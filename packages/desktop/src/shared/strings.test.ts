@@ -37,6 +37,8 @@ const NOTICE_KINDS: NoticeKind[] = [
   'plan-effect-failed',
   'role-truncated',
   'recipe-playbook-truncated',
+  'compact-cancelled',
+  'compact-failed',
 ];
 
 /** `notice.text` — заведомо чужой для окна маркер (раунд исправлений 1 куска E.1) — чтобы поймать случайную подстановку. */
@@ -322,4 +324,9 @@ it('recipe labels are English, name every parse diagnostic and the template play
     expect(R.reason[code], code).toBeTruthy();
   expect(R.playbookTemplate.split('\n').length).toBeLessThanOrEqual(30);
   expect(R.invalidOption('broken.md', R.reason['invalid-yaml'] as string)).toBe('broken.md · Not valid YAML');
+});
+
+it('S.island.donePeek — выглядывающий остров «✅ N», без слов', () => {
+  expect(S.island.donePeek(1)).toBe('✅ 1');
+  expect(S.island.donePeek(12)).toBe('✅ 12');
 });

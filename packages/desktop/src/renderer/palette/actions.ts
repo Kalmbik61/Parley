@@ -19,11 +19,12 @@ import type { AttentionTarget } from '../attention/next.js';
 import type { MruCycle } from '../keys/mru-cycle.js';
 import type { FilesState } from '../files/store.js';
 import { useDevtoolsStore } from '../browser/devtools/store.js';
-import { BROWSER_LIMITS, browserTabCount, openBrowserTab, requestAddressFocus, useBrowserStore } from '../browser/store.js';
+import { BROWSER_LIMITS, browserTabCount, openBrowserTab, requestAddressFocus, toggleBrowserMode, useBrowserStore } from '../browser/store.js';
 import type { LayoutState } from '../layout/store.js';
 import { findTab, focusGroup, focusTab, groups, reopenClosed, updateTab } from '../layout/tree.js';
 import { effectiveView, feedAvailableNow, sessionStartedOrUnknown } from '../lib/feed-view.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
+import { runSaveDiagnostics } from '../shell/diagnostics-flow.js';
 import { activityFor, useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
 import { neighborInOrder } from '../sidebar/sort.js';
@@ -186,6 +187,12 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
     if (key !== undefined) ctx.layout.setActiveWork(key);
     return;
   }
+  // Select и Annotate (этап B браузера): режим активной вкладки браузера; вкладки нет — ничего.
+  if (id === 'browser.select' || id === 'browser.annotate') {
+    const page = ctx.browser.active();
+    if (page !== null) toggleBrowserMode(page.tabId, id === 'browser.select' ? 'select' : 'annotate');
+    return;
+  }
   // ⌘F, ⌘+, ⌘−, ⌘0 из страницы (9.2b): вкладку делает активной browser:focus. Отказ — в консоль, без
   // тоста: вкладка могла закрыться между нажатием и ответом. Вкладки браузера нет — ничего.
   const zoom = ZOOM_STEP[id];
@@ -283,6 +290,9 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
       return;
     case 'host.restart':
       ctx.ui.confirmRestartHost();
+      return;
+    case 'host.diagnostics':
+      void runSaveDiagnostics(ctx.bridge, { profile: false });
       return;
     case 'find':
       (ctx.terminals.focused() ?? ctx.terminals.active())?.openSearch();

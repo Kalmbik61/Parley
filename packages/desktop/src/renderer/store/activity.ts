@@ -18,7 +18,7 @@ export interface ActivityState {
    */
   loaded: boolean;
   /** Подписывается на `activity.changed`; возвращает отписку. */
-  init: (bridge: ParleyBridge) => () => void;
+  init: (bridge: Pick<ParleyBridge, 'on' | 'activitySnapshot'>) => () => void;
 }
 
 export const useActivityStore = create<ActivityState>((set) => ({

@@ -21,11 +21,11 @@ export type ActionId =
   | 'tab.goto.1' | 'tab.goto.2' | 'tab.goto.3' | 'tab.goto.4' | 'tab.goto.5'
   | 'tab.goto.6' | 'tab.goto.7' | 'tab.goto.8' | 'tab.goto.9'
   | 'find' | 'voice.toggle' | 'terminal.clear' | 'chat.toggleView' | 'settings.open'
-  | 'attention.next' | 'wake.toggle' | 'host.restart'
+  | 'attention.next' | 'wake.toggle' | 'host.restart' | 'host.diagnostics'
   | 'appearance.system' | 'appearance.dark' | 'appearance.light'
   | 'browser.newTab'
   | 'browser.find' | 'browser.zoomIn' | 'browser.zoomOut' | 'browser.zoomReset' // when: 'browser', menu: null
-  | 'browser.devtools' | 'browser.console'; // when: 'browser', menu: null (спека 2026-10-07, 4.9)
+  | 'browser.devtools' | 'browser.console' | 'browser.select' | 'browser.annotate'; // when: 'browser', menu: null (спека 2026-10-07, 4.9)
 
 export interface ActionDef {
   id: ActionId;
@@ -101,6 +101,7 @@ export const ACTIONS: readonly ActionDef[] = [
   paletteOnly('attention.next', S.actions.nextNeedsYou, ['attention', 'blocked', 'needs you']),
   paletteOnly('wake.toggle', S.actions.pauseAutoWake, ['auto-wake', 'pause', 'resume', 'wake']),
   paletteOnly('host.restart', S.actions.restartHost, ['host', 'restart', 'reload']),
+  paletteOnly('host.diagnostics', S.actions.diagnostics, ['diagnostics', 'logs', 'report', 'profile']),
   paletteOnly('appearance.system', S.actions.themeSystem, ['theme', 'appearance', 'system']),
   paletteOnly('appearance.dark', S.actions.themeDark, ['theme', 'appearance', 'dark']),
   paletteOnly('appearance.light', S.actions.themeLight, ['theme', 'appearance', 'light']),
@@ -111,6 +112,10 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'browser.zoomIn', title: S.actions.zoomIn, keywords: ['browser', 'zoom', 'bigger'], keys: 'CmdOrCtrl+Plus', menu: null, when: 'browser', inPalette: true, repeatable: true },
   { id: 'browser.zoomOut', title: S.actions.zoomOut, keywords: ['browser', 'zoom', 'smaller'], keys: 'CmdOrCtrl+-', menu: null, when: 'browser', inPalette: true, repeatable: true },
   { id: 'browser.zoomReset', title: S.actions.actualSize, keywords: ['browser', 'zoom', 'reset'], keys: 'CmdOrCtrl+0', menu: null, when: 'browser', inPalette: true },
+  // Этап B браузера (спека 4.9): ⌖ Select; из страницы клавишу пересылает main, в окне — кнопка и палитра.
+  { id: 'browser.select', title: S.actions.selectElement, keywords: ['browser', 'element', 'pick', 'inspect'], keys: 'CmdOrCtrl+Shift+C', menu: null, when: 'browser', inPalette: true },
+  // ✎ Annotate (спека браузера 4.9): ⌘⌥A рядом с ⌘⌥I и ⌘⌥J панели; ⌘⇧A занят действием sidebar.agents.
+  { id: 'browser.annotate', title: S.actions.annotatePage, keywords: ['browser', 'annotate', 'comment', 'pin'], keys: 'CmdOrCtrl+Alt+A', menu: null, when: 'browser', inPalette: true },
   // Панель Console | Network вкладки браузера (спека 2026-10-07-browser-devtools-agent-design.md, 4.3, 4.9). Из
   // страницы их пересылает main; с фокусом в строке и панели вкладки — её обработчик (`BrowserSurface`): рендерер окна
   // действия `browser` не ловит.

@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { addSession, createWork, updateMap, workPaths } from '@parley/core';
 import { METHODS, NOTIFICATIONS, PROTOCOL_VERSION } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
@@ -11,6 +11,9 @@ import type { RawMessage, TestClient } from '../test/helpers.js';
 import { startHost } from './host.js';
 import type { RunningHost } from './host.js';
 import { hostPaths } from './paths.js';
+import { createHostServer, SLOW_REQUEST_MS } from './server.js';
+import { HostError } from './errors.js';
+import type { HostContext } from './context.js';
 
 let hosts: RunningHost[] = [];
 let homes: string[] = [];
@@ -187,6 +190,8 @@ describe('список методов в hello', () => {
     // Архив комнаты: без обоих методов окно пунктов Archive и Reopen не показывает (useHostSupports).
     expect(methods).toContain('rooms.archive');
     expect(methods).toContain('rooms.reopen');
+    // Расход токенов комнаты: без метода окно значок не показывает (useHostSupports).
+    expect(methods).toContain('rooms.usage');
     client.close();
   });
 });
@@ -258,4 +263,79 @@ describe('активность для нового клиента', () => {
     first.close();
     second.close();
   }, 20_000);
+});
+
+describe('медленные запросы', () => {
+  /** Сервер без хоста: свои обработчики и часы, которые отдают заданные отметки по одной на вызов. */
+  async function slowServer(marks: number[], handler: () => Promise<unknown>) {
+    const home = await tempHome();
+    homes.push(home);
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const context = { version: 'test', log, liveSessions: () => 0 } as unknown as HostContext;
+    const queue = [...marks];
+    const server = createHostServer({
+      context,
+      token: 't',
+      helloTimeoutMs: 5000,
+      methodHandlers: { 'host.info': handler as never },
+      notificationHandlers: {},
+      registerClient: () => {},
+      unregisterClient: () => {},
+      now: () => queue.shift() ?? 0,
+    });
+    const socketPath = path.join(home, 'slow.sock');
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    const client = connectRaw(socketPath);
+    await waitConnected(client.socket);
+    await hello(client, 't');
+    return { log, client, close: () => { client.close(); server.close(); } };
+  }
+
+  it('запрос от порога и дольше пишет строку с method, ms и bytes', async () => {
+    const { log, client, close } = await slowServer([0, SLOW_REQUEST_MS + 500], async () => ({ ok: true }));
+    client.send({ id: 900, method: 'host.info', params: {} });
+    await client.next();
+    expect(log.warn).toHaveBeenCalledWith('медленный запрос', expect.objectContaining({
+      method: 'host.info',
+      ms: SLOW_REQUEST_MS + 500,
+      bytes: Buffer.byteLength(JSON.stringify({ ok: true }), 'utf8'),
+    }));
+    close();
+  });
+
+  it('быстрый запрос строки не пишет', async () => {
+    const { log, client, close } = await slowServer([0, 10], async () => ({ ok: true }));
+    client.send({ id: 901, method: 'host.info', params: {} });
+    await client.next();
+    expect(log.warn).not.toHaveBeenCalled();
+    close();
+  });
+
+  it('медленная ошибка пишет поле error с кодом и без bytes', async () => {
+    const { log, client, close } = await slowServer([0, 2000], async () => {
+      throw new HostError('conflict', 'занято');
+    });
+    client.send({ id: 902, method: 'host.info', params: {} });
+    await client.next();
+    const fields = log.warn.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(log.warn.mock.calls[0]?.[0]).toBe('медленный запрос');
+    expect(fields).toMatchObject({ method: 'host.info', ms: 2000, error: 'conflict' });
+    expect(fields).not.toHaveProperty('bytes');
+    close();
+  });
+
+  it('бросающий log.warn не даёт второго ответа: клиент получает ровно один result', async () => {
+    const { log, client, close } = await slowServer([0, 2000], async () => ({ ok: true }));
+    log.warn.mockImplementation(() => {
+      throw new Error('диск полон');
+    });
+    client.send({ id: 903, method: 'host.info', params: {} });
+    const first = await client.next();
+    expect(first).toMatchObject({ id: 903, result: { ok: true } });
+    client.send({ id: 904, method: 'host.info', params: {} });
+    const second = await client.next();
+    expect(second.id).toBe(904);
+    expect(log.warn).toHaveBeenCalled();
+    close();
+  });
 });

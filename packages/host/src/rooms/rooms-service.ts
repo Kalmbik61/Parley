@@ -126,7 +126,7 @@ export async function createHumanRoom(input: Params<'rooms.create'>): Promise<st
     if (room.recipe != null && map.sessions.find((session) => session.id === lead)?.lifecycle === 'pending') {
       room.recipeLeadNotified = lead;
     }
-    for (const id of members) leaveOtherRooms(map, id, room.id);
+    for (const id of members) leaveOtherRooms(map, id, room.id, room.createdAt);
     roomId = room.id;
     if (origin !== undefined) addRoomOriginMessage(map, room.id, origin);
     if (input.quiet !== true) {

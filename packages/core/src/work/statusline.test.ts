@@ -222,6 +222,45 @@ describe('файл лимитов', () => {
   });
 });
 
+describe('заполненность контекста (спека 2026-10-15, 4.1)', () => {
+  const contextRel = path.join('context', 's-01.json');
+
+  it('context_window во входе → context/<сессия>.json', async () => {
+    await run(
+      input({
+        context_window: {
+          used_percentage: 41.5,
+          context_window_size: 200_000,
+          current_usage: { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 83_000 },
+        },
+      }),
+    );
+    expect(JSON.parse(await readFile(path.join(workDir, contextRel), 'utf8'))).toEqual({
+      usedPercent: 41.5,
+      windowTokens: 200_000,
+      usedTokens: 83_030,
+      at: '2026-09-29T12:00:00.000Z',
+    });
+  });
+
+  it('без rate_limits контекст всё равно пишется', async () => {
+    await run(input({ rate_limits: undefined }));
+    expect(JSON.parse(await readFile(path.join(workDir, contextRel), 'utf8'))).toMatchObject({ usedPercent: 8.4 });
+  });
+
+  it('нет context_window — файла нет, строка терминала та же', async () => {
+    const line = await run(input({ context_window: undefined }));
+    await expect(readFile(path.join(workDir, contextRel), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(line).toBe('Opus\n');
+  });
+
+  it('id сессии вне isFileSafeId — файла нет', async () => {
+    env = { ...env, PARLEY_SESSION_ID: '../s-01' };
+    await run(input());
+    await expect(readFile(path.join(workDir, contextRel), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
 describe('строка терминала', () => {
   it('своего statusLine у человека нет — короткая строка: модель и процент контекста', async () => {
     expect(await run(input())).toBe('Opus · ctx 8%\n');

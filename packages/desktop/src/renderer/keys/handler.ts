@@ -48,6 +48,7 @@ export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
   'attention.next',
   'wake.toggle',
   'host.restart',
+  'host.diagnostics',
   'appearance.system',
   'appearance.dark',
   'appearance.light',
@@ -59,6 +60,8 @@ export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
   'browser.zoomIn',
   'browser.zoomOut',
   'browser.zoomReset',
+  'browser.select',
+  'browser.annotate',
   'browser.devtools',
   'browser.console',
 ]);

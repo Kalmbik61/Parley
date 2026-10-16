@@ -31,6 +31,7 @@ const NESTED_KEYS = [
   'notifications',
   'voice',
   'browser',
+  'island',
 ] as const satisfies ReadonlyArray<keyof UiFile>;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

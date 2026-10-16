@@ -7,8 +7,8 @@
  *
  * Страница — недоверенная: мостов окна и Node в госте нет (страж main, 9.1), а рендерер зовёт
  * у `<webview>` только навигацию — `loadURL`, `goBack`, `goForward`, `reload`, `stop`.
- * Программный доступ к странице — только у main (спека 12.2): Design Mode (9.3b) тоже идёт мостом —
- * `pickStart` и `pickCancel`, а не `executeJavaScript` у `<webview>`.
+ * Программный доступ к странице — только у main (спека 12.2): Select и Annotate (этап B) тоже идут мостом —
+ * `pickStart`, `annotateStart` и соседи, а не `executeJavaScript` у `<webview>`.
  *
  * `<webview>` монтируется один раз, при первом адресе http(s) вкладки, и с `src="about:blank"` (спайк 0.1, вариант D):
  * к пустому гостю main уже подключил отладчик, а адрес вкладки окно открывает на первом `dom-ready` после
@@ -22,6 +22,11 @@
  *   (`ui.json`); ⌘⌥I и ⌘⌥J с фокусом в строке или панели ловит этот компонент;
  * - размер — из раскладки (`TabSpec.viewport`): эмуляцию ставит main (`use-viewport.ts`), а окно ставит тот же узел
  *   `<webview>` размером ширина×scale на высота×scale по центру нейтрального поля с подписью.
+ *
+ * Цель «To» (этап B, спека браузера 4.5): сессия или комната, куда лягут «Add to chat», Select и аннотации. Хранится в
+ * раскладке (`TabSpec.target`, нет поля — умолчание); `usePageContext` разрешает её, откатывает пропавшую с тостом и
+ * ведёт очередь добавлений, меню `TargetMenu` стоит в строке вкладки. «Add to chat» панели Console | Network (запись
+ * консоли, запрос, все ошибки) — `context/actions.ts`: слоты `DevtoolsPanel` ведут их в `usePageContext().add`.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -29,9 +34,11 @@ import { toast } from 'sonner';
 import type { WorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { viewportSize, type ViewportSpec } from '../../shared/browser-devtools.js';
-import { BROWSER_PARTITION } from '../../shared/browser-types.js';
+import { BROWSER_PARTITION, type PickResult, type ViewportFraction } from '../../shared/browser-types.js';
+import { viewportNote } from '../../shared/context-markdown.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { ACTIONS, matchesAccelerator, type ActionId, type KeyLike } from '../../shared/keybindings.js';
+import type { BrowserTarget } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -39,14 +46,20 @@ import { focusTab, updateTab } from '../layout/tree.js';
 import { useUiStore } from '../store/ui.js';
 import { isHttpUrl } from '../terminal/links.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
+import { AnnotationEditor } from './annotate/AnnotationEditor.js';
+import { AnnotationTray } from './annotate/AnnotationTray.js';
+import { EMPTY_ANNOTATE, useAnnotateStore } from './annotate/store.js';
+import { addAnnotationsToChat, cancelMark, saveDraft, syncPins, useAnnotateMode } from './annotate/use-annotate-mode.js';
 import { BrowserChrome } from './BrowserChrome.js';
-import { DesignModeCard } from './DesignModeCard.js';
+import { createPageContextActions, elementDraft } from './context/actions.js';
+import { TargetMenu } from './context/TargetMenu.js';
+import { usePageContext } from './context/use-page-context.js';
 import { DevtoolsPanel } from './devtools/DevtoolsPanel.js';
 import { devtoolsCounters, EMPTY_DEVTOOLS, useDevtoolsStore } from './devtools/store.js';
 import { useDevtoolsFeed } from './devtools/use-devtools-feed.js';
 import { FindBar } from './FindBar.js';
 import { fitArea, panelHeight, STAGE, stageBox, type FieldSize } from './stage.js';
-import { clearAddressFocus, useBrowserStore, wantsAddressFocus, type BrowserTabState } from './store.js';
+import { clearAddressFocus, toggleBrowserMode, useBrowserStore, wantsAddressFocus, type BrowserTabState } from './store.js';
 import { layoutUrl } from './url.js';
 import { useViewport } from './use-viewport.js';
 
@@ -83,10 +96,12 @@ const WEBVIEW_ATTRIBUTES = {
 } as Record<string, string>;
 
 /**
- * Клавиши панели (спека 2026-10-07, 4.9) — из реестра. В странице их пересылает main; с фокусом в строке или панели
- * вкладки — этот обработчик: рендерер окна действия `browser` не ловит (`keys/handler.ts#whenAllows`).
+ * Клавиши панели, Select и Annotate (спека 2026-10-07, 4.9) — из реестра. В странице их пересылает main; с фокусом в
+ * строке или панели вкладки — этот обработчик: рендерер окна действия `browser` не ловит (`keys/handler.ts#whenAllows`).
  */
-const PANEL_KEYS = ACTIONS.filter((action) => action.id === 'browser.devtools' || action.id === 'browser.console');
+const PANEL_KEYS = ACTIONS.filter(
+  (action) => action.id === 'browser.devtools' || action.id === 'browser.console' || action.id === 'browser.select' || action.id === 'browser.annotate',
+);
 
 function panelKey(event: KeyLike): ActionId | null {
   return PANEL_KEYS.find((action) => action.keys !== null && matchesAccelerator(action.keys, event))?.id ?? null;
@@ -108,11 +123,14 @@ export interface BrowserSurfaceProps {
   url: string;
   /** Размер вьюпорта вкладки (`TabSpec.viewport`, спека 2026-10-07, 4.2); null — Fit. */
   viewport: ViewportSpec | null;
+  /** Цель «To» из раскладки (этап B): нет — умолчание. */
+  target?: BrowserTarget | undefined;
   groupId: string;
   visible: boolean;
   bridge: ParleyBridge;
-  /** Работа вкладки — сессии получателей карточки Design Mode (9.3b). */
+  /** Работа вкладки: сессии и комнаты цели «To» (этап B). */
   entry: WorkEntry;
+  /** Отправка агенту окна — строке в ввод CLI сессии без Chat (этап B). */
   sendDeps: SendWithToastDeps;
 }
 
@@ -126,19 +144,139 @@ const IDLE: BrowserTabState = {
   webContentsId: null,
   findOpen: false,
   loadFailed: false,
-  pick: 'off',
+  mode: 'off',
 };
 
-export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible, bridge, entry, sendDeps }: BrowserSurfaceProps): JSX.Element {
+export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId, visible, bridge, entry, sendDeps }: BrowserSurfaceProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const fieldRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<WebviewElement | null>(null);
   const readyRef = useRef(false);
   // Адрес вкладки уже открывали после захвата (спайк 0.1): повторные dom-ready страницы его не открывают.
   const firstPageRef = useRef(false);
-  // Номер текущего выбора Design Mode: ответ выбора, который уже сняли (⌖, Esc, навигация), карточку не ставит.
-  const pickTokenRef = useRef(0);
   const state = useBrowserStore((store) => store.tabs[tabId]) ?? IDLE;
+  const pageContext = usePageContext({ bridge, workKey, tabId, entry, stored: target, sendDeps });
+  // Адрес страницы на момент клика «Add to chat»: TabSpec.url, его ведёт сама поверхность.
+  const urlRef = useRef(url);
+  urlRef.current = url;
+  const contextActions = useMemo(
+    () =>
+      createPageContextActions({
+        bridge,
+        webContentsId: () => useBrowserStore.getState().tabs[tabId]?.webContentsId ?? null,
+        pageUrl: () => urlRef.current,
+        devtools: () => useDevtoolsStore.getState().tabs[tabId] ?? EMPTY_DEVTOOLS,
+        add: pageContext.add,
+      }),
+    [bridge, tabId, pageContext.add],
+  );
+
+  // Select (спека браузера 4.6): выбор за выбором, пока режим включён; ⇧-клик режим держит, обычный клик снимает.
+  // Каждый элемент — файл-контекст в цель «To»: одна очередь на вкладку, чипы — в порядке кликов.
+  const selecting = state.mode === 'select' && state.webContentsId !== null;
+  const addRef = useRef(pageContext.add);
+  addRef.current = pageContext.add;
+  const noteRef = useRef<string | null>(null);
+  noteRef.current = viewportNote(viewport);
+  useEffect(() => {
+    const id = useBrowserStore.getState().tabs[tabId]?.webContentsId ?? null;
+    if (!selecting || id === null) return undefined;
+    let alive = true;
+    const off = (): void => useBrowserStore.getState().update(tabId, { mode: 'off' });
+    void (async () => {
+      while (alive) {
+        let result: PickResult | null;
+        try {
+          result = await bridge.browser.pickStart(id);
+        } catch (error) {
+          if (!alive) return;
+          console.error('[parley] pickStart failed', error);
+          toast(errorText(decodeIpcError(error).code, S.errors.actions.pickElement));
+          off();
+          return;
+        }
+        // Режим сняли (⌖, Esc в окне, навигация, скрытая вкладка) — поздний ответ ничего не добавляет.
+        if (!alive) return;
+        if (result === null) {
+          off();
+          return;
+        }
+        void addRef.current(elementDraft(result, noteRef.current));
+        if (!result.shift) {
+          off();
+          return;
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+      bridge.browser.pickCancel(id).catch((error: unknown) => console.warn('[parley] pickCancel failed', error));
+    };
+  }, [selecting, bridge, tabId]);
+
+  // Annotate (спека браузера 4.7): цикл меток и метки страницы — по лотку; лоток вкладки живёт, пока жива вкладка.
+  const annotate = useAnnotateStore((store) => store.tabs[tabId]) ?? EMPTY_ANNOTATE;
+  useAnnotateMode({ bridge, tabId, webContentsId: state.webContentsId, active: state.mode === 'annotate', urlRef });
+  useEffect(() => () => useAnnotateStore.getState().drop(tabId), [tabId]);
+  const [annotateBusy, setAnnotateBusy] = useState(false);
+  const pageId = (): number | null => useBrowserStore.getState().tabs[tabId]?.webContentsId ?? null;
+
+  // Редактор закрыт (Save, Delete, Esc) или лоток исчез («Add to chat», Clear): снятое поле или кнопка держали фокус, он падает
+  // на body, и клавиши корня (Esc, ⌘⌥A) перестают приходить. Возвращаем его странице — следующая метка и так там. Чужой фокус
+  // (адресная строка, поле чата) не трогаем.
+  const editorOpen = annotate.editing !== null;
+  const trayShown = annotate.items.length > 0;
+  const overlays = useRef({ editorOpen: false, trayShown: false });
+  useEffect(() => {
+    const was = overlays.current;
+    overlays.current = { editorOpen, trayShown };
+    if (!(was.editorOpen && !editorOpen) && !(was.trayShown && !trayShown)) return;
+    const holder = document.activeElement;
+    if (holder === null || holder === document.body) viewRef.current?.focus();
+  }, [editorOpen, trayShown]);
+
+  /**
+   * Метка → точка в поле страницы (`fieldRef` A): доля вьюпорта по прямоугольнику `<webview>` — при эмуляции он стоит по
+   * центру поля и уменьшен — плюс его сдвиг в поле, как `getBrowserOverlayAnchor` у Orca. Край поля и переворот
+   * редактора вверх держит Radix (`AnnotationEditor`, `collisionBoundary`).
+   */
+  const anchorAt = (anchor: ViewportFraction): { left: number; top: number } => {
+    const page = fieldRef.current?.getBoundingClientRect();
+    const view = viewRef.current?.getBoundingClientRect();
+    if (page === undefined || view === undefined) return { left: 0, top: 0 };
+    return { left: view.left - page.left + anchor.fx * view.width, top: view.top - page.top + anchor.fy * view.height };
+  };
+
+  // ✎ в строке лотка: положение метки — с прошлой перерисовки, а страницу могли прокрутить; редактор открывается после свежей.
+  const editAnnotation = (n: number): void => {
+    const open = (): void => {
+      // Вкладку могли закрыть, пока шла перерисовка.
+      if (useAnnotateStore.getState().tabs[tabId] === undefined) return;
+      saveDraft(tabId);
+      useAnnotateStore.getState().startEdit(tabId, n);
+    };
+    const id = pageId();
+    if (id === null) open();
+    else void syncPins(bridge, tabId, id).then(open);
+  };
+
+  const addAnnotations = (): void => {
+    setAnnotateBusy(true);
+    void addAnnotationsToChat({
+      bridge,
+      tabId,
+      webContentsId: pageId(),
+      pageUrl: urlRef.current,
+      viewportNote: noteRef.current,
+      add: pageContext.add,
+    }).finally(() => setAnnotateBusy(false));
+  };
+
+  // Скрытую вкладку человек не видит: Select и Annotate в ней снимаются, а не едят клики страницы до возврата.
+  useEffect(() => {
+    if (!visible && state.mode !== 'off') useBrowserStore.getState().update(tabId, { mode: 'off' });
+  }, [visible, state.mode, tabId]);
+
   const devtools = useDevtoolsStore((store) => store.tabs[tabId]) ?? EMPTY_DEVTOOLS;
   const counters = useMemo(() => devtoolsCounters(devtools), [devtools]);
   const devtoolsHeight = useUiStore((store) => store.ui.browser.devtoolsHeight);
@@ -278,13 +416,14 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
       'did-stop-loading': () => update({ loading: false }),
       'page-title-updated': (event) => update({ title: event.title ?? null }),
       // Новый документ: заголовок и значок прежней страницы ему не принадлежат.
-      // Карточка и выбор прошлой страницы к новой не относятся; main и сам ответит выбору null (9.3a).
+      // Режим Select или Annotate прошлой страницы к новой не относится; main и сам ответит выбору null.
       // Касания у нового документа — как у эмуляции в этот миг (спайк 0.3); пустая страница документом вкладки не считается.
       'did-navigate': (event) => {
         saveUrl(event.url);
-        pickTokenRef.current += 1;
         if (event.url !== BLANK_SRC) setDocMobile(appliedMobileRef.current);
-        update({ title: null, favicon: null, pick: 'off' });
+        update({ title: null, favicon: null, mode: 'off' });
+        // Новый документ: меток на странице больше нет, данные в лотке остаются.
+        useAnnotateStore.getState().markAllGone(tabId);
         history();
       },
       'did-navigate-in-page': (event) => {
@@ -383,43 +522,6 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
     useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tabId, { viewport: next }));
   };
 
-  // Design Mode (спека 12.3): выбор — только по ⌖ или «Pick again» человека.
-  const startPick = (): void => {
-    const id = state.webContentsId;
-    if (id === null) return;
-    pickTokenRef.current += 1;
-    const token = pickTokenRef.current;
-    const update = (patch: Partial<BrowserTabState>): void => {
-      if (token === pickTokenRef.current) useBrowserStore.getState().update(tabId, patch);
-    };
-    update({ pick: 'picking' });
-    bridge.browser.pickStart(id).then(
-      (result) => update({ pick: result === null ? 'off' : { result } }),
-      (error: unknown) => {
-        if (token !== pickTokenRef.current) return;
-        console.error('[parley] pickStart failed', error);
-        toast(errorText(decodeIpcError(error).code, S.errors.actions.pickElement));
-        update({ pick: 'off' });
-      },
-    );
-  };
-
-  const cancelPick = (): void => {
-    const id = state.webContentsId;
-    pickTokenRef.current += 1;
-    useBrowserStore.getState().update(tabId, { pick: 'off' });
-    if (id !== null) bridge.browser.pickCancel(id).catch((error: unknown) => console.warn('[parley] pickCancel failed', error));
-  };
-
-  const picking = state.pick === 'picking';
-
-  // Скрытую вкладку человек не видит: выбор в ней снимается, а не ест клики страницы до возврата.
-  const cancelPickRef = useRef(cancelPick);
-  cancelPickRef.current = cancelPick;
-  useEffect(() => {
-    if (!visible && picking) cancelPickRef.current();
-  }, [visible, picking]);
-
   // Поверхность — сосед тела группы, а не потомок: клик в строку сама делает свою вкладку активной.
   const focusOwnTab = (): void => {
     useLayoutStore.getState().apply(workKey, (layout) => focusTab(layout, tabId));
@@ -443,16 +545,25 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
       onPointerDownCapture={focusOwnTab}
       onFocusCapture={focusOwnTab}
       onKeyDown={(event) => {
-        // Esc при фокусе в окне (после клика по ⌖ он на кнопке): в странице Esc ловит сам скрипт выбора.
-        if (event.key === 'Escape' && picking) {
+        // Esc при фокусе в окне (после клика по ⌖ или ✎ он на кнопке): в странице Esc ловит сам скрипт. Esc, который уже
+        // закрыл меню Radix (его события идут по дереву React сквозь портал, в том числе из меню «To») или полосу поиска,
+        // помечен preventDefault — режим он не выключает. Так же с открытым редактором метки: слой Radix гасит каждый Esc
+        // окна для себя, и вне редактора (заголовок лотка, адресная строка) он ни отменяет метку, ни выключает режим — редактор
+        // владеет Esc, набранное не пропадает; отменяет Esc в самом поле (`AnnotationEditor`, не доходит сюда).
+        if (event.key === 'Escape' && !event.defaultPrevented && state.mode !== 'off') {
           event.preventDefault();
-          cancelPick();
+          useBrowserStore.getState().update(tabId, { mode: 'off' });
           return;
         }
         // ⌘⌥I и ⌘⌥J с фокусом в строке или панели вкладки (спека 2026-10-07, 4.9).
         const action = live ? panelKey(event.nativeEvent) : null;
         if (action === null) return;
         event.preventDefault();
+        if (action === 'browser.select' || action === 'browser.annotate') {
+          // Удержанная клавиша шлёт автоповтор (`repeat`): режим переключает только первое нажатие, а не мигает вкл и выкл.
+          if (!event.repeat) toggleBrowserMode(tabId, action === 'browser.select' ? 'select' : 'annotate');
+          return;
+        }
         if (action === 'browser.console') useDevtoolsStore.getState().show(tabId, 'console');
         else useDevtoolsStore.getState().toggle(tabId);
       }}
@@ -470,14 +581,16 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
         onStop={() => onPage((view) => view.stop())}
         onNavigate={navigate}
         onDevTools={openDevTools}
-        picking={picking}
-        onDesignMode={picking ? cancelPick : startPick}
+        mode={state.mode}
+        onSelect={() => toggleBrowserMode(tabId, 'select')}
+        onAnnotate={() => toggleBrowserMode(tabId, 'annotate')}
         viewport={viewport}
         onViewport={setViewport}
         devtoolsOpen={devtools.open}
         counters={counters}
         onToggleDevtools={() => useDevtoolsStore.getState().toggle(tabId)}
         onClearDevtools={clearDevtools}
+        targetMenu={<TargetMenu entry={entry} target={pageContext.target} onChange={pageContext.setTarget} />}
       />
       <div ref={fieldRef} data-testid="browser-field" className={cn('relative min-h-0 flex-1 overflow-hidden', stage !== null && 'bg-muted')}>
         {src === null ? (
@@ -520,9 +633,48 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
             }}
           />
         ) : null}
-        {typeof state.pick === 'object' ? (
-          <DesignModeCard workKey={workKey} entry={entry} result={state.pick.result} sendDeps={sendDeps} onPickAgain={startPick} />
-        ) : null}
+        {!visible || annotate.editing === null ? null : (
+          // Редактор — только у видимой вкладки: слой Radix (DismissableLayer) ловит Esc на документе и помечает его preventDefault,
+          // пока смонтирован, в том числе у скрытой поверхности — тогда ветка Esc корня видимой вкладки (выше) не выключала бы
+          // Select и Annotate. Черновик остаётся в сторе и возвращается вместе с вкладкой. Остаток: две группы рядом показывают
+          // две вкладки сразу, и редактор в группе, где человек сейчас не работает, по-прежнему гасит Esc в другой.
+          <AnnotationEditor
+            key={`${annotate.editing.n}:${annotate.editing.isNew ? 'new' : 'edit'}`}
+            n={annotate.editing.n}
+            draft={annotate.editing.draft}
+            anchor={anchorAt(annotate.editing.anchor)}
+            container={fieldRef.current}
+            onDraft={(text) => useAnnotateStore.getState().setDraft(tabId, text)}
+            onSave={() => useAnnotateStore.getState().save(tabId)}
+            onDelete={() => {
+              const editing = useAnnotateStore.getState().tabs[tabId]?.editing ?? null;
+              if (editing === null) return;
+              // Delete новой метки — та же отмена, что Esc; готовой — удаление пункта.
+              if (editing.isNew) void cancelMark(bridge, tabId, pageId());
+              else useAnnotateStore.getState().remove(tabId, editing.n);
+            }}
+            onCancel={() => void cancelMark(bridge, tabId, pageId())}
+          />
+        )}
+        {annotate.items.length === 0 ? null : (
+          <AnnotationTray
+            items={annotate.items}
+            collapsed={annotate.collapsed}
+            busy={annotateBusy}
+            visible={visible}
+            onToggle={() => useAnnotateStore.getState().setCollapsed(tabId, !annotate.collapsed)}
+            onEdit={editAnnotation}
+            onDelete={(n) => {
+              saveDraft(tabId);
+              useAnnotateStore.getState().remove(tabId, n);
+            }}
+            onClear={() => {
+              saveDraft(tabId);
+              useAnnotateStore.getState().clear(tabId);
+            }}
+            onAddToChat={addAnnotations}
+          />
+        )}
         {state.loadFailed && !state.crashed ? (
           <div
             data-testid="browser-load-failed"
@@ -566,6 +718,9 @@ export function BrowserSurface({ workKey, tabId, url, viewport, groupId, visible
           onResize={commitPanelHeight}
           onReload={reload}
           onClear={clearDevtools}
+          onAddConsoleToChat={contextActions.console}
+          onAddRequestToChat={contextActions.request}
+          onAddErrorsToChat={contextActions.errors}
         />
       ) : null}
     </div>

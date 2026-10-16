@@ -19,6 +19,8 @@ process.env.PARLEY_LOGIN_SHELL = 'skip';
 // Проверка новой версии (V6 плана релиза 0.1.0) в E2E в сеть не ходит: GitHub тестам не нужен, а тост о версии в
 // углу мешал бы ожиданиям спеков. Спеки передают окну `...process.env`, а окно читает переменную из окружения.
 process.env.PARLEY_UPDATE_CHECK = 'off';
+// Острова нет: 74 места в e2e берут первое окно, smoke и browser считают окна. Спека острова снимает переменную сама.
+process.env.PARLEY_ISLAND = 'off';
 
 export default defineConfig({
   testDir: './e2e',

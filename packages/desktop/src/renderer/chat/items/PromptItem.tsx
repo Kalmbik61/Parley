@@ -4,39 +4,62 @@
  * оно ждёт в очереди CLI, пока не придёт настоящий промпт с тем же текстом (решение 8).
  *
  * Хвостовые упоминания `@"путь"` — вложения, которые окно дописало при отправке (`attachments.ts`): в
- * пузыре они над текстом чипами (картинка — миниатюрой), самих путей в тексте нет.
+ * пузыре они над текстом чипами (картинка — миниатюрой), самих путей в тексте нет. Снимок файла-контекста
+ * браузера с тем же именем, что у его `.md`, отдельным чипом не показывается: его миниатюра — в чипе `.md`.
+ *
+ * Очередь окна (спека 2026-10-16, 4.3): серый элемент бывает трёх видов — `queued` (уже в очереди CLI во время хода),
+ * `waiting` (ждёт отправки окном) и `failed` («Not sent» с Retry и ×). У всех `data-testid="chat-queued"` и `data-state`.
+ *
+ * Под настоящим промптом — Copy и Send again (`MessageActions`, спека 2026-10-16, 3.1): Copy кладёт текст как
+ * ушёл, с упоминаниями `@"путь"`, без пустых краёв; Send again ставит его как есть в очередь отправки.
  */
 
 import { useContext } from 'react';
-import { ImageIcon } from 'lucide-react';
+import { ImageIcon, X } from 'lucide-react';
 import { S } from '../../../shared/strings.js';
 import { cn } from '../../lib/cn.js';
+import { Button } from '../../ui/button.js';
 import { AttachmentChip } from '../AttachmentChip.js';
 import { splitAttachments } from '../attachments.js';
 import { ChatEnvContext } from '../chat-env.js';
+import { pairContextAttachments } from '../context-attachments.js';
+import { MessageActions } from './MessageActions.js';
 
 export interface PromptItemProps {
   text: string;
   images?: number;
-  queued?: boolean;
+  /** Серый элемент: `queued` — в очереди CLI, `waiting` — ждёт отправки окном, `failed` — не ушло. Нет — настоящий промпт. */
+  state?: 'queued' | 'waiting' | 'failed';
+  /** `failed`: Retry. */
+  onRetry?: () => void;
+  /** `failed`: × — убрать не ушедшее. */
+  onRemove?: () => void;
 }
 
-export function PromptItem({ text, images = 0, queued = false }: PromptItemProps): JSX.Element {
+export function PromptItem({ text, images = 0, state, onRetry, onRemove }: PromptItemProps): JSX.Element {
   // Мост — только для миниатюр: `useChatEnv()` вне окружения бросает, а промпт без него рисуется (чипы без картинок).
-  const bridge = useContext(ChatEnvContext)?.bridge ?? null;
+  const env = useContext(ChatEnvContext);
+  const bridge = env?.bridge ?? null;
+  const resend = env?.resend;
   // Вставка в CLI оставляет в промпте пустые строки по краям — в пузыре они только место.
   const { text: body, attachments } = splitAttachments(text);
+  const shown = pairContextAttachments(attachments);
+  const grey = state !== undefined;
   return (
-    <div data-testid={queued ? 'chat-queued' : 'chat-prompt'} className="flex min-w-0 justify-end">
+    <div
+      data-testid={grey ? 'chat-queued' : 'chat-prompt'}
+      {...(grey ? { 'data-state': state } : {})}
+      className={cn('flex min-w-0 flex-col items-end', !grey && 'group gap-0.5')}
+    >
       <div
         className={cn(
           'flex min-w-0 max-w-[85%] flex-col gap-1 rounded-md px-3 py-2 text-sm',
-          queued ? 'border border-dashed border-border text-muted-foreground' : 'bg-secondary text-secondary-foreground',
+          grey ? 'border border-dashed border-border text-muted-foreground' : 'bg-secondary text-secondary-foreground',
         )}
       >
-        {attachments.length > 0 ? (
+        {shown.length > 0 ? (
           <div className="flex flex-wrap items-center gap-2">
-            {attachments.map((path, index) => (
+            {shown.map((path, index) => (
               <AttachmentChip key={`${index}:${path}`} path={path} bridge={bridge} size="feed" />
             ))}
           </div>
@@ -48,8 +71,23 @@ export function PromptItem({ text, images = 0, queued = false }: PromptItemProps
             {S.chat.images(images)}
           </span>
         ) : null}
-        {queued ? <span className="text-xs">{S.chat.queued}</span> : null}
+        {state === 'queued' ? <span className="text-xs">{S.chat.queued}</span> : null}
+        {state === 'waiting' ? <span className="text-xs">{S.outbox.waiting}</span> : null}
+        {state === 'failed' ? (
+          <span className="flex items-center gap-2 text-xs">
+            <span className="text-[var(--status-warning-text)]">{S.outbox.notSent}</span>
+            <Button type="button" size="xs" variant="outline" onClick={onRetry}>
+              {S.common.retry}
+            </Button>
+            <Button type="button" size="icon-xs" variant="ghost" aria-label={S.outbox.remove} title={S.outbox.remove} onClick={onRemove}>
+              <X className="size-3.5" aria-hidden="true" />
+            </Button>
+          </span>
+        ) : null}
       </div>
+      {grey ? null : (
+        <MessageActions copyText={text.trim()} align="end" {...(resend === undefined ? {} : { onSendAgain: () => resend(text) })} />
+      )}
     </div>
   );
 }

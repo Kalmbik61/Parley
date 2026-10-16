@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { addAttachments, attachmentMention, composePrompt, splitAttachments } from './attachments.js';
+import { rememberContextImage, resetContextImagesForTests } from './context-attachments.js';
 
 describe('attachmentMention', () => {
   it('путь в двойных кавычках после @, пробелы внутри не мешают', () => {
@@ -36,6 +37,18 @@ describe('composePrompt', () => {
 
   it('путь, который нельзя упомянуть, идёт в shell-кавычках', () => {
     expect(composePrompt('look', ['/h/a #1.png', '/h/b.png'])).toBe(`look '/h/a #1.png' @"/h/b.png" `);
+  });
+});
+
+describe('composePrompt — файлы-контексты браузера (спека 4.5)', () => {
+  afterEach(() => resetContextImagesForTests());
+
+  it('за .md элемента идёт известный .png; без снимка — только .md', () => {
+    const md = '/h/drops/context/element-button.save-a1f3.md';
+    const png = '/h/drops/context/element-button.save-a1f3.png';
+    expect(composePrompt('fix', [md])).toBe(`fix @"${md}" `);
+    rememberContextImage(md, png);
+    expect(composePrompt('fix', [md, '/a.txt'])).toBe(`fix @"${md}" @"${png}" @"/a.txt" `);
   });
 });
 

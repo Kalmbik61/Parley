@@ -41,6 +41,7 @@ import {
   loadConfig,
   loadProviders,
   isClaudeCode,
+  MapLockTimeoutError,
   providerReadiness,
   providerReadinessError,
   readSecret,
@@ -80,6 +81,7 @@ import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import type { WorksService } from '../works/works-service.js';
 import { gitFailure } from '../worktrees/worktrees-service.js';
+import { createStepTimer } from '../timing.js';
 import { createSkillInstaller } from './agent-skills.js';
 import { autoLaunchCandidates } from './auto-launch.js';
 import { findInterrupted } from './interrupted.js';
@@ -108,6 +110,12 @@ export interface CreateSessionInput {
 }
 
 export type LaunchMode = 'launch' | 'resume' | 'new';
+
+/**
+ * Попыток записать старт процесса в карту, пока `map.lock` занят: подъём всей работы после перезапуска хоста
+ * держал замок дольше 3 с (2026-10-09), а процесс к этому моменту уже идёт.
+ */
+const START_WRITE_ATTEMPTS = 3;
 
 /** Что `launch()` передаёт плану запуска сверх самой сессии. */
 export interface LaunchChoice {
@@ -417,23 +425,61 @@ export function createSessionsService(
     return entry;
   }
 
+  /**
+   * PTY жив, а карта говорит `sleeping`: запись старта когда-то не удалась. Окно по карте показывает Resume, а запуск
+   * на живом процессе нового не начинает — без починки кнопка молчала бы. Дописываем `active` с приметами того же процесса.
+   */
+  async function repairLive(ref: SessionRef, handle: PtyHandle): Promise<void> {
+    const key = refKey(ref);
+    launching.add(key);
+    const repaired = (async () => {
+      const session = (await readMap(ref.projectPath, ref.workId)).sessions.find(
+        (candidate) => candidate.id === ref.sessionId,
+      );
+      if (session?.lifecycle !== 'sleeping') return;
+      host.log.warn('карта отставала от живого процесса — сессия снова active', { ref, pid: handle.pid });
+      await startSession(ref.projectPath, ref.workId, ref.sessionId, null, {
+        pid: handle.pid,
+        startedAtProcess: await processStartedAt(handle.pid),
+        launchedBy: 'host',
+      });
+    })();
+    // Как у запуска: выход процесса посреди починки пишет `sleeping` только после неё — иначе `active` с мёртвым pid.
+    starting.set(key, repaired.catch(() => {}));
+    try {
+      await repaired;
+    } finally {
+      starting.delete(key);
+      launching.delete(key);
+    }
+  }
+
   async function launch(
     ref: SessionRef,
     mode: LaunchMode,
     options: LaunchChoice = {},
   ): Promise<void> {
     const key = refKey(ref);
-    if (launching.has(key) || closing.has(key) || pty.get(ref) !== undefined) return;
+    if (launching.has(key) || closing.has(key)) return;
+    const live = pty.get(ref);
+    if (live !== undefined) {
+      await repairLive(ref, live);
+      return;
+    }
     launching.add(key);
+    const timer = createStepTimer();
+    let failed = true;
+    let loggedProvider: string | undefined;
     // Резерв слота бюджета держится до исхода: процесс стартовал — `spent`, любой отказ до старта — `released`.
     let attemptId: string | null = null;
     let processStarted = false;
     try {
-      const map = await readMap(ref.projectPath, ref.workId);
+      const map = await timer.step('readMap', () => readMap(ref.projectPath, ref.workId));
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
       if (session === undefined) {
         throw new Error(`session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
       }
+      loggedProvider = session.provider;
       // Закрытая не поднимается ничем (спека 7.1): процесс без пути в `active`
       // жил бы без записи в карте.
       if (session.lifecycle === 'closed') {
@@ -446,9 +492,9 @@ export function createSessionsService(
 
       // Before planned worktree creation, settings, skills and hook registration; repeated every launch.
       // Первым: отказ готовности провайдера не оставляет следа в карте, в том числе резерва бюджета.
-      const entry = await readyProvider(session.provider);
+      const entry = await timer.step('provider', () => readyProvider(session.provider));
       // Допуск — до worktree, скилла и процесса: исчерпанный бюджет не создаёт ничего.
-      attemptId = await reserveLaunch(ref, session.parent, mode, options.by ?? 'human');
+      attemptId = await timer.step('reserve', () => reserveLaunch(ref, session.parent, mode, options.by ?? 'human'));
 
       // Worktree запланирован (`plannedWorktree` в `create()` или `spawn_session`
       // в core), но каталога на диске ещё нет — заводим его перед первым же
@@ -456,7 +502,7 @@ export function createSessionsService(
       if (session.worktree !== null && session.worktree.createdAt === null) {
         const worktree = session.worktree;
         try {
-          await createWorktree(ref.projectPath, worktree);
+          await timer.step('worktree', () => createWorktree(ref.projectPath, worktree));
         } catch (error) {
           const text = `worktree for ${sessionTag(ref.sessionId)} was not created: ${(error as Error).message}`;
           host.broadcast('host.notice', {
@@ -482,19 +528,19 @@ export function createSessionsService(
         }
         const createdAt = new Date().toISOString();
         worktree.createdAt = createdAt;
-        await updateMap(ref.projectPath, ref.workId, (current) => {
+        await timer.step('worktree', () => updateMap(ref.projectPath, ref.workId, (current) => {
           const target = current.sessions.find((candidate) => candidate.id === ref.sessionId);
           if (target?.worktree !== null && target?.worktree !== undefined) {
             target.worktree.createdAt = createdAt;
           }
-        });
+        }));
       }
 
       // Скилл ставится после worktree: его корень к этому моменту уже на диске. Сбой установки запуск не
       // останавливает — `installSkill` его не бросает.
-      await installSkill(ref, session.worktree?.path ?? null);
+      await timer.step('skill', () => installSkill(ref, session.worktree?.path ?? null));
       try {
-        const result = await ensureParleyMd(ref.projectPath);
+        const result = await timer.step('parleyMd', () => ensureParleyMd(ref.projectPath));
         if (result.receiptError && !creationWarnings.has(ref.projectPath)) {
           creationWarnings.add(ref.projectPath);
           host.log.warn('PARLEY.md accounting could not be completed; automatic recreation is suppressed', { projectPath: ref.projectPath });
@@ -510,23 +556,29 @@ export function createSessionsService(
         }
       }
 
-      const hookUrl = await feedHookUrl(session.provider);
-      const codexHookCommand = hookUrl !== undefined && session.provider === 'codex' ? await feed.codexHookCommand?.() : undefined;
+      const { hookUrl, codexHookCommand } = await timer.step('hooks', async () => {
+        const url = await feedHookUrl(session.provider);
+        const codexCommand = url !== undefined && session.provider === 'codex' ? await feed.codexHookCommand?.() : undefined;
+        return { hookUrl: url, codexHookCommand: codexCommand };
+      });
+      const roleCatalog = feed.roleCatalog
+        ? await timer.step('roles', () => feed.roleCatalog!(session.worktree?.path ?? ref.projectPath))
+        : undefined;
       const planFn = mode === 'resume' ? planResume : mode === 'new' ? planNew : planLaunch;
-      const plan = await planFn(ref.projectPath, ref.workId, session, {
+      const plan = await timer.step('plan', () => planFn(ref.projectPath, ref.workId, session, {
         channel: false,
-        ...(feed.roleCatalog ? { roleCatalog: await feed.roleCatalog(session.worktree?.path ?? ref.projectPath) } : {}),
+        ...(roleCatalog === undefined ? {} : { roleCatalog }),
         ...(hookUrl === undefined ? {} : { hookUrl }),
         ...(codexHookCommand === undefined ? {} : { codexHookCommand }),
         ...(options.prompt === undefined ? {} : { prompt: options.prompt }),
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.effort === undefined ? {} : { effort: options.effort }),
-      });
+      }));
       deliverWarnings(ref, plan);
 
       let command: string;
       try {
-        command = await findRunnerBinary(plan.command, process.env);
+        command = await timer.step('binary', () => findRunnerBinary(plan.command, process.env));
       } catch (error) {
         host.broadcast('host.notice', {
           kind: 'launch-failed',
@@ -541,7 +593,8 @@ export function createSessionsService(
       // `agentEnv` чистит унаследованные метки родительской сессии Claude Code
       // (П0), `plan.env` поверх добавляет свои `PARLEY_*` и `HARNAS_*`.
       // Read again after async preparation: key removal/rotation applies to this exact process.
-      const secret = entry.runner.secret === undefined ? null : await readSecret(entry.runner.secret);
+      const runnerSecret = entry.runner.secret;
+      const secret = runnerSecret === undefined ? null : await timer.step('secret', () => readSecret(runnerSecret));
       if (entry.runner.secret !== undefined && secret === null) {
         throw new HostError('bad_request', 'GLM requires a saved Z.ai key in Providers');
       }
@@ -563,15 +616,18 @@ export function createSessionsService(
       let handle: PtyHandle;
       try {
         // The hook token and inherited host environment are now final. No PTY starts on guard failure.
-        validateSpawnBudget(command, plan.args, env, await spawnLimits());
-        handle = pty.start(ref, {
-          command,
-          args: plan.args,
-          cwd: plan.cwd,
-          env,
-          provider: session.provider,
+        handle = await timer.step('spawn', async () => {
+          validateSpawnBudget(command, plan.args, env, await spawnLimits());
+          const spawned = pty.start(ref, {
+            command,
+            args: plan.args,
+            cwd: plan.cwd,
+            env,
+            provider: session.provider,
+          });
+          processStarted = true;
+          return spawned;
         });
-        processStarted = true;
       } catch (error) {
         if (hookUrl !== undefined) hooks?.unregister(ref);
         const safe = (error as NodeJS.ErrnoException).code === 'E2BIG'
@@ -584,11 +640,22 @@ export function createSessionsService(
       }
       const started = (async () => {
         try {
-          await startSession(ref.projectPath, ref.workId, ref.sessionId, plan.providerSessionId, {
+          const stamp = {
             pid: handle.pid,
             startedAtProcess: await processStartedAt(handle.pid),
-            launchedBy: 'host',
-          }, plan.env['PARLEY_NATIVE_CONTEXT_REVISION']);
+            launchedBy: 'host' as const,
+          };
+          for (let attempt = 1; ; attempt += 1) {
+            try {
+              await startSession(ref.projectPath, ref.workId, ref.sessionId, plan.providerSessionId, stamp,
+                plan.env['PARLEY_NATIVE_CONTEXT_REVISION']);
+              break;
+            } catch (error) {
+              // Замок держат другие писатели карты — это пройдёт; прочий сбой повтором не лечится.
+              if (!(error instanceof MapLockTimeoutError) || attempt >= START_WRITE_ATTEMPTS) throw error;
+              host.log.warn('запись старта сессии ждёт map.lock — повтор', { ref, attempt });
+            }
+          }
         } finally {
           // Процесс уже идёт: слот потрачен, даже если запись старта в карту не удалась.
           if (attemptId !== null) await settleLaunch(ref, attemptId, 'spent');
@@ -597,7 +664,17 @@ export function createSessionsService(
       // Выходу нужен только момент, а не результат: ошибку старта получит вызывающий.
       starting.set(key, started.catch(() => {}));
       try {
-        await started;
+        await timer.step('startWrite', () => started);
+        failed = false;
+      } catch (error) {
+        // Процесс идёт, а карта о нём не знает: окно по карте показывало бы спящую рядом с живым процессом.
+        // Останавливаем — сессия снова без процесса, как и записано в карте, и Resume поднимет её заново.
+        // `starting` снимается до остановки: запись выхода ждёт его и иначе не дождалась бы.
+        starting.delete(key);
+        await stop(ref).catch((stopError: unknown) => {
+          host.log.error('процесс с незаписанным стартом не остановился', { ref, error: String(stopError) });
+        });
+        throw error;
       } finally {
         starting.delete(key);
       }
@@ -612,6 +689,14 @@ export function createSessionsService(
       // Отмена освобождает только свой ожидающий слот: резервы других сессий и прошлых поколений остаются.
       if (attemptId !== null && !processStarted) await settleLaunch(ref, attemptId, 'released');
       launching.delete(key);
+      host.log.info('запуск сессии: время шагов', {
+        ref,
+        mode,
+        by: options.by ?? 'human',
+        ...(loggedProvider === undefined ? {} : { provider: loggedProvider }),
+        ...timer.result(),
+        ...(failed ? { failed: true } : {}),
+      });
     }
   }
 
@@ -690,21 +775,49 @@ export function createSessionsService(
   }
 
   async function create(input: CreateSessionInput): Promise<SessionRef> {
+    const timer = createStepTimer();
+    const logged: { sessionId?: string } = {};
+    let failed = true;
+    try {
+      const ref = await createTimed(input, timer, logged);
+      failed = false;
+      return ref;
+    } finally {
+      host.log.info('создание сессии: время шагов', {
+        projectPath: input.projectPath,
+        workId: input.workId,
+        ...(logged.sessionId === undefined ? {} : { sessionId: logged.sessionId }),
+        provider: input.provider,
+        ...timer.result(),
+        ...(failed ? { failed: true } : {}),
+      });
+    }
+  }
+
+  async function createTimed(
+    input: CreateSessionInput,
+    timer: ReturnType<typeof createStepTimer>,
+    logged: { sessionId?: string },
+  ): Promise<SessionRef> {
     const { projectPath, workId, provider, label, task, parent, worktree } = input;
     // Secret-dependent GLM must refuse before every create branch. Other providers keep their
     // existing create/launch failure behavior; all launches still use the shared preflight below.
-    if ((await loadProviders())[provider]?.runner.secret !== undefined) await readyProvider(provider);
+    if ((await timer.step('providers', () => loadProviders()))[provider]?.runner.secret !== undefined) {
+      await timer.step('providers', () => readyProvider(provider));
+    }
     // Модель и усилие — раньше всего: пара не из каталога провайдера отвергается до первой записи в карте (иначе
     // осталась бы `pending`-сессия, которую нечем запустить), а пустое значение — «по умолчанию». Разрешённый выбор
     // пишется в запись сессии на всех путях ниже: повторный запуск и resume берут его оттуда (спека нормалайзера, 5.5).
     // Пустая строка — отсутствие выбора; только явный null очищает default роли до default CLI.
     if (input.agent !== undefined && input.role !== undefined) throw new HostError('bad_request', 'agent-and-role-conflict');
     const role = input.role ?? (input.agent === undefined ? null : { source: 'claude' as const, name: input.agent });
-    const registry = await loadProviders();
+    const registry = await timer.step('providers', () => loadProviders());
     const entry = registry[provider];
     if (!entry) throw new HostError('bad_request', 'unknown provider');
-    await prepareSessionRole(projectPath, entry, { roleId: roleId(role), provider, mode: 'create' }, feed.roleCatalog ? await feed.roleCatalog(projectPath) : undefined);
-    const resolved = await resolveModelChoice(provider, input.model ?? undefined, input.effort ?? undefined);
+    await timer.step('role', async () => {
+      await prepareSessionRole(projectPath, entry, { roleId: roleId(role), provider, mode: 'create' }, feed.roleCatalog ? await feed.roleCatalog(projectPath) : undefined);
+    });
+    const resolved = await timer.step('model', () => resolveModelChoice(provider, input.model ?? undefined, input.effort ?? undefined));
     // `exactOptionalPropertyTypes`: явный `undefined` ключом в `LaunchChoice` не проходит.
     const choice: LaunchChoice = {
       ...(input.model === null ? { model: null } : resolved.model === undefined ? {} : { model: resolved.model }),
@@ -713,35 +826,38 @@ export function createSessionsService(
 
     // Проверка до создания сессии, а не после (как и в `spawn_session` core,
     // кусок 4.1) — иначе в карте осталась бы pending-сессия, которую нечем завести.
-    if (worktree === true && !(await isGitRepo(projectPath))) {
+    if (worktree === true && !(await timer.step('git', () => isGitRepo(projectPath)))) {
       throw new HostError('bad_request', 'the project has no git — a worktree cannot be created');
     }
 
     if (workId === null) {
-      const created = await createNewSession(projectPath, null);
+      const created = await timer.step('record', () => createNewSession(projectPath, null));
       const ref = { projectPath, workId: created.workId, sessionId: created.session.id };
-      await applyChoice(ref, label, provider, role, choice);
-      if (worktree === true) await attachWorktreePlan(ref, null, false);
-      return createInteractive(ref, 'new', choice);
+      logged.sessionId = ref.sessionId;
+      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice));
+      if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, null, false));
+      return timer.step('launch', () => createInteractive(ref, 'new', choice));
     }
 
     if (task === '' && parent === null) {
-      const created = await createNewSession(projectPath, workId);
+      const created = await timer.step('record', () => createNewSession(projectPath, workId));
       const ref = { projectPath, workId, sessionId: created.session.id };
-      await applyChoice(ref, label, provider, role, choice);
-      if (worktree === true) await attachWorktreePlan(ref, null, false);
-      return createInteractive(ref, 'new', choice);
+      logged.sessionId = ref.sessionId;
+      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice));
+      if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, null, false));
+      return timer.step('launch', () => createInteractive(ref, 'new', choice));
     }
 
     if (task === '' && parent !== null) {
-      const created = await createChildSession(projectPath, workId, parent);
+      const created = await timer.step('record', () => createChildSession(projectPath, workId, parent));
       const ref = { projectPath, workId, sessionId: created.session.id };
-      await applyChoice(ref, label, provider, role, choice);
-      if (worktree === true) await attachWorktreePlan(ref, parent, true);
-      return createInteractive(ref, 'launch', choice);
+      logged.sessionId = ref.sessionId;
+      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice));
+      if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, parent, true));
+      return timer.step('launch', () => createInteractive(ref, 'launch', choice));
     }
 
-    const sessionId = await createPendingSession(projectPath, workId, {
+    const sessionId = await timer.step('record', () => createPendingSession(projectPath, workId, {
       provider,
       label,
       task,
@@ -749,10 +865,11 @@ export function createSessionsService(
       contextFrom: parent === null ? [] : [parent],
       role,
       ...choice,
-    });
+    }));
+    logged.sessionId = sessionId;
     const ref = { projectPath, workId, sessionId };
-    if (worktree === true) await attachWorktreePlan(ref, parent, true);
-    return createInteractive(ref, 'launch', choice);
+    if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, parent, true));
+    return timer.step('launch', () => createInteractive(ref, 'launch', choice));
   }
 
   async function stop(ref: SessionRef): Promise<void> {

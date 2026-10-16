@@ -27,15 +27,16 @@ describe('гид агента цитирует блоки окна дослов�
     expect(GUIDE).toContain(S.notes.note('another note'));
   });
 
-  it('элемент страницы Design Mode — S.designBlock', () => {
-    expect(GUIDE).toContain(S.designBlock.header('http://localhost:5173/settings'));
-    expect(GUIDE).toContain(S.designBlock.dataNote);
-    expect(GUIDE).toContain(S.designBlock.selector('main > section.settings > button.save'));
-    expect(GUIDE).toContain(S.designBlock.text('Save'));
-    expect(GUIDE).toContain(S.designBlock.styles(''));
-    expect(GUIDE).toContain(S.designBlock.html);
-    expect(GUIDE).toContain(S.designBlock.screenshot(''));
-    expect(GUIDE).toContain(S.designBlock.truncated);
+  it('контекст из браузера — S.contextFile', () => {
+    const md = '/Users/…/.parley/desktop/drops/context/element-button.save-a1f3.md';
+    const png = '/Users/…/.parley/desktop/drops/context/element-button.save-a1f3.png';
+    expect(GUIDE).toContain(S.contextFile.terminalLine('element', 'button.save', md, png));
+    expect(GUIDE).toContain(S.contextFile.elementTitle('button.save'));
+    expect(GUIDE).toContain(S.contextFile.url('http://localhost:5173/settings'));
+    expect(GUIDE).toContain(S.contextFile.viewport(375, 812, 2, S.contextFile.emulated('Mobile M')));
+    expect(GUIDE).toContain(S.contextFile.screenshot(png));
+    expect(GUIDE).toContain(S.contextFile.pageDataNote);
+    expect(GUIDE).toContain(S.contextFile.truncated);
   });
 
   it('просьба разрешить конфликт — S.changes.askAgentIntro и askAgentInstruction', () => {

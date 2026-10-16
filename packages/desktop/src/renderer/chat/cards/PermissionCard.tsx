@@ -16,6 +16,7 @@ import { Button } from '../../ui/button.js';
 import { Input } from '../../ui/input.js';
 import { toolHeadline } from '../feed-model.js';
 import { useChatUiStore, EMPTY_CARD_DRAFT } from '../ui-store.js';
+import { alwaysRules } from './always-rules.js';
 import { CardFrame } from './CardFrame.js';
 import { CardNote } from './CardNote.js';
 import { useCardDecision } from './use-card-decision.js';
@@ -25,26 +26,6 @@ const BLOCK = 'm-0 max-h-48 overflow-auto whitespace-pre-wrap rounded border bor
 function str(input: Record<string, unknown>, key: string): string | null {
   const value = input[key];
   return typeof value === 'string' ? value : null;
-}
-
-/** Правила из подсказки `addRules`: `Bash(npm test)`; прочие подсказки кнопку не рождают. */
-export function alwaysRules(suggestions: readonly unknown[]): string[] | null {
-  const rules: string[] = [];
-  let found = false;
-  for (const suggestion of suggestions) {
-    if (typeof suggestion !== 'object' || suggestion === null) continue;
-    const entry = suggestion as { type?: unknown; rules?: unknown };
-    if (entry.type !== 'addRules') continue;
-    found = true;
-    if (!Array.isArray(entry.rules)) continue;
-    for (const rule of entry.rules) {
-      if (typeof rule !== 'object' || rule === null) continue;
-      const { toolName, ruleContent } = rule as { toolName?: unknown; ruleContent?: unknown };
-      if (typeof toolName !== 'string') continue;
-      rules.push(typeof ruleContent === 'string' && ruleContent !== '' ? `${toolName}(${ruleContent})` : toolName);
-    }
-  }
-  return found ? rules : null;
 }
 
 function Collapsible({ label, hideLabel, children }: { label: string; hideLabel: string; children: JSX.Element }): JSX.Element {

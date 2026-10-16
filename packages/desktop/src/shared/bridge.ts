@@ -30,6 +30,12 @@ import type { NotesFile } from './notes-types.js';
 import type { RecipeSaveRequest, RecipeSaveResult } from './recipe-save.js';
 import type { Appearance, UiFile } from './ui-types.js';
 
+/** Результат `app.saveDiagnostics`: путь готового архива и ответил ли хост на запрос снимка (спека диагностики 2026-10-16, A6). */
+export interface DiagnosticsSaveResult {
+  file: string;
+  hostResponded: boolean;
+}
+
 /** Состояние связи окна с хостом — источник для диалогов и строки статуса. */
 export type HostStatus =
   | { state: 'connecting' }
@@ -41,10 +47,11 @@ export type HostStatus =
 /**
  * Куда ведёт клик по уведомлению (спека 3.3, 7.4): вкладка сессии, почты или комнаты.
  * Main шлёт её окну событием `app:focus-target`; окну, которое ещё грузится, — через
- * отложенную (`app:take-focus-target`).
+ * отложенную (`app:take-focus-target`). У цели-сессии с `cardId` клик открывает сессию в виде «Chat»,
+ * прокрученном к этой ждущей карточке (`cardId` — `id` элемента ленты).
  */
 export type FocusTarget =
-  | { kind: 'session'; ref: SessionRef }
+  | { kind: 'session'; ref: SessionRef; cardId?: string }
   | { kind: 'mail'; projectPath: string; workId: string }
   | { kind: 'room'; projectPath: string; workId: string; roomId: string };
 
@@ -139,6 +146,8 @@ export interface ParleyBridge {
      * первого кадра и на каждой перезагрузке страницы (раунд main-r2, п. 1).
      */
     isDark(): boolean;
+    /** Есть ли окно острова (спека 2026-10-12): пока есть, уведомление о запросе с карточкой не шлётся. */
+    islandActive(): boolean;
     /** Двойной клик по пустому месту заголовка (кусок 2.3, спека 5.1). */
     titlebarDoubleClick(): void;
     /**
@@ -158,6 +167,11 @@ export interface ParleyBridge {
     parleyMd(projectPath: string, create: boolean): Promise<{ exists: boolean; created: boolean }>;
     /** Save as recipe: main пишет только `.parley/recipes/<имя>.md` известного проекта и открывает файл; занятое имя — `exists`. */
     saveRecipe(request: RecipeSaveRequest): Promise<RecipeSaveResult>;
+    /**
+     * Собирает архив диагностики в Downloads и показывает его в Finder; `profile` — перед сборкой записать 20-секундный
+     * профиль CPU хоста. Без ответа хоста архив всё равно собирается (`hostResponded: false`).
+     */
+    saveDiagnostics(options: { profile: boolean }): Promise<DiagnosticsSaveResult>;
     /**
      * Только внутри корней любой работы; открывается только белый список, остальное
      * показывается в Finder (кусок 5.2, спека 10.8). Вне корней — отказ `files:denied`.

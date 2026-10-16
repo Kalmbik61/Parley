@@ -61,7 +61,7 @@ let bridge: FakeBridge;
 function feed(
   items: readonly FeedItem[],
   working?: { since: string | null },
-  reveal?: { request: { agentId: string; nonce: number }; onRevealed: (nonce: number) => void },
+  reveal?: { request: ({ agentId: string } | { itemId: string }) & { nonce: number }; onRevealed: (nonce: number) => void },
 ): JSX.Element {
   return (
     <ChatEnvContext.Provider value={{ bridge, sessionRef: REF }}>
@@ -242,6 +242,25 @@ describe('FeedList — просьба показать карточку аген
     expect(scroller.scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 5 * ROW_PX }));
     expect(onRevealed).toHaveBeenCalledTimes(1);
     expect(onRevealed).toHaveBeenCalledWith(7);
+  });
+
+  it('itemId: находит ждущую карточку разрешения по id элемента, прокручивает к ней и гасит просьбу; чужого id нет — просьба ждёт', async () => {
+    const permission: FeedItem = {
+      id: 'perm:1', cardId: 'perm:1', at: AT, kind: 'permission', state: 'pending', toolUseId: null,
+      toolName: 'Bash', toolInput: { command: 'ls' }, suggestions: [], notified: false,
+    };
+    const list = [text('a', 'one'), text('b', 'two'), permission, text('c', 'three')];
+    const onRevealed = vi.fn();
+    const view = render(feed(list));
+    const scroller = fakeScroller();
+    view.rerender(feed(list, undefined, { request: { itemId: 'nope', nonce: 1 }, onRevealed }));
+    await settle();
+    expect(scroller.scrollTo).not.toHaveBeenCalled();
+    expect(onRevealed).not.toHaveBeenCalled();
+    view.rerender(feed(list, undefined, { request: { itemId: 'perm:1', nonce: 2 }, onRevealed }));
+    await settle();
+    expect(scroller.scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 2 * ROW_PX }));
+    expect(onRevealed).toHaveBeenCalledWith(2);
   });
 
   it('прилипание к низу снято: «Jump to latest» появилась, а новый элемент ленту обратно не уводит', async () => {

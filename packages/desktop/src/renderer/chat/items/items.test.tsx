@@ -9,9 +9,9 @@ import { useState } from 'react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { FeedAgent, FeedItem, FeedState, FeedTool } from '@parley/core';
+import type { FeedAgent, FeedItem, FeedState, FeedTool, FeedText } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
@@ -21,6 +21,7 @@ import { ImagePreviewHost } from '../ImagePreview.js';
 import { resetThumbnailCacheForTests } from '../use-thumbnail.js';
 import { AgentItem, type Transcript } from './AgentItem.js';
 import { PromptItem } from './PromptItem.js';
+import { TextItem } from './TextItem.js';
 import { ToolItem } from './ToolItem.js';
 // Редьюсер и разбор журнала — прямо из исходников ленты core, а не из `@parley/core`: корневой модуль
 // тянет `work/mcp-config.ts`, а тот на загрузке строит путь из `import.meta.url`, которого под jsdom нет.
@@ -308,10 +309,27 @@ describe('PromptItem — вложения: хвостовые упоминани
   });
 
   it('серый элемент очереди — те же чипы, подпись «Queued» и текст без путей', () => {
-    renderPrompt(<PromptItem text={'next @"/a/notes.txt" '} queued />);
+    renderPrompt(<PromptItem text={'next @"/a/notes.txt" '} state="queued" />);
     const grey = screen.getByTestId('chat-queued');
     expect(within(grey).getByTestId('chat-attachment').getAttribute('data-path')).toBe('/a/notes.txt');
     expect(grey.textContent).toBe(`notes.txtnext${S.chat.queued}`);
+  });
+
+  it('не ушедший элемент — «Not sent», Retry и × зовут свои колбэки; ждущий — «Waiting» без кнопок', () => {
+    const onRetry = vi.fn();
+    const onRemove = vi.fn();
+    const view = renderPrompt(<PromptItem text="later" state="failed" onRetry={onRetry} onRemove={onRemove} />);
+    const grey = screen.getByTestId('chat-queued');
+    expect(grey.getAttribute('data-state')).toBe('failed');
+    expect(grey.textContent).toContain(S.outbox.notSent);
+    fireEvent.click(within(grey).getByRole('button', { name: S.common.retry }));
+    fireEvent.click(within(grey).getByRole('button', { name: S.outbox.remove }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onRemove).toHaveBeenCalledTimes(1);
+    view.unmount();
+    renderPrompt(<PromptItem text="later" state="waiting" />);
+    expect(screen.getByTestId('chat-queued').textContent).toContain(S.outbox.waiting);
+    expect(screen.queryAllByRole('button')).toEqual([]);
   });
 
   it('лента: промпт и серый элемент очереди рисуют упоминания чипами', () => {
@@ -336,6 +354,12 @@ describe('PromptItem — вложения: хвостовые упоминани
     cleanup();
     renderPrompt(<PromptItem text="" images={1} />);
     expect(screen.getByTestId('chat-prompt').textContent).toBe(S.chat.images(1));
+  });
+
+  it('файл-контекст и его снимок с тем же именем — один чип (спека браузера 4.5)', () => {
+    const md = '/h/drops/context/element-button.save-a1f3.md';
+    renderPrompt(<PromptItem text={`fix this @"${md}" @"/h/drops/context/element-button.save-a1f3.png" @"/a/notes.txt" `} />);
+    expect(paths()).toEqual([md, '/a/notes.txt']);
   });
 });
 
@@ -629,5 +653,75 @@ describe('AgentItem', () => {
     const rows = [...document.querySelectorAll('[data-feed-id]')];
     expect(rows[0]!.className).toContain('pt-3');
     expect(rows[1]!.className).toContain('pt-1');
+  });
+});
+
+describe('действия под сообщениями (спека 2026-10-16, 3.1)', () => {
+  let writeText: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    Reflect.deleteProperty(navigator, 'clipboard');
+  });
+
+  function renderInEnv(node: JSX.Element, resend?: (text: string) => void): ReturnType<typeof render> {
+    const bridge = createFakeBridge();
+    const sessionRef: SessionRef = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-01' };
+    return render(
+      <ChatEnvContext.Provider value={{ bridge, sessionRef, ...(resend === undefined ? {} : { resend }) }}>{node}</ChatEnvContext.Provider>,
+    );
+  }
+
+  it('Copy под своим сообщением кладёт текст как ушёл — с упоминаниями, без пустых краёв; галочка на COPIED_MS', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    renderInEnv(<PromptItem text={'\nsee @"/a/b.txt" \n'} />);
+    fireEvent.click(screen.getByRole('button', { name: S.chat.actions.copy }));
+    await act(async () => {});
+    expect(writeText).toHaveBeenCalledWith('see @"/a/b.txt"');
+    expect(screen.getAllByRole('button', { name: S.chat.actions.copied })).toHaveLength(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(screen.getAllByRole('button', { name: S.chat.actions.copy })).toHaveLength(1);
+  });
+
+  it('буфер отказал — галочки нет, без исключения', async () => {
+    writeText.mockRejectedValue(new Error('denied'));
+    renderInEnv(<PromptItem text="hello" />);
+    fireEvent.click(screen.getByRole('button', { name: S.chat.actions.copy }));
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: S.chat.actions.copied })).toBeNull();
+  });
+
+  it('Send again зовёт resend с текстом промпта как есть; без resend в окружении кнопки нет', () => {
+    const resend = vi.fn();
+    const view = renderInEnv(<PromptItem text={'again @"/a/b.txt" '} />, resend);
+    fireEvent.click(screen.getByRole('button', { name: S.chat.actions.sendAgain }));
+    expect(resend).toHaveBeenCalledWith('again @"/a/b.txt" ');
+    view.unmount();
+    renderInEnv(<PromptItem text="again" />);
+    expect(screen.queryByRole('button', { name: S.chat.actions.sendAgain })).toBeNull();
+  });
+
+  it('у серых элементов строки действий нет', () => {
+    renderInEnv(<PromptItem text="later" state="queued" />, vi.fn());
+    expect(screen.queryByTestId('chat-message-actions')).toBeNull();
+  });
+
+  it('кусок ответа модели: пока пишется — без строки; дописан — Copy кладёт исходный Markdown', async () => {
+    const item: FeedText = { id: 't', at: AT, kind: 'text', messageId: 't', text: '**bold** and `code`', streaming: true };
+    const view = renderInEnv(<TextItem item={item} />);
+    expect(screen.queryByTestId('chat-message-actions')).toBeNull();
+    view.unmount();
+    renderInEnv(<TextItem item={{ ...item, streaming: false }} />);
+    expect(screen.queryByRole('button', { name: S.chat.actions.sendAgain })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: S.chat.actions.copy }));
+    await act(async () => {});
+    expect(writeText).toHaveBeenCalledWith('**bold** and `code`');
   });
 });

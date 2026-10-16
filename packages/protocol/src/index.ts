@@ -6,8 +6,12 @@ export type {
   FeedCardState,
   FeedDecision,
   FeedItem,
+  HealthSample,
+  HostDiagnostics,
+  HostDiagnosticsSession,
   HostErrorReason,
   HostNotice,
+  CompactionPhase,
   LimitWindow,
   LiveMetrics,
   LiveTask,
@@ -18,7 +22,9 @@ export type {
   CapabilityCommand,
   CapabilitySkill,
   CapabilitySource,
+  CompactResult,
   NoticeKind,
+  ProfileStatus,
   ProtocolError,
   ProviderCheck,
   ProviderCheckReason,
@@ -86,7 +92,7 @@ export type { CapabilityMcpInput, CapabilityMcpAdd, CapabilityMcpTarget, Capabil
 export { capabilityActionReason, capabilityActionAvailability, capabilityMcpActions, capabilityMcpAddAvailability } from './capability-snapshot.js';
 export type { CapabilityActionReason, CapabilityActionAvailability, CapabilityMcpActions, CapabilityMcpAddAvailability } from './capability-snapshot.js';
 
-export { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, contextPageMethodSchemas } from './context-pages.js';
+export { COMPACT_MAX_INSTRUCTIONS, COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, contextPageMethodSchemas } from './context-pages.js';
 export type { ContextPageMethodName, ContextPageMethodParams, ContextPageMethodResults } from './context-pages.js';
 
 export { BACKLOG_SNAPSHOT_MAX_BYTES, backlogAuthor, backlogChanged, backlogDiagnostic, backlogErrorCode, backlogFileChoice, backlogItem, backlogMethodSchemas, backlogPrepareTakeResult, backlogRule, backlogSnapshot, backlogSuggestion } from './backlog.js';

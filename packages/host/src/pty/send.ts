@@ -5,11 +5,13 @@
  * одновременно с будильником (`busy`). Автоповторов нет: исход решает человек.
  */
 
+import { performance } from 'node:perf_hooks';
 import { hookedSince } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { SendResult, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import { HostError } from '../errors.js';
+import type { Log } from '../log.js';
 import type { WakeService } from '../wake/wake-service.js';
 import {
   CODEX_SUBMIT_DELAY_MS,
@@ -22,6 +24,7 @@ import { stripEscapes } from './draft.js';
 import { choiceInProgress } from './effort-switch.js';
 import type { PtyManager } from './pty-manager.js';
 import { typeAndSubmit } from './type-and-submit.js';
+import type { AttemptOutcome } from './type-and-submit.js';
 
 /** Предел текста `pty.send` — 64 КиБ в байтах UTF-8 (сквозные ограничения плана). */
 const MAX_SEND_BYTES = 64 * 1024;
@@ -40,7 +43,9 @@ export function sanitizeForSend(text: string): string {
   return clean;
 }
 
-const refused = (reason: 'blocked' | 'busy' | 'no-paste-mode'): SendResult => ({
+type SendReason = 'blocked' | 'busy' | 'no-paste-mode';
+
+const refused = (reason: SendReason): SendResult => ({
   inserted: false,
   submitted: false,
   reason,
@@ -53,38 +58,73 @@ export function createSender(deps: {
   wake: Pick<WakeService, 'inFlight' | 'enterDelayMs'>;
   /** Замок смены модели и effort этой сессии занят: клавиши смены идут в PTY, текст среди них не нужен. */
   switching?: (ref: SessionRef) => boolean;
-}): (params: { ref: SessionRef; text: string; submit: boolean }) => Promise<SendResult> {
+}): (
+  params: { ref: SessionRef; text: string; submit: boolean; requestedAt?: number | undefined },
+  log?: Log,
+) => Promise<SendResult> {
   // Сессии, у которых вставка с submit ждёт своего Enter: иначе Enter первого вызова
   // отправил бы и текст второго, а тост второго сказал бы «без Enter».
   const waiting = new Set<string>();
 
-  return async ({ ref, text, submit }) => {
+  return async ({ ref, text, submit, requestedAt }, log) => {
+    const startedAt = performance.now();
+    // Метка окна — мс эпохи, а не performance.now(): окно и хост на одной машине, часы одни. Метка из будущего
+    // (расхождение часов) даёт 0, а не отрицательное ожидание.
+    const queueMs = requestedAt === undefined ? null : Math.max(0, Date.now() - requestedAt);
     const handle = deps.pty.get(ref);
     if (handle === undefined) throw new HostError('not_found', 'session is not running');
     const codex = handle.provider === 'codex';
     const clean = sanitizeForSend(text);
 
+    // Журнал задержек (спека диагностики, A4): одна запись на вызов, длины и идентификаторы без текста.
+    // typeMs — от входа в обработчик до возврата typeAndSubmit; enterMs — от него до исхода Enter (null, если Enter не ждали).
+    // Журнал синхронный и при ENOSPC/EACCES бросает: запись не должна ломать отправку, поэтому ошибка гасится.
+    const note = (
+      outcome: SendReason | AttemptOutcome | 'draft' | 'failed',
+      typeMs: number,
+      enterMs: number | null,
+    ): void => {
+      if (log === undefined) return;
+      try {
+        log.info('сообщение в сессию', {
+          op: 'pty.send',
+          ref,
+          chars: clean.length,
+          queueMs,
+          typeMs,
+          enterMs,
+          outcome,
+        });
+      } catch {
+        // Диагностика не должна ломать основной путь.
+      }
+    };
+    const refuse = (reason: SendReason): SendResult => {
+      note(reason, Math.round(performance.now() - startedAt), null);
+      return refused(reason);
+    };
+
     // Ползунок `/effort`: Enter в нём сохраняет уровень умолчанием в настройках CLI, а текст стал бы его вводом. Хост
     // закрывает ползунок сам (Esc), но поздний, открывшийся после паузы, мог остаться на экране; пока идёт смена,
     // ползунок открыт намеренно. В обоих случаях в PTY не уходит ни одного байта.
-    if (choiceInProgress(ref, deps)) return refused('blocked');
+    if (choiceInProgress(ref, deps)) return refuse('blocked');
 
     // Отсюда и до pty.write — ни одного await: иначе будильник успел бы напечатать
     // указатель между проверками и вставкой.
     // Пока агент показывает диалог, вставленные символы может прочитать сам диалог —
     // это был бы автоответ, запрещённый рамкой.
     const live = deps.activity.get(ref)?.activity;
-    if (live?.activity === 'blocked') return refused('blocked');
+    if (live?.activity === 'blocked') return refuse('blocked');
     // Ни одного хука с запуска процесса — хост не знает, что у агента на экране: у свежей
     // сессии это может быть вопрос доверия к папке, где Enter выбрал бы «Yes, proceed»
     // (fix-final-b). Отвечаем как на blocked: человек смотрит в терминал сам.
-    if (!hookedSince(live, handle.startedAt)) return refused('blocked');
+    if (!hookedSince(live, handle.startedAt)) return refuse('blocked');
     const key = refKey(ref);
-    if (deps.wake.inFlight(ref) || waiting.has(key)) return refused('busy');
+    if (deps.wake.inFlight(ref) || waiting.has(key)) return refuse('busy');
     const paste = handle.bracketedPaste();
     // Codex — всегда вставкой: без неё поток знаков он не считает вставкой, и Enter внутри него отправил бы
     // сообщение раньше времени. Режима вставки нет — TUI ещё не поднялся, и писать в него нечего.
-    if (codex ? !paste : clean.includes('\n') && !paste) return refused('no-paste-mode');
+    if (codex ? !paste : clean.includes('\n') && !paste) return refuse('no-paste-mode');
 
     // Черновик считается до вставки: человека или хоста от прошлой вставки без Enter.
     const hadDraft = handle.hasDraft();
@@ -112,17 +152,30 @@ export function createSender(deps: {
       },
     );
 
-    if (!submit) return { inserted: true, submitted: false, reason: null };
-    if (hadDraft) return { inserted: true, submitted: false, reason: 'draft' };
+    const typeMs = Math.round(performance.now() - startedAt);
+    if (!submit) {
+      note('typed', typeMs, null);
+      return { inserted: true, submitted: false, reason: null };
+    }
+    if (hadDraft) {
+      note('draft', typeMs, null);
+      return { inserted: true, submitted: false, reason: 'draft' };
+    }
 
     waiting.add(key);
+    const enterFrom = performance.now();
     try {
       const outcome = await attempt.done;
+      note(outcome, typeMs, Math.round(performance.now() - enterFrom));
       if (outcome === 'submitted') return { inserted: true, submitted: true, reason: null };
       if (outcome === 'input') return { inserted: true, submitted: false, reason: 'input' };
       if (outcome === 'blocked') return { inserted: true, submitted: false, reason: 'blocked-before-enter' };
       // Остаётся restarted: попытку отправителя никто не отменяет, а typed бывает только без submit.
       return { inserted: true, submitted: false, reason: 'restarted' };
+    } catch (error) {
+      // Отклонённый Enter (запись в PTY упала): в журнале остаётся след, ошибка уходит вызывающему как раньше.
+      note('failed', typeMs, Math.round(performance.now() - enterFrom));
+      throw error;
     } finally {
       waiting.delete(key);
     }

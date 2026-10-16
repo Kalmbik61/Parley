@@ -1,9 +1,13 @@
 // packages/desktop/src/main/browser/inspector.test.ts
 import { EventEmitter } from 'node:events';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { WebContents } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEVTOOLS_LIMITS, type DevtoolsBatch } from '../../shared/browser-devtools.js';
-import { CDP_ALLOWED, CDP_COMMAND_MS, createInspector, forwardBatches } from './inspector.js';
+import { CDP_ALLOWED, CDP_COMMAND_MS, cdpCallAllowed, createInspector, forwardBatches } from './inspector.js';
+import { REACT_INFO_FN } from './react-info.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -714,9 +718,17 @@ describe('пачки окну (раздел 8; Фокус ревью 1)', () => 
 });
 
 describe('команды CDP (спека 3.3)', () => {
-  it('закрытый список этапа A; Runtime.evaluate и callFunctionOn в нём нет', () => {
+  it('закрытый список этапов A и B; Runtime.evaluate в нём нет', () => {
     expect([...CDP_ALLOWED].sort()).toEqual(
       [
+        'Accessibility.disable',
+        'Accessibility.enable',
+        'Accessibility.getPartialAXTree',
+        'DOM.describeNode',
+        'DOM.disable',
+        'DOM.enable',
+        'DOM.getNodeForLocation',
+        'DOM.resolveNode',
         'Emulation.clearDeviceMetricsOverride',
         'Emulation.setDeviceMetricsOverride',
         'Emulation.setTouchEmulationEnabled',
@@ -726,14 +738,16 @@ describe('команды CDP (спека 3.3)', () => {
         'Network.disable',
         'Network.enable',
         'Network.getResponseBody',
+        'Page.captureScreenshot',
         'Page.disable',
         'Page.enable',
+        'Runtime.callFunctionOn',
         'Runtime.disable',
         'Runtime.enable',
+        'Runtime.releaseObject',
       ].sort(),
     );
     expect(CDP_ALLOWED.has('Runtime.evaluate')).toBe(false);
-    expect(CDP_ALLOWED.has('Runtime.callFunctionOn')).toBe(false);
   });
 
   it('send: команда вне списка — отказ без sendCommand; из списка — sendCommand и ответ', async () => {
@@ -817,5 +831,62 @@ describe('forwardBatches (пачки окну-хозяину гостя)', () =>
     listeners[0]?.(batch);
     expect(send).toHaveBeenCalledTimes(1);
     expect(typeof off).toBe('function');
+  });
+});
+
+describe('закрытый список CDP — этап B (спека браузера 3.3, 3.8)', () => {
+  it('методы выбора и снимков есть, Runtime.evaluate нет', () => {
+    for (const method of [
+      'DOM.enable',
+      'DOM.getNodeForLocation',
+      'DOM.describeNode',
+      'DOM.resolveNode',
+      'Accessibility.enable',
+      'Accessibility.disable',
+      'Accessibility.getPartialAXTree',
+      'Runtime.callFunctionOn',
+      'Runtime.releaseObject',
+      'Page.captureScreenshot',
+    ]) {
+      expect(CDP_ALLOWED.has(method), method).toBe(true);
+    }
+    expect(CDP_ALLOWED.has('Runtime.evaluate')).toBe(false);
+  });
+
+  it('Фокус ревью 4: Runtime.callFunctionOn — только с REACT_INFO_FN', () => {
+    expect(cdpCallAllowed('Runtime.callFunctionOn', { objectId: 'o', functionDeclaration: REACT_INFO_FN })).toBe(true);
+    expect(cdpCallAllowed('Runtime.callFunctionOn', { objectId: 'o', functionDeclaration: 'function () { return document.cookie; }' })).toBe(false);
+    expect(cdpCallAllowed('Runtime.callFunctionOn', { objectId: 'o' })).toBe(false);
+    expect(cdpCallAllowed('Runtime.callFunctionOn')).toBe(false);
+    expect(cdpCallAllowed('Runtime.evaluate', { expression: '1' })).toBe(false);
+    expect(cdpCallAllowed('DOM.describeNode', { backendNodeId: 1 })).toBe(true);
+  });
+
+  it('Фокус ревью 4: send с чужой функцией отклонён до debugger.sendCommand; с REACT_INFO_FN — уходит', async () => {
+    const { dbg, inspector } = setup();
+    dbg.sendCommand.mockClear();
+    const evil = { objectId: 'o1', functionDeclaration: 'function () { return document.cookie; }', returnByValue: true };
+    await expect(inspector.send(7, 'Runtime.callFunctionOn', evil)).rejects.toThrow('CDP method not allowed: Runtime.callFunctionOn');
+    expect(dbg.sendCommand).not.toHaveBeenCalled();
+    const good = { objectId: 'o1', functionDeclaration: REACT_INFO_FN, returnByValue: true };
+    await inspector.send(7, 'Runtime.callFunctionOn', good);
+    expect(dbg.sendCommand).toHaveBeenCalledWith('Runtime.callFunctionOn', good);
+  });
+
+  it('рамочный: в коде main Runtime.callFunctionOn зовётся только с REACT_INFO_FN', () => {
+    const mainDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const files = (readdirSync(mainDir, { recursive: true }) as string[]).filter(
+      (file) => file.endsWith('.ts') && !file.includes('.test.') && path.basename(file) !== 'inspector.ts',
+    );
+    let calls = 0;
+    for (const file of files) {
+      const text = readFileSync(path.join(mainDir, file), 'utf8');
+      for (const match of text.matchAll(/'Runtime\.callFunctionOn'/g)) {
+        calls += 1;
+        const at = match.index ?? 0;
+        expect(text.slice(at, at + 200), file).toContain('functionDeclaration: REACT_INFO_FN');
+      }
+    }
+    expect(calls).toBeGreaterThan(0);
   });
 });

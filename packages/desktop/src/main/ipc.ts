@@ -5,9 +5,10 @@ import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS, SHARED_FILE_PATH } from '@p
 import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
-import type { AppNote, CloseAnswer, FocusTarget, UpdateInfo } from '../shared/bridge.js';
+import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, UpdateInfo } from '../shared/bridge.js';
 import { encodeIpcError } from '../shared/ipc-error.js';
 import { DEVTOOLS_LIMITS, isViewportSpec, type DevtoolsSnapshot } from '../shared/browser-devtools.js';
+import type { ContextInput, SavedContext } from '../shared/browser-types.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 import { DropTooLargeError } from './drops.js';
 import { HostError } from './host-connection.js';
@@ -16,11 +17,14 @@ import { LayoutTooLargeError } from './layout-store.js';
 import { parseRecipeSaveRequest, writeProjectRecipe } from './recipe-file.js';
 import type { LayoutStore } from './layout-store.js';
 import type { NotesStore } from './notes-store.js';
+import { ISLAND_METHODS } from '../shared/island.js';
 import { isNotesFile } from '../shared/notes-types.js';
 import { isSessionId, workKey as projectWorkKey } from '../shared/work-keys.js';
 import type { UiStore } from './ui-store.js';
 import { openOrReveal, revealInFinder } from './files/open-path.js';
 import { FilesDeniedError, type RootsRegistry } from './roots.js';
+import { parseAnnotationPins, type createAnnotate } from './browser/annotate.js';
+import { parseContextInput } from './browser/context-files.js';
 import type { createDesignMode } from './browser/design-mode.js';
 import type { Emulation } from './browser/emulation.js';
 import type { Inspector } from './browser/inspector.js';
@@ -114,7 +118,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isFocusTarget(value: unknown): value is FocusTarget {
+export function isFocusTarget(value: unknown): value is FocusTarget {
   if (!isRecord(value)) return false;
   switch (value.kind) {
     case 'session': {
@@ -123,7 +127,8 @@ function isFocusTarget(value: unknown): value is FocusTarget {
         isRecord(ref) &&
         typeof ref.projectPath === 'string' &&
         typeof ref.workId === 'string' &&
-        typeof ref.sessionId === 'string'
+        typeof ref.sessionId === 'string' &&
+        (value.cardId === undefined || isValidPathArg(value.cardId))
       );
     }
     case 'mail':
@@ -181,6 +186,10 @@ export interface RegisterIpcOptions {
   setAppearance: (mode: Appearance) => void;
   /** `nativeTheme.shouldUseDarkColors` — источник истины темы окна (`app:is-dark`, раунд main-r2, п. 1). */
   isDark: () => boolean;
+  /** Окно острова (спека 2026-10-12): от него `host:call` пропускает только `ISLAND_METHODS`. */
+  isIslandSender?: (sender: unknown) => boolean;
+  /** Есть ли живое окно острова — для `notify.ts` главного окна (`app:island-active`). */
+  islandActive?: () => boolean;
   /** Двойной клик по пустому месту заголовка (кусок 2.3, спека 5.1) — системное действие macOS. */
   titlebarDoubleClick: () => void;
   /** «Reveal in Finder» карточки работы (кусок 3.4) — `shell.showItemInFolder`. */
@@ -191,6 +200,11 @@ export interface RegisterIpcOptions {
   openPath: (absPath: string) => Promise<string>;
   /** Картинка буфера → drops/ (main/index.ts: clipboard и saveImage); null — картинки нет или в буфере есть текст. */
   saveDropImage: () => Promise<string | null>;
+  /**
+   * Архив диагностики (`main/diagnostics/bundle.ts#saveDiagnostics`, спека 2026-10-16 A6): сборка с готовыми
+   * зависимостями (соединение, каталоги, версии), `profile` — писать ли перед этим профиль CPU хоста.
+   */
+  saveDiagnostics: (options: { profile: boolean }) => Promise<DiagnosticsSaveResult>;
   /**
    * Миниатюра картинки «Chat» (`main/image-thumbnail.ts`): путь и сторона (`maxPx`) приходят из окна как есть, проверяет
    * сам модуль; `null` — не картинка или не читается.
@@ -208,6 +222,10 @@ export interface RegisterIpcOptions {
     session: Pick<Session, 'clearStorageData' | 'clearCache'>;
     /** Выбор элемента Design Mode (кусок 9.3a, спека 12.3): main/browser/design-mode.ts#createDesignMode. */
     designMode: ReturnType<typeof createDesignMode>;
+    /** Файл-контекст браузера (этап B, спека 3.6): main/browser/context-files.ts#saveContextFile в drops/context. */
+    saveContext(input: ContextInput): Promise<SavedContext>;
+    /** Аннотации (этап B, спека браузера 4.7): main/browser/annotate.ts#createAnnotate. */
+    annotate: ReturnType<typeof createAnnotate>;
     /** Журнал консоли и сети гостей (спека 2026-10-07, 3.3): main/browser/inspector.ts#createInspector. */
     inspector: Pick<Inspector, 'snapshot' | 'clear' | 'responseBody' | 'ready'>;
     /** Размер вьюпорта (спека 2026-10-07, 4.2): main/browser/emulation.ts#createEmulation. */
@@ -303,11 +321,14 @@ export function registerIpc(options: RegisterIpcOptions): void {
     notesStore,
     setAppearance,
     isDark,
+    isIslandSender,
+    islandActive,
     titlebarDoubleClick,
     showItemInFolder,
     roots,
     openPath,
     saveDropImage,
+    saveDiagnostics,
     imageThumbnail,
     setDirtyBuffers,
     answerClose,
@@ -316,9 +337,13 @@ export function registerIpc(options: RegisterIpcOptions): void {
 
   ipcMain.handle(
     'host:call',
-    withIpcError(async (_event, method: unknown, params: unknown) => {
+    withIpcError(async (event, method: unknown, params: unknown) => {
       if (typeof method !== 'string' || !isMethodName(method)) {
         throw new Error(`unknown method: ${String(method)}`);
+      }
+      // Остров — узкий клиент: остальное ему не нужно, а `host.shutdown` из прозрачного окна поверх всего — тем более.
+      if (isIslandSender?.((event as { sender?: unknown }).sender) === true && !ISLAND_METHODS.has(method)) {
+        throw new Error(`method not allowed for the island: ${method}`);
       }
       return connection.call(method, params);
     }),
@@ -329,8 +354,15 @@ export function registerIpc(options: RegisterIpcOptions): void {
     withIpcError(async () => connection.activitySnapshot()),
   );
 
-  ipcMain.on('host:notify', (_event, method: unknown, params: unknown) => {
+  // Есть ли окно острова: `sendSync` прелоада главного окна, чтобы `notify.ts` знал, слать ли системное уведомление.
+  ipcMain.on('app:island-active', (event) => {
+    (event as { returnValue: unknown }).returnValue = islandActive?.() === true;
+  });
+
+  ipcMain.on('host:notify', (event, method: unknown, params: unknown) => {
     if (typeof method !== 'string' || !isNotificationName(method)) return;
+    // Остров ввод в терминал и размеры не шлёт: уведомления хосту от него тихо отбрасываются (как отказ в `host:call`).
+    if (isIslandSender?.((event as { sender?: unknown }).sender) === true) return;
     connection.notify(method, params);
   });
 
@@ -606,6 +638,27 @@ export function registerIpc(options: RegisterIpcOptions): void {
     return { status: 'saved', id: written.id, opened };
   }));
 
+  // Архив диагностики: окно присылает только «с профилем или без»; каталог, имя и состав задаёт main. Готовый файл
+  // показывается в Finder здесь же — путь в `~/Downloads` вне корней работ, `app:show-in-finder` его не пустил бы.
+  // Сборка идёт одна за раз: второй вызов во время первой ждёт её же результат, а не запускает второй профиль и второй zip.
+  let savingDiagnostics: Promise<DiagnosticsSaveResult> | null = null;
+  // Архив лежит вне корней работ, но его путь выдал сам main: по нему «Show in Finder» из тоста идёт мимо реестра корней.
+  const savedDiagnosticsFiles = new Set<string>();
+  ipcMain.handle('app:save-diagnostics', withIpcError(async (_event, options: unknown) => {
+    if (!isRecord(options) || typeof options.profile !== 'boolean') {
+      throw new HostError('bad_request', 'Invalid diagnostics request.');
+    }
+    if (savingDiagnostics === null) {
+      savingDiagnostics = saveDiagnostics({ profile: options.profile }).finally(() => {
+        savingDiagnostics = null;
+      });
+    }
+    const result = await savingDiagnostics;
+    savedDiagnosticsFiles.add(result.file);
+    showItemInFolder(result.file);
+    return result;
+  }));
+
   ipcMain.handle('app:parley-md', withIpcError(async (_event, projectPath: unknown, create: unknown) => {
     if (!isValidPathArg(projectPath) || typeof create !== 'boolean') {
       throw new HostError('bad_request', 'invalid PARLEY.md request');
@@ -704,6 +757,37 @@ export function registerIpc(options: RegisterIpcOptions): void {
     }),
   );
 
+  // Файл-контекст браузера (спека браузера 3.6): форма — до записи; снимок и имя проверяет saveContextFile.
+  ipcMain.handle(
+    'browser:save-context',
+    withIpcError(async (_event, input: unknown) => browser.saveContext(parseContextInput(input))),
+  );
+
+  // Аннотации (спека браузера 4.7): тот же страж гостя, что у выбора; метки — проверенной формы.
+  ipcMain.handle(
+    'browser:annotate-start',
+    withIpcError(async (_event, id: unknown) => browser.annotate.start(browserGuest(browser, id).id)),
+  );
+  ipcMain.handle(
+    'browser:annotate-cancel',
+    withIpcError(async (_event, id: unknown) => {
+      await browser.annotate.cancel(browserGuest(browser, id).id);
+    }),
+  );
+  ipcMain.handle(
+    'browser:annotate-sync',
+    withIpcError(async (_event, id: unknown, pins: unknown) => {
+      const guest = browserGuest(browser, id);
+      const parsed = parseAnnotationPins(pins);
+      if (parsed === null) throw new HostError('bad_request', 'invalid annotation pins');
+      return browser.annotate.sync(guest.id, parsed);
+    }),
+  );
+  ipcMain.handle(
+    'browser:annotate-capture',
+    withIpcError(async (_event, id: unknown) => browser.annotate.capture(browserGuest(browser, id).id)),
+  );
+
   ipcMain.handle(
     'browser:clear-data',
     withIpcError(async () => {
@@ -759,6 +843,11 @@ export function registerIpc(options: RegisterIpcOptions): void {
     'app:show-in-finder',
     withIpcError(async (_event, absPath: unknown) => {
       if (!isValidPathArg(absPath)) throw new HostError('bad_request', 'invalid path');
+      // Путь сохранённого архива диагностики main выдал сам (`app:save-diagnostics`): корней работ он не касается.
+      if (savedDiagnosticsFiles.has(absPath)) {
+        showItemInFolder(absPath);
+        return;
+      }
       await revealInFinder(absPath, { roots, showItemInFolder });
     }),
   );
@@ -770,13 +859,19 @@ export function registerIpc(options: RegisterIpcOptions): void {
  * отдаёт текущий статус немедленно при подписке, а если подписаться до того,
  * как прелоад этого окна навесил свои слушатели `ipcRenderer.on`, самое первое
  * сообщение (обычно самое важное — «хост подключён») уйдёт в пустоту.
+ *
+ * `options.events` — белый список событий: окну уходят только `host:event` с этим именем (остров, спека 2026-10-12:
+ * `pty.output` всех сессий в его renderer не нужен). Статус хоста шлётся всегда. Без списка — все события.
  */
 export function forwardHostToWindow(
   connection: HostConnection,
   window: BrowserWindow,
+  options: { events?: ReadonlySet<string> } = {},
 ): { dispose: () => void } {
+  const { events } = options;
   const unsubEvent = connection.onEvent((message) => {
     if (window.isDestroyed()) return;
+    if (events !== undefined && !events.has(message.event)) return;
     window.webContents.send('host:event', message);
   });
   const unsubStatus = connection.onStatus((status) => {
@@ -796,11 +891,15 @@ export function forwardHostToWindow(
  * страница, её стор связи снова `connecting`, а статус хоста main слал только первой. Новая
  * подписка отдаёт текущий статус сразу (`onStatus`), прежняя снимается — подписка одна.
  */
-export function forwardHostToPages(connection: HostConnection, window: BrowserWindow): void {
+export function forwardHostToPages(
+  connection: HostConnection,
+  window: BrowserWindow,
+  options: { events?: ReadonlySet<string> } = {},
+): void {
   let current: { dispose: () => void } | null = null;
   window.webContents.on('did-finish-load', () => {
     current?.dispose();
-    current = forwardHostToWindow(connection, window);
+    current = forwardHostToWindow(connection, window, options);
   });
   window.on('closed', () => {
     current?.dispose();

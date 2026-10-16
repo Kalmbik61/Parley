@@ -41,15 +41,12 @@ export interface Queued extends QueuedPrompt {
 }
 
 /**
- * Просьба «показать карточку агента» (план 2026-10-01, кусок 4b): её ставят бейдж агентов, поповер и тулбар,
- * а исполняет лента сессии — прокручивает к карточке с этим `agentId` и гасит просьбу. `nonce` растёт на каждую:
- * повторная просьба про того же агента — новая, а не та же.
+ * Просьба «показать» в ленте (план 2026-10-01, кусок 4b): её ставят бейдж агентов, поповер, тулбар и клик по
+ * уведомлению, а исполняет лента сессии — прокручивает к цели и гасит просьбу. Цель — карточка агента (`agentId`)
+ * или любой элемент ленты по `id` (`itemId`: например, ждущая карточка разрешения). `nonce` растёт на каждую:
+ * повторная просьба про ту же цель — новая, а не та же.
  */
-export interface RevealRequest {
-  sessionKey: string;
-  agentId: string;
-  nonce: number;
-}
+export type RevealRequest = { sessionKey: string; nonce: number } & ({ agentId: string } | { itemId: string });
 
 /**
  * Сколько просьба ждёт карточку. Вкладку, которой ещё не было, лента открывает не сразу (подписка и снимок), а
@@ -78,6 +75,8 @@ export interface ChatUiState {
   reveal: RevealRequest | null;
   /** Поставить просьбу; сама гаснет через `REVEAL_TTL_MS`. */
   requestReveal(sessionKey: string, agentId: string): void;
+  /** То же для элемента ленты по `id` (карточки разрешения, вопроса, плана); те же `nonce` и срок жизни. */
+  requestRevealItem(sessionKey: string, itemId: string): void;
   /** Погасить просьбу с этим `nonce`; ушедшая раньше или уже заменённая новой — не трогается. */
   clearReveal(nonce: number): void;
   setDraft(key: string, text: string): void;
@@ -110,6 +109,12 @@ export const useChatUiStore = create<ChatUiState>((set, get) => ({
     lastNonce += 1;
     const nonce = lastNonce;
     set({ reveal: { sessionKey, agentId, nonce } });
+    setTimeout(() => get().clearReveal(nonce), REVEAL_TTL_MS);
+  },
+  requestRevealItem: (sessionKey, itemId) => {
+    lastNonce += 1;
+    const nonce = lastNonce;
+    set({ reveal: { sessionKey, itemId, nonce } });
     setTimeout(() => get().clearReveal(nonce), REVEAL_TTL_MS);
   },
   clearReveal: (nonce) => set((state) => (state.reveal?.nonce === nonce ? { reveal: null } : state)),

@@ -25,6 +25,7 @@
 
 import { lstat, open } from 'node:fs/promises';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import {
   applyDecision,
   applyHookEvent,
@@ -122,7 +123,7 @@ export interface FeedServiceDeps {
   works: Pick<WorksService, 'entry' | 'onChange'>;
   activity: Pick<
     ActivityService,
-    'onChange' | 'logFile' | 'childLogFile' | 'questionHeld' | 'onLogChange'
+    'onChange' | 'logFile' | 'childLogFile' | 'questionHeld' | 'permissionAnswered' | 'onLogChange'
   >;
   pty: Pick<PtyManager, 'on' | 'get' | 'write' | 'screenText'>;
 }
@@ -159,6 +160,8 @@ export interface FeedService {
   unsubscribe(ref: SessionRef, client: Client): void;
   /** Клиент отключился от хоста: все его подписки сняты. */
   dropClient(client: Client): void;
+  /** Сколько подписок на ленты держит хост: сумма размеров множеств подписчиков по всем сессиям. */
+  subscriberCount(): number;
   decide(ref: SessionRef, cardId: string, decision: FeedDecision): Result<'feed.decide'>;
   /**
    * Режим разрешений, который хост сверил по подвалу терминала (`sessions.setMode`): ставит его в
@@ -170,6 +173,12 @@ export interface FeedService {
    * (ответа ещё не было), лента закрывает сама, а текст промпта, возвращённый CLI в поле ввода, стирает.
    */
   interrupt(ref: SessionRef): void;
+  /**
+   * Сообщение из Chat ушло в сессию (`pty.send` с `submitted`): запоминает время. Первая пачка ленты после метки,
+   * где есть не только эхо промпта человека, пишет в журнал задержек `feed.firstDelta` — сколько агент молчал
+   * до первого ответа, — и метка снимается; выход и новый запуск процесса метку тоже снимают.
+   */
+  markSent(ref: SessionRef): void;
   /** Выключение хоста: всем удержанным хукам `{}`, таймеры сняты. */
   stop(): Promise<void>;
 }
@@ -310,6 +319,8 @@ export function createFeedService(
   const feeds = new Map<string, SessionFeed>();
   const subscribers = new Map<string, Set<Client>>();
   const lastActivity = new Map<string, string>();
+  /** Метки `markSent`: ключ сессии → время отправки, до первой пачки ленты (журнал задержек `feed.firstDelta`). */
+  const sentAt = new Map<string, number>();
   /** Процессы Codex, чья сессия на старте ещё не попала в карту работ: таймер доверия взведут по её появлению. */
   const graceWaiting = new Map<string, SessionRef>();
   /** Таймеры присмотра за Esc из чата. */
@@ -459,7 +470,19 @@ export function createFeedService(
     feed.batch = { upsert: new Map(), removed: new Set() };
     feed.modeChanged = false;
     feed.revision += 1;
-    const clients = subscribers.get(refKey(feed.ref));
+    // Журнал задержек (спека диагностики, A4): запись нужна и без открытого Chat, поэтому до проверки подписчиков.
+    // Эхо промпта человека — не ответ агента: пачка только из промптов метку не снимает.
+    const key = refKey(feed.ref);
+    const sent = sentAt.get(key);
+    if (sent !== undefined && Array.from(upsert.values()).some((item) => item.kind !== 'prompt')) {
+      sentAt.delete(key);
+      log.info('лента: первая дельта после отправки', {
+        op: 'feed.firstDelta',
+        ref: feed.ref,
+        sinceSendMs: Math.max(0, now() - sent),
+      });
+    }
+    const clients = subscribers.get(key);
     if (clients === undefined || clients.size === 0) return;
     const data = {
       ref: feed.ref,
@@ -470,8 +493,10 @@ export function createFeedService(
       ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
     };
     for (const client of Array.from(clients)) {
-      // Клиент не успевает читать — подписка снимается, как у `pty.output`: окно возьмёт снимок заново.
-      if (!client.send({ event: 'feed.changed', data })) clients.delete(client);
+      // В отличие от `pty.output`, подписку по буферу не снимаем: он обычно полон собственным большим ответом
+      // окну (снимок ленты на мегабайты), а дельты мелкие и идут пачками раз в 50 мс. Окно об отписке не
+      // узнало бы и ждало дельт вечно; ушедшего клиента снимает `dropClient`.
+      client.send({ event: 'feed.changed', data });
     }
   }
 
@@ -608,17 +633,21 @@ export function createFeedService(
       return;
     }
     const cardId = card.cardId;
+    const hookEvent = body['hook_event_name'] === 'PreToolUse' ? 'PreToolUse' : 'PermissionRequest';
     pending.hold({
       ref: feed.ref,
       cardId,
-      hookEvent: body['hook_event_name'] === 'PreToolUse' ? 'PreToolUse' : 'PermissionRequest',
+      hookEvent,
       rawToolInput: recordOf(body['tool_input']),
       kind: card.kind,
       respond: request.respond,
     });
     // CLI закрыл запрос сам (ответили в терминале, процесс вышел): решать в окне больше нечего.
     request.onAbandon(() => {
-      if (pending.drop(feed.ref, cardId)) settle(feed.ref, 'elsewhere', [cardId]);
+      if (!pending.drop(feed.ref, cardId)) return;
+      // Ответили в терминале: инструмент пошёл, `blocked` пора снять. Таймаут (`stale`) сюда не попадает.
+      if (hookEvent === 'PermissionRequest') deps.activity.permissionAnswered(feed.ref);
+      settle(feed.ref, 'elsewhere', [cardId]);
     });
   }
 
@@ -967,6 +996,13 @@ export function createFeedService(
     if (stopped || activity !== 'idle' || previous === 'idle') return;
     const feed = feeds.get(key);
     if (feed === undefined) return;
+    // У Codex запрос одобрения идёт из ячейки code mode, а она живёт дольше хода и приглашения: снятая карточка
+    // отдала бы хуку `{}`, Codex ушёл бы в окно TUI, и `exec` ждал бы там без срока (разбор 2026-10-16).
+    try {
+      if (sessionOf(feed.ref).provider === 'codex') return;
+    } catch {
+      // Сессии уже нет в работах — поведение прежнее.
+    }
     // Решение 5: агент у приглашения — карточки ответили в терминале (Esc и прерывание не дают `Stop`).
     // Удержанный `PreToolUse` вопроса не снимаем: пока он висит, CLI ждёт ответа хука и у приглашения
     // быть не может, а журнал событий его не видит и по тишине считает ход оконченным.
@@ -989,6 +1025,7 @@ export function createFeedService(
       feeds.delete(key);
     }
     lastActivity.delete(key);
+    sentAt.delete(key);
     subscribers.delete(key);
     graceWaiting.delete(key);
   }
@@ -1016,6 +1053,8 @@ export function createFeedService(
   // Запуск и возобновление: журнал читается до первого события нового процесса.
   const unsubscribeStart = deps.pty.on('start', (ref) => {
     if (stopped) return;
+    // Новый процесс не ответит на отправку старого: метка дала бы ложные минуты в `feed.firstDelta`.
+    sentAt.delete(refKey(ref));
     void seedAside(ref);
     void armCodexGrace(ref);
   });
@@ -1045,6 +1084,8 @@ export function createFeedService(
 
   const unsubscribeExit = deps.pty.on('exit', (ref) => {
     if (stopped) return;
+    // Ответа вышедшего процесса не будет: метка отправки не должна дожить до чужой пачки.
+    sentAt.delete(refKey(ref));
     graceWaiting.delete(refKey(ref));
     const feed = feeds.get(refKey(ref));
     if (feed === undefined) {
@@ -1127,19 +1168,46 @@ export function createFeedService(
     onHook,
 
     async snapshot(ref, agentId) {
+      const startedAt = performance.now();
       const session = sessionOf(ref);
-      if (agentId !== undefined) return agentSnapshot(ref, agentId);
+      if (agentId !== undefined) {
+        const sub = await agentSnapshot(ref, agentId);
+        log.info('лента: снимок', {
+          sessionId: ref.sessionId,
+          workId: ref.workId,
+          agentId,
+          items: sub.items.length,
+          bytes: null,
+          seedMs: null,
+          totalMs: Math.round(performance.now() - startedAt),
+        });
+        return sub;
+      }
       const feed = feedOf(ref);
-      if (!feed.live && !feed.seeded) await seed(feed, session.provider);
+      let seedMs: number | null = null;
+      if (!feed.live && !feed.seeded) {
+        const seedStartedAt = performance.now();
+        await seed(feed, session.provider);
+        seedMs = Math.round(performance.now() - seedStartedAt);
+      }
       // Накопленная пачка уходит до снимка: следующая дельта подписчику — ровно `revision + 1`.
       flush(feed);
-      return {
+      const snapshot: FeedSnapshot = {
         items: [...feed.state.items],
         revision: feed.revision,
         schemaVersion: FEED_SCHEMA_VERSION,
         mode: feed.state.permissionMode,
         ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
       };
+      log.info('лента: снимок', {
+        sessionId: ref.sessionId,
+        workId: ref.workId,
+        items: snapshot.items.length,
+        bytes: feed.bytes,
+        seedMs,
+        totalMs: Math.round(performance.now() - startedAt),
+      });
+      return snapshot;
     },
 
     subscribe(ref, client) {
@@ -1176,6 +1244,12 @@ export function createFeedService(
       }
     },
 
+    subscriberCount() {
+      let count = 0;
+      for (const clients of subscribers.values()) count += clients.size;
+      return count;
+    },
+
     decide(ref, cardId, decision) {
       const feed = feeds.get(refKey(ref));
       const card = feed?.state.items.find((item) => isCard(item) && item.cardId === cardId);
@@ -1202,6 +1276,8 @@ export function createFeedService(
       );
       // Сначала ответ хуку, потом лента: `commit` снимает хуки решённых карточек пустым `{}`.
       pending.resolve(feed.ref, cardId, response);
+      // Хука «разрешили» у Claude Code нет: без отметки сессия числилась бы `blocked` до конца инструмента.
+      if (held.hookEvent === 'PermissionRequest') deps.activity.permissionAnswered(feed.ref);
       commit(feed, result);
       return { applied: true, state: next.state };
     },
@@ -1228,6 +1304,10 @@ export function createFeedService(
         settleInterrupt(feed, state, pid);
       }, interruptGraceMs);
       interruptTimers.add(timer);
+    },
+
+    markSent(ref) {
+      sentAt.set(refKey(ref), now());
     },
 
     async stop() {

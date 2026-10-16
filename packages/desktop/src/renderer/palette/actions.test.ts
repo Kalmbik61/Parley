@@ -10,7 +10,7 @@ import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { workKey } from '../../shared/work-keys.js';
 import { useBrowserStore, wantsAddressFocus } from '../browser/store.js';
 import { useDevtoolsStore } from '../browser/devtools/store.js';
-import { IMPLEMENTED_ACTIONS } from '../keys/handler.js';
+import { IMPLEMENTED_ACTIONS, isActionAvailable } from '../keys/handler.js';
 import { createMruCycle } from '../keys/mru-cycle.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
@@ -157,6 +157,8 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'attention.next': ({ attention }) => expect(attention.next).toHaveBeenCalledTimes(1),
     'wake.toggle': ({ ui }) => expect(ui.toggleWake).toHaveBeenCalledTimes(1),
     'host.restart': ({ ui }) => expect(ui.confirmRestartHost).toHaveBeenCalledTimes(1),
+    // Задача 12 плана диагностики: сохранение архива без профиля, мост — из контекста действия.
+    'host.diagnostics': ({ bridge }) => expect(bridge.saveDiagnosticsCalls).toEqual([{ profile: false }]),
     'appearance.system': ({ ui }) => expect(ui.setAppearance).toHaveBeenCalledWith('system'),
     'appearance.dark': ({ ui }) => expect(ui.setAppearance).toHaveBeenCalledWith('dark'),
     'appearance.light': ({ ui }) => expect(ui.setAppearance).toHaveBeenCalledWith('light'),
@@ -177,6 +179,9 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'browser.zoomIn': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, 1] }]),
     'browser.zoomOut': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, -1] }]),
     'browser.zoomReset': ({ bridge }) => expect(bridge.browserCalls).toEqual([{ method: 'zoom', args: [7, 0] }]),
+    // Этап B: Select — режим активной вкладки браузера (toggleBrowserMode).
+    'browser.select': () => expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('select'),
+    'browser.annotate': () => expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('annotate'),
     // Спека 2026-10-07, 4.3: панель вкладки браузера активной группы.
     'browser.devtools': () => expect(useDevtoolsStore.getState().tabs[BROWSER_TAB]?.open).toBe(true),
     'browser.console': () => expect(useDevtoolsStore.getState().tabs[BROWSER_TAB]).toMatchObject({ open: true, view: 'console' }),
@@ -237,6 +242,20 @@ describe('runAction — таблица по реестру (тест 1 куск�
   // Тест «действия будущих этапов не реализованы» обеих сторон (browser.newTab основной; files.quickOpen и
   // sidebar.changes полосы) снят слиянием: после этапов 7–9 все действия реестра реализованы, их ветки —
   // в таблице выше.
+});
+
+describe('runAction — host.diagnostics (задача 12 плана диагностики хоста)', () => {
+  it('host.diagnostics запускает сохранение без профиля через мост контекста и не просит активную работу', () => {
+    const spies = makeContext({ activeWorkKey: null });
+    runAction('host.diagnostics', spies.ctx);
+    expect(spies.bridge.saveDiagnosticsCalls).toEqual([{ profile: false }]);
+    expect(spies.toast).not.toHaveBeenCalled();
+  });
+
+  it('действие реализовано и доступно палитре без методов хоста: старый хост собирает архив из файлов и ps', () => {
+    expect(IMPLEMENTED_ACTIONS.has('host.diagnostics')).toBe(true);
+    expect(isActionAvailable('host.diagnostics', new Set())).toBe(true);
+  });
 });
 
 describe('runAction — без активной работы (тест 2 куска 6.3)', () => {
@@ -584,6 +603,39 @@ it('capabilities uses the currently active project and cannot open without an ac
  const missing = makeContext({ activeWorkKey: null }); runAction('project.capabilities', missing.ctx);
  expect(missing.ui.openProjectPanel).not.toHaveBeenCalled(); expect(missing.toast).toHaveBeenCalledTimes(1);
  resetFeedHost();
+});
+
+describe('Select (этап B, спека браузера 4.6)', () => {
+  beforeEach(() => useBrowserStore.setState({ tabs: {} }));
+
+  it('browser.select дважды — режим снят; без страницы — ничего', () => {
+    const spies = makeContext();
+    runAction('browser.select', spies.ctx);
+    expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('select');
+    runAction('browser.select', spies.ctx);
+    expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('off');
+    useBrowserStore.setState({ tabs: {} });
+    runAction('browser.select', makeContext({ browser: false }).ctx);
+    expect(useBrowserStore.getState().tabs).toEqual({});
+  });
+});
+
+describe('Annotate (этап B, спека браузера 4.7)', () => {
+  beforeEach(() => useBrowserStore.setState({ tabs: {} }));
+
+  it('browser.annotate дважды — режим снят; после select — заменяет его; без страницы — ничего', () => {
+    const spies = makeContext();
+    runAction('browser.annotate', spies.ctx);
+    expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('annotate');
+    runAction('browser.annotate', spies.ctx);
+    expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('off');
+    runAction('browser.select', spies.ctx);
+    runAction('browser.annotate', spies.ctx);
+    expect(useBrowserStore.getState().tabs[BROWSER_TAB]?.mode).toBe('annotate');
+    useBrowserStore.setState({ tabs: {} });
+    runAction('browser.annotate', makeContext({ browser: false }).ctx);
+    expect(useBrowserStore.getState().tabs).toEqual({});
+  });
 });
 
 describe('панель браузера (спека 2026-10-07, 4.3)', () => {

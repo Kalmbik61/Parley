@@ -2,15 +2,16 @@
  * Одно сообщение ленты комнаты (спека окна 2026-09-29, 1.3): аватар 18, мета — отправитель (600), `★`
  * у ведущего, `→ all` или `→ S02 бэкенд, S03 ревью`, тег вида, время, точка «непрочитано»; текст
  * 14px/1.55 — Markdown (GFM) с чипами (`RoomMarkdown.tsx`); под ним строка доставки
- * `✓ Picked up by S03 · ▤ Not picked up yet by S01 (busy), S02`. Системная строка — аватар системы без
+ * `✓ Picked up by S03 · Delivering to S01 (resuming)… · ▤ Not picked up yet by S02`. Системная строка — аватар системы без
  * адресата и без точки (решение контролёра 4 куска 6).
  *
  * Точка — токен `--state-done`, а не `accent-2-500` handoff: тот к листу светлой темы 2.6:1, ниже порога
  * 3:1 для признака состояния (решение 11 спеки — те же токены у значков состояний).
  *
  * Строка доставки (`message.delivery`) одна, когда у сообщения есть хотя бы один не закрытый адресат-агент: «забрали»
- * (`data-message-picked`, время каждого — в подсказке, а не в строке) и «ещё нет» (`data-message-waiting`; после тега
- * в скобках причина от хоста, `S01 (busy)`) через « · ». Текст идёт обычным потоком и переносится по словам, а
+ * (`data-message-picked`, время каждого — в подсказке, а не в строке), «доставляется» (`data-message-delivering`, со
+ * спиннером: письмо Parley доводит сам, `DELIVERING`) и «ещё нет» (`data-message-waiting`) через « · »; после тега в
+ * скобках причина от хоста, `S01 (busy)`. Текст идёт обычным потоком и переносится по словам, а
  * неразрывный (чужой id сессии) — по знакам: длинный список не раздвигает колонку и не даёт горизонтальной прокрутки.
  *
  * За «прочитано» (`observeRef`, `attention/use-mark-read.ts`) наблюдается строка меты, а не всё
@@ -26,8 +27,13 @@
  *
  * Свой `@human` человека (Parley 0.3.0) — текст, а не чип «@you»: себя человек не упоминает (`humanChips`); у сообщений
  * агентов чип остаётся — по нему агент зовёт человека.
+ *
+ * Сообщение человека стоит справа и текстом лежит на пузыре `bg-secondary`, как промпт в Chat
+ * (`chat/items/PromptItem.tsx`); сообщения агентов и системы — слева, без пузыря.
  */
 
+import type { MailWait } from '@parley/protocol';
+import { LoaderCircle } from 'lucide-react';
 import { S } from '../../../shared/strings.js';
 import { cn } from '../../lib/cn.js';
 import { isoMs } from '../../lib/iso-time.js';
@@ -64,6 +70,19 @@ function clockTime(iso: string): string {
   return ms === null ? '' : new Date(ms).toTimeString().slice(0, 8);
 }
 
+/**
+ * Причины, при которых письмо Parley доводит сам: поднимает спящую, напечатал указатель. Их ждущие идут в строке со
+ * спиннером, `Delivering to …` (разбор 2026-10-14: после Accept подъём шёл десятки секунд, а строка стояла
+ * неподвижной). `busy` сюда не входит: по протоколу (`MailWait`) это и «занята ходом», и «ждёт ответа человека».
+ * Остальные ждут человека (черновик, лимит, пауза) или без него письма не заберут.
+ */
+const DELIVERING: ReadonlySet<MailWait> = new Set<MailWait>(['resuming', 'in-flight', 'pointed']);
+
+/** `S01 (busy), S03` — теги ждущих, после тега в скобках причина от хоста. */
+function waitingTags(waiting: ReadonlyArray<{ tag: string; reason: MailWait | null }>): string {
+  return waiting.map(({ tag, reason }) => (reason === null ? tag : `${tag} (${S.rooms.mailWait[reason]})`)).join(', ');
+}
+
 /** Цитата — одна строка с обрезкой и акцентной чертой слева; у кнопки и у заглушки «оригинала нет» вид общий. */
 const REPLY_QUOTE_CLASS =
   'block max-w-full self-start truncate border-l-2 border-(--color-accent) pl-2 text-left text-xs text-muted-foreground';
@@ -71,12 +90,15 @@ const REPLY_QUOTE_CLASS =
 interface ReplyQuoteProps {
   reply: ReplyModel;
   onJumpTo: (messageId: string) => void;
+  /** Сообщение человека стоит справа — цитата прижата к правому краю. */
+  right: boolean;
 }
 
-function ReplyQuote({ reply, onJumpTo }: ReplyQuoteProps): JSX.Element {
+function ReplyQuote({ reply, onJumpTo, right }: ReplyQuoteProps): JSX.Element {
+  const quoteClass = cn(REPLY_QUOTE_CLASS, right && 'self-end');
   if (!reply.found) {
     return (
-      <div data-message-reply-missing="" className={REPLY_QUOTE_CLASS}>
+      <div data-message-reply-missing="" className={quoteClass}>
         <span aria-hidden="true">↩</span> {S.rooms.replyMissing}
       </div>
     );
@@ -88,7 +110,7 @@ function ReplyQuote({ reply, onJumpTo }: ReplyQuoteProps): JSX.Element {
       // Строка обрезается по ширине колонки — выдержка целиком видна подсказкой.
       title={reply.excerpt}
       onClick={() => onJumpTo(reply.id)}
-      className={cn(REPLY_QUOTE_CLASS, 'cursor-pointer hover:text-foreground')}
+      className={cn(quoteClass, 'cursor-pointer hover:text-foreground')}
     >
       <span aria-hidden="true">↩ </span>
       <span className="font-semibold">{reply.from}</span>
@@ -106,14 +128,18 @@ export function RoomMessage({
   observeRef,
 }: RoomMessageProps): JSX.Element {
   const { picked, waiting } = message.delivery;
+  const delivering = waiting.filter(({ reason }) => reason !== null && DELIVERING.has(reason));
+  const stalled = waiting.filter(({ reason }) => reason === null || !DELIVERING.has(reason));
   /** Письмо `parley` или системная строка. */
   const system = message.sender.kind === 'system';
+  /** Сообщение человека — справа, на пузыре. */
+  const human = message.sender.kind === 'human';
   return (
     <div
       data-message-id={message.id}
       data-sender={message.sender.kind}
       tabIndex={-1}
-      className="flex max-w-[680px] gap-2.5"
+      className={cn('flex max-w-[680px] gap-2.5', human && 'flex-row-reverse self-end')}
     >
       <div className="flex w-5 shrink-0 justify-center pt-px">
         <SenderAvatar kind={message.sender.kind} provider={message.sender.provider} />
@@ -122,7 +148,10 @@ export function RoomMessage({
         <div
           ref={observeRef}
           data-message-meta={message.id}
-          className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+          className={cn(
+            'flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground',
+            human && 'justify-end',
+          )}
         >
           <span className="min-w-0 break-words font-semibold text-foreground">{message.from}</span>
           {message.lead ? (
@@ -142,37 +171,55 @@ export function RoomMessage({
             />
           ) : null}
         </div>
-        {message.reply === null ? null : <ReplyQuote reply={message.reply} onJumpTo={onJumpTo} />}
-        <RoomMarkdown
-          // Письмо плана от Parley — по разделам (`plan-letter.ts`), пути в письмах системы — кодом.
-          text={system ? (planLetterMarkdown(message.text) ?? message.text) : message.text}
-          labelOf={labelOf}
-          onOpenExternal={onOpenExternal}
-          humanChips={message.sender.kind !== 'human'}
-          codePaths={system}
-        />
+        {message.reply === null ? null : <ReplyQuote reply={message.reply} onJumpTo={onJumpTo} right={human} />}
+        <div
+          className={cn(
+            'min-w-0',
+            human && 'max-w-full self-end rounded-md bg-secondary px-3 py-2 text-secondary-foreground',
+          )}
+        >
+          <RoomMarkdown
+            // Письмо плана от Parley — по разделам (`plan-letter.ts`), пути в письмах системы — кодом.
+            text={system ? (planLetterMarkdown(message.text) ?? message.text) : message.text}
+            labelOf={labelOf}
+            onOpenExternal={onOpenExternal}
+            humanChips={!human}
+            codePaths={system}
+          />
+        </div>
         {picked.length === 0 && waiting.length === 0 ? null : (
-          <div data-message-delivery="" className="break-words text-xs text-muted-foreground">
-            {picked.length === 0 ? null : (
-              <span
-                data-message-picked=""
-                title={picked.map(({ tag, at }) => `${tag} ${clockTime(at)}`.trim()).join(' · ')}
-              >
-                {S.rooms.pickedUp(picked.map(({ tag }) => tag).join(', '))}
-              </span>
-            )}
-            {picked.length === 0 || waiting.length === 0 ? null : ' · '}
-            {waiting.length === 0 ? null : (
-              <span data-message-waiting="">
-                {S.rooms.notPickedUp(
-                  waiting
-                    .map(({ tag, reason }) =>
-                      reason === null ? tag : `${tag} (${S.rooms.mailWait[reason]})`,
-                    )
-                    .join(', '),
-                )}
-              </span>
-            )}
+          <div
+            data-message-delivery=""
+            className={cn('break-words text-xs text-muted-foreground', human && 'text-right')}
+          >
+            {[
+              picked.length === 0 ? null : (
+                <span
+                  key="picked"
+                  data-message-picked=""
+                  title={picked.map(({ tag, at }) => `${tag} ${clockTime(at)}`.trim()).join(' · ')}
+                >
+                  {S.rooms.pickedUp(picked.map(({ tag }) => tag).join(', '))}
+                </span>
+              ),
+              delivering.length === 0 ? null : (
+                <span key="delivering" data-message-delivering="">
+                  <LoaderCircle
+                    data-busy-spinner=""
+                    aria-hidden="true"
+                    className="mr-1 inline-block size-3 animate-spin align-[-2px] motion-reduce:animate-none"
+                  />
+                  {S.rooms.delivering(waitingTags(delivering))}
+                </span>
+              ),
+              stalled.length === 0 ? null : (
+                <span key="waiting" data-message-waiting="">
+                  {S.rooms.notPickedUp(waitingTags(stalled))}
+                </span>
+              ),
+            ]
+              .filter((part) => part !== null)
+              .flatMap((part, index) => (index === 0 ? [part] : [' · ', part]))}
           </div>
         )}
       </div>

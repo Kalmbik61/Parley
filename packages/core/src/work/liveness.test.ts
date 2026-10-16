@@ -1,13 +1,13 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { checkSession, hasLiveProcess, isAlive, processStartedAt, reconcileMap } from './liveness.js';
 import { addSession, removeSession, transitionSession } from './map.js';
-import { createWork, readMap, updateMap } from './store.js';
+import { createWork, readMap, updateMap, workPaths } from './store.js';
 import type { WorkSession } from './types.js';
 
 /** Сколько живёт сессия без pid после последнего признака жизни (спецификация, 5.4). */
@@ -235,6 +235,47 @@ describe('reconcileMap (чек-лист 15)', () => {
       exitCode: null,
     });
     expect(exited?.endedAt).not.toBeNull();
+  });
+
+  /** Три `active` сессии с pid уже завершившегося процесса. */
+  async function seedDead(workId: string, count: number): Promise<string[]> {
+    const dead = start();
+    const startedAtProcess = await processStartedAt(dead.pid ?? 0);
+    await stop(dead);
+    const ids: string[] = [];
+    for (let i = 0; i < count; i += 1) ids.push(await seed(workId, { pid: dead.pid ?? 0, startedAtProcess }));
+    return ids;
+  }
+
+  // После закрытия приложения мёртвы все сессии разом: по записи карты (и индекса работ под общим замком) на каждую
+  // старт хоста растягивался на десятки секунд (разбор 2026-10-14).
+  it('все мёртвые сессии работы усыпляются одной записью карты', async () => {
+    const { work } = await createWork(project, { title: 'работа' });
+    const ids = await seedDead(work.id, 3);
+
+    expect((await reconcileMap(project, work.id)).sort()).toEqual([...ids].sort());
+
+    // `.bak` — карта до последней записи: в ней все три ещё active, значит запись была одна.
+    const before = JSON.parse(await readFile(workPaths(project, work.id).bak, 'utf8')) as { sessions: WorkSession[] };
+    expect(before.sessions.map((session) => session.lifecycle)).toEqual(['active', 'active', 'active']);
+    const after = await readMap(project, work.id);
+    expect(after.sessions.map((session) => session.lifecycle)).toEqual(['sleeping', 'sleeping', 'sleeping']);
+  });
+
+  // Две сверки внахлёст (наблюдатель хоста будит новую, пока идёт прежняя) видят одних и тех же мёртвых. Вторая
+  // раньше падала на «invalid transition sleeping → sleeping» и оставляла остальных сессий работы несверенными.
+  it('две сверки одной работы одновременно: уже уснувших вторая не трогает и не падает', async () => {
+    const { work } = await createWork(project, { title: 'работа' });
+    const ids = await seedDead(work.id, 3);
+
+    const [first, second] = await Promise.all([reconcileMap(project, work.id), reconcileMap(project, work.id)]);
+
+    expect([...first, ...second].sort()).toEqual([...ids].sort());
+    const map = await readMap(project, work.id);
+    for (const session of map.sessions) {
+      expect(session.lifecycle).toBe('sleeping');
+      expect(session.history.filter((entry) => entry.event === 'sleeping')).toHaveLength(1);
+    }
   });
 
   it('второй проход мёртвых не находит: сессия уже sleeping', async () => {

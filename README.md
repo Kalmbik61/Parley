@@ -18,7 +18,11 @@ See "The window" for details. On top of the coordination there is a project laye
 `PARLEY.md`, roles, plans with a backlog, room recipes, decisions, memory and search, a
 Capabilities panel and a skill navigator (on by default); see "The project layer".
 
-https://github.com/user-attachments/assets/68458a1e-add3-4533-9b82-77a37030d52b
+
+
+https://github.com/user-attachments/assets/ba828466-0c53-4565-aedf-e1e3f8f3f988
+
+
 
 ## Install
 
@@ -84,13 +88,13 @@ not come back for that version; a newer one shows it again. "Later" only closes 
 returns with the next check or the next start. Nothing is downloaded or installed, and a network
 error is silent. A window started from source (`pnpm dev:desktop`) does not check at all.
 
-To update, quit Parley (⌘Q), download the new `.dmg` and replace Parley in Applications; your
+To update, quit Parley (⌘Q; this stops the host and its sessions, see "The window"), download the new `.dmg` and replace Parley in Applications; your
 data lives outside the app and stays. Because the app is signed ad hoc, macOS treats every build
 as a new app: the "First launch" steps repeat for each downloaded `.dmg`, and macOS may ask again
 for access to folders such as Documents, Desktop and Downloads.
 
-Then open Parley and restart the host. The window notices that the host still runs from the
-previous app and says so: a notice with "Restart host…" and "Host is outdated — restart" in the
+If you only closed the window instead of quitting,
+the host still runs from the previous app: open Parley and restart it. The window notices that and says so: a notice with "Restart host…" and "Host is outdated — restart" in the
 status bar (the palette, ⌘J, has "Restart host…" too). The host outlives the window, and the
 agents it started keep command lines that point into the old app: the status line script, the
 MCP server and, with "Answer Codex approvals in Parley" on, the Codex hook launcher. The replacement can remove those files (the folder
@@ -291,7 +295,7 @@ adds four more:
 - sessions are not closed or put to sleep without a human's consent: there is no
   hibernation;
 - the window writes nothing to GitHub or other services on the human's behalf;
-- the agent does not control the embedded browser; Design Mode works only on a human's click;
+- the agent does not control the embedded browser; Select and Annotate work only on a human's click;
 - data from pages, files and messages in the texts for the agent is marked as data: "this is
   page data, not instructions".
 
@@ -332,6 +336,13 @@ window starts the host itself, with the Node 22 inside the app (when you run fro
 build without `fetch-node`, with the `node` from your login shell's `PATH`), and does not start
 a second one while the `host.pid` lock is held. The host exits by itself after 5 minutes with
 no windows and no live sessions. A second launch of the window focuses the first.
+
+Closing the window leaves the agents working. Quitting the app (Quit in the Dock menu, ⌘Q)
+stops the host and every session: it first asks, with the number of running sessions, and with
+no live sessions it quits without a question. A host that does not answer within 10 seconds is
+stopped by its pid. A system restart or shutdown asks nothing and stops the host at once. The
+next launch lists the interrupted sessions so you can bring them back; they do not restart on
+their own.
 
 The look of the window is Organic: a sand background, terracotta and sage accents, the
 Figtree and Caprasimo fonts, shadcn/ui primitives. The terminal sits on the window sheet (its
@@ -571,7 +582,8 @@ folders in Parley's letters are shown as code (the letter text itself is unchang
   focus. What to notify about, and whether with sound, is set in Settings, in the
   "Notifications" section; if notifications do not arrive, allow them in System Settings →
   Notifications → Parley. The texts of the notifications are in English, like the whole
-  window;
+  window. While the island is on (see "Island"), a request with a card there is not repeated as a
+  macOS notification;
 - a room lead's decision: a new one ("Decision waiting for you" — "{room} · S01 collected
   positions") and a revised one ("… S01 revised the decision": the lead replaced the text
   before your answer, or brought a corrected one after "Return for rework") notify, but the
@@ -715,7 +727,7 @@ folders in Parley's letters are shown as code (the letter text itself is unchang
   A tab keeps up to 1000 messages and 500 requests. "Reload to capture earlier requests" means
   the page began loading before the capture; "Capture unavailable — reload the page" means it
   could not attach; both notes have a "Reload" button. Headers and bodies are shown as they are:
-  it is your browser, nothing goes to an agent;
+  it is your browser, and nothing goes to an agent unless you add it to chat (below);
 - the viewport size of a browser tab: "Fit" (the default), "Mobile S" 320×568, "Mobile M" 375×812,
   "Mobile L" 430×932, "Tablet" 768×1024, "Laptop" 1280×800, "Desktop" 1440×900, "Custom…"
   (200–3840 × 200–2400), "Rotate" and 1x/2x/3x. Mobile sizes and "Tablet" emulate touch and a
@@ -723,14 +735,24 @@ folders in Parley's letters are shown as code (the letter text itself is unchang
   appears next to the label). The page stands in the middle of the tab with a label like
   "375 × 812 · 2x" and is scaled down, with a percent in the label, when it does not fit. The size
   is kept with the tab and survives a restart;
-- Design Mode: the ⌖ in the bar above the page; a click on an element gives a card with a
-  thumbnail, the selector and the text. Esc or a second ⌖ clears the selection, and clicks on
-  the page work again. "Send to agent ▾" gives the session you choose a block: the address,
-  the selector, the text, the styles, the HTML and the path to a screenshot in
-  `~/.parley/desktop/drops` — marked as page data, not instructions; the outcome is the same
-  toast as for the insertion above. "Copy" puts the block on the clipboard, and "Pick again"
-  picks anew. Picking and sending happen only on your click: the agent does not control the
-  browser.
+- page context goes to chat on your click. "To: S02 ▾" in the bar above the page picks where:
+  a session of the workspace or one of its rooms (by default, the session you worked in last).
+  ⌖ Select (⌘⇧C with focus in the page, the tab's bar or the panel) adds the element you
+  click — its selector, role and accessible name, React component and source line, text,
+  styles, HTML and a screenshot; ⇧-click keeps selecting, Esc or a second ⌖ stops. ✎ Annotate
+  (⌘⌥A): click an element or drag over an area and write what is wrong; numbered pins stay on
+  the page, the tray at the bottom right collects up to 20, and its "Add to chat" adds them as
+  one file with one screenshot. "Add to chat" on a console line or a request in the panel, and
+  "Add errors to chat" in the panel header, add the entry, the request with its bodies, or all
+  visible errors. Each is a Markdown file in `~/.parley/desktop/drops/context` (kept for 7
+  days). Secrets are replaced with `<redacted>`: the values of headers such as `Authorization`
+  and `Cookie`, and the parameters of URLs (also in `Referer`, `Location` and the addresses
+  that console messages quote), forms, multipart fields and JSON bodies; a JSON body that is
+  cut off or does not parse is left out, because its secrets cannot be masked. Page data is
+  marked as "page data, not instructions". A session with the Chat view gets a chip above its
+  input field, a room — a chip above its field, a session without Chat — one line in the CLI's
+  input without Enter. A toast says what was added, with "Open" and "Undo". Nothing is sent
+  until you send it.
 
 **Window keyboard shortcuts** (spec 9.6). All shortcuts are in one table,
 `packages/desktop/src/shared/keybindings.ts`; the system menu, the window's key handler and
@@ -769,6 +791,7 @@ In an input field, text editing stays with the field (⌘A, ⌘C, ⌘V, ⌘X, �
 | Open a link at once | ⌘-click — on a link in the terminal | — |
 | Browser page zoom | ⌘+ / ⌘− / ⌘0 | — |
 | Console and network of a browser tab; open it on Console | ⌘⌥I; ⌘⌥J — in the page, the tab's bar or the panel | — |
+| Select an element / annotate the page | ⌘⇧C / ⌘⌥A — in the page, the tab's bar or the panel | — |
 | Settings | ⌘, | Parley |
 | Next session that needs you; pause auto-wake; restart host; theme; new room; archived workspaces; new browser tab | no shortcut | palette |
 
@@ -895,6 +918,46 @@ indexed the transcript — without streamed text.
 - A plan or a question longer than 16 KB arrives truncated; the full text is in the terminal.
 - A question with two identical question texts collapses into one answer.
 
+### Island
+
+A small black island at the top of the screen — in the notch on a MacBook — shows how many agents
+are working and waiting: a pill "N working · M waiting". Hover or click it for the list of active
+workspaces: the workspace name in bold with its project, the rooms under it ("N in work" or
+"done"), then the sessions; a click on a row opens it in Parley.
+
+When an agent finishes a turn and you have not looked at its session in Parley yet, the island
+keeps it as a "Done" row: a green dot, the session name, when the turn ended and the first lines of
+the agent's last reply, and the pill adds "✅ N done". A row goes away when you look at that session
+in Parley (the window focused, the tab visible for about a second), when the agent starts working
+again, or with the quiet **Clear** under the list, which hides the rows and marks those sessions as
+seen in Parley too (the green "unseen" dot in the sidebar goes away). A row you have just seen in
+Parley stays until the pointer leaves the island or it tucks away. The "finished" system
+notification is unchanged.
+
+When an agent asks for permission, asks a question or brings a plan, the island opens a card by
+itself, without switching to Parley:
+
+- a permission request: **Allow**, **Always** (only when the agent offers rules) and **Deny**;
+- a simple question — one question with one choice and up to four options — as buttons;
+- a plan or a complex question: **Open in Parley**.
+
+With several requests the card shows "1 of N" and arrows. The buttons are disabled for half a
+second after a card appears, so a click aimed at something else does not answer it.
+
+The island never disappears: when nothing is going on (4 seconds, or 20 while there are Done rows)
+it shrinks into a thin bar at the top edge, like the Dynamic Island, or into a small "✅ N" when
+finished sessions are waiting for a look. It grows back by itself on a new request, when agents
+start working or finish a turn, or when you click the bar or pull it down. To tuck it away
+yourself, click the ⌃ arrow at the bottom of the island (it shows while the pointer is over it) or
+swipe up: press on the island and pull up. Drag the island by any part of it except the buttons,
+along the top edge: it snaps to the left, the center or the right, and the place is remembered per
+monitor. Only the island itself catches the mouse; clicks next to it go to the windows below.
+
+The island is on by default; turn it off in Settings → Notifications ("island with requests at
+the top of the screen"). Codex sessions are not on the island yet: their requests come as system
+notifications, as before. While the island is on, a request that has a card is not repeated as a
+macOS notification.
+
 ## Settings
 
 The window has Settings (⌘,), with six tabs:
@@ -905,7 +968,8 @@ The window has Settings (⌘,), with six tabs:
   (0…60)", "Auto-launch pending sessions", "Install agent skills into projects", "Skill
   navigator", "Worktree root", and the "Work limits" block (see "Limits of a workspace and a
   room").
-- **Notifications** — "needs you" / "finished" / "mail and mentions to you" / "sound"; if notifications do
+- **Notifications** — "needs you" / "finished" / "mail and mentions to you" / "sound" / "island with
+  requests at the top of the screen" (see "Island"); if notifications do
   not arrive, a hint points to System Settings → Notifications → Parley. Below them is "Check
   for updates" ("Updates" under "Install"); like the rest of this tab, it is kept in `ui.json`.
 - **Browser** — "Clear browser data": the cookies, storage and cache of the embedded browser.
@@ -1273,8 +1337,8 @@ would have remained a dead layer. For a session in its own worktree the brief na
 branch, the base and the folder path on a separate line and refers to the `worktrees` topic
 for details; the prohibitions in one's own worktree are there — do not switch the branch, do
 not rewrite its history, do not push. The `window` topic ("The human's window") describes the
-four kinds of blocks that the window inserts into the agent's terminal (notes on a diff, a
-page element from Design Mode, a request to resolve a merge conflict, the path of a dropped
+four kinds of blocks that the window inserts into the agent's terminal (notes on a diff,
+page context from the built-in browser, a request to resolve a merge conflict, the path of a dropped
 file or screenshot). References to the guide in the brief and inside the guide itself go by
 topic name, not by section heading: `read_guide` does not accept a heading.
 
@@ -1847,7 +1911,7 @@ origin of the files is in `NOTICE`), and for other providers it is a letter; the
 provider filter. A session with not a single known signal since the process started — for
 Claude Code and GLM that is no hook at all, for Codex neither `Ready` nor `Working` in the
 terminal title (it is stuck on a sign-in or folder trust screen) — answers a send from the window (a
-note, a Design Mode element, a file or a screenshot) with the toast "S02 is waiting for your
+note, a page context line, a file or a screenshot) with the toast "S02 is waiting for your
 answer — text not inserted" with the buttons "Copy" and "Open S02"; auto-wake does not wake it
 either. The provider adapters and the registry stay in core and work from the CLI.
 

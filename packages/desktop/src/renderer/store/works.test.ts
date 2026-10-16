@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { orderedWorks, useWorksStore } from './works.js';
 import type { WorkEntry } from '@parley/core';
@@ -31,6 +31,28 @@ describe('useWorksStore.init', () => {
 
     expect(useWorksStore.getState().entries).toHaveLength(1);
     expect(useWorksStore.getState().loading).toBe(false);
+    dispose();
+  });
+
+  // Хост рассылает снимок ещё до ворот `worksReady` (разбор 2026-10-14): окно уже рисует комнату, а методы снимка
+  // (`rooms.resolveProposal`) ждут. Готовность — только ответ `works.list`; переподключение начинает её заново.
+  it('ready — только после ответа works.list: рассылка до него ворот не открывает', async () => {
+    const bridge = createFakeBridge();
+    let answer!: () => void;
+    bridge.setHandler(
+      'works.list',
+      () => new Promise((resolve) => (answer = () => resolve({ entries: [entry('w-01', '2026-01-01')], branches: {} }))),
+    );
+    useWorksStore.setState({ ready: true });
+    const dispose = useWorksStore.getState().init(bridge);
+    expect(useWorksStore.getState().ready).toBe(false);
+
+    bridge.emit('works.changed', { entries: [entry('w-01', '2026-01-01')], branches: {} });
+    expect(useWorksStore.getState().loading).toBe(false);
+    expect(useWorksStore.getState().ready).toBe(false);
+
+    answer();
+    await vi.waitFor(() => expect(useWorksStore.getState().ready).toBe(true));
     dispose();
   });
 

@@ -13,9 +13,18 @@ import type {
   Params,
   Result,
 } from '@parley/protocol';
-import type { AppNote, CloseAnswer, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../../shared/bridge.js';
+import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../../shared/bridge.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody } from '../../shared/browser-devtools.js';
-import type { BrowserFavicon, BrowserOpenTab, PickResult } from '../../shared/browser-types.js';
+import type {
+  AnnotationPick,
+  AnnotationPosition,
+  BrowserFavicon,
+  BrowserOpenTab,
+  ContextInput,
+  PickResult,
+  SavedContext,
+} from '../../shared/browser-types.js';
+import { contextLabel } from '../../shared/context-markdown.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type {
   DiffFile,
@@ -91,6 +100,8 @@ export interface FakeBridge extends ParleyBridge {
   emitAppearance(dark: boolean): void;
   /** Ответ `app.isDark()` — тёмность `nativeTheme` main (раунд main-r2, п. 1). */
   setDark(dark: boolean): void;
+  /** Ответ `app.islandActive()` — есть ли окно острова (спека 2026-10-12). */
+  setIslandActive(active: boolean): void;
   /** Журнал вызовов `app.titlebarDoubleClick` (кусок 2.3) — по одной записи на вызов. */
   readonly titlebarDoubleClicks: number[];
   /** Журнал вызовов `app.revealWork` (кусок 3.4). */
@@ -108,6 +119,9 @@ export interface FakeBridge extends ParleyBridge {
   /** Вызовы `app.saveRecipe` и ответ на них (по умолчанию — `saved`). */
   readonly saveRecipeCalls: RecipeSaveRequest[];
   setSaveRecipeAnswer(answer: (request: RecipeSaveRequest) => RecipeSaveResult | Promise<RecipeSaveResult>): void;
+  /** Вызовы `app.saveDiagnostics` и ответ на них (по умолчанию — архив собран, хост ответил); `Error` — отказ. */
+  readonly saveDiagnosticsCalls: Array<{ profile: boolean }>;
+  setSaveDiagnosticsAnswer(answer: DiagnosticsSaveResult | Error): void;
   /** Вызовы `app.openPath` и `app.showInFinder`. */
   readonly openedPaths: string[];
   readonly revealedPaths: string[];
@@ -185,6 +199,17 @@ export interface FakeBridge extends ParleyBridge {
   setPickResult(answer: PickResult | null | IpcErrorInfo): void;
   /** Вызовы `browser.pickStart` и `browser.pickCancel` по порядку (кусок 9.3a). */
   readonly pickCalls: Array<{ method: 'pickStart' | 'pickCancel'; webContentsId: number }>;
+  /**
+   * Ответ `browser.saveContext`; `null` — по умолчанию: `/fake/drops/context/<вид>-<метка>-<счётчик>.md` и `.png` рядом,
+   * если был снимок. Отказ — объект с code.
+   */
+  setSaveContextResult(answer: SavedContext | IpcErrorInfo | null): void;
+  /** Ответы `browser.annotateStart` по очереди; очередь пуста — промис ждёт, как настоящий скрипт ждёт клика. Отказ — объект с code. */
+  setAnnotatePicks(picks: Array<AnnotationPick | null | IpcErrorInfo>): void;
+  /** Ответ `browser.annotateSync`; `null` — по умолчанию: у каждой метки прямоугольник 0.1, 0.1, 0.2 × 0.05. */
+  setAnnotatePositions(positions: AnnotationPosition[] | null): void;
+  /** Путь снимка `browser.annotateCapture`; по умолчанию `/fake/drops/annotate.png`. */
+  setAnnotateCapture(path: string | null): void;
   /** Ответ browser.devtoolsSnapshot (спека 2026-10-07, 3.5); по умолчанию пустой журнал с capture 'on'. */
   setDevtoolsSnapshot(snapshot: DevtoolsSnapshot): void;
   /** Пачка журнала: событие `browser:devtools` слушателям `browser.onDevtools`. */
@@ -212,6 +237,7 @@ export function createFakeBridge(): FakeBridge {
   const menuListeners = new Set<(id: ActionId) => void>();
   const appearanceListeners = new Set<(dark: boolean) => void>();
   let dark = false;
+  let islandActive = false;
   const notified: Array<{ method: NotificationName; params: unknown }> = [];
   const calls: Array<{ method: MethodName; params: unknown }> = [];
   const appNotified: AppNote[] = [];
@@ -233,6 +259,8 @@ export function createFakeBridge(): FakeBridge {
   const locateCalls: Array<{ workKey: string; absPaths: string[] }> = [];
   const saveRecipeCalls: RecipeSaveRequest[] = [];
   let saveRecipeAnswer: (request: RecipeSaveRequest) => RecipeSaveResult | Promise<RecipeSaveResult> = (request) => ({ status: 'saved', id: `project:${request.file}`, opened: true });
+  const saveDiagnosticsCalls: Array<{ profile: boolean }> = [];
+  let saveDiagnosticsAnswer: DiagnosticsSaveResult | Error = { file: '/Users/test/Downloads/parley-diagnostics-20261016-123456.zip', hostResponded: true };
   let openPathResult: 'opened' | 'revealed' | { error: unknown } = 'opened';
   const openedPaths: string[] = [];
   const revealedPaths: string[] = [];
@@ -283,6 +311,11 @@ export function createFakeBridge(): FakeBridge {
   const voiceProgressListeners = new Set<(progress: DownloadProgress) => void>();
   let pickAnswer: PickResult | null | IpcErrorInfo = null;
   const pickCalls: Array<{ method: 'pickStart' | 'pickCancel'; webContentsId: number }> = [];
+  let saveContextAnswer: SavedContext | IpcErrorInfo | null = null;
+  let savedContexts = 0;
+  let annotatePicks: Array<AnnotationPick | null | IpcErrorInfo> = [];
+  let annotatePositions: AnnotationPosition[] | null = null;
+  let annotateCapturePath: string | null = '/fake/drops/annotate.png';
   let devtoolsSnapshot: DevtoolsSnapshot = { epoch: 0, capture: 'on', console: [], network: [] };
   const devtoolsListeners = new Set<(batch: DevtoolsBatch) => void>();
   let responseBodyAnswer: ResponseBody | null | IpcErrorInfo = null;
@@ -338,6 +371,10 @@ export function createFakeBridge(): FakeBridge {
     saveRecipeCalls,
     setSaveRecipeAnswer: (answer) => {
       saveRecipeAnswer = answer;
+    },
+    saveDiagnosticsCalls,
+    setSaveDiagnosticsAnswer: (answer) => {
+      saveDiagnosticsAnswer = answer;
     },
     setOpenPathResult: (result) => {
       openPathResult = result;
@@ -427,6 +464,18 @@ export function createFakeBridge(): FakeBridge {
       pickAnswer = answer;
     },
     pickCalls,
+    setSaveContextResult: (answer) => {
+      saveContextAnswer = answer;
+    },
+    setAnnotatePicks: (picks) => {
+      annotatePicks = [...picks];
+    },
+    setAnnotatePositions: (positions) => {
+      annotatePositions = positions;
+    },
+    setAnnotateCapture: (path) => {
+      annotateCapturePath = path;
+    },
     setDevtoolsSnapshot: (snapshot) => {
       devtoolsSnapshot = snapshot;
     },
@@ -523,6 +572,33 @@ export function createFakeBridge(): FakeBridge {
       onFocus: (listener) => {
         browserFocusListeners.add(listener);
         return () => browserFocusListeners.delete(listener);
+      },
+      saveContext: async (input: ContextInput) => {
+        browserCalls.push({ method: 'saveContext', args: [input] });
+        const answer = saveContextAnswer;
+        if (answer !== null && 'code' in answer) throw answer;
+        if (answer !== null) return answer;
+        savedContexts += 1;
+        const base = `/fake/drops/context/${input.kind}-${contextLabel(input.label)}-${savedContexts.toString(16).padStart(4, '0')}`;
+        return { mdPath: `${base}.md`, pngPath: input.imagePath === null ? null : `${base}.png` };
+      },
+      annotateStart: async (webContentsId) => {
+        browserCalls.push({ method: 'annotateStart', args: [webContentsId] });
+        const next = annotatePicks.shift();
+        if (next === undefined) return new Promise<AnnotationPick | null>(() => {});
+        if (next !== null && 'code' in next) throw next;
+        return next;
+      },
+      annotateCancel: async (webContentsId) => {
+        browserCalls.push({ method: 'annotateCancel', args: [webContentsId] });
+      },
+      annotateSync: async (webContentsId, pins) => {
+        browserCalls.push({ method: 'annotateSync', args: [webContentsId, pins] });
+        return annotatePositions ?? pins.map(({ n }) => ({ n, rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.05 } }));
+      },
+      annotateCapture: async (webContentsId) => {
+        browserCalls.push({ method: 'annotateCapture', args: [webContentsId] });
+        return { path: annotateCapturePath };
       },
       devtoolsSnapshot: async (webContentsId) => {
         browserCalls.push({ method: 'devtoolsSnapshot', args: [webContentsId] });
@@ -734,6 +810,7 @@ export function createFakeBridge(): FakeBridge {
         return () => appearanceListeners.delete(listener);
       },
       isDark: () => dark,
+      islandActive: () => islandActive,
       onMenu: (listener) => {
         menuListeners.add(listener);
         return () => menuListeners.delete(listener);
@@ -752,6 +829,11 @@ export function createFakeBridge(): FakeBridge {
       saveRecipe: async (request) => {
         saveRecipeCalls.push(request);
         return saveRecipeAnswer(request);
+      },
+      saveDiagnostics: async (options) => {
+        saveDiagnosticsCalls.push(options);
+        if (saveDiagnosticsAnswer instanceof Error) throw saveDiagnosticsAnswer;
+        return saveDiagnosticsAnswer;
       },
       revealWork: async (projectPath, workId) => {
         revealedWorks.push({ projectPath, workId });
@@ -833,6 +915,9 @@ export function createFakeBridge(): FakeBridge {
     },
     setDark: (next) => {
       dark = next;
+    },
+    setIslandActive: (next) => {
+      islandActive = next;
     },
   };
 

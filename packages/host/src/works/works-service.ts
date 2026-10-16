@@ -99,6 +99,9 @@ export function createWorksService(
   let latest: WorkEntry[] = [];
   /** Номер чтения `latest` (`watchWorks`): старое чтение свежее не затирает. */
   let latestSeq = 0;
+  /** Идущее обновление снимка (`requestRefresh`) и просьба повторить его, когда закончится. */
+  let refreshing: Promise<void> | undefined;
+  let refreshAgain = false;
   let ownLease: HostLease | null = null;
   /** Номер рассылки снимка; растёт в конце каждого `refresh`, перед рассылкой. */
   let revision = 0;
@@ -326,8 +329,29 @@ export function createWorksService(
     if (timer !== undefined) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = undefined;
-      void refresh(latest);
+      void requestRefresh();
     }, debounceMs);
+  }
+
+  /**
+   * Обновления идут по одному (разбор 2026-10-14): записи самой сверки живости будят наблюдатель, и новое обновление
+   * внахлёст повторяло ту же работу — разбор логов провайдеров, запись карт, — а старт хоста на копии настоящих карт
+   * растягивался до 15–30 с. Просьбы, пришедшие во время обновления, склеиваются в одно следующее — со свежим списком.
+   */
+  function requestRefresh(): Promise<void> {
+    if (refreshing !== undefined) {
+      refreshAgain = true;
+      return refreshing;
+    }
+    refreshing = (async () => {
+      do {
+        refreshAgain = false;
+        await refresh(latest);
+      } while (refreshAgain && !stopped);
+    })().finally(() => {
+      refreshing = undefined;
+    });
+    return refreshing;
   }
 
   /**
@@ -415,7 +439,7 @@ export function createWorksService(
       // номер у начального чтения не спросить, а следующее событие всё равно
       // перечитает список.
       if (latestSeq === 0) latest = initial;
-      await refresh(latest);
+      await requestRefresh();
     },
     snapshot: buildSnapshot,
     windowSnapshot,

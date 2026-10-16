@@ -14,6 +14,7 @@ import { emptyLayout, groups } from '../layout/tree.js';
 import { workKey } from '../lib/tree-order.js';
 import { useWorksStore } from '../store/works.js';
 import { TOAST_INSET_VAR } from '../ui/sonner.js';
+import { createToastInsetPublisher } from '../ui/toast-inset.js';
 import { WindowNotes } from './WindowNotes.js';
 import { useWindowNotesStore, WINDOW_NOTE_MS, type WindowNote } from './window-notes.js';
 
@@ -316,5 +317,51 @@ describe('WindowNotes — высота столбца для тостов (--toa
     expect(inset()).toBe('180px');
     unmount();
     expect(inset()).toBe('');
+  });
+
+  describe('угол делят с лотком аннотаций вкладки браузера (второй издатель той же переменной)', () => {
+    it('пересчёт столбца не затирает отступ лотка: переменная — наибольшее из двух', () => {
+      const tray = createToastInsetPublisher();
+      tray.set(260);
+      render(<WindowNotes />);
+      columnHeight = 100;
+      show(note('r-01'));
+      // Карточки ниже лотка (108 < 260): тосты остаются над лотком.
+      expect(inset()).toBe('260px');
+      columnHeight = 358;
+      act(() => observers[0]?.callback());
+      expect(inset()).toBe('366px');
+      columnHeight = 100;
+      act(() => observers[0]?.callback());
+      expect(inset()).toBe('260px');
+      tray.release();
+    });
+
+    it('последняя карточка ушла, а лоток стоит: переменная — отступ лотка, а не пусто', () => {
+      const tray = createToastInsetPublisher();
+      render(<WindowNotes />);
+      columnHeight = 172;
+      show(note('r-01'));
+      expect(inset()).toBe('180px');
+      tray.set(260);
+      expect(inset()).toBe('260px');
+      fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+      expect(inset()).toBe('260px');
+      tray.release();
+      expect(inset()).toBe('');
+    });
+
+    it('окно закрыли (WindowNotes размонтирован), лоток стоит: его отступ остался на <html>', () => {
+      const tray = createToastInsetPublisher();
+      tray.set(260);
+      const { unmount } = render(<WindowNotes />);
+      columnHeight = 400;
+      show(note('r-01'));
+      expect(inset()).toBe('408px');
+      unmount();
+      expect(inset()).toBe('260px');
+      tray.release();
+      expect(inset()).toBe('');
+    });
   });
 });

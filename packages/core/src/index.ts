@@ -53,6 +53,16 @@ export { readCodexLimits } from './codex/limits.js';
 export { dropExpiredWindows, mergeLimits, readWorkLimits } from './limits.js';
 export type { LimitWindow, ProviderLimits } from './limits.js';
 export {
+  claudeContextFill,
+  codexContextFill,
+  CODEX_BASELINE_TOKENS,
+  CONTEXT_DIR,
+  contextFile,
+  parseContextFill,
+  readContextFill,
+} from './context-fill.js';
+export type { ContextFill } from './context-fill.js';
+export {
   EFFORT_DESCRIPTION_MAX,
   EFFORT_TOKEN,
   MODEL_LABEL_MAX,
@@ -157,6 +167,7 @@ export {
   renameRoom,
   renameSession,
   reopenRoom,
+  joinedLine,
   requireOpenRoom,
   roomLead,
   RoomRuleError,
@@ -356,6 +367,7 @@ export type {
   SessionActivity,
 } from './work/activity.js';
 export {
+  PERMISSION_ANSWERED_EVENT,
   TERMINAL_WORKING_EVENT,
   bareEvent,
   eventRecordOf,
@@ -451,6 +463,7 @@ export type {
   MessageKind,
   Proposal,
   Room,
+  RoomMembership,
   SessionLifecycle,
   SessionMetrics,
   SessionResult,
@@ -570,8 +583,14 @@ export type {
   UsageAttribution,
   UsageCompleteness,
   UsageCounters,
+  UsageLedgerOptions,
   UsageObservation,
   UsageSource,
   UsageSummary,
   UsageTotal,
+  UsageWindow,
 } from './work/usage-ledger.js';
+export { isCurrentMember, roomMembership } from './work/room-membership.js';
+export type { MemberPeriods, RoomMembershipView } from './work/room-membership.js';
+export { roomUsage } from './work/room-usage.js';
+export type { RoomUsage, RoomUsageMember, UsageResolver } from './work/room-usage.js';

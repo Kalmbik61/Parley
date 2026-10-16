@@ -191,3 +191,39 @@ describe('fake-bridge: app.imageThumbnail (миниатюры вложений �
     expect(bridge.thumbnailCalls).toEqual(['/a.png', '/a.png', '/a.png', '/b.png', '/c.png']);
   });
 });
+
+describe('fake-bridge: browser.saveContext (этап B браузера)', () => {
+  it('по умолчанию — пути /fake/drops/context по виду и метке, png — только со снимком; журнал browserCalls; ответ и отказ по сеттеру', async () => {
+    const bridge = createFakeBridge();
+    await expect(bridge.browser.saveContext({ kind: 'console', label: 'Error Boom', markdown: '# x', imagePath: null })).resolves.toEqual({
+      mdPath: '/fake/drops/context/console-error-boom-0001.md',
+      pngPath: null,
+    });
+    await expect(bridge.browser.saveContext({ kind: 'element', label: 'button.save', markdown: '# x', imagePath: '/h/drops/a.png' })).resolves.toEqual({
+      mdPath: '/fake/drops/context/element-button.save-0002.md',
+      pngPath: '/fake/drops/context/element-button.save-0002.png',
+    });
+    expect(bridge.browserCalls.map((call) => call.method)).toEqual(['saveContext', 'saveContext']);
+    bridge.setSaveContextResult({ code: 'failed', message: 'disk' });
+    await expect(bridge.browser.saveContext({ kind: 'errors', label: 'x', markdown: '#', imagePath: null })).rejects.toMatchObject({ code: 'failed' });
+  });
+});
+
+describe('fake-bridge: browser.annotate* (этап B браузера)', () => {
+  it('метки — по очереди, очередь пуста — ждёт; sync — положения по номерам; capture — по сеттеру; журнал browserCalls', async () => {
+    const bridge = createFakeBridge();
+    const pick = { kind: 'edit', n: 1 } as const;
+    bridge.setAnnotatePicks([pick]);
+    await expect(bridge.browser.annotateStart(7)).resolves.toEqual(pick);
+    let settled = false;
+    void bridge.browser.annotateStart(7).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    await expect(bridge.browser.annotateSync(7, [{ n: 2, key: 'a2' }])).resolves.toEqual([{ n: 2, rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.05 } }]);
+    bridge.setAnnotateCapture(null);
+    await expect(bridge.browser.annotateCapture(7)).resolves.toEqual({ path: null });
+    expect(bridge.browserCalls.map((call) => call.method)).toEqual(['annotateStart', 'annotateStart', 'annotateSync', 'annotateCapture']);
+  });
+});

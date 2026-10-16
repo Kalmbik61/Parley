@@ -79,6 +79,18 @@ describe('sendToAgent (тест 7)', () => {
     expect(bridge.calls).toEqual([{ method: 'pty.send', params: { ref, text: 'x', submit: false } }]);
   });
 
+  it('с пятым аргументом requestedAt поле уходит в pty.send', async () => {
+    bridge.setHandler('pty.send', () => ok(true, true, null));
+    await sendToAgent(bridge, ref, 'x', true, 1_760_000_000_000);
+    expect(bridge.calls).toEqual([{ method: 'pty.send', params: { ref, text: 'x', submit: true, requestedAt: 1_760_000_000_000 } }]);
+  });
+
+  it('без пятого аргумента поля requestedAt в параметрах нет', async () => {
+    bridge.setHandler('pty.send', () => ok(true, true, null));
+    await sendToAgent(bridge, ref, 'x', true);
+    expect(bridge.calls[0]?.params).not.toHaveProperty('requestedAt');
+  });
+
   it('отказ моста с not_found (encodeIpcError) → { error: not_found }', async () => {
     bridge.setHandler('pty.send', () => {
       throw encodeIpcError({ code: 'not_found', message: 'сессия не запущена' });

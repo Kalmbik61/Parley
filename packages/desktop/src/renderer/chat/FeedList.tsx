@@ -13,11 +13,12 @@
  * поэтому ближайший `scroll` после неё не учитывается.
  *
  * Просьба показать карточку агента (`reveal`: бейдж агентов в сайдбаре и комнате, «N agents running» в тулбаре) —
- * прокрутка к карточке с этим `agentId` и снятое прилипание к низу; исполненную просьбу лента гасит через `onRevealed`.
+ * прокрутка к карточке с этим `agentId` (или к элементу с `itemId`) и снятое прилипание к низу; исполненную просьбу лента гасит через `onRevealed`.
  *
  * Раскрытые вызовы и карточки агентов, а также транскрипты субагентов лента помнит по `id`: строку вне
  * экрана виртуальный список размонтирует, и своё состояние элемента пропало бы. В конце — серые
- * сообщения из очереди (`queued`, решение 8). Несколько агентов подряд — стопкой: между ними отступ меньше.
+ * сообщения из очереди (`queued`, решение 8), за ними — очередь окна
+ * (`outbox`, спека 2026-10-16). Несколько агентов подряд — стопкой: между ними отступ меньше.
  *
  * Строка элемента — `memo`: дельта ленты сохраняет ссылки нетронутых элементов (`applyDelta`), а
  * обработчики раскрытия стабильны, поэтому дельта, меняющая один текст, перерисовывает одну строку.
@@ -55,11 +56,24 @@ export interface QueuedPrompt {
   text: string;
 }
 
-type Row = { key: string; item: FeedItem } | { key: string; queued: QueuedPrompt };
+/** Сообщение в очереди окна (`chat-outbox.ts`): ждёт отправки или не ушло. */
+export interface OutboxPrompt {
+  id: string;
+  text: string;
+  failed: boolean;
+}
+
+const NO_OUTBOX: readonly OutboxPrompt[] = [];
+
+type Row = { key: string; item: FeedItem } | { key: string; queued: QueuedPrompt } | { key: string; outbox: OutboxPrompt };
 
 export interface FeedListProps {
   items: readonly FeedItem[];
   queued: readonly QueuedPrompt[];
+  /** Очередь окна — после «Queued»: ждёт отправки (`waiting`) или не ушло (`failed`, с Retry и ×). */
+  outbox?: readonly OutboxPrompt[];
+  onRetryOutbox?: (id: string) => void;
+  onRemoveOutbox?: (id: string) => void;
   /** Подпись пустой ленты: загрузка, пусто, ошибка; `null` — не нужна. */
   note: string | null;
   /** Есть — рядом с подписью кнопка «Retry» (лента не загрузилась). */
@@ -70,7 +84,7 @@ export interface FeedListProps {
    * Просьба показать карточку агента (`ui-store.ts`, кусок 4b): лента прокручивает к ней и зовёт `onRevealed` с её
    * `nonce`. Карточки ещё нет — просьба ждёт, пока она появится в ленте (снимок только что открытой вкладки).
    */
-  reveal?: { agentId: string; nonce: number };
+  reveal?: ({ agentId: string } | { itemId: string }) & { nonce: number };
   onRevealed?: (nonce: number) => void;
 }
 
@@ -134,12 +148,13 @@ const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, 
   }
 });
 
-export function FeedList({ items, queued, note, onRetry, working, reveal, onRevealed }: FeedListProps): JSX.Element {
+export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onRemoveOutbox, note, onRetry, working, reveal, onRevealed }: FeedListProps): JSX.Element {
   const latest = items.at(-1);
   const activeRetry = latest?.kind === 'error' && latest.retry !== undefined && latest.retry.resolved !== true ? latest : null;
   const rows: Row[] = [
     ...items.map((item) => ({ key: item.id, item })),
     ...queued.map((entry) => ({ key: `queued:${entry.id}`, queued: entry })),
+    ...outbox.map((entry) => ({ key: `outbox:${entry.id}`, outbox: entry })),
   ];
   // Прокрутчик — элементом в состоянии: виртуализатор должен увидеть его уже при монтировании.
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
@@ -210,12 +225,16 @@ export function FeedList({ items, queued, note, onRetry, working, reveal, onReve
     if (atBottomRef.current) pinToBottom();
   }, [pinToBottom, total, rows.length, last, working !== undefined]);
 
-  // Просьба показать карточку агента. Идёт после прилипания к низу: если в одном коммите пришёл и новый элемент,
+  // Просьба показать карточку агента (`agentId`) или любой элемент по `id` (`itemId`, например ждущая карточка
+  // разрешения из уведомления). Идёт после прилипания к низу: если в одном коммите пришёл и новый элемент,
   // и просьба, последним остаётся переход к карточке. Прилипание снимается — иначе следующий элемент увёл бы
   // ленту обратно к низу; доехала лента до дна сама — `scroll` вернёт его. Просьба гаснет, когда карточка найдена.
   useLayoutEffect(() => {
     if (reveal === undefined) return;
-    const at = rows.findIndex((row) => 'item' in row && row.item.kind === 'agent' && row.item.agentId === reveal.agentId);
+    const at = rows.findIndex((row) => {
+      if (!('item' in row)) return false;
+      return 'agentId' in reveal ? row.item.kind === 'agent' && row.item.agentId === reveal.agentId : row.item.id === reveal.itemId;
+    });
     if (at === -1) return;
     atBottomRef.current = false;
     setAtBottom(false);
@@ -270,8 +289,15 @@ export function FeedList({ items, queued, note, onRetry, working, reveal, onReve
                       onToggle={toggle}
                       onTranscript={updateTranscript}
                     />
+                  ) : 'queued' in row ? (
+                    <PromptItem text={row.queued.text} state="queued" />
                   ) : (
-                    <PromptItem text={row.queued.text} queued />
+                    <PromptItem
+                      text={row.outbox.text}
+                      state={row.outbox.failed ? 'failed' : 'waiting'}
+                      onRetry={() => onRetryOutbox?.(row.outbox.id)}
+                      onRemove={() => onRemoveOutbox?.(row.outbox.id)}
+                    />
                   )}
                 </div>
               </div>
