@@ -343,6 +343,20 @@ describe('redactSecretsInText (S1): секреты по виду значени�
     it(name, () => expect(redactSecretsInText(input)).toBe(output));
   }
 
+  it('JWT: текст страницы «eyJ-eyJ-…» на 1 МБ маскируется за линейное время (без квадратичного перебора)', () => {
+    const hostile = 'eyJ-'.repeat(250_000);
+    const started = performance.now();
+    expect(redactSecretsInText(hostile)).toBe(hostile);
+    // Весь конвейер (адреса, пары имя=значение) на 1 МБ линейно стоит ~0,2 с; квадратичный JWT стоил ~110 с.
+    expect(performance.now() - started).toBeLessThan(3000);
+  });
+
+  it('JWT: частичные формы не маскируются, полная — маскируется после дефиса и перед пробелом', () => {
+    expect(redactSecretsInText('eyJabc.def')).toBe('eyJabc.def');
+    expect(redactSecretsInText('x eyJabc.def.ghi y')).toBe(`x ${R} y`);
+    expect(redactSecretsInText('a-eyJabc.def.ghi')).toBe(`a-${R}`);
+  });
+
   it('обычный текст, слова «Basic usage», «code: 404» и «keyboard=1» не меняются; повторная маска ничего не меняет', () => {
     for (const text of ['Basic usage example', 'Failed with code: 404', 'keyboard=1 monkey=2', 'Token expired', 'GET /api/users 200', 'passing=3']) expect(redactSecretsInText(text), text).toBe(text);
     const once = redactSecretsInText('password=hunter2 Bearer abc');

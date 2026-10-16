@@ -109,7 +109,8 @@ export function redactUrlsInText(text: string): string {
 
 /** Схема `Bearer|Basic|Token <значение>`; значение `Basic` и `Token` похоже на секрет (цифра, знак или заглавная не в начале), чтобы «Basic usage» не терялось. */
 const AUTH_SCHEME = /\b(Bearer|Basic|Token)([ \t]+)([A-Za-z0-9\-._~+/]+=*)/gi;
-const JWT = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g;
+/** Хвост `.….…` необязателен, чтобы совпадение не откатывалось: на тексте страницы `eyJ-eyJ-…` перебор остаётся линейным. */
+const JWT = /\beyJ[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*)?/g;
 /** `имя[:=]значение` и `"имя": "значение"`: значение — строка в кавычках или слово до пробела, запятой, `;`, `&`, скобки. Имя ограничено, перебор линейный. */
 const NAMED_VALUE = /(["']?)([A-Za-z_][\w.-]{0,63})\1(\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?:(?:Bearer|Basic|Token)[ \t]+)?[^\s,;&)}\]"']+)/g;
 /** Относительный адрес с query: начало строки или пробел/кавычка/скобка, затем `/путь?query`. */
@@ -135,7 +136,7 @@ export function redactSecretsInText(text: string): string {
       const strict = scheme.toLowerCase() !== 'bearer';
       return strict && !looksSecret(value) ? whole : `${scheme}${space}${REDACTED}`;
     })
-    .replace(JWT, REDACTED);
+    .replace(JWT, (whole, tail: string | undefined) => (tail === undefined ? whole : REDACTED));
 }
 
 /** JSON.rawJSON есть в V8 11.4+ (Node 22, Electron 44); lib TypeScript его не знает. */
