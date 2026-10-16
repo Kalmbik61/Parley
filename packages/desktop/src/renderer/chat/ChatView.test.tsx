@@ -1449,6 +1449,7 @@ describe('ChatView — вложения в поле ввода (живая пр�
     fireEvent.click(sendButton());
     expect(sends()).toEqual([{ ref: REF, text: '@"/a/b c.png" ', submit: true }]);
     expect(chips()).toEqual([]);
+    await act(async () => {});
     expect(sendButton().disabled).toBe(true);
 
     await attach('/a/d.txt');
