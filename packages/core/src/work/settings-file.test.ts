@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BROWSER_TOOLS } from '../mcp/browser-tools.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import {
-  BROWSER_OPEN_PERMISSION,
+  BROWSER_PERMISSIONS,
   FEED_HOOK_EVENTS,
   HOOK_COMMAND,
   HOOK_EVENTS,
@@ -474,18 +474,20 @@ describe('GLM settings', () => {
   });
 });
 
-describe('browser_open разрешён заранее (спека браузера, 5.1)', () => {
+describe('инструменты браузера разрешены заранее (спека браузера, 5.1; S10)', () => {
+  const FIVE = ['tabs', 'console', 'network', 'screenshot', 'open'].map((op) => `mcp__parley__browser_${op}`);
+
   it('без канала агента правила нет', () => {
     expect(workSettings()).not.toHaveProperty('permissions');
   });
 
-  it('с каналом агента — ровно одно правило: browser_open сервера Parley', () => {
-    expect(workSettings({ allowBrowserOpen: true }).permissions).toEqual({ allow: [BROWSER_OPEN_PERMISSION] });
+  it('с каналом агента — permissions.allow ровно пять browser_*; без канала — поля нет', () => {
+    expect(workSettings({ allowBrowser: true }).permissions).toEqual({ allow: FIVE });
+    expect(workSettings({ allowBrowser: false })).not.toHaveProperty('permissions');
   });
 
-  it('имя правила собрано из настоящих имён сервера и инструмента', () => {
-    expect(BROWSER_TOOLS.map((tool) => tool.name)).toContain('browser_open');
-    expect(BROWSER_OPEN_PERMISSION).toBe(`mcp__${MCP_SERVER_NAME}__browser_open`);
-    expect(BROWSER_OPEN_PERMISSION).toBe('mcp__parley__browser_open');
+  it('имена правил собраны из настоящих имён сервера и инструментов', () => {
+    expect(BROWSER_PERMISSIONS).toEqual(BROWSER_TOOLS.map((tool) => `mcp__${MCP_SERVER_NAME}__${tool.name}`));
+    expect(BROWSER_PERMISSIONS).toEqual(FIVE);
   });
 });
