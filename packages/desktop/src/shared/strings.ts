@@ -13,6 +13,7 @@
  * областям окна; параметризованные тексты — функции.
  */
 import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
+import { ASSISTANT_NAME } from './assistant-name.js';
 import type { ContextKind } from './context-markdown.js';
 
 /** Что за файл-контекст — для строки в ввод CLI (`S.contextFile.terminalLine`). */
@@ -928,6 +929,7 @@ export const S = {
       notifications: 'Notifications',
       browser: 'Browser',
       voice: 'Voice',
+      assistant: 'Assistant',
     },
     lockedBy: (value: string): string => `(set by ${value})`,
     appearanceSystem: 'System',
@@ -1149,6 +1151,8 @@ export const S = {
 
   /** Вид «Chat» вкладки сессии (план 2026-10-01, Task 3) — `renderer/chat/`. */
   chat: {
+    /** Подпись сообщения, которое человеку передал помощник (письмо с `via: 'assistant'`). */
+    viaAssistant: `via ${ASSISTANT_NAME}`,
     /** Сегмент тулбара вкладки «Chat | Terminal». */
     segment: { chat: 'Chat', terminal: 'Terminal' },
     viewLabel: 'Session view',
@@ -1749,6 +1753,7 @@ export const S = {
 
   /** Заголовки действий реестра клавиш (`shared/keybindings.ts`, спека 9.6): пункты меню и строки палитры. */
   actions: {
+    askAssistant: `Ask ${ASSISTANT_NAME}`,
     capabilities: 'Capabilities…',
     commandPalette: 'Command palette',
     toggleDictation: 'Toggle dictation',
@@ -1875,6 +1880,8 @@ export const S = {
   /** Тексты общих участников переписки — `lib/participant-tag.ts`. */
   participants: {
     human: 'You',
+    /** Подпись отправителя, когда письмо ушло через помощника. */
+    viaAssistant: (name: string): string => `${name} (via ${ASSISTANT_NAME})`,
     /** Так хост подписывает свои строки в комнате и почте — как на снимке handoff `dark-08`. */
     system: 'Parley',
     deletedSuffix: '(deleted)',
@@ -2070,6 +2077,59 @@ export const S = {
       '',
       'Send: attach this file to a GitHub issue at https://github.com/Kalmbik61/Parley/issues or to your message to the author.',
     ].join('\n'),
+  },
+
+  /** Помощник на острове (спека 2026-10-14, раздел 6): тексты вида, настроек и подтверждения. */
+  assistant: {
+    ask: `Ask ${ASSISTANT_NAME}`,
+    placeholder: `Ask ${ASSISTANT_NAME}…`,
+    ready: 'Ask about your agents, or tell a room something',
+    escToClose: 'Esc to close',
+    hotkeyToTalk: (keys: string): string => `${keys} to talk`,
+    mic: 'Talk',
+    stopMic: 'Stop listening',
+    listening: 'Listening…',
+    transcribing: 'Recognizing…',
+    thinking: 'Thinking…',
+    checking: 'Checking rooms…',
+    reading: (name: string | null): string => (name === null ? 'Reading…' : `Reading ${name}…`),
+    preparing: 'Preparing a message…',
+    working: 'Working…',
+    answering: 'Answering',
+    confirm: 'Waiting for your confirmation',
+    miniListening: 'Listening·',
+    miniThinking: 'Thinking·',
+    miniWorking: 'Working·',
+    miniConfirm: 'Confirm send',
+    to: 'To',
+    send: 'Send',
+    cancel: 'Cancel',
+    enterToSend: 'Enter to send',
+    sent: 'Sent ✓',
+    cancelled: 'Cancelled',
+    needsYou: (name: string, total: number): string => `${name} needs you · 1 of ${total}`,
+    voiceOff: 'Voice is off — Settings → Voice',
+    micDenied: 'Microphone access is off — System Settings → Privacy & Security',
+    noSpeech: "Didn't catch that — try again",
+    voiceFailed: "Couldn't recognize speech — type instead",
+    newConversation: 'New conversation',
+    settings: {
+      enabled: `Turn on ${ASSISTANT_NAME}`,
+      enabledHint: "Answers about your agents and passes your messages on. Runs on the selected provider's subscription.",
+      provider: 'Provider',
+      providerAuto: 'First connected',
+      model: 'Model',
+      modelDefault: 'Fast default',
+      language: 'Language',
+      languageSystem: 'System',
+      languageEnglish: 'English',
+      languageRussian: 'Russian',
+      shortcut: 'Shortcut',
+      shortcutHint: 'Works from any app. Electron format, e.g. Alt+Space.',
+      shortcutTaken: 'This shortcut is taken by another app — choose another.',
+      shortcutClaudeDesktop: 'Alt+Space is also the default Quick Entry shortcut in Claude Desktop. If the island does not open, change the shortcut here or there.',
+      glmSlow: 'GLM answers in about 13 seconds.',
+    },
   },
 
   /** Голосовой ввод (спека 2026-10-06-voice-input-design.md, раздел 3). */

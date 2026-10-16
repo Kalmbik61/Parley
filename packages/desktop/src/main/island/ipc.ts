@@ -19,6 +19,8 @@ export interface IslandIpcOptions {
   config(): Promise<IslandConfig>;
   /** Место могло смениться (другой монитор — другой отступ под чёлку): отдать острову настройки заново. */
   pushConfig(): void;
+  /** Режим помощника: панель берёт клавиатуру (`true`) или отдаёт её прежнему приложению (`false`). */
+  keyboard(on: boolean): void;
   openTarget(target: FocusTarget): void;
   beep(): void;
   /** Clear на острове: сессии просмотрены — хосту уходит `activity.seen` по каждой (список уже проверен). */
@@ -72,6 +74,9 @@ export function registerIslandIpc(options: IslandIpcOptions): void {
   });
   ipcMain.on('island:visible', (event, visible: unknown) => {
     if (fromIsland(event) && typeof visible === 'boolean') controller.setVisible(visible);
+  });
+  ipcMain.on('island:keyboard', (event, on: unknown) => {
+    if (fromIsland(event) && typeof on === 'boolean') options.keyboard(on);
   });
   ipcMain.on('island:drag-start', (event, point: unknown) => {
     if (fromIsland(event) && isPoint(point)) controller.dragStart(point);

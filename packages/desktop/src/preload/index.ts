@@ -14,6 +14,7 @@ import type {
   PickResult,
   SavedContext,
 } from '../shared/browser-types.js';
+import type { AssistantShortcutStatus } from '../shared/island.js';
 import type { ActionId } from '../shared/keybindings.js';
 import type {
   DiffFile,
@@ -219,6 +220,8 @@ const bridge = {
     loadUi: () => ipcRenderer.invoke('app:load-ui') as Promise<UiFile>,
     saveUi: (patch: Partial<Omit<UiFile, 'version'>>) =>
       ipcRenderer.invoke('app:save-ui', patch) as Promise<UiFile>,
+    openAssistant: () => ipcRenderer.send('app:assistant-open'),
+    assistantShortcut: () => ipcRenderer.invoke('app:assistant-shortcut') as Promise<AssistantShortcutStatus>,
     loadNotes: (workKey: string, sessionId: string) =>
       ipcRenderer.invoke('app:load-notes', workKey, sessionId) as Promise<{ file: NotesFile; corruptedTo: string | null }>,
     saveNotes: (workKey: string, sessionId: string, notes: NotesFile) =>

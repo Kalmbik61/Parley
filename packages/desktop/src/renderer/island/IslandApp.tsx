@@ -57,7 +57,13 @@ export const DONE_HOLD_MS = 20000;
 /** Сколько форма сжимается в брусок: та же длительность, что `duration-[250ms]` перехода формы в `IslandView`. */
 export const RETRACT_MORPH_MS = 250;
 
-const INITIAL_CONFIG: IslandConfig = { sound: false, topInset: 0, anchor: 'center' };
+const INITIAL_CONFIG: IslandConfig = {
+  islandEnabled: true,
+  assistant: { enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null } },
+  sound: false,
+  topInset: 0,
+  anchor: 'center',
+};
 
 /** Выравнивание формы в кадре окна: влево, по центру или вправо — по точке, у которой стоит остров. */
 const ANCHOR_CLASS: Record<IslandAnchor, string> = { left: 'justify-start', center: 'justify-center', right: 'justify-end' };

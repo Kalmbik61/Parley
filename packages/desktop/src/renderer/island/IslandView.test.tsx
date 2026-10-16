@@ -23,10 +23,18 @@ import { CARD_ARM_MS, IslandView, type IslandViewProps } from './IslandView.js';
 const REF = { projectPath: '/tmp/proj', workId: 'w-1', sessionId: 's-02' };
 const LABELS = new Map([['k', { session: 'S02 api', work: 'Backend', project: 'proj' }]]);
 
+/** Поля `IslandConfig` для помощника и острова: в этих тестах помощник выключен. */
+const ISLAND_BASE = {
+  islandEnabled: true,
+  assistant: { enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null } },
+};
+
 function api(): IslandApi {
   return {
     config: vi.fn(), onConfig: vi.fn(), onHover: vi.fn(), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(),
     dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
+    keyboard: vi.fn(), onAssistantOpen: vi.fn(() => () => {}), onAssistantBlur: vi.fn(() => () => {}),
+    voice: { transcribe: vi.fn(), micStatus: vi.fn(), requestMic: vi.fn() },
   };
 }
 
@@ -69,7 +77,7 @@ const DONE_MODEL: IslandModel = {
 
 function viewProps(patch: Partial<IslandViewProps> = {}): IslandViewProps {
   return {
-    model: MODEL, items: [], index: 0, config: { sound: true, topInset: 0, anchor: 'center' }, listOpen: false, retracted: false, doneCount: 0, hovered: false, showId: 1,
+    model: MODEL, items: [], index: 0, config: { ...ISLAND_BASE, sound: true, topInset: 0, anchor: 'center' }, listOpen: false, retracted: false, doneCount: 0, hovered: false, showId: 1,
     labels: LABELS, api: api(), shapeRef: createRef<HTMLDivElement>(),
     onDragStart: vi.fn(), onDragEnd: vi.fn(),
     onToggleList: vi.fn(), onHide: vi.fn(), onClearDone: vi.fn(), onSelect: vi.fn(), onDecide: vi.fn(),
@@ -267,7 +275,7 @@ describe('вид острова', () => {
   });
 
   it('подсказки первого показа нет; отступ под чёлку', () => {
-    view({ config: { sound: true, topInset: 38, anchor: 'center' } });
+    view({ config: { ...ISLAND_BASE, sound: true, topInset: 38, anchor: 'center' } });
     expect(screen.queryByText(/Drag me/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Got it' })).toBeNull();
     // Отступ под чёлку — на внутреннем содержимом, которое замеряется: внешняя форма лишь повторяет его размер.
@@ -733,7 +741,7 @@ describe('оформление списка', () => {
 
 describe('убранный остров', () => {
   const INSET = 38;
-  const config = { sound: true, topInset: INSET, anchor: 'center' as const };
+  const config = { ...ISLAND_BASE, sound: true, topInset: INSET, anchor: 'center' as const };
   /** Единственный элемент в содержимом убранной формы: брусок или текст `✅ N`. */
   const only = (): HTMLElement => {
     const content = screen.getByTestId('island-content');

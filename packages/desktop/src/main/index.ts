@@ -6,6 +6,7 @@ import {
   BrowserWindow,
   clipboard,
   dialog,
+  globalShortcut,
   ipcMain,
   nativeImage,
   nativeTheme,
@@ -20,10 +21,11 @@ import {
 } from 'electron';
 import type { WebContents } from 'electron';
 import { configPath, envValue, loadConfig, migrateHome, parleyHome } from '@parley/core';
+import type { AssistantLanguage } from '@parley/core/assistant';
 import type { WorksSnapshot } from '@parley/protocol';
 import type { FocusTarget, HostStatus } from '../shared/bridge.js';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
-import { ISLAND_EVENTS, type IslandConfig } from '../shared/island.js';
+import { ISLAND_EVENTS, type AssistantOpenRequest, type IslandConfig } from '../shared/island.js';
 import { S } from '../shared/strings.js';
 import type { UiFile } from '../shared/ui-types.js';
 import { createAgentOps, type AgentOps } from './browser/agent-ops.js';
@@ -48,6 +50,7 @@ import { imageThumbnail } from './image-thumbnail.js';
 import { forwardAppearanceToWindow, forwardHostToPages, registerIpc } from './ipc.js';
 import { quietExpectedIpcRefusals } from './ipc-quiet.js';
 import { forwardGuestShortcuts } from './guest-shortcuts.js';
+import { createAssistantShortcut } from './assistant/shortcut.js';
 import { registerIslandIpc } from './island/ipc.js';
 import type { IslandPlacement } from './island/placement.js';
 import { createIslandController, islandWindowOptions } from './island/window.js';
@@ -463,6 +466,7 @@ if (!gotLock) {
         const window = island.current();
         if (window !== null) window.webContents.send('island:hover', hovered);
       },
+      onKeyboardLost: () => blurAssistant(),
       onCreated: (window) => {
         // Острову — только нужные ему события хоста: `pty.output` всех сессий в его renderer не нужен.
         forwardHostToPages(connection, window, { events: ISLAND_EVENTS });
@@ -473,9 +477,39 @@ if (!gotLock) {
       },
       log: (message) => console.warn('[parley]', message),
     });
+    const assistantShortcut = createAssistantShortcut({
+      registry: globalShortcut,
+      onTrigger: () => openAssistant({ listen: true }),
+      log: (line) => console.warn('[parley]', line),
+    });
+    function openAssistant(request: AssistantOpenRequest): void {
+      const window = island.current();
+      if (window === null || window.isDestroyed()) return;
+      window.webContents.send('island:assistant-open', request);
+    }
+    function blurAssistant(): void {
+      const window = island.current();
+      if (window === null || window.isDestroyed()) return;
+      window.webContents.send('island:assistant-blur');
+    }
+    const assistantLanguage = (current: UiFile): AssistantLanguage =>
+      current.assistant.language ?? (app.getLocale().toLowerCase().startsWith('ru') ? 'ru' : 'en');
     const islandConfig = async (): Promise<IslandConfig> => {
       const current = await uiStore.load();
-      return { sound: current.notifications.sound, topInset: island.topInset(), anchor: island.anchor() };
+      return {
+        islandEnabled: current.island.enabled,
+        assistant: {
+          enabled: current.assistant.enabled,
+          provider: current.assistant.provider,
+          model: current.assistant.model,
+          language: assistantLanguage(current),
+          hotkey: current.assistant.hotkey,
+          voice: { enabled: current.voice.enabled, model: current.voice.model },
+        },
+        sound: current.notifications.sound,
+        topInset: island.topInset(),
+        anchor: island.anchor(),
+      };
     };
     const pushIslandConfig = (): void => {
       void islandConfig().then((config) => {
@@ -488,8 +522,9 @@ if (!gotLock) {
      * его пишет только main (`savePlacement`), и чтение файла, обогнавшее незавершённую запись, откатило бы место назад.
      */
     const syncIsland = (current: UiFile): void => {
-      if (current.island.enabled && !switches.islandOff) island.open();
+      if ((current.island.enabled || current.assistant.enabled) && !switches.islandOff) island.open();
       else island.close();
+      assistantShortcut.sync(current.assistant.enabled && !switches.islandOff, current.assistant.hotkey);
       pushIslandConfig();
     };
     // Второстепенное окно не должно ронять старт: сбой создания — в журнал, остальное приложение работает.
@@ -511,6 +546,7 @@ if (!gotLock) {
       controller: island,
       config: islandConfig,
       pushConfig: pushIslandConfig,
+      keyboard: (on) => island.setKeyboard(on),
       openTarget: (target) => {
         focusMainWindow();
         sendFocusTarget(target);
@@ -635,6 +671,8 @@ if (!gotLock) {
         });
       },
       isIslandSender: (sender) => island.isIsland(sender),
+      openAssistant: () => openAssistant({ listen: false }),
+      assistantShortcut: () => assistantShortcut.status(),
       // «Страница острова загружена», а не просто «окно есть»: пока она грузится или не загрузилась, системные уведомления не глушатся.
       islandActive: () => {
         const window = island.current();
@@ -801,4 +839,6 @@ if (!gotLock) {
 
   // Идущее распознавание не должно пережить приложение: `whisper-cli` — дочерний процесс окна, не хоста.
   app.on('before-quit', killRunningEngines);
+  // Глобальное сочетание помощника не должно пережить приложение.
+  app.on('will-quit', () => globalShortcut.unregisterAll());
 }

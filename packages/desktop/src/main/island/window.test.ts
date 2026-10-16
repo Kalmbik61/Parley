@@ -24,10 +24,12 @@ class FakeWindow implements IslandWindowLike {
   showInactive(): void { this.visible = true; this.calls.push('showInactive'); }
   hide(): void { this.visible = false; this.calls.push('hide'); }
   setIgnoreMouseEvents(ignore: boolean, options: { forward: boolean }): void { this.mouseCalls.push([ignore, options]); }
+  readonly setFocusable = vi.fn((focusable: boolean): void => { this.calls.push(`focusable:${focusable}`); });
+  readonly focus = vi.fn((): void => { this.calls.push('focus'); });
   isVisible(): boolean { return this.visible; }
   destroy(): void { this.destroyed = true; this.emit('closed'); }
   isDestroyed(): boolean { return this.destroyed; }
-  on(event: 'closed', listener: () => void): void { this.add(event, listener); }
+  on(event: 'closed' | 'blur', listener: () => void): void { this.add(event, listener); }
   emit(event: string): void { for (const listener of this.listeners.get(event) ?? []) listener(); }
   private add(event: string, listener: () => void): void { this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]); }
 }
@@ -39,6 +41,7 @@ function setup(placement: IslandPlacement = { displayId: null, anchor: 'center' 
   let cursor = { x: 0, y: 0 };
   const log = vi.fn();
   const onHover = vi.fn();
+  const onKeyboardLost = vi.fn();
   const cursorSpy = vi.fn(() => cursor);
   const controller = createIslandController<FakeWindow>({
     createWindow: () => {
@@ -52,11 +55,12 @@ function setup(placement: IslandPlacement = { displayId: null, anchor: 'center' 
     savePlacement: (next) => { saved = next; },
     cursor: cursorSpy,
     onHover,
+    onKeyboardLost,
     onCreated: vi.fn(),
     log,
   });
   return {
-    controller, windows, log, onHover, cursorSpy,
+    controller, windows, log, onHover, onKeyboardLost, cursorSpy,
     setDisplays: (next: DisplayLike[]) => { displays = next; },
     setCursor: (next: { x: number; y: number }) => { cursor = next; },
     placement: () => saved,
@@ -237,6 +241,58 @@ describe('окно острова', () => {
     controller.setVisible(true);
     vi.advanceTimersByTime(HOVER_POLL_MS * 3);
     expect(windows[1]?.mouseCalls).toEqual([[true, { forward: false }]]);
+  });
+
+  describe('клавиатура помощника', () => {
+    it('setKeyboard(true): окно становится фокусируемым и берёт фокус', () => {
+      const { controller, windows } = setup();
+      controller.open();
+      controller.setVisible(true);
+      controller.setKeyboard(true);
+      expect(windows[0]?.setFocusable).toHaveBeenCalledWith(true);
+      expect(windows[0]?.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it('setKeyboard(false) у видимого окна: setFocusable(false), затем hide и showInactive', () => {
+      const { controller, windows } = setup();
+      controller.open();
+      controller.setVisible(true);
+      controller.setKeyboard(true);
+      windows[0]?.calls.splice(0);
+      controller.setKeyboard(false);
+      expect(windows[0]?.calls).toEqual(['focusable:false', 'hide', 'showInactive']);
+      expect(windows[0]?.visible).toBe(true);
+    });
+
+    it('setKeyboard(false) у скрытого окна: только setFocusable(false)', () => {
+      const { controller, windows } = setup();
+      controller.open();
+      windows[0]?.calls.splice(0);
+      controller.setKeyboard(false);
+      expect(windows[0]?.calls).toEqual(['focusable:false']);
+    });
+
+    it('blur после setKeyboard(true) зовёт onKeyboardLost один раз, второй blur подряд — нет', () => {
+      const { controller, windows, onKeyboardLost } = setup();
+      controller.open();
+      controller.setVisible(true);
+      controller.setKeyboard(true);
+      windows[0]?.emit('blur');
+      expect(onKeyboardLost).toHaveBeenCalledTimes(1);
+      windows[0]?.emit('blur');
+      expect(onKeyboardLost).toHaveBeenCalledTimes(1);
+    });
+
+    it('blur без взятой клавиатуры и blur сразу после setKeyboard(false) onKeyboardLost не зовут', () => {
+      const { controller, windows, onKeyboardLost } = setup();
+      controller.open();
+      controller.setVisible(true);
+      windows[0]?.emit('blur');
+      controller.setKeyboard(true);
+      controller.setKeyboard(false);
+      windows[0]?.emit('blur');
+      expect(onKeyboardLost).not.toHaveBeenCalled();
+    });
   });
 
   describe('наведение по настоящему курсору', () => {

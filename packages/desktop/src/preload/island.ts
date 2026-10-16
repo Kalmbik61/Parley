@@ -8,12 +8,15 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { EventMessage, EventName, MethodName, SessionRef } from '@parley/protocol';
 import type { HostStatus } from '../shared/bridge.js';
-import type { IslandApi, IslandBridge, IslandConfig, IslandHitRect, IslandPoint } from '../shared/island.js';
+import type { AssistantOpenRequest, IslandApi, IslandBridge, IslandConfig, IslandHitRect, IslandPoint } from '../shared/island.js';
+import type { MicStatus, TranscribeResult } from '../shared/voice-types.js';
 
 const eventListeners = new Map<EventName, Set<(data: unknown) => void>>();
 const statusListeners = new Set<(status: HostStatus) => void>();
 const configListeners = new Set<(config: IslandConfig) => void>();
 const hoverListeners = new Set<(hovered: boolean) => void>();
+const assistantOpenListeners = new Set<(request: AssistantOpenRequest) => void>();
+const assistantBlurListeners = new Set<() => void>();
 /** Последний статус: подписчик, пришедший позже события, получает его сразу (как в общем preload). */
 let lastStatus: HostStatus | null = null;
 
@@ -29,6 +32,12 @@ ipcRenderer.on('island:config', (_event, config: IslandConfig) => {
 });
 ipcRenderer.on('island:hover', (_event, hovered: boolean) => {
   for (const listener of hoverListeners) listener(hovered);
+});
+ipcRenderer.on('island:assistant-open', (_event, request: unknown) => {
+  for (const listener of assistantOpenListeners) listener(request as AssistantOpenRequest);
+});
+ipcRenderer.on('island:assistant-blur', () => {
+  for (const listener of assistantBlurListeners) listener();
 });
 
 const bridge = {
@@ -69,6 +78,24 @@ const bridge = {
     },
     setHitRect: (rect: IslandHitRect | null) => ipcRenderer.send('island:hit-rect', rect),
     setVisible: (visible: boolean) => ipcRenderer.send('island:visible', visible),
+    keyboard: (on: boolean) => ipcRenderer.send('island:keyboard', on),
+    onAssistantOpen: (listener: (request: AssistantOpenRequest) => void) => {
+      assistantOpenListeners.add(listener);
+      return () => {
+        assistantOpenListeners.delete(listener);
+      };
+    },
+    onAssistantBlur: (listener: () => void) => {
+      assistantBlurListeners.add(listener);
+      return () => {
+        assistantBlurListeners.delete(listener);
+      };
+    },
+    voice: {
+      transcribe: (request) => ipcRenderer.invoke('voice:transcribe', request) as Promise<TranscribeResult>,
+      micStatus: () => ipcRenderer.invoke('voice:mic-status') as Promise<MicStatus>,
+      requestMic: () => ipcRenderer.invoke('voice:request-mic') as Promise<boolean>,
+    },
     dragStart: (point: IslandPoint) => ipcRenderer.send('island:drag-start', point),
     dragMove: (point: IslandPoint) => ipcRenderer.send('island:drag-move', point),
     dragEnd: (point: IslandPoint) => ipcRenderer.send('island:drag-end', point),

@@ -34,6 +34,7 @@ import { Switch } from '../../ui/switch.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ui/tabs.js';
 import { ToggleGroup, ToggleGroupItem } from '../../ui/toggle-group.js';
 import { VoiceSettings } from '../../voice/VoiceSettings.js';
+import { AssistantSettings } from './AssistantSettings.js';
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -50,9 +51,10 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   notifications: S.settings.sections.notifications,
   browser: S.settings.sections.browser,
   voice: S.settings.sections.voice,
+  assistant: S.settings.sections.assistant,
 };
 
-const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'notifications', 'browser', 'voice'];
+const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'notifications', 'browser', 'voice', 'assistant'];
 
 type FieldErrors = Partial<Record<keyof ParleyConfig, string>>;
 
@@ -473,6 +475,8 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
           </TabsContent>
 
           <TabsContent value="voice">{uiLoaded ? <VoiceSettings /> : null}</TabsContent>
+
+          <TabsContent value="assistant">{uiLoaded ? <AssistantSettings /> : null}</TabsContent>
         </Tabs>
 
         <DialogFooter>

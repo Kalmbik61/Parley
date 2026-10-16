@@ -154,6 +154,7 @@ function expectation(id: ActionId): (spies: Spies) => void {
     find: ({ focused }) => expect(focused.openSearch).toHaveBeenCalledTimes(1),
     'terminal.clear': ({ focused }) => expect(focused.clear).toHaveBeenCalledTimes(1),
     'voice.toggle': ({ voice }) => expect(voice.toggle).toHaveBeenCalledTimes(1),
+    'assistant.open': ({ bridge }) => expect(bridge.assistantOpenCalls).toEqual(['open']),
     'attention.next': ({ attention }) => expect(attention.next).toHaveBeenCalledTimes(1),
     'wake.toggle': ({ ui }) => expect(ui.toggleWake).toHaveBeenCalledTimes(1),
     'host.restart': ({ ui }) => expect(ui.confirmRestartHost).toHaveBeenCalledTimes(1),

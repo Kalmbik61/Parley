@@ -123,6 +123,8 @@ export interface FakeBridge extends ParleyBridge {
   /** Вызовы `app.saveDiagnostics` и ответ на них (по умолчанию — архив собран, хост ответил); `Error` — отказ. */
   readonly saveDiagnosticsCalls: Array<{ profile: boolean }>;
   setSaveDiagnosticsAnswer(answer: DiagnosticsSaveResult | Error): void;
+  /** Вызовы `app.openAssistant` (палитра): по записи на вызов. */
+  readonly assistantOpenCalls: string[];
   /** Вызовы `app.openPath` и `app.showInFinder`. */
   readonly openedPaths: string[];
   readonly revealedPaths: string[];
@@ -263,6 +265,7 @@ export function createFakeBridge(): FakeBridge {
   const saveRecipeCalls: RecipeSaveRequest[] = [];
   let saveRecipeAnswer: (request: RecipeSaveRequest) => RecipeSaveResult | Promise<RecipeSaveResult> = (request) => ({ status: 'saved', id: `project:${request.file}`, opened: true });
   const saveDiagnosticsCalls: Array<{ profile: boolean }> = [];
+  const assistantOpenCalls: string[] = [];
   let saveDiagnosticsAnswer: DiagnosticsSaveResult | Error = { file: '/Users/test/Downloads/parley-diagnostics-20261016-123456.zip', hostResponded: true };
   let openPathResult: 'opened' | 'revealed' | { error: unknown } = 'opened';
   const openedPaths: string[] = [];
@@ -377,6 +380,7 @@ export function createFakeBridge(): FakeBridge {
       saveRecipeAnswer = answer;
     },
     saveDiagnosticsCalls,
+    assistantOpenCalls,
     setSaveDiagnosticsAnswer: (answer) => {
       saveDiagnosticsAnswer = answer;
     },
@@ -805,6 +809,10 @@ export function createFakeBridge(): FakeBridge {
         ui = normalizeUi({ ...ui, ...patch });
         return ui;
       },
+      openAssistant: () => {
+        assistantOpenCalls.push('open');
+      },
+      assistantShortcut: async () => ({ accelerator: null, ok: true }),
       loadNotes: async (workKey, sessionId) => {
         loadNotesCalls.push({ workKey, sessionId });
         const answer = notesAnswers.get(notesKey(workKey, sessionId)) ?? { file: { version: 1, notes: [] }, corruptedTo: null };

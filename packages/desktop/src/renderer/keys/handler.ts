@@ -42,6 +42,7 @@ export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
   'tab.mruPrev',
   'find',
   'voice.toggle',
+  'assistant.open',
   'terminal.clear',
   'chat.toggleView',
   'works.showArchived',

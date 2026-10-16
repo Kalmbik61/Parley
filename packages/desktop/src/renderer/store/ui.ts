@@ -23,7 +23,7 @@ export interface DialogWork {
 export interface BacklogTakeContext { projectPath: string; id: string; version: string; task: string }
 
 /** Вкладки диалога настроек: `openSettingsDialog(section)` открывает его на нужной. */
-export type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'notifications' | 'browser' | 'voice';
+export type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'notifications' | 'browser' | 'voice' | 'assistant';
 
 export interface DialogsState {
   /**

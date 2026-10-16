@@ -63,9 +63,13 @@ class ResizeObserverStub {
 
 function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
   return {
-    config: vi.fn(async (): Promise<IslandConfig> => ({ sound: false, topInset: 0, anchor: 'center', ...config })),
+    config: vi.fn(async (): Promise<IslandConfig> => ({ islandEnabled: true, assistant: { enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null } }, sound: false, topInset: 0, anchor: 'center', ...config })),
     onConfig: vi.fn(() => () => undefined),
     onHover: vi.fn(() => () => undefined), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
+    keyboard: vi.fn(),
+    onAssistantOpen: vi.fn(() => () => undefined),
+    onAssistantBlur: vi.fn(() => () => undefined),
+    voice: { transcribe: vi.fn(), micStatus: vi.fn(), requestMic: vi.fn() },
   };
 }
 

@@ -199,6 +199,30 @@ describe('normalizeUi: остров', () => {
   });
 });
 
+describe('normalizeUi: помощник', () => {
+  it('нет ключа — умолчание: выключен, Alt+Space, провайдер, модель и язык не выбраны', () => {
+    expect(normalizeUi({}).assistant).toEqual({ enabled: false, provider: null, model: null, hotkey: 'Alt+Space', language: null });
+  });
+
+  it('мусор — умолчание, годные поля остаются', () => {
+    expect(normalizeUi({ assistant: 'x' }).assistant).toEqual(DEFAULT_UI.assistant);
+    expect(normalizeUi({ assistant: { enabled: 1, provider: 5, model: '  ', hotkey: '', language: 3 } }).assistant).toEqual(
+      DEFAULT_UI.assistant,
+    );
+    expect(normalizeUi({ assistant: { enabled: true, provider: 'glm', model: 'm', hotkey: 'Control+Alt+J', language: 'ru' } }).assistant).toEqual({
+      enabled: true,
+      provider: 'glm',
+      model: 'm',
+      hotkey: 'Control+Alt+J',
+      language: 'ru',
+    });
+  });
+
+  it('язык вне en и ru — null', () => {
+    expect(normalizeUi({ assistant: { language: 'de' } }).assistant.language).toBeNull();
+  });
+});
+
 // Спека архива комнат и проектов, 6.3: проекты, убранные из списка пунктом «Remove from list…».
 describe('hiddenProjects (спека архива, 6.3)', () => {
   it('по умолчанию пусто; файл прежней версии без ключа читается с пустым списком', () => {

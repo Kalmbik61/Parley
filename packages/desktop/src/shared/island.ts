@@ -4,9 +4,11 @@
  * браузер, голос, отложенная цель клика) острову не даётся.
  */
 
+import type { AssistantLanguage } from '@parley/core/assistant';
 import type { EventName, SessionRef } from '@parley/protocol';
 import type { FocusTarget, ParleyBridge } from './bridge.js';
 import type { IslandAnchor } from './ui-types.js';
+import type { VoiceApi, VoiceModelId } from './voice-types.js';
 
 /** Точка курсора на экране (DIP), из `PointerEvent.screenX/Y` острова. */
 export interface IslandPoint {
@@ -22,8 +24,36 @@ export interface IslandHitRect {
   height: number;
 }
 
+/** Настройки помощника для острова (спека 2026-10-14, 6.1). */
+export interface IslandAssistantConfig {
+  enabled: boolean;
+  provider: string | null;
+  model: string | null;
+  /** Уже разрешённый язык (`null` из настроек → язык системы). */
+  language: AssistantLanguage;
+  /** Сочетание из настроек — для подсказки «⌥Space to talk». */
+  hotkey: string;
+  /** Голосовой ввод из настроек Voice: без модели помощник слушать не может. */
+  voice: { enabled: boolean; model: VoiceModelId | null };
+}
+
+export interface AssistantOpenRequest {
+  /** Хоткей — сразу слушать; палитра и клик — печать. */
+  listen: boolean;
+}
+
+/** Состояние глобального хоткея помощника (`main/assistant/shortcut.ts`): его видят preload и renderer. */
+export interface AssistantShortcutStatus {
+  /** Сочетание, которое помощник хочет держать; `null` — помощник выключен. */
+  accelerator: string | null;
+  ok: boolean;
+}
+
 /** Что острову нужно из настроек и места: звук по Sound, отступ под чёлку, точка у края монитора. */
 export interface IslandConfig {
+  /** Остров выключен, а помощник включён — окно показывается только в режиме помощника. */
+  islandEnabled: boolean;
+  assistant: IslandAssistantConfig;
   sound: boolean;
   topInset: number;
   /** Точка, у которой стоит остров: форма выравнивается внутри фиксированного кадра окна влево, по центру или вправо. */
@@ -42,6 +72,14 @@ export interface IslandApi {
   /** Область, которую остров ловит мышью: форма (выдвинутый), язычок (убранный) или `null`, если ничего не показано. */
   setHitRect(rect: IslandHitRect | null): void;
   setVisible(visible: boolean): void;
+  /** Режим помощника: панель берёт клавиатуру (`true`) или отдаёт её прежнему приложению (`false`). */
+  keyboard(on: boolean): void;
+  /** Хоткей или палитра открыли помощника. */
+  onAssistantOpen(listener: (request: AssistantOpenRequest) => void): () => void;
+  /** Панель потеряла фокус, пока держала клавиатуру (клик в другое приложение): выйти из режима, как по Esc или ⌃. */
+  onAssistantBlur(listener: () => void): () => void;
+  /** Голос для помощника — те же каналы `voice:*`, что у окна. */
+  voice: Pick<VoiceApi, 'transcribe' | 'micStatus' | 'requestMic'>;
   dragStart(point: IslandPoint): void;
   dragMove(point: IslandPoint): void;
   dragEnd(point: IslandPoint): void;
@@ -61,14 +99,23 @@ export interface IslandApi {
 export type IslandBridge = Pick<ParleyBridge, 'call' | 'on' | 'onStatus' | 'activitySnapshot'> & { island: IslandApi };
 
 /** Методы хоста, которые main пропускает от острова (`host:call` по отправителю). */
-export const ISLAND_METHODS: ReadonlySet<string> = new Set(['works.list', 'feed.snapshot', 'feed.decide']);
+export const ISLAND_METHODS: ReadonlySet<string> = new Set([
+  'works.list',
+  'feed.snapshot',
+  'feed.decide',
+  'assistant.ask',
+  'assistant.cancel',
+  'assistant.decide',
+  'assistant.reset',
+  'assistant.state',
+]);
 
 /**
  * События хоста, которые main пересылает окну острова (`forwardHostToPages` с `events`): список работ и активность
  * сессий. Остальное (`pty.output` всех сессий, лимиты, `feed.changed` и т. д.) острову не нужно — иначе поток вывода
  * терминалов шёл бы в его renderer впустую. Тип `EventName` ловит опечатку при сборке.
  */
-export const ISLAND_EVENTS: ReadonlySet<EventName> = new Set<EventName>(['works.changed', 'activity.changed']);
+export const ISLAND_EVENTS: ReadonlySet<EventName> = new Set<EventName>(['works.changed', 'activity.changed', 'assistant.changed']);
 
 /** Провайдеры вне острова (решение 2026-10-12): Codex — системными уведомлениями, как раньше. */
 export const ISLAND_EXCLUDED_PROVIDERS: ReadonlySet<string> = new Set(['codex']);

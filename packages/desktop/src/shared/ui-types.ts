@@ -5,6 +5,7 @@
  * `ParleyBridge.app.loadUi`/`saveUi`/`setAppearance`.
  */
 
+import type { AssistantLanguage } from '@parley/core/assistant';
 import { isVoiceLanguage, isVoiceModelId, type VoiceModelId } from './voice-types.js';
 
 export type Appearance = 'system' | 'dark' | 'light';
@@ -36,6 +37,19 @@ export interface IslandUi {
   enabled: boolean;
   displayId: number | null;
   anchor: IslandAnchor;
+}
+
+/** Помощник на острове (спека 2026-10-14, 6.1). Выключен по умолчанию: тратит лимит провайдера. */
+export interface AssistantUi {
+  enabled: boolean;
+  /** `null` — первый готовый: Claude, GLM, Codex. */
+  provider: string | null;
+  /** `null` — быстрая модель провайдера по умолчанию. */
+  model: string | null;
+  /** Глобальное сочетание в формате Electron accelerator. */
+  hotkey: string;
+  /** `null` — язык системы. */
+  language: AssistantLanguage | null;
 }
 
 export type RightSidebarTab = 'files' | 'changes' | 'agents';
@@ -75,6 +89,8 @@ export interface UiFile {
   browser: BrowserUi;
   /** Остров одобрений (спека 2026-10-12). */
   island: IslandUi;
+  /** Помощник на острове (спека 2026-10-14, 6.1). */
+  assistant: AssistantUi;
 }
 
 export const DEFAULT_UI: UiFile = {
@@ -96,6 +112,7 @@ export const DEFAULT_UI: UiFile = {
   voice: { enabled: false, model: null, language: 'auto' },
   browser: { devtoolsHeight: null, agentsAllowed: true },
   island: { enabled: true, displayId: null, anchor: 'center' },
+  assistant: { enabled: false, provider: null, model: null, hotkey: 'Alt+Space', language: null },
 };
 
 /**
@@ -216,6 +233,19 @@ function normalizeIsland(value: unknown): IslandUi {
   };
 }
 
+function normalizeAssistant(value: unknown): AssistantUi {
+  const source = isRecord(value) ? value : {};
+  const fallback = DEFAULT_UI.assistant;
+  const text = (item: unknown): string | null => (typeof item === 'string' && item.trim() !== '' ? item : null);
+  return {
+    enabled: typeof source.enabled === 'boolean' ? source.enabled : fallback.enabled,
+    provider: text(source.provider),
+    model: text(source.model),
+    hotkey: text(source.hotkey) ?? fallback.hotkey,
+    language: source.language === 'en' || source.language === 'ru' ? source.language : null,
+  };
+}
+
 /**
  * Приводит сырой JSON `ui.json` к `UiFile`: неизвестные ключи выкинуты (результат
  * собирается по известной схеме, а не копированием входа), неверные значения —
@@ -255,5 +285,6 @@ export function normalizeUi(raw: unknown): UiFile {
     voice: normalizeVoice(source.voice),
     browser: normalizeBrowser(source.browser),
     island: normalizeIsland(source.island),
+    assistant: normalizeAssistant(source.assistant),
   };
 }

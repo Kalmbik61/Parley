@@ -28,6 +28,7 @@ function setup() {
     controller,
     config: vi.fn().mockResolvedValue({ sound: true, topInset: 38, anchor: 'center' }),
     pushConfig: vi.fn(),
+    keyboard: vi.fn(),
     openTarget: vi.fn(),
     beep: vi.fn(),
     markSeen: vi.fn(),
@@ -47,6 +48,7 @@ function calledNames(state: ReturnType<typeof setup>): string[] {
     dragEnd: state.controller.dragEnd,
     config: state.config,
     pushConfig: state.pushConfig,
+    keyboard: state.keyboard,
     openTarget: state.openTarget,
     beep: state.beep,
     markSeen: state.markSeen,
@@ -64,6 +66,19 @@ describe('IPC острова', () => {
     expect(onFailed).not.toHaveBeenCalled();
     ipcMain.emit('island:failed', { sender: island });
     expect(onFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it('keyboard: от острова с булевым значением зовёт options.keyboard, от чужого окна и не с булевым — нет', () => {
+    const state = setup();
+    state.ipcMain.emit('island:keyboard', { sender: stranger }, true);
+    state.ipcMain.emit('island:keyboard', { sender: island }, 'true');
+    state.ipcMain.emit('island:keyboard', { sender: island }, 1);
+    state.ipcMain.emit('island:keyboard', { sender: island });
+    expect(state.keyboard).not.toHaveBeenCalled();
+    state.ipcMain.emit('island:keyboard', { sender: island }, true);
+    expect(state.keyboard).toHaveBeenCalledWith(true);
+    state.ipcMain.emit('island:keyboard', { sender: island }, false);
+    expect(state.keyboard).toHaveBeenLastCalledWith(false);
   });
 
   it('видимость и перетаскивание — только от окна острова и только целые данные', () => {
