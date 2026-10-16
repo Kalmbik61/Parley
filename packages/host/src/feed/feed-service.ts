@@ -25,6 +25,7 @@
 
 import { lstat, open } from 'node:fs/promises';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import {
   applyDecision,
   applyHookEvent,
@@ -122,7 +123,7 @@ export interface FeedServiceDeps {
   works: Pick<WorksService, 'entry' | 'onChange'>;
   activity: Pick<
     ActivityService,
-    'onChange' | 'logFile' | 'childLogFile' | 'questionHeld' | 'onLogChange'
+    'onChange' | 'logFile' | 'childLogFile' | 'questionHeld' | 'permissionAnswered' | 'onLogChange'
   >;
   pty: Pick<PtyManager, 'on' | 'get' | 'write' | 'screenText'>;
 }
@@ -470,8 +471,10 @@ export function createFeedService(
       ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
     };
     for (const client of Array.from(clients)) {
-      // Клиент не успевает читать — подписка снимается, как у `pty.output`: окно возьмёт снимок заново.
-      if (!client.send({ event: 'feed.changed', data })) clients.delete(client);
+      // В отличие от `pty.output`, подписку по буферу не снимаем: он обычно полон собственным большим ответом
+      // окну (снимок ленты на мегабайты), а дельты мелкие и идут пачками раз в 50 мс. Окно об отписке не
+      // узнало бы и ждало дельт вечно; ушедшего клиента снимает `dropClient`.
+      client.send({ event: 'feed.changed', data });
     }
   }
 
@@ -608,17 +611,21 @@ export function createFeedService(
       return;
     }
     const cardId = card.cardId;
+    const hookEvent = body['hook_event_name'] === 'PreToolUse' ? 'PreToolUse' : 'PermissionRequest';
     pending.hold({
       ref: feed.ref,
       cardId,
-      hookEvent: body['hook_event_name'] === 'PreToolUse' ? 'PreToolUse' : 'PermissionRequest',
+      hookEvent,
       rawToolInput: recordOf(body['tool_input']),
       kind: card.kind,
       respond: request.respond,
     });
     // CLI закрыл запрос сам (ответили в терминале, процесс вышел): решать в окне больше нечего.
     request.onAbandon(() => {
-      if (pending.drop(feed.ref, cardId)) settle(feed.ref, 'elsewhere', [cardId]);
+      if (!pending.drop(feed.ref, cardId)) return;
+      // Ответили в терминале: инструмент пошёл, `blocked` пора снять. Таймаут (`stale`) сюда не попадает.
+      if (hookEvent === 'PermissionRequest') deps.activity.permissionAnswered(feed.ref);
+      settle(feed.ref, 'elsewhere', [cardId]);
     });
   }
 
@@ -967,6 +974,13 @@ export function createFeedService(
     if (stopped || activity !== 'idle' || previous === 'idle') return;
     const feed = feeds.get(key);
     if (feed === undefined) return;
+    // У Codex запрос одобрения идёт из ячейки code mode, а она живёт дольше хода и приглашения: снятая карточка
+    // отдала бы хуку `{}`, Codex ушёл бы в окно TUI, и `exec` ждал бы там без срока (разбор 2026-10-16).
+    try {
+      if (sessionOf(feed.ref).provider === 'codex') return;
+    } catch {
+      // Сессии уже нет в работах — поведение прежнее.
+    }
     // Решение 5: агент у приглашения — карточки ответили в терминале (Esc и прерывание не дают `Stop`).
     // Удержанный `PreToolUse` вопроса не снимаем: пока он висит, CLI ждёт ответа хука и у приглашения
     // быть не может, а журнал событий его не видит и по тишине считает ход оконченным.
@@ -1127,19 +1141,46 @@ export function createFeedService(
     onHook,
 
     async snapshot(ref, agentId) {
+      const startedAt = performance.now();
       const session = sessionOf(ref);
-      if (agentId !== undefined) return agentSnapshot(ref, agentId);
+      if (agentId !== undefined) {
+        const sub = await agentSnapshot(ref, agentId);
+        log.info('лента: снимок', {
+          sessionId: ref.sessionId,
+          workId: ref.workId,
+          agentId,
+          items: sub.items.length,
+          bytes: null,
+          seedMs: null,
+          totalMs: Math.round(performance.now() - startedAt),
+        });
+        return sub;
+      }
       const feed = feedOf(ref);
-      if (!feed.live && !feed.seeded) await seed(feed, session.provider);
+      let seedMs: number | null = null;
+      if (!feed.live && !feed.seeded) {
+        const seedStartedAt = performance.now();
+        await seed(feed, session.provider);
+        seedMs = Math.round(performance.now() - seedStartedAt);
+      }
       // Накопленная пачка уходит до снимка: следующая дельта подписчику — ровно `revision + 1`.
       flush(feed);
-      return {
+      const snapshot: FeedSnapshot = {
         items: [...feed.state.items],
         revision: feed.revision,
         schemaVersion: FEED_SCHEMA_VERSION,
         mode: feed.state.permissionMode,
         ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
       };
+      log.info('лента: снимок', {
+        sessionId: ref.sessionId,
+        workId: ref.workId,
+        items: snapshot.items.length,
+        bytes: feed.bytes,
+        seedMs,
+        totalMs: Math.round(performance.now() - startedAt),
+      });
+      return snapshot;
     },
 
     subscribe(ref, client) {
@@ -1202,6 +1243,8 @@ export function createFeedService(
       );
       // Сначала ответ хуку, потом лента: `commit` снимает хуки решённых карточек пустым `{}`.
       pending.resolve(feed.ref, cardId, response);
+      // Хука «разрешили» у Claude Code нет: без отметки сессия числилась бы `blocked` до конца инструмента.
+      if (held.hookEvent === 'PermissionRequest') deps.activity.permissionAnswered(feed.ref);
       commit(feed, result);
       return { applied: true, state: next.state };
     },

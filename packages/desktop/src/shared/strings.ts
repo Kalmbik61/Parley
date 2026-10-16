@@ -353,6 +353,14 @@ export const S = {
     send: 'Send',
   },
 
+  /** Очередь отправки окна (спека 2026-10-16, 4): серые элементы Chat и комнаты. */
+  outbox: {
+    sending: 'Sending…',
+    waiting: 'Waiting',
+    notSent: 'Not sent',
+    remove: 'Remove',
+  },
+
   /**
    * Девять слов состояния сессии (спека 4.2): ключи — те же, что отдаёт
    * `dot-state.ts#stateWord` (`exited` расщеплён на `asleep`/`closed` по
@@ -1248,6 +1256,8 @@ export const S = {
     hideTranscript: 'Hide transcript',
     /** Серый элемент ленты: сообщение ушло в очередь CLI во время хода. */
     queued: 'Queued — the agent reads it when the turn ends',
+    /** Строка действий под сообщением (спека 2026-10-16, 3.1). */
+    actions: { copy: 'Copy', copied: 'Copied', sendAgain: 'Send again' },
     composer: {
       label: 'Message to Claude',
       placeholder: 'Message Claude — Enter to send',
@@ -2100,6 +2110,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'resume-limit': 'hourly resume limit reached — messages are waiting',
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
+  'codex-call-wait': 'stuck in a Codex tool call — Codex may be waiting for an approval in its terminal',
   'skill-foreign': "agent skill not installed — that path already exists and wasn't created by Parley",
   'parley-md-created': 'Parley added PARLEY.md — team rules for your agents',
   'parley-md-unreadable': "PARLEY.md couldn't be read — this session starts without its project rules",

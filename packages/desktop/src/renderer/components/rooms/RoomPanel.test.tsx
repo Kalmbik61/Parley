@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
 import type { LiveMetrics, LiveTask, MailWait } from '@parley/protocol';
 import { encodeIpcError } from '../../../shared/ipc-error.js';
+import { S } from '../../../shared/strings.js';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { ErrorBoundary } from '../../shell/ErrorBoundary.js';
 import { useHostStore } from '../../store/host.js';
@@ -21,6 +22,7 @@ import { useWorksStore } from '../../store/works.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeLetter, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
 import { RoomPanel, type RoomPanelProps } from './RoomPanel.js';
+import { roomOutbox } from './room-outbox.js';
 
 vi.mock('sonner', async (importOriginal) => ({ ...(await importOriginal<typeof import('sonner')>()), toast: vi.fn() }));
 
@@ -61,6 +63,7 @@ let bridge: FakeBridge;
 
 beforeEach(() => {
   bridge = createFakeBridge();
+  roomOutbox.resetForTests();
   bridge.setHandler('rooms.send', () => ({ messageId: 'm-new' }));
   useUiStore.setState({ composerDrafts: {}, composerAttachments: {}, windowFocused: true, documentVisible: true });
   useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS] } });
@@ -1571,14 +1574,63 @@ describe('RoomPanel — поле ввода и отправка (2.2)', () => {
     expect(within(screen.getByRole('listbox')).getAllByRole('option').map((item) => item.getAttribute('data-mention-item'))).toEqual(['s-01', 's-02']);
   });
 
-  it('не ушло: тост с причиной, текст возвращается в поле', async () => {
+  const sentTexts = (): string[] =>
+    bridge.calls.filter((call) => call.method === 'rooms.send').map((call) => (call.params as { text: string }).text);
+  const pendingStates = (): Array<string | null> =>
+    screen.queryAllByTestId('room-pending').map((node) => node.getAttribute('data-state'));
+
+  it('не ушло: тост с причиной, серый «Not sent» с Retry и ×, поле пустое; Retry шлёт снова', async () => {
     bridge.setHandler('rooms.send', () => {
       throw Object.assign(new Error('нет'), { code: 'not_found', message: 'нет' });
     });
     renderPanel(entryOf());
     typeAndSend('Важное');
     await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't send the message: not found."));
-    await waitFor(() => expect(editor().textContent).toBe('Важное'));
+    expect(editor().textContent).toBe('');
+    await waitFor(() => expect(pendingStates()).toEqual(['failed']));
+    bridge.setHandler('rooms.send', () => ({ messageId: 'm-new' }));
+    fireEvent.click(within(screen.getByTestId('room-pending')).getByRole('button', { name: S.common.retry }));
+    await waitFor(() => expect(sentTexts()).toEqual(['Важное', 'Важное']));
+    await waitFor(() => expect(pendingStates()).toEqual(['sending']));
+  });
+
+  it('ушло: серый «Sending…» держится, пока письмо с этим messageId не пришло, и не задваивается', async () => {
+    const { update } = renderPanel(entryOf());
+    typeAndSend('Важное');
+    expect(pendingStates()).toEqual(['sending']);
+    await act(async () => {});
+    expect(pendingStates()).toEqual(['sending']);
+    update(entryOf({ messages: [message('m-new', { text: 'Важное' })] }));
+    await waitFor(() => expect(pendingStates()).toEqual([]));
+    expect(screen.getAllByText('Важное')).toHaveLength(1);
+  });
+
+  it('два Enter подряд — второй rooms.send только после ответа на первый, по порядку', async () => {
+    const answers: Array<(value: { messageId: string }) => void> = [];
+    bridge.setHandler('rooms.send', () => new Promise<{ messageId: string }>((resolve) => answers.push(resolve)));
+    renderPanel(entryOf());
+    typeAndSend('one');
+    typeAndSend('two');
+    expect(sentTexts()).toEqual(['one']);
+    expect(pendingStates()).toEqual(['sending', 'waiting']);
+    await act(async () => answers[0]?.({ messageId: 'm-1' }));
+    expect(sentTexts()).toEqual(['one', 'two']);
+  });
+
+  it('× убирает «Not sent», и следующее письмо уходит', async () => {
+    bridge.setHandler('rooms.send', () => {
+      throw Object.assign(new Error('нет'), { code: 'not_found', message: 'нет' });
+    });
+    renderPanel(entryOf());
+    typeAndSend('first');
+    await waitFor(() => expect(pendingStates()).toEqual(['failed']));
+    bridge.setHandler('rooms.send', () => ({ messageId: 'm-2' }));
+    typeAndSend('second');
+    await act(async () => {});
+    expect(sentTexts()).toEqual(['first']);
+    expect(pendingStates()).toEqual(['failed', 'waiting']);
+    fireEvent.click(screen.getByRole('button', { name: S.outbox.remove }));
+    await waitFor(() => expect(sentTexts()).toEqual(['first', 'second']));
   });
 });
 

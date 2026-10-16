@@ -367,6 +367,7 @@ export type {
   SessionActivity,
 } from './work/activity.js';
 export {
+  PERMISSION_ANSWERED_EVENT,
   TERMINAL_WORKING_EVENT,
   bareEvent,
   eventRecordOf,

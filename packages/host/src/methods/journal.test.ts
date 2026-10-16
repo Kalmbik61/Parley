@@ -42,6 +42,11 @@ async function accepted(at: string, texts: string[], flush = true): Promise<stri
   await refresh(at, workId);
   return workId;
 }
+/** Раздувает карту работы выше лимита общих файлов (1 МиБ) пробелами в конце: JSON остаётся допустимым. */
+async function bloatMap(at: string, workId: string): Promise<void> {
+  const file = path.join(at, '.parley', 'works', workId, 'map.json');
+  await writeFile(file, (await readFile(file, 'utf8')) + ' '.repeat(1024 * 1024 + 10));
+}
 const tree = async (dir: string): Promise<string[]> => (await readdir(dir, { recursive: true }).catch(() => [])).sort();
 
 describe('decisions.list', () => {
@@ -98,6 +103,13 @@ describe('decisions.list', () => {
     await rm(decisions(project), { recursive: true }); await symlink(root, decisions(project));
     await expect(handlers()['decisions.list']({ projectPath: project })).rejects.toMatchObject({ code: 'internal', data: { code: 'journal-unavailable' } });
   });
+  it('a work map larger than 1 MiB does not make the journal unreadable', async () => {
+    const workId = await accepted(project, ['Big map']);
+    await bloatMap(project, workId);
+    const result = await handlers()['decisions.list']({ projectPath: project });
+    expect(result).toMatchObject({ total: 1, partial: false, errors: [] });
+    expect(result.decisions).toMatchObject([{ state: 'accepted', openable: true }]);
+  });
   it('rejects relative paths and unknown fields, and an empty journal is empty', async () => {
     await expect(handlers()['decisions.list']({ projectPath: 'relative' })).rejects.toMatchObject({ code: 'bad_request' });
     await expect(handlers()['decisions.list']({ projectPath: project, extra: 1 } as never)).rejects.toMatchObject({ code: 'bad_request' });
@@ -128,6 +140,10 @@ describe('room history methods', () => {
     await expect(handlers()['rooms.history.get']({ ...room(), roomId: 'r-99' })).rejects.toMatchObject({ code: 'not_found' });
     await expect(handlers()['rooms.history.get']({ ...room(), workId: 'w-9999' })).rejects.toBeInstanceOf(Error);
     await expect(handlers()['rooms.history.get']({ ...room(), projectPath: '../x' })).rejects.toMatchObject({ code: 'bad_request' });
+  });
+  it('get works for a work whose map is larger than 1 MiB', async () => {
+    await bloatMap(project, workId);
+    expect(await handlers()['rooms.history.get'](room())).toEqual({ state: 'not-shared', sharedAt: null, version: 'missing', diagnostics: [] });
   });
   it('Share without explicit confirmation publishes nothing', async () => {
     const before = await tree(path.join(project, '.parley'));

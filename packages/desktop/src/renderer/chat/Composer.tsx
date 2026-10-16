@@ -17,6 +17,11 @@
  * скрепка в текст поля не попадают — это чипы над ним: у картинки миниатюра, у файла значок и имя,
  * крестик убирает. При отправке к тексту дописываются упоминания Claude Code `@"путь"` (`attachments.ts`),
  * и CLI сам прикладывает файл. Одни вложения без текста тоже можно отправить. Ничего не отправляется само.
+ *
+ * История (спека 2026-10-16, 3.2): ↑ в пустом поле подставляет прошлое своё сообщение, повторное ↑ — более раннее,
+ * ↓ — более новое, после самого нового поле снова пустое. Листание идёт, пока в поле неизменённое вызванное
+ * сообщение; правка выключает его. Подсказки имеют приоритет; у вызванного они закрыты. Хвостовые упоминания
+ * `@"путь"` встают обратно чипами.
  */
 
 import {
@@ -36,11 +41,13 @@ import { Button } from '../ui/button.js';
 import { MicButton } from '../voice/MicButton.js';
 import { useTextareaDictation } from '../voice/targets.js';
 import { pasteHasOnlyImage } from '../terminal/drop.js';
-import { addAttachments } from './attachments.js';
+import { addAttachments, splitAttachments } from './attachments.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { applySuggestion, suggestionContext } from './suggestions.js';
 import { SuggestionList } from './SuggestionList.js';
 import { useSuggestions, type SuggestionItem, type SuggestionSource } from './use-suggestions.js';
+
+const NO_HISTORY: readonly string[] = [];
 
 export interface ComposerProps {
   /** Ход идёт — кнопка «Queue». */
@@ -52,6 +59,8 @@ export interface ComposerProps {
   /** Вложения над полем — пути файлов; при отправке уходят упоминаниями после текста. */
   attachments: readonly string[];
   onAttachmentsChange: (next: readonly string[]) => void;
+  /** Свои прошлые сообщения сессии, новые первыми (`history.ts`): ↑/↓ в пустом поле листают их. */
+  history?: readonly string[];
   /** Мост окна: по нему чипы берут миниатюры картинок. */
   bridge: ParleyBridge;
   /**
@@ -91,6 +100,7 @@ export function Composer({
   onPickFiles,
   onPasteImage,
   dictationId,
+  history = NO_HISTORY,
 }: ComposerProps): JSX.Element {
   const field = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -135,6 +145,21 @@ export function Composer({
   const accept = (item: SuggestionItem): void => {
     if (context === null) return;
     replaceText(applySuggestion(text, caret, context, item.insert));
+  };
+
+  // История (спека 2026-10-16, 3.2): `historyAt` — индекс вызванного сообщения. Листание идёт, пока в поле ровно оно;
+  // правка выключает историю, пустое поле начинает её с самого нового.
+  const [historyAt, setHistoryAt] = useState<number | null>(null);
+  const recalled = historyAt === null ? null : splitAttachments(history[historyAt] ?? '').text;
+  const browsing = recalled !== null && text === recalled;
+  const empty = text === '' && attachments.length === 0;
+  const recall = (index: number | null): void => {
+    setHistoryAt(index);
+    const entry = index === null ? { text: '', attachments: [] as string[] } : splitAttachments(history[index] ?? '');
+    onAttachmentsChange(entry.attachments);
+    // Вызванное «/compact» или «@…» не должно открыть подсказки: они перехватили бы следующее ↑.
+    setClosedFor(entry.text);
+    replaceText({ text: entry.text, caret: entry.text.length });
   };
 
   // Вложение — чип над полем, а не текст: путь уходит упоминанием при отправке (`composePrompt`). Ответы
@@ -195,6 +220,25 @@ export function Composer({
         setClosedFor(text);
         return;
       }
+    }
+    const plainArrow = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
+    if (plainArrow && event.key === 'ArrowUp' && (browsing || empty)) {
+      const next = browsing ? (historyAt as number) + 1 : 0;
+      if (next < history.length) {
+        event.preventDefault();
+        recall(next);
+        return;
+      }
+      if (browsing) {
+        // На самом старом: остаёмся на нём.
+        event.preventDefault();
+        return;
+      }
+    }
+    if (plainArrow && event.key === 'ArrowDown' && browsing) {
+      event.preventDefault();
+      recall(historyAt === 0 ? null : (historyAt as number) - 1);
+      return;
     }
     // Enter во время набора иероглифов (IME) подтверждает слово, а не отправляет.
     if (event.key !== 'Enter' || event.shiftKey) return;

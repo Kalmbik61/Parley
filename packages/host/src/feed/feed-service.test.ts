@@ -176,6 +176,22 @@ afterEach(async () => {
 });
 
 describe('снимок и дельты', () => {
+  it('снимок живой ленты пишет строку с items, bytes и seedMs null', async () => {
+    start();
+    send(prompt('go'));
+
+    const snapshot = await service.snapshot(REF);
+
+    expect(fakes.log.info).toHaveBeenCalledWith('лента: снимок', expect.objectContaining({
+      sessionId: REF.sessionId,
+      workId: REF.workId,
+      items: snapshot.items.length,
+      bytes: expect.any(Number),
+      seedMs: null,
+      totalMs: expect.any(Number),
+    }));
+  });
+
   it('дельты идут подписчику по revision, снимок сбрасывает пачку и продолжает счёт', async () => {
     vi.useFakeTimers();
     start();
@@ -227,22 +243,43 @@ describe('снимок и дельты', () => {
     expect(request.responses).toEqual([{}]);
   });
 
-  it('отписка и send() === false снимают подписку', () => {
+  it('отписка снимает подписку', () => {
     vi.useFakeTimers();
     start();
-    const slow = fakeClient(() => false);
     const gone = fakeClient();
-    service.subscribe(REF, slow);
     service.subscribe(REF, gone);
     service.unsubscribe(REF, gone);
 
     send(prompt('a'));
     vi.advanceTimersByTime(50);
+
+    expect(feedChanged(gone)).toHaveLength(0);
+  });
+
+  it('send() === false (буфер сокета выше порога) подписку не снимает: дельты идут дальше подряд', () => {
+    // Буфер переполняет большой ответ самому окну (снимок ленты в 4 МиБ), а не медленный клиент: снятая
+    // молча подписка оставляла чат на «Working…», пока человек не переключит вид (2026-10-15).
+    vi.useFakeTimers();
+    start();
+    const busy = fakeClient(() => false);
+    service.subscribe(REF, busy);
+
+    send(prompt('a'));
+    vi.advanceTimersByTime(50);
     send(prompt('b'));
     vi.advanceTimersByTime(50);
+    send(prompt('c'));
+    vi.advanceTimersByTime(50);
 
-    expect(feedChanged(slow)).toHaveLength(1);
-    expect(feedChanged(gone)).toHaveLength(0);
+    const deltas = feedChanged(busy);
+    expect(deltas).toHaveLength(3);
+    const first = deltas[0]?.revision ?? 0;
+    expect(deltas.map((delta) => delta.revision)).toEqual([first, first + 1, first + 2]);
+    expect(deltas.flatMap((delta) => ofKind(delta.upsert, 'prompt').map((item) => item.text))).toEqual([
+      'a',
+      'b',
+      'c',
+    ]);
   });
 
   it('снимок и подписка неизвестной сессии — not_found', async () => {
@@ -622,6 +659,46 @@ describe('удержание хуков и решения', () => {
     expect(fakes.deps.activity.questionHeld).not.toHaveBeenCalled();
   });
 
+  it('решение окна на удержанный PermissionRequest — отметка «ответили» службе активности', () => {
+    start();
+    send(prompt('go'));
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    send(permission('Bash', { command: 'ls' }));
+    expect(fakes.deps.activity.permissionAnswered).not.toHaveBeenCalled();
+
+    service.decide(REF, 'permission:t1', { kind: 'permission', behavior: 'allow' });
+    expect(vi.mocked(fakes.deps.activity.permissionAnswered).mock.calls).toEqual([[REF]]);
+  });
+
+  it('PermissionRequest: ответили в терминале (CLI закрыл запрос) — отметка «ответили»', () => {
+    start();
+    send(prompt('go'));
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    const request = send(permission('Bash', { command: 'ls' }));
+    request.abandon();
+    expect(vi.mocked(fakes.deps.activity.permissionAnswered).mock.calls).toEqual([[REF]]);
+  });
+
+  it('PermissionRequest: таймаут (stale) отметки не ставит — диалог в терминале ждёт человека', () => {
+    vi.useFakeTimers();
+    start();
+    send(prompt('go'));
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    send(permission('Bash', { command: 'ls' }));
+    vi.advanceTimersByTime(3_600_000);
+    expect(fakes.deps.activity.permissionAnswered).not.toHaveBeenCalled();
+  });
+
+  it('решение на вопрос PreToolUse и его abandon отметки не ставят', () => {
+    start();
+    send(prompt('go'));
+    send(pre('q1', 'AskUserQuestion', { questions: QUESTIONS }));
+    service.decide(REF, 'question:q1', { kind: 'question', answers: { 'Which fruit?': 'Pear' } });
+    const other = send(pre('q2', 'AskUserQuestion', { questions: QUESTIONS }));
+    other.abandon();
+    expect(fakes.deps.activity.permissionAnswered).not.toHaveBeenCalled();
+  });
+
   it('pty.exit: висящим {}, карточки stale, ход закрыт чертой', async () => {
     start();
     send(prompt('go'));
@@ -746,6 +823,20 @@ describe('сев из журнала', () => {
     );
     expect(first.revision).toBe(0);
     expect(second.items).toEqual(first.items);
+  });
+
+  it('снимок с севом из журнала пишет seedMs числом, повторный — null', async () => {
+    const { root } = await history();
+    fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
+    start({ roots: () => [root], readRecords: countingReader().read });
+
+    await service.snapshot(REF);
+    await service.snapshot(REF);
+
+    const lines = fakes.log.info.mock.calls.filter(([msg]) => msg === 'лента: снимок');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]?.[1]).toMatchObject({ sessionId: REF.sessionId, workId: REF.workId, seedMs: expect.any(Number) });
+    expect(lines[1]?.[1]).toMatchObject({ seedMs: null });
   });
 
   it('журнал ещё не известен индексу — следующий снимок сеет, когда он появится', async () => {
@@ -1623,6 +1714,62 @@ describe('хуки Codex', () => {
     start({ codexApprovals: async () => true });
     const request = send(hook('SessionStart'));
     expect(request.responses).toEqual([{}]);
+  });
+
+  // Разбор 2026-10-16: запрос одобрения Codex идёт из ячейки code mode, которая живёт дольше хода. Пустой ответ на конце
+  // хода уводил Codex в его окно одобрения в TUI, и каждый следующий `exec` (и чтение карты) ждал его без срока.
+  it('Stop Codex не отпускает удержанный PermissionRequest: карточка ждёт окна, решение доходит до хука', async () => {
+    const file = path.join(await tempRoot(), 'main.jsonl');
+    await writeFile(
+      file,
+      [
+        { timestamp: '2026-10-15T22:05:05.000Z', ordinal: 0, type: 'session_meta', payload: { id: CODEX_SESSION, cwd: '/tmp/p', cli_version: '0.162.0', source: 'cli' } },
+        { timestamp: '2026-10-15T22:05:05.500Z', ordinal: 1, type: 'event_msg', payload: { type: 'task_started', turn_id: 'u1' } },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join('\n') + '\n',
+    );
+    fakes.setLogFile(file);
+    start({ codexApprovals: async () => true });
+    await service.snapshot(REF);
+    send(hook('SessionStart', { source: 'startup' }));
+    const held = send(permissionBash('pnpm test'));
+    send(hook('Stop', { last_assistant_message: 'ok' }));
+
+    const items = (await service.snapshot(REF)).items;
+    // Stop закрыл ход — иначе тест проверял бы не то.
+    expect(items.filter((entry) => entry.kind === 'turn')).toHaveLength(1);
+    const card = items.find((entry) => entry.kind === 'permission') as { cardId: string; state: string };
+    expect(card.state).toBe('pending');
+    expect(held.responses).toEqual([]);
+
+    service.decide(REF, card.cardId, { kind: 'permission', behavior: 'allow' });
+    expect(held.responses).toEqual([
+      { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } },
+    ]);
+  });
+
+  it('Codex у приглашения (активность idle) — удержанный PermissionRequest продолжает ждать окна', async () => {
+    start({ codexApprovals: async () => true });
+    send(hook('SessionStart', { source: 'startup' }));
+    const held = send(permissionBash('pnpm test'));
+
+    fakes.emitActivity(REF, 'working');
+    fakes.emitActivity(REF, 'idle');
+
+    expect(held.responses).toEqual([]);
+    const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'permission');
+    expect(card).toMatchObject({ state: 'pending' });
+  });
+
+  it('выход процесса Codex по-прежнему отпускает удержанный PermissionRequest: карточка stale, хуку {}', async () => {
+    start({ codexApprovals: async () => true });
+    send(hook('SessionStart', { source: 'startup' }));
+    const held = send(permissionBash('pnpm test'));
+    fakes.emitExit(REF);
+    expect(held.responses).toEqual([{}]);
+    const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'permission');
+    expect(card).toMatchObject({ state: 'stale' });
   });
 
   it('Codex закрыл запрос сам — карточка elsewhere', async () => {

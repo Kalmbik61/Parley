@@ -686,3 +686,115 @@ describe('startupWaitFromEnv — рычаг E2E', () => {
     }
   });
 });
+
+/**
+ * Сторож Codex (разбор 2026-10-16): в code mode все инструменты, и чтение карты Parley тоже, идут через `exec`/`wait`.
+ * Обычно такой вызов отвечает в пределах своего ожидания (`yield_time_ms`, по умолчанию около 30 с). Если в сессии
+ * висит неотвеченный запрос к человеку (одобрение команды или MCP-инструмента), Codex держит вывод без срока, а
+ * заголовок терминала показывает спиннер — сессия часами «работает». Вызов без вывода дольше ожидания и запаса —
+ * «нужен ты» с причиной.
+ */
+describe('сторож Codex: вызов code mode без вывода — «нужен ты»', () => {
+  const row = (record: unknown) => `${JSON.stringify(record)}\n`;
+  const exec = (at: string, input: string, callId = 'call_exec') =>
+    row({ timestamp: at, type: 'response_item', payload: { type: 'custom_tool_call', name: 'exec', call_id: callId, input } });
+  const execOutput = (at: string, callId = 'call_exec') =>
+    row({ timestamp: at, type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: callId, output: 'Script completed' } });
+  const fn = (at: string, name: string, args: string, callId: string) =>
+    row({ timestamp: at, type: 'response_item', payload: { type: 'function_call', name, call_id: callId, arguments: args } });
+  const now = () => new Date().toISOString();
+
+  async function rollout(id: string, body: string, at = now()): Promise<string> {
+    const dir = path.join(codexRoot, '2026', '10', '16');
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, `rollout-2026-10-16T10-00-00-${id}.jsonl`);
+    await writeFile(
+      file,
+      row({ timestamp: at, type: 'session_meta', payload: { id, cwd: project, source: 'cli' } }) +
+        row({ timestamp: at, type: 'event_msg', payload: { type: 'task_started' } }) +
+        body,
+    );
+    return file;
+  }
+
+  const STUCK_TEXT =
+    /^S\d+ is stuck in a Codex tool call — Codex is probably waiting for an approval in its terminal; answer it there or restart the session$/;
+
+  it('exec без вывода дольше ожидания и запаса — blocked и одно уведомление codex-call-wait; вывод возвращает working', async () => {
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'stuck-exec' });
+    a.terminalSignal(ref, WORKING);
+    const file = await rollout(
+      'stuck-exec',
+      exec(now(), '// @exec: {"yield_time_ms": 1}\ntext(await tools.mcp__parley__check_inbox({}));'),
+    );
+
+    await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
+    expect(notices('codex-call-wait')).toHaveLength(1);
+    expect(notices('codex-call-wait')[0]).toMatchObject({ kind: 'codex-call-wait', ref });
+    expect(String(notices('codex-call-wait')[0]?.['text'])).toMatch(STUCK_TEXT);
+
+    // Повторных уведомлений о том же вызове нет.
+    await settle(400);
+    expect(notices('codex-call-wait')).toHaveLength(1);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+
+    // Человек ответил в терминале — вывод пришёл, ход снова идёт.
+    await appendFile(file, execOutput(now()));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+    expect(notices('codex-call-wait')).toHaveLength(1);
+  }, 15_000);
+
+  it('до срока — working без уведомления; явное ожидание ячейки срок продлевает', async () => {
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'long-yield' });
+    a.terminalSignal(ref, WORKING);
+    await rollout('long-yield', exec(now(), '// @exec: {"yield_time_ms": 60000}\ntext(await tools.exec_command({cmd:"pnpm test"}));'));
+    await settle(700);
+    expect(a.get(ref)?.activity.activity).toBe('working');
+    expect(notices('codex-call-wait')).toHaveLength(0);
+  }, 15_000);
+
+  it('без прагмы ожидание по умолчанию — 30 с: за полсекунды сторож не срабатывает', async () => {
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'default-yield' });
+    a.terminalSignal(ref, WORKING);
+    await rollout('default-yield', exec(now(), 'text(await tools.mcp__parley__get_map({}));'));
+    await settle(700);
+    expect(a.get(ref)?.activity.activity).toBe('working');
+    expect(notices('codex-call-wait')).toHaveLength(0);
+  }, 15_000);
+
+  it('wait (function_call) без вывода сторожится так же', async () => {
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'stuck-wait' });
+    a.terminalSignal(ref, WORKING);
+    await rollout('stuck-wait', fn(now(), 'wait', '{"cell_id":"41","yield_time_ms":1}', 'call_wait'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
+    expect(notices('codex-call-wait')).toHaveLength(1);
+  }, 15_000);
+
+  it('прочие вызовы без вывода не сторожатся: MCP напрямую (wait_for ждёт до получаса), shell', async () => {
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'not-code-mode' });
+    a.terminalSignal(ref, WORKING);
+    await rollout(
+      'not-code-mode',
+      fn(now(), 'mcp__parley__wait_for', '{"target":"inbox"}', 'c1') + fn(now(), 'shell_command', '{}', 'c2'),
+    );
+    await settle(700);
+    expect(a.get(ref)?.activity.activity).toBe('working');
+    expect(notices('codex-call-wait')).toHaveLength(0);
+  }, 15_000);
+
+  it('«нужен ты» от терминала не дублируется уведомлением сторожа, пока терминал сам говорит Action Required', async () => {
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'action-required' });
+    // Ход и вызов в rollout — раньше окна одобрения в терминале, как в жизни: `task_started` не старше сигнала (в ту же
+    // миллисекунду тоже) `eventsFor` считает новым ходом и вернул бы working.
+    const before = new Date(Date.now() - 1000).toISOString();
+    await rollout(
+      'action-required',
+      exec(before, '// @exec: {"yield_time_ms": 1}\ntext(await tools.mcp__parley__check_inbox({}));'),
+      before,
+    );
+    a.terminalSignal(ref, ACTION);
+    await settle(700);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(notices('codex-call-wait')).toHaveLength(0);
+  }, 15_000);
+});

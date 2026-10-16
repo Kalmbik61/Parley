@@ -1,4 +1,5 @@
 import { createServer as createNetServer } from 'node:net';
+import { performance } from 'node:perf_hooks';
 import type { Server, Socket } from 'node:net';
 import {
   COMPACT_WORKS_FEATURE,
@@ -22,7 +23,12 @@ export interface ServerOptions {
   notificationHandlers: Partial<Record<NotificationName, AnyNotificationHandler>>;
   registerClient: (client: Client) => void;
   unregisterClient: (client: Client) => void;
+  /** Часы для замера запросов (мс); по умолчанию `performance.now`. */
+  now?: () => number;
 }
+
+/** Запрос дольше этого пишется в лог хоста строкой `медленный запрос`. */
+export const SLOW_REQUEST_MS = 1000;
 
 interface HelloParams {
   token: string;
@@ -189,9 +195,32 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
     return;
   }
 
+  const now = options.now ?? (() => performance.now());
+  const begin = now();
+  // Уведомление о медленном запросе — после `client.send`, чтобы `queuedBytes` показывал очередь с ответом.
+  // Сбой лога (или JSON.stringify) не должен попасть в `.catch` ниже: ответ уже отправлен, и второй ответ с тем же id был бы ложным.
+  const logIfSlow = (outcome: { ok: true; result: unknown } | { ok: false; code: string }): void => {
+    try {
+      const ms = now() - begin;
+      if (ms < SLOW_REQUEST_MS) return;
+      options.context.log.warn('медленный запрос', {
+        method,
+        ms: Math.round(ms),
+        client: client.name,
+        queuedBytes: client.writableLength(),
+        ...(outcome.ok
+          ? { bytes: Buffer.byteLength(JSON.stringify(outcome.result) ?? '', 'utf8') }
+          : { error: outcome.code }),
+      });
+    } catch {
+      // диагностика не важнее ответа
+    }
+  };
+
   Promise.resolve(handler(parsed.params as never, request))
     .then((result) => {
       client.send({ id, result });
+      logIfSlow({ ok: true, result });
     })
     .catch((error: unknown) => {
       // `HostError` несёт свой код протокола (`conflict`, `bad_request`, …) —
@@ -201,10 +230,12 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
           ? { code: error.code, message: error.message }
           : { code: error.code, message: error.message, data: error.data };
         client.send({ id, error: errorField });
+        logIfSlow({ ok: false, code: error.code });
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
       options.context.log.error('обработчик метода упал', { method, error: message });
       client.send({ id, error: { code: 'internal', message } });
+      logIfSlow({ ok: false, code: 'internal' });
     });
 }

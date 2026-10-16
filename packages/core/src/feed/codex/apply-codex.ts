@@ -314,8 +314,10 @@ function applyRecord(draft: FeedDraft, record: RolloutRecord, cursor: CodexCurso
   if (agentId !== null) return;
   if (kind === 'task_started') draft.turnStartedAt = record.at;
   // Ход мог уже закрыть хук `Stop`: повторное закрытие по журналу не даёт второй черты.
-  else if (kind === 'task_complete' && draft.turnStartedAt !== null) closeTurn(draft, record.at, false);
-  else if (kind === 'turn_aborted' && draft.turnStartedAt !== null) closeTurn(draft, record.at, true);
+  // Ждущие карточки не снимаем: запрос одобрения Codex идёт из ячейки code mode, которая переживает ход; пустой
+  // ответ хуку уводит Codex в окно TUI, где `exec` ждёт без срока (разбор 2026-10-16).
+  else if (kind === 'task_complete' && draft.turnStartedAt !== null) closeTurn(draft, record.at, false, true);
+  else if (kind === 'turn_aborted' && draft.turnStartedAt !== null) closeTurn(draft, record.at, true, true);
 }
 
 export function applyCodexRecords(

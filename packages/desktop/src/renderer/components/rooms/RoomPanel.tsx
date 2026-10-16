@@ -36,13 +36,17 @@
  * ничего не нажимал в ленте, и ждать нечего. После перехода лента стоит не у низа (это запоминает `onFeedScroll` по
  * событию `scroll`), поэтому новое сообщение человека от оригинала не уводит.
  *
+ * Отправка (спека 2026-10-16, 4.2): письмо встаёт в очередь комнаты (`room-outbox.ts`) и сразу видно серым в конце
+ * ленты (`RoomPendingMessage`); `rooms.send` идут строго по одному. Ушедшее держится серым «Sending…», пока письмо с
+ * его `messageId` не придёт в карту, — так оно не пропадает и не задваивается; отказ — «Not sent» с Retry и ×.
+ *
  * Архивная комната (спека архива комнат, 5.2) читается, но не пишется: в шапке метка `Archived`, вместо поля ввода строка
  * `This room is archived.` с кнопкой `Reopen` (`rooms.reopen`), панель плана и режим комнаты только читаются
  * (`PlanPanel.tsx`), файлы на вкладку не принимаются. Share истории работает. Вкладка архивируемой комнаты не закрывается,
  * а переходит в этот вид.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { toast } from 'sonner';
 import type { WorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
@@ -57,6 +61,7 @@ import { sessionRowLabel, sessionTag } from '../../lib/participant.js';
 import { relativeTime } from '../../lib/relative-time.js';
 import { earlierRemaining } from '../../lib/window-merge.js';
 import { roomKey } from '../../lib/room-view.js';
+import { useOutboxFlying, useOutboxItems } from '../../lib/outbox.js';
 import { workKey } from '../../lib/tree-order.js';
 import { useNow } from '../../lib/use-now.js';
 import { Button } from '../../ui/button.js';
@@ -68,6 +73,8 @@ import { dragHasFiles } from '../../terminal/drop.js';
 import { ContextChip } from '../context/ContextChip.js';
 import { fitDefaultInstructions } from '../../lib/context-format.js';
 import { Decisions } from '../mail/Decisions.js';
+import { roomOutbox } from './room-outbox.js';
+import { RoomPendingMessage } from './RoomPendingMessage.js';
 import { Composer, type ComposerSubmission } from './Composer.js';
 import { useHostStore } from '../../store/host.js';
 import { PlanPanel, RoomModeControl } from './PlanPanel.js';
@@ -325,6 +332,21 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   // Живая строка сжала или расширила ленту: у низа стояла — остаётся у низа, читают историю — не трогаем.
   useLayoutEffect(keepAtBottom, [keepAtBottom, liveKey]);
 
+  const draftKey = roomKey(workKey(entry.projectPath, entry.map.work.id), roomId);
+  // Очередь писем человека (`room-outbox.ts`): серые — в конце ленты, пока письмо с тем же `messageId` не пришло в карту.
+  const pending = useOutboxItems(roomOutbox, draftKey);
+  const flying = useOutboxFlying(roomOutbox, draftKey);
+  const landedIds = useMemo(() => new Set((model?.messages ?? []).map((message) => message.id)), [model?.messages]);
+  // Ушло и уже пришло в карту — серый не рисуется сразу (без кадра с двумя письмами) и убирается из очереди эффектом.
+  const shownPending = pending.filter((item) => !(item.status === 'sent' && item.sentAs !== undefined && landedIds.has(item.sentAs)));
+  useEffect(() => {
+    for (const item of pending) {
+      if (item.status === 'sent' && item.sentAs !== undefined && landedIds.has(item.sentAs)) roomOutbox.remove(draftKey, item.id);
+    }
+  }, [pending, landedIds, draftKey]);
+  // Серое письмо выросло или ушло — у низа лента остаётся у низа.
+  useLayoutEffect(keepAtBottom, [keepAtBottom, shownPending.length]);
+
   if (model === null) {
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.rooms.notFound}</div>;
   }
@@ -337,8 +359,6 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
 
   // Упомянуть можно живую сессию комнаты: закрытая письма не получит.
   const members = model.participants.filter((participant) => !participant.closed);
-  const draftKey = roomKey(workKey(entry.projectPath, entry.map.work.id), roomId);
-
   const handleLoadEarlier = (): void => {
     void useRoomPagesStore
       .getState()
@@ -350,24 +370,17 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       .catch((error: unknown) => toast(errorText(decodeIpcError(error).code, S.rooms.earlierAction)));
   };
 
-  const handleSend = (submission: ComposerSubmission): Promise<void> =>
-    bridge
-      .call('rooms.send', {
-        projectPath: entry.projectPath,
-        workId: entry.map.work.id,
-        roomId,
-        to: submission.to,
-        text: submission.text,
-        kind: 'note',
-      })
-      .then(
-        () => undefined,
-        (error: unknown) => {
-          // Не ушло (не участник, хост недоступен…): человек узнаёт об этом, а поле ввода вернёт текст.
-          toast(errorText(decodeIpcError(error).code, S.rooms.sendAction));
-          throw error;
-        },
-      );
+  // Письмо — в очередь комнаты (`room-outbox.ts`): серым сразу, уходит строго по одному; отказ — «Not sent» с Retry и ×.
+  const handleSend = (submission: ComposerSubmission): void => {
+    roomOutbox.enqueue(draftKey, {
+      bridge,
+      projectPath: entry.projectPath,
+      workId: entry.map.work.id,
+      roomId,
+      to: submission.to,
+      text: submission.text,
+    });
+  };
 
   const handleReopen = (): void => {
     bridge.call('rooms.reopen', { projectPath: entry.projectPath, workId: entry.map.work.id, roomId }).catch((error: unknown) => {
@@ -493,6 +506,17 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
               onOpenExternal={onOpenExternal}
               onJumpTo={jumpTo}
               observeRef={markRead(message.id, message.needsRead)}
+            />
+          ))}
+          {shownPending.map((item) => (
+            <RoomPendingMessage
+              key={item.id}
+              text={item.payload.text}
+              state={item.status === 'failed' ? 'failed' : item.status === 'sent' || item.id === flying ? 'sending' : 'waiting'}
+              labelOf={labelOf}
+              onOpenExternal={onOpenExternal}
+              onRetry={() => roomOutbox.retry(draftKey, item.id)}
+              onRemove={() => roomOutbox.remove(draftKey, item.id)}
             />
           ))}
           {model.proposal === null ? null : (

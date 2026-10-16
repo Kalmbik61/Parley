@@ -1,4 +1,5 @@
-import { mkdir, appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1035,6 +1036,33 @@ describe('createActivityService: субагенты и ожидание (Parley 
     expect(calls - before).toBeLessThan(50);
     expect(a.get(ref)?.activity.activity).toBe('working');
   }, 20_000);
+});
+
+describe('permissionAnswered: отметка «на запрос ответили»', () => {
+  it('дописывает ровно одну строку в журнал сессии, если каталог events/ есть', async () => {
+    const { ref } = await activeSession();
+    const a = activity(await works());
+    const file = path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`);
+    await appendFile(file, hook('PermissionRequest'));
+
+    a.permissionAnswered(ref);
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const lines = (await readFile(file, 'utf8')).split('\n').filter((line) => line !== '');
+    expect(lines.filter((line) => line.includes('ParleyPermissionAnswered'))).toEqual([
+      '{"hook_event_name":"ParleyPermissionAnswered"}',
+    ]);
+  });
+
+  it('каталога events/ нет — не создаёт его', async () => {
+    const { ref } = await activeSession({ createEventsDir: false });
+    const a = activity(await works());
+
+    a.permissionAnswered(ref);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(existsSync(workPaths(project, ref.workId).events)).toBe(false);
+  });
 });
 
 describe('удержанный вопрос агента (план 2026-10-01, кусок 4a, решение О)', () => {

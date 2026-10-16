@@ -49,6 +49,11 @@ export interface SessionIndex {
     type: 'task_started' | 'task_complete' | 'turn_aborted';
     at: string;
   };
+  /**
+   * Самый ранний вызов code mode Codex (`exec` или `wait`) без вывода после последнего конца хода. `yieldMs` —
+   * заявленное ожидание ячейки (`yield_time_ms`), `null` — не указано. Нет открытых вызовов — поля нет.
+   */
+  openCodeCall?: { name: 'exec' | 'wait'; at: string; yieldMs: number | null };
   durationMs: number | null;
   records: number;
   malformedLines: number;
