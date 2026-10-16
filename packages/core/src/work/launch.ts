@@ -352,6 +352,8 @@ async function plan(
       ...(options.hookUrl === undefined ? {} : { hookUrl: options.hookUrl }),
       ...(skillNavigator ? { sessionId: session.id } : {}),
       ...(disablePlugins.length > 0 ? { disablePlugins } : {}),
+      // Инструмент `browser_open` у сессии есть, только когда канал агента лёг в конфиг MCP (спека браузера, 5.1).
+      ...(options.agent !== undefined && mcpRoute ? { allowBrowserOpen: true } : {}),
       ...(entry.id === 'glm' ? { provider: 'glm' as const } : {}),
       ...(entry.runner.settingsModel === undefined
         ? {}
