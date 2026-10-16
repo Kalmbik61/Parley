@@ -324,7 +324,7 @@ describe('реестр страниц панелей и tabs (спека 3.7, 3.
     });
   });
 
-  it('хозяева (Фокус ревью, п. 3): страница комнаты сессии видна; чужой чат и комната вне owners — не видны, а по id — access_denied; другая работа — свой счёт id', async () => {
+  it('хозяева (Фокус ревью, п. 3): страница комнаты сессии видна; чужой чат и комната вне owners — не видны, а по id — no_tab; другая работа — свой счёт id', async () => {
     const { ops, guests, runOp: run } = setup({ owners: [OWN, ROOM] });
     guests.set(8, fakeGuest(8, 'http://localhost:3000/', 'Room page'));
     guests.set(9, fakeGuest(9, 'http://localhost:4000/', 'Other chat'));
@@ -334,7 +334,8 @@ describe('реестр страниц панелей и tabs (спека 3.7, 3.
     register(ops, { webContentsId: 9, owner: { kind: 'session', sessionId: 's-09' }, pageId: 'bp-cccccc' });
     register(ops, { webContentsId: 10, owner: { kind: 'room', roomId: 'r-99' }, pageId: 'bp-dddddd' });
     expect(okResult<Tabs>(await run('tabs', {})).tabs.map((tab) => [tab.id, tab.title])).toEqual([['t1', 'Settings'], ['t2', 'Room page']]);
-    expect(codeOf(await run('console', { tab: 't3' }))).toBe('access_denied');
+    // Чужая страница по id неотличима от несуществующей (S11).
+    expect(codeOf(await run('console', { tab: 't3' }))).toBe('no_tab');
     expect(codeOf(await run('console', { tab: 't9' }))).toBe('no_tab');
     ops.registerTab({ webContentsId: 11, workKey: OTHER_WORK, owner: OWN, pageId: 'bp-eeeeee', visible: true });
     expect(okResult<Tabs>(await run('tabs', {}, OTHER_REF)).tabs.map((tab) => tab.id)).toEqual(['t1']);
@@ -352,7 +353,16 @@ describe('реестр страниц панелей и tabs (спека 3.7, 3.
     expect(okResult<Tabs>(await run('tabs', {})).tabs).toHaveLength(1);
   });
 
-  it('эмуляция — размер из её спеки; секрет в адресе — с маской; длинный заголовок — 200 символов; чужой сайт — loopback: false', async () => {
+  it('пауза своей панели по id — по-прежнему access_denied «paused by the human»', async () => {
+    const { ops, runOp: run } = setup();
+    register(ops, {});
+    ops.registerTab({ workKey: WORK, owner: OWN, paused: true });
+    const denied = await run('screenshot', { tab: 't1' });
+    expect(codeOf(denied)).toBe('access_denied');
+    expect(messageOf(denied)).toContain('paused by the human');
+  });
+
+  it('эмуляция — размер из её спеки; секрет в адресе — с маской; длинный заголовок — 200 символов', async () => {
     const { ops, emulation, guests, runOp: run } = setup();
     register(ops, {});
     guests.set(7, fakeGuest(7, 'http://localhost:5173/a?token=SECRET1', 'x'.repeat(300)));
@@ -361,8 +371,32 @@ describe('реестр страниц панелей и tabs (спека 3.7, 3.
     expect(tab?.viewport).toEqual({ width: 375, height: 812, emulated: true });
     expect(tab?.url).not.toContain('SECRET1');
     expect(tab?.title).toHaveLength(200);
-    guests.set(7, fakeGuest(7, 'https://example.com/', 'External'));
-    expect(okResult<Tabs>(await run('tabs', {})).tabs[0]?.loopback).toBe(false);
+  });
+
+  it('не-loopback страница: url — только origin, title пустой, viewport null, Page.getLayoutMetrics не вызван', async () => {
+    const { ops, guests, inspector, emulation, runOp: run } = setup();
+    register(ops, {});
+    guests.set(7, fakeGuest(7, 'https://example.com/private/path?token=SECRET1#frag', 'Private title for example'));
+    emulation.current.mockReturnValue({ preset: 'mobile-m', rotated: false, dpr: 2 });
+    const [tab] = okResult<Tabs>(await run('tabs', {})).tabs;
+    expect(tab).toMatchObject({ url: 'https://example.com', title: '', viewport: null, loopback: false, loaded: true });
+    expect(inspector.send).not.toHaveBeenCalled();
+    guests.set(7, fakeGuest(7, 'about:blank', 'Blank'));
+    expect(okResult<Tabs>(await run('tabs', {})).tabs[0]).toMatchObject({ url: '', title: '', viewport: null, loopback: false });
+  });
+
+  it('три гостя с зависшим getLayoutMetrics: tabs отвечает меньше чем за 2 с, у них viewport null', async () => {
+    const { ops, guests, inspector, runOp: run } = setup();
+    guests.set(8, fakeGuest(8));
+    guests.set(9, fakeGuest(9));
+    register(ops, {});
+    register(ops, { webContentsId: 8, pageId: 'bp-bbbbbb' });
+    register(ops, { webContentsId: 9, pageId: 'bp-cccccc' });
+    inspector.send.mockImplementation(() => new Promise(() => undefined));
+    const started = Date.now();
+    const { tabs } = okResult<Tabs>(await run('tabs', {}));
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(tabs.map((tab) => tab.viewport)).toEqual([null, null, null]);
   });
 
   it('заголовок страницы с секретом вида значения — с маской', async () => {

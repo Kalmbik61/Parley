@@ -3,6 +3,7 @@
  * со своим счётом у каждой работы), записи страниц от окна, паузы панелей, доступ к странице (`pageOf`) и список `tabs`.
  */
 import type { WebContents } from 'electron';
+import { AGENT_LIMITS } from '@parley/protocol';
 import type { BrowserAgentOpEvent, BrowserAgentOwner, BrowserAgentTabInfo } from '@parley/protocol';
 import { viewportSize } from '../../shared/browser-devtools.js';
 import type { AgentPageRegistration } from '../../shared/browser-types.js';
@@ -119,7 +120,8 @@ export function createPageRegistry(deps: { fromId(id: number): WebContents | nul
       const workKey = workKeyOf(request.ref.projectPath, request.ref.workId);
       const record = [...pages.values()].find((candidate) => candidate.workKey === workKey && candidate.agentId === agentId);
       if (record === undefined) throw new AgentOpError('no_tab', `There is no page ${agentId} in your browsers: call browser_tabs.`);
-      if (!entitled(request, record)) throw new AgentOpError('access_denied', `You have no access to page ${agentId}: it belongs to a browser panel that is not your chat's or your rooms'.`);
+      // Чужая страница неотличима от несуществующей: агент не узнаёт, что у другого чата есть страница с таким id (S11).
+      if (!entitled(request, record)) throw new AgentOpError('no_tab', `There is no page ${agentId} in your browsers: call browser_tabs.`);
       if (isPaused(record.workKey, record.owner)) throw new AgentOpError('access_denied', 'The human paused agents in this browser panel (paused by the human).');
       return record;
     },
@@ -149,41 +151,64 @@ export interface ListTabsDeps {
   emulation: Pick<Emulation, 'current'>;
 }
 
+/** Размер вьюпорта; зависший гость отдаёт `null` через `metricsMs`, а не держит весь `tabs`. */
 async function viewportOf(deps: ListTabsDeps, id: number): Promise<BrowserAgentTabInfo['viewport']> {
   const spec = deps.emulation.current(id);
   if (spec !== null) {
     const { width, height } = viewportSize(spec);
     return { width, height, emulated: true };
   }
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const metrics = await deps.inspector.send<LayoutMetrics>(id, 'Page.getLayoutMetrics');
+    const metrics = await Promise.race([
+      deps.inspector.send<LayoutMetrics>(id, 'Page.getLayoutMetrics'),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), AGENT_LIMITS.metricsMs);
+      }),
+    ]);
+    if (metrics === null) return null;
     return { width: Math.round(metrics.cssLayoutViewport.clientWidth), height: Math.round(metrics.cssLayoutViewport.clientHeight), emulated: false };
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Чужой сайт показывается агенту только по origin (путь, запрос и заголовок могут нести секреты); не разобрался или origin непрозрачный — пусто. */
+function originOf(url: string): string {
+  try {
+    const { origin } = new URL(url);
+    return origin === 'null' ? '' : origin;
+  } catch {
+    return '';
   }
 }
 
 export async function listTabs(registry: PageRegistry, deps: ListTabsDeps, request: BrowserAgentOpEvent): Promise<{ tabs: BrowserAgentTabInfo[]; notes: string[] }> {
   const { records, known } = registry.listed(request);
-  const tabs: BrowserAgentTabInfo[] = [];
-  for (const record of records) {
-    const contents = registry.live(record);
-    const loaded = contents !== null && !contents.isCrashed();
-    if (contents !== null) {
-      record.lastUrl = contents.getURL();
-      record.lastTitle = contents.getTitle();
-    }
-    tabs.push({
-      id: record.agentId,
-      owner: record.owner,
-      url: urlForAgent(record.lastUrl),
-      title: redactSecretsInText(redactUrlsInText(record.lastTitle)).slice(0, TITLE_LIMIT),
-      viewport: loaded && record.webContentsId !== null ? await viewportOf(deps, record.webContentsId) : null,
-      loaded,
-      // Невыгруженную, но невидимую страницу человек не видит; незагруженную — тем более.
-      visible: loaded && record.visible,
-      loopback: isLoopbackUrl(record.lastUrl),
-    });
-  }
+  const tabs = await Promise.all(
+    records.map(async (record): Promise<BrowserAgentTabInfo> => {
+      const contents = registry.live(record);
+      const loaded = contents !== null && !contents.isCrashed();
+      if (contents !== null) {
+        record.lastUrl = contents.getURL();
+        record.lastTitle = contents.getTitle();
+      }
+      const loopback = isLoopbackUrl(record.lastUrl);
+      return {
+        id: record.agentId,
+        owner: record.owner,
+        url: loopback ? urlForAgent(record.lastUrl) : originOf(record.lastUrl),
+        title: loopback ? redactSecretsInText(redactUrlsInText(record.lastTitle)).slice(0, TITLE_LIMIT) : '',
+        // У чужого сайта размер не спрашиваем: гость не loopback не получает от агента ни одного вызова CDP.
+        viewport: loaded && loopback && record.webContentsId !== null ? await viewportOf(deps, record.webContentsId) : null,
+        loaded,
+        // Невыгруженную, но невидимую страницу человек не видит; незагруженную — тем более.
+        visible: loaded && record.visible,
+        loopback,
+      };
+    }),
+  );
   return { tabs, notes: tabs.length === 0 && !known ? [UNKNOWN_WORK_NOTE] : [] };
 }
