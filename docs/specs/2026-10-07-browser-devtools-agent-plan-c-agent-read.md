@@ -659,7 +659,7 @@ git commit -m "feat(core): инструменты browser_tabs, browser_console,
 - Берёт: `createEmulation` (`set`, `current`, `forget`, карта `state: Map<number, { spec, area }>` с размером и полем человека), `viewportCommands`, `viewportSize` (уже импортирован в файле).
 - Отдаёт: `Emulation.withTemporary<T>(id, spec, run): Promise<T>` (индекс; в комментарии шапки файла «Этап C добавит `withTemporary`» — убрать).
 
-- [ ] **Шаг 1. Написать падающий тест.** В `emulation.test.ts` дописать блок (в файле уже есть `vi`, `createEmulation`, `viewportCommands`, `ViewportSpec`):
+- [x] **Шаг 1. Написать падающий тест.** В `emulation.test.ts` дописать блок (в файле уже есть `vi`, `createEmulation`, `viewportCommands`, `ViewportSpec`):
 
 ```ts
 describe('withTemporary — снимок агента в чужом размере (Фокус ревью этапа C, п. 5)', () => {
@@ -709,9 +709,9 @@ describe('withTemporary — снимок агента в чужом размер
 });
 ```
 
-- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/main/browser/emulation.test.ts` → FAIL: `emulation.withTemporary is not a function`.
+- [x] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/main/browser/emulation.test.ts` → FAIL: `emulation.withTemporary is not a function`.
 
-- [ ] **Шаг 3. Реализовать.** В интерфейс `Emulation` — строка из индекса:
+- [x] **Шаг 3. Реализовать.** В интерфейс `Emulation` — строка из индекса:
 
 ```ts
   /** C: снимок агента в чужом размере — размер на время `run`, потом размер и поле человека (спека 2 п. 10). */
@@ -742,9 +742,9 @@ describe('withTemporary — снимок агента в чужом размер
     },
 ```
 
-- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS.
+- [x] **Шаг 4. Запустить — проходит.** Та же команда → PASS.
 
-- [ ] **Шаг 5. Закоммитить.**
+- [x] **Шаг 5. Закоммитить.**
 
 ```bash
 git add packages/desktop/src/main/browser/emulation.ts packages/desktop/src/main/browser/emulation.test.ts
