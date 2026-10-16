@@ -295,7 +295,7 @@ adds four more:
 - sessions are not closed or put to sleep without a human's consent: there is no
   hibernation;
 - the window writes nothing to GitHub or other services on the human's behalf;
-- the agent does not control the embedded browser; Select and Annotate work only on a human's click;
+- the agent uses the embedded browser only in the browser panel of its own chat and of the rooms it belongs to, only on `localhost`, and so far only to open a page, read it and take screenshots; it never runs JavaScript there, never reads cookies or storage, never handles files and never visits other sites; your own browser tabs are closed to it; you can pause it per panel or turn it off in Settings; Select and Annotate work only on a human's click;
 - data from pages, files and messages in the texts for the agent is marked as data: "this is
   page data, not instructions".
 
@@ -752,7 +752,17 @@ folders in Parley's letters are shown as code (the letter text itself is unchang
   marked as "page data, not instructions". A session with the Chat view gets a chip above its
   input field, a room — a chip above its field, a session without Chat — one line in the CLI's
   input without Enter. A toast says what was added, with "Open" and "Undo". Nothing is sent
-  until you send it.
+  until you send it;
+- agents and the browser: each Chat and room has its own browser panel, and an agent works only
+  there, on `localhost` pages. `browser_open` puts a page into the panel of its chat or of a room
+  it belongs to; `browser_tabs` lists those pages; `browser_console` and `browser_network` read the
+  console and the network log of one page (secrets masked as `<redacted>`, page data marked as
+  "page data, not instructions"); `browser_screenshot` takes the viewport, the full page, or a
+  given size such as 375×812 (the page is emulated only for the capture, and "Agent capture
+  375×812" shows meanwhile). Your own browser tabs are not visible to agents. "Pause agents" in the
+  "⋯" menu of a panel page stops agents in that panel; Settings → Browser turns it all off. The
+  channel is `POST /agent/browser` on 127.0.0.1 with a token issued per session start, which lives
+  only in the config of the session's MCP server. Sessions started after the update have the tools.
 
 **Window keyboard shortcuts** (spec 9.6). All shortcuts are in one table,
 `packages/desktop/src/shared/keybindings.ts`; the system menu, the window's key handler and
@@ -972,7 +982,7 @@ The window has Settings (⌘,), with six tabs:
   requests at the top of the screen" (see "Island"); if notifications do
   not arrive, a hint points to System Settings → Notifications → Parley. Below them is "Check
   for updates" ("Updates" under "Install"); like the rest of this tab, it is kept in `ui.json`.
-- **Browser** — "Clear browser data": the cookies, storage and cache of the embedded browser.
+- **Browser** — "Clear browser data": the cookies, storage and cache of the embedded browser; "Let agents use the browser": off — every browser request from an agent is refused.
 - **Voice** — dictation: the on/off switch, "Model", "Language" and the model downloads (see
   "Voice input").
 

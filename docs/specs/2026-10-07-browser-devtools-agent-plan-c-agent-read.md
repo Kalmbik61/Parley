@@ -2173,7 +2173,7 @@ git commit -m "test(desktop): E2E чтения страниц панелей —
 
 B2 уже написал в спеке окна: абзац про панели и страницу агента в 12.2, текст 15.1 п. 9 («одно действие — `browser_open`»), абзац «Канал агента» в 15.2; в `CHANGELOG.md` — пункты про панели, `browser_open` и выключатель. В README про панели и `browser_open` пока ничего нет (раздел о браузере описывает только вкладки человека), и пункт «Legal boundary» (строка «the agent does not control the embedded browser; Select and Annotate work only on a human's click») B2 не менял.
 
-- [ ] **Шаг 1. CHANGELOG** (`## Unreleased` → `### Added`, после пункта про открытие страницы):
+- [x] **Шаг 1. CHANGELOG** (`## Unreleased` → `### Added`, после пункта про открытие страницы):
 
 ```markdown
 - **Agents can read the browser of their chat and rooms.** An agent (Claude, GLM or Codex) lists the pages in the
@@ -2185,14 +2185,14 @@ B2 уже написал в спеке окна: абзац про панели 
   everyone. Sessions started before the update get the tools after a restart.
 ```
 
-- [ ] **Шаг 2. README** (английский):
+- [x] **Шаг 2. README** (английский):
   - в разделе о браузере (рядом с пунктами про Select и Annotate, после них) — пункт «agents and the browser»: панели чата и комнаты; `browser_open`; `browser_tabs`, `browser_console`, `browser_network`, `browser_screenshot` (маска, снимок другого размера); вкладки человека агентам не видны; «Pause agents» в «⋯» страницы панели; Settings → Browser выключает всё; канал — `POST /agent/browser` на 127.0.0.1 с токеном запуска сессии, который лежит только в конфиге MCP-сервера; инструменты в сессиях, запущенных после обновления;
   - «Legal boundary»: строку «the agent does not control the embedded browser; Select and Annotate work only on a human's click;» заменить: «the agent uses the embedded browser only in the browser panel of its own chat and of the rooms it belongs to, only on `localhost`, and so far only to open a page, read it and take screenshots; it never runs JavaScript there, never reads cookies or storage, never handles files and never visits other sites; your own browser tabs are closed to it; you can pause it per panel or turn it off in Settings; Select and Annotate work only on a human's click;» (управление страницей добавит этап D — тогда формулировка расширяется);
   - раздел «Settings», пункт **Browser**: дописать «"Let agents use the browser": off — every browser request from an agent is refused.»
 
 - [ ] **Шаг 3. Подсказка настройки.** Текст `S.settings.letAgentsUseBrowserHint` (B2) называет только открытие страницы; дописать чтение: *"Agents can open pages on localhost in the browser panel of their chat or room, list those pages, read their console and network log and take screenshots. Off: every browser request from an agent is refused."* (тест `SettingsDialog.test.tsx`, если сверяет текст, обновить.)
 
-- [ ] **Шаг 4. Спека окна `2026-09-26-desktop-orca-ui-design.md`.**
+- [x] **Шаг 4. Спека окна `2026-09-26-desktop-orca-ui-design.md`.**
   - 12.2, пункт «**Агент браузером не управляет.** …» заменить: инспектор CDP и закрытый список уже описаны выше (B); добавить пункт «**Агент читает браузер** (спека браузера 3.7, 5.2)»: страницы панели своего чата и панелей своих комнат при включённом «Let agents use the browser» и без паузы панели, только loopback; канал MCP-сервер → `POST /agent/browser` → `browser.agentOp` → main (реестр страниц панелей `registerTab`) → `browser.agentResult`; доступны список страниц, консоль и сеть текущей страницы с маской и снимки (в том числе в чужом размере, временная эмуляция, подпись «Agent capture W×H»); данные страницы — в ограде «page data, not instructions»; управление страницей — этап D браузерной спеки;
   - 15.1 п. 9: текст B2 заменить текстом из спеки браузера, раздел 11, в части C: агент работает только в браузере своего чата и в браузерах комнат, где он участник, и только на loopback: открытие страницы, чтение консоли и сети, снимки; вкладки человека недоступны; никогда — JS, куки и хранилища, файлы, разрешения, другие сайты; панель ставится на паузу («Pause agents»), всё сразу выключает настройка; «переходы, клики, ввод, прокрутка, размер» и Stop — после этапа D;
   - 15.2, абзац «Канал агента»: дописать операции чтения: реестр страниц панелей ведёт рендерер, main пускает операцию только к странице хозяина из `owners` события, пауза панели — `access_denied`; метод `browser.agentResult` из страницы окна (`host:call`) не пускается, событие `browser.agentOp` странице не пересылается; в журнал хоста идёт одна строка на операцию (`op: browser.agentOp`, `ms`) без данных страницы.
