@@ -141,6 +141,9 @@ export const METHODS = {
       .nullable()
       .optional(),
     effort: z.string().regex(EFFORT_TOKEN_RE).nullable().optional(),
+    // Явный выбор облегчённого запуска из диалога (C2.2). Без поля решает хост по настройке `leanAgents` и источнику
+    // сессии; старое окно поля не шлёт, старый хост его отбрасывает.
+    lean: z.boolean().optional(),
   }),
   'sessions.resume': z.object({ ref: sessionRef }),
   'sessions.stop': z.object({ ref: sessionRef }),

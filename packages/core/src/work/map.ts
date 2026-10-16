@@ -104,6 +104,8 @@ export interface NewSession {
   /** Модель и усилие запуска (`spawn_session`); без них — по умолчанию, поля в записи не будет. */
   model?: string | null;
   effort?: EffortLevel | null;
+  /** Облегчённый запуск (C2.2): решение при создании; без поля — запись как до этого куска. */
+  lean?: boolean;
 }
 
 /**
@@ -143,6 +145,7 @@ export function addSession(
     worktree: null,
     ...(init.model === undefined ? {} : { model: init.model }),
     ...(init.effort === undefined ? {} : { effort: init.effort }),
+    ...(init.lean === undefined ? {} : { lean: init.lean }),
   };
   map.sessions.push(session);
   return session;

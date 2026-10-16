@@ -35,6 +35,7 @@ describe('loadConfig', () => {
       agentSkills: true,
       skillNavigator: true,
       codexApprovals: false,
+      leanAgents: true,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
@@ -72,6 +73,7 @@ describe('loadConfig', () => {
       agentSkills: true,
       skillNavigator: true,
       codexApprovals: false,
+      leanAgents: true,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
@@ -94,6 +96,7 @@ describe('loadConfig', () => {
       agentSkills: true,
       skillNavigator: true,
       codexApprovals: false,
+      leanAgents: true,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
       worktreeRoot: '~/parley/worktrees',
@@ -348,6 +351,7 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['agentSkills', 'AGENT_SKILLS', 'no', false],
     ['skillNavigator', 'SKILL_NAVIGATOR', 'off', false],
     ['codexApprovals', 'CODEX_APPROVALS', 'on', true],
+    ['leanAgents', 'LEAN_AGENTS', 'off', false],
     ['fontFamily', 'FONT_FAMILY', 'Menlo', 'Menlo'],
     ['fontSize', 'FONT_SIZE', '18', 18],
     ['worktreeRoot', 'WORKTREE_ROOT', '/tmp/wt', '/tmp/wt'],
@@ -579,6 +583,30 @@ describe('skillNavigator setting', () => {
     await write({ skillNavigator: 'invalid' });
     const value = await loadConfig(file(), {});
     expect(value.config.skillNavigator).toBe(true); expect(value.warning).toContain('skillNavigator');
+  });
+});
+
+describe('leanAgents setting', () => {
+  it('включён по умолчанию; выключается файлом, окружение сильнее файла', async () => {
+    expect(DEFAULT_CONFIG.leanAgents).toBe(true);
+    expect((await loadConfig(file(), {})).config.leanAgents).toBe(true);
+    await write({ leanAgents: false });
+    expect((await loadConfig(file(), {})).config.leanAgents).toBe(false);
+    expect((await loadConfig(file(), { PARLEY_LEAN_AGENTS: '1' })).config.leanAgents).toBe(true);
+    await write({});
+    expect((await loadConfig(file(), { PARLEY_LEAN_AGENTS: '0' })).config.leanAgents).toBe(false);
+  });
+  it("settings.set: parseSetting разбирает 'true' и 'false' как autoLaunch, мусор отвергает", () => {
+    expect(parseSetting('leanAgents', 'true')).toEqual({ value: true });
+    expect(parseSetting('leanAgents', 'false')).toEqual({ value: false });
+    expect(parseSetting('leanAgents', 'FALSE')).toEqual({ value: false });
+    expect(parseSetting('leanAgents', 'perhaps')).toEqual({ error: 'leanAgents: expected 0 or 1' });
+  });
+  it('неверное значение в файле — предупреждение с именем настройки, остаётся умолчание', async () => {
+    await write({ leanAgents: 'invalid' });
+    const value = await loadConfig(file(), {});
+    expect(value.config.leanAgents).toBe(true);
+    expect(value.warning).toContain('leanAgents');
   });
 });
 

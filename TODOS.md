@@ -287,6 +287,15 @@ core, нужный только ему, документы требований 
   `tsconfig` пакетов исключает тесты: тест на типы в `packages/protocol` (образец —
   `methods.test.ts`) не упадёт на неверном типе. Нужен `tsc` по тестам: отдельный
   `tsconfig` или `vitest --typecheck`.
+- **Локаль `ru_RU` ломает чтение времени старта процесса.** Под `LANG=ru_RU.UTF-8`
+  `ps -o lstart=` печатает русскую дату («пятница, 16 октября 2026 г. 18:32:50»),
+  `startedAtBsd` в `packages/core/src/work/liveness.ts` (~47-51) не разбирает её:
+  `new Date(...)` даёт `NaN`, и `startedAtProcess` становится `null`. На машине автора
+  (2026-10-16) красные 9 тестов core (`host-lock`, `migrate`, `lease`, `liveness`) и 1
+  хоста (`sessions-service` «forwards the actual LaunchPlan revision…»); с
+  `LC_ALL=C LANG=C` все зелёные. Предлагаемая правка — запускать `ps` с `LC_ALL=C` в
+  окружении или разбирать дату независимо от локали. Пока не сделано, тесты гонять с
+  `LC_ALL=C LANG=C`.
 
 ## 7. Агент: что он знает о Parley
 

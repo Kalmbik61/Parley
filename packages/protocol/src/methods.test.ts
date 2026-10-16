@@ -325,6 +325,15 @@ describe('модель, усилие и поля providers.list (дизайн к
     expectTypeOf<Params<'sessions.create'>['effort']>().toEqualTypeOf<string | null | undefined>();
   });
 
+  it('sessions.create: lean необязателен — старое окно его не шлёт, новое передаёт явный выбор', () => {
+    expect(parse({}).success).toBe(true);
+    expect(parse({}).data).not.toHaveProperty('lean');
+    expect(parse({ lean: true })).toMatchObject({ success: true, data: { lean: true } });
+    expect(parse({ lean: false })).toMatchObject({ success: true, data: { lean: false } });
+    for (const lean of ['true', 1, null]) expect(parse({ lean }).success, JSON.stringify(lean)).toBe(false);
+    expectTypeOf<Params<'sessions.create'>['lean']>().toEqualTypeOf<boolean | undefined>();
+  });
+
   it('effort — токен уровня: прежние low, medium, high старого окна и новые xhigh, max, ultra проходят', () => {
     const good = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'minimal', 'none', 'a'.repeat(32)];
     for (const effort of good) expect(parse({ effort }).success, effort).toBe(true);
