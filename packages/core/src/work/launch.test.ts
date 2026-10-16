@@ -2258,6 +2258,11 @@ describe('lean-режим в плане запуска', () => {
     await writeFile(path.join(project, '.claude', 'settings.local.json'), JSON.stringify({ enabledPlugins: { 'local@dir': true } }));
   }
   const settingsOf = async (args: string[]) => JSON.parse(await readFile(args[args.indexOf('--settings') + 1]!, 'utf8'));
+  /** Значение `--append-system-prompt` (гид Parley): lean его не трогает; нет флага — пустая строка. */
+  const appended = (args: string[]): string => {
+    const at = args.indexOf('--append-system-prompt');
+    return at === -1 ? '' : (args[at + 1] ?? '');
+  };
   const CODEX_TOML = ['[mcp_servers.chrome-devtools]', 'command = "npx"', '', '[mcp_servers.parley]', 'command = "x"', '', '[mcp_servers.nx-mcp]', 'url = "http://localhost:1/mcp"'].join('\n');
   async function codexHome(toml: string | null): Promise<void> {
     const dir = path.join(home, 'codex-home');
@@ -2279,6 +2284,8 @@ describe('lean-режим в плане запуска', () => {
     expect(plan.args).not.toContain('--disable-slash-commands');
     expect(plan.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
     expect(plan.env.SLASH_COMMAND_TOOL_CHAR_BUDGET).toBe('1');
+    // Своё Parley lean не отключает: вставка гида остаётся.
+    expect(appended(plan.args)).toContain('Your workspace is');
     // Файл — свой у сессии: в общем файле работы список плагинов лёг бы и на сессии без lean.
     expect(plan.args[at + 1]).toBe(path.join(workPaths(project, workId).dir, 'settings', `${sessionId}.json`));
     const settings = await settingsOf(plan.args);
@@ -2341,6 +2348,8 @@ describe('lean-режим в плане запуска', () => {
     expect(resume.args[0]).toBe('--resume');
     expect(resume.args[resume.args.indexOf('--settings') + 2]).toBe('--strict-mcp-config');
     expect(resume.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
+    expect(appended(launch.args)).toContain('Your workspace is');
+    expect(appended(resume.args)).toContain('Your workspace is');
     expect((await settingsOf(resume.args)).enabledPlugins).toEqual((await settingsOf(launch.args)).enabledPlugins);
   });
 
@@ -2350,6 +2359,32 @@ describe('lean-режим в плане запуска', () => {
     await writeFile(path.join(home, 'providers.json'), JSON.stringify({ claude: { args: ['--settings', '{settingsFile}', '{leanFlags}', '{prompt}'] } }));
     const plan = await planNew(project, workId, session);
     expect(plan.args).not.toContain('--strict-mcp-config');
+  });
+
+  it('lean при шаблоне раннера без {leanFlags}: флаги не доходят, диагностика provider-override-gap у Claude и Codex; без lean или со шаблоном по умолчанию её нет', async () => {
+    await claudeConfig();
+    await codexHome(CODEX_TOML);
+    const overrides = {
+      claude: { args: ['--mcp-config', '{mcpConfig}', '--settings', '{settingsFile}', '--append-system-prompt', '{systemPrompt}', '{prompt}'] },
+      codex: { args: ['-c', '{mcpConfig}', '-c', '{developerInstructions}', '{prompt}'] },
+    };
+    const gap = (plan: { diagnostics?: Array<{ code: string; message: string }> }) => plan.diagnostics?.filter(warning => warning.code === 'provider-override-gap') ?? [];
+    for (const provider of ['claude', 'codex'] as const) {
+      const lean = await sessionWith(provider, true);
+      const notLean = await sessionWith(provider, false);
+      // Шаблон по умолчанию несёт {leanFlags}: диагностики нет.
+      expect(gap(await planNew(project, lean.workId, lean.session))).toEqual([]);
+      await writeFile(path.join(home, 'providers.json'), JSON.stringify({ [provider]: overrides[provider] }));
+      const plan = await planNew(project, lean.workId, lean.session);
+      expect(gap(plan)).toHaveLength(1);
+      expect(gap(plan)[0]?.message).toContain('{leanFlags}');
+      expect(plan.warnings.join(' ')).toContain('{leanFlags}');
+      expect(plan.args).not.toContain('--strict-mcp-config');
+      expect(plan.args.join(' ')).not.toContain('.enabled=false');
+      // Без lean шаблон без {leanFlags} в порядке: жаловаться не на что.
+      expect(gap(await planNew(project, notLean.workId, notLean.session))).toEqual([]);
+      await rm(path.join(home, 'providers.json'), { force: true });
+    }
   });
 
   it('GLM lean: тот же флаг, переменная автопамяти рядом с окружением маршрутизации, плагины берутся из ~/.claude', async () => {
@@ -2364,6 +2399,13 @@ describe('lean-режим в плане запуска', () => {
     expect(plan.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
     expect(plan.env.ANTHROPIC_BASE_URL).toBe('https://api.z.ai/api/anthropic');
     expect((await settingsOf(plan.args)).enabledPlugins).toEqual({ 'superpowers@official': false });
+    // Вставка гида остаётся и при запуске, и при resume.
+    expect(appended(plan.args)).toContain('Your workspace is');
+    session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
+    await claudeTranscript(session.providerSessionId);
+    const resume = await planResume(project, workId, session, { hookUrl });
+    expect(resume.args[0]).toBe('--resume');
+    expect(appended(resume.args)).toContain('Your workspace is');
   });
 
   it('Codex lean: пара -c mcp_servers.<id>.enabled=false на каждый чужой сервер, ни одной для parley; запуск и resume одинаково', async () => {
@@ -2377,6 +2419,11 @@ describe('lean-режим в плане запуска', () => {
       expect(pairs).toEqual([['-c', 'mcp_servers.chrome-devtools.enabled=false'], ['-c', 'mcp_servers.nx-mcp.enabled=false']]);
       expect(plan.args.some(arg => arg.startsWith('mcp_servers.parley='))).toBe(true);
       expect(plan.args.join(' ')).not.toContain('mcp_servers.parley.enabled');
+      // Слой сессии Parley (`-c developer_instructions=…`) lean не отключает.
+      const layerAt = plan.args.findIndex(arg => arg.startsWith('developer_instructions='));
+      expect(layerAt).toBeGreaterThan(0);
+      expect(plan.args[layerAt - 1]).toBe('-c');
+      expect(JSON.parse(plan.args[layerAt]!.slice('developer_instructions='.length)) as string).not.toBe('');
       expect(plan.env).not.toHaveProperty('CLAUDE_CODE_DISABLE_AUTO_MEMORY');
       expect(plan.args).not.toContain('--strict-mcp-config');
     }

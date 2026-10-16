@@ -32,10 +32,10 @@ async function readJsonObject(file: string): Promise<Record<string, unknown> | n
 }
 
 /**
- * Ключи `enabledPlugins` из `<configDir>/settings.json` (по умолчанию `~/.claude`), `<проект>/.claude/settings.json` и
- * `<проект>/.claude/settings.local.json`: id плагинов, которые Claude Code загрузил бы в сессию. Только чтение; нет
- * файла, он не читается или поле другого вида — вклад пустой. Порядок отсортирован: файл настроек сессии
- * получается одинаковым между запусками.
+ * Ключи `enabledPlugins` из `settings.json` в каталоге конфигурации Claude Code (по умолчанию `~/.claude`), а также из
+ * `settings.json` и `settings.local.json` проекта в его каталоге `.claude`: id плагинов, которые Claude Code загрузил
+ * бы в сессию. Только чтение; нет файла, он не читается или поле другого вида — вклад пустой. Порядок отсортирован:
+ * файл настроек сессии получается одинаковым между запусками.
  */
 export async function readUserPluginIds(cwd: string, configDir: string): Promise<string[]> {
   const files = [

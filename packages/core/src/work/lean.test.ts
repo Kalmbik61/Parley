@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -18,6 +18,24 @@ afterEach(async () => {
 async function put(file: string, text: string): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, text, 'utf8');
+}
+
+/**
+ * Размер, время изменения и текст файлов. Время изменения сначала отодвигается в прошлое, чтобы любая перезапись
+ * (даже тем же текстом) сдвинула `mtimeMs` и была видна.
+ */
+async function fingerprint(files: string[]): Promise<Array<{ size: number; mtimeMs: number; text: string }>> {
+  return Promise.all(files.map(async (file) => {
+    const { size, mtimeMs } = await stat(file);
+    return { size, mtimeMs, text: await readFile(file, 'utf8') };
+  }));
+}
+
+/** Состарить файлы на сутки: возвращает их же. */
+async function age(files: string[]): Promise<string[]> {
+  const past = new Date(Date.now() - 24 * 3600 * 1000);
+  for (const file of files) await utimes(file, past, past);
+  return files;
 }
 
 describe('readUserPluginIds', () => {
@@ -45,13 +63,24 @@ describe('readUserPluginIds', () => {
     expect(await readUserPluginIds(cwd, configDir)).toEqual(['ok@dir']);
   });
 
-  it('ничего не пишет: файлы остаются как были', async () => {
+  it('ничего не пишет: все три файла настроек остаются как были (текст, размер и время изменения)', async () => {
     const configDir = path.join(root, 'config');
-    const file = path.join(configDir, 'settings.json');
-    const text = JSON.stringify({ enabledPlugins: { 'a@b': true } });
-    await put(file, text);
-    await readUserPluginIds(path.join(root, 'project'), configDir);
-    expect(await readFile(file, 'utf8')).toBe(text);
+    const cwd = path.join(root, 'project');
+    const files = [
+      path.join(configDir, 'settings.json'),
+      path.join(cwd, '.claude', 'settings.json'),
+      path.join(cwd, '.claude', 'settings.local.json'),
+    ];
+    for (const [i, file] of files.entries()) await put(file, JSON.stringify({ enabledPlugins: { [`plugin-${i}@dir`]: true } }));
+    await age(files);
+    const before = await fingerprint(files);
+    expect(await readUserPluginIds(cwd, configDir)).toHaveLength(3);
+    expect(await fingerprint(files)).toEqual(before);
+    // Каталогов, которых не было, чтение тоже не создаёт.
+    await expect(stat(path.join(root, 'other-project'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await readUserPluginIds(path.join(root, 'other-project'), path.join(root, 'other-config'));
+    await expect(stat(path.join(root, 'other-project'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(path.join(root, 'other-config'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 
@@ -72,6 +101,19 @@ describe('readCodexMcpServerIds', () => {
       'A = "1"',
     ].join('\n'));
     expect(await readCodexMcpServerIds(codexHome)).toEqual(['chrome-devtools', 'nx-mcp']);
+  });
+
+  it('ничего не пишет: config.toml остаётся как был (текст, размер и время изменения), каталога без файла чтение не создаёт', async () => {
+    const codexHome = path.join(root, 'codex');
+    const file = path.join(codexHome, 'config.toml');
+    await put(file, ['[mcp_servers.chrome-devtools]', 'command = "npx"'].join('\n'));
+    await age([file]);
+    const before = await fingerprint([file]);
+    expect(await readCodexMcpServerIds(codexHome)).toEqual(['chrome-devtools']);
+    expect(await fingerprint([file])).toEqual(before);
+    const absent = path.join(root, 'no-codex');
+    expect(await readCodexMcpServerIds(absent)).toEqual([]);
+    await expect(stat(absent)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('нет файла, битый TOML или нет mcp_servers — пустой список', async () => {

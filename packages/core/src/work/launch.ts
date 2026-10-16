@@ -332,7 +332,13 @@ async function plan(
   // Lean: чужие MCP-серверы не подключаются. Без сервера `parley` в запуске (`mcpRoute`) флаг не ставится: оставлять
   // сессию вовсе без серверов нечем и незачем. Плагины Claude выключает файл настроек сессии ниже.
   if (lean && mcpRoute && mcp !== undefined) {
-    if (isClaudeCode(entry)) subs.leanFlags = CLAUDE_LEAN_FLAGS;
+    // Запись в providers.json заменяет шаблон целиком: без `{leanFlags}` флаги не дойдут, чужие MCP-серверы останутся.
+    if ((isClaudeCode(entry) || entry.id === 'codex') && !template.includes('{leanFlags}')) {
+      diagnostics.push({
+        code: 'provider-override-gap',
+        message: `Custom ${entry.id} runner has no {leanFlags}; add this placeholder so lean sessions can leave out other MCP servers. Those servers stay connected.`,
+      });
+    } else if (isClaudeCode(entry)) subs.leanFlags = CLAUDE_LEAN_FLAGS;
     else if (entry.id === 'codex') {
       const codexHome = process.env.CODEX_HOME ? path.resolve(cwd, process.env.CODEX_HOME) : path.join(process.env.HOME ?? homedir(), '.codex');
       const flags = codexLeanFlags(await readCodexMcpServerIds(codexHome));
