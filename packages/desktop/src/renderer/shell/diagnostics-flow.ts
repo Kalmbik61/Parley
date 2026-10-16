@@ -12,11 +12,15 @@ import { errorText, S } from '../../shared/strings.js';
 /** Длина записи профиля хоста: столько секунд идёт отсчёт в сегменте (хост: `PROFILE_DEFAULT_SECONDS`). */
 export const PROFILE_SECONDS = 20;
 
-/** Собирает архив; успех — тост с «Show in Finder» и результат, ошибка — тост и `null`. */
-export async function runSaveDiagnostics(
-  bridge: ParleyBridge,
-  options: { profile: boolean },
-): Promise<DiagnosticsSaveResult | null> {
+/** Сборка, которая идёт прямо сейчас: сегмент и палитра делят её, второй вызов не запускает вторую (и не показывает второй тост). */
+let inFlight: Promise<DiagnosticsSaveResult | null> | null = null;
+
+/** Для тестов: сбрасывает «идущую» сборку, чтобы не зависнуть на отложенном ответе предыдущего теста. */
+export function resetDiagnosticsFlowForTests(): void {
+  inFlight = null;
+}
+
+async function save(bridge: ParleyBridge, options: { profile: boolean }): Promise<DiagnosticsSaveResult | null> {
   try {
     const result = await bridge.app.saveDiagnostics(options);
     toast(S.diagnostics.saved, {
@@ -35,4 +39,20 @@ export async function runSaveDiagnostics(
     toast(errorText(decodeIpcError(error).code, S.errors.actions.saveDiagnostics));
     return null;
   }
+}
+
+/**
+ * Собирает архив; успех — тост с «Show in Finder» и результат, ошибка — тост и `null`. Одна сборка за раз: пока она
+ * идёт, повторный вызов (сегмент и палитра, двойной клик) получает тот же промис, а тост показывает только первый.
+ */
+export function runSaveDiagnostics(
+  bridge: ParleyBridge,
+  options: { profile: boolean },
+): Promise<DiagnosticsSaveResult | null> {
+  if (inFlight !== null) return inFlight;
+  const running = save(bridge, options).finally(() => {
+    if (inFlight === running) inFlight = null;
+  });
+  inFlight = running;
+  return running;
 }

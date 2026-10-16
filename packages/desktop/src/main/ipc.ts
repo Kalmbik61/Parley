@@ -642,6 +642,8 @@ export function registerIpc(options: RegisterIpcOptions): void {
   // показывается в Finder здесь же — путь в `~/Downloads` вне корней работ, `app:show-in-finder` его не пустил бы.
   // Сборка идёт одна за раз: второй вызов во время первой ждёт её же результат, а не запускает второй профиль и второй zip.
   let savingDiagnostics: Promise<DiagnosticsSaveResult> | null = null;
+  // Архив лежит вне корней работ, но его путь выдал сам main: по нему «Show in Finder» из тоста идёт мимо реестра корней.
+  const savedDiagnosticsFiles = new Set<string>();
   ipcMain.handle('app:save-diagnostics', withIpcError(async (_event, options: unknown) => {
     if (!isRecord(options) || typeof options.profile !== 'boolean') {
       throw new HostError('bad_request', 'Invalid diagnostics request.');
@@ -652,6 +654,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
       });
     }
     const result = await savingDiagnostics;
+    savedDiagnosticsFiles.add(result.file);
     showItemInFolder(result.file);
     return result;
   }));
@@ -840,6 +843,11 @@ export function registerIpc(options: RegisterIpcOptions): void {
     'app:show-in-finder',
     withIpcError(async (_event, absPath: unknown) => {
       if (!isValidPathArg(absPath)) throw new HostError('bad_request', 'invalid path');
+      // Путь сохранённого архива диагностики main выдал сам (`app:save-diagnostics`): корней работ он не касается.
+      if (savedDiagnosticsFiles.has(absPath)) {
+        showItemInFolder(absPath);
+        return;
+      }
       await revealInFinder(absPath, { roots, showItemInFolder });
     }),
   );

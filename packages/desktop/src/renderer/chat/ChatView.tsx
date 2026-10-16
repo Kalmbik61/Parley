@@ -450,7 +450,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             items={items}
             queued={queued}
             outbox={outbox}
-            onRetryOutbox={(id) => chatOutbox.retry(sessionKey, id)}
+            onRetryOutbox={(id) => chatOutbox.retry(sessionKey, id, { requestedAt: Date.now() })}
             onRemoveOutbox={(id) => chatOutbox.remove(sessionKey, id)}
             note={noteOf(feed)}
             {...(feed?.status === 'error' ? { onRetry: () => useFeedStore.getState().retry(sessionRef) } : {})}

@@ -5,13 +5,17 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
+import type { DiagnosticsSaveResult } from '../../shared/bridge.js';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
-import { PROFILE_SECONDS, runSaveDiagnostics } from './diagnostics-flow.js';
+import { PROFILE_SECONDS, resetDiagnosticsFlowForTests, runSaveDiagnostics } from './diagnostics-flow.js';
 
 vi.mock('sonner', () => ({ toast: vi.fn() }));
-afterEach(() => vi.mocked(toast).mockClear());
+afterEach(() => {
+  resetDiagnosticsFlowForTests();
+  vi.mocked(toast).mockClear();
+});
 
 describe('runSaveDiagnostics', () => {
   it('профиль в окне — 20 секунд, как у хоста', () => {
@@ -52,5 +56,34 @@ describe('runSaveDiagnostics', () => {
     expect(toast).toHaveBeenCalledTimes(1);
     expect(toast).toHaveBeenCalledWith(errorText('internal', S.errors.actions.saveDiagnostics));
     expect(vi.mocked(toast).mock.calls[0]?.[0]).toBe("Couldn't save diagnostics: host error.");
+  });
+
+  it('одна сборка за раз: второй вызов, пока идёт первый, получает тот же промис, без второго saveDiagnostics и тоста; потом снова идёт в мост', async () => {
+    const bridge = createFakeBridge();
+    let finish: (result: DiagnosticsSaveResult) => void = () => {};
+    const pending = new Promise<DiagnosticsSaveResult>((resolve) => {
+      finish = resolve;
+    });
+    const saveDiagnostics = vi.spyOn(bridge.app, 'saveDiagnostics').mockImplementation(() => pending);
+    const done = { file: '/Users/test/Downloads/one.zip', hostResponded: true };
+
+    const first = runSaveDiagnostics(bridge, { profile: false });
+    const second = runSaveDiagnostics(bridge, { profile: true });
+    expect(second).toBe(first);
+    finish(done);
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(saveDiagnostics).toHaveBeenCalledTimes(1);
+    expect(saveDiagnostics).toHaveBeenCalledWith({ profile: false });
+    expect(a).toEqual(done);
+    expect(b).toBe(a);
+    expect(toast).toHaveBeenCalledTimes(1);
+
+    // После завершения следующий вызов идёт в мост снова и показывает свой тост.
+    saveDiagnostics.mockResolvedValue({ file: '/Users/test/Downloads/two.zip', hostResponded: true });
+    const third = await runSaveDiagnostics(bridge, { profile: false });
+    expect(saveDiagnostics).toHaveBeenCalledTimes(2);
+    expect(third).toEqual({ file: '/Users/test/Downloads/two.zip', hostResponded: true });
+    expect(toast).toHaveBeenCalledTimes(2);
   });
 });

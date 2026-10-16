@@ -516,7 +516,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
               state={item.status === 'failed' ? 'failed' : item.status === 'sent' || item.id === flying ? 'sending' : 'waiting'}
               labelOf={labelOf}
               onOpenExternal={onOpenExternal}
-              onRetry={() => roomOutbox.retry(draftKey, item.id)}
+              onRetry={() => roomOutbox.retry(draftKey, item.id, { requestedAt: Date.now() })}
               onRemove={() => roomOutbox.remove(draftKey, item.id)}
             />
           ))}

@@ -26,7 +26,7 @@ export interface ChatOutboxPayload {
   /** Собранный текст: с упоминаниями вложений (`composePrompt`) или списком путей у Codex (`composeRoomMessage`). */
   text: string;
   deps: SendWithToastDeps;
-  /** Момент нажатия Send (мс эпохи): ставится при постановке в очередь, повтор его не меняет; хост считает по нему `queueMs`. */
+  /** Момент нажатия Send (мс эпохи): ставится при постановке в очередь, автоповтор его не меняет, ручной Retry ставит заново; хост считает по нему `queueMs`. */
   requestedAt: number;
 }
 

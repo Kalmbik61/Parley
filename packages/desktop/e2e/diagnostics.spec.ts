@@ -26,9 +26,14 @@ async function call<T>(window: Page, method: string, params: unknown): Promise<T
   return window.evaluate(([m, p]) => (globalThis as unknown as Parley).parley.call(m, p), [method, params] as const) as Promise<T>;
 }
 
+/** Журнал main под `PARLEY_SHELL=log`: «показать в Finder» и «открыть» вместо настоящих действий. */
+async function shellLog(app: ElectronApplication): Promise<Array<{ action: string; path?: string }>> {
+  return app.evaluate(() => (globalThis as { __parleyShell?: Array<{ action: string; path?: string }> }).__parleyShell ?? []);
+}
+
 /** Файл zip в журнале «показать в Finder»: последний элемент `__parleyShell`. */
 async function lastShellEntry(app: ElectronApplication): Promise<unknown> {
-  const log = await app.evaluate(() => (globalThis as { __parleyShell?: unknown[] }).__parleyShell ?? []);
+  const log = await shellLog(app);
   return log[log.length - 1];
 }
 
@@ -86,6 +91,13 @@ test.describe('диагностика хоста в строке статуса'
     expect(path.dirname(entry.path)).toBe(outDir);
     expect(path.basename(entry.path)).toMatch(/^parley-diagnostics-\d{8}-\d{6}\.zip$/);
     expect(await readdir(outDir)).toEqual([path.basename(entry.path)]);
+
+    // «Show in Finder» из тоста идёт через `app:show-in-finder`: архив лежит вне корней работ, но путь выдал сам main —
+    // кнопка не должна оказаться мёртвой, в журнале появляется вторая запись с тем же путём.
+    await window.getByRole('button', { name: 'Show in Finder', exact: true }).click();
+    await expect
+      .poll(async () => (await shellLog(application)).filter((item) => item.action === 'showItemInFolder' && item.path === entry.path))
+      .toHaveLength(2);
 
     const listing = spawnSync('unzip', ['-l', entry.path], { encoding: 'utf8' });
     expect(listing.status).toBe(0);

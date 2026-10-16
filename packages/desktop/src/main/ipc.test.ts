@@ -647,6 +647,47 @@ describe('app:save-diagnostics', () => {
     });
     expect(showItemInFolder).not.toHaveBeenCalled();
   });
+
+  /** Реестр корней, который отказывает всем путям и считает вопросы: архив лежит в Downloads, вне корней работ. */
+  function deniedRoots(): { roots: RootsRegistry; insideAnyRoot: ReturnType<typeof vi.fn> } {
+    const insideAnyRoot = vi.fn().mockResolvedValue(null);
+    const roots = {
+      resolve: vi.fn().mockRejectedValue(new FilesDeniedError('no roots')),
+      locate: vi.fn().mockResolvedValue(null),
+      insideAnyRoot,
+      roots: vi.fn().mockReturnValue([]),
+      expandHome: vi.fn((p: string) => p),
+      rootPath: vi.fn(() => {
+        throw new FilesDeniedError('no roots');
+      }),
+    } satisfies RootsRegistry;
+    return { roots, insideAnyRoot };
+  }
+
+  it('путь сохранённого архива показывается в Finder напрямую, без корней', async () => {
+    const { roots, insideAnyRoot } = deniedRoots();
+    const { ipcMain, saveDiagnostics, showItemInFolder } = setup({ roots });
+    const { file } = (await ipcMain.invoke('app:save-diagnostics', { profile: false })) as { file: string };
+    expect(saveDiagnostics).toHaveBeenCalledTimes(1);
+    showItemInFolder.mockClear();
+
+    expect(await ipcMain.invoke('app:show-in-finder', file)).toBeUndefined();
+
+    expect(showItemInFolder).toHaveBeenCalledTimes(1);
+    expect(showItemInFolder).toHaveBeenCalledWith(file);
+    expect(insideAnyRoot).not.toHaveBeenCalled();
+  });
+
+  it('чужой путь вне корней по-прежнему отказ files:denied, даже после сохранения архива', async () => {
+    const { roots } = deniedRoots();
+    const { ipcMain, showItemInFolder } = setup({ roots });
+    await ipcMain.invoke('app:save-diagnostics', { profile: false });
+    showItemInFolder.mockClear();
+
+    expect(await codeOf(ipcMain.invoke('app:show-in-finder', '/h/Downloads/other.zip'))).toBe('files:denied');
+    expect(await codeOf(ipcMain.invoke('app:show-in-finder', '/etc/hosts'))).toBe('files:denied');
+    expect(showItemInFolder).not.toHaveBeenCalled();
+  });
 });
 
 // Тесты 8 и 12 куска 4.3: `app:notify` принимает только `AppNote` и режет тексты до 200

@@ -30,7 +30,7 @@ import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { useDictationStore } from '../voice/dictation-store.js';
 import { resetCapabilitiesStoreForTests } from './capabilities-store.js';
-import { chatOutbox } from './chat-outbox.js';
+import { CHAT_RETRY_MS, chatOutbox } from './chat-outbox.js';
 import { resetFeedStoreForTests, useFeedStore } from './store.js';
 import { resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
 import { resetThumbnailCacheForTests } from './use-thumbnail.js';
@@ -1588,6 +1588,43 @@ describe('ChatView — очередь отправки', () => {
     await act(async () => answer({ inserted: true, submitted: true, reason: null }));
     renderBody(makeSession('s-01', 'S01'));
     expect(states()).toEqual([]);
+  });
+
+  it('requestedAt — момент нажатия Send: автоповтор busy его не меняет, ручной Retry ставит заново', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const requestedAts = (): number[] =>
+        bridge.calls.filter((call) => call.method === 'pty.send').map((call) => (call.params as { requestedAt: number }).requestedAt);
+      let attempts = 0;
+      // Две попытки busy (повторы через CHAT_RETRY_MS), на третьей окончательный отказ — «Not sent» с Retry.
+      bridge.setHandler('pty.send', () => {
+        attempts += 1;
+        return { inserted: false, submitted: false, reason: attempts <= 2 ? ('busy' as const) : ('no-paste-mode' as const) };
+      });
+      renderBody(makeSession('s-01', 'S01'));
+      setFeed([]);
+      const sentAt = 1_760_000_000_000;
+      vi.setSystemTime(sentAt);
+      type('важное');
+      fireEvent.keyDown(field(), { key: 'Enter' });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3 * CHAT_RETRY_MS);
+      });
+      expect(Date.now()).toBe(sentAt + 3 * CHAT_RETRY_MS);
+      expect(states()).toEqual(['failed']);
+      // Все три попытки несут метку нажатия Send, а не момента повтора.
+      expect(requestedAts()).toEqual([sentAt, sentAt, sentAt]);
+
+      const retriedAt = sentAt + 60_000;
+      vi.setSystemTime(retriedAt);
+      bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+      fireEvent.click(within(screen.getByTestId('chat-queued')).getByRole('button', { name: S.common.retry }));
+      await act(async () => {});
+      expect(requestedAts()).toEqual([sentAt, sentAt, sentAt, retriedAt]);
+      expect(states()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('Send again под своим сообщением — тот же текст уходит через очередь', async () => {

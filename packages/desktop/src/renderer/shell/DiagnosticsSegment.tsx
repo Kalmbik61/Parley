@@ -2,8 +2,10 @@
  * Сегмент Diagnostics правой группы строки статуса (спека диагностики хоста 2026-10-16, A1, A8): иконка и подпись
  * (на узком окне — только иконка), поповер над строкой с двумя кнопками. «Save diagnostics» собирает архив сразу,
  * «Record 20-second profile» — после записи профиля хоста; пока идёт сборка, обе кнопки заблокированы, а в самом
- * сегменте виден обратный отсчёт или «Saving…». Хост без `host.diagnostics` профиль писать не умеет: кнопка
- * заблокирована, подсказка зовёт перезапустить хост; архив из файлов и `ps` собирается и так.
+ * сегменте виден обратный отсчёт или «Saving…», а на узком окне, где подписи в сегменте нет, — та же строка состояния
+ * в поповере. Хост без `host.diagnostics` профиль писать не умеет: кнопка заблокирована, а подсказка зовёт перезапустить
+ * хост, только когда он подключён и метода у него нет (пока хост подключается или отключён, это не причина);
+ * архив из файлов и `ps` собирается и так.
  */
 
 import { useEffect, useState } from 'react';
@@ -11,6 +13,7 @@ import { Activity } from 'lucide-react';
 import { S } from '../../shared/strings.js';
 import { getHostClient } from '../host-client.js';
 import { useHostSupports } from '../lib/capabilities.js';
+import { useHostStore } from '../store/host.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.js';
 import { PROFILE_SECONDS, runSaveDiagnostics } from './diagnostics-flow.js';
 import { SEGMENT_BUTTON } from './segment.js';
@@ -22,6 +25,7 @@ const ACTION_BUTTON = 'rounded-lg px-2.5 py-1.5 text-left text-xs text-foregroun
 
 export function DiagnosticsSegment(): JSX.Element {
   const supported = useHostSupports('host.diagnostics');
+  const connected = useHostStore((state) => state.status.state === 'connected');
   const [phase, setPhase] = useState<Phase>('idle');
   const [left, setLeft] = useState(PROFILE_SECONDS);
 
@@ -56,6 +60,7 @@ export function DiagnosticsSegment(): JSX.Element {
         </button>
       </PopoverTrigger>
       <PopoverContent aria-label={S.diagnostics.segment} side="top" align="end" className="flex w-[min(320px,calc(100vw-24px))] flex-col gap-1 p-2">
+        {busy ? <p role="status" className="px-2.5 pb-1 pt-1.5 text-xs text-foreground">{label}</p> : null}
         <button type="button" disabled={busy} onClick={() => run(false)} className={ACTION_BUTTON}>
           {S.diagnostics.save}
         </button>
@@ -63,7 +68,7 @@ export function DiagnosticsSegment(): JSX.Element {
           {S.diagnostics.profile}
         </button>
         <p className="px-2.5 pb-1 pt-1.5 text-[11px] leading-snug text-neutral-700">{S.diagnostics.hint}</p>
-        {supported ? null : <p className="px-2.5 pb-1 text-[11px] leading-snug text-accent-700">{S.diagnostics.hostOutdated}</p>}
+        {connected && !supported ? <p className="px-2.5 pb-1 text-[11px] leading-snug text-accent-700">{S.diagnostics.hostOutdated}</p> : null}
       </PopoverContent>
     </Popover>
   );

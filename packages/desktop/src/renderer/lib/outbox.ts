@@ -38,8 +38,11 @@ export interface Outbox<P> {
   store: UseBoundStore<StoreApi<OutboxState<P>>>;
   /** Поставить в конец; возвращает id. */
   enqueue(key: string, payload: P): string;
-  /** `failed` → `pending`, и очередь снова идёт. У прочих статусов — ничего. */
-  retry(key: string, id: string): void;
+  /**
+   * `failed` → `pending`, и очередь снова идёт. У прочих статусов — ничего. `patch` сливается в payload элемента перед
+   * повтором: так ручной Retry обновляет метку времени отправки (`{ ...payload, ...patch }`).
+   */
+  retry(key: string, id: string, patch?: Partial<P>): void;
   /** Убрать `failed` или `sent`; `pending` не убирается (спека, 5). */
   remove(key: string, id: string): void;
   items(key: string): readonly OutboxItem<P>[];
@@ -120,9 +123,10 @@ export function createOutbox<P>(attempt: (key: string, item: OutboxItem<P>) => P
       pump(key);
       return id;
     },
-    retry(key, id) {
-      if (items(key).find((item) => item.id === id)?.status !== 'failed') return;
-      patch(key, id, { status: 'pending' });
+    retry(key, id, payloadPatch) {
+      const item = items(key).find((entry) => entry.id === id);
+      if (item?.status !== 'failed') return;
+      patch(key, id, payloadPatch === undefined ? { status: 'pending' } : { status: 'pending', payload: { ...item.payload, ...payloadPatch } });
       pump(key);
     },
     remove(key, id) {

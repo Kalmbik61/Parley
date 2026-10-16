@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import type { DiagnosticsSaveResult } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
@@ -12,6 +12,7 @@ import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { DiagnosticsSegment } from './DiagnosticsSegment.js';
+import { resetDiagnosticsFlowForTests } from './diagnostics-flow.js';
 
 vi.mock('sonner', () => ({ toast: vi.fn() }));
 
@@ -55,6 +56,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  // Сборка, которую тест не довёл до конца, не должна «идти» в следующем тесте (одна сборка за раз на модуль).
+  resetDiagnosticsFlowForTests();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.mocked(toast).mockClear();
@@ -112,18 +115,18 @@ describe('DiagnosticsSegment', () => {
     fireEvent.click(profileButton());
 
     expect(bridge.app.saveDiagnostics).toHaveBeenCalledWith({ profile: true });
-    expect(screen.getByText('Profiling 20 s…')).toBeTruthy();
+    expect(trigger().textContent).toBe('Profiling 20 s…');
     expect(saveButton().disabled).toBe(true);
     expect(profileButton().disabled).toBe(true);
 
     act(() => {
       vi.advanceTimersByTime(1000);
     });
-    expect(screen.getByText('Profiling 19 s…')).toBeTruthy();
+    expect(trigger().textContent).toBe('Profiling 19 s…');
     act(() => {
       vi.advanceTimersByTime(4000);
     });
-    expect(screen.getByText('Profiling 15 s…')).toBeTruthy();
+    expect(trigger().textContent).toBe('Profiling 15 s…');
     // Повторные клики во время записи ничего не запускают.
     fireEvent.click(profileButton());
     fireEvent.click(saveButton());
@@ -170,6 +173,30 @@ describe('DiagnosticsSegment', () => {
     expect(clear).toHaveBeenCalledWith(id);
   });
 
+  it('прогресс виден и в поповере (на узком окне подписи сегмента нет): Saving… и Profiling N s…, в idle строки нет', async () => {
+    render(<DiagnosticsSegment />);
+    openPopover();
+    const dialog = screen.getByRole('dialog', { name: S.diagnostics.segment });
+    expect(within(dialog).queryByRole('status')).toBeNull();
+
+    const saving = deferredSave();
+    fireEvent.click(saveButton());
+    expect(within(dialog).getByRole('status').textContent).toBe(S.diagnostics.saving);
+    await saving.finish();
+    expect(within(dialog).queryByRole('status')).toBeNull();
+
+    const profiling = deferredSave();
+    vi.useFakeTimers();
+    fireEvent.click(profileButton());
+    expect(within(dialog).getByRole('status').textContent).toBe('Profiling 20 s…');
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(within(dialog).getByRole('status').textContent).toBe('Profiling 19 s…');
+    await profiling.finish();
+    expect(within(dialog).queryByRole('status')).toBeNull();
+  });
+
   it('старый хост: кнопка профиля disabled, подсказка hostOutdated видна, Save работает', () => {
     setHost([...REQUIRED_METHODS]);
     render(<DiagnosticsSegment />);
@@ -177,6 +204,19 @@ describe('DiagnosticsSegment', () => {
 
     expect(profileButton().disabled).toBe(true);
     expect(screen.getByText(S.diagnostics.hostOutdated)).toBeTruthy();
+    expect(saveButton().disabled).toBe(false);
+
+    fireEvent.click(saveButton());
+    expect(bridge.saveDiagnosticsCalls).toEqual([{ profile: false }]);
+  });
+
+  it('хост отключён: подсказки hostOutdated нет, профиль disabled, Save зовёт saveDiagnostics', () => {
+    useHostStore.setState({ status: { state: 'disconnected', reason: 'host gone' } });
+    render(<DiagnosticsSegment />);
+    openPopover();
+
+    expect(screen.queryByText(S.diagnostics.hostOutdated)).toBeNull();
+    expect(profileButton().disabled).toBe(true);
     expect(saveButton().disabled).toBe(false);
 
     fireEvent.click(saveButton());

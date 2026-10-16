@@ -104,6 +104,36 @@ describe('outbox — очередь отправки', () => {
     expect(started).toHaveLength(1);
   });
 
+  it('retry с patch сливает его в payload failed-элемента; без patch payload прежний; у не failed patch игнорируется', async () => {
+    interface Letter {
+      text: string;
+      at: number;
+    }
+    const started: Array<{ payload: Letter; done: Deferred<AttemptResult> }> = [];
+    const outbox = createOutbox<Letter>((_key, item) => {
+      const done = deferred<AttemptResult>();
+      started.push({ payload: item.payload, done });
+      return done.promise;
+    });
+    const id = outbox.enqueue('k', { text: 'a', at: 1 });
+    started[0]?.done.resolve({ kind: 'failed' });
+    await flush();
+
+    outbox.retry('k', id);
+    expect(started[1]?.payload).toEqual({ text: 'a', at: 1 });
+    started[1]?.done.resolve({ kind: 'failed' });
+    await flush();
+
+    outbox.retry('k', id, { at: 5 });
+    expect(started[2]?.payload).toEqual({ text: 'a', at: 5 });
+    expect(outbox.items('k')[0]?.payload).toEqual({ text: 'a', at: 5 });
+
+    // Элемент уже pending: patch не применяется.
+    outbox.retry('k', id, { at: 9 });
+    expect(started).toHaveLength(3);
+    expect(outbox.items('k')[0]?.payload).toEqual({ text: 'a', at: 5 });
+  });
+
   it('keepAs: элемент остаётся sent с sentAs и не держит очередь; remove убирает его', async () => {
     const { outbox, started } = manual();
     const a = outbox.enqueue('k', 'a');
