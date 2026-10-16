@@ -37,8 +37,10 @@ import type { IslandApi, IslandConfig } from '../../shared/island.js';
 import { alwaysRules } from '../chat/cards/always-rules.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
+import { AssistantMark } from '../components/AssistantMark.js';
 import { relativeTime } from '../lib/relative-time.js';
 import { Button } from '../ui/button.js';
+import { AssistantView, type AssistantViewProps } from './assistant/AssistantView.js';
 import { useShapeDrag } from './drag.js';
 import type { IslandModel, IslandRow } from './model.js';
 import { useIslandReplies } from './replies.js';
@@ -53,6 +55,15 @@ import { simpleChoices } from './simple-question.js';
  * защищены: они ничего не решают.
  */
 export const CARD_ARM_MS = 500;
+
+export interface IslandAssistantProps {
+  view: AssistantViewProps;
+  open: boolean;
+  collapsed: boolean;
+  busy: boolean;
+  mini: string | null;
+  onOpen(): void;
+}
 
 export interface IslandViewProps {
   model: IslandModel;
@@ -82,9 +93,11 @@ export interface IslandViewProps {
   onClearDone(): void;
   onSelect(index: number): void;
   onDecide(key: string, decision: FeedDecision): void;
+  /** Помощник (спека 2026-10-14, раздел 8); `null` — выключен в настройках. */
+  assistant: IslandAssistantProps | null;
 }
 
-const sessionKeyOf = (item: IslandRequest): string => item.key.slice(0, item.key.lastIndexOf('\u0000'));
+export const sessionKeyOf = (item: IslandRequest): string => item.key.slice(0, item.key.lastIndexOf('\u0000'));
 
 function rowTarget(row: IslandRow): FocusTarget {
   return row.kind === 'session'
@@ -99,7 +112,14 @@ function Pill(props: IslandViewProps): JSX.Element {
     // при уходе курсора. Строка занимает всю ширину содержимого, а при открытом списке оно растёт до 400 px:
     // содержимое строки по центру, чтобы пилюля не уезжала вбок из-под курсора.
     <div data-testid="island-pill" className="island-reveal flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 text-sm">
-      {model.active || model.done > 0 ? (
+      {props.assistant === null ? null : (
+        <button type="button" data-testid="assistant-dot" aria-label={S.assistant.ask} className="flex cursor-pointer items-center" onClick={props.assistant.onOpen}>
+          <AssistantMark size={18} busy={props.assistant.busy} />
+        </button>
+      )}
+      {props.assistant?.collapsed === true && props.assistant.mini !== null ? (
+        <span data-testid="assistant-mini">{props.assistant.mini}</span>
+      ) : model.active || model.done > 0 ? (
         // Клик только открывает список: наведение открыло его мгновением раньше, и «переключатель» тут же закрывал бы.
         // Не кнопка: за кнопку остров не тащится, а счётчики — самое большое место пилюли. Значки провайдеров — про
         // идущую работу, у одних Done их нет.
@@ -285,7 +305,7 @@ function Card(props: IslandViewProps): JSX.Element | null {
 }
 
 export function IslandView(props: IslandViewProps): JSX.Element {
-  const { model, items, listOpen, config, retracted, doneCount, hovered, shapeRef, api, onDragStart, onDragEnd, onHide } = props;
+  const { model, items, listOpen, config, retracted, doneCount, hovered, shapeRef, api, onDragStart, onDragEnd, onHide, assistant } = props;
   const drag = useShapeDrag(api, { onDragStart, onDragEnd, onSwipeUp: onHide });
   const contentRef = useRef<HTMLDivElement>(null);
   /** Размер содержимого в пикселях; до первого замера `null` — у формы нет явных `width`/`height`. */
@@ -310,6 +330,7 @@ export function IslandView(props: IslandViewProps): JSX.Element {
   const peek = retracted && doneCount > 0;
   const look = !retracted ? 'rounded-b-[22px] shadow-lg' : peek ? 'rounded-b-[14px] shadow-none ring-1 ring-white/50' : 'rounded-[3px] shadow-none ring-1 ring-white/50';
   const marginTop = !retracted ? 0 : peek ? config.topInset : config.topInset + 2;
+  const assistantBig = assistant !== null && assistant.open && !assistant.collapsed;
   return (
     // Форма — прямой элемент flex-корня `IslandApp`: `shrink-0`, чтобы узкий кадр не сжимал её.
     <div
@@ -331,7 +352,11 @@ export function IslandView(props: IslandViewProps): JSX.Element {
           )
         ) : (
           <>
-            {items.length > 0 ? <Card {...props} /> : (
+            {assistantBig ? (
+              <AssistantView {...assistant.view} />
+            ) : items.length > 0 ? (
+              <Card {...props} />
+            ) : (
               <>
                 <Pill {...props} />
                 {listOpen && model.groups.length > 0 ? <List {...props} /> : null}

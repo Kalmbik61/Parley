@@ -35,6 +35,12 @@
  * уборке очистка идёт не сразу, а через `RETRACT_MORPH_MS` — пока форма сжимается в брусок; выдвинули раньше срока —
  * очистка в тот же миг. Done, что убранный остров застал готовыми, не показывался — их не держим. Убранный остров
  * показывает число непросмотренных Done (`seen` ложно) в форме `✅ N`: просмотренные удержанные не считаются.
+ *
+ * Помощник (спека 2026-10-14, раздел 8): стор `useAssistantStore` привязан к мосту при подключении хоста. Режим открывает
+ * событие main (`onAssistantOpen`) или точка в пилюле; пока он открыт или идёт ход, окно видно даже при выключенном
+ * острове, а остров в покое не убирается. Esc, стрелка ⌃, смахивание и потеря фокуса панели (`onAssistantBlur`) выходят
+ * через `hideAssistant`: идущий ход сворачивается в мини-вид, иначе режим закрывается и клавиатура уходит обратно.
+ * Ответ после открытия держится `ANSWER_HOLD_MS`, если курсор не над островом и в поле пусто.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -44,8 +50,13 @@ import type { IslandAnchor } from '../../shared/ui-types.js';
 import { isoMs } from '../lib/iso-time.js';
 import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
+import { browserRecorderDeps } from '../voice/browser-recorder.js';
+import { startRecording } from '../voice/recorder.js';
+import { listen } from './assistant/listen.js';
+import { miniLabel } from './assistant/labels.js';
+import { assistantBusy, useAssistantStore } from './assistant/store.js';
 import { IslandTab } from './IslandTab.js';
-import { IslandView } from './IslandView.js';
+import { IslandView, sessionKeyOf, type IslandAssistantProps } from './IslandView.js';
 import { islandModel, sessionLabels, type IslandRow } from './model.js';
 import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
@@ -56,6 +67,8 @@ export const IDLE_RETRACT_MS = 4000;
 export const DONE_HOLD_MS = 20000;
 /** Сколько форма сжимается в брусок: та же длительность, что `duration-[250ms]` перехода формы в `IslandView`. */
 export const RETRACT_MORPH_MS = 250;
+/** Сколько ответ помощника держится на острове после хода, если курсор не над ним и в поле пусто. */
+export const ANSWER_HOLD_MS = 8000;
 
 const INITIAL_CONFIG: IslandConfig = {
   islandEnabled: true,
@@ -76,6 +89,18 @@ const releaseHeld = (current: Set<string>): Set<string> => (current.size === 0 ?
 /** Равны ли области (`null` равен только `null`). */
 const sameRect = (a: IslandHitRect | null, b: IslandHitRect | null): boolean =>
   a === null || b === null ? a === b : a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+
+/**
+ * Общий выход из режима помощника: идущий ход сворачивается в мини-вид, иначе режим закрывается. `true` — режим был
+ * открыт и выход выполнен (остров убирать не надо). Читает стор напрямую, поэтому годится и в подписке на событие main.
+ */
+function hideAssistant(): boolean {
+  const s = useAssistantStore.getState();
+  if (!s.open) return false;
+  if (assistantBusy(s)) s.collapse();
+  else s.close();
+  return true;
+}
 
 export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   const [connected, setConnected] = useState(false);
@@ -135,6 +160,9 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
       bridge.island.onHover((over) => {
         setHovered(over);
         setListOpen(over);
+        const store = useAssistantStore.getState();
+        if (over && store.open && store.collapsed) store.expand(true);
+        if (!over && store.byHover) store.collapse();
         // Курсор ушёл — показ кончился: просмотренные сессии больше не держат свои строки Done.
         if (!over) setHeld(releaseHeld);
       }),
@@ -153,7 +181,46 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   /** Непросмотренные Done: их число показывает убранный остров (`✅ N`). */
   const unseenDone = doneRows.filter((row) => !row.seen).length;
   const labels = useMemo(() => sessionLabels(entries), [entries]);
-  const idle = !model.active && items.length === 0;
+  const configRef = useRef(config);
+  configRef.current = config;
+  const assistant = useAssistantStore();
+  const busy = assistantBusy(assistant);
+
+  useEffect(() => {
+    if (!connected) return;
+    useAssistantStore.getState().configure({
+      call: bridge.call,
+      keyboard: (on) => bridge.island.keyboard(on),
+      config: () => configRef.current.assistant,
+      listen: (hooks) => {
+        const settings = configRef.current.assistant;
+        if (!settings.voice.enabled || settings.voice.model === null) return null;
+        return listen({
+          record: (onLevel) => startRecording(onLevel, browserRecorderDeps()),
+          transcribe: (request) => bridge.island.voice.transcribe(request),
+          micStatus: () => bridge.island.voice.micStatus(),
+          requestMic: () => bridge.island.voice.requestMic(),
+          now: Date.now,
+          model: settings.voice.model,
+          language: settings.language,
+          ...hooks,
+        });
+      },
+    });
+    void bridge.call('assistant.state', {}).then((state) => useAssistantStore.getState().applyHost(state)).catch(() => {});
+    const off = bridge.on('assistant.changed', (state) => useAssistantStore.getState().applyHost(state));
+    const offOpen = bridge.island.onAssistantOpen((request) => useAssistantStore.getState().openMode(request));
+    const offBlur = bridge.island.onAssistantBlur(() => {
+      hideAssistant();
+    });
+    return () => {
+      off();
+      offOpen();
+      offBlur();
+    };
+  }, [connected, bridge]);
+
+  const idle = !model.active && items.length === 0 && !assistant.open && !busy;
   /** Убран ли остров: в покое при открытии — да, при работе или очереди — нет. */
   const [retracted, setRetracted] = useState(idle);
   // `hovered` здесь не трогаем: его ведёт только main, и локальный сброс разошёлся бы с ним, пока курсор над зоной нажатия.
@@ -227,7 +294,29 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
 
   // Хост не подключён — окна нет: сторы остались от прошлого подключения, и счётчики пилюли были бы устаревшими.
   // Подключён — окно видно всегда: убранный остров лишь сжимается в брусок (или в `✅ N`) под прозрачной зоной нажатия.
-  useEffect(() => bridge.island.setVisible(connected), [connected, bridge]);
+  useEffect(
+    () => bridge.island.setVisible(connected && (config.islandEnabled || assistant.open || busy)),
+    [connected, bridge, config.islandEnabled, assistant.open, busy],
+  );
+  // Режим помощника открыт при убранном острове — форма выдвигается, иначе вида не видно.
+  useEffect(() => {
+    if (assistant.open) setRetracted(false);
+  }, [assistant.open]);
+  // Удержание после ответа: ход кончился, курсор не над островом, поле пусто и карточки нет — режим закрывается сам.
+  useEffect(() => {
+    const s = assistant;
+    if (!s.open || s.collapsed || hovered || busy || s.draft !== '' || s.host.proposal !== null || s.host.turn <= s.openedTurn) return;
+    const timer = setTimeout(() => useAssistantStore.getState().close(), ANSWER_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [assistant, hovered, busy]);
+  useEffect(() => {
+    if (!assistant.open) return;
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') useAssistantStore.getState().close();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [assistant.open]);
   const shown = connected && !retracted;
   // Номер показа растёт при каждом переходе «убран → выдвинут» и считается прямо при отрисовке: карточка, оставшаяся
   // на экране с прошлого показа, не успевает мелькнуть с уже взведёнными кнопками.
@@ -265,6 +354,30 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     for (const batch of markSeenBatches(unseenRefs)) bridge.island.markSeen(batch);
   };
 
+  const assistantProps: IslandAssistantProps | null = !config.assistant.enabled
+    ? null
+    : {
+        open: assistant.open,
+        collapsed: assistant.collapsed,
+        busy,
+        mini: miniLabel(assistant.host, assistant.input),
+        onOpen: () => useAssistantStore.getState().openMode({ listen: false }),
+        view: {
+          host: assistant.host,
+          input: assistant.input,
+          draft: assistant.draft,
+          notice: assistant.notice,
+          cardError: assistant.cardError,
+          hotkey: config.assistant.hotkey,
+          pending: items.length === 0 ? null : { name: labels.get(sessionKeyOf(items[0]!))?.session ?? '', total: items.length },
+          onDraft: (text) => useAssistantStore.getState().setDraft(text),
+          onSubmit: (text) => void useAssistantStore.getState().submit(text),
+          onMic: () => useAssistantStore.getState().toggleListening(),
+          onDecide: (decision) => void useAssistantStore.getState().decide(decision),
+          onShowRequests: () => useAssistantStore.getState().close(),
+        },
+      };
+
   return (
     <div className={`fixed inset-0 flex items-start ${ANCHOR_CLASS[config.anchor]}`} onTransitionEnd={reportHitRect}>
       <IslandView
@@ -283,10 +396,14 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
         onDragStart={() => setDragging(true)}
         onDragEnd={() => setDragging(false)}
         onToggleList={setListOpen}
-        onHide={retract}
+        onHide={() => {
+          if (hideAssistant()) return;
+          retract();
+        }}
         onClearDone={clearDone}
         onSelect={(next) => useIslandRequests.getState().select(next)}
         onDecide={(key, decision) => void useIslandRequests.getState().decide(key, decision)}
+        assistant={assistantProps}
       />
       {retracted ? (
         <IslandTab

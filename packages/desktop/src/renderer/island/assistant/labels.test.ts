@@ -1,0 +1,25 @@
+import { describe, expect, it } from 'vitest';
+import { HOST_IDLE } from './store.js';
+import { hotkeyLabel, miniLabel, statusLabel } from './labels.js';
+
+describe('подписи помощника', () => {
+  it('состояние хода → подпись', () => {
+    expect(statusLabel({ ...HOST_IDLE, phase: 'thinking' }, 'idle')).toBe('Thinking…');
+    expect(statusLabel({ ...HOST_IDLE, phase: 'tool', detail: { tool: 'overview', target: null } }, 'idle')).toBe('Checking rooms…');
+    expect(statusLabel({ ...HOST_IDLE, phase: 'tool', detail: { tool: 'detail', target: 'Auth' } }, 'idle')).toBe('Reading Auth…');
+    expect(statusLabel({ ...HOST_IDLE, phase: 'awaiting-confirm' }, 'idle')).toBe('Waiting for your confirmation');
+    expect(statusLabel({ ...HOST_IDLE, phase: 'offline', error: 'Claude is not connected — open Settings' }, 'idle')).toBe('Claude is not connected — open Settings');
+    expect(statusLabel(HOST_IDLE, 'listening')).toBe('Listening…');
+  });
+  it('мини-вид: подпись только пока занят', () => {
+    expect(miniLabel({ ...HOST_IDLE, phase: 'thinking' }, 'idle')).toBe('Thinking·');
+    expect(miniLabel({ ...HOST_IDLE, phase: 'answering' }, 'idle')).toBe('Working·');
+    expect(miniLabel({ ...HOST_IDLE, phase: 'awaiting-confirm' }, 'idle')).toBe('Confirm send');
+    expect(miniLabel(HOST_IDLE, 'idle')).toBeNull();
+  });
+  it('сочетание — значками macOS', () => {
+    expect(hotkeyLabel('Alt+Space')).toBe('⌥Space');
+    expect(hotkeyLabel('CmdOrCtrl+Shift+J')).toBe('⌘⇧J');
+    expect(hotkeyLabel('Control+Alt+K')).toBe('⌃⌥K');
+  });
+});

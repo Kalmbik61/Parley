@@ -33,3 +33,13 @@ body {
     animation: none;
   }
 }
+
+/* Пятно помощника «дышит», пока он занят (спека 2026-10-14, этап 1 — вместо роя). */
+@keyframes assistant-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.12); opacity: 1; }
+}
+.assistant-pulse { animation: assistant-pulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .assistant-pulse { animation: none; }
+}

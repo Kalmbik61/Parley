@@ -24,6 +24,7 @@ import { useWorksStore } from '../store/works.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { DONE_HOLD_MS, IDLE_RETRACT_MS, IslandApp, RETRACT_MORPH_MS } from './IslandApp.js';
+import { HOST_IDLE, useAssistantStore } from './assistant/store.js';
 import { PULL_EXPAND_PX } from './IslandTab.js';
 import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
@@ -106,8 +107,22 @@ function setup(config: Partial<IslandConfig> = {}) {
       for (const [listener] of vi.mocked(island.onHover).mock.calls) listener(over);
     });
   };
-  return { island, bridge, blocked, working, disconnect, reconnect, hover };
+  /** Main просит открыть режим помощника / сообщает о потере фокуса панели: зовёт последнего подписанного слушателя. */
+  const assistantOpen = (request: { listen: boolean }): void => {
+    act(() => {
+      vi.mocked(island.onAssistantOpen).mock.calls.at(-1)![0](request);
+    });
+  };
+  const assistantBlur = (): void => {
+    act(() => {
+      vi.mocked(island.onAssistantBlur).mock.calls.at(-1)![0]();
+    });
+  };
+  return { island, bridge, blocked, working, disconnect, reconnect, hover, assistantOpen, assistantBlur };
 }
+
+/** Помощник включён в настройках острова. */
+const ASSISTANT_ON = { enabled: true, provider: null, model: null, language: 'en' as const, hotkey: 'Alt+Space', voice: { enabled: false, model: null } };
 
 /** Работа идёт к моменту открытия острова: сторы заполнены заранее, обмена с хостом ждать не надо. */
 function seedWorking(): void {
@@ -142,6 +157,7 @@ beforeEach(() => {
   useIslandReplies.getState().prune(new Set());
   useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
   useActivityStore.setState({ byRef: {}, loaded: false });
+  useAssistantStore.setState({ host: HOST_IDLE, open: false, collapsed: false, byHover: false, input: 'idle', level: 0, draft: '', notice: null, cardError: null, openedTurn: 0 });
 });
 
 afterEach(() => {
@@ -390,6 +406,68 @@ describe('проводка острова', () => {
       fireEvent(summary, pointer('pointermove', 100, 40));
       expect(isRetracted()).toBe(true);
       expect(island.dragStart).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('помощник', () => {
+    /** Рисует остров с включённым помощником и ждёт, пока мост подписан на события main. */
+    async function renderAssistant(config: Partial<IslandConfig> = {}) {
+      const ctx = setup({ assistant: ASSISTANT_ON, ...config });
+      render(<IslandApp bridge={ctx.bridge} />);
+      await waitFor(() => expect(ctx.island.onAssistantOpen).toHaveBeenCalled());
+      return ctx;
+    }
+
+    it('onAssistantOpen показывает вид помощника и берёт клавиатуру', async () => {
+      const { island, assistantOpen } = await renderAssistant();
+      assistantOpen({ listen: false });
+      expect(await screen.findByTestId('assistant-view')).toBeTruthy();
+      expect(island.keyboard).toHaveBeenCalledWith(true);
+    });
+
+    it('Esc закрывает вид и отдаёт клавиатуру', async () => {
+      const { island, assistantOpen } = await renderAssistant();
+      assistantOpen({ listen: false });
+      await screen.findByTestId('assistant-view');
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByTestId('assistant-view')).toBeNull();
+      expect(island.keyboard).toHaveBeenLastCalledWith(false);
+    });
+
+    it('потеря фокуса панели без хода закрывает вид и отдаёт клавиатуру', async () => {
+      const { island, assistantOpen, assistantBlur } = await renderAssistant();
+      assistantOpen({ listen: false });
+      await screen.findByTestId('assistant-view');
+      assistantBlur();
+      expect(screen.queryByTestId('assistant-view')).toBeNull();
+      expect(island.keyboard).toHaveBeenLastCalledWith(false);
+    });
+
+    it('потеря фокуса панели во время хода сворачивает вид в мини-вид', async () => {
+      const { island, assistantOpen, assistantBlur } = await renderAssistant();
+      assistantOpen({ listen: false });
+      await screen.findByTestId('assistant-view');
+      act(() => {
+        useAssistantStore.getState().applyHost({ ...HOST_IDLE, phase: 'thinking', turn: 1 });
+      });
+      assistantBlur();
+      expect(screen.queryByTestId('assistant-view')).toBeNull();
+      expect(screen.getByTestId('assistant-mini').textContent).toBe('Thinking·');
+      expect(island.keyboard).toHaveBeenLastCalledWith(false);
+    });
+
+    it('потеря фокуса панели при закрытом виде ничего не делает', async () => {
+      const { island, assistantBlur } = await renderAssistant();
+      assistantBlur();
+      expect(island.keyboard).not.toHaveBeenCalled();
+      expect(useAssistantStore.getState().open).toBe(false);
+    });
+
+    it('остров выключен: окно скрыто, после onAssistantOpen — видно', async () => {
+      const { island, assistantOpen } = await renderAssistant({ islandEnabled: false });
+      await waitFor(() => expect(island.setVisible).toHaveBeenLastCalledWith(false));
+      assistantOpen({ listen: false });
+      await waitFor(() => expect(island.setVisible).toHaveBeenLastCalledWith(true));
     });
   });
 });
