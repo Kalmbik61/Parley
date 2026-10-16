@@ -309,17 +309,14 @@ export async function planTool(
           /[\r\n]/.test(args.reason)
         )
           throw new RoomRuleError("invalid room mode");
-        const before = map.messages.length;
-        setRoomMode(
+        // Письмо отдаёт сам `setRoomMode`: `map.messages` внутри мутатора на карте-журнале собирает все журналы.
+        const source = setRoomMode(
           map,
           args.room,
           actor,
           args.mode as "free" | "checklist" | "verified",
           args.reason,
         );
-        const source = map.messages
-          .slice(before)
-          .find((row) => row.roomId === args.room && row.from === "system");
         if (source) capturePlanNotice(map, args.room, "mode", source.id);
       } else if (name === "propose_decision") {
         keys(args, ["room", "text", "plan", "kind", "planId", "rev"]);

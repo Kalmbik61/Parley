@@ -125,6 +125,8 @@ interface AttemptState {
   journalBase: number;
   /** Письма, которыми подняли: их отправителям уходит письмо о сбое. */
   resumeLetters: string[];
+  /** Отправители писем подъёма по id: письмо о сбое адресуется им без чтения журналов (на карте-журнале `map.messages` собирал бы их все). */
+  resumeSenders: Map<string, string>;
   /**
    * Процесс вышел, пока `launch` подъёма ещё не вернулся: проверка раннего выхода ждёт его исхода. Запуск
    * мог сам остановить процесс, чей старт не записался в карту, — тогда о сбое скажет его ошибка, своей причиной.
@@ -241,6 +243,7 @@ export function createWakeService(
         resumedAt: null,
         journalBase: 0,
         resumeLetters: [],
+        resumeSenders: new Map(),
         earlyExit: undefined,
         pointerAfter: null,
         resumeUnavailable: false,
@@ -389,9 +392,12 @@ export function createWakeService(
     const ids = new Set(letterIds);
     try {
       await updateMap(ref.projectPath, ref.workId, (map) => {
-        const senders = new Set(
-          map.messages.filter((message) => ids.has(message.id)).map((message) => message.from),
-        );
+        // Отправителей держит состояние подъёма: чтение `map.messages` на карте-журнале собрало бы все журналы.
+        const senders = new Set<string>();
+        for (const id of ids) {
+          const from = state.resumeSenders.get(id);
+          if (from !== undefined) senders.add(from);
+        }
         // Человек узнаёт из уведомления, системе писать незачем, себе — тоже.
         senders.delete(HUMAN);
         senders.delete(SYSTEM);
@@ -417,7 +423,7 @@ export function createWakeService(
     ref: SessionRef,
     session: WorkSession,
     state: AttemptState,
-    action: { text: string; letterIds: string[] } & DeliveryTrace,
+    action: { text: string; letterIds: string[]; senders: ReadonlyMap<string, string> } & DeliveryTrace,
   ): Promise<void> {
     state.resuming = true;
     try {
@@ -434,6 +440,7 @@ export function createWakeService(
 
       state.journalBase = await journalLength(ref);
       state.resumeLetters = [...action.letterIds];
+      state.resumeSenders = new Map(action.senders);
       state.resumedAt = Date.now();
       if (withPrompt) for (const id of action.letterIds) state.pointed.add(id);
       else state.pointerAfter = state.resumedAt;
@@ -620,7 +627,8 @@ export function createWakeService(
         action = deliveryAction({ ...input, resumeAllowed: false });
       }
       if (action.kind === 'resume') {
-        void resumeSession(ref, session, state, { ...action, ...traceOf(input.unread, action.letterIds) });
+        const senders = new Map(input.unread.filter((message) => action.letterIds.includes(message.id)).map((message) => [message.id, message.from] as const));
+        void resumeSession(ref, session, state, { ...action, senders, ...traceOf(input.unread, action.letterIds) });
       } else if (action.kind === 'none' && action.reason === 'resume-limit') limitNotice(ref);
       publishWaiting(
         ref,

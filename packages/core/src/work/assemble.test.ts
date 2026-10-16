@@ -95,7 +95,12 @@ async function writeV3(map: WorkMap): Promise<void> {
   for (const [key, list] of journals) {
     const file = journalFile(paths, key === 'direct' ? null : key);
     await mkdir(path.dirname(file), { recursive: true });
-    const rows = list.map(({ readBy: _readBy, textBytes: _bytes, ...rest }, seq): string => journalLine({ ...rest, seq: seq + 1 } as JournalLetter));
+    const rows = list.map((message, seq): string => {
+      const rest = { ...message };
+      delete (rest as { readBy?: unknown }).readBy;
+      delete (rest as { textBytes?: unknown }).textBytes;
+      return journalLine({ ...rest, seq: seq + 1 } as JournalLetter);
+    });
     await writeFile(file, rows.join(''));
     for (const message of list) {
       for (const session of Object.keys(message.readBy)) cursors.set(session, { ...(cursors.get(session) ?? {}), [key]: message.id });
@@ -179,12 +184,6 @@ describe('assembleMap', () => {
 });
 
 describe('updateMap на карте-журнале', () => {
-  const snapshot = async (id: string): Promise<Record<string, string>> => {
-    const paths = workPaths(project, id);
-    const files = [paths.decisions, journalFile(paths, null), journalFile(paths, 'r-01'), journalFile(paths, 'r-02'), journalFile(paths, 'r-03'), ...(await readdir(paths.cursors)).map((name) => path.join(paths.cursors, name))];
-    return Object.fromEntries(await Promise.all(files.map(async (file) => [file, await readFile(file, 'utf8')] as const)));
-  };
-
   it('мутатор, не трогающий письма, пишет один индекс: журналы, курсоры и decisions.json не тронуты', async () => {
     const { id } = await seedWork('v3');
     const paths = workPaths(project, id);

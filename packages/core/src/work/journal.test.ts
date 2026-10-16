@@ -321,6 +321,26 @@ describe('readMessages', () => {
   });
 });
 
+describe('курсор на письмо, которого больше нет (fromStart)', () => {
+  it('по номеру в id отдаёт только письма с большим номером, журнал с начала не воспроизводится', async () => {
+    // Письма 3 в журнале нет (убрано), курсор на него стоял.
+    await seed('r-01', [line(1, 'r-01', 'm-r01-1'), line(2, 'r-01', 'm-r01-2'), line(4, 'r-01', 'm-r01-4'), line(5, 'r-01', 'm-r01-5')]);
+    const warn = vi.fn();
+    const page = await readPage(project, WORK, 'r-01', { after: 'm-r01-3', fromStart: true, warn });
+    expect(page.letters.map((letter) => letter.id)).toEqual(['m-r01-4', 'm-r01-5']);
+    expect(page.clampedTo).toBeUndefined();
+  });
+
+  it('без номера в id курсор прижимается к концу журнала с предупреждением, ничего не отдаётся', async () => {
+    await seed('r-01', [line(1, 'r-01', 'm-01'), line(2, 'r-01', 'm-02'), line(3, 'r-01', 'm-r01-3')]);
+    const warn = vi.fn();
+    const page = await readPage(project, WORK, 'r-01', { after: 'm-77', fromStart: true, warn });
+    expect(page.letters).toEqual([]);
+    expect(page.clampedTo).toBe('m-r01-3');
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('курсоры', () => {
   it('сессия без файла прочитала «ничего»', async () => {
     expect(await readCursors(project, WORK, 's-03')).toEqual({});
@@ -365,7 +385,7 @@ describe('unreadFromJournals', () => {
   } as Room);
   const index = (rooms: Room[]) => ({ schemaVersion: 2 as const, work: {} as never, sessions: [], rooms });
   const letter = (seq: number, roomId: string | null, extra: Partial<Message> = {}) => {
-    const { readBy: _readBy, ...rest } = {
+    const rest = {
       seq,
       id: roomId === null ? `m-d-${seq}` : `m-r01-${seq}`,
       roomId,
@@ -376,6 +396,7 @@ describe('unreadFromJournals', () => {
       at: `2026-10-16T10:00:${String(seq).padStart(2, '0')}.000Z`,
       ...extra,
     } as Message & { seq: number };
+    delete (rest as { readBy?: unknown }).readBy;
     return rest;
   };
 
@@ -490,7 +511,11 @@ describe('unreadFromJournals', () => {
     const cursors = { 'r-01': 'm-r01-1' };
     // v2: одна лента в порядке записи (по времени), отметки читателя у письма 1 (под курсором)
     const all = [...history['r-01'], ...history['r-02'], ...history.direct].sort((a, b) => (a.at < b.at ? -1 : 1));
-    const v2 = { ...state, messages: all.map(({ seq: _s, ...rest }) => ({ ...rest, readBy: rest.id === 'm-r01-1' ? { 's-02': at(1) } : {} })) } as unknown as WorkMap;
+    const v2 = { ...state, messages: all.map((row) => {
+      const rest = { ...row };
+      delete (rest as { seq?: number }).seq;
+      return { ...rest, readBy: rest.id === 'm-r01-1' ? { 's-02': at(1) } : {} };
+    }) } as unknown as WorkMap;
 
     const expected = unreadFor(v2, 's-02').map((message) => message.id);
     expect(expected).toEqual(['m-r01-2', 'm-r01-4', 'm-r01-6', 'm-r01-7', 'm-d-2']);

@@ -18,7 +18,7 @@ import {
 } from '../rooms/rooms-service.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 
-import { HUMAN, SYSTEM, DEFAULT_CONFIG, loadConfig, updateMap, workPaths, setRoomMode,
+import { HUMAN, DEFAULT_CONFIG, loadConfig, updateMap, workPaths, setRoomMode,
   cancelRoomPlan, updatePlanItem, submitPlanItem, verifyPlanItem, capturePlanNotice,
   reservePlanEffects, reconcileRoomPlans, readMap, summarizePlanEffects, PlanConflictError, RoomRuleError } from '@parley/core';
 import { existsSync } from 'node:fs';
@@ -108,9 +108,7 @@ export function createPlanHandlers(effects: PlanEffectsService): { [M in PlanMet
           switch (name) {
             case 'rooms.setMode': {
               const input = params as PlanMethodParams<'rooms.setMode'>;
-              const before = map.messages.length;
-              setRoomMode(map, input.roomId, HUMAN, input.mode, input.reason, input.confirmCancel === undefined ? {} : { confirmCancel: input.confirmCancel });
-              const source = map.messages.slice(before).find(row => row.from === SYSTEM && row.roomId === input.roomId && row.kind === 'note');
+              const source = setRoomMode(map, input.roomId, HUMAN, input.mode, input.reason, input.confirmCancel === undefined ? {} : { confirmCancel: input.confirmCancel });
               if (!source) throw new NoChange();
               messageId = source.id;
               capturePlanNotice(map, input.roomId, 'mode', source.id);

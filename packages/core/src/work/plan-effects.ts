@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { BacklogDocument, BacklogWriteResult } from "./backlog.js";
 import type { SharedWriteOptions, UpdateMapOptions } from "./store.js";
-import { addMessage } from "./map.js";
+import { addMessage, draftMap, letterSinkOf } from "./map.js";
 import { isMember, isRoomClosed, liveLead, RoomRuleError } from "./rooms.js";
 import { planItemSatisfied, reconcileRoomPlans } from "./plans.js";
 import { PARLEY, HUMAN, SYSTEM } from "./types.js";
@@ -34,6 +34,9 @@ const bounded = (value: unknown, max: number): value is string =>
   Buffer.from(value, "utf8").toString("utf8") === value;
 const id = (value: unknown, prefix: string): value is string =>
   bounded(value, 128) && new RegExp(`^${prefix}-\\d+$`).test(value);
+/** Id письма: `m-NN` (карта v2) или письмо журнала `m-r01-5`, `m-d-5` (карта v3). */
+const letterId = (value: unknown): value is string =>
+  bounded(value, 128) && /^m-(?:\d+|r\d+-\d+|d-\d+)$/.test(value);
 const date = (value: unknown): value is string =>
   bounded(value, 128) && Number.isFinite(Date.parse(value));
 const safe = (value: unknown): value is number =>
@@ -155,6 +158,14 @@ export function planEffectOwnsLetter(
     message.text === effect.text
   );
 }
+/**
+ * Письмо комнаты по id. На карте-журнале (мутатор `updateMap`) `map.messages` собирает ВСЕ журналы, поэтому письмо ищет
+ * приёмник: очередь и журнал одной комнаты с хвоста. На карте v2 и на собранной карте — прежний поиск по `messages`.
+ */
+function letterOf(map: WorkMap, roomId: string, id: string): Message | undefined {
+  const sink = letterSinkOf(map);
+  return sink === undefined ? map.messages.find((row) => row.id === id && row.roomId === roomId) : sink.find(roomId, id);
+}
 export function currentPlanEffect(map: WorkMap, value: PlanEffect): boolean {
   const room = map.rooms.find((row) => row.id === value.roomId);
   if (!room || !actionable(map, room, value.target)) return false;
@@ -165,9 +176,7 @@ export function currentPlanEffect(map: WorkMap, value: PlanEffect): boolean {
       row.rev === value.rev,
   );
   if (value.kind === "mode" || value.kind === "completion-returned") {
-    const source = map.messages.find(
-      (row) => row.id === value.occurrence && row.roomId === room.id,
-    );
+    const source = letterOf(map, room.id, value.occurrence);
     if (!source || liveLead(map, room) !== value.target) return false;
     if (value.kind === "mode")
       return (
@@ -214,9 +223,7 @@ export function capturePlanNotice(
   planId?: string,
 ): void {
   const room = map.rooms.find((row) => row.id === roomId);
-  const source = map.messages.find(
-    (row) => row.id === sourceId && row.roomId === roomId,
-  );
+  const source = letterOf(map, roomId, sourceId);
   if (!room || !source)
     throw new RoomRuleError("plan notice source is unavailable");
   const plan =
@@ -256,22 +263,21 @@ export function reservePlanEffects(
   messageRate: number,
   at = new Date().toISOString(),
 ): PlanReservation {
-  const draft: WorkMap = {
-    ...map,
+  const draft = draftMap(map, {
     work: { ...map.work },
     rooms: structuredClone(map.rooms),
-    messages: [...map.messages],
     plans: structuredClone(map.plans ?? []),
     planExports: structuredClone(map.planExports ?? []),
     planEffects: structuredClone(map.planEffects ?? []),
     planBacklogIntents: structuredClone(map.planBacklogIntents ?? []),
-  };
+  });
   const result = reserve(draft, messageRate, at);
   if (result.changed)
     Object.assign(map, {
       work: draft.work,
       rooms: draft.rooms,
-      messages: draft.messages,
+      // Карта-журнал: письма черновика ушли в приёмник, `messages` назад не присваивается (это сборка всех журналов).
+      ...(letterSinkOf(map) === undefined ? { messages: draft.messages } : {}),
       plans: draft.plans,
       planExports: draft.planExports,
       planEffects: draft.planEffects,
@@ -325,9 +331,15 @@ function reserve(
   )
     throw new RoomRuleError("plan effect storage limit reached");
   const now = Date.parse(at);
-  const recent = map.messages.filter(
-    (row) => row.from === PARLEY && now - Date.parse(row.at) < WINDOW_MS,
-  );
+  const isRecent = (row: Message): boolean => row.from === PARLEY && now - Date.parse(row.at) < WINDOW_MS;
+  const sink = letterSinkOf(map);
+  // Карта-журнал: письма Parley за час берутся из хвостов журналов (и только если есть что отправлять), а не из сборки всех журналов.
+  const recent =
+    sink === undefined
+      ? map.messages.filter(isRecent)
+      : map.planEffects.some((row) => row.status === "queued")
+        ? sink.recent(map.rooms.map((room) => room.id), now - WINDOW_MS).filter(isRecent)
+        : [];
   let available = Math.max(0, messageRate - recent.length);
   for (const value of map.planEffects) {
     if (value.status === "cancelled") continue;
@@ -429,7 +441,7 @@ export function validatePlanEffects(map: WorkMap): void {
       !bounded(value.text, 32768) ||
       !date(value.createdAt) ||
       !["queued", "sent", "cancelled"].includes(value.status) ||
-      (value.messageId !== null && !id(value.messageId, "m")) ||
+      (value.messageId !== null && !letterId(value.messageId)) ||
       (value.status === "queued" && value.messageId !== null) ||
       (value.status === "sent" && value.messageId === null) ||
       value.key !== effectKey(value)

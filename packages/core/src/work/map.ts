@@ -167,10 +167,14 @@ export function removeSession(map: WorkMap, sessionId: string): WorkSession {
       session.contextFrom = session.contextFrom.filter((id) => id !== sessionId);
     }
   }
-  for (const message of map.messages) {
-    // `to` — массив: сравнение строки с ним было бы всегда ложным и молча
-    // перестало бы помечать письма удалённой сессии.
-    if (message.from === sessionId || message.to.includes(sessionId)) message.deleted = true;
+  // Карта-журнал: письма только добавляются, пометку `deleted` на месте не поставить. Её выводит сборщик из
+  // `work.deletedSessions` (ниже), поэтому здесь письма не трогаем.
+  if (letterSinkOf(map) === undefined) {
+    for (const message of map.messages) {
+      // `to` — массив: сравнение строки с ним было бы всегда ложным и молча
+      // перестало бы помечать письма удалённой сессии.
+      if (message.from === sessionId || message.to.includes(sessionId)) message.deleted = true;
+    }
   }
 
   const deleted = map.work.deletedSessions ?? [];
@@ -197,8 +201,68 @@ export interface NewMessage {
   replyTo?: string;
 }
 
+/**
+ * Приёмник писем карты-журнала (v3). Мутатор `updateMap` на v3 получает карту с приёмником под этим ключом: письмо,
+ * добавленное `addMessage`, не ложится в `map.messages` (его там нет), а встаёт в очередь приёмника и уходит в журнал
+ * комнаты при сохранении карты. Номер письма приёмник выдаёт сразу, под замком журнала, поэтому `message.id` внутри
+ * мутатора настоящий. Реализация — `letter-sink.ts`; здесь только контракт, чтобы `map.ts` не тянул диск.
+ * На карте v2 ключа нет, и всё работает как раньше.
+ */
+export const LETTER_SINK = Symbol.for('parley.letterSink');
+
+export interface LetterSink {
+  /** Письмо в очередь журнала; возвращает письмо с настоящим id. Отметки `readBy`, поставленные после, станут курсорами. */
+  add(init: NewMessage, at: string): Message;
+  /** Адресаты комнаты прочли всё, что в ней лежит сейчас (в том числе письма очереди): `reopenRoom`. */
+  readThrough(roomId: string, sessionIds: readonly string[]): void;
+  /** Журнал комнаты уходит вместе с комнатой, как и курсоры на неё: `deleteRoom`. */
+  dropRoom(roomId: string): void;
+  /** Новая запись `decisions.json` (бывший `decisionExports.push`). */
+  appendDecision(intent: unknown): void;
+  /** Правка найденной записи `decisions.json` (`status: 'written'` после публикации). */
+  patchDecision(match: (row: never) => boolean, patch: object): void;
+  /**
+   * Письмо комнаты по id без сборки карты: сначала очередь приёмника, потом журнал комнаты обратным проходом от
+   * хвоста (стоимость растёт с возрастом письма). Нет письма — `undefined`. `readBy` у найденного пуст: отметки лежат в курсорах.
+   */
+  find(roomId: string, id: string): Message | undefined;
+  /** Письма новее `sinceMs` из хвостов журналов комнат `roomIds` и прямых, плюс очередь приёмника (бюджет за час). Читает хвосты, не журналы целиком. */
+  recent(roomIds: readonly string[], sinceMs: number): Message[];
+  /** Все письма ОДНОЙ комнаты (журнал целиком плюс очередь): для действия, которому нужна вся история именно этой комнаты. */
+  roomLetters(roomId: string): Message[];
+}
+
+export const letterSinkOf = (map: object): LetterSink | undefined =>
+  (map as { [LETTER_SINK]?: LetterSink })[LETTER_SINK];
+
+/**
+ * Черновик карты для правки «всё или ничего» (`edit` планов, `reservePlanEffects`): поля `fields` заменяют поля карты.
+ * На карте v2 письма копируются (`messages: [...map.messages]`): черновик, который отбросили, письма не оставляет.
+ * На карте-журнале (v3) письма копировать нельзя: `map.messages` собирает ВСЕ журналы синхронно под `map.lock`. Там черновик
+ * берёт поля карты как есть (в том числе приёмник писем: письма черновика уходят в журнал) и читает `messages` и
+ * `decisionExports` у карты лениво, только если правка к ним обратится. Вызывающий на v3 `messages` назад не присваивает.
+ */
+export function draftMap(map: WorkMap, fields: Partial<WorkMap>): WorkMap {
+  if (letterSinkOf(map) === undefined) return { ...map, ...fields, messages: [...map.messages] };
+  const draft = {} as WorkMap;
+  const own = Object.getOwnPropertyDescriptors(map);
+  for (const key of Reflect.ownKeys(own)) {
+    if (key === 'messages' || key === 'decisionExports') {
+      Object.defineProperty(draft, key, {
+        enumerable: true,
+        configurable: true,
+        get: () => (map as unknown as Record<string, unknown>)[key],
+        set: (value: unknown) => void ((map as unknown as Record<string, unknown>)[key] = value),
+      });
+    } else Object.defineProperty(draft, key, own[key as keyof typeof own] as PropertyDescriptor);
+  }
+  return Object.assign(draft, fields);
+}
+
 /** Кладёт сообщение в карту непрочитанным: доставка — pull через `check_inbox`. */
 export function addMessage(map: WorkMap, init: NewMessage, at = new Date().toISOString()): Message {
+  const sink = letterSinkOf(map);
+  if (sink !== undefined) return sink.add(init, at);
   // Поля перечислены руками, а не `...init`: при разложении `kind: undefined`
   // попал бы в карту ключом без значения, и письмо на диске осталось бы без вида.
   // По той же причине `replyTo` дописывается только заданный.

@@ -1,5 +1,5 @@
 import type { RecipeSnapshot } from '../recipes/types.js';
-import { addMessage, maxNumber } from './map.js';
+import { addMessage, letterSinkOf, maxNumber } from './map.js';
 import { recipientsOf } from './letters.js';
 import { cancelActiveRoomPlan } from './plans.js';
 import { sessionMention, sessionTag } from './thread.js';
@@ -391,12 +391,19 @@ export function deleteRoom(map: WorkMap, roomId: string, at = new Date().toISOSt
   const plans = new Set((map.plans ?? []).filter((plan) => plan.roomId === roomId).map((plan) => plan.id));
   const { work } = map;
   work.roomSeq = Math.max(work.roomSeq ?? 0, maxNumber([room.id], 'r-'));
-  work.messageSeq = Math.max(work.messageSeq ?? 0, maxNumber(map.messages.map((message) => message.id), 'm-'));
+  // `messageSeq` — счётчик писем карты v2 (`m-NN`). На карте-журнале (v3) номер письма выдаёт сам журнал комнаты
+  // (`m-r01-5`, `m-d-5`), поле в индексе остаётся как было при миграции и больше не пересчитывается: два вида id не
+  // пересекаются по форме, а письма удалённой комнаты уходят вместе с её журналом, так что повторить нечему.
+  const sink = letterSinkOf(map);
+  if (sink === undefined) work.messageSeq = Math.max(work.messageSeq ?? 0, maxNumber(map.messages.map((message) => message.id), 'm-'));
   if (room.proposal !== null) work.proposalSeq = Math.max(work.proposalSeq ?? 0, maxNumber([room.proposal.id], 'p-'));
   if (plans.size > 0) work.planSeq = Math.max(work.planSeq ?? 0, maxNumber([...plans], 'pl-'));
 
   map.rooms = map.rooms.filter((candidate) => candidate !== room);
-  map.messages = map.messages.filter((message) => message.roomId !== roomId);
+  // Журнал комнаты живёт, пока комната есть в индексе (`assemble.ts` предупреждает о бесхозном): на v3 он удаляется
+  // вместе с замком и курсорами на комнату при сохранении карты.
+  if (sink === undefined) map.messages = map.messages.filter((message) => message.roomId !== roomId);
+  else sink.dropRoom(roomId);
   if (map.plans !== undefined) map.plans = map.plans.filter((plan) => plan.roomId !== roomId);
   if (map.planEffects !== undefined) map.planEffects = map.planEffects.filter((effect) => effect.roomId !== roomId);
   if (map.planBacklogIntents !== undefined) {
@@ -493,9 +500,18 @@ export function reopenRoom(map: WorkMap, roomId: string, at = new Date().toISOSt
   const room = findRoom(map, roomId);
   if (!isRoomArchived(room)) return;
   room.archivedAt = null;
-  for (const message of map.messages) {
-    if (message.roomId !== roomId) continue;
-    for (const id of recipientsOf(message, map)) message.readBy[id] ??= at;
+  const sink = letterSinkOf(map);
+  if (sink === undefined) {
+    for (const message of map.messages) {
+      if (message.roomId !== roomId) continue;
+      for (const id of recipientsOf(message, map)) message.readBy[id] ??= at;
+    }
+  } else {
+    // Карта-журнал: «прочитано участниками» — курсор на последнем письме комнаты (до строки о возврате ниже).
+    const readers = new Set<string>();
+    // Нужна история ИМЕННО этой комнаты (явные `to` старых писем): её журнал читается целиком, журналы других комнат — нет.
+    for (const message of sink.roomLetters(roomId)) for (const id of recipientsOf(message, map)) readers.add(id);
+    sink.readThrough(roomId, [...readers]);
   }
   addSystemMessage(map, roomId, 'Room reopened by the human.', at);
 }

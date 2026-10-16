@@ -4,15 +4,16 @@ import path from 'node:path';
 import {
   DIRECT_CURSOR_KEY,
   mergeByTime,
-  parseCursors,
+  parseCursorFile,
   parseLetters,
-  readCursors,
+  readCursorFile,
   readMessages,
   unreadableCursorsMessage,
   type JournalLetter,
-  type SessionCursors,
+  type CursorFile,
 } from './journal.js';
 import { recipientsOf } from './letters.js';
+import { attachSink, JournalLetterSink } from './letter-sink.js';
 import { readIndex, workPaths, type WorkPaths } from './store.js';
 import { validateDecisionJournalStorage, type DecisionJournalIntent } from './decision-journal.js';
 import { HUMAN, type Message, type WorkIndexMap, type WorkMap } from './types.js';
@@ -42,7 +43,7 @@ interface Parts {
   /** Письма по ключу журнала, в порядке журнала. */
   journals: Map<string, JournalLetter[]>;
   /** Курсоры по id сессии (в том числе `human`). */
-  cursors: Map<string, SessionCursors>;
+  cursors: Map<string, CursorFile>;
   decisions: DecisionJournalIntent[] | undefined;
 }
 
@@ -53,33 +54,41 @@ function compose(index: WorkIndexMap, keys: (string | null)[], { journals, curso
 
   // Форма карты для `recipientsOf`: ему нужны только комнаты индекса.
   const shape = { ...index, schemaVersion: 2, messages: [] } as unknown as WorkMap;
+  const deletedSessions = new Set(index.work.deletedSessions ?? []);
   const ordered = mergeByTime(keys.map((roomId) => journals.get(keyOf(roomId)) ?? []));
-  const messages: Message[] = ordered.map(({ seq: _seq, ...letter }) => {
+  const messages: Message[] = ordered.map((row) => {
+    const letter = { ...row };
+    delete (letter as { seq?: number }).seq;
     const key = keyOf(letter.roomId);
     const own = positions.get(key)?.get(letter.id) ?? -1;
     const message = { ...letter, readBy: {} } as Message;
+    // Письма удалённой сессии помечает `removeSession` на v2; журнал дописывается только вперёд, поэтому метка
+    // выводится из `work.deletedSessions` (номера сессий не переиспользуются).
+    if (deletedSessions.has(letter.from) || letter.to.some((id) => deletedSessions.has(id))) message.deleted = true;
     // Правило `readBy`, как в v2: отметка стоит у адресата письма (`recipientsOf` — не у отправителя и не у сессии,
     // которой письмо не предназначалось) и у человека для писем, которые он видит (`unreadForHuman`: не его
     // собственные, прямые — только ему). Остальные сессии отметки не получают, даже если курсор ушёл дальше.
     //
-    // КУРСОР — ВОДОРАЗДЕЛ: он помнит одно письмо на журнал, поэтому «прочитано» значит «всё до курсора включительно».
-    // Разреженная отметка v2 (окно гасит одно письмо через `markHumanRead`, `proposals.ts`/`rooms.ts` отмечают
-    // отдельные письма человеку) после перехода становится «прочитано всё по это письмо»: письма, оставшиеся
-    // непрочитанными позади отмеченного, для окна тоже читаны, и бейджи окна (`attention/derive.ts`) их не посчитают.
-    // Это сознательная цена спеки («кто и когда прочитал ... остаётся через курсоры»), а не потеря данных.
+    // КУРСОР — ВОДОРАЗДЕЛ плюс разреженные отметки (форма файла — у `SessionCursors`): «прочитано» значит «всё до
+    // водораздела включительно» или «письмо отмечено отдельно». Явное «прочёл» человека из окна (`markHumanRead`) двигает
+    // водораздел (цена спеки), а отметка мутатора на только что добавленной системной строке — только отметка:
+    // письма человеку, лежащие позади неё, остаются непрочитанными.
     const readers = new Set([...recipientsOf(message, shape), ...(letter.from !== HUMAN && (letter.roomId !== null || letter.to.includes(HUMAN)) ? [HUMAN] : [])]);
     for (const sessionId of readers) {
-      const cursor = cursors.get(sessionId)?.[key];
+      const file = cursors.get(sessionId);
+      const cursor = file?.cursors[key];
       const read = cursor === undefined ? -1 : (positions.get(key)?.get(cursor) ?? -1);
       // Время чтения курсор не хранит: отметкой служит время самого письма. Читатели проверяют наличие отметки.
-      if (read >= own && own !== -1) message.readBy[sessionId] = letter.at;
+      // Прочитано по водоразделу или по разреженной отметке (`marks`): системная строка не гасит письма позади себя.
+      if (own !== -1 && (read >= own || file?.marks[key]?.includes(letter.id) === true)) message.readBy[sessionId] = letter.at;
     }
     return message;
   });
 
   // Работа «двигается» с каждым письмом: письмо индекс не пишет, поэтому `updatedAt` — позднее из индекса и писем.
   const newest = messages.reduce((latest, message) => (message.at > latest ? message.at : latest), index.work.updatedAt);
-  const { schemaVersion: _version, ...rest } = index;
+  const rest = { ...index };
+  delete (rest as { schemaVersion?: unknown }).schemaVersion;
   const map: WorkMap = {
     ...rest,
     schemaVersion: 2,
@@ -127,7 +136,7 @@ export async function assembleFromIndex(projectPath: string, workId: string, ind
       if (await access(file).then(() => true, () => false)) console.warn(strayWarning(name, file));
     }),
   );
-  const cursors = new Map<string, SessionCursors>();
+  const cursors = new Map<string, CursorFile>();
   const names = await readdir(paths.cursors).catch((error: unknown) => {
     if (missing(error)) return [] as string[];
     throw error;
@@ -135,7 +144,7 @@ export async function assembleFromIndex(projectPath: string, workId: string, ind
   await Promise.all(
     names.map(async (name) => {
       const sessionId = sessionOf(name);
-      if (sessionId !== null) cursors.set(sessionId, await readCursors(projectPath, workId, sessionId));
+      if (sessionId !== null) cursors.set(sessionId, await readCursorFile(projectPath, workId, sessionId));
     }),
   );
   const decisions = await readFile(paths.decisions, 'utf8').then(
@@ -170,8 +179,8 @@ function readLettersSync(file: string): JournalLetter[] {
   return parseLetters(text, file);
 }
 
-function readCursorsSync(paths: WorkPaths): Map<string, SessionCursors> {
-  const cursors = new Map<string, SessionCursors>();
+function readCursorsSync(paths: WorkPaths): Map<string, CursorFile> {
+  const cursors = new Map<string, CursorFile>();
   let names: string[];
   try {
     names = readdirSync(paths.cursors);
@@ -191,7 +200,7 @@ function readCursorsSync(paths: WorkPaths): Map<string, SessionCursors> {
       console.warn(unreadableCursorsMessage(file));
       continue;
     }
-    const value = parseCursors(text);
+    const value = parseCursorFile(text);
     if (value === null) console.warn(unreadableCursorsMessage(file));
     else cursors.set(sessionId, value);
   }
@@ -254,7 +263,8 @@ function lazyParts(projectPath: string, workId: string, index: WorkIndexMap): { 
  * `work.updatedAt` здесь — из индекса (сдвинут записью); письмо, более позднее, чем запись, его не двигает (у `readMap` двигает).
  */
 export function lazyJournalMap(projectPath: string, workId: string, index: WorkIndexMap): WorkMap {
-  const { schemaVersion: _version, ...rest } = index;
+  const rest = { ...index };
+  delete (rest as { schemaVersion?: unknown }).schemaVersion;
   const map = { ...rest, schemaVersion: 2 } as unknown as WorkMap;
   const { fields, read } = lazyParts(projectPath, workId, index);
   for (const field of fields) {
@@ -318,14 +328,20 @@ function readOnly<T extends object>(value: T, what: 'messages' | 'decisionExport
  * переносит их в индекс и проверяет охрану: `delete map.messages`, `defineProperty` поверх аксессора или значение, присвоенное
  * несуществующему `decisionExports`, — `MapJournalReadonlyError` до записи на диск.
  */
-export function journalMapView(projectPath: string, workId: string, index: WorkIndexMap): { view: WorkMap; commit: () => void } {
+export function journalMapView(projectPath: string, workId: string, index: WorkIndexMap): { view: WorkMap; commit: () => void; sink: JournalLetterSink } {
   const cache = new WeakMap<object, object>();
   const { fields, read } = lazyParts(projectPath, workId, index);
   const view = { ...index } as unknown as WorkMap;
+  // Письма и решения, которые мутатор добавляет (`addMessage`, `captureDecisionJournal`), уходят в приёмник, а не в
+  // `messages`: журнал дописывает `updateStored` при сохранении, под замками журналов (`letter-sink.ts`).
+  const sink = new JournalLetterSink(projectPath, workId);
+  attachSink(view, sink);
   const getters = new Map<LetterField, () => unknown>();
   for (const field of fields) {
     const get = (): unknown => {
       const value = read(field);
+      // Письма очереди видны рядом с письмами журналов: `captureDecisionJournal` ищет только что добавленное решение.
+      if (field === 'messages') sink.mergePending(value as Message[]);
       return value === undefined ? undefined : readOnly(value, field, cache);
     };
     getters.set(field, get);
@@ -336,7 +352,15 @@ export function journalMapView(projectPath: string, workId: string, index: WorkI
       set(value: unknown) {
         // Сравнение с тем, что видит мутатор (охраняемые копии одного кэша), а не с сырым массивом.
         const current = get() as readonly unknown[] | undefined;
-        const same = Array.isArray(value) && current !== undefined && value.length === current.length && value.every((item, at) => item === current[at]);
+        // Черновик плана (`edit` в plans.ts) снимает копию `messages`, а письма, которые мутатор добавил после
+        // снимка, лежат в очереди приёмника: копия — начало текущего списка и не короче того, что уже в журналах.
+        const onDisk = current === undefined ? 0 : current.length - (field === 'messages' ? sink.pending.length : 0);
+        const same =
+          Array.isArray(value) &&
+          current !== undefined &&
+          value.length >= onDisk &&
+          value.length <= current.length &&
+          value.every((item, at) => item === current[at]);
         if (!same) throw new MapJournalReadonlyError(field);
       },
     });
@@ -351,5 +375,5 @@ export function journalMapView(projectPath: string, workId: string, index: WorkI
     for (const key of Object.keys(source)) if (!LETTER_FIELDS.includes(key as LetterField)) target[key] = source[key];
     for (const key of Object.keys(target)) if (!(key in source)) delete target[key];
   };
-  return { view, commit };
+  return { view, commit, sink };
 }

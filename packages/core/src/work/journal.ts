@@ -1,5 +1,6 @@
-import { mkdir, open, readFile, type FileHandle } from 'node:fs/promises';
+import { mkdir, open, readFile, rmdir, stat, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
+import { JOURNAL_SCHEMA_VERSION, parseIndex, peekSchemaVersion } from './map.js';
 import { DEFAULT_LOCK_TIMEOUT_MS, withLock, workPaths, writeAtomic, type WorkPaths } from './store.js';
 import type { Message, MessageKind } from './types.js';
 
@@ -29,20 +30,135 @@ export interface NewJournalMessage {
   deleted?: boolean;
 }
 
-/** Прочитанное одной сессией: id комнаты (или `direct`) → id последнего прочитанного письма. */
+/**
+ * Прочитанное одной сессией: id комнаты (или `direct`) → id последнего прочитанного письма (водораздел: прочитано всё
+ * по это письмо включительно).
+ *
+ * ФОРМА ФАЙЛА КУРСОРОВ `cursors/<сессия>.json` (одна, определена здесь):
+ * `{ "<ключ журнала>": "<id письма>", …, "marks": { "<ключ журнала>": ["<id письма>", …] } }`.
+ * Ключ журнала — id комнаты или `direct` (`marks` с ними не совпадает). `marks` — разреженные отметки: письма ВПЕРЕДИ
+ * водораздела, прочитанные по отдельности (системная строка, которую человек не видел, но «новым» она быть не должна).
+ * Прочитано = номер письма не больше номера водораздела ИЛИ id среди отметок. Правила `normalizeMarks`: отметки позади
+ * водораздела выбрасываются; отметка вплотную за водоразделом сворачивается в него (водораздел идёт вперёд, пока
+ * следующий номер отмечен); отметок на журнал не больше `MAX_MARKS`, лишние самые старые выбрасываются (письмо снова
+ * выглядит непрочитанным — безопасная сторона). Пустой `marks` в файл не пишется.
+ */
 export type SessionCursors = Record<string, string>;
+
+/** Разреженные отметки прочтения: ключ журнала → id писем впереди водораздела. */
+export type SessionMarks = Record<string, string[]>;
+
+/** Файл курсоров целиком: водоразделы и отметки. */
+export interface CursorFile {
+  cursors: SessionCursors;
+  marks: SessionMarks;
+}
+
+/** Потолок отметок на один журнал: файл курсоров остаётся в сотнях байт при любой череде системных строк. */
+export const MAX_MARKS = 32;
+
+const MARKS_KEY = 'marks';
+
+const keyRoom = (key: string): string | null => (key === DIRECT_CURSOR_KEY ? null : key);
+
+/** Номер строки письма `id` в журнале ключа; `null` — id прежнего вида без номера. */
+const seqInKey = (key: string, id: string): number | null => seqOfLetterId(id, keyRoom(key));
+
+/** Прочитано ли письмо `id` ключа `key` по водоразделу или отметке. */
+export function coversLetter({ cursors, marks }: CursorFile, key: string, id: string): boolean {
+  if (marks[key]?.includes(id) === true) return true;
+  const mark = cursors[key];
+  if (mark === undefined) return false;
+  if (mark === id) return true;
+  const watermark = seqInKey(key, mark);
+  const own = seqInKey(key, id);
+  return watermark !== null && own !== null && own <= watermark;
+}
+
+/**
+ * Приводит отметки ключа к виду файла: позади водораздела — прочь, вплотную за ним — в водораздел, сверх потолка —
+ * самые старые прочь. Водораздел прежнего вида без номера считается нулевым (письма впереди него — все).
+ */
+export function normalizeMarks({ cursors, marks }: CursorFile, key: string): void {
+  const ids = marks[key];
+  if (ids === undefined) return;
+  const mark = cursors[key];
+  let watermark = mark === undefined ? 0 : (seqInKey(key, mark) ?? 0);
+  const bySeq = new Map<number, string>();
+  for (const id of ids) {
+    const seq = seqInKey(key, id);
+    if (seq !== null && seq > watermark) bySeq.set(seq, id);
+  }
+  let collapsed: string | undefined;
+  while (bySeq.has(watermark + 1)) {
+    watermark += 1;
+    collapsed = bySeq.get(watermark);
+    bySeq.delete(watermark);
+  }
+  if (collapsed !== undefined) cursors[key] = collapsed;
+  const kept = [...bySeq.entries()].sort((a, b) => a[0] - b[0]).map(([, id]) => id).slice(-MAX_MARKS);
+  if (kept.length === 0) delete marks[key];
+  else marks[key] = kept;
+}
+
+/** Водораздел ключа вперёд на письмо `id`; назад не идёт. Возвращает, сдвинулся ли. */
+export function advanceWatermark(file: CursorFile, key: string, id: string): boolean {
+  const target = seqInKey(key, id);
+  if (target === null) return false;
+  const current = file.cursors[key];
+  const at = current === undefined ? 0 : (seqInKey(key, current) ?? 0);
+  if (target <= at) return false;
+  file.cursors[key] = id;
+  normalizeMarks(file, key);
+  return true;
+}
+
+/** Отмечает письмо `id` прочитанным по отдельности, не двигая водораздел дальше нужного. Возвращает, изменился ли файл. */
+export function addMark(file: CursorFile, key: string, id: string): boolean {
+  if (coversLetter(file, key, id)) return false;
+  (file.marks[key] ??= []).push(id);
+  normalizeMarks(file, key);
+  return true;
+}
+
+const serializeCursors = ({ cursors, marks }: CursorFile): string => {
+  const live: SessionMarks = {};
+  for (const key of Object.keys(marks)) {
+    normalizeMarks({ cursors, marks }, key);
+    if (marks[key] !== undefined) live[key] = marks[key];
+  }
+  return `${JSON.stringify(Object.keys(live).length === 0 ? cursors : { ...cursors, [MARKS_KEY]: live })}\n`;
+};
 
 export interface JournalReadOptions {
   /** Письма строго после этого id. Неизвестный id — как если бы `after` не был задан. */
   after?: string;
   /** Письма строго до этого id. Неизвестный id — пустой список. */
   before?: string;
+  /**
+   * Без `after` читать вперёд с первого письма журнала, а не с конца: «всё непрочитанное» у сессии без курсора
+   * (`check_inbox`). Неизвестный `after` (письма уже нет в журнале) не воспроизводит журнал: если по id виден номер
+   * строки (`m-r01-5`), отдаются письма с большим номером; иначе курсор прижимается к концу журнала (`clampedTo`)
+   * с предупреждением, и ничего не отдаётся повторно.
+   */
+  fromStart?: boolean;
   /** Сколько писем самое большее; по умолчанию 50. */
   limit?: number;
   /** Сколько байт строк самое большее; по умолчанию 64 КБ. Одно письмо отдаётся всегда, даже если оно больше. */
   maxBytes?: number;
   /** Куда сообщать о пропущенной строке; по умолчанию `console.warn`. */
   warn?: (message: string) => void;
+}
+
+/**
+ * Номер строки журнала по id вида `letterId` (`m-r01-5`, `m-d-5`); `null`, если id другого вида: прежние `m-NN` и id
+ * чужого журнала номера этой строки не несут.
+ */
+export function seqOfLetterId(id: string, roomId: string | null): number | null {
+  const prefix = roomId === null ? 'm-d-' : `m-${roomId.replaceAll('-', '')}-`;
+  if (!id.startsWith(prefix)) return null;
+  const rest = id.slice(prefix.length);
+  return /^\d+$/.test(rest) ? Number(rest) : null;
 }
 
 /** Ключ прямых писем в файле курсора. Id комнаты (`r-NN`) с ним не совпадает. */
@@ -68,10 +184,10 @@ export function journalFile(paths: WorkPaths, roomId: string | null): string {
   return roomId === null ? paths.direct : path.join(paths.rooms, safeId('room', roomId), 'messages.jsonl');
 }
 
-const cursorFile = (paths: WorkPaths, sessionId: string): string => path.join(paths.cursors, `${safeId('session', sessionId)}.json`);
+export const cursorFile = (paths: WorkPaths, sessionId: string): string => path.join(paths.cursors, `${safeId('session', sessionId)}.json`);
 
 /** `m-r01-5`, `m-d-5`: дефис из id комнаты убран, как в примерах спеки. */
-const letterId = (roomId: string | null, seq: number): string => (roomId === null ? `m-d-${seq}` : `m-${roomId.replaceAll('-', '')}-${seq}`);
+export const letterId = (roomId: string | null, seq: number): string => (roomId === null ? `m-d-${seq}` : `m-${roomId.replaceAll('-', '')}-${seq}`);
 
 /** Строка журнала для записи; миграция (задача 6) пишет прежние письма тем же форматом. */
 export function journalLine(letter: JournalLetter): string {
@@ -175,19 +291,76 @@ export function parseLetters(text: string, file: string, warn: (message: string)
   return letters;
 }
 
-/** Текст файла курсоров → курсоры; `null`, если файл не объект. Нечитаемый файл вызывающий считает «ничего не прочитано». */
-export function parseCursors(text: string): SessionCursors | null {
+/** Текст файла курсоров → водоразделы и отметки; `null`, если файл не объект. Нечитаемый файл вызывающий считает «ничего не прочитано». */
+export function parseCursorFile(text: string): CursorFile | null {
   try {
     const value = JSON.parse(text) as unknown;
     if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
-    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+    const entries = Object.entries(value);
+    const cursors = Object.fromEntries(entries.filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+    const marks: SessionMarks = {};
+    const raw = (value as Record<string, unknown>)[MARKS_KEY];
+    if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+      for (const [key, ids] of Object.entries(raw)) {
+        if (Array.isArray(ids)) {
+          const strings = ids.filter((id): id is string => typeof id === 'string');
+          if (strings.length > 0) marks[key] = strings;
+        }
+      }
+    }
+    return { cursors, marks };
   } catch {
     return null;
   }
 }
 
+/** Водоразделы из текста файла курсоров (без отметок); `null`, если файл не объект. */
+export const parseCursors = (text: string): SessionCursors | null => parseCursorFile(text)?.cursors ?? null;
+
 /** Текст предупреждения о нечитаемом файле курсоров: один на асинхронное и синхронное чтение. */
 export const unreadableCursorsMessage = (file: string): string => `cursor file ${file} is unreadable: treating the session as having read nothing`;
+
+/** Письмо в журнал комнаты, которой нет в индексе: не воскрешаем каталог удалённой комнаты. */
+export class RoomGoneError extends Error {
+  constructor(roomId: string) {
+    super(`room ${roomId} does not exist (it may have just been deleted): the letter was not written`);
+    this.name = 'RoomGoneError';
+  }
+}
+
+const exists = (file: string): Promise<boolean> => stat(file).then(() => true, () => false);
+
+/** Комнаты индекса по состоянию файла (`stat`: inode, размер, mtime; индекс пишется заменой файла): пока он не менялся, `appendMessage` его не читает. */
+const roomsOfIndex = new Map<string, { sig: string; rooms: ReadonlySet<string> | null }>();
+
+/**
+ * Знает ли индекс карты-журнала комнату. Нет карты, карта v2 или нечитаемый файл — «знает»: сверять не с чем, а
+ * отказывать из-за чужой беды нельзя. Индекс разбирается заново, только когда файл менялся.
+ */
+async function indexHasRoom(paths: WorkPaths, roomId: string): Promise<boolean> {
+  let info;
+  try {
+    info = await stat(paths.map);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  }
+  const sig = `${info.ino}:${info.size}:${info.mtimeMs}`;
+  let known = roomsOfIndex.get(paths.map);
+  if (known?.sig !== sig) {
+    let rooms: ReadonlySet<string> | null = null;
+    try {
+      const raw = await readFile(paths.map, 'utf8');
+      if (peekSchemaVersion(raw) === JOURNAL_SCHEMA_VERSION) rooms = new Set(parseIndex(raw, paths.map).rooms.map((room) => room.id));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+      rooms = null;
+    }
+    known = { sig, rooms };
+    roomsOfIndex.set(paths.map, known);
+  }
+  return known.rooms === null || known.rooms.has(roomId);
+}
 
 async function openIfExists(file: string, flags: string): Promise<FileHandle | null> {
   try {
@@ -208,9 +381,25 @@ export async function appendMessage(
   roomId: string | null,
   message: NewJournalMessage,
 ): Promise<JournalLetter> {
-  const file = journalFile(workPaths(projectPath, workId), roomId);
+  const paths = workPaths(projectPath, workId);
+  const file = journalFile(paths, roomId);
+  // Каталога комнаты нет — он мог быть удалён вместе с комнатой: создавать его заново можно, только если индекс комнату знает.
+  if (roomId !== null && !(await exists(path.dirname(file))) && !(await indexHasRoom(paths, roomId))) throw new RoomGoneError(roomId);
   await mkdir(path.dirname(file), { recursive: true });
+  try {
+    return await appendLocked(file, paths, roomId, message);
+  } catch (error) {
+    // Каталог, который мы успели пересоздать для комнаты без индекса, убираем (пустой; непустой `rmdir` не тронет).
+    if (error instanceof RoomGoneError) await rmdir(path.dirname(file)).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function appendLocked(file: string, paths: WorkPaths, roomId: string | null, message: NewJournalMessage): Promise<JournalLetter> {
   return withLock(path.join(path.dirname(file), 'messages.lock'), DEFAULT_LOCK_TIMEOUT_MS, async () => {
+    // Под замком журнала: удаление комнаты записывает индекс раньше, чем убирает каталог (`afterCommit` приёмника), так
+    // что опоздавшее письмо видит индекс без комнаты здесь.
+    if (roomId !== null && !(await indexHasRoom(paths, roomId))) throw new RoomGoneError(roomId);
     const handle = await open(file, 'a+');
     try {
       const { size } = await handle.stat();
@@ -264,6 +453,8 @@ export async function appendMessage(
 /** Страница журнала: письма по порядку журнала и признак, что после них в журнале есть ещё. */
 export interface JournalPage {
   letters: JournalLetter[];
+  /** Неизвестный курсор прижат к концу журнала: id последнего письма, на которое вызывающему надо поставить курсор. */
+  clampedTo?: string;
   /** Есть ещё письма после страницы (только для `after`; для чтения с конца и `before` всегда `false`). */
   more: boolean;
 }
@@ -298,7 +489,7 @@ export async function readPage(
   projectPath: string,
   workId: string,
   roomId: string | null,
-  { after, before, limit = DEFAULT_LIMIT, maxBytes = DEFAULT_MAX_BYTES, warn = console.warn }: JournalReadOptions = {},
+  { after, before, fromStart = false, limit = DEFAULT_LIMIT, maxBytes = DEFAULT_MAX_BYTES, warn = console.warn }: JournalReadOptions = {},
 ): Promise<JournalPage> {
   if (limit <= 0) return { letters: [], more: false };
   const file = journalFile(workPaths(projectPath, workId), roomId);
@@ -306,8 +497,22 @@ export async function readPage(
   if (handle === null) return { letters: [], more: false };
   try {
     const { size } = await handle.stat();
-    if (after !== undefined) {
-      const from = await locateEnd(handle, size, after);
+    if (after !== undefined || fromStart) {
+      let from: number | null = 0;
+      let skipThroughSeq: number | undefined;
+      if (after !== undefined) {
+        from = await locateEnd(handle, size, after);
+        if (from === null && fromStart) {
+          // Письма с этим id нет (его убрали): журнал с начала не отдаём, иначе всё прочитанное придёт повторно.
+          const seq = seqOfLetterId(after, roomId);
+          if (seq === null) {
+            warn(`journal ${file}: cursor ${after} is not in the journal and has no line number: moved to the end, nothing is replayed`);
+            return { letters: [], more: false, ...(await lastIdOf(handle, size)) };
+          }
+          from = 0;
+          skipThroughSeq = seq;
+        }
+      }
       if (from !== null) {
         const letters: JournalLetter[] = [];
         let bytes = 0;
@@ -319,6 +524,7 @@ export async function readPage(
             warn(skippedLineMessage(file, buffer.length));
             continue;
           }
+          if (skipThroughSeq !== undefined && letter.seq <= skipThroughSeq) continue;
           if (before !== undefined && letter.id === before) {
             reachedBefore = true;
             break;
@@ -360,6 +566,15 @@ export async function readPage(
   } finally {
     await handle.close();
   }
+}
+
+/** `{ clampedTo }` по id последней целой строки журнала; журнал без целых строк — `{}`. */
+async function lastIdOf(handle: FileHandle, size: number): Promise<{ clampedTo?: string }> {
+  for await (const { line } of reverseLines(handle, size)) {
+    const letter = parseLetter(line.toString('utf8'));
+    if (letter !== null) return { clampedTo: letter.id };
+  }
+  return {};
 }
 
 /** Письма страницы без признака `more`; о контракте `after` см. `readPage`. */
@@ -415,29 +630,39 @@ export function mergeByTime<T extends { at: string }>(lists: readonly (readonly 
 }
 
 /**
- * Файл курсоров сессии целиком (сотни байт). Файла нет — `{}`, то есть «ничего не прочитано»; нечитаемый файл
+ * Файл курсоров сессии целиком (сотни байт). Файла нет — пусто, то есть «ничего не прочитано»; нечитаемый файл
  * тоже: письма придут повторно, а не потеряются. Человек — читатель тоже, его курсор — сессия `human` (`HUMAN`).
  */
-export async function readCursors(
+export async function readCursorFile(
   projectPath: string,
   workId: string,
   sessionId: string,
   { warn = console.warn }: { warn?: (message: string) => void } = {},
-): Promise<SessionCursors> {
+): Promise<CursorFile> {
   const file = cursorFile(workPaths(projectPath, workId), sessionId);
   let text: string;
   try {
     text = await readFile(file, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { cursors: {}, marks: {} };
     throw error;
   }
-  const cursors = parseCursors(text);
-  if (cursors === null) {
+  const parsed = parseCursorFile(text);
+  if (parsed === null) {
     warn(unreadableCursorsMessage(file));
-    return {};
+    return { cursors: {}, marks: {} };
   }
-  return cursors;
+  return parsed;
+}
+
+/** Только водоразделы файла курсоров; об отметках см. `readCursorFile`. */
+export async function readCursors(
+  projectPath: string,
+  workId: string,
+  sessionId: string,
+  options: { warn?: (message: string) => void } = {},
+): Promise<SessionCursors> {
+  return (await readCursorFile(projectPath, workId, sessionId, options)).cursors;
 }
 
 /** Ставит курсор сессии на комнату (`null` — прямые письма): читает файл, меняет одну запись, пишет атомарно. */
@@ -452,8 +677,101 @@ export async function writeCursor(
   const file = cursorFile(paths, sessionId);
   await mkdir(paths.cursors, { recursive: true });
   await withLock(`${file}.lock`, DEFAULT_LOCK_TIMEOUT_MS, async () => {
-    const cursors = await readCursors(projectPath, workId, sessionId);
-    cursors[roomId === null ? DIRECT_CURSOR_KEY : safeId('room', roomId)] = lastId;
-    await writeAtomic(file, `${JSON.stringify(cursors)}\n`);
+    const state = await readCursorFile(projectPath, workId, sessionId);
+    state.cursors[roomId === null ? DIRECT_CURSOR_KEY : safeId('room', roomId)] = lastId;
+    await writeAtomic(file, serializeCursors(state));
+  });
+}
+
+export interface SeqPageOptions {
+  /** Письма строго старше этого номера строки журнала (`seq`). */
+  beforeSeq?: number;
+  /** Письма строго новее этого номера; читаются вперёд, самые старые первыми. Главнее `beforeSeq`. */
+  afterSeq?: number;
+  limit: number;
+  maxBytes: number;
+  warn?: (message: string) => void;
+}
+
+const LINE_SEQ = /^\{"seq":(\d+),/;
+
+/**
+ * Страница журнала по номеру строки (`seq`), а не по id: курсор страниц `read_room` — номер (`before:N`), и прежние
+ * id мигрированных писем (`m-NN`) с ним не связаны. Пока номер строки не дошёл до границы, строки только
+ * пролистываются по префиксу `{"seq":N,` без разбора. СТОИМОСТЬ: назад — от хвоста до границы, вперёд — от начала до
+ * границы (читаются с диска, не разбираются), то есть растёт с глубиной, как у `before`. Без границ — самые новые
+ * `limit` писем в пределах `maxBytes` (одно письмо отдаётся всегда). `more` — за страницей в этом направлении есть ещё.
+ */
+export async function readPageBySeq(
+  projectPath: string,
+  workId: string,
+  roomId: string | null,
+  { beforeSeq, afterSeq, limit, maxBytes, warn = console.warn }: SeqPageOptions,
+): Promise<JournalPage> {
+  if (limit <= 0) return { letters: [], more: false };
+  const file = journalFile(workPaths(projectPath, workId), roomId);
+  const handle = await openIfExists(file, 'r');
+  if (handle === null) return { letters: [], more: false };
+  try {
+    const { size } = await handle.stat();
+    const letters: JournalLetter[] = [];
+    let bytes = 0;
+    let more = false;
+    const take = (buffer: Buffer): 'taken' | 'full' => {
+      if (letters.length >= limit || (letters.length > 0 && bytes + buffer.length > maxBytes)) return 'full';
+      const letter = parseLetter(buffer.toString('utf8'));
+      if (letter === null) {
+        warn(skippedLineMessage(file, buffer.length));
+        return 'taken';
+      }
+      letters.push(letter);
+      bytes += buffer.length;
+      return 'taken';
+    };
+    if (afterSeq !== undefined) {
+      for await (const buffer of forwardLines(handle, 0, size)) {
+        const head = LINE_SEQ.exec(buffer.subarray(0, 32).toString('latin1'));
+        if (head !== null && Number(head[1]) <= afterSeq) continue;
+        if (take(buffer) === 'full') {
+          more = true;
+          break;
+        }
+      }
+      return { letters, more };
+    }
+    for await (const { line } of reverseLines(handle, size)) {
+      const head = LINE_SEQ.exec(line.subarray(0, 32).toString('latin1'));
+      if (beforeSeq !== undefined && head !== null && Number(head[1]) >= beforeSeq) continue;
+      if (take(line) === 'full') {
+        more = true;
+        break;
+      }
+    }
+    return { letters: letters.reverse(), more };
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Курсоры сессии под её замком: `body` читает и меняет объект курсоров, файл пишется один раз и только если `body`
+ * вернул `true`. Замок один на весь вызов, поэтому два `check_inbox` одной сессии (инструмент и ожидание) не раздадут
+ * одно письмо дважды: второй читает курсор уже после записи первого. `writeCursor` берёт тот же замок — внутри `body`
+ * его звать нельзя.
+ */
+export async function withCursors<T>(
+  projectPath: string,
+  workId: string,
+  sessionId: string,
+  body: (cursors: SessionCursors, state: CursorFile) => Promise<{ changed: boolean; value: T }>,
+): Promise<T> {
+  const paths = workPaths(projectPath, workId);
+  const file = cursorFile(paths, sessionId);
+  await mkdir(paths.cursors, { recursive: true });
+  return withLock(`${file}.lock`, DEFAULT_LOCK_TIMEOUT_MS, async () => {
+    const state = await readCursorFile(projectPath, workId, sessionId);
+    const { changed, value } = await body(state.cursors, state);
+    if (changed) await writeAtomic(file, serializeCursors(state));
+    return value;
   });
 }

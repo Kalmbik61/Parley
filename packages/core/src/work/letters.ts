@@ -1,7 +1,8 @@
-import { readMap, updateMap, WorkNotFoundError, workPaths } from './store.js';
+import { readMap, updateMap, WorkNotFoundError, workPaths, workSchemaVersion } from './store.js';
 import { cancelledPlanLetter, planEffectOwnsLetter } from './plan-effects.js';
 import { isRoomArchived } from './rooms.js';
-import { mergeByTime } from './journal.js';
+import { advanceWatermark, coversLetter, DIRECT_CURSOR_KEY, mergeByTime, seqOfLetterId, withCursors } from './journal.js';
+import { JOURNAL_SCHEMA_VERSION } from './map.js';
 import type { JournalLetter, SessionCursors } from './journal.js';
 import { HUMAN, type Message, type WorkMap } from './types.js';
 
@@ -123,6 +124,27 @@ export async function markHumanRead(
     throw error;
   }
   if (pending(current).length === 0) return 0;
+
+  // Карта-журнал: отметка человека — водораздел `human` на самом новом отмеченном письме каждого журнала. Водораздел
+  // поэтому гасит и письма журнала старее отмеченного, которых окно не просило (цена спеки, B3) — это явное «прочёл»
+  // человека, в отличие от системной строки (там разреженная отметка, `letter-sink.ts`). Отбор повторяется ПОД замком
+  // курсоров: пачка окна могла быть отобрана до чужой отметки, и устаревший вызов не должен ни вернуть курсор назад, ни
+  // насчитать уже прочитанное. Водораздел идёт только вперёд (по номеру письма, как `advanceWatermark`).
+  if ((await workSchemaVersion(projectPath, workId)) === JOURNAL_SCHEMA_VERSION) {
+    const candidates = pending(current);
+    return withCursors(projectPath, workId, HUMAN, async (_cursors, state) => {
+      const fresh = candidates.filter((message) => !coversLetter(state, message.roomId ?? DIRECT_CURSOR_KEY, message.id));
+      const newest = new Map<string, Message>();
+      for (const message of fresh) {
+        const key = message.roomId ?? DIRECT_CURSOR_KEY;
+        const best = newest.get(key);
+        if (best === undefined || (seqOfLetterId(message.id, message.roomId) ?? 0) > (seqOfLetterId(best.id, best.roomId) ?? 0)) newest.set(key, message);
+      }
+      let changed = false;
+      for (const [key, message] of newest) if (advanceWatermark(state, key, message.id)) changed = true;
+      return { changed, value: fresh.length };
+    });
+  }
 
   // Под локом отбираем заново: другой клиент мог отметить часть писем между чтениями.
   let marked = 0;

@@ -116,17 +116,21 @@ export {
   addSession,
   bumpWorkId,
   canTransition,
+  JOURNAL_SCHEMA_VERSION,
   maxNumber,
   nextMessageId,
   nextSessionId,
   nextWorkId,
   parseMap,
+  peekSchemaVersion,
   removeSession,
   setResult,
   transitionSession,
 } from './work/map.js';
 export { defaultSessionName } from './work/names.js';
 export { displayStatus } from './work/status-view.js';
+export { appendMessage } from './work/journal.js';
+export type { JournalLetter, NewJournalMessage } from './work/journal.js';
 export { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './work/letters.js';
 export {
   PAGE_DEFAULT_BYTES,
@@ -241,7 +245,9 @@ export {
   deleteWorkFiles,
   parleyHome,
   MapLockTimeoutError,
+  LettersWrittenIndexNotError,
   pruneWorksIndex,
+  readIndex,
   readMap,
   readWorksIndex,
   renameWork,

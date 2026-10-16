@@ -2,9 +2,10 @@ import { mkdtemp, open, readFile, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addMessage, HUMAN, readMap, updateMap, workPaths } from '@parley/core';
+import { addMessage, HUMAN, readMap, unreadFor, updateMap, workPaths } from '@parley/core';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
+import { toJournalLayout } from '../../test/journal-layout.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
@@ -31,7 +32,7 @@ async function reply(client: TestClient, id: number): Promise<RawMessage> {
 }
 
 /** Хост, клиент и работа с одним письмом агента человеку (m-01). */
-async function withLetter(): Promise<{ client: TestClient; dir: string; workId: string }> {
+async function withLetter(journal = false): Promise<{ client: TestClient; dir: string; workId: string }> {
   const home = await tempHome();
   homes.push(home);
   const running = await startHost({ home });
@@ -45,6 +46,7 @@ async function withLetter(): Promise<{ client: TestClient; dir: string; workId: 
   await hello(client, token);
   client.send({ id: 1, method: 'works.create', params: { projectPath: dir, title: 'Почта', goal: '' } });
   const workId = ((await reply(client, 1)).result as { workId: string }).workId;
+  if (journal) await toJournalLayout(dir, workId);
   await updateMap(dir, workId, (map) => {
     addMessage(map, { from: 's-01', to: [HUMAN], text: 'вопрос' });
   });
@@ -52,6 +54,25 @@ async function withLetter(): Promise<{ client: TestClient; dir: string; workId: 
 }
 
 describe('mail.markRead', () => {
+  it('карта-журнал (v3): окно отмечает письмо прочитанным курсором человека, повтор — { marked: 0 }', async () => {
+    const { client, dir, workId } = await withLetter(true);
+    expect((await readMap(dir, workId)).messages.map((message) => message.id)).toEqual(['m-d-1']);
+    expect(unreadFor(await readMap(dir, workId), HUMAN).map((message) => message.id)).toEqual(['m-d-1']);
+
+    client.send({ id: 2, method: 'mail.markRead', params: { projectPath: dir, workId, messageIds: ['m-d-1'] } });
+    expect((await reply(client, 2)).result).toEqual({ marked: 1 });
+
+    const map = await readMap(dir, workId);
+    expect(map.messages[0]?.readBy[HUMAN]).toBeDefined();
+    expect(unreadFor(map, HUMAN)).toEqual([]);
+    const cursor = JSON.parse(await readFile(path.join(workPaths(dir, workId).cursors, `${HUMAN}.json`), 'utf8')) as Record<string, string>;
+    expect(cursor.direct).toBe('m-d-1');
+
+    client.send({ id: 3, method: 'mail.markRead', params: { projectPath: dir, workId, messageIds: ['m-d-1'] } });
+    expect((await reply(client, 3)).result).toEqual({ marked: 0 });
+    client.close();
+  });
+
   it('отмечает письмо человеку прочитанным, повтор — { marked: 0 }', async () => {
     const { client, dir, workId } = await withLetter();
 
