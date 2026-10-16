@@ -1267,7 +1267,8 @@ describe('ChatView — вложения в поле ввода (живая пр�
   };
   const sends = (): unknown[] => bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params);
   const imageData = { items: [{ kind: 'file', type: 'image/png' }], getData: () => '' };
-  const chips = (): HTMLElement[] => screen.queryAllByTestId('chat-attachment');
+  // Только чипы над полем ввода: серый элемент очереди в ленте тоже рисует упоминания чипами.
+  const chips = (): HTMLElement[] => within(screen.getByTestId('chat-composer')).queryAllByTestId('chat-attachment');
   const chipPaths = (): Array<string | null> => chips().map((chip) => chip.getAttribute('data-path'));
   const chip = (path: string): HTMLElement => {
     const found = chips().find((item) => item.getAttribute('data-path') === path);
