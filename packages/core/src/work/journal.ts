@@ -610,6 +610,38 @@ export async function findMessage(projectPath: string, workId: string, roomId: s
 }
 
 /**
+ * `findMessage` с потолком: просматривает с хвоста не больше `maxBytes` байт журнала. `scanned` — сколько байт хвоста
+ * просмотрено (по строке, на которой остановились), `truncated` — письма не нашли, а непросмотренные строки остались.
+ * Для поиска письма, чей журнал по id не определить (`m-NN`): цена поиска ограничена, а не растёт с возрастом письма.
+ */
+export async function findMessageWithin(
+  projectPath: string,
+  workId: string,
+  roomId: string | null,
+  id: string,
+  maxBytes: number,
+): Promise<{ letter?: JournalLetter; scanned: number; truncated: boolean }> {
+  const handle = await openIfExists(journalFile(workPaths(projectPath, workId), roomId), 'r');
+  if (handle === null) return { scanned: 0, truncated: false };
+  try {
+    const { size } = await handle.stat();
+    const needle = `"id":${JSON.stringify(id)}`;
+    let scanned = 0;
+    for await (const { line, start } of reverseLines(handle, size)) {
+      if (scanned > 0 && size - start > maxBytes) return { scanned, truncated: true };
+      scanned = size - start;
+      const raw = line.toString('utf8');
+      if (!raw.includes(needle)) continue;
+      const letter = parseLetter(raw);
+      if (letter?.id === id) return { letter, scanned, truncated: false };
+    }
+    return { scanned, truncated: false };
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
  * Склейка списков писем (по одному на журнал, каждый в порядке журнала) в один по времени письма (`at`).
  * Порядок внутри журнала не нарушается (слияние, а не сортировка); при равном `at` раньше идёт журнал, что раньше
  * в `lists`, а внутри журнала — раньше по `seq`. Общий помощник `assemble.ts` и `unreadFromJournals`.

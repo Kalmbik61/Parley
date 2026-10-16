@@ -48,8 +48,8 @@ afterEach(async () => {
   await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-function service(): WorksService {
-  const created = createWorksService(fakeHost(), { debounceMs: 50, migrateMaps: true });
+function service(options: { migrationRetryMs?: number } = {}): WorksService {
+  const created = createWorksService(fakeHost(), { debounceMs: 50, migrateMaps: true, ...options });
   services.push(created);
   return created;
 }
@@ -81,6 +81,7 @@ describe('миграция карты в хосте', () => {
 
     const s = service();
     await s.start();
+    await s.migrationSettled();
 
     expect(await versionOnDisk(id)).toBe(3);
     const entry = s.entry(project, id);
@@ -97,8 +98,9 @@ describe('миграция карты в хосте', () => {
     const id = await seed(true);
     const before = await readFile(workPaths(project, id).map, 'utf8');
 
-    const s = service();
+    const s = service({ migrationRetryMs: 150 });
     await s.start();
+    await s.migrationSettled();
 
     expect(await readFile(workPaths(project, id).map, 'utf8')).toBe(before);
     expect(await exists(v2Copy(id))).toBe(false);
@@ -106,7 +108,7 @@ describe('миграция карты в хосте', () => {
     expect(s.windowSnapshot()?.entries[0]?.migrationPending).toBe(true);
     expect(s.snapshot().entries[0]?.migrationPending).toBe(true);
 
-    // Сессия ушла: следующее обновление переводит работу на v3 и снимает пометку.
+    // Сессия ушла: повторная проверка (по таймеру) переводит работу на v3 и снимает пометку.
     await updateMap(project, id, (map) => {
       transitionSession(map, 's-01', 'sleeping', { exitCode: 0 });
       map.sessions[0]!.pid = null;
@@ -120,6 +122,7 @@ describe('миграция карты в хосте', () => {
     const id = await seed(false);
     const first = service();
     await first.start();
+    await first.migrationSettled();
     expect(await exists(v2Copy(id))).toBe(true);
     expect((await readIndex(project, id)).v2Removed).toBe(false);
     // Ещё одно обновление в том же запуске копию не трогает.
@@ -130,6 +133,7 @@ describe('миграция карты в хосте', () => {
 
     const second = service();
     await second.start();
+    await second.migrationSettled();
     expect(await exists(v2Copy(id))).toBe(false);
     expect((await readIndex(project, id)).v2Removed).toBe(true);
     expect(second.entry(project, id)?.map.messages).toHaveLength(2);
@@ -145,11 +149,13 @@ describe('копия v2 при потерянных сведениях', () => {
     });
     const first = service();
     await first.start();
+    await first.migrationSettled();
     expect(await versionOnDisk(work.id)).toBe(3);
     await first.stop();
 
     const second = service();
     await second.start();
+    await second.migrationSettled();
     expect(await exists(v2Copy(work.id))).toBe(true);
     expect((await readIndex(project, work.id)).v2Removed).toBe(false);
     const kept = warnings.find((item) => item.message.includes('map.v2.json оставлена навсегда'));

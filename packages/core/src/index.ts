@@ -117,6 +117,7 @@ export {
   bumpWorkId,
   canTransition,
   JOURNAL_SCHEMA_VERSION,
+  letterSinkOf,
   maxNumber,
   nextMessageId,
   nextSessionId,
@@ -129,8 +130,8 @@ export {
 } from './work/map.js';
 export { defaultSessionName } from './work/names.js';
 export { displayStatus } from './work/status-view.js';
-export { appendMessage, parseLetters, readCursorFile, writeCursor } from './work/journal.js';
-export { appendLetters, applyCursors } from './work/assemble.js';
+export { appendMessage, findMessage, findMessageWithin, parseLetters, readCursorFile, writeCursor } from './work/journal.js';
+export { appendLetters, applyCursors, readMapForPlanPreview } from './work/assemble.js';
 export { finishV2Cleanup, hasLiveSession, hasV2Copy, migrateMapToJournal } from './work/migrate-map.js';
 export type { MigrateMapOptions, MigrateMapResult, MigrationStep } from './work/migrate-map.js';
 export type { CursorFile, JournalLetter, NewJournalMessage } from './work/journal.js';
@@ -252,6 +253,8 @@ export {
   pruneWorksIndex,
   readIndex,
   readMap,
+  readMapLazy,
+  parseMapLazy,
   readWorksIndex,
   renameWork,
   setWorkStatus,
@@ -463,6 +466,7 @@ export {
   MAX_TIMEOUT_SEC,
   RATE_WINDOW_MS,
   createParleyServer,
+  journalRoomPage,
 } from './mcp/tools.js';
 export { HUMAN, MESSAGE_KINDS, SYSTEM, PARLEY } from './work/types.js';
 export type {

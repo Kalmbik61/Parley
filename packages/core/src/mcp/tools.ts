@@ -735,9 +735,9 @@ const TOOLS: Tool[] = [
  * номер строки журнала (`before:N`/`after:N`), а не `m-NN`. Форма ответа прежняя: `messages` и `page`. `total` — `null`:
  * размер выборки журнал без прохода не знает (форма `PageInfo` это допускает).
  */
-async function journalRoomPage<V extends { text: string }>(
-  context: McpContext,
-  roomId: string,
+export async function journalRoomPage<V extends { text: string }>(
+  context: Pick<McpContext, 'projectPath' | 'workId'>,
+  roomId: string | null,
   options: { kind?: Message['kind']; cursor: PageCursor | null; maxBytes: number; maxItems: number; view: (message: Message) => V },
 ): Promise<{ messages: V[]; page: PageInfo }> {
   const { cursor, maxBytes, maxItems } = options;

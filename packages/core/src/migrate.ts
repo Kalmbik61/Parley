@@ -38,9 +38,9 @@ import { hostAlive } from './host-lock.js';
 import { envValue, HOME_DIR, LEGACY_HOME_DIR, LEGACY_STATE_DIR, STATE_DIR, STATE_DIRS } from './names.js';
 import type { Env } from './names.js';
 import { hasLiveProcess } from './work/liveness.js';
-import { parseMap } from './work/map.js';
+import { JOURNAL_SCHEMA_VERSION, parseIndex, parseMap, peekSchemaVersion } from './work/map.js';
 import { writeSelfIgnore } from './work/state-dir.js';
-import { parleyHome, readMap, readWorksIndex, updateMap } from './work/store.js';
+import { parleyHome, readMapLazy, readWorksIndex, updateMap } from './work/store.js';
 import type { WorksIndex } from './work/types.js';
 import { NO_FSMONITOR } from './work/worktree.js';
 
@@ -259,7 +259,9 @@ async function busyWork(stateRoot: string, nowMs: number, processes: ProcessTabl
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; // каталог без карты: сессий в нём нет
       throw error;
     }
-    for (const session of parseMap(raw, file).sessions) {
+    // Сессии v3 лежат в индексе: журналы писем для проверки живости не нужны.
+    const sessions = peekSchemaVersion(raw) === JOURNAL_SCHEMA_VERSION ? parseIndex(raw, file).sessions : parseMap(raw, file).sessions;
+    for (const session of sessions) {
       if (await hasLiveProcess(session, { now: nowMs })) {
         return { reason: 'live-session', detail: `${workId}/${session.id}` };
       }
@@ -319,7 +321,8 @@ async function rewriteBrief(file: string): Promise<void> {
 
 /** Пути артефактов в карте одной работы переехавшего каталога. Карта, где переписывать нечего, не трогается. */
 async function rewriteArtifactPaths(projectPath: string, workId: string): Promise<void> {
-  const stale = (await readMap(projectPath, workId)).sessions.some((session) =>
+  // Сессии лежат в индексе: письма карты-журнала для проверки путей не нужны.
+  const stale = (await readMapLazy(projectPath, workId)).sessions.some((session) =>
     session.artifacts.some((artifact) => movedArtifactPath(artifact.path) !== null),
   );
   if (stale) {

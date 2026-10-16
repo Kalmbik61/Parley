@@ -5,7 +5,7 @@ import { parseBacklog } from './backlog.js';
 import type { ProjectContextOptions } from './project-context.js';
 import { parseProjectMemory } from './project-memory.js';
 import { stateDir } from './state-dir.js';
-import { MISSING_SHARED_VERSION, readMap, readSharedFile, sharedProjectPaths } from './store.js';
+import { MISSING_SHARED_VERSION, readMapLazy, readSharedFile, sharedProjectPaths } from './store.js';
 import type { SharedProjectPaths } from './store.js';
 
 /**
@@ -244,7 +244,7 @@ async function sessionRecords(projectPath: string, fail: () => void): Promise<Re
   }
   for (const workId of works) {
     try {
-      for (const session of (await readMap(projectPath, workId)).sessions) {
+      for (const session of (await readMapLazy(projectPath, workId)).sessions) {
         if (session.summary === null || session.summary.trim() === '') continue;
         recs.push({ source: 'sessions', title: firstLine(session.summary), text: session.summary, workId, sessionId: session.id,
           date: session.resultAt ?? session.endedAt ?? session.startedAt });

@@ -3,6 +3,7 @@ import { lstat, mkdir, readFile, readlink, rm, writeFile } from 'node:fs/promise
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { readMap } from '@parley/core';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
@@ -124,7 +125,7 @@ test.describe('скилл parley в проекте', () => {
     const { workId, sessionId } = await newSession(window, project, true);
 
     // Карта — на диске сразу; снимок работ у хоста обновляется по наблюдателю и мог отстать.
-    const map = JSON.parse(await readFile(path.join(project, '.parley', 'works', workId, 'map.json'), 'utf8')) as {
+    const map = (await readMap(project, workId)) as unknown as {
       sessions: Array<{ id: string; worktree: { path: string } | null }>;
     };
     const worktree = map.sessions.find((session) => session.id === sessionId)?.worktree?.path;

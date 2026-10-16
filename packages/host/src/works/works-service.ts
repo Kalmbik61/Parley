@@ -67,12 +67,12 @@ export interface WorksServiceOptions {
   /** Счётчики окна строки состояния: один `refresh` — одна запись. */
   windowCounters?: WindowCounters;
   /**
-   * true — карты v2 без живых сессий переводятся на журналы (`migrate-map.ts`). ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО, и боевой хост
-   * (`main.ts`) его не включает: `methods/backlog.ts` (`knownMap`), `methods/journal.ts` (`freshMap`) и E2E окна читают
-   * `map.json` сырым файлом и не поймут v3. Флаг включается в задаче 10 плана, когда все читатели карты идут через
-   * `readMap`/`assembleMap`. Тесты миграции задают его явно.
+   * true — карты v2 без живых сессий переводятся на журналы (`migrate-map.ts`). По умолчанию выключено; боевой хост
+   * (`main.ts`) включает. Тесты миграции задают его явно.
    */
   migrateMaps?: boolean;
+  /** Первая задержка повторной проверки работы, ждущей конца живой сессии, мс; каждая следующая вдвое дольше. */
+  migrationRetryMs?: number;
 }
 
 export interface WorksService {
@@ -95,6 +95,8 @@ export interface WorksService {
   /** Первое чтение этой работы хостом уже было: autoLaunch берёт только новое (1.7). */
   firstReadDone(projectPath: string, workId: string): boolean;
   onChange(listener: (snapshot: WorksSnapshot, previous: WorksSnapshot) => void): () => void;
+  /** Проход миграции карт (если идёт) закончился. Без миграции — сразу. */
+  migrationSettled(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -126,6 +128,12 @@ const snapshotBytes = (framed: Framed): number => Buffer.byteLength(framed.line,
 /** Сколько последних дописанных писем работы помнит сервис, чтобы вернуть их в список, прочитанный с диска чуть раньше. */
 const RECENT_LETTERS_KEPT = 200;
 
+/** Повторы проверки работы, ждущей конца живой сессии: сколько раз и с какой первой задержкой (дальше вдвое дольше). */
+const MIGRATION_RETRIES = 3;
+const MIGRATION_RETRY_MS = 30_000;
+/** Проход миграции рассылает снимок не чаще: сотни работ на первом запуске не дают сотни рассылок. */
+const MIGRATION_ANNOUNCE_MS = 250;
+
 /** Ключ работы для внутренних карт сервиса: `\u0000` в путях и id не встречается. */
 const workKey = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
 
@@ -148,6 +156,13 @@ export function createWorksService(
   const runStartedAt = new Date().toISOString();
   /** Работы, по которым этот запуск уже решал судьбу `map.v2.json` или уже сообщил о сбое миграции: раз за запуск. */
   const migrationHandled = new Set<string>();
+  /** Работы на v2 с живой сессией: сколько повторных проверок уже было. Пока работа здесь, в снимке у неё `migrationPending`. */
+  const migrationWaiting = new Map<string, number>();
+  /** Идущий проход миграции, просьба о ещё одном после него, просьба о повторе ждущих и таймер повтора. */
+  let migrationRun: Promise<void> | undefined;
+  let migrationAgain = false;
+  let migrationRetryDue = false;
+  let retryTimer: NodeJS.Timeout | undefined;
 
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
@@ -345,7 +360,7 @@ export function createWorksService(
         // мёртвых больше нет), и без перечитывания снимок откатился бы к active мёртвой
         // сессии навсегда (fix-tests2, host-disconnect:127).
         const fresh = await readMap(work.projectPath, work.map.work.id);
-        entries.set(
+        setEntry(
           workKey(work.projectPath, work.map.work.id),
           overlayEntry({
             projectPath: work.projectPath,
@@ -367,60 +382,177 @@ export function createWorksService(
   }
 
   /**
-   * Перевод карт v2 на журналы (задача 7 плана, спека B5) — сразу после сверки живости: решает она, есть ли в работе
-   * живая сессия. Живая есть — работа остаётся на v2, в снимке `migrationPending`. Живых нет — `migrateMapToJournal`
-   * под `map.lock`; сбой не роняет обновление: работа читается как v2, о сбое пишется один раз за запуск.
+   * Перевод карт v2 на журналы (задача 7 плана, спека B5) идёт ВНЕ обновления снимка: `refreshPass` только просит проход
+   * (`scheduleMigration`) после того, как снимок разослан, и не ждёт его, так что первое соединение окна не ждёт перевода
+   * всех карт. Проход идёт по работам по одной (между ними хост отвечает на другие запросы), каждый исход помечает работу
+   * разобранной, и позднее обновление её не трогает: сбой, пропуск «не v2» и «карты нет» не повторяются и не пишутся в
+   * журнал снова. Исключение одно — работа с живой сессией: она остаётся на v2 с `migrationPending`, и её проверка
+   * повторяется по таймеру `MIGRATION_RETRIES` раз с удвоением задержки (30 с, 60 с, 120 с); после этого работа ждёт
+   * следующего запуска хоста, пометка остаётся. Сбой одной работы остальных не трогает. Проход пишет в журнал хоста
+   * одну итоговую строку.
    * Работа на v3, переведённая более ранним запуском хоста, лишается `map.v2.json` (`finishV2Cleanup`): окно и панели уже
    * читали собранную карту. Копию, сделанную этим запуском, он не трогает; не трогает и тогда, когда миграция что-то
    * отбросила или не воспроизвела: причина с числами идёт в журнал хоста.
    */
-  async function migrateMaps(): Promise<void> {
-    if (options.migrateMaps !== true) return;
-    for (const work of Array.from(entries.values())) {
-      const workId = work.map.work.id;
-      const key = workKey(work.projectPath, workId);
+  function scheduleMigration(retry = false): void {
+    if (options.migrateMaps !== true || stopped) return;
+    if (retry) migrationRetryDue = true;
+    if (migrationRun !== undefined) {
+      migrationAgain = true;
+      return;
+    }
+    migrationRun = (async () => {
       try {
-        const version = await workSchemaVersion(work.projectPath, workId);
-        if (version === 3) {
-          if (migrationHandled.has(key)) continue;
-          migrationHandled.add(key);
-          if (!(await hasV2Copy(work.projectPath, workId))) continue;
-          const outcome = await finishV2Cleanup(work.projectPath, workId, runStartedAt);
-          if (outcome === 'kept-dropped') {
-            const kept = (await readIndex(work.projectPath, workId)).v2Kept;
-            host.log.warn('карта: map.v2.json оставлена навсегда, миграция не воспроизвела часть сведений', { projectPath: work.projectPath, workId, ...kept });
-          } else {
-            host.log.info('карта: копия v2 после миграции', { projectPath: work.projectPath, workId, outcome });
-          }
-          continue;
-        }
-        if (version !== 2) continue;
-        if (await hasLiveSession(work.map)) {
-          entries.set(key, { ...work, migrationPending: true });
-          continue;
-        }
-        if (migrationHandled.has(key)) continue;
-        const result = await migrateMapToJournal(work.projectPath, workId, { ...lockOptions, run: runStartedAt });
-        if (result.status === 'skipped') {
-          // `live-session`: сессия ожила между снимком и замком — работа ждёт, как если бы её увидела проверка выше.
-          if (result.reason === 'locked' || result.reason === 'live-session') entries.set(key, { ...work, migrationPending: true });
-          continue;
-        }
-        migrationHandled.add(key);
-        if (result.status === 'failed') {
-          host.log.error('миграция карты не удалась, работа остаётся на v2', { projectPath: work.projectPath, workId, step: result.step, detail: result.detail });
-          continue;
-        }
-        host.log.info('карта переведена на журналы', { projectPath: work.projectPath, workId, ...result });
-        if (result.orderMismatches > 0 || result.readByMismatches > 0 || result.orphaned > 0 || result.droppedMarks > 0) {
-          host.log.warn('миграция карты: часть сведений не воспроизведена сборщиком, map.v2.json останется навсегда', { projectPath: work.projectPath, workId, ...result });
-        }
-        entries.set(key, { projectPath: work.projectPath, map: await readMap(work.projectPath, workId) });
-        journalWorks.add(key);
+        do {
+          migrationAgain = false;
+          const retrying = migrationRetryDue;
+          migrationRetryDue = false;
+          await migrationPass(retrying);
+        } while (migrationAgain && !stopped);
       } catch (error) {
-        host.log.error('миграция карты: проверка не удалась', { projectPath: work.projectPath, workId, error: String(error) });
+        // Журнал хоста мог пропасть вместе с домом: сбой записи в него не должен стать необработанным отказом.
+        try {
+          host.log.error('миграция карт: проход не удался', { error: String(error) });
+        } catch {
+          // писать некуда
+        }
+      }
+      armMigrationRetry();
+    })().finally(() => {
+      migrationRun = undefined;
+    });
+  }
+
+  /** Следующая проверка работ, ждущих конца живой сессии: один таймер на всех, задержка удваивается с каждым повтором. */
+  function armMigrationRetry(): void {
+    if (stopped || retryTimer !== undefined) return;
+    const attempts = Array.from(migrationWaiting.values()).filter((done) => done < MIGRATION_RETRIES);
+    if (attempts.length === 0) return;
+    const delay = (options.migrationRetryMs ?? MIGRATION_RETRY_MS) * 2 ** Math.min(...attempts);
+    retryTimer = setTimeout(() => {
+      retryTimer = undefined;
+      scheduleMigration(true);
+    }, delay);
+    retryTimer.unref();
+  }
+
+  type MigrationOutcome = 'migrated' | 'waiting' | 'failed' | 'skipped' | 'gone';
+
+  /**
+   * Запись работы в снимок. Пометка `migrationPending` держится, пока работа ждёт конца живой сессии: список с диска и
+   * перечитывание о ней не знают. Работа, уже ставшая журналом (v3), ждать перестаёт.
+   */
+  function setEntry(key: string, entry: WorkEntry): void {
+    if (isJournalEntry(entry)) migrationWaiting.delete(key);
+    entries.set(key, migrationWaiting.has(key) ? { ...entry, migrationPending: true } : entry);
+  }
+
+  /** Работа остаётся на v2 до конца живой сессии: пометка `migrationPending` ложится в запись и держится в `migrationWaiting`. */
+  function holdForSession(key: string): MigrationOutcome {
+    if (!migrationWaiting.has(key)) migrationWaiting.set(key, 0);
+    const current = entries.get(key);
+    if (current !== undefined) setEntry(key, current);
+    return 'waiting';
+  }
+
+  async function migrateOne(key: string): Promise<MigrationOutcome> {
+    const work = entries.get(key);
+    if (work === undefined) return 'gone';
+    const workId = work.map.work.id;
+    try {
+      const version = await workSchemaVersion(work.projectPath, workId);
+      if (version === 3) {
+        migrationHandled.add(key);
+        migrationWaiting.delete(key);
+        if (!(await hasV2Copy(work.projectPath, workId))) return 'skipped';
+        const outcome = await finishV2Cleanup(work.projectPath, workId, runStartedAt);
+        if (outcome === 'kept-dropped') {
+          const kept = (await readIndex(work.projectPath, workId)).v2Kept;
+          host.log.warn('карта: map.v2.json оставлена навсегда, миграция не воспроизвела часть сведений', { projectPath: work.projectPath, workId, ...kept });
+        } else {
+          host.log.info('карта: копия v2 после миграции', { projectPath: work.projectPath, workId, outcome });
+        }
+        return 'skipped';
+      }
+      if (version !== 2) {
+        migrationHandled.add(key);
+        return 'skipped';
+      }
+      if (await hasLiveSession((entries.get(key) ?? work).map)) return holdForSession(key);
+      const result = await migrateMapToJournal(work.projectPath, workId, { ...lockOptions, run: runStartedAt });
+      if (result.status === 'skipped') {
+        // `live-session`: сессия ожила между снимком и замком; `locked`: карту держит другой писатель. Оба случая могут пройти.
+        if (result.reason === 'locked' || result.reason === 'live-session') return holdForSession(key);
+        migrationHandled.add(key);
+        return 'skipped';
+      }
+      migrationHandled.add(key);
+      migrationWaiting.delete(key);
+      if (result.status === 'failed') {
+        host.log.error('миграция карты не удалась, работа остаётся на v2', { projectPath: work.projectPath, workId, step: result.step, detail: result.detail });
+        return 'failed';
+      }
+      host.log.info('карта переведена на журналы', { projectPath: work.projectPath, workId, ...result });
+      if (result.orderMismatches > 0 || result.readByMismatches > 0 || result.orphaned > 0 || result.droppedMarks > 0) {
+        host.log.warn('миграция карты: часть сведений не воспроизведена сборщиком, map.v2.json останется навсегда', { projectPath: work.projectPath, workId, ...result });
+      }
+      const assembled = await readMap(work.projectPath, workId);
+      if (entries.has(key)) setEntry(key, { projectPath: work.projectPath, map: assembled });
+      journalWorks.add(key);
+      return 'migrated';
+    } catch (error) {
+      migrationHandled.add(key);
+      host.log.error('миграция карты: проверка не удалась', { projectPath: work.projectPath, workId, error: String(error) });
+      return 'failed';
+    }
+  }
+
+  /** Рассылка снимка после изменения записей вне `refresh`: как конец `refreshPass`, слушатели получают прежний снимок. */
+  function announceSnapshot(previous: WorksSnapshot): WorksSnapshot {
+    const snapshot = buildSnapshot();
+    invalidateSnapshots();
+    publish();
+    for (const listener of listeners) listener(snapshot, previous);
+    return snapshot;
+  }
+
+  async function migrationPass(retry: boolean): Promise<void> {
+    const startedAt = performance.now();
+    const tally = { migrated: 0, waiting: 0, failed: 0, skipped: 0 };
+    let previous = buildSnapshot();
+    let lastAnnounce = performance.now();
+    let changed = false;
+    for (const key of Array.from(entries.keys())) {
+      if (stopped) break;
+      if (retry) {
+        const done = migrationWaiting.get(key);
+        if (done === undefined || done >= MIGRATION_RETRIES) continue;
+        migrationWaiting.set(key, done + 1);
+      } else if (migrationHandled.has(key) || migrationWaiting.has(key)) continue;
+      // Хост отвечает на другие запросы между работами, а не только на их собственных await.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const outcome = await migrateOne(key);
+      if (outcome === 'gone') continue;
+      if (outcome === 'waiting' && (migrationWaiting.get(key) ?? 0) >= MIGRATION_RETRIES) {
+        migrationHandled.add(key);
+        host.log.info('карта: сессия работы всё ещё жива, перевод на журналы отложен до следующего запуска хоста', { workId: key.split('\u0000')[1] });
+      }
+      tally[outcome] += 1;
+      if (outcome === 'migrated' || outcome === 'waiting') changed = true;
+      if (changed && performance.now() - lastAnnounce > MIGRATION_ANNOUNCE_MS) {
+        previous = announceSnapshot(previous);
+        lastAnnounce = performance.now();
+        changed = false;
       }
     }
+    if (changed) announceSnapshot(previous);
+    const visited = tally.migrated + tally.waiting + tally.failed + tally.skipped;
+    if (visited === 0) return;
+    const ms = Math.round(performance.now() - startedAt);
+    host.log.info(
+      `карта: миграция завершена: переведено ${tally.migrated}, ждут конца сессий ${tally.waiting}, сбоев ${tally.failed}, без перевода ${tally.skipped}, ${ms} мс${retry ? ' (повтор)' : ''}`,
+      { ...tally, ms, retry },
+    );
   }
 
   /** Пишет аренду новой работе; уже арендованные пропускаются. */
@@ -551,7 +683,7 @@ export function createWorksService(
   };
 
   function replaceEntry(key: string, next: WorkEntry): void {
-    entries.set(key, next);
+    setEntry(key, next);
     latest = latest.map((work) => (workKey(work.projectPath, work.map.work.id) === key ? next : work));
   }
 
@@ -789,7 +921,7 @@ export function createWorksService(
       if (!projects.has(work.projectPath)) continue;
       try {
         const fresh = await readMap(work.projectPath, work.map.work.id);
-        entries.set(
+        setEntry(
           workKey(work.projectPath, work.map.work.id),
           overlayEntry({
             projectPath: work.projectPath,
@@ -825,7 +957,7 @@ export function createWorksService(
     entries.clear();
     for (const work of works) {
       const key = workKey(work.projectPath, work.map.work.id);
-      entries.set(key, work);
+      setEntry(key, work);
       seenKeys.add(key);
       if (isJournalEntry(work)) journalWorks.add(key);
       else journalWorks.delete(key);
@@ -849,7 +981,6 @@ export function createWorksService(
     for (const [file, held] of Array.from(tails)) if (!seenKeys.has(held.key)) tails.delete(file);
 
     await reconcileLiveness(works);
-    await migrateMaps();
     await checkCorruption(seenKeys);
     for (const work of works) await leaseWork(work);
 
@@ -860,6 +991,8 @@ export function createWorksService(
     for (const listener of listeners) listener(snapshot, previous);
     for (const key of seenKeys) readAlready.add(key);
     await catchUpJournals();
+    // Миграция карт — после рассылки снимка и без ожидания: окно не ждёт перевода всех карт.
+    scheduleMigration();
   }
 
   return {
@@ -900,9 +1033,15 @@ export function createWorksService(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    async migrationSettled() {
+      while (migrationRun !== undefined) await migrationRun;
+    },
     async stop() {
       if (stopped) return;
       stopped = true;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
+      // Работа, которую проход уже начал, доводится: аренды снимаются после неё, а не под её ногами.
+      await migrationRun;
       settler.cancel();
       pendingChanges.clear();
       tails.clear();

@@ -5,7 +5,8 @@ import path from 'node:path';
 import { representLegacyMarkdown } from './decision-journal.js';
 import { participantLabel } from './thread.js';
 import { stateDir } from './state-dir.js';
-import { readMap, readSharedFile, sharedProjectPaths, withSharedProjectLock, withLocalHistoryLock, prepareSharedIgnore, MISSING_SHARED_VERSION } from './store.js';
+import { readMapWithRoom } from './assemble.js';
+import { readSharedFile, sharedProjectPaths, withSharedProjectLock, withLocalHistoryLock, prepareSharedIgnore, MISSING_SHARED_VERSION } from './store.js';
 import type { SharedDiagnostic, SharedFileSnapshot, SharedWriteOptions } from './store.js';
 import { ImmutableMarkdownError, publishImmutableMarkdown, replaceOwnedMarkdown } from './shared-markdown.js';
 import type { MarkdownIdentity } from './shared-markdown.js';
@@ -174,7 +175,7 @@ async function commitHistory(receipt: HistoryReceipt, save: (receipt: HistoryRec
 export interface RoomHistoryResult { sharedAt: string | null; diagnostics: SharedDiagnostic[] }
 async function operation(projectPath: string, workId: string, roomId: string, action: 'local' | 'share' | 'unshare', options: SharedWriteOptions = {}): Promise<RoomHistoryResult> {
   try {
-    const map = await readMap(projectPath, workId);
+    const map = await readMapWithRoom(projectPath, workId, roomId);
     if (map.work.id !== workId) throw new RoomHistoryError('history-invalid');
     const content = renderRoomHistory(map, roomId);
     const paths = await localPaths(projectPath, workId, roomId);
@@ -190,11 +191,11 @@ async function operation(projectPath: string, workId: string, roomId: string, ac
       const body = async (): Promise<RoomHistoryResult> => {
       const receipt = parseReceipt(writer.snapshot, paths, workId, roomId, sharedTarget);
       await recover(receipt, writer.save);
-      if (renderRoomHistory(await readMap(projectPath, workId), roomId) !== content) throw new RoomHistoryError('history-stale');
+      if (renderRoomHistory(await readMapWithRoom(projectPath, workId, roomId), roomId) !== content) throw new RoomHistoryError('history-stale');
       if (action !== 'local' && options.expectedVersion !== undefined && (await readSharedFile(sharedTarget!)).version !== options.expectedVersion) throw new RoomHistoryError('history-conflict');
       const beforeCommit = async (target: string, attempt: number) => {
         await options.beforeCommit?.(target, attempt);
-        if (renderRoomHistory(await readMap(projectPath, workId), roomId) !== content) throw new RoomHistoryError('history-stale');
+        if (renderRoomHistory(await readMapWithRoom(projectPath, workId, roomId), roomId) !== content) throw new RoomHistoryError('history-stale');
       };
       if (action === 'unshare') {
         const previous = await readSharedFile(sharedTarget!);

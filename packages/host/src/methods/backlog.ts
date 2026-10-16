@@ -2,7 +2,7 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
   SharedStateError, inspectSharedIgnore, isRoomArchived, isRoomClosed, acceptBacklogSuggestion, addBacklogItem, dismissBacklogSuggestion, listBacklogSuggestions,
-  parseBacklog, parseMap, readBacklog, readProjectPreferences, readSharedFile, setBacklogFile, setBacklogRule, sharedProjectPaths,
+  parseBacklog, parseMapLazy, readBacklog, readProjectPreferences, readSharedFile, setBacklogFile, setBacklogRule, sharedProjectPaths,
   takeBacklogItem, updateBacklogItem, removeBacklogItem, workPaths, worksIndexPath,
 } from '@parley/core';
 import type { SharedDiagnostic } from '@parley/core';
@@ -31,7 +31,8 @@ async function knownMap(projectPath: string, workId: string) {
   const file = workPaths(canonicalProject, workId).map;
   if (await realpath(file) !== file) throw new SharedStateError('shared-state-unsafe');
   const snapshot = await readSharedFile(file);
-  const map = parseMap(snapshot.text, file);
+  // Карта-журнал (v3): сессии и комнаты лежат в индексе, журналы писем для бэклога не читаются.
+  const map = parseMapLazy(canonicalProject, workId, snapshot.text, file);
   if (map.work.id !== workId || map.sessions.length > 100_000) throw new SharedStateError('shared-state-unsafe');
   return { map, canonicalProject, revision: snapshot.version };
 }

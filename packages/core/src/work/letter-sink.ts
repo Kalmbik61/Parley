@@ -404,3 +404,61 @@ function readdirSyncOrEmpty(dir: string): string[] {
 export function attachSink(view: object, sink: JournalLetterSink): void {
   Object.defineProperty(view, LETTER_SINK, { value: sink, enumerable: true, configurable: true });
 }
+
+/**
+ * Приёмник «примерки» (проход службы эффектов плана): письма и решения принимает только в память, ничего не берёт и не пишет —
+ * ни замков журналов, ни строк. Читающие вызовы (`find`, `recent`, `roomLetters`) идут в настоящий приёмник, у которого очередь
+ * всегда пуста: они читают хвосты журналов без замков. Примерка отвечает на вопрос «изменится ли что-нибудь», и карта с таким
+ * приёмником выбрасывается; настоящая запись идёт через `updateMap`.
+ */
+export class PreviewLetterSink implements LetterSink {
+  private readonly real: JournalLetterSink;
+  private added = 0;
+  readonly pending: Message[] = [];
+
+  constructor(projectPath: string, workId: string) {
+    this.real = new JournalLetterSink(projectPath, workId);
+  }
+
+  add(init: Parameters<LetterSink['add']>[0], at: string): Message {
+    this.added += 1;
+    const message: Message = {
+      id: `m-preview-${this.added}`,
+      roomId: init.roomId ?? null,
+      from: init.from,
+      to: [...init.to],
+      text: init.text,
+      kind: init.kind ?? 'note',
+      at,
+      readBy: {},
+      ...(init.replyTo === undefined ? {} : { replyTo: init.replyTo }),
+    };
+    this.pending.push(message);
+    return message;
+  }
+
+  readThrough(): void {}
+
+  dropRoom(): void {}
+
+  appendDecision(): void {}
+
+  patchDecision(): void {}
+
+  find(roomId: string, id: string): Message | undefined {
+    return this.pending.find((message) => message.id === id && message.roomId === roomId) ?? this.real.find(roomId, id);
+  }
+
+  recent(roomIds: readonly string[], sinceMs: number): Message[] {
+    return [...this.real.recent(roomIds, sinceMs), ...this.pending.filter((message) => Date.parse(message.at) > sinceMs)];
+  }
+
+  roomLetters(roomId: string): Message[] {
+    return [...this.real.roomLetters(roomId), ...this.pending.filter((message) => message.roomId === roomId)];
+  }
+}
+
+/** Вешает на карту приёмник примерки (`PreviewLetterSink`): см. его описание. */
+export function attachPreviewSink(view: object, projectPath: string, workId: string): void {
+  Object.defineProperty(view, LETTER_SINK, { value: new PreviewLetterSink(projectPath, workId), enumerable: true, configurable: true });
+}

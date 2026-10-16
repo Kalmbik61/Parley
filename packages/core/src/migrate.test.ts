@@ -9,8 +9,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MIGRATION_RECORD, migrateHome, migrateProjects } from './migrate.js';
 import type { MigrationEntry } from './migrate.js';
 import { processStartedAt } from './work/liveness.js';
-import { addSession, transitionSession } from './work/map.js';
-import { createWork, readMap, readWorksIndex, updateMap, worksIndexPath } from './work/store.js';
+import { journalFile } from './work/journal.js';
+import { addMessage, addSession, transitionSession } from './work/map.js';
+import { migrateMapToJournal } from './work/migrate-map.js';
+import { createWork, readIndex, readMap, readWorksIndex, updateMap, workPaths, worksIndexPath } from './work/store.js';
 import type { WorkSession } from './work/types.js';
 
 const AT = new Date('2026-09-30T18:00:00.000Z');
@@ -569,6 +571,17 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     expect(await exists(path.join(home, MIGRATION_RECORD))).toBe(false);
   });
 
+  it('работа уже на журналах (v3) и без живых сессий — проект переносится, карту читают через индекс', async () => {
+    const { project, workId } = await legacyProject('shop');
+    await seedSession(project, workId, { lifecycle: 'sleeping', pid: null });
+    expect(await migrateMapToJournal(project, workId)).toMatchObject({ status: 'migrated' });
+
+    const results = await migrateProjects({ now });
+
+    expect(results).toMatchObject([{ status: 'moved' }]);
+    expect(await exists(path.join(currentDir(project), 'works', workId, 'map.json'))).toBe(true);
+  });
+
   it('.harnas — симлинк на каталог: не переносим', async () => {
     const { project, workId } = await legacyProject('shop');
     const target = path.join(root, 'общее-состояние');
@@ -774,6 +787,29 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     // Правка не событие работы: updatedAt стоит на месте, индекс не менялся.
     expect(after.work.updatedAt).toBe(before.work.updatedAt);
     expect(await readFile(worksIndexPath(), 'utf8')).toBe(indexBefore);
+  });
+
+  it('карта-журнал (v3): пути артефактов переписываются по индексу, журнал писем не читается (он подменён каталогом)', async () => {
+    const { project, workId } = await legacyProject('shop');
+    const note = `.harnas/works/${workId}/artifacts/note.txt`;
+    await updateMap(project, workId, (map) => {
+      const session = addSession(map, { provider: 'claude', label: 'план', task: 'задача' });
+      session.artifacts = [{ kind: 'заметка', path: note }];
+      transitionSession(map, session.id, 'active');
+      transitionSession(map, session.id, 'sleeping');
+      session.pid = null;
+      addMessage(map, { roomId: null, from: 'human', to: [session.id], text: 'письмо' });
+    });
+    expect(await migrateMapToJournal(project, workId)).toMatchObject({ status: 'migrated' });
+    // Любая сборка писем (readMap) упала бы на каталоге вместо журнала: EISDIR.
+    const journal = journalFile(workPaths(project, workId), null);
+    await rm(journal);
+    await mkdir(journal);
+
+    expect(await migrateProjects({ now })).toMatchObject([{ status: 'moved' }]);
+
+    const session = (await readIndex(project, workId)).sessions.find((candidate) => candidate.artifacts.length > 0);
+    expect(session?.artifacts).toEqual([{ kind: 'заметка', path: `.parley/works/${workId}/artifacts/note.txt` }]);
   });
 
   it('сохранённые брифы: относительные пути в каталог состояния переписываются, абсолютные и чужие — нет', async () => {

@@ -13,7 +13,8 @@ import {
   type CursorFile,
 } from './journal.js';
 import { recipientsOf } from './letters.js';
-import { attachSink, JournalLetterSink } from './letter-sink.js';
+import { attachPreviewSink, attachSink, JournalLetterSink } from './letter-sink.js';
+import { JOURNAL_SCHEMA_VERSION, parseIndex, parseMap, peekSchemaVersion } from './map.js';
 import { readIndex, workPaths, type WorkPaths } from './store.js';
 import { validateDecisionJournalStorage, type DecisionJournalIntent } from './decision-journal.js';
 import { HUMAN, type Message, type WorkIndexMap, type WorkMap } from './types.js';
@@ -162,6 +163,44 @@ export async function assembleFromIndex(projectPath: string, workId: string, ind
     },
   );
   return compose(index, keys, { journals, cursors, decisions });
+}
+
+/**
+ * Карта с письмами ОДНОЙ комнаты: индекс плюс журнал этой комнаты, без остальных журналов, курсоров и решений. Для читателей,
+ * которым нужна одна комната и её участники (история комнаты): `readMap` на карте-журнале читает журналы всех комнат.
+ * Письма — без `readBy` (курсоры не читаются). Карта v2 разбирается целиком, как в `readMap`: письма всех комнат уже в файле.
+ */
+export async function readMapWithRoom(projectPath: string, workId: string, roomId: string): Promise<WorkMap> {
+  const file = workPaths(projectPath, workId).map;
+  const raw = await readFile(file, 'utf8');
+  if (peekSchemaVersion(raw) !== JOURNAL_SCHEMA_VERSION) return parseMap(raw, file);
+  const index = parseIndex(raw, file);
+  const letters = index.rooms.some((room) => room.id === roomId)
+    ? await readMessages(projectPath, workId, roomId, { limit: Infinity, maxBytes: Infinity })
+    : [];
+  const rest = { ...index };
+  delete (rest as { schemaVersion?: unknown }).schemaVersion;
+  const messages = letters.map((letter) => {
+    const message = { ...letter, readBy: {} };
+    delete (message as { seq?: number }).seq;
+    return message as Message;
+  });
+  return { ...rest, schemaVersion: 2, messages } as unknown as WorkMap;
+}
+
+/**
+ * Карта для примерки резервирования эффектов плана (`reservePlanEffects`): индекс, `decisionExports` из `decisions.json`
+ * и приёмник примерки вместо писем. Письма не читаются: примерке нужны планы, комнаты и письма Parley за последний час,
+ * а их даёт приёмник из хвостов журналов, и только если в очереди что-то есть. Карту можно передавать в `reservePlanEffects`
+ * без копии: он копирует то, что меняет, а записать что-либо через эту карту нельзя. Карта v2 — обычный разбор, как в `readMap`.
+ */
+export async function readMapForPlanPreview(projectPath: string, workId: string): Promise<WorkMap> {
+  const file = workPaths(projectPath, workId).map;
+  const raw = await readFile(file, 'utf8');
+  if (peekSchemaVersion(raw) !== JOURNAL_SCHEMA_VERSION) return parseMap(raw, file);
+  const map = lazyJournalMap(projectPath, workId, parseIndex(raw, file));
+  attachPreviewSink(map, projectPath, workId);
+  return map;
 }
 
 // ---------------------------------------------------------------------------------------------------------------

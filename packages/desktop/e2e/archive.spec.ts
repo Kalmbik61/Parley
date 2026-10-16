@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readMap } from '@parley/core';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
@@ -148,8 +149,8 @@ test.describe('архив комнат и проектов, 800×500 с длин
     return ref.sessionId;
   }
 
-  const mapOf = async (workId: string): Promise<MapShape> =>
-    JSON.parse(await readFile(path.join(project, '.parley', 'works', workId, 'map.json'), 'utf8')) as MapShape;
+  // Карта читается так же, как продукт: `readMap` собирает и карту v2, и карту-журнал (письма лежат в журналах, не в `map.json`).
+  const mapOf = async (workId: string): Promise<MapShape> => (await readMap(project, workId)) as unknown as MapShape;
 
   const hiddenProjects = async (): Promise<string[]> => {
     try {

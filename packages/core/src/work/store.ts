@@ -219,6 +219,22 @@ export async function readMap(projectPath: string, workId: string): Promise<Work
 }
 
 /**
+ * Карта из уже прочитанного текста `map.json` без чтения журналов: v3 — индекс с ленивыми `messages` и `decisionExports`
+ * (`lazyJournalMap`: журналы читаются, только когда к полю обратились), v2 — обычный `parseMap`. Для читателей, которым
+ * нужны сессии, комнаты и статус работы, а не вся переписка (панели решений и бэклога, поиск по итогам сессий).
+ */
+export function parseMapLazy(projectPath: string, workId: string, raw: string, file: string): WorkMap {
+  if (peekSchemaVersion(raw) === JOURNAL_SCHEMA_VERSION) return lazyJournalMap(projectPath, workId, parseIndex(raw, file));
+  return parseMap(raw, file);
+}
+
+/** `readMap` без чтения журналов: см. `parseMapLazy`. */
+export async function readMapLazy(projectPath: string, workId: string): Promise<WorkMap> {
+  const file = workPaths(projectPath, workId).map;
+  return parseMapLazy(projectPath, workId, await readFile(file, 'utf8'), file);
+}
+
+/**
  * Версия формата карты работы без разбора всей карты: берётся из начала файла (`schemaVersion` пишется первым ключом),
  * иначе файл разбирается целиком. Нет файла — `undefined`. Сервер MCP по ней отказывает в записи в формат новее своего.
  */
