@@ -471,6 +471,15 @@ describe('console (спека 5.1)', () => {
     for (const secret of ['SECRET2', 'SECRET3']) expect(JSON.stringify(result), secret).not.toContain(secret);
   });
 
+  it('pattern смотрит на текст с маской: секрет из адреса не подобрать, matched его не выдаёт', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    snapshots.set(7, { ...EMPTY, console: entries });
+    const result = okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1', pattern: 'SECRET3' }));
+    expect(result.entries).toEqual([]);
+    expect(result.matched).toBe(0);
+  });
+
   it('бюджет 20 КБ: при длинных записях их меньше limit, новейшие сохраняются', async () => {
     const { ops, snapshots, runOp: run } = setup();
     register(ops, {});

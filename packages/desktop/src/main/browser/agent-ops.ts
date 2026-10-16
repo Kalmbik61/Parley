@@ -355,13 +355,12 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     const snapshot = captured(contents.id);
     const level = args.level ?? 'error';
     const pattern = args.pattern?.toLowerCase();
-    const matching = snapshot.console.filter(
-      (entry) =>
-        entry.epoch === snapshot.epoch &&
-        (level === 'all' || entry.level === 'error' || (level === 'warning' && entry.level === 'warning')) &&
-        (pattern === undefined || entry.text.toLowerCase().includes(pattern)),
-    );
-    return { tab: record.agentId, url: redactUrl(contents.getURL()), entries: newest(matching.map(toAgentConsole), args.limit ?? DEFAULT_LIST), matched: matching.length };
+    // Фильтр смотрит на текст с маской, как и ответ: по сырому подбирали бы значение секрета посимвольно через `matched`.
+    const matching = snapshot.console
+      .filter((entry) => entry.epoch === snapshot.epoch && (level === 'all' || entry.level === 'error' || (level === 'warning' && entry.level === 'warning')))
+      .map(toAgentConsole)
+      .filter((entry) => pattern === undefined || entry.text.toLowerCase().includes(pattern));
+    return { tab: record.agentId, url: redactUrl(contents.getURL()), entries: newest(matching, args.limit ?? DEFAULT_LIST), matched: matching.length };
   }
 
   async function detailOf(id: number, entry: NetworkEntry): Promise<BrowserAgentRequestDetail> {
