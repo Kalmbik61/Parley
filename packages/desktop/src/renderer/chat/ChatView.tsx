@@ -85,6 +85,7 @@ import { fitDefaultInstructions } from '../lib/context-format.js';
 import { addAttachments, composePrompt } from './attachments.js';
 import { ChatEnvContext, type ChatEnv } from './chat-env.js';
 import { chatOutbox, promptCount } from './chat-outbox.js';
+import { promptHistory } from './history.js';
 import { useOutboxItems } from '../lib/outbox.js';
 import { ChatToolbar, modeLabel, type ModeChoice } from './ChatToolbar.js';
 import { openAgentsPanel } from '../agents/open-agents.js';
@@ -243,6 +244,10 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const outbox = useMemo(
     () => outboxItems.map((item) => ({ id: item.id, text: item.payload.text, failed: item.status === 'failed' })),
     [outboxItems],
+  );
+  const history = useMemo(
+    () => promptHistory(items, [...queued.map((entry) => entry.text), ...outboxItems.map((item) => item.payload.text)]),
+    [items, queued, outboxItems],
   );
   // Просьба показать карточку агента — только про эту сессию (бейдж в сайдбаре и комнате, тулбар); исполняет лента.
   const reveal = useChatUiStore((state) => (state.reveal?.sessionKey === sessionKey ? state.reveal : null));
@@ -467,6 +472,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           </div>
         ) : null}
         <Composer
+          history={history}
           source={suggestionSource}
           slashCommands={!codex}
           codex={codex}

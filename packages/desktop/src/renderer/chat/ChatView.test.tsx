@@ -1964,3 +1964,114 @@ describe('ChatView — просмотр картинки из результат
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 });
+
+describe('ChatView — история ↑/↓ (спека 2026-10-16, 3.2)', () => {
+  const field = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: S.chat.composer.label }) as HTMLTextAreaElement;
+  const type = (value: string): void => {
+    fireEvent.change(field(), { target: { value } });
+  };
+  const key = (name: 'ArrowUp' | 'ArrowDown'): void => {
+    fireEvent.keyDown(field(), { key: name });
+  };
+  const chips = (): string[] => screen.queryAllByTestId('chat-attachment').map((chip) => chip.getAttribute('data-path') ?? '');
+
+  /** Подсказки команд — как в блоке «подсказки поля ввода»: хост с `capabilities.list`, мост отдаёт команды. */
+  function withCommands(names: string[]): void {
+    hostWith([...FEED_METHODS, 'capabilities.list']);
+    bridge.setHandler('capabilities.list', () => ({
+      commands: names.map((name) => ({ name, description: name, terminal: false })),
+      skills: [],
+      agents: [],
+    }));
+    useProvidersStore.setState({
+      providers: [{ ...CLAUDE_OK, models: [{ id: 'opus', label: 'Opus' }, { id: 'sonnet', label: 'Sonnet' }] }],
+      loaded: true,
+    });
+    const session = makeSession('s-01', 'S01');
+    useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: '/tmp/p', sessions: [session] })], branches: {}, loading: false, error: null });
+  }
+
+  it('↑ в пустом поле — прошлые сообщения от новых к старым, ↓ — обратно, после самого нового — пусто', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'one'), turn('u1'), prompt('p2', 'two'), turn('u2')]);
+    key('ArrowUp');
+    expect(field().value).toBe('two');
+    key('ArrowUp');
+    expect(field().value).toBe('one');
+    key('ArrowUp');
+    expect(field().value).toBe('one');
+    key('ArrowDown');
+    expect(field().value).toBe('two');
+    key('ArrowDown');
+    expect(field().value).toBe('');
+  });
+
+  it('при любой длине истории n раз ↑ проходят её всю по порядку, n+1-й остаётся на самом старом', () => {
+    for (let count = 1; count <= 6; count += 1) {
+      const view = renderBody(makeSession('s-01', 'S01'));
+      const texts = Array.from({ length: count }, (_, index) => `m${index}`);
+      setFeed(texts.flatMap((text, index) => [prompt(`p${index}`, text), turn(`u${index}`)]));
+      const seen: string[] = [];
+      for (let index = 0; index <= count; index += 1) {
+        key('ArrowUp');
+        seen.push(field().value);
+      }
+      expect(seen).toEqual([...[...texts].reverse(), texts[0]]);
+      view.unmount();
+      useChatUiStore.getState().setDraft(refKey(REF), '');
+    }
+  });
+
+  it('вызванное начали править — ↑ больше не листает историю', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'one'), turn('u1'), prompt('p2', 'two'), turn('u2')]);
+    key('ArrowUp');
+    type('two!');
+    key('ArrowUp');
+    expect(field().value).toBe('two!');
+  });
+
+  it('непустой черновик — ↑ его не трогает', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'one'), turn('u1')]);
+    type('draft');
+    key('ArrowUp');
+    expect(field().value).toBe('draft');
+  });
+
+  it('открытые подсказки — ↑ их, а не история', async () => {
+    withCommands(['clear', 'compact']);
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'one'), turn('u1')]);
+    type('/');
+    await screen.findByRole('listbox');
+    key('ArrowUp');
+    expect(field().value).toBe('/');
+  });
+
+  it('вызванная команда «/compact» не открывает подсказки: следующее ↑ идёт дальше по истории', async () => {
+    withCommands(['clear', 'compact']);
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'one'), turn('u1'), prompt('p2', '/compact'), turn('u2')]);
+    // Подсказки команд на деле приходят: без них проверка «попап не открылся» прошла бы впустую.
+    type('/comp');
+    await screen.findByRole('listbox');
+    type('');
+    key('ArrowUp');
+    expect(field().value).toBe('/compact');
+    expect(screen.queryByRole('listbox')).toBeNull();
+    key('ArrowUp');
+    expect(field().value).toBe('one');
+  });
+
+  it('вложения вызванного сообщения встают чипами, текст — без путей', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'see @"/a/b.txt" '), turn('u1')]);
+    key('ArrowUp');
+    expect(field().value).toBe('see');
+    expect(chips()).toEqual(['/a/b.txt']);
+    key('ArrowDown');
+    expect(field().value).toBe('');
+    expect(chips()).toEqual([]);
+  });
+});
