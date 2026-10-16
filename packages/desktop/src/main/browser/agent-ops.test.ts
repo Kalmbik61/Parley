@@ -3,9 +3,13 @@
  * перевод его ответа в ответ агенту. Окно подменено: проверяется логика main, а раскладку и тост проверяют тесты рендерера.
  */
 import { describe, expect, it, vi } from 'vitest';
+import { AGENT_LIMITS } from '@parley/protocol';
 import type { BrowserAgentOpEvent, BrowserAgentOpenResult, BrowserAgentOwner, BrowserAgentResult } from '@parley/protocol';
-import type { AgentOpenTab, AgentOpenTabResult } from '../../shared/browser-types.js';
+import type { WebContents } from 'electron';
+import type { DevtoolsSnapshot, ViewportSpec } from '../../shared/browser-devtools.js';
+import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistration } from '../../shared/browser-types.js';
 import { workKey } from '../../shared/work-keys.js';
+import { PANEL_LIMITS } from '../../renderer/layout/tree.js';
 import { createAgentOps, loopbackHref, NOT_MOUNTED_NOTE, type AgentOps } from './agent-ops.js';
 
 const REF = { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' };
@@ -15,6 +19,38 @@ const OTHER_WORK = workKey(OTHER_REF.projectPath, OTHER_REF.workId);
 const PAGE = 'http://localhost:5173/form';
 const OWN = { kind: 'session', sessionId: 's-02' } as const;
 const room = (roomId: string): BrowserAgentOwner => ({ kind: 'room', roomId });
+
+/** Гость-страница: URL и заголовок задаются, уничтожение и падение — флаги. */
+function fakeGuest(id: number, url = 'http://localhost:5173/settings', title = 'Settings') {
+  return { id, getURL: vi.fn(() => url), getTitle: vi.fn(() => title), isDestroyed: vi.fn(() => false), isCrashed: vi.fn(() => false) };
+}
+type Guest = ReturnType<typeof fakeGuest>;
+const EMPTY: DevtoolsSnapshot = { epoch: 1, capture: 'on', console: [], network: [] };
+
+/** PNG-заглушка: подпись и размеры в IHDR (24 байта). */
+function png(width: number, height: number): Buffer {
+  const data = Buffer.alloc(24);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(data);
+  data.writeUInt32BE(width, 16);
+  data.writeUInt32BE(height, 20);
+  return data;
+}
+
+/** Ответы `inspector.send`: вьюпорт 1280×800, страница 1280×2000, снимок — PNG-заглушка. */
+function sendWith(options: { viewport?: { width: number; height: number }; content?: { width: number; height: number }; shot?: Buffer } = {}) {
+  const viewport = options.viewport ?? { width: 1280, height: 800 };
+  const content = options.content ?? { width: 1280, height: 2000 };
+  return async (_id: number, method: string): Promise<unknown> => {
+    if (method === 'Page.getLayoutMetrics') {
+      return {
+        cssLayoutViewport: { clientWidth: viewport.width, clientHeight: viewport.height, pageX: 0, pageY: 0 },
+        cssContentSize: { x: 0, y: 0, width: content.width, height: content.height },
+      };
+    }
+    if (method === 'Page.captureScreenshot') return { data: (options.shot ?? png(viewport.width, viewport.height)).toString('base64') };
+    return {};
+  };
+}
 
 /** Окно отвечает на просьбу своим ответом (если он задан) сразу после неё, как ответил бы рендерер. */
 function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null; sent?: boolean; openMs?: number; owners?: BrowserAgentOwner[] } = {}) {
@@ -29,18 +65,53 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
     }
     return true;
   });
-  const ops: AgentOps = createAgentOps({ agentsAllowed: async () => state.allowed, openTab, ...(overrides.openMs === undefined ? {} : { openMs: overrides.openMs }) });
+  const guests = new Map<number, Guest>([[7, fakeGuest(7)]]);
+  const snapshots = new Map<number, DevtoolsSnapshot>();
+  const activity: AgentActivity[] = [];
+  const inspector = {
+    snapshot: vi.fn((id: number): DevtoolsSnapshot | null => snapshots.get(id) ?? EMPTY),
+    send: vi.fn(sendWith() as <T>(id: number, method: string, params?: Record<string, unknown>) => Promise<T>),
+    responseBody: vi.fn(async (): Promise<{ text: string; base64: boolean; truncated: boolean } | null> => null),
+  };
+  const emulation = {
+    current: vi.fn((): ViewportSpec | null => null),
+    withTemporary: vi.fn(async <T>(_id: number, _spec: ViewportSpec, run: () => Promise<T>): Promise<T> => run()),
+  };
+  const saveImage = vi.fn(async (): Promise<string | null> => '/drops/shot.png');
+  const image = {
+    size: (data: Buffer) => ({ width: data.readUInt32BE(16), height: data.readUInt32BE(20) }),
+    resize: (_data: Buffer, width: number, height: number) => png(width, height),
+    stitch: (parts: Buffer[]) => png(parts[0] ? parts[0].readUInt32BE(16) : 0, parts.reduce((sum, part) => sum + part.readUInt32BE(20), 0)),
+  };
+  const deps = {
+    agentsAllowed: async () => state.allowed,
+    openTab,
+    ...(overrides.openMs === undefined ? {} : { openMs: overrides.openMs }),
+    fromId: (id) => (guests.get(id) as unknown as WebContents | undefined) ?? null,
+    inspector,
+    emulation,
+    saveImage,
+    image,
+    activity: (e: AgentActivity) => void activity.push(e),
+  };
+  const ops: AgentOps = createAgentOps(deps);
   // Хост всегда кладёт в owners саму сессию: для чужого ref (другая работа) — её, а не s-02.
   const run = (args: unknown, ref = REF, op = 'open'): Promise<BrowserAgentResult> =>
     ops.run({ opId: 'op-1', ref, label: ref.sessionId === 's-02' ? 'S02' : 'S01', owners: overrides.owners ?? [{ kind: 'session', sessionId: ref.sessionId }], op: op as BrowserAgentOpEvent['op'], args });
-  return { ops, run, asked, openTab, state };
+  const runOp = (op: string, args: unknown = {}, ref = REF): Promise<BrowserAgentResult> => run(args, ref, op);
+  return { ops, deps, run, runOp, asked, openTab, state, guests, snapshots, activity, inspector, emulation, saveImage };
+}
+
+/** Регистрирует страницу панели чата сессии s-02 (гость 7); `patch` меняет поля. */
+function register(ops: AgentOps, patch: Partial<Extract<AgentPageRegistration, { pageId: string; visible: boolean }>>): void {
+  ops.registerTab({ webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true, ...patch });
 }
 
 const codeOf = (result: BrowserAgentResult): string => (result.ok ? 'ok' : result.error.code);
 const messageOf = (result: BrowserAgentResult): string => (result.ok ? '' : result.error.message);
-function okResult(result: BrowserAgentResult): BrowserAgentOpenResult {
+function okResult<T = BrowserAgentOpenResult>(result: BrowserAgentResult): T {
   if (!result.ok) throw new Error(`операция отказала: ${result.error.code} ${result.error.message}`);
-  return result.result as BrowserAgentOpenResult;
+  return result.result as T;
 }
 
 describe('open (спека 5.1 browser_open)', () => {
@@ -120,7 +191,7 @@ describe('open (спека 5.1 browser_open)', () => {
     const limit = setup({ reply: { error: 'limit' } });
     const refused = await limit.run({ url: PAGE });
     expect(codeOf(refused)).toBe('bad_request');
-    expect(messageOf(refused)).toContain('10 browser tabs');
+    expect(messageOf(refused)).toContain(`${AGENT_LIMITS.panelPages} pages`);
     const noWork = setup({ reply: { error: 'no_work' } });
     const unknown = await noWork.run({ url: PAGE });
     expect(codeOf(unknown)).toBe('window_not_connected');
@@ -192,6 +263,7 @@ describe('окно ушло или молчит (Фокус ревью, п. 4)',
     const none = setup({ sent: false });
     expect(codeOf(await none.run({ url: PAGE }))).toBe('window_not_connected');
     const ops = createAgentOps({
+      ...setup().deps,
       agentsAllowed: async () => true,
       openTab: () => {
         throw new Error('Object has been destroyed');
@@ -218,5 +290,119 @@ describe('окно ушло или молчит (Фокус ревью, п. 4)',
     expect(okResult(await second).url).toBe('http://localhost:5173/second');
     ops.openTabResult(asked[0]?.requestId ?? '', { tabId: 'browser:aaaaaa', reused: false, mounted: true });
     expect(okResult(await first).url).toBe(PAGE);
+  });
+});
+
+type Tabs = { notes: string[]; tabs: Array<{ id: string; owner: unknown; url: string; title: string; viewport: unknown; loaded: boolean; visible: boolean; loopback: boolean }> };
+const ROOM = { kind: 'room', roomId: 'r-01' } as const;
+
+describe('реестр страниц панелей и tabs (спека 3.7, 3.10, 5.1)', () => {
+  it('своя страница: id t1, хозяин, URL, заголовок, размер, loaded, visible, loopback', async () => {
+    const { ops, runOp: run } = setup();
+    register(ops, {});
+    expect(okResult<Tabs>(await run('tabs', {}))).toEqual({
+      notes: [],
+      tabs: [{ id: 't1', owner: OWN, url: 'http://localhost:5173/settings', title: 'Settings', viewport: { width: 1280, height: 800, emulated: false }, loaded: true, visible: true, loopback: true }],
+    });
+  });
+
+  it('хозяева (Фокус ревью, п. 3): страница комнаты сессии видна; чужой чат и комната вне owners — не видны, а по id — access_denied; другая работа — свой счёт id', async () => {
+    const { ops, guests, runOp: run } = setup({ owners: [OWN, ROOM] });
+    guests.set(8, fakeGuest(8, 'http://localhost:3000/', 'Room page'));
+    guests.set(9, fakeGuest(9, 'http://localhost:4000/', 'Other chat'));
+    guests.set(10, fakeGuest(10, 'http://localhost:6000/', 'Other room'));
+    register(ops, {});
+    register(ops, { webContentsId: 8, owner: ROOM, pageId: 'bp-bbbbbb' });
+    register(ops, { webContentsId: 9, owner: { kind: 'session', sessionId: 's-09' }, pageId: 'bp-cccccc' });
+    register(ops, { webContentsId: 10, owner: { kind: 'room', roomId: 'r-99' }, pageId: 'bp-dddddd' });
+    expect(okResult<Tabs>(await run('tabs', {})).tabs.map((tab) => [tab.id, tab.title])).toEqual([['t1', 'Settings'], ['t2', 'Room page']]);
+    expect(codeOf(await run('console', { tab: 't3' }))).toBe('access_denied');
+    expect(codeOf(await run('console', { tab: 't9' }))).toBe('no_tab');
+    ops.registerTab({ webContentsId: 11, workKey: OTHER_WORK, owner: OWN, pageId: 'bp-eeeeee', visible: true });
+    expect(okResult<Tabs>(await run('tabs', {}, OTHER_REF)).tabs.map((tab) => tab.id)).toEqual(['t1']);
+  });
+
+  it('пауза панели (спека 4.8): страниц нет в tabs, операции — access_denied «paused by the human»; снятие паузы возвращает их', async () => {
+    const { ops, runOp: run } = setup();
+    register(ops, {});
+    ops.registerTab({ workKey: WORK, owner: OWN, paused: true });
+    expect(okResult<Tabs>(await run('tabs', {})).tabs).toEqual([]);
+    const denied = await run('console', { tab: 't1' });
+    expect(codeOf(denied)).toBe('access_denied');
+    expect(messageOf(denied)).toContain('paused by the human');
+    ops.registerTab({ workKey: WORK, owner: OWN, paused: false });
+    expect(okResult<Tabs>(await run('tabs', {})).tabs).toHaveLength(1);
+  });
+
+  it('эмуляция — размер из её спеки; секрет в адресе — с маской; длинный заголовок — 200 символов; чужой сайт — loopback: false', async () => {
+    const { ops, emulation, guests, runOp: run } = setup();
+    register(ops, {});
+    guests.set(7, fakeGuest(7, 'http://localhost:5173/a?token=SECRET1', 'x'.repeat(300)));
+    emulation.current.mockReturnValue({ preset: 'mobile-m', rotated: false, dpr: 2 });
+    const [tab] = okResult<Tabs>(await run('tabs', {})).tabs;
+    expect(tab?.viewport).toEqual({ width: 375, height: 812, emulated: true });
+    expect(tab?.url).not.toContain('SECRET1');
+    expect(tab?.title).toHaveLength(200);
+    guests.set(7, fakeGuest(7, 'https://example.com/', 'External'));
+    expect(okResult<Tabs>(await run('tabs', {})).tabs[0]?.loopback).toBe(false);
+  });
+
+  it('id общий с open: страница, открытая browser_open (t1), после регистрации остаётся t1; новая — t2', async () => {
+    const { ops, runOp: run, state } = setup();
+    state.reply = { tabId: 'bp-aaaaaa', reused: false, mounted: true };
+    expect(okResult<{ tab: string }>(await run('open', { url: 'http://localhost:5173/settings' })).tab).toBe('t1');
+    register(ops, {});
+    register(ops, { webContentsId: 8, pageId: 'bp-bbbbbb', visible: false });
+    expect(okResult<Tabs>(await run('tabs', {})).tabs.map((tab) => [tab.id, tab.visible])).toEqual([['t1', true], ['t2', false]]);
+  });
+
+  it('страница без гостя или с уничтоженным — loaded: false, не видна, размера нет; gone убирает её', async () => {
+    const { ops, guests, runOp: run } = setup();
+    register(ops, {});
+    register(ops, { webContentsId: null, pageId: 'bp-bbbbbb', visible: true });
+    guests.get(7)?.isDestroyed.mockReturnValue(true);
+    const { tabs } = okResult<Tabs>(await run('tabs', {}));
+    expect(tabs.map((tab) => [tab.loaded, tab.visible, tab.viewport])).toEqual([[false, false, null], [false, false, null]]);
+    ops.registerTab({ workKey: WORK, pageId: 'bp-bbbbbb', gone: true });
+    expect(okResult<Tabs>(await run('tabs', {})).tabs).toHaveLength(1);
+  });
+
+  it('reset (окно перезагрузилось): реестр и паузы пусты до новой регистрации, id прежние', async () => {
+    const { ops, runOp: run } = setup();
+    register(ops, {});
+    ops.registerTab({ workKey: WORK, owner: OWN, paused: true });
+    ops.reset();
+    expect(okResult<Tabs>(await run('tabs', {})).tabs).toEqual([]);
+    register(ops, {});
+    expect(okResult<Tabs>(await run('tabs', {})).tabs[0]?.id).toBe('t1');
+  });
+
+  it('работа, о которой окно ничего не сообщало, — пустой список и пояснение; работа известна (страница или пауза), но список пуст — без пояснения', async () => {
+    const { ops, runOp: run } = setup();
+    const unknown = okResult<Tabs>(await run('tabs', {}));
+    expect(unknown.tabs).toEqual([]);
+    expect(unknown.notes).toEqual(["Parley's window has not reported any browser pages for this workspace. If the human has not opened this workspace in Parley's window yet, its pages are not known; a page you open with browser_open will appear here."]);
+    register(ops, {});
+    ops.registerTab({ workKey: WORK, owner: OWN, paused: true });
+    expect(okResult<Tabs>(await run('tabs', {}))).toEqual({ tabs: [], notes: [] });
+  });
+
+  it('предел страниц: текст отказа browser_open называет число из AGENT_LIMITS.panelPages, а оно равно PANEL_LIMITS.pages окна', async () => {
+    expect(AGENT_LIMITS.panelPages).toBe(PANEL_LIMITS.pages);
+    const { runOp: run, state } = setup();
+    state.reply = { error: 'limit' };
+    const refused = await run('open', { url: PAGE });
+    expect(codeOf(refused)).toBe('bad_request');
+    expect(messageOf(refused)).toContain(`${AGENT_LIMITS.panelPages} pages`);
+    expect(messageOf(refused)).not.toContain('10');
+  });
+
+  it('общий выключатель — access_denied и у tabs; неверные аргументы — bad_request', async () => {
+    const { runOp: run, state } = setup();
+    state.allowed = false;
+    expect(codeOf(await run('tabs', {}))).toBe('access_denied');
+    state.allowed = true;
+    expect(codeOf(await run('tabs', { extra: 1 }))).toBe('bad_request');
+    expect(codeOf(await run('console', { tab: 'bp-aaaaaa' }))).toBe('bad_request');
   });
 });

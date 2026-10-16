@@ -771,7 +771,7 @@ git commit -m "feat(desktop): временная эмуляция для сни�
 
 **Правило доступа** (спека 3.10, 5.2; один код на все операции, `pageOf`): страница находится по `workKey` из `ref` события и id агента (`t<n>`); нет такой — `no_tab`; её хозяин не входит в `request.owners` — `access_denied` (хозяев вкладывает хост по токену сессии, агент назвать чужого не может); панель на паузе — `access_denied` «paused by the human»; гостя нет, он уничтожен или упал — `tab_not_loaded`; адрес не loopback — `not_loopback`. В `tabs` страницы чужих хозяев и панелей на паузе просто не попадают в список.
 
-- [ ] **Шаг 1. Типы.** В `shared/browser-types.ts` рядом с `AgentOpenTab`:
+- [x] **Шаг 1. Типы.** В `shared/browser-types.ts` рядом с `AgentOpenTab`:
 
 ```ts
 /**
@@ -798,7 +798,7 @@ export interface AgentActivity {
 
   (`BrowserOwner` в этом файле уже импортирован для `AgentOpenTab`.)
 
-- [ ] **Шаг 2. Расширить `setup` в `agent-ops.test.ts`.** Тест B2 собирает `createAgentOps({ agentsAllowed, openTab })`; новые зависимости обязательные, поэтому в `setup` добавить заглушки (проверки `open` от этого не меняются):
+- [x] **Шаг 2. Расширить `setup` в `agent-ops.test.ts`.** Тест B2 собирает `createAgentOps({ agentsAllowed, openTab })`; новые зависимости обязательные, поэтому в `setup` добавить заглушки (проверки `open` от этого не меняются):
 
 ```ts
 /** Гость-страница: URL и заголовок задаются, уничтожение и падение — флаги. */
@@ -822,7 +822,7 @@ const image = { size: (data: Buffer) => ({ width: data.readUInt32BE(16), height:
 
   `png(width, height)` и `sendWith({ viewport?, content?, shot? })` — хелперы теста: `png` собирает буфер с подписью PNG и размерами в IHDR (24 байта: подпись, `writeUInt32BE(width, 16)`, `writeUInt32BE(height, 20)`); `sendWith` возвращает функцию для `inspector.send`: на `Page.getLayoutMetrics` — `{ cssLayoutViewport: { clientWidth, clientHeight, pageX: 0, pageY: 0 }, cssContentSize: { x: 0, y: 0, width, height } }` (по умолчанию вьюпорт 1280×800, страница 1280×2000), на `Page.captureScreenshot` — `{ data: <png в base64> }`, на прочее — `{}`. Хелпер `register(ops, patch)` — `ops.registerTab({ webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true, ...patch })`. `run` в `setup` у B2 принимает `(args, ref, op)` и для `open` — добавить из `setup` синоним `runOp = (op, args = {}, ref = REF) => run(args, ref, op)`; тесты ниже берут его как `runOp: run`.
 
-- [ ] **Шаг 3. Написать падающие тесты** (новый `describe` в `agent-ops.test.ts`; `okResult` B2 типизирован под `open` — сделать его обобщённым `okResult<T>`):
+- [x] **Шаг 3. Написать падающие тесты** (новый `describe` в `agent-ops.test.ts`; `okResult` B2 типизирован под `open` — сделать его обобщённым `okResult<T>`):
 
 ```ts
 type Tabs = { notes: string[]; tabs: Array<{ id: string; owner: unknown; url: string; title: string; viewport: unknown; loaded: boolean; visible: boolean; loopback: boolean }> };
@@ -940,9 +940,9 @@ describe('реестр страниц панелей и tabs (спека 3.7, 3.
 });
 ```
 
-- [ ] **Шаг 4. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/main/browser/agent-ops.test.ts` → FAIL: `registerTab is not a function`, `tabs` отвечает `unsupported`.
+- [x] **Шаг 4. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/main/browser/agent-ops.test.ts` → FAIL: `registerTab is not a function`, `tabs` отвечает `unsupported`.
 
-- [ ] **Шаг 5. Реализовать.** В `agent-ops.ts` (код B2 — `loopbackHref`, `ownerOf`, `openOf`, `askWindow`, `agentIdFor` и ветку `open` не менять, кроме текста предела страниц):
+- [x] **Шаг 5. Реализовать.** В `agent-ops.ts` (код B2 — `loopbackHref`, `ownerOf`, `openOf`, `askWindow`, `agentIdFor` и ветку `open` не менять, кроме текста предела страниц):
   - *предел страниц* (дефект B2): в `openOf` сообщение `bad_request` — `` `This browser panel already has ${AGENT_LIMITS.panelPages} pages, the most Parley allows. Ask the human to close one.` ``; в тесте B2 ожидание `toContain('10 browser tabs')` (строка про предел вкладок) заменить на `toContain(`${AGENT_LIMITS.panelPages} pages`)`; в тест импортировать `PANEL_LIMITS` из `../../renderer/layout/tree.js` и `AGENT_LIMITS` из `@parley/protocol`. Число в протоколе (`AGENT_LIMITS.panelPages`) сверено с источником правды окна тестом выше, с копией core — тестом хоста `browser-contract.test.ts` (он обходит все ключи `BROWSER_TOOL_LIMITS`);
   - *работа без гидрации*: `browser_tabs` для работы, о которой окно ничего не сообщало с начала запуска или после `reset` (ни страницы, ни паузы), отдаёт пустой список с `notes` (константа модуля `UNKNOWN_WORK_NOTE`, текст — как в тесте выше); нового канала и ожидания гидрации нет: рабочий путь агента — `browser_open`, который окно гидрирует само (B2). У работы без панелей и у работы, которую окно просто не читало, пояснение одно и то же, поэтому текст составлен с «if»;
   - импорты: `WebContents` из `electron`; `BrowserAgentOwner`, `BrowserAgentTabInfo` из протокола; `viewportSize` из `../../shared/browser-devtools.js`; `AgentActivity`, `AgentPageRegistration` из `../../shared/browser-types.js`; `redactUrl` из `../../shared/redact.js`; типы `Emulation`, `Inspector` из соседних модулей;
@@ -1067,9 +1067,9 @@ describe('реестр страниц панелей и tabs (спека 3.7, 3.
     },
 ```
 
-- [ ] **Шаг 6. Запустить — проходит.** Та же команда → PASS (тесты `open` B2 и 8 новых).
+- [x] **Шаг 6. Запустить — проходит.** Та же команда → PASS (тесты `open` B2 и 8 новых).
 
-- [ ] **Шаг 7. Закоммитить.**
+- [x] **Шаг 7. Закоммитить.**
 
 ```bash
 git add packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-ops.test.ts packages/desktop/src/shared/browser-types.ts
