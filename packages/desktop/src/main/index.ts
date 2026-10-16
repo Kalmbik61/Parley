@@ -26,6 +26,7 @@ import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { ISLAND_EVENTS, type IslandConfig } from '../shared/island.js';
 import { S } from '../shared/strings.js';
 import type { UiFile } from '../shared/ui-types.js';
+import { createAgentOps, type AgentOps } from './browser/agent-ops.js';
 import { createAnnotate } from './browser/annotate.js';
 import { contextDir, saveContextFile } from './browser/context-files.js';
 import { createDesignMode } from './browser/design-mode.js';
@@ -41,7 +42,7 @@ import { cleanupDropsTree, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, sa
 import { createGitRunner, isProjectWorktree } from './files/git-api.js';
 import createGrepWorker from './files/grep-worker?nodeWorker';
 import { registerFilesIpc } from './files/ipc.js';
-import { HostConnection } from './host-connection.js';
+import { answerBrowserAgentOps, HostConnection } from './host-connection.js';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
 import { imageThumbnail } from './image-thumbnail.js';
 import { forwardAppearanceToWindow, forwardHostToPages, registerIpc } from './ipc.js';
@@ -221,6 +222,15 @@ if (!gotLock) {
         }
       },
     });
+
+    // Операции агента над браузером (спека браузера 2026-10-07, 3.7; этап B2). Подписка — до первого подключения: операция,
+    // пришедшая, пока окно поднимается, получает внятный отказ, а не тайм-аут хоста.
+    let agentOps: AgentOps | null = null;
+    answerBrowserAgentOps(connection, async (event) =>
+      agentOps === null
+        ? { ok: false, error: { code: 'window_not_connected', message: "Parley's window is still starting: try again in a moment." } }
+        : agentOps.run(event),
+    );
 
     try {
       await connection.connect();
@@ -585,6 +595,21 @@ if (!gotLock) {
       },
     });
 
+    // Вкладку агента ставит окно (спека браузера 3.7): место, предел, повтор страницы и тост — его дело. Окно, у которого
+    // страница ещё грузится (прелоад не подписан) или которое закрыто, просьбу не получит: агенту сразу window_not_connected.
+    // `loadedWindows` тут не годится: первый же `<webview>` даёт окну `did-start-loading` (а `did-finish-load` — нет), и признак
+    // снимался бы насовсем; главный кадр окна от гостей не зависит.
+    const ops = createAgentOps({
+      agentsAllowed: async () => (await uiStore.load()).browser.agentsAllowed,
+      openTab: (e) => {
+        const window = mainWindow;
+        if (window === null || window.isDestroyed() || window.webContents.isLoadingMainFrame()) return false;
+        window.webContents.send('browser:agent-open-tab', e);
+        return true;
+      },
+    });
+    agentOps = ops;
+
     // Версия окна и последний статус хоста — для `app-info.json` архива диагностики; `onStatus` отдаёт текущий статус сразу.
     const appVersion = app.isPackaged ? app.getVersion() : null;
     let hostStatus: HostStatus = { state: 'connecting' };
@@ -642,6 +667,7 @@ if (!gotLock) {
         annotate,
         inspector,
         emulation,
+        agent: ops,
       },
       saveDropImage: async () => {
         if (fakeDrops) return saveImage({ png: FAKE_DROP_PNG, dir: dropsDir() });

@@ -6,7 +6,7 @@
  * нет — им нужен `random`, подставной в тестах и `Math.random` по умолчанию.
  */
 
-import type { FileRootSpec } from '../../shared/layout-types.js';
+import type { BrowserOwner, FileRootSpec } from '../../shared/layout-types.js';
 
 function randomHex(length: number, random: () => number): string {
   let out = '';
@@ -29,6 +29,31 @@ export const tabId: {
   file: (root, path) => (root.kind === 'project' ? `file:p:${path}` : `file:w:${root.sessionId}:${path}`),
   browser: (random = Math.random) => `browser:${randomHex(6, random)}`,
 };
+
+/**
+ * `bp-<6 hex>` — страница панели браузера (спека браузера 3.10). Ключ записей `browser/store.ts`, журнала и меток
+ * общий с вкладками браузера на всё окно, поэтому id случайный, а не `<хозяин>:<номер>`: `s-01` есть в каждой работе.
+ */
+export function panelPageId(random: () => number = Math.random): string {
+  return `bp-${randomHex(6, random)}`;
+}
+
+/** Ключ хозяина панели в `WorkLayout.panels`: `session:<id>` или `room:<id>` (та же строка, что `targetKey` цели «To»). */
+export function ownerKey(owner: BrowserOwner): string {
+  return owner.kind === 'session' ? `session:${owner.sessionId}` : `room:${owner.roomId}`;
+}
+
+/** Хозяин по ключу панели; не ключ (чужая запись на диске) — `null`. */
+export function ownerOfKey(key: string): BrowserOwner | null {
+  if (key.startsWith('session:') && key.length > 'session:'.length) return { kind: 'session', sessionId: key.slice('session:'.length) };
+  if (key.startsWith('room:') && key.length > 'room:'.length) return { kind: 'room', roomId: key.slice('room:'.length) };
+  return null;
+}
+
+/** Вкладка вида хозяина: терминал сессии (Chat и терминал — одна вкладка) или комната. Закрыта — панель остаётся. */
+export function ownerTabId(owner: BrowserOwner): string {
+  return owner.kind === 'session' ? tabId.terminal(owner.sessionId) : tabId.room(owner.roomId);
+}
 
 /** `g-<6 hex>` для группы, `s-<6 hex>` для сплита. */
 export function nodeId(prefix: 'g' | 's', random: () => number = Math.random): string {

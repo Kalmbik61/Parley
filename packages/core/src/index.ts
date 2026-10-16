@@ -312,7 +312,7 @@ export type {
   SkillSkip,
   SkillSkipReason,
 } from './work/skill-install.js';
-export { systemGuidance } from './work/guidance.js';
+export { BROWSER_PRIORITY_RULE, systemGuidance } from './work/guidance.js';
 export {
   SUMMARIZER,
   SUMMARY_TIMEOUT_MS,
@@ -429,6 +429,8 @@ export type { NativeSkill, SkillUnavailableReason } from './skills/types.js';
 export { scanClaudeCapabilities } from './capabilities/scan.js';
 export type { ScanOptions } from './capabilities/scan.js';
 export {
+  AGENT_TOKEN_ENV,
+  AGENT_URL_ENV,
   MCP_SERVER_BIN,
   codexMcpOverride,
   mcpConfig,
@@ -436,7 +438,7 @@ export {
   mcpConfigValue,
   writeMcpConfig,
 } from './work/mcp-config.js';
-export type { McpConfigFile, McpConfigParams, McpStdioServer } from './work/mcp-config.js';
+export type { AgentChannel, McpConfigFile, McpConfigParams, McpStdioServer } from './work/mcp-config.js';
 export {
   CHANNEL_MIN_VERSION,
   CHANNEL_VALUE,
@@ -446,6 +448,7 @@ export {
   probeChannelSupport,
 } from './work/channel.js';
 export type { ChannelProbe } from './work/channel.js';
+export { BROWSER_TOOL_LIMITS, BROWSER_TOOL_OPS } from './mcp/browser-tools.js';
 export { contextFromEnv } from './mcp/context.js';
 export type { McpContext } from './mcp/context.js';
 export {

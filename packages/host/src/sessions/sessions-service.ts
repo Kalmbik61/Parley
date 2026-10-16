@@ -186,6 +186,11 @@ export interface SessionsFeedOptions {
    * при включённой настройке `codexApprovals` и адресе приёмника; нет — хуки Codex не включаются.
    */
   codexHookCommand?: () => Promise<string | undefined>;
+  /**
+   * Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): адрес эндпоинта (`null` — не слушает) и токены на
+   * запуск. Всем провайдерам, в отличие от хуков ленты; без него сессии запускаются без инструмента `browser_open`.
+   */
+  agent?: { url(): string | null; register(ref: SessionRef): string; unregister(ref: SessionRef): void };
 }
 
 /** Ключ работы для склейки снимков «до» и «после» в autoLaunch. */
@@ -385,6 +390,7 @@ export function createSessionsService(
     const key = refKey(ref);
     // Токен приёмника живёт, пока жив процесс: `SessionEnd` приходит до выхода, позже хуков нет.
     hooks?.unregister(ref);
+    feed.agent?.unregister(ref);
     const done = (starting.get(key) ?? Promise.resolve())
       .then(() =>
         finishExited(ref.projectPath, ref.workId, ref.sessionId, {
@@ -480,6 +486,7 @@ export function createSessionsService(
     // Резерв слота бюджета держится до исхода: процесс стартовал — `spent`, любой отказ до старта — `released`.
     let attemptId: string | null = null;
     let processStarted = false;
+    let agentChannel: { url: string; token: string } | undefined;
     try {
       const map = await timer.step('readMap', () => readMap(ref.projectPath, ref.workId));
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -571,12 +578,17 @@ export function createSessionsService(
       const roleCatalog = feed.roleCatalog
         ? await timer.step('roles', () => feed.roleCatalog!(session.worktree?.path ?? ref.projectPath))
         : undefined;
+      // Канал агента к браузеру (спека браузера 3.7): свой токен на каждый запуск, у всех провайдеров. Адрес и токен
+      // уходят только в конфиг MCP-сервера, в окружение процесса — нет.
+      const agentUrl = feed.agent?.url() ?? null;
+      if (agentUrl !== null && feed.agent !== undefined) agentChannel = { url: agentUrl, token: feed.agent.register(ref) };
       const planFn = mode === 'resume' ? planResume : mode === 'new' ? planNew : planLaunch;
       const plan = await timer.step('plan', () => planFn(ref.projectPath, ref.workId, session, {
         channel: false,
         ...(roleCatalog === undefined ? {} : { roleCatalog }),
         ...(hookUrl === undefined ? {} : { hookUrl }),
         ...(codexHookCommand === undefined ? {} : { codexHookCommand }),
+        ...(agentChannel === undefined ? {} : { agent: agentChannel }),
         ...(options.prompt === undefined ? {} : { prompt: options.prompt }),
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.effort === undefined ? {} : { effort: options.effort }),
@@ -693,6 +705,8 @@ export function createSessionsService(
       });
       throw error;
     } finally {
+      // Процесс не стартовал — токен канала никому не нужен.
+      if (agentChannel !== undefined && !processStarted) feed.agent?.unregister(ref);
       // Отмена освобождает только свой ожидающий слот: резервы других сессий и прошлых поколений остаются.
       if (attemptId !== null && !processStarted) await settleLaunch(ref, attemptId, 'released');
       launching.delete(key);

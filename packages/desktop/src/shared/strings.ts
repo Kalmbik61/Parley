@@ -980,6 +980,10 @@ export const S = {
     checkForUpdatesHint: 'Looks for a newer Parley release on GitHub at start and once a day',
     /** Секция «Браузер» (кусок 9.1): куки, хранилища и кеш раздела встроенного браузера. */
     clearBrowserData: 'Clear browser data',
+    /** Общий выключатель агентов в браузере (спека браузера 4.8, этап B2). */
+    letAgentsUseBrowser: 'Let agents use the browser',
+    letAgentsUseBrowserHint:
+      'Agents can open pages on localhost in a tab of their own workspace. Off: every browser request from an agent is refused.',
   },
 
   /** Тост о новой версии — `renderer/update/update-notice.ts` (V6 плана релиза 0.1.0). */
@@ -1587,6 +1591,33 @@ export const S = {
         `${width} × ${height} · ${dpr}x${percent === null ? '' : ` · ${percent}%`}`,
       /** Касания включаются с новым документом (спайк 0.3). */
       touchReload: 'Reload to apply touch',
+    },
+    /**
+     * Панель браузера хозяина — справа от вида сессии или комнаты (спека браузера 3.10, 4.11). Заголовок хозяина и названия
+     * страниц — данные (ярлык сессии, название комнаты, заголовок и адрес страницы), идут как есть.
+     */
+    panel: {
+      /** Кнопка у вида хозяина (подпись для читалки экрана и подсказка). */
+      toggle: 'Browser',
+      toggleTitle: 'Show or hide the browser panel',
+      /** `aria-label` полоски страниц. */
+      pages: 'Browser pages',
+      /** Страница без адреса и без заголовка. */
+      newPage: 'New page',
+      addPage: 'Add a page',
+      closePage: (title: string): string => `Close ${title}`,
+      closePanel: 'Close the browser panel',
+      /** Узкий вид (уже 720 px): панель закрывает вид собой, кнопка возвращает к нему. */
+      backToChat: 'Back to chat',
+      backToRoom: 'Back to room',
+      resize: 'Resize the browser panel',
+      tooManyPages: 'No more than 5 pages in a browser panel',
+      /** Пункт «⋯» вкладки браузера человека: страница переезжает в браузер сессии или комнаты. */
+      moveTo: 'Move to browser of…',
+      moved: (name: string): string => `Moved to the browser of ${name}`,
+      /** Тост, когда агент открыл страницу, а вид хозяина не на экране; «Show» переводит человека к ней. */
+      agentOpened: (session: string, address: string): string => `${session} opened ${address}`,
+      agentShow: 'Show',
     },
   },
 

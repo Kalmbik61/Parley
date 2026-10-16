@@ -459,6 +459,17 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
             <Button type="button" variant="outline" className="self-start" onClick={clearBrowserData}>
               {S.settings.clearBrowserData}
             </Button>
+            {/* Общий выключатель агентов (спека браузера 4.8): строка та же, что у уведомлений, а смысл свой — доступ агента. */}
+            {uiLoaded ? (
+              <>
+                <NotificationRow
+                  label={S.settings.letAgentsUseBrowser}
+                  checked={ui.browser.agentsAllowed}
+                  onCheckedChange={(checked) => patchUi({ browser: { ...ui.browser, agentsAllowed: checked } })}
+                />
+                <p className="text-xs text-muted-foreground">{S.settings.letAgentsUseBrowserHint}</p>
+              </>
+            ) : null}
           </TabsContent>
 
           <TabsContent value="voice">{uiLoaded ? <VoiceSettings /> : null}</TabsContent>

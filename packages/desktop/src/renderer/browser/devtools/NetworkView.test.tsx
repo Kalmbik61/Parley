@@ -33,8 +33,8 @@ function row(id: string): HTMLElement {
   return found;
 }
 
-function renderView(narrow = false): void {
-  render(<NetworkView tabId={TAB} pageUrl={PAGE} webContentsId={7} bridge={bridge} narrow={narrow} />);
+function renderView(narrow = false, tight = false): void {
+  render(<NetworkView tabId={TAB} pageUrl={PAGE} webContentsId={7} bridge={bridge} narrow={narrow} tight={tight} />);
 }
 
 const originalOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
@@ -131,5 +131,23 @@ describe('NetworkView (спека 4.4)', () => {
     seed({ network: [] });
     renderView();
     expect(screen.getByText('No requests')).toBeTruthy();
+  });
+});
+
+describe('NetworkView: тесный вид (спека 4.11, ширина меньше ~480 px)', () => {
+  const headers = (): string[] => [...document.querySelectorAll('[data-testid="network-header"] > span')].map((node) => node.textContent ?? '');
+
+  it('при tight (панель 400 px) остаются Status, Name и Size; Method, Type и Time скрыты', () => {
+    seed();
+    renderView(false, true);
+    expect(document.querySelector('[data-testid="network-view"]')?.getAttribute('data-tight')).toBe('true');
+    expect(headers()).toEqual(['Status', 'Name', 'Size']);
+  });
+
+  it('без tight (панель 600 px) таблица прежняя: шесть столбцов', () => {
+    seed();
+    renderView();
+    expect(document.querySelector('[data-testid="network-view"]')?.getAttribute('data-tight')).toBe('false');
+    expect(headers()).toHaveLength(6);
   });
 });

@@ -9,7 +9,10 @@ import { chmod, link, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } f
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { BROWSER_TOOLS } from '../mcp/browser-tools.js';
+import { MCP_SERVER_NAME } from '../names.js';
 import {
+  BROWSER_OPEN_PERMISSION,
   FEED_HOOK_EVENTS,
   HOOK_COMMAND,
   HOOK_EVENTS,
@@ -468,5 +471,21 @@ describe('GLM settings', () => {
       allowedEnvVars: ['PARLEY_HOOK_CAPABILITY', 'PARLEY_SESSION_ID'],
     });
     expect(JSON.stringify(settings)).not.toContain('ANTHROPIC');
+  });
+});
+
+describe('browser_open разрешён заранее (спека браузера, 5.1)', () => {
+  it('без канала агента правила нет', () => {
+    expect(workSettings()).not.toHaveProperty('permissions');
+  });
+
+  it('с каналом агента — ровно одно правило: browser_open сервера Parley', () => {
+    expect(workSettings({ allowBrowserOpen: true }).permissions).toEqual({ allow: [BROWSER_OPEN_PERMISSION] });
+  });
+
+  it('имя правила собрано из настоящих имён сервера и инструмента', () => {
+    expect(BROWSER_TOOLS.map((tool) => tool.name)).toContain('browser_open');
+    expect(BROWSER_OPEN_PERMISSION).toBe(`mcp__${MCP_SERVER_NAME}__browser_open`);
+    expect(BROWSER_OPEN_PERMISSION).toBe('mcp__parley__browser_open');
   });
 });

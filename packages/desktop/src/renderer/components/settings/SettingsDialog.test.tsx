@@ -619,3 +619,34 @@ describe('SettingsDialog — Lean agent sessions', () => {
     expect(screen.getByRole('switch', { name: 'Skill navigator' })).toBeTruthy();
   });
 });
+
+describe('SettingsDialog — «Let agents use the browser» (спека браузера 4.8; этап B2)', () => {
+  it('в секции Browser, включён по умолчанию; клик — app.saveUi с browser.agentsAllowed: false и зеркало ui', async () => {
+    const bridge = createFakeBridge();
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    openSettings(bridge);
+
+    switchTo('Browser');
+    const toggle = await screen.findByLabelText('Let agents use the browser');
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByText(S.settings.letAgentsUseBrowserHint)).toBeTruthy();
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(saveUiSpy).toHaveBeenCalledWith({ browser: { ...DEFAULT_UI.browser, agentsAllowed: false } }));
+    expect(useUiStore.getState().ui.browser.agentsAllowed).toBe(false);
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('выключенный выключатель из ui.json показан выключенным; высота панели в патче не теряется', async () => {
+    const bridge = createFakeBridge();
+    await bridge.app.saveUi({ browser: { devtoolsHeight: 320, agentsAllowed: false } });
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    openSettings(bridge);
+
+    switchTo('Browser');
+    const toggle = await screen.findByLabelText('Let agents use the browser');
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(saveUiSpy).toHaveBeenCalledWith({ browser: { devtoolsHeight: 320, agentsAllowed: true } }));
+  });
+});

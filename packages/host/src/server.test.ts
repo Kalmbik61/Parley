@@ -2,9 +2,10 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { addSession, createWork, updateMap, workPaths } from '@parley/core';
-import { METHODS, NOTIFICATIONS, PROTOCOL_VERSION } from '@parley/protocol';
+import { BROWSER_AGENT_FEATURE, METHODS, NOTIFICATIONS, PROTOCOL_VERSION } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import { connectRaw, hello, removeHome, tempHome, waitClosed, waitConnected } from '../test/helpers.js';
 import type { RawMessage, TestClient } from '../test/helpers.js';
@@ -263,6 +264,114 @@ describe('активность для нового клиента', () => {
     first.close();
     second.close();
   }, 20_000);
+});
+
+describe('канал агента к браузеру: от HTTP до окна и обратно (спека браузера 3.7; этап B2)', () => {
+  const STUB = fileURLToPath(new URL('../test/stub-agent.mjs', import.meta.url));
+  const PAGE = 'http://localhost:5173/';
+
+  /** Следующее сообщение, подходящее под условие; остальные рассылки пропускаются. */
+  async function until(client: TestClient, match: (message: RawMessage) => boolean, timeoutMs = 10_000): Promise<RawMessage> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const left = deadline - Date.now();
+      if (left <= 0) throw new Error('не дождались сообщения');
+      const message = await Promise.race([
+        client.next(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('не дождались сообщения')), left)),
+      ]);
+      if (match(message)) return message;
+    }
+  }
+
+  async function post(url: string, token: string, body: unknown): Promise<{ status: number; json: unknown }> {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    return { status: response.status, json: text === '' ? null : (JSON.parse(text) as unknown) };
+  }
+
+  it('токен сессии — из её конфига MCP; операция уходит окну с browser-agent и возвращается ответом окна; окно ушло — window_not_connected; сессия остановлена — токен 401', async () => {
+    const { home, token } = await boot();
+    const project = await mkdtemp(path.join(tmpdir(), 'parley-server-agent-'));
+    projects.push(project);
+    const argsFile = path.join(project, 'args.json');
+    process.env['PARLEY_CLAUDE_BIN'] = STUB;
+    process.env['STUB_ARGS_FILE'] = argsFile;
+    try {
+      const map = await createWork(project, { title: 'Работа' });
+      const window = connectRaw(hostPaths(home).socket);
+      await waitConnected(window.socket);
+      const answer = await hello(window, token, { client: 'desktop', features: [BROWSER_AGENT_FEATURE] });
+      expect((answer.result as { methods: string[] }).methods).toContain('browser.agentResult');
+
+      window.send({ id: 901, method: 'sessions.create', params: { projectPath: project, workId: map.work.id, provider: 'claude', label: 'агент', task: '', parent: null } });
+      const created = await until(window, (message) => message.id === 901);
+      expect(created.error).toBeUndefined();
+      const ref = (created.result as { ref: SessionRef }).ref;
+
+      // Адрес и токен — из конфига MCP-сервера, как их берёт настоящий parley-mcp.
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(argsFile)) {
+        if (Date.now() > deadline) throw new Error('стаб не записал аргументы');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      const args = JSON.parse(await readFile(argsFile, 'utf8')) as { argv: string[]; env: Record<string, string | null> };
+      const config = JSON.parse(await readFile(args.argv[args.argv.indexOf('--mcp-config') + 1] as string, 'utf8')) as {
+        mcpServers: { parley: { env: Record<string, string> } };
+      };
+      const { PARLEY_AGENT_URL: url, PARLEY_AGENT_TOKEN: agentToken } = config.mcpServers.parley.env;
+      expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/agent\/browser$/);
+      expect(agentToken).toMatch(/^[0-9a-f]{64}$/);
+      expect(args.env['PARLEY_AGENT_TOKEN']).toBeNull();
+
+      // Чужой токен — 401.
+      expect((await post(url as string, 'f'.repeat(64), { op: 'open', args: { url: PAGE } })).status).toBe(401);
+
+      // Операция: HTTP → окно (событие) → окно отвечает методом → HTTP.
+      const opened = post(url as string, agentToken as string, { op: 'open', args: { url: PAGE } });
+      const event = await until(window, (message) => message.event === 'browser.agentOp');
+      expect(event.data).toMatchObject({ ref, label: 'S01', op: 'open', args: { url: PAGE } });
+      const { opId } = event.data as { opId: string };
+      const result = { tab: 't1', url: PAGE, reused: false, notes: [] };
+      window.send({ id: 902, method: 'browser.agentResult', params: { opId, ok: true, result } });
+      expect((await until(window, (message) => message.id === 902)).result).toEqual({ accepted: true });
+      expect(await opened).toEqual({ status: 200, json: { ok: true, result } });
+      // Поздний повтор того же ответа — не принят.
+      window.send({ id: 903, method: 'browser.agentResult', params: { opId, ok: true, result } });
+      expect((await until(window, (message) => message.id === 903)).result).toEqual({ accepted: false });
+
+      // Окно ушло посреди операции — агенту сразу window_not_connected.
+      const dropped = post(url as string, agentToken as string, { op: 'open', args: { url: PAGE } });
+      await until(window, (message) => message.event === 'browser.agentOp');
+      window.close();
+      expect(await dropped).toEqual({ status: 200, json: { ok: false, error: { code: 'window_not_connected', message: expect.any(String) as unknown as string } } });
+
+      // Окон нет совсем — тот же отказ, без ожидания.
+      expect((await post(url as string, agentToken as string, { op: 'open', args: { url: PAGE } })).json).toMatchObject({ ok: false, error: { code: 'window_not_connected' } });
+
+      // Сессия остановлена — токен снят.
+      const second = connectRaw(hostPaths(home).socket);
+      await waitConnected(second.socket);
+      await hello(second, token, { client: 'desktop', features: [BROWSER_AGENT_FEATURE] });
+      second.send({ id: 904, method: 'sessions.stop', params: { ref } });
+      await until(second, (message) => message.id === 904);
+      const stopDeadline = Date.now() + 10_000;
+      for (;;) {
+        const status = (await post(url as string, agentToken as string, { op: 'open', args: { url: PAGE } })).status;
+        if (status === 401) break;
+        if (Date.now() > stopDeadline) throw new Error('токен остановленной сессии остался в силе');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      second.close();
+    } finally {
+      delete process.env['PARLEY_CLAUDE_BIN'];
+      delete process.env['STUB_ARGS_FILE'];
+    }
+  }, 40_000);
 });
 
 describe('медленные запросы', () => {

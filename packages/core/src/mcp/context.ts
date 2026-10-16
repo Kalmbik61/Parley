@@ -4,6 +4,7 @@ import type { WorkSession } from '../work/types.js';
 import path from 'node:path';
 import type { RoleCatalog } from '../roles/types.js';
 import { envName, envValue, LEGACY_STATE_DIR, STATE_DIR, STATE_DIRS } from '../names.js';
+import { AGENT_TOKEN_ENV, AGENT_URL_ENV, type AgentChannel } from '../work/mcp-config.js';
 
 /**
  * Кто звонит и куда писать. Сервер живёт по одному процессу на сессию и узнаёт
@@ -33,6 +34,11 @@ export interface McpContext {
    * флагом канала; без сессии звонить всё равно некому.
    */
   channel: boolean;
+  /**
+   * Канал агента к браузеру окна (спека браузера 3.7): адрес эндпоинта хоста и токен сессии. Нет — инструмент
+   * `browser_open` не объявляется (сессия до обновления или хост без эндпоинта).
+   */
+  agent?: AgentChannel;
   /** Как часто перечитывать карту, если `fs.watch` промолчал. Тесты ускоряют. */
   pollMs?: number;
   /**
@@ -51,6 +57,24 @@ export interface McpContext {
    * Поле нужно тестам и встраиванию.
    */
   resourceLimits?: ResourceLimits;
+}
+
+/**
+ * Канал агента из окружения: только под новыми именами, только `http://127.0.0.1:<порт>/agent/browser` и токен из
+ * 64 hex. Иное — не наша настройка, и канала нет: сервер не пойдёт по чужому адресу с токеном сессии.
+ */
+function agentFromEnv(env: NodeJS.ProcessEnv): AgentChannel | undefined {
+  const url = env[AGENT_URL_ENV];
+  const token = env[AGENT_TOKEN_ENV];
+  if (typeof url !== 'string' || typeof token !== 'string' || !/^[0-9a-f]{64}$/.test(token)) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1' || parsed.pathname !== '/agent/browser') return undefined;
+  return { url, token };
 }
 
 /**
@@ -76,6 +100,7 @@ export function contextFromEnv(env: NodeJS.ProcessEnv = process.env): McpContext
     );
   }
 
+  const agent = agentFromEnv(env);
   return {
     projectPath: path.dirname(state),
     workId: path.basename(workDir),
@@ -87,5 +112,6 @@ export function contextFromEnv(env: NodeJS.ProcessEnv = process.env): McpContext
     skillNavigator: envValue(env, 'SKILL_NAVIGATOR') === '1',
     ...(envValue(env, 'SKILL_LIST_REDUCED') === '1' ? { skillListReduced: true } : {}),
     ...(envValue(env, 'NATIVE_CONTEXT_REVISION') === undefined ? {} : { nativeContextRevision: envValue(env, 'NATIVE_CONTEXT_REVISION')! }),
+    ...(agent === undefined ? {} : { agent }),
   };
 }

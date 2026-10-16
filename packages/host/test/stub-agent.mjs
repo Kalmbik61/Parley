@@ -21,7 +21,7 @@
 //   STUB_ARGS_FILE=<путь>      — при старте пишет туда JSON
 //                                { argv, cwd, env: { PARLEY_WORK_DIR, PARLEY_SESSION_ID,
 //                                HARNAS_WORK_DIR, HARNAS_SESSION_ID, CLAUDE_CODE_SESSION_ID,
-//                                PARLEY_HOOK_TOKEN, PARLEY_HOOK_URL } }
+//                                PARLEY_HOOK_TOKEN, PARLEY_HOOK_URL, PARLEY_AGENT_TOKEN } }
 //   STUB_FLOOD_MB=<n>          — при старте печатает n МБ строк (тест
 //                                пересинхронизации при медленном клиенте)
 //   STUB_IGNORE_SIGHUP=1       — не завершается по SIGHUP (хост должен
@@ -94,6 +94,8 @@ if (process.env.STUB_ARGS_FILE !== undefined) {
         CLAUDE_CODE_SESSION_ID: process.env.CLAUDE_CODE_SESSION_ID ?? null,
         PARLEY_HOOK_TOKEN: process.env.PARLEY_HOOK_TOKEN ?? null,
         PARLEY_HOOK_URL: process.env.PARLEY_HOOK_URL ?? null,
+        // Токен канала агента лежит только в конфиге MCP-сервера: в окружении процесса его быть не должно.
+        PARLEY_AGENT_TOKEN: process.env.PARLEY_AGENT_TOKEN ?? null,
       },
     }),
   );

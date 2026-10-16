@@ -54,6 +54,11 @@ export interface HookServerOptions {
   onHook(request: HookRequest): void;
   /** Предел тела; по умолчанию `HOOK_BODY_LIMIT`. Тестам — меньше. */
   bodyLimit?: number;
+  /**
+   * Другие пути того же сервера (спека браузера 2026-10-07, 3.7): `/agent/browser`. Только POST и точное совпадение
+   * пути; обработчик сам проверяет свой токен, читает тело и отвечает.
+   */
+  routes?: Readonly<Record<string, (req: IncomingMessage, res: ServerResponse) => void>>;
 }
 
 export interface HookServer {
@@ -61,6 +66,8 @@ export interface HookServer {
   listen(): Promise<string>;
   /** Адрес приёмника; `null` — ещё не слушает или уже закрыт. */
   url(): string | null;
+  /** `http://127.0.0.1:<порт>` — основа адресов других путей (`routes`); `null` — ещё не слушает или уже закрыт. */
+  origin(): string | null;
   /**
    * Токен запуска сессии (32 байта, hex) для `PARLEY_HOOK_TOKEN`. Прежний токен той же сессии
    * отзывается. `providerSessionId` — id сессии у Claude Code; `null` — сверять `session_id` не с чем,
@@ -100,6 +107,7 @@ export function createHookServer(options: HookServerOptions): HookServer {
   /** Запросы, которым ещё не ответили: на выключении получают `{}`. */
   const open = new Map<(json: HookResponse) => void, ServerResponse>();
   let address: string | null = null;
+  let base: string | null = null;
   let closing: Promise<void> | null = null;
 
   const server = createServer((req, res) => {
@@ -137,7 +145,16 @@ export function createHookServer(options: HookServerOptions): HookServer {
   }
 
   function handle(req: IncomingMessage, res: ServerResponse): void {
-    const pathname = (req.url ?? '').split('?')[0];
+    const pathname = (req.url ?? '').split('?')[0] ?? '';
+    // Свой путь другого приёмника (`routes`): `hasOwn` — чтобы `/__proto__` не нашёл прототип объекта.
+    const route =
+      req.method === 'POST' && options.routes !== undefined && Object.hasOwn(options.routes, pathname)
+        ? options.routes[pathname]
+        : undefined;
+    if (route !== undefined) {
+      route(req, res);
+      return;
+    }
     if (req.method !== 'POST' || pathname !== HOOK_PATH) {
       reject(req, res, 404, 'route');
       return;
@@ -284,12 +301,14 @@ export function createHookServer(options: HookServerOptions): HookServer {
             log.warn('приёмник хуков: ошибка сервера', { error: error.message }),
           );
           const { port } = server.address() as AddressInfo;
-          address = `http://127.0.0.1:${port}${HOOK_PATH}`;
+          base = `http://127.0.0.1:${port}`;
+          address = `${base}${HOOK_PATH}`;
           resolve(address);
         });
       });
     },
     url: () => address,
+    origin: () => base,
     register(ref, providerSessionId, provider = 'claude') {
       const key = refKey(ref);
       const previous = tokenOfSession.get(key);
@@ -333,6 +352,7 @@ export function createHookServer(options: HookServerOptions): HookServer {
         ]);
         clearTimeout(timer);
         address = null;
+        base = null;
         if (!server.listening) return;
         await new Promise<void>((resolve) => {
           server.close(() => resolve());
