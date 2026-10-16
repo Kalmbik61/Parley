@@ -166,6 +166,25 @@ export async function assembleFromIndex(projectPath: string, workId: string, ind
 }
 
 /**
+ * Индекс поверх уже собранной карты той же работы: сессии, комнаты и всё, что лежит в индексе, берутся из него, письма и
+ * решения (`messages`, `decisionExports`) остаются как в `base`. Для хоста, который уже держит собранную карту и ведёт её
+ * хвостом журналов: после записи индекса (сверка живости) журналы читать заново незачем. `work.updatedAt` — позднее из
+ * индекса и `base` (письмо индекс не двигает). `base` должна быть собрана из журналов этой же работы, не из карты v2.
+ */
+export function rebaseOnIndex(base: WorkMap, index: WorkIndexMap): WorkMap {
+  const rest = { ...index };
+  delete (rest as { schemaVersion?: unknown }).schemaVersion;
+  const updatedAt = base.work.updatedAt > index.work.updatedAt ? base.work.updatedAt : index.work.updatedAt;
+  return {
+    ...rest,
+    schemaVersion: 2,
+    work: { ...index.work, updatedAt },
+    messages: base.messages,
+    ...(base.decisionExports === undefined ? {} : { decisionExports: base.decisionExports }),
+  } as unknown as WorkMap;
+}
+
+/**
  * Карта с письмами ОДНОЙ комнаты: индекс плюс журнал этой комнаты, без остальных журналов, курсоров и решений. Для читателей,
  * которым нужна одна комната и её участники (история комнаты): `readMap` на карте-журнале читает журналы всех комнат.
  * Письма — без `readBy` (курсоры не читаются). Карта v2 разбирается целиком, как в `readMap`: письма всех комнат уже в файле.

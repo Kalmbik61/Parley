@@ -77,7 +77,7 @@ import {
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
 import { addMemberByLead, addRoom, isDescendant, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
 import { displayStatus } from '../work/status-view.js';
-import { SharedStateError, WorkNotFoundError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workPaths, workSchemaVersion } from '../work/store.js';
+import { SharedStateError, WorkNotFoundError, inspectSharedIgnore, readMap, readMapLazy, readWorksIndex, sharedProjectPaths, updateMap, workPaths, workSchemaVersion } from '../work/store.js';
 import { participantLabel, sessionMention, threadOf } from '../work/thread.js';
 import {
   HUMAN,
@@ -1052,7 +1052,7 @@ async function spawnSession(
     if (!(await isGitRepo(context.projectPath))) {
       throw new Error('the project has no git — a worktree cannot be created');
     }
-    const parent = requireSession(await readMap(context.projectPath, context.workId), sessionId);
+    const parent = requireSession(await readMapLazy(context.projectPath, context.workId), sessionId);
     worktreeBase =
       parent.worktree !== null ? parent.worktree.branch : await baseBranchOf(context.projectPath);
   }
@@ -1134,7 +1134,7 @@ async function waitFor(
   const target = stringArg(args, 'target');
   const waitId = randomUUID();
   const timeoutMs = waitTimeoutMs(numberArg(args, 'timeoutSec'));
-  const read = (): Promise<WorkMap> => readMap(context.projectPath, context.workId);
+  const read = (): Promise<WorkMap> => readMapLazy(context.projectPath, context.workId);
 
   let probe: () => Promise<unknown | null>;
   if (target === 'inbox') {
@@ -1606,7 +1606,7 @@ async function backlogTool(context: McpContext, name: string, args: Record<strin
     if (Object.keys(args).some(key => !allowed.includes(key))) throw new SharedStateError('backlog-invalid');
     const sessionId = context.sessionId;
     if (sessionId === null) throw new Error('Backlog tools require a known launched session.');
-    const map = await readMap(context.projectPath, context.workId);
+    const map = await readMapLazy(context.projectPath, context.workId);
     const caller = map.sessions.find(row => row.id === sessionId);
     if (!caller || map.work.id !== context.workId) throw new Error('Backlog tools require a known launched session.');
     if (name === 'backlog_list') {
@@ -1670,7 +1670,7 @@ async function memoryTool(context: McpContext, name: string, args: Record<string
     if (Object.keys(args).some(key => !allowed.includes(key))) throw new SharedStateError('memory-invalid');
     const sessionId = context.sessionId;
     if (sessionId === null) throw new Error('Memory tools require a known launched session.');
-    const map = await readMap(context.projectPath, context.workId);
+    const map = await readMapLazy(context.projectPath, context.workId);
     const caller = map.sessions.find(row => row.id === sessionId);
     if (!caller || map.work.id !== context.workId) throw new Error('Memory tools require a known launched session.');
     if (name === 'search_history') {
@@ -1747,7 +1747,7 @@ async function dispatch(
   if (name === 'remember' || name === 'memory_read' || name === 'search_history') return memoryTool(context, name, args);
   if (name === 'get_map') return getMap(context, args);
   if (name === 'list_roles') {
-    const map = await readMap(context.projectPath, context.workId);
+    const map = await readMapLazy(context.projectPath, context.workId);
     const caller = map.sessions.find(item => item.id === context.sessionId);
     const cwd = caller?.worktree?.path ?? context.projectPath;
     return roleSummaries(await (context.roleCatalog ? context.roleCatalog(cwd) : sessionRoleCatalog(cwd, { codex: true })));
@@ -1825,7 +1825,7 @@ async function bindCodexThread(
   if (typeof root === 'string' && THREAD_ID.test(root) && root.toLowerCase() !== thread) return false;
   try {
     // Чтение до записи: `updateMap` переписал бы карту и без изменений, а её читают наблюдатели окна.
-    const known = (await readMap(context.projectPath, context.workId)).sessions.find(
+    const known = (await readMapLazy(context.projectPath, context.workId)).sessions.find(
       (candidate) => candidate.id === sessionId,
     );
     if (known === undefined) return false;
@@ -1888,7 +1888,7 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
   // Подряд пустых поисков: сбрасывается находкой. Подъём письмом сам повторного поиска не просит (P34).
   let misses = 0;
   async function target(id?: string): Promise<{ session: WorkSession; cwd: string; catalog: SkillCatalog | null; reason?: string }> {
-    const map = await readMap(context.projectPath, context.workId);
+    const map = await readMapLazy(context.projectPath, context.workId);
     const session = map.sessions.find(item => item.id === (id ?? context.sessionId));
     if (!session) throw new Error('Skill search requires a session in this work.');
     const rawCwd = session.worktree?.path ?? context.projectPath;
@@ -1938,7 +1938,7 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
   }
   return {
     async list() {
-      const map = await readMap(context.projectPath, context.workId);
+      const map = await readMapLazy(context.projectPath, context.workId);
       const provider = map.sessions.find(item => item.id === context.sessionId)?.provider;
       const reduced = context.skillListReduced === true;
       if (provider !== undefined && isClaudeCode(provider)) return reduced ? { ...FIND_SKILL, description: FIND_SKILL.description + CLAUDE_NAMES_ONLY } : FIND_SKILL;

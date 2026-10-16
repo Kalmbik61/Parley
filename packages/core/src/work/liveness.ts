@@ -14,7 +14,7 @@ import { promisify } from 'node:util';
 import { DEFAULT_CONFIG } from '../config.js';
 import { readSessionMetrics, silenceMs, sleepSessions, type MetricsRoots } from './metrics.js';
 import { transitionSession } from './map.js';
-import { readMap, updateMap } from './store.js';
+import { readMapLazy, updateMap } from './store.js';
 import type { WorkSession } from './types.js';
 
 const run = promisify(execFile);
@@ -182,7 +182,7 @@ export async function reconcileMap(
     ...roots
   }: ReconcileOptions = {},
 ): Promise<string[]> {
-  const map = await readMap(projectPath, workId);
+  const map = await readMapLazy(projectPath, workId);
   const dead: string[] = [];
   const revived: string[] = [];
 

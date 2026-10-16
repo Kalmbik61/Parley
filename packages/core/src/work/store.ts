@@ -19,7 +19,7 @@ import path from 'node:path';
 import { CONTEXT_DIR, contextFile } from '../context-fill.js';
 import { LIMITS_DIR, limitsFile } from '../limits.js';
 import { envValue, HOME_DIR, LEGACY_HOME_DIR, type Env } from '../names.js';
-import { assembleFromIndex, journalMapView, lazyJournalMap } from './assemble.js';
+import { assembleFromIndex, journalMapView, lazyJournalMap, rebaseOnIndex } from './assemble.js';
 import { JournalBusyError } from './letter-sink.js';
 import { bumpWorkId, JOURNAL_SCHEMA_VERSION, nextWorkId, parseIndex, parseMap, peekSchemaVersion } from './map.js';
 import { PRE_JOURNAL_STATE_IGNORE, PRE_MEMORY_STATE_IGNORE, PRE_RECIPES_STATE_IGNORE, ensureStateDir, isDirectorySync, stateDir, SHARED_STATE_IGNORE } from './state-dir.js';
@@ -232,6 +232,18 @@ export function parseMapLazy(projectPath: string, workId: string, raw: string, f
 export async function readMapLazy(projectPath: string, workId: string): Promise<WorkMap> {
   const file = workPaths(projectPath, workId).map;
   return parseMapLazy(projectPath, workId, await readFile(file, 'utf8'), file);
+}
+
+/**
+ * `readMap` для вызывающего, который уже держит собранную карту этой работы (`base`): карта-журнал читается как индекс
+ * поверх `base` (`rebaseOnIndex`), журналы и курсоры не читаются. Карта v2 разбирается целиком, `base` ей не нужна.
+ * Вызывать, только когда `base` собрана из журналов: письма и решения берутся из неё как есть.
+ */
+export async function readMapOnBase(projectPath: string, workId: string, base: WorkMap): Promise<WorkMap> {
+  const file = workPaths(projectPath, workId).map;
+  const raw = await readFile(file, 'utf8');
+  if (peekSchemaVersion(raw) === JOURNAL_SCHEMA_VERSION) return rebaseOnIndex(base, parseIndex(raw, file));
+  return parseMap(raw, file);
 }
 
 /**

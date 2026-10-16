@@ -2,7 +2,7 @@ import {
   createWork,
   deleteWorkFiles,
   isAlive,
-  readMap,
+  readMapLazy,
   renameWork,
   setWorkStatus,
   WorkNotFoundError,
@@ -48,7 +48,7 @@ export function createWorksDelete(history?: Pick<HistoryService, 'removeWork'>):
   return async (params) => {
   // Карта читается заново, а не из снимка сервиса: снимок мог отстать от диска
   // на длительность debounce, а конфликт должен решаться по настоящему состоянию.
-  const map = await readMap(params.projectPath, params.workId).catch(() => null);
+  const map = await readMapLazy(params.projectPath, params.workId).catch(() => null);
   const busy = map?.sessions.some(
     (session) => session.lifecycle === 'active' && session.pid !== null && isAlive(session.pid),
   );
@@ -71,7 +71,7 @@ export const worksDelete: Handler<'works.delete'> = createWorksDelete();
  * core сообщает `WorkNotFoundError` из самой записи.
  */
 export async function requireWork(projectPath: string, workId: string): Promise<void> {
-  const map = await readMap(projectPath, workId).catch(() => null);
+  const map = await readMapLazy(projectPath, workId).catch(() => null);
   if (map === null) throw new HostError('not_found', `workspace ${workId} does not exist`);
 }
 

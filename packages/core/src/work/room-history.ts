@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { representLegacyMarkdown } from './decision-journal.js';
 import { participantLabel } from './thread.js';
 import { stateDir } from './state-dir.js';
 import { readMapWithRoom } from './assemble.js';
-import { readSharedFile, sharedProjectPaths, withSharedProjectLock, withLocalHistoryLock, prepareSharedIgnore, MISSING_SHARED_VERSION } from './store.js';
+import { readSharedFile, sharedProjectPaths, withSharedProjectLock, withLocalHistoryLock, prepareSharedIgnore, workPaths, MISSING_SHARED_VERSION } from './store.js';
 import type { SharedDiagnostic, SharedFileSnapshot, SharedWriteOptions } from './store.js';
 import { ImmutableMarkdownError, publishImmutableMarkdown, replaceOwnedMarkdown } from './shared-markdown.js';
 import type { MarkdownIdentity } from './shared-markdown.js';
@@ -173,8 +173,28 @@ async function commitHistory(receipt: HistoryReceipt, save: (receipt: HistoryRec
   delete receipt.pending; await save(receipt);
 }
 export interface RoomHistoryResult { sharedAt: string | null; diagnostics: SharedDiagnostic[] }
+/**
+ * Подпись входов истории комнаты: индекс (`map.json`: комнаты, участники) и журнал писем комнаты — только их `stat`. История
+ * считается из этих двух файлов (на карте v2 письма лежат в самом `map.json`, журнала нет). Индекс пишется атомарной
+ * подменой (новый inode), журнал только дописывается (новый размер), поэтому любое изменение входов меняет подпись.
+ */
+async function inputsSignature(projectPath: string, workId: string, roomId: string): Promise<string> {
+  const paths = workPaths(projectPath, workId);
+  const sign = async (file: string): Promise<string> => {
+    try {
+      const info = await stat(file);
+      return `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'none';
+      throw error;
+    }
+  };
+  return `${await sign(paths.map)}|${await sign(path.join(paths.rooms, roomId, 'messages.jsonl'))}`;
+}
 async function operation(projectPath: string, workId: string, roomId: string, action: 'local' | 'share' | 'unshare', options: SharedWriteOptions = {}): Promise<RoomHistoryResult> {
   try {
+    // Подпись берётся до чтения: изменение между ними даст расхождение подписей, а не пропущенную правку.
+    const signature = await inputsSignature(projectPath, workId, roomId);
     const map = await readMapWithRoom(projectPath, workId, roomId);
     if (map.work.id !== workId) throw new RoomHistoryError('history-invalid');
     const content = renderRoomHistory(map, roomId);
@@ -188,10 +208,17 @@ async function operation(projectPath: string, workId: string, roomId: string, ac
       const shared = action !== 'local' || stored?.shared !== undefined || stored?.pending?.kind === 'share'
         ? await sharedProjectPaths(projectPath, options) : undefined;
       const sharedTarget = shared ? path.join(shared.historyShared, `${workId}-${roomId}.md`) : undefined;
+      // Проверка устарелости идёт под замками, поэтому в общем случае это два `stat`, а не чтение индекса и журнала: подпись
+      // входов та же — содержимое то же. Подпись изменилась (писали и в другую комнату: индекс общий) — историю
+      // собирают заново и сравнивают по содержимому, так что чужая запись устаревшей её не делает.
+      const assertFresh = async (): Promise<void> => {
+        if (await inputsSignature(projectPath, workId, roomId) === signature) return;
+        await assertFresh();
+      };
       const body = async (): Promise<RoomHistoryResult> => {
       const receipt = parseReceipt(writer.snapshot, paths, workId, roomId, sharedTarget);
       await recover(receipt, writer.save);
-      if (renderRoomHistory(await readMapWithRoom(projectPath, workId, roomId), roomId) !== content) throw new RoomHistoryError('history-stale');
+      await assertFresh();
       if (action !== 'local' && options.expectedVersion !== undefined && (await readSharedFile(sharedTarget!)).version !== options.expectedVersion) throw new RoomHistoryError('history-conflict');
       const beforeCommit = async (target: string, attempt: number) => {
         await options.beforeCommit?.(target, attempt);

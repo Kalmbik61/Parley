@@ -575,9 +575,12 @@ export async function flushPlanBacklog(
   workId: string,
   options: { io?: PlanEffectsIO; excludedKeys?: ReadonlySet<string> } = {},
 ): Promise<PlanBacklogFlushResult> {
+  // Проход читает планы и намерения бэклога — индекс; письма и решения карты-журнала ему не нужны (`readMapLazy`).
+  const store = await import("./store.js");
   const io: PlanEffectsIO = options.io ?? {
-    ...(await import("./store.js")),
+    ...store,
     ...(await import("./backlog.js")),
+    readMap: store.readMapLazy,
   };
   const initial = await io.readMap(projectPath, workId);
   const result: PlanBacklogFlushResult = { written: [], failed: [] };
@@ -799,7 +802,7 @@ export async function flushPlanEffects(
       ? { excludedKeys: options.excludedBacklogKeys }
       : {}),
   });
-  const map = await (await import("./store.js")).readMap(projectPath, workId);
+  const map = await (await import("./store.js")).readMapLazy(projectPath, workId);
   return {
     effects: summarizePlanEffects(map),
     snapshotFailures: snapshots.failed,

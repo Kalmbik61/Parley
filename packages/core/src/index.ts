@@ -254,6 +254,7 @@ export {
   readIndex,
   readMap,
   readMapLazy,
+  readMapOnBase,
   parseMapLazy,
   readWorksIndex,
   renameWork,

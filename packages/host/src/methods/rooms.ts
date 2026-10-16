@@ -20,7 +20,7 @@ import type { SessionsService } from '../sessions/sessions-service.js';
 
 import { HUMAN, DEFAULT_CONFIG, loadConfig, updateMap, workPaths, setRoomMode,
   cancelRoomPlan, updatePlanItem, submitPlanItem, verifyPlanItem, capturePlanNotice,
-  reservePlanEffects, reconcileRoomPlans, readMap, summarizePlanEffects, PlanConflictError, RoomRuleError } from '@parley/core';
+  reservePlanEffects, reconcileRoomPlans, readMapLazy, summarizePlanEffects, PlanConflictError, RoomRuleError } from '@parley/core';
 import { existsSync } from 'node:fs';
 import type { PlanMethodName, PlanMethodParams, PlanActionResult } from '@parley/protocol';
 import { HostError } from '../errors.js';
@@ -144,7 +144,7 @@ export function createPlanHandlers(effects: PlanEffectsService): { [M in PlanMet
     // Mutation already committed. A delivery/IO failure is partial, never a second mutation on retry.
     try { return { messageId, effects: await effects.flush(projectPath,workId) }; }
     catch {
-      try { return { messageId, effects: summarizePlanEffects(await readMap(projectPath, workId)) }; }
+      try { return { messageId, effects: summarizePlanEffects(await readMapLazy(projectPath, workId)) }; }
       catch { throw new HostError('internal', 'Plan action was saved; delivery remains pending. Retry plan effects.'); }
     }
   }

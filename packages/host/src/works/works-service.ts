@@ -37,6 +37,8 @@ import {
   readCursorFile,
   readIndex,
   readMap,
+  readMapLazy,
+  readMapOnBase,
   readWorkEntry,
   readWorks,
   readWorksIndex,
@@ -47,7 +49,7 @@ import {
   workSchemaVersion,
   writeHostLease,
 } from '@parley/core';
-import type { CursorFile, HostLease, JournalLetter, Message, WorkEntry, WorkFileChange, WorksWatcher } from '@parley/core';
+import type { CursorFile, HostLease, JournalLetter, Message, WorkEntry, WorkFileChange, WorkMap, WorksWatcher } from '@parley/core';
 import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, ROOMS_MAIL_FEATURE, encodeLine } from '@parley/protocol';
 import type { EventData, WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
@@ -328,7 +330,8 @@ export function createWorksService(
       const key = workKey(item.projectPath, item.id);
       if (present.has(key)) continue;
       try {
-        await readMap(item.projectPath, item.id);
+        // Нужно лишь, разбирается ли файл: индекс, без журналов писем.
+        await readMapLazy(item.projectPath, item.id);
         // Распарсилась — просто гонка со свежим чтением, не карта битая.
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
@@ -337,6 +340,18 @@ export function createWorksService(
         notice('map-corrupt', workPaths(item.projectPath, item.id).map);
       }
     }
+  }
+
+  /**
+   * Свежая карта работы для записи снимка. Карта-журнал уже собрана и ведётся хвостом журналов, а перечитывают её ради
+   * индекса (сессии после сверки, проект с только что заведённым наблюдателем): индекс ложится поверх собранной карты, журналы
+   * и курсоры не читаются (`readMapOnBase`). Карта v2 (и работа, которую сервис журналом не знает) читается целиком.
+   */
+  function rereadMap(work: WorkEntry): Promise<WorkMap> {
+    const workId = work.map.work.id;
+    const key = workKey(work.projectPath, workId);
+    if (!journalWorks.has(key)) return readMap(work.projectPath, workId);
+    return readMapOnBase(work.projectPath, workId, entries.get(key)?.map ?? work.map);
   }
 
   /**
@@ -359,7 +374,7 @@ export function createWorksService(
         // наблюдателя мог быть прочитан до записи прошлой сверки (sleeping уже на диске,
         // мёртвых больше нет), и без перечитывания снимок откатился бы к active мёртвой
         // сессии навсегда (fix-tests2, host-disconnect:127).
-        const fresh = await readMap(work.projectPath, work.map.work.id);
+        const fresh = await rereadMap(work);
         setEntry(
           workKey(work.projectPath, work.map.work.id),
           overlayEntry({
@@ -385,10 +400,11 @@ export function createWorksService(
    * Перевод карт v2 на журналы (задача 7 плана, спека B5) идёт ВНЕ обновления снимка: `refreshPass` только просит проход
    * (`scheduleMigration`) после того, как снимок разослан, и не ждёт его, так что первое соединение окна не ждёт перевода
    * всех карт. Проход идёт по работам по одной (между ними хост отвечает на другие запросы), каждый исход помечает работу
-   * разобранной, и позднее обновление её не трогает: сбой, пропуск «не v2» и «карты нет» не повторяются и не пишутся в
-   * журнал снова. Исключение одно — работа с живой сессией: она остаётся на v2 с `migrationPending`, и её проверка
-   * повторяется по таймеру `MIGRATION_RETRIES` раз с удвоением задержки (30 с, 60 с, 120 с); после этого работа ждёт
-   * следующего запуска хоста, пометка остаётся. Сбой одной работы остальных не трогает. Проход пишет в журнал хоста
+   * разобранной, и позднее обновление её не трогает: пропуск «не v2», «карты нет» и «уже журнал» окончательный и не пишется
+   * в журнал снова. Исключений два, и оба остаются на v2 с `migrationPending`: работа с живой сессией и работа, чья проверка
+   * или миграция сорвалась в этот раз (исключение, `failed` миграции: EMFILE, гонка чтения). Их проверка повторяется по
+   * таймеру `MIGRATION_RETRIES` раз с удвоением задержки (30 с, 60 с, 120 с); после этого работа ждёт следующего запуска
+   * хоста, пометка остаётся. Сбой одной работы остальных не трогает. Проход пишет в журнал хоста
    * одну итоговую строку.
    * Работа на v3, переведённая более ранним запуском хоста, лишается `map.v2.json` (`finishV2Cleanup`): окно и панели уже
    * читали собранную карту. Копию, сделанную этим запуском, он не трогает; не трогает и тогда, когда миграция что-то
@@ -463,7 +479,12 @@ export function createWorksService(
       const version = await workSchemaVersion(work.projectPath, workId);
       if (version === 3) {
         migrationHandled.add(key);
-        migrationWaiting.delete(key);
+        // Работа, помеченная прошлым сбоем, но уже ставшая журналом, пометку теряет.
+        if (migrationWaiting.delete(key) && work.migrationPending === true) {
+          const stripped = { ...(entries.get(key) ?? work) };
+          delete stripped.migrationPending;
+          entries.set(key, stripped);
+        }
         if (!(await hasV2Copy(work.projectPath, workId))) return 'skipped';
         const outcome = await finishV2Cleanup(work.projectPath, workId, runStartedAt);
         if (outcome === 'kept-dropped') {
@@ -486,12 +507,14 @@ export function createWorksService(
         migrationHandled.add(key);
         return 'skipped';
       }
-      migrationHandled.add(key);
-      migrationWaiting.delete(key);
       if (result.status === 'failed') {
+        // Работа осталась на v2 (миграция откатывается сама), причина могла быть разовой (EMFILE, гонка): повтор ограничен.
         host.log.error('миграция карты не удалась, работа остаётся на v2', { projectPath: work.projectPath, workId, step: result.step, detail: result.detail });
+        holdForSession(key);
         return 'failed';
       }
+      migrationHandled.add(key);
+      migrationWaiting.delete(key);
       host.log.info('карта переведена на журналы', { projectPath: work.projectPath, workId, ...result });
       if (result.orderMismatches > 0 || result.readByMismatches > 0 || result.orphaned > 0 || result.droppedMarks > 0) {
         host.log.warn('миграция карты: часть сведений не воспроизведена сборщиком, map.v2.json останется навсегда', { projectPath: work.projectPath, workId, ...result });
@@ -501,8 +524,11 @@ export function createWorksService(
       journalWorks.add(key);
       return 'migrated';
     } catch (error) {
-      migrationHandled.add(key);
-      host.log.error('миграция карты: проверка не удалась', { projectPath: work.projectPath, workId, error: String(error) });
+      // Исключение — сбой этой попытки (EMFILE, гонка чтения, ENOENT внутри вызова), а не вердикт «переводить не нужно»:
+      // вердикты («не v2», «карты нет», «уже журнал») возвращаются выше и окончательны. Работа помечается `migrationPending`
+      // и повторяется теми же ограниченными повторами, что и ожидание живой сессии; исчерпав их, ждёт следующего запуска хоста.
+      host.log.error('миграция карты: проверка не удалась, будет повтор', { projectPath: work.projectPath, workId, error: String(error) });
+      holdForSession(key);
       return 'failed';
     }
   }
@@ -533,12 +559,17 @@ export function createWorksService(
       await new Promise<void>((resolve) => setImmediate(resolve));
       const outcome = await migrateOne(key);
       if (outcome === 'gone') continue;
-      if (outcome === 'waiting' && (migrationWaiting.get(key) ?? 0) >= MIGRATION_RETRIES) {
+      if ((outcome === 'waiting' || outcome === 'failed') && (migrationWaiting.get(key) ?? 0) >= MIGRATION_RETRIES) {
         migrationHandled.add(key);
-        host.log.info('карта: сессия работы всё ещё жива, перевод на журналы отложен до следующего запуска хоста', { workId: key.split('\u0000')[1] });
+        host.log.info(
+          outcome === 'waiting'
+            ? 'карта: сессия работы всё ещё жива, перевод на журналы отложен до следующего запуска хоста'
+            : 'карта: проверка работы не удалась во всех повторах, перевод на журналы отложен до следующего запуска хоста',
+          { workId: key.split('\u0000')[1] },
+        );
       }
       tally[outcome] += 1;
-      if (outcome === 'migrated' || outcome === 'waiting') changed = true;
+      if (outcome === 'migrated' || outcome === 'waiting' || outcome === 'failed') changed = true;
       if (changed && performance.now() - lastAnnounce > MIGRATION_ANNOUNCE_MS) {
         previous = announceSnapshot(previous);
         lastAnnounce = performance.now();
@@ -920,7 +951,7 @@ export function createWorksService(
     for (const work of works) {
       if (!projects.has(work.projectPath)) continue;
       try {
-        const fresh = await readMap(work.projectPath, work.map.work.id);
+        const fresh = await rereadMap(work);
         setEntry(
           workKey(work.projectPath, work.map.work.id),
           overlayEntry({
