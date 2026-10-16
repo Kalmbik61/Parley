@@ -34,6 +34,10 @@ export interface PtyHandlers {
   ptyInput: NotificationHandler<'pty.input'>;
   ptyResize: NotificationHandler<'pty.resize'>;
   activitySeen: NotificationHandler<'activity.seen'>;
+  /** Сколько подписок на поток терминалов держат клиенты: сумма размеров множеств в таблице `attached`. */
+  attachedCount(): number;
+  /** Подписан ли на поток сессии хотя бы один клиент. */
+  isAttached(ref: SessionRef): boolean;
 }
 
 /**
@@ -146,5 +150,13 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
       if (entry?.map.sessions.some((session) => session.id === sessionId) !== true) return;
       deps.activity.markSeen(params.ref);
     },
+
+    attachedCount: () => {
+      let count = 0;
+      for (const clients of attached.values()) count += clients.size;
+      return count;
+    },
+
+    isAttached: (ref) => (attached.get(refKey(ref))?.size ?? 0) > 0,
   };
 }

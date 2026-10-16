@@ -130,6 +130,8 @@ export const WORKS_GATED_NOTIFICATIONS = ['activity.seen'] as const satisfies re
 export interface HostHandlers {
   methods: Partial<Record<MethodName, AnyHandler>>;
   notifications: Partial<Record<NotificationName, AnyNotificationHandler>>;
+  /** Счётчики для строки состояния хоста: таблица подписок PTY живёт в замыкании `createPtyHandlers`. */
+  counters: { ptyAttached(): number };
 }
 
 /**
@@ -279,5 +281,5 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     }
   }
 
-  return { methods, notifications };
+  return { methods, notifications, counters: { ptyAttached: pty.attachedCount } };
 }

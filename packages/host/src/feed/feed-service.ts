@@ -160,6 +160,8 @@ export interface FeedService {
   unsubscribe(ref: SessionRef, client: Client): void;
   /** Клиент отключился от хоста: все его подписки сняты. */
   dropClient(client: Client): void;
+  /** Сколько подписок на ленты держит хост: сумма размеров множеств подписчиков по всем сессиям. */
+  subscriberCount(): number;
   decide(ref: SessionRef, cardId: string, decision: FeedDecision): Result<'feed.decide'>;
   /**
    * Режим разрешений, который хост сверил по подвалу терминала (`sessions.setMode`): ставит его в
@@ -1215,6 +1217,12 @@ export function createFeedService(
           if (feed !== undefined) stopCodexPoll(feed);
         }
       }
+    },
+
+    subscriberCount() {
+      let count = 0;
+      for (const clients of subscribers.values()) count += clients.size;
+      return count;
     },
 
     decide(ref, cardId, decision) {

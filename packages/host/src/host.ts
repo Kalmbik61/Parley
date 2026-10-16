@@ -19,6 +19,7 @@ import { createLog } from './log.js';
 import type { Log } from './log.js';
 import { watchIdle } from './idle.js';
 import { startLoopDelayLog } from './loop-delay.js';
+import { createHealthService } from './health/health-service.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
 import { HOST_ERROR_REASONS } from '@parley/protocol';
@@ -212,6 +213,22 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   const stopLoopDelay = startLoopDelayLog(handle.context.log);
   handle.context.onShutdown(async () => stopLoopDelay());
+  // Строка состояния хоста раз в 30 с. Счётчики читаются лениво при `sample()`, поэтому замыкание вправе
+  // ссылаться на сервисы и `handlers`, которые заводятся ниже.
+  const health = createHealthService({
+    log: handle.context.log,
+    counters: () => {
+      const { entries } = worksService.snapshot();
+      return {
+        ptys: ptyManager.list().length,
+        attached: handlers.counters.ptyAttached(),
+        feedSubs: feedService.subscriberCount(),
+        works: entries.length,
+        rooms: entries.reduce((sum, entry) => sum + entry.map.rooms.length, 0),
+        clients: handle.context.clients().length,
+      };
+    },
+  });
   handle.context.onShutdown(async () => planEffects.stop());
   handle.context.onShutdown(async () => history.stop());
   handle.context.onShutdown(() => worksService.stop());
@@ -375,6 +392,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     worktrees: worktreesService,
     feed: feedService,
   });
+  health.start();
+  handle.context.onShutdown(async () => health.stop());
   const server = createHostServer({
     context: handle.context,
     token,
