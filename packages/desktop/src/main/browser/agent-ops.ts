@@ -209,6 +209,10 @@ export function ownerOf(request: BrowserAgentOpEvent, args: BrowserAgentArgs<'op
   return rooms.length === 1 && only !== undefined ? { kind: 'room', roomId: only } : own;
 }
 
+/** Повторы снимка невидимой страницы: до ~1 с, пока окно не сделает её поверхность прозрачной, но видимой. */
+const HIDDEN_CAPTURE_RETRIES = 20;
+const HIDDEN_CAPTURE_RETRY_MS = 50;
+
 export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   const openMs = deps.openMs ?? AGENT_LIMITS.openMs;
   /** Ждущие ответа окна: id просьбы → продолжение. */
@@ -411,8 +415,17 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
 
     const shoot = async (clip?: { x: number; y: number; width: number; height: number; scale: number }): Promise<Buffer> => {
       const params = clip === undefined ? { format: 'png' } : { format: 'png', clip, captureBeyondViewport: true };
-      const shot = await deps.inspector.send<{ data: string }>(id, 'Page.captureScreenshot', params);
-      return Buffer.from(shot.data, 'base64');
+      // Окно переводит поверхность невидимой страницы в opacity: 0 асинхронно: пока кадр не рисуется, Chromium отказывает —
+      // повторяем недолго, первый удачный снимок возвращается сразу.
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          const shot = await deps.inspector.send<{ data: string }>(id, 'Page.captureScreenshot', params);
+          return Buffer.from(shot.data, 'base64');
+        } catch (error) {
+          if (record.visible || attempt >= HIDDEN_CAPTURE_RETRIES) throw error;
+          await new Promise((resolve) => setTimeout(resolve, HIDDEN_CAPTURE_RETRY_MS));
+        }
+      }
     };
 
     const capture = async (): Promise<{ png: Buffer; viewport: { width: number; height: number } }> => {

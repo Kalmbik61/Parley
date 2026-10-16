@@ -623,6 +623,31 @@ describe('screenshot (спека 5.1, 8)', () => {
     expect(activity.map((e) => [e.phase, e.capture])).toEqual([['start', undefined], ['start', { width: 1280, height: 800 }], ['end', undefined]]);
   });
 
+  it('невидимая страница: первый снимок отклонён (кадр ещё не рисуется) — повтор, снимок возвращается; у видимой отказ не повторяется', async () => {
+    const hidden = setup();
+    register(hidden.ops, { visible: false });
+    let shots = 0;
+    hidden.inspector.send.mockImplementation(async (id: number, method: string) => {
+      if (method !== 'Page.captureScreenshot') return sendWith()(id, method);
+      shots += 1;
+      if (shots === 1) throw new Error('Unable to capture screenshot');
+      return { data: png(1280, 800).toString('base64') };
+    });
+    expect(codeOf(await hidden.runOp('screenshot', { tab: 't1' }))).toBe('ok');
+    expect(shots).toBe(2);
+
+    const visible = setup();
+    register(visible.ops, {});
+    let visibleShots = 0;
+    visible.inspector.send.mockImplementation(async (id: number, method: string) => {
+      if (method !== 'Page.captureScreenshot') return sendWith()(id, method);
+      visibleShots += 1;
+      throw new Error('Unable to capture screenshot');
+    });
+    expect(codeOf(await visible.runOp('screenshot', { tab: 't1' }))).not.toBe('ok');
+    expect(visibleShots).toBe(1);
+  });
+
   it('fullPage: страница 2000 при вьюпорте 800 — три полосы 800+800+400, склейка; длиннее трёх вьюпортов — bad_request с советом', async () => {
     const { ops, inspector, saveImage, runOp: run } = setup();
     register(ops, {});
