@@ -10,6 +10,7 @@ import type {
   MessageKind,
   SessionLifecycle,
   SessionResult,
+  WorkIndexMap,
   WorkMap,
   WorkProvider,
   WorkSession,
@@ -336,6 +337,11 @@ export function parseMap(raw: string, file: string): WorkMap {
 
   const work = isRecord(data) ? data.work : undefined;
   const version = isRecord(data) ? data.schemaVersion : undefined;
+  if (version === JOURNAL_SCHEMA_VERSION) {
+    throw new Error(
+      `map ${file} is in a newer format (schemaVersion ${JOURNAL_SCHEMA_VERSION}) than this session understands: ask the human to restart the session`,
+    );
+  }
   if (
     !isRecord(data) ||
     (version !== 1 && version !== 2) ||
@@ -373,6 +379,67 @@ export function parseMap(raw: string, file: string): WorkMap {
   validateDecisionJournalStorage(map);
   validateResources(map);
   return map;
+}
+
+/** Версия карты-журнала: индекс в `map.json`, письма в журналах, решения в `decisions.json`. */
+export const JOURNAL_SCHEMA_VERSION = 3;
+
+/**
+ * Версия карты по началу файла, без разбора всего JSON: `schemaVersion` пишется первым ключом (`serialize`).
+ * Файл не по этой форме разбирается целиком; нечитаемый — `undefined`, а ошибку скажет `parseMap`/`parseIndex`.
+ */
+export function peekSchemaVersion(raw: string): number | undefined {
+  const head = /^\s*\{\s*"schemaVersion"\s*:\s*(\d+)\s*[,}]/.exec(raw.slice(0, 128));
+  if (head !== null) return Number(head[1]);
+  try {
+    const data: unknown = JSON.parse(raw);
+    return isRecord(data) && typeof data.schemaVersion === 'number' ? data.schemaVersion : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Разбирает индекс карты v3. Письма и решения в нём не живут: поля `messages`/`decisionExports`, если они
+ * там есть, игнорируются и при записи не сохраняются. Карта v1/v2 — отказ с подсказкой звать `readMap`/`updateMap`.
+ */
+export function parseIndex(raw: string, file: string): WorkIndexMap {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`index ${file} cannot be parsed: ${(error as Error).message}`);
+  }
+
+  const work = isRecord(data) ? data.work : undefined;
+  const version = isRecord(data) ? data.schemaVersion : undefined;
+  if (version === 1 || version === 2) {
+    throw new Error(`map ${file} is not in the journal format (schemaVersion ${version}): read it with readMap, change it with updateMap`);
+  }
+  if (
+    !isRecord(data) ||
+    version !== JOURNAL_SCHEMA_VERSION ||
+    !isRecord(work) ||
+    typeof work.id !== 'string' ||
+    !Array.isArray(data.sessions) ||
+    !Array.isArray(data.rooms) ||
+    !data.sessions.every(isSessionShape(2))
+  ) {
+    throw new Error(`index ${file} cannot be parsed: unexpected shape (schemaVersion 3 needs work, sessions and rooms)`);
+  }
+  delete data.messages;
+  delete data.decisionExports;
+
+  const index = data as unknown as WorkIndexMap;
+  for (const session of index.sessions) migrateSession(session as unknown as Record<string, unknown>);
+  for (const room of index.rooms) migrateRoom(room as unknown);
+  index.plans ??= [];
+  // Проверки хранилища читают из карты только свои поля (планы, комнаты, журнал ресурсов), не письма.
+  const asMap = index as unknown as WorkMap;
+  validatePlanStorage(asMap);
+  validatePlanEffects(asMap);
+  validateResources(asMap);
+  return index;
 }
 
 /**

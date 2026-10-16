@@ -1,6 +1,8 @@
 import { readMap, updateMap, WorkNotFoundError, workPaths } from './store.js';
-import { cancelledPlanLetter } from './plan-effects.js';
+import { cancelledPlanLetter, planEffectOwnsLetter } from './plan-effects.js';
 import { isRoomArchived } from './rooms.js';
+import { mergeByTime } from './journal.js';
+import type { JournalLetter, SessionCursors } from './journal.js';
 import { HUMAN, type Message, type WorkMap } from './types.js';
 
 /**
@@ -30,6 +32,57 @@ export const isUnreadFor = (message: Message, sessionId: string, map: WorkMap): 
 /** Непрочитанные письма сессии в порядке карты. */
 export const unreadFor = (map: WorkMap, sessionId: string): Message[] =>
   map.messages.filter((message) => isUnreadFor(message, sessionId, map));
+
+/** Индекс карты v3: всё, кроме писем и решений, которые лежат в журналах. */
+export type JournalIndex = Omit<WorkMap, 'messages' | 'decisionExports'>;
+
+/** Письмо журнала по id комнаты и id письма (`findMessage` с путём работы); нет письма — `undefined`. */
+export type LetterResolver = (roomId: string, id: string) => Promise<JournalLetter | undefined>;
+
+/**
+ * Непрочитанное сессии по журналам (карта v3): письма после её курсора, адресованные ей. `journals` — загруженные
+ * письма по комнатам (ключ — id комнаты, прямые — `direct`) в порядке журнала; курсор, которого нет среди
+ * загруженных, значит «читай всё загруженное», поэтому вызывающий грузит `readMessages({ after: курсор })`.
+ * Исключения те же, что у `unreadFor`: письма архивной комнаты и отменённое письмо плана не в счёт.
+ * Результат — по времени письма, при равенстве в порядке ключей `journals`, внутри журнала по `seq` (`mergeByTime`).
+ *
+ * Письмо-уведомление плана видов `mode` и `completion-returned` проверяется по письму-источнику (`occurrence`), а
+ * источник может лежать раньше загруженного хвоста. Отсутствие источника среди загруженных НЕ означает «отменено»:
+ * его догружает `resolve` по id. Отменённым письмо считается, только если источника нет и в журнале.
+ */
+export async function unreadFromJournals(
+  index: JournalIndex,
+  journals: Readonly<Record<string, readonly JournalLetter[]>>,
+  cursors: SessionCursors,
+  sessionId: string,
+  resolve: LetterResolver,
+): Promise<JournalLetter[]> {
+  const asMessage = (letter: JournalLetter): Message => ({ ...letter, readBy: {} }) as Message;
+  const messages = Object.values(journals).flat().map(asMessage);
+  const map: WorkMap = { ...index, messages };
+  const slices = Object.entries(journals).map(([key, letters]) => {
+    const cursor = cursors[key];
+    return letters.slice(cursor === undefined ? 0 : letters.findIndex((letter) => letter.id === cursor) + 1);
+  });
+  for (const slice of slices) {
+    for (const letter of slice) {
+      const message = asMessage(letter);
+      for (const effect of index.planEffects ?? []) {
+        if ((effect.kind !== 'mode' && effect.kind !== 'completion-returned') || !planEffectOwnsLetter(effect, message)) continue;
+        if (messages.some((row) => row.id === effect.occurrence && row.roomId === effect.roomId)) continue;
+        const source = await resolve(effect.roomId, effect.occurrence);
+        if (source !== undefined) messages.push(asMessage(source));
+      }
+    }
+  }
+  const unread = slices.map((slice) =>
+    slice.filter((letter) => {
+      const message = asMessage(letter);
+      return !cancelledPlanLetter(map, message) && recipientsOf(message, map).includes(sessionId);
+    }),
+  );
+  return mergeByTime(unread);
+}
 
 /**
  * Письмо, которое человек видит и ещё не прочёл: прямое письмо ему или сообщение

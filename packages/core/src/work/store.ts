@@ -19,11 +19,12 @@ import path from 'node:path';
 import { CONTEXT_DIR, contextFile } from '../context-fill.js';
 import { LIMITS_DIR, limitsFile } from '../limits.js';
 import { envValue, HOME_DIR, LEGACY_HOME_DIR, type Env } from '../names.js';
-import { bumpWorkId, nextWorkId, parseMap } from './map.js';
+import { assembleFromIndex, journalMapView, lazyJournalMap } from './assemble.js';
+import { bumpWorkId, JOURNAL_SCHEMA_VERSION, nextWorkId, parseIndex, parseMap, peekSchemaVersion } from './map.js';
 import { PRE_JOURNAL_STATE_IGNORE, PRE_MEMORY_STATE_IGNORE, PRE_RECIPES_STATE_IGNORE, ensureStateDir, isDirectorySync, stateDir, SHARED_STATE_IGNORE } from './state-dir.js';
 import { resolveSharedProjectContext, sharedPathIgnored } from './project-context.js';
 import type { ProjectContextOptions, SharedProjectContext } from './project-context.js';
-import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js';
+import type { WorkIndexEntry, WorkIndexMap, WorkMap, WorksIndex, WorkStatus } from './types.js';
 
 /**
  * Домашняя папка Parley (R4), первое подходящее:
@@ -63,6 +64,14 @@ export interface WorkPaths {
   context: string;
   /** Хуки Claude Code для сессий работы (`--settings`), один файл на работу. */
   settings: string;
+  /** Журналы писем комнат (карта v3): `rooms/<room-id>/messages.jsonl`. */
+  rooms: string;
+  /** Журнал прямых писем без комнаты (карта v3): `direct/messages.jsonl`. */
+  direct: string;
+  /** Прочитанное сессиями (карта v3): `cursors/<session-id>.json`. */
+  cursors: string;
+  /** Решения работы (карта v3), бывшие `decisionExports`. */
+  decisions: string;
 }
 
 /** Раскладка работы на диске (спецификация, раздел 2) в каталоге состояния проекта (`stateDir`). */
@@ -80,6 +89,10 @@ export function workPaths(projectPath: string, workId: string): WorkPaths {
     limits: path.join(dir, LIMITS_DIR),
     context: path.join(dir, CONTEXT_DIR),
     settings: path.join(dir, 'settings.json'),
+    rooms: path.join(dir, 'rooms'),
+    direct: path.join(dir, 'direct', 'messages.jsonl'),
+    cursors: path.join(dir, 'cursors'),
+    decisions: path.join(dir, 'decisions.json'),
   };
 }
 
@@ -88,7 +101,7 @@ export interface WriteOptions {
   lockTimeoutMs?: number;
 }
 
-const DEFAULT_LOCK_TIMEOUT_MS = 3000;
+export const DEFAULT_LOCK_TIMEOUT_MS = 3000;
 const RETRY_MS = 20;
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -141,7 +154,7 @@ async function releaseLock(handle: FileHandle, lockFile: string): Promise<void> 
   await rm(lockFile, { force: true });
 }
 
-async function withLock<T>(
+export async function withLock<T>(
   lockFile: string,
   timeoutMs: number,
   body: () => Promise<T>,
@@ -167,16 +180,29 @@ const exists = async (file: string): Promise<boolean> => {
 };
 
 /** Временный файл + rename: читатель видит либо старую карту, либо новую. */
-async function writeAtomic(file: string, text: string): Promise<void> {
+export async function writeAtomic(file: string, text: string): Promise<void> {
   const tmp = `${file}.tmp`;
   await writeFile(tmp, text, 'utf8');
   await rename(tmp, file);
 }
 
-/** Читает карту работы. Битый файл — ошибка, догадки не строим. */
+/**
+ * Читает карту работы. Битый файл — ошибка, догадки не строим. Карта-журнал (v3) собирается в прежнюю форму
+ * (`assembleMap`), поэтому читатели не знают, какой формат на диске.
+ */
 export async function readMap(projectPath: string, workId: string): Promise<WorkMap> {
   const file = workPaths(projectPath, workId).map;
-  return parseMap(await readFile(file, 'utf8'), file);
+  const raw = await readFile(file, 'utf8');
+  if (peekSchemaVersion(raw) === JOURNAL_SCHEMA_VERSION) {
+    return assembleFromIndex(projectPath, workId, parseIndex(raw, file));
+  }
+  return parseMap(raw, file);
+}
+
+/** Читает индекс карты-журнала (v3): без писем и решений. Карта v2 — ошибка: её читает `readMap`. */
+export async function readIndex(projectPath: string, workId: string): Promise<WorkIndexMap> {
+  const file = workPaths(projectPath, workId).map;
+  return parseIndex(await readFile(file, 'utf8'), file);
 }
 
 /**
@@ -263,7 +289,7 @@ async function withWorksIndex<T>(
   });
 }
 
-const entryOf = (projectPath: string, map: WorkMap): WorkIndexEntry => ({
+const entryOf = (projectPath: string, map: Pick<WorkMap, 'work'>): WorkIndexEntry => ({
   id: map.work.id,
   projectPath,
   title: map.work.title,
@@ -382,8 +408,58 @@ export async function updateMap(
   projectPath: string,
   workId: string,
   mutate: (map: WorkMap) => void,
-  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true }: UpdateMapOptions = {},
+  options: UpdateMapOptions = {},
 ): Promise<WorkMap> {
+  const file = workPaths(projectPath, workId).map;
+  return updateStored(projectPath, workId, options, (raw) => {
+    if (peekSchemaVersion(raw) !== JOURNAL_SCHEMA_VERSION) {
+      const map = parseMap(raw, file);
+      return { stored: map, finish: () => map, mutate: () => mutate(map) };
+    }
+    // Карта-журнал: пишется один индекс. Письма и решения мутатор может читать (журналы читаются при первом
+    // обращении), но менять — нет: для них `appendMessage` и решения в `decisions.json`.
+    // Ни мутатор, ни возврат журналов не читают, пока письма не спросили: запись индекса стоит записи индекса.
+    const index = parseIndex(raw, file);
+    const { view, commit } = journalMapView(projectPath, workId, index);
+    return {
+      stored: index,
+      finish: () => lazyJournalMap(projectPath, workId, index),
+      mutate: () => {
+        mutate(view);
+        commit();
+      },
+    };
+  });
+}
+
+/**
+ * Как `updateMap`, но для карты-журнала (v3): мутатор получает индекс без писем и решений, пишется только он.
+ * Карта v2 — ошибка: её меняет `updateMap`.
+ */
+export async function updateIndex(
+  projectPath: string,
+  workId: string,
+  mutate: (index: WorkIndexMap) => void,
+  options: UpdateMapOptions = {},
+): Promise<WorkIndexMap> {
+  const file = workPaths(projectPath, workId).map;
+  return updateStored(projectPath, workId, options, (raw) => {
+    const index = parseIndex(raw, file);
+    return { stored: index, finish: () => index, mutate: () => mutate(index) };
+  });
+}
+
+/**
+ * Общая часть `updateMap` и `updateIndex`: замок, `.bak`, атомарная запись, запись в глобальном индексе.
+ * `open` разбирает файл и говорит, что писать на диск (`stored`), как применить мутатор и как собрать то, что получит
+ * вызывающий (`finish`, после мутатора и сдвига `updatedAt`, под замком).
+ */
+async function updateStored<R>(
+  projectPath: string,
+  workId: string,
+  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true }: UpdateMapOptions,
+  open: (raw: string) => { stored: Pick<WorkMap, 'work'>; finish: () => R; mutate: () => void },
+): Promise<R> {
   const paths = workPaths(projectPath, workId);
   // Блокировка живёт в каталоге работы, поэтому про несуществующую работу первым
   // отчитался бы ENOENT про `map.lock` — не про тот файл, которого на самом деле нет.
@@ -403,22 +479,23 @@ export async function updateMap(
 
   return withLock(paths.lock, lockTimeoutMs, async () => {
     const raw = await readFile(paths.map, 'utf8');
-    const current = parseMap(raw, paths.map);
+    const { stored, finish, mutate } = open(raw);
     // Карта, разошедшаяся с именем каталога, — повод отказаться: иначе в индексе
     // осела бы запись с чужим id, которую в списке работ нечем открыть.
-    if (current.work.id !== workId) {
-      throw new Error(`map ${paths.map} belongs to workspace ${current.work.id}, not ${workId}`);
+    if (stored.work.id !== workId) {
+      throw new Error(`map ${paths.map} belongs to workspace ${stored.work.id}, not ${workId}`);
     }
-    mutate(current);
-    if (touch) current.work.updatedAt = new Date().toISOString();
+    mutate();
+    if (touch) stored.work.updatedAt = new Date().toISOString();
+    const result = finish();
 
     // Индекс обновляем до записи карты и не отпуская `map.lock`: его отказ должен
     // означать «карта не переписана», иначе ретрай вызывающего продублирует мутацию.
     // Порядок записей в индексе при этом остаётся порядком записей карты.
-    await withWorksIndex(lockTimeoutMs, (index) => upsert(index, entryOf(projectPath, current)));
+    await withWorksIndex(lockTimeoutMs, (index) => upsert(index, entryOf(projectPath, stored)));
     await writeFile(paths.bak, raw, 'utf8');
-    await writeAtomic(paths.map, serialize(current));
-    return current;
+    await writeAtomic(paths.map, serialize(stored));
+    return result;
   }).catch(whenGone);
 }
 

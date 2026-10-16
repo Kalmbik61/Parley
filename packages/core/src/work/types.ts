@@ -448,6 +448,14 @@ export interface WorkMap {
   compact?: MapCompact;
 }
 
+/**
+ * Индекс карты v3 (`map.json` с `schemaVersion` 3): всё, кроме писем и решений. Письма лежат в журналах
+ * (`journal.ts`), решения — в `decisions.json`; прежнюю форму `WorkMap` собирает `assembleMap`.
+ */
+export interface WorkIndexMap extends Omit<WorkMap, 'schemaVersion' | 'messages' | 'decisionExports'> {
+  schemaVersion: 3;
+}
+
 /** Запись глобального индекса работ `works-index.json` дома (`parleyHome()`). */
 export interface WorkIndexEntry {
   id: string;
