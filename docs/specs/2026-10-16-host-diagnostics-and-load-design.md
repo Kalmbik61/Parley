@@ -71,7 +71,7 @@ Parley лагает: комната создана, а её сессии ста�
 |---|---|---|
 | `README.txt` | окно | что внутри, оговорка о приватности, куда прислать |
 | `host.log`, `host.log.1`, `host.err` | файлы `~/.parley/host/` | как есть (до 10 МиБ логов + stderr) |
-| `host-info.json` | RPC `host.diagnostics` | версии хоста/Node/платформы, pid, uptime, clients, liveSessions, счётчики (экраны PTY, attached, подписчики ленты, works, rooms, наблюдатели fs), мгновенный CPU % и память хоста, лаг цикла событий текущего окна (max/p99/mean), список сессий: ref, provider, state, startedAt, attached да/нет |
+| `host-info.json` | RPC `host.diagnostics` | версии хоста/Node/платформы, pid, startedAt, uptime, состояние `health` (CPU %, память, лаг цикла событий текущего окна max/p99/mean, счётчики: `ptys` — живые PTY, `attached` — подписки на поток терминала, `feedSubs` — подписки на ленту, `works`, `rooms`, `clients`), список сессий: ref, provider, activity, pid, startedAt, attached да/нет; список файлов профилей и состояние профилировщика |
 | `app-info.json` | окно | версии app/Electron/Chromium/OS/arch, число окон, DPR, аптайм окна, состояние связи с хостом, был ли ответ хоста |
 | `processes.txt` | окно, `spawn('ps', ['-axo', 'pid,ppid,%cpu,%mem,rss,etime,comm'])` | дерево хоста и его потомков (фильтр по pid хоста и ppid-цепочке) + `uptime` (load average), ncpu, memsize. Только `comm` (исполняемый файл), без аргументов: в argv claude/codex лежат бриф сессии (`{prompt}`, `{systemPrompt}`), а у их потомков (MCP-серверы) — токены. Сопоставление pid → сессия берётся из `host-info.json` |
 | `actions.jsonl` | окно, кольцо RPC (A4) | последние 1000 вызовов окна к хосту: время, метод, ms, ok/error |
@@ -79,7 +79,7 @@ Parley лагает: комната создана, а её сессии ста�
 
 ### A3. Строка состояния хоста в логе
 
-Хост раз в 30 с пишет `host: состояние` с `{cpuPct, rssMb, heapMb, extMb, loop:{maxMs,p99Ms}, sessions, screens, attached, feedSubs, works, rooms, clients}`. `cpuPct` — из `process.cpuUsage()` дельтой к стене за окно. Строка ≈ 200 байт; при ротации 5 МиБ это сутки истории даже под шумом. Таймер `unref()`. Эта же функция отдаёт мгновенные значения для `host.diagnostics`.
+Хост раз в 30 с пишет `host: состояние` с `{cpuPct, rssMb, heapMb, extMb, loop:{maxMs,p99Ms,meanMs}, ptys, attached, feedSubs, works, rooms, clients}` (тип `HealthSample` в протоколе). Лаг берётся из `monitorEventLoopDelay` за вычетом его разрешения 20 мс: гистограмма Node хранит интервал между срабатываниями таймера, и без поправки здоровый хост показывал бы «лаг» около 21 мс. `cpuPct` — из `process.cpuUsage()` дельтой к стене за окно. Строка ≈ 200 байт; при ротации 5 МиБ это сутки истории даже под шумом. Таймер `unref()`. Эта же функция отдаёт мгновенные значения для `host.diagnostics`.
 
 Порог предупреждения лага цикла событий остаётся 250 мс/60 с (`loop-delay.ts`), но в строку состояния попадают max и p99 каждого 30-секундного окна, чтобы динамика была видна и без предупреждений.
 
