@@ -16,24 +16,22 @@ const PS_ROW = /^\s*(\d+)\s+(\d+)\s+\S+\s+\S+\s+\S+\s+\S+\s+.+$/;
 /** Запускает `ps` и возвращает вывод одной строкой; сбои и таймаут превращает в строку `ps: …`. */
 function runPs(spawnFn: typeof spawn, timeoutMs: number): Promise<string> {
   return new Promise((resolve) => {
-    let settled = false;
-    let timer: NodeJS.Timeout | undefined;
-    const settle = (text: string): void => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      resolve(text);
-    };
-
     let child: ReturnType<typeof spawn>;
     try {
       child = spawnFn('ps', PS_ARGS, { stdio: ['ignore', 'pipe', 'ignore'] });
     } catch (err) {
-      settle(`ps: ${err instanceof Error ? err.message : String(err)}`);
+      resolve(`ps: ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
 
-    timer = setTimeout(() => {
+    let settled = false;
+    const settle = (text: string): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(text);
+    };
+    const timer = setTimeout(() => {
       child.kill();
       settle(`ps: timed out after ${timeoutMs} ms`);
     }, timeoutMs);
