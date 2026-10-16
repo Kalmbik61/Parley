@@ -347,7 +347,7 @@ describe('ChatView — поле ввода и тулбар', () => {
     fireEvent.keyDown(field(), { key: 'Enter', shiftKey: true });
     expect(sends()).toEqual([]);
     fireEvent.keyDown(field(), { key: 'Enter' });
-    expect(sends()).toEqual([{ ref: REF, text: 'first line', submit: true }]);
+    expect(sends()).toEqual([{ ref: REF, text: 'first line', submit: true, requestedAt: expect.any(Number) }]);
     expect(field().value).toBe('');
     // До ответа хоста — серый «Waiting»; ушло без хода — он уходит: промпт придёт хуком сам.
     expect(screen.getByTestId('chat-queued').getAttribute('data-state')).toBe('waiting');
@@ -365,7 +365,7 @@ describe('ChatView — поле ввода и тулбар', () => {
     setFeed([]);
     type('via button');
     fireEvent.click(screen.getByRole('button', { name: S.chat.composer.send }));
-    expect(sends()).toEqual([{ ref: REF, text: 'via button', submit: true }]);
+    expect(sends()).toEqual([{ ref: REF, text: 'via button', submit: true, requestedAt: expect.any(Number) }]);
   });
 
   it('пока идёт ход — Queue и серый элемент; уходит, когда пришёл промпт с тем же текстом', async () => {
@@ -1171,7 +1171,7 @@ describe('ChatView — подсказки поля ввода (живая про
     expect(sends()).toEqual([]);
     expect(screen.getAllByTestId('chat-attachment')).toHaveLength(1);
     fireEvent.keyDown(field(), { key: 'Enter' });
-    expect(sends()).toEqual([{ ref: REF, text: '/clear @"/a/notes.txt" ', submit: true }]);
+    expect(sends()).toEqual([{ ref: REF, text: '/clear @"/a/notes.txt" ', submit: true, requestedAt: expect.any(Number) }]);
     await act(async () => {});
   });
 
@@ -1432,7 +1432,7 @@ describe('ChatView — вложения в поле ввода (живая пр�
     await attach('/a/b c.png', '/a/notes.txt');
     type('what is this?');
     fireEvent.keyDown(field(), { key: 'Enter' });
-    expect(sends()).toEqual([{ ref: REF, text: 'what is this? @"/a/b c.png" @"/a/notes.txt" ', submit: true }]);
+    expect(sends()).toEqual([{ ref: REF, text: 'what is this? @"/a/b c.png" @"/a/notes.txt" ', submit: true, requestedAt: expect.any(Number) }]);
     expect(field().value).toBe('');
     expect(chips()).toEqual([]);
     expect(document.activeElement).toBe(field());
@@ -1447,7 +1447,7 @@ describe('ChatView — вложения в поле ввода (живая пр�
     setFeed([]);
     await attach('/a/b c.png');
     fireEvent.click(sendButton());
-    expect(sends()).toEqual([{ ref: REF, text: '@"/a/b c.png" ', submit: true }]);
+    expect(sends()).toEqual([{ ref: REF, text: '@"/a/b c.png" ', submit: true, requestedAt: expect.any(Number) }]);
     expect(chips()).toEqual([]);
     await act(async () => {});
     expect(sendButton().disabled).toBe(true);
@@ -1455,7 +1455,7 @@ describe('ChatView — вложения в поле ввода (живая пр�
     await attach('/a/d.txt');
     fireEvent.keyDown(field(), { key: 'Enter' });
     expect(sends()).toHaveLength(2);
-    expect(sends()[1]).toEqual({ ref: REF, text: '@"/a/d.txt" ', submit: true });
+    expect(sends()[1]).toEqual({ ref: REF, text: '@"/a/d.txt" ', submit: true, requestedAt: expect.any(Number) });
     await act(async () => {});
   });
 
@@ -1466,7 +1466,7 @@ describe('ChatView — вложения в поле ввода (живая пр�
     await attach('/a/Shot #1.png');
     type('look');
     fireEvent.keyDown(field(), { key: 'Enter' });
-    expect(sends()).toEqual([{ ref: REF, text: "look '/a/Shot #1.png' ", submit: true }]);
+    expect(sends()).toEqual([{ ref: REF, text: "look '/a/Shot #1.png' ", submit: true, requestedAt: expect.any(Number) }]);
     await act(async () => {});
   });
 
@@ -1482,7 +1482,7 @@ describe('ChatView — вложения в поле ввода (живая пр�
     expect(grey.textContent).toContain('next');
     expect(grey.textContent).not.toContain('/a/notes.txt');
     await act(async () => {});
-    expect(sends()).toEqual([{ ref: REF, text: 'next @"/a/notes.txt" ', submit: true }]);
+    expect(sends()).toEqual([{ ref: REF, text: 'next @"/a/notes.txt" ', submit: true, requestedAt: expect.any(Number) }]);
 
     // Хук отдаёт промпт как набран — с упоминанием; серый уходит, чип остаётся уже в настоящем.
     setFeed([prompt('p1', 'go'), turn('u1'), prompt('p2', 'next @"/a/notes.txt" ')], 2);
@@ -1770,7 +1770,7 @@ describe('ChatView — агенты: тулбар, прокрутка к кар�
     fireEvent.keyDown(field(), { key: 'Enter' });
     await act(async () => {});
     expect(bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params)).toEqual([
-      { ref: REF, text: 'meanwhile, a question', submit: true },
+      { ref: REF, text: 'meanwhile, a question', submit: true, requestedAt: expect.any(Number) },
     ]);
     // Без хода — без серого элемента: промпт придёт хуком сразу.
     expect(screen.queryByTestId('chat-queued')).toBeNull();
@@ -1826,7 +1826,7 @@ describe('ChatView — Codex', () => {
     fireEvent.keyDown(field(), { key: 'Enter' });
     await act(async () => {});
     const sent = bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params);
-    expect(sent).toEqual([{ ref: REF, text: composeRoomMessage('hi', ['/tmp/a b.png']), submit: true }]);
+    expect(sent).toEqual([{ ref: REF, text: composeRoomMessage('hi', ['/tmp/a b.png']), submit: true, requestedAt: expect.any(Number) }]);
   });
 
   describe('подсказка про хуки', () => {

@@ -379,6 +379,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       roomId,
       to: submission.to,
       text: submission.text,
+      requestedAt: Date.now(),
     });
   };
 

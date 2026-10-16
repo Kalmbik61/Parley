@@ -1520,6 +1520,7 @@ describe('RoomPanel — поле ввода и отправка (2.2)', () => {
       to: [],
       text: 'Всем привет',
       kind: 'note',
+      requestedAt: expect.any(Number),
     });
   });
 

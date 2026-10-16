@@ -36,7 +36,13 @@ function setFeed(items: FeedItem[]): void {
   useFeedStore.setState({ feeds: { [KEY]: { items, revision: 1, mode: null, decisions: null, status: 'ready' } } });
 }
 
-const item = (text: string): OutboxItem<ChatOutboxPayload> => ({ id: 'o1', status: 'pending', payload: { ref: REF, text, deps } });
+const REQUESTED_AT = 1_760_000_000_000;
+
+const item = (text: string): OutboxItem<ChatOutboxPayload> => ({
+  id: 'o1',
+  status: 'pending',
+  payload: { ref: REF, text, deps, requestedAt: REQUESTED_AT },
+});
 
 beforeEach(() => {
   bridge = createFakeBridge();
@@ -54,6 +60,12 @@ afterEach(() => {
 });
 
 describe('attemptChatSend', () => {
+  it('pty.send уходит с requestedAt из payload (метка нажатия Send, а не момента вызова)', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    await attemptChatSend(KEY, item('next'));
+    expect(bridge.calls).toEqual([{ method: 'pty.send', params: { ref: REF, text: 'next', submit: true, requestedAt: REQUESTED_AT } }]);
+  });
+
   it('ушло без хода — sent, серых «Queued» нет, тоста нет', async () => {
     bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
     setFeed([prompt('p1', 'go'), turn('u1')]);

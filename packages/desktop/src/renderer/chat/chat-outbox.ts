@@ -26,6 +26,8 @@ export interface ChatOutboxPayload {
   /** Собранный текст: с упоминаниями вложений (`composePrompt`) или списком путей у Codex (`composeRoomMessage`). */
   text: string;
   deps: SendWithToastDeps;
+  /** Момент нажатия Send (мс эпохи): ставится при постановке в очередь, повтор его не меняет; хост считает по нему `queueMs`. */
+  requestedAt: number;
 }
 
 /** Пауза перед повтором `busy` и наименьшая пауза перед повтором `blocked`. */
@@ -55,11 +57,11 @@ function untilNotBlocked(ref: SessionRef): Promise<void> {
 }
 
 export async function attemptChatSend(key: string, item: OutboxItem<ChatOutboxPayload>): Promise<AttemptResult> {
-  const { ref, text, deps } = item.payload;
+  const { ref, text, deps, requestedAt } = item.payload;
   const before = useFeedStore.getState().feeds[key]?.items ?? NO_ITEMS;
   const active = turnActive(before);
   const seen = promptCount(before, text);
-  const outcome = await sendToAgent(deps.bridge, ref, text, true);
+  const outcome = await sendToAgent(deps.bridge, ref, text, true, requestedAt);
   deps.onOutcome?.(outcome);
   if (!('error' in outcome)) {
     if (outcome.reason === 'busy') return { kind: 'retry', wait: () => delay(CHAT_RETRY_MS) };
