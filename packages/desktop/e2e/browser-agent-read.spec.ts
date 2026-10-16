@@ -151,6 +151,10 @@ test.describe('агент читает страницы браузера чат�
       (await call<{ roomId: string }>(window, 'rooms.create', { projectPath: project, workId, title, members, lead: members[0], quiet: true })).roomId;
     const roomId = await room('own-room', [lead, second]);
     const foreignRoomId = await room('foreign-room', [second, third]);
+    // Как в browser-agent-open.spec.ts: `owners` канала берутся из снимка работ хоста, а он отстаёт от `rooms.create`; окно рисует
+    // комнату из того же снимка.
+    await expect(window.locator(`[data-work-key="${workKey}"] [data-room-row="${roomId}"]`).first()).toBeVisible();
+    await expect(window.locator(`[data-work-key="${workKey}"] [data-room-row="${foreignRoomId}"]`).first()).toBeVisible();
     await expect(window.getByTestId('chat-view')).toBeVisible();
     return { electronApp, window, lead, second, workId, roomId, foreignRoomId, workKey };
   }
