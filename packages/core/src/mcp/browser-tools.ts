@@ -232,6 +232,7 @@ interface ScreenshotResult {
   viewport: { width: number; height: number };
   fullPage: boolean;
   emulated: boolean;
+  notes?: string[];
 }
 
 function formatTabs(result: { tabs: TabInfo[]; notes?: string[] }): string {
@@ -314,7 +315,8 @@ async function screenshotResult(result: ScreenshotResult, dropsDir: string): Pro
   if (path.dirname(file) !== root || path.extname(file) !== '.png') return text('The window returned a screenshot path outside Parley drops; nothing was read.', true);
   const caption =
     `Screenshot of ${result.tab} (${result.url}): ${result.viewport.width}×${result.viewport.height} CSS px` +
-    `${result.fullPage ? ', full page' : ''}${result.emulated ? ', emulated' : ''}; image ${result.width}×${result.height} px. File: ${file}`;
+    `${result.fullPage ? ', full page' : ''}${result.emulated ? ', emulated' : ''}; image ${result.width}×${result.height} px. File: ${file}` +
+    (result.notes ?? []).map((note) => `\nNote: ${note}`).join('');
   const data = (await readFile(file)).toString('base64');
   return { content: [{ type: 'image', data, mimeType: 'image/png' }, { type: 'text', text: `${caption}\nIf you cannot see the image, open the file with your image viewer tool (in Codex: view_image).` }] };
 }

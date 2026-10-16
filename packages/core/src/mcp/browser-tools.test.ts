@@ -271,6 +271,10 @@ describe('снимок', () => {
     expect(text.text).toContain('375×812 CSS px, emulated');
     expect(text.text).toContain(file);
     expect(text.text).toContain('view_image');
+    expect(text.text).not.toContain('Note:');
+    answers.push({ status: 200, body: { ok: true, result: { ...SHOT, path: file, notes: ['The page is 50000 px wide; the screenshot is cut at 3840 px.'] } } });
+    const cut = await tools.call('browser_screenshot', { tab: 't1', fullPage: true });
+    expect((cut.content as Array<{ text?: string }>)[1]?.text).toContain('\nNote: The page is 50000 px wide; the screenshot is cut at 3840 px.');
     const outside = await mkdtemp(path.join(tmpdir(), 'parley-outside-'));
     await writeFile(path.join(outside, 'shot.png'), 'secret');
     answers.push({ status: 200, body: { ok: true, result: { ...SHOT, path: path.join(outside, 'shot.png') } } });
