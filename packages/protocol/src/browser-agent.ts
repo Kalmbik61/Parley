@@ -41,7 +41,8 @@ export type BrowserAgentErrorCode = (typeof BROWSER_AGENT_ERROR_CODES)[number];
  * запроса агента. Остальное — пределы чтения (этап C): `text` — текст записи консоли и сообщения; `listBytes` и
  * `listEntries` — размер и число записей списка; `detailBody` — тело запроса или ответа в деталях; `screenshotLongSide`
  * и `fullPageViewports` — размер снимка; `panelPages` — предел страниц панели (источник правды — `PANEL_LIMITS.pages`
- * окна, равенство сверяет тест окна).
+ * окна, равенство сверяет тест окна); `captureReadyMs` — сколько main ждёт, пока окно поставит `<webview>` в размер снимка
+ * и подтвердит это; `captureRetries` — повторы снимка скрытой страницы после подтверждения.
  */
 export const AGENT_LIMITS = {
   opMs: 30_000,
@@ -54,6 +55,8 @@ export const AGENT_LIMITS = {
   screenshotLongSide: 1568,
   fullPageViewports: 3,
   panelPages: 5,
+  captureReadyMs: 2000,
+  captureRetries: 2,
 } as const;
 
 /** Пределы ввода агента, которых нет в таблице спеки: длина адреса — та же, что у журнала вкладки (`DEVTOOLS_LIMITS.url`); `room` — id комнаты; `pattern` — фильтр консоли и сети; `requestId` — id запроса сети. */

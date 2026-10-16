@@ -272,7 +272,7 @@ export interface RegisterIpcOptions {
     /** Размер вьюпорта (спека 2026-10-07, 4.2): main/browser/emulation.ts#createEmulation. */
     emulation: Pick<Emulation, 'set'>;
     /** Ответы окна на просьбы агента (спека браузера 3.7, этап B2): main/browser/agent-ops.ts. */
-    agent: Pick<AgentOps, 'openTabResult' | 'registerTab'>;
+    agent: Pick<AgentOps, 'openTabResult' | 'registerTab' | 'captureReady'>;
   };
 }
 
@@ -868,6 +868,15 @@ export function registerIpc(options: RegisterIpcOptions): void {
         throw new HostError('bad_request', 'invalid request id');
       }
       return browser.inspector.responseBody(guest.id, requestId, DEVTOOLS_LIMITS.panelBody);
+    }),
+  );
+
+  // Окно поставило `<webview>` в размер снимка агента (задача 2 плана исправлений): `id` — из `capture.id` события активности.
+  ipcMain.handle(
+    'browser:agent-capture-ready',
+    withIpcError(async (_event, id: unknown) => {
+      if (typeof id !== 'string' || id.length === 0 || id.length > 64) throw new HostError('bad_request', 'invalid agent capture id');
+      browser.agent.captureReady(id);
     }),
   );
 

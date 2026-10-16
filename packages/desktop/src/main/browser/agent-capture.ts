@@ -1,9 +1,15 @@
 /**
  * Снимок страницы для агента (спека 2026-10-07-browser-devtools-agent-design.md, 5.1, 8): размер, временная эмуляция,
- * fullPage по полосам, повтор снимка невидимой страницы, сохранение в `drops/`.
+ * «поверхность снимка», fullPage по полосам, повтор снимка невидимой страницы, сохранение в `drops/`.
+ *
+ * Поверхность снимка (спайк 0 плана исправлений): Chromium рисует кадр только в размере самого `<webview>` — при эмуляции
+ * больше панели PNG выходил с повтором верхнего левого куска. Поэтому, пока идёт снимок в чужом размере или снимок невидимой
+ * страницы, окно ставит `<webview>` в размер снимка и подтверждает это (`captureReady`); main снимает только после подтверждения.
+ * fullPage не растит поверхность: страница прокручивается вьюпортом, полосы склеиваются.
  */
+import { randomUUID } from 'node:crypto';
 import type { WebContents } from 'electron';
-import { AGENT_LIMITS, AGENT_VIEWPORT } from '@parley/protocol';
+import { AGENT_LIMITS } from '@parley/protocol';
 import type { BrowserAgentArgs, BrowserAgentOpEvent, BrowserAgentScreenshotResult } from '@parley/protocol';
 import { VIEWPORT_PRESETS, viewportSize } from '../../shared/browser-devtools.js';
 import type { ViewportPreset, ViewportSpec } from '../../shared/browser-devtools.js';
@@ -23,28 +29,68 @@ export function captureSpec(width: number, height: number): ViewportSpec {
   return { width, height, mobile: false, dpr: 1 };
 }
 
+/** Пауза перед повтором снимка невидимой страницы, мс. */
+const CAPTURE_RETRY_MS = 50;
+
 /**
- * Повторы снимка невидимой страницы: до ~0,5 с, пока окно не сделает её поверхность прозрачной, но видимой. Повторяется
- * только отказ «кадр не рисуется» (Chromium: «Unable to capture screenshot»); другая ошибка уходит агенту сразу.
+ * Поверхность выше этой доли высоты окна Chromium тайлит (страница повторяется; спайк 0, поправка 3: 900 → верно до 1100,
+ * 1300 тайлится). Запас взят с края: 1080 при окне 900 проходит, 1440 — нет.
  */
-const HIDDEN_CAPTURE_RETRIES = 10;
-const NOT_DRAWN = /capture screenshot/i;
-const HIDDEN_CAPTURE_RETRY_MS = 50;
+const SURFACE_HEIGHT_FACTOR = 1.2;
 
 export interface AgentCaptureDeps {
   inspector: Pick<Inspector, 'send'>;
   emulation: Pick<Emulation, 'current' | 'withTemporary'>;
   registry: Pick<PageRegistry, 'fresh'>;
   saveImage(png: Buffer): Promise<string | null>;
-  image: { size(png: Buffer): { width: number; height: number }; resize(png: Buffer, width: number, height: number): Buffer; stitch(parts: Buffer[]): Buffer };
+  image: {
+    size(png: Buffer): { width: number; height: number };
+    resize(png: Buffer, width: number, height: number): Buffer;
+    stitch(parts: Buffer[]): Buffer;
+    /** Строки PNG `top`…`top + height` (в пикселях картинки) на всю её ширину. */
+    crop(png: Buffer, top: number, height: number): Buffer;
+  };
   activity(e: AgentActivity): void;
+  /**
+   * Код main в мире гостя, изолированном от скриптов страницы (прокрутка fullPage): ответ — значение последнего выражения.
+   * `Runtime.evaluate` инспектора закрыт навсегда (список `CDP_ALLOWED`), и этот путь не нарушает запрета: код здесь только
+   * константы `agent-capture.ts` с целыми числами, агент своего JS не передаёт.
+   */
+  inGuest(contents: WebContents, code: string): Promise<unknown>;
+  /** Высота содержимого окна, в котором лежит гость; `null` или метода нет — проверка размера снимка пропускается. */
+  windowHeight?(contents: WebContents): number | null;
+  /** Сколько ждать подтверждения окна; по умолчанию `AGENT_LIMITS.captureReadyMs`. Тестам — меньше. */
+  captureReadyMs?: number;
 }
 
 export interface AgentCapture {
   screenshotOf(contents: WebContents, record: PageRecord, request: BrowserAgentOpEvent, args: BrowserAgentArgs<'screenshot'>): Promise<BrowserAgentScreenshotResult>;
+  /** Окно подтверждает поверхность снимка (`browser:agent-capture-ready`); чужой и поздний id молча игнорируется. */
+  captureReady(id: string): void;
 }
 
 export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
+  const readyMs = deps.captureReadyMs ?? AGENT_LIMITS.captureReadyMs;
+  /** Ждущие подтверждения окна: id поверхности → продолжение. */
+  const pendingSurfaces = new Map<string, () => void>();
+
+  /** Просит окно поставить `<webview>` в размер снимка и ждёт подтверждения не дольше `readyMs`. */
+  function prepareSurface(contents: WebContents, request: BrowserAgentOpEvent, view: { width: number; height: number }): Promise<void> {
+    const id = randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pendingSurfaces.delete(id);
+        reject(new AgentOpError('timeout', `Parley's window did not prepare the page for the screenshot within ${Math.round(readyMs / 1000)} s.`));
+      }, readyMs);
+      pendingSurfaces.set(id, () => {
+        clearTimeout(timer);
+        pendingSurfaces.delete(id);
+        resolve();
+      });
+      deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'start', capture: { ...view, id } });
+    });
+  }
+
   /** Длинная сторона PNG — не больше `AGENT_LIMITS.screenshotLongSide` (предел картинки, которую модель читает целиком). */
   function fitLongSide(png: Buffer): Buffer {
     const size = deps.image.size(png);
@@ -60,27 +106,50 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
     const current = { width: Math.round(metrics.cssLayoutViewport.clientWidth), height: Math.round(metrics.cssLayoutViewport.clientHeight) };
     const spec = args.width === undefined && args.height === undefined ? null : captureSpec(args.width ?? current.width, args.height ?? current.height);
     const view = spec === null ? current : (({ width, height }) => ({ width, height }))(viewportSize(spec));
+    if (spec !== null) {
+      const windowHeight = deps.windowHeight?.(contents) ?? null;
+      const limit = windowHeight === null ? null : Math.floor(windowHeight * SURFACE_HEIGHT_FACTOR);
+      if (limit !== null && view.height > limit) {
+        throw new AgentOpError('bad_request', `A screenshot ${view.height} px tall does not fit Parley's window (up to ${limit} px): ask for a smaller height, or use fullPage to scroll through a tall page.`);
+      }
+    }
 
-    const shoot = async (clip?: { x: number; y: number; width: number; height: number; scale: number }): Promise<Buffer> => {
-      const params = clip === undefined ? { format: 'png' } : { format: 'png', clip, captureBeyondViewport: true };
-      for (let attempt = 0; ; attempt += 1) {
+    /** Поверхность снимка уже поставлена окном (один раз за снимок: размер не меняется). */
+    let surfaced = false;
+    const ensureSurface = async (): Promise<void> => {
+      if (surfaced) return;
+      await prepareSurface(contents, request, view);
+      surfaced = true;
+    };
+
+    const shoot = async (): Promise<Buffer> => {
+      for (let failures = 0; ; ) {
         try {
-          const shot = await deps.inspector.send<{ data: string }>(id, 'Page.captureScreenshot', params);
+          const shot = await deps.inspector.send<{ data: string }>(id, 'Page.captureScreenshot', { format: 'png' });
           return Buffer.from(shot.data, 'base64');
         } catch (error) {
           // Видимость читается из реестра сейчас: за время снимка человек мог показать страницу или спрятать её.
-          const hidden = deps.registry.fresh(record)?.visible === false;
-          if (!hidden || !NOT_DRAWN.test(error instanceof Error ? error.message : String(error))) throw error;
-          if (attempt >= HIDDEN_CAPTURE_RETRIES) {
+          const hidden = (deps.registry.fresh(record) ?? record).visible === false;
+          if (!hidden) throw error;
+          if (!surfaced) {
+            // Спрятали посреди снимка: поверхность ещё не готовили.
+            await ensureSurface();
+            continue;
+          }
+          failures += 1;
+          if (failures > AGENT_LIMITS.captureRetries) {
             throw new AgentOpError('tab_hidden', `Page ${record.agentId} is not shown to the human and Chromium does not draw it: ask them to open its browser panel, or read browser_console and browser_network.`);
           }
-          await new Promise((resolve) => setTimeout(resolve, HIDDEN_CAPTURE_RETRY_MS));
+          await new Promise((resolve) => setTimeout(resolve, CAPTURE_RETRY_MS));
         }
       }
     };
 
+    const evaluate = (code: string): Promise<unknown> => deps.inGuest(contents, code);
+
     const notes: string[] = [];
     const capture = async (): Promise<{ png: Buffer; viewport: { width: number; height: number } }> => {
+      if (spec !== null || (deps.registry.fresh(record) ?? record).visible === false) await ensureSurface();
       if (args.fullPage !== true) return { png: await shoot(), viewport: view };
       // Высота страницы — уже при нужном размере (под временной эмуляцией вёрстка другая).
       const page = await deps.inspector.send<LayoutMetrics>(id, 'Page.getLayoutMetrics');
@@ -91,18 +160,36 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
           `The page is ${total} px tall, more than ${AGENT_LIMITS.fullPageViewports} viewport heights (${view.height} px): take viewport screenshots of parts of the page instead.`,
         );
       }
-      const wide = Math.max(view.width, Math.ceil(page.cssContentSize.width));
-      // Ширина не больше предела размера снимка: страница в десятки тысяч пикселей дала бы полосы в сотни мегабайт.
-      const width = Math.min(wide, AGENT_VIEWPORT.maxWidth);
-      if (width < wide) notes.push(`The page is ${wide} px wide; the screenshot is cut at ${width} px.`);
+      const wide = Math.ceil(page.cssContentSize.width);
+      if (wide > view.width) notes.push(`The page is ${wide} px wide; the screenshot shows the first ${view.width} px.`);
+      const origin = await evaluate('[window.scrollX, window.scrollY]');
       const strips: Buffer[] = [];
-      // Полоса выше поверхности вида рисуется повтором (спайк 0.7): режем по высоте вьюпорта и склеиваем.
-      for (let y = 0; y < total; y += view.height) strips.push(await shoot({ x: 0, y, width, height: Math.min(view.height, total - y), scale: 1 }));
-      return { png: strips.length === 1 ? (strips[0] as Buffer) : deps.image.stitch(strips), viewport: { width, height: total } };
+      try {
+        // Полоса вне вида рисуется повтором верха (спайк 0, поправка 2): страницу прокручивают вьюпортом, по снимку на полосу.
+        for (let y = 0; y < total; y += view.height) {
+          const reached = await evaluate(
+            `new Promise((done) => { window.scrollTo(0, ${y}); const finish = () => done(window.scrollY); setTimeout(finish, 300); requestAnimationFrame(() => requestAnimationFrame(finish)); })`,
+          );
+          // Последняя полоса: прокрутка зажата у конца документа, нужные строки лежат ниже верха снимка.
+          const at = typeof reached === 'number' ? reached : y;
+          const rows = Math.min(view.height, total - y);
+          const skip = Math.max(0, y - at);
+          const shot = await shoot();
+          if (skip === 0 && rows === view.height) {
+            strips.push(shot);
+          } else {
+            const ratio = deps.image.size(shot).width / view.width;
+            strips.push(deps.image.crop(shot, Math.round(skip * ratio), Math.round(rows * ratio)));
+          }
+        }
+      } finally {
+        // Человек не должен видеть, что страницу прокручивали.
+        const [x, top] = Array.isArray(origin) ? (origin as unknown[]) : [0, 0];
+        if (typeof x === 'number' && typeof top === 'number') await evaluate(`window.scrollTo(${x}, ${top})`).catch(() => undefined);
+      }
+      return { png: strips.length === 1 ? (strips[0] as Buffer) : deps.image.stitch(strips), viewport: { width: view.width, height: total } };
     };
 
-    // Невидимой странице поверхность переводят в opacity: 0 (спайк 0.2); смене размера нужна ещё и подпись «Agent capture W×H».
-    if (spec !== null || !record.visible) deps.activity({ webContentsId: id, session: request.label, op: request.op, phase: 'start', capture: view });
     const taken = spec === null ? await capture() : await deps.emulation.withTemporary(id, spec, capture);
     const png = fitLongSide(taken.png);
     const size = deps.image.size(png);
@@ -121,5 +208,10 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
     };
   }
 
-  return { screenshotOf };
+  return {
+    screenshotOf,
+    captureReady(id) {
+      pendingSurfaces.get(id)?.();
+    },
+  };
 }

@@ -176,8 +176,11 @@ export interface AgentActivity {
   session: string;
   op: string;
   phase: 'start' | 'end';
-  /** Снимок в чужом размере или у невидимой страницы: подпись «Agent capture W×H» и `opacity: 0` на время снимка (задача 15). */
-  capture?: { width: number; height: number };
+  /**
+   * Снимок в чужом размере или у невидимой страницы: окно ставит `<webview>` в этот размер (слева-сверху), рисует подпись
+   * «Agent capture W×H» и `opacity: 0` у скрытой страницы, затем подтверждает `id` через `agentCaptureReady`.
+   */
+  capture?: { width: number; height: number; id: string };
 }
 
 // Интерфейс растёт вместе с мостом: pickStart и pickCancel — с 9.3a.
@@ -230,4 +233,6 @@ export interface BrowserApi {
   registerTab(e: AgentPageRegistration): Promise<void>;
   /** Агент действует на странице (`browser:agent-activity`): подпись снимка в чужом размере, перевод скрытой поверхности в `opacity: 0`. */
   onAgentActivity(listener: (e: AgentActivity) => void): () => void;
+  /** Окно поставило `<webview>` в размер снимка (`capture.id` события `browser:agent-activity`): main снимает только после этого. */
+  agentCaptureReady(id: string): Promise<void>;
 }

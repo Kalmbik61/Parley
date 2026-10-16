@@ -77,7 +77,7 @@ const emulation = {
   })),
 };
 /** Ответы окна на просьбы агента (этап B2): main/browser/agent-ops.ts подменён — мост проверяет только форму. */
-const agentOps = { openTabResult: vi.fn(), registerTab: vi.fn() };
+const agentOps = { openTabResult: vi.fn(), registerTab: vi.fn(), captureReady: vi.fn() };
 
 /** Подставной webContents для моста `browser:*`: EventEmitter плюс то, что трогает мост. */
 function fakeBrowserContents(
@@ -1495,6 +1495,17 @@ describe('канал агента — только для main (этап B2, с�
       expect(await codeOf(ipcMain.invoke('browser:agent-open-tab-result', requestId, raw)), JSON.stringify(raw)).toBe('bad_request');
     }
     expect(agentOps.openTabResult).toHaveBeenCalledTimes(4);
+  });
+
+  it('agent-capture-ready: id поверхности снимка — в main; не строка, пустой и длиннее 64 — bad_request', async () => {
+    const { ipcMain } = setup();
+    agentOps.captureReady.mockClear();
+    await ipcMain.invoke('browser:agent-capture-ready', 'c-77');
+    expect(agentOps.captureReady).toHaveBeenCalledWith('c-77');
+    for (const raw of [7, '', 'x'.repeat(65), null, { id: 'c-77' }]) {
+      expect(await codeOf(ipcMain.invoke('browser:agent-capture-ready', raw)), JSON.stringify(raw)).toBe('bad_request');
+    }
+    expect(agentOps.captureReady).toHaveBeenCalledTimes(1);
   });
 
   it('register-tab: страница панели с живым гостем раздела и пауза панели — в реестр агента; gone — без гостя; неверное и вкладка человека — bad_request', async () => {

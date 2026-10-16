@@ -29,7 +29,7 @@ import type { UiFile } from '../shared/ui-types.js';
 import { createAgentOps, type AgentOps } from './browser/agent-ops.js';
 import { createAnnotate } from './browser/annotate.js';
 import { contextDir, saveContextFile } from './browser/context-files.js';
-import { createDesignMode } from './browser/design-mode.js';
+import { createDesignMode, PICK_WORLD_ID } from './browser/design-mode.js';
 import { createEmulation } from './browser/emulation.js';
 import { fetchFavicon } from './browser/favicon.js';
 import guestAnnotateScript from './browser/guest-annotate.js?raw';
@@ -626,6 +626,15 @@ if (!gotLock) {
           const height = images.reduce((sum, image) => sum + image.getSize().height, 0);
           return nativeImage.createFromBitmap(Buffer.concat(images.map((image) => image.toBitmap())), { width, height }).toPNG();
         },
+        crop: (png, top, height) => {
+          const image = nativeImage.createFromBuffer(png);
+          return image.crop({ x: 0, y: top, width: image.getSize().width, height }).toPNG();
+        },
+      },
+      inGuest: (guest, code) => guest.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code }]),
+      windowHeight: (guest) => {
+        const host = guest.hostWebContents;
+        return host === undefined || host === null ? null : (BrowserWindow.fromWebContents(host)?.getContentSize()[1] ?? null);
       },
       activity: (e) => webContents.fromId(e.webContentsId)?.hostWebContents?.send('browser:agent-activity', e),
     });

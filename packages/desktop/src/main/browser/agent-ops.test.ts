@@ -53,7 +53,7 @@ function sendWith(options: { viewport?: { width: number; height: number }; conte
 }
 
 /** Окно отвечает на просьбу своим ответом (если он задан) сразу после неё, как ответил бы рендерер. */
-function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null; sent?: boolean; openMs?: number; owners?: BrowserAgentOwner[] } = {}) {
+function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null; sent?: boolean; openMs?: number; owners?: BrowserAgentOwner[]; confirmSurface?: boolean; captureReadyMs?: number; windowHeight?: number } = {}) {
   const asked: AgentOpenTab[] = [];
   const state = { allowed: overrides.allowed ?? true, reply: overrides.reply === undefined ? { tabId: 'browser:aaaaaa', reused: false, mounted: true } : overrides.reply };
   const openTab = vi.fn((e: AgentOpenTab): boolean => {
@@ -78,10 +78,13 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
     withTemporary: vi.fn(async <T>(_id: number, _spec: ViewportSpec, run: () => Promise<T>): Promise<T> => run()),
   };
   const saveImage = vi.fn(async (): Promise<string | null> => '/drops/shot.png');
+  /** Мир гостя: ответ по умолчанию — «выражение ничего не вернуло» (заглушка); тесты fullPage подставляют свой. */
+  const inGuest = vi.fn(async (_contents: WebContents, _code: string): Promise<unknown> => undefined);
   const image = {
     size: (data: Buffer) => ({ width: data.readUInt32BE(16), height: data.readUInt32BE(20) }),
     resize: (_data: Buffer, width: number, height: number) => png(width, height),
     stitch: (parts: Buffer[]) => png(parts[0] ? parts[0].readUInt32BE(16) : 0, parts.reduce((sum, part) => sum + part.readUInt32BE(20), 0)),
+    crop: (data: Buffer, _top: number, height: number) => png(data.readUInt32BE(16), height),
   };
   const deps = {
     agentsAllowed: async () => state.allowed,
@@ -92,14 +95,22 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
     emulation,
     saveImage,
     image,
-    activity: (e: AgentActivity) => void activity.push(e),
+    inGuest,
+    // Окно подтверждает поверхность снимка сразу после просьбы, как это делает рендерер (если тест не отключил подтверждение).
+    activity: (e: AgentActivity) => {
+      activity.push(e);
+      const surface = e.capture;
+      if (surface !== undefined && overrides.confirmSurface !== false) queueMicrotask(() => ops.captureReady(surface.id));
+    },
+    ...(overrides.captureReadyMs === undefined ? {} : { captureReadyMs: overrides.captureReadyMs }),
+    ...(overrides.windowHeight === undefined ? {} : { windowHeight: () => overrides.windowHeight as number }),
   };
   const ops: AgentOps = createAgentOps(deps);
   // Хост всегда кладёт в owners саму сессию: для чужого ref (другая работа) — её, а не s-02.
   const run = (args: unknown, ref = REF, op = 'open'): Promise<BrowserAgentResult> =>
     ops.run({ opId: 'op-1', ref, label: ref.sessionId === 's-02' ? 'S02' : 'S01', owners: overrides.owners ?? [{ kind: 'session', sessionId: ref.sessionId }], op: op as BrowserAgentOpEvent['op'], args });
   const runOp = (op: string, args: unknown = {}, ref = REF): Promise<BrowserAgentResult> => run(args, ref, op);
-  return { ops, deps, run, runOp, asked, openTab, state, guests, snapshots, activity, inspector, emulation, saveImage };
+  return { ops, deps, run, runOp, asked, openTab, state, guests, snapshots, activity, inspector, emulation, saveImage, inGuest };
 }
 
 /** Регистрирует страницу панели чата сессии s-02 (гость 7); `patch` меняет поля. */
@@ -611,7 +622,7 @@ describe('screenshot (спека 5.1, 8)', () => {
     expect(result).toMatchObject({ width: 375, height: 812, viewport: { width: 375, height: 812 }, emulated: true });
     expect(activity).toEqual([
       { webContentsId: 7, session: 'S02', op: 'screenshot', phase: 'start' },
-      { webContentsId: 7, session: 'S02', op: 'screenshot', phase: 'start', capture: { width: 375, height: 812 } },
+      { webContentsId: 7, session: 'S02', op: 'screenshot', phase: 'start', capture: { width: 375, height: 812, id: expect.any(String) as unknown as string } },
       { webContentsId: 7, session: 'S02', op: 'screenshot', phase: 'end' },
     ]);
   });
@@ -629,7 +640,7 @@ describe('screenshot (спека 5.1, 8)', () => {
     inspector.send.mockImplementation(sendWith({ shot: png(1280, 800) }));
     expect(codeOf(await run('screenshot', { tab: 't1' }))).toBe('ok');
     expect(emulation.withTemporary).not.toHaveBeenCalled();
-    expect(activity.map((e) => [e.phase, e.capture])).toEqual([['start', undefined], ['start', { width: 1280, height: 800 }], ['end', undefined]]);
+    expect(activity.map((e) => [e.phase, e.capture === undefined ? undefined : { width: e.capture.width, height: e.capture.height }])).toEqual([['start', undefined], ['start', { width: 1280, height: 800 }], ['end', undefined]]);
   });
 
   it('невидимая страница: первый снимок отклонён (кадр ещё не рисуется) — повтор, снимок возвращается; у видимой отказ не повторяется', async () => {
@@ -686,48 +697,120 @@ describe('screenshot (спека 5.1, 8)', () => {
     expect(laterShots).toBe(2);
   });
 
-  it('невидимая страница: другая ошибка CDP не повторяется; повторы исчерпаны — tab_hidden', async () => {
+  it('невидимая страница: после готовности поверхности снимок повторяется при любой ошибке не больше captureRetries раз, затем tab_hidden', async () => {
     const other = setup();
     register(other.ops, { visible: false });
     let shots = 0;
     other.inspector.send.mockImplementation(async (id: number, method: string) => {
       if (method !== 'Page.captureScreenshot') return sendWith()(id, method);
       shots += 1;
-      throw new Error('Target closed');
+      throw new Error(shots === 1 ? 'Target closed' : 'Unable to capture screenshot');
     });
-    expect(codeOf(await other.runOp('screenshot', { tab: 't1' }))).toBe('unsupported');
-    expect(shots).toBe(1);
-
-    const stuck = setup();
-    register(stuck.ops, { visible: false });
-    stuck.inspector.send.mockImplementation(async (id: number, method: string) => {
-      if (method !== 'Page.captureScreenshot') return sendWith()(id, method);
-      throw new Error('Unable to capture screenshot');
-    });
-    const result = await stuck.runOp('screenshot', { tab: 't1' });
+    const result = await other.runOp('screenshot', { tab: 't1' });
     expect(codeOf(result)).toBe('tab_hidden');
     expect(messageOf(result)).toContain('browser_console');
+    expect(shots).toBe(AGENT_LIMITS.captureRetries + 1);
+    // Поверхность готовили один раз, а не на каждый повтор.
+    expect(other.activity.filter((e) => e.capture !== undefined)).toHaveLength(1);
+
+    // У видимой страницы любая ошибка уходит агенту сразу.
+    const visible = setup();
+    register(visible.ops, {});
+    let visibleShots = 0;
+    visible.inspector.send.mockImplementation(async (id: number, method: string) => {
+      if (method !== 'Page.captureScreenshot') return sendWith()(id, method);
+      visibleShots += 1;
+      throw new Error('Target closed');
+    });
+    expect(codeOf(await visible.runOp('screenshot', { tab: 't1' }))).toBe('unsupported');
+    expect(visibleShots).toBe(1);
   });
 
-  it('fullPage: страница шире предела обрезается по AGENT_VIEWPORT.maxWidth, в ответе пояснение', async () => {
+  it('снимок в заданном размере ждёт готовности поверхности: captureScreenshot не раньше captureReady(id)', async () => {
+    const { ops, inspector, activity, runOp: run } = setup({ confirmSurface: false });
+    register(ops, {});
+    inspector.send.mockImplementation(sendWith({ shot: png(375, 812) }));
+    const pending = run('screenshot', { tab: 't1', width: 375, height: 812 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const surface = activity.find((e) => e.capture !== undefined)?.capture;
+    expect(surface).toMatchObject({ width: 375, height: 812 });
+    expect(inspector.send.mock.calls.some(([, method]) => method === 'Page.captureScreenshot')).toBe(false);
+    ops.captureReady('чужой id');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(inspector.send.mock.calls.some(([, method]) => method === 'Page.captureScreenshot')).toBe(false);
+    ops.captureReady((surface as { id: string }).id);
+    expect(codeOf(await pending)).toBe('ok');
+    expect(inspector.send.mock.calls.filter(([, method]) => method === 'Page.captureScreenshot')).toHaveLength(1);
+  });
+
+  it('окно не подтвердило за captureReadyMs — timeout, размер человека возвращён, PNG не сохранён', async () => {
+    const { ops, inspector, emulation, saveImage, runOp: run } = setup({ confirmSurface: false, captureReadyMs: 30 });
+    register(ops, {});
+    const trace: string[] = [];
+    emulation.withTemporary.mockImplementation(async <T,>(_id: number, _spec: ViewportSpec, work: () => Promise<T>): Promise<T> => {
+      trace.push('temporary on');
+      try {
+        return await work();
+      } finally {
+        trace.push('human size back');
+      }
+    });
+    const result = await run('screenshot', { tab: 't1', width: 375, height: 812 });
+    expect(codeOf(result)).toBe('timeout');
+    expect(messageOf(result)).toContain('did not prepare the page for the screenshot');
+    expect(trace).toEqual(['temporary on', 'human size back']);
+    expect(saveImage).not.toHaveBeenCalled();
+    expect(inspector.send.mock.calls.some(([, method]) => method === 'Page.captureScreenshot')).toBe(false);
+  });
+
+  it('видимая страница без размера поверхность не готовит: activity без capture, снимок сразу', async () => {
+    const { ops, activity, runOp: run } = setup({ confirmSurface: false });
+    register(ops, {});
+    expect(codeOf(await run('screenshot', { tab: 't1' }))).toBe('ok');
+    expect(activity.every((e) => e.capture === undefined)).toBe(true);
+  });
+
+  it('снимок выше окна (больше 1,2 высоты его содержимого) — bad_request до эмуляции; в пределе — снимается', async () => {
+    const tall = setup({ windowHeight: 900 });
+    register(tall.ops, {});
+    const refused = await tall.runOp('screenshot', { tab: 't1', width: 1440, height: 1440 });
+    expect(codeOf(refused)).toBe('bad_request');
+    expect(messageOf(refused)).toContain('up to 1080 px');
+    expect(tall.emulation.withTemporary).not.toHaveBeenCalled();
+    tall.inspector.send.mockImplementation(sendWith({ shot: png(1920, 1080) }));
+    expect(codeOf(await tall.runOp('screenshot', { tab: 't1', width: 1920, height: 1080 }))).toBe('ok');
+  });
+
+  it('fullPage страницы шире вьюпорта: ширина = вьюпорт, заметка «The page is 6000 px wide; the screenshot shows the first 1280 px.»', async () => {
     const { ops, inspector, runOp: run } = setup();
     register(ops, {});
-    inspector.send.mockImplementation(sendWith({ content: { width: 50_000, height: 800 }, shot: png(1280, 800) }));
+    inspector.send.mockImplementation(sendWith({ content: { width: 6000, height: 800 }, shot: png(1280, 800) }));
     const result = okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1', fullPage: true }));
-    const clips = inspector.send.mock.calls.filter(([, method]) => method === 'Page.captureScreenshot').map(([, , params]) => (params as { clip: { width: number } }).clip.width);
-    expect(clips).toEqual([AGENT_VIEWPORT.maxWidth]);
-    expect(result.viewport.width).toBe(AGENT_VIEWPORT.maxWidth);
-    expect(result.notes).toEqual([`The page is 50000 px wide; the screenshot is cut at ${AGENT_VIEWPORT.maxWidth} px.`]);
+    expect(result.viewport.width).toBe(1280);
+    expect(result.width).toBe(1280);
+    expect(result.notes).toEqual(['The page is 6000 px wide; the screenshot shows the first 1280 px.']);
   });
 
-  it('fullPage: страница 2000 при вьюпорте 800 — три полосы 800+800+400, склейка; длиннее трёх вьюпортов — bad_request с советом', async () => {
-    const { ops, inspector, saveImage, runOp: run } = setup();
+  it('fullPage: страница 2000 при вьюпорте 800 — три полосы вьюпортом с прокруткой гостя (0, 800, 1600), последняя обрезана до 400, склейка; прокрутка человека возвращена', async () => {
+    const { ops, inspector, inGuest, saveImage, runOp: run } = setup();
     register(ops, {});
+    const evaluated: string[] = [];
+    inGuest.mockImplementation(async (_contents, code) => {
+      evaluated.push(code);
+      if (code.startsWith('[window.scrollX')) return [0, 340];
+      // Документ 2000 при вьюпорте 800: прокрутка до 1600 зажимается на 1200.
+      const to = /scrollTo\(0, (\d+)\)/.exec(code)?.[1];
+      return to === '1600' ? 1200 : Number(to);
+    });
     inspector.send.mockImplementation(sendWith({ content: { width: 1280, height: 2000 }, shot: png(1280, 800) }));
     const result = okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1', fullPage: true }));
-    expect(result).toMatchObject({ fullPage: true, viewport: { width: 1280, height: 2000 } });
-    const clips = inspector.send.mock.calls.filter(([, method]) => method === 'Page.captureScreenshot').map(([, , params]) => (params as { clip: { y: number; height: number }; captureBeyondViewport: boolean }));
-    expect(clips.map((call) => [call.clip.y, call.clip.height, call.captureBeyondViewport])).toEqual([[0, 800, true], [800, 800, true], [1600, 400, true]]);
+    expect(result).toMatchObject({ fullPage: true, viewport: { width: 1280, height: 2000 }, width: 1004, height: 1568 });
+    // 800 + 800 + 400 (последняя обрезана) = 2000 → вписано в 1568 по длинной стороне; без обрезки было бы 2400 и ширина 853.
+    const shots = inspector.send.mock.calls.filter(([, method]) => method === 'Page.captureScreenshot').map(([, , params]) => params);
+    expect(shots).toEqual([{ format: 'png' }, { format: 'png' }, { format: 'png' }]);
+    // Через CDP код не исполняется никогда: прокрутка идёт только через мир гостя.
+    expect(inspector.send.mock.calls.some(([, method]) => method === 'Runtime.evaluate')).toBe(false);
+    expect(evaluated.map((e) => /scrollTo\((\d+), (\d+)\)/.exec(e)?.slice(1).join(','))).toEqual([undefined, '0,0', '0,800', '0,1600', '0,340']);
     expect(saveImage).toHaveBeenCalledTimes(1);
     inspector.send.mockImplementation(sendWith({ content: { width: 1280, height: 2401 } }));
     const tall = await run('screenshot', { tab: 't1', fullPage: true });

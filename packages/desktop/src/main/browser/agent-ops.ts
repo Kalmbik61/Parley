@@ -26,6 +26,7 @@ import { isLoopbackUrl } from '../../shared/loopback.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
 import { AgentOpError } from './agent-errors.js';
 import { createAgentCapture } from './agent-capture.js';
+import type { AgentCaptureDeps } from './agent-capture.js';
 import { createPageRegistry, listTabs } from './agent-pages.js';
 import type { PageRecord } from './agent-pages.js';
 import { createPageQueue, withTimeout } from './agent-queue.js';
@@ -51,11 +52,17 @@ export interface AgentOpsDeps {
   /** PNG снимка — в `drops/` (`main/drops.ts#saveImage`); `null` — не сохранился. */
   saveImage(png: Buffer): Promise<string | null>;
   /** Картинки в main — `nativeImage`, в тестах заглушка. */
-  image: { size(png: Buffer): { width: number; height: number }; resize(png: Buffer, width: number, height: number): Buffer; stitch(parts: Buffer[]): Buffer };
+  image: AgentCaptureDeps['image'];
   /** Агент действует на странице: окно-хозяин показывает это человеку. */
   activity(e: AgentActivity): void;
   /** Сколько ждать операцию на странице; по умолчанию `AGENT_LIMITS.opMs - 2_000`, чтобы очередь освобождалась раньше `timeout` хоста. */
   opTimeoutMs?: number;
+  /** Код main в изолированном мире гостя (прокрутка fullPage), см. `AgentCaptureDeps.inGuest`. */
+  inGuest: AgentCaptureDeps['inGuest'];
+  /** Высота содержимого окна гостя: выше {1,2 × высота} снимок не растят (Chromium тайлит поверхность). */
+  windowHeight?: AgentCaptureDeps['windowHeight'];
+  /** Сколько ждать подтверждения окна, что `<webview>` стоит в размере снимка; по умолчанию `AGENT_LIMITS.captureReadyMs`. Тестам — меньше. */
+  captureReadyMs?: number;
 }
 
 export interface AgentOps {
@@ -64,6 +71,8 @@ export interface AgentOps {
   openTabResult(requestId: string, result: AgentOpenTabResult): void;
   /** Окно сообщает о странице панели, её закрытии или паузе панели (спека 3.7, 4.8). */
   registerTab(e: AgentPageRegistration): void;
+  /** Окно подтверждает, что `<webview>` стоит в размере снимка (канал `browser:agent-capture-ready`); чужой и поздний id молча игнорируется. */
+  captureReady(id: string): void;
   /** Окно перезагрузилось: реестр и паузы забыты до новой регистрации, id агента сохраняются. */
   reset(): void;
 }
@@ -120,7 +129,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   const registry = createPageRegistry({ fromId: deps.fromId });
   const queue = createPageQueue();
   const reads = createAgentReads({ inspector: deps.inspector });
-  const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, saveImage: deps.saveImage, image: deps.image, activity: deps.activity });
+  const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, saveImage: deps.saveImage, image: deps.image, activity: deps.activity, inGuest: deps.inGuest, ...(deps.captureReadyMs === undefined ? {} : { captureReadyMs: deps.captureReadyMs }), ...(deps.windowHeight === undefined ? {} : { windowHeight: deps.windowHeight }) });
   const opTimeoutMs = deps.opTimeoutMs ?? AGENT_LIMITS.opMs - 2_000;
   const pageKey = (workKey: string, pageId: string): string => `${workKey}\n${pageId}`;
 
@@ -231,6 +240,9 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     },
     registerTab(e) {
       registry.register(e);
+    },
+    captureReady(id) {
+      capture.captureReady(id);
     },
     reset() {
       registry.reset();

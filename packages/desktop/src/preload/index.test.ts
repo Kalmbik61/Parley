@@ -147,6 +147,13 @@ describe('preload: последний статус и тема', () => {
     expect(ipcRenderer.invoke).toHaveBeenCalledWith('browser:agent-open-tab-result', 'r1', { tabId: 'browser:abc123', reused: false, mounted: true });
   });
 
+  it('browser.agentCaptureReady зовёт browser:agent-capture-ready с id поверхности снимка', async () => {
+    const bridge = await loadPreload();
+    const { ipcRenderer } = await import('electron');
+    await bridge.browser.agentCaptureReady('c-77');
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith('browser:agent-capture-ready', 'c-77');
+  });
+
   it('browser.registerTab зовёт browser:register-tab; onAgentActivity: событие приходит подписчику, отписка снимает его (этап C)', async () => {
     const bridge = await loadPreload();
     const { ipcRenderer } = await import('electron');
