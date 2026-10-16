@@ -30,9 +30,9 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
     return true;
   });
   const ops: AgentOps = createAgentOps({ agentsAllowed: async () => state.allowed, openTab, ...(overrides.openMs === undefined ? {} : { openMs: overrides.openMs }) });
-  const owners = overrides.owners ?? [OWN];
+  // Хост всегда кладёт в owners саму сессию: для чужого ref (другая работа) — её, а не s-02.
   const run = (args: unknown, ref = REF, op = 'open'): Promise<BrowserAgentResult> =>
-    ops.run({ opId: 'op-1', ref, label: ref.sessionId === 's-02' ? 'S02' : 'S01', owners, op: op as BrowserAgentOpEvent['op'], args });
+    ops.run({ opId: 'op-1', ref, label: ref.sessionId === 's-02' ? 'S02' : 'S01', owners: overrides.owners ?? [{ kind: 'session', sessionId: ref.sessionId }], op: op as BrowserAgentOpEvent['op'], args });
   return { ops, run, asked, openTab, state };
 }
 
