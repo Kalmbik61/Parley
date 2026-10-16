@@ -173,6 +173,11 @@ export interface FeedService {
    * (ответа ещё не было), лента закрывает сама, а текст промпта, возвращённый CLI в поле ввода, стирает.
    */
   interrupt(ref: SessionRef): void;
+  /**
+   * Сообщение из Chat ушло в сессию (`pty.send` с `submitted`): запоминает время. Первая пачка ленты после метки
+   * пишет в журнал задержек `feed.firstDelta` — сколько агент молчал до первого ответа — и метка снимается.
+   */
+  markSent(ref: SessionRef): void;
   /** Выключение хоста: всем удержанным хукам `{}`, таймеры сняты. */
   stop(): Promise<void>;
 }
@@ -313,6 +318,8 @@ export function createFeedService(
   const feeds = new Map<string, SessionFeed>();
   const subscribers = new Map<string, Set<Client>>();
   const lastActivity = new Map<string, string>();
+  /** Метки `markSent`: ключ сессии → время отправки, до первой пачки ленты (журнал задержек `feed.firstDelta`). */
+  const sentAt = new Map<string, number>();
   /** Процессы Codex, чья сессия на старте ещё не попала в карту работ: таймер доверия взведут по её появлению. */
   const graceWaiting = new Map<string, SessionRef>();
   /** Таймеры присмотра за Esc из чата. */
@@ -462,7 +469,18 @@ export function createFeedService(
     feed.batch = { upsert: new Map(), removed: new Set() };
     feed.modeChanged = false;
     feed.revision += 1;
-    const clients = subscribers.get(refKey(feed.ref));
+    // Журнал задержек (спека диагностики, A4): запись нужна и без открытого Chat, поэтому до проверки подписчиков.
+    const key = refKey(feed.ref);
+    const sent = sentAt.get(key);
+    if (sent !== undefined) {
+      sentAt.delete(key);
+      log.info('лента: первая дельта после отправки', {
+        op: 'feed.firstDelta',
+        ref: feed.ref,
+        sinceSendMs: Math.max(0, now() - sent),
+      });
+    }
+    const clients = subscribers.get(key);
     if (clients === undefined || clients.size === 0) return;
     const data = {
       ref: feed.ref,
@@ -1005,6 +1023,7 @@ export function createFeedService(
       feeds.delete(key);
     }
     lastActivity.delete(key);
+    sentAt.delete(key);
     subscribers.delete(key);
     graceWaiting.delete(key);
   }
@@ -1279,6 +1298,10 @@ export function createFeedService(
         settleInterrupt(feed, state, pid);
       }, interruptGraceMs);
       interruptTimers.add(timer);
+    },
+
+    markSent(ref) {
+      sentAt.set(refKey(ref), now());
     },
 
     async stop() {

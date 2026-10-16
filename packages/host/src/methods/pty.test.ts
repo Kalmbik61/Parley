@@ -14,6 +14,7 @@ import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
+import { fakePty } from '../../test/fake-pty.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
@@ -520,6 +521,51 @@ describe('pty.send пишет журнал задержек в журнал хо
     expect(data).toMatchObject({ op: 'pty.send', ref: ref(), chars: 2, enterMs: null, outcome: 'blocked' });
     expect(data.queueMs as number).toBeGreaterThanOrEqual(400);
     expect(pty.manager.write).not.toHaveBeenCalled();
+  });
+});
+
+describe('pty.send ставит метку ленты feed.markSent', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Обработчики с живой сессией, у которой хуки уже были после запуска процесса: отправка идёт до Enter. */
+  function handlersWith(activityState: string) {
+    const fake = fakePty();
+    const feed = { markSent: vi.fn() };
+    const activity = {
+      ...fakeActivity(),
+      get: () => ({ activity: { activity: activityState, lastEventAt: new Date(1000).toISOString() } }),
+    } as unknown as ActivityService;
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: fake.manager, activity, works: fakeWorks(), feed });
+    return { handlers, feed };
+  }
+
+  it('submitted — markSent зовётся один раз с ref сессии', async () => {
+    vi.useFakeTimers();
+    const { handlers, feed } = handlersWith('idle');
+
+    const sent = handlers.ptySend({ ref: ref(), text: 'hi', submit: true }, requestOf(fakeClient()));
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(sent).resolves.toEqual({ inserted: true, submitted: true, reason: null });
+    expect(feed.markSent).toHaveBeenCalledTimes(1);
+    expect(feed.markSent).toHaveBeenCalledWith(ref());
+  });
+
+  it('отказ blocked и вставка без Enter — markSent не зовётся', async () => {
+    vi.useFakeTimers();
+    const blocked = handlersWith('blocked');
+    await expect(
+      blocked.handlers.ptySend({ ref: ref(), text: 'hi', submit: true }, requestOf(fakeClient())),
+    ).resolves.toMatchObject({ inserted: false, submitted: false, reason: 'blocked' });
+    expect(blocked.feed.markSent).not.toHaveBeenCalled();
+
+    const typed = handlersWith('idle');
+    await expect(
+      typed.handlers.ptySend({ ref: ref(), text: 'hi', submit: false }, requestOf(fakeClient())),
+    ).resolves.toEqual({ inserted: true, submitted: false, reason: null });
+    expect(typed.feed.markSent).not.toHaveBeenCalled();
   });
 });
 

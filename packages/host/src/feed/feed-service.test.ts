@@ -347,6 +347,71 @@ describe('снимок и дельты', () => {
   });
 });
 
+describe('журнал задержек: feed.firstDelta', () => {
+  const firstDeltaCalls = () =>
+    fakes.log.info.mock.calls.filter(
+      ([, data]) => (data as { op?: string } | undefined)?.op === 'feed.firstDelta',
+    );
+
+  it('после markSent первая пачка пишет feed.firstDelta со sinceSendMs, вторая молчит', () => {
+    vi.useFakeTimers();
+    let time = 1_000_000;
+    start({ now: () => time });
+    const client = fakeClient();
+    service.subscribe(REF, client);
+
+    service.markSent(REF);
+    time += 1_500;
+    send(prompt('go'));
+    vi.advanceTimersByTime(50);
+
+    expect(firstDeltaCalls()).toEqual([
+      ['лента: первая дельта после отправки', { op: 'feed.firstDelta', ref: REF, sinceSendMs: 1_500 }],
+    ]);
+
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    vi.advanceTimersByTime(50);
+    expect(feedChanged(client)).toHaveLength(2);
+    expect(firstDeltaCalls()).toHaveLength(1);
+  });
+
+  it('пишется и без подписчиков: Chat мог быть закрыт, а отправка прошла', () => {
+    vi.useFakeTimers();
+    let time = 5_000;
+    start({ now: () => time });
+
+    service.markSent(REF);
+    time += 700;
+    send(prompt('go'));
+    vi.advanceTimersByTime(50);
+
+    expect(firstDeltaCalls()).toEqual([
+      ['лента: первая дельта после отправки', { op: 'feed.firstDelta', ref: REF, sinceSendMs: 700 }],
+    ]);
+  });
+
+  it('пустая пачка метку не снимает, без markSent записи нет', async () => {
+    vi.useFakeTimers();
+    let time = 9_000;
+    start({ now: () => time });
+
+    send(prompt('before'));
+    vi.advanceTimersByTime(50);
+    expect(firstDeltaCalls()).toHaveLength(0);
+
+    service.markSent(REF);
+    await service.snapshot(REF);
+    expect(firstDeltaCalls()).toHaveLength(0);
+
+    time += 300;
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    vi.advanceTimersByTime(50);
+    expect(firstDeltaCalls()).toEqual([
+      ['лента: первая дельта после отправки', { op: 'feed.firstDelta', ref: REF, sinceSendMs: 300 }],
+    ]);
+  });
+});
+
 describe('кольцо', () => {
   it('2 001-й элемент вытесняет первый, removed — в дельте', async () => {
     vi.useFakeTimers();

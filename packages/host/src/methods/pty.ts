@@ -13,6 +13,7 @@ import type { ActivityService } from '../activity/activity-service.js';
 import type { Client } from '../client.js';
 import type { Handler, NotificationHandler } from '../context.js';
 import { HostError } from '../errors.js';
+import type { FeedService } from '../feed/feed-service.js';
 import type { Log } from '../log.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import { createSender } from '../pty/send.js';
@@ -27,6 +28,7 @@ export interface PtyMethodDeps {
   wake: Pick<WakeService, 'inFlight' | 'enterDelayMs'>;   // pty.send: busy и пауза Enter
   sessions?: Pick<SessionsService, 'exclusive'>;   // pty.send: пока идёт смена модели или effort, не печатает
   log?: Log;   // журнал хоста: отброшенный медленный клиент потока (`pty.clientDropped`)
+  feed?: Pick<FeedService, 'markSent'>;   // pty.send: метка отправки для журнала задержек (`feed.firstDelta`)
 }
 
 export interface PtyHandlers {
@@ -144,7 +146,12 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
     },
 
     // Отвечает после ожидания своего Enter (около enterDelayMs), исход — в SendResult.
-    ptySend: (params, { host }) => send(params, host.log),
+    ptySend: async (params, { host }) => {
+      const result = await send(params, host.log);
+      // Метка для журнала задержек `feed.firstDelta`: ставится, только когда Enter дошёл; отказ и вставка без Enter агента не будят.
+      if (result.submitted) deps.feed?.markSent(params.ref);
+      return result;
+    },
 
     ptyInput: (params) => {
       deps.pty.input(params.ref, params.data);
