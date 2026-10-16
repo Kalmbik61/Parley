@@ -41,7 +41,7 @@ function stamp(now: Date): string {
 }
 
 /**
- * PNG из картинки буфера: имя YYYYMMDD-HHMMSS-<4 hex>.png, open(…, 'wx', 0o600). Занятое имя (в том
+ * PNG из картинки буфера: имя [prefix]YYYYMMDD-HHMMSS-<4 hex>.png, open(…, 'wx', 0o600). Занятое имя (в том
  * числе симлинк) не перезаписывается: EEXIST — новое случайное имя. Пустая картинка → null,
  * больше MAX_DROP_IMAGE_BYTES — DropTooLargeError, файл не пишется.
  *
@@ -53,6 +53,8 @@ export async function saveImage(input: {
   dir: string;
   now?: Date;
   random?: () => number;
+  /** Начало имени файла: снимки агента лежат с `agent-`, чтобы их убирала своя, частая уборка. */
+  prefix?: string;
 }): Promise<string | null> {
   const { png, dir } = input;
   if (png === null || png.length === 0) return null;
@@ -65,7 +67,7 @@ export async function saveImage(input: {
       .toString(16)
       .padStart(4, '0')
       .slice(-4);
-    const file = path.join(dir, `${stamp(now)}-${hex}.png`);
+    const file = path.join(dir, `${input.prefix ?? ''}${stamp(now)}-${hex}.png`);
     let handle;
     try {
       handle = await open(file, 'wx', 0o600);
@@ -85,9 +87,9 @@ export async function saveImage(input: {
 
 /**
  * Старше maxAgeMs — удалить: по lstat только обычные файлы и сами ссылки (цель ссылки цела), каталоги — нет.
- * Возвращает число удалённых. Каталога нет — 0.
+ * Возвращает число удалённых. Каталога нет — 0. `accept` — какие имена трогать (по умолчанию все).
  */
-export async function cleanupDrops(dir: string, maxAgeMs: number, now: number = Date.now()): Promise<number> {
+export async function cleanupDrops(dir: string, maxAgeMs: number, now: number = Date.now(), accept?: (name: string) => boolean): Promise<number> {
   let names: string[];
   try {
     names = await readdir(dir);
@@ -97,6 +99,7 @@ export async function cleanupDrops(dir: string, maxAgeMs: number, now: number = 
   }
   let removed = 0;
   for (const name of names) {
+    if (accept !== undefined && !accept(name)) continue;
     const file = path.join(dir, name);
     try {
       // lstat, а не stat: ссылку судим по ней самой и удаляем её, а не цель.
@@ -112,6 +115,10 @@ export async function cleanupDrops(dir: string, maxAgeMs: number, now: number = 
   }
   return removed;
 }
+
+/** Начало имени снимка агента (`saveImage`, `prefix`) и срок, после которого его убирает почасовая уборка (спека, S8). */
+export const AGENT_SHOT_PREFIX = 'agent-';
+export const AGENT_SHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /** Подкаталог файлов-контекстов браузера (спека браузера 3.6): `drops/context/`. */
 export const CONTEXT_SUBDIR = 'context';

@@ -38,7 +38,7 @@ import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
 import { createInspector, forwardBatches } from './browser/inspector.js';
 import { saveDiagnostics } from './diagnostics/bundle.js';
-import { cleanupDropsTree, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
+import { AGENT_SHOT_MAX_AGE_MS, AGENT_SHOT_PREFIX, cleanupDrops, cleanupDropsTree, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 import { createGitRunner, isProjectWorktree } from './files/git-api.js';
 import createGrepWorker from './files/grep-worker?nodeWorker';
 import { registerFilesIpc } from './files/ipc.js';
@@ -539,6 +539,10 @@ if (!gotLock) {
     // только обычные файлы и сами ссылки, по lstat.
     // В фоне — старт окна их не ждёт.
     void cleanupDropsTree(dropsDir(), DROPS_MAX_AGE_MS).catch((error: unknown) => console.warn('[parley] cleanupDrops', error));
+    // Снимки агента (`agent-*`) живут сутки: раз в час старше суток убираются (спека, S8).
+    setInterval(() => {
+      void cleanupDrops(dropsDir(), AGENT_SHOT_MAX_AGE_MS, Date.now(), (name) => name.startsWith(AGENT_SHOT_PREFIX)).catch((error: unknown) => console.warn('[parley] cleanupAgentShots', error));
+    }, 60 * 60 * 1000).unref();
     const fakeDrops = switches.drops;
 
     const rootsSource: RootsSource = {
@@ -610,7 +614,7 @@ if (!gotLock) {
       fromId: (id) => webContents.fromId(id) ?? null,
       inspector,
       emulation,
-      saveImage: (png) => saveImage({ png, dir: dropsDir() }),
+      saveImage: (png) => saveImage({ png, dir: dropsDir(), prefix: AGENT_SHOT_PREFIX }),
       image: {
         resize: (png, width, height) => nativeImage.createFromBuffer(png).resize({ width, height, quality: 'good' }).toPNG(),
         // Полосы одной ширины склеиваются побайтно: битмапы строка за строкой подряд (спайк 0.7).
