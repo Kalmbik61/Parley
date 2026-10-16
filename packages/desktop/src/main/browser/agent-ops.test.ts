@@ -3,7 +3,7 @@
  * перевод его ответа в ответ агенту. Окно подменено: проверяется логика main, а раскладку и тост проверяют тесты рендерера.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { AGENT_LIMITS, AGENT_VIEWPORT } from '@parley/protocol';
+import { AGENT_LIMITS } from '@parley/protocol';
 import type { BrowserAgentConsoleResult, BrowserAgentOpEvent, BrowserAgentRequestDetail, BrowserAgentScreenshotResult, BrowserAgentOpenResult, BrowserAgentOwner, BrowserAgentResult } from '@parley/protocol';
 import type { WebContents } from 'electron';
 import { DEVTOOLS_LIMITS, type ConsoleEntry, type DevtoolsSnapshot, type NetworkEntry, type ViewportSpec } from '../../shared/browser-devtools.js';
@@ -84,7 +84,7 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
   };
   const saveImage = vi.fn(async (): Promise<string | null> => '/drops/shot.png');
   /** Мир гостя: ответ по умолчанию — «выражение ничего не вернуло» (заглушка); тесты fullPage подставляют свой. */
-  const inGuest = vi.fn(async (_contents: WebContents, _code: string): Promise<unknown> => undefined);
+  const inGuest = vi.fn<(contents: WebContents, code: string) => Promise<unknown>>(async () => undefined);
   const image = {
     resize: vi.fn((_data: Buffer, width: number, height: number) => png(width, height)),
     stitch: (parts: Buffer[]) => png(parts[0] ? parts[0].readUInt32BE(16) : 0, parts.reduce((sum, part) => sum + part.readUInt32BE(20), 0)),
