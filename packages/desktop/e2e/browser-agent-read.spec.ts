@@ -73,6 +73,14 @@ fetch('/api/settings?token=SECRET123&page=2', {
 });
 </script>`;
 
+/** Страница бюджетов: запрос с 60 заголовками ответа по 2 КБ и консоль с Bearer/JWT, паролем и ключом в тексте. */
+const BUDGET_HTML = `<!doctype html><title>Budget page</title><h1>Budget page</h1>
+<script>
+fetch('/api/headers').catch(() => {});
+console.error('Auth failed: Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.c2lnbmF0dXJl; password=hunter2; api_key=AKIASECRETKEY123');
+</script>`;
+const BUDGET_SECRETS = ['eyJhbGciOiJIUzI1NiJ9', 'c2lnbmF0dXJl', 'hunter2', 'AKIASECRETKEY123'];
+
 /** Сетка 2000×2640 разноцветных ячеек 240×240 с подписью `x,y`: по цвету пикселя видно, какая часть страницы попала в снимок. */
 const GRID_HTML = `<!doctype html><title>Grid</title><style>body{margin:0;font:bold 28px sans-serif}.c{position:absolute;width:236px;height:236px;border:2px solid #000;display:flex;align-items:center;justify-content:center}</style><div id=g></div>
 <script>const g=document.getElementById('g');for(let y=0;y<2600;y+=240)for(let x=0;x<2000;x+=240){const d=document.createElement('div');d.className='c';d.style.left=x+'px';d.style.top=y+'px';d.style.background='hsl('+((y/240)*40)+',70%,'+(60+(x/240)*4)+'%)';d.textContent=x+','+y;g.appendChild(d);}document.body.style.height='2640px';document.body.style.width='2000px';</script>`;
@@ -109,6 +117,14 @@ test.describe('агент читает страницы браузера чат�
       if (req.method === 'POST' && url.startsWith('/api/settings')) {
         req.resume();
         res.writeHead(500, { 'content-type': 'application/json' }).end('{"error":"db down","session":"S3SS10N"}');
+      } else if (url.startsWith('/api/headers')) {
+        const headers: Record<string, string> = { 'content-type': 'application/json' };
+        for (let i = 0; i < 60; i++) headers[`x-debug-${i}`] = `v${i}-${'h'.repeat(1990)}`;
+        res.writeHead(503, headers).end('{"error":"many headers"}');
+      } else if (url.startsWith('/private')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!doctype html><title>Private</title><h1>Private</h1>');
+      } else if (url.startsWith('/budget')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(BUDGET_HTML);
       } else if (url.startsWith('/grid')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(GRID_HTML);
       } else if (url.startsWith('/missing.png')) {
@@ -323,6 +339,56 @@ test.describe('агент читает страницы браузера чат�
     expect(near(second, cellColor(0, 960)), `${second} ≠ ячейка 0,960`).toBe(true);
     const third = await at(300, 2000);
     expect(near(third, cellColor(240, 1920)), `${third} ≠ ячейка 240,1920`).toBe(true);
+  });
+
+  test('бюджеты и маска на настоящей странице', async () => {
+    const opened = await openApp();
+    const { window, electronApp, lead, roomId } = opened;
+    const budgetId = await openPage(opened, lead, { url: `${origin}/budget`, own: true });
+    const leaveId = await openPage(opened, lead, { url: `${origin}/leave`, room: roomId });
+    await tabsLoaded(opened, lead, 2);
+
+    // Деталь запроса с 60 заголовками по 2 КБ укладывается в бюджет.
+    let list = '';
+    await expect
+      .poll(async () => (list = (await agentTool(opened, lead, 'browser_network', { tab: budgetId, urlPattern: '/api/headers' })).text), { timeout: 20_000 })
+      .toMatch(/\/api\/headers/);
+    const headersId = /^(\d+\.\d+)\s.*\/api\/headers/m.exec(list)?.[1];
+    expect(headersId, list).toBeDefined();
+    const detail = await agentTool(opened, lead, 'browser_network', { tab: budgetId, requestId: headersId });
+    expect(detail.isError, detail.text).toBe(false);
+    expect(Buffer.byteLength(detail.text)).toBeLessThanOrEqual(20 * 1024);
+
+    // Консоль: секретов из текста в ответе нет, сама запись на месте.
+    let consoleText = '';
+    await expect
+      .poll(async () => (consoleText = (await agentTool(opened, lead, 'browser_console', { tab: budgetId })).text), { timeout: 20_000 })
+      .toContain('Auth failed');
+    for (const secret of BUDGET_SECRETS) expect(consoleText, secret).not.toContain(secret);
+
+    // Страница комнаты ушла на чужой сайт (главный фрейм гостя data: не пускает, поэтому 0.0.0.0 — не loopback для Parley, а
+    // сервер теста слушает на 127.0.0.1): в списке остаётся origin, без пути, query и заголовка.
+    const foreignPort = new URL(origin).port;
+    await guestEval(electronApp, `${origin}/leave`, `location.href = 'http://0.0.0.0:${foreignPort}/private?sid=EXTSECRET'`).catch(() => null);
+    await expect
+      .poll(async () => (await agentTool(opened, lead, 'browser_tabs')).text, { timeout: 20_000, intervals: [500] })
+      .toContain(`http://0.0.0.0:${foreignPort}`);
+    const tabs = (await agentTool(opened, lead, 'browser_tabs')).text;
+    expect(tabs).not.toContain('Private');
+    expect(tabs).not.toContain('/private');
+    expect(tabs).not.toContain('EXTSECRET');
+    expect(tabs).not.toContain('data:');
+    expect(tabs).toContain(leaveId);
+
+    // Пауза: browser_open отказывает.
+    const panel = panelOf(window, `session:${lead}`);
+    await expect(panel).toBeVisible();
+    await panel.getByRole('button', { name: 'More browser actions' }).click();
+    await window.getByRole('menuitem', { name: 'Pause agents' }).click();
+    await expect(panel).toHaveAttribute('data-agents-paused', 'true');
+    const denied = await agentTool(opened, lead, 'browser_open', { url: `${origin}/`, own: true });
+    expect(denied.isError, denied.text).toBe(true);
+    expect(denied.text).toMatch(/^access_denied:/);
   });
 
   test('чужой хозяин: страница чата другой сессии и комнаты без участия недоступны, в списке их нет', async () => {
