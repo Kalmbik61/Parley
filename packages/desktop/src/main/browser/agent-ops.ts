@@ -21,18 +21,24 @@ import type { WebContents } from 'electron';
 import { AGENT_LIMITS, browserAgentArgs } from '@parley/protocol';
 import type {
   BrowserAgentArgs,
+  BrowserAgentConsoleEntry,
+  BrowserAgentConsoleResult,
   BrowserAgentErrorCode,
+  BrowserAgentNetworkResult,
   BrowserAgentOpEvent,
   BrowserAgentOpenResult,
   BrowserAgentOwner,
+  BrowserAgentRequestDetail,
+  BrowserAgentRequestSummary,
   BrowserAgentResult,
   BrowserAgentTabInfo,
 } from '@parley/protocol';
-import { viewportSize } from '../../shared/browser-devtools.js';
+import { DEVTOOLS_LIMITS, isFailed, viewportSize } from '../../shared/browser-devtools.js';
+import type { ConsoleEntry, DevtoolsSnapshot, NetworkEntry, StackFrame } from '../../shared/browser-devtools.js';
 import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistration } from '../../shared/browser-types.js';
 import type { BrowserOwner } from '../../shared/layout-types.js';
 import { isLoopbackUrl } from '../../shared/loopback.js';
-import { redactUrl } from '../../shared/redact.js';
+import { redactBody, redactHeaders, redactUrl, redactUrlsInText, unmaskableJson } from '../../shared/redact.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
 import type { Emulation } from './emulation.js';
 import type { Inspector } from './inspector.js';
@@ -91,6 +97,65 @@ const ARGS: Partial<Record<string, ArgsSchema>> = browserAgentArgs;
 
 const ok = (result: unknown): BrowserAgentResult => ({ ok: true, result });
 const failure = (code: BrowserAgentErrorCode, message: string): BrowserAgentResult => ({ ok: false, error: { code, message } });
+
+/** Записей в ответе по умолчанию — то же число, что `default` в схемах инструментов MCP. */
+const DEFAULT_LIST = 50;
+
+/** Новейшие записи в пределах `limit` и `AGENT_LIMITS.listBytes` (по JSON), старые — первыми. Одна длинная запись проходит. */
+function newest<T>(items: readonly T[], limit: number): T[] {
+  const picked: T[] = [];
+  let bytes = 0;
+  for (let index = items.length - 1; index >= 0 && picked.length < limit; index -= 1) {
+    const item = items[index] as T;
+    bytes += Buffer.byteLength(JSON.stringify(item));
+    if (bytes > AGENT_LIMITS.listBytes && picked.length > 0) break;
+    picked.push(item);
+  }
+  return picked.reverse();
+}
+
+/** Срок операции в main: очередь страницы не ждёт зависшую команду CDP дольше хоста. */
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new AgentOpError('timeout', message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+const frameText = (frame: StackFrame): string => `${frame.fn === '' ? '(anonymous)' : frame.fn} (${redactUrl(frame.url)}:${frame.line}:${frame.column})`;
+
+function toAgentConsole(entry: ConsoleEntry): BrowserAgentConsoleEntry {
+  return {
+    level: entry.level,
+    origin: entry.origin,
+    text: redactUrlsInText(entry.text),
+    source: entry.location === null ? null : `${redactUrl(entry.location.url)}:${entry.location.line}:${entry.location.column}`,
+    stack: entry.stack.map(frameText),
+    count: entry.count,
+    at: new Date(entry.ts).toISOString(),
+  };
+}
+
+function summaryOf(entry: NetworkEntry): BrowserAgentRequestSummary {
+  return { id: entry.id, method: entry.method, url: redactUrl(entry.url), kind: entry.kind, status: entry.status, statusText: entry.statusText, failure: entry.failure, durationMs: entry.durationMs, mimeType: entry.mimeType };
+}
+
+const headerValue = (headers: ReadonlyArray<[string, string]>, name: string): string | null => headers.find(([key]) => key.toLowerCase() === name)?.[1] ?? null;
+
+/**
+ * Тело для агента (спека 6): маска — до обрезки, `redactBody` режет уже замаскированное. JSON, который нельзя разобрать
+ * целиком (обрезан источником или битый), не отдаётся совсем — маска его не видит (Фокус ревью этапа C, п. 2); вместо
+ * тела — заметка. `mimeType` запроса — его Content-Type целиком (у multipart в нём граница).
+ */
+function bodyForAgent(text: string | null, mimeType: string | null, which: 'request' | 'response', notes: string[]): string | null {
+  if (text === null || text === '') return null;
+  if (unmaskableJson(text, mimeType)) {
+    notes.push(`The ${which} body is JSON that cannot be parsed in full (cut by the capture limit or malformed), so it is not shown: it cannot be masked.`);
+    return null;
+  }
+  return redactBody(text, mimeType, AGENT_LIMITS.detailBody);
+}
 
 /** Пояснение агенту, когда работа вне LRU окна: вкладка в раскладке есть, гостя пока нет. */
 export const NOT_MOUNTED_NOTE = "The workspace is not open in Parley's window, so the page loads when the human opens it.";
@@ -233,6 +298,91 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     return { tabs, notes: tabs.length === 0 && !known ? [UNKNOWN_WORK_NOTE] : [] };
   }
 
+  const opTimeoutMs = deps.opTimeoutMs ?? AGENT_LIMITS.opMs - 2_000;
+  /** Хвост очереди каждой страницы: операции к одной странице — строго по одной (спека 3.7). */
+  const queues = new Map<string, Promise<void>>();
+
+  function enqueue<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const next = (queues.get(key) ?? Promise.resolve()).then(task);
+    const tail = next.then(() => undefined, () => undefined);
+    queues.set(key, tail);
+    void tail.then(() => {
+      if (queues.get(key) === tail) queues.delete(key);
+    });
+    return next;
+  }
+
+  /** Страница по id агента: доступ (`pageOf`), состояние гостя, loopback; затем операция в очереди страницы. */
+  async function onPage<T>(request: BrowserAgentOpEvent, agentId: string, run: (contents: WebContents, record: PageRecord) => Promise<T>): Promise<T> {
+    const record = pageOf(request, agentId);
+    const contents = live(record);
+    if (contents === null) throw new AgentOpError('tab_not_loaded', `Page ${agentId} is not loaded: its panel or workspace is not open in the window.`);
+    if (contents.isCrashed()) throw new AgentOpError('tab_not_loaded', `The page ${agentId} crashed.`);
+    if (!isLoopbackUrl(contents.getURL())) throw new AgentOpError('not_loopback', `Page ${agentId} is not on localhost.`);
+    return enqueue(pageKey(record.workKey, record.pageId), async () => {
+      deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'start' });
+      try {
+        return await withTimeout(run(contents, record), opTimeoutMs, `The ${request.op} operation took longer than ${Math.round(opTimeoutMs / 1000)} s.`);
+      } finally {
+        deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'end' });
+      }
+    });
+  }
+
+  function captured(id: number): DevtoolsSnapshot {
+    const snapshot = deps.inspector.snapshot(id);
+    if (snapshot === null || snapshot.capture === 'unavailable') {
+      throw new AgentOpError('unsupported', 'Console and network capture is unavailable for this page: ask the human to reload it.');
+    }
+    return snapshot;
+  }
+
+  function consoleOf(contents: WebContents, record: PageRecord, args: BrowserAgentArgs<'console'>): BrowserAgentConsoleResult {
+    const snapshot = captured(contents.id);
+    const level = args.level ?? 'error';
+    const pattern = args.pattern?.toLowerCase();
+    const matching = snapshot.console.filter(
+      (entry) =>
+        entry.epoch === snapshot.epoch &&
+        (level === 'all' || entry.level === 'error' || (level === 'warning' && entry.level === 'warning')) &&
+        (pattern === undefined || entry.text.toLowerCase().includes(pattern)),
+    );
+    return { tab: record.agentId, url: redactUrl(contents.getURL()), entries: newest(matching.map(toAgentConsole), args.limit ?? DEFAULT_LIST), matched: matching.length };
+  }
+
+  async function detailOf(id: number, entry: NetworkEntry): Promise<BrowserAgentRequestDetail> {
+    const notes: string[] = [];
+    if (entry.hasPostData && entry.postData === null) notes.push('The request body was not captured.');
+    const requestBody = bodyForAgent(entry.postData, headerValue(entry.requestHeaders, 'content-type'), 'request', notes);
+    // Тело целиком, до предела панели: маска разбирает весь JSON, режется уже результат.
+    const response = await deps.inspector.responseBody(id, entry.id, DEVTOOLS_LIMITS.panelBody).catch(() => null);
+    let responseBody: string | null = null;
+    if (response !== null) {
+      if (response.base64) notes.push('The response body is binary and is not shown.');
+      else responseBody = bodyForAgent(response.text, entry.mimeType, 'response', notes);
+    }
+    return { ...summaryOf(entry), remoteAddress: entry.remoteAddress, fromCache: entry.fromCache, requestHeaders: redactHeaders(entry.requestHeaders), responseHeaders: redactHeaders(entry.responseHeaders), requestBody, responseBody, notes };
+  }
+
+  async function networkOf(contents: WebContents, record: PageRecord, args: BrowserAgentArgs<'network'>): Promise<BrowserAgentNetworkResult> {
+    const snapshot = captured(contents.id);
+    const url = redactUrl(contents.getURL());
+    if (args.requestId !== undefined) {
+      const entry = snapshot.network.find((candidate) => candidate.id === args.requestId);
+      if (entry === undefined) throw new AgentOpError('bad_request', `There is no request ${args.requestId} in the log of page ${record.agentId}: list the requests first.`);
+      return { tab: record.agentId, url, request: await detailOf(contents.id, entry) };
+    }
+    const pattern = args.urlPattern?.toLowerCase();
+    // Фильтр смотрит на адрес с маской: подобрать им значение секрета нельзя.
+    const matching = snapshot.network.filter(
+      (entry) =>
+        entry.epoch === snapshot.epoch &&
+        (args.failedOnly !== false ? isFailed(entry) : true) &&
+        (pattern === undefined || redactUrl(entry.url).toLowerCase().includes(pattern)),
+    );
+    return { tab: record.agentId, url, requests: newest(matching.map(summaryOf), args.limit ?? DEFAULT_LIST), matched: matching.length };
+  }
+
   function askWindow(event: AgentOpenTab): Promise<AgentOpenTabResult | 'no_window' | 'timeout'> {
     return new Promise((resolve) => {
       const done = (result: AgentOpenTabResult | 'no_window' | 'timeout'): void => {
@@ -291,10 +441,14 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
             return ok(await openOf(request, parsed.data as BrowserAgentArgs<'open'>));
           case 'tabs':
             return ok(await listTabs(request));
-          case 'console':
-            // До задачи 11 читать нечего: страница проверяется (чужая, на паузе), чтение ещё не умеем.
-            pageOf(request, (parsed.data as BrowserAgentArgs<'console'>).tab);
-            return failure('unsupported', 'Reading the console is not available yet.');
+          case 'console': {
+            const args = parsed.data as BrowserAgentArgs<'console'>;
+            return ok(await onPage(request, args.tab, async (contents, record) => consoleOf(contents, record, args)));
+          }
+          case 'network': {
+            const args = parsed.data as BrowserAgentArgs<'network'>;
+            return ok(await onPage(request, args.tab, (contents, record) => networkOf(contents, record, args)));
+          }
           default:
             // Операции чтения, которых ещё нет (задачи 11–12).
             return failure('unsupported', `This window does not support the operation ${request.op} yet: ask the human to update Parley.`);

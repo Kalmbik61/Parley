@@ -4,9 +4,9 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { AGENT_LIMITS } from '@parley/protocol';
-import type { BrowserAgentOpEvent, BrowserAgentOpenResult, BrowserAgentOwner, BrowserAgentResult } from '@parley/protocol';
+import type { BrowserAgentConsoleResult, BrowserAgentOpEvent, BrowserAgentRequestDetail, BrowserAgentOpenResult, BrowserAgentOwner, BrowserAgentResult } from '@parley/protocol';
 import type { WebContents } from 'electron';
-import type { DevtoolsSnapshot, ViewportSpec } from '../../shared/browser-devtools.js';
+import { DEVTOOLS_LIMITS, type ConsoleEntry, type DevtoolsSnapshot, type NetworkEntry, type ViewportSpec } from '../../shared/browser-devtools.js';
 import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistration } from '../../shared/browser-types.js';
 import { workKey } from '../../shared/work-keys.js';
 import { PANEL_LIMITS } from '../../renderer/layout/tree.js';
@@ -404,5 +404,167 @@ describe('реестр страниц панелей и tabs (спека 3.7, 3.
     state.allowed = true;
     expect(codeOf(await run('tabs', { extra: 1 }))).toBe('bad_request');
     expect(codeOf(await run('console', { tab: 'bp-aaaaaa' }))).toBe('bad_request');
+  });
+});
+
+function consoleEntry(patch: Partial<ConsoleEntry>): ConsoleEntry {
+  return { id: 1, epoch: 1, ts: Date.UTC(2026, 9, 7, 10), level: 'error', origin: 'console', text: 'boom', location: null, stack: [], count: 1, ...patch };
+}
+function networkEntry(patch: Partial<NetworkEntry>): NetworkEntry {
+  return {
+    id: '100.1', epoch: 1, ts: Date.UTC(2026, 9, 7, 10), method: 'GET', url: 'http://localhost:5173/api', kind: 'fetch', status: 200, statusText: 'OK',
+    failure: null, mimeType: 'application/json', encodedBytes: 10, durationMs: 12, fromCache: false, remoteAddress: '127.0.0.1:5173',
+    requestHeaders: [], responseHeaders: [], hasPostData: false, postData: null, ...patch,
+  };
+}
+
+describe('проверки страницы (спека 5.2)', () => {
+  it('не loopback — not_loopback; страница упала, гость уничтожен или его нет — tab_not_loaded', async () => {
+    const { ops, guests, runOp: run } = setup();
+    register(ops, {});
+    guests.set(7, fakeGuest(7, 'https://example.com/'));
+    expect(codeOf(await run('console', { tab: 't1' }))).toBe('not_loopback');
+    guests.set(7, fakeGuest(7));
+    guests.get(7)?.isCrashed.mockReturnValue(true);
+    expect(codeOf(await run('console', { tab: 't1' }))).toBe('tab_not_loaded');
+    guests.get(7)?.isCrashed.mockReturnValue(false);
+    guests.get(7)?.isDestroyed.mockReturnValue(true);
+    expect(codeOf(await run('network', { tab: 't1' }))).toBe('tab_not_loaded');
+    register(ops, { webContentsId: null });
+    expect(codeOf(await run('console', { tab: 't1' }))).toBe('tab_not_loaded');
+  });
+});
+
+describe('console (спека 5.1)', () => {
+  const entries: ConsoleEntry[] = [
+    consoleEntry({ id: 1, epoch: 0, text: 'old page error' }),
+    consoleEntry({ id: 2, text: 'boom' }),
+    consoleEntry({ id: 3, level: 'warning', text: 'Careful' }),
+    consoleEntry({ id: 4, level: 'info', text: 'hello' }),
+    consoleEntry({
+      id: 5, origin: 'exception', text: 'Uncaught TypeError: x at http://localhost:5173/a?token=SECRET3', count: 3,
+      location: { url: 'http://localhost:5173/src/app.tsx?token=SECRET2', line: 12, column: 5 },
+      stack: [{ fn: 'render', url: 'http://localhost:5173/src/app.tsx?token=SECRET2', line: 12, column: 5 }, { fn: '', url: 'http://localhost:5173/main.tsx', line: 1, column: 1 }],
+    }),
+  ];
+
+  it('по умолчанию — ошибки текущей эпохи; warning — и предупреждения; all — всё; pattern без учёта регистра', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    snapshots.set(7, { ...EMPTY, console: entries });
+    const texts = async (args: Record<string, unknown>) => okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1', ...args })).entries.map((entry) => entry.level + ':' + entry.origin);
+    expect(await texts({})).toEqual(['error:console', 'error:exception']);
+    expect(await texts({ level: 'warning' })).toEqual(['error:console', 'warning:console', 'error:exception']);
+    expect(await texts({ level: 'all' })).toHaveLength(4);
+    expect(await texts({ level: 'all', pattern: 'CAREFUL' })).toEqual(['warning:console']);
+  });
+
+  it('limit — новейшие, старые первыми; matched; источник, стек и текст — с маской URL (Фокус ревью, п. 1)', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    snapshots.set(7, { ...EMPTY, console: entries });
+    const result = okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1', limit: 1 }));
+    expect(result).toMatchObject({ tab: 't1', matched: 2 });
+    const [entry] = result.entries;
+    expect(entry).toMatchObject({ level: 'error', origin: 'exception', count: 3, at: new Date(Date.UTC(2026, 9, 7, 10)).toISOString() });
+    expect(entry?.stack[1]).toBe('(anonymous) (http://localhost:5173/main.tsx:1:1)');
+    for (const secret of ['SECRET2', 'SECRET3']) expect(JSON.stringify(result), secret).not.toContain(secret);
+  });
+
+  it('бюджет 20 КБ: при длинных записях их меньше limit, новейшие сохраняются', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    snapshots.set(7, { ...EMPTY, console: Array.from({ length: 60 }, (_, index) => consoleEntry({ id: index + 10, text: `${index} ${'x'.repeat(1000)}` })) });
+    const result = okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1', limit: 100 }));
+    expect(result.matched).toBe(60);
+    expect(Buffer.byteLength(JSON.stringify(result.entries))).toBeLessThanOrEqual(20_480 + 200);
+    expect(result.entries.at(-1)?.text.startsWith('59 ')).toBe(true);
+  });
+
+  it('захвата нет — unsupported с советом перезагрузить страницу', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    snapshots.set(7, { ...EMPTY, capture: 'unavailable' });
+    const result = await run('console', { tab: 't1' });
+    expect(codeOf(result)).toBe('unsupported');
+    expect(messageOf(result)).toContain('reload');
+  });
+});
+
+describe('network (спека 5.1, 6)', () => {
+  const failing = networkEntry({
+    id: '100.1', method: 'POST', url: 'http://localhost:5173/api/settings?token=SECRET123&page=2', status: 500, statusText: 'Internal Server Error',
+    requestHeaders: [['Authorization', 'Bearer SECRET-AUTH'], ['Content-Type', 'application/json'], ['Cookie', 'sid=COOKIE1']],
+    responseHeaders: [['Content-Type', 'application/json'], ['Set-Cookie', 'sid=COOKIE2']],
+    hasPostData: true, postData: JSON.stringify({ user: { name: 'ann', password: 'hunter2' } }),
+  });
+  const fine = networkEntry({ id: '100.2', url: 'http://localhost:5173/api/ok' });
+  const missing = networkEntry({ id: '100.3', url: 'http://localhost:5173/missing.png', kind: 'image', status: 404, mimeType: 'text/html' });
+  const cors = networkEntry({ id: '100.4', url: 'http://localhost:9999/api', status: null, failure: { reason: 'cors', text: 'MissingAllowOriginHeader' } });
+  const old = networkEntry({ id: '99.1', epoch: 0, status: 500 });
+  const detailOf = async (run: (op: string, args?: unknown) => Promise<BrowserAgentResult>) => okResult<{ request: BrowserAgentRequestDetail }>(await run('network', { tab: 't1', requestId: '100.1' })).request;
+
+  it('по умолчанию — упавшие текущей эпохи; failedOnly: false — все; urlPattern смотрит на адрес с маской (секрет не подобрать)', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    snapshots.set(7, { ...EMPTY, network: [old, failing, fine, missing, cors] });
+    const ids = async (args: Record<string, unknown>) => okResult<{ requests: Array<{ id: string }> }>(await run('network', { tab: 't1', ...args })).requests.map((request) => request.id);
+    expect(await ids({})).toEqual(['100.1', '100.3', '100.4']);
+    expect(await ids({ failedOnly: false })).toEqual(['100.1', '100.2', '100.3', '100.4']);
+    expect(await ids({ failedOnly: false, urlPattern: '/API' })).toEqual(['100.1', '100.2', '100.4']);
+    expect(await ids({ urlPattern: 'SECRET123' })).toEqual([]);
+  });
+
+  it('секреты упавшего запроса — только <redacted> и в списке, и в деталях (Фокус ревью, п. 1)', async () => {
+    const { ops, inspector, snapshots, runOp: run } = setup();
+    register(ops, {});
+    snapshots.set(7, { ...EMPTY, network: [failing] });
+    inspector.responseBody.mockResolvedValue({ text: JSON.stringify({ error: 'db down', session: 'S3SS10N' }), base64: false, truncated: false });
+    const list = await run('network', { tab: 't1' });
+    const detail = await detailOf(run);
+    const all = JSON.stringify([list, detail]);
+    for (const secret of ['SECRET123', 'SECRET-AUTH', 'COOKIE1', 'COOKIE2', 'hunter2', 'S3SS10N']) expect(all, secret).not.toContain(secret);
+    expect(detail.requestHeaders).toEqual([['Authorization', '<redacted>'], ['Content-Type', 'application/json'], ['Cookie', '<redacted>']]);
+    expect(detail.responseHeaders).toEqual([['Content-Type', 'application/json'], ['Set-Cookie', '<redacted>']]);
+    expect(JSON.parse(detail.requestBody ?? 'null')).toEqual({ user: { name: 'ann', password: '<redacted>' } });
+    expect(JSON.parse(detail.responseBody ?? 'null')).toEqual({ error: 'db down', session: '<redacted>' });
+    // Тело берётся целиком, до предела панели: маска разбирает весь JSON, режется уже результат.
+    expect(inspector.responseBody).toHaveBeenCalledWith(7, '100.1', DEVTOOLS_LIMITS.panelBody);
+  });
+
+  it('JSON, который нельзя разобрать целиком, агенту не отдаётся (Фокус ревью, п. 2)', async () => {
+    const { ops, inspector, snapshots, runOp: run } = setup();
+    register(ops, {});
+    snapshots.set(7, { ...EMPTY, network: [networkEntry({ ...failing, postData: '{"user":{"name":"ann","password":"hunter2"' })] });
+    inspector.responseBody.mockResolvedValue({ text: `{"items":[${'1,'.repeat(10)}`, base64: false, truncated: true });
+    const detail = await detailOf(run);
+    expect(detail.requestBody).toBeNull();
+    expect(detail.responseBody).toBeNull();
+    expect(detail.notes).toEqual([
+      'The request body is JSON that cannot be parsed in full (cut by the capture limit or malformed), so it is not shown: it cannot be masked.',
+      'The response body is JSON that cannot be parsed in full (cut by the capture limit or malformed), so it is not shown: it cannot be masked.',
+    ]);
+    expect(JSON.stringify(detail)).not.toContain('hunter2');
+  });
+
+  it('тело формы — с маской полей; длинное текстовое — 8192 символа; бинарное и не снятое — заметки', async () => {
+    const { ops, inspector, snapshots, runOp: run } = setup();
+    register(ops, {});
+    snapshots.set(7, { ...EMPTY, network: [networkEntry({ ...failing, mimeType: 'text/plain', requestHeaders: [['Content-Type', 'application/x-www-form-urlencoded']], postData: 'user=ann&password=hunter2' })] });
+    inspector.responseBody.mockResolvedValue({ text: 'x'.repeat(20_000), base64: false, truncated: false });
+    let detail = await detailOf(run);
+    expect(detail.requestBody).toBe('user=ann&password=<redacted>');
+    expect(Array.from(detail.responseBody ?? '').length).toBeLessThanOrEqual(8192 + 32);
+    snapshots.set(7, { ...EMPTY, network: [networkEntry({ ...failing, postData: null, hasPostData: true })] });
+    inspector.responseBody.mockResolvedValue({ text: 'iVBORw0KGgo=', base64: true, truncated: false });
+    detail = await detailOf(run);
+    expect([detail.requestBody, detail.responseBody]).toEqual([null, null]);
+    expect(detail.notes).toEqual(['The request body was not captured.', 'The response body is binary and is not shown.']);
+  });
+
+  it('неизвестный requestId — bad_request', async () => {
+    const { ops, runOp: run } = setup();
+    register(ops, {});
+    expect(codeOf(await run('network', { tab: 't1', requestId: 'nope' }))).toBe('bad_request');
   });
 });

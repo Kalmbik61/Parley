@@ -1088,7 +1088,7 @@ git commit -m "feat(desktop): реестр страниц панелей для 
 
 Маска уже целиком в `shared/redact.ts`: JSON — ключи на любой глубине, форма — параметры, `multipart` — части с секретным именем, URL — query и hash, заголовки — `Authorization`, `Cookie`, `Set-Cookie`, `Referer`/`Location` через `redactUrl`. Эта задача только вызывает её и ставит порядок (маска до обрезки, неразбираемый JSON не отдаётся). Тексты записей консоли проходят `redactUrlsInText`.
 
-- [ ] **Шаг 1. Написать падающие тесты.** В `agent-ops.test.ts` (хелперы и `setup` — задача 10; импорты `DEVTOOLS_LIMITS`, `ConsoleEntry`, `NetworkEntry`, `BrowserAgentConsoleResult`, `BrowserAgentRequestDetail`) — фабрики записей и блоки:
+- [x] **Шаг 1. Написать падающие тесты.** В `agent-ops.test.ts` (хелперы и `setup` — задача 10; импорты `DEVTOOLS_LIMITS`, `ConsoleEntry`, `NetworkEntry`, `BrowserAgentConsoleResult`, `BrowserAgentRequestDetail`) — фабрики записей и блоки:
 
 ```ts
 function consoleEntry(patch: Partial<ConsoleEntry>): ConsoleEntry {
@@ -1254,9 +1254,9 @@ describe('network (спека 5.1, 6)', () => {
 });
 ```
 
-- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/main/browser/agent-ops.test.ts` → FAIL: `console` и `network` отвечают `unsupported`.
+- [x] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/main/browser/agent-ops.test.ts` → FAIL: `console` и `network` отвечают `unsupported`.
 
-- [ ] **Шаг 3. Реализовать.** В `agent-ops.ts`:
+- [x] **Шаг 3. Реализовать.** В `agent-ops.ts`:
   - импорты: `AGENT_LIMITS` рядом с `browserAgentArgs`; типы протокола (`BrowserAgentArgs`, `BrowserAgentConsoleEntry`, `BrowserAgentConsoleResult`, `BrowserAgentNetworkResult`, `BrowserAgentRequestDetail`, `BrowserAgentRequestSummary`); `DEVTOOLS_LIMITS`, `isFailed` и типы `ConsoleEntry`, `DevtoolsSnapshot`, `NetworkEntry`, `StackFrame` из `shared/browser-devtools.js`; `redactBody`, `redactHeaders`, `redactUrlsInText`, `unmaskableJson` из `shared/redact.js`;
   - помощники модуля после `failure(…)`:
 
@@ -1425,9 +1425,9 @@ function bodyForAgent(text: string | null, mimeType: string | null, which: 'requ
 
   - `ok(…)` в `run` обёрнут в `try` B2, `AgentOpError` переводится в `failure(code, message)`; код ошибок вне этого — `unsupported` — не менять.
 
-- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS.
+- [x] **Шаг 4. Запустить — проходит.** Та же команда → PASS.
 
-- [ ] **Шаг 5. Закоммитить.**
+- [x] **Шаг 5. Закоммитить.**
 
 ```bash
 git add packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-ops.test.ts
