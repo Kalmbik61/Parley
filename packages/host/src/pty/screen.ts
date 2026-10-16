@@ -29,8 +29,13 @@ export interface Screen {
   dispose(): void;
 }
 
-/** Прокрутка снимка экрана — 5 000 строк (сквозные ограничения плана). */
-const DEFAULT_SCROLLBACK = 5000;
+/**
+ * Прокрутка экрана хоста — 1 000 строк. Экран каждой сессии живёт в хосте в памяти, а снимок при
+ * `pty.attach` сериализует весь scrollback: при 15–30 сессиях по 5 000 строк это заметные память и
+ * время снимка. Живой вывод после attach окно держит у себя, так что глубокая история хосту не
+ * нужна (ориентир — Orca держит 1 000 строк в демоне). Прокрутка xterm в окне — отдельная.
+ */
+const DEFAULT_SCROLLBACK = 1000;
 
 export function createScreen(cols: number, rows: number, scrollback = DEFAULT_SCROLLBACK): Screen {
   const terminal: Terminal = new xterm.Terminal({ cols, rows, scrollback, allowProposedApi: true });
