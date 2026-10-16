@@ -103,7 +103,7 @@ import { useLayoutPersistence } from '../layout/persistence.js';
 import { useLayoutStore } from '../layout/store.js';
 import { measureGroupSizes } from '../layout/measure.js';
 import { findTab, focusTab, groups, openTab } from '../layout/tree.js';
-import { focusedPanelPage, focusPanelPage, forgetFocusedPanelPage, openPopupInPanel } from '../browser/panel/actions.js';
+import { focusedPanelPage, focusPanelPage, forgetFocusedPanelPage, handleAgentOpenTab, openPopupInPanel } from '../browser/panel/actions.js';
 import { openBrowserTabFrom, useBrowserStore } from '../browser/store.js';
 import { layoutUrl } from '../browser/url.js';
 import { focusContext } from '../keys/focus-context.js';
@@ -632,6 +632,12 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
           toast: (text) => toast(text),
         });
       }),
+    [bridge],
+  );
+
+  // `browser_open` агента (спека браузера 5.1, 5.2): страница встаёт в панель хозяина без смены вкладки, работы и фокуса.
+  useEffect(
+    () => bridge.browser.onAgentOpenTab((event) => void bridge.browser.agentOpenTabResult(event.requestId, handleAgentOpenTab(event))),
     [bridge],
   );
 

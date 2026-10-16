@@ -10,11 +10,13 @@ import { panelOf } from '../../layout/panels.js';
 import { useLayoutStore } from '../../layout/store.js';
 import { emptyLayout, findTab, groups, openTab, PANEL_LIMITS } from '../../layout/tree.js';
 import { wantsAddressFocus } from '../store.js';
+import { panelRuntimeKey, usePanelRuntime } from './runtime.js';
 import {
   activatePage,
   addBlankPage,
   closePage,
   closePanel,
+  handleAgentOpenTab,
   moveTabToPanel,
   openAgentPage,
   openPageInPanel,
@@ -246,5 +248,24 @@ describe('openAgentPage — browser_open агента, повтор страни
   it('работа не прочитана — no-work; не http(s) — bad-url', () => {
     expect(openAgentPage('/tmp/other', CHAT, 'http://localhost:5173/')).toEqual({ ok: false, reason: 'no-work' });
     expect(openAgentPage(KEY, CHAT, 'file:///etc/hosts')).toEqual({ ok: false, reason: 'bad-url' });
+  });
+});
+
+describe('handleAgentOpenTab — ответ окна на browser:agent-open-tab', () => {
+  const event = (url: string, owner: BrowserOwner = CHAT, workKey = KEY) => ({ requestId: 'r1', workKey, url, sessionId: 's-01', session: 'S01', owner });
+
+  it('страница встала: id, reused и mounted (панель на экране — есть запись в runtime)', () => {
+    const first = handleAgentOpenTab(event('http://localhost:5173/'));
+    expect(first).toMatchObject({ reused: false, mounted: false });
+    usePanelRuntime.getState().mountHost(panelRuntimeKey(KEY, CHAT), false);
+    const again = handleAgentOpenTab(event('http://localhost:5173/#x'));
+    expect(again).toEqual({ tabId: (first as { tabId: string }).tabId, reused: true, mounted: true });
+    usePanelRuntime.getState().unmountHost(panelRuntimeKey(KEY, CHAT));
+  });
+
+  it('предел страниц — limit, работа неизвестна — no_work', () => {
+    for (let i = 0; i < PANEL_LIMITS.pages; i += 1) handleAgentOpenTab(event(`http://localhost:${3000 + i}/`));
+    expect(handleAgentOpenTab(event('http://localhost:4000/'))).toEqual({ error: 'limit' });
+    expect(handleAgentOpenTab(event('http://localhost:4000/', CHAT, '/tmp/other'))).toEqual({ error: 'no_work' });
   });
 });

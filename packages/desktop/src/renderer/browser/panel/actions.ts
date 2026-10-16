@@ -12,6 +12,7 @@
  */
 
 import { toast } from 'sonner';
+import type { AgentOpenTab, AgentOpenTabResult } from '../../../shared/browser-types.js';
 import type { BrowserOwner } from '../../../shared/layout-types.js';
 import { S } from '../../../shared/strings.js';
 import { ownerKey, ownerTabId, panelPageId } from '../../layout/ids.js';
@@ -128,6 +129,19 @@ export function openAgentPage(workKey: string, owner: BrowserOwner, url: string)
   }
   run(workKey, (current) => setPanelOpen(activatePanelPage(current, owner, same.id), owner, true));
   return { ok: true, pageId: same.id, opened: panel?.open !== true, reused: true };
+}
+
+/**
+ * Просьба агента `browser_open` (`browser:agent-open-tab`, спека браузера 5.1, 7): страница встаёт в панель хозяина, которого
+ * выбрал main. `mounted` — панель на экране (вид хозяина смонтирован): иначе страница загрузится, когда человек её откроет.
+ * Предел страниц панели — `limit` (main скажет агенту закрыть одну); работа ещё не прочитана с диска или адрес не годится для
+ * раскладки — `no_work` (main переводит его в «окно работы не знает»).
+ */
+export function handleAgentOpenTab(event: AgentOpenTab): AgentOpenTabResult {
+  const result = openAgentPage(event.workKey, event.owner, event.url);
+  if (!result.ok) return { error: result.reason === 'limit' ? 'limit' : 'no_work' };
+  const mounted = usePanelRuntime.getState().hosts[panelRuntimeKey(event.workKey, event.owner)] !== undefined;
+  return { tabId: result.pageId, reused: result.reused, mounted };
 }
 
 /**
