@@ -42,6 +42,9 @@ export function dprOf(metrics: LayoutMetrics): number {
   return Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
 }
 
+/** Сколько ждать один вызов в госте или окне, мс: упавший или замёрзший гость не отвечает вовсе (как `PICK_LIMITS.scriptMs` в annotate.ts). */
+const GUEST_CALL_MS = 2_000;
+
 /** Пауза перед повтором снимка невидимой страницы, мс. */
 const CAPTURE_RETRY_MS = 50;
 
@@ -82,6 +85,8 @@ export interface AgentCaptureDeps {
   inGuest(contents: WebContents, code: string): Promise<unknown>;
   /** Высота содержимого окна, в котором лежит гость; `null` или метода нет — проверка размера снимка пропускается. */
   windowHeight?(contents: WebContents): number | null;
+  /** Сколько ждать один вызов `inGuest` и `screenDpr`; по умолчанию 2 с. Тестам — меньше. */
+  guestCallMs?: number;
   /** Сколько ждать подтверждения окна; по умолчанию `AGENT_LIMITS.captureReadyMs`. Тестам — меньше. */
   captureReadyMs?: number;
 }
@@ -94,8 +99,40 @@ export interface AgentCapture {
 
 export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
   const readyMs = deps.captureReadyMs ?? AGENT_LIMITS.captureReadyMs;
+  const guestCallMs = deps.guestCallMs ?? GUEST_CALL_MS;
   /** Ждущие подтверждения окна: id поверхности → продолжение. */
   const pendingSurfaces = new Map<string, () => void>();
+
+  /**
+   * Вызов в госте или окне с потолком: отказ по сроку или по отмене операции (если `signal` задан). Задача в очереди
+   * страницы и цепочка эмуляции ждут настоящего конца, поэтому вызов, который не отвечает, не должен висеть вечно.
+   */
+  function bounded<T>(call: Promise<T>, what: string, record: PageRecord, signal: AbortSignal | null): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = (): void => {
+        clearTimeout(timer);
+        reject(new AgentOpError('timeout', 'The operation was cancelled: it took too long.'));
+      };
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        reject(new AgentOpError('tab_not_loaded', `Page ${record.agentId} did not answer during the screenshot (${what}): it may have crashed or hung.`));
+      }, guestCallMs);
+      if (signal?.aborted === true) return onAbort();
+      signal?.addEventListener('abort', onAbort, { once: true });
+      call.then(
+        (value) => {
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+          resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+          reject(error);
+        },
+      );
+    });
+  }
 
   /** Просит окно поставить `<webview>` в размер снимка и ждёт подтверждения не дольше `readyMs`. */
   function prepareSurface(contents: WebContents, request: BrowserAgentOpEvent, view: { width: number; height: number }): Promise<void> {
@@ -170,7 +207,7 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
       }
     };
 
-    const evaluate = (code: string): Promise<unknown> => deps.inGuest(contents, code);
+    const evaluate = (code: string, bound: AbortSignal | null = signal): Promise<unknown> => bounded(deps.inGuest(contents, code), 'scrolling', record, bound);
 
     const notes: string[] = [];
     /**
@@ -179,7 +216,13 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
      * Поэтому клип — только на экране с DPR 1; fullPage его не берёт: полосы склеиваются на main, длинная сторона режется после
      * склейки. Эмуляция на экране DPR > 1 берёт DPR экрана (`withTemporary`): с DPR 1 она не действует и кадр выходит четвертью.
      */
-    const screenDpr = (await deps.screenDpr?.(contents)) ?? (deps.emulation.current(id) === null ? dprOf(metrics) : 1);
+    // Окно, которое не ответило за срок, — как «метода нет»: запасной путь по раскладке самой страницы.
+    const windowDpr = deps.screenDpr === undefined ? null : await bounded(deps.screenDpr(contents), 'window DPR', record, signal).catch((error: unknown) => {
+      signal.throwIfAborted();
+      if (error instanceof AgentOpError && error.code === 'tab_not_loaded') return null;
+      throw error;
+    });
+    const screenDpr = windowDpr ?? (deps.emulation.current(id) === null ? dprOf(metrics) : 1);
     const canClip = args.fullPage !== true && screenDpr <= 1;
     /** Масштаб PNG: длинная сторона не больше предела картинки; `factor` — сужение при повторе. */
     const scaleFor = (cssWidth: number, cssHeight: number, factor: number): number =>
@@ -224,7 +267,7 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
       } finally {
         // Человек не должен видеть, что страницу прокручивали.
         const [x, top] = Array.isArray(origin) ? (origin as unknown[]) : [0, 0];
-        if (typeof x === 'number' && typeof top === 'number') await evaluate(`window.scrollTo(${x}, ${top})`).catch(() => undefined);
+        if (typeof x === 'number' && typeof top === 'number') await evaluate(`window.scrollTo(${x}, ${top})`, null).catch(() => undefined);
       }
       return { png: strips.length === 1 ? (strips[0] as Buffer) : deps.image.stitch(strips), viewport: { width: view.width, height: total }, clipped: false };
     };

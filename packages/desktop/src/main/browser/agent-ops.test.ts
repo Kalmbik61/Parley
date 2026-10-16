@@ -57,7 +57,7 @@ function sendWith(options: { viewport?: { width: number; height: number }; conte
 }
 
 /** Окно отвечает на просьбу своим ответом (если он задан) сразу после неё, как ответил бы рендерер. */
-function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null; sent?: boolean; openMs?: number; owners?: BrowserAgentOwner[]; confirmSurface?: boolean; captureReadyMs?: number; windowHeight?: number; screenDpr?: number; opTimeoutMs?: number } = {}) {
+function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null; sent?: boolean; openMs?: number; owners?: BrowserAgentOwner[]; confirmSurface?: boolean; captureReadyMs?: number; windowHeight?: number; screenDpr?: number; screenDprHangs?: boolean; guestCallMs?: number; opTimeoutMs?: number } = {}) {
   const asked: AgentOpenTab[] = [];
   const state = { allowed: overrides.allowed ?? true, reply: overrides.reply === undefined ? { tabId: 'browser:aaaaaa', reused: false, mounted: true } : overrides.reply };
   const openTab = vi.fn((e: AgentOpenTab): boolean => {
@@ -109,6 +109,8 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
     ...(overrides.opTimeoutMs === undefined ? {} : { opTimeoutMs: overrides.opTimeoutMs }),
     ...(overrides.windowHeight === undefined ? {} : { windowHeight: () => overrides.windowHeight as number }),
     ...(overrides.screenDpr === undefined ? {} : { screenDpr: async () => overrides.screenDpr as number }),
+    ...(overrides.screenDprHangs === true ? { screenDpr: () => new Promise<number | null>(() => undefined) } : {}),
+    ...(overrides.guestCallMs === undefined ? {} : { guestCallMs: overrides.guestCallMs }),
   };
   const ops: AgentOps = createAgentOps(deps);
   // Хост всегда кладёт в owners саму сессию: для чужого ref (другая работа) — её, а не s-02.
@@ -1186,5 +1188,104 @@ describe('тайм-аут и немедленный повтор с настоя
     expect(emulation.current(7)).toEqual(human);
     // Последняя команда размера — размер человека (laptop 1280×800, DPR 2), а не размер снимка.
     expect(log.filter((entry) => entry.startsWith('metrics')).at(-1)).toBe('metrics 1280x800 dpr 2');
+  });
+});
+
+describe('окно не отвечает про DPR экрана (ревью G4)', () => {
+  it('screenDpr не отвечает за срок вызова — запасной путь по раскладке страницы, снимок проходит', async () => {
+    const { ops, runOp: run } = setup({ screenDprHangs: true, guestCallMs: 30 });
+    register(ops, {});
+    const result = okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1' }));
+    expect(result.viewport).toEqual({ width: 1280, height: 800 });
+  });
+});
+
+describe('замёрзший гость посреди fullPage не клинит очередь страницы и размер человека (ревью G4, п. 5–6; reviewer-probes/review56/hang-probe.mts)', () => {
+  /** Настоящие `createAgentOps` и `createEmulation`; `inGuest` отвечает на первый вызов (исходная прокрутка), дальше молчит. */
+  async function frozenGuestSetup(timing: { opTimeoutMs: number; guestCallMs: number }) {
+    const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+    const log: string[] = [];
+    let metrics = { width: 1280, height: 800 };
+    const inspector = {
+      snapshot: (): DevtoolsSnapshot => EMPTY,
+      responseBody: async () => null,
+      send: vi.fn(async (_id: number, method: string, params?: Record<string, unknown>): Promise<unknown> => {
+        if (method === 'Emulation.setDeviceMetricsOverride') {
+          metrics = { width: params?.['width'] as number, height: params?.['height'] as number };
+          log.push(`metrics ${metrics.width}x${metrics.height} dpr ${String(params?.['deviceScaleFactor'])}`);
+        }
+        if (method === 'Emulation.clearDeviceMetricsOverride') {
+          metrics = { width: 1280, height: 800 };
+          log.push('clear');
+        }
+        if (method === 'Page.getLayoutMetrics') {
+          return {
+            layoutViewport: { clientWidth: metrics.width, clientHeight: metrics.height },
+            cssLayoutViewport: { clientWidth: metrics.width, clientHeight: metrics.height, pageX: 0, pageY: 0 },
+            cssContentSize: { x: 0, y: 0, width: metrics.width, height: metrics.height * 2 },
+          };
+        }
+        if (method === 'Page.captureScreenshot') return { data: png(metrics.width, metrics.height).toString('base64') };
+        return {};
+      }),
+    };
+    const emulation = createEmulation({ inspector });
+    const guest = fakeGuest(7);
+    let evals = 0;
+    const ops = createAgentOps({
+      agentsAllowed: async () => true,
+      openTab: () => true,
+      fromId: () => guest as unknown as WebContents,
+      inspector,
+      emulation,
+      saveImage: async () => '/drops/x.png',
+      image: { resize: (_data: Buffer, width: number, height: number) => png(width, height), stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data },
+      // Первый вызов — исходная прокрутка; со второго гость не отвечает вовсе (упал или завис).
+      inGuest: (_contents: WebContents, code: string) => {
+        evals += 1;
+        return evals === 1 ? Promise.resolve(code.startsWith('[') ? [0, 0] : 0) : new Promise<unknown>(() => undefined);
+      },
+      activity: (e: AgentActivity) => {
+        if (e.capture !== undefined) queueMicrotask(() => ops.captureReady((e.capture as { id: string }).id));
+      },
+      ...timing,
+    });
+    register(ops, {});
+    const human: ViewportSpec = { preset: 'laptop', rotated: false, dpr: 2 };
+    await emulation.set(7, human, { width: 900, height: 600 });
+    log.length = 0;
+    const base = { ref: REF, label: 'S02', owners: [{ kind: 'session', sessionId: 's-02' }] as BrowserAgentOwner[] };
+    const shoot = (): Promise<BrowserAgentResult> => ops.run({ ...base, opId: 'x', op: 'screenshot', args: { tab: 't1', width: 1000, height: 700, fullPage: true } });
+    return { ops, emulation, log, base, shoot, sleep };
+  }
+
+  it('гость молчит дольше срока вызова: op1 — tab_not_loaded, следующая операция страницы и emulation.set человека проходят, размер — человека', async () => {
+    const { ops, emulation, log, base, shoot, sleep } = await frozenGuestSetup({ opTimeoutMs: 100, guestCallMs: 40 });
+    expect(codeOf(await shoot())).toBe('tab_not_loaded');
+    const tablet: ViewportSpec = { preset: 'tablet', rotated: false, dpr: 2 };
+    let humanSet = false;
+    void emulation.set(7, tablet, { width: 900, height: 600 }).then(() => { humanSet = true; });
+    const startedAt = Date.now();
+    const second = await ops.run({ ...base, opId: 'y', op: 'console', args: { tab: 't1' } });
+    // Хвост очереди освободился: не позже срока вызова в госте после срока операции (с запасом на таймеры).
+    expect(codeOf(second)).toBe('ok');
+    expect(Date.now() - startedAt).toBeLessThan(400);
+    await sleep(300);
+    expect(humanSet).toBe(true);
+    expect(emulation.current(7)).toEqual(tablet);
+    // Последняя команда размера — размер человека (tablet 768×1024, DPR 2), а не размер снимка.
+    expect(log.filter((entry) => entry.startsWith('metrics')).at(-1)).toBe('metrics 768x1024 dpr 2');
+  });
+
+  it('срок операции вышел раньше срока вызова: op1 — timeout (отмена), вызов в госте отпущен отменой, а возврат прокрутки ограничен сроком; потом страница и размер человека свободны', async () => {
+    const { ops, emulation, log, base, shoot, sleep } = await frozenGuestSetup({ opTimeoutMs: 100, guestCallMs: 250 });
+    expect(codeOf(await shoot())).toBe('timeout');
+    // Возврат прокрутки в finally — только по сроку, без отмены: ждёт до guestCallMs, и только потом хвост свободен.
+    await sleep(300);
+    const tablet: ViewportSpec = { preset: 'tablet', rotated: false, dpr: 2 };
+    await emulation.set(7, tablet, { width: 900, height: 600 });
+    expect(codeOf(await ops.run({ ...base, opId: 'y', op: 'console', args: { tab: 't1' } }))).toBe('ok');
+    expect(emulation.current(7)).toEqual(tablet);
+    expect(log.filter((entry) => entry.startsWith('metrics')).at(-1)).toBe('metrics 768x1024 dpr 2');
   });
 });

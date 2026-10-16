@@ -57,6 +57,8 @@ export interface AgentOpsDeps {
   activity(e: AgentActivity): void;
   /** Сколько ждать операцию на странице; по умолчанию `AGENT_LIMITS.opMs - 2_000`, чтобы очередь освобождалась раньше `timeout` хоста. */
   opTimeoutMs?: number;
+  /** Срок одного вызова в госте и окне при снимке, см. `AgentCaptureDeps.guestCallMs`. */
+  guestCallMs?: AgentCaptureDeps['guestCallMs'];
   /** Код main в изолированном мире гостя (прокрутка fullPage), см. `AgentCaptureDeps.inGuest`. */
   inGuest: AgentCaptureDeps['inGuest'];
   /** Высота содержимого окна гостя: выше {1,2 × высота} снимок не растят (Chromium тайлит поверхность). */
@@ -131,7 +133,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   const registry = createPageRegistry({ fromId: deps.fromId });
   const queue = createPageQueue();
   const reads = createAgentReads({ inspector: deps.inspector });
-  const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, saveImage: deps.saveImage, image: deps.image, activity: deps.activity, inGuest: deps.inGuest, ...(deps.captureReadyMs === undefined ? {} : { captureReadyMs: deps.captureReadyMs }), ...(deps.windowHeight === undefined ? {} : { windowHeight: deps.windowHeight }), ...(deps.screenDpr === undefined ? {} : { screenDpr: deps.screenDpr }) });
+  const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, saveImage: deps.saveImage, image: deps.image, activity: deps.activity, inGuest: deps.inGuest, ...(deps.captureReadyMs === undefined ? {} : { captureReadyMs: deps.captureReadyMs }), ...(deps.guestCallMs === undefined ? {} : { guestCallMs: deps.guestCallMs }), ...(deps.windowHeight === undefined ? {} : { windowHeight: deps.windowHeight }), ...(deps.screenDpr === undefined ? {} : { screenDpr: deps.screenDpr }) });
   const opTimeoutMs = deps.opTimeoutMs ?? AGENT_LIMITS.opMs - 2_000;
   const pageKey = (workKey: string, pageId: string): string => `${workKey}\n${pageId}`;
 
