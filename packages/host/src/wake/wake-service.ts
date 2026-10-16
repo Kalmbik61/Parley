@@ -299,16 +299,20 @@ export function createWakeService(
     startedAt: number,
     outcome: string,
   ): void {
-    host.log.info('письмо доставлено', {
-      op: 'mail.deliver',
-      ref,
-      roomId: action.roomId,
-      letters: action.letterIds.length,
-      sinceSentMs: sinceSentMs(action.newestAt),
-      mode,
-      ms: Math.round(performance.now() - startedAt),
-      outcome,
-    });
+    try {
+      host.log.info('письмо доставлено', {
+        op: 'mail.deliver',
+        ref,
+        roomId: action.roomId,
+        letters: action.letterIds.length,
+        sinceSentMs: sinceSentMs(action.newestAt),
+        mode,
+        ms: Math.round(performance.now() - startedAt),
+        outcome,
+      });
+    } catch {
+      // Журнал синхронный и при ENOSPC/EACCES бросает: диагностика не должна ломать доставку письма.
+    }
   }
 
   function notice(kind: NoticeKind, ref: SessionRef, text: string): void {

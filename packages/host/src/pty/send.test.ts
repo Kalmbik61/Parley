@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -390,6 +391,45 @@ describe('createSender', () => {
       await vi.advanceTimersByTimeAsync(500);
       await result;
       expect(record(log)).toMatchObject({ outcome: 'input', enterMs: expect.any(Number) });
+    });
+
+    it('typeMs около нуля, enterMs равен паузе Enter', async () => {
+      // send.ts берёт performance из node:perf_hooks — фальшивые таймеры vitest его не подменяют (трогают только
+      // globalThis.performance), поэтому часы двигаем вместе с фальшивой Date шпионом на тот же объект.
+      const clock = vi.spyOn(performance, 'now').mockImplementation(() => Date.now());
+      try {
+        const log = makeLog();
+        const result = sender()({ ref, text: 'hi', submit: true }, log);
+        await vi.advanceTimersByTimeAsync(500);
+        await result;
+        expect(record(log)).toMatchObject({ outcome: 'submitted', typeMs: 0, enterMs: 500 });
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it('отклонённый Enter пишет outcome failed и пробрасывает ошибку', async () => {
+      const write = pty.manager.write;
+      pty.manager.write = (target, data) => {
+        if (data === '\r') throw new Error('PTY закрыт');
+        write(target, data);
+      };
+      const log = makeLog();
+      const settled = sender()({ ref, text: 'hi', submit: true }, log).then(
+        () => ({ error: null }),
+        (error: unknown) => ({ error: String(error) }),
+      );
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(settled).resolves.toEqual({ error: 'Error: PTY закрыт' });
+      expect(record(log)).toEqual({
+        op: 'pty.send',
+        ref,
+        chars: 2,
+        queueMs: null,
+        typeMs: expect.any(Number),
+        enterMs: expect.any(Number),
+        outcome: 'failed',
+      });
     });
 
     it('без журнала вторым аргументом работает как прежде', async () => {

@@ -78,9 +78,26 @@ export function createSender(deps: {
 
     // Журнал задержек (спека диагностики, A4): одна запись на вызов, длины и идентификаторы без текста.
     // typeMs — от входа в обработчик до возврата typeAndSubmit; enterMs — от него до исхода Enter (null, если Enter не ждали).
-    const note = (outcome: SendReason | AttemptOutcome | 'draft', typeMs: number, enterMs: number | null): void => {
+    // Журнал синхронный и при ENOSPC/EACCES бросает: запись не должна ломать отправку, поэтому ошибка гасится.
+    const note = (
+      outcome: SendReason | AttemptOutcome | 'draft' | 'failed',
+      typeMs: number,
+      enterMs: number | null,
+    ): void => {
       if (log === undefined) return;
-      log.info('сообщение в сессию', { op: 'pty.send', ref, chars: clean.length, queueMs, typeMs, enterMs, outcome });
+      try {
+        log.info('сообщение в сессию', {
+          op: 'pty.send',
+          ref,
+          chars: clean.length,
+          queueMs,
+          typeMs,
+          enterMs,
+          outcome,
+        });
+      } catch {
+        // Диагностика не должна ломать основной путь.
+      }
     };
     const refuse = (reason: SendReason): SendResult => {
       note(reason, Math.round(performance.now() - startedAt), null);
@@ -146,8 +163,8 @@ export function createSender(deps: {
     }
 
     waiting.add(key);
+    const enterFrom = performance.now();
     try {
-      const enterFrom = performance.now();
       const outcome = await attempt.done;
       note(outcome, typeMs, Math.round(performance.now() - enterFrom));
       if (outcome === 'submitted') return { inserted: true, submitted: true, reason: null };
@@ -155,6 +172,10 @@ export function createSender(deps: {
       if (outcome === 'blocked') return { inserted: true, submitted: false, reason: 'blocked-before-enter' };
       // Остаётся restarted: попытку отправителя никто не отменяет, а typed бывает только без submit.
       return { inserted: true, submitted: false, reason: 'restarted' };
+    } catch (error) {
+      // Отклонённый Enter (запись в PTY упала): в журнале остаётся след, ошибка уходит вызывающему как раньше.
+      note('failed', typeMs, Math.round(performance.now() - enterFrom));
+      throw error;
     } finally {
       waiting.delete(key);
     }

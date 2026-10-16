@@ -35,12 +35,16 @@ export function createReadyJournal(deps: ReadyJournalDeps): ReadyJournal {
     if (!waiting.delete(refKey(ref))) return;
     const handle = pty.get(ref);
     if (handle === undefined) return;
-    log.info('сессия готова', {
-      op: 'session.ready',
-      ref,
-      provider: handle.provider,
-      readyMs: Math.max(0, now() - handle.startedAt),
-    });
+    try {
+      log.info('сессия готова', {
+        op: 'session.ready',
+        ref,
+        provider: handle.provider,
+        readyMs: Math.max(0, now() - handle.startedAt),
+      });
+    } catch {
+      // Журнал синхронный и при ENOSPC/EACCES бросает: диагностика не должна ломать путь хука и сигнала.
+    }
   }
 
   const unsubscribers = [

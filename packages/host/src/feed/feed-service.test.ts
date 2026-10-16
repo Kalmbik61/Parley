@@ -353,7 +353,7 @@ describe('журнал задержек: feed.firstDelta', () => {
       ([, data]) => (data as { op?: string } | undefined)?.op === 'feed.firstDelta',
     );
 
-  it('после markSent первая пачка пишет feed.firstDelta со sinceSendMs, вторая молчит', () => {
+  it('эхо промпта метку не снимает: запись по первой дельте агента, вторая пачка молчит', () => {
     vi.useFakeTimers();
     let time = 1_000_000;
     start({ now: () => time });
@@ -361,17 +361,23 @@ describe('журнал задержек: feed.firstDelta', () => {
     service.subscribe(REF, client);
 
     service.markSent(REF);
-    time += 1_500;
+    time += 500;
     send(prompt('go'));
+    vi.advanceTimersByTime(50);
+    expect(feedChanged(client)).toHaveLength(1);
+    expect(firstDeltaCalls()).toHaveLength(0);
+
+    time += 1_000;
+    send(pre('t1', 'Bash', { command: 'ls' }));
     vi.advanceTimersByTime(50);
 
     expect(firstDeltaCalls()).toEqual([
       ['лента: первая дельта после отправки', { op: 'feed.firstDelta', ref: REF, sinceSendMs: 1_500 }],
     ]);
 
-    send(pre('t1', 'Bash', { command: 'ls' }));
+    send(pre('t2', 'Bash', { command: 'pwd' }));
     vi.advanceTimersByTime(50);
-    expect(feedChanged(client)).toHaveLength(2);
+    expect(feedChanged(client)).toHaveLength(3);
     expect(firstDeltaCalls()).toHaveLength(1);
   });
 
@@ -382,12 +388,28 @@ describe('журнал задержек: feed.firstDelta', () => {
 
     service.markSent(REF);
     time += 700;
-    send(prompt('go'));
+    send(pre('t1', 'Bash', { command: 'ls' }));
     vi.advanceTimersByTime(50);
 
     expect(firstDeltaCalls()).toEqual([
       ['лента: первая дельта после отправки', { op: 'feed.firstDelta', ref: REF, sinceSendMs: 700 }],
     ]);
+  });
+
+  it('exit процесса снимает метку: следующая дельта записи не даёт', () => {
+    vi.useFakeTimers();
+    let time = 20_000;
+    start({ now: () => time });
+
+    service.markSent(REF);
+    time += 400;
+    fakes.emitExit(REF);
+    vi.advanceTimersByTime(50);
+    time += 60_000;
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    vi.advanceTimersByTime(50);
+
+    expect(firstDeltaCalls()).toHaveLength(0);
   });
 
   it('пустая пачка метку не снимает, без markSent записи нет', async () => {

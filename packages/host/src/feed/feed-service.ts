@@ -174,8 +174,9 @@ export interface FeedService {
    */
   interrupt(ref: SessionRef): void;
   /**
-   * Сообщение из Chat ушло в сессию (`pty.send` с `submitted`): запоминает время. Первая пачка ленты после метки
-   * пишет в журнал задержек `feed.firstDelta` — сколько агент молчал до первого ответа — и метка снимается.
+   * Сообщение из Chat ушло в сессию (`pty.send` с `submitted`): запоминает время. Первая пачка ленты после метки,
+   * где есть не только эхо промпта человека, пишет в журнал задержек `feed.firstDelta` — сколько агент молчал
+   * до первого ответа, — и метка снимается; выход и новый запуск процесса метку тоже снимают.
    */
   markSent(ref: SessionRef): void;
   /** Выключение хоста: всем удержанным хукам `{}`, таймеры сняты. */
@@ -470,9 +471,10 @@ export function createFeedService(
     feed.modeChanged = false;
     feed.revision += 1;
     // Журнал задержек (спека диагностики, A4): запись нужна и без открытого Chat, поэтому до проверки подписчиков.
+    // Эхо промпта человека — не ответ агента: пачка только из промптов метку не снимает.
     const key = refKey(feed.ref);
     const sent = sentAt.get(key);
-    if (sent !== undefined) {
+    if (sent !== undefined && Array.from(upsert.values()).some((item) => item.kind !== 'prompt')) {
       sentAt.delete(key);
       log.info('лента: первая дельта после отправки', {
         op: 'feed.firstDelta',
@@ -1051,6 +1053,8 @@ export function createFeedService(
   // Запуск и возобновление: журнал читается до первого события нового процесса.
   const unsubscribeStart = deps.pty.on('start', (ref) => {
     if (stopped) return;
+    // Новый процесс не ответит на отправку старого: метка дала бы ложные минуты в `feed.firstDelta`.
+    sentAt.delete(refKey(ref));
     void seedAside(ref);
     void armCodexGrace(ref);
   });
@@ -1080,6 +1084,8 @@ export function createFeedService(
 
   const unsubscribeExit = deps.pty.on('exit', (ref) => {
     if (stopped) return;
+    // Ответа вышедшего процесса не будет: метка отправки не должна дожить до чужой пачки.
+    sentAt.delete(refKey(ref));
     graceWaiting.delete(refKey(ref));
     const feed = feeds.get(refKey(ref));
     if (feed === undefined) {

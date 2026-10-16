@@ -77,13 +77,17 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
         // останавливается: заново получит его только после нового `pty.attach`.
         clients.delete(client);
         // Журнал задержек (спека диагностики, A4): отброс клиента — вероятная причина «Chat/терминал отстал».
-        if (deps.log !== undefined) {
-          deps.log.info('клиент PTY отброшен', {
-            op: 'pty.clientDropped',
-            ref,
-            client: client.name,
-            queuedBytes: client.writableLength(),
-          });
+        try {
+          if (deps.log !== undefined) {
+            deps.log.info('клиент PTY отброшен', {
+              op: 'pty.clientDropped',
+              ref,
+              client: client.name,
+              queuedBytes: client.writableLength(),
+            });
+          }
+        } catch {
+          // Журнал синхронный и при ENOSPC/EACCES бросает: диагностика не должна рвать рассылку вывода остальным.
         }
         client.send({ event: 'pty.resync', data: { ref } });
       }

@@ -290,7 +290,7 @@ describe('журнал задержек: op room.create и op rooms.send', () =>
     expect(JSON.stringify(data)).not.toContain('секретный');
   });
 
-  it('rooms.send без requestedAt — queueMs null; отказ правил комнаты записи не пишет', async () => {
+  it('rooms.send без requestedAt — queueMs null, из будущего — 0; отказ правил комнаты записи не пишет', async () => {
     const { dir, workId, ids } = await setup();
     const [a, b] = ids as [string, string];
     const log = makeLog();
@@ -298,6 +298,15 @@ describe('журнал задержек: op room.create и op rooms.send', () =>
     await roomsSend({ projectPath: dir, workId, roomId: null, to: [a], text: 'x', kind: 'note' }, requestWith(log));
     expect(log.info).toHaveBeenCalledTimes(1);
     expect((log.info.mock.calls[0] as [string, Record<string, unknown>])[1].queueMs).toBeNull();
+
+    // Метка из будущего (расхождение часов окна и хоста) даёт 0, а не отрицательное ожидание.
+    log.info.mockClear();
+    await roomsSend(
+      { projectPath: dir, workId, roomId: null, to: [a], text: 'x', kind: 'note', requestedAt: Date.now() + 5_000 },
+      requestWith(log),
+    );
+    expect(log.info).toHaveBeenCalledTimes(1);
+    expect((log.info.mock.calls[0] as [string, Record<string, unknown>])[1].queueMs).toBe(0);
 
     log.info.mockClear();
     await expect(
