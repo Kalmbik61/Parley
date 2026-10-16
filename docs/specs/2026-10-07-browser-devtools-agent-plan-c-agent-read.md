@@ -2140,7 +2140,7 @@ git commit -m "feat(desktop): подпись Agent capture и прозрачна
 
 **Тестовая страница** (свой сервер на 127.0.0.1): заголовок `Agent page`; `console.error('boom from page')`; `console.warn('careful from page')`; `fetch('/api/settings?token=SECRET123&page=2', { method: 'POST', headers: { Authorization: 'Bearer SECRET-AUTH', 'Content-Type': 'application/json' }, body: '{"user":{"name":"ann","password":"hunter2"}}' })`, на который сервер отвечает 500 с `{"error":"db down","session":"S3SS10N"}`; картинка `/missing.png` (404). `SECRETS = ['SECRET123', 'SECRET-AUTH', 'hunter2', 'S3SS10N']`.
 
-- [ ] **Шаг 1. Написать E2E** — три теста (`test.setTimeout(150_000)`), стартующие с `openApp()`:
+- [x] **Шаг 1. Написать E2E** — три теста (`test.setTimeout(150_000)`), стартующие с `openApp()`:
 
   1. **«Чтение страниц чата и комнаты: tabs, console, network с маской, снимок 375×812»:**
      - `lead` открывает `browser_open { url: origin + '/', own: true }` и `{ url: origin + '/?room', room: roomId }`; в ответах `Opened t…` (id в виде `t<n>`), хозяева — `your own chat` и `room <roomId>`;
@@ -2155,9 +2155,9 @@ git commit -m "feat(desktop): подпись Agent capture и прозрачна
      - `window.reload()`: страница панели на месте, `browser_tabs` показывает её (реестр восстановился гидрацией раскладки — задача 14), пауза после перезагрузки сохраняется, если её включить до неё.
   - Общий выключатель «Let agents use the browser» покрыт тестами B2 и юнит-тестом `agent-ops.test.ts` (задача 10); здесь не повторяется.
 
-- [ ] **Шаг 2. Запустить E2E.** `pnpm build && pnpm --filter @parley/desktop exec playwright test e2e/browser-agent-read.spec.ts` → PASS. Если PNG вдвое больше 375×812 — эмуляция A не применила DPR 1 (спайк 0.3, вопрос к задаче 9). Если снимок страницы закрытой панели зависает — смотреть стиль корня поверхности (задача 15) и `CDP_COMMAND_MS`.
+- [x] **Шаг 2. Запустить E2E.** `pnpm build && pnpm --filter @parley/desktop exec playwright test e2e/browser-agent-read.spec.ts` → PASS. Если PNG вдвое больше 375×812 — эмуляция A не применила DPR 1 (спайк 0.3, вопрос к задаче 9). Если снимок страницы закрытой панели зависает — смотреть стиль корня поверхности (задача 15) и `CDP_COMMAND_MS`.
 
-- [ ] **Шаг 3. Закоммитить.**
+- [x] **Шаг 3. Закоммитить.**
 
 ```bash
 git add packages/desktop/e2e/browser-agent-read.spec.ts
