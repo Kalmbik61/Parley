@@ -633,7 +633,8 @@ if (!gotLock) {
       screenDpr: async (guest) => {
         const host = guest.hostWebContents;
         if (host === undefined || host === null) return null;
-        const dpr: unknown = await host.executeJavaScript('window.devicePixelRatio');
+        // Изолированный мир окна: рамочный тест запрещает executeJavaScript мира страницы во всём main.
+        const dpr: unknown = await host.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code: 'window.devicePixelRatio' }]);
         return typeof dpr === 'number' && Number.isFinite(dpr) && dpr > 0 ? dpr : null;
       },
       windowHeight: (guest) => {
