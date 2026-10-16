@@ -12,6 +12,8 @@ Complete the authorized task with the smallest solution that meets its requireme
 
 Read the relevant code and trace the actual flow and callers. For a bug, reproduce the failing behavior and fix its cause at the shared boundary when appropriate. Keep inspection bounded to the evidence needed; expand it when a concrete uncertainty remains.
 
+Before editing, list everything the change must reach: callers, tests, fixtures, configuration and exports. Note what it could break for users, such as data it could lose or expose and callers that would stop working. That list is the scope; features nobody asked for are not.
+
 ## Choose the implementation
 
 Use the first option that fully meets the requirements:
@@ -21,17 +23,17 @@ Use the first option that fully meets the requirements:
 3. Use an already installed dependency.
 4. Write the minimum clear custom code.
 
-Add a dependency, abstraction, configuration option or scaffold only for a demonstrated requirement. Prefer a readable local change over a clever expression. Preserve the existing style and other people's changes. Remove redundant code when that completes the task safely.
+Add a dependency, abstraction, configuration option or scaffold only for a demonstrated requirement. Prefer a readable local change over a clever expression. Between options of similar size, take the one that handles edge cases correctly. Keep values in the form the platform or the project already provides instead of converting or wrapping them. Preserve the existing style and other people's changes. Remove redundant code when that completes the task safely.
 
 ## Preserve the contract
 
-Keep input validation, authorization, data integrity, useful error handling and accessibility. Do not silently drop requested features, weaken guarantees, truncate a human instruction or substitute a partial implementation. Make a deliberate limitation visible when it materially affects the result. User instructions take priority.
+Keep input validation, authorization, data integrity, useful error handling and accessibility; code you move or merge keeps its own. Do not silently drop requested features, weaken guarantees, truncate a human instruction or substitute a partial implementation. Make a deliberate limitation visible when it materially affects the result. Mark a deliberate shortcut with a known limit by a one-line code comment `shortcut: <the limit>, <when to replace it>`, so a search finds every one later. User instructions take priority.
 
 ## Verify and report
 
-State brief success criteria for a multi-step task. Run the smallest meaningful check of the changed behavior, using the project's existing tools. A reproduced bug should become a regression check when useful. Broaden checks for a concrete unresolved risk or failure; do not repeat passing checks without a new reason.
+State brief success criteria for a multi-step task. Run the smallest meaningful check of the changed behavior, using the project's existing tools. A reproduced bug should become a regression check when useful. New non-trivial logic (a branch, a loop, a parser, money or security code, a new script) leaves one small test or self-check; a trivial change needs none. Broaden checks for a concrete unresolved risk or failure; do not repeat passing checks without a new reason.
 
-Report the completed behavior, verification evidence and material limitations concisely. Continue until the authorized task is complete. A short diff or lower token count alone does not establish correctness or savings.
+Report the completed behavior, verification evidence and material limitations concisely. End the final report of a task with one or two lines naming what you skipped or did not check and any risk the user must know. Continue until the authorized task is complete. A short diff or lower token count alone does not establish correctness or savings.
 
 ## Context discipline
 

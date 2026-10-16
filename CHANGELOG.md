@@ -4,6 +4,16 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Changed
+
+- **The built-in minimal-development skill asks for more care around a change.** Before editing, an agent lists
+  what the change must reach and what it could break for users; it marks a deliberate shortcut with a
+  `shortcut: <the limit>, <when to replace it>` comment, leaves a small test for new non-trivial logic, and ends
+  a task's final report with what it skipped and any risk. Copies Parley installed update on the next agent
+  launch; a copy you edited is left alone.
+
 ## 0.14.0
 
 Parley can now package what it knows about its own slowness into one file, so a report about a slow window comes with evidence. Quitting the app now stops the host and its sessions, after a question, and two Codex problems are fixed: sessions that froze until Parley was restarted, and compaction that looked stuck.
