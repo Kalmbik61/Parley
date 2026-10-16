@@ -16,6 +16,14 @@ interface FakeServerOptions {
   methods?: string[];
   /** События сразу после ответа `hello` — как повтор активности настоящего хоста. */
   afterHello?: unknown[];
+  /** pid в ответе `hello`; не задан — pid процесса теста. */
+  pid?: number;
+  /** На `host.shutdown` отвечает, но соединение не закрывает — зависший хост. */
+  ignoreShutdown?: boolean;
+  /** На `host.shutdown` не отвечает вовсе и соединение не закрывает — хост, чей цикл событий стоит. */
+  shutdownHangs?: boolean;
+  /** На `host.info` не отвечает вовсе. */
+  infoHangs?: boolean;
 }
 
 /**
@@ -55,7 +63,7 @@ function startFakeServer(paths: HostPaths, options: FakeServerOptions = {}): Pro
                 result: {
                   hostVersion,
                   protocol: PROTOCOL_VERSION,
-                  pid: process.pid,
+                  pid: options.pid ?? process.pid,
                   ...(options.methods === undefined ? {} : { methods: options.methods }),
                 },
               }),
@@ -64,11 +72,27 @@ function startFakeServer(paths: HostPaths, options: FakeServerOptions = {}): Pro
             continue;
           }
           if (message.method === 'host.shutdown' && typeof message.id === 'number') {
+            if (options.shutdownHangs === true) continue;
             socket.write(encodeLine({ id: message.id, result: { ok: true } }));
+            if (options.ignoreShutdown === true) continue;
             setTimeout(() => {
               socket.end();
               server.close();
             }, 10);
+          }
+          if (message.method === 'host.info' && typeof message.id === 'number' && options.infoHangs !== true) {
+            socket.write(
+              encodeLine({
+                id: message.id,
+                result: {
+                  hostVersion,
+                  pid: options.pid ?? process.pid,
+                  startedAt: new Date().toISOString(),
+                  clients: 1,
+                  liveSessions: options.liveSessions ?? 0,
+                },
+              }),
+            );
           }
         }
       });
@@ -472,4 +496,177 @@ describe('HostConnection', () => {
     expect(accepted).toBe(0);
     server.close();
   }, 10000);
+});
+
+/**
+ * Выход из приложения гасит хост (решение 2026-10-16): `stopHost` останавливает хост насовсем — без нового запуска и
+ * переподключения; хост завис — добивается по pid (SIGTERM, затем SIGKILL). Процессы — через подменяемый `processes`:
+ * pid в тестах вымышленный, сигналы настоящим процессам не уходят.
+ */
+describe('HostConnection: остановка хоста при выходе', () => {
+  let home: string;
+  let paths: HostPaths;
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'hq-'));
+    paths = {
+      dir: path.join(home, 'host'),
+      socket: path.join(home, 'host', 'host.sock'),
+      token: path.join(home, 'host', 'host.token'),
+      pid: path.join(home, 'host', 'host.pid'),
+      log: path.join(home, 'host', 'host.log'),
+    };
+  });
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  /** Процессы-заглушки: `alive` решает, жив ли pid; сигналы — в журнал. */
+  function fakeProcesses(alive: (pid: number) => boolean, isHost: (pid: number) => boolean = () => true) {
+    const signals: Array<[number, string]> = [];
+    return {
+      signals,
+      processes: {
+        kill: vi.fn((pid: number, signal: NodeJS.Signals) => {
+          signals.push([pid, signal]);
+        }),
+        isAlive: vi.fn(alive),
+        isHost: vi.fn(isHost),
+      },
+    };
+  }
+
+  const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('хост вышел по host.shutdown — «shutdown», сигналов нет; окно не переподключается и хост не поднимает', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { pid: 999_001 });
+    const spawn = vi.fn();
+    const { processes, signals } = fakeProcesses(() => false);
+    const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 1000, processes });
+    await connection.connect();
+
+    await expect(connection.stopHost({ timeoutMs: 1000, killGraceMs: 100 })).resolves.toBe('shutdown');
+    // Дольше первой паузы переподключения (0,5 с): петля не должна ожить.
+    await settle(1200);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(signals).toEqual([]);
+    connection.close();
+    server.close();
+  }, 10_000);
+
+  it('хост не закрылся за срок — SIGTERM по pid из hello; жив и дальше — SIGKILL: «killed»', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { pid: 999_002, ignoreShutdown: true });
+    const { processes, signals } = fakeProcesses(() => true);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000, processes });
+    await connection.connect();
+
+    await expect(connection.stopHost({ timeoutMs: 200, killGraceMs: 100 })).resolves.toBe('killed');
+    expect(signals).toEqual([
+      [999_002, 'SIGTERM'],
+      [999_002, 'SIGKILL'],
+    ]);
+    connection.close();
+    server.close();
+  }, 10_000);
+
+  it('хост не отвечает на host.shutdown вовсе — срок всё равно выходит, хост добивается по pid', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { pid: 999_008, shutdownHangs: true });
+    const { processes, signals } = fakeProcesses(() => true);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000, processes });
+    await connection.connect();
+
+    const started = Date.now();
+    await expect(connection.stopHost({ timeoutMs: 200, killGraceMs: 100 })).resolves.toBe('killed');
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(signals).toEqual([
+      [999_008, 'SIGTERM'],
+      [999_008, 'SIGKILL'],
+    ]);
+    connection.close();
+    server.close();
+  }, 10_000);
+
+  it('SIGTERM хватило — SIGKILL не шлётся', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { pid: 999_003, ignoreShutdown: true });
+    let terminated = false;
+    const { processes, signals } = fakeProcesses(() => !terminated);
+    processes.kill.mockImplementation((pid: number, signal: NodeJS.Signals) => {
+      signals.push([pid, signal]);
+      if (signal === 'SIGTERM') terminated = true;
+    });
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000, processes });
+    await connection.connect();
+
+    await expect(connection.stopHost({ timeoutMs: 200, killGraceMs: 100 })).resolves.toBe('killed');
+    expect(signals).toEqual([[999_003, 'SIGTERM']]);
+    connection.close();
+    server.close();
+  }, 10_000);
+
+  it('связи нет: живой хост по host.pid гасится по pid; чужой процесс под тем же pid не трогается', async () => {
+    await mkdir(paths.dir, { recursive: true });
+    await writeFile(paths.pid, `999004\n${new Date().toISOString()}\n`, 'utf8');
+    let terminated = false;
+    const { processes, signals } = fakeProcesses(() => !terminated);
+    processes.kill.mockImplementation((pid: number, signal: NodeJS.Signals) => {
+      signals.push([pid, signal]);
+      terminated = true;
+    });
+    const spawn = vi.fn();
+    const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 300, processes });
+
+    await expect(connection.stopHost({ timeoutMs: 200, killGraceMs: 100 })).resolves.toBe('killed');
+    expect(signals).toEqual([[999_004, 'SIGTERM']]);
+    expect(spawn).not.toHaveBeenCalled();
+
+    const foreign = fakeProcesses(() => true, () => false);
+    const other = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 300, processes: foreign.processes });
+    await expect(other.stopHost({ timeoutMs: 200, killGraceMs: 100 })).resolves.toBe('none');
+    expect(foreign.signals).toEqual([]);
+  }, 10_000);
+
+  it('связи нет и pid-файла нет — «none», сигналов нет', async () => {
+    const { processes, signals } = fakeProcesses(() => true);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 300, processes });
+    await expect(connection.stopHost({ timeoutMs: 200, killGraceMs: 100 })).resolves.toBe('none');
+    expect(signals).toEqual([]);
+  });
+
+  it('liveSessions: связь есть — число из host.info; host.info молчит — null по сроку', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { pid: 999_005, liveSessions: 18 });
+    const { processes } = fakeProcesses(() => true);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000, processes });
+    await connection.connect();
+    await expect(connection.liveSessions(500)).resolves.toBe(18);
+    connection.close();
+    server.close();
+
+    await writeToken(paths);
+    const silent = await startFakeServer(paths, { pid: 999_006, infoHangs: true });
+    const second = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000, processes });
+    await second.connect();
+    const started = Date.now();
+    await expect(second.liveSessions(200)).resolves.toBeNull();
+    expect(Date.now() - started).toBeLessThan(2000);
+    second.close();
+    silent.close();
+  }, 10_000);
+
+  it('liveSessions без связи: хоста нет — 0; живой хост по host.pid — null (не знаем, сколько)', async () => {
+    const none = fakeProcesses(() => false);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 300, processes: none.processes });
+    await expect(connection.liveSessions(200)).resolves.toBe(0);
+
+    await mkdir(paths.dir, { recursive: true });
+    await writeFile(paths.pid, `999007\n${new Date().toISOString()}\n`, 'utf8');
+    const alive = fakeProcesses(() => true);
+    const other = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 300, processes: alive.processes });
+    await expect(other.liveSessions(200)).resolves.toBeNull();
+  });
 });

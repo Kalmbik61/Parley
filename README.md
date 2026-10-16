@@ -88,13 +88,13 @@ not come back for that version; a newer one shows it again. "Later" only closes 
 returns with the next check or the next start. Nothing is downloaded or installed, and a network
 error is silent. A window started from source (`pnpm dev:desktop`) does not check at all.
 
-To update, quit Parley (⌘Q), download the new `.dmg` and replace Parley in Applications; your
+To update, quit Parley (⌘Q; this stops the host and its sessions, see "The window"), download the new `.dmg` and replace Parley in Applications; your
 data lives outside the app and stays. Because the app is signed ad hoc, macOS treats every build
 as a new app: the "First launch" steps repeat for each downloaded `.dmg`, and macOS may ask again
 for access to folders such as Documents, Desktop and Downloads.
 
-Then open Parley and restart the host. The window notices that the host still runs from the
-previous app and says so: a notice with "Restart host…" and "Host is outdated — restart" in the
+If you only closed the window instead of quitting,
+the host still runs from the previous app: open Parley and restart it. The window notices that and says so: a notice with "Restart host…" and "Host is outdated — restart" in the
 status bar (the palette, ⌘J, has "Restart host…" too). The host outlives the window, and the
 agents it started keep command lines that point into the old app: the status line script, the
 MCP server and, with "Answer Codex approvals in Parley" on, the Codex hook launcher. The replacement can remove those files (the folder
@@ -336,6 +336,13 @@ window starts the host itself, with the Node 22 inside the app (when you run fro
 build without `fetch-node`, with the `node` from your login shell's `PATH`), and does not start
 a second one while the `host.pid` lock is held. The host exits by itself after 5 minutes with
 no windows and no live sessions. A second launch of the window focuses the first.
+
+Closing the window leaves the agents working. Quitting the app (Quit in the Dock menu, ⌘Q)
+stops the host and every session: it first asks, with the number of running sessions, and with
+no live sessions it quits without a question. A host that does not answer within 10 seconds is
+stopped by its pid. A system restart or shutdown asks nothing and stops the host at once. The
+next launch lists the interrupted sessions so you can bring them back; they do not restart on
+their own.
 
 The look of the window is Organic: a sand background, terracotta and sage accents, the
 Figtree and Caprasimo fonts, shadcn/ui primitives. The terminal sits on the window sheet (its
