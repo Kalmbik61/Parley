@@ -151,7 +151,11 @@ describe('метод browser.agentResult и событие browser.agentOp', () 
     const parse = (params: unknown): boolean => browserAgentResultParams.safeParse(params).success;
     expect(parse({ opId: 'op-1', ok: true, result: { tab: 't1', url: 'http://localhost/', reused: false, notes: [] } })).toBe(true);
     expect(parse({ opId: 'op-1', ok: false, error: { code: 'not_loopback', message: 'Only localhost.' } })).toBe(true);
-    expect(parse({ opId: 'op-1', ok: false, error: { code: 'boom', message: 'x' } })).toBe(false);
+    // Код окна другой сборки хост принимает и сам приводит к `unsupported`: схема не должна терять ответ.
+    expect(parse({ opId: 'op-1', ok: false, error: { code: 'boom', message: 'x' } })).toBe(true);
+    expect(parse({ opId: 'op-1', ok: false, error: { code: '', message: 'x' } })).toBe(false);
+    expect(parse({ opId: 'op-1', ok: false, error: { code: 'c'.repeat(65), message: 'x' } })).toBe(false);
+    expect(parse({ opId: 'op-1', ok: false, error: { code: 'timeout', message: 'x'.repeat(10_001) } })).toBe(false);
     expect(parse({ opId: '', ok: true, result: null })).toBe(false);
     expect(parse({ ok: true, result: null })).toBe(false);
     expect(parse({ opId: 'op-1', ok: true, result: null, extra: 1 })).toBe(false);

@@ -211,6 +211,11 @@ describe('open (спека 5.1 browser_open)', () => {
     expect(asked).toEqual([]);
   });
 
+  it('сообщение отказа не длиннее 2000 знаков', async () => {
+    const { run } = setup();
+    expect(messageOf(await run({ code: '1' }, REF, 'x'.repeat(5000)))).toHaveLength(2000);
+  });
+
   it('предел вкладок — bad_request с советом; работы нет в окне — window_not_connected', async () => {
     const limit = setup({ reply: { error: 'limit' } });
     const refused = await limit.run({ url: PAGE });

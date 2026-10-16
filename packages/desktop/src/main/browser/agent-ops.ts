@@ -85,7 +85,7 @@ type ArgsSchema = { safeParse(value: unknown): { success: true; data: unknown } 
 const ARGS: Partial<Record<string, ArgsSchema>> = browserAgentArgs;
 
 const ok = (result: unknown): BrowserAgentResult => ({ ok: true, result });
-const failure = (code: BrowserAgentErrorCode, message: string): BrowserAgentResult => ({ ok: false, error: { code, message } });
+const failure = (code: BrowserAgentErrorCode, message: string): BrowserAgentResult => ({ ok: false, error: { code, message: message.slice(0, 2000) } });
 
 /** Пояснение агенту, когда работа вне LRU окна: вкладка в раскладке есть, гостя пока нет. */
 export const NOT_MOUNTED_NOTE = "The workspace is not open in Parley's window, so the page loads when the human opens it.";

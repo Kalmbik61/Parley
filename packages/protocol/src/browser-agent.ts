@@ -21,6 +21,9 @@ export const BROWSER_AGENT_FEATURE = 'browser-agent';
 export const BROWSER_AGENT_OPS = ['tabs', 'console', 'network', 'screenshot', 'open'] as const;
 export type BrowserAgentOp = (typeof BROWSER_AGENT_OPS)[number];
 
+/** Возможность окна «исполняю операцию `<op>`» в `hello.features`: окно старой сборки заявляет `browser-agent`, но не знает новых операций. */
+export const BROWSER_AGENT_OP_FEATURE = (op: BrowserAgentOp): string => `${BROWSER_AGENT_FEATURE}:${op}`;
+
 /** Коды отказов (спека 5.1). B2 отдал шесть, C добавил `no_tab`, `tab_hidden`, `tab_not_loaded`; остальные коды спеки добавляет D. */
 export const BROWSER_AGENT_ERROR_CODES = [
   'not_loopback',
@@ -146,7 +149,9 @@ export const browserAgentResultParams = z.union([
   z.strictObject({
     opId,
     ok: z.literal(false),
-    error: z.strictObject({ code: z.enum(BROWSER_AGENT_ERROR_CODES), message: z.string().max(2000) }),
+    // Код — любая строка: окно другой сборки может прислать код, которого хост не знает; хост приводит его к `unsupported`
+    // (`browser.agentResult`), а не теряет ответ вместе с операцией. Длинное сообщение хост режет сам.
+    error: z.strictObject({ code: z.string().min(1).max(64), message: z.string().max(10_000) }),
   }),
 ]);
 
