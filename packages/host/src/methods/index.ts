@@ -1,5 +1,6 @@
-import type { BrowserAgentResult, MethodName, NotificationName, Params } from '@parley/protocol';
+import type { BrowserAgentResult, MethodName, NotificationName, Params, SendResult, SessionRef } from '@parley/protocol';
 import type { BrowserEndpoint } from '../agent/browser-endpoint.js';
+import type { AssistantService } from '../assistant/assistant-service.js';
 import type { BacklogService } from '../backlog/backlog-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { Client } from '../client.js';
@@ -23,6 +24,7 @@ import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
 import { createCapabilitiesHandlers, createCapabilitiesList } from './capabilities.js';
+import { createAssistantHandlers } from './assistant.js';
 import { createBacklogHandlers } from './backlog.js';
 import { contextMessages, contextText } from './context-pages.js';
 import { createChangesHandlers } from './changes.js';
@@ -96,6 +98,10 @@ export interface MethodDeps {
   profiler?: Profiler;
   /** Журнал хоста для записей задержек, которые пишут не обработчики с `request.host.log` (`pty.clientDropped` в потоке PTY). */
   log?: Log;
+  /** Общий отправитель хоста (`createSender`): окно (`pty.send`) и помощник делят «свой Enter в полёте»; без него `pty.*` заводит свой. */
+  send?: (params: { ref: SessionRef; text: string; submit: boolean }) => Promise<SendResult>;
+  /** Помощник на острове (спека 2026-10-14); без него методов `assistant.*` у хоста нет. */
+  assistant?: AssistantService;
 }
 
 /**
@@ -178,6 +184,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     ...createMemoryHandlers(),
     ...createHistoryHandlers(),
     ...(deps.planEffects ? createPlanHandlers(deps.planEffects) : {}),
+    ...(deps.assistant === undefined ? {} : createAssistantHandlers(deps.assistant)),
     'host.info': hostInfo as AnyHandler,
     'host.shutdown': hostShutdown as AnyHandler,
     'works.list': worksList(deps.works) as AnyHandler,

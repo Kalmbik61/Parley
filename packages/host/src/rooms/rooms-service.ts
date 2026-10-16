@@ -39,6 +39,7 @@ import {
   setRoomLead,
   updateMap,
   workPaths,
+  type MessageVia,
   type Room,
   type WorkMap,
 } from '@parley/core';
@@ -164,7 +165,7 @@ export async function deliverRecipeToNewLeads(projectPath: string, map: WorkMap)
  * Письмо человека. Без комнаты — ровно один адресат-сессия; в комнате адресаты
  * должны быть её участниками, пустой `to` — рассылка всем (`recipientsOf`). Комната в архиве — отказ.
  */
-export async function sendHumanLetter(input: Params<'rooms.send'>): Promise<string> {
+export async function sendHumanLetter(input: Params<'rooms.send'>, options: { via?: MessageVia } = {}): Promise<string> {
   const { projectPath, workId, roomId, to, text, kind } = input;
   assertWork(projectPath, workId);
   let messageId = '';
@@ -176,14 +177,27 @@ export async function sendHumanLetter(input: Params<'rooms.send'>): Promise<stri
         if (!isMember(room, id)) throw bad(`session ${id} is not a participant of room ${roomId}`);
         assertDeliverable(map, id);
       }
-      messageId = addMessage(map, { from: HUMAN, to, text, kind, roomId }).id;
+      messageId = addMessage(map, {
+        from: HUMAN,
+        to,
+        text,
+        kind,
+        roomId,
+        ...(options.via === undefined ? {} : { via: options.via }),
+      }).id;
       return;
     }
 
     if (to.length !== 1) throw bad('without a room, exactly one addressee in to is required');
     const target = to[0] as string;
     assertDeliverable(map, target);
-    messageId = addMessage(map, { from: HUMAN, to: [target], text, kind }).id;
+    messageId = addMessage(map, {
+      from: HUMAN,
+      to: [target],
+      text,
+      kind,
+      ...(options.via === undefined ? {} : { via: options.via }),
+    }).id;
   });
   return messageId;
 }

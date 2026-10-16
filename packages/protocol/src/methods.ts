@@ -19,6 +19,8 @@ import { capabilityMcpAdd, capabilityMcpTarget } from './capability-actions.js';
 import type { CapabilityActionResult } from './capability-actions.js';
 import { planMethodSchemas } from './plan-actions.js';
 import type { PlanMethodResults } from './plan-actions.js';
+import { assistantMethodSchemas } from './assistant.js';
+import type { AssistantMethodResults } from './assistant.js';
 import { journalMethodSchemas } from './journal.js';
 import type { JournalMethodResults } from './journal.js';
 import { memoryMethodSchemas } from './memory.js';
@@ -82,6 +84,7 @@ export const EFFORT_TOKEN_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 
 /** Схемы параметров запросов (с ответом, с числовым `id`). */
 export const METHODS = {
+  ...assistantMethodSchemas,
   ...capabilityPluginMethodSchemas,
   ...capabilitySkillMethodSchemas,
   ...backlogMethodSchemas,
@@ -304,7 +307,7 @@ export const NOTIFICATIONS = {
   'activity.seen': z.object({ ref: sessionRef }),
 } as const;
 
-export interface Results extends CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults, JournalMethodResults, MemoryMethodResults, HistoryMethodResults, ContextPageMethodResults {
+export interface Results extends AssistantMethodResults, CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults, JournalMethodResults, MemoryMethodResults, HistoryMethodResults, ContextPageMethodResults {
   /** `methods` — все методы и уведомления хоста; нет поля — хост до этапа 3 (спека 3.2). */
   /** `features` — что хост умеет сверх протокола 1 (например, компактные снимки): нет поля — хост до P35. */
   hello: { hostVersion: string; protocol: number; pid: number; methods?: string[]; features?: string[] };

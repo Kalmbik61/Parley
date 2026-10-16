@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RequestInfo } from '../context.js';
+import type { AssistantService } from '../assistant/assistant-service.js';
 import { createHostHandlers, WORKS_GATED_METHODS, WORKS_GATED_NOTIFICATIONS } from './index.js';
 import type { MethodDeps } from './index.js';
 
@@ -41,6 +42,13 @@ it('registers the window-only decisions list and room history actions', () => {
   const handlers = createHostHandlers(deps);
   for (const name of ['decisions.list', 'rooms.history.get', 'rooms.history.share', 'rooms.history.unshare'] as const)
     expect(handlers.methods[name]).toBeTypeOf('function');
+});
+
+it('assistant.* регистрируются, только если сервис помощника передан', () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  const assistant = {} as unknown as AssistantService;
+  expect(createHostHandlers({ ...deps, assistant }).methods['assistant.ask']).toBeTypeOf('function');
+  expect(createHostHandlers(deps).methods['assistant.ask']).toBeUndefined();
 });
 
 it('registers the window-only project memory and history search methods', () => {
