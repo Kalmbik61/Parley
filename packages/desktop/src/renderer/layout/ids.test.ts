@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FileRootSpec } from '../../shared/layout-types.js';
-import { nodeId, tabId } from './ids.js';
+import { nodeId, ownerKey, ownerOfKey, ownerTabId, panelPageId, tabId } from './ids.js';
 
 /** Подставной `random`: считает от 0, каждый вызов — следующий hex-разряд (тест 15). */
 function stubRandom(): () => number {
@@ -56,5 +56,25 @@ describe('nodeId', () => {
 
   it('без random всё равно даёт форму prefix-6hex (реальный Math.random)', () => {
     expect(nodeId('g')).toMatch(/^g-[0-9a-f]{6}$/);
+  });
+});
+
+describe('панели браузера: id страницы и ключ хозяина (спека браузера 3.10)', () => {
+  it('panelPageId — bp-<6 hex>; подставной random детерминирован', () => {
+    expect(panelPageId(stubRandom())).toBe('bp-012345');
+    expect(panelPageId()).toMatch(/^bp-[0-9a-f]{6}$/);
+  });
+
+  it('ownerKey: session:<id> и room:<id>; ownerOfKey — обратно; не ключ — null', () => {
+    expect(ownerKey({ kind: 'session', sessionId: 's-01' })).toBe('session:s-01');
+    expect(ownerKey({ kind: 'room', roomId: 'r-01' })).toBe('room:r-01');
+    expect(ownerOfKey('session:s-01')).toEqual({ kind: 'session', sessionId: 's-01' });
+    expect(ownerOfKey('room:r-01')).toEqual({ kind: 'room', roomId: 'r-01' });
+    for (const bad of ['', 'session:', 'room:', 'terminal:s-01', 's-01', 'Session:s-01']) expect(ownerOfKey(bad), bad).toBeNull();
+  });
+
+  it('ownerTabId: вкладка вида хозяина — терминал сессии или комната', () => {
+    expect(ownerTabId({ kind: 'session', sessionId: 's-01' })).toBe('terminal:s-01');
+    expect(ownerTabId({ kind: 'room', roomId: 'r-01' })).toBe('room:r-01');
   });
 });

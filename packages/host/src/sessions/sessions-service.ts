@@ -107,6 +107,13 @@ export interface CreateSessionInput {
    */
   model?: string | null;
   effort?: string | null;
+  /**
+   * Облегчённый запуск (спека «меньше ходов и легче контекст», C2.2): явный выбор окна. Ложится в запись сессии на
+   * всех путях ниже, и `resume`, автозапуск и подъём письмом берут его оттуда. Без поля (старое окно, одиночная
+   * сессия человека) записи не меняются — сессия без lean. Сессии агентов (`spawn_session`) решают по настройке
+   * `leanAgents` сами при создании записи в core.
+   */
+  lean?: boolean;
 }
 
 export type LaunchMode = 'launch' | 'resume' | 'new';
@@ -179,6 +186,11 @@ export interface SessionsFeedOptions {
    * при включённой настройке `codexApprovals` и адресе приёмника; нет — хуки Codex не включаются.
    */
   codexHookCommand?: () => Promise<string | undefined>;
+  /**
+   * Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): адрес эндпоинта (`null` — не слушает) и токены на
+   * запуск. Всем провайдерам, в отличие от хуков ленты; без него сессии запускаются без инструмента `browser_open`.
+   */
+  agent?: { url(): string | null; register(ref: SessionRef): string; unregister(ref: SessionRef): void };
 }
 
 /** Ключ работы для склейки снимков «до» и «после» в autoLaunch. */
@@ -378,6 +390,7 @@ export function createSessionsService(
     const key = refKey(ref);
     // Токен приёмника живёт, пока жив процесс: `SessionEnd` приходит до выхода, позже хуков нет.
     hooks?.unregister(ref);
+    feed.agent?.unregister(ref);
     const done = (starting.get(key) ?? Promise.resolve())
       .then(() =>
         finishExited(ref.projectPath, ref.workId, ref.sessionId, {
@@ -473,6 +486,7 @@ export function createSessionsService(
     // Резерв слота бюджета держится до исхода: процесс стартовал — `spent`, любой отказ до старта — `released`.
     let attemptId: string | null = null;
     let processStarted = false;
+    let agentChannel: { url: string; token: string } | undefined;
     try {
       const map = await timer.step('readMap', () => readMap(ref.projectPath, ref.workId));
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -564,12 +578,17 @@ export function createSessionsService(
       const roleCatalog = feed.roleCatalog
         ? await timer.step('roles', () => feed.roleCatalog!(session.worktree?.path ?? ref.projectPath))
         : undefined;
+      // Канал агента к браузеру (спека браузера 3.7): свой токен на каждый запуск, у всех провайдеров. Адрес и токен
+      // уходят только в конфиг MCP-сервера, в окружение процесса — нет.
+      const agentUrl = feed.agent?.url() ?? null;
+      if (agentUrl !== null && feed.agent !== undefined) agentChannel = { url: agentUrl, token: feed.agent.register(ref) };
       const planFn = mode === 'resume' ? planResume : mode === 'new' ? planNew : planLaunch;
       const plan = await timer.step('plan', () => planFn(ref.projectPath, ref.workId, session, {
         channel: false,
         ...(roleCatalog === undefined ? {} : { roleCatalog }),
         ...(hookUrl === undefined ? {} : { hookUrl }),
         ...(codexHookCommand === undefined ? {} : { codexHookCommand }),
+        ...(agentChannel === undefined ? {} : { agent: agentChannel }),
         ...(options.prompt === undefined ? {} : { prompt: options.prompt }),
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.effort === undefined ? {} : { effort: options.effort }),
@@ -686,6 +705,8 @@ export function createSessionsService(
       });
       throw error;
     } finally {
+      // Процесс не стартовал — токен канала никому не нужен.
+      if (agentChannel !== undefined && !processStarted) feed.agent?.unregister(ref);
       // Отмена освобождает только свой ожидающий слот: резервы других сессий и прошлых поколений остаются.
       if (attemptId !== null && !processStarted) await settleLaunch(ref, attemptId, 'released');
       launching.delete(key);
@@ -721,9 +742,16 @@ export function createSessionsService(
    * провайдер из диалога окна должны остаться — иначе выбор человека молча терялся бы.
    * Пустой ярлык оставляет имя по умолчанию: автозаголовок Claude Code его не меняет
    * (спека архива комнат, раздел 14). Модель и усилие ложатся в запись так же, как их
-   * пишет `spawn_session`: без выбора полей нет.
+   * пишет `spawn_session`: без выбора полей нет; так же и `lean`.
    */
-  async function applyChoice(ref: SessionRef, label: string, provider: string, role: SessionRole | null, choice: LaunchChoice): Promise<void> {
+  async function applyChoice(
+    ref: SessionRef,
+    label: string,
+    provider: string,
+    role: SessionRole | null,
+    choice: LaunchChoice,
+    lean: boolean | undefined,
+  ): Promise<void> {
     const trimmed = label.trim();
     await updateMap(ref.projectPath, ref.workId, (map) => {
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -733,6 +761,7 @@ export function createSessionsService(
       session.role = role;
       if (choice.model !== undefined) session.model = choice.model;
       if (choice.effort !== undefined) session.effort = choice.effort;
+      if (lean !== undefined) session.lean = lean;
     });
   }
 
@@ -799,7 +828,7 @@ export function createSessionsService(
     timer: ReturnType<typeof createStepTimer>,
     logged: { sessionId?: string },
   ): Promise<SessionRef> {
-    const { projectPath, workId, provider, label, task, parent, worktree } = input;
+    const { projectPath, workId, provider, label, task, parent, worktree, lean } = input;
     // Secret-dependent GLM must refuse before every create branch. Other providers keep their
     // existing create/launch failure behavior; all launches still use the shared preflight below.
     if ((await timer.step('providers', () => loadProviders()))[provider]?.runner.secret !== undefined) {
@@ -834,7 +863,7 @@ export function createSessionsService(
       const created = await timer.step('record', () => createNewSession(projectPath, null));
       const ref = { projectPath, workId: created.workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
-      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice));
+      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, null, false));
       return timer.step('launch', () => createInteractive(ref, 'new', choice));
     }
@@ -843,7 +872,7 @@ export function createSessionsService(
       const created = await timer.step('record', () => createNewSession(projectPath, workId));
       const ref = { projectPath, workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
-      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice));
+      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, null, false));
       return timer.step('launch', () => createInteractive(ref, 'new', choice));
     }
@@ -852,7 +881,7 @@ export function createSessionsService(
       const created = await timer.step('record', () => createChildSession(projectPath, workId, parent));
       const ref = { projectPath, workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
-      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice));
+      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, parent, true));
       return timer.step('launch', () => createInteractive(ref, 'launch', choice));
     }
@@ -865,6 +894,7 @@ export function createSessionsService(
       contextFrom: parent === null ? [] : [parent],
       role,
       ...choice,
+      ...(lean === undefined ? {} : { lean }),
     }));
     logged.sessionId = sessionId;
     const ref = { projectPath, workId, sessionId };

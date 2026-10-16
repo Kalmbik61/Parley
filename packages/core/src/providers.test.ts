@@ -1370,6 +1370,30 @@ describe('codex: запуск и возобновление (спека комн
     expect(substituteArgs(['-c', 'a=1', '{codexHooks}'], { codexHooks: ['-c', 'b=2'] })).toEqual(['-c', 'a=1', '-c', 'b=2']);
   });
 
+  it('{leanFlags}: у Claude и GLM сразу за --settings, у Codex в общих -c; без значения выпадает, не унося соседний флаг', () => {
+    for (const id of ['claude', 'glm'] as const) {
+      for (const template of [PROVIDERS[id].runner.args!, PROVIDERS[id].runner.resumeArgs!]) {
+        expect(template[template.indexOf('{settingsFile}') + 1]).toBe('{leanFlags}');
+      }
+    }
+    expect(PROVIDERS.codex.runner.args).toContain('{leanFlags}');
+    expect(PROVIDERS.codex.runner.resumeArgs).toContain('{leanFlags}');
+    const claude = { sessionUuid: 'u', mcpConfig: '/m.json', settingsFile: '/s.json' };
+    const plain = startCommand(PROVIDERS.claude, claude).args;
+    expect(plain).not.toContain('{leanFlags}');
+    expect(plain).not.toContain('--strict-mcp-config');
+    const lean = startCommand(PROVIDERS.claude, { ...claude, leanFlags: ['--strict-mcp-config'] }).args;
+    expect(lean.slice(lean.indexOf('--settings'), lean.indexOf('--settings') + 3)).toEqual(['--settings', '/s.json', '--strict-mcp-config']);
+    expect(lean.filter(arg => arg !== '--strict-mcp-config')).toEqual(plain);
+    const pairs = ['-c', 'mcp_servers.a.enabled=false'];
+    const codexPlain = startCommand(PROVIDERS.codex, subs).args;
+    const codexLean = startCommand(PROVIDERS.codex, { ...subs, leanFlags: pairs }).args;
+    expect(codexLean).toHaveLength(codexPlain.length + pairs.length);
+    expect(resumeCommand(PROVIDERS.codex, { ...subs, providerSessionId: 'uuid-1', leanFlags: pairs }).args).toContain('mcp_servers.a.enabled=false');
+    expect(substituteArgs(['-c', 'a=1', '{leanFlags}'], {})).toEqual(['-c', 'a=1']);
+    expect(substituteArgs(['--flag', '{leanFlags}'], {})).toEqual(['--flag']);
+  });
+
   it('каждое -c — настоящий TOML: Codex не возьмёт его строкой', () => {
     for (const args of [
       startCommand(PROVIDERS.codex, subs).args,

@@ -4,6 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   bothEnv,
+  isMember,
+  isRoomArchived,
   isStaleHostLock,
   migrateProjects,
   parleyHome,
@@ -47,6 +49,7 @@ import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
 import { createHistoryService } from './rooms/history-service.js';
+import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { createReadyJournal } from './sessions/ready-journal.js';
@@ -272,6 +275,18 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activity: activityService,
     pty: ptyManager,
   }, options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs });
+  // Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): путь `/agent/browser` на сервере хуков и свой
+  // реестр токенов — у всех провайдеров. Операцию исполняет окно с возможностью `browser-agent`.
+  const browserEndpoint = createBrowserEndpoint({
+    log,
+    clients: () => handle.context.clients(),
+    // Комнаты сессии — из карты в памяти службы работ (спека 3.7: чтения с диска на пути операции нет).
+    roomsOf: (ref) =>
+      worksService
+        .entry(ref.projectPath, ref.workId)
+        ?.map.rooms.filter((room) => isMember(room, ref.sessionId) && !isRoomArchived(room))
+        .map((room) => room.id) ?? [],
+  });
   // Журнал задержек (спека диагностики хоста, A4): «сессия готова» по первому хуку или сигналу ready Codex.
   const readyJournal = createReadyJournal({ log, pty: ptyManager });
   handle.context.onShutdown(async () => readyJournal.stop());
@@ -289,6 +304,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       }
       feedService.onHook(request);
     },
+    routes: { [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res) },
   });
 
   // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт, а
@@ -325,12 +341,26 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     worksService,
     ptyManager,
     activityService,
-    { hooks: hookServer, providerVersions, codexHookCommand: codexHookCommandOnce },
+    {
+      hooks: hookServer,
+      providerVersions,
+      codexHookCommand: codexHookCommandOnce,
+      agent: {
+        url: () => {
+          const origin = hookServer.origin();
+          return origin === null ? null : `${origin}${AGENT_BROWSER_PATH}`;
+        },
+        register: (ref) => browserEndpoint.register(ref),
+        unregister: (ref) => browserEndpoint.unregister(ref),
+      },
+    },
   );
   handle.context.onShutdown(() => sessionsService.stopAll());
   // После остановки сессий: их `SessionEnd` ещё доходят до ленты и получают ответ. Потом всем
   // висящим хукам — `{}`, и приёмник закрывается.
   handle.context.onShutdown(async () => {
+    // Висящим операциям агента — `window_not_connected`, а не обрыв соединения.
+    browserEndpoint.close();
     await feedService.stop();
     await hookServer.close();
   });
@@ -418,6 +448,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     compaction: compactionService,
     worktrees: worktreesService,
     feed: feedService,
+    browserAgent: browserEndpoint,
     health,
     profiler,
     log: handle.context.log,
@@ -442,6 +473,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     unregisterClient: (client) => {
       handle.removeClient(client);
       feedService.dropClient(client);
+      browserEndpoint.dropClient(client);
       handlers.dropClient(client);
       backlogService.removeClient(client.id);
     },

@@ -53,6 +53,7 @@ import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { S, errorText } from '../../../shared/strings.js';
 import { useMarkRead } from '../../attention/use-mark-read.js';
+import { PanelToggle } from '../../browser/panel/PanelToggle.js';
 import { addAttachments } from '../../chat/attachments.js';
 import { useHostSupports } from '../../lib/capabilities.js';
 import { cn } from '../../lib/cn.js';
@@ -450,6 +451,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       className={cn('flex h-full min-h-0 min-w-0 flex-col', dropping && 'ring-2 ring-inset ring-ring')}
     >
       <RoomHeader
+        browserToggle={archived ? undefined : <PanelToggle workKey={workKey(entry.projectPath, entry.map.work.id)} owner={{ kind: 'room', roomId }} />}
         contextChip={<RoomContextChip bridge={bridge} roomTitle={model.title} participants={model.participants} />}
         participantContext={(participant: ParticipantModel) =>
           // Без чипа (спящий, старый хост без `context`) карточка остаётся прежней — одна кнопка на обе строки.

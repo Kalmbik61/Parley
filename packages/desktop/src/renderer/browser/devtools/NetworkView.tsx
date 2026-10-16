@@ -6,6 +6,8 @@
  * - Name: путь и query, у чужого origin — ещё хост.
  * - Выбор строки — детали справа, на узкой панели — поверх списка. Рядом с деталями список сжимается до Status и Name
  *   (как в Chrome): шесть колонок занимают 384 px, и от половины панели Name не осталось бы ничего.
+ * - Тесный вид (панель DevTools уже `TIGHT_PX`, раздел 4.11; порог — в `DevtoolsPanel`): Status | Name | Size — Method, Type и Time скрыты. В панели 320–480 px
+ *   шесть колонок съедали всю ширину, и заголовок Name вырождался в «N..».
  */
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useMemo, useRef, type CSSProperties } from 'react';
@@ -23,6 +25,7 @@ const ROW_PX = 24;
 /** Размер списка до первого замера (jsdom, первый кадр): первые строки есть сразу — как `review/VirtualRows.tsx`. */
 const INITIAL_RECT = { width: 600, height: 400 };
 const GRID = 'grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)_4.5rem_4rem_4rem] items-center gap-2 px-2';
+const GRID_TIGHT = 'grid grid-cols-[3.5rem_minmax(0,1fr)_3.5rem] items-center gap-2 px-2';
 const GRID_COMPACT = 'grid grid-cols-[4.5rem_minmax(0,1fr)] items-center gap-2 px-2';
 
 function NetworkRow(props: {
@@ -31,6 +34,8 @@ function NetworkRow(props: {
   selected: boolean;
   /** Рядом с деталями: только Status и Name. */
   compact: boolean;
+  /** Тесная панель: Status, Name и Size. */
+  tight: boolean;
   style: CSSProperties;
   onSelect(): void;
 }): JSX.Element {
@@ -46,7 +51,7 @@ function NetworkRow(props: {
       title={entry.url}
       onClick={props.onSelect}
       style={props.style}
-      className={cn(props.compact ? GRID_COMPACT : GRID, 'h-6 w-full border-b border-border/60 text-left hover:bg-accent', props.selected && 'bg-accent')}
+      className={cn(props.compact ? GRID_COMPACT : props.tight ? GRID_TIGHT : GRID, 'h-6 w-full border-b border-border/60 text-left hover:bg-accent', props.selected && 'bg-accent')}
     >
       <span
         data-tone={status.tone}
@@ -54,14 +59,14 @@ function NetworkRow(props: {
       >
         {status.text}
       </span>
-      {props.compact ? null : <span className="truncate">{entry.method}</span>}
+      {props.compact || props.tight ? null : <span className="truncate">{entry.method}</span>}
       <span className="min-w-0 truncate">
         {name.path}
         {name.host === null ? null : <span className="text-muted-foreground">{` · ${name.host}`}</span>}
       </span>
-      {props.compact ? null : <span className="truncate text-muted-foreground">{entry.kind}</span>}
+      {props.compact || props.tight ? null : <span className="truncate text-muted-foreground">{entry.kind}</span>}
       {props.compact ? null : <span className="truncate text-muted-foreground">{sizeText(entry)}</span>}
-      {props.compact ? null : (
+      {props.compact || props.tight ? null : (
         <span className="truncate text-muted-foreground">{entry.durationMs === null ? '—' : S.browser.devtools.ms(entry.durationMs)}</span>
       )}
     </button>
@@ -76,11 +81,13 @@ export interface NetworkViewProps {
   bridge: ParleyBridge;
   /** Узкая панель: детали — поверх списка (спека 4.4). */
   narrow: boolean;
+  /** Тесная панель (уже ~480 px): столбцы Status | Name | Size (раздел 4.11). */
+  tight?: boolean;
   /** «Add to chat» запроса — этап B; нет колбэка — нет кнопки. */
   onAddToChat?: ((entry: NetworkEntry) => void) | undefined;
 }
 
-export function NetworkView({ tabId, pageUrl, webContentsId, bridge, narrow, onAddToChat }: NetworkViewProps): JSX.Element {
+export function NetworkView({ tabId, pageUrl, webContentsId, bridge, narrow, tight = false, onAddToChat }: NetworkViewProps): JSX.Element {
   const tab = useDevtoolsStore((state) => state.tabs[tabId]) ?? EMPTY_DEVTOOLS;
   const patch = useDevtoolsStore.getState().patch;
   const rows = useMemo(() => visibleNetwork(tab), [tab]);
@@ -98,7 +105,7 @@ export function NetworkView({ tabId, pageUrl, webContentsId, bridge, narrow, onA
   const beside = selected !== null && !narrow;
 
   return (
-    <div data-testid="network-view" className="flex min-h-0 flex-1 flex-col">
+    <div data-testid="network-view" data-tight={tight} className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-1.5 py-1">
         {FILTERS.map((filter) => (
           <FilterToggle key={filter} pressed={tab.networkFilter === filter} onClick={() => patch(tabId, { networkFilter: filter })}>
@@ -114,14 +121,15 @@ export function NetworkView({ tabId, pageUrl, webContentsId, bridge, narrow, onA
         <div className={cn('flex min-h-0 min-w-0 flex-col overflow-hidden', beside ? 'w-1/2' : 'flex-1')}>
           <div
             data-testid="network-header"
-            className={cn(beside ? GRID_COMPACT : GRID, 'h-6 shrink-0 border-b border-border text-[11px] text-muted-foreground')}
+            className={cn(beside ? GRID_COMPACT : tight ? GRID_TIGHT : GRID, 'h-6 shrink-0 border-b border-border text-[11px] text-muted-foreground')}
           >
             <span>{columns.status}</span>
-            {beside ? null : <span>{columns.method}</span>}
-            <span>{columns.name}</span>
-            {beside ? null : <span>{columns.type}</span>}
+            {beside || tight ? null : <span>{columns.method}</span>}
+            {/* Растяжимый столбец: подпись режется, а не налезает на «Type»; в тесной панели (от 320 px) ему отдана вся лишняя ширина. */}
+            <span className="truncate">{columns.name}</span>
+            {beside || tight ? null : <span>{columns.type}</span>}
             {beside ? null : <span>{columns.size}</span>}
-            {beside ? null : <span>{columns.time}</span>}
+            {beside || tight ? null : <span>{columns.time}</span>}
           </div>
           <div ref={scrollRef} data-testid="network-scroll" className="min-h-0 flex-1 overflow-y-auto font-mono text-[11px]">
             {rows.length === 0 ? (
@@ -138,6 +146,7 @@ export function NetworkView({ tabId, pageUrl, webContentsId, bridge, narrow, onA
                       pageUrl={pageUrl}
                       selected={entry.id === tab.selected}
                       compact={beside}
+                      tight={tight}
                       style={{ position: 'absolute', top: 0, left: 0, right: 0, transform: `translateY(${item.start}px)` }}
                       onSelect={() => patch(tabId, { selected: entry.id })}
                     />

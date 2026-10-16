@@ -125,3 +125,23 @@ export type { MemoryItemView, MemorySuggestionView, MemoryUndoView, MemorySnapsh
 
 export { SHARED_FILE_PATH, HISTORY_SEARCH_MAX_LIMIT, HISTORY_SEARCH_DEFAULT_LIMIT, historySource, historyScope, historyHit, historySearchResult, historyMethodSchemas } from './history.js';
 export type { HistoryHitView, HistorySearchView, HistoryMethodName, HistoryMethodParams, HistoryMethodResults } from './history.js';
+
+export {
+  AGENT_INPUT,
+  AGENT_LIMITS,
+  BROWSER_AGENT_ERROR_CODES,
+  BROWSER_AGENT_FEATURE,
+  BROWSER_AGENT_OPS,
+  browserAgentArgs,
+  browserAgentRequest,
+  browserAgentResultParams,
+} from './browser-agent.js';
+export type {
+  BrowserAgentArgs,
+  BrowserAgentErrorCode,
+  BrowserAgentOp,
+  BrowserAgentOpEvent,
+  BrowserAgentOpenResult,
+  BrowserAgentOwner,
+  BrowserAgentResult,
+} from './browser-agent.js';

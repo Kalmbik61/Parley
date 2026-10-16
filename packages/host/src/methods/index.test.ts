@@ -150,3 +150,22 @@ describe('методы на старте хоста ждут первого чт
     await vi.waitFor(() => expect(touched()).toBeGreaterThan(baseline));
   });
 });
+
+it('browser.agentResult: ответ окна уходит приёмнику агента вместе с клиентом-отправителем (спека браузера 3.7; этап B2)', async () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  const resolve = vi.fn(() => true);
+  const handlers = createHostHandlers({ ...deps, browserAgent: { resolve } });
+  const client = { id: 'c-1' };
+  const handler = handlers.methods['browser.agentResult'] as unknown as (params: unknown, request: unknown) => Promise<unknown>;
+  const opened = { tab: 't1', url: 'http://localhost:5173/', reused: false, notes: [] };
+  await expect(handler({ opId: 'op-1', ok: true, result: opened }, { client })).resolves.toEqual({ accepted: true });
+  expect(resolve).toHaveBeenLastCalledWith('op-1', { ok: true, result: opened }, client);
+  resolve.mockReturnValueOnce(false);
+  await expect(handler({ opId: 'op-2', ok: false, error: { code: 'not_loopback', message: 'x' } }, { client })).resolves.toEqual({ accepted: false });
+  expect(resolve).toHaveBeenLastCalledWith('op-2', { ok: false, error: { code: 'not_loopback', message: 'x' } }, client);
+});
+
+it('без приёмника агента метода browser.agentResult нет', () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  expect(createHostHandlers(deps).methods['browser.agentResult']).toBeUndefined();
+});

@@ -103,7 +103,9 @@ import { useLayoutPersistence } from '../layout/persistence.js';
 import { useLayoutStore } from '../layout/store.js';
 import { measureGroupSizes } from '../layout/measure.js';
 import { findTab, focusTab, groups, openTab } from '../layout/tree.js';
+import { focusedPanelPage, focusPanelPage, forgetFocusedPanelPage, handleAgentOpenTab, openPopupInPanel } from '../browser/panel/actions.js';
 import { openBrowserTabFrom, useBrowserStore } from '../browser/store.js';
+import { layoutUrl } from '../browser/url.js';
 import { focusContext } from '../keys/focus-context.js';
 import { installKeyHandler, isActionAvailable } from '../keys/handler.js';
 import { createMruCycle, type MruCycle } from '../keys/mru-cycle.js';
@@ -436,14 +438,18 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     return terminalSurfaces.get(refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: tab.sessionId }));
   };
 
-  /** Страница активной вкладки активной группы активной работы — цель ⌘F, ⌘+, ⌘−, ⌘0 из страницы (9.2b). */
+  /**
+   * Страница активной вкладки активной группы активной работы — цель ⌘F, ⌘+, ⌘−, ⌘0 из страницы (9.2b); активная вкладка — не
+   * браузер, а вид хозяина с открытой панелью — страница панели, на которую кликнули последней (этап B2).
+   */
   const activeBrowserPage = (): { tabId: string; webContentsId: number } | null => {
     const key = useLayoutStore.getState().activeWorkKey;
     const layout = key === null ? undefined : useLayoutStore.getState().layouts[key];
     if (layout === undefined) return null;
     const activeGroup = groups(layout).find((group) => group.id === layout.activeGroupId);
     const tab = activeGroup?.tabs.find((candidate) => candidate.id === activeGroup.activeTabId);
-    if (tab?.kind !== 'browser') return null;
+    // Не вкладка браузера — страница панели хозяина, на которую клик пришёл последним (`browser/panel/actions.ts`).
+    if (tab?.kind !== 'browser') return focusedPanelPage();
     const webContentsId = useBrowserStore.getState().tabs[tab.id]?.webContentsId ?? null;
     return webContentsId === null ? null : { tabId: tab.id, webContentsId };
   };
@@ -595,6 +601,9 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     () =>
       bridge.browser.onFocus(({ webContentsId }) => {
         const id = browserTabOf(webContentsId);
+        // Страница панели браузера хозяина: активной делается вкладка хозяина (`browser/panel/actions.ts`).
+        if (id !== null && focusPanelPage(id)) return;
+        forgetFocusedPanelPage();
         const state = useLayoutStore.getState();
         const key = state.activeWorkKey;
         const layout = key === null ? undefined : state.layouts[key];
@@ -610,6 +619,10 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
   useEffect(
     () =>
       bridge.browser.onOpenTab((event) => {
+        // Открыватель — страница панели браузера: новая страница встаёт в ту же панель.
+        const opener = browserTabOf(event.openerWebContentsId);
+        const popupUrl = layoutUrl(event.url);
+        if (opener !== null && popupUrl !== null && openPopupInPanel(opener, popupUrl)) return;
         const state = useLayoutStore.getState();
         openBrowserTabFrom(event, {
           apply: state.apply,
@@ -619,6 +632,12 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
           toast: (text) => toast(text),
         });
       }),
+    [bridge],
+  );
+
+  // `browser_open` агента (спека браузера 5.1, 5.2): страница встаёт в панель хозяина без смены вкладки, работы и фокуса.
+  useEffect(
+    () => bridge.browser.onAgentOpenTab((event) => void bridge.browser.agentOpenTabResult(event.requestId, handleAgentOpenTab(event))),
     [bridge],
   );
 

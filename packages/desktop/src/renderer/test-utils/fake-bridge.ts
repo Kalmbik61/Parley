@@ -16,6 +16,7 @@ import type {
 import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../../shared/bridge.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody } from '../../shared/browser-devtools.js';
 import type {
+  AgentOpenTab,
   AnnotationPick,
   AnnotationPosition,
   BrowserFavicon,
@@ -193,6 +194,8 @@ export interface FakeBridge extends ParleyBridge {
   emitFavicon(e: BrowserFavicon): void;
   /** Фокус гостя: событие `browser:focus` слушателям `browser.onFocus` (кусок 9.2b). */
   emitBrowserFocus(e: { webContentsId: number }): void;
+  /** Агент просит открыть вкладку: событие `browser:agent-open-tab` слушателям `browser.onAgentOpenTab` (этап B2). */
+  emitAgentOpenTab(e: AgentOpenTab): void;
   /** Фокус окна macOS: событие `app:window-focus` слушателям `app.onWindowFocus` (кусок 9.2b). */
   emitWindowFocus(focused: boolean): void;
   /** Ответ browser.pickStart; по умолчанию null. Отказ — объект с code, как у прочих отказов подставного моста. */
@@ -304,6 +307,7 @@ export function createFakeBridge(): FakeBridge {
   const browserOpenTabListeners = new Set<(e: BrowserOpenTab) => void>();
   const browserFaviconListeners = new Set<(e: BrowserFavicon) => void>();
   const browserFocusListeners = new Set<(e: { webContentsId: number }) => void>();
+  const agentOpenTabListeners = new Set<(e: AgentOpenTab) => void>();
   const windowFocusListeners = new Set<(focused: boolean) => void>();
   let voiceModels: VoiceModelId[] = [];
   let transcribeResult: TranscribeResult = { text: 'dictated text' };
@@ -456,6 +460,9 @@ export function createFakeBridge(): FakeBridge {
     },
     emitBrowserFocus: (e) => {
       for (const listener of browserFocusListeners) listener(e);
+    },
+    emitAgentOpenTab: (e) => {
+      for (const listener of agentOpenTabListeners) listener(e);
     },
     emitWindowFocus: (focused) => {
       for (const listener of windowFocusListeners) listener(focused);
@@ -626,6 +633,13 @@ export function createFakeBridge(): FakeBridge {
       setViewport: async (webContentsId, spec, area) => {
         browserCalls.push({ method: 'setViewport', args: [webContentsId, spec, area] });
         return { scale: viewportScale };
+      },
+      onAgentOpenTab: (listener) => {
+        agentOpenTabListeners.add(listener);
+        return () => agentOpenTabListeners.delete(listener);
+      },
+      agentOpenTabResult: async (requestId, result) => {
+        browserCalls.push({ method: 'agentOpenTabResult', args: [requestId, result] });
       },
     },
     files: {

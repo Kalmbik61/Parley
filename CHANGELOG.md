@@ -6,8 +6,26 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+Chats and rooms get a browser of their own next to the view, and an agent can show you a page from localhost there without taking your focus.
+
 ### Added
 
+- **A browser next to every Chat and room.** The **Browser** button opens a panel beside the view with its own pages
+  (up to five), Console | Network, sizes, Select and Annotate. What you pick or annotate goes to the chat or room the
+  panel belongs to. The pages survive restarting the window, and in a narrow window the panel covers the view with a
+  **Back** button. A page of a regular browser tab can be sent there with **⋯ → Move to browser of…**.
+- **Agents can open a page for you.** An agent can put a page on localhost into the browser of its own chat or of
+  its room. You see it in that panel; if the view is not on screen, a toast says "S02 opened localhost:5173" with a
+  **Show** button. The agent never changes your active tab or workspace and never takes the keyboard focus, and the
+  same address (without `#fragment`) is not opened twice. Agents that run with Parley's own settings do not ask you
+  before opening a page.
+- **Let agents use the browser.** A switch in Settings → Browser turns agent access off for all sessions at once.
+- **Lean agent sessions.** Agents that Parley starts for rooms and through `spawn_session` now run without
+  your plugins, other MCP servers and auto-memory — about a third less context on every turn of Claude Code
+  (measured on one machine; Codex was not measured). Parley's own tools and hooks, your skills and the
+  project's `CLAUDE.md` stay. It applies to sessions created after you update; turn it off in Settings → Agents
+  ("Lean agent sessions") or with `PARLEY_LEAN_AGENTS=0`. A session you start from the New session dialog is
+  lean only if you tick "Lean session".
 - **Numbers for a "Parley feels slow" report.** The host status line and the diagnostics archive now carry
   per-window counters: how many times the workspace maps were re-read and how long that took, how many
   bytes of map JSON were parsed, how much terminal output arrived (chunks and bytes), and how many session
@@ -15,6 +33,11 @@ All notable changes to Parley are documented in this file.
 
 ### Changed
 
+- **The built-in minimal-development skill asks for more care around a change.** Before editing, an agent lists
+  what the change must reach and what it could break for users; it marks a deliberate shortcut with a
+  `shortcut: <the limit>, <when to replace it>` comment, leaves a small test for new non-trivial logic, and ends
+  a task's final report with what it skipped and any risk. Copies Parley installed update on the next agent
+  launch; a copy you edited is left alone.
 - **Agents get clear rules for room correspondence.** The guide now tells them to keep a letter under
   1200 characters, to put documents and file edits into a file and send only its path, not to quote
   earlier messages (use `replyTo` instead), to call `read_room` only when they really need the history,

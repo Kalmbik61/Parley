@@ -3,7 +3,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { HostPaths } from '@parley/host';
-import { COMPACT_WORKS_FEATURE, encodeLine, LineDecoder, MAX_LINE_BYTES, PROTOCOL_VERSION, ROOMS_MAIL_FEATURE } from '@parley/protocol';
+import { BROWSER_AGENT_FEATURE, COMPACT_WORKS_FEATURE, encodeLine, LineDecoder, MAX_LINE_BYTES, PROTOCOL_VERSION, ROOMS_MAIL_FEATURE } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S } from '../shared/strings.js';
 import { HostConnection } from './host-connection.js';
@@ -80,12 +80,12 @@ describe('HostConnection: слишком длинная строка от хос
     await rm(home, { recursive: true, force: true });
   });
 
-  it('hello сообщает возможности compact-works и rooms-mail', async () => {
+  it('hello сообщает возможности compact-works, browser-agent и rooms-mail', async () => {
     const fake = await startOversizeHost(paths);
     fakes.push(fake);
     const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
     await connection.connect();
-    expect(fake.hellos[0]?.['features']).toEqual([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    expect(fake.hellos[0]?.['features']).toEqual([COMPACT_WORKS_FEATURE, BROWSER_AGENT_FEATURE, ROOMS_MAIL_FEATURE]);
     connection.close();
   });
 
