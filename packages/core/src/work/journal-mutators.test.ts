@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetIo } from '../../test/io-spy.js';
-import { appendMessage, journalFile, readCursors } from './journal.js';
+import { appendMessage, journalFile, readCursorFile } from './journal.js';
 import { addSession } from './map.js';
 import { capturePlanNotice, reservePlanEffects } from './plan-effects.js';
 import { reconcileRoomPlans, setRoomMode } from './plans.js';
@@ -154,8 +154,8 @@ describe('reopenRoom на карте-журнале', () => {
     resetIo(io);
     await updateMap(project, workId, (map) => reopenRoom(map, 'r-01'));
     // Участники прочли всё, что лежало в комнате до возврата.
-    const cursors = await readCursors(project, workId, 's-02');
-    expect(cursors['r-01']).toMatch(/^m-r01-\d+$/);
+    const cursors = await readCursorFile(project, workId, 's-02');
+    expect(cursors['r-01']).toEqual([[1, expect.any(Number)]]);
     expect(read('r-02')).toBe(0);
     expect(read(null)).toBe(0);
   });

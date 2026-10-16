@@ -65,8 +65,8 @@ describe('mail.markRead', () => {
     const map = await readMap(dir, workId);
     expect(map.messages[0]?.readBy[HUMAN]).toBeDefined();
     expect(unreadFor(map, HUMAN)).toEqual([]);
-    const cursor = JSON.parse(await readFile(path.join(workPaths(dir, workId).cursors, `${HUMAN}.json`), 'utf8')) as Record<string, string>;
-    expect(cursor.direct).toBe('m-d-1');
+    const cursor = JSON.parse(await readFile(path.join(workPaths(dir, workId).cursors, `${HUMAN}.json`), 'utf8')) as Record<string, number[][]>;
+    expect(cursor.direct).toEqual([[1, 1]]);
 
     client.send({ id: 3, method: 'mail.markRead', params: { projectPath: dir, workId, messageIds: ['m-d-1'] } });
     expect((await reply(client, 3)).result).toEqual({ marked: 0 });

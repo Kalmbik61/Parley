@@ -6,7 +6,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetIo } from '../../test/io-spy.js';
 import { DEFAULT_CONFIG } from '../config.js';
-import { appendMessage, readCursors, writeCursor } from '../work/journal.js';
+import { addRange, appendMessage, readCursorFile, withCursors, writeCursor } from '../work/journal.js';
 import { addSession } from '../work/map.js';
 import { addRoom } from '../work/rooms.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
@@ -188,7 +188,7 @@ describe('check_inbox на карте-журнале', () => {
     expect(written.length).toBeGreaterThan(0);
     expect(written.every((file) => file.startsWith(path.join(paths().cursors, 's-02.json')))).toBe(true);
     expect(await indexText()).toBe(before);
-    expect(await readCursors(project, workId, 's-02')).toEqual({ direct: 'm-d-1', 'r-01': 'm-r01-2' });
+    expect(await readCursorFile(project, workId, 's-02')).toEqual({ direct: [[1, 1]], 'r-01': [[1, 2]] });
     expect((await callOk(reader, 'check_inbox'))['messages']).toEqual([]);
     await appendMessage(project, workId, 'r-01', { from: 's-01', to: ['s-02'], text: 'новое' });
     expect((await callOk(reader, 'check_inbox'))['messages'].map((message: { text: string }) => message.text)).toEqual(['новое']);
@@ -202,7 +202,7 @@ describe('check_inbox на карте-журнале', () => {
     expect(first['more']).toBe(true);
     expect(first['warning']).toMatch(/call check_inbox again/);
     // Курсор стоит ровно на последнем отданном письме, не дальше.
-    expect(await readCursors(project, workId, 's-02')).toEqual({ 'r-01': 'm-r01-50' });
+    expect(await readCursorFile(project, workId, 's-02')).toEqual({ 'r-01': [[1, 50]] });
     const second = await callOk(reader, 'check_inbox');
     expect(second['messages']).toHaveLength(50);
     expect(second['more']).toBe(true);
@@ -240,26 +240,29 @@ describe('check_inbox на карте-журнале', () => {
     await appendMessage(project, workId, 'r-01', { from: 's-01', to: ['s-03'], text: 'не тебе' });
     const reader = await connect('s-02');
     expect((await callOk(reader, 'check_inbox'))['messages']).toEqual([]);
-    expect(await readCursors(project, workId, 's-02')).toEqual({ 'r-01': 'm-r01-1' });
+    expect(await readCursorFile(project, workId, 's-02')).toEqual({ 'r-01': [[1, 1]] });
   });
 });
 
-describe('check_inbox: курсор, письма которого нет в журнале', () => {
-  it('отвечает предупреждением о потерянных письмах, курсор встаёт на конец журнала', async () => {
-    for (const text of ['раз', 'два', 'три']) await appendMessage(project, workId, 'r-01', { from: 's-01', to: ['s-02'], text });
-    // Курсор прежнего вида (`m-07`): номера строки в нём нет, письма с таким id в журнале нет.
-    await writeCursor(project, workId, 's-02', 'r-01', 'm-07');
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+describe('check_inbox: прочитанное по диапазонам', () => {
+  it('разреженная история сессии: каждое письмо приходит ровно один раз, диапазоны склеиваются', async () => {
+    for (let i = 1; i <= 10; i += 1) await appendMessage(project, workId, 'r-01', { from: 's-01', to: ['s-02'], text: `письмо ${i}` });
+    // Письма 3, 4 и 8 сессия уже прочла по отдельности (системные строки, отметки): прочитано не по порядку.
+    await withCursors(project, workId, 's-02', async (file) => {
+      addRange(file, 'r-01', 3, 4);
+      addRange(file, 'r-01', 8, 8);
+      return { changed: true, value: undefined };
+    });
     const reader = await connect('s-02');
-    const inbox = await callOk(reader, 'check_inbox');
-    warn.mockRestore();
-    expect(inbox['messages']).toEqual([]);
-    expect(inbox['warning']).toMatch(/r-01/);
-    expect(inbox['warning']).toMatch(/m-07/);
-    expect(inbox['warning']).toMatch(/lost|skipped/);
-    expect(await readCursors(project, workId, 's-02')).toEqual({ 'r-01': 'm-r01-3' });
-    // Курсор починен: следующий вызов тих.
-    expect(await callOk(reader, 'check_inbox')).toEqual({ messages: [] });
+    const first = await callOk(reader, 'check_inbox');
+    expect(first['messages'].map((message: { text: string }) => message.text)).toEqual(['письмо 1', 'письмо 2', 'письмо 5', 'письмо 6', 'письмо 7', 'письмо 9', 'письмо 10']);
+    // Продвижение курсора — расширение диапазона: разрывы закрыты, остался один диапазон.
+    expect(await readCursorFile(project, workId, 's-02')).toEqual({ 'r-01': [[1, 10]] });
+    expect((await callOk(reader, 'check_inbox'))['messages']).toEqual([]);
+    await appendMessage(project, workId, 'r-01', { from: 's-01', to: ['s-02'], text: 'письмо 11' });
+    expect((await callOk(reader, 'check_inbox'))['messages'].map((message: { text: string }) => message.text)).toEqual(['письмо 11']);
+    expect((await callOk(reader, 'check_inbox'))['messages']).toEqual([]);
+    expect(await readCursorFile(project, workId, 's-02')).toEqual({ 'r-01': [[1, 11]] });
   });
 });
 
@@ -267,7 +270,7 @@ describe('wait_for("inbox") на карте-журнале', () => {
   it('проба идёт по курсору, как check_inbox: читает файл курсоров и хвост после него, курсор не двигает', async () => {
     // Длинный журнал: 200 писем по ~400 байт, курсор на предпоследнем. Прочитать целиком его нельзя, не заметив шпиона.
     for (let i = 1; i <= 200; i += 1) await appendMessage(project, workId, 'r-01', { from: 's-01', to: ['s-02'], text: `${i} ${'я'.repeat(190)}` });
-    await writeCursor(project, workId, 's-02', 'r-01', 'm-r01-199');
+    await writeCursor(project, workId, 's-02', 'r-01', 199);
     const journal = path.join(paths().dir, 'rooms', 'r-01', 'messages.jsonl');
     const journalSize = (await readFile(journal)).length;
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -283,14 +286,14 @@ describe('wait_for("inbox") на карте-журнале', () => {
     expect(io.bytes[journal] ?? 0).toBeGreaterThan(0);
     expect(io.bytes[journal]!).toBeLessThan(journalSize / 4);
     // Проба курсор не двигает; check_inbox видит то же самое.
-    expect(await readCursors(project, workId, 's-02')).toEqual({ 'r-01': 'm-r01-199' });
+    expect(await readCursorFile(project, workId, 's-02')).toEqual({ 'r-01': [[1, 199]] });
     const inbox = await callOk(waiter, 'check_inbox');
     expect(inbox['messages'].map((message: { id: string }) => message.id)).toEqual(probed['messages'].map((message: { id: string }) => message.id));
   });
 
   it('check_inbox читает хвост после курсора, а не журнал целиком (чтение через дескриптор видно шпиону)', async () => {
     for (let i = 1; i <= 200; i += 1) await appendMessage(project, workId, 'r-01', { from: 's-01', to: ['s-02'], text: `${i} ${'я'.repeat(190)}` });
-    await writeCursor(project, workId, 's-02', 'r-01', 'm-r01-199');
+    await writeCursor(project, workId, 's-02', 'r-01', 199);
     const journal = path.join(paths().dir, 'rooms', 'r-01', 'messages.jsonl');
     const journalSize = (await readFile(journal)).length;
     const reader = await connect('s-02');
@@ -475,7 +478,7 @@ describe('старая сессия против карты-журнала', () 
     }
     expect(WORKSPACE_FORMAT_NEWER_TEXT).toBe('workspace format is newer than this session: ask the human to restart the session');
     // Ничего не записано: ни письма, ни курсора.
-    expect(await readCursors(project, workId, 's-02')).toEqual({});
+    expect(await readCursorFile(project, workId, 's-02')).toEqual({});
     const map = await callOk(old, 'get_map');
     expect(map['sessionId']).toBe('s-02');
     expect((await callOk(old, 'read_room', { room: 'r-01' }))['messages']).toHaveLength(1);

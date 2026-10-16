@@ -1,7 +1,7 @@
 import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  addMark,
+  addRange,
   DIRECT_CURSOR_KEY,
   journalFile,
   journalLine,
@@ -144,7 +144,6 @@ interface JournalState {
   lockFile: string;
   fd: number | null;
   lastSeq: number;
-  lastId: string | null;
   endsWithNewline: boolean;
   letters: JournalLetter[];
 }
@@ -161,7 +160,7 @@ export class JournalLetterSink implements LetterSink {
   private readonly paths: WorkPaths;
   private readonly states = new Map<string, JournalState>();
   private readonly entries: Entry[] = [];
-  private readonly through: { roomId: string; sessions: readonly string[]; upToId: string }[] = [];
+  private readonly through: { roomId: string; sessions: readonly string[]; upToSeq: number }[] = [];
   private readonly dropped = new Set<string>();
   private readonly decisionAppends: unknown[] = [];
   private readonly decisionPatches: { match: (row: never) => boolean; patch: object }[] = [];
@@ -200,12 +199,11 @@ export class JournalLetterSink implements LetterSink {
       this.release();
       throw error;
     }
-    const state: JournalState = { roomId, file, lockFile, fd, lastSeq: 0, lastId: null, endsWithNewline: true, letters: [] };
+    const state: JournalState = { roomId, file, lockFile, fd, lastSeq: 0, endsWithNewline: true, letters: [] };
     this.states.set(key, state);
     try {
       const tail = readTail(file);
       state.lastSeq = tail.seq;
-      state.lastId = tail.id;
       state.endsWithNewline = tail.endsWithNewline;
     } catch (error) {
       this.release();
@@ -235,14 +233,13 @@ export class JournalLetterSink implements LetterSink {
     this.entries.push({ state, letter, message });
     state.letters.push(letter);
     state.lastSeq = seq;
-    state.lastId = letter.id;
     this.pending.push(message);
     return message;
   }
 
   readThrough(roomId: string, sessionIds: readonly string[]): void {
-    const upToId = this.state(roomId).lastId;
-    if (upToId !== null) this.through.push({ roomId, sessions: sessionIds, upToId });
+    const upToSeq = this.state(roomId).lastSeq;
+    if (upToSeq > 0) this.through.push({ roomId, sessions: sessionIds, upToSeq });
   }
 
   dropRoom(roomId: string): void {
@@ -359,28 +356,24 @@ export class JournalLetterSink implements LetterSink {
       for (const name of readdirSyncOrEmpty(this.paths.cursors)) if (name.endsWith('.json')) sessions.add(name.slice(0, -'.json'.length));
     }
     for (const sessionId of sessions) {
-      await withCursors(this.projectPath, this.workId, sessionId, async (cursors, state) => {
+      await withCursors(this.projectPath, this.workId, sessionId, async (file) => {
         let changed = false;
         for (const roomId of this.dropped) {
-          if (cursors[roomId] !== undefined || state.marks[roomId] !== undefined) {
-            delete cursors[roomId];
-            delete state.marks[roomId];
+          if (file[roomId] !== undefined) {
+            delete file[roomId];
             changed = true;
           }
         }
-        // Явное «прочитано по письмо» (`readThrough`) — водораздел: так задумано, это действие над всей лентой комнаты.
+        // Явное «прочитано по письмо» (`readThrough`) — диапазон с первого письма: так задумано, это действие над всей лентой комнаты.
         for (const op of this.through) {
           if (this.dropped.has(op.roomId) || !op.sessions.includes(sessionId)) continue;
-          cursors[op.roomId] = op.upToId;
-          delete state.marks[op.roomId];
-          changed = true;
+          if (addRange(file, op.roomId, 1, op.upToSeq)) changed = true;
         }
-        // Отметка `readBy`, поставленная мутатором письму, — РАЗРЕЖЕННАЯ отметка, а не водораздел: водораздел одним
-        // id снял бы «непрочитано» со всех более ранних писем журнала (системная строка погасила бы человеку
-        // вопросы агента). Отметка вплотную за водоразделом сворачивается в него (`normalizeMarks`), позади водораздела
-        // не пишется.
+        // Отметка `readBy`, поставленная мутатором письму, — диапазон из ОДНОГО письма, а не «прочитано по него»: диапазон с
+        // первого письма снял бы «непрочитано» со всех более ранних писем журнала (системная строка погасила бы человеку
+        // вопросы агента). Соседний с прочитанным диапазон склеивается (`addRange`), файл остаётся маленьким.
         for (const { letter } of bySession.get(sessionId) ?? []) {
-          if (addMark(state, keyOf(letter.roomId), letter.id)) changed = true;
+          if (addRange(file, keyOf(letter.roomId), letter.seq, letter.seq)) changed = true;
         }
         return { changed, value: undefined };
       });

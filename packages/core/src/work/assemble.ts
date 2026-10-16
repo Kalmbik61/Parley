@@ -3,7 +3,9 @@ import { access, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   DIRECT_CURSOR_KEY,
+  isRead,
   mergeByTime,
+  messageSeqs,
   parseCursorFile,
   parseLetters,
   readCursorFile,
@@ -57,10 +59,6 @@ function readersOf(message: Message, shape: WorkMap): Set<string> {
 }
 
 function compose(index: WorkIndexMap, keys: (string | null)[], { journals, cursors, decisions }: Parts): WorkMap {
-  // Позиция письма в своём журнале и позиция курсора там же: прочитано, если курсор на письме или за ним.
-  const positions = new Map<string, Map<string, number>>();
-  for (const [key, letters] of journals) positions.set(key, new Map(letters.map((letter, at) => [letter.id, at])));
-
   // Форма карты для `recipientsOf`: ему нужны только комнаты индекса.
   const shape = { ...index, schemaVersion: 2, messages: [] } as unknown as WorkMap;
   const deletedSessions = new Set(index.work.deletedSessions ?? []);
@@ -69,7 +67,6 @@ function compose(index: WorkIndexMap, keys: (string | null)[], { journals, curso
     const letter = { ...row };
     delete (letter as { seq?: number }).seq;
     const key = keyOf(letter.roomId);
-    const own = positions.get(key)?.get(letter.id) ?? -1;
     const message = { ...letter, readBy: {} } as Message;
     // Письма удалённой сессии помечает `removeSession` на v2; журнал дописывается только вперёд, поэтому метка
     // выводится из `work.deletedSessions` (номера сессий не переиспользуются).
@@ -78,17 +75,14 @@ function compose(index: WorkIndexMap, keys: (string | null)[], { journals, curso
     // которой письмо не предназначалось) и у человека для писем, которые он видит (`unreadForHuman`: не его
     // собственные, прямые — только ему). Остальные сессии отметки не получают, даже если курсор ушёл дальше.
     //
-    // КУРСОР — ВОДОРАЗДЕЛ плюс разреженные отметки (форма файла — у `SessionCursors`): «прочитано» значит «всё до
-    // водораздела включительно» или «письмо отмечено отдельно». Явное «прочёл» человека из окна (`markHumanRead`) двигает
-    // водораздел (цена спеки), а отметка мутатора на только что добавленной системной строке — только отметка:
-    // письма человеку, лежащие позади неё, остаются непрочитанными.
+    // КУРСОР — диапазоны номеров строк (форма файла — у `CursorFile`): «прочитано» значит «номер письма входит в диапазон».
+    // Явное «прочёл» человека из окна (`markHumanRead`) добавляет диапазон с первого письма (цена спеки), а отметка
+    // мутатора на только что добавленной системной строке — диапазон из одного письма: письма человеку, лежащие позади
+    // неё, остаются непрочитанными.
     for (const sessionId of readersOf(message, shape)) {
       const file = cursors.get(sessionId);
-      const cursor = file?.cursors[key];
-      const read = cursor === undefined ? -1 : (positions.get(key)?.get(cursor) ?? -1);
       // Время чтения курсор не хранит: отметкой служит время самого письма. Читатели проверяют наличие отметки.
-      // Прочитано по водоразделу или по разреженной отметке (`marks`): системная строка не гасит письма позади себя.
-      if (own !== -1 && (read >= own || file?.marks[key]?.includes(letter.id) === true)) message.readBy[sessionId] = letter.at;
+      if (file !== undefined && isRead(file, key, row.seq)) message.readBy[sessionId] = letter.at;
     }
     return message;
   });
@@ -244,17 +238,14 @@ export function appendLetters(map: WorkMap, letters: readonly JournalLetter[], c
   const deletedSessions = new Set(map.work.deletedSessions ?? []);
   let newest = map.work.updatedAt;
   for (const [key, rows] of added) {
-    rows.forEach((row, at) => {
+    rows.forEach((row) => {
       const letter = { ...row };
       delete (letter as { seq?: number }).seq;
       const message = { ...letter, readBy: {} } as Message;
       if (deletedSessions.has(letter.from) || letter.to.some((id) => deletedSessions.has(id))) message.deleted = true;
       for (const sessionId of readersOf(message, map)) {
         const file = cursors.get(sessionId);
-        const cursor = file?.cursors[key];
-        // Водораздел на этом письме или на письме позади него в той же порции; отметка — на самом письме.
-        const covered = cursor !== undefined && rows.slice(at).some((later) => later.id === cursor);
-        if (file !== undefined && (covered || file.marks[key]?.includes(letter.id) === true)) message.readBy[sessionId] = letter.at;
+        if (file !== undefined && isRead(file, key, row.seq)) message.readBy[sessionId] = letter.at;
       }
       lists.get(key)!.push(message);
       if (message.at > newest) newest = message.at;
@@ -272,20 +263,12 @@ export function appendLetters(map: WorkMap, letters: readonly JournalLetter[], c
  * Письма, чья отметка не изменилась, остаются прежними объектами.
  */
 export function applyCursors(map: WorkMap, sessionId: string, file: CursorFile | undefined): WorkMap {
-  const counts = new Map<string, number>();
-  const cursorAt = new Map<string, number>();
-  const positions = map.messages.map((message) => {
-    const key = keyOf(message.roomId);
-    const position = counts.get(key) ?? 0;
-    counts.set(key, position + 1);
-    if (file?.cursors[key] === message.id) cursorAt.set(key, position);
-    return position;
-  });
+  const seqs = messageSeqs(map.messages);
   let changed = false;
   const messages = map.messages.map((message, at) => {
     if (!readersOf(message, map).has(sessionId)) return message;
     const key = keyOf(message.roomId);
-    const read = file !== undefined && ((cursorAt.get(key) ?? -1) >= positions[at]! || file.marks[key]?.includes(message.id) === true);
+    const read = file !== undefined && isRead(file, key, seqs[at]!);
     if (read === (message.readBy[sessionId] !== undefined)) return message;
     changed = true;
     const readBy = { ...message.readBy };
@@ -305,7 +288,7 @@ export async function assembleMap(projectPath: string, workId: string): Promise<
 // Синхронное чтение существует потому, что мутатор `updateMap` синхронный: `async` в него не втиснуть. Платит за него
 // только тот, кто действительно читает письма или решения (ленивая сборка при первом обращении): мутатор `updateMap`
 // или вызывающий, которому вернулась карта (`lazyJournalMap`). Читает под замком работы (`map.lock`), поэтому журналы и курсоры не меняются
-// между чтениями. Разбор строк и файлов курсоров общий с асинхронным чтением (`parseLetters`, `parseCursors`).
+// между чтениями. Разбор строк и файлов курсоров общий с асинхронным чтением (`parseLetters`, `parseCursorFile`).
 
 function readLettersSync(file: string): JournalLetter[] {
   let text: string;

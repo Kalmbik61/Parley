@@ -205,7 +205,7 @@ describe('watchWorks: журналы и курсоры', () => {
       await until(
         () => changes.some((c) => c.kind === 'cursor' && c.sessionId === 's-01'),
         async () => {
-          await writeCursor(project, workId, 's-01', 'r-01', 'm-r01-1');
+          await writeCursor(project, workId, 's-01', 'r-01', 1);
         },
       );
       expect(changes.filter((c) => c.kind === 'journal').every((c) => c.workId === workId && c.projectPath === project)).toBe(true);

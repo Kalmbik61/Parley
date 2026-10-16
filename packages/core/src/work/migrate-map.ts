@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { assembleFromIndex } from './assemble.js';
-import { DIRECT_CURSOR_KEY, MAX_MARKS, cursorFile, journalFile, journalLine, type JournalLetter } from './journal.js';
+import { DIRECT_CURSOR_KEY, cursorFile, journalFile, journalLine, type CursorFile, type JournalLetter } from './journal.js';
 import { recipientsOf } from './letters.js';
 import { hasLiveProcess } from './liveness.js';
 import { JOURNAL_SCHEMA_VERSION, parseIndex, parseMap, peekSchemaVersion } from './map.js';
@@ -48,11 +48,9 @@ export type MigrateMapResult =
       letters: number;
       /** Письма комнаты, которой нет в индексе: в журнал не идут (собрать их нечем), остаются только в `map.v2.json`. */
       orphaned: number;
-      /** Файлов курсоров и отметок в них. */
+      /** Файлов курсоров и диапазонов прочитанного в них (точно, ничего не отброшено). */
       cursors: number;
-      marks: number;
-      /** Отметки сверх `MAX_MARKS` на журнал: самые старые отброшены, письма снова выглядят непрочитанными. */
-      droppedMarks: number;
+      ranges: number;
       /** Позиций, где собранный порядок писем не совпал с порядком v2 (равное время в обратном порядке журналов, часы назад). */
       orderMismatches: number;
       /** Писем, у которых набор читателей после сборки не совпал с `readBy` v2 (не адресат, архивная комната). */
@@ -83,37 +81,34 @@ function readersOf(message: Message, map: WorkMap): Set<string> {
   return readers;
 }
 
-interface Cursor {
-  watermark?: string;
-  marks: string[];
-}
-
 /**
- * `readBy` → курсоры. Читатель идёт по письмам журнала, которые мог прочесть (адресованным ему): пока подряд прочитано —
- * водораздел стоит на последнем прочитанном; первое непрочитанное — разрыв, прочитанные ПОСЛЕ него (вразнобой) уходят в
- * отметки. Так непрочитанное остаётся непрочитанным: водораздел на самом новом прочитанном письме проглотил бы разрыв.
- * Без разрывов (обычный случай) курсор — просто самое новое прочитанное письмо.
+ * `readBy` → диапазоны номеров строк (`seq` = позиция в журнале с единицы, как пишет шаг журналов). Читатель идёт по письмам
+ * журнала: прочитанное письмо открывает или продолжает диапазон, непрочитанное письмо, которое он мог прочесть, —
+ * разрыв, закрывающий диапазон. Письма, которых читатель не мог прочесть (не адресат), ничего не меняют: между двумя
+ * прочитанными они покрываются диапазоном и не рвут его, а сами не читаются никогда. Результат точен: ни одно
+ * непрочитанное письмо не попадает в диапазон, ни одно прочитанное не теряется.
  */
-function cursorsOf(journal: readonly Message[], map: WorkMap): Map<string, Cursor> {
+function cursorsOf(journal: readonly Message[], map: WorkMap): Map<string, [number, number][]> {
   const readers = new Set<string>();
   for (const message of journal) for (const reader of Object.keys(message.readBy)) readers.add(reader);
-  const result = new Map<string, Cursor>();
+  const result = new Map<string, [number, number][]>();
   for (const reader of readers) {
-    const cursor: Cursor = { marks: [] };
-    let gap = false;
-    for (const message of journal) {
-      if (!readersOf(message, map).has(reader)) continue;
-      if (message.readBy[reader] === undefined) gap = true;
-      else if (gap) cursor.marks.push(message.id);
-      else cursor.watermark = message.id;
-    }
-    if (cursor.watermark !== undefined || cursor.marks.length > 0) result.set(reader, cursor);
+    const ranges: [number, number][] = [];
+    let open: [number, number] | null = null;
+    journal.forEach((message, at) => {
+      if (!readersOf(message, map).has(reader)) return;
+      const seq = at + 1;
+      if (message.readBy[reader] === undefined) open = null;
+      else if (open === null) ranges.push((open = [seq, seq]));
+      else open[1] = seq;
+    });
+    if (ranges.length > 0) result.set(reader, ranges);
   }
   return result;
 }
 
 /** Есть ли расхождение, из-за которого `map.v2.json` нельзя удалять. */
-const hasDropped = (kept: V2Kept): boolean => kept.orphaned > 0 || kept.droppedMarks > 0 || kept.readByMismatches > 0 || kept.orderMismatches > 0;
+const hasDropped = (kept: V2Kept): boolean => kept.orphaned > 0 || kept.readByMismatches > 0 || kept.orderMismatches > 0;
 
 const toLetter = (message: Message, seq: number): JournalLetter => {
   const letter = { ...message, seq } as Message & { seq: number };
@@ -191,20 +186,14 @@ export async function migrateMapToJournal(projectPath: string, workId: string, o
       // 3. Курсоры: каталог собирается заново, чужие остатки сорванной попытки в нём не остаются.
       step = 'cursors';
       await rm(paths.cursors, { recursive: true, force: true });
-      const perReader = new Map<string, Record<string, unknown>>();
-      let marks = 0;
-      let droppedMarks = 0;
+      const perReader = new Map<string, CursorFile>();
+      let ranges = 0;
       for (const roomId of keys) {
         const key = keyOf(roomId);
-        for (const [reader, cursor] of cursorsOf(byKey.get(key)!, map)) {
+        for (const [reader, readRanges] of cursorsOf(byKey.get(key)!, map)) {
           const file = perReader.get(reader) ?? {};
-          if (cursor.watermark !== undefined) file[key] = cursor.watermark;
-          if (cursor.marks.length > 0) {
-            const kept = cursor.marks.slice(-MAX_MARKS);
-            droppedMarks += cursor.marks.length - kept.length;
-            marks += kept.length;
-            file.marks = { ...(file.marks as Record<string, string[]> | undefined), [key]: kept };
-          }
+          file[key] = readRanges;
+          ranges += readRanges.length;
           perReader.set(reader, file);
         }
       }
@@ -232,7 +221,7 @@ export async function migrateMapToJournal(projectPath: string, workId: string, o
       const { orderMismatches, readByMismatches } = compare(expected, assembled.messages);
       // ПРАВИЛО КОПИИ: ничего не отброшено и не расходится — копия может быть убрана позже (`finishV2Cleanup`); хоть одно
       // число не ноль — `v2Kept` в индексе, и копия не удаляется никогда: она единственная хранит то, чего нет в журналах.
-      const kept: V2Kept = { orphaned: orphans.length, droppedMarks, readByMismatches, orderMismatches };
+      const kept: V2Kept = { orphaned: orphans.length, readByMismatches, orderMismatches };
       const indexMap = {
         schemaVersion: JOURNAL_SCHEMA_VERSION,
         ...index,
@@ -250,8 +239,7 @@ export async function migrateMapToJournal(projectPath: string, workId: string, o
         letters: expected.length,
         orphaned: orphans.length,
         cursors: perReader.size,
-        marks,
-        droppedMarks,
+        ranges,
         orderMismatches,
         readByMismatches,
       };
@@ -266,7 +254,7 @@ export async function migrateMapToJournal(projectPath: string, workId: string, o
  * Удаление `map.v2.json` (спека B5, план задачи 7). Копия живёт, пока её не прочли все потребители новой раскладки.
  * Миграция пишет в индекс `v2Removed: false`, `migratedRun` (запуск хоста, который перевёл работу) и, если что-то не
  * воспроизведено, `v2Kept`. Копия удаляется и ставится `v2Removed: true`, только когда выполнено ВСЁ:
- *   1. `v2Kept` в индексе нет: ни письма без комнаты, ни отброшенные отметки, ни расхождение читателей или порядка —
+ *   1. `v2Kept` в индексе нет: ни письма без комнаты, ни расхождение читателей или порядка —
  *      иначе `kept-dropped`, копия остаётся навсегда (причину пишет хост в журнал по счётчикам индекса);
  *   2. `migratedRun` раньше `currentRun`, запуска хоста, который зовёт уборку: копия, сделанная этим запуском (или чужим
  *      запуском, начатым после него), его собственным не убирается — иначе `same-run`;

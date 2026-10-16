@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { appendMessage, journalFile, readCursors, readMessages, RoomGoneError, withCursors } from './journal.js';
+import { addRange, appendMessage, journalFile, readCursorFile, readMessages, RoomGoneError, withCursors } from './journal.js';
 import { markHumanRead } from './letters.js';
 import { addMessage, addSession, removeSession } from './map.js';
 import { resolveProposal, setProposal } from './proposals.js';
@@ -97,7 +97,7 @@ describe('addMessage в мутаторе updateMap на карте-журнал�
     expect(seen).toEqual(['своё']);
   });
 
-  it('readBy, поставленный после addMessage, — разреженная отметка, а не водораздел; вплотную за водоразделом она сворачивается', async () => {
+  it('readBy, поставленный после addMessage, — диапазон из одного письма, а не «прочитано по него»; соседний с прочитанным склеивается', async () => {
     const cursorJson = async () => JSON.parse(await readFile(path.join(workPaths(project, workId).cursors, `${HUMAN}.json`), 'utf8')) as unknown;
     await appendMessage(project, workId, 'r-01', { from: 's-02', to: [], text: 'старое' });
     await updateMap(project, workId, (map) => {
@@ -105,26 +105,26 @@ describe('addMessage в мутаторе updateMap на карте-журнал�
       line.readBy[HUMAN] = line.at;
     });
     // «Старое» осталось непрочитанным, а строка отмечена отдельно.
-    expect(await cursorJson()).toEqual({ marks: { 'r-01': ['m-r01-2'] } });
-    // Явное «прочёл» по «старому» сдвигает водораздел и сворачивает отметку вплотную за ним.
+    expect(await cursorJson()).toEqual({ 'r-01': [[2, 2]] });
+    // Явное «прочёл» по «старому» добавляет письмо 1 и склеивается с отметкой вплотную за ним.
     await markHumanRead(project, workId, ['m-r01-1']);
-    expect(await cursorJson()).toEqual({ 'r-01': 'm-r01-2' });
-    // Две отметки подряд вплотную за водоразделом сворачиваются целиком.
+    expect(await cursorJson()).toEqual({ 'r-01': [[1, 2]] });
+    // Две отметки подряд вплотную за прочитанным склеиваются целиком.
     await updateMap(project, workId, (map) => {
       for (const text of ['раз', 'два']) {
         const line = addMessage(map, { from: 'system', to: [HUMAN], roomId: 'r-01', text });
         line.readBy[HUMAN] = line.at;
       }
     });
-    expect(await cursorJson()).toEqual({ 'r-01': 'm-r01-4' });
-    // Водораздел впереди отмеченного письма назад не возвращается, отметка позади него не пишется.
+    expect(await cursorJson()).toEqual({ 'r-01': [[1, 4]] });
+    // Прочитанное впереди отмеченного письма назад не возвращается, повторная отметка уже прочитанного файл не меняет.
     await mkdir(workPaths(project, workId).cursors, { recursive: true });
-    await writeFile(path.join(workPaths(project, workId).cursors, `${HUMAN}.json`), JSON.stringify({ 'r-01': 'm-r01-9' }));
+    await writeFile(path.join(workPaths(project, workId).cursors, `${HUMAN}.json`), JSON.stringify({ 'r-01': [[1, 9]] }));
     await updateMap(project, workId, (map) => {
       const line = addMessage(map, { from: 'system', to: [HUMAN], roomId: 'r-01', text: 'позже' });
       line.readBy[HUMAN] = line.at;
     });
-    expect(await cursorJson()).toEqual({ 'r-01': 'm-r01-9' });
+    expect(await cursorJson()).toEqual({ 'r-01': [[1, 9]] });
   });
 });
 
@@ -217,9 +217,9 @@ describe('удаление комнаты на карте-журнале', () =>
     await appendMessage(project, workId, 'r-02', { from: 's-01', to: ['s-02'], text: 'два' });
     const paths = workPaths(project, workId);
     await mkdir(paths.cursors, { recursive: true });
-    await writeFile(path.join(paths.cursors, 's-02.json'), JSON.stringify({ 'r-01': 'm-r01-1', 'r-02': 'm-r02-1' }));
+    await writeFile(path.join(paths.cursors, 's-02.json'), JSON.stringify({ 'r-01': [[1, 1]], 'r-02': [[1, 1]] }));
     await updateMap(project, workId, (map) => void deleteRoom(map, 'r-01'));
-    expect(await readCursors(project, workId, 's-02')).toEqual({ 'r-02': 'm-r02-1' });
+    expect(await readCursorFile(project, workId, 's-02')).toEqual({ 'r-02': [[1, 1]] });
   });
 
   it('messageSeq на v3 не пересчитывается: поле остаётся как было', async () => {
@@ -240,7 +240,7 @@ describe('возврат комнаты из архива и решения на
     const all = await letters('r-01');
     expect(all.map((letter) => letter.text)).toEqual(['до архива', 'Room archived by the human.', 'Room reopened by the human.']);
     // s-02 была адресатом первого письма; архивная комната адресатов не имела, курсор — по последнему письму до возврата.
-    expect((await readCursors(project, workId, 's-02'))['r-01']).toBe(all[1]!.id);
+    expect((await readCursorFile(project, workId, 's-02'))['r-01']).toEqual([[1, all[1]!.seq]]);
   });
 
   it('принятое решение: письмо в журнале комнаты и запись в decisions.json с id письма журнала', async () => {
@@ -278,10 +278,10 @@ describe('прочие писатели писем на карте-журнал�
   it('markHumanRead на v3 ставит курсор человека на самое новое отмеченное письмо журнала', async () => {
     for (const text of ['один', 'два', 'три']) await appendMessage(project, workId, 'r-01', { from: 's-02', to: [], text });
     expect(await markHumanRead(project, workId, ['m-r01-2'])).toBe(1);
-    expect(await readCursors(project, workId, HUMAN)).toEqual({ 'r-01': 'm-r01-2' });
+    expect(await readCursorFile(project, workId, HUMAN)).toEqual({ 'r-01': [[1, 2]] });
     // Уже прочитанное и чужие id — ноль, курсор не двигается назад.
     expect(await markHumanRead(project, workId, ['m-r01-1', 'm-r01-2', 'm-нет'])).toBe(0);
-    expect(await readCursors(project, workId, HUMAN)).toEqual({ 'r-01': 'm-r01-2' });
+    expect(await readCursorFile(project, workId, HUMAN)).toEqual({ 'r-01': [[1, 2]] });
   });
 });
 
@@ -298,22 +298,24 @@ describe('отметки прочтения не врут: системная с
     for (const text of ['вопрос один', 'вопрос два']) await appendMessage(project, workId, 'r-01', { from: 's-02', to: [HUMAN], text });
     await systemLine('строка');
     expect(await humanRead()).toEqual({ 'm-r01-1': false, 'm-r01-2': false, 'm-r01-3': true });
+    // В файле только сама строка: диапазон из одного письма, а не «прочитано по третье».
+    expect(JSON.parse(await cursorText())).toEqual({ 'r-01': [[3, 3]] });
   });
 
-  it('явный markHumanRead самого нового письма сворачивает отметки в водораздел', async () => {
+  it('явный markHumanRead самого нового письма склеивает отметки в один диапазон', async () => {
     for (const text of ['вопрос один', 'вопрос два']) await appendMessage(project, workId, 'r-01', { from: 's-02', to: [HUMAN], text });
     await systemLine('строка');
     expect(await markHumanRead(project, workId, ['m-r01-2'])).toBe(1);
     expect(await humanRead()).toEqual({ 'm-r01-1': true, 'm-r01-2': true, 'm-r01-3': true });
-    // Отметка позади водораздела не остаётся: в файле одна запись и ни одной отметки.
-    expect(JSON.parse(await cursorText())).toEqual({ 'r-01': 'm-r01-3' });
+    // Отметка внутри прочитанного не остаётся: в файле один диапазон.
+    expect(JSON.parse(await cursorText())).toEqual({ 'r-01': [[1, 3]] });
   });
 
-  it('отметка вплотную за водоразделом сразу сворачивается в него', async () => {
+  it('отметка вплотную за прочитанным сразу склеивается с ним', async () => {
     await appendMessage(project, workId, 'r-01', { from: 's-02', to: [HUMAN], text: 'вопрос' });
     await markHumanRead(project, workId, ['m-r01-1']);
     await systemLine('строка');
-    expect(JSON.parse(await cursorText())).toEqual({ 'r-01': 'm-r01-2' });
+    expect(JSON.parse(await cursorText())).toEqual({ 'r-01': [[1, 2]] });
   });
 
   it('файл курсоров не растёт после длинной череды системных строк за непрочитанным письмом', async () => {
@@ -324,6 +326,7 @@ describe('отметки прочтения не врут: системная с
       });
     }
     expect((await humanRead())['m-r01-1']).toBe(false);
+    expect(JSON.parse(await cursorText())).toEqual({ 'r-01': [[2, 601]] });
     expect((await cursorText()).length).toBeLessThan(4096);
   });
 });
@@ -334,24 +337,24 @@ describe('markHumanRead не двигает курсор назад', () => {
   it('устаревший вызов со старым id оставляет курсор на месте и сообщает 0', async () => {
     for (const text of ['один', 'два', 'три']) await appendMessage(project, workId, 'r-01', { from: 's-02', to: [HUMAN], text });
     // Курсорный замок держит «чужой» вызов: устаревший markHumanRead успевает прочитать карту (письмо 1 ему непрочитано)
-    // и встаёт в очередь на замок; пока он ждёт, чужой вызов ставит водораздел на 3.
+    // и встаёт в очередь на замок; пока он ждёт, чужой вызов прочитанным 1–3.
     let stale = -1;
-    await withCursors(project, workId, HUMAN, async (cursors) => {
+    await withCursors(project, workId, HUMAN, async (file) => {
       const call = markHumanRead(project, workId, ['m-r01-1']).then((count) => void (stale = count));
       await new Promise((resolve) => setTimeout(resolve, 150));
-      cursors['r-01'] = 'm-r01-3';
+      addRange(file, 'r-01', 1, 3);
       void call;
       return { changed: true, value: undefined };
     });
     await vi.waitFor(() => expect(stale).not.toBe(-1));
-    expect(JSON.parse(await readFile(cursorFileOf(), 'utf8'))).toEqual({ 'r-01': 'm-r01-3' });
+    expect(JSON.parse(await readFile(cursorFileOf(), 'utf8'))).toEqual({ 'r-01': [[1, 3]] });
     expect(stale).toBe(0);
   });
 
   it('два одновременных вызова заканчиваются на более новом курсоре в любом порядке', async () => {
     for (const text of ['один', 'два', 'три']) await appendMessage(project, workId, 'r-01', { from: 's-02', to: [HUMAN], text });
     await Promise.all([markHumanRead(project, workId, ['m-r01-1']), markHumanRead(project, workId, ['m-r01-3'])]);
-    expect(JSON.parse(await readFile(cursorFileOf(), 'utf8'))).toEqual({ 'r-01': 'm-r01-3' });
+    expect(JSON.parse(await readFile(cursorFileOf(), 'utf8'))).toEqual({ 'r-01': [[1, 3]] });
   });
 });
 

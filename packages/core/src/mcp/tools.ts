@@ -53,7 +53,7 @@ import {
 } from '../work/context-pages.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { unreadFor, unreadFromJournals } from '../work/letters.js';
-import { appendMessage, DIRECT_CURSOR_KEY, findMessage, mergeByTime, readCursors, readMessages, readPage, readPageBySeq, withCursors, type JournalLetter } from '../work/journal.js';
+import { addRange, appendMessage, DIRECT_CURSOR_KEY, findMessage, mergeByTime, readCursorFile, readMessages, readPage, readPageBySeq, readPrefix, withCursors, type CursorFile, type JournalLetter } from '../work/journal.js';
 import { addMessage, addSession, JOURNAL_SCHEMA_VERSION, parseIndex, transitionSession, type NewMessage } from '../work/map.js';
 import { readBacklog } from '../work/backlog.js';
 import { listBacklogSuggestions, suggestBacklog } from '../work/backlog-suggestions.js';
@@ -1142,7 +1142,7 @@ async function waitFor(
       // Карта-журнал: та же проходка по курсору, что у `check_inbox` (файл курсоров и хвосты журналов), курсоры не двигаются.
       const structure = await workStructure(context);
       if (structure.journal) {
-        const scan = await scanInbox(context, sessionId, structure.map, await readCursors(context.projectPath, context.workId, sessionId));
+        const scan = await scanInbox(context, sessionId, structure.map, await readCursorFile(context.projectPath, context.workId, sessionId));
         return scan.taken.length === 0
           ? null
           : { state: 'message', messages: scan.taken.map((letter) => inboxView(asMessage(letter), structure.map, sessionId)) };
@@ -1353,15 +1353,14 @@ async function checkInbox(context: McpContext, sessionId: string): Promise<unkno
  */
 async function checkInboxJournal(context: McpContext, sessionId: string, map: WorkMap): Promise<unknown> {
   requireSession(map, sessionId);
-  const { taken, more, lost } = await withCursors(context.projectPath, context.workId, sessionId, async (cursors) => {
-    const scan = await scanInbox(context, sessionId, map, cursors);
-    for (const [key, id] of Object.entries(scan.moved)) cursors[key] = id;
-    return { changed: Object.keys(scan.moved).length > 0, value: { taken: scan.taken, more: scan.more, lost: scan.lost } };
+  const { taken, more } = await withCursors(context.projectPath, context.workId, sessionId, async (file) => {
+    const scan = await scanInbox(context, sessionId, map, file);
+    let changed = false;
+    for (const [key, [from, to]] of Object.entries(scan.moved)) if (addRange(file, key, from, to)) changed = true;
+    return { changed, value: { taken: scan.taken, more: scan.more } };
   });
   const messages = taken.map((letter) => inboxView(asMessage(letter), map, sessionId));
-  // Потеря курсора доходит до агента: `console.warn` читателя журнала его никто не видит, а письма после потерянного курсора
-  // иначе пропали бы молча. Сколько писем пропущено, сказать нельзя: у прежнего id нет номера строки.
-  const warnings = [...lost, ...(more ? [`more unread letters remain (this call returned ${messages.length}): call check_inbox again`] : [])];
+  const warnings = more ? [`more unread letters remain (this call returned ${messages.length}): call check_inbox again`] : [];
   return {
     messages,
     ...(more ? { more: true } : {}),
@@ -1371,40 +1370,33 @@ async function checkInboxJournal(context: McpContext, sessionId: string, map: Wo
 
 /**
  * Непрочитанное сессии по журналам: общий проход `check_inbox` и пробы `wait_for("inbox")`, поэтому они не расходятся
- * в том, что непрочитано. Ничего не пишет: `moved` — куда вызывающий (под замком курсоров) может сдвинуть курсоры;
- * проба их не двигает. Читает файл курсоров (он уже в `cursors`) и хвосты журналов после курсора, не целые журналы.
+ * в том, что непрочитано. Ничего не пишет: `moved` — диапазоны (`[от, до]` номеров строк), которые вызывающий (под замком
+ * курсоров) может добавить к прочитанному; проба их не добавляет. Читает файл курсоров (он уже в `file`) и хвосты журналов
+ * с первого разрыва в прочитанном, не целые журналы.
  */
 async function scanInbox(
   context: McpContext,
   sessionId: string,
   map: WorkMap,
-  cursors: Readonly<Record<string, string>>,
-): Promise<{ taken: JournalLetter[]; more: boolean; moved: Record<string, string>; lost: string[] }> {
+  file: CursorFile,
+): Promise<{ taken: JournalLetter[]; more: boolean; moved: Record<string, [number, number]> }> {
   const keys: (string | null)[] = [null, ...map.rooms.map((room) => room.id)];
   const resolve = async (roomId: string, id: string) => findMessage(context.projectPath, context.workId, roomId, id);
   const budget = { letters: 0, bytes: 0 };
   const rows: JournalLetter[][] = [];
-  const moved: Record<string, string> = {};
-  const lost: string[] = [];
+  const moved: Record<string, [number, number]> = {};
   let more = false;
   for (const roomId of keys) {
     const key = roomId ?? DIRECT_CURSOR_KEY;
     const mine: JournalLetter[] = [];
-    let after = cursors[key];
-    let scannedTo: string | undefined;
+    // Всё до первого разрыва прочитано (`readPrefix`); письма после него, уже прочитанные по отдельности, отсеивает `unreadFromJournals`.
+    const start = readPrefix(file, key);
+    let afterSeq = start;
+    let scannedTo = start;
     scan: for (;;) {
-      const page = await readPage(context.projectPath, context.workId, roomId, { fromStart: true, ...(after === undefined ? {} : { after }), limit: 100, maxBytes: 256 * 1024 });
-      if (page.letters.length === 0) {
-        // Курсор указывал на письмо, которого больше нет: прижат к концу журнала (`readPage`), повтора нет.
-        if (page.clampedTo !== undefined) {
-          scannedTo = page.clampedTo;
-          lost.push(
-            `journal ${roomId ?? 'direct messages'}: your read position ${after ?? ''} is no longer in the journal and has no line number, so the letters after it cannot be located: unread letters may have been skipped (count unknown); your position was moved to the end of the journal (${page.clampedTo})`,
-          );
-        }
-        break;
-      }
-      const unread = new Set((await unreadFromJournals(map, { [key]: page.letters }, {}, sessionId, resolve)).map((letter) => letter.id));
+      const page = await readPage(context.projectPath, context.workId, roomId, { afterSeq, limit: 100, maxBytes: 256 * 1024 });
+      if (page.letters.length === 0) break;
+      const unread = new Set((await unreadFromJournals(map, { [key]: page.letters }, file, sessionId, resolve)).map((letter) => letter.id));
       for (const letter of page.letters) {
         if (unread.has(letter.id)) {
           const size = Buffer.byteLength(letter.text, 'utf8');
@@ -1416,15 +1408,15 @@ async function scanInbox(
           budget.letters += 1;
           budget.bytes += size;
         }
-        scannedTo = letter.id;
+        scannedTo = letter.seq;
       }
       if (!page.more) break;
-      after = scannedTo;
+      afterSeq = scannedTo;
     }
-    if (scannedTo !== undefined && cursors[key] !== scannedTo) moved[key] = scannedTo;
+    if (scannedTo > start) moved[key] = [start + 1, scannedTo];
     rows.push(mine);
   }
-  return { taken: mergeByTime(rows), more, moved, lost };
+  return { taken: mergeByTime(rows), more, moved };
 }
 
 async function createRoom(

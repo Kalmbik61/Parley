@@ -31,103 +31,77 @@ export interface NewJournalMessage {
 }
 
 /**
- * Прочитанное одной сессией: id комнаты (или `direct`) → id последнего прочитанного письма (водораздел: прочитано всё
- * по это письмо включительно).
+ * Прочитанное одной сессией (человек — читатель `human`) — ДИАПАЗОНЫ номеров строк (`seq`) на журнал.
  *
  * ФОРМА ФАЙЛА КУРСОРОВ `cursors/<сессия>.json` (одна, определена здесь):
- * `{ "<ключ журнала>": "<id письма>", …, "marks": { "<ключ журнала>": ["<id письма>", …] } }`.
- * Ключ журнала — id комнаты или `direct` (`marks` с ними не совпадает). `marks` — разреженные отметки: письма ВПЕРЕДИ
- * водораздела, прочитанные по отдельности (системная строка, которую человек не видел, но «новым» она быть не должна).
- * Прочитано = номер письма не больше номера водораздела ИЛИ id среди отметок. Правила `normalizeMarks`: отметки позади
- * водораздела выбрасываются; отметка вплотную за водоразделом сворачивается в него (водораздел идёт вперёд, пока
- * следующий номер отмечен); отметок на журнал не больше `MAX_MARKS`, лишние самые старые выбрасываются (письмо снова
- * выглядит непрочитанным — безопасная сторона). Пустой `marks` в файл не пишется.
+ * `{ "<ключ журнала>": [[от, до], …], … }`, например `{"r-01":[[1,120],[130,130]],"direct":[[1,5]]}`.
+ * Ключ журнала — id комнаты или `direct`. Диапазон `[от, до]` — номера `seq` от `от` до `до` включительно, оба целые и
+ * `от <= до`; диапазоны идут по возрастанию и не пересекаются и не соприкасаются (`до + 1 < от` следующего): соседние и
+ * перекрывающиеся склеиваются при каждой записи. Прочитано = номер письма входит в один из диапазонов. Обычный случай
+ * («прочитано всё по N») — один диапазон `[1, N]`; разреженная история человека — несколько диапазонов. Потолка и
+ * выбрасываемых отметок нет: размер файла растёт с числом РАЗРЫВОВ в прочитанном, а не с числом писем.
+ * Запись только ДОБАВЛЯЕТ к прочитанному (`addRange`) и никогда не убирает: устаревший писатель не «разчитает» письмо.
+ * Исключение одно — удаление комнаты стирает ключ журнала целиком. Нечитаемый ключ или диапазон при разборе отбрасывается
+ * (письма выглядят непрочитанными — безопасная сторона), порядок и склейка при разборе восстанавливаются.
  */
-export type SessionCursors = Record<string, string>;
-
-/** Разреженные отметки прочтения: ключ журнала → id писем впереди водораздела. */
-export type SessionMarks = Record<string, string[]>;
-
-/** Файл курсоров целиком: водоразделы и отметки. */
-export interface CursorFile {
-  cursors: SessionCursors;
-  marks: SessionMarks;
-}
-
-/** Потолок отметок на один журнал: файл курсоров остаётся в сотнях байт при любой череде системных строк. */
-export const MAX_MARKS = 32;
-
-const MARKS_KEY = 'marks';
+export type CursorFile = Record<string, [number, number][]>;
 
 const keyRoom = (key: string): string | null => (key === DIRECT_CURSOR_KEY ? null : key);
 
-/** Номер строки письма `id` в журнале ключа; `null` — id прежнего вида без номера. */
-const seqInKey = (key: string, id: string): number | null => seqOfLetterId(id, keyRoom(key));
+/** Прочитано ли письмо с номером строки `seq` в журнале ключа `key`. */
+export function isRead(file: CursorFile, key: string, seq: number): boolean {
+  for (const [from, to] of file[key] ?? []) {
+    if (seq < from) return false;
+    if (seq <= to) return true;
+  }
+  return false;
+}
 
-/** Прочитано ли письмо `id` ключа `key` по водоразделу или отметке. */
-export function coversLetter({ cursors, marks }: CursorFile, key: string, id: string): boolean {
-  if (marks[key]?.includes(id) === true) return true;
-  const mark = cursors[key];
-  if (mark === undefined) return false;
-  if (mark === id) return true;
-  const watermark = seqInKey(key, mark);
-  const own = seqInKey(key, id);
-  return watermark !== null && own !== null && own <= watermark;
+/** До какого номера прочитано сплошняком с первого письма (`0` — первое письмо не прочитано). Дальше первый разрыв. */
+export function readPrefix(file: CursorFile, key: string): number {
+  const first = file[key]?.[0];
+  return first !== undefined && first[0] === 1 ? first[1] : 0;
+}
+
+/** Склеивает диапазоны: по возрастанию, перекрывающиеся и соприкасающиеся — в один. Негодные пары отбрасываются. */
+function mergeRanges(ranges: readonly (readonly [number, number])[]): [number, number][] {
+  const sorted = ranges.filter(([from, to]) => Number.isInteger(from) && Number.isInteger(to) && from >= 1 && to >= from).sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const [from, to] of sorted) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && from <= last[1] + 1) last[1] = Math.max(last[1], to);
+    else merged.push([from, to]);
+  }
+  return merged;
+}
+
+/** Добавляет к прочитанному ключа письма `from..to` включительно; возвращает, изменился ли файл. Убирать из прочитанного нельзя. */
+export function addRange(file: CursorFile, key: string, from: number, to: number): boolean {
+  const before = file[key] ?? [];
+  const after = mergeRanges([...before, [from, to]]);
+  if (after.length === before.length && after.every(([a, b], i) => a === before[i]![0] && b === before[i]![1])) return false;
+  file[key] = after;
+  return true;
 }
 
 /**
- * Приводит отметки ключа к виду файла: позади водораздела — прочь, вплотную за ним — в водораздел, сверх потолка —
- * самые старые прочь. Водораздел прежнего вида без номера считается нулевым (письма впереди него — все).
+ * Номера строк писем карты по порядку `messages`: из id (`m-r01-5`), а у прежних писем (`m-NN`) — позиция в своём
+ * журнале с единицы (миграция нумерует их именно так). Карта хранит письма журнала по порядку журнала.
  */
-export function normalizeMarks({ cursors, marks }: CursorFile, key: string): void {
-  const ids = marks[key];
-  if (ids === undefined) return;
-  const mark = cursors[key];
-  let watermark = mark === undefined ? 0 : (seqInKey(key, mark) ?? 0);
-  const bySeq = new Map<number, string>();
-  for (const id of ids) {
-    const seq = seqInKey(key, id);
-    if (seq !== null && seq > watermark) bySeq.set(seq, id);
-  }
-  let collapsed: string | undefined;
-  while (bySeq.has(watermark + 1)) {
-    watermark += 1;
-    collapsed = bySeq.get(watermark);
-    bySeq.delete(watermark);
-  }
-  if (collapsed !== undefined) cursors[key] = collapsed;
-  const kept = [...bySeq.entries()].sort((a, b) => a[0] - b[0]).map(([, id]) => id).slice(-MAX_MARKS);
-  if (kept.length === 0) delete marks[key];
-  else marks[key] = kept;
+export function messageSeqs(messages: readonly Pick<Message, 'id' | 'roomId'>[]): number[] {
+  const counts = new Map<string, number>();
+  return messages.map((message) => {
+    const key = message.roomId ?? DIRECT_CURSOR_KEY;
+    const position = (counts.get(key) ?? 0) + 1;
+    counts.set(key, position);
+    return seqOfLetterId(message.id, keyRoom(key)) ?? position;
+  });
 }
 
-/** Водораздел ключа вперёд на письмо `id`; назад не идёт. Возвращает, сдвинулся ли. */
-export function advanceWatermark(file: CursorFile, key: string, id: string): boolean {
-  const target = seqInKey(key, id);
-  if (target === null) return false;
-  const current = file.cursors[key];
-  const at = current === undefined ? 0 : (seqInKey(key, current) ?? 0);
-  if (target <= at) return false;
-  file.cursors[key] = id;
-  normalizeMarks(file, key);
-  return true;
-}
-
-/** Отмечает письмо `id` прочитанным по отдельности, не двигая водораздел дальше нужного. Возвращает, изменился ли файл. */
-export function addMark(file: CursorFile, key: string, id: string): boolean {
-  if (coversLetter(file, key, id)) return false;
-  (file.marks[key] ??= []).push(id);
-  normalizeMarks(file, key);
-  return true;
-}
-
-const serializeCursors = ({ cursors, marks }: CursorFile): string => {
-  const live: SessionMarks = {};
-  for (const key of Object.keys(marks)) {
-    normalizeMarks({ cursors, marks }, key);
-    if (marks[key] !== undefined) live[key] = marks[key];
-  }
-  return `${JSON.stringify(Object.keys(live).length === 0 ? cursors : { ...cursors, [MARKS_KEY]: live })}\n`;
+const serializeCursors = (file: CursorFile): string => {
+  const live: CursorFile = {};
+  for (const [key, ranges] of Object.entries(file)) if (ranges.length > 0) live[key] = ranges;
+  return `${JSON.stringify(live)}\n`;
 };
 
 export interface JournalReadOptions {
@@ -135,6 +109,12 @@ export interface JournalReadOptions {
   after?: string;
   /** Письма строго до этого id. Неизвестный id — пустой список. */
   before?: string;
+  /**
+   * Письма с номером строки строго больше этого (вперёд, самые старые первыми), как `after`, но по номеру, а не по id:
+   * у прежних писем (`m-NN`) номера в id нет. Положение ищется обратным проходом от хвоста (платим за непрочитанное).
+   * Главнее `after`.
+   */
+  afterSeq?: number;
   /**
    * Без `after` читать вперёд с первого письма журнала, а не с конца: «всё непрочитанное» у сессии без курсора
    * (`check_inbox`). Неизвестный `after` (письма уже нет в журнале) не воспроизводит журнал: если по id виден номер
@@ -166,6 +146,8 @@ export const DIRECT_CURSOR_KEY = 'direct';
 
 const DEFAULT_LIMIT = 50;
 const DEFAULT_MAX_BYTES = 64 * 1024;
+const LINE_SEQ = /^\{"seq":(\d+),/;
+
 /** Размер блока чтения с конца. Страница журнала читает не больше `maxBytes` плюс один такой блок. */
 const CHUNK_BYTES = 8 * 1024;
 
@@ -291,31 +273,23 @@ export function parseLetters(text: string, file: string, warn: (message: string)
   return letters;
 }
 
-/** Текст файла курсоров → водоразделы и отметки; `null`, если файл не объект. Нечитаемый файл вызывающий считает «ничего не прочитано». */
+/** Текст файла курсоров → диапазоны прочитанного; `null`, если файл не объект. Нечитаемый файл вызывающий считает «ничего не прочитано». */
 export function parseCursorFile(text: string): CursorFile | null {
   try {
     const value = JSON.parse(text) as unknown;
     if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
-    const entries = Object.entries(value);
-    const cursors = Object.fromEntries(entries.filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
-    const marks: SessionMarks = {};
-    const raw = (value as Record<string, unknown>)[MARKS_KEY];
-    if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
-      for (const [key, ids] of Object.entries(raw)) {
-        if (Array.isArray(ids)) {
-          const strings = ids.filter((id): id is string => typeof id === 'string');
-          if (strings.length > 0) marks[key] = strings;
-        }
-      }
+    const file: CursorFile = {};
+    for (const [key, raw] of Object.entries(value)) {
+      if (!Array.isArray(raw)) continue;
+      const pairs = raw.filter((pair): pair is [number, number] => Array.isArray(pair) && pair.length === 2 && typeof pair[0] === 'number' && typeof pair[1] === 'number');
+      const ranges = mergeRanges(pairs);
+      if (ranges.length > 0) file[key] = ranges;
     }
-    return { cursors, marks };
+    return file;
   } catch {
     return null;
   }
 }
-
-/** Водоразделы из текста файла курсоров (без отметок); `null`, если файл не объект. */
-export const parseCursors = (text: string): SessionCursors | null => parseCursorFile(text)?.cursors ?? null;
 
 /** Текст предупреждения о нечитаемом файле курсоров: один на асинхронное и синхронное чтение. */
 export const unreadableCursorsMessage = (file: string): string => `cursor file ${file} is unreadable: treating the session as having read nothing`;
@@ -469,6 +443,16 @@ async function locateEnd(handle: FileHandle, size: number, id: string): Promise<
   return null;
 }
 
+/** Смещение сразу за последней строкой с номером не больше `seq` — обратным проходом от хвоста; `0`, если таких строк нет. */
+async function locateEndBySeq(handle: FileHandle, size: number, seq: number): Promise<number> {
+  if (seq <= 0) return 0;
+  for await (const { line, start } of reverseLines(handle, size)) {
+    const head = LINE_SEQ.exec(line.subarray(0, 32).toString('latin1'));
+    if (head !== null && Number(head[1]) <= seq) return Math.min(start + line.length + 1, size);
+  }
+  return 0;
+}
+
 /**
  * Страница писем журнала, `letters` по порядку журнала.
  *
@@ -489,7 +473,7 @@ export async function readPage(
   projectPath: string,
   workId: string,
   roomId: string | null,
-  { after, before, fromStart = false, limit = DEFAULT_LIMIT, maxBytes = DEFAULT_MAX_BYTES, warn = console.warn }: JournalReadOptions = {},
+  { after, before, afterSeq, fromStart = false, limit = DEFAULT_LIMIT, maxBytes = DEFAULT_MAX_BYTES, warn = console.warn }: JournalReadOptions = {},
 ): Promise<JournalPage> {
   if (limit <= 0) return { letters: [], more: false };
   const file = journalFile(workPaths(projectPath, workId), roomId);
@@ -497,10 +481,12 @@ export async function readPage(
   if (handle === null) return { letters: [], more: false };
   try {
     const { size } = await handle.stat();
-    if (after !== undefined || fromStart) {
+    if (after !== undefined || afterSeq !== undefined || fromStart) {
       let from: number | null = 0;
       let skipThroughSeq: number | undefined;
-      if (after !== undefined) {
+      if (afterSeq !== undefined) {
+        from = await locateEndBySeq(handle, size, afterSeq);
+      } else if (after !== undefined) {
         from = await locateEnd(handle, size, after);
         if (from === null && fromStart) {
           // Письма с этим id нет (его убрали): журнал с начала не отдаём, иначе всё прочитанное придёт повторно.
@@ -676,43 +662,32 @@ export async function readCursorFile(
   try {
     text = await readFile(file, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { cursors: {}, marks: {} };
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
     throw error;
   }
   const parsed = parseCursorFile(text);
   if (parsed === null) {
     warn(unreadableCursorsMessage(file));
-    return { cursors: {}, marks: {} };
+    return {};
   }
   return parsed;
 }
 
-/** Только водоразделы файла курсоров; об отметках см. `readCursorFile`. */
-export async function readCursors(
-  projectPath: string,
-  workId: string,
-  sessionId: string,
-  options: { warn?: (message: string) => void } = {},
-): Promise<SessionCursors> {
-  return (await readCursorFile(projectPath, workId, sessionId, options)).cursors;
-}
-
-/** Ставит курсор сессии на комнату (`null` — прямые письма): читает файл, меняет одну запись, пишет атомарно. */
+/**
+ * Помечает прочитанным всё с первого письма по номер `upToSeq` включительно (`null` вместо комнаты — прямые письма):
+ * читает файл, добавляет диапазон, пишет атомарно. Назад не идёт: уже прочитанное остаётся прочитанным.
+ */
 export async function writeCursor(
   projectPath: string,
   workId: string,
   sessionId: string,
   roomId: string | null,
-  lastId: string,
+  upToSeq: number,
 ): Promise<void> {
-  const paths = workPaths(projectPath, workId);
-  const file = cursorFile(paths, sessionId);
-  await mkdir(paths.cursors, { recursive: true });
-  await withLock(`${file}.lock`, DEFAULT_LOCK_TIMEOUT_MS, async () => {
-    const state = await readCursorFile(projectPath, workId, sessionId);
-    state.cursors[roomId === null ? DIRECT_CURSOR_KEY : safeId('room', roomId)] = lastId;
-    await writeAtomic(file, serializeCursors(state));
-  });
+  await withCursors(projectPath, workId, sessionId, async (file) => ({
+    changed: addRange(file, roomId === null ? DIRECT_CURSOR_KEY : safeId('room', roomId), 1, upToSeq),
+    value: undefined,
+  }));
 }
 
 export interface SeqPageOptions {
@@ -725,7 +700,6 @@ export interface SeqPageOptions {
   warn?: (message: string) => void;
 }
 
-const LINE_SEQ = /^\{"seq":(\d+),/;
 
 /**
  * Страница журнала по номеру строки (`seq`), а не по id: курсор страниц `read_room` — номер (`before:N`), и прежние
@@ -786,8 +760,8 @@ export async function readPageBySeq(
 }
 
 /**
- * Курсоры сессии под её замком: `body` читает и меняет объект курсоров, файл пишется один раз и только если `body`
- * вернул `true`. Замок один на весь вызов, поэтому два `check_inbox` одной сессии (инструмент и ожидание) не раздадут
+ * Курсоры сессии под её замком: `body` читает и меняет файл курсоров, файл пишется один раз и только если `body`
+ * вернул `changed: true`. Замок один на весь вызов, поэтому два `check_inbox` одной сессии (инструмент и ожидание) не раздадут
  * одно письмо дважды: второй читает курсор уже после записи первого. `writeCursor` берёт тот же замок — внутри `body`
  * его звать нельзя.
  */
@@ -795,14 +769,14 @@ export async function withCursors<T>(
   projectPath: string,
   workId: string,
   sessionId: string,
-  body: (cursors: SessionCursors, state: CursorFile) => Promise<{ changed: boolean; value: T }>,
+  body: (file: CursorFile) => Promise<{ changed: boolean; value: T }>,
 ): Promise<T> {
   const paths = workPaths(projectPath, workId);
   const file = cursorFile(paths, sessionId);
   await mkdir(paths.cursors, { recursive: true });
   return withLock(`${file}.lock`, DEFAULT_LOCK_TIMEOUT_MS, async () => {
     const state = await readCursorFile(projectPath, workId, sessionId);
-    const { changed, value } = await body(state.cursors, state);
+    const { changed, value } = await body(state);
     if (changed) await writeAtomic(file, serializeCursors(state));
     return value;
   });

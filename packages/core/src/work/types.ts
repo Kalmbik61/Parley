@@ -470,7 +470,7 @@ export interface WorkIndexMap extends Omit<WorkMap, 'schemaVersion' | 'messages'
    */
   migratedRun?: string;
   /**
-   * Что миграция не воспроизвела (письма без комнаты, отброшенные отметки, расхождения читателей и порядка). Есть поле —
+   * Что миграция не воспроизвела (письма без комнаты, расхождения читателей и порядка). Есть поле —
    * `map.v2.json` не удаляется никогда: в нём единственная полная копия. Нет поля — расхождений не было.
    */
   v2Kept?: V2Kept;
@@ -479,7 +479,6 @@ export interface WorkIndexMap extends Omit<WorkMap, 'schemaVersion' | 'messages'
 /** Счётчики расхождений миграции v2 → v3; хотя бы один не ноль — копия v2 остаётся. */
 export interface V2Kept {
   orphaned: number;
-  droppedMarks: number;
   readByMismatches: number;
   orderMismatches: number;
 }

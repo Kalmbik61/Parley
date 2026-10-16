@@ -34,7 +34,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
-const { appendMessage, findMessage, readCursors, readMessages, readPage, writeCursor, journalFile } = await import('./journal.js');
+const { addRange, appendMessage, findMessage, isRead, readCursorFile, readMessages, readPage, withCursors, writeCursor, journalFile } = await import('./journal.js');
 const { unreadFromJournals, unreadFor } = await import('./letters.js');
 const { workPaths } = await import('./store.js');
 const { HUMAN } = await import('./types.js');
@@ -154,7 +154,7 @@ describe('appendMessage', () => {
 
   it('id комнаты и сессии не выходят из каталога работы', async () => {
     await expect(appendMessage(project, WORK, '../x', note('плохо'))).rejects.toThrow(/invalid/);
-    await expect(readCursors(project, WORK, '../s-01')).rejects.toThrow(/invalid/);
+    await expect(readCursorFile(project, WORK, '../s-01')).rejects.toThrow(/invalid/);
   });
 
   it('на 10 000 писем одно письмо читает с диска столько же, сколько на 100', async () => {
@@ -341,35 +341,79 @@ describe('курсор на письмо, которого больше нет (
   });
 });
 
-describe('курсоры', () => {
+describe('курсоры: диапазоны прочитанного', () => {
+  const cursorPath = (session: string): string => path.join(workPaths(project, WORK).cursors, `${session}.json`);
+  /** Помечает письма прочитанными по одному диапазону на номер, одной записью под замком файла. */
+  const mark = (session: string, key: string, seqs: number[]) =>
+    withCursors(project, WORK, session, async (file) => {
+      let changed = false;
+      for (const seq of seqs) if (addRange(file, key, seq, seq)) changed = true;
+      return { changed, value: undefined };
+    });
+
   it('сессия без файла прочитала «ничего»', async () => {
-    expect(await readCursors(project, WORK, 's-03')).toEqual({});
+    expect(await readCursorFile(project, WORK, 's-03')).toEqual({});
   });
 
-  it('пишется по комнатам и direct, перезаписывается, файлы сессий не мешают друг другу', async () => {
-    await writeCursor(project, WORK, 's-03', 'r-01', 'm-r01-412');
-    await writeCursor(project, WORK, 's-03', null, 'm-d-17');
-    expect(await readCursors(project, WORK, 's-03')).toEqual({ 'r-01': 'm-r01-412', direct: 'm-d-17' });
-    await writeCursor(project, WORK, 's-03', 'r-01', 'm-r01-420');
-    await writeCursor(project, WORK, 's-04', 'r-01', 'm-r01-1');
-    expect(await readCursors(project, WORK, 's-03')).toEqual({ 'r-01': 'm-r01-420', direct: 'm-d-17' });
-    expect(await readCursors(project, WORK, 's-04')).toEqual({ 'r-01': 'm-r01-1' });
+  it('пишется по комнатам и direct, перезаписывается вперёд, файлы сессий не мешают друг другу', async () => {
+    await writeCursor(project, WORK, 's-03', 'r-01', 412);
+    await writeCursor(project, WORK, 's-03', null, 17);
+    expect(await readCursorFile(project, WORK, 's-03')).toEqual({ 'r-01': [[1, 412]], direct: [[1, 17]] });
+    await writeCursor(project, WORK, 's-03', 'r-01', 420);
+    await writeCursor(project, WORK, 's-04', 'r-01', 1);
+    expect(await readCursorFile(project, WORK, 's-03')).toEqual({ 'r-01': [[1, 420]], direct: [[1, 17]] });
+    expect(await readCursorFile(project, WORK, 's-04')).toEqual({ 'r-01': [[1, 1]] });
     expect(workPaths(project, WORK).cursors).toBe(path.join(workPaths(project, WORK).dir, 'cursors'));
   });
 
-  it('человек — читатель со своим курсором: файл human.json', async () => {
-    await writeCursor(project, WORK, HUMAN, 'r-01', 'm-r01-5');
-    expect(JSON.parse(await readFile(path.join(workPaths(project, WORK).cursors, 'human.json'), 'utf8'))).toEqual({ 'r-01': 'm-r01-5' });
+  it('человек — читатель со своим курсором: файл human.json в форме диапазонов', async () => {
+    await writeCursor(project, WORK, HUMAN, 'r-01', 5);
+    expect(JSON.parse(await readFile(cursorPath('human'), 'utf8'))).toEqual({ 'r-01': [[1, 5]] });
   });
 
   it('запись курсора — сотни байт, чтение целого файла сессии без догадок о битом файле', async () => {
-    await writeCursor(project, WORK, 's-03', 'r-01', 'm-r01-9');
-    const file = path.join(workPaths(project, WORK).cursors, 's-03.json');
-    expect((await stat(file)).size).toBeLessThan(1024);
-    await writeFile(file, '{oborvano');
+    await writeCursor(project, WORK, 's-03', 'r-01', 9);
+    expect((await stat(cursorPath('s-03'))).size).toBeLessThan(1024);
+    await writeFile(cursorPath('s-03'), '{oborvano');
     const warn = vi.fn();
-    expect(await readCursors(project, WORK, 's-03', { warn })).toEqual({});
+    expect(await readCursorFile(project, WORK, 's-03', { warn })).toEqual({});
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('файл прежней формы (id вместо диапазонов) читается как «ничего не прочитано»: безопасная сторона', async () => {
+    await mkdir(workPaths(project, WORK).cursors, { recursive: true });
+    await writeFile(cursorPath('s-03'), JSON.stringify({ 'r-01': 'm-r01-5', marks: { 'r-01': ['m-r01-9'] } }));
+    expect(await readCursorFile(project, WORK, 's-03')).toEqual({});
+  });
+
+  it('разреженная история: 300 писем, 150 разбросанных прочтений переживают запись и чтение точно, файл меньше килобайта', async () => {
+    // Читаются первые три из каждых шести: 150 писем, 50 диапазонов.
+    const read = Array.from({ length: 300 }, (_, i) => i + 1).filter((seq) => (seq - 1) % 6 < 3);
+    expect(read).toHaveLength(150);
+    await mark('human', 'r-01', read.slice(0, 40));
+    await mark('human', 'r-01', read.slice(40, 100));
+    await mark('human', 'r-01', read.slice(100));
+    const file = await readCursorFile(project, WORK, 'human');
+    for (let seq = 1; seq <= 300; seq += 1) expect(isRead(file, 'r-01', seq), `seq ${seq}`).toBe(read.includes(seq));
+    expect(file['r-01']).toHaveLength(50);
+    expect((await stat(cursorPath('human'))).size).toBeLessThan(1024);
+  });
+
+  it('диапазоны склеиваются, когда соприкасаются: три записи, закрывающие разрыв, оставляют один диапазон', async () => {
+    await writeCursor(project, WORK, 's-03', 'r-01', 3);
+    await mark('s-03', 'r-01', [7, 8, 9]);
+    expect(await readCursorFile(project, WORK, 's-03')).toEqual({ 'r-01': [[1, 3], [7, 9]] });
+    await mark('s-03', 'r-01', [4, 5, 6]);
+    expect(JSON.parse(await readFile(cursorPath('s-03'), 'utf8'))).toEqual({ 'r-01': [[1, 9]] });
+  });
+
+  it('устаревший писатель не «разчитывает» письмо: запись только добавляет к прочитанному', async () => {
+    await mark('s-03', 'r-01', [5, 6]);
+    await writeCursor(project, WORK, 's-03', 'r-01', 10);
+    // Писатель, прочитавший файл раньше: его запись «до 3» идёт после «до 10» и ничего не убирает.
+    await writeCursor(project, WORK, 's-03', 'r-01', 3);
+    await mark('s-03', 'r-01', [5]);
+    expect(await readCursorFile(project, WORK, 's-03')).toEqual({ 'r-01': [[1, 10]] });
   });
 });
 
@@ -407,7 +451,7 @@ describe('unreadFromJournals', () => {
       'r-01': [letter(1, 'r-01'), letter(2, 'r-01'), letter(3, 'r-01', { to: ['s-03'] }), letter(4, 'r-01', { from: 's-02' })],
       direct: [letter(1, null, { to: ['s-02'] }), letter(2, null, { to: ['s-03'] })],
     };
-    const got = await unreadFromJournals(index([room()]), journals, { 'r-01': 'm-r01-1' }, 's-02', none);
+    const got = await unreadFromJournals(index([room()]), journals, { 'r-01': [[1, 1]] }, 's-02', none);
     // письмо 3 адресовано s-03, письмо 4 — от самой s-02; прямое m-d-1 — ей, курсора direct нет
     expect(got.map((message) => message.id)).toEqual(['m-d-1', 'm-r01-2']);
   });
@@ -449,7 +493,7 @@ describe('unreadFromJournals', () => {
 
     it('живое уведомление не пропадает, если источник лежит раньше загруженного хвоста', async () => {
       const resolve = vi.fn(async (_room: string, id: string) => (id === 'm-r01-1' ? (source() as never) : undefined));
-      const got = await unreadFromJournals({ ...base(), planEffects: [effect] } as never, { 'r-01': [notice()] }, { 'r-01': 'm-r01-4' }, 's-02', resolve);
+      const got = await unreadFromJournals({ ...base(), planEffects: [effect] } as never, { 'r-01': [notice()] }, { 'r-01': [[1, 4]] }, 's-02', resolve);
       expect(got.map((message) => message.id)).toEqual(['m-r01-5']);
       expect(resolve).toHaveBeenCalledWith('r-01', 'm-r01-1');
     });
@@ -461,7 +505,7 @@ describe('unreadFromJournals', () => {
 
     it('источник среди загруженных не запрашивается', async () => {
       const resolve = vi.fn(none);
-      const got = await unreadFromJournals({ ...base(), planEffects: [effect] } as never, { 'r-01': [source(), notice()] }, { 'r-01': 'm-r01-1' }, 's-02', resolve);
+      const got = await unreadFromJournals({ ...base(), planEffects: [effect] } as never, { 'r-01': [source(), notice()] }, { 'r-01': [[1, 1]] }, 's-02', resolve);
       expect(got.map((message) => message.id)).toEqual(['m-r01-5']);
       expect(resolve).not.toHaveBeenCalled();
     });
@@ -508,7 +552,7 @@ describe('unreadFromJournals', () => {
     function base2() {
       return { schemaVersion: 2 as const, work: { status: 'active', updatedAt: at(0) } as never };
     }
-    const cursors = { 'r-01': 'm-r01-1' };
+    const cursors = { 'r-01': [[1, 1]] as [number, number][] };
     // v2: одна лента в порядке записи (по времени), отметки читателя у письма 1 (под курсором)
     const all = [...history['r-01'], ...history['r-02'], ...history.direct].sort((a, b) => (a.at < b.at ? -1 : 1));
     const v2 = { ...state, messages: all.map((row) => {

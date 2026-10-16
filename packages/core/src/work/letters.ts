@@ -1,9 +1,9 @@
 import { readMap, updateMap, WorkNotFoundError, workPaths, workSchemaVersion } from './store.js';
 import { cancelledPlanLetter, planEffectOwnsLetter } from './plan-effects.js';
 import { isRoomArchived } from './rooms.js';
-import { advanceWatermark, coversLetter, DIRECT_CURSOR_KEY, mergeByTime, seqOfLetterId, withCursors } from './journal.js';
+import { addRange, DIRECT_CURSOR_KEY, isRead, mergeByTime, messageSeqs, withCursors } from './journal.js';
 import { JOURNAL_SCHEMA_VERSION } from './map.js';
-import type { JournalLetter, SessionCursors } from './journal.js';
+import type { CursorFile, JournalLetter } from './journal.js';
 import { HUMAN, type Message, type WorkMap } from './types.js';
 
 /**
@@ -42,8 +42,9 @@ export type LetterResolver = (roomId: string, id: string) => Promise<JournalLett
 
 /**
  * Непрочитанное сессии по журналам (карта v3): письма после её курсора, адресованные ей. `journals` — загруженные
- * письма по комнатам (ключ — id комнаты, прямые — `direct`) в порядке журнала; курсор, которого нет среди
- * загруженных, значит «читай всё загруженное», поэтому вызывающий грузит `readMessages({ after: курсор })`.
+ * письма по комнатам (ключ — id комнаты, прямые — `direct`) в порядке журнала; прочитанным считается письмо, номер
+ * строки которого входит в диапазоны `cursors` своего журнала, остальное загруженное — непрочитано (вызывающий грузит
+ * хвост журнала с первого разрыва в прочитанном).
  * Исключения те же, что у `unreadFor`: письма архивной комнаты и отменённое письмо плана не в счёт.
  * Результат — по времени письма, при равенстве в порядке ключей `journals`, внутри журнала по `seq` (`mergeByTime`).
  *
@@ -54,7 +55,7 @@ export type LetterResolver = (roomId: string, id: string) => Promise<JournalLett
 export async function unreadFromJournals(
   index: JournalIndex,
   journals: Readonly<Record<string, readonly JournalLetter[]>>,
-  cursors: SessionCursors,
+  cursors: CursorFile,
   sessionId: string,
   resolve: LetterResolver,
 ): Promise<JournalLetter[]> {
@@ -62,8 +63,7 @@ export async function unreadFromJournals(
   const messages = Object.values(journals).flat().map(asMessage);
   const map: WorkMap = { ...index, messages };
   const slices = Object.entries(journals).map(([key, letters]) => {
-    const cursor = cursors[key];
-    return letters.slice(cursor === undefined ? 0 : letters.findIndex((letter) => letter.id === cursor) + 1);
+    return letters.filter((letter) => !isRead(cursors, key, letter.seq));
   });
   for (const slice of slices) {
     for (const letter of slice) {
@@ -125,23 +125,24 @@ export async function markHumanRead(
   }
   if (pending(current).length === 0) return 0;
 
-  // Карта-журнал: отметка человека — водораздел `human` на самом новом отмеченном письме каждого журнала. Водораздел
-  // поэтому гасит и письма журнала старее отмеченного, которых окно не просило (цена спеки, B3) — это явное «прочёл»
-  // человека, в отличие от системной строки (там разреженная отметка, `letter-sink.ts`). Отбор повторяется ПОД замком
-  // курсоров: пачка окна могла быть отобрана до чужой отметки, и устаревший вызов не должен ни вернуть курсор назад, ни
-  // насчитать уже прочитанное. Водораздел идёт только вперёд (по номеру письма, как `advanceWatermark`).
+  // Карта-журнал: отметка человека — диапазон `human` с первого письма по самое новое отмеченное письмо каждого журнала.
+  // Диапазон поэтому гасит и письма журнала старее отмеченного, которых окно не просило (цена спеки, B3) — это явное
+  // «прочёл» человека, в отличие от системной строки (там диапазон из одного письма, `letter-sink.ts`). Отбор повторяется
+  // ПОД замком курсоров: пачка окна могла быть отобрана до чужой отметки, и устаревший вызов не должен насчитать уже
+  // прочитанное. Диапазон только добавляется (`addRange`), назад ничто не идёт.
   if ((await workSchemaVersion(projectPath, workId)) === JOURNAL_SCHEMA_VERSION) {
+    const all = messageSeqs(current.messages);
+    const seqs = new Map(current.messages.map((message, at) => [message.id, all[at]!]));
     const candidates = pending(current);
-    return withCursors(projectPath, workId, HUMAN, async (_cursors, state) => {
-      const fresh = candidates.filter((message) => !coversLetter(state, message.roomId ?? DIRECT_CURSOR_KEY, message.id));
-      const newest = new Map<string, Message>();
+    return withCursors(projectPath, workId, HUMAN, async (file) => {
+      const fresh = candidates.filter((message) => !isRead(file, message.roomId ?? DIRECT_CURSOR_KEY, seqs.get(message.id)!));
+      const newest = new Map<string, number>();
       for (const message of fresh) {
         const key = message.roomId ?? DIRECT_CURSOR_KEY;
-        const best = newest.get(key);
-        if (best === undefined || (seqOfLetterId(message.id, message.roomId) ?? 0) > (seqOfLetterId(best.id, best.roomId) ?? 0)) newest.set(key, message);
+        newest.set(key, Math.max(newest.get(key) ?? 0, seqs.get(message.id)!));
       }
       let changed = false;
-      for (const [key, message] of newest) if (advanceWatermark(state, key, message.id)) changed = true;
+      for (const [key, seq] of newest) if (addRange(file, key, 1, seq)) changed = true;
       return { changed, value: fresh.length };
     });
   }

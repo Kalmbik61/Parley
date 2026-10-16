@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appendLetters, applyCursors, assembleMap, MapJournalReadonlyError } from './assemble.js';
-import { appendMessage, journalFile, journalLine, readCursorFile, writeCursor, type JournalLetter } from './journal.js';
+import { appendMessage, journalFile, journalLine, messageSeqs, readCursorFile, writeCursor, type JournalLetter } from './journal.js';
 import { recipientsOf } from './letters.js';
 import { addMessage, addSession, parseMap } from './map.js';
 import { addRoom } from './rooms.js';
@@ -91,7 +91,7 @@ async function writeV3(map: WorkMap): Promise<void> {
   await writeFile(paths.map, `${JSON.stringify({ ...index, schemaVersion: 3 }, null, 2)}\n`);
   const journals = new Map<string, Message[]>();
   for (const message of messages) journals.set(keyOf(message.roomId), [...(journals.get(keyOf(message.roomId)) ?? []), message]);
-  const cursors = new Map<string, Record<string, string>>();
+  const cursors = new Map<string, Record<string, [number, number][]>>();
   for (const [key, list] of journals) {
     const file = journalFile(paths, key === 'direct' ? null : key);
     await mkdir(path.dirname(file), { recursive: true });
@@ -102,14 +102,18 @@ async function writeV3(map: WorkMap): Promise<void> {
       return journalLine({ ...rest, seq: seq + 1 } as JournalLetter);
     });
     await writeFile(file, rows.join(''));
-    for (const message of list) {
-      for (const session of Object.keys(message.readBy)) cursors.set(session, { ...(cursors.get(session) ?? {}), [key]: message.id });
-    }
+    // Курсор фикстуры — прочитано с первого письма по последнее отмеченное читателем.
+    list.forEach((message, at) => {
+      for (const session of Object.keys(message.readBy)) cursors.set(session, { ...(cursors.get(session) ?? {}), [key]: [[1, at + 1]] });
+    });
   }
   await mkdir(paths.cursors, { recursive: true });
   for (const [session, value] of cursors) await writeFile(path.join(paths.cursors, `${session}.json`), JSON.stringify(value));
   if (decisionExports !== undefined) await writeFile(paths.decisions, JSON.stringify(decisionExports));
 }
+
+/** Номер строки журнала письма карты (для `writeCursor`). */
+const seqIn = (map: WorkMap, message: Message): number => messageSeqs(map.messages)[map.messages.indexOf(message)]!;
 
 /** Создаёт работу и кладёт на её место фикстуру: v2 как есть или в раскладке v3. */
 async function seedWork(layout: 'v2' | 'v3'): Promise<{ id: string; expected: WorkMap }> {
@@ -580,7 +584,7 @@ describe('дельта карты-журнала (appendLetters, applyCursors)',
     const { id } = await seedWork('v3');
     const before = await assembleMap(project, id);
     const letter = await appendMessage(project, id, 'r-01', { from: 's-02', to: [], text: 'системная строка', at: at(210) });
-    await writeCursor(project, id, 's-03', 'r-01', letter.id);
+    await writeCursor(project, id, 's-03', 'r-01', letter.seq);
     const full = await assembleMap(project, id);
     const file = await readCursorFile(project, id, 's-03');
     const delta = appendLetters(before, [letter], new Map([['s-03', file]]));
@@ -593,8 +597,8 @@ describe('дельта карты-журнала (appendLetters, applyCursors)',
     const { id } = await seedWork('v3');
     const before = await assembleMap(project, id);
     const last = before.messages.filter((message) => message.roomId === 'r-02').at(-1)!;
-    await writeCursor(project, id, 's-03', 'r-02', last.id);
-    await writeCursor(project, id, HUMAN, 'r-03', before.messages.filter((message) => message.roomId === 'r-03').at(-1)!.id);
+    await writeCursor(project, id, 's-03', 'r-02', seqIn(before, last));
+    await writeCursor(project, id, HUMAN, 'r-03', seqIn(before, before.messages.filter((message) => message.roomId === 'r-03').at(-1)!));
     const full = await assembleMap(project, id);
     const once = applyCursors(before, 's-03', await readCursorFile(project, id, 's-03'));
     const twice = applyCursors(once, HUMAN, await readCursorFile(project, id, HUMAN));

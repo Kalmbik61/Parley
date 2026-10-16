@@ -516,7 +516,7 @@ export function createWorksService(
       migrationHandled.add(key);
       migrationWaiting.delete(key);
       host.log.info('карта переведена на журналы', { projectPath: work.projectPath, workId, ...result });
-      if (result.orderMismatches > 0 || result.readByMismatches > 0 || result.orphaned > 0 || result.droppedMarks > 0) {
+      if (result.orderMismatches > 0 || result.readByMismatches > 0 || result.orphaned > 0) {
         host.log.warn('миграция карты: часть сведений не воспроизведена сборщиком, map.v2.json останется навсегда', { projectPath: work.projectPath, workId, ...result });
       }
       const assembled = await readMap(work.projectPath, workId);

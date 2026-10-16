@@ -130,7 +130,7 @@ describe('migrateMapToJournal', () => {
   it('мигрирует фикстуру за один вызов: те же письма в том же порядке с тем же readBy, решения на месте', async () => {
     const { id, expected, original } = await seedV2();
     const result = await migrateMapToJournal(project, id);
-    expect(result).toMatchObject({ status: 'migrated', letters: 50, orphaned: 0, droppedMarks: 0, orderMismatches: 0, readByMismatches: 0 });
+    expect(result).toMatchObject({ status: 'migrated', letters: 50, orphaned: 0, orderMismatches: 0, readByMismatches: 0 });
 
     expect(await workSchemaVersion(project, id)).toBe(3);
     const assembled = await assembleMap(project, id);
@@ -166,32 +166,29 @@ describe('migrateMapToJournal', () => {
     expect((await readIndex(project, id)).v2Removed).toBe(false);
   });
 
-  it('курсор — последнее прочитанное письмо, прочитанное вразнобой уходит в marks', async () => {
+  it('курсор — точные диапазоны: прочитанное подряд один диапазон, прочитанное вразнобой несколько, ничего не потеряно', async () => {
     const { id, expected } = await seedV2();
     await migrateMapToJournal(project, id);
     const paths = workPaths(project, id);
-    const r01 = expected.messages.filter((message) => message.roomId === 'r-01').map((message) => message.id);
+    const r01 = expected.messages.filter((message) => message.roomId === 'r-01');
     const read = async (session: string): Promise<Record<string, unknown>> =>
       JSON.parse(await readFile(path.join(paths.cursors, `${session}.json`), 'utf8')) as Record<string, unknown>;
 
-    // s-02 читала по порядку: курсор на последнем прочитанном, отметок нет.
-    const s02 = await read('s-02');
-    expect(s02['r-01']).toBe(r01[2]);
-    expect(s02.marks).toBeUndefined();
-    // s-03 в r-01 прочла 1, 2 и 4: водораздел на 2-м, 4-е — отметка; 3-е осталось непрочитанным.
-    const s03 = await read('s-03');
-    expect(s03['r-01']).toBe(r01[1]);
-    expect((s03.marks as Record<string, string[]>)['r-01']).toEqual([r01[3]]);
-    // Человек — читатель как сессия; свои письма он не «читает», поэтому курсор на последнем чужом из первых четырёх.
-    const lastForHuman = expected.messages.filter((message) => message.roomId === 'r-01').slice(0, 4).filter((message) => message.from !== HUMAN).at(-1)!;
-    expect((await read(HUMAN))['r-01']).toBe(lastForHuman.id);
-    // Водораздел и отметки вместе дают в точности прежний readBy: 3-е письмо s-03 не прочитано.
-    const third = (await assembleMap(project, id)).messages.find((message) => message.id === r01[2])!;
+    // s-02 читала по порядку: письма 1–3 одним диапазоном.
+    expect((await read('s-02'))['r-01']).toEqual([[1, 3]]);
+    // s-03 в r-01 прочла 1, 2 и 4: два диапазона, 3-е осталось непрочитанным.
+    expect((await read('s-03'))['r-01']).toEqual([[1, 2], [4, 4]]);
+    // Человек — читатель как сессия; свои письма он не «читает» (разрыва они не образуют), поэтому диапазон — от первого
+    // чужого письма из первых четырёх до последнего.
+    const seen = r01.slice(0, 4).map((message, at) => [message, at + 1] as const).filter(([message]) => message.from !== HUMAN);
+    expect((await read(HUMAN))['r-01']).toEqual([[seen[0]![1], seen.at(-1)![1]]]);
+    // Диапазоны дают в точности прежний readBy: 3-е письмо s-03 не прочитано.
+    const third = (await assembleMap(project, id)).messages.find((message) => message.id === r01[2]!.id)!;
     expect(third.readBy['s-03']).toBeUndefined();
   });
 
   it('письма, адресованные не этой сессии, разрыва в чтении не образуют', async () => {
-    const { id, expected } = await seedV2((workId) => {
+    const { id } = await seedV2((workId) => {
       const map = fixtureV2(workId);
       map.messages = [];
       addMessage(map, { roomId: 'r-01', from: HUMAN, to: [], text: 'всем' }, at(10));
@@ -202,8 +199,8 @@ describe('migrateMapToJournal', () => {
     });
     await migrateMapToJournal(project, id);
     const cursor = JSON.parse(await readFile(path.join(workPaths(project, id).cursors, 's-02.json'), 'utf8')) as Record<string, unknown>;
-    expect(cursor['r-01']).toBe(expected.messages[2]!.id);
-    expect(cursor.marks).toBeUndefined();
+    // Письмо 2 s-02 не адресовано: разрыва нет, диапазон сплошной.
+    expect(cursor['r-01']).toEqual([[1, 3]]);
   });
 
   it('второй вызов ничего не меняет: файлы те же по байтам, письма не дублируются', async () => {
@@ -390,7 +387,7 @@ describe('когда map.v2.json нельзя убирать', () => {
     expect(await exists(v2Copy(id))).toBe(true);
     const index = await readIndex(project, id);
     expect(index.v2Removed).toBe(false);
-    expect(index.v2Kept).toEqual({ orphaned: 1, droppedMarks: 0, readByMismatches: 0, orderMismatches: 0 });
+    expect(index.v2Kept).toEqual({ orphaned: 1, readByMismatches: 0, orderMismatches: 0 });
     expect(await readFile(v2Copy(id), 'utf8')).toContain('чужое');
   });
 

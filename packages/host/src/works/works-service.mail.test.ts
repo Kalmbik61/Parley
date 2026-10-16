@@ -225,7 +225,7 @@ describe('письма карты-журнала в хосте', () => {
     const s = await started();
     expect(s.entry(project, id)?.map.messages[0]?.readBy['s-02']).toBeUndefined();
 
-    await writeCursor(project, id, 's-02', 'r-01', 'm-01');
+    await writeCursor(project, id, 's-02', 'r-01', 1);
     await vi.waitFor(() => expect(s.entry(project, id)?.map.messages[0]?.readBy['s-02']).toBeDefined(), { timeout: 5000 });
     await sleep(300);
     expect(broadcasts).toEqual([]);
@@ -271,7 +271,7 @@ describe('письма карты-журнала в хосте', () => {
     fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
     const s = await started();
     const before = s.windowSnapshot();
-    await writeCursor(project, id, 's-02', 'r-01', 'm-01');
+    await writeCursor(project, id, 's-02', 'r-01', 1);
     await vi.waitFor(() => expect(s.entry(project, id)?.map.messages[0]?.readBy['s-02']).toBeDefined(), { timeout: 5000 });
     const after = s.windowSnapshot();
     expect(after?.entries[0]?.map.messages[0]?.readBy['s-02']).toBeDefined();

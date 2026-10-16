@@ -159,6 +159,6 @@ describe('копия v2 при потерянных сведениях', () => {
     expect(await exists(v2Copy(work.id))).toBe(true);
     expect((await readIndex(project, work.id)).v2Removed).toBe(false);
     const kept = warnings.find((item) => item.message.includes('map.v2.json оставлена навсегда'));
-    expect(kept?.data).toMatchObject({ workId: work.id, orphaned: 1, droppedMarks: 0, readByMismatches: 0, orderMismatches: 0 });
+    expect(kept?.data).toMatchObject({ workId: work.id, orphaned: 1, readByMismatches: 0, orderMismatches: 0 });
   }, 20_000);
 });
