@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { createConnection, type Socket } from 'node:net';
+import { performance } from 'node:perf_hooks';
 import type { HostPaths } from '@parley/host';
 import {
   COMPACT_WORKS_FEATURE,
@@ -16,6 +17,7 @@ import {
 } from '@parley/protocol';
 import type { HostStatus } from '../shared/bridge.js';
 import { S } from '../shared/strings.js';
+import { createRpcRing, type RpcRecord } from './diagnostics/rpc-ring.js';
 
 interface PendingCall {
   resolve: (value: unknown) => void;
@@ -53,6 +55,15 @@ export class HostError extends Error {
   }
 }
 
+/** `params.ref.sessionId`, если параметры — объект с таким полем. */
+function sessionIdOf(params: unknown): string | undefined {
+  if (typeof params !== 'object' || params === null) return undefined;
+  const ref = (params as { ref?: unknown }).ref;
+  if (typeof ref !== 'object' || ref === null) return undefined;
+  const sessionId = (ref as { sessionId?: unknown }).sessionId;
+  return typeof sessionId === 'string' ? sessionId : undefined;
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -84,6 +95,8 @@ export class HostConnection {
   private loop: Promise<void> | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, PendingCall>();
+  /** Последние вызовы окна к хосту — для архива диагностики (`recentCalls`). */
+  private readonly rpcRing = createRpcRing();
   private readonly eventListeners = new Set<(message: EventMessage) => void>();
   private readonly statusListeners = new Set<(status: HostStatus) => void>();
   private status: HostStatus = { state: 'connecting' };
@@ -440,8 +453,34 @@ export class HostConnection {
     const promise = new Promise<unknown>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
     });
+    const startedAt = new Date().toISOString();
+    const startedMs = performance.now();
     this.socket.write(encodeLine({ id, method, params }));
-    return promise;
+    const ref = sessionIdOf(params);
+    const record = (ok: boolean, error?: string): void => {
+      this.rpcRing.push({
+        t: startedAt,
+        method,
+        ms: performance.now() - startedMs,
+        ok,
+        ...(error === undefined ? {} : { error }),
+        ...(ref === undefined ? {} : { ref }),
+      });
+    };
+    try {
+      const result = await promise;
+      record(true);
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      record(false, error instanceof HostError ? error.code : message.slice(0, 120));
+      throw error;
+    }
+  }
+
+  /** Последние вызовы окна к хосту (до `RPC_RING_CAPACITY`), от старых к новым. */
+  recentCalls(): RpcRecord[] {
+    return this.rpcRing.entries();
   }
 
   notify(method: NotificationName, params: unknown): void {
