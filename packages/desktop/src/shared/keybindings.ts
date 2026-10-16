@@ -21,7 +21,7 @@ export type ActionId =
   | 'tab.goto.1' | 'tab.goto.2' | 'tab.goto.3' | 'tab.goto.4' | 'tab.goto.5'
   | 'tab.goto.6' | 'tab.goto.7' | 'tab.goto.8' | 'tab.goto.9'
   | 'find' | 'voice.toggle' | 'terminal.clear' | 'chat.toggleView' | 'settings.open'
-  | 'attention.next' | 'wake.toggle' | 'host.restart'
+  | 'attention.next' | 'wake.toggle' | 'host.restart' | 'host.diagnostics'
   | 'appearance.system' | 'appearance.dark' | 'appearance.light'
   | 'browser.newTab'
   | 'browser.find' | 'browser.zoomIn' | 'browser.zoomOut' | 'browser.zoomReset' // when: 'browser', menu: null
@@ -101,6 +101,7 @@ export const ACTIONS: readonly ActionDef[] = [
   paletteOnly('attention.next', S.actions.nextNeedsYou, ['attention', 'blocked', 'needs you']),
   paletteOnly('wake.toggle', S.actions.pauseAutoWake, ['auto-wake', 'pause', 'resume', 'wake']),
   paletteOnly('host.restart', S.actions.restartHost, ['host', 'restart', 'reload']),
+  paletteOnly('host.diagnostics', S.actions.diagnostics, ['diagnostics', 'logs', 'report', 'profile']),
   paletteOnly('appearance.system', S.actions.themeSystem, ['theme', 'appearance', 'system']),
   paletteOnly('appearance.dark', S.actions.themeDark, ['theme', 'appearance', 'dark']),
   paletteOnly('appearance.light', S.actions.themeLight, ['theme', 'appearance', 'light']),

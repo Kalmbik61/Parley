@@ -64,7 +64,7 @@ const ALL_ACTION_IDS: Record<ActionId, true> = {
   'tab.goto.1': true, 'tab.goto.2': true, 'tab.goto.3': true, 'tab.goto.4': true, 'tab.goto.5': true,
   'tab.goto.6': true, 'tab.goto.7': true, 'tab.goto.8': true, 'tab.goto.9': true,
   find: true, 'voice.toggle': true, 'terminal.clear': true, 'chat.toggleView': true, 'settings.open': true,
-  'attention.next': true, 'wake.toggle': true, 'host.restart': true,
+  'attention.next': true, 'wake.toggle': true, 'host.restart': true, 'host.diagnostics': true,
   'appearance.system': true, 'appearance.dark': true, 'appearance.light': true,
   'browser.newTab': true,
   'browser.find': true, 'browser.zoomIn': true, 'browser.zoomOut': true, 'browser.zoomReset': true,
@@ -133,11 +133,25 @@ describe('ACTIONS (тест 1)', () => {
       expect(action?.when).toBe('browser');
       expect(action?.menu).toBeNull();
     }
-    for (const id of ['works.showArchived', 'room.new', 'attention.next', 'wake.toggle', 'host.restart'] as const) {
+    for (const id of ['works.showArchived', 'room.new', 'attention.next', 'wake.toggle', 'host.restart', 'host.diagnostics'] as const) {
       const action = ACTIONS.find((candidate) => candidate.id === id);
       expect(action?.keys).toBeNull();
       expect(action?.menu).toBeNull();
     }
+  });
+});
+
+describe('host.diagnostics (задача 12 плана диагностики хоста)', () => {
+  it('палитровое действие «Save diagnostics…»: без сочетания и меню, ключевые слова для поиска', () => {
+    expect(ACTIONS.find((action) => action.id === 'host.diagnostics')).toEqual({
+      id: 'host.diagnostics',
+      title: 'Save diagnostics…',
+      keywords: ['diagnostics', 'logs', 'report', 'profile'],
+      keys: null,
+      menu: null,
+      when: 'always',
+      inPalette: true,
+    });
   });
 });
 

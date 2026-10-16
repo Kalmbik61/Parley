@@ -1742,6 +1742,7 @@ export const S = {
     pauseAutoWake: 'Pause auto-wake',
     resumeAutoWake: 'Resume auto-wake',
     restartHost: 'Restart host…',
+    diagnostics: 'Save diagnostics…',
     themeSystem: 'Theme: system',
     themeDark: 'Theme: dark',
     themeLight: 'Theme: light',
@@ -1840,6 +1841,7 @@ export const S = {
     actions: {
       loadProviders: 'load providers',
       refreshProviderLimits: 'refresh provider limits',
+      saveDiagnostics: 'save diagnostics',
       saveProviderKey: 'save the provider key',
       checkProviderKey: 'check the GLM key',
       removeProviderKey: 'remove the provider key',
@@ -2000,8 +2002,17 @@ export const S = {
     layoutError: "Couldn't show layout",
   },
 
-  /** Архив диагностики (спека 2026-10-16-host-diagnostics-and-load-design.md, A2): `README.txt` внутри zip. */
+  /** Диагностика хоста (спека 2026-10-16-host-diagnostics-and-load-design.md): сегмент строки статуса (A1) и `README.txt` внутри zip (A2). */
   diagnostics: {
+    segment: 'Diagnostics',
+    save: 'Save diagnostics',
+    profile: 'Record 20-second profile, then save',
+    saving: 'Saving…',
+    profiling: (left: number): string => `Profiling ${left} s…`,
+    hint: 'Includes host logs, process list and timings. No message text, terminal output or keys. The file is saved to Downloads; attach it to a GitHub issue.',
+    hostOutdated: 'Host is outdated — restart it for full diagnostics',
+    saved: 'Diagnostics saved',
+    showInFinder: 'Show in Finder',
     readme: [
       'Parley diagnostics bundle',
       '',
