@@ -67,6 +67,27 @@ describe('sessions.create: модель и усилие из диалога (д�
   });
 });
 
+describe('sessions.create: облегчённый запуск (lean, часть C)', () => {
+  it('явный lean — true и false — доезжает до сервиса как есть', async () => {
+    const { create, sessionsCreate } = handlers();
+
+    await sessionsCreate({ ...params, lean: true }, request);
+    await sessionsCreate({ ...params, lean: false }, request);
+
+    expect(create).toHaveBeenNthCalledWith(1, { ...params, lean: true });
+    expect(create).toHaveBeenNthCalledWith(2, { ...params, lean: false });
+  });
+
+  it('старое окно без поля: ключа lean в вызове сервиса нет вовсе, даже со значением undefined', async () => {
+    const { create, sessionsCreate } = handlers();
+
+    await sessionsCreate({ ...params, lean: undefined }, request);
+
+    const [input] = create.mock.calls[0] as [Record<string, unknown>];
+    expect(Object.keys(input)).not.toContain('lean');
+  });
+});
+
 describe('sessions.setMode (план 2026-10-01, решение 4)', () => {
   const footer = '  ⏸ plan mode on (shift+tab to cycle) · ← for agents';
 

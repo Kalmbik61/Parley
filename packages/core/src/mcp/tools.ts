@@ -871,6 +871,9 @@ async function spawnSession(
   }
 
   const limits = await limitsOf(context);
+  // Облегчённый запуск (C2.2): сессии агента всегда по настройке `leanAgents`. Решение принимается здесь, при
+  // создании, и ложится в запись: `resume`, автозапуск и подъём письмом берут его из карты, а не из настроек.
+  const lean = (await loadConfig()).config.leanAgents;
   let created = '';
   const map = await updateMap(context.projectPath, context.workId, (current) => {
     requireSession(current, sessionId);
@@ -887,6 +890,7 @@ async function spawnSession(
       role: savedRole,
       ...(chosenModel === undefined ? {} : { model: chosenModel }),
       ...(chosenEffort === undefined ? {} : { effort: chosenEffort }),
+      lean,
     });
     created = session.id;
     attempt.session = session.id;

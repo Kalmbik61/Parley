@@ -1642,6 +1642,146 @@ describe('модель и усилие из карты: сессия, завед
   });
 });
 
+describe('lean: решение при создании и запуск по записи в карте (часть C, C2.2)', () => {
+  const LEAN_FLAG = '--strict-mcp-config';
+
+  it('все пути создания пишут явный lean в запись сессии; окно без поля — ключа нет', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const parent = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'родитель', task: 'т' });
+    const base = { projectPath: project, provider: 'claude', label: '' };
+
+    for (const lean of [true, false]) {
+      // Тихий старт, новая работа под быструю сессию, дочерняя без задачи и `pending` с задачей.
+      const refs = [
+        await service.create({ ...base, workId: work.work.id, task: '', parent: null, lean }),
+        await service.create({ ...base, workId: null, task: '', parent: null, lean }),
+        await service.create({ ...base, workId: work.work.id, task: '', parent, lean }),
+        await service.create({ ...base, workId: work.work.id, task: 'сделай штуку', parent: null, lean }),
+      ];
+      for (const ref of refs) {
+        const map = await readMap(ref.projectPath, ref.workId);
+        expect(map.sessions.find((candidate) => candidate.id === ref.sessionId)?.lean, `${ref.sessionId} lean=${lean}`).toBe(lean);
+        await service.stop(ref);
+      }
+    }
+
+    // Одиночная сессия из окна без поля (и старое окно): lean нет, как до этого куска, — настройка leanAgents
+    // её не касается, даже включённая.
+    await saveConfig({ leanAgents: true });
+    const plain = [
+      await service.create({ ...base, workId: work.work.id, task: '', parent: null }),
+      await service.create({ ...base, workId: work.work.id, task: 'сделай штуку', parent: null }),
+    ];
+    for (const ref of plain) {
+      const session = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
+      expect(session).toBeDefined();
+      expect(Object.keys(session ?? {}), ref.sessionId).not.toContain('lean');
+      await service.stop(ref);
+    }
+  });
+
+  it('явный lean: true у одиночной сессии доезжает до argv; без поля и с lean: false — флага нет', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const argvOf = async (lean?: boolean): Promise<string[]> => {
+      const argsFile = await tempArgsFile();
+      setEnv('STUB_ARGS_FILE', argsFile);
+      const ref = await service.create({
+        projectPath: project,
+        workId: work.work.id,
+        provider: 'claude',
+        label: '',
+        task: '',
+        parent: null,
+        ...(lean === undefined ? {} : { lean }),
+      });
+      const { argv } = await readArgs(argsFile);
+      await service.stop(ref);
+      return argv;
+    };
+
+    expect(await argvOf(true)).toContain(LEAN_FLAG);
+    expect(await argvOf(false)).not.toContain(LEAN_FLAG);
+    expect(await argvOf()).not.toContain(LEAN_FLAG);
+  });
+
+  it('resume lean-сессии собирает запуск с теми же lean-флагами, что и первый запуск', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: '',
+      task: 'сделай штуку',
+      parent: null,
+      lean: true,
+    });
+    const first = (await readArgs(argsFile)).argv;
+    await service.stop(ref);
+    expect(first).toContain(LEAN_FLAG);
+
+    // Второй запуск перезапишет файл стаба: убираем первый, чтобы прочитать именно resume.
+    await rm(argsFile);
+    await service.launch(ref, 'resume');
+    const resumed = (await readArgs(argsFile)).argv;
+    await service.stop(ref);
+
+    expect(resumed).toContain('--resume');
+    expect(resumed).toContain(LEAN_FLAG);
+  });
+
+  it('сессия без lean в записи после resume по-прежнему без lean-флагов, даже при leanAgents: true', async () => {
+    await saveConfig({ leanAgents: true });
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: '',
+      task: 'сделай штуку',
+      parent: null,
+    });
+    await readArgs(argsFile);
+    await service.stop(ref);
+
+    await rm(argsFile);
+    await service.launch(ref, 'resume');
+    const resumed = (await readArgs(argsFile)).argv;
+    await service.stop(ref);
+
+    expect(resumed).toContain('--resume');
+    expect(resumed).not.toContain(LEAN_FLAG);
+  });
+
+  it('pending, заведённая spawn_session с lean в записи, запускается с lean-флагами (как поднимает autoLaunch)', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    // Так `spawn_session` агента заводит запись: решение «lean» лежит в карте, а поднимает её хост позже и без диалога.
+    const sessionId = await createPendingSession(project, work.work.id, {
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      lean: true,
+    });
+    const ref: SessionRef = { projectPath: project, workId: work.work.id, sessionId };
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    await service.launch(ref, 'launch', { by: 'auto' });
+
+    expect((await readArgs(argsFile)).argv).toContain(LEAN_FLAG);
+    await service.stop(ref);
+  });
+});
+
 describe('session layer warnings and final spawn budget', () => {
   const roomy = async () => ({ argMax: 1048576, pointerSize: 8 });
   const makeRef = async (projectPath = project, provider = 'claude'): Promise<SessionRef> => {
