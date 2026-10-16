@@ -47,6 +47,7 @@ import { createPlanEffectsService } from './rooms/plan-effects.js';
 import { createHistoryService } from './rooms/history-service.js';
 import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
+import { createReadyJournal } from './sessions/ready-journal.js';
 import { createWakeService } from './wake/wake-service.js';
 import { createWorktreesService } from './worktrees/worktrees-service.js';
 import { readHostVersion } from './version.js';
@@ -260,12 +261,16 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activity: activityService,
     pty: ptyManager,
   }, options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs });
+  // Журнал задержек (спека диагностики хоста, A4): «сессия готова» по первому хуку или сигналу ready Codex.
+  const readyJournal = createReadyJournal({ log, pty: ptyManager });
+  handle.context.onShutdown(async () => readyJournal.stop());
   // Сжатие контекста (спека 2026-10-15, 5): создаётся после будильника, но хук-сервер и будильник видят его уже сейчас.
   // eslint-disable-next-line prefer-const -- поздняя привязка: замыкания хук-сервера и будильника читают её раньше присваивания
   let compactionService: CompactionService | undefined;
   const hookServer = createHookServer({
     log,
     onHook: (request) => {
+      readyJournal.onHook(request.ref);
       try {
         compactionService?.onHook(request.ref, request.body);
       } catch (error) {
