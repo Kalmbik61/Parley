@@ -4,13 +4,23 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.14.0
 
-Parley can now package what it knows about its own slowness into one file, so a report about a slow window comes with evidence.
+Parley can now package what it knows about its own slowness into one file, so a report about a slow window comes with evidence. Quitting the app now stops the host and its sessions, after a question, and two Codex problems are fixed: sessions that froze until Parley was restarted, and compaction that looked stuck.
 
 ### Added
 
 - **Diagnostics in the status bar.** One click saves a zip with host logs, a process list, request timings and an optional 20-second CPU profile of the host — attach it to an issue when Parley feels slow. The host journal now records where delays happen: session readiness, Chat sends, room mail delivery and the first reply.
+
+### Changed
+
+- **Quitting Parley stops the host and its sessions.** Closing the window still leaves the agents
+  working. Quit (⌘Q, or Quit in the Dock menu) now asks "Quit Parley?" with the number of running
+  sessions and stops the host together with them; with no live sessions it quits without a question.
+  A host that does not answer within 10 seconds is stopped by its pid, and a system restart or
+  shutdown stops it at once, without asking. The interrupted sessions do not restart on their own:
+  the next launch lists them so you can bring them back. Updating gets simpler too: after ⌘Q the
+  host is gone, so the new app does not need "Restart host…" unless you only closed the window.
 
 ### Fixed
 
