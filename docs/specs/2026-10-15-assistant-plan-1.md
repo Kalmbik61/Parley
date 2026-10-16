@@ -4,7 +4,7 @@
 
 **Цель:** помощник отвечает на вопросы о работах, комнатах и сессиях и передаёт сообщения человека в комнату или агенту после подтверждения — вызов глобальным хоткеем, кликом или из палитры, ввод голосом (Whisper) или печатью, ответ текстом на острове; вместо роя — светящееся пятно.
 
-**Архитектура:** ход помощника — отдельный процесс CLI выбранного провайдера без терминала (подход 2 спеки), его запускает новый `assistant-service` хоста; поток событий CLI разбирают чистые функции core. Инструменты помощника — режим `assistant` того же `parley-mcp`, который ходит в хост маршрутом `/assistant/*` hook-сервера с токеном разговора. Окно: настройки в `ui.json`, глобальный хоткей и клавиатура острова — в main, вид помощника — в renderer острова; письмо помощника несёт `via: 'assistant'`.
+**Архитектура:** ход помощника — отдельный процесс CLI выбранного провайдера без терминала (подход 2 спеки), его запускает новый `assistant-service` хоста; поток событий CLI разбирают чистые функции core. Инструменты помощника — режим `assistant` того же `parley-mcp`, который ходит в хост путями `/assistant/<tool>` сервера хуков (его `routes`) с токеном разговора. Окно: настройки в `ui.json`, глобальный хоткей и клавиатура острова — в main, вид помощника — в renderer острова; письмо помощника несёт `via: 'assistant'`.
 
 **Стек:** TypeScript (strict, `exactOptionalPropertyTypes`, импорты с `.js`), Node 20, `@modelcontextprotocol/sdk`, zod 4, Electron 44 + electron-vite, React 18, zustand, Tailwind v4, vitest (jsdom для renderer), Playwright (`_electron`) для E2E.
 
@@ -23,7 +23,7 @@
 - Метка эмоции: `[[calm]]`, `[[joy]]`, `[[sad]]`, `[[surprise]]`, `[[anger]]`; `error` ставит только хост.
 - Слова подтверждения сверяет окно, а не модель; принимаются оба языка сразу (уточнение спеки 7.3, внесено этим планом).
 - `exactOptionalPropertyTypes`: необязательное поле — только спредом `...(x === undefined ? {} : { x })`.
-- Сообщения коммитов (в шагах «Коммит» даны первые строки) заканчиваются строкой `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- Сообщения коммитов (в шагах «Коммит» даны первые строки) заканчиваются строкой `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 
 ## Review Focus
 
@@ -31,7 +31,7 @@
 2. **Карточку подтвердили, а сессия уже остановилась** (или комната ушла в архив). Ничего не отправляется, на карточке — причина, карточка остаётся. Покрытие: задача 10, тест `decide` с `send`, который бросает `session is not running`.
 3. **Модель назвала цель именем, а не id** («S03», «Auth»), или имя неоднозначно. Однозначное имя находится, неоднозначное — ошибка со списком кандидатов, письмо не уходит не туда. Покрытие: задача 7, тесты `resolveTarget`.
 4. **CLI нет, версия старая, у GLM нет ключа.** Помощник — `offline` с причиной, ход не запускается, остальной Parley работает. Покрытие: задача 10, тест `ask` с `ready`, вернувшим причину, и с `binary`, который бросает.
-5. **Остров не отдаёт клавиатуру после закрытия режима.** Если панель останется фокусируемой, печать в других приложениях уйдёт в никуда. Покрытие: задача 11 (`setKeyboard(false)` делает `setFocusable(false)`, `hide`, `showInactive`), задача 14 (Esc и сворачивание зовут `api.keyboard(false)`), живая проверка.
+5. **Остров не отдаёт клавиатуру после закрытия режима.** Если панель останется фокусируемой, печать в других приложениях уйдёт в никуда. Покрытие: задача 11 (`setKeyboard(false)` делает `setFocusable(false)`, `hide`, `showInactive`; потеря фокуса панели при взятой клавиатуре — `blur` — уходит острову событием `onAssistantBlur`), задача 14 (Esc, сворачивание и `onAssistantBlur` зовут `api.keyboard(false)`), живая проверка.
 
 ---
 
@@ -44,7 +44,7 @@
 git switch -c feat/assistant
 git fetch origin && git merge --ff-only origin/master || git merge origin/master
 ```
-Expected: ветка `feat/assistant`, master v0.12.0 или новее внутри.
+Expected: ветка `feat/assistant`, master v0.14.0 или новее внутри (план сверен с 0c8b7767, 2026-10-16). Слияние упирается ровно в один конфликт — `TODOS.md` (проверено `git merge-tree`): оставить записи master целиком и добавить к ним пункты помощника из ветки. Остальные файлы ветки — спека, план и `docs/specs/assets/`, master их не трогал.
 
 - [ ] **Шаг 2: Загрузка и зависимости.** `uptime; memory_pressure -Q | tail -1` — load average за минуту ниже ~8. Затем:
 ```bash
@@ -928,13 +928,104 @@ export type MessageVia = 'assistant';
 ```
 В `index.ts` — `MessageVia` к типам из `./work/types.js`.
 
+---
+
+### Задача 5а: Папка помощника невидима для обнаружения сессий
+
+**Файлы:**
+- Modify: `packages/core/src/discover.ts` (`assistantCwd`, `claudeProjectSlug`, пропуск в `discoverSessions` и `sessionFileForPath`), `packages/core/src/watch.ts` (`WatchSource.index` может вернуть `null`), `packages/core/src/codex/index-session.ts` (`buildCodexIndex` без роллаутов помощника), `packages/core/src/index.ts` (экспорт `assistantCwd`, `claudeProjectSlug`)
+- Test: создать `packages/core/src/discover.test.ts`; дописать в `packages/core/src/all-sessions.test.ts`
+
+**Interfaces:**
+- Consumes: `parleyHome` (`work/store.ts`).
+- Produces: `assistantCwd(home?: string): string` — `<home>/assistant`, рабочая папка CLI помощника (её же берёт задача 10 вместо своего `path.join(deps.home, 'assistant')`); `claudeProjectSlug(cwd: string): string` — имя каталога проекта у Claude Code (всё, кроме латинских букв и цифр, — дефис); `WatchSource.index(): Promise<SessionIndex | null>` — `null` значит «не сессия Parley, изменение пропустить».
+
+Зачем (спека 2026-10-14, 15.6): CLI помощника пишут транскрипты сами — Claude в `~/.claude/projects/<слаг ~/.parley/assistant>/`, Codex в `~/.codex/sessions/` с `cwd` помощника. Без пропуска каждый ход помощника попадал бы в History как чужая сессия и будил `watchSessions` хоста.
+
+- [ ] **Шаг 1: Тесты.** `discover.test.ts` (временный корень через `mkdtemp`; `PARLEY_HOME` — на время теста, как в `config.test.ts`):
+```ts
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { assistantCwd, claudeProjectSlug, discoverSessions, sessionFileForPath } from './discover.js';
+
+let root: string;
+let home: string;
+const savedHome = process.env.PARLEY_HOME;
+
+beforeEach(async () => {
+  root = await mkdtemp(path.join(tmpdir(), 'parley-discover-'));
+  home = path.join(root, 'parley-home');
+  process.env.PARLEY_HOME = home;
+});
+afterEach(async () => {
+  if (savedHome === undefined) delete process.env.PARLEY_HOME;
+  else process.env.PARLEY_HOME = savedHome;
+  await rm(root, { recursive: true, force: true });
+});
+
+describe('папка помощника (спека 2026-10-14, 15.6)', () => {
+  it('claudeProjectSlug — слаг Claude Code: не буква и не цифра → дефис', () => {
+    expect(claudeProjectSlug('/Users/a/.parley/assistant')).toBe('-Users-a--parley-assistant');
+    expect(claudeProjectSlug('/Users/a/Desktop/MY/my_harnas')).toBe('-Users-a-Desktop-MY-my-harnas');
+  });
+
+  it('discoverSessions не видит транскрипты помощника, остальные проекты — видит', async () => {
+    const projects = path.join(root, 'projects');
+    const assistant = path.join(projects, claudeProjectSlug(assistantCwd(home)));
+    const other = path.join(projects, '-Users-a-proj');
+    await mkdir(assistant, { recursive: true });
+    await mkdir(other, { recursive: true });
+    await writeFile(path.join(assistant, 'aaa.jsonl'), '');
+    await writeFile(path.join(other, 'bbb.jsonl'), '');
+    const found = await discoverSessions(projects);
+    expect(found.map((session) => session.id)).toEqual(['bbb']);
+  });
+
+  it('sessionFileForPath для файла помощника — null', () => {
+    const projects = '/root';
+    const slug = claudeProjectSlug(assistantCwd(home));
+    expect(sessionFileForPath(path.join(projects, slug, 'aaa.jsonl'), projects)).toBeNull();
+    expect(sessionFileForPath(path.join(projects, '-Users-a-proj', 'bbb.jsonl'), projects)).toBe(path.join(projects, '-Users-a-proj', 'bbb.jsonl'));
+  });
+});
+```
+В `all-sessions.test.ts` (помощнику `codexSession` добавить необязательный параметр `cwd`; `PARLEY_HOME` — на время теста, как выше): роллаут Codex с `cwd: assistantCwd(home)` в `buildAllSessions` не попадает, соседний с обычным `cwd` — попадает.
+
+- [ ] **Шаг 2: Реализация.** `discover.ts` (импорт `parleyHome` из `./work/store.js`; `store.ts` сам `discover.ts` не импортирует — круга нет):
+```ts
+/** Рабочая папка CLI помощника (спека 2026-10-14, 15.6): её транскрипты — не сессии Parley. */
+export function assistantCwd(home: string = parleyHome()): string {
+  return path.join(home, 'assistant');
+}
+
+/** Имя каталога проекта в `~/.claude/projects`: Claude Code заменяет всё, кроме латинских букв и цифр, дефисом. */
+export function claudeProjectSlug(cwd: string): string {
+  return cwd.replace(/[^a-zA-Z0-9]/g, '-');
+}
+
+const assistantSlug = (): string => claudeProjectSlug(assistantCwd());
+```
+В `discoverSessions` первой строкой цикла по проектам: `if (!project.isDirectory() || project.name === assistantSlug()) continue;`. В `sessionFileForPath` после разбора `[project, second]`: `if (project === assistantSlug()) return null;` (комментарий: транскрипты помощника — не сессии Parley, watcher их не перечитывает).
+
+`watch.ts`: `WatchSource.index(file, root): Promise<SessionIndex | null>` (JSDoc: `null` — файл не сессия Parley, изменение пропускается); в `reparse` после `const session = await source.index(file, source.root);` — `if (session === null) return;`. `codexSource.index`:
+```ts
+    index: async (file) => {
+      const session = await indexCodexSession(file);
+      // Ход помощника (спека 2026-10-14, 15.6) — не сессия Parley.
+      return session.cwd === assistantCwd() ? null : session;
+    },
+```
+`codex/index-session.ts`, `buildCodexIndex`: после `mapLimited` — `const own = index.filter((session) => session.cwd !== assistantCwd());` (импорт `assistantCwd` из `../discover.js`), дальше сортировать и возвращать `own`. `index.ts`: экспорт `assistantCwd`, `claudeProjectSlug` рядом с `discoverSessions`.
+
 - [ ] **Шаг 3: Прогон группы A** (контролёр, после проверки загрузки):
 ```bash
-cd packages/core && nice -n 10 pnpm vitest run src/assistant src/mcp src/work/map.test.ts src/providers.test.ts && nice -n 10 pnpm typecheck && nice -n 10 pnpm build
+cd packages/core && nice -n 10 pnpm vitest run src/assistant src/mcp src/work/map.test.ts src/providers.test.ts src/discover.test.ts src/all-sessions.test.ts src/fixtures.test.ts && nice -n 10 pnpm typecheck && nice -n 10 pnpm build
 ```
 Expected: всё зелёное; `frame-check.test.ts` — тоже (`nice -n 10 pnpm vitest run test/frame-check.test.ts`). Коммит группы:
 ```bash
-git add packages/core && git commit -m "feat(core): помощник — разбор потоков CLI, шаблоны хода, режим parley-mcp, via у письма"
+git add packages/core && git commit -m "feat(core): помощник — разбор потоков CLI, шаблоны хода, режим parley-mcp, via у письма, папка помощника вне обнаружения"
 ```
 
 ---
@@ -1361,148 +1452,266 @@ export function detailText(source: OverviewSource, target: AssistantTarget, last
 
 ---
 
-### Задача 8: Маршрут `/assistant/*` hook-сервера
+### Задача 8: Приёмник `/assistant/<tool>` на сервере хуков
 
 **Файлы:**
-- Modify: `packages/host/src/hooks/hook-server.ts`
-- Test: дописать в `packages/host/src/hooks/hook-server.test.ts`
+- Create: `packages/host/src/assistant/assistant-endpoint.ts`
+- Test: `packages/host/src/assistant/assistant-endpoint.test.ts`
 
 **Interfaces:**
-- Produces: в `HookServerOptions` — `onAssistant?(tool: string, args: unknown): Promise<AssistantReply>`; `export interface AssistantReply { status: number; body: { text: string } | { error: string } }`; в `HookServer` — `baseUrl(): string | null` (адрес без `/hooks`) и `setAssistantToken(token: string | null): void`.
+- Consumes: `HookServerOptions.routes` и `HookServer.origin()` (`hooks/hook-server.ts`, в master с v0.12.0: точный путь + POST, обработчик сам проверяет токен, читает тело и отвечает); образец — `agent/browser-endpoint.ts` (`/agent/browser`).
+- Produces: `ASSISTANT_PATH = '/assistant'`; `ASSISTANT_TOOL_NAMES` (`parley_overview`, `parley_detail`, `propose_message`, `end_conversation`); `ASSISTANT_BODY_LIMIT`; `export interface AssistantReply { status: number; body: { text: string } | { error: string } }`; `createAssistantEndpoint({ log, tool(name, args): Promise<AssistantReply> })` → `{ routes(): Record<string, (req, res) => void>; setToken(token: string | null): void }`.
 
-- [ ] **Шаг 1: Тест** (по образцу `boot()`/`post()` этого файла; `fetch` Node 20 достаточно):
+Сам `hook-server.ts` не меняется: четыре точных пути `/assistant/<tool>` уходят ему через `routes` (задача 10, шаг 6), адрес для `PARLEY_ASSISTANT_URL` — `` `${hookServer.origin()}${ASSISTANT_PATH}` ``. Неизвестный инструмент до приёмника не доходит — сервер хуков сам отвечает 404 (проверка REA 2026-10-16: прежняя редакция задачи дублировала `routes` и `origin()` своим префиксом и `baseUrl()`).
+
+- [ ] **Шаг 1: Тест** (по образцу `browser-endpoint.test.ts`: свой `createServer` на `127.0.0.1:0`, который отдаёт запрос маршруту по `req.url`, как это делает сервер хуков; `silentLog` — из `../../test/feed-fakes.js`; `fetch` Node 20 достаточно, кроме 413):
 
 ```ts
-describe('маршрут помощника /assistant/*', () => {
-  it('верный токен — ответ обработчика; чужой или снятый — 401', async () => {
-    const onAssistant = vi.fn().mockResolvedValue({ status: 200, body: { text: 'ok' } });
-    const server = createHookServer({ log: silentLog, onHook: vi.fn(), onAssistant });
-    await server.listen();
-    try {
-      const base = server.baseUrl();
-      expect(base).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-      const post = (token: string): Promise<Response> =>
-        fetch(`${base}/assistant/parley_overview`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: '{"a":1}' });
-      expect((await post('nope')).status).toBe(401);
-      server.setAssistantToken('secret-1');
-      const ok = await post('secret-1');
-      expect(ok.status).toBe(200);
-      expect(await ok.json()).toEqual({ text: 'ok' });
-      expect(onAssistant).toHaveBeenCalledWith('parley_overview', { a: 1 });
-      expect((await post('secret-2')).status).toBe(401);
-      server.setAssistantToken(null);
-      expect((await post('secret-1')).status).toBe(401);
-    } finally {
-      await server.close(); // тем же способом, что соседние тесты останавливают сервер
+import { createServer, request, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { silentLog } from '../../test/feed-fakes.js';
+import { ASSISTANT_BODY_LIMIT, ASSISTANT_PATH, ASSISTANT_TOOL_NAMES, createAssistantEndpoint, type AssistantReply } from './assistant-endpoint.js';
+
+let servers: Server[] = [];
+afterEach(async () => {
+  await Promise.all(servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+  servers = [];
+});
+
+/** Обработчик инструмента по умолчанию — `200 {text:'ok'}`; тесты переопределяют через `mock*Once`. */
+const okTool = () => vi.fn(async (_name: string, _args: unknown): Promise<AssistantReply> => ({ status: 200, body: { text: 'ok' } }));
+
+/** Сервер с маршрутами приёмника — как их подключает сервер хуков: только точный путь, остальное — 404. */
+async function boot(tool = okTool()) {
+  const endpoint = createAssistantEndpoint({ log: silentLog(), tool });
+  const routes = endpoint.routes();
+  const server = createServer((req, res) => {
+    const route = routes[(req.url ?? '').split('?')[0] ?? ''];
+    if (route === undefined) {
+      res.writeHead(404).end();
+      return;
     }
+    route(req, res);
   });
-  it('без обработчика маршрута нет', async () => {
-    const server = createHookServer({ log: silentLog, onHook: vi.fn() });
-    await server.listen();
-    try {
-      server.setAssistantToken('t');
-      const response = await fetch(`${server.baseUrl()}/assistant/x`, { method: 'POST', headers: { authorization: 'Bearer t' }, body: '{}' });
-      expect(response.status).toBe(404);
-    } finally {
-      await server.close();
-    }
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const post = (name: string, token: string | null, body = '{"a":1}'): Promise<Response> =>
+    fetch(`${origin}${ASSISTANT_PATH}/${name}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(token === null ? {} : { authorization: `Bearer ${token}` }) },
+      body,
+    });
+  return { endpoint, tool, post, origin };
+}
+
+describe('приёмник инструментов помощника (спека 2026-10-14, 7.1)', () => {
+  it('маршрут на каждый инструмент, и только на них', async () => {
+    const { endpoint, post } = await boot();
+    expect(Object.keys(endpoint.routes()).sort()).toEqual([...ASSISTANT_TOOL_NAMES].map((name) => `${ASSISTANT_PATH}/${name}`).sort());
+    endpoint.setToken('t');
+    expect((await post('unknown_tool', 't')).status).toBe(404);
   });
-  it('битый JSON — 400', async () => {
-    const server = createHookServer({ log: silentLog, onHook: vi.fn(), onAssistant: vi.fn() });
-    await server.listen();
-    try {
-      server.setAssistantToken('t');
-      const response = await fetch(`${server.baseUrl()}/assistant/x`, { method: 'POST', headers: { authorization: 'Bearer t' }, body: '{' });
-      expect(response.status).toBe(400);
-    } finally {
-      await server.close();
-    }
+
+  it('верный токен — ответ обработчика; без токена, чужой или снятый — 401 без тела', async () => {
+    const { endpoint, tool, post } = await boot();
+    expect((await post('parley_overview', 'nope')).status).toBe(401);
+    expect((await post('parley_overview', null)).status).toBe(401);
+    endpoint.setToken('secret-1');
+    const ok = await post('parley_overview', 'secret-1');
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ text: 'ok' });
+    expect(tool).toHaveBeenCalledWith('parley_overview', { a: 1 });
+    expect((await post('parley_overview', 'secret-2')).status).toBe(401);
+    endpoint.setToken(null);
+    expect((await post('parley_overview', 'secret-1')).status).toBe(401);
+    expect(tool).toHaveBeenCalledTimes(1);
+  });
+
+  it('статус и тело обработчика уходят как есть; исключение — 500 с текстом', async () => {
+    const tool = okTool();
+    tool.mockResolvedValueOnce({ status: 409, body: { error: 'busy' } }).mockRejectedValueOnce(new Error('boom'));
+    const { endpoint, post } = await boot(tool);
+    endpoint.setToken('t');
+    const conflict = await post('propose_message', 't');
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toEqual({ error: 'busy' });
+    const failed = await post('propose_message', 't');
+    expect(failed.status).toBe(500);
+    expect(await failed.json()).toEqual({ error: 'boom' });
+  });
+
+  it('пустое тело — пустые аргументы; битый JSON или не объект — 400', async () => {
+    const { endpoint, tool, post } = await boot();
+    endpoint.setToken('t');
+    expect((await post('parley_detail', 't', '')).status).toBe(200);
+    expect(tool).toHaveBeenLastCalledWith('parley_detail', {});
+    expect((await post('parley_detail', 't', '{')).status).toBe(400);
+    expect((await post('parley_detail', 't', '[1]')).status).toBe(400);
+    expect(tool).toHaveBeenCalledTimes(1);
+  });
+
+  it('тело больше предела — 413 (образец — тест 413 в hooks/hook-server.test.ts)', async () => {
+    const { endpoint, tool, origin } = await boot();
+    endpoint.setToken('t');
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = request(`${origin}${ASSISTANT_PATH}/parley_detail`, { method: 'POST', headers: { authorization: 'Bearer t', 'content-type': 'application/json' } }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on('error', (error: NodeJS.ErrnoException) => {
+        // Сервер закрыл соединение, не дочитав тело, — это и есть отказ.
+        if (error.code === 'EPIPE' || error.code === 'ECONNRESET') resolve(413);
+        else reject(error);
+      });
+      req.end(`{"text":"${'x'.repeat(ASSISTANT_BODY_LIMIT)}"}`);
+    });
+    expect(status).toBe(413);
+    expect(tool).not.toHaveBeenCalled();
   });
 });
 ```
 
-- [ ] **Шаг 2: Реализация.** Импорт `timingSafeEqual` из `node:crypto` (рядом с `randomBytes`), типы `IncomingMessage`, `ServerResponse` — как уже импортированы. Над `createHookServer`:
+- [ ] **Шаг 2: Реализация** `assistant-endpoint.ts`:
 ```ts
-/** Ответ маршрута помощника (спека 2026-10-14, 7.1). */
+/**
+ * Приёмник инструментов помощника (спека 2026-10-14, 7.1): `POST /assistant/<tool>` на том же сервере 127.0.0.1, что
+ * принимает хуки (`hooks/hook-server.ts`, параметр `routes`) — по одному точному пути на инструмент, как у
+ * `/agent/browser`. Токен один — у текущего разговора (`setToken`); сравнение в постоянное время; `null` — маршруты
+ * закрыты. Отказы доступа — без тела, как у хуков: токен — 401, тело больше 1 МиБ — 413, не JSON-объект — 400.
+ * Ответ обработчика уходит как есть: `200 {text}` или не-200 `{error}` (режим помощника `parley-mcp` читает оба).
+ *
+ * Журнал — одна строка на вызов: инструмент и статус; аргументов (там текст человека) и токена в нём нет.
+ */
+import { timingSafeEqual } from 'node:crypto';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { Log } from '../log.js';
+
+/** Основа путей приёмника; адрес для `PARLEY_ASSISTANT_URL` — `<origin сервера хуков>/assistant`. */
+export const ASSISTANT_PATH = '/assistant';
+/** Инструменты режима помощника `parley-mcp` (задача 4) — по пути на каждый. */
+export const ASSISTANT_TOOL_NAMES = ['parley_overview', 'parley_detail', 'propose_message', 'end_conversation'] as const;
+/** Предел тела вызова: аргументы инструментов — короткие строки. */
+export const ASSISTANT_BODY_LIMIT = 1024 * 1024;
+
+/** Ответ инструмента: статус и тело для MCP-сервера помощника. */
 export interface AssistantReply {
   status: number;
   body: { text: string } | { error: string };
 }
 
-const ASSISTANT_PREFIX = '/assistant/';
-const ASSISTANT_BODY_LIMIT = 1024 * 1024;
+export interface AssistantEndpointOptions {
+  log: Log;
+  /** Вызов инструмента текущего разговора (`assistant-service.tool`). */
+  tool(name: string, args: unknown): Promise<AssistantReply>;
+}
 
-function readBody(req: IncomingMessage, limit: number): Promise<string> {
-  return new Promise((resolve, reject) => {
+export interface AssistantEndpoint {
+  /** Маршруты для `routes` сервера хуков: `/assistant/<tool>` → обработчик. */
+  routes(): Record<string, (req: IncomingMessage, res: ServerResponse) => void>;
+  /** Токен текущего разговора; `null` — маршруты закрыты (разговора нет). */
+  setToken(token: string | null): void;
+}
+
+const headerOf = (req: IncomingMessage, name: string): string | undefined => {
+  const value = req.headers[name];
+  return Array.isArray(value) ? value[0] : value;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+export function createAssistantEndpoint(options: AssistantEndpointOptions): AssistantEndpoint {
+  const { log } = options;
+  let token: Buffer | null = null;
+
+  const allowed = (header: string | undefined): boolean => {
+    if (token === null) return false;
+    const given = Buffer.from(header?.startsWith('Bearer ') === true ? header.slice('Bearer '.length).trim() : '');
+    return given.length === token.length && timingSafeEqual(given, token);
+  };
+
+  /** Отказ без тела; соединение закрывается — недочитанное тело дальше не читается. */
+  function refuse(req: IncomingMessage, res: ServerResponse, status: 400 | 401 | 413, reason: string): void {
+    if (!res.headersSent) {
+      log.warn('вызов инструмента помощника отклонён', { status, reason });
+      res.writeHead(status, { 'Content-Length': '0', Connection: 'close' });
+    }
+    res.end(() => req.socket.destroy());
+  }
+
+  function reply(res: ServerResponse, result: AssistantReply): void {
+    if (res.writableEnded || res.destroyed) return;
+    const payload = JSON.stringify(result.body);
+    res.writeHead(result.status, { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(payload)) });
+    res.end(payload);
+  }
+
+  function handle(name: string, req: IncomingMessage, res: ServerResponse): void {
+    if (!allowed(headerOf(req, 'authorization'))) {
+      refuse(req, res, 401, 'token');
+      return;
+    }
+    const declared = Number(headerOf(req, 'content-length') ?? '0');
+    if (Number.isFinite(declared) && declared > ASSISTANT_BODY_LIMIT) {
+      refuse(req, res, 413, 'body-size');
+      return;
+    }
     const chunks: Buffer[] = [];
     let size = 0;
+    let rejected = false;
     req.on('data', (chunk: Buffer) => {
+      if (rejected) return;
       size += chunk.length;
-      if (size > limit) {
-        req.destroy();
-        reject(new Error('body too large'));
+      if (size > ASSISTANT_BODY_LIMIT) {
+        rejected = true;
+        chunks.length = 0;
+        req.pause();
+        refuse(req, res, 413, 'body-size');
         return;
       }
       chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
-  });
+    req.on('error', () => {
+      rejected = true;
+    });
+    req.on('end', () => {
+      if (rejected) return;
+      const text = Buffer.concat(chunks, size).toString('utf8');
+      let args: unknown = {};
+      try {
+        if (text.trim() !== '') args = JSON.parse(text);
+      } catch {
+        refuse(req, res, 400, 'json');
+        return;
+      }
+      if (!isRecord(args)) {
+        refuse(req, res, 400, 'json');
+        return;
+      }
+      void options
+        .tool(name, args)
+        .catch((error: unknown): AssistantReply => ({ status: 500, body: { error: error instanceof Error ? error.message : String(error) } }))
+        .then((result) => {
+          log.info('инструмент помощника', { tool: name, status: result.status });
+          reply(res, result);
+        });
+    });
+  }
+
+  return {
+    routes: () =>
+      Object.fromEntries(
+        ASSISTANT_TOOL_NAMES.map((name) => [`${ASSISTANT_PATH}/${name}`, (req: IncomingMessage, res: ServerResponse) => handle(name, req, res)]),
+      ),
+    setToken: (next) => {
+      token = next === null ? null : Buffer.from(next);
+    },
+  };
 }
 ```
-В `HookServerOptions`:
-```ts
-  /** Вызов инструмента помощника (`/assistant/<tool>`); нет — маршрута нет. */
-  onAssistant?(tool: string, args: unknown): Promise<AssistantReply>;
-```
-В `HookServer`:
-```ts
-  /** Адрес сервера без `/hooks`, `null` до `listen()`. */
-  baseUrl(): string | null;
-  /** Токен текущего разговора помощника; `null` — маршрут закрыт. */
-  setAssistantToken(token: string | null): void;
-```
-В замыкании `createHookServer`:
-```ts
-  let assistantToken: Buffer | null = null;
-
-  const assistantAllowed = (header: string | undefined): boolean => {
-    if (assistantToken === null) return false;
-    const given = Buffer.from(header?.startsWith('Bearer ') === true ? header.slice('Bearer '.length).trim() : '');
-    return given.length === assistantToken.length && timingSafeEqual(given, assistantToken);
-  };
-
-  const handleAssistant = async (req: IncomingMessage, res: ServerResponse, tool: string): Promise<void> => {
-    const onAssistant = options.onAssistant;
-    if (onAssistant === undefined) return reject(req, res, 404, 'route');
-    if (!assistantAllowed(headerOf(req, 'authorization'))) return reject(req, res, 401, 'token');
-    let args: unknown = {};
-    try {
-      const raw = await readBody(req, ASSISTANT_BODY_LIMIT);
-      args = raw.trim() === '' ? {} : JSON.parse(raw);
-    } catch {
-      return reject(req, res, 400, 'body');
-    }
-    const reply = await onAssistant(tool, args).catch((error: unknown): AssistantReply => ({ status: 500, body: { error: (error as Error).message } }));
-    res.writeHead(reply.status, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(reply.body));
-  };
-```
-В `handle()` перед проверкой `HOOK_PATH`:
-```ts
-    if (req.method === 'POST' && pathname?.startsWith(ASSISTANT_PREFIX) === true) {
-      void handleAssistant(req, res, pathname.slice(ASSISTANT_PREFIX.length));
-      return;
-    }
-```
-(если `reject` возвращает не `void` — писать `reject(...); return;` вместо `return reject(...)`). В возвращаемом объекте:
-```ts
-    baseUrl: () => (url === null ? null : url.slice(0, -HOOK_PATH.length)),
-    setAssistantToken: (token) => {
-      assistantToken = token === null ? null : Buffer.from(token);
-    },
-```
-(`url` — кэш строки из `listen()`; имя переменной взять из кода `url()`.)
+Если `headerOf`/`isRecord` в хосте уже вынесены общими (проверить `hooks/hook-server.ts` и `agent/browser-endpoint.ts`) — взять их, не дублировать.
 
 ---
 
@@ -1687,7 +1896,7 @@ export function runTurn(spec: TurnSpec, onEvent: (event: AssistantStreamEvent) =
 
 **Файлы:**
 - Create: `packages/host/src/assistant/sent-log.ts`, `packages/host/src/assistant/assistant-service.ts`, `packages/host/src/methods/assistant.ts`
-- Modify: `packages/host/src/rooms/rooms-service.ts` (`sendHumanLetter` — второй параметр), `packages/host/src/methods/pty.ts` (`send?` в зависимостях), `packages/host/src/methods/index.ts` (`MethodDeps.send?`, `MethodDeps.assistant?`, регистрация), `packages/host/src/host.ts` (общий отправитель, сервис, `onAssistant`)
+- Modify: `packages/host/src/rooms/rooms-service.ts` (`sendHumanLetter` — второй параметр), `packages/host/src/methods/pty.ts` (`send?` в зависимостях), `packages/host/src/methods/index.ts` (`MethodDeps.send?`, `MethodDeps.assistant?`, регистрация), `packages/host/src/host.ts` (приёмник помощника в `routes` сервера хуков, общий отправитель, сервис)
 - Test: `packages/host/src/assistant/assistant-service.test.ts`, `packages/host/src/assistant/sent-log.test.ts`, дописать в `packages/host/src/methods/index.test.ts` и в тест `sendHumanLetter`
 
 **Interfaces:**
@@ -1732,13 +1941,14 @@ describe('sent.jsonl', () => {
 
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { assistantCwd } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 
 const KEEP = 500;
 const SLACK = 100;
 const RETURN = 50;
 
-const fileOf = (home: string): string => path.join(home, 'assistant', 'sent.jsonl');
+const fileOf = (home: string): string => path.join(assistantCwd(home), 'sent.jsonl');
 
 export async function appendSent(home: string, ref: SessionRef, text: string, at: string): Promise<void> {
   const file = fileOf(home);
@@ -1819,7 +2029,7 @@ beforeEach(async () => {
     activity: { get: () => ({ activity: { activity: 'working', waitingFor: null, exited: false }, metrics: null }) as never },
     send: vi.fn().mockResolvedValue({ inserted: true, submitted: true, reason: null }),
     sendLetter: vi.fn().mockResolvedValue('m-1'),
-    endpoint: { baseUrl: () => 'http://127.0.0.1:9', setAssistantToken: (value) => { token = value; } },
+    endpoint: { origin: () => 'http://127.0.0.1:9', setToken: (value) => { token = value; } },
     providers: async () => ({ claude: CLAUDE }),
     ready: async () => null,
     launchEnv: async () => ({}),
@@ -1996,6 +2206,7 @@ import {
   ASSISTANT_PROVIDER_ORDER,
   assistantCodexMcp,
   assistantCommand,
+  assistantCwd,
   assistantMcpJson,
   assistantPrompt,
   codexInstructionsFile,
@@ -2008,7 +2219,7 @@ import {
 import type { AssistantDetail, AssistantProposal, AssistantState, EventData, EventName, Params, SendResult, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { FeedService } from '../feed/feed-service.js';
-import type { AssistantReply } from '../hooks/hook-server.js';
+import { ASSISTANT_PATH, type AssistantReply } from './assistant-endpoint.js';
 import type { WorksService } from '../works/works-service.js';
 import { detailText, overviewText, resolveTarget, targetsOf, type AssistantTarget, type OverviewSource } from './overview.js';
 import { appendSent, readSent } from './sent-log.js';
@@ -2027,7 +2238,8 @@ export interface AssistantServiceDeps {
   send(params: { ref: SessionRef; text: string; submit: boolean }): Promise<SendResult>;
   /** `sendHumanLetter` с `via: 'assistant'`. */
   sendLetter(input: Params<'rooms.send'>): Promise<string>;
-  endpoint: { baseUrl(): string | null; setAssistantToken(token: string | null): void };
+  /** Сервер хуков (`origin`) и приёмник помощника (`setToken`, задача 8). */
+  endpoint: { origin(): string | null; setToken(token: string | null): void };
   providers(): Promise<Record<string, ProviderEntry>>;
   /** `null` — провайдер готов; иначе причина по-английски. */
   ready(entry: ProviderEntry): Promise<string | null>;
@@ -2085,7 +2297,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   const run = deps.run ?? runTurn;
   const now = deps.now ?? Date.now;
   const idleMs = deps.idleMs ?? ASSISTANT_IDLE_MS;
-  const dir = path.join(deps.home, 'assistant');
+  const dir = assistantCwd(deps.home); // та же папка, что пропускает обнаружение сессий (задача 5а)
 
   let state: AssistantState = { ...EMPTY };
   let conversation: Conversation | null = null;
@@ -2104,7 +2316,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
 
   function endConversation(): void {
     conversation = null;
-    deps.endpoint.setAssistantToken(null);
+    deps.endpoint.setToken(null);
     outcomeNote = null;
     if (pending !== null) {
       pending = null;
@@ -2142,7 +2354,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     }
     if (conversation === null) {
       conversation = { provider: entry.id, model, language, token: randomBytes(32).toString('hex'), sessionId: null, endAfterTurn: false };
-      deps.endpoint.setAssistantToken(conversation.token);
+      deps.endpoint.setToken(conversation.token);
     }
     return conversation;
   }
@@ -2166,12 +2378,12 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   async function start(entry: ProviderEntry, model: string | null, language: AssistantLanguage, text: string, retried: boolean): Promise<void> {
     const current = await ensure(entry, model, language);
     const next = state.turn + 1;
-    const base = deps.endpoint.baseUrl();
+    const base = deps.endpoint.origin();
     if (base === null) {
       publish({ ...EMPTY, proposal: state.proposal, phase: 'error', mood: 'error', question: text, error: 'Parley is still starting — try again', turn: next });
       return;
     }
-    const url = `${base}/assistant`;
+    const url = `${base}${ASSISTANT_PATH}`;
     const { mcpFile, promptFile } = await files(current, url);
     const codex = entry.runner.mcpConfig === 'codex-override';
     const prompt = outcomeNote === null ? text : `${outcomeNote}\n${text}`;
@@ -2385,7 +2597,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     stop() {
       stopTurn();
       if (idleTimer !== null) clearTimeout(idleTimer);
-      deps.endpoint.setAssistantToken(null);
+      deps.endpoint.setToken(null);
     },
   };
 }
@@ -2436,14 +2648,19 @@ export function createAssistantHandlers(service: AssistantService): Record<strin
 ```
 Тест в `methods/index.test.ts` (по образцу соседних): с `assistant` в `fakeDeps` у `createHostHandlers(deps).methods['assistant.ask']` — функция; без — `undefined`.
 
-- [ ] **Шаг 6: Проводка в `host.ts`.** Перед `createHookServer`: `let assistantService: AssistantService | undefined;`; в опции хук-сервера:
+- [ ] **Шаг 6: Проводка в `host.ts`** (ориентиры — по именам, не по строкам: после v0.12.0 файл вырос). Перед `createHookServer`, рядом с поздней привязкой `compactionService`:
 ```ts
-    onAssistant: (tool, args) =>
+  // Приёмник инструментов помощника (задача 8) нужен серверу хуков при создании, сам сервис — после сессий.
+  let assistantService: AssistantService | undefined;
+  const assistantEndpoint = createAssistantEndpoint({
+    log,
+    tool: (name, args) =>
       assistantService === undefined
         ? Promise.resolve({ status: 503, body: { error: 'the assistant is not ready' } })
-        : assistantService.tool(tool, args),
+        : assistantService.tool(name, args),
+  });
 ```
-После `wakeService` и `sessionsService`, до `createHostHandlers`:
+В `routes` сервера хуков рядом с `[AGENT_BROWSER_PATH]` — `...assistantEndpoint.routes()`. После `wakeService` и `sessionsService`, перед `const handlers = createHostHandlers({`:
 ```ts
   // Один отправитель на хост: окно (`pty.send`) и помощник делят «свой Enter в полёте» по сессии.
   const send = createSender({
@@ -2461,7 +2678,7 @@ export function createAssistantHandlers(service: AssistantService): Record<strin
     feed: feedService,
     send,
     sendLetter: (input) => sendHumanLetter(input, { via: 'assistant' }),
-    endpoint: hookServer,
+    endpoint: { origin: () => hookServer.origin(), setToken: (token) => assistantEndpoint.setToken(token) },
     providers: () => loadProviders(),
     ready: async (entry) => {
       await providerVersions.ready;
@@ -2481,7 +2698,7 @@ export function createAssistantHandlers(service: AssistantService): Record<strin
   });
   handle.context.onShutdown(async () => assistantService?.stop());
 ```
-и в вызов `createHostHandlers({ … })` — `send, assistant: assistantService`. Сигнатуры `readSecret`, `providerReadinessError` и имя логгера (`log`) сверить по коду; `hookServer` удовлетворяет `endpoint` после задачи 8.
+и в вызов `createHostHandlers({ … })` — `send, assistant: assistantService`. Сигнатуры `readSecret`, `providerReadinessError` и имя логгера (`log`) сверить по коду. Импорты: `createAssistantEndpoint` из `./assistant/assistant-endpoint.js`, `createAssistantService` и тип `AssistantService` из `./assistant/assistant-service.js`.
 
 - [ ] **Шаг 7: Прогон группы B** (контролёр, после проверки загрузки):
 ```bash
@@ -2564,6 +2781,7 @@ export const ASSISTANT_NAME = 'Jarvis';
       shortcut: 'Shortcut',
       shortcutHint: 'Works from any app. Electron format, e.g. Alt+Space.',
       shortcutTaken: 'This shortcut is taken by another app — choose another.',
+      shortcutClaudeDesktop: 'Alt+Space is also the default Quick Entry shortcut in Claude Desktop. If the island does not open, change the shortcut here or there.',
       glmSlow: 'GLM answers in about 13 seconds.',
     },
   },
@@ -2618,7 +2836,7 @@ describe('глобальный хоткей помощника', () => {
   });
 });
 ```
-В `window.test.ts` (у `FakeWindow` добавить `setFocusable`, `focus` как шпионов): `setKeyboard(true)` → `setFocusable(true)` и `focus()`; `setKeyboard(false)` у видимого окна → `setFocusable(false)`, затем `hide()` и `showInactive()`; у скрытого — только `setFocusable(false)`. В `ipc.test.ts` острова: `island:keyboard` с `true` от острова зовёт `options.keyboard(true)`, от чужого отправителя и с не-boolean — нет.
+В `window.test.ts` (у `FakeWindow` добавить `setFocusable`, `focus` как шпионов; `on('blur')` хранит слушателя, тест дёргает его сам; в `setup()` — `onKeyboardLost: vi.fn()`): `setKeyboard(true)` → `setFocusable(true)` и `focus()`; `setKeyboard(false)` у видимого окна → `setFocusable(false)`, затем `hide()` и `showInactive()`; у скрытого — только `setFocusable(false)`; `blur` после `setKeyboard(true)` зовёт `onKeyboardLost()` один раз (второй `blur` подряд — нет); `blur` без взятой клавиатуры и `blur` сразу после `setKeyboard(false)` — не зовут. В `ipc.test.ts` острова: `island:keyboard` с `true` от острова зовёт `options.keyboard(true)`, от чужого отправителя и с не-boolean — нет.
 
 - [ ] **Шаг 3: Хоткей** `main/assistant/shortcut.ts`:
 ```ts
@@ -2723,28 +2941,42 @@ export interface AssistantOpenRequest {
   keyboard(on: boolean): void;
   /** Хоткей или палитра открыли помощника. */
   onAssistantOpen(listener: (request: AssistantOpenRequest) => void): () => void;
+  /** Панель потеряла фокус, пока держала клавиатуру (клик в другое приложение): выйти из режима, как по Esc или ⌃. */
+  onAssistantBlur(listener: () => void): () => void;
   /** Голос для помощника — те же каналы `voice:*`, что у окна. */
   voice: Pick<VoiceApi, 'transcribe' | 'micStatus' | 'requestMic'>;
 ```
-`ISLAND_METHODS` — добавить `'assistant.ask'`, `'assistant.cancel'`, `'assistant.decide'`, `'assistant.reset'`, `'assistant.state'`; `ISLAND_EVENTS` — `'assistant.changed'`. Фабрики `api()` в тестах острова — добавить `keyboard: vi.fn()`, `onAssistantOpen: vi.fn(() => () => {})`, `voice: { transcribe: vi.fn(), micStatus: vi.fn(), requestMic: vi.fn() }`.
+`ISLAND_METHODS` — добавить `'assistant.ask'`, `'assistant.cancel'`, `'assistant.decide'`, `'assistant.reset'`, `'assistant.state'`; `ISLAND_EVENTS` — `'assistant.changed'`. Фабрики `api()` в тестах острова — добавить `keyboard: vi.fn()`, `onAssistantOpen: vi.fn(() => () => {})`, `onAssistantBlur: vi.fn(() => () => {})`, `voice: { transcribe: vi.fn(), micStatus: vi.fn(), requestMic: vi.fn() }`.
 
 `preload/island.ts` (в объект `island`, по образцу соседних подписок на `Set`):
 ```ts
       keyboard: (on) => ipcRenderer.send('island:keyboard', on),
       onAssistantOpen: (listener) => subscribe(assistantOpenListeners, listener), // по образцу onConfig/onHover
+      onAssistantBlur: (listener) => subscribe(assistantBlurListeners, listener),
       voice: {
         transcribe: (request) => ipcRenderer.invoke('voice:transcribe', request) as Promise<TranscribeResult>,
         micStatus: () => ipcRenderer.invoke('voice:mic-status') as Promise<MicStatus>,
         requestMic: () => ipcRenderer.invoke('voice:request-mic') as Promise<boolean>,
       },
 ```
-и `ipcRenderer.on('island:assistant-open', (_event, request) => { for (const listener of assistantOpenListeners) listener(request as AssistantOpenRequest); })`.
+и `ipcRenderer.on('island:assistant-open', (_event, request) => { for (const listener of assistantOpenListeners) listener(request as AssistantOpenRequest); })`, `ipcRenderer.on('island:assistant-blur', () => { for (const listener of assistantBlurListeners) listener(); })`.
 
-`main/island/window.ts`: в `IslandWindowLike` — `setFocusable(focusable: boolean): void; focus(): void;`; в `IslandController` — `setKeyboard(on: boolean): void;`; реализация в `createIslandController`:
+`main/island/window.ts`: в `IslandWindowLike` — `setFocusable(focusable: boolean): void; focus(): void;` и `on(event: 'closed' | 'blur', listener: () => void): unknown;` (вместо одного `'closed'`); в `IslandControllerDeps` — `/** Панель потеряла фокус, пока держала клавиатуру (клик в другое приложение): main велит острову выйти из режима. */ onKeyboardLost(): void;`; в `IslandController` — `setKeyboard(on: boolean): void;`. В `createIslandController` — флаг `let keyboard = false;` рядом с `hovered`; в `open()` рядом с `created.on('closed', …)`:
+```ts
+    // Клавиатура ушла сама (клик в другое приложение) — как Esc. `hide()`/`showInactive()` внутри `setKeyboard(false)` тоже
+    // дают blur, но флаг к тому моменту уже снят.
+    created.on('blur', () => {
+      if (!keyboard || window !== created) return;
+      keyboard = false;
+      deps.onKeyboardLost();
+    });
+```
+реализация:
 ```ts
     setKeyboard(on) {
       const current = window; // переменная окна контроллера
       if (current === null || current.isDestroyed()) return;
+      keyboard = on;
       if (on) {
         current.setFocusable(true);
         current.focus();
@@ -2779,6 +3011,11 @@ export interface AssistantOpenRequest {
     if (window === null || window.isDestroyed()) return;
     window.webContents.send('island:assistant-open', request);
   }
+  function blurAssistant(): void {
+    const window = island.current();
+    if (window === null || window.isDestroyed()) return;
+    window.webContents.send('island:assistant-blur');
+  }
   const assistantLanguage = (current: UiFile): AssistantLanguage =>
     current.assistant.language ?? (app.getLocale().toLowerCase().startsWith('ru') ? 'ru' : 'en');
 ```
@@ -2801,7 +3038,7 @@ export interface AssistantOpenRequest {
     assistantShortcut.sync(current.assistant.enabled && !switches.islandOff, current.assistant.hotkey);
     pushIslandConfig();
 ```
-`registerIslandIpc({ …, keyboard: (on) => island.setKeyboard(on) })`; `app.on('will-quit', () => globalShortcut.unregisterAll())`. В `registerIpc` — опции `openAssistant: () => openAssistant({ listen: false })` и `assistantShortcut: () => assistantShortcut.status()`; в `main/ipc.ts`:
+`registerIslandIpc({ …, keyboard: (on) => island.setKeyboard(on) })`; в deps `createIslandController` (рядом с `onHover`) — `onKeyboardLost: () => blurAssistant()`; `app.on('will-quit', () => globalShortcut.unregisterAll())`. В `registerIpc` — опции `openAssistant: () => openAssistant({ listen: false })` и `assistantShortcut: () => assistantShortcut.status()`; в `main/ipc.ts`:
 ```ts
   ipcMain.on('app:assistant-open', () => options.openAssistant?.());
   ipcMain.handle('app:assistant-shortcut', () => options.assistantShortcut?.() ?? { accelerator: null, ok: true });
@@ -2840,7 +3077,8 @@ export interface AssistantOpenRequest {
 - список моделей — из `models` выбранного провайдера, первым «Fast default»;
 - язык — `System` / `English` / `Russian` → `null` / `'en'` / `'ru'`;
 - `assistantShortcut()` с `ok: false` показывает `S.assistant.settings.shortcutTaken`;
-- у GLM видна подсказка `glmSlow`.
+- у GLM видна подсказка `glmSlow`;
+- при сочетании `Alt+Space` (без учёта регистра и пробелов; `Option+Space` — тоже) видна подсказка `shortcutClaudeDesktop`, при `Ctrl+Shift+J` — нет.
 
 - [ ] **Шаг 2: Компонент** — по образцу `VoiceSettings.tsx` (тот же способ получить мост, те же `Switch`, `Select`, `ToggleGroup`, `Input`, локальные строки-поля):
 ```tsx
@@ -2872,7 +3110,9 @@ export function AssistantSettings(): JSX.Element {
   const selected = providers.find((provider) => provider.id === assistant.provider) ?? null;
   // …разметка: Switch enabled + enabledHint; Select provider (`__auto` → null) с подсказкой glmSlow для 'glm';
   // Select model (`__default` → null; пункты selected?.models ?? []); ToggleGroup language;
-  // Input hotkey (onBlur → patch({ hotkey }) при непустом значении) и строка shortcutTaken при shortcut?.ok === false.
+  // Input hotkey (onBlur → patch({ hotkey }) при непустом значении) и строка shortcutTaken при shortcut?.ok === false;
+  // строка shortcutClaudeDesktop, когда /^(alt|option)\+space$/i.test(assistant.hotkey.replace(/\s+/g, '')): у двух приложений
+  // register возвращает true обоим, и конфликт с Quick Entry Claude Desktop иначе не виден (проверка REA 2026-10-16).
 }
 ```
 `ProviderRow` — тип элемента `Result<'providers.list'>['providers']`. Разметку строк — как у соседних полей Settings.
@@ -3351,7 +3591,7 @@ describe('подписи помощника', () => {
 - `cardError` показывается на карточке;
 - строка ожидающих запросов (`assistant-pending`) по клику зовёт `onShowRequests`.
 
-В `IslandView.test.tsx`: при `assistant.open && !assistant.collapsed` — виден `assistant-view`, пилюли нет; при `collapsed && busy` — пилюля с `assistant-mini` и подписью `miniLabel`; при включённом помощнике в пилюле есть `assistant-dot`, клик — `onOpen`. В `IslandApp.test.tsx`: событие `onAssistantOpen({ listen: false })` показывает вид помощника и зовёт `api.keyboard(true)`; Esc закрывает и зовёт `api.keyboard(false)`; остров с `islandEnabled: false` вызывает `setVisible(false)`, а после `onAssistantOpen` — `setVisible(true)`.
+В `IslandView.test.tsx`: при `assistant.open && !assistant.collapsed` — виден `assistant-view`, пилюли нет; при `collapsed && busy` — пилюля с `assistant-mini` и подписью `miniLabel`; при включённом помощнике в пилюле есть `assistant-dot`, клик — `onOpen`. В `IslandApp.test.tsx`: событие `onAssistantOpen({ listen: false })` показывает вид помощника и зовёт `api.keyboard(true)`; Esc закрывает и зовёт `api.keyboard(false)`; `onAssistantBlur` при открытом виде без хода — закрывает и зовёт `api.keyboard(false)`, во время хода — сворачивает (пилюля `assistant-mini`), при закрытом виде ничего не делает; остров с `islandEnabled: false` вызывает `setVisible(false)`, а после `onAssistantOpen` — `setVisible(true)`.
 
 - [ ] **Шаг 2: `AssistantMark.tsx`**
 ```tsx
@@ -3646,9 +3886,13 @@ const assistantBig = assistant !== null && assistant.open && !assistant.collapse
     void bridge.call('assistant.state', {}).then((state) => useAssistantStore.getState().applyHost(state)).catch(() => {});
     const off = bridge.on('assistant.changed', (state) => useAssistantStore.getState().applyHost(state));
     const offOpen = bridge.island.onAssistantOpen((request) => useAssistantStore.getState().openMode(request));
+    const offBlur = bridge.island.onAssistantBlur(() => {
+      hideAssistant();
+    });
     return () => {
       off();
       offOpen();
+      offBlur();
     };
   }, [connected, bridge]);
 ```
@@ -3679,7 +3923,7 @@ Esc:
     return () => window.removeEventListener('keydown', onKey);
   }, [assistant.open]);
 ```
-Стрелка ⌃ и смахивание (`onHide`): `if (assistant.open) { if (busy) store.collapse(); else store.close(); return; } retract();`. Проп `assistant` для `IslandView`:
+Общий выход из режима — `hideAssistant()` на уровне модуля (читает стор через `useAssistantStore.getState()`, поэтому годится и в подписке): `const s = useAssistantStore.getState(); if (!s.open) return false; if (assistantBusy(s)) s.collapse(); else s.close(); return true;`. Стрелка ⌃ и смахивание (`onHide`): `if (hideAssistant()) return; retract();`; потеря фокуса панели (`onAssistantBlur`, выше) — тот же `hideAssistant()`. Проп `assistant` для `IslandView`:
 ```ts
   const assistantProps: IslandAssistantProps | null = !config.assistant.enabled
     ? null
@@ -3893,7 +4137,7 @@ if (!args.includes('--strict-mcp-config')) {
 5. В главном окне открыть комнату: последнее письмо — `Skip the Safari tests.`, в его шапке — `You (via Jarvis)`, вместо значка человека — `[data-assistant-mark]`.
 6. Вопрос `what is going on?` → `assistant-answer` содержит `The room is working.`; Esc → `assistant-view` пропал.
 
-- [ ] **Шаг 3: Документы.** README — раздел «Assistant» (по-английски): что это (навигатор на острове, отвечает о работах, передаёт сообщения после подтверждения), как включить (Settings → Assistant, провайдер и модель, язык, ⌥Space), голос — через Settings → Voice, что он не умеет (одобрения, запуск сессий — потом), что каждый вопрос — короткий ход CLI на подписке выбранного провайдера, где данные (`~/.parley/assistant/`). CHANGELOG, Unreleased: «Assistant on the island (stage 1): ask about your agents by hotkey, voice or text; pass messages to rooms and agents after confirmation; messages show “You (via Jarvis)”». Спека: 6.1 — настройки в `ui.json` (`ui.assistant`), не `settings.set`; 6.5 — `provider` и `model` в `assistant.ask` могут быть `null`, `detail` — структура `{ tool, target }`, метод `assistant.sent`; 7.3 — подтверждение принимает оба языка; 7.4 — Chat помечается окном по `assistant.sent`, а не хостом в ленте.
+- [ ] **Шаг 3: Документы.** README — раздел «Assistant» (по-английски): что это (навигатор на острове, отвечает о работах, передаёт сообщения после подтверждения), как включить (Settings → Assistant, провайдер и модель, язык, ⌥Space; ⌥Space по умолчанию занят и у Quick Entry в Claude Desktop — сменить сочетание там или здесь), голос — через Settings → Voice, что он не умеет (одобрения, запуск сессий — потом), что каждый вопрос — короткий ход CLI на подписке выбранного провайдера, где данные (`~/.parley/assistant/`). CHANGELOG, Unreleased: «Assistant on the island (stage 1): ask about your agents by hotkey, voice or text; pass messages to rooms and agents after confirmation; messages show “You (via Jarvis)”». Спека: 6.1 — настройки в `ui.json` (`ui.assistant`), не `settings.set`; 6.5 — `provider` и `model` в `assistant.ask` могут быть `null`, `detail` — структура `{ tool, target }`, метод `assistant.sent`; 7.3 — подтверждение принимает оба языка; 7.4 — Chat помечается окном по `assistant.sent`, а не хостом в ленте.
 
 - [ ] **Шаг 4: Прогон группы E и всего** (контролёр, после проверки загрузки):
 ```bash
@@ -3911,7 +4155,9 @@ Dev-окно с отдельным домом (рецепт из памяти: `
 1. Settings → Assistant: включить, провайдер Claude, язык Русский; ⌥Space из браузера — остров раскрылся и слушает, Parley на передний план не вышел.
 2. Голосом: «Кто сейчас работает?» — ответ по-русски за ~4 с, подписи «Thinking…» → «Checking rooms…» → ответ.
 3. «Скажи комнате X, что …» — карточка, «да» голосом — письмо в комнате с «You (via Jarvis)».
-4. Esc — печать в прежнем приложении идёт туда же (клавиатура вернулась).
+4. Esc — печать в прежнем приложении идёт туда же (клавиатура вернулась). `hide` и `showInactive` в `setKeyboard(false)` идут без паузы, проба 2026-10-15 ждала между ними 2,5 с: если ввод не вернулся — чинить это первым. Клик в другое приложение при открытом виде — вид свернулся (во время хода) или закрылся сам, печать там идёт туда.
 5. Во время хода стрелка ⌃ — мини-вид «Thinking·»; ответ раскрывает остров сам; через 8 с без курсора — обычная пилюля.
 6. То же на GLM и Codex (по одному вопросу); на Codex — живьём проверить `default_tools_approval_mode` в одной строке `-c` (TOML-таблица).
 7. Остров выключен в настройках, помощник включён: ⌥Space показывает только помощника, после закрытия остров прячется.
+8. Claude Desktop запущен, его Quick Entry на умолчании ⌥Space (в настройках Claude Desktop сочетание не пустое): кто получает ⌥Space; в Settings → Assistant при `Alt+Space` видна подсказка про Claude Desktop; после смены сочетания в одном из приложений остров открывается.
+9. После нескольких ходов: в History сессий помощника нет, хотя на диске есть `~/.claude/projects/<слаг ~/.parley/assistant>/` (и роллаут Codex с `cwd` помощника после хода на Codex).
