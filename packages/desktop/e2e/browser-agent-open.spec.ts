@@ -181,7 +181,8 @@ test.describe('агент открывает страницу в браузер�
     expect(first.text).toMatch(/Opened t\d+:/);
     await expect(window.getByText(`S01 opened ${new URL(origin).host}`)).toBeVisible();
     await expect(window.getByTestId('chat-view')).toBeVisible();
-    await expect(window.getByTestId('browser-panel')).toHaveCount(0);
+    // Панель в DOM остаётся (страницы переживают уход вида), но скрыта: человеку она не показана.
+    await expect(panelOf(window, `room:${roomId}`)).toBeHidden();
 
     // Вид чата на экране: страница встаёт в его панель, она открывается сама.
     const own = await agentOpens(opened, { url: `${origin}/chat-page`, own: true });

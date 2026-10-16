@@ -1292,7 +1292,7 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
     expect(guest.setZoomLevel).toHaveBeenLastCalledWith(0);
     await ipcMain.invoke('browser:zoom', 7, 0);
     expect(guest.setZoomLevel).toHaveBeenLastCalledWith(0);
-    expect(guest.setZoomLevel).toHaveBeenCalledTimes(3);
+    expect(guest.setZoomLevel).toHaveBeenCalledTimes(4);
 
     for (const step of [2, 0.5, '1', null]) {
       expect(await codeOf(ipcMain.invoke('browser:zoom', 7, step)), String(step)).toBe('bad_request');
@@ -1474,6 +1474,8 @@ describe('канал агента — только для main (этап B2, с�
     agentOps.openTabResult.mockClear();
     await ipcMain.invoke('browser:agent-open-tab-result', 'r1', { tabId: 'browser:abc123', reused: false, mounted: false });
     expect(agentOps.openTabResult).toHaveBeenLastCalledWith('r1', { tabId: 'browser:abc123', reused: false, mounted: false });
+    await ipcMain.invoke('browser:agent-open-tab-result', 'r1p', { tabId: 'bp-abc123', reused: true, mounted: true });
+    expect(agentOps.openTabResult).toHaveBeenLastCalledWith('r1p', { tabId: 'bp-abc123', reused: true, mounted: true });
     await ipcMain.invoke('browser:agent-open-tab-result', 'r2', { error: 'limit' });
     expect(agentOps.openTabResult).toHaveBeenLastCalledWith('r2', { error: 'limit' });
     await ipcMain.invoke('browser:agent-open-tab-result', 'r3', { error: 'no_work' });
@@ -1492,7 +1494,7 @@ describe('канал агента — только для main (этап B2, с�
     for (const [requestId, raw] of bad) {
       expect(await codeOf(ipcMain.invoke('browser:agent-open-tab-result', requestId, raw)), JSON.stringify(raw)).toBe('bad_request');
     }
-    expect(agentOps.openTabResult).toHaveBeenCalledTimes(3);
+    expect(agentOps.openTabResult).toHaveBeenCalledTimes(4);
   });
 });
 

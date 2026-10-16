@@ -164,7 +164,8 @@ export function parseAgentOpenTabResult(raw: unknown): AgentOpenTabResult | null
   if (!isRecord(raw)) return null;
   if (raw.error === 'limit' || raw.error === 'no_work') return { error: raw.error };
   const { tabId, reused, mounted } = raw;
-  if (typeof tabId !== 'string' || !tabId.startsWith('browser:') || tabId.length > 200) return null;
+  // Вкладка раскладки (`browser:…`) или страница панели хозяина (`bp-…`, `panelPageId`).
+  if (typeof tabId !== 'string' || !(tabId.startsWith('browser:') || tabId.startsWith('bp-')) || tabId.length > 200) return null;
   if (typeof reused !== 'boolean' || typeof mounted !== 'boolean') return null;
   return { tabId, reused, mounted };
 }
