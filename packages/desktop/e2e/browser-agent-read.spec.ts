@@ -82,7 +82,7 @@ console.error('Auth failed: Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiO
 const BUDGET_SECRETS = ['eyJhbGciOiJIUzI1NiJ9', 'c2lnbmF0dXJl', 'hunter2', 'AKIASECRETKEY123'];
 
 /** Сетка 2000×2640 разноцветных ячеек 240×240 с подписью `x,y`: по цвету пикселя видно, какая часть страницы попала в снимок. */
-const GRID_HTML = `<!doctype html><title>Grid</title><style>body{margin:0;font:bold 28px sans-serif}.c{position:absolute;width:236px;height:236px;border:2px solid #000;display:flex;align-items:center;justify-content:center}</style><div id=g></div>
+const GRID_HTML = `<!doctype html><title>Grid</title><style>html{scroll-behavior:smooth}body{margin:0;font:bold 28px sans-serif}.c{position:absolute;width:236px;height:236px;border:2px solid #000;display:flex;align-items:center;justify-content:center}</style><div id=g></div>
 <script>const g=document.getElementById('g');for(let y=0;y<2600;y+=240)for(let x=0;x<2000;x+=240){const d=document.createElement('div');d.className='c';d.style.left=x+'px';d.style.top=y+'px';d.style.background='hsl('+((y/240)*40)+',70%,'+(60+(x/240)*4)+'%)';d.textContent=x+','+y;g.appendChild(d);}document.body.style.height='2640px';document.body.style.width='2000px';</script>`;
 
 /** Цвет ячейки сетки с левым верхним углом (x, y) — тот же расчёт, что в странице. */

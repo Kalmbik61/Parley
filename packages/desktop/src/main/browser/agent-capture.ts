@@ -250,7 +250,7 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
         for (let y = 0; y < total; y += view.height) {
           signal.throwIfAborted();
           const reached = await evaluate(
-            `new Promise((done) => { window.scrollTo(0, ${y}); const finish = () => done(window.scrollY); setTimeout(finish, 300); requestAnimationFrame(() => requestAnimationFrame(finish)); })`,
+            `new Promise((done) => { window.scrollTo({ left: 0, top: ${y}, behavior: 'instant' }); const finish = () => done(window.scrollY); setTimeout(finish, 300); requestAnimationFrame(() => requestAnimationFrame(finish)); })`,
           );
           // Последняя полоса: прокрутка зажата у конца документа, нужные строки лежат ниже верха снимка.
           const at = typeof reached === 'number' ? reached : y;
@@ -267,7 +267,7 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
       } finally {
         // Человек не должен видеть, что страницу прокручивали.
         const [x, top] = Array.isArray(origin) ? (origin as unknown[]) : [0, 0];
-        if (typeof x === 'number' && typeof top === 'number') await evaluate(`window.scrollTo(${x}, ${top})`, null).catch(() => undefined);
+        if (typeof x === 'number' && typeof top === 'number') await evaluate(`window.scrollTo({ left: ${x}, top: ${top}, behavior: 'instant' })`, null).catch(() => undefined);
       }
       return { png: strips.length === 1 ? (strips[0] as Buffer) : deps.image.stitch(strips), viewport: { width: view.width, height: total }, clipped: false };
     };

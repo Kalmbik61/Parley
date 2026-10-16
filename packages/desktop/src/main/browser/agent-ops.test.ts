@@ -1096,7 +1096,7 @@ describe('screenshot (спека 5.1, 8)', () => {
       evaluated.push(code);
       if (code.startsWith('[window.scrollX')) return [0, 340];
       // Документ 2000 при вьюпорте 800: прокрутка до 1600 зажимается на 1200.
-      const to = /scrollTo\(0, (\d+)\)/.exec(code)?.[1];
+      const to = /top: (\d+)/.exec(code)?.[1];
       return to === '1600' ? 1200 : Number(to);
     });
     inspector.send.mockImplementation(sendWith({ content: { width: 1280, height: 2000 }, shot: png(1280, 800) }));
@@ -1108,7 +1108,9 @@ describe('screenshot (спека 5.1, 8)', () => {
     expect(shots).toEqual([{ format: 'png' }, { format: 'png' }, { format: 'png' }]);
     // Через CDP код не исполняется никогда: прокрутка идёт только через мир гостя.
     expect(inspector.send.mock.calls.some(([, method]) => method === 'Runtime.evaluate')).toBe(false);
-    expect(evaluated.map((e) => /scrollTo\((\d+), (\d+)\)/.exec(e)?.slice(1).join(','))).toEqual([undefined, '0,0', '0,800', '0,1600', '0,340']);
+    expect(evaluated.map((e) => /scrollTo\(\{ left: (\d+), top: (\d+), behavior: 'instant' \}\)/.exec(e)?.slice(1).join(','))).toEqual([undefined, '0,0', '0,800', '0,1600', '0,340']);
+    // CSS `scroll-behavior: smooth` страницы не должен замедлять прокрутку: любая прокрутка гостя — мгновенная.
+    expect(evaluated.filter((e) => e.includes('scrollTo')).every((e) => e.includes("behavior: 'instant'"))).toBe(true);
     expect(saveImage).toHaveBeenCalledTimes(1);
   });
 
