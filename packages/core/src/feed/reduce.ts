@@ -616,9 +616,9 @@ function rejectRunningTools(draft: FeedDraft, at: string): void {
 }
 
 /** Закрывает идущий ход: тексты, карточки, вызовы; `turn` — если ход шёл. */
-export function closeTurn(draft: FeedDraft, at: string, interrupted = false): void {
+export function closeTurn(draft: FeedDraft, at: string, interrupted = false, keepPending = false): void {
   closeTexts(draft);
-  settleAllPending(draft, at);
+  if (!keepPending) settleAllPending(draft, at);
   rejectRunningTools(draft, at);
   if (draft.turnStartedAt !== null) {
     draft.put({

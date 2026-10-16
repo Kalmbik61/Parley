@@ -93,6 +93,8 @@ export interface ActivityServiceOptions extends MetricsRoots {
    * входа или доверия к папке, и сессии «нужен ты» (спека комнат, 3.6, «Экраны старта»).
    */
   startupWaitMs?: number;
+  /** Запас сверх ожидания вызова code mode Codex, после которого сессия «нужен ты» (`CODEX_CALL_GRACE_MS`). */
+  codexCallGraceMs?: number;
   now?: () => number;
 }
 
@@ -173,6 +175,13 @@ const DEFAULT_TRUST_WAIT_MS = 20_000;
  * взгляда в терминал, а не тревога — сессии, которая молча ждёт входа.
  */
 const DEFAULT_STARTUP_WAIT_MS = 20_000;
+/**
+ * Запас сверх заявленного ожидания вызова code mode Codex (`exec`/`wait`): вызов без вывода дольше
+ * `yield_time_ms` плюс этот запас считается застрявшим на запросе одобрения (разбор 2026-10-16).
+ */
+export const CODEX_CALL_GRACE_MS = 120_000;
+/** Ожидание вызова code mode, когда оно не указано (`yieldMs === null`): по умолчанию у Codex около 30 с. */
+export const CODEX_DEFAULT_YIELD_MS = 30_000;
 
 /**
  * Рычаг E2E окна: `PARLEY_CODEX_STARTUP_MS` (и прежняя `HARNAS_CODEX_STARTUP_MS`) — срок экранов старта Codex в миллисекундах. Тест не может
@@ -236,6 +245,8 @@ const eventNameOf = (signal: CodexSignal, turnSeen: boolean): string | null => {
  * вмешалось чужое событие новее сигнала: `Stop` от notify с временем файла позже последнего кадра
  * спиннера или мигания `Action Required`. Следующий сигнал того же вида такое расхождение чинит.
  */
+/** Предел задержки `setTimeout` в Node (2^31 − 1 мс): больше — таймер срабатывает через 1 мс. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const agreesWith = (derived: Activity | undefined, signal: CodexSignal): boolean => {
   switch (signal.kind) {
     case 'working':
@@ -288,9 +299,12 @@ export function createActivityService(
   const backgroundHoldMs = options.backgroundHoldMs ?? DEFAULT_BACKGROUND_HOLD_MS;
   const trustWaitMs = options.trustWaitMs ?? DEFAULT_TRUST_WAIT_MS;
   const startupWaitMs = options.startupWaitMs ?? DEFAULT_STARTUP_WAIT_MS;
+  const codexCallGraceMs = options.codexCallGraceMs ?? CODEX_CALL_GRACE_MS;
 
   const logIndex: LogIndex = createLogIndex(roots);
   const live = new Map<string, SessionLive>();
+  /** Выведенная активность до подмены на `blocked` (вопрос, сторож): с ней сверяются сигналы терминала. */
+  const derivedActivity = new Map<string, Activity>();
   const journals = new Map<string, readonly EventRecord[] | null>();
   const seenAt = new Map<string, string>();
   const silenceTimers = new Map<string, NodeJS.Timeout>();
@@ -299,6 +313,10 @@ export function createActivityService(
   const pointerLabelReset = new Set<string>();
   /** Сессии, чей вопрос агента удержан окном (`questionHeld`): им публикуется `blocked`. */
   const questionHeldKeys = new Set<string>();
+  /** Таймеры сторожа вызова code mode Codex по ключу сессии: срабатывают в момент, когда вызов считается застрявшим. */
+  const codexCallTimers = new Map<string, NodeJS.Timeout>();
+  /** Время вызова (`openCodeCall.at`), о котором сторож уже сообщил, по ключу сессии: одно уведомление на вызов. */
+  const codexCallNotified = new Map<string, string>();
   /** Причина, по которой письма сессии ждут (`mailWaiting`), по ключу сессии. */
   const mailWaits = new Map<string, MailWait>();
   const contexts = new Map<string, ContextFill>();
@@ -340,6 +358,13 @@ export function createActivityService(
     if (timer === undefined) return;
     clearTimeout(timer);
     silenceTimers.delete(key);
+  }
+
+  function clearCodexCallTimer(key: string): void {
+    const timer = codexCallTimers.get(key);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    codexCallTimers.delete(key);
   }
 
   function clearTrustWaitTimer(key: string): void {
@@ -728,10 +753,46 @@ export function createActivityService(
       backgroundHoldMs,
     });
 
-    const metrics = metricsFor(ref, key, entry, session, activity, logIndex.index(session));
-    // Удержанный вопрос агента: публикуется 'blocked', а таймер тишины и метрики — по настоящему значению.
+    const index = logIndex.index(session);
+    const metrics = metricsFor(ref, key, entry, session, activity, index);
+
+    // Сторож Codex: вызов code mode без вывода дольше ожидания и запаса — запрос одобрения, которого никто не видит.
+    let codexStuck = false;
+    const call = driven && activity.activity === 'working' ? index?.openCodeCall : undefined;
+    if (call === undefined) {
+      clearCodexCallTimer(key);
+    } else {
+      const stuckAt = Date.parse(call.at) + (call.yieldMs ?? CODEX_DEFAULT_YIELD_MS) + codexCallGraceMs;
+      if (Number.isNaN(stuckAt)) {
+        clearCodexCallTimer(key);
+      } else if (now >= stuckAt) {
+        clearCodexCallTimer(key);
+        codexStuck = true;
+        if (codexCallNotified.get(key) !== call.at) {
+          codexCallNotified.set(key, call.at);
+          host.broadcast('host.notice', {
+            kind: 'codex-call-wait',
+            ref,
+            text: `${sessionTag(ref.sessionId)} is stuck in a Codex tool call — Codex is probably waiting for an approval in its terminal; answer it there or restart the session`,
+            at: new Date(now).toISOString(),
+          });
+        }
+      } else {
+        clearCodexCallTimer(key);
+        codexCallTimers.set(
+          key,
+          setTimeout(() => {
+            codexCallTimers.delete(key);
+            recompute(ref);
+          }, Math.min(stuckAt - now, MAX_TIMER_DELAY_MS)),
+        );
+      }
+    }
+
+    derivedActivity.set(key, activity.activity);
+    // Удержанный вопрос агента или застрявший вызов: публикуется 'blocked', а таймер тишины и метрики — по настоящему значению.
     const published: SessionActivity =
-      questionHeldKeys.has(key) && activity.activity !== 'blocked'
+      (questionHeldKeys.has(key) || codexStuck) && activity.activity !== 'blocked'
         ? { ...activity, activity: 'blocked' }
         : activity;
     const value: SessionLive = { activity: published, metrics };
@@ -860,6 +921,7 @@ export function createActivityService(
 
     for (const [key] of Array.from(journals)) if (!validSessions.has(key)) journals.delete(key);
     for (const [key] of Array.from(live)) if (!validSessions.has(key)) live.delete(key);
+    for (const key of Array.from(derivedActivity.keys())) if (!validSessions.has(key)) derivedActivity.delete(key);
     for (const [key] of Array.from(subagentCaches)) {
       if (!validSessions.has(key)) subagentCaches.delete(key);
     }
@@ -877,6 +939,12 @@ export function createActivityService(
     }
     for (const key of Array.from(questionHeldKeys)) {
       if (!validSessions.has(key)) questionHeldKeys.delete(key);
+    }
+    for (const key of Array.from(codexCallTimers.keys())) {
+      if (!validSessions.has(key)) clearCodexCallTimer(key);
+    }
+    for (const key of Array.from(codexCallNotified.keys())) {
+      if (!validSessions.has(key)) codexCallNotified.delete(key);
     }
     for (const key of Array.from(hooksMissingNotified)) {
       if (!validSessions.has(key)) hooksMissingNotified.delete(key);
@@ -1030,7 +1098,7 @@ export function createActivityService(
       if (
         previous === null ||
         previous.name !== name ||
-        !agreesWith(live.get(key)?.activity.activity, signal)
+        !agreesWith(derivedActivity.get(key), signal)
       ) {
         recompute(ref);
       }
@@ -1039,6 +1107,7 @@ export function createActivityService(
       const key = refKey(ref);
       if (!terminals.has(key)) return;
       clearTerminal(key);
+      clearCodexCallTimer(key);
       recompute(ref);
     },
     markSeen(ref, at = new Date().toISOString()) {
@@ -1076,6 +1145,9 @@ export function createActivityService(
       silenceTimers.clear();
       for (const timer of trustWaitTimers.values()) clearTimeout(timer);
       trustWaitTimers.clear();
+      for (const timer of codexCallTimers.values()) clearTimeout(timer);
+      codexCallTimers.clear();
+      derivedActivity.clear();
       for (const key of Array.from(terminals.keys())) clearTerminal(key);
       for (const watch of workWatches.values()) watch.watcher?.close();
       workWatches.clear();

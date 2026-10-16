@@ -369,3 +369,119 @@ describe('buildCodexIndex', () => {
     expect(index.every((s) => s.provider === 'codex')).toBe(true);
   });
 });
+
+describe('indexCodexSession: вызов code mode без ответа (сторож, разбор 2026-10-16)', () => {
+  const item = (at: string, payload: Record<string, unknown>) => line({ timestamp: at, type: 'response_item', payload });
+  const exec = (at: string, input: string, callId = 'call_exec') =>
+    item(at, { type: 'custom_tool_call', name: 'exec', call_id: callId, input });
+  const execOutput = (at: string, callId = 'call_exec') =>
+    item(at, { type: 'custom_tool_call_output', call_id: callId, output: 'Script completed' });
+  const wait = (at: string, args: string, callId = 'call_wait') =>
+    item(at, { type: 'function_call', name: 'wait', call_id: callId, arguments: args });
+  const event = (at: string, type: string) => line({ timestamp: at, type: 'event_msg', payload: { type } });
+  const CHECK_INBOX = 'text(await tools.mcp__parley__check_inbox({}));';
+
+  it('exec без вывода — openCodeCall с временем вызова и ожиданием из прагмы // @exec', async () => {
+    const file = await writeRollout(
+      '2026-10-15',
+      'open-exec',
+      meta() +
+        event('2026-10-15T22:06:34.521Z', 'task_started') +
+        exec('2026-10-15T22:06:37.780Z', `// @exec: {"yield_time_ms": 1000, "max_output_tokens": 6000}\n${CHECK_INBOX}`),
+    );
+    expect((await indexCodexSession(file)).openCodeCall).toEqual({
+      name: 'exec',
+      at: '2026-10-15T22:06:37.780Z',
+      yieldMs: 1000,
+    });
+  });
+
+  it('exec без прагмы — ожидание неизвестно (yieldMs null)', async () => {
+    const file = await writeRollout(
+      '2026-10-15',
+      'open-exec-default',
+      meta() + event('2026-10-15T22:06:34.521Z', 'task_started') + exec('2026-10-15T22:06:37.780Z', CHECK_INBOX),
+    );
+    expect((await indexCodexSession(file)).openCodeCall).toEqual({
+      name: 'exec',
+      at: '2026-10-15T22:06:37.780Z',
+      yieldMs: null,
+    });
+  });
+
+  it('вывод с тем же call_id закрывает вызов', async () => {
+    const file = await writeRollout(
+      '2026-10-15',
+      'closed-exec',
+      meta() +
+        event('2026-10-15T22:05:05.529Z', 'task_started') +
+        exec('2026-10-15T22:05:09.440Z', CHECK_INBOX) +
+        execOutput('2026-10-15T22:05:10.362Z'),
+    );
+    expect((await indexCodexSession(file)).openCodeCall).toBeUndefined();
+  });
+
+  it('вывод чужого вызова не закрывает открытый', async () => {
+    const file = await writeRollout(
+      '2026-10-15',
+      'other-output',
+      meta() +
+        event('2026-10-15T22:05:05.529Z', 'task_started') +
+        exec('2026-10-15T22:05:09.440Z', CHECK_INBOX, 'call_a') +
+        execOutput('2026-10-15T22:05:10.362Z', 'call_b'),
+    );
+    expect((await indexCodexSession(file)).openCodeCall).toMatchObject({ name: 'exec', at: '2026-10-15T22:05:09.440Z' });
+  });
+
+  it('wait (function_call) без вывода — openCodeCall с yield_time_ms из arguments', async () => {
+    const file = await writeRollout(
+      '2026-10-15',
+      'open-wait',
+      meta() +
+        event('2026-10-15T21:54:43.908Z', 'task_started') +
+        wait('2026-10-15T21:55:33.985Z', '{"cell_id":"38","yield_time_ms":20000,"max_tokens":3500}'),
+    );
+    expect((await indexCodexSession(file)).openCodeCall).toEqual({
+      name: 'wait',
+      at: '2026-10-15T21:55:33.985Z',
+      yieldMs: 20000,
+    });
+  });
+
+  it('из нескольких открытых — самый ранний', async () => {
+    const file = await writeRollout(
+      '2026-10-15',
+      'two-open',
+      meta() +
+        event('2026-10-15T22:06:34.521Z', 'task_started') +
+        exec('2026-10-15T22:06:37.780Z', CHECK_INBOX, 'call_first') +
+        exec('2026-10-15T22:06:38.000Z', CHECK_INBOX, 'call_second'),
+    );
+    expect((await indexCodexSession(file)).openCodeCall).toMatchObject({ at: '2026-10-15T22:06:37.780Z' });
+  });
+
+  it.each(['task_complete', 'turn_aborted'])('%s снимает вызовы, оставшиеся открытыми в прошлом ходе', async (type) => {
+    const file = await writeRollout(
+      '2026-10-15',
+      `turn-end-${type}`,
+      meta() +
+        event('2026-10-15T22:06:34.521Z', 'task_started') +
+        exec('2026-10-15T22:06:37.780Z', CHECK_INBOX) +
+        event('2026-10-16T06:35:17.818Z', type),
+    );
+    expect((await indexCodexSession(file)).openCodeCall).toBeUndefined();
+  });
+
+  it('прочие вызовы не сторожатся: shell, MCP напрямую, apply_patch', async () => {
+    const file = await writeRollout(
+      '2026-10-15',
+      'not-code-mode',
+      meta() +
+        event('2026-10-15T22:06:34.521Z', 'task_started') +
+        item('2026-10-15T22:06:35.000Z', { type: 'function_call', name: 'shell_command', call_id: 'c1', arguments: '{}' }) +
+        item('2026-10-15T22:06:36.000Z', { type: 'function_call', name: 'mcp__parley__wait_for', call_id: 'c2', arguments: '{}' }) +
+        item('2026-10-15T22:06:37.000Z', { type: 'custom_tool_call', name: 'apply_patch', call_id: 'c3', input: '*** Begin Patch' }),
+    );
+    expect((await indexCodexSession(file)).openCodeCall).toBeUndefined();
+  });
+});
