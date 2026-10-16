@@ -25,6 +25,7 @@
 
 import { lstat, open } from 'node:fs/promises';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import {
   applyDecision,
   applyHookEvent,
@@ -1129,19 +1130,46 @@ export function createFeedService(
     onHook,
 
     async snapshot(ref, agentId) {
+      const startedAt = performance.now();
       const session = sessionOf(ref);
-      if (agentId !== undefined) return agentSnapshot(ref, agentId);
+      if (agentId !== undefined) {
+        const sub = await agentSnapshot(ref, agentId);
+        log.info('лента: снимок', {
+          sessionId: ref.sessionId,
+          workId: ref.workId,
+          agentId,
+          items: sub.items.length,
+          bytes: null,
+          seedMs: null,
+          totalMs: Math.round(performance.now() - startedAt),
+        });
+        return sub;
+      }
       const feed = feedOf(ref);
-      if (!feed.live && !feed.seeded) await seed(feed, session.provider);
+      let seedMs: number | null = null;
+      if (!feed.live && !feed.seeded) {
+        const seedStartedAt = performance.now();
+        await seed(feed, session.provider);
+        seedMs = Math.round(performance.now() - seedStartedAt);
+      }
       // Накопленная пачка уходит до снимка: следующая дельта подписчику — ровно `revision + 1`.
       flush(feed);
-      return {
+      const snapshot: FeedSnapshot = {
         items: [...feed.state.items],
         revision: feed.revision,
         schemaVersion: FEED_SCHEMA_VERSION,
         mode: feed.state.permissionMode,
         ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
       };
+      log.info('лента: снимок', {
+        sessionId: ref.sessionId,
+        workId: ref.workId,
+        items: snapshot.items.length,
+        bytes: feed.bytes,
+        seedMs,
+        totalMs: Math.round(performance.now() - startedAt),
+      });
+      return snapshot;
     },
 
     subscribe(ref, client) {
