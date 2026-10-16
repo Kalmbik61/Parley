@@ -361,6 +361,17 @@ export const S = {
     remove: 'Remove',
   },
 
+  /** Выход из приложения останавливает хост (решение 2026-10-16): вопрос системным диалогом. */
+  quit: {
+    title: 'Quit Parley?',
+    detail: (count: number | null): string =>
+      count === null
+        ? "The host isn't responding. It will be stopped together with all its sessions. They won't restart on their own — the next launch lists them so you can bring them back."
+        : `The host will stop and ${count} running ${count === 1 ? 'session' : 'sessions'} will be terminated. They won't restart on their own — the next launch lists them so you can bring them back.`,
+    stop: (count: number | null): string =>
+      count === null ? 'Stop host and Quit' : `Stop ${count} ${count === 1 ? 'session' : 'sessions'} and Quit`,
+  },
+
   /**
    * Девять слов состояния сессии (спека 4.2): ключи — те же, что отдаёт
    * `dot-state.ts#stateWord` (`exited` расщеплён на `asleep`/`closed` по
