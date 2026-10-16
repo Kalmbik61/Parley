@@ -50,15 +50,16 @@ export interface RunnerConfig {
    * из диалога окна (по `{model}` и `{effort}` в этом шаблоне окно узнаёт, что провайдер
    * их принимает: `supportsModel`, `supportsEffort`), `{prompt}` — стартовый бриф,
    * `{skillCatalog}` — `-c skills.include_instructions=false` Codex: убирает родной
-   * каталог скиллов, только при включённом навигаторе и подтверждённом пути загрузки.
+   * каталог скиллов, только при включённом навигаторе и подтверждённом пути загрузки,
+   * `{leanFlags}` — флаги облегчённого запуска (`work/lean.ts`), только у lean-сессии.
    * undefined — новая сессия запускается без аргументов.
    */
   args?: string[];
   /**
    * Аргументы для возобновления конкретной сессии. Подстановки:
    * `{providerSessionId}`, `{mcpConfig}`, `{settingsFile}`, `{systemPrompt}`,
-   * `{channel}`, `{agent}`, `{model}`, `{effort}`, `{skillCatalog}`, `{prompt}` — указатель на письма при подъёме
-   * спящей сессии (спецификация окна 7.2).
+   * `{channel}`, `{agent}`, `{model}`, `{effort}`, `{skillCatalog}`, `{leanFlags}`, `{prompt}` — указатель на письма
+   * при подъёме спящей сессии (спецификация окна 7.2).
    * Системный промпт в транскрипте не хранится, поэтому вставка гида идёт и
    * сюда. undefined — провайдер не умеет открывать сессию по идентификатору,
    * запускаем без аргументов.
@@ -123,6 +124,7 @@ export interface ProviderInfo extends Omit<ProviderEntry, 'id'> {
  *   навигаторе и подтверждённом пути загрузки, иначе пара выпадает и каталог остаётся полным.
  * Хуки Codex (`{codexHooks}`, `hooks.*`) включаются только по согласию человека — настройка `codexApprovals`
  * (спека 2026-10-07, решение 9); доверие выдаёт сам человек в Codex, харнесс его себе не пишет.
+ * `{leanFlags}` — пары `-c mcp_servers.<id>.enabled=false` чужих серверов; есть только у lean-сессии (`work/lean.ts`).
  * Так же не выдаётся доверие к папке (`projects`): экран доверия проходит человек в терминале Codex.
  */
 const CODEX_CONFIG_FLAGS: readonly string[] = [
@@ -145,6 +147,7 @@ const CODEX_CONFIG_FLAGS: readonly string[] = [
   '-c',
   '{skillCatalog}',
   '{codexHooks}',
+  '{leanFlags}',
 ];
 
 /**
@@ -192,6 +195,7 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{mcpConfig}',
         '--settings',
         '{settingsFile}',
+        '{leanFlags}',
         '--append-system-prompt',
         '{systemPrompt}',
         // Флаг документирован, но скрыт из `--help`: research preview канала
@@ -222,6 +226,7 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{mcpConfig}',
         '--settings',
         '{settingsFile}',
+        '{leanFlags}',
         '--append-system-prompt',
         '{systemPrompt}',
         '--dangerously-load-development-channels',
@@ -317,6 +322,7 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{mcpConfig}',
         '--settings',
         '{settingsFile}',
+        '{leanFlags}',
         '--append-system-prompt',
         '{systemPrompt}',
         '--model',
@@ -338,6 +344,7 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{mcpConfig}',
         '--settings',
         '{settingsFile}',
+        '{leanFlags}',
         '--append-system-prompt',
         '{systemPrompt}',
         '--model',
@@ -414,6 +421,8 @@ export interface RunnerSubstitutions {
   skillCatalog?: string;
   /** Готовые пары `-c hooks.<Event>=…` (`work/codex-hooks.ts`): подставляются на место элемента, без значения — выпадают. */
   codexHooks?: readonly string[];
+  /** Готовые флаги облегчённого запуска (`work/lean.ts`): `--strict-mcp-config` у Claude, пары `-c …enabled=false` у Codex; без значения — выпадают. */
+  leanFlags?: readonly string[];
   /** Модель новой сессии из диалога окна: `--model` у claude и codex. */
   model?: string;
   /**
@@ -427,7 +436,7 @@ export interface RunnerSubstitutions {
 
 // `notify` остался в списке ради старых записей providers.json: значения нет, и пара `-c {notify}` выпадает.
 const PLACEHOLDER =
-  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|codexHooks|model|effort|disallowedTools|sandbox)\}$/;
+  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|codexHooks|model|effort|disallowedTools|sandbox|leanFlags)\}$/;
 
 /**
  * Усилие можно подставить и внутрь строки шаблона (`model_reasoning_effort="{effort}"`):
@@ -495,8 +504,8 @@ export function substituteArgs(template: readonly string[], subs: RunnerSubstitu
       continue;
     }
     if (value === undefined) {
-      // У `{codexHooks}` своего флага перед элементом нет — соседний `-c` чужой.
-      if (match[1] !== 'codexHooks') dropWithFlag();
+      // У `{codexHooks}` и `{leanFlags}` своего флага перед элементом нет — соседний флаг чужой.
+      if (match[1] !== 'codexHooks' && match[1] !== 'leanFlags') dropWithFlag();
       continue;
     }
     args.push(value as string);

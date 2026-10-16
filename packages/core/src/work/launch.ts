@@ -16,6 +16,7 @@ import { realpath } from 'node:fs/promises';
 import { loadConfig } from '../config.js';
 import { codexHookFlags } from './codex-hooks.js';
 import { findRunnerBinary } from './find-binary.js';
+import { CLAUDE_LEAN_ENV, CLAUDE_LEAN_FLAGS, codexLeanFlags, readCodexMcpServerIds, readUserPluginIds } from './lean.js';
 import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
 import { claudeProjectRoots } from '../discover.js';
 import { isServiceText, type SessionIndex } from '../session-index.js';
@@ -201,6 +202,8 @@ async function plan(
   const nativeContextRevision = randomUUID();
   const entry = await entryOf(session.provider);
   const skillNavigator = launchConfig.skillNavigator;
+  // Облегчённый запуск решён при создании сессии и хранится в её записи: запуск, resume и подъём письмом читают одно и то же.
+  const lean = session.lean === true;
   // GLM — тот же Claude Code, но хост срезает у него `CLAUDE_CONFIG_DIR` (provider-env.ts): конфигурация — `~/.claude`.
   const claudeConfigEnv = claudeConfigDirFor(entry, process.env);
   const incompatibility = providerCompatibilityError(entry);
@@ -275,13 +278,14 @@ async function plan(
   let skillList: 'names' | 'removed' | undefined;
   let codexListUnread = false;
   let disablePlugins: string[] = [];
+  const claudeConfigDir = claudeConfigEnv ? path.resolve(cwd, claudeConfigEnv) : path.join(process.env.HOME ?? homedir(), '.claude');
   if (skillNavigator && isClaudeCode(entry)) {
     const claude = await claudeSkillReduction({
       nativeRole: nativeClaudeRole,
       mcpRoute,
       settingsFile: template.includes('{settingsFile}'),
       cwd,
-      configDir: claudeConfigEnv ? path.resolve(cwd, claudeConfigEnv) : path.join(process.env.HOME ?? homedir(), '.claude'),
+      configDir: claudeConfigDir,
     });
     if (claude.reduced) { skillList = 'names'; disablePlugins = claude.disablePlugins; }
   } else if (skillNavigator && entry.id === 'codex' && mcpRoute) {
@@ -325,6 +329,16 @@ async function plan(
 
   const subs: RunnerSubstitutions = {};
   if (mcp !== undefined) subs.mcpConfig = mcp;
+  // Lean: чужие MCP-серверы не подключаются. Без сервера `parley` в запуске (`mcpRoute`) флаг не ставится: оставлять
+  // сессию вовсе без серверов нечем и незачем. Плагины Claude выключает файл настроек сессии ниже.
+  if (lean && mcpRoute && mcp !== undefined) {
+    if (isClaudeCode(entry)) subs.leanFlags = CLAUDE_LEAN_FLAGS;
+    else if (entry.id === 'codex') {
+      const codexHome = process.env.CODEX_HOME ? path.resolve(cwd, process.env.CODEX_HOME) : path.join(process.env.HOME ?? homedir(), '.codex');
+      const flags = codexLeanFlags(await readCodexMcpServerIds(codexHome));
+      if (flags.length > 0) subs.leanFlags = flags;
+    }
+  }
   if (channel) subs.channel = CHANNEL_VALUE;
   // Роль сессии ставится при каждом запуске, включая `resume`: агент Claude
   // Code живёт в процессе, а не в транскрипте, как и системная вставка (5.1).
@@ -335,9 +349,14 @@ async function plan(
   if (role.readOnly && isClaudeCode(entry)) subs.disallowedTools = 'Edit,Write,NotebookEdit';
   assertRoleDelivery(entry, role, [template]);
   if (template.includes('{settingsFile}')) {
+    // Плагины пользователя lean выключает вместе с модом jev одним списком. Файл — свой у сессии: в общем файле работы
+    // список лёг бы и на сессии без lean.
+    if (lean && isClaudeCode(entry)) {
+      disablePlugins = [...new Set([...disablePlugins, ...(await readUserPluginIds(cwd, claudeConfigDir))])];
+    }
     subs.settingsFile = await writeWorkSettings(projectPath, workId, {
       ...(options.hookUrl === undefined ? {} : { hookUrl: options.hookUrl }),
-      ...(skillNavigator ? { sessionId: session.id } : {}),
+      ...(skillNavigator || lean ? { sessionId: session.id } : {}),
       ...(disablePlugins.length > 0 ? { disablePlugins } : {}),
       ...(entry.id === 'glm' ? { provider: 'glm' as const } : {}),
       ...(entry.runner.settingsModel === undefined
@@ -470,6 +489,7 @@ async function plan(
       ...bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id, SKILL_NAVIGATOR: skillNavigator ? '1' : '0', NATIVE_CONTEXT_REVISION: nativeContextRevision,
         ...(skillList === undefined ? {} : { SKILL_LIST_REDUCED: '1' }) }),
       ...(isClaudeCode(entry) && skillList === 'names' ? CLAUDE_SKILL_BUDGET_ENV : {}),
+      ...(lean && isClaudeCode(entry) ? CLAUDE_LEAN_ENV : {}),
     },
     providerSessionId,
     warnings,

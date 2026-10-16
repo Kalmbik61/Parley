@@ -2240,3 +2240,154 @@ describe('GLM launch plans', () => {
     expect(plan.providerSessionId).toBe('glm-conversation');
   });
 });
+
+describe('lean-режим в плане запуска', () => {
+  const hookUrl = 'http://127.0.0.1:40001/hooks';
+  /** Сессия с признаком lean в записи: так его видит `plan` (решение принимает хост при создании). */
+  async function sessionWith(provider: string, lean: boolean) {
+    const { workId, sessionId } = await pending(provider);
+    const session = await sessionOf(workId, sessionId);
+    if (lean) session.lean = true;
+    return { workId, sessionId, session };
+  }
+  /** Настройки Claude Code: пользователь с двумя плагинами, проект с локальным третьим. */
+  async function userPlugins(): Promise<void> {
+    const configDir = await claudeConfig();
+    await writeFile(path.join(configDir, 'settings.json'), JSON.stringify({ enabledPlugins: { 'superpowers@official': true, 'omc@market': false } }));
+    await mkdir(path.join(project, '.claude'), { recursive: true });
+    await writeFile(path.join(project, '.claude', 'settings.local.json'), JSON.stringify({ enabledPlugins: { 'local@dir': true } }));
+  }
+  const settingsOf = async (args: string[]) => JSON.parse(await readFile(args[args.indexOf('--settings') + 1]!, 'utf8'));
+  const CODEX_TOML = ['[mcp_servers.chrome-devtools]', 'command = "npx"', '', '[mcp_servers.parley]', 'command = "x"', '', '[mcp_servers.nx-mcp]', 'url = "http://localhost:1/mcp"'].join('\n');
+  async function codexHome(toml: string | null): Promise<void> {
+    const dir = path.join(home, 'codex-home');
+    await mkdir(dir, { recursive: true });
+    if (toml === null) await rm(path.join(dir, 'config.toml'), { force: true });
+    else await writeFile(path.join(dir, 'config.toml'), toml);
+    setEnv('CODEX_HOME', dir);
+  }
+
+  it('Claude lean: --strict-mcp-config сразу за --settings, автопамять выключена рядом с бюджетом навигатора, плагины выключены в файле сессии', async () => {
+    await userPlugins();
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, sessionId, session } = await sessionWith('claude', true);
+    const plan = await planLaunch(project, workId, session, { hookUrl });
+    const at = plan.args.indexOf('--settings');
+    expect(plan.args[at + 2]).toBe('--strict-mcp-config');
+    expect(plan.args.filter(arg => arg === '--strict-mcp-config')).toHaveLength(1);
+    expect(plan.args).toContain('--mcp-config');
+    expect(plan.args).not.toContain('--disable-slash-commands');
+    expect(plan.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
+    expect(plan.env.SLASH_COMMAND_TOOL_CHAR_BUDGET).toBe('1');
+    // Файл — свой у сессии: в общем файле работы список плагинов лёг бы и на сессии без lean.
+    expect(plan.args[at + 1]).toBe(path.join(workPaths(project, workId).dir, 'settings', `${sessionId}.json`));
+    const settings = await settingsOf(plan.args);
+    expect(settings.enabledPlugins).toEqual({ 'local@dir': false, 'omc@market': false, 'superpowers@official': false });
+    expect(settings).not.toHaveProperty('disableAllHooks');
+    // Хуки Parley и строка статуса — как у обычной сессии.
+    expect({ ...settings, enabledPlugins: undefined }).toEqual({ ...JSON.parse(workSettingsJson({ hookUrl })), enabledPlugins: undefined });
+  });
+
+  it('Claude lean при выключенном навигаторе: бюджета скиллов нет, остальные следы lean на месте, общий файл работы не тронут', async () => {
+    await userPlugins();
+    const { workId, sessionId, session } = await sessionWith('claude', true);
+    const plan = await planNew(project, workId, session);
+    expect(plan.args).toContain('--strict-mcp-config');
+    expect(plan.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
+    expect(plan.env).not.toHaveProperty('SLASH_COMMAND_TOOL_CHAR_BUDGET');
+    expect(plan.args[plan.args.indexOf('--settings') + 1]).toBe(path.join(workPaths(project, workId).dir, 'settings', `${sessionId}.json`));
+    await expect(stat(workPaths(project, workId).settings)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('Claude без lean: ни флага, ни переменной, ни enabledPlugins — файл настроек прежний', async () => {
+    await userPlugins();
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    for (const lean of [false, undefined]) {
+      const { workId, session } = await sessionWith('claude', false);
+      if (lean === false) session.lean = false;
+      const plan = await planLaunch(project, workId, session, { hookUrl });
+      expect(plan.args).not.toContain('--strict-mcp-config');
+      expect(plan.env).not.toHaveProperty('CLAUDE_CODE_DISABLE_AUTO_MEMORY');
+      expect(await readFile(plan.args[plan.args.indexOf('--settings') + 1]!, 'utf8')).toBe(workSettingsJson({ hookUrl }));
+    }
+  });
+
+  it('Claude lean без пользовательских файлов настроек: флаг и переменная есть, поля enabledPlugins в файле нет', async () => {
+    await claudeConfig();
+    const { workId, session } = await sessionWith('claude', true);
+    const plan = await planLaunch(project, workId, session, { hookUrl });
+    expect(plan.args).toContain('--strict-mcp-config');
+    expect(plan.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
+    expect(await settingsOf(plan.args)).not.toHaveProperty('enabledPlugins');
+  });
+
+  it('Claude lean вместе с модом jev: его id и плагины пользователя выключаются одним списком без повторов', async () => {
+    const configDir = await claudeConfig([{}]);
+    await writeFile(path.join(configDir, 'settings.json'), JSON.stringify({ enabledPlugins: { 'jev-skill-suggestion@skills-dir': true, 'superpowers@official': true } }));
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, session } = await sessionWith('claude', true);
+    const plan = await planLaunch(project, workId, session, { hookUrl });
+    expect((await settingsOf(plan.args)).enabledPlugins).toEqual({ 'jev-skill-suggestion@skills-dir': false, 'superpowers@official': false });
+  });
+
+  it('Claude lean: resume даёт те же флаги, ту же переменную и тот же список плагинов, что запуск', async () => {
+    await userPlugins();
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { workId, session } = await sessionWith('claude', true);
+    const launch = await planLaunch(project, workId, session, { hookUrl });
+    session.providerSessionId = 'c0ffee00-1111-2222-3333-444455556666';
+    await claudeTranscript(session.providerSessionId);
+    const resume = await planResume(project, workId, session, { hookUrl });
+    expect(resume.args[0]).toBe('--resume');
+    expect(resume.args[resume.args.indexOf('--settings') + 2]).toBe('--strict-mcp-config');
+    expect(resume.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
+    expect((await settingsOf(resume.args)).enabledPlugins).toEqual((await settingsOf(launch.args)).enabledPlugins);
+  });
+
+  it('Claude lean: шаблон без MCP не получает --strict-mcp-config (иначе у сессии не осталось бы ни одного сервера)', async () => {
+    await claudeConfig();
+    const { workId, session } = await sessionWith('claude', true);
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ claude: { args: ['--settings', '{settingsFile}', '{leanFlags}', '{prompt}'] } }));
+    const plan = await planNew(project, workId, session);
+    expect(plan.args).not.toContain('--strict-mcp-config');
+  });
+
+  it('GLM lean: тот же флаг, переменная автопамяти рядом с окружением маршрутизации, плагины берутся из ~/.claude', async () => {
+    const fakeHome = path.join(home, 'user-home');
+    await mkdir(path.join(fakeHome, '.claude'), { recursive: true });
+    await writeFile(path.join(fakeHome, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'superpowers@official': true } }));
+    setEnv('HOME', fakeHome);
+    setEnv('CLAUDE_CONFIG_DIR', undefined);
+    const { workId, session } = await sessionWith('glm', true);
+    const plan = await planLaunch(project, workId, session, { hookUrl });
+    expect(plan.args[plan.args.indexOf('--settings') + 2]).toBe('--strict-mcp-config');
+    expect(plan.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
+    expect(plan.env.ANTHROPIC_BASE_URL).toBe('https://api.z.ai/api/anthropic');
+    expect((await settingsOf(plan.args)).enabledPlugins).toEqual({ 'superpowers@official': false });
+  });
+
+  it('Codex lean: пара -c mcp_servers.<id>.enabled=false на каждый чужой сервер, ни одной для parley; запуск и resume одинаково', async () => {
+    await codexHome(CODEX_TOML);
+    const { workId, session } = await sessionWith('codex', true);
+    const launch = await planLaunch(project, workId, session);
+    session.providerSessionId = 'codex-thread';
+    const resume = await planResume(project, workId, session);
+    for (const plan of [launch, resume]) {
+      const pairs = plan.args.flatMap((arg, i) => (arg.endsWith('.enabled=false') ? [[plan.args[i - 1], arg]] : []));
+      expect(pairs).toEqual([['-c', 'mcp_servers.chrome-devtools.enabled=false'], ['-c', 'mcp_servers.nx-mcp.enabled=false']]);
+      expect(plan.args.some(arg => arg.startsWith('mcp_servers.parley='))).toBe(true);
+      expect(plan.args.join(' ')).not.toContain('mcp_servers.parley.enabled');
+      expect(plan.env).not.toHaveProperty('CLAUDE_CODE_DISABLE_AUTO_MEMORY');
+      expect(plan.args).not.toContain('--strict-mcp-config');
+    }
+  });
+
+  it('Codex без lean или без config.toml: ни одной пары enabled=false', async () => {
+    await codexHome(CODEX_TOML);
+    const notLean = await sessionWith('codex', false);
+    expect((await planLaunch(project, notLean.workId, notLean.session)).args.join(' ')).not.toContain('.enabled=false');
+    await codexHome(null);
+    const lean = await sessionWith('codex', true);
+    expect((await planLaunch(project, lean.workId, lean.session)).args.join(' ')).not.toContain('.enabled=false');
+  });
+});

@@ -76,6 +76,14 @@ describe('выключение плагинов в сессии (сокраще�
     expect({ ...off, enabledPlugins: undefined }).toEqual({ ...plain, enabledPlugins: undefined });
     expect(Object.keys(off.hooks)).toEqual(Object.keys(plain.hooks));
   });
+
+  it('lean: весь список плагинов пользователя — false, ни disableAllHooks, ни permissions в файле не появляется', () => {
+    const ids = ['superpowers@official', 'omc@market', 'figma@official'];
+    const off = workSettings({ disablePlugins: ids });
+    expect(off.enabledPlugins).toEqual({ 'superpowers@official': false, 'omc@market': false, 'figma@official': false });
+    expect(Object.keys(off).sort()).toEqual(['enabledPlugins', 'hooks', 'statusLine']);
+    expect(workSettingsJson({ disablePlugins: ids })).not.toMatch(/disableAllHooks|permissions/);
+  });
 });
 
 describe('HTTP-хуки ленты вида «Chat» (план 2026-10-01, решение 1)', () => {
