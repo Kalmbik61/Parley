@@ -11,6 +11,7 @@
  * письма уже указаны и не в полёте ли уже указатель.
  */
 
+import { performance } from 'node:perf_hooks';
 import {
   addMessage,
   DEFAULT_CONFIG,
@@ -29,6 +30,7 @@ import {
   workPaths,
   type DeliveryAction,
   type DeliveryInput,
+  type Message,
   type WorkEntry,
   type WorkSession,
 } from '@parley/core';
@@ -161,6 +163,29 @@ const isResourceDenial = (error: unknown): boolean =>
 
 const workKeyOf = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
 
+/** Данные доставки для журнала задержек (`mail.deliver`): когда отправлено самое новое письмо и в какой оно комнате. */
+interface DeliveryTrace {
+  newestAt: string | null;
+  roomId: string | null;
+}
+
+/** Самое новое из писем `letterIds` среди `letters` (`at` — ISO, сравнивается строкой); таких писем нет — пусто. */
+function traceOf(letters: readonly Message[], letterIds: readonly string[]): DeliveryTrace {
+  let newest: Message | undefined;
+  for (const message of letters) {
+    if (!letterIds.includes(message.id)) continue;
+    if (newest === undefined || message.at >= newest.at) newest = message;
+  }
+  return { newestAt: newest?.at ?? null, roomId: newest?.roomId ?? null };
+}
+
+/** Мс от отправки письма до сейчас; метки нет или она не разбирается — `null`; часы разошлись — 0. */
+function sinceSentMs(newestAt: string | null): number | null {
+  if (newestAt === null) return null;
+  const sentAt = Date.parse(newestAt);
+  return Number.isNaN(sentAt) ? null : Math.max(0, Date.now() - sentAt);
+}
+
 /** Число хуков в журнале сессии; журнала нет — ноль. */
 async function journalLength(ref: SessionRef): Promise<number> {
   const events = await openEvents(workPaths(ref.projectPath, ref.workId).events)
@@ -263,6 +288,29 @@ export function createWakeService(
     options.compacting?.(ref) === true ||
     choiceInProgress(ref, { pty, switching: (target) => sessions.exclusive?.held(target) === true });
 
+  /**
+   * Журнал задержек доставки письма (спека диагностики хоста, A4): сколько прошло с отправки самого нового письма
+   * и сколько заняла сама доставка. Только длины и идентификаторы — текста письма в записи нет.
+   */
+  function logDelivery(
+    ref: SessionRef,
+    action: { letterIds: readonly string[] } & DeliveryTrace,
+    mode: 'pointer' | 'resume',
+    startedAt: number,
+    outcome: string,
+  ): void {
+    host.log.info('письмо доставлено', {
+      op: 'mail.deliver',
+      ref,
+      roomId: action.roomId,
+      letters: action.letterIds.length,
+      sinceSentMs: sinceSentMs(action.newestAt),
+      mode,
+      ms: Math.round(performance.now() - startedAt),
+      outcome,
+    });
+  }
+
   function notice(kind: NoticeKind, ref: SessionRef, text: string): void {
     // И в лог: уведомление видит только открытое окно, а разбирать «сессия не ответила» приходится позже.
     host.log.info('будильник: уведомление', { kind, ref });
@@ -362,7 +410,7 @@ export function createWakeService(
     ref: SessionRef,
     session: WorkSession,
     state: AttemptState,
-    action: { text: string; letterIds: string[] },
+    action: { text: string; letterIds: string[] } & DeliveryTrace,
   ): Promise<void> {
     state.resuming = true;
     try {
@@ -383,7 +431,14 @@ export function createWakeService(
       if (withPrompt) for (const id of action.letterIds) state.pointed.add(id);
       else state.pointerAfter = state.resumedAt;
 
-      await sessions.launch(ref, 'resume', withPrompt ? { by: 'wake', prompt: action.text } : { by: 'wake' });
+      const launchStartedAt = performance.now();
+      try {
+        await sessions.launch(ref, 'resume', withPrompt ? { by: 'wake', prompt: action.text } : { by: 'wake' });
+      } catch (error) {
+        logDelivery(ref, action, 'resume', launchStartedAt, 'failed');
+        throw error;
+      }
+      logDelivery(ref, action, 'resume', launchStartedAt, 'launched');
       const earlyExit = state.earlyExit;
       state.earlyExit = undefined;
       if (earlyExit !== undefined) void earlyExit();
@@ -427,13 +482,14 @@ export function createWakeService(
   function beginAttempt(
     ref: SessionRef,
     state: AttemptState,
-    action: { text: string; letterIds: string[]; queue?: true },
+    action: { text: string; letterIds: string[]; queue?: true } & DeliveryTrace,
     codex = false,
   ): void {
     // Печать и Enter — общая механика с pty.send (кусок 5.1): Enter через паузу тому же
     // pid, отмена по вводу человека. Черновиком хоста свой указатель не помечается —
     // правила будильника (спека 7.3) прежние.
     // Перед Enter — снова `blocked`: запрос разрешения мог появиться за паузу (fix-final-b).
+    const startedAt = performance.now();
     const typing = typeAndSubmit(
       { pty, enterDelayMs },
       ref,
@@ -472,6 +528,8 @@ export function createWakeService(
     }
 
     void typing.done.then((outcome) => {
+      // В журнал — любой исход, и у сменённой или отменённой попытки: по нему видно, сколько указатель пролежал.
+      logDelivery(ref, action, 'pointer', startedAt, outcome);
       // Попытку уже сменили или отменили — её исход ничего не решает.
       if (state.typing !== typing) return;
       state.typing = undefined;
@@ -553,8 +611,9 @@ export function createWakeService(
       if (action.kind === 'resume' && (backedOff || !limiter.tryTake(ref))) {
         action = deliveryAction({ ...input, resumeAllowed: false });
       }
-      if (action.kind === 'resume') void resumeSession(ref, session, state, action);
-      else if (action.kind === 'none' && action.reason === 'resume-limit') limitNotice(ref);
+      if (action.kind === 'resume') {
+        void resumeSession(ref, session, state, { ...action, ...traceOf(input.unread, action.letterIds) });
+      } else if (action.kind === 'none' && action.reason === 'resume-limit') limitNotice(ref);
       publishWaiting(
         ref,
         state,
@@ -623,7 +682,7 @@ export function createWakeService(
       return;
     }
     state.choiceRetries = 0;
-    beginAttempt(ref, state, action, codex);
+    beginAttempt(ref, state, { ...action, ...traceOf(unreadFor(entry.map, session.id), action.letterIds) }, codex);
     // Указатель в очереди занятого Codex хода не начинает — он «сообщён», а не «в полёте».
     publishWaiting(ref, state, action.queue === true ? 'pointed' : 'in-flight');
   }
