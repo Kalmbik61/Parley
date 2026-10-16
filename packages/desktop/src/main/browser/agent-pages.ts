@@ -37,10 +37,12 @@ export interface PageRecord {
 
 export interface PageRegistry {
   agentIdFor(workKey: string, tabId: string): string;
-  /** Запись страницы, её закрытие или пауза панели от окна. */
+  /**
+   * Запись окна: `hello` начинает поколение документа и забывает страницы и паузы (id агента сохраняются); остальные записи
+   * принимаются только текущего поколения. Страница с известным `pageId` и другим хозяином, гость, уже привязанный к другой
+   * странице, пропускаются.
+   */
   register(e: AgentPageRegistration): void;
-  /** Окно перезагрузилось: записи и паузы забыты до новой регистрации, id агента сохраняются. */
-  reset(): void;
   /** Страница своей работы по id агента и проверки доступа (спека 5.2). */
   pageOf(request: BrowserAgentOpEvent, agentId: string): PageRecord;
   /** Живой гость записи; `null` — гостя нет или он уничтожен. */
@@ -72,6 +74,8 @@ export function createPageRegistry(deps: { fromId(id: number): WebContents | nul
   const pages = new Map<string, PageRecord>();
   /** Приостановленные панели: работа и хозяин. */
   const paused = new Set<string>();
+  /** Поколение документа окна из последнего `hello`; до него записи не принимаются. */
+  let generation: string | null = null;
 
   function agentIdFor(workKey: string, tabId: string): string {
     const key = `${workKey}\n${tabId}`;
@@ -89,17 +93,27 @@ export function createPageRegistry(deps: { fromId(id: number): WebContents | nul
   return {
     agentIdFor,
     register(e) {
-      if ('gone' in e) {
+      if (e.kind === 'hello') {
+        generation = e.generation;
+        pages.clear();
+        paused.clear();
+        return;
+      }
+      if (e.generation !== generation) return;
+      if (e.kind === 'gone') {
         pages.delete(pageKey(e.workKey, e.pageId));
         return;
       }
-      if ('paused' in e) {
+      if (e.kind === 'paused') {
         if (e.paused) paused.add(panelKey(e.workKey, e.owner));
         else paused.delete(panelKey(e.workKey, e.owner));
         return;
       }
       const key = pageKey(e.workKey, e.pageId);
       const previous = pages.get(key);
+      // Хозяина и гостя страницы окно не меняет: это либо запоздавшая чужая запись, либо подмена.
+      if (previous !== undefined && ownerId(previous.owner) !== ownerId(e.owner)) return;
+      if (e.webContentsId !== null && [...pages].some(([otherKey, other]) => otherKey !== key && other.webContentsId === e.webContentsId)) return;
       const contents = e.webContentsId === null ? null : deps.fromId(e.webContentsId);
       pages.set(key, {
         agentId: agentIdFor(e.workKey, e.pageId),
@@ -111,10 +125,6 @@ export function createPageRegistry(deps: { fromId(id: number): WebContents | nul
         lastUrl: contents?.getURL() ?? previous?.lastUrl ?? '',
         lastTitle: contents?.getTitle() ?? previous?.lastTitle ?? '',
       });
-    },
-    reset() {
-      pages.clear();
-      paused.clear();
     },
     pageOf(request, agentId) {
       const workKey = workKeyOf(request.ref.projectPath, request.ref.workId);

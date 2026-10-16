@@ -74,12 +74,10 @@ export interface AgentOps {
   run(request: BrowserAgentOpEvent): Promise<BrowserAgentResult>;
   /** Ответ окна на `browser:agent-open-tab` (канал `browser:agent-open-tab-result`); чужой и поздний id молча игнорируется. */
   openTabResult(requestId: string, result: AgentOpenTabResult): void;
-  /** Окно сообщает о странице панели, её закрытии или паузе панели (спека 3.7, 4.8). */
+  /** Окно сообщает о новом поколении документа, странице панели, её закрытии или паузе панели (спека 3.7, 4.8). */
   registerTab(e: AgentPageRegistration): void;
   /** Окно подтверждает, что `<webview>` стоит в размере снимка (канал `browser:agent-capture-ready`); чужой и поздний id молча игнорируется. */
   captureReady(id: string): void;
-  /** Окно перезагрузилось: реестр и паузы забыты до новой регистрации, id агента сохраняются. */
-  reset(): void;
 }
 
 /** Схема аргументов по имени операции: хост другой версии может прислать незнакомую. */
@@ -273,9 +271,6 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     },
     captureReady(id) {
       capture.captureReady(id);
-    },
-    reset() {
-      registry.reset();
     },
   };
 }

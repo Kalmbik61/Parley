@@ -170,17 +170,22 @@ function parseOwner(raw: unknown): BrowserOwner | null {
 
 /** Запись реестра страниц панелей из рендерера (спека браузера 3.5, 3.10): форма и пределы — до main. Вкладки человека (`browser:…`) сюда не входят. */
 export function parseAgentRegistration(raw: unknown): AgentPageRegistration | null {
-  if (!isRecord(raw) || !isValidWorkKey(raw.workKey)) return null;
+  if (!isRecord(raw)) return null;
+  const { generation } = raw;
+  if (typeof generation !== 'string' || generation === '' || generation.length > 64) return null;
+  if (raw.kind === 'hello') return { kind: 'hello', generation };
+  if (!isValidWorkKey(raw.workKey)) return null;
   const workKey = raw.workKey;
   const isPage = (id: unknown): id is string => typeof id === 'string' && id.startsWith('bp-') && id.length <= 64;
-  if (raw.gone === true) return isPage(raw.pageId) ? { workKey, pageId: raw.pageId, gone: true } : null;
+  if (raw.kind === 'gone') return isPage(raw.pageId) ? { kind: 'gone', generation, workKey, pageId: raw.pageId } : null;
+  if (raw.kind !== 'page' && raw.kind !== 'paused') return null;
   const owner = parseOwner(raw.owner);
   if (owner === null) return null;
-  if ('paused' in raw) return typeof raw.paused === 'boolean' ? { workKey, owner, paused: raw.paused } : null;
+  if (raw.kind === 'paused') return typeof raw.paused === 'boolean' ? { kind: 'paused', generation, workKey, owner, paused: raw.paused } : null;
   const { webContentsId, pageId, visible } = raw;
   if (!isPage(pageId) || typeof visible !== 'boolean') return null;
   if (webContentsId !== null && !Number.isInteger(webContentsId)) return null;
-  return { webContentsId: webContentsId as number | null, workKey, owner, pageId, visible };
+  return { kind: 'page', generation, webContentsId: webContentsId as number | null, workKey, owner, pageId, visible };
 }
 
 export function parseAgentOpenTabResult(raw: unknown): AgentOpenTabResult | null {
@@ -900,7 +905,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     withIpcError(async (_event, raw: unknown) => {
       const registration = parseAgentRegistration(raw);
       if (registration === null) throw new HostError('bad_request', 'invalid browser page registration');
-      if ('webContentsId' in registration && registration.webContentsId !== null) browserGuest(browser, registration.webContentsId);
+      if (registration.kind === 'page' && registration.webContentsId !== null) browserGuest(browser, registration.webContentsId);
       browser.agent.registerTab(registration);
     }),
   );

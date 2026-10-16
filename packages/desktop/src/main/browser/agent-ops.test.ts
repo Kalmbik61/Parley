@@ -12,6 +12,7 @@ import { workKey } from '../../shared/work-keys.js';
 import { PANEL_LIMITS } from '../../renderer/layout/tree.js';
 import { pngSize } from './png.js';
 import { createEmulation } from './emulation.js';
+import { createPageRegistry } from './agent-pages.js';
 import { captureSpec, createAgentOps, loopbackHref, NOT_MOUNTED_NOTE, type AgentOps } from './agent-ops.js';
 
 const REF = { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' };
@@ -113,6 +114,8 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
     ...(overrides.guestCallMs === undefined ? {} : { guestCallMs: overrides.guestCallMs }),
   };
   const ops: AgentOps = createAgentOps(deps);
+  // Окно всегда начинает с `hello`: записи до него реестр пропускает.
+  ops.registerTab({ kind: 'hello', generation: GEN });
   // Хост всегда кладёт в owners саму сессию: для чужого ref (другая работа) — её, а не s-02.
   const run = (args: unknown, ref = REF, op = 'open'): Promise<BrowserAgentResult> =>
     ops.run({ opId: 'op-1', ref, label: ref.sessionId === 's-02' ? 'S02' : 'S01', owners: overrides.owners ?? [{ kind: 'session', sessionId: ref.sessionId }], op: op as BrowserAgentOpEvent['op'], args });
@@ -120,9 +123,12 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
   return { ops, deps, run, runOp, asked, openTab, state, guests, snapshots, activity, inspector, emulation, saveImage, inGuest, image };
 }
 
+/** Поколение документа окна в тестах реестра. */
+const GEN = 'gen-1';
+
 /** Регистрирует страницу панели чата сессии s-02 (гость 7); `patch` меняет поля. */
-function register(ops: AgentOps, patch: Partial<Extract<AgentPageRegistration, { pageId: string; visible: boolean }>>): void {
-  ops.registerTab({ webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true, ...patch });
+function register(ops: AgentOps, patch: Partial<Extract<AgentPageRegistration, { kind: 'page' }>>): void {
+  ops.registerTab({ kind: 'page', generation: GEN, webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true, ...patch });
 }
 
 const codeOf = (result: BrowserAgentResult): string => (result.ok ? 'ok' : result.error.code);
@@ -280,15 +286,15 @@ describe('open: выбор хозяина (спека 5.1, 3.10)', () => {
 describe('open: пауза панели хозяина (S5)', () => {
   it('панель хозяина на паузе: browser_open — access_denied «paused by the human», окну ничего (asked пуст)', async () => {
     const { ops, run, asked } = setup({ owners: [OWN, ROOM] });
-    ops.registerTab({ workKey: WORK, owner: OWN, paused: true });
-    ops.registerTab({ workKey: WORK, owner: ROOM, paused: true });
+    ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: true });
+    ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: ROOM, paused: true });
     for (const args of [{ url: PAGE, own: true }, { url: PAGE, room: 'r-01' }, { url: PAGE }]) {
       const result = await run(args);
       expect(codeOf(result)).toBe('access_denied');
       expect(messageOf(result)).toContain('paused by the human');
     }
     expect(asked).toEqual([]);
-    ops.registerTab({ workKey: WORK, owner: OWN, paused: false });
+    ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: false });
     expect(codeOf(await run({ url: PAGE, own: true }))).toBe('ok');
   });
 });
@@ -354,26 +360,26 @@ describe('реестр страниц панелей и tabs (спека 3.7, 3.
     // Чужая страница по id неотличима от несуществующей (S11).
     expect(codeOf(await run('console', { tab: 't3' }))).toBe('no_tab');
     expect(codeOf(await run('console', { tab: 't9' }))).toBe('no_tab');
-    ops.registerTab({ webContentsId: 11, workKey: OTHER_WORK, owner: OWN, pageId: 'bp-eeeeee', visible: true });
+    ops.registerTab({ kind: 'page', generation: GEN, webContentsId: 11, workKey: OTHER_WORK, owner: OWN, pageId: 'bp-eeeeee', visible: true });
     expect(okResult<Tabs>(await run('tabs', {}, OTHER_REF)).tabs.map((tab) => tab.id)).toEqual(['t1']);
   });
 
   it('пауза панели (спека 4.8): страниц нет в tabs, операции — access_denied «paused by the human»; снятие паузы возвращает их', async () => {
     const { ops, runOp: run } = setup();
     register(ops, {});
-    ops.registerTab({ workKey: WORK, owner: OWN, paused: true });
+    ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: true });
     expect(okResult<Tabs>(await run('tabs', {})).tabs).toEqual([]);
     const denied = await run('console', { tab: 't1' });
     expect(codeOf(denied)).toBe('access_denied');
     expect(messageOf(denied)).toContain('paused by the human');
-    ops.registerTab({ workKey: WORK, owner: OWN, paused: false });
+    ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: false });
     expect(okResult<Tabs>(await run('tabs', {})).tabs).toHaveLength(1);
   });
 
   it('пауза своей панели по id — по-прежнему access_denied «paused by the human»', async () => {
     const { ops, runOp: run } = setup();
     register(ops, {});
-    ops.registerTab({ workKey: WORK, owner: OWN, paused: true });
+    ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: true });
     const denied = await run('screenshot', { tab: 't1' });
     expect(codeOf(denied)).toBe('access_denied');
     expect(messageOf(denied)).toContain('paused by the human');
@@ -440,18 +446,40 @@ describe('реестр страниц панелей и tabs (спека 3.7, 3.
     guests.get(7)?.isDestroyed.mockReturnValue(true);
     const { tabs } = okResult<Tabs>(await run('tabs', {}));
     expect(tabs.map((tab) => [tab.loaded, tab.visible, tab.viewport])).toEqual([[false, false, null], [false, false, null]]);
-    ops.registerTab({ workKey: WORK, pageId: 'bp-bbbbbb', gone: true });
+    ops.registerTab({ kind: 'gone', generation: GEN, workKey: WORK, pageId: 'bp-bbbbbb' });
     expect(okResult<Tabs>(await run('tabs', {})).tabs).toHaveLength(1);
   });
 
-  it('reset (окно перезагрузилось): реестр и паузы пусты до новой регистрации, id прежние', async () => {
+  it('hello сбрасывает реестр; запись старого поколения пропущена; id прежние', async () => {
     const { ops, runOp: run } = setup();
     register(ops, {});
-    ops.registerTab({ workKey: WORK, owner: OWN, paused: true });
-    ops.reset();
+    ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: true });
+    ops.registerTab({ kind: 'hello', generation: 'gen-2' });
     expect(okResult<Tabs>(await run('tabs', {})).tabs).toEqual([]);
+    // Запоздавшая запись прежнего документа окна: ни страница, ни пауза не появляются.
     register(ops, {});
+    ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: true });
+    expect(okResult<Tabs>(await run('tabs', {})).tabs).toEqual([]);
+    ops.registerTab({ kind: 'page', generation: 'gen-2', webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true });
     expect(okResult<Tabs>(await run('tabs', {})).tabs[0]?.id).toBe('t1');
+  });
+
+  it('pageId с другим owner и webContentsId у второй страницы не перепривязываются; до hello записи пропущены', async () => {
+    const { ops, runOp: run, guests } = setup({ owners: [OWN, ROOM] });
+    guests.set(8, fakeGuest(8));
+    register(ops, {});
+    // Тот же pageId, другой хозяин: запись пропущена.
+    register(ops, { owner: ROOM, webContentsId: 8 });
+    // Гость 7 уже у bp-aaaaaa: вторая страница его не получает.
+    register(ops, { pageId: 'bp-bbbbbb' });
+    // Новая страница с новым гостем принимается.
+    register(ops, { pageId: 'bp-cccccc', webContentsId: 8 });
+    const tabs = okResult<Tabs>(await run('tabs', {})).tabs;
+    expect(tabs.map((tab) => [tab.id, tab.owner])).toEqual([['t1', OWN], ['t2', OWN]]);
+    // Реестр без hello записей не принимает.
+    const raw = createPageRegistry({ fromId: () => null });
+    raw.register({ kind: 'page', generation: GEN, webContentsId: null, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true });
+    expect(raw.listed({ ref: REF, owners: [OWN] } as BrowserAgentOpEvent).records).toEqual([]);
   });
 
   it('работа, о которой окно ничего не сообщало, — пустой список и пояснение; работа известна (страница или пауза), но список пуст — без пояснения', async () => {
@@ -460,7 +488,7 @@ describe('реестр страниц панелей и tabs (спека 3.7, 3.
     expect(unknown.tabs).toEqual([]);
     expect(unknown.notes).toEqual(["Parley's window has not reported any browser pages for this workspace. If the human has not opened this workspace in Parley's window yet, its pages are not known; a page you open with browser_open will appear here."]);
     register(ops, {});
-    ops.registerTab({ workKey: WORK, owner: OWN, paused: true });
+    ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: true });
     expect(okResult<Tabs>(await run('tabs', {}))).toEqual({ tabs: [], notes: [] });
   });
 
@@ -1278,7 +1306,7 @@ describe('проверки перед запуском из очереди (оп
   }
 
   it('пауза панели между постановкой и запуском — access_denied «paused by the human»', async () => {
-    const result = await queued(({ ops }) => ops.registerTab({ workKey: WORK, owner: OWN, paused: true }));
+    const result = await queued(({ ops }) => ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: true }));
     expect(codeOf(result)).toBe('access_denied');
     expect(messageOf(result)).toContain('paused by the human');
   });
@@ -1429,6 +1457,7 @@ describe('тайм-аут и немедленный повтор с настоя
       },
       opTimeoutMs: 100,
     });
+    ops.registerTab({ kind: 'hello', generation: GEN });
     register(ops, {});
     const human: ViewportSpec = { preset: 'laptop', rotated: false, dpr: 2 };
     await emulation.set(7, human, { width: 900, height: 600 });
@@ -1507,6 +1536,7 @@ describe('замёрзший гость посреди fullPage не клини�
       },
       ...timing,
     });
+    ops.registerTab({ kind: 'hello', generation: GEN });
     register(ops, {});
     const human: ViewportSpec = { preset: 'laptop', rotated: false, dpr: 2 };
     await emulation.set(7, human, { width: 900, height: 600 });

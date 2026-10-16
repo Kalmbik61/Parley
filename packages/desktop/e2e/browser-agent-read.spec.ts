@@ -380,4 +380,43 @@ test.describe('агент читает страницы браузера чат�
     await expect(panelOf(window, `session:${lead}`)).toHaveAttribute('data-agents-paused', 'true', { timeout: 30_000 });
     expect((await agentTool(opened, lead, 'browser_tabs')).text).toContain('No pages are open');
   });
+
+  test('пауза переживает отменённый переход окна', async () => {
+    const opened = await openApp();
+    const { window, lead } = opened;
+    const first = await openPage(opened, lead, { url: `${origin}/`, own: true });
+    await openPage(opened, lead, { url: `${origin}/grid`, own: true });
+    const panel = panelOf(window, `session:${lead}`);
+    await expect(panel).toBeVisible();
+    await tabsLoaded(opened, lead, 2);
+
+    await panel.getByRole('button', { name: 'More browser actions' }).click();
+    await window.getByRole('menuitem', { name: 'Pause agents' }).click();
+    await expect(panel).toHaveAttribute('data-agents-paused', 'true');
+
+    // Файл, брошенный мимо зон приёма: `guardNavigation` отменяет переход окна. Окно остаётся прежним документом, пауза — на месте.
+    // Отменённый переход Playwright «не завершается»: он блокирует обычный click, поэтому дальше клики идут из страницы окна.
+    await window.evaluate(() => {
+      setTimeout(() => {
+        location.href = 'file:///tmp/parley-e2e-drop';
+      }, 0);
+    });
+    await window.waitForTimeout(500);
+    // Смена активной страницы панели заставляет окно заново сверить реестр с main.
+    const clickTab = (index: number): Promise<void> =>
+      window.evaluate(
+        ([owner, at]) => {
+          const tabs = document.querySelectorAll(`[data-testid="browser-panel"][data-panel-owner="${owner}"] [role="tab"]`);
+          (tabs[at < 0 ? tabs.length + at : at] as HTMLElement).click();
+        },
+        [`session:${lead}`, index] as const,
+      );
+    await clickTab(-1);
+    await clickTab(0);
+    await window.waitForTimeout(300);
+
+    const denied = await agentTool(opened, lead, 'browser_console', { tab: first });
+    expect(denied.isError, denied.text).toBe(true);
+    expect(denied.text).toMatch(/^access_denied:/);
+  });
 });

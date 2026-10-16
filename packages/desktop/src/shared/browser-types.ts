@@ -161,13 +161,15 @@ export type AgentOpenTabResult =
 
 /**
  * Запись реестра страниц панелей для агента (спека браузера 3.5, 3.7, 3.10). Вкладки человека не регистрируются.
- * `webContentsId: null` — страницы в раскладке нет гостя (панель выгружена); `gone` — страница закрыта; `paused` — пауза
- * панели хозяина (4.8).
+ * `generation` — поколение документа окна (случайная строка, меняется при каждой перезагрузке): `hello` идёт первым и
+ * сбрасывает реестр main; записи другого поколения main пропускает. `webContentsId: null` — у страницы в раскладке нет
+ * гостя (панель выгружена); `gone` — страница закрыта; `paused` — пауза панели хозяина (4.8).
  */
 export type AgentPageRegistration =
-  | { webContentsId: number | null; workKey: string; owner: BrowserOwner; pageId: string; visible: boolean }
-  | { workKey: string; pageId: string; gone: true }
-  | { workKey: string; owner: BrowserOwner; paused: boolean };
+  | { kind: 'hello'; generation: string }
+  | { kind: 'page'; generation: string; webContentsId: number | null; workKey: string; owner: BrowserOwner; pageId: string; visible: boolean }
+  | { kind: 'gone'; generation: string; workKey: string; pageId: string }
+  | { kind: 'paused'; generation: string; workKey: string; owner: BrowserOwner; paused: boolean };
 
 /** Агент действует на странице — событие `browser:agent-activity` окну-хозяину гостя. */
 export interface AgentActivity {

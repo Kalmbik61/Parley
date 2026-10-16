@@ -340,11 +340,6 @@ if (!gotLock) {
       // перезагрузкой, которую потом отменит вопрос о правках (fix-7.3 п. 4б), и сбросил бы счёт.
       window.webContents.on('did-navigate', () => closeGuard.reset());
       window.webContents.on('render-process-gone', () => closeGuard.reset());
-      // Реестр страниц панелей для агента забывается вместе со страницами окна. Не did-start-loading: он приходит окну и от
-      // каждого `<webview>`, реестр стирался бы при открытии любой страницы. Рендерер регистрирует страницы заново.
-      window.webContents.on('did-start-navigation', (details) => {
-        if (details.isMainFrame && !details.isSameDocument) agentOps?.reset();
-      });
       window.on('closed', () => {
         closeGuard.dispose();
         if (mainWindow === window) mainWindow = null;

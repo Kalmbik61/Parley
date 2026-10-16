@@ -1508,23 +1508,34 @@ describe('канал агента — только для main (этап B2, с�
     expect(agentOps.captureReady).toHaveBeenCalledTimes(1);
   });
 
-  it('register-tab: страница панели с живым гостем раздела и пауза панели — в реестр агента; gone — без гостя; неверное и вкладка человека — bad_request', async () => {
+  it('register-tab: hello, страница панели с живым гостем раздела, gone и пауза панели — в реестр агента; неверное и вкладка человека — bad_request', async () => {
     const guest = fakeBrowserContents(7, 'webview');
     const { ipcMain } = setup({ webContents: new Map<number, unknown>([[7, guest], [1, fakeBrowserContents(1, 'window')]]) });
     agentOps.registerTab.mockClear();
-    const page = { webContentsId: 7, workKey: '/p w-1', owner: { kind: 'session', sessionId: 's-02' }, pageId: 'bp-abc123', visible: false };
+    const generation = 'a1b2c3';
+    const hello = { kind: 'hello', generation };
+    await ipcMain.invoke('browser:register-tab', hello);
+    expect(agentOps.registerTab).toHaveBeenLastCalledWith(hello);
+    const page = { kind: 'page', generation, webContentsId: 7, workKey: '/p w-1', owner: { kind: 'session', sessionId: 's-02' }, pageId: 'bp-abc123', visible: false };
     await ipcMain.invoke('browser:register-tab', page);
     expect(agentOps.registerTab).toHaveBeenLastCalledWith(page);
     const unloaded = { ...page, webContentsId: null };
     await ipcMain.invoke('browser:register-tab', unloaded);
     expect(agentOps.registerTab).toHaveBeenLastCalledWith(unloaded);
-    const pause = { workKey: '/p w-1', owner: { kind: 'room', roomId: 'r-01' }, paused: true };
+    const pause = { kind: 'paused', generation, workKey: '/p w-1', owner: { kind: 'room', roomId: 'r-01' }, paused: true };
     await ipcMain.invoke('browser:register-tab', pause);
     expect(agentOps.registerTab).toHaveBeenLastCalledWith(pause);
-    await ipcMain.invoke('browser:register-tab', { workKey: '/p w-1', pageId: 'bp-abc123', gone: true });
-    expect(agentOps.registerTab).toHaveBeenCalledTimes(4);
+    await ipcMain.invoke('browser:register-tab', { kind: 'gone', generation, workKey: '/p w-1', pageId: 'bp-abc123' });
+    expect(agentOps.registerTab).toHaveBeenCalledTimes(5);
     for (const bad of [
       { ...page, webContentsId: 1 }, // не гость раздела
+      { ...page, kind: 'tab' }, // неизвестный вид
+      { ...page, kind: undefined }, // прежняя форма без kind
+      { ...page, generation: '' },
+      { ...page, generation: 'x'.repeat(65) },
+      { ...page, generation: 7 },
+      { kind: 'hello' },
+      { kind: 'hello', generation: '' },
       { ...page, pageId: 'browser:abc123' }, // вкладка человека
       { ...page, pageId: 'terminal:s-01' },
       { ...page, owner: { kind: 'session', sessionId: '' } },
@@ -1532,12 +1543,12 @@ describe('канал агента — только для main (этап B2, с�
       { ...page, visible: 'yes' },
       { ...page, workKey: '__proto__' },
       { ...pause, paused: 'yes' },
-      { workKey: '/p w-1', pageId: 'terminal:x', gone: true },
+      { kind: 'gone', generation, workKey: '/p w-1', pageId: 'terminal:x' },
       null,
     ]) {
       expect(await codeOf(ipcMain.invoke('browser:register-tab', bad)), JSON.stringify(bad)).toBe('bad_request');
     }
-    expect(agentOps.registerTab).toHaveBeenCalledTimes(4);
+    expect(agentOps.registerTab).toHaveBeenCalledTimes(5);
   });
 
   it('host:call не пускает browser.agentResult: ответ на операцию агента шлёт только main (спека 3.7)', async () => {

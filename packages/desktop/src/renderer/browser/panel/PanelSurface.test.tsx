@@ -223,7 +223,9 @@ describe('PanelSurface — предел живых панелей (спека б
   });
 });
 
-const registrations = (): unknown[] => bridge.browserCalls.filter((call) => call.method === 'registerTab').map((call) => call.args[0]);
+/** Записи реестра без `hello`: поколение документа в тесте любое. */
+const registrations = (): unknown[] => bridge.browserCalls.filter((call) => call.method === 'registerTab').map((call) => call.args[0]).filter((e) => (e as { kind: string }).kind !== 'hello');
+const PAGE_REG = { kind: 'page', generation: expect.any(String) };
 
 describe('PanelSurface — реестр страниц для агента (этап C)', () => {
   it('монтирование — без гостя, dom-ready — с id гостя, повтор не шлётся; уход вида хозяина с экрана — запись «невидима»', () => {
@@ -231,9 +233,9 @@ describe('PanelSurface — реестр страниц для агента (эт
     showHost(CHAT);
     renderLayer();
     const view = arm(webview(P1), 7);
-    expect(registrations()).toEqual([{ webContentsId: null, workKey: WORK_KEY, owner: CHAT, pageId: P1, visible: true }]);
+    expect(registrations()).toEqual([{ ...PAGE_REG, webContentsId: null, workKey: WORK_KEY, owner: CHAT, pageId: P1, visible: true }]);
     fire(view, 'dom-ready');
-    expect(registrations().at(-1)).toEqual({ webContentsId: 7, workKey: WORK_KEY, owner: CHAT, pageId: P1, visible: true });
+    expect(registrations().at(-1)).toEqual({ ...PAGE_REG, webContentsId: 7, workKey: WORK_KEY, owner: CHAT, pageId: P1, visible: true });
     expect(registrations()).toHaveLength(2);
     act(() => usePanelRuntime.getState().unmountHost(panelRuntimeKey(WORK_KEY, CHAT)));
     // Вид хозяина ушёл с экрана — страница невидима человеку (гость, если он ещё жив, main проверит сам).
@@ -252,7 +254,7 @@ describe('PanelSurface — реестр страниц для агента (эт
     const before = registrations().length;
     unmount();
     const added = registrations().slice(before);
-    expect(added).toEqual([{ webContentsId: null, workKey: WORK_KEY, owner: CHAT, pageId: P1, visible: false }]);
+    expect(added).toEqual([{ ...PAGE_REG, webContentsId: null, workKey: WORK_KEY, owner: CHAT, pageId: P1, visible: false }]);
   });
 
   it('пауза панели: data-agents-paused на корне, «Pause agents» пишет её в раскладку, «Resume agents» снимает', () => {
