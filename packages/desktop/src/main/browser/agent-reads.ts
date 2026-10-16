@@ -83,12 +83,16 @@ export function createAgentReads(deps: { inspector: Pick<Inspector, 'snapshot' |
     return snapshot;
   }
 
-  async function detailOf(id: number, entry: NetworkEntry): Promise<BrowserAgentRequestDetail> {
+  async function detailOf(contents: WebContents, record: PageRecord, entry: NetworkEntry): Promise<BrowserAgentRequestDetail> {
     const notes: string[] = [];
     if (entry.hasPostData && entry.postData === null) notes.push('The request body was not captured.');
     const requestBody = bodyForAgent(entry.postData, headerValue(entry.requestHeaders, 'content-type'), 'request', notes);
     // Тело целиком, до предела панели: маска разбирает весь JSON, режется уже результат.
-    const response = await deps.inspector.responseBody(id, entry.id, DEVTOOLS_LIMITS.panelBody).catch(() => null);
+    const response = await deps.inspector.responseBody(contents.id, entry.id, DEVTOOLS_LIMITS.panelBody).catch(() => {
+      // Тела нет — это не ошибка, но если гость ушёл посреди чтения, агенту нужен тот же отказ, что и у любой страницы без гостя.
+      if (contents.isDestroyed()) throw new AgentOpError('tab_not_loaded', `Page ${record.agentId} went away while its request was being read.`);
+      return null;
+    });
     let responseBody: string | null = null;
     if (response !== null) {
       if (response.base64) notes.push('The response body is binary and is not shown.');
@@ -115,7 +119,7 @@ export function createAgentReads(deps: { inspector: Pick<Inspector, 'snapshot' |
       if (args.requestId !== undefined) {
         const entry = snapshot.network.find((candidate) => candidate.id === args.requestId);
         if (entry === undefined) throw new AgentOpError('bad_request', `There is no request ${args.requestId} in the log of page ${record.agentId}: list the requests first.`);
-        return { tab: record.agentId, url, request: await detailOf(contents.id, entry) };
+        return { tab: record.agentId, url, request: await detailOf(contents, record, entry) };
       }
       const pattern = args.urlPattern?.toLowerCase();
       // Фильтр смотрит на адрес с маской: подобрать им значение секрета нельзя.

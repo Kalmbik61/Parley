@@ -56,7 +56,7 @@ function sendWith(options: { viewport?: { width: number; height: number }; conte
 }
 
 /** Окно отвечает на просьбу своим ответом (если он задан) сразу после неё, как ответил бы рендерер. */
-function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null; sent?: boolean; openMs?: number; owners?: BrowserAgentOwner[]; confirmSurface?: boolean; captureReadyMs?: number; windowHeight?: number; screenDpr?: number } = {}) {
+function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null; sent?: boolean; openMs?: number; owners?: BrowserAgentOwner[]; confirmSurface?: boolean; captureReadyMs?: number; windowHeight?: number; screenDpr?: number; opTimeoutMs?: number } = {}) {
   const asked: AgentOpenTab[] = [];
   const state = { allowed: overrides.allowed ?? true, reply: overrides.reply === undefined ? { tabId: 'browser:aaaaaa', reused: false, mounted: true } : overrides.reply };
   const openTab = vi.fn((e: AgentOpenTab): boolean => {
@@ -105,6 +105,7 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
       if (surface !== undefined && overrides.confirmSurface !== false) queueMicrotask(() => ops.captureReady(surface.id));
     },
     ...(overrides.captureReadyMs === undefined ? {} : { captureReadyMs: overrides.captureReadyMs }),
+    ...(overrides.opTimeoutMs === undefined ? {} : { opTimeoutMs: overrides.opTimeoutMs }),
     ...(overrides.windowHeight === undefined ? {} : { windowHeight: () => overrides.windowHeight as number }),
     ...(overrides.screenDpr === undefined ? {} : { screenDpr: async () => overrides.screenDpr as number }),
   };
@@ -1031,5 +1032,88 @@ describe('проверки перед запуском из очереди (оп
   it('страница ушла на внешний адрес — not_loopback; операция не началась', async () => {
     const result = await queued(({ guests }) => guests.set(7, fakeGuest(7, 'https://example.com/')));
     expect(codeOf(result)).toBe('not_loopback');
+  });
+});
+
+describe('срок операции и очередь (R1, R6, R13, R14)', () => {
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /** Снимок, у которого `Page.captureScreenshot` держится управляемым промисом; `shots` — сколько раз его вызвали. */
+  function heldShots(ctx: ReturnType<typeof setup>) {
+    const gate = { release: () => undefined as void, shots: 0 };
+    const held = new Promise<void>((resolve) => { gate.release = resolve; });
+    ctx.inspector.send.mockImplementation(async (id: number, method: string) => {
+      if (method !== 'Page.captureScreenshot') return sendWith()(id, method);
+      gate.shots += 1;
+      if (gate.shots === 1) await held;
+      return { data: png(1280, 800).toString('base64') };
+    });
+    return gate;
+  }
+
+  it('тайм-аут: агент получает timeout через 100 мс, а вторая операция страницы стартует только после конца первой', async () => {
+    const ctx = setup({ opTimeoutMs: 100 });
+    register(ctx.ops, {});
+    const gate = heldShots(ctx);
+    const started = Date.now();
+    const first = await ctx.runOp('screenshot', { tab: 't1' });
+    expect(codeOf(first)).toBe('timeout');
+    expect(Date.now() - started).toBeLessThan(400);
+    const second = ctx.runOp('screenshot', { tab: 't1' });
+    await sleep(40);
+    expect(gate.shots).toBe(1);
+    gate.release();
+    expect(codeOf(await second)).toBe('ok');
+    expect(gate.shots).toBe(2);
+  });
+
+  it('activity end — после реального конца операции, не на тайм-ауте', async () => {
+    const ctx = setup({ opTimeoutMs: 100 });
+    register(ctx.ops, {});
+    const gate = heldShots(ctx);
+    expect(codeOf(await ctx.runOp('screenshot', { tab: 't1' }))).toBe('timeout');
+    expect(ctx.activity.map((e) => e.phase)).toEqual(['start']);
+    gate.release();
+    await sleep(20);
+    expect(ctx.activity.map((e) => e.phase)).toEqual(['start', 'end']);
+  });
+
+  it('после тайм-аута снимок не сохраняется: saveImage не вызван', async () => {
+    const ctx = setup({ opTimeoutMs: 100 });
+    register(ctx.ops, {});
+    const gate = heldShots(ctx);
+    expect(codeOf(await ctx.runOp('screenshot', { tab: 't1' }))).toBe('timeout');
+    gate.release();
+    await sleep(30);
+    expect(ctx.saveImage).not.toHaveBeenCalled();
+  });
+
+  it('операция, простоявшая в очереди дольше срока, не запускается: timeout, ни activity, ни Emulation.*', async () => {
+    const ctx = setup({ opTimeoutMs: 100 });
+    register(ctx.ops, {});
+    const gate = heldShots(ctx);
+    const first = ctx.runOp('screenshot', { tab: 't1' });
+    await sleep(10);
+    const second = await ctx.runOp('screenshot', { tab: 't1', width: 375, height: 812 });
+    expect(codeOf(second)).toBe('timeout');
+    expect(messageOf(second)).toContain('waited too long');
+    expect(codeOf(await first)).toBe('timeout');
+    gate.release();
+    await sleep(30);
+    expect(ctx.activity.filter((e) => e.phase === 'start')).toHaveLength(1);
+    expect(ctx.emulation.withTemporary).not.toHaveBeenCalled();
+    expect(ctx.inspector.send.mock.calls.some(([, method]) => String(method).startsWith('Emulation.'))).toBe(false);
+  });
+
+  it('гость уничтожен посреди деталей запроса — tab_not_loaded, а не unsupported', async () => {
+    const ctx = setup();
+    register(ctx.ops, {});
+    ctx.snapshots.set(7, { epoch: 1, capture: 'on', console: [], network: [networkEntry({ id: 'r1' })] });
+    ctx.inspector.responseBody.mockImplementation(async () => {
+      ctx.guests.get(7)?.isDestroyed.mockReturnValue(true);
+      throw new Error('Object has been destroyed');
+    });
+    const result = await ctx.runOp('network', { tab: 't1', requestId: 'r1' });
+    expect(codeOf(result)).toBe('tab_not_loaded');
   });
 });

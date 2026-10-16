@@ -87,7 +87,7 @@ export interface AgentCaptureDeps {
 }
 
 export interface AgentCapture {
-  screenshotOf(contents: WebContents, record: PageRecord, request: BrowserAgentOpEvent, args: BrowserAgentArgs<'screenshot'>): Promise<BrowserAgentScreenshotResult>;
+  screenshotOf(contents: WebContents, record: PageRecord, request: BrowserAgentOpEvent, args: BrowserAgentArgs<'screenshot'>, signal: AbortSignal): Promise<BrowserAgentScreenshotResult>;
   /** Окно подтверждает поверхность снимка (`browser:agent-capture-ready`); чужой и поздний id молча игнорируется. */
   captureReady(id: string): void;
 }
@@ -123,7 +123,7 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
     return deps.image.resize(png, Math.max(1, Math.round(size.width * scale)), Math.max(1, Math.round(size.height * scale)));
   }
 
-  async function screenshotOf(contents: WebContents, record: PageRecord, request: BrowserAgentOpEvent, args: BrowserAgentArgs<'screenshot'>): Promise<BrowserAgentScreenshotResult> {
+  async function screenshotOf(contents: WebContents, record: PageRecord, request: BrowserAgentOpEvent, args: BrowserAgentArgs<'screenshot'>, signal: AbortSignal): Promise<BrowserAgentScreenshotResult> {
     const id = contents.id;
     const metrics = await deps.inspector.send<LayoutMetrics>(id, 'Page.getLayoutMetrics');
     // Эпоха документа до съёмки: после неё сверяется, что страница не сменилась посреди снимка (аудит 3.2, R2).
@@ -186,6 +186,7 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
       Math.min(1, AGENT_LIMITS.screenshotLongSide / Math.max(cssWidth, cssHeight)) * factor;
     type Taken = { png: Buffer; viewport: { width: number; height: number }; clipped: boolean };
     const takeOnce = async (factor: number): Promise<Taken> => {
+      signal.throwIfAborted();
       // Место вьюпорта и высота страницы — сейчас, при поставленной эмуляции и поверхности: в начале операции там были размеры человека.
       const now = await deps.inspector.send<LayoutMetrics>(id, 'Page.getLayoutMetrics');
       if (args.fullPage !== true) {
@@ -204,6 +205,7 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
       try {
         // Полоса вне вида рисуется повтором верха (спайк 0, поправка 2): страницу прокручивают вьюпортом, по снимку на полосу.
         for (let y = 0; y < total; y += view.height) {
+          signal.throwIfAborted();
           const reached = await evaluate(
             `new Promise((done) => { window.scrollTo(0, ${y}); const finish = () => done(window.scrollY); setTimeout(finish, 300); requestAnimationFrame(() => requestAnimationFrame(finish)); })`,
           );
@@ -238,6 +240,7 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
         if (taken.clipped) {
           taken = await takeOnce(factor);
         } else {
+          signal.throwIfAborted();
           const size = pngSize(taken.png);
           taken = { ...taken, png: deps.image.resize(taken.png, Math.max(1, Math.round(size.width * OVERSIZE_FACTOR)), Math.max(1, Math.round(size.height * OVERSIZE_FACTOR))) };
         }
@@ -253,8 +256,10 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
     if (deps.inspector.snapshot(id)?.epoch !== epoch0) {
       throw new AgentOpError('tab_not_loaded', `Page ${record.agentId} navigated during the screenshot: take it again.`);
     }
+    signal.throwIfAborted();
     const png = fitLongSide(taken.png);
     const size = pngSize(png);
+    signal.throwIfAborted();
     const saved = await deps.saveImage(png);
     if (saved === null) throw new AgentOpError('unsupported', 'The screenshot could not be saved to Parley drops.');
     return {

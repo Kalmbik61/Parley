@@ -29,7 +29,7 @@ import { createAgentCapture } from './agent-capture.js';
 import type { AgentCaptureDeps } from './agent-capture.js';
 import { createPageRegistry, listTabs } from './agent-pages.js';
 import type { PageRecord } from './agent-pages.js';
-import { createPageQueue, withTimeout } from './agent-queue.js';
+import { createPageQueue } from './agent-queue.js';
 import { createAgentReads } from './agent-reads.js';
 import type { Emulation } from './emulation.js';
 import type { Inspector } from './inspector.js';
@@ -145,16 +145,39 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     return { record, contents };
   }
 
-  /** Операция на странице в её очереди. Проверки — сразу (быстрый отказ) и ещё раз перед запуском: в очереди ждут до `opTimeoutMs`. */
-  async function onPage<T>(request: BrowserAgentOpEvent, agentId: string, run: (contents: WebContents, record: PageRecord) => Promise<T>): Promise<T> {
+  /** Ошибка не `AgentOpError` внутри страницы: записи нет — `no_tab`; гость уничтожен или упал — `tab_not_loaded`; иначе `unsupported`. */
+  function pageFailure(record: PageRecord, contents: WebContents, signal: AbortSignal, error: unknown): AgentOpError {
+    if (error instanceof AgentOpError) return error;
+    if (signal.aborted) return new AgentOpError('timeout', 'The operation was cancelled: it took too long.');
+    const message = error instanceof Error ? error.message : String(error);
+    if (registry.fresh(record) === undefined) return new AgentOpError('no_tab', `Page ${record.agentId} was closed during the operation: call browser_tabs.`);
+    let gone = false;
+    try {
+      gone = contents.isDestroyed() || contents.isCrashed();
+    } catch {
+      gone = true;
+    }
+    if (gone) return new AgentOpError('tab_not_loaded', `Page ${record.agentId} went away during the operation (${message.slice(0, 200)}).`);
+    return new AgentOpError('unsupported', message.slice(0, 2000));
+  }
+
+  /**
+   * Операция на странице в её очереди. Срок — с постановки (`deadline`), а не со старта: в очереди ждут до `opTimeoutMs`.
+   * Проверки — сразу (быстрый отказ) и ещё раз перед запуском; `activity end` — в `finally` самой задачи, по её настоящему концу.
+   */
+  async function onPage<T>(request: BrowserAgentOpEvent, agentId: string, run: (contents: WebContents, record: PageRecord, signal: AbortSignal) => Promise<T>): Promise<T> {
+    const deadline = Date.now() + opTimeoutMs;
     const first = checked(request, agentId);
-    return queue.run(pageKey(first.record.workKey, first.record.pageId), async () => {
+    return queue.run(pageKey(first.record.workKey, first.record.pageId), deadline, async (signal) => {
       // Пока операция ждала, человек мог выключить доступ, поставить панель на паузу или увести страницу на внешний сайт.
       if (!(await deps.agentsAllowed())) throw new AgentOpError('access_denied', AGENTS_OFF);
       const { record, contents } = checked(request, agentId);
+      signal.throwIfAborted();
       deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'start' });
       try {
-        return await withTimeout(run(contents, record), opTimeoutMs, `The ${request.op} operation took longer than ${Math.round(opTimeoutMs / 1000)} s.`);
+        return await run(contents, record, signal);
+      } catch (error) {
+        throw pageFailure(record, contents, signal, error);
       } finally {
         deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'end' });
       }
@@ -229,7 +252,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
           }
           case 'screenshot': {
             const args = parsed.data as BrowserAgentArgs<'screenshot'>;
-            return ok(await onPage(request, args.tab, (contents, record) => capture.screenshotOf(contents, record, request, args)));
+            return ok(await onPage(request, args.tab, (contents, record, signal) => capture.screenshotOf(contents, record, request, args, signal)));
           }
         }
       } catch (error) {
