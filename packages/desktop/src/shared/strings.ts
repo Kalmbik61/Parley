@@ -738,7 +738,7 @@ export const S = {
         sessionName: 'The session’s name in the sidebar and on its tab. If empty, the session gets a name by its number — Ralph, Anatoly, Ruslan and so on. Rename it any time from its menu.',
         agents: 'One agent starts a session; two or more make a room.\nRole — optional ready-made instructions with a default provider, model and effort; what you pick in the row wins. Builtin roles come with Parley; “·\u00A0Claude” and “·\u00A0Codex” are your own agents from that CLI and run only there.\n🔒 — a read-only role: the CLI does not let the agent edit files.\nModel and effort — which model runs and how hard it thinks; Default keeps the CLI’s own setting.\nIn a room, ★ picks the lead, who collects the positions and brings you the decision; the branch icon gives one agent its own worktree.',
         worktree: 'Each agent works in its own Git worktree: a separate folder on a new branch, so agents do not overwrite each other’s edits. You review and merge the work in the Changes tab. Needs a Git repository.',
-        leanSession: 'Starts the agent without your plugins, other MCP servers and auto-memory — about 40 % less context per turn. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Agents of a room follow Settings → Agents.',
+        leanSession: 'Starts the agent without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions. Agents of a room follow Settings → Agents.',
         /** Перед строками режимов — `S.plans.modes` и `S.plans.modeHelp`, те же, что в панели плана комнаты. */
         mode: 'How the room tracks the work. You can change it later in the room.',
       },
@@ -941,7 +941,7 @@ export const S = {
     autoLaunchPending: 'Auto-launch pending sessions',
     /** Облегчённый запуск агентов комнат и `spawn_session` (спека «меньше ходов и легче контекст», C2.2). */
     leanAgents: 'Lean agent sessions',
-    leanAgentsHint: 'Agents Parley starts for rooms and spawn_session run without your plugins, other MCP servers and auto-memory — about 40 % less context per turn. Parley’s own tools and hooks, your skills, the project CLAUDE.md and skills stay; MCP servers for a work are chosen in Capabilities.',
+    leanAgentsHint: 'Agents Parley starts for rooms and spawn_session run without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions.',
     /** Скилл `parley` в папку проекта и в worktree сессий при запуске (кусок 10 плана комнат). */
     agentSkills: 'Install agent skills into projects',
     skillNavigator: 'Skill navigator',

@@ -48,8 +48,9 @@
  * Флажок один на все сессии диалога: у каждого агента комнаты свой worktree.
  *
  * Lean-режим (C2.2): участники комнаты уходят в `sessions.create` с `lean` из настройки `leanAgents` (читается при
- * открытии вместе с порогами; хост не отдал её — поля нет, решает хост), одиночная сессия — со своим флажком «Lean session»
- * (по умолчанию снят; без галочки поля нет). Старый хост поле отбросит, старому окну его не нужно.
+ * открытии вместе с порогами; не пришла к «Create room» — комната спрашивает её ещё раз, и всё равно нет — поля нет,
+ * решает хост), одиночная сессия — со своим флажком «Lean session» (по умолчанию снят; без галочки поля нет).
+ * Флажок виден, только когда хост отдал `leanAgents`: старый хост поле `lean` отбрасывает, и галочка бы врала.
  *
  * Бюджет работы (P37): пороги читаются из настроек при открытии, занятое — из карты выбранной работы. Подвал показывает,
  * сколько сессий идёт и сколько запусков осталось в часе; старт, который не помещается (нужные участники больше свободных
@@ -611,6 +612,18 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
       const target = { projectPath: selected.projectPath, workId: selected.map.work.id };
       const done: Record<number, AgentResult> = { ...results };
       let allStarted = true;
+      // Настройка не пришла при открытии (ответ опоздал или упал): комната спрашивает её ещё раз и один раз за запуск.
+      // Нет и теперь — поле lean опускаем, решает хост.
+      let roomLean = leanAgents;
+      if (multi && roomLean === null) {
+        try {
+          const { config } = await bridge.call('settings.get', {});
+          if (launch.cancelled) return;
+          if (typeof config.leanAgents === 'boolean') roomLean = config.leanAgents;
+        } catch {
+          // Хост настроек не отдал — поле lean не шлём.
+        }
+      }
       // По очереди, а не разом: номера сессий идут в порядке строк, и звезда ведущего указывает на свою.
       for (const row of agents) {
         if (done[row.key]?.status === 'started') continue;
@@ -644,7 +657,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
             ...(row.modelTouched && (info?.models?.length ?? 0) > 0 ? { model: chosenModel(row, info) } : {}),
             ...(row.effortTouched && effortChoices(info, chosenModel(row, info)) !== null ? { effort: chosenEffort(row, info) } : {}),
             // Участники комнаты — по настройке (хост её не отдал — решает сам), одиночная сессия — только с галочкой.
-            ...(multi ? (leanAgents === null ? {} : { lean: leanAgents }) : lean ? { lean: true } : {}),
+            ...(multi ? (roomLean === null ? {} : { lean: roomLean }) : lean ? { lean: true } : {}),
           });
           done[row.key] = { status: 'started', sessionId: ref.sessionId };
         } catch (err) {
@@ -1051,7 +1064,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
               </label>
               <FieldHint field={text.inOwnWorktree} text={text.hints.worktree} />
             </span>
-            {multi ? null : (
+            {multi || leanAgents === null ? null : (
               <span className="flex items-center gap-1">
                 <label className="flex items-center gap-2">
                   <Checkbox checked={lean} disabled={groupLocked} onCheckedChange={(value) => setLean(value === true)} />

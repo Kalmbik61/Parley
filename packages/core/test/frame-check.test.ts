@@ -228,9 +228,6 @@ describe('исключение для чтения settings.json в скрипт
     expect(FRAME_EXCEPTIONS.map((item) => `${item.file} | ${item.rule}`)).toEqual([
       `${STATUSLINE} | запись в каталоги агентов`,
       'packages/core/src/skills/claude.ts | запись в каталоги агентов',
-      'packages/core/src/work/lean.ts | запись в каталоги агентов',
-      'packages/core/src/work/lean.ts | запись в каталоги агентов',
-      'packages/core/src/work/lean.ts | запись в каталоги агентов',
       'packages/core/src/work/agents.ts | YOLO-флаги',
       'packages/host/src/capabilities/claude.ts | запись в каталоги агентов',
       'packages/host/src/capabilities/native-plugin-inventory.ts | запись в каталоги агентов',

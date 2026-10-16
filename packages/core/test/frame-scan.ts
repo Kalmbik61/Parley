@@ -86,27 +86,6 @@ export const FRAME_EXCEPTIONS: readonly FrameException[] = [
       'спека возможностей (2026-10-02): резолвер скиллов только читает settings.json проекта (O_RDONLY), чтобы учесть enabledPlugins и переопределения видимости',
   },
   {
-    file: 'packages/core/src/work/lean.ts',
-    rule: 'запись в каталоги агентов',
-    line: "path.join(configDir, 'settings.json'),",
-    reason:
-      'спека C2.2 (docs/specs/2026-10-16-fewer-turns-lean-context-design.md): только чтение settings.json человека (enabledPlugins), чтобы выключить его плагины в файле --settings самой сессии',
-  },
-  {
-    file: 'packages/core/src/work/lean.ts',
-    rule: 'запись в каталоги агентов',
-    line: "path.join(cwd, '.claude', 'settings.json'),",
-    reason:
-      'спека C2.2 (docs/specs/2026-10-16-fewer-turns-lean-context-design.md): только чтение settings.json проекта (и settings.local.json рядом, enabledPlugins), запись не предполагается',
-  },
-  {
-    file: 'packages/core/src/work/lean.ts',
-    rule: 'запись в каталоги агентов',
-    line: "const servers = parseToml(await readFile(path.join(codexHome, 'config.toml'), 'utf8'))['mcp_servers'];",
-    reason:
-      'спека C2.2 (docs/specs/2026-10-16-fewer-turns-lean-context-design.md): только чтение config.toml Codex (имена [mcp_servers.<id>]), чужие серверы выключаются флагами -c запуска, файл не меняется',
-  },
-  {
     file: 'packages/core/src/work/agents.ts',
     rule: 'YOLO-флаги',
     line: "return ['--sandbox', '-s', '--dangerously-bypass-approvals-and-sandbox', '--yolo', '--approve-for-me', '--not-so-yolo'].includes(item) ||",
