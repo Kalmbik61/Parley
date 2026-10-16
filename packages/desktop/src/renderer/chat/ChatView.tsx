@@ -272,7 +272,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     const text = codex ? composeRoomMessage(typed, paths) : composePrompt(typed, paths);
     setDraft(sessionKey, '');
     if (paths.length > 0) setAttachments(sessionKey, []);
-    chatOutbox.enqueue(sessionKey, { ref: sessionRef, text, deps: sendDeps });
+    chatOutbox.enqueue(sessionKey, { ref: sessionRef, text, deps: sendDeps, requestedAt: Date.now() });
   };
 
   const setMode = (mode: ModeChoice): void => {
@@ -386,7 +386,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
       workKey,
       tabId: tab.id,
       resend: (text: string) => {
-        chatOutbox.enqueue(sessionKey, { ref: sessionRef, text, deps: sendDeps });
+        chatOutbox.enqueue(sessionKey, { ref: sessionRef, text, deps: sendDeps, requestedAt: Date.now() });
       },
     }),
     [bridge, sessionKey, workKey, tab.id, sendDeps],
@@ -450,7 +450,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             items={items}
             queued={queued}
             outbox={outbox}
-            onRetryOutbox={(id) => chatOutbox.retry(sessionKey, id)}
+            onRetryOutbox={(id) => chatOutbox.retry(sessionKey, id, { requestedAt: Date.now() })}
             onRemoveOutbox={(id) => chatOutbox.remove(sessionKey, id)}
             note={noteOf(feed)}
             {...(feed?.status === 'error' ? { onRetry: () => useFeedStore.getState().retry(sessionRef) } : {})}

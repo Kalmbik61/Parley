@@ -24,6 +24,7 @@ import type { LayoutState } from '../layout/store.js';
 import { findTab, focusGroup, focusTab, groups, reopenClosed, updateTab } from '../layout/tree.js';
 import { effectiveView, feedAvailableNow, sessionStartedOrUnknown } from '../lib/feed-view.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
+import { runSaveDiagnostics } from '../shell/diagnostics-flow.js';
 import { activityFor, useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
 import { neighborInOrder } from '../sidebar/sort.js';
@@ -289,6 +290,9 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
       return;
     case 'host.restart':
       ctx.ui.confirmRestartHost();
+      return;
+    case 'host.diagnostics':
+      void runSaveDiagnostics(ctx.bridge, { profile: false });
       return;
     case 'find':
       (ctx.terminals.focused() ?? ctx.terminals.active())?.openSearch();

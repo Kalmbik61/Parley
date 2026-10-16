@@ -305,6 +305,22 @@ describe('снимок и дельты', () => {
     expect(feedChanged(stays)).toHaveLength(1);
   });
 
+  it('subscriberCount считает подписки и падает до нуля после dropClient', () => {
+    start();
+    const first = fakeClient();
+    const second = fakeClient();
+    expect(service.subscriberCount()).toBe(0);
+
+    service.subscribe(REF, first);
+    service.subscribe(REF, second);
+    expect(service.subscriberCount()).toBe(2);
+
+    service.dropClient(first);
+    expect(service.subscriberCount()).toBe(1);
+    service.dropClient(second);
+    expect(service.subscriberCount()).toBe(0);
+  });
+
   it('сессия пропала из работ: удержанным {}, лента и подписки забыты, таймеры сняты', async () => {
     vi.useFakeTimers();
     start();
@@ -328,6 +344,93 @@ describe('снимок и дельты', () => {
     send(prompt('again'));
     vi.advanceTimersByTime(50);
     expect(feedChanged(client)).toHaveLength(0);
+  });
+});
+
+describe('журнал задержек: feed.firstDelta', () => {
+  const firstDeltaCalls = () =>
+    fakes.log.info.mock.calls.filter(
+      ([, data]) => (data as { op?: string } | undefined)?.op === 'feed.firstDelta',
+    );
+
+  it('эхо промпта метку не снимает: запись по первой дельте агента, вторая пачка молчит', () => {
+    vi.useFakeTimers();
+    let time = 1_000_000;
+    start({ now: () => time });
+    const client = fakeClient();
+    service.subscribe(REF, client);
+
+    service.markSent(REF);
+    time += 500;
+    send(prompt('go'));
+    vi.advanceTimersByTime(50);
+    expect(feedChanged(client)).toHaveLength(1);
+    expect(firstDeltaCalls()).toHaveLength(0);
+
+    time += 1_000;
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    vi.advanceTimersByTime(50);
+
+    expect(firstDeltaCalls()).toEqual([
+      ['лента: первая дельта после отправки', { op: 'feed.firstDelta', ref: REF, sinceSendMs: 1_500 }],
+    ]);
+
+    send(pre('t2', 'Bash', { command: 'pwd' }));
+    vi.advanceTimersByTime(50);
+    expect(feedChanged(client)).toHaveLength(3);
+    expect(firstDeltaCalls()).toHaveLength(1);
+  });
+
+  it('пишется и без подписчиков: Chat мог быть закрыт, а отправка прошла', () => {
+    vi.useFakeTimers();
+    let time = 5_000;
+    start({ now: () => time });
+
+    service.markSent(REF);
+    time += 700;
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    vi.advanceTimersByTime(50);
+
+    expect(firstDeltaCalls()).toEqual([
+      ['лента: первая дельта после отправки', { op: 'feed.firstDelta', ref: REF, sinceSendMs: 700 }],
+    ]);
+  });
+
+  it('exit процесса снимает метку: следующая дельта записи не даёт', () => {
+    vi.useFakeTimers();
+    let time = 20_000;
+    start({ now: () => time });
+
+    service.markSent(REF);
+    time += 400;
+    fakes.emitExit(REF);
+    vi.advanceTimersByTime(50);
+    time += 60_000;
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    vi.advanceTimersByTime(50);
+
+    expect(firstDeltaCalls()).toHaveLength(0);
+  });
+
+  it('пустая пачка метку не снимает, без markSent записи нет', async () => {
+    vi.useFakeTimers();
+    let time = 9_000;
+    start({ now: () => time });
+
+    send(prompt('before'));
+    vi.advanceTimersByTime(50);
+    expect(firstDeltaCalls()).toHaveLength(0);
+
+    service.markSent(REF);
+    await service.snapshot(REF);
+    expect(firstDeltaCalls()).toHaveLength(0);
+
+    time += 300;
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    vi.advanceTimersByTime(50);
+    expect(firstDeltaCalls()).toEqual([
+      ['лента: первая дельта после отправки', { op: 'feed.firstDelta', ref: REF, sinceSendMs: 300 }],
+    ]);
   });
 });
 

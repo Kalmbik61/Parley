@@ -28,7 +28,7 @@ import { hostPaths } from '../paths.js';
 import { createPtyManager } from '../pty/pty-manager.js';
 import { createSessionsService } from '../sessions/sessions-service.js';
 import type { WorksService } from '../works/works-service.js';
-import { createRoomsArchive } from './rooms.js';
+import { createRoomsArchive, roomsCreate, roomsSend } from './rooms.js';
 
 // Каждый тест поднимает хост и ждёт письма настоящих сессий: под нагрузкой машины пяти секунд по умолчанию мало.
 vi.setConfig({ testTimeout: 30_000 });
@@ -250,6 +250,71 @@ async function addLiveSession(dir: string, workId: string, label: string): Promi
   });
   return id;
 }
+
+describe('журнал задержек: op room.create и op rooms.send', () => {
+  const makeLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
+  /** Обработчики зовутся напрямую: им нужен только журнал хоста запроса. */
+  const requestWith = (log: ReturnType<typeof makeLog>): RequestInfo =>
+    ({ client: {}, host: { log } }) as unknown as RequestInfo;
+
+  it('rooms.create пишет op room.create с числом участников и ms — без названия комнаты', async () => {
+    const { dir, workId, ids } = await setup();
+    const [a, b] = ids as [string, string];
+    const log = makeLog();
+
+    const { roomId } = await roomsCreate({ projectPath: dir, workId, title: 'Секретное название', members: [a, b] }, requestWith(log));
+
+    expect(log.info).toHaveBeenCalledTimes(1);
+    const [message, data] = log.info.mock.calls[0] as [string, Record<string, unknown>];
+    expect(message).toBe('комната создана');
+    expect(data).toEqual({ op: 'room.create', roomId, members: 2, ms: expect.any(Number) });
+    expect(data.ms as number).toBeGreaterThanOrEqual(0);
+    expect(JSON.stringify(data)).not.toContain('Секретное');
+  });
+
+  it('rooms.send пишет op rooms.send с queueMs от requestedAt — без текста письма', async () => {
+    const { dir, workId, ids } = await setup();
+    const [a] = ids as [string];
+    const log = makeLog();
+
+    const { messageId } = await roomsSend(
+      { projectPath: dir, workId, roomId: null, to: [a], text: 'секретный текст письма', kind: 'note', requestedAt: Date.now() - 700 },
+      requestWith(log),
+    );
+
+    expect(log.info).toHaveBeenCalledTimes(1);
+    const [message, data] = log.info.mock.calls[0] as [string, Record<string, unknown>];
+    expect(message).toBe('письмо принято');
+    expect(data).toEqual({ op: 'rooms.send', messageId, to: 1, roomId: null, queueMs: expect.any(Number), ms: expect.any(Number) });
+    expect(data.queueMs as number).toBeGreaterThanOrEqual(700);
+    expect(JSON.stringify(data)).not.toContain('секретный');
+  });
+
+  it('rooms.send без requestedAt — queueMs null, из будущего — 0; отказ правил комнаты записи не пишет', async () => {
+    const { dir, workId, ids } = await setup();
+    const [a, b] = ids as [string, string];
+    const log = makeLog();
+
+    await roomsSend({ projectPath: dir, workId, roomId: null, to: [a], text: 'x', kind: 'note' }, requestWith(log));
+    expect(log.info).toHaveBeenCalledTimes(1);
+    expect((log.info.mock.calls[0] as [string, Record<string, unknown>])[1].queueMs).toBeNull();
+
+    // Метка из будущего (расхождение часов окна и хоста) даёт 0, а не отрицательное ожидание.
+    log.info.mockClear();
+    await roomsSend(
+      { projectPath: dir, workId, roomId: null, to: [a], text: 'x', kind: 'note', requestedAt: Date.now() + 5_000 },
+      requestWith(log),
+    );
+    expect(log.info).toHaveBeenCalledTimes(1);
+    expect((log.info.mock.calls[0] as [string, Record<string, unknown>])[1].queueMs).toBe(0);
+
+    log.info.mockClear();
+    await expect(
+      roomsSend({ projectPath: dir, workId, roomId: null, to: [a, b], text: 'x', kind: 'note' }, requestWith(log)),
+    ).rejects.toMatchObject({ code: 'bad_request' });
+    expect(log.info).not.toHaveBeenCalled();
+  });
+});
 
 describe('rooms.create: ведущий и правило одной комнаты (дизайн комнат, 3.2, решение 4)', () => {
   it('ведущий по умолчанию — первый участник; повторы и человек в счёт не идут', async () => {

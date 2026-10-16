@@ -160,6 +160,8 @@ export interface FeedService {
   unsubscribe(ref: SessionRef, client: Client): void;
   /** Клиент отключился от хоста: все его подписки сняты. */
   dropClient(client: Client): void;
+  /** Сколько подписок на ленты держит хост: сумма размеров множеств подписчиков по всем сессиям. */
+  subscriberCount(): number;
   decide(ref: SessionRef, cardId: string, decision: FeedDecision): Result<'feed.decide'>;
   /**
    * Режим разрешений, который хост сверил по подвалу терминала (`sessions.setMode`): ставит его в
@@ -171,6 +173,12 @@ export interface FeedService {
    * (ответа ещё не было), лента закрывает сама, а текст промпта, возвращённый CLI в поле ввода, стирает.
    */
   interrupt(ref: SessionRef): void;
+  /**
+   * Сообщение из Chat ушло в сессию (`pty.send` с `submitted`): запоминает время. Первая пачка ленты после метки,
+   * где есть не только эхо промпта человека, пишет в журнал задержек `feed.firstDelta` — сколько агент молчал
+   * до первого ответа, — и метка снимается; выход и новый запуск процесса метку тоже снимают.
+   */
+  markSent(ref: SessionRef): void;
   /** Выключение хоста: всем удержанным хукам `{}`, таймеры сняты. */
   stop(): Promise<void>;
 }
@@ -311,6 +319,8 @@ export function createFeedService(
   const feeds = new Map<string, SessionFeed>();
   const subscribers = new Map<string, Set<Client>>();
   const lastActivity = new Map<string, string>();
+  /** Метки `markSent`: ключ сессии → время отправки, до первой пачки ленты (журнал задержек `feed.firstDelta`). */
+  const sentAt = new Map<string, number>();
   /** Процессы Codex, чья сессия на старте ещё не попала в карту работ: таймер доверия взведут по её появлению. */
   const graceWaiting = new Map<string, SessionRef>();
   /** Таймеры присмотра за Esc из чата. */
@@ -460,7 +470,19 @@ export function createFeedService(
     feed.batch = { upsert: new Map(), removed: new Set() };
     feed.modeChanged = false;
     feed.revision += 1;
-    const clients = subscribers.get(refKey(feed.ref));
+    // Журнал задержек (спека диагностики, A4): запись нужна и без открытого Chat, поэтому до проверки подписчиков.
+    // Эхо промпта человека — не ответ агента: пачка только из промптов метку не снимает.
+    const key = refKey(feed.ref);
+    const sent = sentAt.get(key);
+    if (sent !== undefined && Array.from(upsert.values()).some((item) => item.kind !== 'prompt')) {
+      sentAt.delete(key);
+      log.info('лента: первая дельта после отправки', {
+        op: 'feed.firstDelta',
+        ref: feed.ref,
+        sinceSendMs: Math.max(0, now() - sent),
+      });
+    }
+    const clients = subscribers.get(key);
     if (clients === undefined || clients.size === 0) return;
     const data = {
       ref: feed.ref,
@@ -1003,6 +1025,7 @@ export function createFeedService(
       feeds.delete(key);
     }
     lastActivity.delete(key);
+    sentAt.delete(key);
     subscribers.delete(key);
     graceWaiting.delete(key);
   }
@@ -1030,6 +1053,8 @@ export function createFeedService(
   // Запуск и возобновление: журнал читается до первого события нового процесса.
   const unsubscribeStart = deps.pty.on('start', (ref) => {
     if (stopped) return;
+    // Новый процесс не ответит на отправку старого: метка дала бы ложные минуты в `feed.firstDelta`.
+    sentAt.delete(refKey(ref));
     void seedAside(ref);
     void armCodexGrace(ref);
   });
@@ -1059,6 +1084,8 @@ export function createFeedService(
 
   const unsubscribeExit = deps.pty.on('exit', (ref) => {
     if (stopped) return;
+    // Ответа вышедшего процесса не будет: метка отправки не должна дожить до чужой пачки.
+    sentAt.delete(refKey(ref));
     graceWaiting.delete(refKey(ref));
     const feed = feeds.get(refKey(ref));
     if (feed === undefined) {
@@ -1217,6 +1244,12 @@ export function createFeedService(
       }
     },
 
+    subscriberCount() {
+      let count = 0;
+      for (const clients of subscribers.values()) count += clients.size;
+      return count;
+    },
+
     decide(ref, cardId, decision) {
       const feed = feeds.get(refKey(ref));
       const card = feed?.state.items.find((item) => isCard(item) && item.cardId === cardId);
@@ -1271,6 +1304,10 @@ export function createFeedService(
         settleInterrupt(feed, state, pid);
       }, interruptGraceMs);
       interruptTimers.add(timer);
+    },
+
+    markSent(ref) {
+      sentAt.set(refKey(ref), now());
     },
 
     async stop() {

@@ -30,7 +30,7 @@ import { backlogMethodSchemas } from './backlog.js';
 import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
 import type { FeedDecisions } from './feed.js';
-import type { Capabilities, CompactResult, ModelOption, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type { Capabilities, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 /** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
 const recipeSnapshot = z
@@ -93,6 +93,10 @@ export const METHODS = {
   hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string(), features: z.array(z.string().max(64)).max(32).optional() }),
   'host.info': z.object({}),
   'host.shutdown': z.object({}),
+  // Диагностика хоста (спека 2026-10-16): мгновенный снимок и CPU-профиль по запросу; старый хост методов не знает.
+  'host.diagnostics': z.object({}),
+  'host.profile.start': z.object({ seconds: z.number().int().min(1).max(60).optional() }),
+  'host.profile.status': z.object({}),
   'providers.list': z.object({}),
   'providers.refreshLimits': z.object({}),
   'providers.check': z.object({ provider: z.string() }),
@@ -243,6 +247,9 @@ export const METHODS = {
     to: z.array(z.string()),
     text: z.string().min(1),
     kind: z.enum(['note', 'question', 'decision']),
+    // Момент нажатия Send в окне (мс эпохи, одни часы с хостом): из него хост считает ожидание в очереди окна
+    // (журнал задержек, `queueMs`). Старый хост поле отбросит, старое окно его не шлёт.
+    requestedAt: z.number().optional(),
   }),
   'worktrees.available': z.object({ projectPath: z.string() }),
   // `patch` только добавлен: старый хост его отбросит, старое окно не шлёт. false — `patch: ''`.
@@ -262,7 +269,8 @@ export const METHODS = {
   }),
   // Предел 64 КиБ хост считает в байтах UTF-8 после очистки (спека 8.6, шаг 2): схема
   // байтов не видит, поэтому здесь только «не пусто».
-  'pty.send': z.object({ ref: sessionRef, text: z.string().min(1), submit: z.boolean() }),
+  // `requestedAt` — как у `rooms.send`: метка нажатия Send для `queueMs` в журнале хоста.
+  'pty.send': z.object({ ref: sessionRef, text: z.string().min(1), submit: z.boolean(), requestedAt: z.number().optional() }),
   // Лента вида «Chat» (план 2026-10-01, Task 2, решение 14). `agentId` — лента субагента из его
   // журнала: id идёт в путь `subagents/agent-<id>.jsonl`, поэтому только буквы, цифры, `_` и `-`.
   'feed.snapshot': z.object({
@@ -295,6 +303,9 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
   hello: { hostVersion: string; protocol: number; pid: number; methods?: string[]; features?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };
   'host.shutdown': { ok: true };
+  'host.diagnostics': HostDiagnostics;
+  'host.profile.start': ProfileStatus;
+  'host.profile.status': ProfileStatus;
   /** Перечитаны источники CLI и запрошена квота подключённого Z.ai; свежесть зависит от источника. */
   'providers.refreshLimits': { ok: true };
   /**

@@ -21,7 +21,7 @@ import {
 import type { WebContents } from 'electron';
 import { configPath, envValue, loadConfig, migrateHome, parleyHome } from '@parley/core';
 import type { WorksSnapshot } from '@parley/protocol';
-import type { FocusTarget } from '../shared/bridge.js';
+import type { FocusTarget, HostStatus } from '../shared/bridge.js';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { ISLAND_EVENTS, type IslandConfig } from '../shared/island.js';
 import { S } from '../shared/strings.js';
@@ -36,6 +36,7 @@ import guestDomScript from './browser/guest-dom.js?raw';
 import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
 import { createInspector, forwardBatches } from './browser/inspector.js';
+import { saveDiagnostics } from './diagnostics/bundle.js';
 import { cleanupDropsTree, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 import { createGitRunner, isProjectWorktree } from './files/git-api.js';
 import createGrepWorker from './files/grep-worker?nodeWorker';
@@ -584,6 +585,13 @@ if (!gotLock) {
       },
     });
 
+    // Версия окна и последний статус хоста — для `app-info.json` архива диагностики; `onStatus` отдаёт текущий статус сразу.
+    const appVersion = app.isPackaged ? app.getVersion() : null;
+    let hostStatus: HostStatus = { state: 'connecting' };
+    connection.onStatus((status) => {
+      hostStatus = status;
+    });
+
     registerIpc({
       ipcMain,
       connection,
@@ -641,6 +649,33 @@ if (!gotLock) {
         if ((await clipboard.readText()) !== '') return null;
         return saveImage({ png: await clipboardPng(), dir: dropsDir() });
       },
+      saveDiagnostics: (options) =>
+        saveDiagnostics(
+          {
+            call: (method, params) => connection.call(method, params),
+            recentCalls: () => connection.recentCalls(),
+            hostDir: paths.dir,
+            // Тесты и E2E подменяют каталог, чтобы не писать в настоящие Downloads человека.
+            outDir: process.env.PARLEY_DIAGNOSTICS_DIR ?? app.getPath('downloads'),
+            appInfo: () => ({
+              appVersion,
+              electron: process.versions.electron,
+              chrome: process.versions.chrome,
+              node: process.versions.node,
+              platform: process.platform,
+              release: os.release(),
+              arch: process.arch,
+              windows: BrowserWindow.getAllWindows().length,
+              uptimeSec: Math.round(process.uptime()),
+              host: {
+                state: hostStatus.state,
+                hostVersion: 'hostVersion' in hostStatus ? hostStatus.hostVersion : null,
+              },
+            }),
+            readme: S.diagnostics.readme,
+          },
+          options,
+        ),
       imageThumbnail: (absPath, maxPx) => imageThumbnail(absPath, nativeImage, maxPx),
       setDirtyBuffers: (sender, count) => closeGuards.get(sender)?.setDirtyCount(count),
       answerClose: (sender, answer) => closeGuards.get(sender)?.answer(answer),
@@ -663,7 +698,7 @@ if (!gotLock) {
       getUpdate: () => updates.latest(),
       // Только у собранного окна: несобранное (E2E, `pnpm dev`) отдало бы версию Electron, и любой хост
       // показался бы хостом другой сборки — с тостом поверх окна.
-      appVersion: app.isPackaged ? app.getVersion() : null,
+      appVersion,
       setBadge: (count) => {
         app.dock?.setBadge(count > 0 ? String(count) : '');
       },

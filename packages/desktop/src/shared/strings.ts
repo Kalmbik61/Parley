@@ -1753,6 +1753,7 @@ export const S = {
     pauseAutoWake: 'Pause auto-wake',
     resumeAutoWake: 'Resume auto-wake',
     restartHost: 'Restart host…',
+    diagnostics: 'Save diagnostics…',
     themeSystem: 'Theme: system',
     themeDark: 'Theme: dark',
     themeLight: 'Theme: light',
@@ -1851,6 +1852,7 @@ export const S = {
     actions: {
       loadProviders: 'load providers',
       refreshProviderLimits: 'refresh provider limits',
+      saveDiagnostics: 'save diagnostics',
       saveProviderKey: 'save the provider key',
       checkProviderKey: 'check the GLM key',
       removeProviderKey: 'remove the provider key',
@@ -2009,6 +2011,28 @@ export const S = {
     sidebarError: "Couldn't show workspace sidebar",
     rightSidebarError: "Couldn't show right sidebar",
     layoutError: "Couldn't show layout",
+  },
+
+  /** Диагностика хоста (спека 2026-10-16-host-diagnostics-and-load-design.md): сегмент строки статуса (A1) и `README.txt` внутри zip (A2). */
+  diagnostics: {
+    segment: 'Diagnostics',
+    save: 'Save diagnostics',
+    profile: 'Record 20-second profile, then save',
+    saving: 'Saving…',
+    profiling: (left: number): string => `Profiling ${left} s…`,
+    hint: 'Includes host logs, process list and timings. No message text, terminal output or keys. The file is saved to Downloads; attach it to a GitHub issue.',
+    hostOutdated: 'Host is outdated — restart it for full diagnostics',
+    saved: 'Diagnostics saved',
+    showInFinder: 'Show in Finder',
+    readme: [
+      'Parley diagnostics bundle',
+      '',
+      'Contents: host.log and host.log.1 (host journal), host.err (host stderr), host-info.json (host versions, health sample, live sessions), app-info.json (app and OS versions), processes.txt (host process tree: pid, cpu, memory, executable name only), actions.jsonl (recent window-to-host calls with timings), host-*.cpuprofile (CPU profiles, open in Chrome DevTools > Performance > Load profile).',
+      '',
+      'Privacy: project paths and session or room names are included. Message text, terminal output, provider keys and environment variables are not.',
+      '',
+      'Send: attach this file to a GitHub issue at https://github.com/Kalmbik61/Parley/issues or to your message to the author.',
+    ].join('\n'),
   },
 
   /** Голосовой ввод (спека 2026-10-06-voice-input-design.md, раздел 3). */

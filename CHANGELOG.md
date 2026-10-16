@@ -6,6 +6,12 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+Parley can now package what it knows about its own slowness into one file, so a report about a slow window comes with evidence.
+
+### Added
+
+- **Diagnostics in the status bar.** One click saves a zip with host logs, a process list, request timings and an optional 20-second CPU profile of the host — attach it to an issue when Parley feels slow. The host journal now records where delays happen: session readiness, Chat sends, room mail delivery and the first reply.
+
 ### Fixed
 
 - **Compacting a Codex agent finishes on time.** The context chip stayed on "…" after Codex had already

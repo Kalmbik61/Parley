@@ -17,10 +17,19 @@ import { sessionTag } from '../lib/participant.js';
 
 export type SendOutcome = SendResult | { error: 'not_found' | 'failed'; message: string };
 
-/** Отказ вызова разбирает decodeIpcError (E.1): код not_found → not_found, прочее → failed. */
-export async function sendToAgent(bridge: ParleyBridge, ref: SessionRef, text: string, submit: boolean): Promise<SendOutcome> {
+/**
+ * Отказ вызова разбирает decodeIpcError (E.1): код not_found → not_found, прочее → failed.
+ * `requestedAt` — момент нажатия Send (очередь Chat): хост считает по нему `queueMs`; без него поля в вызове нет.
+ */
+export async function sendToAgent(
+  bridge: ParleyBridge,
+  ref: SessionRef,
+  text: string,
+  submit: boolean,
+  requestedAt?: number,
+): Promise<SendOutcome> {
   try {
-    return await bridge.call('pty.send', { ref, text, submit });
+    return await bridge.call('pty.send', { ref, text, submit, ...(requestedAt === undefined ? {} : { requestedAt }) });
   } catch (error) {
     const { code, message } = decodeIpcError(error);
     // Текст хоста — только в консоль, человеку — свой тост.

@@ -18,12 +18,14 @@ export interface RoomOutboxPayload {
   /** Упомянутые сессии; пусто — всем участникам. */
   to: string[];
   text: string;
+  /** Момент нажатия Send (мс эпохи): ставится при постановке в очередь, автоповтор его не меняет, ручной Retry ставит заново; хост считает по нему `queueMs`. */
+  requestedAt: number;
 }
 
 export async function attemptRoomSend(_key: string, item: OutboxItem<RoomOutboxPayload>): Promise<AttemptResult> {
-  const { bridge, projectPath, workId, roomId, to, text } = item.payload;
+  const { bridge, projectPath, workId, roomId, to, text, requestedAt } = item.payload;
   try {
-    const { messageId } = await bridge.call('rooms.send', { projectPath, workId, roomId, to, text, kind: 'note' });
+    const { messageId } = await bridge.call('rooms.send', { projectPath, workId, roomId, to, text, kind: 'note', requestedAt });
     return { kind: 'sent', keepAs: messageId };
   } catch (error) {
     // Не ушло (не участник, комната в архиве, тайм-аут `map.lock`, хост недоступен): человек узнаёт об этом тостом.

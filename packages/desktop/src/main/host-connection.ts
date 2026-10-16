@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { createConnection, type Socket } from 'node:net';
+import { performance } from 'node:perf_hooks';
 import type { HostPaths } from '@parley/host';
 import {
   COMPACT_WORKS_FEATURE,
@@ -17,10 +18,18 @@ import {
 } from '@parley/protocol';
 import type { HostStatus } from '../shared/bridge.js';
 import { S } from '../shared/strings.js';
+import { createRpcRing, type RpcRecord } from './diagnostics/rpc-ring.js';
 
 interface PendingCall {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  method: string;
+  /** Момент записи вызова в сокет, ISO. */
+  startedAt: string;
+  /** `performance.now()` в тот же момент: по нему считается возраст висящего вызова. */
+  startedMs: number;
+  /** `sessionId` из `params.ref`, если он есть. */
+  ref?: string;
 }
 
 /** Процесс хоста, запущенный окном: жив ли он ещё (раунд lane-r4). */
@@ -91,6 +100,15 @@ export class HostError extends Error {
   }
 }
 
+/** `params.ref.sessionId`, если параметры — объект с таким полем. */
+function sessionIdOf(params: unknown): string | undefined {
+  if (typeof params !== 'object' || params === null) return undefined;
+  const ref = (params as { ref?: unknown }).ref;
+  if (typeof ref !== 'object' || ref === null) return undefined;
+  const sessionId = (ref as { sessionId?: unknown }).sessionId;
+  return typeof sessionId === 'string' ? sessionId : undefined;
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -125,6 +143,8 @@ export class HostConnection {
   private loop: Promise<void> | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, PendingCall>();
+  /** Последние вызовы окна к хосту — для архива диагностики (`recentCalls`). */
+  private readonly rpcRing = createRpcRing();
   private readonly eventListeners = new Set<(message: EventMessage) => void>();
   private readonly statusListeners = new Set<(status: HostStatus) => void>();
   private status: HostStatus = { state: 'connecting' };
@@ -330,8 +350,10 @@ export class HostConnection {
     socket.on('error', () => {});
 
     const id = this.nextId++;
+    const startedAt = new Date().toISOString();
+    const startedMs = performance.now();
     const pendingPromise = new Promise<unknown>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { resolve, reject, method: 'hello', startedAt, startedMs });
     });
     // Обрыв посреди рукопожатия — отказ только этого `hello`: повторяет сама петля, статус и
     // текущий сокет не трогаются.
@@ -478,13 +500,57 @@ export class HostConnection {
   }
 
   async call(method: MethodName, params: unknown): Promise<unknown> {
-    if (!this.socket) throw new Error('no connection to host');
+    const ref = sessionIdOf(params);
+    const startedAt = new Date().toISOString();
+    if (!this.socket) {
+      // Отказ без сокета тоже виден в архиве диагностики: иначе «окно молчит» не отличить от «окно не звало».
+      this.rpcRing.push({ t: startedAt, method, ms: 0, ok: false, error: 'no-connection', ...(ref === undefined ? {} : { ref }) });
+      throw new Error('no connection to host');
+    }
     const id = this.nextId++;
+    const startedMs = performance.now();
     const promise = new Promise<unknown>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { resolve, reject, method, startedAt, startedMs, ...(ref === undefined ? {} : { ref }) });
     });
     this.socket.write(encodeLine({ id, method, params }));
-    return promise;
+    const record = (ok: boolean, error?: string): void => {
+      this.rpcRing.push({
+        t: startedAt,
+        method,
+        ms: performance.now() - startedMs,
+        ok,
+        ...(error === undefined ? {} : { error }),
+        ...(ref === undefined ? {} : { ref }),
+      });
+    };
+    try {
+      const result = await promise;
+      record(true);
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      record(false, error instanceof HostError ? error.code : message.slice(0, 120));
+      throw error;
+    }
+  }
+
+  /**
+   * Последние вызовы окна к хосту (до `RPC_RING_CAPACITY`), от старых к новым, и в конце по записи на каждый
+   * вызов, который ещё ждёт ответа (`error: 'pending'`, `ms` — возраст): зависший хост иначе в кольце не виден.
+   */
+  recentCalls(): RpcRecord[] {
+    const now = performance.now();
+    const hanging = [...this.pending.values()].map(
+      (call): RpcRecord => ({
+        t: call.startedAt,
+        method: call.method,
+        ms: Math.round(now - call.startedMs),
+        ok: false,
+        error: 'pending',
+        ...(call.ref === undefined ? {} : { ref: call.ref }),
+      }),
+    );
+    return [...this.rpcRing.entries(), ...hanging];
   }
 
   notify(method: NotificationName, params: unknown): void {

@@ -48,6 +48,7 @@ export const IMPLEMENTED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
   'attention.next',
   'wake.toggle',
   'host.restart',
+  'host.diagnostics',
   'appearance.system',
   'appearance.dark',
   'appearance.light',

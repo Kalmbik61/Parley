@@ -14,6 +14,7 @@ import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
+import { fakePty } from '../../test/fake-pty.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
@@ -243,6 +244,34 @@ describe('createPtyHandlers', () => {
     expect(outputEvents(client)).toHaveLength(0);
   });
 
+  it('dropClient снимает подписки клиента: attachedCount 0 и isAttached false', async () => {
+    const pty = fakePtyManager();
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+    const sessionRef = ref();
+    pty.markLive(sessionRef);
+    const gone = fakeClient();
+    const stays = fakeClient();
+
+    await handlers.ptyAttach({ ref: sessionRef }, requestOf(gone));
+    expect(handlers.attachedCount()).toBe(1);
+    expect(handlers.isAttached(sessionRef)).toBe(true);
+
+    handlers.dropClient(gone);
+    expect(handlers.attachedCount()).toBe(0);
+    expect(handlers.isAttached(sessionRef)).toBe(false);
+
+    // Второй клиент на той же сессии остаётся и после ухода первого.
+    await handlers.ptyAttach({ ref: sessionRef }, requestOf(gone));
+    await handlers.ptyAttach({ ref: sessionRef }, requestOf(stays));
+    expect(handlers.attachedCount()).toBe(2);
+    handlers.dropClient(gone);
+    expect(handlers.attachedCount()).toBe(1);
+    expect(handlers.isAttached(sessionRef)).toBe(true);
+    pty.emitOutput(sessionRef, 'остался один');
+    expect(outputEvents(stays)).toHaveLength(1);
+    expect(outputEvents(gone)).toHaveLength(0);
+  });
+
   it('backpressure: send()===false останавливает поток и шлёт pty.resync до нового attach', async () => {
     const pty = fakePtyManager();
     const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
@@ -267,6 +296,49 @@ describe('createPtyHandlers', () => {
     await handlers.ptyAttach({ ref: sessionRef }, requestOf(client));
     pty.emitOutput(sessionRef, 'снова течёт');
     expect(outputEvents(client)).toHaveLength(2);
+  });
+
+  it('недоставленный чанк пишет op pty.clientDropped с queuedBytes — один раз, поток остановлен', async () => {
+    const pty = fakePtyManager();
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks(), log });
+    const sessionRef = ref();
+    pty.markLive(sessionRef);
+
+    const client = { ...fakeClient(() => false), writableLength: () => 5_000_000 };
+    await handlers.ptyAttach({ ref: sessionRef }, requestOf(client));
+    pty.emitOutput(sessionRef, 'кусок который не помещается');
+    pty.emitOutput(sessionRef, 'этот уже не придёт');
+
+    expect(log.info).toHaveBeenCalledTimes(1);
+    expect(log.info).toHaveBeenCalledWith('клиент PTY отброшен', {
+      op: 'pty.clientDropped',
+      ref: sessionRef,
+      client: 'test',
+      queuedBytes: 5_000_000,
+    });
+  });
+
+  it('доставленные чанки журнал не пишут', async () => {
+    const pty = fakePtyManager();
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks(), log });
+    const sessionRef = ref();
+    pty.markLive(sessionRef);
+    await handlers.ptyAttach({ ref: sessionRef }, requestOf(fakeClient()));
+    pty.emitOutput(sessionRef, 'доставлено');
+    expect(log.info).not.toHaveBeenCalled();
+  });
+
+  it('без журнала в зависимостях отброс клиента не падает: pty.resync уходит как прежде', async () => {
+    const pty = fakePtyManager();
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+    const sessionRef = ref();
+    pty.markLive(sessionRef);
+    const client = fakeClient(() => false);
+    await handlers.ptyAttach({ ref: sessionRef }, requestOf(client));
+    expect(() => pty.emitOutput(sessionRef, 'не помещается')).not.toThrow();
+    expect(resyncEvents(client)).toHaveLength(1);
   });
 
   it('выход процесса убирает подписчиков сессии', async () => {
@@ -428,6 +500,72 @@ describe('pty.send и замок смены модели и effort', () => {
     expect(pty.manager.write).not.toHaveBeenCalled();
     release();
     await holding;
+  });
+});
+
+describe('pty.send пишет журнал задержек в журнал хоста запроса', () => {
+  it('отказ blocked (ни одного хука у сессии) пишет op pty.send с queueMs от requestedAt и enterMs null', async () => {
+    const pty = fakePtyManager();
+    pty.markLive(ref());
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const request: RequestInfo = { client: fakeClient(), host: { ...fakeHost(), log } };
+
+    await expect(
+      handlers.ptySend({ ref: ref(), text: 'hi', submit: true, requestedAt: Date.now() - 400 }, request),
+    ).resolves.toMatchObject({ inserted: false, reason: 'blocked' });
+
+    expect(log.info).toHaveBeenCalledTimes(1);
+    const [message, data] = log.info.mock.calls[0] as [string, Record<string, unknown>];
+    expect(message).toBe('сообщение в сессию');
+    expect(data).toMatchObject({ op: 'pty.send', ref: ref(), chars: 2, enterMs: null, outcome: 'blocked' });
+    expect(data.queueMs as number).toBeGreaterThanOrEqual(400);
+    expect(pty.manager.write).not.toHaveBeenCalled();
+  });
+});
+
+describe('pty.send ставит метку ленты feed.markSent', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Обработчики с живой сессией, у которой хуки уже были после запуска процесса: отправка идёт до Enter. */
+  function handlersWith(activityState: string) {
+    const fake = fakePty();
+    const feed = { markSent: vi.fn() };
+    const activity = {
+      ...fakeActivity(),
+      get: () => ({ activity: { activity: activityState, lastEventAt: new Date(1000).toISOString() } }),
+    } as unknown as ActivityService;
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: fake.manager, activity, works: fakeWorks(), feed });
+    return { handlers, feed };
+  }
+
+  it('submitted — markSent зовётся один раз с ref сессии', async () => {
+    vi.useFakeTimers();
+    const { handlers, feed } = handlersWith('idle');
+
+    const sent = handlers.ptySend({ ref: ref(), text: 'hi', submit: true }, requestOf(fakeClient()));
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(sent).resolves.toEqual({ inserted: true, submitted: true, reason: null });
+    expect(feed.markSent).toHaveBeenCalledTimes(1);
+    expect(feed.markSent).toHaveBeenCalledWith(ref());
+  });
+
+  it('отказ blocked и вставка без Enter — markSent не зовётся', async () => {
+    vi.useFakeTimers();
+    const blocked = handlersWith('blocked');
+    await expect(
+      blocked.handlers.ptySend({ ref: ref(), text: 'hi', submit: true }, requestOf(fakeClient())),
+    ).resolves.toMatchObject({ inserted: false, submitted: false, reason: 'blocked' });
+    expect(blocked.feed.markSent).not.toHaveBeenCalled();
+
+    const typed = handlersWith('idle');
+    await expect(
+      typed.handlers.ptySend({ ref: ref(), text: 'hi', submit: false }, requestOf(fakeClient())),
+    ).resolves.toEqual({ inserted: true, submitted: false, reason: null });
+    expect(typed.feed.markSent).not.toHaveBeenCalled();
   });
 });
 

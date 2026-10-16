@@ -481,6 +481,91 @@ describe('HostConnection', () => {
     }
   }, 10000);
 
+  it('recentCalls: успешный вызов записан с методом, ok и числовым ms', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(() => null), connectTimeoutMs: 1000 });
+    await connection.connect();
+    expect(connection.recentCalls()).toEqual([]);
+
+    await connection.call('host.shutdown', {});
+
+    const calls = connection.recentCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ method: 'host.shutdown', ok: true });
+    expect(typeof calls[0]?.ms).toBe('number');
+    expect(calls[0]?.ms).toBeGreaterThanOrEqual(0);
+    expect(Number.isNaN(Date.parse(calls[0]?.t ?? ''))).toBe(false);
+    expect(calls[0]).not.toHaveProperty('error');
+    expect(calls[0]).not.toHaveProperty('ref');
+
+    connection.close();
+    server.close();
+  });
+
+  it('recentCalls: вызов без ответа, отклонённый при закрытии соединения, записан с ok: false и ref', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(() => null), connectTimeoutMs: 1000 });
+    await connection.connect();
+
+    // Фейковый хост на pty.send не отвечает; host.shutdown следом закроет сокет, и handleClose отклонит ждущий вызов.
+    const hanging = connection.call('pty.send', { ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-7' }, text: 'x', submit: true });
+    const rejection = expect(hanging).rejects.toThrow(S.connection.reasonClosed);
+    await connection.call('host.shutdown', {});
+    await rejection;
+
+    const calls = connection.recentCalls();
+    expect(calls.map((c) => [c.method, c.ok])).toEqual([
+      ['host.shutdown', true],
+      ['pty.send', false],
+    ]);
+    expect(calls[1]).toMatchObject({ ref: 's-7', error: S.connection.reasonClosed.slice(0, 120) });
+    expect(typeof calls[1]?.ms).toBe('number');
+
+    connection.close();
+    server.close();
+  });
+
+  it('recentCalls: вызов без соединения записан с error no-connection', async () => {
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(() => null), connectTimeoutMs: 1000 });
+
+    await expect(
+      connection.call('pty.send', { ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-3' }, text: 'x', submit: true }),
+    ).rejects.toThrow('no connection to host');
+
+    const calls = connection.recentCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ method: 'pty.send', ms: 0, ok: false, error: 'no-connection', ref: 's-3' });
+    expect(Number.isNaN(Date.parse(calls[0]?.t ?? ''))).toBe(false);
+  });
+
+  it('recentCalls: висящий вызов виден как pending с возрастом, после закрытия — как обычный отказ', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(() => null), connectTimeoutMs: 1000 });
+    await connection.connect();
+
+    // Фейковый хост на pty.send не отвечает.
+    const hanging = connection.call('pty.send', { ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-9' }, text: 'x', submit: true });
+    const rejection = expect(hanging).rejects.toThrow(S.connection.reasonClosed);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const calls = connection.recentCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ method: 'pty.send', ok: false, error: 'pending', ref: 's-9' });
+    expect(calls[0]?.ms).toBeGreaterThanOrEqual(0);
+    expect(Number.isNaN(Date.parse(calls[0]?.t ?? ''))).toBe(false);
+
+    // host.shutdown закроет сокет, и handleClose отклонит ждущий вызов: висящих больше нет.
+    await connection.call('host.shutdown', {});
+    await rejection;
+    expect(connection.recentCalls().map((c) => c.error)).not.toContain('pending');
+
+    connection.close();
+    server.close();
+  });
+
   it('после close повторов нет: неудачный connect и close — хост позже не подключается (fix-final-b, M4)', async () => {
     await writeToken(paths);
     const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(() => null), connectTimeoutMs: 300 });

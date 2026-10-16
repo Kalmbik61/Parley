@@ -1,10 +1,14 @@
 import type { MethodName, NotificationName } from '@parley/protocol';
 import type { BacklogService } from '../backlog/backlog-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
+import type { Client } from '../client.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
 import type { CompactionService } from '../compaction/compaction-service.js';
 import { createCompactionMethods } from '../compaction/compaction-methods.js';
+import type { Profiler } from '../diagnostics/profiler.js';
 import type { FeedService } from '../feed/feed-service.js';
+import type { HealthService } from '../health/health-service.js';
+import type { Log } from '../log.js';
 import type { PlanEffectsService } from '../rooms/plan-effects.js';
 import type { HistoryService } from '../rooms/history-service.js';
 import { createRoomsUsage } from '../rooms/room-usage.js';
@@ -21,6 +25,7 @@ import { createCapabilitiesHandlers, createCapabilitiesList } from './capabiliti
 import { createBacklogHandlers } from './backlog.js';
 import { contextMessages, contextText } from './context-pages.js';
 import { createChangesHandlers } from './changes.js';
+import { createDiagnosticsHandlers } from './diagnostics.js';
 import { createFeedHandlers } from './feed.js';
 import { createHistoryHandlers } from './history.js';
 import { createJournalHandlers } from './journal.js';
@@ -82,6 +87,12 @@ export interface MethodDeps {
   compaction?: CompactionService;
   /** Явная проверка ключа Z.ai (`providers.check`); без неё метода нет, а в `providers.list` нет `check`. */
   glmCheck?: GlmCheckService;
+  /** Состояние хоста для `host.diagnostics`; методы диагностики регистрируются, только когда заданы и он, и `profiler`. */
+  health?: HealthService;
+  /** CPU-профиль по запросу (`host.profile.*`); без него (и без `health`) методов диагностики у хоста нет. */
+  profiler?: Profiler;
+  /** Журнал хоста для записей задержек, которые пишут не обработчики с `request.host.log` (`pty.clientDropped` в потоке PTY). */
+  log?: Log;
 }
 
 /**
@@ -130,6 +141,10 @@ export const WORKS_GATED_NOTIFICATIONS = ['activity.seen'] as const satisfies re
 export interface HostHandlers {
   methods: Partial<Record<MethodName, AnyHandler>>;
   notifications: Partial<Record<NotificationName, AnyNotificationHandler>>;
+  /** Счётчики для строки состояния хоста: таблица подписок PTY живёт в замыкании `createPtyHandlers`. */
+  counters: { ptyAttached(): number };
+  /** Клиент отключился: снимает его с подписок потока терминалов. */
+  dropClient(client: Client): void;
 }
 
 /**
@@ -250,6 +265,19 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     methods['feed.decide'] = feed.feedDecide as AnyHandler;
     methods['feed.interrupt'] = feed.feedInterrupt as AnyHandler;
   }
+  if (deps.health !== undefined && deps.profiler !== undefined) {
+    // Не в `WORKS_GATED_METHODS`: снимка работ диагностика не читает и должна отвечать, пока хост ещё стартует.
+    const diagnostics = createDiagnosticsHandlers({
+      health: deps.health,
+      profiler: deps.profiler,
+      pty: deps.pty,
+      activity: deps.activity,
+      isAttached: pty.isAttached,
+    });
+    methods['host.diagnostics'] = diagnostics.hostDiagnostics as AnyHandler;
+    methods['host.profile.start'] = diagnostics.profileStart as AnyHandler;
+    methods['host.profile.status'] = diagnostics.profileStatus as AnyHandler;
+  }
   const notifications: Partial<Record<NotificationName, AnyNotificationHandler>> = {
     'pty.input': pty.ptyInput as AnyNotificationHandler,
     'pty.resize': pty.ptyResize as AnyNotificationHandler,
@@ -279,5 +307,5 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     }
   }
 
-  return { methods, notifications };
+  return { methods, notifications, counters: { ptyAttached: pty.attachedCount }, dropClient: pty.dropClient };
 }
