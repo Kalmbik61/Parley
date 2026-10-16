@@ -30,6 +30,7 @@ import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { useDictationStore } from '../voice/dictation-store.js';
 import { resetCapabilitiesStoreForTests } from './capabilities-store.js';
+import { chatOutbox } from './chat-outbox.js';
 import { resetFeedStoreForTests, useFeedStore } from './store.js';
 import { resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
 import { resetThumbnailCacheForTests } from './use-thumbnail.js';
@@ -86,6 +87,7 @@ beforeEach(() => {
   sendDeps = { bridge, session: () => null, openSession: () => undefined };
   resetFeedStoreForTests();
   resetChatUiStoreForTests();
+  chatOutbox.resetForTests();
   resetCapabilitiesStoreForTests();
   resetThumbnailCacheForTests();
   hostWith(FEED_METHODS);
@@ -102,6 +104,7 @@ afterEach(() => {
   if (originalOffsetHeight !== undefined) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', originalOffsetHeight);
   resetFeedStoreForTests();
   resetChatUiStoreForTests();
+  chatOutbox.resetForTests();
   useHostStore.setState({ status: { state: 'connecting' } });
   useProvidersStore.setState({ providers: [], loaded: false });
   useActivityStore.setState({ byRef: {}, loaded: false });
@@ -346,7 +349,9 @@ describe('ChatView — поле ввода и тулбар', () => {
     fireEvent.keyDown(field(), { key: 'Enter' });
     expect(sends()).toEqual([{ ref: REF, text: 'first line', submit: true }]);
     expect(field().value).toBe('');
-    // Без хода — без серого элемента: промпт придёт хуком сразу.
+    // До ответа хоста — серый «Waiting»; ушло без хода — он уходит: промпт придёт хуком сам.
+    expect(screen.getByTestId('chat-queued').getAttribute('data-state')).toBe('waiting');
+    await act(async () => {});
     expect(screen.queryByTestId('chat-queued')).toBeNull();
     // Пустое поле Enter не отправляет.
     fireEvent.keyDown(field(), { key: 'Enter' });
@@ -378,13 +383,29 @@ describe('ChatView — поле ввода и тулбар', () => {
     expect(screen.getAllByTestId('chat-prompt')).toHaveLength(2);
   });
 
-  it('отказ отправки (busy) — серый элемент уходит', async () => {
-    bridge.setHandler('pty.send', () => ({ inserted: false, submitted: false, reason: 'busy' }));
-    renderBody(makeSession('s-01', 'S01'));
-    setFeed([prompt('p1', 'go')]);
-    type('later');
-    fireEvent.keyDown(field(), { key: 'Enter' });
-    await waitFor(() => expect(screen.queryByTestId('chat-queued')).toBeNull());
+  it('busy — серый «Waiting» остаётся без тоста, через секунду повтор; удачный — уходит', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      let busy = true;
+      bridge.setHandler('pty.send', () =>
+        busy ? { inserted: false, submitted: false, reason: 'busy' as const } : { inserted: true, submitted: true, reason: null },
+      );
+      renderBody(makeSession('s-01', 'S01'));
+      setFeed([prompt('p1', 'go'), turn('u1')]);
+      type('later');
+      fireEvent.keyDown(field(), { key: 'Enter' });
+      await act(async () => {});
+      expect(screen.getByTestId('chat-queued').getAttribute('data-state')).toBe('waiting');
+      expect(toast.error).not.toHaveBeenCalled();
+      busy = false;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(sends()).toHaveLength(2);
+      expect(screen.queryByTestId('chat-queued')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('Stop у хоста с feed.interrupt зовёт метод, а не шлёт Esc сам (живая проверка 2026-10-02)', async () => {
@@ -480,7 +501,7 @@ describe('ChatView — поле ввода и тулбар', () => {
     expect(screen.getByTestId('chat-queued').textContent).toContain('queued one');
   });
 
-  it('успешная отправка — без тоста «Sent to»; отказ busy — тост с Retry', async () => {
+  it('успешная отправка — без тоста «Sent to»; окончательный отказ — прежний тост', async () => {
     bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
     renderBody(makeSession('s-01', 'S01'));
     setFeed([]);
@@ -490,11 +511,11 @@ describe('ChatView — поле ввода и тулбар', () => {
     expect(toast).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
 
-    bridge.setHandler('pty.send', () => ({ inserted: false, submitted: false, reason: 'busy' }));
+    bridge.setHandler('pty.send', () => ({ inserted: false, submitted: false, reason: 'no-paste-mode' }));
     type('loud');
     fireEvent.keyDown(field(), { key: 'Enter' });
     await act(async () => {});
-    expect(vi.mocked(toast.error).mock.calls.map((call) => call[0])).toEqual([S.send.busy('S01')]);
+    expect(vi.mocked(toast.error).mock.calls.map((call) => call[0])).toEqual([S.send.noPasteMode('S01')]);
   });
 });
 
@@ -1246,7 +1267,8 @@ describe('ChatView — вложения в поле ввода (живая пр�
   };
   const sends = (): unknown[] => bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params);
   const imageData = { items: [{ kind: 'file', type: 'image/png' }], getData: () => '' };
-  const chips = (): HTMLElement[] => screen.queryAllByTestId('chat-attachment');
+  // Только чипы над полем ввода: серый элемент очереди в ленте тоже рисует упоминания чипами.
+  const chips = (): HTMLElement[] => within(screen.getByTestId('chat-composer')).queryAllByTestId('chat-attachment');
   const chipPaths = (): Array<string | null> => chips().map((chip) => chip.getAttribute('data-path'));
   const chip = (path: string): HTMLElement => {
     const found = chips().find((item) => item.getAttribute('data-path') === path);
@@ -1414,9 +1436,9 @@ describe('ChatView — вложения в поле ввода (живая пр�
     expect(field().value).toBe('');
     expect(chips()).toEqual([]);
     expect(document.activeElement).toBe(field());
-    // Без хода — без серого элемента: промпт придёт хуком сразу.
-    expect(screen.queryByTestId('chat-queued')).toBeNull();
+    // Без хода — серый «Waiting» уходит, как только хост ответил: промпт придёт хуком сразу.
     await act(async () => {});
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
   });
 
   it('одни вложения без текста отправляются: Send доступна, уходят только упоминания, Enter в пустом поле — то же', async () => {
@@ -1427,6 +1449,7 @@ describe('ChatView — вложения в поле ввода (живая пр�
     fireEvent.click(sendButton());
     expect(sends()).toEqual([{ ref: REF, text: '@"/a/b c.png" ', submit: true }]);
     expect(chips()).toEqual([]);
+    await act(async () => {});
     expect(sendButton().disabled).toBe(true);
 
     await attach('/a/d.txt');
@@ -1486,176 +1509,94 @@ describe('ChatView — вложения в поле ввода (живая пр�
   });
 });
 
-describe('ChatView — отказ отправки не теряет набранное', () => {
+describe('ChatView — очередь отправки', () => {
   const field = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: S.chat.composer.label }) as HTMLTextAreaElement;
   const type = (value: string): void => {
     fireEvent.change(field(), { target: { value } });
   };
-  const chipPaths = (): Array<string | null> => screen.queryAllByTestId('chat-attachment').map((chip) => chip.getAttribute('data-path'));
-  const KEY = refKey(REF);
-  /** Скрепка: диалог отвечает `paths`, чипы встают после ответа. */
-  async function attach(...paths: string[]): Promise<void> {
-    bridge.setChosenFiles(paths);
-    fireEvent.click(screen.getByTestId('chat-attach'));
-    await act(async () => {});
-  }
-  const draft = (): string => useChatUiStore.getState().drafts[KEY] ?? '';
-  const staged = (): readonly string[] => useChatUiStore.getState().attachments[KEY] ?? [];
+  const sentTexts = (): string[] =>
+    bridge.calls.filter((call) => call.method === 'pty.send').map((call) => (call.params as { text: string }).text);
+  const states = (): Array<string | null> => screen.queryAllByTestId('chat-queued').map((node) => node.getAttribute('data-state'));
 
-  /** Хост отвечает на `pty.send` исходом `outcome` не сразу: до `answer()` поле уже очищено, как у любой отправки. */
-  function holdSend(): { answer: (outcome: SendResult) => Promise<void> } {
-    let resolve!: (value: SendResult) => void;
-    bridge.setHandler(
-      'pty.send',
-      () =>
-        new Promise<SendResult>((done) => {
-          resolve = done;
-        }),
-    );
-    return {
-      answer: async (outcome) => {
-        resolve(outcome);
-        await act(async () => {});
-      },
-    };
-  }
-
-  it('поле и вложения очищаются сразу, до ответа хоста', async () => {
-    const send = holdSend();
+  it('окончательный отказ — поле пустое, серый «Not sent» с Retry и ×; Retry шлёт снова', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: false, submitted: false, reason: 'no-paste-mode' }));
     renderBody(makeSession('s-01', 'S01'));
     setFeed([]);
-    await attach('/a/notes.txt');
-    type('draft text');
-    fireEvent.keyDown(field(), { key: 'Enter' });
-    expect(field().value).toBe('');
-    expect(chipPaths()).toEqual([]);
-    expect(draft()).toBe('');
-    expect(staged()).toEqual([]);
-    await send.answer({ inserted: true, submitted: true, reason: null });
-  });
-
-  it.each(['blocked', 'busy', 'no-paste-mode'] as const)('хост ничего не вставил (%s) — текст и вложения вернулись в поле', async (reason) => {
-    const send = holdSend();
-    renderBody(makeSession('s-01', 'S01'));
-    setFeed([]);
-    await attach('/a/b c.png', '/a/notes.txt');
-    type('what is this?');
-    fireEvent.keyDown(field(), { key: 'Enter' });
-    expect(field().value).toBe('');
-    await send.answer({ inserted: false, submitted: false, reason });
-    // Вернулось набранное как есть: текст без упоминаний, вложения — чипами.
-    expect(field().value).toBe('what is this?');
-    expect(chipPaths()).toEqual(['/a/b c.png', '/a/notes.txt']);
-    expect(draft()).toBe('what is this?');
-    expect(staged()).toEqual(['/a/b c.png', '/a/notes.txt']);
-    // Тост отказа прежний: из поля его ничто не убирает.
-    expect(toast.error).toHaveBeenCalledTimes(1);
-  });
-
-  it('вернулось, и отправить можно снова — теперь удачно: поле пусто, вернуть больше нечего', async () => {
-    bridge.setHandler('pty.send', () => ({ inserted: false, submitted: false, reason: 'busy' }));
-    renderBody(makeSession('s-01', 'S01'));
-    setFeed([]);
-    type('again please');
+    type('важное');
     fireEvent.keyDown(field(), { key: 'Enter' });
     await act(async () => {});
-    expect(field().value).toBe('again please');
+    expect(field().value).toBe('');
+    const grey = screen.getByTestId('chat-queued');
+    expect(grey.getAttribute('data-state')).toBe('failed');
+    expect(grey.textContent).toContain(S.outbox.notSent);
     bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    fireEvent.click(within(grey).getByRole('button', { name: S.common.retry }));
+    await act(async () => {});
+    expect(sentTexts()).toEqual(['важное', 'важное']);
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
+  });
+
+  it('пока «Not sent» стоит, новые ждут за ним; × убирает его, и очередь идёт дальше', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: false, submitted: false, reason: 'no-paste-mode' }));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    type('first');
     fireEvent.keyDown(field(), { key: 'Enter' });
     await act(async () => {});
-    expect(field().value).toBe('');
-    expect(bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params)).toEqual([
-      { ref: REF, text: 'again please', submit: true },
-      { ref: REF, text: 'again please', submit: true },
-    ]);
-  });
-
-  it('ошибка вызова (хост недоступен, сессия не запущена) — тоже возврат', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    bridge.setHandler('pty.send', () => {
-      throw new Error('boom');
-    });
-    renderBody(makeSession('s-01', 'S01'));
-    setFeed([]);
-    await attach('/a/notes.txt');
-    type('lost?');
-    fireEvent.keyDown(field(), { key: 'Enter' });
-    await act(async () => {});
-    expect(field().value).toBe('lost?');
-    expect(chipPaths()).toEqual(['/a/notes.txt']);
-    vi.restoreAllMocks();
-  });
-
-  it('человек за это время начал новое сообщение — его текст не трогаем, прежнее не возвращается', async () => {
-    const send = holdSend();
-    renderBody(makeSession('s-01', 'S01'));
-    setFeed([]);
-    await attach('/a/old.txt');
-    type('first message');
-    fireEvent.keyDown(field(), { key: 'Enter' });
-    type('second, typed meanwhile');
-    await send.answer({ inserted: false, submitted: false, reason: 'blocked' });
-    expect(field().value).toBe('second, typed meanwhile');
-    // Вложения прежнего сообщения тоже не вернулись: возврат — всё или ничего.
-    expect(chipPaths()).toEqual([]);
-    expect(staged()).toEqual([]);
-  });
-
-  it('человек успел прикрепить файл (текст пуст) — поле занято: прежнее не возвращается', async () => {
-    const send = holdSend();
-    renderBody(makeSession('s-01', 'S01'));
-    setFeed([]);
-    type('first message');
-    fireEvent.keyDown(field(), { key: 'Enter' });
-    await attach('/a/new.txt');
-    await send.answer({ inserted: false, submitted: false, reason: 'busy' });
-    expect(field().value).toBe('');
-    expect(chipPaths()).toEqual(['/a/new.txt']);
-  });
-
-  it.each(['draft', 'input', 'blocked-before-enter', 'restarted'] as const)('вставлено без Enter (%s) — текст уже в поле ввода терминала: поле остаётся пустым', async (reason) => {
-    const send = holdSend();
-    renderBody(makeSession('s-01', 'S01'));
-    setFeed([]);
-    await attach('/a/notes.txt');
-    type('pasted without enter');
-    fireEvent.keyDown(field(), { key: 'Enter' });
-    await send.answer({ inserted: true, submitted: false, reason });
-    expect(field().value).toBe('');
-    expect(chipPaths()).toEqual([]);
-    expect(draft()).toBe('');
-    expect(staged()).toEqual([]);
-  });
-
-  it('успех — поле пустое; серый элемент очереди при отказе уходит, как и прежде', async () => {
     bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
-    renderBody(makeSession('s-01', 'S01'));
-    setFeed([]);
-    type('fine');
+    type('second');
     fireEvent.keyDown(field(), { key: 'Enter' });
     await act(async () => {});
-    expect(field().value).toBe('');
-
-    // Ход идёт, отказ busy: серого элемента нет, а набранное вернулось в поле.
-    bridge.setHandler('pty.send', () => ({ inserted: false, submitted: false, reason: 'busy' }));
-    setFeed([prompt('p1', 'go')]);
-    type('queued then refused');
-    fireEvent.click(screen.getByRole('button', { name: S.chat.composer.queue }));
-    await waitFor(() => expect(screen.queryByTestId('chat-queued')).toBeNull());
-    expect(field().value).toBe('queued then refused');
+    expect(sentTexts()).toEqual(['first']);
+    expect(states()).toEqual(['failed', 'waiting']);
+    fireEvent.click(screen.getByRole('button', { name: S.outbox.remove }));
+    await act(async () => {});
+    expect(sentTexts()).toEqual(['first', 'second']);
+    expect(states()).toEqual([]);
   });
 
-  it('вид размонтирован до ответа хоста — набранное возвращается в стор и ждёт нового монтирования', async () => {
-    const send = holdSend();
+  it('три сообщения подряд — pty.send строго по одному и по порядку; кнопка — Queue, пока очередь не пуста', async () => {
+    const answers: Array<(result: SendResult) => void> = [];
+    bridge.setHandler('pty.send', () => new Promise<SendResult>((resolve) => answers.push(resolve)));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    for (const text of ['one', 'two', 'three']) {
+      type(text);
+      fireEvent.keyDown(field(), { key: 'Enter' });
+    }
+    expect(sentTexts()).toEqual(['one']);
+    expect(screen.getAllByRole('button', { name: S.chat.composer.queue })).toHaveLength(1);
+    for (let index = 0; index < 3; index += 1) {
+      await act(async () => answers[index]?.({ inserted: true, submitted: true, reason: null }));
+    }
+    expect(sentTexts()).toEqual(['one', 'two', 'three']);
+    expect(screen.getAllByRole('button', { name: S.chat.composer.send })).toHaveLength(1);
+  });
+
+  it('вид размонтирован до ответа хоста — очередь всё равно доходит', async () => {
+    let answer: (result: SendResult) => void = () => undefined;
+    bridge.setHandler('pty.send', () => new Promise<SendResult>((resolve) => (answer = resolve)));
     const view = renderBody(makeSession('s-01', 'S01'));
     setFeed([]);
-    type('typed before leaving');
+    type('one');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    type('two');
     fireEvent.keyDown(field(), { key: 'Enter' });
     view.unmount();
-    await send.answer({ inserted: false, submitted: false, reason: 'blocked' });
-    expect(draft()).toBe('typed before leaving');
+    await act(async () => answer({ inserted: true, submitted: true, reason: null }));
+    expect(sentTexts()).toEqual(['one', 'two']);
+    await act(async () => answer({ inserted: true, submitted: true, reason: null }));
     renderBody(makeSession('s-01', 'S01'));
-    expect(field().value).toBe('typed before leaving');
+    expect(states()).toEqual([]);
+  });
+
+  it('Send again под своим сообщением — тот же текст уходит через очередь', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'again @"/a/b.txt" '), turn('u1')]);
+    fireEvent.click(within(screen.getByTestId('chat-prompt')).getByRole('button', { name: S.chat.actions.sendAgain }));
+    await act(async () => {});
+    expect(sentTexts()).toEqual(['again @"/a/b.txt" ']);
   });
 });
 
@@ -2021,5 +1962,117 @@ describe('ChatView — просмотр картинки из результат
     view.rerender(bodyOf(REF, { view: 'terminal' }));
     expect(screen.queryByTestId('chat-view')).toBeNull();
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe('ChatView — история ↑/↓ (спека 2026-10-16, 3.2)', () => {
+  const field = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: S.chat.composer.label }) as HTMLTextAreaElement;
+  const type = (value: string): void => {
+    fireEvent.change(field(), { target: { value } });
+  };
+  const key = (name: 'ArrowUp' | 'ArrowDown'): void => {
+    fireEvent.keyDown(field(), { key: name });
+  };
+  const chips = (): string[] =>
+    within(screen.getByTestId('chat-composer')).queryAllByTestId('chat-attachment').map((chip) => chip.getAttribute('data-path') ?? '');
+
+  /** Подсказки команд — как в блоке «подсказки поля ввода»: хост с `capabilities.list`, мост отдаёт команды. */
+  function withCommands(names: string[]): void {
+    hostWith([...FEED_METHODS, 'capabilities.list']);
+    bridge.setHandler('capabilities.list', () => ({
+      commands: names.map((name) => ({ name, description: name, terminal: false })),
+      skills: [],
+      agents: [],
+    }));
+    useProvidersStore.setState({
+      providers: [{ ...CLAUDE_OK, models: [{ id: 'opus', label: 'Opus' }, { id: 'sonnet', label: 'Sonnet' }] }],
+      loaded: true,
+    });
+    const session = makeSession('s-01', 'S01');
+    useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: '/tmp/p', sessions: [session] })], branches: {}, loading: false, error: null });
+  }
+
+  it('↑ в пустом поле — прошлые сообщения от новых к старым, ↓ — обратно, после самого нового — пусто', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'one'), turn('u1'), prompt('p2', 'two'), turn('u2')]);
+    key('ArrowUp');
+    expect(field().value).toBe('two');
+    key('ArrowUp');
+    expect(field().value).toBe('one');
+    key('ArrowUp');
+    expect(field().value).toBe('one');
+    key('ArrowDown');
+    expect(field().value).toBe('two');
+    key('ArrowDown');
+    expect(field().value).toBe('');
+  });
+
+  it('при любой длине истории n раз ↑ проходят её всю по порядку, n+1-й остаётся на самом старом', () => {
+    for (let count = 1; count <= 6; count += 1) {
+      const view = renderBody(makeSession('s-01', 'S01'));
+      const texts = Array.from({ length: count }, (_, index) => `m${index}`);
+      setFeed(texts.flatMap((text, index) => [prompt(`p${index}`, text), turn(`u${index}`)]));
+      const seen: string[] = [];
+      for (let index = 0; index <= count; index += 1) {
+        key('ArrowUp');
+        seen.push(field().value);
+      }
+      expect(seen).toEqual([...[...texts].reverse(), texts[0]]);
+      view.unmount();
+      useChatUiStore.getState().setDraft(refKey(REF), '');
+    }
+  });
+
+  it('вызванное начали править — ↑ больше не листает историю', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'one'), turn('u1'), prompt('p2', 'two'), turn('u2')]);
+    key('ArrowUp');
+    type('two!');
+    key('ArrowUp');
+    expect(field().value).toBe('two!');
+  });
+
+  it('непустой черновик — ↑ его не трогает', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'one'), turn('u1')]);
+    type('draft');
+    key('ArrowUp');
+    expect(field().value).toBe('draft');
+  });
+
+  it('открытые подсказки — ↑ их, а не история', async () => {
+    withCommands(['clear', 'compact']);
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'one'), turn('u1')]);
+    type('/');
+    await screen.findByRole('listbox');
+    key('ArrowUp');
+    expect(field().value).toBe('/');
+  });
+
+  it('вызванная команда «/compact» не открывает подсказки: следующее ↑ идёт дальше по истории', async () => {
+    withCommands(['clear', 'compact']);
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'one'), turn('u1'), prompt('p2', '/compact'), turn('u2')]);
+    // Подсказки команд на деле приходят: без них проверка «попап не открылся» прошла бы впустую.
+    type('/comp');
+    await screen.findByRole('listbox');
+    type('');
+    key('ArrowUp');
+    expect(field().value).toBe('/compact');
+    expect(screen.queryByRole('listbox')).toBeNull();
+    key('ArrowUp');
+    expect(field().value).toBe('one');
+  });
+
+  it('вложения вызванного сообщения встают чипами, текст — без путей', () => {
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'see @"/a/b.txt" '), turn('u1')]);
+    key('ArrowUp');
+    expect(field().value).toBe('see');
+    expect(chips()).toEqual(['/a/b.txt']);
+    key('ArrowDown');
+    expect(field().value).toBe('');
+    expect(chips()).toEqual([]);
   });
 });

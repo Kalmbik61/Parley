@@ -7,15 +7,14 @@
  * сессии для «просмотрено» и уведомлений (`attention/seen.ts`) ставит сам вид — как `TerminalSurface`.
  * Карточки разрешения, вопроса и плана — с кнопками (`cards/`, кусок 4a): решения уходят `feed.decide`.
  *
- * Ввод (решение 8): текст уходит `pty.send` с `submit: true` через `sendWithToast` — те же отказы и
- * тосты, что у отправки из комнаты и ревью. Отправленное во время хода показывается в ленте серым,
- * пока не придёт промпт с тем же текстом, или до отказа отправки. «Stop» — `feed.interrupt` хоста (Esc агенту и
- * присмотр за исходом); у хоста без метода — Esc в терминал (`pty.input`).
+ * Ввод (решение 8, очередь — спека 2026-10-16, 4.3): поле и вложения очищаются сразу, а сообщение встаёт в очередь
+ * окна (`chat-outbox.ts`) — серым «Waiting» в конце ленты — и уходит `pty.send` с Enter строго по одному. Очередь сама
+ * повторяет `busy` и `blocked`; окончательный отказ — «Not sent» с Retry и ×, тост прежний (`showSendToast`). Ушедшее
+ * во время хода — серый «Queued», пока не придёт промпт с тем же текстом. Поле больше не возвращает набранное: не
+ * ушедшее видно в ленте. Очередь живёт вне вида, поэтому переживает смену вида и вкладки.
+ * «Stop» — `feed.interrupt` хоста (Esc агенту и присмотр за исходом); у хоста без метода — Esc в терминал (`pty.input`).
  * Тоста «Sent to S01» в чате нет — отправленное видно в самой ленте; отказы и их тосты прежние.
- * Черновик и серые элементы живут в `ui-store.ts` по сессии и переживают смену вида и вкладки.
- * Поле и вложения очищаются сразу; если хост ничего не вставил (нет процесса, `blocked`, `busy`, `no-paste-mode`),
- * набранное возвращается — но только в поле, пустое к этому моменту: человек мог начать новое сообщение. Вставка без
- * Enter (`draft`, `input`, `blocked-before-enter`, `restarted`) ничего не возвращает: текст уже в поле ввода терминала.
+ * Черновик и серые «Queued» живут в `ui-store.ts` по сессии, очередь окна — в `lib/outbox.ts`; всё переживает смену вида и вкладки.
  *
  * Codex (спека 2026-10-07, 5.4): лента из журнала; меню модели, effort и режима — подписи; подсказок `/` нет;
  * вложения — списком путей, как в комнате.
@@ -79,12 +78,15 @@ import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import { NotRunningCard } from '../terminal/NotRunningCard.js';
 import { dragHasFiles } from '../terminal/drop.js';
-import { resumeSession, sendWithToast, type SendWithToastDeps } from '../terminal/send.js';
+import { resumeSession, type SendWithToastDeps } from '../terminal/send.js';
 import { composeRoomMessage } from '../components/rooms/attachments.js';
 import { ContextChip } from '../components/context/ContextChip.js';
 import { fitDefaultInstructions } from '../lib/context-format.js';
 import { addAttachments, composePrompt } from './attachments.js';
 import { ChatEnvContext, type ChatEnv } from './chat-env.js';
+import { chatOutbox, promptCount } from './chat-outbox.js';
+import { promptHistory } from './history.js';
+import { useOutboxItems } from '../lib/outbox.js';
 import { ChatToolbar, modeLabel, type ModeChoice } from './ChatToolbar.js';
 import { openAgentsPanel } from '../agents/open-agents.js';
 import { useCapabilitiesStore } from './capabilities-store.js';
@@ -171,14 +173,6 @@ function choiceFailed(method: string, action: string, error: unknown): void {
   toast.error(busy ? S.chat.choice.sessionBusy : errorText(code, action));
 }
 
-/** Номер серого элемента — общий на окно: элементы разных сессий живут в одном сторе. */
-let nextQueuedId = 0;
-
-function promptCount(items: readonly FeedItem[], text: string): number {
-  const wanted = text.trim();
-  return items.filter((item) => item.kind === 'prompt' && item.text.trim() === wanted).length;
-}
-
 function noteOf(feed: FeedEntry | null): string | null {
   if (feed?.status === 'error') return S.chat.feedUnavailable;
   if (feed === null || feed.status === 'loading') return S.chat.loading;
@@ -246,6 +240,15 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const draft = useChatUiStore((state) => state.drafts[sessionKey] ?? '');
   const attachments = useChatUiStore((state) => state.attachments[sessionKey] ?? NO_PATHS);
   const queued = useChatUiStore((state) => state.queued[sessionKey] ?? NO_QUEUED);
+  const outboxItems = useOutboxItems(chatOutbox, sessionKey);
+  const outbox = useMemo(
+    () => outboxItems.map((item) => ({ id: item.id, text: item.payload.text, failed: item.status === 'failed' })),
+    [outboxItems],
+  );
+  const history = useMemo(
+    () => promptHistory(items, [...queued.map((entry) => entry.text), ...outboxItems.map((item) => item.payload.text)]),
+    [items, queued, outboxItems],
+  );
   // Просьба показать карточку агента — только про эту сессию (бейдж в сайдбаре и комнате, тулбар); исполняет лента.
   const reveal = useChatUiStore((state) => (state.reveal?.sessionKey === sessionKey ? state.reveal : null));
   const clearReveal = useChatUiStore((state) => state.clearReveal);
@@ -263,27 +266,13 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     });
   }, [items, sessionKey]);
 
+  // Поле и вложения очищаются сразу; сообщение — в очередь окна (`chat-outbox.ts`): серым сразу, уходит строго по одному.
   const submit = (typed: string, paths: readonly string[]): void => {
-    const { updateQueued, setDraft, setAttachments } = useChatUiStore.getState();
+    const { setDraft, setAttachments } = useChatUiStore.getState();
     const text = codex ? composeRoomMessage(typed, paths) : composePrompt(typed, paths);
-    const id = String((nextQueuedId += 1));
-    if (active) updateQueued(sessionKey, (was) => [...was, { id, text, seen: promptCount(items, text) }]);
-    // Поле очищается сразу, как в любом чате; хост ничего не вставил — набранное вернётся (ниже).
     setDraft(sessionKey, '');
     if (paths.length > 0) setAttachments(sessionKey, []);
-    void sendWithToast(sendDeps, sessionRef, text, true, { silentSuccess: true }).then((outcome) => {
-      if (!('error' in outcome) && outcome.submitted) return;
-      // Отказ или вставка без Enter: в очередь CLI сообщение не попало.
-      updateQueued(sessionKey, (was) => (was.some((entry) => entry.id === id) ? was.filter((entry) => entry.id !== id) : was));
-      // Вставка без Enter (`draft`, `input`, `blocked-before-enter`, `restarted`) — текст уже в поле ввода терминала.
-      if (!('error' in outcome) && outcome.inserted) return;
-      // Ничего не вставлено (нет процесса, `blocked`, `busy`, `no-paste-mode`): набранное не должно пропасть. Человек за
-      // это время мог начать новое сообщение — его поле не трогаем.
-      const now = useChatUiStore.getState();
-      if ((now.drafts[sessionKey] ?? '') !== '' || (now.attachments[sessionKey] ?? NO_PATHS).length > 0) return;
-      setDraft(sessionKey, typed);
-      if (paths.length > 0) setAttachments(sessionKey, paths);
-    });
+    chatOutbox.enqueue(sessionKey, { ref: sessionRef, text, deps: sendDeps });
   };
 
   const setMode = (mode: ModeChoice): void => {
@@ -390,7 +379,18 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const showTerminal = (): void => {
     useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tab.id, { view: 'terminal' }));
   };
-  const env = useMemo<ChatEnv>(() => ({ bridge, sessionRef, workKey, tabId: tab.id }), [bridge, sessionKey, workKey, tab.id]);
+  const env = useMemo<ChatEnv>(
+    () => ({
+      bridge,
+      sessionRef,
+      workKey,
+      tabId: tab.id,
+      resend: (text: string) => {
+        chatOutbox.enqueue(sessionKey, { ref: sessionRef, text, deps: sendDeps });
+      },
+    }),
+    [bridge, sessionKey, workKey, tab.id, sendDeps],
+  );
 
   return (
     <ChatEnvContext.Provider value={env}>
@@ -449,6 +449,9 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           <FeedList
             items={items}
             queued={queued}
+            outbox={outbox}
+            onRetryOutbox={(id) => chatOutbox.retry(sessionKey, id)}
+            onRemoveOutbox={(id) => chatOutbox.remove(sessionKey, id)}
             note={noteOf(feed)}
             {...(feed?.status === 'error' ? { onRetry: () => useFeedStore.getState().retry(sessionRef) } : {})}
             {...(showWorking ? { working: { since: turnStart } } : {})}
@@ -469,6 +472,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           </div>
         ) : null}
         <Composer
+          history={history}
           source={suggestionSource}
           slashCommands={!codex}
           codex={codex}
@@ -476,7 +480,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           onPasteImage={pasteImage}
           dictationId={`chat:${sessionKey}`}
           bridge={bridge}
-          busy={active}
+          busy={active || outboxItems.length > 0}
           visible={visible}
           text={draft}
           onTextChange={(text) => useChatUiStore.getState().setDraft(sessionKey, text)}
