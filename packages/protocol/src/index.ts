@@ -140,5 +140,6 @@ export type {
   BrowserAgentOp,
   BrowserAgentOpEvent,
   BrowserAgentOpenResult,
+  BrowserAgentOwner,
   BrowserAgentResult,
 } from './browser-agent.js';

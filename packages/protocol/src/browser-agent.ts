@@ -43,14 +43,24 @@ export const AGENT_LIMITS = {
   requestBytes: 65_536,
 } as const;
 
-/** Пределы ввода агента, которых нет в таблице спеки: длина адреса — та же, что у журнала вкладки (`DEVTOOLS_LIMITS.url`). */
-export const AGENT_INPUT = { url: 4096 } as const;
+/** Пределы ввода агента, которых нет в таблице спеки: длина адреса — та же, что у журнала вкладки (`DEVTOOLS_LIMITS.url`); `room` — id комнаты. */
+export const AGENT_INPUT = { url: 4096, room: 64 } as const;
 
-/** Событие хоста окну. `label` — короткий номер сессии (`S02`) для тоста окна и журнала. */
+/**
+ * Хозяин браузера, доступный сессии (спека 3.10): сама сессия или комната её работы. Форма та же, что у `BrowserOwner`
+ * окна (`desktop/src/shared/layout-types.ts`); протокол от desktop не зависит, поэтому тип здесь свой.
+ */
+export type BrowserAgentOwner = { kind: 'session'; sessionId: string } | { kind: 'room'; roomId: string };
+
+/**
+ * Событие хоста окну. `label` — короткий номер сессии (`S02`) для тоста окна и журнала. `owners` — хозяева, которыми
+ * сессия может пользоваться на момент операции (спека 3.7, 3.10): она сама и комнаты её работы, где она участник.
+ */
 export interface BrowserAgentOpEvent {
   opId: string;
   ref: SessionRef;
   label: string;
+  owners: BrowserAgentOwner[];
   op: BrowserAgentOp;
   args: unknown;
 }
@@ -61,7 +71,14 @@ export type BrowserAgentResult =
 
 /** Схемы аргументов по операциям; хост проверяет до окна, main окна — у себя. */
 export const browserAgentArgs = {
-  open: z.strictObject({ url: z.string().min(1).max(AGENT_INPUT.url) }),
+  // `own` и `room` вместе — отказ (спека 5.1): куда открыть, агент называет одним способом.
+  open: z
+    .strictObject({
+      url: z.string().min(1).max(AGENT_INPUT.url),
+      own: z.boolean().optional(),
+      room: z.string().min(1).max(AGENT_INPUT.room).optional(),
+    })
+    .refine((args) => !(args.own === true && args.room !== undefined), { message: 'pass either own or room, not both' }),
 } satisfies Record<BrowserAgentOp, z.ZodType>;
 
 export type BrowserAgentArgs<O extends BrowserAgentOp> = z.infer<(typeof browserAgentArgs)[O]>;
@@ -90,6 +107,8 @@ export const browserAgentResultParams = z.union([
  */
 export interface BrowserAgentOpenResult {
   tab: string;
+  /** Чей браузер получил страницу (правило выбора — спека 5.1). */
+  owner: BrowserAgentOwner;
   url: string;
   reused: boolean;
   notes: string[];

@@ -9,7 +9,7 @@ import {
   browserAgentRequest,
   browserAgentResultParams,
 } from './browser-agent.js';
-import type { BrowserAgentOpEvent, BrowserAgentOpenResult } from './browser-agent.js';
+import type { BrowserAgentOpEvent, BrowserAgentOpenResult, BrowserAgentOwner } from './browser-agent.js';
 import type { EventData } from './events.js';
 import * as protocol from './index.js';
 import { METHODS } from './methods.js';
@@ -33,9 +33,9 @@ describe('канал агента к браузеру: константы (сп�
     ]);
   });
 
-  it('пределы: 30 с на операцию, 10 с окну на вкладку, 64 КБ на запрос; адрес до 4096 знаков', () => {
+  it('пределы: 30 с на операцию, 10 с окну на вкладку, 64 КБ на запрос; адрес до 4096 знаков, id комнаты до 64', () => {
     expect(AGENT_LIMITS).toEqual({ opMs: 30_000, openMs: 10_000, requestBytes: 65_536 });
-    expect(AGENT_INPUT).toEqual({ url: 4096 });
+    expect(AGENT_INPUT).toEqual({ url: 4096, room: 64 });
   });
 
   it('индекс пакета отдаёт имена канала', () => {
@@ -62,6 +62,17 @@ describe('схема аргументов open', () => {
       { url: 'http://localhost/', workKey: '/p w-2' },
     ]) {
       expect(ok(bad), JSON.stringify(bad).slice(0, 60)).toBe(false);
+    }
+  });
+
+  it('own и room: булево и id комнаты по отдельности проходят, вместе — отказ (спека 5.1)', () => {
+    const url = 'http://localhost:5173/';
+    expect(ok({ url, own: true })).toBe(true);
+    expect(ok({ url, own: false, room: 'r-01' })).toBe(true);
+    expect(ok({ url, room: 'r-01' })).toBe(true);
+    expect(ok({ url, own: true, room: 'r-01' })).toBe(false);
+    for (const bad of [{ url, own: 'yes' }, { url, room: '' }, { url, room: 'r'.repeat(65) }, { url, room: 7 }]) {
+      expect(ok(bad), JSON.stringify(bad)).toBe(false);
     }
   });
 
@@ -95,6 +106,7 @@ describe('метод browser.agentResult и событие browser.agentOp', () 
     expectTypeOf<Result<'browser.agentResult'>>().toEqualTypeOf<{ accepted: boolean }>();
     expectTypeOf<EventData<'browser.agentOp'>>().toEqualTypeOf<BrowserAgentOpEvent>();
     expectTypeOf<Params<'browser.agentResult'>>().toMatchTypeOf<{ opId: string }>();
-    expectTypeOf<BrowserAgentOpenResult>().toEqualTypeOf<{ tab: string; url: string; reused: boolean; notes: string[] }>();
+    expectTypeOf<BrowserAgentOpenResult>().toEqualTypeOf<{ tab: string; owner: BrowserAgentOwner; url: string; reused: boolean; notes: string[] }>();
+    expectTypeOf<BrowserAgentOpEvent['owners']>().toEqualTypeOf<BrowserAgentOwner[]>();
   });
 });
