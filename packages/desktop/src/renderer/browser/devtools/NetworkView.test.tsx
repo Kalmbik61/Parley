@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { NetworkEntry } from '../../../shared/browser-devtools.js';
 import { networkEntry } from '../../test-utils/devtools-fixtures.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
@@ -131,5 +131,48 @@ describe('NetworkView (спека 4.4)', () => {
     seed({ network: [] });
     renderView();
     expect(screen.getByText('No requests')).toBeTruthy();
+  });
+});
+
+describe('NetworkView: тесный вид (спека 4.11, ширина меньше ~480 px)', () => {
+  /** Подмена ResizeObserver: тест сам сообщает ширину вида. */
+  function withWidth(width: number): void {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(private readonly callback: ResizeObserverCallback) {}
+        observe(): void {
+          this.callback([{ contentRect: { width } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+        }
+        disconnect(): void {}
+        unobserve(): void {}
+      },
+    );
+  }
+  const headers = (): string[] => [...document.querySelectorAll('[data-testid="network-header"] > span')].map((node) => node.textContent ?? '');
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('в 400 px остаются Status, Name и Size; Method, Type и Time скрыты', () => {
+    withWidth(400);
+    seed();
+    act(() => renderView());
+    expect(document.querySelector('[data-testid="network-view"]')?.getAttribute('data-tight')).toBe('true');
+    expect(headers()).toEqual(['Status', 'Name', 'Size']);
+  });
+
+  it('в 320 px то же: Name не вырождается — он единственный растяжимый столбец', () => {
+    withWidth(320);
+    seed();
+    act(() => renderView());
+    expect(headers()).toEqual(['Status', 'Name', 'Size']);
+  });
+
+  it('в 600 px таблица прежняя: шесть столбцов', () => {
+    withWidth(600);
+    seed();
+    act(() => renderView());
+    expect(document.querySelector('[data-testid="network-view"]')?.getAttribute('data-tight')).toBe('false');
+    expect(headers()).toHaveLength(6);
   });
 });
