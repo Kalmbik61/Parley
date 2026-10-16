@@ -269,3 +269,39 @@ describe('handleAgentOpenTab — ответ окна на browser:agent-open-tab
     expect(handleAgentOpenTab(event('http://localhost:4000/', CHAT, '/tmp/other'))).toEqual({ error: 'no_work' });
   });
 });
+
+describe('тост агента «Show» (спека браузера 5.1, 5.2)', () => {
+  const event = (url: string, owner: BrowserOwner = CHAT) => ({ requestId: 'r1', workKey: KEY, url, sessionId: 's-01', session: 'S02', owner });
+  const lastToast = (): [string, { action: { label: string; onClick: () => void } }] =>
+    vi.mocked(toast).mock.calls.at(-1) as unknown as [string, { action: { label: string; onClick: () => void } }];
+
+  it('вид хозяина на экране — тоста нет', () => {
+    usePanelRuntime.getState().mountHost(panelRuntimeKey(KEY, CHAT), false);
+    handleAgentOpenTab(event('http://localhost:5173/app'));
+    expect(toast).not.toHaveBeenCalled();
+    usePanelRuntime.getState().unmountHost(panelRuntimeKey(KEY, CHAT));
+  });
+
+  it('вида нет — тост «S02 opened localhost:5173» с кнопкой «Show»; открытие ничего не переключает', () => {
+    const before = layoutNow();
+    handleAgentOpenTab(event('http://localhost:5173/app?x=1'));
+    const [message, options] = lastToast();
+    expect(message).toBe('S02 opened localhost:5173');
+    expect(options.action.label).toBe('Show');
+    expect(layoutNow().activeGroupId).toBe(before.activeGroupId);
+    expect(findTab(layoutNow(), 'browser:aaaaaa')).not.toBeNull();
+  });
+
+  it('«Show» делает работу активной, вкладку хозяина — активной в группе, панель открытой, страницу — активной', () => {
+    const first = handleAgentOpenTab(event('http://localhost:5173/')) as { tabId: string };
+    const firstToast = lastToast();
+    handleAgentOpenTab(event('http://localhost:5174/'));
+    closePanel(KEY, CHAT);
+    useLayoutStore.setState({ activeWorkKey: '/tmp/other' });
+    firstToast[1].action.onClick();
+    expect(useLayoutStore.getState().activeWorkKey).toBe(KEY);
+    expect(panelNow()?.open).toBe(true);
+    expect(panelNow()?.active).toBe(first.tabId);
+    expect(findTab(layoutNow(), 'terminal:s-01')?.group.activeTabId).toBe('terminal:s-01');
+  });
+});

@@ -140,8 +140,41 @@ export function openAgentPage(workKey: string, owner: BrowserOwner, url: string)
 export function handleAgentOpenTab(event: AgentOpenTab): AgentOpenTabResult {
   const result = openAgentPage(event.workKey, event.owner, event.url);
   if (!result.ok) return { error: result.reason === 'limit' ? 'limit' : 'no_work' };
-  const mounted = usePanelRuntime.getState().hosts[panelRuntimeKey(event.workKey, event.owner)] !== undefined;
+  const key = panelRuntimeKey(event.workKey, event.owner);
+  const runtime = usePanelRuntime.getState();
+  const mounted = runtime.hosts[key] !== undefined;
+  if (!mounted) {
+    const { workKey, owner } = event;
+    toast(S.browser.panel.agentOpened(event.session, shortAddress(event.url)), {
+      action: { label: S.browser.panel.agentShow, onClick: () => showPanelPage(workKey, owner, result.pageId) },
+    });
+  }
   return { tabId: result.pageId, reused: result.reused, mounted };
+}
+
+/** Адрес для тоста: хост с портом, без схемы, пути и параметров (`http://localhost:5173/app?x=1` → `localhost:5173`). */
+function shortAddress(url: string): string {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Кнопка «Show» тоста агента (спека браузера 5.1, 5.2): клик человека — единственное, что переводит его к странице агента.
+ * Работа становится активной, вкладка хозяина — активной в своей группе (если она открыта), панель открывается, страница
+ * в ней активна. Самого открытия страницы агентом это не касается: оно ничего из этого не делает.
+ */
+export function showPanelPage(workKey: string, owner: BrowserOwner, pageId: string): void {
+  const store = useLayoutStore.getState();
+  store.setActiveWork(workKey);
+  run(workKey, (layout) => {
+    const tabId = ownerTabId(owner);
+    const focused = findTab(layout, tabId) === null ? layout : focusTab(layout, tabId);
+    return setPanelOpen(activatePanelPage(focused, owner, pageId), owner, true);
+  });
+  usePanelRuntime.getState().touch(panelRuntimeKey(workKey, owner));
 }
 
 /**

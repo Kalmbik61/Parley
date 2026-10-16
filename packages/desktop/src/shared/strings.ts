@@ -1609,6 +1609,9 @@ export const S = {
       /** Пункт «⋯» вкладки браузера человека: страница переезжает в браузер сессии или комнаты. */
       moveTo: 'Move to browser of…',
       moved: (name: string): string => `Moved to the browser of ${name}`,
+      /** Тост, когда агент открыл страницу, а вид хозяина не на экране; «Show» переводит человека к ней. */
+      agentOpened: (session: string, address: string): string => `${session} opened ${address}`,
+      agentShow: 'Show',
     },
   },
 
