@@ -10,7 +10,8 @@
  * страницы при эмуляции — размер вида × DPR, а не размер на экране: `scale` его не уменьшает (Mobile M 2x даёт
  * 750×1624). Это пригодится снимку этапа C.
  *
- * `withTemporary` — снимок агента в другом размере: размер и поле вкладки для возврата лежат в `state`.
+ * `withTemporary` — снимок агента в другом размере: временный размер шлётся прямо в CDP и в `state` не пишется, `state` —
+ * всегда размер человека. Применения на одну вкладку идут по одному (цепочка промисов), `set` человека ждёт конца снимка.
  */
 import { MOBILE_USER_AGENT, viewportSize, type ViewportSpec } from '../../shared/browser-devtools.js';
 import type { CdpMethod, Inspector } from './inspector.js';
@@ -84,15 +85,33 @@ export interface Emulation {
 }
 
 export function createEmulation(deps: { inspector: Pick<Inspector, 'send'> }): Emulation {
+  /** Размер и поле человека. Временный размер снимка сюда не попадает никогда. */
   const state = new Map<number, { spec: ViewportSpec; area: ViewportArea }>();
+  /** Хвост применений CDP каждой вкладки: `set` и `withTemporary` идут по одному, в порядке вызова. */
+  const chains = new Map<number, Promise<unknown>>();
+  function serial<T>(id: number, work: () => Promise<T>): Promise<T> {
+    const result = (chains.get(id) ?? Promise.resolve()).then(work);
+    const tail = result.then(() => undefined, () => undefined);
+    chains.set(id, tail);
+    void tail.then(() => {
+      if (chains.get(id) === tail) chains.delete(id);
+    });
+    return result;
+  }
+  /** Команды по одной и по порядку; отказ — отказ всей цепочки. */
+  async function apply(id: number, commands: EmulationCommand[]): Promise<void> {
+    for (const { method, params } of commands) await deps.inspector.send(id, method, params);
+  }
   const emulation: Emulation = {
-    async set(id, spec, area, deviceScaleFactor) {
-      const { commands, scale } = viewportCommands(spec, area, deviceScaleFactor);
-      // По одной и по порядку. Отказ — отказ set; прежний размер остаётся в state.
-      for (const { method, params } of commands) await deps.inspector.send(id, method, params);
-      if (spec === null) state.delete(id);
-      else state.set(id, { spec: copySpec(spec), area: { width: area.width, height: area.height } });
-      return { scale };
+    set(id, spec, area, deviceScaleFactor) {
+      return serial(id, async () => {
+        const { commands, scale } = viewportCommands(spec, area, deviceScaleFactor);
+        // Отказ — отказ set; прежний размер остаётся в state.
+        await apply(id, commands);
+        if (spec === null) state.delete(id);
+        else state.set(id, { spec: copySpec(spec), area: { width: area.width, height: area.height } });
+        return { scale };
+      });
     },
     current(id) {
       const entry = state.get(id);
@@ -101,24 +120,22 @@ export function createEmulation(deps: { inspector: Pick<Inspector, 'send'> }): E
     forget(id) {
       state.delete(id);
     },
-    async withTemporary(id, spec, run, deviceScaleFactor) {
-      const before = state.get(id); // размер и поле человека; при Fit записи нет
-      const { width, height } = viewportSize(spec);
-      const same = (a: ViewportSpec | null, b: ViewportSpec | null): boolean => JSON.stringify(a) === JSON.stringify(b);
-      try {
-        // Поле равно размеру — scale 1: страница снимается в полный размер, а не вписанной во вкладку.
-        await emulation.set(id, spec, { width, height }, deviceScaleFactor);
-        return await run();
-      } finally {
-        // Человек сменил размер во время снимка — его выбор не трогаем. Временный не встал (сбой `set`, команды могли
-        // лечь частично) — повторить прежний.
-        const now = state.get(id)?.spec ?? null;
-        if (same(now, spec) || same(now, before?.spec ?? null)) {
-          await emulation
-            .set(id, before?.spec ?? null, before?.area ?? { width, height })
-            .catch((error: unknown) => console.warn('[parley] emulation restore failed', error));
+    withTemporary(id, spec, run, deviceScaleFactor) {
+      return serial(id, async () => {
+        const { width, height } = viewportSize(spec);
+        try {
+          // Поле равно размеру — scale 1: страница снимается в полный размер, а не вписанной во вкладку. `state` не трогаем.
+          await apply(id, viewportCommands(spec, { width, height }, deviceScaleFactor).commands);
+          return await run();
+        } finally {
+          // Размер и поле человека — на этот момент: пока цепочка держит вкладку, `set` человека ждёт и ложится следом. Записи
+          // нет (Fit) — эмуляция снимается, даже если временный размер не встал (команды могли лечь частично).
+          const human = state.get(id);
+          await apply(id, viewportCommands(human?.spec ?? null, human?.area ?? { width, height }).commands).catch((error: unknown) =>
+            console.warn('[parley] emulation restore failed', error),
+          );
         }
-      }
+      });
     },
   };
   return emulation;

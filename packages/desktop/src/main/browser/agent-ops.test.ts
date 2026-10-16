@@ -11,6 +11,7 @@ import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistra
 import { workKey } from '../../shared/work-keys.js';
 import { PANEL_LIMITS } from '../../renderer/layout/tree.js';
 import { pngSize } from './png.js';
+import { createEmulation } from './emulation.js';
 import { captureSpec, createAgentOps, loopbackHref, NOT_MOUNTED_NOTE, type AgentOps } from './agent-ops.js';
 
 const REF = { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' };
@@ -1115,5 +1116,75 @@ describe('срок операции и очередь (R1, R6, R13, R14)', () =>
     });
     const result = await ctx.runOp('network', { tab: 't1', requestId: 'r1' });
     expect(codeOf(result)).toBe('tab_not_loaded');
+  });
+});
+
+describe('тайм-аут и немедленный повтор с настоящей эмуляцией (Фокус ревью, п. 5; reviewer-probes/race1.ts)', () => {
+  it('тайм-аут и немедленный повтор: у человека прежний laptop 2x', async () => {
+    const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+    const log: string[] = [];
+    let metrics = { width: 1280, height: 800 };
+    let shots = 0;
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const inspector = {
+      snapshot: (): DevtoolsSnapshot => EMPTY,
+      responseBody: async () => null,
+      send: vi.fn(async (_id: number, method: string, params?: Record<string, unknown>): Promise<unknown> => {
+        if (method === 'Emulation.setDeviceMetricsOverride') {
+          metrics = { width: params?.['width'] as number, height: params?.['height'] as number };
+          log.push(`metrics ${metrics.width}x${metrics.height} dpr ${String(params?.['deviceScaleFactor'])}`);
+        }
+        if (method === 'Emulation.clearDeviceMetricsOverride') {
+          metrics = { width: 1280, height: 800 };
+          log.push('clear');
+        }
+        if (method === 'Page.getLayoutMetrics') {
+          return {
+            layoutViewport: { clientWidth: metrics.width, clientHeight: metrics.height },
+            cssLayoutViewport: { clientWidth: metrics.width, clientHeight: metrics.height, pageX: 0, pageY: 0 },
+            cssContentSize: { x: 0, y: 0, width: metrics.width, height: metrics.height },
+          };
+        }
+        if (method === 'Page.captureScreenshot') {
+          shots += 1;
+          if (shots === 1) await held;
+          return { data: png(metrics.width, metrics.height).toString('base64') };
+        }
+        return {};
+      }),
+    };
+    const emulation = createEmulation({ inspector });
+    const guest = fakeGuest(7);
+    const ops = createAgentOps({
+      agentsAllowed: async () => true,
+      openTab: () => true,
+      fromId: () => guest as unknown as WebContents,
+      inspector,
+      emulation,
+      saveImage: async () => '/drops/x.png',
+      image: { resize: (_data: Buffer, width: number, height: number) => png(width, height), stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data },
+      inGuest: async () => undefined,
+      activity: (e: AgentActivity) => {
+        if (e.capture !== undefined) queueMicrotask(() => ops.captureReady((e.capture as { id: string }).id));
+      },
+      opTimeoutMs: 100,
+    });
+    register(ops, {});
+    const human: ViewportSpec = { preset: 'laptop', rotated: false, dpr: 2 };
+    await emulation.set(7, human, { width: 900, height: 600 });
+    log.length = 0;
+    const call = (width: number, height: number): Promise<BrowserAgentResult> =>
+      ops.run({ opId: 'x', ref: REF, label: 'S02', owners: [{ kind: 'session', sessionId: 's-02' }], op: 'screenshot', args: { tab: 't1', width, height } });
+    expect(codeOf(await call(1000, 700))).toBe('timeout');
+    const second = call(600, 500);
+    await sleep(30);
+    expect(log).toEqual(['metrics 1000x700 dpr 1']);
+    release();
+    expect(codeOf(await second)).toBe('ok');
+    await sleep(20);
+    expect(emulation.current(7)).toEqual(human);
+    // Последняя команда размера — размер человека (laptop 1280×800, DPR 2), а не размер снимка.
+    expect(log.filter((entry) => entry.startsWith('metrics')).at(-1)).toBe('metrics 1280x800 dpr 2');
   });
 });
