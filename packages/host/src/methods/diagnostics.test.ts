@@ -96,7 +96,7 @@ describe('host.diagnostics (спека A2)', () => {
 describe('host.profile.* (спека A5)', () => {
   it('host.profile.start без seconds зовёт profiler.start(20), с seconds — как есть', async () => {
     const running: ProfileStatus = { state: 'running', startedAt: '2026-10-16T10:00:00.000Z', seconds: 20 };
-    const start = vi.fn((_seconds?: number): ProfileStatus => running);
+    const start = vi.fn<(seconds?: number) => ProfileStatus>(() => running);
     const handlers = handlersOf({ start });
     await expect(handlers.profileStart({}, undefined as never)).resolves.toEqual(running);
     expect(start).toHaveBeenLastCalledWith(20);
