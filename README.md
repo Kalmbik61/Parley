@@ -18,7 +18,11 @@ See "The window" for details. On top of the coordination there is a project laye
 `PARLEY.md`, roles, plans with a backlog, room recipes, decisions, memory and search, a
 Capabilities panel and a skill navigator (on by default); see "The project layer".
 
-https://github.com/user-attachments/assets/68458a1e-add3-4533-9b82-77a37030d52b
+
+
+https://github.com/user-attachments/assets/ba828466-0c53-4565-aedf-e1e3f8f3f988
+
+
 
 ## Install
 
@@ -84,13 +88,13 @@ not come back for that version; a newer one shows it again. "Later" only closes 
 returns with the next check or the next start. Nothing is downloaded or installed, and a network
 error is silent. A window started from source (`pnpm dev:desktop`) does not check at all.
 
-To update, quit Parley (⌘Q), download the new `.dmg` and replace Parley in Applications; your
+To update, quit Parley (⌘Q; this stops the host and its sessions, see "The window"), download the new `.dmg` and replace Parley in Applications; your
 data lives outside the app and stays. Because the app is signed ad hoc, macOS treats every build
 as a new app: the "First launch" steps repeat for each downloaded `.dmg`, and macOS may ask again
 for access to folders such as Documents, Desktop and Downloads.
 
-Then open Parley and restart the host. The window notices that the host still runs from the
-previous app and says so: a notice with "Restart host…" and "Host is outdated — restart" in the
+If you only closed the window instead of quitting,
+the host still runs from the previous app: open Parley and restart it. The window notices that and says so: a notice with "Restart host…" and "Host is outdated — restart" in the
 status bar (the palette, ⌘J, has "Restart host…" too). The host outlives the window, and the
 agents it started keep command lines that point into the old app: the status line script, the
 MCP server and, with "Answer Codex approvals in Parley" on, the Codex hook launcher. The replacement can remove those files (the folder
@@ -332,6 +336,13 @@ window starts the host itself, with the Node 22 inside the app (when you run fro
 build without `fetch-node`, with the `node` from your login shell's `PATH`), and does not start
 a second one while the `host.pid` lock is held. The host exits by itself after 5 minutes with
 no windows and no live sessions. A second launch of the window focuses the first.
+
+Closing the window leaves the agents working. Quitting the app (Quit in the Dock menu, ⌘Q)
+stops the host and every session: it first asks, with the number of running sessions, and with
+no live sessions it quits without a question. A host that does not answer within 10 seconds is
+stopped by its pid. A system restart or shutdown asks nothing and stops the host at once. The
+next launch lists the interrupted sessions so you can bring them back; they do not restart on
+their own.
 
 The look of the window is Organic: a sand background, terracotta and sage accents, the
 Figtree and Caprasimo fonts, shadcn/ui primitives. The terminal sits on the window sheet (its
@@ -918,9 +929,10 @@ When an agent finishes a turn and you have not looked at its session in Parley y
 keeps it as a "Done" row: a green dot, the session name, when the turn ended and the first lines of
 the agent's last reply, and the pill adds "✅ N done". A row goes away when you look at that session
 in Parley (the window focused, the tab visible for about a second), when the agent starts working
-again, or with the quiet **Clear** under the list, which hides the rows on the island only. A row
-you have just seen in Parley stays until the pointer leaves the island or it tucks away. The
-"finished" system notification is unchanged.
+again, or with the quiet **Clear** under the list, which hides the rows and marks those sessions as
+seen in Parley too (the green "unseen" dot in the sidebar goes away). A row you have just seen in
+Parley stays until the pointer leaves the island or it tucks away. The "finished" system
+notification is unchanged.
 
 When an agent asks for permission, asks a question or brings a plan, the island opens a card by
 itself, without switching to Parley:

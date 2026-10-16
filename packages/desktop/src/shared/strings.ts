@@ -238,6 +238,69 @@ export const S = {
     ignore: { 'parley-gitignore-custom': 'The project has a custom state ignore file. Check that the shared history is tracked by Git.',
       'parley-dir-ignored': 'The project state folder is ignored by Git, so the shared history stays local.' },
   },
+  usage: {
+    title: 'Token usage',
+    since: 'Since each member joined',
+    sessionScope: 'This session, all time',
+    columns: ['In', 'Out', 'Cache read', 'Cache write'],
+    total: 'Total',
+    lead: 'lead',
+    partial: 'partial',
+    snapshot: 'snapshot',
+    stale: 'stale',
+    notAvailable: 'n/a',
+    left: (iso: string): string => `left ${new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+    sharedWith: (rooms: readonly string[]): string => `shared with ${rooms.join(', ')}`,
+    logMissing: 'n/a — log not found',
+    sessionDeleted: 'n/a — session deleted',
+    notStarted: 'not started',
+    footnote: 'Tokens, not money or plan limit. Providers count tokens differently.',
+    legend: '`?` — not reported.',
+    reconstructed: 'Membership before usage tracking is partly reconstructed.',
+    updated: (iso: string): string => `Updated ${new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+    markdownTitle: (title: string, roomId: string): string => `Room “${title}” (${roomId}) — token usage`,
+    copy: 'Copy',
+    copied: 'Copied',
+    unavailable: 'Usage unavailable',
+    counting: 'Counting…',
+  },
+  /** Заполненность контекста и сжатие (спека 2026-10-15, 3). Инструкции по умолчанию — текст для агента. */
+  context: {
+    marks: { unknown: '—', pending: '⏳', running: '…', compacted: 'compacted', asleep: 'asleep' },
+    tooltip: {
+      tokens: (used: string, window: string): string => `Context: ${used} of ${window} tokens`,
+      percent: (percent: string): string => `Context: ${percent} used`,
+      unknown: 'No context data yet',
+      pending: 'Compaction queued — runs when the agent is free',
+      running: 'Compacting…',
+      compacted: 'Compacted — waiting for the next update',
+    },
+    title: (label: string): string => `Context · ${label}`,
+    roomTitle: 'Context',
+    roomChip: (value: string): string => `Ctx ${value}`,
+    numbers: (used: string, window: string, percent: string): string => `${used} of ${window} tokens · ${percent}`,
+    instructionsLabel: 'Focus instructions',
+    codexNoFocus: 'Codex compacts without focus',
+    compact: 'Compact',
+    compactAll: 'Compact all',
+    cancel: 'Cancel',
+    compacting: 'Compacting…',
+    compactAction: 'compact the context',
+    cancelAction: 'cancel the compaction',
+    refusedAsleep: (label: string): string => `${label} is asleep — nothing to compact`,
+    refusedUnknownScreen: (label: string): string =>
+      `Can't compact ${label} yet — it hasn't reported since launch. Check its terminal.`,
+    allResult: (started: number, queued: number, skipped: number): string =>
+      [
+        `Compacting ${started} ${started === 1 ? 'agent' : 'agents'}`,
+        ...(queued > 0 ? [`${queued} queued`] : []),
+        ...(skipped > 0 ? [`${skipped} skipped`] : []),
+      ].join(' · '),
+    roomDefault: (title: string): string =>
+      `Focus on room "${title}": the human's task, decisions made, open questions, who owns what, and files touched. Drop details unrelated to this room.`,
+    sessionDefault: (name: string): string =>
+      `Focus on "${name}": the current task, decisions made, open questions, and files touched. Drop unrelated details.`,
+  },
   roles: {
     readOnly: 'Read only', unavailable: 'Role unavailable', providerLocked: 'Native roles use their own provider',
     option: (name: string, source: 'builtin' | 'claude' | 'codex'): string => `${name} · ${{ builtin: 'Builtin', claude: 'Claude', codex: 'Codex' }[source]}`,
@@ -288,6 +351,25 @@ export const S = {
     retry: 'Retry',
     copy: 'Copy',
     send: 'Send',
+  },
+
+  /** Очередь отправки окна (спека 2026-10-16, 4): серые элементы Chat и комнаты. */
+  outbox: {
+    sending: 'Sending…',
+    waiting: 'Waiting',
+    notSent: 'Not sent',
+    remove: 'Remove',
+  },
+
+  /** Выход из приложения останавливает хост (решение 2026-10-16): вопрос системным диалогом. */
+  quit: {
+    title: 'Quit Parley?',
+    detail: (count: number | null): string =>
+      count === null
+        ? "The host isn't responding. It will be stopped together with all its sessions. They won't restart on their own — the next launch lists them so you can bring them back."
+        : `The host will stop and ${count} running ${count === 1 ? 'session' : 'sessions'} will be terminated. They won't restart on their own — the next launch lists them so you can bring them back.`,
+    stop: (count: number | null): string =>
+      count === null ? 'Stop host and Quit' : `Stop ${count} ${count === 1 ? 'session' : 'sessions'} and Quit`,
   },
 
   /**
@@ -1189,6 +1271,8 @@ export const S = {
     hideTranscript: 'Hide transcript',
     /** Серый элемент ленты: сообщение ушло в очередь CLI во время хода. */
     queued: 'Queued — the agent reads it when the turn ends',
+    /** Строка действий под сообщением (спека 2026-10-16, 3.1). */
+    actions: { copy: 'Copy', copied: 'Copied', sendAgain: 'Send again' },
     composer: {
       label: 'Message to Claude',
       placeholder: 'Message Claude — Enter to send',
@@ -1697,6 +1781,7 @@ export const S = {
     pauseAutoWake: 'Pause auto-wake',
     resumeAutoWake: 'Resume auto-wake',
     restartHost: 'Restart host…',
+    diagnostics: 'Save diagnostics…',
     themeSystem: 'Theme: system',
     themeDark: 'Theme: dark',
     themeLight: 'Theme: light',
@@ -1795,6 +1880,7 @@ export const S = {
     actions: {
       loadProviders: 'load providers',
       refreshProviderLimits: 'refresh provider limits',
+      saveDiagnostics: 'save diagnostics',
       saveProviderKey: 'save the provider key',
       checkProviderKey: 'check the GLM key',
       removeProviderKey: 'remove the provider key',
@@ -1955,6 +2041,28 @@ export const S = {
     layoutError: "Couldn't show layout",
   },
 
+  /** Диагностика хоста (спека 2026-10-16-host-diagnostics-and-load-design.md): сегмент строки статуса (A1) и `README.txt` внутри zip (A2). */
+  diagnostics: {
+    segment: 'Diagnostics',
+    save: 'Save diagnostics',
+    profile: 'Record 20-second profile, then save',
+    saving: 'Saving…',
+    profiling: (left: number): string => `Profiling ${left} s…`,
+    hint: 'Includes host logs, process list and timings. No message text, terminal output or keys. The file is saved to Downloads; attach it to a GitHub issue.',
+    hostOutdated: 'Host is outdated — restart it for full diagnostics',
+    saved: 'Diagnostics saved',
+    showInFinder: 'Show in Finder',
+    readme: [
+      'Parley diagnostics bundle',
+      '',
+      'Contents: host.log and host.log.1 (host journal), host.err (host stderr), host-info.json (host versions, health sample, live sessions), app-info.json (app and OS versions), processes.txt (host process tree: pid, cpu, memory, executable name only), actions.jsonl (recent window-to-host calls with timings), host-*.cpuprofile (CPU profiles, open in Chrome DevTools > Performance > Load profile).',
+      '',
+      'Privacy: project paths and session or room names are included. Message text, terminal output, provider keys and environment variables are not.',
+      '',
+      'Send: attach this file to a GitHub issue at https://github.com/Kalmbik61/Parley/issues or to your message to the author.',
+    ].join('\n'),
+  },
+
   /** Голосовой ввод (спека 2026-10-06-voice-input-design.md, раздел 3). */
   voice: {
     setUp: 'Set up voice input',
@@ -2065,6 +2173,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'resume-limit': 'hourly resume limit reached — messages are waiting',
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
+  'codex-call-wait': 'stuck in a Codex tool call — Codex may be waiting for an approval in its terminal',
   'skill-foreign': "agent skill not installed — that path already exists and wasn't created by Parley",
   'parley-md-created': 'Parley added PARLEY.md — team rules for your agents',
   'parley-md-unreadable': "PARLEY.md couldn't be read — this session starts without its project rules",
@@ -2076,6 +2185,8 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'plan-effect-failed': 'plan delivery or export is pending — open the plan and retry after resolving the conflict',
   'role-truncated': 'role text was cut at 32 KB — shorten the role to include the remainder',
   'recipe-playbook-truncated': 'recipe playbook was cut at 32 KB — shorten the playbook to include the remainder',
+  'compact-cancelled': 'compaction cancelled — the agent stopped',
+  'compact-failed': "compaction didn't go through — check the agent's terminal",
   'snapshot-too-large': 'workspace data is too large to show — delete or archive old workspaces',
 };
 

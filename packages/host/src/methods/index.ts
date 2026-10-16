@@ -2,10 +2,17 @@ import type { BrowserAgentResult, MethodName, NotificationName, Params } from '@
 import type { BrowserEndpoint } from '../agent/browser-endpoint.js';
 import type { BacklogService } from '../backlog/backlog-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
+import type { Client } from '../client.js';
 import type { AnyHandler, AnyNotificationHandler, RequestInfo } from '../context.js';
+import type { CompactionService } from '../compaction/compaction-service.js';
+import { createCompactionMethods } from '../compaction/compaction-methods.js';
+import type { Profiler } from '../diagnostics/profiler.js';
 import type { FeedService } from '../feed/feed-service.js';
+import type { HealthService } from '../health/health-service.js';
+import type { Log } from '../log.js';
 import type { PlanEffectsService } from '../rooms/plan-effects.js';
 import type { HistoryService } from '../rooms/history-service.js';
+import { createRoomsUsage } from '../rooms/room-usage.js';
 import type { GlmCheckService } from '../limits/glm-check.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { CodexCatalog } from '../providers/codex-catalog.js';
@@ -19,6 +26,7 @@ import { createCapabilitiesHandlers, createCapabilitiesList } from './capabiliti
 import { createBacklogHandlers } from './backlog.js';
 import { contextMessages, contextText } from './context-pages.js';
 import { createChangesHandlers } from './changes.js';
+import { createDiagnosticsHandlers } from './diagnostics.js';
 import { createFeedHandlers } from './feed.js';
 import { createHistoryHandlers } from './history.js';
 import { createJournalHandlers } from './journal.js';
@@ -76,10 +84,18 @@ export interface MethodDeps {
   codexCatalog?: CodexCatalog;
   /** Лимиты подписок (`providers.list`); без них у провайдеров `limits: null`. */
   limits?: LimitsService;
+  /** Сжатие контекста по клику человека (спека 2026-10-15); без него методов сжатия у хоста нет. */
+  compaction?: CompactionService;
   /** Явная проверка ключа Z.ai (`providers.check`); без неё метода нет, а в `providers.list` нет `check`. */
   glmCheck?: GlmCheckService;
   /** Канал агента к браузеру окна (спека браузера 3.7): ответ окна `browser.agentResult`; без него метода нет. */
   browserAgent?: Pick<BrowserEndpoint, 'resolve'>;
+  /** Состояние хоста для `host.diagnostics`; методы диагностики регистрируются, только когда заданы и он, и `profiler`. */
+  health?: HealthService;
+  /** CPU-профиль по запросу (`host.profile.*`); без него (и без `health`) методов диагностики у хоста нет. */
+  profiler?: Profiler;
+  /** Журнал хоста для записей задержек, которые пишут не обработчики с `request.host.log` (`pty.clientDropped` в потоке PTY). */
+  log?: Log;
 }
 
 /**
@@ -108,6 +124,8 @@ export const WORKS_GATED_METHODS = [
   'sessions.interrupted',
   'sessions.setMode',
   'sessions.setEffort',
+  'sessions.compact',
+  'sessions.cancelCompact',
   'sessions.setModel',
   'sessions.resumeInterrupted',
   'pty.attach',
@@ -126,6 +144,10 @@ export const WORKS_GATED_NOTIFICATIONS = ['activity.seen'] as const satisfies re
 export interface HostHandlers {
   methods: Partial<Record<MethodName, AnyHandler>>;
   notifications: Partial<Record<NotificationName, AnyNotificationHandler>>;
+  /** Счётчики для строки состояния хоста: таблица подписок PTY живёт в замыкании `createPtyHandlers`. */
+  counters: { ptyAttached(): number };
+  /** Клиент отключился: снимает его с подписок потока терминалов. */
+  dropClient(client: Client): void;
 }
 
 /**
@@ -147,6 +169,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const worktrees = createWorktreesHandlers(deps);
   const changes = createChangesHandlers(deps);
   const capabilities = createCapabilitiesHandlers();
+
+  const compaction = deps.compaction === undefined ? null : createCompactionMethods(deps.compaction);
 
   const methods: Partial<Record<MethodName, AnyHandler>> = {
     ...createBacklogHandlers(deps.backlog),
@@ -185,6 +209,12 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'sessions.interrupted': sessions.sessionsInterrupted as AnyHandler,
     'sessions.setMode': sessions.sessionsSetMode as AnyHandler,
     'sessions.setEffort': sessions.sessionsSetEffort as AnyHandler,
+    ...(compaction === null
+      ? {}
+      : {
+          'sessions.compact': compaction.compact as AnyHandler,
+          'sessions.cancelCompact': compaction.cancel as AnyHandler,
+        }),
     'sessions.setModel': sessions.sessionsSetModel as AnyHandler,
     'sessions.resumeInterrupted': sessions.sessionsResumeInterrupted as AnyHandler,
     'wake.pause': wake.wakePause as AnyHandler,
@@ -197,6 +227,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'rooms.delete': roomsDelete as AnyHandler,
     'rooms.archive': createRoomsArchive(deps.sessions) as AnyHandler,
     'rooms.reopen': roomsReopen as AnyHandler,
+    'rooms.usage': createRoomsUsage(deps.works, deps.activity) as AnyHandler,
     'rooms.resolveProposal': (async (params, request) => {
       const result = await roomsResolveProposal(params, request);
       // The decision is committed. Delivery failure retains pending effects and its safe notice.
@@ -244,6 +275,19 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
       return { accepted: endpoint.resolve(params.opId, result, request.client) };
     }) as AnyHandler;
   }
+  if (deps.health !== undefined && deps.profiler !== undefined) {
+    // Не в `WORKS_GATED_METHODS`: снимка работ диагностика не читает и должна отвечать, пока хост ещё стартует.
+    const diagnostics = createDiagnosticsHandlers({
+      health: deps.health,
+      profiler: deps.profiler,
+      pty: deps.pty,
+      activity: deps.activity,
+      isAttached: pty.isAttached,
+    });
+    methods['host.diagnostics'] = diagnostics.hostDiagnostics as AnyHandler;
+    methods['host.profile.start'] = diagnostics.profileStart as AnyHandler;
+    methods['host.profile.status'] = diagnostics.profileStatus as AnyHandler;
+  }
   const notifications: Partial<Record<NotificationName, AnyNotificationHandler>> = {
     'pty.input': pty.ptyInput as AnyNotificationHandler,
     'pty.resize': pty.ptyResize as AnyNotificationHandler,
@@ -273,5 +317,5 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     }
   }
 
-  return { methods, notifications };
+  return { methods, notifications, counters: { ptyAttached: pty.attachedCount }, dropClient: pty.dropClient };
 }

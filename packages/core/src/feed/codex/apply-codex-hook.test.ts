@@ -76,6 +76,38 @@ describe('applyCodexHookEvent', () => {
     expect(update.state.items.filter((item) => item.kind === 'turn')).toHaveLength(1);
   });
 
+  // Разбор 2026-10-16: запрос одобрения приходит из ячейки code mode, а она живёт дольше хода. Снятая на конце хода
+  // карточка отдавала хуку `{}`, Codex уходил в своё окно одобрения в TUI, и каждый следующий `exec` ждал его без срока.
+  const askedInTurn = () => {
+    const started = applyCodexRecords(
+      emptyFeedState(),
+      [{ ordinal: 1, at: AT, type: 'event_msg', payload: { type: 'task_started' } }],
+      emptyCodexCursor(),
+    );
+    const asked = run(
+      [{ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'pnpm test' } }],
+      started.update.state,
+    );
+    return { asked, cursor: started.cursor };
+  };
+  const permissionOf = (state: FeedState) => state.items.find((item) => item.kind === 'permission') as FeedPermissionCard;
+
+  it('Stop закрывает ход, но ждущая карточка разрешения остаётся pending', () => {
+    const { asked } = askedInTurn();
+    const stopped = applyCodexHookEvent(asked, { hook_event_name: 'Stop', last_assistant_message: 'ok' }, AT);
+    expect(stopped.state.items.filter((item) => item.kind === 'turn')).toHaveLength(1);
+    expect(permissionOf(stopped.state).state).toBe('pending');
+    expect(stopped.changes.some((item) => item.kind === 'permission')).toBe(false);
+  });
+
+  it.each(['task_complete', 'turn_aborted'])('%s журнала закрывает ход, но ждущая карточка остаётся pending', (type) => {
+    const { asked, cursor } = askedInTurn();
+    const { update } = applyCodexRecords(asked, [{ ordinal: 2, at: AT, type: 'event_msg', payload: { type } }], cursor);
+    expect(update.state.items.filter((item) => item.kind === 'turn')).toHaveLength(1);
+    expect(permissionOf(update.state).state).toBe('pending');
+    expect(update.changes.some((item) => item.kind === 'permission')).toBe(false);
+  });
+
   it('незнакомое событие — без изменений', () => {
     expect(applyCodexHookEvent(emptyFeedState(), { hook_event_name: 'Nope' }, AT).changes).toEqual([]);
   });

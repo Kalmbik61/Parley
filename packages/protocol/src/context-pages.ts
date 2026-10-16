@@ -10,6 +10,8 @@ import type { Message, PageInfo, TextPage } from '@parley/core';
  * сокращены, итоги и счётчики — в `map.compact`). Клиент без неё получает прежний полный снимок, пока тот влезает в кадр.
  */
 export const COMPACT_WORKS_FEATURE = 'compact-works';
+/** Предел инструкции сжатия, знаков (UTF-16): общий для хоста и окна (спека 2026-10-15, 5.3). */
+export const COMPACT_MAX_INSTRUCTIONS = 350;
 
 /**
  * Прежний полный снимок отдаётся клиенту без `compact-works`, только если он не больше этого размера: кадр

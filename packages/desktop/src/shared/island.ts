@@ -4,7 +4,7 @@
  * браузер, голос, отложенная цель клика) острову не даётся.
  */
 
-import type { EventName } from '@parley/protocol';
+import type { EventName, SessionRef } from '@parley/protocol';
 import type { FocusTarget, ParleyBridge } from './bridge.js';
 import type { IslandAnchor } from './ui-types.js';
 
@@ -48,6 +48,12 @@ export interface IslandApi {
   /** Показать главное окно (создать, если закрыто) и открыть в нём цель. */
   open(target: FocusTarget): void;
   beep(): void;
+  /**
+   * Clear: сессии строк Done просмотрены. Остров хосту уведомлений не шлёт (`host:notify` от него отбрасывается), поэтому
+   * для этого есть узкий канал `island:mark-seen`: main проверяет список и шлёт хосту `activity.seen`, как главное окно, когда
+   * видит сессию, — в Parley гаснет «непросмотрено».
+   */
+  markSeen(refs: SessionRef[]): void;
   /** Отрисовка острова упала: main снимает признак «страница загружена» (уведомления снова идут) и прячет окно. */
   failed(): void;
 }
@@ -66,3 +72,13 @@ export const ISLAND_EVENTS: ReadonlySet<EventName> = new Set<EventName>(['works.
 
 /** Провайдеры вне острова (решение 2026-10-12): Codex — системными уведомлениями, как раньше. */
 export const ISLAND_EXCLUDED_PROVIDERS: ReadonlySet<string> = new Set(['codex']);
+
+/** Сколько ссылок на сессии принимает одно «просмотрено» острова (`island:mark-seen`); main отбрасывает список длиннее. */
+export const ISLAND_MARK_SEEN_LIMIT = 50;
+
+/** Ссылки для «просмотрено» порциями не длиннее `ISLAND_MARK_SEEN_LIMIT`: длинный Clear уходит несколькими сообщениями. */
+export function markSeenBatches(refs: readonly SessionRef[]): SessionRef[][] {
+  const batches: SessionRef[][] = [];
+  for (let at = 0; at < refs.length; at += ISLAND_MARK_SEEN_LIMIT) batches.push(refs.slice(at, at + ISLAND_MARK_SEEN_LIMIT));
+  return batches;
+}

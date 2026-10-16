@@ -17,7 +17,8 @@
  *
  * Раскрытые вызовы и карточки агентов, а также транскрипты субагентов лента помнит по `id`: строку вне
  * экрана виртуальный список размонтирует, и своё состояние элемента пропало бы. В конце — серые
- * сообщения из очереди (`queued`, решение 8). Несколько агентов подряд — стопкой: между ними отступ меньше.
+ * сообщения из очереди (`queued`, решение 8), за ними — очередь окна
+ * (`outbox`, спека 2026-10-16). Несколько агентов подряд — стопкой: между ними отступ меньше.
  *
  * Строка элемента — `memo`: дельта ленты сохраняет ссылки нетронутых элементов (`applyDelta`), а
  * обработчики раскрытия стабильны, поэтому дельта, меняющая один текст, перерисовывает одну строку.
@@ -55,11 +56,24 @@ export interface QueuedPrompt {
   text: string;
 }
 
-type Row = { key: string; item: FeedItem } | { key: string; queued: QueuedPrompt };
+/** Сообщение в очереди окна (`chat-outbox.ts`): ждёт отправки или не ушло. */
+export interface OutboxPrompt {
+  id: string;
+  text: string;
+  failed: boolean;
+}
+
+const NO_OUTBOX: readonly OutboxPrompt[] = [];
+
+type Row = { key: string; item: FeedItem } | { key: string; queued: QueuedPrompt } | { key: string; outbox: OutboxPrompt };
 
 export interface FeedListProps {
   items: readonly FeedItem[];
   queued: readonly QueuedPrompt[];
+  /** Очередь окна — после «Queued»: ждёт отправки (`waiting`) или не ушло (`failed`, с Retry и ×). */
+  outbox?: readonly OutboxPrompt[];
+  onRetryOutbox?: (id: string) => void;
+  onRemoveOutbox?: (id: string) => void;
   /** Подпись пустой ленты: загрузка, пусто, ошибка; `null` — не нужна. */
   note: string | null;
   /** Есть — рядом с подписью кнопка «Retry» (лента не загрузилась). */
@@ -134,12 +148,13 @@ const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, 
   }
 });
 
-export function FeedList({ items, queued, note, onRetry, working, reveal, onRevealed }: FeedListProps): JSX.Element {
+export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onRemoveOutbox, note, onRetry, working, reveal, onRevealed }: FeedListProps): JSX.Element {
   const latest = items.at(-1);
   const activeRetry = latest?.kind === 'error' && latest.retry !== undefined && latest.retry.resolved !== true ? latest : null;
   const rows: Row[] = [
     ...items.map((item) => ({ key: item.id, item })),
     ...queued.map((entry) => ({ key: `queued:${entry.id}`, queued: entry })),
+    ...outbox.map((entry) => ({ key: `outbox:${entry.id}`, outbox: entry })),
   ];
   // Прокрутчик — элементом в состоянии: виртуализатор должен увидеть его уже при монтировании.
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
@@ -274,8 +289,15 @@ export function FeedList({ items, queued, note, onRetry, working, reveal, onReve
                       onToggle={toggle}
                       onTranscript={updateTranscript}
                     />
+                  ) : 'queued' in row ? (
+                    <PromptItem text={row.queued.text} state="queued" />
                   ) : (
-                    <PromptItem text={row.queued.text} queued />
+                    <PromptItem
+                      text={row.outbox.text}
+                      state={row.outbox.failed ? 'failed' : 'waiting'}
+                      onRetry={() => onRetryOutbox?.(row.outbox.id)}
+                      onRemove={() => onRemoveOutbox?.(row.outbox.id)}
+                    />
                   )}
                 </div>
               </div>

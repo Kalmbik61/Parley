@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -296,6 +297,146 @@ describe('createSender', () => {
   it('пустой после очистки текст — bad_request, записей нет', async () => {
     await expect(sender()({ ref, text: '\x1b[31m', submit: true })).rejects.toMatchObject({ code: 'bad_request' });
     expect(pty.writes).toEqual([]);
+  });
+
+  describe('журнал задержек: op pty.send', () => {
+    const makeLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
+    /** Данные единственной записи журнала; тест сам проверяет, что запись одна. */
+    const record = (log: ReturnType<typeof makeLog>): Record<string, unknown> => {
+      expect(log.info).toHaveBeenCalledTimes(1);
+      const [message, data] = log.info.mock.calls[0] as [string, Record<string, unknown>];
+      expect(message).toBe('сообщение в сессию');
+      return data;
+    };
+
+    it('пишет op pty.send с queueMs, typeMs, enterMs и outcome submitted — без текста', async () => {
+      vi.setSystemTime(10_000);
+      const log = makeLog();
+      const result = sender()({ ref, text: 'hello', submit: true, requestedAt: Date.now() - 1200 }, log);
+      await vi.advanceTimersByTimeAsync(500);
+      await result;
+      const data = record(log);
+      expect(data).toEqual({
+        op: 'pty.send',
+        ref,
+        chars: 5,
+        queueMs: 1200,
+        typeMs: expect.any(Number),
+        enterMs: expect.any(Number),
+        outcome: 'submitted',
+      });
+      expect(data.typeMs as number).toBeGreaterThanOrEqual(0);
+      expect(data.enterMs as number).toBeGreaterThanOrEqual(0);
+      expect(JSON.stringify(data)).not.toContain('hello');
+    });
+
+    it('без requestedAt queueMs null; requestedAt в будущем даёт queueMs 0, а не отрицательное или NaN', async () => {
+      vi.setSystemTime(10_000);
+      const withoutLabel = makeLog();
+      const first = sender()({ ref, text: 'hi', submit: true }, withoutLabel);
+      await vi.advanceTimersByTimeAsync(500);
+      await first;
+      expect(record(withoutLabel).queueMs).toBeNull();
+
+      const future = makeLog();
+      const second = sender()({ ref, text: 'hi', submit: true, requestedAt: Date.now() + 5000 }, future);
+      await vi.advanceTimersByTimeAsync(500);
+      await second;
+      expect(record(future).queueMs).toBe(0);
+    });
+
+    it('отказ busy пишется с outcome busy и enterMs null', async () => {
+      vi.setSystemTime(10_000);
+      wakeInFlight = true;
+      const log = makeLog();
+      await sender()({ ref, text: 'hi', submit: true, requestedAt: Date.now() - 300 }, log);
+      expect(record(log)).toEqual({
+        op: 'pty.send',
+        ref,
+        chars: 2,
+        queueMs: 300,
+        typeMs: expect.any(Number),
+        enterMs: null,
+        outcome: 'busy',
+      });
+    });
+
+    it('отказы blocked и no-paste-mode тоже пишутся один раз с enterMs null', async () => {
+      activityState = 'blocked';
+      const blocked = makeLog();
+      await sender()({ ref, text: 'hi', submit: true }, blocked);
+      expect(record(blocked)).toMatchObject({ outcome: 'blocked', enterMs: null });
+
+      activityState = 'idle';
+      const noPaste = makeLog();
+      await sender()({ ref, text: 'a\nb', submit: true }, noPaste);
+      expect(record(noPaste)).toMatchObject({ outcome: 'no-paste-mode', chars: 3, enterMs: null });
+    });
+
+    it('без submit — outcome typed, при черновике человека — draft; enterMs у обоих null', async () => {
+      const typed = makeLog();
+      await sender()({ ref, text: 'hi', submit: false }, typed);
+      expect(record(typed)).toMatchObject({ outcome: 'typed', enterMs: null });
+
+      pty.humanDraft = true;
+      const draft = makeLog();
+      await sender()({ ref, text: 'hi', submit: true }, draft);
+      expect(record(draft)).toMatchObject({ outcome: 'draft', enterMs: null });
+    });
+
+    it('ввод человека в паузе — outcome input, enterMs число', async () => {
+      const log = makeLog();
+      const result = sender()({ ref, text: 'hi', submit: true }, log);
+      pty.emitDraft(ref);
+      await vi.advanceTimersByTimeAsync(500);
+      await result;
+      expect(record(log)).toMatchObject({ outcome: 'input', enterMs: expect.any(Number) });
+    });
+
+    it('typeMs около нуля, enterMs равен паузе Enter', async () => {
+      // send.ts берёт performance из node:perf_hooks — фальшивые таймеры vitest его не подменяют (трогают только
+      // globalThis.performance), поэтому часы двигаем вместе с фальшивой Date шпионом на тот же объект.
+      const clock = vi.spyOn(performance, 'now').mockImplementation(() => Date.now());
+      try {
+        const log = makeLog();
+        const result = sender()({ ref, text: 'hi', submit: true }, log);
+        await vi.advanceTimersByTimeAsync(500);
+        await result;
+        expect(record(log)).toMatchObject({ outcome: 'submitted', typeMs: 0, enterMs: 500 });
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it('отклонённый Enter пишет outcome failed и пробрасывает ошибку', async () => {
+      const write = pty.manager.write;
+      pty.manager.write = (target, data) => {
+        if (data === '\r') throw new Error('PTY закрыт');
+        write(target, data);
+      };
+      const log = makeLog();
+      const settled = sender()({ ref, text: 'hi', submit: true }, log).then(
+        () => ({ error: null }),
+        (error: unknown) => ({ error: String(error) }),
+      );
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(settled).resolves.toEqual({ error: 'Error: PTY закрыт' });
+      expect(record(log)).toEqual({
+        op: 'pty.send',
+        ref,
+        chars: 2,
+        queueMs: null,
+        typeMs: expect.any(Number),
+        enterMs: expect.any(Number),
+        outcome: 'failed',
+      });
+    });
+
+    it('без журнала вторым аргументом работает как прежде', async () => {
+      const result = sender()({ ref, text: 'hi', submit: true });
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(result).resolves.toEqual({ inserted: true, submitted: true, reason: null });
+    });
   });
 });
 

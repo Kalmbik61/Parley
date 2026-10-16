@@ -13,6 +13,8 @@ import type { ActivityService } from '../activity/activity-service.js';
 import type { Client } from '../client.js';
 import type { Handler, NotificationHandler } from '../context.js';
 import { HostError } from '../errors.js';
+import type { FeedService } from '../feed/feed-service.js';
+import type { Log } from '../log.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import { createSender } from '../pty/send.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
@@ -25,6 +27,8 @@ export interface PtyMethodDeps {
   works: WorksService;   // activity.seen: есть ли сессия в снимке работ хоста
   wake: Pick<WakeService, 'inFlight' | 'enterDelayMs'>;   // pty.send: busy и пауза Enter
   sessions?: Pick<SessionsService, 'exclusive'>;   // pty.send: пока идёт смена модели или effort, не печатает
+  log?: Log;   // журнал хоста: отброшенный медленный клиент потока (`pty.clientDropped`)
+  feed?: Pick<FeedService, 'markSent'>;   // pty.send: метка отправки для журнала задержек (`feed.firstDelta`)
 }
 
 export interface PtyHandlers {
@@ -34,6 +38,12 @@ export interface PtyHandlers {
   ptyInput: NotificationHandler<'pty.input'>;
   ptyResize: NotificationHandler<'pty.resize'>;
   activitySeen: NotificationHandler<'activity.seen'>;
+  /** Сколько подписок на поток терминалов держат клиенты: сумма размеров множеств в таблице `attached`. */
+  attachedCount(): number;
+  /** Подписан ли на поток сессии хотя бы один клиент. */
+  isAttached(ref: SessionRef): boolean;
+  /** Клиент ушёл: снимает его со всех сессий в `attached` и `waiting`, пустые множества убирает из карт. */
+  dropClient(client: Client): void;
 }
 
 /**
@@ -66,6 +76,19 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
         // Клиент не успевает читать (буфер сокета выше порога) — поток ему
         // останавливается: заново получит его только после нового `pty.attach`.
         clients.delete(client);
+        // Журнал задержек (спека диагностики, A4): отброс клиента — вероятная причина «Chat/терминал отстал».
+        try {
+          if (deps.log !== undefined) {
+            deps.log.info('клиент PTY отброшен', {
+              op: 'pty.clientDropped',
+              ref,
+              client: client.name,
+              queuedBytes: client.writableLength(),
+            });
+          }
+        } catch {
+          // Журнал синхронный и при ENOSPC/EACCES бросает: диагностика не должна рвать рассылку вывода остальным.
+        }
         client.send({ event: 'pty.resync', data: { ref } });
       }
     }
@@ -127,7 +150,12 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
     },
 
     // Отвечает после ожидания своего Enter (около enterDelayMs), исход — в SendResult.
-    ptySend: (params) => send(params),
+    ptySend: async (params, { host }) => {
+      const result = await send(params, host.log);
+      // Метка для журнала задержек `feed.firstDelta`: ставится, только когда Enter дошёл; отказ и вставка без Enter агента не будят.
+      if (result.submitted) deps.feed?.markSent(params.ref);
+      return result;
+    },
 
     ptyInput: (params) => {
       deps.pty.input(params.ref, params.data);
@@ -145,6 +173,25 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
       const entry = deps.works.entry(projectPath, workId);
       if (entry?.map.sessions.some((session) => session.id === sessionId) !== true) return;
       deps.activity.markSeen(params.ref);
+    },
+
+    attachedCount: () => {
+      let count = 0;
+      for (const clients of attached.values()) count += clients.size;
+      return count;
+    },
+
+    isAttached: (ref) => (attached.get(refKey(ref))?.size ?? 0) > 0,
+
+    // Закрытый клиент без `pty.detach` иначе жил бы в таблицах до выхода процесса или нового вывода
+    // (и раздувал `attachedCount`, хотя смотреть на поток некому).
+    dropClient: (client) => {
+      for (const table of [attached, waiting]) {
+        for (const [key, clients] of table) {
+          clients.delete(client);
+          if (clients.size === 0) table.delete(key);
+        }
+      }
     },
   };
 }

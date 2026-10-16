@@ -1166,7 +1166,7 @@ async function createRoom(
     roomId = room.id;
     // Одна комната на сессию (решение 4 дизайна комнат): создатель и участники уходят из прочих комнат работы — как у
     // `rooms.create` окна (`createHumanRoom`) и у `add_to_room`. Прежние комнаты остаются со своими письмами.
-    for (const memberId of [sessionId, ...members]) leaveOtherRooms(current, memberId, room.id);
+    for (const memberId of [sessionId, ...members]) leaveOtherRooms(current, memberId, room.id, room.createdAt);
     const notice = joinNotice(room, current);
     for (const memberId of members) {
       addMessage(current, { from: sessionId, to: [memberId], roomId: room.id, kind: 'note', text: notice });

@@ -5,8 +5,10 @@
  * две вкладки одной сессии — одна подписка). Открытие — `feed.subscribe`, затем `feed.snapshot`: в
  * этом порядке дельта между ними не теряется. Снимок даёт `revision` r; дельта `feed.changed` r+1
  * применяется (upsert по id: новые — в конец в порядке массива, известные — на месте; `removed`
- * удаляет), дельта ≤ r отбрасывается, дельта > r+1 — разрыв: снимок заново, а дельты до его прихода
- * отбрасываются. Закрытие последней вкладки — `feed.unsubscribe` (и после ошибки тоже).
+ * удаляет), дельта ≤ r отбрасывается, дельта > r+1 — разрыв: снимок заново. Дельты, пришедшие, пока
+ * снимок в пути (main пересылает событие раньше, чем ответ `host:call`), хранятся и после снимка
+ * применяются по порядку по тем же правилам; всё, что пришло до начала загрузки, снимок уже включает.
+ * Закрытие последней вкладки — `feed.unsubscribe` (и после ошибки тоже).
  *
  * Мост — из `init`, который `App` зовёт на каждый статус `connected`: одна подписка на
  * `feed.changed` на стор, а открытые ленты после переподключения подписываются и берут снимок
@@ -71,8 +73,10 @@ interface Opened {
   count: number;
   /** Растёт на каждую загрузку и закрытие: ответ устаревшей загрузки отбрасывается. */
   generation: number;
-  /** Снимок в пути — дельты отбрасываются. */
+  /** Снимок в пути — дельты копятся в `queued`. */
   loading: boolean;
+  /** Дельты, пришедшие, пока снимок в пути; `load` и исход снимка очищают. */
+  queued: EventData<'feed.changed'>[];
 }
 
 let bridge: ParleyBridge | null = null;
@@ -156,6 +160,7 @@ export const useFeedStore = create<FeedState>((set, get) => {
     if (feed === undefined || current === null || !hostHasFeed()) return;
     feed.generation += 1;
     feed.loading = true;
+    feed.queued = [];
     const generation = feed.generation;
     const stale = (): boolean => opened.get(key) !== feed || feed.generation !== generation || bridge !== current;
     const prev = get().feeds[key];
@@ -168,10 +173,22 @@ export const useFeedStore = create<FeedState>((set, get) => {
         feed.loading = false;
         patch(key, { items: snapshot.items, revision: snapshot.revision, mode: snapshot.mode, decisions: snapshot.decisions ?? null, status: 'ready' });
         settleAfterSnapshot(key, snapshot.items);
+        const queued = feed.queued.sort((a, b) => a.revision - b.revision);
+        feed.queued = [];
+        for (const delta of queued) {
+          const entry = get().feeds[key];
+          if (entry === undefined || delta.revision <= entry.revision) continue;
+          if (delta.revision > entry.revision + 1) {
+            load(key);
+            return;
+          }
+          applyChanged(key, entry, delta);
+        }
       })
       .catch((error: unknown) => {
         if (stale()) return;
         feed.loading = false;
+        feed.queued = [];
         const { message } = decodeIpcError(error);
         console.warn('[parley] feed', message);
         const was = get().feeds[key];
@@ -179,16 +196,8 @@ export const useFeedStore = create<FeedState>((set, get) => {
       });
   };
 
-  const onChanged = (delta: EventData<'feed.changed'>): void => {
-    const key = refKey(delta.ref);
-    const feed = opened.get(key);
-    const entry = get().feeds[key];
-    if (feed === undefined || feed.loading || entry === undefined || entry.status !== 'ready') return;
-    if (delta.revision <= entry.revision) return;
-    if (delta.revision > entry.revision + 1) {
-      load(key);
-      return;
-    }
+  /** Применяет дельту revision+1 к открытой ленте: элементы, revision, режим, решения и карточки. */
+  const applyChanged = (key: string, entry: FeedEntry, delta: EventData<'feed.changed'>): void => {
     patch(key, {
       ...entry,
       items: applyDelta(entry.items, delta.upsert, delta.removed),
@@ -199,6 +208,24 @@ export const useFeedStore = create<FeedState>((set, get) => {
     // Карточка сменила состояние или ушла — её решение, пометка и черновик своё отслужили.
     const settled = delta.upsert.filter((item) => 'cardId' in item && item.state !== 'pending').map((item) => item.id);
     settleCards(key, [...settled, ...delta.removed]);
+  };
+
+  const onChanged = (delta: EventData<'feed.changed'>): void => {
+    const key = refKey(delta.ref);
+    const feed = opened.get(key);
+    const entry = get().feeds[key];
+    if (feed === undefined || entry === undefined) return;
+    if (feed.loading) {
+      feed.queued.push(delta);
+      return;
+    }
+    if (entry.status !== 'ready') return;
+    if (delta.revision <= entry.revision) return;
+    if (delta.revision > entry.revision + 1) {
+      load(key);
+      return;
+    }
+    applyChanged(key, entry, delta);
   };
 
   return {
@@ -221,7 +248,7 @@ export const useFeedStore = create<FeedState>((set, get) => {
         feed.count += 1;
         return;
       }
-      opened.set(key, { ref, count: 1, generation: 0, loading: false });
+      opened.set(key, { ref, count: 1, generation: 0, loading: false, queued: [] });
       load(key);
     },
     close: (ref) => {

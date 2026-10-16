@@ -123,7 +123,8 @@ export function applyCodexHookEvent(state: FeedState, body: Json, at: string): F
       break;
     }
     case 'Stop': {
-      if (agentId === null && draft.turnStartedAt !== null) closeTurn(draft, at, false);
+      // Ждущие карточки не снимаем: запрос одобрения Codex идёт из ячейки code mode, которая переживает ход (разбор 2026-10-16).
+      if (agentId === null && draft.turnStartedAt !== null) closeTurn(draft, at, false, true);
       break;
     }
     default:

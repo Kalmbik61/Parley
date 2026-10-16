@@ -20,6 +20,9 @@
  * (`attachments.ts`). Сообщение из одних вложений тоже уходит. Файлы, брошенные на само поле, оно не берёт текстом:
  * бросок поднимается к вкладке и становится вложением.
  *
+ * Отправка не ждёт хоста: письмо уходит в очередь комнаты, а не ушедшее видно в ленте «Not sent» (спека 2026-10-16,
+ * 4.2) — поле его не возвращает.
+ *
  * Фокус — контур `--ring` 2px с отступом 2px: правило `:focus-visible` слоя base (`styles/base.css`,
  * спека 4), поле его не перекрывает; каретка цвета ring. Контур и при клике мышью — как у прочих полей окна:
  * у текстовых полей `:focus-visible` срабатывает всегда.
@@ -85,11 +88,8 @@ export interface ComposerProps {
   bridge: ParleyBridge;
   /** Ключ черновика — `roomKey(workKey, roomId)` (`lib/room-view.ts`). Другая комната — другой ключ и заново смонтированное поле. */
   draftKey: string;
-  /**
-   * Отправка. Отказ (промис отклонён) возвращает текст в поле, если оно ещё пусто: письмо не должно
-   * пропасть вместе с ошибкой, которую показывает вызывающий.
-   */
-  onSend: (submission: ComposerSubmission) => Promise<void> | void;
+  /** Письмо уходит в очередь комнаты (`room-outbox.ts`); поле его больше не ждёт и не возвращает. */
+  onSend: (submission: ComposerSubmission) => void;
 }
 
 interface MenuState {
@@ -188,13 +188,7 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
     setAttachments([]);
     dismissedRef.current = null;
     refresh();
-    void Promise.resolve(onSend({ to: content.to, text: composeRoomMessage(trimmed, sent) })).catch(() => {
-      const current = editorRef.current;
-      if (current === null || !isBlank(readEditor(current))) return;
-      fillEditor(current, trimmed, chipLabel);
-      if ((useUiStore.getState().composerAttachments[draftKey] ?? []).length === 0) setAttachments(sent);
-      refresh();
-    });
+    onSend({ to: content.to, text: composeRoomMessage(trimmed, sent) });
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {

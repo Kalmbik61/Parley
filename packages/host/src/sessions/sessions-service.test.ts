@@ -571,6 +571,42 @@ describe('create(): карта после старта', () => {
   });
 });
 
+describe('время шагов в логе хоста', () => {
+  it('create() пишет время шагов создания и запуска', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    const info = vi.fn();
+    const host = { ...fakeHost(), log: { info, warn: () => {}, error: () => {} } };
+
+    const service = createSessionsService(host, fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      parent: null,
+    });
+
+    const launchLine = info.mock.calls.find(([msg]) => msg === 'запуск сессии: время шагов')?.[1] as
+      | { totalMs: number; steps: Record<string, number>; failed?: boolean; provider?: string }
+      | undefined;
+    expect(launchLine).toBeDefined();
+    expect(launchLine?.totalMs).toEqual(expect.any(Number));
+    expect(Object.keys(launchLine?.steps ?? {})).toEqual(expect.arrayContaining(['plan', 'spawn', 'startWrite']));
+    expect(launchLine?.failed).toBeUndefined();
+    expect(launchLine?.provider).toBe('claude');
+
+    const createLine = info.mock.calls.find(([msg]) => msg === 'создание сессии: время шагов')?.[1] as
+      | { sessionId?: string; totalMs: number; steps: Record<string, number> }
+      | undefined;
+    expect(createLine?.sessionId).toBe(ref.sessionId);
+    expect(Object.keys(createLine?.steps ?? {})).toEqual(expect.arrayContaining(['record', 'launch']));
+
+    await service.stop(ref);
+  });
+});
+
 describe('launch(): лента вида «Chat» — адрес приёмника и токен по версии claude (Task 2c)', () => {
   const HOOK_URL = 'http://127.0.0.1:4321/hooks';
 

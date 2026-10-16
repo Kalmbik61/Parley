@@ -2,20 +2,22 @@
  * Текст ответа модели (план 2026-10-01, решения 3 и 10): Markdown тем же `RoomMarkdown`, что в комнате
  * (правила ссылок и HTML — `lib/markdown-links.ts`), ссылки открываются в браузере человека. Упоминаний
  * сессий в ответе модели нет — `labelOf` пустой. Пока текст пишется (`streaming`), за ним мигает
- * курсор; обрезанный хостом текст — с пометкой.
+ * курсор; обрезанный хостом текст — с пометкой. Дописанный кусок — с Copy (исходный Markdown, спека 2026-10-16,
+ * 3.1); пока пишется — без строки действий.
  */
 
 import type { FeedText } from '@parley/core';
 import { S } from '../../../shared/strings.js';
 import { RoomMarkdown } from '../../components/rooms/RoomMarkdown.js';
 import { useChatEnv } from '../chat-env.js';
+import { MessageActions } from './MessageActions.js';
 
 const noLabel = (): null => null;
 
 export function TextItem({ item }: { item: FeedText }): JSX.Element {
   const { bridge } = useChatEnv();
   return (
-    <div data-testid="chat-text" className="min-w-0 text-sm [overflow-wrap:anywhere]">
+    <div data-testid="chat-text" className="group min-w-0 text-sm [overflow-wrap:anywhere]">
       <RoomMarkdown text={item.text} labelOf={noLabel} onOpenExternal={(url) => void bridge.app.openExternal(url)} />
       {item.streaming ? (
         <span
@@ -26,6 +28,7 @@ export function TextItem({ item }: { item: FeedText }): JSX.Element {
         />
       ) : null}
       {item.truncated === true ? <p className="m-0 mt-1 text-xs text-[var(--status-warning-text)]">{S.chat.textTruncated}</p> : null}
+      {item.streaming ? null : <MessageActions copyText={item.text} align="start" />}
     </div>
   );
 }

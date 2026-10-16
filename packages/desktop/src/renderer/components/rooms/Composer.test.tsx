@@ -885,32 +885,6 @@ describe('Composer — черновик на комнату (3.4)', () => {
   });
 });
 
-describe('Composer — отказ отправки', () => {
-  it('письмо не ушло: текст и чип возвращаются в пустое поле', async () => {
-    const onSend = vi.fn<(submission: ComposerSubmission) => Promise<void>>().mockRejectedValue(new Error('offline'));
-    renderComposer(onSend);
-    pickByKeys(1);
-    type('важное');
-    press('Enter');
-    await waitFor(() => expect(chips()).toHaveLength(1));
-    expect(editor().textContent).toContain('важное');
-    expect(screen.getByText('To S02')).toBeTruthy();
-  });
-
-  it('пока шёл запрос, человек начал новое письмо: его текст не затирается', async () => {
-    let fail: (error: Error) => void = () => {};
-    const onSend = vi.fn(() => new Promise<void>((_resolve, reject) => (fail = reject)));
-    renderComposer(onSend);
-    type('первое');
-    press('Enter');
-    type('второе');
-    fail(new Error('offline'));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(editor().textContent).toBe('второе');
-  });
-});
-
 describe('диктовка в поле комнаты (спека 3.2)', () => {
   let dispose: () => void = () => undefined;
   afterEach(() => dispose());
@@ -959,18 +933,6 @@ describe('Composer — вложения', () => {
     expect(chips()).toEqual(['/a/two.txt']);
     press('Enter');
     expect(onSend).toHaveBeenCalledWith({ to: [], text: 'Attachments:\n- `/a/two.txt`' });
-  });
-
-  it('отказ отправки возвращает и текст, и вложения', async () => {
-    bridge.setChosenFiles(['/a/one.txt']);
-    const onSend = vi.fn(() => Promise.reject(new Error('нет')));
-    renderComposer(onSend);
-    fireEvent.click(attach());
-    await waitFor(() => expect(chips()).toHaveLength(1));
-    type('Текст');
-    press('Enter');
-    await waitFor(() => expect(chips()).toEqual(['/a/one.txt']));
-    expect(editor().textContent).toBe('Текст');
   });
 
   describe('скриншот из буфера', () => {

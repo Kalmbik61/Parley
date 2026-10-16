@@ -8,7 +8,7 @@
  * отступ `0 14 2 18`, зазор 14, 12px `neutral-800`. Слева — сегмент на провайдера: значок 14, имя и версия
  * CLI моноширинным 11px `neutral-700`. Claude/Codex/GLM видны всегда в этом порядке;
  * недоступная кнопка приглушена, без версии и лимитов. Клик открывает общую карточку подключения. Справа — сегменты спеки Orca-UI 5.9: последнее уведомление хоста
- * (сжимается многоточием), счётчики внимания, связь с хостом, «Host is outdated», будильник.
+ * (сжимается многоточием), счётчики внимания, связь с хостом, «Host is outdated», диагностика (`DiagnosticsSegment`), будильник.
  *
  * Лимиты подписки (кусок 9b, спека комнат Organic, 3.5) — после версии: полоска пятичасового окна (нет
  * его — недельного) и «58% 5h · 41% wk». Нет данных — сегмент прежний. Проценты целые, округление вниз:
@@ -34,6 +34,8 @@ import { hostMethods, missingMethods, otherHostBuild } from '../lib/capabilities
 import { useHostStore } from '../store/host.js';
 import { useProvidersStore, type ProviderInfo } from '../store/providers.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.js';
+import { DiagnosticsSegment } from './DiagnosticsSegment.js';
+import { SEGMENT_BUTTON } from './segment.js';
 
 const CONNECTION_TEXT: Record<HostStatus['state'], (status: HostStatus) => string> = {
   connecting: () => S.connection.statusConnecting,
@@ -59,9 +61,6 @@ export interface StatusBarProps {
   /** Клик по сегменту внимания — «следующая, где нужен ты» (спека 7.6): AppShell — openNextAttention. */
   onNextAttention: () => void;
 }
-
-/** Кнопка-сегмент справа: пилюля, основной цвет и на hover — вторичный текст на заливке ниже 4.5:1. */
-const SEGMENT_BUTTON = 'shrink-0 rounded-full px-2 py-0.5 text-foreground transition-colors hover:bg-foreground/8';
 
 /** От скольки процентов лимит в любом окне считается на исходе: текст и полоска — `accent-700` (спека 3.5). */
 const LIMIT_WARNING_PERCENT = 80;
@@ -269,6 +268,7 @@ export function StatusBar({
           onConfirm={onRestartHost}
           onOpenChange={onRestartHostOpenChange}
         />
+        <DiagnosticsSegment />
         <button
           type="button"
           onClick={onToggleWake}

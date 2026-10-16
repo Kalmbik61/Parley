@@ -26,7 +26,7 @@ const LABELS = new Map([['k', { session: 'S02 api', work: 'Backend', project: 'p
 function api(): IslandApi {
   return {
     config: vi.fn(), onConfig: vi.fn(), onHover: vi.fn(), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(),
-    dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), failed: vi.fn(),
+    dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
   };
 }
 
@@ -141,7 +141,7 @@ describe('вид острова', () => {
     const pill = screen.getByTestId('island-pill');
     expect(pill.className).toContain('justify-center');
     expect(screen.getByTestId('island-list').className).toContain('w-[400px]');
-    expect(screen.getByTestId('island-list').className).toContain('max-h-[360px]');
+    expect(screen.getByTestId('island-list-scroll').className).toContain('max-h-[360px]');
   });
 
   it('клик по пилюле только открывает список — открытый наведением он не закрывает', () => {
@@ -420,13 +420,17 @@ describe('Done на острове', () => {
     expect(screen.getByTestId('island-room').textContent).toBe('Refunds· 1 in work');
   });
 
-  it('Clear — внизу списка, вправо; зовёт onClearDone; без Done кнопки нет', () => {
+  it('Clear — под списком, вправо, вне прокрутки (стоит на месте); зовёт onClearDone; без Done кнопки нет', () => {
     const props = view({ model: DONE_MODEL, listOpen: true });
     const clear = screen.getByTestId('island-clear');
     expect(clear.textContent).toBe('Clear');
-    expect(clear.className).toContain('self-end');
     expect(clear.className).toContain('text-muted-foreground');
-    expect(screen.getByTestId('island-list').lastElementChild).toBe(clear);
+    const scroll = screen.getByTestId('island-list-scroll');
+    expect(scroll.className).toContain('overflow-y-auto');
+    expect(scroll.contains(clear)).toBe(false);
+    const row = screen.getByTestId('island-list').lastElementChild as HTMLElement;
+    expect(row.contains(clear)).toBe(true);
+    expect(row.className).toContain('justify-end');
     fireEvent.click(clear);
     expect(props.onClearDone).toHaveBeenCalledTimes(1);
     cleanup();

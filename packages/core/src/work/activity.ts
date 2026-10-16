@@ -18,11 +18,20 @@
  * `backgroundHoldMs` (час), фоновый субагент и ожидание считаются зомби — удержание снято, ход
  * окончен.
  *
+ * Запрос разрешения (`PermissionRequest`, блокирующий `Notification`) ставит `blocked`, а хука «разрешили»
+ * у Claude Code нет: о нём хост пишет отметку `ParleyPermissionAnswered` (Allow/Deny в Parley, ответ в
+ * терминале), и она возвращает `working`. Без отметки `blocked` снимает запись пользователя в логе,
+ * но не раньше конца одобренного инструмента.
+ *
  * Функция чистая: весь диск остаётся в `events.ts` и `metrics.ts`.
  */
 
 import { DEFAULT_CONFIG } from '../config.js';
-import { TERMINAL_WORKING_EVENT, type BackgroundTask, type EventRecord } from './events.js';
+import {
+  PERMISSION_ANSWERED_EVENT,
+  TERMINAL_WORKING_EVENT, type BackgroundTask,
+  type EventRecord,
+} from './events.js';
 
 export type Activity = 'working' | 'blocked' | 'unseen' | 'idle';
 
@@ -200,6 +209,9 @@ export function activityOf({
   let source: ActivitySource = 'none';
   let turnEndedAt: string | null = null;
   let lastEventAt: string | null = null;
+  // Время события, поставившего `blocked`: запись пользователя в логе сверяется с ним, а не с последним
+  // событием, иначе строки ожидания и субагенты после ответа возвращали бы `blocked`.
+  let blockedAt: string | null = null;
   let exited = false;
   const started = new Map<string, StartedAgent>();
   // Работающие субагенты из последнего снимка `background_tasks` — те, что живут и
@@ -270,12 +282,14 @@ export function activityOf({
         break;
       case 'PermissionRequest':
         phase = 'blocked';
+        blockedAt = event.at;
         source = 'hooks';
         break;
       case 'Notification': {
         const type = event.notificationType ?? '';
         if (BLOCKING.has(type)) {
           phase = 'blocked';
+          blockedAt = event.at;
           source = 'hooks';
         } else if (RESUMING.has(type)) {
           start();
@@ -286,6 +300,10 @@ export function activityOf({
         }
         break;
       }
+      case PERMISSION_ANSWERED_EVENT:
+        // На запрос ответили, инструмент работает. Вне `blocked` отметка ничего не значит: хода она не начинает.
+        if (phase === 'blocked') start();
+        break;
       case 'Stop':
         end(event.at);
         break;
@@ -346,14 +364,16 @@ export function activityOf({
 
   // Страховка по логу (4.3). Из записей лога `blocked` снимает только запись
   // ПОЛЬЗОВАТЕЛЯ: пока агент ждёт ответа, с его стороны в транскрипт не пишется
-  // ничего, а появившаяся запись значит, что разрешение выдано и ход продолжился
-  // (хука «разрешение выдано» в наборе 4.2 нет).
+  // ничего, а появившаяся запись значит, что разрешение выдано и ход продолжился.
+  // Хука «разрешение выдано» в наборе 4.2 нет — обычно об этом сообщает отметка хоста
+  // `ParleyPermissionAnswered`; страховка нужна, когда её не записали. Запись сверяется со временем
+  // запроса (`blockedAt`), а не последнего события: строки ожидания и субагенты ложатся позже неё.
   const lastRecordAt = log?.lastRecordAt ?? null;
   const recordAt = msOf(lastRecordAt);
   const eventAt = msOf(lastEventAt);
   const userAt = msOf(log?.lastUserRecordAt ?? null);
 
-  if (phase === 'blocked' && isNewer(userAt, eventAt)) {
+  if (phase === 'blocked' && isNewer(userAt, msOf(blockedAt))) {
     phase = 'working';
     turnEndedAt = null;
     source = 'log';

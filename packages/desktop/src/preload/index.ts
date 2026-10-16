@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@parley/protocol';
-import type { AppNote, CloseAnswer, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../shared/bridge.js';
+import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../shared/bridge.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import type {
   AgentOpenTab,
@@ -250,6 +250,8 @@ const bridge = {
     parleyMd: (projectPath: string, create: boolean) =>
       ipcRenderer.invoke('app:parley-md', projectPath, create) as Promise<{ exists: boolean; created: boolean }>,
     saveRecipe: (request: RecipeSaveRequest) => ipcRenderer.invoke('app:save-recipe', request) as Promise<RecipeSaveResult>,
+    saveDiagnostics: (options: { profile: boolean }) =>
+      ipcRenderer.invoke('app:save-diagnostics', options) as Promise<DiagnosticsSaveResult>,
     revealWork: (projectPath: string, workId: string) =>
       ipcRenderer.invoke('app:reveal-work', projectPath, workId) as Promise<void>,
     openPath: (absPath: string) => ipcRenderer.invoke('app:open-path', absPath) as Promise<'opened' | 'revealed'>,

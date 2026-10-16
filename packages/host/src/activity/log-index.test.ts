@@ -293,4 +293,118 @@ describe('createLogIndex', () => {
       expect(idx.usage(session())).toBeUndefined();
     });
   });
+
+  describe('usageIn: срез по окнам (спека расхода токенов, 5.3)', () => {
+    const windows = [{ from: '2026-10-14T10:00:00.000Z', to: null }];
+    const answer = (id: string, msg: string, at: string, input: number): string =>
+      `${JSON.stringify({ type: 'assistant', sessionId: id, timestamp: at, message: { role: 'assistant', id: msg, usage: { input_tokens: input, output_tokens: 1 } } })}\n`;
+
+    async function writeRollout(id: string, points: Array<[string, number]>, meta: Record<string, unknown> = {}): Promise<void> {
+      const dir = path.join(codexRoot, '2026', '10', '14');
+      await mkdir(dir, { recursive: true });
+      const lines = [
+        { type: 'session_meta', timestamp: points[0]![0], payload: { id, cwd: '/codex', source: 'cli', ...meta } },
+        ...points.map(([at, input]) => ({
+          type: 'event_msg',
+          timestamp: at,
+          payload: { type: 'token_count', info: { total_token_usage: { input_tokens: input, cached_input_tokens: 0, output_tokens: 1 } } },
+        })),
+      ];
+      await writeFile(path.join(dir, `rollout-2026-10-14T09-00-00-${id}.jsonl`), lines.map((line) => JSON.stringify(line)).join('\n'));
+    }
+
+    it('Claude: только ответы внутри окна, подагенты — тем же окном; лога нет — undefined', async () => {
+      const id = 's-slice';
+      await writeClaudeSession(id, answer(id, 'm1', '2026-10-14T09:00:00.000Z', 100) + answer(id, 'm2', '2026-10-14T11:00:00.000Z', 10));
+      await mkdir(path.join(claudeRoot, '-proj', id, 'subagents'), { recursive: true });
+      await writeFile(path.join(claudeRoot, '-proj', id, 'subagents', 'agent-a1.jsonl'), answer(id, 'a1', '2026-10-14T11:30:00.000Z', 5));
+      const idx = index();
+      await idx.start();
+
+      expect(await idx.usageIn(session({ providerSessionId: id }), windows)).toMatchObject({ input: 15 });
+      expect(await idx.usageIn(session({ providerSessionId: 'нет-такого' }), windows)).toBeUndefined();
+    });
+
+    it('Codex: накопитель родителя и порождённого треда режутся окном', async () => {
+      await writeRollout('p-thread', [['2026-10-14T09:00:00.000Z', 100], ['2026-10-14T11:00:00.000Z', 160]]);
+      await writeRollout('c-thread', [['2026-10-14T09:30:00.000Z', 10], ['2026-10-14T11:30:00.000Z', 40]], { parent_thread_id: 'p-thread' });
+      const idx = index();
+      await idx.start();
+
+      expect(await idx.usageIn(session({ provider: 'codex', providerSessionId: 'p-thread' }), windows)).toMatchObject({
+        input: 90,
+        cacheWrite: null,
+        coverage: 'conversation-and-descendants',
+      });
+    });
+
+    it('повторный срез без новых записей берётся из кэша, дописанный лог — пересчитывается', async () => {
+      const id = 's-cache';
+      const file = await writeClaudeSession(id, answer(id, 'm1', '2026-10-14T11:00:00.000Z', 10));
+      const idx = index();
+      await idx.start();
+      const ref = session({ providerSessionId: id });
+
+      const first = await idx.usageIn(ref, windows);
+      expect(await idx.usageIn(ref, windows)).toBe(first);
+      await appendFile(file, answer(id, 'm2', '2026-10-14T11:10:00.000Z', 5));
+      expect(await idx.usageIn(ref, windows)).toMatchObject({ input: 15 });
+    });
+  });
+  describe('reindex: перечитывание rollout Codex без событий fs.watch', () => {
+    const rolloutRecord = (type: string, at: string): string =>
+      `${JSON.stringify({ type: 'event_msg', timestamp: at, payload: { type } })}\n`;
+
+    async function writeRollout(id: string): Promise<string> {
+      const dir = path.join(codexRoot, '2026', '10', '04');
+      await mkdir(dir, { recursive: true });
+      const file = path.join(dir, `rollout-2026-10-04T12-00-00-${id}.jsonl`);
+      await writeFile(
+        file,
+        `${JSON.stringify({ type: 'session_meta', timestamp: '2026-10-04T12:00:00.000Z', payload: { id, cwd: '/codex', source: 'cli' } })}\n` +
+          rolloutRecord('task_started', '2026-10-04T12:00:01.000Z'),
+      );
+      return file;
+    }
+
+    it('дозапись видна после reindex(file), слушатели onChange зовутся', async () => {
+      const file = await writeRollout('re-1');
+      const idx = index();
+      await idx.start();
+      const codex = session({ provider: 'codex', providerSessionId: 're-1' });
+      expect(idx.index(codex)?.lastTurnEvent?.type).toBe('task_started');
+
+      let calls = 0;
+      idx.onChange(() => (calls += 1));
+      await appendFile(file, rolloutRecord('task_complete', '2026-10-04T12:00:09.000Z'));
+      await idx.reindex(file);
+
+      expect(idx.index(codex)?.lastTurnEvent).toMatchObject({ type: 'task_complete' });
+      expect(calls).toBeGreaterThan(0);
+    });
+
+    it('файла нет — запись убирается из индекса', async () => {
+      const file = await writeRollout('re-2');
+      const idx = index();
+      await idx.start();
+      const codex = session({ provider: 'codex', providerSessionId: 're-2' });
+      expect(idx.index(codex)).toBeDefined();
+
+      await rm(file);
+      await idx.reindex(file);
+
+      expect(idx.index(codex)).toBeUndefined();
+    });
+
+    it('остановленный индекс ничего не делает', async () => {
+      const file = await writeRollout('re-3');
+      const idx = index();
+      await idx.start();
+      let calls = 0;
+      idx.onChange(() => (calls += 1));
+      idx.stop();
+      await idx.reindex(file);
+      expect(calls).toBe(0);
+    });
+  });
 });

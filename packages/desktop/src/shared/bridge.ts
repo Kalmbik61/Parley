@@ -30,6 +30,12 @@ import type { NotesFile } from './notes-types.js';
 import type { RecipeSaveRequest, RecipeSaveResult } from './recipe-save.js';
 import type { Appearance, UiFile } from './ui-types.js';
 
+/** Результат `app.saveDiagnostics`: путь готового архива и ответил ли хост на запрос снимка (спека диагностики 2026-10-16, A6). */
+export interface DiagnosticsSaveResult {
+  file: string;
+  hostResponded: boolean;
+}
+
 /** Состояние связи окна с хостом — источник для диалогов и строки статуса. */
 export type HostStatus =
   | { state: 'connecting' }
@@ -161,6 +167,11 @@ export interface ParleyBridge {
     parleyMd(projectPath: string, create: boolean): Promise<{ exists: boolean; created: boolean }>;
     /** Save as recipe: main пишет только `.parley/recipes/<имя>.md` известного проекта и открывает файл; занятое имя — `exists`. */
     saveRecipe(request: RecipeSaveRequest): Promise<RecipeSaveResult>;
+    /**
+     * Собирает архив диагностики в Downloads и показывает его в Finder; `profile` — перед сборкой записать 20-секундный
+     * профиль CPU хоста. Без ответа хоста архив всё равно собирается (`hostResponded: false`).
+     */
+    saveDiagnostics(options: { profile: boolean }): Promise<DiagnosticsSaveResult>;
     /**
      * Только внутри корней любой работы; открывается только белый список, остальное
      * показывается в Finder (кусок 5.2, спека 10.8). Вне корней — отказ `files:denied`.
