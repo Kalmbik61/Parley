@@ -3,7 +3,7 @@
  * перевод его ответа в ответ агенту. Окно подменено: проверяется логика main, а раскладку и тост проверяют тесты рендерера.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { AGENT_LIMITS } from '@parley/protocol';
+import { AGENT_LIMITS, AGENT_VIEWPORT } from '@parley/protocol';
 import type { BrowserAgentConsoleResult, BrowserAgentOpEvent, BrowserAgentRequestDetail, BrowserAgentScreenshotResult, BrowserAgentOpenResult, BrowserAgentOwner, BrowserAgentResult } from '@parley/protocol';
 import type { WebContents } from 'electron';
 import { DEVTOOLS_LIMITS, type ConsoleEntry, type DevtoolsSnapshot, type NetworkEntry, type ViewportSpec } from '../../shared/browser-devtools.js';
@@ -655,6 +655,69 @@ describe('screenshot (спека 5.1, 8)', () => {
     });
     expect(codeOf(await visible.runOp('screenshot', { tab: 't1' }))).not.toBe('ok');
     expect(visibleShots).toBe(1);
+  });
+
+  it('видимость читается в момент решения о повторе: показали страницу посреди снимка — отказ без повтора; спрятали — повтор', async () => {
+    const shown = setup();
+    register(shown.ops, { visible: false });
+    let shots = 0;
+    shown.inspector.send.mockImplementation(async (id: number, method: string) => {
+      if (method !== 'Page.captureScreenshot') return sendWith()(id, method);
+      shots += 1;
+      register(shown.ops, { visible: true });
+      throw new Error('Unable to capture screenshot');
+    });
+    expect(codeOf(await shown.runOp('screenshot', { tab: 't1' }))).not.toBe('ok');
+    expect(shots).toBe(1);
+
+    const hiddenLater = setup();
+    register(hiddenLater.ops, {});
+    let laterShots = 0;
+    hiddenLater.inspector.send.mockImplementation(async (id: number, method: string) => {
+      if (method !== 'Page.captureScreenshot') return sendWith()(id, method);
+      laterShots += 1;
+      if (laterShots === 1) {
+        register(hiddenLater.ops, { visible: false });
+        throw new Error('Unable to capture screenshot');
+      }
+      return { data: png(1280, 800).toString('base64') };
+    });
+    expect(codeOf(await hiddenLater.runOp('screenshot', { tab: 't1' }))).toBe('ok');
+    expect(laterShots).toBe(2);
+  });
+
+  it('невидимая страница: другая ошибка CDP не повторяется; повторы исчерпаны — tab_hidden', async () => {
+    const other = setup();
+    register(other.ops, { visible: false });
+    let shots = 0;
+    other.inspector.send.mockImplementation(async (id: number, method: string) => {
+      if (method !== 'Page.captureScreenshot') return sendWith()(id, method);
+      shots += 1;
+      throw new Error('Target closed');
+    });
+    expect(codeOf(await other.runOp('screenshot', { tab: 't1' }))).toBe('unsupported');
+    expect(shots).toBe(1);
+
+    const stuck = setup();
+    register(stuck.ops, { visible: false });
+    stuck.inspector.send.mockImplementation(async (id: number, method: string) => {
+      if (method !== 'Page.captureScreenshot') return sendWith()(id, method);
+      throw new Error('Unable to capture screenshot');
+    });
+    const result = await stuck.runOp('screenshot', { tab: 't1' });
+    expect(codeOf(result)).toBe('tab_hidden');
+    expect(messageOf(result)).toContain('browser_console');
+  });
+
+  it('fullPage: страница шире предела обрезается по AGENT_VIEWPORT.maxWidth, в ответе пояснение', async () => {
+    const { ops, inspector, runOp: run } = setup();
+    register(ops, {});
+    inspector.send.mockImplementation(sendWith({ content: { width: 50_000, height: 800 }, shot: png(1280, 800) }));
+    const result = okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1', fullPage: true }));
+    const clips = inspector.send.mock.calls.filter(([, method]) => method === 'Page.captureScreenshot').map(([, , params]) => (params as { clip: { width: number } }).clip.width);
+    expect(clips).toEqual([AGENT_VIEWPORT.maxWidth]);
+    expect(result.viewport.width).toBe(AGENT_VIEWPORT.maxWidth);
+    expect(result.notes).toEqual([`The page is 50000 px wide; the screenshot is cut at ${AGENT_VIEWPORT.maxWidth} px.`]);
   });
 
   it('fullPage: страница 2000 при вьюпорте 800 — три полосы 800+800+400, склейка; длиннее трёх вьюпортов — bad_request с советом', async () => {

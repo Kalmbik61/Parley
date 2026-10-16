@@ -227,4 +227,6 @@ export interface BrowserAgentScreenshotResult {
   viewport: { width: number; height: number };
   fullPage: boolean;
   emulated: boolean;
+  /** Пояснения Parley: например, `fullPage` шире предела обрезан. Нет поля — пояснений нет. */
+  notes?: string[];
 }

@@ -18,7 +18,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { WebContents } from 'electron';
-import { AGENT_LIMITS, browserAgentArgs } from '@parley/protocol';
+import { AGENT_LIMITS, AGENT_VIEWPORT, browserAgentArgs } from '@parley/protocol';
 import type {
   BrowserAgentArgs,
   BrowserAgentConsoleEntry,
@@ -212,8 +212,12 @@ export function ownerOf(request: BrowserAgentOpEvent, args: BrowserAgentArgs<'op
   return rooms.length === 1 && only !== undefined ? { kind: 'room', roomId: only } : own;
 }
 
-/** Повторы снимка невидимой страницы: до ~1 с, пока окно не сделает её поверхность прозрачной, но видимой. */
-const HIDDEN_CAPTURE_RETRIES = 20;
+/**
+ * Повторы снимка невидимой страницы: до ~0,5 с, пока окно не сделает её поверхность прозрачной, но видимой. Повторяется
+ * только отказ «кадр не рисуется» (Chromium: «Unable to capture screenshot»); другая ошибка уходит агенту сразу.
+ */
+const HIDDEN_CAPTURE_RETRIES = 10;
+const NOT_DRAWN = /capture screenshot/i;
 const HIDDEN_CAPTURE_RETRY_MS = 50;
 
 export function createAgentOps(deps: AgentOpsDeps): AgentOps {
@@ -426,19 +430,23 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
 
     const shoot = async (clip?: { x: number; y: number; width: number; height: number; scale: number }): Promise<Buffer> => {
       const params = clip === undefined ? { format: 'png' } : { format: 'png', clip, captureBeyondViewport: true };
-      // Окно переводит поверхность невидимой страницы в opacity: 0 асинхронно: пока кадр не рисуется, Chromium отказывает —
-      // повторяем недолго, первый удачный снимок возвращается сразу.
       for (let attempt = 0; ; attempt += 1) {
         try {
           const shot = await deps.inspector.send<{ data: string }>(id, 'Page.captureScreenshot', params);
           return Buffer.from(shot.data, 'base64');
         } catch (error) {
-          if (record.visible || attempt >= HIDDEN_CAPTURE_RETRIES) throw error;
+          // Видимость читается из реестра сейчас: за время снимка человек мог показать страницу или спрятать её.
+          const hidden = pages.get(pageKey(record.workKey, record.pageId))?.visible === false;
+          if (!hidden || !NOT_DRAWN.test(error instanceof Error ? error.message : String(error))) throw error;
+          if (attempt >= HIDDEN_CAPTURE_RETRIES) {
+            throw new AgentOpError('tab_hidden', `Page ${record.agentId} is not shown to the human and Chromium does not draw it: ask them to open its browser panel, or read browser_console and browser_network.`);
+          }
           await new Promise((resolve) => setTimeout(resolve, HIDDEN_CAPTURE_RETRY_MS));
         }
       }
     };
 
+    const notes: string[] = [];
     const capture = async (): Promise<{ png: Buffer; viewport: { width: number; height: number } }> => {
       if (args.fullPage !== true) return { png: await shoot(), viewport: view };
       // Высота страницы — уже при нужном размере (под временной эмуляцией вёрстка другая).
@@ -450,7 +458,10 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
           `The page is ${total} px tall, more than ${AGENT_LIMITS.fullPageViewports} viewport heights (${view.height} px): take viewport screenshots of parts of the page instead.`,
         );
       }
-      const width = Math.max(view.width, Math.ceil(page.cssContentSize.width));
+      const wide = Math.max(view.width, Math.ceil(page.cssContentSize.width));
+      // Ширина не больше предела размера снимка: страница в десятки тысяч пикселей дала бы полосы в сотни мегабайт.
+      const width = Math.min(wide, AGENT_VIEWPORT.maxWidth);
+      if (width < wide) notes.push(`The page is ${wide} px wide; the screenshot is cut at ${width} px.`);
       const strips: Buffer[] = [];
       // Полоса выше поверхности вида рисуется повтором (спайк 0.7): режем по высоте вьюпорта и склеиваем.
       for (let y = 0; y < total; y += view.height) strips.push(await shoot({ x: 0, y, width, height: Math.min(view.height, total - y), scale: 1 }));
@@ -473,6 +484,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
       viewport: taken.viewport,
       fullPage: args.fullPage === true,
       emulated: spec !== null || deps.emulation.current(id) !== null,
+      ...(notes.length === 0 ? {} : { notes }),
     };
   }
 
