@@ -8,7 +8,8 @@ import { clampNoteText } from '../shared/app-note.js';
 import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, UpdateInfo } from '../shared/bridge.js';
 import { encodeIpcError } from '../shared/ipc-error.js';
 import { DEVTOOLS_LIMITS, isViewportSpec, type DevtoolsSnapshot } from '../shared/browser-devtools.js';
-import type { AgentOpenTabResult, ContextInput, SavedContext } from '../shared/browser-types.js';
+import type { AgentOpenTabResult, AgentPageRegistration, ContextInput, SavedContext } from '../shared/browser-types.js';
+import type { BrowserOwner } from '../shared/layout-types.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 import { DropTooLargeError } from './drops.js';
 import { HostError } from './host-connection.js';
@@ -160,6 +161,28 @@ export function isAppNote(value: unknown): value is AppNote {
 }
 
 /** Ответ окна на просьбу агента открыть вкладку (спека браузера 3.5, этап B2): форма — до main. */
+function parseOwner(raw: unknown): BrowserOwner | null {
+  if (!isRecord(raw)) return null;
+  if (raw.kind === 'session' && typeof raw.sessionId === 'string' && raw.sessionId !== '' && raw.sessionId.length <= 64) return { kind: 'session', sessionId: raw.sessionId };
+  if (raw.kind === 'room' && typeof raw.roomId === 'string' && raw.roomId !== '' && raw.roomId.length <= 64) return { kind: 'room', roomId: raw.roomId };
+  return null;
+}
+
+/** Запись реестра страниц панелей из рендерера (спека браузера 3.5, 3.10): форма и пределы — до main. Вкладки человека (`browser:…`) сюда не входят. */
+export function parseAgentRegistration(raw: unknown): AgentPageRegistration | null {
+  if (!isRecord(raw) || !isValidWorkKey(raw.workKey)) return null;
+  const workKey = raw.workKey;
+  const isPage = (id: unknown): id is string => typeof id === 'string' && id.startsWith('bp-') && id.length <= 64;
+  if (raw.gone === true) return isPage(raw.pageId) ? { workKey, pageId: raw.pageId, gone: true } : null;
+  const owner = parseOwner(raw.owner);
+  if (owner === null) return null;
+  if ('paused' in raw) return typeof raw.paused === 'boolean' ? { workKey, owner, paused: raw.paused } : null;
+  const { webContentsId, pageId, visible } = raw;
+  if (!isPage(pageId) || typeof visible !== 'boolean') return null;
+  if (webContentsId !== null && !Number.isInteger(webContentsId)) return null;
+  return { webContentsId: webContentsId as number | null, workKey, owner, pageId, visible };
+}
+
 export function parseAgentOpenTabResult(raw: unknown): AgentOpenTabResult | null {
   if (!isRecord(raw)) return null;
   if (raw.error === 'limit' || raw.error === 'no_work') return { error: raw.error };
@@ -249,7 +272,7 @@ export interface RegisterIpcOptions {
     /** Размер вьюпорта (спека 2026-10-07, 4.2): main/browser/emulation.ts#createEmulation. */
     emulation: Pick<Emulation, 'set'>;
     /** Ответы окна на просьбы агента (спека браузера 3.7, этап B2): main/browser/agent-ops.ts. */
-    agent: Pick<AgentOps, 'openTabResult'>;
+    agent: Pick<AgentOps, 'openTabResult' | 'registerTab'>;
   };
 }
 
@@ -858,6 +881,18 @@ export function registerIpc(options: RegisterIpcOptions): void {
         throw new HostError('bad_request', 'invalid agent open-tab result');
       }
       browser.agent.openTabResult(requestId, result);
+    }),
+  );
+
+  // Реестр страниц панелей для агента (спека браузера 3.5). Живая страница — только гость раздела браузера; без гостя
+  // (панель выгружена), закрытие страницы и пауза панели гостя не имеют.
+  ipcMain.handle(
+    'browser:register-tab',
+    withIpcError(async (_event, raw: unknown) => {
+      const registration = parseAgentRegistration(raw);
+      if (registration === null) throw new HostError('bad_request', 'invalid browser page registration');
+      if ('webContentsId' in registration && registration.webContentsId !== null) browserGuest(browser, registration.webContentsId);
+      browser.agent.registerTab(registration);
     }),
   );
 

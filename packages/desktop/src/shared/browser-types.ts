@@ -226,4 +226,8 @@ export interface BrowserApi {
   onAgentOpenTab(listener: (e: AgentOpenTab) => void): () => void;
   /** Ответ окна main на просьбу агента (`browser:agent-open-tab-result`): id вкладки раскладки или причина отказа. */
   agentOpenTabResult(requestId: string, result: AgentOpenTabResult): Promise<void>;
+  /** Реестр страниц панелей для агента (`browser:register-tab`, спека браузера 3.5, 3.10): страница, её закрытие, пауза панели. */
+  registerTab(e: AgentPageRegistration): Promise<void>;
+  /** Агент действует на странице (`browser:agent-activity`): подпись снимка в чужом размере, перевод скрытой поверхности в `opacity: 0`. */
+  onAgentActivity(listener: (e: AgentActivity) => void): () => void;
 }

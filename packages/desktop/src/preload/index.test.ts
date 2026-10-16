@@ -146,4 +146,17 @@ describe('preload: последний статус и тема', () => {
     await bridge.browser.agentOpenTabResult('r1', { tabId: 'browser:abc123', reused: false, mounted: true });
     expect(ipcRenderer.invoke).toHaveBeenCalledWith('browser:agent-open-tab-result', 'r1', { tabId: 'browser:abc123', reused: false, mounted: true });
   });
+
+  it('browser.registerTab зовёт browser:register-tab; onAgentActivity: событие приходит подписчику, отписка снимает его (этап C)', async () => {
+    const bridge = await loadPreload();
+    const { ipcRenderer } = await import('electron');
+    await bridge.browser.registerTab({ workKey: '/p w-1', pageId: 'bp-aaaaaa', gone: true });
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith('browser:register-tab', { workKey: '/p w-1', pageId: 'bp-aaaaaa', gone: true });
+    const listener = vi.fn();
+    const off = bridge.browser.onAgentActivity(listener);
+    emit('browser:agent-activity', { webContentsId: 7, session: 'S02', op: 'tabs', phase: 'start' });
+    off();
+    emit('browser:agent-activity', { webContentsId: 7, session: 'S02', op: 'tabs', phase: 'end' });
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
 });

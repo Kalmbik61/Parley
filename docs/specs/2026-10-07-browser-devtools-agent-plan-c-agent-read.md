@@ -1674,7 +1674,7 @@ git commit -m "feat(desktop): снимок агента — временная �
 - Берёт: `createAgentOps`, `AgentOps` (задачи 10–12); `AgentPageRegistration`, `AgentActivity` (задача 10).
 - Отдаёт (индекс, «Мост окна»): `BrowserApi.registerTab(e)` (канал `browser:register-tab`), `BrowserApi.onAgentActivity(listener)` (событие `browser:agent-activity`); `FakeBridge.emitAgentActivity(e)`; `parseAgentRegistration(raw)` (`main/ipc.ts`); `RegisterIpcOptions.browser.agent: Pick<AgentOps, 'openTabResult' | 'registerTab'>`.
 
-- [ ] **Шаг 1. Написать падающие тесты.**
+- [x] **Шаг 1. Написать падающие тесты.**
 
   В `preload/index.test.ts` (хелперы `loadPreload`, `emit` — как у теста `onAgentOpenTab`):
 
@@ -1736,9 +1736,9 @@ git commit -m "feat(desktop): снимок агента — временная �
 
   (`browserSetup`, `setup`, `codeOf` — хелперы файла; форму вызова `host:call` и ожидаемый отказ сверить с соседним тестом `host:call` в том же файле.)
 
-- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/preload/index.test.ts src/main/ipc.test.ts` → FAIL: нет `registerTab`, `onAgentActivity`, канала `browser:register-tab`.
+- [x] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/preload/index.test.ts src/main/ipc.test.ts` → FAIL: нет `registerTab`, `onAgentActivity`, канала `browser:register-tab`.
 
-- [ ] **Шаг 3. Мост и preload.** В `shared/browser-types.ts`, `interface BrowserApi`:
+- [x] **Шаг 3. Мост и preload.** В `shared/browser-types.ts`, `interface BrowserApi`:
 
 ```ts
   /** Реестр страниц панелей для агента (`browser:register-tab`, спека браузера 3.5, 3.10): страница, её закрытие, пауза панели. */
@@ -1749,7 +1749,7 @@ git commit -m "feat(desktop): снимок агента — временная �
 
   В `preload/index.ts` — по образцу `onAgentOpenTab` (набор слушателей на `ipcRenderer.on('browser:agent-activity', …)`; `registerTab: (e) => ipcRenderer.invoke('browser:register-tab', e)`); в `fake-bridge.ts` — `registerTab` пишет `{ method: 'registerTab', args: [e] }` в `browserCalls`, `onAgentActivity` с набором слушателей и `emitAgentActivity(e)` по образцу `emitAgentOpenTab`.
 
-- [ ] **Шаг 4. IPC main.** В `main/ipc.ts`:
+- [x] **Шаг 4. IPC main.** В `main/ipc.ts`:
   - `RegisterIpcOptions.browser.agent: Pick<AgentOps, 'openTabResult' | 'registerTab'>`;
   - рядом с `parseAgentOpenTabResult`:
 
@@ -1795,7 +1795,7 @@ export function parseAgentRegistration(raw: unknown): AgentPageRegistration | nu
 
   - `MAIN_ONLY_METHODS`, `forwardHostToWindow` и `parseAgentOpenTabResult` не трогать.
 
-- [ ] **Шаг 5. Проводка `main/index.ts`.** Расширить вызов `createAgentOps` B2 (рядом с `agentsAllowed`, `openTab`; `inspector`, `emulation`, `webContents`, `nativeImage`, `saveImage`, `dropsDir` в файле уже есть):
+- [x] **Шаг 5. Проводка `main/index.ts`.** Расширить вызов `createAgentOps` B2 (рядом с `agentsAllowed`, `openTab`; `inspector`, `emulation`, `webContents`, `nativeImage`, `saveImage`, `dropsDir` в файле уже есть):
 
 ```ts
       fromId: (id) => webContents.fromId(id) ?? null,
@@ -1820,11 +1820,11 @@ export function parseAgentRegistration(raw: unknown): AgentPageRegistration | nu
 
   **Проверка на живом окне** (до шага 6, `pnpm dev`): открыть страницу в панели чата, вызвать `browser_tabs` агента — страница в списке; перезагрузить окно (⌘R) — через секунду `browser_tabs` снова показывает её, а открытие любой новой страницы в `<webview>` реестр не стирает. Если `did-start-navigation` шумит (приходит от гостей или сбрасывает реестр без перезагрузки) — запасной вариант одной строкой: `window.webContents.on('did-finish-load', …)` главного кадра вместо него, а `reset` звать только при `webContents.getURL()` страницы окна (не гостя).
 
-- [ ] **Шаг 6. Запустить — проходит.**
+- [x] **Шаг 6. Запустить — проходит.**
   - Та же команда → PASS.
   - `pnpm --filter @parley/desktop typecheck` → без ошибок; `pnpm --filter @parley/desktop test` → зелёный.
 
-- [ ] **Шаг 7. Закоммитить.**
+- [x] **Шаг 7. Закоммитить.**
 
 ```bash
 git add packages/desktop/src/shared/browser-types.ts packages/desktop/src/preload packages/desktop/src/renderer/test-utils/fake-bridge.ts packages/desktop/src/main/ipc.ts packages/desktop/src/main/ipc.test.ts packages/desktop/src/main/index.ts
