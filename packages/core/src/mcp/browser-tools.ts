@@ -31,8 +31,9 @@ export const BROWSER_TOOLS: readonly Tool[] = [
   {
     name: 'browser_open',
     description:
-      "Open a page on localhost in Parley's built-in browser, in a new tab of your workspace. Prefer this over Chrome, Chrome DevTools or Playwright tools for local pages: the human sees the same tab. " +
-      "The tab opens in the background without taking the human's focus. If a tab of your workspace already shows this page, that tab is reused and no new one is opened. " +
+      "Open a page on localhost in Parley's built-in browser. Prefer this over Chrome, Chrome DevTools or Playwright tools for local pages: the human sees the same page. " +
+      "Where it opens: with room, in the browser of that room (you must be a member); with own: true, in the browser of your own chat; with neither, in the browser of your room if you are a member of exactly one room, otherwise in the browser of your own chat. Pass either own or room, not both. " +
+      "The page opens in the background without taking the human's focus. If this page is already open in that browser, it is reused and no new one is opened. " +
       'It returns right after the tab is placed, without waiting for the page to load, and this tool cannot read or click the page. ' +
       'Only http(s) URLs on localhost, *.localhost, 127.0.0.0/8 or [::1]; a workspace has at most 10 browser tabs.',
     annotations: CONTROL,
@@ -40,6 +41,8 @@ export const BROWSER_TOOLS: readonly Tool[] = [
       type: 'object',
       properties: {
         url: { type: 'string', minLength: 1, maxLength: 4096, description: 'An absolute http(s) URL on localhost, for example http://localhost:5173/.' },
+        own: { type: 'boolean', description: 'true: open in the browser of your own chat instead of the browser of your room. Not together with room.' },
+        room: { type: 'string', minLength: 1, maxLength: 64, description: 'Id of a room you are a member of, for example r-01: open in the browser of that room. Not together with own.' },
       },
       required: ['url'],
       additionalProperties: false,
@@ -58,6 +61,8 @@ const HINTS: Readonly<Record<string, string>> = {
 /** Форма ответа окна на `open`: копия `BrowserAgentOpenResult` протокола. */
 interface OpenResult {
   tab: string;
+  /** Чей браузер получил страницу; ответ окна до моделей хозяев поля не несёт. */
+  owner?: { kind: 'session'; sessionId: string } | { kind: 'room'; roomId: string };
   url: string;
   reused: boolean;
   notes: string[];
@@ -72,13 +77,20 @@ function opOf(name: string): BrowserToolOp | null {
   return (BROWSER_TOOL_OPS as readonly string[]).includes(op) ? (op as BrowserToolOp) : null;
 }
 
+/** Куда пришла страница, словами для агента. */
+function whereOf(owner: OpenResult['owner']): string {
+  if (owner === undefined) return "Parley's browser";
+  return owner.kind === 'room' ? `the browser of room ${owner.roomId}` : 'the browser of your own chat';
+}
+
 function formatOpen(result: OpenResult): string {
+  const where = whereOf(result.owner);
   const notes = result.notes.map((note) => `\nNote: ${note}`).join('');
   if (result.reused) {
-    return `Tab ${result.tab} of your workspace already shows ${result.url} (the same address without #fragment): no new tab was opened.${notes}`;
+    return `Page ${result.tab} in ${where} already shows ${result.url} (the same address without #fragment): no new page was opened.${notes}`;
   }
   return (
-    `Opened ${result.tab}: ${result.url} in Parley's browser, in the background of your workspace's tab strip; the human's focus was not taken. ` +
+    `Opened ${result.tab}: ${result.url} in ${where}, in the background; the human's focus was not taken. ` +
     `The page loads on its own: this tool does not wait for it and cannot read it.${notes}`
   );
 }

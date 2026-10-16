@@ -83,8 +83,10 @@ describe('объявление инструмента', () => {
     const [open] = tools;
     expect(open?.annotations).toEqual({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
     expect(open?.inputSchema).toMatchObject({ required: ['url'], additionalProperties: false });
+    // Куда открыть (спека 5.1): own и room — необязательные.
+    expect(Object.keys((open?.inputSchema as { properties: object }).properties)).toEqual(['url', 'own', 'room']);
     expect(open?.description).not.toMatch(/[А-Яа-яЁё]/);
-    for (const phrase of ['Prefer this over Chrome, Chrome DevTools or Playwright', 'localhost', 'without taking the human', 'reused', 'at most 10']) {
+    for (const phrase of ['Prefer this over Chrome, Chrome DevTools or Playwright', 'localhost', 'without taking the human', 'reused', 'at most 10', 'with own: true', 'exactly one room']) {
       expect(open?.description, phrase).toContain(phrase);
     }
     expect(BROWSER_TOOLS).toHaveLength(1);
@@ -114,13 +116,22 @@ describe('ответы — текстом для агента', () => {
     expect(result.text).toContain('does not wait for it and cannot read it');
   });
 
+  it('хозяин назван словами: браузер комнаты и браузер своего чата', async () => {
+    const client = await connect(await startEndpoint());
+    answers.push({ status: 200, body: { ok: true, result: { tab: 't1', owner: { kind: 'room', roomId: 'r-01' }, url: PAGE, reused: false, notes: [] } } });
+    expect((await call(client, 'browser_open', { url: PAGE, room: 'r-01' })).text).toContain('in the browser of room r-01');
+    answers.push({ status: 200, body: { ok: true, result: { tab: 't2', owner: { kind: 'session', sessionId: 's-02' }, url: PAGE, reused: true, notes: [] } } });
+    expect((await call(client, 'browser_open', { url: PAGE, own: true })).text).toContain('in the browser of your own chat');
+    expect(seen.at(-1)?.body).toEqual({ op: 'open', args: { url: PAGE, own: true } });
+  });
+
   it('вкладка уже была: сказано, что новая не открыта; заметки окна добавлены', async () => {
     const client = await connect(await startEndpoint());
     answers.push({ status: 200, body: { ok: true, result: { tab: 't1', url: PAGE, reused: true, notes: ['The workspace is not open in Parley\'s window.'] } } });
     const result = await call(client, 'browser_open', { url: PAGE });
     expect(result.isError).toBe(false);
-    expect(result.text).toContain('Tab t1 of your workspace already shows');
-    expect(result.text).toContain('no new tab was opened');
+    expect(result.text).toContain('Page t1 in Parley\'s browser already shows');
+    expect(result.text).toContain('no new page was opened');
     expect(result.text).toContain("Note: The workspace is not open in Parley's window.");
   });
 });
