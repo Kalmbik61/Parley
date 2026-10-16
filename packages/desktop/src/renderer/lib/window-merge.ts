@@ -57,3 +57,46 @@ export function earlierCursor(entry: WorkEntry, roomId: string): string | undefi
   const from = entry.map.compact?.messages.rooms[roomId]?.tailFrom ?? null;
   return from === null ? undefined : `before:${from}`;
 }
+
+/**
+ * Работа с письмами, пришедшими событием `rooms.mail` (карта-журнал): новые встают в ленту, а счётчики хоста в `compact`
+ * растут вместе с ней, чтобы «ещё старых писем» не появлялось от нового письма. Письмо, которое окно уже держит, не считается.
+ */
+export function withMail(entry: WorkEntry, messages: readonly Message[]): WorkEntry {
+  const have = new Set(entry.map.messages.map((message) => message.id));
+  const fresh = messages.filter((message) => !have.has(message.id));
+  if (fresh.length === 0) return entry;
+  const next = withMessages(entry, fresh);
+  const compact = entry.map.compact;
+  if (compact === undefined) return next;
+  const rooms = { ...compact.messages.rooms };
+  const unreadRooms = { ...compact.unread.rooms };
+  let unreadLetters = compact.unread.letters;
+  for (const message of fresh) {
+    const key = message.roomId ?? 'direct';
+    const counts = rooms[key];
+    if (counts !== undefined) rooms[key] = { ...counts, total: counts.total + 1, included: counts.included + 1, tailFrom: counts.tailFrom ?? messageSeq(message) };
+    if (isHumanUnread(message)) {
+      if (message.roomId === null) unreadLetters += 1;
+      else unreadRooms[message.roomId] = (unreadRooms[message.roomId] ?? 0) + 1;
+    }
+  }
+  const latest = fresh.reduce((top, message) => (messageSeq(message) > messageSeq(top) ? message : top));
+  return {
+    ...next,
+    map: {
+      ...next.map,
+      compact: {
+        ...compact,
+        messages: {
+          ...compact.messages,
+          total: compact.messages.total + fresh.length,
+          included: compact.messages.included + fresh.length,
+          latestId: compact.messages.latestId === null || messageSeq(latest) > messageSeq({ id: compact.messages.latestId }) ? latest.id : compact.messages.latestId,
+          rooms,
+        },
+        unread: { letters: unreadLetters, rooms: unreadRooms },
+      },
+    },
+  };
+}

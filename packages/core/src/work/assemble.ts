@@ -47,6 +47,14 @@ interface Parts {
   decisions: DecisionJournalIntent[] | undefined;
 }
 
+/**
+ * Кому у письма стоит отметка `readBy`: адресатам (`recipientsOf`) и человеку на письмах, которые он видит (`unreadForHuman`:
+ * не его собственные, прямые — только ему). Общее правило сборки и дельты (`appendLetters`, `applyCursors`).
+ */
+function readersOf(message: Message, shape: WorkMap): Set<string> {
+  return new Set([...recipientsOf(message, shape), ...(message.from !== HUMAN && (message.roomId !== null || message.to.includes(HUMAN)) ? [HUMAN] : [])]);
+}
+
 function compose(index: WorkIndexMap, keys: (string | null)[], { journals, cursors, decisions }: Parts): WorkMap {
   // Позиция письма в своём журнале и позиция курсора там же: прочитано, если курсор на письме или за ним.
   const positions = new Map<string, Map<string, number>>();
@@ -73,8 +81,7 @@ function compose(index: WorkIndexMap, keys: (string | null)[], { journals, curso
     // водораздела включительно» или «письмо отмечено отдельно». Явное «прочёл» человека из окна (`markHumanRead`) двигает
     // водораздел (цена спеки), а отметка мутатора на только что добавленной системной строке — только отметка:
     // письма человеку, лежащие позади неё, остаются непрочитанными.
-    const readers = new Set([...recipientsOf(message, shape), ...(letter.from !== HUMAN && (letter.roomId !== null || letter.to.includes(HUMAN)) ? [HUMAN] : [])]);
-    for (const sessionId of readers) {
+    for (const sessionId of readersOf(message, shape)) {
       const file = cursors.get(sessionId);
       const cursor = file?.cursors[key];
       const read = cursor === undefined ? -1 : (positions.get(key)?.get(cursor) ?? -1);
@@ -155,6 +162,80 @@ export async function assembleFromIndex(projectPath: string, workId: string, ind
     },
   );
   return compose(index, keys, { journals, cursors, decisions });
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Дельта собранной карты (хост, задача 8): хвост журнала или курсор меняют карту в памяти, не читая диск. Результат
+// совпадает с полной сборкой (`assembleMap`) на тех же файлах; прежняя карта не меняется — её уже раздали слушателям.
+
+/**
+ * Карта с дописанными письмами журналов (`letters` — новые строки, в порядке журнала). Письма комнат, которых в карте нет,
+ * пропускаются: комнату принесёт индекс, и его перечитывание соберёт карту заново. `cursors` — курсоры, уже известные
+ * вызывающему: отметка на новом письме (системная строка мутатора) могла прийти раньше самого письма.
+ */
+export function appendLetters(map: WorkMap, letters: readonly JournalLetter[], cursors: ReadonlyMap<string, CursorFile> = new Map()): WorkMap {
+  const keys = journalKeys(map as unknown as WorkIndexMap);
+  const lists = new Map<string, Message[]>(keys.map((roomId) => [keyOf(roomId), []]));
+  for (const message of map.messages) lists.get(keyOf(message.roomId))?.push(message);
+  const added = new Map<string, JournalLetter[]>();
+  for (const letter of letters) {
+    const key = keyOf(letter.roomId);
+    if (lists.has(key)) added.set(key, [...(added.get(key) ?? []), letter]);
+  }
+  if (added.size === 0) return map;
+  const deletedSessions = new Set(map.work.deletedSessions ?? []);
+  let newest = map.work.updatedAt;
+  for (const [key, rows] of added) {
+    rows.forEach((row, at) => {
+      const letter = { ...row };
+      delete (letter as { seq?: number }).seq;
+      const message = { ...letter, readBy: {} } as Message;
+      if (deletedSessions.has(letter.from) || letter.to.some((id) => deletedSessions.has(id))) message.deleted = true;
+      for (const sessionId of readersOf(message, map)) {
+        const file = cursors.get(sessionId);
+        const cursor = file?.cursors[key];
+        // Водораздел на этом письме или на письме позади него в той же порции; отметка — на самом письме.
+        const covered = cursor !== undefined && rows.slice(at).some((later) => later.id === cursor);
+        if (file !== undefined && (covered || file.marks[key]?.includes(letter.id) === true)) message.readBy[sessionId] = letter.at;
+      }
+      lists.get(key)!.push(message);
+      if (message.at > newest) newest = message.at;
+    });
+  }
+  return {
+    ...map,
+    work: newest === map.work.updatedAt ? map.work : { ...map.work, updatedAt: newest },
+    messages: mergeByTime(keys.map((roomId) => lists.get(keyOf(roomId))!)),
+  };
+}
+
+/**
+ * Карта с пересчитанным `readBy` одной сессии по её файлу курсоров (`undefined` — файла нет: ничего не прочитано).
+ * Письма, чья отметка не изменилась, остаются прежними объектами.
+ */
+export function applyCursors(map: WorkMap, sessionId: string, file: CursorFile | undefined): WorkMap {
+  const counts = new Map<string, number>();
+  const cursorAt = new Map<string, number>();
+  const positions = map.messages.map((message) => {
+    const key = keyOf(message.roomId);
+    const position = counts.get(key) ?? 0;
+    counts.set(key, position + 1);
+    if (file?.cursors[key] === message.id) cursorAt.set(key, position);
+    return position;
+  });
+  let changed = false;
+  const messages = map.messages.map((message, at) => {
+    if (!readersOf(message, map).has(sessionId)) return message;
+    const key = keyOf(message.roomId);
+    const read = file !== undefined && ((cursorAt.get(key) ?? -1) >= positions[at]! || file.marks[key]?.includes(message.id) === true);
+    if (read === (message.readBy[sessionId] !== undefined)) return message;
+    changed = true;
+    const readBy = { ...message.readBy };
+    if (read) readBy[sessionId] = message.at;
+    else delete readBy[sessionId];
+    return { ...message, readBy };
+  });
+  return changed ? { ...map, messages } : map;
 }
 
 /** `map.json` v3 + журналы + `decisions.json` → `WorkMap` прежней формы. */

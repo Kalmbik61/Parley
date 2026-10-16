@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { assembleMap, MapJournalReadonlyError } from './assemble.js';
-import { journalFile, journalLine, type JournalLetter } from './journal.js';
+import { appendLetters, applyCursors, assembleMap, MapJournalReadonlyError } from './assemble.js';
+import { appendMessage, journalFile, journalLine, readCursorFile, writeCursor, type JournalLetter } from './journal.js';
 import { recipientsOf } from './letters.js';
 import { addMessage, addSession, parseMap } from './map.js';
 import { addRoom } from './rooms.js';
@@ -547,5 +547,63 @@ describe('журнал комнаты, которой нет в индексе',
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('дельта карты-журнала (appendLetters, applyCursors)', () => {
+  it('appendLetters даёт ту же карту, что полная сборка после записи писем: рассылка комнаты, адресное, прямое, от человека', async () => {
+    const { id } = await seedWork('v3');
+    const before = await assembleMap(project, id);
+    const letters = [
+      await appendMessage(project, id, 'r-01', { from: 's-02', to: [], text: 'всем в комнате', at: at(200) }),
+      await appendMessage(project, id, 'r-02', { from: HUMAN, to: ['s-03'], text: 'человек — s-03', at: at(201) }),
+      await appendMessage(project, id, null, { from: 's-01', to: [HUMAN], text: 'прямое человеку', at: at(202) }),
+    ];
+    const full = await assembleMap(project, id);
+    const delta = appendLetters(before, letters);
+    expect(delta.messages).toEqual(full.messages);
+    expect(delta.work.updatedAt).toBe(full.work.updatedAt);
+    // Прежняя карта не тронута: снимки, уже розданные слушателям, остаются теми, какими были.
+    expect(before.messages).toHaveLength(50);
+  });
+
+  it('appendLetters вставляет письмо с более ранним временем на своё место, как слияние по времени', async () => {
+    const { id } = await seedWork('v3');
+    const before = await assembleMap(project, id);
+    const late = await appendMessage(project, id, 'r-03', { from: 's-01', to: [], text: 'поздно', at: at(300) });
+    const early = await appendMessage(project, id, 'r-01', { from: 's-01', to: [], text: 'раньше', at: at(20) });
+    const full = await assembleMap(project, id);
+    expect(appendLetters(before, [late, early]).messages).toEqual(full.messages);
+  });
+
+  it('appendLetters учитывает отметку курсора на только что добавленном письме', async () => {
+    const { id } = await seedWork('v3');
+    const before = await assembleMap(project, id);
+    const letter = await appendMessage(project, id, 'r-01', { from: 's-02', to: [], text: 'системная строка', at: at(210) });
+    await writeCursor(project, id, 's-03', 'r-01', letter.id);
+    const full = await assembleMap(project, id);
+    const file = await readCursorFile(project, id, 's-03');
+    const delta = appendLetters(before, [letter], new Map([['s-03', file]]));
+    // Само письмо отмечено сразу; письма позади водораздела подтянет событие курсора (`applyCursors`).
+    expect(delta.messages.at(-1)?.readBy['s-03']).toBe(letter.at);
+    expect(applyCursors(delta, 's-03', file).messages).toEqual(full.messages);
+  });
+
+  it('applyCursors даёт ту же карту, что полная сборка после записи курсора; снятие файла курсора снимает отметки', async () => {
+    const { id } = await seedWork('v3');
+    const before = await assembleMap(project, id);
+    const last = before.messages.filter((message) => message.roomId === 'r-02').at(-1)!;
+    await writeCursor(project, id, 's-03', 'r-02', last.id);
+    await writeCursor(project, id, HUMAN, 'r-03', before.messages.filter((message) => message.roomId === 'r-03').at(-1)!.id);
+    const full = await assembleMap(project, id);
+    const once = applyCursors(before, 's-03', await readCursorFile(project, id, 's-03'));
+    const twice = applyCursors(once, HUMAN, await readCursorFile(project, id, HUMAN));
+    expect(twice.messages).toEqual(full.messages);
+    expect(once.messages.some((message) => message.readBy['s-03'] !== undefined)).toBe(true);
+    // Файла нет — «ничего не прочитано»: отметки сессии уходят.
+    expect(applyCursors(once, 's-03', undefined).messages.every((message) => message.readBy['s-03'] === undefined)).toBe(true);
+    // Письма, чья отметка не менялась, остаются теми же объектами.
+    const unchanged = once.messages.filter((message) => message.roomId === 'r-01');
+    expect(twice.messages.filter((message) => message.roomId === 'r-01')).toEqual(unchanged);
   });
 });

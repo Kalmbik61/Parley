@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks';
 import type { Server, Socket } from 'node:net';
 import {
   COMPACT_WORKS_FEATURE,
+  ROOMS_MAIL_FEATURE,
   FEED_CODEX_FEATURE,
   LineDecoder,
   LineTooLongError,
@@ -38,7 +39,7 @@ interface HelloParams {
 }
 
 /** Что хост умеет сверх протокола 1: окно по этому списку знает, что снимок работ компактный и что лента Chat есть у Codex. */
-const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE];
+const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE, ROOMS_MAIL_FEATURE];
 
 /** Пишет один кадр напрямую в сокет — до рукопожатия у соединения ещё нет `Client`. */
 function writeRaw(socket: Socket, message: ResponseMessage): void {

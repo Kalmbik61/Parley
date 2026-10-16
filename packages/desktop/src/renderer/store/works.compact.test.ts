@@ -96,4 +96,20 @@ describe('useWorksStore: номер снимка (P35)', () => {
     expect(useWorksStore.getState().entries[0]?.map.messages).toHaveLength(5);
     dispose();
   });
+
+  it('пропущенное окном rooms.mail: снимок следующего works.list (переподключение или новее по номеру) содержит письмо и применяется', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('works.list', () => snapshot(5, [entry([note('m-05')], 5, 5)]));
+    const first = useWorksStore.getState().init(bridge);
+    await flush();
+    expect(useWorksStore.getState().entries[0]?.map.messages.map((message) => message.id)).toEqual(['m-05']);
+    first();
+
+    // Событие о письме m-06 окно не получило; хост же после письма сменил номер снимка (works.list отвечает с новым).
+    bridge.setHandler('works.list', () => snapshot(6, [entry([note('m-05'), note('m-06')], 6, 5)]));
+    const second = useWorksStore.getState().init(bridge);
+    await flush();
+    expect(useWorksStore.getState().entries[0]?.map.messages.map((message) => message.id)).toEqual(['m-05', 'm-06']);
+    second();
+  });
 });

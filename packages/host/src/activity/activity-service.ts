@@ -974,9 +974,17 @@ export function createActivityService(
     for (const [key] of Array.from(trustWaitTimers)) if (!validSessions.has(key)) clearTrustWaitTimer(key);
   }
 
-  function handleWorksChange(snapshot: WorksSnapshot): void {
+  /**
+   * `previous` — снимок до изменения (диф уже есть у `refresh`): работа, чья запись та же и у которой наблюдатель журналов
+   * уже включён, не пересчитывается. У изменившейся работы журнал хуков дочитывается для КАЖДОЙ её сессии, а у новой — при
+   * заведении наблюдателя: дочитывание закрывает окно между созданием `fs.watch` и его включением и не урезается.
+   */
+  function handleWorksChange(snapshot: WorksSnapshot, previous?: WorksSnapshot): void {
     if (stopped) return;
+    const before = new Map((previous?.entries ?? []).map((entry) => [workKeyOf(entry.projectPath, entry.map.work.id), entry]));
     for (const entry of snapshot.entries) {
+      const wk = workKeyOf(entry.projectPath, entry.map.work.id);
+      if (before.get(wk) === entry && workWatches.get(wk)?.watcher != null) continue;
       const { watch, renewed } = ensureWorkWatch(entry);
       for (const session of entry.map.sessions) {
         const ref: SessionRef = {
@@ -1019,7 +1027,7 @@ export function createActivityService(
       void logIndex.start().then(() => catchUp.schedule(), (error: unknown) => {
         host.log.error('индекс логов провайдера не построился', { error: String(error) });
       });
-      unsubscribeWorks = works.onChange((snapshot) => handleWorksChange(snapshot));
+      unsubscribeWorks = works.onChange((snapshot, previous) => handleWorksChange(snapshot, previous));
       handleWorksChange(works.snapshot());
     },
     get: (ref) => live.get(refKey(ref)),

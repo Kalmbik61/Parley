@@ -1,9 +1,9 @@
 import type { HealthSample } from '@parley/protocol';
 
-/** Шесть счётчиков окна строки состояния: сумма с прошлого тика `health-service`. */
+/** Семь счётчиков окна строки состояния: сумма с прошлого тика `health-service`. */
 export type WindowTally = Pick<
   HealthSample,
-  'refreshCount' | 'refreshMs' | 'mapBytesParsed' | 'ptyBytes' | 'ptyChunks' | 'recomputes'
+  'refreshCount' | 'refreshMs' | 'mapBytesParsed' | 'journalBytesRead' | 'ptyBytes' | 'ptyChunks' | 'recomputes'
 >;
 
 /**
@@ -15,6 +15,8 @@ export interface WindowCounters {
   refresh(ms: number): void;
   /** Байты JSON карт после одного чтения списка: зовёт works-service там, где `readWorks` или наблюдатель вернули список; три перечитывания `readMap` внутри сервиса не считаются: `readMap` не отдаёт размер. */
   mapsParsed(bytes: number): void;
+  /** Байты журналов писем, прочитанные хвостом (`journal-tail.ts`): не карты, поэтому не в `mapsParsed`. */
+  journalBytes(bytes: number): void;
   /** Один кусок вывода PTY. */
   pty(bytes: number): void;
   /** Один пересчёт одной сессии (будильник или активность). */
@@ -27,6 +29,7 @@ const empty = (): WindowTally => ({
   refreshCount: 0,
   refreshMs: 0,
   mapBytesParsed: 0,
+  journalBytesRead: 0,
   ptyBytes: 0,
   ptyChunks: 0,
   recomputes: 0,
@@ -41,6 +44,9 @@ export function createWindowCounters(): WindowCounters {
     },
     mapsParsed(bytes) {
       tally.mapBytesParsed += bytes;
+    },
+    journalBytes(bytes) {
+      tally.journalBytesRead += bytes;
     },
     pty(bytes) {
       tally.ptyChunks += 1;

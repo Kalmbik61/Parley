@@ -21,6 +21,7 @@ import {
   loadConfig,
   loadProviders,
   openEvents,
+  recipientsOf,
   sessionTag,
   SYSTEM,
   PARLEY,
@@ -47,7 +48,7 @@ import { typeAndSubmit } from '../pty/type-and-submit.js';
 import { deliverRecipeToNewLeads } from '../rooms/rooms-service.js';
 import type { Attempt } from '../pty/type-and-submit.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
-import type { WorksService } from '../works/works-service.js';
+import type { RoomMail, WorksService } from '../works/works-service.js';
 import { ResumeLimiter } from './resume-limiter.js';
 
 export interface WakeServiceOptions {
@@ -225,6 +226,7 @@ export function createWakeService(
   let isPaused = false;
   let started = false;
   let unsubscribeWorks: (() => void) | undefined;
+  let unsubscribeMail: (() => void) | undefined;
   let unsubscribeActivity: (() => void) | undefined;
   let unsubscribeDraft: (() => void) | undefined;
   let unsubscribeHostDraft: (() => void) | undefined;
@@ -756,6 +758,17 @@ export function createWakeService(
     }
   }
 
+  /** Адресаты новых писем (`rooms.mail`): `to`, у рассылки комнаты — её участники без отправителя (`recipientsOf`). */
+  function recomputeAddressees(mail: RoomMail): void {
+    const entry = works.entry(mail.projectPath, mail.workId);
+    if (entry === undefined) return;
+    const addressees = new Set<string>();
+    for (const { from, to } of mail.appended) {
+      for (const id of recipientsOf({ roomId: mail.roomId, from, to } as Message, entry.map)) addressees.add(id);
+    }
+    for (const sessionId of addressees) recompute({ projectPath: mail.projectPath, workId: mail.workId, sessionId });
+  }
+
   return {
     enterDelayMs,
 
@@ -776,6 +789,8 @@ export function createWakeService(
         deliverRecipes();
         recomputeAll();
       });
+      // Письмо в журнал карты-журнала индекса не меняет: пересчитываются только его адресаты, а не все сессии всех работ.
+      unsubscribeMail = works.onMail(recomputeAddressees);
       unsubscribeActivity = activity.onChange((ref, value) => {
         const state = attempts.get(refKey(ref));
         // Ход начался (`UserPromptSubmit`) — попытка удалась, предохранитель не нужен. Сессия, которую
@@ -842,6 +857,7 @@ export function createWakeService(
       if (!started) return;
       started = false;
       unsubscribeWorks?.();
+      unsubscribeMail?.();
       unsubscribeActivity?.();
       unsubscribeDraft?.();
       unsubscribeHostDraft?.();

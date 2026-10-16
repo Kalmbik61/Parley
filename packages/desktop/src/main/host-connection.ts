@@ -5,6 +5,7 @@ import { performance } from 'node:perf_hooks';
 import type { HostPaths } from '@parley/host';
 import {
   COMPACT_WORKS_FEATURE,
+  ROOMS_MAIL_FEATURE,
   encodeLine,
   LineDecoder,
   LineTooLongError,
@@ -363,7 +364,8 @@ export class HostConnection {
         id,
         method: 'hello',
         // Окно читает компактный снимок работ (P35): письма хвостом, старше — страницами `context.messages`.
-        params: { token, protocol: PROTOCOL_VERSION, client: 'desktop', features: [COMPACT_WORKS_FEATURE] },
+        // `rooms-mail`: письма в журнале карты приходят событием `rooms.mail`, окно дочитывает их само (`room-pages.ts`).
+        params: { token, protocol: PROTOCOL_VERSION, client: 'desktop', features: [COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE] },
       }),
     );
 

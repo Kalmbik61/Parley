@@ -1,7 +1,9 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MapCompact, Message, WorkEntry } from '@parley/core';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeLetter, makeRoom, makeWork } from '../test-utils/work-fixtures.js';
+import { ROOMS_MAIL_FEATURE } from '@parley/protocol';
+import { useHostStore } from './host.js';
 import { useRoomPagesStore } from './room-pages.js';
 import { useWorksStore } from './works.js';
 
@@ -96,5 +98,80 @@ describe('useRoomPagesStore.loadEarlier', () => {
     });
     await useRoomPagesStore.getState().loadEarlier(bridge, entry([], 9, null), 'r-01', () => {});
     expect(seen).toEqual([{ projectPath: '/tmp/proj', workId: 'w-01', roomId: 'r-01' }]);
+  });
+});
+
+describe('useRoomPagesStore.init: rooms.mail', () => {
+  const connected = (features: string[] | null): void =>
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.14.0', methods: null, features } });
+  const mail = (roomId: string | null = 'r-01') => ({ projectPath: '/tmp/proj', workId: 'w-01', roomId, appended: [{ id: 'm-10', from: 's-01', to: [], kind: 'note', at: 'x' }] });
+  const page = (messages: Message[]) => ({ messages, page: { total: 10, returned: messages.length, complete: true, next: null, bytes: 1, cut: 0 } });
+
+  it('письмо комнаты дочитывается хвостом после последнего известного номера и встаёт в карту без works.changed', async () => {
+    connected([ROOMS_MAIL_FEATURE]);
+    const bridge = createFakeBridge();
+    const cursors: Array<string | undefined> = [];
+    bridge.setHandler('context.messages', (params) => {
+      cursors.push(params.cursor);
+      return page([note('m-10')]);
+    });
+    useWorksStore.setState({ entries: [entry([note('m-08'), note('m-09')], 9, 8)] });
+    const off = useRoomPagesStore.getState().init(bridge);
+
+    bridge.emit('rooms.mail', mail());
+    await vi.waitFor(() => expect(useWorksStore.getState().entries[0]?.map.messages.map((message) => message.id)).toEqual(['m-08', 'm-09', 'm-10']));
+
+    expect(cursors).toEqual(['after:9']);
+    // счётчики хоста растут вместе с лентой: «ещё старых» не появляется от нового письма
+    const compact = useWorksStore.getState().entries[0]!.map.compact!;
+    expect(compact.messages.total).toBe(10);
+    expect(compact.messages.rooms['r-01']).toMatchObject({ total: 10, included: 3 });
+    expect(compact.messages.latestId).toBe('m-10');
+    off();
+  });
+
+  it('то же письмо дважды (событие и страница) не дублируется и не раздувает счётчики', async () => {
+    connected([ROOMS_MAIL_FEATURE]);
+    const bridge = createFakeBridge();
+    bridge.setHandler('context.messages', () => page([note('m-09'), note('m-10')]));
+    useWorksStore.setState({ entries: [entry([note('m-08'), note('m-09')], 9, 8)] });
+    const off = useRoomPagesStore.getState().init(bridge);
+    bridge.emit('rooms.mail', mail());
+    await vi.waitFor(() => expect(useWorksStore.getState().entries[0]?.map.messages).toHaveLength(3));
+    expect(useWorksStore.getState().entries[0]?.map.compact?.messages.total).toBe(10);
+    off();
+  });
+
+  it('прежний хост без признака rooms-mail: событие не читается, окно живёт по works.changed как раньше', async () => {
+    connected(null);
+    const bridge = createFakeBridge();
+    let calls = 0;
+    bridge.setHandler('context.messages', () => {
+      calls += 1;
+      return page([note('m-10')]);
+    });
+    useWorksStore.setState({ entries: [entry([note('m-09')], 9, 9)] });
+    const off = useRoomPagesStore.getState().init(bridge);
+    bridge.emit('rooms.mail', mail());
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(calls).toBe(0);
+    expect(useWorksStore.getState().entries[0]?.map.messages.map((message) => message.id)).toEqual(['m-09']);
+    off();
+  });
+
+  it('письмо работы, которой в окне нет, ничего не запрашивает', async () => {
+    connected([ROOMS_MAIL_FEATURE]);
+    const bridge = createFakeBridge();
+    let calls = 0;
+    bridge.setHandler('context.messages', () => {
+      calls += 1;
+      return page([]);
+    });
+    useWorksStore.setState({ entries: [] });
+    const off = useRoomPagesStore.getState().init(bridge);
+    bridge.emit('rooms.mail', mail());
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(calls).toBe(0);
+    off();
   });
 });

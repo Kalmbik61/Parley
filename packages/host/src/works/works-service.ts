@@ -12,20 +12,32 @@
  * повторяется на следующем изменении. Карту, которая есть на диске, но не
  * разбирается, `readWorks` из core молча пропускает — сервис проверяет это
  * отдельно и жалуется один раз на файл, ничего в него не дописывая.
+ *
+ * Карта-журнал (v3, спека 2026-10-16, B3–B4): письмо — строка в журнале, индекс при этом не меняется. Наблюдатель называет
+ * изменившийся файл; журнал дочитывается хвостом (`journal-tail.ts`), письмо дописывается в собранную карту дельтой
+ * (`appendLetters`) и уходит окнам событием `rooms.mail`, без `refresh` и без разбора карт. Индекс — прежний путь: список
+ * перечитывается, но карты с тем же mtime и размером не разбираются (`readWorks(…, previous)`).
  */
 
+import path from 'node:path';
 import {
+  appendLetters,
+  applyCursors,
   compactWorkMap,
+  derivedEntry,
   finishV2Cleanup,
   gitBranch,
   hasLiveSession,
   hasV2Copy,
+  isJournalEntry,
   migrateMapToJournal,
   parleyHome,
   MapLockTimeoutError,
   processStartedAt,
+  readCursorFile,
   readIndex,
   readMap,
+  readWorkEntry,
   readWorks,
   readWorksIndex,
   reconcileMap,
@@ -35,13 +47,17 @@ import {
   workSchemaVersion,
   writeHostLease,
 } from '@parley/core';
-import type { HostLease, WorkEntry, WorksWatcher } from '@parley/core';
-import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES } from '@parley/protocol';
-import type { WorksSnapshot } from '@parley/protocol';
+import type { CursorFile, HostLease, JournalLetter, Message, WorkEntry, WorkFileChange, WorksWatcher } from '@parley/core';
+import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, ROOMS_MAIL_FEATURE, encodeLine } from '@parley/protocol';
+import type { EventData, WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
 import type { HostContext } from '../context.js';
 import { createSettler } from '../watch-settle.js';
 import type { WindowCounters } from '../health/window-counters.js';
+import { createJournalTail, type JournalTail } from './journal-tail.js';
+
+/** Событие `rooms.mail`: в журнал дописаны письма. */
+export type RoomMail = EventData<'rooms.mail'>;
 
 export interface WorksServiceOptions {
   /** Сколько подряд изменений склеивается в одну рассылку `works.changed`. */
@@ -71,6 +87,11 @@ export interface WorksService {
   /** Прежний полный снимок для клиента без `compact-works`; `null` — он не влезает в кадр, клиенту нужно обновление. */
   legacySnapshot(): WorksSnapshot | null;
   entry(projectPath: string, workId: string): WorkEntry | undefined;
+  /**
+   * В журнал карты-журнала дописаны письма (уже в `snapshot()`/`entry()`). Зовётся тем же событием, что уходит окнам с
+   * `rooms-mail`: будильнику нужны адресаты, активности — работа. Перечитывание индекса сюда не приходит.
+   */
+  onMail(listener: (mail: RoomMail) => void): () => void;
   /** Первое чтение этой работы хостом уже было: autoLaunch берёт только новое (1.7). */
   firstReadDone(projectPath: string, workId: string): boolean;
   onChange(listener: (snapshot: WorksSnapshot, previous: WorksSnapshot) => void): () => void;
@@ -89,7 +110,21 @@ const WINDOW_SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024;
 const WINDOW_FALLBACK_TEXT_BYTES = 4 * 1024;
 
 const isCompactClient = (client: Client): boolean => client.features.has(COMPACT_WORKS_FEATURE);
-const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8');
+const wantsMail = (client: Client): boolean => client.features.has(ROOMS_MAIL_FEATURE);
+const lacksMail = (client: Client): boolean => !wantsMail(client);
+
+/** Снимок вместе с кадром `works.changed`, закодированным один раз: по нему меряется размер и он же уходит каждому клиенту. */
+interface Framed {
+  snapshot: WorksSnapshot;
+  line: string;
+}
+/** Байты кадра вокруг данных снимка (`{"event":"works.changed","data":` + `}` + перевод строки): пределы считаются по снимку, как раньше. */
+const FRAME_ENVELOPE_BYTES = Buffer.byteLength('{"event":"works.changed","data":}\n');
+const frame = (snapshot: WorksSnapshot): Framed => ({ snapshot, line: encodeLine({ event: 'works.changed', data: snapshot }) });
+const snapshotBytes = (framed: Framed): number => Buffer.byteLength(framed.line, 'utf8') - FRAME_ENVELOPE_BYTES;
+
+/** Сколько последних дописанных писем работы помнит сервис, чтобы вернуть их в список, прочитанный с диска чуть раньше. */
+const RECENT_LETTERS_KEPT = 200;
 
 /** Ключ работы для внутренних карт сервиса: `\u0000` в путях и id не встречается. */
 const workKey = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
@@ -117,6 +152,8 @@ export function createWorksService(
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
   let latest: WorkEntry[] = [];
+  /** Последний список наблюдателя как пришёл, до дописывания писем: по нему узнаётся повтор того же чтения. */
+  let lastRaw: readonly WorkEntry[] = [];
   /** Номер чтения `latest` (`watchWorks`): старое чтение свежее не затирает. */
   let latestSeq = 0;
   /** Идущее обновление снимка (`requestRefresh`) и просьба повторить его, когда закончится. */
@@ -126,11 +163,30 @@ export function createWorksService(
   /** Номер рассылки снимка; растёт в конце каждого `refresh`, перед рассылкой. */
   let revision = 0;
   /** Снимки для клиентов считаются один раз на номер: `works.list` и рассылка делят одну работу. */
-  let windowCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
-  let legacyCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
+  let windowCache: { revision: number; framed: Framed | null } | null = null;
+  let legacyCache: { revision: number; framed: Framed | null } | null = null;
   /** Клиенты, о которых уже записано «нужно обновление», и признак сообщения о слишком большом снимке: не на каждую рассылку. */
   const upgradeNotified = new Set<string>();
   let oversizeNotified = false;
+
+  /** Работы на карте-журнале (v3): только их письма читаются хвостом. Заполняют списки наблюдателя и миграция. */
+  const journalWorks = new Set<string>();
+  /** Хвосты журналов по файлу (с ключом работы — для очистки, когда работа исчезла); позиция живёт, пока жив сервис. */
+  const tails = new Map<string, { tail: JournalTail; key: string }>();
+  /**
+   * Письма, которые хвост прочитал, а комнаты в собранной карте ещё нет: индекс с комнатой придёт позже письма. Хвост
+   * уже сдвинулся, так что заново эти письма не прочитать — их держит сервис, пока `refresh` не принесёт комнату.
+   */
+  const parked = new Map<string, JournalLetter[]>();
+  /** Изменения файлов, ещё не обработанные: на файл одна запись, обработка идёт по одной. */
+  const pendingChanges = new Map<string, WorkFileChange>();
+  let draining: Promise<void> | undefined;
+  /** Последние письма и файлы курсоров, которые сервис уже учёл, по работе: список, прочитанный с диска чуть раньше, не должен их откатить. */
+  const recentLetters = new Map<string, JournalLetter[]>();
+  const seenCursors = new Map<string, Map<string, CursorFile>>();
+  /** Id писем собранной карты работы — для отсева уже известных писем; привязан к объекту карты. */
+  const knownIdsCache = new Map<string, { map: WorkEntry['map']; ids: Set<string> }>();
+  const mailListeners = new Set<(mail: RoomMail) => void>();
 
   const buildSnapshot = (): WorksSnapshot => ({
     entries: Array.from(entries.values()),
@@ -142,44 +198,58 @@ export function createWorksService(
    * идут без писем. Размер проверяется до отправки: не влез — запасной вариант без писем и с короткими текстами,
    * не влез и он — `null` (кадр, который декодер окна разорвёт, не уходит никогда).
    */
-  function buildWindow(): WorksSnapshot | null {
+  function buildWindow(): Framed | null {
     const all = Array.from(entries.values());
     const live = all.filter((entry) => entry.map.work.status !== 'archived').length;
     const share = Math.min(
       WINDOW_MESSAGES_PER_WORK_BYTES,
       Math.max(WINDOW_MESSAGES_MIN_BYTES, Math.floor(WINDOW_MESSAGES_TOTAL_BYTES / Math.max(live, 1))),
     );
-    const build = (messagesFor: (archived: boolean) => number, textMax?: number): WorksSnapshot => ({
-      entries: all.map((entry) => ({
-        projectPath: entry.projectPath,
-        map: compactWorkMap(entry.map, {
-          messageBytes: messagesFor(entry.map.work.status === 'archived'),
-          ...(textMax === undefined ? {} : { textMax }),
-        }),
-        // Только когда миграция ждёт: окно без этого поля (прежнее) его просто не видит.
-        ...(entry.migrationPending === true ? { migrationPending: true } : {}),
-      })),
-      branches: Object.fromEntries(branches),
-      revision,
-    });
+    const build = (messagesFor: (archived: boolean) => number, textMax?: number): Framed =>
+      frame({
+        entries: all.map((entry) => ({
+          projectPath: entry.projectPath,
+          map: compactWorkMap(entry.map, {
+            messageBytes: messagesFor(entry.map.work.status === 'archived'),
+            ...(textMax === undefined ? {} : { textMax }),
+          }),
+          // Только когда миграция ждёт: окно без этого поля (прежнее) его просто не видит.
+          ...(entry.migrationPending === true ? { migrationPending: true } : {}),
+        })),
+        branches: Object.fromEntries(branches),
+        revision,
+      });
     const normal = build((archived) => (archived ? 0 : share));
-    if (jsonBytes(normal) <= WINDOW_SNAPSHOT_MAX_BYTES) return normal;
+    if (snapshotBytes(normal) <= WINDOW_SNAPSHOT_MAX_BYTES) return normal;
     const fallback = build(() => 0, WINDOW_FALLBACK_TEXT_BYTES);
-    return jsonBytes(fallback) <= WINDOW_SNAPSHOT_MAX_BYTES ? fallback : null;
+    return snapshotBytes(fallback) <= WINDOW_SNAPSHOT_MAX_BYTES ? fallback : null;
   }
 
-  const windowSnapshot = (): WorksSnapshot | null => {
-    if (windowCache?.revision !== revision) windowCache = { revision, snapshot: buildWindow() };
-    return windowCache.snapshot;
-  };
+  /**
+   * Снимки для клиентов устарели (письмо, курсор, пересборка работы без `refresh`). Номер снимка растёт, как после
+   * `refresh`: его сравнивает окно (`store/works.ts`, применяет только снимок новее уже применённого) и по нему же
+   * живут оба кэша. Без этого `works.list` отдавал бы снимок до письма окну, открытому после события.
+   */
+  function invalidateSnapshots(): void {
+    revision += 1;
+    windowCache = null;
+    legacyCache = null;
+  }
 
-  const legacySnapshot = (): WorksSnapshot | null => {
-    if (legacyCache?.revision !== revision) {
-      const full: WorksSnapshot = { ...buildSnapshot(), revision };
-      legacyCache = { revision, snapshot: jsonBytes(full) <= LEGACY_SNAPSHOT_MAX_BYTES ? full : null };
-    }
-    return legacyCache.snapshot;
+  const windowFramed = (): Framed | null => {
+    if (windowCache?.revision !== revision) windowCache = { revision, framed: buildWindow() };
+    return windowCache.framed;
   };
+  const windowSnapshot = (): WorksSnapshot | null => windowFramed()?.snapshot ?? null;
+
+  const legacyFramed = (): Framed | null => {
+    if (legacyCache?.revision !== revision) {
+      const full = frame({ ...buildSnapshot(), revision });
+      legacyCache = { revision, framed: snapshotBytes(full) <= LEGACY_SNAPSHOT_MAX_BYTES ? full : null };
+    }
+    return legacyCache.framed;
+  };
+  const legacySnapshot = (): WorksSnapshot | null => legacyFramed()?.snapshot ?? null;
 
   /**
    * Рассылка снимка: окно с `compact-works` получает компактный, прежнее окно — полный, пока тот влезает в кадр. Не
@@ -187,10 +257,11 @@ export function createWorksService(
    * по кругу): прежнее окно остаётся с последним снимком, а хост один раз на клиента пишет об этом в журнал.
    * Уведомления `host.notice` прежнему окну не шлются: вида, которого оно не знает, его строка статуса не разберёт.
    */
-  function publish(): void {
-    const compact = windowSnapshot();
+  function publish(only?: (client: Client) => boolean): void {
+    const allowed = (client: Client): boolean => only === undefined || only(client);
+    const compact = windowFramed();
     if (compact !== null) {
-      host.broadcast('works.changed', compact, isCompactClient);
+      host.broadcast('works.changed', compact.snapshot, (client) => isCompactClient(client) && allowed(client), compact.line);
       oversizeNotified = false;
     } else if (!oversizeNotified) {
       oversizeNotified = true;
@@ -201,9 +272,9 @@ export function createWorksService(
     const stillConnected = new Set(legacyClients.map((client) => client.id));
     for (const id of upgradeNotified) if (!stillConnected.has(id)) upgradeNotified.delete(id);
     if (legacyClients.length === 0) return;
-    const legacy = legacySnapshot();
+    const legacy = legacyFramed();
     if (legacy !== null) {
-      host.broadcast('works.changed', legacy, (client) => !isCompactClient(client));
+      host.broadcast('works.changed', legacy.snapshot, (client) => !isCompactClient(client) && allowed(client), legacy.line);
       return;
     }
     for (const client of legacyClients) {
@@ -211,6 +282,15 @@ export function createWorksService(
       upgradeNotified.add(client.id);
       host.log.warn('карта: полный снимок не влезает в кадр, окну без compact-works нужно обновление', { client: client.name });
     }
+  }
+
+  /**
+   * Письмо в журнал не меняет индекс: окно с `rooms-mail` получает `rooms.mail` и дочитывает письма само, а окно без
+   * признака рассылкой `works.changed` — только оно и только если оно есть. Это не `refresh`: слушатели сервиса не зовутся.
+   */
+  function publishToWindowsWithoutMail(): void {
+    if (!host.clients().some(lacksMail)) return;
+    publish(lacksMail);
   }
 
   const notice = (kind: 'map-lock' | 'map-corrupt' | 'snapshot-too-large', text: string): void => {
@@ -265,10 +345,13 @@ export function createWorksService(
         // мёртвых больше нет), и без перечитывания снимок откатился бы к active мёртвой
         // сессии навсегда (fix-tests2, host-disconnect:127).
         const fresh = await readMap(work.projectPath, work.map.work.id);
-        entries.set(workKey(work.projectPath, work.map.work.id), {
-          projectPath: work.projectPath,
-          map: fresh,
-        });
+        entries.set(
+          workKey(work.projectPath, work.map.work.id),
+          overlayEntry({
+            projectPath: work.projectPath,
+            map: fresh,
+          }),
+        );
       } catch (error) {
         if (error instanceof MapLockTimeoutError) {
           notice('map-lock', error.message);
@@ -333,6 +416,7 @@ export function createWorksService(
           host.log.warn('миграция карты: часть сведений не воспроизведена сборщиком, map.v2.json останется навсегда', { projectPath: work.projectPath, workId, ...result });
         }
         entries.set(key, { projectPath: work.projectPath, map: await readMap(work.projectPath, workId) });
+        journalWorks.add(key);
       } catch (error) {
         host.log.error('миграция карты: проверка не удалась', { projectPath: work.projectPath, workId, error: String(error) });
       }
@@ -361,19 +445,54 @@ export function createWorksService(
     options.windowCounters?.mapsParsed(works.reduce((sum, work) => sum + (work.bytes ?? 0), 0));
   }
 
+  /** Работы списка, собранные из журналов, — те, чьи письма читаются хвостом. */
+  function noteJournals(works: readonly WorkEntry[]): void {
+    for (const work of works) {
+      const key = workKey(work.projectPath, work.map.work.id);
+      if (isJournalEntry(work)) journalWorks.add(key);
+      else journalWorks.delete(key);
+    }
+  }
+
+  /**
+   * Запись работы с письмами и прочитанным, которые сервис уже учёл по хвосту, но которых нет в только что прочитанной с
+   * диска карте: чтение могло начаться раньше, чем письмо легло в журнал, а закончиться позже, чем хвост его принял.
+   */
+  function overlayEntry(entry: WorkEntry): WorkEntry {
+    const key = workKey(entry.projectPath, entry.map.work.id);
+    if (!journalWorks.has(key)) return entry;
+    const letters = recentLetters.get(key);
+    const cursors = seenCursors.get(key);
+    if (letters === undefined && cursors === undefined) return entry;
+    let map = entry.map;
+    if (letters !== undefined) {
+      const known = new Set(map.messages.map((message) => message.id));
+      const missing = letters.filter((letter) => !known.has(letter.id));
+      if (missing.length > 0) map = appendLetters(map, missing, cursors);
+    }
+    for (const [sessionId, file] of cursors ?? []) map = applyCursors(map, sessionId, file);
+    return map === entry.map ? entry : derivedEntry(entry, { map });
+  }
+
   /** `true` — наблюдатель проекта заведён только что. */
   function ensureWatcher(projectPath: string): boolean {
     if (stopped || watchers.has(projectPath)) return false;
     const watcher = watchWorks(
-      (works, seq) => {
-        // Разбор уже случился, даже если список ниже отбросим как устаревший.
-        countParsed(works);
+      (works, seq, parsedBytes) => {
+        // Разбор уже случился, даже если список ниже отбросим как устаревший. Считаются только карты, разобранные
+        // этим чтением: неизменившиеся пришли из прежних записей без чтения.
+        options.windowCounters?.mapsParsed(parsedBytes);
         // Наблюдателей несколько (дом и каждый проект), каждый читает список
         // сам, и медленное старое чтение одного может прийти позже свежего
         // чтения другого.
         if (seq < latestSeq) return;
         latestSeq = seq;
-        latest = works;
+        // Второй наблюдатель того же события отдаёт тот же список (карты не изменились, общий разбор): обновлять нечего.
+        const same = works.length === lastRaw.length && works.every((work, at) => work === lastRaw[at]);
+        lastRaw = works;
+        if (same) return;
+        noteJournals(works);
+        latest = works.map(overlayEntry);
         scheduleRefresh();
       },
       projectPath,
@@ -385,11 +504,225 @@ export function createWorksService(
         debounceMs: 0,
         onError: (error) =>
           host.log.warn('наблюдение за работами: событие пропущено', { error: String(error) }),
+        onChange: onFileChange,
+        reuse: () => Array.from(entries.values()),
       },
     );
     watchers.set(projectPath, watcher);
     settler.schedule();
     return true;
+  }
+
+  // --- письма карты-журнала: хвост журнала и курсоры (задача 8 плана) ---
+
+  function onFileChange(change: WorkFileChange): void {
+    if (stopped) return;
+    // Два события одного файла подряд — одна обработка: хвост всё равно читает до конца.
+    pendingChanges.set(change.file, change);
+    draining ??= drainChanges().finally(() => {
+      draining = undefined;
+    });
+  }
+
+  /** Изменения обрабатываются по одному: хвост журнала и карта работы не должны меняться двумя обработчиками разом. */
+  async function drainChanges(): Promise<void> {
+    while (!stopped) {
+      const next = pendingChanges.entries().next();
+      if (next.done === true) return;
+      const [file, change] = next.value;
+      pendingChanges.delete(file);
+      try {
+        if (journalWorks.has(workKey(change.projectPath, change.workId))) {
+          if (change.kind === 'journal') await applyJournalChange(change);
+          else await applyCursorChange(change);
+        }
+      } catch (error) {
+        host.log.warn('письма: изменение файла не обработано', { file, error: String(error) });
+      }
+    }
+  }
+
+  const knownIds = (key: string, map: WorkEntry['map']): Set<string> => {
+    const cached = knownIdsCache.get(key);
+    if (cached?.map === map) return cached.ids;
+    const ids = new Set(map.messages.map((message) => message.id));
+    knownIdsCache.set(key, { map, ids });
+    return ids;
+  };
+
+  function replaceEntry(key: string, next: WorkEntry): void {
+    entries.set(key, next);
+    latest = latest.map((work) => (workKey(work.projectPath, work.map.work.id) === key ? next : work));
+  }
+
+  /** Новая карта той же записи (дельта): список наблюдателя и `entries` вместе, чтобы очередной `refresh` её не откатил. */
+  function replaceMap(key: string, entry: WorkEntry, map: WorkEntry['map'], addedIds: readonly string[] = []): void {
+    const cached = knownIdsCache.get(key);
+    if (cached?.map === entry.map) {
+      for (const id of addedIds) cached.ids.add(id);
+      cached.map = map;
+    }
+    replaceEntry(key, derivedEntry(entry, { map }));
+  }
+
+  /** Письмо, как его видит `rooms.mail`: и письмо журнала, и письмо собранной карты. */
+  type Delivered = Pick<Message, 'id' | 'roomId' | 'from' | 'to' | 'kind' | 'at'>;
+
+  /** Письма приняты картой: окнам и слушателям уходит `rooms.mail` — по событию на комнату, — а снимки для клиентов устаревают. */
+  function announce(projectPath: string, workId: string, letters: readonly Delivered[]): void {
+    if (letters.length === 0) return;
+    invalidateSnapshots();
+    const byRoom = new Map<string | null, Delivered[]>();
+    for (const letter of letters) byRoom.set(letter.roomId, [...(byRoom.get(letter.roomId) ?? []), letter]);
+    for (const [roomId, rows] of byRoom) {
+      const mail: RoomMail = {
+        projectPath,
+        workId,
+        roomId,
+        appended: rows.map(({ id, from, to, kind, at }) => ({ id, from, to, kind, at })),
+      };
+      host.broadcast('rooms.mail', mail, wantsMail);
+      for (const listener of mailListeners) listener(mail);
+    }
+    publishToWindowsWithoutMail();
+  }
+
+  /**
+   * Письма, чьи комнаты в карте есть, встают в неё дельтой (те, что карта уже знает, — не повторно) и объявляются.
+   * Комнаты нет — письмо ждёт в `parked`, пока индекс её не принесёт.
+   */
+  function takeLetters(key: string, entry: WorkEntry, letters: readonly JournalLetter[], announceKnown: boolean): void {
+    const rooms = new Set(entry.map.rooms.map((room) => room.id));
+    const ready = letters.filter((letter) => letter.roomId === null || rooms.has(letter.roomId));
+    const waiting = letters.filter((letter) => !ready.includes(letter));
+    if (waiting.length > 0) parked.set(key, [...(parked.get(key) ?? []), ...waiting].slice(-RECENT_LETTERS_KEPT));
+    if (ready.length === 0) return;
+    const known = knownIds(key, entry.map);
+    const missing = ready.filter((letter) => !known.has(letter.id));
+    if (missing.length > 0) {
+      const map = appendLetters(entry.map, missing, seenCursors.get(key));
+      if (map !== entry.map) replaceMap(key, entry, map, missing.map((letter) => letter.id));
+      recentLetters.set(key, [...(recentLetters.get(key) ?? []), ...missing].slice(-RECENT_LETTERS_KEPT));
+    }
+    announce(entry.projectPath, entry.map.work.id, announceKnown ? ready : missing);
+  }
+
+  /**
+   * После `refresh`: комната, которой не было, когда пришло письмо, теперь есть (сборщик прочёл журнал сам, письмо уже в
+   * карте) — письмо объявляется, как объявилось бы дельтой: будильнику и окну оно нужно в любом случае.
+   */
+  function releaseParked(): void {
+    for (const [key, letters] of Array.from(parked)) {
+      const entry = entries.get(key);
+      if (entry === undefined) {
+        parked.delete(key);
+        continue;
+      }
+      const rooms = new Set(entry.map.rooms.map((room) => room.id));
+      const waiting = letters.filter((letter) => letter.roomId !== null && !rooms.has(letter.roomId));
+      if (waiting.length === 0) parked.delete(key);
+      else parked.set(key, waiting);
+      const ready = letters.filter((letter) => !waiting.includes(letter));
+      if (ready.length > 0) takeLetters(key, entry, ready, true);
+    }
+  }
+
+  /**
+   * Журнал убрали, усекли или заменили (или хвост не сошёлся с картой): дельтой не обойтись, работа собирается с диска заново
+   * и объявляется обычным обновлением. Письма, которые сервис помнил по старому журналу, больше не действуют. Письма, которых
+   * в прежней карте не было, объявляются как `rooms.mail`: к тому времени карта в `entries` уже новая, и разницы с прежней у
+   * следующего `refresh` не будет (его `previous` снимается с `entries`), так что без этого будильник и активность их не увидели бы.
+   */
+  async function reseed(key: string, projectPath: string, workId: string, tail?: JournalTail): Promise<void> {
+    const before = entries.get(key);
+    const fresh = await readWorkEntry(projectPath, workId, undefined, { share: false });
+    if (fresh === null || stopped) return;
+    options.windowCounters?.mapsParsed(fresh.bytes ?? 0);
+    recentLetters.delete(key);
+    knownIdsCache.delete(key);
+    // Хвост начинает заново: прежняя позиция относилась к журналу, которого больше нет (или к окну, не сошедшемуся с картой).
+    tail?.forget();
+    if (isJournalEntry(fresh)) journalWorks.add(key);
+    else journalWorks.delete(key);
+    replaceEntry(key, overlayEntry(fresh));
+    const appeared = entries.get(key);
+    if (before !== undefined && appeared !== undefined) {
+      const had = new Set(before.map.messages.map((message) => message.id));
+      announce(projectPath, workId, appeared.map.messages.filter((message) => !had.has(message.id)));
+    }
+    scheduleRefresh();
+  }
+
+  async function applyJournalChange(change: Extract<WorkFileChange, { kind: 'journal' }>): Promise<void> {
+    const { projectPath, workId, file } = change;
+    const key = workKey(projectPath, workId);
+    let held = tails.get(file);
+    if (held === undefined) {
+      held = { tail: createJournalTail(file, { warn: (message) => host.log.warn(message) }), key };
+      tails.set(file, held);
+    }
+    const { tail } = held;
+    const read = await tail.read();
+    options.windowCounters?.journalBytes(read.bytes);
+    const entry = entries.get(key);
+    if (entry === undefined || stopped) return;
+    if (read.reset) return reseed(key, projectPath, workId, tail);
+    const known = knownIds(key, entry.map);
+    // Первое чтение большого журнала началось с середины: если в окне нет ни одного письма, которое карта уже знает, между
+    // собранной картой и окном могли остаться пропущенные письма.
+    if (read.partial && !read.letters.some((letter) => known.has(letter.id))) return reseed(key, projectPath, workId, tail);
+    takeLetters(
+      key,
+      entry,
+      read.letters.filter((letter) => !known.has(letter.id)),
+      false,
+    );
+  }
+
+  /**
+   * Дочитывание журналов (потерянное событие наблюдателя, `watch-settle.ts`): письмо, о котором событие не пришло, лежит в
+   * журнале, а записи списка переиспользуются, пока индекс тот же. На каждый журнал известной работы — один `stat`; читается
+   * он, только если размер или файл изменились с прошлого чтения. Журнал, который ещё не читали, читается первый раз
+   * (окно хвоста, не больше 256 КиБ), и дальше он на учёте. Чтение идёт через ту же очередь, что и события наблюдателя.
+   */
+  async function catchUpJournals(): Promise<void> {
+    if (stopped) return;
+    const stale: WorkFileChange[] = [];
+    for (const key of journalWorks) {
+      const entry = entries.get(key);
+      if (entry === undefined) continue;
+      const workId = entry.map.work.id;
+      const paths = workPaths(entry.projectPath, workId);
+      const rooms: Array<string | null> = [null, ...entry.map.rooms.map((room) => room.id)];
+      await Promise.all(
+        rooms.map(async (roomId) => {
+          const file = roomId === null ? paths.direct : path.join(paths.rooms, roomId, 'messages.jsonl');
+          const held = tails.get(file);
+          if (held !== undefined && !(await held.tail.changed())) return;
+          stale.push({ kind: 'journal', projectPath: entry.projectPath, workId, roomId, file });
+        }),
+      );
+    }
+    if (stale.length === 0 || stopped) return;
+    for (const change of stale) onFileChange(change);
+    await draining;
+  }
+
+  /** Курсор сессии: файл маленький, читается целиком; `readBy` в карте пересчитывается на месте и без события (спека B4). */
+  async function applyCursorChange(change: Extract<WorkFileChange, { kind: 'cursor' }>): Promise<void> {
+    const { projectPath, workId, sessionId } = change;
+    const key = workKey(projectPath, workId);
+    const file = await readCursorFile(projectPath, workId, sessionId, { warn: (message) => host.log.warn(message) });
+    const seen = seenCursors.get(key) ?? new Map<string, CursorFile>();
+    seen.set(sessionId, file);
+    seenCursors.set(key, seen);
+    const entry = entries.get(key);
+    if (entry === undefined || stopped) return;
+    const map = applyCursors(entry.map, sessionId, file);
+    if (map !== entry.map) {
+      replaceMap(key, entry, map);
+      invalidateSnapshots();
+    }
   }
 
   /**
@@ -399,6 +732,7 @@ export function createWorksService(
    */
   async function settleRead(): Promise<void> {
     if (stopped) return;
+    await catchUpJournals();
     const seq = latestSeq;
     const fresh = await readWorks(parleyHome()).catch(() => null);
     if (fresh !== null) countParsed(fresh);
@@ -455,10 +789,13 @@ export function createWorksService(
       if (!projects.has(work.projectPath)) continue;
       try {
         const fresh = await readMap(work.projectPath, work.map.work.id);
-        entries.set(workKey(work.projectPath, work.map.work.id), {
-          projectPath: work.projectPath,
-          map: fresh,
-        });
+        entries.set(
+          workKey(work.projectPath, work.map.work.id),
+          overlayEntry({
+            projectPath: work.projectPath,
+            map: fresh,
+          }),
+        );
       } catch {
         // Карту удалили или переписывают — следующее чтение наблюдателя разберётся.
       }
@@ -490,6 +827,8 @@ export function createWorksService(
       const key = workKey(work.projectPath, work.map.work.id);
       entries.set(key, work);
       seenKeys.add(key);
+      if (isJournalEntry(work)) journalWorks.add(key);
+      else journalWorks.delete(key);
       if (ensureWatcher(work.projectPath)) newlyWatched.add(work.projectPath);
     }
     await rereadNewlyWatched(works, newlyWatched);
@@ -504,18 +843,23 @@ export function createWorksService(
       if (!projects.has(projectPath)) branches.delete(projectPath);
     }
 
+    // Работы, которых в списке больше нет, забываются вместе с тем, что о них помнил хвост.
+    for (const key of Array.from(journalWorks)) if (!seenKeys.has(key)) journalWorks.delete(key);
+    for (const map of [recentLetters, seenCursors, knownIdsCache, parked]) for (const key of Array.from(map.keys())) if (!seenKeys.has(key)) map.delete(key);
+    for (const [file, held] of Array.from(tails)) if (!seenKeys.has(held.key)) tails.delete(file);
+
     await reconcileLiveness(works);
     await migrateMaps();
     await checkCorruption(seenKeys);
     for (const work of works) await leaseWork(work);
 
+    releaseParked();
     const snapshot = buildSnapshot();
-    revision += 1;
-    windowCache = null;
-    legacyCache = null;
+    invalidateSnapshots();
     publish();
     for (const listener of listeners) listener(snapshot, previous);
     for (const key of seenKeys) readAlready.add(key);
+    await catchUpJournals();
   }
 
   return {
@@ -537,13 +881,20 @@ export function createWorksService(
       // Наблюдатель успел отдать своё чтение, пока шло это, — его и берём:
       // номер у начального чтения не спросить, а следующее событие всё равно
       // перечитает список.
-      if (latestSeq === 0) latest = initial;
+      if (latestSeq === 0) {
+        latest = initial;
+        lastRaw = initial;
+      }
       await requestRefresh();
     },
     snapshot: buildSnapshot,
     windowSnapshot,
     legacySnapshot,
     entry: (projectPath, workId) => entries.get(workKey(projectPath, workId)),
+    onMail(listener) {
+      mailListeners.add(listener);
+      return () => mailListeners.delete(listener);
+    },
     firstReadDone: (projectPath, workId) => readAlready.has(workKey(projectPath, workId)),
     onChange(listener) {
       listeners.add(listener);
@@ -553,6 +904,9 @@ export function createWorksService(
       if (stopped) return;
       stopped = true;
       settler.cancel();
+      pendingChanges.clear();
+      tails.clear();
+      parked.clear();
       if (timer !== undefined) clearTimeout(timer);
       for (const watcher of watchers.values()) watcher.close();
       watchers.clear();

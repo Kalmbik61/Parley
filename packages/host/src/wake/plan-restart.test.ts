@@ -92,6 +92,7 @@ function rig(map: WorkMap) {
     }),
     entry: () => ({ projectPath: project, map }),
     onChange: () => () => {},
+    onMail: () => () => {},
   } as unknown as WorksService;
   const activity = {
     onChange: () => () => {},
