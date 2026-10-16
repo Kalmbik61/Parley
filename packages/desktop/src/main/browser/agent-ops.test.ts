@@ -365,6 +365,14 @@ describe('реестр страниц панелей и tabs (спека 3.7, 3.
     expect(okResult<Tabs>(await run('tabs', {})).tabs[0]?.loopback).toBe(false);
   });
 
+  it('заголовок страницы с секретом вида значения — с маской', async () => {
+    const { ops, guests, runOp: run } = setup();
+    register(ops, {});
+    guests.set(7, fakeGuest(7, 'http://localhost:5173/a', 'Reset password=hunter2 for http://localhost:5173/r?token=SECRET9'));
+    const [tab] = okResult<Tabs>(await run('tabs', {})).tabs;
+    expect(tab?.title).toBe('Reset password=<redacted> for http://localhost:5173/r?token=<redacted>');
+  });
+
   it('id общий с open: страница, открытая browser_open (t1), после регистрации остаётся t1; новая — t2', async () => {
     const { ops, runOp: run, state } = setup();
     state.reply = { tabId: 'bp-aaaaaa', reused: false, mounted: true };
@@ -506,6 +514,28 @@ describe('console (спека 5.1)', () => {
     expect(result.matched).toBe(60);
     expect(Buffer.byteLength(JSON.stringify(result.entries))).toBeLessThanOrEqual(20_480 + 200);
     expect(result.entries.at(-1)?.text.startsWith('59 ')).toBe(true);
+  });
+
+  it('консоль: секреты вида значения в тексте скрыты, pattern по сырому секрету ничего не находит', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    snapshots.set(7, {
+      ...EMPTY,
+      console: [
+        consoleEntry({ id: 20, text: 'Auth failed: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.c2ln; password=hunter2; api_key=AKIAIOSFODNN7EXAMPLE' }),
+        consoleEntry({ id: 21, text: 'GET /reset?token=RESETTOKEN 404' }),
+      ],
+    });
+    const result = okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1' }));
+    expect(result.entries.map((entry) => entry.text)).toEqual([
+      'Auth failed: Bearer <redacted>; password=<redacted>; api_key=<redacted>',
+      'GET /reset?token=<redacted> 404',
+    ]);
+    for (const secret of ['hunter2', 'AKIAIOSFODNN7EXAMPLE', 'c2ln', 'RESETTOKEN']) {
+      expect(JSON.stringify(result), secret).not.toContain(secret);
+      const found = okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1', pattern: secret }));
+      expect([found.entries, found.matched], secret).toEqual([[], 0]);
+    }
   });
 
   it('захвата нет — unsupported с советом перезагрузить страницу', async () => {

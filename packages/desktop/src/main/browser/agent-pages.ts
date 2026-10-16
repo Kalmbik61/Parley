@@ -8,7 +8,7 @@ import { viewportSize } from '../../shared/browser-devtools.js';
 import type { AgentPageRegistration } from '../../shared/browser-types.js';
 import type { BrowserOwner } from '../../shared/layout-types.js';
 import { isLoopbackUrl } from '../../shared/loopback.js';
-import { redactUrl } from '../../shared/redact.js';
+import { redactSecretsInText, redactUrl, redactUrlsInText } from '../../shared/redact.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
 import { AgentOpError } from './agent-errors.js';
 import type { Emulation } from './emulation.js';
@@ -176,7 +176,7 @@ export async function listTabs(registry: PageRegistry, deps: ListTabsDeps, reque
       id: record.agentId,
       owner: record.owner,
       url: redactUrl(record.lastUrl),
-      title: record.lastTitle.slice(0, TITLE_LIMIT),
+      title: redactSecretsInText(redactUrlsInText(record.lastTitle)).slice(0, TITLE_LIMIT),
       viewport: loaded && record.webContentsId !== null ? await viewportOf(deps, record.webContentsId) : null,
       loaded,
       // Невыгруженную, но невидимую страницу человек не видит; незагруженную — тем более.

@@ -15,7 +15,7 @@ import type {
 import { cutCodePoints } from '../../shared/code-points.js';
 import { DEVTOOLS_LIMITS, isFailed } from '../../shared/browser-devtools.js';
 import type { ConsoleEntry, DevtoolsSnapshot, NetworkEntry, StackFrame } from '../../shared/browser-devtools.js';
-import { redactBody, redactHeaders, redactUrl, redactUrlsInText, unmaskableJson } from '../../shared/redact.js';
+import { redactBody, redactHeaders, redactSecretsInText, redactUrl, redactUrlsInText, unmaskableJson } from '../../shared/redact.js';
 import { AgentOpError } from './agent-errors.js';
 import type { PageRecord } from './agent-pages.js';
 import type { Inspector } from './inspector.js';
@@ -42,7 +42,7 @@ export function toAgentConsole(entry: ConsoleEntry): BrowserAgentConsoleEntry {
   return {
     level: entry.level,
     origin: entry.origin,
-    text: redactUrlsInText(entry.text),
+    text: redactSecretsInText(redactUrlsInText(entry.text)),
     source: entry.location === null ? null : `${redactUrl(entry.location.url)}:${entry.location.line}:${entry.location.column}`,
     stack: entry.stack.map(frameText),
     count: entry.count,
