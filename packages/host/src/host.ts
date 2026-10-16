@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, chmod, link, rename, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   bothEnv,
@@ -20,6 +21,7 @@ import type { Log } from './log.js';
 import { watchIdle } from './idle.js';
 import { startLoopDelayLog } from './loop-delay.js';
 import { createHealthService } from './health/health-service.js';
+import { createProfiler } from './diagnostics/profiler.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
 import { HOST_ERROR_REASONS } from '@parley/protocol';
@@ -394,6 +396,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   health.start();
   handle.context.onShutdown(async () => health.stop());
+  // Профиль CPU по запросу: файлы в `~/.parley/host/diagnostics`; идущая запись на остановке хоста дописывается.
+  const profiler = createProfiler({ dir: path.join(paths.dir, 'diagnostics'), log: handle.context.log });
+  handle.context.onShutdown(async () => profiler.stop());
   const server = createHostServer({
     context: handle.context,
     token,

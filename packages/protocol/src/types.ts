@@ -286,6 +286,13 @@ export interface ProtocolError {
   data?: Record<string, unknown>;
 }
 
+/** Состояние профилировщика CPU хоста: `host.profile.status`. `file` — путь `.cpuprofile` на диске хоста. */
+export type ProfileStatus =
+  | { state: 'idle' }
+  | { state: 'running'; startedAt: string; seconds: number }
+  | { state: 'done'; file: string; finishedAt: string }
+  | { state: 'failed'; error: string };
+
 export interface WorksSnapshot {
   entries: WorkEntry[];
   branches: Record<string, string | null>;

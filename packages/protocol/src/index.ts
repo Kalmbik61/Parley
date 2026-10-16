@@ -21,6 +21,7 @@ export type {
   CapabilitySource,
   CompactResult,
   NoticeKind,
+  ProfileStatus,
   ProtocolError,
   ProviderCheck,
   ProviderCheckReason,
