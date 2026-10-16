@@ -170,6 +170,9 @@ export function captureSpec(width: number, height: number): ViewportSpec {
 /** Пояснение агенту, когда работа вне LRU окна: вкладка в раскладке есть, гостя пока нет. */
 export const NOT_MOUNTED_NOTE = "The workspace is not open in Parley's window, so the page loads when the human opens it.";
 
+/** Отказ при выключенном общем «Let agents use the browser». */
+const AGENTS_OFF = 'The human turned off agent access to the browser (Settings → Browser → Let agents use the browser).';
+
 /** Длина заголовка страницы в `tabs`. */
 const TITLE_LIMIT = 200;
 
@@ -326,14 +329,23 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     return next;
   }
 
-  /** Страница по id агента: доступ (`pageOf`), состояние гостя, loopback; затем операция в очереди страницы. */
-  async function onPage<T>(request: BrowserAgentOpEvent, agentId: string, run: (contents: WebContents, record: PageRecord) => Promise<T>): Promise<T> {
+  /** Страница по id агента: доступ (`pageOf`), состояние гостя, loopback. */
+  function checked(request: BrowserAgentOpEvent, agentId: string): { record: PageRecord; contents: WebContents } {
     const record = pageOf(request, agentId);
     const contents = live(record);
     if (contents === null) throw new AgentOpError('tab_not_loaded', `Page ${agentId} is not loaded: its panel or workspace is not open in the window.`);
     if (contents.isCrashed()) throw new AgentOpError('tab_not_loaded', `The page ${agentId} crashed.`);
     if (!isLoopbackUrl(contents.getURL())) throw new AgentOpError('not_loopback', `Page ${agentId} is not on localhost.`);
-    return enqueue(pageKey(record.workKey, record.pageId), async () => {
+    return { record, contents };
+  }
+
+  /** Операция на странице в её очереди. Проверки — сразу (быстрый отказ) и ещё раз перед запуском: в очереди ждут до `opTimeoutMs`. */
+  async function onPage<T>(request: BrowserAgentOpEvent, agentId: string, run: (contents: WebContents, record: PageRecord) => Promise<T>): Promise<T> {
+    const first = checked(request, agentId);
+    return enqueue(pageKey(first.record.workKey, first.record.pageId), async () => {
+      // Пока операция ждала, человек мог выключить доступ, поставить панель на паузу или увести страницу на внешний сайт.
+      if (!(await deps.agentsAllowed())) throw new AgentOpError('access_denied', AGENTS_OFF);
+      const { record, contents } = checked(request, agentId);
       deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'start' });
       try {
         return await withTimeout(run(contents, record), opTimeoutMs, `The ${request.op} operation took longer than ${Math.round(opTimeoutMs / 1000)} s.`);
@@ -514,7 +526,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
         return failure('bad_request', `Invalid arguments for ${request.op}: ${where} — ${issue?.message ?? 'invalid'}.`);
       }
       if (!(await deps.agentsAllowed())) {
-        return failure('access_denied', 'The human turned off agent access to the browser (Settings → Browser → Let agents use the browser).');
+        return failure('access_denied', AGENTS_OFF);
       }
       try {
         switch (request.op) {

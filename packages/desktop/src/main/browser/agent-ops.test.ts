@@ -704,3 +704,45 @@ describe('screenshot (спека 5.1, 8)', () => {
     expect(codeOf(await run('screenshot', { tab: 't1' }))).toBe('unsupported');
   });
 });
+
+describe('проверки перед запуском из очереди (операция ждёт до opTimeoutMs)', () => {
+  /** Первый снимок держит очередь страницы, второй операции — `console` — стоит за ним; `release` отпускает первый. */
+  async function queued(change: (ctx: ReturnType<typeof setup>) => void) {
+    const ctx = setup();
+    register(ctx.ops, {});
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    ctx.inspector.send.mockImplementation(async (id: number, method: string) => {
+      if (method === 'Page.captureScreenshot') {
+        await gate;
+        return { data: png(100, 100).toString('base64') };
+      }
+      return sendWith()(id, method);
+    });
+    const first = ctx.runOp('screenshot', { tab: 't1' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const second = ctx.runOp('console', { tab: 't1' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    change(ctx);
+    release();
+    await first;
+    return second;
+  }
+
+  it('пауза панели между постановкой и запуском — access_denied «paused by the human»', async () => {
+    const result = await queued(({ ops }) => ops.registerTab({ workKey: WORK, owner: OWN, paused: true }));
+    expect(codeOf(result)).toBe('access_denied');
+    expect(messageOf(result)).toContain('paused by the human');
+  });
+
+  it('выключили «Let agents use the browser» — access_denied', async () => {
+    const result = await queued(({ state }) => { state.allowed = false; });
+    expect(codeOf(result)).toBe('access_denied');
+    expect(messageOf(result)).toContain('Let agents use the browser');
+  });
+
+  it('страница ушла на внешний адрес — not_loopback; операция не началась', async () => {
+    const result = await queued(({ guests }) => guests.set(7, fakeGuest(7, 'https://example.com/')));
+    expect(codeOf(result)).toBe('not_loopback');
+  });
+});
