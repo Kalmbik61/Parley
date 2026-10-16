@@ -246,6 +246,17 @@ describe('читающие инструменты (спека 5.1)', () => {
     expect(body).toContain('[error] boom ×3');
   });
 
+  it('console: похожие — «(+39 similar)»; заголовок — «Next: after=<id>.»', async () => {
+    const client = await connect(await startEndpoint());
+    const entry = { id: 41, level: 'error', origin: 'console', text: 'List 39 has no key', source: null, stack: [], count: 40, similar: 40, at: '2026-10-07T10:00:01.000Z' };
+    answers.push({ status: 200, body: { ok: true, result: { tab: 't1', url: 'http://localhost:5173/', matched: 40, entries: [entry], next: 41 } } });
+    const full = (await call(client, 'browser_console', { tab: 't1' })).text;
+    expect(full).toContain('Next: after=41.');
+    expect(full).toContain('[error] List 39 has no key ×40 (+39 similar)');
+    answers.push({ status: 200, body: { ok: true, result: { tab: 't1', url: 'http://localhost:5173/', matched: 0, entries: [], next: null } } });
+    expect((await call(client, 'browser_console', { tab: 't1', after: 41 })).text).not.toContain('Next:');
+  });
+
   it('network: список и детали; <redacted> окна доходит как есть; заметки о телах; длинный ответ режется на 20 КБ', async () => {
     const client = await connect(await startEndpoint());
     const summary = { id: '100.1', method: 'POST', url: 'http://localhost:5173/api/settings?token=%3Credacted%3E', kind: 'fetch', status: 500, statusText: 'Internal Server Error', failure: null, durationMs: 42, mimeType: 'application/json' };

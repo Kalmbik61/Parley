@@ -38,7 +38,7 @@ export type BrowserAgentErrorCode = (typeof BROWSER_AGENT_ERROR_CODES)[number];
 /**
  * Пределы канала (спека, раздел 8). `opMs` — срок ответа окна хосту; `openMs` — сколько main ждёт, пока окно поставит
  * вкладку и ответит (вкладка встаёт за кадр, дольше — окно перезагружается или не слушает); `requestBytes` — тело
- * запроса агента. Остальное — пределы чтения (этап C): `text` — текст записи консоли и сообщения; `listBytes` и
+ * запроса агента. Остальное — пределы чтения (этап C): `listStackFrames` — сколько своих кадров стека в записи консоли; `listEntryText` — текст записи консоли в кодовых точках; `listBytes` и
  * `listEntries` — размер и число записей списка; `detailBody` — тело запроса или ответа в деталях; `headerValue`, `headers` — длина значения и число заголовков на сторону в деталях; `listQuery` — сколько знаков адреса после `?` в списке сети; `screenshotLongSide`
  * и `fullPageViewports` — размер снимка; `panelPages` — предел страниц панели (источник правды — `PANEL_LIMITS.pages`
  * окна, равенство сверяет тест окна); `captureReadyMs` — сколько main ждёт, пока окно поставит `<webview>` в размер снимка
@@ -48,13 +48,14 @@ export const AGENT_LIMITS = {
   opMs: 30_000,
   openMs: 10_000,
   requestBytes: 65_536,
-  text: 10_000,
   listBytes: 20_480,
   listEntries: 100,
   detailBody: 8192,
   headerValue: 256,
   headers: 40,
   listQuery: 80,
+  listStackFrames: 5,
+  listEntryText: 1024,
   screenshotLongSide: 1568,
   fullPageViewports: 3,
   panelPages: 5,
@@ -100,7 +101,13 @@ const side = (max: number) => z.number().int().min(AGENT_VIEWPORT.min).max(max);
 /** Схемы аргументов по операциям; хост проверяет до окна, main окна — у себя. */
 export const browserAgentArgs = {
   tabs: z.strictObject({}),
-  console: z.strictObject({ tab, level: z.enum(['error', 'warning', 'all']).optional(), pattern: pattern.optional(), limit: limit.optional() }),
+  console: z.strictObject({
+    tab,
+    level: z.enum(['error', 'warning', 'all']).optional(),
+    pattern: pattern.optional(),
+    limit: limit.optional(),
+    after: z.number().int().min(0).optional(),
+  }),
   network: z.strictObject({
     tab,
     failedOnly: z.boolean().optional(),
@@ -178,6 +185,8 @@ export interface BrowserAgentTabsResult {
 }
 
 export interface BrowserAgentConsoleEntry {
+  /** Номер записи в журнале страницы: значение `after` для следующего чтения. */
+  id: number;
   level: 'error' | 'warning' | 'info' | 'debug';
   origin: 'console' | 'exception' | 'network' | 'browser';
   text: string;
@@ -185,7 +194,10 @@ export interface BrowserAgentConsoleEntry {
   source: string | null;
   /** Кадры стека: `fn (url:строка:столбец)`. */
   stack: string[];
+  /** Сколько раз повторилось сообщение (у свёртки похожих — сумма по группе). */
   count: number;
+  /** Свёртка похожих (тексты различаются числами): размер группы; поля нет — запись одна. Остаётся новейшая. */
+  similar?: number;
   /** ISO-время записи. */
   at: string;
 }
@@ -194,8 +206,10 @@ export interface BrowserAgentConsoleResult {
   url: string;
   /** Новейшие подходящие записи в пределах `listEntries` и `listBytes`, старые — первыми. */
   entries: BrowserAgentConsoleEntry[];
-  /** Сколько записей текущей страницы подошло под фильтр. */
+  /** Сколько записей текущей страницы подошло под фильтр (до свёртки похожих). */
   matched: number;
+  /** Наибольший id среди подходящих записей — значение `after` для следующего чтения; `null` — подходящих нет. */
+  next: number | null;
 }
 
 export interface BrowserAgentRequestSummary {

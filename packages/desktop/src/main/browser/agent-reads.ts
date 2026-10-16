@@ -38,16 +38,43 @@ export function newest<T>(items: readonly T[], limit: number): T[] {
 
 const frameText = (frame: StackFrame): string => `${frame.fn === '' ? '(anonymous)' : frame.fn} (${redactUrl(frame.url)}:${frame.line}:${frame.column})`;
 
-export function toAgentConsole(entry: ConsoleEntry): BrowserAgentConsoleEntry {
+/** Кадр библиотеки, а не кода страницы: в стеке из пятидесяти кадров ошибку находят по своим. */
+const VENDOR_FRAME = /\/node_modules\/|^node:|^chrome-extension:|\/@vite\/|\/\.vite\/deps\/|^webpack-internal:/;
+
+/** До `listStackFrames` своих кадров; своих нет — первый кадр, чтобы стек не пропал совсем. */
+function compactStack(stack: readonly StackFrame[]): string[] {
+  const own = stack.filter((frame) => !VENDOR_FRAME.test(frame.url)).slice(0, AGENT_LIMITS.listStackFrames);
+  const shown = own.length > 0 ? own : stack.slice(0, 1);
+  return shown.map(frameText);
+}
+
+/** Текст записи с маской (до обрезки); обрезка по кодовым точкам — в `toAgentConsole`. */
+const maskedText = (entry: ConsoleEntry): string => redactSecretsInText(redactUrlsInText(entry.text));
+
+export function toAgentConsole(entry: ConsoleEntry, masked: string = maskedText(entry)): BrowserAgentConsoleEntry {
+  const head = cutCodePoints(masked, AGENT_LIMITS.listEntryText);
   return {
+    id: entry.id,
     level: entry.level,
     origin: entry.origin,
-    text: redactSecretsInText(redactUrlsInText(entry.text)),
+    text: head.cut ? `${head.text}…` : masked,
     source: entry.location === null ? null : `${redactUrl(entry.location.url)}:${entry.location.line}:${entry.location.column}`,
-    stack: entry.stack.map(frameText),
+    stack: compactStack(entry.stack),
     count: entry.count,
     at: new Date(entry.ts).toISOString(),
   };
+}
+
+/** Свёртка похожих (тексты различаются числами: id, время, номер строки): остаётся новейшая запись группы, `count` — сумма, `similar` — размер группы. */
+function foldSimilar(items: ReadonlyArray<{ entry: BrowserAgentConsoleEntry; key: string }>): BrowserAgentConsoleEntry[] {
+  const groups = new Map<string, { newest: BrowserAgentConsoleEntry; count: number; size: number }>();
+  for (const { entry, key } of items) {
+    const group = groups.get(key);
+    groups.set(key, { newest: entry, count: (group?.count ?? 0) + entry.count, size: (group?.size ?? 0) + 1 });
+  }
+  const folded = [...groups.values()].map(({ newest, count, size }): BrowserAgentConsoleEntry => ({ ...newest, count, ...(size > 1 ? { similar: size } : {}) }));
+  // Порядок — по новейшей записи группы, старые первыми.
+  return folded.sort((a, b) => a.id - b.id);
 }
 
 export function summaryOf(entry: NetworkEntry): BrowserAgentRequestSummary {
@@ -131,10 +158,12 @@ export function createAgentReads(deps: { inspector: Pick<Inspector, 'snapshot' |
       const pattern = args.pattern?.toLowerCase();
       // Фильтр смотрит на текст с маской, как и ответ: по сырому подбирали бы значение секрета посимвольно через `matched`.
       const matching = snapshot.console
-        .filter((entry) => entry.epoch === snapshot.epoch && (level === 'all' || entry.level === 'error' || (level === 'warning' && entry.level === 'warning')))
-        .map(toAgentConsole)
-        .filter((entry) => pattern === undefined || entry.text.toLowerCase().includes(pattern));
-      return { tab: record.agentId, url: redactUrl(contents.getURL()), entries: newest(matching, args.limit ?? DEFAULT_LIST), matched: matching.length };
+        .filter((entry) => entry.epoch === snapshot.epoch && (args.after === undefined || entry.id > args.after) && (level === 'all' || entry.level === 'error' || (level === 'warning' && entry.level === 'warning')))
+        .map((entry) => ({ entry, masked: maskedText(entry) }))
+        .filter(({ masked }) => pattern === undefined || masked.toLowerCase().includes(pattern));
+      const folded = foldSimilar(matching.map(({ entry, masked }) => ({ entry: toAgentConsole(entry, masked), key: `${entry.level} ${masked.replace(/\d+/g, '#')}` })));
+      const next = matching.reduce<number | null>((top, { entry }) => (top === null || entry.id > top ? entry.id : top), null);
+      return { tab: record.agentId, url: redactUrl(contents.getURL()), entries: newest(folded, args.limit ?? DEFAULT_LIST), matched: matching.length, next };
     },
     async networkOf(contents, record, args) {
       const snapshot = captured(contents.id);

@@ -42,13 +42,14 @@ describe('канал агента к браузеру: константы (сп�
       opMs: 30_000,
       openMs: 10_000,
       requestBytes: 65_536,
-      text: 10_000,
       listBytes: 20_480,
       listEntries: 100,
       detailBody: 8192,
       headerValue: 256,
       headers: 40,
       listQuery: 80,
+      listStackFrames: 5,
+      listEntryText: 1024,
       screenshotLongSide: 1568,
       fullPageViewports: 3,
       panelPages: 5,
@@ -121,6 +122,11 @@ describe('схемы операций чтения', () => {
     for (const bad of [{}, { tab: 'bp-abc123' }, { tab: 't1', level: 'info' }, { tab: 't1', pattern: '' }, { tab: 't1', pattern: 'x'.repeat(201) }, { tab: 't1', limit: 0 }, { tab: 't1', limit: 101 }, { tab: 't1', limit: 1.5 }, { tab: 't1', extra: 1 }]) {
       expect(ok('console', bad), JSON.stringify(bad)).toBe(false);
     }
+  });
+
+  it('console: after — целое от 0', () => {
+    expect(ok('console', { tab: 't1', after: 0 })).toBe(true);
+    for (const bad of [{ tab: 't1', after: -1 }, { tab: 't1', after: 1.5 }, { tab: 't1', after: '3' }]) expect(ok('console', bad), JSON.stringify(bad)).toBe(false);
   });
 
   it('network: failedOnly, urlPattern, limit, requestId', () => {

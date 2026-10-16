@@ -509,11 +509,104 @@ describe('console (спека 5.1)', () => {
   it('бюджет 20 КБ: при длинных записях их меньше limit, новейшие сохраняются', async () => {
     const { ops, snapshots, runOp: run } = setup();
     register(ops, {});
-    snapshots.set(7, { ...EMPTY, console: Array.from({ length: 60 }, (_, index) => consoleEntry({ id: index + 10, text: `${index} ${'x'.repeat(1000)}` })) });
+    // Тексты различаются буквами, а не числами: числа свёртка похожих склеила бы в одну запись.
+    const word = (index: number): string => String.fromCharCode(97 + Math.floor(index / 26), 97 + (index % 26));
+    snapshots.set(7, { ...EMPTY, console: Array.from({ length: 60 }, (_, index) => consoleEntry({ id: index + 10, text: `${word(index)} ${'x'.repeat(1000)}` })) });
     const result = okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1', limit: 100 }));
     expect(result.matched).toBe(60);
-    expect(Buffer.byteLength(JSON.stringify(result.entries))).toBeLessThanOrEqual(20_480 + 200);
-    expect(result.entries.at(-1)?.text.startsWith('59 ')).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(result.entries))).toBeLessThanOrEqual(20_480 + 1200);
+    expect(result.entries.at(-1)?.text.startsWith(`${word(59)} `)).toBe(true);
+  });
+
+  it('ошибка с 20 кадрами (15 из node_modules) и 25-строчным текстом — 5 своих кадров, текст 1024 с «…»', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    const own = (index: number) => ({ fn: `own${index}`, url: `http://localhost:5173/src/f${index}.tsx`, line: index + 1, column: 1 });
+    const vendor = (index: number) => ({ fn: `lib${index}`, url: `http://localhost:5173/node_modules/.vite/deps/react-dom.js?v=${index}`, line: index + 1, column: 1 });
+    // Свои и вендорские вперемешку: 5 своих кадров из 20 — первые пять своих по порядку.
+    const stack = Array.from({ length: 20 }, (_, index) => (index % 4 === 0 ? own(index) : vendor(index)));
+    const text = Array.from({ length: 25 }, (_, index) => `    at Component (http://localhost:5173/src/components/Feature/Component.tsx:${10 + index}:5)`).join('\n');
+    snapshots.set(7, { ...EMPTY, console: [consoleEntry({ id: 40, text, stack })] });
+    const [entry] = okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1' })).entries;
+    expect(entry?.stack).toEqual([0, 4, 8, 12, 16].map((index) => `own${index} (http://localhost:5173/src/f${index}.tsx:${index + 1}:1)`));
+    expect(Array.from(entry?.text ?? '')).toHaveLength(1025);
+    expect(entry?.text.endsWith('…')).toBe(true);
+    expect(entry?.id).toBe(40);
+  });
+
+  it('стек только из вендорских кадров — первый кадр; кадров своих больше пяти — пять', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    const vendor = (index: number) => ({ fn: `lib${index}`, url: index % 2 === 0 ? 'node:internal/process' : 'webpack-internal:///./node_modules/x.js', line: 1, column: 1 });
+    const own = (index: number) => ({ fn: `own${index}`, url: `http://localhost:5173/src/f${index}.tsx`, line: 1, column: 1 });
+    snapshots.set(7, {
+      ...EMPTY,
+      console: [
+        consoleEntry({ id: 1, text: 'only vendor', stack: [vendor(0), vendor(1), vendor(2)] }),
+        consoleEntry({ id: 2, text: 'many own', stack: Array.from({ length: 8 }, (_, index) => own(index)) }),
+      ],
+    });
+    const [vendorOnly, manyOwn] = okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1' })).entries;
+    expect(vendorOnly?.stack).toEqual(['lib0 (node:internal/process:1:1)']);
+    expect(manyOwn?.stack).toHaveLength(5);
+  });
+
+  it('40 сообщений, различающихся числом, — одна запись, count 40, similar 40', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    snapshots.set(7, {
+      ...EMPTY,
+      console: [
+        consoleEntry({ id: 1, text: 'Other failure' }),
+        ...Array.from({ length: 40 }, (_, index) => consoleEntry({ id: index + 2, text: `List ${index} has no key`, ts: Date.UTC(2026, 9, 7, 10, 0, index) })),
+      ],
+    });
+    const result = okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1' }));
+    expect(result.matched).toBe(41);
+    expect(result.entries).toHaveLength(2);
+    expect(result.entries[1]).toMatchObject({ id: 41, text: 'List 39 has no key', count: 40, similar: 40 });
+    expect(result.entries[0]?.similar).toBeUndefined();
+    // Группа — по уровню и тексту: тот же текст на другом уровне не склеивается; count повторов суммируется.
+    snapshots.set(7, {
+      ...EMPTY,
+      console: [
+        consoleEntry({ id: 1, level: 'warning', text: 'retry 1 failed', count: 3 }),
+        consoleEntry({ id: 2, level: 'error', text: 'retry 2 failed', count: 2 }),
+        consoleEntry({ id: 3, level: 'error', text: 'retry 3 failed', count: 4 }),
+      ],
+    });
+    const mixed = okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1', level: 'all' }));
+    expect(mixed.entries.map((entry) => [entry.level, entry.count, entry.similar])).toEqual([['warning', 3, undefined], ['error', 6, 2]]);
+  });
+
+  it('after: только записи новее; next — последний id', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    snapshots.set(7, { ...EMPTY, console: [consoleEntry({ id: 3, text: 'alpha' }), consoleEntry({ id: 5, text: 'beta' }), consoleEntry({ id: 9, text: 'gamma' })] });
+    const first = okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1' }));
+    expect(first.next).toBe(9);
+    const second = okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1', after: 5 }));
+    expect(second.entries.map((entry) => entry.text)).toEqual(['gamma']);
+    expect([second.matched, second.next]).toEqual([1, 9]);
+    const none = okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1', after: 9 }));
+    expect([none.entries, none.matched, none.next]).toEqual([[], 0, null]);
+  });
+
+  it('46 React-подобных ошибок из пробы 1 укладываются в 20 КБ все', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    const trace = Array.from({ length: 25 }, (_, index) => `    at Component${index} (http://127.0.0.1:5173/src/components/Feature${index}/Component${index}.tsx?t=1760000000000:${10 + index}:5)`).join('\n');
+    const frames = (name: string) => Array.from({ length: 36 }, (_, index) => ({ fn: name, url: 'http://127.0.0.1:5173/', line: 65, column: 30 + index }));
+    const keyWarnings = Array.from({ length: 40 }, (_, index) =>
+      consoleEntry({ id: index + 1, text: `Warning: Each child in a list should have a unique "key" prop. Check the render method of \`List${index}\`. See https://reactjs.org/link/warning-keys for more information.\n${trace}`, stack: frames('rec') }),
+    );
+    const uncaught = Array.from({ length: 5 }, (_, index) => consoleEntry({ id: 41 + index, origin: 'exception', text: `Uncaught Error: Uncaught render failure ${index}`, stack: frames('deep') }));
+    const auth = consoleEntry({ id: 46, text: 'Auth failed: password=hunter2' });
+    snapshots.set(7, { ...EMPTY, console: [...keyWarnings, ...uncaught, auth] });
+    const result = okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1', limit: 100 }));
+    expect(result.matched).toBe(46);
+    expect(result.entries.map((entry) => entry.similar)).toEqual([40, 5, undefined]);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(20_480);
   });
 
   it('консоль: секреты вида значения в тексте скрыты, pattern по сырому секрету ничего не находит', async () => {
