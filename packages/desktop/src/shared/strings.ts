@@ -2000,6 +2000,19 @@ export const S = {
     layoutError: "Couldn't show layout",
   },
 
+  /** Архив диагностики (спека 2026-10-16-host-diagnostics-and-load-design.md, A2): `README.txt` внутри zip. */
+  diagnostics: {
+    readme: [
+      'Parley diagnostics bundle',
+      '',
+      'Contents: host.log and host.log.1 (host journal), host.err (host stderr), host-info.json (host versions, health sample, live sessions), app-info.json (app and OS versions), processes.txt (host process tree: pid, cpu, memory, executable name only), actions.jsonl (recent window-to-host calls with timings), host-*.cpuprofile (CPU profiles, open in Chrome DevTools > Performance > Load profile).',
+      '',
+      'Privacy: project paths and session or room names are included. Message text, terminal output, provider keys and environment variables are not.',
+      '',
+      'Send: attach this file to a GitHub issue at https://github.com/Kalmbik61/Parley/issues or to your message to the author.',
+    ].join('\n'),
+  },
+
   /** Голосовой ввод (спека 2026-10-06-voice-input-design.md, раздел 3). */
   voice: {
     setUp: 'Set up voice input',

@@ -137,6 +137,7 @@ function setup(
   getUpdate: ReturnType<typeof vi.fn>;
   openPath: ReturnType<typeof vi.fn>;
   saveDropImage: ReturnType<typeof vi.fn>;
+  saveDiagnostics: ReturnType<typeof vi.fn>;
   imageThumbnail: ReturnType<typeof vi.fn>;
   chooseFiles: ReturnType<typeof vi.fn>;
   setDirtyBuffers: ReturnType<typeof vi.fn>;
@@ -183,6 +184,8 @@ function setup(
   const openPath = vi.fn().mockResolvedValue('');
   // Настоящий буфер обмена тесты не читают (решение контролёра 5.4): main отдаёт путь подмены.
   const saveDropImage = vi.fn().mockResolvedValue('/h/drops/a.png');
+  // Настоящую сборку архива (ps, zip, диск) тесты ipc не гоняют: ей отдельный `bundle.test.ts`.
+  const saveDiagnostics = vi.fn().mockResolvedValue({ file: '/h/Downloads/parley-diagnostics-20261016-123456.zip', hostResponded: true });
   const chooseFiles = vi.fn().mockResolvedValue(['/h/a.png']);
   // Настоящий nativeImage тесты не зовут: модуль миниатюр проверяет `image-thumbnail.test.ts`.
   const imageThumbnail = vi.fn().mockResolvedValue('data:image/png;base64,AAAA');
@@ -225,6 +228,7 @@ function setup(
     roots,
     openPath,
     saveDropImage,
+    saveDiagnostics,
     imageThumbnail,
     setDirtyBuffers,
     answerClose,
@@ -254,6 +258,7 @@ function setup(
     getUpdate,
     openPath,
     saveDropImage,
+    saveDiagnostics,
     imageThumbnail,
     chooseFiles,
     setDirtyBuffers,
@@ -583,6 +588,42 @@ describe('registerIpc', () => {
         return true;
       });
     }
+    expect(showItemInFolder).not.toHaveBeenCalled();
+  });
+});
+
+describe('app:save-diagnostics', () => {
+  it('зовёт saveDiagnostics с { profile: false } и показывает файл в Finder', async () => {
+    const { ipcMain, saveDiagnostics, showItemInFolder } = setup();
+
+    const result = await ipcMain.invoke('app:save-diagnostics', { profile: false });
+
+    expect(saveDiagnostics).toHaveBeenCalledWith({ profile: false });
+    expect(showItemInFolder).toHaveBeenCalledWith('/h/Downloads/parley-diagnostics-20261016-123456.zip');
+    expect(result).toEqual({ file: '/h/Downloads/parley-diagnostics-20261016-123456.zip', hostResponded: true });
+  });
+
+  it('без boolean profile — bad_request, сборка и Finder не зовутся', async () => {
+    const { ipcMain, saveDiagnostics, showItemInFolder } = setup();
+
+    for (const options of [undefined, null, {}, { profile: 'yes' }, { profile: 1 }, 'profile']) {
+      await expect(ipcMain.invoke('app:save-diagnostics', options)).rejects.toSatisfy((error: unknown) => {
+        expect(decodeIpcError(error).code).toBe('bad_request');
+        return true;
+      });
+    }
+    expect(saveDiagnostics).not.toHaveBeenCalled();
+    expect(showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it('сбой сборки доходит с кодом failed, Finder не зовётся', async () => {
+    const { ipcMain, saveDiagnostics, showItemInFolder } = setup();
+    saveDiagnostics.mockRejectedValue(new Error('ENOSPC'));
+
+    await expect(ipcMain.invoke('app:save-diagnostics', { profile: true })).rejects.toSatisfy((error: unknown) => {
+      expect(decodeIpcError(error).code).toBe('failed');
+      return true;
+    });
     expect(showItemInFolder).not.toHaveBeenCalled();
   });
 });
