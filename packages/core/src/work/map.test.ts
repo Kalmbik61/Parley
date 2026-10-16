@@ -650,6 +650,19 @@ describe('parseMap', () => {
     expect(parsed.sessions[0]?.model).toBe('opus');
   });
 
+  it('lean: старая карта читается без поля и без миграции, записанное значение при чтении остаётся', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'план', task: 't' });
+    const raw = JSON.parse(JSON.stringify(map)) as { sessions: Record<string, unknown>[] };
+
+    const old = parseMap(JSON.stringify(raw), 'map.json');
+    expect('lean' in (old.sessions[0] ?? {})).toBe(false);
+    expect(old.sessions[0]?.lean).toBeUndefined();
+
+    raw.sessions[0]!['lean'] = true;
+    expect(parseMap(JSON.stringify(raw), 'map.json').sessions[0]?.lean).toBe(true);
+  });
+
   it('уровни каталогов в карте читаются как есть: xhigh, max, ultra', () => {
     const map = emptyMap();
     for (const effort of ['xhigh', 'max', 'ultra']) {
