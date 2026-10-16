@@ -18,6 +18,7 @@ import { HostError } from './errors.js';
 import { createLog } from './log.js';
 import type { Log } from './log.js';
 import { watchIdle } from './idle.js';
+import { startLoopDelayLog } from './loop-delay.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
 import { HOST_ERROR_REASONS } from '@parley/protocol';
@@ -209,6 +210,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const history = createHistoryService(worksService, {
     onFailure: ({ count }) => log.warn('history-write-failed', { count }),
   });
+  const stopLoopDelay = startLoopDelayLog(handle.context.log);
+  handle.context.onShutdown(async () => stopLoopDelay());
   handle.context.onShutdown(async () => planEffects.stop());
   handle.context.onShutdown(async () => history.stop());
   handle.context.onShutdown(() => worksService.stop());

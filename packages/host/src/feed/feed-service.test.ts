@@ -176,6 +176,22 @@ afterEach(async () => {
 });
 
 describe('снимок и дельты', () => {
+  it('снимок живой ленты пишет строку с items, bytes и seedMs null', async () => {
+    start();
+    send(prompt('go'));
+
+    const snapshot = await service.snapshot(REF);
+
+    expect(fakes.log.info).toHaveBeenCalledWith('лента: снимок', expect.objectContaining({
+      sessionId: REF.sessionId,
+      workId: REF.workId,
+      items: snapshot.items.length,
+      bytes: expect.any(Number),
+      seedMs: null,
+      totalMs: expect.any(Number),
+    }));
+  });
+
   it('дельты идут подписчику по revision, снимок сбрасывает пачку и продолжает счёт', async () => {
     vi.useFakeTimers();
     start();
@@ -767,6 +783,20 @@ describe('сев из журнала', () => {
     );
     expect(first.revision).toBe(0);
     expect(second.items).toEqual(first.items);
+  });
+
+  it('снимок с севом из журнала пишет seedMs числом, повторный — null', async () => {
+    const { root } = await history();
+    fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
+    start({ roots: () => [root], readRecords: countingReader().read });
+
+    await service.snapshot(REF);
+    await service.snapshot(REF);
+
+    const lines = fakes.log.info.mock.calls.filter(([msg]) => msg === 'лента: снимок');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]?.[1]).toMatchObject({ sessionId: REF.sessionId, workId: REF.workId, seedMs: expect.any(Number) });
+    expect(lines[1]?.[1]).toMatchObject({ seedMs: null });
   });
 
   it('журнал ещё не известен индексу — следующий снимок сеет, когда он появится', async () => {

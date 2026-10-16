@@ -4,6 +4,17 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Changed
+
+- **The host log shows where time goes.** Starting a new session and opening Chat can take several
+  seconds on a busy machine. To find out why, Parley's host now writes to `~/.parley/host/host.log`
+  how long each step of creating and starting a session took, every Chat feed snapshot (its size and
+  how long it took to build), every request that took over a second, and, once a minute, how far the
+  host fell behind when it was busy for 250 ms or more. Nothing else changes; the log holds no prompts,
+  keys or command lines.
+
 ## 0.13.0
 
 Rooms now show how many tokens they used and how full each agent's context is, and you can compact an agent's context right from the room. Chat no longer gets stuck on "Working…" after the agent has answered.
