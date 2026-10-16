@@ -2110,6 +2110,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'resume-limit': 'hourly resume limit reached — messages are waiting',
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
+  'codex-call-wait': 'stuck in a Codex tool call — Codex may be waiting for an approval in its terminal',
   'skill-foreign': "agent skill not installed — that path already exists and wasn't created by Parley",
   'parley-md-created': 'Parley added PARLEY.md — team rules for your agents',
   'parley-md-unreadable': "PARLEY.md couldn't be read — this session starts without its project rules",

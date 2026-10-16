@@ -1716,6 +1716,62 @@ describe('хуки Codex', () => {
     expect(request.responses).toEqual([{}]);
   });
 
+  // Разбор 2026-10-16: запрос одобрения Codex идёт из ячейки code mode, которая живёт дольше хода. Пустой ответ на конце
+  // хода уводил Codex в его окно одобрения в TUI, и каждый следующий `exec` (и чтение карты) ждал его без срока.
+  it('Stop Codex не отпускает удержанный PermissionRequest: карточка ждёт окна, решение доходит до хука', async () => {
+    const file = path.join(await tempRoot(), 'main.jsonl');
+    await writeFile(
+      file,
+      [
+        { timestamp: '2026-10-15T22:05:05.000Z', ordinal: 0, type: 'session_meta', payload: { id: CODEX_SESSION, cwd: '/tmp/p', cli_version: '0.162.0', source: 'cli' } },
+        { timestamp: '2026-10-15T22:05:05.500Z', ordinal: 1, type: 'event_msg', payload: { type: 'task_started', turn_id: 'u1' } },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join('\n') + '\n',
+    );
+    fakes.setLogFile(file);
+    start({ codexApprovals: async () => true });
+    await service.snapshot(REF);
+    send(hook('SessionStart', { source: 'startup' }));
+    const held = send(permissionBash('pnpm test'));
+    send(hook('Stop', { last_assistant_message: 'ok' }));
+
+    const items = (await service.snapshot(REF)).items;
+    // Stop закрыл ход — иначе тест проверял бы не то.
+    expect(items.filter((entry) => entry.kind === 'turn')).toHaveLength(1);
+    const card = items.find((entry) => entry.kind === 'permission') as { cardId: string; state: string };
+    expect(card.state).toBe('pending');
+    expect(held.responses).toEqual([]);
+
+    service.decide(REF, card.cardId, { kind: 'permission', behavior: 'allow' });
+    expect(held.responses).toEqual([
+      { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } },
+    ]);
+  });
+
+  it('Codex у приглашения (активность idle) — удержанный PermissionRequest продолжает ждать окна', async () => {
+    start({ codexApprovals: async () => true });
+    send(hook('SessionStart', { source: 'startup' }));
+    const held = send(permissionBash('pnpm test'));
+
+    fakes.emitActivity(REF, 'working');
+    fakes.emitActivity(REF, 'idle');
+
+    expect(held.responses).toEqual([]);
+    const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'permission');
+    expect(card).toMatchObject({ state: 'pending' });
+  });
+
+  it('выход процесса Codex по-прежнему отпускает удержанный PermissionRequest: карточка stale, хуку {}', async () => {
+    start({ codexApprovals: async () => true });
+    send(hook('SessionStart', { source: 'startup' }));
+    const held = send(permissionBash('pnpm test'));
+    fakes.emitExit(REF);
+    expect(held.responses).toEqual([{}]);
+    const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'permission');
+    expect(card).toMatchObject({ state: 'stale' });
+  });
+
   it('Codex закрыл запрос сам — карточка elsewhere', async () => {
     start({ codexApprovals: async () => true });
     const request = send(permissionBash('ls'));
