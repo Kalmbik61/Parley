@@ -2049,7 +2049,7 @@ git commit -m "feat(desktop): реестр страниц панелей для 
 - Берёт: `bridge.browser.onAgentActivity` и `AgentActivity` (задача 13), `capture` из `screenshotOf` (задача 12), `useBrowserStore.tabs[tabId].webContentsId`.
 - Отдаёт: строку `S.browser.panel.agentCapture(width, height)` → `Agent capture 375×812`.
 
-- [ ] **Шаг 1. Написать падающие тесты** в `BrowserSurface.test.tsx` (обвязка страницы панели, `bridge.emitAgentActivity` — `FakeBridge`, задача 13):
+- [x] **Шаг 1. Написать падающие тесты** в `BrowserSurface.test.tsx` (обвязка страницы панели, `bridge.emitAgentActivity` — `FakeBridge`, задача 13):
 
 ```ts
 describe('снимок агента на странице (этап C, спека 4.8; спайк 0.2)', () => {
@@ -2081,9 +2081,9 @@ describe('снимок агента на странице (этап C, спек�
 
   (Корню поверхности нужен `data-testid="browser-surface-root"`: если у корня уже есть `data-tab-id`, тест берёт его селектором `[data-tab-id]`.)
 
-- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/renderer/browser/BrowserSurface.test.tsx` → FAIL.
+- [x] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/renderer/browser/BrowserSurface.test.tsx` → FAIL.
 
-- [ ] **Шаг 3. Реализовать.** В `BrowserSurface.tsx`, рядом с подпиской `onFavicon`:
+- [x] **Шаг 3. Реализовать.** В `BrowserSurface.tsx`, рядом с подпиской `onFavicon`:
 
 ```ts
   // Снимок агента (спека 4.8; спайк 0.2): `start` с `capture` — размер, в котором страницу снимают; пока он идёт, на видимой
@@ -2114,9 +2114,9 @@ describe('снимок агента на странице (этап C, спек�
 
   `strings.ts`, `browser.panel` после `resumeAgents`: `/** Подпись на странице, пока агент снимает её в чужом размере (спека 4.8). */ agentCapture: (width: number, height: number): string => \`Agent capture ${width}×${height}\`,`.
 
-- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS; `pnpm --filter @parley/desktop exec vitest run src/renderer src/english-ui.test.ts` → зелёный.
+- [x] **Шаг 4. Запустить — проходит.** Та же команда → PASS; `pnpm --filter @parley/desktop exec vitest run src/renderer src/english-ui.test.ts` → зелёный.
 
-- [ ] **Шаг 5. Закоммитить.**
+- [x] **Шаг 5. Закоммитить.**
 
 ```bash
 git add packages/desktop/src/renderer/browser/BrowserSurface.tsx packages/desktop/src/renderer/browser/BrowserSurface.test.tsx packages/desktop/src/shared/strings.ts

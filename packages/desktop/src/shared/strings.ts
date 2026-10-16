@@ -1621,6 +1621,8 @@ export const S = {
       /** Пункты «⋯» страницы панели: пауза агентов этого браузера (спека 4.8). */
       pauseAgents: 'Pause agents',
       resumeAgents: 'Resume agents',
+      /** Подпись на странице, пока агент снимает её в чужом размере (спека 4.8). */
+      agentCapture: (width: number, height: number): string => `Agent capture ${width}×${height}`,
     },
   },
 

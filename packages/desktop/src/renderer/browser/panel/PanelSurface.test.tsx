@@ -270,6 +270,38 @@ describe('PanelSurface — реестр страниц для агента (эт
   });
 });
 
+describe('PanelSurface — снимок агента на странице (этап C, спека 4.8; спайк 0.2)', () => {
+  const activity = (phase: 'start' | 'end', webContentsId: number, capture?: { width: number; height: number }): void =>
+    act(() => bridge.emitAgentActivity({ webContentsId, session: 'S02', op: 'screenshot', phase, ...(capture === undefined ? {} : { capture }) }));
+
+  it('start с capture своей страницы — «Agent capture 375×812»; end — подписи нет; чужая страница и start без capture не трогают', () => {
+    setPanel(CHAT, ['http://localhost:3000/']);
+    showHost(CHAT);
+    renderLayer();
+    fire(arm(webview(P1), 7), 'dom-ready');
+    activity('start', 9, { width: 375, height: 812 });
+    activity('start', 7);
+    expect(screen.queryByTestId('agent-capture')).toBeNull();
+    activity('start', 7, { width: 375, height: 812 });
+    expect(screen.getByTestId('agent-capture').textContent).toBe('Agent capture 375×812');
+    activity('end', 7);
+    expect(screen.queryByTestId('agent-capture')).toBeNull();
+  });
+
+  it('невидимая страница на время start с capture: visibility: visible, opacity: 0, pointer-events: none; на end — снова hidden', () => {
+    setPanel(CHAT, ['http://localhost:3000/']);
+    renderLayer();
+    fire(arm(webview(P1), 7), 'dom-ready');
+    const page = surface(P1) as HTMLElement;
+    expect(page.style.visibility).toBe('hidden');
+    activity('start', 7, { width: 1280, height: 800 });
+    expect([page.style.visibility, page.style.opacity, page.style.pointerEvents]).toEqual(['visible', '0', 'none']);
+    expect(screen.queryByTestId('agent-capture')).toBeNull();
+    activity('end', 7);
+    expect(page.style.visibility).toBe('hidden');
+  });
+});
+
 describe('PanelSurface — страница панели как браузер', () => {
   it('адрес перехода и размер из меню пишутся в страницу панели, а не во вкладку', () => {
     setPanel(CHAT, ['http://localhost:3000/']);

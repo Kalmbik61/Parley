@@ -502,6 +502,21 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
     [bridge, tabId],
   );
 
+  // Снимок агента (спека 4.8; спайк 0.2): `start` с `capture` — размер, в котором страницу снимают; пока он идёт, на видимой
+  // странице висит подпись «Agent capture W×H», а невидимую поверхность окно делает «видимой, но прозрачной»: у скрытого
+  // `<webview>` кадр не рисуется, у `opacity: 0` — рисуется.
+  const [agentCapture, setAgentCapture] = useState<{ width: number; height: number } | null>(null);
+  useEffect(
+    () =>
+      bridge.browser.onAgentActivity((event) => {
+        const own = useBrowserStore.getState().tabs[tabId]?.webContentsId ?? null;
+        if (own === null || event.webContentsId !== own) return;
+        if (event.phase === 'end') setAgentCapture(null);
+        else if (event.capture !== undefined) setAgentCapture(event.capture);
+      }),
+    [bridge, tabId],
+  );
+
   useEffect(() => () => useBrowserStore.getState().remove(tabId), [tabId]);
 
   /** Метод живой страницы; до `dom-ready` Electron бросает — это не повод ронять окно. */
@@ -610,7 +625,7 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
       ref={rootRef}
       data-tab-id={tabId}
       className={cn('absolute flex flex-col overflow-hidden bg-background', place.kind === 'panel' && 'inset-0')}
-      style={{ visibility: visible ? 'visible' : 'hidden' }}
+      style={visible ? { visibility: 'visible' } : agentCapture !== null ? { visibility: 'visible', opacity: 0, pointerEvents: 'none' } : { visibility: 'hidden' }}
       onPointerDownCapture={focusOwnTab}
       onFocusCapture={focusOwnTab}
       onKeyDown={(event) => {
@@ -684,6 +699,11 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
             {...WEBVIEW_ATTRIBUTES}
           />
         )}
+        {agentCapture !== null && visible ? (
+          <div data-testid="agent-capture" className="pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 rounded-md border border-border bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm">
+            {S.browser.panel.agentCapture(agentCapture.width, agentCapture.height)}
+          </div>
+        ) : null}
         {stage === null ? null : (
           <div
             data-testid="viewport-label"
