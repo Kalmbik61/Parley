@@ -4,6 +4,14 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+Parley can now package what it knows about its own slowness into one file, so a report about a slow window comes with evidence.
+
+### Added
+
+- **Diagnostics in the status bar.** One click saves a zip with host logs, a process list, request timings and an optional 20-second CPU profile of the host — attach it to an issue when Parley feels slow. The host journal now records where delays happen: session readiness, Chat sends, room mail delivery and the first reply.
+
 ## 0.13.1
 
 Chat gets Copy and Send again under messages, ↑ and ↓ through your past messages, and a send queue that keeps your messages in order in Chat and rooms. The host log now shows where time goes when starting a session or opening Chat is slow.
