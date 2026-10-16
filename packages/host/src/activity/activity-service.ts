@@ -111,6 +111,10 @@ export interface ActivityService {
   logFile(ref: SessionRef): string | null;
   /** Журнал субагента Codex по id его треда; не найден — null. */
   childLogFile(ref: SessionRef, threadId: string): string | null;
+  /** Файлы журналов сессии Codex: основной и субагентов; не Codex или журнала нет — []. */
+  codexLogFiles(ref: SessionRef): string[];
+  /** Перечитать журнал Codex в индексе логов (`codex-log-poll.ts`). */
+  reindexLog(file: string): Promise<void>;
   /** Пользователь смотрел на сессию: `pty.attach` и `pty.input` (1.6). */
   markSeen(ref: SessionRef, at?: string): void;
   onChange(listener: (ref: SessionRef, value: SessionLive) => void): () => void;
@@ -144,12 +148,10 @@ export interface ActivityService {
    * комната пишет её рядом с «not picked up yet». `null` — писем нет.
    */
   mailWaiting(ref: SessionRef, reason: MailWait | null): void;
-  /** Заполненность контекста Claude/GLM из файла строки статуса (`ContextService`); `null` — файла нет. */
+  /** Заполненность контекста (`ContextService`: Claude/GLM — файл строки статуса, Codex — хвост rollout); `null` — нет. */
   setContext(ref: SessionRef, fill: ContextFill | null): void;
   /** Сжатие сессии (`CompactionService`): фаза просьбы и конец последнего сжатия. */
   setCompaction(ref: SessionRef, track: CompactionTrack): void;
-  /** Время последней записи `compacted` в rollout-логе Codex; не Codex или записи нет — `null`. */
-  codexCompactedAt(ref: SessionRef): string | null;
   /**
    * Журнал какой-то сессии изменился (индекс логов; живая лента по нему ловит прерывание Esc —
    * запись «[Request interrupted by user…]», план 2026-10-01, решение 5). Возвращает отписку.
@@ -583,8 +585,8 @@ export function createActivityService(
       // Комнату и прогон по одной сессии не определить: сессия бывает в нескольких комнатах.
       attribution: { workId: ref.workId, sessionId: session.id, roomId: null, runId: null },
     };
-    // Codex — из индекса лога; Claude и GLM — из файла строки статуса (`ContextService`).
-    const fill = session.provider === 'codex' ? (indexed?.context ?? null) : (contexts.get(key) ?? null);
+    // Все провайдеры — из `ContextService`: Claude и GLM — файл строки статуса, Codex — хвост rollout.
+    const fill = contexts.get(key) ?? null;
     const view = contextView(fill, compactions.get(key));
     return {
       usage,
@@ -1038,11 +1040,6 @@ export function createActivityService(
       else compactions.set(key, track);
       recompute(ref);
     },
-    codexCompactedAt(ref) {
-      const session = works.entry(ref.projectPath, ref.workId)?.map.sessions.find((item) => item.id === ref.sessionId);
-      if (session === undefined || session.provider !== 'codex') return null;
-      return logIndex.index(session)?.compactedAt ?? null;
-    },
     questionHeld(ref, held) {
       const key = refKey(ref);
       if (questionHeldKeys.has(key) === held) return;
@@ -1087,6 +1084,17 @@ export function createActivityService(
         ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
       if (session === undefined) return null;
       return logIndex.childLogs(session).find((child) => child.threadId === threadId)?.file ?? null;
+    },
+    codexLogFiles(ref) {
+      const session = works
+        .entry(ref.projectPath, ref.workId)
+        ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session === undefined || session.provider !== 'codex') return [];
+      const main = logIndex.index(session)?.file;
+      return [...(main === undefined ? [] : [main]), ...logIndex.childLogs(session).map((child) => child.file)];
+    },
+    reindexLog(file) {
+      return logIndex.reindex(file);
     },
     terminalStarted(ref) {
       if (stopped) return;

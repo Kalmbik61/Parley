@@ -235,6 +235,17 @@ describe('createActivityService', () => {
     expect(a.get(ref)?.activity).toMatchObject({ activity: 'unseen', source: 'hooks' });
   }, 30_000);
 
+  it('2а-codex: codexLogFiles у сессии не Codex пуст, reindexLog не падает на отсутствующем файле', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    expect(a.codexLogFiles(ref)).toEqual([]);
+    await expect(a.reindexLog(path.join(claudeRoot, 'нет-такого.jsonl'))).resolves.toBeUndefined();
+  });
+
   it('2б: mailWaiting — причина ожидания писем уходит в метрики и рассылку, null её снимает', async () => {
     const { ref } = await activeSession();
     const w = await works();
@@ -276,15 +287,6 @@ describe('createActivityService', () => {
     expect(a.get(ref)?.metrics).toMatchObject({ context: null, compaction: 'compacted' });
     a.setContext(ref, { ...fill, usedPercent: 12, at: '2026-10-15T10:06:00.000Z' });
     expect(a.get(ref)?.metrics).toMatchObject({ context: { usedPercent: 12 }, compaction: null });
-  });
-
-  it('2г: codexCompactedAt у сессии Claude — null', async () => {
-    const { ref } = await activeSession();
-    const w = await works();
-    const a = activity(w);
-    await a.start();
-    await settle();
-    expect(a.codexCompactedAt(ref)).toBeNull();
   });
 
   it('3: без хуков тишина лога дольше порога → idle, таймер срабатывает один раз', async () => {

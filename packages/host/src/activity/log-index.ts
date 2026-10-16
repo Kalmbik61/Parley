@@ -51,6 +51,12 @@ export interface LogIndex {
   /** Что известно про лог сессии для страховки `activityOf`; `null` — лога нет (4.3). */
   log(session: WorkSession): ActivityLog | null;
   onChange(listener: () => void): () => void;
+  /**
+   * Перечитать один rollout-файл Codex и влить в индекс — как событие наблюдателя. На macOS `fs.watch` дозаписи
+   * Codex не доставляет, поэтому `codex-log-poll.ts` зовёт это по опросу. Ошибку чтения (кроме «файла нет»)
+   * не глотаем, а отдаём вызывающему: поллер ловит её сам и пробует на следующем проходе, как `onError` наблюдателя.
+   */
+  reindex(file: string): Promise<void>;
   stop(): void;
 }
 
@@ -227,6 +233,18 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
         : // Не `endedAt`: итоги хуков и длительность хода Claude Code пишет уже после `Stop`, и по ним
           // закончившая ход сессия числилась бы `working` ещё порог тишины — письма ей всё это время ждали бы.
           { lastRecordAt: found.lastWorkRecordAt, lastUserRecordAt: found.lastUserRecordAt };
+    },
+    async reindex(file) {
+      if (stopped) return;
+      let session: SessionIndex;
+      try {
+        session = await indexCodexSession(file);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        if (!stopped) applyChange({ kind: 'removed', file });
+        return;
+      }
+      if (!stopped) applyChange({ kind: 'updated', file, session });
     },
     onChange(listener) {
       listeners.add(listener);

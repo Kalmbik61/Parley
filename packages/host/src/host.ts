@@ -27,6 +27,7 @@ import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
 import { createCompactionService, type CompactionService } from './compaction/compaction-service.js';
 import { createContextService } from './context/context-service.js';
+import { createCodexLogPoller } from './activity/codex-log-poll.js';
 import { linkTerminalActivity } from './activity/terminal-link.js';
 import { createGlmCheckService } from './limits/glm-check.js';
 import type { GlmCheckOptions } from './limits/glm-check.js';
@@ -328,6 +329,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const contextService = createContextService({ pty: ptyManager, activity: activityService });
   contextService.start();
   handle.context.onShutdown(async () => contextService.stop());
+
+  // Индекс логов Codex: `fs.watch` на macOS дозаписи rollout не доставляет — перечитываем файлы запущенных сессий сами.
+  const codexLogPoller = createCodexLogPoller({ pty: ptyManager, activity: activityService });
+  codexLogPoller.start();
+  handle.context.onShutdown(async () => codexLogPoller.stop());
 
   // Дифф, коммит, слияние и отбрасывание worktree сессии (4.2) — «Остановить»
   // при отбрасывании она делит с обычным `sessions.stop`.

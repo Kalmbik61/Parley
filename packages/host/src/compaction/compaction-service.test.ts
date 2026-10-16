@@ -3,6 +3,7 @@ import type { SessionRef } from '@parley/protocol';
 import { fakePty, type FakePty } from '../../test/fake-pty.js';
 import { HostError } from '../errors.js';
 import type { SwitchLock } from '../sessions/sessions-service.js';
+import type { RolloutRecord } from '@parley/core';
 import { compactCommand, createCompactionService, type CompactionDeps } from './compaction-service.js';
 import type { CompactionTrack } from './context-view.js';
 
@@ -36,9 +37,10 @@ describe('createCompactionService (спека 5.2–5.5)', () => {
   let lastEventAt: string | null;
   let held: boolean;
   let inFlight: boolean;
-  let codexCompactedAt: string | null;
+  let logFile: string | null;
+  let tailReads: RolloutRecord[][];
+  let tailsMade: string[];
   let activityListeners: Array<(target: SessionRef) => void>;
-  let logListeners: Array<() => void>;
   let tracks: CompactionTrack[];
   let notices: string[];
 
@@ -49,9 +51,10 @@ describe('createCompactionService (спека 5.2–5.5)', () => {
     lastEventAt = new Date(1000).toISOString();
     held = false;
     inFlight = false;
-    codexCompactedAt = null;
+    logFile = '/tmp/rollout.jsonl';
+    tailReads = [];
+    tailsMade = [];
     activityListeners = [];
-    logListeners = [];
     tracks = [];
     notices = [];
   });
@@ -83,18 +86,20 @@ describe('createCompactionService (спека 5.2–5.5)', () => {
           activityListeners.push(listener);
           return () => undefined;
         },
-        onLogChange: (listener: () => void) => {
-          logListeners.push(listener);
-          return () => undefined;
-        },
         setCompaction: (_target: SessionRef, track: CompactionTrack) => {
           tracks.push(track);
         },
-        codexCompactedAt: () => codexCompactedAt,
+        logFile: () => logFile,
       } as unknown as CompactionDeps['activity'],
       exclusive: lock,
       wake: { inFlight: () => inFlight, enterDelayMs: 500 },
       timeoutMs: 60_000,
+      codexTimeoutMs: 600_000,
+      codexPollMs: 2_000,
+      codexTail: (file: string) => {
+        tailsMade.push(file);
+        return { read: async () => tailReads.shift() ?? [] };
+      },
     };
     const created = createCompactionService(deps);
     created.start();
@@ -206,19 +211,57 @@ describe('createCompactionService (спека 5.2–5.5)', () => {
     expect(pty.writes).toEqual(['/compact', '\r']);
   });
 
-  it('Codex — конец по записи compacted новее печати; старая запись — не конец', async () => {
+  const rec = (type: string, at: string): RolloutRecord => ({ ordinal: null, at, type, payload: {} });
+
+  it('Codex — записи, бывшие в файле до печати (первое чтение), сжатие не заканчивают', async () => {
+    pty.provider = 'codex';
+    const s = service();
+    s.compact(ref, null);
+    tailReads.push([rec('compacted', '2026-01-01T00:00:00.000Z')]);
+    await vi.advanceTimersByTimeAsync(60);
+    expect(tailsMade).toEqual(['/tmp/rollout.jsonl']);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(s.holds(ref)).toBe(true);
+  });
+
+  it('Codex — compacted после печати заканчивает сжатие на следующем опросе, finishedAt — её время', async () => {
+    pty.provider = 'codex';
+    const s = service();
+    s.compact(ref, null);
+    tailReads.push([]);
+    await vi.advanceTimersByTimeAsync(60);
+    tailReads.push([rec('event_msg', '2026-10-16T10:00:00.000Z'), rec('compacted', '2026-10-16T10:00:05.000Z')]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(s.holds(ref)).toBe(false);
+    expect(tracks.at(-1)).toEqual({ phase: null, finishedAt: '2026-10-16T10:00:05.000Z' });
+    expect(notices).toEqual([]);
+  });
+
+  it('Codex — не падает по таймауту Claude, падает compact-failed по codexTimeoutMs', async () => {
     pty.provider = 'codex';
     const s = service();
     s.compact(ref, null);
     await vi.advanceTimersByTimeAsync(60);
-    codexCompactedAt = new Date(Date.now() - 60_000).toISOString();
-    for (const listener of logListeners) listener();
+    await vi.advanceTimersByTimeAsync(61_000);
     expect(s.holds(ref)).toBe(true);
-    codexCompactedAt = new Date(Date.now() + 1_000).toISOString();
-    for (const listener of logListeners) listener();
-    await vi.advanceTimersByTimeAsync(0);
+    expect(notices).toEqual([]);
+    await vi.advanceTimersByTimeAsync(560_000);
     expect(s.holds(ref)).toBe(false);
-    expect(tracks.at(-1)).toEqual({ phase: null, finishedAt: codexCompactedAt });
+    expect(notices).toEqual(['compact-failed']);
+  });
+
+  it('Codex — logFile null: без исключений, конец по таймауту', async () => {
+    pty.provider = 'codex';
+    logFile = null;
+    const s = service();
+    s.compact(ref, null);
+    await vi.advanceTimersByTimeAsync(60);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(tailsMade).toEqual([]);
+    expect(s.holds(ref)).toBe(true);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(s.holds(ref)).toBe(false);
+    expect(notices).toEqual(['compact-failed']);
   });
 
   it('нет отчёта до таймаута — compact-failed, замок снят', async () => {
