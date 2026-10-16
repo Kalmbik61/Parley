@@ -234,6 +234,17 @@ describe('createActivityService', () => {
     expect(a.get(ref)?.activity).toMatchObject({ activity: 'unseen', source: 'hooks' });
   }, 30_000);
 
+  it('2а-codex: codexLogFiles у сессии не Codex пуст, reindexLog не падает на отсутствующем файле', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    expect(a.codexLogFiles(ref)).toEqual([]);
+    await expect(a.reindexLog(path.join(claudeRoot, 'нет-такого.jsonl'))).resolves.toBeUndefined();
+  });
+
   it('2б: mailWaiting — причина ожидания писем уходит в метрики и рассылку, null её снимает', async () => {
     const { ref } = await activeSession();
     const w = await works();

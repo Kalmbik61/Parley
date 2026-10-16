@@ -351,4 +351,60 @@ describe('createLogIndex', () => {
       expect(await idx.usageIn(ref, windows)).toMatchObject({ input: 15 });
     });
   });
+  describe('reindex: перечитывание rollout Codex без событий fs.watch', () => {
+    const rolloutRecord = (type: string, at: string): string =>
+      `${JSON.stringify({ type: 'event_msg', timestamp: at, payload: { type } })}\n`;
+
+    async function writeRollout(id: string): Promise<string> {
+      const dir = path.join(codexRoot, '2026', '10', '04');
+      await mkdir(dir, { recursive: true });
+      const file = path.join(dir, `rollout-2026-10-04T12-00-00-${id}.jsonl`);
+      await writeFile(
+        file,
+        `${JSON.stringify({ type: 'session_meta', timestamp: '2026-10-04T12:00:00.000Z', payload: { id, cwd: '/codex', source: 'cli' } })}\n` +
+          rolloutRecord('task_started', '2026-10-04T12:00:01.000Z'),
+      );
+      return file;
+    }
+
+    it('дозапись видна после reindex(file), слушатели onChange зовутся', async () => {
+      const file = await writeRollout('re-1');
+      const idx = index();
+      await idx.start();
+      const codex = session({ provider: 'codex', providerSessionId: 're-1' });
+      expect(idx.index(codex)?.lastTurnEvent?.type).toBe('task_started');
+
+      let calls = 0;
+      idx.onChange(() => (calls += 1));
+      await appendFile(file, rolloutRecord('task_complete', '2026-10-04T12:00:09.000Z'));
+      await idx.reindex(file);
+
+      expect(idx.index(codex)?.lastTurnEvent).toMatchObject({ type: 'task_complete' });
+      expect(calls).toBeGreaterThan(0);
+    });
+
+    it('файла нет — запись убирается из индекса', async () => {
+      const file = await writeRollout('re-2');
+      const idx = index();
+      await idx.start();
+      const codex = session({ provider: 'codex', providerSessionId: 're-2' });
+      expect(idx.index(codex)).toBeDefined();
+
+      await rm(file);
+      await idx.reindex(file);
+
+      expect(idx.index(codex)).toBeUndefined();
+    });
+
+    it('остановленный индекс ничего не делает', async () => {
+      const file = await writeRollout('re-3');
+      const idx = index();
+      await idx.start();
+      let calls = 0;
+      idx.onChange(() => (calls += 1));
+      idx.stop();
+      await idx.reindex(file);
+      expect(calls).toBe(0);
+    });
+  });
 });

@@ -106,6 +106,10 @@ export interface ActivityService {
   logFile(ref: SessionRef): string | null;
   /** Журнал субагента Codex по id его треда; не найден — null. */
   childLogFile(ref: SessionRef, threadId: string): string | null;
+  /** Файлы журналов сессии Codex: основной и субагентов; не Codex или журнала нет — []. */
+  codexLogFiles(ref: SessionRef): string[];
+  /** Перечитать журнал Codex в индексе логов (`codex-log-poll.ts`). */
+  reindexLog(file: string): Promise<void>;
   /** Пользователь смотрел на сессию: `pty.attach` и `pty.input` (1.6). */
   markSeen(ref: SessionRef, at?: string): void;
   onChange(listener: (ref: SessionRef, value: SessionLive) => void): () => void;
@@ -989,6 +993,17 @@ export function createActivityService(
         ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
       if (session === undefined) return null;
       return logIndex.childLogs(session).find((child) => child.threadId === threadId)?.file ?? null;
+    },
+    codexLogFiles(ref) {
+      const session = works
+        .entry(ref.projectPath, ref.workId)
+        ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session === undefined || session.provider !== 'codex') return [];
+      const main = logIndex.index(session)?.file;
+      return [...(main === undefined ? [] : [main]), ...logIndex.childLogs(session).map((child) => child.file)];
+    },
+    reindexLog(file) {
+      return logIndex.reindex(file);
     },
     terminalStarted(ref) {
       if (stopped) return;

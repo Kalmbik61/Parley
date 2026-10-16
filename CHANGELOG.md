@@ -24,6 +24,9 @@ All notable changes to Parley are documented in this file.
 
 ### Fixed
 
+- **Codex sessions no longer freeze until Parley is restarted.** On macOS the file system does not report
+  appended lines of the logs Codex keeps open, so activity, token usage and subagents of a Codex session stopped
+  updating. Parley now re-reads the logs of running Codex sessions itself instead of waiting for those events.
 - **Clear stays in place under a long Done list on the island.** Clear was inside the scrolling
   list and scrolled away with it; it now stands under the list.
 
