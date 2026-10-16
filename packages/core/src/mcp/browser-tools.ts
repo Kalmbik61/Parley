@@ -61,8 +61,8 @@ const HINTS: Readonly<Record<string, string>> = {
 /** Форма ответа окна на `open`: копия `BrowserAgentOpenResult` протокола. */
 interface OpenResult {
   tab: string;
-  /** Чей браузер получил страницу; ответ окна до моделей хозяев поля не несёт. */
-  owner?: { kind: 'session'; sessionId: string } | { kind: 'room'; roomId: string };
+  /** Чей браузер получил страницу. */
+  owner: { kind: 'session'; sessionId: string } | { kind: 'room'; roomId: string };
   url: string;
   reused: boolean;
   notes: string[];
@@ -79,7 +79,6 @@ function opOf(name: string): BrowserToolOp | null {
 
 /** Куда пришла страница, словами для агента. */
 function whereOf(owner: OpenResult['owner']): string {
-  if (owner === undefined) return "Parley's browser";
   return owner.kind === 'room' ? `the browser of room ${owner.roomId}` : 'the browser of your own chat';
 }
 

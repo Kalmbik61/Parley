@@ -159,10 +159,6 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
         const where = issue === undefined || issue.path.length === 0 ? 'args' : issue.path.map(String).join('.');
         return failure('bad_request', `Invalid arguments for ${request.op}: ${where} — ${issue?.message ?? 'invalid'}.`);
       }
-      // Хост без `owners` (старее окна) доступ по хозяевам решить не может: просим обновить, а не гадаем.
-      if (!Array.isArray(request.owners)) {
-        return failure('unsupported', "Parley's host is older than its window and does not send browser owners: ask the human to restart Parley.");
-      }
       if (!(await deps.agentsAllowed())) {
         return failure('access_denied', 'The human turned off agent access to the browser (Settings → Browser → Let agents use the browser).');
       }

@@ -180,13 +180,10 @@ describe('open: выбор хозяина (спека 5.1, 3.10)', () => {
     expect(asked).toEqual([]);
   });
 
-  it('в owners нет самой сессии — access_denied; хост без owners вовсе — unsupported', async () => {
+  it('в owners нет самой сессии — access_denied', async () => {
     const noSelf = await ownerAsked([room('r-01')], {});
     expect(codeOf(noSelf.result)).toBe('access_denied');
     expect(noSelf.asked).toEqual([]);
-    const { ops } = setup();
-    const old = await ops.run({ opId: 'op-1', ref: REF, label: 'S02', op: 'open', args: { url: PAGE } } as unknown as BrowserAgentOpEvent);
-    expect(codeOf(old)).toBe('unsupported');
   });
 });
 
