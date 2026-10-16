@@ -1589,6 +1589,15 @@ describe('ChatView — очередь отправки', () => {
     renderBody(makeSession('s-01', 'S01'));
     expect(states()).toEqual([]);
   });
+
+  it('Send again под своим сообщением — тот же текст уходит через очередь', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'again @"/a/b.txt" '), turn('u1')]);
+    fireEvent.click(within(screen.getByTestId('chat-prompt')).getByRole('button', { name: S.chat.actions.sendAgain }));
+    await act(async () => {});
+    expect(sentTexts()).toEqual(['again @"/a/b.txt" ']);
+  });
 });
 
 describe('ChatView — агенты: тулбар, прокрутка к карточке, heldByBackground (кусок 4b)', () => {

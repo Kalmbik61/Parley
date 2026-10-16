@@ -9,6 +9,9 @@
  *
  * Очередь окна (спека 2026-10-16, 4.3): серый элемент бывает трёх видов — `queued` (уже в очереди CLI во время хода),
  * `waiting` (ждёт отправки окном) и `failed` («Not sent» с Retry и ×). У всех `data-testid="chat-queued"` и `data-state`.
+ *
+ * Под настоящим промптом — Copy и Send again (`MessageActions`, спека 2026-10-16, 3.1): Copy кладёт текст как
+ * ушёл, с упоминаниями `@"путь"`, без пустых краёв; Send again ставит его как есть в очередь отправки.
  */
 
 import { useContext } from 'react';
@@ -20,6 +23,7 @@ import { AttachmentChip } from '../AttachmentChip.js';
 import { splitAttachments } from '../attachments.js';
 import { ChatEnvContext } from '../chat-env.js';
 import { pairContextAttachments } from '../context-attachments.js';
+import { MessageActions } from './MessageActions.js';
 
 export interface PromptItemProps {
   text: string;
@@ -34,7 +38,9 @@ export interface PromptItemProps {
 
 export function PromptItem({ text, images = 0, state, onRetry, onRemove }: PromptItemProps): JSX.Element {
   // Мост — только для миниатюр: `useChatEnv()` вне окружения бросает, а промпт без него рисуется (чипы без картинок).
-  const bridge = useContext(ChatEnvContext)?.bridge ?? null;
+  const env = useContext(ChatEnvContext);
+  const bridge = env?.bridge ?? null;
+  const resend = env?.resend;
   // Вставка в CLI оставляет в промпте пустые строки по краям — в пузыре они только место.
   const { text: body, attachments } = splitAttachments(text);
   const shown = pairContextAttachments(attachments);
@@ -43,7 +49,7 @@ export function PromptItem({ text, images = 0, state, onRetry, onRemove }: Promp
     <div
       data-testid={grey ? 'chat-queued' : 'chat-prompt'}
       {...(grey ? { 'data-state': state } : {})}
-      className="flex min-w-0 justify-end"
+      className={cn('flex min-w-0 flex-col items-end', !grey && 'group gap-0.5')}
     >
       <div
         className={cn(
@@ -79,6 +85,9 @@ export function PromptItem({ text, images = 0, state, onRetry, onRemove }: Promp
           </span>
         ) : null}
       </div>
+      {grey ? null : (
+        <MessageActions copyText={text.trim()} align="end" {...(resend === undefined ? {} : { onSendAgain: () => resend(text) })} />
+      )}
     </div>
   );
 }

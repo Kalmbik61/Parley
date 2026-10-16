@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { FeedAgent, FeedItem, FeedState, FeedTool } from '@parley/core';
+import type { FeedAgent, FeedItem, FeedState, FeedTool, FeedText } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
@@ -21,6 +21,7 @@ import { ImagePreviewHost } from '../ImagePreview.js';
 import { resetThumbnailCacheForTests } from '../use-thumbnail.js';
 import { AgentItem, type Transcript } from './AgentItem.js';
 import { PromptItem } from './PromptItem.js';
+import { TextItem } from './TextItem.js';
 import { ToolItem } from './ToolItem.js';
 // Редьюсер и разбор журнала — прямо из исходников ленты core, а не из `@parley/core`: корневой модуль
 // тянет `work/mcp-config.ts`, а тот на загрузке строит путь из `import.meta.url`, которого под jsdom нет.
@@ -652,5 +653,75 @@ describe('AgentItem', () => {
     const rows = [...document.querySelectorAll('[data-feed-id]')];
     expect(rows[0]!.className).toContain('pt-3');
     expect(rows[1]!.className).toContain('pt-1');
+  });
+});
+
+describe('действия под сообщениями (спека 2026-10-16, 3.1)', () => {
+  let writeText: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    Reflect.deleteProperty(navigator, 'clipboard');
+  });
+
+  function renderInEnv(node: JSX.Element, resend?: (text: string) => void): ReturnType<typeof render> {
+    const bridge = createFakeBridge();
+    const sessionRef: SessionRef = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-01' };
+    return render(
+      <ChatEnvContext.Provider value={{ bridge, sessionRef, ...(resend === undefined ? {} : { resend }) }}>{node}</ChatEnvContext.Provider>,
+    );
+  }
+
+  it('Copy под своим сообщением кладёт текст как ушёл — с упоминаниями, без пустых краёв; галочка на COPIED_MS', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    renderInEnv(<PromptItem text={'\nsee @"/a/b.txt" \n'} />);
+    fireEvent.click(screen.getByRole('button', { name: S.chat.actions.copy }));
+    await act(async () => {});
+    expect(writeText).toHaveBeenCalledWith('see @"/a/b.txt"');
+    expect(screen.getAllByRole('button', { name: S.chat.actions.copied })).toHaveLength(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(screen.getAllByRole('button', { name: S.chat.actions.copy })).toHaveLength(1);
+  });
+
+  it('буфер отказал — галочки нет, без исключения', async () => {
+    writeText.mockRejectedValue(new Error('denied'));
+    renderInEnv(<PromptItem text="hello" />);
+    fireEvent.click(screen.getByRole('button', { name: S.chat.actions.copy }));
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: S.chat.actions.copied })).toBeNull();
+  });
+
+  it('Send again зовёт resend с текстом промпта как есть; без resend в окружении кнопки нет', () => {
+    const resend = vi.fn();
+    const view = renderInEnv(<PromptItem text={'again @"/a/b.txt" '} />, resend);
+    fireEvent.click(screen.getByRole('button', { name: S.chat.actions.sendAgain }));
+    expect(resend).toHaveBeenCalledWith('again @"/a/b.txt" ');
+    view.unmount();
+    renderInEnv(<PromptItem text="again" />);
+    expect(screen.queryByRole('button', { name: S.chat.actions.sendAgain })).toBeNull();
+  });
+
+  it('у серых элементов строки действий нет', () => {
+    renderInEnv(<PromptItem text="later" state="queued" />, vi.fn());
+    expect(screen.queryByTestId('chat-message-actions')).toBeNull();
+  });
+
+  it('кусок ответа модели: пока пишется — без строки; дописан — Copy кладёт исходный Markdown', async () => {
+    const item: FeedText = { id: 't', at: AT, kind: 'text', messageId: 't', text: '**bold** and `code`', streaming: true };
+    const view = renderInEnv(<TextItem item={item} />);
+    expect(screen.queryByTestId('chat-message-actions')).toBeNull();
+    view.unmount();
+    renderInEnv(<TextItem item={{ ...item, streaming: false }} />);
+    expect(screen.queryByRole('button', { name: S.chat.actions.sendAgain })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: S.chat.actions.copy }));
+    await act(async () => {});
+    expect(writeText).toHaveBeenCalledWith('**bold** and `code`');
   });
 });

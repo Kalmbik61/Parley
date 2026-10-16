@@ -14,7 +14,7 @@
  * ушедшее видно в ленте. Очередь живёт вне вида, поэтому переживает смену вида и вкладки.
  * «Stop» — `feed.interrupt` хоста (Esc агенту и присмотр за исходом); у хоста без метода — Esc в терминал (`pty.input`).
  * Тоста «Sent to S01» в чате нет — отправленное видно в самой ленте; отказы и их тосты прежние.
- * Черновик и серые элементы живут в `ui-store.ts` по сессии и переживают смену вида и вкладки.
+ * Черновик и серые «Queued» живут в `ui-store.ts` по сессии, очередь окна — в `lib/outbox.ts`; всё переживает смену вида и вкладки.
  *
  * Codex (спека 2026-10-07, 5.4): лента из журнала; меню модели, effort и режима — подписи; подсказок `/` нет;
  * вложения — списком путей, как в комнате.
@@ -374,7 +374,18 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const showTerminal = (): void => {
     useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tab.id, { view: 'terminal' }));
   };
-  const env = useMemo<ChatEnv>(() => ({ bridge, sessionRef, workKey, tabId: tab.id }), [bridge, sessionKey, workKey, tab.id]);
+  const env = useMemo<ChatEnv>(
+    () => ({
+      bridge,
+      sessionRef,
+      workKey,
+      tabId: tab.id,
+      resend: (text: string) => {
+        chatOutbox.enqueue(sessionKey, { ref: sessionRef, text, deps: sendDeps });
+      },
+    }),
+    [bridge, sessionKey, workKey, tab.id, sendDeps],
+  );
 
   return (
     <ChatEnvContext.Provider value={env}>
