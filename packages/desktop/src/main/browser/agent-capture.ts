@@ -19,6 +19,7 @@ import { AgentOpError } from './agent-errors.js';
 import type { LayoutMetrics, PageRecord, PageRegistry } from './agent-pages.js';
 import type { Emulation } from './emulation.js';
 import type { Inspector } from './inspector.js';
+import { isLoopbackUrl } from '../../shared/loopback.js';
 
 /** Размер снимка агента: совпал с пресетом в любой ориентации — пресет, иначе Custom; DPR 1 — PNG в CSS-пикселях. */
 export function captureSpec(width: number, height: number): ViewportSpec {
@@ -39,7 +40,7 @@ const CAPTURE_RETRY_MS = 50;
 const SURFACE_HEIGHT_FACTOR = 1.2;
 
 export interface AgentCaptureDeps {
-  inspector: Pick<Inspector, 'send'>;
+  inspector: Pick<Inspector, 'send' | 'snapshot'>;
   emulation: Pick<Emulation, 'current' | 'withTemporary'>;
   registry: Pick<PageRegistry, 'fresh'>;
   saveImage(png: Buffer): Promise<string | null>;
@@ -103,6 +104,8 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
   async function screenshotOf(contents: WebContents, record: PageRecord, request: BrowserAgentOpEvent, args: BrowserAgentArgs<'screenshot'>): Promise<BrowserAgentScreenshotResult> {
     const id = contents.id;
     const metrics = await deps.inspector.send<LayoutMetrics>(id, 'Page.getLayoutMetrics');
+    // Эпоха документа до съёмки: после неё сверяется, что страница не сменилась посреди снимка (аудит 3.2, R2).
+    const epoch0 = deps.inspector.snapshot(id)?.epoch;
     const current = { width: Math.round(metrics.cssLayoutViewport.clientWidth), height: Math.round(metrics.cssLayoutViewport.clientHeight) };
     const spec = args.width === undefined && args.height === undefined ? null : captureSpec(args.width ?? current.width, args.height ?? current.height);
     const view = spec === null ? current : (({ width, height }) => ({ width, height }))(viewportSize(spec));
@@ -153,13 +156,9 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
       if (args.fullPage !== true) return { png: await shoot(), viewport: view };
       // Высота страницы — уже при нужном размере (под временной эмуляцией вёрстка другая).
       const page = await deps.inspector.send<LayoutMetrics>(id, 'Page.getLayoutMetrics');
-      const total = Math.max(view.height, Math.ceil(page.cssContentSize.height));
-      if (total > view.height * AGENT_LIMITS.fullPageViewports) {
-        throw new AgentOpError(
-          'bad_request',
-          `The page is ${total} px tall, more than ${AGENT_LIMITS.fullPageViewports} viewport heights (${view.height} px): take viewport screenshots of parts of the page instead.`,
-        );
-      }
+      const content = Math.max(view.height, Math.ceil(page.cssContentSize.height));
+      const total = Math.min(content, view.height * AGENT_LIMITS.fullPageViewports);
+      if (content > total) notes.push(`The page is ${content} px tall; the screenshot shows the first ${total} px (${AGENT_LIMITS.fullPageViewports} viewport heights).`);
       const wide = Math.ceil(page.cssContentSize.width);
       if (wide > view.width) notes.push(`The page is ${wide} px wide; the screenshot shows the first ${view.width} px.`);
       const origin = await evaluate('[window.scrollX, window.scrollY]');
@@ -191,6 +190,13 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
     };
 
     const taken = spec === null ? await capture() : await deps.emulation.withTemporary(id, spec, capture);
+    // Страница могла уйти с localhost или сменить документ, пока снимали (редирект dev-сервера): чужое в drops не кладём.
+    if (!isLoopbackUrl(contents.getURL())) {
+      throw new AgentOpError('not_loopback', `Page ${record.agentId} left localhost during the screenshot; nothing was saved.`);
+    }
+    if (deps.inspector.snapshot(id)?.epoch !== epoch0) {
+      throw new AgentOpError('tab_not_loaded', `Page ${record.agentId} navigated during the screenshot: take it again.`);
+    }
     const png = fitLongSide(taken.png);
     const size = deps.image.size(png);
     const saved = await deps.saveImage(png);

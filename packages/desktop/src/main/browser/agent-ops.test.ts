@@ -812,10 +812,48 @@ describe('screenshot (спека 5.1, 8)', () => {
     expect(inspector.send.mock.calls.some(([, method]) => method === 'Runtime.evaluate')).toBe(false);
     expect(evaluated.map((e) => /scrollTo\((\d+), (\d+)\)/.exec(e)?.slice(1).join(','))).toEqual([undefined, '0,0', '0,800', '0,1600', '0,340']);
     expect(saveImage).toHaveBeenCalledTimes(1);
-    inspector.send.mockImplementation(sendWith({ content: { width: 1280, height: 2401 } }));
-    const tall = await run('screenshot', { tab: 't1', fullPage: true });
-    expect(codeOf(tall)).toBe('bad_request');
-    expect(messageOf(tall)).toContain('3 viewport heights');
+  });
+
+  it('страница 3780 px при вьюпорте 752 — три полосы, ok, заметка «The page is 3780 px tall; the screenshot shows the first 2256 px (3 viewport heights).»', async () => {
+    const { ops, inspector, saveImage, runOp: run } = setup();
+    register(ops, {});
+    inspector.send.mockImplementation(sendWith({ viewport: { width: 399, height: 752 }, content: { width: 399, height: 3780 } }));
+    const result = okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1', fullPage: true }));
+    const shots = inspector.send.mock.calls.filter(([, method]) => method === 'Page.captureScreenshot');
+    expect(shots).toHaveLength(3);
+    expect(result.viewport).toEqual({ width: 399, height: 2256 });
+    expect(result.notes).toEqual(['The page is 3780 px tall; the screenshot shows the first 2256 px (3 viewport heights).']);
+    expect(saveImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('страница ушла с localhost посреди fullPage — not_loopback «Page t1 left localhost during the screenshot; nothing was saved.», saveImage не вызван', async () => {
+    const { ops, inspector, guests, saveImage, runOp: run } = setup();
+    register(ops, {});
+    const guest = guests.get(7) as Guest;
+    let shots = 0;
+    inspector.send.mockImplementation(async (id: number, method: string) => {
+      if (method === 'Page.captureScreenshot' && (shots += 1) === 1) guest.getURL.mockReturnValue('https://example.com/login');
+      return sendWith({ content: { width: 1280, height: 2000 }, shot: png(1280, 800) })(id, method);
+    });
+    const result = await run('screenshot', { tab: 't1', fullPage: true });
+    expect(codeOf(result)).toBe('not_loopback');
+    expect(messageOf(result)).toBe('Page t1 left localhost during the screenshot; nothing was saved.');
+    expect(saveImage).not.toHaveBeenCalled();
+  });
+
+  it('эпоха сменилась посреди снимка (переход на localhost) — tab_not_loaded «Page t1 navigated during the screenshot: take it again.», saveImage не вызван', async () => {
+    const { ops, inspector, snapshots, saveImage, runOp: run } = setup();
+    register(ops, {});
+    snapshots.set(7, { ...EMPTY, epoch: 1 });
+    let shots = 0;
+    inspector.send.mockImplementation(async (id: number, method: string) => {
+      if (method === 'Page.captureScreenshot' && (shots += 1) === 1) snapshots.set(7, { ...EMPTY, epoch: 2 });
+      return sendWith({ content: { width: 1280, height: 2000 }, shot: png(1280, 800) })(id, method);
+    });
+    const result = await run('screenshot', { tab: 't1', fullPage: true });
+    expect(codeOf(result)).toBe('tab_not_loaded');
+    expect(messageOf(result)).toBe('Page t1 navigated during the screenshot: take it again.');
+    expect(saveImage).not.toHaveBeenCalled();
   });
 
   it('операции одной страницы — по одной: второй снимок начинается после первого', async () => {
