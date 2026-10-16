@@ -16,6 +16,7 @@ import {
   closePage,
   closePanel,
   moveTabToPanel,
+  openAgentPage,
   openPageInPanel,
   resizePanel,
   togglePanel,
@@ -211,5 +212,39 @@ describe('moveTabToPanel — «Move to browser of…»', () => {
     expect(moveTabToPanel(KEY, 'terminal:s-01', CHAT)).toBe('not-found');
     expect(moveTabToPanel(KEY, 'browser:nope', CHAT)).toBe('not-found');
     expect(layoutNow()).toBe(before);
+  });
+});
+
+describe('openAgentPage — browser_open агента, повтор страницы (спека браузера 5.1, 5.2)', () => {
+  it('адрес без #фрагмента уже открыт — новая не открывается, найденная активна, закрытая панель открыта', () => {
+    const first = openAgentPage(KEY, CHAT, 'http://localhost:5173/app');
+    expect(first).toMatchObject({ ok: true, opened: true, reused: false });
+    openPageInPanel(KEY, CHAT, 'http://localhost:3000/', { focus: false });
+    closePanel(KEY, CHAT);
+    const before = layoutNow();
+    const again = openAgentPage(KEY, CHAT, 'http://localhost:5173/app#section');
+    expect(again).toEqual({ ok: true, pageId: (first as { pageId: string }).pageId, opened: true, reused: true });
+    expect(panelNow()).toMatchObject({ open: true, active: (first as { pageId: string }).pageId });
+    expect(panelNow()?.pages).toHaveLength(2);
+    expect(layoutNow().root).toBe(before.root);
+    expect(layoutNow().activeGroupId).toBe(before.activeGroupId);
+  });
+
+  it('другой путь или запрос — новая страница; повтор ищется только в панели этого хозяина', () => {
+    openAgentPage(KEY, CHAT, 'http://localhost:5173/app');
+    expect(openAgentPage(KEY, CHAT, 'http://localhost:5173/app?x=1')).toMatchObject({ ok: true, reused: false });
+    expect(openAgentPage(KEY, ROOM, 'http://localhost:5173/app')).toMatchObject({ ok: true, reused: false });
+    expect(panelNow()?.pages).toHaveLength(2);
+  });
+
+  it('повтор работает и на полной панели, а шестая новая страница — limit', () => {
+    for (let i = 0; i < PANEL_LIMITS.pages; i += 1) openAgentPage(KEY, CHAT, `http://localhost:${3000 + i}/`);
+    expect(openAgentPage(KEY, CHAT, 'http://localhost:3002/')).toMatchObject({ ok: true, reused: true });
+    expect(openAgentPage(KEY, CHAT, 'http://localhost:4000/')).toEqual({ ok: false, reason: 'limit' });
+  });
+
+  it('работа не прочитана — no-work; не http(s) — bad-url', () => {
+    expect(openAgentPage('/tmp/other', CHAT, 'http://localhost:5173/')).toEqual({ ok: false, reason: 'no-work' });
+    expect(openAgentPage(KEY, CHAT, 'file:///etc/hosts')).toEqual({ ok: false, reason: 'bad-url' });
   });
 });

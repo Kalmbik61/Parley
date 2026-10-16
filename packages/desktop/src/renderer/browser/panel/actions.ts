@@ -94,6 +94,42 @@ export function openPageInPanel(workKey: string, owner: BrowserOwner, url: strin
   return error === 'too-many-pages' ? { ok: false, reason: 'limit' } : { ok: true, pageId, opened };
 }
 
+export type OpenAgentPageResult =
+  /** `reused` — страница с этим адресом (без #фрагмента) в панели уже была: новая не открывалась. */
+  | { ok: true; pageId: string; opened: boolean; reused: boolean }
+  | { ok: false; reason: 'no-work' | 'bad-url' | 'limit' };
+
+/** Адрес без #фрагмента: по нему `browser_open` узнаёт уже открытую страницу (спека браузера 5.1). */
+function withoutFragment(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = '';
+    return parsed.href;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * `browser_open` агента (спека браузера 5.1, 5.2): страница с тем же адресом без #фрагмента в панели хозяина уже есть — она
+ * становится активной, панель открывается, новая не добавляется (`reused`); иначе `openPageInPanel` с `focus: false`. Фокус
+ * клавиатуры, активная вкладка, группа и работа окна не меняются.
+ */
+export function openAgentPage(workKey: string, owner: BrowserOwner, url: string): OpenAgentPageResult {
+  const layout = useLayoutStore.getState().layouts[workKey];
+  if (layout === undefined) return { ok: false, reason: 'no-work' };
+  const safe = layoutUrl(url);
+  if (safe === null) return { ok: false, reason: 'bad-url' };
+  const panel = panelOf(layout, owner);
+  const same = panel?.pages.find((page) => page.url !== '' && withoutFragment(page.url) === withoutFragment(safe));
+  if (same === undefined) {
+    const opened = openPageInPanel(workKey, owner, url, { focus: false });
+    return opened.ok ? { ...opened, reused: false } : opened;
+  }
+  run(workKey, (current) => setPanelOpen(activatePanelPage(current, owner, same.id), owner, true));
+  return { ok: true, pageId: same.id, opened: panel?.open !== true, reused: true };
+}
+
 /**
  * «Move to browser of…» у вкладки человека: адрес и размер переезжают в новую страницу панели хозяина, вкладка закрывается.
  * Вкладка не уходит в стек ⌘⇧T: страница переехала, а не закрыта, и возврат дал бы двойника. Предел страниц панели —
