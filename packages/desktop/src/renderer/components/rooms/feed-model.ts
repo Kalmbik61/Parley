@@ -116,6 +116,8 @@ export interface MessageModel {
   sender: { kind: SenderKind; provider: string | null };
   /** Подпись отправителя: `You`, `System`, `S02 бэкенд`. */
   from: string;
+  /** Письмо человека через помощника (спека 2026-10-14, 7.4): подпись «You (via Jarvis)» и знак помощника. */
+  via: 'assistant' | null;
   /** Отправитель — ведущий (`★`). */
   lead: boolean;
   /** Адресаты для `→ …`: `all` или ярлыки; `null` — у системной строки адресата не показываем. */
@@ -366,7 +368,8 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       return {
         id: message.id,
         sender: { kind, provider: kind === 'agent' ? providerOf(map, message.from) : null },
-        from: labelOf(map, message.from),
+        from: message.from === HUMAN && message.via === 'assistant' ? S.participants.viaAssistant(S.participants.human) : labelOf(map, message.from),
+        via: message.via ?? null,
         lead: message.from === lead,
         // Системная строка: `to: [human]` — служебность хоста (`addSystemMessage`), не адресат для показа.
         to: message.from === SYSTEM ? null : message.to.length === 0 ? S.rooms.toAll : message.to.map((id) => labelOf(map, id)).join(', '),

@@ -86,6 +86,8 @@ export interface FeedListProps {
    */
   reveal?: ({ agentId: string } | { itemId: string }) & { nonce: number };
   onRevealed?: (nonce: number) => void;
+  /** Id промптов, которые отправил помощник (`viaAssistantIds`): над пузырём «via Jarvis». */
+  viaIds?: ReadonlySet<string>;
 }
 
 /** Строка «Working…» с прошедшим временем (живая проверка 2026-10-02: терминал показывает спиннер, чат был пуст). */
@@ -115,12 +117,13 @@ interface ItemViewProps {
   transcript: Transcript | null;
   onToggle: (id: string) => void;
   onTranscript: (id: string, update: TranscriptUpdate) => void;
+  via: boolean;
 }
 
-const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, onTranscript }: ItemViewProps): JSX.Element {
+const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, onTranscript, via }: ItemViewProps): JSX.Element {
   switch (item.kind) {
     case 'prompt':
-      return <PromptItem text={item.text} images={item.images} />;
+      return <PromptItem text={item.text} images={item.images} {...(via ? { via } : {})} />;
     case 'text':
       return <TextItem item={item} />;
     case 'tool':
@@ -148,7 +151,7 @@ const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, 
   }
 });
 
-export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onRemoveOutbox, note, onRetry, working, reveal, onRevealed }: FeedListProps): JSX.Element {
+export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onRemoveOutbox, note, onRetry, working, reveal, onRevealed, viaIds }: FeedListProps): JSX.Element {
   const latest = items.at(-1);
   const activeRetry = latest?.kind === 'error' && latest.retry !== undefined && latest.retry.resolved !== true ? latest : null;
   const rows: Row[] = [
@@ -288,6 +291,7 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onR
                       transcript={transcripts[row.item.id] ?? null}
                       onToggle={toggle}
                       onTranscript={updateTranscript}
+                      via={viaIds?.has(row.item.id) === true}
                     />
                   ) : 'queued' in row ? (
                     <PromptItem text={row.queued.text} state="queued" />

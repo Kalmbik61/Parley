@@ -157,7 +157,7 @@ describe('пути кодом в ленте', () => {
   });
 
   const message = (patch: Partial<MessageModel>): MessageModel => ({
-    id: 'm-01', sender: { kind: 'system', provider: null }, from: 'System', lead: false, to: 'S02', kind: 'note',
+    id: 'm-01', sender: { kind: 'system', provider: null }, from: 'System', via: null, lead: false, to: 'S02', kind: 'note',
     at: '2026-10-07T10:00:00.000Z', text: READY, unread: false, needsRead: false, mentionsYou: false,
     delivery: { picked: [], waiting: [] }, reply: null, ...patch,
   });
@@ -170,6 +170,11 @@ describe('пути кодом в ленте', () => {
     expect(strong).toEqual(['Бэкенд: стор документов и приём файла', 'Scope', 'Criteria', 'Next:']);
     expect(within(container).getAllByRole('listitem')).toHaveLength(2);
     expect(codes(container)).toEqual(['src/services/patient_document_store.py', 'plan_update', 'plan_submit']);
+  });
+
+  it('письмо человека через помощника — знак помощника вместо значка человека', () => {
+    const { container } = renderMessage(message({ sender: { kind: 'human', provider: null }, from: 'You (via Jarvis)', via: 'assistant', text: 'привет' }));
+    expect(container.querySelector('[data-assistant-mark]')).not.toBeNull();
   });
 
   it('сообщение агента с тем же текстом остаётся как есть', () => {

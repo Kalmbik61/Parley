@@ -377,6 +377,19 @@ describe('buildRoomModel — сообщения', () => {
     ]);
   });
 
+  it('письмо человека через помощника — «You (via Jarvis)» и via; без via — «You» и null', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-1', { from: 'human', via: 'assistant', at: '2026-09-27T09:00:00.000Z' }),
+        message('m-2', { from: 'human', at: '2026-09-27T09:01:00.000Z' }),
+      ],
+    });
+    expect(build(entry).messages.map((item) => [item.from, item.via])).toEqual([
+      ['You (via Jarvis)', 'assistant'],
+      ['You', null],
+    ]);
+  });
+
   it('вид отправителя для аватара и провайдер агента', () => {
     const entry = entryOf({
       messages: [
