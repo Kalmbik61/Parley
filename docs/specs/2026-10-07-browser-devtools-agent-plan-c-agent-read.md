@@ -297,10 +297,10 @@ git commit -m "feat(protocol): операции чтения браузера а
 **Файлы:**
 - Изменить: `packages/host/src/agent/browser-endpoint.ts` (функция `record`), `packages/host/src/agent/browser-endpoint.test.ts`
 
-- [ ] **Шаг 1. Тест.** В `browser-endpoint.test.ts` в тесте журнала проверить, что запись `операция агента в браузере` содержит `op: 'browser.agentOp'`, `agentOp` с именем операции (`'open'`), числовое `ms` и по-прежнему не содержит токена, аргументов и query адресов. Запустить — красный.
-- [ ] **Шаг 2. Правка.** В `record`: `op: 'browser.agentOp'`, имя операции агента — полем `agentOp`; `ms` как есть (от приёма до ответа окна: `startedAt` ставится в `dispatch`). Новых чтений с диска на пути нет.
-- [ ] **Шаг 3. Запустить** `pnpm --filter @parley/host exec vitest run src/agent` — зелёный.
-- [ ] **Шаг 4. Закоммитить** `fix(host): журнал операции агента — op browser.agentOp и поле agentOp` с трейлером `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
+- [x] **Шаг 1. Тест.** В `browser-endpoint.test.ts` в тесте журнала проверить, что запись `операция агента в браузере` содержит `op: 'browser.agentOp'`, `agentOp` с именем операции (`'open'`), числовое `ms` и по-прежнему не содержит токена, аргументов и query адресов. Запустить — красный.
+- [x] **Шаг 2. Правка.** В `record`: `op: 'browser.agentOp'`, имя операции агента — полем `agentOp`; `ms` как есть (от приёма до ответа окна: `startedAt` ставится в `dispatch`). Новых чтений с диска на пути нет.
+- [x] **Шаг 3. Запустить** `pnpm --filter @parley/host exec vitest run src/agent` — зелёный.
+- [x] **Шаг 4. Закоммитить** `fix(host): журнал операции агента — op browser.agentOp и поле agentOp` с трейлером `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
 
 ---
 
