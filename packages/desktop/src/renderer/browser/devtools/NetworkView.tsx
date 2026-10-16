@@ -6,11 +6,11 @@
  * - Name: путь и query, у чужого origin — ещё хост.
  * - Выбор строки — детали справа, на узкой панели — поверх списка. Рядом с деталями список сжимается до Status и Name
  *   (как в Chrome): шесть колонок занимают 384 px, и от половины панели Name не осталось бы ничего.
- * - Тесный вид (вид уже `TIGHT_PX`, раздел 4.11): Status | Name | Size — Method, Type и Time скрыты. В панели 320–480 px
+ * - Тесный вид (панель DevTools уже `TIGHT_PX`, раздел 4.11; порог — в `DevtoolsPanel`): Status | Name | Size — Method, Type и Time скрыты. В панели 320–480 px
  *   шесть колонок съедали всю ширину, и заголовок Name вырождался в «N..».
  */
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useMemo, useRef, type CSSProperties } from 'react';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { isFailed, type NetworkEntry } from '../../../shared/browser-devtools.js';
 import { S } from '../../../shared/strings.js';
@@ -25,8 +25,6 @@ const ROW_PX = 24;
 /** Размер списка до первого замера (jsdom, первый кадр): первые строки есть сразу — как `review/VirtualRows.tsx`. */
 const INITIAL_RECT = { width: 600, height: 400 };
 const GRID = 'grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)_4.5rem_4rem_4rem] items-center gap-2 px-2';
-/** Ширина вида, меньше которой таблица тесная: Status | Name | Size (раздел 4.11, «~480 px»). */
-export const TIGHT_PX = 480;
 const GRID_TIGHT = 'grid grid-cols-[3.5rem_minmax(0,1fr)_3.5rem] items-center gap-2 px-2';
 const GRID_COMPACT = 'grid grid-cols-[4.5rem_minmax(0,1fr)] items-center gap-2 px-2';
 
@@ -83,11 +81,13 @@ export interface NetworkViewProps {
   bridge: ParleyBridge;
   /** Узкая панель: детали — поверх списка (спека 4.4). */
   narrow: boolean;
+  /** Тесная панель (уже ~480 px): столбцы Status | Name | Size (раздел 4.11). */
+  tight?: boolean;
   /** «Add to chat» запроса — этап B; нет колбэка — нет кнопки. */
   onAddToChat?: ((entry: NetworkEntry) => void) | undefined;
 }
 
-export function NetworkView({ tabId, pageUrl, webContentsId, bridge, narrow, onAddToChat }: NetworkViewProps): JSX.Element {
+export function NetworkView({ tabId, pageUrl, webContentsId, bridge, narrow, tight = false, onAddToChat }: NetworkViewProps): JSX.Element {
   const tab = useDevtoolsStore((state) => state.tabs[tabId]) ?? EMPTY_DEVTOOLS;
   const patch = useDevtoolsStore.getState().patch;
   const rows = useMemo(() => visibleNetwork(tab), [tab]);
@@ -103,21 +103,9 @@ export function NetworkView({ tabId, pageUrl, webContentsId, bridge, narrow, onA
   });
   const columns = S.browser.devtools.columns;
   const beside = selected !== null && !narrow;
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const [tight, setTight] = useState(false);
-  useEffect(() => {
-    const node = rootRef.current;
-    if (node === null || typeof ResizeObserver === 'undefined') return undefined;
-    const observer = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width;
-      if (width !== undefined) setTight(width < TIGHT_PX);
-    });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
 
   return (
-    <div ref={rootRef} data-testid="network-view" data-tight={tight} className="flex min-h-0 flex-1 flex-col">
+    <div data-testid="network-view" data-tight={tight} className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-1.5 py-1">
         {FILTERS.map((filter) => (
           <FilterToggle key={filter} pressed={tab.networkFilter === filter} onClick={() => patch(tabId, { networkFilter: filter })}>
