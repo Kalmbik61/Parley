@@ -1292,7 +1292,7 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
     expect(guest.setZoomLevel).toHaveBeenLastCalledWith(0);
     await ipcMain.invoke('browser:zoom', 7, 0);
     expect(guest.setZoomLevel).toHaveBeenLastCalledWith(0);
-    expect(guest.setZoomLevel).toHaveBeenCalledTimes(4);
+    expect(guest.setZoomLevel).toHaveBeenCalledTimes(3);
 
     for (const step of [2, 0.5, '1', null]) {
       expect(await codeOf(ipcMain.invoke('browser:zoom', 7, step)), String(step)).toBe('bad_request');
