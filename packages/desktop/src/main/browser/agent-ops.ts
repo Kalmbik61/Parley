@@ -9,6 +9,9 @@
  * просит его событием `browser:agent-open-tab`, ждёт ответ не дольше `AGENT_LIMITS.openMs` и переводит его в ответ агенту.
  * Страницу main не трогает: ни гостя, ни CDP, ни ожидания загрузки (это этапы C и D).
  *
+ * Чей браузер получает страницу, решает `ownerOf` по правилу спеки 5.1 и по `owners` события — хозяевам, которых хост
+ * вложил по карте работы (3.7, 3.10); хозяин вне списка — `access_denied`. Выбранный хозяин уходит окну в `AgentOpenTab`.
+ *
  * Вкладку агент называет коротким id (`t1`, `t2`…): у каждой работы свой счёт, id держится, пока жив main. Этапы C и D
  * опираются на те же id.
  */
@@ -16,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { AGENT_LIMITS, browserAgentArgs } from '@parley/protocol';
 import type { BrowserAgentArgs, BrowserAgentErrorCode, BrowserAgentOpEvent, BrowserAgentOpenResult, BrowserAgentResult } from '@parley/protocol';
 import type { AgentOpenTab, AgentOpenTabResult } from '../../shared/browser-types.js';
+import type { BrowserOwner } from '../../shared/layout-types.js';
 import { isLoopbackUrl } from '../../shared/loopback.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
 
@@ -64,6 +68,29 @@ export function loopbackHref(raw: string): string | null {
   return parsed.href;
 }
 
+/**
+ * Хозяин для `open` (спека 5.1): с `room` — браузер этой комнаты, если она в `owners`; с `own` — браузер чата сессии;
+ * без обоих — браузер комнаты, когда сессия участник ровно одной, иначе браузер чата. `own` вместе с `room` схема
+ * протокола отвергает раньше, здесь это тоже `bad_request`: проверка у каждой стороны своя.
+ */
+export function ownerOf(request: BrowserAgentOpEvent, args: BrowserAgentArgs<'open'>): BrowserOwner {
+  if (args.own === true && args.room !== undefined) throw new AgentOpError('bad_request', 'Pass either own or room, not both.');
+  const rooms = request.owners.flatMap((owner) => (owner.kind === 'room' ? [owner.roomId] : []));
+  const own = { kind: 'session', sessionId: request.ref.sessionId } as const;
+  if (!request.owners.some((owner) => owner.kind === 'session' && owner.sessionId === own.sessionId)) {
+    throw new AgentOpError('access_denied', 'This session has no browser of its own right now.');
+  }
+  if (args.room !== undefined) {
+    if (!rooms.includes(args.room)) {
+      throw new AgentOpError('access_denied', `You are not a member of room ${args.room}, so you cannot use its browser. Use own: true for the browser of your own chat.`);
+    }
+    return { kind: 'room', roomId: args.room };
+  }
+  if (args.own === true) return own;
+  const [only] = rooms;
+  return rooms.length === 1 && only !== undefined ? { kind: 'room', roomId: only } : own;
+}
+
 export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   const openMs = deps.openMs ?? AGENT_LIMITS.openMs;
   /** Ждущие ответа окна: id просьбы → продолжение. */
@@ -107,8 +134,9 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     if (url === null) {
       throw new AgentOpError('not_loopback', 'Only http(s) pages on localhost can be opened: pass an absolute URL such as http://localhost:5173/.');
     }
+    const owner = ownerOf(request, args);
     const workKey = workKeyOf(request.ref.projectPath, request.ref.workId);
-    const answer = await askWindow({ requestId: randomUUID(), workKey, url, sessionId: request.ref.sessionId, session: request.label });
+    const answer = await askWindow({ requestId: randomUUID(), workKey, url, sessionId: request.ref.sessionId, session: request.label, owner });
     if (answer === 'no_window') throw new AgentOpError('window_not_connected', "Parley's window is not ready: ask the human to open it.");
     if (answer === 'timeout') throw new AgentOpError('timeout', `The window did not place the tab within ${Math.round(openMs / 1000)} s.`);
     if ('error' in answer) {
@@ -116,7 +144,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
         ? new AgentOpError('bad_request', 'This workspace already has 10 browser tabs, the most Parley allows. Ask the human to close one.')
         : new AgentOpError('window_not_connected', "Parley's window does not know this workspace yet: try again in a moment.");
     }
-    return { tab: agentIdFor(workKey, answer.tabId), url, reused: answer.reused, notes: answer.mounted ? [] : [NOT_MOUNTED_NOTE] };
+    return { tab: agentIdFor(workKey, answer.tabId), owner, url, reused: answer.reused, notes: answer.mounted ? [] : [NOT_MOUNTED_NOTE] };
   }
 
   return {
@@ -130,6 +158,10 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
         const issue = parsed.error.issues[0];
         const where = issue === undefined || issue.path.length === 0 ? 'args' : issue.path.map(String).join('.');
         return failure('bad_request', `Invalid arguments for ${request.op}: ${where} — ${issue?.message ?? 'invalid'}.`);
+      }
+      // Хост без `owners` (старее окна) доступ по хозяевам решить не может: просим обновить, а не гадаем.
+      if (!Array.isArray(request.owners)) {
+        return failure('unsupported', "Parley's host is older than its window and does not send browser owners: ask the human to restart Parley.");
       }
       if (!(await deps.agentsAllowed())) {
         return failure('access_denied', 'The human turned off agent access to the browser (Settings → Browser → Let agents use the browser).');

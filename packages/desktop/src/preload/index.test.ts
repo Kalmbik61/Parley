@@ -137,7 +137,7 @@ describe('preload: последний статус и тема', () => {
     const { ipcRenderer } = await import('electron');
     const listener = vi.fn();
     const off = bridge.browser.onAgentOpenTab(listener);
-    const request = { requestId: 'r1', workKey: '/p w-1', url: 'http://localhost:5173/', sessionId: 's-02', session: 'S02' };
+    const request = { requestId: 'r1', workKey: '/p w-1', url: 'http://localhost:5173/', sessionId: 's-02', session: 'S02', owner: { kind: 'session' as const, sessionId: 's-02' } };
     emit('browser:agent-open-tab', request);
     off();
     emit('browser:agent-open-tab', request);

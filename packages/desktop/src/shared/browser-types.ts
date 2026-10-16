@@ -4,6 +4,7 @@
  */
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from './browser-devtools.js';
 import type { ContextKind } from './context-markdown.js';
+import type { BrowserOwner } from './layout-types.js';
 
 /** Единственный раздел `<webview>`: страж main (`main/browser/guard.ts`) другой не пускает. */
 export const BROWSER_PARTITION = 'persist:harnas-browser';
@@ -145,6 +146,8 @@ export interface AgentOpenTab {
   sessionId: string;
   /** Короткий номер сессии для тоста «S02 opened …». */
   session: string;
+  /** Чей браузер получает страницу: выбран по правилу 5.1 и входит в `owners` операции (спека 3.10). */
+  owner: BrowserOwner;
 }
 
 /**
