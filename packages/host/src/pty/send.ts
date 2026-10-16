@@ -59,7 +59,7 @@ export function createSender(deps: {
   /** Замок смены модели и effort этой сессии занят: клавиши смены идут в PTY, текст среди них не нужен. */
   switching?: (ref: SessionRef) => boolean;
 }): (
-  params: { ref: SessionRef; text: string; submit: boolean; requestedAt?: number },
+  params: { ref: SessionRef; text: string; submit: boolean; requestedAt?: number | undefined },
   log?: Log,
 ) => Promise<SendResult> {
   // Сессии, у которых вставка с submit ждёт своего Enter: иначе Enter первого вызова
