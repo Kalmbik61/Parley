@@ -8,6 +8,7 @@ import { createCompactionMethods } from '../compaction/compaction-methods.js';
 import type { Profiler } from '../diagnostics/profiler.js';
 import type { FeedService } from '../feed/feed-service.js';
 import type { HealthService } from '../health/health-service.js';
+import type { Log } from '../log.js';
 import type { PlanEffectsService } from '../rooms/plan-effects.js';
 import type { HistoryService } from '../rooms/history-service.js';
 import { createRoomsUsage } from '../rooms/room-usage.js';
@@ -90,6 +91,8 @@ export interface MethodDeps {
   health?: HealthService;
   /** CPU-профиль по запросу (`host.profile.*`); без него (и без `health`) методов диагностики у хоста нет. */
   profiler?: Profiler;
+  /** Журнал хоста для записей задержек, которые пишут не обработчики с `request.host.log` (`pty.clientDropped` в потоке PTY). */
+  log?: Log;
 }
 
 /**

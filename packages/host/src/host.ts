@@ -399,6 +399,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     feed: feedService,
     health,
     profiler,
+    log: handle.context.log,
   });
   health.start();
   handle.context.onShutdown(async () => health.stop());

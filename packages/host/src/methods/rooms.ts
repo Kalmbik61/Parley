@@ -3,6 +3,7 @@
  * Правила живут в `rooms/rooms-service.ts` — здесь только форма ответа.
  */
 
+import { performance } from 'node:perf_hooks';
 import type { Handler } from '../context.js';
 import {
   addRoomMember,
@@ -25,13 +26,34 @@ import type { PlanMethodName, PlanMethodParams, PlanActionResult } from '@parley
 import { HostError } from '../errors.js';
 import type { PlanEffectsService } from '../rooms/plan-effects.js';
 
-export const roomsCreate: Handler<'rooms.create'> = async (params) => ({
-  roomId: await createHumanRoom(params),
-});
+// Журнал задержек (спека диагностики, A4): записи с `op`, только длины и идентификаторы — ни названия комнаты, ни текста письма.
+export const roomsCreate: Handler<'rooms.create'> = async (params, { host }) => {
+  const startedAt = performance.now();
+  const roomId = await createHumanRoom(params);
+  host.log.info('комната создана', {
+    op: 'room.create',
+    roomId,
+    members: params.members.length,
+    ms: Math.round(performance.now() - startedAt),
+  });
+  return { roomId };
+};
 
-export const roomsSend: Handler<'rooms.send'> = async (params) => ({
-  messageId: await sendHumanLetter(params),
-});
+export const roomsSend: Handler<'rooms.send'> = async (params, { host }) => {
+  const startedAt = performance.now();
+  // Метка окна — мс эпохи: без неё (старое окно) или из будущего (расхождение часов) ожидание не считается.
+  const queueMs = params.requestedAt === undefined ? null : Math.max(0, Date.now() - params.requestedAt);
+  const messageId = await sendHumanLetter(params);
+  host.log.info('письмо принято', {
+    op: 'rooms.send',
+    messageId,
+    to: params.to.length,
+    roomId: params.roomId,
+    queueMs,
+    ms: Math.round(performance.now() - startedAt),
+  });
+  return { messageId };
+};
 
 export const roomsAddMember: Handler<'rooms.addMember'> = async (params) => ({
   messageId: await addRoomMember(params),

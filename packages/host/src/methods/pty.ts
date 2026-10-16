@@ -13,6 +13,7 @@ import type { ActivityService } from '../activity/activity-service.js';
 import type { Client } from '../client.js';
 import type { Handler, NotificationHandler } from '../context.js';
 import { HostError } from '../errors.js';
+import type { Log } from '../log.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import { createSender } from '../pty/send.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
@@ -25,6 +26,7 @@ export interface PtyMethodDeps {
   works: WorksService;   // activity.seen: есть ли сессия в снимке работ хоста
   wake: Pick<WakeService, 'inFlight' | 'enterDelayMs'>;   // pty.send: busy и пауза Enter
   sessions?: Pick<SessionsService, 'exclusive'>;   // pty.send: пока идёт смена модели или effort, не печатает
+  log?: Log;   // журнал хоста: отброшенный медленный клиент потока (`pty.clientDropped`)
 }
 
 export interface PtyHandlers {
@@ -72,6 +74,15 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
         // Клиент не успевает читать (буфер сокета выше порога) — поток ему
         // останавливается: заново получит его только после нового `pty.attach`.
         clients.delete(client);
+        // Журнал задержек (спека диагностики, A4): отброс клиента — вероятная причина «Chat/терминал отстал».
+        if (deps.log !== undefined) {
+          deps.log.info('клиент PTY отброшен', {
+            op: 'pty.clientDropped',
+            ref,
+            client: client.name,
+            queuedBytes: client.writableLength(),
+          });
+        }
         client.send({ event: 'pty.resync', data: { ref } });
       }
     }
@@ -133,7 +144,7 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
     },
 
     // Отвечает после ожидания своего Enter (около enterDelayMs), исход — в SendResult.
-    ptySend: (params) => send(params),
+    ptySend: (params, { host }) => send(params, host.log),
 
     ptyInput: (params) => {
       deps.pty.input(params.ref, params.data);
