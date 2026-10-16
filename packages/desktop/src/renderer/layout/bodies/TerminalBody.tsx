@@ -14,6 +14,7 @@
 import type { WorkSession } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
+import { PanelHost } from '../../browser/panel/PanelHost.js';
 import { ChatToolbar } from '../../chat/ChatToolbar.js';
 import { ChatView } from '../../chat/ChatView.js';
 import { effectiveView, useFeedAvailability, useHostHasFeed, useSessionStarted, type TerminalTab } from '../../lib/feed-view.js';
@@ -36,25 +37,28 @@ export function TerminalBody({ workKey, tab, session, sessionRef, active, bridge
   const started = useSessionStarted(sessionRef);
   const view = effectiveView(tab, available, started);
   if (view === null) return <div data-testid="tab-view-pending" className="h-full w-full" />;
-  if (view === 'chat') {
-    return (
-      <ChatView
-        workKey={workKey}
-        tab={tab}
-        sessionRef={sessionRef}
-        visible={active}
-        live={session.lifecycle === 'active'}
-        bridge={bridge}
-        sendDeps={sendDeps}
-        provider={session.provider}
-        storedModel={session.model ?? null}
-        storedEffort={session.effort ?? null}
-      />
-    );
-  }
+  // Панель браузера сессии (спека браузера 4.11) стоит справа от вида — и от Chat, и от терминала (его поверхность в слое
+  // уступает ей ширину, `TerminalSurface#reserveAnchor`).
   return (
-    <div data-testid="terminal-body" className="flex h-full w-full flex-col">
-      {hasFeed ? <ChatToolbar workKey={workKey} tabId={tab.id} view="terminal" available={available === true} provider={session.provider} micTargetId={`terminal:${refKey(sessionRef)}`} /> : null}
-    </div>
+    <PanelHost workKey={workKey} owner={{ kind: 'session', sessionId: session.id }}>
+      {view === 'chat' ? (
+        <ChatView
+          workKey={workKey}
+          tab={tab}
+          sessionRef={sessionRef}
+          visible={active}
+          live={session.lifecycle === 'active'}
+          bridge={bridge}
+          sendDeps={sendDeps}
+          provider={session.provider}
+          storedModel={session.model ?? null}
+          storedEffort={session.effort ?? null}
+        />
+      ) : (
+        <div data-testid="terminal-body" className="flex h-full w-full flex-col">
+          {hasFeed ? <ChatToolbar workKey={workKey} tabId={tab.id} view="terminal" available={available === true} provider={session.provider} micTargetId={`terminal:${refKey(sessionRef)}`} /> : null}
+        </div>
+      )}
+    </PanelHost>
   );
 }

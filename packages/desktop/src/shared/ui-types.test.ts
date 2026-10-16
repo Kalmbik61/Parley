@@ -162,7 +162,7 @@ describe('fitRightSidebar', () => {
 
 describe('раздел browser (спека 2026-10-07, 4.3)', () => {
   it('по умолчанию высоты панели нет — 40 % вкладки', () => {
-    expect(normalizeUi({}).browser).toEqual({ devtoolsHeight: null });
+    expect(normalizeUi({}).browser).toEqual({ devtoolsHeight: null, agentsAllowed: true });
   });
 
   it('высота — целое не ниже 120; мусор — по умолчанию', () => {
@@ -215,5 +215,19 @@ describe('hiddenProjects (спека архива, 6.3)', () => {
     for (const garbage of ['/p/a', 1, null, {}, [1], ['/p/a', null], [['/p/a']]]) {
       expect(normalizeUi({ hiddenProjects: garbage }).hiddenProjects, JSON.stringify(garbage)).toEqual([]);
     }
+  });
+});
+
+describe('browser.agentsAllowed (спека браузера 4.8; этап B2)', () => {
+  it('по умолчанию включён; false сохраняется; не boolean — по умолчанию', () => {
+    expect(DEFAULT_UI.browser.agentsAllowed).toBe(true);
+    expect(normalizeUi({}).browser.agentsAllowed).toBe(true);
+    expect(normalizeUi({ browser: { agentsAllowed: false } }).browser.agentsAllowed).toBe(false);
+    expect(normalizeUi({ browser: { agentsAllowed: 'no' } }).browser.agentsAllowed).toBe(true);
+    expect(normalizeUi({ browser: { agentsAllowed: 0 } }).browser.agentsAllowed).toBe(true);
+  });
+
+  it('поле высоты панели рядом не теряется', () => {
+    expect(normalizeUi({ browser: { agentsAllowed: false, devtoolsHeight: 300 } }).browser).toEqual({ devtoolsHeight: 300, agentsAllowed: false });
   });
 });

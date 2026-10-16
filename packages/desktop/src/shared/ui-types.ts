@@ -17,10 +17,12 @@ export interface VoiceUi {
   language: string;
 }
 
-/** Вкладки браузера (спека 2026-10-07-browser-devtools-agent-design.md, 4.3): высота панели Console | Network — общая. */
+/** Вкладки браузера (спека 2026-10-07-browser-devtools-agent-design.md, 4.3, 4.8): высота панели Console | Network — общая. */
 export interface BrowserUi {
   /** null — 40 % высоты вкладки (`DEVTOOLS_PANEL.defaultShare`). */
   devtoolsHeight: number | null;
+  /** «Let agents use the browser» (спека 4.8): выключен — все операции агента получают `access_denied`. */
+  agentsAllowed: boolean;
 }
 
 /** Точка острова у верхнего края монитора (спека острова, раздел 4). */
@@ -92,7 +94,7 @@ export const DEFAULT_UI: UiFile = {
   checkForUpdates: true,
   dismissedUpdate: null,
   voice: { enabled: false, model: null, language: 'auto' },
-  browser: { devtoolsHeight: null },
+  browser: { devtoolsHeight: null, agentsAllowed: true },
   island: { enabled: true, displayId: null, anchor: 'center' },
 };
 
@@ -184,7 +186,10 @@ function normalizeBrowser(value: unknown): BrowserUi {
   const source = isRecord(value) ? value : {};
   // Высоты вкладки ui.json не знает: здесь — только низ; верх держит окно (`renderer/browser/stage.ts#panelHeight`).
   const height = isFiniteNumber(source.devtoolsHeight) ? Math.max(Math.round(source.devtoolsHeight), DEVTOOLS_PANEL.minHeight) : null;
-  return { devtoolsHeight: height };
+  return {
+    devtoolsHeight: height,
+    agentsAllowed: typeof source.agentsAllowed === 'boolean' ? source.agentsAllowed : DEFAULT_UI.browser.agentsAllowed,
+  };
 }
 
 function normalizeNotifications(value: unknown): UiFile['notifications'] {

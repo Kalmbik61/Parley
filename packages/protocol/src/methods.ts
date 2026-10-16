@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { browserAgentResultParams } from './browser-agent.js';
 import { capabilitySkillMethodSchemas } from './capability-skill-actions.js';
 import type { CapabilitySkillMethodResults } from './capability-skill-actions.js';
 import type {
@@ -140,6 +141,9 @@ export const METHODS = {
       .nullable()
       .optional(),
     effort: z.string().regex(EFFORT_TOKEN_RE).nullable().optional(),
+    // Явный выбор облегчённого запуска из диалога (C2.2). Без поля решает хост по настройке `leanAgents` и источнику
+    // сессии; старое окно поля не шлёт, старый хост его отбрасывает.
+    lean: z.boolean().optional(),
   }),
   'sessions.resume': z.object({ ref: sessionRef }),
   'sessions.stop': z.object({ ref: sessionRef }),
@@ -287,6 +291,9 @@ export const METHODS = {
   // «Stop» вида «Chat»: Esc агенту по нажатию человека; хост сам закрывает в ленте ход, который CLI бросил
   // без записи, и стирает из поля ввода терминала возвращённый туда текст промпта.
   'feed.interrupt': z.object({ ref: sessionRef }),
+  // Ответ окна на операцию агента (спека браузера 2026-10-07, 3.7): зовёт только main окна, хост принимает его только от
+  // клиента, которому ушла операция.
+  'browser.agentResult': browserAgentResultParams,
 } as const;
 
 // Уведомления клиента — без id и без ответа: их слишком много, чтобы ждать каждое.
@@ -451,6 +458,8 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
   /** `applied: false` — карточка уже не ждёт (ответили в терминале, второе нажатие); `state` — её состояние. */
   'feed.decide': { applied: boolean; state: FeedCardState };
   'feed.interrupt': { ok: true };
+  /** `accepted: false` — операция уже закрыта (срок, уход окна) или ушла другому клиенту. */
+  'browser.agentResult': { accepted: boolean };
 }
 
 export type MethodName = keyof typeof METHODS;

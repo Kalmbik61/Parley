@@ -991,6 +991,7 @@ restarting the window. A field that is set by an environment variable is labeled
   "autoLaunch": true,
   "agentSkills": true,
   "skillNavigator": true,
+  "leanAgents": true,
   "fontFamily": "'SF Mono', Menlo, monospace",
   "fontSize": 14,
   "worktreeRoot": "~/parley/worktrees"
@@ -999,9 +1000,9 @@ restarting the window. A field that is set by an environment variable is labeled
 
 The values above are the defaults. Environment variables override the file:
 `PARLEY_SILENCE_MS`, `PARLEY_MESSAGE_RATE`, `PARLEY_RESUME_RATE`, `PARLEY_AUTO_LAUNCH`,
-`PARLEY_AGENT_SKILLS`, `PARLEY_SKILL_NAVIGATOR`, `PARLEY_FONT_FAMILY`, `PARLEY_FONT_SIZE`,
-`PARLEY_WORKTREE_ROOT`, and the limit variables of the table in "Limits of a workspace and a
-room".
+`PARLEY_AGENT_SKILLS`, `PARLEY_SKILL_NAVIGATOR`, `PARLEY_LEAN_AGENTS`, `PARLEY_FONT_FAMILY`,
+`PARLEY_FONT_SIZE`, `PARLEY_WORKTREE_ROOT`, and the limit variables of the table in "Limits of
+a workspace and a room".
 
 `resumeRate` is how many times per hour a message may wake a sleeping session
 (`claude --resume`), 0…60; over the limit, the message just waits. `autoLaunch` (on by
@@ -1020,6 +1021,15 @@ at launch. What exactly is written to disk and how to turn it off are described 
 sessions") adds the `find_skill` tool and shortens the native skill list; `false` in the file,
 the toggle, or `PARLEY_SKILL_NAVIGATOR=false` (also `0`, `no`, `off`) turns it off; see
 "Skill navigator". The ten limit keys of "Work limits" live in the same `config.json`.
+
+`leanAgents` (on by default; the toggle is "Lean agent sessions") starts the agents that
+Parley creates for rooms and through `spawn_session` without your plugins, other MCP servers
+and auto-memory, which saves about a third of the context on every turn of Claude Code.
+Parley's own tools and hooks, your skills and the project's `CLAUDE.md` stay. The choice is
+made when a session is created and is kept for its resumes. A session you create from the
+window is lean only with the "Lean session" checkbox in the new session dialog; `false` in
+the file, the toggle, or `PARLEY_LEAN_AGENTS=0` (also `false`, `no`, `off`) turns it off for
+new rooms and spawned sessions.
 
 `channelPush` (and the `PARLEY_CHANNEL_PUSH` variable) is the setting for a channel push when
 a session is started from the `parley-core` CLI (see "Core CLI"); the window does not read it

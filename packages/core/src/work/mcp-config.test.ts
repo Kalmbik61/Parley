@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -366,5 +366,78 @@ describe('сокращённый список скиллов в окружени
       expect(env.PARLEY_SKILL_LIST_REDUCED).toBe('1');
       expect(env.HARNAS_SKILL_LIST_REDUCED).toBe('1');
     }
+  });
+});
+
+describe('канал агента к браузеру (спека браузера 3.7; этап B2)', () => {
+  const agent = { url: 'http://127.0.0.1:4321/agent/browser', token: 'ab'.repeat(32) };
+
+  it('Claude: адрес и токен — в env сервера, только под именами PARLEY_*', () => {
+    const env = mcpConfig({ ...params, agent }).mcpServers[MCP_SERVER_NAME]?.env;
+    expect(env).toEqual({ ...SESSION_ENV, PARLEY_AGENT_URL: agent.url, PARLEY_AGENT_TOKEN: agent.token });
+    expect(env).not.toHaveProperty('HARNAS_AGENT_URL');
+    expect(env).not.toHaveProperty('HARNAS_AGENT_TOKEN');
+  });
+
+  it('Codex: тот же канал в таблице env; унаследованный от хоста канал не перекрывает свой', () => {
+    const inherited = {
+      PARLEY_AGENT_URL: 'http://127.0.0.1:1/agent/browser',
+      PARLEY_AGENT_TOKEN: 'cd'.repeat(32),
+      HARNAS_AGENT_TOKEN: 'ef'.repeat(32),
+      PARLEY_HOME: '/tmp/дом',
+    };
+    const { value } = parseTomlAssignment(codexMcpOverride({ ...params, agent, env: inherited }));
+    expect((value as Record<string, TomlValue>)['env']).toEqual({
+      ...SESSION_ENV,
+      PARLEY_AGENT_URL: agent.url,
+      PARLEY_AGENT_TOKEN: agent.token,
+      PARLEY_HOME: '/tmp/дом',
+    });
+  });
+
+  it('без канала переменных канала нет ни у Claude, ни у Codex — и унаследованные не просачиваются (токен чужой сессии)', () => {
+    expect(mcpConfig(params).mcpServers[MCP_SERVER_NAME]?.env).not.toHaveProperty('PARLEY_AGENT_TOKEN');
+    const inherited = { PARLEY_AGENT_TOKEN: 'cd'.repeat(32), HARNAS_AGENT_URL: 'http://127.0.0.1:1/agent/browser' };
+    const { value } = parseTomlAssignment(codexMcpOverride({ ...params, env: inherited }));
+    expect((value as Record<string, TomlValue>)['env']).toEqual(SESSION_ENV);
+  });
+});
+
+describe('writeMcpConfig: токен канала агента (спека браузера 3.7; этап B2)', () => {
+  let home = '';
+  let project = '';
+  const agent = { url: 'http://127.0.0.1:4321/agent/browser', token: 'ab'.repeat(32) };
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+    project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+    process.env.PARLEY_HOME = home;
+    await createWork(project, { title: 'Авторизация' });
+  });
+
+  afterEach(async () => {
+    delete process.env.PARLEY_HOME;
+    await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  it('канал пишется в файл, а файл — с правами 0600: в нём токен', async () => {
+    const file = await writeMcpConfig(project, 'w-0001', 's-01', undefined, false, { agent });
+    const written = JSON.parse(await readFile(file, 'utf8')) as ReturnType<typeof mcpConfig>;
+    expect(written.mcpServers[MCP_SERVER_NAME]?.env['PARLEY_AGENT_TOKEN']).toBe(agent.token);
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+  });
+
+  it('файл прежнего запуска с правами 0644 при новом запуске закрывается до 0600, а токен в нём — новый', async () => {
+    const first = await writeMcpConfig(project, 'w-0001', 's-01');
+    await chmod(first, 0o644);
+    const again = await writeMcpConfig(project, 'w-0001', 's-01', undefined, false, { agent });
+    expect(again).toBe(first);
+    expect((await stat(again)).mode & 0o777).toBe(0o600);
+    expect(await readFile(again, 'utf8')).toContain(agent.token);
+  });
+
+  it('без канала в файле его нет', async () => {
+    const file = await writeMcpConfig(project, 'w-0001', 's-01');
+    expect(await readFile(file, 'utf8')).not.toContain('AGENT');
   });
 });

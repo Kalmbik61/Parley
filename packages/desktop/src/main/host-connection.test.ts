@@ -3,10 +3,10 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { HostPaths } from '@parley/host';
-import { encodeLine, LineDecoder, PROTOCOL_VERSION } from '@parley/protocol';
+import { BROWSER_AGENT_FEATURE, COMPACT_WORKS_FEATURE, encodeLine, LineDecoder, PROTOCOL_VERSION } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S } from '../shared/strings.js';
-import { HostConnection } from './host-connection.js';
+import { answerBrowserAgentOps, HostConnection } from './host-connection.js';
 
 interface FakeServerOptions {
   hostVersion?: string;
@@ -16,6 +16,8 @@ interface FakeServerOptions {
   methods?: string[];
   /** События сразу после ответа `hello` — как повтор активности настоящего хоста. */
   afterHello?: unknown[];
+  /** Всё, что клиент прислал: `hello`, вызовы методов (этап B2: что окно шлёт хосту). */
+  received?: unknown[];
   /** pid в ответе `hello`; не задан — pid процесса теста. */
   pid?: number;
   /** На `host.shutdown` отвечает, но соединение не закрывает — зависший хост. */
@@ -41,6 +43,7 @@ function startFakeServer(paths: HostPaths, options: FakeServerOptions = {}): Pro
       const decoder = new LineDecoder();
       socket.on('data', (chunk: Buffer) => {
         for (const raw of decoder.push(chunk)) {
+          options.received?.push(raw);
           const message = raw as { id?: number; method?: string };
           if (message.method === 'hello' && typeof message.id === 'number') {
             if (!protocolOk) {
@@ -581,6 +584,80 @@ describe('HostConnection', () => {
     expect(accepted).toBe(0);
     server.close();
   }, 10000);
+});
+
+describe('операции агента над браузером (этап B2, спека браузера 3.7)', () => {
+  let home: string;
+  let paths: HostPaths;
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'hh-'));
+    paths = {
+      dir: path.join(home, 'host'),
+      socket: path.join(home, 'host', 'host.sock'),
+      token: path.join(home, 'host', 'host.token'),
+      pid: path.join(home, 'host', 'host.pid'),
+      log: path.join(home, 'host', 'host.log'),
+    };
+  });
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  const op = (opId: string) => ({
+    event: 'browser.agentOp',
+    data: { opId, ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-02' }, label: 'S02', op: 'open', args: { url: 'http://localhost:5173/' } },
+  });
+
+  it('hello заявляет compact-works и browser-agent', async () => {
+    await writeToken(paths);
+    const received: unknown[] = [];
+    const server = await startFakeServer(paths, { received });
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
+    await connection.connect();
+    const hello = received.find((message) => (message as { method?: string }).method === 'hello') as { params: { features: string[] } };
+    expect(hello.params.features).toEqual([COMPACT_WORKS_FEATURE, BROWSER_AGENT_FEATURE]);
+    connection.close();
+    server.close();
+  });
+
+  it('операция агента уходит в run, ответ — browser.agentResult с тем же opId; сбой run — unsupported', async () => {
+    await writeToken(paths);
+    const received: unknown[] = [];
+    const server = await startFakeServer(paths, { received, afterHello: [op('op-1'), op('op-2')] });
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
+    answerBrowserAgentOps(connection, async (event) => {
+      if (event.opId === 'op-2') throw new Error('boom');
+      return { ok: true, result: { tab: 't1', url: 'http://localhost:5173/', reused: false, notes: [] } };
+    });
+    await connection.connect();
+    const results = (): unknown[] =>
+      received.filter((message) => (message as { method?: string }).method === 'browser.agentResult').map((message) => (message as { params: unknown }).params);
+    await vi.waitFor(() => expect(results()).toHaveLength(2));
+    expect(results()).toEqual(
+      expect.arrayContaining([
+        { opId: 'op-1', ok: true, result: { tab: 't1', url: 'http://localhost:5173/', reused: false, notes: [] } },
+        { opId: 'op-2', ok: false, error: { code: 'unsupported', message: 'boom' } },
+      ]),
+    );
+    connection.close();
+    server.close();
+  });
+
+  it('прочие события run не получают; отписка снимает слушателя', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { afterHello: [{ event: 'wake.changed', data: { paused: true } }] });
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
+    const run = vi.fn(async () => ({ ok: true as const, result: null }));
+    const off = answerBrowserAgentOps(connection, run);
+    await connection.connect();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(run).not.toHaveBeenCalled();
+    off();
+    connection.close();
+    server.close();
+  });
 });
 
 /**

@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import type { WorkEntry } from '@parley/core';
 import type { SavedContext } from '../../../shared/browser-types.js';
 import { workKey } from '../../../shared/work-keys.js';
+import { useLayoutStore } from '../../layout/store.js';
 import { roomKey } from '../../lib/room-view.js';
 import { useUiStore } from '../../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
@@ -77,5 +78,37 @@ describe('usePageContext — очередь добавлений и цель (с
     await expect(result.current.add(draft('a'))).resolves.toBe('failed');
     expect(vi.mocked(toast).mock.calls).toEqual([['No session or room to add page context to']]);
     expect(bridge.browserCalls.filter((call) => call.method === 'saveContext')).toEqual([]);
+  });
+});
+
+describe('usePageContext — страница панели хозяина (спека браузера 3.10, 4.5)', () => {
+  const sendDeps = { bridge: undefined as unknown as FakeBridge, session: () => null, openSession: vi.fn() };
+
+  /** Хук страницы панели: цель закреплена за хозяином `fixed`, `stored` и умолчание ни при чём. */
+  function mountPinned(entry: WorkEntry, fixed: { kind: 'session'; sessionId: string } | { kind: 'room'; roomId: string }, stored?: { kind: 'room'; roomId: string }): RenderHookResult<PageContext, unknown> {
+    return renderHook(() => usePageContext({ bridge, workKey: KEY, tabId: 'bp-000001', entry, stored, fixed, sendDeps: { ...sendDeps, bridge } }));
+  }
+
+  it('цель — хозяин панели, а не умолчание и не поле вкладки; комната хозяина получает файл', async () => {
+    const work = makeWork('w-01', { projectPath: '/tmp/p', rooms: [makeRoom('r-01', 'review'), makeRoom('r-02', 'other')] });
+    const { result } = mountPinned(work, { kind: 'room', roomId: 'r-02' }, { kind: 'room', roomId: 'r-01' });
+    expect(result.current.target).toEqual({ kind: 'room', roomId: 'r-02' });
+    await expect(result.current.add(draft('a'))).resolves.toBe('room');
+    expect(useUiStore.getState().composerAttachments[roomKey(KEY, 'r-02')]).toHaveLength(1);
+    expect(roomPaths()).toEqual([]);
+  });
+
+  it('хозяин исчез из карты — отката на умолчание и тоста нет: панель уберёт слежение за составом работы', () => {
+    const { result } = mountPinned(NOWHERE, { kind: 'room', roomId: 'r-99' });
+    expect(result.current.target).toEqual({ kind: 'room', roomId: 'r-99' });
+    expect(vi.mocked(toast)).not.toHaveBeenCalled();
+  });
+
+  it('setTarget у закреплённой цели ничего не пишет в раскладку', () => {
+    const { result } = mountPinned(WITH_ROOM, { kind: 'room', roomId: 'r-01' });
+    const apply = vi.spyOn(useLayoutStore.getState(), 'apply');
+    result.current.setTarget({ kind: 'room', roomId: 'r-02' });
+    expect(apply).not.toHaveBeenCalled();
+    expect(result.current.target).toEqual({ kind: 'room', roomId: 'r-01' });
   });
 });

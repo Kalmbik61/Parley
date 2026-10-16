@@ -10,11 +10,13 @@
 
 import { useEffect, useRef } from 'react';
 import type { WorkEntry } from '@parley/core';
-import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
+import type { BrowserOwner, TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { settleVanishedWork } from '../files/SaveChangesDialog.js';
 import { workTitleText } from '../lib/participant.js';
+import { isRoomArchived } from '../lib/room-archive.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
+import { prunePanels } from './panels.js';
 import { emptyLayout, parseWorkLayout, pruneLayout } from './tree.js';
 import { useLayoutStore } from './store.js';
 
@@ -48,6 +50,24 @@ export function isTabAlive(entry: WorkEntry, tab: TabSpec): boolean {
       return session.worktree.createdAt !== null;
     }
   }
+}
+
+/**
+ * Жив ли хозяин панели браузера (спека браузера 3.10): сессия есть в карте (закрытая тоже — её вкладка и панель живут до
+ * удаления); комната есть и не в архиве (панель архивной комнаты уходит вместе с полем ввода, куда ложился бы контекст).
+ */
+export function isPanelOwnerAlive(entry: WorkEntry, owner: BrowserOwner): boolean {
+  return owner.kind === 'session'
+    ? entry.map.sessions.some((session) => session.id === owner.sessionId)
+    : entry.map.rooms.some((room) => room.id === owner.roomId && !isRoomArchived(room));
+}
+
+/** Раскладка без мёртвых вкладок и панелей исчезнувших хозяев; ничего не умерло — та же ссылка. */
+function pruneDead(layout: WorkLayout, entry: WorkEntry): WorkLayout {
+  return prunePanels(
+    pruneLayout(layout, (tab) => isTabAlive(entry, tab)),
+    (owner) => isPanelOwnerAlive(entry, owner),
+  );
 }
 
 /** Соседняя работа в прежнем порядке: следующая, у последней — предыдущая, иначе `null`. */
@@ -99,12 +119,12 @@ function survivingNeighbor(
   return order.find((key) => !isArchived(key)) ?? null;
 }
 
-/** `loadLayout` → `parseWorkLayout` → `pruneLayout(isTabAlive)`; `null` на любом шаге → `emptyLayout()`. */
+/** `loadLayout` → `parseWorkLayout` → `pruneLayout(isTabAlive)` и панели живых хозяев; `null` на любом шаге → `emptyLayout()`. */
 async function restoreLayout(bridge: ParleyBridge, entry: WorkEntry | undefined, key: string): Promise<WorkLayout> {
   const raw = await bridge.app.loadLayout(key);
   const parsed = raw === null ? null : parseWorkLayout(raw);
   const base = parsed ?? emptyLayout();
-  return entry === undefined ? base : pruneLayout(base, (tab) => isTabAlive(entry, tab));
+  return entry === undefined ? base : pruneDead(base, entry);
 }
 
 /**
@@ -339,13 +359,15 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order, visibl
   // удалённой сессии висела в строке вкладок телом «Session deleted» до перезапуска окна. Сами
   // правила жизни — те же `isTabAlive`, что у восстановления; вопрос о правках не спрашивается:
   // из этого окна `SessionRowMenu` спрашивает ДО `sessions.delete`, а снаружи (другое окно)
-  // worktree сессии уже удалён вместе с ней. Подпись — только состав (id сессий, наличие их
-  // worktree, id комнат): прочие события `works.changed` не должны перебирать все раскладки.
+  // worktree сессии уже удалён вместе с ней. Так же уходят панели браузера исчезнувших хозяев
+  // (`isPanelOwnerAlive`: сессию удалили, комнату удалили или убрали в архив). Подпись — только
+  // состав (id сессий, наличие их worktree, id комнат и их архивность): прочие события
+  // `works.changed` не должны перебирать все раскладки.
   const aliveSig = JSON.stringify(
     works.map((entry) => [
       workKeyOf(entry.projectPath, entry.map.work.id),
       entry.map.sessions.map((candidate) => [candidate.id, candidate.worktree !== null]),
-      entry.map.rooms.map((room) => room.id),
+      entry.map.rooms.map((room) => [room.id, isRoomArchived(room)]),
     ]),
   );
   useEffect(() => {
@@ -355,9 +377,9 @@ export function useLayoutPersistence({ bridge, works, worksLoaded, order, visibl
       const entry = worksRef.current.find((candidate) => workKeyOf(candidate.projectPath, candidate.map.work.id) === key);
       // Пропавшая работа — дело эффекта состава выше (drop); здесь только живые.
       if (entry === undefined) continue;
-      // `pruneLayout` без мёртвых вкладок возвращает ту же ссылку — `apply` не трогает стор,
+      // Без мёртвых вкладок и панелей `pruneDead` возвращает ту же ссылку — `apply` не трогает стор,
       // и сохранение на диск не дёргается.
-      store.apply(key, (layout) => pruneLayout(layout, (tab) => isTabAlive(entry, tab)));
+      store.apply(key, (layout) => pruneDead(layout, entry));
     }
   }, [worksLoaded, aliveSig]);
 

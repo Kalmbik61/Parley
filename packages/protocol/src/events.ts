@@ -1,4 +1,5 @@
 import type { BacklogChanged } from './backlog.js';
+import type { BrowserAgentOpEvent } from './browser-agent.js';
 import type { CapabilitySnapshot } from './capability-snapshot.js';
 import type { FeedItem, SessionActivity } from '@parley/core';
 import type { FeedDecisions } from './feed.js';
@@ -44,6 +45,11 @@ export interface Events {
     mode: string | null;
     decisions?: FeedDecisions | null;
   };
+  /**
+   * Операция агента над браузером окна (спека браузера 2026-10-07, 3.7): только клиенту с возможностью
+   * `browser-agent` в `hello.features`, одному. Ответ — метод `browser.agentResult` с тем же `opId`.
+   */
+  'browser.agentOp': BrowserAgentOpEvent;
 }
 
 export type EventName = keyof Events;

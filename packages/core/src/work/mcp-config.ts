@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bothEnv, ENV_PREFIX, LEGACY_ENV_PREFIX, MCP_SERVER_NAME } from '../names.js';
@@ -23,6 +23,21 @@ function serverLaunch(command?: string): { command: string; args: string[] } {
     : { command, args: [] };
 }
 
+/** Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): адрес эндпоинта хоста и токен запуска сессии. */
+export interface AgentChannel {
+  /** `http://127.0.0.1:<порт>/agent/browser`. */
+  url: string;
+  /** 32 байта hex; новый на каждый запуск сессии. */
+  token: string;
+}
+
+/** Переменные канала у MCP-сервера — только под новыми именами: у прежних сборок канала не было. */
+export const AGENT_URL_ENV = 'PARLEY_AGENT_URL';
+export const AGENT_TOKEN_ENV = 'PARLEY_AGENT_TOKEN';
+
+const agentEnv = (agent: AgentChannel | undefined): Record<string, string> =>
+  agent === undefined ? {} : { [AGENT_URL_ENV]: agent.url, [AGENT_TOKEN_ENV]: agent.token };
+
 export interface McpConfigParams {
   /** Путь к `<проект>/.parley/works/<work-id>/` — переменная `PARLEY_WORK_DIR` сервера (и прежняя `HARNAS_WORK_DIR`). */
   workDir: string;
@@ -30,6 +45,11 @@ export interface McpConfigParams {
   /** Родной список скиллов этого запуска сокращён: сервер объявляет это в описании `find_skill`. Только `true` попадает в окружение. */
   skillListReduced?: boolean;
   nativeContextRevision?: string;
+  /**
+   * Канал агента к браузеру окна (спека браузера 3.7): с ним сервер объявляет инструмент `browser_open`. Хост выдаёт его
+   * каждому запуску; нет — старый хост или сервер хуков не поднялся, и инструментов браузера у сессии нет.
+   */
+  agent?: AgentChannel;
   /** Id сессии в карте — переменная `PARLEY_SESSION_ID` (и прежняя `HARNAS_SESSION_ID`). */
   sessionId: string;
   /** Чем запускать сервер; по умолчанию node и скрипт сервера по абсолютному пути. */
@@ -76,20 +96,24 @@ export function mcpConfig({
   skillNavigator,
   skillListReduced,
   nativeContextRevision,
+  agent,
 }: McpConfigParams): McpConfigFile {
   return {
     mcpServers: {
       [MCP_SERVER_NAME]: {
         type: 'stdio',
         ...serverLaunch(command),
-        env: bothEnv({
-          WORK_DIR: workDir,
-          SESSION_ID: sessionId,
-          ...(channel === true ? { CHANNEL: '1' } : {}),
-          ...(skillNavigator === undefined ? {} : { SKILL_NAVIGATOR: skillNavigator ? '1' : '0' }),
-          ...(skillListReduced === true ? { SKILL_LIST_REDUCED: '1' } : {}),
-          ...(nativeContextRevision === undefined ? {} : { NATIVE_CONTEXT_REVISION: nativeContextRevision }),
-        }),
+        env: {
+          ...bothEnv({
+            WORK_DIR: workDir,
+            SESSION_ID: sessionId,
+            ...(channel === true ? { CHANNEL: '1' } : {}),
+            ...(skillNavigator === undefined ? {} : { SKILL_NAVIGATOR: skillNavigator ? '1' : '0' }),
+            ...(skillListReduced === true ? { SKILL_LIST_REDUCED: '1' } : {}),
+            ...(nativeContextRevision === undefined ? {} : { NATIVE_CONTEXT_REVISION: nativeContextRevision }),
+          }),
+          ...agentEnv(agent),
+        },
       },
     },
   };
@@ -127,8 +151,14 @@ export const CODEX_MCP_TOOL_TIMEOUT_SEC = 30 * 60 + 60;
 
 /** Переменные, которые сервер получает из окружения запускающего: только наше пространство имён, оба префикса. */
 const OWN_VARIABLE = new RegExp(`^(?:${ENV_PREFIX}|${LEGACY_ENV_PREFIX})[A-Z0-9_]+$`);
-/** Три переменные, которые харнесс задаёт сессии сам, под обоими именами: унаследованное значение их не перекрывает. */
-const SESSION_VARIABLES = new Set(Object.keys(bothEnv({ WORK_DIR: '', SESSION_ID: '', CHANNEL: '', SKILL_NAVIGATOR: '', SKILL_LIST_REDUCED: '', NATIVE_CONTEXT_REVISION: '' })));
+/**
+ * Переменные, которые харнесс задаёт сессии сам, под обоими именами: унаследованное значение их не перекрывает. Канал
+ * агента — тоже только свой: хост, поднятый из сессии агента, унаследовал бы её адрес и токен.
+ */
+const SESSION_VARIABLES = new Set([
+  ...Object.keys(bothEnv({ WORK_DIR: '', SESSION_ID: '', CHANNEL: '', SKILL_NAVIGATOR: '', SKILL_LIST_REDUCED: '', NATIVE_CONTEXT_REVISION: '' })),
+  ...Object.keys(bothEnv({ AGENT_URL: '', AGENT_TOKEN: '' })),
+]);
 
 /** Пары `имя=значение` таблицы `env` сервера: сначала адрес сессии под обоими именами, затем унаследованные `PARLEY_*` и `HARNAS_*`. */
 function codexServerEnv({
@@ -138,7 +168,8 @@ function codexServerEnv({
   skillNavigator,
   skillListReduced,
   nativeContextRevision,
-}: Pick<McpConfigParams, 'workDir' | 'sessionId' | 'env' | 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision'>): Array<[string, string]> {
+  agent,
+}: Pick<McpConfigParams, 'workDir' | 'sessionId' | 'env' | 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision' | 'agent'>): Array<[string, string]> {
   const inherited = Object.entries(env ?? {})
     .filter(
       (entry): entry is [string, string] =>
@@ -152,7 +183,7 @@ function codexServerEnv({
     ...(skillNavigator === undefined ? {} : { SKILL_NAVIGATOR: skillNavigator ? '1' : '0' }),
     ...(skillListReduced === true ? { SKILL_LIST_REDUCED: '1' } : {}),
     ...(nativeContextRevision === undefined ? {} : { NATIVE_CONTEXT_REVISION: nativeContextRevision }),
-  })), ...inherited];
+  })), ...Object.entries(agentEnv(agent)), ...inherited];
 }
 
 /**
@@ -194,7 +225,7 @@ export async function writeMcpConfig(
   sessionId: string,
   command?: string,
   channel = false,
-  snapshot: Pick<McpConfigParams, 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision'> = {},
+  snapshot: Pick<McpConfigParams, 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision' | 'agent'> = {},
 ): Promise<string> {
   const paths = workPaths(projectPath, workId);
   const file = path.join(paths.mcp, `${sessionId}.json`);
@@ -209,7 +240,10 @@ export async function writeMcpConfig(
       ...(command === undefined ? {} : { command }),
       ...(channel ? { channel } : {}),
     }),
-    'utf8',
+    { encoding: 'utf8', mode: 0o600 },
   );
+  // В файле — токен канала агента: читать его может только сам человек. `mode` у `writeFile` действует лишь при
+  // создании, а файл переписывается на каждом запуске, и прежний мог лечь с 0644, — права ставятся явно.
+  await chmod(file, 0o600);
   return file;
 }

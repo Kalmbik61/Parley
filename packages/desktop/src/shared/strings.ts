@@ -726,6 +726,8 @@ export const S = {
       removeAgent: 'Remove agent',
       addAgent: 'Add agent',
       inOwnWorktree: 'In its own worktree',
+      /** Одиночная сессия человека по умолчанию не lean; участники комнаты берут настройку `leanAgents`. */
+      leanSession: 'Lean session',
       /** Знак «?» у поля: имя кнопки для скринридера — `About Mode`; текст подсказки — в `hints`. */
       hintLabel: (field: string): string => `About “${field}”`,
       /** Подсказки полей диалога по наведению на «?»: что это за поле, без деталей реализации. */
@@ -736,6 +738,7 @@ export const S = {
         sessionName: 'The session’s name in the sidebar and on its tab. If empty, the session gets a name by its number — Ralph, Anatoly, Ruslan and so on. Rename it any time from its menu.',
         agents: 'One agent starts a session; two or more make a room.\nRole — optional ready-made instructions with a default provider, model and effort; what you pick in the row wins. Builtin roles come with Parley; “·\u00A0Claude” and “·\u00A0Codex” are your own agents from that CLI and run only there.\n🔒 — a read-only role: the CLI does not let the agent edit files.\nModel and effort — which model runs and how hard it thinks; Default keeps the CLI’s own setting.\nIn a room, ★ picks the lead, who collects the positions and brings you the decision; the branch icon gives one agent its own worktree.',
         worktree: 'Each agent works in its own Git worktree: a separate folder on a new branch, so agents do not overwrite each other’s edits. You review and merge the work in the Changes tab. Needs a Git repository.',
+        leanSession: 'Starts the agent without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions. Agents of a room follow Settings → Agents.',
         /** Перед строками режимов — `S.plans.modes` и `S.plans.modeHelp`, те же, что в панели плана комнаты. */
         mode: 'How the room tracks the work. You can change it later in the room.',
       },
@@ -936,6 +939,9 @@ export const S = {
     messageCap: 'Message cap per hour',
     resumeRate: 'Session wake-ups per hour (0…60)',
     autoLaunchPending: 'Auto-launch pending sessions',
+    /** Облегчённый запуск агентов комнат и `spawn_session` (спека «меньше ходов и легче контекст», C2.2). */
+    leanAgents: 'Lean agent sessions',
+    leanAgentsHint: 'Agents Parley starts for rooms and spawn_session run without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions.',
     /** Скилл `parley` в папку проекта и в worktree сессий при запуске (кусок 10 плана комнат). */
     agentSkills: 'Install agent skills into projects',
     skillNavigator: 'Skill navigator',
@@ -974,6 +980,10 @@ export const S = {
     checkForUpdatesHint: 'Looks for a newer Parley release on GitHub at start and once a day',
     /** Секция «Браузер» (кусок 9.1): куки, хранилища и кеш раздела встроенного браузера. */
     clearBrowserData: 'Clear browser data',
+    /** Общий выключатель агентов в браузере (спека браузера 4.8, этап B2). */
+    letAgentsUseBrowser: 'Let agents use the browser',
+    letAgentsUseBrowserHint:
+      'Agents can open pages on localhost in a tab of their own workspace. Off: every browser request from an agent is refused.',
   },
 
   /** Тост о новой версии — `renderer/update/update-notice.ts` (V6 плана релиза 0.1.0). */
@@ -1581,6 +1591,33 @@ export const S = {
         `${width} × ${height} · ${dpr}x${percent === null ? '' : ` · ${percent}%`}`,
       /** Касания включаются с новым документом (спайк 0.3). */
       touchReload: 'Reload to apply touch',
+    },
+    /**
+     * Панель браузера хозяина — справа от вида сессии или комнаты (спека браузера 3.10, 4.11). Заголовок хозяина и названия
+     * страниц — данные (ярлык сессии, название комнаты, заголовок и адрес страницы), идут как есть.
+     */
+    panel: {
+      /** Кнопка у вида хозяина (подпись для читалки экрана и подсказка). */
+      toggle: 'Browser',
+      toggleTitle: 'Show or hide the browser panel',
+      /** `aria-label` полоски страниц. */
+      pages: 'Browser pages',
+      /** Страница без адреса и без заголовка. */
+      newPage: 'New page',
+      addPage: 'Add a page',
+      closePage: (title: string): string => `Close ${title}`,
+      closePanel: 'Close the browser panel',
+      /** Узкий вид (уже 720 px): панель закрывает вид собой, кнопка возвращает к нему. */
+      backToChat: 'Back to chat',
+      backToRoom: 'Back to room',
+      resize: 'Resize the browser panel',
+      tooManyPages: 'No more than 5 pages in a browser panel',
+      /** Пункт «⋯» вкладки браузера человека: страница переезжает в браузер сессии или комнаты. */
+      moveTo: 'Move to browser of…',
+      moved: (name: string): string => `Moved to the browser of ${name}`,
+      /** Тост, когда агент открыл страницу, а вид хозяина не на экране; «Show» переводит человека к ней. */
+      agentOpened: (session: string, address: string): string => `${session} opened ${address}`,
+      agentShow: 'Show',
     },
   },
 

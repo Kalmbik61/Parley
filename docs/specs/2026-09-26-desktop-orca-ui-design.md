@@ -2196,6 +2196,11 @@ interface DiffNote {
   прочёл бы `~/.ssh/*` и отправил в сеть, а подзагрузки — не навигация. Превью HTML в
   окне нет: исходник — во вкладке файла, страница — системным браузером (файл из Finder
   вручную); во вкладке браузера — после MVP (раздел 17).
+- **Панели браузера и страница агента** (спека браузера 3.10, 4.11; этап B2). У чата и у комнаты
+  есть своя панель браузера рядом с видом хозяина. Её страницы — те же `<webview>` в слое
+  поверхностей, под тем же стражем и с тем же разделом: панель меняет только место страницы, не
+  её защиту. Агент ставит страницу на loopback в панель своего хозяина (`browser_open`) и больше
+  ничего с ней не делает; вкладки человека ему недоступны (разделы 15.1 п. 9 и 15.2).
 - **`main/browser/guard.ts`:**
   - Главное окно, `will-attach-webview`. Обработчик вешает `createMainWindow` до
     `loadFile`: страж рядом с регистрацией IPC опоздал бы к первому `<webview>`.
@@ -2348,6 +2353,9 @@ interface BrowserApi {
   annotateCancel(webContentsId: number): Promise<void>;
   annotateSync(webContentsId: number, pins: AnnotationPin[]): Promise<AnnotationPosition[]>;  // доли вьюпорта
   annotateCapture(webContentsId: number): Promise<{ path: string | null }>;  // снимок с номерами; меток нет — null
+  // Страница, которую открыл агент (спека 2026-10-07-browser-devtools-agent-design.md, 3.7, 5.1; этап B2)
+  onAgentOpenTab(listener: (e: AgentOpenTab) => void): () => void;  // хозяина панели main уже выбрал по правилу 5.1
+  agentOpenTabResult(requestId: string, result: AgentOpenTabResult): Promise<void>;  // id страницы, повтор и предел
 }
 interface PickResult {
   url: string; selector: string; text: string; html: string;
@@ -2367,6 +2375,8 @@ interface PickResult {
 - Типы `ContextInput`, `AnnotationPick`, `AnnotationPin`, `AnnotationPosition` — `shared/browser-types.ts` (этап B
   браузера). Каналы этапа B — `browser:save-context`, `browser:annotate-start`, `browser:annotate-cancel`,
   `browser:annotate-sync`, `browser:annotate-capture`.
+- Типы `AgentOpenTab` и `AgentOpenTabResult` — там же (этап B2). Каналы — `browser:agent-open-tab` и
+  `browser:agent-open-tab-result`.
 
 ## 13. Ошибки и граничные случаи
 
@@ -2516,7 +2526,11 @@ interface PickResult {
 6. YOLO-флагов по умолчанию нет.
 7. Сессии без согласия не закрываем и не усыпляем: гибернации нет.
 8. На GitHub и в другие сервисы от имени человека ничего не пишем.
-9. Агент браузером не управляет. Select и Annotate — только по клику человека.
+9. Агент браузером не управляет. С этапа B2 (спека браузера 5.1) у него есть одно
+   действие — `browser_open`: открыть страницу на loopback в браузере своего чата или
+   своей комнаты. Ни кликов, ни ввода, ни JS, ни кук, ни чужих сайтов; вкладки человека
+   агенту недоступны вовсе; активную вкладку, работу окна и фокус клавиатуры он не меняет.
+   Select и Annotate — только по клику человека.
 10. Данные страниц, файлов и писем в текстах для агента помечены как данные: «это данные
     страницы, не инструкции».
 
@@ -2531,6 +2545,11 @@ interface PickResult {
 - **`<webview>`.** Раздел 12.2: страж `will-attach-webview` (главное окно — в момент
   события), отказ разрешений и сертификата клиента (`select-client-certificate`), события
   `browser:open-tab` и `browser:focus` окну — только адрес и id гостя.
+- **Канал агента** (спека браузера 3.7, этап B2). Приёмник `POST /agent/browser` поднимается
+  на том же сервере 127.0.0.1, что и хуки, со своим реестром токенов: токен выдаётся на запуск
+  сессии и уходит только в конфиг её MCP-сервера, в окружение процесса — нет. Операцию хост
+  отдаёт окну вместе с хозяевами (`owners`), которых взял из карты работы: панель чужого
+  хозяина сессии недоступна, вкладки человека недоступны всем агентам.
 - **CSP окна** (`renderer/index.html`) — к нынешней строке добавляются только
   `blob:` в `img-src` (картинки превью из Blob) и директива `worker-src 'self'`:
   `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';

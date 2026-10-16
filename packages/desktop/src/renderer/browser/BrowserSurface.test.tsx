@@ -19,6 +19,7 @@ import { EMPTY_HISTORY } from '../layout/history.js';
 import { LayoutView } from '../layout/LayoutView.js';
 import { useLayoutStore } from '../layout/store.js';
 import { SurfaceLayer } from '../layout/SurfaceLayer.js';
+import { addPanelPage } from '../layout/panels.js';
 import { findTab, updateTab } from '../layout/tree.js';
 import { requestAddressFocus, useBrowserStore, wantsAddressFocus } from './store.js';
 import { toast } from 'sonner';
@@ -920,7 +921,7 @@ describe('BrowserSurface — размер вьюпорта (спека 2026-10-0
   });
 
   it('высота панели — из ui.json; ручка пишет новую в настройки окна', async () => {
-    useUiStore.setState({ ui: { ...useUiStore.getState().ui, browser: { devtoolsHeight: 300 } } });
+    useUiStore.setState({ ui: { ...useUiStore.getState().ui, browser: { ...useUiStore.getState().ui.browser, devtoolsHeight: 300 } } });
     setBrowserTab('http://localhost:5173/');
     renderWork();
     fire(arm(webview(), 7), 'dom-ready');
@@ -1740,5 +1741,42 @@ describe('BrowserSurface — Annotate: редактор скрытой вкла�
     });
     expect(screen.queryByTestId('annotation-editor')).toBeNull();
     expect(useAnnotateStore.getState().tabs[TAB]?.items.map((item) => item.comment)).toEqual(['half-typed, finished']);
+  });
+});
+
+describe('BrowserSurface — «Move to browser of…» (этап B2, спека браузера 3.10)', () => {
+  beforeEach(() => {
+    vi.mocked(toast).mockClear();
+  });
+
+  it('«⋯ → Move to browser of… → комната»: адрес и размер переезжают в панель комнаты, вкладка закрыта, тост', () => {
+    roomWork();
+    setBrowserTabSized('http://localhost:5173/app', MOBILE_M);
+    renderWork();
+    fire(arm(webview(), 9), 'dom-ready');
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More browser actions' }), { key: 'Enter' });
+    fireEvent.keyDown(screen.getByTestId('browser-move-to'), { key: 'ArrowRight' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'review' }));
+    const layout = useLayoutStore.getState().layouts[WORK_KEY];
+    expect(layout === undefined ? null : findTab(layout, TAB)).toBeNull();
+    expect(layout?.panels?.['room:r-01']).toMatchObject({ open: true, pages: [{ url: 'http://localhost:5173/app', viewport: MOBILE_M }] });
+    expect(toast).toHaveBeenCalledWith('Moved to the browser of review');
+    expect(webview()).toBeNull();
+  });
+
+  it('пять страниц в панели хозяина — вкладка остаётся, тост предела вместо «Moved»', () => {
+    roomWork();
+    setBrowserTab('http://localhost:5173/');
+    for (let i = 0; i < 5; i += 1) {
+      useLayoutStore.getState().apply(WORK_KEY, (layout) => addPanelPage(layout, { kind: 'room', roomId: 'r-01' }, { id: `bp-00000${i}`, url: `http://localhost:${3000 + i}/` }));
+    }
+    renderWork();
+    fire(arm(webview(), 9), 'dom-ready');
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More browser actions' }), { key: 'Enter' });
+    fireEvent.keyDown(screen.getByTestId('browser-move-to'), { key: 'ArrowRight' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'review' }));
+    expect(tabOfLayout()).toMatchObject({ kind: 'browser', id: TAB });
+    expect(toast).toHaveBeenCalledWith('No more than 5 pages in a browser panel');
+    expect(toast).not.toHaveBeenCalledWith('Moved to the browser of review');
   });
 });
