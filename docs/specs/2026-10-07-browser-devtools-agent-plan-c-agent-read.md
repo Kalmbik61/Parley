@@ -332,7 +332,7 @@ git commit -m "feat(protocol): операции чтения браузера а
 
 **Аннотации.** `browser_open` остаётся с `CONTROL` (`readOnlyHint: false`: пишет страницу в раскладку окна). Четыре читающих — `READ = { readOnlyHint: true, openWorldHint: false }`: они ничего не меняют и не выходят за localhost; по аннотациям Codex не спрашивает человека. `allowBrowserOpen` (`settings-file.ts`) не меняется: заранее разрешён только `browser_open`, читающие инструменты Claude Code одобряет человек, как прочие инструменты Parley (спека 5.1).
 
-- [ ] **Шаг 1. Написать падающие тесты.** В `browser-tools.test.ts` (хелперы `startEndpoint`, `connect`, `call`, `answers`, `seen` и `TOKEN` в файле есть) поправить четыре ожидания B2: `const [open] = tools` → `tools.find((tool) => tool.name === 'browser_open')`; `expect(BROWSER_TOOLS).toHaveLength(1)` → `5`; `BROWSER_TOOL_LIMITS` → `{ opMs: 30_000, listBytes: 20_480, listEntries: 100, detailBody: 8192, screenshotLongSide: 1568, panelPages: 5 }`; в списке фраз описания `browser_open` вместо `'at most 10'` — `` `at most ${BROWSER_TOOL_LIMITS.panelPages} pages` `` (число идёт от предела, а не вписано в тест). Импорты дополнить: `PAGE_DATA_NOTE`, `fence`, `pageData` из `./browser-tools.js`; `mkdtemp`, `realpath`, `rm`, `writeFile` из `node:fs/promises`; `tmpdir`, `path`. Дописать:
+- [x] **Шаг 1. Написать падающие тесты.** В `browser-tools.test.ts` (хелперы `startEndpoint`, `connect`, `call`, `answers`, `seen` и `TOKEN` в файле есть) поправить четыре ожидания B2: `const [open] = tools` → `tools.find((tool) => tool.name === 'browser_open')`; `expect(BROWSER_TOOLS).toHaveLength(1)` → `5`; `BROWSER_TOOL_LIMITS` → `{ opMs: 30_000, listBytes: 20_480, listEntries: 100, detailBody: 8192, screenshotLongSide: 1568, panelPages: 5 }`; в списке фраз описания `browser_open` вместо `'at most 10'` — `` `at most ${BROWSER_TOOL_LIMITS.panelPages} pages` `` (число идёт от предела, а не вписано в тест). Импорты дополнить: `PAGE_DATA_NOTE`, `fence`, `pageData` из `./browser-tools.js`; `mkdtemp`, `realpath`, `rm`, `writeFile` из `node:fs/promises`; `tmpdir`, `path`. Дописать:
 
 ```ts
 describe('ограда данных страницы (спека 6)', () => {
@@ -456,9 +456,9 @@ describe('ошибки читающих инструментов', () => {
 
   В `guidance.test.ts` (блок про `BROWSER_PRIORITY_RULE`): ожидание `'the human sees the same tab'` заменить на `'the human sees the same page'`, добавить `expect(BROWSER_PRIORITY_RULE).toContain('browser_tabs')` и `expect(BROWSER_PRIORITY_RULE).not.toContain('reading or clicking')`; предел 700 байт остаётся.
 
-- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/core exec vitest run src/mcp/browser-tools.test.ts src/work/guidance.test.ts` → FAIL (нет `fence`, `pageData`, инструментов).
+- [x] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/core exec vitest run src/mcp/browser-tools.test.ts src/work/guidance.test.ts` → FAIL (нет `fence`, `pageData`, инструментов).
 
-- [ ] **Шаг 3. Реализовать.** В `browser-tools.ts`:
+- [x] **Шаг 3. Реализовать.** В `browser-tools.ts`:
   - шапку-комментарий дополнить: четыре читающих инструмента C; формы ответов окна — копии `BrowserAgent*Result` протокола (сверяет E2E канала);
   - константы и ограда (импорты `readFile`, `realpath` из `node:fs/promises`, `path`, `parleyHome` из `../work/store.js`):
 
@@ -637,11 +637,11 @@ async function screenshotResult(result: ScreenshotResult, dropsDir: string): Pro
   - в `createBrowserTools`: `const dropsDir = deps.dropsDir ?? path.join(parleyHome(), 'desktop', 'drops');` (как `main/drops.ts#dropsDir` окна) и в `switch` метода `call` ветки `tabs`, `console`, `network`, `screenshot` перед `open` (`text(formatTabs(…))`, …, `await screenshotResult(answer.result as ScreenshotResult, dropsDir)`).
   - `guidance.ts`, `BROWSER_PRIORITY_RULE`: «browser_open shows the page in a tab of this workspace, and the human sees the same tab» → «browser_open shows the page in the browser panel of your chat or room, and the human sees the same page; browser_tabs, browser_console, browser_network and browser_screenshot read it»; в скобках «(so far: reading or clicking the page, …)» → «(so far: clicking or typing in the page, …)». Остальное в строке не менять.
 
-- [ ] **Шаг 4. Запустить — проходит.**
+- [x] **Шаг 4. Запустить — проходит.**
   - `pnpm --filter @parley/core exec vitest run src/mcp src/work/guidance.test.ts` → PASS (таблица аннотаций `annotations.test.ts` и список инструментов собираются без канала и не меняются).
   - `pnpm --filter @parley/core build && pnpm --filter @parley/host exec vitest run src/agent/browser-contract.test.ts` → PASS.
 
-- [ ] **Шаг 5. Закоммитить.**
+- [x] **Шаг 5. Закоммитить.**
 
 ```bash
 git add packages/core/src/mcp/browser-tools.ts packages/core/src/mcp/browser-tools.test.ts packages/core/src/work/guidance.ts packages/core/src/work/guidance.test.ts
