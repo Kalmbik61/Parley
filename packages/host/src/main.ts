@@ -23,6 +23,9 @@ async function main(): Promise<number> {
   const hookGraceRaw = Number(envValue(process.env, 'CODEX_HOOK_GRACE_MS'));
   const codexHookGraceMs = Number.isInteger(hookGraceRaw) && hookGraceRaw >= 100 && hookGraceRaw <= 600_000 ? hookGraceRaw : undefined;
   const options = {
+    // `migrateMaps` (перевод карт v2 на журналы, задача 7 карты-журнала) здесь НЕ включён: `methods/backlog.ts`,
+    // `methods/journal.ts` и E2E окна читают `map.json` сырым файлом и не поймут v3. Включается в задаче 10, когда
+    // каждый читатель карты идёт через `readMap`/`assembleMap`.
     ...(envIdleMs ? { idleMs: Number(envIdleMs) } : {}),
     ...(probeVersions ? { probeVersion: probeCliVersion, probeCodexCatalog } : {}),
     ...(limits === undefined ? {} : { limits }),

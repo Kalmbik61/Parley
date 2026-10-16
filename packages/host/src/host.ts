@@ -92,6 +92,11 @@ export interface HostOptions {
    * Боевой хост не задаёт — 15 секунд; E2E окна сокращает его переменной `PARLEY_CODEX_HOOK_GRACE_MS`.
    */
   codexHookGraceMs?: number;
+  /**
+   * Перевод карт v2 на журналы (задача 7 плана карты-журнала). Выключен по умолчанию и пока не включается нигде, кроме
+   * тестов миграции: остальные читатели `map.json` v3 не понимают. `main.ts` включит его в задаче 10.
+   */
+  migrateMaps?: boolean;
 }
 
 export interface RunningHost {
@@ -198,7 +203,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // через `works.list`/`works.changed`, а на остановке хост снимает свою аренду.
   // Счётчики окна строки состояния: сервисы пишут, health читает и обнуляет.
   const windowCounters = createWindowCounters();
-  const worksService = createWorksService(handle.context, { windowCounters });
+  const worksService = createWorksService(handle.context, { windowCounters, ...(options.migrateMaps === true ? { migrateMaps: true } : {}) });
   // Сервис зовёт onFailure по разу на каждый код сбоя (конфликт снимка, журнал решения), а у человека одна карточка
   // с одним текстом: повтор для той же работы только вытеснял бы из строки статуса прежние уведомления.
   const planEffectNoticed = new Set<string>();

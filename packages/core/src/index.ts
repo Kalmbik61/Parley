@@ -130,6 +130,8 @@ export {
 export { defaultSessionName } from './work/names.js';
 export { displayStatus } from './work/status-view.js';
 export { appendMessage } from './work/journal.js';
+export { finishV2Cleanup, hasLiveSession, hasV2Copy, migrateMapToJournal } from './work/migrate-map.js';
+export type { MigrateMapOptions, MigrateMapResult, MigrationStep } from './work/migrate-map.js';
 export type { JournalLetter, NewJournalMessage } from './work/journal.js';
 export { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './work/letters.js';
 export {
@@ -255,6 +257,7 @@ export {
   updateMap,
   WorkNotFoundError,
   workPaths,
+  workSchemaVersion,
   worksIndexPath,
 } from './work/store.js';
 export type { NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';

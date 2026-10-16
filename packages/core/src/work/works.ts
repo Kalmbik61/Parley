@@ -1,7 +1,8 @@
 import { watch, type FSWatcher } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { parseMap } from './map.js';
+import { assembleFromIndex } from './assemble.js';
+import { JOURNAL_SCHEMA_VERSION, parseIndex, parseMap, peekSchemaVersion } from './map.js';
 import { stateDir } from './state-dir.js';
 import { parleyHome, readWorksIndex, workPaths } from './store.js';
 import type { WorkMap } from './types.js';
@@ -12,6 +13,11 @@ export interface WorkEntry {
   map: WorkMap;
   /** Размер файла карты в байтах, как его прочли с диска: для счётчиков хоста, без повторного чтения. */
   bytes?: number;
+  /**
+   * Работа на карте v2, которую нельзя перевести на v3, пока в ней есть живая сессия (`migrate-map.ts`). Ставит хост;
+   * поля нет, когда миграция не ждёт, — прежнее окно его не знает и не должно.
+   */
+  migrationPending?: boolean;
 }
 
 const worksDir = (projectPath: string): string => path.join(stateDir(projectPath), 'works');
@@ -26,7 +32,9 @@ async function readEntry(projectPath: string, workId: string): Promise<WorkEntry
   const file = workPaths(projectPath, workId).map;
   try {
     const text = await readFile(file, 'utf8');
-    return { projectPath, map: parseMap(text, file), bytes: Buffer.byteLength(text) };
+    // Карта-журнал (v3) собирается в прежнюю форму: письма читаются из журналов, `bytes` — размер индекса.
+    const map = peekSchemaVersion(text) === JOURNAL_SCHEMA_VERSION ? await assembleFromIndex(projectPath, workId, parseIndex(text, file)) : parseMap(text, file);
+    return { projectPath, map, bytes: Buffer.byteLength(text) };
   } catch {
     return null;
   }
