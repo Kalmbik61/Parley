@@ -33,7 +33,7 @@ import {
 } from '../providers.js';
 import { prepareSessionRole, roleFromId, roleId, roleSummaries, sessionRoleCatalog } from '../work/agents.js';
 import { LEAD_ROLE, memberRole, writeBrief } from '../work/brief.js';
-import { CONTEXT_LIMITS, FIND_SKILL_MAX_BYTES, READ_GUIDE_MAX_BYTES, boundResponse, contextBytes, markedExcerpt } from '../work/context-budget.js';
+import { CONTEXT_LIMITS, FIND_SKILL_MAX_BYTES, LETTER_MAX_CHARS, LETTER_SOFT_CHARS, READ_GUIDE_MAX_BYTES, boundResponse, contextBytes, markedExcerpt } from '../work/context-budget.js';
 import {
   PAGE_MAX_BYTES,
   PAGE_MAX_ITEMS,
@@ -491,7 +491,11 @@ const TOOLS: Tool[] = [
             'An addressee id, or several at once. Without room — exactly one; with room and no to — a broadcast to the room.',
           oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
         },
-        text: { type: 'string' },
+        text: {
+          type: 'string',
+          maxLength: LETTER_MAX_CHARS,
+          description: `At most ${LETTER_MAX_CHARS} characters; keep letters short. For anything long write a file and send its path.`,
+        },
         kind: {
           type: 'string',
           enum: [...MESSAGE_KINDS],
@@ -1047,6 +1051,11 @@ async function sendMessage(
   const roomId = optionalStringArg(args, 'room');
   // Пустая строка — ошибка, как у `room`: `stringArg` пустое значение не пропускает.
   const replyTo = optionalStringArg(args, 'replyTo');
+  // Схема с maxLength клиента не обязывает, поэтому потолок держит сам обработчик, до записи в карту. Обычный
+  // Error, а не SharedStateError: у того сообщение — голый код, а агенту нужна фраза с действием.
+  if (text.length > LETTER_MAX_CHARS) {
+    throw new Error(`letter is ${text.length} chars, limit ${LETTER_MAX_CHARS}: write a file and send its path`);
+  }
 
   const limits = await limitsOf(context);
   let created = '';
@@ -1107,8 +1116,11 @@ async function sendMessage(
       created = addMessage(current, { from: sessionId, to: [target], text, kind }).id;
     }
   });
-  const warning = unknownParamsWarning(args);
-  return warning === null ? { messageId: created } : { messageId: created, warning };
+  const warnings = [
+    text.length > LETTER_SOFT_CHARS ? `long letter (${text.length} chars): prefer a file and a path` : null,
+    unknownParamsWarning(args),
+  ].filter((warning): warning is string => warning !== null);
+  return warnings.length === 0 ? { messageId: created } : { messageId: created, warning: warnings.join('; ') };
 }
 
 async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {

@@ -4,6 +4,22 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Changed
+
+- **Agents get clear rules for room correspondence.** The guide now tells them to keep a letter under
+  1200 characters, to put documents and file edits into a file and send only its path, not to quote
+  earlier messages (use `replyTo` instead), to call `read_room` only when they really need the history,
+  and to read the room map through the tools instead of opening `map.json`.
+
+### Fixed
+
+- **Oversized letters no longer slip through `send_message`.** The 4096-character limit was only declared
+  in the tool schema, so letters of 54 KB went through; the server now enforces it, and a letter above
+  1200 characters comes back with a warning to shorten it. Letters are never truncated, and letters sent
+  from the window are not affected.
+
 ## 0.14.0
 
 Parley can now package what it knows about its own slowness into one file, so a report about a slow window comes with evidence. Quitting the app now stops the host and its sessions, after a question, and two Codex problems are fixed: sessions that froze until Parley was restarted, and compaction that looked stuck.
