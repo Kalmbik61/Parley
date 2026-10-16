@@ -15,9 +15,25 @@ import { HUMAN, type Message, type WorkMap } from './types.js';
  * и сессий не будит (архив комнат, 3.4).
  */
 export function recipientsOf(message: Message, map: WorkMap): string[] {
+  // Вопрос «кто получает это письмо СЕЙЧАС»: доставка, будильник и непрочитанное. Архивная комната не получает никого.
   if (message.roomId === null) return message.to;
   const room = map.rooms.find((candidate) => candidate.id === message.roomId);
   if (room !== undefined && isRoomArchived(room)) return [];
+  return addresseesIn(message, room);
+}
+
+/**
+ * Вопрос «кто МОГ прочесть это письмо ТОГДА»: адресаты письма без оглядки на архив комнаты. Нужен там, где восстанавливаются
+ * отметки прошлого (`readBy` из курсоров при сборке карты-журнала и миграции): отметки поставлены до архивации и остаются
+ * историей. Доставку и непрочитанное решает `recipientsOf`, не эта функция.
+ */
+export function addresseesThen(message: Message, map: WorkMap): string[] {
+  if (message.roomId === null) return message.to;
+  return addresseesIn(message, map.rooms.find((candidate) => candidate.id === message.roomId));
+}
+
+/** Общая часть обоих вопросов: явное `to`, а у рассылки комнаты — её участники без отправителя и человека. */
+function addresseesIn(message: Message, room: WorkMap['rooms'][number] | undefined): string[] {
   if (message.to.length > 0) return message.to;
   if (room === undefined) return [];
   const members = new Set([room.creator, ...room.members]);

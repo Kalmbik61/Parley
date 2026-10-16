@@ -14,7 +14,7 @@ import {
   type JournalLetter,
   type CursorFile,
 } from './journal.js';
-import { recipientsOf } from './letters.js';
+import { addresseesThen } from './letters.js';
 import { attachPreviewSink, attachSink, JournalLetterSink } from './letter-sink.js';
 import { JOURNAL_SCHEMA_VERSION, parseIndex, parseMap, peekSchemaVersion } from './map.js';
 import { readIndex, workPaths, type WorkPaths } from './store.js';
@@ -51,15 +51,16 @@ interface Parts {
 }
 
 /**
- * Кому у письма стоит отметка `readBy`: адресатам (`recipientsOf`) и человеку на письмах, которые он видит (`unreadForHuman`:
+ * Кому у письма стоит отметка `readBy`: адресатам (`addresseesThen` — «кто мог прочесть тогда», архив комнаты не в счёт: отметки
+ * поставлены до архивации, а не «кто получает сейчас», как `recipientsOf`) и человеку на письмах, которые он видит (`unreadForHuman`:
  * не его собственные, прямые — только ему). Общее правило сборки и дельты (`appendLetters`, `applyCursors`).
  */
 function readersOf(message: Message, shape: WorkMap): Set<string> {
-  return new Set([...recipientsOf(message, shape), ...(message.from !== HUMAN && (message.roomId !== null || message.to.includes(HUMAN)) ? [HUMAN] : [])]);
+  return new Set([...addresseesThen(message, shape), ...(message.from !== HUMAN && (message.roomId !== null || message.to.includes(HUMAN)) ? [HUMAN] : [])]);
 }
 
 function compose(index: WorkIndexMap, keys: (string | null)[], { journals, cursors, decisions }: Parts): WorkMap {
-  // Форма карты для `recipientsOf`: ему нужны только комнаты индекса.
+  // Форма карты для `addresseesThen`: ему нужны только комнаты индекса.
   const shape = { ...index, schemaVersion: 2, messages: [] } as unknown as WorkMap;
   const deletedSessions = new Set(index.work.deletedSessions ?? []);
   const ordered = mergeByTime(keys.map((roomId) => journals.get(keyOf(roomId)) ?? []));
@@ -71,7 +72,7 @@ function compose(index: WorkIndexMap, keys: (string | null)[], { journals, curso
     // Письма удалённой сессии помечает `removeSession` на v2; журнал дописывается только вперёд, поэтому метка
     // выводится из `work.deletedSessions` (номера сессий не переиспользуются).
     if (deletedSessions.has(letter.from) || letter.to.some((id) => deletedSessions.has(id))) message.deleted = true;
-    // Правило `readBy`, как в v2: отметка стоит у адресата письма (`recipientsOf` — не у отправителя и не у сессии,
+    // Правило `readBy`, как в v2: отметка стоит у адресата письма (`addresseesThen` — не у отправителя и не у сессии,
     // которой письмо не предназначалось) и у человека для писем, которые он видит (`unreadForHuman`: не его
     // собственные, прямые — только ему). Остальные сессии отметки не получают, даже если курсор ушёл дальше.
     //

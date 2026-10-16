@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appendLetters, applyCursors, assembleMap, MapJournalReadonlyError } from './assemble.js';
 import { appendMessage, journalFile, journalLine, messageSeqs, readCursorFile, writeCursor, type JournalLetter } from './journal.js';
-import { recipientsOf } from './letters.js';
+import { recipientsOf, unreadFor } from './letters.js';
 import { addMessage, addSession, parseMap } from './map.js';
 import { addRoom } from './rooms.js';
 import { createWork, readIndex, readMap, readWorksIndex, updateIndex, updateMap, workPaths } from './store.js';
@@ -519,6 +519,41 @@ describe('readBy собирается как в v2: только адресат�
     });
     const letters = (await assembleMap(project, id)).messages;
     expect(letters.map((message) => message.readBy[HUMAN] !== undefined)).toEqual([true, true, true]);
+  });
+
+  // Архив комнаты закрывает доставку (`recipientsOf` пуст), но отметки, поставленные до архивации, — история.
+  const archive = (map: WorkMap, roomId: string): void => void (map.rooms.find((candidate) => candidate.id === roomId)!.archivedAt = at(900));
+
+  it('письмо архивной комнаты: курсор сессии, прочитавшей его до архивации, даёт её readBy после сборки', async () => {
+    const { id } = await build((map) => {
+      const letter = room(map, 's-01', 'до архива', 100);
+      letter.readBy = { 's-02': letter.at };
+      archive(map, 'r-01');
+    });
+    const [letter] = (await assembleMap(project, id)).messages;
+    expect(letter!.readBy).toEqual({ 's-02': letter!.at });
+  });
+
+  it('то же письмо архивной комнаты по-прежнему не непрочитано ни для кого и никого не будит: правило доставки не менялось', async () => {
+    const { id } = await build((map) => {
+      const letter = room(map, 's-01', 'до архива', 100);
+      letter.readBy = { 's-02': letter.at };
+      archive(map, 'r-01');
+    });
+    const map = await assembleMap(project, id);
+    expect(recipientsOf(map.messages[0]!, map)).toEqual([]);
+    for (const session of ['s-01', 's-02', 's-03']) expect(unreadFor(map, session)).toEqual([]);
+  });
+
+  it('письмо открытой комнаты не затронуто: отметка только у прочитавшего адресата', async () => {
+    const { id } = await build((map) => {
+      const letter = room(map, 's-01', 'открытая', 100);
+      letter.readBy = { 's-02': letter.at };
+      archive(map, 'r-02');
+    });
+    const map = await assembleMap(project, id);
+    expect(map.messages[0]!.readBy).toEqual({ 's-02': map.messages[0]!.at });
+    expect(unreadFor(map, 's-03')).toEqual([map.messages[0]]);
   });
 });
 

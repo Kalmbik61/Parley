@@ -2,7 +2,7 @@ import { mkdir, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { assembleFromIndex } from './assemble.js';
 import { DIRECT_CURSOR_KEY, cursorFile, journalFile, journalLine, type CursorFile, type JournalLetter } from './journal.js';
-import { recipientsOf } from './letters.js';
+import { addresseesThen } from './letters.js';
 import { hasLiveProcess } from './liveness.js';
 import { JOURNAL_SCHEMA_VERSION, parseIndex, parseMap, peekSchemaVersion } from './map.js';
 import { DEFAULT_LOCK_TIMEOUT_MS, MapLockTimeoutError, updateIndex, withLock, workPaths, writeAtomic } from './store.js';
@@ -74,9 +74,9 @@ export async function hasLiveSession(map: Pick<WorkMap, 'sessions'>): Promise<bo
   return false;
 }
 
-/** Читатели письма как в сборщике: адресаты (`recipientsOf`) и человек на письмах, которые он видит. */
+/** Читатели письма как в сборщике: адресаты «тогда» (`addresseesThen`, не `recipientsOf`: архив комнаты отметок не отменяет) и человек на письмах, которые он видит. */
 function readersOf(message: Message, map: WorkMap): Set<string> {
-  const readers = new Set(recipientsOf(message, map));
+  const readers = new Set(addresseesThen(message, map));
   if (message.from !== HUMAN && (message.roomId !== null || message.to.includes(HUMAN))) readers.add(HUMAN);
   return readers;
 }

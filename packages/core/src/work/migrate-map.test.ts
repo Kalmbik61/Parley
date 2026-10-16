@@ -203,6 +203,19 @@ describe('migrateMapToJournal', () => {
     expect(cursor['r-01']).toEqual([[1, 3]]);
   });
 
+  it('отметка сессии на письме архивной комнаты переживает миграцию: курсор пишется по адресатам «тогда», а не «сейчас»', async () => {
+    const { id } = await seedV2((workId) => {
+      const map = fixtureV2(workId);
+      const letter = map.messages.find((message) => message.roomId === 'r-03' && message.from === 's-01')!;
+      letter.readBy['s-02'] = letter.at;
+      return map;
+    });
+    const result = await migrateMapToJournal(project, id);
+    expect(result).toMatchObject({ status: 'migrated', readByMismatches: 0 });
+    const letters = (await assembleMap(project, id)).messages.filter((message) => message.roomId === 'r-03' && message.from === 's-01');
+    expect(letters.some((message) => message.readBy['s-02'] !== undefined)).toBe(true);
+  });
+
   it('второй вызов ничего не меняет: файлы те же по байтам, письма не дублируются', async () => {
     const { id } = await seedV2();
     await migrateMapToJournal(project, id);
