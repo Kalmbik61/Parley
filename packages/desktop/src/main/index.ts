@@ -11,6 +11,7 @@ import {
   nativeTheme,
   net,
   Notification,
+  powerMonitor,
   screen,
   session,
   shell,
@@ -51,6 +52,7 @@ import type { IslandPlacement } from './island/placement.js';
 import { createIslandController, islandWindowOptions } from './island/window.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
+import { guardAppQuit, quitQuestion } from './quit-guard.js';
 import { createNotesStore } from './notes-store.js';
 import {
   createLoggedNotification,
@@ -225,6 +227,37 @@ if (!gotLock) {
     } catch (err) {
       console.error('[parley] failed to connect to host', err);
     }
+
+    // Выход из приложения (Dock → «Завершить», ⌘Q, меню) гасит хост со всеми сессиями; закрытие окна — нет.
+    // Вопрос — системный диалог без родительского окна: на `will-quit` окон уже нет. Тестовый режим — по-старому.
+    const quitGuard = guardAppQuit(app, {
+      liveSessions: () => connection.liveSessions(),
+      ask: async (count) => {
+        const question = quitQuestion(count);
+        const { response } = await dialog.showMessageBox({
+          type: 'warning',
+          message: question.message,
+          detail: question.detail,
+          buttons: question.buttons,
+          defaultId: 0,
+          cancelId: 1,
+        });
+        return response === 0 ? 'stop' : 'cancel';
+      },
+      stopHost: async () => {
+        await connection.stopHost();
+      },
+      onCancel: focusMainWindow,
+      keepHost: switches.dialogs,
+      log: (line) => console.warn(`[parley] ${line}`),
+    });
+    // Перезагрузка или выключение системы — без вопроса (событие есть на macOS и Linux): хост гасится сразу.
+    // Типы Electron объявляют слушатель без аргумента, а само событие отменяемое: задерживаем выключение, пока гасится хост.
+    powerMonitor.on('shutdown', (event?: { preventDefault(): void }) => {
+      event?.preventDefault();
+      quitGuard.systemShutdown();
+      app.quit();
+    });
 
     // `ui.json` и `themeSource` — до первого окна: `nativeTheme.shouldUseDarkColors`
     // ниже должен уже отражать выбор пользователя, иначе `backgroundColor` возьмёт
@@ -734,7 +767,8 @@ if (!gotLock) {
     });
   });
 
-  // Хост — отдельный, отсоединённый процесс: закрытие окна его не трогает.
+  // Хост — отдельный, отсоединённый процесс: закрытие окна его не трогает. Выход из приложения — другое дело:
+  // его сторож (`guardAppQuit`) спрашивает и гасит хост.
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
   });

@@ -12,6 +12,16 @@ Parley can now package what it knows about its own slowness into one file, so a 
 
 - **Diagnostics in the status bar.** One click saves a zip with host logs, a process list, request timings and an optional 20-second CPU profile of the host — attach it to an issue when Parley feels slow. The host journal now records where delays happen: session readiness, Chat sends, room mail delivery and the first reply.
 
+### Fixed
+
+- **Compacting a Codex agent finishes on time.** The context chip stayed on "…" after Codex had already
+  compacted, and five minutes later a false "compaction didn't go through" followed. Parley now reads the end
+  of the Codex log itself while compaction runs, and a long compaction of a big context is not counted as failed
+  before 15 minutes. The context percentage of Codex agents stays current too.
+- **Codex sessions no longer freeze until Parley is restarted.** On macOS the file system does not report
+  appended lines of the logs Codex keeps open, so activity, token usage and subagents of a Codex session stopped
+  updating. Parley now re-reads the logs of running Codex sessions itself instead of waiting for those events.
+
 ## 0.13.1
 
 Chat gets Copy and Send again under messages, ↑ and ↓ through your past messages, and a send queue that keeps your messages in order in Chat and rooms. The host log now shows where time goes when starting a session or opening Chat is slow.
