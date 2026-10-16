@@ -594,6 +594,59 @@ describe('network (спека 5.1, 6)', () => {
     register(ops, {});
     expect(codeOf(await run('network', { tab: 't1', requestId: 'nope' }))).toBe('bad_request');
   });
+
+  it('деталь запроса прошлой эпохи — bad_request, как неизвестный', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    snapshots.set(7, { ...EMPTY, network: [old, failing] });
+    expect(codeOf(await run('network', { tab: 't1', requestId: '99.1' }))).toBe('bad_request');
+    expect(okResult<{ request: { id: string } }>(await run('network', { tab: 't1', requestId: '100.1' })).request.id).toBe('100.1');
+  });
+
+  it('60 заголовков по 2 КБ: значения по 256 знаков с «…», не больше 40 на сторону, заметка «20 more response headers are not shown.»', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    const headers = Array.from({ length: 60 }, (_, index): [string, string] => [`X-H${index}`, 'v'.repeat(2048)]);
+    snapshots.set(7, { ...EMPTY, network: [networkEntry({ ...failing, requestHeaders: headers.slice(0, 3), responseHeaders: headers })] });
+    const detail = await detailOf(run);
+    expect(detail.responseHeaders).toHaveLength(40);
+    expect(detail.requestHeaders).toHaveLength(3);
+    for (const [, value] of detail.responseHeaders) expect(value).toBe(`${'v'.repeat(256)}…`);
+    expect(detail.notes).toContain('20 more response headers are not shown.');
+    expect(detail.notes.some((note) => note.includes('request headers'))).toBe(false);
+  });
+
+  it('список: query длиннее 80 знаков обрезан с «…»; в детали адрес полный (с маской)', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    const url = `http://localhost:5173/api/search?q=${'a'.repeat(300)}&token=SECRET123`;
+    snapshots.set(7, { ...EMPTY, network: [networkEntry({ ...failing, url })] });
+    const [summary] = okResult<{ requests: Array<{ url: string }> }>(await run('network', { tab: 't1' })).requests;
+    expect(summary?.url).toBe(`http://localhost:5173/api/search?q=${'a'.repeat(78)}…`);
+    expect(JSON.stringify(summary)).not.toContain('SECRET123');
+    const detail = await detailOf(run);
+    expect(detail.url).toBe(`http://localhost:5173/api/search?q=${'a'.repeat(300)}&token=<redacted>`);
+  });
+
+  it('after: только запросы после названного в текущей эпохе; next — id последнего; неизвестный after — все и заметка «Request X is no longer in the log; all matching requests are listed.»', async () => {
+    const { ops, snapshots, runOp: run } = setup();
+    register(ops, {});
+    const all = ['1', '2', '3', '4'].map((id) => networkEntry({ id: `100.${id}`, status: 500 }));
+    snapshots.set(7, { ...EMPTY, network: [old, ...all] });
+    type List = { requests: Array<{ id: string }>; notes: string[]; next: string | null };
+    const first = okResult<List>(await run('network', { tab: 't1', limit: 2 }));
+    expect(first.requests.map((request) => request.id)).toEqual(['100.3', '100.4']);
+    expect(first.next).toBe('100.4');
+    expect(first.notes).toEqual([]);
+    const after = okResult<List>(await run('network', { tab: 't1', after: '100.2' }));
+    expect(after.requests.map((request) => request.id)).toEqual(['100.3', '100.4']);
+    expect(after.next).toBe('100.4');
+    expect(okResult<List>(await run('network', { tab: 't1', after: '100.4' })).next).toBeNull();
+    // Запрос прошлой эпохи как курсор — неизвестный.
+    const unknown = okResult<List>(await run('network', { tab: 't1', after: '99.1' }));
+    expect(unknown.requests.map((request) => request.id)).toEqual(['100.1', '100.2', '100.3', '100.4']);
+    expect(unknown.notes).toEqual(['Request 99.1 is no longer in the log; all matching requests are listed.']);
+  });
 });
 
 describe('captureSpec — размер снимка агента', () => {

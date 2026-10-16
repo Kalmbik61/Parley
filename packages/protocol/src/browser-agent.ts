@@ -39,7 +39,7 @@ export type BrowserAgentErrorCode = (typeof BROWSER_AGENT_ERROR_CODES)[number];
  * Пределы канала (спека, раздел 8). `opMs` — срок ответа окна хосту; `openMs` — сколько main ждёт, пока окно поставит
  * вкладку и ответит (вкладка встаёт за кадр, дольше — окно перезагружается или не слушает); `requestBytes` — тело
  * запроса агента. Остальное — пределы чтения (этап C): `text` — текст записи консоли и сообщения; `listBytes` и
- * `listEntries` — размер и число записей списка; `detailBody` — тело запроса или ответа в деталях; `screenshotLongSide`
+ * `listEntries` — размер и число записей списка; `detailBody` — тело запроса или ответа в деталях; `headerValue`, `headers` — длина значения и число заголовков на сторону в деталях; `listQuery` — сколько знаков адреса после `?` в списке сети; `screenshotLongSide`
  * и `fullPageViewports` — размер снимка; `panelPages` — предел страниц панели (источник правды — `PANEL_LIMITS.pages`
  * окна, равенство сверяет тест окна); `captureReadyMs` — сколько main ждёт, пока окно поставит `<webview>` в размер снимка
  * и подтвердит это; `captureRetries` — повторы снимка скрытой страницы после подтверждения; `screenshotBytes` — предел PNG снимка (больше — повтор в меньшем масштабе).
@@ -52,6 +52,9 @@ export const AGENT_LIMITS = {
   listBytes: 20_480,
   listEntries: 100,
   detailBody: 8192,
+  headerValue: 256,
+  headers: 40,
+  listQuery: 80,
   screenshotLongSide: 1568,
   fullPageViewports: 3,
   panelPages: 5,
@@ -104,6 +107,7 @@ export const browserAgentArgs = {
     urlPattern: pattern.optional(),
     limit: limit.optional(),
     requestId: z.string().min(1).max(AGENT_INPUT.requestId).optional(),
+    after: z.string().min(1).max(AGENT_INPUT.requestId).optional(),
   }),
   screenshot: z.strictObject({
     tab,
@@ -216,7 +220,16 @@ export interface BrowserAgentRequestDetail extends BrowserAgentRequestSummary {
   notes: string[];
 }
 export type BrowserAgentNetworkResult =
-  | { tab: string; url: string; requests: BrowserAgentRequestSummary[]; matched: number }
+  | {
+      tab: string;
+      url: string;
+      requests: BrowserAgentRequestSummary[];
+      matched: number;
+      /** Пояснения Parley: например, названный `after` уже вытеснен из журнала. */
+      notes: string[];
+      /** id последнего запроса в списке — значение `after` для следующего чтения; `null` — список пуст. */
+      next: string | null;
+    }
   | { tab: string; url: string; request: BrowserAgentRequestDetail };
 
 export interface BrowserAgentScreenshotResult {

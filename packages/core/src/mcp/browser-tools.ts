@@ -91,7 +91,8 @@ export const BROWSER_TOOLS: readonly Tool[] = [
         failedOnly: { type: 'boolean', default: true, description: 'true: only failed requests; false: all requests.' },
         urlPattern: { type: 'string', minLength: 1, maxLength: 200, description: 'Only requests whose URL contains this string.' },
         limit: LIMIT,
-        requestId: { type: 'string', minLength: 1, maxLength: 64, description: 'Id of a request from the list: return it in detail.' },
+        requestId: { type: 'string', minLength: 1, maxLength: 200, description: 'Id of a request from the list: return it in detail.' },
+        after: { type: 'string', minLength: 1, maxLength: 200, description: 'Id of a request from the list: only requests logged after it (the Next: value of the previous answer).' },
       },
       required: ['tab'],
       additionalProperties: false,
@@ -222,7 +223,7 @@ interface RequestDetail extends RequestSummary {
   responseBody: string | null;
   notes: string[];
 }
-type NetworkResult = { tab: string; url: string; matched: number; requests: RequestSummary[] } | { tab: string; url: string; request: RequestDetail };
+type NetworkResult = { tab: string; url: string; matched: number; requests: RequestSummary[]; notes?: string[]; next?: string | null } | { tab: string; url: string; request: RequestDetail };
 interface ScreenshotResult {
   tab: string;
   url: string;
@@ -296,11 +297,13 @@ function formatNetwork(result: NetworkResult): string {
       'Response body:', request.responseBody ?? '  (none)',
       ...request.notes.map((note) => `Note: ${note}`),
     ];
-    return `Request ${request.id} of ${result.tab} (${result.url}). Secrets are masked as <redacted>.\n\n${pageData(lines.join('\n'))}`;
+    return `Request ${request.id} of ${result.tab} (${result.url}). Secrets are masked as <redacted>.\n\n${pageData(cut(lines.join('\n'), BROWSER_TOOL_LIMITS.listBytes))}`;
   }
   const head = `Network of ${result.tab} (${result.url}): ${result.requests.length} of ${result.matched} matching requests, oldest first. Pass a requestId for one request in detail.`;
-  if (result.requests.length === 0) return `${head} Nothing matched.`;
-  return `${head}\n\n${pageData(cut(result.requests.map(summaryLine).join('\n'), BROWSER_TOOL_LIMITS.listBytes))}`;
+  const notes = (result.notes ?? []).map((note) => `\nNote: ${note}`).join('');
+  if (result.requests.length === 0) return `${head} Nothing matched.${notes}`;
+  const next = result.next == null ? '' : ` Next: after=${result.next}.`;
+  return `${head}${next}${notes}\n\n${pageData(cut(result.requests.map(summaryLine).join('\n'), BROWSER_TOOL_LIMITS.listBytes))}`;
 }
 
 async function screenshotResult(result: ScreenshotResult, dropsDir: string, clientName: string | undefined): Promise<CallToolResult> {

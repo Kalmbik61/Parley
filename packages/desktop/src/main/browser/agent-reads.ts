@@ -12,6 +12,7 @@ import type {
   BrowserAgentRequestDetail,
   BrowserAgentRequestSummary,
 } from '@parley/protocol';
+import { cutCodePoints } from '../../shared/code-points.js';
 import { DEVTOOLS_LIMITS, isFailed } from '../../shared/browser-devtools.js';
 import type { ConsoleEntry, DevtoolsSnapshot, NetworkEntry, StackFrame } from '../../shared/browser-devtools.js';
 import { redactBody, redactHeaders, redactUrl, redactUrlsInText, unmaskableJson } from '../../shared/redact.js';
@@ -51,6 +52,26 @@ export function toAgentConsole(entry: ConsoleEntry): BrowserAgentConsoleEntry {
 
 export function summaryOf(entry: NetworkEntry): BrowserAgentRequestSummary {
   return { id: entry.id, method: entry.method, url: redactUrl(entry.url), kind: entry.kind, status: entry.status, statusText: entry.statusText, failure: entry.failure, durationMs: entry.durationMs, mimeType: entry.mimeType };
+}
+
+/** Список сети: query и фрагмент адреса (после маски) — не длиннее `AGENT_LIMITS.listQuery` знаков; полный адрес — в деталях. */
+function shortUrl(url: string): string {
+  const at = url.indexOf('?');
+  if (at === -1) return url;
+  const head = cutCodePoints(url.slice(at + 1), AGENT_LIMITS.listQuery);
+  return `${url.slice(0, at + 1)}${head.text}${head.cut ? '…' : ''}`;
+}
+
+/** Заголовки для агента: маска до обрезки, значение — до `headerValue` знаков, не больше `headers` штук; лишнее — заметка. */
+function headersForAgent(headers: ReadonlyArray<[string, string]>, side: 'request' | 'response', notes: string[]): Array<[string, string]> {
+  const shown = redactHeaders(headers)
+    .slice(0, AGENT_LIMITS.headers)
+    .map(([name, value]): [string, string] => {
+      const head = cutCodePoints(value, AGENT_LIMITS.headerValue);
+      return [name, head.cut ? `${head.text}…` : value];
+    });
+  if (headers.length > shown.length) notes.push(`${headers.length - shown.length} more ${side} headers are not shown.`);
+  return shown;
 }
 
 const headerValue = (headers: ReadonlyArray<[string, string]>, name: string): string | null => headers.find(([key]) => key.toLowerCase() === name)?.[1] ?? null;
@@ -98,7 +119,9 @@ export function createAgentReads(deps: { inspector: Pick<Inspector, 'snapshot' |
       if (response.base64) notes.push('The response body is binary and is not shown.');
       else responseBody = bodyForAgent(response.text, entry.mimeType, 'response', notes);
     }
-    return { ...summaryOf(entry), remoteAddress: entry.remoteAddress, fromCache: entry.fromCache, requestHeaders: redactHeaders(entry.requestHeaders), responseHeaders: redactHeaders(entry.responseHeaders), requestBody, responseBody, notes };
+    const requestHeaders = headersForAgent(entry.requestHeaders, 'request', notes);
+    const responseHeaders = headersForAgent(entry.responseHeaders, 'response', notes);
+    return { ...summaryOf(entry), remoteAddress: entry.remoteAddress, fromCache: entry.fromCache, requestHeaders, responseHeaders, requestBody, responseBody, notes };
   }
 
   return {
@@ -117,19 +140,29 @@ export function createAgentReads(deps: { inspector: Pick<Inspector, 'snapshot' |
       const snapshot = captured(contents.id);
       const url = redactUrl(contents.getURL());
       if (args.requestId !== undefined) {
-        const entry = snapshot.network.find((candidate) => candidate.id === args.requestId);
+        // Запрос прошлой страницы (прошлая эпоха) для агента — как неизвестный: его уже нет в списках.
+        const entry = snapshot.network.find((candidate) => candidate.id === args.requestId && candidate.epoch === snapshot.epoch);
         if (entry === undefined) throw new AgentOpError('bad_request', `There is no request ${args.requestId} in the log of page ${record.agentId}: list the requests first.`);
         return { tab: record.agentId, url, request: await detailOf(contents, record, entry) };
       }
       const pattern = args.urlPattern?.toLowerCase();
+      const notes: string[] = [];
+      const current = snapshot.network.filter((entry) => entry.epoch === snapshot.epoch);
+      let from = 0;
+      if (args.after !== undefined) {
+        const at = current.findIndex((entry) => entry.id === args.after);
+        if (at === -1) notes.push(`Request ${args.after} is no longer in the log; all matching requests are listed.`);
+        else from = at + 1;
+      }
       // Фильтр смотрит на адрес с маской: подобрать им значение секрета нельзя.
-      const matching = snapshot.network.filter(
-        (entry) =>
-          entry.epoch === snapshot.epoch &&
-          (args.failedOnly !== false ? isFailed(entry) : true) &&
-          (pattern === undefined || redactUrl(entry.url).toLowerCase().includes(pattern)),
+      const matching = current
+        .slice(from)
+        .filter((entry) => (args.failedOnly !== false ? isFailed(entry) : true) && (pattern === undefined || redactUrl(entry.url).toLowerCase().includes(pattern)));
+      const requests = newest(
+        matching.map((entry) => ({ ...summaryOf(entry), url: shortUrl(redactUrl(entry.url)) })),
+        args.limit ?? DEFAULT_LIST,
       );
-      return { tab: record.agentId, url, requests: newest(matching.map(summaryOf), args.limit ?? DEFAULT_LIST), matched: matching.length };
+      return { tab: record.agentId, url, requests, matched: matching.length, notes, next: requests[requests.length - 1]?.id ?? null };
     },
   };
 }

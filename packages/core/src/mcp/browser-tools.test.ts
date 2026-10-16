@@ -214,6 +214,17 @@ describe('читающие инструменты (спека 5.1)', () => {
     expect(empty.text).toContain('Note: The window has not reported any browser pages for this workspace yet.');
   });
 
+  it('network: в ответе списка — «Next: after=<id>.»', async () => {
+    const client = await connect(await startEndpoint());
+    const summary = { id: '100.1', method: 'GET', url: 'http://localhost:5173/a', kind: 'fetch', status: 500, statusText: '', failure: null, durationMs: 1, mimeType: null };
+    answers.push({ status: 200, body: { ok: true, result: { tab: 't1', url: 'http://localhost:5173/', matched: 1, requests: [summary], notes: [], next: '100.1' } } });
+    expect((await call(client, 'browser_network', { tab: 't1' })).text).toContain('Next: after=100.1.');
+    answers.push({ status: 200, body: { ok: true, result: { tab: 't1', url: 'http://localhost:5173/', matched: 0, requests: [], notes: ['Request x is no longer in the log; all matching requests are listed.'], next: null } } });
+    const empty = (await call(client, 'browser_network', { tab: 't1', after: 'x' })).text;
+    expect(empty).not.toContain('Next:');
+    expect(empty).toContain('Note: Request x is no longer in the log');
+  });
+
   it('console: заголовок вне ограды, записи в ограде — уровень, текст, ×N, источник, стек', async () => {
     const client = await connect(await startEndpoint());
     answers.push({
@@ -247,6 +258,11 @@ describe('читающие инструменты (спека 5.1)', () => {
     const detail = await call(client, 'browser_network', { tab: 't1', requestId: '100.1' });
     expect(detail.text).toContain('Authorization: <redacted>');
     expect(detail.text).toContain('Note: The JSON response body is larger than the capture limit');
+    const big = { ...summary, remoteAddress: null, fromCache: false, requestHeaders: [], responseHeaders: [], requestBody: 'q'.repeat(30_000), responseBody: null, notes: [] };
+    answers.push({ status: 200, body: { ok: true, result: { tab: 't1', url: 'http://localhost:5173/', request: big } } });
+    const bigDetail = await call(client, 'browser_network', { tab: 't1', requestId: '100.1' });
+    expect(Buffer.byteLength(bigDetail.text)).toBeLessThan(20_480 + 1024);
+    expect(bigDetail.text).toContain('… (cut at 20 KB)');
     const entries = Array.from({ length: 100 }, (_, index) => ({ level: 'error', origin: 'console', text: `${index} ${'x'.repeat(400)}`, source: null, stack: [], count: 1, at: '2026-10-07T10:00:00.000Z' }));
     answers.push({ status: 200, body: { ok: true, result: { tab: 't1', url: 'http://localhost:5173/', matched: 100, entries } } });
     const long = await call(client, 'browser_console', { tab: 't1', level: 'all' });
