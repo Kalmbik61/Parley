@@ -640,11 +640,18 @@ export function registerIpc(options: RegisterIpcOptions): void {
 
   // Архив диагностики: окно присылает только «с профилем или без»; каталог, имя и состав задаёт main. Готовый файл
   // показывается в Finder здесь же — путь в `~/Downloads` вне корней работ, `app:show-in-finder` его не пустил бы.
+  // Сборка идёт одна за раз: второй вызов во время первой ждёт её же результат, а не запускает второй профиль и второй zip.
+  let savingDiagnostics: Promise<DiagnosticsSaveResult> | null = null;
   ipcMain.handle('app:save-diagnostics', withIpcError(async (_event, options: unknown) => {
     if (!isRecord(options) || typeof options.profile !== 'boolean') {
       throw new HostError('bad_request', 'Invalid diagnostics request.');
     }
-    const result = await saveDiagnostics({ profile: options.profile });
+    if (savingDiagnostics === null) {
+      savingDiagnostics = saveDiagnostics({ profile: options.profile }).finally(() => {
+        savingDiagnostics = null;
+      });
+    }
+    const result = await savingDiagnostics;
     showItemInFolder(result.file);
     return result;
   }));

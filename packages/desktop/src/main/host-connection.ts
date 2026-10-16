@@ -22,6 +22,13 @@ import { createRpcRing, type RpcRecord } from './diagnostics/rpc-ring.js';
 interface PendingCall {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  method: string;
+  /** Момент записи вызова в сокет, ISO. */
+  startedAt: string;
+  /** `performance.now()` в тот же момент: по нему считается возраст висящего вызова. */
+  startedMs: number;
+  /** `sessionId` из `params.ref`, если он есть. */
+  ref?: string;
 }
 
 /** Процесс хоста, запущенный окном: жив ли он ещё (раунд lane-r4). */
@@ -301,8 +308,10 @@ export class HostConnection {
     socket.on('error', () => {});
 
     const id = this.nextId++;
+    const startedAt = new Date().toISOString();
+    const startedMs = performance.now();
     const pendingPromise = new Promise<unknown>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { resolve, reject, method: 'hello', startedAt, startedMs });
     });
     // Обрыв посреди рукопожатия — отказ только этого `hello`: повторяет сама петля, статус и
     // текущий сокет не трогаются.
@@ -448,15 +457,19 @@ export class HostConnection {
   }
 
   async call(method: MethodName, params: unknown): Promise<unknown> {
-    if (!this.socket) throw new Error('no connection to host');
-    const id = this.nextId++;
-    const promise = new Promise<unknown>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-    });
-    const startedAt = new Date().toISOString();
-    const startedMs = performance.now();
-    this.socket.write(encodeLine({ id, method, params }));
     const ref = sessionIdOf(params);
+    const startedAt = new Date().toISOString();
+    if (!this.socket) {
+      // Отказ без сокета тоже виден в архиве диагностики: иначе «окно молчит» не отличить от «окно не звало».
+      this.rpcRing.push({ t: startedAt, method, ms: 0, ok: false, error: 'no-connection', ...(ref === undefined ? {} : { ref }) });
+      throw new Error('no connection to host');
+    }
+    const id = this.nextId++;
+    const startedMs = performance.now();
+    const promise = new Promise<unknown>((resolve, reject) => {
+      this.pending.set(id, { resolve, reject, method, startedAt, startedMs, ...(ref === undefined ? {} : { ref }) });
+    });
+    this.socket.write(encodeLine({ id, method, params }));
     const record = (ok: boolean, error?: string): void => {
       this.rpcRing.push({
         t: startedAt,
@@ -478,9 +491,23 @@ export class HostConnection {
     }
   }
 
-  /** Последние вызовы окна к хосту (до `RPC_RING_CAPACITY`), от старых к новым. */
+  /**
+   * Последние вызовы окна к хосту (до `RPC_RING_CAPACITY`), от старых к новым, и в конце по записи на каждый
+   * вызов, который ещё ждёт ответа (`error: 'pending'`, `ms` — возраст): зависший хост иначе в кольце не виден.
+   */
   recentCalls(): RpcRecord[] {
-    return this.rpcRing.entries();
+    const now = performance.now();
+    const hanging = [...this.pending.values()].map(
+      (call): RpcRecord => ({
+        t: call.startedAt,
+        method: call.method,
+        ms: Math.round(now - call.startedMs),
+        ok: false,
+        error: 'pending',
+        ...(call.ref === undefined ? {} : { ref: call.ref }),
+      }),
+    );
+    return [...this.rpcRing.entries(), ...hanging];
   }
 
   notify(method: NotificationName, params: unknown): void {

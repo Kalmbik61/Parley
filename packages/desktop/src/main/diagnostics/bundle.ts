@@ -31,20 +31,33 @@ export interface SaveDiagnosticsDeps {
   callTimeoutMs?: number;
   profileSeconds?: number;
   profilePollMs?: number;
+  /** Запас сверх длины профиля, после которого ожидание прекращается (по умолчанию `PROFILE_GRACE_MS`). */
+  profileGraceMs?: number;
   processTree?: typeof defaultProcessTree;
   systemSummary?: typeof defaultSystemSummary;
   writeZip?: typeof defaultWriteZip;
 }
 
+/** Хост не ответил за срок: отличается от отказа хоста, чтобы `host-info.json` не путал «завис» и «не умеет». */
+class DiagnosticsTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`no response in ${timeoutMs} ms`);
+    this.name = 'DiagnosticsTimeoutError';
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 /**
- * Ждёт `promise` не дольше `timeoutMs`. Если вызов так и не вернулся, его позднее отклонение никем не
- * обрабатывается — гасим, чтобы оно не стало unhandled rejection в main.
+ * Ждёт `promise` не дольше `timeoutMs`; по сроку отклоняет `DiagnosticsTimeoutError`. Если вызов так и не вернулся,
+ * его позднее отклонение никем не обрабатывается — гасим, чтобы оно не стало unhandled rejection в main.
  */
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   promise.catch(() => {});
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(`no response in ${timeoutMs} ms`)), timeoutMs);
+    timer = setTimeout(() => reject(new DiagnosticsTimeoutError(timeoutMs)), timeoutMs);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
@@ -67,7 +80,7 @@ async function recordProfile(
   seconds: number,
   pollMs: number,
 ): Promise<void> {
-  const deadline = Date.now() + seconds * 1000 + PROFILE_GRACE_MS;
+  const deadline = Date.now() + seconds * 1000 + (deps.profileGraceMs ?? PROFILE_GRACE_MS);
   try {
     let status = (await withTimeout(deps.call('host.profile.start', { seconds }), callTimeoutMs)) as ProfileStatus;
     while (status.state === 'running' && Date.now() < deadline) {
@@ -79,13 +92,21 @@ async function recordProfile(
   }
 }
 
-/** Содержимое `host-info.json`: ответ `host.diagnostics` или причина, по которой его нет. */
-async function hostInfo(deps: SaveDiagnosticsDeps, callTimeoutMs: number): Promise<{ info: Record<string, unknown>; responded: boolean }> {
+/**
+ * Содержимое `host-info.json`: ответ `host.diagnostics` или причина, по которой его нет — только `timeoutMs`, если
+ * хост не ответил за срок, и только `error`, если он отказал. `pid` — из ответа хоста (положительное целое), иначе `null`.
+ */
+async function hostInfo(
+  deps: SaveDiagnosticsDeps,
+  callTimeoutMs: number,
+): Promise<{ info: Record<string, unknown>; responded: boolean; pid: number | null }> {
   try {
     const result = (await withTimeout(deps.call('host.diagnostics', {}), callTimeoutMs)) as HostDiagnostics;
-    return { info: { responded: true, ...result }, responded: true };
+    const pid = Number.isInteger(result.pid) && result.pid > 0 ? result.pid : null;
+    return { info: { responded: true, ...result }, responded: true, pid };
   } catch (error) {
-    return { info: { responded: false, timeoutMs: callTimeoutMs, error: errorMessage(error) }, responded: false };
+    const reason = error instanceof DiagnosticsTimeoutError ? { timeoutMs: error.timeoutMs } : { error: errorMessage(error) };
+    return { info: { responded: false, ...reason }, responded: false, pid: null };
   }
 }
 
@@ -148,9 +169,10 @@ export async function saveDiagnostics(
     await recordProfile(deps, callTimeoutMs, deps.profileSeconds ?? PROFILE_SECONDS, deps.profilePollMs ?? PROFILE_POLL_MS);
   }
 
-  const { info, responded } = await hostInfo(deps, callTimeoutMs);
+  const { info, responded, pid: reportedPid } = await hostInfo(deps, callTimeoutMs);
 
-  const pid = await readHostPid(deps.hostDir);
+  // pid из ответа хоста точнее файла: `host.pid` может остаться от прошлого процесса.
+  const pid = reportedPid ?? (await readHostPid(deps.hostDir));
   const processes = pid === null ? 'host.pid: missing' : await processTree([pid]);
 
   const created = now();

@@ -616,6 +616,27 @@ describe('app:save-diagnostics', () => {
     expect(showItemInFolder).not.toHaveBeenCalled();
   });
 
+  it('два одновременных вызова — одна сборка, оба получают один и тот же файл, Finder на каждый вызов', async () => {
+    const { ipcMain, saveDiagnostics, showItemInFolder } = setup();
+    let finish: (result: { file: string; hostResponded: boolean }) => void = () => {};
+    saveDiagnostics.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+
+    const first = ipcMain.invoke('app:save-diagnostics', { profile: false }) as Promise<unknown>;
+    const second = ipcMain.invoke('app:save-diagnostics', { profile: true }) as Promise<unknown>;
+    finish({ file: '/h/Downloads/one.zip', hostResponded: true });
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(saveDiagnostics).toHaveBeenCalledTimes(1);
+    expect(a).toEqual({ file: '/h/Downloads/one.zip', hostResponded: true });
+    expect(b).toEqual(a);
+    expect(showItemInFolder).toHaveBeenCalledTimes(2);
+
+    // После завершения следующий вызов снова запускает сборку.
+    saveDiagnostics.mockResolvedValue({ file: '/h/Downloads/two.zip', hostResponded: true });
+    await ipcMain.invoke('app:save-diagnostics', { profile: false });
+    expect(saveDiagnostics).toHaveBeenCalledTimes(2);
+  });
+
   it('сбой сборки доходит с кодом failed, Finder не зовётся', async () => {
     const { ipcMain, saveDiagnostics, showItemInFolder } = setup();
     saveDiagnostics.mockRejectedValue(new Error('ENOSPC'));

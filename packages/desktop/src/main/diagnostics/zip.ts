@@ -58,9 +58,9 @@ function* sliceBuffer(data: Buffer): Generator<Buffer> {
 
 /**
  * Пишет zip в `${target}.tmp` и переименовывает в `target`. Запись `{ file }`, которой нет
- * на диске, пропускается и попадает в `skipped`; остальные пишутся. Любой другой сбой
- * (чтение, запись) убирает `.tmp` и поднимается наружу. `now` — только для проверки
- * DOS-метки в тестах.
+ * на диске (`ENOENT`), пропускается и попадает в `skipped`; остальные пишутся. Любой другой
+ * сбой (нет прав, каталог вместо файла, чтение, запись) убирает `.tmp` и поднимается наружу.
+ * `now` — только для проверки DOS-метки в тестах.
  */
 export async function writeZip(
   target: string,
@@ -69,6 +69,10 @@ export async function writeZip(
 ): Promise<{ skipped: string[] }> {
   const tmp = `${target}.tmp`;
   const out = createWriteStream(tmp);
+  // Слушатель 'error' потока записи вешается сразу (finished): сбой открытия или записи (нет каталога,
+  // диск полон) иначе остался бы событием без обработчика и поднялся бы uncaughtException в main.
+  const outDone = finished(out);
+  outDone.catch(() => {});
   const skipped: string[] = [];
   const written: WrittenEntry[] = [];
   const { time, date } = dosDateTime(now);
@@ -80,9 +84,12 @@ export async function writeZip(
       out.write(chunk, (error) => (error ? reject(error) : resolve()));
     });
 
+  /** Открытый поток-источник текущей записи: при сбое его закрывает catch, иначе дескриптор файла утёк бы. */
+  let source: Readable | null = null;
+
   try {
     for (const entry of entries) {
-      const source = await openSource(entry.source);
+      source = await openSource(entry.source);
       if (source === null) {
         skipped.push(entry.name);
         continue;
@@ -128,6 +135,7 @@ export async function writeZip(
         }),
       );
       offset += compressedSize;
+      source = null;
 
       const descriptor = Buffer.alloc(16);
       descriptor.writeUInt32LE(SIG_DESCRIPTOR, 0);
@@ -170,9 +178,10 @@ export async function writeZip(
     await write(eocd);
 
     out.end();
-    await finished(out);
+    await outDone;
     await rename(tmp, target);
   } catch (error) {
+    source?.destroy();
     out.destroy();
     await rm(tmp, { force: true });
     throw error;
@@ -182,21 +191,23 @@ export async function writeZip(
 
 /**
  * Поток данных записи. Для `{ file }` ждёт открытия файла, чтобы отсутствующий файл
- * отличить до записи заголовка: `null` — пропустить, архив остаётся целым.
+ * отличить до записи заголовка: `null` (только для `ENOENT`) — пропустить, архив остаётся целым.
+ * Любая другая ошибка открытия (`EACCES`, `EISDIR`, `EMFILE`) отклоняет промис.
  */
 async function openSource(source: ZipEntry['source']): Promise<Readable | null> {
   if (typeof source === 'string') return Readable.from(sliceBuffer(Buffer.from(source, 'utf8')), { objectMode: false });
   if (Buffer.isBuffer(source)) return Readable.from(sliceBuffer(source), { objectMode: false });
 
   const stream = createReadStream(source.file, { highWaterMark: CHUNK_BYTES });
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const onOpen = () => {
       stream.off('error', onError);
       resolve(stream);
     };
-    const onError = () => {
+    const onError = (error: NodeJS.ErrnoException) => {
       stream.off('open', onOpen);
-      resolve(null);
+      if (error.code === 'ENOENT') resolve(null);
+      else reject(error);
     };
     stream.once('open', onOpen);
     stream.once('error', onError);

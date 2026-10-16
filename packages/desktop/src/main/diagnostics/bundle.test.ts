@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HostDiagnostics, ProfileStatus } from '@parley/protocol';
+import { S } from '../../shared/strings.js';
 import { saveDiagnostics, type SaveDiagnosticsDeps } from './bundle.js';
 import type { RpcRecord } from './rpc-ring.js';
 
@@ -81,6 +82,21 @@ function makeDeps(overrides: Partial<SaveDiagnosticsDeps> = {}): SaveDiagnostics
   };
 }
 
+/** `call`, который на `host.diagnostics` отвечает заданным снимком. */
+function answerWith(info: HostDiagnostics): SaveDiagnosticsDeps['call'] {
+  return vi.fn(async (method: string): Promise<unknown> => {
+    if (method === 'host.diagnostics') return info;
+    throw new Error(`unexpected ${method}`);
+  });
+}
+
+/** `call` хоста, не знающего метода: ответа `host.diagnostics` нет, pid остаётся только в `host.pid`. */
+function unsupportedCall(): SaveDiagnosticsDeps['call'] {
+  return vi.fn(async () => {
+    throw new Error('unknown method host.diagnostics');
+  });
+}
+
 function listZip(file: string): string {
   return spawnSync('unzip', ['-l', file], { encoding: 'utf8' }).stdout;
 }
@@ -91,8 +107,8 @@ function readFromZip(file: string, name: string): string {
 
 describe('saveDiagnostics', () => {
   it.skipIf(!HAS_UNZIP)('собирает архив со всеми файлами и responded:true', async () => {
-    // Настоящие ps и сводка системы: дерево процессов хоста (pid теста) попадает в processes.txt.
-    const deps = makeDeps();
+    // Настоящие ps и сводка системы: дерево процессов хоста (pid теста, он же в ответе хоста) попадает в processes.txt.
+    const deps = makeDeps({ call: answerWith({ ...HOST_INFO, pid: process.pid }) });
     delete deps.processTree;
     delete deps.systemSummary;
 
@@ -116,8 +132,8 @@ describe('saveDiagnostics', () => {
     expect(lines.map((line) => JSON.parse(line) as RpcRecord)).toEqual(RECORDS);
   });
 
-  it.skipIf(!HAS_UNZIP)('processes.txt: дерево по pid из host.pid, затем пустая строка и сводка системы', async () => {
-    const deps = makeDeps();
+  it.skipIf(!HAS_UNZIP)('processes.txt: хост не ответил — дерево по pid из host.pid, затем пустая строка и сводка системы', async () => {
+    const deps = makeDeps({ call: unsupportedCall() });
 
     const result = await saveDiagnostics(deps, { profile: false });
 
@@ -125,9 +141,19 @@ describe('saveDiagnostics', () => {
     expect(readFromZip(result.file, 'processes.txt')).toBe(`tree of ${process.pid}\n\ncpus: 8`);
   });
 
-  it.skipIf(!HAS_UNZIP)('без host.pid в processes.txt строка host.pid: missing', async () => {
+  it.skipIf(!HAS_UNZIP)('pid хоста берётся из ответа host.diagnostics, а не из host.pid', async () => {
+    await writeFile(path.join(hostDir, 'host.pid'), '777\n2026-10-16T10:00:00.000Z\n');
+    const deps = makeDeps({ call: answerWith({ ...HOST_INFO, pid: 4242 }) });
+
+    const result = await saveDiagnostics(deps, { profile: false });
+
+    expect(deps.processTree).toHaveBeenCalledWith([4242]);
+    expect(readFromZip(result.file, 'processes.txt')).toBe('tree of 4242\n\ncpus: 8');
+  });
+
+  it.skipIf(!HAS_UNZIP)('без host.pid и без ответа хоста в processes.txt строка host.pid: missing', async () => {
     await rm(path.join(hostDir, 'host.pid'));
-    const deps = makeDeps();
+    const deps = makeDeps({ call: unsupportedCall() });
 
     const result = await saveDiagnostics(deps, { profile: false });
 
@@ -146,7 +172,7 @@ describe('saveDiagnostics', () => {
     expect(existsSync(result.file)).toBe(true);
     const info = JSON.parse(readFromZip(result.file, 'host-info.json')) as Record<string, unknown>;
     expect(info).toMatchObject({ responded: false, timeoutMs: 50 });
-    expect(typeof info.error).toBe('string');
+    expect(info).not.toHaveProperty('error');
     expect(readFromZip(result.file, 'app-info.json')).toContain('"hostResponded": false');
   });
 
@@ -171,14 +197,15 @@ describe('saveDiagnostics', () => {
   });
 
   it.skipIf(!HAS_UNZIP)('метод не поддержан (call отвергает) — responded:false с error', async () => {
-    const deps = makeDeps({ call: vi.fn(async () => { throw new Error('unknown method host.diagnostics'); }) });
+    const deps = makeDeps({ call: unsupportedCall() });
 
     const result = await saveDiagnostics(deps, { profile: false });
 
     expect(result.hostResponded).toBe(false);
     const info = JSON.parse(readFromZip(result.file, 'host-info.json')) as Record<string, unknown>;
-    expect(info).toMatchObject({ responded: false, timeoutMs: 1000 });
+    expect(info).toMatchObject({ responded: false });
     expect(info.error).toContain('unknown method');
+    expect(info).not.toHaveProperty('timeoutMs');
   });
 
   it.skipIf(!HAS_UNZIP)('свежий дом без host.log.1 и host.err — архив без них', async () => {
@@ -266,5 +293,55 @@ describe('saveDiagnostics', () => {
 
     expect(Date.now() - started).toBeLessThan(2000);
     expect(result.hostResponded).toBe(true);
+  });
+
+  it.skipIf(!HAS_UNZIP)('profile: статус навсегда running — ожидание прекращается по дедлайну, архив собирается без профиля', async () => {
+    let statusCalls = 0;
+    const running: ProfileStatus = { state: 'running', startedAt: '2026-10-16T12:00:00.000Z', seconds: 0.01 };
+    const call = vi.fn(async (method: string): Promise<unknown> => {
+      if (method === 'host.profile.start') return running;
+      if (method === 'host.profile.status') {
+        statusCalls += 1;
+        return running;
+      }
+      return HOST_INFO;
+    });
+
+    const result = await saveDiagnostics(
+      makeDeps({ call, profileSeconds: 0.01, profilePollMs: 5, profileGraceMs: 50 }),
+      { profile: true },
+    );
+
+    expect(existsSync(result.file)).toBe(true);
+    expect(result.hostResponded).toBe(true);
+    // Дедлайн 10 мс + 50 мс при опросе раз в 5 мс: опросов несколько, но конечное число.
+    expect(statusCalls).toBeGreaterThan(0);
+    expect(statusCalls).toBeLessThan(100);
+    expect(listZip(result.file)).not.toContain('.cpuprofile');
+  });
+
+  it.skipIf(!HAS_UNZIP)('приватность: токен, сокет и providers.json хоста в архив не попадают (спека A7)', async () => {
+    const marker = 'SECRET-MARKER';
+    await writeFile(path.join(hostDir, 'host.token'), `${marker}\n`);
+    await writeFile(path.join(hostDir, 'host.sock'), marker);
+    await writeFile(path.join(hostDir, 'providers.json'), JSON.stringify({ glm: { env: { ANTHROPIC_AUTH_TOKEN: marker } } }));
+
+    const result = await saveDiagnostics(makeDeps(), { profile: false });
+
+    const names = spawnSync('unzip', ['-Z1', result.file], { encoding: 'utf8' }).stdout.trim().split('\n');
+    expect(names).toEqual(['README.txt', 'host.log', 'host-info.json', 'app-info.json', 'processes.txt', 'actions.jsonl']);
+    // `unzip -p` без имён распаковывает в stdout все записи: маркера нет ни в одной.
+    expect(spawnSync('unzip', ['-p', result.file], { encoding: 'utf8' }).stdout).not.toContain(marker);
+  });
+});
+
+describe('README диагностики (S.diagnostics.readme)', () => {
+  it('называет архив, состав процессов, приватность и куда отправить', () => {
+    const { readme } = S.diagnostics;
+
+    expect(readme).toContain('Parley diagnostics bundle');
+    expect(readme).toContain('executable name only');
+    expect(readme).toContain('Message text, terminal output, provider keys and environment variables are not.');
+    expect(readme).toContain('https://github.com/Kalmbik61/Parley/issues');
   });
 });

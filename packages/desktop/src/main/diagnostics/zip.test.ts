@@ -1,10 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeZip } from './zip.js';
 
 const hasUnzip = existsSync('/usr/bin/unzip');
@@ -107,5 +107,31 @@ describe('writeZip', () => {
     // `unzip -Z -T` печатает метку времени записи как ГГГГММДД.ЧЧММСС.
     const listing = unzip(['-Z', '-T', target]).stdout.toString();
     expect(listing).toMatch(/20261016\.103004 a\.txt/);
+  });
+
+  it('сбой записи: несуществующий каталог target — writeZip отклоняется, .tmp не остаётся, процесс не падает', async () => {
+    const missing = path.join(dir, 'нет-каталога', 'out.zip');
+    const uncaught = vi.fn();
+    process.once('uncaughtException', uncaught);
+    try {
+      await expect(writeZip(missing, [{ name: 'a.txt', source: 'a' }])).rejects.toThrow();
+      // Даём событию 'error' потока записи дойти до обработчиков: без слушателя оно стало бы uncaughtException.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      process.off('uncaughtException', uncaught);
+    }
+
+    expect(uncaught).not.toHaveBeenCalled();
+    expect(existsSync(`${missing}.tmp`)).toBe(false);
+  });
+
+  it('нечитаемый файл-источник (каталог вместо файла, EISDIR) отклоняет writeZip, а не попадает в skipped', async () => {
+    const asDirectory = path.join(dir, 'host.log');
+    await mkdir(asDirectory);
+
+    await expect(writeZip(target, [{ name: 'host.log', source: { file: asDirectory } }])).rejects.toThrow(/EISDIR/);
+
+    expect(existsSync(target)).toBe(false);
+    expect(existsSync(`${target}.tmp`)).toBe(false);
   });
 });
