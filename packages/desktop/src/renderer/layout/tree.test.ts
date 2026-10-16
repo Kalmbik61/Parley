@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ViewportSpec } from '../../shared/browser-devtools.js';
-import type { GroupNode, LayoutNode, TabSpec, WorkLayout } from '../../shared/layout-types.js';
+import type { BrowserPanelSpec, GroupNode, LayoutNode, TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { tabId } from './ids.js';
 import {
   LIMITS,
+  PANEL_LIMITS,
   closeTab,
   emptyLayout,
   findTab,
@@ -1185,5 +1186,83 @@ describe('цель «To» вкладки браузера (этап B, спек�
     for (const bad of [{ kind: 'session' }, { kind: 'room', roomId: 5 }, 'x', null]) {
       expect(parsed(withTarget(bad)), JSON.stringify(bad)).toEqual(page);
     }
+  });
+});
+
+describe('панели браузера хозяев в раскладке (этап B2, спека браузера 3.10)', () => {
+  const PANEL: BrowserPanelSpec = {
+    open: true,
+    width: 480,
+    pages: [
+      { id: 'bp-000001', url: 'http://localhost:5173/', viewport: { preset: 'mobile-m', rotated: false, dpr: 2 } },
+      { id: 'bp-000002', url: '' },
+    ],
+    active: 'bp-000002',
+  };
+  // Одна раскладка на describe: `emptyLayout()` и `freshTab()` каждый раз берут новые случайные id.
+  const base: WorkLayout = openTab(emptyLayout(), freshTab(), 'active');
+  const withPanels = (panels: unknown): unknown => ({ ...JSON.parse(JSON.stringify(base)), panels });
+
+  it('раскладка до панелей (без поля) читается как есть: поля panels в результате нет', () => {
+    const parsed = parseWorkLayout(JSON.parse(JSON.stringify(base))) as WorkLayout;
+    expect(parsed).toEqual(base);
+    expect('panels' in parsed).toBe(false);
+  });
+
+  it('панели переживают запись на диск и чтение: ключи, страницы, размер, активная, ширина, open', () => {
+    const layout: WorkLayout = { ...base, panels: { 'session:s-01': PANEL, 'room:r-01': { ...PANEL, open: false, pages: [{ id: 'bp-000003', url: 'http://localhost:3000/' }], active: 'bp-000003' } } };
+    expect(parseWorkLayout(JSON.parse(JSON.stringify(layout)))).toEqual(layout);
+  });
+
+  it('мусор панелей раскладку не бракует: чужой ключ, не-объект, панель без страниц, мусорная страница — пропускаются', () => {
+    const raw = withPanels({
+      'session:s-01': PANEL,
+      'terminal:s-01': PANEL,
+      'room:r-01': 5,
+      'room:r-02': { open: true, width: 480, pages: [], active: null },
+      'session:s-02': { open: true, width: 480, pages: [{ id: 5, url: 'x' }, { id: 'bp-000009' }, null], active: null },
+    });
+    const parsed = parseWorkLayout(raw) as WorkLayout;
+    expect(Object.keys(parsed.panels ?? {})).toEqual(['session:s-01']);
+    // Целиком мусорное поле — как будто его нет.
+    for (const bad of [5, 'x', null, [], { 'room:r-01': 5 }]) {
+      const result = parseWorkLayout(withPanels(bad)) as WorkLayout;
+      expect(result, JSON.stringify(bad)).toEqual(base);
+      expect('panels' in result).toBe(false);
+    }
+  });
+
+  it('страниц не больше пяти, id не повторяются на всю раскладку, активная — среди страниц, ширина не меньше 320, открытой без страниц нет', () => {
+    const pages = Array.from({ length: PANEL_LIMITS.pages + 3 }, (_, i) => ({ id: `bp-00000${i}`, url: `http://localhost:${3000 + i}/` }));
+    const raw = withPanels({
+      'session:s-01': { open: true, width: 100, pages, active: 'нет-такой' },
+      // Тот же id страницы в другой панели: дубль пропускается, и панель без единой своей страницы пропадает.
+      'room:r-01': { open: true, width: 'x', pages: [pages[0]], active: pages[0]?.id },
+    });
+    const parsed = parseWorkLayout(raw) as WorkLayout;
+    const first = parsed.panels?.['session:s-01'];
+    expect(first?.pages.map((page) => page.id)).toEqual(pages.slice(0, PANEL_LIMITS.pages).map((page) => page.id));
+    expect(first?.active).toBe('bp-000000');
+    expect(first?.width).toBe(PANEL_LIMITS.minWidth);
+    expect(parsed.panels?.['room:r-01']).toBeUndefined();
+    const noWidth = parseWorkLayout(withPanels({ 'room:r-01': { open: 1, pages: [pages[0]], active: null } })) as WorkLayout;
+    expect(noWidth.panels?.['room:r-01']).toMatchObject({ open: false, width: PANEL_LIMITS.defaultWidth, active: 'bp-000000' });
+  });
+
+  it('лишние поля панели и страницы с диска не путешествуют обратно; мусор в размере страницы — Fit', () => {
+    const raw = withPanels({
+      'session:s-01': { open: true, width: 480, extra: 1, active: 'bp-000001', pages: [{ id: 'bp-000001', url: 'http://localhost:3000/', extra: 2, viewport: { preset: 'нет', rotated: 5 } }] },
+    });
+    const panel = (parseWorkLayout(raw) as WorkLayout).panels?.['session:s-01'];
+    expect(panel).toEqual({ open: true, width: 480, pages: [{ id: 'bp-000001', url: 'http://localhost:3000/' }], active: 'bp-000001' });
+  });
+
+  it('pruneLayout панели не трогает: закрытая вкладка хозяина панель не стирает, ссылка на панели прежняя', () => {
+    const tab = freshTab();
+    const layout: WorkLayout = { ...openTab(emptyLayout(), tab, 'active'), panels: { 'session:s-1': PANEL } };
+    const pruned = pruneLayout(layout, () => false);
+    expect(pruned.panels).toBe(layout.panels);
+    expect(groups(pruned)[0]?.tabs).toEqual([]);
+    expect(closeTab(layout, tab.id).panels).toBe(layout.panels);
   });
 });

@@ -26,6 +26,7 @@ import {
   startSession,
   UNTITLED_WORK,
 } from './launch.js';
+import { BROWSER_PRIORITY_RULE } from './guidance.js';
 import { setResult } from './map.js';
 import { defaultSessionName } from './names.js';
 import { addRoom } from './rooms.js';
@@ -1098,6 +1099,75 @@ describe('системная вставка гида', () => {
     const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
 
     expect(plan.args).not.toContain('--append-system-prompt');
+  });
+});
+
+describe('правило приоритета браузера Parley в запуске (спека браузера 5.1; этап B2)', () => {
+  const agent = { url: 'http://127.0.0.1:4321/agent/browser', token: 'ab'.repeat(32) };
+  /** Значение `--append-system-prompt` (Claude и GLM); '' — флага нет. */
+  const claudeLayer = (args: string[]): string => args[args.indexOf('--append-system-prompt') + 1] ?? '';
+  const codexLayer = (args: string[]): string => {
+    const arg = args.find((value) => value.startsWith('developer_instructions='));
+    if (arg === undefined) throw new Error('developer layer missing');
+    return JSON.parse(arg.slice('developer_instructions='.length)) as string;
+  };
+
+  it('без канала правила нет — у claude и codex (Фокус ревью, п. 5)', async () => {
+    const claude = await pending('claude');
+    const plan = await planLaunch(project, claude.workId, await sessionOf(claude.workId, claude.sessionId));
+    expect(claudeLayer(plan.args)).not.toContain('browser_open');
+
+    const codex = await pending('codex');
+    const codexPlan = await planLaunch(project, codex.workId, await sessionOf(codex.workId, codex.sessionId));
+    expect(codexLayer(codexPlan.args)).not.toContain('browser_open');
+  });
+
+  it('Claude с каналом: правило приоритета в слое при launch, new и resume (Фокус ревью, п. 5)', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const session = await sessionOf(workId, sessionId);
+    const id = '7fa0e1ee-cc7b-4a1e-9d4e-0000000000a1';
+    await claudeTranscript(id);
+    for (const plan of [
+      await planLaunch(project, workId, session, { agent }),
+      await planNew(project, workId, session, { agent }),
+      await planResume(project, workId, { ...session, providerSessionId: id }, { agent }),
+    ]) {
+      expect(claudeLayer(plan.args)).toContain(BROWSER_PRIORITY_RULE);
+    }
+    // Слой тот же, что и без канала, плюс один блок после гида: остальное не сдвинулось.
+    const without = claudeLayer((await planLaunch(project, workId, session)).args);
+    const withRule = claudeLayer((await planLaunch(project, workId, session, { agent })).args);
+    expect(withRule.replace(`\n\n${BROWSER_PRIORITY_RULE}`, '')).toBe(without);
+  });
+
+  it('GLM — тот же Claude Code: правило в слое и канал в файле конфига', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const session = { ...(await sessionOf(workId, sessionId)), provider: 'glm' };
+    const plan = await planLaunch(project, workId, session, { agent });
+    expect(claudeLayer(plan.args)).toContain(BROWSER_PRIORITY_RULE);
+    const file = plan.args[plan.args.indexOf('--mcp-config') + 1] as string;
+    expect(JSON.parse(await readFile(file, 'utf8')).mcpServers.parley.env).toMatchObject({ PARLEY_AGENT_TOKEN: agent.token });
+  });
+
+  it('Codex с каналом: правило приоритета в developer_instructions при launch, new и resume (Фокус ревью, п. 5)', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const session = await sessionOf(workId, sessionId);
+    for (const plan of [
+      await planLaunch(project, workId, session, { agent }),
+      await planNew(project, workId, session, { agent }),
+      await planResume(project, workId, { ...session, providerSessionId: 'codex-thread' }, { agent, prompt: 'INBOX POINTER' }),
+    ]) {
+      expect(codexLayer(plan.args)).toContain(BROWSER_PRIORITY_RULE);
+    }
+  });
+
+  it('канал есть, а сервера MCP у запуска нет (свой шаблон без {mcpConfig}) — правила нет: велеть звать нечего', async () => {
+    const { workId, sessionId } = await pending('claude');
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ claude: { args: ['--append-system-prompt', '{systemPrompt}', '{prompt}'] } }));
+    const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId), { agent });
+    expect(plan.args).toContain('--append-system-prompt');
+    expect(plan.args).not.toContain('--mcp-config');
+    expect(claudeLayer(plan.args)).not.toContain('browser_open');
   });
 });
 
@@ -2238,5 +2308,40 @@ describe('GLM launch plans', () => {
     expect(plan.args).not.toContain('--resume');
     expect(plan.args[plan.args.indexOf('--session-id') + 1]).toBe('glm-conversation');
     expect(plan.providerSessionId).toBe('glm-conversation');
+  });
+});
+
+describe('канал агента к браузеру в запуске (спека браузера 3.7; этап B2)', () => {
+  const agent = { url: 'http://127.0.0.1:4321/agent/browser', token: 'ab'.repeat(32) };
+  const mcpEnvOf = async (args: string[]): Promise<Record<string, string>> => {
+    const file = args[args.indexOf('--mcp-config') + 1] as string;
+    return (JSON.parse(await readFile(file, 'utf8')) as { mcpServers: { parley: { env: Record<string, string> } } }).mcpServers.parley.env;
+  };
+
+  it('адрес и токен — в env сервера parley у claude (файл 0600) и codex (-c), не в окружении процесса и не в argv claude', async () => {
+    const claude = await pending('claude');
+    const plan = await planLaunch(project, claude.workId, await sessionOf(claude.workId, claude.sessionId), { agent });
+    expect(await mcpEnvOf(plan.args)).toMatchObject({ PARLEY_AGENT_URL: agent.url, PARLEY_AGENT_TOKEN: agent.token });
+    expect(plan.env).not.toHaveProperty('PARLEY_AGENT_TOKEN');
+    expect(plan.env).not.toHaveProperty('PARLEY_AGENT_URL');
+    expect(plan.args.join('\n')).not.toContain(agent.token);
+    expect((await stat(plan.args[plan.args.indexOf('--mcp-config') + 1] as string)).mode & 0o777).toBe(0o600);
+
+    const codex = await pending('codex');
+    const codexPlan = await planLaunch(project, codex.workId, await sessionOf(codex.workId, codex.sessionId), { agent });
+    const table = parseTomlAssignment(codexPlan.args.find((arg) => arg.startsWith('mcp_servers.parley=')) as string).value as Record<string, TomlValue>;
+    expect(table['env']).toMatchObject({ PARLEY_AGENT_URL: agent.url, PARLEY_AGENT_TOKEN: agent.token });
+    expect(codexPlan.env).not.toHaveProperty('PARLEY_AGENT_TOKEN');
+  });
+
+  it('без канала в конфиге MCP нет ни адреса, ни токена — у claude и codex', async () => {
+    const claude = await pending('claude');
+    const plan = await planLaunch(project, claude.workId, await sessionOf(claude.workId, claude.sessionId));
+    expect(await mcpEnvOf(plan.args)).not.toHaveProperty('PARLEY_AGENT_TOKEN');
+    expect(await mcpEnvOf(plan.args)).not.toHaveProperty('PARLEY_AGENT_URL');
+
+    const codex = await pending('codex');
+    const codexPlan = await planLaunch(project, codex.workId, await sessionOf(codex.workId, codex.sessionId));
+    expect(codexPlan.args.join('\n')).not.toContain('PARLEY_AGENT');
   });
 });

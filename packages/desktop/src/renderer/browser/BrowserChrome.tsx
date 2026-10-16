@@ -8,7 +8,8 @@
  * - ⌖ Select и ✎ Annotate (этап B) — после меню размеров, перед «To»; подсвечена кнопка включённого режима;
  * - меню цели «To» (`targetMenu`, этап B, спека браузера 4.1) — после ⌖ и ✎, перед консолью;
  * - консоль: значок со счётчиками ошибок (красный) и предупреждений (жёлтый); нули не показываются;
- * - «⋯»: «Open full DevTools» (прежняя кнопка «DevTools») и «Clear console and network».
+ * - «⋯»: «Open full DevTools» (прежняя кнопка «DevTools»), «Clear console and network» и у вкладки человека — подменю
+ *   «Move to browser of…» (`moveMenu`, этап B2).
  * Под строкой — полоса загрузки 2px.
  *
  * Узкая строка (окно 800×500): подпись кнопки размера прячет флаг ширины строки (`ResizeObserver`), остаются значки;
@@ -61,6 +62,8 @@ export interface BrowserChromeProps {
   onClearDevtools(): void;
   /** Меню цели «To» (этап B, спека браузера 4.1): после ⌖ и ✎, перед консолью. */
   targetMenu?: ReactNode;
+  /** Подменю «Move to browser of…» в «⋯» (этап B2, спека браузера 3.10) — только у вкладки человека. */
+  moveMenu?: ReactNode;
 }
 
 /** Ширина содержимого строки (без отступов), с которой видна подпись кнопки размера: порог прежнего контейнерного запроса. */
@@ -183,6 +186,7 @@ export function BrowserChrome(props: BrowserChromeProps): JSX.Element {
         <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={props.onDevTools}>{S.browser.devtools.openFull}</DropdownMenuItem>
           <DropdownMenuItem onSelect={props.onClearDevtools}>{S.browser.devtools.clearAll}</DropdownMenuItem>
+          {props.moveMenu}
         </DropdownMenuContent>
       </DropdownMenu>
       {loading ? <div data-testid="browser-loading" className="absolute inset-x-0 -bottom-px h-0.5 animate-pulse bg-blue-500" /> : null}

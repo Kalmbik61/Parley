@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
 import { lstat, mkdir, open, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { ENV_PREFIX, LEGACY_ENV_PREFIX } from '../names.js';
+import { ENV_PREFIX, LEGACY_ENV_PREFIX, MCP_SERVER_NAME } from '../names.js';
 import { ensureStateDir } from './state-dir.js';
 import { statusLineCommand } from './statusline.js';
 import { workPaths } from './store.js';
@@ -89,7 +89,15 @@ export interface SettingsFile {
   statusLine: StatusLineSetting;
   /** Только `false`: плагины, выключенные в этой сессии (мод jev при сокращённом списке скиллов). */
   enabledPlugins?: Record<string, false>;
+  /** Правила разрешений сессии; сейчас — только заранее разрешённый `browser_open` (спека браузера, 5.1). */
+  permissions?: { allow: string[] };
 }
+
+/**
+ * `browser_open` Parley, как его видит Claude Code: `mcp__<сервер>__<инструмент>` (спека браузера 2026-10-07, 5.1).
+ * Имя сервера — тот же `MCP_SERVER_NAME`, под которым он стоит в конфиге MCP сессии.
+ */
+export const BROWSER_OPEN_PERMISSION = `mcp__${MCP_SERVER_NAME}__browser_open`;
 
 /** События, которые лента получает HTTP-хуками (вид «Chat», решение 1). */
 export const FEED_HOOK_EVENTS = [
@@ -143,6 +151,12 @@ export interface WorkSettingsOptions {
   hookEvents?: readonly string[];
   /** Точные id плагинов, которые выключаются только в этой сессии; пусто или нет — поля в файле нет. */
   disablePlugins?: readonly string[];
+  /**
+   * У сессии есть канал агента, значит, есть и инструмент `browser_open`: снять вопрос Claude Code перед его первым
+   * вызовом правилом `permissions.allow` в этом файле (спека браузера, 5.1; в `~/.claude` ничего не пишется).
+   * Остальные инструменты браузера правило не получают.
+   */
+  allowBrowserOpen?: boolean;
 }
 
 function feedHook(url: string, event: string, tokenEnv: string): HookHttp {
@@ -175,6 +189,7 @@ export function workSettings({
   hookUrl,
   hookEvents = FEED_HOOK_EVENTS,
   disablePlugins = [],
+  allowBrowserOpen = false,
 }: WorkSettingsOptions = {}): SettingsFile {
   const hooks: Record<string, HookMatcher[]> = {};
   for (const event of HOOK_EVENTS) {
@@ -198,6 +213,7 @@ export function workSettings({
     hooks,
     statusLine: { type: 'command', command: statusLineCommand() },
     ...(model === undefined ? {} : { model }),
+    ...(allowBrowserOpen ? { permissions: { allow: [BROWSER_OPEN_PERMISSION] } } : {}),
     ...(disablePlugins.length === 0 ? {} : { enabledPlugins: Object.fromEntries(disablePlugins.map((id) => [id, false as const])) }),
   };
 }

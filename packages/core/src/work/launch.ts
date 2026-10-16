@@ -37,7 +37,7 @@ import type { RoleCatalog } from '../roles/types.js';
 import type { RequiredRolePermissions } from '../roles/catalog.js';
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { loadBrief, writeBrief } from './brief.js';
-import { systemGuidance } from './guidance.js';
+import { BROWSER_PRIORITY_RULE, systemGuidance } from './guidance.js';
 import { readParleyMd } from './parley-md.js';
 import { readProjectMemory } from './project-memory.js';
 import type { MemoryItem } from './project-memory.js';
@@ -45,7 +45,7 @@ import { leadRecipeBlock } from './recipe-lead.js';
 import { buildSessionLayer, developerInstructions, validateLayerArguments, type SessionLayerInput, type SessionLayerWarning } from './session-layer.js';
 import { addSession, removeSession, transitionSession, type NewSession } from './map.js';
 import { NEW_LABEL } from './names.js';
-import { mcpConfigValue, writeMcpConfig } from './mcp-config.js';
+import { mcpConfigValue, writeMcpConfig, type AgentChannel } from './mcp-config.js';
 import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
 import { writeWorkSettings } from './settings-file.js';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
@@ -90,6 +90,13 @@ export interface LaunchOptions {
    * `codexApprovals` даёт `-c hooks.…` в аргументах запуска Codex (спека 2026-10-07, 5.6).
    */
   codexHookCommand?: string;
+  /**
+   * Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): адрес эндпоинта хоста и токен этого запуска. Уходит
+   * только в конфиг MCP-сервера (файл `--mcp-config` у Claude и GLM, `-c mcp_servers.parley` у Codex), в окружение
+   * процесса — нет. Хост передаёт его каждому запуску, если эндпоинт слушает. С ним слой сессии получает правило
+   * приоритета браузера Parley (`BROWSER_PRIORITY_RULE`) — если запуск вообще несёт сервер MCP.
+   */
+  agent?: AgentChannel;
   /** Optional current role/recipe/memory snapshot, never persisted in the session map. */
   layer?: Omit<SessionLayerInput, 'guidance' | 'bridge' | 'brief' | 'parleyMd'>;
 }
@@ -313,13 +320,19 @@ async function plan(
     nativeContextRevision,
     env: process.env,
     ...(channel ? { channel } : {}),
+    ...(options.agent === undefined ? {} : { agent: options.agent }),
   };
 
   // Файл конфига нужен только тем, кто принимает путь; codex получает сервер
   // значением `-c`, и лишний файл ему незачем.
   const file =
     entry.runner.mcpConfig === 'json-file'
-      ? await writeMcpConfig(projectPath, workId, session.id, undefined, channel, { skillNavigator, skillListReduced: skillList !== undefined, nativeContextRevision })
+      ? await writeMcpConfig(projectPath, workId, session.id, undefined, channel, {
+          skillNavigator,
+          skillListReduced: skillList !== undefined,
+          nativeContextRevision,
+          ...(options.agent === undefined ? {} : { agent: options.agent }),
+        })
       : null;
   const mcp = mcpConfigValue(entry.runner.mcpConfig, params, file ?? '');
 
@@ -339,6 +352,8 @@ async function plan(
       ...(options.hookUrl === undefined ? {} : { hookUrl: options.hookUrl }),
       ...(skillNavigator ? { sessionId: session.id } : {}),
       ...(disablePlugins.length > 0 ? { disablePlugins } : {}),
+      // Инструмент `browser_open` у сессии есть, только когда канал агента лёг в конфиг MCP (спека браузера, 5.1).
+      ...(options.agent !== undefined && mcpRoute ? { allowBrowserOpen: true } : {}),
       ...(entry.id === 'glm' ? { provider: 'glm' as const } : {}),
       ...(entry.runner.settingsModel === undefined
         ? {}
@@ -398,6 +413,8 @@ async function plan(
         omitGoal: brief !== null || (!resuming && mode !== 'new' && !quiet),
       }),
       bridge,
+      // Правило — только там, где у агента есть `browser_open`: канал выдан и сервер MCP доходит шаблоном с `{mcpConfig}`.
+      ...(options.agent !== undefined && mcpRoute ? { browser: BROWSER_PRIORITY_RULE } : {}),
       ...(brief === null ? {} : { brief }),
       parleyMd: parley.text,
       memoryItems,

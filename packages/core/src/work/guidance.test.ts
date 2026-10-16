@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MCP_SERVER_NAME } from '../names.js';
 import { GUIDE } from './guide.js';
 import { contextBytes, GUIDANCE_MAX_BYTES, STABLE_POLICY_MAX_BYTES, textHash } from './context-budget.js';
-import { guidanceBudgetProblems, stableGuidance, systemGuidance } from './guidance.js';
+import { BROWSER_PRIORITY_RULE, guidanceBudgetProblems, stableGuidance, systemGuidance } from './guidance.js';
 import { ACCEPTED_LETTER, RETURNED_LETTER } from './proposals.js';
 import type { WorkMap } from './types.js';
 
@@ -718,5 +718,24 @@ describe('бюджет вставки в байтах (P34)', () => {
     const text = systemGuidance(mapOf('Authorization', 'login'), 's-03', { skillNavigator: true });
     expect(text).toContain('find_skill — skills by task, if needed.');
     expect(text).not.toMatch(/must (call|use) find_skill/i);
+  });
+});
+
+describe('правило приоритета браузера Parley (этап B2)', () => {
+  it('короткое, по-английски, называет browser_open и всех, кого он обгоняет, и оставляет им то, чего он не делает', () => {
+    expect(BROWSER_PRIORITY_RULE).not.toMatch(/[А-Яа-яЁё]/);
+    expect(contextBytes(BROWSER_PRIORITY_RULE)).toBeLessThanOrEqual(700);
+    expect(BROWSER_PRIORITY_RULE).toContain("use Parley's browser first");
+    expect(BROWSER_PRIORITY_RULE).toContain('browser_open');
+    expect(BROWSER_PRIORITY_RULE).toContain('the human sees the same tab');
+    for (const other of ['Chrome', 'Chrome DevTools', 'Playwright']) expect(BROWSER_PRIORITY_RULE, other).toContain(other);
+    for (const left of ['other sites', 'running JS', 'cookies', 'files', 'performance traces', 'browser_open is not available']) {
+      expect(BROWSER_PRIORITY_RULE, left).toContain(left);
+    }
+  });
+
+  it('вставка и стабильная политика его не несут: они одни и те же байты у каждой сессии', () => {
+    expect(stableGuidance()).not.toContain('browser_open');
+    expect(systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03')).not.toContain('browser_open');
   });
 });

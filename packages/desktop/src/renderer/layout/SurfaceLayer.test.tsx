@@ -21,8 +21,11 @@ import { terminalSurfaces } from '../terminal/surface-registry.js';
 import { XTERM_LIGHT } from '../terminal/xterm-themes.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
+import { panelAnchor } from '../browser/panel/anchor.js';
+import { panelRuntimeKey, usePanelRuntime } from '../browser/panel/runtime.js';
 import { EMPTY_HISTORY } from './history.js';
 import { LayoutView } from './LayoutView.js';
+import { addPanelPage, setPanelOpen } from './panels.js';
 import { useLayoutStore } from './store.js';
 import { SurfaceLayer } from './SurfaceLayer.js';
 import { tabMeta } from './tab-meta.js';
@@ -653,5 +656,63 @@ describe('SurfaceLayer — вид «Chat» (план 2026-10-01, решение 
     expect(surface('terminal:a')?.style.getPropertyValue('top')).not.toContain('36px');
     expect(screen.queryByTestId('chat-toolbar')).toBeNull();
     expect(bridge.calls.some((call) => call.method.startsWith('feed.'))).toBe(false);
+  });
+});
+
+describe('SurfaceLayer — панели браузера хозяев (этап B2, спека браузера 3.10, 4.11)', () => {
+  const OWNER_B = { kind: 'session', sessionId: 'b' } as const;
+
+  /** Все значения, которые поверхности пробовали поставить свойству `width` (jsdom значения с `anchor-size()` не хранит). */
+  function widthWrites(): { writes: string[]; restore: () => void } {
+    const writes: string[] = [];
+    const original = CSSStyleDeclaration.prototype.setProperty;
+    const spy = vi.spyOn(CSSStyleDeclaration.prototype, 'setProperty').mockImplementation(function (this: CSSStyleDeclaration, name: string, value: string | null, priority?: string) {
+      if (name === 'width' && value !== null) writes.push(value);
+      return original.call(this, name, value, priority ?? '');
+    });
+    return { writes, restore: () => spy.mockRestore() };
+  }
+
+  function addPanel(open: boolean): void {
+    useLayoutStore.getState().apply(WORK_KEY, (layout) => {
+      const added = addPanelPage(layout, OWNER_B, { id: 'bp-000001', url: 'http://localhost:3000/' }).layout;
+      return open ? added : setPanelOpen(added, OWNER_B, false);
+    });
+  }
+
+  beforeEach(() => usePanelRuntime.setState({ hosts: {}, usedAt: {}, published: {}, live: new Set() }));
+
+  it('открытая панель сессии отнимает у её терминала ширину участка по якорю reserve; закрытая — терминал на всю ширину', async () => {
+    const { writes, restore } = widthWrites();
+    try {
+      setLayout(twoGroups(), 'g1');
+      addPanel(true);
+      renderWork();
+      await flush();
+      const reserve = panelAnchor(WORK_KEY, OWNER_B, 'reserve');
+      expect(writes).toContain(`calc(anchor-size(width) - anchor-size(${reserve} width, 0px))`);
+      // Терминалы сессий без панели (a, x) — на всю ширину.
+      expect(writes).toContain('anchor-size(width)');
+      cleanup();
+      writes.length = 0;
+      setLayout(twoGroups(), 'g1');
+      addPanel(false);
+      renderWork();
+      await flush();
+      expect(writes.filter((value) => value.includes('--bpr-'))).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it('клик в панель делает активной группу её хозяина (а не прежнюю активную группу)', async () => {
+    setLayout(twoGroups(), 'g1');
+    addPanel(true);
+    act(() => usePanelRuntime.getState().mountHost(panelRuntimeKey(WORK_KEY, OWNER_B), false));
+    renderWork();
+    await flush();
+    expect(useLayoutStore.getState().layouts[WORK_KEY]?.activeGroupId).toBe('g1');
+    fireEvent.pointerDown(screen.getByTestId('browser-panel-strip'));
+    expect(useLayoutStore.getState().layouts[WORK_KEY]?.activeGroupId).toBe('g2');
   });
 });

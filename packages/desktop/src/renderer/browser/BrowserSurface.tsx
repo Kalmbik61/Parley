@@ -5,6 +5,10 @@
  * группы — как у терминала. Перенос вкладки меняет только якорь: узел `<webview>` в DOM не
  * переносится, иначе гость перезагрузился бы. Это держит сортировка слоя по id вкладки (2.5).
  *
+ * Место поверхности (`BrowserPlace`, этап B2, спека браузера 3.10): вкладка раскладки или страница панели браузера хозяина
+ * (`panel/PanelSurface.tsx`). Страница панели — тот же браузер, но она заполняет поле своей панели, адрес и размер пишет в
+ * запись панели (`panels`), а цель «To» закреплена за хозяином: меню «To» и «Move to browser of…» у неё нет.
+ *
  * Страница — недоверенная: мостов окна и Node в госте нет (страж main, 9.1), а рендерер зовёт
  * у `<webview>` только навигацию — `loadURL`, `goBack`, `goForward`, `reload`, `stop`.
  * Программный доступ к странице — только у main (спека 12.2): Select и Annotate (этап B) тоже идут мостом —
@@ -38,9 +42,10 @@ import { BROWSER_PARTITION, type PickResult, type ViewportFraction } from '../..
 import { viewportNote } from '../../shared/context-markdown.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { ACTIONS, matchesAccelerator, type ActionId, type KeyLike } from '../../shared/keybindings.js';
-import type { BrowserTarget } from '../../shared/layout-types.js';
+import type { BrowserOwner, BrowserTarget } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
+import { updatePanelPage, type PanelPagePatch } from '../layout/panels.js';
 import { useLayoutStore } from '../layout/store.js';
 import { focusTab, updateTab } from '../layout/tree.js';
 import { useUiStore } from '../store/ui.js';
@@ -53,11 +58,14 @@ import { addAnnotationsToChat, cancelMark, saveDraft, syncPins, useAnnotateMode 
 import { BrowserChrome } from './BrowserChrome.js';
 import { createPageContextActions, elementDraft } from './context/actions.js';
 import { TargetMenu } from './context/TargetMenu.js';
+import { targetName } from './context/targets.js';
 import { usePageContext } from './context/use-page-context.js';
 import { DevtoolsPanel } from './devtools/DevtoolsPanel.js';
 import { devtoolsCounters, EMPTY_DEVTOOLS, useDevtoolsStore } from './devtools/store.js';
 import { useDevtoolsFeed } from './devtools/use-devtools-feed.js';
 import { FindBar } from './FindBar.js';
+import { moveTabToPanel } from './panel/actions.js';
+import { MoveToMenu } from './panel/MoveToMenu.js';
 import { fitArea, panelHeight, STAGE, stageBox, type FieldSize } from './stage.js';
 import { clearAddressFocus, toggleBrowserMode, useBrowserStore, wantsAddressFocus, type BrowserTabState } from './store.js';
 import { layoutUrl } from './url.js';
@@ -116,16 +124,23 @@ function sameViewport(a: ViewportSpec | null, b: ViewportSpec | null): boolean {
   return a.width === b.width && a.height === b.height && a.mobile === b.mobile && a.dpr === b.dpr;
 }
 
+/**
+ * Место поверхности (спека браузера 3.10): вкладка раскладки или страница панели хозяина.
+ * - Вкладка встаёт CSS-якорем на тело своей группы, цель «To» у неё своя (нет поля — умолчание).
+ * - Страница панели заполняет поле под полоской страниц (`browser/panel/PanelSurface.tsx`), а цель «To» закреплена за
+ *   хозяином: контекст из браузера чата уходит в этот чат, из браузера комнаты — в комнату. Меню «To» нет.
+ */
+export type BrowserPlace =
+  | { kind: 'tab'; tabId: string; groupId: string; target?: BrowserTarget | undefined }
+  | { kind: 'panel'; owner: BrowserOwner; pageId: string };
+
 export interface BrowserSurfaceProps {
   workKey: string;
-  tabId: string;
-  /** Адрес вкладки из раскладки; '' — новая вкладка. */
+  place: BrowserPlace;
+  /** Адрес вкладки или страницы панели из раскладки; '' — новая страница. */
   url: string;
-  /** Размер вьюпорта вкладки (`TabSpec.viewport`, спека 2026-10-07, 4.2); null — Fit. */
+  /** Размер вьюпорта (`TabSpec.viewport` или `BrowserPanelPage.viewport`, спека 2026-10-07, 4.2); null — Fit. */
   viewport: ViewportSpec | null;
-  /** Цель «To» из раскладки (этап B): нет — умолчание. */
-  target?: BrowserTarget | undefined;
-  groupId: string;
   visible: boolean;
   bridge: ParleyBridge;
   /** Работа вкладки: сессии и комнаты цели «To» (этап B). */
@@ -147,7 +162,9 @@ const IDLE: BrowserTabState = {
   mode: 'off',
 };
 
-export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId, visible, bridge, entry, sendDeps }: BrowserSurfaceProps): JSX.Element {
+export function BrowserSurface({ workKey, place, url, viewport, visible, bridge, entry, sendDeps }: BrowserSurfaceProps): JSX.Element {
+  // Ключ записей стора вкладок, журнала и меток: id вкладки или страницы панели (оба случайные на всё окно, `layout/ids.ts`).
+  const tabId = place.kind === 'tab' ? place.tabId : place.pageId;
   const rootRef = useRef<HTMLDivElement | null>(null);
   const fieldRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<WebviewElement | null>(null);
@@ -155,7 +172,27 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
   // Адрес вкладки уже открывали после захвата (спайк 0.1): повторные dom-ready страницы его не открывают.
   const firstPageRef = useRef(false);
   const state = useBrowserStore((store) => store.tabs[tabId]) ?? IDLE;
-  const pageContext = usePageContext({ bridge, workKey, tabId, entry, stored: target, sendDeps });
+  const pageContext = usePageContext({
+    bridge,
+    workKey,
+    tabId,
+    entry,
+    stored: place.kind === 'tab' ? place.target : undefined,
+    ...(place.kind === 'panel' ? { fixed: place.owner } : {}),
+    sendDeps,
+  });
+  // Адрес и размер живут в раскладке: у вкладки — её поля, у страницы панели — запись панели хозяина.
+  const placeRef = useRef(place);
+  placeRef.current = place;
+  const patchPage = useCallback(
+    (patch: PanelPagePatch): void => {
+      useLayoutStore.getState().apply(workKey, (layout) => {
+        const at = placeRef.current;
+        return at.kind === 'tab' ? updateTab(layout, at.tabId, patch) : updatePanelPage(layout, at.owner, at.pageId, patch);
+      });
+    },
+    [workKey],
+  );
   // Адрес страницы на момент клика «Add to chat»: TabSpec.url, его ведёт сама поверхность.
   const urlRef = useRef(url);
   urlRef.current = url;
@@ -335,10 +372,12 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
   const [docMobile, setDocMobile] = useState<boolean | null>(null);
   const touchStale = stage !== null && docMobile !== null && appliedMobile !== docMobile;
 
-  // Якорные свойства — через `setProperty`, как у терминала: в `CSSProperties` @types/react 18 их нет.
+  // Якорные свойства — через `setProperty`, как у терминала: в `CSSProperties` @types/react 18 их нет. Страница панели
+  // якоря не ставит: она заполняет поле своей панели (`inset-0` на корне).
+  const groupId = place.kind === 'tab' ? place.groupId : null;
   useLayoutEffect(() => {
     const el = rootRef.current;
-    if (el === null) return;
+    if (el === null || groupId === null) return;
     el.style.setProperty('position-anchor', `--g-${groupId}`);
     el.style.setProperty('top', 'anchor(top)');
     el.style.setProperty('left', 'anchor(left)');
@@ -372,7 +411,7 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
     // Адрес — только в раскладку, и только http(s) без user:pass@ (спека 12.1).
     const saveUrl = (next: string | undefined): void => {
       const safe = next === undefined ? null : layoutUrl(next);
-      if (safe !== null) useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tabId, { url: safe }));
+      if (safe !== null) patchPage({ url: safe });
     };
     // Первая страница вкладки (спайк 0.1, вариант D): `<webview>` стартует с about:blank, main к его первому dom-ready
     // уже подключил отладчик и ждёт ответов enable. Адрес открываем после `devtoolsReady`: иначе подресурсы первой
@@ -450,7 +489,7 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
     return () => {
       for (const [type, listener] of Object.entries(listeners)) view.removeEventListener(type, listener);
     };
-  }, [bridge, src, tabId, workKey]);
+  }, [bridge, src, tabId, workKey, patchPage]);
 
   // Favicon качает main (CSP окна внешних картинок не пускает) и шлёт всем вкладкам окна; своя — по id гостя.
   useEffect(
@@ -483,7 +522,7 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
     }
     // Страницы ещё нет: адрес — в раскладку, и `<webview>` смонтируется с ним как с первым `src`.
     const safe = layoutUrl(next);
-    if (safe !== null) useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tabId, { url: safe }));
+    if (safe !== null) patchPage({ url: safe });
   };
 
   const reload = (): void => {
@@ -519,12 +558,20 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
       if (viewportFailed) retryViewport();
       return;
     }
-    useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tabId, { viewport: next }));
+    patchPage({ viewport: next });
   };
 
-  // Поверхность — сосед тела группы, а не потомок: клик в строку сама делает свою вкладку активной.
+  // Поверхность — сосед тела группы, а не потомок: клик в строку сама делает свою вкладку активной. Страница панели
+  // вкладки не имеет: вид хозяина фокусирует вся панель (`PanelSurface`).
   const focusOwnTab = (): void => {
+    if (place.kind !== 'tab') return;
     useLayoutStore.getState().apply(workKey, (layout) => focusTab(layout, tabId));
+  };
+
+  // «⋯ → Move to browser of…» (спека браузера 3.10): адрес и размер уходят в панель хозяина, вкладка закрывается.
+  const moveToPanel = (owner: BrowserOwner): void => {
+    if (place.kind !== 'tab') return;
+    if (moveTabToPanel(workKey, place.tabId, owner) === null) toast(S.browser.panel.moved(targetName(entry, owner)));
   };
 
   const live = src !== null && state.webContentsId !== null;
@@ -540,7 +587,7 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
     <div
       ref={rootRef}
       data-tab-id={tabId}
-      className="absolute flex flex-col overflow-hidden bg-background"
+      className={cn('absolute flex flex-col overflow-hidden bg-background', place.kind === 'panel' && 'inset-0')}
       style={{ visibility: visible ? 'visible' : 'hidden' }}
       onPointerDownCapture={focusOwnTab}
       onFocusCapture={focusOwnTab}
@@ -590,7 +637,12 @@ export function BrowserSurface({ workKey, tabId, url, viewport, target, groupId,
         counters={counters}
         onToggleDevtools={() => useDevtoolsStore.getState().toggle(tabId)}
         onClearDevtools={clearDevtools}
-        targetMenu={<TargetMenu entry={entry} target={pageContext.target} onChange={pageContext.setTarget} />}
+        {...(place.kind === 'tab'
+          ? {
+              targetMenu: <TargetMenu entry={entry} target={pageContext.target} onChange={pageContext.setTarget} />,
+              moveMenu: <MoveToMenu entry={entry} onMove={moveToPanel} />,
+            }
+          : {})}
       />
       <div ref={fieldRef} data-testid="browser-field" className={cn('relative min-h-0 flex-1 overflow-hidden', stage !== null && 'bg-muted')}>
         {src === null ? (

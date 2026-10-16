@@ -1,8 +1,9 @@
-import type { MethodName, NotificationName } from '@parley/protocol';
+import type { BrowserAgentResult, MethodName, NotificationName, Params } from '@parley/protocol';
+import type { BrowserEndpoint } from '../agent/browser-endpoint.js';
 import type { BacklogService } from '../backlog/backlog-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { Client } from '../client.js';
-import type { AnyHandler, AnyNotificationHandler } from '../context.js';
+import type { AnyHandler, AnyNotificationHandler, RequestInfo } from '../context.js';
 import type { CompactionService } from '../compaction/compaction-service.js';
 import { createCompactionMethods } from '../compaction/compaction-methods.js';
 import type { Profiler } from '../diagnostics/profiler.js';
@@ -87,6 +88,8 @@ export interface MethodDeps {
   compaction?: CompactionService;
   /** Явная проверка ключа Z.ai (`providers.check`); без неё метода нет, а в `providers.list` нет `check`. */
   glmCheck?: GlmCheckService;
+  /** Канал агента к браузеру окна (спека браузера 3.7): ответ окна `browser.agentResult`; без него метода нет. */
+  browserAgent?: Pick<BrowserEndpoint, 'resolve'>;
   /** Состояние хоста для `host.diagnostics`; методы диагностики регистрируются, только когда заданы и он, и `profiler`. */
   health?: HealthService;
   /** CPU-профиль по запросу (`host.profile.*`); без него (и без `health`) методов диагностики у хоста нет. */
@@ -264,6 +267,13 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     methods['feed.unsubscribe'] = feed.feedUnsubscribe as AnyHandler;
     methods['feed.decide'] = feed.feedDecide as AnyHandler;
     methods['feed.interrupt'] = feed.feedInterrupt as AnyHandler;
+  }
+  if (deps.browserAgent !== undefined) {
+    const endpoint = deps.browserAgent;
+    methods['browser.agentResult'] = (async (params: Params<'browser.agentResult'>, request: RequestInfo) => {
+      const result: BrowserAgentResult = params.ok ? { ok: true, result: params.result } : { ok: false, error: params.error };
+      return { accepted: endpoint.resolve(params.opId, result, request.client) };
+    }) as AnyHandler;
   }
   if (deps.health !== undefined && deps.profiler !== undefined) {
     // Не в `WORKS_GATED_METHODS`: снимка работ диагностика не читает и должна отвечать, пока хост ещё стартует.

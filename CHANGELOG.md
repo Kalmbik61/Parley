@@ -6,6 +6,21 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+Chats and rooms get a browser of their own next to the view, and an agent can show you a page from localhost there without taking your focus.
+
+### Added
+
+- **A browser next to every Chat and room.** The **Browser** button opens a panel beside the view with its own pages
+  (up to five), Console | Network, sizes, Select and Annotate. What you pick or annotate goes to the chat or room the
+  panel belongs to. The pages survive restarting the window, and in a narrow window the panel covers the view with a
+  **Back** button. A page of a regular browser tab can be sent there with **⋯ → Move to browser of…**.
+- **Agents can open a page for you.** An agent can put a page on localhost into the browser of its own chat or of
+  its room. You see it in that panel; if the view is not on screen, a toast says "S02 opened localhost:5173" with a
+  **Show** button. The agent never changes your active tab or workspace and never takes the keyboard focus, and the
+  same address (without `#fragment`) is not opened twice. Agents that run with Parley's own settings do not ask you
+  before opening a page.
+- **Let agents use the browser.** A switch in Settings → Browser turns agent access off for all sessions at once.
+
 ### Changed
 
 - **The built-in minimal-development skill asks for more care around a change.** Before editing, an agent lists

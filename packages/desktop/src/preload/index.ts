@@ -3,6 +3,8 @@ import type { EventMessage, EventName, MethodName, NotificationName } from '@par
 import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../shared/bridge.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import type {
+  AgentOpenTab,
+  AgentOpenTabResult,
   AnnotationPick,
   AnnotationPin,
   AnnotationPosition,
@@ -53,6 +55,7 @@ const browserOpenTabListeners = new Set<(e: BrowserOpenTab) => void>();
 const browserFaviconListeners = new Set<(e: BrowserFavicon) => void>();
 const browserFocusListeners = new Set<(e: { webContentsId: number }) => void>();
 const browserDevtoolsListeners = new Set<(batch: DevtoolsBatch) => void>();
+const browserAgentOpenTabListeners = new Set<(e: AgentOpenTab) => void>();
 const windowFocusListeners = new Set<(focused: boolean) => void>();
 const updateListeners = new Set<(info: UpdateInfo) => void>();
 const voiceProgressListeners = new Set<(progress: DownloadProgress) => void>();
@@ -130,6 +133,10 @@ ipcRenderer.on('browser:focus', (_event, e: { webContentsId: number }) => {
 
 ipcRenderer.on('browser:devtools', (_event, batch: DevtoolsBatch) => {
   for (const listener of browserDevtoolsListeners) listener(batch);
+});
+
+ipcRenderer.on('browser:agent-open-tab', (_event, e: AgentOpenTab) => {
+  for (const listener of browserAgentOpenTabListeners) listener(e);
 });
 
 ipcRenderer.on('app:window-focus', (_event, focused: boolean) => {
@@ -351,6 +358,12 @@ const bridge = {
     },
     setViewport: (webContentsId: number, spec: ViewportSpec | null, area: { width: number; height: number }) =>
       ipcRenderer.invoke('browser:set-viewport', webContentsId, spec, area) as Promise<{ scale: number }>,
+    onAgentOpenTab: (listener: (e: AgentOpenTab) => void) => {
+      browserAgentOpenTabListeners.add(listener);
+      return () => browserAgentOpenTabListeners.delete(listener);
+    },
+    agentOpenTabResult: (requestId: string, result: AgentOpenTabResult) =>
+      ipcRenderer.invoke('browser:agent-open-tab-result', requestId, result) as Promise<void>,
   },
   voice: {
     listModels: () => ipcRenderer.invoke('voice:list-models') as Promise<VoiceModelId[]>,

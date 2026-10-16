@@ -21,3 +21,29 @@ describe('reduced skill list launch snapshot', () => {
     expect(contextFromEnv({ ...base, PARLEY_SKILL_LIST_REDUCED: 'true' })).not.toHaveProperty('skillListReduced');
   });
 });
+
+describe('канал агента к браузеру (спека браузера 3.7; этап B2)', () => {
+  const token = 'ab'.repeat(32);
+  const url = 'http://127.0.0.1:4321/agent/browser';
+
+  it('адрес 127.0.0.1…/agent/browser и токен из 64 hex — канал есть', () => {
+    expect(contextFromEnv({ ...base, PARLEY_AGENT_URL: url, PARLEY_AGENT_TOKEN: token }).agent).toEqual({ url, token });
+  });
+
+  it('нет одной из переменных, чужой хост, путь или схема, короткий токен, прежние имена — канала нет', () => {
+    for (const env of [
+      { PARLEY_AGENT_URL: url },
+      { PARLEY_AGENT_TOKEN: token },
+      { PARLEY_AGENT_URL: 'http://evil.example:4321/agent/browser', PARLEY_AGENT_TOKEN: token },
+      { PARLEY_AGENT_URL: 'http://localhost:4321/agent/browser', PARLEY_AGENT_TOKEN: token },
+      { PARLEY_AGENT_URL: 'http://127.0.0.1:4321/hooks', PARLEY_AGENT_TOKEN: token },
+      { PARLEY_AGENT_URL: 'https://127.0.0.1:4321/agent/browser', PARLEY_AGENT_TOKEN: token },
+      { PARLEY_AGENT_URL: 'not a url', PARLEY_AGENT_TOKEN: token },
+      { PARLEY_AGENT_URL: url, PARLEY_AGENT_TOKEN: 'short' },
+      { PARLEY_AGENT_URL: url, PARLEY_AGENT_TOKEN: token.toUpperCase() },
+      { HARNAS_AGENT_URL: url, HARNAS_AGENT_TOKEN: token },
+    ]) {
+      expect(contextFromEnv({ ...base, ...env }), JSON.stringify(env)).not.toHaveProperty('agent');
+    }
+  });
+});

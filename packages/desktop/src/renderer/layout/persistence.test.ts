@@ -14,7 +14,8 @@ import { tabId } from './ids.js';
 import { emptyLayout, groups, openTab, splitGroup } from './tree.js';
 import { EMPTY_HISTORY } from './history.js';
 import { useLayoutStore } from './store.js';
-import { ensureHydrated, isTabAlive, neighborWork, useLayoutPersistence, type UseLayoutPersistenceInput } from './persistence.js';
+import { addPanelPage, panelOf } from './panels.js';
+import { ensureHydrated, isPanelOwnerAlive, isTabAlive, neighborWork, useLayoutPersistence, type UseLayoutPersistenceInput } from './persistence.js';
 
 function session(id: string, overrides: Partial<WorkSession> = {}): WorkSession {
   return {
@@ -123,6 +124,26 @@ describe('isTabAlive', () => {
     expect(
       isTabAlive(entry, { kind: 'file', id: 'f', root: { kind: 'worktree', sessionId: 's-99' }, path: 'a.ts' }),
     ).toBe(false);
+  });
+});
+
+describe('isPanelOwnerAlive (панели браузера, спека браузера 3.10)', () => {
+  const entry = work('w-a', '/tmp/a', [session('s-01'), session('s-02', { lifecycle: 'closed' })]);
+  entry.map.rooms.push(
+    { id: 'r-01', title: 'r', creator: 'human', members: [], createdAt: '2026-01-01' },
+    { id: 'r-02', title: 'r2', creator: 'human', members: [], createdAt: '2026-01-01', archivedAt: '2026-02-01' },
+  );
+
+  it('сессия — по наличию в карте, закрытая жива (её вкладка и панель живут до удаления)', () => {
+    expect(isPanelOwnerAlive(entry, { kind: 'session', sessionId: 's-01' })).toBe(true);
+    expect(isPanelOwnerAlive(entry, { kind: 'session', sessionId: 's-02' })).toBe(true);
+    expect(isPanelOwnerAlive(entry, { kind: 'session', sessionId: 's-99' })).toBe(false);
+  });
+
+  it('комната — по наличию в карте, архивная мертва', () => {
+    expect(isPanelOwnerAlive(entry, { kind: 'room', roomId: 'r-01' })).toBe(true);
+    expect(isPanelOwnerAlive(entry, { kind: 'room', roomId: 'r-02' })).toBe(false);
+    expect(isPanelOwnerAlive(entry, { kind: 'room', roomId: 'r-99' })).toBe(false);
   });
 });
 
@@ -273,6 +294,75 @@ describe('useLayoutPersistence', () => {
       },
       { timeout: 2000 },
     );
+  });
+
+  describe('панели браузера хозяев', () => {
+    const chat = { kind: 'session', sessionId: 's-02' } as const;
+    const room = { kind: 'room', roomId: 'r-01' } as const;
+
+    function entryWithRoom(sessions: WorkSession[], archived = false): WorkEntry {
+      const entry = work('w-a', '/tmp/a', sessions);
+      entry.map.rooms.push({ id: 'r-01', title: 'r', creator: 'human', members: [], createdAt: '2026-01-01', ...(archived ? { archivedAt: '2026-02-01' } : {}) });
+      return entry;
+    }
+
+    it('восстановление оставляет панели живых хозяев и выбрасывает панели удалённых', async () => {
+      const bridge = createFakeBridge();
+      let raw: WorkLayout = openTab(emptyLayout(), { kind: 'terminal', id: tabId.terminal('s-01'), sessionId: 's-01' }, 'active');
+      raw = addPanelPage(raw, { kind: 'session', sessionId: 's-01' }, { id: 'bp-000001', url: 'http://localhost:3000/' }).layout;
+      raw = addPanelPage(raw, chat, { id: 'bp-000002', url: 'http://localhost:3001/' }).layout;
+      raw = addPanelPage(raw, room, { id: 'bp-000003', url: 'http://localhost:3002/' }).layout;
+      await bridge.app.saveLayout(keyA, raw);
+
+      // Сессии s-02 в карте нет, комната r-01 — в архиве.
+      renderHook(() => useLayoutPersistence({ bridge, works: [entryWithRoom([session('s-01')], true)], worksLoaded: true, order: [keyA], visibleOrder: [keyA] }));
+      await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
+
+      const restored = useLayoutStore.getState().layouts[keyA] as WorkLayout;
+      expect(Object.keys(restored.panels ?? {})).toEqual(['session:s-01']);
+    });
+
+    it('закрытая вкладка хозяина панель не стирает, а исчезнувший хозяин — стирает и в живой раскладке', async () => {
+      const bridge = createFakeBridge();
+      const withSession = entryWithRoom([session('s-01'), session('s-02')]);
+      const { rerender } = renderHook(
+        ({ entries }: { entries: WorkEntry[] }) => useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order: [keyA], visibleOrder: [keyA] }),
+        { initialProps: { entries: [withSession] } },
+      );
+      await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
+      const tab: TabSpec = { kind: 'terminal', id: tabId.terminal('s-02'), sessionId: 's-02' };
+      useLayoutStore.getState().apply(keyA, (l) => openTab(l, tab, 'active'));
+      useLayoutStore.getState().apply(keyA, (l) => addPanelPage(l, chat, { id: 'bp-000001', url: 'http://localhost:3000/' }));
+      useLayoutStore.getState().apply(keyA, (l) => addPanelPage(l, room, { id: 'bp-000002', url: 'http://localhost:3001/' }));
+
+      await useLayoutStore.getState().requestCloseTabs(keyA, [tab.id]);
+      expect(Object.keys((useLayoutStore.getState().layouts[keyA] as WorkLayout).panels ?? {})).toEqual(['session:s-02', 'room:r-01']);
+
+      // Комнату убрали в архив — её панель уходит, панель сессии остаётся.
+      rerender({ entries: [entryWithRoom([session('s-01'), session('s-02')], true)] });
+      expect(Object.keys((useLayoutStore.getState().layouts[keyA] as WorkLayout).panels ?? {})).toEqual(['session:s-02']);
+
+      // Сессию удалили — уходит и она, поля panels в раскладке больше нет.
+      rerender({ entries: [entryWithRoom([session('s-01')], true)] });
+      expect((useLayoutStore.getState().layouts[keyA] as WorkLayout).panels).toBeUndefined();
+    });
+
+    it('изменение панели уходит на диск после тишины, как изменение вкладок', async () => {
+      const bridge = createFakeBridge();
+      renderHook(() => useLayoutPersistence({ bridge, works: [entryWithRoom([session('s-02')])], worksLoaded: true, order: [keyA], visibleOrder: [keyA] }));
+      await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
+
+      useLayoutStore.getState().apply(keyA, (l) => addPanelPage(l, chat, { id: 'bp-000001', url: 'http://localhost:3000/' }));
+
+      await waitFor(
+        () => {
+          const saved = bridge.layoutSaves.find((item) => item.workKey === keyA);
+          expect(saved).toBeDefined();
+          expect(panelOf(saved?.layout as WorkLayout, chat)?.pages).toEqual([{ id: 'bp-000001', url: 'http://localhost:3000/' }]);
+        },
+        { timeout: 2000 },
+      );
+    });
   });
 
   it('пять изменений за 200 мс дают одно сохранение; изменения в двух работах — два сохранения (тест 3)', async () => {

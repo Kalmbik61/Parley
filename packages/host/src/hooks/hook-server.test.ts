@@ -441,3 +441,34 @@ describe('удержанные хуки', () => {
 function cardState(service: FeedService): string {
   return service.decide(REF, 'permission:t1', { kind: 'question', answers: {} }).state;
 }
+
+describe('другие пути сервера (спека браузера 3.7; этап B2)', () => {
+  it('POST на путь из routes уходит его обработчику без проверки токена хуков; GET туда и чужой путь — 404; origin — основа адреса', async () => {
+    const seen: string[] = [];
+    const { server, url, token } = await boot({
+      routes: {
+        '/agent/browser': (req, res) => {
+          seen.push(req.method ?? '');
+          res.writeHead(204).end();
+        },
+      },
+    });
+    const origin = server.origin();
+    expect(origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(url).toBe(`${origin}/hooks`);
+    expect((await post(`${origin}/agent/browser`, {}, { token: null, session: null })).status).toBe(204);
+    expect((await post(`${origin}/agent/browser`, {}, { token, method: 'GET' })).status).toBe(404);
+    expect((await post(`${origin}/agent/other`, {}, { token })).status).toBe(404);
+    expect((await post(`${origin}/__proto__`, {}, { token })).status).toBe(404);
+    expect(seen).toEqual(['POST']);
+    await server.close();
+    expect(server.origin()).toBeNull();
+  });
+
+  it('без routes путь агента — 404, как любой чужой', async () => {
+    const { server, url, token } = await boot();
+    const origin = server.origin();
+    expect(url).toBe(`${origin}/hooks`);
+    expect((await post(`${origin}/agent/browser`, {}, { token })).status).toBe(404);
+  });
+});
