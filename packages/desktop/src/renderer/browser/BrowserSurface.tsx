@@ -45,7 +45,7 @@ import { ACTIONS, matchesAccelerator, type ActionId, type KeyLike } from '../../
 import type { BrowserOwner, BrowserTarget } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
-import { updatePanelPage, type PanelPagePatch } from '../layout/panels.js';
+import { ownerOfPage, panelOf, updatePanelPage, type PanelPagePatch } from '../layout/panels.js';
 import { useLayoutStore } from '../layout/store.js';
 import { focusTab, updateTab } from '../layout/tree.js';
 import { useUiStore } from '../store/ui.js';
@@ -64,7 +64,8 @@ import { DevtoolsPanel } from './devtools/DevtoolsPanel.js';
 import { devtoolsCounters, EMPTY_DEVTOOLS, useDevtoolsStore } from './devtools/store.js';
 import { useDevtoolsFeed } from './devtools/use-devtools-feed.js';
 import { FindBar } from './FindBar.js';
-import { moveTabToPanel } from './panel/actions.js';
+import { reportAgentPage } from './panel/agent-registry.js';
+import { moveTabToPanel, pausePanel } from './panel/actions.js';
 import { MoveToMenu } from './panel/MoveToMenu.js';
 import { fitArea, panelHeight, STAGE, stageBox, type FieldSize } from './stage.js';
 import { clearAddressFocus, toggleBrowserMode, useBrowserStore, wantsAddressFocus, type BrowserTabState } from './store.js';
@@ -574,6 +575,27 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
     if (moveTabToPanel(workKey, place.tabId, owner) === null) toast(S.browser.panel.moved(targetName(entry, owner)));
   };
 
+  // Страница панели для main (реестр агента, этап C): гость и видимость — точно то, что видит человек. Вкладки человека агенту закрыты.
+  const panelOwner = place.kind === 'panel' ? place.owner : null;
+  const panelPageId = place.kind === 'panel' ? place.pageId : null;
+  const panelPaused = useLayoutStore((store) => {
+    const layout = store.layouts[workKey];
+    return panelOwner !== null && layout !== undefined && panelOf(layout, panelOwner)?.paused === true;
+  });
+  useEffect(() => {
+    if (panelOwner === null || panelPageId === null) return;
+    reportAgentPage(bridge, workKey, panelOwner, panelPageId, state.webContentsId, visible);
+  }, [bridge, workKey, panelOwner, panelPageId, state.webContentsId, visible]);
+  // Панель выгружена, а страница в раскладке жива — main помнит её без гостя. Закрытую страницу воскрешать нельзя:
+  // `gone` уже ушёл от подписчика на раскладки, раньше размонтирования.
+  useEffect(() => {
+    if (panelOwner === null || panelPageId === null) return;
+    return () => {
+      const layout = useLayoutStore.getState().layouts[workKey];
+      if (layout !== undefined && ownerOfPage(layout, panelPageId) !== null) reportAgentPage(bridge, workKey, panelOwner, panelPageId, null, false);
+    };
+  }, [bridge, workKey, panelOwner, panelPageId]);
+
   const live = src !== null && state.webContentsId !== null;
   const panel = panelHeight(devtoolsHeight, rootHeight);
   const commitPanelHeight = (height: number): void => {
@@ -642,7 +664,10 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
               targetMenu: <TargetMenu entry={entry} target={pageContext.target} onChange={pageContext.setTarget} />,
               moveMenu: <MoveToMenu entry={entry} onMove={moveToPanel} />,
             }
-          : {})}
+          : {
+              paused: panelPaused,
+              onPause: (next: boolean) => pausePanel(workKey, place.owner, next),
+            })}
       />
       <div ref={fieldRef} data-testid="browser-field" className={cn('relative min-h-0 flex-1 overflow-hidden', stage !== null && 'bg-muted')}>
         {src === null ? (

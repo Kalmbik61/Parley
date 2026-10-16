@@ -64,6 +64,9 @@ export interface BrowserChromeProps {
   targetMenu?: ReactNode;
   /** Подменю «Move to browser of…» в «⋯» (этап B2, спека браузера 3.10) — только у вкладки человека. */
   moveMenu?: ReactNode;
+  /** Агенты панели на паузе (спека 4.8) — только у страницы панели; `onPause` есть тоже только у неё. */
+  paused?: boolean;
+  onPause?(next: boolean): void;
 }
 
 /** Ширина содержимого строки (без отступов), с которой видна подпись кнопки размера: порог прежнего контейнерного запроса. */
@@ -186,6 +189,11 @@ export function BrowserChrome(props: BrowserChromeProps): JSX.Element {
         <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={props.onDevTools}>{S.browser.devtools.openFull}</DropdownMenuItem>
           <DropdownMenuItem onSelect={props.onClearDevtools}>{S.browser.devtools.clearAll}</DropdownMenuItem>
+          {props.onPause === undefined ? null : (
+            <DropdownMenuItem onSelect={() => props.onPause?.(props.paused !== true)}>
+              {props.paused === true ? S.browser.panel.resumeAgents : S.browser.panel.pauseAgents}
+            </DropdownMenuItem>
+          )}
           {props.moveMenu}
         </DropdownMenuContent>
       </DropdownMenu>

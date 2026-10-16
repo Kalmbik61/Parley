@@ -2234,8 +2234,8 @@ describe('AppShell — страница в окне (тесты 1 и 3 куск�
   it('тест 3: пункты browser.find и browser.zoomIn — у страницы активной вкладки активной группы', async () => {
     const { key } = await pageInSecondGroup();
     act(() => bridge.emitMenu('browser.zoomIn'));
-    // Снимок журнала гостя уходит сам, как только известен id (BrowserSurface, devtoolsSnapshot): к меню он не относится.
-    const menuCalls = (): Array<{ method: string; args: unknown[] }> => bridge.browserCalls.filter((call) => call.method !== 'devtoolsSnapshot');
+    // Снимок журнала гостя и реестр страниц для агента (registerTab) уходят сами, как только известен id: к меню они не относятся.
+    const menuCalls = (): Array<{ method: string; args: unknown[] }> => bridge.browserCalls.filter((call) => call.method !== 'devtoolsSnapshot' && call.method !== 'registerTab');
     expect(menuCalls()).toEqual([]);
     act(() => bridge.emitBrowserFocus({ webContentsId: 7 }));
     act(() => bridge.emitMenu('browser.zoomIn'));
@@ -2325,7 +2325,7 @@ describe('AppShell — страница панели браузера хозяи
 
   it('клавиши из страницы панели: ⌘F и масштаб идут к странице панели, на которую кликнули последней; без клика и со скрытой панелью — никуда', async () => {
     const { key } = await panelInSecondGroup();
-    const menuCalls = (): Array<{ method: string; args: unknown[] }> => bridge.browserCalls.filter((call) => call.method !== 'devtoolsSnapshot');
+    const menuCalls = (): Array<{ method: string; args: unknown[] }> => bridge.browserCalls.filter((call) => call.method !== 'devtoolsSnapshot' && call.method !== 'registerTab');
     // Клика в страницу панели ещё не было, а активная вкладка — не браузер: ⌘+ и ⌘F ничего не трогают.
     act(() => bridge.emitMenu('browser.zoomIn'));
     act(() => bridge.emitMenu('browser.find'));

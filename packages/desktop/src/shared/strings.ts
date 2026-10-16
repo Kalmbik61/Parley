@@ -1618,6 +1618,9 @@ export const S = {
       /** Тост, когда агент открыл страницу, а вид хозяина не на экране; «Show» переводит человека к ней. */
       agentOpened: (session: string, address: string): string => `${session} opened ${address}`,
       agentShow: 'Show',
+      /** Пункты «⋯» страницы панели: пауза агентов этого браузера (спека 4.8). */
+      pauseAgents: 'Pause agents',
+      resumeAgents: 'Resume agents',
     },
   },
 

@@ -1855,7 +1855,7 @@ git commit -m "feat(desktop): канал агента в main — реестр �
 - *пауза* — подписчик сравнивает `panel.paused` с последним отправленным и шлёт `{ workKey, owner, paused }` при смене и при гидрации для панелей с `paused: true`; панель исчезла, пока была на паузе, — шлёт `paused: false`, чтобы пересозданная панель не унаследовала старую паузу main;
 - перезагрузка окна: модуль живёт в странице и начинает с пустого состояния, main сбрасывает реестр (`reset`, задача 13) — страницы приходят заново вместе с гидрацией раскладок.
 
-- [ ] **Шаг 1. Написать падающие тесты.**
+- [x] **Шаг 1. Написать падающие тесты.**
 
   `tree.test.ts` (рядом с тестами панелей B2): разбор — `paused: true` переносится, `false`, нет поля и мусор (`'yes'`) — поля нет; пересохранение раскладки с `paused` сохраняет его.
 
@@ -1909,15 +1909,15 @@ describe('реестр страниц панелей для main (этап C, с
 
   `BrowserChrome.test.tsx`: у страницы панели в «⋯» есть «Pause agents» (при `paused` — «Resume agents»), клик зовёт `onPause(!paused)`; у вкладки человека пункта нет.
 
-- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/renderer/layout src/renderer/browser` → FAIL (нет `paused`, `agent-registry.js`, пункта меню).
+- [x] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop exec vitest run src/renderer/layout src/renderer/browser` → FAIL (нет `paused`, `agent-registry.js`, пункта меню).
 
-- [ ] **Шаг 3. Раскладка.**
+- [x] **Шаг 3. Раскладка.**
   - `layout-types.ts`: в `BrowserPanelSpec` — `/** Агенты на паузе в этой панели (спека 4.8): их операции — access_denied, страниц нет в browser_tabs. Поля нет — не на паузе. */ paused?: boolean;`
   - `tree.ts#parseBrowserPanel`: возврат — `{ open: value.open === true, width, pages, active, ...(value.paused === true ? { paused: true } : {}) }`.
   - `panels.ts`: `setPanelPaused(layout, owner, paused)` — по образцу `setPanelOpen`: панели нет или состояние то же — та же раскладка; иначе копия панели с `paused: true` либо без поля.
   - `actions.ts`: `export function pausePanel(workKey, owner, paused): void { run(workKey, (layout) => setPanelPaused(layout, owner, paused)); }`.
 
-- [ ] **Шаг 4. Реестр.** Новый `agent-registry.ts` (состояние модуля: что отправлено по страницам и паузам; сбой отправки — `console.warn`, как у соседей):
+- [x] **Шаг 4. Реестр.** Новый `agent-registry.ts` (состояние модуля: что отправлено по страницам и паузам; сбой отправки — `console.warn`, как у соседей):
 
 ```ts
 import type { ParleyBridge } from '../../../../shared/bridge.js';
@@ -1999,7 +1999,7 @@ export function resetAgentRegistry(): void {
 
   (Импорт `ParleyBridge` и `ownerOfKey` сверить с путями соседних файлов; `pages` хранит и страницы, закрытые до `hydrated`, — они уходят `gone` на ближайшей синхронизации.)
 
-- [ ] **Шаг 5. Поверхность, строка, оболочка, строки.**
+- [x] **Шаг 5. Поверхность, строка, оболочка, строки.**
   - `BrowserSurface.tsx`: для `place.kind === 'panel'` —
 
 ```ts
@@ -2027,9 +2027,9 @@ export function resetAgentRegistry(): void {
   - `AppShell.tsx` рядом с подпиской `onAgentOpenTab`: `useEffect(() => startAgentRegistry(bridge), [bridge]);`
   - `strings.ts`, в `browser.panel` после `agentShow`: `pauseAgents: 'Pause agents'`, `resumeAgents: 'Resume agents'` (подпись снимка — задача 15).
 
-- [ ] **Шаг 6. Запустить — проходит.** Та же команда → PASS; `pnpm --filter @parley/desktop exec vitest run src/renderer src/english-ui.test.ts` → зелёный.
+- [x] **Шаг 6. Запустить — проходит.** Та же команда → PASS; `pnpm --filter @parley/desktop exec vitest run src/renderer src/english-ui.test.ts` → зелёный.
 
-- [ ] **Шаг 7. Закоммитить.**
+- [x] **Шаг 7. Закоммитить.**
 
 ```bash
 git add packages/desktop/src/shared/layout-types.ts packages/desktop/src/shared/strings.ts packages/desktop/src/renderer/layout packages/desktop/src/renderer/browser packages/desktop/src/renderer/shell/AppShell.tsx

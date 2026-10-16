@@ -207,6 +207,13 @@ describe('BrowserSurface (тест 3)', () => {
     expect(useBrowserStore.getState().tabs[TAB]?.webContentsId).toBe(42);
   });
 
+  it('вкладка человека агенту не регистрируется: registerTab не зовётся ни разу', () => {
+    setBrowserTab('http://localhost:5173/');
+    renderWork();
+    fire(arm(webview(), 42), 'dom-ready');
+    expect(bridge.browserCalls.filter((call) => call.method === 'registerTab')).toEqual([]);
+  });
+
   it('загрузка и «назад / вперёд»: полоса загрузки, Stop во время загрузки, кнопки — по canGoBack/canGoForward', () => {
     setBrowserTab('http://localhost:5173/');
     renderWork();

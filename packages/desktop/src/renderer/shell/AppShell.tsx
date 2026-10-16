@@ -103,6 +103,7 @@ import { useLayoutPersistence } from '../layout/persistence.js';
 import { useLayoutStore } from '../layout/store.js';
 import { measureGroupSizes } from '../layout/measure.js';
 import { findTab, focusTab, groups, openTab } from '../layout/tree.js';
+import { startAgentRegistry } from '../browser/panel/agent-registry.js';
 import { focusedPanelPage, focusPanelPage, forgetFocusedPanelPage, handleAgentOpenTab, openPopupInPanel } from '../browser/panel/actions.js';
 import { openBrowserTabFrom, useBrowserStore } from '../browser/store.js';
 import { layoutUrl } from '../browser/url.js';
@@ -640,6 +641,9 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     () => bridge.browser.onAgentOpenTab((event) => void bridge.browser.agentOpenTabResult(event.requestId, handleAgentOpenTab(event))),
     [bridge],
   );
+
+  // Реестр страниц панелей для main: агент видит их по `browser_tabs` (спека 3.7, этап C).
+  useEffect(() => startAgentRegistry(bridge), [bridge]);
 
   // Открывающие действия сайдбара: сессия/почта/комната могут
   // принадлежать НЕ активной сейчас работе (у каждой работы своя раскладка) —
