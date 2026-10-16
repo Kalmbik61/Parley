@@ -62,6 +62,7 @@ import {
   type WorksSnapshot,
 } from '@parley/protocol';
 import type { HostContext } from '../context.js';
+import type { WindowCounters } from '../health/window-counters.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
 import { createSettler } from '../watch-settle.js';
 import type { WorksService } from '../works/works-service.js';
@@ -81,6 +82,8 @@ export interface SessionLive {
  * заводить незачем.
  */
 export interface ActivityServiceOptions extends MetricsRoots {
+  /** Счётчики окна строки состояния: каждый `recompute` сессии — одна запись. */
+  windowCounters?: WindowCounters;
   silenceThresholdMs?: number;
   /** Предел удержания фоновыми субагентами и ожиданием `wait_for` (`activityOf`); по умолчанию — час. */
   backgroundHoldMs?: number;
@@ -731,6 +734,7 @@ export function createActivityService(
     const entry = works.entry(ref.projectPath, ref.workId);
     const session = entry?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
     if (entry === undefined || session === undefined) return;
+    options.windowCounters?.recompute();
 
     const key = refKey(ref);
     const events = eventsFor(session, key);

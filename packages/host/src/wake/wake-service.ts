@@ -38,6 +38,7 @@ import { refKey } from '@parley/protocol';
 import type { MailWait, NoticeKind, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
+import type { WindowCounters } from '../health/window-counters.js';
 import { HostError } from '../errors.js';
 import { CODEX_SUBMIT_DELAY_MS, codexPaste, codexSubmitKey } from '../pty/codex-input.js';
 import { choiceInProgress } from '../pty/effort-switch.js';
@@ -50,6 +51,8 @@ import type { WorksService } from '../works/works-service.js';
 import { ResumeLimiter } from './resume-limiter.js';
 
 export interface WakeServiceOptions {
+  /** Счётчики окна строки состояния: каждый `recompute` сессии — одна запись. */
+  windowCounters?: WindowCounters;
   /** Пауза перед Enter — если человек уже не печатает, указатель уходит как ход (спека 7.3). */
   enterDelayMs?: number;
   /** Ход не начался за это время после указателя — предупреждение, повторного набора нет. */
@@ -570,6 +573,7 @@ export function createWakeService(
     const entry = works.entry(ref.projectPath, ref.workId);
     const session = entry?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
     if (entry === undefined || session === undefined) return;
+    options.windowCounters?.recompute();
     ensureKnown(entry);
 
     const state = stateFor(refKey(ref));

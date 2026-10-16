@@ -114,6 +114,20 @@ describe('ссылки между темами гида', () => {
   });
 });
 
+describe('правила переписки', () => {
+  it('тема letters задаёт предел письма, файл с путём и replyTo', () => {
+    const text = guideTopic('letters') ?? '';
+
+    expect(text).toContain('1200');
+    expect(text).toContain('path');
+    expect(text).toContain('replyTo');
+  });
+
+  it('тема rules запрещает читать map.json напрямую', () => {
+    expect(guideTopic('rules')).toMatch(/Do not read `map\.json`/);
+  });
+});
+
 describe('язык гида', () => {
   it('гид и подписи его тем — по-английски: кириллицы в тексте для агента нет', () => {
     expect(GUIDE).not.toMatch(/[А-Яа-яЁё]/);

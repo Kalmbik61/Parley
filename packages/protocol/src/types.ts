@@ -306,6 +306,15 @@ export interface HealthSample {
   works: number;
   rooms: number;
   clients: number;
+  /** Счётчики окна (с прошлой строки состояния): обновления карт, их время и разобранные байты JSON (только карты, разобранные `readWorks` и наблюдателем; перечитывания `readMap` не входят). */
+  refreshCount: number;
+  refreshMs: number;
+  mapBytesParsed: number;
+  /** Вывод PTY за окно: кусков и байт. */
+  ptyChunks: number;
+  ptyBytes: number;
+  /** Пересчёты сессий за окно: будильник и активность вместе. */
+  recomputes: number;
 }
 
 /** Живая сессия в ответе `host.diagnostics`: без текстов и вывода, только адрес, процесс и состояние. */

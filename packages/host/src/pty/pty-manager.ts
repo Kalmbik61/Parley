@@ -11,6 +11,7 @@
 import { refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
+import type { WindowCounters } from '../health/window-counters.js';
 import { createCodexTerminalParser } from './codex-terminal.js';
 import type { CodexSignal, CodexTerminalParser } from './codex-terminal.js';
 import { DraftTracker } from './draft.js';
@@ -115,7 +116,7 @@ type PtyListener =
   | HostDraftListener
   | SignalListener;
 
-export function createPtyManager(host: HostContext): PtyManager {
+export function createPtyManager(host: HostContext, windowCounters?: WindowCounters): PtyManager {
   const sessions = new Map<string, Session>();
   const outputListeners = new Set<OutputListener>();
   const exitListeners = new Set<ExitListener>();
@@ -161,6 +162,7 @@ export function createPtyManager(host: HostContext): PtyManager {
     host.busy(key, true);
 
     ptyProcess.onData((data) => {
+      windowCounters?.pty(Buffer.byteLength(data));
       session.screen.write(data);
       session.batcher.push(data);
       if (session.terminal === null) return;

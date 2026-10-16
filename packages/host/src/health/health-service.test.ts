@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHealthService } from './health-service.js';
+import { createWindowCounters } from './window-counters.js';
 
 const NS = 1_000_000;
 const MB = 1024 * 1024;
@@ -46,6 +47,7 @@ describe('createHealthService', () => {
     expect(log.info).toHaveBeenCalledWith('host: состояние', {
       cpuPct: 50, rssMb: 490, heapMb: 200, extMb: 30, loop: { maxMs: 100, p99Ms: 20, meanMs: 0 },
       ptys: 15, attached: 3, feedSubs: 2, works: 4, rooms: 2, clients: 1,
+      refreshCount: 0, refreshMs: 0, mapBytesParsed: 0, ptyChunks: 0, ptyBytes: 0, recomputes: 0,
     });
     expect(histogram.reset).toHaveBeenCalledTimes(1);
     service.stop();
@@ -78,9 +80,45 @@ describe('createHealthService', () => {
     expect(sample).toEqual({
       cpuPct: 30, rssMb: 490, heapMb: 200, extMb: 30, loop: { maxMs: 100, p99Ms: 20, meanMs: 0 },
       ptys: 15, attached: 3, feedSubs: 2, works: 4, rooms: 2, clients: 1,
+      refreshCount: 0, refreshMs: 0, mapBytesParsed: 0, ptyChunks: 0, ptyBytes: 0, recomputes: 0,
     });
     expect(histogram.reset).toHaveBeenCalledTimes(1);
     expect(log.info).toHaveBeenCalledTimes(1);
+    service.stop();
+  });
+
+  it('счётчики окна попадают в sample() и в строку, тик обнуляет их, sample() не сбрасывает', () => {
+    const log = fakeLog();
+    const windowCounters = createWindowCounters();
+    const service = createHealthService({
+      log,
+      counters: () => counters,
+      windowCounters,
+      histogram: fakeHistogram(),
+      cpuUsage: (() => ({ user: 0, system: 0 })) as unknown as typeof process.cpuUsage,
+      memoryUsage: fakeMemory,
+      intervalMs: 30_000,
+    });
+    service.start();
+    windowCounters.refresh(40.04);
+    windowCounters.refresh(10.01);
+    windowCounters.mapsParsed(1000);
+    windowCounters.mapsParsed(500);
+    windowCounters.pty(7);
+    windowCounters.pty(3);
+    windowCounters.recompute();
+    windowCounters.recompute();
+    windowCounters.recompute();
+
+    const expected = { refreshCount: 2, refreshMs: 50.1, mapBytesParsed: 1500, ptyChunks: 2, ptyBytes: 10, recomputes: 3 };
+    expect(service.sample()).toMatchObject(expected);
+    expect(service.sample()).toMatchObject(expected); // повторный sample() ничего не сбросил
+
+    vi.advanceTimersByTime(30_000);
+    expect(log.info).toHaveBeenCalledWith('host: состояние', expect.objectContaining(expected));
+    expect(service.sample()).toMatchObject({
+      refreshCount: 0, refreshMs: 0, mapBytesParsed: 0, ptyChunks: 0, ptyBytes: 0, recomputes: 0,
+    });
     service.stop();
   });
 

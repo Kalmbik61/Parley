@@ -35,12 +35,15 @@ import type { WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
 import type { HostContext } from '../context.js';
 import { createSettler } from '../watch-settle.js';
+import type { WindowCounters } from '../health/window-counters.js';
 
 export interface WorksServiceOptions {
   /** Сколько подряд изменений склеивается в одну рассылку `works.changed`. */
   debounceMs?: number;
   /** Таймаут `map.lock` для записей сервиса (живость, аренда). */
   lockTimeoutMs?: number;
+  /** Счётчики окна строки состояния: один `refresh` — одна запись. */
+  windowCounters?: WindowCounters;
 }
 
 export interface WorksService {
@@ -278,11 +281,18 @@ export function createWorksService(
     }
   }
 
+  /** Байты карт считаются там, где список прочитан и разобран, а не в `refresh`: тот бывает на кэшированном списке. */
+  function countParsed(works: readonly WorkEntry[]): void {
+    options.windowCounters?.mapsParsed(works.reduce((sum, work) => sum + (work.bytes ?? 0), 0));
+  }
+
   /** `true` — наблюдатель проекта заведён только что. */
   function ensureWatcher(projectPath: string): boolean {
     if (stopped || watchers.has(projectPath)) return false;
     const watcher = watchWorks(
       (works, seq) => {
+        // Разбор уже случился, даже если список ниже отбросим как устаревший.
+        countParsed(works);
         // Наблюдателей несколько (дом и каждый проект), каждый читает список
         // сам, и медленное старое чтение одного может прийти позже свежего
         // чтения другого.
@@ -316,6 +326,7 @@ export function createWorksService(
     if (stopped) return;
     const seq = latestSeq;
     const fresh = await readWorks(parleyHome()).catch(() => null);
+    if (fresh !== null) countParsed(fresh);
     // Пока читали, пришло событие наблюдателя: его чтение свежее нашего, следующая пауза сверит ещё раз.
     if (stopped || fresh === null || seq !== latestSeq) return;
     if (JSON.stringify(fresh) === JSON.stringify(latest)) return;
@@ -379,7 +390,18 @@ export function createWorksService(
     }
   }
 
+  /** Счётчик окна: проход `refresh` считается и при сбое в `publish` или слушателе, и при раннем выходе из-за `stopped`. */
   async function refresh(works: readonly WorkEntry[]): Promise<void> {
+    const startedAt = performance.now();
+    try {
+      if (stopped) return;
+      await refreshPass(works);
+    } finally {
+      options.windowCounters?.refresh(performance.now() - startedAt);
+    }
+  }
+
+  async function refreshPass(works: readonly WorkEntry[]): Promise<void> {
     if (stopped) return;
     const previous = buildSnapshot();
 
@@ -435,6 +457,7 @@ export function createWorksService(
       for (const item of index.works) ensureWatcher(item.projectPath);
 
       const initial = await readWorks(parleyHome());
+      countParsed(initial);
       // Наблюдатель успел отдать своё чтение, пока шло это, — его и берём:
       // номер у начального чтения не спросить, а следующее событие всё равно
       // перечитает список.

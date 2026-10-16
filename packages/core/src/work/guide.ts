@@ -75,7 +75,8 @@ A revision conflict means refresh get_map and use the accepted current revision.
 A workspace is a whole topic of work: a title, a goal, a set of sessions, rooms and the
 correspondence between them. A session is one agent run inside a workspace: it has a label
 (a role), a task, a lifecycle, a result, a summary and artifacts. The workspace map
-(\`map.json\`) is the shared memory: Parley writes it, everyone reads it. Whatever you want
+(\`map.json\`) is the shared memory: it is a Parley file, read through \`get_map\`,
+\`read_room\` and \`check_inbox\`; you do not open \`.parley/\` as files. Whatever you want
 to pass to neighbouring sessions and to the human gets there through the tools, not through
 files dropped at random.
 
@@ -476,6 +477,15 @@ Do not answer a \`note\` or a \`decision\`: "thanks" and "agreed" cost a colleag
 And do not \`wait_for\` someone who will answer with a message anyway — the message will wake
 you by itself.
 
+Rules for letters:
+
+- A letter to an agent is up to 1200 characters.
+- One thought per letter.
+- Documents, specs, file edits and logs go into a file (an artifact or a project file): the
+  letter carries the path and two lines of substance.
+- Do not quote or retell a colleague's letter: pass \`replyTo\`.
+- Call \`read_room\` only when you need the history; new mail comes from \`check_inbox\`.
+
 A conversation has a cap: \`messageRate\` messages from one session per sliding hour (20 by
 default). If you hit it, the conversation has gone in circles: do not resend the same
 message, but hand in a \`report\` and tell the human where you got stuck.
@@ -515,6 +525,7 @@ your permission settings yourself.`,
 
 - Do not finish without \`report\` — the result will not go anywhere.
 - Do not write to \`map.json\`, \`briefs/\` and \`events/\` by hand: Parley writes the map.
+- Do not read \`map.json\` directly: use \`get_map\`, \`read_room\` and \`check_inbox\`.
 - Do not delete or move the \`.parley\` state directories (and the old
   \`.harnas\` ones) through the shell, even if you are asked to "remove the workspace": you
   have no delete tool on purpose. Tell the human that it is done in the window: a session —
