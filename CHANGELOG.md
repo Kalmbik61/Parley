@@ -6,6 +6,13 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Numbers for a "Parley feels slow" report.** The host status line and the diagnostics archive now carry
+  per-window counters: how many times the workspace maps were re-read and how long that took, how many
+  bytes of map JSON were parsed, how much terminal output arrived (chunks and bytes), and how many session
+  recomputes the wake and activity services did. The counters cover the time since the previous status line.
+
 ### Changed
 
 - **Agents get clear rules for room correspondence.** The guide now tells them to keep a letter under

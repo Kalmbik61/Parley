@@ -1,6 +1,7 @@
 import { monitorEventLoopDelay, type IntervalHistogram } from 'node:perf_hooks';
 import type { HealthSample } from '@parley/protocol';
 import type { Log } from '../log.js';
+import { emptyWindowTally, type WindowCounters } from './window-counters.js';
 
 export const HEALTH_INTERVAL_MS = 30_000;
 
@@ -41,6 +42,8 @@ const round1 = (value: number): number => Math.round(value * 10) / 10;
 export function createHealthService(deps: {
   log: Log;
   counters: () => HealthCounters;
+  /** Счётчики окна: читаются в `sample()`, обнуляются на тике вместе с гистограммой. Без них поля — нули. */
+  windowCounters?: WindowCounters;
   histogram?: Pick<IntervalHistogram, 'enable' | 'disable' | 'reset' | 'max' | 'mean' | 'percentile'>;
   cpuUsage?: typeof process.cpuUsage;
   memoryUsage?: typeof process.memoryUsage;
@@ -67,6 +70,7 @@ export function createHealthService(deps: {
     const cpu = cpuUsage();
     const cpuMs = (cpu.user - baseCpu.user + (cpu.system - baseCpu.system)) / 1000;
     const memory = memoryUsage();
+    const windowTally = deps.windowCounters?.read() ?? emptyWindowTally();
     return {
       cpuPct: wallMs > 0 ? round1((cpuMs / wallMs) * 100) : 0,
       rssMb: Math.round(memory.rss / BYTES_PER_MB),
@@ -74,6 +78,8 @@ export function createHealthService(deps: {
       extMb: Math.round(memory.external / BYTES_PER_MB),
       loop: { maxMs: ms(histogram.max), p99Ms: ms(histogram.percentile(99)), meanMs: ms(histogram.mean) },
       ...deps.counters(),
+      ...windowTally,
+      refreshMs: round1(windowTally.refreshMs),
     };
   };
 
@@ -88,6 +94,7 @@ export function createHealthService(deps: {
         try {
           deps.log.info('host: состояние', sample());
           histogram.reset();
+          deps.windowCounters?.reset();
           baseCpu = cpuUsage();
           baseAt = now();
         } catch {

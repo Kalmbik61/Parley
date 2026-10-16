@@ -10,6 +10,8 @@ import type { WorkMap } from './types.js';
 export interface WorkEntry {
   projectPath: string;
   map: WorkMap;
+  /** Размер файла карты в байтах, как его прочли с диска: для счётчиков хоста, без повторного чтения. */
+  bytes?: number;
 }
 
 const worksDir = (projectPath: string): string => path.join(stateDir(projectPath), 'works');
@@ -23,7 +25,8 @@ const worksDir = (projectPath: string): string => path.join(stateDir(projectPath
 async function readEntry(projectPath: string, workId: string): Promise<WorkEntry | null> {
   const file = workPaths(projectPath, workId).map;
   try {
-    return { projectPath, map: parseMap(await readFile(file, 'utf8'), file) };
+    const text = await readFile(file, 'utf8');
+    return { projectPath, map: parseMap(text, file), bytes: Buffer.byteLength(text) };
   } catch {
     return null;
   }

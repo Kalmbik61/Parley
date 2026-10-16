@@ -21,6 +21,7 @@ import type { Log } from './log.js';
 import { watchIdle } from './idle.js';
 import { startLoopDelayLog } from './loop-delay.js';
 import { createHealthService } from './health/health-service.js';
+import { createWindowCounters } from './health/window-counters.js';
 import { createProfiler } from './diagnostics/profiler.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
@@ -195,7 +196,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   // Работы стартуют и останавливаются вместе с хостом: окно узнаёт о них
   // через `works.list`/`works.changed`, а на остановке хост снимает свою аренду.
-  const worksService = createWorksService(handle.context);
+  // Счётчики окна строки состояния: сервисы пишут, health читает и обнуляет.
+  const windowCounters = createWindowCounters();
+  const worksService = createWorksService(handle.context, { windowCounters });
   // Сервис зовёт onFailure по разу на каждый код сбоя (конфликт снимка, журнал решения), а у человека одна карточка
   // с одним текстом: повтор для той же работы только вытеснял бы из строки статуса прежние уведомления.
   const planEffectNoticed = new Set<string>();
@@ -221,6 +224,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // ссылаться на сервисы и `handlers`, которые заводятся ниже.
   const health = createHealthService({
     log: handle.context.log,
+    windowCounters,
     counters: () => {
       const { entries } = worksService.snapshot();
       return {
@@ -240,13 +244,14 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Активность живёт поверх работ: точка статуса и строка метрик окна (1.5).
   // `pty.attach`/`pty.input` (1.6) зовут её `markSeen`.
   const activityService = createActivityService(handle.context, worksService, {
+    windowCounters,
     ...(options.startupWaitMs === undefined ? {} : { startupWaitMs: options.startupWaitMs }),
   });
   handle.context.onShutdown(() => activityService.stop());
 
   // Живые PTY сессий (1.6). На остановке хоста добиваются вместе с ним —
   // иначе процесс агента остаётся сиротой без хоста, который бы его закрыл.
-  const ptyManager = createPtyManager(handle.context);
+  const ptyManager = createPtyManager(handle.context, windowCounters);
 
   // Состояние сессий codex — по потоку их терминала, а не по хукам (спека комнат Organic, 3.6): менеджер PTY
   // разбирает заголовок окна и уведомления, сервис активности выводит из них состояние.
@@ -335,7 +340,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activityService,
     ptyManager,
     sessionsService,
-    { compacting: (ref) => compactionService?.holds(ref) === true },
+    { compacting: (ref) => compactionService?.holds(ref) === true, windowCounters },
   );
   handle.context.onShutdown(async () => wakeService.stop());
 
