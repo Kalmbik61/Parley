@@ -243,6 +243,7 @@ const messageView = (message: Message, map: WorkMap) => {
     room: room === null ? null : { id: room.id, title: room.title },
     // Ответ несёт id сообщения, на которое написан (Parley 0.3.0); у прочих писем ключа нет совсем.
     ...(message.replyTo === undefined ? {} : { replyTo: message.replyTo }),
+    ...(message.via === undefined ? {} : { via: message.via }),
     // Рассылка комнаты (пустой `to`): агент иначе видит письмо без адресата и не отличает «всем» от случайного.
     ...(message.to.length === 0 ? { toEveryone: true } : {}),
   };

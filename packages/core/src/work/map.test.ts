@@ -10,7 +10,7 @@ import {
 } from './map.js';
 import { defaultSessionName, NEW_LABEL } from './names.js';
 import { roomLead } from './rooms.js';
-import type { Room, SessionLifecycle, WorkMap } from './types.js';
+import { HUMAN, type Room, type SessionLifecycle, type WorkMap } from './types.js';
 
 const emptyMap = (): WorkMap => ({
   schemaVersion: 2,
@@ -220,6 +220,14 @@ describe('addMessage', () => {
     const again = parseMap(JSON.stringify(map), 'map.json');
     expect(again.messages[1]?.replyTo).toBe('m-01');
     expect('replyTo' in (again.messages[0] ?? {})).toBe(false);
+  });
+
+  it('addMessage переносит via, а без него поля нет', () => {
+    const map = emptyMap();
+    const withVia = addMessage(map, { from: HUMAN, to: [], text: 'x', roomId: 'r-1', via: 'assistant' });
+    const plain = addMessage(map, { from: HUMAN, to: [], text: 'y', roomId: 'r-1' });
+    expect(withVia.via).toBe('assistant');
+    expect('via' in plain).toBe(false);
   });
 });
 

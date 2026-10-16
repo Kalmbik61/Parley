@@ -8,6 +8,7 @@ import type {
   HistoryEntry,
   Message,
   MessageKind,
+  MessageVia,
   SessionLifecycle,
   SessionResult,
   WorkMap,
@@ -197,6 +198,7 @@ export interface NewMessage {
    * сообщения комнате проверяет вызывающий; без `replyTo` ключа в письме не будет.
    */
   replyTo?: string;
+  via?: MessageVia;
 }
 
 /** Кладёт сообщение в карту непрочитанным: доставка — pull через `check_inbox`. */
@@ -214,6 +216,7 @@ export function addMessage(map: WorkMap, init: NewMessage, at = new Date().toISO
     at,
     readBy: {},
     ...(init.replyTo === undefined ? {} : { replyTo: init.replyTo }),
+    ...(init.via === undefined ? {} : { via: init.via }),
   };
   map.messages.push(message);
   return message;

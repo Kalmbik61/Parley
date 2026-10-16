@@ -8,6 +8,7 @@ import {
   EFFORT_TOKEN,
   MODEL_LABEL_MAX,
   PROVIDERS,
+  assistantCommand,
   codexModelsFile,
   commandInPath,
   commandBinary,
@@ -713,6 +714,44 @@ describe('режим одного ответа', () => {
   });
 });
 
+describe('assistantCommand — ход помощника (спека 2026-10-14, 6.3)', () => {
+  const subs = { prompt: 'кто работает?', model: 'haiku', mcpConfig: '/h/assistant/mcp.json', systemPrompt: 'SYS', developerInstructions: 'model_instructions_file="/h/p.md"' };
+  it('claude: промпт сразу за -p, изоляция и только MCP помощника', () => {
+    const command = assistantCommand(PROVIDERS.claude, subs, false);
+    expect(command?.args.slice(0, 2)).toEqual(['-p', 'кто работает?']);
+    expect(command?.args).toEqual(expect.arrayContaining(['--strict-mcp-config', '--allowedTools', 'mcp__parley-assistant__*', '--setting-sources', '--disable-slash-commands']));
+    expect(command?.args[command.args.indexOf('--tools') + 1]).toBe('');
+    expect(command?.args).not.toContain('--resume');
+  });
+  it('claude со второго хода — --resume с id', () => {
+    expect(assistantCommand(PROVIDERS.claude, { ...subs, providerSessionId: 'sid-1' }, true)?.args.slice(-2)).toEqual(['--resume', 'sid-1']);
+  });
+  it('glm — тот же набор, что у claude', () => {
+    expect(assistantCommand(PROVIDERS.glm, subs, false)?.args).toEqual(assistantCommand(PROVIDERS.claude, subs, false)?.args);
+  });
+  it('codex: exec, песочница, конфиг MCP и промпт в конце; resume — thread и промпт в конце', () => {
+    const codex = { ...subs, mcpConfig: 'mcp_servers.parley-assistant={}' };
+    const first = assistantCommand(PROVIDERS.codex, codex, false);
+    expect(first?.args.slice(0, 2)).toEqual(['exec', '--json']);
+    expect(first?.args).toEqual(expect.arrayContaining(['--sandbox', 'read-only', '--ignore-user-config', 'mcp_servers.parley-assistant={}']));
+    expect(first?.args.at(-1)).toBe('кто работает?');
+    const next = assistantCommand(PROVIDERS.codex, { ...codex, providerSessionId: 't-1' }, true);
+    expect(next?.args.slice(0, 2)).toEqual(['exec', 'resume']);
+    expect(next?.args.slice(-2)).toEqual(['t-1', 'кто работает?']);
+    expect(next?.args).not.toContain('--sandbox');
+  });
+  it('без модели флаг --model выпадает', () => {
+    const { prompt, mcpConfig, systemPrompt, developerInstructions } = subs;
+    expect(assistantCommand(PROVIDERS.claude, { prompt, mcpConfig, systemPrompt, developerInstructions }, false)?.args).not.toContain('--model');
+  });
+  it('провайдер без шаблона — null', () => {
+    const runner = { ...PROVIDERS.claude.runner };
+    delete runner.assistantArgs;
+    delete runner.assistantResumeArgs;
+    expect(assistantCommand({ ...PROVIDERS.claude, runner }, subs, false)).toBeNull();
+  });
+});
+
 describe('commandInPath', () => {
   let dir = '';
 
@@ -884,6 +923,20 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
       command: 'claude',
       args: ['--print', 'сожми'],
     });
+  });
+
+  it('assistantArgs из providers.json заменяет встроенный', async () => {
+    await write({ claude: { assistantArgs: ['-p', '{prompt}', '--model', '{model}'] } });
+    const registry = await loadProviders();
+    expect(assistantCommand(registry['claude'] as ProviderEntry, { prompt: 'привет', model: 'haiku' }, false)).toEqual({
+      command: 'claude',
+      args: ['-p', 'привет', '--model', 'haiku'],
+    });
+  });
+
+  it('assistantArgs не массивом строк — unexpected entry shape', async () => {
+    await write({ claude: { assistantArgs: '-p' } });
+    await expect(loadProviders()).rejects.toThrow(/unexpected entry shape/);
   });
 
   describe('models: свой список моделей для окна', () => {

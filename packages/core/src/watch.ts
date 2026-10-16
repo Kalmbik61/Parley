@@ -2,7 +2,7 @@ import { watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
 import { access } from 'node:fs/promises';
 import { adapterV1, type SchemaAdapter } from './adapter-v1.js';
-import { defaultRoot, discoverSession, sessionFileForPath } from './discover.js';
+import { assistantCwd, defaultRoot, discoverSession, sessionFileForPath } from './discover.js';
 import { defaultCodexRoot } from './codex/discover.js';
 import { indexCodexSession } from './codex/index-session.js';
 import { indexSessionFile, type SessionIndex } from './session-index.js';
@@ -15,7 +15,8 @@ export interface WatchSource {
   root: string;
   /** Путь изменившегося файла → файл сессии, которую надо перечитать. */
   resolve(changedPath: string, root: string): string | null;
-  index(file: string, root: string): Promise<SessionIndex>;
+  /** `null` — файл не сессия Parley, изменение пропускается. */
+  index(file: string, root: string): Promise<SessionIndex | null>;
 }
 
 export interface WatchOptions {
@@ -62,7 +63,11 @@ export function codexSource(root: string = defaultCodexRoot()): WatchSource {
       if (relative.startsWith('..') || !relative.endsWith('.jsonl')) return null;
       return changedPath;
     },
-    index: (file) => indexCodexSession(file),
+    index: async (file) => {
+      const session = await indexCodexSession(file);
+      // Ход помощника (спека 2026-10-14, 15.6) — не сессия Parley.
+      return session.cwd === assistantCwd() ? null : session;
+    },
   };
 }
 
@@ -91,6 +96,7 @@ export function watchSessions(
         return;
       }
       const session = await source.index(file, source.root);
+      if (session === null) return;
       if (!closed) onChange({ kind: 'updated', file, session });
     } catch (error) {
       onError?.(error, file);

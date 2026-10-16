@@ -26,7 +26,9 @@ export { adapterV1 } from './adapter-v1.js';
 export type { TokenTotals } from './counters.js';
 export type { SchemaAdapter, SessionRecord } from './adapter-v1.js';
 export {
+  assistantCwd,
   claudeProjectRoots,
+  claudeProjectSlug,
   defaultRoot,
   discoverSession,
   discoverSessions,
@@ -68,6 +70,7 @@ export {
   MODEL_LABEL_MAX,
   PROVIDERS,
   agentEnv,
+  assistantCommand,
   codexModelsFile,
   commandBinary,
   commandInPath,
@@ -464,6 +467,7 @@ export type {
   LaunchedBy,
   Message,
   MessageKind,
+  MessageVia,
   Proposal,
   Room,
   RoomMembership,
@@ -597,3 +601,12 @@ export { isCurrentMember, roomMembership } from './work/room-membership.js';
 export type { MemberPeriods, RoomMembershipView } from './work/room-membership.js';
 export { roomUsage } from './work/room-usage.js';
 export type { RoomUsage, RoomUsageMember, UsageResolver } from './work/room-usage.js';
+export { MODEL_MOODS, matchConfirm, normalizePhrase, normalizeSentText, splitMood } from './assistant/text.js';
+export type { AssistantLanguage, AssistantMood, ConfirmAnswer, MoodSplit } from './assistant/text.js';
+export { ASSISTANT_MCP_NAME, classifyAssistantError, parseClaudeLine, parseCodexLine } from './assistant/stream.js';
+export type { AssistantErrorKind, AssistantStreamEvent } from './assistant/stream.js';
+export {
+  ASSISTANT_DEFAULT_MODELS, ASSISTANT_MIN_VERSIONS, ASSISTANT_PROVIDER_ORDER, assistantCodexMcp, assistantMcpJson,
+  assistantPrompt, codexInstructionsFile, versionAtLeast,
+} from './assistant/launch.js';
+export type { AssistantMcpParams } from './assistant/launch.js';

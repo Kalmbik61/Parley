@@ -4,20 +4,28 @@
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { loadConfig } from '../config.js';
+import { envValue } from '../names.js';
+import { createAssistantServer } from './assistant.js';
 import { contextFromEnv } from './context.js';
 import { createParleyServer } from './tools.js';
 
 async function main(): Promise<number> {
   let server;
   try {
-    // Потолок писем живёт в настройках, а не в окружении: сервер читает их сам
-    // при старте, на время жизни процесса значение не меняется (4.7).
-    const { config } = await loadConfig();
-    server = createParleyServer({
-      ...contextFromEnv(),
-      messageRate: config.messageRate,
-      worktreeRoot: config.worktreeRoot,
-    });
+    const assistantUrl = envValue(process.env, 'ASSISTANT_URL');
+    if (assistantUrl !== undefined) {
+      // Режим помощника (спека 2026-10-14, 7.1): своя пара инструментов, карта работ не нужна.
+      server = createAssistantServer({ url: assistantUrl, token: envValue(process.env, 'ASSISTANT_TOKEN') ?? '' });
+    } else {
+      // Потолок писем живёт в настройках, а не в окружении: сервер читает их сам
+      // при старте, на время жизни процесса значение не меняется (4.7).
+      const { config } = await loadConfig();
+      server = createParleyServer({
+        ...contextFromEnv(),
+        messageRate: config.messageRate,
+        worktreeRoot: config.worktreeRoot,
+      });
+    }
   } catch (error) {
     process.stderr.write(`parley-mcp: ${(error as Error).message}\n`);
     return 1;

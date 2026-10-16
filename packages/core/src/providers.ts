@@ -71,6 +71,13 @@ export interface RunnerConfig {
    * дозаказ резюме (спецификация, раздел 6); undefined — провайдер так не умеет.
    */
   printArgs?: string[];
+  /**
+   * Ход помощника (спека 2026-10-14, 6.3): разовый запуск без терминала, инструменты — только MCP помощника.
+   * Нет поля — провайдер помощнику не годится.
+   */
+  assistantArgs?: string[];
+  /** То же со второго хода разговора: продолжение по `{providerSessionId}`. */
+  assistantResumeArgs?: string[];
   mcpConfig?: McpConfigKind;
 }
 
@@ -166,6 +173,39 @@ const CODEX_CONFIG_FLAGS: readonly string[] = [
 const CODEX_PARLEY_FLAGS: readonly string[] = ['--no-daemon', '-a', 'on-request', ...CODEX_CONFIG_FLAGS];
 
 /**
+ * Ход помощника (спека 2026-10-14, приложение A.2): только MCP помощника, без встроенных инструментов, без
+ * настроек, хуков, плагинов и автопамяти человека. Промпт — сразу за `-p`: `--allowedTools`, `--tools` и
+ * `--mcp-config` вариадические и «съели» бы его в конце.
+ */
+const CLAUDE_ASSISTANT_ARGS = [
+  '-p', '{prompt}', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+  '--model', '{model}', '--mcp-config', '{mcpConfig}', '--strict-mcp-config', '--system-prompt', '{systemPrompt}',
+  '--allowedTools', 'mcp__parley-assistant__*', '--tools', '', '--setting-sources', '', '--disable-slash-commands',
+  '--settings', '{"autoMemoryEnabled":false}',
+];
+const CLAUDE_ASSISTANT_RESUME_ARGS = [...CLAUDE_ASSISTANT_ARGS, '--resume', '{providerSessionId}'];
+/** Codex 0.162.0: хуки и `notify` человека, shell и прочие встроенные возможности выключены (приложение A.2). */
+const CODEX_ASSISTANT_DISABLE = [
+  'hooks', 'shell_tool', 'unified_exec', 'apps', 'plugins', 'browser_use', 'browser_use_external', 'computer_use',
+  'goals', 'image_generation', 'view_image', 'multi_agent', 'skill_search', 'tool_suggest', 'sleep_tool',
+].flatMap((feature) => ['--disable', feature]);
+const CODEX_ASSISTANT_CONFIG = [
+  '-c', 'web_search="disabled"', '-c', 'skills.include_instructions=false', '-c', 'include_apps_instructions=false',
+  '-c', 'include_collaboration_mode_instructions=false', '-c', 'model_reasoning_effort="low"',
+  '-c', '{mcpConfig}', '-c', '{developerInstructions}',
+];
+const CODEX_ASSISTANT_ARGS = [
+  'exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only', '--ignore-user-config', '--ignore-rules',
+  ...CODEX_ASSISTANT_DISABLE, ...CODEX_ASSISTANT_CONFIG, '--model', '{model}', '{prompt}',
+];
+/** У `exec resume` нет `--sandbox` — песочница ключом конфига. */
+const CODEX_ASSISTANT_RESUME_ARGS = [
+  'exec', 'resume', '--json', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules',
+  ...CODEX_ASSISTANT_DISABLE, ...CODEX_ASSISTANT_CONFIG, '-c', 'sandbox_mode="read-only"',
+  '--model', '{model}', '{providerSessionId}', '{prompt}',
+];
+
+/**
  * Реестр провайдеров: где брать историю и чем запускать.
  *
  * GLM здесь runner-only: своей истории у него нет (проверено, см.
@@ -249,6 +289,8 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
       // `-p <промпт>` — один ответ без интерактива: им считается дозаказ резюме.
       printArgs: ['-p', '{prompt}'],
       mcpConfig: 'json-file',
+      assistantArgs: CLAUDE_ASSISTANT_ARGS,
+      assistantResumeArgs: CLAUDE_ASSISTANT_RESUME_ARGS,
     },
   },
   codex: {
@@ -289,6 +331,8 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
       // Указатель на письма — позиционным промптом последним: первым ходом поднятой сессии.
       resumeArgs: ['resume', '{providerSessionId}', ...CODEX_CONFIG_FLAGS, '{prompt}'],
       mcpConfig: 'codex-override',
+      assistantArgs: CODEX_ASSISTANT_ARGS,
+      assistantResumeArgs: CODEX_ASSISTANT_RESUME_ARGS,
     },
   },
   glm: {
@@ -360,6 +404,8 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{prompt}',
       ],
       mcpConfig: 'json-file',
+      assistantArgs: CLAUDE_ASSISTANT_ARGS,
+      assistantResumeArgs: CLAUDE_ASSISTANT_RESUME_ARGS,
     },
   },
 };
@@ -542,6 +588,16 @@ export function printCommand(
     command: entry.runner.command,
     args: substituteArgs(entry.runner.printArgs ?? [], subs),
   };
+}
+
+/** Команда хода помощника (спека 2026-10-14, 6.3); `null` — у провайдера нет шаблона, помощнику он не годится. */
+export function assistantCommand(
+  entry: ProviderEntry,
+  subs: RunnerSubstitutions,
+  resume: boolean,
+): { command: string; args: string[] } | null {
+  const template = resume ? entry.runner.assistantResumeArgs : entry.runner.assistantArgs;
+  return template === undefined ? null : { command: entry.runner.command, args: substituteArgs(template, subs) };
 }
 
 /**
@@ -754,6 +810,8 @@ export interface ProviderOverride {
   args?: string[];
   resumeArgs?: string[];
   printArgs?: string[];
+  assistantArgs?: string[];
+  assistantResumeArgs?: string[];
   mcpConfig?: McpConfigKind;
   /**
    * Свой список моделей вместо встроенного, целиком (как `args`); `[]` убирает список. Элемент —
@@ -972,6 +1030,8 @@ function checkShape(id: string, file: string, patch: Record<string, unknown>): v
     (patch['args'] !== undefined && !isStrings(patch['args'])) ||
     (patch['resumeArgs'] !== undefined && !isStrings(patch['resumeArgs'])) ||
     (patch['printArgs'] !== undefined && !isStrings(patch['printArgs'])) ||
+    (patch['assistantArgs'] !== undefined && !isStrings(patch['assistantArgs'])) ||
+    (patch['assistantResumeArgs'] !== undefined && !isStrings(patch['assistantResumeArgs'])) ||
     (patch['models'] !== undefined && !isModelList(patch['models'])) ||
     (patch['mcpConfig'] !== undefined &&
       patch['mcpConfig'] !== 'json-file' &&
@@ -1012,6 +1072,10 @@ function applyOverride(
   if (args !== undefined) runner.args = args;
   if (resumeArgs !== undefined) runner.resumeArgs = resumeArgs;
   if (printArgs !== undefined) runner.printArgs = printArgs;
+  const assistantArgs = patch.assistantArgs ?? base?.runner.assistantArgs;
+  const assistantResumeArgs = patch.assistantResumeArgs ?? base?.runner.assistantResumeArgs;
+  if (assistantArgs !== undefined) runner.assistantArgs = assistantArgs;
+  if (assistantResumeArgs !== undefined) runner.assistantResumeArgs = assistantResumeArgs;
   if (mcpConfig !== undefined) runner.mcpConfig = mcpConfig;
 
   // Из файла в запись ложатся свои копии пар, а не объекты разобранного JSON; уровни в файле — id,
