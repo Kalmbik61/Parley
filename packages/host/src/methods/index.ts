@@ -1,6 +1,7 @@
 import type { MethodName, NotificationName } from '@parley/protocol';
 import type { BacklogService } from '../backlog/backlog-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
+import type { Client } from '../client.js';
 import type { AnyHandler, AnyNotificationHandler } from '../context.js';
 import type { CompactionService } from '../compaction/compaction-service.js';
 import { createCompactionMethods } from '../compaction/compaction-methods.js';
@@ -139,6 +140,8 @@ export interface HostHandlers {
   notifications: Partial<Record<NotificationName, AnyNotificationHandler>>;
   /** Счётчики для строки состояния хоста: таблица подписок PTY живёт в замыкании `createPtyHandlers`. */
   counters: { ptyAttached(): number };
+  /** Клиент отключился: снимает его с подписок потока терминалов. */
+  dropClient(client: Client): void;
 }
 
 /**
@@ -301,5 +304,5 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     }
   }
 
-  return { methods, notifications, counters: { ptyAttached: pty.attachedCount } };
+  return { methods, notifications, counters: { ptyAttached: pty.attachedCount }, dropClient: pty.dropClient };
 }

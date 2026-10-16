@@ -44,7 +44,7 @@ describe('createHealthService', () => {
     vi.advanceTimersByTime(30_000);
     expect(log.info).toHaveBeenCalledTimes(1);
     expect(log.info).toHaveBeenCalledWith('host: состояние', {
-      cpuPct: 50, rssMb: 490, heapMb: 200, extMb: 30, loop: { maxMs: 120, p99Ms: 40, meanMs: 3 },
+      cpuPct: 50, rssMb: 490, heapMb: 200, extMb: 30, loop: { maxMs: 100, p99Ms: 20, meanMs: 0 },
       ptys: 15, attached: 3, feedSubs: 2, works: 4, rooms: 2, clients: 1,
     });
     expect(histogram.reset).toHaveBeenCalledTimes(1);
@@ -76,7 +76,7 @@ describe('createHealthService', () => {
     const sample = service.sample();
 
     expect(sample).toEqual({
-      cpuPct: 30, rssMb: 490, heapMb: 200, extMb: 30, loop: { maxMs: 120, p99Ms: 40, meanMs: 3 },
+      cpuPct: 30, rssMb: 490, heapMb: 200, extMb: 30, loop: { maxMs: 100, p99Ms: 20, meanMs: 0 },
       ptys: 15, attached: 3, feedSubs: 2, works: 4, rooms: 2, clients: 1,
     });
     expect(histogram.reset).toHaveBeenCalledTimes(1);

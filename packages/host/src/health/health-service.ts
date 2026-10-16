@@ -4,6 +4,13 @@ import type { Log } from '../log.js';
 
 export const HEALTH_INTERVAL_MS = 30_000;
 
+/**
+ * Разрешение гистограммы лага. Node пишет в `monitorEventLoopDelay` интервал между срабатываниями таймера,
+ * то есть разрешение плюс задержка цикла: в простое `max` ≈ 22 мс при разрешении 20. Саму задержку даёт
+ * значение за вычетом разрешения.
+ */
+export const LOOP_RESOLUTION_MS = 20;
+
 const NS_PER_MS = 1_000_000;
 const BYTES_PER_MB = 1024 * 1024;
 
@@ -40,7 +47,7 @@ export function createHealthService(deps: {
   now?: () => number;
   intervalMs?: number;
 }): HealthService {
-  const histogram = deps.histogram ?? monitorEventLoopDelay({ resolution: 20 });
+  const histogram = deps.histogram ?? monitorEventLoopDelay({ resolution: LOOP_RESOLUTION_MS });
   const cpuUsage = deps.cpuUsage ?? process.cpuUsage;
   const memoryUsage = deps.memoryUsage ?? process.memoryUsage;
   const now = deps.now ?? Date.now;
@@ -51,8 +58,9 @@ export function createHealthService(deps: {
   let baseCpu = cpuUsage();
   let baseAt = now();
 
-  // У пустой гистограммы среднее — NaN: в журнале должен быть 0, а не null.
-  const ms = (ns: number): number => (Number.isFinite(ns) ? Math.round(ns / NS_PER_MS) : 0);
+  // У пустой гистограммы среднее — NaN: в журнале должен быть 0, а не null. Разрешение вычитаем (см.
+  // `LOOP_RESOLUTION_MS`): без этого простой хост показывал бы лаг ≈ 20 мс; отсекаем на нуле.
+  const ms = (ns: number): number => (Number.isFinite(ns) ? Math.max(0, Math.round(ns / NS_PER_MS) - LOOP_RESOLUTION_MS) : 0);
 
   const sample = (): HealthSample => {
     const wallMs = now() - baseAt;
@@ -77,10 +85,15 @@ export function createHealthService(deps: {
       baseAt = now();
       histogram.enable();
       timer = setInterval(() => {
-        deps.log.info('host: состояние', sample());
-        histogram.reset();
-        baseCpu = cpuUsage();
-        baseAt = now();
+        try {
+          deps.log.info('host: состояние', sample());
+          histogram.reset();
+          baseCpu = cpuUsage();
+          baseAt = now();
+        } catch {
+          // Сбой строки состояния (счётчик бросил, журнал не записался) не должен ронять хост;
+          // писать о нём некуда — журнал как раз мог быть недоступен.
+        }
       }, intervalMs);
       timer.unref();
     },

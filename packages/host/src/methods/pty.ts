@@ -38,6 +38,8 @@ export interface PtyHandlers {
   attachedCount(): number;
   /** Подписан ли на поток сессии хотя бы один клиент. */
   isAttached(ref: SessionRef): boolean;
+  /** Клиент ушёл: снимает его со всех сессий в `attached` и `waiting`, пустые множества убирает из карт. */
+  dropClient(client: Client): void;
 }
 
 /**
@@ -158,5 +160,16 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
     },
 
     isAttached: (ref) => (attached.get(refKey(ref))?.size ?? 0) > 0,
+
+    // Закрытый клиент без `pty.detach` иначе жил бы в таблицах до выхода процесса или нового вывода
+    // (и раздувал `attachedCount`, хотя смотреть на поток некому).
+    dropClient: (client) => {
+      for (const table of [attached, waiting]) {
+        for (const [key, clients] of table) {
+          clients.delete(client);
+          if (clients.size === 0) table.delete(key);
+        }
+      }
+    },
   };
 }

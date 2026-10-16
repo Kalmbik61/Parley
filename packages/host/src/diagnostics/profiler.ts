@@ -79,8 +79,16 @@ export function createProfiler(deps: {
     const entries = await Promise.all(
       names
         .filter((name) => name.endsWith(PROFILE_EXT))
-        .map(async (name) => ({ file: path.join(dir, name), mtimeMs: (await stat(path.join(dir, name))).mtimeMs })),
-    );
+        .map(async (name) => {
+          const file = path.join(dir, name);
+          try {
+            return { file, mtimeMs: (await stat(file)).mtimeMs };
+          } catch {
+            // Файл исчез между readdir и stat (чистка соседнего профиля) — в список не попадает.
+            return null;
+          }
+        }),
+    ).then((found) => found.filter((entry) => entry !== null));
     entries.sort((a, b) => b.mtimeMs - a.mtimeMs || (a.file < b.file ? 1 : -1));
     return entries.map((entry) => entry.file);
   };
@@ -96,12 +104,13 @@ export function createProfiler(deps: {
   const finish = (current: Run): Promise<void> => {
     current.finishing ??= (async () => {
       clearTimeout(current.timer);
+      // Имя файла не зависит от результата записи: временный файл виден и из `catch`.
+      const file = path.join(dir, `host-${stamp(current.startedAt)}${PROFILE_EXT}`);
+      const tmp = `${file}.tmp`;
       try {
         await current.ready;
         const result = (await post(current.session, 'Profiler.stop')) as { profile: unknown };
         await mkdir(dir, { recursive: true });
-        const file = path.join(dir, `host-${stamp(current.startedAt)}${PROFILE_EXT}`);
-        const tmp = `${file}.tmp`;
         await writeFile(tmp, JSON.stringify(result.profile));
         await rename(tmp, file);
         status = { state: 'done', file, finishedAt: now().toISOString() };
@@ -109,6 +118,11 @@ export function createProfiler(deps: {
       } catch (err) {
         status = { state: 'failed', error: messageOf(err) };
         log.warn('host: профиль CPU не записан', { error: messageOf(err) });
+        try {
+          await rm(tmp, { force: true });
+        } catch {
+          // Не удалился — остаётся `.tmp`, который файлом профиля не считается.
+        }
       } finally {
         try {
           current.session.disconnect();

@@ -243,6 +243,34 @@ describe('createPtyHandlers', () => {
     expect(outputEvents(client)).toHaveLength(0);
   });
 
+  it('dropClient снимает подписки клиента: attachedCount 0 и isAttached false', async () => {
+    const pty = fakePtyManager();
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+    const sessionRef = ref();
+    pty.markLive(sessionRef);
+    const gone = fakeClient();
+    const stays = fakeClient();
+
+    await handlers.ptyAttach({ ref: sessionRef }, requestOf(gone));
+    expect(handlers.attachedCount()).toBe(1);
+    expect(handlers.isAttached(sessionRef)).toBe(true);
+
+    handlers.dropClient(gone);
+    expect(handlers.attachedCount()).toBe(0);
+    expect(handlers.isAttached(sessionRef)).toBe(false);
+
+    // Второй клиент на той же сессии остаётся и после ухода первого.
+    await handlers.ptyAttach({ ref: sessionRef }, requestOf(gone));
+    await handlers.ptyAttach({ ref: sessionRef }, requestOf(stays));
+    expect(handlers.attachedCount()).toBe(2);
+    handlers.dropClient(gone);
+    expect(handlers.attachedCount()).toBe(1);
+    expect(handlers.isAttached(sessionRef)).toBe(true);
+    pty.emitOutput(sessionRef, 'остался один');
+    expect(outputEvents(stays)).toHaveLength(1);
+    expect(outputEvents(gone)).toHaveLength(0);
+  });
+
   it('backpressure: send()===false останавливает поток и шлёт pty.resync до нового attach', async () => {
     const pty = fakePtyManager();
     const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });

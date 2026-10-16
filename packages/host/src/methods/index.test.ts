@@ -65,6 +65,20 @@ it('registers rooms.archive and rooms.reopen, which read the live processes and 
   }
 });
 
+it('методы диагностики есть только при health и profiler', () => {
+  const names = ['host.diagnostics', 'host.profile.start', 'host.profile.status'] as const;
+  const { deps } = fakeDeps(Promise.resolve());
+  const without = createHostHandlers(deps).methods;
+  for (const name of names) expect(without).not.toHaveProperty(name);
+
+  const withBoth = createHostHandlers({
+    ...deps,
+    health: { sample: () => ({}) },
+    profiler: { status: () => ({ state: 'idle' }), files: async () => [], start: () => ({ state: 'idle' }), stop: async () => {} },
+  } as never).methods;
+  for (const name of names) expect(withBoth[name]).toBeTypeOf('function');
+});
+
 it('registers both explicit native skill sharing actions', () => {
   const { deps } = fakeDeps(Promise.resolve());
   const handlers = createHostHandlers(deps);

@@ -41,7 +41,8 @@ export function createDiagnosticsHandlers(deps: {
         startedAt: new Date(handle.startedAt).toISOString(),
         attached: deps.isAttached(handle.ref),
       })),
-      profiles: await deps.profiler.files(),
+      // Список профилей необязателен: ответ `host.diagnostics` важнее ошибки чтения каталога.
+      profiles: await deps.profiler.files().catch(() => []),
       profile: deps.profiler.status(),
     }),
 

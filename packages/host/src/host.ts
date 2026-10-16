@@ -420,6 +420,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     unregisterClient: (client) => {
       handle.removeClient(client);
       feedService.dropClient(client);
+      handlers.dropClient(client);
       backlogService.removeClient(client.id);
     },
   });
@@ -433,6 +434,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   } catch (error) {
     // Не поднялся — замок не держится до выхода процесса (в тестах процесс один на много хостов).
     idleWatcher.stop();
+    health.stop();
     await releasePidLock(paths.pid);
     restoreHomeEnv(previousHomes);
     throw error;

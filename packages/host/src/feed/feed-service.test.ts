@@ -305,6 +305,22 @@ describe('снимок и дельты', () => {
     expect(feedChanged(stays)).toHaveLength(1);
   });
 
+  it('subscriberCount считает подписки и падает до нуля после dropClient', () => {
+    start();
+    const first = fakeClient();
+    const second = fakeClient();
+    expect(service.subscriberCount()).toBe(0);
+
+    service.subscribe(REF, first);
+    service.subscribe(REF, second);
+    expect(service.subscriberCount()).toBe(2);
+
+    service.dropClient(first);
+    expect(service.subscriberCount()).toBe(1);
+    service.dropClient(second);
+    expect(service.subscriberCount()).toBe(0);
+  });
+
   it('сессия пропала из работ: удержанным {}, лента и подписки забыты, таймеры сняты', async () => {
     vi.useFakeTimers();
     start();

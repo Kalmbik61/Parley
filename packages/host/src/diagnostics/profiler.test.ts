@@ -160,6 +160,12 @@ describe('createProfiler', () => {
     await profiler.stop();
   });
 
+  it('files() без каталога профилей отдаёт []', async () => {
+    const profiler = createProfiler({ dir: path.join(root, 'нет-такого'), log: fakeLog() });
+
+    expect(await profiler.files()).toEqual([]);
+  });
+
   it('настоящий inspector: профиль за 300 мс парсится и содержит nodes', async () => {
     vi.useRealTimers();
     const profiler = createProfiler({ dir, log: fakeLog() });
