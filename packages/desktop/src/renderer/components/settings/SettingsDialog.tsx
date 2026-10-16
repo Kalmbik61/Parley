@@ -172,7 +172,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* 32rem: шесть вкладок (пятая «Browser» — кусок 9.1, шестая «Voice») в 28rem выходили за край диалога. */}
+      {/* 32rem: семь вкладок (пятая «Browser» — кусок 9.1, шестая «Voice») в 28rem выходили за край диалога. */}
       <DialogContent aria-describedby={undefined} className="w-[32rem] max-w-[32rem]">
         <DialogTitle>{S.settings.title}</DialogTitle>
         {loadError !== null ? <p className="text-xs text-destructive">{loadError}</p> : null}

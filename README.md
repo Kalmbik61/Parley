@@ -958,9 +958,38 @@ the top of the screen"). Codex sessions are not on the island yet: their request
 notifications, as before. While the island is on, a request that has a card is not repeated as a
 macOS notification.
 
+### Assistant
+
+Jarvis is a small navigator on the island. It answers questions about your workspaces, rooms and
+sessions ("what is going on?", "who is waiting?") and passes a message to a room or to an agent
+after you confirm it. It does not decide anything for you: a message goes out only when you press
+**Send** on its card, and the text of the card cannot be edited — ask Jarvis to change it instead.
+
+- **Turn it on:** Settings → Assistant. It is off by default. Pick a provider (by default the first
+  connected one: Claude, then GLM, then Codex) and a model (by default a fast one), and a language
+  (by default the language of the system: Russian or English). Jarvis needs `claude` 2.1.300 or
+  newer, or `codex` 0.162.0 or newer.
+- **Call it:** the global shortcut ⌥Space from any app, a click on the island, or the command
+  palette (⌘J → "Ask Jarvis"). ⌥Space is also the default Quick Entry shortcut of Claude Desktop;
+  if the island does not open, change the shortcut there or in Settings → Assistant.
+- **Talk or type:** type a question and press Enter, or use the microphone and speak. Voice goes
+  through Settings → Voice (the same Whisper model as dictation), so set it up there first. The
+  answer is text on the island.
+- **Confirm:** a message for a room or an agent comes as a card with the addressee and the text.
+  Press **Send** or Enter, or say "yes" / "send" after the shortcut; **Cancel** or "no" drops it.
+  In a room the letter is shown as "You (via Jarvis)"; in a Chat, the message carries the same
+  mark.
+- **What it cannot do yet:** answer an agent's permission request or plan, start sessions or
+  rooms, and speak the answer aloud.
+- **Cost:** every question is a short run of the selected provider's CLI on your subscription,
+  with no terminal. A conversation is reset after 15 minutes without activity. GLM answers in
+  about 13 seconds.
+- **Where the data is:** the working folder, the MCP config and the log of sent messages live in
+  `~/.parley/assistant/` (under `PARLEY_HOME` when it is set).
+
 ## Settings
 
-The window has Settings (⌘,), with six tabs:
+The window has Settings (⌘,), with seven tabs:
 
 - **Appearance** — "System" / "Dark" / "Light".
 - **Terminal** — "Terminal font", "Terminal font size (8…32)".
@@ -975,6 +1004,7 @@ The window has Settings (⌘,), with six tabs:
 - **Browser** — "Clear browser data": the cookies, storage and cache of the embedded browser.
 - **Voice** — dictation: the on/off switch, "Model", "Language" and the model downloads (see
   "Voice input").
+- **Assistant** — the island assistant: on/off, provider and model, language, global shortcut.
 
 The fields from "Terminal" and "Agents" are written through the host to `~/.parley/config.json`
 (or to `config.json` in the home directory given by `PARLEY_HOME`) and apply without

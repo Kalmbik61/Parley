@@ -37,11 +37,11 @@ export function splitMood(buffer: string, final: boolean): MoodSplit | null {
 export type ConfirmAnswer = 'send' | 'cancel';
 
 const SEND_PHRASES = new Set([
-  'да', 'ага', 'давай', 'отправь', 'отправляй', 'да отправь', 'да отправляй', 'да давай',
+  'да', 'ага', 'давай', 'отправь', 'отправляй', 'да отправь', 'да отправляй', 'да давай', // cyrillic-ok: слова подтверждения человека (спека 7.3)
   'yes', 'yep', 'yeah', 'send', 'send it', 'go ahead', 'yes send', 'yes send it',
 ]);
 const CANCEL_PHRASES = new Set([
-  'нет', 'не надо', 'отмена', 'отмени', 'не отправляй', 'нет не надо',
+  'нет', 'не надо', 'отмена', 'отмени', 'не отправляй', 'нет не надо', // cyrillic-ok: слова отмены человека (спека 7.3)
   'no', 'nope', 'cancel', 'dont', 'dont send', 'no cancel',
 ]);
 
@@ -49,7 +49,7 @@ const CANCEL_PHRASES = new Set([
 export function normalizePhrase(phrase: string): string {
   return phrase
     .toLowerCase()
-    .replace(/ё/g, 'е')
+    .replace(/ё/g, 'е') // cyrillic-ok: ё → е во вводе человека
     .replace(/[^\p{L}\p{N}\s]/gu, '')
     .replace(/\s+/g, ' ')
     .trim();

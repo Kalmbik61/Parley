@@ -10,6 +10,10 @@ Chats and rooms get a browser of their own next to the view, and an agent can sh
 
 ### Added
 
+- **Assistant on the island (stage 1).** Jarvis answers questions about your agents by hotkey (⌥Space), voice
+  or text, and passes messages to rooms and agents after you confirm them on a card. Messages show as
+  "You (via Jarvis)" in rooms and in Chat. It is off by default: turn it on in Settings → Assistant. Each question
+  is a short run of your provider's CLI on your subscription.
 - **A browser next to every Chat and room.** The **Browser** button opens a panel beside the view with its own pages
   (up to five), Console | Network, sizes, Select and Annotate. What you pick or annotate goes to the chat or room the
   panel belongs to. The pages survive restarting the window, and in a narrow window the panel covers the view with a

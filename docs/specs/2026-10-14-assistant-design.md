@@ -103,7 +103,7 @@ Auth?», «кто ждёт меня?», «скажи S03, что тесты мо
 
 ### 6.1 Настройки
 
-Settings → Assistant (через существующий механизм `settings.set`):
+Settings → Assistant. Настройки лежат в `ui.json` (`ui.assistant`, их пишет `app:save-ui`, вложенные ключи сливаются), а не в `settings.set` хоста — хоткей и вид нужны main и острову; хост получает провайдера, модель и язык параметрами `assistant.ask`:
 
 | Ключ | Что | По умолчанию |
 |---|---|---|
@@ -173,20 +173,21 @@ Settings → Assistant (через существующий механизм `se
 
 | Метод | Параметры | Что |
 |---|---|---|
-| `assistant.ask` | `{ text }` | начать ход |
+| `assistant.ask` | `{ text, provider, model, language }` | начать ход; `provider` и `model` могут быть `null` — первый готовый провайдер и модель по умолчанию |
 | `assistant.cancel` | `{}` | оборвать ход (SIGTERM, через 2 с SIGKILL) |
 | `assistant.decide` | `{ proposalId, decision: 'send' \| 'cancel' }` | решение по карточке |
 | `assistant.reset` | `{}` | новый разговор |
 | `assistant.state` | `{}` | снимок для острова при подключении |
+| `assistant.sent` | `{ ref }` | что помощник отправил этой сессии в Chat (`{ text, at }`), для пометки «via» в окне |
 
 Событие `assistant.changed`: `{ state, detail?, question?, answer, mood, proposal?, error? }`, где
 `state` — `idle` · `thinking` · `tool` · `answering` · `awaiting-confirm` · `error` · `offline`;
-`detail` — подпись инструмента («Checking rooms…», «Reading Auth…», «Preparing a message…»).
+`detail` — структура `{ tool, target }` (`tool`: `overview` · `detail` · `propose` · `other`; `target` — имя комнаты или сессии у `detail`), подпись («Checking rooms…», «Reading Auth…», «Preparing a message…») строит окно.
 `listening` и `speaking` ведёт сам остров: запись и звук — у него.
 
 Остров получает эти методы и событие через свой белый список (`ISLAND_METHODS`, `ISLAND_EVENTS`). Главному окну
 они не нужны: «Ask Jarvis» из палитры — команда main-процессу показать остров в режиме помощника, а метку «via»
-в Chat ставит хост в ленте (раздел 7.4).
+в Chat окно ставит само по `assistant.sent` (раздел 7.4).
 
 ### 6.6 Сбои и отмена
 
@@ -237,8 +238,8 @@ Settings → Assistant (через существующий механизм `se
 
 - Карточка одна: новая заменяет старую (старая — «отменена»); сброс разговора её снимает.
 - Подтверждение: клик, Enter (панель в фокусе) или голосом — хоткей, затем фраза. **Фразу сверяет Parley, не
-  модель** (`core/src/assistant/confirm.ts`): после нормализации, не длиннее трёх слов, по списку языка из
-  настроек — «да», «отправляй», «отправь», «давай» / «yes», «send», «send it», «go ahead» → Send; «нет»,
+  модель** (`core/src/assistant/text.ts`): после нормализации, не длиннее трёх слов, по спискам обоих
+  языков сразу (язык настроек список не сужает) — «да», «отправляй», «отправь», «давай» / «yes», «send», «send it», «go ahead» → Send; «нет»,
   «отмена», «не надо» / «no», «cancel» → Cancel. Не совпало — фраза уходит модели обычным вопросом, карточка
   остаётся.
 - Исход хост добавляет в начало следующего вопроса строкой `[system: proposal <id> was sent|cancelled]`.
@@ -252,9 +253,10 @@ Settings → Assistant (через существующий механизм `se
   отдают `via` полем рядом с `from`, текст письма не меняется.
 - **Chat агента.** `pty.send { submit: true }`, текст как есть. Хост дописывает запись в
   `~/.parley/assistant/sent.jsonl` (`{ ref, hash, at }`, хеш нормализованного текста, хранятся последние 500).
-  Лента сессии на хосте (`host/src/feed/`) ставит `via: 'assistant'` пункту-сообщению человека, у которого
-  совпали сессия и хеш, а время — в пределах 2 мин после записи; Chat (`renderer/chat/items/PromptItem.tsx`)
-  рисует такой пункт так же: «You (via Jarvis)» и значок помощника.
+  Метку ставит окно, а не хост в ленте: Chat спрашивает `assistant.sent { ref }` (последние записи `{ text, at }`
+  этой сессии) и помечает пункт-сообщение человека, у которого совпал нормализованный текст, а время — от 5 с до
+  записи до 2 мин после (`renderer/chat/assistant-sent.ts`); `PromptItem.tsx` рисует такой пункт так же:
+  «You (via Jarvis)» и значок помощника.
 - После отправки остров показывает «Sent ✓»; с этапа 3 Parley говорит «Отправил» / «Sent» по шаблону, без модели.
 
 ## 8. Остров в режиме помощника
