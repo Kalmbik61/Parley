@@ -14,8 +14,8 @@ import type { BrowserAgentArgs, BrowserAgentOpEvent, BrowserAgentScreenshotResul
 import { VIEWPORT_PRESETS, viewportSize } from '../../shared/browser-devtools.js';
 import type { ViewportPreset, ViewportSpec } from '../../shared/browser-devtools.js';
 import type { AgentActivity } from '../../shared/browser-types.js';
-import { redactUrl } from '../../shared/redact.js';
 import { AgentOpError } from './agent-errors.js';
+import { urlForAgent } from './agent-url.js';
 import type { LayoutMetrics, PageRecord, PageRegistry } from './agent-pages.js';
 import type { Emulation } from './emulation.js';
 import type { Inspector } from './inspector.js';
@@ -307,7 +307,7 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
     if (saved === null) throw new AgentOpError('unsupported', 'The screenshot could not be saved to Parley drops.');
     return {
       tab: record.agentId,
-      url: redactUrl(contents.getURL()),
+      url: urlForAgent(contents.getURL()),
       path: saved,
       width: size.width,
       height: size.height,

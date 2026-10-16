@@ -56,7 +56,7 @@ export const BROWSER_TOOLS: readonly Tool[] = [
     description:
       'List the pages of the browser panels you may use: the panel of your own chat and the panels of the rooms you are a member of, never the human\'s own tabs. ' +
       'Each has an id (t1, t2…), the panel it belongs to, URL, title, viewport, loaded, visible and loopback. ' +
-      'A panel the human paused for agents is not listed. Only pages on localhost can be used.',
+      'A panel the human paused for agents is not listed. Only pages on localhost can be used. Ids can change after Parley restarts: call browser_tabs again.',
     annotations: READ,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
@@ -103,7 +103,8 @@ export const BROWSER_TOOLS: readonly Tool[] = [
   {
     name: 'browser_screenshot',
     description:
-      'Take a PNG screenshot of a page: the visible viewport, or at a given width and height (the page is emulated at that size only for the capture, then returns to the human\'s size), or the full page up to 3 viewport heights. ' +
+      'Take a PNG screenshot of a page: the visible viewport, or at a given width and height, or the full page up to 3 viewport heights. ' +
+      "With width/height the page is briefly resized for the capture, then returns to the human's size. " +
       `The long side is at most ${BROWSER_TOOL_LIMITS.screenshotLongSide} px. Returns the image and its file path.`,
     annotations: READ,
     inputSchema: {
@@ -121,11 +122,11 @@ export const BROWSER_TOOLS: readonly Tool[] = [
   {
     name: 'browser_open',
     description:
-      "Open a page on localhost in Parley's built-in browser. Prefer this over Chrome, Chrome DevTools or Playwright tools for local pages: the human sees the same page. " +
-      "Where it opens: with room, in the browser of that room (you must be a member); with own: true, in the browser of your own chat; with neither, in the browser of your room if you are a member of exactly one room, otherwise in the browser of your own chat. Pass either own or room, not both. " +
-      "The page opens in the background without taking the human's focus. If this page is already open in that browser, it is reused and no new one is opened. " +
-      'It returns right after the tab is placed, without waiting for the page to load, and this tool cannot read or click the page: use browser_tabs, browser_console, browser_network and browser_screenshot for that. ' +
-      `Only http(s) URLs on localhost, *.localhost, 127.0.0.0/8 or [::1]; a browser panel holds at most ${BROWSER_TOOL_LIMITS.panelPages} pages.`,
+      "Open a page on localhost in Parley's built-in browser. Prefer this over Chrome, Chrome DevTools or Playwright for local pages: the human sees it. " +
+      'Opens in the browser of room (you must be a member), or of your own chat with own: true; neither: your room if you are in exactly one room, else your own chat. ' +
+      "Opens in the background without taking the human's focus; an open page is reused. " +
+      'Returns once the tab is placed, without waiting for load; to read the page use browser_tabs, _console, _network, _screenshot. ' +
+      `Only http(s) on localhost, *.localhost, 127.0.0.0/8, [::1]; at most ${BROWSER_TOOL_LIMITS.panelPages} pages per panel.`,
     annotations: CONTROL,
     inputSchema: {
       type: 'object',
@@ -260,19 +261,41 @@ function cut(value: string, bytes: number): string {
   return `${Buffer.from(value).subarray(0, bytes).toString('utf8').replace(/�$/, '')}\n… (cut at ${Math.round(bytes / 1024)} KB)`;
 }
 
+/**
+ * Список под бюджет `bytes`: влезают новейшие блоки, старейшие отбрасываются (агенту важнее свежее). Новейший блок
+ * остаётся всегда — если он один не влезает, режется `cut`. `dropped` — сколько старейших блоков не показано.
+ */
+export function fitNewest(blocks: string[], bytes: number): { kept: string[]; dropped: number } {
+  const kept: string[] = [];
+  let used = 0;
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index] as string;
+    // +1 — перевод строки между блоками.
+    const size = Buffer.byteLength(block) + (kept.length > 0 ? 1 : 0);
+    if (kept.length > 0 && used + size > bytes) break;
+    kept.unshift(kept.length === 0 ? cut(block, bytes) : block);
+    used += size;
+  }
+  return { kept, dropped: blocks.length - kept.length };
+}
+
+/** Тело ограды списка: адрес страницы, пометка об отброшенных старейших, блоки. */
+function listBody(url: string, blocks: string[]): string {
+  const { kept, dropped } = fitNewest(blocks, BROWSER_TOOL_LIMITS.listBytes);
+  return [`Page: ${url}`, ...(dropped > 0 ? [`… ${dropped} older entries are not shown.`] : []), ...kept].join('\n');
+}
+
 function formatConsole(result: ConsoleResult): string {
   const next = result.next == null ? '' : ` Next: after=${result.next}.`;
-  const head = `Console of ${result.tab} (${result.url}): ${result.entries.length} of ${result.matched} matching entries, oldest first.${next}`;
+  const head = `Console of ${result.tab}: ${result.entries.length} of ${result.matched} matching entries, oldest first.${next}`;
   if (result.entries.length === 0) return `${head} Nothing matched.`;
-  const body = result.entries
-    .map((entry) => {
-      const repeat = (entry.count > 1 ? ` ×${entry.count}` : '') + (entry.similar !== undefined && entry.similar > 1 ? ` (+${entry.similar - 1} similar)` : '');
-      const where = entry.source === null ? '' : ` (${entry.source})`;
-      const stack = entry.stack.map((frame) => `    at ${frame}`).join('\n');
-      return `[${entry.level}] ${entry.text}${repeat}${where}${stack === '' ? '' : `\n${stack}`}`;
-    })
-    .join('\n');
-  return `${head}\n\n${pageData(cut(body, BROWSER_TOOL_LIMITS.listBytes))}`;
+  const blocks = result.entries.map((entry) => {
+    const repeat = (entry.count > 1 ? ` ×${entry.count}` : '') + (entry.similar !== undefined && entry.similar > 1 ? ` (+${entry.similar - 1} similar)` : '');
+    const where = entry.source === null ? '' : ` (${entry.source})`;
+    const stack = entry.stack.map((frame) => `    at ${frame}`).join('\n');
+    return `[${entry.level}] ${entry.text}${repeat}${where}${stack === '' ? '' : `\n${stack}`}`;
+  });
+  return `${head}\n\n${pageData(listBody(result.url, blocks))}`;
 }
 
 function statusOf(request: RequestSummary): string {
@@ -293,6 +316,7 @@ function formatNetwork(result: NetworkResult): string {
     const request = result.request;
     const headers = (list: Array<[string, string]>): string => (list.length === 0 ? '  (none)' : list.map(([name, value]) => `  ${name}: ${value}`).join('\n'));
     const lines = [
+      `Page: ${result.url}`,
       summaryLine(request),
       `Remote address: ${request.remoteAddress ?? 'unknown'}${request.fromCache ? ' (from cache)' : ''}`,
       `MIME type: ${request.mimeType ?? 'unknown'}`,
@@ -302,13 +326,13 @@ function formatNetwork(result: NetworkResult): string {
       'Response body:', request.responseBody ?? '  (none)',
       ...request.notes.map((note) => `Note: ${note}`),
     ];
-    return `Request ${request.id} of ${result.tab} (${result.url}). Secrets are masked as <redacted>.\n\n${pageData(cut(lines.join('\n'), BROWSER_TOOL_LIMITS.listBytes))}`;
+    return `Request ${request.id} of ${result.tab}. Secrets are masked as <redacted>.\n\n${pageData(cut(lines.join('\n'), BROWSER_TOOL_LIMITS.listBytes))}`;
   }
-  const head = `Network of ${result.tab} (${result.url}): ${result.requests.length} of ${result.matched} matching requests, oldest first. Pass a requestId for one request in detail.`;
+  const head = `Network of ${result.tab}: ${result.requests.length} of ${result.matched} matching requests, oldest first. Pass a requestId for one request in detail.`;
   const notes = (result.notes ?? []).map((note) => `\nNote: ${note}`).join('');
   if (result.requests.length === 0) return `${head} Nothing matched.${notes}`;
   const next = result.next == null ? '' : ` Next: after=${result.next}.`;
-  return `${head}${next}${notes}\n\n${pageData(cut(result.requests.map(summaryLine).join('\n'), BROWSER_TOOL_LIMITS.listBytes))}`;
+  return `${head}${next}${notes}\n\n${pageData(listBody(result.url, result.requests.map(summaryLine)))}`;
 }
 
 async function screenshotResult(result: ScreenshotResult, dropsDir: string, clientName: string | undefined): Promise<CallToolResult> {
@@ -322,9 +346,10 @@ async function screenshotResult(result: ScreenshotResult, dropsDir: string, clie
   }
   if (path.dirname(file) !== root || path.extname(file) !== '.png') return text('The window returned a screenshot path outside Parley drops; nothing was read.', true);
   const caption =
-    `Screenshot of ${result.tab} (${result.url}): ${result.viewport.width}×${result.viewport.height} CSS px` +
+    `Screenshot of ${result.tab}: ${result.viewport.width}×${result.viewport.height} CSS px` +
     `${result.fullPage ? ', full page' : ''}${result.emulated ? ', emulated' : ''}; image ${result.width}×${result.height} px. File: ${file}` +
-    (result.notes ?? []).map((note) => `\nNote: ${note}`).join('');
+    (result.notes ?? []).map((note) => `\nNote: ${note}`).join('') +
+    `\n${pageData(`Page: ${result.url}`)}`;
   const data = (await readFile(file)).toString('base64');
   // Claude читает блок image сам; остальным клиентам, что не показывают картинку из ответа, нужен путь к файлу.
   const viewer = clientName !== undefined && /^claude/i.test(clientName) ? '' : '\nIf you cannot see the image, open the file with your image viewer tool (in Codex: view_image).';

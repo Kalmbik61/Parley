@@ -95,6 +95,16 @@ describe('объявление инструмента', () => {
     expect(BROWSER_TOOLS).toHaveLength(5);
   });
 
+  it('описание browser_open — не длиннее 600 знаков', () => {
+    expect(BROWSER_TOOLS.find((tool) => tool.name === 'browser_open')?.description?.length).toBeLessThanOrEqual(600);
+  });
+
+  it('описания: id вкладок меняются после перезапуска; снимок с размером на время съёмки меняет размер страницы', () => {
+    const description = (name: string) => BROWSER_TOOLS.find((tool) => tool.name === name)?.description;
+    expect(description('browser_tabs')).toContain('Ids can change after Parley restarts: call browser_tabs again.');
+    expect(description('browser_screenshot')).toContain("With width/height the page is briefly resized for the capture, then returns to the human's size.");
+  });
+
   it('предел операции — тот же 30 с, что в протоколе (сверяет тест хоста)', () => {
     expect(BROWSER_TOOL_LIMITS).toEqual({ opMs: 30_000, listBytes: 20_480, listEntries: 100, detailBody: 8192, screenshotLongSide: 1568, panelPages: 5 });
   });
@@ -241,9 +251,13 @@ describe('читающие инструменты (спека 5.1)', () => {
       },
     });
     const [head, body] = (await call(client, 'browser_console', { tab: 't1' })).text.split(PAGE_DATA_NOTE);
-    expect(head).toContain('Console of t1 (http://localhost:5173/): 2 of 2 matching entries, oldest first.');
+    expect(head).toContain('Console of t1: 2 of 2 matching entries, oldest first.');
     expect(body).toContain('[error] Uncaught TypeError: x is undefined (http://localhost:5173/src/app.tsx:12:5)\n    at render (http://localhost:5173/src/app.tsx:12:5)');
     expect(body).toContain('[error] boom ×3');
+    // Адрес страницы — первая строка внутри ограды; в заголовке вне ограды его нет.
+    expect(head).not.toContain('localhost:5173/)');
+    expect(head).not.toContain('http://localhost:5173/\n');
+    expect(body).toContain('```text\nPage: http://localhost:5173/\n[error] Uncaught');
   });
 
   it('console: похожие — «(+39 similar)»; заголовок — «Next: after=<id>.»', async () => {
@@ -278,7 +292,30 @@ describe('читающие инструменты (спека 5.1)', () => {
     answers.push({ status: 200, body: { ok: true, result: { tab: 't1', url: 'http://localhost:5173/', matched: 100, entries } } });
     const long = await call(client, 'browser_console', { tab: 't1', level: 'all' });
     expect(Buffer.byteLength(long.text)).toBeLessThan(20_480 + 1024);
-    expect(long.text).toContain('… (cut at 20 KB)');
+    expect(long.text).toMatch(/\n… \d+ older entries are not shown\.\n/);
+    expect(long.text).toContain(`99 ${'x'.repeat(400)}`);
+    expect(long.text).not.toContain(`[error] 0 ${'x'.repeat(400)}`);
+  });
+
+  it('список больше 20 КБ: отброшены старейшие с пометкой, новейшая запись на месте', async () => {
+    const client = await connect(await startEndpoint());
+    const requests = Array.from({ length: 100 }, (_, index) => ({ id: `100.${index}`, method: 'GET', url: `http://localhost:5173/${'p'.repeat(400)}/${index}`, kind: 'fetch', status: 500, statusText: '', failure: null, durationMs: 1, mimeType: null }));
+    answers.push({ status: 200, body: { ok: true, result: { tab: 't1', url: 'http://localhost:5173/', matched: 100, requests, notes: [], next: '100.99' } } });
+    const text = (await call(client, 'browser_network', { tab: 't1' })).text;
+    expect(Buffer.byteLength(text)).toBeLessThan(20_480 + 1024);
+    expect(text).toMatch(/older entries are not shown\./);
+    expect(text).toContain('100.99  GET 500');
+    expect(text).not.toContain('100.0  GET 500');
+    expect(text).toContain('Page: http://localhost:5173/');
+  });
+
+  it('снимок и деталь запроса: адрес — в ограде, не в подписи', async () => {
+    const client = await connect(await startEndpoint());
+    const detail = { id: '100.1', method: 'GET', url: 'http://localhost:5173/a', kind: 'fetch', status: 500, statusText: '', failure: null, durationMs: 1, mimeType: null, remoteAddress: null, fromCache: false, requestHeaders: [], responseHeaders: [], requestBody: null, responseBody: null, notes: [] };
+    answers.push({ status: 200, body: { ok: true, result: { tab: 't1', url: 'http://localhost:5173/page', request: detail } } });
+    const [head, body] = (await call(client, 'browser_network', { tab: 't1', requestId: '100.1' })).text.split(PAGE_DATA_NOTE);
+    expect(head).not.toContain('localhost:5173/page');
+    expect(body).toContain('Page: http://localhost:5173/page\n');
   });
 });
 

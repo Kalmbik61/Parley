@@ -641,6 +641,36 @@ describe('console (спека 5.1)', () => {
   });
 });
 
+describe('адрес страницы в ответах (аудит 4.1, S6)', () => {
+  it('URL в 1 МБ — в ответе не длиннее 512 знаков', async () => {
+    const { ops, snapshots, guests, runOp: run } = setup();
+    register(ops, {});
+    const huge = `http://localhost:5173/${'a'.repeat(1_000_000)}?token=SECRETVALUE`;
+    guests.get(7)?.getURL.mockReturnValue(huge);
+    const longRequest = networkEntry({ id: '100.9', url: huge, status: 500 });
+    snapshots.set(7, { ...EMPTY, console: [consoleEntry({ id: 1, text: 'boom', location: { url: huge, line: 1, column: 1 }, stack: [{ fn: 'f', url: huge, line: 1, column: 1 }] })], network: [longRequest] });
+    const consoleResult = okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1' }));
+    const list = okResult<{ url: string; requests: Array<{ url: string }> }>(await run('network', { tab: 't1' }));
+    const detail = okResult<{ url: string; request: { url: string } }>(await run('network', { tab: 't1', requestId: '100.9' }));
+    const tabs = okResult<{ tabs: Array<{ url: string }> }>(await run('tabs'));
+    const urls = [consoleResult.url, consoleResult.entries[0]?.source ?? '', consoleResult.entries[0]?.stack[0] ?? '', list.url, list.requests[0]?.url ?? '', detail.url, detail.request.url, tabs.tabs[0]?.url ?? ''];
+    for (const url of urls) {
+      expect(Array.from(url).length, url.slice(0, 40)).toBeLessThanOrEqual(530);
+      expect(url).not.toContain('SECRETVALUE');
+    }
+    for (const url of [consoleResult.url, list.url, list.requests[0]?.url ?? '', detail.url, detail.request.url, tabs.tabs[0]?.url ?? '']) {
+      expect(Array.from(url).length).toBeLessThanOrEqual(512);
+      expect(url.endsWith('…')).toBe(true);
+    }
+  });
+
+  it('короткий адрес не меняется', async () => {
+    const { ops, runOp: run } = setup();
+    register(ops, {});
+    expect(okResult<BrowserAgentConsoleResult>(await run('console', { tab: 't1' })).url).toBe('http://localhost:5173/settings');
+  });
+});
+
 describe('network (спека 5.1, 6)', () => {
   const failing = networkEntry({
     id: '100.1', method: 'POST', url: 'http://localhost:5173/api/settings?token=SECRET123&page=2', status: 500, statusText: 'Internal Server Error',

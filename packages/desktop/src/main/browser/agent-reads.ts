@@ -18,6 +18,7 @@ import type { ConsoleEntry, DevtoolsSnapshot, NetworkEntry, StackFrame } from '.
 import { redactBody, redactHeaders, redactSecretsInText, redactUrl, redactUrlsInText, unmaskableJson } from '../../shared/redact.js';
 import { AgentOpError } from './agent-errors.js';
 import type { PageRecord } from './agent-pages.js';
+import { clipUrl, urlForAgent } from './agent-url.js';
 import type { Inspector } from './inspector.js';
 
 /** Записей в ответе по умолчанию — то же число, что `default` в схемах инструментов MCP. */
@@ -36,7 +37,7 @@ export function newest<T>(items: readonly T[], limit: number): T[] {
   return picked.reverse();
 }
 
-const frameText = (frame: StackFrame): string => `${frame.fn === '' ? '(anonymous)' : frame.fn} (${redactUrl(frame.url)}:${frame.line}:${frame.column})`;
+const frameText = (frame: StackFrame): string => `${frame.fn === '' ? '(anonymous)' : frame.fn} (${urlForAgent(frame.url)}:${frame.line}:${frame.column})`;
 
 /** Кадр библиотеки, а не кода страницы: в стеке из пятидесяти кадров ошибку находят по своим. */
 const VENDOR_FRAME = /\/node_modules\/|^node:|^chrome-extension:|\/@vite\/|\/\.vite\/deps\/|^webpack-internal:/;
@@ -58,7 +59,7 @@ export function toAgentConsole(entry: ConsoleEntry, masked: string = maskedText(
     level: entry.level,
     origin: entry.origin,
     text: head.cut ? `${head.text}…` : masked,
-    source: entry.location === null ? null : `${redactUrl(entry.location.url)}:${entry.location.line}:${entry.location.column}`,
+    source: entry.location === null ? null : `${urlForAgent(entry.location.url)}:${entry.location.line}:${entry.location.column}`,
     stack: compactStack(entry.stack),
     count: entry.count,
     at: new Date(entry.ts).toISOString(),
@@ -78,7 +79,7 @@ function foldSimilar(items: ReadonlyArray<{ entry: BrowserAgentConsoleEntry; key
 }
 
 export function summaryOf(entry: NetworkEntry): BrowserAgentRequestSummary {
-  return { id: entry.id, method: entry.method, url: redactUrl(entry.url), kind: entry.kind, status: entry.status, statusText: entry.statusText, failure: entry.failure, durationMs: entry.durationMs, mimeType: entry.mimeType };
+  return { id: entry.id, method: entry.method, url: urlForAgent(entry.url), kind: entry.kind, status: entry.status, statusText: entry.statusText, failure: entry.failure, durationMs: entry.durationMs, mimeType: entry.mimeType };
 }
 
 /** Список сети: query и фрагмент адреса (после маски) — не длиннее `AGENT_LIMITS.listQuery` знаков; полный адрес — в деталях. */
@@ -163,11 +164,11 @@ export function createAgentReads(deps: { inspector: Pick<Inspector, 'snapshot' |
         .filter(({ masked }) => pattern === undefined || masked.toLowerCase().includes(pattern));
       const folded = foldSimilar(matching.map(({ entry, masked }) => ({ entry: toAgentConsole(entry, masked), key: `${entry.level} ${masked.replace(/\d+/g, '#')}` })));
       const next = matching.reduce<number | null>((top, { entry }) => (top === null || entry.id > top ? entry.id : top), null);
-      return { tab: record.agentId, url: redactUrl(contents.getURL()), entries: newest(folded, args.limit ?? DEFAULT_LIST), matched: matching.length, next };
+      return { tab: record.agentId, url: urlForAgent(contents.getURL()), entries: newest(folded, args.limit ?? DEFAULT_LIST), matched: matching.length, next };
     },
     async networkOf(contents, record, args) {
       const snapshot = captured(contents.id);
-      const url = redactUrl(contents.getURL());
+      const url = urlForAgent(contents.getURL());
       if (args.requestId !== undefined) {
         // Запрос прошлой страницы (прошлая эпоха) для агента — как неизвестный: его уже нет в списках.
         const entry = snapshot.network.find((candidate) => candidate.id === args.requestId && candidate.epoch === snapshot.epoch);
@@ -188,7 +189,7 @@ export function createAgentReads(deps: { inspector: Pick<Inspector, 'snapshot' |
         .slice(from)
         .filter((entry) => (args.failedOnly !== false ? isFailed(entry) : true) && (pattern === undefined || redactUrl(entry.url).toLowerCase().includes(pattern)));
       const requests = newest(
-        matching.map((entry) => ({ ...summaryOf(entry), url: shortUrl(redactUrl(entry.url)) })),
+        matching.map((entry) => ({ ...summaryOf(entry), url: clipUrl(shortUrl(redactUrl(entry.url))) })),
         args.limit ?? DEFAULT_LIST,
       );
       return { tab: record.agentId, url, requests, matched: matching.length, notes, next: requests[requests.length - 1]?.id ?? null };

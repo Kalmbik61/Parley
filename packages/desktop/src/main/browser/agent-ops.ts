@@ -31,6 +31,7 @@ import { createPageRegistry, listTabs } from './agent-pages.js';
 import type { PageRecord } from './agent-pages.js';
 import { createPageQueue } from './agent-queue.js';
 import { createAgentReads } from './agent-reads.js';
+import { clipUrl } from './agent-url.js';
 import type { Emulation } from './emulation.js';
 import type { Inspector } from './inspector.js';
 
@@ -220,7 +221,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
         ? new AgentOpError('bad_request', `This browser panel already has ${AGENT_LIMITS.panelPages} pages, the most Parley allows. Ask the human to close one.`)
         : new AgentOpError('window_not_connected', "Parley's window does not know this workspace yet: try again in a moment.");
     }
-    return { tab: registry.agentIdFor(workKey, answer.tabId), owner, url, reused: answer.reused, notes: answer.mounted ? [] : [NOT_MOUNTED_NOTE] };
+    return { tab: registry.agentIdFor(workKey, answer.tabId), owner, url: clipUrl(url), reused: answer.reused, notes: answer.mounted ? [] : [NOT_MOUNTED_NOTE] };
   }
 
   return {

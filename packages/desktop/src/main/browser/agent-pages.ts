@@ -8,9 +8,10 @@ import { viewportSize } from '../../shared/browser-devtools.js';
 import type { AgentPageRegistration } from '../../shared/browser-types.js';
 import type { BrowserOwner } from '../../shared/layout-types.js';
 import { isLoopbackUrl } from '../../shared/loopback.js';
-import { redactSecretsInText, redactUrl, redactUrlsInText } from '../../shared/redact.js';
+import { redactSecretsInText, redactUrlsInText } from '../../shared/redact.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
 import { AgentOpError } from './agent-errors.js';
+import { urlForAgent } from './agent-url.js';
 import type { Emulation } from './emulation.js';
 import type { Inspector } from './inspector.js';
 
@@ -175,7 +176,7 @@ export async function listTabs(registry: PageRegistry, deps: ListTabsDeps, reque
     tabs.push({
       id: record.agentId,
       owner: record.owner,
-      url: redactUrl(record.lastUrl),
+      url: urlForAgent(record.lastUrl),
       title: redactSecretsInText(redactUrlsInText(record.lastTitle)).slice(0, TITLE_LIMIT),
       viewport: loaded && record.webContentsId !== null ? await viewportOf(deps, record.webContentsId) : null,
       loaded,
