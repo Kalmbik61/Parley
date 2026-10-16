@@ -117,8 +117,8 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
         signal?.removeEventListener('abort', onAbort);
         reject(new AgentOpError('tab_not_loaded', `Page ${record.agentId} did not answer during the screenshot (${what}): it may have crashed or hung.`));
       }, guestCallMs);
-      if (signal?.aborted === true) return onAbort();
       signal?.addEventListener('abort', onAbort, { once: true });
+      // Обработчики на `call` вешаются и при уже отменённой операции: иначе его поздний отказ уйдёт в unhandledRejection.
       call.then(
         (value) => {
           clearTimeout(timer);
@@ -131,6 +131,7 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
           reject(error);
         },
       );
+      if (signal?.aborted === true) onAbort();
     });
   }
 
@@ -216,11 +217,10 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
      * Поэтому клип — только на экране с DPR 1; fullPage его не берёт: полосы склеиваются на main, длинная сторона режется после
      * склейки. Эмуляция на экране DPR > 1 берёт DPR экрана (`withTemporary`): с DPR 1 она не действует и кадр выходит четвертью.
      */
-    // Окно, которое не ответило за срок, — как «метода нет»: запасной путь по раскладке самой страницы.
-    const windowDpr = deps.screenDpr === undefined ? null : await bounded(deps.screenDpr(contents), 'window DPR', record, signal).catch((error: unknown) => {
+    // Окно, которое не ответило за срок или отказало, — как «метода нет»: запасной путь по раскладке самой страницы.
+    const windowDpr = deps.screenDpr === undefined ? null : await bounded(deps.screenDpr(contents), 'window DPR', record, signal).catch(() => {
       signal.throwIfAborted();
-      if (error instanceof AgentOpError && error.code === 'tab_not_loaded') return null;
-      throw error;
+      return null;
     });
     const screenDpr = windowDpr ?? (deps.emulation.current(id) === null ? dprOf(metrics) : 1);
     const canClip = args.fullPage !== true && screenDpr <= 1;

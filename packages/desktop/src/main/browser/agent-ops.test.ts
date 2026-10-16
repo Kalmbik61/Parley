@@ -58,7 +58,7 @@ function sendWith(options: { viewport?: { width: number; height: number }; conte
 }
 
 /** Окно отвечает на просьбу своим ответом (если он задан) сразу после неё, как ответил бы рендерер. */
-function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null; sent?: boolean; openMs?: number; owners?: BrowserAgentOwner[]; confirmSurface?: boolean; captureReadyMs?: number; windowHeight?: number; screenDpr?: number; screenDprHangs?: boolean; guestCallMs?: number; opTimeoutMs?: number } = {}) {
+function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null; sent?: boolean; openMs?: number; owners?: BrowserAgentOwner[]; confirmSurface?: boolean; captureReadyMs?: number; windowHeight?: number; screenDpr?: number; screenDprHangs?: boolean; screenDprRejects?: boolean; guestCallMs?: number; opTimeoutMs?: number } = {}) {
   const asked: AgentOpenTab[] = [];
   const state = { allowed: overrides.allowed ?? true, reply: overrides.reply === undefined ? { tabId: 'browser:aaaaaa', reused: false, mounted: true } : overrides.reply };
   const openTab = vi.fn((e: AgentOpenTab): boolean => {
@@ -111,6 +111,7 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
     ...(overrides.windowHeight === undefined ? {} : { windowHeight: () => overrides.windowHeight as number }),
     ...(overrides.screenDpr === undefined ? {} : { screenDpr: async () => overrides.screenDpr as number }),
     ...(overrides.screenDprHangs === true ? { screenDpr: () => new Promise<number | null>(() => undefined) } : {}),
+    ...(overrides.screenDprRejects === true ? { screenDpr: () => Promise.reject(new Error('Script failed to execute')) } : {}),
     ...(overrides.guestCallMs === undefined ? {} : { guestCallMs: overrides.guestCallMs }),
   };
   const ops: AgentOps = createAgentOps(deps);
@@ -1487,6 +1488,13 @@ describe('тайм-аут и немедленный повтор с настоя
 describe('окно не отвечает про DPR экрана (ревью G4)', () => {
   it('screenDpr не отвечает за срок вызова — запасной путь по раскладке страницы, снимок проходит', async () => {
     const { ops, runOp: run } = setup({ screenDprHangs: true, guestCallMs: 30 });
+    register(ops, {});
+    const result = okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1' }));
+    expect(result.viewport).toEqual({ width: 1280, height: 800 });
+  });
+
+  it('screenDpr отказал — тот же запасной путь, а не unsupported', async () => {
+    const { ops, runOp: run } = setup({ screenDprRejects: true });
     register(ops, {});
     const result = okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1' }));
     expect(result.viewport).toEqual({ width: 1280, height: 800 });

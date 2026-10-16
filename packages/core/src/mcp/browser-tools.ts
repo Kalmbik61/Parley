@@ -105,6 +105,7 @@ export const BROWSER_TOOLS: readonly Tool[] = [
     description:
       'Take a PNG screenshot of a page: the visible viewport, or at a given width and height, or the full page up to 3 viewport heights. ' +
       "With width/height the page is briefly resized for the capture, then returns to the human's size. " +
+      'fullPage scrolls the page down and back, so scroll handlers and lazy loading on the page may fire. ' +
       `The long side is at most ${BROWSER_TOOL_LIMITS.screenshotLongSide} px. Returns the image and its file path.`,
     annotations: READ,
     inputSchema: {
