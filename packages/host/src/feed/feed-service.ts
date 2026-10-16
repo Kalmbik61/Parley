@@ -123,7 +123,7 @@ export interface FeedServiceDeps {
   works: Pick<WorksService, 'entry' | 'onChange'>;
   activity: Pick<
     ActivityService,
-    'onChange' | 'logFile' | 'childLogFile' | 'questionHeld' | 'onLogChange'
+    'onChange' | 'logFile' | 'childLogFile' | 'questionHeld' | 'permissionAnswered' | 'onLogChange'
   >;
   pty: Pick<PtyManager, 'on' | 'get' | 'write' | 'screenText'>;
 }
@@ -611,17 +611,21 @@ export function createFeedService(
       return;
     }
     const cardId = card.cardId;
+    const hookEvent = body['hook_event_name'] === 'PreToolUse' ? 'PreToolUse' : 'PermissionRequest';
     pending.hold({
       ref: feed.ref,
       cardId,
-      hookEvent: body['hook_event_name'] === 'PreToolUse' ? 'PreToolUse' : 'PermissionRequest',
+      hookEvent,
       rawToolInput: recordOf(body['tool_input']),
       kind: card.kind,
       respond: request.respond,
     });
     // CLI закрыл запрос сам (ответили в терминале, процесс вышел): решать в окне больше нечего.
     request.onAbandon(() => {
-      if (pending.drop(feed.ref, cardId)) settle(feed.ref, 'elsewhere', [cardId]);
+      if (!pending.drop(feed.ref, cardId)) return;
+      // Ответили в терминале: инструмент пошёл, `blocked` пора снять. Таймаут (`stale`) сюда не попадает.
+      if (hookEvent === 'PermissionRequest') deps.activity.permissionAnswered(feed.ref);
+      settle(feed.ref, 'elsewhere', [cardId]);
     });
   }
 
@@ -1232,6 +1236,8 @@ export function createFeedService(
       );
       // Сначала ответ хуку, потом лента: `commit` снимает хуки решённых карточек пустым `{}`.
       pending.resolve(feed.ref, cardId, response);
+      // Хука «разрешили» у Claude Code нет: без отметки сессия числилась бы `blocked` до конца инструмента.
+      if (held.hookEvent === 'PermissionRequest') deps.activity.permissionAnswered(feed.ref);
       commit(feed, result);
       return { applied: true, state: next.state };
     },

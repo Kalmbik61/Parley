@@ -659,6 +659,46 @@ describe('удержание хуков и решения', () => {
     expect(fakes.deps.activity.questionHeld).not.toHaveBeenCalled();
   });
 
+  it('решение окна на удержанный PermissionRequest — отметка «ответили» службе активности', () => {
+    start();
+    send(prompt('go'));
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    send(permission('Bash', { command: 'ls' }));
+    expect(fakes.deps.activity.permissionAnswered).not.toHaveBeenCalled();
+
+    service.decide(REF, 'permission:t1', { kind: 'permission', behavior: 'allow' });
+    expect(vi.mocked(fakes.deps.activity.permissionAnswered).mock.calls).toEqual([[REF]]);
+  });
+
+  it('PermissionRequest: ответили в терминале (CLI закрыл запрос) — отметка «ответили»', () => {
+    start();
+    send(prompt('go'));
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    const request = send(permission('Bash', { command: 'ls' }));
+    request.abandon();
+    expect(vi.mocked(fakes.deps.activity.permissionAnswered).mock.calls).toEqual([[REF]]);
+  });
+
+  it('PermissionRequest: таймаут (stale) отметки не ставит — диалог в терминале ждёт человека', () => {
+    vi.useFakeTimers();
+    start();
+    send(prompt('go'));
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    send(permission('Bash', { command: 'ls' }));
+    vi.advanceTimersByTime(3_600_000);
+    expect(fakes.deps.activity.permissionAnswered).not.toHaveBeenCalled();
+  });
+
+  it('решение на вопрос PreToolUse и его abandon отметки не ставят', () => {
+    start();
+    send(prompt('go'));
+    send(pre('q1', 'AskUserQuestion', { questions: QUESTIONS }));
+    service.decide(REF, 'question:q1', { kind: 'question', answers: { 'Which fruit?': 'Pear' } });
+    const other = send(pre('q2', 'AskUserQuestion', { questions: QUESTIONS }));
+    other.abandon();
+    expect(fakes.deps.activity.permissionAnswered).not.toHaveBeenCalled();
+  });
+
   it('pty.exit: висящим {}, карточки stale, ход закрыт чертой', async () => {
     start();
     send(prompt('go'));

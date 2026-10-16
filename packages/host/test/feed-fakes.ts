@@ -112,6 +112,7 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
       logFile: () => logFile,
       childLogFile: (_ref: SessionRef, threadId: string) => childLogFiles.get(threadId) ?? null,
       questionHeld: vi.fn(),
+      permissionAnswered: vi.fn(),
       onChange: (listener: ActivityListener) => {
         activityListeners.add(listener);
         return () => activityListeners.delete(listener);
