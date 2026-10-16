@@ -47,6 +47,10 @@
  * что проект — git-репозиторий (`branches` для этого не годится: при отсоединённой голове ветки нет и у git-проекта).
  * Флажок один на все сессии диалога: у каждого агента комнаты свой worktree.
  *
+ * Lean-режим (C2.2): участники комнаты уходят в `sessions.create` с `lean` из настройки `leanAgents` (читается при
+ * открытии вместе с порогами; хост не отдал её — поля нет, решает хост), одиночная сессия — со своим флажком «Lean session»
+ * (по умолчанию снят; без галочки поля нет). Старый хост поле отбросит, старому окну его не нужно.
+ *
  * Бюджет работы (P37): пороги читаются из настроек при открытии, занятое — из карты выбранной работы. Подвал показывает,
  * сколько сессий идёт и сколько запусков осталось в часе; старт, который не помещается (нужные участники больше свободных
  * слотов или запусков, комната больше своего порога), блокируется с объяснением — до первого `sessions.create`, чтобы
@@ -91,6 +95,7 @@ import { useUiStore } from '../../store/ui.js';
 import { useHostStore } from '../../store/host.js';
 import { useWorksStore } from '../../store/works.js';
 import { Button } from '../../ui/button.js';
+import { Checkbox } from '../../ui/checkbox.js';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '../../ui/dialog.js';
 import { Textarea } from '../../ui/textarea.js';
 import { Input } from '../../ui/input.js';
@@ -298,6 +303,10 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
   const [leadKey, setLeadKey] = useState(1);
   const [worktree, setWorktree] = useState(false);
   const [worktreeAvailable, setWorktreeAvailable] = useState(false);
+  /** «Lean session» одиночной сессии: по умолчанию снят. У комнаты вместо него настройка `leanAgents`. */
+  const [lean, setLean] = useState(false);
+  /** `leanAgents` из настроек этого открытия; `null` — хост её не отдал (старый хост) или ответ не пришёл. */
+  const [leanAgents, setLeanAgents] = useState<boolean | null>(null);
   /** Каталог рецептов проекта; `null` — не загружен или хост рецептов не знает: выбора рецепта тогда нет. */
   const [recipes, setRecipes] = useState<RecipeCatalogView | null>(null);
   const [recipeId, setRecipeId] = useState<string | null>(null);
@@ -344,6 +353,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
     setName(''); setTask(backlog?.task ?? ''); setCreatedTarget(null);
     setWorkChoice(work === null ? null : workKey(work.projectPath, work.workId));
     setWorktree(false);
+    setLean(false);
     setRecipeId(null);
     setMode('free');
     setSaving(false);
@@ -405,10 +415,13 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
     if (!open) return;
     let stale = false;
     setLimits(null);
+    setLeanAgents(null);
     bridge
       .call('settings.get', {})
       .then(({ config }) => {
-        if (!stale && RESOURCE_LIMIT_KEYS.every((key) => typeof config[key] === 'number')) setLimits(limitsFromConfig(config));
+        if (stale) return;
+        if (RESOURCE_LIMIT_KEYS.every((key) => typeof config[key] === 'number')) setLimits(limitsFromConfig(config));
+        if (typeof config.leanAgents === 'boolean') setLeanAgents(config.leanAgents);
       })
       .catch(() => {
         // Без порогов подвал бюджета не показывается, а решает хост.
@@ -630,6 +643,8 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
             // после `providers.changed` выбор уходит как `Default`.
             ...(row.modelTouched && (info?.models?.length ?? 0) > 0 ? { model: chosenModel(row, info) } : {}),
             ...(row.effortTouched && effortChoices(info, chosenModel(row, info)) !== null ? { effort: chosenEffort(row, info) } : {}),
+            // Участники комнаты — по настройке (хост её не отдал — решает сам), одиночная сессия — только с галочкой.
+            ...(multi ? (leanAgents === null ? {} : { lean: leanAgents }) : lean ? { lean: true } : {}),
           });
           done[row.key] = { status: 'started', sessionId: ref.sessionId };
         } catch (err) {
@@ -1036,6 +1051,15 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
               </label>
               <FieldHint field={text.inOwnWorktree} text={text.hints.worktree} />
             </span>
+            {multi ? null : (
+              <span className="flex items-center gap-1">
+                <label className="flex items-center gap-2">
+                  <Checkbox checked={lean} disabled={groupLocked} onCheckedChange={(value) => setLean(value === true)} />
+                  {text.leanSession}
+                </label>
+                <FieldHint field={text.leanSession} text={text.hints.leanSession} />
+              </span>
+            )}
             {multi ? (
               <span className="flex items-center gap-2">
                 <span className="flex items-center gap-1">

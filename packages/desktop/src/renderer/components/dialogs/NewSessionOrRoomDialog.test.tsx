@@ -2118,3 +2118,81 @@ describe('NewSessionOrRoomDialog — подключение провайдера
     expect(document.querySelector('[data-provider-card]')).toBeNull();
   });
 });
+
+describe('NewSessionOrRoomDialog — Lean agent sessions (C2.2)', () => {
+  /** Диалогу из настроек нужен только `leanAgents`: остальное его не интересует. */
+  const stubLean = (leanAgents: boolean): void => {
+    bridge.setHandler('settings.get', async () => ({ config: { leanAgents } as never, locked: {} }));
+  };
+  const leanOf = (): unknown[] => callsOf('sessions.create').map((params) => params['lean']);
+  const leanBox = (): HTMLElement => screen.getByRole('checkbox', { name: 'Lean session' });
+
+  it('участники комнаты уходят с lean: true при включённой настройке', async () => {
+    stubLean(true);
+    const { onOpenChange } = await renderDialog({ room: true });
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(leanOf()).toEqual([true, true]);
+  });
+
+  it('участники комнаты уходят с lean: false при выключенной настройке', async () => {
+    stubLean(false);
+    const { onOpenChange } = await renderDialog({ room: true });
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(leanOf()).toEqual([false, false]);
+    expect(callsOf('sessions.create').every((params) => 'lean' in params)).toBe(true);
+  });
+
+  it('хост не отдал настройку (прежняя версия): поля lean у участников нет', async () => {
+    bridge.setHandler('settings.get', async () => { throw new Error('unknown method'); });
+    const { onOpenChange } = await renderDialog({ room: true });
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create').every((params) => !('lean' in params))).toBe(true);
+  });
+
+  it('одиночная сессия: чекбокс «Lean session» по умолчанию снят, без галочки поля lean нет — даже при включённой настройке', async () => {
+    stubLean(true);
+    const { onOpenChange } = await renderDialog();
+    expect(isChecked(leanBox())).toBe(false);
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')).toHaveLength(1);
+    expect('lean' in (callsOf('sessions.create')[0] as Record<string, unknown>)).toBe(false);
+  });
+
+  it('одиночная сессия с галочкой уходит с lean: true', async () => {
+    stubLean(false);
+    const { onOpenChange } = await renderDialog();
+    fireEvent.click(leanBox());
+    expect(isChecked(leanBox())).toBe(true);
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(leanOf()).toEqual([true]);
+  });
+
+  it('чекбокс есть только у одиночной сессии: с двумя агентами его нет, а галочка не уходит в комнату', async () => {
+    stubLean(false);
+    const { onOpenChange } = await renderDialog();
+    fireEvent.click(leanBox());
+    await addAgent();
+    expect(screen.queryByRole('checkbox', { name: 'Lean session' })).toBeNull();
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(leanOf()).toEqual([false, false]);
+  });
+
+  it('новое открытие начинается со снятой галочкой', async () => {
+    const view = render(
+      <NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={vi.fn()} />,
+    );
+    await act(async () => {});
+    fireEvent.click(leanBox());
+    expect(isChecked(leanBox())).toBe(true);
+    view.rerender(<NewSessionOrRoomDialog open={false} bridge={bridge} work={null} room={false} onOpenChange={vi.fn()} />);
+    view.rerender(<NewSessionOrRoomDialog open bridge={bridge} work={null} room={false} onOpenChange={vi.fn()} />);
+    await act(async () => {});
+    expect(isChecked(leanBox())).toBe(false);
+  });
+});

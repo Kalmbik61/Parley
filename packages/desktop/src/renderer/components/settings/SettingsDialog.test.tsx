@@ -28,6 +28,8 @@ const CONFIG = {
   // Как у хоста по умолчанию (с 2026-10-06).
   skillNavigator: true,
   codexApprovals: false,
+  // Как у хоста по умолчанию.
+  leanAgents: true,
   fontFamily: 'Menlo',
   fontSize: 13,
   worktreeRoot: '~/.harnas/worktrees',
@@ -576,5 +578,44 @@ describe('SettingsDialog — Codex approvals', () => {
     switchTo('Agents');
     await screen.findByText('Worktree root');
     expect(screen.queryByRole('switch', { name: 'Answer Codex approvals in Parley' })).toBeNull();
+  });
+});
+
+describe('SettingsDialog — Lean agent sessions', () => {
+  it('defaults on, saves both ways and shows the hint', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.get', () => ({ config: CONFIG, locked: {} }));
+    bridge.setHandler('settings.set', ({ key, value }) => ({ config: { ...CONFIG, [key]: value === 'true' } }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+    switchTo('Agents');
+    const toggle = await screen.findByRole('switch', { name: 'Lean agent sessions' });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByText(S.settings.leanAgentsHint)).toBeTruthy();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+    expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'leanAgents', value: 'false' } });
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
+    expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'leanAgents', value: 'true' } });
+  });
+
+  it('shows the env lock and disables the switch', async () => {
+    const bridge = createFakeBridge();
+    openSettings(bridge, { leanAgents: 'PARLEY_LEAN_AGENTS' });
+    switchTo('Agents');
+    await screen.findByText(/set by PARLEY_LEAN_AGENTS/);
+    expect((screen.getByRole('switch', { name: 'Lean agent sessions' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('hides the field for an older host while keeping other agent settings', async () => {
+    const bridge = createFakeBridge();
+    const oldHost: Partial<typeof CONFIG> = { ...CONFIG };
+    delete oldHost.leanAgents;
+    bridge.setHandler('settings.get', () => ({ config: oldHost as typeof CONFIG, locked: {} }));
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+    switchTo('Agents');
+    await screen.findByText('Worktree root');
+    expect(screen.queryByRole('switch', { name: 'Lean agent sessions' })).toBeNull();
+    expect(screen.getByRole('switch', { name: 'Skill navigator' })).toBeTruthy();
   });
 });
