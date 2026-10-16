@@ -5,7 +5,8 @@
  * от main (`onHover`) и открывает список, а область под мышь (форма или язычок) уходит main и не повторяется. Где нужна
  * цепочка «событие → снимок ленты → карточка», таймеры настоящие; отсчёт покоя идёт на подставных таймерах и на заранее заполненных сторах (без обмена с хостом).
  * Строки Done: новый конец хода выдвигает остров (без звука), конец хода до подключения — нет, удержание `DONE_HOLD_MS`
- * вместо покоя, Clear прячет строки до нового конца хода. Показанная строка Done держится до конца показа: сессию отметили
+ * вместо покоя, Clear прячет строки до нового конца хода и отмечает непросмотренные сессии просмотренными (`markSeen`; удержанные
+ * просмотренные хосту не шлются). Показанная строка Done держится до конца показа: сессию отметили
  * просмотренной (`idle` с прежним концом хода) — строка остаётся, пока курсор не ушёл с острова; при уборке острова она
  * держится ещё `RETRACT_MORPH_MS` (пока форма сжимается), выдвинули раньше — уходит в тот же миг. Убранный остров — та же
  * форма, сжатая в брусок; с непросмотренными Done (просмотренные в число не входят) вместо бруска в ней «✅ N». Поверх
@@ -64,7 +65,7 @@ function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
   return {
     config: vi.fn(async (): Promise<IslandConfig> => ({ sound: false, topInset: 0, anchor: 'center', ...config })),
     onConfig: vi.fn(() => () => undefined),
-    onHover: vi.fn(() => () => undefined), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), failed: vi.fn(),
+    onHover: vi.fn(() => () => undefined), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
   };
 }
 
@@ -873,6 +874,51 @@ describe('Done на острове', () => {
     act(() => seedDone(FRESHER));
     expect(isRetracted()).toBe(false);
     expect(screen.getByTestId('island-counters').textContent).toBe('✅ 1 done');
+  });
+
+  it('Clear отмечает просмотренными сессии непросмотренных Done-строк: markSeen с их ref', () => {
+    const { island, bridge, hover } = setup();
+    render(<IslandApp bridge={bridge} />);
+    act(() => seedDone(FRESH));
+    hover(true);
+    expect(island.markSeen).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('island-clear'));
+    expect(island.markSeen).toHaveBeenCalledTimes(1);
+    expect(island.markSeen).toHaveBeenCalledWith([ref('s-01')]);
+    expect(screen.queryByTestId('island-done')).toBeNull();
+  });
+
+  it('Clear не шлёт удержанные просмотренные строки: в markSeen только ref непросмотренных', () => {
+    const { island, bridge, hover } = setup();
+    render(<IslandApp bridge={bridge} />);
+    const activity = (state: 'unseen' | 'idle', sessionId: string) => [refKey(ref(sessionId)), makeActivity(ref(sessionId), state, { turnEndedAt: FRESH })] as const;
+    const seed = (first: 'unseen' | 'idle', second: 'unseen' | 'idle'): void => {
+      act(() => {
+        useWorksStore.setState({ entries: ENTRIES, branches: {}, loading: false, error: null });
+        useActivityStore.setState({ byRef: Object.fromEntries([activity(first, 's-01'), activity(second, 's-02')]), loaded: true });
+      });
+    };
+    seed('unseen', 'unseen');
+    hover(true);
+    // s-01 посмотрели в Parley: её строка удержана (`seen` истинно), s-02 всё ещё ждёт.
+    seed('idle', 'unseen');
+    expect(screen.getAllByTestId('island-done')).toHaveLength(2);
+    fireEvent.click(screen.getByTestId('island-clear'));
+    expect(island.markSeen).toHaveBeenCalledTimes(1);
+    expect(island.markSeen).toHaveBeenCalledWith([ref('s-02')]);
+    expect(screen.queryByTestId('island-done')).toBeNull();
+  });
+
+  it('Clear при одних удержанных просмотренных строках прячет их, а markSeen не зовёт', () => {
+    const { island, bridge, hover } = setup();
+    render(<IslandApp bridge={bridge} />);
+    act(() => seedDone(FRESH));
+    act(() => seedSeen(FRESH));
+    hover(true);
+    expect(screen.getByTestId('island-done')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('island-clear'));
+    expect(screen.queryByTestId('island-done')).toBeNull();
+    expect(island.markSeen).not.toHaveBeenCalled();
   });
 
   it('активность сессии пропала (конца хода нет) — строка уходит сама', () => {

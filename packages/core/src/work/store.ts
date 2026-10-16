@@ -16,6 +16,7 @@ import {
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { CONTEXT_DIR, contextFile } from '../context-fill.js';
 import { LIMITS_DIR, limitsFile } from '../limits.js';
 import { envValue, HOME_DIR, LEGACY_HOME_DIR, type Env } from '../names.js';
 import { bumpWorkId, nextWorkId, parseMap } from './map.js';
@@ -58,6 +59,8 @@ export interface WorkPaths {
   events: string;
   /** Лимиты подписки от строки статуса Claude Code: `limits/<session-id>.json`, пишет её скрипт. */
   limits: string;
+  /** Заполненность контекста сессий от строки статуса (спека 2026-10-15). */
+  context: string;
   /** Хуки Claude Code для сессий работы (`--settings`), один файл на работу. */
   settings: string;
 }
@@ -75,6 +78,7 @@ export function workPaths(projectPath: string, workId: string): WorkPaths {
     mcp: path.join(dir, 'mcp'),
     events: path.join(dir, 'events'),
     limits: path.join(dir, LIMITS_DIR),
+    context: path.join(dir, CONTEXT_DIR),
     settings: path.join(dir, 'settings.json'),
   };
 }
@@ -195,6 +199,7 @@ export async function deleteSessionFiles(
     path.join(paths.events, `${sessionId}.jsonl`),
     path.join(paths.mcp, `${sessionId}.json`),
     limitsFile(paths.dir, sessionId),
+    contextFile(paths.dir, sessionId),
   ];
   await Promise.all(files.map((file) => rm(file, { force: true })));
 }

@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
-import type { EventMessage, EventName, MethodName } from '@parley/protocol';
+import type { EventMessage, EventName, MethodName, SessionRef } from '@parley/protocol';
 import type { HostStatus } from '../shared/bridge.js';
 import type { IslandApi, IslandBridge, IslandConfig, IslandHitRect, IslandPoint } from '../shared/island.js';
 
@@ -74,6 +74,7 @@ const bridge = {
     dragEnd: (point: IslandPoint) => ipcRenderer.send('island:drag-end', point),
     open: (target: unknown) => ipcRenderer.send('island:open', target),
     beep: () => ipcRenderer.send('island:beep'),
+    markSeen: (refs: SessionRef[]) => ipcRenderer.send('island:mark-seen', refs),
     failed: () => ipcRenderer.send('island:failed'),
   } satisfies IslandApi,
 };

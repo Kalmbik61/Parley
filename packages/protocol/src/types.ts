@@ -1,4 +1,4 @@
-import type { UsageSummary, WorkEntry } from '@parley/core';
+import type { ContextFill, UsageSummary, WorkEntry } from '@parley/core';
 
 /**
  * Лимиты подписки провайдера (спека комнат Organic, 3.5): пятичасовое и недельное окна и время, когда
@@ -124,6 +124,12 @@ export type MailWait =
   | 'resume-limit'
   | 'pending';
 
+/**
+ * Сжатие контекста сессии (спека 2026-10-15, 5.6): просьба ждёт, пока агент освободится; идёт; закончено, а новой
+ * цифры заполненности ещё нет.
+ */
+export type CompactionPhase = 'pending' | 'running' | 'compacted';
+
 /** Живые цифры сессии для строки статуса и списка — `null`, пока их не видно. */
 export interface LiveMetrics {
   /**
@@ -154,6 +160,13 @@ export interface LiveMetrics {
    * Поля нет у хоста более ранней версии.
    */
   mailWaiting?: MailWait | null;
+  /**
+   * Заполненность контекста сейчас (спека 2026-10-15, 4.3); `null` — неизвестно. Поля нет у хоста более ранней
+   * версии: окно чипа не показывает.
+   */
+  context?: ContextFill | null;
+  /** Сжатие контекста (спека 5.6); `null` — ничего. Поля нет у хоста более ранней версии. */
+  compaction?: CompactionPhase | null;
 }
 
 /** Виды уведомлений хоста, для которых не нужен отдельный запрос-ответ. */
@@ -180,11 +193,16 @@ export type NoticeKind =
   // Codex не показал ни `Ready`, ни `Working` за срок после запуска: он на экране входа или доверия к папке,
   // и его проходит человек в терминале Codex. Сессия при этом «нужен ты» (`blocked`), а уведомление называет причину.
   | 'startup-wait'
+  // Вызов code mode Codex (`exec`/`wait`) без вывода дольше своего ожидания и запаса: он ждёт одобрения, которого никто
+  // не видит (в окне Codex в терминале). Сессия «нужен ты» (`blocked`), а уведомление называет причину.
+  | 'codex-call-wait'
   // Скилл `parley` не поставлен в проект: путь уже есть, а создал его не харнесс (или по дороге лежит
   // симлинк). Файл остаётся как есть; окно показывает короткую строку, подробности — в `host.log`.
   | 'skill-foreign'
   // Даже компактный снимок работ не влезает в кадр: окно остаётся с прежним, пока данные не уменьшатся (P35).
-  | 'snapshot-too-large';
+  | 'snapshot-too-large'
+  | 'compact-cancelled'
+  | 'compact-failed';
 
 export interface HostNotice {
   kind: NoticeKind;
@@ -211,6 +229,14 @@ export interface SendResult {
   submitted: boolean;
   reason: SendReason | null;
 }
+
+/**
+ * Ответ `sessions.compact` (спека 2026-10-15, 5.1): напечатано сейчас; ждёт, пока агент освободится; отказ —
+ * экран неизвестен (ни одного хука с запуска) или процесса нет.
+ */
+export type CompactResult =
+  | { state: 'started' | 'pending' }
+  | { state: 'refused'; reason: 'unknown-screen' | 'asleep' };
 
 export type ErrorCode =
   | 'unauthorized'
@@ -258,6 +284,63 @@ export interface ProtocolError {
   code: ErrorCode;
   message: string;
   data?: Record<string, unknown>;
+}
+
+/** Состояние профилировщика CPU хоста: `host.profile.status`. `file` — путь `.cpuprofile` на диске хоста. */
+export type ProfileStatus =
+  | { state: 'idle' }
+  | { state: 'running'; startedAt: string; seconds: number }
+  | { state: 'done'; file: string; finishedAt: string }
+  | { state: 'failed'; error: string };
+
+/** Показатели хоста на момент запроса: строка журнала `host: состояние` и поле `health` ответа `host.diagnostics`. */
+export interface HealthSample {
+  cpuPct: number;
+  rssMb: number;
+  heapMb: number;
+  extMb: number;
+  loop: { maxMs: number; p99Ms: number; meanMs: number };
+  ptys: number;
+  attached: number;
+  feedSubs: number;
+  works: number;
+  rooms: number;
+  clients: number;
+  /** Счётчики окна (с прошлой строки состояния): обновления карт, их время и разобранные байты JSON (только карты, разобранные `readWorks` и наблюдателем; перечитывания `readMap` не входят). */
+  refreshCount: number;
+  refreshMs: number;
+  mapBytesParsed: number;
+  /** Вывод PTY за окно: кусков и байт. */
+  ptyChunks: number;
+  ptyBytes: number;
+  /** Пересчёты сессий за окно: будильник и активность вместе. */
+  recomputes: number;
+}
+
+/** Живая сессия в ответе `host.diagnostics`: без текстов и вывода, только адрес, процесс и состояние. */
+export interface HostDiagnosticsSession {
+  ref: SessionRef;
+  provider: string | null;
+  activity: string | null;
+  pid: number;
+  startedAt: string;
+  attached: boolean;
+}
+
+/** Ответ `host.diagnostics`: мгновенный снимок хоста для архива диагностики. `profiles` — пути `.cpuprofile` на диске хоста. */
+export interface HostDiagnostics {
+  hostVersion: string;
+  node: string;
+  platform: string;
+  release: string;
+  arch: string;
+  pid: number;
+  startedAt: string;
+  uptimeSec: number;
+  health: HealthSample;
+  sessions: HostDiagnosticsSession[];
+  profiles: string[];
+  profile: ProfileStatus;
 }
 
 export interface WorksSnapshot {

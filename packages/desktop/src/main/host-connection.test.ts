@@ -3,10 +3,10 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { HostPaths } from '@parley/host';
-import { encodeLine, LineDecoder, PROTOCOL_VERSION } from '@parley/protocol';
+import { BROWSER_AGENT_FEATURE, COMPACT_WORKS_FEATURE, encodeLine, LineDecoder, PROTOCOL_VERSION } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S } from '../shared/strings.js';
-import { HostConnection } from './host-connection.js';
+import { answerBrowserAgentOps, HostConnection } from './host-connection.js';
 
 interface FakeServerOptions {
   hostVersion?: string;
@@ -16,6 +16,16 @@ interface FakeServerOptions {
   methods?: string[];
   /** События сразу после ответа `hello` — как повтор активности настоящего хоста. */
   afterHello?: unknown[];
+  /** Всё, что клиент прислал: `hello`, вызовы методов (этап B2: что окно шлёт хосту). */
+  received?: unknown[];
+  /** pid в ответе `hello`; не задан — pid процесса теста. */
+  pid?: number;
+  /** На `host.shutdown` отвечает, но соединение не закрывает — зависший хост. */
+  ignoreShutdown?: boolean;
+  /** На `host.shutdown` не отвечает вовсе и соединение не закрывает — хост, чей цикл событий стоит. */
+  shutdownHangs?: boolean;
+  /** На `host.info` не отвечает вовсе. */
+  infoHangs?: boolean;
 }
 
 /**
@@ -33,6 +43,7 @@ function startFakeServer(paths: HostPaths, options: FakeServerOptions = {}): Pro
       const decoder = new LineDecoder();
       socket.on('data', (chunk: Buffer) => {
         for (const raw of decoder.push(chunk)) {
+          options.received?.push(raw);
           const message = raw as { id?: number; method?: string };
           if (message.method === 'hello' && typeof message.id === 'number') {
             if (!protocolOk) {
@@ -55,7 +66,7 @@ function startFakeServer(paths: HostPaths, options: FakeServerOptions = {}): Pro
                 result: {
                   hostVersion,
                   protocol: PROTOCOL_VERSION,
-                  pid: process.pid,
+                  pid: options.pid ?? process.pid,
                   ...(options.methods === undefined ? {} : { methods: options.methods }),
                 },
               }),
@@ -64,11 +75,27 @@ function startFakeServer(paths: HostPaths, options: FakeServerOptions = {}): Pro
             continue;
           }
           if (message.method === 'host.shutdown' && typeof message.id === 'number') {
+            if (options.shutdownHangs === true) continue;
             socket.write(encodeLine({ id: message.id, result: { ok: true } }));
+            if (options.ignoreShutdown === true) continue;
             setTimeout(() => {
               socket.end();
               server.close();
             }, 10);
+          }
+          if (message.method === 'host.info' && typeof message.id === 'number' && options.infoHangs !== true) {
+            socket.write(
+              encodeLine({
+                id: message.id,
+                result: {
+                  hostVersion,
+                  pid: options.pid ?? process.pid,
+                  startedAt: new Date().toISOString(),
+                  clients: 1,
+                  liveSessions: options.liveSessions ?? 0,
+                },
+              }),
+            );
           }
         }
       });
@@ -457,6 +484,91 @@ describe('HostConnection', () => {
     }
   }, 10000);
 
+  it('recentCalls: успешный вызов записан с методом, ok и числовым ms', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(() => null), connectTimeoutMs: 1000 });
+    await connection.connect();
+    expect(connection.recentCalls()).toEqual([]);
+
+    await connection.call('host.shutdown', {});
+
+    const calls = connection.recentCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ method: 'host.shutdown', ok: true });
+    expect(typeof calls[0]?.ms).toBe('number');
+    expect(calls[0]?.ms).toBeGreaterThanOrEqual(0);
+    expect(Number.isNaN(Date.parse(calls[0]?.t ?? ''))).toBe(false);
+    expect(calls[0]).not.toHaveProperty('error');
+    expect(calls[0]).not.toHaveProperty('ref');
+
+    connection.close();
+    server.close();
+  });
+
+  it('recentCalls: вызов без ответа, отклонённый при закрытии соединения, записан с ok: false и ref', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(() => null), connectTimeoutMs: 1000 });
+    await connection.connect();
+
+    // Фейковый хост на pty.send не отвечает; host.shutdown следом закроет сокет, и handleClose отклонит ждущий вызов.
+    const hanging = connection.call('pty.send', { ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-7' }, text: 'x', submit: true });
+    const rejection = expect(hanging).rejects.toThrow(S.connection.reasonClosed);
+    await connection.call('host.shutdown', {});
+    await rejection;
+
+    const calls = connection.recentCalls();
+    expect(calls.map((c) => [c.method, c.ok])).toEqual([
+      ['host.shutdown', true],
+      ['pty.send', false],
+    ]);
+    expect(calls[1]).toMatchObject({ ref: 's-7', error: S.connection.reasonClosed.slice(0, 120) });
+    expect(typeof calls[1]?.ms).toBe('number');
+
+    connection.close();
+    server.close();
+  });
+
+  it('recentCalls: вызов без соединения записан с error no-connection', async () => {
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(() => null), connectTimeoutMs: 1000 });
+
+    await expect(
+      connection.call('pty.send', { ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-3' }, text: 'x', submit: true }),
+    ).rejects.toThrow('no connection to host');
+
+    const calls = connection.recentCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ method: 'pty.send', ms: 0, ok: false, error: 'no-connection', ref: 's-3' });
+    expect(Number.isNaN(Date.parse(calls[0]?.t ?? ''))).toBe(false);
+  });
+
+  it('recentCalls: висящий вызов виден как pending с возрастом, после закрытия — как обычный отказ', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(() => null), connectTimeoutMs: 1000 });
+    await connection.connect();
+
+    // Фейковый хост на pty.send не отвечает.
+    const hanging = connection.call('pty.send', { ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-9' }, text: 'x', submit: true });
+    const rejection = expect(hanging).rejects.toThrow(S.connection.reasonClosed);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const calls = connection.recentCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ method: 'pty.send', ok: false, error: 'pending', ref: 's-9' });
+    expect(calls[0]?.ms).toBeGreaterThanOrEqual(0);
+    expect(Number.isNaN(Date.parse(calls[0]?.t ?? ''))).toBe(false);
+
+    // host.shutdown закроет сокет, и handleClose отклонит ждущий вызов: висящих больше нет.
+    await connection.call('host.shutdown', {});
+    await rejection;
+    expect(connection.recentCalls().map((c) => c.error)).not.toContain('pending');
+
+    connection.close();
+    server.close();
+  });
+
   it('после close повторов нет: неудачный connect и close — хост позже не подключается (fix-final-b, M4)', async () => {
     await writeToken(paths);
     const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(() => null), connectTimeoutMs: 300 });
@@ -472,4 +584,251 @@ describe('HostConnection', () => {
     expect(accepted).toBe(0);
     server.close();
   }, 10000);
+});
+
+describe('операции агента над браузером (этап B2, спека браузера 3.7)', () => {
+  let home: string;
+  let paths: HostPaths;
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'hh-'));
+    paths = {
+      dir: path.join(home, 'host'),
+      socket: path.join(home, 'host', 'host.sock'),
+      token: path.join(home, 'host', 'host.token'),
+      pid: path.join(home, 'host', 'host.pid'),
+      log: path.join(home, 'host', 'host.log'),
+    };
+  });
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  const op = (opId: string) => ({
+    event: 'browser.agentOp',
+    data: { opId, ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-02' }, label: 'S02', op: 'open', args: { url: 'http://localhost:5173/' } },
+  });
+
+  it('hello заявляет compact-works и browser-agent', async () => {
+    await writeToken(paths);
+    const received: unknown[] = [];
+    const server = await startFakeServer(paths, { received });
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
+    await connection.connect();
+    const hello = received.find((message) => (message as { method?: string }).method === 'hello') as { params: { features: string[] } };
+    expect(hello.params.features).toEqual([COMPACT_WORKS_FEATURE, BROWSER_AGENT_FEATURE]);
+    connection.close();
+    server.close();
+  });
+
+  it('операция агента уходит в run, ответ — browser.agentResult с тем же opId; сбой run — unsupported', async () => {
+    await writeToken(paths);
+    const received: unknown[] = [];
+    const server = await startFakeServer(paths, { received, afterHello: [op('op-1'), op('op-2')] });
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
+    answerBrowserAgentOps(connection, async (event) => {
+      if (event.opId === 'op-2') throw new Error('boom');
+      return { ok: true, result: { tab: 't1', url: 'http://localhost:5173/', reused: false, notes: [] } };
+    });
+    await connection.connect();
+    const results = (): unknown[] =>
+      received.filter((message) => (message as { method?: string }).method === 'browser.agentResult').map((message) => (message as { params: unknown }).params);
+    await vi.waitFor(() => expect(results()).toHaveLength(2));
+    expect(results()).toEqual(
+      expect.arrayContaining([
+        { opId: 'op-1', ok: true, result: { tab: 't1', url: 'http://localhost:5173/', reused: false, notes: [] } },
+        { opId: 'op-2', ok: false, error: { code: 'unsupported', message: 'boom' } },
+      ]),
+    );
+    connection.close();
+    server.close();
+  });
+
+  it('прочие события run не получают; отписка снимает слушателя', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { afterHello: [{ event: 'wake.changed', data: { paused: true } }] });
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
+    const run = vi.fn(async () => ({ ok: true as const, result: null }));
+    const off = answerBrowserAgentOps(connection, run);
+    await connection.connect();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(run).not.toHaveBeenCalled();
+    off();
+    connection.close();
+    server.close();
+  });
+});
+
+/**
+ * Выход из приложения гасит хост (решение 2026-10-16): `stopHost` останавливает хост насовсем — без нового запуска и
+ * переподключения; хост завис — добивается по pid (SIGTERM, затем SIGKILL). Процессы — через подменяемый `processes`:
+ * pid в тестах вымышленный, сигналы настоящим процессам не уходят.
+ */
+describe('HostConnection: остановка хоста при выходе', () => {
+  let home: string;
+  let paths: HostPaths;
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'hq-'));
+    paths = {
+      dir: path.join(home, 'host'),
+      socket: path.join(home, 'host', 'host.sock'),
+      token: path.join(home, 'host', 'host.token'),
+      pid: path.join(home, 'host', 'host.pid'),
+      log: path.join(home, 'host', 'host.log'),
+    };
+  });
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  /** Процессы-заглушки: `alive` решает, жив ли pid; сигналы — в журнал. */
+  function fakeProcesses(alive: (pid: number) => boolean, isHost: (pid: number) => boolean = () => true) {
+    const signals: Array<[number, string]> = [];
+    return {
+      signals,
+      processes: {
+        kill: vi.fn((pid: number, signal: NodeJS.Signals) => {
+          signals.push([pid, signal]);
+        }),
+        isAlive: vi.fn(alive),
+        isHost: vi.fn(isHost),
+      },
+    };
+  }
+
+  const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('хост вышел по host.shutdown — «shutdown», сигналов нет; окно не переподключается и хост не поднимает', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { pid: 999_001 });
+    const spawn = vi.fn();
+    const { processes, signals } = fakeProcesses(() => false);
+    const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 1000, processes });
+    await connection.connect();
+
+    await expect(connection.stopHost({ timeoutMs: 1000, killGraceMs: 100 })).resolves.toBe('shutdown');
+    // Дольше первой паузы переподключения (0,5 с): петля не должна ожить.
+    await settle(1200);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(signals).toEqual([]);
+    connection.close();
+    server.close();
+  }, 10_000);
+
+  it('хост не закрылся за срок — SIGTERM по pid из hello; жив и дальше — SIGKILL: «killed»', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { pid: 999_002, ignoreShutdown: true });
+    const { processes, signals } = fakeProcesses(() => true);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000, processes });
+    await connection.connect();
+
+    await expect(connection.stopHost({ timeoutMs: 200, killGraceMs: 100 })).resolves.toBe('killed');
+    expect(signals).toEqual([
+      [999_002, 'SIGTERM'],
+      [999_002, 'SIGKILL'],
+    ]);
+    connection.close();
+    server.close();
+  }, 10_000);
+
+  it('хост не отвечает на host.shutdown вовсе — срок всё равно выходит, хост добивается по pid', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { pid: 999_008, shutdownHangs: true });
+    const { processes, signals } = fakeProcesses(() => true);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000, processes });
+    await connection.connect();
+
+    const started = Date.now();
+    await expect(connection.stopHost({ timeoutMs: 200, killGraceMs: 100 })).resolves.toBe('killed');
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(signals).toEqual([
+      [999_008, 'SIGTERM'],
+      [999_008, 'SIGKILL'],
+    ]);
+    connection.close();
+    server.close();
+  }, 10_000);
+
+  it('SIGTERM хватило — SIGKILL не шлётся', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { pid: 999_003, ignoreShutdown: true });
+    let terminated = false;
+    const { processes, signals } = fakeProcesses(() => !terminated);
+    processes.kill.mockImplementation((pid: number, signal: NodeJS.Signals) => {
+      signals.push([pid, signal]);
+      if (signal === 'SIGTERM') terminated = true;
+    });
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000, processes });
+    await connection.connect();
+
+    await expect(connection.stopHost({ timeoutMs: 200, killGraceMs: 100 })).resolves.toBe('killed');
+    expect(signals).toEqual([[999_003, 'SIGTERM']]);
+    connection.close();
+    server.close();
+  }, 10_000);
+
+  it('связи нет: живой хост по host.pid гасится по pid; чужой процесс под тем же pid не трогается', async () => {
+    await mkdir(paths.dir, { recursive: true });
+    await writeFile(paths.pid, `999004\n${new Date().toISOString()}\n`, 'utf8');
+    let terminated = false;
+    const { processes, signals } = fakeProcesses(() => !terminated);
+    processes.kill.mockImplementation((pid: number, signal: NodeJS.Signals) => {
+      signals.push([pid, signal]);
+      terminated = true;
+    });
+    const spawn = vi.fn();
+    const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 300, processes });
+
+    await expect(connection.stopHost({ timeoutMs: 200, killGraceMs: 100 })).resolves.toBe('killed');
+    expect(signals).toEqual([[999_004, 'SIGTERM']]);
+    expect(spawn).not.toHaveBeenCalled();
+
+    const foreign = fakeProcesses(() => true, () => false);
+    const other = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 300, processes: foreign.processes });
+    await expect(other.stopHost({ timeoutMs: 200, killGraceMs: 100 })).resolves.toBe('none');
+    expect(foreign.signals).toEqual([]);
+  }, 10_000);
+
+  it('связи нет и pid-файла нет — «none», сигналов нет', async () => {
+    const { processes, signals } = fakeProcesses(() => true);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 300, processes });
+    await expect(connection.stopHost({ timeoutMs: 200, killGraceMs: 100 })).resolves.toBe('none');
+    expect(signals).toEqual([]);
+  });
+
+  it('liveSessions: связь есть — число из host.info; host.info молчит — null по сроку', async () => {
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { pid: 999_005, liveSessions: 18 });
+    const { processes } = fakeProcesses(() => true);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000, processes });
+    await connection.connect();
+    await expect(connection.liveSessions(500)).resolves.toBe(18);
+    connection.close();
+    server.close();
+
+    await writeToken(paths);
+    const silent = await startFakeServer(paths, { pid: 999_006, infoHangs: true });
+    const second = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000, processes });
+    await second.connect();
+    const started = Date.now();
+    await expect(second.liveSessions(200)).resolves.toBeNull();
+    expect(Date.now() - started).toBeLessThan(2000);
+    second.close();
+    silent.close();
+  }, 10_000);
+
+  it('liveSessions без связи: хоста нет — 0; живой хост по host.pid — null (не знаем, сколько)', async () => {
+    const none = fakeProcesses(() => false);
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 300, processes: none.processes });
+    await expect(connection.liveSessions(200)).resolves.toBe(0);
+
+    await mkdir(paths.dir, { recursive: true });
+    await writeFile(paths.pid, `999007\n${new Date().toISOString()}\n`, 'utf8');
+    const alive = fakeProcesses(() => true);
+    const other = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 300, processes: alive.processes });
+    await expect(other.liveSessions(200)).resolves.toBeNull();
+  });
 });

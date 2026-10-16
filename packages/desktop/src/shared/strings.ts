@@ -238,6 +238,69 @@ export const S = {
     ignore: { 'parley-gitignore-custom': 'The project has a custom state ignore file. Check that the shared history is tracked by Git.',
       'parley-dir-ignored': 'The project state folder is ignored by Git, so the shared history stays local.' },
   },
+  usage: {
+    title: 'Token usage',
+    since: 'Since each member joined',
+    sessionScope: 'This session, all time',
+    columns: ['In', 'Out', 'Cache read', 'Cache write'],
+    total: 'Total',
+    lead: 'lead',
+    partial: 'partial',
+    snapshot: 'snapshot',
+    stale: 'stale',
+    notAvailable: 'n/a',
+    left: (iso: string): string => `left ${new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+    sharedWith: (rooms: readonly string[]): string => `shared with ${rooms.join(', ')}`,
+    logMissing: 'n/a — log not found',
+    sessionDeleted: 'n/a — session deleted',
+    notStarted: 'not started',
+    footnote: 'Tokens, not money or plan limit. Providers count tokens differently.',
+    legend: '`?` — not reported.',
+    reconstructed: 'Membership before usage tracking is partly reconstructed.',
+    updated: (iso: string): string => `Updated ${new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+    markdownTitle: (title: string, roomId: string): string => `Room “${title}” (${roomId}) — token usage`,
+    copy: 'Copy',
+    copied: 'Copied',
+    unavailable: 'Usage unavailable',
+    counting: 'Counting…',
+  },
+  /** Заполненность контекста и сжатие (спека 2026-10-15, 3). Инструкции по умолчанию — текст для агента. */
+  context: {
+    marks: { unknown: '—', pending: '⏳', running: '…', compacted: 'compacted', asleep: 'asleep' },
+    tooltip: {
+      tokens: (used: string, window: string): string => `Context: ${used} of ${window} tokens`,
+      percent: (percent: string): string => `Context: ${percent} used`,
+      unknown: 'No context data yet',
+      pending: 'Compaction queued — runs when the agent is free',
+      running: 'Compacting…',
+      compacted: 'Compacted — waiting for the next update',
+    },
+    title: (label: string): string => `Context · ${label}`,
+    roomTitle: 'Context',
+    roomChip: (value: string): string => `Ctx ${value}`,
+    numbers: (used: string, window: string, percent: string): string => `${used} of ${window} tokens · ${percent}`,
+    instructionsLabel: 'Focus instructions',
+    codexNoFocus: 'Codex compacts without focus',
+    compact: 'Compact',
+    compactAll: 'Compact all',
+    cancel: 'Cancel',
+    compacting: 'Compacting…',
+    compactAction: 'compact the context',
+    cancelAction: 'cancel the compaction',
+    refusedAsleep: (label: string): string => `${label} is asleep — nothing to compact`,
+    refusedUnknownScreen: (label: string): string =>
+      `Can't compact ${label} yet — it hasn't reported since launch. Check its terminal.`,
+    allResult: (started: number, queued: number, skipped: number): string =>
+      [
+        `Compacting ${started} ${started === 1 ? 'agent' : 'agents'}`,
+        ...(queued > 0 ? [`${queued} queued`] : []),
+        ...(skipped > 0 ? [`${skipped} skipped`] : []),
+      ].join(' · '),
+    roomDefault: (title: string): string =>
+      `Focus on room "${title}": the human's task, decisions made, open questions, who owns what, and files touched. Drop details unrelated to this room.`,
+    sessionDefault: (name: string): string =>
+      `Focus on "${name}": the current task, decisions made, open questions, and files touched. Drop unrelated details.`,
+  },
   roles: {
     readOnly: 'Read only', unavailable: 'Role unavailable', providerLocked: 'Native roles use their own provider',
     option: (name: string, source: 'builtin' | 'claude' | 'codex'): string => `${name} · ${{ builtin: 'Builtin', claude: 'Claude', codex: 'Codex' }[source]}`,
@@ -288,6 +351,25 @@ export const S = {
     retry: 'Retry',
     copy: 'Copy',
     send: 'Send',
+  },
+
+  /** Очередь отправки окна (спека 2026-10-16, 4): серые элементы Chat и комнаты. */
+  outbox: {
+    sending: 'Sending…',
+    waiting: 'Waiting',
+    notSent: 'Not sent',
+    remove: 'Remove',
+  },
+
+  /** Выход из приложения останавливает хост (решение 2026-10-16): вопрос системным диалогом. */
+  quit: {
+    title: 'Quit Parley?',
+    detail: (count: number | null): string =>
+      count === null
+        ? "The host isn't responding. It will be stopped together with all its sessions. They won't restart on their own — the next launch lists them so you can bring them back."
+        : `The host will stop and ${count} running ${count === 1 ? 'session' : 'sessions'} will be terminated. They won't restart on their own — the next launch lists them so you can bring them back.`,
+    stop: (count: number | null): string =>
+      count === null ? 'Stop host and Quit' : `Stop ${count} ${count === 1 ? 'session' : 'sessions'} and Quit`,
   },
 
   /**
@@ -644,6 +726,8 @@ export const S = {
       removeAgent: 'Remove agent',
       addAgent: 'Add agent',
       inOwnWorktree: 'In its own worktree',
+      /** Одиночная сессия человека по умолчанию не lean; участники комнаты берут настройку `leanAgents`. */
+      leanSession: 'Lean session',
       /** Знак «?» у поля: имя кнопки для скринридера — `About Mode`; текст подсказки — в `hints`. */
       hintLabel: (field: string): string => `About “${field}”`,
       /** Подсказки полей диалога по наведению на «?»: что это за поле, без деталей реализации. */
@@ -654,6 +738,7 @@ export const S = {
         sessionName: 'The session’s name in the sidebar and on its tab. If empty, the session gets a name by its number — Ralph, Anatoly, Ruslan and so on. Rename it any time from its menu.',
         agents: 'One agent starts a session; two or more make a room.\nRole — optional ready-made instructions with a default provider, model and effort; what you pick in the row wins. Builtin roles come with Parley; “·\u00A0Claude” and “·\u00A0Codex” are your own agents from that CLI and run only there.\n🔒 — a read-only role: the CLI does not let the agent edit files.\nModel and effort — which model runs and how hard it thinks; Default keeps the CLI’s own setting.\nIn a room, ★ picks the lead, who collects the positions and brings you the decision; the branch icon gives one agent its own worktree.',
         worktree: 'Each agent works in its own Git worktree: a separate folder on a new branch, so agents do not overwrite each other’s edits. You review and merge the work in the Changes tab. Needs a Git repository.',
+        leanSession: 'Starts the agent without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions. Agents of a room follow Settings → Agents.',
         /** Перед строками режимов — `S.plans.modes` и `S.plans.modeHelp`, те же, что в панели плана комнаты. */
         mode: 'How the room tracks the work. You can change it later in the room.',
       },
@@ -756,6 +841,8 @@ export const S = {
     /** Строка доставки под сообщением: кто уже забрал его (`readBy`) и кто ещё нет. */
     pickedUp: (tags: string): string => `✓ Picked up by ${tags}`,
     notPickedUp: (tags: string): string => `▤ Not picked up yet by ${tags}`,
+    /** Те из ждущих, кому Parley доводит письмо сам (поднимает, напечатал указатель), — со спиннером. */
+    delivering: (tags: string): string => `Delivering to ${tags}…`,
     /**
      * Почему сообщение ещё не забрано — в скобках после тега, `S01 (busy)`. Ключи — `MailWait` протокола: причину
      * присылает хост в живых метриках сессии (`metrics.mailWaiting`); таблица обязана покрывать их все.
@@ -791,6 +878,11 @@ export const S = {
     returnForRework: 'Return for rework',
     returnPlaceholder: 'What should the lead change?',
     sendToLead: 'Send to lead',
+    /**
+     * Под кнопками карточки, пока ответ в пути, а хост ещё не ответил на `works.list`: после перезапуска он сверяет,
+     * какие сессии живы, и ответ на решение ждёт этого (разбор 2026-10-14).
+     */
+    hostStarting: 'Parley is still starting — your answer goes through once it is ready',
     /** Тост на `conflict`: ведущий заменил текст или решение уже закрыто — живая карточка на месте. */
     decisionChanged: 'The decision changed — review the latest version.',
     /**
@@ -847,6 +939,9 @@ export const S = {
     messageCap: 'Message cap per hour',
     resumeRate: 'Session wake-ups per hour (0…60)',
     autoLaunchPending: 'Auto-launch pending sessions',
+    /** Облегчённый запуск агентов комнат и `spawn_session` (спека «меньше ходов и легче контекст», C2.2). */
+    leanAgents: 'Lean agent sessions',
+    leanAgentsHint: 'Agents Parley starts for rooms and spawn_session run without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions.',
     /** Скилл `parley` в папку проекта и в worktree сессий при запуске (кусок 10 плана комнат). */
     agentSkills: 'Install agent skills into projects',
     skillNavigator: 'Skill navigator',
@@ -885,6 +980,10 @@ export const S = {
     checkForUpdatesHint: 'Looks for a newer Parley release on GitHub at start and once a day',
     /** Секция «Браузер» (кусок 9.1): куки, хранилища и кеш раздела встроенного браузера. */
     clearBrowserData: 'Clear browser data',
+    /** Общий выключатель агентов в браузере (спека браузера 4.8, этап B2). */
+    letAgentsUseBrowser: 'Let agents use the browser',
+    letAgentsUseBrowserHint:
+      'Agents can open pages on localhost in a tab of their own workspace. Off: every browser request from an agent is refused.',
   },
 
   /** Тост о новой версии — `renderer/update/update-notice.ts` (V6 плана релиза 0.1.0). */
@@ -1178,6 +1277,8 @@ export const S = {
     hideTranscript: 'Hide transcript',
     /** Серый элемент ленты: сообщение ушло в очередь CLI во время хода. */
     queued: 'Queued — the agent reads it when the turn ends',
+    /** Строка действий под сообщением (спека 2026-10-16, 3.1). */
+    actions: { copy: 'Copy', copied: 'Copied', sendAgain: 'Send again' },
     composer: {
       label: 'Message to Claude',
       placeholder: 'Message Claude — Enter to send',
@@ -1491,6 +1592,33 @@ export const S = {
       /** Касания включаются с новым документом (спайк 0.3). */
       touchReload: 'Reload to apply touch',
     },
+    /**
+     * Панель браузера хозяина — справа от вида сессии или комнаты (спека браузера 3.10, 4.11). Заголовок хозяина и названия
+     * страниц — данные (ярлык сессии, название комнаты, заголовок и адрес страницы), идут как есть.
+     */
+    panel: {
+      /** Кнопка у вида хозяина (подпись для читалки экрана и подсказка). */
+      toggle: 'Browser',
+      toggleTitle: 'Show or hide the browser panel',
+      /** `aria-label` полоски страниц. */
+      pages: 'Browser pages',
+      /** Страница без адреса и без заголовка. */
+      newPage: 'New page',
+      addPage: 'Add a page',
+      closePage: (title: string): string => `Close ${title}`,
+      closePanel: 'Close the browser panel',
+      /** Узкий вид (уже 720 px): панель закрывает вид собой, кнопка возвращает к нему. */
+      backToChat: 'Back to chat',
+      backToRoom: 'Back to room',
+      resize: 'Resize the browser panel',
+      tooManyPages: 'No more than 5 pages in a browser panel',
+      /** Пункт «⋯» вкладки браузера человека: страница переезжает в браузер сессии или комнаты. */
+      moveTo: 'Move to browser of…',
+      moved: (name: string): string => `Moved to the browser of ${name}`,
+      /** Тост, когда агент открыл страницу, а вид хозяина не на экране; «Show» переводит человека к ней. */
+      agentOpened: (session: string, address: string): string => `${session} opened ${address}`,
+      agentShow: 'Show',
+    },
   },
 
   /**
@@ -1662,6 +1790,7 @@ export const S = {
     pauseAutoWake: 'Pause auto-wake',
     resumeAutoWake: 'Resume auto-wake',
     restartHost: 'Restart host…',
+    diagnostics: 'Save diagnostics…',
     themeSystem: 'Theme: system',
     themeDark: 'Theme: dark',
     themeLight: 'Theme: light',
@@ -1760,6 +1889,7 @@ export const S = {
     actions: {
       loadProviders: 'load providers',
       refreshProviderLimits: 'refresh provider limits',
+      saveDiagnostics: 'save diagnostics',
       saveProviderKey: 'save the provider key',
       checkProviderKey: 'check the GLM key',
       removeProviderKey: 'remove the provider key',
@@ -1920,6 +2050,28 @@ export const S = {
     layoutError: "Couldn't show layout",
   },
 
+  /** Диагностика хоста (спека 2026-10-16-host-diagnostics-and-load-design.md): сегмент строки статуса (A1) и `README.txt` внутри zip (A2). */
+  diagnostics: {
+    segment: 'Diagnostics',
+    save: 'Save diagnostics',
+    profile: 'Record 20-second profile, then save',
+    saving: 'Saving…',
+    profiling: (left: number): string => `Profiling ${left} s…`,
+    hint: 'Includes host logs, process list and timings. No message text, terminal output or keys. The file is saved to Downloads; attach it to a GitHub issue.',
+    hostOutdated: 'Host is outdated — restart it for full diagnostics',
+    saved: 'Diagnostics saved',
+    showInFinder: 'Show in Finder',
+    readme: [
+      'Parley diagnostics bundle',
+      '',
+      'Contents: host.log and host.log.1 (host journal), host.err (host stderr), host-info.json (host versions, health sample, live sessions), app-info.json (app and OS versions), processes.txt (host process tree: pid, cpu, memory, executable name only), actions.jsonl (recent window-to-host calls with timings), host-*.cpuprofile (CPU profiles, open in Chrome DevTools > Performance > Load profile).',
+      '',
+      'Privacy: project paths and session or room names are included. Message text, terminal output, provider keys and environment variables are not.',
+      '',
+      'Send: attach this file to a GitHub issue at https://github.com/Kalmbik61/Parley/issues or to your message to the author.',
+    ].join('\n'),
+  },
+
   /** Голосовой ввод (спека 2026-10-06-voice-input-design.md, раздел 3). */
   voice: {
     setUp: 'Set up voice input',
@@ -2030,6 +2182,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'resume-limit': 'hourly resume limit reached — messages are waiting',
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
+  'codex-call-wait': 'stuck in a Codex tool call — Codex may be waiting for an approval in its terminal',
   'skill-foreign': "agent skill not installed — that path already exists and wasn't created by Parley",
   'parley-md-created': 'Parley added PARLEY.md — team rules for your agents',
   'parley-md-unreadable': "PARLEY.md couldn't be read — this session starts without its project rules",
@@ -2041,6 +2194,8 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'plan-effect-failed': 'plan delivery or export is pending — open the plan and retry after resolving the conflict',
   'role-truncated': 'role text was cut at 32 KB — shorten the role to include the remainder',
   'recipe-playbook-truncated': 'recipe playbook was cut at 32 KB — shorten the playbook to include the remainder',
+  'compact-cancelled': 'compaction cancelled — the agent stopped',
+  'compact-failed': "compaction didn't go through — check the agent's terminal",
   'snapshot-too-large': 'workspace data is too large to show — delete or archive old workspaces',
 };
 

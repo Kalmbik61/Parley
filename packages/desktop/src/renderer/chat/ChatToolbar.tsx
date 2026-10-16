@@ -9,12 +9,14 @@
  * и уровни модели из карты, выбор уходит `sessions.setModel` / `sessions.setEffort` из `ChatView`; у хоста без этих
  * методов — подпись модели простым текстом («Stop» ушёл в поле ввода).
  * Левее них, пока в ленте есть работающие карточки агентов, — «N agents running» (кусок 4b): клик ведёт ленту к первой из
- * них. Высота фиксирована и строки не переносятся: от неё зависит отступ поверхности терминала.
+ * них. Высота фиксирована и строки не переносятся: от неё зависит отступ поверхности терминала. Правее всего — кнопка
+ * «Browser» панели браузера сессии (`browser/panel/PanelToggle.tsx`, этап B2).
  */
 
+import type { ReactNode } from 'react';
 import { ChevronDown, LoaderCircle } from 'lucide-react';
 
-import type { EffortOption, ModelOption } from '@parley/protocol';
+import type { EffortOption, LiveMetrics, ModelOption } from '@parley/protocol';
 import type { TerminalView } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -22,6 +24,7 @@ import { RoleChip } from '../lib/role-summary.js';
 import { useWorksStore } from '../store/works.js';
 import { workKey as keyOf } from '../lib/tree-order.js';
 import { updateTab, findTab } from '../layout/tree.js';
+import { PanelToggle } from '../browser/panel/PanelToggle.js';
 import { Button } from '../ui/button.js';
 import {
   DropdownMenu,
@@ -34,6 +37,7 @@ import {
 } from '../ui/dropdown-menu.js';
 import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group.js';
 import { MicButton } from '../voice/MicButton.js';
+import { SessionUsageChip } from './SessionUsageChip.js';
 
 /** Высота тулбара: на столько поверхность терминала опускается под ним. */
 export const TAB_TOOLBAR_PX = 36;
@@ -111,6 +115,10 @@ export interface ChatToolbarProps {
   agents?: { running: number; onShow: () => void };
   /** Цель диктовки вида Terminal (`terminal:<refKey>`, спека 3.2); нет — кнопки нет. */
   micTargetId?: string;
+  /** Живые цифры сессии: значок расхода токенов (спека расхода токенов, 3.4); нет или `null` — значка нет. */
+  metrics?: LiveMetrics | null;
+  /** Чип контекста сессии (`ContextChip`, спека 2026-10-15, 3.4) — рядом со значком расхода. */
+  contextChip?: ReactNode;
 }
 
 const ITEM = 'h-6 whitespace-nowrap px-2.5 text-xs';
@@ -202,7 +210,7 @@ function ChoiceMenu({ menu }: { menu: ChoiceMenuProps }): JSX.Element {
   );
 }
 
-export function ChatToolbar({ workKey, tabId, view, available, provider, modeLabelText = null, model = null, modeMenu, choiceMenu, agents, micTargetId }: ChatToolbarProps): JSX.Element {
+export function ChatToolbar({ workKey, tabId, view, available, provider, modeLabelText = null, model = null, modeMenu, choiceMenu, agents, micTargetId, metrics = null, contextChip }: ChatToolbarProps): JSX.Element {
   const entries = useWorksStore(state => state.entries);
   const layout = useLayoutStore(state => state.layouts[workKey]);
   const found = layout ? findTab(layout, tabId) : null;
@@ -240,6 +248,8 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
       </span>
       {session && entry ? <RoleChip revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`} role={session.role} sessionRef={{ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }} /> : null}
       <span className="min-w-0 flex-1" />
+      {metrics === null ? null : <SessionUsageChip metrics={metrics} />}
+      {contextChip}
       {agents === undefined ? null : (
         <Button type="button" size="xs" variant="outline" data-testid="chat-agents-running" onClick={agents.onShow} className="shrink-0">
           <LoaderCircle className="size-3 animate-spin motion-reduce:animate-none" aria-hidden="true" />
@@ -298,6 +308,8 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
           <MicButton targetId={micTargetId} size="sm" />
         </span>
       )}
+      {/* Панель браузера этой сессии (спека браузера 4.11): кнопка в обоих видах, правее прочего. */}
+      {session === undefined ? null : <PanelToggle workKey={workKey} owner={{ kind: 'session', sessionId: session.id }} />}
     </div>
   );
 }

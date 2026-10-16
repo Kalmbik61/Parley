@@ -13,13 +13,19 @@ import { toast } from 'sonner';
 import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
 import type { LiveMetrics, LiveTask, MailWait } from '@parley/protocol';
 import { encodeIpcError } from '../../../shared/ipc-error.js';
+import { EMPTY_HISTORY } from '../../layout/history.js';
+import { useLayoutStore } from '../../layout/store.js';
+import { emptyLayout } from '../../layout/tree.js';
+import { S } from '../../../shared/strings.js';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { ErrorBoundary } from '../../shell/ErrorBoundary.js';
 import { useHostStore } from '../../store/host.js';
 import { useUiStore } from '../../store/ui.js';
+import { useWorksStore } from '../../store/works.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeLetter, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
 import { RoomPanel, type RoomPanelProps } from './RoomPanel.js';
+import { roomOutbox } from './room-outbox.js';
 
 vi.mock('sonner', async (importOriginal) => ({ ...(await importOriginal<typeof import('sonner')>()), toast: vi.fn() }));
 
@@ -60,6 +66,7 @@ let bridge: FakeBridge;
 
 beforeEach(() => {
   bridge = createFakeBridge();
+  roomOutbox.resetForTests();
   bridge.setHandler('rooms.send', () => ({ messageId: 'm-new' }));
   useUiStore.setState({ composerDrafts: {}, composerAttachments: {}, windowFocused: true, documentVisible: true });
   useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS] } });
@@ -1322,6 +1329,7 @@ describe('RoomPanel — строка доставки: кто забрал со�
   const deliveryLine = (id = 'm-1'): HTMLElement | null => messageRow(id).querySelector('[data-message-delivery]');
   const pickedPart = (id = 'm-1'): HTMLElement | null => messageRow(id).querySelector('[data-message-picked]');
   const waitingPart = (id = 'm-1'): HTMLElement | null => messageRow(id).querySelector('[data-message-waiting]');
+  const deliveringPart = (id = 'm-1'): HTMLElement | null => messageRow(id).querySelector('[data-message-delivering]');
 
   it('«Not picked up yet by …» — теги тех, кто ещё не прочитал', () => {
     const entry = entryOf({ messages: [message('m-1', { readBy: { human: 'x', 's-02': 'x' } })] });
@@ -1331,11 +1339,26 @@ describe('RoomPanel — строка доставки: кто забрал со�
 
   it('и забравшие, и ждущие: одна строка, части через « · », у ждущего причина от хоста в скобках', () => {
     const entry = entryOf({ messages: [message('m-1', { readBy: { human: 'x', 's-02': 'x' } })] });
-    renderPanel(entry, { activity: withDoing({ 's-01': { mailWaiting: 'busy' } }) });
+    renderPanel(entry, { activity: withDoing({ 's-01': { mailWaiting: 'paused' } }) });
     expect(document.querySelectorAll('[data-message-delivery]')).toHaveLength(1);
-    expect(deliveryLine()?.textContent).toBe('✓ Picked up by S02 · ▤ Not picked up yet by S01 (busy), S03');
+    expect(deliveryLine()?.textContent).toBe('✓ Picked up by S02 · ▤ Not picked up yet by S01 (auto-wake paused), S03');
     expect(pickedPart()?.textContent).toBe('✓ Picked up by S02');
-    expect(waitingPart()?.textContent).toBe('▤ Not picked up yet by S01 (busy), S03');
+    expect(waitingPart()?.textContent).toBe('▤ Not picked up yet by S01 (auto-wake paused), S03');
+  });
+
+  // Разбор 2026-10-14: после Accept спящие просыпаются десятки секунд, а строка стояла неподвижной. Причины, при
+  // которых Parley сам доводит письмо (поднимает, напечатал указатель), — со спиннером; те, где
+  // нужен человек или письма не будет без него, — прежней строкой.
+  it('Parley доставляет сам — «Delivering to …» со спиннером; ждущие человека — прежней строкой рядом', () => {
+    const entry = entryOf({ messages: [message('m-1', { readBy: { human: 'x', 's-02': 'x' } })] });
+    renderPanel(entry, {
+      activity: withDoing({ 's-01': { mailWaiting: 'resuming' }, 's-03': { mailWaiting: 'resume-limit' } }),
+    });
+    expect(deliveryLine()?.textContent).toBe(
+      '✓ Picked up by S02 · Delivering to S01 (resuming)… · ▤ Not picked up yet by S03 (resume limit reached)',
+    );
+    expect(deliveringPart()?.querySelector('[data-busy-spinner]')).not.toBeNull();
+    expect(waitingPart()?.querySelector('[data-busy-spinner]')).toBeNull();
   });
 
   it('все забрали — только «Picked up by …»: части «не забрали» и разделителя нет', () => {
@@ -1346,8 +1369,8 @@ describe('RoomPanel — строка доставки: кто забрал со�
   });
 
   it('никто не забрал — только «Not picked up yet by …»: части «забрали» и разделителя нет', () => {
-    renderPanel(entryOf({ messages: [message('m-1')] }), { activity: withDoing({ 's-01': { mailWaiting: 'busy' } }) });
-    expect(deliveryLine()?.textContent).toBe('▤ Not picked up yet by S01 (busy), S02, S03');
+    renderPanel(entryOf({ messages: [message('m-1')] }), { activity: withDoing({ 's-01': { mailWaiting: 'draft' } }) });
+    expect(deliveryLine()?.textContent).toBe('▤ Not picked up yet by S01 (unsent text in its terminal), S02, S03');
     expect(pickedPart()).toBeNull();
   });
 
@@ -1381,11 +1404,18 @@ describe('RoomPanel — строка доставки: кто забрал со�
       'resume-limit': 'resume limit reached',
       pending: 'not launched',
     };
+    const delivering = new Set<MailWait>(['in-flight', 'pointed', 'resuming']);
     for (const [reason, text] of Object.entries(words) as Array<[MailWait, string]>) {
       renderPanel(entryOf({ messages: [message('m-1', { to: ['s-01'] })] }), {
         activity: withDoing({ 's-01': { mailWaiting: reason } }),
       });
-      expect(waitingPart()?.textContent, reason).toBe(`▤ Not picked up yet by S01 (${text})`);
+      if (delivering.has(reason)) {
+        expect(deliveringPart()?.textContent, reason).toBe(`Delivering to S01 (${text})…`);
+        expect(waitingPart(), reason).toBeNull();
+      } else {
+        expect(waitingPart()?.textContent, reason).toBe(`▤ Not picked up yet by S01 (${text})`);
+        expect(deliveringPart(), reason).toBeNull();
+      }
       cleanup();
     }
   });
@@ -1493,6 +1523,7 @@ describe('RoomPanel — поле ввода и отправка (2.2)', () => {
       to: [],
       text: 'Всем привет',
       kind: 'note',
+      requestedAt: expect.any(Number),
     });
   });
 
@@ -1547,14 +1578,63 @@ describe('RoomPanel — поле ввода и отправка (2.2)', () => {
     expect(within(screen.getByRole('listbox')).getAllByRole('option').map((item) => item.getAttribute('data-mention-item'))).toEqual(['s-01', 's-02']);
   });
 
-  it('не ушло: тост с причиной, текст возвращается в поле', async () => {
+  const sentTexts = (): string[] =>
+    bridge.calls.filter((call) => call.method === 'rooms.send').map((call) => (call.params as { text: string }).text);
+  const pendingStates = (): Array<string | null> =>
+    screen.queryAllByTestId('room-pending').map((node) => node.getAttribute('data-state'));
+
+  it('не ушло: тост с причиной, серый «Not sent» с Retry и ×, поле пустое; Retry шлёт снова', async () => {
     bridge.setHandler('rooms.send', () => {
       throw Object.assign(new Error('нет'), { code: 'not_found', message: 'нет' });
     });
     renderPanel(entryOf());
     typeAndSend('Важное');
     await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn't send the message: not found."));
-    await waitFor(() => expect(editor().textContent).toBe('Важное'));
+    expect(editor().textContent).toBe('');
+    await waitFor(() => expect(pendingStates()).toEqual(['failed']));
+    bridge.setHandler('rooms.send', () => ({ messageId: 'm-new' }));
+    fireEvent.click(within(screen.getByTestId('room-pending')).getByRole('button', { name: S.common.retry }));
+    await waitFor(() => expect(sentTexts()).toEqual(['Важное', 'Важное']));
+    await waitFor(() => expect(pendingStates()).toEqual(['sending']));
+  });
+
+  it('ушло: серый «Sending…» держится, пока письмо с этим messageId не пришло, и не задваивается', async () => {
+    const { update } = renderPanel(entryOf());
+    typeAndSend('Важное');
+    expect(pendingStates()).toEqual(['sending']);
+    await act(async () => {});
+    expect(pendingStates()).toEqual(['sending']);
+    update(entryOf({ messages: [message('m-new', { text: 'Важное' })] }));
+    await waitFor(() => expect(pendingStates()).toEqual([]));
+    expect(screen.getAllByText('Важное')).toHaveLength(1);
+  });
+
+  it('два Enter подряд — второй rooms.send только после ответа на первый, по порядку', async () => {
+    const answers: Array<(value: { messageId: string }) => void> = [];
+    bridge.setHandler('rooms.send', () => new Promise<{ messageId: string }>((resolve) => answers.push(resolve)));
+    renderPanel(entryOf());
+    typeAndSend('one');
+    typeAndSend('two');
+    expect(sentTexts()).toEqual(['one']);
+    expect(pendingStates()).toEqual(['sending', 'waiting']);
+    await act(async () => answers[0]?.({ messageId: 'm-1' }));
+    expect(sentTexts()).toEqual(['one', 'two']);
+  });
+
+  it('× убирает «Not sent», и следующее письмо уходит', async () => {
+    bridge.setHandler('rooms.send', () => {
+      throw Object.assign(new Error('нет'), { code: 'not_found', message: 'нет' });
+    });
+    renderPanel(entryOf());
+    typeAndSend('first');
+    await waitFor(() => expect(pendingStates()).toEqual(['failed']));
+    bridge.setHandler('rooms.send', () => ({ messageId: 'm-2' }));
+    typeAndSend('second');
+    await act(async () => {});
+    expect(sentTexts()).toEqual(['first']);
+    expect(pendingStates()).toEqual(['failed', 'waiting']);
+    fireEvent.click(screen.getByRole('button', { name: S.outbox.remove }));
+    await waitFor(() => expect(sentTexts()).toEqual(['first', 'second']));
   });
 });
 
@@ -2212,6 +2292,59 @@ describe('RoomPanel — карточка решения (1.3, 2.4)', () => {
     expect(resolveCalls()).toHaveLength(1);
   });
 
+  // Разбор 2026-10-14: после перезапуска Accept висел до 30 с, а признаком были только погасшие кнопки.
+  const pendingResolve = (): (() => void) => {
+    let finish: () => void = () => {};
+    bridge.setHandler(
+      'rooms.resolveProposal',
+      () => new Promise<{ messageId: string }>((resolve) => (finish = () => resolve({ messageId: 'm-decision' }))),
+    );
+    return () => finish();
+  };
+  const spinnerIn = (element: HTMLElement): Element | null => element.querySelector('[data-busy-spinner]');
+  const startingHint = (): HTMLElement | null => card().querySelector('[data-host-starting]');
+
+  it('пока ответа нет — спиннер в нажатой кнопке: Accept или Send to lead', async () => {
+    useWorksStore.setState({ ready: true });
+    pendingResolve();
+    renderPanel(withProposal());
+    expect(spinnerIn(button('Accept'))).toBeNull();
+    fireEvent.click(button('Accept'));
+    expect(spinnerIn(button('Accept'))).not.toBeNull();
+    expect(spinnerIn(button('Return for rework'))).toBeNull();
+    cleanup();
+
+    pendingResolve();
+    renderPanel(withProposal());
+    fireEvent.click(button('Return for rework'));
+    fireEvent.click(button('Send to lead'));
+    expect(spinnerIn(button('Send to lead'))).not.toBeNull();
+    expect(spinnerIn(button('Cancel'))).toBeNull();
+  });
+
+  it('хост ещё не открыл снимок работ — под кнопками «Parley is still starting…», пока ответ в пути', async () => {
+    useWorksStore.setState({ ready: false });
+    const finish = pendingResolve();
+    const { rerender, initial } = renderPanel(withProposal());
+    // До нажатия подписи нет: кнопка ничего не ждёт.
+    expect(startingHint()).toBeNull();
+    fireEvent.click(button('Accept'));
+    expect(startingHint()?.textContent).toBe('Parley is still starting — your answer goes through once it is ready');
+
+    act(() => useWorksStore.setState({ ready: true }));
+    rerender(<RoomPanel {...initial} />);
+    expect(startingHint()).toBeNull();
+    await act(async () => finish());
+  });
+
+  it('хост готов — подписи о старте нет, только спиннер', () => {
+    useWorksStore.setState({ ready: true });
+    pendingResolve();
+    renderPanel(withProposal());
+    fireEvent.click(button('Accept'));
+    expect(startingHint()).toBeNull();
+  });
+
   it('два клика в один тик, до перерисовки, тоже дают один вызов', async () => {
     renderPanel(withProposal());
     const accept = button('Accept');
@@ -2486,5 +2619,34 @@ describe('RoomPanel — архивная комната (5.2)', () => {
     expect(screen.getByRole('combobox', { name: 'Room mode' })).toHaveProperty('disabled', true);
     expect(screen.getAllByText('Reopen this room to change the plan.').length).toBeGreaterThan(0);
     expect(screen.queryByText('Reopen this workspace to change the plan.')).toBeNull();
+  });
+});
+
+describe('кнопка «Browser» в шапке комнаты (этап B2, спека браузера 4.11)', () => {
+  it('у открытой комнаты — справа в строке названия, нажатие создаёт панель браузера комнаты; у архивной кнопки нет', () => {
+    const key = `${PROJECT} ${WORK_ID}`;
+    useLayoutStore.setState({
+      activeWorkKey: key,
+      layouts: { [key]: emptyLayout() },
+      hydrated: { [key]: true },
+      pending: {},
+      history: EMPTY_HISTORY,
+      mru: {},
+      navigating: false,
+    });
+    try {
+      renderPanel(entryOf());
+      const button = screen.getByRole('button', { name: 'Browser' });
+      expect(button.closest('[data-room-header]')).not.toBeNull();
+      expect(button.getAttribute('aria-pressed')).toBe('false');
+      fireEvent.click(button);
+      expect(useLayoutStore.getState().layouts[key]?.panels?.['room:r-01']).toMatchObject({ open: true, pages: [{ url: '' }] });
+      expect(screen.getByRole('button', { name: 'Browser' }).getAttribute('aria-pressed')).toBe('true');
+      cleanup();
+      renderPanel(entryOf({ room: room({ archivedAt: '2026-10-08T12:00:00.000Z' }) }));
+      expect(screen.queryByRole('button', { name: 'Browser' })).toBeNull();
+    } finally {
+      useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
+    }
   });
 });

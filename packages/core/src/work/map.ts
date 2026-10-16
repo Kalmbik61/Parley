@@ -104,6 +104,8 @@ export interface NewSession {
   /** Модель и усилие запуска (`spawn_session`); без них — по умолчанию, поля в записи не будет. */
   model?: string | null;
   effort?: EffortLevel | null;
+  /** Облегчённый запуск (C2.2): решение при создании; без поля — запись как до этого куска. */
+  lean?: boolean;
 }
 
 /**
@@ -143,6 +145,7 @@ export function addSession(
     worktree: null,
     ...(init.model === undefined ? {} : { model: init.model }),
     ...(init.effort === undefined ? {} : { effort: init.effort }),
+    ...(init.lean === undefined ? {} : { lean: init.lean }),
   };
   map.sessions.push(session);
   return session;
@@ -435,6 +438,15 @@ function isRecipeSnapshot(value: unknown): boolean {
     name.length <= 300 && typeof playbook === 'string' && Buffer.byteLength(playbook, 'utf8') <= 1024 * 1024;
 }
 
+const isIsoTime = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value));
+
+/** Журнал участия комнаты: записи с id сессии, моментом входа и уходом (`null` — ещё в комнате). */
+function isMemberLog(value: unknown): boolean {
+  return Array.isArray(value) && value.every((entry) =>
+    isRecord(entry) && typeof entry['session'] === 'string' && entry['session'] !== '' &&
+    isIsoTime(entry['from']) && (entry['to'] === null || isIsoTime(entry['to'])));
+}
+
 /**
  * Ведущего и решения в комнатах до 2026-09-29 не было: подставляется `null`, а ведущим
  * такой комнаты считается первый из `members` (`roomLead`). Архива комнат (`archivedAt`) до 2026-10-08 тоже не было:
@@ -451,6 +463,9 @@ function migrateRoom(room: unknown): void {
   if (room['recipe'] !== null && !isRecipeSnapshot(room['recipe'])) throw new Error('invalid room recipe');
   if (room['recipeLeadNotified'] !== undefined && typeof room['recipeLeadNotified'] !== 'string') throw new Error('invalid room recipe');
   if (isRecord(room['proposal'])) room['proposal']['kind'] ??= 'decision';
+  // Журнал участия (спека расхода токенов, 4.1): битый убирается — комната читается как созданная до журнала,
+  // а карта из-за него не становится нечитаемой.
+  if (room['memberLog'] !== undefined && !isMemberLog(room['memberLog'])) delete room['memberLog'];
 }
 
 /** Полей процесса в старых картах просто не было; испорченный effort читается как «нет выбора». */

@@ -5,10 +5,10 @@ import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS, SHARED_FILE_PATH } from '@p
 import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
-import type { AppNote, CloseAnswer, FocusTarget, UpdateInfo } from '../shared/bridge.js';
+import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, UpdateInfo } from '../shared/bridge.js';
 import { encodeIpcError } from '../shared/ipc-error.js';
 import { DEVTOOLS_LIMITS, isViewportSpec, type DevtoolsSnapshot } from '../shared/browser-devtools.js';
-import type { ContextInput, SavedContext } from '../shared/browser-types.js';
+import type { AgentOpenTabResult, ContextInput, SavedContext } from '../shared/browser-types.js';
 import type { Appearance, UiFile } from '../shared/ui-types.js';
 import { DropTooLargeError } from './drops.js';
 import { HostError } from './host-connection.js';
@@ -24,6 +24,7 @@ import type { UiStore } from './ui-store.js';
 import { openOrReveal, revealInFinder } from './files/open-path.js';
 import { FilesDeniedError, type RootsRegistry } from './roots.js';
 import { parseAnnotationPins, type createAnnotate } from './browser/annotate.js';
+import type { AgentOps } from './browser/agent-ops.js';
 import { parseContextInput } from './browser/context-files.js';
 import type { createDesignMode } from './browser/design-mode.js';
 import type { Emulation } from './browser/emulation.js';
@@ -66,6 +67,12 @@ export function withIpcError(
 
 const METHOD_NAMES = new Set<string>(Object.keys(METHODS));
 const NOTIFICATION_NAMES = new Set<string>(Object.keys(NOTIFICATIONS));
+
+/**
+ * Методы, которые зовёт только main (спека браузера 2026-10-07, 3.7): ответ на операцию агента не приходит от страницы
+ * окна — иначе она ответила бы агенту сама.
+ */
+const MAIN_ONLY_METHODS: ReadonlySet<string> = new Set(['browser.agentResult']);
 
 export function isMethodName(value: string): value is MethodName {
   return METHOD_NAMES.has(value);
@@ -152,6 +159,17 @@ export function isAppNote(value: unknown): value is AppNote {
   );
 }
 
+/** Ответ окна на просьбу агента открыть вкладку (спека браузера 3.5, этап B2): форма — до main. */
+export function parseAgentOpenTabResult(raw: unknown): AgentOpenTabResult | null {
+  if (!isRecord(raw)) return null;
+  if (raw.error === 'limit' || raw.error === 'no_work') return { error: raw.error };
+  const { tabId, reused, mounted } = raw;
+  // Вкладка раскладки (`browser:…`) или страница панели хозяина (`bp-…`, `panelPageId`).
+  if (typeof tabId !== 'string' || !(tabId.startsWith('browser:') || tabId.startsWith('bp-')) || tabId.length > 200) return null;
+  if (typeof reused !== 'boolean' || typeof mounted !== 'boolean') return null;
+  return { tabId, reused, mounted };
+}
+
 export interface RegisterIpcOptions {
   ipcMain: IpcMain;
   connection: HostConnection;
@@ -201,6 +219,11 @@ export interface RegisterIpcOptions {
   /** Картинка буфера → drops/ (main/index.ts: clipboard и saveImage); null — картинки нет или в буфере есть текст. */
   saveDropImage: () => Promise<string | null>;
   /**
+   * Архив диагностики (`main/diagnostics/bundle.ts#saveDiagnostics`, спека 2026-10-16 A6): сборка с готовыми
+   * зависимостями (соединение, каталоги, версии), `profile` — писать ли перед этим профиль CPU хоста.
+   */
+  saveDiagnostics: (options: { profile: boolean }) => Promise<DiagnosticsSaveResult>;
+  /**
    * Миниатюра картинки «Chat» (`main/image-thumbnail.ts`): путь и сторона (`maxPx`) приходят из окна как есть, проверяет
    * сам модуль; `null` — не картинка или не читается.
    */
@@ -225,6 +248,8 @@ export interface RegisterIpcOptions {
     inspector: Pick<Inspector, 'snapshot' | 'clear' | 'responseBody' | 'ready'>;
     /** Размер вьюпорта (спека 2026-10-07, 4.2): main/browser/emulation.ts#createEmulation. */
     emulation: Pick<Emulation, 'set'>;
+    /** Ответы окна на просьбы агента (спека браузера 3.7, этап B2): main/browser/agent-ops.ts. */
+    agent: Pick<AgentOps, 'openTabResult'>;
   };
 }
 
@@ -323,6 +348,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     roots,
     openPath,
     saveDropImage,
+    saveDiagnostics,
     imageThumbnail,
     setDirtyBuffers,
     answerClose,
@@ -332,7 +358,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
   ipcMain.handle(
     'host:call',
     withIpcError(async (event, method: unknown, params: unknown) => {
-      if (typeof method !== 'string' || !isMethodName(method)) {
+      if (typeof method !== 'string' || !isMethodName(method) || MAIN_ONLY_METHODS.has(method)) {
         throw new Error(`unknown method: ${String(method)}`);
       }
       // Остров — узкий клиент: остальное ему не нужно, а `host.shutdown` из прозрачного окна поверх всего — тем более.
@@ -632,6 +658,27 @@ export function registerIpc(options: RegisterIpcOptions): void {
     return { status: 'saved', id: written.id, opened };
   }));
 
+  // Архив диагностики: окно присылает только «с профилем или без»; каталог, имя и состав задаёт main. Готовый файл
+  // показывается в Finder здесь же — путь в `~/Downloads` вне корней работ, `app:show-in-finder` его не пустил бы.
+  // Сборка идёт одна за раз: второй вызов во время первой ждёт её же результат, а не запускает второй профиль и второй zip.
+  let savingDiagnostics: Promise<DiagnosticsSaveResult> | null = null;
+  // Архив лежит вне корней работ, но его путь выдал сам main: по нему «Show in Finder» из тоста идёт мимо реестра корней.
+  const savedDiagnosticsFiles = new Set<string>();
+  ipcMain.handle('app:save-diagnostics', withIpcError(async (_event, options: unknown) => {
+    if (!isRecord(options) || typeof options.profile !== 'boolean') {
+      throw new HostError('bad_request', 'Invalid diagnostics request.');
+    }
+    if (savingDiagnostics === null) {
+      savingDiagnostics = saveDiagnostics({ profile: options.profile }).finally(() => {
+        savingDiagnostics = null;
+      });
+    }
+    const result = await savingDiagnostics;
+    savedDiagnosticsFiles.add(result.file);
+    showItemInFolder(result.file);
+    return result;
+  }));
+
   ipcMain.handle('app:parley-md', withIpcError(async (_event, projectPath: unknown, create: unknown) => {
     if (!isValidPathArg(projectPath) || typeof create !== 'boolean') {
       throw new HostError('bad_request', 'invalid PARLEY.md request');
@@ -801,6 +848,19 @@ export function registerIpc(options: RegisterIpcOptions): void {
     }),
   );
 
+  // Ответ окна на `browser:agent-open-tab` (спека браузера 3.7, этап B2): id вкладки раскладки или причина отказа. Чужой или
+  // поздний id main просто не найдёт — просьба уже закрыта.
+  ipcMain.handle(
+    'browser:agent-open-tab-result',
+    withIpcError(async (_event, requestId: unknown, raw: unknown) => {
+      const result = parseAgentOpenTabResult(raw);
+      if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 64 || result === null) {
+        throw new HostError('bad_request', 'invalid agent open-tab result');
+      }
+      browser.agent.openTabResult(requestId, result);
+    }),
+  );
+
   ipcMain.handle(
     'browser:set-viewport',
     withIpcError(async (_event, id: unknown, spec: unknown, area: unknown) => {
@@ -816,6 +876,11 @@ export function registerIpc(options: RegisterIpcOptions): void {
     'app:show-in-finder',
     withIpcError(async (_event, absPath: unknown) => {
       if (!isValidPathArg(absPath)) throw new HostError('bad_request', 'invalid path');
+      // Путь сохранённого архива диагностики main выдал сам (`app:save-diagnostics`): корней работ он не касается.
+      if (savedDiagnosticsFiles.has(absPath)) {
+        showItemInFolder(absPath);
+        return;
+      }
       await revealInFinder(absPath, { roots, showItemInFolder });
     }),
   );
@@ -839,6 +904,8 @@ export function forwardHostToWindow(
   const { events } = options;
   const unsubEvent = connection.onEvent((message) => {
     if (window.isDestroyed()) return;
+    // Операция агента — дело main (`answerBrowserAgentOps`): странице окна её аргументы не нужны.
+    if (message.event === 'browser.agentOp') return;
     if (events !== undefined && !events.has(message.event)) return;
     window.webContents.send('host:event', message);
   });

@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_CONFIG } from '../config.js';
+import { DEFAULT_CONFIG, saveConfig } from '../config.js';
 import { BRANCH_PREFIX, MCP_SERVER_NAME } from '../names.js';
 import { PROVIDERS, selectableModels } from '../providers.js';
 import { clearSecret, writeSecret } from '../secrets.js';
@@ -1188,6 +1188,27 @@ describe('spawn_session worktree', () => {
   });
 });
 
+describe('spawn_session: lean (облегчённый запуск, часть C)', () => {
+  it('leanAgents включена (умолчание): сессия агента пишется с lean: true', async () => {
+    const client = await connect('s-01');
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+
+    expect(session(await readMapFile(), 's-02').lean).toBe(true);
+  });
+
+  it('leanAgents выключена: lean не включён; настройка читается заново при каждом вызове', async () => {
+    const client = await connect('s-01');
+    await saveConfig({ leanAgents: false });
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await saveConfig({ leanAgents: true });
+    await callOk(client, 'spawn_session', { provider: 'claude', label: 'тесты', task: 'гонять' });
+
+    const stored = await readMapFile();
+    expect(session(stored, 's-02').lean ?? false).toBe(false);
+    expect(session(stored, 's-03').lean).toBe(true);
+  });
+});
+
 describe('spawn_session: модель и усилие', () => {
   /** Свои провайдеры: шаблоны решают, что доедет до команды. Бинарь — заглушка из `beforeEach`. */
   async function withProviders(): Promise<void> {
@@ -1593,6 +1614,37 @@ describe('send_message и check_inbox', () => {
     expect(await callOk(second, 'send_message', { to: 's-01', text: 'три' })).toEqual({
       messageId: 'm-04',
     });
+  });
+
+  it('письмо длиннее потолка: отказ с советом писать файл, в карте письма нет', async () => {
+    const first = await connect('s-01');
+    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    const second = await connect('s-02');
+
+    const refused = await call(second, 'send_message', { to: 's-01', text: 'я'.repeat(4097) });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toBe('letter is 4097 chars, limit 4096: write a file and send its path');
+    expect((await readMapFile()).messages).toEqual([]);
+
+    // Ровно на потолке — ещё письмо, текст не обрезан.
+    await callOk(second, 'send_message', { to: 's-01', text: 'я'.repeat(4096) });
+    expect((await readMapFile()).messages[0]?.text).toHaveLength(4096);
+  });
+
+  it('письмо длиннее мягкого порога пишется с предупреждением, короткое — без замечаний', async () => {
+    const first = await connect('s-01');
+    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    const second = await connect('s-02');
+
+    const long = await callOk(second, 'send_message', { to: 's-01', text: 'я'.repeat(1500) });
+    expect(long['warning']).toBe('long letter (1500 chars): prefer a file and a path');
+    expect((await readMapFile()).messages).toHaveLength(1);
+
+    const both = await callOk(second, 'send_message', { to: 's-01', text: 'я'.repeat(1500), reply_to: 'm-01' });
+    expect(both['warning']).toContain('long letter (1500 chars): prefer a file and a path; unknown parameters ignored');
+
+    const short = await callOk(second, 'send_message', { to: 's-01', text: 'я'.repeat(800) });
+    expect(short).toEqual({ messageId: 'm-03' });
   });
 
   it('to массивом из одного элемента — как строка', async () => {

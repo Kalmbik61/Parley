@@ -2,12 +2,14 @@
  * Каналы острова в main (спека 2026-10-12, 5.1). Каждый слушает только окно острова (`controller.isIsland`):
  * чужое окно с тем же именем канала ничего не двигает. Данные проверяются по форме: видимость — булево, точка — два
  * числа, область под мышь — `null` или четыре конечных числа (размеры не отрицательны, значения не больше
- * `MAX_HIT_RECT_VALUE`), цель — `isFocusTarget`, как у уведомлений.
+ * `MAX_HIT_RECT_VALUE`), цель — `isFocusTarget`, как у уведомлений, «просмотрено» — от 1 до `ISLAND_MARK_SEEN_LIMIT` ссылок на сессии
+ * (`sessionRef` протокола).
  */
 
 import type { IpcMain } from 'electron';
+import { sessionRef, type SessionRef } from '@parley/protocol';
 import type { FocusTarget } from '../../shared/bridge.js';
-import type { IslandConfig, IslandHitRect, IslandPoint } from '../../shared/island.js';
+import { ISLAND_MARK_SEEN_LIMIT, type IslandConfig, type IslandHitRect, type IslandPoint } from '../../shared/island.js';
 import { isFocusTarget, withIpcError } from '../ipc.js';
 import type { IslandController, IslandWindowLike } from './window.js';
 
@@ -19,6 +21,8 @@ export interface IslandIpcOptions {
   pushConfig(): void;
   openTarget(target: FocusTarget): void;
   beep(): void;
+  /** Clear на острове: сессии просмотрены — хосту уходит `activity.seen` по каждой (список уже проверен). */
+  markSeen(refs: SessionRef[]): void;
   /** Отрисовка острова упала (`IslandErrorBoundary`): окно больше не показывает запросы. */
   onFailed(): void;
 }
@@ -37,6 +41,19 @@ function isHitRect(value: unknown): value is IslandHitRect {
   const { x, y, width, height } = value as Record<string, unknown>;
   const fits = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n <= MAX_HIT_RECT_VALUE;
   return fits(x) && fits(y) && fits(width) && width >= 0 && fits(height) && height >= 0;
+}
+
+
+/** Список ссылок для «просмотрено»: каждая прошла `sessionRef` (лишние поля срезаны) или `null`, если форма негодна. */
+function parseSeenRefs(value: unknown): SessionRef[] | null {
+  if (!Array.isArray(value) || value.length < 1 || value.length > ISLAND_MARK_SEEN_LIMIT) return null;
+  const refs: SessionRef[] = [];
+  for (const item of value) {
+    const parsed = sessionRef.safeParse(item);
+    if (!parsed.success) return null;
+    refs.push(parsed.data);
+  }
+  return refs;
 }
 
 export function registerIslandIpc(options: IslandIpcOptions): void {
@@ -72,6 +89,11 @@ export function registerIslandIpc(options: IslandIpcOptions): void {
   });
   ipcMain.on('island:beep', (event) => {
     if (fromIsland(event)) options.beep();
+  });
+  ipcMain.on('island:mark-seen', (event, refs: unknown) => {
+    if (!fromIsland(event)) return;
+    const parsed = parseSeenRefs(refs);
+    if (parsed !== null) options.markSeen(parsed);
   });
   ipcMain.on('island:failed', (event) => {
     if (fromIsland(event)) options.onFailed();

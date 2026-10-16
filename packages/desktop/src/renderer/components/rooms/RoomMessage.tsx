@@ -2,15 +2,16 @@
  * Одно сообщение ленты комнаты (спека окна 2026-09-29, 1.3): аватар 18, мета — отправитель (600), `★`
  * у ведущего, `→ all` или `→ S02 бэкенд, S03 ревью`, тег вида, время, точка «непрочитано»; текст
  * 14px/1.55 — Markdown (GFM) с чипами (`RoomMarkdown.tsx`); под ним строка доставки
- * `✓ Picked up by S03 · ▤ Not picked up yet by S01 (busy), S02`. Системная строка — аватар системы без
+ * `✓ Picked up by S03 · Delivering to S01 (resuming)… · ▤ Not picked up yet by S02`. Системная строка — аватар системы без
  * адресата и без точки (решение контролёра 4 куска 6).
  *
  * Точка — токен `--state-done`, а не `accent-2-500` handoff: тот к листу светлой темы 2.6:1, ниже порога
  * 3:1 для признака состояния (решение 11 спеки — те же токены у значков состояний).
  *
  * Строка доставки (`message.delivery`) одна, когда у сообщения есть хотя бы один не закрытый адресат-агент: «забрали»
- * (`data-message-picked`, время каждого — в подсказке, а не в строке) и «ещё нет» (`data-message-waiting`; после тега
- * в скобках причина от хоста, `S01 (busy)`) через « · ». Текст идёт обычным потоком и переносится по словам, а
+ * (`data-message-picked`, время каждого — в подсказке, а не в строке), «доставляется» (`data-message-delivering`, со
+ * спиннером: письмо Parley доводит сам, `DELIVERING`) и «ещё нет» (`data-message-waiting`) через « · »; после тега в
+ * скобках причина от хоста, `S01 (busy)`. Текст идёт обычным потоком и переносится по словам, а
  * неразрывный (чужой id сессии) — по знакам: длинный список не раздвигает колонку и не даёт горизонтальной прокрутки.
  *
  * За «прочитано» (`observeRef`, `attention/use-mark-read.ts`) наблюдается строка меты, а не всё
@@ -31,6 +32,8 @@
  * (`chat/items/PromptItem.tsx`); сообщения агентов и системы — слева, без пузыря.
  */
 
+import type { MailWait } from '@parley/protocol';
+import { LoaderCircle } from 'lucide-react';
 import { S } from '../../../shared/strings.js';
 import { cn } from '../../lib/cn.js';
 import { isoMs } from '../../lib/iso-time.js';
@@ -65,6 +68,19 @@ export interface RoomMessageProps {
 function clockTime(iso: string): string {
   const ms = isoMs(iso);
   return ms === null ? '' : new Date(ms).toTimeString().slice(0, 8);
+}
+
+/**
+ * Причины, при которых письмо Parley доводит сам: поднимает спящую, напечатал указатель. Их ждущие идут в строке со
+ * спиннером, `Delivering to …` (разбор 2026-10-14: после Accept подъём шёл десятки секунд, а строка стояла
+ * неподвижной). `busy` сюда не входит: по протоколу (`MailWait`) это и «занята ходом», и «ждёт ответа человека».
+ * Остальные ждут человека (черновик, лимит, пауза) или без него письма не заберут.
+ */
+const DELIVERING: ReadonlySet<MailWait> = new Set<MailWait>(['resuming', 'in-flight', 'pointed']);
+
+/** `S01 (busy), S03` — теги ждущих, после тега в скобках причина от хоста. */
+function waitingTags(waiting: ReadonlyArray<{ tag: string; reason: MailWait | null }>): string {
+  return waiting.map(({ tag, reason }) => (reason === null ? tag : `${tag} (${S.rooms.mailWait[reason]})`)).join(', ');
 }
 
 /** Цитата — одна строка с обрезкой и акцентной чертой слева; у кнопки и у заглушки «оригинала нет» вид общий. */
@@ -112,6 +128,8 @@ export function RoomMessage({
   observeRef,
 }: RoomMessageProps): JSX.Element {
   const { picked, waiting } = message.delivery;
+  const delivering = waiting.filter(({ reason }) => reason !== null && DELIVERING.has(reason));
+  const stalled = waiting.filter(({ reason }) => reason === null || !DELIVERING.has(reason));
   /** Письмо `parley` или системная строка. */
   const system = message.sender.kind === 'system';
   /** Сообщение человека — справа, на пузыре. */
@@ -174,26 +192,34 @@ export function RoomMessage({
             data-message-delivery=""
             className={cn('break-words text-xs text-muted-foreground', human && 'text-right')}
           >
-            {picked.length === 0 ? null : (
-              <span
-                data-message-picked=""
-                title={picked.map(({ tag, at }) => `${tag} ${clockTime(at)}`.trim()).join(' · ')}
-              >
-                {S.rooms.pickedUp(picked.map(({ tag }) => tag).join(', '))}
-              </span>
-            )}
-            {picked.length === 0 || waiting.length === 0 ? null : ' · '}
-            {waiting.length === 0 ? null : (
-              <span data-message-waiting="">
-                {S.rooms.notPickedUp(
-                  waiting
-                    .map(({ tag, reason }) =>
-                      reason === null ? tag : `${tag} (${S.rooms.mailWait[reason]})`,
-                    )
-                    .join(', '),
-                )}
-              </span>
-            )}
+            {[
+              picked.length === 0 ? null : (
+                <span
+                  key="picked"
+                  data-message-picked=""
+                  title={picked.map(({ tag, at }) => `${tag} ${clockTime(at)}`.trim()).join(' · ')}
+                >
+                  {S.rooms.pickedUp(picked.map(({ tag }) => tag).join(', '))}
+                </span>
+              ),
+              delivering.length === 0 ? null : (
+                <span key="delivering" data-message-delivering="">
+                  <LoaderCircle
+                    data-busy-spinner=""
+                    aria-hidden="true"
+                    className="mr-1 inline-block size-3 animate-spin align-[-2px] motion-reduce:animate-none"
+                  />
+                  {S.rooms.delivering(waitingTags(delivering))}
+                </span>
+              ),
+              stalled.length === 0 ? null : (
+                <span key="waiting" data-message-waiting="">
+                  {S.rooms.notPickedUp(waitingTags(stalled))}
+                </span>
+              ),
+            ]
+              .filter((part) => part !== null)
+              .flatMap((part, index) => (index === 0 ? [part] : [' · ', part]))}
           </div>
         )}
       </div>

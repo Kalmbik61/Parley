@@ -15,7 +15,7 @@ import { LayoutTooLargeError, type LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
 import { createNotesStore, type NotesStore } from './notes-store.js';
 import type { NotesFile } from '../shared/notes-types.js';
-import { forwardHostToPages, registerIpc, withIpcError } from './ipc.js';
+import { forwardHostToPages, forwardHostToWindow, registerIpc, withIpcError } from './ipc.js';
 import { createRootsRegistry, FilesDeniedError, type RootsRegistry } from './roots.js';
 
 /** Подставной `ipcMain`: сохраняет обработчики и умеет их дёргать, как настоящий `invoke`. */
@@ -76,6 +76,8 @@ const emulation = {
     scale: 0.5,
   })),
 };
+/** Ответы окна на просьбы агента (этап B2): main/browser/agent-ops.ts подменён — мост проверяет только форму. */
+const agentOps = { openTabResult: vi.fn() };
 
 /** Подставной webContents для моста `browser:*`: EventEmitter плюс то, что трогает мост. */
 function fakeBrowserContents(
@@ -137,6 +139,7 @@ function setup(
   getUpdate: ReturnType<typeof vi.fn>;
   openPath: ReturnType<typeof vi.fn>;
   saveDropImage: ReturnType<typeof vi.fn>;
+  saveDiagnostics: ReturnType<typeof vi.fn>;
   imageThumbnail: ReturnType<typeof vi.fn>;
   chooseFiles: ReturnType<typeof vi.fn>;
   setDirtyBuffers: ReturnType<typeof vi.fn>;
@@ -183,6 +186,8 @@ function setup(
   const openPath = vi.fn().mockResolvedValue('');
   // Настоящий буфер обмена тесты не читают (решение контролёра 5.4): main отдаёт путь подмены.
   const saveDropImage = vi.fn().mockResolvedValue('/h/drops/a.png');
+  // Настоящую сборку архива (ps, zip, диск) тесты ipc не гоняют: ей отдельный `bundle.test.ts`.
+  const saveDiagnostics = vi.fn().mockResolvedValue({ file: '/h/Downloads/parley-diagnostics-20261016-123456.zip', hostResponded: true });
   const chooseFiles = vi.fn().mockResolvedValue(['/h/a.png']);
   // Настоящий nativeImage тесты не зовут: модуль миниатюр проверяет `image-thumbnail.test.ts`.
   const imageThumbnail = vi.fn().mockResolvedValue('data:image/png;base64,AAAA');
@@ -225,6 +230,7 @@ function setup(
     roots,
     openPath,
     saveDropImage,
+    saveDiagnostics,
     imageThumbnail,
     setDirtyBuffers,
     answerClose,
@@ -236,6 +242,7 @@ function setup(
       annotate,
       inspector,
       emulation,
+      agent: agentOps,
     },
   });
 
@@ -254,6 +261,7 @@ function setup(
     getUpdate,
     openPath,
     saveDropImage,
+    saveDiagnostics,
     imageThumbnail,
     chooseFiles,
     setDirtyBuffers,
@@ -583,6 +591,104 @@ describe('registerIpc', () => {
         return true;
       });
     }
+    expect(showItemInFolder).not.toHaveBeenCalled();
+  });
+});
+
+describe('app:save-diagnostics', () => {
+  it('зовёт saveDiagnostics с { profile: false } и показывает файл в Finder', async () => {
+    const { ipcMain, saveDiagnostics, showItemInFolder } = setup();
+
+    const result = await ipcMain.invoke('app:save-diagnostics', { profile: false });
+
+    expect(saveDiagnostics).toHaveBeenCalledWith({ profile: false });
+    expect(showItemInFolder).toHaveBeenCalledWith('/h/Downloads/parley-diagnostics-20261016-123456.zip');
+    expect(result).toEqual({ file: '/h/Downloads/parley-diagnostics-20261016-123456.zip', hostResponded: true });
+  });
+
+  it('без boolean profile — bad_request, сборка и Finder не зовутся', async () => {
+    const { ipcMain, saveDiagnostics, showItemInFolder } = setup();
+
+    for (const options of [undefined, null, {}, { profile: 'yes' }, { profile: 1 }, 'profile']) {
+      await expect(ipcMain.invoke('app:save-diagnostics', options)).rejects.toSatisfy((error: unknown) => {
+        expect(decodeIpcError(error).code).toBe('bad_request');
+        return true;
+      });
+    }
+    expect(saveDiagnostics).not.toHaveBeenCalled();
+    expect(showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it('два одновременных вызова — одна сборка, оба получают один и тот же файл, Finder на каждый вызов', async () => {
+    const { ipcMain, saveDiagnostics, showItemInFolder } = setup();
+    let finish: (result: { file: string; hostResponded: boolean }) => void = () => {};
+    saveDiagnostics.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+
+    const first = ipcMain.invoke('app:save-diagnostics', { profile: false }) as Promise<unknown>;
+    const second = ipcMain.invoke('app:save-diagnostics', { profile: true }) as Promise<unknown>;
+    finish({ file: '/h/Downloads/one.zip', hostResponded: true });
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(saveDiagnostics).toHaveBeenCalledTimes(1);
+    expect(a).toEqual({ file: '/h/Downloads/one.zip', hostResponded: true });
+    expect(b).toEqual(a);
+    expect(showItemInFolder).toHaveBeenCalledTimes(2);
+
+    // После завершения следующий вызов снова запускает сборку.
+    saveDiagnostics.mockResolvedValue({ file: '/h/Downloads/two.zip', hostResponded: true });
+    await ipcMain.invoke('app:save-diagnostics', { profile: false });
+    expect(saveDiagnostics).toHaveBeenCalledTimes(2);
+  });
+
+  it('сбой сборки доходит с кодом failed, Finder не зовётся', async () => {
+    const { ipcMain, saveDiagnostics, showItemInFolder } = setup();
+    saveDiagnostics.mockRejectedValue(new Error('ENOSPC'));
+
+    await expect(ipcMain.invoke('app:save-diagnostics', { profile: true })).rejects.toSatisfy((error: unknown) => {
+      expect(decodeIpcError(error).code).toBe('failed');
+      return true;
+    });
+    expect(showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  /** Реестр корней, который отказывает всем путям и считает вопросы: архив лежит в Downloads, вне корней работ. */
+  function deniedRoots(): { roots: RootsRegistry; insideAnyRoot: ReturnType<typeof vi.fn> } {
+    const insideAnyRoot = vi.fn().mockResolvedValue(null);
+    const roots = {
+      resolve: vi.fn().mockRejectedValue(new FilesDeniedError('no roots')),
+      locate: vi.fn().mockResolvedValue(null),
+      insideAnyRoot,
+      roots: vi.fn().mockReturnValue([]),
+      expandHome: vi.fn((p: string) => p),
+      rootPath: vi.fn(() => {
+        throw new FilesDeniedError('no roots');
+      }),
+    } satisfies RootsRegistry;
+    return { roots, insideAnyRoot };
+  }
+
+  it('путь сохранённого архива показывается в Finder напрямую, без корней', async () => {
+    const { roots, insideAnyRoot } = deniedRoots();
+    const { ipcMain, saveDiagnostics, showItemInFolder } = setup({ roots });
+    const { file } = (await ipcMain.invoke('app:save-diagnostics', { profile: false })) as { file: string };
+    expect(saveDiagnostics).toHaveBeenCalledTimes(1);
+    showItemInFolder.mockClear();
+
+    expect(await ipcMain.invoke('app:show-in-finder', file)).toBeUndefined();
+
+    expect(showItemInFolder).toHaveBeenCalledTimes(1);
+    expect(showItemInFolder).toHaveBeenCalledWith(file);
+    expect(insideAnyRoot).not.toHaveBeenCalled();
+  });
+
+  it('чужой путь вне корней по-прежнему отказ files:denied, даже после сохранения архива', async () => {
+    const { roots } = deniedRoots();
+    const { ipcMain, showItemInFolder } = setup({ roots });
+    await ipcMain.invoke('app:save-diagnostics', { profile: false });
+    showItemInFolder.mockClear();
+
+    expect(await codeOf(ipcMain.invoke('app:show-in-finder', '/h/Downloads/other.zip'))).toBe('files:denied');
+    expect(await codeOf(ipcMain.invoke('app:show-in-finder', '/etc/hosts'))).toBe('files:denied');
     expect(showItemInFolder).not.toHaveBeenCalled();
   });
 });
@@ -1324,6 +1430,71 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
     expect(annotate.cancel).toHaveBeenCalledWith(7);
     expect(annotate.sync).toHaveBeenCalledWith(7, [{ n: 1, key: 'a1' }]);
     expect(annotate.capture).toHaveBeenCalledWith(7);
+  });
+});
+
+describe('канал агента — только для main (этап B2, спека браузера 3.7)', () => {
+  const codeOf = async (promise: unknown): Promise<string> => {
+    try {
+      await promise;
+    } catch (error) {
+      return decodeIpcError(error).code;
+    }
+    return 'resolved';
+  };
+
+  it('host:call не пускает browser.agentResult: ответ на операцию агента шлёт только main', async () => {
+    const { ipcMain, connection } = setup();
+    await expect(ipcMain.invoke('host:call', 'browser.agentResult', { opId: 'op-1', ok: true, result: {} })).rejects.toBeDefined();
+    expect(connection.call).not.toHaveBeenCalled();
+    // Положительный контроль: обычный метод проходит тем же путём.
+    await ipcMain.invoke('host:call', 'works.list', {});
+    expect(connection.call).toHaveBeenCalledWith('works.list', {});
+  });
+
+  it('forwardHostToWindow не пересылает странице browser.agentOp; прочие события — пересылает', () => {
+    const captured: { listener?: (message: unknown) => void } = {};
+    const connection = {
+      onEvent: (listener: (message: unknown) => void) => {
+        captured.listener = listener;
+        return () => {};
+      },
+      onStatus: () => () => {},
+    } as unknown as HostConnection;
+    const sent: unknown[] = [];
+    const window = { isDestroyed: () => false, webContents: { send: (channel: string, data: unknown) => sent.push([channel, data]) } };
+    forwardHostToWindow(connection, window as unknown as BrowserWindow);
+    captured.listener?.({ event: 'browser.agentOp', data: { opId: 'op-1', args: { url: 'http://localhost:5173/' } } });
+    captured.listener?.({ event: 'wake.changed', data: { paused: true } });
+    expect(sent).toEqual([['host:event', { event: 'wake.changed', data: { paused: true } }]]);
+  });
+
+  it('agent-open-tab-result: ответ окна — в main; чужая форма, не вкладка браузера и не строка id — bad_request', async () => {
+    const { ipcMain } = setup();
+    agentOps.openTabResult.mockClear();
+    await ipcMain.invoke('browser:agent-open-tab-result', 'r1', { tabId: 'browser:abc123', reused: false, mounted: false });
+    expect(agentOps.openTabResult).toHaveBeenLastCalledWith('r1', { tabId: 'browser:abc123', reused: false, mounted: false });
+    await ipcMain.invoke('browser:agent-open-tab-result', 'r1p', { tabId: 'bp-abc123', reused: true, mounted: true });
+    expect(agentOps.openTabResult).toHaveBeenLastCalledWith('r1p', { tabId: 'bp-abc123', reused: true, mounted: true });
+    await ipcMain.invoke('browser:agent-open-tab-result', 'r2', { error: 'limit' });
+    expect(agentOps.openTabResult).toHaveBeenLastCalledWith('r2', { error: 'limit' });
+    await ipcMain.invoke('browser:agent-open-tab-result', 'r3', { error: 'no_work' });
+    expect(agentOps.openTabResult).toHaveBeenLastCalledWith('r3', { error: 'no_work' });
+    const bad: Array<[unknown, unknown]> = [
+      ['r4', { tabId: 'terminal:s-01', reused: false, mounted: true }],
+      ['r4', { tabId: 'browser:abc123', reused: 'yes', mounted: true }],
+      ['r4', { tabId: 'browser:abc123', reused: false }],
+      ['r4', { tabId: `browser:${'x'.repeat(200)}`, reused: false, mounted: true }],
+      ['r4', { error: 'boom' }],
+      ['r4', null],
+      [7, { error: 'limit' }],
+      ['', { error: 'limit' }],
+      ['x'.repeat(65), { error: 'limit' }],
+    ];
+    for (const [requestId, raw] of bad) {
+      expect(await codeOf(ipcMain.invoke('browser:agent-open-tab-result', requestId, raw)), JSON.stringify(raw)).toBe('bad_request');
+    }
+    expect(agentOps.openTabResult).toHaveBeenCalledTimes(4);
   });
 });
 

@@ -1,4 +1,5 @@
-import { mkdir, appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,12 +15,13 @@ import {
   NEW_LABEL,
   UNTITLED_WORK,
 } from '@parley/core';
+import type { UsageSummary } from '@parley/core';
 import type { EventData, EventName, LiveMetrics, SessionRef } from '@parley/protocol';
 import { refKey } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
-import { createActivityService } from './activity-service.js';
+import { createActivityService, wholeSessionUsage } from './activity-service.js';
 import type { ActivityService, ActivityServiceOptions } from './activity-service.js';
 import type { SubagentMeta } from './subagent-meta.js';
 
@@ -233,6 +235,17 @@ describe('createActivityService', () => {
     expect(a.get(ref)?.activity).toMatchObject({ activity: 'unseen', source: 'hooks' });
   }, 30_000);
 
+  it('2а-codex: codexLogFiles у сессии не Codex пуст, reindexLog не падает на отсутствующем файле', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    expect(a.codexLogFiles(ref)).toEqual([]);
+    await expect(a.reindexLog(path.join(claudeRoot, 'нет-такого.jsonl'))).resolves.toBeUndefined();
+  });
+
   it('2б: mailWaiting — причина ожидания писем уходит в метрики и рассылку, null её снимает', async () => {
     const { ref } = await activeSession();
     const w = await works();
@@ -250,6 +263,30 @@ describe('createActivityService', () => {
 
     a.mailWaiting(ref, null);
     expect(a.get(ref)?.metrics?.mailWaiting).toBeNull();
+  });
+
+  it('2в: контекст — setContext уходит в метрики, setCompaction прячет старый процент до свежего наблюдения', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+    expect(a.get(ref)?.metrics?.context ?? null).toBeNull();
+
+    const fill = { usedPercent: 82, windowTokens: 200_000, usedTokens: 164_000, at: '2026-10-15T10:00:00.000Z' };
+    a.setContext(ref, fill);
+    expect(a.get(ref)?.metrics).toMatchObject({ context: fill, compaction: null });
+    const sent = activityChanges(ref).length;
+    // То же значение — ни пересчёта, ни рассылки.
+    a.setContext(ref, { ...fill });
+    expect(activityChanges(ref)).toHaveLength(sent);
+
+    a.setCompaction(ref, { phase: 'pending', finishedAt: null });
+    expect(a.get(ref)?.metrics).toMatchObject({ context: fill, compaction: 'pending' });
+    a.setCompaction(ref, { phase: null, finishedAt: '2026-10-15T10:05:00.000Z' });
+    expect(a.get(ref)?.metrics).toMatchObject({ context: null, compaction: 'compacted' });
+    a.setContext(ref, { ...fill, usedPercent: 12, at: '2026-10-15T10:06:00.000Z' });
+    expect(a.get(ref)?.metrics).toMatchObject({ context: { usedPercent: 12 }, compaction: null });
   });
 
   it('3: без хуков тишина лога дольше порога → idle, таймер срабатывает один раз', async () => {
@@ -1001,6 +1038,33 @@ describe('createActivityService: субагенты и ожидание (Parley 
   }, 20_000);
 });
 
+describe('permissionAnswered: отметка «на запрос ответили»', () => {
+  it('дописывает ровно одну строку в журнал сессии, если каталог events/ есть', async () => {
+    const { ref } = await activeSession();
+    const a = activity(await works());
+    const file = path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`);
+    await appendFile(file, hook('PermissionRequest'));
+
+    a.permissionAnswered(ref);
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const lines = (await readFile(file, 'utf8')).split('\n').filter((line) => line !== '');
+    expect(lines.filter((line) => line.includes('ParleyPermissionAnswered'))).toEqual([
+      '{"hook_event_name":"ParleyPermissionAnswered"}',
+    ]);
+  });
+
+  it('каталога events/ нет — не создаёт его', async () => {
+    const { ref } = await activeSession({ createEventsDir: false });
+    const a = activity(await works());
+
+    a.permissionAnswered(ref);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(existsSync(workPaths(project, ref.workId).events)).toBe(false);
+  });
+});
+
 describe('удержанный вопрос агента (план 2026-10-01, кусок 4a, решение О)', () => {
   const journal = (ref: SessionRef): string =>
     path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`);
@@ -1510,5 +1574,34 @@ describe('токены сессии: свежесть и учёт кэша (P36)
     expect(json).not.toMatch(/\.jsonl|binding|epoch/);
     // Уходящее окну событие устроено так же, как и снимок.
     expect(JSON.stringify(activityChanges(ref).at(-1)?.metrics)).not.toContain(NATIVE);
+  });
+});
+
+describe('wholeSessionUsage (спека расхода токенов, 5.2)', () => {
+  const unavailable: UsageSummary = {
+    input: null,
+    output: null,
+    cacheRead: null,
+    cacheWrite: null,
+    totalInput: null,
+    source: 'unavailable',
+    observedAt: null,
+    stale: false,
+    completeness: 'unknown',
+    coverage: 'conversation',
+  };
+
+  it('выбранный итог отдаётся как есть', () => {
+    const live = { ...unavailable, input: 5, output: 1, source: 'native-index' as const, completeness: 'complete' as const };
+    expect(wholeSessionUsage(live, true, 'claude')).toBe(live);
+  });
+
+  it('лог есть, ответов модели ещё нет — ноль; у Codex запись в кэш неизвестна', () => {
+    expect(wholeSessionUsage(unavailable, true, 'claude')).toMatchObject({ input: 0, output: 0, cacheWrite: 0, completeness: 'complete' });
+    expect(wholeSessionUsage(unavailable, true, 'codex')).toMatchObject({ input: 0, cacheWrite: null });
+  });
+
+  it('ни лога, ни снимка — посчитать нечем', () => {
+    expect(wholeSessionUsage(unavailable, false, 'claude')).toBeNull();
   });
 });

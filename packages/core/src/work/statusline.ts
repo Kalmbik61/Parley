@@ -4,11 +4,13 @@
  * зовёт его после каждого ответа модели: JSON сессии на stdin, первая строка stdout — строка
  * статуса в терминале (code.claude.com/docs/en/statusline).
  *
- * Скрипт делает две вещи:
+ * Скрипт делает три вещи:
  * 1. Если во входе есть `rate_limits` (подписки Pro и Max, после первого ответа модели), атомарно
  *    пишет `{ at, rateLimits }` в `limits/<сессия>.json` каталога работы. Оттуда лимиты
  *    берёт хост. Нет `rate_limits` — файла нет.
- * 2. Печатает строку терминала. Своя строка статуса у человека есть в настройках Claude Code —
+ * 2. Если во входе есть `context_window` с числовым `used_percentage`, так же атомарно пишет заполненность контекста
+ *    в `context/<сессия>.json` (спека 2026-10-15, 4.1). Нет — файла нет.
+ * 3. Печатает строку терминала. Своя строка статуса у человека есть в настройках Claude Code —
  *    вызывает её команду с тем же stdin и тем же окружением и печатает вывод как есть, так что в
  *    терминале ничего не меняется. Нет — короткая строка: модель и процент контекста.
  *
@@ -28,6 +30,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { claudeContextFill, CONTEXT_DIR, contextFile } from '../context-fill.js';
 import { claudeLimits, isFileSafeId, LIMITS_DIR, limitsFile } from '../limits.js';
 import { envValue } from '../names.js';
 
@@ -107,10 +110,35 @@ function parseInput(raw: string): Record<string, unknown> | null {
 }
 
 /**
- * Пишет `{ at, rateLimits }` в файл сессии: временный файл рядом и `rename`, чтобы хост не
- * прочитал недописанное. Каталог `limits` заводится, а каталог работы — нет: удалённую работу
- * (её стёрли под живым агентом) скрипт не воскрешает. Адрес — из окружения агента, как у хуков.
+ * Атомарная запись файла сессии в подкаталог работы (`limits/`, `context/`): временный файл и `rename`. Каталог
+ * работы не создаётся (`mkdir` без recursive): удалённую под живым агентом работу скрипт не воскрешает.
  */
+async function writeSessionFile(
+  env: NodeJS.ProcessEnv,
+  dirName: string,
+  fileOf: (workDir: string, sessionId: string) => string,
+  body: unknown,
+): Promise<void> {
+  const workDir = envValue(env, 'WORK_DIR');
+  const sessionId = envValue(env, 'SESSION_ID');
+  if (workDir === undefined || !path.isAbsolute(workDir)) return;
+  if (sessionId === undefined || !isFileSafeId(sessionId)) return;
+
+  try {
+    await mkdir(path.join(workDir, dirName));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return;
+  }
+  const file = fileOf(workDir, sessionId);
+  const temp = `${file}.${process.pid}.tmp`;
+  try {
+    await writeFile(temp, `${JSON.stringify(body)}\n`, 'utf8');
+    await rename(temp, file);
+  } catch {
+    await rm(temp, { force: true }).catch(() => undefined);
+  }
+}
+
 async function saveLimits(
   input: Record<string, unknown> | null,
   env: NodeJS.ProcessEnv,
@@ -120,24 +148,18 @@ async function saveLimits(
   const rateLimits = input?.['rate_limits'];
   // Окон подписки во входе нет (шлюз, API-ключ, первый ход) — хранить нечего.
   if (claudeLimits(rateLimits, at) === null) return;
-  const workDir = envValue(env, 'WORK_DIR');
-  const sessionId = envValue(env, 'SESSION_ID');
-  if (workDir === undefined || !path.isAbsolute(workDir)) return;
-  if (sessionId === undefined || !isFileSafeId(sessionId)) return;
+  await writeSessionFile(env, LIMITS_DIR, limitsFile, { at, rateLimits });
+}
 
-  try {
-    await mkdir(path.join(workDir, LIMITS_DIR));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return;
-  }
-  const file = limitsFile(workDir, sessionId);
-  const temp = `${file}.${process.pid}.tmp`;
-  try {
-    await writeFile(temp, `${JSON.stringify({ at, rateLimits })}\n`, 'utf8');
-    await rename(temp, file);
-  } catch {
-    await rm(temp, { force: true }).catch(() => undefined);
-  }
+/** Заполненность контекста (спека 2026-10-15, 4.1): `context/<сессия>.json`; нет `context_window` — файла нет. */
+async function saveContext(
+  input: Record<string, unknown> | null,
+  env: NodeJS.ProcessEnv,
+  now: () => number,
+): Promise<void> {
+  const fill = claudeContextFill(input?.['context_window'], new Date(now()).toISOString());
+  if (fill === null) return;
+  await writeSessionFile(env, CONTEXT_DIR, contextFile, fill);
 }
 
 /**
@@ -285,6 +307,7 @@ export async function runStatusline(raw: string, options: StatuslineOptions = {}
 
   // Файл — до команды человека: строку, убитую Claude Code на полуслове, данные не теряют.
   await saveLimits(input, env, options.now ?? Date.now).catch(() => undefined);
+  await saveContext(input, env, options.now ?? Date.now).catch(() => undefined);
 
   const command = await humanCommand(input, options.home ?? homedir()).catch(() => null);
   const human =

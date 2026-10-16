@@ -9,7 +9,7 @@ import { setResult, transitionSession } from './map.js';
 import { freezeUsage, type UsageSummary } from './usage-ledger.js';
 import type { TransitionOptions } from './map.js';
 import { readMap, updateMap } from './store.js';
-import type { SessionMetrics, SessionResult, WorkMap, WorkProvider } from './types.js';
+import type { SessionMetrics, SessionResult, WorkMap, WorkProvider, WorkSession } from './types.js';
 
 /** Корни истории провайдеров. Переопределяются тестами; в бою — значения по умолчанию. */
 export interface MetricsRoots {
@@ -214,11 +214,7 @@ export async function finishSession(
   );
   if (session === undefined) throw new Error(`session ${sessionId} is not in the map`);
 
-  const { providerSessionId } = session;
-  const measured =
-    providerSessionId === null
-      ? null
-      : await readSessionMetrics(session.provider, providerSessionId, options);
+  const measured = await measureFinal(session, options);
 
   return updateMap(
     projectPath,
@@ -228,26 +224,81 @@ export async function finishSession(
         to === 'sleeping'
           ? transitionSession(map, sessionId, to, options)
           : setResult(map, sessionId, to, options.at);
-      // Лог читался до захвата блокировки: если сессию за это время перепривязали
-      // к другому логу, чужие числа в карту не попадут.
-      if (measured !== null && target.providerSessionId === providerSessionId) {
-        target.metrics = {
-          ...measured.metrics,
-          // Снимок помнит, к какому разговору и запуску процесса он относится: по возобновлении
-          // окно сравнит его с живым индексом, а не примет за цифры нового запуска.
-          ...(measured.usage === null || providerSessionId === null
-            ? {}
-            : {
-                usage: freezeUsage(measured.usage, {
-                  binding: providerSessionId,
-                  epoch: session.startedAtProcess,
-                  // Сон — закрытый период; `report` снимает цифры посреди работы.
-                  closed: to === 'sleeping',
-                }),
-              }),
-        };
-      }
+      storeFinal(target, session, measured, to);
     },
     options.lockTimeoutMs === undefined ? {} : { lockTimeoutMs: options.lockTimeoutMs },
   );
+}
+
+/**
+ * Усыпляет мёртвые сессии одной работы одной записью карты (сверка живости, `reconcileMap`): после закрытия
+ * приложения мертвы все разом, а запись на каждую — это ещё и индекс работ под общим замком. Логи читаются до
+ * замка, как у `finishSession`. Сессию, которую за это время уже усыпили (вторая сверка внахлёст), закрыли или
+ * подняли новым процессом, запись не трогает. Возвращает id усыплённых.
+ */
+export async function sleepSessions(
+  projectPath: string,
+  workId: string,
+  sessionIds: readonly string[],
+  options: FinishOptions = {},
+): Promise<string[]> {
+  const map = await readMap(projectPath, workId);
+  const read: Array<{ session: WorkSession; measured: LiveSessionMetrics | null }> = [];
+  for (const session of map.sessions) {
+    if (sessionIds.includes(session.id)) read.push({ session, measured: await measureFinal(session, options) });
+  }
+
+  const slept: string[] = [];
+  await updateMap(
+    projectPath,
+    workId,
+    (current) => {
+      for (const { session, measured } of read) {
+        const target = current.sessions.find((candidate) => candidate.id === session.id);
+        if (target?.lifecycle !== 'active' || target.pid !== session.pid || target.startedAtProcess !== session.startedAtProcess) continue;
+        transitionSession(current, session.id, 'sleeping', options);
+        storeFinal(target, session, measured, 'sleeping');
+        slept.push(session.id);
+      }
+      // Усыплять оказалось некого — карта та же, и карточка работы не должна всплыть в сайдбаре.
+      if (slept.length > 0) current.work.updatedAt = new Date().toISOString();
+    },
+    { touch: false, ...(options.lockTimeoutMs === undefined ? {} : { lockTimeoutMs: options.lockTimeoutMs }) },
+  );
+  return slept;
+}
+
+/** Итоговые метрики сессии из лога провайдера; `null` — сессия не привязана к логу или лога нет. */
+async function measureFinal(session: WorkSession, roots: MetricsRoots): Promise<LiveSessionMetrics | null> {
+  return session.providerSessionId === null
+    ? null
+    : readSessionMetrics(session.provider, session.providerSessionId, roots);
+}
+
+/** Пишет итоговые метрики в запись сессии; `seen` — сессия, какой она была при чтении лога. */
+function storeFinal(
+  target: WorkSession,
+  seen: WorkSession,
+  measured: LiveSessionMetrics | null,
+  to: FinalStatus,
+): void {
+  const { providerSessionId } = seen;
+  // Лог читался до захвата блокировки: если сессию за это время перепривязали
+  // к другому логу, чужие числа в карту не попадут.
+  if (measured === null || target.providerSessionId !== providerSessionId) return;
+  target.metrics = {
+    ...measured.metrics,
+    // Снимок помнит, к какому разговору и запуску процесса он относится: по возобновлении
+    // окно сравнит его с живым индексом, а не примет за цифры нового запуска.
+    ...(measured.usage === null || providerSessionId === null
+      ? {}
+      : {
+          usage: freezeUsage(measured.usage, {
+            binding: providerSessionId,
+            epoch: seen.startedAtProcess,
+            // Сон — закрытый период; `report` снимает цифры посреди работы.
+            closed: to === 'sleeping',
+          }),
+        }),
+  };
 }

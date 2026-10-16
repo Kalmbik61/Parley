@@ -53,6 +53,16 @@ export { readCodexLimits } from './codex/limits.js';
 export { dropExpiredWindows, mergeLimits, readWorkLimits } from './limits.js';
 export type { LimitWindow, ProviderLimits } from './limits.js';
 export {
+  claudeContextFill,
+  codexContextFill,
+  CODEX_BASELINE_TOKENS,
+  CONTEXT_DIR,
+  contextFile,
+  parseContextFill,
+  readContextFill,
+} from './context-fill.js';
+export type { ContextFill } from './context-fill.js';
+export {
   EFFORT_DESCRIPTION_MAX,
   EFFORT_TOKEN,
   MODEL_LABEL_MAX,
@@ -157,6 +167,7 @@ export {
   renameRoom,
   renameSession,
   reopenRoom,
+  joinedLine,
   requireOpenRoom,
   roomLead,
   RoomRuleError,
@@ -301,7 +312,7 @@ export type {
   SkillSkip,
   SkillSkipReason,
 } from './work/skill-install.js';
-export { systemGuidance } from './work/guidance.js';
+export { BROWSER_PRIORITY_RULE, systemGuidance } from './work/guidance.js';
 export {
   SUMMARIZER,
   SUMMARY_TIMEOUT_MS,
@@ -356,6 +367,7 @@ export type {
   SessionActivity,
 } from './work/activity.js';
 export {
+  PERMISSION_ANSWERED_EVENT,
   TERMINAL_WORKING_EVENT,
   bareEvent,
   eventRecordOf,
@@ -417,6 +429,8 @@ export type { NativeSkill, SkillUnavailableReason } from './skills/types.js';
 export { scanClaudeCapabilities } from './capabilities/scan.js';
 export type { ScanOptions } from './capabilities/scan.js';
 export {
+  AGENT_TOKEN_ENV,
+  AGENT_URL_ENV,
   MCP_SERVER_BIN,
   codexMcpOverride,
   mcpConfig,
@@ -424,7 +438,7 @@ export {
   mcpConfigValue,
   writeMcpConfig,
 } from './work/mcp-config.js';
-export type { McpConfigFile, McpConfigParams, McpStdioServer } from './work/mcp-config.js';
+export type { AgentChannel, McpConfigFile, McpConfigParams, McpStdioServer } from './work/mcp-config.js';
 export {
   CHANNEL_MIN_VERSION,
   CHANNEL_VALUE,
@@ -434,6 +448,7 @@ export {
   probeChannelSupport,
 } from './work/channel.js';
 export type { ChannelProbe } from './work/channel.js';
+export { BROWSER_TOOL_LIMITS, BROWSER_TOOL_OPS } from './mcp/browser-tools.js';
 export { contextFromEnv } from './mcp/context.js';
 export type { McpContext } from './mcp/context.js';
 export {
@@ -451,6 +466,7 @@ export type {
   MessageKind,
   Proposal,
   Room,
+  RoomMembership,
   SessionLifecycle,
   SessionMetrics,
   SessionResult,
@@ -570,8 +586,14 @@ export type {
   UsageAttribution,
   UsageCompleteness,
   UsageCounters,
+  UsageLedgerOptions,
   UsageObservation,
   UsageSource,
   UsageSummary,
   UsageTotal,
+  UsageWindow,
 } from './work/usage-ledger.js';
+export { isCurrentMember, roomMembership } from './work/room-membership.js';
+export type { MemberPeriods, RoomMembershipView } from './work/room-membership.js';
+export { roomUsage } from './work/room-usage.js';
+export type { RoomUsage, RoomUsageMember, UsageResolver } from './work/room-usage.js';

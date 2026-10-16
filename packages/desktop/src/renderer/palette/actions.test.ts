@@ -10,7 +10,7 @@ import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { workKey } from '../../shared/work-keys.js';
 import { useBrowserStore, wantsAddressFocus } from '../browser/store.js';
 import { useDevtoolsStore } from '../browser/devtools/store.js';
-import { IMPLEMENTED_ACTIONS } from '../keys/handler.js';
+import { IMPLEMENTED_ACTIONS, isActionAvailable } from '../keys/handler.js';
 import { createMruCycle } from '../keys/mru-cycle.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
@@ -157,6 +157,8 @@ function expectation(id: ActionId): (spies: Spies) => void {
     'attention.next': ({ attention }) => expect(attention.next).toHaveBeenCalledTimes(1),
     'wake.toggle': ({ ui }) => expect(ui.toggleWake).toHaveBeenCalledTimes(1),
     'host.restart': ({ ui }) => expect(ui.confirmRestartHost).toHaveBeenCalledTimes(1),
+    // Задача 12 плана диагностики: сохранение архива без профиля, мост — из контекста действия.
+    'host.diagnostics': ({ bridge }) => expect(bridge.saveDiagnosticsCalls).toEqual([{ profile: false }]),
     'appearance.system': ({ ui }) => expect(ui.setAppearance).toHaveBeenCalledWith('system'),
     'appearance.dark': ({ ui }) => expect(ui.setAppearance).toHaveBeenCalledWith('dark'),
     'appearance.light': ({ ui }) => expect(ui.setAppearance).toHaveBeenCalledWith('light'),
@@ -240,6 +242,20 @@ describe('runAction — таблица по реестру (тест 1 куск�
   // Тест «действия будущих этапов не реализованы» обеих сторон (browser.newTab основной; files.quickOpen и
   // sidebar.changes полосы) снят слиянием: после этапов 7–9 все действия реестра реализованы, их ветки —
   // в таблице выше.
+});
+
+describe('runAction — host.diagnostics (задача 12 плана диагностики хоста)', () => {
+  it('host.diagnostics запускает сохранение без профиля через мост контекста и не просит активную работу', () => {
+    const spies = makeContext({ activeWorkKey: null });
+    runAction('host.diagnostics', spies.ctx);
+    expect(spies.bridge.saveDiagnosticsCalls).toEqual([{ profile: false }]);
+    expect(spies.toast).not.toHaveBeenCalled();
+  });
+
+  it('действие реализовано и доступно палитре без методов хоста: старый хост собирает архив из файлов и ps', () => {
+    expect(IMPLEMENTED_ACTIONS.has('host.diagnostics')).toBe(true);
+    expect(isActionAvailable('host.diagnostics', new Set())).toBe(true);
+  });
 });
 
 describe('runAction — без активной работы (тест 2 куска 6.3)', () => {

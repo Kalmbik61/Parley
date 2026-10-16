@@ -36,19 +36,24 @@
  * ничего не нажимал в ленте, и ждать нечего. После перехода лента стоит не у низа (это запоминает `onFeedScroll` по
  * событию `scroll`), поэтому новое сообщение человека от оригинала не уводит.
  *
+ * Отправка (спека 2026-10-16, 4.2): письмо встаёт в очередь комнаты (`room-outbox.ts`) и сразу видно серым в конце
+ * ленты (`RoomPendingMessage`); `rooms.send` идут строго по одному. Ушедшее держится серым «Sending…», пока письмо с
+ * его `messageId` не придёт в карту, — так оно не пропадает и не задваивается; отказ — «Not sent» с Retry и ×.
+ *
  * Архивная комната (спека архива комнат, 5.2) читается, но не пишется: в шапке метка `Archived`, вместо поля ввода строка
  * `This room is archived.` с кнопкой `Reopen` (`rooms.reopen`), панель плана и режим комнаты только читаются
  * (`PlanPanel.tsx`), файлы на вкладку не принимаются. Share истории работает. Вкладка архивируемой комнаты не закрывается,
  * а переходит в этот вид.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { toast } from 'sonner';
 import type { WorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { S, errorText } from '../../../shared/strings.js';
 import { useMarkRead } from '../../attention/use-mark-read.js';
+import { PanelToggle } from '../../browser/panel/PanelToggle.js';
 import { addAttachments } from '../../chat/attachments.js';
 import { useHostSupports } from '../../lib/capabilities.js';
 import { cn } from '../../lib/cn.js';
@@ -57,6 +62,7 @@ import { sessionRowLabel, sessionTag } from '../../lib/participant.js';
 import { relativeTime } from '../../lib/relative-time.js';
 import { earlierRemaining } from '../../lib/window-merge.js';
 import { roomKey } from '../../lib/room-view.js';
+import { useOutboxFlying, useOutboxItems } from '../../lib/outbox.js';
 import { workKey } from '../../lib/tree-order.js';
 import { useNow } from '../../lib/use-now.js';
 import { Button } from '../../ui/button.js';
@@ -65,17 +71,23 @@ import { useRoomPagesStore } from '../../store/room-pages.js';
 import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
 import { dragHasFiles } from '../../terminal/drop.js';
+import { ContextChip } from '../context/ContextChip.js';
+import { fitDefaultInstructions } from '../../lib/context-format.js';
 import { Decisions } from '../mail/Decisions.js';
+import { roomOutbox } from './room-outbox.js';
+import { RoomPendingMessage } from './RoomPendingMessage.js';
 import { Composer, type ComposerSubmission } from './Composer.js';
 import { useHostStore } from '../../store/host.js';
 import { PlanPanel, RoomModeControl } from './PlanPanel.js';
 import { CompletionCard } from './CompletionCard.js';
 import { DecisionCard } from './DecisionCard.js';
-import { buildRoomModel } from './feed-model.js';
+import { buildRoomModel, type ParticipantModel } from './feed-model.js';
+import { RoomContextChip } from './RoomContextChip.js';
 import { RoomHeader } from './RoomHeader.js';
 import { RoomHistoryMenu } from './RoomHistoryMenu.js';
 import { RoomMessage } from './RoomMessage.js';
 import { RoomRecipeChip } from './RoomRecipeChip.js';
+import { RoomUsageChip } from './RoomUsageChip.js';
 
 export interface RoomPanelProps {
   entry: WorkEntry;
@@ -126,6 +138,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   const earlierLoading = useRoomPagesStore((state) => state.loading[earlierKey] === true);
   const connection = useHostStore(state => state.connections);
   const status = useHostStore(state => state.status.state);
+  const hostReady = useWorksStore((state) => state.ready);
   const resolveKey = [entry.projectPath, entry.map.work.id, roomId, connection, status, entry.map.work.status, canResolve, model?.plan?.id, model?.plan?.rev, JSON.stringify(model?.proposal)].join('\0');
   const currentResolve = useRef(resolveKey); currentResolve.current = resolveKey;
   const currentBridge = useRef(bridge); currentBridge.current = bridge;
@@ -320,6 +333,21 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   // Живая строка сжала или расширила ленту: у низа стояла — остаётся у низа, читают историю — не трогаем.
   useLayoutEffect(keepAtBottom, [keepAtBottom, liveKey]);
 
+  const draftKey = roomKey(workKey(entry.projectPath, entry.map.work.id), roomId);
+  // Очередь писем человека (`room-outbox.ts`): серые — в конце ленты, пока письмо с тем же `messageId` не пришло в карту.
+  const pending = useOutboxItems(roomOutbox, draftKey);
+  const flying = useOutboxFlying(roomOutbox, draftKey);
+  const landedIds = useMemo(() => new Set((model?.messages ?? []).map((message) => message.id)), [model?.messages]);
+  // Ушло и уже пришло в карту — серый не рисуется сразу (без кадра с двумя письмами) и убирается из очереди эффектом.
+  const shownPending = pending.filter((item) => !(item.status === 'sent' && item.sentAs !== undefined && landedIds.has(item.sentAs)));
+  useEffect(() => {
+    for (const item of pending) {
+      if (item.status === 'sent' && item.sentAs !== undefined && landedIds.has(item.sentAs)) roomOutbox.remove(draftKey, item.id);
+    }
+  }, [pending, landedIds, draftKey]);
+  // Серое письмо выросло или ушло — у низа лента остаётся у низа.
+  useLayoutEffect(keepAtBottom, [keepAtBottom, shownPending.length]);
+
   if (model === null) {
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.rooms.notFound}</div>;
   }
@@ -332,8 +360,6 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
 
   // Упомянуть можно живую сессию комнаты: закрытая письма не получит.
   const members = model.participants.filter((participant) => !participant.closed);
-  const draftKey = roomKey(workKey(entry.projectPath, entry.map.work.id), roomId);
-
   const handleLoadEarlier = (): void => {
     void useRoomPagesStore
       .getState()
@@ -345,24 +371,18 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       .catch((error: unknown) => toast(errorText(decodeIpcError(error).code, S.rooms.earlierAction)));
   };
 
-  const handleSend = (submission: ComposerSubmission): Promise<void> =>
-    bridge
-      .call('rooms.send', {
-        projectPath: entry.projectPath,
-        workId: entry.map.work.id,
-        roomId,
-        to: submission.to,
-        text: submission.text,
-        kind: 'note',
-      })
-      .then(
-        () => undefined,
-        (error: unknown) => {
-          // Не ушло (не участник, хост недоступен…): человек узнаёт об этом, а поле ввода вернёт текст.
-          toast(errorText(decodeIpcError(error).code, S.rooms.sendAction));
-          throw error;
-        },
-      );
+  // Письмо — в очередь комнаты (`room-outbox.ts`): серым сразу, уходит строго по одному; отказ — «Not sent» с Retry и ×.
+  const handleSend = (submission: ComposerSubmission): void => {
+    roomOutbox.enqueue(draftKey, {
+      bridge,
+      projectPath: entry.projectPath,
+      workId: entry.map.work.id,
+      roomId,
+      to: submission.to,
+      text: submission.text,
+      requestedAt: Date.now(),
+    });
+  };
 
   const handleReopen = (): void => {
     bridge.call('rooms.reopen', { projectPath: entry.projectPath, workId: entry.map.work.id, roomId }).catch((error: unknown) => {
@@ -430,7 +450,29 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       onDrop={onDrop}
       className={cn('flex h-full min-h-0 min-w-0 flex-col', dropping && 'ring-2 ring-inset ring-ring')}
     >
-      <RoomHeader recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} archived={archived} participants={model.participants} onOpenSession={onOpenSession} />
+      <RoomHeader
+        browserToggle={archived ? undefined : <PanelToggle workKey={workKey(entry.projectPath, entry.map.work.id)} owner={{ kind: 'room', roomId }} />}
+        contextChip={<RoomContextChip bridge={bridge} roomTitle={model.title} participants={model.participants} />}
+        participantContext={(participant: ParticipantModel) =>
+          // Без чипа (спящий, старый хост без `context`) карточка остаётся прежней — одна кнопка на обе строки.
+          participant.sessionRef === undefined ||
+          participant.lifecycle !== 'active' ||
+          (participant.context === undefined && participant.compaction === undefined) ? null : (
+            <ContextChip
+              bridge={bridge}
+              sessionRef={participant.sessionRef}
+              provider={participant.provider}
+              label={participant.label}
+              running={participant.lifecycle === 'active'}
+              context={participant.context}
+              compaction={participant.compaction}
+              defaultInstructions={fitDefaultInstructions(S.context.roomDefault, model.title)}
+              testId="participant-context-chip"
+              className="h-5 px-1.5 text-[11px]"
+            />
+          )
+        }
+        usageChip={<RoomUsageChip bridge={bridge} entry={entry} roomId={roomId} active={active} providers={providers}/>} recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} archived={archived} participants={model.participants} onOpenSession={onOpenSession} />
       {/* Обёртка — только для кнопки `↓N` поверх низа ленты: прокручивается сама лента. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div
@@ -469,6 +511,17 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
               observeRef={markRead(message.id, message.needsRead)}
             />
           ))}
+          {shownPending.map((item) => (
+            <RoomPendingMessage
+              key={item.id}
+              text={item.payload.text}
+              state={item.status === 'failed' ? 'failed' : item.status === 'sent' || item.id === flying ? 'sending' : 'waiting'}
+              labelOf={labelOf}
+              onOpenExternal={onOpenExternal}
+              onRetry={() => roomOutbox.retry(draftKey, item.id, { requestedAt: Date.now() })}
+              onRemove={() => roomOutbox.remove(draftKey, item.id)}
+            />
+          ))}
           {model.proposal === null ? null : (
             <CompletionOrDecision
               plan={model.plan}
@@ -480,6 +533,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
               labelOf={labelOf}
               onOpenExternal={onOpenExternal}
               canResolve={canResolve}
+              hostReady={hostReady}
               {...(entry.map.work.status !== 'active' ? {unavailableReason:S.plans.workClosed} : {})}
               onResolve={handleResolve}
               onLayout={keepAtBottom}

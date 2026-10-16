@@ -630,3 +630,29 @@ describe('indexSessionFile: токены подагентов (P36c)', () => {
     expect(JSON.stringify(index.usage)).not.toMatch(/agent-secret|\.jsonl|subagents/);
   });
 });
+
+describe('indexSessionFile со срезом по окнам (спека расхода токенов, 5.3)', () => {
+  it('в usage только ответы внутри окна, подагенты режутся тем же окном', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'parley-slice-'));
+    try {
+      const dir = path.join(root, '-proj');
+      await mkdir(path.join(dir, 'sess', 'subagents'), { recursive: true });
+      const answer = (msg: string, at: string, input: number): string =>
+        JSON.stringify({ type: 'assistant', sessionId: 'sess', timestamp: at, message: { role: 'assistant', id: msg, usage: { input_tokens: input, output_tokens: 1 } } });
+      const file = path.join(dir, 'sess.jsonl');
+      await writeFile(file, [answer('m1', '2026-10-14T09:00:00.000Z', 100), answer('m2', '2026-10-14T11:00:00.000Z', 10)].join('\n'));
+      await writeFile(
+        path.join(dir, 'sess', 'subagents', 'agent-a1.jsonl'),
+        [answer('a1', '2026-10-14T09:30:00.000Z', 1000), answer('a2', '2026-10-14T11:30:00.000Z', 5)].join('\n'),
+      );
+      const { subagents } = await discoverSession(file, root);
+      const index = await indexSessionFile(file, root, {
+        subagents,
+        usageWindows: [{ from: '2026-10-14T10:00:00.000Z', to: null }],
+      });
+      expect(index.usage).toMatchObject({ input: 15, coverage: 'conversation-and-descendants' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

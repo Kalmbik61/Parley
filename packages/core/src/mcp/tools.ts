@@ -33,7 +33,7 @@ import {
 } from '../providers.js';
 import { prepareSessionRole, roleFromId, roleId, roleSummaries, sessionRoleCatalog } from '../work/agents.js';
 import { LEAD_ROLE, memberRole, writeBrief } from '../work/brief.js';
-import { CONTEXT_LIMITS, FIND_SKILL_MAX_BYTES, READ_GUIDE_MAX_BYTES, boundResponse, contextBytes, markedExcerpt } from '../work/context-budget.js';
+import { CONTEXT_LIMITS, FIND_SKILL_MAX_BYTES, LETTER_MAX_CHARS, LETTER_SOFT_CHARS, READ_GUIDE_MAX_BYTES, boundResponse, contextBytes, markedExcerpt } from '../work/context-budget.js';
 import {
   PAGE_MAX_BYTES,
   PAGE_MAX_ITEMS,
@@ -86,6 +86,7 @@ import {
   type WorkSession,
 } from '../work/types.js';
 import { baseBranchOf, isGitRepo, plannedWorktree } from '../work/worktree.js';
+import { BROWSER_UNAVAILABLE, createBrowserTools } from './browser-tools.js';
 import type { McpContext } from './context.js';
 import { watchInbox, type Ring } from './inbox-watch.js';
 import { waitForMap } from './watch-map.js';
@@ -491,7 +492,11 @@ const TOOLS: Tool[] = [
             'An addressee id, or several at once. Without room — exactly one; with room and no to — a broadcast to the room.',
           oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
         },
-        text: { type: 'string' },
+        text: {
+          type: 'string',
+          maxLength: LETTER_MAX_CHARS,
+          description: `At most ${LETTER_MAX_CHARS} characters; keep letters short. For anything long write a file and send its path.`,
+        },
         kind: {
           type: 'string',
           enum: [...MESSAGE_KINDS],
@@ -871,6 +876,9 @@ async function spawnSession(
   }
 
   const limits = await limitsOf(context);
+  // Облегчённый запуск (C2.2): сессии агента всегда по настройке `leanAgents`. Решение принимается здесь, при
+  // создании, и ложится в запись: `resume`, автозапуск и подъём письмом берут его из карты, а не из настроек.
+  const lean = (await loadConfig()).config.leanAgents;
   let created = '';
   const map = await updateMap(context.projectPath, context.workId, (current) => {
     requireSession(current, sessionId);
@@ -887,6 +895,7 @@ async function spawnSession(
       role: savedRole,
       ...(chosenModel === undefined ? {} : { model: chosenModel }),
       ...(chosenEffort === undefined ? {} : { effort: chosenEffort }),
+      lean,
     });
     created = session.id;
     attempt.session = session.id;
@@ -1047,6 +1056,11 @@ async function sendMessage(
   const roomId = optionalStringArg(args, 'room');
   // Пустая строка — ошибка, как у `room`: `stringArg` пустое значение не пропускает.
   const replyTo = optionalStringArg(args, 'replyTo');
+  // Схема с maxLength клиента не обязывает, поэтому потолок держит сам обработчик, до записи в карту. Обычный
+  // Error, а не SharedStateError: у того сообщение — голый код, а агенту нужна фраза с действием.
+  if (text.length > LETTER_MAX_CHARS) {
+    throw new Error(`letter is ${text.length} chars, limit ${LETTER_MAX_CHARS}: write a file and send its path`);
+  }
 
   const limits = await limitsOf(context);
   let created = '';
@@ -1107,8 +1121,11 @@ async function sendMessage(
       created = addMessage(current, { from: sessionId, to: [target], text, kind }).id;
     }
   });
-  const warning = unknownParamsWarning(args);
-  return warning === null ? { messageId: created } : { messageId: created, warning };
+  const warnings = [
+    text.length > LETTER_SOFT_CHARS ? `long letter (${text.length} chars): prefer a file and a path` : null,
+    unknownParamsWarning(args),
+  ].filter((warning): warning is string => warning !== null);
+  return warnings.length === 0 ? { messageId: created } : { messageId: created, warning: warnings.join('; ') };
 }
 
 async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {
@@ -1165,7 +1182,7 @@ async function createRoom(
     roomId = room.id;
     // Одна комната на сессию (решение 4 дизайна комнат): создатель и участники уходят из прочих комнат работы — как у
     // `rooms.create` окна (`createHumanRoom`) и у `add_to_room`. Прежние комнаты остаются со своими письмами.
-    for (const memberId of [sessionId, ...members]) leaveOtherRooms(current, memberId, room.id);
+    for (const memberId of [sessionId, ...members]) leaveOtherRooms(current, memberId, room.id, room.createdAt);
     const notice = joinNotice(room, current);
     for (const memberId of members) {
       addMessage(current, { from: sessionId, to: [memberId], roomId: room.id, kind: 'note', text: notice });
@@ -1694,7 +1711,11 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
   }
 
   const navigator = context.skillNavigator === true ? skillNavigator(context) : null;
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: navigator ? [...TOOLS, await navigator.list()] : TOOLS }));
+  // Инструмент браузера окна (спека браузера 2026-10-07, 3.7) — только при канале агента в окружении сервера.
+  const browser = context.agent === undefined ? null : createBrowserTools(context.agent);
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [...TOOLS, ...(browser?.tools ?? []), ...(navigator ? [await navigator.list()] : [])],
+  }));
   // Тред Codex привязывается один раз за жизнь сервера — с первого вызова, где `_meta.threadId` есть.
   let threadBound = false;
   server.setRequestHandler(
@@ -1705,6 +1726,10 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
         return { content: [{ type: 'text', text: 'Skill navigator is disabled for this launch.' }], isError: true };
       // До самого инструмента: `wait_for` может держать вызов до получаса, а привязка нужна сразу.
       if (!threadBound) threadBound = await bindCodexThread(context, request.params._meta);
+      // Инструменты браузера отвечают сами: без канала — отказ с советом перезапустить сессию.
+      if (request.params.name.startsWith('browser_')) {
+        return browser === null ? { content: [{ type: 'text', text: BROWSER_UNAVAILABLE }], isError: true } : browser.call(request.params.name, args);
+      }
       try {
         const result = request.params.name === 'find_skill' ? await navigator!.find(args)
           : await dispatch(context, request.params.name, args, extra.signal);

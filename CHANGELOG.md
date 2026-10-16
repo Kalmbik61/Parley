@@ -4,6 +4,153 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+Chats and rooms get a browser of their own next to the view, and an agent can show you a page from localhost there without taking your focus.
+
+### Added
+
+- **A browser next to every Chat and room.** The **Browser** button opens a panel beside the view with its own pages
+  (up to five), Console | Network, sizes, Select and Annotate. What you pick or annotate goes to the chat or room the
+  panel belongs to. The pages survive restarting the window, and in a narrow window the panel covers the view with a
+  **Back** button. A page of a regular browser tab can be sent there with **⋯ → Move to browser of…**.
+- **Agents can open a page for you.** An agent can put a page on localhost into the browser of its own chat or of
+  its room. You see it in that panel; if the view is not on screen, a toast says "S02 opened localhost:5173" with a
+  **Show** button. The agent never changes your active tab or workspace and never takes the keyboard focus, and the
+  same address (without `#fragment`) is not opened twice. Agents that run with Parley's own settings do not ask you
+  before opening a page.
+- **Let agents use the browser.** A switch in Settings → Browser turns agent access off for all sessions at once.
+- **Lean agent sessions.** Agents that Parley starts for rooms and through `spawn_session` now run without
+  your plugins, other MCP servers and auto-memory — about a third less context on every turn of Claude Code
+  (measured on one machine; Codex was not measured). Parley's own tools and hooks, your skills and the
+  project's `CLAUDE.md` stay. It applies to sessions created after you update; turn it off in Settings → Agents
+  ("Lean agent sessions") or with `PARLEY_LEAN_AGENTS=0`. A session you start from the New session dialog is
+  lean only if you tick "Lean session".
+- **Numbers for a "Parley feels slow" report.** The host status line and the diagnostics archive now carry
+  per-window counters: how many times the workspace maps were re-read and how long that took, how many
+  bytes of map JSON were parsed, how much terminal output arrived (chunks and bytes), and how many session
+  recomputes the wake and activity services did. The counters cover the time since the previous status line.
+
+### Changed
+
+- **The built-in minimal-development skill asks for more care around a change.** Before editing, an agent lists
+  what the change must reach and what it could break for users; it marks a deliberate shortcut with a
+  `shortcut: <the limit>, <when to replace it>` comment, leaves a small test for new non-trivial logic, and ends
+  a task's final report with what it skipped and any risk. Copies Parley installed update on the next agent
+  launch; a copy you edited is left alone.
+- **Agents get clear rules for room correspondence.** The guide now tells them to keep a letter under
+  1200 characters, to put documents and file edits into a file and send only its path, not to quote
+  earlier messages (use `replyTo` instead), to call `read_room` only when they really need the history,
+  and to read the room map through the tools instead of opening `map.json`.
+
+### Fixed
+
+- **Oversized letters no longer slip through `send_message`.** The 4096-character limit was only declared
+  in the tool schema, so letters of 54 KB went through; the server now enforces it, and a letter above
+  1200 characters comes back with a warning to shorten it. Letters are never truncated, and letters sent
+  from the window are not affected.
+
+## 0.14.0
+
+Parley can now package what it knows about its own slowness into one file, so a report about a slow window comes with evidence. Quitting the app now stops the host and its sessions, after a question, and two Codex problems are fixed: sessions that froze until Parley was restarted, and compaction that looked stuck.
+
+### Added
+
+- **Diagnostics in the status bar.** One click saves a zip with host logs, a process list, request timings and an optional 20-second CPU profile of the host — attach it to an issue when Parley feels slow. The host journal now records where delays happen: session readiness, Chat sends, room mail delivery and the first reply.
+
+### Changed
+
+- **Quitting Parley stops the host and its sessions.** Closing the window still leaves the agents
+  working. Quit (⌘Q, or Quit in the Dock menu) now asks "Quit Parley?" with the number of running
+  sessions and stops the host together with them; with no live sessions it quits without a question.
+  A host that does not answer within 10 seconds is stopped by its pid, and a system restart or
+  shutdown stops it at once, without asking. The interrupted sessions do not restart on their own:
+  the next launch lists them so you can bring them back. Updating gets simpler too: after ⌘Q the
+  host is gone, so the new app does not need "Restart host…" unless you only closed the window.
+
+### Fixed
+
+- **Compacting a Codex agent finishes on time.** The context chip stayed on "…" after Codex had already
+  compacted, and five minutes later a false "compaction didn't go through" followed. Parley now reads the end
+  of the Codex log itself while compaction runs, and a long compaction of a big context is not counted as failed
+  before 15 minutes. The context percentage of Codex agents stays current too.
+- **Codex sessions no longer freeze until Parley is restarted.** On macOS the file system does not report
+  appended lines of the logs Codex keeps open, so activity, token usage and subagents of a Codex session stopped
+  updating. Parley now re-reads the logs of running Codex sessions itself instead of waiting for those events.
+
+## 0.13.1
+
+Chat gets Copy and Send again under messages, ↑ and ↓ through your past messages, and a send queue that keeps your messages in order in Chat and rooms. The host log now shows where time goes when starting a session or opening Chat is slow.
+
+### Added
+
+- **Copy and Send again under Chat messages.** Hover over your message to copy it or send it again right
+  away; every piece of the model's answer has Copy too. In an empty Chat field, ↑ and ↓ go through the
+  messages you sent in this session.
+- **Messages wait their turn.** What you send to a busy Chat or room shows up in the feed right away,
+  greyed out, and goes out strictly one at a time. Chat retries by itself while the agent is busy or
+  waiting for a permission. A message that could not be sent is marked **Not sent**, with **Retry** and
+  **×**; the ones after it wait, marked **Waiting**. The queue lives in the window: it survives switching
+  tabs and views, but not closing the window.
+
+### Changed
+
+- **The host log shows where time goes.** Starting a new session and opening Chat can take several
+  seconds on a busy machine. To find out why, Parley's host now writes to `~/.parley/host/host.log`
+  how long each step of creating and starting a session took, every Chat feed snapshot (its size and
+  how long it took to build), every request that took over a second, and, once a minute, how far the
+  host fell behind when it was busy for 250 ms or more. Nothing else changes; the log holds no prompts,
+  keys or command lines.
+
+## 0.13.0
+
+Rooms now show how many tokens they used and how full each agent's context is, and you can compact an agent's context right from the room. Chat no longer gets stuck on "Working…" after the agent has answered.
+
+### Added
+
+- **See how many tokens a room used.** The room header has a chip with the room's input and output
+  tokens (`↑1.2M ↓84k`); click it for the breakdown by provider and by session, counted from the moment
+  each member joined the room until they left. **Copy** puts the table on the clipboard as Markdown.
+  Chat shows the same chip with its session's tokens over its whole life. These are tokens, not money
+  or a share of your plan limit — the limits stay at the bottom of the window; a number a provider does
+  not report shows as `?`, and an incomplete total starts with `≥`.
+- **See how full each agent's context is, and compact it on your terms.** Every room participant card shows
+  how much of the model's context window the agent has used (amber from 60 %, red from 85 %), and the room
+  header shows the fullest one as **Ctx 82%**. Click a chip to compact that agent with focus instructions
+  prefilled from the room's title — edit them if you like — or use **Compact all** for the whole room. An agent
+  that is busy compacts as soon as its turn ends (⏳); Parley holds room messages for it until compaction is
+  done. Chat shows the same chip for its session. Codex compacts without focus instructions.
+
+### Changed
+
+- **Clear on the island marks the finished sessions as seen.** The quiet **Clear** under the list
+  used to hide the "Done" rows on the island only, so the green "unseen" dot stayed in the Parley
+  sidebar. Now it also marks those sessions as seen, as if you had looked at them: the dot goes
+  away and the "✅ N" tab disappears. A row that was already seen in Parley is only hidden.
+
+### Fixed
+
+- **Chat no longer gets stuck on "Working…" when the agent has already answered.** Sometimes Chat
+  (and the agents panel in a room) stopped taking updates: the answer was already in the terminal,
+  and it showed up in Chat only after switching to the terminal and back. Two leaks are fixed. The
+  host no longer drops the window's feed subscription when its socket buffer is full — that happened
+  right after large feed snapshots of long sessions (up to 4 MB) — and the window no longer discards
+  an update that arrives just before the snapshot it is waiting for.
+- **Clear stays in place under a long Done list on the island.** Clear was inside the scrolling
+  list and scrolled away with it; it now stands under the list.
+
+## 0.12.1
+
+After a restart, accepting a room's decision no longer hangs for half a minute: Parley's host now comes up in a few seconds, and the window shows what it is waiting for — a spinner in the pressed button and on messages that are being delivered.
+
+### Changed
+
+- **Waiting is visible.** While the answer to a decision is on its way, the pressed button (Accept or Send to lead) shows a spinner; if Parley is still starting, the card says "Parley is still starting — your answer goes through once it is ready". Under a message, recipients that Parley is delivering it to by itself — waking the session or after typing the pointer — show "Delivering to S01 (resuming)…" with a spinner; the ones that need you keep "▤ Not picked up yet by …".
+
+### Fixed
+
+- **Accept answers right after a restart.** After Parley was reopened, the host put every session whose process had ended to sleep one by one, and its own writes kept starting overlapping passes of the same check; until they finished, Accept and Return for rework on a decision waited — up to half a minute on a busy machine. Sleeping sessions of a workspace are now recorded in one write and the passes run one at a time: on a copy of real workspaces (9 workspaces, 38 sessions) the start went from 15–18 s to about 3 s, and the "invalid transition sleeping → sleeping" errors in the host log are gone. Sessions also wake on an accepted decision sooner.
+
 ## 0.12.0
 
 The Island at the top of the screen — in the notch on a MacBook — answers permission requests and shows which agents are working and what they just finished. Browser pages send their context to chat, your messages in rooms sit on the right, and "needs you" notifications say what is asked.

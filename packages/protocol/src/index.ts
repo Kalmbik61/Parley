@@ -6,8 +6,12 @@ export type {
   FeedCardState,
   FeedDecision,
   FeedItem,
+  HealthSample,
+  HostDiagnostics,
+  HostDiagnosticsSession,
   HostErrorReason,
   HostNotice,
+  CompactionPhase,
   LimitWindow,
   LiveMetrics,
   LiveTask,
@@ -18,7 +22,9 @@ export type {
   CapabilityCommand,
   CapabilitySkill,
   CapabilitySource,
+  CompactResult,
   NoticeKind,
+  ProfileStatus,
   ProtocolError,
   ProviderCheck,
   ProviderCheckReason,
@@ -86,7 +92,7 @@ export type { CapabilityMcpInput, CapabilityMcpAdd, CapabilityMcpTarget, Capabil
 export { capabilityActionReason, capabilityActionAvailability, capabilityMcpActions, capabilityMcpAddAvailability } from './capability-snapshot.js';
 export type { CapabilityActionReason, CapabilityActionAvailability, CapabilityMcpActions, CapabilityMcpAddAvailability } from './capability-snapshot.js';
 
-export { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, contextPageMethodSchemas } from './context-pages.js';
+export { COMPACT_MAX_INSTRUCTIONS, COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, contextPageMethodSchemas } from './context-pages.js';
 export type { ContextPageMethodName, ContextPageMethodParams, ContextPageMethodResults } from './context-pages.js';
 
 export { BACKLOG_SNAPSHOT_MAX_BYTES, backlogAuthor, backlogChanged, backlogDiagnostic, backlogErrorCode, backlogFileChoice, backlogItem, backlogMethodSchemas, backlogPrepareTakeResult, backlogRule, backlogSnapshot, backlogSuggestion } from './backlog.js';
@@ -117,3 +123,23 @@ export type { MemoryItemView, MemorySuggestionView, MemoryUndoView, MemorySnapsh
 
 export { SHARED_FILE_PATH, HISTORY_SEARCH_MAX_LIMIT, HISTORY_SEARCH_DEFAULT_LIMIT, historySource, historyScope, historyHit, historySearchResult, historyMethodSchemas } from './history.js';
 export type { HistoryHitView, HistorySearchView, HistoryMethodName, HistoryMethodParams, HistoryMethodResults } from './history.js';
+
+export {
+  AGENT_INPUT,
+  AGENT_LIMITS,
+  BROWSER_AGENT_ERROR_CODES,
+  BROWSER_AGENT_FEATURE,
+  BROWSER_AGENT_OPS,
+  browserAgentArgs,
+  browserAgentRequest,
+  browserAgentResultParams,
+} from './browser-agent.js';
+export type {
+  BrowserAgentArgs,
+  BrowserAgentErrorCode,
+  BrowserAgentOp,
+  BrowserAgentOpEvent,
+  BrowserAgentOpenResult,
+  BrowserAgentOwner,
+  BrowserAgentResult,
+} from './browser-agent.js';

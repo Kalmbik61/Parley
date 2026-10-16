@@ -283,6 +283,11 @@ describe('комнаты: ведущий и решение (дизайн ком�
     expectTypeOf<Result<'rooms.reopen'>>().toEqualTypeOf<{ ok: true }>();
   });
 
+  it('rooms.usage: комната обязательна', () => {
+    expect(METHODS['rooms.usage'].safeParse(room).success).toBe(true);
+    expect(METHODS['rooms.usage'].safeParse({ projectPath: '/p', workId: 'w-0001' }).success).toBe(false);
+  });
+
   it('rooms.resolveProposal: accept или return, заметка необязательна и до 4000 знаков', () => {
     const accept = { ...room, proposalId: 'p-01', action: 'accept' };
     expect(METHODS['rooms.resolveProposal'].safeParse(accept).success).toBe(true);
@@ -318,6 +323,15 @@ describe('модель, усилие и поля providers.list (дизайн к
     // Уровень — строка-токен: набор уровней у каждой модели свой (нормалайзер модели и effort, 5.6);
     // null — явное «по умолчанию» (снимает умолчание роли).
     expectTypeOf<Params<'sessions.create'>['effort']>().toEqualTypeOf<string | null | undefined>();
+  });
+
+  it('sessions.create: lean необязателен — старое окно его не шлёт, новое передаёт явный выбор', () => {
+    expect(parse({}).success).toBe(true);
+    expect(parse({}).data).not.toHaveProperty('lean');
+    expect(parse({ lean: true })).toMatchObject({ success: true, data: { lean: true } });
+    expect(parse({ lean: false })).toMatchObject({ success: true, data: { lean: false } });
+    for (const lean of ['true', 1, null]) expect(parse({ lean }).success, JSON.stringify(lean)).toBe(false);
+    expectTypeOf<Params<'sessions.create'>['lean']>().toEqualTypeOf<boolean | undefined>();
   });
 
   it('effort — токен уровня: прежние low, medium, high старого окна и новые xhigh, max, ultra проходят', () => {

@@ -21,6 +21,8 @@ import { devtoolsCounters, EMPTY_DEVTOOLS, useDevtoolsStore } from './store.js';
 
 /** Уже этой ширины детали запроса ложатся поверх списка (спека 4.4). */
 const NARROW_PX = 640;
+/** Уже этой ширины панели таблица Network тесная: Status | Name | Size (спека 4.11, «~480 px»). */
+const TIGHT_PX = 480;
 const TRIGGER = 'px-2 py-0.5 text-[11px]';
 const CONTENT = 'mt-0 flex min-h-0 min-w-0 flex-1 flex-col';
 
@@ -49,13 +51,16 @@ export function DevtoolsPanel(props: DevtoolsPanelProps): JSX.Element {
   const store = useDevtoolsStore.getState();
   const panelRef = useRef<HTMLElement | null>(null);
   const [narrow, setNarrow] = useState(false);
+  const [tight, setTight] = useState(false);
 
   useLayoutEffect(() => {
     const node = panelRef.current;
     if (node === null || typeof ResizeObserver === 'undefined') return undefined;
     const observer = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width;
-      if (width !== undefined) setNarrow(width < NARROW_PX);
+      if (width === undefined) return;
+      setNarrow(width < NARROW_PX);
+      setTight(width < TIGHT_PX);
     });
     observer.observe(node);
     return () => observer.disconnect();
@@ -144,6 +149,7 @@ export function DevtoolsPanel(props: DevtoolsPanelProps): JSX.Element {
             webContentsId={props.webContentsId}
             bridge={props.bridge}
             narrow={narrow}
+            tight={tight}
             onAddToChat={props.onAddRequestToChat}
           />
         </TabsContent>

@@ -65,16 +65,23 @@ describe('createUiStore', () => {
 
   it('browser сохраняется и читается обратно; патч других полей его не трогает (спека 2026-10-07, 4.3)', async () => {
     const store = createUiStore(file);
-    await store.save({ browser: { devtoolsHeight: 260 } });
+    await store.save({ browser: { ...DEFAULT_UI.browser, devtoolsHeight: 260 } });
     await store.save({ appearance: 'dark' });
-    expect((await store.load()).browser).toEqual({ devtoolsHeight: 260 });
+    expect((await store.load()).browser).toEqual({ devtoolsHeight: 260, agentsAllowed: true });
+  });
+
+  it('browser.agentsAllowed сохраняется и читается обратно; патч других полей его не трогает (этап B2)', async () => {
+    const store = createUiStore(file);
+    await store.save({ browser: { ...DEFAULT_UI.browser, agentsAllowed: false } });
+    await store.save({ appearance: 'dark' });
+    expect((await store.load()).browser).toEqual({ devtoolsHeight: null, agentsAllowed: false });
   });
 
   it('пустой патч browser не стирает сохранённую высоту панели: browser сливается по одному уровню (NESTED_KEYS)', async () => {
     const store = createUiStore(file);
-    await store.save({ browser: { devtoolsHeight: 260 } });
-    await store.save({ browser: {} });
-    expect((await store.load()).browser).toEqual({ devtoolsHeight: 260 });
+    await store.save({ browser: { ...DEFAULT_UI.browser, devtoolsHeight: 260 } });
+    await store.save({ browser: {} as typeof DEFAULT_UI.browser });
+    expect((await store.load()).browser).toEqual({ devtoolsHeight: 260, agentsAllowed: true });
   });
 
   it('save сливает island на один уровень: место не стирает enabled', async () => {

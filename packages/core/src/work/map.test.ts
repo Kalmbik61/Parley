@@ -71,6 +71,22 @@ describe('addSession', () => {
     expect('model' in (again.sessions[0] ?? {})).toBe(false);
   });
 
+  it('lean (облегчённый запуск) пишется, когда задан — и true, и явный false; без него ключа в записи нет', () => {
+    const map = emptyMap();
+    const plain = addSession(map, { provider: 'claude', label: 'план', task: 'план' });
+    const lean = addSession(map, { provider: 'claude', label: 'ревью', task: 'проверить', lean: true });
+    const notLean = addSession(map, { provider: 'claude', label: 'тесты', task: 'гонять', lean: false });
+
+    expect('lean' in plain).toBe(false);
+    expect(lean.lean).toBe(true);
+    expect(notLean.lean).toBe(false);
+    // Через JSON — как на диске: решение, принятое при создании, при чтении карты остаётся.
+    const again = parseMap(JSON.stringify(map), 'map.json');
+    expect('lean' in (again.sessions[0] ?? {})).toBe(false);
+    expect(again.sessions[1]?.lean).toBe(true);
+    expect(again.sessions[2]?.lean).toBe(false);
+  });
+
   it('нумерует сессии s-NN по порядку и создаёт запись pending', () => {
     const map = emptyMap();
     const first = addSession(map, { provider: 'claude', label: 'план', task: 'составить план' });
@@ -648,6 +664,19 @@ describe('parseMap', () => {
     const parsed = parseMap(JSON.stringify(raw), 'map.json');
     expect(parsed.sessions[0]?.effort).toBeNull();
     expect(parsed.sessions[0]?.model).toBe('opus');
+  });
+
+  it('lean: старая карта читается без поля и без миграции, записанное значение при чтении остаётся', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'план', task: 't' });
+    const raw = JSON.parse(JSON.stringify(map)) as { sessions: Record<string, unknown>[] };
+
+    const old = parseMap(JSON.stringify(raw), 'map.json');
+    expect('lean' in (old.sessions[0] ?? {})).toBe(false);
+    expect(old.sessions[0]?.lean).toBeUndefined();
+
+    raw.sessions[0]!['lean'] = true;
+    expect(parseMap(JSON.stringify(raw), 'map.json').sessions[0]?.lean).toBe(true);
   });
 
   it('уровни каталогов в карте читаются как есть: xhigh, max, ultra', () => {

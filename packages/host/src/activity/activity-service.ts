@@ -13,8 +13,11 @@
  */
 
 import { existsSync } from 'node:fs';
+import { appendFile } from 'node:fs/promises';
+import path from 'node:path';
 import {
   DEFAULT_BACKGROUND_HOLD_MS,
+  PERMISSION_ANSWERED_EVENT,
   TERMINAL_WORKING_EVENT,
   activityOf,
   claudeProjectRoots,
@@ -36,6 +39,7 @@ import {
   watchEvents,
   workPaths,
   type Activity,
+  type ContextFill,
   type ActivityLog,
   type EventRecord,
   type EventsLog,
@@ -43,6 +47,7 @@ import {
   type MetricsRoots,
   type SessionActivity,
   type SessionIndex,
+  type UsageResolver,
   type UsageSummary,
   type WorkEntry,
   type WorkSession,
@@ -57,9 +62,11 @@ import {
   type WorksSnapshot,
 } from '@parley/protocol';
 import type { HostContext } from '../context.js';
+import type { WindowCounters } from '../health/window-counters.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
 import { createSettler } from '../watch-settle.js';
 import type { WorksService } from '../works/works-service.js';
+import { contextView, type CompactionTrack } from '../compaction/context-view.js';
 import { createLogIndex, type LogIndex } from './log-index.js';
 import { readSubagentMeta, type SubagentMeta } from './subagent-meta.js';
 
@@ -75,6 +82,8 @@ export interface SessionLive {
  * заводить незачем.
  */
 export interface ActivityServiceOptions extends MetricsRoots {
+  /** Счётчики окна строки состояния: каждый `recompute` сессии — одна запись. */
+  windowCounters?: WindowCounters;
   silenceThresholdMs?: number;
   /** Предел удержания фоновыми субагентами и ожиданием `wait_for` (`activityOf`); по умолчанию — час. */
   backgroundHoldMs?: number;
@@ -90,6 +99,8 @@ export interface ActivityServiceOptions extends MetricsRoots {
    * входа или доверия к папке, и сессии «нужен ты» (спека комнат, 3.6, «Экраны старта»).
    */
   startupWaitMs?: number;
+  /** Запас сверх ожидания вызова code mode Codex, после которого сессия «нужен ты» (`CODEX_CALL_GRACE_MS`). */
+  codexCallGraceMs?: number;
   now?: () => number;
 }
 
@@ -103,6 +114,10 @@ export interface ActivityService {
   logFile(ref: SessionRef): string | null;
   /** Журнал субагента Codex по id его треда; не найден — null. */
   childLogFile(ref: SessionRef, threadId: string): string | null;
+  /** Файлы журналов сессии Codex: основной и субагентов; не Codex или журнала нет — []. */
+  codexLogFiles(ref: SessionRef): string[];
+  /** Перечитать журнал Codex в индексе логов (`codex-log-poll.ts`). */
+  reindexLog(file: string): Promise<void>;
   /** Пользователь смотрел на сессию: `pty.attach` и `pty.input` (1.6). */
   markSeen(ref: SessionRef, at?: string): void;
   onChange(listener: (ref: SessionRef, value: SessionLive) => void): () => void;
@@ -124,15 +139,29 @@ export interface ActivityService {
    */
   questionHeld(ref: SessionRef, held: boolean): void;
   /**
+   * На запрос разрешения (`PermissionRequest`) ответили — в окне или в терминале. Хука «разрешили» у Claude
+   * Code нет, а запись пользователя ложится в лог лишь после конца одобренного инструмента, и сессия до
+   * тех пор числилась бы `blocked`. Дописывает в журнал сессии отметку `ParleyPermissionAnswered`;
+   * пересчитает наблюдатель журнала. Best-effort: каталога `events/` нет (сессия без хуков) или диск
+   * не пишет — молча ничего.
+   */
+  permissionAnswered(ref: SessionRef): void;
+  /**
    * Почему письма сессии ещё не забраны (причина будильника) — уходит окну в `LiveMetrics.mailWaiting`:
    * комната пишет её рядом с «not picked up yet». `null` — писем нет.
    */
   mailWaiting(ref: SessionRef, reason: MailWait | null): void;
+  /** Заполненность контекста (`ContextService`: Claude/GLM — файл строки статуса, Codex — хвост rollout); `null` — нет. */
+  setContext(ref: SessionRef, fill: ContextFill | null): void;
+  /** Сжатие сессии (`CompactionService`): фаза просьбы и конец последнего сжатия. */
+  setCompaction(ref: SessionRef, track: CompactionTrack): void;
   /**
    * Журнал какой-то сессии изменился (индекс логов; живая лента по нему ловит прерывание Esc —
    * запись «[Request interrupted by user…]», план 2026-10-01, решение 5). Возвращает отписку.
    */
   onLogChange(listener: () => void): () => void;
+  /** Источник цифр итога комнаты (спека расхода токенов, 5.2): итог сессии целиком, границы её лога и срез по окнам. */
+  usageResolver(): UsageResolver;
   stop(): Promise<void>;
 }
 
@@ -162,6 +191,13 @@ const DEFAULT_TRUST_WAIT_MS = 20_000;
  * взгляда в терминал, а не тревога — сессии, которая молча ждёт входа.
  */
 const DEFAULT_STARTUP_WAIT_MS = 20_000;
+/**
+ * Запас сверх заявленного ожидания вызова code mode Codex (`exec`/`wait`): вызов без вывода дольше
+ * `yield_time_ms` плюс этот запас считается застрявшим на запросе одобрения (разбор 2026-10-16).
+ */
+export const CODEX_CALL_GRACE_MS = 120_000;
+/** Ожидание вызова code mode, когда оно не указано (`yieldMs === null`): по умолчанию у Codex около 30 с. */
+export const CODEX_DEFAULT_YIELD_MS = 30_000;
 
 /**
  * Рычаг E2E окна: `PARLEY_CODEX_STARTUP_MS` (и прежняя `HARNAS_CODEX_STARTUP_MS`) — срок экранов старта Codex в миллисекундах. Тест не может
@@ -225,6 +261,8 @@ const eventNameOf = (signal: CodexSignal, turnSeen: boolean): string | null => {
  * вмешалось чужое событие новее сигнала: `Stop` от notify с временем файла позже последнего кадра
  * спиннера или мигания `Action Required`. Следующий сигнал того же вида такое расхождение чинит.
  */
+/** Предел задержки `setTimeout` в Node (2^31 − 1 мс): больше — таймер срабатывает через 1 мс. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const agreesWith = (derived: Activity | undefined, signal: CodexSignal): boolean => {
   switch (signal.kind) {
     case 'working':
@@ -242,6 +280,27 @@ interface WorkWatch {
   watcher: EventsWatcher | null;
 }
 
+/**
+ * Итог сессии целиком для комнаты (спека расхода токенов, 5.2): выбранный `selectUsage`. Лог уже есть, а ответов модели
+ * в нём ещё нет — ноль, а не «нет данных» (запись в кэш у Codex не наблюдается — она неизвестна). Ни лога, ни снимка — `null`.
+ */
+export function wholeSessionUsage(selected: UsageSummary, hasLog: boolean, provider: string): UsageSummary | null {
+  if (selected.source !== 'unavailable') return selected;
+  if (!hasLog) return null;
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: provider === 'codex' ? null : 0,
+    totalInput: 0,
+    source: 'native-index',
+    observedAt: null,
+    stale: false,
+    completeness: 'complete',
+    coverage: 'conversation',
+  };
+}
+
 export function createActivityService(
   host: HostContext,
   works: WorksService,
@@ -256,9 +315,12 @@ export function createActivityService(
   const backgroundHoldMs = options.backgroundHoldMs ?? DEFAULT_BACKGROUND_HOLD_MS;
   const trustWaitMs = options.trustWaitMs ?? DEFAULT_TRUST_WAIT_MS;
   const startupWaitMs = options.startupWaitMs ?? DEFAULT_STARTUP_WAIT_MS;
+  const codexCallGraceMs = options.codexCallGraceMs ?? CODEX_CALL_GRACE_MS;
 
   const logIndex: LogIndex = createLogIndex(roots);
   const live = new Map<string, SessionLive>();
+  /** Выведенная активность до подмены на `blocked` (вопрос, сторож): с ней сверяются сигналы терминала. */
+  const derivedActivity = new Map<string, Activity>();
   const journals = new Map<string, readonly EventRecord[] | null>();
   const seenAt = new Map<string, string>();
   const silenceTimers = new Map<string, NodeJS.Timeout>();
@@ -267,8 +329,14 @@ export function createActivityService(
   const pointerLabelReset = new Set<string>();
   /** Сессии, чей вопрос агента удержан окном (`questionHeld`): им публикуется `blocked`. */
   const questionHeldKeys = new Set<string>();
+  /** Таймеры сторожа вызова code mode Codex по ключу сессии: срабатывают в момент, когда вызов считается застрявшим. */
+  const codexCallTimers = new Map<string, NodeJS.Timeout>();
+  /** Время вызова (`openCodeCall.at`), о котором сторож уже сообщил, по ключу сессии: одно уведомление на вызов. */
+  const codexCallNotified = new Map<string, string>();
   /** Причина, по которой письма сессии ждут (`mailWaiting`), по ключу сессии. */
   const mailWaits = new Map<string, MailWait>();
+  const contexts = new Map<string, ContextFill>();
+  const compactions = new Map<string, CompactionTrack>();
   const hooksMissingNotified = new Set<string>();
   const trustWaitTimers = new Map<string, NodeJS.Timeout>();
   const trustWaitNotified = new Set<string>();
@@ -306,6 +374,13 @@ export function createActivityService(
     if (timer === undefined) return;
     clearTimeout(timer);
     silenceTimers.delete(key);
+  }
+
+  function clearCodexCallTimer(key: string): void {
+    const timer = codexCallTimers.get(key);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    codexCallTimers.delete(key);
   }
 
   function clearTrustWaitTimer(key: string): void {
@@ -474,18 +549,12 @@ export function createActivityService(
     return tasks;
   }
 
-  function metricsFor(
-    ref: SessionRef,
-    key: string,
-    entry: WorkEntry,
-    session: WorkSession,
-    activity: SessionActivity,
-    indexed: SessionIndex | undefined,
-  ): LiveMetrics {
-    // Токены: у идущей сессии побеждает свежий индекс лога, а снимок из карты (его ставят `report` и
-    // усыпление) годится для остановленной и как запасной, когда свежего индекса нет. Какой источник
-    // выбран, видно в `usage.source`; сумма не выдумывается (`selectUsage`). Снимок чужого разговора
-    // (сессию перепривязали) за свой не принимается. Модель в карте не хранится никогда (work-rows.ts, sidebar.tsx).
+  /**
+   * Токены сессии: у идущей побеждает свежий индекс лога, а снимок из карты (его ставят `report` и усыпление) годится для
+   * остановленной и как запасной, когда свежего индекса нет. Какой источник выбран, видно в `usage.source`; сумма не
+   * выдумывается (`selectUsage`). Снимок чужого разговора (сессию перепривязали) за свой не принимается.
+   */
+  function selectedUsage(session: WorkSession): UsageSummary {
     const snapshot = session.metrics;
     const frozen =
       snapshot === null
@@ -495,17 +564,33 @@ export function createActivityService(
           : snapshot.usage.binding === session.providerSessionId
             ? snapshot.usage
             : null;
-    const selected = selectUsage({
+    return selectUsage({
       active: session.lifecycle === 'active',
       epoch: session.startedAtProcess,
       live: logIndex.usage(session) ?? null,
       frozen,
     });
+  }
+
+  function metricsFor(
+    ref: SessionRef,
+    key: string,
+    entry: WorkEntry,
+    session: WorkSession,
+    activity: SessionActivity,
+    indexed: SessionIndex | undefined,
+  ): LiveMetrics {
+    // Модель в карте не хранится никогда (work-rows.ts, sidebar.tsx).
+    const snapshot = session.metrics;
+    const selected = selectedUsage(session);
     const usage: UsageSummary = {
       ...selected,
       // Комнату и прогон по одной сессии не определить: сессия бывает в нескольких комнатах.
       attribution: { workId: ref.workId, sessionId: session.id, roomId: null, runId: null },
     };
+    // Все провайдеры — из `ContextService`: Claude и GLM — файл строки статуса, Codex — хвост rollout.
+    const fill = contexts.get(key) ?? null;
+    const view = contextView(fill, compactions.get(key));
     return {
       usage,
       tokensIn: usage.input,
@@ -520,6 +605,8 @@ export function createActivityService(
       tasks: liveTasksOf(ref, key, activity),
       waitingFor: activity.waitingFor,
       mailWaiting: mailWaits.get(key) ?? null,
+      context: view.context,
+      compaction: view.compaction,
     };
   }
 
@@ -647,6 +734,7 @@ export function createActivityService(
     const entry = works.entry(ref.projectPath, ref.workId);
     const session = entry?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
     if (entry === undefined || session === undefined) return;
+    options.windowCounters?.recompute();
 
     const key = refKey(ref);
     const events = eventsFor(session, key);
@@ -682,10 +770,46 @@ export function createActivityService(
       backgroundHoldMs,
     });
 
-    const metrics = metricsFor(ref, key, entry, session, activity, logIndex.index(session));
-    // Удержанный вопрос агента: публикуется 'blocked', а таймер тишины и метрики — по настоящему значению.
+    const index = logIndex.index(session);
+    const metrics = metricsFor(ref, key, entry, session, activity, index);
+
+    // Сторож Codex: вызов code mode без вывода дольше ожидания и запаса — запрос одобрения, которого никто не видит.
+    let codexStuck = false;
+    const call = driven && activity.activity === 'working' ? index?.openCodeCall : undefined;
+    if (call === undefined) {
+      clearCodexCallTimer(key);
+    } else {
+      const stuckAt = Date.parse(call.at) + (call.yieldMs ?? CODEX_DEFAULT_YIELD_MS) + codexCallGraceMs;
+      if (Number.isNaN(stuckAt)) {
+        clearCodexCallTimer(key);
+      } else if (now >= stuckAt) {
+        clearCodexCallTimer(key);
+        codexStuck = true;
+        if (codexCallNotified.get(key) !== call.at) {
+          codexCallNotified.set(key, call.at);
+          host.broadcast('host.notice', {
+            kind: 'codex-call-wait',
+            ref,
+            text: `${sessionTag(ref.sessionId)} is stuck in a Codex tool call — Codex is probably waiting for an approval in its terminal; answer it there or restart the session`,
+            at: new Date(now).toISOString(),
+          });
+        }
+      } else {
+        clearCodexCallTimer(key);
+        codexCallTimers.set(
+          key,
+          setTimeout(() => {
+            codexCallTimers.delete(key);
+            recompute(ref);
+          }, Math.min(stuckAt - now, MAX_TIMER_DELAY_MS)),
+        );
+      }
+    }
+
+    derivedActivity.set(key, activity.activity);
+    // Удержанный вопрос агента или застрявший вызов: публикуется 'blocked', а таймер тишины и метрики — по настоящему значению.
     const published: SessionActivity =
-      questionHeldKeys.has(key) && activity.activity !== 'blocked'
+      (questionHeldKeys.has(key) || codexStuck) && activity.activity !== 'blocked'
         ? { ...activity, activity: 'blocked' }
         : activity;
     const value: SessionLive = { activity: published, metrics };
@@ -814,6 +938,7 @@ export function createActivityService(
 
     for (const [key] of Array.from(journals)) if (!validSessions.has(key)) journals.delete(key);
     for (const [key] of Array.from(live)) if (!validSessions.has(key)) live.delete(key);
+    for (const key of Array.from(derivedActivity.keys())) if (!validSessions.has(key)) derivedActivity.delete(key);
     for (const [key] of Array.from(subagentCaches)) {
       if (!validSessions.has(key)) subagentCaches.delete(key);
     }
@@ -823,8 +948,20 @@ export function createActivityService(
     for (const key of Array.from(mailWaits.keys())) {
       if (!validSessions.has(key)) mailWaits.delete(key);
     }
+    for (const key of Array.from(contexts.keys())) {
+      if (!validSessions.has(key)) contexts.delete(key);
+    }
+    for (const key of Array.from(compactions.keys())) {
+      if (!validSessions.has(key)) compactions.delete(key);
+    }
     for (const key of Array.from(questionHeldKeys)) {
       if (!validSessions.has(key)) questionHeldKeys.delete(key);
+    }
+    for (const key of Array.from(codexCallTimers.keys())) {
+      if (!validSessions.has(key)) clearCodexCallTimer(key);
+    }
+    for (const key of Array.from(codexCallNotified.keys())) {
+      if (!validSessions.has(key)) codexCallNotified.delete(key);
     }
     for (const key of Array.from(hooksMissingNotified)) {
       if (!validSessions.has(key)) hooksMissingNotified.delete(key);
@@ -893,6 +1030,20 @@ export function createActivityService(
       else mailWaits.set(key, reason);
       recompute(ref);
     },
+    setContext(ref, fill) {
+      const key = refKey(ref);
+      if (JSON.stringify(contexts.get(key) ?? null) === JSON.stringify(fill)) return;
+      if (fill === null) contexts.delete(key);
+      else contexts.set(key, fill);
+      recompute(ref);
+    },
+    setCompaction(ref, track) {
+      const key = refKey(ref);
+      if (JSON.stringify(compactions.get(key) ?? null) === JSON.stringify(track)) return;
+      if (track.phase === null && track.finishedAt === null) compactions.delete(key);
+      else compactions.set(key, track);
+      recompute(ref);
+    },
     questionHeld(ref, held) {
       const key = refKey(ref);
       if (questionHeldKeys.has(key) === held) return;
@@ -900,8 +1051,30 @@ export function createActivityService(
       else questionHeldKeys.delete(key);
       recompute(ref);
     },
+    permissionAnswered(ref) {
+      // Каталог не создаём: его отсутствие — признак сессии без хуков (`hooks-missing`).
+      const file = path.join(
+        workPaths(ref.projectPath, ref.workId).events,
+        `${ref.sessionId}.jsonl`,
+      );
+      appendFile(file, `${JSON.stringify({ hook_event_name: PERMISSION_ANSWERED_EVENT })}\n`, 'utf8').catch(
+        () => {
+          // Отметка — подсказка состоянию: без неё `blocked` снимет страховка по логу.
+        },
+      );
+    },
     onLogChange(listener) {
       return logIndex.onChange(listener);
+    },
+    usageResolver() {
+      return {
+        whole: (session) => wholeSessionUsage(selectedUsage(session), logIndex.index(session) !== undefined, session.provider),
+        bounds: (session) => {
+          const found = logIndex.index(session);
+          return found === undefined ? null : { startedAt: found.startedAt, endedAt: found.endedAt };
+        },
+        slice: async (session, windows) => (await logIndex.usageIn(session, windows)) ?? null,
+      };
     },
     logFile(ref) {
       const session = works
@@ -915,6 +1088,17 @@ export function createActivityService(
         ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
       if (session === undefined) return null;
       return logIndex.childLogs(session).find((child) => child.threadId === threadId)?.file ?? null;
+    },
+    codexLogFiles(ref) {
+      const session = works
+        .entry(ref.projectPath, ref.workId)
+        ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session === undefined || session.provider !== 'codex') return [];
+      const main = logIndex.index(session)?.file;
+      return [...(main === undefined ? [] : [main]), ...logIndex.childLogs(session).map((child) => child.file)];
+    },
+    reindexLog(file) {
+      return logIndex.reindex(file);
     },
     terminalStarted(ref) {
       if (stopped) return;
@@ -949,7 +1133,7 @@ export function createActivityService(
       if (
         previous === null ||
         previous.name !== name ||
-        !agreesWith(live.get(key)?.activity.activity, signal)
+        !agreesWith(derivedActivity.get(key), signal)
       ) {
         recompute(ref);
       }
@@ -958,6 +1142,7 @@ export function createActivityService(
       const key = refKey(ref);
       if (!terminals.has(key)) return;
       clearTerminal(key);
+      clearCodexCallTimer(key);
       recompute(ref);
     },
     markSeen(ref, at = new Date().toISOString()) {
@@ -995,6 +1180,9 @@ export function createActivityService(
       silenceTimers.clear();
       for (const timer of trustWaitTimers.values()) clearTimeout(timer);
       trustWaitTimers.clear();
+      for (const timer of codexCallTimers.values()) clearTimeout(timer);
+      codexCallTimers.clear();
+      derivedActivity.clear();
       for (const key of Array.from(terminals.keys())) clearTerminal(key);
       for (const watch of workWatches.values()) watch.watcher?.close();
       workWatches.clear();

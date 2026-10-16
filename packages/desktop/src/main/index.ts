@@ -11,6 +11,7 @@ import {
   nativeTheme,
   net,
   Notification,
+  powerMonitor,
   screen,
   session,
   shell,
@@ -20,11 +21,12 @@ import {
 import type { WebContents } from 'electron';
 import { configPath, envValue, loadConfig, migrateHome, parleyHome } from '@parley/core';
 import type { WorksSnapshot } from '@parley/protocol';
-import type { FocusTarget } from '../shared/bridge.js';
+import type { FocusTarget, HostStatus } from '../shared/bridge.js';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
 import { ISLAND_EVENTS, type IslandConfig } from '../shared/island.js';
 import { S } from '../shared/strings.js';
 import type { UiFile } from '../shared/ui-types.js';
+import { createAgentOps, type AgentOps } from './browser/agent-ops.js';
 import { createAnnotate } from './browser/annotate.js';
 import { contextDir, saveContextFile } from './browser/context-files.js';
 import { createDesignMode } from './browser/design-mode.js';
@@ -35,11 +37,12 @@ import guestDomScript from './browser/guest-dom.js?raw';
 import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
 import { createInspector, forwardBatches } from './browser/inspector.js';
+import { saveDiagnostics } from './diagnostics/bundle.js';
 import { cleanupDropsTree, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 import { createGitRunner, isProjectWorktree } from './files/git-api.js';
 import createGrepWorker from './files/grep-worker?nodeWorker';
 import { registerFilesIpc } from './files/ipc.js';
-import { HostConnection } from './host-connection.js';
+import { answerBrowserAgentOps, HostConnection } from './host-connection.js';
 import { hostPaths, resolveHostEntry, resolveNodeBin, spawnHost } from './host-launcher.js';
 import { imageThumbnail } from './image-thumbnail.js';
 import { forwardAppearanceToWindow, forwardHostToPages, registerIpc } from './ipc.js';
@@ -50,6 +53,7 @@ import type { IslandPlacement } from './island/placement.js';
 import { createIslandController, islandWindowOptions } from './island/window.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
+import { guardAppQuit, quitQuestion } from './quit-guard.js';
 import { createNotesStore } from './notes-store.js';
 import {
   createLoggedNotification,
@@ -219,11 +223,51 @@ if (!gotLock) {
       },
     });
 
+    // Операции агента над браузером (спека браузера 2026-10-07, 3.7; этап B2). Подписка — до первого подключения: операция,
+    // пришедшая, пока окно поднимается, получает внятный отказ, а не тайм-аут хоста.
+    let agentOps: AgentOps | null = null;
+    answerBrowserAgentOps(connection, async (event) =>
+      agentOps === null
+        ? { ok: false, error: { code: 'window_not_connected', message: "Parley's window is still starting: try again in a moment." } }
+        : agentOps.run(event),
+    );
+
     try {
       await connection.connect();
     } catch (err) {
       console.error('[parley] failed to connect to host', err);
     }
+
+    // Выход из приложения (Dock → «Завершить», ⌘Q, меню) гасит хост со всеми сессиями; закрытие окна — нет.
+    // Вопрос — системный диалог без родительского окна: на `will-quit` окон уже нет. Тестовый режим — по-старому.
+    const quitGuard = guardAppQuit(app, {
+      liveSessions: () => connection.liveSessions(),
+      ask: async (count) => {
+        const question = quitQuestion(count);
+        const { response } = await dialog.showMessageBox({
+          type: 'warning',
+          message: question.message,
+          detail: question.detail,
+          buttons: question.buttons,
+          defaultId: 0,
+          cancelId: 1,
+        });
+        return response === 0 ? 'stop' : 'cancel';
+      },
+      stopHost: async () => {
+        await connection.stopHost();
+      },
+      onCancel: focusMainWindow,
+      keepHost: switches.dialogs,
+      log: (line) => console.warn(`[parley] ${line}`),
+    });
+    // Перезагрузка или выключение системы — без вопроса (событие есть на macOS и Linux): хост гасится сразу.
+    // Типы Electron объявляют слушатель без аргумента, а само событие отменяемое: задерживаем выключение, пока гасится хост.
+    powerMonitor.on('shutdown', (event?: { preventDefault(): void }) => {
+      event?.preventDefault();
+      quitGuard.systemShutdown();
+      app.quit();
+    });
 
     // `ui.json` и `themeSource` — до первого окна: `nativeTheme.shouldUseDarkColors`
     // ниже должен уже отражать выбор пользователя, иначе `backgroundColor` возьмёт
@@ -472,6 +516,12 @@ if (!gotLock) {
         sendFocusTarget(target);
       },
       beep: () => shell.beep(),
+      // Тот же `activity.seen`, что шлёт главное окно, когда видит сессию. Методы хоста из приветствия тут не сверяются: хост
+      // без `activity.seen` молча отбрасывает уведомление (сервер хоста вызывает `handler?.()`, а неизвестное протоколу
+      // только пишет в журнал), и окно само предлагает перезапустить такой хост.
+      markSeen: (refs) => {
+        for (const ref of refs) connection.notify('activity.seen', { ref });
+      },
       onFailed: () => {
         // Упал рендер острова: страница не считается загруженной (системные уведомления снова идут), окно прячется.
         const window = island.current();
@@ -545,6 +595,28 @@ if (!gotLock) {
       },
     });
 
+    // Вкладку агента ставит окно (спека браузера 3.7): место, предел, повтор страницы и тост — его дело. Окно, у которого
+    // страница ещё грузится (прелоад не подписан) или которое закрыто, просьбу не получит: агенту сразу window_not_connected.
+    // `loadedWindows` тут не годится: первый же `<webview>` даёт окну `did-start-loading` (а `did-finish-load` — нет), и признак
+    // снимался бы насовсем; главный кадр окна от гостей не зависит.
+    const ops = createAgentOps({
+      agentsAllowed: async () => (await uiStore.load()).browser.agentsAllowed,
+      openTab: (e) => {
+        const window = mainWindow;
+        if (window === null || window.isDestroyed() || window.webContents.isLoadingMainFrame()) return false;
+        window.webContents.send('browser:agent-open-tab', e);
+        return true;
+      },
+    });
+    agentOps = ops;
+
+    // Версия окна и последний статус хоста — для `app-info.json` архива диагностики; `onStatus` отдаёт текущий статус сразу.
+    const appVersion = app.isPackaged ? app.getVersion() : null;
+    let hostStatus: HostStatus = { state: 'connecting' };
+    connection.onStatus((status) => {
+      hostStatus = status;
+    });
+
     registerIpc({
       ipcMain,
       connection,
@@ -595,6 +667,7 @@ if (!gotLock) {
         annotate,
         inspector,
         emulation,
+        agent: ops,
       },
       saveDropImage: async () => {
         if (fakeDrops) return saveImage({ png: FAKE_DROP_PNG, dir: dropsDir() });
@@ -602,6 +675,33 @@ if (!gotLock) {
         if ((await clipboard.readText()) !== '') return null;
         return saveImage({ png: await clipboardPng(), dir: dropsDir() });
       },
+      saveDiagnostics: (options) =>
+        saveDiagnostics(
+          {
+            call: (method, params) => connection.call(method, params),
+            recentCalls: () => connection.recentCalls(),
+            hostDir: paths.dir,
+            // Тесты и E2E подменяют каталог, чтобы не писать в настоящие Downloads человека.
+            outDir: process.env.PARLEY_DIAGNOSTICS_DIR ?? app.getPath('downloads'),
+            appInfo: () => ({
+              appVersion,
+              electron: process.versions.electron,
+              chrome: process.versions.chrome,
+              node: process.versions.node,
+              platform: process.platform,
+              release: os.release(),
+              arch: process.arch,
+              windows: BrowserWindow.getAllWindows().length,
+              uptimeSec: Math.round(process.uptime()),
+              host: {
+                state: hostStatus.state,
+                hostVersion: 'hostVersion' in hostStatus ? hostStatus.hostVersion : null,
+              },
+            }),
+            readme: S.diagnostics.readme,
+          },
+          options,
+        ),
       imageThumbnail: (absPath, maxPx) => imageThumbnail(absPath, nativeImage, maxPx),
       setDirtyBuffers: (sender, count) => closeGuards.get(sender)?.setDirtyCount(count),
       answerClose: (sender, answer) => closeGuards.get(sender)?.answer(answer),
@@ -624,7 +724,7 @@ if (!gotLock) {
       getUpdate: () => updates.latest(),
       // Только у собранного окна: несобранное (E2E, `pnpm dev`) отдало бы версию Electron, и любой хост
       // показался бы хостом другой сборки — с тостом поверх окна.
-      appVersion: app.isPackaged ? app.getVersion() : null,
+      appVersion,
       setBadge: (count) => {
         app.dock?.setBadge(count > 0 ? String(count) : '');
       },
@@ -693,7 +793,8 @@ if (!gotLock) {
     });
   });
 
-  // Хост — отдельный, отсоединённый процесс: закрытие окна его не трогает.
+  // Хост — отдельный, отсоединённый процесс: закрытие окна его не трогает. Выход из приложения — другое дело:
+  // его сторож (`guardAppQuit`) спрашивает и гасит хост.
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
   });

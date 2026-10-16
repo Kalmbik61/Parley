@@ -154,6 +154,11 @@ export interface WorkSession {
    */
   model?: string | null;
   effort?: EffortLevel | null;
+  /**
+   * Облегчённый запуск (спека «меньше ходов и легче контекст», C2.2): решение принимается один раз при создании
+   * сессии и одинаково применяется при `resume`. Нет поля = `false`: карты до этого куска читаются без миграции.
+   */
+  lean?: boolean;
 }
 
 /**
@@ -240,6 +245,16 @@ export interface Proposal {
   at: string;
 }
 
+/** Запись журнала участия (спека расхода токенов, 4.1). */
+export interface RoomMembership {
+  /** Id сессии; человек в журнал не пишется. */
+  session: string;
+  /** Вход: создание комнаты для создателя и начальных участников, иначе момент `addMember`. */
+  from: string;
+  /** Уход (`leaveOtherRooms`); `null` — участник до сих пор в комнате. */
+  to: string | null;
+}
+
 /** Комната — круг участников переписки (спецификация 6.1). */
 export interface Room {
   mode?: RoomMode;
@@ -278,6 +293,11 @@ export interface Room {
    * необязательное, как `mode` и `recipe`, — комната из литерала без поля открыта (`isRoomArchived`).
    */
   archivedAt?: string | null;
+  /**
+   * Журнал участия (спека расхода токенов, 4.1): кто, когда вошёл и вышел. Нет поля — комната создана до журнала, её
+   * история восстанавливается по ленте (`roomMembership`). Битый журнал `parseMap` убирает.
+   */
+  memberLog?: RoomMembership[];
 }
 
 /** Письмо: доставляется по pull, живёт в карте. */

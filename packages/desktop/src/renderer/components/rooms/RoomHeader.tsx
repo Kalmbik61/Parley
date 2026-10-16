@@ -18,6 +18,14 @@ export interface RoomHeaderProps {
   recipeChip?: ReactNode;
   /** Share/Unshare истории комнаты (`RoomHistoryMenu`). */
   historyMenu?: ReactNode;
+  /** Кнопка «Browser» панели браузера комнаты (спека браузера 4.11) — справа в строке названия. */
+  browserToggle?: ReactNode;
+  /** Значок расхода токенов комнаты (`RoomUsageChip`) рядом с режимом. */
+  usageChip?: ReactNode;
+  /** Значок контекста комнаты (`RoomContextChip`, спека 2026-10-15, 3.3) рядом с расходом. */
+  contextChip?: ReactNode;
+  /** Чип контекста участника на карточке (`ContextChip`, спека 3.2). */
+  participantContext?: (participant: ParticipantModel) => ReactNode;
   title: string;
   subtitle: string;
   /** Комната в архиве: рядом с названием метка `Archived`. */
@@ -26,7 +34,7 @@ export interface RoomHeaderProps {
   onOpenSession: (sessionId: string, agentId?: string) => void;
 }
 
-export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, modeControl, recipeChip, historyMenu }: RoomHeaderProps): JSX.Element {
+export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, modeControl, recipeChip, historyMenu, browserToggle, usageChip, contextChip, participantContext }: RoomHeaderProps): JSX.Element {
   return (
     <div
       data-room-header=""
@@ -42,16 +50,21 @@ export function RoomHeader({ title, subtitle, archived = false, participants, on
               {S.rooms.archived}
             </Badge>
           ) : null}
+          {browserToggle === undefined ? null : <div className="ml-auto shrink-0">{browserToggle}</div>}
         </div>
         <span title={subtitle} className="truncate text-[13px] text-muted-foreground">
           {subtitle}
         </span>
       </div>
-      {recipeChip === undefined ? modeControl : (
-        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">{modeControl}{recipeChip}</div>
+      {recipeChip === undefined && usageChip === undefined && contextChip === undefined ? modeControl : (
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">{modeControl}{recipeChip}{usageChip}{contextChip}</div>
       )}
       {historyMenu}
-      <ParticipantStrip participants={participants} onOpenSession={onOpenSession} />
+      <ParticipantStrip
+        participants={participants}
+        onOpenSession={onOpenSession}
+        {...(participantContext === undefined ? {} : { contextChip: participantContext })}
+      />
     </div>
   );
 }

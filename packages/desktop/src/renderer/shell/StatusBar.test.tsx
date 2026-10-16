@@ -1049,3 +1049,24 @@ describe('StatusBar — ручное обновление лимитов', () =>
     expect(limitsIn(container, 'glm')?.title).not.toMatch(/Invalid|resets|1970/);
   });
 });
+
+// Задача 12 плана диагностики хоста: сегмент Diagnostics в правой группе, между «Host is outdated» и будильником.
+describe('StatusBar — сегмент Diagnostics', () => {
+  it('в правой группе есть сегмент диагностики перед переключателем wake, в одном блоке с ним', () => {
+    const { container } = renderPlain({ status: { state: 'connected', hostVersion: '1.0.0', methods: [...REQUIRED_METHODS] } });
+    const segment = container.querySelector<HTMLElement>('[data-diagnostics-segment]');
+    const wake = screen.getByRole('button', { name: 'Auto-wake on' });
+    expect(segment).not.toBeNull();
+    expect(segment!.parentElement).toBe(wake.parentElement);
+    expect(segment!.compareDocumentPosition(wake) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(segment!.className).toContain('shrink-0');
+  });
+
+  it('стоит после связи с хостом и «Host is outdated»', () => {
+    const { container } = renderPlain({ status: old });
+    const segment = container.querySelector<HTMLElement>('[data-diagnostics-segment]') as HTMLElement;
+    for (const before of [screen.getByText('Host 1.0.0'), screen.getByRole('button', { name: 'Host is outdated — restart' })]) {
+      expect(before.compareDocumentPosition(segment) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+});

@@ -139,7 +139,7 @@ describe('дельты по revision', () => {
     expect(feed()?.revision).toBe(5);
   });
 
-  it('разрыв > r+1 — снимок заново, дельты до его прихода отброшены', async () => {
+  it('разрыв > r+1 — снимок заново, дельты не новее его revision отброшены', async () => {
     let answer!: (value: { items: FeedItem[]; revision: number }) => void;
     setSnapshots(bridge, [new Promise((resolve) => (answer = resolve))]);
     bridge.emit('feed.changed', { mode: null, ref: REF, revision: 8, upsert: [prompt('gap')], removed: [] });
@@ -154,6 +154,90 @@ describe('дельты по revision', () => {
     expect(feed()).toEqual({ items: [prompt('a'), prompt('z')], revision: 10, mode: null, decisions: null, status: 'ready' });
     bridge.emit('feed.changed', { mode: null, ref: REF, revision: 11, upsert: [prompt('next')], removed: [] });
     expect(feed()?.items.map((item) => item.id)).toEqual(['a', 'z', 'next']);
+  });
+});
+
+describe('дельты, пришедшие во время снимка', () => {
+  // main пересылает событие хоста сразу, а ответ `host:call` — через промис: дельта r+1 из той же порции
+  // байтов приходит в окно раньше снимка r. Выброшенная, она оставляла чат на «Working…» (2026-10-15).
+  let answer!: (value: Snap) => void;
+  let refuse!: (error: Error) => void;
+
+  beforeEach(() => {
+    setSnapshots(bridge, [
+      new Promise<Snap>((resolve, reject) => {
+        answer = resolve;
+        refuse = reject;
+      }),
+    ]);
+    useFeedStore.getState().open(REF);
+  });
+
+  it('дельты r+1, r+2, обогнавшие снимок r, применяются после него по порядку', async () => {
+    await flush();
+    expect(feed()?.status).toBe('loading');
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 6, upsert: [prompt('c')], removed: [] });
+    bridge.emit('feed.changed', { mode: 'plan', ref: REF, revision: 7, upsert: [prompt('d')], removed: ['a'] });
+    answer({ items: [prompt('a'), prompt('b')], revision: 5 });
+    await flush();
+    expect(feed()).toEqual({ items: [prompt('b'), prompt('c'), prompt('d')], revision: 7, mode: 'plan', decisions: null, status: 'ready' });
+    expect(feedCalls(bridge)).toEqual(['feed.subscribe', 'feed.snapshot']);
+    // Дальше лента идёт обычным порядком.
+    bridge.emit('feed.changed', { mode: 'plan', ref: REF, revision: 8, upsert: [prompt('e')], removed: [] });
+    expect(feed()?.items.map((item) => item.id)).toEqual(['b', 'c', 'd', 'e']);
+  });
+
+  it('пришедшие во время снимка дельты ≤ его revision отбрасываются, следующие применяются', async () => {
+    await flush();
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 4, upsert: [prompt('old')], removed: [] });
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 5, upsert: [prompt('dup')], removed: [] });
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 6, upsert: [prompt('c')], removed: [] });
+    answer({ items: [prompt('a'), prompt('b')], revision: 5 });
+    await flush();
+    expect(feed()?.items.map((item) => item.id)).toEqual(['a', 'b', 'c']);
+    expect(feed()?.revision).toBe(6);
+  });
+
+  it('разрыв после снимка среди сохранённых дельт — снимок заново', async () => {
+    await flush();
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 7, upsert: [prompt('late')], removed: [] });
+    // Первый снимок уже в пути; следующий вызов `feed.snapshot` — повтор после разрыва.
+    setSnapshots(bridge, [{ items: [prompt('a'), prompt('late')], revision: 7 }]);
+    answer({ items: [prompt('a'), prompt('b')], revision: 5 });
+    // Первый снимок и второй круг subscribe → snapshot.
+    await flush();
+    await flush();
+    expect(feedCalls(bridge)).toEqual(['feed.subscribe', 'feed.snapshot', 'feed.subscribe', 'feed.snapshot']);
+    expect(feed()).toEqual({ items: [prompt('a'), prompt('late')], revision: 7, mode: null, decisions: null, status: 'ready' });
+  });
+
+  it('дельты, сохранённые до переподключения, на снимок нового моста не ложатся', async () => {
+    await flush();
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 2, upsert: [prompt('stale')], removed: [] });
+    dispose?.();
+    const next = createFakeBridge();
+    next.setHandler('feed.subscribe', () => ({ ok: true }));
+    setSnapshots(next, [{ items: [prompt('fresh')], revision: 1 }]);
+    dispose = useFeedStore.getState().init(next);
+    await flush();
+    answer({ items: [prompt('a')], revision: 5 });
+    await flush();
+    expect(feed()).toEqual({ items: [prompt('fresh')], revision: 1, mode: null, decisions: null, status: 'ready' });
+  });
+
+  it('снимок отказал — сохранённые дельты не применяются ни сейчас, ни после Retry', async () => {
+    await flush();
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 6, upsert: [prompt('c')], removed: [] });
+    // Повтор отдаст снимок с той же revision 5: дельта 6, если бы осталась, легла бы на него.
+    setSnapshots(bridge, [{ items: [prompt('a')], revision: 5 }]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    refuse(new Error('boom'));
+    await flush();
+    expect(feed()?.status).toBe('error');
+    useFeedStore.getState().retry(REF);
+    await flush();
+    expect(feed()).toEqual({ items: [prompt('a')], revision: 5, mode: null, decisions: null, status: 'ready' });
+    warn.mockRestore();
   });
 });
 

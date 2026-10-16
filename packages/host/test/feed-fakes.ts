@@ -14,7 +14,7 @@ import type { Log } from '../src/log.js';
 
 export const REF: SessionRef = { projectPath: '/proj', workId: 'w-1', sessionId: 's-01' };
 
-export const silentLog = (): Log & { warn: ReturnType<typeof vi.fn> } => ({
+export const silentLog = (): Log & { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> } => ({
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
@@ -112,6 +112,7 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
       logFile: () => logFile,
       childLogFile: (_ref: SessionRef, threadId: string) => childLogFiles.get(threadId) ?? null,
       questionHeld: vi.fn(),
+      permissionAnswered: vi.fn(),
       onChange: (listener: ActivityListener) => {
         activityListeners.add(listener);
         return () => activityListeners.delete(listener);

@@ -1,8 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, chmod, link, rename, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   bothEnv,
+  isMember,
+  isRoomArchived,
   isStaleHostLock,
   migrateProjects,
   parleyHome,
@@ -18,12 +21,19 @@ import { HostError } from './errors.js';
 import { createLog } from './log.js';
 import type { Log } from './log.js';
 import { watchIdle } from './idle.js';
+import { startLoopDelayLog } from './loop-delay.js';
+import { createHealthService } from './health/health-service.js';
+import { createWindowCounters } from './health/window-counters.js';
+import { createProfiler } from './diagnostics/profiler.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
 import { HOST_ERROR_REASONS } from '@parley/protocol';
 import { createHostHandlers } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
+import { createCompactionService, type CompactionService } from './compaction/compaction-service.js';
+import { createContextService } from './context/context-service.js';
+import { createCodexLogPoller } from './activity/codex-log-poll.js';
 import { linkTerminalActivity } from './activity/terminal-link.js';
 import { createGlmCheckService } from './limits/glm-check.js';
 import type { GlmCheckOptions } from './limits/glm-check.js';
@@ -39,8 +49,10 @@ import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
 import { createHistoryService } from './rooms/history-service.js';
+import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
+import { createReadyJournal } from './sessions/ready-journal.js';
 import { createWakeService } from './wake/wake-service.js';
 import { createWorktreesService } from './worktrees/worktrees-service.js';
 import { readHostVersion } from './version.js';
@@ -187,7 +199,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   // Работы стартуют и останавливаются вместе с хостом: окно узнаёт о них
   // через `works.list`/`works.changed`, а на остановке хост снимает свою аренду.
-  const worksService = createWorksService(handle.context);
+  // Счётчики окна строки состояния: сервисы пишут, health читает и обнуляет.
+  const windowCounters = createWindowCounters();
+  const worksService = createWorksService(handle.context, { windowCounters });
   // Сервис зовёт onFailure по разу на каждый код сбоя (конфликт снимка, журнал решения), а у человека одна карточка
   // с одним текстом: повтор для той же работы только вытеснял бы из строки статуса прежние уведомления.
   const planEffectNoticed = new Set<string>();
@@ -207,6 +221,25 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const history = createHistoryService(worksService, {
     onFailure: ({ count }) => log.warn('history-write-failed', { count }),
   });
+  const stopLoopDelay = startLoopDelayLog(handle.context.log);
+  handle.context.onShutdown(async () => stopLoopDelay());
+  // Строка состояния хоста раз в 30 с. Счётчики читаются лениво при `sample()`, поэтому замыкание вправе
+  // ссылаться на сервисы и `handlers`, которые заводятся ниже.
+  const health = createHealthService({
+    log: handle.context.log,
+    windowCounters,
+    counters: () => {
+      const { entries } = worksService.snapshot();
+      return {
+        ptys: ptyManager.list().length,
+        attached: handlers.counters.ptyAttached(),
+        feedSubs: feedService.subscriberCount(),
+        works: entries.length,
+        rooms: entries.reduce((sum, entry) => sum + entry.map.rooms.length, 0),
+        clients: handle.context.clients().length,
+      };
+    },
+  });
   handle.context.onShutdown(async () => planEffects.stop());
   handle.context.onShutdown(async () => history.stop());
   handle.context.onShutdown(() => worksService.stop());
@@ -214,13 +247,14 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Активность живёт поверх работ: точка статуса и строка метрик окна (1.5).
   // `pty.attach`/`pty.input` (1.6) зовут её `markSeen`.
   const activityService = createActivityService(handle.context, worksService, {
+    windowCounters,
     ...(options.startupWaitMs === undefined ? {} : { startupWaitMs: options.startupWaitMs }),
   });
   handle.context.onShutdown(() => activityService.stop());
 
   // Живые PTY сессий (1.6). На остановке хоста добиваются вместе с ним —
   // иначе процесс агента остаётся сиротой без хоста, который бы его закрыл.
-  const ptyManager = createPtyManager(handle.context);
+  const ptyManager = createPtyManager(handle.context, windowCounters);
 
   // Состояние сессий codex — по потоку их терминала, а не по хукам (спека комнат Organic, 3.6): менеджер PTY
   // разбирает заголовок окна и уведомления, сервис активности выводит из них состояние.
@@ -236,7 +270,37 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activity: activityService,
     pty: ptyManager,
   }, options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs });
-  const hookServer = createHookServer({ log, onHook: (request) => feedService.onHook(request) });
+  // Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): путь `/agent/browser` на сервере хуков и свой
+  // реестр токенов — у всех провайдеров. Операцию исполняет окно с возможностью `browser-agent`.
+  const browserEndpoint = createBrowserEndpoint({
+    log,
+    clients: () => handle.context.clients(),
+    // Комнаты сессии — из карты в памяти службы работ (спека 3.7: чтения с диска на пути операции нет).
+    roomsOf: (ref) =>
+      worksService
+        .entry(ref.projectPath, ref.workId)
+        ?.map.rooms.filter((room) => isMember(room, ref.sessionId) && !isRoomArchived(room))
+        .map((room) => room.id) ?? [],
+  });
+  // Журнал задержек (спека диагностики хоста, A4): «сессия готова» по первому хуку или сигналу ready Codex.
+  const readyJournal = createReadyJournal({ log, pty: ptyManager });
+  handle.context.onShutdown(async () => readyJournal.stop());
+  // Сжатие контекста (спека 2026-10-15, 5): создаётся после будильника, но хук-сервер и будильник видят его уже сейчас.
+  // eslint-disable-next-line prefer-const -- поздняя привязка: замыкания хук-сервера и будильника читают её раньше присваивания
+  let compactionService: CompactionService | undefined;
+  const hookServer = createHookServer({
+    log,
+    onHook: (request) => {
+      readyJournal.onHook(request.ref);
+      try {
+        compactionService?.onHook(request.ref, request.body);
+      } catch (error) {
+        log.warn(`compaction hook failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      feedService.onHook(request);
+    },
+    routes: { [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res) },
+  });
 
   // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт, а
   // запуск сессии — для порога ленты (`feedSupported`), поэтому проба заводится до сервиса сессий.
@@ -272,12 +336,26 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     worksService,
     ptyManager,
     activityService,
-    { hooks: hookServer, providerVersions, codexHookCommand: codexHookCommandOnce },
+    {
+      hooks: hookServer,
+      providerVersions,
+      codexHookCommand: codexHookCommandOnce,
+      agent: {
+        url: () => {
+          const origin = hookServer.origin();
+          return origin === null ? null : `${origin}${AGENT_BROWSER_PATH}`;
+        },
+        register: (ref) => browserEndpoint.register(ref),
+        unregister: (ref) => browserEndpoint.unregister(ref),
+      },
+    },
   );
   handle.context.onShutdown(() => sessionsService.stopAll());
   // После остановки сессий: их `SessionEnd` ещё доходят до ленты и получают ответ. Потом всем
   // висящим хукам — `{}`, и приёмник закрывается.
   handle.context.onShutdown(async () => {
+    // Висящим операциям агента — `window_not_connected`, а не обрыв соединения.
+    browserEndpoint.close();
     await feedService.stop();
     await hookServer.close();
   });
@@ -292,8 +370,29 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activityService,
     ptyManager,
     sessionsService,
+    { compacting: (ref) => compactionService?.holds(ref) === true, windowCounters },
   );
   handle.context.onShutdown(async () => wakeService.stop());
+
+  compactionService = createCompactionService({
+    host: handle.context,
+    pty: ptyManager,
+    activity: activityService,
+    exclusive: sessionsService.exclusive,
+    wake: wakeService,
+  });
+  compactionService.start();
+  handle.context.onShutdown(async () => compactionService?.stop());
+
+  // Заполненность контекста Claude/GLM (спека 2026-10-15, 4.3): опрос файлов строки статуса раз в 5 секунд.
+  const contextService = createContextService({ pty: ptyManager, activity: activityService });
+  contextService.start();
+  handle.context.onShutdown(async () => contextService.stop());
+
+  // Индекс логов Codex: `fs.watch` на macOS дозаписи rollout не доставляет — перечитываем файлы запущенных сессий сами.
+  const codexLogPoller = createCodexLogPoller({ pty: ptyManager, activity: activityService });
+  codexLogPoller.start();
+  handle.context.onShutdown(async () => codexLogPoller.stop());
 
   // Дифф, коммит, слияние и отбрасывание worktree сессии (4.2) — «Остановить»
   // при отбрасывании она делит с обычным `sessions.stop`.
@@ -323,6 +422,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const backlogService = createBacklogService();
   handle.context.onShutdown(async () => backlogService.close());
 
+  // Профиль CPU по запросу: файлы в `~/.parley/host/diagnostics`; идущая запись на остановке хоста дописывается.
+  const profiler = createProfiler({ dir: path.join(paths.dir, 'diagnostics'), log: handle.context.log });
+  handle.context.onShutdown(async () => profiler.stop());
+
   const handlers = createHostHandlers({
     backlog: backlogService,
     planEffects,
@@ -337,9 +440,16 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     pty: ptyManager,
     sessions: sessionsService,
     wake: wakeService,
+    compaction: compactionService,
     worktrees: worktreesService,
     feed: feedService,
+    browserAgent: browserEndpoint,
+    health,
+    profiler,
+    log: handle.context.log,
   });
+  health.start();
+  handle.context.onShutdown(async () => health.stop());
   const server = createHostServer({
     context: handle.context,
     token,
@@ -358,6 +468,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     unregisterClient: (client) => {
       handle.removeClient(client);
       feedService.dropClient(client);
+      browserEndpoint.dropClient(client);
+      handlers.dropClient(client);
       backlogService.removeClient(client.id);
     },
   });
@@ -371,6 +483,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   } catch (error) {
     // Не поднялся — замок не держится до выхода процесса (в тестах процесс один на много хостов).
     idleWatcher.stop();
+    health.stop();
     await releasePidLock(paths.pid);
     restoreHomeEnv(previousHomes);
     throw error;

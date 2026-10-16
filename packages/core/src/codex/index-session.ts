@@ -4,7 +4,7 @@ import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
 import { INDEX_READ_CONCURRENCY, mapLimited } from '../map-limited.js';
 import type { SessionIndex } from '../session-index.js';
 import { isPointerText } from '../work/delivery.js';
-import { createUsageLedger, observedCount } from '../work/usage-ledger.js';
+import { createUsageLedger, observedCount, type UsageWindow } from '../work/usage-ledger.js';
 import { defaultCodexRoot, discoverCodexSessions } from './discover.js';
 
 function asRecord(value: unknown): RawRecord | null {
@@ -82,6 +82,30 @@ function parentThreadId(payload: RawRecord): string | null {
   return str(spawn, 'parent_thread_id');
 }
 
+/** Ожидание ячейки `exec` — `yield_time_ms` из прагмы `// @exec: {...}` в первой строке кода; иначе null. */
+function execYieldMs(input: string | null): number | null {
+  const first = input?.split('\n', 1)[0]?.trim() ?? '';
+  const match = /^\/\/\s*@exec:\s*(\{.*\})\s*$/.exec(first);
+  if (match?.[1] === undefined) return null;
+  try {
+    const value = asRecord(JSON.parse(match[1]))?.['yield_time_ms'];
+    return typeof value === 'number' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Ожидание `wait` — `yield_time_ms` из JSON-аргументов; иначе null. */
+function waitYieldMs(args: string | null): number | null {
+  if (args === null) return null;
+  try {
+    const value = asRecord(JSON.parse(args))?.['yield_time_ms'];
+    return typeof value === 'number' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Индексирует один rollout-лог Codex в общую модель SessionIndex.
  *
@@ -90,7 +114,11 @@ function parentThreadId(payload: RawRecord): string | null {
  * Наружу при этом отдаётся ровно тот же SessionIndex, что и у Claude Code, —
  * UI о различиях не знает. `signal` прерывает чтение (`forEachJsonlRecord`).
  */
-export async function indexCodexSession(file: string, signal?: AbortSignal): Promise<SessionIndex> {
+export async function indexCodexSession(
+  file: string,
+  signal?: AbortSignal,
+  options: { usageWindows?: readonly UsageWindow[] } = {},
+): Promise<SessionIndex> {
   const models = new Counter();
   const tools = new Counter();
   const roles = new Counter();
@@ -105,8 +133,10 @@ export async function indexCodexSession(file: string, signal?: AbortSignal): Pro
   let firstUserMessage: string | null = null;
   let lastUserRecordAt: string | null = null;
   let lastCounters = null as ReturnType<typeof codexCounters>;
-  const ledger = createUsageLedger();
+  const ledger = createUsageLedger(options.usageWindows === undefined ? {} : { windows: options.usageWindows });
   let lastTurnEvent: SessionIndex['lastTurnEvent'];
+  // Открытые вызовы code mode по call_id (разбор 2026-10-16).
+  const openCalls = new Map<string, { name: 'exec' | 'wait'; at: string; yieldMs: number | null }>();
   let spawned = false;
   let parentId: string | null = null;
   let forkedFrom: string | null = null;
@@ -150,6 +180,17 @@ export async function indexCodexSession(file: string, signal?: AbortSignal): Pro
         if (kind === 'function_call' || kind === 'custom_tool_call') {
           tools.add(str(payload, 'name'));
         }
+        const callId = str(payload, 'call_id');
+        if (callId !== null && at !== null) {
+          const name = str(payload, 'name');
+          if (kind === 'custom_tool_call' && name === 'exec') {
+            openCalls.set(callId, { name: 'exec', at, yieldMs: execYieldMs(str(payload, 'input')) });
+          } else if (kind === 'function_call' && name === 'wait') {
+            openCalls.set(callId, { name: 'wait', at, yieldMs: waitYieldMs(str(payload, 'arguments')) });
+          } else if (kind === 'custom_tool_call_output' || kind === 'function_call_output') {
+            openCalls.delete(callId);
+          }
+        }
         break;
       }
 
@@ -160,6 +201,7 @@ export async function indexCodexSession(file: string, signal?: AbortSignal): Pro
         ) {
           lastTurnEvent = { type: kind, at };
         }
+        if (kind === 'task_complete' || kind === 'turn_aborted') openCalls.clear();
         // Заголовок сессии — первая РЕПЛИКА ЧЕЛОВЕКА. Сообщения из response_item
         // для этого не годятся: там же едут системные инструкции и AGENTS.md.
         if (kind === 'user_message') {
@@ -205,6 +247,11 @@ export async function indexCodexSession(file: string, signal?: AbortSignal): Pro
           cacheWrite: 0,
         };
 
+  let openCodeCall: SessionIndex['openCodeCall'];
+  for (const call of openCalls.values()) {
+    if (openCodeCall === undefined || call.at < openCodeCall.at) openCodeCall = call;
+  }
+
   const title = firstUserMessage === null ? null : oneLine(firstUserMessage);
 
   return {
@@ -224,6 +271,7 @@ export async function indexCodexSession(file: string, signal?: AbortSignal): Pro
     // У Codex служебного хвоста после хода нет в этом смысле: время работы — время последней записи.
     lastWorkRecordAt: endedAt,
     ...(lastTurnEvent === undefined ? {} : { lastTurnEvent }),
+    ...(openCodeCall === undefined ? {} : { openCodeCall }),
     durationMs,
     records: stats.parsed,
     malformedLines: stats.malformed,

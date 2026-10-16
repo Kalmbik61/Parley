@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { browserAgentResultParams } from './browser-agent.js';
 import { capabilitySkillMethodSchemas } from './capability-skill-actions.js';
 import type { CapabilitySkillMethodResults } from './capability-skill-actions.js';
 import type {
@@ -8,6 +9,7 @@ import type {
   MergeCheck,
   MergeResult,
   ProjectChanges,
+  RoomUsage,
   WorktreeDiff,
 } from '@parley/core';
 import type { CapabilitySnapshot } from './capability-snapshot.js';
@@ -29,7 +31,7 @@ import { backlogMethodSchemas } from './backlog.js';
 import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
 import type { FeedDecisions } from './feed.js';
-import type { Capabilities, ModelOption, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type { Capabilities, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 /** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
 const recipeSnapshot = z
@@ -92,6 +94,10 @@ export const METHODS = {
   hello: z.object({ token: z.string(), protocol: z.number().int(), client: z.string(), features: z.array(z.string().max(64)).max(32).optional() }),
   'host.info': z.object({}),
   'host.shutdown': z.object({}),
+  // Диагностика хоста (спека 2026-10-16): мгновенный снимок и CPU-профиль по запросу; старый хост методов не знает.
+  'host.diagnostics': z.object({}),
+  'host.profile.start': z.object({ seconds: z.number().int().min(1).max(60).optional() }),
+  'host.profile.status': z.object({}),
   'providers.list': z.object({}),
   'providers.refreshLimits': z.object({}),
   'providers.check': z.object({ provider: z.string() }),
@@ -135,6 +141,9 @@ export const METHODS = {
       .nullable()
       .optional(),
     effort: z.string().regex(EFFORT_TOKEN_RE).nullable().optional(),
+    // Явный выбор облегчённого запуска из диалога (C2.2). Без поля решает хост по настройке `leanAgents` и источнику
+    // сессии; старое окно поля не шлёт, старый хост его отбрасывает.
+    lean: z.boolean().optional(),
   }),
   'sessions.resume': z.object({ ref: sessionRef }),
   'sessions.stop': z.object({ ref: sessionRef }),
@@ -150,6 +159,8 @@ export const METHODS = {
   // Смена effort идущей сессии из меню чата (нормалайзер модели и effort, 5.7). «По умолчанию» здесь не выбирается:
   // `/effort auto` стёр бы сохранённый уровень человека. Уровни модели сверяет хост (`bad_request`).
   'sessions.setEffort': z.object({ ref: sessionRef, effort: z.string().regex(EFFORT_TOKEN_RE) }),
+  'sessions.compact': z.object({ ref: sessionRef, instructions: z.string().max(8_000).nullable() }),
+  'sessions.cancelCompact': z.object({ ref: sessionRef }),
   // Смена модели идущей сессии из меню чата (нормалайзер модели и effort, 5.8): то же одно слово, что у
   // `sessions.create`, но непустое. Список моделей сверяет хост (`bad_request`).
   'sessions.setModel': z.object({ ref: sessionRef, model: z.string().max(200).regex(/^[^\s-]\S*$/) }),
@@ -214,6 +225,9 @@ export const METHODS = {
   // прячет пункты.
   'rooms.archive': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string(), stopSessions: z.boolean() }),
   'rooms.reopen': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string() }),
+  // Расход токенов комнаты (спека расхода токенов, 6.1): итог с момента входа каждого участника. Только чтение. Старый
+  // хост метода не знает — окно по списку методов значок не показывает.
+  'rooms.usage': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string() }),
   // Ответ человека на решение ведущего. Устаревший `proposalId` хост отвергает как `conflict`;
   // заметка возврата — до 4000 знаков, длиннее не проходит схему. `rev` — версия карточки, которую
   // человек видел (`Proposal.rev`): пока карточка висела, ведущий мог заменить текст (`id` тот же, `rev`
@@ -237,6 +251,9 @@ export const METHODS = {
     to: z.array(z.string()),
     text: z.string().min(1),
     kind: z.enum(['note', 'question', 'decision']),
+    // Момент нажатия Send в окне (мс эпохи, одни часы с хостом): из него хост считает ожидание в очереди окна
+    // (журнал задержек, `queueMs`). Старый хост поле отбросит, старое окно его не шлёт.
+    requestedAt: z.number().optional(),
   }),
   'worktrees.available': z.object({ projectPath: z.string() }),
   // `patch` только добавлен: старый хост его отбросит, старое окно не шлёт. false — `patch: ''`.
@@ -256,7 +273,8 @@ export const METHODS = {
   }),
   // Предел 64 КиБ хост считает в байтах UTF-8 после очистки (спека 8.6, шаг 2): схема
   // байтов не видит, поэтому здесь только «не пусто».
-  'pty.send': z.object({ ref: sessionRef, text: z.string().min(1), submit: z.boolean() }),
+  // `requestedAt` — как у `rooms.send`: метка нажатия Send для `queueMs` в журнале хоста.
+  'pty.send': z.object({ ref: sessionRef, text: z.string().min(1), submit: z.boolean(), requestedAt: z.number().optional() }),
   // Лента вида «Chat» (план 2026-10-01, Task 2, решение 14). `agentId` — лента субагента из его
   // журнала: id идёт в путь `subagents/agent-<id>.jsonl`, поэтому только буквы, цифры, `_` и `-`.
   'feed.snapshot': z.object({
@@ -273,6 +291,9 @@ export const METHODS = {
   // «Stop» вида «Chat»: Esc агенту по нажатию человека; хост сам закрывает в ленте ход, который CLI бросил
   // без записи, и стирает из поля ввода терминала возвращённый туда текст промпта.
   'feed.interrupt': z.object({ ref: sessionRef }),
+  // Ответ окна на операцию агента (спека браузера 2026-10-07, 3.7): зовёт только main окна, хост принимает его только от
+  // клиента, которому ушла операция.
+  'browser.agentResult': browserAgentResultParams,
 } as const;
 
 // Уведомления клиента — без id и без ответа: их слишком много, чтобы ждать каждое.
@@ -289,6 +310,9 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
   hello: { hostVersion: string; protocol: number; pid: number; methods?: string[]; features?: string[] };
   'host.info': { hostVersion: string; pid: number; startedAt: string; clients: number; liveSessions: number };
   'host.shutdown': { ok: true };
+  'host.diagnostics': HostDiagnostics;
+  'host.profile.start': ProfileStatus;
+  'host.profile.status': ProfileStatus;
   /** Перечитаны источники CLI и запрошена квота подключённого Z.ai; свежесть зависит от источника. */
   'providers.refreshLimits': { ok: true };
   /**
@@ -369,6 +393,8 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
    * карту. Не совпал — карта не меняется.
    */
   'sessions.setEffort': { effort: string | null; verified: boolean };
+  'sessions.compact': CompactResult;
+  'sessions.cancelCompact': { cancelled: boolean };
   /**
    * Смена модели (нормалайзер модели и effort, 5.8). `model` — модель, записанная в карту; `effort` —
    * уровень после смены (`null` — «по умолчанию»: прежнего уровня у новой модели нет или он не был
@@ -400,6 +426,8 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
   'rooms.delete': { ok: true };
   'rooms.archive': { ok: true };
   'rooms.reopen': { ok: true };
+  /** Итог токенов комнаты: целиком, по провайдерам и по участникам. Токены, а не деньги и не доля лимита. */
+  'rooms.usage': RoomUsage;
   /** `messageId` — сообщение `decision` при `accept`, письмо ведущему при `return`. */
   'rooms.resolveProposal': { messageId: string };
   'rooms.send': { messageId: string };
@@ -430,6 +458,8 @@ export interface Results extends CapabilitySkillMethodResults, BacklogMethodResu
   /** `applied: false` — карточка уже не ждёт (ответили в терминале, второе нажатие); `state` — её состояние. */
   'feed.decide': { applied: boolean; state: FeedCardState };
   'feed.interrupt': { ok: true };
+  /** `accepted: false` — операция уже закрыта (срок, уход окна) или ушла другому клиенту. */
+  'browser.agentResult': { accepted: boolean };
 }
 
 export type MethodName = keyof typeof METHODS;

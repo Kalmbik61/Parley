@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -177,6 +177,7 @@ interface StubArgs {
     CLAUDE_CODE_SESSION_ID: string | null;
     PARLEY_HOOK_TOKEN: string | null;
     PARLEY_HOOK_URL: string | null;
+    PARLEY_AGENT_TOKEN: string | null;
   };
 }
 
@@ -570,6 +571,42 @@ describe('create(): карта после старта', () => {
   });
 });
 
+describe('время шагов в логе хоста', () => {
+  it('create() пишет время шагов создания и запуска', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    const info = vi.fn();
+    const host = { ...fakeHost(), log: { info, warn: () => {}, error: () => {} } };
+
+    const service = createSessionsService(host, fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      parent: null,
+    });
+
+    const launchLine = info.mock.calls.find(([msg]) => msg === 'запуск сессии: время шагов')?.[1] as
+      | { totalMs: number; steps: Record<string, number>; failed?: boolean; provider?: string }
+      | undefined;
+    expect(launchLine).toBeDefined();
+    expect(launchLine?.totalMs).toEqual(expect.any(Number));
+    expect(Object.keys(launchLine?.steps ?? {})).toEqual(expect.arrayContaining(['plan', 'spawn', 'startWrite']));
+    expect(launchLine?.failed).toBeUndefined();
+    expect(launchLine?.provider).toBe('claude');
+
+    const createLine = info.mock.calls.find(([msg]) => msg === 'создание сессии: время шагов')?.[1] as
+      | { sessionId?: string; totalMs: number; steps: Record<string, number> }
+      | undefined;
+    expect(createLine?.sessionId).toBe(ref.sessionId);
+    expect(Object.keys(createLine?.steps ?? {})).toEqual(expect.arrayContaining(['record', 'launch']));
+
+    await service.stop(ref);
+  });
+});
+
 describe('launch(): лента вида «Chat» — адрес приёмника и токен по версии claude (Task 2c)', () => {
   const HOOK_URL = 'http://127.0.0.1:4321/hooks';
 
@@ -817,6 +854,106 @@ describe('launch(): лента вида «Chat» — адрес приёмник
     ).rejects.toThrow('spawn не удался');
     expect(registered).toHaveLength(1);
     expect(unregistered).toEqual([registered[0]?.ref]);
+  });
+});
+
+describe('launch(): канал агента к браузеру — токен на каждый запуск у всех провайдеров (спека браузера 3.7; этап B2)', () => {
+  const AGENT_URL = 'http://127.0.0.1:4321/agent/browser';
+
+  function fakeAgent(url: string | null = AGENT_URL) {
+    const registered: SessionRef[] = [];
+    const unregistered: SessionRef[] = [];
+    const agent: NonNullable<SessionsFeedOptions['agent']> = {
+      url: () => url,
+      register(ref) {
+        registered.push(ref);
+        return `${String(registered.length).padStart(2, '0')}${'a'.repeat(62)}`;
+      },
+      unregister(ref) {
+        unregistered.push(ref);
+      },
+    };
+    return { agent, registered, unregistered };
+  }
+
+  async function launchWith(provider: string, agent: NonNullable<SessionsFeedOptions['agent']>, extra: Record<string, string> = {}) {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    for (const [key, value] of Object.entries(extra)) setEnv(key, value);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { agent });
+    const ref = await service.create({ projectPath: project, workId: work.work.id, provider, label: 'бэкенд', task: '', parent: null });
+    return { args: await readArgs(argsFile), ref, service };
+  }
+
+  it('claude: адрес и токен — в env сервера parley файла --mcp-config (0600), не в окружении процесса', async () => {
+    const { agent, registered } = fakeAgent();
+    const { args, ref, service } = await launchWith('claude', agent);
+    expect(registered).toEqual([ref]);
+    const file = args.argv[args.argv.indexOf('--mcp-config') + 1] as string;
+    const env = (JSON.parse(await readFile(file, 'utf8')) as { mcpServers: { parley: { env: Record<string, string> } } }).mcpServers.parley.env;
+    expect(env['PARLEY_AGENT_URL']).toBe(AGENT_URL);
+    expect(env['PARLEY_AGENT_TOKEN']).toBe(`01${'a'.repeat(62)}`);
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect(args.env.PARLEY_AGENT_TOKEN).toBeNull();
+    expect(args.argv.join('\n')).not.toContain(`01${'a'.repeat(62)}`);
+    await service.stop(ref);
+  });
+
+  it('codex: тот же канал — в таблице env сервера `-c mcp_servers.parley`', async () => {
+    const { agent } = fakeAgent();
+    const { args, ref, service } = await launchWith('codex', agent, { PARLEY_CODEX_BIN: STUB });
+    const override = args.argv.find((arg) => arg.startsWith('mcp_servers.parley=')) as string;
+    expect(override).toContain(`PARLEY_AGENT_URL=${JSON.stringify(AGENT_URL)}`);
+    expect(override).toContain(`PARLEY_AGENT_TOKEN=${JSON.stringify(`01${'a'.repeat(62)}`)}`);
+    expect(args.env.PARLEY_AGENT_TOKEN).toBeNull();
+    await service.stop(ref);
+  });
+
+  it('выход процесса снимает токен; эндпоинт не слушает — токена нет и в конфиге пусто', async () => {
+    const live = fakeAgent();
+    const launched = await launchWith('claude', live.agent);
+    await launched.service.stop(launched.ref);
+    await waitFor(() => live.unregistered.some((ref) => ref.sessionId === launched.ref.sessionId), REAL_PROCESS_WAIT_MS);
+
+    const closed = fakeAgent(null);
+    const plain = await launchWith('claude', closed.agent);
+    expect(closed.registered).toEqual([]);
+    const file = plain.args.argv[plain.args.argv.indexOf('--mcp-config') + 1] as string;
+    expect(await readFile(file, 'utf8')).not.toContain('PARLEY_AGENT');
+    await plain.service.stop(plain.ref);
+  });
+
+  it('pty.start бросил — выданный токен снимается, ошибка доходит до вызывающего', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const { agent, registered, unregistered } = fakeAgent();
+    const pty = createPtyManager(fakeHost());
+    const failing = {
+      ...pty,
+      start: () => {
+        throw new Error('spawn не удался');
+      },
+    };
+    const service = createSessionsService(fakeHost(), fakeWorks(), failing, fakeActivity(), { agent });
+    await expect(
+      service.create({ projectPath: project, workId: work.work.id, provider: 'claude', label: '', task: '', parent: null }),
+    ).rejects.toThrow('spawn не удался');
+    expect(registered).toHaveLength(1);
+    expect(unregistered).toEqual([registered[0]]);
+  });
+
+  it('новый запуск той же сессии — новый вызов register: прежний токен реестр отзывает сам', async () => {
+    const { agent, registered } = fakeAgent();
+    const first = await launchWith('claude', agent);
+    await first.service.stop(first.ref);
+    await waitFor(async () => {
+      const map = await readMap(project, first.ref.workId);
+      return map.sessions.find((candidate) => candidate.id === first.ref.sessionId)?.lifecycle !== 'active';
+    }, REAL_PROCESS_WAIT_MS);
+    await first.service.launch(first.ref, 'resume');
+    expect(registered).toHaveLength(2);
+    expect(registered[1]).toEqual(first.ref);
+    await first.service.stop(first.ref);
   });
 });
 
@@ -1602,6 +1739,146 @@ describe('модель и усилие из карты: сессия, завед
     expect(args.argv[args.argv.indexOf('--model') + 1]).toBe('opus');
     expect(args.argv[args.argv.indexOf('--effort') + 1]).toBe('high');
 
+    await service.stop(ref);
+  });
+});
+
+describe('lean: решение при создании и запуск по записи в карте (часть C, C2.2)', () => {
+  const LEAN_FLAG = '--strict-mcp-config';
+
+  it('все пути создания пишут явный lean в запись сессии; окно без поля — ключа нет', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const parent = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'родитель', task: 'т' });
+    const base = { projectPath: project, provider: 'claude', label: '' };
+
+    for (const lean of [true, false]) {
+      // Тихий старт, новая работа под быструю сессию, дочерняя без задачи и `pending` с задачей.
+      const refs = [
+        await service.create({ ...base, workId: work.work.id, task: '', parent: null, lean }),
+        await service.create({ ...base, workId: null, task: '', parent: null, lean }),
+        await service.create({ ...base, workId: work.work.id, task: '', parent, lean }),
+        await service.create({ ...base, workId: work.work.id, task: 'сделай штуку', parent: null, lean }),
+      ];
+      for (const ref of refs) {
+        const map = await readMap(ref.projectPath, ref.workId);
+        expect(map.sessions.find((candidate) => candidate.id === ref.sessionId)?.lean, `${ref.sessionId} lean=${lean}`).toBe(lean);
+        await service.stop(ref);
+      }
+    }
+
+    // Одиночная сессия из окна без поля (и старое окно): lean нет, как до этого куска, — настройка leanAgents
+    // её не касается, даже включённая.
+    await saveConfig({ leanAgents: true });
+    const plain = [
+      await service.create({ ...base, workId: work.work.id, task: '', parent: null }),
+      await service.create({ ...base, workId: work.work.id, task: 'сделай штуку', parent: null }),
+    ];
+    for (const ref of plain) {
+      const session = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
+      expect(session).toBeDefined();
+      expect(Object.keys(session ?? {}), ref.sessionId).not.toContain('lean');
+      await service.stop(ref);
+    }
+  });
+
+  it('явный lean: true у одиночной сессии доезжает до argv; без поля и с lean: false — флага нет', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const argvOf = async (lean?: boolean): Promise<string[]> => {
+      const argsFile = await tempArgsFile();
+      setEnv('STUB_ARGS_FILE', argsFile);
+      const ref = await service.create({
+        projectPath: project,
+        workId: work.work.id,
+        provider: 'claude',
+        label: '',
+        task: '',
+        parent: null,
+        ...(lean === undefined ? {} : { lean }),
+      });
+      const { argv } = await readArgs(argsFile);
+      await service.stop(ref);
+      return argv;
+    };
+
+    expect(await argvOf(true)).toContain(LEAN_FLAG);
+    expect(await argvOf(false)).not.toContain(LEAN_FLAG);
+    expect(await argvOf()).not.toContain(LEAN_FLAG);
+  });
+
+  it('resume lean-сессии собирает запуск с теми же lean-флагами, что и первый запуск', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: '',
+      task: 'сделай штуку',
+      parent: null,
+      lean: true,
+    });
+    const first = (await readArgs(argsFile)).argv;
+    await service.stop(ref);
+    expect(first).toContain(LEAN_FLAG);
+
+    // Второй запуск перезапишет файл стаба: убираем первый, чтобы прочитать именно resume.
+    await rm(argsFile);
+    await service.launch(ref, 'resume');
+    const resumed = (await readArgs(argsFile)).argv;
+    await service.stop(ref);
+
+    expect(resumed).toContain('--resume');
+    expect(resumed).toContain(LEAN_FLAG);
+  });
+
+  it('сессия без lean в записи после resume по-прежнему без lean-флагов, даже при leanAgents: true', async () => {
+    await saveConfig({ leanAgents: true });
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: '',
+      task: 'сделай штуку',
+      parent: null,
+    });
+    await readArgs(argsFile);
+    await service.stop(ref);
+
+    await rm(argsFile);
+    await service.launch(ref, 'resume');
+    const resumed = (await readArgs(argsFile)).argv;
+    await service.stop(ref);
+
+    expect(resumed).toContain('--resume');
+    expect(resumed).not.toContain(LEAN_FLAG);
+  });
+
+  it('pending, заведённая spawn_session с lean в записи, запускается с lean-флагами (как поднимает autoLaunch)', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    // Так `spawn_session` агента заводит запись: решение «lean» лежит в карте, а поднимает её хост позже и без диалога.
+    const sessionId = await createPendingSession(project, work.work.id, {
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      lean: true,
+    });
+    const ref: SessionRef = { projectPath: project, workId: work.work.id, sessionId };
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    await service.launch(ref, 'launch', { by: 'auto' });
+
+    expect((await readArgs(argsFile)).argv).toContain(LEAN_FLAG);
     await service.stop(ref);
   });
 });

@@ -131,4 +131,19 @@ describe('preload: последний статус и тема', () => {
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith(batch);
   });
+
+  it('browser.onAgentOpenTab: просьба агента приходит подписчику, отписка снимает его; agentOpenTabResult зовёт browser:agent-open-tab-result (этап B2)', async () => {
+    const bridge = await loadPreload();
+    const { ipcRenderer } = await import('electron');
+    const listener = vi.fn();
+    const off = bridge.browser.onAgentOpenTab(listener);
+    const request = { requestId: 'r1', workKey: '/p w-1', url: 'http://localhost:5173/', sessionId: 's-02', session: 'S02', owner: { kind: 'session' as const, sessionId: 's-02' } };
+    emit('browser:agent-open-tab', request);
+    off();
+    emit('browser:agent-open-tab', request);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(request);
+    await bridge.browser.agentOpenTabResult('r1', { tabId: 'browser:abc123', reused: false, mounted: true });
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith('browser:agent-open-tab-result', 'r1', { tabId: 'browser:abc123', reused: false, mounted: true });
+  });
 });

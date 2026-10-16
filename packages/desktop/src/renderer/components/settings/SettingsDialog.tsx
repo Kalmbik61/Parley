@@ -274,6 +274,30 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   <span className="text-xs text-destructive">{errors.autoLaunch}</span>
                 ) : null}
 
+                {/* Ключа нет у хоста, оставшегося от прежней версии: он lean-запуск не знает, переключатель врал бы. */}
+                {config.leanAgents !== undefined ? (
+                  <>
+                    <label className="flex items-center justify-between gap-2 text-sm">
+                      <span>
+                        {S.settings.leanAgents}
+                        {locked.leanAgents !== undefined ? (
+                          <span className="text-muted-foreground"> {S.settings.lockedBy(locked.leanAgents)}</span>
+                        ) : null}
+                      </span>
+                      <Switch
+                        aria-label={S.settings.leanAgents}
+                        checked={config.leanAgents}
+                        disabled={locked.leanAgents !== undefined}
+                        onCheckedChange={(checked) => void save('leanAgents', checked ? 'true' : 'false')}
+                      />
+                    </label>
+                    <span className="text-xs text-muted-foreground">{S.settings.leanAgentsHint}</span>
+                    {errors.leanAgents !== undefined ? (
+                      <span className="text-xs text-destructive">{errors.leanAgents}</span>
+                    ) : null}
+                  </>
+                ) : null}
+
                 {/* Ключа нет у хоста, оставшегося от прежней версии: переключатель врал бы — ни поставить, ни
                     отключить скилл такой хост не умеет. */}
                 {config.agentSkills !== undefined ? (
@@ -435,6 +459,17 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
             <Button type="button" variant="outline" className="self-start" onClick={clearBrowserData}>
               {S.settings.clearBrowserData}
             </Button>
+            {/* Общий выключатель агентов (спека браузера 4.8): строка та же, что у уведомлений, а смысл свой — доступ агента. */}
+            {uiLoaded ? (
+              <>
+                <NotificationRow
+                  label={S.settings.letAgentsUseBrowser}
+                  checked={ui.browser.agentsAllowed}
+                  onCheckedChange={(checked) => patchUi({ browser: { ...ui.browser, agentsAllowed: checked } })}
+                />
+                <p className="text-xs text-muted-foreground">{S.settings.letAgentsUseBrowserHint}</p>
+              </>
+            ) : null}
           </TabsContent>
 
           <TabsContent value="voice">{uiLoaded ? <VoiceSettings /> : null}</TabsContent>
