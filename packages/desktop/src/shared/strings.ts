@@ -983,7 +983,7 @@ export const S = {
     /** Общий выключатель агентов в браузере (спека браузера 4.8, этап B2). */
     letAgentsUseBrowser: 'Let agents use the browser',
     letAgentsUseBrowserHint:
-      'Agents can open pages on localhost in a tab of their own workspace. Off: every browser request from an agent is refused.',
+      'Agents can open pages on localhost in the browser panel of their chat or room, list those pages, read their console and network log and take screenshots. Off: every browser request from an agent is refused.',
   },
 
   /** Тост о новой версии — `renderer/update/update-notice.ts` (V6 плана релиза 0.1.0). */
