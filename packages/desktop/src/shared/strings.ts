@@ -353,6 +353,14 @@ export const S = {
     send: 'Send',
   },
 
+  /** Очередь отправки окна (спека 2026-10-16, 4): серые элементы Chat и комнаты. */
+  outbox: {
+    sending: 'Sending…',
+    waiting: 'Waiting',
+    notSent: 'Not sent',
+    remove: 'Remove',
+  },
+
   /**
    * Девять слов состояния сессии (спека 4.2): ключи — те же, что отдаёт
    * `dot-state.ts#stateWord` (`exited` расщеплён на `asleep`/`closed` по

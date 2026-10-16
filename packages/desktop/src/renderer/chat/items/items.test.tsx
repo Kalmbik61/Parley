@@ -9,7 +9,7 @@ import { useState } from 'react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { FeedAgent, FeedItem, FeedState, FeedTool } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
@@ -308,10 +308,27 @@ describe('PromptItem — вложения: хвостовые упоминани
   });
 
   it('серый элемент очереди — те же чипы, подпись «Queued» и текст без путей', () => {
-    renderPrompt(<PromptItem text={'next @"/a/notes.txt" '} queued />);
+    renderPrompt(<PromptItem text={'next @"/a/notes.txt" '} state="queued" />);
     const grey = screen.getByTestId('chat-queued');
     expect(within(grey).getByTestId('chat-attachment').getAttribute('data-path')).toBe('/a/notes.txt');
     expect(grey.textContent).toBe(`notes.txtnext${S.chat.queued}`);
+  });
+
+  it('не ушедший элемент — «Not sent», Retry и × зовут свои колбэки; ждущий — «Waiting» без кнопок', () => {
+    const onRetry = vi.fn();
+    const onRemove = vi.fn();
+    const view = renderPrompt(<PromptItem text="later" state="failed" onRetry={onRetry} onRemove={onRemove} />);
+    const grey = screen.getByTestId('chat-queued');
+    expect(grey.getAttribute('data-state')).toBe('failed');
+    expect(grey.textContent).toContain(S.outbox.notSent);
+    fireEvent.click(within(grey).getByRole('button', { name: S.common.retry }));
+    fireEvent.click(within(grey).getByRole('button', { name: S.outbox.remove }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onRemove).toHaveBeenCalledTimes(1);
+    view.unmount();
+    renderPrompt(<PromptItem text="later" state="waiting" />);
+    expect(screen.getByTestId('chat-queued').textContent).toContain(S.outbox.waiting);
+    expect(screen.queryAllByRole('button')).toEqual([]);
   });
 
   it('лента: промпт и серый элемент очереди рисуют упоминания чипами', () => {
