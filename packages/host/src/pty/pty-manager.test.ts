@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import type { CodexSignal } from './codex-terminal.js';
+import { createWindowCounters } from '../health/window-counters.js';
 import { createPtyManager } from './pty-manager.js';
 import type { ExitInfo, PtyLaunch } from './pty-process.js';
 
@@ -66,6 +67,20 @@ afterEach(async () => {
 });
 
 describe('PtyManager', () => {
+  it('счётчики окна: каждый кусок вывода PTY считается кусками и байтами', async () => {
+    const windowCounters = createWindowCounters();
+    const manager = createPtyManager(fakeHost(), windowCounters);
+    const sessionRef = ref();
+    manager.start(sessionRef, launch());
+
+    await waitFor(() => manager.snapshot(sessionRef).snapshot.includes('STUB READY'));
+    const tally = windowCounters.read();
+    expect(tally.ptyChunks).toBeGreaterThan(0);
+    expect(tally.ptyBytes).toBeGreaterThanOrEqual('STUB READY'.length);
+
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+
   it('pty.attach: снимок сразу после старта содержит баннер стаба', async () => {
     const manager = createPtyManager(fakeHost());
     const sessionRef = ref();

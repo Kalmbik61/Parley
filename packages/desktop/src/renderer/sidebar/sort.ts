@@ -2,7 +2,8 @@
  * Порядок сайдбара (спека 6.1, 6.2): «Закреплённые», затем группы проектов;
  * внутри — где нужен человек, выше. Функции чистые: пересортировку под
  * указателем держит `use-deferred-order.ts`, а не этот модуль. Там же — состав строк одной
- * карточки (`cardRows`, спека окна 2026-09-29, 1.2): сессии и комнаты на месте своих участников.
+ * карточки (`cardRows`, спека окна 2026-09-29, 1.2): сессии и комнаты на месте своих участников; метки линий дерева
+ * от родителя к дочерним сессиям (`treeGuides`) считаются по этим же строкам.
  */
 
 import type { Room, WorkEntry, WorkMap, WorkSession } from '@parley/core';
@@ -208,14 +209,18 @@ export interface CardSessionRow {
   kind: 'session';
   session: WorkSession;
   depth: number;
+  /** Кто запустил сессию (`WorkSession.parent`); от этой строки до строки родителя идёт линия дерева (`treeGuides`). */
+  parent: string | null;
 }
 
 /** Строка карточки — комната; участники, что стоят в ней, отдельными строками карточки не выводятся. */
 export interface CardRoomRow {
   kind: 'room';
   room: Room;
-  /** Глубина её первого живого участника в дереве сессий (отступ `8 + 12·depth`); комната в конце — 0. */
+  /** Глубина её первого живого участника в дереве сессий (отступ `20·depth`, `TreeGuides.tsx`); комната в конце — 0. */
   depth: number;
+  /** `parent` того участника, что поставил комнату на карточку; комната в конце и архивная — `null`: линии дерева к ней нет. */
+  parent: string | null;
   /** Ведущий (`roomLiveLead`), `★` — у него; `null` — живых участников нет, комната закрыта. */
   lead: string | null;
   /** Участники, что стоят в этой комнате и показаны строками развёрнутой комнаты: закрытые — при `showClosed`. */
@@ -285,7 +290,7 @@ export function homeRoomOf(map: WorkMap, sessionId: string): Room | null {
 const staysOnCard = (session: WorkSession): boolean => session.lifecycle === 'active' || session.lifecycle === 'pending';
 
 /** Строка комнаты (`cardRows`, `archivedRows`): состав участников зависит от `home` и от того, в архиве ли комната. */
-function buildRoomRow(map: WorkMap, home: Map<string, Room>, showClosed: boolean, room: Room, depth: number): CardRoomRow {
+function buildRoomRow(map: WorkMap, home: Map<string, Room>, showClosed: boolean, room: Room, depth: number, parent: string | null): CardRoomRow {
   const archived = isRoomArchived(room);
   // Только те, кого сайдбар поставил в эту комнату: запись `room.members` старой карты может числить сессию и в другой.
   // Работающие участники архивной комнаты стоят на карточке своими строками (`staysOnCard`), второй раз их не выводим.
@@ -296,6 +301,7 @@ function buildRoomRow(map: WorkMap, home: Map<string, Room>, showClosed: boolean
     kind: 'room',
     room,
     depth,
+    parent,
     lead: roomLiveLead(map, room),
     members: sessions.filter((session) => showClosed || session.lifecycle !== 'closed'),
     sessions,
@@ -326,15 +332,15 @@ export function cardRows(map: WorkMap, showClosed: boolean): CardRow[] {
     const room = home.get(session.id);
     const inArchive = room !== undefined && isRoomArchived(room);
     if (room === undefined || (inArchive && staysOnCard(session))) {
-      if (live || showClosed) rows.push({ kind: 'session', session, depth });
+      if (live || showClosed) rows.push({ kind: 'session', session, depth, parent: session.parent });
     } else if (!inArchive && live && !emitted.has(room.id)) {
       // Спящая и закрытая сессия архивной комнаты (`inArchive`) строки не получает: она уходит с комнатой под ссылку.
       emitted.add(room.id);
-      rows.push(buildRoomRow(map, home, showClosed, room, depth));
+      rows.push(buildRoomRow(map, home, showClosed, room, depth, session.parent));
     }
   }
   for (const room of map.rooms) {
-    if (!emitted.has(room.id) && !isRoomArchived(room)) rows.push(buildRoomRow(map, home, showClosed, room, 0));
+    if (!emitted.has(room.id) && !isRoomArchived(room)) rows.push(buildRoomRow(map, home, showClosed, room, 0, null));
   }
   return rows;
 }
@@ -345,5 +351,50 @@ export function cardRows(map: WorkMap, showClosed: boolean): CardRow[] {
  */
 export function archivedRows(map: WorkMap, showClosed: boolean): CardRoomRow[] {
   const home = homeRooms(map);
-  return map.rooms.filter(isRoomArchived).map((room) => buildRoomRow(map, home, showClosed, room, 0));
+  return map.rooms.filter(isRoomArchived).map((room) => buildRoomRow(map, home, showClosed, room, 0, null));
+}
+
+/**
+ * Метка линии дерева в строке карточки (`TreeGuides.tsx` рисует её). `column` — глубина строки родителя: ствол ребра
+ * стоит в её колонке, под значком состояния. `start` — ствол начинается под значком строки родителя и идёт до её низа;
+ * `pass` — ствол проходит строку насквозь; `elbow` — у строки ребёнка ствол доходит до середины и скруглённым углом
+ * поворачивает вправо, к краю подсветки строки.
+ */
+export interface TreeGuide {
+  kind: 'start' | 'pass' | 'elbow';
+  column: number;
+}
+
+/** Строка без меток: одна общая пустышка, чтобы `memo` строк не сбивался на каждом проходе. */
+export const NO_GUIDES: readonly TreeGuide[] = [];
+
+/** Строка карточки показывает сессию `id`: строка сессии или строка комнаты, где она стоит среди участников. */
+const rowHolds = (row: CardRow, id: string): boolean =>
+  row.kind === 'session' ? row.session.id === id : row.sessions.some((member) => member.id === id);
+
+/**
+ * Метки линий дерева по строкам карточки (`cardRows`), по массиву на строку. Ребро — от строки ребёнка `i` к ближайшей
+ * выше строке `j`, что показывает его родителя (`CardRow.parent`): `start` у `j`, `pass` у строк строго между ними,
+ * `elbow` у `i`; ответвление к старшему из детей и ствол к младшим получаются сами — у строки две метки. Ребра нет,
+ * если строки родителя выше не видно (закрыт и спрятан под «N more closed», архив) или ребёнок стоит не правее колонки
+ * родителя (строка комнаты, поставленная участником с другой глубиной): линия вела бы к чужой строке или назад.
+ */
+export function treeGuides(rows: readonly CardRow[]): Array<readonly TreeGuide[]> {
+  const marks: TreeGuide[][] = rows.map(() => []);
+  const add = (index: number, guide: TreeGuide): void => {
+    const list = marks[index];
+    if (list !== undefined && !list.some((item) => item.kind === guide.kind && item.column === guide.column)) list.push(guide);
+  };
+  rows.forEach((row, index) => {
+    const { parent } = row;
+    if (parent === null) return;
+    let from = index - 1;
+    while (from >= 0 && !rowHolds(rows[from] as CardRow, parent)) from -= 1;
+    const column = rows[from]?.depth;
+    if (column === undefined || row.depth <= column) return;
+    add(from, { kind: 'start', column });
+    for (let between = from + 1; between < index; between += 1) add(between, { kind: 'pass', column });
+    add(index, { kind: 'elbow', column });
+  });
+  return marks.map((list) => (list.length === 0 ? NO_GUIDES : list));
 }

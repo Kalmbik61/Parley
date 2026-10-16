@@ -33,6 +33,10 @@ Chats and rooms get a browser of their own next to the view, and an agent can sh
   project's `CLAUDE.md` stay. It applies to sessions created after you update; turn it off in Settings → Agents
   ("Lean agent sessions") or with `PARLEY_LEAN_AGENTS=0`. A session you start from the New session dialog is
   lean only if you tick "Lean session".
+- **Numbers for a "Parley feels slow" report.** The host status line and the diagnostics archive now carry
+  per-window counters: how many times the workspace maps were re-read and how long that took, how many
+  bytes of map JSON were parsed, how much terminal output arrived (chunks and bytes), and how many session
+  recomputes the wake and activity services did. The counters cover the time since the previous status line.
 
 ### Fixed
 
@@ -61,6 +65,20 @@ Chats and rooms get a browser of their own next to the view, and an agent can sh
   `shortcut: <the limit>, <when to replace it>` comment, leaves a small test for new non-trivial logic, and ends
   a task's final report with what it skipped and any risk. Copies Parley installed update on the next agent
   launch; a copy you edited is left alone.
+- **Agents get clear rules for room correspondence.** The guide now tells them to keep a letter under
+  1200 characters, to put documents and file edits into a file and send only its path, not to quote
+  earlier messages (use `replyTo` instead), to call `read_room` only when they really need the history,
+  and to read the room map through the tools instead of opening `map.json`.
+- **Sessions started by another session hang off their parent in the sidebar.** A thin line runs from the parent's
+  status dot down to each session it started, like a tree, and the indent grows from 12 to 20 px per level. A
+  child whose parent row is hidden under "N more closed" has no line.
+
+### Fixed
+
+- **Oversized letters no longer slip through `send_message`.** The 4096-character limit was only declared
+  in the tool schema, so letters of 54 KB went through; the server now enforces it, and a letter above
+  1200 characters comes back with a warning to shorten it. Letters are never truncated, and letters sent
+  from the window are not affected.
 
 ## 0.14.0
 

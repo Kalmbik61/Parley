@@ -182,6 +182,21 @@ describe('rooms.create / rooms.send', () => {
     });
   });
 
+  it('rooms.send: письмо человека на 5000 знаков проходит целиком — потолок send_message касается только агентов', async () => {
+    const { client, dir, workId, ids } = await setup();
+    const [a] = ids as [string];
+    const text = 'ж'.repeat(5000);
+
+    const sent = await call(client, 'rooms.send', { projectPath: dir, workId, roomId: null, to: [a], text, kind: 'note' });
+    expect(sent.error).toBeUndefined();
+    expect(sent.result).not.toHaveProperty('warning');
+
+    const map = await readMap(dir, workId);
+    expect(map.messages).toHaveLength(1);
+    expect(map.messages[0]).toMatchObject({ from: HUMAN, to: [a], text });
+    expect(map.messages[0]?.text).toHaveLength(5000);
+  });
+
   it('5: rooms.send в комнату, где адресат не участник, — bad_request, письма нет', async () => {
     const { client, dir, workId, ids } = await setup();
     const [a, b, outsider] = ids as [string, string, string];

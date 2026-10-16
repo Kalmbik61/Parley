@@ -2,7 +2,7 @@
  * Тесты 4, 11, 12, 13 куска 3.3: строка сессии карточки. Тест 12 переехал сюда из
  * тестов прежнего дерева сессий (контракт перетаскивания 2.6), удалённого в 3.5.
  *
- * Облик Organic (спека окна 2026-09-29, 1.2): пилюля 26px, отступ слева 8 + 12 на уровень, зазор 6,
+ * Облик Organic (спека окна 2026-09-29, 1.2): пилюля 26px, сдвиг 20 на уровень через marginLeft и отступ слева 8, зазор 6,
  * 12px; значок состояния 12, значок агента 13, слово состояния 11px строчными, ветка своего worktree —
  * значок GitBranch 11, время 10px шириной 22. Подкраска: `blocked` — `accent-200` (слово `accent-800`),
  * `unseen` — `accent-2-200` (слово `accent-2-800`), выбранная и hover — `text 9%`; закрытая — .5 при
@@ -203,14 +203,54 @@ describe('SessionRow — девять состояний таблицы 4.2 (т�
     expect(screen.getByText(S.states.working).className).toContain('text-[11px]');
   });
 
-  it('отступ слева — 8 + 12 на уровень', () => {
+  it('уровень сдвигает строку через marginLeft на 20, отступ слева всегда 8: заливка начинается после изгиба линии дерева', () => {
     render(
       <SessionRow workKey={KEY} projectPath={PROJECT} workId={WORK} bridge={BRIDGE} session={makeSession('s-02', 'b')} depth={2} activity={null} now={NOW} draggable selected={false} onOpen={() => {}} />,
     );
-    expect(row('s-02').style.paddingLeft).toBe('32px');
+    expect(row('s-02').style.marginLeft).toBe('40px');
+    expect(row('s-02').style.paddingLeft).toBe('8px');
     cleanup();
     renderRow(makeSession('s-01', 'a'));
+    expect(row('s-01').style.marginLeft).toBe('0px');
     expect(row('s-01').style.paddingLeft).toBe('8px');
+  });
+
+  it('линии дерева: метки рисуются внутри строки, по оси значка родителя, без событий указателя; без меток спанов нет', () => {
+    renderRow(makeSession('s-01', 'a'));
+    expect(row().querySelector('[data-tree-guide]')).toBeNull();
+    cleanup();
+    render(
+      <SessionRow
+        workKey={KEY}
+        projectPath={PROJECT}
+        workId={WORK}
+        bridge={BRIDGE}
+        session={makeSession('s-03', 'c', { parent: 's-01' })}
+        depth={1}
+        activity={null}
+        now={NOW}
+        draggable
+        selected={false}
+        onOpen={() => {}}
+        guides={[
+          { kind: 'elbow', column: 0 },
+          { kind: 'pass', column: 0 },
+        ]}
+      />,
+    );
+    const elbow = row('s-03').querySelector<HTMLElement>('[data-tree-guide="elbow"]') as HTMLElement;
+    // Ось родителя — 14 от края блока, строка сдвинута на 20: ось на 6 левее края строки, угол длиной 6 до края заливки.
+    expect(elbow.style.left).toBe('-6px');
+    expect(elbow.style.width).toBe('6px');
+    expect(elbow.style.height).toBe('13px');
+    expect(elbow.getAttribute('aria-hidden')).toBe('true');
+    expect(elbow.className).toContain('pointer-events-none');
+    expect(elbow.className).toContain('absolute');
+    expect(row('s-03').className).toMatch(/\brelative\b/);
+    const pass = row('s-03').querySelector<HTMLElement>('[data-tree-guide="pass"]') as HTMLElement;
+    expect(pass.style.left).toBe('-6px');
+    expect(pass.style.top).toBe('0px');
+    expect(pass.style.bottom).toBe('-1px');
   });
 
   it('длинная метка (40 знаков) не выталкивает слово и время: метка сжимается многоточием, но не уже 5ch (номер S01…)', () => {
@@ -244,9 +284,10 @@ describe('SessionRow — участник комнаты (кусок 5)', () => 
       <SessionRow workKey={KEY} projectPath={PROJECT} workId={WORK} bridge={BRIDGE} session={session} depth={3} activity={null} now={NOW} draggable selected={false} onOpen={() => {}} inRoom lead={lead} />,
     );
 
-  it('отступ слева 18 (глубина не в счёт), правое поле 0; обычная строка держит 8 + 12·depth и 6', () => {
+  it('отступ слева 18 (глубина не в счёт), без marginLeft, правое поле 0; обычная строка держит marginLeft 20·depth, 8 и 6', () => {
     inRoom(makeSession('s-01', 'a'), false);
     expect(row().style.paddingLeft).toBe('18px');
+    expect(row().style.marginLeft).toBe('');
     expect(row().className).toMatch(/\bpr-0\b/);
     expect(row().className).not.toMatch(/\bpr-1\.5\b/);
     expect(row().className).toMatch(/\bh-\[26px\]/);

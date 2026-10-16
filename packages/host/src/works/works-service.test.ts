@@ -11,6 +11,7 @@ import {
 } from '@parley/core';
 import type { EventData, EventName } from '@parley/protocol';
 import type { HostContext } from '../context.js';
+import { createWindowCounters } from '../health/window-counters.js';
 import { createWorksService } from './works-service.js';
 import type { WorksService } from './works-service.js';
 
@@ -117,6 +118,57 @@ describe('источники', () => {
     } finally {
       await rm(brandNewProject, { recursive: true, force: true });
     }
+  });
+});
+
+describe('счётчики окна', () => {
+  it('start читает N карт один раз: байты равны сумме размеров файлов, refresh считан один раз', async () => {
+    const first = await createWork(projectA, { title: 'Первая' });
+    const second = await createWork(projectA, { title: 'Вторая с чуть более длинным названием' });
+    const windowCounters = createWindowCounters();
+
+    const s = service({ windowCounters });
+    await s.start();
+
+    const sizes = await Promise.all(
+      [first, second].map(async (map) =>
+        Buffer.byteLength(await readFile(workPaths(projectA, map.work.id).map, 'utf8')),
+      ),
+    );
+    const tally = windowCounters.read();
+    expect(tally.mapBytesParsed).toBe(sizes[0]! + sizes[1]!);
+    // Число проходов не фиксируем: пока идёт start, наблюдатель может прислать своё событие и добавить ещё один refresh.
+    expect(tally.refreshCount).toBeGreaterThanOrEqual(1);
+    expect(tally.refreshMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('карта, пришедшая через наблюдатель, добавляет свои байты к mapBytesParsed', async () => {
+    const windowCounters = createWindowCounters();
+    const s = service({ debounceMs: 50, windowCounters });
+    await s.start();
+    const afterStart = windowCounters.read().mapBytesParsed;
+
+    const work = await createWork(projectA, { title: 'Через наблюдатель' });
+    await vi.waitFor(
+      () => expect(s.snapshot().entries.map((entry) => entry.map.work.id)).toContain(work.work.id),
+      { timeout: 10_000, interval: 5 },
+    );
+
+    const size = Buffer.byteLength(await readFile(workPaths(projectA, work.work.id).map, 'utf8'));
+    // Наблюдатель мог прочитать список не раз (карта, .bak, индекс), поэтому не меньше размера, а не равенство.
+    expect(windowCounters.read().mapBytesParsed - afterStart).toBeGreaterThanOrEqual(size);
+  }, 20_000);
+
+  it('проход refresh, упавший в слушателе, всё равно считается', async () => {
+    const windowCounters = createWindowCounters();
+    const s = service({ windowCounters });
+    s.onChange(() => {
+      throw new Error('сбой слушателя');
+    });
+
+    await expect(s.start()).rejects.toThrow('сбой слушателя');
+
+    expect(windowCounters.read().refreshCount).toBeGreaterThanOrEqual(1);
   });
 });
 

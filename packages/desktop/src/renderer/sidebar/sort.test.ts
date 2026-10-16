@@ -3,7 +3,7 @@ import type { Message, Proposal, Room, WorkEntry, WorkMap, WorkSession, WorkStat
 import { workAttention, type Attention, type WorkAttention } from '../attention/derive.js';
 import { workKey } from '../lib/tree-order.js';
 import { activityMap, makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { archivedRows, buildSections, cardRows, compareWorks, homeRoomOf, neighborInOrder, visibleWorkOrder, type CardRow } from './sort.js';
+import { archivedRows, buildSections, cardRows, compareWorks, homeRoomOf, NO_GUIDES, neighborInOrder, treeGuides, visibleWorkOrder, type CardRow, type TreeGuide } from './sort.js';
 
 function att(level: Attention, lastEventAt = '2026-09-27T09:00:00.000Z'): WorkAttention {
   return {
@@ -602,5 +602,100 @@ describe('cardRows и archivedRows — архивные комнаты (5.1)', (
     expect(byId([target, other])?.archiveStops.map((member) => member.id)).toEqual(['s-01']);
     // Соседка в архиве — она комнатой не считается: оба участника остаются без открытой комнаты.
     expect(byId([target, { ...other, archivedAt: ARCHIVED_AT }])?.archiveStops.map((member) => member.id)).toEqual(['s-01', 's-02']);
+  });
+});
+
+// Линии дерева от родителя к дочерним сессиям (`treeGuides`): метки по строкам `cardRows`, рисует их `TreeGuides.tsx`.
+describe('treeGuides — линии дерева в карточке', () => {
+  const room = (id: string, members: string[], patch: Partial<Room> = {}): Room => ({ ...makeRoom(id, id), members, lead: members[0] ?? null, ...patch });
+  const map = (list: WorkSession[], rooms: Room[] = []): WorkMap => makeWork('w-01', { sessions: list, rooms }).map;
+  const s = (id: string, parent: string | null = null, patch: Partial<WorkSession> = {}): WorkSession => makeSession(id, id, { parent, ...patch });
+  /** Метки строки как `kind+column`, по алфавиту: `elbow0`, `pass0`, `start1`. */
+  const marks = (guides: readonly TreeGuide[]): string[] => guides.map((guide) => `${guide.kind}${guide.column}`).sort();
+  const rowId = (row: CardRow): string => (row.kind === 'session' ? row.session.id : row.room.id);
+
+  it('родитель, два ребёнка и внук у первого: ствол родителя идёт сквозь внука к младшему ребёнку, у каждого ребёнка свой изгиб', () => {
+    const rows = cardRows(map([s('s-01'), s('s-02', 's-01'), s('s-03', 's-01'), s('s-04', 's-02')]), false);
+    expect(rows.map(rowId)).toEqual(['s-01', 's-02', 's-04', 's-03']);
+    const guides = treeGuides(rows);
+    expect(guides.map(marks)).toEqual([
+      ['start0'],
+      // s-02: свой изгиб, ствол его же ребёнка s-04 (колонка 1) и ствол родителя к s-03 сквозь строку — «├».
+      ['elbow0', 'pass0', 'start1'],
+      ['elbow1', 'pass0'],
+      ['elbow0'],
+    ]);
+
+    // Инвариант: у каждого изгиба в колонке c ближайшая выше строка со `start` в c — родитель; все строки между ними несут `pass` в c.
+    guides.forEach((list, index) => {
+      for (const { kind, column } of list) {
+        if (kind !== 'elbow') continue;
+        let from = index - 1;
+        while (from >= 0 && !(guides[from] ?? []).some((guide) => guide.kind === 'start' && guide.column === column)) from -= 1;
+        expect(from, `родитель изгиба в строке ${index}`).toBeGreaterThanOrEqual(0);
+        for (let between = from + 1; between < index; between += 1) {
+          expect((guides[between] ?? []).some((guide) => guide.kind === 'pass' && guide.column === column), `pass в строке ${between}`).toBe(true);
+        }
+      }
+    });
+  });
+
+  it('одинаковые метки схлопнуты: два брата — один ствол родителя сквозь строку первого, а не два', () => {
+    const rows = cardRows(map([s('s-01'), s('s-02', 's-01'), s('s-03', 's-01'), s('s-04', 's-01')]), false);
+    const [, second, third] = treeGuides(rows);
+    expect(marks(second ?? [])).toEqual(['elbow0', 'pass0']);
+    expect(marks(third ?? [])).toEqual(['elbow0', 'pass0']);
+    expect(treeGuides(rows).every((list) => list.filter((guide) => guide.kind === 'pass').length <= 1)).toBe(true);
+  });
+
+  it('родитель закрыт и спрятан (showClosed = false) — к ребёнку линии нет, ребёнок остаётся с отступом своей глубины; линия внука к ребёнку цела', () => {
+    const list = [s('s-01', null, { lifecycle: 'closed' }), s('s-02', 's-01'), s('s-03', 's-02')];
+    const hidden = cardRows(map(list), false);
+    expect(hidden.map(rowId)).toEqual(['s-02', 's-03']);
+    expect(hidden.map((row) => row.depth)).toEqual([1, 2]);
+    // У s-02 нет изгиба (строки s-01 выше нет), ни у кого нет меток колонки 0; ребро s-03 → s-02 цело.
+    expect(treeGuides(hidden).map(marks)).toEqual([['start1'], ['elbow1']]);
+    // С раскрытым «N more closed» строка родителя на месте — и линия к ребёнку тоже.
+    expect(treeGuides(cardRows(map(list), true)).map(marks)).toEqual([['start0'], ['elbow0', 'start1'], ['elbow1']]);
+  });
+
+  it('ребёнок в комнате: изгиб у строки комнаты, если её поставил он; родитель в комнате — ствол начинается у строки комнаты', () => {
+    const child = cardRows(map([s('s-01'), s('s-02', 's-01')], [room('r-01', ['s-02'])]), false);
+    expect(child.map(rowId)).toEqual(['s-01', 'r-01']);
+    expect(child[1]).toMatchObject({ kind: 'room', depth: 1, parent: 's-01' });
+    expect(treeGuides(child).map(marks)).toEqual([['start0'], ['elbow0']]);
+
+    const parent = cardRows(map([s('s-01'), s('s-02', 's-01')], [room('r-01', ['s-01'])]), false);
+    expect(parent.map(rowId)).toEqual(['r-01', 's-02']);
+    expect(treeGuides(parent).map(marks)).toEqual([['start0'], ['elbow0']]);
+  });
+
+  it('ребёнок и родитель в одной комнате: строка одна, линии нет; комната в конце без участников и архивная — без меток', () => {
+    const same = cardRows(map([s('s-01'), s('s-02', 's-01')], [room('r-01', ['s-01', 's-02'])]), false);
+    expect(same.map(rowId)).toEqual(['r-01']);
+    expect(treeGuides(same).map(marks)).toEqual([[]]);
+
+    const tail = cardRows(map([s('s-01')], [room('r-01', [])]), false);
+    expect(tail.map(rowId)).toEqual(['s-01', 'r-01']);
+    expect(tail[1]).toMatchObject({ kind: 'room', parent: null });
+    expect(treeGuides(tail).map(marks)).toEqual([[], []]);
+
+    const archived = archivedRows(map([s('s-01')], [room('r-02', ['s-01'], { archivedAt: '2026-10-08T12:00:00.000Z' })]), false);
+    expect(archived.every((row) => row.parent === null)).toBe(true);
+  });
+
+  it('ребёнок не правее колонки строки родителя (родитель — неведущий участник комнаты на другой глубине) — ребра нет, линия не уходит назад', () => {
+    // R1 стоит на s-03 (глубина 2) и держит ещё корень s-04; его ребёнок s-05 (глубина 1) оказывается левее колонки R1.
+    const rows = cardRows(map([s('s-01'), s('s-02', 's-01'), s('s-03', 's-02'), s('s-04'), s('s-05', 's-04')], [room('r-01', ['s-03', 's-04'])]), false);
+    expect(rows.map(rowId)).toEqual(['s-01', 's-02', 'r-01', 's-05']);
+    expect(rows.map((row) => row.depth)).toEqual([0, 1, 2, 1]);
+    expect(treeGuides(rows).map(marks)).toEqual([['start0'], ['elbow0', 'start1'], ['elbow1'], []]);
+  });
+
+  it('сессии без родителей и родитель, которого нет в карте, — без меток, строки делят общую пустую константу', () => {
+    const rows = cardRows(map([s('s-01'), s('s-02'), s('s-03', 's-missing')]), false);
+    const guides = treeGuides(rows);
+    expect(guides).toHaveLength(3);
+    expect(guides.every((list) => list === NO_GUIDES)).toBe(true);
   });
 });
