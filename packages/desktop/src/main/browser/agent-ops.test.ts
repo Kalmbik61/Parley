@@ -276,6 +276,23 @@ describe('open: выбор хозяина (спека 5.1, 3.10)', () => {
   });
 });
 
+
+describe('open: пауза панели хозяина (S5)', () => {
+  it('панель хозяина на паузе: browser_open — access_denied «paused by the human», окну ничего (asked пуст)', async () => {
+    const { ops, run, asked } = setup({ owners: [OWN, ROOM] });
+    ops.registerTab({ workKey: WORK, owner: OWN, paused: true });
+    ops.registerTab({ workKey: WORK, owner: ROOM, paused: true });
+    for (const args of [{ url: PAGE, own: true }, { url: PAGE, room: 'r-01' }, { url: PAGE }]) {
+      const result = await run(args);
+      expect(codeOf(result)).toBe('access_denied');
+      expect(messageOf(result)).toContain('paused by the human');
+    }
+    expect(asked).toEqual([]);
+    ops.registerTab({ workKey: WORK, owner: OWN, paused: false });
+    expect(codeOf(await run({ url: PAGE, own: true }))).toBe('ok');
+  });
+});
+
 describe('окно ушло или молчит (Фокус ревью, п. 4)', () => {
   it('окна нет (просьба не ушла) и окно закрылось посреди вызова — window_not_connected сразу', async () => {
     const none = setup({ sent: false });

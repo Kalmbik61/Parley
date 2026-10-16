@@ -213,6 +213,8 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     }
     const owner = ownerOf(request, args);
     const workKey = workKeyOf(request.ref.projectPath, request.ref.workId);
+    // Человек приостановил агентов в этой панели: страницу в ней не открываем, как не работаем с уже открытыми (спека 4.8, S5).
+    if (registry.isPaused(workKey, owner)) throw new AgentOpError('access_denied', 'The human paused agents in this browser panel (paused by the human).');
     const answer = await askWindow({ requestId: randomUUID(), workKey, url, sessionId: request.ref.sessionId, session: request.label, owner });
     if (answer === 'no_window') throw new AgentOpError('window_not_connected', "Parley's window is not ready: ask the human to open it.");
     if (answer === 'timeout') throw new AgentOpError('timeout', `The window did not place the tab within ${Math.round(openMs / 1000)} s.`);
