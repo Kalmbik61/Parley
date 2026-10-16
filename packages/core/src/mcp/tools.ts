@@ -1700,7 +1700,7 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
 
   const navigator = context.skillNavigator === true ? skillNavigator(context) : null;
   // Инструмент браузера окна (спека браузера 2026-10-07, 3.7) — только при канале агента в окружении сервера.
-  const browser = context.agent === undefined ? null : createBrowserTools(context.agent);
+  const browser = context.agent === undefined ? null : createBrowserTools(context.agent, { clientName: () => server.getClientVersion()?.name });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [...TOOLS, ...(browser?.tools ?? []), ...(navigator ? [await navigator.list()] : [])],
   }));

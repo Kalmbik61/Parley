@@ -16,6 +16,8 @@ import type { Inspector } from './inspector.js';
 
 /** Ответ `Page.getLayoutMetrics`: нужные поля. */
 export interface LayoutMetrics {
+  /** Вьюпорт в пикселях устройства: отношение его ширины к CSS-ширине — DPR. */
+  layoutViewport: { clientWidth: number; clientHeight: number };
   cssLayoutViewport: { clientWidth: number; clientHeight: number; pageX: number; pageY: number };
   cssContentSize: { x: number; y: number; width: number; height: number };
 }

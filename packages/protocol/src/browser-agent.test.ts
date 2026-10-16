@@ -51,6 +51,7 @@ describe('канал агента к браузеру: константы (сп�
       panelPages: 5,
       captureReadyMs: 2000,
       captureRetries: 2,
+      screenshotBytes: 3_500_000,
     });
     expect(AGENT_INPUT).toEqual({ url: 4096, room: 64, pattern: 200, requestId: 200 });
     expect(AGENT_VIEWPORT).toEqual({ min: 200, maxWidth: 3840, maxHeight: 2400 });

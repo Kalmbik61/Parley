@@ -19,6 +19,7 @@ import { AgentOpError } from './agent-errors.js';
 import type { LayoutMetrics, PageRecord, PageRegistry } from './agent-pages.js';
 import type { Emulation } from './emulation.js';
 import type { Inspector } from './inspector.js';
+import { pngSize } from './png.js';
 import { isLoopbackUrl } from '../../shared/loopback.js';
 
 /** Размер снимка агента: совпал с пресетом в любой ориентации — пресет, иначе Custom; DPR 1 — PNG в CSS-пикселях. */
@@ -30,6 +31,17 @@ export function captureSpec(width: number, height: number): ViewportSpec {
   return { width, height, mobile: false, dpr: 1 };
 }
 
+/** Во сколько раз сужается снимок при повторе, когда PNG не влез в `AGENT_LIMITS.screenshotBytes`. */
+const OVERSIZE_FACTOR = 0.7;
+/** Сколько раз повторяют снимок, не влезший в предел байт. */
+const OVERSIZE_RETRIES = 2;
+
+/** Отношение пикселей устройства к CSS-пикселям вьюпорта; не число или не больше нуля — 1. */
+export function dprOf(metrics: LayoutMetrics): number {
+  const ratio = metrics.layoutViewport?.clientWidth / metrics.cssLayoutViewport.clientWidth;
+  return Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+}
+
 /** Пауза перед повтором снимка невидимой страницы, мс. */
 const CAPTURE_RETRY_MS = 50;
 
@@ -39,13 +51,23 @@ const CAPTURE_RETRY_MS = 50;
  */
 const SURFACE_HEIGHT_FACTOR = 1.2;
 
+/** Область снимка в CSS-пикселях страницы и масштаб PNG (`Page.captureScreenshot.clip`). */
+interface Clip {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale: number;
+}
+
 export interface AgentCaptureDeps {
   inspector: Pick<Inspector, 'send' | 'snapshot'>;
   emulation: Pick<Emulation, 'current' | 'withTemporary'>;
+  /** DPR окна, в котором лежит гость (`window.devicePixelRatio` окна); `null` или метода нет — по `Page.getLayoutMetrics` (без эмуляции человека), иначе 1. */
+  screenDpr?(contents: WebContents): Promise<number | null>;
   registry: Pick<PageRegistry, 'fresh'>;
   saveImage(png: Buffer): Promise<string | null>;
   image: {
-    size(png: Buffer): { width: number; height: number };
     resize(png: Buffer, width: number, height: number): Buffer;
     stitch(parts: Buffer[]): Buffer;
     /** Строки PNG `top`…`top + height` (в пикселях картинки) на всю её ширину. */
@@ -94,7 +116,7 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
 
   /** Длинная сторона PNG — не больше `AGENT_LIMITS.screenshotLongSide` (предел картинки, которую модель читает целиком). */
   function fitLongSide(png: Buffer): Buffer {
-    const size = deps.image.size(png);
+    const size = pngSize(png);
     const long = Math.max(size.width, size.height);
     if (long <= AGENT_LIMITS.screenshotLongSide) return png;
     const scale = AGENT_LIMITS.screenshotLongSide / long;
@@ -125,10 +147,10 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
       surfaced = true;
     };
 
-    const shoot = async (): Promise<Buffer> => {
+    const shoot = async (clip: Clip | null): Promise<Buffer> => {
       for (let failures = 0; ; ) {
         try {
-          const shot = await deps.inspector.send<{ data: string }>(id, 'Page.captureScreenshot', { format: 'png' });
+          const shot = await deps.inspector.send<{ data: string }>(id, 'Page.captureScreenshot', clip === null ? { format: 'png' } : { format: 'png', clip });
           return Buffer.from(shot.data, 'base64');
         } catch (error) {
           // Видимость читается из реестра сейчас: за время снимка человек мог показать страницу или спрятать её.
@@ -151,16 +173,32 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
     const evaluate = (code: string): Promise<unknown> => deps.inGuest(contents, code);
 
     const notes: string[] = [];
-    const capture = async (): Promise<{ png: Buffer; viewport: { width: number; height: number } }> => {
-      if (spec !== null || (deps.registry.fresh(record) ?? record).visible === false) await ensureSurface();
-      if (args.fullPage !== true) return { png: await shoot(), viewport: view };
+    /**
+     * Клип с масштабом уменьшает PNG прямо в Chromium, без декода на main, но на экране с DPR > 1 он ненадёжен: сразу после
+     * смены размера Chromium отдаёт то верный кадр, то неверную четверть страницы (спайк 0, В3; повтор пробы на DPR 2 дал то же).
+     * Поэтому клип — только на экране с DPR 1; fullPage его не берёт: полосы склеиваются на main, длинная сторона режется после
+     * склейки. Эмуляция на экране DPR > 1 берёт DPR экрана (`withTemporary`): с DPR 1 она не действует и кадр выходит четвертью.
+     */
+    const screenDpr = (await deps.screenDpr?.(contents)) ?? (deps.emulation.current(id) === null ? dprOf(metrics) : 1);
+    const canClip = args.fullPage !== true && screenDpr <= 1;
+    /** Масштаб PNG: длинная сторона не больше предела картинки; `factor` — сужение при повторе. */
+    const scaleFor = (cssWidth: number, cssHeight: number, factor: number): number =>
+      Math.min(1, AGENT_LIMITS.screenshotLongSide / Math.max(cssWidth, cssHeight)) * factor;
+    type Taken = { png: Buffer; viewport: { width: number; height: number }; clipped: boolean };
+    const takeOnce = async (factor: number): Promise<Taken> => {
+      // Место вьюпорта и высота страницы — сейчас, при поставленной эмуляции и поверхности: в начале операции там были размеры человека.
+      const now = await deps.inspector.send<LayoutMetrics>(id, 'Page.getLayoutMetrics');
+      if (args.fullPage !== true) {
+        const scale = scaleFor(view.width, view.height, factor);
+        const clip = { x: now.cssLayoutViewport.pageX, y: now.cssLayoutViewport.pageY, width: view.width, height: view.height, scale };
+        return { png: await shoot(canClip && scale < 1 ? clip : null), viewport: view, clipped: canClip };
+      }
       // Высота страницы — уже при нужном размере (под временной эмуляцией вёрстка другая).
-      const page = await deps.inspector.send<LayoutMetrics>(id, 'Page.getLayoutMetrics');
-      const content = Math.max(view.height, Math.ceil(page.cssContentSize.height));
+      const content = Math.max(view.height, Math.ceil(now.cssContentSize.height));
       const total = Math.min(content, view.height * AGENT_LIMITS.fullPageViewports);
-      if (content > total) notes.push(`The page is ${content} px tall; the screenshot shows the first ${total} px (${AGENT_LIMITS.fullPageViewports} viewport heights).`);
-      const wide = Math.ceil(page.cssContentSize.width);
-      if (wide > view.width) notes.push(`The page is ${wide} px wide; the screenshot shows the first ${view.width} px.`);
+      if (content > total && factor === 1) notes.push(`The page is ${content} px tall; the screenshot shows the first ${total} px (${AGENT_LIMITS.fullPageViewports} viewport heights).`);
+      const wide = Math.ceil(now.cssContentSize.width);
+      if (wide > view.width && factor === 1) notes.push(`The page is ${wide} px wide; the screenshot shows the first ${view.width} px.`);
       const origin = await evaluate('[window.scrollX, window.scrollY]');
       const strips: Buffer[] = [];
       try {
@@ -173,11 +211,11 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
           const at = typeof reached === 'number' ? reached : y;
           const rows = Math.min(view.height, total - y);
           const skip = Math.max(0, y - at);
-          const shot = await shoot();
+          const shot = await shoot(null);
           if (skip === 0 && rows === view.height) {
             strips.push(shot);
           } else {
-            const ratio = deps.image.size(shot).width / view.width;
+            const ratio = pngSize(shot).width / view.width;
             strips.push(deps.image.crop(shot, Math.round(skip * ratio), Math.round(rows * ratio)));
           }
         }
@@ -186,10 +224,28 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
         const [x, top] = Array.isArray(origin) ? (origin as unknown[]) : [0, 0];
         if (typeof x === 'number' && typeof top === 'number') await evaluate(`window.scrollTo(${x}, ${top})`).catch(() => undefined);
       }
-      return { png: strips.length === 1 ? (strips[0] as Buffer) : deps.image.stitch(strips), viewport: { width: view.width, height: total } };
+      return { png: strips.length === 1 ? (strips[0] as Buffer) : deps.image.stitch(strips), viewport: { width: view.width, height: total }, clipped: false };
+    };
+    const capture = async (): Promise<{ png: Buffer; viewport: { width: number; height: number } }> => {
+      if (spec !== null || (deps.registry.fresh(record) ?? record).visible === false) await ensureSurface();
+      // PNG, не влезший в предел байт, снимается ещё раз уже (клип с масштабом — картинку на main не декодируем); без клипа
+      // (экран с DPR > 1) уменьшается уже снятая.
+      let taken = await takeOnce(1);
+      for (let attempt = 1, factor = OVERSIZE_FACTOR; taken.png.length > AGENT_LIMITS.screenshotBytes; attempt += 1, factor *= OVERSIZE_FACTOR) {
+        if (attempt > OVERSIZE_RETRIES) {
+          throw new AgentOpError('unsupported', `The screenshot is too large (over ${Math.round(AGENT_LIMITS.screenshotBytes / 1_000_000)} MB even after reducing it): take a screenshot of a smaller size or of part of the page.`);
+        }
+        if (taken.clipped) {
+          taken = await takeOnce(factor);
+        } else {
+          const size = pngSize(taken.png);
+          taken = { ...taken, png: deps.image.resize(taken.png, Math.max(1, Math.round(size.width * OVERSIZE_FACTOR)), Math.max(1, Math.round(size.height * OVERSIZE_FACTOR))) };
+        }
+      }
+      return { png: taken.png, viewport: taken.viewport };
     };
 
-    const taken = spec === null ? await capture() : await deps.emulation.withTemporary(id, spec, capture);
+    const taken = spec === null ? await capture() : screenDpr > 1 ? await deps.emulation.withTemporary(id, spec, capture, screenDpr) : await deps.emulation.withTemporary(id, spec, capture);
     // Страница могла уйти с localhost или сменить документ, пока снимали (редирект dev-сервера): чужое в drops не кладём.
     if (!isLoopbackUrl(contents.getURL())) {
       throw new AgentOpError('not_loopback', `Page ${record.agentId} left localhost during the screenshot; nothing was saved.`);
@@ -198,7 +254,7 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
       throw new AgentOpError('tab_not_loaded', `Page ${record.agentId} navigated during the screenshot: take it again.`);
     }
     const png = fitLongSide(taken.png);
-    const size = deps.image.size(png);
+    const size = pngSize(png);
     const saved = await deps.saveImage(png);
     if (saved === null) throw new AgentOpError('unsupported', 'The screenshot could not be saved to Parley drops.');
     return {

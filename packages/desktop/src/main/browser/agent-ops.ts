@@ -61,6 +61,8 @@ export interface AgentOpsDeps {
   inGuest: AgentCaptureDeps['inGuest'];
   /** Высота содержимого окна гостя: выше {1,2 × высота} снимок не растят (Chromium тайлит поверхность). */
   windowHeight?: AgentCaptureDeps['windowHeight'];
+  /** DPR экрана окна гостя, см. `AgentCaptureDeps.screenDpr`. */
+  screenDpr?: AgentCaptureDeps['screenDpr'];
   /** Сколько ждать подтверждения окна, что `<webview>` стоит в размере снимка; по умолчанию `AGENT_LIMITS.captureReadyMs`. Тестам — меньше. */
   captureReadyMs?: number;
 }
@@ -129,7 +131,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   const registry = createPageRegistry({ fromId: deps.fromId });
   const queue = createPageQueue();
   const reads = createAgentReads({ inspector: deps.inspector });
-  const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, saveImage: deps.saveImage, image: deps.image, activity: deps.activity, inGuest: deps.inGuest, ...(deps.captureReadyMs === undefined ? {} : { captureReadyMs: deps.captureReadyMs }), ...(deps.windowHeight === undefined ? {} : { windowHeight: deps.windowHeight }) });
+  const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, saveImage: deps.saveImage, image: deps.image, activity: deps.activity, inGuest: deps.inGuest, ...(deps.captureReadyMs === undefined ? {} : { captureReadyMs: deps.captureReadyMs }), ...(deps.windowHeight === undefined ? {} : { windowHeight: deps.windowHeight }), ...(deps.screenDpr === undefined ? {} : { screenDpr: deps.screenDpr }) });
   const opTimeoutMs = deps.opTimeoutMs ?? AGENT_LIMITS.opMs - 2_000;
   const pageKey = (workKey: string, pageId: string): string => `${workKey}\n${pageId}`;
 

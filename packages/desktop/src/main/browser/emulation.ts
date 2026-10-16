@@ -30,7 +30,7 @@ export interface EmulationCommand {
 const TOUCH_POINTS = 5;
 
 /** Команды CDP для размера; `null` — Fit: эмуляция, касания и подмена UA сняты. `scale` — вписывание, не больше 1. */
-export function viewportCommands(spec: ViewportSpec | null, area: ViewportArea): { commands: EmulationCommand[]; scale: number } {
+export function viewportCommands(spec: ViewportSpec | null, area: ViewportArea, deviceScaleFactor?: number): { commands: EmulationCommand[]; scale: number } {
   if (spec === null) {
     return {
       commands: [
@@ -50,7 +50,7 @@ export function viewportCommands(spec: ViewportSpec | null, area: ViewportArea):
     commands: [
       {
         method: 'Emulation.setDeviceMetricsOverride',
-        params: { width: size.width, height: size.height, deviceScaleFactor: size.dpr, mobile: size.mobile, scale },
+        params: { width: size.width, height: size.height, deviceScaleFactor: deviceScaleFactor ?? size.dpr, mobile: size.mobile, scale },
       },
       {
         method: 'Emulation.setTouchEmulationEnabled',
@@ -70,19 +70,24 @@ function copySpec(spec: ViewportSpec): ViewportSpec {
 }
 
 export interface Emulation {
-  set(id: number, spec: ViewportSpec | null, area: ViewportArea): Promise<{ scale: number }>;
+  /** `deviceScaleFactor` — подмена DPR команды (снимок агента на экране с DPR > 1, см. `withTemporary`); `current` отдаёт `spec` как есть. */
+  set(id: number, spec: ViewportSpec | null, area: ViewportArea, deviceScaleFactor?: number): Promise<{ scale: number }>;
   current(id: number): ViewportSpec | null;
   /** Гость уничтожен: размер его вкладки не помним (id не переиспользуются, но `current` не должен отдавать чужой след). */
   forget(id: number): void;
   /** C: снимок агента в чужом размере — размер на время `run`, потом размер и поле человека (спека 2 п. 10). */
-  withTemporary<T>(id: number, spec: ViewportSpec, run: () => Promise<T>): Promise<T>;
+  /**
+   * `deviceScaleFactor` — DPR экрана окна: эмуляция с DPR 1 на экране DPR 2 не действует, и Chromium рисует вдвое крупную левую
+   * верхнюю четверть страницы (спайк 0, В3). Без него — DPR из `spec`.
+   */
+  withTemporary<T>(id: number, spec: ViewportSpec, run: () => Promise<T>, deviceScaleFactor?: number): Promise<T>;
 }
 
 export function createEmulation(deps: { inspector: Pick<Inspector, 'send'> }): Emulation {
   const state = new Map<number, { spec: ViewportSpec; area: ViewportArea }>();
   const emulation: Emulation = {
-    async set(id, spec, area) {
-      const { commands, scale } = viewportCommands(spec, area);
+    async set(id, spec, area, deviceScaleFactor) {
+      const { commands, scale } = viewportCommands(spec, area, deviceScaleFactor);
       // По одной и по порядку. Отказ — отказ set; прежний размер остаётся в state.
       for (const { method, params } of commands) await deps.inspector.send(id, method, params);
       if (spec === null) state.delete(id);
@@ -96,13 +101,13 @@ export function createEmulation(deps: { inspector: Pick<Inspector, 'send'> }): E
     forget(id) {
       state.delete(id);
     },
-    async withTemporary(id, spec, run) {
+    async withTemporary(id, spec, run, deviceScaleFactor) {
       const before = state.get(id); // размер и поле человека; при Fit записи нет
       const { width, height } = viewportSize(spec);
       const same = (a: ViewportSpec | null, b: ViewportSpec | null): boolean => JSON.stringify(a) === JSON.stringify(b);
       try {
         // Поле равно размеру — scale 1: страница снимается в полный размер, а не вписанной во вкладку.
-        await emulation.set(id, spec, { width, height });
+        await emulation.set(id, spec, { width, height }, deviceScaleFactor);
         return await run();
       } finally {
         // Человек сменил размер во время снимка — его выбор не трогаем. Временный не встал (сбой `set`, команды могли

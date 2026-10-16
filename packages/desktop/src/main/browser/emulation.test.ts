@@ -125,6 +125,17 @@ describe('withTemporary — снимок агента в чужом размер
     return { emulation: createEmulation({ inspector: { send } }), sent };
   }
 
+  it('deviceScaleFactor подменяет DPR команды (экран DPR 2), а current отдаёт прежний spec; без него — dpr из spec', async () => {
+    const { emulation, sent } = setup();
+    await emulation.withTemporary(7, temp, async () => {
+      expect(emulation.current(7)).toEqual(temp);
+    }, 2);
+    expect(sent[0]?.params).toMatchObject({ width: 375, height: 812, deviceScaleFactor: 2 });
+    sent.length = 0;
+    await emulation.withTemporary(7, temp, async () => undefined);
+    expect(sent[0]?.params).toMatchObject({ deviceScaleFactor: 1 });
+  });
+
   it('на время снимка — размер агента в масштабе 1 (площадь = его размер), потом — размер и площадь человека', async () => {
     const { emulation, sent } = setup();
     await emulation.set(7, human, area);

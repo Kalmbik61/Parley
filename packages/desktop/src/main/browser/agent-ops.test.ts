@@ -10,6 +10,7 @@ import { DEVTOOLS_LIMITS, type ConsoleEntry, type DevtoolsSnapshot, type Network
 import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistration } from '../../shared/browser-types.js';
 import { workKey } from '../../shared/work-keys.js';
 import { PANEL_LIMITS } from '../../renderer/layout/tree.js';
+import { pngSize } from './png.js';
 import { captureSpec, createAgentOps, loopbackHref, NOT_MOUNTED_NOTE, type AgentOps } from './agent-ops.js';
 
 const REF = { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' };
@@ -37,12 +38,14 @@ function png(width: number, height: number): Buffer {
 }
 
 /** Ответы `inspector.send`: вьюпорт 1280×800, страница 1280×2000, снимок — PNG-заглушка. */
-function sendWith(options: { viewport?: { width: number; height: number }; content?: { width: number; height: number }; shot?: Buffer } = {}) {
+function sendWith(options: { viewport?: { width: number; height: number }; content?: { width: number; height: number }; shot?: Buffer; dpr?: number } = {}) {
   const viewport = options.viewport ?? { width: 1280, height: 800 };
   const content = options.content ?? { width: 1280, height: 2000 };
   return async (_id: number, method: string): Promise<unknown> => {
     if (method === 'Page.getLayoutMetrics') {
       return {
+        // layoutViewport — в пикселях устройства (CDP): при DPR 2 вдвое шире CSS-вьюпорта.
+        layoutViewport: { clientWidth: viewport.width * (options.dpr ?? 1), clientHeight: viewport.height * (options.dpr ?? 1) },
         cssLayoutViewport: { clientWidth: viewport.width, clientHeight: viewport.height, pageX: 0, pageY: 0 },
         cssContentSize: { x: 0, y: 0, width: content.width, height: content.height },
       };
@@ -53,7 +56,7 @@ function sendWith(options: { viewport?: { width: number; height: number }; conte
 }
 
 /** Окно отвечает на просьбу своим ответом (если он задан) сразу после неё, как ответил бы рендерер. */
-function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null; sent?: boolean; openMs?: number; owners?: BrowserAgentOwner[]; confirmSurface?: boolean; captureReadyMs?: number; windowHeight?: number } = {}) {
+function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null; sent?: boolean; openMs?: number; owners?: BrowserAgentOwner[]; confirmSurface?: boolean; captureReadyMs?: number; windowHeight?: number; screenDpr?: number } = {}) {
   const asked: AgentOpenTab[] = [];
   const state = { allowed: overrides.allowed ?? true, reply: overrides.reply === undefined ? { tabId: 'browser:aaaaaa', reused: false, mounted: true } : overrides.reply };
   const openTab = vi.fn((e: AgentOpenTab): boolean => {
@@ -81,8 +84,7 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
   /** Мир гостя: ответ по умолчанию — «выражение ничего не вернуло» (заглушка); тесты fullPage подставляют свой. */
   const inGuest = vi.fn(async (_contents: WebContents, _code: string): Promise<unknown> => undefined);
   const image = {
-    size: (data: Buffer) => ({ width: data.readUInt32BE(16), height: data.readUInt32BE(20) }),
-    resize: (_data: Buffer, width: number, height: number) => png(width, height),
+    resize: vi.fn((_data: Buffer, width: number, height: number) => png(width, height)),
     stitch: (parts: Buffer[]) => png(parts[0] ? parts[0].readUInt32BE(16) : 0, parts.reduce((sum, part) => sum + part.readUInt32BE(20), 0)),
     crop: (data: Buffer, _top: number, height: number) => png(data.readUInt32BE(16), height),
   };
@@ -104,13 +106,14 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
     },
     ...(overrides.captureReadyMs === undefined ? {} : { captureReadyMs: overrides.captureReadyMs }),
     ...(overrides.windowHeight === undefined ? {} : { windowHeight: () => overrides.windowHeight as number }),
+    ...(overrides.screenDpr === undefined ? {} : { screenDpr: async () => overrides.screenDpr as number }),
   };
   const ops: AgentOps = createAgentOps(deps);
   // Хост всегда кладёт в owners саму сессию: для чужого ref (другая работа) — её, а не s-02.
   const run = (args: unknown, ref = REF, op = 'open'): Promise<BrowserAgentResult> =>
     ops.run({ opId: 'op-1', ref, label: ref.sessionId === 's-02' ? 'S02' : 'S01', owners: overrides.owners ?? [{ kind: 'session', sessionId: ref.sessionId }], op: op as BrowserAgentOpEvent['op'], args });
   const runOp = (op: string, args: unknown = {}, ref = REF): Promise<BrowserAgentResult> => run(args, ref, op);
-  return { ops, deps, run, runOp, asked, openTab, state, guests, snapshots, activity, inspector, emulation, saveImage, inGuest };
+  return { ops, deps, run, runOp, asked, openTab, state, guests, snapshots, activity, inspector, emulation, saveImage, inGuest, image };
 }
 
 /** Регистрирует страницу панели чата сессии s-02 (гость 7); `patch` меняет поля. */
@@ -807,6 +810,7 @@ describe('screenshot (спека 5.1, 8)', () => {
     expect(result).toMatchObject({ fullPage: true, viewport: { width: 1280, height: 2000 }, width: 1004, height: 1568 });
     // 800 + 800 + 400 (последняя обрезана) = 2000 → вписано в 1568 по длинной стороне; без обрезки было бы 2400 и ширина 853.
     const shots = inspector.send.mock.calls.filter(([, method]) => method === 'Page.captureScreenshot').map(([, , params]) => params);
+    // fullPage — без клипа: масштаб клипа на экране DPR > 1 ненадёжен, длинная сторона режется после склейки.
     expect(shots).toEqual([{ format: 'png' }, { format: 'png' }, { format: 'png' }]);
     // Через CDP код не исполняется никогда: прокрутка идёт только через мир гостя.
     expect(inspector.send.mock.calls.some(([, method]) => method === 'Runtime.evaluate')).toBe(false);
@@ -879,6 +883,105 @@ describe('screenshot (спека 5.1, 8)', () => {
     release();
     await Promise.all([first, second]);
     expect(order).toEqual(['start 1', 'end 1', 'start 2', 'end 2']);
+  });
+
+  it('DPR 2 (layoutViewport 798, css 399×752): без клипа — клип с масштабом 1/DPR на экране DPR > 1 даёт неверную четверть; PNG в пикселях устройства влезает в 1568 — отдан как есть, resize не вызван', async () => {
+    const { ops, inspector, image, runOp: run } = setup();
+    register(ops, {});
+    inspector.send.mockImplementation(sendWith({ viewport: { width: 399, height: 752 }, dpr: 2, shot: png(798, 1504) }));
+    const result = okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1' }));
+    expect(inspector.send).toHaveBeenCalledWith(7, 'Page.captureScreenshot', { format: 'png' });
+    expect([result.width, result.height]).toEqual([798, 1504]);
+    expect(result.viewport).toEqual({ width: 399, height: 752 });
+    expect(image.resize).not.toHaveBeenCalled();
+  });
+
+  it('DPR 2: PNG 2560×1600 длиннее 1568 — уменьшен до 1568×980 один раз', async () => {
+    const { ops, inspector, image, runOp: run } = setup();
+    register(ops, {});
+    inspector.send.mockImplementation(sendWith({ dpr: 2, shot: png(2560, 1600) }));
+    const result = okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1' }));
+    expect([result.width, result.height]).toEqual([1568, 980]);
+    expect(image.resize).toHaveBeenCalledTimes(1);
+  });
+
+  it('DPR 2: PNG больше screenshotBytes — снятая картинка уменьшается ×0,7 (не больше двух раз), повторных снимков нет', async () => {
+    const { ops, inspector, image, saveImage, runOp: run } = setup();
+    register(ops, {});
+    const big = Buffer.concat([png(798, 1504), Buffer.alloc(AGENT_LIMITS.screenshotBytes)]);
+    inspector.send.mockImplementation(sendWith({ viewport: { width: 399, height: 752 }, dpr: 2, shot: big }));
+    image.resize.mockImplementation((_data, width, height) => Buffer.concat([png(width, height), Buffer.alloc(AGENT_LIMITS.screenshotBytes)]));
+    const refused = await run('screenshot', { tab: 't1' });
+    expect(codeOf(refused)).toBe('unsupported');
+    expect(inspector.send.mock.calls.filter(([, method]) => method === 'Page.captureScreenshot')).toHaveLength(1);
+    expect(image.resize).toHaveBeenCalledTimes(2);
+    expect(image.resize.mock.calls[0]?.slice(1)).toEqual([559, 1053]);
+    expect(saveImage).not.toHaveBeenCalled();
+  });
+
+  it('3840×2400 в эмуляции: clip.scale = 1568/3840, resize не вызван', async () => {
+    const { ops, inspector, image, runOp: run } = setup();
+    register(ops, {});
+    inspector.send.mockImplementation(sendWith({ viewport: { width: 3840, height: 2400 }, shot: png(1568, 980) }));
+    const result = okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1', width: 3840, height: 2400 }));
+    expect(inspector.send).toHaveBeenCalledWith(7, 'Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, width: 3840, height: 2400, scale: 1568 / 3840 } });
+    expect([result.width, result.height]).toEqual([1568, 980]);
+    expect(image.resize).not.toHaveBeenCalled();
+  });
+
+  it('эмуляция на экране DPR 2: withTemporary получает DPR экрана (эмуляция с DPR 1 там не действует), клипа нет, PNG в пикселях устройства', async () => {
+    const { ops, inspector, emulation, image, runOp: run } = setup({ screenDpr: 2 });
+    register(ops, {});
+    inspector.send.mockImplementation(sendWith({ viewport: { width: 375, height: 700 }, dpr: 2, shot: png(750, 1400) }));
+    const result = okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1', width: 375, height: 700 }));
+    expect(emulation.withTemporary).toHaveBeenCalledWith(7, { width: 375, height: 700, mobile: false, dpr: 1 }, expect.any(Function), 2);
+    expect(inspector.send).toHaveBeenCalledWith(7, 'Page.captureScreenshot', { format: 'png' });
+    expect([result.width, result.height]).toEqual([750, 1400]);
+    expect(result.viewport).toEqual({ width: 375, height: 700 });
+    expect(image.resize).not.toHaveBeenCalled();
+  });
+
+  it('эмуляция человека включена на экране DPR 2 — клипа нет, PNG 3840×2400 уменьшается на main до 1568', async () => {
+    const { ops, inspector, emulation, image, runOp: run } = setup({ screenDpr: 2 });
+    register(ops, {});
+    emulation.current.mockReturnValue({ preset: 'laptop', rotated: false, dpr: 1 });
+    inspector.send.mockImplementation(sendWith({ viewport: { width: 3840, height: 2400 }, shot: png(3840, 2400) }));
+    const result = okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1', width: 3840, height: 2400 }));
+    expect(inspector.send).toHaveBeenCalledWith(7, 'Page.captureScreenshot', { format: 'png' });
+    expect([result.width, result.height]).toEqual([1568, 980]);
+    expect(image.resize).toHaveBeenCalledTimes(1);
+  });
+
+  it('PNG больше screenshotBytes — повтор с масштабом ×0,7, не больше двух раз; всё ещё больше — unsupported «The screenshot is too large…»', async () => {
+    const { ops, inspector, saveImage, runOp: run } = setup();
+    register(ops, {});
+    const scales: number[] = [];
+    inspector.send.mockImplementation(async (id: number, method: string, params?: Record<string, unknown>) => {
+      if (method !== 'Page.captureScreenshot') return sendWith()(id, method);
+      scales.push((params?.clip as { scale: number } | undefined)?.scale ?? 1);
+      return { data: Buffer.concat([png(1280, 800), Buffer.alloc(AGENT_LIMITS.screenshotBytes)]).toString('base64') };
+    });
+    const result = await run('screenshot', { tab: 't1' });
+    expect(codeOf(result)).toBe('unsupported');
+    expect(messageOf(result)).toContain('The screenshot is too large');
+    expect(scales).toHaveLength(3);
+    // Первый снимок вьюпорта в 1280 — без клипа (масштаб 1), повторы — клипом с масштабом ×0,7.
+    expect(scales[0]).toBe(1);
+    expect(scales[1]).toBeCloseTo(0.7);
+    expect(scales[2]).toBeCloseTo(0.49);
+    expect(saveImage).not.toHaveBeenCalled();
+
+    // Помещается со второй попытки — ok.
+    scales.length = 0;
+    inspector.send.mockImplementation(async (id: number, method: string, params?: Record<string, unknown>) => {
+      if (method !== 'Page.captureScreenshot') return sendWith()(id, method);
+      scales.push((params?.clip as { scale: number } | undefined)?.scale ?? 1);
+      return { data: (scales.length === 1 ? Buffer.concat([png(1280, 800), Buffer.alloc(AGENT_LIMITS.screenshotBytes)]) : png(896, 560)).toString('base64') };
+    });
+    expect(okResult<BrowserAgentScreenshotResult>(await run('screenshot', { tab: 't1' })).width).toBe(896);
+    expect(scales).toHaveLength(2);
+    expect(saveImage).toHaveBeenCalledTimes(1);
+    expect(pngSize(saveImage.mock.calls[0]?.[0] as unknown as Buffer)).toEqual({ width: 896, height: 560 });
   });
 
   it('drops не записался — unsupported', async () => {

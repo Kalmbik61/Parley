@@ -617,7 +617,6 @@ if (!gotLock) {
       emulation,
       saveImage: (png) => saveImage({ png, dir: dropsDir() }),
       image: {
-        size: (png) => nativeImage.createFromBuffer(png).getSize(),
         resize: (png, width, height) => nativeImage.createFromBuffer(png).resize({ width, height, quality: 'good' }).toPNG(),
         // Полосы одной ширины склеиваются побайтно: битмапы строка за строкой подряд (спайк 0.7).
         stitch: (parts) => {
@@ -632,6 +631,12 @@ if (!gotLock) {
         },
       },
       inGuest: (guest, code) => guest.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code }]),
+      screenDpr: async (guest) => {
+        const host = guest.hostWebContents;
+        if (host === undefined || host === null) return null;
+        const dpr: unknown = await host.executeJavaScript('window.devicePixelRatio');
+        return typeof dpr === 'number' && Number.isFinite(dpr) && dpr > 0 ? dpr : null;
+      },
       windowHeight: (guest) => {
         const host = guest.hostWebContents;
         return host === undefined || host === null ? null : (BrowserWindow.fromWebContents(host)?.getContentSize()[1] ?? null);
