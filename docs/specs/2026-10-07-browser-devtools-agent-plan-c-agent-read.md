@@ -115,7 +115,7 @@ pnpm --filter @parley/desktop e2e   # после pnpm build; исходные к
 - Добавляет: `AGENT_VIEWPORT = { min: 200, maxWidth: 3840, maxHeight: 2400 }`; схемы `browserAgentArgs.tabs/console/network/screenshot`; формы ответов `BrowserAgentTabInfo`, `BrowserAgentTabsResult`, `BrowserAgentConsoleEntry`, `BrowserAgentConsoleResult`, `BrowserAgentRequestSummary`, `BrowserAgentRequestDetail`, `BrowserAgentNetworkResult`, `BrowserAgentScreenshotResult`.
 - Остаются D: `navigation_blocked`, `human_busy`, `stale_ref`, `loadMs`, `waitMs`, `snapshotBytes`, `recentMinutes`.
 
-- [ ] **Шаг 1. Написать падающий тест.** В `browser-agent.test.ts`: заменить ожидания трёх тестов B2 новыми значениями (список операций; девять кодов — шесть B2 и `no_tab`, `tab_hidden`, `tab_not_loaded`; `AGENT_LIMITS` с новыми ключами рядом с `opMs`, `openMs`, `requestBytes`; `AGENT_INPUT` с четырьмя ключами) и дописать:
+- [x] **Шаг 1. Написать падающий тест.** В `browser-agent.test.ts`: заменить ожидания трёх тестов B2 новыми значениями (список операций; девять кодов — шесть B2 и `no_tab`, `tab_hidden`, `tab_not_loaded`; `AGENT_LIMITS` с новыми ключами рядом с `opMs`, `openMs`, `requestBytes`; `AGENT_INPUT` с четырьмя ключами) и дописать:
 
 ```ts
 describe('схемы операций чтения', () => {
@@ -152,9 +152,9 @@ describe('схемы операций чтения', () => {
 
   В тест «индекс пакета отдаёт имена канала» добавить `AGENT_VIEWPORT`. Тип-тест B2 `BrowserAgentOpenResult` остаётся.
 
-- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/protocol exec vitest run src/browser-agent.test.ts` → FAIL (старые ожидания и нет схем).
+- [x] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/protocol exec vitest run src/browser-agent.test.ts` → FAIL (старые ожидания и нет схем).
 
-- [ ] **Шаг 3. Реализовать.** В `browser-agent.ts`:
+- [x] **Шаг 3. Реализовать.** В `browser-agent.ts`:
   - операции, коды и пределы — как в «Интерфейсах»; комментарий над `BROWSER_AGENT_OPS` («C ставит свои четыре чтения перед `open`») уже стоит, комментарий над кодами («Остальные добавляют C и D») дополнить: C добавил `no_tab`, `tab_hidden`, `tab_not_loaded`;
   - схемы дописать в `browserAgentArgs` (объект остаётся `satisfies Record<BrowserAgentOp, z.ZodType>` — без схемы новую операцию не добавить):
 
@@ -274,12 +274,12 @@ export interface BrowserAgentScreenshotResult {
 
   - `index.ts`: добавить в экспорты значения `AGENT_VIEWPORT` и типы форм ответов (`BrowserAgentTabInfo`, `BrowserAgentTabsResult`, `BrowserAgentConsoleEntry`, `BrowserAgentConsoleResult`, `BrowserAgentRequestSummary`, `BrowserAgentRequestDetail`, `BrowserAgentNetworkResult`, `BrowserAgentScreenshotResult`). `BrowserAgentArgs`, `BrowserAgentOp`, `BrowserAgentOpEvent`, `BrowserAgentOwner`, `BrowserAgentResult` уже экспортируются.
 
-- [ ] **Шаг 4. Запустить — проходит.**
+- [x] **Шаг 4. Запустить — проходит.**
   - `pnpm --filter @parley/protocol exec vitest run src/browser-agent.test.ts` → PASS.
   - `pnpm --filter @parley/protocol test` → зелёный; `pnpm --filter @parley/protocol build`.
   - Тест хоста `agent/browser-contract.test.ts` станет красным до задачи 8 (список операций core ещё `['open']`): коммит этой задачи его не чинит.
 
-- [ ] **Шаг 5. Закоммитить.**
+- [x] **Шаг 5. Закоммитить.**
 
 ```bash
 git add packages/protocol/src/browser-agent.ts packages/protocol/src/browser-agent.test.ts packages/protocol/src/index.ts
