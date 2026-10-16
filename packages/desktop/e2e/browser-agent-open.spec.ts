@@ -131,6 +131,11 @@ test.describe('агент открывает страницу в браузер�
       (await call<{ roomId: string }>(window, 'rooms.create', { projectPath: project, workId, title, members, lead: members[0], quiet: true })).roomId;
     const roomId = await room('own-room', [lead, second]);
     const foreignRoomId = await room('foreign-room', [second, third]);
+    // `rooms.create` отвечает, когда карта записана на диск, а снимок работ хоста (из него канал агента берёт `owners`)
+    // обновляет файловый наблюдатель чуть позже. Окно рисует комнату из того же снимка: пока строки нет, агент мог бы
+    // считать сессию участником нуля комнат, и страница законно ушла бы в чат.
+    await expect(window.locator(`[data-work-key="${workKey}"] [data-room-row="${roomId}"]`).first()).toBeVisible();
+    await expect(window.locator(`[data-work-key="${workKey}"] [data-room-row="${foreignRoomId}"]`).first()).toBeVisible();
     await expect(window.getByTestId('chat-view')).toBeVisible();
     return { electronApp, window, lead, workId, roomId, foreignRoomId, workKey };
   }
