@@ -576,6 +576,52 @@ describe('updateMap', () => {
       expect([...goal].sort()).toEqual(tokens);
     }, 30_000);
 
+    it('таймаут называет хозяина: живой pid и сколько держит', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, `${process.pid}\n`);
+      const old = new Date(Date.now() - 4_000);
+      await utimes(indexLock, old, old);
+
+      const error = await createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 100 }).catch((cause: Error) => cause);
+
+      expect(error).toBeInstanceOf(MapLockTimeoutError);
+      expect((error as Error).message).toMatch(
+        new RegExp(`was not released within 100 ms \\(held by pid ${process.pid}, alive, for [45] s\\)$`),
+      );
+    });
+
+    it('таймаут: файл без pid — «no owner pid» и возраст файла', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, 'не-pid');
+      const old = new Date(Date.now() - 3 * 3_600_000);
+      await utimes(indexLock, old, old);
+      await writeFile(`${indexLock}.steal`, '');
+
+      const error = await createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 100 }).catch((cause: Error) => cause);
+
+      expect((error as Error).message).toMatch(/\(no owner pid, file age 3 h\)$/);
+    });
+
+    it('таймаут: мёртвый хозяин, пока перехват идёт у другого, — «dead»', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      const dead = await deadPid();
+      await writeFile(indexLock, `${dead}\n`);
+      await writeFile(`${indexLock}.steal`, '');
+
+      const error = await createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 100 }).catch((cause: Error) => cause);
+
+      expect((error as Error).message).toMatch(new RegExp(`\\(held by pid ${dead}, dead, for \\d+ s\\)$`));
+    });
+
+    it('таймаут без читаемого файла блокировки — без хвоста', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await symlink(path.join(home, 'нет-такого-файла'), indexLock);
+
+      const error = await createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 100 }).catch((cause: Error) => cause);
+
+      expect((error as Error).message).toMatch(/was not released within 100 ms$/);
+    });
+
     it('взятая блокировка содержит pid текущего процесса', async () => {
       await createWork(project, { title: 'Авторизация' });
       let mapLock = '';

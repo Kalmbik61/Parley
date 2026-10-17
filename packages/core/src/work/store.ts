@@ -101,8 +101,9 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * и повторить на следующем событии (план, кусок 1.4).
  */
 export class MapLockTimeoutError extends Error {
-  constructor(lockFile: string, timeoutMs: number) {
-    super(`lock ${lockFile} was not released within ${timeoutMs} ms`);
+  /** `holder` — необязательный хвост про хозяина блокировки, см. `describeHolder`. */
+  constructor(lockFile: string, timeoutMs: number, holder = '') {
+    super(`lock ${lockFile} was not released within ${timeoutMs} ms${holder}`);
     this.name = 'MapLockTimeoutError';
   }
 }
@@ -173,9 +174,29 @@ async function removeOrphanedLock(lockFile: string): Promise<boolean> {
   }
 }
 
+const humanAge = (ms: number): string => {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds} s`;
+  return seconds < 3600 ? `${Math.round(seconds / 60)} min` : `${Math.round(seconds / 3600)} h`;
+};
+
+/** Хвост сообщения о таймауте: кто держит блокировку и сколько. Файл не читается — пустая строка. */
+async function describeHolder(lockFile: string): Promise<string> {
+  try {
+    const info = await lstat(lockFile);
+    const age = humanAge(Date.now() - info.mtimeMs);
+    const pid = /^(\d+)\n$/.exec(await readFile(lockFile, 'utf8'))?.[1];
+    return pid === undefined
+      ? ` (no owner pid, file age ${age})`
+      : ` (held by pid ${pid}, ${isAlive(Number(pid)) ? 'alive' : 'dead'}, for ${age})`;
+  } catch {
+    return '';
+  }
+}
+
 /** Эксклюзивное создание файла — атомарная операция файловой системы; в файл пишется pid хозяина. */
 async function acquireLock(lockFile: string, timeoutMs: number,
-  timeoutError: () => Error = () => new MapLockTimeoutError(lockFile, timeoutMs), mode = 0o666,
+  timeoutError: (holder: string) => Error = (holder) => new MapLockTimeoutError(lockFile, timeoutMs, holder), mode = 0o666,
 ): Promise<FileHandle> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -186,7 +207,7 @@ async function acquireLock(lockFile: string, timeoutMs: number,
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       if (await removeOrphanedLock(lockFile)) continue;
       if (Date.now() >= deadline) {
-        throw timeoutError();
+        throw timeoutError(await describeHolder(lockFile));
       }
       await delay(RETRY_MS);
       continue;
