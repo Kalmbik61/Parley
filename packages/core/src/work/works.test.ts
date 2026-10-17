@@ -93,6 +93,15 @@ describe('readWorks', () => {
     expect((await readWorks(project))[0]?.bytes).toBe(0);
   });
 
+  it('разобранная карта в тестах заморожена: правка «на месте» бросает, а не портит общий объект', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const [entry] = await readWorks(project);
+    expect(() => {
+      (entry?.map.work as { title: string }).title = 'испорчено';
+    }).toThrow(TypeError);
+    expect(() => entry?.map.sessions.push({} as never)).toThrow(TypeError);
+  });
+
   it('без единой работы список пуст', async () => {
     expect(await readWorks(project)).toEqual([]);
   });

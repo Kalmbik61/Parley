@@ -21,6 +21,21 @@ const worksDir = (projectPath: string): string => path.join(stateDir(projectPath
  * различают версии; неизменённая карта стоит одного `stat` вместо чтения и разбора мегабайт JSON. Карту отдаём
  * общим объектом, не копией: читатели (`WorkEntry`) её не меняют — правки идут через `updateMap` с диска.
  */
+/**
+ * В тестах и разработке (`VITEST`, `PARLEY_FREEZE_MAPS=1`) разобранная карта замораживается: общий объект,
+ * который кто-то правит «на месте», в проде тихо портил бы карту всем читателям сразу, а здесь это `TypeError`
+ * в месте правки. В проде заморозки нет — обход объекта на каждый разбор лишний.
+ */
+const freezeMaps = process.env['VITEST'] !== undefined || process.env['PARLEY_FREEZE_MAPS'] === '1';
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
+
 const parsedMaps = new Map<string, { mtimeMs: number; size: number; ino: number; map: WorkMap }>();
 
 /**
@@ -47,7 +62,7 @@ async function readEntry(projectPath: string, workId: string): Promise<WorkEntry
       return { projectPath, map: cached.map, bytes: 0 };
     }
     const text = await readFile(file, 'utf8');
-    const map = parseMap(text, file);
+    const map = freezeMaps ? deepFreeze(parseMap(text, file)) : parseMap(text, file);
     parsedMaps.set(file, { mtimeMs: info.mtimeMs, size: info.size, ino: info.ino, map });
     return { projectPath, map, bytes: Buffer.byteLength(text) };
   } catch {
