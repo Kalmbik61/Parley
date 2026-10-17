@@ -228,7 +228,7 @@ Settings → Assistant. Настройки лежат в `ui.json` (`ui.assistan
 3. **`propose_message({ target, text, kind? })`** — `target`: комната или сессия; `kind` для комнаты: `note`
    (по умолчанию), `question`, `decision`. Хост проверяет: цель есть, не в архиве; сессия — запущена. Создаёт
    карточку и сразу отвечает модели «shown to the human, awaiting their decision» — ход не ждёт решения.
-   Не прошло проверку — ответ модели с причиной («S03 is not running»), карточки нет.
+   Спящая сессия (`lifecycle: sleeping`) проверку проходит — карточка с пометкой `wake`; подтверждение делает `sessions.launch(ref, 'resume', { by: 'human', prompt })`, текст уходит первым ходом. Не прошло проверку — ответ модели с причиной («S03 has not started yet» для `pending`, для закрытой — отказ с причиной), карточки нет.
 4. **`end_conversation()`** — человек попросил начать заново.
 
 ### 7.3 Карточка подтверждения
