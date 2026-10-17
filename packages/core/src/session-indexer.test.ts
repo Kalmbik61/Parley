@@ -7,12 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { extendCodexSessionIndex, indexCodexSession, type CodexIndexState } from './codex/index-session.js';
 import type { DiscoveredSubagent } from './discover.js';
 import { DEFAULT_TIMELINE_READER, type TimelineReader } from './jsonl-tail.js';
-import {
-  extendClaudeSessionIndex,
-  indexSessionFile,
-  type ClaudeIndexState,
-  type SessionIndex,
-} from './session-index.js';
+import { extendClaudeSessionIndex, indexSessionFile, type SessionIndex } from './session-index.js';
 import { createSessionIndexer } from './session-indexer.js';
 
 let root: string;
