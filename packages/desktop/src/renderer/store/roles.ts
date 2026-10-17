@@ -49,7 +49,8 @@ export const useRolesStore = create<RolesState>((set, get) => ({
     const token = Symbol(cwd);
     pending.set(cwd, token);
     const keep = was?.roles ?? [];
-    const status = force && was?.status === 'ready' ? 'reloading' : 'loading';
+    // Force поверх любой записи (ready, loading по TTL, error) — reloading: чип скрывает замок старой ревизии до ответа.
+    const status = force && was !== undefined ? 'reloading' : 'loading';
     set((state) => ({ byCwd: { ...state.byCwd, [cwd]: { status, roles: keep, at: Date.now() } } }));
     const finish = (entry: RolesEntry): void => {
       // Ответ устаревшего запроса (после force) не затирает свежий.
