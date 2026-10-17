@@ -55,6 +55,19 @@ describe('createScreen', () => {
     screen.dispose();
   });
 
+  it('по умолчанию снимок держит последние 1000 строк истории плюс экран', async () => {
+    const screen = createScreen(80, 24);
+    let data = '';
+    for (let i = 0; i < 1500; i += 1) data += `line ${i}\r\n`;
+    screen.write(data);
+    await waitFor(() => screen.snapshot().includes('line 1499'));
+    const snapshot = screen.snapshot();
+    expect(snapshot).toContain('line 1499');
+    expect(snapshot).toContain('line 500');
+    expect(snapshot).not.toContain('line 400');
+    screen.dispose();
+  });
+
   it('bracketedPaste(): ESC[?2004h включает режим вставки, ESC[?2004l выключает (кусок 5.1)', async () => {
     const screen = createScreen(80, 24);
     expect(screen.bracketedPaste()).toBe(false);

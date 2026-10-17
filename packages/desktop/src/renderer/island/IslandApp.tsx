@@ -40,7 +40,7 @@
  * событие main (`onAssistantOpen`) или точка в пилюле; пока он открыт или идёт ход, окно видно даже при выключенном
  * острове, а остров в покое не убирается. Esc, стрелка ⌃, смахивание и потеря фокуса панели (`onAssistantBlur`) выходят
  * через `hideAssistant`: идущий ход сворачивается в мини-вид, иначе режим закрывается и клавиатура уходит обратно.
- * Ответ после открытия держится `ANSWER_HOLD_MS`, если курсор не над островом и в поле пусто.
+ * Ответ сам не закрывается: человек читает его сколько нужно и закрывает одним из этих способов.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -67,8 +67,6 @@ export const IDLE_RETRACT_MS = 4000;
 export const DONE_HOLD_MS = 20000;
 /** Сколько форма сжимается в брусок: та же длительность, что `duration-[250ms]` перехода формы в `IslandView`. */
 export const RETRACT_MORPH_MS = 250;
-/** Сколько ответ помощника держится на острове после хода, если курсор не над ним и в поле пусто. */
-export const ANSWER_HOLD_MS = 8000;
 
 const INITIAL_CONFIG: IslandConfig = {
   islandEnabled: true,
@@ -302,13 +300,6 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   useEffect(() => {
     if (assistant.open) setRetracted(false);
   }, [assistant.open]);
-  // Удержание после ответа: ход кончился, курсор не над островом, поле пусто и карточки нет — режим закрывается сам.
-  useEffect(() => {
-    const s = assistant;
-    if (!s.open || s.collapsed || hovered || busy || s.draft !== '' || s.host.proposal !== null || s.host.turn <= s.openedTurn) return;
-    const timer = setTimeout(() => useAssistantStore.getState().close(), ANSWER_HOLD_MS);
-    return () => clearTimeout(timer);
-  }, [assistant, hovered, busy]);
   useEffect(() => {
     if (!assistant.open) return;
     const onKey = (event: KeyboardEvent): void => {

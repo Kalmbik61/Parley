@@ -157,7 +157,7 @@ beforeEach(() => {
   useIslandReplies.getState().prune(new Set());
   useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
   useActivityStore.setState({ byRef: {}, loaded: false });
-  useAssistantStore.setState({ host: HOST_IDLE, open: false, collapsed: false, byHover: false, input: 'idle', level: 0, draft: '', notice: null, cardError: null, openedTurn: 0 });
+  useAssistantStore.setState({ host: HOST_IDLE, open: false, collapsed: false, byHover: false, input: 'idle', level: 0, draft: '', notice: null, cardError: null });
 });
 
 afterEach(() => {
@@ -454,6 +454,24 @@ describe('проводка острова', () => {
       expect(screen.queryByTestId('assistant-view')).toBeNull();
       expect(screen.getByTestId('assistant-mini').textContent).toBe('Thinking·');
       expect(island.keyboard).toHaveBeenLastCalledWith(false);
+    });
+
+    it('ответ после хода остаётся на острове, пока человек сам его не закроет', async () => {
+      const { assistantOpen } = await renderAssistant();
+      assistantOpen({ listen: false });
+      await screen.findByTestId('assistant-view');
+      vi.useFakeTimers();
+      act(() => {
+        useAssistantStore.getState().applyHost({ ...HOST_IDLE, phase: 'thinking', turn: 1 });
+      });
+      act(() => {
+        useAssistantStore.getState().applyHost({ ...HOST_IDLE, answer: 'Two sessions are working.', turn: 1 });
+      });
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(screen.getByTestId('assistant-view')).toBeTruthy();
+      expect(useAssistantStore.getState().open).toBe(true);
     });
 
     it('потеря фокуса панели при закрытом виде ничего не делает', async () => {

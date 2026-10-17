@@ -9,6 +9,7 @@ All notable changes to Parley are documented in this file.
 ### Changed
 
 - **Agent sessions no longer run your own Claude Code status line.** Claude Code runs the status line command after every model response; in a room with six busy agents a custom one (for example a HUD that calls git, node and jq) ran about once a second and kept 15–20 % of a CPU core busy. Sessions started by Parley now show Parley's short line (model and context use) in their terminal. Your status line in your own terminal is unchanged.
+- **The host keeps 1,000 lines of each terminal instead of 5,000.** The host holds a copy of every session's terminal in memory and sends all of it when the window opens the session; with 20–30 sessions the deeper history could take hundreds of megabytes. When you open a session, the terminal now starts with its last 1,000 lines; while it stays open the window keeps up to 5,000 as before. The chat view is not affected.
 
 ### Fixed
 
@@ -22,6 +23,8 @@ All notable changes to Parley are documented in this file.
 - **Deleting a work no longer removes its folder when the index is busy.** The folder is now deleted only once the index lock is taken, so a failed delete leaves the work intact.
 - **Parley stays responsive with many agents running.** The host now re-reads work maps once per change instead of a dozen times (one watcher on the Parley home, overlapping reads collapsed into one repeat, unchanged maps are not parsed again). Role chips share one read of the Codex configuration instead of starting Codex for each of them (role files are still read fresh). A transcript update recomputes only the session it belongs to, and a live transcript is re-indexed at most every two seconds instead of after every append.
 - **The room usage chip no longer loads the host.** It refreshes once a minute (or on Refresh), and the host reads only what was appended to the agents' logs since the last request instead of the whole file. Role chips now share one request per working directory instead of one per session.
+- **A burst of terminal output no longer becomes one huge message.** Printing a large file or a log dump used to be sent to the window as a single message, which could approach the protocol's 8 MiB frame limit; output is now sent in pieces of at most 256 KiB.
+- **The assistant's answer stays on the island until you close it.** It used to close by itself 8 seconds after the answer unless the pointer was over the island, often while you were still reading. Now it stays until you press Esc or the shortcut, click the ⌃ arrow, swipe the island up or click elsewhere.
 
 ## 0.15.0
 
