@@ -24,6 +24,7 @@ All notable changes to Parley are documented in this file.
 - **Parley stays responsive with many agents running.** The host now re-reads work maps once per change instead of a dozen times (one watcher on the Parley home, overlapping reads collapsed into one repeat, unchanged maps are not parsed again). Role chips share one read of the Codex configuration instead of starting Codex for each of them (role files are still read fresh). A transcript update recomputes only the session it belongs to, and a live transcript is re-indexed at most every two seconds instead of after every append.
 - **The room usage chip no longer loads the host.** It refreshes once a minute (or on Refresh), and the host reads only what was appended to the agents' logs since the last request instead of the whole file. Role chips now share one request per working directory instead of one per session.
 - **A burst of terminal output no longer becomes one huge message.** Printing a large file or a log dump used to be sent to the window as a single message, which could approach the protocol's 8 MiB frame limit; output is now sent in pieces of at most 256 KiB.
+- **The assistant's answer stays on the island until you close it.** It used to close by itself 8 seconds after the answer unless the pointer was over the island, often while you were still reading. Now it stays until you press Esc or the shortcut, click the ⌃ arrow, swipe the island up or click elsewhere.
 
 ## 0.15.0
 

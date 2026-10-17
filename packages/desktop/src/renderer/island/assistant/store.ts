@@ -42,8 +42,6 @@ export interface AssistantStoreState {
   draft: string;
   notice: string | null;
   cardError: string | null;
-  /** Номер хода на момент открытия: ответ после него — повод свернуться через 8 с. */
-  openedTurn: number;
   configure(deps: AssistantDeps): void;
   applyHost(state: AssistantState): void;
   openMode(request: { listen: boolean }): void;
@@ -104,7 +102,6 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
       draft: '',
       notice: null,
       cardError: null,
-      openedTurn: 0,
       configure: (next) => {
         deps = next;
       },
@@ -119,7 +116,7 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
           listening?.stop();
           return;
         }
-        set({ open: true, collapsed: false, byHover: false, notice: null, openedTurn: state.open ? state.openedTurn : state.host.turn });
+        set({ open: true, collapsed: false, byHover: false, notice: null });
         deps?.keyboard(true);
         if (request.listen) {
           stopTurn();
