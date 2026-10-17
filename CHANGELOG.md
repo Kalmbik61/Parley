@@ -4,6 +4,12 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Fixed
+
+- **Parley stays responsive with many agents running.** The host now re-reads work maps once per change instead of a dozen times (one watcher on the Parley home, overlapping reads collapsed into one repeat, unchanged maps are not parsed again). Role lists are cached and shared between role chips instead of starting Codex for each of them. A transcript update recomputes only the session it belongs to, and a live transcript is re-indexed at most every two seconds instead of after every append.
+
 ## 0.15.0
 
 Parley gets an assistant that lives on the island and a browser that lives next to every chat and room. Agents can open pages in that browser and read it, the sessions Parley starts run leaner, and the window, the assistant and the agents' brief now agree on what state a session is in.
