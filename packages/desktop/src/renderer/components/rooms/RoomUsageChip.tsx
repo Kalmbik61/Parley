@@ -1,7 +1,8 @@
 /**
  * Значок расхода токенов в шапке комнаты (спека расхода токенов, 3.1–3.3): `↑1.2M ↓84k`, по клику — поповер с итогом,
- * провайдерами, участниками и Copy. Хост спрашивается только при `active` (6.3): при открытии, при смене состава или
- * архива и при изменении живых цифр участников, но не чаще раза в 10 секунд. Старый хост метода не знает — значка нет.
+ * провайдерами, участниками, Copy и Refresh. Хост спрашивается только при `active` (6.3): при открытии, при смене состава
+ * или архива и раз в минуту, пока вкладка активна; рост токенов участников сам по себе запроса не рождает, а кнопка
+ * Refresh спрашивает сразу, но не чаще раза в 5 секунд. Старый хост метода не знает — значка нет.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -18,15 +19,16 @@ import {
   usageMarkdown,
   type UsageLabels,
 } from '../../lib/usage-format.js';
-import { activityFor, useActivityStore } from '../../store/activity.js';
 import { useHostStore } from '../../store/host.js';
 import { Button } from '../../ui/button.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover.js';
 
 const U = S.usage;
 
-/** Не чаще раза в 10 секунд (6.3). */
-export const ROOM_USAGE_MIN_INTERVAL_MS = 10_000;
+/** Повтор запроса, пока вкладка активна: раз в минуту (чтение логов участников тяжёлое для хоста). */
+export const ROOM_USAGE_MIN_INTERVAL_MS = 60_000;
+/** Refresh не чаще раза в 5 секунд. */
+export const ROOM_USAGE_REFRESH_MIN_MS = 5_000;
 
 /** Колонки одной ширины в итоге и в списке участников: две сетки не разъезжаются. */
 const GRID = 'grid grid-cols-[minmax(0,1fr)_repeat(4,4.5rem)] items-baseline gap-x-3 gap-y-1';
@@ -54,17 +56,9 @@ export function RoomUsageChip({ bridge, entry, roomId, active, providers }: Room
     // `composition` — снимок ровно тех полей, из которых собран список.
     [composition],
   );
-  // Строка из живых цифр участников: изменилась — расход мог вырасти.
-  const signal = useActivityStore((state) =>
-    sessionIds
-      .map((sessionId) => {
-        const metrics = activityFor(state.byRef, { projectPath, workId, sessionId })?.metrics;
-        return `${metrics?.tokensIn ?? ''}/${metrics?.tokensOut ?? ''}`;
-      })
-      .join('|'),
-  );
   const [usage, setUsage] = useState<RoomUsage | null>(null);
   const [failed, setFailed] = useState(false);
+  const [loading, setLoading] = useState(false);
   const lastRequest = useRef(0);
   const identity = `${projectPath}\u0000${workId}\u0000${roomId}`;
   const currentIdentity = useRef(identity);
@@ -77,25 +71,40 @@ export function RoomUsageChip({ bridge, entry, roomId, active, providers }: Room
     lastRequest.current = 0;
   }, [identity]);
 
+  const request = (): void => {
+    lastRequest.current = Date.now();
+    const asked = identity;
+    setLoading(true);
+    bridge.call('rooms.usage', { projectPath, workId, roomId }).then(
+      (value) => {
+        if (currentIdentity.current !== asked) return;
+        setUsage(value);
+        setFailed(false);
+        setLoading(false);
+      },
+      () => {
+        if (currentIdentity.current !== asked) return;
+        setFailed(true);
+        setLoading(false);
+      },
+    );
+  };
+  // Свежее замыкание для таймера и кнопки: эффект зависит не от неё, а от повода спросить.
+  const requestRef = useRef(request);
+  requestRef.current = request;
+
+  // Поводы спросить: активация, смена комнаты или состава, затем таймер раз в минуту, пока `active`.
   useEffect(() => {
     if (!active || !supported || !connected) return;
-    const wait = Math.max(0, lastRequest.current + ROOM_USAGE_MIN_INTERVAL_MS - Date.now());
-    const timer = setTimeout(() => {
-      lastRequest.current = Date.now();
-      const asked = identity;
-      bridge.call('rooms.usage', { projectPath, workId, roomId }).then(
-        (value) => {
-          if (currentIdentity.current !== asked) return;
-          setUsage(value);
-          setFailed(false);
-        },
-        () => {
-          if (currentIdentity.current === asked) setFailed(true);
-        },
-      );
-    }, wait);
-    return () => clearTimeout(timer);
-  }, [active, supported, connected, identity, composition, signal, bridge, projectPath, workId, roomId]);
+    requestRef.current();
+    const timer = setInterval(() => requestRef.current(), ROOM_USAGE_MIN_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [active, supported, connected, identity, composition]);
+
+  const refresh = (): void => {
+    if (Date.now() - lastRequest.current < ROOM_USAGE_REFRESH_MIN_MS) return;
+    request();
+  };
 
   if (!supported || room === undefined) return null;
   const labels = createUsageLabels(entry.map.sessions, providers);
@@ -130,20 +139,43 @@ export function RoomUsageChip({ bridge, entry, roomId, active, providers }: Room
         {usage === null ? (
           <p className="text-muted-foreground">{failed ? U.unavailable : U.counting}</p>
         ) : (
-          <UsageTable usage={usage} labels={labels} onCopy={copy} />
+          <UsageTable usage={usage} labels={labels} onCopy={copy} onRefresh={refresh} loading={loading} />
         )}
       </PopoverContent>
     </Popover>
   );
 }
 
-function UsageTable({ usage, labels, onCopy }: { usage: RoomUsage; labels: UsageLabels; onCopy: () => void }): JSX.Element {
+function UsageTable({
+  usage,
+  labels,
+  onCopy,
+  onRefresh,
+  loading,
+}: {
+  usage: RoomUsage;
+  labels: UsageLabels;
+  onCopy: () => void;
+  onRefresh: () => void;
+  loading: boolean;
+}): JSX.Element {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex min-w-0 items-center gap-2">
         <span className="min-w-0 flex-1 truncate font-medium">
           {U.title} · {U.since}
         </span>
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          data-testid="room-usage-refresh"
+          disabled={loading}
+          onClick={onRefresh}
+          className="shrink-0"
+        >
+          {U.refresh}
+        </Button>
         <Button type="button" size="xs" variant="outline" data-testid="room-usage-copy" onClick={onCopy} className="shrink-0">
           {U.copy}
         </Button>

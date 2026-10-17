@@ -5,7 +5,7 @@ import { useActivityStore } from '../../store/activity.js';
 import { useHostStore } from '../../store/host.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
-import { ROOM_USAGE_MIN_INTERVAL_MS, RoomUsageChip } from './RoomUsageChip.js';
+import { ROOM_USAGE_MIN_INTERVAL_MS, ROOM_USAGE_REFRESH_MIN_MS, RoomUsageChip } from './RoomUsageChip.js';
 
 const T0 = '2026-10-14T10:00:00.000Z';
 const total = (input: number, over: Partial<UsageTotal> = {}): UsageTotal => ({
@@ -127,7 +127,7 @@ describe('RoomUsageChip (спека расхода токенов, 3.1–3.3)', 
     expect(chip.closest('button')?.getAttribute('title')).toBe('Usage unavailable');
   });
 
-  it('новые цифры участников — повтор не чаще раза в 10 секунд', async () => {
+  it('повтор не чаще раза в минуту: через 59 с запроса нет, через 60 — есть', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
     bridge.setHandler('rooms.usage', () => USAGE);
     render(show());
@@ -135,14 +135,82 @@ describe('RoomUsageChip (спека расхода токенов, 3.1–3.3)', 
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(usageCalls()).toHaveLength(1);
-    const ref = { projectPath: '/p', workId: 'w-01', sessionId: 's-01' };
-    act(() => useActivityStore.setState({ byRef: activityMap([makeActivity(ref, 'working', { metrics: metrics(10) })]) }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(ROOM_USAGE_MIN_INTERVAL_MS - 1000);
     });
     expect(usageCalls()).toHaveLength(1);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(usageCalls()).toHaveLength(2);
+  });
+
+  it('рост токенов участников сам по себе запрос не рождает', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    bridge.setHandler('rooms.usage', () => USAGE);
+    render(show());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const ref = { projectPath: '/p', workId: 'w-01', sessionId: 's-01' };
+    act(() => useActivityStore.setState({ byRef: activityMap([makeActivity(ref, 'working', { metrics: metrics(10) })]) }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(usageCalls()).toHaveLength(1);
+  });
+
+  it('таймер повтора чистится при active=false и при размонтировании', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    bridge.setHandler('rooms.usage', () => USAGE);
+    const view = render(show());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    view.rerender(show(false));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ROOM_USAGE_MIN_INTERVAL_MS * 2);
+    });
+    expect(usageCalls()).toHaveLength(1);
+    view.rerender(show(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(usageCalls()).toHaveLength(2);
+    view.unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ROOM_USAGE_MIN_INTERVAL_MS * 2);
+    });
+    expect(usageCalls()).toHaveLength(2);
+  });
+
+  it('Refresh спрашивает сразу и не чаще раза в 5 с', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    bridge.setHandler('rooms.usage', () => USAGE);
+    render(show());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('room-usage-chip'));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const refresh = () => screen.getByTestId('room-usage-refresh');
+    await act(async () => {
+      fireEvent.click(refresh());
+    });
+    expect(usageCalls()).toHaveLength(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ROOM_USAGE_REFRESH_MIN_MS);
+    });
+    await act(async () => {
+      fireEvent.click(refresh());
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(usageCalls()).toHaveLength(2);
+    await act(async () => {
+      fireEvent.click(refresh());
+      await vi.advanceTimersByTimeAsync(0);
     });
     expect(usageCalls()).toHaveLength(2);
   });
