@@ -25,7 +25,7 @@ if (process.argv[2] === '--version') {
   };
   out({ type: 'system', subtype: 'init', session_id: 'stub-assistant-1' });
   // «slow …» — ход думает 2 с: за это время окно копит очередь.
-  if (/^slow /i.test(prompt)) await new Promise((resolve) => setTimeout(resolve, 2000));
+  if (/^slow /i.test(prompt)) await new Promise((resolve) => globalThis.setTimeout(resolve, 2000));
   out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'mcp__parley-assistant__parley_overview', input: {} }] } });
   const overview = await call('parley_overview', {});
   const room = /\[(room:[^\]]+)\]/.exec(overview.text ?? '')?.[1];
