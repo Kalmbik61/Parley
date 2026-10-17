@@ -335,7 +335,10 @@ export function createWorksService(
     if (fresh !== null) countParsed(fresh);
     // Пока читали, пришло событие наблюдателя: его чтение свежее нашего, следующая пауза сверит ещё раз.
     if (stopped || fresh === null || seq !== latestSeq) return;
-    if (JSON.stringify(fresh) === JSON.stringify(latest)) return;
+    // `bytes` в сравнении не участвует: у карты из кэша разбора он 0, и список без перемен выглядел бы новым.
+    const content = (list: readonly WorkEntry[]): string =>
+      JSON.stringify(list.map(({ projectPath, map }) => ({ projectPath, map })));
+    if (content(fresh) === content(latest)) return;
     latest = fresh;
     scheduleRefresh();
   }
