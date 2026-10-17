@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** помощник говорит ответы вслух голосом macOS `say` на языке настроек, а рой во время речи становится лицом с эмоцией из метки ответа и ртом, который двигается по реальной громкости.
+**Goal:** помощник говорит ответы вслух голосом macOS `say` на языке настроек; когда ответ дописан, рой становится лицом с эмоцией из метки ответа и ртом, который двигается по реальной громкости, — ровно так, как в одобренном макете.
 
-**Architecture:** синтез — в main окна (`main/assistant/tts.ts`: `say` → WAV во временный файл в `~/.parley/assistant/tts/`, чтение, удаление), остров получает байты по IPC и играет их через WebAudio (`renderer/island/assistant/speaker.ts`, `AnalyserNode` даёт громкость рта). Ответ режется на предложения по мере прихода (`speech-queue.ts`), первое звучит, пока модель пишет дальше. Речь — состояние ввода острова (`InputPhase` получает `speaking` и `settling`), протокол хоста не меняется: эмоция уже приходит в `AssistantState.mood`. Лицо — порт функций `face`/`blink` и таблицы `EMO` одобренного макета `island-mockup.html` в существующий Canvas 2D-движок (`swarm/engine.ts`), новая форма `face` в `swarm/spec.ts`.
+**Architecture:** синтез — в main окна (`main/assistant/tts.ts`: `say` → WAV во временный файл в `~/.parley/assistant/tts/`, чтение, удаление), остров получает байты по IPC и играет их через WebAudio (`renderer/island/assistant/speaker.ts`, `AnalyserNode` даёт громкость рта). Ответ режется на предложения по мере прихода (`speech-queue.ts`), первое звучит, пока модель пишет дальше. Речь — состояние ввода острова (`InputPhase` получает `speaking` и `settling`), протокол хоста не меняется: эмоция уже приходит в `AssistantState.mood`. Лицо, эмоции и всё поведение речи — из одобренного макета `island-mockup.html`: таблица `EMO`, `DUR`, функции `face`/`blink`/`flash` переносятся в Canvas 2D-движок (`swarm/engine.ts`) дословно, новая форма `face` в `swarm/spec.ts`; порядок состояний — по сценариям макета `finish`/`speak`/`decide`/`hotkey`/`esc`/`tuck`: ответ стримится сферой, **лицо говорит после ответа**, затем сфера «Done» 1 с.
 
 **Tech Stack:** Electron 44 (main: `child_process`, `say`), WebAudio (`AudioContext`, `decodeAudioData`, `AnalyserNode`), `Intl.Segmenter`, React 18, zustand, vitest + jsdom, Playwright `_electron` со стабом `e2e/stub-assistant-agent.mjs` и подменой `PARLEY_TTS=fake`.
 
-**Spec:** `docs/specs/2026-10-14-assistant-design.md` — разделы 6.1 (настройки `assistant.speak`, `assistant.voice`), 8.2 (виды и кадры), 9 (лицо: эмоции, тайминги, моргание, бюджет), 10 (голос), 12 (проверки). Эталон лица — `docs/specs/assets/2026-10-14-assistant/island-mockup.html` (строки 246–257 таблица `EMO` и `DUR`, 280–350 `setSpec`/`face`/`blink`/`frame`, 380–392 `specFor`). Разведка кода — отчёт `recon-stage3` 2026-10-17; номера строк ниже — из него, по master после PR #71.
+**Spec:** `docs/specs/2026-10-14-assistant-design.md` — разделы 6.1 (настройки `assistant.speak`, `assistant.voice`), 8.2 (виды и кадры), 9 (лицо: эмоции, тайминги, моргание, бюджет), 10 (голос), 12 (проверки). Эталон лица **и взаимодействия** — `docs/specs/assets/2026-10-14-assistant/island-mockup.html` (строки 246–257 таблица `EMO` и `DUR`, 280–350 `setSpec`/`face`/`blink`/`frame`, 376–386 `SPEC`/`specFor`/`LABEL`/`MINI`, 449–473 сценарии `speak`/`finish`/`decide`/`hotkey`/`esc`/`tuck`). Разведка кода — отчёт `recon-stage3` 2026-10-17; номера строк ниже — из него, по master после PR #71.
 
 ## Global Constraints
 
@@ -18,28 +18,45 @@
 - Никаких `secrets.json`, `ANTHROPIC_AUTH_TOKEN`, `--dangerously-*`; `CLAUDECODE` не трогать; новых зависимостей нет.
 - Кадры роя — только по таблице 8.2: большой вид 60 fps, мини при занятом помощнике 30 fps (`speaking` и `settling` — занятость), свободный 0. Лицо идёт на тех же 700 душах большого вида; в мини лица нет — сфера.
 - Протокол хоста (`AssistantState`, `AssistantPhase`) не меняется; `speaking`/`settling` живут в острове.
+- **Макет — источник эмоций и взаимодействия** (решение человека 2026-10-17). Числа таблицы `EMO`, `DUR`, тайминги моргания, вспышки, короны и переходов — из `island-mockup.html` без изменений; порядок состояний речи — из его сценариев. Где спека 10 расходится с макетом (перечислено в «Из макета»), действует макет. Отклонения от макета — только из списка «Решения» ниже.
 - Один seed — один кадр: моргание и всё случайное в лице — из детерминированного генератора движка, не из `Math.random`.
 - eslint: нет игнора `_x`, `prefer-const`, плагина react-hooks нет; `LC_ALL=C` для тестов; E2E 800×500 с длинными именами; собранное приложение локально не запускать.
 - Коммит на задачу, сообщение по-русски, подпись `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`; исполнители не запускают vitest/tsc/eslint/сборку и не коммитят.
 
-## Решения, которых нет в спеке (записаны как мои, человек может поправить)
+## Из макета (не решения — так в одобренном прототипе; где спека 10 говорит иначе, действует макет)
 
-- **Языки без шаблонов.** Фразы «Sent» / «Cancelled» и тексты ошибок есть по-английски и по-русски; для прочих языков помощника — английские.
-- **Reduced motion.** Статичный кадр лица **текущей** эмоции (как в макете), рот на 0,3, без моргания; бриф говорил «спокойно», но эмоция — информация, а не движение.
-- **После речи** — сфера 1 с (`settling`, как `settle` в макете), затем состояние по хосту (облако или кольцо карточки).
+- **Лицо после ответа** (`finish`, подпись переключателя макета — «answer ends in a face»): ответ стримится сферой с потоком (`answering`), и только когда он дописан, рой складывается в лицо и говорит весь ответ. Спека 10 («первое предложение звучит, пока модель пишет») уступает макету: предложения **синтезируются** по мере прихода, а **играют** после конца ответа — задержки нет, порядок как в макете. GLM и Codex отдают текст сразу целиком — у них тот же путь.
+- **После речи** — `settle`: сфера `rot 0.3`, подпись «Done» (в мини тоже «Done»), 1000 мс, затем `idle` и обычный таймер 8 с.
+- **Карточка** (`decide`): озвучивается только «Отправил» / «Sent» — лицом, через 900 мс после появления исхода (`if (A.spk && ok)`); отмена не озвучивается; текст предложения на карточке не озвучивается (`fProp` без `speak`). Спека 10 («Отменил / Cancelled») уступает макету.
+- **Ошибки не озвучиваются**: `error` — коралловая сфера с глитчем и подпись, без лица и без речи. Спека 10 («ошибки из 6.6» голосом) уступает макету.
+- **Хоткей и кнопка микрофона во время речи** (`hotkey` при `BUSY`; `#mic.onclick = hotkey`): ничего не обрывают и не пишут — только раскрывают свёрнутый остров. Спека 10 («хоткей обрывает речь и начинает слушать») уступает макету. Так микрофон никогда не пишет голос помощника.
+- **Esc во время речи** (`esc`): речь обрывается, сразу `idle` (без `settle`), остров — в пилюлю.
+- **Стрелка ⌃ во время речи** (`tuck`): остров сворачивается в мини, речь продолжается — мини-сфера 30 fps с подписью «Speaking».
+- **Значок динамика** (`#spk`, `aria-pressed`): переключает тот же флаг, что и настройка «Speak answers» (в макете `#spk` и чекбокс панели — одно поле `A.spk`), а не «до конца разговора» — спека 10 уступает макету. Остров пишет `assistant.speak` в `ui.json` через main; Settings и остров показывают одно значение.
+- **Мини-вид при речи** — сфера без эмоции (`specFor(isMini)`), палитра лица сохраняется (коралл при `anger`/`error`).
+- **Палитра и приглушение лица**: `pal = anger | error ? coral : amber`, `dim = EMO[emo].dim` (у `sad` 0.78); ореол — по палитре (`haloFor` уже так).
+- **Reduced motion**: статичный кадр лица текущей эмоции, рот `amp 0.3`, без моргания, переходов и вспышки.
+- **Переходы**: `sphere → face 0.8`, `face → sphere 0.8`, `cloud → face 1.4`, `face → cloud 1.2`; смена эмоции внутри лица 0.6 с; вход в лицо — рот (роль 2) с задержкой 0.2 с; `surprise` — вспышка яркости ×(1 + 0.8·flash) со спадом 0.6 с; моргание раз в 2.4–4.4 с по 220 мс, в 20 % случаев двойное (+330 мс, 180 мс), закрытие 0.94; `surprise` и `error` не моргают.
+
+## Решения, которых нет ни в спеке, ни в макете (мои, человек может поправить)
+
+- **Источник случайности моргания** — второй поток `rng(seed ^ 0x9e3779b9)` вместо `Math.random` макета: числа те же, картинка та же, но кадр воспроизводим (ограничение «один seed — один кадр» и тесты).
+- **Рот по реальной громкости**: вместо синтетической кривой `ampAt` макета (у макета нет звука) — `amp = clamp((rms − 0.02) / 0.25)` по `getFloatTimeDomainData` аналайзера, атака мгновенная, спад 0.08 с; `amp` идёт в ту же формулу `lerp(H0, H1, amp)`.
+- **Выключение динамика посреди речи** (макет молчит: его речь — таймер) — речь обрывается, сразу `idle` как по Esc, остров остаётся открытым.
+- **Эмоция `error`** в таблице есть дословно; хост даёт `mood: 'error'` только с фазой `error`, которая не озвучивается, — в продукте лицо `error` не появляется, таблица не режется.
+- **Языки фраз.** «Отправил» / «Sent» — по-русски и по-английски; для прочих языков помощника — английская.
 - **Нет голоса для языка** — `say` без `-v` (системный голос), речь не отключается. Если `say` вообще не отвечает (не macOS, сбой) — текст без звука, лица нет, молча.
 - **Прогрев** — синтез короткой фразы при включении «Speak answers» и при старте острова с включённой речью.
 - **Новинки `say`** (`Albert`, `Bad News`, `Bahh`, `Bells`, `Boing`, `Bubbles`, `Cellos`, `Good News`, `Jester`, `Organ`, `Superstar`, `Trinoids`, `Whisper`, `Wobble`, `Zarvox`) в список не попадают.
-- **Громкость рта**: `amp = clamp((rms − 0.02) / 0.25)` по `getFloatTimeDomainData` аналайзера, атака мгновенная, спад `0.08 с`.
-- **Предложение готово**, когда за ним уже есть следующий текст, либо фаза хоста вышла из `thinking`/`tool`/`answering`; сегментация — `Intl.Segmenter(language, { granularity: 'sentence' })`, минимум 2 знака.
-- **Карточка**: текст предложения не озвучивается; после решения озвучивается только фраза исхода.
+- **Предложение готово** для синтеза, когда за ним уже есть следующий текст, либо ответ закончен; сегментация — `Intl.Segmenter(language, { granularity: 'sentence' })`, минимум 2 знака.
+- **Одна подпись на один флаг**: «Speak answers» и в Settings, и на значке острова (в макете значок подписан «Spoken replies»; спека 6.1 зовёт настройку «Speak answers»).
 
 ## Review Focus
 
 1. Ответ с инструментом посередине: хост сбрасывает `answer` в `''` на `tool` и публикует новый текст — очередь должна забыть недоговорённое и не склеивать старое с новым (Задача 6: тест «answer стал короче отданного префикса → очередь сброшена, speaker.stop()»).
-2. Хоткей во время речи: речь обрывается до старта записи, иначе микрофон пишет голос помощника (Задача 7: тест «openMode({listen:true}) при speaking → stop() вызван раньше record()»).
+2. Хоткей и микрофон во время речи: по макету не пишут и не обрывают — иначе микрофон записал бы голос помощника (Задача 7: тест «openMode({listen:true}) и toggleListening() при speaking → record не вызван, stop не вызван, остров раскрыт»).
 3. `say` зависает или бинарь отсутствует: ход не должен висеть — тайм-аут 20 с на предложение, результат без звука, остров возвращается к сфере (Задача 2: тест «run не завершился за timeout → SIGKILL, пустой результат»; Задача 7: тест «synthesize бросает → input idle, notice нет»).
-4. Выключение «Speak answers» посреди речи: текущая речь обрывается, лицо складывается в сферу (Задача 7: тест «config.speech.enabled → false при speaking → stop, input settling»).
+4. Выключение «Speak answers» посреди речи (значок острова или Settings): речь обрывается, лицо складывается в сферу, остров открыт (Задача 7: тест «config.speech.enabled → false при speaking → stop, input idle»).
 5. Смена эмоции в той же форме (`joy` → `sad` при двух предложениях разной метки невозможна внутри хода, но возможна между ходами и при ошибке): переход 0,6 с без глитча, палитра янтарь → коралл за 0,3 с (Задача 8: тест «face joy → face anger: dur 0.6, pal coral»).
 
 ---
@@ -105,12 +122,13 @@
 - Produces:
   - `island:tts` — `invoke({ text: string; voice: string | null; language: string }) → Uint8Array | null`; только от окна острова (`fromIsland`), `text` до 2000 знаков, иначе `HostError('bad_request')`.
   - `island:tts-warmup` — `invoke({ language, voice }) → void`.
+  - `island:assistant-speak` — `invoke(on: boolean) → void`; только от окна острова; main делает `uiStore.save({ assistant: { speak: on } })` и зовёт `onUiSaved` — конфиг острова и зеркало настроек обновляются тем же путём, что из диалога Settings (значок динамика макета и настройка — один флаг).
   - `app:assistant-voices` — `invoke(language: string) → SayVoice[]` для главного окна.
-  - `bridge.island.speech = { synthesize(input), warmup(input) }`; `bridge.app.assistantVoices(language)`.
+  - `bridge.island.speech = { synthesize(input), warmup(input), setSpeak(on) }`; `bridge.app.assistantVoices(language)`.
   - `normalizeAssistant`: `speak` по умолчанию `false`, `voice` — строка или `null`; старые `ui.json` без полей — умолчания.
   - `islandConfig().assistant.speech = { enabled: current.assistant.speak, voice: current.assistant.voice }`.
 
-- [ ] **Step 1: Падающие тесты** — `ui-types.test.ts`: `normalizeAssistant({})` даёт `speak: false, voice: null`; `{ speak: 'yes' }` → `false`; `main/island/ipc.test.ts`: `island:tts` отдаёт байты фейка, не от острова → `HostError('forbidden')` как у соседей, текст 2001 знак → `bad_request`; `main/ipc.test.ts`: `app:assistant-voices('ru')` отдаёт список службы; `preload/island.test.ts`: `speech.synthesize` зовёт `invoke('island:tts', …)`.
+- [ ] **Step 1: Падающие тесты** — `ui-types.test.ts`: `normalizeAssistant({})` даёт `speak: false, voice: null`; `{ speak: 'yes' }` → `false`; `main/island/ipc.test.ts`: `island:tts` отдаёт байты фейка, не от острова → `HostError('forbidden')` как у соседей, текст 2001 знак → `bad_request`; `main/ipc.test.ts`: `app:assistant-voices('ru')` отдаёт список службы; `preload/island.test.ts`: `speech.synthesize` зовёт `invoke('island:tts', …)`; `main/island/ipc.test.ts`: `island:assistant-speak(true)` → `uiStore.save` с `{ assistant: { speak: true } }` и `onUiSaved`, не от острова → `forbidden`.
 - [ ] **Step 2: Запустить, убедиться, что падают.**
 - [ ] **Step 3: Реализация** по интерфейсам; байты через IPC — `Uint8Array` (в renderer `slice(byteOffset, byteOffset+byteLength)` до `ArrayBuffer`, как `voice/ipc.ts:15–21` в обратную сторону).
 - [ ] **Step 4: PASS** по пяти файлам тестов + `tsc` desktop (фикстуры с новым полем `speech`).
@@ -178,10 +196,10 @@
     reset(): void
     wasReset(): boolean                                             // и снимает флаг
   }
-  export function spokenPhrase(kind: 'sent' | 'cancelled' | 'error', language: string, detail?: string): string
+  export function spokenPhrase(kind: 'sent', language: string): string
   ```
-- `spoken.ts`: таблица `{ en: { sent: 'Sent.', cancelled: 'Cancelled.', error: 'Something went wrong.' }, ru: { sent: 'Отправил.', cancelled: 'Отменил.', error: 'Что-то пошло не так.' } }`, прочие языки → `en`; ошибки из 6.6 (лимит, не подключён, тайм-аут) — по `detail` ключам хоста, если он их даёт, иначе общая фраза.
-- Сегментация через `Intl.Segmenter`; готово = есть текст после границы, либо `settled === true` (фаза хоста вышла из `thinking`/`tool`/`answering`); каждое предложение проходит `speakable` (Задача 1) и отбрасывается, если короче 2 знаков.
+- `spoken.ts`: таблица `{ en: { sent: 'Sent.' }, ru: { sent: 'Отправил.' } }`, прочие языки → `en`. Только эта фраза: по макету (`decide`) отмена и ошибки не озвучиваются.
+- Сегментация через `Intl.Segmenter`; готово = есть текст после границы, либо `settled === true` (фаза хоста вышла из `thinking`/`tool`/`answering`); каждое предложение проходит `speakable` (Задача 1) и отбрасывается, если короче 2 знаков. Очередь только **режет и отдаёт на синтез**; когда играть — решает стор (Задача 7: после конца ответа, как `finish` макета).
 
 - [ ] **Step 1: Падающие тесты** — потоковый ввод `'The room is working.'` → `[]`, затем `'The room is working. Two agents'` → `['The room is working.']`, затем `settled` → `['Two agents']`; `push(2, …)` после `push(1, …)` → сброс; `answer` короче префикса → сброс (Review Focus 1); русский текст с «т. е.» не режется внутри сокращения (Segmenter `ru`); `spokenPhrase('sent','uk')` → `'Sent.'`.
 - [ ] **Step 2: Запустить, убедиться, что падают.**
@@ -191,28 +209,30 @@
 
 ---
 
-### Task 7: Стор острова — состояние речи, обрывы, глушение
+### Task 7: Стор острова — речь по сценариям макета, Esc, значок динамика
 
 **Files:**
-- Modify: `packages/desktop/src/renderer/island/assistant/store.ts:13, 20–22, 84–93, 111–135, 155`, `labels.ts:6–7, 29`, `IslandApp.tsx:71, 97–104, 189–215, 307–319` (configure: `speech` deps; прогрев при `config.speech.enabled`), `shared/strings.ts` (`assistant.speaking: 'Speaking'`, `miniSpeaking: 'Speaking'`, `mute: 'Mute for this conversation'`, `unmute: 'Unmute'`)
+- Modify: `packages/desktop/src/renderer/island/assistant/store.ts:13, 20–22, 84–93, 111–135, 155`, `labels.ts:6–7, 29`, `IslandApp.tsx:71, 97–104, 189–215, 307–319` (configure: `speech` deps; прогрев при `config.speech.enabled`), `shared/strings.ts` (`assistant.speaking: 'Speaking'`, `done: 'Done'`, `miniSpeaking: 'Speaking'`, `miniDone: 'Done'`)
 - Test: `store.test.ts`, `labels.test.ts`, `IslandApp.test.tsx`
 
 **Interfaces:**
-- Produces: `InputPhase = 'idle' | 'listening' | 'transcribing' | 'speaking' | 'settling'`; стор получает `muted: boolean`, `toggleMute()`, `mouth(): number` (прокси к speaker), `speechEnabled` из конфига.
-- `AssistantDeps.speech = { synthesize(text): Promise<ArrayBuffer | null>; speaker: Speaker; feed: ReturnType<typeof createSentenceFeed> }`.
-- Поведение:
-  - `applyHost`: если речь включена и не заглушена — `feed.push(host.turn, host.answer, settled)`, каждое предложение → `synthesize` → `speaker.enqueue`; при `feed.wasReset()` → `speaker.stop()`; первый `enqueue` ставит `input: 'speaking'`; `speaker.onIdle` → `input: 'settling'` на 1000 мс → `'idle'`.
-  - `host.outcome` сменился на `sent`/`cancelled` → озвучить `spokenPhrase`; `host.phase === 'error'` и речь включена → фраза ошибки.
-  - `openMode({ listen: true })` при `speaking`/`settling` → `speaker.stop()`, затем запись (Review Focus 2); `close()` → `stop()`; `toggleListening()` при речи → `stop()` и запись в режиме `draft`; `toggleMute()` при речи → `stop()`, `muted` держится до `reset()`.
-  - Выключение `config.speech.enabled` при речи → `stop()`, `settling` (Review Focus 4). `synthesize` вернул `null` или бросил → предложение пропущено, без notice (Review Focus 3).
-  - `assistantBusy` считает `speaking`/`settling` занятостью (таймер `ANSWER_HOLD_MS` не закрывает остров посреди речи); `hideAssistant()` при речи сворачивает в мини, речь продолжается.
-  - `labels.statusLabel`: `speaking` → `S.assistant.speaking`, `settling` → как `idle`; `miniLabel`: `speaking` → `miniSpeaking` (сейчас любой input даёт `miniListening`, :29).
+- Produces: `InputPhase = 'idle' | 'listening' | 'transcribing' | 'speaking' | 'settling'`; стор получает `toggleSpeak()`, `mouth(): number` (прокси к speaker), `speechEnabled` из конфига.
+- `AssistantDeps.speech = { synthesize(text): Promise<ArrayBuffer | null>; speaker: Speaker; feed: ReturnType<typeof createSentenceFeed>; setSpeak(on: boolean): Promise<void> }`.
+- Поведение — по сценариям макета (`finish`, `speak`, `decide`, `hotkey`, `esc`, `tuck`):
+  - `applyHost` при включённой речи: пока хост в `answering` — `feed.push(host.turn, host.answer, settled)`, каждое предложение сразу уходит в `synthesize`, результаты лежат в `pending` **по порядку** (массив промисов) и в `speaker` пока не идут; `feed.wasReset()` → `pending` очищен, `speaker.stop()`.
+  - **Ответ дописан без карточки** (фаза хоста ушла из `answering` в `idle`, исхода нет) → `settled` отдаёт хвост → `pending` по очереди (`await` последовательно) → `speaker.enqueue`; первый `enqueue` ставит `input: 'speaking'`; `speaker.onIdle` → `input: 'settling'` на 1000 мс → `'idle'` (`finish` → `speak` → `settle`).
+  - **Ход с карточкой** (`awaiting-confirm`): ничего не озвучивается; `host.outcome` стал `sent` → через 900 мс `synthesize(spokenPhrase('sent', language))` → лицо говорит → `settling` → `idle` (`decide`); `cancelled` и `error` → молча.
+  - `openMode({ listen: true })` и `toggleListening()` при `speaking`/`settling` → записи нет, речь не обрывается, остров только раскрывается (`hotkey` при `BUSY`; Review Focus 2).
+  - `close()` (Esc) → `speaker.stop()`, `pending` очищен, сразу `idle` без `settling` (`esc`).
+  - `toggleSpeak()` → `deps.speech.setSpeak(!speechEnabled)`; пришедший конфиг `speech.enabled === false` при речи → `stop()`, `idle` (Review Focus 4). `synthesize` вернул `null` или бросил → предложение пропущено, без notice (Review Focus 3).
+  - `assistantBusy` считает `speaking`/`settling` занятостью (таймер `ANSWER_HOLD_MS` не закрывает остров посреди речи); `hideAssistant()` (⌃) при речи сворачивает в мини, речь продолжается (`tuck`).
+  - `labels.statusLabel`: `speaking` → `S.assistant.speaking` («Speaking»), `settling` → `S.assistant.done` («Done»); `miniLabel`: `speaking` → `miniSpeaking` («Speaking»), `settling` → `miniDone` («Done») (сейчас любой input даёт `miniListening`, :29) — таблицы `LABEL`/`MINI` макета.
 
 - [ ] **Step 1: Падающие тесты** — по каждому пункту поведения выше по одному тесту с фейковыми `speaker`/`synthesize`/`feed` (vi.fn, fake timers для 1000 мс).
 - [ ] **Step 2: Запустить, убедиться, что падают.**
 - [ ] **Step 3: Реализация**; `IslandApp` собирает `speaker` и `feed` на `connected` и язык из конфига; прогрев `bridge.island.speech.warmup` при `config.speech.enabled` (один раз на включение).
 - [ ] **Step 4: PASS** по трём файлам.
-- [ ] **Step 5: Коммит** — `feat(island): речь помощника — состояние, обрывы хоткеем и Esc, глушение`.
+- [ ] **Step 5: Коммит** — `feat(island): речь помощника после ответа — состояние, Esc, значок динамика`.
 
 ---
 
@@ -230,6 +250,7 @@
   - `swarmSpecFor(host, input, mini)`: `input === 'speaking'` → `{ shape: 'face', emo: host.mood, pal: anger|error ? 'coral' : 'amber', dim: EMO[emo].dim ?? 1 }`; `input === 'settling'` → сфера `rot 0.3`; в мини `face` → `sphere`, `emo: null`. Приоритет: `offline` хоста выше речи; `listening`/`transcribing` — как сейчас.
   - `SwarmEngine.frame(now, ctx, reducedMotion, mic, mouth = 0)`; ключ спеки `${shape}|${fx}|${emo}`; `Soul.role: 0 | 1 | 2` по порогам 0,24 / 0,48 из уже существующего вызова `R()` (engine.ts:223 — порядок генератора не меняется, рой по seed совпадает с макетом); `shapeClass` → `'cloud' | 'sphere' | 'face'`; `tg(s, t, amp, bl)` с веткой `face(s, F, amp, bl, t)` — порт строк 308–325 макета (корона-пыль, ×1,2, `sm 1.15`, `z 0.35`); `blink(now, F)` — порт 326–333 на **втором потоке rng** (`rng(seed ^ 0x9e3779b9)`), не на `Math.random`; `flash` для `surprise` (яркость ×(1+0,8·flash), спад 0,6 с); в `frame` — `p` с вычетом 0,2 с для `role === 2` при входе в лицо, `trans = el < dur + extra`; reduced motion: `amp 0.3`, `bl 1`, без вспышки.
   - `<Swarm mouth={() => number}>` — геттер, читается в rAF (как `live.current.mic`), без ререндера; `data-emo` на canvas при `face`.
+  - **Все числа лица — из макета без правок**: пороги ролей 0.24 / 0.48, `ex = 0.41·sx`, `ey` из таблицы, глаз `F.a·X`, `F.b·Y·bl`, веко `cut` через `clamp(cut[0] + cut[1]·sx·X, −1, 0.8)`, `dome` → `−|Y|`, `x`-глаз через `len`, рот `H = lerp(H0, H1, amp)`, `mo` по степени 0.8 с `(0.92 + 0.16·amp)`, `curl`, `wave 0.035·sin(q·3.4π)`, `pw`, корона `gx·0.045 + 0.012·sin(t/1000·0.8 + tw)`, `m 0.7`, масштаб ×1.2, `sm 1.15`, `z 0.35`. Отличий от макета два — источник случайности моргания и `amp` (раздел «Решения»); новых параметров не вводить.
 
 - [ ] **Step 1: Падающие тесты** — `spec.test.ts`: `speaking` + `mood joy` → `face/joy/amber`; `mood anger` → `coral`; `settling` → `sphere rot 0.3`; mini + speaking → `sphere`; (поправить `toEqual` на :36 под новое поле `emo`). `engine.test.ts`: после перехода в `face calm` души `role 0` лежат внутри эллипса глаза (`|x/1.2 + 0.41| ≤ 0.095 + 0.06`, `|y/1.2 + 0.28| ≤ 0.13 + 0.06`), `role 2` — в полосе рта (`|x/1.2| ≤ 0.39 + 0.06`, `|y/1.2 − 0.25| ≤ 0.25`); `mouth 1` против `mouth 0` — высота рта больше; два движка с одним seed и одинаковыми `now` → одинаковые `souls` в лице через 5 с (моргание детерминировано); `face joy → face anger` → `dur 0.6`, палитра `coral` (Review Focus 5); `surprise` вход → яркость первого кадра выше (проверить через `dim`-множитель, если он читается; иначе через внутренний `flash` в тестовом геттере). `Swarm.test.tsx`: `data-shape="face"`, `data-emo="joy"`.
 - [ ] **Step 2: Запустить, убедиться, что падают.**
@@ -242,14 +263,14 @@
 ### Task 9: Виды — лицо на острове, значок динамика, мини «Speaking»
 
 **Files:**
-- Modify: `packages/desktop/src/renderer/island/assistant/AssistantView.tsx:19–37, 61, 82, 127–169`, `IslandView.tsx:110–114`, `IslandApp.tsx` (пропсы `mouth`, `muted`, `onToggleMute`)
+- Modify: `packages/desktop/src/renderer/island/assistant/AssistantView.tsx:19–37, 61, 82, 127–169`, `IslandView.tsx:110–114`, `IslandApp.tsx` (пропсы `mouth`, `speakOn`, `onToggleSpeak`)
 - Test: `AssistantView.test.tsx`, `IslandView.test.tsx`, `IslandApp.test.tsx`
 
 **Interfaces:**
-- Consumes: `swarmSpecFor(host, input, mini)` с `host.mood` в зависимостях `useMemo` (:61 и IslandView :112), `store.mouth`, `store.muted`, `store.toggleMute`.
-- Produces: кнопка динамика рядом с микрофоном (`data-testid="assistant-mute"`, `aria-label` = `S.assistant.mute`/`unmute`, иконка `Volume2`/`VolumeX` из lucide), видна только при `config.speech.enabled`; подпись состояния «Speaking» (Задача 7); мини-пилюля: `fps 30` при `speaking`/`settling` (через `assistantBusy`), подпись `miniSpeaking`.
+- Consumes: `swarmSpecFor(host, input, mini)` с `host.mood` в зависимостях `useMemo` (:61 и IslandView :112), `store.mouth`, `config.speech.enabled`, `store.toggleSpeak`.
+- Produces: кнопка динамика рядом с микрофоном, как `#spk` макета (`data-testid="assistant-speak"`, `aria-label` = `S.assistant.settings.speak`, `aria-pressed` = `config.speech.enabled`, иконка `Volume2`/`VolumeX` из lucide), видна всегда; подписи «Speaking» и «Done» (Задача 7); мини-пилюля: `fps 30` при `speaking`/`settling` (через `assistantBusy`), подписи `miniSpeaking`/`miniDone`.
 
-- [ ] **Step 1: Падающие тесты** — `AssistantView`: при `input speaking` и `mood sad` canvas имеет `data-shape="face" data-emo="sad"`, подпись «Speaking», кнопка `assistant-mute` есть; клик → `onToggleMute`; `speech.enabled false` → кнопки нет. `IslandView`: мини при `speaking` → `data-shape="sphere"`, подпись «Speaking». `IslandApp`: `mouth` пробрасывается в `<Swarm>` (геттер зовётся в кадре с фейковым rAF).
+- [ ] **Step 1: Падающие тесты** — `AssistantView`: при `input speaking` и `mood sad` canvas имеет `data-shape="face" data-emo="sad"`, подпись «Speaking»; при `settling` — `data-shape="sphere"` и «Done»; кнопка `assistant-speak` с `aria-pressed="true"` при `speech.enabled`, `"false"` без неё; клик → `onToggleSpeak`. `IslandView`: мини при `speaking` → `data-shape="sphere"`, подпись «Speaking». `IslandApp`: `mouth` пробрасывается в `<Swarm>` (геттер зовётся в кадре с фейковым rAF).
 - [ ] **Step 2: Запустить, убедиться, что падают.**
 - [ ] **Step 3: Реализация.**
 - [ ] **Step 4: PASS**; снимки состояний стендом `shots-assistant.mjs` (speaking calm/joy/anger, settling, мини) — приложить к журналу.
@@ -263,12 +284,12 @@
 - Modify: `packages/desktop/e2e/assistant.spec.ts` (новый сценарий), при необходимости `e2e/stub-assistant-agent.mjs:30–38` (метки уже есть: `[[joy]]`)
 - Modify: `README.md` (раздел помощника: Speak answers, голос, значок динамика), `CHANGELOG.md` (Unreleased → Added «The assistant speaks»), `docs/specs/2026-10-14-assistant-design.md` (отметки «сделано» в 9–10, расхождения: Canvas 2D вместо WebGL2, `settling`, решения этого плана), `TODOS.md` (этап 4 и шесть отложенных эмоций)
 
-- [ ] **Step 1: E2E** — запуск с `PARLEY_TTS=fake` и `PARLEY_VOICE=fake`; `saveUi({ assistant: { enabled: true, provider: 'claude', speak: true } })`; вопрос текстом; ожидание `data-shape="face"` и `data-emo="joy"` на `[data-testid=swarm]` острова, подписи «Speaking»; затем `data-shape="sphere"` (settling) и `cloud`; второй сценарий: Esc во время речи закрывает остров, `data-shape` не `face` при повторном открытии. Длинные имена работ и комнат, окно 800×500.
+- [ ] **Step 1: E2E** — запуск с `PARLEY_TTS=fake` и `PARLEY_VOICE=fake`; `saveUi({ assistant: { enabled: true, provider: 'claude', speak: true } })`; вопрос текстом; пока ответ идёт — `data-shape="sphere"`; после конца ответа — `data-shape="face"` и `data-emo="joy"` на `[data-testid=swarm]`, подпись «Speaking»; затем `data-shape="sphere"` с подписью «Done» и `cloud`; второй сценарий: хоткей во время лица не даёт «Listening…» и оставляет `face`; Esc во время речи закрывает остров, `data-shape` не `face` при повторном открытии. Длинные имена работ и комнат, окно 800×500.
 - [ ] **Step 2: Прогнать** `pnpm --dir packages/desktop exec playwright test e2e/assistant.spec.ts` — PASS трижды.
 - [ ] **Step 3: Документы** по списку файлов.
 - [ ] **Step 4: Полный прогон** — `pnpm build && pnpm typecheck && pnpm lint && LC_ALL=C pnpm -r --workspace-concurrency=1 test`; E2E `assistant.spec.ts`, `island.spec.ts`, `dialogs-layout.spec.ts`.
 - [ ] **Step 5: Коммит** — `feat(assistant): этап 3 — E2E речи и лица, README, CHANGELOG, спека`.
-- [ ] **Step 6: Живая проверка (человек, dev-окно `~/.parley-voice`)** — голос ru и en (Milena/Yuri, Samantha/Alex), включение «Speak answers» и прогрев (первое предложение без задержки больше 1 с после второго запуска), хоткей во время речи, Esc, значок динамика, карточка → «Отправил», эмоции joy/sad/anger на реальных ответах, reduced motion в System Settings, CPU острова при лице (замер из плана острова, Задача 4).
+- [ ] **Step 6: Живая проверка (человек, dev-окно `~/.parley-voice`)** — голос ru и en (Milena/Yuri, Samantha/Alex), включение «Speak answers» и прогрев (первое предложение без задержки больше 1 с после второго запуска), хоткей во время речи (только раскрывает, не пишет), Esc, значок динамика (переключает «Speak answers» и в Settings), карточка → «Отправил» лицом, отмена — молча, эмоции joy/sad/anger на реальных ответах, reduced motion в System Settings, CPU острова при лице (замер из плана острова, Задача 4).
 
 ---
 
