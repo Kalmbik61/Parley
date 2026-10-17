@@ -38,7 +38,8 @@ const USER_HZ = 100;
 
 /** macOS: `ps` печатает локальное время старта с точностью до секунды. */
 async function startedAtBsd(pid: number): Promise<string | null> {
-  const { stdout } = await run('ps', ['-o', 'lstart=', '-p', String(pid)]);
+  // В русской локали `ps` печатает дату по-русски, `Date` её не разбирает: формат нужен английский.
+  const { stdout } = await run('ps', ['-o', 'lstart=', '-p', String(pid)], { env: { ...process.env, LC_ALL: 'C' } });
   const at = new Date(stdout.trim());
   return Number.isNaN(at.getTime()) ? null : at.toISOString();
 }
