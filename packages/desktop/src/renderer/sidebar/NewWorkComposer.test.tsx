@@ -397,6 +397,19 @@ describe('NewWorkComposer — отправка', () => {
     await waitFor(() => expect(opened).toEqual([false]));
   });
 
+  it('sessions.create отказан бюджетом — ошибка называет лимит и что сделать', async () => {
+    bridge.setHandler('sessions.create', async () => {
+      throw { code: 'conflict', message: 'raw host text', data: { code: 'resource-budget', reason: 'concurrent', scope: 'work', limit: 10, used: 10 } };
+    });
+    await renderComposer(() => {});
+    typeTitle('title');
+    fireEvent.click(create());
+
+    expect(
+      await screen.findByText('Couldn\'t create session: 10 of 10 sessions are already running in this workspace. Put one to sleep or raise "Running sessions, workspace" in Settings.'),
+    ).toBeTruthy();
+  });
+
   it('Retry берёт агента и промпт, которые человек поправил после сбоя', async () => {
     let fail = true;
     bridge.setHandler('sessions.create', async (params) => {

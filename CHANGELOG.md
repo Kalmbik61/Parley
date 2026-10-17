@@ -8,7 +8,9 @@ All notable changes to Parley are documented in this file.
 
 ### Fixed
 
-- **Parley no longer stays stuck when a process dies holding the works index lock.** A lock whose owner is gone is now taken over automatically; a lock left behind by an older version is taken over after 10 seconds. Before, a crashed process could leave Parley unable to save any work until the lock file was deleted by hand.
+- **Parley no longer stays stuck when a process dies holding the works index lock.** A lock whose owner is gone is now taken over automatically; a lock left behind by an older version is taken over after 10 seconds. Before, a crashed process could leave Parley unable to save any work until the lock file was deleted by hand. Several processes waiting on the same dead lock no longer race to take it over, and a lock that times out now says who holds it (the owner's pid, whether it is alive, and for how long).
+- **The window says why a session did not start.** When the work or room session limit or the hourly starts limit is reached, resuming a session, creating one, creating a room or dropping a session into a room now names the limit (for example "6 of 6 sessions are already running in this room") and what to do about it, including the Settings value to raise. Before, most of these showed only "conflicting state" or nothing at all.
+- **Session liveness checks work when Parley or its CLI runs under a non-English locale.**
 - **Deleting a work no longer removes its folder when the index is busy.** The folder is now deleted only once the index lock is taken, so a failed delete leaves the work intact.
 
 ## 0.15.0

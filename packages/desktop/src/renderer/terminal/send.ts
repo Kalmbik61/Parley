@@ -12,8 +12,8 @@ import { liveStatus } from '@parley/core/session-state';
 import type { SendResult, SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
-import { errorText, S } from '../../shared/strings.js';
-import { sessionTag } from '../lib/participant.js';
+import { errorText, S, startErrorText } from '../../shared/strings.js';
+import { sessionRowLabel, sessionTag } from '../lib/participant.js';
 
 export type SendOutcome = SendResult | { error: 'not_found' | 'failed'; message: string };
 
@@ -50,12 +50,15 @@ export function canResume(session: WorkSession): boolean {
   return session.lifecycle !== 'closed' && RESUMABLE.has(liveStatus(session));
 }
 
-/** «Resume» неживой сессии: отказ — тостом, а не молча (раунд main-r2, п. 2); общая у терминала и чата. */
-export function resumeSession(bridge: ParleyBridge, ref: SessionRef): void {
+/**
+ * «Resume» неживой сессии: отказ — тостом, а не молча (раунд main-r2, п. 2); общая у терминала, чата и кнопки тоста
+ * отправки. Отказ бюджета называет причину и что делать (`startErrorText`); `name` — ярлык сессии, если он известен.
+ */
+export function resumeSession(bridge: ParleyBridge, ref: SessionRef, name?: string): void {
   bridge.call('sessions.resume', { ref }).catch((error: unknown) => {
-    const { code, message } = decodeIpcError(error);
-    console.warn('[parley] sessions.resume', message);
-    toast.error(errorText(code, S.errors.actions.resumeSession));
+    const failure = decodeIpcError(error);
+    console.warn('[parley] sessions.resume', failure.message);
+    toast.error(startErrorText(failure, name === undefined ? S.errors.actions.resumeSession : S.errors.actions.resumeNamed(name)));
   });
 }
 
@@ -161,9 +164,7 @@ export function showSendToast(
     retry: { label: S.common.retry, onClick: () => (deps.retry === undefined ? void sendWithToast(deps, ref, text, submit, sendOptions) : deps.retry()) },
     resume: {
       label: S.sidebar.sessionMenu.resume,
-      onClick: () => {
-        deps.bridge.call('sessions.resume', { ref }).catch((error: unknown) => console.warn('[parley] sessions.resume', error));
-      },
+      onClick: () => resumeSession(deps.bridge, ref, session === null ? undefined : sessionRowLabel(session.id, session.label)),
     },
   };
   // У sonner две кнопки: `action` и `cancel` — таблице 8.6 больше двух не нужно.

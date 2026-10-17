@@ -41,7 +41,7 @@ import type { TabSpec } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
 import { applyFocusTarget, buildFocusTargetDeps } from '../attention/focus-target.js';
 import { useHostSupports } from '../lib/capabilities.js';
-import { sessionTag } from '../lib/participant.js';
+import { sessionRowLabel, sessionTag } from '../lib/participant.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { dndId, type DropTargetData } from '../layout/dnd.js';
 import { useTerminalDropPreview } from '../layout/DropIndicator.js';
@@ -271,7 +271,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     const tag = sessionTag(sessionRef.sessionId);
     toast.error(S.send.notRunning(tag), {
       id: `not-running:${refKey(sessionRef)}`,
-      ...(canResume(session) ? { action: { label: S.sidebar.sessionMenu.resume, onClick: () => resumeSession(bridge, sessionRef) } } : {}),
+      ...(canResume(session) ? { action: { label: S.sidebar.sessionMenu.resume, onClick: () => resumeSession(bridge, sessionRef, sessionRowLabel(session.id, session.label)) } } : {}),
     });
   }, [bridge, sessionRef]);
 

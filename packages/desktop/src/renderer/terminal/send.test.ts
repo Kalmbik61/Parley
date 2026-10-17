@@ -10,7 +10,7 @@ import type { WorkSession } from '@parley/core';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession } from '../test-utils/work-fixtures.js';
-import { canResume, sendToAgent, sendToast, sendWithToast, type SendOutcome, type SendWithToastDeps } from './send.js';
+import { canResume, resumeSession, sendToAgent, sendToast, sendWithToast, type SendOutcome, type SendWithToastDeps } from './send.js';
 
 vi.mock('sonner', () => {
   const fn = Object.assign(vi.fn(), { error: vi.fn() });
@@ -259,5 +259,60 @@ describe('sendWithToast (тест 8)', () => {
     await sendWithToast(deps, ref, 'hi', true);
     expect(lastToast()).toEqual({ kind: 'error', text: "Couldn't send to agent: failed.", buttons: [] });
     expect(console.warn).toHaveBeenCalled();
+  });
+});
+
+describe('отказ возобновления по бюджету называет причину', () => {
+  const budgetError = (): Error =>
+    encodeIpcError({
+      code: 'conflict',
+      message: 'session limit reached: raw host text',
+      data: { code: 'resource-budget', reason: 'concurrent', scope: 'room', limit: 6, used: 6 },
+    });
+  const PHRASE = 'Put one to sleep or raise "Running sessions, room" in Settings.';
+
+  beforeEach(() => {
+    vi.mocked(toast.error).mockClear();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('resumeSession: тост со счётом, комнатой и настройкой, а не «conflicting state»', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('sessions.resume', () => {
+      throw budgetError();
+    });
+    resumeSession(bridge, ref, 'S02 Bruno');
+    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe(
+      `Couldn't resume S02 Bruno: 6 of 6 sessions are already running in this room. ${PHRASE}`,
+    );
+  });
+
+  it('resumeSession без имени — «resume session»', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('sessions.resume', () => {
+      throw budgetError();
+    });
+    resumeSession(bridge, ref);
+    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toMatch(/^Couldn't resume session: 6 of 6 sessions/);
+  });
+
+  it('кнопка Resume в тосте отправки: отказ уходит тостом, а не только в консоль', async () => {
+    const bridge = createFakeBridge();
+    const session = makeSession('s-02', 'Bruno', { lifecycle: 'sleeping' });
+    bridge.setHandler('pty.send', () => {
+      throw encodeIpcError({ code: 'not_found', message: 'm' });
+    });
+    bridge.setHandler('sessions.resume', () => {
+      throw budgetError();
+    });
+    await sendWithToast({ bridge, session: () => session, openSession: vi.fn() }, ref, 'hi', true);
+    const options = vi.mocked(toast.error).mock.calls.at(-1)?.[1] as { action?: { label: string; onClick: (e: unknown) => void }; cancel?: { label: string; onClick: (e: unknown) => void } };
+    vi.mocked(toast.error).mockClear();
+    [options.action, options.cancel].find((item) => item?.label === 'Resume')?.onClick({});
+    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toContain(`6 of 6 sessions are already running in this room. ${PHRASE}`);
   });
 });

@@ -759,6 +759,15 @@ describe('NewSessionOrRoomDialog — частичный сбой запуска'
     expect(callsOf('rooms.create')).toEqual([]);
   });
 
+  it('rooms.create отказан бюджетом — ошибка комнаты называет лимит и что сделать', async () => {
+    bridge.setHandler('rooms.create', async () => {
+      throw { code: 'conflict', message: 'raw host text', data: { code: 'resource-budget', reason: 'concurrent', scope: 'room', limit: 6, used: 6 } };
+    });
+    await renderDialog({ room: true });
+    fireEvent.click(button('Create room'));
+    expect(await screen.findByText(`Couldn't create room: 6 of 6 sessions are already running in this room. Put one to sleep or raise "Running sessions, room" in Settings.`)).toBeTruthy();
+  });
+
   it('rooms.create упал после запуска всех — ошибка комнаты, Retry зовёт только rooms.create', async () => {
     let fail = true;
     bridge.setHandler('rooms.create', async () => {
@@ -1752,16 +1761,16 @@ describe('бюджет работы при старте (P37)', () => {
     expect(callsOf('rooms.create')[0]?.members).toEqual(['s-01', 's-02', 's-03']);
   });
 
-  it('отказ самого хоста по агенту показан его словами, комнаты нет, модель не запущена', async () => {
+  it('отказ самого хоста по агенту назван по полям: счёт, где, что сделать; комнаты нет, модель не запущена', async () => {
     stubSettings();
     bridge.setHandler('sessions.create', async () => {
-      throw Object.assign(new Error('session limit reached: 10 of 10 sessions are running or reserved in this workspace; stop one or raise the limit in Settings'), {
-        code: 'conflict', data: { code: 'resource-budget', reason: 'concurrent' },
+      throw Object.assign(new Error('session limit reached: raw technical host text'), {
+        code: 'conflict', data: { code: 'resource-budget', reason: 'concurrent', scope: 'work', limit: 10, used: 10 },
       });
     });
     await renderDialog({ room: true });
     fireEvent.click(button('Create room'));
-    await waitFor(() => expect(within(rows()[0] as HTMLElement).getByRole('status').textContent).toMatch(/^Not started: session limit reached: 10 of 10/));
+    await waitFor(() => expect(within(rows()[0] as HTMLElement).getByRole('status').textContent).toBe('Couldn\'t create session: 10 of 10 sessions are already running in this workspace. Put one to sleep or raise "Running sessions, workspace" in Settings.'));
     expect(callsOf('rooms.create')).toHaveLength(0);
     expect(button('Retry')).toBeTruthy();
   });

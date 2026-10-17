@@ -60,7 +60,7 @@ import type { ParleyBridge, HostStatus } from '../../shared/bridge.js';
 import type { ActionId } from '../../shared/keybindings.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
-import { errorText, noticeText, S } from '../../shared/strings.js';
+import { errorText, noticeText, S, startErrorText } from '../../shared/strings.js';
 import { fitRightSidebar, LEFT_SIDEBAR } from '../../shared/ui-types.js';
 import { applyFocusTarget, buildFocusTargetDeps } from '../attention/focus-target.js';
 import { openNextAttention } from '../attention/next.js';
@@ -185,7 +185,7 @@ function dropOnSidebar(bridge: ParleyBridge, key: string, sessionId: string, tar
     .then(() => useUiStore.getState().setRoomExpanded(roomKey(key, drop.roomId), true))
     .catch((error: unknown) => {
       console.warn('[parley] rooms.addMember', error);
-      toast(errorText(decodeIpcError(error).code, S.sidebar.addToRoomAction));
+      toast(startErrorText(decodeIpcError(error), S.sidebar.addToRoomAction));
     });
 }
 

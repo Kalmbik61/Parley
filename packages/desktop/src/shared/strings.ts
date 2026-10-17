@@ -16,6 +16,7 @@
 import { STATE_WORDS } from '@parley/core/session-state';
 import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
+import type { IpcErrorInfo } from './ipc-error.js';
 
 /** Что за файл-контекст — для строки в ввод CLI (`S.contextFile.terminalLine`). */
 const CONTEXT_NAMES: Record<ContextKind, string> = {
@@ -751,8 +752,6 @@ export const S = {
         `This start needs ${needed} launches, ${remaining} left this hour. Wait or raise the limits in Settings → Agents.`,
       budgetBlockedRoom: (needed: number, limit: number): string =>
         `A room runs at most ${limit} sessions at once; this one has ${needed}. Remove an agent or raise the limit in Settings → Agents.`,
-      /** Отказ хоста по агенту (бюджет исчерпал другой процесс за время диалога): текст хоста уже называет предел. */
-      budgetRefused: (reason: string): string => `Not started: ${reason}`,
     },
     /** Диалог «New room» из двух сессий (1.6) — `components/dialogs/MergeRoomDialog.tsx`. */
     mergeRoom: {
@@ -1888,6 +1887,27 @@ export const S = {
 
   /** Действия для `errorText(code, action)` — фраза подставляется в «Couldn't <action>: …». */
   errors: {
+    /**
+     * Отказ запуска по бюджету (`HostError` `data.code === 'resource-budget'`): окно собирает фразу из полей хоста
+     * (`reason`, `scope`, `limit`, `used`), а не показывает его технический текст. Названия настроек — `S.settings.limits`.
+     */
+    budget: {
+      where: { work: ' in this workspace', room: ' in this room', session: '' } as Record<string, string>,
+      counts: (used: number, limit: number): string => `${used} of ${limit} `,
+      concurrent: (counts: string, where: string): string => `${counts}sessions are already running${where}`,
+      newSessions: (counts: string, where: string): string => `agents already created ${counts}sessions${where}`,
+      depth: (limit: number | null): string => limit === null ? 'the spawn depth limit was reached' : `agents can nest at most ${limit} levels deep`,
+      launches: (counts: string, where: string): string => `${counts}starts and wake-ups in the last hour${where}`,
+      resumeRate: (counts: string): string => `${counts}wake-ups of this session in the last hour`,
+      messages: (counts: string, where: string): string => `${counts}agent messages in the last hour${where}`,
+      fanout: (counts: string, where: string): string => `${counts}message deliveries in the last hour${where}`,
+      adviceSleep: 'Put one to sleep or raise',
+      adviceWait: 'Wait, or raise',
+      adviceRaise: 'Raise',
+      /** «raise "<настройка>" in Settings»; настройки нет (неизвестная причина или область) — без названия. */
+      inSettings: (name: string | null): string => name === null ? 'the limit in Settings.' : `"${name}" in Settings.`,
+      unknown: (counts: string): string => `a limit was reached${counts === '' ? '' : ` (${counts.trim()})`}. Wait a while or check the limits in Settings.`,
+    },
     actions: {
       loadProviders: 'load providers',
       refreshProviderLimits: 'refresh provider limits',
@@ -1934,6 +1954,8 @@ export const S = {
       readFolder: 'read folder',
       searchFiles: 'search in files',
       resumeSession: 'resume session',
+      /** Возобновление названной сессии: «Couldn't resume Bruno: …». */
+      resumeNamed: (name: string): string => `resume ${name}`,
       saveFile: 'save file',
       clearBrowserData: 'clear browser data',
       discardWorktree: 'discard worktree',
@@ -2214,6 +2236,52 @@ export function errorText(code: string, action?: string): string {
   const reason = ERROR_REASON[code] ?? DEFAULT_REASON;
   if (action === undefined) return `${reason.charAt(0).toUpperCase()}${reason.slice(1)}.`;
   return `Couldn't ${action}: ${reason}.`;
+}
+
+const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+/** Настройка порога по причине отказа и области; `null` — названия нет. */
+function budgetSettingName(reason: string, scope: string): string | null {
+  const L = S.settings.limits;
+  const byScope = (work: string, room: string): string | null => (scope === 'work' ? work : scope === 'room' ? room : null);
+  switch (reason) {
+    case 'concurrent': return byScope(L.workConcurrent, L.roomConcurrent);
+    case 'new-sessions': return byScope(L.workNewSessions, L.roomNewSessions);
+    case 'launches': return byScope(L.workLaunches, L.roomLaunches);
+    case 'messages': return byScope(L.workMessages, L.roomMessages);
+    case 'depth': return L.spawnDepth;
+    case 'fanout': return L.fanout;
+    default: return null;
+  }
+}
+
+/**
+ * Отказ запуска для человека. Если хост отказал по бюджету (`data.code === 'resource-budget'`) — фраза из его
+ * структурных полей: сколько занято, где, что сделать и в какой настройке (текст хоста английский и технический,
+ * в окне все строки живут в `S`). Прочие ошибки — прежний `errorText`.
+ */
+export function startErrorText(failure: IpcErrorInfo, action: string): string {
+  const data = failure.data;
+  if (data?.['code'] !== 'resource-budget') return errorText(failure.code, action);
+  const B = S.errors.budget;
+  const reason = typeof data['reason'] === 'string' ? data['reason'] : '';
+  const scope = typeof data['scope'] === 'string' ? data['scope'] : '';
+  const used = data['used'];
+  const limit = data['limit'];
+  const counts = finite(used) && finite(limit) ? B.counts(used, limit) : '';
+  const where = B.where[scope] ?? '';
+  const name = budgetSettingName(reason, scope);
+  const phrase = (what: string, advice: string): string => `Couldn't ${action}: ${what}. ${advice} ${B.inSettings(name)}`;
+  switch (reason) {
+    case 'concurrent': return phrase(B.concurrent(counts, where), B.adviceSleep);
+    case 'new-sessions': return phrase(B.newSessions(counts, where), B.adviceRaise);
+    case 'depth': return phrase(B.depth(finite(limit) ? limit : null), B.adviceRaise);
+    case 'launches': return phrase(B.launches(counts, where), B.adviceWait);
+    case 'resume-rate': return phrase(B.resumeRate(counts), B.adviceWait);
+    case 'messages': return phrase(B.messages(counts, where), B.adviceWait);
+    case 'fanout': return phrase(B.fanout(counts, where), B.adviceWait);
+    default: return `Couldn't ${action}: ${B.unknown(counts)}`;
+  }
 }
 
 /**
