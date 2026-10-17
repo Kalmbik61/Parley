@@ -218,8 +218,10 @@ describe('normalizeUi: помощник', () => {
     });
   });
 
-  it('язык вне en и ru — null', () => {
-    expect(normalizeUi({ assistant: { language: 'de' } }).assistant.language).toBeNull();
+  it('язык помощника — код Whisper; auto и незнакомое — null', () => {
+    expect(normalizeUi({ assistant: { language: 'uk' } }).assistant.language).toBe('uk');
+    expect(normalizeUi({ assistant: { language: 'auto' } }).assistant.language).toBeNull();
+    expect(normalizeUi({ assistant: { language: 'english' } }).assistant.language).toBeNull();
   });
 });
 

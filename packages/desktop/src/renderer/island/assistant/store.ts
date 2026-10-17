@@ -37,6 +37,8 @@ export interface AssistantStoreState {
   byHover: boolean;
   input: InputPhase;
   level: number;
+  /** Когда началась запись (для таймера); `null` — не записываем. */
+  listenStartedAt: number | null;
   draft: string;
   notice: string | null;
   cardError: string | null;
@@ -58,27 +60,35 @@ export interface AssistantStoreState {
 export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreState>> {
   let deps: AssistantDeps | null = null;
   let listening: Listening | null = null;
+  /**
+   * Что делать с распознанным: `send` — хоткей (⌥Space), голосовой сценарий без рук, вопрос уходит сразу (спека 8.4);
+   * `draft` — кнопка микрофона, как диктовка в чатах: текст ложится в поле, отправляет человек Enter-ом.
+   */
+  let listenMode: 'send' | 'draft' = 'send';
   return create<AssistantStoreState>((set, get) => {
     const stopTurn = (): void => {
       if (TURN_PHASES.has(get().host.phase)) void deps?.call('assistant.cancel', {});
     };
-    const startListening = (): void => {
+    const startListening = (mode: 'send' | 'draft'): void => {
       if (deps === null) return;
       const session = deps.listen({
         onLevel: (level) => set({ level }),
-        onTranscribing: () => set({ input: 'transcribing', level: 0 }),
+        onTranscribing: () => set({ input: 'transcribing', level: 0, listenStartedAt: null }),
       });
       if (session === null) {
         set({ notice: S.assistant.voiceOff });
         return;
       }
       listening = session;
-      set({ input: 'listening', notice: null });
+      listenMode = mode;
+      set({ input: 'listening', notice: null, listenStartedAt: Date.now() });
       void session.result.then((result) => {
         if (listening === session) listening = null;
-        set({ input: 'idle', level: 0 });
-        if ('text' in result) void get().submit(result.text);
-        else if (result.error === 'mic') set({ notice: S.assistant.micDenied });
+        set({ input: 'idle', level: 0, listenStartedAt: null });
+        if ('text' in result) {
+          if (listenMode === 'send') void get().submit(result.text);
+          else set({ draft: result.text });
+        } else if (result.error === 'mic') set({ notice: S.assistant.micDenied });
         else if (result.error === 'no_speech') set({ notice: S.assistant.noSpeech });
         else if (result.error === 'voice') set({ notice: S.assistant.voiceFailed });
       });
@@ -90,6 +100,7 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
       byHover: false,
       input: 'idle',
       level: 0,
+      listenStartedAt: null,
       draft: '',
       notice: null,
       cardError: null,
@@ -112,14 +123,14 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         deps?.keyboard(true);
         if (request.listen) {
           stopTurn();
-          startListening();
+          startListening('send');
         }
       },
       close: () => {
         listening?.cancel();
         listening = null;
         stopTurn();
-        set({ open: false, collapsed: false, byHover: false, input: 'idle', level: 0, notice: null });
+        set({ open: false, collapsed: false, byHover: false, input: 'idle', level: 0, listenStartedAt: null, notice: null });
         deps?.keyboard(false);
       },
       collapse: () => {
@@ -145,7 +156,7 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         if (get().input === 'listening') listening?.stop();
         else if (get().input === 'idle') {
           stopTurn();
-          startListening();
+          startListening('draft');
         }
       },
       decide: async (decision) => {

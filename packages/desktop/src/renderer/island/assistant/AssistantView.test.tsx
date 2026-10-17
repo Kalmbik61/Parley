@@ -16,6 +16,7 @@ function props(patch: Partial<AssistantViewProps> = {}, host: Partial<AssistantS
     host: { ...HOST_IDLE, ...host },
     input: 'idle',
     level: 0,
+    listenStartedAt: null,
     draft: '',
     notice: null,
     cardError: null,
@@ -113,5 +114,17 @@ describe('вид помощника', () => {
     render(<AssistantView {...p} />);
     fireEvent.click(screen.getByTestId('assistant-pending'));
     expect(p.onShowRequests).toHaveBeenCalled();
+  });
+
+  it('запись: виден таймер и полоска громкости, кнопка — красная точка', () => {
+    render(<AssistantView {...props({ input: 'listening', listenStartedAt: Date.now() - 65_000, level: 0.1 })} />);
+    expect(screen.getByTestId('assistant-mic-elapsed').textContent).toBe('1:05');
+    expect(screen.getByTestId('assistant-mic').getAttribute('aria-label')).toBe('Stop listening');
+  });
+
+  it('распознавание: кнопка микрофона выключена, таймера нет', () => {
+    render(<AssistantView {...props({ input: 'transcribing' })} />);
+    expect((screen.getByTestId('assistant-mic') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByTestId('assistant-mic-elapsed')).toBeNull();
   });
 });

@@ -72,12 +72,16 @@ describe('AssistantSettings (спека 2026-10-14, 6.1)', () => {
     });
   });
 
-  it('язык: System, English и Russian пишут null, en и ru', () => {
+  it('язык: System первым, за ним English и Russian; выбор пишет код или null', async () => {
     render(<AssistantSettings />);
-    fireEvent.click(screen.getByRole('radio', { name: text.languageEnglish }));
-    fireEvent.click(screen.getByRole('radio', { name: text.languageRussian }));
-    fireEvent.click(screen.getByRole('radio', { name: text.languageSystem }));
-    expect(saved).toEqual([{ assistant: { language: 'en' } }, { assistant: { language: 'ru' } }, { assistant: { language: null } }]);
+    const trigger = screen.getByRole('combobox', { name: text.language });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    const names = (await screen.findAllByRole('option')).map((option) => option.textContent);
+    expect(names.slice(0, 3)).toEqual([text.languageSystem, 'English', 'Russian']);
+    fireEvent.keyDown(screen.getAllByRole('option')[0]!, { key: 'Escape' });
+    await chooseOption(screen.getByRole('combobox', { name: text.language }), 'Ukrainian');
+    await chooseOption(screen.getByRole('combobox', { name: text.language }), text.languageSystem);
+    expect(saved).toEqual([{ assistant: { language: 'uk' } }, { assistant: { language: null } }]);
   });
 
   it('сочетание занято — видна причина', async () => {

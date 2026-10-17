@@ -17,7 +17,7 @@ export function formatElapsed(ms: number): string {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
-function useElapsed(startedAt: number | null): number {
+export function useElapsed(startedAt: number | null): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (startedAt === null) return;

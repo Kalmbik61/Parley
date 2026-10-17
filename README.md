@@ -967,7 +967,7 @@ after you confirm it. It does not decide anything for you: a message goes out on
 
 - **Turn it on:** Settings → Assistant. It is off by default. Pick a provider (by default the first
   connected one: Claude, then GLM, then Codex) and a model (by default a fast one), and a language
-  (by default the language of the system: Russian or English). The assistant needs `claude` 2.1.300 or
+  (any Whisper language; by default the language of the system). The assistant needs `claude` 2.1.300 or
   newer, or `codex` 0.162.0 or newer.
 - **Call it:** the global shortcut ⌥Space from any app, a click on the island, or the command
   palette (⌘J → "Ask the assistant"). ⌥Space is also the default Quick Entry shortcut of Claude Desktop;

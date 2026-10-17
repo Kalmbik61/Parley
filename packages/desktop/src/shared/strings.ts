@@ -2121,8 +2121,6 @@ export const S = {
       modelDefault: 'Fast default',
       language: 'Language',
       languageSystem: 'System',
-      languageEnglish: 'English',
-      languageRussian: 'Russian',
       shortcut: 'Shortcut',
       shortcutHint: 'Works from any app. Electron format, e.g. Alt+Space.',
       shortcutTaken: 'This shortcut is taken by another app — choose another.',

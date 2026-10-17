@@ -4,22 +4,22 @@
  */
 import { useEffect, useState } from 'react';
 import type { Result } from '@parley/protocol';
-import type { AssistantLanguage } from '@parley/core/assistant';
 import type { AssistantShortcutStatus } from '../../../shared/island.js';
 import { S } from '../../../shared/strings.js';
+import { LANGUAGE_OPTIONS } from '../../../shared/voice-types.js';
 import type { AssistantUi, UiFile } from '../../../shared/ui-types.js';
 import { getHostClient } from '../../host-client.js';
 import { useUiStore } from '../../store/ui.js';
 import { Input } from '../../ui/input.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select.js';
 import { Switch } from '../../ui/switch.js';
-import { ToggleGroup, ToggleGroupItem } from '../../ui/toggle-group.js';
 
 type ProviderRow = Result<'providers.list'>['providers'][number];
 
 /** Значения-заглушки Select для «не задано» (`null`): у Radix пустой строки в пункте быть не может. */
 const AUTO = '__auto';
 const DEFAULT_MODEL = '__default';
+const SYSTEM_LANGUAGE = '__system';
 
 export function AssistantSettings(): JSX.Element {
   const assistant = useUiStore((state) => state.ui.assistant);
@@ -97,23 +97,25 @@ export function AssistantSettings(): JSX.Element {
         </Select>
       </label>
 
-      <div className="flex flex-col gap-1">
-        <span id="assistant-language">{text.language}</span>
-        <ToggleGroup
-          type="single"
-          aria-labelledby="assistant-language"
-          value={assistant.language ?? 'system'}
-          onValueChange={(value) => {
-            // Повторный клик по выбранному пункту Radix сообщает пустой строкой — выбор не снимается.
-            if (value === '') return;
-            patch({ language: value === 'system' ? null : (value as AssistantLanguage) });
-          }}
+      <label className="flex flex-col gap-1">
+        <span>{text.language}</span>
+        <Select
+          value={assistant.language ?? SYSTEM_LANGUAGE}
+          onValueChange={(value) => patch({ language: value === SYSTEM_LANGUAGE ? null : value })}
         >
-          <ToggleGroupItem value="system">{text.languageSystem}</ToggleGroupItem>
-          <ToggleGroupItem value="en">{text.languageEnglish}</ToggleGroupItem>
-          <ToggleGroupItem value="ru">{text.languageRussian}</ToggleGroupItem>
-        </ToggleGroup>
-      </div>
+          <SelectTrigger aria-label={text.language}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="max-h-72">
+            <SelectItem value={SYSTEM_LANGUAGE}>{text.languageSystem}</SelectItem>
+            {LANGUAGE_OPTIONS.filter(({ code }) => code !== 'auto').map(({ code, name }) => (
+              <SelectItem key={code} value={code}>
+                {name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </label>
 
       <label className="flex flex-col gap-1">
         <span>{text.shortcut}</span>

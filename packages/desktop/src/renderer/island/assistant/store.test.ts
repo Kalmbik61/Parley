@@ -58,4 +58,25 @@ describe('стор помощника', () => {
     await store.getState().decide('send');
     expect(store.getState().cardError).toBe('S03 is not running');
   });
+  it('микрофон кладёт распознанное в поле, не отправляя; таймер выставлен и сброшен', async () => {
+    const result = Promise.resolve({ text: 'hello' });
+    const { store, deps } = setup({ listen: vi.fn(() => ({ stop: vi.fn(), cancel: vi.fn(), result })) });
+    store.getState().toggleListening();
+    expect(store.getState().input).toBe('listening');
+    expect(store.getState().listenStartedAt).not.toBeNull();
+    await result;
+    await Promise.resolve();
+    expect(store.getState().draft).toBe('hello');
+    expect(store.getState().listenStartedAt).toBeNull();
+    expect(deps.call).not.toHaveBeenCalledWith('assistant.ask', expect.anything());
+  });
+  it('хоткей отправляет распознанное сразу', async () => {
+    const result = Promise.resolve({ text: 'hello' });
+    const { store, deps } = setup({ listen: vi.fn(() => ({ stop: vi.fn(), cancel: vi.fn(), result })) });
+    store.getState().openMode({ listen: true });
+    await result;
+    await Promise.resolve();
+    expect(deps.call).toHaveBeenCalledWith('assistant.ask', expect.objectContaining({ text: 'hello' }));
+    expect(store.getState().draft).toBe('');
+  });
 });

@@ -26,6 +26,11 @@ describe('промпт и версии', () => {
     expect(assistantPrompt('en')).toContain('Reply in English');
     expect(assistantPrompt('ru')).toContain('[[calm]]');
   });
+  it('промпт называет любой язык Whisper по-английски, незнакомый код не роняет', () => {
+    expect(assistantPrompt('uk')).toContain('Reply in Ukrainian');
+    expect(assistantPrompt('zh')).toContain('Reply in Chinese');
+    expect(assistantPrompt('zz')).toContain('Reply in zz');
+  });
   it('versionAtLeast читает версию из вывода --version', () => {
     expect(versionAtLeast('2.1.300 (Claude Code)', '2.1.300')).toBe(true);
     expect(versionAtLeast('2.1.299 (Claude Code)', '2.1.300')).toBe(false);

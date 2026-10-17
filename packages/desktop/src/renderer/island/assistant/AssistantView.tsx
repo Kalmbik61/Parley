@@ -4,12 +4,13 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Mic, MicOff } from 'lucide-react';
+import { Loader2, Mic } from 'lucide-react';
 import type { AssistantState } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
 import { AssistantMark } from '../../components/AssistantMark.js';
 import { Button } from '../../ui/button.js';
 import { levelWidth } from '../../voice/level.js';
+import { formatElapsed, useElapsed } from '../../voice/MicButton.js';
 import { Swarm } from '../swarm/Swarm.js';
 import { haloFor, swarmSpecFor } from '../swarm/spec.js';
 import { hotkeyLabel, statusLabel } from './labels.js';
@@ -20,6 +21,8 @@ export interface AssistantViewProps {
   input: InputPhase;
   /** Громкость микрофона (rms из стора, 0…≈0,2): рой сжимается и волнуется в такт. */
   level: number;
+  /** Когда началась запись (для таймера `m:ss`); `null` — не записываем. */
+  listenStartedAt: number | null;
   draft: string;
   notice: string | null;
   cardError: string | null;
@@ -54,6 +57,7 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
   const { host, input, draft, pending } = props;
   const proposal = host.proposal;
   const armed = useArmed(proposal?.id ?? null);
+  const elapsed = useElapsed(input === 'listening' ? props.listenStartedAt : null);
   const spec = useMemo(() => swarmSpecFor(host, input, false), [host.phase, input]);
   const halo = haloFor(spec, host);
   const dotColor = STATUS_DOT[host.phase];
@@ -130,8 +134,32 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
           className="min-w-0 flex-1 bg-transparent py-1 outline-none placeholder:text-muted-foreground"
           onChange={(event) => props.onDraft(event.target.value)}
         />
-        <button type="button" data-testid="assistant-mic" aria-label={input === 'listening' ? S.assistant.stopMic : S.assistant.mic} className="cursor-pointer text-muted-foreground hover:text-foreground" onClick={props.onMic}>
-          {input === 'listening' ? <MicOff size={16} className="text-[var(--color-accent)]" /> : <Mic size={16} />}
+        {input === 'listening' ? (
+          <>
+            <span className="h-1.5 w-10 overflow-hidden rounded-full bg-white/10">
+              <span className="block h-full bg-destructive transition-[width]" style={{ width: `${Math.round(levelWidth(props.level) * 100)}%` }} />
+            </span>
+            <span data-testid="assistant-mic-elapsed" className="text-xs tabular-nums text-muted-foreground">
+              {formatElapsed(elapsed)}
+            </span>
+          </>
+        ) : null}
+        <button
+          type="button"
+          data-testid="assistant-mic"
+          aria-label={input === 'listening' ? S.assistant.stopMic : input === 'transcribing' ? S.assistant.transcribing : S.assistant.mic}
+          disabled={input === 'transcribing'}
+          className="cursor-pointer text-muted-foreground hover:text-foreground"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={props.onMic}
+        >
+          {input === 'listening' ? (
+            <span className="assistant-dot-pulse block size-2.5 rounded-full bg-destructive" />
+          ) : input === 'transcribing' ? (
+            <Loader2 size={16} className="animate-spin" />
+          ) : (
+            <Mic size={16} />
+          )}
         </button>
       </form>
       <div className="flex justify-between text-[12px] text-muted-foreground">

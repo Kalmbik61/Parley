@@ -52,7 +52,7 @@ export const assistantMethodSchemas = {
     provider: z.string().min(1).nullable(),
     /** `null` — модель по умолчанию провайдера. */
     model: z.string().min(1).nullable(),
-    language: z.enum(['en', 'ru']),
+    language: z.string().regex(/^[a-z]{2,3}$/),
   }),
   'assistant.cancel': z.object({}),
   'assistant.decide': z.object({ proposalId: z.string().min(1), decision: z.enum(['send', 'cancel']) }),

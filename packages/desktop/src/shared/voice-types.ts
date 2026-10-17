@@ -3,6 +3,8 @@
  * `ParleyBridge.voice`. Лежит в `shared/`: каталог читают и main (скачивание и проверка), и окно (вкладка Voice).
  */
 
+import { S } from './strings.js';
+
 export type VoiceModelId = 'base' | 'small' | 'large-v3-turbo-q5_0';
 
 export interface VoiceModel {
@@ -114,3 +116,10 @@ export interface VoiceApi {
   /** System Settings → Privacy & Security → Microphone. */
   openMicSettings(): Promise<void>;
 }
+
+/** Список языков: Auto, English, Russian, затем остальные по алфавиту (спека 3.1). */
+export const LANGUAGE_OPTIONS = [
+  { code: 'auto', name: S.voice.settings.auto },
+  ...WHISPER_LANGUAGES.filter((language) => language.code === 'en' || language.code === 'ru').sort((a, b) => a.name.localeCompare(b.name)),
+  ...WHISPER_LANGUAGES.filter((language) => language.code !== 'en' && language.code !== 'ru'),
+];

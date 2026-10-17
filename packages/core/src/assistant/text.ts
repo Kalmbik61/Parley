@@ -5,7 +5,11 @@
  */
 
 export type AssistantMood = 'calm' | 'joy' | 'sad' | 'surprise' | 'anger' | 'error';
-export type AssistantLanguage = 'en' | 'ru';
+/**
+ * Код языка из списка Whisper (`en`, `ru`, `uk`, `zh`, `yue`, …): две-три латинские строчные буквы. Проверяет окно
+ * (`isVoiceLanguage`) и протокол (regex), поэтому тип — просто строка.
+ */
+export type AssistantLanguage = string;
 
 /** Эмоции, которые ставит модель; `error` ставит только хост при сбое хода. */
 export const MODEL_MOODS: readonly AssistantMood[] = ['calm', 'joy', 'sad', 'surprise', 'anger'];

@@ -48,7 +48,7 @@ export interface AssistantUi {
   model: string | null;
   /** Глобальное сочетание в формате Electron accelerator. */
   hotkey: string;
-  /** `null` — язык системы. */
+  /** Код языка Whisper (`uk`, `de`, …), не `auto`; `null` — язык системы. */
   language: AssistantLanguage | null;
 }
 
@@ -275,7 +275,7 @@ function normalizeAssistant(value: unknown): AssistantUi {
     provider: text(source.provider),
     model: text(source.model),
     hotkey: text(source.hotkey) ?? fallback.hotkey,
-    language: source.language === 'en' || source.language === 'ru' ? source.language : null,
+    language: isVoiceLanguage(source.language) && source.language !== 'auto' ? source.language : null,
   };
 }
 

@@ -73,7 +73,14 @@ export function codexInstructionsFile(file: string): string {
   return `model_instructions_file=${JSON.stringify(file)}`;
 }
 
-const LANGUAGE_NAMES: Readonly<Record<AssistantLanguage, string>> = { en: 'English', ru: 'Russian' };
+/** Английское название языка по коду; незнакомый код или сбой `Intl` — сам код. */
+function languageName(code: string): string {
+  try {
+    return new Intl.DisplayNames(['en'], { type: 'language' }).of(code) || code;
+  } catch {
+    return code;
+  }
+}
 
 /** Системный промпт помощника (спека 6.4). */
 export function assistantPrompt(language: AssistantLanguage): string {
@@ -83,7 +90,7 @@ export function assistantPrompt(language: AssistantLanguage): string {
     'You answer the person about what their agents, works and rooms are doing, and you pass their messages on.',
     '',
     'Rules:',
-    `- Reply in ${LANGUAGE_NAMES[language]}, even if the person wrote in another language.`,
+    `- Reply in ${languageName(language)}, even if the person wrote in another language.`,
     '- Your reply is read on a small panel and may be spoken aloud: 1-4 short spoken sentences. No markdown, lists, file paths, code or ids.',
     '- Start every reply with one mood tag: [[calm]] [[joy]] [[sad]] [[surprise]] [[anger]], matching the news. Then the reply.',
     '- For anything about the current state call parley_overview first, every time. For one room or session call parley_detail with an id from the overview. Never answer about state from memory and never guess; if the tools do not say, say you do not know.',

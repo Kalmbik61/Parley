@@ -22,6 +22,7 @@ import {
 import type { WebContents } from 'electron';
 import { configPath, envValue, loadConfig, migrateHome, parleyHome } from '@parley/core';
 import type { AssistantLanguage } from '@parley/core/assistant';
+import { systemAssistantLanguage } from '../shared/assistant-language.js';
 import type { WorksSnapshot } from '@parley/protocol';
 import type { FocusTarget, HostStatus } from '../shared/bridge.js';
 import { BROWSER_PARTITION } from '../shared/browser-types.js';
@@ -493,7 +494,7 @@ if (!gotLock) {
       window.webContents.send('island:assistant-blur');
     }
     const assistantLanguage = (current: UiFile): AssistantLanguage =>
-      current.assistant.language ?? (app.getLocale().toLowerCase().startsWith('ru') ? 'ru' : 'en');
+      current.assistant.language ?? systemAssistantLanguage(app.getLocale());
     const islandConfig = async (): Promise<IslandConfig> => {
       const current = await uiStore.load();
       return {
