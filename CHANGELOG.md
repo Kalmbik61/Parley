@@ -8,7 +8,7 @@ All notable changes to Parley are documented in this file.
 
 ### Changed
 
-- **Agent sessions no longer run your own Claude Code status line.** Claude Code runs the status line command after every model response; with several agents a custom one (for example a HUD that calls git, node and jq) ran about once a second and kept 15–20 % of a CPU core busy. Sessions started by Parley now show Parley's short line (model and context use) in their terminal. Your status line in your own terminal is unchanged.
+- **Agent sessions no longer run your own Claude Code status line.** Claude Code runs the status line command after every model response; in a room with six busy agents a custom one (for example a HUD that calls git, node and jq) ran about once a second and kept 15–20 % of a CPU core busy. Sessions started by Parley now show Parley's short line (model and context use) in their terminal. Your status line in your own terminal is unchanged.
 
 ### Fixed
 
