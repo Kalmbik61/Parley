@@ -79,6 +79,12 @@ describe('overviewText', () => {
     expect(text).toMatch(/Session S05 Vera \[[^\]]+\] claude · needs you · /);
     expect(text).toContain('1 need the person');
   });
+  it('у сессии — её комната: модель пишет агенту через неё с упоминанием; вне комнаты — без пометки', () => {
+    const rooms = [{ id: 'r-1', title: 'Auth', creator: 's-03', members: ['s-03'], createdAt: '', lead: null, proposal: null }];
+    const text = overviewText(source([entry('/p/one', 'w-1', 'Parley', { rooms } as Partial<WorkMap>)], { 's-03': live('working'), 's-05': live('idle') }));
+    expect(text).toMatch(/Session S03 Ruslan \[[^\]]+\] claude · working · in room "Auth" · task/);
+    expect(text).not.toMatch(/Session S05 Vera[^\n]*in room/);
+  });
   it('слова состояний — из единой таблицы: idle у resume, asleep у спящей без live', () => {
     const mixed = entry('/p/one', 'w-1', 'Parley', {
       sessions: [session('s-03', 'S03 Ruslan', { lifecycle: 'sleeping' }), session('s-05', 'S05 Vera')],

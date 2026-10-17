@@ -91,6 +91,9 @@ export function resolveTarget(targets: readonly AssistantTarget[], wanted: strin
 function sessionLine(entry: WorkEntry, session: WorkSession, state: DotState, live: SessionLive | undefined): string {
   const prefix = `${projectKey(entry.projectPath)}:${entry.map.work.id}`;
   const parts = [`  Session ${participantLabel(entry.map, session.id)} [session:${prefix}:${session.id}] ${session.provider}`, stateWord(state, session.lifecycle)];
+  // Комната нужна модели, чтобы писать агенту через неё с упоминанием; сессия состоит не больше чем в одной комнате работы.
+  const room = entry.map.rooms.find((candidate) => !isArchived(candidate) && candidate.members.includes(session.id));
+  if (room !== undefined) parts.push(`in room "${room.title}"`);
   if (typeof session.task === 'string' && session.task.trim() !== '') parts.push(`task: ${oneLine(session.task, 160)}`);
   if (typeof session.summary === 'string' && session.summary.trim() !== '') parts.push(`summary: ${oneLine(session.summary, 200)}`);
   const waitingFor = live?.activity.waitingFor ?? null;

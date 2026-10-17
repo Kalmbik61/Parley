@@ -10,12 +10,15 @@ describe('подписи помощника', () => {
     expect(statusLabel({ ...HOST_IDLE, phase: 'awaiting-confirm' }, 'idle')).toBe('Waiting for your confirmation');
     expect(statusLabel({ ...HOST_IDLE, phase: 'offline', error: 'Claude is not connected — open Settings' }, 'idle')).toBe('Claude is not connected — open Settings');
     expect(statusLabel(HOST_IDLE, 'listening')).toBe('Listening…');
+    expect(statusLabel(HOST_IDLE, 'idle', true)).toBe('Sending…');
+    expect(statusLabel(HOST_IDLE, 'listening', true)).toBe('Listening…');
   });
   it('мини-вид: подпись только пока занят', () => {
     expect(miniLabel({ ...HOST_IDLE, phase: 'thinking' }, 'idle')).toBe('Thinking·');
     expect(miniLabel({ ...HOST_IDLE, phase: 'answering' }, 'idle')).toBe('Working·');
     expect(miniLabel({ ...HOST_IDLE, phase: 'awaiting-confirm' }, 'idle')).toBe('Confirm send');
     expect(miniLabel(HOST_IDLE, 'idle')).toBeNull();
+    expect(miniLabel(HOST_IDLE, 'idle', true)).toBe('Sending·');
   });
   it('сочетание — значками macOS', () => {
     expect(hotkeyLabel('Alt+Space')).toBe('⌥Space');

@@ -1,6 +1,7 @@
 /**
  * Большой вид помощника: ответ и вопрос, подпись состояния, карточка подтверждения (кнопка Send взводится через
- * 500 мс, Enter в пустом поле отправляет), ввод по Enter, ошибка на карточке и строка ожидающих запросов.
+ * 500 мс, Enter в пустом поле отправляет), ввод по Enter, ошибка на карточке и строка ожидающих запросов; вопрос в пути,
+ * очередь, упоминания на карточке и загрузка на Send.
  */
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -20,6 +21,10 @@ function props(patch: Partial<AssistantViewProps> = {}, host: Partial<AssistantS
     draft: '',
     notice: null,
     cardError: null,
+    sending: null,
+    queue: [],
+    history: [],
+    deciding: null,
     hotkey: 'Alt+Space',
     pending: null,
     maxHeight: 'calc(100vh - 88px)',
@@ -27,6 +32,7 @@ function props(patch: Partial<AssistantViewProps> = {}, host: Partial<AssistantS
     onSubmit: vi.fn(),
     onMic: vi.fn(),
     onDecide: vi.fn(),
+    onUnqueue: vi.fn(),
     onShowRequests: vi.fn(),
     ...patch,
   };
@@ -153,6 +159,61 @@ describe('вид помощника', () => {
     render(<AssistantView {...props({ input: 'listening', listenStartedAt: Date.now() - 65_000, level: 0.1 })} />);
     expect(screen.getByTestId('assistant-mic-elapsed').textContent).toBe('1:05');
     expect(screen.getByTestId('assistant-mic').getAttribute('aria-label')).toBe('Stop listening');
+  });
+
+  it('вопрос в пути: виден сразу, прошлый ответ и исход спрятаны, подпись — Sending…', () => {
+    render(<AssistantView {...props({ sending: 'А комната?' }, { phase: 'idle', question: 'Кто работает?', answer: 'Двое.', outcome: 'sent' })} />);
+    expect(screen.getByTestId('assistant-question').textContent).toBe('А комната?');
+    expect(screen.queryByTestId('assistant-answer')).toBeNull();
+    expect(screen.queryByTestId('assistant-sent')).toBeNull();
+    expect(screen.getByTestId('assistant-status').textContent).toBe('Sending…');
+  });
+
+  it('история: прошлые обмены приглушённо над текущим вопросом', () => {
+    render(<AssistantView {...props({ history: [{ id: 1, question: 'Кто работает?', answer: 'Двое.' }] }, { phase: 'thinking', question: 'А комната?', turn: 2 })} />);
+    const [exchange] = screen.getAllByTestId('assistant-history');
+    expect(exchange!.textContent).toBe('Кто работает?Двое.');
+    expect(screen.getByTestId('assistant-scroll').firstElementChild).toBe(exchange);
+    expect(screen.getByTestId('assistant-question').textContent).toBe('А комната?');
+  });
+
+  it('вопрос в пути: текущий обмен уже приглушён в истории над ним', () => {
+    render(<AssistantView {...props({ sending: 'А комната?' }, { question: 'Кто работает?', answer: 'Двое.', turn: 1 })} />);
+    expect(screen.getAllByTestId('assistant-history').map((item) => item.textContent)).toEqual(['Кто работает?Двое.']);
+    expect(screen.getByTestId('assistant-question').textContent).toBe('А комната?');
+  });
+
+  it('поле не принимает больше 4000 знаков', () => {
+    render(<AssistantView {...props()} />);
+    expect((screen.getByTestId('assistant-input') as HTMLInputElement).maxLength).toBe(4000);
+  });
+
+  it('очередь: серые Queued внизу середины, × убирает', () => {
+    const p = props({ queue: [{ id: 1, text: 'и ещё одно' }, { id: 2, text: 'и третье' }] }, { phase: 'answering', question: 'q', answer: 'a' });
+    render(<AssistantView {...p} />);
+    const queued = screen.getAllByTestId('assistant-queued');
+    expect(queued.map((item) => item.textContent)).toEqual(['и ещё одноQueued', 'и третьеQueued']);
+    expect(screen.getByTestId('assistant-scroll').lastElementChild).toBe(queued[1]);
+    fireEvent.click(screen.getAllByLabelText('Remove from queue')[1]!);
+    expect(p.onUnqueue).toHaveBeenCalledWith(2);
+  });
+
+  it('упомянутые — чипами @ впереди текста карточки', () => {
+    render(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: { ...PROPOSAL, mentions: ['S03 Ruslan', 'S05 Vera'] } })} />);
+    expect(screen.getAllByTestId('assistant-mention').map((chip) => chip.textContent)).toEqual(['@S03 Ruslan', '@S05 Vera']);
+  });
+
+  it('решение в пути: Send крутится, обе кнопки выключены, Enter в пустом поле не шлёт второй раз', () => {
+    const p = props({ deciding: 'send' }, { phase: 'awaiting-confirm', proposal: PROPOSAL });
+    render(<AssistantView {...p} />);
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(screen.getByTestId('assistant-send-spinner')).toBeTruthy();
+    expect((screen.getByTestId('assistant-send') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('assistant-cancel') as HTMLButtonElement).disabled).toBe(true);
+    submitForm();
+    expect(p.onDecide).not.toHaveBeenCalled();
   });
 
   it('распознавание: кнопка микрофона выключена, таймера нет', () => {

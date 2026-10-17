@@ -946,8 +946,8 @@ describe('перетаскивание за форму и курсоры', () =>
 function assistantProps(patch: Partial<IslandAssistantProps> = {}): IslandAssistantProps {
   return {
     view: {
-      host: HOST_IDLE, input: 'idle', level: 0, draft: '', notice: null, cardError: null, hotkey: 'Alt+Space', pending: null,
-      onDraft: vi.fn(), onSubmit: vi.fn(), onMic: vi.fn(), onDecide: vi.fn(), onShowRequests: vi.fn(),
+      host: HOST_IDLE, input: 'idle', level: 0, draft: '', notice: null, cardError: null, sending: null, queue: [], history: [], deciding: null, hotkey: 'Alt+Space', pending: null,
+      onDraft: vi.fn(), onSubmit: vi.fn(), onMic: vi.fn(), onDecide: vi.fn(), onUnqueue: vi.fn(), onShowRequests: vi.fn(),
     },
     open: false, collapsed: false, busy: false, mini: null, onOpen: vi.fn(),
     ...patch,

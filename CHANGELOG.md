@@ -6,10 +6,17 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **The assistant can address agents in a room.** When it passes your message to a room, it can mention the agents it is for: the card shows them as `@` chips, and the letter goes to the room addressed to them, the way an `@` mention you type does. It can still write to an agent's own chat instead; which way it goes depends on how you ask.
+
 ### Fixed
 
 - **The host no longer re-reads whole agent transcripts while agents work.** Each time an agent wrote to its log, the host parsed the entire file again, along with every subagent log of the session; with a dozen busy agents this took about 60 % of the host's CPU time. The host now reads only what was appended since the last read: on a 160 MB transcript an update costs about 4 ms of CPU instead of about 500 ms.
 - **The island and notifications no longer download the whole chat of a session.** To show a waiting request or the last answer, the window asked the host for the entire chat of the session (up to 4 MB) every time a session started waiting or finished a turn. In two hours with 18 sessions that came to about 530 MB, and the window's other requests queued behind it for up to a minute and a half. They now get only the waiting requests and the last answer.
+- **What you send to the assistant shows up right away.** The island used to wait for the host before showing your question, and under load that took seconds. Now the question appears at once with "Sending…".
+- **Messages sent while the assistant is answering wait their turn.** Each new message used to cancel the answer in progress, so quick messages in a row left only the last one answered. Now they wait under the answer as grey "Queued" items (× removes one) and go to the assistant together as one message when it finishes. The earlier exchange stays on the island above, dimmed. Dictating with the mic button no longer stops the answer either; the shortcut still interrupts it, as before.
+- **The Send button on the assistant's card shows that it is sending.** It spins, and both buttons stay disabled until the message is delivered or fails.
 
 ## 0.15.1
 

@@ -24,14 +24,24 @@ if (process.argv[2] === '--version') {
     return response.json();
   };
   out({ type: 'system', subtype: 'init', session_id: 'stub-assistant-1' });
+  // «slow …» — ход думает 2 с: за это время окно копит очередь.
+  if (/^slow /i.test(prompt)) await new Promise((resolve) => setTimeout(resolve, 2000));
   out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'mcp__parley-assistant__parley_overview', input: {} }] } });
   const overview = await call('parley_overview', {});
   const room = /\[(room:[^\]]+)\]/.exec(overview.text ?? '')?.[1];
+  const session = /\[(session:[^\]]+)\]/.exec(overview.text ?? '')?.[1];
   let answer = '[[calm]] Nothing is open right now.';
   // «long …» — тот же ход, но к ответу дописаны 40 строк: проверка, что длинный обмен не выходит за кадр острова.
   const long = /^long /i.test(prompt);
   const ask = long ? prompt.slice('long '.length) : prompt;
-  if (/^tell /i.test(ask) && room !== undefined) {
+  if (/^echo /i.test(ask)) {
+    // Вопрос как пришёл: очередь окна уходит одним ходом, сообщения через пустую строку.
+    answer = `[[calm]] Got: ${ask.split('\n\n').join(' | ')}`;
+  } else if (/^mention /i.test(ask) && room !== undefined && session !== undefined) {
+    out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't2', name: 'mcp__parley-assistant__propose_message', input: { target: room, text: 'Skip the Safari tests.', mention: [session] } }] } });
+    await call('propose_message', { target: room, text: 'Skip the Safari tests.', mention: [session] });
+    answer = '[[calm]] I prepared a message for the planner in the room.';
+  } else if (/^tell /i.test(ask) && room !== undefined) {
     out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't2', name: 'mcp__parley-assistant__propose_message', input: { target: room, text: 'Skip the Safari tests.' } }] } });
     await call('propose_message', { target: room, text: 'Skip the Safari tests.' });
     answer = '[[calm]] I prepared a message for the room.';
