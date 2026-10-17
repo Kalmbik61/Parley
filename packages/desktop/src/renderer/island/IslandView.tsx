@@ -57,8 +57,14 @@ import { swarmSpecFor } from './swarm/spec.js';
  */
 export const CARD_ARM_MS = 500;
 
+/**
+ * Что под видом помощника должно остаться в кадре: ряд стрелки ⌃ (`pt-1.5` + `h-5` + `pb-2` = 34 px) и запас на тень
+ * `shadow-lg` выдвинутой формы. Вид не выше кадра за вычетом чёлки и этого запаса — длинный ответ прокручивается внутри.
+ */
+const ASSISTANT_BOTTOM_RESERVE_PX = 34 + 16;
+
 export interface IslandAssistantProps {
-  view: AssistantViewProps;
+  view: Omit<AssistantViewProps, 'maxHeight'>;
   open: boolean;
   collapsed: boolean;
   busy: boolean;
@@ -361,7 +367,7 @@ export function IslandView(props: IslandViewProps): JSX.Element {
         ) : (
           <>
             {assistantBig ? (
-              <AssistantView {...assistant.view} />
+              <AssistantView {...assistant.view} maxHeight={`calc(100vh - ${config.topInset + ASSISTANT_BOTTOM_RESERVE_PX}px)`} />
             ) : items.length > 0 ? (
               <Card {...props} />
             ) : (

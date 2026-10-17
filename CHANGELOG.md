@@ -8,7 +8,11 @@ All notable changes to Parley are documented in this file.
 
 ### Fixed
 
-- **Parley stays responsive with many agents running.** The host now re-reads work maps once per change instead of a dozen times (one watcher on the Parley home, overlapping reads collapsed into one repeat, unchanged maps are not parsed again). Role lists are cached and shared between role chips instead of starting Codex for each of them. A transcript update recomputes only the session it belongs to, and a live transcript is re-indexed at most every two seconds instead of after every append.
+- **A long answer from the assistant no longer runs off the island.** The question, the answer and the
+  confirmation card scroll inside the island, while the swarm, the input field and the hints stay in place.
+  While a card waits, the view keeps it and its **Send** button in sight. A long question shows two lines;
+  hover it for the whole text.
+- **Parley stays responsive with many agents running.** The host now re-reads work maps once per change instead of a dozen times (one watcher on the Parley home, overlapping reads collapsed into one repeat, unchanged maps are not parsed again). Role chips share one read of the Codex configuration instead of starting Codex for each of them (role files are still read fresh). A transcript update recomputes only the session it belongs to, and a live transcript is re-indexed at most every two seconds instead of after every append.
 
 ## 0.15.0
 

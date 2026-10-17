@@ -1,9 +1,13 @@
 /**
  * Большой вид помощника на острове (спека 2026-10-14, 8.2; эталон — island-mockup.html): рой душ с ореолом, подпись
  * состояния с точкой, последний вопрос и ответ, карточка подтверждения, строка ввода.
+ *
+ * Окно острова — фиксированный кадр, поэтому вид не выше `maxHeight`: вопрос, ответ, карточка и подсказка живут в
+ * прокручиваемой середине, а рой, подпись и строка ввода всегда на месте. Вопрос — не длиннее двух строк (целиком —
+ * в подсказке), чтобы длинная фраза не оттесняла ответ за край.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Mic } from 'lucide-react';
 import type { AssistantState } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
@@ -29,6 +33,8 @@ export interface AssistantViewProps {
   hotkey: string;
   /** Ждущие запросы одобрения: первая сессия и сколько всего. */
   pending: { name: string; total: number } | null;
+  /** Предел высоты вида (CSS-значение): кадр острова минус чёлка и ряд под видом. */
+  maxHeight: string;
   onDraft(text: string): void;
   onSubmit(text: string): void;
   onMic(): void;
@@ -61,19 +67,28 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
   const spec = useMemo(() => swarmSpecFor(host, input, false), [host.phase, input]);
   const halo = haloFor(spec, host);
   const dotColor = STATUS_DOT[host.phase];
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const proposalId = proposal?.id ?? null;
+  // Пока ждёт карточка, середина держится у низа: ответ может дописываться над карточкой, а Send не должна уехать из
+  // виду — Enter в пустом поле отправляет её, и человек должен видеть, что именно.
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (proposalId === null || element === null) return;
+    element.scrollTop = element.scrollHeight;
+  }, [proposalId, host.answer, props.cardError, props.notice]);
   const submit = (): void => {
     if (draft.trim() === '' && proposal !== null && armed) props.onDecide('send');
     else props.onSubmit(draft);
   };
   return (
-    <div data-testid="assistant-view" className="island-reveal flex w-[420px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm">
+    <div data-testid="assistant-view" className="island-reveal flex w-[420px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm" style={{ maxHeight: props.maxHeight }}>
       {pending === null ? null : (
         <button type="button" data-testid="assistant-pending" className="flex cursor-pointer items-center gap-2 self-start rounded px-1 text-[13px] text-foreground/80 hover:bg-white/10" onClick={props.onShowRequests}>
           <span className="size-[7px] rounded-full bg-[var(--color-accent)]" />
           {S.assistant.needsYou(pending.name, pending.total)}
         </button>
       )}
-      <div className="relative -mx-3 h-[136px]">
+      <div className="relative -mx-3 h-[136px] shrink-0">
         <div
           aria-hidden
           className="absolute inset-0 transition-opacity duration-300"
@@ -89,41 +104,49 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
         />
         {statusLabel(host, input)}
       </div>
-      {host.question === null ? null : <div className="text-[13px] text-muted-foreground">{host.question}</div>}
-      {host.answer === '' ? null : (
-        <div data-testid="assistant-answer" className="whitespace-pre-wrap">
-          {host.answer}
-        </div>
-      )}
-      {host.outcome === 'sent' ? <div data-testid="assistant-sent" className="text-[13px] text-[var(--color-accent)]">{S.assistant.sent}</div> : null}
-      {host.outcome === 'cancelled' ? <div className="text-[13px] text-muted-foreground">{S.assistant.cancelled}</div> : null}
-      {proposal === null ? null : (
-        <div data-testid="assistant-card" className="flex flex-col gap-2 rounded-md bg-white/5 p-2.5">
-          <div className="flex min-w-0 items-center gap-2 text-[13px] text-muted-foreground">
-            <AssistantMark size={12} />
-            <span className="min-w-0 truncate">
-              {S.assistant.to} <span className="font-semibold text-foreground">{proposal.target}</span> · {proposal.where}
-            </span>
+      {/* Середина сжимается первой (`min-h-0`); пустая не занимает места и не добавляет зазор. Нажатие на ней не тащит
+          остров: иначе ползунок прокрутки двигал бы окно. */}
+      <div ref={scrollRef} data-testid="assistant-scroll" data-no-drag className="flex min-h-0 flex-col gap-2 overflow-y-auto empty:hidden">
+        {host.question === null ? null : (
+          <div title={host.question} className="line-clamp-2 shrink-0 text-[13px] text-muted-foreground">
+            {host.question}
           </div>
-          {proposal.wake ? (
-            <div data-testid="assistant-wake-note" className="text-[12px] text-muted-foreground">
-              {S.assistant.wakeNote}
+        )}
+        {host.answer === '' ? null : (
+          <div data-testid="assistant-answer" className="shrink-0 whitespace-pre-wrap">
+            {host.answer}
+          </div>
+        )}
+        {host.outcome === 'sent' ? <div data-testid="assistant-sent" className="text-[13px] text-[var(--color-accent)]">{S.assistant.sent}</div> : null}
+        {host.outcome === 'cancelled' ? <div className="text-[13px] text-muted-foreground">{S.assistant.cancelled}</div> : null}
+        {proposal === null ? null : (
+          <div data-testid="assistant-card" className="flex shrink-0 flex-col gap-2 rounded-md bg-white/5 p-2.5">
+            <div className="flex min-w-0 items-center gap-2 text-[13px] text-muted-foreground">
+              <AssistantMark size={12} />
+              <span className="min-w-0 truncate">
+                {S.assistant.to} <span className="font-semibold text-foreground">{proposal.target}</span> · {proposal.where}
+              </span>
             </div>
-          ) : null}
-          <div className="whitespace-pre-wrap border-l-2 border-[var(--color-accent)] pl-2">{proposal.text}</div>
-          {props.cardError === null ? null : <div className="text-[13px] text-[var(--status-warning-text)]">{props.cardError}</div>}
-          <div className="flex items-center gap-2">
-            <Button data-testid="assistant-send" size="default" className="cursor-pointer text-sm" disabled={!armed} onClick={() => props.onDecide('send')}>
-              {proposal.wake ? S.assistant.wakeAndSend : S.assistant.send}
-            </Button>
-            <Button data-testid="assistant-cancel" size="default" variant="outline" className="cursor-pointer text-sm" onClick={() => props.onDecide('cancel')}>
-              {S.assistant.cancel}
-            </Button>
-            <span className="ml-auto text-[12px] text-muted-foreground">{S.assistant.enterToSend}</span>
+            {proposal.wake ? (
+              <div data-testid="assistant-wake-note" className="text-[12px] text-muted-foreground">
+                {S.assistant.wakeNote}
+              </div>
+            ) : null}
+            <div className="whitespace-pre-wrap border-l-2 border-[var(--color-accent)] pl-2">{proposal.text}</div>
+            {props.cardError === null ? null : <div className="text-[13px] text-[var(--status-warning-text)]">{props.cardError}</div>}
+            <div className="flex items-center gap-2">
+              <Button data-testid="assistant-send" size="default" className="cursor-pointer text-sm" disabled={!armed} onClick={() => props.onDecide('send')}>
+                {proposal.wake ? S.assistant.wakeAndSend : S.assistant.send}
+              </Button>
+              <Button data-testid="assistant-cancel" size="default" variant="outline" className="cursor-pointer text-sm" onClick={() => props.onDecide('cancel')}>
+                {S.assistant.cancel}
+              </Button>
+              <span className="ml-auto text-[12px] text-muted-foreground">{S.assistant.enterToSend}</span>
+            </div>
           </div>
-        </div>
-      )}
-      {props.notice === null ? null : <div className="text-[13px] text-muted-foreground">{props.notice}</div>}
+        )}
+        {props.notice === null ? null : <div className="text-[13px] text-muted-foreground">{props.notice}</div>}
+      </div>
       <form
         className="flex items-center gap-2 rounded-md bg-white/5 px-2 py-1"
         onSubmit={(event) => {
