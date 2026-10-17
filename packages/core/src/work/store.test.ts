@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
@@ -118,6 +118,32 @@ describe('песочница тестов', () => {
 
 describe('parleyHome — выбор дома (R4)', () => {
   const userHome = (): string => home;
+
+  describe('предохранитель: тест не резолвит настоящий дом Parley', () => {
+    // `userInfo().homedir` читается из базы пользователей — `HOME` песочницы его не подменяет.
+    const realHome = userInfo().homedir;
+
+    it('PARLEY_HOME на настоящий ~/.parley или ~/.harnas — ошибка', () => {
+      expect(() => parleyHome({ PARLEY_HOME: path.join(realHome, '.parley') })).toThrow(/sandbox-home/);
+      expect(() => parleyHome({ HARNAS_HOME: path.join(realHome, '.harnas') })).toThrow(/sandbox-home/);
+    });
+
+    it('путь внутри настоящего дома — ошибка', () => {
+      expect(() => parleyHome({ PARLEY_HOME: path.join(realHome, '.parley', 'works') })).toThrow(/sandbox-home/);
+    });
+
+    it('запасной путь от настоящего домашнего каталога — ошибка', () => {
+      expect(() => parleyHome({}, realHome)).toThrow(/sandbox-home/);
+    });
+
+    it('временные каталоги и фейковый userHome работают', () => {
+      expect(parleyHome({ PARLEY_HOME: path.join(home, 'x') }, userHome())).toBe(path.join(home, 'x'));
+      expect(parleyHome({}, userHome())).toBe(path.join(home, '.parley'));
+      expect(parleyHome({ PARLEY_HOME: path.join(realHome, '.parley-sibling') })).toBe(
+        path.join(realHome, '.parley-sibling'),
+      );
+    });
+  });
 
   it('PARLEY_HOME — первый', () => {
     expect(parleyHome({ PARLEY_HOME: '/new', HARNAS_HOME: '/old' }, userHome())).toBe('/new');

@@ -14,7 +14,7 @@ import {
   writeFile,
   type FileHandle,
 } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import path from 'node:path';
 import { CONTEXT_DIR, contextFile } from '../context-fill.js';
 import { LIMITS_DIR, limitsFile } from '../limits.js';
@@ -34,12 +34,36 @@ import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js
  * Пустая переменная — то же, что незаданная. `env` и `userHome` подменяет тест.
  */
 export function parleyHome(env: Env = process.env, userHome: string = homedir()): string {
+  const resolved = resolveParleyHome(env, userHome);
+  refuseRealHomeUnderTest(resolved);
+  return resolved;
+}
+
+function resolveParleyHome(env: Env, userHome: string): string {
   const explicit = envValue(env, 'HOME');
   if (explicit !== undefined) return explicit;
   const current = path.join(userHome, HOME_DIR);
   if (isDirectorySync(current)) return current;
   const legacy = path.join(userHome, LEGACY_HOME_DIR);
   return isDirectorySync(legacy) ? legacy : current;
+}
+
+/**
+ * Предохранитель: под vitest (настоящее окружение процесса, не параметр `env`) дом не может оказаться настоящим
+ * `~/.parley` или `~/.harnas` — иначе тест писал бы в данные человека (инцидент 17.10.2026). Домашний каталог берётся
+ * из базы пользователей: `HOME` песочницы его не подменяет.
+ */
+function refuseRealHomeUnderTest(resolved: string): void {
+  if (process.env['VITEST'] === undefined) return;
+  const target = path.resolve(resolved);
+  for (const dir of [HOME_DIR, LEGACY_HOME_DIR]) {
+    const real = path.join(userInfo().homedir, dir);
+    const relative = path.relative(real, target);
+    if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)))
+      throw new Error(
+        `Тест резолвит настоящий дом Parley (${target}): песочница test/sandbox-home.ts не применена — vitest запущен мимо конфига пакета?`,
+      );
+  }
 }
 
 /** Глобальный индекс работ: все работы всех проектов. */
