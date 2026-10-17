@@ -26,6 +26,7 @@ export function VoiceSettings(): JSX.Element {
   };
 
   const hasModel = downloaded.length > 0;
+  const options = [{ code: 'auto', name: S.voice.settings.auto }, ...LANGUAGE_OPTIONS];
 
   return (
     <div className="flex flex-col gap-3 text-sm">
@@ -89,7 +90,7 @@ export function VoiceSettings(): JSX.Element {
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="max-h-72">
-            {LANGUAGE_OPTIONS.map((language) => (
+            {options.map((language) => (
               <SelectItem key={language.code} value={language.code}>
                 {language.name}
               </SelectItem>

@@ -90,6 +90,16 @@ describe('AssistantSettings (спека 2026-10-14, 6.1)', () => {
     await waitFor(() => expect(screen.getByText(text.shortcutTaken)).toBeTruthy());
   });
 
+  it('сочетание: клик по полю и ⌥J пишут Alt+J через patchUi', () => {
+    render(<AssistantSettings />);
+    const field = screen.getByTestId('shortcut-field');
+    fireEvent.click(field);
+    expect(screen.getByText(text.shortcutRecording)).toBeTruthy();
+    fireEvent.keyDown(field, { code: 'KeyJ', altKey: true });
+    expect(saved).toEqual([{ assistant: { hotkey: 'Alt+J' } }]);
+    expect(screen.getByTestId('shortcut-field').textContent).toBe('⌥J');
+  });
+
   it('у GLM видна подсказка про 13 секунд', () => {
     useUiStore.setState({ ui: { ...DEFAULT_UI, assistant: { ...DEFAULT_UI.assistant, provider: 'glm' } } });
     render(<AssistantSettings />);

@@ -40,16 +40,4 @@ export function miniLabel(host: AssistantState, input: InputPhase): string | nul
   }
 }
 
-const KEY_MARKS: ReadonlyArray<[RegExp, string]> = [
-  [/^(CmdOrCtrl|CommandOrControl|Command|Cmd|Meta|Super)$/i, '⌘'],
-  [/^(Control|Ctrl)$/i, '⌃'],
-  [/^(Alt|Option)$/i, '⌥'],
-  [/^Shift$/i, '⇧'],
-];
-
-export function hotkeyLabel(accelerator: string): string {
-  return accelerator
-    .split('+')
-    .map((part) => KEY_MARKS.find(([pattern]) => pattern.test(part))?.[1] ?? part)
-    .join('');
-}
+export { hotkeyLabel } from '../../../shared/hotkey.js';

@@ -10,9 +10,9 @@ import { LANGUAGE_OPTIONS } from '../../../shared/voice-types.js';
 import type { AssistantUi, UiFile } from '../../../shared/ui-types.js';
 import { getHostClient } from '../../host-client.js';
 import { useUiStore } from '../../store/ui.js';
-import { Input } from '../../ui/input.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select.js';
 import { Switch } from '../../ui/switch.js';
+import { ShortcutField } from './ShortcutField.js';
 
 type ProviderRow = Result<'providers.list'>['providers'][number];
 
@@ -27,7 +27,6 @@ export function AssistantSettings(): JSX.Element {
   const bridge = getHostClient();
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [shortcut, setShortcut] = useState<AssistantShortcutStatus | null>(null);
-  const [hotkey, setHotkey] = useState(assistant.hotkey);
 
   useEffect(() => {
     let alive = true;
@@ -108,7 +107,7 @@ export function AssistantSettings(): JSX.Element {
           </SelectTrigger>
           <SelectContent className="max-h-72">
             <SelectItem value={SYSTEM_LANGUAGE}>{text.languageSystem}</SelectItem>
-            {LANGUAGE_OPTIONS.filter(({ code }) => code !== 'auto').map(({ code, name }) => (
+            {LANGUAGE_OPTIONS.map(({ code, name }) => (
               <SelectItem key={code} value={code}>
                 {name}
               </SelectItem>
@@ -119,14 +118,7 @@ export function AssistantSettings(): JSX.Element {
 
       <label className="flex flex-col gap-1">
         <span>{text.shortcut}</span>
-        <Input
-          aria-label={text.shortcut}
-          value={hotkey}
-          onChange={(event) => setHotkey(event.target.value)}
-          onBlur={() => {
-            if (hotkey.trim() !== '') patch({ hotkey: hotkey.trim() });
-          }}
-        />
+        <ShortcutField value={assistant.hotkey} label={text.shortcut} onChange={(hotkey) => patch({ hotkey })} />
       </label>
       <p className="text-xs text-muted-foreground">{text.shortcutHint}</p>
       {shortcut?.ok === false ? <p className="text-xs text-destructive">{text.shortcutTaken}</p> : null}
