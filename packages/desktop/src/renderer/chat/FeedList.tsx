@@ -86,7 +86,7 @@ export interface FeedListProps {
    */
   reveal?: ({ agentId: string } | { itemId: string }) & { nonce: number };
   onRevealed?: (nonce: number) => void;
-  /** Id промптов, которые отправил помощник (`viaAssistantIds`): над пузырём «via Jarvis». */
+  /** Id промптов, которые отправил помощник (`viaAssistantIds`): над пузырём «via assistant». */
   viaIds?: ReadonlySet<string>;
 }
 

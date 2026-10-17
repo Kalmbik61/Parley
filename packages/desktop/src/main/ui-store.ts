@@ -9,48 +9,12 @@
 import { readFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { parleyHome } from '@parley/core';
-import { DEFAULT_UI, normalizeUi, type UiFile } from '../shared/ui-types.js';
+import { DEFAULT_UI, mergeUiPatch, normalizeUi, type UiFile } from '../shared/ui-types.js';
 import { createFileQueue, writeAtomic } from './atomic-file.js';
 
 /** `~/.parley/desktop/ui.json` — рядом с `layouts.json` (`layout-store.ts`). */
 export function desktopUiPath(home: string = parleyHome()): string {
   return path.join(home, 'desktop', 'ui.json');
-}
-
-/**
- * Вложенные объекты `UiFile`, которые `save` сливает НЕ целиком поверх
- * текущего файла, а по одному уровню (текущее ⊕ патч) перед `normalizeUi`
- * (раунд исправлений 1, находка I1/тест 12): иначе `normalizeUi` подставляет
- * `DEFAULT_UI` в подполя, которых нет в патче, — частичный `{ sound: false }`
- * откатывал бы `needsYou`/`finished`/`mail` на дефолтный `true`, хотя патч их
- * не трогал.
- */
-const NESTED_KEYS = [
-  'leftSidebar',
-  'rightSidebar',
-  'notifications',
-  'voice',
-  'browser',
-  'island',
-  'assistant',
-] as const satisfies ReadonlyArray<keyof UiFile>;
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function mergeUiPatch(
-  current: UiFile,
-  patch: Partial<Omit<UiFile, 'version'>>,
-): Record<string, unknown> {
-  const merged: Record<string, unknown> = { ...current, ...patch };
-  for (const key of NESTED_KEYS) {
-    const patchValue = (patch as Partial<Record<(typeof NESTED_KEYS)[number], unknown>>)[key];
-    if (isPlainObject(patchValue)) {
-      merged[key] = { ...(current[key] as Record<string, unknown>), ...patchValue };
-    }
-  }
-  return merged;
 }
 
 /**

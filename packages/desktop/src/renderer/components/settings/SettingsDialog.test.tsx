@@ -10,7 +10,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import { createFakeBridge } from '../../test-utils/fake-bridge.js';
 import { S } from '../../../shared/strings.js';
@@ -648,5 +648,29 @@ describe('SettingsDialog — «Let agents use the browser» (спека брау
     expect(toggle.getAttribute('aria-checked')).toBe('false');
     fireEvent.click(toggle);
     await waitFor(() => expect(saveUiSpy).toHaveBeenCalledWith({ browser: { devtoolsHeight: 320, agentsAllowed: true } }));
+  });
+});
+
+describe('SettingsDialog — навигация слева (живая проверка 2026-10-17)', () => {
+  it('секции — вертикальный список в прежнем порядке, содержимое — в панели с прокруткой', async () => {
+    const bridge = createFakeBridge();
+    openSettings(bridge);
+
+    const list = screen.getByRole('tablist');
+    expect(list.getAttribute('aria-orientation')).toBe('vertical');
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'Appearance',
+      'Terminal',
+      'Agents',
+      'Notifications',
+      'Browser',
+      'Voice',
+      'Assistant',
+    ]);
+
+    const pane = screen.getByTestId('settings-pane');
+    // Не «Assistant»: та секция зовёт getHostClient(), которого в этом окружении нет.
+    switchTo('Browser');
+    expect(await within(pane).findByRole('button', { name: S.settings.clearBrowserData })).toBeTruthy();
   });
 });

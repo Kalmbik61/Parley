@@ -116,7 +116,7 @@ export interface MessageModel {
   sender: { kind: SenderKind; provider: string | null };
   /** Подпись отправителя: `You`, `System`, `S02 бэкенд`. */
   from: string;
-  /** Письмо человека через помощника (спека 2026-10-14, 7.4): подпись «You (via Jarvis)» и знак помощника. */
+  /** Письмо человека через помощника (спека 2026-10-14, 7.4): подпись «You (via assistant)» и знак помощника. */
   via: 'assistant' | null;
   /** Отправитель — ведущий (`★`). */
   lead: boolean;

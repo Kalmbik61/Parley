@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
-import { DEFAULT_UI } from '../../shared/ui-types.js';
+import { DEFAULT_UI, type UiFile } from '../../shared/ui-types.js';
 import { useUiStore } from './ui.js';
 
 beforeEach(() => {
@@ -213,6 +213,28 @@ describe('useUiStore.patchUi / setAppearance / setSidebar (кусок 2.3, те�
     expect(useUiStore.getState().ui.collapsedProjects).toEqual(['/p']);
     expect(saveUiSpy).toHaveBeenNthCalledWith(1, { pinnedWorks: ['a'] });
     expect(saveUiSpy).toHaveBeenNthCalledWith(2, { collapsedProjects: ['/p'] });
+    dispose();
+  });
+
+  it('частичный патч вложенного объекта не сбрасывает соседние подполя зеркала; в app.saveUi уходит сырой патч', () => {
+    const bridge = createFakeBridge();
+    const dispose = useUiStore.getState().init(bridge);
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    useUiStore.setState({
+      ui: { ...DEFAULT_UI, assistant: { enabled: true, provider: 'claude', model: 'haiku', hotkey: 'Alt+Space', language: 'ru' } },
+    });
+
+    useUiStore.getState().patchUi({ assistant: { model: 'sonnet' } } as Partial<Omit<UiFile, 'version' | 'activeWorkKey'>>);
+
+    const { assistant } = useUiStore.getState().ui;
+    expect(assistant.enabled).toBe(true);
+    expect(assistant.provider).toBe('claude');
+    expect(assistant.language).toBe('ru');
+    expect(assistant.model).toBe('sonnet');
+    expect(saveUiSpy).toHaveBeenCalledWith({ assistant: { model: 'sonnet' } });
+
+    useUiStore.getState().patchUi({ island: { enabled: false } } as Partial<Omit<UiFile, 'version' | 'activeWorkKey'>>);
+    expect(useUiStore.getState().ui.island).toEqual({ ...DEFAULT_UI.island, enabled: false });
     dispose();
   });
 

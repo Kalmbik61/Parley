@@ -1,20 +1,25 @@
 /**
- * Большой вид помощника на острове (спека 2026-10-14, 8.2; эталон — island-mockup.html): знак, подпись состояния,
- * последний вопрос и ответ, карточка подтверждения, строка ввода.
+ * Большой вид помощника на острове (спека 2026-10-14, 8.2; эталон — island-mockup.html): рой душ с ореолом, подпись
+ * состояния с точкой, последний вопрос и ответ, карточка подтверждения, строка ввода.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Mic, MicOff } from 'lucide-react';
 import type { AssistantState } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
 import { AssistantMark } from '../../components/AssistantMark.js';
 import { Button } from '../../ui/button.js';
+import { levelWidth } from '../../voice/level.js';
+import { Swarm } from '../swarm/Swarm.js';
+import { haloFor, swarmSpecFor } from '../swarm/spec.js';
 import { hotkeyLabel, statusLabel } from './labels.js';
-import { assistantBusy, type InputPhase } from './store.js';
+import type { InputPhase } from './store.js';
 
 export interface AssistantViewProps {
   host: AssistantState;
   input: InputPhase;
+  /** Громкость микрофона (rms из стора, 0…≈0,2): рой сжимается и волнуется в такт. */
+  level: number;
   draft: string;
   notice: string | null;
   cardError: string | null;
@@ -31,6 +36,9 @@ export interface AssistantViewProps {
 /** Как `CARD_ARM_MS` острова: кнопки карточки взводятся не сразу — случайный клик у края экрана не отправит. */
 const ARM_MS = 500;
 
+/** Цвет точки у подписи состояния; остальные фазы — акцентный (класс), без inline-цвета. */
+const STATUS_DOT: Partial<Record<AssistantState['phase'], string>> = { error: '#dc604c', offline: '#9c948a', 'awaiting-confirm': '#ffc24d' };
+
 function useArmed(key: string | null): boolean {
   const [armed, setArmed] = useState(false);
   useEffect(() => {
@@ -46,7 +54,9 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
   const { host, input, draft, pending } = props;
   const proposal = host.proposal;
   const armed = useArmed(proposal?.id ?? null);
-  const busy = assistantBusy({ host, input });
+  const spec = useMemo(() => swarmSpecFor(host, input, false), [host.phase, input]);
+  const halo = haloFor(spec, host);
+  const dotColor = STATUS_DOT[host.phase];
   const submit = (): void => {
     if (draft.trim() === '' && proposal !== null && armed) props.onDecide('send');
     else props.onSubmit(draft);
@@ -59,10 +69,20 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
           {S.assistant.needsYou(pending.name, pending.total)}
         </button>
       )}
-      <div className="flex justify-center py-1">
-        <AssistantMark size={88} busy={busy} />
+      <div className="relative -mx-3 h-[136px]">
+        <div
+          aria-hidden
+          className="absolute inset-0 transition-opacity duration-300"
+          style={{ background: `radial-gradient(ellipse 46% 62% at 50% 42%, rgba(${halo.rgb}, ${halo.alpha}), transparent 72%)` }}
+        />
+        <Swarm spec={spec} souls={700} width={420} height={136} d={86} cy={62} k={0.058} minPx={2.4} fps={60} mic={levelWidth(props.level)} className="absolute inset-0" />
       </div>
-      <div data-testid="assistant-status" className="text-center text-[13px] text-muted-foreground">
+      <div data-testid="assistant-status" className="flex items-center justify-center gap-1.5 text-[13px] text-muted-foreground">
+        <span
+          data-testid="assistant-status-dot"
+          className={`size-[7px] shrink-0 rounded-full ${dotColor === undefined ? 'bg-[var(--color-accent)]' : ''} ${input === 'listening' ? 'assistant-dot-pulse' : ''}`}
+          {...(dotColor === undefined ? {} : { style: { background: dotColor } })}
+        />
         {statusLabel(host, input)}
       </div>
       {host.question === null ? null : <div className="text-[13px] text-muted-foreground">{host.question}</div>}

@@ -377,7 +377,7 @@ describe('buildRoomModel — сообщения', () => {
     ]);
   });
 
-  it('письмо человека через помощника — «You (via Jarvis)» и via; без via — «You» и null', () => {
+  it('письмо человека через помощника — «You (via assistant)» и via; без via — «You» и null', () => {
     const entry = entryOf({
       messages: [
         message('m-1', { from: 'human', via: 'assistant', at: '2026-09-27T09:00:00.000Z' }),
@@ -385,7 +385,7 @@ describe('buildRoomModel — сообщения', () => {
       ],
     });
     expect(build(entry).messages.map((item) => [item.from, item.via])).toEqual([
-      ['You (via Jarvis)', 'assistant'],
+      ['You (via assistant)', 'assistant'],
       ['You', null],
     ]);
   });

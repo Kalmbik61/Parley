@@ -173,7 +173,7 @@ describe('пути кодом в ленте', () => {
   });
 
   it('письмо человека через помощника — знак помощника вместо значка человека', () => {
-    const { container } = renderMessage(message({ sender: { kind: 'human', provider: null }, from: 'You (via Jarvis)', via: 'assistant', text: 'привет' }));
+    const { container } = renderMessage(message({ sender: { kind: 'human', provider: null }, from: 'You (via assistant)', via: 'assistant', text: 'привет' }));
     expect(container.querySelector('[data-assistant-mark]')).not.toBeNull();
   });
 

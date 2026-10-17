@@ -146,6 +146,39 @@ export function fitRightSidebar(saved: number, windowWidth: number, leftWidth: n
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/**
+ * Вложенные объекты `UiFile`, которые `save` сливает НЕ целиком поверх
+ * текущего файла, а по одному уровню (текущее ⊕ патч) перед `normalizeUi`
+ * (раунд исправлений 1, находка I1/тест 12): иначе `normalizeUi` подставляет
+ * `DEFAULT_UI` в подполя, которых нет в патче, — частичный `{ sound: false }`
+ * откатывал бы `needsYou`/`finished`/`mail` на дефолтный `true`, хотя патч их
+ * не трогал.
+ */
+export const NESTED_UI_KEYS = [
+  'leftSidebar',
+  'rightSidebar',
+  'notifications',
+  'voice',
+  'browser',
+  'island',
+  'assistant',
+] as const satisfies ReadonlyArray<keyof UiFile>;
+
+/** Слияние патча с текущим `UiFile`: верхний уровень — заменой, ключи `NESTED_UI_KEYS` — на один уровень вглубь. */
+export function mergeUiPatch(
+  current: UiFile,
+  patch: Partial<Omit<UiFile, 'version'>>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...current, ...patch };
+  for (const key of NESTED_UI_KEYS) {
+    const patchValue = (patch as Partial<Record<(typeof NESTED_UI_KEYS)[number], unknown>>)[key];
+    if (isRecord(patchValue)) {
+      merged[key] = { ...(current[key] as Record<string, unknown>), ...patchValue };
+    }
+  }
+  return merged;
+}
+
 const isAppearance = (value: unknown): value is Appearance =>
   value === 'system' || value === 'dark' || value === 'light';
 

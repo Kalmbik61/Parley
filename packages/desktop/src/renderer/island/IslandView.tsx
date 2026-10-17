@@ -28,7 +28,7 @@
  * вне прокручиваемой части списка: длинный список едет под ней, а кнопка остаётся на месте.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState, type Ref } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react';
 import { ChevronUp } from 'lucide-react';
 import type { FeedDecision } from '@parley/core';
 import { S } from '../../shared/strings.js';
@@ -37,7 +37,6 @@ import type { IslandApi, IslandConfig } from '../../shared/island.js';
 import { alwaysRules } from '../chat/cards/always-rules.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
-import { AssistantMark } from '../components/AssistantMark.js';
 import { relativeTime } from '../lib/relative-time.js';
 import { Button } from '../ui/button.js';
 import { AssistantView, type AssistantViewProps } from './assistant/AssistantView.js';
@@ -46,6 +45,8 @@ import type { IslandModel, IslandRow } from './model.js';
 import { useIslandReplies } from './replies.js';
 import type { IslandRequest } from './requests.js';
 import { simpleChoices } from './simple-question.js';
+import { Swarm } from './swarm/Swarm.js';
+import { swarmSpecFor } from './swarm/spec.js';
 
 /**
  * Сколько кнопки решения (Allow / Always / Deny / варианты ответа) выключены после каждого показа карточки: остров
@@ -105,6 +106,13 @@ function rowTarget(row: IslandRow): FocusTarget {
     : { kind: 'room', projectPath: row.projectPath, workId: row.workId, roomId: row.roomId };
 }
 
+/** Мини-рой в кнопке пилюли: canvas 28 px лежит в кнопке 26 px, как `.dotbtn` макета; 30 кадров/с только пока помощник занят. */
+function MiniSwarm({ assistant }: { assistant: IslandAssistantProps }): JSX.Element {
+  const { host, input } = assistant.view;
+  const spec = useMemo(() => swarmSpecFor(host, input, true), [host.phase, input]);
+  return <Swarm spec={spec} souls={150} width={28} height={28} d={17} cy={14} k={0.15} minPx={1.5} seed={5} fps={assistant.busy ? 30 : 0} />;
+}
+
 function Pill(props: IslandViewProps): JSX.Element {
   const { model, onToggleList } = props;
   return (
@@ -113,8 +121,8 @@ function Pill(props: IslandViewProps): JSX.Element {
     // содержимое строки по центру, чтобы пилюля не уезжала вбок из-под курсора.
     <div data-testid="island-pill" className="island-reveal flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 text-sm">
       {props.assistant === null ? null : (
-        <button type="button" data-testid="assistant-dot" aria-label={S.assistant.ask} className="flex cursor-pointer items-center" onClick={props.assistant.onOpen}>
-          <AssistantMark size={18} busy={props.assistant.busy} />
+        <button type="button" data-testid="assistant-dot" aria-label={S.assistant.ask} className="grid size-[26px] -ml-1 cursor-pointer place-items-center overflow-visible rounded-full hover:bg-white/10" onClick={props.assistant.onOpen}>
+          <MiniSwarm assistant={props.assistant} />
         </button>
       )}
       {props.assistant?.collapsed === true && props.assistant.mini !== null ? (

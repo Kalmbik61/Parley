@@ -35,7 +35,7 @@ export interface PromptItemProps {
   onRetry?: () => void;
   /** `failed`: × — убрать не ушедшее. */
   onRemove?: () => void;
-  /** Сообщение отправил помощник (спека 2026-10-14, 7.4): над пузырём «via Jarvis». */
+  /** Сообщение отправил помощник (спека 2026-10-14, 7.4): над пузырём «via assistant». */
   via?: boolean;
 }
 

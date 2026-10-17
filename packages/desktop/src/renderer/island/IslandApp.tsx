@@ -365,6 +365,7 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
         view: {
           host: assistant.host,
           input: assistant.input,
+          level: assistant.level,
           draft: assistant.draft,
           notice: assistant.notice,
           cardError: assistant.cardError,

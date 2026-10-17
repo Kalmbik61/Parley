@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_UI, fitRightSidebar, LEFT_SIDEBAR, normalizeUi, RIGHT_SIDEBAR } from './ui-types.js';
+import { DEFAULT_UI, fitRightSidebar, LEFT_SIDEBAR, mergeUiPatch, normalizeUi, RIGHT_SIDEBAR } from './ui-types.js';
 
 describe('normalizeUi', () => {
   it('пустой объект → DEFAULT_UI', () => {
@@ -253,5 +253,23 @@ describe('browser.agentsAllowed (спека браузера 4.8; этап B2)',
 
   it('поле высоты панели рядом не теряется', () => {
     expect(normalizeUi({ browser: { agentsAllowed: false, devtoolsHeight: 300 } }).browser).toEqual({ devtoolsHeight: 300, agentsAllowed: false });
+  });
+});
+
+describe('mergeUiPatch', () => {
+  it('вложенный объект сливается по одному уровню: соседние подполя остаются', () => {
+    const current = { ...DEFAULT_UI, assistant: { ...DEFAULT_UI.assistant, enabled: true, provider: 'claude' as const, language: 'ru' as const } };
+    const merged = mergeUiPatch(current, { assistant: { model: 'sonnet' } } as Partial<Omit<typeof DEFAULT_UI, 'version'>>);
+    expect(merged.assistant).toEqual({ ...current.assistant, model: 'sonnet' });
+  });
+
+  it('массив верхнего уровня заменяется целиком', () => {
+    const current = { ...DEFAULT_UI, pinnedWorks: ['a', 'b'] };
+    expect(mergeUiPatch(current, { pinnedWorks: ['c'] }).pinnedWorks).toEqual(['c']);
+  });
+
+  it('не-объект для вложенного ключа кладётся как есть (отсечёт normalizeUi)', () => {
+    const merged = mergeUiPatch(DEFAULT_UI, { assistant: null } as unknown as Partial<Omit<typeof DEFAULT_UI, 'version'>>);
+    expect(merged.assistant).toBeNull();
   });
 });

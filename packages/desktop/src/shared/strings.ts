@@ -13,7 +13,6 @@
  * областям окна; параметризованные тексты — функции.
  */
 import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
-import { ASSISTANT_NAME } from './assistant-name.js';
 import type { ContextKind } from './context-markdown.js';
 
 /** Что за файл-контекст — для строки в ввод CLI (`S.contextFile.terminalLine`). */
@@ -1152,7 +1151,7 @@ export const S = {
   /** Вид «Chat» вкладки сессии (план 2026-10-01, Task 3) — `renderer/chat/`. */
   chat: {
     /** Подпись сообщения, которое человеку передал помощник (письмо с `via: 'assistant'`). */
-    viaAssistant: `via ${ASSISTANT_NAME}`,
+    viaAssistant: 'via assistant',
     /** Сегмент тулбара вкладки «Chat | Terminal». */
     segment: { chat: 'Chat', terminal: 'Terminal' },
     viewLabel: 'Session view',
@@ -1753,7 +1752,7 @@ export const S = {
 
   /** Заголовки действий реестра клавиш (`shared/keybindings.ts`, спека 9.6): пункты меню и строки палитры. */
   actions: {
-    askAssistant: `Ask ${ASSISTANT_NAME}`,
+    askAssistant: 'Ask the assistant',
     capabilities: 'Capabilities…',
     commandPalette: 'Command palette',
     toggleDictation: 'Toggle dictation',
@@ -1881,7 +1880,7 @@ export const S = {
   participants: {
     human: 'You',
     /** Подпись отправителя, когда письмо ушло через помощника. */
-    viaAssistant: (name: string): string => `${name} (via ${ASSISTANT_NAME})`,
+    viaAssistant: (name: string): string => `${name} (via assistant)`,
     /** Так хост подписывает свои строки в комнате и почте — как на снимке handoff `dark-08`. */
     system: 'Parley',
     deletedSuffix: '(deleted)',
@@ -2081,8 +2080,8 @@ export const S = {
 
   /** Помощник на острове (спека 2026-10-14, раздел 6): тексты вида, настроек и подтверждения. */
   assistant: {
-    ask: `Ask ${ASSISTANT_NAME}`,
-    placeholder: `Ask ${ASSISTANT_NAME}…`,
+    ask: 'Ask the assistant',
+    placeholder: 'Ask the assistant…',
     ready: 'Ask about your agents, or tell a room something',
     escToClose: 'Esc to close',
     hotkeyToTalk: (keys: string): string => `${keys} to talk`,
@@ -2114,7 +2113,7 @@ export const S = {
     voiceFailed: "Couldn't recognize speech — type instead",
     newConversation: 'New conversation',
     settings: {
-      enabled: `Turn on ${ASSISTANT_NAME}`,
+      enabled: 'Turn on the assistant',
       enabledHint: "Answers about your agents and passes your messages on. Runs on the selected provider's subscription.",
       provider: 'Provider',
       providerAuto: 'First connected',

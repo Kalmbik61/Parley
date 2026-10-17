@@ -15,6 +15,7 @@ function props(patch: Partial<AssistantViewProps> = {}, host: Partial<AssistantS
   return {
     host: { ...HOST_IDLE, ...host },
     input: 'idle',
+    level: 0,
     draft: '',
     notice: null,
     cardError: null,
@@ -88,6 +89,23 @@ describe('вид помощника', () => {
   it('cardError показывается на карточке', () => {
     render(<AssistantView {...props({ cardError: 'S03 is not running' }, { phase: 'awaiting-confirm', proposal: PROPOSAL })} />);
     expect(screen.getByTestId('assistant-card').textContent).toContain('S03 is not running');
+  });
+
+  it('точка статуса: error — коралловая, offline и confirm — свои цвета; рой есть в виде', () => {
+    const { rerender } = render(<AssistantView {...props({}, { phase: 'error', error: 'Limit reached' })} />);
+    expect((screen.getByTestId('assistant-status-dot') as HTMLElement).style.backgroundColor).toBe('rgb(220, 96, 76)');
+    expect(screen.getByTestId('swarm')).toBeTruthy();
+    rerender(<AssistantView {...props({}, { phase: 'offline', error: 'No CLI' })} />);
+    expect((screen.getByTestId('assistant-status-dot') as HTMLElement).style.backgroundColor).toBe('rgb(156, 148, 138)');
+    rerender(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: PROPOSAL })} />);
+    expect((screen.getByTestId('assistant-status-dot') as HTMLElement).style.backgroundColor).toBe('rgb(255, 194, 77)');
+  });
+
+  it('точка статуса пульсирует только при записи', () => {
+    const { rerender } = render(<AssistantView {...props({ input: 'listening' })} />);
+    expect(screen.getByTestId('assistant-status-dot').className).toContain('assistant-dot-pulse');
+    rerender(<AssistantView {...props()} />);
+    expect(screen.getByTestId('assistant-status-dot').className).not.toContain('assistant-dot-pulse');
   });
 
   it('строка ожидающих запросов по клику зовёт onShowRequests', () => {

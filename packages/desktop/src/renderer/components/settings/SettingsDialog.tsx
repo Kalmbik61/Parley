@@ -16,6 +16,11 @@
  * (`setAppearance`/`patchUi`), а не грузят `ui.json` сами: то же зеркало,
  * что и у заголовка окна и сайдбаров — без этого две копии в разных
  * компонентах могли бы разойтись (см. комментарий у `patchUi`).
+ *
+ * С 2026-10-17 секции — столбец слева, справа панель содержимого со своей
+ * прокруткой, диалог 46rem × 34rem в пределах окна. Причина — живая проверка:
+ * горизонтальная полоса из семи вкладок обрезалась («…pearance»), а
+ * прокручивался весь диалог вместе с полосой, а не содержимое секции.
  */
 
 import { useEffect, useState, type ReactNode } from 'react';
@@ -172,21 +177,36 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* 32rem: семь вкладок (пятая «Browser» — кусок 9.1, шестая «Voice») в 28rem выходили за край диалога. */}
-      <DialogContent aria-describedby={undefined} className="w-[32rem] max-w-[32rem]">
+      {/* Высота фиксирована (в пределах окна): секции разной высоты не дёргают размер диалога при переключении;
+          в окне 800×500 диалог ограничен 100dvh-2rem. */}
+      <DialogContent aria-describedby={undefined} className="h-[min(34rem,calc(100dvh-2rem))] w-[46rem] max-w-[calc(100vw-2rem)]">
         <DialogTitle>{S.settings.title}</DialogTitle>
         {loadError !== null ? <p className="text-xs text-destructive">{loadError}</p> : null}
 
-        <Tabs value={section} onValueChange={(value) => setSection(value as SettingsSection)}>
-          <TabsList>
+        {/* min-h-0 flex-1: прокручивается только правая панель, а не вся секция вкладок. */}
+        <Tabs
+          value={section}
+          onValueChange={(value) => setSection(value as SettingsSection)}
+          orientation="vertical"
+          className="flex min-h-0 flex-1 gap-5"
+        >
+          <TabsList
+            aria-label={S.settings.title}
+            className="flex h-auto w-40 shrink-0 flex-col items-stretch justify-start gap-0.5 self-start rounded-none bg-transparent p-0"
+          >
             {SECTION_ORDER.map((key) => (
-              <TabsTrigger key={key} value={key}>
+              <TabsTrigger
+                key={key}
+                value={key}
+                className="justify-start rounded-md px-3 py-1.5 text-sm data-[state=active]:bg-muted data-[state=active]:text-foreground data-[state=active]:shadow-none"
+              >
                 {SECTION_LABELS[key]}
               </TabsTrigger>
             ))}
           </TabsList>
 
-          <TabsContent value="appearance">
+          <div data-testid="settings-pane" className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <TabsContent value="appearance" className="mt-0">
             {uiLoaded ? (
               <ToggleGroup
                 type="single"
@@ -202,7 +222,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
             ) : null}
           </TabsContent>
 
-          <TabsContent value="terminal" className="flex flex-col gap-3">
+          <TabsContent value="terminal" className="mt-0 flex flex-col gap-3">
             {config !== null ? (
               <>
                 <FieldRow label={S.settings.terminalFont} lockedBy={locked.fontFamily ?? null} error={errors.fontFamily}>
@@ -224,7 +244,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
             ) : null}
           </TabsContent>
 
-          <TabsContent value="agents" className="flex flex-col gap-3">
+          <TabsContent value="agents" className="mt-0 flex flex-col gap-3">
             {config !== null ? (
               <>
                 <FieldRow
@@ -405,7 +425,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
             ) : null}
           </TabsContent>
 
-          <TabsContent value="notifications" className="flex flex-col gap-3">
+          <TabsContent value="notifications" className="mt-0 flex flex-col gap-3">
             {uiLoaded ? (
               <>
                 <NotificationRow
@@ -457,7 +477,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
             ) : null}
           </TabsContent>
 
-          <TabsContent value="browser" className="flex flex-col gap-3">
+          <TabsContent value="browser" className="mt-0 flex flex-col gap-3">
             <Button type="button" variant="outline" className="self-start" onClick={clearBrowserData}>
               {S.settings.clearBrowserData}
             </Button>
@@ -474,9 +494,10 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
             ) : null}
           </TabsContent>
 
-          <TabsContent value="voice">{uiLoaded ? <VoiceSettings /> : null}</TabsContent>
+          <TabsContent value="voice" className="mt-0">{uiLoaded ? <VoiceSettings /> : null}</TabsContent>
 
-          <TabsContent value="assistant">{uiLoaded ? <AssistantSettings /> : null}</TabsContent>
+          <TabsContent value="assistant" className="mt-0">{uiLoaded ? <AssistantSettings /> : null}</TabsContent>
+          </div>
         </Tabs>
 
         <DialogFooter>

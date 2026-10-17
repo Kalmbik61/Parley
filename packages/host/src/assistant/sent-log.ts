@@ -1,6 +1,6 @@
 /**
  * Что помощник отправил агентам в Chat (спека 2026-10-14, 7.4): `<parleyHome>/assistant/sent.jsonl`, строка — `{ ref,
- * text, at }`. Окно по нему помечает такие сообщения в ленте Chat («You (via Jarvis)»).
+ * text, at }`. Окно по нему помечает такие сообщения в ленте Chat («You (via assistant)»).
  */
 
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';

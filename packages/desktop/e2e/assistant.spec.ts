@@ -7,8 +7,8 @@ import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
- * Помощник на острове (спека 2026-10-14): палитра «Ask Jarvis» → вид помощника на острове → вопрос → карточка с письмом
- * в комнату → Send → в комнате письмо «You (via Jarvis)» со значком помощника → второй вопрос и ответ → Esc.
+ * Помощник на острове (спека 2026-10-14): палитра «Ask the assistant» → вид помощника на острове → вопрос → карточка с письмом
+ * в комнату → Send → в комнате письмо «You (via assistant)» со значком помощника → второй вопрос и ответ → Esc.
  * Вместо `claude` — `stub-assistant-agent.mjs`: ход помощника он ведёт по-настоящему через маршруты хоста (обзор,
  * предложение письма), сессии работы и `--version` уходят в обычную заглушку. Каркас — как у `island.spec.ts`:
  * остров включается пустым `PARLEY_ISLAND` (конфиг Playwright гасит его для всех спеков), главное окно берётся по
@@ -80,7 +80,7 @@ test.describe('помощник на острове', () => {
     await rm(project, { recursive: true, force: true });
   });
 
-  test('вопрос → карточка с письмом комнате → Send → «You (via Jarvis)» в комнате → ответ → Esc', async () => {
+  test('вопрос → карточка с письмом комнате → Send → «You (via assistant)» в комнате → ответ → Esc', async () => {
     test.setTimeout(120_000);
     app = await electron.launch({
       args: [mainEntry],
@@ -131,11 +131,11 @@ test.describe('помощник на острове', () => {
       )
       .toBe(1);
 
-    // 3. Палитра ⌘J → «Ask Jarvis» → на острове вид помощника.
+    // 3. Палитра ⌘J → «Ask the assistant» → на острове вид помощника.
     await window.keyboard.press('Meta+J');
     await expect(window.locator('[data-palette] [cmdk-input]')).toBeFocused();
-    await window.keyboard.type('Ask Jarvis');
-    await expect(window.locator('[data-palette] [role="option"]').first()).toContainText('Ask Jarvis');
+    await window.keyboard.type('Ask the assistant');
+    await expect(window.locator('[data-palette] [role="option"]').first()).toContainText('Ask the assistant');
     await window.keyboard.press('Enter');
     await expect.poll(() => islandPage(app!) !== undefined, { message: 'остров создан' }).toBe(true);
     const island = islandPage(app)!;
@@ -155,7 +155,7 @@ test.describe('помощник на острове', () => {
     await row.click();
     const letter = window.locator('[data-room-feed] [data-message-id]').filter({ hasText: LETTER }).last();
     await expect(letter).toBeVisible();
-    await expect(letter.locator('[data-message-meta]')).toContainText('You (via Jarvis)');
+    await expect(letter.locator('[data-message-meta]')).toContainText('You (via assistant)');
     await expect(letter.locator('[data-assistant-mark]')).toHaveCount(1);
 
     // 6. Второй вопрос — ответ текстом; Esc закрывает вид помощника.

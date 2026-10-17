@@ -946,7 +946,7 @@ describe('перетаскивание за форму и курсоры', () =>
 function assistantProps(patch: Partial<IslandAssistantProps> = {}): IslandAssistantProps {
   return {
     view: {
-      host: HOST_IDLE, input: 'idle', draft: '', notice: null, cardError: null, hotkey: 'Alt+Space', pending: null,
+      host: HOST_IDLE, input: 'idle', level: 0, draft: '', notice: null, cardError: null, hotkey: 'Alt+Space', pending: null,
       onDraft: vi.fn(), onSubmit: vi.fn(), onMic: vi.fn(), onDecide: vi.fn(), onShowRequests: vi.fn(),
     },
     open: false, collapsed: false, busy: false, mini: null, onOpen: vi.fn(),
@@ -970,6 +970,7 @@ describe('помощник на острове', () => {
   it('помощник включён: в пилюле точка, клик зовёт onOpen; выключен — точки нет', () => {
     const assistant = assistantProps();
     render(<IslandView {...viewProps({ assistant })} />);
+    expect(screen.getByTestId('assistant-dot').querySelector('[data-testid="swarm"]')?.getAttribute('data-shape')).toBe('dot');
     fireEvent.click(screen.getByTestId('assistant-dot'));
     expect(assistant.onOpen).toHaveBeenCalled();
     cleanup();

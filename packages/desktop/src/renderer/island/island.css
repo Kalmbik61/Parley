@@ -43,3 +43,12 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .assistant-pulse { animation: none; }
 }
+
+/* Точка у подписи состояния пульсирует, пока идёт запись голоса (live-1, L3). */
+@keyframes assistant-dot-pulse {
+  50% { transform: scale(1.7); opacity: 0.5; }
+}
+.assistant-dot-pulse { animation: assistant-dot-pulse 1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .assistant-dot-pulse { animation: none; }
+}
