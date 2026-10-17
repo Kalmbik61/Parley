@@ -307,8 +307,8 @@ and 3.5) add two more:
   prints the models of your account — at host start and no more often than every six hours
   (see "Models"). The startup probes can be turned off with `PARLEY_SKIP_VERSION_PROBE=1`;
   GLM still requires a verified supported version before launch;
-- the status line script only reads the human's and the project's `settings.json` and
-  writes nothing.
+- the status line script reads no Claude Code settings and writes only into the work
+  directory.
 
 One explicit exception to "nothing is written to `~/.claude`, `~/.codex` or `~/.agents`" is
 recorded in `docs/specs/2026-10-02-capabilities-design.md`, section 6.4. (The boundary test
@@ -1184,12 +1184,12 @@ script (`<node> <core>/dist/work/statusline-bin.js`, both with absolute paths, l
 server; `<node>` is the one the host runs on). Claude Code calls it after every model
 response. From its input the script puts
 `rate_limits` into `<work-dir>/limits/<id>.json` (`{ at, rateLimits }`, an atomic write) and
-prints a terminal line. Your own `statusLine` from the Claude Code settings (the project's
-local and shared settings — of the directory Claude Code was launched from — then yours;
-read-only) it calls with the same input and prints its output as is; if there is none, it
-prints the model and the context percentage. A directory the agent moved to later is not
-read: another repository inside the project cannot run its own status line around folder
-trust. Once every 30 seconds the host gathers the values per provider (for Codex, from the
+the context fill into `<work-dir>/context/<id>.json`, and prints a short terminal line: the
+model and the context percentage. Your own `statusLine` from the Claude Code settings is
+neither looked up nor run in these sessions: Claude Code calls the command after every
+response, and with several agents a heavy one (git, node and jq on every call) kept a
+noticeable share of a CPU core busy. Your status line in your own terminal is unchanged.
+Once every 30 seconds the host gathers the values per provider (for Codex, from the
 tail of the freshest session log, the `codex` bucket only) and gives them to the window. For
 Claude the windows are merged across sessions, each one separately: with the same reset the
 larger value is taken, with different resets the window with the later reset. A window whose
@@ -1198,24 +1198,10 @@ reset time has passed is not shown.
 What this changes for you:
 
 - While a session has a status line configured, Claude Code hides most footer hints:
-  `esc to interrupt`, `? for shortcuts`, `hold space to speak`. Parley sessions that had no
-  status line of their own will lose them — a short "model · context" line remains.
-- The `padding`, `refreshInterval` and `hideVimModeIndicator` fields of your status line may
-  not reach Claude Code: the `statusLine` key from `--settings` may replace yours entirely
-  (the Claude Code documentation is silent about nested fields), and the script calls only
-  its command. To be checked on a real `claude` (run 2 in `TODOS.md`).
-- The project is the directory Claude Code is launched from (`project_dir`). For a session in
-  its own git worktree, the worktree's own settings are looked up; the main checkout's
-  `settings.local.json` is not looked up, and a status line defined only there is not called
-  (the short line is shown).
-- A command counts as ours, and is not called, only if it contains the full path of our
-  script; your script with the same file name is called as usual. A command that does not
-  answer within 5 seconds is killed together with its process group, and the line stays
-  short.
-- The command of your status line runs in a separate session (`detached`, that is `setsid`),
-  so it has no controlling terminal: whatever reads `/dev/tty` (for example,
-  `stty size </dev/tty`) will not get a terminal. If the script is killed by SIGKILL, your
-  command's group may outlive it.
+  `esc to interrupt`, `? for shortcuts`, `hold space to speak`. Parley sessions will lose
+  them — a short "model · context" line remains.
+- The status line of Parley sessions is always Parley's short line, whatever your
+  `statusLine` settings say.
 
 **Liveness.** When a session starts, its `pid`, the process start time and `launchedBy` are
 written to the map. When Parley starts and on every watcher event (not on a timer), each

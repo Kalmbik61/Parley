@@ -200,33 +200,22 @@ describe('узкие исключения добровольно введённ�
 });
 
 /**
- * Явное исключение из правила «запись в каталоги агентов» (спека комнат Organic, 3.5): скрипт
- * строки статуса читает `settings.json` человека и проекта, чтобы строка в терминале осталась
- * прежней. Исключение узкое: один файл, одно правило, одна строка целиком.
+ * Явные исключения из правил рамки: узкие — один файл, одно правило, одна строка целиком. Скрипт
+ * строки статуса (`statusline.ts`) исключения больше не имеет: настроек Claude Code человека он не
+ * читает.
  */
-describe('исключение для чтения settings.json в скрипте строки статуса (спека комнат, 3.5)', () => {
+describe('исключения рамки: statusline.ts среди них больше нет', () => {
   const STATUSLINE = 'packages/core/src/work/statusline.ts';
   const DECLARATION = "const SETTINGS_FILE = '.claude/settings.json';";
 
-  it('исключение statusline.ts: правило записи в каталоги агентов, причина — ссылка на 3.5', () => {
-    expect(FRAME_EXCEPTIONS[0]).toMatchObject({
-      file: STATUSLINE,
-      rule: 'запись в каталоги агентов',
-      line: DECLARATION,
-    });
-    expect(FRAME_EXCEPTIONS[0]?.reason).toContain('3.5');
-  });
-
   // Список исключений закреплён поимённо: новое — решение контролёра (frame-scan.ts), поэтому
   // оно краснит этот тест, пока человек не прочитал строку и не добавил её сюда осознанно.
-  // Все, кроме statusline.ts, — чтение: спека возможностей (2026-10-02) запрещает писать в
-  // ~/.claude.json и settings.json, читать их можно; и проверка конфликтных флагов Codex в
-  // agents.ts, которая такие флаги отвергает, а не подставляет. Исключения провайдеров
-  // (спека провайдеров, 4.2–5) — только фиксированные адреса Z.ai, хранилище ключа и финальное
-  // окружение процесса GLM.
+  // Все — чтение: спека возможностей (2026-10-02) запрещает писать в ~/.claude.json и
+  // settings.json, читать их можно; и проверка конфликтных флагов Codex в agents.ts, которая
+  // такие флаги отвергает, а не подставляет. Исключения провайдеров (спека провайдеров, 4.2–5) —
+  // только фиксированные адреса Z.ai, хранилище ключа и финальное окружение процесса GLM.
   it('исключений ровно перечисленные: файл и правило, причина — одна строка', () => {
     expect(FRAME_EXCEPTIONS.map((item) => `${item.file} | ${item.rule}`)).toEqual([
-      `${STATUSLINE} | запись в каталоги агентов`,
       'packages/core/src/skills/claude.ts | запись в каталоги агентов',
       'packages/core/src/work/agents.ts | YOLO-флаги',
       'packages/host/src/capabilities/claude.ts | запись в каталоги агентов',
@@ -246,36 +235,43 @@ describe('исключение для чтения settings.json в скрипт
     }
   });
 
-  it('объявление пути настроек в statusline.ts не находка', () => {
-    expect(scanSource(STATUSLINE, `  ${DECLARATION}`)).toEqual([]);
-    expect(isFrameException(STATUSLINE, 'запись в каталоги агентов', DECLARATION)).toBe(true);
+  it('объявление пути настроек в statusline.ts — находка: исключения у файла нет', () => {
+    expect(FRAME_EXCEPTIONS.some((item) => item.file === STATUSLINE)).toBe(false);
+    expect(scanSource(STATUSLINE, `  ${DECLARATION}`)).toMatchObject([
+      { rule: 'запись в каталоги агентов' },
+    ]);
+    expect(isFrameException(STATUSLINE, 'запись в каталоги агентов', DECLARATION)).toBe(false);
   });
 
-  it('запись в каталоги агента из того же файла по-прежнему ловится', () => {
-    for (const write of [
+  it('путь настроек Claude Code в statusline.ts по-прежнему ловится: и чтение, и запись', () => {
+    for (const line of [
       "await writeFile(path.join(home, '.claude/settings.json'), text);",
+      "await readFile(path.join(dir, '.claude/settings.json'), 'utf8');",
       "await writeFile(path.join(home, '.claude.json'), text);",
       "await writeFile(path.join(home, '.codex/config.toml'), text);",
-      // Та же строка объявления, но с дописанным кодом, — уже не исключение.
-      `${DECLARATION} await writeFile(SETTINGS_FILE, text);`,
-      "const OTHER_FILE = '.claude/settings.json';",
     ]) {
-      const hits = scanSource(STATUSLINE, write);
-      expect(hits, write).toHaveLength(1);
-      expect(hits[0]?.rule, write).toBe('запись в каталоги агентов');
+      const hits = scanSource(STATUSLINE, line);
+      expect(hits, line).toHaveLength(1);
+      expect(hits[0]?.rule, line).toBe('запись в каталоги агентов');
     }
   });
 
-  it('то же объявление в любом другом файле — находка', () => {
-    expect(scanSource('packages/core/src/work/other.ts', DECLARATION)).toHaveLength(1);
-    expect(scanSource('packages/host/src/statusline.ts', DECLARATION)).toHaveLength(1);
+  it('исключение узкое: то же объявление в другом файле — находка, а в своём файле — нет', () => {
+    const [exception] = FRAME_EXCEPTIONS;
+    if (exception === undefined) throw new Error('в FRAME_EXCEPTIONS пусто');
+    expect(scanSource(exception.file, exception.line)).toEqual([]);
+    expect(scanSource('packages/core/src/work/other.ts', exception.line)).toHaveLength(1);
+    // Та же строка с дописанным кодом — уже не исключение.
+    expect(scanSource(exception.file, `${exception.line} await writeFile(file, text);`)).toHaveLength(
+      1,
+    );
   });
 
   it('исключение снимает только своё правило: для других правил та же строка не исключена', () => {
-    for (const { rule } of FRAME_RULES.filter(
-      (item) => item.rule !== 'запись в каталоги агентов',
-    )) {
-      expect(isFrameException(STATUSLINE, rule, DECLARATION), rule).toBe(false);
+    const [exception] = FRAME_EXCEPTIONS;
+    if (exception === undefined) throw new Error('в FRAME_EXCEPTIONS пусто');
+    for (const { rule } of FRAME_RULES.filter((item) => item.rule !== exception.rule)) {
+      expect(isFrameException(exception.file, rule, exception.line), rule).toBe(false);
     }
   });
 
@@ -301,76 +297,56 @@ describe('исключение для чтения settings.json в скрипт
 });
 
 /**
- * Закрепление использований константы пути (спека комнат Organic, 3.5). Исключение выше снимает
- * правило только со СТРОКИ ОБЪЯВЛЕНИЯ `SETTINGS_FILE`, а запись через константу сканер не видит: в
- * `writeFile(path.join(home, SETTINGS_FILE), …)` самого пути уже нет. Поэтому строки, где названа
- * константа, закреплены поимённо: новая ссылка краснит тест, пока человек осознанно не обновит
- * `PINNED_USES` в `frame-scan.ts`.
+ * Закрепление использований константы пути (`PINNED_USES`): исключение на объявлении константы
+ * пути снимает правило только со строки объявления, а запись через константу сканер не видит.
+ * Сейчас закреплений нет — исключений на объявления констант не осталось; механизм сверки
+ * проверен на синтетическом закреплении.
  */
-describe('закрепление использований констант путей настроек (спека комнат, 3.5)', () => {
-  const STATUSLINE = 'packages/core/src/work/statusline.ts';
+describe('закрепление использований констант путей настроек', () => {
   const NO_DRIFT = { added: [], removed: [] };
-  const pinned = (): PinnedUses => {
-    const [pin] = PINNED_USES;
-    if (pin === undefined) throw new Error('в PINNED_USES нет закрепления');
-    return pin;
+  const pin: PinnedUses = {
+    file: 'packages/core/src/work/example.ts',
+    name: 'SETTINGS_FILE',
+    declarations: ["const SETTINGS_FILE = '.claude/settings.json';"],
+    reads: ['return path.join(home, SETTINGS_FILE);'],
   };
-  const readStatusline = (): Promise<string> => readFile(path.join(repoRoot, STATUSLINE), 'utf8');
-  // Мутации правят копию, а не настоящий файл: чистая копия — ровно закреплённые строки, поэтому
-  // тесты с мутациями не зависят от того, что сейчас лежит в statusline.ts (его сверяет отдельный
-  // тест).
-  const cleanCopy = (): string => [...pinned().declarations, ...pinned().reads].join('\n');
+  const cleanCopy = (): string => [...pin.declarations, ...pin.reads].join('\n');
 
-  it('закрепление одно: statusline.ts, SETTINGS_FILE, два объявления и две строки чтения', () => {
-    expect(PINNED_USES).toHaveLength(1);
-    expect(pinned()).toMatchObject({ file: STATUSLINE, name: 'SETTINGS_FILE' });
-    expect(pinned().declarations).toEqual([
-      "const SETTINGS_FILE = '.claude/settings.json';",
-      "const LOCAL_SETTINGS_FILE = '.claude/settings.local.json';",
-    ]);
-    // Объявление, снятое с правила исключением, закреплено вместе с остальными.
-    expect(pinned().declarations).toContain(FRAME_EXCEPTIONS[0]?.line);
-    expect(pinned().reads).toHaveLength(2);
-  });
-
-  it('в statusline.ts имя константы встречается только в закреплённых строках', async () => {
-    expect(
-      pinDrift(await readStatusline(), pinned()),
-      'новая ссылка на константу пути настроек Claude Code: если она только читает, допишите ' +
-        'строку в PINNED_USES (test/frame-scan.ts); запись в каталог агента — нарушение рамки 15.1',
-    ).toEqual(NO_DRIFT);
+  it('закреплений больше нет, а скрипт строки статуса не называет пути настроек вовсе', async () => {
+    expect(PINNED_USES).toEqual([]);
+    const source = await readFile(
+      path.join(repoRoot, 'packages/core/src/work/statusline.ts'),
+      'utf8',
+    );
+    expect(source).not.toContain('SETTINGS_FILE');
+    expect(scanSource('packages/core/src/work/statusline.ts', source)).toEqual([]);
   });
 
   // В чистую копию дописана строка записи через константу. Правило рамки такую строку не видит —
   // пути в ней нет, — а закрепление видит каждую; без мутации копия зелёная.
   it('запись через константу в копии файла краснит закрепление', () => {
-    expect(pinDrift(cleanCopy(), pinned())).toEqual(NO_DRIFT);
+    expect(pinDrift(cleanCopy(), pin)).toEqual(NO_DRIFT);
     for (const write of [
       'await writeFile(path.join(home, SETTINGS_FILE), text);',
       'await rename(temp, SETTINGS_FILE);',
       "const backup = SETTINGS_FILE + '.bak';",
-      'await writeFile(path.join(dir, LOCAL_SETTINGS_FILE), text);',
       // Комментарии не пропускаются: упоминание имени — такая же ссылка.
       '// SETTINGS_FILE',
     ]) {
-      const drift = pinDrift(`${cleanCopy()}\n  ${write}\n`, pinned());
-      expect(drift, write).toEqual({ added: [write], removed: [] });
+      expect(pinDrift(`${cleanCopy()}\n  ${write}\n`, pin), write).toEqual({
+        added: [write],
+        removed: [],
+      });
     }
   });
 
   it('пропавшая закреплённая строка и лишняя копия закреплённой — тоже расхождение', () => {
-    const read = 'return [...project, path.join(home, SETTINGS_FILE)];';
-    expect(pinned().reads).toContain(read);
-    // Строка чтения пропала — закрепление устарело.
-    expect(pinDrift(cleanCopy().replace(read, '// убрано'), pinned())).toEqual({
+    const read = pin.reads[0] ?? '';
+    expect(pinDrift(cleanCopy().replace(read, '// убрано'), pin)).toEqual({
       added: [],
       removed: [read],
     });
-    // Строка продублирована: считаются строки, а не принадлежность к множеству.
-    expect(pinDrift(`${cleanCopy()}\n  ${read}\n`, pinned())).toEqual({
-      added: [read],
-      removed: [],
-    });
+    expect(pinDrift(`${cleanCopy()}\n  ${read}\n`, pin)).toEqual({ added: [read], removed: [] });
   });
 });
 
@@ -470,9 +446,8 @@ async function snapshot(dir: string, base: string = dir): Promise<string[]> {
 }
 
 describe('строка статуса не пишет в каталоги агента (спека комнат, 3.5)', () => {
-  // Скрипт строки статуса читает настройки Claude Code — своя строка статуса человека лежит
-  // там — и только читает: рамка «в `~/.claude` не пишем ничего» остаётся в силе. Данные лимитов
-  // ложатся в каталог работы, а не в каталог агента.
+  // Скрипт строки статуса настройки Claude Code не читает и не пишет: рамка «в `~/.claude` не
+  // пишем ничего» остаётся в силе. Данные лимитов ложатся в каталог работы, а не в каталог агента.
   it('домашняя папка и проект человека после прогона скрипта не изменились ни на байт', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'frame-statusline-'));
     try {
@@ -504,10 +479,10 @@ describe('строка статуса не пишет в каталоги аге
         PARLEY_WORK_DIR: workDir,
         PARLEY_SESSION_ID: 's-01',
       };
-      const printed = await runStatusline(input, { env, home });
+      const printed = await runStatusline(input, { env });
 
-      // Настройки прочитаны (вывод — от команды человека), а не переписаны.
-      expect(printed.toString()).toBe('local');
+      // Строка — короткая, свою строку статуса из настроек человека скрипт не звал.
+      expect(printed.toString()).toBe('Opus\n');
       expect({ home: await snapshot(home), project: await snapshot(project) }).toEqual(before);
       // Данные лимитов — в каталоге работы, и только там.
       expect(await readdir(path.join(workDir, 'limits'))).toEqual(['s-01.json']);

@@ -4,30 +4,25 @@
  * зовёт его после каждого ответа модели: JSON сессии на stdin, первая строка stdout — строка
  * статуса в терминале (code.claude.com/docs/en/statusline).
  *
- * Скрипт делает три вещи:
+ * Скрипт делает две вещи с файлами и печатает короткую строку:
  * 1. Если во входе есть `rate_limits` (подписки Pro и Max, после первого ответа модели), атомарно
  *    пишет `{ at, rateLimits }` в `limits/<сессия>.json` каталога работы. Оттуда лимиты
  *    берёт хост. Нет `rate_limits` — файла нет.
  * 2. Если во входе есть `context_window` с числовым `used_percentage`, так же атомарно пишет заполненность контекста
  *    в `context/<сессия>.json` (спека 2026-10-15, 4.1). Нет — файла нет.
- * 3. Печатает строку терминала. Своя строка статуса у человека есть в настройках Claude Code —
- *    вызывает её команду с тем же stdin и тем же окружением и печатает вывод как есть, так что в
- *    терминале ничего не меняется. Нет — короткая строка: модель и процент контекста.
+ * Строка терминала всегда короткая: модель и процент контекста. Строку статуса человека из
+ * настроек Claude Code скрипт не ищет и не запускает: Claude Code зовёт команду после каждого
+ * ответа, и у многих агентов комнаты тяжёлая команда человека (git, node, jq на каждый вызов)
+ * держала бы заметную долю ядра постоянно.
  *
- * Границы: настройки Claude Code только читаются, в каталог агента ничего не пишется — рамочный
- * тест проверяет и это. Сети скрипт не касается. Он быстрый, потому что зовётся часто, поэтому
+ * Границы: в каталог агента ничего не пишется, настройки Claude Code не читаются — рамочный тест
+ * проверяет и это. Сети скрипт не касается. Он быстрый, потому что зовётся часто, поэтому
  * тянет только встроенные модули и лист `../limits.js`. Любая ошибка (битый stdin, нет
- * каталога, упала команда человека) даёт строку и код выхода 0: при ненулевом коде или пустом
- * выводе Claude Code гасит строку статуса совсем.
- *
- * Команда человека запускается в своей группе процессов. По таймауту и по отмене (Claude Code
- * вытесняет идущий вызов новым — точка входа получает SIGTERM) убивается вся группа: у составной
- * команды `sleep` пережил бы одну убитую оболочку и держал бы унаследованный stderr.
+ * каталога) даёт строку и код выхода 0: при ненулевом коде или пустом выводе Claude Code гасит
+ * строку статуса совсем.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claudeContextFill, CONTEXT_DIR, contextFile } from '../context-fill.js';
@@ -54,44 +49,10 @@ const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)
 export const statusLineCommand = (): string =>
   `${shellQuote(process.execPath)} ${shellQuote(STATUSLINE_ENTRY)}`;
 
-/**
- * Наша ли это команда: в ней стоит полный путь нашего скрипта — как есть или в кавычках для
- * оболочки. По имени файла нельзя: свой скрипт человека тоже может зваться `statusline-bin`, и
- * его строку мы бы молча подменили короткой.
- */
-export function isOwnCommand(command: string): boolean {
-  return command.includes(STATUSLINE_ENTRY) || command.includes(shellQuote(STATUSLINE_ENTRY));
-}
-
-/**
- * Сколько ждём команду человека. В документации Claude Code предела у строки статуса нет
- * (медленный скрипт просто задерживает обновление, а новый вызов его отменяет), поэтому предел
- * свой: зависшая команда не оставит терминал без строки. Щедрый, чтобы не резать тяжёлые
- * скрипты человека с git и подсчётом расходов.
- */
-export const HUMAN_TIMEOUT_MS = 5000;
-
-/**
- * Файлы настроек Claude Code, где лежит строка статуса человека, — пути от корня проекта или
- * домашней папки. Только чтение (спека комнат Organic, 3.5): это единственное место в исходниках,
- * где названы такие пути, и рамочный тест снимает с него правило явным исключением
- * (`test/frame-scan.ts`).
- */
-const SETTINGS_FILE = '.claude/settings.json';
-const LOCAL_SETTINGS_FILE = '.claude/settings.local.json';
-
 export interface StatuslineOptions {
-  /** Окружение процесса агента: адрес работы и сессии; то же уходит команде человека. */
+  /** Окружение процесса агента: адрес работы и сессии. */
   env?: NodeJS.ProcessEnv;
-  /** Домашняя папка человека; по умолчанию `os.homedir()`. */
-  home?: string;
   now?: () => number;
-  humanTimeoutMs?: number;
-  /**
-   * Отмена: Claude Code вытесняет идущий вызов новым, и точка входа получает SIGTERM. По отмене
-   * команда человека убивается вместе со своей группой процессов, строка остаётся короткой.
-   */
-  signal?: AbortSignal;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -162,131 +123,7 @@ async function saveContext(
   await writeSessionFile(env, CONTEXT_DIR, contextFile, fill);
 }
 
-/**
- * Каталог проекта — `project_dir` из входа: куда запущен Claude Code и где он сам ищет настройки
- * проекта, после того как человек принял доверие к этой папке. `current_dir` (куда агент ушёл
- * потом) не годится: там может оказаться чужой репозиторий, клон или пакет со своей строкой
- * статуса, и мы исполнили бы её в обход доверия. Он берётся только у старого Claude Code без
- * `project_dir`, где совпадает с каталогом запуска; как и верхнее поле `cwd`.
- */
-function projectDir(input: Record<string, unknown> | null): string | null {
-  const workspace = isRecord(input?.['workspace']) ? input['workspace'] : null;
-  const candidates = [workspace?.['project_dir'], workspace?.['current_dir'], input?.['cwd']];
-  for (const dir of candidates) {
-    if (typeof dir === 'string' && path.isAbsolute(dir)) return dir;
-  }
-  return null;
-}
-
-/**
- * Файлы настроек Claude Code, где может лежать строка статуса человека, в порядке старшинства
- * (docs/en/settings): локальные настройки проекта, общие настройки проекта, настройки
- * пользователя. Каталога проекта во входе нет — только настройки пользователя: каталог самого
- * процесса не угадывается.
- */
-function settingsFiles(input: Record<string, unknown> | null, home: string): string[] {
-  const dir = projectDir(input);
-  const project =
-    dir === null ? [] : [path.join(dir, LOCAL_SETTINGS_FILE), path.join(dir, SETTINGS_FILE)];
-  return [...project, path.join(home, SETTINGS_FILE)];
-}
-
-/**
- * Команда строки статуса человека — из первого файла настроек, где она есть. Наша собственная
- * не считается: звать себя же — бесконечная рекурсия, а не строка человека. Только чтение.
- */
-async function humanCommand(
-  input: Record<string, unknown> | null,
-  home: string,
-): Promise<string | null> {
-  for (const file of settingsFiles(input, home)) {
-    let settings: unknown;
-    try {
-      settings = JSON.parse(await readFile(file, 'utf8'));
-    } catch {
-      continue;
-    }
-    const line = isRecord(settings) ? settings['statusLine'] : undefined;
-    if (!isRecord(line) || line['type'] !== 'command') continue;
-    const command = text(line['command']);
-    if (command === null) continue;
-    return isOwnCommand(command) ? null : command;
-  }
-  return null;
-}
-
-/**
- * Убивает команду человека вместе с её группой процессов. Одной оболочки мало: у составной
- * команды (`sleep 12; echo hi`) убитую оболочку пережил бы `sleep`, а он держит унаследованные
- * stdout и stderr, и Claude Code ждёт их закрытия. Группа своя — команда запущена с `detached`,
- * и её id равен pid оболочки.
- */
-function killGroup(child: ChildProcess): void {
-  try {
-    if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
-  } catch {
-    // Группа уже ушла (или платформа без групп) — хотя бы оболочку.
-    child.kill('SIGKILL');
-  }
-}
-
-/**
- * Запускает команду человека так же, как Claude Code: оболочкой, с тем же stdin и окружением.
- * Вывод — как есть. Не ответила за `timeoutMs`, отменена `signal`, упала или не запустилась —
- * `null`, строку тогда печатает сам скрипт. По таймауту и по отмене убивается вся группа команды.
- */
-function runHuman(
-  command: string,
-  stdin: string,
-  env: NodeJS.ProcessEnv,
-  timeoutMs: number,
-  signal: AbortSignal | undefined,
-): Promise<Buffer | null> {
-  return new Promise((resolve) => {
-    if (signal?.aborted) {
-      resolve(null);
-      return;
-    }
-    const chunks: Buffer[] = [];
-    let child: ChildProcess | undefined;
-    let done = false;
-    const finish = (result: Buffer | null): void => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', stop);
-      resolve(result);
-    };
-    // Таймаут и отмена — одно и то же: убить команду с группой и отдать короткую строку.
-    const stop = (): void => {
-      if (child !== undefined && !done) killGroup(child);
-      finish(null);
-    };
-    const timer = setTimeout(stop, timeoutMs);
-    signal?.addEventListener('abort', stop, { once: true });
-
-    try {
-      // stderr команды идёт в наш stderr: `claude --debug` показывает его человеку.
-      child = spawn(command, {
-        shell: true,
-        detached: true,
-        env,
-        stdio: ['pipe', 'pipe', 'inherit'],
-      });
-    } catch {
-      finish(null);
-      return;
-    }
-    child.on('error', () => finish(null));
-    child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk));
-    child.on('close', (code) => finish(code === 0 ? Buffer.concat(chunks) : null));
-    // Команда, не читающая stdin, закрывает его раньше, чем мы дописали, — это не ошибка.
-    child.stdin?.on('error', () => undefined);
-    child.stdin?.end(stdin);
-  });
-}
-
-/** Короткая строка без своей у человека: модель и процент контекста (`Opus · ctx 8%`). */
+/** Строка терминала: модель и процент контекста (`Opus · ctx 8%`). */
 function shortLine(input: Record<string, unknown> | null): string {
   const model = isRecord(input?.['model']) ? input['model'] : null;
   const name = text(model?.['display_name']) ?? text(model?.['id']) ?? 'Claude';
@@ -298,27 +135,16 @@ function shortLine(input: Record<string, unknown> | null): string {
 }
 
 /**
- * Одна отработка строки статуса: JSON со stdin → (файл лимитов, вывод для терминала). Не
- * бросает: сбой любой части оставляет остальные.
+ * Одна отработка строки статуса: JSON со stdin → (файлы лимитов и контекста, короткая строка для
+ * терминала). Не бросает: сбой любой части оставляет остальные.
  */
 export async function runStatusline(raw: string, options: StatuslineOptions = {}): Promise<Buffer> {
   const env = options.env ?? process.env;
   const input = parseInput(raw);
 
-  // Файл — до команды человека: строку, убитую Claude Code на полуслове, данные не теряют.
+  // Файлы — до вывода: строку, убитую Claude Code на полуслове, данные не теряют.
   await saveLimits(input, env, options.now ?? Date.now).catch(() => undefined);
   await saveContext(input, env, options.now ?? Date.now).catch(() => undefined);
 
-  const command = await humanCommand(input, options.home ?? homedir()).catch(() => null);
-  const human =
-    command === null
-      ? null
-      : await runHuman(
-          command,
-          raw,
-          env,
-          options.humanTimeoutMs ?? HUMAN_TIMEOUT_MS,
-          options.signal,
-        );
-  return human ?? Buffer.from(shortLine(input), 'utf8');
+  return Buffer.from(shortLine(input), 'utf8');
 }
