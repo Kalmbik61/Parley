@@ -126,28 +126,50 @@ export class WorkNotFoundError extends Error {
 const STALE_UNOWNED_LOCK_MS = 10_000;
 
 /**
+ * Осиротела ли блокировка: pid хозяина мёртв; файл без pid (прежняя версия, окно между `open` и записью, guard) —
+ * старше 10 с. Не обычный файл (висячий симлинк, каталог) и любая ошибка чтения — не осиротела: ждём до таймаута,
+ * как до перехвата, а не крутим цикл.
+ */
+async function isOrphaned(file: string): Promise<boolean> {
+  try {
+    const info = await lstat(file);
+    if (!info.isFile()) return false;
+    // Строгий разбор: недописанное «12» из «12345\n» — не pid, судим по возрасту.
+    const pid = /^(\d+)\n$/.exec(await readFile(file, 'utf8'))?.[1];
+    return pid !== undefined ? !isAlive(Number(pid)) : Date.now() - info.mtimeMs > STALE_UNOWNED_LOCK_MS;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Снимает блокировку, чей хозяин мёртв (процесс упал, не отпустив её), и сообщает, что снял: тогда `open` стоит
  * повторить сразу. Живой pid (в том числе наш собственный) не трогаем никогда.
  *
- * Сравнение inode перед `rm` не даёт снять свежую чужую блокировку, но проверка и удаление не атомарны: остаётся
- * малое окно TOCTOU — как у `releaseSharedLock`.
+ * Перепроверка и `rm` идут под guard-файлом `<lock>.steal` (`wx`): перехватывает один процесс за раз, поэтому второй
+ * ожидающий не удалит блокировку, которую первый уже снял и взял заново. Guard живёт микросекунды и pid не пишет;
+ * guard старше 10 с остался от вора, упавшего внутри, — его снимаем. Окно TOCTOU остаётся только у снятия такого
+ * guard-а и у `release*` — второго порядка, после уже случившейся аномалии.
  */
 async function removeOrphanedLock(lockFile: string): Promise<boolean> {
+  if (!(await isOrphaned(lockFile))) return false;
+  const guard = `${lockFile}.steal`;
+  let handle: FileHandle;
   try {
-    const first = await stat(lockFile);
-    const firstLine = (await readFile(lockFile, 'utf8')).trim().split('\n')[0] ?? '';
-    const pid = /^\d+$/.test(firstLine) ? Number(firstLine) : null;
-    const orphaned =
-      pid !== null ? !isAlive(pid) : Date.now() - first.mtimeMs > STALE_UNOWNED_LOCK_MS;
-    if (!orphaned) return false;
-    const second = await stat(lockFile);
-    if (second.dev !== first.dev || second.ino !== first.ino) return false;
+    handle = await open(guard, 'wx', 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST' && (await isOrphaned(guard))) await rm(guard, { force: true }).catch(() => {});
+    return false;
+  }
+  try {
+    if (!(await isOrphaned(lockFile))) return false;
     await rm(lockFile, { force: true });
     return true;
-  } catch (error) {
-    // Файл исчез между проверками — повторяем `open` сразу.
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
-    throw error;
+  } catch {
+    return false;
+  } finally {
+    await handle.close().catch(() => {});
+    await rm(guard, { force: true }).catch(() => {});
   }
 }
 
@@ -180,9 +202,20 @@ async function acquireLock(lockFile: string, timeoutMs: number,
   }
 }
 
+/**
+ * Снимает файл блокировки, только если это всё ещё наш файл: перехват мог отдать путь новому хозяину. Идентичность
+ * берём до `close` — пока дескриптор открыт, inode не переиспользуется.
+ */
 async function releaseLock(handle: FileHandle, lockFile: string): Promise<void> {
-  await handle.close();
-  await rm(lockFile, { force: true });
+  try {
+    const own = await handle.stat();
+    const current = await lstat(lockFile);
+    if (current.dev === own.dev && current.ino === own.ino) await rm(lockFile);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  } finally {
+    await handle.close();
+  }
 }
 
 async function withLock<T>(
@@ -641,20 +674,8 @@ export async function withSharedProjectLock<T>(paths: SharedProjectPaths, body: 
   const timeout = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
   if (!Number.isFinite(timeout) || timeout < 0 || timeout > 30_000) throw new SharedStateError('backlog-invalid');
   const handle = await acquireLock(paths.lock, timeout, () => new SharedStateError('backlog-lock-timeout'), 0o600);
-  const identity = await handle.stat();
   try { return await body(); }
-  finally {
-    await releaseSharedLock(handle, paths.lock, identity);
-  }
-}
-
-async function releaseSharedLock(handle: FileHandle, file: string, identity: { dev: number; ino: number }): Promise<void> {
-  await handle.close();
-  // Do not remove an observed replacement lock. Portable compare/unlink still has a small TOCTOU.
-  try {
-    const current = await lstat(file);
-    if (current.dev === identity.dev && current.ino === identity.ino) await rm(file);
-  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  finally { await releaseLock(handle, paths.lock); }
 }
 
 /** Private history receipt lock: selected checkout only, without native main discovery. */
@@ -670,9 +691,8 @@ export async function withLocalHistoryLock<T>(root: string, parent: string, body
   if (!Number.isFinite(timeout) || timeout < 0 || timeout > 30_000) throw new SharedStateError('backlog-invalid');
   const file = path.join(parent, 'history.lock');
   const handle = await acquireLock(file, timeout, () => new SharedStateError('backlog-lock-timeout'), 0o600);
-  let identity: { dev: number; ino: number } | undefined;
-  try { identity = await handle.stat(); await verify(); return await body(); }
-  finally { if (identity) await releaseSharedLock(handle, file, identity); else await handle.close(); }
+  try { await verify(); return await body(); }
+  finally { await releaseLock(handle, file); }
 }
 
 /** Read-only diagnostics: never creates state or migrates an existing ignore file. */

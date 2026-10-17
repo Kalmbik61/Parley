@@ -76,6 +76,7 @@ const run = promisify(execFile);
 const require = createRequire(import.meta.url);
 /** Пишущий скрипт запускается отдельным процессом через tsx: настоящая параллельность. */
 const writerScript = fileURLToPath(new URL('../../test/work-writer.ts', import.meta.url));
+const lockRaceScript = fileURLToPath(new URL('../../test/work-lock-race.ts', import.meta.url));
 const tsxLoader = pathToFileURL(require.resolve('tsx')).href;
 
 let home = '';
@@ -496,6 +497,84 @@ describe('updateMap', () => {
       );
       expect(await readFile(indexLock, 'utf8')).toBe(`${process.pid}\n`);
     });
+
+    it('висячий симлинк на месте блокировки: таймаут, а не горячий цикл', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await symlink(path.join(home, 'нет-такого-файла'), indexLock);
+
+      const started = Date.now();
+      await expect(createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 200 })).rejects.toBeInstanceOf(
+        MapLockTimeoutError,
+      );
+      expect(Date.now() - started).toBeLessThan(2_000);
+    });
+
+    it('живой pid при старом mtime: pid важнее возраста, блокировка не снимается', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, `${process.pid}\n`);
+      const old = new Date(Date.now() - 60_000);
+      await utimes(indexLock, old, old);
+
+      await expect(createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 100 })).rejects.toBeInstanceOf(
+        MapLockTimeoutError,
+      );
+      expect(await readFile(indexLock, 'utf8')).toBe(`${process.pid}\n`);
+    });
+
+    it('свежий guard перехвата: идёт чужой перехват, ждём до таймаута', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, `${await deadPid()}\n`);
+      await writeFile(`${indexLock}.steal`, '');
+
+      await expect(createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 150 })).rejects.toBeInstanceOf(
+        MapLockTimeoutError,
+      );
+      expect(await exists(indexLock)).toBe(true);
+    });
+
+    it('guard старше 10 с — вор упал внутри: guard снимается, блокировка берётся', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, `${await deadPid()}\n`);
+      await writeFile(`${indexLock}.steal`, '');
+      const old = new Date(Date.now() - 11_000);
+      await utimes(`${indexLock}.steal`, old, old);
+
+      await createWork(project, { title: 'Авторизация' });
+
+      expect((await readWorksIndex()).works).toHaveLength(1);
+      expect(await exists(indexLock)).toBe(false);
+      expect(await exists(`${indexLock}.steal`)).toBe(false);
+    });
+
+    it('releaseLock не удаляет подменённый файл блокировки', async () => {
+      await createWork(project, { title: 'Авторизация' });
+      const lock = workPaths(project, 'w-0001').lock;
+
+      await updateMap(project, 'w-0001', async () => {
+        await rm(lock);
+        await writeFile(lock, 'чужая блокировка');
+      });
+
+      expect(await readFile(lock, 'utf8')).toBe('чужая блокировка');
+    });
+
+    it('несколько процессов разом перехватывают одну мёртвую блокировку карты: ни одно обновление не потеряно', async () => {
+      await createWork(project, { title: 'Авторизация' });
+      await writeFile(workPaths(project, 'w-0001').lock, `${await deadPid()}\n`);
+      const start = Date.now() + 2_500;
+      const tokens = ['a', 'b', 'c', 'd', 'e', 'f'];
+
+      await Promise.all(
+        tokens.map((token) =>
+          run(process.execPath, ['--import', tsxLoader, lockRaceScript, project, 'w-0001', token, String(start)], {
+            env: { ...process.env, PARLEY_HOME: home },
+          }),
+        ),
+      );
+
+      const goal = (await readMap(project, 'w-0001')).work.goal.split(' ').filter(Boolean);
+      expect([...goal].sort()).toEqual(tokens);
+    }, 30_000);
 
     it('взятая блокировка содержит pid текущего процесса', async () => {
       await createWork(project, { title: 'Авторизация' });
