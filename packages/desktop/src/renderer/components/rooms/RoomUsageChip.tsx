@@ -5,7 +5,7 @@
  * Refresh спрашивает сразу, но не чаще раза в 5 секунд. Старый хост метода не знает — значка нет.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { RoomUsage, UsageCounters, WorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
@@ -51,11 +51,6 @@ export function RoomUsageChip({ bridge, entry, roomId, active, providers }: Room
   // Состав, журнал и архив: смена любого — повод спросить заново.
   const composition =
     room === undefined ? '' : JSON.stringify([room.creator, room.members, room.archivedAt ?? null, room.memberLog?.length ?? 0]);
-  const sessionIds = useMemo(
-    () => (room === undefined ? [] : [...new Set([room.creator, ...room.members, ...(room.memberLog ?? []).map((record) => record.session)])]),
-    // `composition` — снимок ровно тех полей, из которых собран список.
-    [composition],
-  );
   const [usage, setUsage] = useState<RoomUsage | null>(null);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(false);
