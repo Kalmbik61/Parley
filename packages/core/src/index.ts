@@ -607,6 +607,13 @@ export type {
 } from './work/usage-ledger.js';
 export { isCurrentMember, roomMembership } from './work/room-membership.js';
 export type { MemberPeriods, RoomMembershipView } from './work/room-membership.js';
+export {
+  claudeUsageObservation,
+  codexUsageObservation,
+  noteClaudeSidechain,
+  replayClaudeUsage,
+} from './work/usage-observations.js';
+export type { ClaudeSidechain, UsageLedger } from './work/usage-observations.js';
 export { roomUsage } from './work/room-usage.js';
 export type { RoomUsage, RoomUsageMember, UsageResolver } from './work/room-usage.js';
 export { MODEL_MOODS, matchConfirm, normalizePhrase, normalizeSentText, splitMood } from './assistant/text.js';

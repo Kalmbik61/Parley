@@ -4,7 +4,8 @@ import { adapterV1, type SchemaAdapter, type SessionRecord } from './adapter-v1.
 import { Counter, oneLine, SYNTHETIC_MODEL, type TokenTotals } from './counters.js';
 import type { DiscoveredSubagent } from './discover.js';
 import { isPointerText } from './work/delivery.js';
-import { createUsageLedger, type UsageCounters, type UsageSummary, type UsageWindow } from './work/usage-ledger.js';
+import { createUsageLedger, type UsageObservation, type UsageSummary, type UsageWindow } from './work/usage-ledger.js';
+import { claudeUsageObservation, noteClaudeSidechain, replayClaudeUsage, type ClaudeSidechain } from './work/usage-observations.js';
 
 export type Provider = 'claude' | 'codex' | 'glm';
 
@@ -147,17 +148,6 @@ export interface IndexSessionOptions {
   usageWindows?: readonly UsageWindow[];
 }
 
-/** Счётчики записи ответа Claude: `input_tokens` — вход без кэша, полный вход — сумма трёх частей. */
-function claudeCounters({ input, output, cacheRead, cacheWrite }: NonNullable<SessionRecord['usage']>): UsageCounters {
-  return {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    totalInput: input === null || cacheRead === null || cacheWrite === null ? null : input + cacheRead + cacheWrite,
-  };
-}
-
 /**
  * Индексирует ОДИН файл сессии: мета, заголовок, длительность, счётчики моделей,
  * инструментов, ролей и типов записей. Подсессии добавляются отдельно — они лежат
@@ -172,13 +162,10 @@ export async function indexSessionFile(
   const tools = new Counter();
   const roles = new Counter();
   const recordTypes = new Counter();
-  // Один ответ модели приходит несколькими записями: склейка по message.id — в учёте токенов.
-  const ledger = createUsageLedger(usageWindows === undefined ? {} : { windows: usageWindows });
-  let hasUsage = false;
-  // Родитель старых версий Claude Code пишет записи агента и у себя (`isSidechain`): их же несёт и файл
-  // агента, поэтому по ним решается, можно ли склеить два файла по id ответа.
-  const sidechainAgents = new Set<string | null>();
-  let sidechainUnidentified = false;
+  // Наблюдения копятся и проигрываются в ledger в конце (usage-observations): один ответ модели приходит
+  // несколькими записями, склейка по message.id — в учёте токенов.
+  const observations: UsageObservation[] = [];
+  const sidechain: ClaudeSidechain = { agents: new Set(), unidentified: false };
 
   let sessionId: string | null = null;
   let cwd: string | null = null;
@@ -203,26 +190,10 @@ export async function indexSessionFile(
     roles.add(record.role);
     for (const tool of record.toolUses) tools.add(tool);
 
-    // Токены считаются только по ответам модели: usage в реплике человека —
-    // это отчёт об уже учтённом вызове инструмента, повторный счёт.
-    //
-    // Второй источник двойного счёта крупнее: один ответ модели Claude Code
-    // пишет несколькими записями — по одной на блок content (thinking, text,
-    // tool_use), и КАЖДАЯ несёт полный usage всего ответа. Поэтому счёт идёт
-    // по message.id, а не по записям (на реальных логах разница в 2–3 раза).
-    // У записей без message.id склеивать не по чему — их id это проверенное смещение записи.
-    if (record.role === 'assistant' && record.usage !== null) {
-      hasUsage = true;
-      if (record.isSidechain) {
-        sidechainAgents.add(record.agentId);
-        if (record.messageId === null) sidechainUnidentified = true;
-      }
-      ledger.observe({
-        kind: 'delta',
-        id: record.messageId === null ? `line:${file}:${lineNo}` : `msg:${record.messageId}`,
-        counters: claudeCounters(record.usage),
-        at: record.timestamp,
-      });
+    const observation = claudeUsageObservation(record, file, lineNo);
+    if (observation !== null) {
+      observations.push(observation);
+      noteClaudeSidechain(sidechain, record);
     }
 
     sessionId ??= record.sessionId;
@@ -285,33 +256,27 @@ export async function indexSessionFile(
   }
 
   // `tokens` и `usage` собственного лога снимаются до подагентов: прежние потребители ждут его одного.
-  const own = ledger.summary();
+  const usageOptions = usageWindows === undefined ? {} : { windows: usageWindows };
+  const ownLedger = createUsageLedger(usageOptions);
+  replayClaudeUsage(ownLedger, { observations, sidechain }, []);
+  const own = ownLedger.summary();
+  const subagentObservations: Array<{ agentId: string; observations: UsageObservation[] }> = [];
   for (const subagent of subagents) {
+    const list: UsageObservation[] = [];
     await forEachJsonlRecord(subagent.file, (raw, lineNo) => {
-      const record = adapter.toSessionRecord(raw);
-      if (record.role !== 'assistant' || record.usage === null) return;
-      // Запись агента, которую родитель уже записал у себя: без общего id ответа она не склеивается, и
-      // чем из двух копий её считать, не доказать — не учитывается, итог неполный.
-      if (
-        (sidechainAgents.has(subagent.agentId) || sidechainAgents.has(null)) &&
-        (record.messageId === null || sidechainUnidentified)
-      ) {
-        ledger.markAmbiguous();
-        return;
-      }
-      ledger.observe({
-        kind: 'delta',
-        id: record.messageId === null ? `line:${subagent.file}:${lineNo}` : `msg:${record.messageId}`,
-        counters: claudeCounters(record.usage),
-        at: record.timestamp,
-        child: true,
-      });
+      const observation = claudeUsageObservation(adapter.toSessionRecord(raw), subagent.file, lineNo);
+      if (observation !== null) list.push(observation);
     }, signal);
+    subagentObservations.push({ agentId: subagent.agentId, observations: list });
   }
-
-  const usage = ledger.summary();
+  let usage = own;
+  if (subagentObservations.length > 0) {
+    const ledger = createUsageLedger(usageOptions);
+    replayClaudeUsage(ledger, { observations, sidechain }, subagentObservations);
+    usage = ledger.summary();
+  }
   // `tokens` — для показа (лента, строка метрик): неизвестное поле показывается нулём, а в `usage` остаётся null.
-  const tokens: TokenTotals | null = hasUsage
+  const tokens: TokenTotals | null = observations.length > 0
     ? {
         input: own.input ?? 0,
         output: own.output ?? 0,

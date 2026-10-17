@@ -4,7 +4,8 @@ import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
 import { INDEX_READ_CONCURRENCY, mapLimited } from '../map-limited.js';
 import type { SessionIndex } from '../session-index.js';
 import { isPointerText } from '../work/delivery.js';
-import { createUsageLedger, observedCount, type UsageWindow } from '../work/usage-ledger.js';
+import { createUsageLedger, type UsageCounters, type UsageWindow } from '../work/usage-ledger.js';
+import { codexUsageObservation } from '../work/usage-observations.js';
 import { assistantCwd } from '../discover.js';
 import { defaultCodexRoot, discoverCodexSessions } from './discover.js';
 
@@ -18,29 +19,6 @@ function str(source: RawRecord | null, key: string): string | null {
   if (source === null) return null;
   const value = source[key];
   return typeof value === 'string' && value !== '' ? value : null;
-}
-
-/**
- * `total_token_usage` записи `token_count` как наблюдение для учёта токенов (он накопительный, поэтому
- * берётся последняя такая запись, а не сумма). Поля, которых в записи нет, остаются
- * `null`: `cacheWrite` у Codex не наблюдается никогда (в логе нет такого счётчика) и нулём не
- * подменяется. `input_tokens` у Codex уже включает кэш, поэтому он же — полный вход, а вход без кэша
- * известен, только если известен и кэш.
- */
-function codexCounters(payload: RawRecord) {
-  const info = asRecord(payload['info']);
-  const total = info === null ? null : asRecord(info['total_token_usage']);
-  if (total === null) return null;
-
-  const totalInput = observedCount(total, 'input_tokens');
-  const cacheRead = observedCount(total, 'cached_input_tokens');
-  return {
-    input: totalInput === null || cacheRead === null ? null : Math.max(0, totalInput - cacheRead),
-    output: observedCount(total, 'output_tokens'),
-    cacheRead,
-    cacheWrite: null,
-    totalInput,
-  };
 }
 
 /** Первый текстовый блок content[] — там `{type: 'input_text', text}`. */
@@ -133,7 +111,7 @@ export async function indexCodexSession(
   let endedAt: string | null = null;
   let firstUserMessage: string | null = null;
   let lastUserRecordAt: string | null = null;
-  let lastCounters = null as ReturnType<typeof codexCounters>;
+  let lastCounters = null as UsageCounters | null;
   const ledger = createUsageLedger(options.usageWindows === undefined ? {} : { windows: options.usageWindows });
   let lastTurnEvent: SessionIndex['lastTurnEvent'];
   // Открытые вызовы code mode по call_id (разбор 2026-10-16).
@@ -213,14 +191,10 @@ export async function indexCodexSession(
             lastUserRecordAt = at;
           }
         }
-        if (kind === 'token_count') {
-          // Накопитель сессии: одна нить на лог. Падение значения без доказанного сброса учёт не
-          // суммирует и не угадывает — итог остаётся наибольшим и помечается неполным.
-          const counters = codexCounters(payload);
-          if (counters !== null) {
-            lastCounters = counters;
-            ledger.observe({ kind: 'cumulative', stream: 'rollout', counters, at });
-          }
+        const observation = codexUsageObservation(raw);
+        if (observation !== null) {
+          lastCounters = observation.counters;
+          ledger.observe(observation);
         }
         break;
       }
