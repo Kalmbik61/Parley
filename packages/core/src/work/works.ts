@@ -1,5 +1,5 @@
 import { watch, type FSWatcher } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parseMap } from './map.js';
 import { stateDir } from './state-dir.js';
@@ -17,17 +17,41 @@ export interface WorkEntry {
 const worksDir = (projectPath: string): string => path.join(stateDir(projectPath), 'works');
 
 /**
+ * Разобранные карты по файлу. Карта пишется атомарным rename (новый inode), поэтому `mtimeMs + size + ino`
+ * различают версии; неизменённая карта стоит одного `stat` вместо чтения и разбора мегабайт JSON. Карту отдаём
+ * общим объектом, не копией: читатели (`WorkEntry`) её не меняют — правки идут через `updateMap` с диска.
+ */
+const parsedMaps = new Map<string, { mtimeMs: number; size: number; ino: number; map: WorkMap }>();
+
+/**
  * Читает одну карту. Её может не быть (проект переехал или удалён) или она может
  * быть битой — в списке работ это повод пропустить одну строку, а не остаться
  * без списка совсем. Отдельная работа с битой картой отвечает за себя сама
  * (`readMap` по-прежнему бросает).
+ *
+ * `bytes` — только реальный разбор: из кэша карта приходит с 0, счётчик хоста не врёт про прочитанное.
  */
 async function readEntry(projectPath: string, workId: string): Promise<WorkEntry | null> {
   const file = workPaths(projectPath, workId).map;
   try {
+    // `stat` до чтения: если карту перепишут между ними, в кэше окажется новое содержимое под старым ключом,
+    // и следующий проход просто разберёт её ещё раз.
+    const info = await stat(file);
+    const cached = parsedMaps.get(file);
+    if (
+      cached !== undefined &&
+      cached.mtimeMs === info.mtimeMs &&
+      cached.size === info.size &&
+      cached.ino === info.ino
+    ) {
+      return { projectPath, map: cached.map, bytes: 0 };
+    }
     const text = await readFile(file, 'utf8');
-    return { projectPath, map: parseMap(text, file), bytes: Buffer.byteLength(text) };
+    const map = parseMap(text, file);
+    parsedMaps.set(file, { mtimeMs: info.mtimeMs, size: info.size, ino: info.ino, map });
+    return { projectPath, map, bytes: Buffer.byteLength(text) };
   } catch {
+    parsedMaps.delete(file);
     return null;
   }
 }

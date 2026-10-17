@@ -75,6 +75,24 @@ describe('readWorks', () => {
     expect(works[0]?.map.sessions.map((session) => session.label)).toEqual(['бэкенд']);
   });
 
+  it('неизменённая карта второй раз не разбирается, изменённая — разбирается', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    const first = (await readWorks(project))[0];
+    expect(first?.bytes).toBeGreaterThan(0);
+
+    const second = (await readWorks(project))[0];
+    expect(second?.bytes).toBe(0);
+    expect(second?.map).toBe(first?.map);
+
+    await updateMap(project, created.work.id, (map) => {
+      map.work.goal = 'логин по e-mail';
+    });
+    const third = (await readWorks(project))[0];
+    expect(third?.bytes).toBeGreaterThan(0);
+    expect(third?.map.work.goal).toBe('логин по e-mail');
+    expect((await readWorks(project))[0]?.bytes).toBe(0);
+  });
+
   it('без единой работы список пуст', async () => {
     expect(await readWorks(project)).toEqual([]);
   });
