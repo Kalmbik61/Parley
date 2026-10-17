@@ -42,13 +42,21 @@ describe('канал агента к браузеру: константы (сп�
       opMs: 30_000,
       openMs: 10_000,
       requestBytes: 65_536,
-      text: 10_000,
       listBytes: 20_480,
       listEntries: 100,
       detailBody: 8192,
+      headerValue: 256,
+      headers: 40,
+      listQuery: 80,
+      listStackFrames: 5,
+      listEntryText: 1024,
       screenshotLongSide: 1568,
       fullPageViewports: 3,
       panelPages: 5,
+      captureReadyMs: 2000,
+      captureRetries: 2,
+      screenshotBytes: 3_500_000,
+      metricsMs: 1500,
     });
     expect(AGENT_INPUT).toEqual({ url: 4096, room: 64, pattern: 200, requestId: 200 });
     expect(AGENT_VIEWPORT).toEqual({ min: 200, maxWidth: 3840, maxHeight: 2400 });
@@ -117,6 +125,11 @@ describe('схемы операций чтения', () => {
     }
   });
 
+  it('console: after — целое от 0', () => {
+    expect(ok('console', { tab: 't1', after: 0 })).toBe(true);
+    for (const bad of [{ tab: 't1', after: -1 }, { tab: 't1', after: 1.5 }, { tab: 't1', after: '3' }]) expect(ok('console', bad), JSON.stringify(bad)).toBe(false);
+  });
+
   it('network: failedOnly, urlPattern, limit, requestId', () => {
     expect(ok('network', { tab: 't1', failedOnly: false, urlPattern: '/api', limit: 5, requestId: '1234.56' })).toBe(true);
     expect(ok('network', { tab: 't1', requestId: '' })).toBe(false);
@@ -138,7 +151,11 @@ describe('метод browser.agentResult и событие browser.agentOp', () 
     const parse = (params: unknown): boolean => browserAgentResultParams.safeParse(params).success;
     expect(parse({ opId: 'op-1', ok: true, result: { tab: 't1', url: 'http://localhost/', reused: false, notes: [] } })).toBe(true);
     expect(parse({ opId: 'op-1', ok: false, error: { code: 'not_loopback', message: 'Only localhost.' } })).toBe(true);
-    expect(parse({ opId: 'op-1', ok: false, error: { code: 'boom', message: 'x' } })).toBe(false);
+    // Код окна другой сборки хост принимает и сам приводит к `unsupported`: схема не должна терять ответ.
+    expect(parse({ opId: 'op-1', ok: false, error: { code: 'boom', message: 'x' } })).toBe(true);
+    expect(parse({ opId: 'op-1', ok: false, error: { code: '', message: 'x' } })).toBe(false);
+    expect(parse({ opId: 'op-1', ok: false, error: { code: 'c'.repeat(65), message: 'x' } })).toBe(false);
+    expect(parse({ opId: 'op-1', ok: false, error: { code: 'timeout', message: 'x'.repeat(10_001) } })).toBe(false);
     expect(parse({ opId: '', ok: true, result: null })).toBe(false);
     expect(parse({ ok: true, result: null })).toBe(false);
     expect(parse({ opId: 'op-1', ok: true, result: null, extra: 1 })).toBe(false);

@@ -125,13 +125,24 @@ describe('withTemporary — снимок агента в чужом размер
     return { emulation: createEmulation({ inspector: { send } }), sent };
   }
 
+  it('deviceScaleFactor подменяет DPR команды (экран DPR 2), а current отдаёт прежний spec; без него — dpr из spec', async () => {
+    const { emulation, sent } = setup();
+    await emulation.withTemporary(7, temp, async () => {
+      expect(emulation.current(7)).toBeNull();
+    }, 2);
+    expect(sent[0]?.params).toMatchObject({ width: 375, height: 812, deviceScaleFactor: 2 });
+    sent.length = 0;
+    await emulation.withTemporary(7, temp, async () => undefined);
+    expect(sent[0]?.params).toMatchObject({ deviceScaleFactor: 1 });
+  });
+
   it('на время снимка — размер агента в масштабе 1 (площадь = его размер), потом — размер и площадь человека', async () => {
     const { emulation, sent } = setup();
     await emulation.set(7, human, area);
     sent.length = 0;
     let during: ViewportSpec | null = null;
     expect(await emulation.withTemporary(7, temp, async () => { during = emulation.current(7); return 'shot'; })).toBe('shot');
-    expect(during).toEqual(temp);
+    expect(during).toEqual(human);
     expect(emulation.current(7)).toEqual(human);
     expect(sent).toEqual([...commandsOf(temp, own), ...commandsOf(human, area)]);
   });
@@ -148,8 +159,64 @@ describe('withTemporary — снимок агента в чужом размер
     await emulation.set(7, human, area);
     await expect(emulation.withTemporary(7, temp, async () => Promise.reject(new Error('capture failed')))).rejects.toThrow('capture failed');
     expect(emulation.current(7)).toEqual(human);
+  });
+
+  it('временный размер не попадает в current', async () => {
+    const { emulation } = setup();
+    await emulation.set(7, human, area);
+    let during: ViewportSpec | null = null;
+    await emulation.withTemporary(7, temp, async () => { during = emulation.current(7); });
+    expect(during).toEqual(human);
+    const { emulation: fit } = setup();
+    await fit.withTemporary(7, temp, async () => { during = fit.current(7); });
+    expect(during).toBeNull();
+  });
+
+  it('set человека во время снимка применяется после возврата и остаётся', async () => {
+    const { emulation, sent } = setup();
+    await emulation.set(7, human, area);
+    sent.length = 0;
     const tablet: ViewportSpec = { preset: 'tablet', rotated: false, dpr: 2 };
-    await emulation.withTemporary(7, temp, async () => { await emulation.set(7, tablet, area); });
+    let humanSet: Promise<unknown> = Promise.resolve();
+    await emulation.withTemporary(7, temp, async () => {
+      humanSet = emulation.set(7, tablet, area);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(emulation.current(7)).toEqual(human);
+    });
+    await humanSet;
+    expect(sent).toEqual([...commandsOf(temp, own), ...commandsOf(human, area), ...commandsOf(tablet, area)]);
     expect(emulation.current(7)).toEqual(tablet);
+  });
+
+  it('смена поля во время снимка: после — размер человека с новым полем (scale из нового поля)', async () => {
+    const { emulation, sent } = setup();
+    await emulation.set(7, human, area);
+    sent.length = 0;
+    const wide = { width: 1600, height: 1000 };
+    let humanSet: Promise<{ scale: number }> = Promise.resolve({ scale: 0 });
+    await emulation.withTemporary(7, temp, async () => { humanSet = emulation.set(7, human, wide); });
+    expect((await humanSet).scale).toBe(1);
+    expect(sent.slice(-3)).toEqual(commandsOf(human, wide));
+    expect(emulation.current(7)).toEqual(human);
+  });
+
+  it('отказ отладчика при Fit: current остаётся null, следующий снимок в конце снимает эмуляцию', async () => {
+    const sent: string[] = [];
+    let failing = true;
+    const send = vi.fn(async (_id: number, method: string) => {
+      sent.push(method);
+      if (failing && method === 'Emulation.clearDeviceMetricsOverride') throw new Error('debugger detached');
+      return {};
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const emulation = createEmulation({ inspector: { send } });
+    await emulation.withTemporary(7, temp, async () => undefined);
+    expect(emulation.current(7)).toBeNull();
+    failing = false;
+    sent.length = 0;
+    await emulation.withTemporary(7, temp, async () => undefined);
+    expect(sent.slice(-3)).toEqual(['Emulation.clearDeviceMetricsOverride', 'Emulation.setTouchEmulationEnabled', 'Emulation.setUserAgentOverride']);
+    expect(emulation.current(7)).toBeNull();
+    warn.mockRestore();
   });
 });

@@ -655,6 +655,9 @@ export function createFakeBridge(): FakeBridge {
         agentActivityListeners.add(listener);
         return () => agentActivityListeners.delete(listener);
       },
+      agentCaptureReady: async (id) => {
+        browserCalls.push({ method: 'agentCaptureReady', args: [id] });
+      },
     },
     files: {
       stat: async (root, paths) => paths.map((path) => fileStats.get(`${rootKey(root)}\n${path}`) ?? null),

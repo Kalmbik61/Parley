@@ -40,6 +40,11 @@ describe('saveImage (тест 1)', () => {
     expect((await stat(saved)).mode & 0o777).toBe(0o600);
   });
 
+  it('prefix в имени: agent-YYYYMMDD-HHMMSS-<4 hex>.png', async () => {
+    const saved = await saveImage({ png: PNG, dir, now: NOW, random: sequence(0.5), prefix: 'agent-' });
+    expect(saved).toBe(path.join(dir, 'agent-20260927-140509-8000.png'));
+  });
+
   it('png: null → null и ни одного файла', async () => {
     expect(await saveImage({ png: null, dir, now: NOW })).toBeNull();
     expect(await readdir(dir).catch(() => [])).toEqual([]);
@@ -102,6 +107,19 @@ describe('cleanupDrops (тест 2)', () => {
     expect(await cleanupDrops(dir, WEEK, now)).toBe(2);
     expect((await readdir(dir)).sort()).toEqual(['fresh.png', 'sub']);
     expect(await readFile(target, 'utf8')).toBe('цель');
+  });
+
+  it('уборка с accept трогает только agent-*', async () => {
+    await mkdir(dir, { recursive: true });
+    const now = Date.now();
+    const old = new Date(now - 2 * 24 * 60 * 60 * 1000);
+    for (const name of ['agent-old.png', 'human-old.png']) {
+      await writeFile(path.join(dir, name), 'x');
+      await utimes(path.join(dir, name), old, old);
+    }
+    await writeFile(path.join(dir, 'agent-fresh.png'), 'y');
+    expect(await cleanupDrops(dir, 24 * 60 * 60 * 1000, now, (name) => name.startsWith('agent-'))).toBe(1);
+    expect((await readdir(dir)).sort()).toEqual(['agent-fresh.png', 'human-old.png']);
   });
 
   it('свежая ссылка на старую цель остаётся', async () => {

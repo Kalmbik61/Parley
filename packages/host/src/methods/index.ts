@@ -1,4 +1,5 @@
-import type { BrowserAgentResult, MethodName, NotificationName, Params } from '@parley/protocol';
+import { BROWSER_AGENT_ERROR_CODES } from '@parley/protocol';
+import type { BrowserAgentErrorCode, BrowserAgentResult, MethodName, NotificationName, Params } from '@parley/protocol';
 import type { BrowserEndpoint } from '../agent/browser-endpoint.js';
 import type { BacklogService } from '../backlog/backlog-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -97,6 +98,13 @@ export interface MethodDeps {
   /** Журнал хоста для записей задержек, которые пишут не обработчики с `request.host.log` (`pty.clientDropped` в потоке PTY). */
   log?: Log;
 }
+
+/** Сколько знаков сообщения окна доходит агенту. */
+const AGENT_MESSAGE_MAX = 2000;
+
+/** Код окна, которого хост не знает (окно новее), — `unsupported`; текст окна остаётся. */
+const knownAgentCode = (code: string): BrowserAgentErrorCode =>
+  (BROWSER_AGENT_ERROR_CODES as readonly string[]).includes(code) ? (code as BrowserAgentErrorCode) : 'unsupported';
 
 /**
  * Методы, которым нужен снимок работ хоста (раунд lane-r4, п. 4): сокет слушает раньше первого
@@ -271,7 +279,9 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
   if (deps.browserAgent !== undefined) {
     const endpoint = deps.browserAgent;
     methods['browser.agentResult'] = (async (params: Params<'browser.agentResult'>, request: RequestInfo) => {
-      const result: BrowserAgentResult = params.ok ? { ok: true, result: params.result } : { ok: false, error: params.error };
+      const result: BrowserAgentResult = params.ok
+        ? { ok: true, result: params.result }
+        : { ok: false, error: { code: knownAgentCode(params.error.code), message: params.error.message.slice(0, AGENT_MESSAGE_MAX) } };
       return { accepted: endpoint.resolve(params.opId, result, request.client) };
     }) as AnyHandler;
   }

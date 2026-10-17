@@ -165,6 +165,26 @@ it('browser.agentResult: ответ окна уходит приёмнику а�
   expect(resolve).toHaveBeenLastCalledWith('op-2', { ok: false, error: { code: 'not_loopback', message: 'x' } }, client);
 });
 
+it('browser.agentResult: неизвестный код окна — агенту unsupported с текстом окна, не timeout', async () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  const resolve = vi.fn(() => true);
+  const handlers = createHostHandlers({ ...deps, browserAgent: { resolve } });
+  const client = { id: 'c-1' };
+  const handler = handlers.methods['browser.agentResult'] as unknown as (params: unknown, request: unknown) => Promise<unknown>;
+  await handler({ opId: 'op-1', ok: false, error: { code: 'tab_crashed', message: 'The tab crashed.' } }, { client });
+  expect(resolve).toHaveBeenLastCalledWith('op-1', { ok: false, error: { code: 'unsupported', message: 'The tab crashed.' } }, client);
+});
+
+it('browser.agentResult: сообщение 5000 знаков — агенту 2000', async () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  const resolve = vi.fn(() => true);
+  const handlers = createHostHandlers({ ...deps, browserAgent: { resolve } });
+  const client = { id: 'c-1' };
+  const handler = handlers.methods['browser.agentResult'] as unknown as (params: unknown, request: unknown) => Promise<unknown>;
+  await handler({ opId: 'op-1', ok: false, error: { code: 'timeout', message: 'x'.repeat(5000) } }, { client });
+  expect(resolve).toHaveBeenLastCalledWith('op-1', { ok: false, error: { code: 'timeout', message: 'x'.repeat(2000) } }, client);
+});
+
 it('без приёмника агента метода browser.agentResult нет', () => {
   const { deps } = fakeDeps(Promise.resolve());
   expect(createHostHandlers(deps).methods['browser.agentResult']).toBeUndefined();

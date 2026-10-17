@@ -73,6 +73,31 @@ fetch('/api/settings?token=SECRET123&page=2', {
 });
 </script>`;
 
+/** Страница бюджетов: запрос с 60 заголовками ответа по 2 КБ и консоль с Bearer/JWT, паролем и ключом в тексте. */
+const BUDGET_HTML = `<!doctype html><title>Budget page</title><h1>Budget page</h1>
+<script>
+fetch('/api/headers').catch(() => {});
+console.error('Auth failed: Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.c2lnbmF0dXJl; password=hunter2; api_key=AKIASECRETKEY123');
+</script>`;
+const BUDGET_SECRETS = ['eyJhbGciOiJIUzI1NiJ9', 'c2lnbmF0dXJl', 'hunter2', 'AKIASECRETKEY123'];
+
+/** Сетка 2000×2640 разноцветных ячеек 240×240 с подписью `x,y`: по цвету пикселя видно, какая часть страницы попала в снимок. */
+const GRID_HTML = `<!doctype html><title>Grid</title><style>html{scroll-behavior:smooth}body{margin:0;font:bold 28px sans-serif}.c{position:absolute;width:236px;height:236px;border:2px solid #000;display:flex;align-items:center;justify-content:center}</style><div id=g></div>
+<script>const g=document.getElementById('g');for(let y=0;y<2600;y+=240)for(let x=0;x<2000;x+=240){const d=document.createElement('div');d.className='c';d.style.left=x+'px';d.style.top=y+'px';d.style.background='hsl('+((y/240)*40)+',70%,'+(60+(x/240)*4)+'%)';d.textContent=x+','+y;g.appendChild(d);}document.body.style.height='2640px';document.body.style.width='2000px';</script>`;
+
+/** Цвет ячейки сетки с левым верхним углом (x, y) — тот же расчёт, что в странице. */
+function cellColor(x: number, y: number): [number, number, number] {
+  const hue = (y / 240) * 40;
+  const light = (60 + (x / 240) * 4) / 100;
+  const sat = 0.7;
+  const a = sat * Math.min(light, 1 - light);
+  const channel = (n: number): number => {
+    const k = (n + hue / 30) % 12;
+    return Math.round(255 * (light - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
+  };
+  return [channel(0), channel(8), channel(4)];
+}
+
 test.describe('агент читает страницы браузера чата и комнаты (этап C)', () => {
   test.setTimeout(150_000);
   let home: string;
@@ -92,6 +117,16 @@ test.describe('агент читает страницы браузера чат�
       if (req.method === 'POST' && url.startsWith('/api/settings')) {
         req.resume();
         res.writeHead(500, { 'content-type': 'application/json' }).end('{"error":"db down","session":"S3SS10N"}');
+      } else if (url.startsWith('/api/headers')) {
+        const headers: Record<string, string> = { 'content-type': 'application/json' };
+        for (let i = 0; i < 60; i++) headers[`x-debug-${i}`] = `v${i}-${'h'.repeat(1990)}`;
+        res.writeHead(503, headers).end('{"error":"many headers"}');
+      } else if (url.startsWith('/private')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!doctype html><title>Private</title><h1>Private</h1>');
+      } else if (url.startsWith('/budget')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(BUDGET_HTML);
+      } else if (url.startsWith('/grid')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(GRID_HTML);
       } else if (url.startsWith('/missing.png')) {
         res.writeHead(404).end();
       } else {
@@ -113,7 +148,7 @@ test.describe('агент читает страницы браузера чат�
   });
 
   /** Окно, работа с тремя сессиями и двумя комнатами: в `roomId` ведущая сессия участник, в `foreignRoomId` — нет. Chat ведущей на экране. */
-  async function openApp() {
+  async function openApp(launchArgs: string[] = []) {
     const env = {
       ...process.env,
       PARLEY_HOME: home,
@@ -126,7 +161,7 @@ test.describe('агент читает страницы браузера чат�
             // Проба версий включена: у claude есть вид Chat.
       PARLEY_SKIP_VERSION_PROBE: '',
     };
-    const electronApp = await electron.launch({ args: [mainEntry], env });
+    const electronApp = await electron.launch({ args: [mainEntry, ...launchArgs], env });
     app = electronApp;
     electronApp.on('window', (page) => page.on('dialog', (dialog) => void dialog.dismiss().catch(() => {})));
     const window = await electronApp.firstWindow();
@@ -260,6 +295,102 @@ test.describe('агент читает страницы браузера чат�
     await expect(panelOf(window, `room:${roomId}`)).toBeHidden();
   });
 
+  test('снимок больше панели — настоящая страница, без повторов', async () => {
+    // DPR 1: масштаб экрана в снимке — дело задачи 4 плана исправлений.
+    const opened = await openApp(['--force-device-scale-factor=1']);
+    const { electronApp } = opened;
+    const lead = opened.lead;
+    const gridId = await openPage(opened, lead, { url: `${origin}/grid`, own: true });
+    await tabsLoaded(opened, lead, 1);
+
+    /** Цвет пикселя PNG-файла (x, y), RGB. */
+    const pixelOf = async (file: string, x: number, y: number): Promise<number[]> => {
+      const bgra = await electronApp.evaluate(
+        ({ nativeImage }, [path_, px, py]) => Array.from(nativeImage.createFromPath(path_ as string).crop({ x: px as number, y: py as number, width: 1, height: 1 }).toBitmap()),
+        [file, x, y] as const,
+      );
+      return [bgra[2] as number, bgra[1] as number, bgra[0] as number];
+    };
+    const near = (actual: number[], expected: number[]): boolean => actual.every((value, i) => Math.abs(value - (expected[i] as number)) <= 8);
+    const fileOf = (text: string): string => {
+      const file = /File: (\S+\.png)/.exec(text)?.[1];
+      expect(file, text).toBeDefined();
+      return file as string;
+    };
+
+    // Вьюпорт 1440×900 при панели 399×752: правый край (1300, 100) — ячейка 1200,0, а не повтор ячейки левого столбца.
+    const viewport = await agentTool(opened, lead, 'browser_screenshot', { tab: gridId, width: 1440, height: 900 });
+    expect(viewport.isError, viewport.text).toBe(false);
+    const viewportFile = fileOf(viewport.text);
+    expect(await pngSize(viewportFile)).toEqual({ width: 1440, height: 900 });
+    const right = await pixelOf(viewportFile, 1300, 100);
+    expect(near(right, cellColor(1200, 0)), `${right} ≠ ячейка 1200,0`).toBe(true);
+    expect(near(right, cellColor(0, 0)), `${right} = ячейка 0,0 (повтор)`).toBe(false);
+
+    // fullPage 1440×900: страница 2640 — три полосы; длинная сторона вписана в 1568, поэтому координаты — в масштабе PNG.
+    const full = await agentTool(opened, lead, 'browser_screenshot', { tab: gridId, width: 1440, height: 900, fullPage: true });
+    expect(full.isError, full.text).toBe(false);
+    const fullFile = fileOf(full.text);
+    const size = await pngSize(fullFile);
+    const scale = size.width / 1440;
+    expect(size.height).toBe(Math.round(2640 * scale));
+    const at = (x: number, y: number): Promise<number[]> => pixelOf(fullFile, Math.round(x * scale), Math.round(y * scale));
+    const second = await at(20, 1000);
+    expect(near(second, cellColor(0, 960)), `${second} ≠ ячейка 0,960`).toBe(true);
+    const third = await at(300, 2000);
+    expect(near(third, cellColor(240, 1920)), `${third} ≠ ячейка 240,1920`).toBe(true);
+  });
+
+  test('бюджеты и маска на настоящей странице', async () => {
+    const opened = await openApp();
+    const { window, electronApp, lead, roomId } = opened;
+    const budgetId = await openPage(opened, lead, { url: `${origin}/budget`, own: true });
+    const leaveId = await openPage(opened, lead, { url: `${origin}/leave`, room: roomId });
+    await tabsLoaded(opened, lead, 2);
+
+    // Деталь запроса с 60 заголовками по 2 КБ укладывается в бюджет.
+    let list = '';
+    await expect
+      .poll(async () => (list = (await agentTool(opened, lead, 'browser_network', { tab: budgetId, urlPattern: '/api/headers' })).text), { timeout: 20_000 })
+      .toMatch(/\/api\/headers/);
+    const headersId = /^(\d+\.\d+)\s.*\/api\/headers/m.exec(list)?.[1];
+    expect(headersId, list).toBeDefined();
+    const detail = await agentTool(opened, lead, 'browser_network', { tab: budgetId, requestId: headersId });
+    expect(detail.isError, detail.text).toBe(false);
+    expect(Buffer.byteLength(detail.text)).toBeLessThanOrEqual(20 * 1024);
+
+    // Консоль: секретов из текста в ответе нет, сама запись на месте.
+    let consoleText = '';
+    await expect
+      .poll(async () => (consoleText = (await agentTool(opened, lead, 'browser_console', { tab: budgetId })).text), { timeout: 20_000 })
+      .toContain('Auth failed');
+    for (const secret of BUDGET_SECRETS) expect(consoleText, secret).not.toContain(secret);
+
+    // Страница комнаты ушла на чужой сайт (главный фрейм гостя data: не пускает, поэтому 0.0.0.0 — не loopback для Parley, а
+    // сервер теста слушает на 127.0.0.1): в списке остаётся origin, без пути, query и заголовка.
+    const foreignPort = new URL(origin).port;
+    await guestEval(electronApp, `${origin}/leave`, `location.href = 'http://0.0.0.0:${foreignPort}/private?sid=EXTSECRET'`).catch(() => null);
+    await expect
+      .poll(async () => (await agentTool(opened, lead, 'browser_tabs')).text, { timeout: 20_000, intervals: [500] })
+      .toContain(`http://0.0.0.0:${foreignPort}`);
+    const tabs = (await agentTool(opened, lead, 'browser_tabs')).text;
+    expect(tabs).not.toContain('Private');
+    expect(tabs).not.toContain('/private');
+    expect(tabs).not.toContain('EXTSECRET');
+    expect(tabs).not.toContain('data:');
+    expect(tabs).toContain(leaveId);
+
+    // Пауза: browser_open отказывает.
+    const panel = panelOf(window, `session:${lead}`);
+    await expect(panel).toBeVisible();
+    await panel.getByRole('button', { name: 'More browser actions' }).click();
+    await window.getByRole('menuitem', { name: 'Pause agents' }).click();
+    await expect(panel).toHaveAttribute('data-agents-paused', 'true');
+    const denied = await agentTool(opened, lead, 'browser_open', { url: `${origin}/`, own: true });
+    expect(denied.isError, denied.text).toBe(true);
+    expect(denied.text).toMatch(/^access_denied:/);
+  });
+
   test('чужой хозяин: страница чата другой сессии и комнаты без участия недоступны, в списке их нет', async () => {
     const opened = await openApp();
     const { second, lead, foreignRoomId } = opened;
@@ -314,5 +445,44 @@ test.describe('агент читает страницы браузера чат�
     await window.reload();
     await expect(panelOf(window, `session:${lead}`)).toHaveAttribute('data-agents-paused', 'true', { timeout: 30_000 });
     expect((await agentTool(opened, lead, 'browser_tabs')).text).toContain('No pages are open');
+  });
+
+  test('пауза переживает отменённый переход окна', async () => {
+    const opened = await openApp();
+    const { window, lead } = opened;
+    const first = await openPage(opened, lead, { url: `${origin}/`, own: true });
+    await openPage(opened, lead, { url: `${origin}/grid`, own: true });
+    const panel = panelOf(window, `session:${lead}`);
+    await expect(panel).toBeVisible();
+    await tabsLoaded(opened, lead, 2);
+
+    await panel.getByRole('button', { name: 'More browser actions' }).click();
+    await window.getByRole('menuitem', { name: 'Pause agents' }).click();
+    await expect(panel).toHaveAttribute('data-agents-paused', 'true');
+
+    // Файл, брошенный мимо зон приёма: `guardNavigation` отменяет переход окна. Окно остаётся прежним документом, пауза — на месте.
+    // Отменённый переход Playwright «не завершается»: он блокирует обычный click, поэтому дальше клики идут из страницы окна.
+    await window.evaluate(() => {
+      setTimeout(() => {
+        location.href = 'file:///tmp/parley-e2e-drop';
+      }, 0);
+    });
+    await window.waitForTimeout(500);
+    // Смена активной страницы панели заставляет окно заново сверить реестр с main.
+    const clickTab = (index: number): Promise<void> =>
+      window.evaluate(
+        ([owner, at]) => {
+          const tabs = document.querySelectorAll(`[data-testid="browser-panel"][data-panel-owner="${owner}"] [role="tab"]`);
+          (tabs[at < 0 ? tabs.length + at : at] as HTMLElement).click();
+        },
+        [`session:${lead}`, index] as const,
+      );
+    await clickTab(-1);
+    await clickTab(0);
+    await window.waitForTimeout(300);
+
+    const denied = await agentTool(opened, lead, 'browser_console', { tab: first });
+    expect(denied.isError, denied.text).toBe(true);
+    expect(denied.text).toMatch(/^access_denied:/);
   });
 });

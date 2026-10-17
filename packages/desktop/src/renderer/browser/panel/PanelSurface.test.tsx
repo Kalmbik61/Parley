@@ -9,6 +9,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
+import { AGENT_LIMITS } from '@parley/protocol';
 import type { PickResult } from '../../../shared/browser-types.js';
 import type { BrowserOwner, WorkLayout } from '../../../shared/layout-types.js';
 import { DEFAULT_UI } from '../../../shared/ui-types.js';
@@ -222,7 +223,9 @@ describe('PanelSurface — предел живых панелей (спека б
   });
 });
 
-const registrations = (): unknown[] => bridge.browserCalls.filter((call) => call.method === 'registerTab').map((call) => call.args[0]);
+/** Записи реестра без `hello`: поколение документа в тесте любое. */
+const registrations = (): unknown[] => bridge.browserCalls.filter((call) => call.method === 'registerTab').map((call) => call.args[0]).filter((e) => (e as { kind: string }).kind !== 'hello');
+const PAGE_REG = { kind: 'page', generation: expect.any(String) };
 
 describe('PanelSurface — реестр страниц для агента (этап C)', () => {
   it('монтирование — без гостя, dom-ready — с id гостя, повтор не шлётся; уход вида хозяина с экрана — запись «невидима»', () => {
@@ -230,9 +233,9 @@ describe('PanelSurface — реестр страниц для агента (эт
     showHost(CHAT);
     renderLayer();
     const view = arm(webview(P1), 7);
-    expect(registrations()).toEqual([{ webContentsId: null, workKey: WORK_KEY, owner: CHAT, pageId: P1, visible: true }]);
+    expect(registrations()).toEqual([{ ...PAGE_REG, webContentsId: null, workKey: WORK_KEY, owner: CHAT, pageId: P1, visible: true }]);
     fire(view, 'dom-ready');
-    expect(registrations().at(-1)).toEqual({ webContentsId: 7, workKey: WORK_KEY, owner: CHAT, pageId: P1, visible: true });
+    expect(registrations().at(-1)).toEqual({ ...PAGE_REG, webContentsId: 7, workKey: WORK_KEY, owner: CHAT, pageId: P1, visible: true });
     expect(registrations()).toHaveLength(2);
     act(() => usePanelRuntime.getState().unmountHost(panelRuntimeKey(WORK_KEY, CHAT)));
     // Вид хозяина ушёл с экрана — страница невидима человеку (гость, если он ещё жив, main проверит сам).
@@ -251,7 +254,7 @@ describe('PanelSurface — реестр страниц для агента (эт
     const before = registrations().length;
     unmount();
     const added = registrations().slice(before);
-    expect(added).toEqual([{ webContentsId: null, workKey: WORK_KEY, owner: CHAT, pageId: P1, visible: false }]);
+    expect(added).toEqual([{ ...PAGE_REG, webContentsId: null, workKey: WORK_KEY, owner: CHAT, pageId: P1, visible: false }]);
   });
 
   it('пауза панели: data-agents-paused на корне, «Pause agents» пишет её в раскладку, «Resume agents» снимает', () => {
@@ -271,8 +274,8 @@ describe('PanelSurface — реестр страниц для агента (эт
 });
 
 describe('PanelSurface — снимок агента на странице (этап C, спека 4.8; спайк 0.2)', () => {
-  const activity = (phase: 'start' | 'end', webContentsId: number, capture?: { width: number; height: number }): void =>
-    act(() => bridge.emitAgentActivity({ webContentsId, session: 'S02', op: 'screenshot', phase, ...(capture === undefined ? {} : { capture }) }));
+  const activity = (phase: 'start' | 'end', webContentsId: number, capture?: { width: number; height: number; id?: string }): void =>
+    act(() => bridge.emitAgentActivity({ webContentsId, session: 'S02', op: 'screenshot', phase, ...(capture === undefined ? {} : { capture: { id: 'c1', ...capture } }) }));
 
   it('start с capture своей страницы — «Agent capture 375×812»; end — подписи нет; чужая страница и start без capture не трогают', () => {
     setPanel(CHAT, ['http://localhost:3000/']);
@@ -299,6 +302,106 @@ describe('PanelSurface — снимок агента на странице (эт
     expect(screen.queryByTestId('agent-capture')).toBeNull();
     activity('end', 7);
     expect(page.style.visibility).toBe('hidden');
+  });
+
+  /** Кадры окна под управлением теста: `frame()` исполняет все ждущие `requestAnimationFrame`. */
+  function stubFrames(): { frame(): void } {
+    const queue = new Map<number, FrameRequestCallback>();
+    let next = 0;
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback): number => {
+      next += 1;
+      queue.set(next, callback);
+      return next;
+    });
+    vi.stubGlobal('cancelAnimationFrame', (handle: number): void => void queue.delete(handle));
+    return {
+      frame: () =>
+        act(() => {
+          const due = [...queue.entries()];
+          queue.clear();
+          for (const [, callback] of due) callback(0);
+        }),
+    };
+  }
+  const readyCalls = (): unknown[][] => bridge.browserCalls.filter((call) => call.method === 'agentCaptureReady').map((call) => call.args);
+
+  it('start с capture: <webview> получает left 0, top 0, width и height снимка; после двух кадров — agentCaptureReady(id); end возвращает прежний вид', () => {
+    const frames = stubFrames();
+    setPanel(CHAT, ['http://localhost:3000/']);
+    showHost(CHAT);
+    renderLayer();
+    const view = arm(webview(P1), 7);
+    fire(view, 'dom-ready');
+    expect(view.style.width).toBe('');
+    expect(view.className).not.toContain('absolute');
+    activity('start', 7, { width: 1440, height: 900, id: 'c-77' });
+    expect([view.style.left, view.style.top, view.style.width, view.style.height]).toEqual(['0px', '0px', '1440px', '900px']);
+    expect(view.className).toContain('absolute');
+    // Узел тот же: гость не перезагружается.
+    expect(webview(P1)).toBe(view);
+    expect(readyCalls()).toEqual([]);
+    frames.frame();
+    expect(readyCalls()).toEqual([]);
+    frames.frame();
+    expect(readyCalls()).toEqual([['c-77']]);
+    frames.frame();
+    expect(readyCalls()).toEqual([['c-77']]);
+    activity('end', 7);
+    expect(view.style.width).toBe('');
+    expect(view.className).not.toContain('absolute');
+  });
+
+  it('смена webContentsId сбрасывает capture: размер снимка снят, подтверждения нет', () => {
+    const frames = stubFrames();
+    setPanel(CHAT, ['http://localhost:3000/']);
+    showHost(CHAT);
+    renderLayer();
+    const view = arm(webview(P1), 7);
+    fire(view, 'dom-ready');
+    activity('start', 7, { width: 1440, height: 900, id: 'c-1' });
+    expect(view.style.width).toBe('1440px');
+    view.getWebContentsId.mockReturnValue(8);
+    fire(view, 'dom-ready');
+    expect(view.style.width).toBe('');
+    frames.frame();
+    frames.frame();
+    expect(readyCalls()).toEqual([]);
+  });
+
+  it('без end capture снимается сторожем через AGENT_LIMITS.opMs', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      stubFrames();
+      setPanel(CHAT, ['http://localhost:3000/']);
+      showHost(CHAT);
+      renderLayer();
+      const view = arm(webview(P1), 7);
+      fire(view, 'dom-ready');
+      activity('start', 7, { width: 1440, height: 900, id: 'c-2' });
+      act(() => void vi.advanceTimersByTime(AGENT_LIMITS.opMs - 1));
+      expect(view.style.width).toBe('1440px');
+      act(() => void vi.advanceTimersByTime(2));
+      expect(view.style.width).toBe('');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('окно в фоне кадров не рисует: подтверждение уходит по запасному таймеру', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      stubFrames();
+      setPanel(CHAT, ['http://localhost:3000/']);
+      showHost(CHAT);
+      renderLayer();
+      fire(arm(webview(P1), 7), 'dom-ready');
+      activity('start', 7, { width: 1440, height: 900, id: 'c-3' });
+      expect(readyCalls()).toEqual([]);
+      act(() => void vi.advanceTimersByTime(300));
+      expect(readyCalls()).toEqual([['c-3']]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

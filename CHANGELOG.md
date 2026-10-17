@@ -38,8 +38,28 @@ Chats and rooms get a browser of their own next to the view, and an agent can sh
   bytes of map JSON were parsed, how much terminal output arrived (chunks and bytes), and how many session
   recomputes the wake and activity services did. The counters cover the time since the previous status line.
 
+### Fixed
+
+- **Screenshots from an agent show the real page.** A screenshot at another size (such as 1440×900) or of a page
+  wider than the panel used to come back as a tile of the panel-sized piece repeated; the window now sets the page to
+  the screenshot size for the moment and the agent gets the actual layout. A full-page screenshot takes the first three
+  viewport heights and says so instead of refusing; images stay under 3.5 MB.
+- **A timed-out or repeated screenshot no longer leaves your page in the agent's size.** Your size, preset and
+  field are exactly what you last chose, and a second request waits for the first.
+- **Agents read less and see less.** A request in detail stays under 20 KB (headers cut to 256 characters), console
+  entries are compact with similar ones folded, network rows keep only the first 80 characters of the query, and
+  `after` returns only what is new since the last read. `browser_tabs` shows a page that left localhost only as its
+  origin, and details of an earlier document of the page are no longer readable.
+- **More secrets are masked in what agents read.** The console text and strings inside JSON are masked by the shape
+  of the value (`Bearer …`, JWT, `password=…`, `api_key=…`); `sid`, `sig`, `jwt`, `pwd`, `xsrf` and `code` in a URL
+  are covered too.
+- **Pause really pauses.** An agent cannot open a page in a paused panel, and a canceled window navigation no longer
+  makes agents forget the pause. Agent screenshots in `drops/` are cleaned up hourly.
+
 ### Changed
 
+- **Agents that run with Parley's own settings do not ask before reading the browser.** The reading tools
+  (`browser_tabs`, `browser_console`, `browser_network`, `browser_screenshot`) are allowed up front, like `browser_open`.
 - **The built-in minimal-development skill asks for more care around a change.** Before editing, an agent lists
   what the change must reach and what it could break for users; it marks a deliberate shortcut with a
   `shortcut: <the limit>, <when to replace it>` comment, leaves a small test for new non-trivial logic, and ends

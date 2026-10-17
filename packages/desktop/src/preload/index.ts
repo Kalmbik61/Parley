@@ -376,6 +376,7 @@ const bridge = {
       browserAgentActivityListeners.add(listener);
       return () => browserAgentActivityListeners.delete(listener);
     },
+    agentCaptureReady: (id: string) => ipcRenderer.invoke('browser:agent-capture-ready', id) as Promise<void>,
   },
   voice: {
     listModels: () => ipcRenderer.invoke('voice:list-models') as Promise<VoiceModelId[]>,

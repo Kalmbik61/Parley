@@ -18,31 +18,27 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { WebContents } from 'electron';
-import { AGENT_LIMITS, AGENT_VIEWPORT, browserAgentArgs } from '@parley/protocol';
-import type {
-  BrowserAgentArgs,
-  BrowserAgentConsoleEntry,
-  BrowserAgentConsoleResult,
-  BrowserAgentErrorCode,
-  BrowserAgentNetworkResult,
-  BrowserAgentOpEvent,
-  BrowserAgentOpenResult,
-  BrowserAgentOwner,
-  BrowserAgentRequestDetail,
-  BrowserAgentRequestSummary,
-  BrowserAgentResult,
-  BrowserAgentScreenshotResult,
-  BrowserAgentTabInfo,
-} from '@parley/protocol';
-import { DEVTOOLS_LIMITS, isFailed, VIEWPORT_PRESETS, viewportSize } from '../../shared/browser-devtools.js';
-import type { ConsoleEntry, DevtoolsSnapshot, NetworkEntry, StackFrame, ViewportPreset, ViewportSpec } from '../../shared/browser-devtools.js';
+import { AGENT_LIMITS, browserAgentArgs } from '@parley/protocol';
+import type { BrowserAgentArgs, BrowserAgentErrorCode, BrowserAgentOpEvent, BrowserAgentOpenResult, BrowserAgentResult } from '@parley/protocol';
 import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistration } from '../../shared/browser-types.js';
 import type { BrowserOwner } from '../../shared/layout-types.js';
 import { isLoopbackUrl } from '../../shared/loopback.js';
-import { redactBody, redactHeaders, redactUrl, redactUrlsInText, unmaskableJson } from '../../shared/redact.js';
+import { S } from '../../shared/strings.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
+import { AgentOpError } from './agent-errors.js';
+import { createAgentCapture } from './agent-capture.js';
+import type { AgentCaptureDeps } from './agent-capture.js';
+import { createPageRegistry, listTabs } from './agent-pages.js';
+import type { PageRecord } from './agent-pages.js';
+import { createPageQueue } from './agent-queue.js';
+import { createAgentReads } from './agent-reads.js';
+import { clipUrl } from './agent-url.js';
 import type { Emulation } from './emulation.js';
 import type { Inspector } from './inspector.js';
+
+export { AgentOpError } from './agent-errors.js';
+export { captureSpec } from './agent-capture.js';
+export type { LayoutMetrics } from './agent-pages.js';
 
 export interface AgentOpsDeps {
   /** «Let agents use the browser» (`UiFile.browser.agentsAllowed`): читается на каждую операцию. */
@@ -58,38 +54,31 @@ export interface AgentOpsDeps {
   /** PNG снимка — в `drops/` (`main/drops.ts#saveImage`); `null` — не сохранился. */
   saveImage(png: Buffer): Promise<string | null>;
   /** Картинки в main — `nativeImage`, в тестах заглушка. */
-  image: { size(png: Buffer): { width: number; height: number }; resize(png: Buffer, width: number, height: number): Buffer; stitch(parts: Buffer[]): Buffer };
+  image: AgentCaptureDeps['image'];
   /** Агент действует на странице: окно-хозяин показывает это человеку. */
   activity(e: AgentActivity): void;
   /** Сколько ждать операцию на странице; по умолчанию `AGENT_LIMITS.opMs - 2_000`, чтобы очередь освобождалась раньше `timeout` хоста. */
   opTimeoutMs?: number;
+  /** Срок одного вызова в госте и окне при снимке, см. `AgentCaptureDeps.guestCallMs`. */
+  guestCallMs?: AgentCaptureDeps['guestCallMs'];
+  /** Код main в изолированном мире гостя (прокрутка fullPage), см. `AgentCaptureDeps.inGuest`. */
+  inGuest: AgentCaptureDeps['inGuest'];
+  /** Высота содержимого окна гостя: выше {1,2 × высота} снимок не растят (Chromium тайлит поверхность). */
+  windowHeight?: AgentCaptureDeps['windowHeight'];
+  /** DPR экрана окна гостя, см. `AgentCaptureDeps.screenDpr`. */
+  screenDpr?: AgentCaptureDeps['screenDpr'];
+  /** Сколько ждать подтверждения окна, что `<webview>` стоит в размере снимка; по умолчанию `AGENT_LIMITS.captureReadyMs`. Тестам — меньше. */
+  captureReadyMs?: number;
 }
 
 export interface AgentOps {
   run(request: BrowserAgentOpEvent): Promise<BrowserAgentResult>;
   /** Ответ окна на `browser:agent-open-tab` (канал `browser:agent-open-tab-result`); чужой и поздний id молча игнорируется. */
   openTabResult(requestId: string, result: AgentOpenTabResult): void;
-  /** Окно сообщает о странице панели, её закрытии или паузе панели (спека 3.7, 4.8). */
+  /** Окно сообщает о новом поколении документа, странице панели, её закрытии или паузе панели (спека 3.7, 4.8). */
   registerTab(e: AgentPageRegistration): void;
-  /** Окно перезагрузилось: реестр и паузы забыты до новой регистрации, id агента сохраняются. */
-  reset(): void;
-}
-
-/** Ответ `Page.getLayoutMetrics`: нужные поля. */
-export interface LayoutMetrics {
-  cssLayoutViewport: { clientWidth: number; clientHeight: number; pageX: number; pageY: number };
-  cssContentSize: { x: number; y: number; width: number; height: number };
-}
-
-/** Отказ операции с кодом протокола; текст читает агент. */
-export class AgentOpError extends Error {
-  readonly code: BrowserAgentErrorCode;
-
-  constructor(code: BrowserAgentErrorCode, message: string) {
-    super(message);
-    this.name = 'AgentOpError';
-    this.code = code;
-  }
+  /** Окно подтверждает, что `<webview>` стоит в размере снимка (канал `browser:agent-capture-ready`); чужой и поздний id молча игнорируется. */
+  captureReady(id: string): void;
 }
 
 /** Схема аргументов по имени операции: хост другой версии может прислать незнакомую. */
@@ -97,88 +86,13 @@ type ArgsSchema = { safeParse(value: unknown): { success: true; data: unknown } 
 const ARGS: Partial<Record<string, ArgsSchema>> = browserAgentArgs;
 
 const ok = (result: unknown): BrowserAgentResult => ({ ok: true, result });
-const failure = (code: BrowserAgentErrorCode, message: string): BrowserAgentResult => ({ ok: false, error: { code, message } });
-
-/** Записей в ответе по умолчанию — то же число, что `default` в схемах инструментов MCP. */
-const DEFAULT_LIST = 50;
-
-/** Новейшие записи в пределах `limit` и `AGENT_LIMITS.listBytes` (по JSON), старые — первыми. Одна длинная запись проходит. */
-function newest<T>(items: readonly T[], limit: number): T[] {
-  const picked: T[] = [];
-  let bytes = 0;
-  for (let index = items.length - 1; index >= 0 && picked.length < limit; index -= 1) {
-    const item = items[index] as T;
-    bytes += Buffer.byteLength(JSON.stringify(item));
-    if (bytes > AGENT_LIMITS.listBytes && picked.length > 0) break;
-    picked.push(item);
-  }
-  return picked.reverse();
-}
-
-/** Срок операции в main: очередь страницы не ждёт зависшую команду CDP дольше хоста. */
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new AgentOpError('timeout', message)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-const frameText = (frame: StackFrame): string => `${frame.fn === '' ? '(anonymous)' : frame.fn} (${redactUrl(frame.url)}:${frame.line}:${frame.column})`;
-
-function toAgentConsole(entry: ConsoleEntry): BrowserAgentConsoleEntry {
-  return {
-    level: entry.level,
-    origin: entry.origin,
-    text: redactUrlsInText(entry.text),
-    source: entry.location === null ? null : `${redactUrl(entry.location.url)}:${entry.location.line}:${entry.location.column}`,
-    stack: entry.stack.map(frameText),
-    count: entry.count,
-    at: new Date(entry.ts).toISOString(),
-  };
-}
-
-function summaryOf(entry: NetworkEntry): BrowserAgentRequestSummary {
-  return { id: entry.id, method: entry.method, url: redactUrl(entry.url), kind: entry.kind, status: entry.status, statusText: entry.statusText, failure: entry.failure, durationMs: entry.durationMs, mimeType: entry.mimeType };
-}
-
-const headerValue = (headers: ReadonlyArray<[string, string]>, name: string): string | null => headers.find(([key]) => key.toLowerCase() === name)?.[1] ?? null;
-
-/**
- * Тело для агента (спека 6): маска — до обрезки, `redactBody` режет уже замаскированное. JSON, который нельзя разобрать
- * целиком (обрезан источником или битый), не отдаётся совсем — маска его не видит (Фокус ревью этапа C, п. 2); вместо
- * тела — заметка. `mimeType` запроса — его Content-Type целиком (у multipart в нём граница).
- */
-function bodyForAgent(text: string | null, mimeType: string | null, which: 'request' | 'response', notes: string[]): string | null {
-  if (text === null || text === '') return null;
-  if (unmaskableJson(text, mimeType)) {
-    notes.push(`The ${which} body is JSON that cannot be parsed in full (cut by the capture limit or malformed), so it is not shown: it cannot be masked.`);
-    return null;
-  }
-  return redactBody(text, mimeType, AGENT_LIMITS.detailBody);
-}
-
-/** Размер снимка агента: совпал с пресетом в любой ориентации — пресет, иначе Custom; DPR 1 — PNG в CSS-пикселях. */
-export function captureSpec(width: number, height: number): ViewportSpec {
-  for (const [preset, size] of Object.entries(VIEWPORT_PRESETS) as Array<[ViewportPreset, { width: number; height: number }]>) {
-    if (size.width === width && size.height === height) return { preset, rotated: false, dpr: 1 };
-    if (size.width === height && size.height === width) return { preset, rotated: true, dpr: 1 };
-  }
-  return { width, height, mobile: false, dpr: 1 };
-}
+const failure = (code: BrowserAgentErrorCode, message: string): BrowserAgentResult => ({ ok: false, error: { code, message: message.slice(0, 2000) } });
 
 /** Пояснение агенту, когда работа вне LRU окна: вкладка в раскладке есть, гостя пока нет. */
 export const NOT_MOUNTED_NOTE = "The workspace is not open in Parley's window, so the page loads when the human opens it.";
 
 /** Отказ при выключенном общем «Let agents use the browser». */
-const AGENTS_OFF = 'The human turned off agent access to the browser (Settings → Browser → Let agents use the browser).';
-
-/** Длина заголовка страницы в `tabs`. */
-const TITLE_LIMIT = 200;
-
-/** Пояснение агенту, когда окно о работе ничего не сообщало: пустой список здесь не значит «страниц нет». */
-const UNKNOWN_WORK_NOTE =
-  "Parley's window has not reported any browser pages for this workspace. If the human has not opened this workspace in Parley's window yet, its pages are not known; a page you open with browser_open will appear here.";
+const AGENTS_OFF = `The human turned off agent access to the browser (Settings → Browser → ${S.settings.letAgentsUseBrowser}).`;
 
 /** Адрес, который агент может открыть: http(s) на loopback, без учётных данных; иначе `null`. Фрагмент (#…) остаётся: им бывают маршруты SPA. */
 export function loopbackHref(raw: string): string | null {
@@ -212,280 +126,64 @@ export function ownerOf(request: BrowserAgentOpEvent, args: BrowserAgentArgs<'op
   return rooms.length === 1 && only !== undefined ? { kind: 'room', roomId: only } : own;
 }
 
-/**
- * Повторы снимка невидимой страницы: до ~0,5 с, пока окно не сделает её поверхность прозрачной, но видимой. Повторяется
- * только отказ «кадр не рисуется» (Chromium: «Unable to capture screenshot»); другая ошибка уходит агенту сразу.
- */
-const HIDDEN_CAPTURE_RETRIES = 10;
-const NOT_DRAWN = /capture screenshot/i;
-const HIDDEN_CAPTURE_RETRY_MS = 50;
-
 export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   const openMs = deps.openMs ?? AGENT_LIMITS.openMs;
   /** Ждущие ответа окна: id просьбы → продолжение. */
   const pendingOpens = new Map<string, (result: AgentOpenTabResult | 'no_window' | 'timeout') => void>();
-  /** id агента по работе и вкладке; счёт — свой у каждой работы. */
-  const ids = new Map<string, string>();
-  const counters = new Map<string, number>();
-
-  function agentIdFor(workKey: string, tabId: string): string {
-    const key = `${workKey}\n${tabId}`;
-    const known = ids.get(key);
-    if (known !== undefined) return known;
-    const next = (counters.get(workKey) ?? 0) + 1;
-    counters.set(workKey, next);
-    const id = `t${next}`;
-    ids.set(key, id);
-    return id;
-  }
-
-  interface PageRecord {
-    agentId: string;
-    webContentsId: number | null;
-    workKey: string;
-    owner: BrowserOwner;
-    pageId: string;
-    visible: boolean;
-    lastUrl: string;
-    lastTitle: string;
-  }
-  /** Страницы панелей: ключ — работа и страница (`bp-…` уникален на окно, но счёт `agentIdFor` — на работу). */
-  const pages = new Map<string, PageRecord>();
-  /** Приостановленные панели: работа и хозяин. */
-  const paused = new Set<string>();
-  const pageKey = (workKey: string, pageId: string): string => `${workKey}\n${pageId}`;
-  const ownerId = (owner: BrowserAgentOwner | BrowserOwner): string => (owner.kind === 'session' ? `session:${owner.sessionId}` : `room:${owner.roomId}`);
-  const panelKey = (workKey: string, owner: BrowserOwner): string => `${workKey}\n${ownerId(owner)}`;
-  const entitled = (request: BrowserAgentOpEvent, record: PageRecord): boolean => request.owners.some((owner) => ownerId(owner) === ownerId(record.owner));
-  const isPaused = (record: PageRecord): boolean => paused.has(panelKey(record.workKey, record.owner));
-
-  function live(record: PageRecord): WebContents | null {
-    if (record.webContentsId === null) return null;
-    const contents = deps.fromId(record.webContentsId);
-    return contents === null || contents.isDestroyed() ? null : contents;
-  }
-
-  /** Страница своей работы по id агента и проверки доступа (спека 5.2); дальше проверки состояния — задачи 11–12. */
-  function pageOf(request: BrowserAgentOpEvent, agentId: string): PageRecord {
-    const workKey = workKeyOf(request.ref.projectPath, request.ref.workId);
-    const record = [...pages.values()].find((candidate) => candidate.workKey === workKey && candidate.agentId === agentId);
-    if (record === undefined) throw new AgentOpError('no_tab', `There is no page ${agentId} in your browsers: call browser_tabs.`);
-    if (!entitled(request, record)) throw new AgentOpError('access_denied', `You have no access to page ${agentId}: it belongs to a browser panel that is not your chat's or your rooms'.`);
-    if (isPaused(record)) throw new AgentOpError('access_denied', 'The human paused agents in this browser panel (paused by the human).');
-    return record;
-  }
-
-  async function viewportOf(id: number): Promise<BrowserAgentTabInfo['viewport']> {
-    const spec = deps.emulation.current(id);
-    if (spec !== null) {
-      const { width, height } = viewportSize(spec);
-      return { width, height, emulated: true };
-    }
-    try {
-      const metrics = await deps.inspector.send<LayoutMetrics>(id, 'Page.getLayoutMetrics');
-      return { width: Math.round(metrics.cssLayoutViewport.clientWidth), height: Math.round(metrics.cssLayoutViewport.clientHeight), emulated: false };
-    } catch {
-      return null;
-    }
-  }
-
-  async function listTabs(request: BrowserAgentOpEvent): Promise<{ tabs: BrowserAgentTabInfo[]; notes: string[] }> {
-    const workKey = workKeyOf(request.ref.projectPath, request.ref.workId);
-    const mine = [...pages.values()]
-      .filter((record) => record.workKey === workKey && entitled(request, record) && !isPaused(record))
-      .sort((a, b) => Number(a.agentId.slice(1)) - Number(b.agentId.slice(1)));
-    const tabs: BrowserAgentTabInfo[] = [];
-    for (const record of mine) {
-      const contents = live(record);
-      const loaded = contents !== null && !contents.isCrashed();
-      if (contents !== null) {
-        record.lastUrl = contents.getURL();
-        record.lastTitle = contents.getTitle();
-      }
-      tabs.push({
-        id: record.agentId,
-        owner: record.owner,
-        url: redactUrl(record.lastUrl),
-        title: record.lastTitle.slice(0, TITLE_LIMIT),
-        viewport: loaded && record.webContentsId !== null ? await viewportOf(record.webContentsId) : null,
-        loaded,
-        // Невыгруженную, но невидимую страницу человек не видит; незагруженную — тем более.
-        visible: loaded && record.visible,
-        loopback: isLoopbackUrl(record.lastUrl),
-      });
-    }
-    // Работа известна реестру, если о ней приходила хоть одна запись (страница или пауза); иначе пустой список — не «страниц нет».
-    const known = [...pages.values()].some((record) => record.workKey === workKey) || [...paused].some((key) => key.startsWith(`${workKey}\n`));
-    return { tabs, notes: tabs.length === 0 && !known ? [UNKNOWN_WORK_NOTE] : [] };
-  }
-
+  const registry = createPageRegistry({ fromId: deps.fromId });
+  const queue = createPageQueue();
+  const reads = createAgentReads({ inspector: deps.inspector });
+  const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, saveImage: deps.saveImage, image: deps.image, activity: deps.activity, inGuest: deps.inGuest, ...(deps.captureReadyMs === undefined ? {} : { captureReadyMs: deps.captureReadyMs }), ...(deps.guestCallMs === undefined ? {} : { guestCallMs: deps.guestCallMs }), ...(deps.windowHeight === undefined ? {} : { windowHeight: deps.windowHeight }), ...(deps.screenDpr === undefined ? {} : { screenDpr: deps.screenDpr }) });
   const opTimeoutMs = deps.opTimeoutMs ?? AGENT_LIMITS.opMs - 2_000;
-  /** Хвост очереди каждой страницы: операции к одной странице — строго по одной (спека 3.7). */
-  const queues = new Map<string, Promise<void>>();
-
-  function enqueue<T>(key: string, task: () => Promise<T>): Promise<T> {
-    const next = (queues.get(key) ?? Promise.resolve()).then(task);
-    const tail = next.then(() => undefined, () => undefined);
-    queues.set(key, tail);
-    void tail.then(() => {
-      if (queues.get(key) === tail) queues.delete(key);
-    });
-    return next;
-  }
+  const pageKey = (workKey: string, pageId: string): string => `${workKey}\n${pageId}`;
 
   /** Страница по id агента: доступ (`pageOf`), состояние гостя, loopback. */
   function checked(request: BrowserAgentOpEvent, agentId: string): { record: PageRecord; contents: WebContents } {
-    const record = pageOf(request, agentId);
-    const contents = live(record);
+    const record = registry.pageOf(request, agentId);
+    const contents = registry.live(record);
     if (contents === null) throw new AgentOpError('tab_not_loaded', `Page ${agentId} is not loaded: its panel or workspace is not open in the window.`);
     if (contents.isCrashed()) throw new AgentOpError('tab_not_loaded', `The page ${agentId} crashed.`);
     if (!isLoopbackUrl(contents.getURL())) throw new AgentOpError('not_loopback', `Page ${agentId} is not on localhost.`);
     return { record, contents };
   }
 
-  /** Операция на странице в её очереди. Проверки — сразу (быстрый отказ) и ещё раз перед запуском: в очереди ждут до `opTimeoutMs`. */
-  async function onPage<T>(request: BrowserAgentOpEvent, agentId: string, run: (contents: WebContents, record: PageRecord) => Promise<T>): Promise<T> {
+  /** Ошибка не `AgentOpError` внутри страницы: записи нет — `no_tab`; гость уничтожен или упал — `tab_not_loaded`; иначе `unsupported`. */
+  function pageFailure(record: PageRecord, contents: WebContents, signal: AbortSignal, error: unknown): AgentOpError {
+    if (error instanceof AgentOpError) return error;
+    if (signal.aborted) return new AgentOpError('timeout', 'The operation was cancelled: it took too long.');
+    const message = error instanceof Error ? error.message : String(error);
+    if (registry.fresh(record) === undefined) return new AgentOpError('no_tab', `Page ${record.agentId} was closed during the operation: call browser_tabs.`);
+    let gone = false;
+    try {
+      gone = contents.isDestroyed() || contents.isCrashed();
+    } catch {
+      gone = true;
+    }
+    if (gone) return new AgentOpError('tab_not_loaded', `Page ${record.agentId} went away during the operation (${message.slice(0, 200)}).`);
+    return new AgentOpError('unsupported', message.slice(0, 2000));
+  }
+
+  /**
+   * Операция на странице в её очереди. Срок — с постановки (`deadline`), а не со старта: в очереди ждут до `opTimeoutMs`.
+   * Проверки — сразу (быстрый отказ) и ещё раз перед запуском; `activity end` — в `finally` самой задачи, по её настоящему концу.
+   */
+  async function onPage<T>(request: BrowserAgentOpEvent, agentId: string, run: (contents: WebContents, record: PageRecord, signal: AbortSignal) => Promise<T>): Promise<T> {
+    const deadline = Date.now() + opTimeoutMs;
     const first = checked(request, agentId);
-    return enqueue(pageKey(first.record.workKey, first.record.pageId), async () => {
+    return queue.run(pageKey(first.record.workKey, first.record.pageId), deadline, async (signal) => {
       // Пока операция ждала, человек мог выключить доступ, поставить панель на паузу или увести страницу на внешний сайт.
       if (!(await deps.agentsAllowed())) throw new AgentOpError('access_denied', AGENTS_OFF);
       const { record, contents } = checked(request, agentId);
+      signal.throwIfAborted();
       deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'start' });
       try {
-        return await withTimeout(run(contents, record), opTimeoutMs, `The ${request.op} operation took longer than ${Math.round(opTimeoutMs / 1000)} s.`);
+        return await run(contents, record, signal);
+      } catch (error) {
+        throw pageFailure(record, contents, signal, error);
       } finally {
         deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'end' });
       }
     });
-  }
-
-  function captured(id: number): DevtoolsSnapshot {
-    const snapshot = deps.inspector.snapshot(id);
-    if (snapshot === null || snapshot.capture === 'unavailable') {
-      throw new AgentOpError('unsupported', 'Console and network capture is unavailable for this page: ask the human to reload it.');
-    }
-    return snapshot;
-  }
-
-  function consoleOf(contents: WebContents, record: PageRecord, args: BrowserAgentArgs<'console'>): BrowserAgentConsoleResult {
-    const snapshot = captured(contents.id);
-    const level = args.level ?? 'error';
-    const pattern = args.pattern?.toLowerCase();
-    // Фильтр смотрит на текст с маской, как и ответ: по сырому подбирали бы значение секрета посимвольно через `matched`.
-    const matching = snapshot.console
-      .filter((entry) => entry.epoch === snapshot.epoch && (level === 'all' || entry.level === 'error' || (level === 'warning' && entry.level === 'warning')))
-      .map(toAgentConsole)
-      .filter((entry) => pattern === undefined || entry.text.toLowerCase().includes(pattern));
-    return { tab: record.agentId, url: redactUrl(contents.getURL()), entries: newest(matching, args.limit ?? DEFAULT_LIST), matched: matching.length };
-  }
-
-  async function detailOf(id: number, entry: NetworkEntry): Promise<BrowserAgentRequestDetail> {
-    const notes: string[] = [];
-    if (entry.hasPostData && entry.postData === null) notes.push('The request body was not captured.');
-    const requestBody = bodyForAgent(entry.postData, headerValue(entry.requestHeaders, 'content-type'), 'request', notes);
-    // Тело целиком, до предела панели: маска разбирает весь JSON, режется уже результат.
-    const response = await deps.inspector.responseBody(id, entry.id, DEVTOOLS_LIMITS.panelBody).catch(() => null);
-    let responseBody: string | null = null;
-    if (response !== null) {
-      if (response.base64) notes.push('The response body is binary and is not shown.');
-      else responseBody = bodyForAgent(response.text, entry.mimeType, 'response', notes);
-    }
-    return { ...summaryOf(entry), remoteAddress: entry.remoteAddress, fromCache: entry.fromCache, requestHeaders: redactHeaders(entry.requestHeaders), responseHeaders: redactHeaders(entry.responseHeaders), requestBody, responseBody, notes };
-  }
-
-  async function networkOf(contents: WebContents, record: PageRecord, args: BrowserAgentArgs<'network'>): Promise<BrowserAgentNetworkResult> {
-    const snapshot = captured(contents.id);
-    const url = redactUrl(contents.getURL());
-    if (args.requestId !== undefined) {
-      const entry = snapshot.network.find((candidate) => candidate.id === args.requestId);
-      if (entry === undefined) throw new AgentOpError('bad_request', `There is no request ${args.requestId} in the log of page ${record.agentId}: list the requests first.`);
-      return { tab: record.agentId, url, request: await detailOf(contents.id, entry) };
-    }
-    const pattern = args.urlPattern?.toLowerCase();
-    // Фильтр смотрит на адрес с маской: подобрать им значение секрета нельзя.
-    const matching = snapshot.network.filter(
-      (entry) =>
-        entry.epoch === snapshot.epoch &&
-        (args.failedOnly !== false ? isFailed(entry) : true) &&
-        (pattern === undefined || redactUrl(entry.url).toLowerCase().includes(pattern)),
-    );
-    return { tab: record.agentId, url, requests: newest(matching.map(summaryOf), args.limit ?? DEFAULT_LIST), matched: matching.length };
-  }
-
-  /** Длинная сторона PNG — не больше `AGENT_LIMITS.screenshotLongSide` (предел картинки, которую модель читает целиком). */
-  function fitLongSide(png: Buffer): Buffer {
-    const size = deps.image.size(png);
-    const long = Math.max(size.width, size.height);
-    if (long <= AGENT_LIMITS.screenshotLongSide) return png;
-    const scale = AGENT_LIMITS.screenshotLongSide / long;
-    return deps.image.resize(png, Math.max(1, Math.round(size.width * scale)), Math.max(1, Math.round(size.height * scale)));
-  }
-
-  async function screenshotOf(contents: WebContents, record: PageRecord, request: BrowserAgentOpEvent, args: BrowserAgentArgs<'screenshot'>): Promise<BrowserAgentScreenshotResult> {
-    const id = contents.id;
-    const metrics = await deps.inspector.send<LayoutMetrics>(id, 'Page.getLayoutMetrics');
-    const current = { width: Math.round(metrics.cssLayoutViewport.clientWidth), height: Math.round(metrics.cssLayoutViewport.clientHeight) };
-    const spec = args.width === undefined && args.height === undefined ? null : captureSpec(args.width ?? current.width, args.height ?? current.height);
-    const view = spec === null ? current : (({ width, height }) => ({ width, height }))(viewportSize(spec));
-
-    const shoot = async (clip?: { x: number; y: number; width: number; height: number; scale: number }): Promise<Buffer> => {
-      const params = clip === undefined ? { format: 'png' } : { format: 'png', clip, captureBeyondViewport: true };
-      for (let attempt = 0; ; attempt += 1) {
-        try {
-          const shot = await deps.inspector.send<{ data: string }>(id, 'Page.captureScreenshot', params);
-          return Buffer.from(shot.data, 'base64');
-        } catch (error) {
-          // Видимость читается из реестра сейчас: за время снимка человек мог показать страницу или спрятать её.
-          const hidden = pages.get(pageKey(record.workKey, record.pageId))?.visible === false;
-          if (!hidden || !NOT_DRAWN.test(error instanceof Error ? error.message : String(error))) throw error;
-          if (attempt >= HIDDEN_CAPTURE_RETRIES) {
-            throw new AgentOpError('tab_hidden', `Page ${record.agentId} is not shown to the human and Chromium does not draw it: ask them to open its browser panel, or read browser_console and browser_network.`);
-          }
-          await new Promise((resolve) => setTimeout(resolve, HIDDEN_CAPTURE_RETRY_MS));
-        }
-      }
-    };
-
-    const notes: string[] = [];
-    const capture = async (): Promise<{ png: Buffer; viewport: { width: number; height: number } }> => {
-      if (args.fullPage !== true) return { png: await shoot(), viewport: view };
-      // Высота страницы — уже при нужном размере (под временной эмуляцией вёрстка другая).
-      const page = await deps.inspector.send<LayoutMetrics>(id, 'Page.getLayoutMetrics');
-      const total = Math.max(view.height, Math.ceil(page.cssContentSize.height));
-      if (total > view.height * AGENT_LIMITS.fullPageViewports) {
-        throw new AgentOpError(
-          'bad_request',
-          `The page is ${total} px tall, more than ${AGENT_LIMITS.fullPageViewports} viewport heights (${view.height} px): take viewport screenshots of parts of the page instead.`,
-        );
-      }
-      const wide = Math.max(view.width, Math.ceil(page.cssContentSize.width));
-      // Ширина не больше предела размера снимка: страница в десятки тысяч пикселей дала бы полосы в сотни мегабайт.
-      const width = Math.min(wide, AGENT_VIEWPORT.maxWidth);
-      if (width < wide) notes.push(`The page is ${wide} px wide; the screenshot is cut at ${width} px.`);
-      const strips: Buffer[] = [];
-      // Полоса выше поверхности вида рисуется повтором (спайк 0.7): режем по высоте вьюпорта и склеиваем.
-      for (let y = 0; y < total; y += view.height) strips.push(await shoot({ x: 0, y, width, height: Math.min(view.height, total - y), scale: 1 }));
-      return { png: strips.length === 1 ? (strips[0] as Buffer) : deps.image.stitch(strips), viewport: { width, height: total } };
-    };
-
-    // Невидимой странице поверхность переводят в opacity: 0 (спайк 0.2); смене размера нужна ещё и подпись «Agent capture W×H».
-    if (spec !== null || !record.visible) deps.activity({ webContentsId: id, session: request.label, op: request.op, phase: 'start', capture: view });
-    const taken = spec === null ? await capture() : await deps.emulation.withTemporary(id, spec, capture);
-    const png = fitLongSide(taken.png);
-    const size = deps.image.size(png);
-    const saved = await deps.saveImage(png);
-    if (saved === null) throw new AgentOpError('unsupported', 'The screenshot could not be saved to Parley drops.');
-    return {
-      tab: record.agentId,
-      url: redactUrl(contents.getURL()),
-      path: saved,
-      width: size.width,
-      height: size.height,
-      viewport: taken.viewport,
-      fullPage: args.fullPage === true,
-      emulated: spec !== null || deps.emulation.current(id) !== null,
-      ...(notes.length === 0 ? {} : { notes }),
-    };
   }
 
   function askWindow(event: AgentOpenTab): Promise<AgentOpenTabResult | 'no_window' | 'timeout'> {
@@ -514,6 +212,8 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     }
     const owner = ownerOf(request, args);
     const workKey = workKeyOf(request.ref.projectPath, request.ref.workId);
+    // Человек приостановил агентов в этой панели: страницу в ней не открываем, как не работаем с уже открытыми (спека 4.8, S5).
+    if (registry.isPaused(workKey, owner)) throw new AgentOpError('access_denied', 'The human paused agents in this browser panel (paused by the human).');
     const answer = await askWindow({ requestId: randomUUID(), workKey, url, sessionId: request.ref.sessionId, session: request.label, owner });
     if (answer === 'no_window') throw new AgentOpError('window_not_connected', "Parley's window is not ready: ask the human to open it.");
     if (answer === 'timeout') throw new AgentOpError('timeout', `The window did not place the tab within ${Math.round(openMs / 1000)} s.`);
@@ -522,7 +222,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
         ? new AgentOpError('bad_request', `This browser panel already has ${AGENT_LIMITS.panelPages} pages, the most Parley allows. Ask the human to close one.`)
         : new AgentOpError('window_not_connected', "Parley's window does not know this workspace yet: try again in a moment.");
     }
-    return { tab: agentIdFor(workKey, answer.tabId), owner, url, reused: answer.reused, notes: answer.mounted ? [] : [NOT_MOUNTED_NOTE] };
+    return { tab: registry.agentIdFor(workKey, answer.tabId), owner, url: clipUrl(url), reused: answer.reused, notes: answer.mounted ? [] : [NOT_MOUNTED_NOTE] };
   }
 
   return {
@@ -545,18 +245,18 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
           case 'open':
             return ok(await openOf(request, parsed.data as BrowserAgentArgs<'open'>));
           case 'tabs':
-            return ok(await listTabs(request));
+            return ok(await listTabs(registry, deps, request));
           case 'console': {
             const args = parsed.data as BrowserAgentArgs<'console'>;
-            return ok(await onPage(request, args.tab, async (contents, record) => consoleOf(contents, record, args)));
+            return ok(await onPage(request, args.tab, async (contents, record) => reads.consoleOf(contents, record, args)));
           }
           case 'network': {
             const args = parsed.data as BrowserAgentArgs<'network'>;
-            return ok(await onPage(request, args.tab, (contents, record) => networkOf(contents, record, args)));
+            return ok(await onPage(request, args.tab, (contents, record) => reads.networkOf(contents, record, args)));
           }
           case 'screenshot': {
             const args = parsed.data as BrowserAgentArgs<'screenshot'>;
-            return ok(await onPage(request, args.tab, (contents, record) => screenshotOf(contents, record, request, args)));
+            return ok(await onPage(request, args.tab, (contents, record, signal) => capture.screenshotOf(contents, record, request, args, signal)));
           }
         }
       } catch (error) {
@@ -568,32 +268,10 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
       pendingOpens.get(requestId)?.(result);
     },
     registerTab(e) {
-      if ('gone' in e) {
-        pages.delete(pageKey(e.workKey, e.pageId));
-        return;
-      }
-      if ('paused' in e) {
-        if (e.paused) paused.add(panelKey(e.workKey, e.owner));
-        else paused.delete(panelKey(e.workKey, e.owner));
-        return;
-      }
-      const key = pageKey(e.workKey, e.pageId);
-      const previous = pages.get(key);
-      const contents = e.webContentsId === null ? null : deps.fromId(e.webContentsId);
-      pages.set(key, {
-        agentId: agentIdFor(e.workKey, e.pageId),
-        webContentsId: e.webContentsId,
-        workKey: e.workKey,
-        owner: e.owner,
-        pageId: e.pageId,
-        visible: e.visible,
-        lastUrl: contents?.getURL() ?? previous?.lastUrl ?? '',
-        lastTitle: contents?.getTitle() ?? previous?.lastTitle ?? '',
-      });
+      registry.register(e);
     },
-    reset() {
-      pages.clear();
-      paused.clear();
+    captureReady(id) {
+      capture.captureReady(id);
     },
   };
 }
