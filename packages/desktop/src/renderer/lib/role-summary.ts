@@ -4,8 +4,8 @@ import type { Result, RoleSummary, SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 
-/** Столько ответ `roles.list` годится для новых плашек; как и на хосте, правку роли видно не позже этой паузы. */
-const ROLES_TTL_MS = 30_000;
+/** Ответ `roles.list` нужен плашкам одной пачки монтирования; дольше держать нельзя — новая роль должна появиться сразу. */
+const ROLES_TTL_MS = 3_000;
 const rolesCache = new WeakMap<object, Map<string, { at: number; value: Promise<Result<'roles.list'>> }>>();
 
 /**
@@ -20,6 +20,7 @@ function loadRoles(bridge: ParleyBridge, projectPath: string, workId: string, se
   const now = Date.now();
   const hit = cache.get(key);
   if (hit && now - hit.at < ROLES_TTL_MS) return hit.value;
+  for (const [other, old] of cache) if (now - old.at >= ROLES_TTL_MS) cache.delete(other);
   const entry = { at: now, value: bridge.call('roles.list', { projectPath, ref: { projectPath, workId, sessionId } }) };
   cache.set(key, entry);
   const map = cache;
