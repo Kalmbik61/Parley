@@ -67,7 +67,7 @@ import type { CodexSignal } from '../pty/codex-terminal.js';
 import { createSettler } from '../watch-settle.js';
 import type { WorksService } from '../works/works-service.js';
 import { contextView, type CompactionTrack } from '../compaction/context-view.js';
-import { createLogIndex, type LogIndex } from './log-index.js';
+import { createLogIndex, type LogChange, type LogIndex } from './log-index.js';
 import { readSubagentMeta, type SubagentMeta } from './subagent-meta.js';
 
 export interface SessionLive {
@@ -996,10 +996,12 @@ export function createActivityService(
     pruneRemoved(snapshot);
   }
 
-  function handleLogChange(): void {
+  /** `change` — какая запись индекса изменилась: пересчитываются только задетые ею сессии; без него (первый список) — все. */
+  function handleLogChange(change?: LogChange): void {
     if (stopped) return;
     for (const entry of works.snapshot().entries) {
       for (const session of entry.map.sessions) {
+        if (change !== undefined && !change.affects(session)) continue;
         recompute({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id });
       }
     }

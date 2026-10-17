@@ -30,6 +30,18 @@ import {
   withDescendants,
 } from '@parley/core';
 
+/**
+ * Что изменилось в индексе: подписчику, который пересчитывает свои сессии, нет смысла трогать остальные.
+ * Без аргумента подписчика зовут на первый полный список — тогда пересчитывается всё.
+ */
+export interface LogChange {
+  /**
+   * Задела ли запись эту сессию: её собственный лог, лог её порождённого треда Codex (токены потомков идут в
+   * итог родителя) или она ещё не привязана к логу (`providerSessionId === null`: привязка идёт по появлению логов).
+   */
+  affects(session: WorkSession): boolean;
+}
+
 export interface LogIndex {
   start(): Promise<void>;
   /** Запись индекса по `providerSessionId` сессии; `undefined` — лога нет. */
@@ -50,7 +62,7 @@ export interface LogIndex {
   usageIn(session: WorkSession, windows: readonly UsageWindow[]): Promise<UsageSummary | undefined>;
   /** Что известно про лог сессии для страховки `activityOf`; `null` — лога нет (4.3). */
   log(session: WorkSession): ActivityLog | null;
-  onChange(listener: () => void): () => void;
+  onChange(listener: (change?: LogChange) => void): () => void;
   /**
    * Перечитать один rollout-файл Codex и влить в индекс — как событие наблюдателя. На macOS `fs.watch` дозаписи
    * Codex не доставляет, поэтому `codex-log-poll.ts` зовёт это по опросу. Ошибку чтения (кроме «файла нет»)
@@ -67,6 +79,13 @@ export interface LogIndex {
 const logFamily = (provider: string): 'codex' | 'claude' => (provider === 'codex' ? 'codex' : 'claude');
 const logKey = (provider: string, id: string): string => `${logFamily(provider)}\u0000${id}`;
 
+/**
+ * Живой транскрипт перечитывается целиком (десятки-сотни МБ, до 0.6 с CPU), поэтому не чаще раза за это время.
+ * Статусы «работает/ждёт» ведут хуки и терминал, лог — только страховка с порогом тишины в десятки секунд:
+ * задержка на пару секунд ей не мешает. Первая запись после паузы по-прежнему ждёт обычные 300 мс.
+ */
+export const LIVE_REINDEX_MIN_INTERVAL_MS = 2000;
+
 /** Сколько срезов держит кэш (спека расхода токенов, 6.2). */
 const SLICE_CACHE_SIZE = 64;
 
@@ -75,7 +94,7 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
   const byId = new Map<string, SessionIndex>();
   /** Порождённые треды Codex по ключу родителя: родные признаки (`parent_thread_id`), не время и cwd. */
   const byParent = new Map<string, SessionIndex[]>();
-  const listeners = new Set<() => void>();
+  const listeners = new Set<(change?: LogChange) => void>();
   let watcher: SessionWatcher | undefined;
   let stopped = false;
   // Прерывает построение списка на остановке: чтение истории в гигабайты держало бы процесс хоста
@@ -96,12 +115,25 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
 
   /** Та же склейка, что и `applyChange` в `use-sessions.ts`: по файлу, свежие первыми. */
   const applyChange = (change: SessionChange): void => {
+    const previous = sessions.find((session) => session.file === change.file);
     sessions =
       change.kind === 'removed'
         ? sessions.filter((session) => session.file !== change.file)
         : [...sessions.filter((session) => session.file !== change.file), change.session];
     rebuild();
-    for (const listener of listeners) listener();
+    // Старая запись нужна для `removed` и для смены id в том же файле; к каждой добавляются предки по `parentId`.
+    const ids = new Set<string>();
+    for (const start of [previous, change.kind === 'updated' ? change.session : undefined]) {
+      for (let node = start; node !== undefined && !ids.has(logKey(node.provider, node.id)); ) {
+        ids.add(logKey(node.provider, node.id));
+        node = node.provider === 'codex' && node.parentId !== undefined ? byId.get(logKey('codex', node.parentId)) : undefined;
+      }
+    }
+    const affected: LogChange = {
+      affects: (session) =>
+        session.providerSessionId === null || ids.has(logKey(session.provider, session.providerSessionId)),
+    };
+    for (const listener of listeners) listener(affected);
   };
 
   const indexOf = (session: WorkSession): SessionIndex | undefined =>
@@ -191,7 +223,7 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
         [claudeSource(roots.claudeRoot), codexSource(roots.codexRoot)],
         // Сбой ре-парса одного файла не должен ронять хост — следующее событие
         // попробует снова, как и у остальных наблюдателей хоста.
-        { onError: () => {} },
+        { minIntervalMs: LIVE_REINDEX_MIN_INTERVAL_MS, onError: () => {} },
       );
     },
     index: indexOf,

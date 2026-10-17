@@ -174,6 +174,37 @@ describe('watchSessions', () => {
       watcher.close();
     }
   }, 20_000);
+
+  it('minIntervalMs: частые дозаписи перечитываются не чаще интервала, первая — сразу', async () => {
+    const project = path.join(dir, '-proj');
+    await mkdir(project, { recursive: true });
+    const file = path.join(project, 's1.jsonl');
+    await writeFile(file, `${JSON.stringify({ type: 'user', sessionId: 's1' })}\n`);
+
+    const changes: SessionChange[] = [];
+    const watcher = watchSessions((c) => changes.push(c), [claudeSource(dir)], {
+      debounceMs: 20,
+      minIntervalMs: 700,
+    });
+    try {
+      const append = (n: number): Promise<void> =>
+        appendFile(file, `${JSON.stringify({ type: 'custom-title', customTitle: `t${n}`, sessionId: 's1' })}\n`);
+      // Прогрев fs.watch: пока первое событие не пришло, пишем.
+      await expectChange(changes, () => append(0), (c) => c.kind === 'updated');
+      const before = changes.length;
+      const started = Date.now();
+      for (let n = 1; Date.now() - started < 1500; n += 1) {
+        await append(n);
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      // За 1.5 с + хвост без ограничения было бы десятки перечитываний; с интервалом 0.7 с — единицы.
+      expect(changes.length - before).toBeLessThanOrEqual(4);
+      expect(changes.length - before).toBeGreaterThanOrEqual(1);
+    } finally {
+      watcher.close();
+    }
+  }, 30_000);
 });
 
 describe('claudeSource', () => {
