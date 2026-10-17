@@ -1,10 +1,11 @@
 import path from 'node:path';
 import { Counter, oneLine, type TokenTotals } from '../counters.js';
 import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
+import { DEFAULT_TIMELINE_READER, readJsonlTail, type TailCursor, type TimelineReader } from '../jsonl-tail.js';
 import { INDEX_READ_CONCURRENCY, mapLimited } from '../map-limited.js';
-import type { SessionIndex } from '../session-index.js';
+import { missingFileError, type SessionIndex } from '../session-index.js';
 import { isPointerText } from '../work/delivery.js';
-import { createUsageLedger, type UsageCounters, type UsageWindow } from '../work/usage-ledger.js';
+import { createUsageLedger, type UsageCounters, type UsageObservation, type UsageWindow } from '../work/usage-ledger.js';
 import { codexUsageObservation } from '../work/usage-observations.js';
 import { assistantCwd } from '../discover.js';
 import { defaultCodexRoot, discoverCodexSessions } from './discover.js';
@@ -86,6 +87,210 @@ function waitYieldMs(args: string | null): number | null {
 }
 
 /**
+ * Состояние накопления индекса одного rollout-лога Codex: пустое → `feed` по записи → `build` собирает
+ * SessionIndex. Полное чтение (`indexCodexSession`) и дочитывание хвоста (`extendCodexSessionIndex`) идут
+ * через одно и то же, поэтому результат у них совпадает.
+ */
+export class CodexIndexAccumulator {
+  models = new Counter();
+  tools = new Counter();
+  roles = new Counter();
+  recordTypes = new Counter();
+
+  id: string | null = null;
+  cwd: string | null = null;
+  gitBranch: string | null = null;
+  version: string | null = null;
+  startedAt: string | null = null;
+  endedAt: string | null = null;
+  firstUserMessage: string | null = null;
+  lastUserRecordAt: string | null = null;
+  lastCounters = null as UsageCounters | null;
+  // Наблюдения копятся и проигрываются в ledger при сборке: сам ledger копировать нельзя.
+  observations: UsageObservation[] = [];
+  lastTurnEvent: SessionIndex['lastTurnEvent'];
+  // Открытые вызовы code mode по call_id (разбор 2026-10-16).
+  openCalls = new Map<string, { name: 'exec' | 'wait'; at: string; yieldMs: number | null }>();
+  spawned = false;
+  parentId: string | null = null;
+  forkedFrom: string | null = null;
+
+  /** Записей-объектов и битых строк среди принятых целыми строками. */
+  parsed = 0;
+  malformed = 0;
+
+  /** Независимая копия: счётчики, наблюдения и открытые вызовы копируются, прежнее состояние не мутируется. */
+  clone(): CodexIndexAccumulator {
+    return Object.assign(new CodexIndexAccumulator(), this, {
+      models: this.models.clone(),
+      tools: this.tools.clone(),
+      roles: this.roles.clone(),
+      recordTypes: this.recordTypes.clone(),
+      observations: [...this.observations],
+      openCalls: new Map(this.openCalls),
+    });
+  }
+
+  feed(raw: RawRecord): void {
+    const type = str(raw, 'type');
+    const payload = asRecord(raw['payload']);
+    this.recordTypes.add(type);
+
+    const at = str(raw, 'timestamp');
+    if (at !== null) {
+      if (this.startedAt === null || at < this.startedAt) this.startedAt = at;
+      if (this.endedAt === null || at > this.endedAt) this.endedAt = at;
+    }
+
+    if (payload === null) return;
+    const kind = str(payload, 'type');
+
+    switch (type) {
+      case 'session_meta': {
+        this.id ??= str(payload, 'id');
+        this.cwd ??= str(payload, 'cwd');
+        this.version ??= str(payload, 'cli_version');
+        this.gitBranch ??= str(asRecord(payload['git']), 'branch');
+        this.spawned ||= isSpawnedMeta(payload);
+        this.parentId ??= parentThreadId(payload);
+        this.forkedFrom ??= str(payload, 'forked_from_id');
+        break;
+      }
+
+      case 'turn_context': {
+        // Модель меняется между ходами — считаем каждый ход.
+        this.models.add(str(payload, 'model'));
+        this.cwd ??= str(payload, 'cwd');
+        break;
+      }
+
+      case 'response_item': {
+        if (kind === 'message') this.roles.add(str(payload, 'role'));
+        // Инструменты вызываются и обычные, и «кастомные» — считаем оба вида.
+        if (kind === 'function_call' || kind === 'custom_tool_call') {
+          this.tools.add(str(payload, 'name'));
+        }
+        const callId = str(payload, 'call_id');
+        if (callId !== null && at !== null) {
+          const name = str(payload, 'name');
+          if (kind === 'custom_tool_call' && name === 'exec') {
+            this.openCalls.set(callId, { name: 'exec', at, yieldMs: execYieldMs(str(payload, 'input')) });
+          } else if (kind === 'function_call' && name === 'wait') {
+            this.openCalls.set(callId, { name: 'wait', at, yieldMs: waitYieldMs(str(payload, 'arguments')) });
+          } else if (kind === 'custom_tool_call_output' || kind === 'function_call_output') {
+            this.openCalls.delete(callId);
+          }
+        }
+        break;
+      }
+
+      case 'event_msg': {
+        if (
+          at !== null &&
+          (kind === 'task_started' || kind === 'task_complete' || kind === 'turn_aborted')
+        ) {
+          this.lastTurnEvent = { type: kind, at };
+        }
+        if (kind === 'task_complete' || kind === 'turn_aborted') this.openCalls.clear();
+        // Заголовок сессии — первая РЕПЛИКА ЧЕЛОВЕКА. Сообщения из response_item
+        // для этого не годятся: там же едут системные инструкции и AGENTS.md.
+        if (kind === 'user_message') {
+          this.firstUserMessage ??= str(payload, 'message') ?? firstContentText(payload);
+          // Результаты инструментов у Codex едут не сообщениями пользователя, так
+          // что отметка страховки здесь — ровно реплика человека (раздел 4.3).
+          if (at !== null && (this.lastUserRecordAt === null || at > this.lastUserRecordAt)) {
+            this.lastUserRecordAt = at;
+          }
+        }
+        const observation = codexUsageObservation(raw);
+        if (observation !== null) {
+          this.lastCounters = observation.counters;
+          this.observations.push(observation);
+        }
+        break;
+      }
+
+      default:
+        break;
+    }
+  }
+
+  /**
+   * Собирает SessionIndex. `pendingMalformed` — оборванная последняя строка: полное чтение считает её битой,
+   * хотя в состояние она ещё не вошла.
+   */
+  build(
+    file: string,
+    { usageWindows, pendingMalformed = false }: { usageWindows?: readonly UsageWindow[]; pendingMalformed?: boolean } = {},
+  ): SessionIndex {
+    const { cwd, startedAt, endedAt, lastCounters, firstUserMessage, lastTurnEvent, spawned, parentId, forkedFrom } = this;
+    const ledger = createUsageLedger(usageWindows === undefined ? {} : { windows: usageWindows });
+    for (const observation of this.observations) ledger.observe(observation);
+
+    const durationMs =
+      startedAt !== null && endedAt !== null
+        ? Math.max(0, Date.parse(endedAt) - Date.parse(startedAt))
+        : null;
+
+    // `tokens` — для показа: неизвестное поле показывается нулём, а в `usage` остаётся null. Запись в кэш у
+    // Codex не наблюдается никогда, поэтому здесь по-прежнему 0.
+    const tokens: TokenTotals | null =
+      lastCounters === null
+        ? null
+        : {
+            input: lastCounters.input ?? 0,
+            output: lastCounters.output ?? 0,
+            cacheRead: lastCounters.cacheRead ?? 0,
+            cacheWrite: 0,
+          };
+
+    let openCodeCall: SessionIndex['openCodeCall'];
+    for (const call of this.openCalls.values()) {
+      if (openCodeCall === undefined || call.at < openCodeCall.at) openCodeCall = call;
+    }
+
+    const title = firstUserMessage === null ? null : oneLine(firstUserMessage);
+
+    return {
+      id: this.id ?? path.basename(file, '.jsonl'),
+      // Слага проекта у Codex нет — берём имя каталога из cwd.
+      project: cwd === null ? '—' : path.basename(cwd),
+      projectPath: cwd,
+      cwd,
+      gitBranch: this.gitBranch,
+      version: this.version,
+      file,
+      title,
+      titleSource: title === null ? null : 'first-text',
+      startedAt,
+      endedAt,
+      lastUserRecordAt: this.lastUserRecordAt,
+      // У Codex служебного хвоста после хода нет в этом смысле: время работы — время последней записи.
+      lastWorkRecordAt: endedAt,
+      ...(lastTurnEvent === undefined ? {} : { lastTurnEvent }),
+      ...(openCodeCall === undefined ? {} : { openCodeCall }),
+      durationMs,
+      records: this.parsed,
+      malformedLines: this.malformed + (pendingMalformed ? 1 : 0),
+      models: this.models.toObject(),
+      tools: this.tools.toObject(),
+      roles: this.roles.toObject(),
+      recordTypes: this.recordTypes.toObject(),
+      primaryModel: this.models.top(),
+      // Субагентов у Codex нет как явления.
+      subsessionCount: 0,
+      tokens,
+      usage: ledger.summary(),
+      provider: 'codex',
+      ...(spawned ? { spawned: true } : {}),
+      ...(parentId === null ? {} : { parentId }),
+      ...(forkedFrom === null ? {} : { forkedFrom }),
+      ...(firstUserMessage !== null && isPointerText(firstUserMessage) ? { firstPromptPointer: true as const } : {}),
+    };
+  }
+}
+
+/**
  * Индексирует один rollout-лог Codex в общую модель SessionIndex.
  *
  * Формат другой во всём (см. specs/runners.md): вся мета в одной записи
@@ -98,173 +303,53 @@ export async function indexCodexSession(
   signal?: AbortSignal,
   options: { usageWindows?: readonly UsageWindow[] } = {},
 ): Promise<SessionIndex> {
-  const models = new Counter();
-  const tools = new Counter();
-  const roles = new Counter();
-  const recordTypes = new Counter();
+  const acc = new CodexIndexAccumulator();
+  const stats = await forEachJsonlRecord(file, (raw) => acc.feed(raw), signal);
+  acc.parsed = stats.parsed;
+  acc.malformed = stats.malformed;
+  return acc.build(file, options.usageWindows === undefined ? {} : { usageWindows: options.usageWindows });
+}
 
-  let id: string | null = null;
-  let cwd: string | null = null;
-  let gitBranch: string | null = null;
-  let version: string | null = null;
-  let startedAt: string | null = null;
-  let endedAt: string | null = null;
-  let firstUserMessage: string | null = null;
-  let lastUserRecordAt: string | null = null;
-  let lastCounters = null as UsageCounters | null;
-  const ledger = createUsageLedger(options.usageWindows === undefined ? {} : { windows: options.usageWindows });
-  let lastTurnEvent: SessionIndex['lastTurnEvent'];
-  // Открытые вызовы code mode по call_id (разбор 2026-10-16).
-  const openCalls = new Map<string, { name: 'exec' | 'wait'; at: string; yieldMs: number | null }>();
-  let spawned = false;
-  let parentId: string | null = null;
-  let forkedFrom: string | null = null;
+/** Состояние дочитывания rollout-лога Codex: накопленное и место в файле. */
+export interface CodexIndexState {
+  acc: CodexIndexAccumulator;
+  cursor: TailCursor;
+}
 
-  const onRecord = (raw: RawRecord): void => {
-    const type = str(raw, 'type');
-    const payload = asRecord(raw['payload']);
-    recordTypes.add(type);
+/**
+ * То же, что `indexCodexSession`, но дочитывает только дописанное с места `previous` (нет новых байт — файл не
+ * открывается). Возвращает НОВОЕ состояние (прежнее не меняется) и SessionIndex, равный полному чтению текущего
+ * содержимого, включая момент, когда последняя строка оборвана. Файла нет — ошибка ENOENT, как у полного чтения.
+ */
+export async function extendCodexSessionIndex(
+  previous: CodexIndexState | null,
+  file: string,
+  { reader = DEFAULT_TIMELINE_READER, usageWindows }: { reader?: TimelineReader; usageWindows?: readonly UsageWindow[] } = {},
+): Promise<{ state: CodexIndexState; index: SessionIndex }> {
+  let draft: CodexIndexAccumulator | null = null;
+  const result = await readJsonlTail(previous?.cursor ?? null, file, reader, {
+    reset: () => {
+      draft = new CodexIndexAccumulator();
+    },
+    record: (raw) => {
+      draft ??= (previous as CodexIndexState).acc.clone();
+      draft.feed(raw);
+    },
+  });
+  if (result.missing) throw missingFileError(file);
 
-    const at = str(raw, 'timestamp');
-    if (at !== null) {
-      if (startedAt === null || at < startedAt) startedAt = at;
-      if (endedAt === null || at > endedAt) endedAt = at;
-    }
-
-    if (payload === null) return;
-    const kind = str(payload, 'type');
-
-    switch (type) {
-      case 'session_meta': {
-        id ??= str(payload, 'id');
-        cwd ??= str(payload, 'cwd');
-        version ??= str(payload, 'cli_version');
-        gitBranch ??= str(asRecord(payload['git']), 'branch');
-        spawned ||= isSpawnedMeta(payload);
-        parentId ??= parentThreadId(payload);
-        forkedFrom ??= str(payload, 'forked_from_id');
-        break;
-      }
-
-      case 'turn_context': {
-        // Модель меняется между ходами — считаем каждый ход.
-        models.add(str(payload, 'model'));
-        cwd ??= str(payload, 'cwd');
-        break;
-      }
-
-      case 'response_item': {
-        if (kind === 'message') roles.add(str(payload, 'role'));
-        // Инструменты вызываются и обычные, и «кастомные» — считаем оба вида.
-        if (kind === 'function_call' || kind === 'custom_tool_call') {
-          tools.add(str(payload, 'name'));
-        }
-        const callId = str(payload, 'call_id');
-        if (callId !== null && at !== null) {
-          const name = str(payload, 'name');
-          if (kind === 'custom_tool_call' && name === 'exec') {
-            openCalls.set(callId, { name: 'exec', at, yieldMs: execYieldMs(str(payload, 'input')) });
-          } else if (kind === 'function_call' && name === 'wait') {
-            openCalls.set(callId, { name: 'wait', at, yieldMs: waitYieldMs(str(payload, 'arguments')) });
-          } else if (kind === 'custom_tool_call_output' || kind === 'function_call_output') {
-            openCalls.delete(callId);
-          }
-        }
-        break;
-      }
-
-      case 'event_msg': {
-        if (
-          at !== null &&
-          (kind === 'task_started' || kind === 'task_complete' || kind === 'turn_aborted')
-        ) {
-          lastTurnEvent = { type: kind, at };
-        }
-        if (kind === 'task_complete' || kind === 'turn_aborted') openCalls.clear();
-        // Заголовок сессии — первая РЕПЛИКА ЧЕЛОВЕКА. Сообщения из response_item
-        // для этого не годятся: там же едут системные инструкции и AGENTS.md.
-        if (kind === 'user_message') {
-          firstUserMessage ??= str(payload, 'message') ?? firstContentText(payload);
-          // Результаты инструментов у Codex едут не сообщениями пользователя, так
-          // что отметка страховки здесь — ровно реплика человека (раздел 4.3).
-          if (at !== null && (lastUserRecordAt === null || at > lastUserRecordAt)) {
-            lastUserRecordAt = at;
-          }
-        }
-        const observation = codexUsageObservation(raw);
-        if (observation !== null) {
-          lastCounters = observation.counters;
-          ledger.observe(observation);
-        }
-        break;
-      }
-
-      default:
-        break;
-    }
-  };
-  const stats = await forEachJsonlRecord(file, onRecord, signal);
-
-  const durationMs =
-    startedAt !== null && endedAt !== null
-      ? Math.max(0, Date.parse(endedAt) - Date.parse(startedAt))
-      : null;
-
-  // `tokens` — для показа: неизвестное поле показывается нулём, а в `usage` остаётся null. Запись в кэш у
-  // Codex не наблюдается никогда, поэтому здесь по-прежнему 0.
-  const tokens: TokenTotals | null =
-    lastCounters === null
-      ? null
-      : {
-          input: lastCounters.input ?? 0,
-          output: lastCounters.output ?? 0,
-          cacheRead: lastCounters.cacheRead ?? 0,
-          cacheWrite: 0,
-        };
-
-  let openCodeCall: SessionIndex['openCodeCall'];
-  for (const call of openCalls.values()) {
-    if (openCodeCall === undefined || call.at < openCodeCall.at) openCodeCall = call;
+  // Счётчики строк входят в состояние, только если появились целые строки; прежнее не трогаем.
+  let acc = (draft as CodexIndexAccumulator | null) ?? (previous as CodexIndexState).acc;
+  if (result.parsed > 0 || result.malformed > 0) {
+    if (acc === (previous as CodexIndexState | null)?.acc) acc = acc.clone();
+    acc.parsed += result.parsed;
+    acc.malformed += result.malformed;
   }
-
-  const title = firstUserMessage === null ? null : oneLine(firstUserMessage);
-
-  return {
-    id: id ?? path.basename(file, '.jsonl'),
-    // Слага проекта у Codex нет — берём имя каталога из cwd.
-    project: cwd === null ? '—' : path.basename(cwd),
-    projectPath: cwd,
-    cwd,
-    gitBranch,
-    version,
-    file,
-    title,
-    titleSource: title === null ? null : 'first-text',
-    startedAt,
-    endedAt,
-    lastUserRecordAt,
-    // У Codex служебного хвоста после хода нет в этом смысле: время работы — время последней записи.
-    lastWorkRecordAt: endedAt,
-    ...(lastTurnEvent === undefined ? {} : { lastTurnEvent }),
-    ...(openCodeCall === undefined ? {} : { openCodeCall }),
-    durationMs,
-    records: stats.parsed,
-    malformedLines: stats.malformed,
-    models: models.toObject(),
-    tools: tools.toObject(),
-    roles: roles.toObject(),
-    recordTypes: recordTypes.toObject(),
-    primaryModel: models.top(),
-    // Субагентов у Codex нет как явления.
-    subsessionCount: 0,
-    tokens,
-    usage: ledger.summary(),
-    provider: 'codex',
-    ...(spawned ? { spawned: true } : {}),
-    ...(parentId === null ? {} : { parentId }),
-    ...(forkedFrom === null ? {} : { forkedFrom }),
-    ...(firstUserMessage !== null && isPointerText(firstUserMessage) ? { firstPromptPointer: true as const } : {}),
-  };
+  const index = acc.build(file, {
+    pendingMalformed: result.cursor.pendingMalformed,
+    ...(usageWindows === undefined ? {} : { usageWindows }),
+  });
+  return { state: { acc, cursor: result.cursor }, index };
 }
 
 /** Индекс всех сессий Codex, свежие первыми. `signal` прерывает чтение — как у `buildIndex`. */

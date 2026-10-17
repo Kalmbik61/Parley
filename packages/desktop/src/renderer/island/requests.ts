@@ -88,7 +88,7 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
     requestIds.set(sessionKey, id);
     let snapshot: Result<'feed.snapshot'> | null;
     try {
-      snapshot = await current('feed.snapshot', { ref });
+      snapshot = await current('feed.snapshot', { ref, scope: 'attention' });
     } catch {
       snapshot = null;
     }

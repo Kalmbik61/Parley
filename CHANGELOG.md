@@ -4,6 +4,13 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Fixed
+
+- **The host no longer re-reads whole agent transcripts while agents work.** Each time an agent wrote to its log, the host parsed the entire file again, along with every subagent log of the session; with a dozen busy agents this took about 60 % of the host's CPU time. The host now reads only what was appended since the last read: on a 160 MB transcript an update costs about 4 ms of CPU instead of about 500 ms.
+- **The island and notifications no longer download the whole chat of a session.** To show a waiting request or the last answer, the window asked the host for the entire chat of the session (up to 4 MB) every time a session started waiting or finished a turn. In two hours with 18 sessions that came to about 530 MB, and the window's other requests queued behind it for up to a minute and a half. They now get only the waiting requests and the last answer.
+
 ## 0.15.1
 
 Parley stays responsive with many agents at work: the host stops re-reading work maps and agent logs over and over, and agent sessions no longer run your own status line. A process that crashes holding the works index lock no longer leaves Parley unable to save, the window says why a session did not start, and the assistant's answer stays on the island until you close it.

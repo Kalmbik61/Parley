@@ -192,6 +192,51 @@ describe('снимок и дельты', () => {
     }));
   });
 
+  it('scope attention: ждущие карточки и последний text после последнего prompt, в порядке ленты', async () => {
+    start();
+    send(prompt('go'));
+    send(display('m0', 0, 'old', true));
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    send(permission('Bash', { command: 'ls' }));
+    const question = send(pre('q1', 'AskUserQuestion', { questions: QUESTIONS }));
+    const questionCard = ofKind((await service.snapshot(REF)).items, 'question')[0] as FeedQuestionCard;
+    service.decide(REF, questionCard.cardId, { kind: 'question', answers: { 'Which fruit?': 'Pear' } });
+    expect(question.responses).toHaveLength(1);
+    send(display('m1', 0, 'one', true));
+    send(display('m2', 0, 'two', true));
+    send(pre('pl1', 'ExitPlanMode', PLAN));
+    send(permission('ExitPlanMode', PLAN));
+
+    const full = await service.snapshot(REF);
+    const cut = await service.snapshot(REF, undefined, 'attention');
+
+    expect(cut.items.map((item) => item.kind)).toEqual(['permission', 'text', 'plan']);
+    expect(ofKind(cut.items, 'text')[0]).toMatchObject({ text: 'two' });
+    expect(full.items.length).toBeGreaterThan(cut.items.length);
+    expect(ofKind(full.items, 'text')).toHaveLength(3);
+    expect(cut).toMatchObject({ revision: full.revision, schemaVersion: full.schemaVersion, mode: full.mode });
+    expect(fakes.log.info).toHaveBeenLastCalledWith('лента: снимок', expect.objectContaining({
+      scope: 'attention',
+      items: 3,
+      sentBytes: expect.any(Number),
+    }));
+  });
+
+  it('scope attention: пустая лента — пусто; без prompt — последний text вообще; без text — только карточки', async () => {
+    start();
+    expect((await service.snapshot(REF, undefined, 'attention')).items).toEqual([]);
+
+    send(display('m1', 0, 'one', true));
+    send(display('m2', 0, 'two', true));
+    expect((await service.snapshot(REF, undefined, 'attention')).items.map((item) => item.kind)).toEqual(['text']);
+    expect(ofKind((await service.snapshot(REF, undefined, 'attention')).items, 'text')[0]).toMatchObject({ text: 'two' });
+
+    send(prompt('go'));
+    expect((await service.snapshot(REF, undefined, 'attention')).items).toEqual([]);
+    send(permission('Bash', { command: 'ls' }));
+    expect((await service.snapshot(REF, undefined, 'attention')).items.map((item) => item.kind)).toEqual(['permission']);
+  });
+
   it('дельты идут подписчику по revision, снимок сбрасывает пачку и продолжает счёт', async () => {
     vi.useFakeTimers();
     start();

@@ -286,6 +286,10 @@ export const METHODS = {
       .string()
       .regex(/^[A-Za-z0-9_-]{1,80}$/)
       .optional(),
+    // `attention` — урезанный снимок для острова и уведомлений: в `items` только ждущие карточки и последний
+    // ответ модели после последнего промпта (остальное в `FeedSnapshot` прежнее). Без поля — вся лента.
+    // С `agentId` поле игнорируется. Старый хост поле молча отбрасывает и отдаёт полный снимок.
+    scope: z.enum(['attention']).optional(),
   }),
   'feed.subscribe': z.object({ ref: sessionRef }),
   'feed.unsubscribe': z.object({ ref: sessionRef }),

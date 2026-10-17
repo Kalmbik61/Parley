@@ -7,6 +7,13 @@ export class Counter {
     this.counts.set(key, (this.counts.get(key) ?? 0) + 1);
   }
 
+  /** Независимая копия: порядок первого появления ключей (он решает ничьи) сохраняется. */
+  clone(): Counter {
+    const copy = new Counter();
+    for (const [key, count] of this.counts) copy.counts.set(key, count);
+    return copy;
+  }
+
   /** Записи в порядке убывания частоты — так их и показывает UI. */
   toObject(): Record<string, number> {
     return Object.fromEntries([...this.counts].sort((a, b) => b[1] - a[1]));
