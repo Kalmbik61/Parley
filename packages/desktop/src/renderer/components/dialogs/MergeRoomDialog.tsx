@@ -18,7 +18,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { WorkSession } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
-import { errorText, S } from '../../../shared/strings.js';
+import { S, startErrorText } from '../../../shared/strings.js';
 import { cn } from '../../lib/cn.js';
 import { openWhenListed } from '../../lib/open-when-listed.js';
 import { sessionRowLabel } from '../../lib/participant.js';
@@ -102,7 +102,7 @@ export function MergeRoomDialog({ open, bridge, projectPath, workId, dragged, ta
       onOpenChange(false);
     } catch (err) {
       console.warn('[parley] rooms.create', err);
-      setError(errorText(decodeIpcError(err).code, S.errors.actions.createRoom));
+      setError(startErrorText(decodeIpcError(err), S.errors.actions.createRoom));
     } finally {
       setBusy(false);
     }

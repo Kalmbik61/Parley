@@ -23,7 +23,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
-import { errorText, providerName, S } from '../../shared/strings.js';
+import { errorText, providerName, S, startErrorText } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
 import { defaultProvider, type ProviderOption } from '../lib/default-provider.js';
 import { openWhenListed } from '../lib/open-when-listed.js';
@@ -245,7 +245,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
     } catch (err) {
       console.warn('[parley] sessions.create', err);
       setCreatedWork(work);
-      setError(errorText(decodeIpcError(err).code, S.errors.actions.createSession));
+      setError(startErrorText(decodeIpcError(err), S.errors.actions.createSession));
       setBusy(false);
     }
   };

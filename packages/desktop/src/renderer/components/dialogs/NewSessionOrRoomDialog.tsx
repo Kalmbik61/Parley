@@ -83,7 +83,7 @@ import {
 import type { BacklogMethodParams, Result, RoleSummary } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
-import { errorText, providerName, S } from '../../../shared/strings.js';
+import { errorText, providerName, S, startErrorText } from '../../../shared/strings.js';
 import { useLayoutStore } from '../../layout/store.js';
 import { cn } from '../../lib/cn.js';
 import { defaultProvider } from '../../lib/default-provider.js';
@@ -663,13 +663,8 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
         } catch (err) {
           if (!backlog) console.warn('[parley] sessions.create', err);
           const failure = decodeIpcError(err);
-          // Бюджет исчерпал кто-то другой за время диалога: хост назвал предел сам — показываем его слова.
-          done[row.key] = {
-            status: 'failed',
-            message: failure.data?.['code'] === 'resource-budget'
-              ? S.dialogs.newSession.budgetRefused(failure.message)
-              : errorText(failure.code, S.errors.actions.createSession),
-          };
+          // Бюджет исчерпал кто-то другой за время диалога: `startErrorText` называет предел, где он и что делать.
+          done[row.key] = { status: 'failed', message: startErrorText(failure, S.errors.actions.createSession) };
           allStarted = false;
         }
         // Диалог закрыли, пока шёл этот агент, — следующих не запускаем и итог в форму не пишем.
@@ -734,7 +729,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
       } catch (err) {
         if (!backlog) console.warn('[parley] rooms.create', err);
         if (launch.cancelled) return;
-        setError(errorText(decodeIpcError(err).code, S.errors.actions.createRoom));
+        setError(startErrorText(decodeIpcError(err), S.errors.actions.createRoom));
       }
     } finally {
       if (launchRef.current === launch) launchRef.current = null;

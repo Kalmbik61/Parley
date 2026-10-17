@@ -654,6 +654,17 @@ describe('AppShell — бросок сессии на строки сайдба�
     expect(useUiStore.getState().roomExpanded[roomKey(key, 'r-01')]).toBeUndefined();
   });
 
+  it('rooms.addMember отказан бюджетом — тост называет лимит комнаты и что сделать', async () => {
+    vi.mocked(toast).mockClear();
+    bridge.setHandler('rooms.addMember', () => {
+      throw { code: 'conflict', message: 'raw host text', data: { code: 'resource-budget', reason: 'concurrent', scope: 'room', limit: 6, used: 6 } };
+    });
+    await renderShell(entries());
+    await activate(key);
+    drop('s-01', { workKey: key, kind: 'room-row', roomId: 'r-01' });
+    await waitFor(() => expect(vi.mocked(toast)).toHaveBeenCalledWith(`Couldn't add the session to the room: 6 of 6 sessions are already running in this room. Put one to sleep or raise "Running sessions, room" in Settings.`));
+  });
+
   it('нельзя — ни вызова, ни диалога: на себя, в свою комнату, на закрытую, закрытую сессию, вкладку', async () => {
     await setup();
     drop('s-01', { workKey: key, kind: 'session-row', sessionId: 's-01' }); // на себя

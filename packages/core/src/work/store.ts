@@ -14,12 +14,13 @@ import {
   writeFile,
   type FileHandle,
 } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import path from 'node:path';
 import { CONTEXT_DIR, contextFile } from '../context-fill.js';
 import { LIMITS_DIR, limitsFile } from '../limits.js';
 import { envValue, HOME_DIR, LEGACY_HOME_DIR, type Env } from '../names.js';
 import { bumpWorkId, nextWorkId, parseMap } from './map.js';
+import { isAlive } from './pid-alive.js';
 import { PRE_JOURNAL_STATE_IGNORE, PRE_MEMORY_STATE_IGNORE, PRE_RECIPES_STATE_IGNORE, ensureStateDir, isDirectorySync, stateDir, SHARED_STATE_IGNORE } from './state-dir.js';
 import { resolveSharedProjectContext, sharedPathIgnored } from './project-context.js';
 import type { ProjectContextOptions, SharedProjectContext } from './project-context.js';
@@ -33,12 +34,37 @@ import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js
  * Пустая переменная — то же, что незаданная. `env` и `userHome` подменяет тест.
  */
 export function parleyHome(env: Env = process.env, userHome: string = homedir()): string {
+  const resolved = resolveParleyHome(env, userHome);
+  refuseRealHomeUnderTest(resolved);
+  return resolved;
+}
+
+function resolveParleyHome(env: Env, userHome: string): string {
   const explicit = envValue(env, 'HOME');
   if (explicit !== undefined) return explicit;
   const current = path.join(userHome, HOME_DIR);
   if (isDirectorySync(current)) return current;
   const legacy = path.join(userHome, LEGACY_HOME_DIR);
   return isDirectorySync(legacy) ? legacy : current;
+}
+
+/**
+ * Предохранитель: под vitest (настоящее окружение процесса, не параметр `env`) дом не может оказаться настоящим
+ * `~/.parley` или `~/.harnas` — иначе тест писал бы в данные человека (инцидент 17.10.2026). Домашний каталог берётся
+ * из базы пользователей: `HOME` песочницы его не подменяет.
+ */
+function refuseRealHomeUnderTest(resolved: string): void {
+  if (process.env['VITEST'] === undefined) return;
+  const target = path.resolve(resolved);
+  for (const dir of [HOME_DIR, LEGACY_HOME_DIR]) {
+    const real = path.join(userInfo().homedir, dir);
+    const relative = path.relative(real, target);
+    const outside = relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+    if (!outside)
+      throw new Error(
+        `A test resolved the real Parley home (${target}): the sandbox test/sandbox-home.ts is not applied — was vitest run outside the package config?`,
+      );
+  }
 }
 
 /** Глобальный индекс работ: все работы всех проектов. */
@@ -100,8 +126,9 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * и повторить на следующем событии (план, кусок 1.4).
  */
 export class MapLockTimeoutError extends Error {
-  constructor(lockFile: string, timeoutMs: number) {
-    super(`lock ${lockFile} was not released within ${timeoutMs} ms`);
+  /** `holder` — необязательный хвост про хозяина блокировки, см. `describeHolder`. */
+  constructor(lockFile: string, timeoutMs: number, holder = '') {
+    super(`lock ${lockFile} was not released within ${timeoutMs} ms${holder}`);
     this.name = 'MapLockTimeoutError';
   }
 }
@@ -118,27 +145,135 @@ export class WorkNotFoundError extends Error {
   }
 }
 
-/** Эксклюзивное создание файла — атомарная операция файловой системы. */
-async function acquireLock(lockFile: string, timeoutMs: number,
-  timeoutError: () => Error = () => new MapLockTimeoutError(lockFile, timeoutMs), mode = 0o666,
-): Promise<FileHandle> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    try {
-      return await open(lockFile, 'wx', mode);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      if (Date.now() >= deadline) {
-        throw timeoutError();
-      }
-      await delay(RETRY_MS);
-    }
+/**
+ * Файл блокировки без pid старше этого возраста остался от упавшего процесса прежней версии: окно между `open` и
+ * записью pid — микросекунды, свежий пустой файл — это чужой процесс, который вот-вот допишет свой pid.
+ */
+const STALE_UNOWNED_LOCK_MS = 10_000;
+
+/**
+ * Осиротела ли блокировка: pid хозяина мёртв; файл без pid (прежняя версия, окно между `open` и записью) —
+ * старше 10 с. Не обычный файл (висячий симлинк, каталог) и любая ошибка чтения — не осиротела: ждём до таймаута,
+ * как до перехвата, а не крутим цикл.
+ */
+async function isOrphaned(file: string): Promise<boolean> {
+  try {
+    const info = await lstat(file);
+    if (!info.isFile()) return false;
+    // Строгий разбор: недописанное «12» из «12345\n» — не pid, судим по возрасту.
+    const pid = /^(\d+)\n$/.exec(await readFile(file, 'utf8'))?.[1];
+    return pid !== undefined ? !isAlive(Number(pid)) : Date.now() - info.mtimeMs > STALE_UNOWNED_LOCK_MS;
+  } catch {
+    return false;
   }
 }
 
+/**
+ * Guard перехвата судим только по возрасту (`lstat`, без разбора содержимого): pid в нём не пишется, и подброшенный
+ * извне файл с живым pid, каталог или симлинк иначе выключили бы перехват этой блокировки навсегда.
+ */
+async function staleGuard(file: string): Promise<boolean> {
+  try {
+    return Date.now() - (await lstat(file)).mtimeMs > STALE_UNOWNED_LOCK_MS;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Снимает блокировку, чей хозяин мёртв (процесс упал, не отпустив её), и сообщает, что снял: тогда `open` стоит
+ * повторить сразу. Живой pid (в том числе наш собственный) не трогаем никогда.
+ *
+ * Перепроверка и `rm` идут под guard-файлом `<lock>.steal` (`wx`): перехватывает один процесс за раз, поэтому второй
+ * ожидающий не удалит блокировку, которую первый уже снял и взял заново. Guard живёт микросекунды и pid не пишет;
+ * guard старше 10 с остался от вора, упавшего внутри, — его снимаем. Окно TOCTOU остаётся только у снятия такого
+ * guard-а и у `release*` — второго порядка, после уже случившейся аномалии.
+ */
+async function removeOrphanedLock(lockFile: string): Promise<boolean> {
+  if (!(await isOrphaned(lockFile))) return false;
+  const guard = `${lockFile}.steal`;
+  let handle: FileHandle;
+  try {
+    handle = await open(guard, 'wx', 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST' && (await staleGuard(guard))) await rm(guard, { force: true }).catch(() => {});
+    return false;
+  }
+  try {
+    if (!(await isOrphaned(lockFile))) return false;
+    await rm(lockFile, { force: true });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await handle.close().catch(() => {});
+    await rm(guard, { force: true }).catch(() => {});
+  }
+}
+
+const humanAge = (ms: number): string => {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds} s`;
+  return seconds < 3600 ? `${Math.round(seconds / 60)} min` : `${Math.round(seconds / 3600)} h`;
+};
+
+/** Хвост сообщения о таймауте: кто держит блокировку и сколько. Файл не читается — пустая строка. */
+async function describeHolder(lockFile: string): Promise<string> {
+  try {
+    const info = await lstat(lockFile);
+    const age = humanAge(Date.now() - info.mtimeMs);
+    const pid = /^(\d+)\n$/.exec(await readFile(lockFile, 'utf8'))?.[1];
+    return pid === undefined
+      ? ` (no owner pid, file age ${age})`
+      : ` (held by pid ${pid}, ${isAlive(Number(pid)) ? 'alive' : 'dead'}, for ${age})`;
+  } catch {
+    return '';
+  }
+}
+
+/** Эксклюзивное создание файла — атомарная операция файловой системы; в файл пишется pid хозяина. */
+async function acquireLock(lockFile: string, timeoutMs: number,
+  timeoutError: (holder: string) => Error = (holder) => new MapLockTimeoutError(lockFile, timeoutMs, holder), mode = 0o666,
+): Promise<FileHandle> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let handle: FileHandle;
+    try {
+      handle = await open(lockFile, 'wx', mode);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (await removeOrphanedLock(lockFile)) continue;
+      if (Date.now() >= deadline) {
+        throw timeoutError(await describeHolder(lockFile));
+      }
+      await delay(RETRY_MS);
+      continue;
+    }
+    try {
+      await handle.writeFile(`${process.pid}\n`);
+    } catch (error) {
+      await handle.close();
+      await rm(lockFile, { force: true });
+      throw error;
+    }
+    return handle;
+  }
+}
+
+/**
+ * Снимает файл блокировки, только если это всё ещё наш файл: перехват мог отдать путь новому хозяину. Идентичность
+ * берём до `close` — пока дескриптор открыт, inode не переиспользуется.
+ */
 async function releaseLock(handle: FileHandle, lockFile: string): Promise<void> {
-  await handle.close();
-  await rm(lockFile, { force: true });
+  try {
+    const own = await handle.stat();
+    const current = await lstat(lockFile);
+    if (current.dev === own.dev && current.ino === own.ino) await rm(lockFile);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  } finally {
+    await handle.close();
+  }
 }
 
 async function withLock<T>(
@@ -207,15 +342,16 @@ export async function deleteSessionFiles(
 /**
  * Удаляет работу целиком: каталог `<состояние>/works/<id>` со всем содержимым,
  * включая артефакты, и её запись в глобальном индексе. Каталога уже нет —
- * не ошибка: запись из индекса всё равно снимается.
+ * не ошибка: запись из индекса всё равно снимается. Каталог удаляется только
+ * после взятия блокировки индекса: отказ блокировки ничего не стирает.
  */
 export async function deleteWorkFiles(
   projectPath: string,
   workId: string,
   { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS }: WriteOptions = {},
 ): Promise<void> {
-  await rm(workPaths(projectPath, workId).dir, { recursive: true, force: true });
-  await withWorksIndex(lockTimeoutMs, (index) => {
+  await withWorksIndex(lockTimeoutMs, async (index) => {
+    await rm(workPaths(projectPath, workId).dir, { recursive: true, force: true });
     index.works = index.works.filter(
       (work) => !(work.id === workId && work.projectPath === projectPath),
     );
@@ -596,20 +732,8 @@ export async function withSharedProjectLock<T>(paths: SharedProjectPaths, body: 
   const timeout = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
   if (!Number.isFinite(timeout) || timeout < 0 || timeout > 30_000) throw new SharedStateError('backlog-invalid');
   const handle = await acquireLock(paths.lock, timeout, () => new SharedStateError('backlog-lock-timeout'), 0o600);
-  const identity = await handle.stat();
   try { return await body(); }
-  finally {
-    await releaseSharedLock(handle, paths.lock, identity);
-  }
-}
-
-async function releaseSharedLock(handle: FileHandle, file: string, identity: { dev: number; ino: number }): Promise<void> {
-  await handle.close();
-  // Do not remove an observed replacement lock. Portable compare/unlink still has a small TOCTOU.
-  try {
-    const current = await lstat(file);
-    if (current.dev === identity.dev && current.ino === identity.ino) await rm(file);
-  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  finally { await releaseLock(handle, paths.lock); }
 }
 
 /** Private history receipt lock: selected checkout only, without native main discovery. */
@@ -625,9 +749,8 @@ export async function withLocalHistoryLock<T>(root: string, parent: string, body
   if (!Number.isFinite(timeout) || timeout < 0 || timeout > 30_000) throw new SharedStateError('backlog-invalid');
   const file = path.join(parent, 'history.lock');
   const handle = await acquireLock(file, timeout, () => new SharedStateError('backlog-lock-timeout'), 0o600);
-  let identity: { dev: number; ino: number } | undefined;
-  try { identity = await handle.stat(); await verify(); return await body(); }
-  finally { if (identity) await releaseSharedLock(handle, file, identity); else await handle.close(); }
+  try { await verify(); return await body(); }
+  finally { await releaseLock(handle, file); }
 }
 
 /** Read-only diagnostics: never creates state or migrates an existing ignore file. */

@@ -10,6 +10,9 @@ export default defineConfig({
     // Рендерер понадобится jsdom, начиная с куска 1.10 — остальной код (main,
     // preload, shared) тестируется как обычный node-процесс.
     environmentMatchGlobs: [['src/renderer/**', 'jsdom']],
+    // Дом тестового процесса — временный каталог, как у core и host: main пишет в `~/.parley/desktop`, и тест без
+    // песочницы писал бы в данные человека (а `parleyHome()` под vitest настоящий дом отвергает).
+    setupFiles: ['../core/test/sandbox-home.ts'],
     // `dist/**` — вывод `electron-builder` (кусок 1.13): внутри упакованного
     // `.app` лежит `pnpm deploy` хоста целиком, вместе с его `*.test.ts` —
     // без исключения vitest пытается прогнать их тут, под чужим tsconfig.
