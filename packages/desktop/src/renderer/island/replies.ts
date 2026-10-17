@@ -48,7 +48,7 @@ export const useIslandReplies = create<IslandRepliesState>((set) => {
     let text: string | null = null;
     let failed = false;
     try {
-      text = lastReply((await current('feed.snapshot', { ref })).items);
+      text = lastReply((await current('feed.snapshot', { ref, scope: 'attention' })).items);
     } catch {
       failed = true;
     }

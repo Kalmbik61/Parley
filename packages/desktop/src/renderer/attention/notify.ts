@@ -385,7 +385,7 @@ export function wireAttentionNotifications(
     pendingAsk: (ref) =>
       hostMethods(useHostStore.getState().status).has('feed.snapshot')
         ? bridge
-            .call('feed.snapshot', { ref })
+            .call('feed.snapshot', { ref, scope: 'attention' })
             .then((snapshot) => pendingAskOf(snapshot, ref.projectPath))
             .catch(() => null)
         : Promise.resolve(null),
