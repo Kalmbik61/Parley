@@ -230,7 +230,9 @@ export function createLogIndex(roots: MetricsRoots = {}, options: LogIndexOption
     const cached = subagentCache.get(file);
     if (cached !== undefined && now() - cached.at < subagentTtlMs) return cached.subagents;
     const { subagents } = await discoverSession(file, root);
+    subagentCache.delete(file);
     subagentCache.set(file, { at: now(), subagents });
+    if (subagentCache.size > timelineCacheSize) subagentCache.delete(subagentCache.keys().next().value as string);
     return subagents;
   };
   /** Подпись прочитанных файлов: размер и mtime каждого; пропавший файл — своя метка. */
