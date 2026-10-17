@@ -246,7 +246,7 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
           </ToggleGroupItem>
         </ToggleGroup>
       </span>
-      {session && entry ? <RoleChip revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`} role={session.role} sessionRef={{ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }} /> : null}
+      {session && entry ? <RoleChip cwd={session.worktree?.path ?? entry.projectPath} revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`} role={session.role} sessionRef={{ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }} /> : null}
       <span className="min-w-0 flex-1" />
       {metrics === null ? null : <SessionUsageChip metrics={metrics} />}
       {contextChip}

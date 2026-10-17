@@ -305,7 +305,7 @@ export const SessionRow = memo(function SessionRow({
           ) : (
             <span className={cn('min-w-[5ch] flex-1 truncate', selected && 'font-bold')}>{label}</span>
           )}
-          <RoleChip revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`} role={session.role} sessionRef={{ projectPath, workId, sessionId: session.id }} bridge={bridge} />
+          <RoleChip cwd={session.worktree?.path ?? projectPath} revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`} role={session.role} sessionRef={{ projectPath, workId, sessionId: session.id }} bridge={bridge} />
           {lead ? (
             <span data-lead title={S.sidebar.lead} className="shrink-0 text-[11px] text-accent-700">
               ★

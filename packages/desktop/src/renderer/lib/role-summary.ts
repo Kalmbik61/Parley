@@ -1,59 +1,41 @@
-import { createElement, useEffect, useState } from 'react';
+import { createElement, useEffect, useRef } from 'react';
 import type { SessionRole } from '@parley/core';
-import type { Result, RoleSummary, SessionRef } from '@parley/protocol';
+import type { RoleSummary, SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
-
-/** Ответ `roles.list` нужен плашкам одной пачки монтирования; дольше держать нельзя — новая роль должна появиться сразу. */
-const ROLES_TTL_MS = 3_000;
-const rolesCache = new WeakMap<object, Map<string, { at: number; value: Promise<Result<'roles.list'>> }>>();
+import { useRolesStore } from '../store/roles.js';
 
 /**
- * Плашка роли есть у каждой сессии в сайдбаре, и все они монтируются разом: запрос на плашку давал пачку
- * одинаковых вызовов (на хосте — по процессу Codex на каждый). Одинаковый ключ — сессия и ревизия запуска —
- * делит один вызов; кэш на мост, чтобы разные соединения не делили ответы.
+ * Current display metadata only. Launch permissions are independently resolved by core.
+ * Роли берутся из общего стора по рабочему каталогу (`cwd`, по умолчанию `projectPath` сессии): пачка плашек
+ * одного каталога даёт один `roles.list`. Смена `revision` после монтирования перечитывает роли принудительно,
+ * и пока идёт перезагрузка, хук отдаёт `null` — замок старой ревизии не висит; обновление по TTL роли не прячет.
  */
-function loadRoles(bridge: ParleyBridge, projectPath: string, workId: string, sessionId: string, revision: string): Promise<Result<'roles.list'>> {
-  let cache = rolesCache.get(bridge);
-  if (!cache) rolesCache.set(bridge, cache = new Map());
-  const key = `${projectPath}\0${workId}\0${sessionId}\0${revision}`;
-  const now = Date.now();
-  const hit = cache.get(key);
-  if (hit && now - hit.at < ROLES_TTL_MS) return hit.value;
-  for (const [other, old] of cache) if (now - old.at >= ROLES_TTL_MS) cache.delete(other);
-  const entry = { at: now, value: bridge.call('roles.list', { projectPath, ref: { projectPath, workId, sessionId } }) };
-  cache.set(key, entry);
-  const map = cache;
-  entry.value.catch(() => { if (map.get(key) === entry) map.delete(key); });
-  return entry.value;
-}
-
-/** Current display metadata only. Launch permissions are independently resolved by core. */
-export function useRoleSummary(bridge: ParleyBridge | undefined, sessionRef: SessionRef | undefined, role: SessionRole | null | undefined, revision = ''): RoleSummary | null {
-  const [summary, setSummary] = useState<{ key: string; value: RoleSummary | null } | null>(null);
+export function useRoleSummary(bridge: ParleyBridge | undefined, sessionRef: SessionRef | undefined, role: SessionRole | null | undefined, revision = '', cwd?: string): RoleSummary | null {
   const id = role ? `${role.source}:${role.name}` : null;
   const projectPath = sessionRef?.projectPath, workId = sessionRef?.workId, sessionId = sessionRef?.sessionId;
-  const key = `${projectPath}\0${workId}\0${sessionId}\0${id}\0${revision}`;
+  const dir = cwd ?? projectPath;
+  const entry = useRolesStore(state => dir === undefined ? undefined : state.byCwd[dir]);
+  const seen = useRef(revision);
   useEffect(() => {
-    setSummary(null);
-    if (!bridge || !id || projectPath === undefined || workId === undefined || sessionId === undefined) return;
-    let stale = false;
-    loadRoles(bridge, projectPath, workId, sessionId, revision).then(result => {
-      if (!stale) setSummary({ key, value: result.roles.find(item => item.id === id) ?? null });
-    }).catch(() => { /* Older/unavailable host: no inferred read-only flag. */ });
-    return () => { stale = true; };
-  }, [bridge, id, projectPath, workId, sessionId, key, revision]);
-  return summary?.key === key ? summary.value : null;
+    if (!bridge || !id || projectPath === undefined || workId === undefined || sessionId === undefined || dir === undefined) return;
+    const force = seen.current !== revision;
+    seen.current = revision;
+    useRolesStore.getState().load(bridge, { projectPath, ...(cwd === undefined ? {} : { ref: { projectPath, workId, sessionId } }), cwd: dir, ...(force ? { force: true } : {}) });
+  }, [bridge, id, projectPath, workId, sessionId, dir, revision]);
+  if (!id || !entry || entry.status === 'reloading') return null;
+  if (entry.status === 'loading' && entry.roles.length === 0) return null;
+  return entry.roles.find(item => item.id === id) ?? null;
 }
-export interface RoleChipProps { role: SessionRole | null | undefined; sessionRef?: SessionRef; bridge?: ParleyBridge; revision?: string }
+export interface RoleChipProps { role: SessionRole | null | undefined; sessionRef?: SessionRef; bridge?: ParleyBridge; revision?: string; cwd?: string }
 /**
  * Чип роли в тесной строке сжимается первым (жалоба 2026-10-07: в карточке участника комнаты имя схлопывалось, а слово
  * состояния уезжало за край). Сетка `auto minmax(0, max-content)`: 🔒 — своя колонка, она не сжимается, текст — до нуля
  * с многоточием в своём элементе (у голого текста в inline-flex многоточия нет). Наименьшая ширина чипа — поля и 🔒,
  * поэтому без `min-w-0`: замок не обрезается. Полная роль — первой строкой тултипа, описание — второй.
  */
-export function RoleChip({ role, sessionRef, bridge, revision }: RoleChipProps): ReturnType<typeof createElement> | null {
-  const current = useRoleSummary(bridge ?? window.parley, sessionRef, role, revision);
+export function RoleChip({ role, sessionRef, bridge, revision, cwd }: RoleChipProps): ReturnType<typeof createElement> | null {
+  const current = useRoleSummary(bridge ?? window.parley, sessionRef, role, revision, cwd);
   if (!role) return null;
   const label = S.roles.option(current?.name ?? role.name, role.source);
   return createElement('span', { 'data-role-chip': '', className: 'inline-grid grid-cols-[auto_minmax(0,max-content)] items-center rounded bg-foreground/5 px-1.5 text-[10px]', title: [label, current?.description ?? S.roles.unavailable].filter(Boolean).join('\n') },
