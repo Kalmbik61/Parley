@@ -6,85 +6,37 @@ All notable changes to Parley are documented in this file.
 
 ## 0.15.0
 
-Chats and rooms get a browser of their own next to the view, and an agent can show you a page from localhost there without taking your focus.
+Parley gets an assistant that lives on the island and a browser that lives next to every chat and room. Agents can open pages in that browser and read it, the sessions Parley starts run leaner, and the window, the assistant and the agents' brief now agree on what state a session is in.
 
 ### Added
 
-- **Assistant on the island (stage 1).** The assistant answers questions about your agents by hotkey (⌥Space), voice
-  or text, and passes messages to rooms and agents after you confirm them on a card. Messages show as
-  "You (via assistant)" in rooms and in Chat. It is off by default: turn it on in Settings → Assistant. Each question
-  is a short run of your provider's CLI on your subscription. An agent that is asleep can take a message too: the card says it will be woken, and the session resumes with your text as its first turn.
-- **A browser next to every Chat and room.** The **Browser** button opens a panel beside the view with its own pages
-  (up to five), Console | Network, sizes, Select and Annotate. What you pick or annotate goes to the chat or room the
-  panel belongs to. The pages survive restarting the window, and in a narrow window the panel covers the view with a
-  **Back** button. A page of a regular browser tab can be sent there with **⋯ → Move to browser of…**.
-- **Agents can open a page for you.** An agent can put a page on localhost into the browser of its own chat or of
-  its room. You see it in that panel; if the view is not on screen, a toast says "S02 opened localhost:5173" with a
-  **Show** button. The agent never changes your active tab or workspace and never takes the keyboard focus, and the
-  same address (without `#fragment`) is not opened twice. Agents that run with Parley's own settings do not ask you
-  before opening a page.
-- **Agents can read the browser of their chat and rooms.** An agent (Claude, GLM or Codex) lists the pages in the
-  browser panel of its own chat and of the rooms it belongs to, reads the console errors and failed requests of the
-  current page — secrets in headers, query strings and JSON bodies are masked as `<redacted>` — and takes screenshots,
-  also at another size such as 375×812 (the page shows "Agent capture 375×812" for a moment; your size comes back).
-  Your own browser tabs are never visible to agents. **⋯ → Pause agents** in a panel page stops all agents in that
-  panel (**Resume agents** lifts it); Settings → Browser → "Let agents use the browser" still turns access off for
-  everyone. Sessions started before the update get the tools after a restart.
-- **Let agents use the browser.** A switch in Settings → Browser turns agent access off for all sessions at once.
-- **Lean agent sessions.** Agents that Parley starts for rooms and through `spawn_session` now run without
-  your plugins, other MCP servers and auto-memory — about a third less context on every turn of Claude Code
-  (measured on one machine; Codex was not measured). Parley's own tools and hooks, your skills and the
-  project's `CLAUDE.md` stay. It applies to sessions created after you update; turn it off in Settings → Agents
-  ("Lean agent sessions") or with `PARLEY_LEAN_AGENTS=0`. A session you start from the New session dialog is
-  lean only if you tick "Lean session".
-- **Numbers for a "Parley feels slow" report.** The host status line and the diagnostics archive now carry
-  per-window counters: how many times the workspace maps were re-read and how long that took, how many
-  bytes of map JSON were parsed, how much terminal output arrived (chunks and bytes), and how many session
-  recomputes the wake and activity services did. The counters cover the time since the previous status line.
+- **Assistant on the island.** Press ⌥Space from any app, or click the dot on the island, and ask about your agents, works and rooms: who is working, who needs you, what a room is up to. Speak or type; the answer streams onto the island. Ask it to tell a room or an agent something and it prepares a card. Nothing is sent until you confirm; the message then shows as "You (via assistant)" in the room or in Chat. An agent that is asleep can take a message too: the card says it will be woken, and the session resumes with your text as its first turn.
+  - Off by default. Settings → Assistant: turn it on, pick the provider and model (Claude, GLM or Codex, on your subscription; each question is a short run of that CLI, not an API call), the answer language (any Whisper language or the system one) and the shortcut (click the field, press the keys).
+  - Voice goes through the same local Whisper as dictation in chats, so audio never leaves your Mac. The mic button puts the transcript into the field; the shortcut sends it as soon as you stop talking. The hint under the field shows your shortcut and Esc to close.
+  - The swarm: a cloud of souls at rest, a sphere while it thinks, an arc while a tool runs, a stream while it answers, an amber ring while a card waits, coral on an error, grey while the host is away. The pill shows a small swarm while the assistant is busy. Reduced motion is honored.
+  - It sees all your open works and rooms, keeps one conversation (forgotten after 15 minutes of silence or with **New conversation**) and never acts on its own: it reads and proposes, you decide.
 
-### Fixed
+- **A browser next to every Chat and room.** The **Browser** button opens a panel beside the view with its own pages (up to five), Console | Network, device sizes, Select and Annotate; what you pick or annotate goes to the chat or room the panel belongs to. Pages survive a window restart, and in a narrow window the panel covers the view with a **Back** button. A regular browser tab moves there with **⋯ → Move to browser of…**.
+  - **Agents can open a page for you.** An agent puts a localhost page into the browser of its own chat or room. If the view is off screen, a toast says "S02 opened localhost:5173" with a **Show** button. It never changes your active tab or workspace, never takes the keyboard focus, and the same address is not opened twice.
+  - **Agents can read it.** Claude, GLM and Codex list the pages of their own chat and rooms, read the console errors and failed requests of the current page, and take screenshots, also at another size such as 375×812 (the page shows "Agent capture 375×812" for a moment, then your size comes back). Your own browser tabs are never visible to agents. Secrets are masked as `<redacted>` by the shape of the value (`Bearer …`, JWT, `password=…`, `api_key=…`, and `sid`, `sig`, `jwt`, `pwd`, `xsrf`, `code` in a URL); a request in detail stays under 20 KB, similar console entries are folded, and `after` returns only what is new since the last read. Agents that run with Parley's own settings do not ask before opening or reading.
+  - **Pause and the switch.** **⋯ → Pause agents** in a panel page stops all agents in that panel (**Resume agents** lifts it); Settings → Browser → "Let agents use the browser" turns access off for everyone. Sessions started before the update get the tools after a restart.
 
-- **Screenshots from an agent show the real page.** A screenshot at another size (such as 1440×900) or of a page
-  wider than the panel used to come back as a tile of the panel-sized piece repeated; the window now sets the page to
-  the screenshot size for the moment and the agent gets the actual layout. A full-page screenshot takes the first three
-  viewport heights and says so instead of refusing; images stay under 3.5 MB.
-- **A timed-out or repeated screenshot no longer leaves your page in the agent's size.** Your size, preset and
-  field are exactly what you last chose, and a second request waits for the first.
-- **Agents read less and see less.** A request in detail stays under 20 KB (headers cut to 256 characters), console
-  entries are compact with similar ones folded, network rows keep only the first 80 characters of the query, and
-  `after` returns only what is new since the last read. `browser_tabs` shows a page that left localhost only as its
-  origin, and details of an earlier document of the page are no longer readable.
-- **More secrets are masked in what agents read.** The console text and strings inside JSON are masked by the shape
-  of the value (`Bearer …`, JWT, `password=…`, `api_key=…`); `sid`, `sig`, `jwt`, `pwd`, `xsrf` and `code` in a URL
-  are covered too.
-- **Pause really pauses.** An agent cannot open a page in a paused panel, and a canceled window navigation no longer
-  makes agents forget the pause. Agent screenshots in `drops/` are cleaned up hourly.
+- **Lean agent sessions.** Agents that Parley starts for rooms and through `spawn_session` run without your plugins, other MCP servers and auto-memory: about a third less context on every turn of Claude Code (measured on one machine; Codex was not measured). Parley's own tools and hooks, your skills and the project's `CLAUDE.md` stay. It applies to sessions created after you update; turn it off in Settings → Agents ("Lean agent sessions") or with `PARLEY_LEAN_AGENTS=0`. A session from the New session dialog is lean only if you tick "Lean session".
+- **Numbers for a "Parley feels slow" report.** The host status line and the diagnostics archive carry per-window counters since the previous status line: map re-reads and their time, bytes of map JSON parsed, terminal output received (chunks and bytes), and session recomputes of the wake and activity services.
 
 ### Changed
 
-- **Agents that run with Parley's own settings do not ask before reading the browser.** The reading tools
-  (`browser_tabs`, `browser_console`, `browser_network`, `browser_screenshot`) are allowed up front, like `browser_open`.
-- **The built-in minimal-development skill asks for more care around a change.** Before editing, an agent lists
-  what the change must reach and what it could break for users; it marks a deliberate shortcut with a
-  `shortcut: <the limit>, <when to replace it>` comment, leaves a small test for new non-trivial logic, and ends
-  a task's final report with what it skipped and any risk. Copies Parley installed update on the next agent
-  launch; a copy you edited is left alone.
-- **Agents get clear rules for room correspondence.** The guide now tells them to keep a letter under
-  1200 characters, to put documents and file edits into a file and send only its path, not to quote
-  earlier messages (use `replyTo` instead), to call `read_room` only when they really need the history,
-  and to read the room map through the tools instead of opening `map.json`.
-- **Sessions started by another session hang off their parent in the sidebar.** A thin line runs from the parent's
-  status dot down to each session it started, like a tree, and the indent grows from 12 to 20 px per level. A
-  child whose parent row is hidden under "N more closed" has no line.
+- **One table of session states.** The window, the assistant and the agents' brief take the session state from one shared module, so they use the same words ("working", "needs you", "asleep"…), and a session you just resumed is never reported as off.
+- **Sessions started by another session hang off their parent in the sidebar.** A thin line runs from the parent's status dot to each child, and the indent grows per level. A child whose parent row is hidden under "N more closed" has no line.
+- **Agents get clear rules for room correspondence.** A letter stays under 1200 characters, documents and file edits go into a file with only its path in the letter, earlier messages are not quoted (`replyTo` instead), `read_room` is for when the history is really needed, and the room map is read through the tools, not `map.json`.
+- **The built-in minimal-development skill asks for more care around a change.** Before editing, an agent lists what the change must reach and what it could break; a deliberate shortcut is marked with a `shortcut: <the limit>, <when to replace it>` comment; new non-trivial logic gets a small test; the final report names what was skipped and any risk. Installed copies update on the next agent launch; a copy you edited is left alone.
 - **Notification toggles start with a capital letter.** Settings → Notifications now reads "Needs you", "Finished", "Mail and mentions to you", "Sound", "Island with requests at the top of the screen".
-- **One table of session states.** The window, the assistant on the island and the brief that agents get now take the session state from one shared module, so the assistant names states with the same words as the sidebar ("working", "needs you", "asleep"…) and no longer reports a running session as off.
 
 ### Fixed
 
-- **Oversized letters no longer slip through `send_message`.** The 4096-character limit was only declared
-  in the tool schema, so letters of 54 KB went through; the server now enforces it, and a letter above
-  1200 characters comes back with a warning to shorten it. Letters are never truncated, and letters sent
-  from the window are not affected.
+- **Screenshots from an agent show the real page.** A screenshot at another size, or of a page wider than the panel, used to come back as a repeated tile; the window now sets the page to the requested size for the moment. A full-page screenshot takes the first three viewport heights and says so; images stay under 3.5 MB. A timed-out or repeated screenshot no longer leaves your page in the agent's size, and a second request waits for the first.
+- **Pause really pauses.** An agent cannot open a page in a paused panel, and a cancelled window navigation no longer makes agents forget the pause. Agent screenshots in `drops/` are cleaned up hourly.
+- **Oversized letters no longer slip through `send_message`.** The 4096-character limit was only declared in the tool schema, so letters of 54 KB went through; the server now enforces it, and a letter above 1200 characters comes back with a warning to shorten it. Letters are never truncated, and letters sent from the window are not affected.
 
 ## 0.14.0
 
