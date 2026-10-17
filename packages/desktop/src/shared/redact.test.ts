@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSecretName, REDACTED, redactBody, redactHeaders, redactUrl, redactUrlsInText, unmaskableJson } from './redact.js';
+import { isSecretName, REDACTED, redactBody, redactHeaders, redactSecretsInText, redactUrl, redactUrlsInText, unmaskableJson } from './redact.js';
 import { S } from './strings.js';
 
 describe('isSecretName (спека браузера, раздел 6)', () => {
@@ -126,9 +126,9 @@ describe('redactUrlsInText', () => {
 
 describe('redactBody', () => {
   it('вложенный JSON: секретные ключи на любой глубине и в массивах — <redacted>', () => {
-    const body = JSON.stringify({ user: { name: 'demo', credentials: { password: 'p1' } }, items: [{ apiKey: 'k1' }, { id: 1 }], session_id: 's1' });
+    const body = JSON.stringify({ user: { name: 'demo', account: { password: 'p1' } }, items: [{ apiKey: 'k1' }, { id: 1 }], session_id: 's1' });
     expect(JSON.parse(redactBody(body, 'application/json; charset=utf-8'))).toEqual({
-      user: { name: 'demo', credentials: { password: REDACTED } },
+      user: { name: 'demo', account: { password: REDACTED } },
       items: [{ apiKey: REDACTED }, { id: 1 }],
       session_id: REDACTED,
     });
@@ -321,5 +321,103 @@ describe('redactBody: multipart/form-data (FormData, форма с файлом)
       redactBody(body, MULTIPART);
       expect(performance.now() - started, `тело ${index}`).toBeLessThan(500);
     }
+  });
+});
+
+describe('redactSecretsInText (S1): секреты по виду значения в тексте консоли', () => {
+  const R = REDACTED;
+  const cases: Array<[string, string, string]> = [
+    ['Bearer, пароль и ключ в одном сообщении', 'Auth failed: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.c2ln; password=hunter2; api_key=AKIAIOSFODNN7EXAMPLE', `Auth failed: Bearer ${R}; password=${R}; api_key=${R}`],
+    ['относительный адрес с query', 'GET /reset?token=abc 404', `GET /reset?token=${R} 404`],
+    ['code OAuth в адресе', 'http://x/cb?code=AUTH&state=1', `http://x/cb?code=${R}&state=1`],
+    ['разделитель «;» в query', 'http://x/a?b=1;token=semicolon', `http://x/a?b=1;token=${R}`],
+    ['code в относительном адресе', 'redirect to /cb?code=AUTH&state=1', `redirect to /cb?code=${R}&state=1`],
+    ['JSON в тексте', 'got {"password":"x","token":"y","user":"bob"}', `got {"password":"${R}","token":"${R}","user":"bob"}`],
+    ['объект с bare-ключом', 'config {api_key: sk-live-123, user: bob}', `config {api_key: ${R}, user: bob}`],
+    ['заголовок со схемой', 'Authorization: Bearer abc.def', `Authorization: ${R}`],
+    ['Basic с base64', 'sent Basic dXNlcjpwYXNzd29yZA== to server', `sent Basic ${R} to server`],
+    ['JWT без схемы', 'token was eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.c2ln end', `token was ${R} end`],
+    ['новые имена', 'jwt=aaa pwd=bbb x-xsrf=ccc signature=ddd credential=eee private=fff sid=ggg sig=hhh pass=iii otp=123456', `jwt=${R} pwd=${R} x-xsrf=${R} signature=${R} credential=${R} private=${R} sid=${R} sig=${R} pass=${R} otp=${R}`],
+  ];
+  for (const [name, input, output] of cases) {
+    it(name, () => expect(redactSecretsInText(input)).toBe(output));
+  }
+
+  it('JWT: текст страницы «eyJ-eyJ-…» на 1 МБ маскируется за линейное время (без квадратичного перебора)', () => {
+    const hostile = 'eyJ-'.repeat(250_000);
+    const started = performance.now();
+    expect(redactSecretsInText(hostile)).toBe(hostile);
+    // Весь конвейер (адреса, пары имя=значение) на 1 МБ линейно стоит ~0,2 с; квадратичный JWT стоил ~110 с.
+    expect(performance.now() - started).toBeLessThan(3000);
+  });
+
+  it('JWT: частичные формы не маскируются, полная — маскируется после дефиса и перед пробелом', () => {
+    expect(redactSecretsInText('eyJabc.def')).toBe('eyJabc.def');
+    expect(redactSecretsInText('x eyJabc.def.ghi y')).toBe(`x ${R} y`);
+    expect(redactSecretsInText('a-eyJabc.def.ghi')).toBe(`a-${R}`);
+  });
+
+  it('обычный текст, слова «Basic usage», «code: 404» и «keyboard=1» не меняются; повторная маска ничего не меняет', () => {
+    for (const text of ['Basic usage example', 'Failed with code: 404', 'keyboard=1 monkey=2', 'Token expired', 'GET /api/users 200', 'passing=3']) expect(redactSecretsInText(text), text).toBe(text);
+    const once = redactSecretsInText('password=hunter2 Bearer abc');
+    expect(redactSecretsInText(once)).toBe(once);
+  });
+
+  it('текст задаёт страница: длинные серии имён, кавычек и «=» обрабатываются за линейное время', () => {
+    const started = Date.now();
+    for (const text of ['a'.repeat(200_000), '"'.repeat(100_000), 'a='.repeat(50_000), `password=${'"'.repeat(50_000)}`, `Bearer ${'a'.repeat(100_000)}`, 'a.'.repeat(60_000), '/a?'.repeat(40_000)]) redactSecretsInText(text);
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+});
+
+describe('redactUrl: новые имена, code и «;» (S3, S4)', () => {
+  it('code — секрет только в параметрах адреса; ; делит пары; новые имена', () => {
+    expect(redactUrl('http://x/cb?code=AUTH&state=1')).toBe(`http://x/cb?code=${REDACTED}&state=1`);
+    expect(redactUrl('http://x/a?b=1;token=semicolon')).toBe(`http://x/a?b=1;token=${REDACTED}`);
+    expect(redactUrl('http://x/a?X-Amz-Signature=abc&sid=1&sig=2&PHPSESSID=3')).toBe(`http://x/a?X-Amz-Signature=${REDACTED}&sid=${REDACTED}&sig=${REDACTED}&PHPSESSID=${REDACTED}`);
+    expect(isSecretName('code')).toBe(false);
+    for (const name of ['signature', 'x-credential', 'jwt', 'bearer', 'xsrf-cookie', 'pwd', 'private', 'sid', 'sig', 'pass', 'otp', 'userPass']) expect(isSecretName(name), name).toBe(true);
+    for (const name of ['passenger', 'signal', 'sidebar', 'bypass', 'otpx']) expect(isSecretName(name), name).toBe(false);
+  });
+});
+
+describe('redactBody: строки JSON, пары имя/значение, формы без типа, большие числа (S2, S4, A8)', () => {
+  const json = (value: unknown): unknown => JSON.parse(redactBody(JSON.stringify(value), 'application/json'));
+
+  it('строковые значения: адрес с токеном, JWT, JSON внутри строки, пара «пароль=значение»', () => {
+    expect(json({ link: 'http://localhost:3000/verify?token=abc' })).toEqual({ link: `http://localhost:3000/verify?token=${REDACTED}` });
+    expect(json({ jwt: 'x', note: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.c2ln' })).toEqual({ jwt: REDACTED, note: REDACTED });
+    expect(json({ payload: '{"password":"x","a":1}' })).toEqual({ payload: `{"password":"${REDACTED}","a":1}` });
+    expect(json({ log: 'login password=hunter2 failed' })).toEqual({ log: `login password=${REDACTED} failed` });
+    expect(redactBody('"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.c2ln"', 'application/json')).toBe(JSON.stringify(REDACTED, null, 2));
+  });
+
+  it('объект {name, value} и {key, value}: значение секретного имени скрыто', () => {
+    expect(json([{ name: 'password', value: 'hunter2' }])).toEqual([{ name: 'password', value: REDACTED }]);
+    expect(json([{ name: 'theme', value: 'dark' }])).toEqual([{ name: 'theme', value: 'dark' }]);
+    expect(json([{ key: 'api_key', value: 'abc' }])).toEqual([{ key: REDACTED, value: REDACTED }]);
+    expect(json([{ name: 'Cookie', value: { a: 1 } }])).toEqual([{ name: 'Cookie', value: REDACTED }]);
+  });
+
+  it('форма под text/plain и без типа маскируется как форма; обычный текст и JSON со знаком «=» не страдают', () => {
+    expect(redactBody('user=bob&password=hunter2', 'text/plain')).toBe(`user=bob&password=${REDACTED}`);
+    expect(redactBody('user=bob&password=hunter2', null)).toBe(`user=bob&password=${REDACTED}`);
+    expect(redactBody('user=bob;password=hunter2', 'text/plain; charset=utf-8')).toBe(`user=bob;password=${REDACTED}`);
+    expect(redactBody('just some text = here', 'text/plain')).toBe('just some text = here');
+    expect(redactBody('a=b&c', 'text/plain')).toBe('a=b&c');
+    expect(JSON.parse(redactBody('{"next":"a=b","password":"x"}', 'text/plain'))).toEqual({ next: 'a=b', password: REDACTED });
+    // code в форме — не секрет (только в параметрах адреса)
+    expect(redactBody('code=404&x=1', 'text/plain')).toBe('code=404&x=1');
+  });
+
+  it('Фокус ревью 4: {"error":{"code":404}} и большое целое остаются читаемыми и точными', () => {
+    const text = '{"error":{"code":404},"id":9007199254740993,"list":[-9007199254740995,12,1.5],"token":9007199254740993}';
+    const masked = redactBody(text, 'application/json');
+    expect(masked).toContain('"code": 404');
+    expect(masked).toContain('"id": 9007199254740993');
+    expect(masked).toContain('-9007199254740995');
+    expect(masked).toContain('1.5');
+    expect(masked).toContain(`"token": "${REDACTED}"`);
+    expect(redactBody('{"error":{"code":404},"id":9007199254740993}', 'application/json')).toBe('{\n  "error": {\n    "code": 404\n  },\n  "id": 9007199254740993\n}');
   });
 });

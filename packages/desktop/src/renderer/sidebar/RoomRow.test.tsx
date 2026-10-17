@@ -150,19 +150,38 @@ describe('RoomRow — свёрнутая (1.2)', () => {
     expect(rowEl().className).toMatch(/\bgap-1\b/);
     expect(rowEl().className).toContain('text-xs');
     expect(rowEl().style.paddingLeft).toBe('8px');
+    expect(rowEl().style.marginLeft).toBe('0px');
     expect(header().className).toContain('h-[18px]');
     expect(header().className).toContain('gap-1.5');
     expect(rowEl().querySelector('[data-testid="agent-state-dot"]')).toBeNull();
   });
 
-  it('отступ слева — 8 + 12 на уровень глубины первого участника', () => {
+  it('сдвиг — marginLeft на 20 за уровень глубины первого участника, отступ слева остаётся 8', () => {
     const nested = makeWork(WORK, {
       projectPath: PROJECT,
       sessions: [makeSession('s-01', 'root'), makeSession('s-02', 'child', { parent: 's-01' })],
       rooms: [room({ members: ['s-02'], lead: 's-02' })],
     });
     renderRow(nested);
-    expect(rowEl().style.paddingLeft).toBe('20px');
+    expect(rowEl().style.marginLeft).toBe('20px');
+    expect(rowEl().style.paddingLeft).toBe('8px');
+  });
+
+  it('линии дерева: метки внутри строки комнаты, ствол на оси значка вопроса; без меток спанов нет', () => {
+    const nested = makeWork(WORK, {
+      projectPath: PROJECT,
+      sessions: [makeSession('s-01', 'root'), makeSession('s-02', 'child', { parent: 's-01' })],
+      rooms: [room({ members: ['s-02'], lead: 's-02' })],
+    });
+    renderRow(nested);
+    expect(rowEl().querySelector('[data-tree-guide]')).toBeNull();
+    cleanup();
+    renderRow(nested, { guides: [{ kind: 'elbow', column: 0 }] });
+    const elbow = rowEl().querySelector<HTMLElement>('[data-tree-guide="elbow"]') as HTMLElement;
+    expect(elbow.style.left).toBe('-6px');
+    expect(elbow.style.width).toBe('6px');
+    expect(elbow.style.height).toBe('13px');
+    expect(rowEl().className).toMatch(/\brelative\b/);
   });
 
   it('шапка: Hash 13px, название, шеврон в кнопке 16px (тултип «Show agents») и время последнего сообщения', () => {

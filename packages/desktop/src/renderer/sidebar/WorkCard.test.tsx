@@ -321,7 +321,7 @@ describe('WorkCard (тест 3)', () => {
     expect(group?.className).toContain('flex-col');
   });
 
-  it('строки сессий по treeOrder с отступом 12px на уровень; клик по строке — onOpenSession', () => {
+  it('строки сессий по treeOrder с отступом 20px на уровень; клик по строке — onOpenSession', () => {
     const onOpenSession = vi.fn();
     const tree = makeWork('w-01', {
       sessions: [makeSession('s-01', 'root'), makeSession('s-02', 'other'), makeSession('s-03', 'child', { parent: 's-01' })],
@@ -329,10 +329,36 @@ describe('WorkCard (тест 3)', () => {
     renderCard(tree, { onOpenSession });
     const rows = [...card().querySelectorAll<HTMLElement>('[data-session-id]')];
     expect(rows.map((element) => element.getAttribute('data-session-id'))).toEqual(['s-01', 's-03', 's-02']);
-    const indent = (element: HTMLElement): number => Number.parseInt(element.style.paddingLeft, 10);
-    expect(indent(rows[1] as HTMLElement) - indent(rows[0] as HTMLElement)).toBe(12);
+    const indent = (element: HTMLElement): number => Number.parseInt(element.style.marginLeft, 10);
+    expect(indent(rows[1] as HTMLElement) - indent(rows[0] as HTMLElement)).toBe(20);
     fireEvent.click(rows[2] as HTMLElement);
     expect(onOpenSession).toHaveBeenCalledWith('s-02');
+  });
+
+  it('линии дерева: у родителя ствол начинается под значком, у дочерней строки — изгиб; у сессии без родителя и детей меток нет', () => {
+    const tree = makeWork('w-01', {
+      sessions: [makeSession('s-01', 'root'), makeSession('s-02', 'other'), makeSession('s-03', 'child', { parent: 's-01' })],
+    });
+    renderCard(tree);
+    const guidesOf = (id: string): string[] =>
+      [...card().querySelectorAll<HTMLElement>(`[data-session-id="${id}"] [data-tree-guide]`)].map((guide) => guide.getAttribute('data-tree-guide') ?? '');
+    expect(guidesOf('s-01')).toEqual(['start']);
+    expect(guidesOf('s-03')).toEqual(['elbow']);
+    expect(guidesOf('s-02')).toEqual([]);
+  });
+
+  it('линий дерева нет, если строки родителя не видно: родитель закрыт и спрятан под «N more closed», ребёнок остаётся с отступом', () => {
+    const tree = makeWork('w-01', {
+      sessions: [makeSession('s-01', 'root', { lifecycle: 'closed' }), makeSession('s-02', 'child', { parent: 's-01' })],
+    });
+    renderCard(tree);
+    expect(card().querySelectorAll('[data-tree-guide]')).toHaveLength(0);
+    expect((document.querySelector('[data-session-id="s-02"]') as HTMLElement).style.marginLeft).toBe('20px');
+    fireEvent.click(screen.getByText('1 more closed'));
+    expect(card().querySelectorAll('[data-session-id="s-01"] [data-tree-guide="start"]')).toHaveLength(1);
+    expect(card().querySelectorAll('[data-session-id="s-02"] [data-tree-guide="elbow"]')).toHaveLength(1);
+    // Раскрытие живёт в памяти окна по ключу работы — убираем за собой, как соседний тест.
+    fireEvent.click(screen.getByText('Hide closed'));
   });
 
   it('клик по карточке — onActivate; у активной работы строки тащатся, выбранная помечена', () => {

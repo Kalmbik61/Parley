@@ -65,6 +65,7 @@
   --color-work-sidebar-accent: var(--work-sidebar-accent);
   --color-work-sidebar-accent-foreground: var(--work-sidebar-accent-foreground);
   --color-work-sidebar-border: var(--work-sidebar-border);
+  --color-work-sidebar-tree-line: var(--work-sidebar-tree-line);
   --color-work-sidebar-ring: var(--work-sidebar-ring);
   --color-work-sidebar-focus-ring: var(--work-sidebar-focus-ring);
   --color-work-sidebar-muted-foreground: var(--work-sidebar-muted-foreground);
@@ -311,6 +312,9 @@
   --work-sidebar-accent: color-mix(in srgb, var(--color-text) 9%, transparent);
   --work-sidebar-accent-foreground: var(--color-text);
   --work-sidebar-border: var(--color-divider);
+  /* Линии дерева сессий в карточке работы (`sidebar/TreeGuides.tsx`): тонкая линия 1px, приглушённая; `.dark` переопределяет
+     сам `--color-neutral-400`, отдельного значения для тёмной темы не нужно. */
+  --work-sidebar-tree-line: var(--color-neutral-400);
   /* Рамка переименования в сайдбаре (`InlineRename`) — то же кольцо, что общее `--ring`. */
   --work-sidebar-ring: var(--ring);
   /* Раунд исправлений 1 куска 3.4: кольцо фокуса карточек и строк — ≥ 3:1 к любому фону

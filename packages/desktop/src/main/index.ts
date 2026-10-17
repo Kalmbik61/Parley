@@ -32,7 +32,7 @@ import type { UiFile } from '../shared/ui-types.js';
 import { createAgentOps, type AgentOps } from './browser/agent-ops.js';
 import { createAnnotate } from './browser/annotate.js';
 import { contextDir, saveContextFile } from './browser/context-files.js';
-import { createDesignMode } from './browser/design-mode.js';
+import { createDesignMode, PICK_WORLD_ID } from './browser/design-mode.js';
 import { createEmulation } from './browser/emulation.js';
 import { fetchFavicon } from './browser/favicon.js';
 import guestAnnotateScript from './browser/guest-annotate.js?raw';
@@ -41,7 +41,7 @@ import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
 import { createInspector, forwardBatches } from './browser/inspector.js';
 import { saveDiagnostics } from './diagnostics/bundle.js';
-import { cleanupDropsTree, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
+import { AGENT_SHOT_MAX_AGE_MS, AGENT_SHOT_PREFIX, cleanupDrops, cleanupDropsTree, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
 import { createGitRunner, isProjectWorktree } from './files/git-api.js';
 import createGrepWorker from './files/grep-worker?nodeWorker';
 import { registerFilesIpc } from './files/ipc.js';
@@ -576,6 +576,10 @@ if (!gotLock) {
     // только обычные файлы и сами ссылки, по lstat.
     // В фоне — старт окна их не ждёт.
     void cleanupDropsTree(dropsDir(), DROPS_MAX_AGE_MS).catch((error: unknown) => console.warn('[parley] cleanupDrops', error));
+    // Снимки агента (`agent-*`) живут сутки: раз в час старше суток убираются (спека, S8).
+    setInterval(() => {
+      void cleanupDrops(dropsDir(), AGENT_SHOT_MAX_AGE_MS, Date.now(), (name) => name.startsWith(AGENT_SHOT_PREFIX)).catch((error: unknown) => console.warn('[parley] cleanupAgentShots', error));
+    }, 60 * 60 * 1000).unref();
     const fakeDrops = switches.drops;
 
     const rootsSource: RootsSource = {
@@ -644,6 +648,37 @@ if (!gotLock) {
         window.webContents.send('browser:agent-open-tab', e);
         return true;
       },
+      fromId: (id) => webContents.fromId(id) ?? null,
+      inspector,
+      emulation,
+      saveImage: (png) => saveImage({ png, dir: dropsDir(), prefix: AGENT_SHOT_PREFIX }),
+      image: {
+        resize: (png, width, height) => nativeImage.createFromBuffer(png).resize({ width, height, quality: 'good' }).toPNG(),
+        // Полосы одной ширины склеиваются побайтно: битмапы строка за строкой подряд (спайк 0.7).
+        stitch: (parts) => {
+          const images = parts.map((part) => nativeImage.createFromBuffer(part));
+          const { width } = images[0]?.getSize() ?? { width: 0 };
+          const height = images.reduce((sum, image) => sum + image.getSize().height, 0);
+          return nativeImage.createFromBitmap(Buffer.concat(images.map((image) => image.toBitmap())), { width, height }).toPNG();
+        },
+        crop: (png, top, height) => {
+          const image = nativeImage.createFromBuffer(png);
+          return image.crop({ x: 0, y: top, width: image.getSize().width, height }).toPNG();
+        },
+      },
+      inGuest: (guest, code) => guest.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code }]),
+      screenDpr: async (guest) => {
+        const host = guest.hostWebContents;
+        if (host === undefined || host === null) return null;
+        // Изолированный мир окна: рамочный тест запрещает executeJavaScript мира страницы во всём main.
+        const dpr: unknown = await host.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code: 'window.devicePixelRatio' }]);
+        return typeof dpr === 'number' && Number.isFinite(dpr) && dpr > 0 ? dpr : null;
+      },
+      windowHeight: (guest) => {
+        const host = guest.hostWebContents;
+        return host === undefined || host === null ? null : (BrowserWindow.fromWebContents(host)?.getContentSize()[1] ?? null);
+      },
+      activity: (e) => webContents.fromId(e.webContentsId)?.hostWebContents?.send('browser:agent-activity', e),
     });
     agentOps = ops;
 

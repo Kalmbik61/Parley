@@ -19,7 +19,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sessionTag } from '@parley/core';
-import { AGENT_LIMITS, BROWSER_AGENT_FEATURE, browserAgentArgs, browserAgentRequest, refKey } from '@parley/protocol';
+import { AGENT_LIMITS, BROWSER_AGENT_FEATURE, BROWSER_AGENT_OP_FEATURE, BROWSER_AGENT_OPS, browserAgentArgs, browserAgentRequest, refKey } from '@parley/protocol';
 import type { BrowserAgentErrorCode, BrowserAgentOp, BrowserAgentOpEvent, BrowserAgentOwner, BrowserAgentResult, SessionRef } from '@parley/protocol';
 import type { Client } from '../client.js';
 import type { Log } from '../log.js';
@@ -123,7 +123,8 @@ export function createBrowserEndpoint(options: BrowserEndpointOptions): BrowserE
       projectPath: ref.projectPath,
       workId: ref.workId,
       sessionId: ref.sessionId,
-      op,
+      op: 'browser.agentOp',
+      agentOp: op,
       tab: stringField(args, 'tab') ?? (result.ok ? stringField(result.result, 'tab') : null),
       origin: originOf(stringField(args, 'url'), result.ok ? stringField(result.result, 'url') : null),
       outcome: result.ok ? 'ok' : result.error.code,
@@ -156,6 +157,13 @@ export function createBrowserEndpoint(options: BrowserEndpointOptions): BrowserE
     }
     const clients = options.clients();
     const window = clients.filter((client) => client.features.has(BROWSER_AGENT_FEATURE)).at(-1);
+    // Окно заявляет операции по одной (`browser-agent:<op>`); если оно заявляет хоть одну, а нужной нет, — оно старее хоста.
+    if (window !== undefined && !window.features.has(BROWSER_AGENT_OP_FEATURE(op)) && BROWSER_AGENT_OPS.some((known) => window.features.has(BROWSER_AGENT_OP_FEATURE(known)))) {
+      const result = failure('unsupported', `Parley's window does not support ${op} yet: ask the human to update Parley.`);
+      record(ref, op, args.data, result, 0);
+      send(res, result);
+      return;
+    }
     if (window === undefined) {
       const old = clients.some((client) => client.name === 'desktop');
       const result = old

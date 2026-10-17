@@ -36,6 +36,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { WorkEntry } from '@parley/core';
+import { AGENT_LIMITS } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { viewportSize, type ViewportSpec } from '../../shared/browser-devtools.js';
 import { BROWSER_PARTITION, type PickResult, type ViewportFraction } from '../../shared/browser-types.js';
@@ -45,7 +46,7 @@ import { ACTIONS, matchesAccelerator, type ActionId, type KeyLike } from '../../
 import type { BrowserOwner, BrowserTarget } from '../../shared/layout-types.js';
 import { errorText, S } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
-import { updatePanelPage, type PanelPagePatch } from '../layout/panels.js';
+import { ownerOfPage, panelOf, updatePanelPage, type PanelPagePatch } from '../layout/panels.js';
 import { useLayoutStore } from '../layout/store.js';
 import { focusTab, updateTab } from '../layout/tree.js';
 import { useUiStore } from '../store/ui.js';
@@ -64,7 +65,8 @@ import { DevtoolsPanel } from './devtools/DevtoolsPanel.js';
 import { devtoolsCounters, EMPTY_DEVTOOLS, useDevtoolsStore } from './devtools/store.js';
 import { useDevtoolsFeed } from './devtools/use-devtools-feed.js';
 import { FindBar } from './FindBar.js';
-import { moveTabToPanel } from './panel/actions.js';
+import { reportAgentPage } from './panel/agent-registry.js';
+import { moveTabToPanel, pausePanel } from './panel/actions.js';
 import { MoveToMenu } from './panel/MoveToMenu.js';
 import { fitArea, panelHeight, STAGE, stageBox, type FieldSize } from './stage.js';
 import { clearAddressFocus, toggleBrowserMode, useBrowserStore, wantsAddressFocus, type BrowserTabState } from './store.js';
@@ -91,6 +93,9 @@ const ERR_ABORTED = -3;
 
 /** Стартовая страница `<webview>` (спайк 0.1, вариант D): страж пускает такой `src`, адрес вкладки открывается позже. */
 const BLANK_SRC = 'about:blank';
+/** Кадров окна между постановкой `<webview>` в размер снимка и подтверждением main (спайк 0 плана исправлений, В2); запас — 250 мс, если окно кадры не рисует. */
+const CAPTURE_READY_FRAMES = 2;
+const CAPTURE_READY_FALLBACK_MS = 250;
 
 /**
  * Атрибуты `<webview>` строками: React 18 булев `allowpopups` у тега без дефиса не выводит, а
@@ -501,6 +506,53 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
     [bridge, tabId],
   );
 
+  // Снимок агента (спека 4.8; спайк 0.2; спайк 0 плана исправлений): `start` с `capture` — размер, в котором страницу снимают.
+  // `<webview>` на это время встаёт в размер снимка слева-сверху поля (тот же узел: гость не перезагружается), на видимой
+  // странице висит подпись «Agent capture W×H», а невидимую поверхность окно делает «видимой, но прозрачной»: у скрытого
+  // `<webview>` кадр не рисуется, у `opacity: 0` — рисуется. Через `CAPTURE_READY_FRAMES` кадров окно подтверждает `capture.id`,
+  // и main снимает. `end`, смена гостя или сторож на срок операции возвращают размер человека.
+  const [agentCapture, setAgentCapture] = useState<{ width: number; height: number; id: string } | null>(null);
+  useEffect(
+    () =>
+      bridge.browser.onAgentActivity((event) => {
+        const own = useBrowserStore.getState().tabs[tabId]?.webContentsId ?? null;
+        if (own === null || event.webContentsId !== own) return;
+        if (event.phase === 'end') setAgentCapture(null);
+        else if (event.capture !== undefined) setAgentCapture(event.capture);
+      }),
+    [bridge, tabId],
+  );
+
+  useEffect(() => {
+    setAgentCapture(null);
+  }, [state.webContentsId]);
+  const captureId = agentCapture?.id ?? null;
+  useEffect(() => {
+    if (captureId === null) return;
+    let frames = 0;
+    let raf = 0;
+    let confirmed = false;
+    const confirm = (): void => {
+      if (confirmed) return;
+      confirmed = true;
+      bridge.browser.agentCaptureReady(captureId).catch((error: unknown) => console.warn('[parley] agent capture confirmation failed', error));
+    };
+    const tick = (): void => {
+      frames += 1;
+      if (frames >= CAPTURE_READY_FRAMES) confirm();
+      else raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    // Окно в фоне кадры не рисует: вёрстка уже применена, ждать дальше нечего.
+    const fallback = setTimeout(confirm, CAPTURE_READY_FALLBACK_MS);
+    const guard = setTimeout(() => setAgentCapture(null), AGENT_LIMITS.opMs);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(fallback);
+      clearTimeout(guard);
+    };
+  }, [bridge, captureId]);
+
   useEffect(() => () => useBrowserStore.getState().remove(tabId), [tabId]);
 
   /** Метод живой страницы; до `dom-ready` Electron бросает — это не повод ронять окно. */
@@ -574,6 +626,27 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
     if (moveTabToPanel(workKey, place.tabId, owner) === null) toast(S.browser.panel.moved(targetName(entry, owner)));
   };
 
+  // Страница панели для main (реестр агента, этап C): гость и видимость — точно то, что видит человек. Вкладки человека агенту закрыты.
+  const panelOwner = place.kind === 'panel' ? place.owner : null;
+  const panelPageId = place.kind === 'panel' ? place.pageId : null;
+  const panelPaused = useLayoutStore((store) => {
+    const layout = store.layouts[workKey];
+    return panelOwner !== null && layout !== undefined && panelOf(layout, panelOwner)?.paused === true;
+  });
+  useEffect(() => {
+    if (panelOwner === null || panelPageId === null) return;
+    reportAgentPage(bridge, workKey, panelOwner, panelPageId, state.webContentsId, visible);
+  }, [bridge, workKey, panelOwner, panelPageId, state.webContentsId, visible]);
+  // Панель выгружена, а страница в раскладке жива — main помнит её без гостя. Закрытую страницу воскрешать нельзя:
+  // `gone` уже ушёл от подписчика на раскладки, раньше размонтирования.
+  useEffect(() => {
+    if (panelOwner === null || panelPageId === null) return;
+    return () => {
+      const layout = useLayoutStore.getState().layouts[workKey];
+      if (layout !== undefined && ownerOfPage(layout, panelPageId) !== null) reportAgentPage(bridge, workKey, panelOwner, panelPageId, null, false);
+    };
+  }, [bridge, workKey, panelOwner, panelPageId]);
+
   const live = src !== null && state.webContentsId !== null;
   const panel = panelHeight(devtoolsHeight, rootHeight);
   const commitPanelHeight = (height: number): void => {
@@ -588,7 +661,7 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
       ref={rootRef}
       data-tab-id={tabId}
       className={cn('absolute flex flex-col overflow-hidden bg-background', place.kind === 'panel' && 'inset-0')}
-      style={{ visibility: visible ? 'visible' : 'hidden' }}
+      style={visible ? { visibility: 'visible' } : agentCapture !== null ? { visibility: 'visible', opacity: 0, pointerEvents: 'none' } : { visibility: 'hidden' }}
       onPointerDownCapture={focusOwnTab}
       onFocusCapture={focusOwnTab}
       onKeyDown={(event) => {
@@ -642,7 +715,10 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
               targetMenu: <TargetMenu entry={entry} target={pageContext.target} onChange={pageContext.setTarget} />,
               moveMenu: <MoveToMenu entry={entry} onMove={moveToPanel} />,
             }
-          : {})}
+          : {
+              paused: panelPaused,
+              onPause: (next: boolean) => pausePanel(workKey, place.owner, next),
+            })}
       />
       <div ref={fieldRef} data-testid="browser-field" className={cn('relative min-h-0 flex-1 overflow-hidden', stage !== null && 'bg-muted')}>
         {src === null ? (
@@ -654,11 +730,20 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
           <webview
             ref={setView}
             src={BLANK_SRC}
-            className={stage === null ? 'flex h-full w-full bg-white' : 'absolute flex bg-white shadow-md'}
-            {...(stage === null ? {} : { style: { left: stage.left, top: stage.top, width: stage.width, height: stage.height } })}
+            className={agentCapture === null && stage === null ? 'flex h-full w-full bg-white' : 'absolute flex bg-white shadow-md'}
+            {...(agentCapture !== null
+              ? { style: { left: 0, top: 0, width: agentCapture.width, height: agentCapture.height } }
+              : stage === null
+                ? {}
+                : { style: { left: stage.left, top: stage.top, width: stage.width, height: stage.height } })}
             {...WEBVIEW_ATTRIBUTES}
           />
         )}
+        {agentCapture !== null && visible ? (
+          <div data-testid="agent-capture" className="pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 rounded-md border border-border bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm">
+            {S.browser.panel.agentCapture(agentCapture.width, agentCapture.height)}
+          </div>
+        ) : null}
         {stage === null ? null : (
           <div
             data-testid="viewport-label"

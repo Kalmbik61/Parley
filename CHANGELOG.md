@@ -23,6 +23,13 @@ Chats and rooms get a browser of their own next to the view, and an agent can sh
   **Show** button. The agent never changes your active tab or workspace and never takes the keyboard focus, and the
   same address (without `#fragment`) is not opened twice. Agents that run with Parley's own settings do not ask you
   before opening a page.
+- **Agents can read the browser of their chat and rooms.** An agent (Claude, GLM or Codex) lists the pages in the
+  browser panel of its own chat and of the rooms it belongs to, reads the console errors and failed requests of the
+  current page — secrets in headers, query strings and JSON bodies are masked as `<redacted>` — and takes screenshots,
+  also at another size such as 375×812 (the page shows "Agent capture 375×812" for a moment; your size comes back).
+  Your own browser tabs are never visible to agents. **⋯ → Pause agents** in a panel page stops all agents in that
+  panel (**Resume agents** lifts it); Settings → Browser → "Let agents use the browser" still turns access off for
+  everyone. Sessions started before the update get the tools after a restart.
 - **Let agents use the browser.** A switch in Settings → Browser turns agent access off for all sessions at once.
 - **Lean agent sessions.** Agents that Parley starts for rooms and through `spawn_session` now run without
   your plugins, other MCP servers and auto-memory — about a third less context on every turn of Claude Code
@@ -35,8 +42,28 @@ Chats and rooms get a browser of their own next to the view, and an agent can sh
   bytes of map JSON were parsed, how much terminal output arrived (chunks and bytes), and how many session
   recomputes the wake and activity services did. The counters cover the time since the previous status line.
 
+### Fixed
+
+- **Screenshots from an agent show the real page.** A screenshot at another size (such as 1440×900) or of a page
+  wider than the panel used to come back as a tile of the panel-sized piece repeated; the window now sets the page to
+  the screenshot size for the moment and the agent gets the actual layout. A full-page screenshot takes the first three
+  viewport heights and says so instead of refusing; images stay under 3.5 MB.
+- **A timed-out or repeated screenshot no longer leaves your page in the agent's size.** Your size, preset and
+  field are exactly what you last chose, and a second request waits for the first.
+- **Agents read less and see less.** A request in detail stays under 20 KB (headers cut to 256 characters), console
+  entries are compact with similar ones folded, network rows keep only the first 80 characters of the query, and
+  `after` returns only what is new since the last read. `browser_tabs` shows a page that left localhost only as its
+  origin, and details of an earlier document of the page are no longer readable.
+- **More secrets are masked in what agents read.** The console text and strings inside JSON are masked by the shape
+  of the value (`Bearer …`, JWT, `password=…`, `api_key=…`); `sid`, `sig`, `jwt`, `pwd`, `xsrf` and `code` in a URL
+  are covered too.
+- **Pause really pauses.** An agent cannot open a page in a paused panel, and a canceled window navigation no longer
+  makes agents forget the pause. Agent screenshots in `drops/` are cleaned up hourly.
+
 ### Changed
 
+- **Agents that run with Parley's own settings do not ask before reading the browser.** The reading tools
+  (`browser_tabs`, `browser_console`, `browser_network`, `browser_screenshot`) are allowed up front, like `browser_open`.
 - **The built-in minimal-development skill asks for more care around a change.** Before editing, an agent lists
   what the change must reach and what it could break for users; it marks a deliberate shortcut with a
   `shortcut: <the limit>, <when to replace it>` comment, leaves a small test for new non-trivial logic, and ends
@@ -46,6 +73,9 @@ Chats and rooms get a browser of their own next to the view, and an agent can sh
   1200 characters, to put documents and file edits into a file and send only its path, not to quote
   earlier messages (use `replyTo` instead), to call `read_room` only when they really need the history,
   and to read the room map through the tools instead of opening `map.json`.
+- **Sessions started by another session hang off their parent in the sidebar.** A thin line runs from the parent's
+  status dot down to each session it started, like a tree, and the indent grows from 12 to 20 px per level. A
+  child whose parent row is hidden under "N more closed" has no line.
 
 ### Fixed
 

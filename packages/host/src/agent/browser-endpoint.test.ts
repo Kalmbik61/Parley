@@ -5,7 +5,7 @@
 import { createServer, request, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BROWSER_AGENT_FEATURE } from '@parley/protocol';
+import { BROWSER_AGENT_FEATURE, BROWSER_AGENT_OP_FEATURE } from '@parley/protocol';
 import type { BrowserAgentOpEvent, EventMessage, ResponseMessage, SessionRef } from '@parley/protocol';
 import { silentLog } from '../../test/feed-fakes.js';
 import type { Client } from '../client.js';
@@ -200,6 +200,25 @@ describe('операция до окна и ответ', () => {
     expect(json(await post(old.url, { op: 'open', args: { url: PAGE } }, old.token))).toMatchObject({ ok: false, error: { code: 'unsupported' } });
   });
 
+  it('окно с browser-agent:tabs, но без browser-agent:screenshot — unsupported сразу, окну не отправлено', async () => {
+    const window = fakeWindow([BROWSER_AGENT_FEATURE, BROWSER_AGENT_OP_FEATURE('tabs')]);
+    const { url, token } = await boot([window]);
+    const answer = json(await post(url, { op: 'screenshot', args: { tab: 't1' } }, token)) as { ok: boolean; error: { code: string; message: string } };
+    expect(answer).toMatchObject({ ok: false, error: { code: 'unsupported' } });
+    expect(answer.error.message).toBe("Parley's window does not support screenshot yet: ask the human to update Parley.");
+    expect(window.sent).toEqual([]);
+  });
+
+  it('окно без browser-agent:* (сборка C) — как раньше: операция уходит окну', async () => {
+    const window = fakeWindow();
+    const { endpoint, url, token } = await boot([window]);
+    const reply = post(url, { op: 'screenshot', args: { tab: 't1' } }, token);
+    const op = await nextOp(window);
+    expect(op.op).toBe('screenshot');
+    endpoint.resolve(op.opId, OPENED, window);
+    await reply;
+  });
+
   it('схема: неизвестная операция, неверные аргументы, не JSON — bad_request, окну ничего', async () => {
     const window = fakeWindow();
     const { url, token } = await boot([window]);
@@ -276,7 +295,8 @@ describe('журнал хоста', () => {
       projectPath: '/proj',
       workId: 'w-1',
       sessionId: 's-02',
-      op: 'open',
+      op: 'browser.agentOp',
+      agentOp: 'open',
       tab: 't1',
       origin: 'http://localhost:5173',
       outcome: 'ok',
@@ -295,7 +315,7 @@ describe('журнал хоста', () => {
     await reply;
     const none = await boot([]);
     await post(none.url, { op: 'open', args: { url: PAGE } }, none.token);
-    expect(vi.mocked(log.info).mock.calls.at(-1)?.[1]).toMatchObject({ op: 'open', tab: null, origin: null, outcome: 'not_loopback' });
+    expect(vi.mocked(log.info).mock.calls.at(-1)?.[1]).toMatchObject({ op: 'browser.agentOp', agentOp: 'open', tab: null, origin: null, outcome: 'not_loopback' });
     expect(vi.mocked(none.log.info).mock.calls.at(-1)?.[1]).toMatchObject({ outcome: 'window_not_connected', origin: 'http://localhost:5173', ms: 0 });
   });
 });

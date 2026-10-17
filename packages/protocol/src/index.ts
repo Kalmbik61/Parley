@@ -127,8 +127,11 @@ export type { HistoryHitView, HistorySearchView, HistoryMethodName, HistoryMetho
 export {
   AGENT_INPUT,
   AGENT_LIMITS,
+  AGENT_VIEWPORT,
+  AGENT_DEFAULTS,
   BROWSER_AGENT_ERROR_CODES,
   BROWSER_AGENT_FEATURE,
+  BROWSER_AGENT_OP_FEATURE,
   BROWSER_AGENT_OPS,
   browserAgentArgs,
   browserAgentRequest,
@@ -136,12 +139,20 @@ export {
 } from './browser-agent.js';
 export type {
   BrowserAgentArgs,
+  BrowserAgentConsoleEntry,
+  BrowserAgentConsoleResult,
   BrowserAgentErrorCode,
+  BrowserAgentNetworkResult,
   BrowserAgentOp,
   BrowserAgentOpEvent,
   BrowserAgentOpenResult,
   BrowserAgentOwner,
+  BrowserAgentRequestDetail,
+  BrowserAgentRequestSummary,
   BrowserAgentResult,
+  BrowserAgentScreenshotResult,
+  BrowserAgentTabInfo,
+  BrowserAgentTabsResult,
 } from './browser-agent.js';
 export { assistantMethodSchemas } from './assistant.js';
 export type { AssistantDetail, AssistantMethodResults, AssistantPhase, AssistantProposal, AssistantState } from './assistant.js';

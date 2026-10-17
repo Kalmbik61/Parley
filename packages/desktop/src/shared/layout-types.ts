@@ -79,6 +79,8 @@ export interface BrowserPanelSpec {
   width: number;
   pages: BrowserPanelPage[];
   active: string | null;
+  /** Агенты на паузе в этой панели (спека 4.8): их операции — access_denied, страниц нет в browser_tabs. Поля нет — не на паузе. */
+  paused?: boolean;
 }
 
 export interface WorkLayout {

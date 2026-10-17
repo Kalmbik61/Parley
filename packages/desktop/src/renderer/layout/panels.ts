@@ -63,6 +63,16 @@ export function setPanelOpen(layout: WorkLayout, owner: BrowserOwner, open: bool
   return withPanel(layout, owner, { ...panel, open });
 }
 
+/** Поставить агентов панели на паузу или снять её; поле снимается целиком. Панели нет или состояние то же — та же раскладка. */
+export function setPanelPaused(layout: WorkLayout, owner: BrowserOwner, paused: boolean): WorkLayout {
+  const panel = panelOf(layout, owner);
+  if (panel === undefined || (panel.paused === true) === paused) return layout;
+  if (paused) return withPanel(layout, owner, { ...panel, paused: true });
+  const rest = { ...panel };
+  delete rest.paused;
+  return withPanel(layout, owner, rest);
+}
+
 /**
  * Закрыть страницу. Активной становится сосед — справа, иначе слева, как у вкладок. Последняя страница уносит панель:
  * закрывать в ней нечего, а ширина без страниц ничего не стоит.

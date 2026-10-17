@@ -3,7 +3,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { HostPaths } from '@parley/host';
-import { BROWSER_AGENT_FEATURE, COMPACT_WORKS_FEATURE, encodeLine, LineDecoder, PROTOCOL_VERSION } from '@parley/protocol';
+import { BROWSER_AGENT_FEATURE, BROWSER_AGENT_OP_FEATURE, BROWSER_AGENT_OPS, COMPACT_WORKS_FEATURE, encodeLine, LineDecoder, PROTOCOL_VERSION } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S } from '../shared/strings.js';
 import { answerBrowserAgentOps, HostConnection } from './host-connection.js';
@@ -610,14 +610,14 @@ describe('операции агента над браузером (этап B2, 
     data: { opId, ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-02' }, label: 'S02', op: 'open', args: { url: 'http://localhost:5173/' } },
   });
 
-  it('hello заявляет compact-works и browser-agent', async () => {
+  it('hello заявляет compact-works, browser-agent и browser-agent:<op> на каждую операцию', async () => {
     await writeToken(paths);
     const received: unknown[] = [];
     const server = await startFakeServer(paths, { received });
     const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
     await connection.connect();
     const hello = received.find((message) => (message as { method?: string }).method === 'hello') as { params: { features: string[] } };
-    expect(hello.params.features).toEqual([COMPACT_WORKS_FEATURE, BROWSER_AGENT_FEATURE]);
+    expect(hello.params.features).toEqual([COMPACT_WORKS_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE)]);
     connection.close();
     server.close();
   });

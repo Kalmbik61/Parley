@@ -3,7 +3,8 @@
  * Комната стоит в карточке на месте первого из своих участников (`sort.ts#cardRows`), самих участников отдельными
  * строками карточка не выводит.
  *
- * Облик: radius 14, отступ `4 6 7 {8 + 12·depth}`, зазор 4, 12px. Шапка 18px, зазор 6: значок вопроса 12 (только
+ * Облик: radius 14, отступ `4 6 7 8` и сдвиг на уровень `marginLeft: 20·depth` (как у строки сессии: заливка начинается
+ * после изгиба линии дерева, `TreeGuides.tsx`), зазор 4, 12px. Шапка 18px, зазор 6: значок вопроса 12 (только
  * когда решение ждёт человека, иначе пустое место), Hash 13, название, слово состояния — `decision` (`accent-800`),
  * `@you · {n} new`, если среди новых сообщений есть упоминание человека (`@human`, Parley 0.3.0), или `{n} new`
  * (оба — `neutral-800`), шеврон в кнопке 16px (`Show agents` / `Hide agents`), время последнего события. Свёрнутая —
@@ -65,7 +66,8 @@ import { RoomRowMenu } from './RoomRowMenu.js';
 import { SessionRow } from './SessionRow.js';
 import { planProgress } from '../components/rooms/PlanPanel.js';
 import type { RoomPlan } from '@parley/core';
-import type { CardRoomRow } from './sort.js';
+import { NO_GUIDES, type CardRoomRow, type TreeGuide } from './sort.js';
+import { TREE_STEP, TreeGuides } from './TreeGuides.js';
 import { DROP_TARGET_FILL, DROP_TARGET_INK, useSidebarDropTarget } from './use-drop-target.js';
 import { useCursorStop } from './use-sidebar-keys.js';
 
@@ -76,6 +78,8 @@ export interface RoomRowProps {
   workId: string;
   bridge: ParleyBridge;
   row: CardRoomRow;
+  /** Линии дерева к этой строке и сквозь неё (`sort.ts#treeGuides`); у архивной комнаты их нет. */
+  guides?: readonly TreeGuide[];
   plan?: RoomPlan | null;
   /** Сообщения комнаты, не прочитанные человеком (`WorkAttention.roomsUnread`). */
   unread: number;
@@ -121,6 +125,7 @@ export function RoomRow({
   workId,
   bridge,
   row,
+  guides = NO_GUIDES,
   plan,
   unread,
   mentioned,
@@ -204,10 +209,10 @@ export function RoomRow({
         event.stopPropagation();
         activate();
       }}
-      style={{ paddingLeft: `${8 + row.depth * 12}px` }}
+      style={{ marginLeft: `${row.depth * TREE_STEP}px`, paddingLeft: '8px' }}
       className={cn(
-        // Кольцо внутрь: карточка режет выступающее (`overflow-hidden`).
-        'flex min-w-0 cursor-default flex-col gap-1 rounded-[14px] pb-[7px] pr-1.5 pt-1 text-xs text-work-sidebar-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
+        // Кольцо внутрь: карточка режет выступающее (`overflow-hidden`). `relative` — для линий дерева.
+        'relative flex min-w-0 cursor-default flex-col gap-1 rounded-[14px] pb-[7px] pr-1.5 pt-1 text-xs text-work-sidebar-foreground outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-work-sidebar-focus-ring',
         // Цель броска (2.5) бьёт всё, даже подкраску решения. Подкраска бьёт выбор и развёрнутость и не бледнеет
         // под курсором — как у строки сессии.
         over
@@ -299,6 +304,8 @@ export function RoomRow({
           ))}
         </div>
       ) : null}
+      {/* Последним: вне потока (absolute), поэтому ни раскладку строки, ни `gap` между её частями не двигает. */}
+      <TreeGuides guides={guides} depth={row.depth} />
     </div>
     </RoomRowMenu>
   );

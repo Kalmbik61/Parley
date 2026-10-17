@@ -12,9 +12,11 @@ import {
   panelOf,
   prunePanels,
   setPanelOpen,
+  setPanelPaused,
   setPanelWidth,
   updatePanelPage,
 } from './panels.js';
+import { ownerKey } from './ids.js';
 import { emptyLayout, PANEL_LIMITS } from './tree.js';
 
 /** Одна пустая раскладка на файл: `emptyLayout()` каждый раз берёт новый случайный id группы. */
@@ -69,6 +71,32 @@ describe('addPanelPage', () => {
     const snapshot = JSON.stringify(before);
     addPanelPage(before, CHAT, page(3));
     expect(JSON.stringify(before)).toBe(snapshot);
+  });
+});
+
+describe('setPanelPaused', () => {
+  it('ставит паузу и снимает: поле удаляется, а не пишется false; остальное цело', () => {
+    const layout = withPages(2);
+    const paused = setPanelPaused(layout, CHAT, true);
+    expect(panelOf(paused, CHAT)).toEqual({ ...panelOf(layout, CHAT), paused: true });
+    const resumed = setPanelPaused(paused, CHAT, false);
+    expect(panelOf(resumed, CHAT)).toEqual(panelOf(layout, CHAT));
+    expect('paused' in (panelOf(resumed, CHAT) ?? {})).toBe(false);
+  });
+
+  it('Resume сохраняет неизвестное поле панели', () => {
+    const layout = withPages(2);
+    const panel = panelOf(layout, CHAT)!;
+    const future: WorkLayout = { ...layout, panels: { [ownerKey(CHAT)]: { ...panel, paused: true, futureField: 7 } as typeof panel } };
+    const resumed = setPanelPaused(future, CHAT, false);
+    expect(panelOf(resumed, CHAT)).toEqual({ ...panel, futureField: 7 });
+    expect('paused' in (panelOf(resumed, CHAT) ?? {})).toBe(false);
+  });
+
+  it('то же состояние и несуществующая панель — та же ссылка', () => {
+    const layout = withPages(1);
+    expect(setPanelPaused(layout, CHAT, false)).toBe(layout);
+    expect(setPanelPaused(layout, ROOM, true)).toBe(layout);
   });
 });
 

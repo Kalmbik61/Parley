@@ -5,6 +5,8 @@ import { performance } from 'node:perf_hooks';
 import type { HostPaths } from '@parley/host';
 import {
   BROWSER_AGENT_FEATURE,
+  BROWSER_AGENT_OP_FEATURE,
+  BROWSER_AGENT_OPS,
   COMPACT_WORKS_FEATURE,
   encodeLine,
   LineDecoder,
@@ -367,7 +369,7 @@ export class HostConnection {
         method: 'hello',
         // Окно читает компактный снимок работ (P35): письма хвостом, старше — страницами `context.messages`, и исполняет
         // операции агента над своим браузером (спека браузера 3.7).
-        params: { token, protocol: PROTOCOL_VERSION, client: 'desktop', features: [COMPACT_WORKS_FEATURE, BROWSER_AGENT_FEATURE] },
+        params: { token, protocol: PROTOCOL_VERSION, client: 'desktop', features: [COMPACT_WORKS_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE)] },
       }),
     );
 

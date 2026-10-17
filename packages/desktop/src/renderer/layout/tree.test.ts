@@ -1249,6 +1249,15 @@ describe('панели браузера хозяев в раскладке (эт
     expect(noWidth.panels?.['room:r-01']).toMatchObject({ open: false, width: PANEL_LIMITS.defaultWidth, active: 'bp-000000' });
   });
 
+  it('пауза агентов переживает запись и чтение; false и мусор — поля нет', () => {
+    const layout: WorkLayout = { ...base, panels: { 'session:s-01': { ...PANEL, paused: true } } };
+    expect(parseWorkLayout(JSON.parse(JSON.stringify(layout)))).toEqual(layout);
+    for (const bad of [false, 'yes', 1, null]) {
+      const panel = (parseWorkLayout(withPanels({ 'session:s-01': { ...PANEL, paused: bad } })) as WorkLayout).panels?.['session:s-01'];
+      expect(panel && 'paused' in panel, String(bad)).toBe(false);
+    }
+  });
+
   it('лишние поля панели и страницы с диска не путешествуют обратно; мусор в размере страницы — Fit', () => {
     const raw = withPanels({
       'session:s-01': { open: true, width: 480, extra: 1, active: 'bp-000001', pages: [{ id: 'bp-000001', url: 'http://localhost:3000/', extra: 2, viewport: { preset: 'нет', rotated: 5 } }] },

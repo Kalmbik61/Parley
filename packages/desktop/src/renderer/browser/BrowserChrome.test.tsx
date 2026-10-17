@@ -119,6 +119,22 @@ describe('BrowserChrome (спека 2026-10-07, 4.1)', () => {
     expect(props.onClearDevtools).toHaveBeenCalledTimes(1);
   });
 
+  it('⋯ у страницы панели: «Pause agents» / «Resume agents» зовёт onPause; у вкладки человека пункта нет', () => {
+    const props = renderChrome({ onPause: vi.fn() });
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More browser actions' }), { key: 'Enter' });
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'Pause agents' }));
+    expect(props.onPause).toHaveBeenCalledWith(true);
+    cleanup();
+    const paused = renderChrome({ onPause: vi.fn(), paused: true });
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More browser actions' }), { key: 'Enter' });
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'Resume agents' }));
+    expect(paused.onPause).toHaveBeenCalledWith(false);
+    cleanup();
+    renderChrome();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'More browser actions' }), { key: 'Enter' });
+    expect(within(screen.getByRole('menu')).queryByRole('menuitem', { name: /agents/ })).toBeNull();
+  });
+
   it('без страницы размер, консоль и ⋯ неактивны', () => {
     renderChrome({ live: false });
     for (const name of ['Viewport size', 'Console and network', 'More browser actions']) {

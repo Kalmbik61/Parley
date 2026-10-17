@@ -50,8 +50,8 @@ function findSkillHint(skillList: GuidanceOptions['skillList']): string {
  * нельзя велеть агенту звать инструмент, которого у него нет. Вставка и политика остаются теми же байтами у всех сессий.
  */
 export const BROWSER_PRIORITY_RULE =
-  "For pages on localhost, use Parley's browser first: browser_open shows the page in a tab of this workspace, and the human sees the same tab. " +
-  "Use Chrome, Chrome DevTools or Playwright tools only for other sites, for what Parley's browser tools do not do (so far: reading or clicking the page, running JS, cookies, files, performance traces), or when browser_open is not available.";
+  "For pages on localhost, use Parley's browser first: browser_open shows the page in the browser panel of your chat or room, and the human sees the same page; browser_tabs, browser_console, browser_network and browser_screenshot read it. " +
+  "Use Chrome, Chrome DevTools or Playwright tools only for other sites, for what Parley's browser tools do not do (so far: clicking or typing in the page, running JS, cookies, files, performance traces), or when browser_open is not available.";
 
 /**
  * Стабильная политика: правила координации без id сессии, названия и цели. Меняется только от настроек запуска
