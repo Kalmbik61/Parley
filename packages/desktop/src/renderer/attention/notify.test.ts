@@ -11,6 +11,8 @@ import type { AppNote, FocusTarget } from '../../shared/bridge.js';
 import { DEFAULT_UI, type UiFile } from '../../shared/ui-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { useActivityStore } from '../store/activity.js';
+import { REQUIRED_METHODS } from '../lib/capabilities.js';
+import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import type { PendingAsk } from './ask-summary.js';
@@ -1106,6 +1108,21 @@ describe('wireAttentionNotifications на подставном мосте и н�
     expect(bridge.appNotified).toHaveLength(1);
     offAgain();
     vi.useRealTimers();
+  });
+
+  it('вопрос сессии узнаётся урезанным снимком: feed.snapshot идёт со scope attention', async () => {
+    vi.useFakeTimers();
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS, 'feed.snapshot'] } });
+    bridge.setHandler('feed.snapshot', async () => ({ items: [], revision: 0, schemaVersion: 1, mode: null }));
+    const off = wire();
+    emit(ref1, 'working');
+    emit(ref1, 'blocked');
+    await vi.runAllTimersAsync();
+    const snapshots = bridge.calls.filter((call) => call.method === 'feed.snapshot');
+    expect(snapshots.length).toBeGreaterThan(0);
+    for (const call of snapshots) expect(call.params).toEqual({ ref: ref1, scope: 'attention' });
+    off();
+    useHostStore.setState({ status: { state: 'connecting' } });
   });
 
   it('host.notice моста доходит до уведомителя; после отписки — нет', () => {

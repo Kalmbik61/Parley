@@ -68,7 +68,7 @@ describe('стор ответов острова', () => {
     await flush();
     useIslandReplies.getState().fetch(REF, 'k1');
     expect(call).toHaveBeenCalledTimes(1);
-    expect(call).toHaveBeenCalledWith('feed.snapshot', { ref: REF });
+    expect(call).toHaveBeenCalledWith('feed.snapshot', { ref: REF, scope: 'attention' });
     expect(useIslandReplies.getState().texts).toEqual({ k1: 'All done' });
     useIslandReplies.getState().fetch(REF, 'k2');
     await flush();
