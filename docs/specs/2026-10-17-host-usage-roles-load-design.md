@@ -40,16 +40,21 @@
 
 ### 1.1 Наблюдения
 
-Сейчас `indexSessionFile` (Claude) и `indexCodexSession` (Codex) по ходу чтения зовут `ledger.observe(...)`: Claude — `{ kind: 'delta', id, counters, at }` для записей `role === 'assistant'` с `usage` (подагенты — с `child: true`), Codex — `{ kind: 'cumulative', stream: 'rollout', counters, at }` по `event_msg` / `token_count` и сбросы. Правило «запись → наблюдение» выносится в чистые функции ядра:
+Сейчас `indexSessionFile` (Claude) и `indexCodexSession` (Codex) по ходу чтения зовут `ledger.observe(...)`: Claude — `{ kind: 'delta', id, counters, at }` для записей `role === 'assistant'` с `usage`, подагенты — тем же ledger с `child: true`, при этом из записей родителя копятся множества sidechain (`isSidechain`, `agentId`, `messageId`), а запись подагента без `messageId`, пересекающаяся с родителем, даёт `ledger.markAmbiguous()`; Codex — `{ kind: 'cumulative', stream: 'rollout', counters, at }` по `event_msg` / `token_count` (сбросов адаптер не выдаёт, спад счётчика — `partial`). Тип `UsageObservation` уже экспортирован из `usage-ledger.ts`.
+
+Правило «запись → наблюдение» и правило проигрывания в ledger выносятся в чистые функции ядра так, чтобы полный перечит и срез по шкале шли через один и тот же код:
 
 ```ts
 // core/src/work/usage-observations.ts
-export type UsageObservation = Parameters<UsageLedger['observe']>[0];
+export interface ClaudeSidechain { agents: Set<string>; unidentified: boolean }     // копится по записям родителя, монотонно
 export function claudeUsageObservation(record: SessionRecord, file: string, lineNo: number): UsageObservation | null;
+export function noteClaudeSidechain(state: ClaudeSidechain, record: SessionRecord): void;
 export function codexUsageObservation(raw: RawRecord): UsageObservation | null;
+/** Один ledger: родитель, затем подагенты с child: true и той же проверкой неоднозначности, что сейчас в indexSessionFile. */
+export function replayClaudeUsage(ledger: UsageLedger, parent: UsageTimeline, subagents: readonly UsageTimeline[]): void;
 ```
 
-Оба индексатора переходят на эти функции (поведение не меняется — тесты индекса остаются зелёными).
+`indexSessionFile` после чтения файлов строит те же структуры (наблюдения родителя и подагентов, sidechain) и зовёт `replayClaudeUsage`; `indexCodexSession` собирает наблюдения и проигрывает их в свой ledger. Поведение не меняется — тесты индекса остаются зелёными, а эквивалентность среза полному перечиту обеспечивается общим кодом, не копией.
 
 ### 1.2 Шкала файла
 
@@ -58,30 +63,34 @@ export function codexUsageObservation(raw: RawRecord): UsageObservation | null;
 export interface UsageTimeline {
   file: string;
   family: 'claude' | 'codex';
-  /** Байт лога, разобранных целиком (до последнего `\n`); хвост без перевода строки не считается. */
+  /** Байт лога, разобранных целиком. */
   offset: number;
-  /** Размер и ino файла при последнем чтении: усечение или подмена → шкала строится заново. */
+  /** Размер и ino файла при последнем чтении: усечение (size < offset) или подмена (другой ino) → шкала строится заново. */
   size: number; ino: number;
-  observations: UsageObservation[];
   lineNo: number;
+  observations: readonly UsageObservation[];
+  /** Только у родителя Claude: состояние sidechain для проверки неоднозначности подагентов. */
+  sidechain?: ClaudeSidechain;
 }
-export async function extendUsageTimeline(timeline: UsageTimeline | null, file: string, family): Promise<UsageTimeline>;
-export function sliceUsageTimeline(timelines: readonly UsageTimeline[], windows: readonly UsageWindow[]): UsageSummary | undefined;
+export interface TimelineReader { stat(file): Promise<{ size: number; ino: number }>; open(file, start): NodeJS.ReadableStream }   // по умолчанию node:fs; в тестах подменяется
+export async function extendUsageTimeline(previous: UsageTimeline | null, file: string, family: 'claude' | 'codex', reader?: TimelineReader): Promise<UsageTimeline>;
+export function claudeUsageFromTimelines(parent: UsageTimeline, subagents: readonly UsageTimeline[], windows: readonly UsageWindow[]): UsageSummary;
+export function codexUsageFromTimeline(timeline: UsageTimeline, windows: readonly UsageWindow[]): UsageSummary;
 ```
 
-`extendUsageTimeline`: `stat(file)`; если шкалы нет, `ino` другой или `size < offset` — читать с нуля; иначе читать `createReadStream(file, { start: offset })` кусками, резать по `\n`, последний неполный кусок не разбирать (он войдёт в следующий вызов), каждую полную строку `JSON.parse` → наблюдение через функции 1.1, `offset` сдвигать на конец последней полной строки. Битая строка пропускается, как в `forEachJsonlRecord`. Файла нет — шкала пустая с `size: 0`.
+`extendUsageTimeline` возвращает **новый** объект (прежний не мутируется: массив наблюдений копируется с дописанным хвостом) — одновременные вызовы по одному файлу безопасны, побеждает последняя запись в кэш. `stat(file)`; если шкалы нет, `ino` другой или `size < offset` — читать с нуля; иначе читать `createReadStream(file, { start: offset })` кусками ≤ 1 МиБ, резать по `\n`, каждую строку `JSON.parse` → наблюдение через функции 1.1 (у Claude заодно `noteClaudeSidechain`), `offset` сдвигать на конец строки. **Хвост без перевода строки**: пробовать `JSON.parse`; целый объект — принять и сдвинуть `offset` до конца файла (так ведёт себя readline сегодня, и фикстуры без завершающего `\n` считаются одинаково); оборванный — не разбирать, он войдёт в следующий вызов. Битая строка с `\n` пропускается, как в `forEachJsonlRecord`. Файла нет — пустая шкала с `size: 0, ino: 0`.
 
-`sliceUsageTimeline`: новый `createUsageLedger({ windows })`, в который по порядку проигрываются наблюдения главного лога, затем потомков (с `child: true`, как сейчас), итог — `ledger.summary()` с теми же `coverage` и `attribution`, что даёт `withDescendants`. Эквивалентность полному перечиту — тест на фикстурах обоих провайдеров с окнами, потомками и сбросом Codex.
+Срез: `claudeUsageFromTimelines` — новый `createUsageLedger({ windows })` и `replayClaudeUsage` (один ledger, подагенты с `child: true`, неоднозначность по sidechain), итог `ledger.summary()`; `codexUsageFromTimeline` — ledger с окнами и наблюдения файла; потомки Codex складываются в `usageIn`, как сейчас, через `withDescendants` с `descendantOf`. Пустая шкала даёт обычную `summary()` (неизвестно или нули по окнам), не `undefined`: `undefined` из `usageIn` остаётся только когда сессии нет в индексе. Эквивалентность полному перечиту — тест на фикстурах обоих провайдеров с окнами, подагентами Claude (в том числе sidechain без `messageId`), порождённым тредом Codex и спадом счётчика Codex (`partial`).
 
 ### 1.3 `LogIndex.usageIn`
 
-Вместо `signature` + `slices`: кэш шкал `Map<file, UsageTimeline>` (LRU 256). На запрос: главный файл и файлы потомков (у Claude — `discoverSession`, результат кэшируется по главному файлу на `SUBAGENT_DISCOVERY_TTL_MS`; у Codex — `descendantIndexes` из памяти) → для каждого `extendUsageTimeline` → `sliceUsageTimeline`. Кэш срезов `slices` остаётся как есть (попадания при неизменных файлах по-прежнему бесплатны), но промах теперь стоит чтения хвоста, а не файла.
+Кэш шкал `Map<file, UsageTimeline>` (LRU 256) и карта идущих дочитываний `Map<file, Promise<UsageTimeline>>` (два `usageIn` одного участника из двух комнат делят одно чтение). На запрос: главный файл и файлы потомков (у Claude — `discoverSession`, результат кэшируется по главному файлу на `SUBAGENT_DISCOVERY_TTL_MS`; у Codex — `descendantIndexes` из памяти) → для каждого `extendUsageTimeline` → `claudeUsageFromTimelines` или `codexUsageFromTimeline` + `withDescendants`. Кэш срезов `slices` остаётся как есть (попадания при неизменных файлах по-прежнему бесплатны), но промах теперь стоит чтения хвоста, а не файла. `createLogIndex(roots, options?)` получает `reader`, `timelineCacheSize`, `subagentTtlMs`, `now` для тестов.
 
 `reindex`, `start`, наблюдатель `watchSessions` и `handleLogChange` не меняются.
 
 ### 1.4 Чип и запрос
 
-`RoomUsageChip`: интервал `ROOM_USAGE_MIN_INTERVAL_MS = 60_000`; из зависимостей эффекта уходит `signal` (токены участников) — поводы спросить: активация, смена `composition`, таймер раз в 60 с пока `active`. В поповере — кнопка **Refresh** (`S.roomUsage.refresh`), которая спрашивает сразу (не чаще раза в 5 с). «Updated HH:MM» остаётся. Старая спека расхода, раздел 6.3, считается заменённой этим пунктом.
+`RoomUsageChip`: интервал `ROOM_USAGE_MIN_INTERVAL_MS = 60_000`; из зависимостей эффекта уходит `signal` (токены участников) — поводы спросить: активация, смена `composition`, таймер раз в 60 с пока `active`. В поповере — кнопка **Refresh** (`S.usage.refresh`, раздел строк чипа называется `usage`), которая спрашивает сразу (не чаще раза в 5 с). «Updated HH:MM» остаётся; E2E `room-usage.spec.ts` на 800×500 проверяет, что кнопка помещается. Старая спека расхода, раздел 6.3, считается заменённой этим пунктом.
 
 ## 2. `roles.list` (host + окно)
 
@@ -89,18 +98,18 @@ export function sliceUsageTimeline(timelines: readonly UsageTimeline[], windows:
 
 `createRolesList(deps)` получает `works: Pick<WorksService, 'entry'>` и берёт сессию из `works.entry(projectPath, workId)?.map` (снимок в памяти хоста), а не из `readMap` с диска; работы нет в снимке — прежний `not_found`. Рабочий каталог — `session.worktree?.path ?? projectPath`, как сейчас.
 
-Кэш каталога: `Map<cwd, { at: number; value: Promise<RoleList> }>` с `ROLE_CATALOG_TTL_MS = 60_000`; одновременные вызовы одного `cwd` делят один промис; промис, отклонённый ошибкой, из кэша убирается. Спавн codex внутри `sessionRoleCatalog` тем самым идёт не чаще раза в минуту на каталог. Протокол `roles.list` не меняется.
+Кэш каталога: `Map<cwd, { at: number; value: Promise<RoleList>; partial: boolean }>`. Полный каталог живёт `ROLE_CATALOG_TTL_MS = 60_000`; каталог с `partial: true` (`sessionRoleCatalog` не бросает при сбое codex — нет бинаря, таймаут 8 с, нет контекста — а возвращает диагностику `context-unverified`) живёт `ROLE_CATALOG_PARTIAL_TTL_MS = 10_000`: следующая попытка скоро, но одновременные вызовы не плодят спавны; отклонённый промис из кэша убирается сразу. Одновременные вызовы одного `cwd` делят один промис. Спавн codex идёт не чаще раза в минуту на каталог при живом codex и не чаще раза в 10 с при его сбое. Протокол `roles.list` не меняется.
 
 ### 2.2 Окно
 
-Новый стор `renderer/store/roles.ts` по образцу `chat/capabilities-store.ts`: `byCwd: Record<cwd, { status; roles: RoleSummary[]; at }>`, `load(bridge, { projectPath, ref, cwd })` с TTL 60 с и дедупом в полёте; `cwd` = `session.worktree?.path ?? projectPath`. `useRoleSummary(bridge, sessionRef, role, revision, cwd?)` читает роль из стора по `cwd`; смена `revision` (pid, старт процесса, lifecycle, worktree) делает `load` с `force: true` — один RPC на каталог, не на чип. Вызовы `RoleChip` в `SessionRow`, `ChatToolbar`, `ParticipantStrip` (через `feed-model`), `PlanPanel` передают `cwd` из сессии; `ProjectPanel` (автор бэклога без worktree) и диалог новой сессии остаются на `projectPath`.
+Новый стор `renderer/store/roles.ts` по образцу `chat/capabilities-store.ts`: `byCwd: Record<cwd, { status: 'loading' | 'reloading' | 'ready' | 'error'; roles: RoleSummary[]; partial: boolean; at }>`, `load(bridge, { projectPath, ref?, cwd, force? })` с TTL 60 с (10 с для `partial`) и дедупом в полёте. Ключ стора всегда равен каталогу, который посчитает хост: окно передаёт `ref` только когда знает `session.worktree?.path` и кладёт ответ под этот путь; не знает сессии — зовёт без `ref` и кладёт под `projectPath`. `useRoleSummary(bridge, sessionRef, role, revision, cwd?)` читает роль из стора по `cwd`; смена `revision` **после монтирования** (не на первом рендере) делает `load` с `force: true`, и пока идёт принудительная перезагрузка (`status: 'reloading'`) хук отдаёт `null` — старый замок не висит; обычное обновление по TTL старые роли не прячет. `revision` везде — строка `pid:startedAtProcess:lifecycle:worktree.path` сессии (как в `SessionRow`); `PlanPanel` переходит на неё с `plan.rev`. Вызовы `RoleChip` в `SessionRow`, `ChatToolbar`, `ParticipantStrip` (через `feed-model`), `PlanPanel` передают `cwd` из сессии; `ProjectPanel` ищет сессию автора в снимке работ окна и передаёт её `cwd`, а если сессии нет — зовёт без `ref` под `projectPath`; диалог новой сессии без изменений.
 
 ## 3. Тесты
 
-- core: `usage-observations` — те же наблюдения, что раньше давали индексаторы (снимок на фикстурах); `usage-timeline` — дочитывание хвоста (второй вызов читает только новые байты: подменённый `createReadStream` фиксирует `start`), неполная последняя строка, усечение и подмена файла (`ino`), эквивалентность полному перечиту по окнам с потомками и сбросом Codex.
+- core: `usage-observations` — те же наблюдения и sidechain, что индексаторы (на фикстурах `session-index.test.ts`, `codex/index-session-slice.test.ts`, `codex.test.ts`); `usage-timeline` — дочитывание хвоста (второй вызов читает только новые байты: `TimelineReader` фиксирует `start`), последняя строка без `\n` целым объектом считается, оборванная ждёт, усечение и подмена файла (`ino`), неизменяемость результата, эквивалентность полному перечиту по окнам с подагентами Claude (включая sidechain без `messageId`), тредом Codex и спадом счётчика.
 - host `log-index.test.ts`: существующий «повторный срез без новых записей берётся из кэша, дописанный лог — пересчитывается» дополняется проверкой, что дописанный лог читается с прежнего `offset`; `room-usage.test.ts` без изменений.
-- host `methods/roles.test.ts`: карта берётся из `works.entry`, не с диска; 12 одновременных вызовов одного `cwd` — один вызов каталога; по истечении TTL — новый; ошибка каталога не кэшируется.
-- окно: `RoomUsageChip.test.tsx` — интервал 60 с, рост токенов сам по себе запрос не рождает, Refresh спрашивает сразу; `role-summary.test.tsx` — 12 чипов одного `cwd` → один `roles.list`, смена revision → ещё один; `roles-store.test.ts` — TTL и дедуп.
+- host `methods/roles.test.ts`: карта берётся из `works.entry`, не с диска; 12 одновременных вызовов одного `cwd` — один вызов каталога; по истечении TTL — новый; `partial: true` живёт 10 с, а не 60; отклонённый промис не кэшируется.
+- окно: `RoomUsageChip.test.tsx` — интервал 60 с, рост токенов сам по себе запрос не рождает, Refresh спрашивает сразу; `role-summary.test.tsx` — 12 чипов одного `cwd` → один `roles.list`, смена revision → `force` и `null` на время перезагрузки, обновление по TTL старые роли не прячет; `roles.test.ts` (стор) — TTL, короткий TTL для `partial`, дедуп, ключ по каталогу хоста.
 - Приёмка на машине автора: архив Diagnostics при открытой Room 1 с семью живыми агентами: `host: состояние` cpuPct < 20, `rooms.usage` в кольце окна < 500 мс, `roles.list` ≤ 1 на каталог в минуту.
 
 ## 4. Порядок
@@ -110,7 +119,9 @@ export function sliceUsageTimeline(timelines: readonly UsageTimeline[], windows:
 ## Мои выборы, не обсуждавшиеся явно
 
 - Шкала только в памяти, LRU 256 файлов; первый запрос после рестарта хоста читает лог целиком.
-- Подмена и усечение файла определяются по `ino` и `size < offset`, без контрольных сумм.
+- Подмена и усечение файла определяются по `ino` и `size < offset`, без контрольных сумм; последняя строка без `\n` принимается, если это целый JSON.
+- Каталог ролей с `partial: true` кэшируется на 10 с, полный — на 60 с; та же пара TTL в сторе окна.
+- Хук ролей прячет данные только на время принудительной перезагрузки по смене revision.
 - Чип: таймер 60 с вместо реакции на токены; Refresh в поповере с порогом 5 с.
 - Кэш каталога ролей — по `cwd` на 60 с, без наблюдения за файлами ролей; тот же TTL в окне.
 - `roles.list` берёт сессию из снимка работ хоста; протокол не меняется.
