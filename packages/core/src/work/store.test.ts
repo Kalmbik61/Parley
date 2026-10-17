@@ -1,7 +1,8 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
@@ -13,6 +14,7 @@ import {
   createWork,
   deleteSessionFiles,
   deleteWorkFiles,
+  MapLockTimeoutError,
   pruneWorksIndex,
   readMap,
   readWorksIndex,
@@ -74,6 +76,7 @@ const run = promisify(execFile);
 const require = createRequire(import.meta.url);
 /** Пишущий скрипт запускается отдельным процессом через tsx: настоящая параллельность. */
 const writerScript = fileURLToPath(new URL('../../test/work-writer.ts', import.meta.url));
+const lockRaceScript = fileURLToPath(new URL('../../test/work-lock-race.ts', import.meta.url));
 const tsxLoader = pathToFileURL(require.resolve('tsx')).href;
 
 let home = '';
@@ -115,6 +118,32 @@ describe('песочница тестов', () => {
 
 describe('parleyHome — выбор дома (R4)', () => {
   const userHome = (): string => home;
+
+  describe('предохранитель: тест не резолвит настоящий дом Parley', () => {
+    // `userInfo().homedir` читается из базы пользователей — `HOME` песочницы его не подменяет.
+    const realHome = userInfo().homedir;
+
+    it('PARLEY_HOME на настоящий ~/.parley или ~/.harnas — ошибка', () => {
+      expect(() => parleyHome({ PARLEY_HOME: path.join(realHome, '.parley') })).toThrow(/sandbox-home/);
+      expect(() => parleyHome({ HARNAS_HOME: path.join(realHome, '.harnas') })).toThrow(/sandbox-home/);
+    });
+
+    it('путь внутри настоящего дома — ошибка', () => {
+      expect(() => parleyHome({ PARLEY_HOME: path.join(realHome, '.parley', 'works') })).toThrow(/sandbox-home/);
+    });
+
+    it('запасной путь от настоящего домашнего каталога — ошибка', () => {
+      expect(() => parleyHome({}, realHome)).toThrow(/sandbox-home/);
+    });
+
+    it('временные каталоги и фейковый userHome работают', () => {
+      expect(parleyHome({ PARLEY_HOME: path.join(home, 'x') }, userHome())).toBe(path.join(home, 'x'));
+      expect(parleyHome({}, userHome())).toBe(path.join(home, '.parley'));
+      expect(parleyHome({ PARLEY_HOME: path.join(realHome, '.parley-sibling') })).toBe(
+        path.join(realHome, '.parley-sibling'),
+      );
+    });
+  });
 
   it('PARLEY_HOME — первый', () => {
     expect(parleyHome({ PARLEY_HOME: '/new', HARNAS_HOME: '/old' }, userHome())).toBe('/new');
@@ -431,6 +460,204 @@ describe('updateMap', () => {
 
     expect((await readMap(project, 'w-0001')).sessions).toHaveLength(1);
     expect((await readWorksIndex()).works).toHaveLength(1);
+  });
+
+  it('deleteWorkFiles при отказе блокировки индекса не удаляет каталог работы', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await writeFile(path.join(home, 'works-index.lock'), `${process.pid}\n`);
+
+    await expect(deleteWorkFiles(project, 'w-0001', { lockTimeoutMs: 100 })).rejects.toBeInstanceOf(
+      MapLockTimeoutError,
+    );
+
+    expect((await readMap(project, 'w-0001')).work.id).toBe('w-0001');
+    expect((await readWorksIndex()).works).toHaveLength(1);
+  });
+
+  describe('осиротевшая блокировка индекса', () => {
+    const deadPid = async (): Promise<number> => {
+      const child = spawn(process.execPath, ['-e', '']);
+      const pid = child.pid as number;
+      await new Promise((resolve) => child.once('exit', resolve));
+      return pid;
+    };
+
+    it('блокировка с pid умершего процесса перехватывается', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, `${await deadPid()}\n`);
+
+      await createWork(project, { title: 'Авторизация' });
+
+      expect((await readWorksIndex()).works).toHaveLength(1);
+      expect(await exists(indexLock)).toBe(false);
+    });
+
+    it('пустой файл блокировки старше 10 с перехватывается', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, '');
+      const old = new Date(Date.now() - 11_000);
+      await utimes(indexLock, old, old);
+
+      await createWork(project, { title: 'Авторизация' });
+
+      expect((await readWorksIndex()).works).toHaveLength(1);
+      expect(await exists(indexLock)).toBe(false);
+    });
+
+    it('пустой свежий файл блокировки не трогаем: таймаут', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, '');
+
+      await expect(createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 100 })).rejects.toBeInstanceOf(
+        MapLockTimeoutError,
+      );
+      expect(await exists(indexLock)).toBe(true);
+    });
+
+    it('блокировка с живым pid не перехватывается', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, `${process.pid}\n`);
+
+      await expect(createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 100 })).rejects.toBeInstanceOf(
+        MapLockTimeoutError,
+      );
+      expect(await readFile(indexLock, 'utf8')).toBe(`${process.pid}\n`);
+    });
+
+    it('висячий симлинк на месте блокировки: таймаут, а не горячий цикл', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await symlink(path.join(home, 'нет-такого-файла'), indexLock);
+
+      const started = Date.now();
+      await expect(createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 200 })).rejects.toBeInstanceOf(
+        MapLockTimeoutError,
+      );
+      expect(Date.now() - started).toBeLessThan(2_000);
+    });
+
+    it('живой pid при старом mtime: pid важнее возраста, блокировка не снимается', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, `${process.pid}\n`);
+      const old = new Date(Date.now() - 60_000);
+      await utimes(indexLock, old, old);
+
+      await expect(createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 100 })).rejects.toBeInstanceOf(
+        MapLockTimeoutError,
+      );
+      expect(await readFile(indexLock, 'utf8')).toBe(`${process.pid}\n`);
+    });
+
+    it('свежий guard перехвата: идёт чужой перехват, ждём до таймаута', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, `${await deadPid()}\n`);
+      await writeFile(`${indexLock}.steal`, '');
+
+      await expect(createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 150 })).rejects.toBeInstanceOf(
+        MapLockTimeoutError,
+      );
+      expect(await exists(indexLock)).toBe(true);
+    });
+
+    it('guard старше 10 с — вор упал внутри: guard снимается, блокировка берётся', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, `${await deadPid()}\n`);
+      await writeFile(`${indexLock}.steal`, '');
+      const old = new Date(Date.now() - 11_000);
+      await utimes(`${indexLock}.steal`, old, old);
+
+      await createWork(project, { title: 'Авторизация' });
+
+      expect((await readWorksIndex()).works).toHaveLength(1);
+      expect(await exists(indexLock)).toBe(false);
+      expect(await exists(`${indexLock}.steal`)).toBe(false);
+    });
+
+    it('releaseLock не удаляет подменённый файл блокировки', async () => {
+      await createWork(project, { title: 'Авторизация' });
+      const lock = workPaths(project, 'w-0001').lock;
+
+      // Подмена синхронно внутри мутатора: асинхронный мутатор никто не ждёт.
+      await updateMap(project, 'w-0001', () => {
+        rmSync(lock);
+        writeFileSync(lock, 'чужая блокировка');
+      });
+
+      expect(await readFile(lock, 'utf8')).toBe('чужая блокировка');
+    });
+
+    it('несколько процессов разом перехватывают одну мёртвую блокировку карты: ни одно обновление не потеряно', async () => {
+      await createWork(project, { title: 'Авторизация' });
+      await writeFile(workPaths(project, 'w-0001').lock, `${await deadPid()}\n`);
+      const start = Date.now() + 2_500;
+      const tokens = ['a', 'b', 'c', 'd', 'e', 'f'];
+
+      await Promise.all(
+        tokens.map((token) =>
+          run(process.execPath, ['--import', tsxLoader, lockRaceScript, project, 'w-0001', token, String(start)], {
+            env: { ...process.env, PARLEY_HOME: home },
+          }),
+        ),
+      );
+
+      const goal = (await readMap(project, 'w-0001')).work.goal.split(' ').filter(Boolean);
+      expect([...goal].sort()).toEqual(tokens);
+    }, 30_000);
+
+    it('таймаут называет хозяина: живой pid и сколько держит', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, `${process.pid}\n`);
+      const old = new Date(Date.now() - 4_000);
+      await utimes(indexLock, old, old);
+
+      const error = await createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 100 }).catch((cause: Error) => cause);
+
+      expect(error).toBeInstanceOf(MapLockTimeoutError);
+      expect((error as Error).message).toMatch(
+        new RegExp(`was not released within 100 ms \\(held by pid ${process.pid}, alive, for [45] s\\)$`),
+      );
+    });
+
+    it('таймаут: файл без pid — «no owner pid» и возраст файла', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, 'не-pid');
+      const old = new Date(Date.now() - 3 * 3_600_000);
+      await utimes(indexLock, old, old);
+      await writeFile(`${indexLock}.steal`, '');
+
+      const error = await createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 100 }).catch((cause: Error) => cause);
+
+      expect((error as Error).message).toMatch(/\(no owner pid, file age 3 h\)$/);
+    });
+
+    it('таймаут: мёртвый хозяин, пока перехват идёт у другого, — «dead»', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      const dead = await deadPid();
+      await writeFile(indexLock, `${dead}\n`);
+      await writeFile(`${indexLock}.steal`, '');
+
+      const error = await createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 100 }).catch((cause: Error) => cause);
+
+      expect((error as Error).message).toMatch(new RegExp(`\\(held by pid ${dead}, dead, for \\d+ s\\)$`));
+    });
+
+    it('таймаут без читаемого файла блокировки — без хвоста', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await symlink(path.join(home, 'нет-такого-файла'), indexLock);
+
+      const error = await createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 100 }).catch((cause: Error) => cause);
+
+      expect((error as Error).message).toMatch(/was not released within 100 ms$/);
+    });
+
+    it('взятая блокировка содержит pid текущего процесса', async () => {
+      await createWork(project, { title: 'Авторизация' });
+      let mapLock = '';
+      await updateMap(project, 'w-0001', () => {
+        mapLock = readFileSync(workPaths(project, 'w-0001').lock, 'utf8');
+      });
+
+      expect(mapLock).toBe(`${process.pid}\n`);
+    });
   });
 
   it('два параллельных процесса создают разные работы в индексе', async () => {

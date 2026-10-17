@@ -22,7 +22,7 @@ import { liveStatus } from '@parley/core/session-state';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec } from '../../shared/layout-types.js';
-import { errorText, S } from '../../shared/strings.js';
+import { errorText, S, startErrorText } from '../../shared/strings.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
 import { fileTabIds } from '../files/close-guard.js';
 import { tabId } from '../layout/ids.js';
@@ -79,7 +79,12 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
   const ref = { projectPath, workId, sessionId: session.id };
   // Ошибки управления сессией — как у прежнего меню: в консоль, строка сама покажет исход.
   const call = (method: 'sessions.resume' | 'sessions.stop' | 'sessions.close' | 'sessions.delete'): void => {
-    bridge.call(method, { ref }).catch((error: unknown) => console.warn(`[parley] ${method}`, error));
+    bridge.call(method, { ref }).catch((error: unknown) => {
+      console.warn(`[parley] ${method}`, error);
+      // Возобновление отказывает по бюджету: человеку нужна причина и что делать, строка её не покажет.
+      const failure = decodeIpcError(error);
+      if (method === 'sessions.resume' && failure.data?.['code'] === 'resource-budget') toast(startErrorText(failure, S.errors.actions.resumeNamed(label)));
+    });
   };
 
   const openBeside = (): void => {

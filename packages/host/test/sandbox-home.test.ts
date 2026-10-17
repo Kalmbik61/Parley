@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -5,6 +6,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  * и из сессии такого агента. Унаследованный дом перекрыл бы подмену `HOME`: запись из недосчитанного промиса после
  * `afterEach` (ровно то, от чего песочница нужна) ушла бы в настоящий `~/.parley`, а не во временный каталог.
  */
+
+// Состояние на момент загрузки файла: до любых тестов, значит — только от `setupFiles` конфига пакета.
+const atLoad = { testHome: process.env['PARLEY_TEST_HOME'], homedir: homedir() };
 
 const saved = {
   parley: process.env['PARLEY_HOME'],
@@ -24,6 +28,11 @@ afterEach(() => {
 });
 
 describe('песочница дома', () => {
+  it('настройка песочницы применена к процессу ещё до теста (конфиг пакета подхвачен и из корня репозитория)', () => {
+    expect(atLoad.testHome).toBeDefined();
+    expect(atLoad.homedir).toBe(atLoad.testHome);
+  });
+
   it('унаследованные PARLEY_HOME и HARNAS_HOME снимаются, HOME — временный каталог процесса', async () => {
     process.env['PARLEY_HOME'] = '/настоящий/дом/parley';
     process.env['HARNAS_HOME'] = '/настоящий/дом/harnas';

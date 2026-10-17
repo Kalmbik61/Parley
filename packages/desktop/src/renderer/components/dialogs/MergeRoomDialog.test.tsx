@@ -146,6 +146,15 @@ describe('MergeRoomDialog — Create room', () => {
     expect(useUiStore.getState().roomExpanded[roomKey(KEY, 'r-01')]).toBe(true);
   });
 
+  it('отказ бюджета в rooms.create — ошибка называет лимит и что сделать', async () => {
+    bridge.setHandler('rooms.create', async () => {
+      throw { code: 'conflict', message: 'raw host text', data: { code: 'resource-budget', reason: 'concurrent', scope: 'room', limit: 6, used: 6 } };
+    });
+    renderDialog(vi.fn());
+    fireEvent.click(screen.getByRole('button', { name: 'Create room' }));
+    expect(await screen.findByText(`Couldn't create room: 6 of 6 sessions are already running in this room. Put one to sleep or raise "Running sessions, room" in Settings.`)).toBeTruthy();
+  });
+
   it('отказ хоста — ошибка createRoom, диалог открыт; повтор возможен', async () => {
     let fail = true;
     bridge.setHandler('rooms.create', async () => {

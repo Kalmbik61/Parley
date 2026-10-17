@@ -14,8 +14,12 @@ import { promisify } from 'node:util';
 import { DEFAULT_CONFIG } from '../config.js';
 import { readSessionMetrics, silenceMs, sleepSessions, type MetricsRoots } from './metrics.js';
 import { transitionSession } from './map.js';
+import { isAlive } from './pid-alive.js';
 import { readMap, updateMap } from './store.js';
 import type { WorkSession } from './types.js';
+
+// `isAlive` живёт в `pid-alive.ts`: он нужен и `store.ts`, а тот импортируется отсюда.
+export { isAlive };
 
 const run = promisify(execFile);
 
@@ -32,20 +36,10 @@ const DEAD_SILENCE_FACTOR = 10;
 /** Тики ядра в секунде: `USER_HZ` на Linux практически всегда 100. */
 const USER_HZ = 100;
 
-/** Жив ли процесс. `EPERM` — процесс есть, просто он не наш. */
-export function isAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
 /** macOS: `ps` печатает локальное время старта с точностью до секунды. */
 async function startedAtBsd(pid: number): Promise<string | null> {
-  const { stdout } = await run('ps', ['-o', 'lstart=', '-p', String(pid)]);
+  // В русской локали `ps` печатает дату по-русски, `Date` её не разбирает: формат нужен английский.
+  const { stdout } = await run('ps', ['-o', 'lstart=', '-p', String(pid)], { env: { ...process.env, LC_ALL: 'C' } });
   const at = new Date(stdout.trim());
   return Number.isNaN(at.getTime()) ? null : at.toISOString();
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PAGE_DATA_NOTE } from '@parley/core';
 import type { ErrorCode, HostNotice, NoticeKind } from '@parley/protocol';
-import { errorText, noticeText, providerName, S } from './strings.js';
+import { errorText, noticeText, providerName, S, startErrorText } from './strings.js';
 
 const CYRILLIC = /[Ѐ-ӿ]/;
 
@@ -211,6 +211,64 @@ describe('errorText', () => {
 
   it('без action — только причина с большой буквы', () => {
     expect(errorText('not_found')).toBe('Not found.');
+  });
+});
+
+describe('startErrorText — отказ запуска называет причину и что делать', () => {
+  const refused = (data: Record<string, unknown>) => ({
+    code: 'conflict',
+    message: 'session limit reached: raw technical host text',
+    data: { code: 'resource-budget', ...data },
+  });
+
+  it('concurrent в комнате: счёт, где, что сделать и название настройки', () => {
+    expect(startErrorText(refused({ reason: 'concurrent', scope: 'room', limit: 6, used: 6 }), 'resume Bruno')).toBe(
+      'Couldn\'t resume Bruno: 6 of 6 sessions are already running in this room. Put one to sleep or raise "Running sessions, room" in Settings.',
+    );
+  });
+
+  it('concurrent в работе: «workspace» и настройка работы', () => {
+    const text = startErrorText(refused({ reason: 'concurrent', scope: 'work', limit: 10, used: 10 }), 'create session');
+    expect(text).toContain('10 of 10 sessions are already running in this workspace');
+    expect(text).toContain(`"${S.settings.limits.workConcurrent}"`);
+  });
+
+  it('launches: запуски за последний час и настройка по области', () => {
+    const text = startErrorText(refused({ reason: 'launches', scope: 'room', limit: 20, used: 20 }), 'resume session');
+    expect(text).toContain('20 of 20 starts and wake-ups in the last hour in this room');
+    expect(text).toContain(`"${S.settings.limits.roomLaunches}"`);
+  });
+
+  it.each([
+    ['new-sessions', 'work', 'workNewSessions'],
+    ['depth', 'work', 'spawnDepth'],
+    ['messages', 'room', 'roomMessages'],
+    ['fanout', 'work', 'fanout'],
+  ] as const)('reason %s называет свою настройку', (reason, scope, key) => {
+    const text = startErrorText(refused({ reason, scope, limit: 3, used: 4 }), 'start');
+    expect(text).toContain(`"${S.settings.limits[key]}"`);
+    expect(text).not.toContain('raw technical host text');
+  });
+
+  it('resume-rate: короткая фраза про пробуждения сессии', () => {
+    expect(startErrorText(refused({ reason: 'resume-rate', scope: 'session', limit: 6, used: 6 }), 'resume session')).toMatch(
+      /^Couldn't resume session: 6 of 6 wake-ups of this session in the last hour\./,
+    );
+  });
+
+  it('неизвестный reason: limit и used без названия настройки', () => {
+    expect(startErrorText(refused({ reason: 'brand-new', scope: 'work', limit: 5, used: 7 }), 'start')).toBe(
+      "Couldn't start: a limit was reached (7 of 5). Wait a while or check the limits in Settings.",
+    );
+  });
+
+  it('поля не пришли: фраза без чисел, но с причиной', () => {
+    expect(startErrorText(refused({ reason: 'concurrent' }), 'start')).toMatch(/^Couldn't start: .*running.*Settings\.$/);
+  });
+
+  it('прочие ошибки — прежний errorText', () => {
+    expect(startErrorText({ code: 'conflict', message: 'x' }, 'merge')).toBe(errorText('conflict', 'merge'));
+    expect(startErrorText({ code: 'conflict', message: 'x', data: { code: 'other' } }, 'merge')).toBe(errorText('conflict', 'merge'));
   });
 });
 

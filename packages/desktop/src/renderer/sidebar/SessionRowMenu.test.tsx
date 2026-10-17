@@ -315,3 +315,26 @@ describe('SessionRowMenu — Make lead (участник развёрнутой 
     warn.mockRestore();
   });
 });
+
+describe('SessionRowMenu — Resume', () => {
+  it('отказ бюджета — тост с причиной и настройкой, не «conflicting state»', async () => {
+    bridge.setHandler('sessions.resume', () => {
+      throw encodeIpcError({
+        code: 'conflict',
+        message: 'raw host text',
+        data: { code: 'resource-budget', reason: 'concurrent', scope: 'room', limit: 6, used: 6 },
+      });
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    renderMenu(makeSession('s-02', 'Bruno', { lifecycle: 'sleeping' }));
+    fireEvent.click(screen.getByText('Resume'));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(toast).toHaveBeenCalledWith(
+      'Couldn\'t resume S02 Bruno: 6 of 6 sessions are already running in this room. Put one to sleep or raise "Running sessions, room" in Settings.',
+    );
+    warn.mockRestore();
+  });
+});
