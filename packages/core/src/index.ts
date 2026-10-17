@@ -35,8 +35,21 @@ export {
   sessionFileForPath,
 } from './discover.js';
 export type { DiscoveredSession, DiscoveredSubagent } from './discover.js';
-export { indexSessionFile, projectSlug } from './session-index.js';
-export type { IndexSessionOptions, Provider, SessionIndex, TitleSource } from './session-index.js';
+export { extendClaudeSessionIndex, indexSessionFile, projectSlug } from './session-index.js';
+export type {
+  ClaudeIndexState,
+  ExtendClaudeOptions,
+  IndexSessionOptions,
+  Provider,
+  SessionIndex,
+  TitleSource,
+} from './session-index.js';
+export { extendCodexSessionIndex } from './codex/index-session.js';
+export type { CodexIndexState } from './codex/index-session.js';
+export { createSessionIndexer } from './session-indexer.js';
+export type { SessionIndexer, SessionIndexerOptions } from './session-indexer.js';
+export { readJsonlTail } from './jsonl-tail.js';
+export type { TailCursor, TailHandler, TailResult } from './jsonl-tail.js';
 export { indexSubsession, readSubagentMeta } from './subsession.js';
 export type { SubagentMeta, Subsession } from './subsession.js';
 export { buildIndex, buildSessionTree, loadSessionTree } from './session-tree.js';

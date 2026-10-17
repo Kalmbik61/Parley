@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { WorkSession } from '@parley/core';
-import { DEFAULT_TIMELINE_READER, type TimelineReader } from '@parley/core';
+import { DEFAULT_TIMELINE_READER, createSessionIndexer, type TimelineReader } from '@parley/core';
 import { createLogIndex } from './log-index.js';
 import type { LogIndex } from './log-index.js';
 
@@ -523,6 +523,59 @@ describe('createLogIndex', () => {
       expect(idx.index(codex)?.lastTurnEvent).toMatchObject({ type: 'task_complete' });
       expect(calls).toBeGreaterThan(0);
     });
+
+    it('reindex идёт через индексатор: дозапись читается с места, а не целиком', async () => {
+      const file = await writeRollout('re-tail');
+      const opens: Array<{ file: string; start: number }> = [];
+      const reader: TimelineReader = {
+        stat: (f) => DEFAULT_TIMELINE_READER.stat(f),
+        open: (f, start) => {
+          opens.push({ file: f, start });
+          return DEFAULT_TIMELINE_READER.open(f, start);
+        },
+      };
+      const idx = index({ indexer: createSessionIndexer({ reader }) });
+      await idx.start();
+      const codex = session({ provider: 'codex', providerSessionId: 're-tail' });
+
+      await idx.reindex(file);
+      const before = opens.length;
+      const size = (await DEFAULT_TIMELINE_READER.stat(file)).size;
+      await appendFile(file, rolloutRecord('task_complete', '2026-10-04T12:00:09.000Z'));
+      await idx.reindex(file);
+
+      expect(idx.index(codex)?.lastTurnEvent).toMatchObject({ type: 'task_complete' });
+      expect(opens.slice(before).map((open) => open.start)).toEqual([size]);
+    });
+
+    it('живое изменение файла (watchSessions) тоже идёт через индексатор', async () => {
+      const id = 's-live';
+      const first = `${JSON.stringify({ type: 'custom-title', customTitle: 'старое', sessionId: id })}\n`;
+      const file = await writeClaudeSession(id, first);
+      const opens: number[] = [];
+      const reader: TimelineReader = {
+        stat: (f) => DEFAULT_TIMELINE_READER.stat(f),
+        open: (f, start) => {
+          if (f === file) opens.push(start);
+          return DEFAULT_TIMELINE_READER.open(f, start);
+        },
+      };
+      const idx = index({ indexer: createSessionIndexer({ reader }) });
+      await idx.start();
+      const append = (): Promise<void> =>
+        appendFile(file, `${JSON.stringify({ type: 'custom-title', customTitle: 'новое', sessionId: id })}\n`);
+      await append();
+      await waitFor(() => idx.index(session({ providerSessionId: id }))?.title === 'новое', 15_000, append);
+
+      // Первое живое чтение — с нуля (состояния ещё нет), следующее — только дописанное.
+      expect(opens.length).toBeGreaterThan(0);
+      const size = (await DEFAULT_TIMELINE_READER.stat(file)).size;
+      const again = (): Promise<void> =>
+        appendFile(file, `${JSON.stringify({ type: 'custom-title', customTitle: 'третье', sessionId: id })}\n`);
+      await again();
+      await waitFor(() => idx.index(session({ providerSessionId: id }))?.title === 'третье', 15_000, again);
+      expect(opens.at(-1)).toBeGreaterThanOrEqual(size);
+    }, 40_000);
 
     it('файла нет — запись убирается из индекса', async () => {
       const file = await writeRollout('re-2');

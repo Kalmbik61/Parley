@@ -59,6 +59,7 @@ describe('очередь запросов острова', () => {
       ['c-2', 'Run: ls'],
     ]);
     expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(snapshot).toHaveBeenCalledWith({ ref: ref('s-01'), scope: 'attention' });
   });
 
   it('карточки ещё нет — первый повтор через 500 мс', async () => {

@@ -16,8 +16,8 @@ import {
   discoverSession,
   claudeUsageFromTimelines,
   codexUsageFromTimeline,
+  createSessionIndexer,
   extendUsageTimeline,
-  indexCodexSession,
   watchSessions,
   type ActivityLog,
   type DescendantUsage,
@@ -25,6 +25,7 @@ import {
   type MetricsRoots,
   type SessionChange,
   type SessionIndex,
+  type SessionIndexer,
   type SessionWatcher,
   type SubagentTimeline,
   type TimelineReader,
@@ -86,7 +87,7 @@ const logFamily = (provider: string): 'codex' | 'claude' => (provider === 'codex
 const logKey = (provider: string, id: string): string => `${logFamily(provider)}\u0000${id}`;
 
 /**
- * Живой транскрипт перечитывается целиком (десятки-сотни МБ, до 0.6 с CPU), поэтому не чаще раза за это время.
+ * Живой транскрипт перечитывается (индексатор дочитывает хвост, но разбор всё равно не бесплатный), поэтому не чаще раза за это время.
  * Статусы «работает/ждёт» ведут хуки и терминал, лог — только страховка с порогом тишины в десятки секунд:
  * задержка на пару секунд ей не мешает. Первая запись после паузы по-прежнему ждёт обычные 300 мс.
  */
@@ -103,6 +104,8 @@ export const SUBAGENT_DISCOVERY_TTL_MS = 30_000;
 export interface LogIndexOptions {
   /** Чтение логов для шкал расхода; в тестах подменяется, чтобы видеть, откуда и сколько читали. */
   reader?: TimelineReader;
+  /** Индексатор живых логов (наблюдатель и `reindex`); по умолчанию свой. В тестах — со своим читателем. */
+  indexer?: SessionIndexer;
   timelineCacheSize?: number;
   subagentTtlMs?: number;
   now?: () => number;
@@ -112,6 +115,8 @@ export function createLogIndex(roots: MetricsRoots = {}, options: LogIndexOption
   const timelineCacheSize = options.timelineCacheSize ?? USAGE_TIMELINE_CACHE_SIZE;
   const subagentTtlMs = options.subagentTtlMs ?? SUBAGENT_DISCOVERY_TTL_MS;
   const now = options.now ?? Date.now;
+  // Один индексатор на наблюдатель и опрос Codex: живой лог дочитывается с места, а не читается целиком.
+  const indexer = options.indexer ?? createSessionIndexer();
   let sessions: SessionIndex[] = [];
   const byId = new Map<string, SessionIndex>();
   /** Порождённые треды Codex по ключу родителя: родные признаки (`parent_thread_id`), не время и cwd. */
@@ -280,7 +285,7 @@ export function createLogIndex(roots: MetricsRoots = {}, options: LogIndexOption
       for (const listener of listeners) listener();
       watcher = watchSessions(
         applyChange,
-        [claudeSource(roots.claudeRoot), codexSource(roots.codexRoot)],
+        [claudeSource(roots.claudeRoot, undefined, indexer), codexSource(roots.codexRoot, indexer)],
         // Сбой ре-парса одного файла не должен ронять хост — следующее событие
         // попробует снова, как и у остальных наблюдателей хоста.
         { minIntervalMs: LIVE_REINDEX_MIN_INTERVAL_MS, onError: () => {} },
@@ -329,7 +334,7 @@ export function createLogIndex(roots: MetricsRoots = {}, options: LogIndexOption
       if (stopped) return;
       let session: SessionIndex;
       try {
-        session = await indexCodexSession(file);
+        session = await indexer.codex(file);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         if (!stopped) applyChange({ kind: 'removed', file });

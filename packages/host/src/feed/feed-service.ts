@@ -155,7 +155,11 @@ export interface FeedService {
   /** Событие хука от приёмника: ответ — сразу или после решения человека. */
   onHook(request: HookRequest): void;
   /** Снимок ленты сессии или, с `agentId`, ленты субагента из его журнала. */
-  snapshot(ref: SessionRef, agentId?: string): Promise<FeedSnapshot>;
+  /**
+   * `scope: 'attention'` — в `items` только ждущие карточки и последний `text` после последнего `prompt`
+   * (нет `prompt` — последний `text` вообще); с `agentId` игнорируется.
+   */
+  snapshot(ref: SessionRef, agentId?: string, scope?: 'attention'): Promise<FeedSnapshot>;
   subscribe(ref: SessionRef, client: Client): void;
   unsubscribe(ref: SessionRef, client: Client): void;
   /** Клиент отключился от хоста: все его подписки сняты. */
@@ -237,6 +241,19 @@ const isCard = (item: FeedItem): item is FeedCard =>
 
 const isPendingCard = (item: FeedItem): item is FeedCard =>
   isCard(item) && item.state === 'pending';
+
+/** Урезанный снимок «нужен ты»: ждущие карточки и последний ответ модели после последнего промпта, порядок ленты. */
+const attentionItems = (items: readonly FeedItem[]): FeedItem[] => {
+  const lastPrompt = items.findLastIndex((item) => item.kind === 'prompt');
+  let reply = -1;
+  for (let index = items.length - 1; index > lastPrompt; index -= 1) {
+    if (items[index]?.kind === 'text') {
+      reply = index;
+      break;
+    }
+  }
+  return items.filter((item, index) => index === reply || isPendingCard(item));
+};
 
 const textOf = (value: unknown): string | null =>
   typeof value === 'string' && value !== '' ? value : null;
@@ -1167,7 +1184,7 @@ export function createFeedService(
   return {
     onHook,
 
-    async snapshot(ref, agentId) {
+    async snapshot(ref, agentId, scope) {
       const startedAt = performance.now();
       const session = sessionOf(ref);
       if (agentId !== undefined) {
@@ -1193,7 +1210,7 @@ export function createFeedService(
       // Накопленная пачка уходит до снимка: следующая дельта подписчику — ровно `revision + 1`.
       flush(feed);
       const snapshot: FeedSnapshot = {
-        items: [...feed.state.items],
+        items: scope === 'attention' ? attentionItems(feed.state.items) : [...feed.state.items],
         revision: feed.revision,
         schemaVersion: FEED_SCHEMA_VERSION,
         mode: feed.state.permissionMode,
@@ -1204,6 +1221,8 @@ export function createFeedService(
         workId: ref.workId,
         items: snapshot.items.length,
         bytes: feed.bytes,
+        scope: scope ?? null,
+        sentBytes: scope === 'attention' ? Buffer.byteLength(JSON.stringify(snapshot.items)) : feed.bytes,
         seedMs,
         totalMs: Math.round(performance.now() - startedAt),
       });

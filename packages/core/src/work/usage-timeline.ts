@@ -1,7 +1,5 @@
-import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
-import { adapterV1 } from '../adapter-v1.js';
-import type { RawRecord } from '../jsonl.js';
+import { adapterV1, type SchemaAdapter } from '../adapter-v1.js';
+import { DEFAULT_TIMELINE_READER, readJsonlTail, type TailCursor, type TimelineReader } from '../jsonl-tail.js';
 import { createUsageLedger, type UsageObservation, type UsageSummary, type UsageWindow } from './usage-ledger.js';
 import {
   claudeUsageObservation,
@@ -11,9 +9,7 @@ import {
   type ClaudeSidechain,
 } from './usage-observations.js';
 
-/** Кусок чтения лога: больше за раз в память не берём. */
-const READ_CHUNK_BYTES = 1024 * 1024;
-const LF = 0x0a;
+export { DEFAULT_TIMELINE_READER, type TimelineReader };
 
 /**
  * Шкала расхода одного лога: наблюдения учёта с места, до которого файл уже прочитан. Следующий вызов
@@ -39,19 +35,6 @@ export interface UsageTimeline {
 /** Подагент для среза: шкала его файла и id агента (по нему решается склейка с sidechain родителя). */
 export type SubagentTimeline = UsageTimeline & { agentId: string | null };
 
-export interface TimelineReader {
-  stat(file: string): Promise<{ size: number; ino: number }>;
-  open(file: string, start: number): NodeJS.ReadableStream;
-}
-
-export const DEFAULT_TIMELINE_READER: TimelineReader = {
-  stat: async (file) => {
-    const { size, ino } = await stat(file);
-    return { size, ino };
-  },
-  open: (file, start) => createReadStream(file, { start, highWaterMark: READ_CHUNK_BYTES }),
-};
-
 function emptyTimeline(file: string, family: 'claude' | 'codex'): UsageTimeline {
   return {
     file,
@@ -65,132 +48,82 @@ function emptyTimeline(file: string, family: 'claude' | 'codex'): UsageTimeline 
   };
 }
 
-function isMissing(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT';
-}
-
-/** Строка → запись-объект или null (пустая, битая, не объект — как в `forEachJsonlRecord`). */
-function parseLine(line: Buffer): RawRecord | null {
-  const trimmed = line.toString('utf8').trim();
-  if (trimmed === '') return null;
-  try {
-    const parsed: unknown = JSON.parse(trimmed);
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as RawRecord) : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Дочитывает лог с `previous.offset` и возвращает НОВУЮ шкалу (прежняя не меняется). Усечение
  * (`size < offset`) или подмена файла (другой `ino`) — чтение с нуля. Оборванная последняя строка ждёт
- * следующего вызова; целая (JSON-объект) без `\n` принимается сразу, как у readline.
+ * следующего вызова; целая (JSON-объект) без `\n` принимается сразу, как у readline. Само чтение —
+ * `readJsonlTail`. `adapter` разбирает записи Claude так же, как в полном чтении индексатора.
  */
 export async function extendUsageTimeline(
   previous: UsageTimeline | null,
   file: string,
   family: 'claude' | 'codex',
   reader: TimelineReader = DEFAULT_TIMELINE_READER,
+  adapter: SchemaAdapter = adapterV1,
 ): Promise<UsageTimeline> {
-  let current: { size: number; ino: number };
-  try {
-    current = await reader.stat(file);
-  } catch (error) {
-    if (isMissing(error)) return emptyTimeline(file, family);
-    throw error;
-  }
+  const prior = previous !== null && previous.family === family ? previous : null;
+  // Черновик заводится только когда есть что менять; прежняя шкала не мутируется никогда.
+  type Draft = { observations: UsageObservation[]; sidechain: ClaudeSidechain | undefined };
+  let draft: Draft | null = null;
+  const fresh = (): Draft => ({
+    observations: [],
+    sidechain: family === 'claude' ? { agents: new Set<string | null>(), unidentified: false } : undefined,
+  });
+  const copyOfPrior = (): Draft => ({
+    observations: [...(prior?.observations ?? [])],
+    sidechain:
+      family === 'claude'
+        ? { agents: new Set(prior?.sidechain?.agents), unidentified: prior?.sidechain?.unidentified ?? false }
+        : undefined,
+  });
 
-  const base =
-    previous !== null && previous.family === family && previous.ino === current.ino && current.size >= previous.offset
-      ? previous
-      : emptyTimeline(file, family);
-  const start = base.offset;
-  const observations = [...base.observations];
-  const sidechain: ClaudeSidechain | undefined =
-    family === 'claude'
-      ? { agents: new Set(base.sidechain?.agents), unidentified: base.sidechain?.unidentified ?? false }
-      : undefined;
-  let lineNo = base.lineNo;
-  let skipLf = base.unterminated === true;
-  let unterminated = false;
+  const cursor: TailCursor | null =
+    prior === null
+      ? null
+      : {
+          offset: prior.offset,
+          size: prior.size,
+          ino: prior.ino,
+          lineNo: prior.lineNo,
+          unterminated: prior.unterminated === true,
+          pendingMalformed: false,
+        };
 
-  const onRecord = (raw: RawRecord): void => {
-    if (family === 'claude') {
-      const record = adapterV1.toSessionRecord(raw);
-      const observation = claudeUsageObservation(record, file, lineNo);
-      if (observation !== null) {
-        observations.push(observation);
-        if (sidechain !== undefined) noteClaudeSidechain(sidechain, record);
-      }
-      return;
-    }
-    const observation = codexUsageObservation(raw);
-    if (observation !== null) observations.push(observation);
-  };
-
-  // Ничего нового (и хвост не ждёт дописывания): файл открывать незачем.
-  if (current.size === start) return { ...base, size: start, observations, ...(sidechain ? { sidechain } : {}) };
-
-  let consumed = start;
-  let bytesRead = 0;
-  let carry: Buffer = Buffer.alloc(0);
-  let stream: NodeJS.ReadableStream;
-  try {
-    stream = reader.open(file, start);
-  } catch (error) {
-    if (isMissing(error)) return emptyTimeline(file, family);
-    throw error;
-  }
-  try {
-    for await (const chunk of stream) {
-      const piece = typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer);
-      bytesRead += piece.length;
-      let data = carry.length === 0 ? piece : Buffer.concat([carry, piece]);
-      if (skipLf && data.length > 0) {
-        skipLf = false;
-        if (data[0] === LF) {
-          data = data.subarray(1);
-          consumed += 1;
+  const result = await readJsonlTail(cursor, file, reader, {
+    reset: () => {
+      draft = fresh();
+    },
+    record: (raw, lineNo) => {
+      draft ??= copyOfPrior();
+      if (family === 'claude') {
+        const record = adapter.toSessionRecord(raw);
+        const observation = claudeUsageObservation(record, file, lineNo);
+        if (observation !== null) {
+          draft.observations.push(observation);
+          if (draft.sidechain !== undefined) noteClaudeSidechain(draft.sidechain, record);
         }
+        return;
       }
-      let pos = 0;
-      for (let end = data.indexOf(LF, pos); end !== -1; end = data.indexOf(LF, pos)) {
-        lineNo++;
-        const raw = parseLine(data.subarray(pos, end));
-        if (raw !== null) onRecord(raw);
-        consumed += end + 1 - pos;
-        pos = end + 1;
-      }
-      carry = data.subarray(pos);
-    }
-  } catch (error) {
-    if (isMissing(error)) return emptyTimeline(file, family);
-    throw error;
-  } finally {
-    (stream as { destroy?: () => void }).destroy?.();
-  }
+      const observation = codexUsageObservation(raw);
+      if (observation !== null) draft.observations.push(observation);
+    },
+  });
+  if (result.missing) return emptyTimeline(file, family);
 
-  // Хвост без `\n`: целый объект считается сразу, иначе ждёт дописывания (offset остаётся на его начале).
-  if (carry.length > 0) {
-    const raw = parseLine(carry);
-    if (raw !== null) {
-      lineNo++;
-      onRecord(raw);
-      consumed += carry.length;
-      unterminated = true;
-    }
-  }
-
+  const kept = draft as Draft | null;
+  const observations = kept?.observations ?? prior?.observations ?? [];
+  const sidechain = kept === null ? prior?.sidechain : kept.sidechain;
+  const { cursor: next } = result;
   return {
     file,
     family,
-    offset: consumed,
-    size: start + bytesRead,
-    ino: current.ino,
-    lineNo,
+    offset: next.offset,
+    size: next.size,
+    ino: next.ino,
+    lineNo: next.lineNo,
     observations,
     ...(sidechain !== undefined ? { sidechain } : {}),
-    ...(unterminated ? { unterminated: true } : {}),
+    ...(next.unterminated ? { unterminated: true } : {}),
   };
 }
 

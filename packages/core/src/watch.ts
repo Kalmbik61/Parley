@@ -6,6 +6,7 @@ import { assistantCwd, defaultRoot, discoverSession, sessionFileForPath } from '
 import { defaultCodexRoot } from './codex/discover.js';
 import { indexCodexSession } from './codex/index-session.js';
 import { indexSessionFile, type SessionIndex } from './session-index.js';
+import type { SessionIndexer } from './session-indexer.js';
 
 export type SessionChange =
   { kind: 'updated'; file: string; session: SessionIndex } | { kind: 'removed'; file: string };
@@ -45,23 +46,28 @@ const exists = async (file: string): Promise<boolean> => {
   }
 };
 
-/** Источник Claude Code: подсессии лежат в соседних файлах и поднимаются к родителю. */
+/**
+ * Источник Claude Code: подсессии лежат в соседних файлах и поднимаются к родителю. С `indexer` живой файл
+ * дочитывается хвостом, без него — полное чтение.
+ */
 export function claudeSource(
   root: string = defaultRoot(),
   adapter: SchemaAdapter = adapterV1,
+  indexer?: SessionIndexer,
 ): WatchSource {
   return {
     root,
     resolve: sessionFileForPath,
     async index(file, sourceRoot) {
       const discovered = await discoverSession(file, sourceRoot);
-      return indexSessionFile(file, sourceRoot, { adapter, subagents: discovered.subagents });
+      const options = { adapter, subagents: discovered.subagents };
+      return indexer === undefined ? indexSessionFile(file, sourceRoot, options) : indexer.claude(file, sourceRoot, options);
     },
   };
 }
 
-/** Источник Codex: один rollout-файл — одна сессия, вложенности нет. */
-export function codexSource(root: string = defaultCodexRoot()): WatchSource {
+/** Источник Codex: один rollout-файл — одна сессия, вложенности нет. С `indexer` файл дочитывается хвостом. */
+export function codexSource(root: string = defaultCodexRoot(), indexer?: SessionIndexer): WatchSource {
   return {
     root,
     resolve: (changedPath, sourceRoot) => {
@@ -70,7 +76,7 @@ export function codexSource(root: string = defaultCodexRoot()): WatchSource {
       return changedPath;
     },
     index: async (file) => {
-      const session = await indexCodexSession(file);
+      const session = await (indexer === undefined ? indexCodexSession(file) : indexer.codex(file));
       // Ход помощника (спека 2026-10-14, 15.6) — не сессия Parley.
       return session.cwd === assistantCwd() ? null : session;
     },
