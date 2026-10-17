@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { WorkSession } from '@parley/core';
+import { DEFAULT_TIMELINE_READER, type TimelineReader } from '@parley/core';
 import { createLogIndex } from './log-index.js';
 import type { LogIndex } from './log-index.js';
 
@@ -21,8 +22,8 @@ afterEach(async () => {
   await Promise.all([claudeRoot, codexRoot].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-function index(): LogIndex {
-  const created = createLogIndex({ claudeRoot, codexRoot });
+function index(options: Parameters<typeof createLogIndex>[1] = {}): LogIndex {
+  const created = createLogIndex({ claudeRoot, codexRoot }, options);
   indexes.push(created);
   return created;
 }
@@ -381,6 +382,116 @@ describe('createLogIndex', () => {
       expect(await idx.usageIn(ref, windows)).toMatchObject({ input: 15 });
     });
   });
+  describe('usageIn: шкалы расхода', () => {
+    const windows = [{ from: '2026-10-14T10:00:00.000Z', to: null }];
+    const answer = (id: string, msg: string, at: string, input: number): string =>
+      `${JSON.stringify({ type: 'assistant', sessionId: id, timestamp: at, message: { role: 'assistant', id: msg, usage: { input_tokens: input, output_tokens: 1 } } })}\n`;
+    /** Читатель-счётчик: помнит, с какого байта открывали каждый файл. */
+    function countingReader(): { reader: TimelineReader; opens: Array<{ file: string; start: number }> } {
+      const opens: Array<{ file: string; start: number }> = [];
+      return {
+        opens,
+        reader: {
+          stat: (file) => DEFAULT_TIMELINE_READER.stat(file),
+          open: (file, start) => {
+            opens.push({ file, start });
+            return DEFAULT_TIMELINE_READER.open(file, start);
+          },
+        },
+      };
+    }
+
+    it('дописанный лог читается с прежнего offset, а не целиком', async () => {
+      const id = 's-tail';
+      const first = answer(id, 'm1', '2026-10-14T11:00:00.000Z', 10);
+      const file = await writeClaudeSession(id, first);
+      const { reader, opens } = countingReader();
+      const idx = index({ reader });
+      await idx.start();
+      const ref = session({ providerSessionId: id });
+
+      expect(await idx.usageIn(ref, windows)).toMatchObject({ input: 10 });
+      await appendFile(file, answer(id, 'm2', '2026-10-14T11:10:00.000Z', 5));
+      expect(await idx.usageIn(ref, windows)).toMatchObject({ input: 15 });
+
+      expect(opens.map((open) => open.start)).toEqual([0, Buffer.byteLength(first)]);
+    });
+
+    it('два одновременных usageIn одного участника дочитывают файл один раз', async () => {
+      const id = 's-shared';
+      await writeClaudeSession(id, answer(id, 'm1', '2026-10-14T11:00:00.000Z', 10));
+      const { reader, opens } = countingReader();
+      const idx = index({ reader });
+      await idx.start();
+      const ref = session({ providerSessionId: id });
+
+      const [a, b] = await Promise.all([idx.usageIn(ref, windows), idx.usageIn(ref, windows)]);
+
+      expect(a).toMatchObject({ input: 10 });
+      expect(b).toMatchObject({ input: 10 });
+      expect(opens).toHaveLength(1);
+    });
+
+    it('упавшее дочитывание не остаётся идущим: следующий вызов читает заново', async () => {
+      const id = 's-fail';
+      await writeClaudeSession(id, answer(id, 'm1', '2026-10-14T11:00:00.000Z', 10));
+      let failing = true;
+      const reader: TimelineReader = {
+        stat: async (file) => {
+          if (failing) throw new Error('EIO');
+          return DEFAULT_TIMELINE_READER.stat(file);
+        },
+        open: (file, start) => DEFAULT_TIMELINE_READER.open(file, start),
+      };
+      const idx = index({ reader });
+      await idx.start();
+      const ref = session({ providerSessionId: id });
+
+      await expect(idx.usageIn(ref, windows)).rejects.toThrow('EIO');
+      failing = false;
+      expect(await idx.usageIn(ref, windows)).toMatchObject({ input: 10 });
+    });
+
+    it('новый файл подагента попадает в срез после TTL обнаружения', async () => {
+      const id = 's-ttl';
+      await writeClaudeSession(id, answer(id, 'm1', '2026-10-14T11:00:00.000Z', 10));
+      let clock = 1_000;
+      const idx = index({ now: () => clock, subagentTtlMs: 30_000 });
+      await idx.start();
+      const ref = session({ providerSessionId: id });
+
+      expect(await idx.usageIn(ref, windows)).toMatchObject({ input: 10 });
+      await mkdir(path.join(claudeRoot, '-proj', id, 'subagents'), { recursive: true });
+      await writeFile(path.join(claudeRoot, '-proj', id, 'subagents', 'agent-a1.jsonl'), answer(id, 'a1', '2026-10-14T11:30:00.000Z', 5));
+
+      clock += 29_000;
+      expect(await idx.usageIn(ref, windows)).toMatchObject({ input: 10 });
+      clock += 2_000;
+      expect(await idx.usageIn(ref, windows)).toMatchObject({ input: 15 });
+    });
+
+    it('шкалы вытесняются по LRU при переполнении', async () => {
+      const files: string[] = [];
+      for (const id of ['s-a', 's-b', 's-c']) files.push(await writeClaudeSession(id, answer(id, 'm1', '2026-10-14T11:00:00.000Z', 10)));
+      const { reader, opens } = countingReader();
+      const idx = index({ reader, timelineCacheSize: 2 });
+      await idx.start();
+      const ref = (id: string) => session({ providerSessionId: id });
+
+      await idx.usageIn(ref('s-a'), windows);
+      await idx.usageIn(ref('s-b'), windows);
+      await idx.usageIn(ref('s-c'), windows); // вытесняет s-a
+      const before = opens.length;
+      // Другие окна — срез не из кэша срезов; шкала s-b жива (файл не вырос — не открывается), шкала s-a вытеснена.
+      const other = [{ from: '2026-10-14T10:30:00.000Z', to: null }];
+      await idx.usageIn(ref('s-b'), other);
+      expect(opens).toHaveLength(before);
+      await idx.usageIn(ref('s-a'), other);
+      expect(opens).toHaveLength(before + 1);
+      expect(opens.at(-1)).toEqual({ file: files[0], start: 0 });
+    });
+  });
+
   describe('reindex: перечитывание rollout Codex без событий fs.watch', () => {
     const rolloutRecord = (type: string, at: string): string =>
       `${JSON.stringify({ type: 'event_msg', timestamp: at, payload: { type } })}\n`;

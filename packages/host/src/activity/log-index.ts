@@ -14,16 +14,22 @@ import {
   codexSource,
   defaultRoot,
   discoverSession,
+  claudeUsageFromTimelines,
+  codexUsageFromTimeline,
+  extendUsageTimeline,
   indexCodexSession,
-  indexSessionFile,
   watchSessions,
   type ActivityLog,
   type DescendantUsage,
+  type DiscoveredSubagent,
   type MetricsRoots,
   type SessionChange,
   type SessionIndex,
   type SessionWatcher,
+  type SubagentTimeline,
+  type TimelineReader,
   type UsageSummary,
+  type UsageTimeline,
   type UsageWindow,
   type WorkSession,
   usageKey,
@@ -89,7 +95,23 @@ export const LIVE_REINDEX_MIN_INTERVAL_MS = 2000;
 /** Сколько срезов держит кэш (спека расхода токенов, 6.2). */
 const SLICE_CACHE_SIZE = 64;
 
-export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
+/** Сколько шкал расхода по файлам держит индекс (LRU). */
+export const USAGE_TIMELINE_CACHE_SIZE = 256;
+/** Как долго результат обнаружения подагентов Claude считается свежим: новый подагент виден не позже этого срока. */
+export const SUBAGENT_DISCOVERY_TTL_MS = 30_000;
+
+export interface LogIndexOptions {
+  /** Чтение логов для шкал расхода; в тестах подменяется, чтобы видеть, откуда и сколько читали. */
+  reader?: TimelineReader;
+  timelineCacheSize?: number;
+  subagentTtlMs?: number;
+  now?: () => number;
+}
+
+export function createLogIndex(roots: MetricsRoots = {}, options: LogIndexOptions = {}): LogIndex {
+  const timelineCacheSize = options.timelineCacheSize ?? USAGE_TIMELINE_CACHE_SIZE;
+  const subagentTtlMs = options.subagentTtlMs ?? SUBAGENT_DISCOVERY_TTL_MS;
+  const now = options.now ?? Date.now;
   let sessions: SessionIndex[] = [];
   const byId = new Map<string, SessionIndex>();
   /** Порождённые треды Codex по ключу родителя: родные признаки (`parent_thread_id`), не время и cwd. */
@@ -179,6 +201,38 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
     if (slices.size > SLICE_CACHE_SIZE) slices.delete(slices.keys().next().value as string);
     return value;
   };
+
+  /** Шкалы расхода по файлу (LRU): срез дочитывает хвост лога, а не читает его заново. */
+  const timelines = new Map<string, UsageTimeline>();
+  /** Идущее дочитывание файла — общее для одновременных `usageIn` (две комнаты с одним участником). */
+  const extending = new Map<string, Promise<UsageTimeline>>();
+  const timelineOf = (file: string, family: 'claude' | 'codex'): Promise<UsageTimeline> => {
+    const running = extending.get(file);
+    if (running !== undefined) return running;
+    const run = (async (): Promise<UsageTimeline> => {
+      try {
+        const next = await extendUsageTimeline(timelines.get(file) ?? null, file, family, options.reader);
+        timelines.delete(file);
+        timelines.set(file, next);
+        if (timelines.size > timelineCacheSize) timelines.delete(timelines.keys().next().value as string);
+        return next;
+      } finally {
+        // Упавшее чтение не должно оставаться «идущим»: следующий вызов начнёт заново.
+        extending.delete(file);
+      }
+    })();
+    extending.set(file, run);
+    return run;
+  };
+  /** Подагенты Claude по главному файлу: `discoverSession` ходит по каталогам, поэтому раз в TTL. */
+  const subagentCache = new Map<string, { at: number; subagents: DiscoveredSubagent[] }>();
+  const subagentsOf = async (file: string, root: string): Promise<DiscoveredSubagent[]> => {
+    const cached = subagentCache.get(file);
+    if (cached !== undefined && now() - cached.at < subagentTtlMs) return cached.subagents;
+    const { subagents } = await discoverSession(file, root);
+    subagentCache.set(file, { at: now(), subagents });
+    return subagents;
+  };
   /** Подпись прочитанных файлов: размер и mtime каждого; пропавший файл — своя метка. */
   const signature = async (files: readonly string[]): Promise<string> =>
     (
@@ -239,28 +293,27 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
     async usageIn(session, windows) {
       const found = indexOf(session);
       if (found === undefined) return undefined;
-      const options = { usageWindows: windows };
       if (found.provider === 'codex') {
         const children = descendantIndexes(found);
         const key = `codex\u0000${JSON.stringify(windows)}\u0000${await signature([found.file, ...children.map((child) => child.file)])}`;
         const cached = slices.get(key);
         if (cached !== undefined) return remember(key, cached);
-        const own = (await indexCodexSession(found.file, undefined, options)).usage;
-        if (own === undefined) return undefined;
+        const own = codexUsageFromTimeline(await timelineOf(found.file, 'codex'), windows);
         const descendants: DescendantUsage[] = [];
         for (const child of children) {
-          const usage = (await indexCodexSession(child.file, undefined, options)).usage;
-          if (usage !== undefined) descendants.push(descendantOf(child, usage));
+          descendants.push(descendantOf(child, codexUsageFromTimeline(await timelineOf(child.file, 'codex'), windows)));
         }
         return remember(key, withDescendants(own, descendants));
       }
       const root = roots.claudeRoot ?? defaultRoot();
-      const { subagents } = await discoverSession(found.file, root);
+      const subagents = await subagentsOf(found.file, root);
       const key = `claude\u0000${JSON.stringify(windows)}\u0000${await signature([found.file, ...subagents.map((agent) => agent.file)])}`;
       const cached = slices.get(key);
       if (cached !== undefined) return remember(key, cached);
-      const usage = (await indexSessionFile(found.file, root, { subagents, ...options })).usage;
-      return usage === undefined ? undefined : remember(key, usage);
+      const parent = await timelineOf(found.file, 'claude');
+      const children: SubagentTimeline[] = [];
+      for (const agent of subagents) children.push({ ...(await timelineOf(agent.file, 'claude')), agentId: agent.agentId });
+      return remember(key, claudeUsageFromTimelines(parent, children, windows));
     },
     log(session) {
       const found = indexOf(session);
