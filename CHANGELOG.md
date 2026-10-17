@@ -17,6 +17,7 @@ All notable changes to Parley are documented in this file.
 - **Session liveness checks work when Parley or its CLI runs under a non-English locale.**
 - **Deleting a work no longer removes its folder when the index is busy.** The folder is now deleted only once the index lock is taken, so a failed delete leaves the work intact.
 - **Parley stays responsive with many agents running.** The host now re-reads work maps once per change instead of a dozen times (one watcher on the Parley home, overlapping reads collapsed into one repeat, unchanged maps are not parsed again). Role chips share one read of the Codex configuration instead of starting Codex for each of them (role files are still read fresh). A transcript update recomputes only the session it belongs to, and a live transcript is re-indexed at most every two seconds instead of after every append.
+- **The room usage chip no longer loads the host.** It refreshes once a minute (or on Refresh), and the host reads only what was appended to the agents' logs since the last request instead of the whole file. Role chips now share one request per working directory instead of one per session.
 
 ## 0.15.0
 
