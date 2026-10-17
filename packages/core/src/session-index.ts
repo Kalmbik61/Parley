@@ -423,12 +423,12 @@ export async function extendClaudeSessionIndex(
   });
   if (result.missing) throw missingFileError(file);
 
-  const changed = draft as ClaudeIndexAccumulator | null;
-  // Счётчики строк вошли в состояние только если оно менялось; иначе новых целых строк не было.
-  const acc = changed ?? (previous as ClaudeIndexState).acc;
-  if (changed !== null) {
-    changed.parsed += result.parsed;
-    changed.malformed += result.malformed;
+  // Счётчики строк входят в состояние, только если появились целые строки; прежнее не трогаем.
+  let acc = (draft as ClaudeIndexAccumulator | null) ?? (previous as ClaudeIndexState).acc;
+  if (result.parsed > 0 || result.malformed > 0) {
+    if (acc === (previous as ClaudeIndexState | null)?.acc) acc = acc.clone();
+    acc.parsed += result.parsed;
+    acc.malformed += result.malformed;
   }
 
   const timelines = new Map<string, UsageTimeline>();
