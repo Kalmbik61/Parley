@@ -39,6 +39,19 @@ describe('startRecording', () => {
     expect(context.close).toHaveBeenCalled();
   });
 
+  it('onLevel получает RMS и пик именно этого кадра, а не накопленный максимум', async () => {
+    const { deps, frame } = fakeDeps();
+    const calls: Array<[number, number]> = [];
+    await startRecording((level, peak) => calls.push([level, peak]), deps);
+    frame([0.1, -0.3, 0.2]);
+    frame([0.05, -0.02]);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.[0]).toBeCloseTo(0.216, 3);
+    expect(calls[0]?.[1]).toBeCloseTo(0.3, 5);
+    expect(calls[1]?.[0]).toBeCloseTo(0.038, 3);
+    expect(calls[1]?.[1]).toBeCloseTo(0.05, 5);
+  });
+
   it('cancel закрывает всё и ничего не отдаёт', async () => {
     const { deps, track } = fakeDeps();
     const recording = await startRecording(() => undefined, deps);

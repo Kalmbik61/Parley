@@ -60,4 +60,26 @@ describe('listen', () => {
     session.stop();
     await expect(session.result).resolves.toEqual({ error: 'no_speech' });
   });
+  it('тихая речь (RMS ниже 0.02, пик выше) — речь: стоп через SILENCE_MS после неё, а не через NO_SPEECH_MS', async () => {
+    let t = 0;
+    const recording = { stop: vi.fn().mockResolvedValue({ pcm: new ArrayBuffer(4), durationMs: 900, peak: 0.06 }), cancel: vi.fn() };
+    const d = deps({ now: () => t, record: vi.fn().mockResolvedValue(recording) });
+    const session = listen(d);
+    await vi.waitFor(() => expect(d.record).toHaveBeenCalled());
+    const feed = vi.mocked(d.record).mock.calls[0]?.[0];
+    if (!feed) throw new Error('record не получил колбэк громкости');
+    feed(0.015, 0.06);
+    t = 500;
+    feed(0.001, 0.004);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(recording.stop).not.toHaveBeenCalled();
+    // Время далеко от NO_SPEECH_MS: по старому порогу RMS речь не была бы замечена и остров ждал бы все 8 с.
+    t = 500 + SILENCE_MS;
+    feed(0.001, 0.004);
+    await expect(session.result).resolves.toEqual({ text: 'Кто работает?' });
+    expect(recording.stop).toHaveBeenCalledTimes(1);
+    // Наружу, в полоску громкости, уходит именно RMS, а не пик.
+    expect(d.onLevel).toHaveBeenNthCalledWith(1, 0.015);
+    expect(d.onLevel).toHaveBeenNthCalledWith(2, 0.001);
+  });
 });

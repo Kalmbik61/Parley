@@ -1,27 +1,31 @@
 /**
  * Голосовой ввод помощника на острове (спека 2026-10-14, 8.4): запись тем же рекордером, что диктовка окна, конец —
- * 1,2 с тишины после речи (или повторный хоткей), затем локальный Whisper с подсказкой языка помощника.
+ * 1,2 с тишины после речи по пику кадра (или повторный хоткей), затем локальный Whisper с подсказкой языка помощника.
  */
 
 import type { MicStatus, TranscribeRequest, TranscribeResult, VoiceModelId } from '../../../shared/voice-types.js';
+import { SILENCE_PEAK } from '../../voice/level.js';
 import type { Recording } from '../../voice/recorder.js';
 
-/** Громкость кадра (RMS), выше которой — речь. */
-export const SPEECH_LEVEL = 0.02;
+/**
+ * Пик кадра, выше которого — речь. Порог чатов (0.02) откалиброван именно как порог пика; по RMS негромкая речь
+ * у ноутбучного микрофона (≈ 0.01–0.02) не засчитывалась, и остров ждал NO_SPEECH_MS перед распознаванием.
+ */
+export const SPEECH_PEAK = SILENCE_PEAK;
 export const SILENCE_MS = 1200;
 /** Так и не заговорили — перестать слушать. */
 export const NO_SPEECH_MS = 8000;
 export const MAX_LISTEN_MS = 60_000;
 
-/** Возвращает функцию «пора остановиться?» для каждого кадра громкости. */
-export function silenceGate(now: () => number): (level: number) => boolean {
+/** Возвращает функцию «пора остановиться?» для каждого кадра по его пику. */
+export function silenceGate(now: () => number): (peak: number) => boolean {
   const started = now();
   let heard = false;
   let quietSince: number | null = null;
-  return (level) => {
+  return (peak) => {
     const at = now();
     if (at - started >= MAX_LISTEN_MS) return true;
-    if (level >= SPEECH_LEVEL) {
+    if (peak >= SPEECH_PEAK) {
       heard = true;
       quietSince = null;
       return false;
@@ -35,7 +39,7 @@ export function silenceGate(now: () => number): (level: number) => boolean {
 export type ListenResult = { text: string } | { error: 'mic' | 'no_speech' | 'voice' | 'cancelled' };
 
 export interface ListenDeps {
-  record(onLevel: (level: number) => void): Promise<Recording>;
+  record(onLevel: (level: number, peak: number) => void): Promise<Recording>;
   transcribe(request: TranscribeRequest): Promise<TranscribeResult>;
   micStatus(): Promise<MicStatus>;
   requestMic(): Promise<boolean>;
@@ -71,9 +75,9 @@ export function listen(deps: ListenDeps): Listening {
     const gate = silenceGate(deps.now);
     let recording: Recording;
     try {
-      recording = await deps.record((level) => {
+      recording = await deps.record((level, peak) => {
         deps.onLevel(level);
-        if (gate(level)) stop();
+        if (gate(peak)) stop();
       });
     } catch {
       return { error: 'mic' };
