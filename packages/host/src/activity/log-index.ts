@@ -37,7 +37,7 @@ import {
 export interface LogChange {
   /**
    * Задела ли запись эту сессию: её собственный лог, лог её порождённого треда Codex (токены потомков идут в
-   * итог родителя) или она ещё не привязана к логу (`providerSessionId === null`: привязка идёт по появлению логов).
+   * итог родителя) или она активна и ещё не привязана к логу (`providerSessionId === null`: привязка `maybeLink` идёт по появлению логов, закрытым и непущенным она не нужна).
    */
   affects(session: WorkSession): boolean;
 }
@@ -124,14 +124,18 @@ export function createLogIndex(roots: MetricsRoots = {}): LogIndex {
     // Старая запись нужна для `removed` и для смены id в том же файле; к каждой добавляются предки по `parentId`.
     const ids = new Set<string>();
     for (const start of [previous, change.kind === 'updated' ? change.session : undefined]) {
-      for (let node = start; node !== undefined && !ids.has(logKey(node.provider, node.id)); ) {
+      // Свой `seen` на каждое начало: цепочка нового `parentId` не должна упираться в предков старой записи.
+      const seen = new Set<string>();
+      for (let node = start; node !== undefined && !seen.has(logKey(node.provider, node.id)); ) {
+        seen.add(logKey(node.provider, node.id));
         ids.add(logKey(node.provider, node.id));
         node = node.provider === 'codex' && node.parentId !== undefined ? byId.get(logKey('codex', node.parentId)) : undefined;
       }
     }
     const affected: LogChange = {
       affects: (session) =>
-        session.providerSessionId === null || ids.has(logKey(session.provider, session.providerSessionId)),
+        (session.providerSessionId === null && session.lifecycle === 'active') ||
+        (session.providerSessionId !== null && ids.has(logKey(session.provider, session.providerSessionId))),
     };
     for (const listener of listeners) listener(affected);
   };

@@ -17,7 +17,7 @@ export interface WorkEntry {
 const worksDir = (projectPath: string): string => path.join(stateDir(projectPath), 'works');
 
 /**
- * Разобранные карты по файлу. Карта пишется атомарным rename (новый inode), поэтому `mtimeMs + size + ino`
+ * Разобранные карты по файлу. Карта пишется атомарным rename (новый inode), поэтому `mtimeMs + ctimeMs + size + ino` (ctime не выставить задним числом, как mtime)
  * различают версии; неизменённая карта стоит одного `stat` вместо чтения и разбора мегабайт JSON. Карту отдаём
  * общим объектом, не копией: читатели (`WorkEntry`) её не меняют — правки идут через `updateMap` с диска.
  */
@@ -36,7 +36,7 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-const parsedMaps = new Map<string, { mtimeMs: number; size: number; ino: number; map: WorkMap }>();
+const parsedMaps = new Map<string, { mtimeMs: number; ctimeMs: number; size: number; ino: number; map: WorkMap }>();
 
 /**
  * Читает одну карту. Её может не быть (проект переехал или удалён) или она может
@@ -56,6 +56,7 @@ async function readEntry(projectPath: string, workId: string): Promise<WorkEntry
     if (
       cached !== undefined &&
       cached.mtimeMs === info.mtimeMs &&
+      cached.ctimeMs === info.ctimeMs &&
       cached.size === info.size &&
       cached.ino === info.ino
     ) {
@@ -63,7 +64,7 @@ async function readEntry(projectPath: string, workId: string): Promise<WorkEntry
     }
     const text = await readFile(file, 'utf8');
     const map = freezeMaps ? deepFreeze(parseMap(text, file)) : parseMap(text, file);
-    parsedMaps.set(file, { mtimeMs: info.mtimeMs, size: info.size, ino: info.ino, map });
+    parsedMaps.set(file, { mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs, size: info.size, ino: info.ino, map });
     return { projectPath, map, bytes: Buffer.byteLength(text) };
   } catch {
     parsedMaps.delete(file);
@@ -91,11 +92,13 @@ async function localWorkIds(projectPath: string): Promise<string[]> {
 export async function readWorks(projectPath: string = process.cwd()): Promise<WorkEntry[]> {
   const seen = new Set<string>();
   const works: WorkEntry[] = [];
+  const files = new Set<string>();
 
   const push = async (project: string, workId: string): Promise<void> => {
     const key = `${project}\0${workId}`;
     if (seen.has(key)) return;
     seen.add(key);
+    files.add(workPaths(project, workId).map);
     const entry = await readEntry(project, workId);
     if (entry !== null) works.push(entry);
   };
@@ -107,6 +110,8 @@ export async function readWorks(projectPath: string = process.cwd()): Promise<Wo
     await push(projectPath, workId);
   }
 
+  // Карты работ, которых в списке больше нет (удалены, ушли из индекса), в кэше не держим.
+  for (const file of parsedMaps.keys()) if (!files.has(file)) parsedMaps.delete(file);
   return works;
 }
 
@@ -172,7 +177,9 @@ export function watchWorks(
     }
     reading = true;
     const seq = ++readSeq;
-    read(projectPath)
+    // Синхронный бросок подменённого `read` не должен оставить `reading` навсегда.
+    Promise.resolve()
+      .then(() => read(projectPath))
       .then((works) => {
         // Чтение, начатое раньше уже отданного, несёт устаревший список.
         if (closed || seq < applied) return;

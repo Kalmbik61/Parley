@@ -214,6 +214,7 @@ describe('createLogIndex', () => {
         mine: change.affects(session({ providerSessionId: 's-mine' })),
         other: change.affects(session({ providerSessionId: 's-other' })),
         unlinked: change.affects(session({ providerSessionId: null })),
+        unlinkedClosed: change.affects(session({ providerSessionId: null, lifecycle: 'sleeping' })),
       });
     });
     const append = (): Promise<void> =>
@@ -221,7 +222,7 @@ describe('createLogIndex', () => {
     await append();
     // Запись самих файлов до `start()` тоже может прийти событием (чужим) — ищем то, что задело нашу сессию.
     await waitFor(() => seen.some((entry) => entry.mine), 15_000, append);
-    expect(seen.find((entry) => entry.mine)).toEqual({ mine: true, other: false, unlinked: true });
+    expect(seen.find((entry) => entry.mine)).toEqual({ mine: true, other: false, unlinked: true, unlinkedClosed: false });
     for (const entry of seen) expect(entry.unlinked).toBe(true);
   }, 40_000);
 
