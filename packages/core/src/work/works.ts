@@ -74,6 +74,13 @@ export async function readWorks(projectPath: string = process.cwd()): Promise<Wo
 export interface WatchWorksOptions {
   /** Запись карты идёт несколькими файловыми операциями — склеиваем их в одну. */
   debounceMs?: number;
+  /**
+   * Следить ли за всем `parleyHome()`. По умолчанию да; наблюдателю проекта при уже заведённом
+   * наблюдателе дома хватает каталога работ проекта: иначе каждая запись индекса будит каждого.
+   */
+  watchHome?: boolean;
+  /** Чтение списка; подменяется в тестах, чтобы считать проходы. */
+  read?: (projectPath: string) => Promise<WorkEntry[]>;
   onError?: (error: unknown) => void;
 }
 
@@ -101,29 +108,46 @@ const relevant = (name: string): boolean =>
  * Хватает наблюдения за домом (`parleyHome`): любая запись карты обновляет и глобальный
  * индекс (см. `updateMap`), поэтому изменения чужих проектов видны тоже. Каталог
  * работ самого проекта наблюдается вдобавок — на случай другого дома.
+ *
+ * Чтений внахлёст не бывает: пока одно идёт, события лишь помечают список «грязным».
  */
 export function watchWorks(
   onWorks: (works: WorkEntry[], seq: number) => void,
   projectPath: string = process.cwd(),
-  { debounceMs = 300, onError }: WatchWorksOptions = {},
+  { debounceMs = 300, watchHome = true, read = readWorks, onError }: WatchWorksOptions = {},
 ): WorksWatcher {
   const watchers: FSWatcher[] = [];
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
   let applied = 0;
+  /** Чтение идёт, и события за это время просят ровно одно повторное после него, а не чтение на каждое. */
+  let reading = false;
+  let dirty = false;
 
   const refresh = (): void => {
     timer = undefined;
     if (closed) return;
+    if (reading) {
+      dirty = true;
+      return;
+    }
+    reading = true;
     const seq = ++readSeq;
-    readWorks(projectPath)
+    read(projectPath)
       .then((works) => {
         // Чтение, начатое раньше уже отданного, несёт устаревший список.
         if (closed || seq < applied) return;
         applied = seq;
         onWorks(works, seq);
       })
-      .catch((error: unknown) => onError?.(error));
+      .catch((error: unknown) => onError?.(error))
+      .finally(() => {
+        reading = false;
+        if (dirty && !closed) {
+          dirty = false;
+          schedule();
+        }
+      });
   };
 
   const schedule = (): void => {
@@ -131,7 +155,7 @@ export function watchWorks(
     timer = setTimeout(refresh, debounceMs);
   };
 
-  for (const dir of [parleyHome(), worksDir(projectPath)]) {
+  for (const dir of watchHome ? [parleyHome(), worksDir(projectPath)] : [worksDir(projectPath)]) {
     try {
       const watcher = watch(dir, { recursive: true }, (_event, name) => {
         if (name !== null && relevant(name.toString())) schedule();

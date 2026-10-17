@@ -138,4 +138,87 @@ describe('watchWorks', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(seen).toEqual([]);
   });
+
+  it('события во время чтения дают одно повторное чтение, а не по чтению на событие', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    let reads = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const seen: WorkEntry[][] = [];
+    const watcher = watchWorks((works) => seen.push(works), project, {
+      debounceMs: 10,
+      read: async (projectPath) => {
+        reads += 1;
+        if (reads === 1) await gate;
+        return readWorks(projectPath);
+      },
+    });
+
+    try {
+      let n = 0;
+      const started = Date.now();
+      // Прогрев fs.watch: пишем, пока первое чтение не началось.
+      while (reads === 0) {
+        n += 1;
+        await updateMap(project, created.work.id, (map) => {
+          map.work.goal = `цель ${n}`;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        if (Date.now() - started > 15_000) throw new Error('события не дождались');
+      }
+      // Первое чтение держится, а записи идут: каждая шлёт события карты и индекса.
+      for (let i = 0; i < 5; i += 1) {
+        await updateMap(project, created.work.id, (map) => {
+          map.work.goal = `во время чтения ${i}`;
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(reads).toBe(1);
+
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(reads).toBe(2);
+      expect(seen.at(-1)?.[0]?.map.work.goal).toBe('во время чтения 4');
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it('без watchHome запись индекса в доме читать не заставляет, а карта проекта — заставляет', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    let reads = 0;
+    const watcher = watchWorks(() => {}, project, {
+      debounceMs: 10,
+      watchHome: false,
+      read: async (projectPath) => {
+        reads += 1;
+        return readWorks(projectPath);
+      },
+    });
+
+    try {
+      // Каталог работ проекта наблюдается всегда: ждём, пока watch прогреется.
+      const started = Date.now();
+      while (reads === 0) {
+        await updateMap(project, created.work.id, (map) => {
+          map.work.goal = 'карта проекта';
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        if (Date.now() - started > 15_000) throw new Error('события не дождались');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const before = reads;
+      await writeFile(
+        path.join(home, 'works-index.json'),
+        '{"schemaVersion":1,"works":[]}\n',
+        'utf8',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(reads).toBe(before);
+    } finally {
+      watcher.close();
+    }
+  });
 });
