@@ -241,9 +241,11 @@ describe('лок', () => {
     broadcasts = [];
     // Любое дальнейшее изменение индекса запускает следующий цикл.
     await createWork(projectB, { title: 'Толчок' });
-    await new Promise((resolve) => setTimeout(resolve, 150));
-
-    expect(s.entry(projectA, map.work.id)?.map.sessions[0]?.lifecycle).toBe('sleeping');
+    // Склейка событий наблюдателя (75 мс) и сервиса (50 мс) складываются: ждём результат, а не фиксированную паузу.
+    await vi.waitFor(
+      () => expect(s.entry(projectA, map.work.id)?.map.sessions[0]?.lifecycle).toBe('sleeping'),
+      { timeout: 3000, interval: 25 },
+    );
   });
 });
 

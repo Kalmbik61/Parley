@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -75,6 +75,45 @@ describe('readWorks', () => {
     expect(works[0]?.map.sessions.map((session) => session.label)).toEqual(['бэкенд']);
   });
 
+  it('неизменённая карта второй раз не разбирается, изменённая — разбирается', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    const first = (await readWorks(project))[0];
+    expect(first?.bytes).toBeGreaterThan(0);
+
+    const second = (await readWorks(project))[0];
+    expect(second?.bytes).toBe(0);
+    expect(second?.map).toBe(first?.map);
+
+    await updateMap(project, created.work.id, (map) => {
+      map.work.goal = 'логин по e-mail';
+    });
+    const third = (await readWorks(project))[0];
+    expect(third?.bytes).toBeGreaterThan(0);
+    expect(third?.map.work.goal).toBe('логин по e-mail');
+    expect((await readWorks(project))[0]?.bytes).toBe(0);
+  });
+
+  it('разобранная карта в тестах заморожена: правка «на месте» бросает, а не портит общий объект', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const [entry] = await readWorks(project);
+    expect(() => {
+      (entry?.map.work as { title: string }).title = 'испорчено';
+    }).toThrow(TypeError);
+    expect(() => entry?.map.sessions.push({} as never)).toThrow(TypeError);
+  });
+
+  it('карта работы, пропавшей из списка, из кэша уходит: вернулась — разбирается заново', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    expect((await readWorks(project))[0]?.bytes).toBeGreaterThan(0);
+    expect((await readWorks(project))[0]?.bytes).toBe(0);
+    const file = workPaths(project, created.work.id).map;
+    const text = await readFile(file, 'utf8');
+    await rm(file);
+    expect(await readWorks(project)).toEqual([]);
+    await writeFile(file, text, 'utf8');
+    expect((await readWorks(project))[0]?.bytes).toBeGreaterThan(0);
+  });
+
   it('без единой работы список пуст', async () => {
     expect(await readWorks(project)).toEqual([]);
   });
@@ -137,5 +176,154 @@ describe('watchWorks', () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(seen).toEqual([]);
+  });
+
+  it('события во время чтения дают одно повторное чтение, а не по чтению на событие', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    let reads = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const seen: WorkEntry[][] = [];
+    const watcher = watchWorks((works) => seen.push(works), project, {
+      debounceMs: 10,
+      read: async (projectPath) => {
+        reads += 1;
+        if (reads === 1) await gate;
+        return readWorks(projectPath);
+      },
+    });
+
+    try {
+      let n = 0;
+      const started = Date.now();
+      // Прогрев fs.watch: пишем, пока первое чтение не началось.
+      while (reads === 0) {
+        n += 1;
+        await updateMap(project, created.work.id, (map) => {
+          map.work.goal = `цель ${n}`;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        if (Date.now() - started > 15_000) throw new Error('события не дождались');
+      }
+      // Первое чтение держится, а записи идут: каждая шлёт события карты и индекса.
+      for (let i = 0; i < 5; i += 1) {
+        await updateMap(project, created.work.id, (map) => {
+          map.work.goal = `во время чтения ${i}`;
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(reads).toBe(1);
+
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(reads).toBe(2);
+      expect(seen.at(-1)?.[0]?.map.work.goal).toBe('во время чтения 4');
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it('без watchHome запись индекса в доме читать не заставляет, а карта проекта — заставляет', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    let reads = 0;
+    const watcher = watchWorks(() => {}, project, {
+      debounceMs: 10,
+      watchHome: false,
+      read: async (projectPath) => {
+        reads += 1;
+        return readWorks(projectPath);
+      },
+    });
+
+    try {
+      // Каталог работ проекта наблюдается всегда: ждём, пока watch прогреется.
+      const started = Date.now();
+      while (reads === 0) {
+        await updateMap(project, created.work.id, (map) => {
+          map.work.goal = 'карта проекта';
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        if (Date.now() - started > 15_000) throw new Error('события не дождались');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const before = reads;
+      await writeFile(
+        path.join(home, 'works-index.json'),
+        '{"schemaVersion":1,"works":[]}\n',
+        'utf8',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(reads).toBe(before);
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it('ошибка чтения не останавливает наблюдателя: следующее событие читает снова; бросок read синхронно — тоже', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    let reads = 0;
+    const errors: unknown[] = [];
+    const seen: WorkEntry[][] = [];
+    const watcher = watchWorks((works) => seen.push(works), project, {
+      debounceMs: 10,
+      onError: (error) => errors.push(error),
+      read: (projectPath) => {
+        reads += 1;
+        if (reads === 1) throw new Error('синхронный бросок');
+        if (reads === 2) return Promise.reject(new Error('отказ чтения'));
+        return readWorks(projectPath);
+      },
+    });
+    try {
+      await expectWorks(
+        seen,
+        () =>
+          updateMap(project, created.work.id, (map) => {
+            map.work.goal = `цель ${reads}`;
+          }).then(() => undefined),
+        (list) => list.length === 1,
+      );
+      expect(errors).toHaveLength(2);
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it('close посреди чтения: результат не отдаётся и повтор не планируется', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    let reads = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const seen: WorkEntry[][] = [];
+    const watcher = watchWorks((works) => seen.push(works), project, {
+      debounceMs: 10,
+      read: async (projectPath) => {
+        reads += 1;
+        await gate;
+        return readWorks(projectPath);
+      },
+    });
+    const started = Date.now();
+    let n = 0;
+    while (reads === 0) {
+      n += 1;
+      await updateMap(project, created.work.id, (map) => {
+        map.work.goal = `цель ${n}`;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (Date.now() - started > 15_000) throw new Error('события не дождались');
+    }
+    await updateMap(project, created.work.id, (map) => {
+      map.work.goal = 'во время чтения';
+    });
+    watcher.close();
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(seen).toEqual([]);
+    expect(reads).toBe(1);
   });
 });

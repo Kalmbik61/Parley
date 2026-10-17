@@ -16,6 +16,7 @@ All notable changes to Parley are documented in this file.
 - **The window says why a session did not start.** When the work or room session limit or the hourly starts limit is reached, resuming a session, creating one, creating a room or dropping a session into a room now names the limit (for example "6 of 6 sessions are already running in this room") and what to do about it, including the Settings value to raise. Before, most of these showed only "conflicting state" or nothing at all.
 - **Session liveness checks work when Parley or its CLI runs under a non-English locale.**
 - **Deleting a work no longer removes its folder when the index is busy.** The folder is now deleted only once the index lock is taken, so a failed delete leaves the work intact.
+- **Parley stays responsive with many agents running.** The host now re-reads work maps once per change instead of a dozen times (one watcher on the Parley home, overlapping reads collapsed into one repeat, unchanged maps are not parsed again). Role chips share one read of the Codex configuration instead of starting Codex for each of them (role files are still read fresh). A transcript update recomputes only the session it belongs to, and a live transcript is re-indexed at most every two seconds instead of after every append.
 
 ## 0.15.0
 

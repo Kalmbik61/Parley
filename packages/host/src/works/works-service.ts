@@ -66,6 +66,12 @@ export interface WorksService {
 
 const DEFAULT_DEBOUNCE_MS = 100;
 
+/**
+ * Склейка событий внутри одного `watchWorks`. Запись карты — это запись индекса, `.bak` и самой карты с
+ * промежутками в десятки миллисекунд: при 0 каждое событие запускало своё полное чтение всех карт.
+ */
+const WATCH_DEBOUNCE_MS = 75;
+
 /** Бюджет писем в снимке для окна: на все активные работы вместе, не больше на одну и не меньше на одну. */
 const WINDOW_MESSAGES_TOTAL_BYTES = 3 * 1024 * 1024;
 const WINDOW_MESSAGES_PER_WORK_BYTES = 1024 * 1024;
@@ -303,11 +309,11 @@ export function createWorksService(
       },
       projectPath,
       {
-        // Своя склейка на уровне сервиса (см. `scheduleRefresh`): у каждого
-        // проекта — свой наблюдатель, и без debounce:0 здесь несколько
-        // параллельных таймеров watchWorks независимо дребезжали бы одним
-        // и тем же изменением индекса.
-        debounceMs: 0,
+        // Помимо склейки сервиса (`scheduleRefresh`) события склеивает и сам наблюдатель. Дом
+        // наблюдается один раз — наблюдателю проекта достаточно каталога его работ, иначе каждая
+        // запись индекса будила бы каждого из них и каждый читал бы все карты.
+        debounceMs: WATCH_DEBOUNCE_MS,
+        watchHome: projectPath === parleyHome(),
         onError: (error) =>
           host.log.warn('наблюдение за работами: событие пропущено', { error: String(error) }),
       },
@@ -329,7 +335,10 @@ export function createWorksService(
     if (fresh !== null) countParsed(fresh);
     // Пока читали, пришло событие наблюдателя: его чтение свежее нашего, следующая пауза сверит ещё раз.
     if (stopped || fresh === null || seq !== latestSeq) return;
-    if (JSON.stringify(fresh) === JSON.stringify(latest)) return;
+    // `bytes` в сравнении не участвует: у карты из кэша разбора он 0, и список без перемен выглядел бы новым.
+    const content = (list: readonly WorkEntry[]): string =>
+      JSON.stringify(list.map(({ projectPath, map }) => ({ projectPath, map })));
+    if (content(fresh) === content(latest)) return;
     latest = fresh;
     scheduleRefresh();
   }

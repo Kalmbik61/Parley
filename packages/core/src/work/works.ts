@@ -1,5 +1,5 @@
 import { watch, type FSWatcher } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parseMap } from './map.js';
 import { stateDir } from './state-dir.js';
@@ -17,17 +17,57 @@ export interface WorkEntry {
 const worksDir = (projectPath: string): string => path.join(stateDir(projectPath), 'works');
 
 /**
+ * Разобранные карты по файлу. Карта пишется атомарным rename (новый inode), поэтому `mtimeMs + ctimeMs + size + ino` (ctime не выставить задним числом, как mtime)
+ * различают версии; неизменённая карта стоит одного `stat` вместо чтения и разбора мегабайт JSON. Карту отдаём
+ * общим объектом, не копией: читатели (`WorkEntry`) её не меняют — правки идут через `updateMap` с диска.
+ */
+/**
+ * В тестах и разработке (`VITEST`, `PARLEY_FREEZE_MAPS=1`) разобранная карта замораживается: общий объект,
+ * который кто-то правит «на месте», в проде тихо портил бы карту всем читателям сразу, а здесь это `TypeError`
+ * в месте правки. В проде заморозки нет — обход объекта на каждый разбор лишний.
+ */
+const freezeMaps = process.env['VITEST'] !== undefined || process.env['PARLEY_FREEZE_MAPS'] === '1';
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
+
+const parsedMaps = new Map<string, { mtimeMs: number; ctimeMs: number; size: number; ino: number; map: WorkMap }>();
+
+/**
  * Читает одну карту. Её может не быть (проект переехал или удалён) или она может
  * быть битой — в списке работ это повод пропустить одну строку, а не остаться
  * без списка совсем. Отдельная работа с битой картой отвечает за себя сама
  * (`readMap` по-прежнему бросает).
+ *
+ * `bytes` — только реальный разбор: из кэша карта приходит с 0, счётчик хоста не врёт про прочитанное.
  */
 async function readEntry(projectPath: string, workId: string): Promise<WorkEntry | null> {
   const file = workPaths(projectPath, workId).map;
   try {
+    // `stat` до чтения: если карту перепишут между ними, в кэше окажется новое содержимое под старым ключом,
+    // и следующий проход просто разберёт её ещё раз.
+    const info = await stat(file);
+    const cached = parsedMaps.get(file);
+    if (
+      cached !== undefined &&
+      cached.mtimeMs === info.mtimeMs &&
+      cached.ctimeMs === info.ctimeMs &&
+      cached.size === info.size &&
+      cached.ino === info.ino
+    ) {
+      return { projectPath, map: cached.map, bytes: 0 };
+    }
     const text = await readFile(file, 'utf8');
-    return { projectPath, map: parseMap(text, file), bytes: Buffer.byteLength(text) };
+    const map = freezeMaps ? deepFreeze(parseMap(text, file)) : parseMap(text, file);
+    parsedMaps.set(file, { mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs, size: info.size, ino: info.ino, map });
+    return { projectPath, map, bytes: Buffer.byteLength(text) };
   } catch {
+    parsedMaps.delete(file);
     return null;
   }
 }
@@ -52,11 +92,13 @@ async function localWorkIds(projectPath: string): Promise<string[]> {
 export async function readWorks(projectPath: string = process.cwd()): Promise<WorkEntry[]> {
   const seen = new Set<string>();
   const works: WorkEntry[] = [];
+  const files = new Set<string>();
 
   const push = async (project: string, workId: string): Promise<void> => {
     const key = `${project}\0${workId}`;
     if (seen.has(key)) return;
     seen.add(key);
+    files.add(workPaths(project, workId).map);
     const entry = await readEntry(project, workId);
     if (entry !== null) works.push(entry);
   };
@@ -68,12 +110,21 @@ export async function readWorks(projectPath: string = process.cwd()): Promise<Wo
     await push(projectPath, workId);
   }
 
+  // Карты работ, которых в списке больше нет (удалены, ушли из индекса), в кэше не держим.
+  for (const file of parsedMaps.keys()) if (!files.has(file)) parsedMaps.delete(file);
   return works;
 }
 
 export interface WatchWorksOptions {
   /** Запись карты идёт несколькими файловыми операциями — склеиваем их в одну. */
   debounceMs?: number;
+  /**
+   * Следить ли за всем `parleyHome()`. По умолчанию да; наблюдателю проекта при уже заведённом
+   * наблюдателе дома хватает каталога работ проекта: иначе каждая запись индекса будит каждого.
+   */
+  watchHome?: boolean;
+  /** Чтение списка; подменяется в тестах, чтобы считать проходы. */
+  read?: (projectPath: string) => Promise<WorkEntry[]>;
   onError?: (error: unknown) => void;
 }
 
@@ -101,29 +152,48 @@ const relevant = (name: string): boolean =>
  * Хватает наблюдения за домом (`parleyHome`): любая запись карты обновляет и глобальный
  * индекс (см. `updateMap`), поэтому изменения чужих проектов видны тоже. Каталог
  * работ самого проекта наблюдается вдобавок — на случай другого дома.
+ *
+ * Чтений внахлёст не бывает: пока одно идёт, события лишь помечают список «грязным».
  */
 export function watchWorks(
   onWorks: (works: WorkEntry[], seq: number) => void,
   projectPath: string = process.cwd(),
-  { debounceMs = 300, onError }: WatchWorksOptions = {},
+  { debounceMs = 300, watchHome = true, read = readWorks, onError }: WatchWorksOptions = {},
 ): WorksWatcher {
   const watchers: FSWatcher[] = [];
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
   let applied = 0;
+  /** Чтение идёт, и события за это время просят ровно одно повторное после него, а не чтение на каждое. */
+  let reading = false;
+  let dirty = false;
 
   const refresh = (): void => {
     timer = undefined;
     if (closed) return;
+    if (reading) {
+      dirty = true;
+      return;
+    }
+    reading = true;
     const seq = ++readSeq;
-    readWorks(projectPath)
+    // Синхронный бросок подменённого `read` не должен оставить `reading` навсегда.
+    Promise.resolve()
+      .then(() => read(projectPath))
       .then((works) => {
         // Чтение, начатое раньше уже отданного, несёт устаревший список.
         if (closed || seq < applied) return;
         applied = seq;
         onWorks(works, seq);
       })
-      .catch((error: unknown) => onError?.(error));
+      .catch((error: unknown) => onError?.(error))
+      .finally(() => {
+        reading = false;
+        if (dirty && !closed) {
+          dirty = false;
+          schedule();
+        }
+      });
   };
 
   const schedule = (): void => {
@@ -131,7 +201,7 @@ export function watchWorks(
     timer = setTimeout(refresh, debounceMs);
   };
 
-  for (const dir of [parleyHome(), worksDir(projectPath)]) {
+  for (const dir of watchHome ? [parleyHome(), worksDir(projectPath)] : [worksDir(projectPath)]) {
     try {
       const watcher = watch(dir, { recursive: true }, (_event, name) => {
         if (name !== null && relevant(name.toString())) schedule();

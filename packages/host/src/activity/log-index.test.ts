@@ -196,6 +196,36 @@ describe('createLogIndex', () => {
     await waitFor(() => calls > 0, 15_000, write);
   }, 40_000);
 
+  it('onChange отдаёт, какие сессии задела запись: своя и непривязанные — да, чужая — нет', async () => {
+    const mine = await writeClaudeSession(
+      's-mine',
+      `${JSON.stringify({ type: 'custom-title', customTitle: 'моя', sessionId: 's-mine' })}\n`,
+    );
+    await writeClaudeSession(
+      's-other',
+      `${JSON.stringify({ type: 'custom-title', customTitle: 'чужая', sessionId: 's-other' })}\n`,
+    );
+    const idx = index();
+    await idx.start();
+    const seen: Array<Record<string, boolean>> = [];
+    idx.onChange((change) => {
+      if (change === undefined) return;
+      seen.push({
+        mine: change.affects(session({ providerSessionId: 's-mine' })),
+        other: change.affects(session({ providerSessionId: 's-other' })),
+        unlinked: change.affects(session({ providerSessionId: null })),
+        unlinkedClosed: change.affects(session({ providerSessionId: null, lifecycle: 'sleeping' })),
+      });
+    });
+    const append = (): Promise<void> =>
+      appendFile(mine, `${JSON.stringify({ type: 'custom-title', customTitle: 'моя 2', sessionId: 's-mine' })}\n`);
+    await append();
+    // Запись самих файлов до `start()` тоже может прийти событием (чужим) — ищем то, что задело нашу сессию.
+    await waitFor(() => seen.some((entry) => entry.mine), 15_000, append);
+    expect(seen.find((entry) => entry.mine)).toEqual({ mine: true, other: false, unlinked: true, unlinkedClosed: false });
+    for (const entry of seen) expect(entry.unlinked).toBe(true);
+  }, 40_000);
+
   describe('usage: потомки (P36c)', () => {
     const THREAD = '22222222-2222-2222-2222-222222222222';
     const AT = '2026-10-04T12:00:00.000Z';

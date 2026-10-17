@@ -22,6 +22,12 @@ export interface WatchSource {
 export interface WatchOptions {
   /** Claude Code дописывает файл пачками — склеиваем всплеск событий в одно. */
   debounceMs?: number;
+  /**
+   * Не чаще одного перечитывания файла за это время. Перечитывание — полный разбор файла, у живой сессии это
+   * десятки-сотни МБ: при записи каждые пару секунд один debounce не помогает, разбор шёл бы после каждой.
+   * Первое изменение после паузы по-прежнему ждёт только `debounceMs`.
+   */
+  minIntervalMs?: number;
   /** Сбой ре-парса не должен ронять watcher; по умолчанию тихо игнорируется. */
   onError?: (error: unknown, file: string) => void;
 }
@@ -80,15 +86,17 @@ export function codexSource(root: string = defaultCodexRoot()): WatchSource {
 export function watchSessions(
   onChange: (change: SessionChange) => void,
   sources: WatchSource[],
-  { debounceMs = 300, onError }: WatchOptions = {},
+  { debounceMs = 300, minIntervalMs = 0, onError }: WatchOptions = {},
 ): SessionWatcher {
   const timers = new Map<string, NodeJS.Timeout>();
+  const lastRun = new Map<string, number>();
   const watchers: FSWatcher[] = [];
   let closed = false;
 
   const reparse = async (source: WatchSource, file: string): Promise<void> => {
     timers.delete(file);
     if (closed) return;
+    lastRun.set(file, Date.now());
 
     try {
       if (!(await exists(file))) {
@@ -106,9 +114,10 @@ export function watchSessions(
   const schedule = (source: WatchSource, file: string): void => {
     const pending = timers.get(file);
     if (pending) clearTimeout(pending);
+    const wait = Math.max(debounceMs, (lastRun.get(file) ?? 0) + minIntervalMs - Date.now());
     timers.set(
       file,
-      setTimeout(() => void reparse(source, file), debounceMs),
+      setTimeout(() => void reparse(source, file), wait),
     );
   };
 

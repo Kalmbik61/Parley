@@ -38,3 +38,18 @@ describe('roles.list participant context and safe projection', () => {
     expect(calls).toBe(0);
   });
 });
+describe('roles.list: сессия из памяти сервиса работ', () => {
+  it('берёт worktree из памяти без чтения карты; нет в памяти — читает диск', async () => {
+    const { work } = await createWork(project, { title: 'Roles', goal: '' });
+    let cwd = '';
+    const catalog = async (current: string) => { cwd = current; return buildRoleCatalog(); };
+    const map = { sessions: [{ id: 's-01', worktree: { path: '/in/memory' } }] };
+    const works = { entry: () => ({ projectPath: project, map }) } as never;
+    const ref = { projectPath: project, workId: work.id, sessionId: 's-01' };
+    await createRolesList(catalog, works)({ projectPath: project, ref }, request);
+    expect(cwd).toBe('/in/memory');
+    // В памяти работы нет, на диске её сессия s-01 тоже нет: диск прочитан и ответил not_found.
+    const empty = { entry: () => undefined } as never;
+    await expect(createRolesList(catalog, empty)({ projectPath: project, ref }, request)).rejects.toMatchObject({ code: 'not_found' });
+  });
+});

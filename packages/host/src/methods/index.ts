@@ -58,6 +58,7 @@ import {
 } from './rooms.js';
 import { createRolesList } from './roles.js';
 import { createRecipesList } from './recipes.js';
+import { createCachedCatalog } from './role-catalog-cache.js';
 import { createSessionHandlers } from './sessions.js';
 import { settingsGet, settingsSet } from './settings.js';
 import { createWakeHandlers } from './wake.js';
@@ -183,6 +184,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const worktrees = createWorktreesHandlers(deps);
   const changes = createChangesHandlers(deps);
   const capabilities = createCapabilitiesHandlers();
+  // Один кэш на `roles.list` и `recipes.list`: оба просят один и тот же каталог по одному `cwd`.
+  const roleCatalog = createCachedCatalog();
 
   const compaction = deps.compaction === undefined ? null : createCompactionMethods(deps.compaction);
 
@@ -213,8 +216,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'pty.attach': pty.ptyAttach as AnyHandler,
     'pty.detach': pty.ptyDetach as AnyHandler,
     'pty.send': pty.ptySend as AnyHandler,
-    'roles.list': createRolesList() as AnyHandler,
-    'recipes.list': createRecipesList() as AnyHandler,
+    'roles.list': createRolesList(roleCatalog, deps.works) as AnyHandler,
+    'recipes.list': createRecipesList(roleCatalog) as AnyHandler,
     'sessions.create': sessions.sessionsCreate as AnyHandler,
     'sessions.resume': sessions.sessionsResume as AnyHandler,
     'sessions.stop': sessions.sessionsStop as AnyHandler,

@@ -24,6 +24,7 @@ import type { WorksService } from '../works/works-service.js';
 import { createActivityService, wholeSessionUsage } from './activity-service.js';
 import type { ActivityService, ActivityServiceOptions } from './activity-service.js';
 import type { SubagentMeta } from './subagent-meta.js';
+import { createWindowCounters } from '../health/window-counters.js';
 
 let home = '';
 let project = '';
@@ -1604,4 +1605,44 @@ describe('wholeSessionUsage (спека расхода токенов, 5.2)', ()
   it('ни лога, ни снимка — посчитать нечем', () => {
     expect(wholeSessionUsage(unavailable, false, 'claude')).toBeNull();
   });
+});
+
+describe('изменение лога пересчитывает только свою сессию', () => {
+  it('дозапись лога одной из четырёх сессий — один пересчёт, а не четыре', async () => {
+    const map = await createWork(project, { title: 'Работа' });
+    await updateMap(project, map.work.id, (current) => {
+      for (let i = 1; i <= 4; i += 1) {
+        const created = addSession(current, { provider: 'claude', label: `s${i}`, task: 'сделать' });
+        created.providerSessionId = `s-log-${i}`;
+        created.launchedBy = 'host';
+        transitionSession(current, created.id, 'active');
+      }
+    });
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    const logFile = (i: number): string => path.join(claudeRoot, '-proj', `s-log-${i}.jsonl`);
+    const line = (i: number, title: string): string =>
+      `${JSON.stringify({ type: 'custom-title', customTitle: title, sessionId: `s-log-${i}` })}\n`;
+    for (let i = 1; i <= 4; i += 1) await writeFile(logFile(i), line(i, `заголовок ${i}`));
+
+    const counters = createWindowCounters();
+    const w = await works();
+    const a = activity(w, { windowCounters: counters });
+    await a.start();
+    // Индекс логов строится в фоне, его первый список пересчитывает всех: ждём тишины, потом считаем.
+    await settle(1500);
+    const base = counters.read().recomputes;
+
+    // Рекурсивный fs.watch включается не мгновенно: повторяем запись, пока пересчёт не случился.
+    // Пересчёт после изменения лога синхронный — смотрим счётчик сразу после первого прироста, пока чужие
+    // пересчёты (журналы, таймеры) не успели его разбавить.
+    for (let attempt = 0; counters.read().recomputes === base; attempt += 1) {
+      if (attempt > 8) throw new Error('изменение лога не доехало до activity');
+      await appendFile(logFile(2), line(2, `правка ${attempt}`));
+      for (let waited = 0; waited < (attempt === 0 ? 1500 : 2500) && counters.read().recomputes === base; waited += 5) await settle(5);
+    }
+    await settle(20);
+    const delta = counters.read().recomputes - base;
+    // Раньше изменение любого лога пересчитывало все четыре сессии.
+    expect(delta).toBeLessThanOrEqual(2);
+  }, 60_000);
 });
