@@ -22,6 +22,7 @@ function props(patch: Partial<AssistantViewProps> = {}, host: Partial<AssistantS
     cardError: null,
     hotkey: 'Alt+Space',
     pending: null,
+    maxHeight: 'calc(100vh - 88px)',
     onDraft: vi.fn(),
     onSubmit: vi.fn(),
     onMic: vi.fn(),
@@ -50,6 +51,19 @@ describe('вид помощника', () => {
     expect(screen.getByText('Who is working?')).toBeTruthy();
     expect(screen.getByTestId('assistant-answer').textContent).toBe('Two agents.');
     expect(screen.getByTestId('assistant-status').textContent).toBe('Answering');
+  });
+
+  it('середина прокручивается в пределе maxHeight; без вопроса и ответа она пустая; вопрос — в две строки с подсказкой', () => {
+    const question = 'Should this go to the busy room or to a new one? '.repeat(6).trim();
+    const { rerender } = render(<AssistantView {...props()} />);
+    expect(screen.getByTestId('assistant-view').style.maxHeight).toBe('calc(100vh - 88px)');
+    expect(screen.getByTestId('assistant-scroll').childElementCount).toBe(0);
+    rerender(<AssistantView {...props({}, { phase: 'answering', question, answer: 'Two agents.' })} />);
+    const scroll = screen.getByTestId('assistant-scroll');
+    expect(scroll.className).toContain('overflow-y-auto');
+    expect(scroll.contains(screen.getByTestId('assistant-answer'))).toBe(true);
+    const shown = screen.getByTitle(question);
+    expect(shown.className).toContain('line-clamp-2');
   });
 
   it('карточка: адресат и текст; Send выключена первые 500 мс, потом зовёт onDecide', () => {
