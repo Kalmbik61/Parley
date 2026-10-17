@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir, userInfo } from 'node:os';
@@ -576,9 +576,10 @@ describe('updateMap', () => {
       await createWork(project, { title: 'Авторизация' });
       const lock = workPaths(project, 'w-0001').lock;
 
-      await updateMap(project, 'w-0001', async () => {
-        await rm(lock);
-        await writeFile(lock, 'чужая блокировка');
+      // Подмена синхронно внутри мутатора: асинхронный мутатор никто не ждёт.
+      await updateMap(project, 'w-0001', () => {
+        rmSync(lock);
+        writeFileSync(lock, 'чужая блокировка');
       });
 
       expect(await readFile(lock, 'utf8')).toBe('чужая блокировка');

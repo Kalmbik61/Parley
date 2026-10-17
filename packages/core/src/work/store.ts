@@ -59,7 +59,8 @@ function refuseRealHomeUnderTest(resolved: string): void {
   for (const dir of [HOME_DIR, LEGACY_HOME_DIR]) {
     const real = path.join(userInfo().homedir, dir);
     const relative = path.relative(real, target);
-    if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)))
+    const outside = relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+    if (!outside)
       throw new Error(
         `A test resolved the real Parley home (${target}): the sandbox test/sandbox-home.ts is not applied — was vitest run outside the package config?`,
       );
@@ -151,7 +152,7 @@ export class WorkNotFoundError extends Error {
 const STALE_UNOWNED_LOCK_MS = 10_000;
 
 /**
- * Осиротела ли блокировка: pid хозяина мёртв; файл без pid (прежняя версия, окно между `open` и записью, guard) —
+ * Осиротела ли блокировка: pid хозяина мёртв; файл без pid (прежняя версия, окно между `open` и записью) —
  * старше 10 с. Не обычный файл (висячий симлинк, каталог) и любая ошибка чтения — не осиротела: ждём до таймаута,
  * как до перехвата, а не крутим цикл.
  */
@@ -162,6 +163,18 @@ async function isOrphaned(file: string): Promise<boolean> {
     // Строгий разбор: недописанное «12» из «12345\n» — не pid, судим по возрасту.
     const pid = /^(\d+)\n$/.exec(await readFile(file, 'utf8'))?.[1];
     return pid !== undefined ? !isAlive(Number(pid)) : Date.now() - info.mtimeMs > STALE_UNOWNED_LOCK_MS;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Guard перехвата судим только по возрасту (`lstat`, без разбора содержимого): pid в нём не пишется, и подброшенный
+ * извне файл с живым pid, каталог или симлинк иначе выключили бы перехват этой блокировки навсегда.
+ */
+async function staleGuard(file: string): Promise<boolean> {
+  try {
+    return Date.now() - (await lstat(file)).mtimeMs > STALE_UNOWNED_LOCK_MS;
   } catch {
     return false;
   }
@@ -183,7 +196,7 @@ async function removeOrphanedLock(lockFile: string): Promise<boolean> {
   try {
     handle = await open(guard, 'wx', 0o600);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST' && (await isOrphaned(guard))) await rm(guard, { force: true }).catch(() => {});
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST' && (await staleGuard(guard))) await rm(guard, { force: true }).catch(() => {});
     return false;
   }
   try {

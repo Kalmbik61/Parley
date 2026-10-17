@@ -5,7 +5,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -21,7 +21,9 @@ const engine = resolveEngine({
   pathEnv: process.env.PATH,
   isFile: isFileSync,
 });
-const model = path.join(voiceModelsDir(), 'ggml-base.bin');
+// Модель читается из настоящего дома нарочно и только на чтение: песочница теста подменяет `HOME`, а `parleyHome()`
+// под vitest настоящий дом отвергает.
+const model = path.join(voiceModelsDir(path.join(userInfo().homedir, '.parley')), 'ggml-base.bin');
 const ready = process.platform === 'darwin' && engine !== null && existsSync(model);
 
 function phrase(voice: string, text: string): ArrayBuffer {
