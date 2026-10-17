@@ -4,6 +4,13 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Fixed
+
+- **Parley no longer stays stuck when a process dies holding the works index lock.** A lock whose owner is gone is now taken over automatically; a lock left behind by an older version is taken over after 10 seconds. Before, a crashed process could leave Parley unable to save any work until the lock file was deleted by hand.
+- **Deleting a work no longer removes its folder when the index is busy.** The folder is now deleted only once the index lock is taken, so a failed delete leaves the work intact.
+
 ## 0.15.0
 
 Parley gets an assistant that lives on the island and a browser that lives next to every chat and room. Agents can open pages in that browser and read it, the sessions Parley starts run leaner, and the window, the assistant and the agents' brief now agree on what state a session is in.

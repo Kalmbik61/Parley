@@ -20,6 +20,7 @@ import { CONTEXT_DIR, contextFile } from '../context-fill.js';
 import { LIMITS_DIR, limitsFile } from '../limits.js';
 import { envValue, HOME_DIR, LEGACY_HOME_DIR, type Env } from '../names.js';
 import { bumpWorkId, nextWorkId, parseMap } from './map.js';
+import { isAlive } from './pid-alive.js';
 import { PRE_JOURNAL_STATE_IGNORE, PRE_MEMORY_STATE_IGNORE, PRE_RECIPES_STATE_IGNORE, ensureStateDir, isDirectorySync, stateDir, SHARED_STATE_IGNORE } from './state-dir.js';
 import { resolveSharedProjectContext, sharedPathIgnored } from './project-context.js';
 import type { ProjectContextOptions, SharedProjectContext } from './project-context.js';
@@ -118,21 +119,64 @@ export class WorkNotFoundError extends Error {
   }
 }
 
-/** Эксклюзивное создание файла — атомарная операция файловой системы. */
+/**
+ * Файл блокировки без pid старше этого возраста остался от упавшего процесса прежней версии: окно между `open` и
+ * записью pid — микросекунды, свежий пустой файл — это чужой процесс, который вот-вот допишет свой pid.
+ */
+const STALE_UNOWNED_LOCK_MS = 10_000;
+
+/**
+ * Снимает блокировку, чей хозяин мёртв (процесс упал, не отпустив её), и сообщает, что снял: тогда `open` стоит
+ * повторить сразу. Живой pid (в том числе наш собственный) не трогаем никогда.
+ *
+ * Сравнение inode перед `rm` не даёт снять свежую чужую блокировку, но проверка и удаление не атомарны: остаётся
+ * малое окно TOCTOU — как у `releaseSharedLock`.
+ */
+async function removeOrphanedLock(lockFile: string): Promise<boolean> {
+  try {
+    const first = await stat(lockFile);
+    const firstLine = (await readFile(lockFile, 'utf8')).trim().split('\n')[0] ?? '';
+    const pid = /^\d+$/.test(firstLine) ? Number(firstLine) : null;
+    const orphaned =
+      pid !== null ? !isAlive(pid) : Date.now() - first.mtimeMs > STALE_UNOWNED_LOCK_MS;
+    if (!orphaned) return false;
+    const second = await stat(lockFile);
+    if (second.dev !== first.dev || second.ino !== first.ino) return false;
+    await rm(lockFile, { force: true });
+    return true;
+  } catch (error) {
+    // Файл исчез между проверками — повторяем `open` сразу.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  }
+}
+
+/** Эксклюзивное создание файла — атомарная операция файловой системы; в файл пишется pid хозяина. */
 async function acquireLock(lockFile: string, timeoutMs: number,
   timeoutError: () => Error = () => new MapLockTimeoutError(lockFile, timeoutMs), mode = 0o666,
 ): Promise<FileHandle> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
+    let handle: FileHandle;
     try {
-      return await open(lockFile, 'wx', mode);
+      handle = await open(lockFile, 'wx', mode);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (await removeOrphanedLock(lockFile)) continue;
       if (Date.now() >= deadline) {
         throw timeoutError();
       }
       await delay(RETRY_MS);
+      continue;
     }
+    try {
+      await handle.writeFile(`${process.pid}\n`);
+    } catch (error) {
+      await handle.close();
+      await rm(lockFile, { force: true });
+      throw error;
+    }
+    return handle;
   }
 }
 
@@ -207,15 +251,16 @@ export async function deleteSessionFiles(
 /**
  * Удаляет работу целиком: каталог `<состояние>/works/<id>` со всем содержимым,
  * включая артефакты, и её запись в глобальном индексе. Каталога уже нет —
- * не ошибка: запись из индекса всё равно снимается.
+ * не ошибка: запись из индекса всё равно снимается. Каталог удаляется только
+ * после взятия блокировки индекса: отказ блокировки ничего не стирает.
  */
 export async function deleteWorkFiles(
   projectPath: string,
   workId: string,
   { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS }: WriteOptions = {},
 ): Promise<void> {
-  await rm(workPaths(projectPath, workId).dir, { recursive: true, force: true });
-  await withWorksIndex(lockTimeoutMs, (index) => {
+  await withWorksIndex(lockTimeoutMs, async (index) => {
+    await rm(workPaths(projectPath, workId).dir, { recursive: true, force: true });
     index.works = index.works.filter(
       (work) => !(work.id === workId && work.projectPath === projectPath),
     );

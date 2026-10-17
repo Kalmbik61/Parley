@@ -1,6 +1,7 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -13,6 +14,7 @@ import {
   createWork,
   deleteSessionFiles,
   deleteWorkFiles,
+  MapLockTimeoutError,
   pruneWorksIndex,
   readMap,
   readWorksIndex,
@@ -431,6 +433,79 @@ describe('updateMap', () => {
 
     expect((await readMap(project, 'w-0001')).sessions).toHaveLength(1);
     expect((await readWorksIndex()).works).toHaveLength(1);
+  });
+
+  it('deleteWorkFiles при отказе блокировки индекса не удаляет каталог работы', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await writeFile(path.join(home, 'works-index.lock'), `${process.pid}\n`);
+
+    await expect(deleteWorkFiles(project, 'w-0001', { lockTimeoutMs: 100 })).rejects.toBeInstanceOf(
+      MapLockTimeoutError,
+    );
+
+    expect((await readMap(project, 'w-0001')).work.id).toBe('w-0001');
+    expect((await readWorksIndex()).works).toHaveLength(1);
+  });
+
+  describe('осиротевшая блокировка индекса', () => {
+    const deadPid = async (): Promise<number> => {
+      const child = spawn(process.execPath, ['-e', '']);
+      const pid = child.pid as number;
+      await new Promise((resolve) => child.once('exit', resolve));
+      return pid;
+    };
+
+    it('блокировка с pid умершего процесса перехватывается', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, `${await deadPid()}\n`);
+
+      await createWork(project, { title: 'Авторизация' });
+
+      expect((await readWorksIndex()).works).toHaveLength(1);
+      expect(await exists(indexLock)).toBe(false);
+    });
+
+    it('пустой файл блокировки старше 10 с перехватывается', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, '');
+      const old = new Date(Date.now() - 11_000);
+      await utimes(indexLock, old, old);
+
+      await createWork(project, { title: 'Авторизация' });
+
+      expect((await readWorksIndex()).works).toHaveLength(1);
+      expect(await exists(indexLock)).toBe(false);
+    });
+
+    it('пустой свежий файл блокировки не трогаем: таймаут', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, '');
+
+      await expect(createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 100 })).rejects.toBeInstanceOf(
+        MapLockTimeoutError,
+      );
+      expect(await exists(indexLock)).toBe(true);
+    });
+
+    it('блокировка с живым pid не перехватывается', async () => {
+      const indexLock = path.join(home, 'works-index.lock');
+      await writeFile(indexLock, `${process.pid}\n`);
+
+      await expect(createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 100 })).rejects.toBeInstanceOf(
+        MapLockTimeoutError,
+      );
+      expect(await readFile(indexLock, 'utf8')).toBe(`${process.pid}\n`);
+    });
+
+    it('взятая блокировка содержит pid текущего процесса', async () => {
+      await createWork(project, { title: 'Авторизация' });
+      let mapLock = '';
+      await updateMap(project, 'w-0001', () => {
+        mapLock = readFileSync(workPaths(project, 'w-0001').lock, 'utf8');
+      });
+
+      expect(mapLock).toBe(`${process.pid}\n`);
+    });
   });
 
   it('два параллельных процесса создают разные работы в индексе', async () => {
