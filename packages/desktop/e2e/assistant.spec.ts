@@ -1,4 +1,4 @@
-import { rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -8,7 +8,9 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
  * Помощник на острове (спека 2026-10-14): палитра «Ask the assistant» → вид помощника на острове → вопрос → карточка с письмом
- * в комнату → Send → в комнате письмо «You (via assistant)» со значком помощника → второй вопрос и ответ → Esc.
+ * в комнату → Send → в комнате письмо «You (via assistant)» со значком помощника → письмо агенту комнаты с упоминанием →
+ * второй вопрос и ответ → вопрос виден сразу, пока ход думает, сообщения ждут «Queued» и уходят одним ходом → то же при
+ * замороженном хосте → Esc.
  * Вместо `claude` — `stub-assistant-agent.mjs`: ход помощника он ведёт по-настоящему через маршруты хоста (обзор,
  * предложение письма), сессии работы и `--version` уходят в обычную заглушку. Каркас — как у `island.spec.ts`:
  * остров включается пустым `PARLEY_ISLAND` (конфиг Playwright гасит его для всех спеков), главное окно берётся по
@@ -158,10 +160,56 @@ test.describe('помощник на острове', () => {
     await expect(letter.locator('[data-message-meta]')).toContainText('You (via assistant)');
     await expect(letter.locator('[data-assistant-mark]')).toHaveCount(1);
 
-    // 6. Второй вопрос — ответ текстом; Esc закрывает вид помощника.
+    // 5а. Письмо агенту через комнату: на карточке чип упомянутого, в ленте комнаты — чип упоминания у письма.
+    await island.getByTestId('assistant-input').fill('mention tell the planner to skip Safari tests');
+    await island.getByTestId('assistant-input').press('Enter');
+    await expect(island.getByTestId('assistant-mention')).toContainText('@', { timeout: 30_000 });
+    await island.waitForTimeout(600);
+    await island.getByTestId('assistant-send').click();
+    await expect(island.getByTestId('assistant-sent')).toBeVisible();
+    const mentioned = window.locator('[data-room-feed] [data-message-id]').filter({ hasText: LETTER }).last();
+    await expect(mentioned.locator(`[data-mention="${ref.sessionId}"]`)).toHaveCount(1);
+
+    // 6. Второй вопрос — ответ текстом.
     await island.getByTestId('assistant-input').fill('what is going on?');
     await island.getByTestId('assistant-input').press('Enter');
     await expect(island.getByTestId('assistant-answer')).toContainText('The room is working.', { timeout: 30_000 });
+
+    // 6а. Вопрос виден сразу; пока ход думает, следующие сообщения ждут серыми «Queued» и уходят вместе одним ходом.
+    await island.getByTestId('assistant-input').fill('slow what is going on?');
+    await island.getByTestId('assistant-input').press('Enter');
+    await expect(island.getByTestId('assistant-question')).toHaveText('slow what is going on?');
+    await island.getByTestId('assistant-input').fill('echo first');
+    await island.getByTestId('assistant-input').press('Enter');
+    await island.getByTestId('assistant-input').fill('echo second');
+    await island.getByTestId('assistant-input').press('Enter');
+    await expect(island.getByTestId('assistant-queued')).toHaveCount(2);
+    await expect(island.getByTestId('assistant-answer')).toContainText('Got: echo first | echo second', { timeout: 30_000 });
+    await expect(island.getByTestId('assistant-queued')).toHaveCount(0);
+    // Ответ, который сменила очередь, не пропал: он выше, в истории.
+    await expect(island.getByTestId('assistant-history').last()).toContainText('The room is working.');
+
+    // 6б. Хост стоит (под нагрузкой его цикл событий занят секундами; здесь процесс заморожен): вопрос всё равно виден
+    // сразу с «Sending…», следующее сообщение ждёт в очереди, а ответы приходят, когда хост оживает.
+    const hostPid = Number((await readFile(path.join(home, 'host', 'host.pid'), 'utf8')).split('\n')[0]);
+    process.kill(hostPid, 'SIGSTOP');
+    try {
+      await island.getByTestId('assistant-input').fill('echo while the host is busy');
+      await island.getByTestId('assistant-input').press('Enter');
+      await expect(island.getByTestId('assistant-question')).toHaveText('echo while the host is busy', { timeout: 1000 });
+      await expect(island.getByTestId('assistant-status')).toHaveText('Sending…');
+      await island.getByTestId('assistant-input').fill('echo and one more');
+      await island.getByTestId('assistant-input').press('Enter');
+      await expect(island.getByTestId('assistant-queued')).toHaveCount(1);
+    } finally {
+      process.kill(hostPid, 'SIGCONT');
+    }
+    await expect(island.getByTestId('assistant-answer')).toContainText('Got: echo and one more', { timeout: 30_000 });
+    await expect(island.getByTestId('assistant-history').last()).toContainText('Got: echo while the host is busy');
+    // Выше история, а ответ дописался внизу и виден: середина держится у низа.
+    const answerBox = (await island.getByTestId('assistant-answer').boundingBox())!;
+    const scrollBox = (await island.getByTestId('assistant-scroll').boundingBox())!;
+    expect(answerBox.y + answerBox.height).toBeLessThanOrEqual(scrollBox.y + scrollBox.height + 1);
 
     // 7. Длинный вопрос, длинный ответ и карточка не выходят за кадр острова (окно фиксированное): ответ и карточка
     // прокручиваются, кнопка Send видна, поле ввода — в кадре, колесо мыши листает ответ.

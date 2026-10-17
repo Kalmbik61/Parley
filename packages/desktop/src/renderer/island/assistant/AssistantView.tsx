@@ -5,10 +5,13 @@
  * Окно острова — фиксированный кадр, поэтому вид не выше `maxHeight`: вопрос, ответ, карточка и подсказка живут в
  * прокручиваемой середине, а рой, подпись и строка ввода всегда на месте. Вопрос — не длиннее двух строк (целиком —
  * в подсказке), чтобы длинная фраза не оттесняла ответ за край.
+ *
+ * Отправленный вопрос виден сразу (`sending`), до хоста: прошлый ответ уходит выше, в приглушённую историю обменов, а
+ * сообщения, что ждут конца хода, лежат внизу середины серыми «Queued» с ×.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, Mic } from 'lucide-react';
+import { Loader2, Mic, X } from 'lucide-react';
 import type { AssistantState } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
 import { AssistantMark } from '../../components/AssistantMark.js';
@@ -18,7 +21,7 @@ import { formatElapsed, useElapsed } from '../../voice/MicButton.js';
 import { Swarm } from '../swarm/Swarm.js';
 import { haloFor, swarmSpecFor } from '../swarm/spec.js';
 import { hotkeyLabel, statusLabel } from './labels.js';
-import type { InputPhase } from './store.js';
+import { ASK_MAX, type Exchange, type InputPhase, type QueuedMessage } from './store.js';
 
 export interface AssistantViewProps {
   host: AssistantState;
@@ -30,6 +33,13 @@ export interface AssistantViewProps {
   draft: string;
   notice: string | null;
   cardError: string | null;
+  /** Вопрос ушёл, хост ещё не начал по нему ход: остров показывает его сам. */
+  sending: string | null;
+  queue: readonly QueuedMessage[];
+  /** Прошлые обмены разговора — приглушённо над текущим вопросом. */
+  history: readonly Exchange[];
+  /** Решение карточки в пути: Send крутится, обе кнопки не жмутся. */
+  deciding: 'send' | 'cancel' | null;
   hotkey: string;
   /** Ждущие запросы одобрения: первая сессия и сколько всего. */
   pending: { name: string; total: number } | null;
@@ -39,6 +49,7 @@ export interface AssistantViewProps {
   onSubmit(text: string): void;
   onMic(): void;
   onDecide(decision: 'send' | 'cancel'): void;
+  onUnqueue(id: number): void;
   onShowRequests(): void;
 }
 
@@ -60,26 +71,34 @@ function useArmed(key: string | null): boolean {
 }
 
 export function AssistantView(props: AssistantViewProps): JSX.Element {
-  const { host, input, draft, pending } = props;
+  const { host, input, draft, pending, sending, queue, deciding } = props;
+  // Пока вопрос в пути, текущий обмен уже стоит в истории: хост его ещё не сменил, а остров — сменил.
+  const history: readonly Exchange[] =
+    sending !== null && host.question !== null ? [...props.history, { id: -1, question: host.question, answer: host.answer === '' ? (host.error ?? '') : host.answer }] : props.history;
   const proposal = host.proposal;
+  const mentions = proposal?.mentions ?? [];
   const armed = useArmed(proposal?.id ?? null);
   const elapsed = useElapsed(input === 'listening' ? props.listenStartedAt : null);
-  const spec = useMemo(() => swarmSpecFor(host, input, false), [host.phase, input]);
+  // Пока вопрос в пути, рой думает: хост ещё в прошлой фазе.
+  const swarmPhase = sending === null ? host.phase : 'thinking';
+  const spec = useMemo(() => swarmSpecFor({ ...host, phase: swarmPhase }, input, false), [swarmPhase, input]);
   const halo = haloFor(spec, host);
   const dotColor = STATUS_DOT[host.phase];
   const scrollRef = useRef<HTMLDivElement>(null);
   const proposalId = proposal?.id ?? null;
-  // Пока ждёт карточка, середина держится у низа: ответ может дописываться над карточкой, а Send не должна уехать из
-  // виду — Enter в пустом поле отправляет её, и человек должен видеть, что именно.
+  // Пока ждёт карточка или очередь или выше стоит история, середина держится у низа: ответ дописывается внизу, а Send,
+  // ждущие сообщения и сам ответ не должны уехать из виду — Enter в пустом поле отправляет карточку, и человек должен
+  // видеть, что именно.
   useLayoutEffect(() => {
     const element = scrollRef.current;
-    if (proposalId === null || element === null) return;
+    if ((proposalId === null && queue.length === 0 && history.length === 0) || element === null) return;
     element.scrollTop = element.scrollHeight;
-  }, [proposalId, host.answer, props.cardError, props.notice]);
+  }, [proposalId, queue.length, history.length, sending, host.turn, host.answer, props.cardError, props.notice]);
   const submit = (): void => {
-    if (draft.trim() === '' && proposal !== null && armed) props.onDecide('send');
+    if (draft.trim() === '' && proposal !== null && armed && deciding === null) props.onDecide('send');
     else props.onSubmit(draft);
   };
+  const question = sending ?? host.question;
   return (
     <div data-testid="assistant-view" className="island-reveal flex w-[420px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm" style={{ maxHeight: props.maxHeight }}>
       {pending === null ? null : (
@@ -102,23 +121,31 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
           className={`size-[7px] shrink-0 rounded-full ${dotColor === undefined ? 'bg-[var(--color-accent)]' : ''} ${input === 'listening' ? 'assistant-dot-pulse' : ''}`}
           {...(dotColor === undefined ? {} : { style: { background: dotColor } })}
         />
-        {statusLabel(host, input)}
+        {statusLabel(host, input, sending !== null)}
       </div>
       {/* Середина сжимается первой (`min-h-0`); пустая не занимает места и не добавляет зазор. Нажатие на ней не тащит
           остров: иначе ползунок прокрутки двигал бы окно. */}
       <div ref={scrollRef} data-testid="assistant-scroll" data-no-drag className="flex min-h-0 flex-col gap-2 overflow-y-auto empty:hidden">
-        {host.question === null ? null : (
-          <div title={host.question} className="line-clamp-2 shrink-0 text-[13px] text-muted-foreground">
-            {host.question}
+        {history.map((exchange) => (
+          <div key={exchange.id} data-testid="assistant-history" className="flex shrink-0 flex-col gap-1 text-[13px] text-muted-foreground">
+            <div title={exchange.question} className="line-clamp-2">
+              {exchange.question}
+            </div>
+            {exchange.answer === '' ? null : <div className="whitespace-pre-wrap opacity-80">{exchange.answer}</div>}
+          </div>
+        ))}
+        {question === null ? null : (
+          <div data-testid="assistant-question" title={question} className="line-clamp-2 shrink-0 text-[13px] text-muted-foreground">
+            {question}
           </div>
         )}
-        {host.answer === '' ? null : (
+        {host.answer === '' || sending !== null ? null : (
           <div data-testid="assistant-answer" className="shrink-0 whitespace-pre-wrap">
             {host.answer}
           </div>
         )}
-        {host.outcome === 'sent' ? <div data-testid="assistant-sent" className="text-[13px] text-[var(--color-accent)]">{S.assistant.sent}</div> : null}
-        {host.outcome === 'cancelled' ? <div className="text-[13px] text-muted-foreground">{S.assistant.cancelled}</div> : null}
+        {sending === null && host.outcome === 'sent' ? <div data-testid="assistant-sent" className="text-[13px] text-[var(--color-accent)]">{S.assistant.sent}</div> : null}
+        {sending === null && host.outcome === 'cancelled' ? <div className="text-[13px] text-muted-foreground">{S.assistant.cancelled}</div> : null}
         {proposal === null ? null : (
           <div data-testid="assistant-card" className="flex shrink-0 flex-col gap-2 rounded-md bg-white/5 p-2.5">
             <div className="flex min-w-0 items-center gap-2 text-[13px] text-muted-foreground">
@@ -132,19 +159,45 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
                 {S.assistant.wakeNote}
               </div>
             ) : null}
-            <div className="whitespace-pre-wrap border-l-2 border-[var(--color-accent)] pl-2">{proposal.text}</div>
+            <div className="whitespace-pre-wrap border-l-2 border-[var(--color-accent)] pl-2">
+              {/* Упомянутые — чипами впереди текста, как их нарисует лента комнаты (письмо уйдёт с токенами `@s03`). */}
+              {mentions.map((name) => (
+                <span key={name} data-testid="assistant-mention" className="mr-1 inline-block rounded-full bg-[color-mix(in_srgb,var(--color-accent)_22%,transparent)] px-[7px] font-semibold">
+                  @{name}
+                </span>
+              ))}
+              {proposal.text}
+            </div>
             {props.cardError === null ? null : <div className="text-[13px] text-[var(--status-warning-text)]">{props.cardError}</div>}
             <div className="flex items-center gap-2">
-              <Button data-testid="assistant-send" size="default" className="cursor-pointer text-sm" disabled={!armed} onClick={() => props.onDecide('send')}>
+              <Button data-testid="assistant-send" size="default" className="cursor-pointer text-sm" disabled={!armed || deciding !== null} aria-busy={deciding === 'send'} onClick={() => props.onDecide('send')}>
+                {deciding === 'send' ? <Loader2 data-testid="assistant-send-spinner" size={14} className="animate-spin" /> : null}
                 {proposal.wake ? S.assistant.wakeAndSend : S.assistant.send}
               </Button>
-              <Button data-testid="assistant-cancel" size="default" variant="outline" className="cursor-pointer text-sm" onClick={() => props.onDecide('cancel')}>
+              <Button data-testid="assistant-cancel" size="default" variant="outline" className="cursor-pointer text-sm" disabled={deciding !== null} onClick={() => props.onDecide('cancel')}>
                 {S.assistant.cancel}
               </Button>
               <span className="ml-auto text-[12px] text-muted-foreground">{S.assistant.enterToSend}</span>
             </div>
           </div>
         )}
+        {queue.map((item) => (
+          <div key={item.id} data-testid="assistant-queued" className="flex shrink-0 items-start gap-2 text-[13px] text-muted-foreground">
+            <span className="line-clamp-2 min-w-0 flex-1" title={item.text}>
+              {item.text}
+            </span>
+            <span className="shrink-0 text-[12px]">{S.assistant.queued}</span>
+            <button
+              type="button"
+              aria-label={S.assistant.unqueue}
+              className="shrink-0 cursor-pointer hover:text-foreground"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => props.onUnqueue(item.id)}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        ))}
         {props.notice === null ? null : <div className="text-[13px] text-muted-foreground">{props.notice}</div>}
       </div>
       <form
@@ -158,6 +211,7 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
           data-testid="assistant-input"
           autoFocus
           value={draft}
+          maxLength={ASK_MAX}
           placeholder={S.assistant.placeholder}
           className="min-w-0 flex-1 bg-transparent py-1 outline-none placeholder:text-muted-foreground"
           onChange={(event) => props.onDraft(event.target.value)}

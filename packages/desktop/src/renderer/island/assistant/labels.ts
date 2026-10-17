@@ -2,9 +2,11 @@ import type { AssistantState } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
 import type { InputPhase } from './store.js';
 
-export function statusLabel(host: AssistantState, input: InputPhase): string {
+/** `sending` — вопрос ушёл, а хост ещё не начал по нему ход (`Sending…`). */
+export function statusLabel(host: AssistantState, input: InputPhase, sending = false): string {
   if (input === 'listening') return S.assistant.listening;
   if (input === 'transcribing') return S.assistant.transcribing;
+  if (sending) return S.assistant.sending;
   switch (host.phase) {
     case 'thinking':
       return S.assistant.thinking;
@@ -25,8 +27,9 @@ export function statusLabel(host: AssistantState, input: InputPhase): string {
   }
 }
 
-export function miniLabel(host: AssistantState, input: InputPhase): string | null {
+export function miniLabel(host: AssistantState, input: InputPhase, sending = false): string | null {
   if (input !== 'idle') return S.assistant.miniListening;
+  if (sending) return S.assistant.miniSending;
   switch (host.phase) {
     case 'thinking':
       return S.assistant.miniThinking;
