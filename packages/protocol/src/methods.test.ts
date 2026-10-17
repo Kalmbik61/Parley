@@ -532,6 +532,13 @@ describe('лента: feed.* (план 2026-10-01, Task 2)', () => {
     }
   });
 
+  it('feed.snapshot: scope необязателен, допустим только attention', () => {
+    const snapshot = (extra: Record<string, unknown>) => METHODS['feed.snapshot'].safeParse({ ref, ...extra });
+    expect(snapshot({}).success).toBe(true);
+    expect(snapshot({ scope: 'attention' }).success).toBe(true);
+    for (const scope of ['full', '', 'Attention', 1, null]) expect(snapshot({ scope }).success).toBe(false);
+  });
+
   it('feed.subscribe и feed.unsubscribe — ref', () => {
     expect(METHODS['feed.subscribe'].safeParse({ ref }).success).toBe(true);
     expect(METHODS['feed.unsubscribe'].safeParse({ ref }).success).toBe(true);
