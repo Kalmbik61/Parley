@@ -77,3 +77,18 @@ describe('чип роли в тесной строке', () => {
     await waitFor(() => expect(chip().title).toBe('architect · Builtin\nRole unavailable'));
   });
 });
+
+describe('пачка плашек одной сессии', () => {
+  it('несколько плашек с одним ключом дают один вызов roles.list; другая ревизия — новый', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('roles.list', async () => ({ roles: [{ id: 'codex:review', name: 'Review', source: 'codex', provider: 'codex', description: 'Native', model: null, effort: null, readOnly: false }], diagnostics: [], partial: false }));
+    const role = { source: 'codex' as const, name: 'review' };
+    const sessionRef = { projectPath: '/project', workId: 'w-1', sessionId: 's-1' };
+    const { rerender } = render(<>{[1, 2, 3, 4, 5].map(n => <RoleChip key={n} bridge={bridge} role={role} sessionRef={sessionRef} revision="r1" />)}</>);
+    await waitFor(() => expect(document.querySelectorAll('[data-role-chip]')).toHaveLength(5));
+    await waitFor(() => expect((document.querySelector('[data-role-chip]') as HTMLElement).title).toBe('Review · Codex\nNative'));
+    expect(bridge.calls.filter(call => call.method === 'roles.list')).toHaveLength(1);
+    rerender(<>{[1, 2].map(n => <RoleChip key={n} bridge={bridge} role={role} sessionRef={sessionRef} revision="r2" />)}</>);
+    await waitFor(() => expect(bridge.calls.filter(call => call.method === 'roles.list')).toHaveLength(2));
+  });
+});

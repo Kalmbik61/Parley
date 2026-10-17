@@ -1,8 +1,31 @@
 import { createElement, useEffect, useState } from 'react';
 import type { SessionRole } from '@parley/core';
-import type { RoleSummary, SessionRef } from '@parley/protocol';
+import type { Result, RoleSummary, SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
+
+/** Столько ответ `roles.list` годится для новых плашек; как и на хосте, правку роли видно не позже этой паузы. */
+const ROLES_TTL_MS = 30_000;
+const rolesCache = new WeakMap<object, Map<string, { at: number; value: Promise<Result<'roles.list'>> }>>();
+
+/**
+ * Плашка роли есть у каждой сессии в сайдбаре, и все они монтируются разом: запрос на плашку давал пачку
+ * одинаковых вызовов (на хосте — по процессу Codex на каждый). Одинаковый ключ — сессия и ревизия запуска —
+ * делит один вызов; кэш на мост, чтобы разные соединения не делили ответы.
+ */
+function loadRoles(bridge: ParleyBridge, projectPath: string, workId: string, sessionId: string, revision: string): Promise<Result<'roles.list'>> {
+  let cache = rolesCache.get(bridge);
+  if (!cache) rolesCache.set(bridge, cache = new Map());
+  const key = `${projectPath}\0${workId}\0${sessionId}\0${revision}`;
+  const now = Date.now();
+  const hit = cache.get(key);
+  if (hit && now - hit.at < ROLES_TTL_MS) return hit.value;
+  const entry = { at: now, value: bridge.call('roles.list', { projectPath, ref: { projectPath, workId, sessionId } }) };
+  cache.set(key, entry);
+  const map = cache;
+  entry.value.catch(() => { if (map.get(key) === entry) map.delete(key); });
+  return entry.value;
+}
 
 /** Current display metadata only. Launch permissions are independently resolved by core. */
 export function useRoleSummary(bridge: ParleyBridge | undefined, sessionRef: SessionRef | undefined, role: SessionRole | null | undefined, revision = ''): RoleSummary | null {
@@ -14,7 +37,7 @@ export function useRoleSummary(bridge: ParleyBridge | undefined, sessionRef: Ses
     setSummary(null);
     if (!bridge || !id || projectPath === undefined || workId === undefined || sessionId === undefined) return;
     let stale = false;
-    bridge.call('roles.list', { projectPath, ref: { projectPath, workId, sessionId } }).then(result => {
+    loadRoles(bridge, projectPath, workId, sessionId, revision).then(result => {
       if (!stale) setSummary({ key, value: result.roles.find(item => item.id === id) ?? null });
     }).catch(() => { /* Older/unavailable host: no inferred read-only flag. */ });
     return () => { stale = true; };
