@@ -98,6 +98,29 @@ describe('assistant-service: ход', () => {
     expect(last()).toMatchObject({ phase: 'offline', error: 'Claude CLI is not installed' });
     expect(turns).toHaveLength(0);
   });
+  it('сбой до хода — error с вопросом, новым номером хода и askId: окно узнаёт, что вопрос дошёл', async () => {
+    const service = createAssistantService({ ...deps, providers: async () => { throw new Error('providers.json is broken'); } });
+    await service.ask({ ...ASK, askId: 'a-1' });
+    expect(last()).toMatchObject({ phase: 'error', question: 'кто работает?', turn: 1, askId: 'a-1' });
+  });
+  it('askId вопроса — в состоянии хода; id процесса хоста один на все состояния', async () => {
+    const service = createAssistantService(deps);
+    expect(service.state().instance).toMatch(/^[0-9a-f]{16}$/);
+    await service.ask({ ...ASK, askId: 'a-1' });
+    expect(last()).toMatchObject({ phase: 'thinking', askId: 'a-1', instance: service.state().instance });
+    expect(createAssistantService(deps).state().instance).not.toBe(service.state().instance);
+  });
+  it('отмена, пока ход запускается, — процесс не стартует', async () => {
+    let release: (() => void) | null = null;
+    const service = createAssistantService({ ...deps, launchEnv: () => new Promise((resolve) => { release = () => resolve({}); }) });
+    const asking = service.ask(ASK);
+    await vi.waitFor(() => expect(release).not.toBeNull());
+    service.cancel();
+    release!();
+    await asking;
+    expect(turns).toHaveLength(0);
+    expect(states.some((state) => state.phase === 'thinking')).toBe(false);
+  });
   it('бинаря нет — offline', async () => {
     const service = createAssistantService({ ...deps, binary: async () => { throw new Error('not found'); } });
     await service.ask(ASK);
@@ -121,6 +144,20 @@ describe('assistant-service: ход', () => {
     turns[1]?.end({ ok: false, kind: 'resume', message: 'No conversation found' });
     await vi.waitFor(() => expect(turns).toHaveLength(3));
     expect(turns[2]?.spec.args).toEqual(['-p', 'дальше']);
+  });
+  it('повтор без --resume не показывает окну idle посреди хода и не снимает карточку', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    turns[0]?.emit({ type: 'session', id: 'old' });
+    turns[0]?.end({ ok: true });
+    await flush();
+    await service.ask({ ...ASK, text: 'дальше' });
+    await service.tool('propose_message', { target: 'Auth', text: 'Пропусти Safari' });
+    const before = states.length;
+    turns[1]?.end({ ok: false, kind: 'resume', message: 'No conversation found' });
+    await vi.waitFor(() => expect(turns).toHaveLength(3));
+    expect(states.slice(before).some((state) => state.phase === 'idle')).toBe(false);
+    expect(last().proposal?.text).toBe('Пропусти Safari');
   });
 });
 
@@ -149,6 +186,40 @@ describe('assistant-service: инструменты и карточка', () => 
     await expect(service.decide(proposal!.id, 'send')).resolves.toEqual({ applied: true, error: null });
     expect(deps.sendLetter).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', roomId: 'r-1', to: [], text: 'Пропусти Safari', kind: 'decision' });
     expect(last()).toMatchObject({ proposal: null, outcome: 'sent', phase: 'idle' });
+  });
+  it('mention в комнату — имена на карточке; send — to и токен @s03 в начале письма', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    const reply = await service.tool('propose_message', { target: 'Auth', text: 'Пропусти Safari', mention: ['S03'] });
+    expect(reply.status).toBe(200);
+    expect(last().proposal).toMatchObject({ target: 'Auth', mentions: ['S03 Ruslan'] });
+    await service.decide(last().proposal!.id, 'send');
+    expect(deps.sendLetter).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', roomId: 'r-1', to: ['s-03'], text: '@s03 Пропусти Safari', kind: 'note' });
+  });
+  it('упоминание, что модель уже вписала в текст (@S03 или @s-03), не повторяется', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    await service.tool('propose_message', { target: 'Auth', text: '@S03, пропусти Safari', mention: ['S03 Ruslan'] });
+    await service.decide(last().proposal!.id, 'send');
+    expect(deps.sendLetter).toHaveBeenLastCalledWith(expect.objectContaining({ to: ['s-03'], text: '@S03, пропусти Safari' }));
+    await service.tool('propose_message', { target: 'Auth', text: 'ок, @s-03', mention: ['S03'] });
+    await service.decide(last().proposal!.id, 'send');
+    expect(deps.sendLetter).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'ок, @s-03' }));
+  });
+  it('mention не участника комнаты — 400 со списком участников, карточки нет', async () => {
+    const map = { ...MAP, sessions: [...MAP.sessions, { id: 's-05', label: 'S05 Vera', provider: 'claude', task: null, summary: null, lifecycle: 'active' }] } as unknown as WorkMap;
+    const service = createAssistantService({ ...deps, works: { snapshot: () => ({ entries: [{ projectPath: '/p', map }] as WorkEntry[], branches: {} }) } });
+    await service.ask(ASK);
+    const reply = await service.tool('propose_message', { target: 'Auth', text: 'x', mention: ['S05'] });
+    expect(reply).toMatchObject({ status: 400, body: { error: 'S05 Vera is not in room "Auth"; its members: S03 Ruslan' } });
+    expect(last().proposal).toBeNull();
+  });
+  it('mention у сессии — 400: прямое письмо адресуется целью', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    const reply = await service.tool('propose_message', { target: 'S03', text: 'x', mention: ['S03'] });
+    expect(reply.status).toBe(400);
+    expect(last().proposal).toBeNull();
   });
   it('исход карточки уходит модели служебной строкой', async () => {
     const service = await withProposal();

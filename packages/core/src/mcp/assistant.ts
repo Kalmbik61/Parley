@@ -34,6 +34,12 @@ export const ASSISTANT_TOOLS: Tool[] = [
         target: TARGET,
         text: { type: 'string', description: 'The exact text to send, in the words the person asked for.' },
         kind: { type: 'string', enum: ['note', 'question', 'decision'], description: 'Only for rooms; note by default.' },
+        mention: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Only for rooms: the agents of this room the message is for (session ids from parley_overview, or exact names). They are mentioned with @ and get it addressed to them; the rest of the room still sees it. Without it the message is a task for everyone in the room.',
+        },
       },
       required: ['target', 'text'],
       additionalProperties: false,
