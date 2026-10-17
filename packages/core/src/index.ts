@@ -614,6 +614,13 @@ export {
   replayClaudeUsage,
 } from './work/usage-observations.js';
 export type { ClaudeSidechain, UsageLedger } from './work/usage-observations.js';
+export {
+  DEFAULT_TIMELINE_READER,
+  claudeUsageFromTimelines,
+  codexUsageFromTimeline,
+  extendUsageTimeline,
+} from './work/usage-timeline.js';
+export type { SubagentTimeline, TimelineReader, UsageTimeline } from './work/usage-timeline.js';
 export { roomUsage } from './work/room-usage.js';
 export type { RoomUsage, RoomUsageMember, UsageResolver } from './work/room-usage.js';
 export { MODEL_MOODS, matchConfirm, normalizePhrase, normalizeSentText, splitMood } from './assistant/text.js';
