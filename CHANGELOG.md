@@ -4,7 +4,7 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.15.0
 
 Chats and rooms get a browser of their own next to the view, and an agent can show you a page from localhost there without taking your focus.
 
