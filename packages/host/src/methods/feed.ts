@@ -21,7 +21,7 @@ export interface FeedHandlers {
 
 export function createFeedHandlers(deps: FeedMethodDeps): FeedHandlers {
   return {
-    feedSnapshot: (params) => deps.feed.snapshot(params.ref, params.agentId),
+    feedSnapshot: (params) => deps.feed.snapshot(params.ref, params.agentId, params.scope),
     feedSubscribe: async (params, request) => {
       deps.feed.subscribe(params.ref, request.client);
       return { ok: true };
