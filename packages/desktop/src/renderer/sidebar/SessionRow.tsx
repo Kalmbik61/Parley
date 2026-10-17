@@ -45,6 +45,7 @@ import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } fro
 import { GitBranch, Mail } from 'lucide-react';
 import { useDndContext, useDraggable } from '@dnd-kit/core';
 import type { WorkSession } from '@parley/core';
+import { dotState, liveStatus, stateWord } from '@parley/core/session-state';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { sessionAttention } from '../attention/derive.js';
@@ -55,7 +56,6 @@ import { AgentStateDot } from '../components/AgentStateDot.js';
 import { dndId, type DragSourceData } from '../layout/dnd.js';
 import { RoleChip } from '../lib/role-summary.js';
 import { cn } from '../lib/cn.js';
-import { displayStatus, dotState, stateWord } from '../lib/dot-state.js';
 import { formatMetricsLine } from '../lib/metrics-line.js';
 import { sessionRowLabel, sessionTag } from '../lib/participant.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
@@ -205,7 +205,7 @@ export const SessionRow = memo(function SessionRow({
     waitNotice?.kind === 'startup-wait' && eventAfter(live?.lastEventAt ?? null, waitNotice.at);
   const waitKind = startupResolved ? null : (waitNotice?.kind ?? null);
   const trustWait = waitKind !== null;
-  const state = dotState(displayStatus(session), live?.activity ?? null);
+  const state = dotState(liveStatus(session), live?.activity ?? null);
   const word = stateWord(state, session.lifecycle);
   const attention = sessionAttention(session, live);
   const closed = session.lifecycle === 'closed';

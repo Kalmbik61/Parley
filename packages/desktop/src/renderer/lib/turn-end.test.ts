@@ -19,7 +19,6 @@ const live = (
   turnEndedAt: null,
   lastEventAt: null,
   source: 'hooks',
-  exited: false,
   hooksMissing: false,
 });
 

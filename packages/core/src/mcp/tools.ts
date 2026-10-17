@@ -72,7 +72,7 @@ import {
 } from '../work/resource-policy.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
 import { addMemberByLead, addRoom, isDescendant, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
-import { displayStatus } from '../work/status-view.js';
+import { reportedStatus } from '../work/session-state.js';
 import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workPaths } from '../work/store.js';
 import { participantLabel, sessionMention, threadOf } from '../work/thread.js';
 import {
@@ -709,7 +709,7 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
       const withSummary = map.sessions.filter((session) => session.summary !== null);
       const { items, page } = pageBySeq(withSummary, {
         seq: (session) => seqOf(session.id, 's-'),
-        view: (session) => ({ id: session.id, label: session.label, status: displayStatus(session), source: session.summarySource, text: session.summary ?? '' }),
+        view: (session) => ({ id: session.id, label: session.label, status: reportedStatus(session), source: session.summarySource, text: session.summary ?? '' }),
         shrink: (view, limit) => shrinkSummary(view, limit),
         cursor: parseCursor(cursorRaw),
         maxBytes,
@@ -804,7 +804,7 @@ async function report(
     sessionId,
     // Ответ прежней формы: сданный итог виден сразу, даже у сессии, которую
     // харнесс ещё не отметил запущенной.
-    status: session.result ?? displayStatus(session),
+    status: session.result ?? reportedStatus(session),
     summary: session.summary,
     artifacts: session.artifacts,
   };

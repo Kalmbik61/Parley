@@ -10,6 +10,7 @@
     "./names": "./dist/names.js",
     "./feed-turn": "./dist/feed/turn.js",
     "./assistant": "./dist/assistant/text.js",
+    "./session-state": "./dist/work/session-state.js",
     "./session-names": "./dist/work/names.js",
     "./resource-policy": "./dist/work/resource-policy.js"
   },

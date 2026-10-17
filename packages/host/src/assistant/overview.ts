@@ -1,25 +1,34 @@
 /**
  * Что помощник знает о работах (спека 2026-10-14, 7.2): компактный снимок всех открытых работ, подробности одной
  * комнаты или сессии и разбор цели, которую назвала модель. Чистые функции: снимок работ и активность — на входе.
+ * Состояния сессий берутся из единого модуля core (`sessionDotState`, `stateWord`), своего расчёта у помощника нет:
+ * решение человека 2026-10-17 о паритете статусов с окном и агентами.
  */
 
 import { createHash } from 'node:crypto';
-import { participantLabel, type WorkEntry, type WorkMap, type WorkSession } from '@parley/core';
+import {
+  participantLabel,
+  sessionDotState,
+  stateWord,
+  type DotState,
+  type SessionLifecycle,
+  type WorkEntry,
+  type WorkMap,
+  type WorkSession,
+} from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { SessionLive } from '../activity/activity-service.js';
 
-export type SessionState = 'working' | 'needs-you' | 'unseen' | 'idle' | 'off';
-
 export type AssistantTarget =
   | { kind: 'room'; id: string; projectPath: string; workId: string; roomId: string; name: string; where: string }
-  | { kind: 'session'; id: string; ref: SessionRef; name: string; where: string; running: boolean };
+  | { kind: 'session'; id: string; ref: SessionRef; name: string; where: string; running: boolean; lifecycle: SessionLifecycle };
 
 export interface OverviewSource {
   entries: readonly WorkEntry[];
   live(ref: SessionRef): SessionLive | undefined;
 }
 
-const STATE_ORDER: Readonly<Record<SessionState, number>> = { 'needs-you': 0, working: 1, unseen: 2, idle: 3, off: 4 };
+const STATE_ORDER: Readonly<Record<DotState, number>> = { blocked: 0, working: 1, unseen: 2, idle: 3, pending: 4, done: 5, failed: 6, exited: 7 };
 const ROOM_MESSAGES = 10;
 const PLAN_ITEMS = 12;
 
@@ -33,20 +42,6 @@ const open = (entries: readonly WorkEntry[]): WorkEntry[] => entries.filter((ent
 const isArchived = (room: { archivedAt?: unknown }): boolean => typeof room.archivedAt === 'string';
 const where = (entry: WorkEntry): string => `${entry.map.work.title} · ${projectName(entry.projectPath)}`;
 const refOf = (entry: WorkEntry, session: WorkSession): SessionRef => ({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id });
-
-export function sessionState(session: WorkSession, live: SessionLive | undefined): SessionState {
-  if (session.lifecycle === 'closed' || live === undefined || live.activity.exited) return 'off';
-  switch (live.activity.activity) {
-    case 'blocked':
-      return 'needs-you';
-    case 'working':
-      return 'working';
-    case 'unseen':
-      return 'unseen';
-    default:
-      return 'idle';
-  }
-}
 
 export function targetsOf(source: OverviewSource): AssistantTarget[] {
   const targets: AssistantTarget[] = [];
@@ -66,7 +61,9 @@ export function targetsOf(source: OverviewSource): AssistantTarget[] {
         ref,
         name: participantLabel(map, session.id),
         where: where(entry),
-        running: sessionState(session, source.live(ref)) !== 'off',
+        // Процесс есть, пока сессия `active`: после resume активность может быть ещё не выведена (`idle`), но запущена она.
+        running: session.lifecycle === 'active',
+        lifecycle: session.lifecycle,
       });
     }
   }
@@ -91,13 +88,13 @@ export function resolveTarget(targets: readonly AssistantTarget[], wanted: strin
   return { error: `No room or session "${key}". Call parley_overview for the current ids.` };
 }
 
-function sessionLine(entry: WorkEntry, session: WorkSession, state: SessionState, live: SessionLive | undefined): string {
+function sessionLine(entry: WorkEntry, session: WorkSession, state: DotState, live: SessionLive | undefined): string {
   const prefix = `${projectKey(entry.projectPath)}:${entry.map.work.id}`;
-  const parts = [`  Session ${participantLabel(entry.map, session.id)} [session:${prefix}:${session.id}] ${session.provider}`, state];
+  const parts = [`  Session ${participantLabel(entry.map, session.id)} [session:${prefix}:${session.id}] ${session.provider}`, stateWord(state, session.lifecycle)];
   if (typeof session.task === 'string' && session.task.trim() !== '') parts.push(`task: ${oneLine(session.task, 160)}`);
   if (typeof session.summary === 'string' && session.summary.trim() !== '') parts.push(`summary: ${oneLine(session.summary, 200)}`);
   const waitingFor = live?.activity.waitingFor ?? null;
-  if (state === 'needs-you' && waitingFor !== null) parts.push(`waiting for: ${oneLine(waitingFor, 120)}`);
+  if (state === 'blocked' && waitingFor !== null) parts.push(`waiting for: ${oneLine(waitingFor, 120)}`);
   return parts.join(' · ');
 }
 
@@ -115,7 +112,7 @@ export function overviewText(source: OverviewSource, maxChars = 8000): string {
       .filter((session) => session.lifecycle !== 'closed')
       .map((session) => {
         const live = source.live(refOf(entry, session));
-        return { session, live, state: sessionState(session, live) };
+        return { session, live, state: sessionDotState(session, live?.activity.activity ?? null) };
       })
       .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state]);
     const lines = [`Work "${map.work.title}" (project ${projectName(entry.projectPath)})`];
@@ -123,7 +120,7 @@ export function overviewText(source: OverviewSource, maxChars = 8000): string {
       if (isArchived(room)) continue;
       const members = sessions.filter((item) => room.members.includes(item.session.id));
       const working = members.filter((item) => item.state === 'working').length;
-      const waiting = members.filter((item) => item.state === 'needs-you').length;
+      const waiting = members.filter((item) => item.state === 'blocked').length;
       const plan = planOf(map, room.id);
       const done = plan?.items.filter((item) => item.status === 'done' || item.status === 'verified').length ?? 0;
       lines.push(
@@ -134,7 +131,7 @@ export function overviewText(source: OverviewSource, maxChars = 8000): string {
       );
     }
     for (const item of sessions) lines.push(sessionLine(entry, item.session, item.state, item.live));
-    const rank = Math.min(...sessions.map((item) => STATE_ORDER[item.state]), STATE_ORDER.off);
+    const rank = Math.min(...sessions.map((item) => STATE_ORDER[item.state]), STATE_ORDER.exited);
     blocks.push({ rank, text: lines.join('\n') });
   }
   if (blocks.length === 0) return 'No works are open in Parley right now.';
@@ -165,7 +162,7 @@ export function detailText(source: OverviewSource, target: AssistantTarget, last
     const session = map.sessions.find((item) => item.id === target.ref.sessionId);
     if (session === undefined) return `${target.name} is no longer in Parley.`;
     const live = source.live(target.ref);
-    const lines = [sessionLine(entry, session, sessionState(session, live), live).trim()];
+    const lines = [sessionLine(entry, session, sessionDotState(session, live?.activity.activity ?? null), live).trim()];
     if (lastReply !== null) lines.push(`Last reply: ${oneLine(lastReply, 1500)}`);
     return lines.join('\n');
   }

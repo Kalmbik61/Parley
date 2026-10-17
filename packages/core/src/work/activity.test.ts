@@ -172,13 +172,11 @@ describe('activityOf: таблица переходов 4.2', () => {
 
   // Пункт 5, первая половина: «с отчётом статус не меняется» решает вызывающий,
   // у свёртки входа про отчёт нет.
-  it('SessionEnd поднимает флаг exited, не трогая activity', () => {
+  it('SessionEnd не трогает activity', () => {
     const result = activity([event('UserPromptSubmit'), event('SessionEnd')]);
 
     // Жизненный цикл (`exited` или отчёт агента) меняет вызывающий, не свёртка.
-    expect(result.exited).toBe(true);
     expect(result.activity).toBe('working');
-    expect(activity([event('UserPromptSubmit')]).exited).toBe(false);
   });
 
   // Пункт 6: счёт по id, подробности — в блоке про субагентов ниже.
@@ -225,7 +223,6 @@ describe('activityOf: таблица переходов 4.2', () => {
       turnEndedAt: null,
       lastEventAt: null,
       source: 'none',
-      exited: false,
       hooksMissing: false,
     });
   });

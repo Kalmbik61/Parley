@@ -3,30 +3,15 @@ import type { TokenTotals } from '../counters.js';
 import type { EffortLevel } from '../providers.js';
 import type { RecipeSnapshot } from '../recipes/types.js';
 import type { FrozenUsage } from './usage-ledger.js';
+import type { SessionLifecycle, SessionResult } from './session-state.js';
+
+// Типы статуса сессии объявлены в `session-state.ts` вместе с функциями, которые их выводят.
+export type { SessionStatus, SessionLifecycle, SessionResult } from './session-state.js';
 
 /** Статус работы. `archived` в списке не показывается (дизайн TUI, раздел 8). */
 export interface SessionRole { source: 'builtin' | 'claude' | 'codex'; name: string }
 
 export type WorkStatus = 'active' | 'done' | 'archived';
-
-/**
- * Прежний единый статус сессии (карта v1). В карте его больше нет: с v2 он
- * собирается из двух осей функцией `displayStatus` (`status-view.ts`) — его
- * называют агенту бриф и инструменты MCP, а точки окна рисуют его же.
- */
-export type SessionStatus = 'pending' | 'active' | 'exited' | 'done' | 'failed';
-
-/**
- * Ось процесса (спецификация 7.1): `sleeping` — процесса нет, но сессия на связи
- * и письмо её поднимает; `closed` — закрыта явно и писем не получает.
- */
-export type SessionLifecycle = 'pending' | 'active' | 'sleeping' | 'closed';
-
-/**
- * Ось итога: приходит только из `report` и процесс не меняет — после
- * `report(done)` сессия остаётся `active` (спецификация 7.1).
- */
-export type SessionResult = 'done' | 'failed';
 
 /**
  * Одна ступень жизни сессии: переход по оси процесса или поставленный итог.

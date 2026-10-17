@@ -16,7 +16,7 @@ describe('useActivityStore', () => {
 
     bridge.emit('activity.changed', {
       ref,
-      activity: { activity: 'blocked', subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', exited: false, hooksMissing: false },
+      activity: { activity: 'blocked', subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', hooksMissing: false },
       metrics: null,
     });
 
@@ -31,7 +31,7 @@ describe('useActivityStore', () => {
 
     bridge.emit('activity.changed', {
       ref,
-      activity: { activity: 'working', subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', exited: false, hooksMissing: false },
+      activity: { activity: 'working', subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', hooksMissing: false },
       metrics: null,
     });
 
@@ -42,7 +42,7 @@ describe('useActivityStore', () => {
 describe('useActivityStore: снимок активности из main (раунд исправлений 1 куска 3.1)', () => {
   const entry = (state: 'blocked' | 'working' | 'idle'): ActivityEntry => ({
     ref,
-    activity: { activity: state, subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', exited: false, hooksMissing: false },
+    activity: { activity: state, subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', hooksMissing: false },
     metrics: null,
   });
 
@@ -122,7 +122,7 @@ describe('activityFor', () => {
   it('ключ строится тем же refKey, что и у store', () => {
     const entry = {
       ref,
-      activity: { activity: 'idle' as const, subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'log' as const, exited: false, hooksMissing: false },
+      activity: { activity: 'idle' as const, subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'log' as const, hooksMissing: false },
       metrics: null,
     };
     expect(activityFor({ [refKey(ref)]: entry }, ref)).toBe(entry);

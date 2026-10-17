@@ -101,7 +101,6 @@ export function makeActivity(
       turnEndedAt: patch.turnEndedAt ?? null,
       lastEventAt: patch.lastEventAt === undefined ? '2026-09-27T09:00:00.000Z' : patch.lastEventAt,
       source: 'hooks',
-      exited: false,
       hooksMissing: false,
     },
     metrics: patch.metrics ?? null,

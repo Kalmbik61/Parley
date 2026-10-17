@@ -5,13 +5,15 @@
  * `tsconfig.web.json` разом. Типы `HostNotice`/`NoticeKind` (для `noticeText`)
  * берутся из `@parley/protocol`. `@parley/core` с куска 8.3 тоже в `references`
  * обоих тсконфигов (`shared/files-types.ts` берёт оттуда `DiffFile`), но таблица
- * его типов не тянет: ключи вроде букв статуса git — обычные строки.
+ * его типов не тянет: ключи вроде букв статуса git — обычные строки. Исключение —
+ * `states`: слова состояний лежат в чистом модуле `@parley/core/session-state`.
  *
  * Перевод — по глоссарию индекса плана (`docs/specs/2026-09-26-desktop-orca-ui-plan.md`,
  * «Сквозные ограничения» → «Язык интерфейса»): работа → workspace, почта →
  * mail, письмо → message, будильник → auto-wake и т. д. Группы ниже по
  * областям окна; параметризованные тексты — функции.
  */
+import { STATE_WORDS } from '@parley/core/session-state';
 import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
 
@@ -373,23 +375,12 @@ export const S = {
   },
 
   /**
-   * Девять слов состояния сессии (спека 4.2): ключи — те же, что отдаёт
-   * `dot-state.ts#stateWord` (`exited` расщеплён на `asleep`/`closed` по
-   * `lifecycle`, как и в прежней русской таблице). Строчными — так их пишет строка сессии
+   * Девять слов состояния сессии (спека 4.2): таблица живёт в core по решению о паритете статусов —
+   * одна для окна, помощника и брифа агентов. Строчными — так их пишет строка сессии
    * (спека окна 2026-09-29, 1.2): `working`, `needs you`, `done · unseen`…; те же слова — имена
    * значков для скринридера и слово итога в тултипе.
    */
-  states: {
-    working: 'working',
-    blocked: 'needs you',
-    unseen: 'done · unseen',
-    idle: 'idle',
-    pending: 'not started',
-    asleep: 'asleep',
-    closed: 'closed',
-    done: 'done',
-    failed: 'failed',
-  },
+  states: STATE_WORDS,
 
   /** Экран пустого окна (нет ни одной работы) — `shell/Landing.tsx`. */
   landing: {

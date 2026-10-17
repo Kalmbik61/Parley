@@ -129,7 +129,15 @@ export {
   transitionSession,
 } from './work/map.js';
 export { defaultSessionName } from './work/names.js';
-export { displayStatus } from './work/status-view.js';
+export {
+  STATE_WORDS,
+  dotState,
+  liveStatus,
+  reportedStatus,
+  sessionDotState,
+  stateWord,
+} from './work/session-state.js';
+export type { DotState, SessionAxes, StateWordKey } from './work/session-state.js';
 export { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './work/letters.js';
 export {
   PAGE_DEFAULT_BYTES,

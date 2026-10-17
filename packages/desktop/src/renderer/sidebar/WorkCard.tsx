@@ -37,6 +37,7 @@ import { memo, useRef, useState } from 'react';
 import { create } from 'zustand';
 import { AtSign, Hash, Mail, Plus } from 'lucide-react';
 import type { SessionLifecycle, WorkEntry } from '@parley/core';
+import { dotState, liveStatus, type DotState } from '@parley/core/session-state';
 import { refKey } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
@@ -45,7 +46,6 @@ import { AgentStateDot } from '../components/AgentStateDot.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { cn } from '../lib/cn.js';
 import { isRoomArchived } from '../lib/room-archive.js';
-import { displayStatus, dotState, type DotState } from '../lib/dot-state.js';
 import { workTitleText } from '../lib/participant.js';
 import { relativeTime } from '../lib/relative-time.js';
 import { treeOrder, workKey } from '../lib/tree-order.js';
@@ -95,7 +95,7 @@ function urgentGlyph(
   for (const session of entry.map.sessions) {
     if (session.lifecycle === 'closed') continue;
     const ref = refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id });
-    const state = dotState(displayStatus(session), activity[ref]?.activity.activity ?? null);
+    const state = dotState(liveStatus(session), activity[ref]?.activity.activity ?? null);
     const rank = URGENCY.indexOf(state);
     if (best === null || rank < best.rank) best = { state, lifecycle: session.lifecycle, rank };
   }

@@ -1278,7 +1278,6 @@ describe('AppShell и активность (раунд исправлений 1 
               turnEndedAt: null,
               lastEventAt: '2026-01-03T00:00:00.000Z',
               source: 'hooks',
-              exited: false,
               hooksMissing: false,
             },
             metrics: null,
@@ -1301,7 +1300,7 @@ describe('AppShell и активность (раунд исправлений 1 
     const ref = { projectPath: '/tmp/w-01', workId: 'w-01', sessionId: 's-01' };
     const entry = (activity: 'working' | 'blocked', tokensIn: number) => ({
       ref,
-      activity: { activity, subagents: 0, turnEndedAt: null, lastEventAt: '2026-01-03T00:00:00.000Z', source: 'hooks' as const, exited: false, hooksMissing: false },
+      activity: { activity, subagents: 0, turnEndedAt: null, lastEventAt: '2026-01-03T00:00:00.000Z', source: 'hooks' as const, hooksMissing: false },
       metrics: { tokensIn, tokensOut: 0, durationMs: 0, unread: 0, subagents: 0, model: 'opus' },
     });
     act(() => useActivityStore.setState({ byRef: { [refKey(ref)]: entry('working', 1) } }));
@@ -1326,7 +1325,7 @@ describe('AppShell и активность (раунд исправлений 1 
         byRef: {
           [refKey(ref)]: {
             ref,
-            activity: { activity: 'blocked', subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', exited: false, hooksMissing: false },
+            activity: { activity: 'blocked', subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', hooksMissing: false },
             metrics: null,
           },
         },
@@ -1441,7 +1440,6 @@ describe('AppShell — видимый порядок для persistence (реш�
         turnEndedAt: null,
         lastEventAt: '2026-01-05T00:00:00.000Z',
         source: 'hooks' as const,
-        exited: false,
         hooksMissing: false,
       },
       metrics: null,
@@ -1665,7 +1663,7 @@ describe('AppShell — показ архивных (тесты 6, 7 куска 6
       byRef: {
         [refKey(ref)]: {
           ref,
-          activity: { activity: 'blocked', subagents: 0, turnEndedAt: null, lastEventAt: '2026-01-05T00:00:00.000Z', source: 'hooks', exited: false, hooksMissing: false },
+          activity: { activity: 'blocked', subagents: 0, turnEndedAt: null, lastEventAt: '2026-01-05T00:00:00.000Z', source: 'hooks', hooksMissing: false },
           metrics: null,
         },
       },
@@ -1713,7 +1711,7 @@ describe('AppShell — показ архивных (тесты 6, 7 куска 6
       byRef: {
         [refKey(ref)]: {
           ref,
-          activity: { activity: 'blocked', subagents: 0, turnEndedAt: null, lastEventAt: '2026-01-05T00:00:00.000Z', source: 'hooks', exited: false, hooksMissing: false },
+          activity: { activity: 'blocked', subagents: 0, turnEndedAt: null, lastEventAt: '2026-01-05T00:00:00.000Z', source: 'hooks', hooksMissing: false },
           metrics: null,
         },
       },

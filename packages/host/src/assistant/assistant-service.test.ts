@@ -31,7 +31,7 @@ beforeEach(async () => {
   deps = {
     broadcast: (_event, data) => { states.push(data as AssistantState); },
     works: { snapshot: () => ({ entries: [{ projectPath: '/p', map: MAP }] as WorkEntry[], branches: {} }) },
-    activity: { get: () => ({ activity: { activity: 'working', waitingFor: null, exited: false }, metrics: null }) as never },
+    activity: { get: () => ({ activity: { activity: 'working', waitingFor: null }, metrics: null }) as never },
     send: vi.fn().mockResolvedValue({ inserted: true, submitted: true, reason: null }),
     sendLetter: vi.fn().mockResolvedValue('m-1'),
     endpoint: { origin: () => 'http://127.0.0.1:9', setToken: (value) => { token = value; } },

@@ -8,11 +8,11 @@
 
 import { toast } from 'sonner';
 import type { WorkSession } from '@parley/core';
+import { liveStatus } from '@parley/core/session-state';
 import type { SendResult, SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
-import { displayStatus } from '../lib/dot-state.js';
 import { sessionTag } from '../lib/participant.js';
 
 export type SendOutcome = SendResult | { error: 'not_found' | 'failed'; message: string };
@@ -47,7 +47,7 @@ const RESUMABLE: ReadonlySet<string> = new Set(['exited', 'done', 'failed']);
 /** «Resume» уместна: status exited, done или failed и lifecycle не closed — как RESUMABLE меню сессии. */
 export function canResume(session: WorkSession): boolean {
   // У закрытой `sessions.resume` падает (host/sessions/sessions-service.ts).
-  return session.lifecycle !== 'closed' && RESUMABLE.has(displayStatus(session));
+  return session.lifecycle !== 'closed' && RESUMABLE.has(liveStatus(session));
 }
 
 /** «Resume» неживой сессии: отказ — тостом, а не молча (раунд main-r2, п. 2); общая у терминала и чата. */

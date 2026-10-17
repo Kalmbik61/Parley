@@ -6,7 +6,7 @@
  * src/renderer/src/components/AgentStateDot.tsx): своя таблица состояний
  * (`DotState` вместо `AgentDotState` Orca — по-другому делится) и без
  * встроенного тултипа — слово состояния показывает соседняя колонка строки
- * сайдбара (`lib/dot-state.ts#stateWord`, куски 1.3 и 3.3), а не сам значок.
+ * сайдбара (`@parley/core/session-state#stateWord`, куски 1.3 и 3.3), а не сам значок.
  * Copyright (c) 2026 Lovecast Inc. Лицензия MIT — полный текст в NOTICE в
  * корне репозитория.
  *
@@ -29,7 +29,7 @@
 
 import { CircleCheck, CircleX, MessageCircleQuestion, Moon } from 'lucide-react';
 import type { SessionLifecycle } from '@parley/core';
-import { stateWord, type DotState } from '../lib/dot-state.js';
+import { stateWord, type DotState } from '@parley/core/session-state';
 import { cn } from '../lib/cn.js';
 import { AgentWorkingSpinner } from './AgentWorkingSpinner.js';
 

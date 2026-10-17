@@ -12,8 +12,7 @@
  * идёт через `providers.ts`, который на верхнем уровне модуля трогает
  * `node:fs`, а песочница окна (`contextIsolation`, `sandbox`, без
  * `nodeIntegration` — `main/window.ts`) рантайм core не пропускает. Тот же
- * приём — в `lib/participant.ts` (`sessionTag`) и `lib/dot-state.ts`
- * (`displayStatus`).
+ * приём — в `lib/participant.ts` (`sessionTag`).
  */
 
 import type { WorkMap } from '@parley/core';

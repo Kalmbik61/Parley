@@ -6,9 +6,9 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
+import { stateWord } from '@parley/core/session-state';
 import { AgentStateDot } from './AgentStateDot.js';
 import { spinnerDelayMs } from './AgentWorkingSpinner.js';
-import { stateWord } from '../lib/dot-state.js';
 
 afterEach(cleanup);
 

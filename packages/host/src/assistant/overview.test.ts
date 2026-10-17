@@ -20,7 +20,7 @@ function entry(projectPath: string, workId: string, title: string, overrides: Pa
   };
 }
 const live = (activity: string, waitingFor: string | null = null): SessionLive =>
-  ({ activity: { activity, waitingFor, exited: false }, metrics: null }) as unknown as SessionLive;
+  ({ activity: { activity, waitingFor }, metrics: null }) as unknown as SessionLive;
 
 function source(entries: WorkEntry[], states: Record<string, SessionLive>): OverviewSource {
   return { entries, live: (ref) => states[ref.sessionId] };
@@ -53,9 +53,19 @@ describe('targetsOf и resolveTarget', () => {
     } as unknown as Partial<WorkMap>);
     expect(targetsOf(source([archived, roomArchived], {}))).toEqual([]);
   });
-  it('сессия без живого процесса — running: false', () => {
+  it('спящая сессия без live — running: false, lifecycle sleeping', () => {
+    const sleeping = entry('/p/one', 'w-1', 'Parley', { sessions: [session('s-03', 'S03 Ruslan', { lifecycle: 'sleeping' })] } as unknown as Partial<WorkMap>);
+    const target = targetsOf(source([sleeping], {})).find((item) => item.kind === 'session');
+    expect(target).toMatchObject({ running: false, lifecycle: 'sleeping' });
+  });
+  it('сессия после resume (lifecycle active, activity idle) — running: true', () => {
+    const resumed = source([entry('/p/one', 'w-1', 'Parley')], { 's-03': live('idle') });
+    const target = targetsOf(resumed).find((item) => item.kind === 'session' && item.name === 'S03 Ruslan');
+    expect(target).toMatchObject({ running: true, lifecycle: 'active' });
+  });
+  it('живая сессия без выведенной activity — тоже running: true', () => {
     const target = targetsOf(source([entry('/p/one', 'w-1', 'Parley')], {})).find((item) => item.kind === 'session');
-    expect(target).toMatchObject({ running: false });
+    expect(target).toMatchObject({ running: true, lifecycle: 'active' });
   });
 });
 
@@ -66,6 +76,23 @@ describe('overviewText', () => {
     expect(text).toContain('Room "Auth"');
     expect(text.indexOf('Session S05 Vera')).toBeLessThan(text.indexOf('Session S03 Ruslan'));
     expect(text).toContain('waiting for: Bash: rm -rf dist');
+    expect(text).toMatch(/Session S05 Vera \[[^\]]+\] claude · needs you · /);
+    expect(text).toContain('1 need the person');
+  });
+  it('слова состояний — из единой таблицы: idle у resume, asleep у спящей без live', () => {
+    const mixed = entry('/p/one', 'w-1', 'Parley', {
+      sessions: [session('s-03', 'S03 Ruslan', { lifecycle: 'sleeping' }), session('s-05', 'S05 Vera')],
+    } as unknown as Partial<WorkMap>);
+    const text = overviewText(source([mixed], { 's-05': live('idle') }));
+    expect(text).toMatch(/Session S05 Vera \[[^\]]+\] claude · idle · /);
+    expect(text).toMatch(/Session S03 Ruslan \[[^\]]+\] claude · asleep · /);
+    expect(text.indexOf('Session S05 Vera')).toBeLessThan(text.indexOf('Session S03 Ruslan'));
+  });
+  it('завершённая сессия с итогом называется по итогу, а не asleep', () => {
+    const finished = entry('/p/one', 'w-1', 'Parley', {
+      sessions: [session('s-03', 'S03 Ruslan', { lifecycle: 'sleeping', result: 'done' })],
+    } as unknown as Partial<WorkMap>);
+    expect(overviewText(source([finished], {}))).toMatch(/Session S03 Ruslan \[[^\]]+\] claude · done · /);
   });
   it('пусто — так и говорит', () => {
     expect(overviewText(source([], {}))).toBe('No works are open in Parley right now.');

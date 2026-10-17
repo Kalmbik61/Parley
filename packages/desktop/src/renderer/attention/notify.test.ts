@@ -64,7 +64,7 @@ function entry(title: string, sessions: WorkSession[], messages: Message[] = [],
 }
 
 function live(activity: SessionActivity['activity']): SessionActivity {
-  return { activity, subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', exited: false, hooksMissing: false };
+  return { activity, subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', hooksMissing: false };
 }
 
 const ref2: SessionRef = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-02' };
