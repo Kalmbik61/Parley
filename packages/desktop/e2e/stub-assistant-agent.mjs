@@ -28,13 +28,17 @@ if (process.argv[2] === '--version') {
   const overview = await call('parley_overview', {});
   const room = /\[(room:[^\]]+)\]/.exec(overview.text ?? '')?.[1];
   let answer = '[[calm]] Nothing is open right now.';
-  if (/^tell /i.test(prompt) && room !== undefined) {
+  // «long …» — тот же ход, но к ответу дописаны 40 строк: проверка, что длинный обмен не выходит за кадр острова.
+  const long = /^long /i.test(prompt);
+  const ask = long ? prompt.slice('long '.length) : prompt;
+  if (/^tell /i.test(ask) && room !== undefined) {
     out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't2', name: 'mcp__parley-assistant__propose_message', input: { target: room, text: 'Skip the Safari tests.' } }] } });
     await call('propose_message', { target: room, text: 'Skip the Safari tests.' });
     answer = '[[calm]] I prepared a message for the room.';
   } else if (room !== undefined) {
     answer = '[[joy]] The room is working.';
   }
+  if (long) answer += Array.from({ length: 40 }, (_, i) => `\nDetail ${i + 1}.`).join('');
   for (const word of answer.split(/(?<= )/)) out({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: word } } });
   out({ type: 'result', subtype: 'success', is_error: false, result: answer, session_id: 'stub-assistant-1' });
 }

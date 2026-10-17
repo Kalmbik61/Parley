@@ -162,6 +162,28 @@ test.describe('помощник на острове', () => {
     await island.getByTestId('assistant-input').fill('what is going on?');
     await island.getByTestId('assistant-input').press('Enter');
     await expect(island.getByTestId('assistant-answer')).toContainText('The room is working.', { timeout: 30_000 });
+
+    // 7. Длинный вопрос, длинный ответ и карточка не выходят за кадр острова (окно фиксированное): ответ и карточка
+    // прокручиваются, кнопка Send видна, поле ввода — в кадре, колесо мыши листает ответ.
+    await island.getByTestId('assistant-input').fill(`long tell the room to skip Safari tests ${'and explain the whole plan in detail '.repeat(8)}`);
+    await island.getByTestId('assistant-input').press('Enter');
+    await expect(island.getByTestId('assistant-card')).toContainText(LETTER, { timeout: 30_000 });
+    await expect(island.getByTestId('assistant-answer')).toContainText('Detail 40.', { timeout: 30_000 });
+    const frameHeight = await island.evaluate(() => window.innerHeight);
+    const bottomOf = async (testId: string): Promise<number> => {
+      const box = (await island.getByTestId(testId).boundingBox())!;
+      return box.y + box.height;
+    };
+    expect(await bottomOf('island')).toBeLessThanOrEqual(frameHeight);
+    expect(await bottomOf('assistant-input')).toBeLessThanOrEqual(frameHeight);
+    const scroll = island.getByTestId('assistant-scroll');
+    expect(await scroll.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    expect(await bottomOf('assistant-send')).toBeLessThanOrEqual(await bottomOf('assistant-scroll'));
+    const pinned = await scroll.evaluate((element) => element.scrollTop);
+    await scroll.hover();
+    await island.mouse.wheel(0, -400);
+    await expect.poll(() => scroll.evaluate((element) => element.scrollTop), { message: 'колесо листает ответ вверх' }).toBeLessThan(pinned);
+
     await island.keyboard.press('Escape');
     await expect(island.getByTestId('assistant-view')).toHaveCount(0);
   });
