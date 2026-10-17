@@ -33,6 +33,7 @@ beforeEach(async () => {
     works: { snapshot: () => ({ entries: [{ projectPath: '/p', map: MAP }] as WorkEntry[], branches: {} }) },
     activity: { get: () => ({ activity: { activity: 'working', waitingFor: null }, metrics: null }) as never },
     send: vi.fn().mockResolvedValue({ inserted: true, submitted: true, reason: null }),
+    launch: vi.fn().mockResolvedValue(undefined),
     sendLetter: vi.fn().mockResolvedValue('m-1'),
     endpoint: { origin: () => 'http://127.0.0.1:9', setToken: (value) => { token = value; } },
     providers: async () => ({ claude: CLAUDE }),
@@ -141,7 +142,7 @@ describe('assistant-service: инструменты и карточка', () => 
   it('propose → карточка; send → письмо в комнату с via', async () => {
     const service = await withProposal();
     const proposal = last().proposal;
-    expect(proposal).toMatchObject({ target: 'Auth', kind: 'decision', text: 'Пропусти Safari' });
+    expect(proposal).toMatchObject({ target: 'Auth', kind: 'decision', text: 'Пропусти Safari', wake: false });
     turns[0]?.end({ ok: true });
     await flush();
     expect(last().phase).toBe('awaiting-confirm');
@@ -189,5 +190,69 @@ describe('assistant-service: инструменты и карточка', () => 
     turns[0]?.end({ ok: true });
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect((await service.tool('parley_overview', {})).status).toBe(409);
+  });
+});
+
+describe('assistant-service: спящая сессия', () => {
+  const REF = { projectPath: '/p', workId: 'w-1', sessionId: 's-04' };
+  let lifecycle = 'sleeping';
+  beforeEach(() => { lifecycle = 'sleeping'; });
+
+  // Карта собирается заново при каждом снимке: тест меняет `lifecycle` между предложением и решением.
+  const wakeDeps = (): AssistantServiceDeps => {
+    const map = (): WorkMap => ({ ...MAP, sessions: [{ id: 's-04', label: 'S04 Ana', provider: 'claude', task: 'docs', summary: null, lifecycle }], rooms: [] }) as unknown as WorkMap;
+    return { ...deps, works: { snapshot: () => ({ entries: [{ projectPath: '/p', map: map() }] as WorkEntry[], branches: {} }) } };
+  };
+  async function withCard(overrides: Partial<AssistantServiceDeps> = {}) {
+    const service = createAssistantService({ ...wakeDeps(), ...overrides });
+    await service.ask(ASK);
+    const reply = await service.tool('propose_message', { target: 'S04', text: 'Привет, проснись' });
+    return { service, reply };
+  }
+
+  it('propose на спящую сессию — карточка с wake: true, отказа нет', async () => {
+    const { reply } = await withCard();
+    expect(reply.status).toBe(200);
+    expect(last().proposal).toMatchObject({ target: 'S04 Ana', kind: null, text: 'Привет, проснись', wake: true });
+  });
+  it('decide по карточке спящей сессии — resume с текстом первым ходом, send не зовётся, запись в журнале есть', async () => {
+    const { service } = await withCard();
+    await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: true, error: null });
+    expect(deps.launch).toHaveBeenCalledTimes(1);
+    expect(deps.launch).toHaveBeenCalledWith(REF, 'resume', { by: 'human', prompt: 'Привет, проснись' });
+    expect(deps.send).not.toHaveBeenCalled();
+    await expect(service.sent(REF)).resolves.toMatchObject([{ text: 'Привет, проснись' }]);
+    expect(last()).toMatchObject({ proposal: null, outcome: 'sent' });
+  });
+  it('propose на сессию, которая ещё не стартовала — 409 и карточки нет', async () => {
+    lifecycle = 'pending';
+    const { reply } = await withCard();
+    expect(reply).toMatchObject({ status: 409, body: { error: 'S04 Ana has not started yet' } });
+    expect(last().proposal).toBeNull();
+  });
+  it('decide: сессия за время ожидания проснулась — обычный send, не launch', async () => {
+    const { service } = await withCard();
+    lifecycle = 'active';
+    await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: true, error: null });
+    expect(deps.send).toHaveBeenCalledWith({ ref: REF, text: 'Привет, проснись', submit: true });
+    expect(deps.launch).not.toHaveBeenCalled();
+    await expect(service.sent(REF)).resolves.toMatchObject([{ text: 'Привет, проснись' }]);
+  });
+  it('decide: сессия за время ожидания закрылась — ошибка, карточка остаётся, ничего не отправлено', async () => {
+    const { service } = await withCard();
+    const id = last().proposal!.id;
+    lifecycle = 'closed';
+    await expect(service.decide(id, 'send')).resolves.toEqual({ applied: false, error: 'S04 Ana is closed' });
+    expect(deps.send).not.toHaveBeenCalled();
+    expect(deps.launch).not.toHaveBeenCalled();
+    expect(last().proposal?.id).toBe(id);
+  });
+  it('ошибка подъёма уходит в error карточки, записи в журнале нет', async () => {
+    const launch = vi.fn().mockRejectedValue(new Error('too many running sessions'));
+    const { service } = await withCard({ launch });
+    const id = last().proposal!.id;
+    await expect(service.decide(id, 'send')).resolves.toEqual({ applied: false, error: 'too many running sessions' });
+    expect(last().proposal?.id).toBe(id);
+    await expect(service.sent(REF)).resolves.toEqual([]);
   });
 });

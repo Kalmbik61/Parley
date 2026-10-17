@@ -105,11 +105,16 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
               {S.assistant.to} <span className="font-semibold text-foreground">{proposal.target}</span> · {proposal.where}
             </span>
           </div>
+          {proposal.wake ? (
+            <div data-testid="assistant-wake-note" className="text-[12px] text-muted-foreground">
+              {S.assistant.wakeNote}
+            </div>
+          ) : null}
           <div className="whitespace-pre-wrap border-l-2 border-[var(--color-accent)] pl-2">{proposal.text}</div>
           {props.cardError === null ? null : <div className="text-[13px] text-[var(--status-warning-text)]">{props.cardError}</div>}
           <div className="flex items-center gap-2">
             <Button data-testid="assistant-send" size="default" className="cursor-pointer text-sm" disabled={!armed} onClick={() => props.onDecide('send')}>
-              {S.assistant.send}
+              {proposal.wake ? S.assistant.wakeAndSend : S.assistant.send}
             </Button>
             <Button data-testid="assistant-cancel" size="default" variant="outline" className="cursor-pointer text-sm" onClick={() => props.onDecide('cancel')}>
               {S.assistant.cancel}

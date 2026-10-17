@@ -9,7 +9,7 @@ import type { AssistantState } from '@parley/protocol';
 import { AssistantView, type AssistantViewProps } from './AssistantView.js';
 import { HOST_IDLE } from './store.js';
 
-const PROPOSAL = { id: 'p1', target: 'Auth', where: 'Parley · Backend', kind: 'note', text: 'Please start with the tests.' } as const;
+const PROPOSAL = { id: 'p1', target: 'Auth', where: 'Parley · Backend', kind: 'note', text: 'Please start with the tests.', wake: false } as const;
 
 function props(patch: Partial<AssistantViewProps> = {}, host: Partial<AssistantState> = {}): AssistantViewProps {
   return {
@@ -85,6 +85,25 @@ describe('вид помощника', () => {
     render(<AssistantView {...p} />);
     submitForm();
     expect(p.onSubmit).toHaveBeenCalledWith('who is working?');
+  });
+
+  it('карточка спящей сессии: подпись про пробуждение и кнопка «Wake and send»', () => {
+    const p = props({}, { phase: 'awaiting-confirm', proposal: { ...PROPOSAL, target: 'S03 Ruslan', kind: null, wake: true } });
+    render(<AssistantView {...p} />);
+    expect(screen.getByTestId('assistant-wake-note').textContent).toBe('The agent is asleep and will be woken with this message.');
+    const send = screen.getByTestId('assistant-send') as HTMLButtonElement;
+    expect(send.textContent).toBe('Wake and send');
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    fireEvent.click(send);
+    expect(p.onDecide).toHaveBeenCalledWith('send');
+  });
+
+  it('карточка без пробуждения: ни подписи, ни кнопки «Wake and send»', () => {
+    render(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: PROPOSAL })} />);
+    expect(screen.queryByTestId('assistant-wake-note')).toBeNull();
+    expect(screen.getByTestId('assistant-send').textContent).toBe('Send');
   });
 
   it('cardError показывается на карточке', () => {

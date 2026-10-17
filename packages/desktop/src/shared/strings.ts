@@ -2098,6 +2098,8 @@ export const S = {
     miniConfirm: 'Confirm send',
     to: 'To',
     send: 'Send',
+    wakeAndSend: 'Wake and send',
+    wakeNote: 'The agent is asleep and will be woken with this message.',
     cancel: 'Cancel',
     enterToSend: 'Enter to send',
     sent: 'Sent ✓',

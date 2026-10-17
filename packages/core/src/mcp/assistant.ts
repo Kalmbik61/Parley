@@ -27,7 +27,7 @@ export const ASSISTANT_TOOLS: Tool[] = [
   },
   {
     name: 'propose_message',
-    description: 'Prepare a message from the person to a room or to an agent session. Nothing is sent: the person sees a card and confirms or cancels it.',
+    description: 'Prepare a message from the person to a room or to an agent session, awake or asleep. An asleep session is resumed with this text as its first turn after the person confirms. Nothing is sent: the person sees a card and confirms or cancels it.',
     inputSchema: {
       type: 'object',
       properties: {

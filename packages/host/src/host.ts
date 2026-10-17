@@ -423,6 +423,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activity: activityService,
     feed: feedService,
     send,
+    launch: (ref, mode, options) => sessionsService.launch(ref, mode, options),
     sendLetter: (input) => sendHumanLetter(input, { via: 'assistant' }),
     endpoint: { origin: () => hookServer.origin(), setToken: (token) => assistantEndpoint.setToken(token) },
     providers: () => loadProviders(),

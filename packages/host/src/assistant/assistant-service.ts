@@ -21,6 +21,7 @@ import {
   splitMood,
   type AssistantLanguage,
   type ProviderEntry,
+  type SessionLifecycle,
 } from '@parley/core';
 import type { AssistantDetail, AssistantProposal, AssistantState, EventData, EventName, Params, SendResult, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -42,6 +43,11 @@ export interface AssistantServiceDeps {
   feed?: Pick<FeedService, 'snapshot'>;
   /** Общий отправитель хоста (`createSender`) — тот же, что у `pty.send`. */
   send(params: { ref: SessionRef; text: string; submit: boolean }): Promise<SendResult>;
+  /**
+   * Подъём спящей сессии подтверждённым текстом (`sessions.launch`). `by: 'human'` — это действие человека,
+   * подтверждённое на карточке, и лимиты будильника (`resumeRate`) на него не распространяются.
+   */
+  launch(ref: SessionRef, mode: 'resume', options: { by: 'human'; prompt: string }): Promise<void>;
   /** `sendHumanLetter` с `via: 'assistant'`. */
   sendLetter(input: Params<'rooms.send'>): Promise<string>;
   /** Сервер хуков (`origin`) и приёмник помощника (`setToken`, задача 8). */
@@ -87,6 +93,9 @@ interface Pending {
 const EMPTY: AssistantState = { phase: 'idle', detail: null, question: null, answer: '', mood: 'calm', proposal: null, outcome: null, error: null, turn: 0 };
 
 const firstLine = (text: string): string => text.split('\n')[0]?.trim() ?? '';
+/** Почему сессии в этом состоянии нельзя передать сообщение; `null` — можно (`active` — отправка, `sleeping` — подъём). Нет сессии — закрыта. */
+const unreachable = (name: string, lifecycle: SessionLifecycle | undefined): string | null =>
+  lifecycle === undefined || lifecycle === 'closed' ? `${name} is closed` : lifecycle === 'pending' ? `${name} has not started yet` : null;
 const stringArg = (input: Record<string, unknown>, key: string): string => (typeof input[key] === 'string' ? (input[key] as string) : '');
 
 function detailOf(name: string, input: Record<string, unknown>, targets: readonly AssistantTarget[]): AssistantDetail {
@@ -312,7 +321,10 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const found = resolveTarget(targets, stringArg(input, 'target'));
     if ('error' in found) return { status: 404, body: { error: found.error } };
     const target = found.target;
-    if (target.kind === 'session' && !target.running) return { status: 409, body: { error: `${target.name} is not running` } };
+    if (target.kind === 'session') {
+      const refusal = unreachable(target.name, target.lifecycle);
+      if (refusal !== null) return { status: 409, body: { error: refusal } };
+    }
     const kind = input['kind'];
     proposals += 1;
     pending = {
@@ -322,6 +334,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         where: target.where,
         kind: target.kind === 'room' ? (kind === 'question' || kind === 'decision' ? kind : 'note') : null,
         text,
+        wake: target.kind === 'session' && target.lifecycle === 'sleeping',
       },
       target,
     };
@@ -367,9 +380,21 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
           const { projectPath, workId, roomId } = current.target;
           await deps.sendLetter({ projectPath, workId, roomId, to: [], text: current.view.text, kind: current.view.kind ?? 'note' });
         } else {
-          const result = await deps.send({ ref: current.target.ref, text: current.view.text, submit: true });
-          if (!result.inserted) return { applied: false, error: `${current.target.name} can't take a message now (${result.reason ?? 'busy'})` };
-          await appendSent(deps.home, current.target.ref, current.view.text, new Date(now()).toISOString());
+          const { ref, name } = current.target;
+          // Решает состояние сессии сейчас, а не в момент предложения: за время ожидания карточки она могла проснуться или закрыться.
+          const session = deps.works
+            .snapshot()
+            .entries.find((entry) => entry.projectPath === ref.projectPath && entry.map.work.id === ref.workId)
+            ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
+          const refusal = unreachable(name, session?.lifecycle);
+          if (refusal !== null) return { applied: false, error: refusal };
+          if (session?.lifecycle === 'sleeping') {
+            await deps.launch(ref, 'resume', { by: 'human', prompt: current.view.text });
+          } else {
+            const result = await deps.send({ ref, text: current.view.text, submit: true });
+            if (!result.inserted) return { applied: false, error: `${name} can't take a message now (${result.reason ?? 'busy'})` };
+          }
+          await appendSent(deps.home, ref, current.view.text, new Date(now()).toISOString());
         }
       } catch (error) {
         return { applied: false, error: (error as Error).message };

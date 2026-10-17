@@ -24,6 +24,8 @@ export interface AssistantProposal {
   /** Вид письма комнаты; у сессии — `null`. */
   kind: 'note' | 'question' | 'decision' | null;
   text: string;
+  /** Цель спит: подтверждение поднимет сессию (`resume`) этим текстом первым ходом. У комнат и запущенных сессий — `false`. */
+  wake: boolean;
 }
 
 export interface AssistantState {

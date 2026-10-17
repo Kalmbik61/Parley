@@ -34,7 +34,7 @@ describe('стор помощника', () => {
   });
   it('«да» при карточке — решение, а не вопрос', async () => {
     const { store, deps } = setup();
-    store.getState().applyHost({ ...HOST_IDLE, phase: 'awaiting-confirm', proposal: { id: 'p1', target: 'Auth', where: 'Parley · x', kind: 'note', text: 't' }, turn: 1 });
+    store.getState().applyHost({ ...HOST_IDLE, phase: 'awaiting-confirm', proposal: { id: 'p1', target: 'Auth', where: 'Parley · x', kind: 'note', text: 't', wake: false }, turn: 1 });
     await store.getState().submit('Да, отправляй');
     expect(deps.call).toHaveBeenCalledWith('assistant.decide', { proposalId: 'p1', decision: 'send' });
     expect(deps.call).not.toHaveBeenCalledWith('assistant.ask', expect.anything());
@@ -54,7 +54,7 @@ describe('стор помощника', () => {
   });
   it('ошибка решения карточки — на карточке', async () => {
     const { store } = setup({ call: vi.fn().mockResolvedValue({ applied: false, error: 'S03 is not running' }) });
-    store.getState().applyHost({ ...HOST_IDLE, proposal: { id: 'p1', target: 'S03', where: 'w', kind: null, text: 't' }, phase: 'awaiting-confirm', turn: 1 });
+    store.getState().applyHost({ ...HOST_IDLE, proposal: { id: 'p1', target: 'S03', where: 'w', kind: null, text: 't', wake: false }, phase: 'awaiting-confirm', turn: 1 });
     await store.getState().decide('send');
     expect(store.getState().cardError).toBe('S03 is not running');
   });
