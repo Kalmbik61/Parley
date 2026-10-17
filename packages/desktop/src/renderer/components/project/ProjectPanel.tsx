@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ComponentProps } from 'react';
 import { capabilityActionResult, capabilitySnapshot } from '@parley/protocol';
 import type { CapabilityActionResult, CapabilityMcpAdd, CapabilityPresence, CapabilityProvider, CapabilitySnapshot } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
@@ -40,6 +41,12 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
   const methods = hostMethods(status);
   const supported = methods.has('capabilities.get') && methods.has('capabilities.refresh');
   const entries = useWorksStore(state => state.entries);
+  /** Плашка роли автора предложения: каталог берётся из его сессии в снимке работ; сессии нет — без `cwd`, ключ стора — проект. */
+  const authorChip = (author: NonNullable<Parameters<NonNullable<ComponentProps<typeof BacklogPanel>['renderAuthor']>>[0]['author']>): JSX.Element => {
+    const session = entries.find(entry => entry.projectPath === author.projectPath && entry.map.work.id === author.workId)?.map.sessions.find(item => item.id === author.sessionId);
+    return <RoleChip role={author.role} sessionRef={{ projectPath: author.projectPath, workId: author.workId, sessionId: author.sessionId }} bridge={bridge} revision={author.revision}
+      {...(session ? { cwd: session.worktree?.path ?? author.projectPath } : {})} />;
+  };
   const [pendingSuggestions, setPendingSuggestions] = useState(0);
   const [pendingMemory, setPendingMemory] = useState(0);
   const backlogSupported = ['backlog.get', 'backlog.subscribe', 'backlog.unsubscribe', 'backlog.prepareTake', 'backlog.take'].every(method => methods.has(method));
@@ -259,9 +266,7 @@ export function ProjectPanel({ bridge, projectPath, onOpenChange }: ProjectPanel
                 useUiStore.getState().openNewSessionDialog({ projectPath: project, workId: backlogWork.map.work.id }, {
                   room: true, backlog: { projectPath: project, id: item.id, version,
                     task: [item.title, item.details].filter(Boolean).join('\n\n') } });
-              }} renderAuthor={suggestion => suggestion.author ? <span>{sessionLabelText(suggestion.author.label, suggestion.author.sessionId)} <RoleChip
-                role={suggestion.author.role} sessionRef={{ projectPath: suggestion.author.projectPath,
-                  workId: suggestion.author.workId, sessionId: suggestion.author.sessionId }} bridge={bridge} revision={suggestion.author.revision} /></span>
+              }} renderAuthor={suggestion => suggestion.author ? <span>{sessionLabelText(suggestion.author.label, suggestion.author.sessionId)} {authorChip(suggestion.author)}</span>
                 : `${suggestion.workId}/${suggestion.sessionId}`} />
           </TabsContent>
           {/* Список решений прокручивается внутри диалога: общий верх (путь, PARLEY.md) его не вытесняет.

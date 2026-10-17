@@ -318,7 +318,8 @@ export function PlanSummary({
                       workId: entry.map.work.id,
                       sessionId: session.id,
                     }}
-                    revision={String(plan.rev)}
+                    cwd={session.worktree?.path ?? entry.projectPath}
+                    revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`}
                   />
                 ) : null}
               </div>

@@ -47,6 +47,7 @@ import {
   type MetricsRoots,
   type SessionActivity,
   type SessionIndex,
+  type TimelineReader,
   type UsageResolver,
   type UsageSummary,
   type WorkEntry,
@@ -82,6 +83,8 @@ export interface SessionLive {
  * заводить незачем.
  */
 export interface ActivityServiceOptions extends MetricsRoots {
+  /** Чтение логов для шкал расхода — подмена для тестов. */
+  timelineReader?: TimelineReader;
   /** Счётчики окна строки состояния: каждый `recompute` сессии — одна запись. */
   windowCounters?: WindowCounters;
   silenceThresholdMs?: number;
@@ -317,7 +320,7 @@ export function createActivityService(
   const startupWaitMs = options.startupWaitMs ?? DEFAULT_STARTUP_WAIT_MS;
   const codexCallGraceMs = options.codexCallGraceMs ?? CODEX_CALL_GRACE_MS;
 
-  const logIndex: LogIndex = createLogIndex(roots);
+  const logIndex: LogIndex = createLogIndex(roots, options.timelineReader === undefined ? {} : { reader: options.timelineReader });
   const live = new Map<string, SessionLive>();
   /** Выведенная активность до подмены на `blocked` (вопрос, сторож): с ней сверяются сигналы терминала. */
   const derivedActivity = new Map<string, Activity>();

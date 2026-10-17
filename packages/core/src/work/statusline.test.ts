@@ -1,24 +1,18 @@
 /**
- * Скрипт строки статуса Claude Code (спека комнат Organic, 3.5): кладёт `rate_limits` в файл
- * работы и печатает строку терминала. Вход — JSON со stdin по документации
- * code.claude.com/docs/en/statusline; настоящие `claude` и `codex` не запускаются, а
- * «команда человека» здесь — обычные `printf`, `cat` и `sleep`.
+ * Скрипт строки статуса Claude Code (спека комнат Organic, 3.5): кладёт `rate_limits` и
+ * заполненность контекста в файлы работы и печатает короткую строку терминала. Вход — JSON со
+ * stdin по документации code.claude.com/docs/en/statusline; настоящие `claude` и `codex` не
+ * запускаются, а «команда человека» в настройках здесь — обычные `touch` и `printf`.
  */
 
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  STATUSLINE_BIN,
-  STATUSLINE_ENTRY,
-  isOwnCommand,
-  runStatusline,
-  statusLineCommand,
-} from './statusline.js';
+import { STATUSLINE_BIN, runStatusline } from './statusline.js';
 
 const require = createRequire(import.meta.url);
 const tsxLoader = pathToFileURL(require.resolve('tsx')).href;
@@ -43,8 +37,13 @@ beforeEach(async () => {
   project = path.join(root, 'project');
   workDir = path.join(root, 'work');
   await Promise.all([home, project, workDir].map((dir) => mkdir(dir)));
-  // Окружение процесса агента: адрес работы и сессии, как у хуков; PATH нужен командам человека.
-  env = { PATH: process.env['PATH'], PARLEY_WORK_DIR: workDir, PARLEY_SESSION_ID: 's-01' };
+  // Окружение процесса агента: адрес работы и сессии, как у хуков; HOME — дом человека с его настройками.
+  env = {
+    PATH: process.env['PATH'],
+    HOME: home,
+    PARLEY_WORK_DIR: workDir,
+    PARLEY_SESSION_ID: 's-01',
+  };
 });
 
 afterEach(async () => {
@@ -75,69 +74,10 @@ const run = async (
   raw: string,
   options: Parameters<typeof runStatusline>[1] = {},
 ): Promise<string> =>
-  (await runStatusline(raw, { env, home, now: () => NOW, ...options })).toString('utf8');
-
-/** Жив ли процесс: убитый, но не подобранный родителем (зомби) считается мёртвым. */
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
-  try {
-    const state = execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });
-    return !state.trim().startsWith('Z');
-  } catch {
-    return false;
-  }
-}
-
-/** Есть ли процесс с такой командной строкой (`pgrep -f`). */
-function hasProcess(pattern: string): boolean {
-  try {
-    execFileSync('pgrep', ['-f', pattern], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Ждёт, пока условие не выполнится; иначе — ошибка теста, а не зависание. */
-async function until(
-  condition: () => boolean | Promise<boolean>,
-  what: string,
-  timeoutMs = 5000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!(await condition())) {
-    if (Date.now() > deadline) throw new Error(`не дождались: ${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-}
-
-/** pid из файла, который записал внутренний `sh` составной команды (см. `compound`). */
-async function sleeperPid(file: string): Promise<number> {
-  let pid = 0;
-  await until(
-    async () => {
-      pid = Number((await readFile(file, 'utf8').catch(() => '')).trim());
-      return pid > 0;
-    },
-    'pid внутреннего процесса команды человека',
-    15_000,
-  );
-  return pid;
-}
-
-/**
- * Составная команда человека: внешняя оболочка (её запускает скрипт) порождает внутренний `sh`,
- * тот записывает свой pid и становится `sleep`. Убить одну внешнюю оболочку мало: `sleep`
- * переживёт её и продолжит держать унаследованные stdout и stderr.
- */
-const compound = (pidFile: string): string =>
-  `sh -c 'echo $$ > "${pidFile}"; exec sleep 30'; echo x`;
+  (await runStatusline(raw, { env, now: () => NOW, ...options })).toString('utf8');
 
 const limitsFile = path.join('limits', 's-01.json');
+const contextRel = path.join('context', 's-01.json');
 const exists = async (file: string): Promise<boolean> =>
   stat(file).then(
     () => true,
@@ -223,8 +163,6 @@ describe('файл лимитов', () => {
 });
 
 describe('заполненность контекста (спека 2026-10-15, 4.1)', () => {
-  const contextRel = path.join('context', 's-01.json');
-
   it('context_window во входе → context/<сессия>.json', async () => {
     await run(
       input({
@@ -281,227 +219,39 @@ describe('строка терминала', () => {
     expect(await exists(path.join(workDir, 'limits'))).toBe(false);
   });
 
-  it('statusLine человека: его вывод — как есть, без добавленного перевода строки', async () => {
-    await putStatusLine(home, 'settings.json', "printf 'мой статус'");
+  it('statusLine человека в настройках пользователя и проекта не запускается: метки нет, строка короткая', async () => {
+    const marker = path.join(root, 'marker');
+    const command = `touch '${marker}'; printf 'человек'`;
+    await putStatusLine(home, 'settings.json', command);
+    await putStatusLine(project, 'settings.json', command);
+    await putStatusLine(project, 'settings.local.json', command);
 
-    expect(await run(input())).toBe('мой статус');
-    // Файл лимитов при этом пишется: строка человека одно, данные окна — другое.
+    expect(await run(input())).toBe('Opus · ctx 8%\n');
+    expect(await exists(marker)).toBe(false);
+    // Данные окна при этом пишутся: файлы лимитов и контекста — как без настроек человека.
     expect(await exists(path.join(workDir, limitsFile))).toBe(true);
-  });
-
-  it('команда человека получает тот же stdin и то же окружение', async () => {
-    await putStatusLine(home, 'settings.json', 'cat');
-    const raw = input();
-    expect(await run(raw)).toBe(raw);
-
-    await putStatusLine(home, 'settings.json', 'echo "$PARLEY_SESSION_ID $PARLEY_WORK_DIR"');
-    expect(await run(raw)).toBe(`s-01 ${workDir}\n`);
-  });
-
-  it('порядок старшинства: локальные настройки проекта, общие проекта, пользователя', async () => {
-    await putStatusLine(project, 'settings.local.json', "printf 'локальная'");
-    await putStatusLine(project, 'settings.json', "printf 'проектная'");
-    await putStatusLine(home, 'settings.json', "printf 'пользовательская'");
-
-    expect(await run(input())).toBe('локальная');
-    await rm(path.join(project, '.claude', 'settings.local.json'));
-    expect(await run(input())).toBe('проектная');
-    await rm(path.join(project, '.claude', 'settings.json'));
-    expect(await run(input())).toBe('пользовательская');
-    await rm(path.join(home, '.claude', 'settings.json'));
-    expect(await run(input())).toBe('Opus · ctx 8%\n');
-  });
-
-  it('файл настроек битый или без команды-строки статуса — ищется дальше', async () => {
-    await mkdir(path.join(project, '.claude'), { recursive: true });
-    await writeFile(path.join(project, '.claude', 'settings.local.json'), '{ битый', 'utf8');
-    await writeFile(
-      path.join(project, '.claude', 'settings.json'),
-      JSON.stringify({ statusLine: { type: 'command' }, permissions: {} }),
-      'utf8',
-    );
-    await putStatusLine(home, 'settings.json', "printf 'пользовательская'");
-
-    expect(await run(input())).toBe('пользовательская');
-  });
-
-  it('проект — project_dir, куда запущен Claude Code; настройки каталога, куда ушёл агент, не берутся', async () => {
-    const inner = path.join(project, 'src');
-    await mkdir(inner);
-    const marker = path.join(root, 'чужая-команда-вызвана');
-    await putStatusLine(project, 'settings.json', "printf 'проектная'");
-    // Чужой репозиторий внутри проекта (клон, vendored-пакет) со своей строкой статуса: Claude Code её
-    // не читает, значит, и нам исполнять её нельзя — это обход доверия к папке.
-    await putStatusLine(inner, 'settings.json', `touch '${marker}'; printf 'подкаталог'`);
-    const drifted = { workspace: { current_dir: inner, project_dir: project } };
-
-    expect(await run(input(drifted))).toBe('проектная');
-    // В проекте своей строки нет — настройки подкаталога всё равно не берутся, дальше пользователь.
-    await rm(path.join(project, '.claude'), { recursive: true });
-    await putStatusLine(home, 'settings.json', "printf 'пользовательская'");
-    expect(await run(input(drifted))).toBe('пользовательская');
-    expect(await exists(marker)).toBe(false);
-  });
-
-  it('старый Claude Code без project_dir: проект — current_dir; нет ни того ни другого — только настройки пользователя', async () => {
-    await putStatusLine(project, 'settings.json', "printf 'проектная'");
-    await putStatusLine(home, 'settings.json', "printf 'пользовательская'");
-
-    expect(await run(input({ workspace: { current_dir: project } }))).toBe('проектная');
-    expect(await run(input({ workspace: undefined, cwd: project }))).toBe('проектная');
-    // Каталога проекта во входе нет (битый вход): каталог процесса не угадывается, проект не читается.
-    expect(await run(input({ workspace: undefined }))).toBe('пользовательская');
-    expect(await run('не json')).toBe('пользовательская');
-  });
-
-  it('наш же скрипт в настройках человека не зовётся: короткая строка вместо рекурсии', async () => {
-    const marker = path.join(root, 'called');
-    // Команда с полным путём нашего скрипта, оставляющая след, если её всё-таки вызвали.
-    await putStatusLine(home, 'settings.json', `touch '${marker}'; echo '${STATUSLINE_ENTRY}'`);
-
-    expect(await run(input())).toBe('Opus · ctx 8%\n');
-    expect(await exists(marker)).toBe(false);
-  });
-
-  it('чужой скрипт с похожим именем — не наш: вызывается, а не заменяется короткой строкой', async () => {
-    // Свой скрипт человека, названный `statusline-bin`, — не повод его пропускать.
-    const script = path.join(home, 'bin', STATUSLINE_BIN);
-    await mkdir(path.dirname(script), { recursive: true });
-    await writeFile(script, "#!/bin/sh\nprintf 'мой скрипт'\n", { mode: 0o755 });
-    await putStatusLine(home, 'settings.json', script);
-    expect(await run(input())).toBe('мой скрипт');
-
-    await putStatusLine(home, 'settings.json', `echo /x/work/${STATUSLINE_BIN}.js`);
-    expect(await run(input())).toBe(`/x/work/${STATUSLINE_BIN}.js\n`);
-    await putStatusLine(home, 'settings.json', `printf 'заметки-${STATUSLINE_BIN}'`);
-    expect(await run(input())).toBe(`заметки-${STATUSLINE_BIN}`);
-  });
-
-  it('команда человека упала — короткая строка, а не пустота', async () => {
-    await putStatusLine(home, 'settings.json', 'echo частичный вывод; exit 3');
-    expect(await run(input())).toBe('Opus · ctx 8%\n');
-
-    await putStatusLine(home, 'settings.json', 'команды-с-таким-именем-нет 2>/dev/null');
-    expect(await run(input())).toBe('Opus · ctx 8%\n');
-  });
-
-  it('команда человека зависла — короткая строка по таймауту, скрипт не ждёт её конца', async () => {
-    await putStatusLine(home, 'settings.json', 'sleep 5');
-
-    const started = Date.now();
-    const line = await run(input(), { humanTimeoutMs: 150 });
-
-    expect(line).toBe('Opus · ctx 8%\n');
-    expect(Date.now() - started).toBeLessThan(2500);
-    // Файл лимитов записан до вызова команды: и зависшая, и убитая Claude Code строка его не теряет.
-    expect(await exists(path.join(workDir, limitsFile))).toBe(true);
-  });
-
-  it('составная команда зависла: по таймауту убивается вся группа процессов, а не только оболочка', async () => {
-    const pidFile = path.join(root, 'sleeper.pid');
-    await putStatusLine(home, 'settings.json', compound(pidFile));
-
-    // Предел щедрый: под нагрузкой две оболочки подряд запускаются не мгновенно.
-    const started = Date.now();
-    const pending = run(input(), { humanTimeoutMs: 2000 });
-    const pid = await sleeperPid(pidFile);
-    try {
-      expect(await pending).toBe('Opus · ctx 8%\n');
-      expect(Date.now() - started).toBeLessThan(8000);
-      // Внутренний процесс — не сама оболочка: без группы он пережил бы её и держал stderr.
-      await until(() => !alive(pid), 'процесс команды человека убит вместе с группой', 3000);
-    } finally {
-      if (alive(pid)) process.kill(pid, 'SIGKILL');
-    }
-  }, 20_000);
-
-  it('составная `sleep 5; echo x` с малым таймаутом: строка короткая, а `sleep` из группы не остаётся', async () => {
-    // Своя длительность и якоря в шаблоне: `pgrep -f` не должен спутать этот `sleep` с чужим
-    // процессом, в чьей командной строке просто упомянута такая команда.
-    await putStatusLine(home, 'settings.json', 'sleep 5.317; echo x');
-    const sleeping = '^sleep 5\\.317$';
-
-    const line = run(input(), { humanTimeoutMs: 2000 });
-    await until(() => hasProcess(sleeping), 'sleep запущен', 10_000);
-
-    expect(await line).toBe('Opus · ctx 8%\n');
-    await until(() => !hasProcess(sleeping), 'sleep убит вместе с группой', 3000);
-  }, 20_000);
-
-  it('отмена (signal): команда человека убивается с группой, строка короткая; отменено до запуска — команда не стартует', async () => {
-    const pidFile = path.join(root, 'sleeper.pid');
-    await putStatusLine(home, 'settings.json', compound(pidFile));
-
-    const cancel = new AbortController();
-    const pending = run(input(), { signal: cancel.signal });
-    const pid = await sleeperPid(pidFile);
-    try {
-      cancel.abort();
-      expect(await pending).toBe('Opus · ctx 8%\n');
-      await until(() => !alive(pid), 'процесс команды человека убит вместе с группой', 3000);
-    } finally {
-      if (alive(pid)) process.kill(pid, 'SIGKILL');
-    }
-
-    const marker = path.join(root, 'started');
-    await putStatusLine(home, 'settings.json', `touch '${marker}'`);
-    expect(await run(input(), { signal: AbortSignal.abort() })).toBe('Opus · ctx 8%\n');
-    expect(await exists(marker)).toBe(false);
-  }, 20_000);
-});
-
-describe('isOwnCommand: наша ли это команда — по полному пути скрипта, а не по имени', () => {
-  const quote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
-
-  it('полная команда харнесса и любая команда с полным путём нашего скрипта — наши', () => {
-    expect(isOwnCommand(statusLineCommand())).toBe(true);
-    expect(isOwnCommand(`/opt/node/bin/node ${STATUSLINE_ENTRY}`)).toBe(true);
-    expect(isOwnCommand(`node ${quote(STATUSLINE_ENTRY)} --x`)).toBe(true);
-    expect(isOwnCommand(STATUSLINE_ENTRY)).toBe(true);
-  });
-
-  it('то же имя файла в другом месте, обрывок имени и пустая команда — не наши', () => {
-    for (const command of [
-      `node /home/me/${STATUSLINE_BIN}.js`,
-      `/home/me/bin/${STATUSLINE_BIN}`,
-      `printf '${STATUSLINE_BIN}'`,
-      `cat ${STATUSLINE_BIN}-notes.txt`,
-      path.dirname(STATUSLINE_ENTRY),
-      '',
-    ]) {
-      expect(isOwnCommand(command)).toBe(false);
-    }
+    expect(await exists(path.join(workDir, contextRel))).toBe(true);
   });
 });
 
 /** Настоящий процесс скрипта: код выхода и stdout, как их видит Claude Code. */
-function startScript(
+function spawnScript(
   stdin: string,
   extraEnv: NodeJS.ProcessEnv,
-): {
-  child: ChildProcess;
-  result: Promise<{ code: number | null; signal: NodeJS.Signals | null; out: string }>;
-} {
+): Promise<{ code: number | null; out: string }> {
   const child = spawn(process.execPath, ['--import', tsxLoader, binScript], {
     env: { ...env, ...extraEnv },
     stdio: ['pipe', 'pipe', 'inherit'],
   });
-  const result = new Promise<{ code: number | null; signal: NodeJS.Signals | null; out: string }>(
-    (resolve, reject) => {
-      let out = '';
-      child.stdout?.on('data', (chunk: Buffer) => (out += chunk.toString('utf8')));
-      child.on('error', reject);
-      child.on('close', (code, signal) => resolve({ code, signal, out }));
-    },
-  );
+  const result = new Promise<{ code: number | null; out: string }>((resolve, reject) => {
+    let out = '';
+    child.stdout?.on('data', (chunk: Buffer) => (out += chunk.toString('utf8')));
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code, out }));
+  });
   child.stdin?.end(stdin);
-  return { child, result };
+  return result;
 }
-
-const spawnScript = (
-  stdin: string,
-  extraEnv: NodeJS.ProcessEnv,
-): Promise<{ code: number | null; out: string }> => startScript(stdin, extraEnv).result;
 
 describe('процесс скрипта', () => {
   it('битый stdin: код выхода 0 и непустая строка', async () => {
@@ -511,56 +261,16 @@ describe('процесс скрипта', () => {
     expect(result.out).toBe('Claude\n');
   }, 30_000);
 
-  it('вход Claude Code: код 0, строка печатается, файл лимитов пишется', async () => {
-    await putStatusLine(home, 'settings.json', "printf 'человек'");
+  it('вход Claude Code: код 0, короткая строка, файлы пишутся, statusLine человека не запускается', async () => {
+    const marker = path.join(root, 'marker');
+    await putStatusLine(home, 'settings.json', `touch '${marker}'; printf 'человек'`);
 
     const result = await spawnScript(input(), { HOME: home });
 
     expect(result.code).toBe(0);
-    expect(result.out).toBe('человек');
+    expect(result.out).toBe('Opus · ctx 8%\n');
+    expect(await exists(marker)).toBe(false);
     expect(await exists(path.join(workDir, limitsFile))).toBe(true);
+    expect(await exists(path.join(workDir, contextRel))).toBe(true);
   }, 30_000);
-
-  it('составная команда зависла: по настоящему таймауту — короткая строка, код 0, процессов группы не осталось', async () => {
-    const pidFile = path.join(root, 'sleeper.pid');
-    await putStatusLine(home, 'settings.json', compound(pidFile));
-
-    const { child, result } = startScript(input(), { HOME: home });
-    let pid = 0;
-    try {
-      pid = await sleeperPid(pidFile);
-      const done = await result;
-
-      expect(done).toEqual({ code: 0, signal: null, out: 'Opus · ctx 8%\n' });
-      await until(() => !alive(pid), 'процесс команды человека убит вместе с группой', 3000);
-    } finally {
-      if (pid > 0 && alive(pid)) process.kill(pid, 'SIGKILL');
-      child.kill('SIGKILL');
-    }
-  }, 30_000);
-
-  // Claude Code отменяет идущий вызов, когда его вытесняет новый (документация statusline): скрипт
-  // получает сигнал. Команда человека живёт в своей группе процессов и сама сигнала не получит.
-  it.each(['SIGTERM', 'SIGINT'] as const)(
-    '%s посреди команды человека: группа убита, код выхода 0',
-    async (name) => {
-      const pidFile = path.join(root, 'sleeper.pid');
-      await putStatusLine(home, 'settings.json', compound(pidFile));
-
-      const { child, result } = startScript(input(), { HOME: home });
-      let pid = 0;
-      try {
-        pid = await sleeperPid(pidFile);
-        child.kill(name);
-        const done = await result;
-
-        expect({ code: done.code, signal: done.signal }).toEqual({ code: 0, signal: null });
-        await until(() => !alive(pid), 'процесс команды человека убит вместе с группой', 3000);
-      } finally {
-        if (pid > 0 && alive(pid)) process.kill(pid, 'SIGKILL');
-        child.kill('SIGKILL');
-      }
-    },
-    30_000,
-  );
 });

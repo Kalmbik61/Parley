@@ -6,6 +6,10 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- **Agent sessions no longer run your own Claude Code status line.** Claude Code runs the status line command after every model response; in a room with six busy agents a custom one (for example a HUD that calls git, node and jq) ran about once a second and kept 15–20 % of a CPU core busy. Sessions started by Parley now show Parley's short line (model and context use) in their terminal. Your status line in your own terminal is unchanged.
+
 ### Fixed
 
 - **A long answer from the assistant no longer runs off the island.** The question, the answer and the
@@ -17,6 +21,7 @@ All notable changes to Parley are documented in this file.
 - **Session liveness checks work when Parley or its CLI runs under a non-English locale.**
 - **Deleting a work no longer removes its folder when the index is busy.** The folder is now deleted only once the index lock is taken, so a failed delete leaves the work intact.
 - **Parley stays responsive with many agents running.** The host now re-reads work maps once per change instead of a dozen times (one watcher on the Parley home, overlapping reads collapsed into one repeat, unchanged maps are not parsed again). Role chips share one read of the Codex configuration instead of starting Codex for each of them (role files are still read fresh). A transcript update recomputes only the session it belongs to, and a live transcript is re-indexed at most every two seconds instead of after every append.
+- **The room usage chip no longer loads the host.** It refreshes once a minute (or on Refresh), and the host reads only what was appended to the agents' logs since the last request instead of the whole file. Role chips now share one request per working directory instead of one per session.
 
 ## 0.15.0
 

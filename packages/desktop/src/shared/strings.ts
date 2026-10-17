@@ -263,6 +263,7 @@ export const S = {
     updated: (iso: string): string => `Updated ${new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
     markdownTitle: (title: string, roomId: string): string => `Room “${title}” (${roomId}) — token usage`,
     copy: 'Copy',
+    refresh: 'Refresh',
     copied: 'Copied',
     unavailable: 'Usage unavailable',
     counting: 'Counting…',

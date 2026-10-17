@@ -26,9 +26,8 @@ export const FRAME_RULES: ReadonlyArray<{ rule: string; pattern: RegExp }> = [
     // Срабатывает и при чтении того же пути, не только при записи (план куска
     // 1.1, тест 5): регэксп не может надёжно отличить вызов записи от чтения во
     // всех формах (`writeFile`, `fs.writeFileSync`, шаблонные строки и т.д.), а
-    // чтения этих файлов рамка 15.1 не предполагает — кроме одного явного
-    // исключения из `FRAME_EXCEPTIONS`: скрипт строки статуса читает
-    // `settings.json` человека и проекта (спека комнат Organic, 3.5).
+    // чтения этих файлов рамка 15.1 не предполагает — кроме явных исключений
+    // из `FRAME_EXCEPTIONS`.
     rule: 'запись в каталоги агентов',
     pattern: /\.claude\/settings\.json|\.claude\.json|\.codex\/config\.toml/,
   },
@@ -71,13 +70,6 @@ export interface FrameException {
 }
 
 export const FRAME_EXCEPTIONS: readonly FrameException[] = [
-  {
-    file: 'packages/core/src/work/statusline.ts',
-    rule: 'запись в каталоги агентов',
-    line: "const SETTINGS_FILE = '.claude/settings.json';",
-    reason:
-      'спека комнат Organic 3.5: скрипт строки статуса только читает settings.json человека и проекта, чтобы вызвать их statusLine',
-  },
   {
     file: 'packages/core/src/skills/claude.ts',
     rule: 'запись в каталоги агентов',
@@ -196,21 +188,8 @@ export interface PinnedUses {
   reads: readonly string[];
 }
 
-export const PINNED_USES: readonly PinnedUses[] = [
-  {
-    file: 'packages/core/src/work/statusline.ts',
-    name: 'SETTINGS_FILE',
-    declarations: [
-      "const SETTINGS_FILE = '.claude/settings.json';",
-      "const LOCAL_SETTINGS_FILE = '.claude/settings.local.json';",
-    ],
-    // `settingsFiles`: пути настроек проекта и человека, откуда `humanCommand` только читает.
-    reads: [
-      'dir === null ? [] : [path.join(dir, LOCAL_SETTINGS_FILE), path.join(dir, SETTINGS_FILE)];',
-      'return [...project, path.join(home, SETTINGS_FILE)];',
-    ],
-  },
-];
+/** Закреплений сейчас нет: исключений на объявления констант путей не осталось. */
+export const PINNED_USES: readonly PinnedUses[] = [];
 
 /**
  * Сверяет использования константы в исходнике с закреплением. `added` — строки, где имя названо, а

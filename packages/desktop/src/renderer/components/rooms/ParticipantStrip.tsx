@@ -51,7 +51,7 @@ export function ParticipantStrip({ participants, onOpenSession, contextChip }: P
             <AgentStateDot state={participant.state} lifecycle={participant.lifecycle} />
             <AgentIcon provider={participant.provider} size={14} />
             <span className="min-w-[5ch] flex-1 truncate font-semibold">{participant.label}</span>
-            <RoleChip {...(participant.roleRevision ? { revision: participant.roleRevision } : {})} role={participant.role} {...(participant.sessionRef ? { sessionRef: participant.sessionRef } : {})} />
+            <RoleChip {...(participant.cwd ? { cwd: participant.cwd } : {})} {...(participant.roleRevision ? { revision: participant.roleRevision } : {})} role={participant.role} {...(participant.sessionRef ? { sessionRef: participant.sessionRef } : {})} />
             {participant.lead ? (
               <span title={S.rooms.lead} className="shrink-0 text-accent-700">
                 ★
