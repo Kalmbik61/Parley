@@ -4,6 +4,15 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Fixed
+
+- **A long answer from the assistant no longer runs off the island.** The question, the answer and the
+  confirmation card scroll inside the island, while the swarm, the input field and the hints stay in place.
+  While a card waits, the view keeps it and its **Send** button in sight. A long question shows two lines;
+  hover it for the whole text.
+
 ## 0.15.0
 
 Parley gets an assistant that lives on the island and a browser that lives next to every chat and room. Agents can open pages in that browser and read it, the sessions Parley starts run leaner, and the window, the assistant and the agents' brief now agree on what state a session is in.
