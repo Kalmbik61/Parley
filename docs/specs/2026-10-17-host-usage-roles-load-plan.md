@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** срез расхода комнаты считается по шкале наблюдений с дочитыванием хвоста лога вместо полного перечита, чип спрашивает раз в минуту; `roles.list` берёт сессию из снимка хоста и кэширует каталог ролей (и спавн codex) по рабочему каталогу на минуту, окно зовёт его один раз на каталог.
+**Goal:** срез расхода комнаты считается по шкале наблюдений с дочитыванием хвоста лога вместо полного перечита, чип спрашивает раз в минуту; чипы ролей в окне читают общий стор по рабочему каталогу — один `roles.list` на каталог вместо одного на сессию. Хостовая часть `roles.list` уже сделана в `perf/host-refresh` и здесь не повторяется.
 
-**Architecture:** ядро выносит правило «запись лога → наблюдение учёта» в чистые функции и получает `UsageTimeline` (смещение, ino, наблюдения) с `extendUsageTimeline` (чтение с `offset`) и `sliceUsageTimeline` (проигрывание в `createUsageLedger({ windows })`). `LogIndex.usageIn` хоста держит LRU шкал по файлу и кэш обнаружения подагентов. `createRolesList` получает `works.entry` и TTL-кэш по `cwd`. В окне чип расхода теряет зависимость от токенов, а чипы ролей читают общий стор по `cwd`.
+**Architecture:** ядро выносит правило «запись лога → наблюдение учёта» в чистые функции и получает `UsageTimeline` (смещение, ino, наблюдения) с `extendUsageTimeline` (чтение с `offset`) и `sliceUsageTimeline` (проигрывание в `createUsageLedger({ windows })`). `LogIndex.usageIn` хоста держит LRU шкал по файлу и кэш обнаружения подагентов. В окне чип расхода теряет зависимость от токенов, а чипы ролей читают общий стор по `cwd` (склейка `loadRoles` из `perf/host-refresh` заменяется стором).
 
 **Tech Stack:** TypeScript, Node 22, vitest, zod (протокол не меняется), React + zustand (окно), pnpm workspace.
 
@@ -12,13 +12,13 @@
 
 ## Global Constraints
 
-- База — `origin/master` (26da1d52 или новее, 0.15.0). Ветка `feat/host-usage-roles-load`, worktree `.claude/worktrees/host-usage-roles-load`; перед `pnpm install` и полными прогонами — `uptime`, при load ≥ 10 ждать.
+- База — `origin/master` **после слияния PR ветки `perf/host-refresh`** (PR #73 уже влит). До этого ветку не начинать: обе работы трогают `packages/host/src/activity/log-index.ts` (там `onChange(change?: LogChange)`, `applyChange` с `affects`, `LIVE_REINDEX_MIN_INTERVAL_MS`; здесь `usageIn`), `role-summary.ts` и `CHANGELOG.md`. Ветка `feat/host-usage-roles-load`, worktree `.claude/worktrees/host-usage-roles-load`; перед `pnpm install` и полными прогонами — `uptime`, при load ≥ 10 ждать.
 - После правок `packages/core` или `packages/protocol` перед тестами хоста и окна — `pnpm --filter @parley/core build && pnpm --filter @parley/protocol build`.
 - Протокол не меняется. Старое окно / старый хост работают как раньше.
 - Константы: `ROOM_USAGE_MIN_INTERVAL_MS = 60_000` (было 10 000), `ROOM_USAGE_REFRESH_MIN_MS = 5_000`, `USAGE_TIMELINE_CACHE_SIZE = 256`, `SUBAGENT_DISCOVERY_TTL_MS = 30_000`, `ROLE_CATALOG_TTL_MS = 60_000`, `ROLES_STORE_TTL_MS = 60_000`.
 - Шкала только в памяти; усечение (`size < offset`) или подмена (`ino` другой) — чтение с нуля; последняя строка без `\n` принимается, если `JSON.parse` даёт целый объект (как readline сегодня), иначе ждёт следующего вызова. `extendUsageTimeline` не мутирует прежнюю шкалу.
 - `UsageObservation` берётся из `usage-ledger.ts` (уже экспортирован), новый тип с тем же именем не вводить; `claudeCounters` и `codexCounters` экспортируются из своих модулей без циклов импортов.
-- Константы кэша ролей: `ROLE_CATALOG_TTL_MS = 60_000`, `ROLE_CATALOG_PARTIAL_TTL_MS = 10_000` (каталог с `partial: true`); в сторе окна те же два TTL.
+- Хостовый кэш каталога ролей не делаем (решение `perf/host-refresh`: кэш только чтения конфигурации Codex, файлы ролей читаются каждый раз). В сторе окна `ROLES_STORE_TTL_MS = 3_000`.
 - Цифры расхода не меняются: `sliceUsageTimeline` даёт тот же `UsageSummary`, что полный перечит с теми же окнами (тест эквивалентности на фикстурах обоих провайдеров).
 - Тексты окна по-английски в `packages/desktop/src/shared/strings.ts` (страж `english-ui.test.ts`); в хосте кириллица только в первом аргументе `log.*` (страж `english-text.test.ts`). Комментарии, тесты, документы — по-русски.
 - Тесты — только фокусные из плана, без мутационных прогонов и переборов; один процесс тестов за раз.
@@ -29,7 +29,7 @@
 1. Лог дописан не целой строкой (агент пишет запись по частям) — оборванный хвост не разбирается и не теряется: следующий вызов начинает с того же `offset`; целая последняя строка без `\n` считается сразу (задача 2, тесты «оборванная последняя строка» и «целая строка без перевода»).
 2. Лог усечён или подменён (ротация Codex, удалённая и заново созданная сессия) — шкала строится заново, суммы не удваиваются (задача 2, тест «усечение и другой ino»).
 3. У участника появился новый подагент между вызовами — он попадает в срез не позже чем через 30 с (задача 3, тест «новый файл подагента после TTL»).
-4. Каталог ролей вернулся с `partial: true` (codex не найден, таймаут 8 с: `sessionRoleCatalog` не бросает, а отдаёт диагностику) — такой ответ живёт 10 с, а не минуту, и 12 одновременных вызовов не плодят 12 спавнов; отклонённый промис не кэшируется (задача 5, тесты «partial живёт 10 с», «одновременные вызовы», «отказ не кэшируется»).
+4. Каталог ролей вернулся непроверенным (codex не найден, таймаут 8 с) — хост не держит такой ответ (`role-catalog-cache.ts` из `perf/host-refresh`), а стор окна не держит его дольше 3 с, и 12 чипов одного каталога всё равно дают один вызов (задача 6, тест «ошибка оставляет прежние роли со status error», задача 5 — ничего, покрыто `role-catalog-cache.test.ts`).
 5. Рабочий каталог сессии сменился (worktree появился после запуска) — `revision` чипа меняется, стор окна перечитывает роли для нового `cwd`, старый `cwd` не используется (задача 6, тест «смена revision и cwd»).
 
 ---
@@ -121,7 +121,7 @@ it('файла нет — пустая шкала; срез пустой шка�
 
 **Interfaces:**
 - Consumes: задача 2; `discoverSession(file, root)` (`core/src/discover.ts:137`), `descendantIndexes`, `descendantOf` (`log-index.ts:113-134`), `logKey`.
-- Produces: `createLogIndex(roots, options?: { reader?: TimelineReader; timelineCacheSize?: number; subagentTtlMs?: number; now?: () => number })`. Внутри: `timelines: Map<string, UsageTimeline>` (LRU, `USAGE_TIMELINE_CACHE_SIZE = 256`), `extending: Map<string, Promise<UsageTimeline>>` (идущее дочитывание файла — общий промис), `subagentCache: Map<string, { at: number; subagents: DiscoveredSubagent[] }>` (`SUBAGENT_DISCOVERY_TTL_MS = 30_000`). `usageIn`: сессии нет в индексе → `undefined` (как сейчас); Codex — шкалы главного файла и файлов `descendantIndexes`, `codexUsageFromTimeline` для каждой, `withDescendants(own, children.map(c => descendantOf(c, usage)))` как сейчас; Claude — подагенты из кэша обнаружения (просроченный → `discoverSession`), шкалы файлов, `claudeUsageFromTimelines`. Кэш `slices` по старому ключу (окна + подпись файлов) остаётся перед этим шагом: при неизменных файлах файлы не трогаются вовсе. Экспортировать константы.
+- Produces (поверх `perf/host-refresh`: `onChange(change?: LogChange)`, `applyChange` с `affects` и `LIVE_REINDEX_MIN_INTERVAL_MS` не трогать): `createLogIndex(roots, options?: { reader?: TimelineReader; timelineCacheSize?: number; subagentTtlMs?: number; now?: () => number })`. Внутри: `timelines: Map<string, UsageTimeline>` (LRU, `USAGE_TIMELINE_CACHE_SIZE = 256`), `extending: Map<string, Promise<UsageTimeline>>` (идущее дочитывание файла — общий промис), `subagentCache: Map<string, { at: number; subagents: DiscoveredSubagent[] }>` (`SUBAGENT_DISCOVERY_TTL_MS = 30_000`). `usageIn`: сессии нет в индексе → `undefined` (как сейчас); Codex — шкалы главного файла и файлов `descendantIndexes`, `codexUsageFromTimeline` для каждой, `withDescendants(own, children.map(c => descendantOf(c, usage)))` как сейчас; Claude — подагенты из кэша обнаружения (просроченный → `discoverSession`), шкалы файлов, `claudeUsageFromTimelines`. Кэш `slices` по старому ключу (окна + подпись файлов) остаётся перед этим шагом: при неизменных файлах файлы не трогаются вовсе. Экспортировать константы.
 
 - [ ] **Step 1: Падающие тесты** (в стиле блока ~297-352: временный корень, фикстуры логов)
 
@@ -163,42 +163,9 @@ it('Refresh спрашивает сразу и не чаще раза в 5 с', 
 
 ---
 
-### Task 5: `roles.list` — снимок работ и кэш каталога
+### Task 5: `roles.list` на хосте — ВЫПОЛНЕНО в `perf/host-refresh`, пропустить
 
-**Files:**
-- Modify: `packages/host/src/methods/roles.ts` (весь файл, 15 строк), `packages/host/src/methods/index.ts` (:216 регистрация)
-- Test: `packages/host/src/methods/roles.test.ts`
-
-**Interfaces:**
-- Consumes: `WorksService.entry(projectPath, workId)` (`works/works-service.ts:57`), `sessionRoleCatalog`, `roleSummaries` (`core/src/work/agents.ts`).
-- Produces:
-  ```ts
-  export const ROLE_CATALOG_TTL_MS = 60_000;
-  export const ROLE_CATALOG_PARTIAL_TTL_MS = 10_000;
-  export function createRolesList(deps: {
-    works: Pick<WorksService, 'entry'>;
-    catalog?: typeof sessionRoleCatalog;
-    now?: () => number;
-    ttlMs?: number;
-    partialTtlMs?: number;
-  }): Handler<'roles.list'>;
-  ```
-  Сессия — из `deps.works.entry(projectPath, ref.workId)?.map.sessions` (работы нет → `HostError('not_found', 'work is not open')`, сессии нет → прежний `not_found`); `cwd = session.worktree?.path ?? projectPath`. Кэш `Map<cwd, { at: number; value: Promise<RoleList>; partial: boolean }>`: запись живая, пока `now() - at <` (`partialTtlMs`, если `partial`, иначе `ttlMs`); `partial` выставляется по ответу (`RoleList.partial`) после разрешения промиса; отклонённый промис удаляется в `catch`. Регистрация: `'roles.list': createRolesList({ works: deps.works }) as AnyHandler`.
-
-- [ ] **Step 1: Падающие тесты** (как в файле: `catalog` подменяется; добавить fake `works` с `entry`)
-
-```ts
-it('сессия берётся из снимка работ, карта с диска не читается', ...);   // vi.spyOn на readMap из @parley/core не вызван / либо works.entry с worktree → catalog получил путь worktree
-it('12 одновременных вызовов одного cwd — один вызов каталога', ...);
-it('после TTL каталог запрашивается снова, разные cwd — разные записи', ...);  // fake now
-it('каталог с partial: true живёт 10 с, полный — 60', ...);                    // fake now; catalog отдаёт { partial: true, diagnostics: [{ source: 'codex', code: 'context-unverified' }] }
-it('отклонённый промис каталога не кэшируется: следующий вызов пробует снова', ...);
-it('работы нет в снимке — not_found', ...);
-```
-
-- [ ] **Step 2:** `pnpm --filter @parley/host exec vitest run src/methods/roles.test.ts` → FAIL.
-- [ ] **Step 3:** Реализовать и поправить регистрацию. — [ ] **Step 4:** `pnpm --filter @parley/host exec vitest run src/methods/roles.test.ts src/methods/index.test.ts src/server.test.ts` → PASS.
-- [ ] **Step 5:** Commit — `perf(host): roles.list берёт сессию из снимка работ и кэширует каталог ролей по каталогу на минуту`.
+Ветка `perf/host-refresh` (коммиты b67e2e80, 1b842222, 5c924c23) уже содержит: `createRolesList(catalog, works)` с сессией из `works.entry` и запасным `readMap`; `methods/role-catalog-cache.ts` — `createCachedCatalog` с склейкой одинаковых запросов на 1,5 с и кэшем только чтения конфигурации Codex на 30 с (непроверенный ответ и отказ не кэшируются); регистрация `'roles.list': createRolesList(roleCatalog, deps.works)` и общий каталог с `recipes.list`; тесты `roles.test.ts` и `role-catalog-cache.test.ts`. Ничего не делать; задача 6 опирается на это как на данность.
 
 ---
 
@@ -207,16 +174,15 @@ it('работы нет в снимке — not_found', ...);
 **Files:**
 - Create: `packages/desktop/src/renderer/store/roles.ts`
 - Test: `packages/desktop/src/renderer/store/roles.test.ts`
-- Modify: `packages/desktop/src/renderer/lib/role-summary.ts` (`useRoleSummary`, `RoleChipProps`), `packages/desktop/src/renderer/sidebar/SessionRow.tsx` (:308), `packages/desktop/src/renderer/chat/ChatToolbar.tsx` (:249), `packages/desktop/src/renderer/components/rooms/feed-model.ts` (`ParticipantModel` ~53-57, `roleRevision` ~292: добавить `cwd`), `packages/desktop/src/renderer/components/rooms/ParticipantStrip.tsx` (:54), `packages/desktop/src/renderer/components/rooms/PlanPanel.tsx` (:313-322: `revision` — строка сессии `pid:startedAtProcess:lifecycle:worktree.path`, как в SessionRow, вместо `String(plan.rev)`), `packages/desktop/src/renderer/components/project/ProjectPanel.tsx` (:262-264: сессию автора искать в снимке работ окна (`useWorksStore`), передавать её `cwd`; нет сессии — без `sessionRef`, ключ `projectPath`)
+- Modify: `packages/desktop/src/renderer/lib/role-summary.ts` (удалить `rolesCache`/`loadRoles`/`ROLES_TTL_MS` из `perf/host-refresh` — их работу берёт стор; `useRoleSummary`, `RoleChipProps`), `packages/desktop/src/renderer/sidebar/SessionRow.tsx` (:308), `packages/desktop/src/renderer/chat/ChatToolbar.tsx` (:249), `packages/desktop/src/renderer/components/rooms/feed-model.ts` (`ParticipantModel` ~53-57, `roleRevision` ~292: добавить `cwd`), `packages/desktop/src/renderer/components/rooms/ParticipantStrip.tsx` (:54), `packages/desktop/src/renderer/components/rooms/PlanPanel.tsx` (:313-322: `revision` — строка сессии `pid:startedAtProcess:lifecycle:worktree.path`, как в SessionRow, вместо `String(plan.rev)`), `packages/desktop/src/renderer/components/project/ProjectPanel.tsx` (:262-264: сессию автора искать в снимке работ окна (`useWorksStore`), передавать её `cwd`; нет сессии — без `sessionRef`, ключ `projectPath`)
 - Test: `packages/desktop/src/renderer/lib/role-summary.test.tsx`
 
 **Interfaces:**
-- Consumes: образец `chat/capabilities-store.ts` (TTL, `byProject`, `load`, `resetForTests`), `hostMethods` (`lib/capabilities.ts`), `WorkSession.worktree?.path`.
+- Consumes: образец `chat/capabilities-store.ts` (TTL, `byProject`, `load`, `resetForTests`), `hostMethods` (`lib/capabilities.ts`), `WorkSession.worktree?.path`; хост из `perf/host-refresh` (сессия из снимка, кэш контекста Codex).
 - Produces:
   ```ts
-  export const ROLES_STORE_TTL_MS = 60_000;
-  export const ROLES_STORE_PARTIAL_TTL_MS = 10_000;
-  export interface RolesEntry { status: 'loading' | 'reloading' | 'ready' | 'error'; roles: RoleSummary[]; partial: boolean; at: number }
+  export const ROLES_STORE_TTL_MS = 3_000;
+  export interface RolesEntry { status: 'loading' | 'reloading' | 'ready' | 'error'; roles: RoleSummary[]; at: number }
   export interface RolesState {
     byCwd: Record<string, RolesEntry>;
     /** `ref` только когда вызывающий знает worktree сессии и `cwd` равен тому, что посчитает хост; иначе без `ref`, cwd = projectPath. */
@@ -228,14 +194,13 @@ it('работы нет в снимке — not_found', ...);
   export function useRoleSummary(bridge, sessionRef, role, revision = '', cwd?: string): RoleSummary | null;
   export interface RoleChipProps { role; sessionRef?; bridge?; revision?; cwd?: string }
   ```
-  `load`: без метода у хоста — ничего; запись свежая (`now - at <` TTL, 10 с для `partial`) и не `force` — ничего; в полёте — дедуп; `force` на готовой записи → `status: 'reloading'` с прежними ролями; ошибка — `status: 'error'` с прежними ролями. `useRoleSummary`: `cwd ?? sessionRef.projectPath`; первый рендер — `load` без `force`; смена `revision` после монтирования (сравнение с прежним значением в ref) — `load(..., { force: true })`; пока `status === 'reloading'` хук отдаёт `null`, при `'loading'` без прежних ролей — `null`, при обновлении по TTL — прежние роли. Вызовы `RoleChip` в SessionRow, ChatToolbar, PlanPanel передают `cwd={session.worktree?.path ?? projectPath}` и строку `revision` сессии; `ParticipantModel` получает `cwd`, ParticipantStrip передаёт его; ProjectPanel — по описанию в Files; NewSessionOrRoomDialog без изменений.
+  `load`: без метода у хоста — ничего; запись свежая (`now - at < ROLES_STORE_TTL_MS`) и не `force` — ничего; в полёте — дедуп; `force` на готовой записи → `status: 'reloading'` с прежними ролями; ошибка — `status: 'error'` с прежними ролями. `useRoleSummary`: `cwd ?? sessionRef.projectPath`; первый рендер — `load` без `force`; смена `revision` после монтирования (сравнение с прежним значением в ref) — `load(..., { force: true })`; пока `status === 'reloading'` хук отдаёт `null`, при `'loading'` без прежних ролей — `null`, при обновлении по TTL — прежние роли. Вызовы `RoleChip` в SessionRow, ChatToolbar, PlanPanel передают `cwd={session.worktree?.path ?? projectPath}` и строку `revision` сессии; `ParticipantModel` получает `cwd`, ParticipantStrip передаёт его; ProjectPanel — по описанию в Files; NewSessionOrRoomDialog без изменений.
 
 - [ ] **Step 1: Падающие тесты**
 
 ```ts
 // roles.test.ts (стор)
-it('load по одному cwd — один вызов roles.list, повтор в пределах TTL — ноль', ...);
-it('ответ с partial: true протухает через 10 с, полный — через 60', ...);
+it('load по одному cwd — один вызов roles.list, повтор в пределах 3 с — ноль, после — новый', ...);
 it('force перечитывает со status reloading и прежними ролями; ошибка оставляет прежние роли со status error', ...);
 // role-summary.test.tsx
 it('12 чипов одного cwd дают один roles.list', ...);
@@ -243,7 +208,7 @@ it('смена revision после монтирования даёт force и nu
 it('смена revision и cwd перечитывает роли для нового cwd', ...);  // Review Focus 5
 it('обновление по TTL не прячет прежний замок', ...);
 ```
-   Существующие тесты файла: «rereads the same role after launch/cwd revision» — остаётся 2 вызова (force) и замок пропадает на время перезагрузки; «drops lock across participant scope changes» — вызовов по числу разных cwd.
+   Существующие тесты файла: «rereads the same role after launch/cwd revision» — остаётся 2 вызова (force) и замок пропадает на время перезагрузки; «drops lock across participant scope changes» — вызовов по числу разных cwd; тест склейки из `perf/host-refresh` (одна пачка → один вызов) переписать под стор по cwd.
 - [ ] **Step 2:** `pnpm --filter @parley/desktop exec vitest run src/renderer/store/roles.test.ts src/renderer/lib/role-summary.test.tsx` → FAIL.
 - [ ] **Step 3:** Реализовать стор, хук и места вызова.
 - [ ] **Step 4:** `pnpm --filter @parley/desktop exec vitest run src/renderer/store/roles.test.ts src/renderer/lib/role-summary.test.tsx src/renderer/sidebar src/renderer/components/rooms src/renderer/components/project src/renderer/chat/ChatToolbar.test.tsx src/english-ui.test.ts` → PASS.
@@ -257,7 +222,7 @@ it('обновление по TTL не прячет прежний замок', 
 - Modify: `CHANGELOG.md` (раздел `## Unreleased` над `## 0.15.0`; создать, если нет)
 
 - [ ] **Step 1:** `uptime`; при load < 10: `pnpm --filter @parley/core build && pnpm --filter @parley/protocol build && pnpm --filter @parley/host build`, затем по одному процессу: `pnpm --filter @parley/core test`, `pnpm --filter @parley/host test`, `pnpm --filter @parley/desktop test`, `pnpm typecheck`, `pnpm lint`, затем `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop exec playwright test e2e/room-usage.spec.ts` (поповер расхода с кнопкой Refresh на 800×500). Упавший файл перегнать отдельно: прошёл — флейк (known: `works-service.serial`, `wake-service` под нагрузкой), не прошёл — чинить в рамках задач 1–6.
-- [ ] **Step 2:** CHANGELOG `### Changed` (по-английски): «**Room usage and role chips no longer load the host.** The room usage chip refreshes once a minute (or on Refresh) and the host reads only what was appended to the agents' logs since the last request instead of the whole file; role chips share one request per working directory and the host keeps the role catalog for a minute. A room with seven busy agents kept the host at 60–97 % CPU; now it should stay below 20 %.»
+- [ ] **Step 2:** CHANGELOG `## Unreleased` уже содержит запись `perf/host-refresh` («Parley stays responsive with many agents running…»). Добавить рядом свою (по-английски): «**The room usage chip no longer loads the host.** It refreshes once a minute (or on Refresh), and the host reads only what was appended to the agents' logs since the last request instead of the whole file. Role chips now share one request per working directory instead of one per session. A room with seven busy agents kept the host at 60–97 % CPU; now it should stay below 20 %.»
 - [ ] **Step 3:** Commit — `docs(changelog): дешёвые rooms.usage и roles.list`.
 
 ---
