@@ -1,10 +1,12 @@
 import path from 'node:path';
 import { forEachJsonlRecord, type RawRecord } from './jsonl.js';
+import { DEFAULT_TIMELINE_READER, readJsonlTail, type TailCursor, type TimelineReader } from './jsonl-tail.js';
 import { adapterV1, type SchemaAdapter, type SessionRecord } from './adapter-v1.js';
 import { Counter, oneLine, SYNTHETIC_MODEL, type TokenTotals } from './counters.js';
 import type { DiscoveredSubagent } from './discover.js';
 import { isPointerText } from './work/delivery.js';
 import { createUsageLedger, type UsageObservation, type UsageSummary, type UsageWindow } from './work/usage-ledger.js';
+import { extendUsageTimeline, type UsageTimeline } from './work/usage-timeline.js';
 import { claudeUsageObservation, noteClaudeSidechain, replayClaudeUsage, type ClaudeSidechain } from './work/usage-observations.js';
 
 export type Provider = 'claude' | 'codex' | 'glm';
@@ -148,6 +150,208 @@ export interface IndexSessionOptions {
   usageWindows?: readonly UsageWindow[];
 }
 
+/** Подагент для итога: id агента и его наблюдения учёта (`replayClaudeUsage`). */
+interface SubagentObservations {
+  agentId: string | null;
+  observations: readonly UsageObservation[];
+}
+
+/**
+ * Состояние накопления индекса одного файла сессии Claude: пустое → `feed` по записи → `build` собирает
+ * SessionIndex. Полное чтение (`indexSessionFile`) и дочитывание хвоста (`extendClaudeSessionIndex`) идут
+ * через одно и то же, поэтому результат у них совпадает.
+ */
+export class ClaudeIndexAccumulator {
+  models = new Counter();
+  tools = new Counter();
+  roles = new Counter();
+  recordTypes = new Counter();
+  // Наблюдения копятся и проигрываются в ledger в конце (usage-observations): один ответ модели приходит
+  // несколькими записями, склейка по message.id — в учёте токенов.
+  observations: UsageObservation[] = [];
+  sidechain: ClaudeSidechain = { agents: new Set(), unidentified: false };
+
+  sessionId: string | null = null;
+  cwd: string | null = null;
+  gitBranch: string | null = null;
+  version: string | null = null;
+  startedAt: string | null = null;
+  endedAt: string | null = null;
+  lastUserRecordAt: string | null = null;
+  lastWorkRecordAt: string | null = null;
+
+  // Заголовки дописываются в файл снова и снова — побеждает последний.
+  title: string | null = null;
+  titleSource: TitleSource | null = null;
+  lastPrompt: string | null = null;
+  firstText: string | null = null;
+
+  /** Записей-объектов и битых строк среди принятых целыми строками. */
+  parsed = 0;
+  malformed = 0;
+
+  constructor(
+    readonly file: string,
+    readonly adapter: SchemaAdapter = adapterV1,
+  ) {}
+
+  /** Независимая копия: счётчики и наблюдения копируются, прежнее состояние не мутируется. */
+  clone(): ClaudeIndexAccumulator {
+    return Object.assign(new ClaudeIndexAccumulator(this.file, this.adapter), this, {
+      models: this.models.clone(),
+      tools: this.tools.clone(),
+      roles: this.roles.clone(),
+      recordTypes: this.recordTypes.clone(),
+      observations: [...this.observations],
+      sidechain: { agents: new Set(this.sidechain.agents), unidentified: this.sidechain.unidentified },
+    });
+  }
+
+  feed(raw: RawRecord, lineNo: number): void {
+    const record: SessionRecord = this.adapter.toSessionRecord(raw);
+
+    this.recordTypes.add(record.type);
+    this.models.add(record.model);
+    this.roles.add(record.role);
+    for (const tool of record.toolUses) this.tools.add(tool);
+
+    const observation = claudeUsageObservation(record, this.file, lineNo);
+    if (observation !== null) {
+      this.observations.push(observation);
+      noteClaudeSidechain(this.sidechain, record);
+    }
+
+    this.sessionId ??= record.sessionId;
+    this.cwd ??= record.cwd;
+    this.gitBranch ??= record.gitBranch;
+    this.version ??= record.version;
+
+    if (record.title !== null && (record.type === 'custom-title' || record.type === 'ai-title')) {
+      this.title = record.title;
+      this.titleSource = record.type === 'custom-title' ? 'custom' : 'ai';
+    }
+    // Последний запрос-команда (`/model`, `!ls`) или служебный текст не заменяет прежний настоящий.
+    if (
+      record.lastPrompt !== null &&
+      !isServiceText(record.lastPrompt) &&
+      !isCommandPrompt(record.lastPrompt)
+    ) {
+      this.lastPrompt = record.lastPrompt;
+    }
+    // Служебные реплики (`isMeta`, обёртки слеш-команд) — не первая реплика человека: сессия, начатая
+    // с `/model`, иначе называлась бы `<local-command-caveat>…`.
+    if (
+      this.firstText === null &&
+      record.role === 'user' &&
+      record.text !== null &&
+      !record.isMeta &&
+      !isServiceText(record.text)
+    ) {
+      this.firstText = record.text;
+    }
+
+    // Записи заголовков и служебные идут без timestamp — по ним время не считаем.
+    const at = record.timestamp;
+    if (at !== null) {
+      if (this.startedAt === null || at < this.startedAt) this.startedAt = at;
+      if (this.endedAt === null || at > this.endedAt) this.endedAt = at;
+      if (record.role === 'user' && (this.lastUserRecordAt === null || at > this.lastUserRecordAt)) {
+        this.lastUserRecordAt = at;
+      }
+      if (record.role !== null && (this.lastWorkRecordAt === null || at > this.lastWorkRecordAt)) {
+        this.lastWorkRecordAt = at;
+      }
+    }
+  }
+
+  /**
+   * Собирает SessionIndex. `pendingMalformed` — оборванная последняя строка: полное чтение считает её битой,
+   * хотя в состояние она ещё не вошла.
+   */
+  build(
+    root: string,
+    {
+      subagents = [],
+      subsessionCount = subagents.length,
+      usageWindows,
+      pendingMalformed = false,
+    }: {
+      subagents?: readonly SubagentObservations[];
+      subsessionCount?: number;
+      usageWindows?: readonly UsageWindow[];
+      pendingMalformed?: boolean;
+    } = {},
+  ): SessionIndex {
+    const { file, observations, sidechain, startedAt, endedAt, firstText } = this;
+    const durationMs =
+      startedAt !== null && endedAt !== null
+        ? Math.max(0, Date.parse(endedAt) - Date.parse(startedAt))
+        : null;
+
+    // Заголовка нет — показываем реплику: сначала последнюю, потом первую.
+    let title = this.title;
+    let titleSource = this.titleSource;
+    if (title === null && this.lastPrompt !== null) {
+      title = oneLine(this.lastPrompt);
+      titleSource = 'last-prompt';
+    }
+    if (title === null && firstText !== null) {
+      title = oneLine(firstText);
+      titleSource = 'first-text';
+    }
+
+    // `tokens` и `usage` собственного лога снимаются до подагентов: прежние потребители ждут его одного.
+    const usageOptions = usageWindows === undefined ? {} : { windows: usageWindows };
+    const ownLedger = createUsageLedger(usageOptions);
+    replayClaudeUsage(ownLedger, { observations, sidechain }, []);
+    const own = ownLedger.summary();
+    let usage = own;
+    if (subagents.length > 0) {
+      const ledger = createUsageLedger(usageOptions);
+      replayClaudeUsage(ledger, { observations, sidechain }, subagents);
+      usage = ledger.summary();
+    }
+    // `tokens` — для показа (лента, строка метрик): неизвестное поле показывается нулём, а в `usage` остаётся null.
+    const tokens: TokenTotals | null = observations.length > 0
+      ? {
+          input: own.input ?? 0,
+          output: own.output ?? 0,
+          cacheRead: own.cacheRead ?? 0,
+          cacheWrite: own.cacheWrite ?? 0,
+        }
+      : null;
+
+    return {
+      id: this.sessionId ?? path.basename(file, '.jsonl'),
+      project: projectSlug(file, root),
+      projectPath: this.cwd,
+      cwd: this.cwd,
+      gitBranch: this.gitBranch,
+      version: this.version,
+      file,
+      title,
+      titleSource,
+      startedAt,
+      endedAt,
+      lastUserRecordAt: this.lastUserRecordAt,
+      lastWorkRecordAt: this.lastWorkRecordAt,
+      durationMs,
+      records: this.parsed,
+      malformedLines: this.malformed + (pendingMalformed ? 1 : 0),
+      models: this.models.toObject(),
+      tools: this.tools.toObject(),
+      roles: this.roles.toObject(),
+      recordTypes: this.recordTypes.toObject(),
+      primaryModel: this.models.top(new Set([SYNTHETIC_MODEL])),
+      subsessionCount,
+      tokens,
+      usage,
+      provider: 'claude',
+      ...(firstText !== null && isPointerText(firstText) ? { firstPromptPointer: true as const } : {}),
+    };
+  }
+}
+
 /**
  * Индексирует ОДИН файл сессии: мета, заголовок, длительность, счётчики моделей,
  * инструментов, ролей и типов записей. Подсессии добавляются отдельно — они лежат
@@ -158,109 +362,12 @@ export async function indexSessionFile(
   root: string,
   { adapter = adapterV1, subagents = [], subsessionCount = subagents.length, signal, usageWindows }: IndexSessionOptions = {},
 ): Promise<SessionIndex> {
-  const models = new Counter();
-  const tools = new Counter();
-  const roles = new Counter();
-  const recordTypes = new Counter();
-  // Наблюдения копятся и проигрываются в ledger в конце (usage-observations): один ответ модели приходит
-  // несколькими записями, склейка по message.id — в учёте токенов.
-  const observations: UsageObservation[] = [];
-  const sidechain: ClaudeSidechain = { agents: new Set(), unidentified: false };
+  const acc = new ClaudeIndexAccumulator(file, adapter);
+  const stats = await forEachJsonlRecord(file, (raw, lineNo) => acc.feed(raw, lineNo), signal);
+  acc.parsed = stats.parsed;
+  acc.malformed = stats.malformed;
 
-  let sessionId: string | null = null;
-  let cwd: string | null = null;
-  let gitBranch: string | null = null;
-  let version: string | null = null;
-  let startedAt: string | null = null;
-  let endedAt: string | null = null;
-  let lastUserRecordAt: string | null = null;
-  let lastWorkRecordAt: string | null = null;
-
-  // Заголовки дописываются в файл снова и снова — побеждает последний.
-  let title: string | null = null;
-  let titleSource: TitleSource | null = null;
-  let lastPrompt: string | null = null;
-  let firstText: string | null = null;
-
-  const onRecord = (raw: RawRecord, lineNo: number): void => {
-    const record: SessionRecord = adapter.toSessionRecord(raw);
-
-    recordTypes.add(record.type);
-    models.add(record.model);
-    roles.add(record.role);
-    for (const tool of record.toolUses) tools.add(tool);
-
-    const observation = claudeUsageObservation(record, file, lineNo);
-    if (observation !== null) {
-      observations.push(observation);
-      noteClaudeSidechain(sidechain, record);
-    }
-
-    sessionId ??= record.sessionId;
-    cwd ??= record.cwd;
-    gitBranch ??= record.gitBranch;
-    version ??= record.version;
-
-    if (record.title !== null && (record.type === 'custom-title' || record.type === 'ai-title')) {
-      title = record.title;
-      titleSource = record.type === 'custom-title' ? 'custom' : 'ai';
-    }
-    // Последний запрос-команда (`/model`, `!ls`) или служебный текст не заменяет прежний настоящий.
-    if (
-      record.lastPrompt !== null &&
-      !isServiceText(record.lastPrompt) &&
-      !isCommandPrompt(record.lastPrompt)
-    ) {
-      lastPrompt = record.lastPrompt;
-    }
-    // Служебные реплики (`isMeta`, обёртки слеш-команд) — не первая реплика человека: сессия, начатая
-    // с `/model`, иначе называлась бы `<local-command-caveat>…`.
-    if (
-      firstText === null &&
-      record.role === 'user' &&
-      record.text !== null &&
-      !record.isMeta &&
-      !isServiceText(record.text)
-    ) {
-      firstText = record.text;
-    }
-
-    // Записи заголовков и служебные идут без timestamp — по ним время не считаем.
-    const at = record.timestamp;
-    if (at !== null) {
-      if (startedAt === null || at < startedAt) startedAt = at;
-      if (endedAt === null || at > endedAt) endedAt = at;
-      if (record.role === 'user' && (lastUserRecordAt === null || at > lastUserRecordAt)) {
-        lastUserRecordAt = at;
-      }
-      if (record.role !== null && (lastWorkRecordAt === null || at > lastWorkRecordAt)) {
-        lastWorkRecordAt = at;
-      }
-    }
-  };
-  const stats = await forEachJsonlRecord(file, onRecord, signal);
-
-  const durationMs =
-    startedAt !== null && endedAt !== null
-      ? Math.max(0, Date.parse(endedAt) - Date.parse(startedAt))
-      : null;
-
-  // Заголовка нет — показываем реплику: сначала последнюю, потом первую.
-  if (title === null && lastPrompt !== null) {
-    title = oneLine(lastPrompt);
-    titleSource = 'last-prompt';
-  }
-  if (title === null && firstText !== null) {
-    title = oneLine(firstText);
-    titleSource = 'first-text';
-  }
-
-  // `tokens` и `usage` собственного лога снимаются до подагентов: прежние потребители ждут его одного.
-  const usageOptions = usageWindows === undefined ? {} : { windows: usageWindows };
-  const ownLedger = createUsageLedger(usageOptions);
-  replayClaudeUsage(ownLedger, { observations, sidechain }, []);
-  const own = ownLedger.summary();
-  const subagentObservations: Array<{ agentId: string; observations: UsageObservation[] }> = [];
+  const subagentObservations: SubagentObservations[] = [];
   for (const subagent of subagents) {
     const list: UsageObservation[] = [];
     await forEachJsonlRecord(subagent.file, (raw, lineNo) => {
@@ -269,48 +376,73 @@ export async function indexSessionFile(
     }, signal);
     subagentObservations.push({ agentId: subagent.agentId, observations: list });
   }
-  let usage = own;
-  if (subagentObservations.length > 0) {
-    const ledger = createUsageLedger(usageOptions);
-    replayClaudeUsage(ledger, { observations, sidechain }, subagentObservations);
-    usage = ledger.summary();
-  }
-  // `tokens` — для показа (лента, строка метрик): неизвестное поле показывается нулём, а в `usage` остаётся null.
-  const tokens: TokenTotals | null = observations.length > 0
-    ? {
-        input: own.input ?? 0,
-        output: own.output ?? 0,
-        cacheRead: own.cacheRead ?? 0,
-        cacheWrite: own.cacheWrite ?? 0,
-      }
-    : null;
+  return acc.build(root, { subagents: subagentObservations, subsessionCount, ...(usageWindows === undefined ? {} : { usageWindows }) });
+}
 
-  return {
-    id: sessionId ?? path.basename(file, '.jsonl'),
-    project: projectSlug(file, root),
-    projectPath: cwd,
-    cwd,
-    gitBranch,
-    version,
-    file,
-    title,
-    titleSource,
-    startedAt,
-    endedAt,
-    lastUserRecordAt,
-    lastWorkRecordAt,
-    durationMs,
-    records: stats.parsed,
-    malformedLines: stats.malformed,
-    models: models.toObject(),
-    tools: tools.toObject(),
-    roles: roles.toObject(),
-    recordTypes: recordTypes.toObject(),
-    primaryModel: models.top(new Set([SYNTHETIC_MODEL])),
+/** Состояние дочитывания сессии Claude: накопленное, место в главном файле и шкалы подагентов по пути файла. */
+export interface ClaudeIndexState {
+  acc: ClaudeIndexAccumulator;
+  cursor: TailCursor;
+  subagents: ReadonlyMap<string, UsageTimeline>;
+}
+
+export interface ExtendClaudeOptions {
+  adapter?: SchemaAdapter;
+  /** Как у `IndexSessionOptions`: подагенты входят в `usage` и `subsessionCount`. Пропавший из списка выпадает. */
+  subagents?: DiscoveredSubagent[];
+  subsessionCount?: number;
+  reader?: TimelineReader;
+}
+
+/** Ошибка «файла нет» в форме, которую ждут вызывающие полного чтения. */
+export function missingFileError(file: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`ENOENT: no such file or directory, open '${file}'`), { code: 'ENOENT' });
+}
+
+/**
+ * То же, что `indexSessionFile`, но дочитывает только дописанное с места `previous` (ноль байт — файл не
+ * открывается). Возвращает НОВОЕ состояние (прежнее не меняется) и SessionIndex, равный полному чтению
+ * текущего содержимого, включая момент, когда последняя строка оборвана. Подагенты — хвостом через
+ * `extendUsageTimeline`. Файла нет — ошибка ENOENT, как у полного чтения.
+ */
+export async function extendClaudeSessionIndex(
+  previous: ClaudeIndexState | null,
+  file: string,
+  root: string,
+  { adapter = adapterV1, subagents = [], subsessionCount = subagents.length, reader = DEFAULT_TIMELINE_READER }: ExtendClaudeOptions = {},
+): Promise<{ state: ClaudeIndexState; index: SessionIndex }> {
+  let draft: ClaudeIndexAccumulator | null = null;
+  const result = await readJsonlTail(previous?.cursor ?? null, file, reader, {
+    reset: () => {
+      draft = new ClaudeIndexAccumulator(file, adapter);
+    },
+    record: (raw, lineNo) => {
+      draft ??= (previous as ClaudeIndexState).acc.clone();
+      draft.feed(raw, lineNo);
+    },
+  });
+  if (result.missing) throw missingFileError(file);
+
+  const changed = draft as ClaudeIndexAccumulator | null;
+  // Счётчики строк вошли в состояние только если оно менялось; иначе новых целых строк не было.
+  const acc = changed ?? (previous as ClaudeIndexState).acc;
+  if (changed !== null) {
+    changed.parsed += result.parsed;
+    changed.malformed += result.malformed;
+  }
+
+  const timelines = new Map<string, UsageTimeline>();
+  const subagentObservations: SubagentObservations[] = [];
+  for (const subagent of subagents) {
+    const timeline = await extendUsageTimeline(previous?.subagents.get(subagent.file) ?? null, subagent.file, 'claude', reader, adapter);
+    timelines.set(subagent.file, timeline);
+    subagentObservations.push({ agentId: subagent.agentId, observations: timeline.observations });
+  }
+
+  const index = acc.build(root, {
+    subagents: subagentObservations,
     subsessionCount,
-    tokens,
-    usage,
-    provider: 'claude',
-    ...(firstText !== null && isPointerText(firstText) ? { firstPromptPointer: true as const } : {}),
-  };
+    pendingMalformed: result.cursor.pendingMalformed,
+  });
+  return { state: { acc, cursor: result.cursor, subagents: timelines }, index };
 }

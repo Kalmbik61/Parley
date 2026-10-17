@@ -63,12 +63,13 @@ export async function extendUsageTimeline(
 ): Promise<UsageTimeline> {
   const prior = previous !== null && previous.family === family ? previous : null;
   // Черновик заводится только когда есть что менять; прежняя шкала не мутируется никогда.
-  let draft: { observations: UsageObservation[]; sidechain: ClaudeSidechain | undefined } | null = null;
-  const fresh = (): NonNullable<typeof draft> => ({
+  type Draft = { observations: UsageObservation[]; sidechain: ClaudeSidechain | undefined };
+  let draft: Draft | null = null;
+  const fresh = (): Draft => ({
     observations: [],
     sidechain: family === 'claude' ? { agents: new Set<string | null>(), unidentified: false } : undefined,
   });
-  const copyOfPrior = (): NonNullable<typeof draft> => ({
+  const copyOfPrior = (): Draft => ({
     observations: [...(prior?.observations ?? [])],
     sidechain:
       family === 'claude'
@@ -109,7 +110,7 @@ export async function extendUsageTimeline(
   });
   if (result.missing) return emptyTimeline(file, family);
 
-  const kept = draft as typeof draft;
+  const kept = draft as Draft | null;
   const observations = kept?.observations ?? prior?.observations ?? [];
   const sidechain = kept === null ? prior?.sidechain : kept.sidechain;
   const { cursor: next } = result;
