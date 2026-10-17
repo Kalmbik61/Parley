@@ -16,7 +16,8 @@ export interface SessionIndexerOptions {
 export interface SessionIndexer {
   /**
    * SessionIndex файла Claude: первый вызов читает файл целиком, следующие — только дописанное. `adapter` и
-   * `subagents` берутся из вызова, который запустил чтение (одновременные вызовы по одному файлу делят его).
+   * `subagents` берутся из вызова, который запустил чтение (вызовы, пришедшие во время чтения, делят дочитывание
+   * после него).
    */
   claude(
     file: string,
@@ -29,8 +30,10 @@ export interface SessionIndexer {
 
 /**
  * Кэш состояний индексации по файлам: живой лог перечитывается хвостом, а не целиком. Одно дочитывание файла
- * в полёте — одновременные вызовы получают общий промис. Упавшее чтение не остаётся «в полёте» и сохранённого
- * состояния не трогает; «файла нет» его забывает.
+ * в полёте. Вызов, пришедший во время чтения, ждёт его и дочитывает ещё раз (одно дочитывание на всех таких):
+ * идущее чтение могло начаться до записи, о которой сообщил вызов, а следующей записи может и не случиться.
+ * Без новых байт повтор — только `stat`. Упавшее чтение не остаётся «в полёте» и сохранённого состояния не
+ * трогает; «файла нет» его забывает.
  */
 export function createSessionIndexer({
   maxFiles = SESSION_INDEXER_MAX_FILES,
@@ -38,13 +41,28 @@ export function createSessionIndexer({
 }: SessionIndexerOptions = {}): SessionIndexer {
   const states = new Map<string, unknown>();
   const running = new Map<string, Promise<SessionIndex>>();
+  const queued = new Map<string, Promise<SessionIndex>>();
 
   const extend = <State>(
     key: string,
     step: (previous: State | null) => Promise<{ state: State; index: SessionIndex }>,
   ): Promise<SessionIndex> => {
     const inFlight = running.get(key);
-    if (inFlight !== undefined) return inFlight;
+    if (inFlight !== undefined) {
+      let next = queued.get(key);
+      if (next === undefined) {
+        const settled = inFlight.then(
+          () => undefined,
+          () => undefined,
+        );
+        next = settled.then(() => {
+          queued.delete(key);
+          return extend(key, step);
+        });
+        queued.set(key, next);
+      }
+      return next;
+    }
     const run = (async (): Promise<SessionIndex> => {
       try {
         const { state, index } = await step((states.get(key) as State | undefined) ?? null);

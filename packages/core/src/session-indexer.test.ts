@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -371,10 +372,52 @@ describe('createSessionIndexer', () => {
     await writeFile(file, codexLines().join('\n') + '\n');
     const counting = countingReader();
     const indexer = createSessionIndexer({ reader: counting.reader });
-    const [a, b] = await Promise.all([indexer.codex(file), indexer.codex(file)]);
+    const [a, b, c] = await Promise.all([indexer.codex(file), indexer.codex(file), indexer.codex(file)]);
+    // Второй и третий ждут первое чтение и дочитывают одним повтором; новых байт нет — файл не открывается.
     expect(counting.opens).toHaveLength(1);
-    expect(a).toBe(b);
+    expect(b).toBe(c);
+    expect(b).toEqual(a);
     expect(a).toEqual(await indexCodexSession(file));
+  });
+
+  it('вызов во время чтения получает и то, что дописано, пока чтение шло', async () => {
+    const file = path.join(root, 'rollout.jsonl');
+    const lines = codexLines();
+    await writeFile(file, lines.slice(0, 8).join('\n') + '\n');
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let markOpened!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      markOpened = resolve;
+    });
+    let first = true;
+    const reader: TimelineReader = {
+      stat: (target) => DEFAULT_TIMELINE_READER.stat(target),
+      open: (target, start) => {
+        if (!first) return DEFAULT_TIMELINE_READER.open(target, start);
+        first = false;
+        // Первое чтение видит файл, каким он был при открытии, а отдаёт его только после `release`.
+        const content = readFileSync(target).subarray(start);
+        markOpened();
+        return Readable.from(
+          (async function* () {
+            await gate;
+            yield content;
+          })(),
+        );
+      },
+    };
+    const indexer = createSessionIndexer({ reader });
+    const before = indexer.codex(file);
+    await opened;
+    await appendFile(file, lines.slice(8).join('\n') + '\n');
+    const after = indexer.codex(file);
+    release();
+    const full = await indexCodexSession(file);
+    expect((await before).records).toBeLessThan(full.records);
+    expect(await after).toEqual(full);
   });
 
   it('следующий вызов дочитывает хвост, Claude и Codex', async () => {
