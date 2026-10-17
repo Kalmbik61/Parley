@@ -135,6 +135,8 @@ export interface ParleyBridge {
     openAssistant(): void;
     /** Глобальный хоткей помощника: какое сочетание держим и удалось ли его занять (настройки показывают отказ). */
     assistantShortcut(): Promise<AssistantShortcutStatus>;
+    /** Поле записи сочетания в настройках: `true` — снять глобальный хоткей на время записи, `false` — вернуть. */
+    assistantShortcutSuspend(on: boolean): void;
     /**
      * Заметки к диффу сессии (кусок 8.4a, спека 11.4), `main/notes-store.ts`. Битый файл — пустые
      * заметки, а corruptedTo — имя, под которым его сохранили рядом: путь `notes/` лежит вне корней

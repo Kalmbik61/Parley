@@ -13,27 +13,46 @@ export interface ShortcutRegistry {
 export function createAssistantShortcut(deps: { registry: ShortcutRegistry; onTrigger(): void; log(line: string): void }): {
   sync(enabled: boolean, accelerator: string): AssistantShortcutStatus;
   status(): AssistantShortcutStatus;
+  suspend(on: boolean): void;
 } {
   let current: string | null = null;
   let ok = true;
+  let suspended = false;
+
+  function tryRegister(accelerator: string): boolean {
+    let registered = false;
+    try {
+      registered = deps.registry.register(accelerator, deps.onTrigger);
+    } catch (error) {
+      deps.log(`assistant: bad shortcut ${accelerator}: ${(error as Error).message}`);
+    }
+    if (!registered) deps.log(`assistant: shortcut ${accelerator} is not available`);
+    return registered;
+  }
+
   return {
     sync(enabled, accelerator) {
       const wanted = enabled ? accelerator : null;
       if (wanted === current && (wanted === null || ok)) return { accelerator: current, ok };
-      if (current !== null && ok) deps.registry.unregister(current);
+      if (current !== null && ok && !suspended) deps.registry.unregister(current);
       current = wanted;
       ok = true;
-      if (wanted !== null) {
-        try {
-          ok = deps.registry.register(wanted, deps.onTrigger);
-        } catch (error) {
-          ok = false;
-          deps.log(`assistant: bad shortcut ${wanted}: ${(error as Error).message}`);
-        }
-        if (!ok) deps.log(`assistant: shortcut ${wanted} is not available`);
-      }
+      if (wanted !== null && !suspended) ok = tryRegister(wanted);
       return { accelerator: current, ok };
     },
     status: () => ({ accelerator: current, ok }),
+    /**
+     * На время записи сочетания в Settings снимаем текущее глобальное: пока оно зарегистрировано, система отдаёт
+     * нажатие хоткею, и поле записи не получает собственное сочетание. `sync` в паузе только запоминает новое.
+     */
+    suspend(on) {
+      if (on === suspended) return;
+      suspended = on;
+      if (on) {
+        if (current !== null && ok) deps.registry.unregister(current);
+      } else if (current !== null) {
+        ok = tryRegister(current);
+      }
+    },
   };
 }

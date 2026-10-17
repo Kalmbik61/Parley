@@ -43,4 +43,48 @@ describe('глобальный хоткей помощника', () => {
     (fake.register.mock.calls[0]?.[1] as () => void)();
     expect(onTrigger).toHaveBeenCalledTimes(1);
   });
+  it('пауза снимает текущее сочетание, возобновление регистрирует его снова', () => {
+    const fake = registry();
+    const shortcut = createAssistantShortcut({ registry: fake, onTrigger: vi.fn(), log: vi.fn() });
+    shortcut.sync(true, 'Alt+Space');
+    shortcut.suspend(true);
+    expect(fake.unregister).toHaveBeenCalledTimes(1);
+    expect(fake.unregister).toHaveBeenCalledWith('Alt+Space');
+    shortcut.suspend(false);
+    expect(fake.register).toHaveBeenCalledTimes(2);
+    expect(fake.register).toHaveBeenLastCalledWith('Alt+Space', expect.any(Function));
+    expect(shortcut.status()).toEqual({ accelerator: 'Alt+Space', ok: true });
+  });
+  it('sync во время паузы не трогает реестр; после паузы берётся новое сочетание, старое не снимается повторно', () => {
+    const fake = registry();
+    const shortcut = createAssistantShortcut({ registry: fake, onTrigger: vi.fn(), log: vi.fn() });
+    shortcut.sync(true, 'Alt+Space');
+    shortcut.suspend(true);
+    expect(shortcut.sync(true, 'Control+Alt+J')).toEqual({ accelerator: 'Control+Alt+J', ok: true });
+    expect(fake.register).toHaveBeenCalledTimes(1);
+    expect(fake.unregister).toHaveBeenCalledTimes(1);
+    shortcut.suspend(false);
+    expect(fake.register).toHaveBeenCalledTimes(2);
+    expect(fake.register).toHaveBeenLastCalledWith('Control+Alt+J', expect.any(Function));
+    expect(fake.unregister).toHaveBeenCalledTimes(1);
+  });
+  it('пауза при выключенном помощнике реестр не трогает', () => {
+    const fake = registry();
+    const shortcut = createAssistantShortcut({ registry: fake, onTrigger: vi.fn(), log: vi.fn() });
+    shortcut.suspend(true);
+    shortcut.suspend(false);
+    expect(fake.register).not.toHaveBeenCalled();
+    expect(fake.unregister).not.toHaveBeenCalled();
+  });
+  it('повторная пауза не снимает дважды, повторное возобновление не регистрирует дважды', () => {
+    const fake = registry();
+    const shortcut = createAssistantShortcut({ registry: fake, onTrigger: vi.fn(), log: vi.fn() });
+    shortcut.sync(true, 'Alt+Space');
+    shortcut.suspend(true);
+    shortcut.suspend(true);
+    expect(fake.unregister).toHaveBeenCalledTimes(1);
+    shortcut.suspend(false);
+    shortcut.suspend(false);
+    expect(fake.register).toHaveBeenCalledTimes(2);
+  });
 });

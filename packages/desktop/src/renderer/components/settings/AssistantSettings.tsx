@@ -118,7 +118,12 @@ export function AssistantSettings(): JSX.Element {
 
       <label className="flex flex-col gap-1">
         <span>{text.shortcut}</span>
-        <ShortcutField value={assistant.hotkey} label={text.shortcut} onChange={(hotkey) => patch({ hotkey })} />
+        <ShortcutField
+          value={assistant.hotkey}
+          label={text.shortcut}
+          onChange={(hotkey) => patch({ hotkey })}
+          onRecording={(on) => bridge.app.assistantShortcutSuspend(on)}
+        />
       </label>
       <p className="text-xs text-muted-foreground">{text.shortcutHint}</p>
       {shortcut?.ok === false ? <p className="text-xs text-destructive">{text.shortcutTaken}</p> : null}

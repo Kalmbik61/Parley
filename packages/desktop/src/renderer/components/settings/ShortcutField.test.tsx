@@ -59,4 +59,53 @@ describe('ShortcutField', () => {
     expect(onChange).not.toHaveBeenCalled();
     expect(field.textContent).toBe('⌥Space');
   });
+
+  describe('onRecording', () => {
+    function recorder() {
+      const onRecording = vi.fn();
+      const view = render(<ShortcutField value="Alt+Space" label="Shortcut" onChange={() => undefined} onRecording={onRecording} />);
+      return { onRecording, field: screen.getByTestId('shortcut-field'), unmount: view.unmount };
+    }
+
+    it('focus и следом click дают один true', () => {
+      const { onRecording, field } = recorder();
+      fireEvent.focus(field);
+      fireEvent.click(field);
+      expect(onRecording.mock.calls).toEqual([[true]]);
+    });
+
+    it('принятое сочетание — false', () => {
+      const { onRecording, field } = recorder();
+      fireEvent.click(field);
+      fireEvent.keyDown(field, { code: 'KeyJ', altKey: true });
+      expect(onRecording.mock.calls).toEqual([[true], [false]]);
+    });
+
+    it('Escape — false', () => {
+      const { onRecording, field } = recorder();
+      fireEvent.click(field);
+      fireEvent.keyDown(field, { code: 'Escape' });
+      expect(onRecording.mock.calls).toEqual([[true], [false]]);
+    });
+
+    it('потеря фокуса — false', () => {
+      const { onRecording, field } = recorder();
+      fireEvent.click(field);
+      fireEvent.blur(field);
+      expect(onRecording.mock.calls).toEqual([[true], [false]]);
+    });
+
+    it('размонтирование посреди записи — false', () => {
+      const { onRecording, field, unmount } = recorder();
+      fireEvent.click(field);
+      unmount();
+      expect(onRecording.mock.calls).toEqual([[true], [false]]);
+    });
+
+    it('размонтирование без записи колбэк не зовёт', () => {
+      const { onRecording, unmount } = recorder();
+      unmount();
+      expect(onRecording).not.toHaveBeenCalled();
+    });
+  });
 });

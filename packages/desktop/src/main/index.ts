@@ -709,6 +709,7 @@ if (!gotLock) {
       isIslandSender: (sender) => island.isIsland(sender),
       openAssistant: () => openAssistant({ listen: false }),
       assistantShortcut: () => assistantShortcut.status(),
+      suspendAssistantShortcut: (on) => assistantShortcut.suspend(on),
       // «Страница острова загружена», а не просто «окно есть»: пока она грузится или не загрузилась, системные уведомления не глушатся.
       islandActive: () => {
         const window = island.current();

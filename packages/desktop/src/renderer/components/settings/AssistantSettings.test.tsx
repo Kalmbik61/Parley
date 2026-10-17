@@ -100,6 +100,15 @@ describe('AssistantSettings (спека 2026-10-14, 6.1)', () => {
     expect(screen.getByTestId('shortcut-field').textContent).toBe('⌥J');
   });
 
+  it('запись сочетания снимает глобальный хоткей и возвращает его: мост получает true, затем false', () => {
+    render(<AssistantSettings />);
+    const field = screen.getByTestId('shortcut-field');
+    fireEvent.click(field);
+    expect(bridge.assistantShortcutSuspended).toEqual([true]);
+    fireEvent.keyDown(field, { code: 'KeyJ', altKey: true });
+    expect(bridge.assistantShortcutSuspended).toEqual([true, false]);
+  });
+
   it('у GLM видна подсказка про 13 секунд', () => {
     useUiStore.setState({ ui: { ...DEFAULT_UI, assistant: { ...DEFAULT_UI.assistant, provider: 'glm' } } });
     render(<AssistantSettings />);
