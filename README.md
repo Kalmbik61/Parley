@@ -20,7 +20,10 @@ Capabilities panel and a skill navigator (on by default); see "The project layer
 
 
 
-https://github.com/user-attachments/assets/ba828466-0c53-4565-aedf-e1e3f8f3f988
+
+
+https://github.com/user-attachments/assets/613b9de7-a369-47eb-8422-c69e52dd26bb
+
 
 
 
