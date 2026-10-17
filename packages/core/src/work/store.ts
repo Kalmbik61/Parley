@@ -61,7 +61,7 @@ function refuseRealHomeUnderTest(resolved: string): void {
     const relative = path.relative(real, target);
     if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)))
       throw new Error(
-        `Тест резолвит настоящий дом Parley (${target}): песочница test/sandbox-home.ts не применена — vitest запущен мимо конфига пакета?`,
+        `A test resolved the real Parley home (${target}): the sandbox test/sandbox-home.ts is not applied — was vitest run outside the package config?`,
       );
   }
 }
