@@ -966,11 +966,11 @@ export const S = {
       fanout: 'Message deliveries per hour, workspace',
       range: (min: number, max: number): string => `${min}…${max}`,
     },
-    notifyNeedsYou: 'needs you',
-    notifyFinished: 'finished',
-    notifyMail: 'mail and mentions to you',
-    notifySound: 'sound',
-    notifyIsland: 'island with requests at the top of the screen',
+    notifyNeedsYou: 'Needs you',
+    notifyFinished: 'Finished',
+    notifyMail: 'Mail and mentions to you',
+    notifySound: 'Sound',
+    notifyIsland: 'Island with requests at the top of the screen',
     /** Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */
     notificationsHint: 'Not getting notifications? System Settings → Notifications → Parley',
     /**

@@ -76,6 +76,7 @@ Chats and rooms get a browser of their own next to the view, and an agent can sh
 - **Sessions started by another session hang off their parent in the sidebar.** A thin line runs from the parent's
   status dot down to each session it started, like a tree, and the indent grows from 12 to 20 px per level. A
   child whose parent row is hidden under "N more closed" has no line.
+- **Notification toggles start with a capital letter.** Settings → Notifications now reads "Needs you", "Finished", "Mail and mentions to you", "Sound", "Island with requests at the top of the screen".
 
 ### Fixed
 

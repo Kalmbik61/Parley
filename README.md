@@ -574,7 +574,7 @@ folders in Parley's letters are shown as code (the letter text itself is unchang
   more than 1 s while the window is focused;
 - macOS notifications: a session waits for you or has finished its turn, a message to you
   arrived (an agent's `@human` in a room too: "S02 mentioned you in {room}", one per room, under
-  the same "mail and mentions to you" setting), a session failed to start, failed to resume or waits for
+  the same "Mail and mentions to you" setting), a session failed to start, failed to resume or waits for
   folder trust. When you are
   already looking at that tab, there is no notification; after a window or host restart there
   is no burst of notifications about earlier states. A click opens the window (also when the
@@ -963,7 +963,7 @@ swipe up: press on the island and pull up. Drag the island by any part of it exc
 along the top edge: it snaps to the left, the center or the right, and the place is remembered per
 monitor. Only the island itself catches the mouse; clicks next to it go to the windows below.
 
-The island is on by default; turn it off in Settings → Notifications ("island with requests at
+The island is on by default; turn it off in Settings → Notifications ("Island with requests at
 the top of the screen"). Codex sessions are not on the island yet: their requests come as system
 notifications, as before. While the island is on, a request that has a card is not repeated as a
 macOS notification.
@@ -1007,7 +1007,7 @@ The window has Settings (⌘,), with seven tabs:
   (0…60)", "Auto-launch pending sessions", "Install agent skills into projects", "Skill
   navigator", "Worktree root", and the "Work limits" block (see "Limits of a workspace and a
   room").
-- **Notifications** — "needs you" / "finished" / "mail and mentions to you" / "sound" / "island with
+- **Notifications** — "Needs you" / "Finished" / "Mail and mentions to you" / "Sound" / "Island with
   requests at the top of the screen" (see "Island"); if notifications do
   not arrive, a hint points to System Settings → Notifications → Parley. Below them is "Check
   for updates" ("Updates" under "Install"); like the rest of this tab, it is kept in `ui.json`.
