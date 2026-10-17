@@ -26,6 +26,7 @@
  */
 
 import type { Message, MessageKind, SessionLifecycle, WorkEntry, WorkMap, RoomMode, RoomPlan } from '@parley/core';
+import { dotState, liveStatus, stateWord, type DotState } from '@parley/core/session-state';
 import { refKey, type LiveTask, type MailWait } from '@parley/protocol';
 import { S, providerName } from '../../../shared/strings.js';
 import {
@@ -34,7 +35,6 @@ import {
   sessionAttention,
   type Attention,
 } from '../../attention/derive.js';
-import { displayStatus, dotState, stateWord, type DotState } from '../../lib/dot-state.js';
 import { DECISIONS_SHOWN, recipientsOf } from '../../lib/mail-view.js';
 import { sessionLabelText, sessionRowLabel, sessionTag, workTitleText } from '../../lib/participant.js';
 import { modelName } from '../../lib/participant-tag.js';
@@ -116,6 +116,8 @@ export interface MessageModel {
   sender: { kind: SenderKind; provider: string | null };
   /** Подпись отправителя: `You`, `System`, `S02 бэкенд`. */
   from: string;
+  /** Письмо человека через помощника (спека 2026-10-14, 7.4): подпись «You (via assistant)» и знак помощника. */
+  via: 'assistant' | null;
   /** Отправитель — ведущий (`★`). */
   lead: boolean;
   /** Адресаты для `→ …`: `all` или ярлыки; `null` — у системной строки адресата не показываем. */
@@ -273,7 +275,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
     if (session === undefined) continue;
     const liveEntry = liveOf(id);
     const live = liveEntry?.activity ?? null;
-    const state = dotState(displayStatus(session), live?.activity ?? null);
+    const state = dotState(liveStatus(session), live?.activity ?? null);
     const providerDisplay = providerName(session.provider, providers.find((entryProvider) => entryProvider.id === session.provider)?.label ?? session.provider);
     const model = modelName(liveEntry?.metrics?.model ?? null);
     // Хост прежней версии полей не присылает — тогда участник ничем особым не занят.
@@ -366,7 +368,8 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       return {
         id: message.id,
         sender: { kind, provider: kind === 'agent' ? providerOf(map, message.from) : null },
-        from: labelOf(map, message.from),
+        from: message.from === HUMAN && message.via === 'assistant' ? S.participants.viaAssistant(S.participants.human) : labelOf(map, message.from),
+        via: message.via ?? null,
         lead: message.from === lead,
         // Системная строка: `to: [human]` — служебность хоста (`addSystemMessage`), не адресат для показа.
         to: message.from === SYSTEM ? null : message.to.length === 0 ? S.rooms.toAll : message.to.map((id) => labelOf(map, id)).join(', '),

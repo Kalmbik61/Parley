@@ -53,7 +53,6 @@ function live(activity: SessionActivity['activity'], lastEventAt: string | null 
     turnEndedAt: null,
     lastEventAt,
     source: 'hooks',
-    exited: false,
     hooksMissing: false,
   };
 }

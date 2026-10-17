@@ -19,6 +19,7 @@ import { ImageIcon, X } from 'lucide-react';
 import { S } from '../../../shared/strings.js';
 import { cn } from '../../lib/cn.js';
 import { Button } from '../../ui/button.js';
+import { AssistantMark } from '../../components/AssistantMark.js';
 import { AttachmentChip } from '../AttachmentChip.js';
 import { splitAttachments } from '../attachments.js';
 import { ChatEnvContext } from '../chat-env.js';
@@ -34,9 +35,11 @@ export interface PromptItemProps {
   onRetry?: () => void;
   /** `failed`: × — убрать не ушедшее. */
   onRemove?: () => void;
+  /** Сообщение отправил помощник (спека 2026-10-14, 7.4): над пузырём «via assistant». */
+  via?: boolean;
 }
 
-export function PromptItem({ text, images = 0, state, onRetry, onRemove }: PromptItemProps): JSX.Element {
+export function PromptItem({ text, images = 0, state, onRetry, onRemove, via }: PromptItemProps): JSX.Element {
   // Мост — только для миниатюр: `useChatEnv()` вне окружения бросает, а промпт без него рисуется (чипы без картинок).
   const env = useContext(ChatEnvContext);
   const bridge = env?.bridge ?? null;
@@ -51,6 +54,12 @@ export function PromptItem({ text, images = 0, state, onRetry, onRemove }: Promp
       {...(grey ? { 'data-state': state } : {})}
       className={cn('flex min-w-0 flex-col items-end', !grey && 'group gap-0.5')}
     >
+      {via === true ? (
+        <div className="flex items-center justify-end gap-1 text-[12px] text-muted-foreground">
+          <AssistantMark size={12} />
+          {S.chat.viaAssistant}
+        </div>
+      ) : null}
       <div
         className={cn(
           'flex min-w-0 max-w-[85%] flex-col gap-1 rounded-md px-3 py-2 text-sm',

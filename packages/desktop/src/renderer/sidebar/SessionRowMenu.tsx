@@ -18,6 +18,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { SessionStatus, WorkSession } from '@parley/core';
+import { liveStatus } from '@parley/core/session-state';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec } from '../../shared/layout-types.js';
@@ -29,7 +30,6 @@ import { measureGroupSizes } from '../layout/measure.js';
 import { useLayoutStore } from '../layout/store.js';
 import { splitGroup } from '../layout/tree.js';
 import { useHostSupports } from '../lib/capabilities.js';
-import { displayStatus } from '../lib/dot-state.js';
 import { sessionRowLabel } from '../lib/participant.js';
 import { useReviewStore } from '../review/store.js';
 import { useUiStore } from '../store/ui.js';
@@ -73,7 +73,7 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
 
   const canRename = useHostSupports('sessions.rename');
   const canSetLead = useHostSupports('rooms.setLead');
-  const status = displayStatus(session);
+  const status = liveStatus(session);
   const closed = session.lifecycle === 'closed';
   const label = sessionRowLabel(session.id, session.label);
   const ref = { projectPath, workId, sessionId: session.id };

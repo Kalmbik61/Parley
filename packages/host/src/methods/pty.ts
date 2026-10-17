@@ -8,7 +8,7 @@
  */
 
 import { refKey } from '@parley/protocol';
-import type { SessionRef } from '@parley/protocol';
+import type { SendResult, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { Client } from '../client.js';
 import type { Handler, NotificationHandler } from '../context.js';
@@ -29,6 +29,7 @@ export interface PtyMethodDeps {
   sessions?: Pick<SessionsService, 'exclusive'>;   // pty.send: пока идёт смена модели или effort, не печатает
   log?: Log;   // журнал хоста: отброшенный медленный клиент потока (`pty.clientDropped`)
   feed?: Pick<FeedService, 'markSent'>;   // pty.send: метка отправки для журнала задержек (`feed.firstDelta`)
+  send?: (params: { ref: SessionRef; text: string; submit: boolean }) => Promise<SendResult>;   // общий отправитель хоста; без него — свой
 }
 
 export interface PtyHandlers {
@@ -60,10 +61,12 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
   // Один отправитель на хост: «свой Enter в полёте» по сессии должен быть общим для всех
   // клиентов, иначе два окна обошли бы busy.
   const { sessions } = deps;
-  const send = createSender({
-    ...deps,
-    ...(sessions === undefined ? {} : { switching: (ref: SessionRef) => sessions.exclusive.held(ref) }),
-  });
+  const send =
+    deps.send ??
+    createSender({
+      ...deps,
+      ...(sessions === undefined ? {} : { switching: (ref: SessionRef) => sessions.exclusive.held(ref) }),
+    });
 
   deps.pty.on('output', (ref, data) => {
     const key = refKey(ref);

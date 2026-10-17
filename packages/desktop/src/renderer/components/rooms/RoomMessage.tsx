@@ -142,7 +142,7 @@ export function RoomMessage({
       className={cn('flex max-w-[680px] gap-2.5', human && 'flex-row-reverse self-end')}
     >
       <div className="flex w-5 shrink-0 justify-center pt-px">
-        <SenderAvatar kind={message.sender.kind} provider={message.sender.provider} />
+        <SenderAvatar kind={message.sender.kind} provider={message.sender.provider} via={message.via} />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div

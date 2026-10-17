@@ -28,7 +28,7 @@
  * вне прокручиваемой части списка: длинный список едет под ней, а кнопка остаётся на месте.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState, type Ref } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react';
 import { ChevronUp } from 'lucide-react';
 import type { FeedDecision } from '@parley/core';
 import { S } from '../../shared/strings.js';
@@ -39,11 +39,14 @@ import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { relativeTime } from '../lib/relative-time.js';
 import { Button } from '../ui/button.js';
+import { AssistantView, type AssistantViewProps } from './assistant/AssistantView.js';
 import { useShapeDrag } from './drag.js';
 import type { IslandModel, IslandRow } from './model.js';
 import { useIslandReplies } from './replies.js';
 import type { IslandRequest } from './requests.js';
 import { simpleChoices } from './simple-question.js';
+import { Swarm } from './swarm/Swarm.js';
+import { swarmSpecFor } from './swarm/spec.js';
 
 /**
  * Сколько кнопки решения (Allow / Always / Deny / варианты ответа) выключены после каждого показа карточки: остров
@@ -53,6 +56,15 @@ import { simpleChoices } from './simple-question.js';
  * защищены: они ничего не решают.
  */
 export const CARD_ARM_MS = 500;
+
+export interface IslandAssistantProps {
+  view: AssistantViewProps;
+  open: boolean;
+  collapsed: boolean;
+  busy: boolean;
+  mini: string | null;
+  onOpen(): void;
+}
 
 export interface IslandViewProps {
   model: IslandModel;
@@ -82,14 +94,23 @@ export interface IslandViewProps {
   onClearDone(): void;
   onSelect(index: number): void;
   onDecide(key: string, decision: FeedDecision): void;
+  /** Помощник (спека 2026-10-14, раздел 8); `null` — выключен в настройках. */
+  assistant: IslandAssistantProps | null;
 }
 
-const sessionKeyOf = (item: IslandRequest): string => item.key.slice(0, item.key.lastIndexOf('\u0000'));
+export const sessionKeyOf = (item: IslandRequest): string => item.key.slice(0, item.key.lastIndexOf('\u0000'));
 
 function rowTarget(row: IslandRow): FocusTarget {
   return row.kind === 'session'
     ? { kind: 'session', ref: row.ref }
     : { kind: 'room', projectPath: row.projectPath, workId: row.workId, roomId: row.roomId };
+}
+
+/** Мини-рой в кнопке пилюли: canvas 28 px лежит в кнопке 26 px, как `.dotbtn` макета; 30 кадров/с только пока помощник занят. */
+function MiniSwarm({ assistant }: { assistant: IslandAssistantProps }): JSX.Element {
+  const { host, input } = assistant.view;
+  const spec = useMemo(() => swarmSpecFor(host, input, true), [host.phase, input]);
+  return <Swarm spec={spec} souls={150} width={28} height={28} d={17} cy={14} k={0.15} minPx={1.5} seed={5} fps={assistant.busy ? 30 : 0} />;
 }
 
 function Pill(props: IslandViewProps): JSX.Element {
@@ -99,7 +120,14 @@ function Pill(props: IslandViewProps): JSX.Element {
     // при уходе курсора. Строка занимает всю ширину содержимого, а при открытом списке оно растёт до 400 px:
     // содержимое строки по центру, чтобы пилюля не уезжала вбок из-под курсора.
     <div data-testid="island-pill" className="island-reveal flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 text-sm">
-      {model.active || model.done > 0 ? (
+      {props.assistant === null ? null : (
+        <button type="button" data-testid="assistant-dot" aria-label={S.assistant.ask} className="grid size-[26px] -ml-1 cursor-pointer place-items-center overflow-visible rounded-full hover:bg-white/10" onClick={props.assistant.onOpen}>
+          <MiniSwarm assistant={props.assistant} />
+        </button>
+      )}
+      {props.assistant?.collapsed === true && props.assistant.mini !== null ? (
+        <span data-testid="assistant-mini">{props.assistant.mini}</span>
+      ) : model.active || model.done > 0 ? (
         // Клик только открывает список: наведение открыло его мгновением раньше, и «переключатель» тут же закрывал бы.
         // Не кнопка: за кнопку остров не тащится, а счётчики — самое большое место пилюли. Значки провайдеров — про
         // идущую работу, у одних Done их нет.
@@ -285,7 +313,7 @@ function Card(props: IslandViewProps): JSX.Element | null {
 }
 
 export function IslandView(props: IslandViewProps): JSX.Element {
-  const { model, items, listOpen, config, retracted, doneCount, hovered, shapeRef, api, onDragStart, onDragEnd, onHide } = props;
+  const { model, items, listOpen, config, retracted, doneCount, hovered, shapeRef, api, onDragStart, onDragEnd, onHide, assistant } = props;
   const drag = useShapeDrag(api, { onDragStart, onDragEnd, onSwipeUp: onHide });
   const contentRef = useRef<HTMLDivElement>(null);
   /** Размер содержимого в пикселях; до первого замера `null` — у формы нет явных `width`/`height`. */
@@ -310,6 +338,7 @@ export function IslandView(props: IslandViewProps): JSX.Element {
   const peek = retracted && doneCount > 0;
   const look = !retracted ? 'rounded-b-[22px] shadow-lg' : peek ? 'rounded-b-[14px] shadow-none ring-1 ring-white/50' : 'rounded-[3px] shadow-none ring-1 ring-white/50';
   const marginTop = !retracted ? 0 : peek ? config.topInset : config.topInset + 2;
+  const assistantBig = assistant !== null && assistant.open && !assistant.collapsed;
   return (
     // Форма — прямой элемент flex-корня `IslandApp`: `shrink-0`, чтобы узкий кадр не сжимал её.
     <div
@@ -331,7 +360,11 @@ export function IslandView(props: IslandViewProps): JSX.Element {
           )
         ) : (
           <>
-            {items.length > 0 ? <Card {...props} /> : (
+            {assistantBig ? (
+              <AssistantView {...assistant.view} />
+            ) : items.length > 0 ? (
+              <Card {...props} />
+            ) : (
               <>
                 <Pill {...props} />
                 {listOpen && model.groups.length > 0 ? <List {...props} /> : null}

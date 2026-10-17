@@ -26,6 +26,7 @@ import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
 import { createPtyManager } from '../pty/pty-manager.js';
+import { sendHumanLetter } from '../rooms/rooms-service.js';
 import { createSessionsService } from '../sessions/sessions-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { createRoomsArchive, roomsCreate, roomsSend } from './rooms.js';
@@ -251,6 +252,20 @@ describe('rooms.create / rooms.send', () => {
     });
     expect(response.error).toMatchObject({ code: 'bad_request', message: `session ${b} is closed` });
     expect((await readMap(dir, workId)).rooms).toEqual([]);
+  });
+
+  it('sendHumanLetter: с via кладёт его в письмо, без второго параметра — без ключа', async () => {
+    const { dir, workId, ids } = await setup();
+    const [a] = ids as [string];
+    const input = { projectPath: dir, workId, roomId: null, to: [a], text: 'письмо', kind: 'note' as const };
+
+    await sendHumanLetter(input, { via: 'assistant' });
+    await sendHumanLetter(input);
+
+    const [first, second] = (await readMap(dir, workId)).messages;
+    expect(first?.via).toBe('assistant');
+    expect(second).toBeDefined();
+    expect(second).not.toHaveProperty('via');
   });
 });
 

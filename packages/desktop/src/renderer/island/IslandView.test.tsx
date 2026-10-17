@@ -18,15 +18,24 @@ import type { IslandModel } from './model.js';
 import { useIslandReplies } from './replies.js';
 import type { IslandRequest } from './requests.js';
 import { SWIPE_UP_PX } from './drag.js';
-import { CARD_ARM_MS, IslandView, type IslandViewProps } from './IslandView.js';
+import { HOST_IDLE } from './assistant/store.js';
+import { CARD_ARM_MS, IslandView, type IslandAssistantProps, type IslandViewProps } from './IslandView.js';
 
 const REF = { projectPath: '/tmp/proj', workId: 'w-1', sessionId: 's-02' };
 const LABELS = new Map([['k', { session: 'S02 api', work: 'Backend', project: 'proj' }]]);
+
+/** Поля `IslandConfig` для помощника и острова: в этих тестах помощник выключен. */
+const ISLAND_BASE = {
+  islandEnabled: true,
+  assistant: { enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null } },
+};
 
 function api(): IslandApi {
   return {
     config: vi.fn(), onConfig: vi.fn(), onHover: vi.fn(), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(),
     dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
+    keyboard: vi.fn(), onAssistantOpen: vi.fn(() => () => {}), onAssistantBlur: vi.fn(() => () => {}),
+    voice: { transcribe: vi.fn(), micStatus: vi.fn(), requestMic: vi.fn() },
   };
 }
 
@@ -69,10 +78,11 @@ const DONE_MODEL: IslandModel = {
 
 function viewProps(patch: Partial<IslandViewProps> = {}): IslandViewProps {
   return {
-    model: MODEL, items: [], index: 0, config: { sound: true, topInset: 0, anchor: 'center' }, listOpen: false, retracted: false, doneCount: 0, hovered: false, showId: 1,
+    model: MODEL, items: [], index: 0, config: { ...ISLAND_BASE, sound: true, topInset: 0, anchor: 'center' }, listOpen: false, retracted: false, doneCount: 0, hovered: false, showId: 1,
     labels: LABELS, api: api(), shapeRef: createRef<HTMLDivElement>(),
     onDragStart: vi.fn(), onDragEnd: vi.fn(),
     onToggleList: vi.fn(), onHide: vi.fn(), onClearDone: vi.fn(), onSelect: vi.fn(), onDecide: vi.fn(),
+    assistant: null,
     ...patch,
   };
 }
@@ -267,7 +277,7 @@ describe('вид острова', () => {
   });
 
   it('подсказки первого показа нет; отступ под чёлку', () => {
-    view({ config: { sound: true, topInset: 38, anchor: 'center' } });
+    view({ config: { ...ISLAND_BASE, sound: true, topInset: 38, anchor: 'center' } });
     expect(screen.queryByText(/Drag me/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Got it' })).toBeNull();
     // Отступ под чёлку — на внутреннем содержимом, которое замеряется: внешняя форма лишь повторяет его размер.
@@ -733,7 +743,7 @@ describe('оформление списка', () => {
 
 describe('убранный остров', () => {
   const INSET = 38;
-  const config = { sound: true, topInset: INSET, anchor: 'center' as const };
+  const config = { ...ISLAND_BASE, sound: true, topInset: INSET, anchor: 'center' as const };
   /** Единственный элемент в содержимом убранной формы: брусок или текст `✅ N`. */
   const only = (): HTMLElement => {
     const content = screen.getByTestId('island-content');
@@ -929,5 +939,42 @@ describe('перетаскивание за форму и курсоры', () =>
     fireEvent(pill, pointer('lostpointercapture', 33, 44, 0));
     expect(props.api.dragEnd).toHaveBeenCalledWith({ screenX: 33, screenY: 44 });
     expect(props.onDragEnd).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** Помощник включён: пропсы большого вида пустые, нужные поля задаёт тест. */
+function assistantProps(patch: Partial<IslandAssistantProps> = {}): IslandAssistantProps {
+  return {
+    view: {
+      host: HOST_IDLE, input: 'idle', level: 0, draft: '', notice: null, cardError: null, hotkey: 'Alt+Space', pending: null,
+      onDraft: vi.fn(), onSubmit: vi.fn(), onMic: vi.fn(), onDecide: vi.fn(), onShowRequests: vi.fn(),
+    },
+    open: false, collapsed: false, busy: false, mini: null, onOpen: vi.fn(),
+    ...patch,
+  };
+}
+
+describe('помощник на острове', () => {
+  it('открыт и не свёрнут: виден большой вид, пилюли нет', () => {
+    render(<IslandView {...viewProps({ assistant: assistantProps({ open: true }) })} />);
+    expect(screen.getByTestId('assistant-view')).toBeTruthy();
+    expect(screen.queryByTestId('island-pill')).toBeNull();
+  });
+
+  it('свёрнут и занят: пилюля с мини-подписью', () => {
+    render(<IslandView {...viewProps({ assistant: assistantProps({ open: true, collapsed: true, busy: true, mini: 'Thinking·' }) })} />);
+    expect(screen.queryByTestId('assistant-view')).toBeNull();
+    expect(screen.getByTestId('assistant-mini').textContent).toBe('Thinking·');
+  });
+
+  it('помощник включён: в пилюле точка, клик зовёт onOpen; выключен — точки нет', () => {
+    const assistant = assistantProps();
+    render(<IslandView {...viewProps({ assistant })} />);
+    expect(screen.getByTestId('assistant-dot').querySelector('[data-testid="swarm"]')?.getAttribute('data-shape')).toBe('dot');
+    fireEvent.click(screen.getByTestId('assistant-dot'));
+    expect(assistant.onOpen).toHaveBeenCalled();
+    cleanup();
+    render(<IslandView {...viewProps()} />);
+    expect(screen.queryByTestId('assistant-dot')).toBeNull();
   });
 });

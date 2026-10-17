@@ -8,6 +8,7 @@ import type {
   SessionRef,
 } from '@parley/protocol';
 import type { BrowserApi } from './browser-types.js';
+import type { AssistantShortcutStatus } from './island.js';
 import type { VoiceApi } from './voice-types.js';
 import type {
   DiffFile,
@@ -130,6 +131,12 @@ export interface ParleyBridge {
     /** `ui.json` (кусок 1.1 плана окна, спека 3.4) — хранилище в `main/ui-store.ts`. */
     loadUi(): Promise<UiFile>;
     saveUi(patch: Partial<Omit<UiFile, 'version'>>): Promise<UiFile>;
+    /** Палитра открывает помощника на острове (печать, без голоса); окно острова получает `island:assistant-open`. */
+    openAssistant(): void;
+    /** Глобальный хоткей помощника: какое сочетание держим и удалось ли его занять (настройки показывают отказ). */
+    assistantShortcut(): Promise<AssistantShortcutStatus>;
+    /** Поле записи сочетания в настройках: `true` — снять глобальный хоткей на время записи, `false` — вернуть. */
+    assistantShortcutSuspend(on: boolean): void;
     /**
      * Заметки к диффу сессии (кусок 8.4a, спека 11.4), `main/notes-store.ts`. Битый файл — пустые
      * заметки, а corruptedTo — имя, под которым его сохранили рядом: путь `notes/` лежит вне корней

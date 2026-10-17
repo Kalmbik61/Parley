@@ -5,19 +5,12 @@
  */
 import { useEffect } from 'react';
 import { S } from '../../shared/strings.js';
-import { VOICE_MODELS, WHISPER_LANGUAGES } from '../../shared/voice-types.js';
+import { LANGUAGE_OPTIONS, VOICE_MODELS } from '../../shared/voice-types.js';
 import { useUiStore } from '../store/ui.js';
 import { Button } from '../ui/button.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select.js';
 import { Switch } from '../ui/switch.js';
 import { useDownloadsStore } from './downloads-store.js';
-
-/** Список языков: Auto, English, Russian, затем остальные по алфавиту (спека 3.1). */
-const LANGUAGE_OPTIONS = [
-  { code: 'auto', name: S.voice.settings.auto },
-  ...WHISPER_LANGUAGES.filter((language) => language.code === 'en' || language.code === 'ru').sort((a, b) => a.name.localeCompare(b.name)),
-  ...WHISPER_LANGUAGES.filter((language) => language.code !== 'en' && language.code !== 'ru'),
-];
 
 export function VoiceSettings(): JSX.Element {
   const settings = useUiStore((state) => state.ui.voice);
@@ -33,6 +26,7 @@ export function VoiceSettings(): JSX.Element {
   };
 
   const hasModel = downloaded.length > 0;
+  const options = [{ code: 'auto', name: S.voice.settings.auto }, ...LANGUAGE_OPTIONS];
 
   return (
     <div className="flex flex-col gap-3 text-sm">
@@ -96,7 +90,7 @@ export function VoiceSettings(): JSX.Element {
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="max-h-72">
-            {LANGUAGE_OPTIONS.map((language) => (
+            {options.map((language) => (
               <SelectItem key={language.code} value={language.code}>
                 {language.name}
               </SelectItem>

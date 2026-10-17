@@ -44,10 +44,10 @@ import { horizontalListSortingStrategy, SortableContext, useSortable } from '@dn
 import { Plus } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import type { Activity, WorkEntry } from '@parley/core';
+import { dotState, liveStatus } from '@parley/core/session-state';
 import type { SessionRef } from '@parley/protocol';
 import type { GroupNode } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
-import { displayStatus, dotState } from '../lib/dot-state.js';
 import { activityFor, useActivityStore } from '../store/activity.js';
 import { usePaletteStore } from '../palette/store.js';
 import { dndId, type DragSourceData, type DropTargetData } from './dnd.js';
@@ -291,7 +291,7 @@ export function TabStrip({ workKey, group, entry, portal, active }: TabStripProp
           const dot =
             tab.kind === 'terminal' && meta.session !== null
               ? {
-                  state: dotState(displayStatus(meta.session), liveActivity[tab.sessionId] ?? null),
+                  state: dotState(liveStatus(meta.session), liveActivity[tab.sessionId] ?? null),
                   lifecycle: meta.session.lifecycle,
                 }
               : null;

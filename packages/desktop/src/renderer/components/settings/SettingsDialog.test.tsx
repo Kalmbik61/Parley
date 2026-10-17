@@ -10,7 +10,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import { createFakeBridge } from '../../test-utils/fake-bridge.js';
 import { S } from '../../../shared/strings.js';
@@ -80,7 +80,7 @@ describe('SettingsDialog — тест 1 куска 1.4: секции спеки 
     expect(screen.queryByDisplayValue('mocha')).toBeNull();
 
     switchTo('Notifications');
-    await screen.findByLabelText('sound');
+    await screen.findByLabelText('Sound');
     expect(screen.queryByText('Theme')).toBeNull();
     expect(screen.queryByDisplayValue('mocha')).toBeNull();
   });
@@ -103,7 +103,7 @@ describe('SettingsDialog — тест 1 куска 1.4: секции спеки 
     openSettings(bridge);
 
     switchTo('Notifications');
-    const soundToggle = await screen.findByLabelText('sound');
+    const soundToggle = await screen.findByLabelText('Sound');
     fireEvent.click(soundToggle);
 
     await waitFor(() =>
@@ -113,15 +113,15 @@ describe('SettingsDialog — тест 1 куска 1.4: секции спеки 
     );
   });
 
-  it('переключатель почты называет и упоминания — «mail and mentions to you» (Parley 0.3.0): уведомление о @human идёт под ним', async () => {
+  it('переключатель почты называет и упоминания — «Mail and mentions to you» (Parley 0.3.0): уведомление о @human идёт под ним', async () => {
     const bridge = createFakeBridge();
     const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
     openSettings(bridge);
 
     switchTo('Notifications');
-    expect(await screen.findByLabelText('mail and mentions to you')).toBeTruthy();
+    expect(await screen.findByLabelText('Mail and mentions to you')).toBeTruthy();
     expect(screen.queryByLabelText('mail to you')).toBeNull();
-    fireEvent.click(screen.getByLabelText('mail and mentions to you'));
+    fireEvent.click(screen.getByLabelText('Mail and mentions to you'));
 
     await waitFor(() =>
       expect(saveUiSpy).toHaveBeenCalledWith({
@@ -349,7 +349,7 @@ describe('SettingsDialog — переключатель «Check for updates» (V
 
 // Остров одобрений (спека 2026-10-12): переключатель стоит в «Notifications», под звуком.
 describe('SettingsDialog — переключатель «Island»', () => {
-  const ISLAND_SWITCH = 'island with requests at the top of the screen';
+  const ISLAND_SWITCH = 'Island with requests at the top of the screen';
 
   it('включён по умолчанию; клик пишет ui.island.enabled — патчем из одного ключа; повторный — включает', async () => {
     const bridge = createFakeBridge();
@@ -648,5 +648,29 @@ describe('SettingsDialog — «Let agents use the browser» (спека брау
     expect(toggle.getAttribute('aria-checked')).toBe('false');
     fireEvent.click(toggle);
     await waitFor(() => expect(saveUiSpy).toHaveBeenCalledWith({ browser: { devtoolsHeight: 320, agentsAllowed: true } }));
+  });
+});
+
+describe('SettingsDialog — навигация слева (живая проверка 2026-10-17)', () => {
+  it('секции — вертикальный список в прежнем порядке, содержимое — в панели с прокруткой', async () => {
+    const bridge = createFakeBridge();
+    openSettings(bridge);
+
+    const list = screen.getByRole('tablist');
+    expect(list.getAttribute('aria-orientation')).toBe('vertical');
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'Appearance',
+      'Terminal',
+      'Agents',
+      'Notifications',
+      'Browser',
+      'Voice',
+      'Assistant',
+    ]);
+
+    const pane = screen.getByTestId('settings-pane');
+    // Не «Assistant»: та секция зовёт getHostClient(), которого в этом окружении нет.
+    switchTo('Browser');
+    expect(await within(pane).findByRole('button', { name: S.settings.clearBrowserData })).toBeTruthy();
   });
 });

@@ -15,7 +15,7 @@
  *     это уже неверно: письма комнаты показывает `components/rooms/feed-model.ts`.
  *
  * `recipientsOf`/`isUnreadFor` перенесены из `core/work/letters.ts` значением:
- * рендерер тянет из `@parley/core` только типы (см. `lib/dot-state.ts`,
+ * рендерер тянет из `@parley/core` только типы (см.
  * `lib/participant-tag.ts`) — рантайм модуля идёт через `work/mcp-config.ts`,
  * который трогает `node:fs`, а песочница окна такое не пропускает.
  */

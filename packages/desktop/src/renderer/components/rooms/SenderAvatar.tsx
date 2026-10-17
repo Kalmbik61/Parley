@@ -8,6 +8,7 @@ import { Hash, User } from 'lucide-react';
 import { S } from '../../../shared/strings.js';
 import { cn } from '../../lib/cn.js';
 import { AgentIcon } from '../AgentIcon.js';
+import { AssistantMark } from '../AssistantMark.js';
 import type { SenderKind } from './feed-model.js';
 
 export interface SenderAvatarProps {
@@ -15,9 +16,12 @@ export interface SenderAvatarProps {
   /** Провайдер агента; `null` — сессии уже нет в карте. */
   provider: string | null;
   size?: number;
+  /** Письмо человека через помощника — вместо значка человека знак помощника. */
+  via?: 'assistant' | null;
 }
 
-export function SenderAvatar({ kind, provider, size = 18 }: SenderAvatarProps): JSX.Element {
+export function SenderAvatar({ kind, provider, size = 18, via }: SenderAvatarProps): JSX.Element {
+  if (kind === 'human' && via === 'assistant') return <AssistantMark size={size} />;
   if (kind === 'agent') return <AgentIcon provider={provider ?? '?'} size={size} />;
   const human = kind === 'human';
   const Icon = human ? User : Hash;

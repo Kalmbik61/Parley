@@ -18,7 +18,7 @@ import { LayoutTooLargeError } from './layout-store.js';
 import { parseRecipeSaveRequest, writeProjectRecipe } from './recipe-file.js';
 import type { LayoutStore } from './layout-store.js';
 import type { NotesStore } from './notes-store.js';
-import { ISLAND_METHODS } from '../shared/island.js';
+import { ISLAND_METHODS, type AssistantShortcutStatus } from '../shared/island.js';
 import { isNotesFile } from '../shared/notes-types.js';
 import { isSessionId, workKey as projectWorkKey } from '../shared/work-keys.js';
 import type { UiStore } from './ui-store.js';
@@ -236,6 +236,12 @@ export interface RegisterIpcOptions {
   isIslandSender?: (sender: unknown) => boolean;
   /** Есть ли живое окно острова — для `notify.ts` главного окна (`app:island-active`). */
   islandActive?: () => boolean;
+  /** Палитра открывает помощника на острове (`app:assistant-open`): печать, без голоса. */
+  openAssistant?: () => void;
+  /** Состояние глобального хоткея помощника для настроек (`app:assistant-shortcut`). */
+  assistantShortcut?: () => AssistantShortcutStatus;
+  /** Поле записи сочетания в настройках снимает глобальный хоткей на время записи (`app:assistant-shortcut-suspend`). */
+  suspendAssistantShortcut?: (on: boolean) => void;
   /** Двойной клик по пустому месту заголовка (кусок 2.3, спека 5.1) — системное действие macOS. */
   titlebarDoubleClick: () => void;
   /** «Reveal in Finder» карточки работы (кусок 3.4) — `shell.showItemInFolder`. */
@@ -406,6 +412,13 @@ export function registerIpc(options: RegisterIpcOptions): void {
   ipcMain.on('app:island-active', (event) => {
     (event as { returnValue: unknown }).returnValue = islandActive?.() === true;
   });
+
+  ipcMain.on('app:assistant-open', () => options.openAssistant?.());
+  ipcMain.handle(
+    'app:assistant-shortcut',
+    withIpcError(() => options.assistantShortcut?.() ?? { accelerator: null, ok: true }),
+  );
+  ipcMain.on('app:assistant-shortcut-suspend', (_event, on: unknown) => options.suspendAssistantShortcut?.(on === true));
 
   ipcMain.on('host:notify', (event, method: unknown, params: unknown) => {
     if (typeof method !== 'string' || !isNotificationName(method)) return;

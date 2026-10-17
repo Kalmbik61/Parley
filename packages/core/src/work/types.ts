@@ -3,30 +3,15 @@ import type { TokenTotals } from '../counters.js';
 import type { EffortLevel } from '../providers.js';
 import type { RecipeSnapshot } from '../recipes/types.js';
 import type { FrozenUsage } from './usage-ledger.js';
+import type { SessionLifecycle, SessionResult } from './session-state.js';
+
+// Типы статуса сессии объявлены в `session-state.ts` вместе с функциями, которые их выводят.
+export type { SessionStatus, SessionLifecycle, SessionResult } from './session-state.js';
 
 /** Статус работы. `archived` в списке не показывается (дизайн TUI, раздел 8). */
 export interface SessionRole { source: 'builtin' | 'claude' | 'codex'; name: string }
 
 export type WorkStatus = 'active' | 'done' | 'archived';
-
-/**
- * Прежний единый статус сессии (карта v1). В карте его больше нет: с v2 он
- * собирается из двух осей функцией `displayStatus` (`status-view.ts`) — его
- * называют агенту бриф и инструменты MCP, а точки окна рисуют его же.
- */
-export type SessionStatus = 'pending' | 'active' | 'exited' | 'done' | 'failed';
-
-/**
- * Ось процесса (спецификация 7.1): `sleeping` — процесса нет, но сессия на связи
- * и письмо её поднимает; `closed` — закрыта явно и писем не получает.
- */
-export type SessionLifecycle = 'pending' | 'active' | 'sleeping' | 'closed';
-
-/**
- * Ось итога: приходит только из `report` и процесс не меняет — после
- * `report(done)` сессия остаётся `active` (спецификация 7.1).
- */
-export type SessionResult = 'done' | 'failed';
 
 /**
  * Одна ступень жизни сессии: переход по оси процесса или поставленный итог.
@@ -300,6 +285,9 @@ export interface Room {
   memberLog?: RoomMembership[];
 }
 
+/** Через кого человек отправил письмо (спека 2026-10-14, 7.4); нет поля — сам, в окне. */
+export type MessageVia = 'assistant';
+
 /** Письмо: доставляется по pull, живёт в карте. */
 export interface Message {
   id: string;
@@ -318,6 +306,8 @@ export interface Message {
    * Нет поля — не ответ; так лежат и все письма карт до 0.3.0, подставлять `parseMap` нечего.
    */
   replyTo?: string;
+  /** Письмо человека, переданное помощником (спека 2026-10-14, 7.4). У старых карт поля нет. */
+  via?: MessageVia;
   /**
    * Отметки прочтения по адресатам: у рассылки комнаты каждый читает сам, и
    * одна отметка на письмо спрятала бы его от тех, кто ещё не прочёл.

@@ -300,6 +300,9 @@ export function runAction(id: ActionId, ctx: ActionContext): void {
     case 'voice.toggle':
       ctx.voice.toggle();
       return;
+    case 'assistant.open':
+      ctx.bridge.app.openAssistant();
+      return;
     case 'terminal.clear':
       (ctx.source === 'palette' ? ctx.terminals.active() : ctx.terminals.focused())?.clear();
       return;

@@ -3,16 +3,24 @@ import { mkdir, chmod, link, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  ASSISTANT_MIN_VERSIONS,
   bothEnv,
+  findRunnerBinary,
   isMember,
   isRoomArchived,
   isStaleHostLock,
+  loadProviders,
   migrateProjects,
   parleyHome,
   parseHostLock,
   processStartedAt,
+  providerReadiness,
+  providerReadinessError,
   readHostLock,
+  readSecret,
   socketIsAlive,
+  versionAtLeast,
+  type ProviderEntry,
 } from '@parley/core';
 import { createHostContext } from './context.js';
 import type { HostContext } from './context.js';
@@ -28,6 +36,7 @@ import { createProfiler } from './diagnostics/profiler.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
 import { HOST_ERROR_REASONS } from '@parley/protocol';
+import type { SessionRef } from '@parley/protocol';
 import { createHostHandlers } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
@@ -44,14 +53,19 @@ import type { CatalogProbe } from './providers/codex-catalog.js';
 import { startProviderVersions } from './providers/versions.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
+import { createSender } from './pty/send.js';
 import { createFeedService } from './feed/feed-service.js';
 import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
 import { createHistoryService } from './rooms/history-service.js';
+import { sendHumanLetter } from './rooms/rooms-service.js';
+import { createAssistantEndpoint } from './assistant/assistant-endpoint.js';
+import { createAssistantService, type AssistantService } from './assistant/assistant-service.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
+import { providerLaunchEnv } from './sessions/provider-env.js';
 import { createReadyJournal } from './sessions/ready-journal.js';
 import { createWakeService } from './wake/wake-service.js';
 import { createWorktreesService } from './worktrees/worktrees-service.js';
@@ -288,6 +302,16 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Сжатие контекста (спека 2026-10-15, 5): создаётся после будильника, но хук-сервер и будильник видят его уже сейчас.
   // eslint-disable-next-line prefer-const -- поздняя привязка: замыкания хук-сервера и будильника читают её раньше присваивания
   let compactionService: CompactionService | undefined;
+  // Приёмник инструментов помощника (задача 8) нужен серверу хуков при создании, сам сервис — после сессий.
+  // eslint-disable-next-line prefer-const -- поздняя привязка: замыкание приёмника читает её раньше присваивания
+  let assistantService: AssistantService | undefined;
+  const assistantEndpoint = createAssistantEndpoint({
+    log,
+    tool: (name, args) =>
+      assistantService === undefined
+        ? Promise.resolve({ status: 503, body: { error: 'the assistant is not ready' } })
+        : assistantService.tool(name, args),
+  });
   const hookServer = createHookServer({
     log,
     onHook: (request) => {
@@ -299,7 +323,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       }
       feedService.onHook(request);
     },
-    routes: { [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res) },
+    routes: { [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
   });
 
   // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт, а
@@ -384,6 +408,43 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   compactionService.start();
   handle.context.onShutdown(async () => compactionService?.stop());
 
+  // Один отправитель на хост: окно (`pty.send`) и помощник делят «свой Enter в полёте» по сессии.
+  const send = createSender({
+    pty: ptyManager,
+    activity: activityService,
+    wake: wakeService,
+    switching: (ref: SessionRef) => sessionsService.exclusive.held(ref),
+  });
+  const secretOf = (entry: ProviderEntry): Promise<string | null> =>
+    entry.runner.secret === undefined ? Promise.resolve(null) : readSecret(entry.runner.secret);
+  assistantService = createAssistantService({
+    broadcast: (event, data) => handle.context.broadcast(event, data),
+    works: worksService,
+    activity: activityService,
+    feed: feedService,
+    send,
+    launch: (ref, mode, options) => sessionsService.launch(ref, mode, options),
+    sendLetter: (input) => sendHumanLetter(input, { via: 'assistant' }),
+    endpoint: { origin: () => hookServer.origin(), setToken: (token) => assistantEndpoint.setToken(token) },
+    providers: () => loadProviders(),
+    ready: async (entry) => {
+      await providerVersions.ready;
+      const key = await secretOf(entry);
+      const readiness = await providerReadiness(entry, { keyPresent: key !== null, probeVersion: (command) => providerVersions.fresh(command) });
+      if (readiness.needs !== null || readiness.error !== null) return providerReadinessError(entry, readiness) ?? `${entry.label} is not ready`;
+      const min = ASSISTANT_MIN_VERSIONS[entry.runner.command];
+      const version = providerVersions.get(entry.runner.command);
+      return min !== undefined && version !== null && !versionAtLeast(version, min)
+        ? `Update the ${entry.label} CLI to ${min} or newer to use the assistant`
+        : null;
+    },
+    launchEnv: async (entry) => providerLaunchEnv(entry, process.env, {}, await secretOf(entry)),
+    binary: (command) => findRunnerBinary(command, process.env),
+    home: parleyHome(),
+    log: (line) => log.info(line),
+  });
+  handle.context.onShutdown(async () => assistantService?.stop());
+
   // Заполненность контекста Claude/GLM (спека 2026-10-15, 4.3): опрос файлов строки статуса раз в 5 секунд.
   const contextService = createContextService({ pty: ptyManager, activity: activityService });
   contextService.start();
@@ -444,6 +505,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     worktrees: worktreesService,
     feed: feedService,
     browserAgent: browserEndpoint,
+    send,
+    assistant: assistantService,
     health,
     profiler,
     log: handle.context.log,

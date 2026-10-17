@@ -154,3 +154,5 @@ export type {
   BrowserAgentTabInfo,
   BrowserAgentTabsResult,
 } from './browser-agent.js';
+export { assistantMethodSchemas } from './assistant.js';
+export type { AssistantDetail, AssistantMethodResults, AssistantPhase, AssistantProposal, AssistantState } from './assistant.js';

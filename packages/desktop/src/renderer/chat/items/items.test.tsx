@@ -308,6 +308,12 @@ describe('PromptItem — вложения: хвостовые упоминани
     expect(screen.getByTestId('chat-prompt').textContent).toBe(`see @"/a.png" and @src/a.ts or '/h/a #1.png'`);
   });
 
+  it('сообщение помощника — над пузырём «via assistant» и знак', () => {
+    const { container } = renderPrompt(<PromptItem text="привет" via />);
+    expect(screen.getByTestId('chat-prompt').textContent).toContain(S.chat.viaAssistant);
+    expect(container.querySelector('[data-assistant-mark]')).not.toBeNull();
+  });
+
   it('серый элемент очереди — те же чипы, подпись «Queued» и текст без путей', () => {
     renderPrompt(<PromptItem text={'next @"/a/notes.txt" '} state="queued" />);
     const grey = screen.getByTestId('chat-queued');

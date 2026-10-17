@@ -114,3 +114,9 @@ export interface VoiceApi {
   /** System Settings → Privacy & Security → Microphone. */
   openMicSettings(): Promise<void>;
 }
+
+/** Список языков: English, Russian, затем остальные по алфавиту (спека 3.1); пункт «Auto» добавляет окно на месте. */
+export const LANGUAGE_OPTIONS = [
+  ...WHISPER_LANGUAGES.filter((language) => language.code === 'en' || language.code === 'ru').sort((a, b) => a.name.localeCompare(b.name)),
+  ...WHISPER_LANGUAGES.filter((language) => language.code !== 'en' && language.code !== 'ru'),
+];

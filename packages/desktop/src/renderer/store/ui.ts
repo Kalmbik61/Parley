@@ -11,7 +11,7 @@
 import { create } from 'zustand';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { applyDarkClass } from '../theme/appearance.js';
-import { DEFAULT_UI, normalizeUi, type Appearance, type RightSidebarTab, type UiFile } from '../../shared/ui-types.js';
+import { DEFAULT_UI, mergeUiPatch, normalizeUi, type Appearance, type RightSidebarTab, type UiFile } from '../../shared/ui-types.js';
 
 /** Работа, для которой открыт диалог (кусок 3.4). */
 export interface DialogWork {
@@ -23,7 +23,7 @@ export interface DialogWork {
 export interface BacklogTakeContext { projectPath: string; id: string; version: string; task: string }
 
 /** Вкладки диалога настроек: `openSettingsDialog(section)` открывает его на нужной. */
-export type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'notifications' | 'browser' | 'voice';
+export type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'notifications' | 'browser' | 'voice' | 'assistant';
 
 export interface DialogsState {
   /**
@@ -316,7 +316,10 @@ export const useUiStore = create<UiState>((set, get) => {
     },
 
     patchUi: (patch) => {
-      set((state) => ({ ui: normalizeUi({ ...state.ui, ...patch }) }));
+      // Зеркало сливает патч так же, как main (`mergeUiPatch`): вложенный объект — по одному уровню. Раньше
+      // `{ ...state.ui, ...patch }` заменял его целиком, и `normalizeUi` сбрасывал остальные подполя в дефолты
+      // (находка живой проверки 2026-10-17: «Turn on» откатывался после клика по модели).
+      set((state) => ({ ui: normalizeUi(mergeUiPatch(state.ui, patch)) }));
       // Сырой патч, а не слитое зеркало: main сам знает своё текущее
       // содержимое диска и сольёт с ним ровно эти ключи (`main/ui-store.ts`,
       // `mergeUiPatch`) — отправка уже слитого зеркала переписала бы поля,

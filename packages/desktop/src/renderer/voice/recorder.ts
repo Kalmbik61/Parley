@@ -1,8 +1,9 @@
 /**
  * Запись с микрофона (спека 4.1): `getUserMedia` моно с шумоподавлением → `AudioContext` 16 кГц (ресемплинг —
  * Chromium) → AudioWorklet `pcm-capture` → PCM Int16 в памяти. Громкость каждого кадра уходит наружу для полоски,
- * пик — для порога тишины. Зависимости браузера подменяемы: jsdom их не знает. Настоящие — в `browser-recorder.ts`:
- * там импорт worklet, и этот модуль (его тянут store, кнопка и поля) от сборщика worklet не зависит.
+ * пик — для порога тишины; пик кадра уходит и наружу — для порога речи острова. Зависимости браузера подменяемы:
+ * jsdom их не знает. Настоящие — в `browser-recorder.ts`: там импорт worklet, и этот модуль (его тянут store, кнопка
+ * и поля) от сборщика worklet не зависит.
  */
 import { joinChunks, floatTo16 } from './pcm.js';
 import { peakOf, rms } from './level.js';
@@ -48,7 +49,7 @@ export interface RecorderDeps {
   workletUrl(): Promise<string>;
 }
 
-export async function startRecording(onLevel: (level: number) => void, deps: RecorderDeps): Promise<Recording> {
+export async function startRecording(onLevel: (level: number, peak: number) => void, deps: RecorderDeps): Promise<Recording> {
   let stream: MediaStream;
   try {
     stream = await deps.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
@@ -72,8 +73,9 @@ export async function startRecording(onLevel: (level: number) => void, deps: Rec
       const frame = event.data;
       chunks.push(floatTo16(frame));
       samples += frame.length;
-      peak = Math.max(peak, peakOf(frame));
-      onLevel(rms(frame));
+      const framePeak = peakOf(frame);
+      peak = Math.max(peak, framePeak);
+      onLevel(rms(frame), framePeak);
     };
     source.connect(node);
     node.connect(context.destination);

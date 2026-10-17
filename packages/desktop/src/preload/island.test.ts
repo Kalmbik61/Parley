@@ -58,7 +58,10 @@ describe('preload острова', () => {
     const bridge = await loadPreload();
     expect(Object.keys(bridge).sort()).toEqual(['activitySnapshot', 'call', 'island', 'on', 'onStatus']);
     expect(Object.keys(bridge.island).sort()).toEqual(
-      ['beep', 'config', 'dragEnd', 'dragMove', 'dragStart', 'failed', 'markSeen', 'onConfig', 'onHover', 'open', 'setHitRect', 'setVisible'].sort(),
+      [
+        'beep', 'config', 'dragEnd', 'dragMove', 'dragStart', 'failed', 'keyboard', 'markSeen', 'onAssistantBlur', 'onAssistantOpen', 'onConfig',
+        'onHover', 'open', 'setHitRect', 'setVisible', 'voice',
+      ].sort(),
     );
   });
 
@@ -131,10 +134,10 @@ describe('preload острова', () => {
     expect(invoke).toHaveBeenLastCalledWith('host:activity-snapshot');
   });
 
-  it('мост выставлен под ключом parley, а подписки ipcRenderer.on — ровно четыре канала', async () => {
+  it('мост выставлен под ключом parley, а подписки ipcRenderer.on — ровно шесть каналов', async () => {
     await loadPreload();
     expect(exposedKey).toBe('parley');
-    expect([...subscribed].sort()).toEqual(['host:event', 'host:status', 'island:config', 'island:hover']);
+    expect([...subscribed].sort()).toEqual(['host:event', 'host:status', 'island:assistant-blur', 'island:assistant-open', 'island:config', 'island:hover']);
   });
 
   it('отписка работает: после неё слушатель событий хоста, статуса, настроек и наведения молчит, соседний — нет', async () => {

@@ -2546,6 +2546,19 @@ describe('send_message: replyTo — ответ с цитатой (Parley 0.3.0)'
       }
     }
   });
+
+  it('read_room: письмо человека через помощника приходит с via, обычное — без ключа', async () => {
+    const { owner } = await replySetup();
+    await updateMap(project, workId, (map) => {
+      addMessage(map, { from: HUMAN, to: [], text: 'Через помощника', roomId: 'r-01', via: 'assistant' }); // m-06
+      addMessage(map, { from: HUMAN, to: [], text: 'Сам в окне', roomId: 'r-01' }); // m-07
+    });
+
+    const messages = (await callOk(owner, 'read_room', { room: 'r-01' }))['messages'] as { id: string }[];
+
+    expect(messages.find((message) => message.id === 'm-06')).toMatchObject({ via: 'assistant' });
+    expect(messages.find((message) => message.id === 'm-07')).not.toHaveProperty('via');
+  });
 });
 
 describe('read_room', () => {

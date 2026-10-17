@@ -83,6 +83,7 @@ import { composeRoomMessage } from '../components/rooms/attachments.js';
 import { ContextChip } from '../components/context/ContextChip.js';
 import { fitDefaultInstructions } from '../lib/context-format.js';
 import { addAttachments, composePrompt } from './attachments.js';
+import { useAssistantSent, viaAssistantIds } from './assistant-sent.js';
 import { ChatEnvContext, type ChatEnv } from './chat-env.js';
 import { chatOutbox, promptCount } from './chat-outbox.js';
 import { promptHistory } from './history.js';
@@ -183,6 +184,8 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const feed = useFeed(sessionRef);
   const codex = provider === 'codex';
   const items = feed?.items ?? NO_ITEMS;
+  const sent = useAssistantSent(bridge, sessionRef, useHostSupports('assistant.sent'));
+  const viaIds = useMemo(() => viaAssistantIds(items, sent), [items, sent]);
   const active = live && turnActive(items);
   const blocked = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.activity === 'blocked');
   const metrics = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.metrics ?? null);
@@ -448,6 +451,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
         <ImagePreviewHost bridge={bridge} sessionKey={sessionKey} visible={visible}>
           <FeedList
             items={items}
+            viaIds={viaIds}
             queued={queued}
             outbox={outbox}
             onRetryOutbox={(id) => chatOutbox.retry(sessionKey, id, { requestedAt: Date.now() })}

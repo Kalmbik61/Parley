@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_UI, fitRightSidebar, LEFT_SIDEBAR, normalizeUi, RIGHT_SIDEBAR } from './ui-types.js';
+import { DEFAULT_UI, fitRightSidebar, LEFT_SIDEBAR, mergeUiPatch, normalizeUi, RIGHT_SIDEBAR } from './ui-types.js';
 
 describe('normalizeUi', () => {
   it('пустой объект → DEFAULT_UI', () => {
@@ -199,6 +199,32 @@ describe('normalizeUi: остров', () => {
   });
 });
 
+describe('normalizeUi: помощник', () => {
+  it('нет ключа — умолчание: выключен, Alt+Space, провайдер, модель и язык не выбраны', () => {
+    expect(normalizeUi({}).assistant).toEqual({ enabled: false, provider: null, model: null, hotkey: 'Alt+Space', language: null });
+  });
+
+  it('мусор — умолчание, годные поля остаются', () => {
+    expect(normalizeUi({ assistant: 'x' }).assistant).toEqual(DEFAULT_UI.assistant);
+    expect(normalizeUi({ assistant: { enabled: 1, provider: 5, model: '  ', hotkey: '', language: 3 } }).assistant).toEqual(
+      DEFAULT_UI.assistant,
+    );
+    expect(normalizeUi({ assistant: { enabled: true, provider: 'glm', model: 'm', hotkey: 'Control+Alt+J', language: 'ru' } }).assistant).toEqual({
+      enabled: true,
+      provider: 'glm',
+      model: 'm',
+      hotkey: 'Control+Alt+J',
+      language: 'ru',
+    });
+  });
+
+  it('язык помощника — код Whisper; auto и незнакомое — null', () => {
+    expect(normalizeUi({ assistant: { language: 'uk' } }).assistant.language).toBe('uk');
+    expect(normalizeUi({ assistant: { language: 'auto' } }).assistant.language).toBeNull();
+    expect(normalizeUi({ assistant: { language: 'english' } }).assistant.language).toBeNull();
+  });
+});
+
 // Спека архива комнат и проектов, 6.3: проекты, убранные из списка пунктом «Remove from list…».
 describe('hiddenProjects (спека архива, 6.3)', () => {
   it('по умолчанию пусто; файл прежней версии без ключа читается с пустым списком', () => {
@@ -229,5 +255,23 @@ describe('browser.agentsAllowed (спека браузера 4.8; этап B2)',
 
   it('поле высоты панели рядом не теряется', () => {
     expect(normalizeUi({ browser: { agentsAllowed: false, devtoolsHeight: 300 } }).browser).toEqual({ devtoolsHeight: 300, agentsAllowed: false });
+  });
+});
+
+describe('mergeUiPatch', () => {
+  it('вложенный объект сливается по одному уровню: соседние подполя остаются', () => {
+    const current = { ...DEFAULT_UI, assistant: { ...DEFAULT_UI.assistant, enabled: true, provider: 'claude' as const, language: 'ru' as const } };
+    const merged = mergeUiPatch(current, { assistant: { model: 'sonnet' } } as Partial<Omit<typeof DEFAULT_UI, 'version'>>);
+    expect(merged.assistant).toEqual({ ...current.assistant, model: 'sonnet' });
+  });
+
+  it('массив верхнего уровня заменяется целиком', () => {
+    const current = { ...DEFAULT_UI, pinnedWorks: ['a', 'b'] };
+    expect(mergeUiPatch(current, { pinnedWorks: ['c'] }).pinnedWorks).toEqual(['c']);
+  });
+
+  it('не-объект для вложенного ключа кладётся как есть (отсечёт normalizeUi)', () => {
+    const merged = mergeUiPatch(DEFAULT_UI, { assistant: null } as unknown as Partial<Omit<typeof DEFAULT_UI, 'version'>>);
+    expect(merged.assistant).toBeNull();
   });
 });

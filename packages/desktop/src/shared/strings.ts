@@ -5,13 +5,15 @@
  * `tsconfig.web.json` разом. Типы `HostNotice`/`NoticeKind` (для `noticeText`)
  * берутся из `@parley/protocol`. `@parley/core` с куска 8.3 тоже в `references`
  * обоих тсконфигов (`shared/files-types.ts` берёт оттуда `DiffFile`), но таблица
- * его типов не тянет: ключи вроде букв статуса git — обычные строки.
+ * его типов не тянет: ключи вроде букв статуса git — обычные строки. Исключение —
+ * `states`: слова состояний лежат в чистом модуле `@parley/core/session-state`.
  *
  * Перевод — по глоссарию индекса плана (`docs/specs/2026-09-26-desktop-orca-ui-plan.md`,
  * «Сквозные ограничения» → «Язык интерфейса»): работа → workspace, почта →
  * mail, письмо → message, будильник → auto-wake и т. д. Группы ниже по
  * областям окна; параметризованные тексты — функции.
  */
+import { STATE_WORDS } from '@parley/core/session-state';
 import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
 
@@ -373,23 +375,12 @@ export const S = {
   },
 
   /**
-   * Девять слов состояния сессии (спека 4.2): ключи — те же, что отдаёт
-   * `dot-state.ts#stateWord` (`exited` расщеплён на `asleep`/`closed` по
-   * `lifecycle`, как и в прежней русской таблице). Строчными — так их пишет строка сессии
+   * Девять слов состояния сессии (спека 4.2): таблица живёт в core по решению о паритете статусов —
+   * одна для окна, помощника и брифа агентов. Строчными — так их пишет строка сессии
    * (спека окна 2026-09-29, 1.2): `working`, `needs you`, `done · unseen`…; те же слова — имена
    * значков для скринридера и слово итога в тултипе.
    */
-  states: {
-    working: 'working',
-    blocked: 'needs you',
-    unseen: 'done · unseen',
-    idle: 'idle',
-    pending: 'not started',
-    asleep: 'asleep',
-    closed: 'closed',
-    done: 'done',
-    failed: 'failed',
-  },
+  states: STATE_WORDS,
 
   /** Экран пустого окна (нет ни одной работы) — `shell/Landing.tsx`. */
   landing: {
@@ -928,6 +919,7 @@ export const S = {
       notifications: 'Notifications',
       browser: 'Browser',
       voice: 'Voice',
+      assistant: 'Assistant',
     },
     lockedBy: (value: string): string => `(set by ${value})`,
     appearanceSystem: 'System',
@@ -965,11 +957,11 @@ export const S = {
       fanout: 'Message deliveries per hour, workspace',
       range: (min: number, max: number): string => `${min}…${max}`,
     },
-    notifyNeedsYou: 'needs you',
-    notifyFinished: 'finished',
-    notifyMail: 'mail and mentions to you',
-    notifySound: 'sound',
-    notifyIsland: 'island with requests at the top of the screen',
+    notifyNeedsYou: 'Needs you',
+    notifyFinished: 'Finished',
+    notifyMail: 'Mail and mentions to you',
+    notifySound: 'Sound',
+    notifyIsland: 'Island with requests at the top of the screen',
     /** Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */
     notificationsHint: 'Not getting notifications? System Settings → Notifications → Parley',
     /**
@@ -1149,6 +1141,8 @@ export const S = {
 
   /** Вид «Chat» вкладки сессии (план 2026-10-01, Task 3) — `renderer/chat/`. */
   chat: {
+    /** Подпись сообщения, которое человеку передал помощник (письмо с `via: 'assistant'`). */
+    viaAssistant: 'via assistant',
     /** Сегмент тулбара вкладки «Chat | Terminal». */
     segment: { chat: 'Chat', terminal: 'Terminal' },
     viewLabel: 'Session view',
@@ -1754,6 +1748,7 @@ export const S = {
 
   /** Заголовки действий реестра клавиш (`shared/keybindings.ts`, спека 9.6): пункты меню и строки палитры. */
   actions: {
+    askAssistant: 'Ask the assistant',
     capabilities: 'Capabilities…',
     commandPalette: 'Command palette',
     toggleDictation: 'Toggle dictation',
@@ -1880,6 +1875,8 @@ export const S = {
   /** Тексты общих участников переписки — `lib/participant-tag.ts`. */
   participants: {
     human: 'You',
+    /** Подпись отправителя, когда письмо ушло через помощника. */
+    viaAssistant: (name: string): string => `${name} (via assistant)`,
     /** Так хост подписывает свои строки в комнате и почте — как на снимке handoff `dark-08`. */
     system: 'Parley',
     deletedSuffix: '(deleted)',
@@ -2075,6 +2072,60 @@ export const S = {
       '',
       'Send: attach this file to a GitHub issue at https://github.com/Kalmbik61/Parley/issues or to your message to the author.',
     ].join('\n'),
+  },
+
+  /** Помощник на острове (спека 2026-10-14, раздел 6): тексты вида, настроек и подтверждения. */
+  assistant: {
+    ask: 'Ask the assistant',
+    placeholder: 'Ask the assistant…',
+    ready: 'Ask about your agents, or tell a room something',
+    escToClose: 'Esc to close',
+    hotkeyToTalk: (keys: string): string => `${keys} to talk`,
+    mic: 'Talk',
+    stopMic: 'Stop listening',
+    listening: 'Listening…',
+    transcribing: 'Recognizing…',
+    thinking: 'Thinking…',
+    checking: 'Checking rooms…',
+    reading: (name: string | null): string => (name === null ? 'Reading…' : `Reading ${name}…`),
+    preparing: 'Preparing a message…',
+    working: 'Working…',
+    answering: 'Answering',
+    confirm: 'Waiting for your confirmation',
+    miniListening: 'Listening·',
+    miniThinking: 'Thinking·',
+    miniWorking: 'Working·',
+    miniConfirm: 'Confirm send',
+    to: 'To',
+    send: 'Send',
+    wakeAndSend: 'Wake and send',
+    wakeNote: 'The agent is asleep and will be woken with this message.',
+    cancel: 'Cancel',
+    enterToSend: 'Enter to send',
+    sent: 'Sent ✓',
+    cancelled: 'Cancelled',
+    needsYou: (name: string, total: number): string => `${name} needs you · 1 of ${total}`,
+    voiceOff: 'Voice is off — Settings → Voice',
+    micDenied: 'Microphone access is off — System Settings → Privacy & Security',
+    noSpeech: "Didn't catch that — try again",
+    voiceFailed: "Couldn't recognize speech — type instead",
+    newConversation: 'New conversation',
+    settings: {
+      enabled: 'Turn on the assistant',
+      enabledHint: "Answers about your agents and passes your messages on. Runs on the selected provider's subscription.",
+      provider: 'Provider',
+      providerAuto: 'First connected',
+      model: 'Model',
+      modelDefault: 'Fast default',
+      language: 'Language',
+      languageSystem: 'System',
+      shortcut: 'Shortcut',
+      shortcutHint: 'Click the field, then press the keys. Works from any app.',
+      shortcutRecording: 'Press the keys…',
+      shortcutTaken: 'This shortcut is taken by another app — choose another.',
+      shortcutClaudeDesktop: 'Alt+Space is also the default Quick Entry shortcut in Claude Desktop. If the island does not open, change the shortcut here or there.',
+      glmSlow: 'GLM answers in about 13 seconds.',
+    },
   },
 
   /** Голосовой ввод (спека 2026-10-06-voice-input-design.md, раздел 3). */

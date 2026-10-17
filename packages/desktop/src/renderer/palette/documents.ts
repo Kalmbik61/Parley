@@ -13,6 +13,7 @@
  */
 
 import type { WorkEntry, WorkSession } from '@parley/core';
+import { dotState, liveStatus, stateWord, type DotState } from '@parley/core/session-state';
 import { refKey } from '@parley/protocol';
 import { toast } from 'sonner';
 import type { ActionDef, ActionId } from '../../shared/keybindings.js';
@@ -26,7 +27,6 @@ import { measureGroupSizes } from '../layout/measure.js';
 import { useLayoutStore } from '../layout/store.js';
 import { tabMeta, type TabMeta } from '../layout/tab-meta.js';
 import { groups, openTab, openTerminalSessionIds, splitGroup } from '../layout/tree.js';
-import { displayStatus, dotState, stateWord, type DotState } from '../lib/dot-state.js';
 import { isoMs } from '../lib/iso-time.js';
 import { sessionLabelText, sessionRowLabel, sessionTag, workTitleText } from '../lib/participant.js';
 import { isRoomArchived } from '../lib/room-archive.js';
@@ -134,7 +134,7 @@ export function buildDocuments(input: {
 
     const sessionState = (session: WorkSession): DotState =>
       dotState(
-        displayStatus(session),
+        liveStatus(session),
         activity[refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id })]?.activity.activity ?? null,
       );
 

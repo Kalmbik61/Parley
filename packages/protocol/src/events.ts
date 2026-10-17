@@ -1,3 +1,4 @@
+import type { AssistantState } from './assistant.js';
 import type { BacklogChanged } from './backlog.js';
 import type { BrowserAgentOpEvent } from './browser-agent.js';
 import type { CapabilitySnapshot } from './capability-snapshot.js';
@@ -50,6 +51,7 @@ export interface Events {
    * `browser-agent` в `hello.features`, одному. Ответ — метод `browser.agentResult` с тем же `opId`.
    */
   'browser.agentOp': BrowserAgentOpEvent;
+  'assistant.changed': AssistantState;
 }
 
 export type EventName = keyof Events;

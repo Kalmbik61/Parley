@@ -32,8 +32,10 @@ import {
   TERMINAL_WORKING_EVENT, type BackgroundTask,
   type EventRecord,
 } from './events.js';
+import type { Activity } from './session-state.js';
 
-export type Activity = 'working' | 'blocked' | 'unseen' | 'idle';
+// Тип объявлен в `session-state.ts` (единый модуль состояний); здесь реэкспорт, чтобы импорты `Activity` не ломались.
+export type { Activity } from './session-state.js';
 
 /** Чем выведено состояние: журналом хуков, страховкой по логу или ничем. */
 export type ActivitySource = 'hooks' | 'log' | 'none';
@@ -88,8 +90,6 @@ export interface SessionActivity {
   turnEndedAt: string | null;
   lastEventAt: string | null;
   source: ActivitySource;
-  /** В журнале был `SessionEnd`: жизненный цикл меняет вызывающий, не мы. */
-  exited: boolean;
   /** Каталога `events/` нет — работает одна страховка, нужно предупреждение. */
   hooksMissing: boolean;
 }
@@ -212,7 +212,6 @@ export function activityOf({
   // Время события, поставившего `blocked`: запись пользователя в логе сверяется с ним, а не с последним
   // событием, иначе строки ожидания и субагенты после ответа возвращали бы `blocked`.
   let blockedAt: string | null = null;
-  let exited = false;
   const started = new Map<string, StartedAgent>();
   // Работающие субагенты из последнего снимка `background_tasks` — те, что живут и
   // после конца хода родителя. Событие без поля снимок не трогает, пустой список стирает.
@@ -342,9 +341,6 @@ export function activityOf({
         // брошенного вызова не должен снимать новое.
         waits = event.waitId === null ? [] : waits.filter((wait) => wait.id !== event.waitId);
         break;
-      case 'SessionEnd':
-        exited = true;
-        break;
       default:
         // Прочие хуки состояние не меняют.
         break;
@@ -442,7 +438,6 @@ export function activityOf({
     turnEndedAt,
     lastEventAt,
     source,
-    exited,
     hooksMissing: events === null,
   };
 }

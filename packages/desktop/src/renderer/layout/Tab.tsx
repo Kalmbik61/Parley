@@ -27,12 +27,12 @@
 import { toast } from 'sonner';
 import { GitCompare, Globe, Hash, Mail as MailIcon, X } from 'lucide-react';
 import type { SessionLifecycle } from '@parley/core';
+import type { DotState } from '@parley/core/session-state';
 import type { GroupNode, TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { useBrowserStore } from '../browser/store.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { FileTypeIcon } from '../components/FileTypeIcon.js';
-import type { DotState } from '../lib/dot-state.js';
 import { cn } from '../lib/cn.js';
 import { fileKind } from '../files/file-kind.js';
 import {

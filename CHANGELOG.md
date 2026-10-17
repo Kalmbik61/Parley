@@ -10,6 +10,10 @@ Chats and rooms get a browser of their own next to the view, and an agent can sh
 
 ### Added
 
+- **Assistant on the island (stage 1).** The assistant answers questions about your agents by hotkey (⌥Space), voice
+  or text, and passes messages to rooms and agents after you confirm them on a card. Messages show as
+  "You (via assistant)" in rooms and in Chat. It is off by default: turn it on in Settings → Assistant. Each question
+  is a short run of your provider's CLI on your subscription. An agent that is asleep can take a message too: the card says it will be woken, and the session resumes with your text as its first turn.
 - **A browser next to every Chat and room.** The **Browser** button opens a panel beside the view with its own pages
   (up to five), Console | Network, sizes, Select and Annotate. What you pick or annotate goes to the chat or room the
   panel belongs to. The pages survive restarting the window, and in a narrow window the panel covers the view with a
@@ -72,6 +76,8 @@ Chats and rooms get a browser of their own next to the view, and an agent can sh
 - **Sessions started by another session hang off their parent in the sidebar.** A thin line runs from the parent's
   status dot down to each session it started, like a tree, and the indent grows from 12 to 20 px per level. A
   child whose parent row is hidden under "N more closed" has no line.
+- **Notification toggles start with a capital letter.** Settings → Notifications now reads "Needs you", "Finished", "Mail and mentions to you", "Sound", "Island with requests at the top of the screen".
+- **One table of session states.** The window, the assistant on the island and the brief that agents get now take the session state from one shared module, so the assistant names states with the same words as the sidebar ("working", "needs you", "asleep"…) and no longer reports a running session as off.
 
 ### Fixed
 

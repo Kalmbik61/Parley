@@ -5,6 +5,7 @@ import { INDEX_READ_CONCURRENCY, mapLimited } from '../map-limited.js';
 import type { SessionIndex } from '../session-index.js';
 import { isPointerText } from '../work/delivery.js';
 import { createUsageLedger, observedCount, type UsageWindow } from '../work/usage-ledger.js';
+import { assistantCwd } from '../discover.js';
 import { defaultCodexRoot, discoverCodexSessions } from './discover.js';
 
 function asRecord(value: unknown): RawRecord | null {
@@ -302,6 +303,7 @@ export async function buildCodexIndex(
   const index = await mapLimited(discovered, INDEX_READ_CONCURRENCY, (session) =>
     indexCodexSession(session.file, signal),
   );
-  index.sort((a, b) => String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? '')));
-  return index;
+  const own = index.filter((session) => session.cwd !== assistantCwd());
+  own.sort((a, b) => String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? '')));
+  return own;
 }

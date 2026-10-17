@@ -1,0 +1,40 @@
+#!/usr/bin/env node
+// Заглушка `claude` для E2E помощника: ход помощника (`--strict-mcp-config`) зовёт инструменты через маршрут хоста
+// и печатает stream-json; любой другой запуск (сессии работы) уходит в stub-echo-agent.mjs.
+// `--version` отвечает сама: заглушка агента говорит 2.1.286, а помощнику нужен claude не старше 2.1.300.
+import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { URL, fileURLToPath } from 'node:url';
+
+const args = process.argv.slice(2);
+if (process.argv[2] === '--version') {
+  process.stdout.write('2.1.300 (Claude Code)\n');
+  process.exit(0);
+} else if (!args.includes('--strict-mcp-config')) {
+  const echo = fileURLToPath(new URL('./stub-echo-agent.mjs', import.meta.url));
+  const child = spawn(process.execPath, [echo, ...args], { stdio: 'inherit' });
+  child.on('exit', (code) => process.exit(code ?? 0));
+} else {
+  const prompt = (args[args.indexOf('-p') + 1] ?? '').replace(/^\[system:[^\]]*\]\n/, '');
+  const config = JSON.parse(readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8'));
+  const { PARLEY_ASSISTANT_URL: url, PARLEY_ASSISTANT_TOKEN: token } = Object.values(config.mcpServers)[0].env;
+  const out = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);
+  const call = async (tool, body) => {
+    const response = await globalThis.fetch(`${url}/${tool}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    return response.json();
+  };
+  out({ type: 'system', subtype: 'init', session_id: 'stub-assistant-1' });
+  out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'mcp__parley-assistant__parley_overview', input: {} }] } });
+  const overview = await call('parley_overview', {});
+  const room = /\[(room:[^\]]+)\]/.exec(overview.text ?? '')?.[1];
+  let answer = '[[calm]] Nothing is open right now.';
+  if (/^tell /i.test(prompt) && room !== undefined) {
+    out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't2', name: 'mcp__parley-assistant__propose_message', input: { target: room, text: 'Skip the Safari tests.' } }] } });
+    await call('propose_message', { target: room, text: 'Skip the Safari tests.' });
+    answer = '[[calm]] I prepared a message for the room.';
+  } else if (room !== undefined) {
+    answer = '[[joy]] The room is working.';
+  }
+  for (const word of answer.split(/(?<= )/)) out({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: word } } });
+  out({ type: 'result', subtype: 'success', is_error: false, result: answer, session_id: 'stub-assistant-1' });
+}

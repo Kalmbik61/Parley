@@ -78,10 +78,12 @@ export interface IslandWindowLike {
   showInactive(): void;
   hide(): void;
   setIgnoreMouseEvents(ignore: boolean, options: { forward: boolean }): void;
+  setFocusable(focusable: boolean): void;
+  focus(): void;
   isVisible(): boolean;
   destroy(): void;
   isDestroyed(): boolean;
-  on(event: 'closed', listener: () => void): unknown;
+  on(event: 'closed' | 'blur', listener: () => void): unknown;
 }
 
 export interface IslandControllerDeps<W extends IslandWindowLike> {
@@ -95,6 +97,8 @@ export interface IslandControllerDeps<W extends IslandWindowLike> {
   cursor(): { x: number; y: number };
   /** Курсор вошёл в область острова или ушёл из неё: main отдаёт это renderer острова. */
   onHover(hovered: boolean): void;
+  /** Панель потеряла фокус, пока держала клавиатуру (клик в другое приложение): main велит острову выйти из режима. */
+  onKeyboardLost(): void;
   /** Окно создано: main вешает пересылку событий хоста и отдаёт настройки. */
   onCreated(window: W): void;
   log(message: string): void;
@@ -108,6 +112,8 @@ export interface IslandController<W extends IslandWindowLike> {
   /** Область острова в координатах окна (форма или язычок) от renderer; `null` — ничего не показано, курсор всегда «вне». */
   setHitRect(rect: IslandHitRect | null): void;
   setVisible(visible: boolean): void;
+  /** Режим помощника: панель берёт клавиатуру (`true`) или отдаёт её прежнему приложению (`false`). */
+  setKeyboard(on: boolean): void;
   dragStart(point: IslandPoint): void;
   dragMove(point: IslandPoint): void;
   dragEnd(point: IslandPoint): void;
@@ -127,6 +133,8 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
   let hitRect: IslandHitRect | null = null;
   /** Курсор над областью острова (или остров тащат): окно ловит мышь, renderer знает об этом из `onHover`. */
   let hovered = false;
+  /** Панель взяла клавиатуру (режим помощника): потеря фокуса в этом состоянии сообщается через `onKeyboardLost`. */
+  let keyboard = false;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   const live = (): W | null => (window !== null && !window.isDestroyed() ? window : null);
@@ -187,6 +195,13 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
         stopPolling();
       }
     });
+    // Клавиатура ушла сама (клик в другое приложение) — как Esc. `hide()`/`showInactive()` внутри `setKeyboard(false)` тоже
+    // дают blur, но флаг к тому моменту уже снят.
+    created.on('blur', () => {
+      if (!keyboard || window !== created) return;
+      keyboard = false;
+      deps.onKeyboardLost();
+    });
     created.webContents.on('render-process-gone', () => {
       crashes += 1;
       deps.log(`island renderer gone (${crashes})`);
@@ -242,6 +257,24 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
         current.showInactive();
       }
       startPolling();
+    },
+    setKeyboard: (on) => {
+      const current = live();
+      if (current === null) return;
+      keyboard = on;
+      if (on) {
+        current.setFocusable(true);
+        current.focus();
+        return;
+      }
+      current.setFocusable(false);
+      // Снять с панели ключевое окно: иначе печать в других приложениях шла бы в никуда. Проба 2026-10-15: hide и
+      // showInactive возвращают ввод прежнему приложению, не трогая передний план.
+      if (current.isVisible()) {
+        current.hide();
+        current.showInactive();
+        current.setIgnoreMouseEvents(!hovered, { forward: false });
+      }
     },
     dragStart: (point) => {
       const current = live();

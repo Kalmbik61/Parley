@@ -64,7 +64,7 @@ const ALL_ACTION_IDS: Record<ActionId, true> = {
   'tab.goto.1': true, 'tab.goto.2': true, 'tab.goto.3': true, 'tab.goto.4': true, 'tab.goto.5': true,
   'tab.goto.6': true, 'tab.goto.7': true, 'tab.goto.8': true, 'tab.goto.9': true,
   find: true, 'voice.toggle': true, 'terminal.clear': true, 'chat.toggleView': true, 'settings.open': true,
-  'attention.next': true, 'wake.toggle': true, 'host.restart': true, 'host.diagnostics': true,
+  'attention.next': true, 'wake.toggle': true, 'host.restart': true, 'host.diagnostics': true, 'assistant.open': true,
   'appearance.system': true, 'appearance.dark': true, 'appearance.light': true,
   'browser.newTab': true,
   'browser.find': true, 'browser.zoomIn': true, 'browser.zoomOut': true, 'browser.zoomReset': true,

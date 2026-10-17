@@ -317,7 +317,7 @@ describe('App — бейдж и «просмотрено» (тесты 8 и 13 �
     act(() => {
       bridge.emit('activity.changed', {
         ref,
-        activity: { activity, subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', exited: false, hooksMissing: false },
+        activity: { activity, subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', hooksMissing: false },
         metrics: { tokensIn, tokensOut: 0, durationMs: 0, unread: 0, subagents: 0, model: 'opus' },
       });
     });

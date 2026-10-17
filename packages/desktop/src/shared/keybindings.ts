@@ -21,7 +21,7 @@ export type ActionId =
   | 'tab.goto.1' | 'tab.goto.2' | 'tab.goto.3' | 'tab.goto.4' | 'tab.goto.5'
   | 'tab.goto.6' | 'tab.goto.7' | 'tab.goto.8' | 'tab.goto.9'
   | 'find' | 'voice.toggle' | 'terminal.clear' | 'chat.toggleView' | 'settings.open'
-  | 'attention.next' | 'wake.toggle' | 'host.restart' | 'host.diagnostics'
+  | 'attention.next' | 'wake.toggle' | 'host.restart' | 'host.diagnostics' | 'assistant.open'
   | 'appearance.system' | 'appearance.dark' | 'appearance.light'
   | 'browser.newTab'
   | 'browser.find' | 'browser.zoomIn' | 'browser.zoomOut' | 'browser.zoomReset' // when: 'browser', menu: null
@@ -58,6 +58,7 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'find', title: S.actions.find, keywords: ['search', 'terminal'], keys: 'CmdOrCtrl+F', menu: 'edit', when: 'terminal', inPalette: true },
   // Диктовка (спека 2026-10-06-voice-input-design.md, 3.4): поле или терминал с фокусом; идёт запись — её стоп.
   { id: 'voice.toggle', title: S.actions.toggleDictation, keywords: ['voice', 'dictation', 'microphone', 'speech'], keys: 'CmdOrCtrl+Shift+M', menu: 'edit', when: 'always', inPalette: true },
+  { id: 'assistant.open', title: S.actions.askAssistant, keywords: ['assistant', 'jarvis', 'ask', 'voice'], keys: null, menu: null, when: 'always', inPalette: true },
 
   { id: 'palette.open', title: S.actions.commandPalette, keywords: ['command', 'palette'], keys: 'CmdOrCtrl+J', menu: 'view', when: 'always', inPalette: false },
   { id: 'files.quickOpen', title: S.actions.goToFile, keywords: ['open', 'file', 'quick'], keys: 'CmdOrCtrl+P', menu: 'view', when: 'always', inPalette: true },

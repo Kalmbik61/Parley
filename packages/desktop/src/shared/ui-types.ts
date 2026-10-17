@@ -5,6 +5,7 @@
  * `ParleyBridge.app.loadUi`/`saveUi`/`setAppearance`.
  */
 
+import type { AssistantLanguage } from '@parley/core/assistant';
 import { isVoiceLanguage, isVoiceModelId, type VoiceModelId } from './voice-types.js';
 
 export type Appearance = 'system' | 'dark' | 'light';
@@ -36,6 +37,19 @@ export interface IslandUi {
   enabled: boolean;
   displayId: number | null;
   anchor: IslandAnchor;
+}
+
+/** Помощник на острове (спека 2026-10-14, 6.1). Выключен по умолчанию: тратит лимит провайдера. */
+export interface AssistantUi {
+  enabled: boolean;
+  /** `null` — первый готовый: Claude, GLM, Codex. */
+  provider: string | null;
+  /** `null` — быстрая модель провайдера по умолчанию. */
+  model: string | null;
+  /** Глобальное сочетание в формате Electron accelerator. */
+  hotkey: string;
+  /** Код языка Whisper (`uk`, `de`, …), не `auto`; `null` — язык системы. */
+  language: AssistantLanguage | null;
 }
 
 export type RightSidebarTab = 'files' | 'changes' | 'agents';
@@ -75,6 +89,8 @@ export interface UiFile {
   browser: BrowserUi;
   /** Остров одобрений (спека 2026-10-12). */
   island: IslandUi;
+  /** Помощник на острове (спека 2026-10-14, 6.1). */
+  assistant: AssistantUi;
 }
 
 export const DEFAULT_UI: UiFile = {
@@ -96,6 +112,7 @@ export const DEFAULT_UI: UiFile = {
   voice: { enabled: false, model: null, language: 'auto' },
   browser: { devtoolsHeight: null, agentsAllowed: true },
   island: { enabled: true, displayId: null, anchor: 'center' },
+  assistant: { enabled: false, provider: null, model: null, hotkey: 'Alt+Space', language: null },
 };
 
 /**
@@ -128,6 +145,39 @@ export function fitRightSidebar(saved: number, windowWidth: number, leftWidth: n
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/**
+ * Вложенные объекты `UiFile`, которые `save` сливает НЕ целиком поверх
+ * текущего файла, а по одному уровню (текущее ⊕ патч) перед `normalizeUi`
+ * (раунд исправлений 1, находка I1/тест 12): иначе `normalizeUi` подставляет
+ * `DEFAULT_UI` в подполя, которых нет в патче, — частичный `{ sound: false }`
+ * откатывал бы `needsYou`/`finished`/`mail` на дефолтный `true`, хотя патч их
+ * не трогал.
+ */
+export const NESTED_UI_KEYS = [
+  'leftSidebar',
+  'rightSidebar',
+  'notifications',
+  'voice',
+  'browser',
+  'island',
+  'assistant',
+] as const satisfies ReadonlyArray<keyof UiFile>;
+
+/** Слияние патча с текущим `UiFile`: верхний уровень — заменой, ключи `NESTED_UI_KEYS` — на один уровень вглубь. */
+export function mergeUiPatch(
+  current: UiFile,
+  patch: Partial<Omit<UiFile, 'version'>>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...current, ...patch };
+  for (const key of NESTED_UI_KEYS) {
+    const patchValue = (patch as Partial<Record<(typeof NESTED_UI_KEYS)[number], unknown>>)[key];
+    if (isRecord(patchValue)) {
+      merged[key] = { ...(current[key] as Record<string, unknown>), ...patchValue };
+    }
+  }
+  return merged;
+}
 
 const isAppearance = (value: unknown): value is Appearance =>
   value === 'system' || value === 'dark' || value === 'light';
@@ -216,6 +266,19 @@ function normalizeIsland(value: unknown): IslandUi {
   };
 }
 
+function normalizeAssistant(value: unknown): AssistantUi {
+  const source = isRecord(value) ? value : {};
+  const fallback = DEFAULT_UI.assistant;
+  const text = (item: unknown): string | null => (typeof item === 'string' && item.trim() !== '' ? item : null);
+  return {
+    enabled: typeof source.enabled === 'boolean' ? source.enabled : fallback.enabled,
+    provider: text(source.provider),
+    model: text(source.model),
+    hotkey: text(source.hotkey) ?? fallback.hotkey,
+    language: isVoiceLanguage(source.language) && source.language !== 'auto' ? source.language : null,
+  };
+}
+
 /**
  * Приводит сырой JSON `ui.json` к `UiFile`: неизвестные ключи выкинуты (результат
  * собирается по известной схеме, а не копированием входа), неверные значения —
@@ -255,5 +318,6 @@ export function normalizeUi(raw: unknown): UiFile {
     voice: normalizeVoice(source.voice),
     browser: normalizeBrowser(source.browser),
     island: normalizeIsland(source.island),
+    assistant: normalizeAssistant(source.assistant),
   };
 }

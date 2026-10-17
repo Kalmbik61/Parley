@@ -2,6 +2,19 @@ import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { envValue } from './names.js';
+import { parleyHome } from './work/store.js';
+
+/** Рабочая папка CLI помощника (спека 2026-10-14, 15.6): её транскрипты — не сессии Parley. */
+export function assistantCwd(home: string = parleyHome()): string {
+  return path.join(home, 'assistant');
+}
+
+/** Имя каталога проекта в `~/.claude/projects`: Claude Code заменяет всё, кроме латинских букв и цифр, дефисом. */
+export function claudeProjectSlug(cwd: string): string {
+  return cwd.replace(/[^a-zA-Z0-9]/g, '-');
+}
+
+const assistantSlug = (): string => claudeProjectSlug(assistantCwd());
 
 /**
  * Переопределение корня истории Claude Code — только для тестов (раунд lane-r3, п. 1):
@@ -108,7 +121,7 @@ export async function discoverSessions(root: string = defaultRoot()): Promise<Di
   const sessions: DiscoveredSession[] = [];
 
   for (const project of await readDirSafe(root)) {
-    if (!project.isDirectory()) continue;
+    if (!project.isDirectory() || project.name === assistantSlug()) continue;
     const projectDir = path.join(root, project.name);
 
     for (const entry of await readDirSafe(projectDir)) {
@@ -150,6 +163,8 @@ export function sessionFileForPath(changedPath: string, root: string): string | 
   const segments = relative.split(path.sep);
   const [project, second] = segments;
   if (project === undefined || second === undefined) return null;
+  // Транскрипты помощника — не сессии Parley, watcher их не перечитывает.
+  if (project === assistantSlug()) return null;
 
   // <project>/<id>.jsonl — сама сессия.
   if (segments.length === 2) {

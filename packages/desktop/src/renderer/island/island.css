@@ -33,3 +33,22 @@ body {
     animation: none;
   }
 }
+
+/* Пятно помощника «дышит», пока он занят (спека 2026-10-14, этап 1 — вместо роя). */
+@keyframes assistant-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.12); opacity: 1; }
+}
+.assistant-pulse { animation: assistant-pulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .assistant-pulse { animation: none; }
+}
+
+/* Точка у подписи состояния пульсирует, пока идёт запись голоса (live-1, L3). */
+@keyframes assistant-dot-pulse {
+  50% { transform: scale(1.7); opacity: 0.5; }
+}
+.assistant-dot-pulse { animation: assistant-dot-pulse 1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .assistant-dot-pulse { animation: none; }
+}

@@ -1,7 +1,7 @@
 import { markedExcerpt, textHash } from './context-budget.js';
 import { unreadFor, unreadForHuman } from './letters.js';
 import { isRoomArchived } from './rooms.js';
-import { displayStatus } from './status-view.js';
+import { reportedStatus } from './session-state.js';
 import type { Message, MapCompact, RoomPlan, WorkMap, WorkSession } from './types.js';
 
 /**
@@ -468,7 +468,7 @@ export interface SessionTopology {
   contextFrom: string[];
   lifecycle: WorkSession['lifecycle'];
   result: WorkSession['result'];
-  /** Единый статус для разговора с человеком: `displayStatus`. */
+  /** Единый статус для разговора с человеком: `reportedStatus`. */
   status: string;
   resultAt: string | null;
   closedAt: string | null;
@@ -578,7 +578,7 @@ export function mapTopology(map: WorkMap, callerId: string | null): MapTopology 
       contextFrom: session.contextFrom,
       lifecycle: session.lifecycle,
       result: session.result,
-      status: displayStatus(session),
+      status: reportedStatus(session),
       resultAt: session.resultAt,
       closedAt: session.closedAt,
       startedAt: session.startedAt,
