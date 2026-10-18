@@ -136,7 +136,7 @@ describe('TerminalBody — вид вкладки', () => {
     expect(screen.getAllByTestId('terminal-body')).toHaveLength(1);
     expect((segment('Chat') as HTMLButtonElement).disabled).toBe(true);
     expect((segment('Terminal') as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByTitle(S.chat.terminalOnlyFor('codex')).contains(segment('Chat'))).toBe(true);
+    expect(screen.getByTitle(S.chat.hostFeedUnsupported).contains(segment('Chat'))).toBe(true);
   });
 
   it('версия claude неизвестна (null) — терминал, сегмент выключен с подсказкой', () => {
@@ -147,7 +147,7 @@ describe('TerminalBody — вид вкладки', () => {
     expect((segment('Chat') as HTMLButtonElement).disabled).toBe(true);
     expect(segment('Terminal').getAttribute('aria-checked')).toBe('true');
     expect(S.chat.terminalOnlyFor('claude')).toBe('Chat needs Claude Code 2.1.286 or newer');
-    expect(screen.getByTitle(S.chat.terminalOnlyFor('claude')).contains(segment('Chat'))).toBe(true);
+    expect(screen.getByTitle(S.chat.versionUnknown).contains(segment('Chat'))).toBe(true);
   });
 
   it('providers.list ещё не ответил — пустая заглушка: ни чата, ни терминала, ни тулбара; ответ пришёл — чат', () => {

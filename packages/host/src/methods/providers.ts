@@ -48,8 +48,18 @@ export function createProvidersList(
     catalog?.refreshIfStale();
     const registry = await loadProviders();
     await versions?.ready;
+    const probes = new Map<string, Promise<string | null>>();
+    const probeVersion = (command: string): Promise<string | null> => {
+      let result = probes.get(command);
+      if (result === undefined) {
+        result = versions?.fresh(command) ?? Promise.resolve(null);
+        probes.set(command, result);
+      }
+      return result;
+    };
     const providers = await Promise.all(
       Object.values(registry).map(async (entry) => {
+        if (versions?.get(entry.runner.command) === null) await probeVersion(entry.runner.command);
         let key: string | null = null;
         if (entry.runner.secret !== undefined) {
           try {
@@ -60,7 +70,7 @@ export function createProvidersList(
         }
         const readiness = await providerReadiness(entry, {
           keyPresent: key !== null,
-          probeVersion: (command) => versions?.fresh(command) ?? Promise.resolve(null),
+          probeVersion,
         });
         return {
           id: entry.id,
@@ -170,10 +180,18 @@ export function createProvidersCheck(
   };
 }
 
-export function createProvidersRefreshLimits(limits: LimitsService): Handler<'providers.refreshLimits'> {
+export function createProvidersRefreshLimits(limits: LimitsService, versions?: ProviderVersions): Handler<'providers.refreshLimits'> {
   return async () => {
     try {
-      await limits.refresh(true);
+      await Promise.all([
+        limits.refresh(true),
+        (async () => {
+          if (versions === undefined) return;
+          await versions.ready;
+          const registry = await loadProviders();
+          await Promise.all([...new Set(Object.values(registry).map(entry => entry.runner.command))].map(command => versions.fresh(command)));
+        })(),
+      ]);
     } catch (error) {
       throw new HostError('internal', 'Unable to refresh GLM quota', {
         provider: 'glm', reason: error instanceof ZaiQuotaError ? error.reason : 'unavailable',

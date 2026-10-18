@@ -42,19 +42,25 @@ function atLeast(version: string, min: string): boolean {
   return at === -1 || have[at]! > need[at]!;
 }
 
-export function feedAvailable({
-  hostMethods: methods,
-  features,
-  provider,
-  family,
-  version,
-}: FeedAvailabilityInput): boolean {
-  if (!methods.has('feed.snapshot')) return false;
+export type FeedUnavailableReason = 'host-unsupported' | 'provider-unsupported' | 'unknown-version' | 'old-version';
+
+export function feedUnavailableReason({ hostMethods: methods, features, provider, family, version }: FeedAvailabilityInput): FeedUnavailableReason | null {
+  if (!methods.has('feed.snapshot')) return 'host-unsupported';
   if (provider === 'codex') {
-    return (features?.has(FEED_CODEX_FEATURE) ?? false) && version !== null && atLeast(version, CODEX_FEED_MIN_VERSION);
-  }
-  if (family !== 'claude' && !(family === undefined && provider === 'claude')) return false;
-  return version !== null && atLeast(version, FEED_MIN_VERSION);
+    if (!features?.has(FEED_CODEX_FEATURE)) return 'host-unsupported';
+  } else if (family !== 'claude' && !(family === undefined && provider === 'claude')) return 'provider-unsupported';
+  if (version === null || semver(version) === null) return 'unknown-version';
+  return atLeast(version, provider === 'codex' ? CODEX_FEED_MIN_VERSION : FEED_MIN_VERSION) ? null : 'old-version';
+}
+
+export function feedAvailable(input: FeedAvailabilityInput): boolean {
+  return feedUnavailableReason(input) === null;
+}
+
+export function useFeedUnavailableReason(provider: string): FeedUnavailableReason | null {
+  const info = useProvidersStore(state => state.providers.find(entry => entry.id === provider));
+  const status = useHostStore(state => state.status);
+  return feedUnavailableReason({ hostMethods: hostMethods(status), features: hostFeatures(status), provider, family: info?.family, version: info?.version ?? null });
 }
 
 /**

@@ -9,7 +9,7 @@ import { FEED_MIN_VERSION } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { ActivityEntry } from '../store/activity.js';
 import { makeActivity } from '../test-utils/work-fixtures.js';
-import { effectiveView, feedAvailability, feedAvailable, feedAvailableNow, sessionStarted, sessionStartedOrUnknown } from './feed-view.js';
+import { effectiveView, feedUnavailableReason, feedAvailability, feedAvailable, feedAvailableNow, sessionStarted, sessionStartedOrUnknown } from './feed-view.js';
 import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
 
@@ -163,5 +163,19 @@ describe('sessionStarted', () => {
     expect(sessionStarted(entry(null))).toBe(false);
     expect(sessionStarted(null)).toBe(false);
     expect(sessionStarted(undefined)).toBe(false);
+  });
+});
+
+
+describe('feedUnavailableReason', () => {
+  const input = { hostMethods: FEED, features: new Set(['feed-codex']), provider: 'codex', version: '0.162.0' };
+  it('distinguishes unknown version, old CLI, host support and unsupported provider', () => {
+    expect(feedUnavailableReason({ ...input, version: null })).toBe('unknown-version');
+    expect(feedUnavailableReason({ ...input, version: 'nightly' })).toBe('unknown-version');
+    expect(feedUnavailableReason({ ...input, version: '0.159.0' })).toBe('old-version');
+    expect(feedUnavailableReason({ ...input, features: new Set() })).toBe('host-unsupported');
+    expect(feedUnavailableReason({ ...input, hostMethods: NO_FEED })).toBe('host-unsupported');
+    expect(feedUnavailableReason({ ...input, provider: 'other' })).toBe('provider-unsupported');
+    expect(feedUnavailableReason(input)).toBeNull();
   });
 });

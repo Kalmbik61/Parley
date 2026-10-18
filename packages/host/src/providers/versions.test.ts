@@ -100,6 +100,25 @@ const silentLog = (): Log & { warnings: string[] } => {
 };
 
 describe('startProviderVersions: одна проба на старте, с кэшем', () => {
+  it('shares simultaneous retries and recovers from an unknown startup version', async () => {
+    let calls = 0;
+    let complete: ((value: string | null) => void) | undefined;
+    const versions = startProviderVersions(async command => {
+      if (command !== 'codex') return null;
+      calls += 1;
+      if (calls === 1) return null;
+      return new Promise<string | null>(resolve => { complete = resolve; });
+    }, silentLog());
+    await versions.ready;
+    const first = versions.fresh('codex');
+    const second = versions.fresh('codex');
+    await Promise.resolve();
+    expect(calls).toBe(2);
+    complete!('0.162.0');
+    expect(await Promise.all([first, second])).toEqual(['0.162.0', '0.162.0']);
+    expect(versions.get('codex')).toBe('0.162.0');
+  });
+
   it('fresh reuses the supplied probe after an upgrade and updates the cache', async () => {
     let version = '2.1.286';
     const versions = startProviderVersions(async () => version, silentLog());
