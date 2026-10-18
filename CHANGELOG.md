@@ -4,11 +4,23 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.16.0
+
+Agent plans are now visible in room cards and the Agents tab. Feature Lead and agent-owned rooms let agents coordinate existing sessions, while Codex operations that need attention are easier to find.
+
+### Changed
+
+- **Agents coordinate existing sessions instead of creating child sessions.** The `spawn_session` tool and automatic launch of parent-linked pending sessions have been removed. Create new sessions through the window or CLI, then invite them to a room. Integrations using `create_room` must now provide nonempty working members and an explicit lead among them.
 
 ### Added
 
-- **Agent-authored plans appear in room participant cards and the Agents tab.** See the current step, confirmed progress and descriptions, and open a participant's plan without leaving the room. Claude task IDs also restore subagent steps; incomplete histories are marked explicitly.
+- **Agent-authored plans appear in room participant cards and the Agents tab.** See the current or next step, confirmed progress and descriptions, and open a participant's plan without leaving the room. Claude task IDs also restore subagent steps; incomplete histories are marked explicitly. Large plans retain their full progress counts and current step.
+- **Feature Lead coordinates a feature through rooms.** The new built-in role plans work, coordinates participants and checks the result. An agent can own a room without joining its working members; ownership and room leadership are shown separately in the sidebar.
+
+### Fixed
+
+- **Codex operations that stop producing output surface as needing attention.** A long-running code operation no longer leaves the session looking indefinitely busy when it may need approval.
+- **Codex terminal requests remain reachable from the island.** When a waiting request cannot be shown as an interactive card, the island provides a way to open the session's terminal.
 
 ## 0.15.2
 
