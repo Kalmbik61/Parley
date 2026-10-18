@@ -37,6 +37,14 @@ function handlers(): {
 }
 
 describe('sessions.create: модель и усилие из диалога (дизайн комнат, 3.2)', () => {
+  it('propagates the service rejection for obsolete nonnull parent creation', async () => {
+    const { create, sessionsCreate } = handlers();
+    const rejection = new Error('Child sessions are no longer supported');
+    create.mockRejectedValueOnce(rejection);
+    await expect(sessionsCreate({ ...params, parent: 's-02' }, request)).rejects.toBe(rejection);
+    expect(create).toHaveBeenCalledOnce();
+    expect(create).toHaveBeenCalledWith({ ...params, parent: 's-02' });
+  });
   it('model и effort доезжают до сервиса как есть; ответ — ref', async () => {
     const { create, sessionsCreate } = handlers();
 

@@ -78,6 +78,7 @@ export interface RoomRowProps {
   workId: string;
   bridge: ParleyBridge;
   row: CardRoomRow;
+  ownerSessions?: WorkSession[];
   /** Линии дерева к этой строке и сквозь неё (`sort.ts#treeGuides`); у архивной комнаты их нет. */
   guides?: readonly TreeGuide[];
   plan?: RoomPlan | null;
@@ -125,6 +126,7 @@ export function RoomRow({
   workId,
   bridge,
   row,
+  ownerSessions = [],
   guides = NO_GUIDES,
   plan,
   unread,
@@ -182,6 +184,7 @@ export function RoomRow({
       projectPath={projectPath}
       workId={workId}
       row={row}
+      ownerSessions={ownerSessions}
       bridge={bridge}
       onRename={() => setRenaming(true)}
       livePlan={Boolean(plan)}
@@ -193,6 +196,7 @@ export function RoomRow({
       aria-selected={stop}
       tabIndex={stop ? 0 : -1}
       data-room-row={room.id}
+      data-room-owner-id={room.ownerId ?? undefined}
       data-selected={selected}
       {...(row.archived ? { 'data-dimmed': '' } : {})}
       {...(over ? { 'data-drop-over': '' } : {})}

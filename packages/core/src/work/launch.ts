@@ -618,35 +618,6 @@ export async function createNewSession(
 }
 
 /**
- * Дочерняя сессия выбранной, руками (окно, через хост). Родитель и контекст — выбранная
- * сессия, бриф собирается как у порождённых агентом (`spawn_session`): резюме и
- * артефакты родителя плюс правила. Задачи у неё нет: бриф уходит контекстом в
- * системный промпт, а запрос пишет пользователь первым сообщением (раздел B
- * плана от 2026-09-06).
- */
-export async function createChildSession(
-  projectPath: string,
-  workId: string,
-  parentId: string,
-): Promise<NewSessionResult> {
-  let created: WorkSession | undefined;
-  const map = await updateMap(projectPath, workId, (current) => {
-    const parent = current.sessions.find((item) => item.id === parentId);
-    if (parent === undefined) throw new Error(`session ${parentId} is not in workspace ${workId}`);
-    created = addSession(current, {
-      provider: 'claude',
-      label: NEW_LABEL,
-      task: '',
-      parent: parentId,
-      contextFrom: [parentId],
-    });
-  });
-  if (created === undefined) throw new Error(`session in workspace ${workId} was not created`);
-  await writeBrief(projectPath, map, created.id);
-  return { workId, session: created };
-}
-
-/**
  * Заголовок для автозаголовка из записи индекса логов; `null` — назвать сессию нечем. Разговор, начатый
  * указателем на письма (`firstPromptPointer`: агент комнаты без задачи, первым ему пришла почта), имени из
  * лога не получает: заголовок из реплики — сам указатель, а `ai-title` Claude генерирует по первому запросу

@@ -196,6 +196,8 @@ export {
   roomLead,
   RoomRuleError,
   setRoomLead,
+  setRoomOwner,
+  canReadRoom,
 } from './work/rooms.js';
 export type { LeadChange, NewRoom } from './work/rooms.js';
 export { leadRecipeBlock, recipeLeadBlock, recipeLeadsPending, reconcileRecipeLeads } from './work/recipe-lead.js';
@@ -300,7 +302,6 @@ export { buildBrief, writeBrief } from './work/brief.js';
 export {
   applyAutoTitle,
   autoTitleOf,
-  createChildSession,
   createNewSession,
   createPendingSession,
   deleteSession,
@@ -558,7 +559,6 @@ export {
   RESOURCE_LIMIT_KEYS,
   RESOURCE_WINDOW_MS,
   ResourceDeniedError,
-  admitSpawn,
   assertMessageBudget,
   attemptKindFor,
   countRecipients,
@@ -569,7 +569,6 @@ export {
   roomOfSession,
   settleAttempt,
   settleByEvidence,
-  spawnDepthOf,
   teamStartFits,
 } from './work/resource-policy.js';
 export type {
@@ -580,7 +579,6 @@ export type {
   ResourceLimits,
   ResourceStatus,
   ScopeStatus,
-  SpawnRequest,
 } from './work/resource-policy.js';
 export type { ResourceAttempt, ResourceKind, WorkResources } from './work/types.js';
 

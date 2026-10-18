@@ -118,6 +118,7 @@ export function addSession(
   init: NewSession,
   at = new Date().toISOString(),
 ): WorkSession {
+  if (init.parent != null) throw new Error('Parley sessions cannot have a parent');
   if (init.agent !== undefined && init.role !== undefined) throw new Error('agent-and-role-conflict');
   const id = nextSessionId(map);
   const session: WorkSession = {
@@ -170,6 +171,7 @@ export function removeSession(map: WorkMap, sessionId: string): WorkSession {
       session.contextFrom = session.contextFrom.filter((id) => id !== sessionId);
     }
   }
+  for (const room of map.rooms) if (room.ownerId === sessionId) room.ownerId = null;
   for (const message of map.messages) {
     // `to` — массив: сравнение строки с ним было бы всегда ложным и молча
     // перестало бы помечать письма удалённой сессии.
@@ -371,7 +373,7 @@ export function parseMap(raw: string, file: string): WorkMap {
     migrateMessage(message as unknown as Record<string, unknown>);
   }
   for (const room of map.rooms) {
-    migrateRoom(room as unknown);
+    migrateRoom(room as unknown, map.sessions);
   }
   map.plans ??= [];
   validatePlanStorage(map);
@@ -455,8 +457,15 @@ function isMemberLog(value: unknown): boolean {
  * такой комнаты считается первый из `members` (`roomLead`). Архива комнат (`archivedAt`) до 2026-10-08 тоже не было:
  * комната открыта. Запись, которая не объект, не трогаем — как и прежде, её форму проверять некому.
  */
-function migrateRoom(room: unknown): void {
+function migrateRoom(room: unknown, sessions: WorkSession[]): void {
   if (!isRecord(room)) return;
+  if (!Object.hasOwn(room, 'ownerId')) {
+    const creator = room['creator'];
+    const members = room['members'];
+    if (typeof creator === 'string' && creator !== 'human' && Array.isArray(members) && !members.includes(creator)) members.push(creator);
+    room['ownerId'] = sessions.some((session) => session.id === creator) ? creator : null;
+  }
+  if (room['ownerId'] !== null && (typeof room['ownerId'] !== 'string' || !sessions.some((session) => session.id === room['ownerId']))) throw new Error('invalid room owner');
   room['lead'] ??= null;
   room['proposal'] ??= null;
   room['archivedAt'] ??= null;

@@ -164,3 +164,17 @@ describe('roomUsage (спека расхода токенов, 5)', () => {
     expect(result.members[0]?.sharedWith).toEqual(['r-02']);
   });
 });
+
+it('ownership alone never duplicates owner usage across rooms', async () => {
+  const map = emptyMap();
+  const owner = bound(map, 'owner');
+  const member = bound(map, 'member');
+  const first = addRoom(map, { title: 'one', creator: owner.id, ownerId: owner.id, members: [member.id] }, T0);
+  const second = addRoom(map, { title: 'two', creator: owner.id, ownerId: owner.id, members: [] }, T0);
+  const firstUsage = await roomUsage(map, first.id, resolver(), NOW);
+  const secondUsage = await roomUsage(map, second.id, resolver(), NOW);
+  expect(firstUsage.members.map((entry) => entry.sessionId)).toEqual([member.id]);
+  expect(firstUsage.total.input).toBe(100);
+  expect(secondUsage.members).toEqual([]);
+  expect(secondUsage.total.input).toBe(0);
+});

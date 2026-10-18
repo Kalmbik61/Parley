@@ -4,7 +4,7 @@ import { BRIEF_MAX_BYTES, CONTEXT_LIMITS, ContextBudgetError, assertWithinBudget
 import { isMember, isRoomArchived, liveLead } from './rooms.js';
 import { ensureStateDir } from './state-dir.js';
 import { readMap, workPaths } from './store.js';
-import { participantLabel, recentDecisions, sessionMention, threadOf } from './thread.js';
+import { participantLabel, recentDecisions, sessionMention, agentThreadOf } from './thread.js';
 import { HUMAN, type WorkMap, type WorkSession } from './types.js';
 
 /**
@@ -127,13 +127,23 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
   // Знакомство с коллегами и уже принятыми решениями треда (спецификация 5.2):
   // без них сессия не знает, кому писать, и переспрашивает то, о чём в её
   // группе договорились до неё. Пустые разделы не печатаются.
-  const thread = threadOf(map, session.id);
+  const thread = agentThreadOf(map, session.id);
   const colleagues = thread.members.filter((id) => id !== session.id);
   // Комнаты, где сессия участник (этап 3, раздел 6.3): без них сессия узнаёт
   // о своих комнатах только из ответа `create_room`, а на резюме сессии в
   // брифе комната появляется у всех остальных участников.
   // Архивную комнату человек убрал с глаз, и писать в неё нельзя: ни в составе, ни ролью ведущего она не нужна.
   const rooms = map.rooms.filter((room) => isMember(room, session.id) && !isRoomArchived(room));
+  const ownedRooms = map.rooms.filter((room) => room.ownerId === session.id && !isRoomArchived(room));
+  if (ownedRooms.length > 0) {
+    lines.push('## Owned rooms', '', 'Ownership is separate from working membership. Outside membership, read the room and address only its live lead; do not broadcast.', '');
+    for (const room of ownedRooms.slice(0, MAX_PARTICIPANTS)) {
+      const lead = liveLead(map, room);
+      lines.push(`- ${room.id} "${field('title', room.title, CONTEXT_LIMITS.label, `get_map {room: "${room.id}"}`)}" — lead: ${lead ?? 'none'}`);
+    }
+    if (ownedRooms.length > MAX_PARTICIPANTS) lines.push(`- … and ${ownedRooms.length - MAX_PARTICIPANTS} more: get_map`);
+    lines.push('');
+  }
   if (colleagues.length > 0 || rooms.length > 0) {
     lines.push('## Colleagues', '');
     for (const id of colleagues.slice(0, MAX_COLLEAGUES)) {
@@ -152,9 +162,8 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
       lines.push(`- … and ${colleagues.length - MAX_COLLEAGUES} more: get_map`);
     }
     for (const room of rooms) {
-      // Создатель в `members` не пишется (спецификация 6.1), поэтому состав
-      // собираем из него и списка участников; себя в составе не повторяем.
-      const participants = [room.creator, ...room.members]
+      // Рабочий состав явный; владение само по себе не делает сессию участником.
+      const participants = room.members
         .filter((id, at, all) => all.indexOf(id) === at && id !== session.id)
         .map((id) => (id === HUMAN ? 'human' : participantLabel(map, id)));
       const shown = participants.slice(0, MAX_PARTICIPANTS);

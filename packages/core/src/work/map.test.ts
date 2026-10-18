@@ -90,7 +90,7 @@ describe('addSession', () => {
   it('нумерует сессии s-NN по порядку и создаёт запись pending', () => {
     const map = emptyMap();
     const first = addSession(map, { provider: 'claude', label: 'план', task: 'составить план' });
-    const second = addSession(map, {
+    const second = fixtureSession(map, {
       provider: 'codex',
       label: 'бэкенд',
       task: 'шаги 1–3',
@@ -742,7 +742,7 @@ describe('parseMap', () => {
     it('в старой карте lead и proposal читаются как null, остальное не тронуто', () => {
       const parsed = parseMap(withRooms([oldRoom]), 'map.json');
 
-      expect(parsed.rooms[0]).toEqual({ ...oldRoom, lead: null, proposal: null, mode: 'free', recipe: null, archivedAt: null });
+      expect(parsed.rooms[0]).toEqual({ ...oldRoom, ownerId: null, lead: null, proposal: null, mode: 'free', recipe: null, archivedAt: null });
     });
 
     it('ведущий старой комнаты — первый из members (lead: null не переписывается в id)', () => {
@@ -761,7 +761,7 @@ describe('parseMap', () => {
       const written = { ...oldRoom, lead: 's-03', proposal };
 
       const parsed = parseMap(withRooms([written]), 'map.json');
-      expect(parsed.rooms[0]).toEqual({ ...written, mode: 'free', recipe: null, archivedAt: null, proposal: { ...proposal, kind: 'decision' } });
+      expect(parsed.rooms[0]).toEqual({ ...written, ownerId: null, mode: 'free', recipe: null, archivedAt: null, proposal: { ...proposal, kind: 'decision' } });
       expect(parseMap(JSON.stringify(parsed), 'map.json')).toEqual(parsed);
     });
 
@@ -837,8 +837,8 @@ describe('removeSession', () => {
   const tree = (): WorkMap => {
     const map = emptyMap();
     addSession(map, { provider: 'claude', label: 'план', task: 't' });
-    addSession(map, { provider: 'claude', label: 'бэкенд', task: 't', parent: 's-01' });
-    addSession(map, {
+    fixtureSession(map, { provider: 'claude', label: 'бэкенд', task: 't', parent: 's-01' });
+    fixtureSession(map, {
       provider: 'claude',
       label: 'ревью',
       task: 't',
@@ -937,5 +937,51 @@ describe('role-only normalized records', () => {
     const migrated = parseMap(JSON.stringify(map), 'map.json');
     expect(migrated.sessions[0]?.role).toEqual({ source: 'claude', name: 'two words' });
     expect(JSON.stringify(migrated)).not.toContain('"agent"');
+  });
+});
+
+/** Исторические parent-связи задаются фикстурой, новый конструктор их не создаёт. */
+function fixtureSession(map: WorkMap, init: Parameters<typeof addSession>[1], at?: string) {
+  const session = addSession(map, { ...init, parent: null }, at);
+  session.parent = init.parent ?? null;
+  return session;
+}
+
+describe('room ownership migration', () => {
+  it('materializes legacy creator without reordering lead or touching history and is idempotent', () => {
+    const map = emptyMap();
+    const creator = addSession(map, { provider: 'claude', label: 'owner', task: '' });
+    const member = addSession(map, { provider: 'codex', label: 'lead', task: '' });
+    transitionSession(map, creator.id, 'closed');
+    const legacy = { id: 'r-01', title: 'old', creator: creator.id, members: [member.id], createdAt: map.work.createdAt,
+      archivedAt: '2026-10-01T00:00:00Z', memberLog: [{ session: creator.id, from: map.work.createdAt, to: null }] };
+    const message = addMessage(map, { from: member.id, to: [], text: 'history', roomId: legacy.id });
+    message.readBy[creator.id] = map.work.createdAt;
+    const parsed = parseMap(JSON.stringify({ ...map, rooms: [legacy] }), 'map.json');
+    expect(parsed.rooms[0]).toMatchObject({ ownerId: creator.id, creator: creator.id, members: [member.id, creator.id], memberLog: legacy.memberLog, archivedAt: legacy.archivedAt });
+    expect(roomLead(parsed.rooms[0]!)).toBe(member.id);
+    expect(parsed.messages).toEqual(map.messages);
+    expect(parsed.sessions).toEqual(map.sessions);
+    expect(parseMap(JSON.stringify(parsed), 'map.json')).toEqual(parsed);
+  });
+
+  it('human and missing creators migrate owner to null; explicit owner null prevents legacy membership', () => {
+    const map = emptyMap();
+    const base = { title: 'old', members: [], createdAt: map.work.createdAt };
+    const parsed = parseMap(JSON.stringify({ ...map, rooms: [
+      { ...base, id: 'r-01', creator: HUMAN },
+      { ...base, id: 'r-02', creator: 's-99' },
+      { ...base, id: 'r-03', creator: 's-99', ownerId: null },
+    ] }), 'map.json');
+    expect(parsed.rooms.map((room) => room.ownerId)).toEqual([null, null, null]);
+    expect(parsed.rooms[0]?.members).toEqual([]);
+    expect(parsed.rooms[2]?.members).toEqual([]);
+  });
+
+  it('new non-null parent fails before any map mutation', () => {
+    const map = emptyMap();
+    const before = structuredClone(map);
+    expect(() => addSession(map, { provider: 'claude', label: '', task: '', parent: 's-01' })).toThrow(/parent/);
+    expect(map).toEqual(before);
   });
 });

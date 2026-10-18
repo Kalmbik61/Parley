@@ -10,16 +10,16 @@ import {
   RESOURCE_COVERAGE,
   RESOURCE_WINDOW_MS,
   ResourceDeniedError,
-  admitSpawn,
   assertMessageBudget,
   attemptKindFor,
   deniedForAgent,
   limitsFromConfig,
   reserveAttempt,
   resourceStatus,
+  roomOfSession,
+  countRecipients,
   settleAttempt,
   settleByEvidence,
-  spawnDepthOf,
   teamStartFits,
   type ResourceLimits,
 } from './resource-policy.js';
@@ -42,8 +42,8 @@ const emptyMap = (): WorkMap => ({
 });
 
 /** Сессия `active`: так её видит бюджет — как занятый слот. */
-function addActive(map: WorkMap, parent: string | null = null): string {
-  const session = addSession(map, { provider: 'claude', label: 'x', task: 'y', parent });
+function addActive(map: WorkMap): string {
+  const session = addSession(map, { provider: 'claude', label: 'x', task: 'y' });
   transitionSession(map, session.id, 'active');
   return session.id;
 }
@@ -57,64 +57,6 @@ const denied = (run: () => void): ResourceDeniedError => {
   }
   throw new Error('отказа не было');
 };
-
-describe('admitSpawn: глубина, новые сессии и слоты', () => {
-  it('глубина: корень может породить ребёнка, ребёнок — внука, но не глубже порога', () => {
-    const map = emptyMap();
-    const root = addActive(map);
-    const child = addSession(map, { provider: 'claude', label: 'c', task: 't', parent: root }).id;
-    const grand = addSession(map, { provider: 'claude', label: 'g', task: 't', parent: child }).id;
-    expect(spawnDepthOf(map, root)).toBe(0);
-    expect(spawnDepthOf(map, grand)).toBe(2);
-
-    expect(() => admitSpawn(map, { actor: root, limits: limits({ spawnDepth: 3 }), now: NOW })).not.toThrow();
-    const refusal = denied(() => admitSpawn(map, { actor: grand, limits: limits({ spawnDepth: 2 }), now: NOW }));
-    expect(refusal.code).toBe('depth');
-    expect(refusal.message).toContain('depth');
-  });
-
-  it('новые сессии: потолок работы и потолок комнаты породившего, счётчик не уменьшается от удаления', () => {
-    const map = emptyMap();
-    const lead = addActive(map);
-    addRoom(map, { title: 'r', creator: lead, members: [] });
-    const tight = limits({ workNewSessions: 3, roomNewSessions: 2, workConcurrent: 50, roomConcurrent: 50 });
-
-    admitSpawn(map, { actor: lead, limits: tight, now: NOW });
-    admitSpawn(map, { actor: lead, limits: tight, now: NOW });
-    const room = denied(() => admitSpawn(map, { actor: lead, limits: tight, now: NOW }));
-    expect([room.code, room.scope, room.limit]).toEqual(['new-sessions', 'room', 2]);
-
-    // Агент вне комнаты упирается в потолок работы: комнатный его не касается.
-    const loner = addActive(map);
-    admitSpawn(map, { actor: loner, limits: tight, now: NOW });
-    const work = denied(() => admitSpawn(map, { actor: loner, limits: tight, now: NOW }));
-    expect([work.code, work.scope]).toEqual(['new-sessions', 'work']);
-    expect(map.resources?.spawned).toBe(3);
-    expect(map.resources?.spawnedByRoom).toEqual({ 'r-01': 2 });
-  });
-
-  it('слоты: живые и заказанные (pending с родителем) занимают место, закрытые и ручные pending — нет', () => {
-    const map = emptyMap();
-    const root = addActive(map);
-    addSession(map, { provider: 'claude', label: 'c', task: 't', parent: root }); // заказан агентом: занимает слот
-    addSession(map, { provider: 'claude', label: 'm', task: '' }); // ручной pending без родителя: не занимает
-    const closed = addActive(map);
-    transitionSession(map, closed, 'closed');
-
-    const two = limits({ workConcurrent: 2 });
-    const refusal = denied(() => admitSpawn(map, { actor: root, limits: two, now: NOW }));
-    expect([refusal.code, refusal.used, refusal.limit]).toEqual(['concurrent', 2, 2]);
-    expect(() => admitSpawn(map, { actor: root, limits: limits({ workConcurrent: 3 }), now: NOW })).not.toThrow();
-  });
-
-  it('отказ ничего не оставляет в карте: ни резерва, ни счётчика', () => {
-    const map = emptyMap();
-    const root = addActive(map);
-    denied(() => admitSpawn(map, { actor: root, limits: limits({ workNewSessions: 0 }), now: NOW }));
-    expect(map.resources?.spawned ?? 0).toBe(0);
-    expect(map.resources?.attempts ?? []).toEqual([]);
-  });
-});
 
 describe('reserveAttempt: окно запусков, слоты и повтор', () => {
   const owner = 'host-A';
@@ -140,7 +82,7 @@ describe('reserveAttempt: окно запусков, слоты и повтор'
     const a = addActive(map);
     const b = addActive(map);
     const outsider = addActive(map);
-    addRoom(map, { title: 'r', creator: a, members: [b] });
+    addRoom(map, { title: 'r', creator: a, members: [a, b] });
     const tight = limits({ roomLaunches: 1, workLaunches: 10, workConcurrent: 50, roomConcurrent: 50 });
 
     const first = reserveAttempt(map, { kind: 'launch', actor: 'human', session: a, owner, limits: tight, now: NOW });
@@ -339,9 +281,10 @@ describe('текст отказа и состояние бюджета', () => {
     const map = emptyMap();
     const lead = addActive(map);
     const member = addActive(map);
-    addSession(map, { provider: 'claude', label: 'c', task: 't', parent: lead }); // заказана
-    const id = addRoom(map, { title: 'r', creator: lead, members: [member] }).id;
-    admitSpawn(map, { actor: lead, limits: limits(), now: NOW });
+    const legacy = addSession(map, { provider: 'claude', label: 'c', task: 't' });
+    legacy.parent = lead; // историческая запись
+    const id = addRoom(map, { title: 'r', creator: lead, members: [lead, member] }).id;
+    map.resources = { seq: 0, spawned: 1, spawnedByRoom: {}, attempts: [] };
     addMessage(map, { from: lead, to: [member], text: 'x', roomId: id }, iso(NOW - 5));
 
     const status = resourceStatus(map, limits({ workConcurrent: 4, roomConcurrent: 2 }), NOW, id);
@@ -391,28 +334,6 @@ describe('журнал в карте: чтение, запись, перезап
     await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
-  it('двенадцать одновременных spawn не превышают слоты: проходят ровно разрешённые', async () => {
-    await updateMap(project, workId, (map) => {
-      addActive(map);
-    });
-    const tight = limits({ workNewSessions: 4, workConcurrent: 50 });
-    const results = await Promise.allSettled(
-      Array.from({ length: 12 }, () =>
-        updateMap(project, workId, (map) => {
-          const attempt = admitSpawn(map, { actor: 's-01', limits: tight });
-          attempt.session = addSession(map, { provider: 'claude', label: 'k', task: 't', parent: 's-01' }).id;
-        }),
-      ),
-    );
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(4);
-    const refused = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
-    expect(refused).toHaveLength(8);
-    expect(refused.every((result) => result.reason instanceof ResourceDeniedError)).toBe(true);
-    const map = await readMap(project, workId);
-    expect(map.sessions).toHaveLength(5);
-    expect(map.resources?.spawned).toBe(4);
-  });
-
   it('параллельные резервы запуска не обходят общий потолок слотов, повтор той же сессии не берёт второй', async () => {
     await updateMap(project, workId, (map) => {
       for (let i = 0; i < 6; i += 1) addSession(map, { provider: 'claude', label: 'x', task: 't' });
@@ -449,7 +370,11 @@ describe('журнал в карте: чтение, запись, перезап
   it('перезапуск не выдаёт новый бюджет: счётчики читаются с диска, окно запусков и новые сессии на месте', async () => {
     await updateMap(project, workId, (map) => {
       const lead = addActive(map);
-      admitSpawn(map, { actor: lead, limits: limits({ workNewSessions: 1 }) }).session = addSession(map, { provider: 'claude', label: 'k', task: 't', parent: lead }).id;
+      // Счётчики и журнал старых spawn сохраняются; новые операции их не создают.
+      const child = addSession(map, { provider: 'claude', label: 'legacy', task: '' });
+      child.parent = lead;
+      const at = new Date().toISOString();
+      map.resources = { seq: 1, spawned: 1, spawnedByRoom: {}, attempts: [{ id: 'a-0001', kind: 'spawn', state: 'spent', at, settledAt: at, actor: lead, session: child.id, room: null, owner: `mcp:${lead}` }] };
       const attempt = reserveAttempt(map, { kind: 'launch', actor: 'human', session: lead, owner: 'host-A', limits: limits() });
       settleAttempt(map, attempt.id, 'host-A', 'spent');
     });
@@ -461,8 +386,6 @@ describe('журнал в карте: чтение, запись, перезап
       ['spawn', 'spent'],
       ['launch', 'spent'],
     ]);
-    const refusal = denied(() => admitSpawn(after, { actor: 's-01', limits: limits({ workNewSessions: 1 }) }));
-    expect(refusal.code).toBe('new-sessions');
     const status = resourceStatus(after, limits({ workLaunches: 1 }), Date.now());
     expect(status.work.launches.remaining).toBe(0);
   });
@@ -475,5 +398,23 @@ describe('журнал в карте: чтение, запись, перезап
     expect(() => parseMap(JSON.stringify(broken), 'map.json')).toThrow('invalid resource ledger');
     const badAttempt = { ...emptyMap(), resources: { seq: 1, spawned: 0, spawnedByRoom: {}, attempts: [{ id: 'a-0001', kind: 'boom' }] } };
     expect(() => parseMap(JSON.stringify(badAttempt), 'map.json')).toThrow('invalid resource ledger');
+  });
+});
+
+describe('ownership resource accounting', () => {
+  it('owns multiple rooms without consuming room slots or broadcast deliveries', () => {
+    const map = emptyMap();
+    const owner = addActive(map);
+    const member = addActive(map);
+    const first = addRoom(map, { title: 'one', creator: owner, ownerId: owner, members: [member] });
+    addRoom(map, { title: 'two', creator: owner, ownerId: owner, members: [] });
+    expect(roomOfSession(map, owner)).toBeNull();
+    const status = resourceStatus(map, limits(), NOW, first.id);
+    expect(status.room?.concurrent.used).toBe(1);
+    expect(status.work.concurrent.used).toBe(2);
+    expect(status.work).not.toHaveProperty('spawnDepth');
+    expect(RESOURCE_COVERAGE.counted).not.toContain('spawn_session');
+    expect(countRecipients(map, HUMAN, first.id, [])).toBe(1);
+    expect(countRecipients(map, member, first.id, [owner])).toBe(1);
   });
 });

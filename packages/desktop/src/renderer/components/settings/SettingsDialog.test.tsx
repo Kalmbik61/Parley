@@ -482,12 +482,12 @@ describe('SettingsDialog — пороги бюджета работы (P37)', ()
 
     switchTo('Agents');
     const section = await screen.findByRole('region', { name: 'Work limits' });
-    expect(section.querySelectorAll('input')).toHaveLength(10);
+    expect(section.querySelectorAll('input')).toHaveLength(9);
     expect(section.textContent).toContain('Running sessions, workspace (1…64)');
     expect(section.textContent).toContain('Agent-created sessions, room (0…1000)');
     expect(section.textContent).toContain('not tokens or money');
     expect(section.textContent).toContain('Subagents a CLI starts inside its own session are not counted');
-    expect((screen.getByLabelText(/Spawn depth/) as HTMLInputElement).value).toBe('3');
+    expect(screen.queryByLabelText(/Spawn depth/)).toBeNull();
   });
 
   it('человек меняет порог явно: blur зовёт settings.set с ключом и текстом', async () => {

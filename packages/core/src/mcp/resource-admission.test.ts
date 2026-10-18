@@ -1,4 +1,4 @@
-/** Допуск бюджета на путях MCP (P37): spawn_session, send_message, приглашения create_room (add_to_room письма не пишет); управление квотой не блокируется. */
+/** Допуск бюджета на путях MCP (P37): send_message, приглашения create_room (add_to_room письма не пишет); управление квотой не блокируется. */
 
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,7 +6,7 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG, saveConfig } from '../config.js';
+import { DEFAULT_CONFIG } from '../config.js';
 import { addMessage, addSession, transitionSession } from '../work/map.js';
 import { DEFAULT_RESOURCE_LIMITS, type ResourceLimits } from '../work/resource-policy.js';
 import { addRoom } from '../work/rooms.js';
@@ -89,59 +89,13 @@ afterEach(async () => {
 
 const spawnArgs = { provider: 'claude', label: 'исп', task: 'делать' };
 
-describe('spawn_session: допуск', () => {
-  it('двенадцать одновременных вызовов не превышают слоты новых сессий', async () => {
-    const lead = await connect('s-01', limits({ workNewSessions: 3 }));
-    const results = await Promise.all(Array.from({ length: 12 }, () => call(lead, 'spawn_session', spawnArgs)));
-
-    expect(results.filter((result) => !result.isError)).toHaveLength(3);
-    const refused = results.filter((result) => result.isError);
-    expect(refused).toHaveLength(9);
-    expect(refused[0]?.text).toContain('new-session limit reached');
-    expect(refused[0]?.text).toContain('Only the human can raise this limit');
-    const map = await readMap(project, workId);
-    expect(map.sessions).toHaveLength(4);
-    expect(map.resources?.spawned).toBe(3);
-  });
-
-  it('одновременные слоты: ожидающие дети занимают место, отказ не запускает и не записывает сессию', async () => {
-    const lead = await connect('s-01', limits({ workConcurrent: 3 }));
-    const results = await Promise.all(Array.from({ length: 6 }, () => call(lead, 'spawn_session', spawnArgs)));
-    expect(results.filter((result) => !result.isError)).toHaveLength(2); // s-01 уже занимает один слот
-    expect(results.find((result) => result.isError)?.text).toContain('session limit reached');
-    expect((await readMap(project, workId)).sessions).toHaveLength(3);
-  });
-
-  it('глубина: ребёнок первого уровня порождает, второго — отказ', async () => {
-    const lead = await connect('s-01', limits({ spawnDepth: 1 }));
-    expect((await call(lead, 'spawn_session', spawnArgs)).isError).toBe(false); // s-02, глубина 1
-    const child = await connect('s-02', limits({ spawnDepth: 1 }));
-    const refused = await call(child, 'spawn_session', spawnArgs);
-    expect(refused.isError).toBe(true);
-    expect(refused.text).toContain('spawn depth limit reached');
-    expect((await readMap(project, workId)).sessions).toHaveLength(2);
-  });
-
-  it('пороги читаются из настроек при каждом допуске: изменение человека действует сразу, без перезапуска сервера', async () => {
-    const lead = await connect('s-01', undefined);
-    await saveConfig({ workNewSessions: 1 });
-    expect((await call(lead, 'spawn_session', spawnArgs)).isError).toBe(false);
-    const refused = await call(lead, 'spawn_session', spawnArgs);
-    expect(refused.isError).toBe(true);
-
-    await saveConfig({ workNewSessions: 5 });
-    expect((await call(lead, 'spawn_session', spawnArgs)).isError).toBe(false);
-  });
-
-  it('у агента нет инструмента или аргумента, который менял бы бюджет', async () => {
+describe('removed session creation', () => {
+  it('cannot bypass human session creation or mutate the map through the removed tool', async () => {
     const lead = await connect('s-01', limits({ workNewSessions: 0 }));
-    const { tools } = await lead.listTools();
-    expect(tools.map((tool) => tool.name).filter((name) => /limit|budget|quota/i.test(name))).toEqual([]);
-
-    // Аргументы-лимиты в вызове игнорируются: бюджет берётся только из настроек человека.
-    const refused = await call(lead, 'spawn_session', { ...spawnArgs, workNewSessions: 99, limit: 99, budget: 99 });
-    expect(refused.isError).toBe(true);
-    expect((await readMap(project, workId)).sessions).toHaveLength(1);
+    const before = await readMap(project, workId);
+    expect((await lead.listTools()).tools.some(tool => tool.name === 'spawn_session')).toBe(false);
+    expect((await call(lead, 'spawn_session', spawnArgs)).isError).toBe(true);
+    expect(await readMap(project, workId)).toEqual(before);
   });
 });
 
@@ -149,7 +103,8 @@ describe('send_message и приглашения: допуск', () => {
   beforeEach(async () => {
     await updateMap(project, workId, (map) => {
       for (const label of ['a', 'b', 'c']) {
-        const session = addSession(map, { provider: 'claude', label, task: 'x', parent: 's-01' });
+        const session = addSession(map, { provider: 'claude', label, task: 'x', parent: null });
+        session.parent = 's-01';
         transitionSession(map, session.id, 'active');
       }
     });
@@ -160,7 +115,7 @@ describe('send_message и приглашения: допуск', () => {
     expect((await call(lead, 'send_message', { to: 's-02', text: 'раз' })).isError).toBe(false);
     expect((await call(lead, 'send_message', { to: 's-02', text: 'два' })).text).toContain('too many messages');
 
-    const room = await call(lead, 'create_room', { title: 'команда', members: ['s-02', 's-03'] });
+    const room = await call(lead, 'create_room', { title: 'команда', members: ['s-02', 's-03'], lead: 's-02' });
     expect(room.isError).toBe(true);
     expect(room.text).toContain('too many messages');
     expect((await readMap(project, workId)).rooms).toEqual([]);
@@ -168,20 +123,20 @@ describe('send_message и приглашения: допуск', () => {
 
   it('приглашения расходуют общий бюджет писем работы: N приглашённых — N писем', async () => {
     const lead = await connect('s-01', limits({ workMessages: 2 }));
-    const refused = await call(lead, 'create_room', { title: 'команда', members: ['s-02', 's-03', 's-04'] });
+    const refused = await call(lead, 'create_room', { title: 'команда', members: ['s-02', 's-03', 's-04'], lead: 's-02' });
     expect(refused.isError).toBe(true);
     expect(refused.text).toContain('message limit reached');
     expect(refused.text).toContain('Only the human can raise this limit');
     expect((await readMap(project, workId)).messages).toHaveLength(0);
 
-    const ok = await call(lead, 'create_room', { title: 'команда', members: ['s-02', 's-03'] });
+    const ok = await call(lead, 'create_room', { title: 'команда', members: ['s-02', 's-03'], lead: 's-02' });
     expect(ok.isError).toBe(false);
     expect((await readMap(project, workId)).messages).toHaveLength(2);
   });
 
   it('комната: потолок писем комнаты уже рабочего, рассылка считает адресатов', async () => {
     await updateMap(project, workId, (map) => {
-      addRoom(map, { title: 'r', creator: 's-01', members: ['s-02', 's-03', 's-04'] });
+      addRoom(map, { title: 'r', creator: 's-01', members: ['s-01', 's-02', 's-03', 's-04'], lead: 's-02' });
     });
     const lead = await connect('s-01', limits({ roomMessages: 2, fanout: 10 }));
     expect((await call(lead, 'send_message', { room: 'r-01', text: 'раз' })).isError).toBe(false);
@@ -199,7 +154,7 @@ describe('send_message и приглашения: допуск', () => {
 
   it('add_to_room: пишет только системную строку, бюджет писем не расходует и исчерпанной квотой не блокируется', async () => {
     await updateMap(project, workId, (map) => {
-      addRoom(map, { title: 'r', creator: 's-01', members: ['s-02'], lead: 's-01' });
+      addRoom(map, { title: 'r', creator: 's-01', members: ['s-01', 's-02'], lead: 's-01' });
       for (let i = 0; i < 3; i += 1) addMessage(map, { from: 's-02', to: ['s-01'], text: `шум ${i}` });
     });
     const lead = await connect('s-01', limits({ workMessages: 3, roomMessages: 3, fanout: 3 }), 1);
@@ -220,7 +175,7 @@ describe('send_message и приглашения: допуск', () => {
 
   it('исчерпанная разговорная квота не блокирует управление: report, close_session, check_inbox, get_map, read_room, wait_for', async () => {
     await updateMap(project, workId, (map) => {
-      addRoom(map, { title: 'r', creator: 's-01', members: ['s-02'] });
+      addRoom(map, { title: 'r', creator: 's-01', members: ['s-01', 's-02'] });
       for (let i = 0; i < 3; i += 1) addMessage(map, { from: 's-02', to: ['s-01'], text: `шум ${i}` });
       // Письмо от человека — вне квоты: оно не считается и не мешает.
       addMessage(map, { from: HUMAN, to: ['s-02'], text: 'человек' });

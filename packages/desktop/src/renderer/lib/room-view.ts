@@ -15,12 +15,12 @@ import { isoMs } from './iso-time.js';
 const HUMAN = 'human';
 
 /**
- * Участники-сессии комнаты по записи: создатель-сессия, затем `members` в порядке записи (как лента участников
+ * Участники-сессии комнаты по записи: только `members` в порядке записи (как лента участников
  * вкладки, `components/rooms/feed-model.ts`). Человек, повторы и сессии, которых уже нет в карте (удалены), не входят;
  * закрытые входят — значок-счётчик свёрнутой комнаты считает всех агентов, не только запущенных (решение 7).
  */
 export function roomSessions(map: WorkMap, room: Room): WorkSession[] {
-  const ids = [...new Set([room.creator, ...room.members])].filter((id) => id !== HUMAN);
+  const ids = [...new Set(room.members)].filter((id) => id !== HUMAN);
   return ids.flatMap((id) => map.sessions.find((session) => session.id === id) ?? []);
 }
 

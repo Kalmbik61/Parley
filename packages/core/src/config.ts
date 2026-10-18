@@ -44,8 +44,6 @@ export interface ParleyConfig extends ResourceLimits {
    * письма ждут, а не жгут подписку за ночь (спецификация окна 7.4). 0…60.
    */
   resumeRate: number;
-  /** Запускать ли `pending` от агента самим, в фоне, без диалога (раздел 5.2). */
-  autoLaunch: boolean;
   /**
    * Ставить ли скилл `parley` в проект и в worktree сессии при запуске (`work/skill-install.ts`): файлы
    * `.agents/skills/parley` и симлинк `.claude/skills/parley`. Выключено — хост скилл не ставит и не
@@ -60,7 +58,7 @@ export interface ParleyConfig extends ResourceLimits {
   /** Отвечать на одобрения Codex из окна Parley: хуки Codex при запуске и resume (спека 2026-10-07, решение 9). */
   codexApprovals: boolean;
   /**
-   * Облегчённый запуск агентов, которых Parley заводит сам (участники комнат и `spawn_session`): без плагинов,
+   * Облегчённый запуск участников комнат, которых Parley заводит по рецепту: без плагинов,
    * чужих MCP-серверов и автопамяти пользователя (спека «меньше ходов и легче контекст», C2.2). Включён по умолчанию;
    * сессию, которую человек запускает из окна сам, решение не касается. Читается один раз, при создании сессии.
    */
@@ -83,7 +81,6 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   channelPush: true,
   messageRate: 20,
   resumeRate: 6,
-  autoLaunch: true,
   agentSkills: true,
   skillNavigator: true,
   codexApprovals: false,
@@ -104,7 +101,6 @@ export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
   channelPush: 'CHANNEL_PUSH',
   messageRate: 'MESSAGE_RATE',
   resumeRate: 'RESUME_RATE',
-  autoLaunch: 'AUTO_LAUNCH',
   agentSkills: 'AGENT_SKILLS',
   skillNavigator: 'SKILL_NAVIGATOR',
   codexApprovals: 'CODEX_APPROVALS',
@@ -116,7 +112,6 @@ export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
   roomConcurrent: 'ROOM_CONCURRENT',
   workNewSessions: 'WORK_NEW_SESSIONS',
   roomNewSessions: 'ROOM_NEW_SESSIONS',
-  spawnDepth: 'SPAWN_DEPTH',
   workLaunches: 'WORK_LAUNCHES',
   roomLaunches: 'ROOM_LAUNCHES',
   workMessages: 'WORK_MESSAGES',
@@ -205,7 +200,6 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('channelPush', (value) => typeof value === 'boolean', 'true or false');
   take('messageRate', isPositiveInt, 'a positive integer');
   take('resumeRate', isResumeRate, RESUME_RATE_EXPECTED);
-  take('autoLaunch', (value) => typeof value === 'boolean', 'true or false');
   take('agentSkills', (value) => typeof value === 'boolean', 'true or false');
   take('skillNavigator', (value) => typeof value === 'boolean', 'true or false');
   take('codexApprovals', (value) => typeof value === 'boolean', 'true or false');
@@ -230,7 +224,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   const nameOf = (key: keyof ParleyConfig): string => envName(env, ENV_NAMES[key]) ?? ENV_NAMES[key];
 
   const flag = (
-    key: 'channelPush' | 'autoLaunch' | 'agentSkills' | 'skillNavigator' | 'codexApprovals' | 'leanAgents',
+    key: 'channelPush' | 'agentSkills' | 'skillNavigator' | 'codexApprovals' | 'leanAgents',
   ): void => {
     const value = text(key);
     if (value === undefined) return;
@@ -257,7 +251,6 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
     if (isResumeRate(parsed)) patch.resumeRate = parsed;
     else complain(`${nameOf('resumeRate')}: expected ${RESUME_RATE_EXPECTED}`);
   }
-  flag('autoLaunch');
   flag('agentSkills');
   flag('skillNavigator');
   flag('codexApprovals');
@@ -339,7 +332,6 @@ export async function loadConfig(
 /** Булевы ключи настроек — те же множества «да/нет», что у загрузчика окружения. */
 const BOOLEAN_KEYS: ReadonlySet<keyof ParleyConfig> = new Set([
   'channelPush',
-  'autoLaunch',
   'agentSkills',
   'skillNavigator',
   'codexApprovals',

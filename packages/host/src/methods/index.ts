@@ -55,6 +55,7 @@ import {
   roomsResolveProposal,
   roomsSend,
   roomsSetLead,
+  roomsSetOwner,
 } from './rooms.js';
 import { createRolesList } from './roles.js';
 import { createRecipesList } from './recipes.js';
@@ -242,6 +243,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'rooms.addMember': roomsAddMember as AnyHandler,
     'rooms.rename': roomsRename as AnyHandler,
     'rooms.setLead': roomsSetLead as AnyHandler,
+    'rooms.setOwner': roomsSetOwner as AnyHandler,
     'rooms.delete': roomsDelete as AnyHandler,
     'rooms.archive': createRoomsArchive(deps.sessions) as AnyHandler,
     'rooms.reopen': roomsReopen as AnyHandler,

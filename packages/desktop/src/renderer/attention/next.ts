@@ -73,7 +73,11 @@ export function nextAttentionTarget(
         if (worth && tier !== null) found[tier]?.push({ index, target });
         index += 1;
       };
+      const visitedSessions = new Set<string>();
       const visitSession = (session: WorkSession): void => {
+        // Владелец может быть показан якорем и ссылкой среди рабочих участников.
+        if (visitedSessions.has(session.id)) return;
+        visitedSessions.add(session.id);
         const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
         const level = sessionAttention(session, activity[refKey(ref)]?.activity ?? null);
         visit({ kind: 'session', ref }, level === 'needs-you' ? 0 : level === 'unseen' ? 2 : null);

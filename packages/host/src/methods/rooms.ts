@@ -15,6 +15,7 @@ import {
   resolveRoomProposal,
   sendHumanLetter,
   setHumanRoomLead,
+  setHumanRoomOwner,
 } from '../rooms/rooms-service.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 
@@ -67,6 +68,11 @@ export const roomsRename: Handler<'rooms.rename'> = async (params) => {
 export const roomsSetLead: Handler<'rooms.setLead'> = async (params) => ({
   messageId: await setHumanRoomLead(params),
 });
+
+export const roomsSetOwner: Handler<'rooms.setOwner'> = async (params) => {
+  await setHumanRoomOwner(params);
+  return { ok: true };
+};
 
 export const roomsDelete: Handler<'rooms.delete'> = async (params) => {
   await deleteHumanRoom(params);

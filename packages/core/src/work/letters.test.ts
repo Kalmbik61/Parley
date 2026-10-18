@@ -53,14 +53,14 @@ describe('recipientsOf', () => {
     const map = mapWithRoom();
     const letter = addMessage(map, { from: 's-02', to: [], text: 'x', roomId: 'r-01' });
 
-    expect(recipientsOf(letter, map).sort()).toEqual(['s-01', 's-03']);
+    expect(recipientsOf(letter, map).sort()).toEqual(['s-03']);
   });
 
   it('рассылка человека — всем участникам', () => {
     const map = mapWithRoom();
     const letter = addMessage(map, { from: HUMAN, to: [], text: 'x', roomId: 'r-01' });
 
-    expect(recipientsOf(letter, map).sort()).toEqual(['s-01', 's-02', 's-03']);
+    expect(recipientsOf(letter, map).sort()).toEqual(['s-02', 's-03']);
   });
 
   it('комнаты нет в карте — адресатов у рассылки нет', () => {

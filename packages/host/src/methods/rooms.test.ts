@@ -938,6 +938,23 @@ describe('rooms.rename / rooms.setLead / rooms.delete: управление ко
     return { ...context, base: { projectPath: context.dir, workId: context.workId, roomId: 'r-01' } };
   }
 
+  it('rooms.setOwner assigns and clears ownership without changing members, lead or history', async () => {
+    const { client, dir, workId, ids, base } = await withRoom();
+    const before = await readMap(dir, workId);
+    const owner = ids[2]!;
+    expect((await call(client, 'rooms.setOwner', { ...base, sessionId: owner })).result).toEqual({ ok: true });
+    const assigned = await readMap(dir, workId);
+    expect(assigned.rooms[0]).toEqual({ ...before.rooms[0], ownerId: owner });
+    expect(assigned.sessions).toEqual(before.sessions);
+    expect(assigned.messages).toEqual(before.messages);
+    expect((await call(client, 'rooms.setOwner', { ...base, sessionId: null })).result).toEqual({ ok: true });
+    expect((await readMap(dir, workId)).rooms).toEqual(before.rooms);
+    for (const extra of [{ sessionId: 's-99' }, { sessionId: owner, roomId: 'r-99' }]) {
+      expect((await call(client, 'rooms.setOwner', { ...base, ...extra })).error?.code).toBe('bad_request');
+    }
+    expect(await readMap(dir, workId)).toEqual(before);
+  });
+
   it('rooms.rename: края обрезаются, updatedAt работы стоит на месте; пустое, чужая комната и работа — bad_request', async () => {
     const { client, dir, workId, base } = await withRoom();
     const before = await readMap(dir, workId);
