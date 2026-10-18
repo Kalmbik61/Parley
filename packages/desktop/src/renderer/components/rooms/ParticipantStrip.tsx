@@ -18,6 +18,7 @@
  * «чем занят» — отдельная кнопка рядом с чипом. Сама карточка — блок: фон, рамка наведения и тултип у него.
  */
 
+import { planSummary } from '@parley/core/agent-plan';
 import type { ReactNode } from 'react';
 import { S } from '../../../shared/strings.js';
 import { RoleChip } from '../../lib/role-summary.js';
@@ -25,6 +26,7 @@ import { cn } from '../../lib/cn.js';
 import { AgentIcon } from '../AgentIcon.js';
 import { AgentsBadge } from '../AgentsBadge.js';
 import { AgentStateDot } from '../AgentStateDot.js';
+import { PlanChip, PlanHover } from './PlanChip.js';
 import type { ParticipantModel } from './feed-model.js';
 
 export interface ParticipantStripProps {
@@ -32,10 +34,11 @@ export interface ParticipantStripProps {
   /** Клик по карточке — открыть сессию; по агенту в поповере — открыть её на карточке этого агента (`agentId`). */
   onOpenSession: (sessionId: string, agentId?: string) => void;
   /** Чип контекста участника (спека 2026-10-15, 3.2): во второй строке справа, вне кнопки открытия. */
+  onOpenPlan?: (sessionId: string) => void;
   contextChip?: (participant: ParticipantModel) => ReactNode;
 }
 
-export function ParticipantStrip({ participants, onOpenSession, contextChip }: ParticipantStripProps): JSX.Element {
+export function ParticipantStrip({ participants, onOpenSession, onOpenPlan, contextChip }: ParticipantStripProps): JSX.Element {
   return (
     <div
       role="group"
@@ -46,8 +49,12 @@ export function ParticipantStrip({ participants, onOpenSession, contextChip }: P
       {participants.map((participant) => {
         const chip = contextChip?.(participant) ?? null;
         const open = (): void => onOpenSession(participant.id);
+        const openPlan = (): void => onOpenPlan?.(participant.id);
+        const summary = participant.plan == null ? null : planSummary(participant.plan);
+        const showPlanChip = participant.plan != null && summary !== null && (participant.plan.partial || summary.done < summary.total);
+        const showPlanLine = participant.doing === null && participant.plan != null && participant.planLine != null;
         const header = (
-          <span className="flex items-center gap-1.5 text-xs">
+          <span className="flex w-full min-w-0 items-center gap-1.5 text-xs">
             <AgentStateDot state={participant.state} lifecycle={participant.lifecycle} />
             <AgentIcon provider={participant.provider} size={14} />
             <span className="min-w-[5ch] flex-1 truncate font-semibold">{participant.label}</span>
@@ -85,7 +92,7 @@ export function ParticipantStrip({ participants, onOpenSession, contextChip }: P
                   : 'bg-[color-mix(in_srgb,currentColor_6%,transparent)]',
             )}
           >
-            {chip !== null ? (
+            {chip !== null || showPlanChip || showPlanLine ? (
               <>
                 <button type="button" onClick={open} className="flex w-full flex-col rounded-t-[14px] px-3 pt-[9px] text-left">
                   {header}
@@ -99,6 +106,12 @@ export function ParticipantStrip({ participants, onOpenSession, contextChip }: P
                       onOpen={(task) => onOpenSession(participant.id, task.id)}
                       className="min-h-4 min-w-0 flex-1 truncate text-left text-xs text-muted-foreground hover:text-foreground hover:underline"
                     />
+                  ) : showPlanLine && participant.plan != null ? (
+                    <PlanHover plan={participant.plan} onOpen={openPlan}>
+                      <button type="button" onClick={openPlan} className="min-h-4 min-w-0 flex-1 truncate text-left text-xs text-muted-foreground hover:text-foreground hover:underline">
+                        {participant.planLine?.text}
+                      </button>
+                    </PlanHover>
                   ) : (
                     <button
                       type="button"
@@ -109,7 +122,8 @@ export function ParticipantStrip({ participants, onOpenSession, contextChip }: P
                       {participant.doing ?? participant.task}
                     </button>
                   )}
-                  {chip}
+                  {showPlanChip && participant.plan != null ? <PlanChip plan={participant.plan} onOpen={openPlan} /> : null}
+                  {chip !== null ? <span className="shrink-0">{chip}</span> : null}
                 </div>
               </>
             ) : participant.agents.length > 0 && participant.doing !== null ? (

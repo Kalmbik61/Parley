@@ -1725,7 +1725,9 @@ describe('ChatView — агенты: тулбар, прокрутка к кар�
     try {
       renderBody(makeSession('s-01', 'S01'));
       setFeed(feedWithAgents());
+      useChatUiStore.getState().pinAgentsSession('/tmp/p w-01', 'other');
       fireEvent.click(running()!);
+      expect(useChatUiStore.getState().agentsPin['/tmp/p w-01']).toBeNull();
       expect(useUiStore.getState().ui.rightSidebar).toMatchObject({ open: true, tab: 'agents' });
       expect(useChatUiStore.getState().reveal).toBeNull();
     } finally {

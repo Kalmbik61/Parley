@@ -1646,3 +1646,63 @@ describe('изменение лога пересчитывает только с
     expect(delta).toBeLessThanOrEqual(2);
   }, 60_000);
 });
+
+
+describe('план в живых метриках', () => {
+  const at = '2026-10-18T10:00:00.000Z';
+  const nativeId = 'codex-plan';
+  const records = (values: unknown[]): string => values.map((value) => JSON.stringify(value)).join('\n') + '\n';
+  const planCall = (id: string, subject: string) => [
+    { timestamp: at, type: 'response_item', payload: { type: 'function_call', call_id: id, name: 'update_plan', arguments: JSON.stringify({ plan: [{ step: subject, status: 'in_progress' }] }) } },
+    { timestamp: at, type: 'response_item', payload: { type: 'function_call_output', call_id: id, output: 'Plan updated' } },
+  ];
+
+  async function setup(lifecycle: 'active' | 'sleeping' = 'active', withPlan = true) {
+    const { ref } = await activeSession({ providerSessionId: nativeId });
+    await updateMap(project, ref.workId, (map) => {
+      const session = map.sessions.find((item) => item.id === ref.sessionId)!;
+      session.provider = 'codex';
+      session.lifecycle = lifecycle;
+    });
+    const dir = path.join(codexRoot, '2026', '10', '18');
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, `rollout-2026-10-18T10-00-00-${nativeId}.jsonl`);
+    await writeFile(file, records([
+      { timestamp: at, type: 'session_meta', payload: { id: nativeId, cwd: project, source: 'cli' } },
+      { timestamp: at, type: 'turn_context', payload: { model: 'gpt-5.1-codex', cwd: project } },
+      ...(withPlan ? planCall('plan-1', 'A') : []),
+    ]));
+    const a = activity(await works(), { now: () => Date.parse(at) });
+    await a.start();
+    await waitFor(() => a.get(ref)?.metrics?.model === 'gpt-5.1-codex', 15_000);
+    return { a, ref, file };
+  }
+
+  it('метрики и activity.changed несут plan из индекса лога', async () => {
+    const { a, ref } = await setup();
+    expect(a.get(ref)?.metrics?.plan?.items[0]?.subject).toBe('A');
+    expect(activityChanges(ref).at(-1)?.metrics).toMatchObject({ plan: { items: [{ subject: 'A' }] } });
+  });
+
+  it('смена плана снова шлёт activity.changed, тот же индекс — нет', async () => {
+    const { a, ref, file } = await setup();
+    const before = activityChanges(ref).length;
+    await appendFile(file, records(planCall('plan-2', 'B')));
+    await a.reindexLog(file);
+    expect(a.get(ref)?.metrics?.plan?.items[0]?.subject).toBe('B');
+    expect(activityChanges(ref).length).toBe(before + 1);
+    expect(activityChanges(ref).at(-1)?.metrics).toMatchObject({ plan: { items: [{ subject: 'B' }] } });
+    await a.reindexLog(file);
+    expect(activityChanges(ref).length).toBe(before + 1);
+  });
+
+  it('спящая сессия тоже несёт plan', async () => {
+    const { a, ref } = await setup('sleeping');
+    expect(a.get(ref)?.metrics?.plan?.items[0]?.subject).toBe('A');
+  });
+
+  it('сессия без плановых вызовов несёт null', async () => {
+    const { a, ref } = await setup('active', false);
+    expect(a.get(ref)?.metrics?.plan).toBeNull();
+  });
+});

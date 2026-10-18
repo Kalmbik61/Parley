@@ -8,6 +8,8 @@
  */
 
 import { create } from 'zustand';
+import { useLayoutStore, type LayoutState } from '../layout/store.js';
+import { groups } from '../layout/tree.js';
 import type { AgentPick } from '../agents/agents-model.js';
 import type { QueuedPrompt } from './FeedList.js';
 
@@ -64,6 +66,8 @@ export interface ChatUiState {
   queued: Record<string /* refKey */, readonly Queued[]>;
   /** Экран агента в панели Agents по сессии (`refKey`); `null` — список (спека 2026-10-07, 5.1). */
   agentPanel: Record<string, AgentPick | null>;
+  agentsPin: Record<string, string | null>;
+  pinAgentsSession(workKey: string, sessionId: string | null): void;
   /** Раскрыт ли блок «Finished» панели по сессии. */
   finishedOpen: Record<string, boolean>;
   /** Подсказка про хуки Codex скрыта человеком («Got it») до закрытия окна; по `refKey` сессии. */
@@ -100,6 +104,8 @@ export const useChatUiStore = create<ChatUiState>((set, get) => ({
   queued: {},
   reveal: null,
   agentPanel: {},
+  agentsPin: {},
+  pinAgentsSession: (workKey, sessionId) => set((state) => ({ agentsPin: { ...state.agentsPin, [workKey]: sessionId } })),
   finishedOpen: {},
   hooksHintDismissed: {},
   dismissHooksHint: (sessionKey) => set((state) => ({ hooksHintDismissed: { ...state.hooksHintDismissed, [sessionKey]: true } })),
@@ -142,5 +148,24 @@ export const useChatUiStore = create<ChatUiState>((set, get) => ({
 
 /** Только для тестов. */
 export function resetChatUiStoreForTests(): void {
-  useChatUiStore.setState({ drafts: {}, attachments: {}, queued: {}, reveal: null, cardDrafts: {}, agentPanel: {}, finishedOpen: {}, hooksHintDismissed: {} });
+  useChatUiStore.setState({ drafts: {}, attachments: {}, queued: {}, reveal: null, cardDrafts: {}, agentPanel: {}, agentsPin: {}, finishedOpen: {}, hooksHintDismissed: {} });
+}
+
+/** Pin resets follow actual tab activation, including while the Agents panel is unmounted. */
+export function bindAgentsPinToLayout(): () => void {
+  const active = (state: LayoutState) => {
+    const workKey = state.activeWorkKey;
+    const layout = workKey === null ? undefined : state.layouts[workKey];
+    if (workKey === null || layout === undefined) return null;
+    const group = groups(layout).find((candidate) => candidate.id === layout.activeGroupId);
+    const tab = group?.tabs.find((candidate) => candidate.id === group.activeTabId);
+    return group === undefined || tab === undefined ? null : { workKey, groupId: group.id, tab };
+  };
+  return useLayoutStore.subscribe((state, previous) => {
+    const next = active(state);
+    if (next === null || (next.tab.kind !== 'terminal' && next.tab.kind !== 'diff')) return;
+    const before = active(previous);
+    if (before?.workKey === next.workKey && before.groupId === next.groupId && before.tab.id === next.tab.id) return;
+    if (useChatUiStore.getState().agentsPin[next.workKey] != null) useChatUiStore.getState().pinAgentsSession(next.workKey, null);
+  });
 }

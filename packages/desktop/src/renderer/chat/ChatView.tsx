@@ -375,7 +375,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   // К первой работающей карточке; у только что созданной (`SubagentStart` ещё не пришёл) `agentId` нет — прокручивать не к чему.
   const showAgent = (): void => {
     const agentId = agents.map((agent) => agent.agentId).find((id): id is string => id !== null) ?? null;
-    openAgentsPanel(sessionKey, agentId);
+    openAgentsPanel(sessionRef, agentId);
   };
   const hooksHintDismissed = useChatUiStore((state) => state.hooksHintDismissed[sessionKey] === true);
   const showHooksHint = codex && feed?.decisions === 'terminal' && !hooksHintDismissed;

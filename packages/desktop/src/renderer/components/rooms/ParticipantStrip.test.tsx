@@ -6,6 +6,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { capPlan, type AgentPlan } from '@parley/core/agent-plan';
 import type { LiveTask } from '@parley/protocol';
 import type { ParticipantModel } from './feed-model.js';
 import { ParticipantStrip } from './ParticipantStrip.js';
@@ -25,6 +26,8 @@ function participant(patch: Partial<ParticipantModel> = {}): ParticipantModel {
     word: 'working',
     attention: 'working',
     task: 'Спроектировать возвраты',
+    plan: null,
+    planLine: null,
     doing: null,
     doingDetail: null,
     agents: [],
@@ -176,5 +179,46 @@ describe('чип контекста (спека 2026-10-15, 3.2)', () => {
     unmount();
     render(<ParticipantStrip participants={[participant()]} onOpenSession={vi.fn()} contextChip={() => null} />);
     expect(document.querySelectorAll('[data-participant="s-01"] button')).toHaveLength(1);
+  });
+});
+
+
+describe('ParticipantStrip — agent plan', () => {
+  const plan = (done = 3, total = 7, partial = false): AgentPlan => capPlan({
+    items: Array.from({ length: total }, (_, i) => ({ id: String(i), subject: `Step ${i + 1}`, description: null, activeForm: null, status: i < done ? 'completed' : 'in_progress' })),
+    explanation: null, partial, updatedAt: '2026-10-18T00:00:00Z',
+  });
+  it('doing takes priority while the progress chip remains visible', () => {
+    renderStrip([participant({ doing: 'Waiting for S02', plan: plan(), planLine: { kind: 'current', text: '▸ Step 4' } })]);
+    expect(screen.getByText('Waiting for S02')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '3/7' })).toBeTruthy();
+    expect(screen.queryByText('▸ Step 4')).toBeNull();
+  });
+  it('opens the plan from its line and chip', () => {
+    const onOpenPlan = vi.fn();
+    render(<ParticipantStrip participants={[participant({ plan: plan(), planLine: { kind: 'current', text: '▸ Step 4' } })]} onOpenSession={vi.fn()} onOpenPlan={onOpenPlan} />);
+    fireEvent.click(screen.getByText('▸ Step 4'));
+    fireEvent.click(screen.getByRole('button', { name: '3/7' }));
+    expect(onOpenPlan.mock.calls).toEqual([['s-01'], ['s-01']]);
+  });
+  it('all 60 steps completed returns to task with no chip despite a capped list', () => {
+    renderStrip([participant({ plan: plan(60, 60) })]);
+    expect(screen.getByText('Спроектировать возвраты')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '60/60' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Plan' })).toBeNull();
+  });
+  it('partial completed steps retain a Plan chip with no total', () => {
+    renderStrip([participant({ plan: plan(3, 3, true) })]);
+    expect(screen.getByText('Спроектировать возвраты')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Plan' })).toBeTruthy();
+    expect(screen.queryByText('3/3')).toBeNull();
+  });
+  it('long subject and name truncate while both chips remain whole', () => {
+    render(<ParticipantStrip participants={[participant({ label: 'Long agent name '.repeat(30), plan: plan(), planLine: { kind: 'current', text: '▸ ' + 'Long subject '.repeat(30) } })]} onOpenSession={vi.fn()} contextChip={() => <button>82%</button>} />);
+    expect(screen.getByText(/Long agent name/).className).toContain('truncate');
+    expect(screen.getByText(/▸ Long subject/).className).toContain('truncate');
+    expect(screen.getByText(/▸ Long subject/).className).toContain('min-w-0');
+    expect(screen.getByRole('button', { name: '3/7' }).className).toContain('shrink-0');
+    expect(screen.getByText('82%').parentElement?.className).toContain('shrink-0');
   });
 });

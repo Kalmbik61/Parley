@@ -605,6 +605,7 @@ export function createActivityService(
       unread: unreadOf(entry, session.id),
       subagents: activity.subagents,
       model: indexed?.primaryModel ?? null,
+      plan: indexed?.plan ?? null,
       tasks: liveTasksOf(ref, key, activity),
       waitingFor: activity.waitingFor,
       mailWaiting: mailWaits.get(key) ?? null,

@@ -643,3 +643,4 @@ export {
   assistantPrompt, codexInstructionsFile, versionAtLeast,
 } from './assistant/launch.js';
 export type { AssistantMcpParams } from './assistant/launch.js';
+export type { AgentPlanStatus, AgentPlanItem, AgentPlanState, AgentPlanSummary, AgentPlan, PlanCall } from './agent-plan.js';
