@@ -267,9 +267,8 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
   const liveOf = (sessionId: string): ActivityEntry | undefined =>
     activity[refKey({ projectPath: entry.projectPath, workId: map.work.id, sessionId })];
 
-  // Создатель-сессия в `members` не пишется (`core/work/rooms.ts#addMember`), человек — участник всегда
-  // и списком не хранится: агенты комнаты — создатель и члены без человека, каждый один раз.
-  const memberIds = [...new Set([room.creator, ...room.members])].filter((id) => id !== HUMAN);
+  // Только явное рабочее членство; владение и происхождение не добавляют участника.
+  const memberIds = [...new Set(room.members)].filter((id) => id !== HUMAN);
   const participants: ParticipantModel[] = [];
   for (const id of memberIds) {
     const session = map.sessions.find((candidate) => candidate.id === id);
@@ -317,6 +316,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
   const createdBy = room.creator === HUMAN ? S.rooms.createdByYou : S.rooms.createdBy(labelOf(map, room.creator));
   const subtitle = [
     createdBy,
+    ...(room.ownerId ? [`Owner ${labelOf(map, room.ownerId)}`] : []),
     S.rooms.agentCount(participants.length),
     ...(lead === null ? [] : [S.rooms.leadIs(sessionTag(lead))]),
     workTitleText(map.work.title),

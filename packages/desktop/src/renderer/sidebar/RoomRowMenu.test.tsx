@@ -58,6 +58,7 @@ function renderMenu(
       workId="w-01"
       row={entry.map.rooms.some((room) => typeof room.archivedAt === 'string') ? archivedRowOf(entry) : rowOf(entry)}
       bridge={bridge}
+      ownerSessions={entry.map.sessions}
       onRename={onRename}
       {...extra}
     >
@@ -72,6 +73,29 @@ const hostWith = (methods: string[]): void => {
   useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods } });
 };
 const methods = (): string[] => bridge.calls.map((call) => call.method);
+
+it('assigns an existing workspace session as owner without moving members or changing the lead', async () => {
+  hostWith(['rooms.setOwner']);
+  const entry = work();
+  renderMenu(entry);
+  fireEvent.keyDown(screen.getByText('Assign owner'), { key: 'ArrowRight' });
+  fireEvent.click(await screen.findByText('solo'));
+  expect(bridge.calls).toEqual([
+    { method: 'rooms.setOwner', params: { projectPath: '/tmp/proj', workId: 'w-01', roomId: 'r-01', sessionId: 's-03' } },
+  ]);
+  expect(entry.map.rooms[0]?.members).toEqual(['s-01', 's-02']);
+  expect(entry.map.rooms[0]?.lead).toBe('s-01');
+});
+
+it('clears an owner and allows archived rooms to retain and change ownership', async () => {
+  hostWith(['rooms.setOwner']);
+  renderMenu(work({ ownerId: 's-03', archivedAt: '2026-10-18T10:00:00.000Z' }));
+  fireEvent.keyDown(screen.getByText('Change owner'), { key: 'ArrowRight' });
+  fireEvent.click(await screen.findByText('Clear owner'));
+  expect(bridge.calls).toEqual([
+    { method: 'rooms.setOwner', params: { projectPath: '/tmp/proj', workId: 'w-01', roomId: 'r-01', sessionId: null } },
+  ]);
+});
 const confirmDelete = (): void => {
   fireEvent.click(screen.getByText('Delete…'));
   // Первая по DOM — кнопка подтверждения (крестик диалога — после неё).
@@ -84,6 +108,7 @@ beforeEach(() => {
   bridge.setHandler('rooms.delete', () => ({ ok: true as const }));
   bridge.setHandler('rooms.archive', () => ({ ok: true as const }));
   bridge.setHandler('rooms.reopen', () => ({ ok: true as const }));
+  bridge.setHandler('rooms.setOwner', () => ({ ok: true as const }));
   hostWith(['rooms.rename', 'rooms.delete', 'rooms.archive', 'rooms.reopen', 'sessions.delete']);
   useUiStore.setState({ sidebarHolds: {} });
   useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });

@@ -248,6 +248,8 @@ export interface Room {
   title: string;
   /** Id сессии-создателя или `human`. */
   creator: string;
+  /** Владелец; рабочее участие задаётся только members. */
+  ownerId: string | null;
   /** Id сессий; человек — участник всегда и в список не пишется. */
   members: string[];
   createdAt: string;

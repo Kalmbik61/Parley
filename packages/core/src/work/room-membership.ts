@@ -28,9 +28,9 @@ interface Entry {
 const ms = (iso: string): number => Date.parse(iso);
 const end = (to: string | null): number => (to === null ? Number.POSITIVE_INFINITY : ms(to));
 
-/** Текущий участник из сессий: создатель-сессия или запись в `members`. */
+/** Текущий рабочий участник из сессий: запись в `members`. */
 export const isCurrentMember = (room: Room, sessionId: string): boolean =>
-  sessionId !== HUMAN && (room.creator === sessionId || room.members.includes(sessionId));
+  sessionId !== HUMAN && room.members.includes(sessionId);
 
 /** Входы в старую комнату: строки «joined» её ленты, а у текущих участников без строки — создание комнаты. */
 function legacyEntries(map: WorkMap, room: Room): Array<{ session: string; at: string }> {
@@ -39,7 +39,7 @@ function legacyEntries(map: WorkMap, room: Room): Array<{ session: string; at: s
     if (message.roomId !== room.id || message.from !== SYSTEM) continue;
     lines.set(message.text, [...(lines.get(message.text) ?? []), message.at]);
   }
-  const candidates = new Set([...map.sessions.map((session) => session.id), ...room.members, room.creator]);
+  const candidates = new Set([...map.sessions.map((session) => session.id), ...room.members]);
   candidates.delete(HUMAN);
   const entries: Array<{ session: string; at: string }> = [];
   for (const session of candidates) {

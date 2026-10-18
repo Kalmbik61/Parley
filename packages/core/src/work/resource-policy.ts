@@ -1,10 +1,9 @@
 /**
  * Бюджет работы и комнаты (P37, A11/A25 аудита): сколько сессий живёт одновременно, сколько новых заводят агенты,
- * как глубоко они порождают друг друга, сколько запусков и возобновлений за скользящий час, сколько писем и адресатов.
+ * сколько запусков и возобновлений за скользящий час, сколько писем и адресатов.
  *
  * Модуль чистый — без файлов и процессов: правила применяются к `WorkMap` внутри мутатора `updateMap`, то есть под
- * тем же замком, что и сама операция. Поэтому проверка и резерв атомарны (двенадцать одновременных `spawn_session`
- * не превысят слоты), а израсходованное лежит в самой карте и переживает перезапуск хоста. Окно и пороги — счётчики
+ * тем же замком, что и сама операция. Поэтому проверка и резерв атомарны, а израсходованное лежит в самой карте и переживает перезапуск хоста. Окно и пороги — счётчики
  * запусков и писем: жёсткого денежного потолка у провайдеров нет, и бюджет его не обещает (`RESOURCE_COVERAGE`).
  *
  * Резерв берётся до операции и закрывается её исходом: `spent` — случилась, `released` — отменена владельцем.
@@ -32,8 +31,6 @@ export interface ResourceLimits {
   workNewSessions: number;
   /** То же на комнату породившего агента. */
   roomNewSessions: number;
-  /** Глубина цепочки «агент породил агента»: корень — 0. */
-  spawnDepth: number;
   /** Запусков, возобновлений и повторов за скользящий час в работе. */
   workLaunches: number;
   /** То же в комнате. */
@@ -52,7 +49,6 @@ export const DEFAULT_RESOURCE_LIMITS: Readonly<ResourceLimits> = {
   roomConcurrent: 6,
   workNewSessions: 30,
   roomNewSessions: 12,
-  spawnDepth: 3,
   workLaunches: 40,
   roomLaunches: 20,
   workMessages: 200,
@@ -68,7 +64,6 @@ export const RESOURCE_LIMIT_BOUNDS: Readonly<Record<keyof ResourceLimits, { min:
   roomConcurrent: { min: 1, max: 64 },
   workNewSessions: { min: 0, max: 1000 },
   roomNewSessions: { min: 0, max: 1000 },
-  spawnDepth: { min: 1, max: 8 },
   workLaunches: { min: 1, max: 1000 },
   roomLaunches: { min: 1, max: 1000 },
   workMessages: { min: 1, max: 10_000 },
@@ -91,8 +86,6 @@ export function limitsFromConfig(config: ResourceLimits): ResourceLimits {
 export const RESOURCE_COVERAGE = {
   completeness: 'partial',
   counted: [
-    'spawn_session',
-    'autoLaunch of agent-created sessions',
     'wake resumes',
     'launches and resumes started from the window',
     'send_message and room invitations',
@@ -111,7 +104,6 @@ export const REQUEST_BUDGET_EXTENSION =
 export type ResourceDeniedCode =
   | 'concurrent'
   | 'new-sessions'
-  | 'depth'
   | 'launches'
   | 'resume-rate'
   | 'messages'
@@ -142,8 +134,6 @@ const DENIED_TEXT: Record<ResourceDeniedCode, (scope: 'work' | 'room' | 'session
     `session limit reached: ${used} of ${limit} sessions are running or reserved ${where(scope)}; stop one or raise the limit in Settings`,
   'new-sessions': (scope, used, limit) =>
     `new-session limit reached: agents already created ${used} of ${limit} sessions ${where(scope)}; raise the limit in Settings`,
-  depth: (_scope, used, limit) =>
-    `spawn depth limit reached: a session at depth ${used - 1} cannot create a child beyond depth ${limit}`,
   launches: (scope, used, limit) =>
     `launch limit reached: ${used} of ${limit} launches and resumes in the last hour ${where(scope)}; wait or raise the limit in Settings`,
   'resume-rate': (_scope, used, limit) =>
@@ -162,24 +152,10 @@ const isAgentSender = (from: string): boolean => from !== HUMAN && from !== SYST
 
 const within = (at: string, now: number): boolean => now - Date.parse(at) < RESOURCE_WINDOW_MS;
 
-/** Комната сессии: создатель или участник; одна на сессию. `null` — сессия вне комнат. */
+/** Рабочая комната сессии по members; одна на сессию. `null` — сессия вне комнат. */
 export function roomOfSession(map: WorkMap, sessionId: string): string | null {
-  const room = map.rooms.find((candidate) => candidate.creator === sessionId || candidate.members.includes(sessionId));
+  const room = map.rooms.find((candidate) => candidate.members.includes(sessionId));
   return room === undefined ? null : room.id;
-}
-
-/** Глубина сессии: число родителей над ней. Цикл в карте не зацикливает подсчёт. */
-export function spawnDepthOf(map: WorkMap, sessionId: string): number {
-  let depth = 0;
-  let current = map.sessions.find((candidate) => candidate.id === sessionId);
-  const seen = new Set<string>();
-  while (current !== undefined && current.parent !== null && !seen.has(current.id)) {
-    seen.add(current.id);
-    depth += 1;
-    const parent: string = current.parent;
-    current = map.sessions.find((candidate) => candidate.id === parent);
-  }
-  return depth;
 }
 
 function ensureResources(map: WorkMap): WorkResources {
@@ -245,66 +221,8 @@ const inRoom = (map: WorkMap, ids: Iterable<string>, roomId: string): number => 
   return count;
 };
 
-export interface SpawnRequest {
-  /** Сессия агента, который просит новую. */
-  actor: string;
-  limits: ResourceLimits;
-  now?: number;
-}
-
-/**
- * Допуск `spawn_session`: глубина, число новых сессий и слоты проверяются и записываются в журнал одним действием
- * внутри мутатора. Исключение отменяет всю мутацию — карта не меняется, резерв не остаётся. Возвращает попытку:
- * вызывающий проставляет ей id созданной сессии.
- */
-export function admitSpawn(map: WorkMap, request: SpawnRequest): ResourceAttempt {
-  const now = request.now ?? Date.now();
-  const { actor, limits } = request;
-  settleByEvidence(map, now);
-  const resources = ensureResources(map);
-  prune(resources, now);
-
-  const depth = spawnDepthOf(map, actor) + 1;
-  if (depth > limits.spawnDepth) throw new ResourceDeniedError('depth', 'work', depth, limits.spawnDepth);
-
-  const room = roomOfSession(map, actor);
-  if (resources.spawned >= limits.workNewSessions) {
-    throw new ResourceDeniedError('new-sessions', 'work', resources.spawned, limits.workNewSessions);
-  }
-  if (room !== null) {
-    const spawnedInRoom = resources.spawnedByRoom[room] ?? 0;
-    if (spawnedInRoom >= limits.roomNewSessions) {
-      throw new ResourceDeniedError('new-sessions', 'room', spawnedInRoom, limits.roomNewSessions);
-    }
-  }
-
-  const busy = occupied(map);
-  if (busy.size >= limits.workConcurrent) throw new ResourceDeniedError('concurrent', 'work', busy.size, limits.workConcurrent);
-  if (room !== null) {
-    const busyInRoom = inRoom(map, busy, room);
-    if (busyInRoom >= limits.roomConcurrent) throw new ResourceDeniedError('concurrent', 'room', busyInRoom, limits.roomConcurrent);
-  }
-
-  resources.spawned += 1;
-  if (room !== null) resources.spawnedByRoom[room] = (resources.spawnedByRoom[room] ?? 0) + 1;
-  const attempt: ResourceAttempt = {
-    id: nextAttemptId(resources),
-    kind: 'spawn',
-    // Запись сессии пишется той же мутацией: подтверждать нечего, и отменить её, не отменив мутацию, нельзя.
-    state: 'spent',
-    at: new Date(now).toISOString(),
-    settledAt: new Date(now).toISOString(),
-    actor,
-    session: '',
-    room,
-    owner: `mcp:${actor}`,
-  };
-  resources.attempts.push(attempt);
-  return attempt;
-}
-
 export interface ReserveRequest {
-  /** `launch`/`retry` — запуск, `resume` — возобновление; `spawn` берётся через `admitSpawn`. */
+  /** `launch`/`retry` — запуск, `resume` — возобновление; новые spawn не создаются. */
   kind: Exclude<ResourceKind, 'spawn'>;
   /** `human`, `wake` или `auto`. */
   actor: string;
@@ -424,7 +342,7 @@ export function countRecipients(map: WorkMap, from: string, roomId: string | nul
   if (roomId === null || to.length > 0) return to.length;
   const room = map.rooms.find((candidate) => candidate.id === roomId);
   if (room === undefined) return 0;
-  const members = new Set([room.creator, ...room.members]);
+  const members = new Set(room.members);
   members.delete(HUMAN);
   members.delete(from);
   return members.size;
@@ -474,7 +392,7 @@ export interface ScopeStatus {
 }
 
 export interface ResourceStatus {
-  work: ScopeStatus & { fanout: Meter; spawnDepth: number };
+  work: ScopeStatus & { fanout: Meter };
   /** `null` — комната не названа. */
   room: ScopeStatus | null;
   /** Резервы чужого поколения без свидетельств: считаются занятыми, пока их не закроет свидетельство или повтор. */
@@ -545,7 +463,7 @@ export function resourceStatus(
   if (delivered >= limits.fanout) exhausted.add('fanout');
 
   return {
-    work: { ...work, fanout: meter(delivered, 0, limits.fanout), spawnDepth: limits.spawnDepth },
+    work: { ...work, fanout: meter(delivered, 0, limits.fanout) },
     room,
     ambiguous: (resources?.attempts ?? []).filter(
       (attempt) => attempt.state === 'reserved' && owner !== null && attempt.owner !== owner,

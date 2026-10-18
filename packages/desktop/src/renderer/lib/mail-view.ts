@@ -45,7 +45,7 @@ export function recipientsOf(message: Message, map: WorkMap): string[] {
   if (room !== undefined && isRoomArchived(room)) return [];
   if (message.to.length > 0) return message.to;
   if (room === undefined) return [];
-  const members = new Set([room.creator, ...room.members]);
+  const members = new Set(room.members);
   members.delete(HUMAN);
   members.delete(message.from);
   return [...members];

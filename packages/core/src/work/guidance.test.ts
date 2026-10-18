@@ -28,7 +28,6 @@ function mapOf(title: string, goal: string): WorkMap {
 const TOOLS = [
   'get_map',
   'report',
-  'spawn_session',
   'wait_for',
   'send_message',
   'check_inbox',
@@ -40,7 +39,7 @@ const TOOLS = [
 ];
 
 describe('системная вставка', () => {
-  it('короткая (≤14 строк), называет работу, сессию и все одиннадцать инструментов', () => {
+  it('короткая (≤14 строк), называет работу, сессию и активные инструменты', () => {
     const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
     const lines = text.split('\n');
 
@@ -49,8 +48,8 @@ describe('системная вставка', () => {
     expect(text).toContain('Authorization');
     expect(text).toContain('s-03');
     for (const tool of TOOLS) expect(text).toContain(tool);
-    // Правило предпочтения: длинная или параллельная подзадача — подсессия работы.
-    expect(text).toMatch(/in parallel/);
+    // Сессии создаёт человек; встроенные субагенты провайдера остаются доступны.
+    expect(text).toContain('invite existing sessions');
     expect(text).toMatch(/subagents/);
   });
 
@@ -81,9 +80,10 @@ describe('системная вставка', () => {
     expect(line).toContain('answer with send_message only to a question');
   });
 
-  it('автозапуск: spawn_session не отсылает к человеку', () => {
+  it('новые сессии создаёт человек; доступны существующие сессии', () => {
     const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
-    expect(text).toMatch(/starts by itself/);
+    expect(text).toContain('New Parley sessions are created by the human');
+    expect(text).not.toContain('spawn_session');
     expect(text).not.toContain('pending is started by the human');
   });
 
@@ -127,12 +127,13 @@ describe('системная вставка', () => {
     expect(text).toContain('first second');
   });
 
-  it('комнаты: ведущий по умолчанию — ты, propose_decision — только ведущий, решение ждёт человека', () => {
+  it('комнаты: явные участники и ведущий, propose_decision — только ведущий, решение ждёт человека', () => {
     const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
     const line = text.split('\n').find((candidate) => candidate.startsWith('create_room'));
 
     expect(line).toBeDefined();
-    expect(line).toMatch(/lead — the lead, you by default/);
+    expect(line).toContain('nonempty explicit members and an explicit lead among them');
+    expect(line).toContain('no owner broadcasts');
     expect(line).toMatch(/propose_decision — lead only: the decision waits for the human/);
   });
 
@@ -208,8 +209,9 @@ function sectionOf(heading: string, next: string): string {
 }
 
 describe('подробный гид', () => {
-  it('объясняет предпочтение подсессий и состояние deleted', () => {
-    expect(GUIDE).toContain('spawn_session');
+  it('объясняет создание сессий человеком, встроенных субагентов и состояние deleted', () => {
+    expect(GUIDE).not.toContain('spawn_session');
+    expect(GUIDE).toContain('Native provider subagents remain available');
     expect(GUIDE).toContain('state: deleted');
     expect(GUIDE.split('\n').length).toBeGreaterThan(30);
   });
@@ -243,14 +245,14 @@ describe('подробный гид', () => {
     expect(tail).toMatch(/`mcp__harnas__[^`]*`[\s\S]*`mcp__parley__[^`]*`/);
   });
 
-  it('описывает роль-агента у spawn_session', () => {
+  it('сохраняет сведения о ролях сессий', () => {
     expect(GUIDE).toContain(
-      'spawn_session(provider, label, task, contextFrom, role, agent, worktree, model, effort)',
+      'New Parley sessions are created by the human.',
     );
     expect(GUIDE).toContain('.claude/agents/');
   });
 
-  it('spawn_session: worktree — своя копия git на отдельной ветке, только в проекте с git, правила — тема worktrees', () => {
+  it('создание сессии человеком: worktree — своя копия git на отдельной ветке, только в проекте с git, правила — тема worktrees', () => {
     const tools = sectionOf('## Tools', '## Rooms');
 
     expect(tools).toMatch(/`worktree` is optional: `true` — the session works in its own git worktree/);
@@ -261,7 +263,7 @@ describe('подробный гид', () => {
     expect(tools).toContain('The rules for working in it are in topic `worktrees`.');
   });
 
-  it('spawn_session: model — id из models провайдера в get_map, не из списка — ошибка; effort — уровни выбранной модели', () => {
+  it('создание сессии человеком: model — id из models провайдера в get_map, не из списка — ошибка; effort — уровни выбранной модели', () => {
     const tools = sectionOf('## Tools', '## Rooms');
 
     expect(tools).toMatch(/`model` is an `id` from the `models` field of the right provider in `get_map`/);
@@ -279,7 +281,7 @@ describe('подробный гид', () => {
     expect(GUIDE).not.toMatch(/`low`, `medium` or `high`/);
   });
 
-  it('spawn_session: выбор хранится в записи — разбуженная письмом сессия возобновляется с той же моделью и effort', () => {
+  it('создание сессии человеком: выбор хранится в записи — разбуженная письмом сессия возобновляется с той же моделью и effort', () => {
     const tools = sectionOf('## Tools', '## Rooms');
 
     // Resume теперь передаёт модель и effort из карты (нормалайзер, 5.4): прежняя оговорка
@@ -292,7 +294,7 @@ describe('подробный гид', () => {
     const lead = sectionOf('### The lead and the decision', '### Room participant');
 
     expect(lead).toContain('`add_to_room(room, session)`');
-    expect(lead).toMatch(/an executor just spawned with\s+`spawn_session`/);
+    expect(lead).toContain('an existing executor');
     expect(lead).toMatch(/one room per\s+session/);
     expect(lead).toContain('`@s04 joined the room`');
     expect(lead).toMatch(/The new participant does not get a message about\s+being added/);
@@ -318,17 +320,17 @@ describe('подробный гид', () => {
     expect(GUIDE).not.toMatch(/TUI|prefix [dD]/);
   });
 
-  it('комнаты: create_room для подчинённых, рассылка против адресного, read_room для контекста', () => {
+  it('комнаты: create_room для явного рабочего состава, рассылка против адресного, read_room для контекста', () => {
     expect(GUIDE).toContain('## Rooms');
-    expect(GUIDE).toMatch(/create_room[\s\S]*for your subordinates/);
+    expect(GUIDE).toMatch(/create_room[\s\S]*nonempty explicit list of existing working/);
     expect(GUIDE).toMatch(/broadcast[\s\S]*addressed/);
     expect(GUIDE).toMatch(/read_room[\s\S]*for context, without replying/);
   });
 
-  it('комнаты: create_room с lead — ведущий по умолчанию ты, человек в окне назначает сам', () => {
+  it('комнаты: create_room требует явного ведущего среди участников', () => {
     expect(GUIDE).toContain('`create_room(title, members, lead)`');
-    expect(GUIDE).toMatch(/`lead` is the id\s+of the lead[\s\S]*without it you are the lead/);
-    expect(GUIDE).toMatch(/in the window too — there the human assigns the lead/);
+    expect(GUIDE).toMatch(/explicit lead included in that list/);
+    expect(GUIDE).toContain('Ownership does not grant operational lead rights');
   });
 
   it('комнаты, ведущему: собрать позиции, предложить решение, до принятия не начинать', () => {

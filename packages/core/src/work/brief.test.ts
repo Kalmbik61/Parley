@@ -39,11 +39,11 @@ function mapWithSessions(): WorkMap {
       provider: 'codex',
       label: 'бэкенд',
       task: 'Реализовать шаги 1–3 плана',
-      parent: 's-01',
+      parent: null,
       contextFrom: ['s-01'],
     },
     AT,
-  );
+  ).parent = 's-01';
   return map;
 }
 
@@ -135,9 +135,9 @@ function mapWithThread(): WorkMap {
   const map = mapWithSessions();
   addSession(
     map,
-    { provider: 'claude', label: 'ревью', task: 'Проверить шаги 1–3', parent: 's-01' },
+    { provider: 'claude', label: 'ревью', task: 'Проверить шаги 1–3', parent: null },
     AT,
-  );
+  ).parent = 's-01';
   addMessage(
     map,
     { from: 's-01', to: ['s-02'], text: 'миграции отдельным PR', kind: 'decision' },
@@ -237,6 +237,16 @@ describe('бриф: комнаты', () => {
 });
 
 describe('бриф: роль в комнате', () => {
+  it('separates owned rooms from working membership and operational leadership', () => {
+    const map = mapWithSessions();
+    const room = addRoom(map, { title: 'Delivery', creator: 's-02', members: ['s-01'], lead: 's-01' });
+    room.ownerId = 's-02';
+    const brief = buildBrief(map, 's-02');
+    expect(brief).toContain('## Owned rooms');
+    expect(brief).toContain('lead: s-01');
+    expect(brief).toContain('do not broadcast');
+    expect(brief).not.toContain('## Role in the room');
+  });
   /** Тред с s-01 (план), s-02 (бэкенд), s-03 (ревью); комната создана s-01, ведущий — s-02. */
   function mapWithRoom(lead: string | null = 's-02'): WorkMap {
     const map = mapWithThread();
@@ -344,10 +354,10 @@ describe('бриф: роль в комнате', () => {
     );
   });
 
-  it('создатель-сессия, не назначенный ведущим, — тоже участник', () => {
+  it('создатель вне members не получает рабочую роль', () => {
     const brief = buildBrief(mapWithRoom(), 's-01');
 
-    expect(brief).toContain('- r-01 "Бэкенд": the lead is s-02 (бэкенд).');
+    expect(brief).not.toContain('## Role in the room');
     expect(brief).not.toContain('you are the lead');
   });
 
@@ -366,7 +376,7 @@ describe('бриф: роль в комнате', () => {
 
     // Сам он — «ты ведущий», остальным его называет бриф.
     expect(buildBrief(map, 's-03')).toContain('- r-01 "Бэкенд": you are the lead.');
-    expect(buildBrief(map, 's-01')).toContain('- r-01 "Бэкенд": the lead is s-03 (ревью).');
+    expect(buildBrief(map, 's-01')).not.toContain('## Role in the room');
   });
 
   it('роль отсылает к темам `lead` и `member` гида один раз, сколько бы комнат ни было', () => {
@@ -392,7 +402,7 @@ describe('бриф: роль в комнате', () => {
   it('состав комнаты в «Коллегах» на месте, роль идёт следом', () => {
     const brief = buildBrief(mapWithRoom(), 's-03');
 
-    expect(brief).toContain('- r-01 "Бэкенд": план, бэкенд');
+    expect(brief).toContain('- r-01 "Бэкенд": бэкенд');
     expect(brief.indexOf('## Colleagues')).toBeLessThan(brief.indexOf('## Role in the room'));
     expect(brief.indexOf('## Role in the room')).toBeLessThan(brief.indexOf('## Rules'));
   });
@@ -631,7 +641,7 @@ describe('бриф: бюджет и ссылки вместо обрезания
   it('коллеги сверх двенадцати — ссылка на get_map', () => {
     const map = mapWithSessions();
     for (let at = 0; at < 15; at += 1) {
-      addSession(map, { provider: 'claude', label: `коллега ${at}`, task: 'x', parent: 's-01' }, AT);
+      addSession(map, { provider: 'claude', label: `коллега ${at}`, task: 'x', parent: null }, AT).parent = 's-01';
     }
     const brief = buildBrief(map, 's-02');
     expect(brief.match(/^- s-\d+ — /gm)).toHaveLength(12);
@@ -758,5 +768,21 @@ describe('бриф: обновление по ревизии', () => {
       const { file } = await seeded();
       expect(file).toBe(path.join(workPaths(project, 'w-0001').briefs, 's-01.md'));
     });
+  });
+});
+
+describe('brief agent message visibility', () => {
+  it('excludes unrelated private decisions while retaining owned room decisions and direct replies', () => {
+    const map = mapWithSessions();
+    map.sessions[1]!.parent = null;
+    const owner = addSession(map, { provider: 'claude', label: 'owner', task: 'coordinate' });
+    const room = addRoom(map, { creator: 's-01', ownerId: owner.id, title: 'owned', members: ['s-01', 's-02'], lead: 's-01' });
+    addMessage(map, { from: 's-01', to: ['s-02'], text: 'PRIVATE_WORKER_DECISION', kind: 'decision' });
+    addMessage(map, { from: 's-01', to: [owner.id], text: 'DIRECT_OWNER_DECISION', kind: 'decision' });
+    addMessage(map, { from: 's-01', to: [], roomId: room.id, text: 'OWNED_ROOM_DECISION', kind: 'decision' });
+    const brief = buildBrief(map, owner.id);
+    expect(brief).not.toContain('PRIVATE_WORKER_DECISION');
+    expect(brief).toContain('DIRECT_OWNER_DECISION');
+    expect(brief).toContain('OWNED_ROOM_DECISION');
   });
 });

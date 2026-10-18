@@ -39,9 +39,7 @@ describe('roomLiveLead', () => {
 
   it('живых участников нет — ведёт живой создатель-сессия', () => {
     const { map } = makeWork('w', { sessions: [alive('s-01'), closed('s-02')] });
-    expect(roomLiveLead(map, room({ creator: 's-01', members: ['s-02'], lead: 's-02' }))).toBe(
-      's-01',
-    );
+    expect(roomLiveLead(map, room({ creator: 's-01', ownerId: 's-01', members: ['s-02'], lead: 's-02' }))).toBeNull();
   });
 
   it('закрытая комната — ведущего нет, человек-создатель не в счёт', () => {

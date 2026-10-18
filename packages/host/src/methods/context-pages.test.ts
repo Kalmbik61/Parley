@@ -71,7 +71,7 @@ async function seed(dir: string, count: number, size: number, extra: Partial<Par
   const map = await createWork(dir, { title: 'Работа', goal: 'Цель работы' });
   await updateMap(dir, map.work.id, (current) => {
     addSession(current, { provider: 'claude', label: 'план', task: 'x' });
-    addSession(current, { provider: 'claude', label: 'код', task: 'y', parent: 's-01' });
+    addSession(current, { provider: 'claude', label: 'код', task: 'y', parent: null }).parent = 's-01';
     addRoom(current, { title: 'Комната', creator: 'human', members: ['s-01', 's-02'], lead: 's-01' });
     for (let i = 0; i < count; i += 1) addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: `${i}:`.padEnd(size, 'я'), ...extra });
   });

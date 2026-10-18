@@ -1021,7 +1021,7 @@ describe('WakeService: подъём спящей письмом', () => {
   it('9: письмо в ленте архивной комнаты спящую не поднимает — ни подъёма, ни resume-failed; прямое письмо по-прежнему будит', async () => {
     const { workId, target, sender } = await sleepingPair();
     await updateMap(project, workId, (map) => {
-      addRoom(map, { title: 'Созвон', creator: sender, members: [target], lead: sender });
+      addRoom(map, { title: 'Созвон', creator: sender, members: [sender, target], lead: sender });
       archiveRoom(map, 'r-01');
     });
     const argsFile = await tempArgsFile();

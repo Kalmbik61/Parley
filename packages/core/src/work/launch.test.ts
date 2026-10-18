@@ -10,7 +10,6 @@ import { claudeSkillRoute, codexSkillRoute } from './skill-reduction.js';
 import {
   applyAutoTitle,
   autoTitleOf,
-  createChildSession,
   createNewSession,
   createPendingSession,
   finishExited,
@@ -26,12 +25,26 @@ import {
   startSession,
   UNTITLED_WORK,
 } from './launch.js';
+import { writeBrief } from './brief.js';
 import { BROWSER_PRIORITY_RULE } from './guidance.js';
 import { setResult } from './map.js';
 import { defaultSessionName } from './names.js';
 import { addRoom } from './rooms.js';
 import { workSettingsJson } from './settings-file.js';
 import { createWork, readMap, updateMap, workPaths } from './store.js';
+
+/** Historical parent links remain readable, but are never created by production APIs. */
+async function historicalChild(projectPath: string, workId: string, parentId: string) {
+  const created = await createNewSession(projectPath, workId);
+  const map = await updateMap(projectPath, workId, (current) => {
+    const child = current.sessions.find((row) => row.id === created.session.id)!;
+    child.parent = parentId;
+    child.contextFrom = [parentId];
+  });
+  const session = map.sessions.find((row) => row.id === created.session.id)!;
+  await writeBrief(projectPath, map, session.id);
+  return { workId, session };
+}
 
 /** Пути к бинарям подменяются на заглушку: настоящий агент здесь не запускается. */
 const STUB = path.join(
@@ -145,14 +158,14 @@ describe('создание pending сессии', () => {
     expect(brief).toContain('report');
   });
 
-  it('дочерняя сессия руками: родитель, контекст и бриф с его резюме (prefix C)', async () => {
+  it('историческая дочерняя сессия: родитель, контекст и бриф с его резюме', async () => {
     const { workId, sessionId } = await pending('claude');
     await updateMap(project, workId, (map) => {
       const parent = map.sessions.find((item) => item.id === sessionId);
       if (parent !== undefined) parent.summary = 'миграции готовы';
     });
 
-    const { session: child } = await createChildSession(project, workId, sessionId);
+    const { session: child } = await historicalChild(project, workId, sessionId);
     expect(child.parent).toBe(sessionId);
     expect(child.contextFrom).toEqual([sessionId]);
     const brief = await readFile(
@@ -161,6 +174,15 @@ describe('создание pending сессии', () => {
     );
     expect(brief).toContain('тесты');
     expect(brief).toContain('миграции готовы');
+  });
+
+  it('rejects new child sessions before changing the map or writing a brief', async () => {
+    const { workId, sessionId } = await pending('claude');
+    const before = await readMap(project, workId);
+    await expect(createPendingSession(project, workId, {
+      provider: 'claude', label: 'child', task: 'task', parent: sessionId,
+    })).rejects.toThrow(/child|parent/i);
+    expect(await readMap(project, workId)).toEqual(before);
   });
 
   it('пропавший бриф собирается заново — запускать сессию всё равно нужно', async () => {
@@ -197,7 +219,7 @@ describe('метки быстрой сессии и автозаголовок',
   it('дочерняя и быстрая сессия работы получают имена своих номеров, а не метку новой сессии', async () => {
     const { workId, sessionId } = await pending('claude');
     const quick = await createNewSession(project, workId);
-    const { session: child } = await createChildSession(project, workId, sessionId);
+    const { session: child } = await historicalChild(project, workId, sessionId);
 
     expect([quick.session.label, child.label]).toEqual([
       defaultSessionName(quick.session.id),
@@ -210,7 +232,7 @@ describe('метки быстрой сессии и автозаголовок',
 
   it('бриф дочерней сессии не несёт русской метки: агент читает её в «Your session»', async () => {
     const { workId, sessionId } = await pending('claude');
-    const { session: child } = await createChildSession(project, workId, sessionId);
+    const { session: child } = await historicalChild(project, workId, sessionId);
     const brief = await readFile(
       path.join(workPaths(project, workId).briefs, `${child.id}.md`),
       'utf8',
@@ -1027,7 +1049,7 @@ describe('системная вставка гида', () => {
       const parent = map.sessions.find((item) => item.id === sessionId);
       if (parent !== undefined) parent.summary = 'миграции готовы';
     });
-    const { session: child } = await createChildSession(project, workId, sessionId);
+    const { session: child } = await historicalChild(project, workId, sessionId);
     expect(child.task).toBe('');
 
     const plan = await planLaunch(project, workId, child);
@@ -1058,7 +1080,7 @@ describe('системная вставка гида', () => {
       const parent = map.sessions.find((item) => item.id === sessionId);
       if (parent !== undefined) parent.summary = 'миграции готовы';
     });
-    const { session: child } = await createChildSession(project, workId, sessionId);
+    const { session: child } = await historicalChild(project, workId, sessionId);
     await updateMap(project, workId, (map) => {
       const target = map.sessions.find((item) => item.id === child.id);
       if (target !== undefined) target.providerSessionId = '7fa0e1ee-cc7b-4a1e-9d4e-000000000003';
@@ -1405,7 +1427,7 @@ describe('common session layer delivery', () => {
   it('quiet Codex gets the existing brief as context, never as a first prompt', async () => {
     const { workId, sessionId } = await pending('codex');
     await updateMap(project, workId, (map) => { map.sessions[0]!.summary = 'QUIET PARENT CONTEXT'; });
-    const { session: child } = await createChildSession(project, workId, sessionId);
+    const { session: child } = await historicalChild(project, workId, sessionId);
     child.provider = 'codex';
     for (const plan of [await planLaunch(project, workId, child),
       await planResume(project, workId, { ...child, providerSessionId: 'codex-thread' })]) {
@@ -2161,7 +2183,7 @@ describe('ограниченный стартовый контекст (P34)', (
     expect(launch.args.at(-1)).toContain('Goal: логин по e-mail');
 
     // Тихий ребёнок: бриф в слое, цель в нём одна.
-    const { session: child } = await createChildSession(project, workId, sessionId);
+    const { session: child } = await historicalChild(project, workId, sessionId);
     child.provider = 'codex';
     expect(count(codexLayer((await planLaunch(project, workId, child)).args), 'логин по e-mail')).toBe(1);
 
@@ -2173,7 +2195,7 @@ describe('ограниченный стартовый контекст (P34)', (
 
   it('разные id сессий не меняют стабильную политику в начале слоя', async () => {
     const { workId, sessionId } = await pending('codex');
-    const { session: child } = await createChildSession(project, workId, sessionId);
+    const { session: child } = await historicalChild(project, workId, sessionId);
     child.provider = 'codex';
     const first = codexLayer((await planLaunch(project, workId, await sessionOf(workId, sessionId))).args);
     const second = codexLayer((await planLaunch(project, workId, child)).args);
@@ -2188,7 +2210,7 @@ describe('ограниченный стартовый контекст (P34)', (
     const created = await createWork(project, { title: 'Авторизация', goal: 'ж'.repeat(100_000) });
     const workId = created.work.id;
     const sessionId = await createPendingSession(project, workId, { provider: 'codex', label: 'тесты', task: 'прогнать' });
-    const { session: child } = await createChildSession(project, workId, sessionId);
+    const { session: child } = await historicalChild(project, workId, sessionId);
     child.provider = 'codex';
     const launch = await planLaunch(project, workId, await sessionOf(workId, sessionId));
     const quiet = await planLaunch(project, workId, child);
@@ -2228,7 +2250,7 @@ describe('ограниченный стартовый контекст (P34)', (
   it('тихая сессия при возобновлении получает свежий бриф в слое, а не отдельную строку', async () => {
     const { workId, sessionId } = await pending('codex');
     await updateMap(project, workId, (map) => { map.sessions[0]!.summary = 'OLD SUMMARY'; });
-    const { session: child } = await createChildSession(project, workId, sessionId);
+    const { session: child } = await historicalChild(project, workId, sessionId);
     child.provider = 'codex';
     await updateMap(project, workId, (map) => { map.sessions[0]!.summary = 'NEW SUMMARY'; });
     const plan = await planResume(project, workId, { ...child, providerSessionId: 'codex-thread' });
