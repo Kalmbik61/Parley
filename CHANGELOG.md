@@ -4,6 +4,12 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Added
+
+- **Agent-authored plans appear in room participant cards and the Agents tab.** See the current step, confirmed progress and descriptions, and open a participant's plan without leaving the room. Claude task IDs also restore subagent steps; incomplete histories are marked explicitly.
+
 ## 0.15.2
 
 The host does far less work while agents run: it reads only what agents append to their logs, and the island and notifications no longer download whole chats. The assistant on the island shows what you send at once, queues the messages you send while it answers instead of cancelling the answer, can address agents in a room with a mention, and its Send button shows that it is sending.

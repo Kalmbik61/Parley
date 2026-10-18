@@ -136,8 +136,8 @@ Claude-коллектор хранит только плановые вызов�
 
 Codex-коллектор связывает `function_call` и `function_call_output` по `call_id`, сохраняет порядок первого вызова и отсекает повторы. `arguments` — `JSON.parse` в `try`, битый JSON — пропуск. Успешный ответ даёт `done`, явная ошибка результата — `failed`, отсутствие ответа — `running`; неподдерживаемая/неоднозначная форма результата не считается подтверждением успеха. Проверить нормализацию результата на фикстурах успеха и ошибки; приёмка не ограничивается одним `function_call` без результата. Никакого разбора произвольного JavaScript внутри code mode.
 
-- [ ] **Step 0: Замер «до»** (спека 9.4). На текущем master: `pnpm --filter @parley/core build`, затем однократный скрипт в scratchpad, который импортирует `indexSessionFile` из `packages/core/dist/session-index.js` и 5 раз индексирует самый большой лог (`ls -S ~/.claude/projects/*/*.jsonl | head -1`). Записать медиану в журнал задачи.
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 0: Замер «до»** (спека 9.4). На текущем master: `pnpm --filter @parley/core build`, затем однократный скрипт в scratchpad, который импортирует `indexSessionFile` из `packages/core/dist/session-index.js` и 5 раз индексирует самый большой лог (`ls -S ~/.claude/projects/*/*.jsonl | head -1`). Записать медиану в журнал задачи.
+- [x] **Step 1: Write the failing tests:**
   - `agent-plan-log.test.ts`: `Claude: TaskCreate применяется с номером из ответа, TaskUpdate меняет статус` — записи выше → `items[0]` равно `{ id: '1', subject: 'A', description: 'D', activeForm: 'Doing A', status: 'in_progress' }`;
   - `Claude: вызов без ответа не меняет план` — Create без ответа → `null`; обновление/замена без ответа сохраняют предыдущее состояние;
   - `Claude: задержанный ответ не меняет порядок` — Create A, Update A, успешный ответ Update, успешный ответ Create → A in_progress; до ответа Create A не выдумывается;
@@ -149,11 +149,11 @@ Codex-коллектор связывает `function_call` и `function_call_ou
   - `Codex: успешная пара вызов/ответ даёт план; битый JSON, ошибка и отсутствие ответа не меняют его; повтор старого call_id не откатывает новый снимок`;
   - `session-index.test.ts`: `индекс несёт plan; без плановых вызовов plan === null`;
   - `codex.test.ts`: `индекс Codex несёт plan из успешного update_plan; без поддерживаемых вызовов plan === null`.
-- [ ] **Step 2:** `pnpm --filter @parley/core exec vitest run src/agent-plan-log.test.ts src/session-index.test.ts src/codex/codex.test.ts` → новые тесты FAIL.
-- [ ] **Step 3:** Реализовать коллекторы и подключить их в оба накопителя: `onRecord(raw)` в `feed`, независимый `clone`, `plan: collector.finish()` в `build`. Прогнать `src/session-indexer.test.ts` вместе с остальными тестами задачи.
-- [ ] **Step 4:** Тесты → PASS; весь `pnpm --filter @parley/core test` → PASS.
-- [ ] **Step 5: Замер «после»** тем же скриптом: медиана не больше «до» × 1.1. При превышении оптимизировать отбор по типу записи и ID планового вызова. Не фильтровать все записи только по имени инструмента: ответы не обязаны его содержать, и такая фильтрация потеряет подтверждение результата.
-- [ ] **Step 6: Commit** — `feat(core): carry the agent plan in the session log index`.
+- [x] **Step 2:** `pnpm --filter @parley/core exec vitest run src/agent-plan-log.test.ts src/session-index.test.ts src/codex/codex.test.ts` → новые тесты FAIL.
+- [x] **Step 3:** Реализовать коллекторы и подключить их в оба накопителя: `onRecord(raw)` в `feed`, независимый `clone`, `plan: collector.finish()` в `build`. Прогнать `src/session-indexer.test.ts` вместе с остальными тестами задачи.
+- [x] **Step 4:** Тесты → PASS; весь `pnpm --filter @parley/core test` → PASS.
+- [x] **Step 5: Замер «после»** тем же скриптом: медиана не больше «до» × 1.1. При превышении оптимизировать отбор по типу записи и ID планового вызова. Не фильтровать все записи только по имени инструмента: ответы не обязаны его содержать, и такая фильтрация потеряет подтверждение результата.
+- [x] **Step 6: Commit** — `feat(core): carry the agent plan in the session log index`.
 
 ### Task 3: План в живых метриках хоста
 
@@ -165,14 +165,14 @@ Codex-коллектор связывает `function_call` и `function_call_ou
 - Consumes: `SessionIndex.plan` (Task 2), `LiveMetrics.plan` (Task 1).
 - Produces: `metricsFor(...).plan === indexed?.plan ?? null` — у сессий в любом `lifecycle`.
 
-- [ ] **Step 1: Write the failing tests** (по образцу соседних тестов, которые подменяют индекс лога):
+- [x] **Step 1: Write the failing tests** (по образцу соседних тестов, которые подменяют индекс лога):
   - `метрики несут plan из индекса лога` — индекс с планом из одного пункта → в `activity.changed` `metrics.plan.items[0].subject === 'A'`;
   - `смена плана в индексе снова шлёт activity.changed, тот же план — нет`;
   - `спящая сессия тоже несёт plan`.
-- [ ] **Step 2:** `pnpm --filter @parley/host exec vitest run src/activity/activity-service.test.ts` → новые FAIL.
-- [ ] **Step 3:** Добавить `plan: indexed?.plan ?? null` в `metricsFor`.
-- [ ] **Step 4:** Тест → PASS; `pnpm --filter @parley/host test` → PASS (при флейках сравнить с базовым прогоном, см. «капризы tui-тестов»).
-- [ ] **Step 5: Commit** — `feat(host): send the agent plan in live metrics`.
+- [x] **Step 2:** `pnpm --filter @parley/host exec vitest run src/activity/activity-service.test.ts` → новые FAIL.
+- [x] **Step 3:** Добавить `plan: indexed?.plan ?? null` в `metricsFor`.
+- [x] **Step 4:** Тест → PASS; `pnpm --filter @parley/host test` → PASS (при флейках сравнить с базовым прогоном, см. «капризы tui-тестов»).
+- [x] **Step 5: Commit** — `feat(host): send the agent plan in live metrics`.
 
 ### Task 4: Этапы субагента на той же свёртке
 
@@ -186,7 +186,7 @@ Codex-коллектор связывает `function_call` и `function_call_ou
 
 `response.text` у вложенного вызова уже есть (`finishTool` в `core/src/feed/reduce.ts`); ID может быть в JSON-сводке или успешном текстовом ответе. Парсинг ID — общий в core, собственной нумерации в окне нет. Неплановые вызовы не влияют на состояние; running/failed/rejected пропускаются. Если `plan === null`, но `agentStepsPartial(agent)`, раздел Steps всё равно показывает предупреждение.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `agents-model.test.ts`: успешные `TaskCreate A/B` с ответами ID 1/2, успешный `TaskUpdate #1 completed` → `[['A','completed'],['B','pending']]`; варианты ID из JSON и текста;
   - `хвост не перенумеровывает задачи` — Create №1 выпал, сохранился успешный Create №2 и Update №1 → пункт №2 pending, `partial === true`;
   - `неполнота учитывается до следующего вызова` — начало выпало, известный Create №2 → Update №2 completed → Create №3: оба известных пункта сохранены, завершение неизвестной части не запускает новый план;
@@ -194,10 +194,10 @@ Codex-коллектор связывает `function_call` и `function_call_ou
   - `ошибка, отказ и running не меняют этапы; усечённый плановый input/response даёт partial`;
   - прежние `TodoWrite`/`update_plan` проверяют успешные завершённые вызовы; отсутствующий результат не маскируется в фикстуре под успех;
   - `AgentDetail.test.tsx`: `toolCount: 150`, 100 детей → `S.agentsPanel.planIncomplete` виден, точного общего счётчика нет; предупреждение видно и без восстановленных пунктов.
-- [ ] **Step 2:** `pnpm --filter @parley/desktop exec vitest run src/renderer/agents/agents-model.test.ts src/renderer/agents/AgentDetail.test.tsx` → FAIL.
-- [ ] **Step 3:** Реализовать; `AgentDetail` рисует `plan.items` прежними значками, при `plan.partial` или `agentStepsPartial` показывает `planIncomplete: 'Plan may be incomplete'`, при `omitted > 0` — число скрытых пунктов. Предупреждение доступно и когда пункты восстановить не удалось.
-- [ ] **Step 4:** Тесты → PASS.
-- [ ] **Step 5: Commit** — `fix(desktop): show subagent steps from TaskCreate/TaskUpdate`.
+- [x] **Step 2:** `pnpm --filter @parley/desktop exec vitest run src/renderer/agents/agents-model.test.ts src/renderer/agents/AgentDetail.test.tsx` → FAIL.
+- [x] **Step 3:** Реализовать; `AgentDetail` рисует `plan.items` прежними значками, при `plan.partial` или `agentStepsPartial` показывает `planIncomplete: 'Plan may be incomplete'`, при `omitted > 0` — число скрытых пунктов. Предупреждение доступно и когда пункты восстановить не удалось.
+- [x] **Step 4:** Тесты → PASS.
+- [x] **Step 5: Commit** — `fix(desktop): show subagent steps from TaskCreate/TaskUpdate`.
 
 ### Task 5: Раздел Plan и явная сессия на вкладке Agents
 
@@ -217,17 +217,17 @@ Codex-коллектор связывает `function_call` и `function_call_ou
 
 `AgentsPanel`: `sessionId = pin ?? focusedSessionOf(...)`. При пине в шапке — `sessionRowLabel` участника. `PlanSection` стоит сверху в обеих ветках (`hasFeed` и без ленты), когда `plan` не `null`/`undefined`. Открытие комнаты — тем же путём, что клик по строке комнаты в сайдбаре (`sidebar/RoomRow.tsx`). Раздел Plan: заголовок `Plan · {done}/{total}` из сохранённой `plan.summary` через `planSummary`, ссылки `{planId} · item {itemId}: {title}` (подсказка — `scope`), `explanation`, пункты со значками `CheckCircle2` / `LoaderCircle` / `Circle`; клик раскрывает `description` через `RoomMarkdown`; `in_progress` раскрыт сразу; без описания не раскрывается; при `omitted > 0` — строка `+{omitted} more`. При `partial` заголовок только `Plan`, без точного общего счётчика; под ним `Plan may be incomplete`. `omitted` означает только скрытые отображением пункты и не заменяет предупреждение о неполных исходных данных. Счётчики и текущий пункт не пересчитываются из усечённого `items`.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `plan-links.test.ts`: `берёт пункты сессии из активных планов` — пункт чужого `owner`, пункт `done`, план `completed` → не попадают;
   - `PlanSection.test.tsx`: `in_progress раскрыт, клик раскрывает другой`, `пункт без описания не раскрывается`, `ссылка на комнату зовёт onOpenRoom`, `omitted показан`; 60 завершённых пунктов, из которых видны 50, дают заголовок `Plan · 60/60`; исходный текущий пункт №51 остаётся в списке после ограничения; `partial` показывает `Plan may be incomplete` и не показывает `n/m`;
   - `AgentsPanel.test.tsx`: `пин показывает сессию участника и её Plan`, `сессия без ленты тоже показывает Plan`, `metrics без поля plan — раздела нет`;
   - `ui-store.test.ts`: подписка снимает пин при активации `terminal` и `diff`, включая `MRU B → комната → пин A → терминал B`; не снимает при открытии комнаты/файла; работает без смонтированного `AgentsPanel`; после отписки не реагирует;
   - `open-agents.test.ts`: `openPlanInPanel ставит пин и вкладку agents, фокус не трогает`; интеграция с настоящим `rightSidebarHasRoom`/`fitRightSidebar` при `window.innerWidth = 800`, открытом левом сайдбаре шириной 288: левый закрыт, правый помещается и открыт на Agents, пин у нужной сессии, активная вкладка остаётся комнатой; существующие `openAgentsPanel`/`openAgentInPanel` снимают пин другой сессии, даже когда выбранная сессия уже была в фокусе;
   - существующие тесты `ChatView`: кнопка списка агентов передаёт `SessionRef` после изменения сигнатуры.
-- [ ] **Step 2:** `pnpm --filter @parley/desktop exec vitest run src/renderer/agents src/renderer/chat/ui-store.test.ts src/renderer/chat/ChatView.test.tsx` → новые FAIL.
-- [ ] **Step 3:** Реализовать по Interfaces; английские строки в `S.agentsPanel`.
-- [ ] **Step 4:** Тесты → PASS; `pnpm --filter @parley/desktop exec tsc --noEmit` → без ошибок.
-- [ ] **Step 5: Commit** — `feat(desktop): plan section and pinned session in the Agents tab`.
+- [x] **Step 2:** `pnpm --filter @parley/desktop exec vitest run src/renderer/agents src/renderer/chat/ui-store.test.ts src/renderer/chat/ChatView.test.tsx` → новые FAIL.
+- [x] **Step 3:** Реализовать по Interfaces; английские строки в `S.agentsPanel`.
+- [x] **Step 4:** Тесты → PASS; `pnpm --filter @parley/desktop exec tsc --noEmit` → без ошибок.
+- [x] **Step 5: Commit** — `feat(desktop): plan section and pinned session in the Agents tab`.
 
 ### Task 6: План в карточке участника комнаты
 
@@ -245,22 +245,22 @@ Codex-коллектор связывает `function_call` и `function_call_ou
 
 Вторая строка: текст `doing ?? planLine?.text ?? task`. Клик по тексту при `planLine` (и пустом `doing`) → `onOpenPlan`, иначе как сейчас. `PlanChip` стоит перед чипом контекста, когда `plan` есть и (`partial` или `done < total`), в том числе рядом с `doing`. Если данные неполны и все известные пункты закрыты, текст возвращается к `task`, но чип `Plan` оставляет доступ к предупреждению: завершение всего плана неизвестно. Полный план с 60 закрытыми пунктами возвращается к `task` без чипа независимо от ограничения списка до 50. Чипы `shrink-0`, текст `min-w-0 truncate`.
 
-- [ ] **Step 1: Write the failing tests:**
+- [x] **Step 1: Write the failing tests:**
   - `feed-model.test.ts`: `planLine: current, next, null при всех закрытых`, `нет поля plan — plan null, строка — task`; текущий пункт №51 из исходных 60 остаётся текущей строкой после ограничения списка;
   - `ParticipantStrip.test.tsx`: `doing важнее плана, чип 3/7 рядом`, `без doing — ▸ subject, клик зовёт onOpenPlan`, `все 60 пунктов закрыты, видны 50 — task, чипа нет`, `partial без известных открытых пунктов — task и чип Plan без n/m`, `длинный subject и имя: чипы видны целиком` (проверить классы `shrink-0` у чипов и `truncate` у текста);
   - `PlanChip.test.tsx`: `наведение показывает список и 6 строк описания in_progress`, `Open in Agents зовёт onOpen`, `наведение на текст пункта во второй строке открывает тот же список`, `omitted показан`, `partial показывает Plan may be incomplete без точного общего счётчика`.
-- [ ] **Step 2:** `pnpm --filter @parley/desktop exec vitest run src/renderer/components/rooms` → новые FAIL.
-- [ ] **Step 3:** Реализовать по Interfaces; строки `S.rooms.planNext`, `S.rooms.planOpenInAgents` и т. п. — по-английски.
-- [ ] **Step 4:** Тесты → PASS; `pnpm --filter @parley/desktop test` → PASS (флейки — сравнить с базовым прогоном).
-- [ ] **Step 5: Commit** — `feat(desktop): agent plan in room participant cards`.
+- [x] **Step 2:** `pnpm --filter @parley/desktop exec vitest run src/renderer/components/rooms` → новые FAIL.
+- [x] **Step 3:** Реализовать по Interfaces; строки `S.rooms.planNext`, `S.rooms.planOpenInAgents` и т. п. — по-английски.
+- [x] **Step 4:** Тесты → PASS; `pnpm --filter @parley/desktop test` → PASS (флейки — сравнить с базовым прогоном).
+- [x] **Step 5: Commit** — `feat(desktop): agent plan in room participant cards`.
 
 ### Task 7: Живая приёмка и CHANGELOG
 
 **Files:**
 - Modify: `CHANGELOG.md` (раздел Unreleased, по-английски)
 
-- [ ] **Step 1:** Перед запуском — загрузка машины (`uptime`, `memory_pressure`); при load ≥ числа ядер ждать.
-- [ ] **Step 2:** Dev-окно (рецепт — память «окно без терминала»), комната с двумя Claude и одним Codex. Для сессии, где в логе есть подтверждённые успешные вызовы планирования, проверить:
+- [x] **Step 1:** Перед запуском — загрузка машины (`uptime`, `memory_pressure`); при load ≥ числа ядер ждать.
+- [x] **Step 2:** Dev-окно (рецепт — память «окно без терминала»), комната с двумя Claude и одним Codex. Для сессии, где в логе есть подтверждённые успешные вызовы планирования, проверить:
   - карточка: `▸ subject`, чип `n/m`, наведение — список и описание, клик — вкладка Agents на этом участнике без ухода из комнаты;
   - раздел Plan: раскрытие описаний, ссылка на пункт плана комнаты;
   - пин: комната с последней сессией B → открыть план участника A → активировать терминал B; Agents показывает B. Повторить с закрытым правым сайдбаром перед переходом и затем открыть Agents; старый пин не возвращается. Существующий вход к субагенту B также снимает пин A;
@@ -268,5 +268,8 @@ Codex-коллектор связывает `function_call` и `function_call_ou
   - субагент с подтверждёнными вызовами: этапы и статусы соответствуют реальным ID. Потеря начала истории не меняет статус чужого пункта и обозначается `Plan may be incomplete`, без точного общего счётчика;
   - подготовленные фикстуры длинного плана: 60 закрытых пунктов → чипа нет; текущий пункт №51 → виден в строке и подробностях; `omitted` и `partial` имеют отдельные пометки.
   Длинные названия пунктов и проекта, светлая и тёмная тема. Снимки — в отчёт. Если Codex в живом запуске не вызывает `update_plan`, отсутствие плана — правильный результат; в отчёте это ограничение живой проверки, а успешный `update_plan` проверяется фикстурой. Не заявлять наблюдённую живую поддержку Codex без таких записей. То же ограничение записать, если субагент не вызвал инструмент планирования.
-- [ ] **Step 3:** Запись в `CHANGELOG.md`: «Show agent-authored plans from successful planning calls on room participant cards and in the Agents tab; support Claude task IDs in subagent steps and mark incomplete plans.»
-- [ ] **Step 4: Commit** — `docs(changelog): agent plans in rooms and the Agents tab`.
+- [x] **Step 3:** Запись в `CHANGELOG.md`: «Show agent-authored plans from successful planning calls on room participant cards and in the Agents tab; support Claude task IDs in subagent steps and mark incomplete plans.»
+- [x] **Step 4: Commit** — `docs(changelog): agent plans in rooms and the Agents tab`.
+
+
+**Результат приёмки:** [отчёт и снимки](../audits/2026-10-18/agent-plans-acceptance.md). Electron проверен на нативных фикстурах; новые живые вызовы платных CLI не наблюдались. Поддержка форматов и усечённой истории проверена тестами.
