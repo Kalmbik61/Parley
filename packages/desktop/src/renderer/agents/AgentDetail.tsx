@@ -19,7 +19,7 @@ import { requestTranscript, TRANSCRIPT_TAIL, useLiveTranscript, type Transcript 
 import { RoomMarkdown } from '../components/rooms/RoomMarkdown.js';
 import { formatDuration } from '../lib/metrics-line.js';
 import { useNow } from '../lib/use-now.js';
-import { agentSteps, findAgent, type AgentPick } from './agents-model.js';
+import { agentSteps, agentStepsPartial, findAgent, type AgentPick } from './agents-model.js';
 
 const PROMPT_LINES = 12;
 const noLabel = (): null => null;
@@ -61,7 +61,8 @@ export function AgentDetail({ bridge, sessionRef, items, pick, onBack }: AgentDe
   const elapsed = running ? now.getTime() - Date.parse(agent.at) : (agent.durationMs ?? null);
   const promptLines = (agent.prompt ?? '').split('\n');
   const prompt = promptOpen || promptLines.length <= PROMPT_LINES ? agent.prompt ?? '' : promptLines.slice(0, PROMPT_LINES).join('\n');
-  const steps = agentSteps(agent);
+  const plan = agentSteps(agent);
+  const planPartial = plan?.partial === true || agentStepsPartial(agent);
   const tail = transcript?.state === 'ready' ? transcript.items.slice(-TRANSCRIPT_TAIL) : [];
 
   return (
@@ -95,17 +96,19 @@ export function AgentDetail({ bridge, sessionRef, items, pick, onBack }: AgentDe
             </section>
           ) : null}
 
-          {steps !== null ? (
+          {plan !== null || planPartial ? (
             <section className="flex min-w-0 flex-col gap-1">
               <h3 className="text-xs font-semibold uppercase text-muted-foreground">{S.agentsPanel.steps}</h3>
               <ul className="flex flex-col gap-0.5 text-sm">
-                {steps.map((step, index) => (
+                {plan?.items.map((step, index) => (
                   <li key={index} className="flex min-w-0 items-start gap-1.5">
                     {step.status === 'completed' ? <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" /> : step.status === 'in_progress' ? <LoaderCircle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" /> : <Circle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />}
-                    <span className="min-w-0 break-words">{step.text}</span>
+                    <span className="min-w-0 break-words">{step.subject}</span>
                   </li>
                 ))}
               </ul>
+              {planPartial ? <p className="text-xs text-muted-foreground">{S.agentsPanel.planIncomplete}</p> : null}
+              {plan !== null && plan.omitted > 0 ? <p className="text-xs text-muted-foreground">{S.agentsPanel.planOmitted(plan.omitted)}</p> : null}
             </section>
           ) : null}
 

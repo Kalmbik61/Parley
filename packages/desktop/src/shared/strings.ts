@@ -807,6 +807,12 @@ export const S = {
 
   /** Комнаты — `rooms/*`. */
   rooms: {
+    planLabel: 'Plan',
+    planNext: (subject: string): string => `Next: ${subject}`,
+    planOpenInAgents: 'Open in Agents',
+    planIncomplete: 'Plan may be incomplete',
+    planMore: (count: number): string => `+${count} more`,
+
     fallbackTitle: 'Room',
     notFound: 'Room not found',
     /** Метка в шапке вкладки архивной комнаты и строка вместо поля ввода (спека архива комнат, 5.2). */
@@ -1014,6 +1020,8 @@ export const S = {
   /** «Изменения» и вкладка диффа — `review/*` (куски 8.2a, 8.2b, 8.3). */
   /** Вкладка Agents правого сайдбара (спека 2026-10-07, 5.1). */
   agentsPanel: {
+    plan: 'Plan',
+    planMore: (count: number): string => `+${count} more`,
     tab: 'Agents',
     noSession: 'Open a session to see its agents',
     empty: 'No agents in this session yet',
@@ -1024,6 +1032,8 @@ export const S = {
     back: 'All agents',
     task: 'Task',
     steps: 'Steps',
+    planIncomplete: 'Plan may be incomplete',
+    planOmitted: (count: number): string => `${count} more ${count === 1 ? 'step' : 'steps'}`,
     activity: 'Activity',
     result: 'Result',
     showAll: 'Show all',

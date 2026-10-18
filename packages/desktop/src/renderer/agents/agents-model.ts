@@ -1,10 +1,11 @@
 /**
  * Модель панели агентов (спека 2026-10-07, 5.1): строки по карточкам `agent` ленты сессии — работающие и закончившие
- * отдельно, в порядке ленты; текущий шаг — строка последнего вложенного вызова; этапы — последний `TodoWrite` (Claude)
- * или `update_plan` (Codex). Ни React, ни моста — только элементы ленты.
+ * отдельно, в порядке ленты; текущий шаг — строка последнего вложенного вызова; этапы — свёртка успешных
+ * плановых вызовов общей моделью core. Ни React, ни моста — только элементы ленты.
  */
 
 import type { FeedAgent, FeedAgentStatus, FeedItem } from '@parley/core';
+import { applyPlanCall, capPlan, type AgentPlan, type AgentPlanState } from '@parley/core/agent-plan';
 import { toolHeadline, type ToolHeadline } from '../chat/feed-model.js';
 
 export interface AgentRow {
@@ -28,11 +29,6 @@ export interface AgentGroups {
 
 /** Какой агент открыт на экране: по id карточки (из списка) или по `agentId` (из поповера). */
 export type AgentPick = { by: 'item'; id: string } | { by: 'agent'; id: string };
-
-export interface AgentStep {
-  text: string;
-  status: 'pending' | 'in_progress' | 'completed';
-}
 
 const isAgent = (item: FeedItem): item is FeedAgent => item.kind === 'agent';
 
@@ -63,29 +59,28 @@ export function agentRows(items: readonly FeedItem[]): AgentGroups {
   return { running, finished };
 }
 
-const STEP_STATUSES: ReadonlySet<string> = new Set(['pending', 'in_progress', 'completed']);
+const PLAN_TOOLS: ReadonlySet<string> = new Set(['TaskCreate', 'TaskUpdate', 'TodoWrite', 'update_plan']);
 
-function stepsOf(list: unknown, textKey: 'content' | 'step'): AgentStep[] | null {
-  if (!Array.isArray(list)) return null;
-  const steps: AgentStep[] = [];
-  for (const entry of list) {
-    if (typeof entry !== 'object' || entry === null) continue;
-    const record = entry as Record<string, unknown>;
-    const text = record[textKey];
-    if (typeof text !== 'string' || text === '') continue;
-    const status = typeof record['status'] === 'string' && STEP_STATUSES.has(record['status']) ? (record['status'] as AgentStep['status']) : 'pending';
-    steps.push({ text, status });
-  }
-  return steps.length === 0 ? null : steps;
+export function agentStepsPartial(agent: FeedAgent): boolean {
+  return agent.toolCount > agent.children.length || agent.children.some((call) =>
+    PLAN_TOOLS.has(call.name) && (call.truncated === true || call.response?.truncated === true),
+  );
 }
 
-export function agentSteps(agent: FeedAgent): AgentStep[] | null {
-  for (let at = agent.children.length - 1; at >= 0; at -= 1) {
-    const call = agent.children[at]!;
-    if (call.name === 'TodoWrite') return stepsOf(call.input['todos'], 'content');
-    if (call.name === 'update_plan') return stepsOf(call.input['plan'], 'step');
+export function agentSteps(agent: FeedAgent): AgentPlan | null {
+  const partial = agentStepsPartial(agent);
+  let plan: AgentPlanState | null = null;
+  for (const call of agent.children) {
+    plan = applyPlanCall(plan, {
+      name: call.name,
+      input: call.input,
+      result: call.response?.text,
+      status: call.status,
+      at: call.at,
+    });
+    if (plan !== null && partial) plan = { ...plan, partial: true };
   }
-  return null;
+  return plan === null ? null : capPlan(plan);
 }
 
 export function findAgent(items: readonly FeedItem[], pick: AgentPick): FeedAgent | null {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FeedAgent, FeedItem, FeedTool } from '@parley/core';
-import { agentRows, agentSteps, findAgent } from './agents-model.js';
+import { agentRows, agentSteps, agentStepsPartial, findAgent } from './agents-model.js';
 
 const AT = '2026-10-07T10:00:00.000Z';
 const LONG_PATH = `/Users/someone/projects/${'very-long-directory-name/'.repeat(5)}feed/types.ts`;
@@ -58,25 +58,87 @@ describe('agentRows', () => {
   });
 });
 
+function planning(id: string, name: string, input: Record<string, unknown>, result = '{}', over: Partial<FeedTool> = {}): FeedTool {
+  return { ...child(id, name, input), response: { text: result, size: result.length, truncated: false }, ...over };
+}
+
+const subjects = (value: FeedAgent) => agentSteps(value)?.items.map((item) => [item.id, item.subject, item.status]);
+
 describe('agentSteps', () => {
-  it('этапы Claude — вход последнего TodoWrite', () => {
-    const steps = agentSteps(agent({ children: [
-      child('c1', 'TodoWrite', { todos: [{ content: 'старое', status: 'pending' }] }),
-      child('c2', 'Bash', { command: 'ls' }),
-      child('c3', 'TodoWrite', { todos: [{ content: 'Найти вызовы', status: 'completed' }, { content: 'Проверить тесты', status: 'in_progress' }] }),
-    ] }));
-    expect(steps).toEqual([{ text: 'Найти вызовы', status: 'completed' }, { text: 'Проверить тесты', status: 'in_progress' }]);
+  it.each(['{"task":{"id":"1"}}', 'Task #1 created successfully: A'])('uses returned task IDs (%s)', (result) => {
+    expect(subjects(agent({ children: [
+      planning('a', 'TaskCreate', { subject: 'A' }, result),
+      planning('b', 'TaskCreate', { subject: 'B' }, '{"task":{"id":2}}'),
+      planning('c', 'TaskUpdate', { taskId: '1', status: 'completed' }),
+    ] }))).toEqual([['1', 'A', 'completed'], ['2', 'B', 'pending']]);
   });
 
-  it('этапы Codex — вход update_plan (plan[].step)', () => {
-    const steps = agentSteps(agent({ children: [child('c1', 'update_plan', { plan: [{ step: 'Прочитать журнал', status: 'completed' }] })] }));
-    expect(steps).toEqual([{ text: 'Прочитать журнал', status: 'completed' }]);
+  it('does not renumber tasks when the first create is missing', () => {
+    const value = agent({ toolCount: 3, children: [
+      planning('b', 'TaskCreate', { subject: 'B' }, 'Task #2 created successfully: B'),
+      planning('c', 'TaskUpdate', { taskId: '1', status: 'completed' }),
+    ] });
+    expect(subjects(value)).toEqual([['2', 'B', 'pending']]);
+    expect(agentSteps(value)?.partial).toBe(true);
   });
 
-  it('без TodoWrite и update_plan — null; незнакомый статус — pending; пустой текст пропускается', () => {
-    expect(agentSteps(agent({ children: [child('c1', 'Bash', { command: 'ls' })] }))).toBeNull();
-    expect(agentSteps(agent({ children: [child('c1', 'TodoWrite', { todos: [{ content: 'a', status: 'blocked' }, { content: '', status: 'pending' }] })] })))
-      .toEqual([{ text: 'a', status: 'pending' }]);
+  it('marks a lost prefix before completing a known task and creating the next', () => {
+    const value = agent({ toolCount: 4, children: [
+      planning('b', 'TaskCreate', { subject: 'B' }, '{"task":{"id":"2"}}'),
+      planning('c', 'TaskUpdate', { taskId: '2', status: 'completed' }),
+      planning('d', 'TaskCreate', { subject: 'C' }, '{"task":{"id":"3"}}'),
+    ] });
+    expect(subjects(value)).toEqual([['2', 'B', 'completed'], ['3', 'C', 'pending']]);
+    expect(agentSteps(value)?.partial).toBe(true);
+  });
+
+  it('never guesses an ID from create order', () => {
+    expect(subjects(agent({ children: [
+      planning('a', 'TaskCreate', { subject: 'A' }, 'Created'),
+      planning('b', 'TaskUpdate', { taskId: '1', status: 'completed' }),
+    ] }))).toEqual([[null, 'A', 'pending']]);
+  });
+
+  it.each(['failed', 'rejected', 'running'] as const)('ignores %s calls', (status) => {
+    expect(subjects(agent({ children: [
+      planning('a', 'TodoWrite', { todos: [{ content: 'A', status: 'pending' }] }),
+      planning('b', 'TodoWrite', { todos: [{ content: 'B', status: 'completed' }] }, '{}', { status }),
+    ] }))).toEqual([[null, 'A', 'pending']]);
+  });
+
+  it('requires a result and folds successful replacement lists', () => {
+    expect(agentSteps(agent({ children: [child('a', 'TodoWrite', { todos: [{ content: 'missing result' }] })] }))).toBeNull();
+    expect(subjects(agent({ children: [
+      planning('a', 'TodoWrite', { todos: [{ content: 'old', status: 'pending' }] }),
+      planning('b', 'update_plan', { plan: [{ step: 'new', status: 'in_progress' }] }),
+    ] }))).toEqual([[null, 'new', 'in_progress']]);
+  });
+
+  it.each(['input', 'response'] as const)('marks truncated planning %s before later folds', (part) => {
+    const first = planning('a', 'TodoWrite', { todos: [{ content: 'A', status: 'completed' }] });
+    if (part === 'input') first.truncated = true;
+    else first.response!.truncated = true;
+    const value = agent({ children: [first,
+      planning('b', 'TaskCreate', { subject: 'B' }, '{"task":{"id":"2"}}'),
+    ] });
+    expect(subjects(value)).toEqual([[null, 'A', 'completed'], ['2', 'B', 'pending']]);
+    expect(agentSteps(value)?.partial).toBe(true);
+    expect(agentStepsPartial(value)).toBe(true);
+  });
+
+  it('keeps partial after a list replacement and ignores non-planning truncation', () => {
+    const value = agent({ toolCount: 3, children: [planning('a', 'update_plan', { plan: [{ step: 'A' }] })] });
+    expect(agentSteps(value)?.partial).toBe(true);
+    expect(agentStepsPartial(agent({ children: [{ ...child('b', 'Read', {}), truncated: true }] }))).toBe(false);
+  });
+
+  it('caps only after folding all task updates', () => {
+    const children = Array.from({ length: 51 }, (_, index) => planning(String(index), 'TaskCreate', { subject: `Task ${index}` }, JSON.stringify({ task: { id: String(index) } })));
+    children.push(planning('update', 'TaskUpdate', { taskId: '50', status: 'in_progress' }));
+    const plan = agentSteps(agent({ children }));
+    expect(plan?.items).toHaveLength(50);
+    expect(plan?.omitted).toBe(1);
+    expect(plan?.items.some((item) => item.id === '50' && item.status === 'in_progress')).toBe(true);
   });
 });
 

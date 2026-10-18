@@ -32,12 +32,30 @@ describe('AgentDetail', () => {
   });
 
   it('этапы из TodoWrite показываются, без них раздела нет', () => {
-    const todo: FeedTool = { ...call, id: 'tool:c2', toolUseId: 'c2', name: 'TodoWrite', input: { todos: [{ content: 'Шаг один', status: 'in_progress' }] } };
+    const todo: FeedTool = { ...call, id: 'tool:c2', toolUseId: 'c2', name: 'TodoWrite', input: { todos: [{ content: 'Шаг один', status: 'in_progress' }] }, response: { text: '{}', size: 2, truncated: false } };
     const { rerender } = render(<AgentDetail bridge={createFakeBridge()} sessionRef={REF} items={[agent({ children: [todo] })]} pick={{ by: 'item', id: 'agent:t1' }} onBack={() => undefined} />);
     expect(screen.getByText(S.agentsPanel.steps)).toBeTruthy();
     expect(screen.getByText('Шаг один')).toBeTruthy();
     rerender(<AgentDetail bridge={createFakeBridge()} sessionRef={REF} items={[agent({ children: [call] })]} pick={{ by: 'item', id: 'agent:t1' }} onBack={() => undefined} />);
     expect(screen.queryByText(S.agentsPanel.steps)).toBeNull();
+  });
+
+  it.each([true, false])('shows incomplete history warning with recovered steps: %s', (withPlan) => {
+    const children: FeedTool[] = Array.from({ length: 100 }, (_, index) => ({ ...call, id: `tool:${index}`, toolUseId: String(index) }));
+    if (withPlan) children[99] = { ...children[99]!, name: 'TodoWrite', input: { todos: [{ content: 'Recovered step', status: 'pending' }] }, response: { text: '{}', size: 2, truncated: false } };
+    render(<AgentDetail bridge={createFakeBridge()} sessionRef={REF} items={[agent({ toolCount: 150, children })]} pick={{ by: 'item', id: 'agent:t1' }} onBack={() => undefined} />);
+    const section = screen.getByText(S.agentsPanel.steps).closest('section')!;
+    expect(within(section).getByText('Plan may be incomplete')).toBeTruthy();
+    expect(section.textContent).not.toMatch(/150|100/);
+  });
+
+  it('shows how many plan steps were omitted', () => {
+    const todos = Array.from({ length: 51 }, (_, index) => ({ content: `Step ${index}`, status: 'pending' }));
+    const todo: FeedTool = { ...call, name: 'TodoWrite', input: { todos }, response: { text: '{}', size: 2, truncated: false } };
+    render(<AgentDetail bridge={createFakeBridge()} sessionRef={REF} items={[agent({ children: [todo] })]} pick={{ by: 'item', id: 'agent:t1' }} onBack={() => undefined} />);
+    const section = screen.getByText(S.agentsPanel.steps).closest('section')!;
+    expect(within(section).getAllByRole('listitem')).toHaveLength(50);
+    expect(within(section).getByText('1 more step')).toBeTruthy();
   });
 
   it('агент закончил при открытом экране — итог появился, экран остался (Review Focus 4)', () => {
