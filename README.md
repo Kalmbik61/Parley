@@ -200,8 +200,8 @@ only through data:
    │ schema adapters → session index → watcher  map store (lock,          │
    │ metrics: tokens, duration, tools           .bak, status transitions) │
    │ hook log → activity, liveness by pid       parley-core CLI (JSON)    │
-   │ parley-mcp — 23 tools (24 with find_skill): get_map, report,         │
-   │ list_roles, wait_for, send_message, check_inbox, rooms,           │
+   │ parley-mcp: get_map, report, list_roles, wait_for, send_message,     │
+   │ check_inbox, rooms, create_session (host-backed sessions),          │
    │ decisions and plans, backlog, memory, search_history, read_guide     │
    └────────────────────────────────────────────────────────────────────┬─┘
                                                                         │ stdio MCP
@@ -825,7 +825,7 @@ them wait. Archived workspaces are not counted in the counters, the badge and "N
 that needs you", even when shown.
 
 The host itself wakes agents. When an agent has finished its turn and you are not typing
-anything, the host prints a pointer: "New messages (N). Call check_inbox." New Parley sessions are created by the human; agents coordinate existing sessions.
+anything, the host prints a pointer: "New messages (N). Call check_inbox." Agents can create and launch ordinary peer sessions in the current workspace with `create_session` through the host agent channel.
 
 The core can also be used separately from the UI — it prints only JSON to stdout:
 
@@ -1048,8 +1048,8 @@ a workspace and a room".
 
 `resumeRate` is how many times per hour a message may wake a sleeping session
 (`claude --resume`), 0…60; over the limit, the message just waits. `autoLaunch` is retained as a legacy configuration field; parent-linked pending sessions
-are no longer started automatically. New Parley sessions are created by the human through
-the window or CLI.
+are no longer started automatically. New sessions can be created by the human through
+the window or CLI, or by an agent through host-backed `create_session`, which launches them explicitly.
 
 `agentSkills` (on by default; the toggle is "Install agent skills into projects") decides
 whether to install the `parley` and `minimal-development` skills into the project folder and into the session's worktree
@@ -1266,7 +1266,7 @@ enough) to keep your version. See
 
 In the window a session is created with ⌘T ("New session or room") in the active workspace,
 with the new workspace dialog (⌘N or "New workspace"), and with the menu items of a card
-("New session", "New room") or of the palette ("New session or room", "New room"). Agents invite existing sessions; new sessions are created by the human. The window has no import of the `~/.claude` history.
+("New session", "New room") or of the palette ("New session or room", "New room"). Agents can use `create_session` through the host agent channel to create and launch ordinary peer sessions in their current workspace. The window has no import of the `~/.claude` history.
 
 In the window a session is removed with "Delete" in its menu. A live process is closed as
 usual — SIGHUP, waiting up to three seconds for it to exit, then SIGKILL — and the record
@@ -1308,6 +1308,7 @@ to introduce itself; the server knows who is calling. The tools:
 
 | Tool | What it does |
 | --- | --- |
+| `create_session(provider, label, task, role?, agent?, worktree?, model?, effort?)` | creates and launches a normal peer (`parent: null`) only in the caller's workspace; requires a host agent channel and follows workspace/room creation and launch limits. Provider comes from `get_map`, role from `list_roles`; `role` and `agent` are mutually exclusive. An optional worktree starts from the project base. No room membership or ownership is inherited |
 | `get_map(session?, room?, field?, id?, kind?, cursor?, maxBytes?)` | without arguments, the compact map (sessions, rooms, live plan revisions, unread counters, cursors), plus the registry's providers with an availability mark, a list of models (`models`, each with its effort levels `efforts`) and an effort flag (`effort`); with arguments, one session or room or one field as a bounded page (see "Compact map and pages") |
 | `report(status, summary, artifacts)` | `done` / `failed` — the result, `progress` — an intermediate summary |
 | `list_roles()` | the built-in and native roles available in the participant's folder, with source, provider, default model and effort and the read-only mark; no prompts or file paths |
@@ -1350,8 +1351,9 @@ title or goal that does not fit becomes a reference to the exact `get_map` call,
 The rules say which tools exist (a line for each group; the room tools take one line together
 with the lead and member roles; `add_to_room` and the details of plans are in the tool itself
 and in `read_guide`), how to use the backlog, memory and search, and the separation of room
-ownership from working membership. Agents invite existing sessions; the human creates new
-Parley sessions. Native provider subagents remain available within task permissions. All Parley launches and
+ownership from working membership. Agents can create ordinary peer sessions in their current
+workspace with `create_session` through the host agent channel. These have `parent: null`
+and inherit no room membership or ownership; the room lead may invite them with `add_to_room`. Native provider subagents remain available within task permissions. All Parley launches and
 the `parley-core work session new` command receive it. The system prompt is not stored in the
 transcript, so the insert is sent again on `--resume` as well. A provider with no such flag
 does not get it: the substitution is dropped silently, like the settings file. The brief of a
@@ -1360,7 +1362,7 @@ and resume unless you edited it by hand, and a field that does not fit its byte 
 reference with a size and a `sha256` instead of being cut silently.
 
 The second layer is `read_guide(topic?)`: the entities and the lifecycle of a session, what to
-put into the summary and the artifacts, how the brief is built, how to wait for a subordinate
+put into the summary and the artifacts, how the brief is built, how to wait for another
 session, and what not to do. Without `topic` it returns the whole guide, with `topic` one
 section: `plans`, `overview`, `lifecycle`, `tools`, `rooms`, `lead`, `member`, `brief`, `window`,
 `worktrees`, `letters`, `rules`; an unknown topic is an error with a list. It is a tool, not
@@ -1483,10 +1485,10 @@ button. Pausing auto-wake in the status bar accumulates messages and wakes nobod
 
 **A worktree per session.** The "New session or room" dialog (⌘T) and the new workspace
 dialog have an "In its own worktree" switch; for an agent it is the `worktree: true`
-option when the human creates a session. The host runs `git worktree add` into
+option of `create_session`. The host runs `git worktree add` into
 `<worktreeRoot>/<project folder name>-<6 hex>/<w-id>-<s-id>` (for example,
 `…/shop-a1b2c3/w-0003-s-02`) with the branch `parley/<w-id>/<s-id>` (for example,
-`parley/w-0003/s-02`). The base is the branch (or commit) selected when the human creates the session. The path is tied to the session:
+`parley/w-0003/s-02`). The base is the branch (or commit) selected when the human creates the session; agent-created sessions use the project base. The path is tied to the session:
 `--resume` runs from the same directory. The "Changes" item in any session's menu opens the
 "Changes" tab of the right sidebar: the diff of the branch and of uncommitted changes against
 the base. The main button changes with the state: "Commit", "Commit all in folder", "Merge
@@ -1548,7 +1550,8 @@ node packages/core/dist/cli.js work session new \
 
 The last command creates a `pending` record, writes the brief, the MCP config and the settings
 file with hooks, and prints a ready launch command (`command`, `args`, `cwd`, `env`). The
-stock `claude` launched with it sees the map, reports, and can spawn its own sessions; the PTY
+stock `claude` launched with it sees the map and reports; `create_session` requires an active
+host agent channel, which this standalone launch does not supply; the PTY
 of such a session does not belong to the host, and the window's terminal cannot be attached
 to it.
 
@@ -1819,7 +1822,7 @@ reached the agent is told to report and wait for you.
 | `roomMessages` | Agent messages per hour, room | 100 | 1…10000 | `PARLEY_ROOM_MESSAGES` |
 | `fanout` | Message deliveries per hour, workspace | 400 | 1…100000 | `PARLEY_FANOUT` |
 
-Every path that can start a session goes through these limits: human-created sessions and invitations of
+Every path that can start a session goes through these limits: human-created sessions, agent `create_session` calls and invitations of
 `create_room`, `send_message`, a start from the window, auto-launch, resume and a wake-up by
 mail. Stop, close, `report`, reading, and messages from you, from Parley itself and from the
 host are never blocked. The count lives in the workspace map, so a host restart does not give a

@@ -67,6 +67,7 @@ import {
   type ResourceLimits,
 } from '../work/resource-policy.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
+import { CREATE_SESSION_TOOL, SESSION_CREATION_UNAVAILABLE, createSession } from './session-tools.js';
 import { addMemberByLead, addRoom, canReadRoom, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
 import { reportedStatus } from '../work/session-state.js';
 import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workPaths } from '../work/store.js';
@@ -1552,8 +1553,9 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
   const navigator = context.skillNavigator === true ? skillNavigator(context) : null;
   // Инструмент браузера окна (спека браузера 2026-10-07, 3.7) — только при канале агента в окружении сервера.
   const browser = context.agent === undefined ? null : createBrowserTools(context.agent, { clientName: () => server.getClientVersion()?.name });
+  const sessionAgent = sessionId === null ? undefined : context.agent;
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [...TOOLS, ...(browser?.tools ?? []), ...(navigator ? [await navigator.list()] : [])],
+    tools: [...TOOLS, ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL] : []), ...(navigator ? [await navigator.list()] : [])],
   }));
   // Тред Codex привязывается один раз за жизнь сервера — с первого вызова, где `_meta.threadId` есть.
   let threadBound = false;
@@ -1568,6 +1570,11 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
       // Инструменты браузера отвечают сами: без канала — отказ с советом перезапустить сессию.
       if (request.params.name.startsWith('browser_')) {
         return browser === null ? { content: [{ type: 'text', text: BROWSER_UNAVAILABLE }], isError: true } : browser.call(request.params.name, args);
+      }
+      if (request.params.name === 'create_session') {
+        return sessionAgent === undefined
+          ? { content: [{ type: 'text', text: SESSION_CREATION_UNAVAILABLE }], isError: true }
+          : createSession(sessionAgent, args, extra.signal);
       }
       try {
         const result = request.params.name === 'find_skill' ? await navigator!.find(args)

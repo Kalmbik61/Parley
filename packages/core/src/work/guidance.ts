@@ -67,7 +67,7 @@ export function stableGuidance({ skillNavigator = false, skillList }: Pick<Guida
     'You are inside Parley; coordination goes through the tools of the parley MCP server.',
     'get_map — the compact workspace map: sessions with lifecycle/result, rooms, plan revisions, unread counts and providers; call it first. Long text, history, summaries, artifacts and messages are pages: get_map with session, room, field, cursor.',
     'report — done or failed: the result is handed in, the session stays reachable and does not close itself; progress — a summary along the way.',
-    'New Parley sessions are created by the human; invite existing sessions from get_map. Native provider subagents remain available within your task and permissions.',
+    'create_session — create and launch a peer in your current workspace; requires a host agent channel. No inherited room membership or ownership; leads invite existing sessions. Native provider subagents remain separate.',
     'wait_for — wait for a session (target is its id) or a message (target: "inbox"); for a new task given to a session that has handed in its report, wait via "inbox", not by id.',
     'send_message — a message to a session or to a room (room): question — waiting for an answer, decision — we have agreed, note — a note (the default); replyTo — in a room, the id of the message you are answering, above all a question from the human: the window shows a quote of it.',
     // В окне письма объявляет указатель: хост печатает его после хода агента (`delivery.ts`), а сессии окна

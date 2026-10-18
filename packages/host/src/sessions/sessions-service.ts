@@ -55,6 +55,7 @@ import {
   SpawnBudgetError,
   readMap,
   reserveAttempt,
+  roomOfSession,
   ResourceDeniedError,
   sessionTag,
   settleAttempt,
@@ -92,6 +93,8 @@ export interface CreateSessionInput {
   label: string;
   task: string;
   parent: string | null;
+  /** Authenticated caller requesting an ordinary workspace peer. */
+  requestedBy?: string;
   role?: SessionRole | null;
   agent?: string;
   /** Своя рабочая копия git — план пишется сразу, каталог заводит `launch()` (спека 8.1). */
@@ -127,7 +130,7 @@ export interface LaunchChoice {
    * созданного агентом, `wake` — будильник. Нет значения — человек. Возобновление будильником подчиняется ещё и
    * личному потолку `resumeRate`.
    */
-  by?: 'human' | 'auto' | 'wake';
+  by?: string;
   /** Указатель первым ходом `resume`, если провайдер его принимает. */
   prompt?: string;
   model?: string | null;
@@ -298,7 +301,7 @@ export function createSessionsService(
   async function refuseLaunch(
     ref: SessionRef,
     parentId: string | null,
-    by: 'human' | 'auto' | 'wake',
+    by: string,
     error: ResourceDeniedError,
   ): Promise<never> {
     host.log.warn('launch refused by the resource budget', { ref, by, code: error.code, scope: error.scope });
@@ -329,7 +332,7 @@ export function createSessionsService(
     ref: SessionRef,
     parentId: string | null,
     mode: LaunchMode,
-    by: 'human' | 'auto' | 'wake',
+    by: string,
   ): Promise<string> {
     const { config } = await loadConfig();
     let attemptId = '';
@@ -810,6 +813,8 @@ export function createSessionsService(
     logged: { sessionId?: string },
   ): Promise<SessionRef> {
     const { projectPath, workId, provider, label, task, parent, worktree, lean } = input;
+    if (input.requestedBy !== undefined && (workId === null || !task.trim())) throw new HostError('bad_request', 'Agent-created sessions require a workspace and task.');
+    const agentConfig = input.requestedBy === undefined ? undefined : (await loadConfig()).config;
     if (parent !== null) throw new HostError('bad_request', 'Child sessions are no longer supported. Create a root session and add it to a room.');
     // Secret-dependent GLM must refuse before every create branch. Other providers keep their
     // existing create/launch failure behavior; all launches still use the shared preflight below.
@@ -831,6 +836,7 @@ export function createSessionsService(
     const resolved = await timer.step('model', () => resolveModelChoice(provider, input.model ?? undefined, input.effort ?? undefined));
     // `exactOptionalPropertyTypes`: явный `undefined` ключом в `LaunchChoice` не проходит.
     const choice: LaunchChoice = {
+      ...(input.requestedBy === undefined ? {} : { by: input.requestedBy }),
       ...(input.model === null ? { model: null } : resolved.model === undefined ? {} : { model: resolved.model }),
       ...(input.effort === null ? { effort: null } : resolved.effort === undefined ? {} : { effort: resolved.effort }),
     };
@@ -858,20 +864,47 @@ export function createSessionsService(
       return timer.step('launch', () => createInteractive(ref, 'new', choice));
     }
 
-    const sessionId = await timer.step('record', () => createPendingSession(projectPath, workId, {
-      provider,
-      label,
-      task,
-      parent,
-      contextFrom: [],
-      role,
-      ...choice,
-      ...(lean === undefined ? {} : { lean }),
-    }));
-    logged.sessionId = sessionId;
-    const ref = { projectPath, workId, sessionId };
-    if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, true));
-    return timer.step('launch', () => createInteractive(ref, 'launch', choice));
+    let admitted: { ref: SessionRef; attemptId: string } | undefined;
+    try {
+      const sessionId = await timer.step('record', () => createPendingSession(projectPath, workId, {
+        provider,
+        label,
+        task,
+        parent,
+        contextFrom: [],
+        role,
+        ...choice,
+        ...(lean === undefined ? {} : { lean }),
+      }, agentConfig === undefined ? undefined : (map, sessionId) => {
+        const caller = map.sessions.find(s => s.id === input.requestedBy);
+        if (!caller || caller.lifecycle === 'closed') throw new HostError('bad_request', 'The caller session is no longer available.');
+        if (map.work.status === 'archived') throw new HostError('bad_request', 'The workspace is archived.');
+        const limits = limitsFromConfig(agentConfig);
+        const room = roomOfSession(map, caller.id);
+        const used = map.resources?.spawned ?? 0;
+        const roomUsed = room === null ? 0 : map.resources?.spawnedByRoom[room] ?? 0;
+        if (used >= limits.workNewSessions) throw new ResourceDeniedError('new-sessions', 'work', used, limits.workNewSessions);
+        if (room !== null && roomUsed >= limits.roomNewSessions) throw new ResourceDeniedError('new-sessions', 'room', roomUsed, limits.roomNewSessions);
+        const attempt = reserveAttempt(map, { kind: 'launch', actor: caller.id, session: sessionId, owner: generation, limits });
+        admitted = { ref: { projectPath, workId, sessionId }, attemptId: attempt.id };
+        map.resources!.spawned += 1;
+        if (room !== null) map.resources!.spawnedByRoom[room] = roomUsed + 1;
+      }));
+      logged.sessionId = sessionId;
+      const ref = { projectPath, workId, sessionId };
+      if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, true));
+      return await timer.step('launch', () => createInteractive(ref, 'launch', choice));
+    } catch (error) {
+      if (admitted !== undefined) {
+        await settleLaunch(admitted.ref, admitted.attemptId, 'released');
+        throw new HostError(
+          error instanceof HostError ? error.code : 'internal',
+          `Session ${admitted.ref.sessionId} could not be started: ${error instanceof Error ? error.message : String(error)}. Check get_map before retrying create_session.`,
+          { ...(error instanceof HostError ? error.data : {}), ref: admitted.ref },
+        );
+      }
+      throw error;
+    }
   }
 
   async function stop(ref: SessionRef): Promise<void> {

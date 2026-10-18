@@ -52,7 +52,7 @@ import { writeWorkSettings } from './settings-file.js';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
 import { isPointerText } from './delivery.js';
 import { createWork, deleteSessionFiles, readMap, updateMap, workPaths } from './store.js';
-import type { LaunchedBy, WorkSession } from './types.js';
+import type { LaunchedBy, WorkMap, WorkSession } from './types.js';
 
 /** Чего хочет запуск сверх самой сессии. */
 export interface LaunchOptions {
@@ -680,10 +680,12 @@ export async function createPendingSession(
   projectPath: string,
   workId: string,
   init: NewSession,
+  admit?: (map: WorkMap, sessionId: string) => void,
 ): Promise<string> {
   let created = '';
   const map = await updateMap(projectPath, workId, (current) => {
     created = addSession(current, init).id;
+    admit?.(current, created);
   });
   await writeBrief(projectPath, map, created);
   return created;

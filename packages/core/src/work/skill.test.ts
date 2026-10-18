@@ -78,6 +78,13 @@ describe('заглушка скилла parley: frontmatter по специфи�
 describe('заглушка скилла parley: тело', () => {
   const { body } = parts(SKILL_MD);
 
+  it('описывает обычные сессии без наследования комнаты', () => {
+    expect(body).toContain('`create_session`');
+    expect(body).toContain('current workspace');
+    expect(body).toContain('host agent channel');
+    expect(body).not.toContain('created by the human');
+  });
+
   it('отсылает к read_guide и не пересказывает гид', () => {
     expect(body).toContain('`read_guide`');
     expect(body).toMatch(/Do not retell the guide from memory/);
@@ -178,8 +185,9 @@ describe('заглушка и гид согласованы', () => {
       projectPath: '/нет/такого/проекта',
       workId: 'w-0001',
       workDir: '/нет/такого/проекта/.parley/works/w-0001',
-      sessionId: null,
+      sessionId: 's-01',
       channel: false,
+      agent: { url: 'http://127.0.0.1:1/agent/browser', token: 'ab'.repeat(32) },
     });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'test', version: '0.0.0' });
