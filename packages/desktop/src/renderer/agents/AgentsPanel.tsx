@@ -6,7 +6,7 @@
  */
 
 import { Bot, ChevronRight, LoaderCircle } from 'lucide-react';
-import type { FeedItem, WorkEntry } from '@parley/core';
+import type { AgentPlan, FeedItem, WorkEntry } from '@parley/core';
 import { refKey, type LiveTask, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
@@ -16,6 +16,11 @@ import { focusedSessionOf, useLayoutStore } from '../layout/store.js';
 import { useFeedAvailability } from '../lib/feed-view.js';
 import { formatDuration } from '../lib/metrics-line.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
+import { sessionRowLabel } from '../lib/participant.js';
+import { tabId } from '../layout/ids.js';
+import { openTab } from '../layout/tree.js';
+import { PlanSection } from './PlanSection.js';
+import { roomPlanLinks } from './plan-links.js';
 import { useNow } from '../lib/use-now.js';
 import { useActivityStore } from '../store/activity.js';
 import { AgentDetail } from './AgentDetail.js';
@@ -28,7 +33,9 @@ export interface AgentsPanelProps {
 
 export function AgentsPanel({ bridge, entry }: AgentsPanelProps): JSX.Element {
   const workKey = workKeyOf(entry.projectPath, entry.map.work.id);
-  const sessionId = useLayoutStore((state) => focusedSessionOf(state, workKey));
+  const pin = useChatUiStore((state) => state.agentsPin[workKey] ?? null);
+  const focused = useLayoutStore((state) => focusedSessionOf(state, workKey));
+  const sessionId = pin ?? focused;
   const availability = useFeedAvailability();
   const byRef = useActivityStore((state) => state.byRef);
   const session = sessionId === null ? undefined : entry.map.sessions.find((candidate) => candidate.id === sessionId);
@@ -48,6 +55,13 @@ export function AgentsPanel({ bridge, entry }: AgentsPanelProps): JSX.Element {
       sessionRef={sessionRef}
       hasFeed={availability(session.provider) === true}
       tasks={tasks}
+      plan={byRef[refKey(sessionRef)]?.metrics?.plan ?? null}
+      links={roomPlanLinks(entry, session.id)}
+      pinnedLabel={pin === null ? null : sessionRowLabel(session.id, session.label)}
+      onOpenRoom={(roomId) => {
+        useLayoutStore.getState().setActiveWork(workKey);
+        useLayoutStore.getState().apply(workKey, (layout) => openTab(layout, { kind: 'room', id: tabId.room(roomId), roomId }));
+      }}
     />
   );
 }
@@ -57,18 +71,28 @@ export interface AgentsPanelViewProps {
   sessionRef: SessionRef;
   hasFeed: boolean;
   tasks: readonly LiveTask[];
+  plan?: AgentPlan | null;
+  links?: ReturnType<typeof roomPlanLinks>;
+  pinnedLabel?: string | null;
+  onOpenRoom?: (roomId: string) => void;
 }
 
-export function AgentsPanelView({ bridge, sessionRef, hasFeed, tasks }: AgentsPanelViewProps): JSX.Element {
+export function AgentsPanelView({ bridge, sessionRef, hasFeed, tasks, plan, links = [], pinnedLabel, onOpenRoom = () => {} }: AgentsPanelViewProps): JSX.Element {
   const key = refKey(sessionRef);
   const feed = useFeed(sessionRef);
   const finishedOpen = useChatUiStore((state) => state.finishedOpen[key] ?? false);
   const select = useChatUiStore((state) => state.selectAgent);
   const pick = useChatUiStore((state) => state.agentPanel[key] ?? null);
 
+  const planHeader = <>
+    {pinnedLabel ? <h2 className="truncate text-sm font-medium">{pinnedLabel}</h2> : null}
+    {plan != null ? <PlanSection plan={plan} links={links} onOpenRoom={onOpenRoom} /> : null}
+  </>;
+
   if (!hasFeed) {
     return (
       <div data-testid="agents-panel" className="flex min-h-0 flex-col gap-2 overflow-y-auto px-1">
+        {planHeader}
         {tasks.length === 0 ? <p className="text-sm text-muted-foreground">{S.agentsPanel.empty}</p> : null}
         {tasks.map((task) => (
           <div key={task.id} className="flex min-w-0 items-center gap-2 text-sm">
@@ -81,9 +105,10 @@ export function AgentsPanelView({ bridge, sessionRef, hasFeed, tasks }: AgentsPa
     );
   }
 
-  // Подписка — первым ребёнком при обоих видах: переход список ↔ экран агента её не пересоздаёт.
+  // Подписка сохраняется при переходе список ↔ экран агента.
   return (
-    <>
+    <div className="flex min-h-0 flex-col gap-2 overflow-y-auto px-1">
+      {planHeader}
       <FeedSubscription sessionRef={sessionRef} />
       {pick !== null ? (
         <div data-testid="agents-panel" className="flex min-h-0 flex-col">
@@ -92,7 +117,7 @@ export function AgentsPanelView({ bridge, sessionRef, hasFeed, tasks }: AgentsPa
       ) : (
         <AgentList feedItems={feed?.items ?? []} sessionKey={key} finishedOpen={finishedOpen} />
       )}
-    </>
+    </div>
   );
 }
 

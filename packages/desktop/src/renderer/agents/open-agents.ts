@@ -11,10 +11,13 @@ import { applyFocusTarget, buildFocusTargetDeps } from '../attention/focus-targe
 import { openAgentCard } from '../chat/open-agent.js';
 import { useChatUiStore } from '../chat/ui-store.js';
 import { rightSidebarHasRoom } from '../shell/RightSidebar.js';
+import { workKey } from '../lib/tree-order.js';
 import { useUiStore } from '../store/ui.js';
 
 /** Тулбар «N agents running»: вкладка Agents; нет места — прокрутка к первой карточке (прежнее поведение). */
-export function openAgentsPanel(sessionKey: string, firstAgentId: string | null): void {
+export function openAgentsPanel(ref: SessionRef, firstAgentId: string | null): void {
+  const sessionKey = refKey(ref);
+  useChatUiStore.getState().pinAgentsSession(workKey(ref.projectPath, ref.workId), null);
   if (!rightSidebarHasRoom()) {
     if (firstAgentId !== null) useChatUiStore.getState().requestReveal(sessionKey, firstAgentId);
     return;
@@ -25,6 +28,7 @@ export function openAgentsPanel(sessionKey: string, firstAgentId: string | null)
 
 /** Строка поповера агентов: вкладка сессии в фокусе, вкладка Agents и экран агента; нет места — openAgentCard. */
 export function openAgentInPanel(ref: SessionRef, agentId: string): void {
+  useChatUiStore.getState().pinAgentsSession(workKey(ref.projectPath, ref.workId), null);
   if (!rightSidebarHasRoom()) {
     openAgentCard(ref, agentId);
     return;
@@ -34,5 +38,13 @@ export function openAgentInPanel(ref: SessionRef, agentId: string): void {
     return;
   }
   useChatUiStore.getState().selectAgent(refKey(ref), { by: 'agent', id: agentId });
+  useUiStore.getState().setSidebar('right', { open: true, tab: 'agents' });
+}
+
+/** Open a participant plan without changing the main tab, making room at the minimum window width. */
+export function openPlanInPanel(ref: SessionRef): void {
+  if (!rightSidebarHasRoom()) useUiStore.getState().setSidebar('left', { open: false });
+  useChatUiStore.getState().pinAgentsSession(workKey(ref.projectPath, ref.workId), ref.sessionId);
+  useChatUiStore.getState().selectAgent(refKey(ref), null);
   useUiStore.getState().setSidebar('right', { open: true, tab: 'agents' });
 }

@@ -115,6 +115,7 @@ import { useHostStore } from '../store/host.js';
 import { runAction, type ActionContext, type ActionSource } from '../palette/actions.js';
 import { Palette } from '../palette/Palette.js';
 import { usePaletteStore } from '../palette/store.js';
+import { bindAgentsPinToLayout } from '../chat/ui-store.js';
 import { bindReviewToLayout } from '../review/store.js';
 import { pathsToInput } from '../terminal/drop.js';
 import { sendWithToast, type SendWithToastDeps } from '../terminal/send.js';
@@ -565,6 +566,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
 
   // Выбор сессии шапки «Изменений» живёт до смены работы (спека 11.1, кусок 8.2b).
   useEffect(() => bindReviewToLayout(), []);
+  useEffect(() => bindAgentsPinToLayout(), []);
 
   // Буферы файлов (кусок 7.3a): живут, пока вкладка есть в раскладке; закрытие вкладки с правками
   // спрашивает «Save changes to …?». Вопрос закрытия окна и ⌘Q — `WindowCloseQuestion` ниже.
