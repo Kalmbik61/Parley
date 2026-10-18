@@ -170,7 +170,7 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     if (connected) useIslandRequests.getState().sync(entries, byRef);
   }, [connected, entries, byRef]);
 
-  const withCard = useMemo(() => new Set(items.map((item) => refKey(item.ref))), [items]);
+  const withCard = useMemo(() => new Set(items.filter((item) => item.inWindow).map((item) => refKey(item.ref))), [items]);
   const model = useMemo(() => islandModel(entries, byRef, withCard, cleared, held), [entries, byRef, withCard, cleared, held]);
   const doneRows = useMemo(
     () => model.groups.flatMap((group) => group.rows).filter((row): row is DoneRow => row.kind === 'session' && row.state === 'done'),

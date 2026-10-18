@@ -1,9 +1,9 @@
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { appendFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { discoverCodexSessions } from './discover.js';
-import { buildCodexIndex, indexCodexSession } from './index-session.js';
+import { buildCodexIndex, extendCodexSessionIndex, indexCodexSession } from './index-session.js';
 
 let root: string;
 
@@ -323,6 +323,70 @@ describe('indexCodexSession: вызов code mode без ответа (стор�
     item(at, { type: 'function_call', name: 'wait', call_id: callId, arguments: args });
   const event = (at: string, type: string) => line({ timestamp: at, type: 'event_msg', payload: { type } });
   const CHECK_INBOX = 'text(await tools.mcp__parley__check_inbox({}));';
+
+  const AT = '2026-10-18T09:52:11.151Z';
+  const yielded = (id = '58', callId = 'call_exec', output: unknown = `Script running with cell ID ${id}\nWall time 31 seconds\nOutput:\n`) =>
+    item(AT, { type: 'custom_tool_call_output', call_id: callId, output });
+
+  it('s21: yielded exec survives repeated waits and a completed turn', async () => {
+    const file = await writeRollout('2026-10-18', 's21', meta() + event(AT, 'task_started') +
+      exec(AT, 'text(await tools.exec_command({cmd:"git fetch"}));') + yielded() +
+      wait(AT, '{"cell_id":"58","yield_time_ms":1000}') +
+      item(AT, { type: 'function_call_output', call_id: 'call_wait', output: [{ type: 'input_text', text: 'Script running with cell ID 58\nOutput:\n' }] }) +
+      event(AT, 'task_complete'));
+    const indexed = await indexCodexSession(file);
+    expect(indexed.openCodeCall).toBeUndefined();
+    expect(indexed.pendingCodeCell).toEqual({ id: '58', at: AT });
+  });
+
+  it('incremental reads retain pending cells and late results without changing previous snapshots', async () => {
+    const file = await writeRollout('2026-10-18', 'incremental-cell', meta() +
+      exec(AT, CHECK_INBOX) + yielded() + wait(AT, '{"cell_id":"58"}'));
+    const before = await extendCodexSessionIndex(null, file);
+    expect(before.index.openCodeCall?.name).toBe('wait');
+    await appendFile(file, event(AT, 'task_complete'));
+    const ended = await extendCodexSessionIndex(before.state, file);
+    expect(ended.index).toEqual(await indexCodexSession(file));
+    expect(ended.index.pendingCodeCell).toEqual({ id: '58', at: AT });
+    expect(ended.index.openCodeCall).toBeUndefined();
+    expect(before.state.acc.build(file)).toEqual(before.index);
+    await appendFile(file, item(AT, { type: 'function_call_output', call_id: 'call_wait', output: 'Script completed\nOutput:\n' }));
+    const completed = await extendCodexSessionIndex(ended.state, file);
+    expect(completed.index).toEqual(await indexCodexSession(file));
+    expect(completed.index.pendingCodeCell).toBeUndefined();
+    expect(ended.state.acc.build(file)).toEqual(ended.index);
+  });
+
+  it.each(['Script completed\nOutput:\n', 'Script terminated'])('wait result %s clears only its own cell', async (output) => {
+    const file = await writeRollout('2026-10-18', 'cell-finished', meta() +
+      exec(AT, CHECK_INBOX) + yielded() + exec(AT, CHECK_INBOX, 'second') + yielded('59', 'second') +
+      wait(AT, '{"cell_id":"58"}') +
+      item(AT, { type: 'function_call_output', call_id: 'call_wait', output: [{ type: 'input_text', text: output }] }));
+    expect((await indexCodexSession(file)).pendingCodeCell).toEqual({ id: '59', at: AT });
+  });
+
+  it('does not mistake nested command output or unrelated tools for a yielded cell', async () => {
+    const file = await writeRollout('2026-10-18', 'fake-cell', meta() + exec(AT, CHECK_INBOX) +
+      yielded('58', 'call_exec', 'Script completed\nOutput:\nScript running with cell ID 58') +
+      item(AT, { type: 'function_call', name: 'shell_command', call_id: 'shell', arguments: '{}' }) +
+      yielded('59', 'shell'));
+    expect((await indexCodexSession(file)).pendingCodeCell).toBeUndefined();
+  });
+
+  it('a wait result delivered after the turn ends still clears its cell', async () => {
+    const file = await writeRollout('2026-10-18', 'late-cell-result', meta() +
+      exec(AT, CHECK_INBOX) + yielded() + wait(AT, '{"cell_id":"58"}') + event(AT, 'task_complete') +
+      item(AT, { type: 'function_call_output', call_id: 'call_wait', output: 'Script completed\nOutput:\n' }));
+    const indexed = await indexCodexSession(file);
+    expect(indexed.openCodeCall).toBeUndefined();
+    expect(indexed.pendingCodeCell).toBeUndefined();
+  });
+
+  it('an explicit interruption dismisses the unfinished-cell alert', async () => {
+    const file = await writeRollout('2026-10-18', 'cell-interrupted', meta() + exec(AT, CHECK_INBOX) + yielded() +
+      event(AT, 'turn_aborted') + event(AT, 'task_started') + event(AT, 'task_complete'));
+    expect((await indexCodexSession(file)).pendingCodeCell).toBeUndefined();
+  });
 
   it('exec без вывода — openCodeCall с временем вызова и ожиданием из прагмы // @exec', async () => {
     const file = await writeRollout(

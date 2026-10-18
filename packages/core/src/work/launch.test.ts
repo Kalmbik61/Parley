@@ -1398,6 +1398,8 @@ describe('common session layer delivery', () => {
       expect(layer).not.toContain('template');
       expect(layer).not.toContain('прогнать e2e');
       expect(plan.args).toContain('project_doc_fallback_filenames=["CLAUDE.md"]');
+      expect(layer).toContain('Codex approval recovery:');
+      expect(layer).toContain('verify its effects before retrying');
       if (plan.args[0] === 'resume') expect(plan.args.at(-1)).toBe('INBOX POINTER');
     }
   });
@@ -1964,7 +1966,8 @@ describe('сокращение родного списка скиллов вме
     expect(server.env.HARNAS_SKILL_LIST_REDUCED).toBe('1');
     const layer = JSON.parse(plan.args.find((arg) => arg.startsWith('developer_instructions='))!.slice('developer_instructions='.length)) as string;
     expect(layer).toContain('no native skill list');
-    expect(layer.split('\n').length).toBeLessThanOrEqual(14);
+    // Лимит относится к общей вставке; блок восстановления Codex следует отдельно, как bridge.
+    expect(layer.split('\n\n')[0]!.split('\n').length).toBeLessThanOrEqual(14);
     // The native context for find_skill is read without the flag: the names come from the full inventory.
     expect((await readNativeContext(project, workId, sessionId))?.configArgs).toEqual([]);
     expect(plan.warnings.join(' ')).not.toContain('full native skill list');

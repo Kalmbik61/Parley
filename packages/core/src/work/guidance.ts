@@ -20,6 +20,11 @@ import type { WorkMap } from './types.js';
 /** Потолок строк вставки: растущие правила копят строки, а не уходят в `read_guide`. */
 export const GUIDANCE_MAX_LINES = 14;
 
+/** Восстановление после одобрения — отдельный блок только для запусков Codex. */
+export const CODEX_APPROVAL_GUIDANCE =
+  'Codex approval recovery: "Script running with cell ID" means the operation is unfinished. Keep track of the cell; do not finish the turn or report done while waiting for its approval/result. Use bounded waits, keep the human informed and continue independent work when possible. ' +
+  'After a resumed turn or a saved approval rule, do not assume the old operation resumed. If it remains stuck, stop it and verify its effects before retrying only unfinished, authorized work. Never replay writes merely because approval was saved. Task authorization does not replace runtime approval; do not bypass permission controls.';
+
 /**
  * Заголовок и цель работы пишет человек — там бывают переносы строк, а счёт
  * строк вставки от них поехал бы.

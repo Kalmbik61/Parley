@@ -13,12 +13,12 @@
  * показывает язычок убранного острова.
  * Ключ Done включает конец хода (`turnEndedAt`): новый конец хода той же сессии — новый ключ, и прежний Clear его
  * не скрывает. Done не «работа»: `active` и провайдеры пилюли его не считают, а `done` — число таких строк.
- * Комната помечена `done`, если никто из её участников не в работе, а кто-то из них в Done. Codex вне острова.
+ * Комната помечена `done`, если никто из её участников не в работе, а кто-то из них в Done. У Codex показываем запросы действий.
  */
 
 import type { WorkEntry } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
-import { ISLAND_EXCLUDED_PROVIDERS } from '../../shared/island.js';
+import { ISLAND_ATTENTION_ONLY_PROVIDERS } from '../../shared/island.js';
 import { sessionAttention } from '../attention/derive.js';
 import { sessionRowLabel, workTitleText } from '../lib/participant.js';
 import { projectName } from '../lib/project-name.js';
@@ -68,11 +68,11 @@ export function islandModel(
     const busy = new Set<string>();
     const finished = new Set<string>();
     for (const session of entry.map.sessions) {
-      if (ISLAND_EXCLUDED_PROVIDERS.has(session.provider)) continue;
       const ref = { projectPath: entry.projectPath, workId: work.id, sessionId: session.id };
       const key = refKey(ref);
       const live = byRef[key]?.activity ?? null;
       const state = sessionAttention(session, live);
+      if (ISLAND_ATTENTION_ONLY_PROVIDERS.has(session.provider) && state !== 'needs-you') continue;
       const turnEndedAt = live?.turnEndedAt ?? null;
       const doneKey = `${key}\u0000${turnEndedAt ?? ''}`;
       const unseen = state === 'unseen';
