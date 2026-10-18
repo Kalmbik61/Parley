@@ -99,5 +99,7 @@ it('old metrics without plan show a discoverable empty state', () => {
 it('shows Plan above the agent list for a session with a feed', () => {
  const plan = capPlan({ items: [], explanation: 'Feed plan', partial: false, updatedAt: AT });
  render(<AgentsPanelView bridge={createFakeBridge()} sessionRef={REF} hasFeed tasks={[]} plan={plan} />);
- expect(screen.getByText('Plan · 0/0')).toBeTruthy(); expect(screen.getByText('Feed plan')).toBeTruthy();
+ expect(screen.getByRole('heading', { name: 'Plan' })).toBeTruthy();
+ expect(screen.getByText(S.agentsPanel.noPlan)).toBeTruthy();
+ expect(screen.getByText('Feed plan')).toBeTruthy();
 });
