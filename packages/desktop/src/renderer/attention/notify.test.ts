@@ -340,14 +340,14 @@ describe('createAttentionNotifier.onActivity (тест 2 куска 4.3)', () =>
       expect(h.notes[0]?.body).toBe('Run: npm test\np');
     });
 
-    it('остров жив, сессия Codex — уведомление есть', async () => {
+    it.each([run, null])('остров жив, сессия Codex с карточкой %s — без дублирующего уведомления', async (ask) => {
       const h = harness([entry('Redesign', [session('s-02', 'executor', { provider: 'codex' })])]);
       h.island = true;
-      h.asks = [run];
+      h.asks = [ask];
       h.notifier.onActivity(ref2, live('working'));
       h.notifier.onActivity(ref2, live('blocked'));
       await settle();
-      expect(h.notes).toHaveLength(1);
+      expect(h.notes).toEqual([]);
     });
 
     it('«закончил» — по-прежнему синхронно и без запроса карточки', () => {
@@ -1073,7 +1073,7 @@ describe('wireAttentionNotifications на подставном мосте и н�
     bridge = createFakeBridge();
     useActivityStore.setState({ byRef: {} });
     useWindowNotesStore.setState({ notes: [] });
-    useUiStore.setState({ windowFocused: true, documentVisible: true });
+    useUiStore.setState({ ui: DEFAULT_UI, windowFocused: true, documentVisible: true });
     useWorksStore.setState({
       entries: [entry('Redesign', [session('s-01', 'planner'), session('s-02', 'executor'), session('s-03', 'backend')])],
       branches: {},
@@ -1123,6 +1123,22 @@ describe('wireAttentionNotifications на подставном мосте и н�
     for (const call of snapshots) expect(call.params).toEqual({ ref: ref1, scope: 'attention' });
     off();
     useHostStore.setState({ status: { state: 'connecting' } });
+  });
+
+  it.each([true, false])('Codex: окно Island загружено, переключатель enabled=%s — системный сигнал только при выключенном Island', async (enabled) => {
+    vi.useFakeTimers();
+    vi.spyOn(bridge.app, 'islandActive').mockReturnValue(true);
+    useUiStore.setState({ ui: { ...DEFAULT_UI, island: { ...DEFAULT_UI.island, enabled } } });
+    useWorksStore.setState({ entries: [entry('Codex work', [session('s-02', 'codex', { provider: 'codex' })])] });
+    const off = wire();
+    try {
+      emit(ref2, 'working');
+      emit(ref2, 'blocked');
+      await settle();
+      expect(bridge.appNotified).toHaveLength(enabled ? 0 : 1);
+    } finally {
+      off();
+    }
   });
 
   it('host.notice моста доходит до уведомителя; после отписки — нет', () => {

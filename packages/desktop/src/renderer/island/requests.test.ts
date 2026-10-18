@@ -49,16 +49,17 @@ describe('очередь запросов острова', () => {
     vi.useRealTimers();
   });
 
-  it('сессия начала ждать — в очередь все её ждущие карточки; Codex не спрашивается', async () => {
+  it('сессия начала ждать — в очередь карточки и запрос терминала Codex', async () => {
     const { call, snapshot } = bridge({ 's-01': [permission('c-1'), permission('c-2', 'ls')] });
     useIslandRequests.getState().bind(call as never);
     useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked'), makeActivity(ref('s-03'), 'blocked')]));
     await flush();
-    expect(useIslandRequests.getState().items.map((item) => [item.card.cardId, item.summary])).toEqual([
+    expect(useIslandRequests.getState().items.filter((item) => item.card !== null).map((item) => [item.card?.cardId, item.summary])).toEqual([
       ['c-1', 'Run: rm -rf build'],
       ['c-2', 'Run: ls'],
     ]);
-    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(useIslandRequests.getState().items.find((item) => item.ref.sessionId === 's-03')).toMatchObject({ card: null, inWindow: false });
+    expect(snapshot).toHaveBeenCalledTimes(2);
     expect(snapshot).toHaveBeenCalledWith({ ref: ref('s-01'), scope: 'attention' });
   });
 
@@ -73,6 +74,45 @@ describe('очередь запросов острова', () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(snapshot).toHaveBeenCalledTimes(2);
     expect(useIslandRequests.getState().items).toHaveLength(1);
+  });
+
+  it('Codex: недоступная лента не скрывает действие в терминале и не разрешает его через feed.decide', async () => {
+    const { call, snapshot, decide } = bridge({});
+    snapshot.mockRejectedValue(new Error('feed unavailable'));
+    useIslandRequests.getState().bind(call as never);
+    const blocked = activityMap([makeActivity(ref('s-03'), 'blocked')]);
+    useIslandRequests.getState().sync(entries, blocked);
+    const first = useIslandRequests.getState().items[0]!;
+    expect(first).toMatchObject({ ref: ref('s-03'), card: null, inWindow: false });
+    await flush();
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(useIslandRequests.getState().items).toEqual([first]);
+    await useIslandRequests.getState().decide(first.key, { kind: 'permission', behavior: 'allow' });
+    expect(decide).not.toHaveBeenCalled();
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-03'), 'working')]));
+    expect(useIslandRequests.getState().items).toEqual([]);
+    useIslandRequests.getState().sync(entries, blocked);
+    expect(useIslandRequests.getState().items[0]?.key).not.toBe(first.key);
+  });
+
+  it('Codex: поздняя карточка заменяет переход к терминалу, а завершение ожидания отменяет поздний ответ', async () => {
+    const cards: Record<string, FeedCard[]> = {};
+    const { call } = bridge(cards);
+    useIslandRequests.getState().bind(call as never);
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-03'), 'blocked')]));
+    await flush();
+    expect(useIslandRequests.getState().items[0]?.card).toBeNull();
+    cards['s-03'] = [permission('codex-permission')];
+    await vi.advanceTimersByTimeAsync(500);
+    expect(useIslandRequests.getState().items).toHaveLength(1);
+    expect(useIslandRequests.getState().items[0]).toMatchObject({ card: { cardId: 'codex-permission' }, inWindow: true });
+    const late = deferred<ReturnType<typeof snap>>();
+    useIslandRequests.getState().bind(vi.fn().mockReturnValue(late.promise) as never);
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-03'), 'blocked')]));
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-03'), 'working')]));
+    late.resolve(snap([permission('stale')]));
+    await flush();
+    expect(useIslandRequests.getState().items).toEqual([]);
   });
 
   it('сессия перестала ждать — её карточки уходят', async () => {
@@ -91,7 +131,7 @@ describe('очередь запросов острова', () => {
     await vi.advanceTimersByTimeAsync(10);
     useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-02'), 'blocked'), makeActivity(ref('s-01'), 'blocked')]));
     await flush();
-    expect(useIslandRequests.getState().items.map((item) => item.card.cardId)).toEqual(['c-2', 'c-1']);
+    expect(useIslandRequests.getState().items.map((item) => item.card?.cardId)).toEqual(['c-2', 'c-1']);
   });
 
   it('applied: true — карточка уходит; решение уходит хосту с cardId', async () => {
@@ -209,7 +249,7 @@ describe('очередь запросов острова', () => {
     await flush();
     older.resolve(snap([permission('c-old')]));
     await flush();
-    expect(useIslandRequests.getState().items.map((item) => item.card.cardId)).toEqual(['c-new']);
+    expect(useIslandRequests.getState().items.map((item) => item.card?.cardId)).toEqual(['c-new']);
   });
 
   it('удавшийся снимок без ждущих карточек убирает прежнюю карточку сессии (ответили в терминале)', async () => {
@@ -234,7 +274,7 @@ describe('очередь запросов острова', () => {
     useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
     await flush();
     expect(snapshot).toHaveBeenCalledTimes(2);
-    expect(useIslandRequests.getState().items.map((item) => item.card.cardId)).toEqual(['c-1']);
+    expect(useIslandRequests.getState().items.map((item) => item.card?.cardId)).toEqual(['c-1']);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(snapshot).toHaveBeenCalledTimes(2);
   });
@@ -291,7 +331,7 @@ describe('очередь запросов острова', () => {
     useIslandRequests.getState().select(1);
     expect(useIslandRequests.getState().index).toBe(1);
     useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked'), makeActivity(ref('s-02'), 'working')]));
-    expect(useIslandRequests.getState().items.map((item) => item.card.cardId)).toEqual(['c-1']);
+    expect(useIslandRequests.getState().items.map((item) => item.card?.cardId)).toEqual(['c-1']);
     expect(useIslandRequests.getState().index).toBe(0);
   });
 

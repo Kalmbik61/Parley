@@ -776,24 +776,30 @@ export function createActivityService(
     const index = logIndex.index(session);
     const metrics = metricsFor(ref, key, entry, session, activity, index);
 
-    // Сторож Codex: вызов code mode без вывода дольше ожидания и запаса — запрос одобрения, которого никто не видит.
+    // Сторож Codex: долгий вызов без вывода или конец хода с ещё незавершённой ячейкой (s21).
     let codexStuck = false;
-    const call = driven && activity.activity === 'working' ? index?.openCodeCall : undefined;
+    const pendingCell = driven && index?.lastTurnEvent?.type === 'task_complete' ? index.pendingCodeCell : undefined;
+    const call = pendingCell === undefined
+      ? driven && activity.activity === 'working' ? index?.openCodeCall : undefined
+      : { at: pendingCell.at, yieldMs: 0 };
     if (call === undefined) {
       clearCodexCallTimer(key);
     } else {
-      const stuckAt = Date.parse(call.at) + (call.yieldMs ?? CODEX_DEFAULT_YIELD_MS) + codexCallGraceMs;
+      const stuckAt = pendingCell === undefined
+        ? Date.parse(call.at) + (call.yieldMs ?? CODEX_DEFAULT_YIELD_MS) + codexCallGraceMs
+        : now;
       if (Number.isNaN(stuckAt)) {
         clearCodexCallTimer(key);
       } else if (now >= stuckAt) {
         clearCodexCallTimer(key);
         codexStuck = true;
-        if (codexCallNotified.get(key) !== call.at) {
-          codexCallNotified.set(key, call.at);
+        const noticeKey = pendingCell === undefined ? call.at : `cell:${pendingCell.id}:${pendingCell.at}`;
+        if (codexCallNotified.get(key) !== noticeKey) {
+          codexCallNotified.set(key, noticeKey);
           host.broadcast('host.notice', {
             kind: 'codex-call-wait',
             ref,
-            text: `${sessionTag(ref.sessionId)} is stuck in a Codex tool call — Codex is probably waiting for an approval in its terminal; answer it there or restart the session`,
+            text: `${sessionTag(ref.sessionId)} ${pendingCell === undefined ? 'has not returned from a Codex tool call' : 'finished its turn with an unfinished tool operation'}. Check pending approvals; if already answered, stop the stuck operation and verify its effects before retrying.`,
             at: new Date(now).toISOString(),
           });
         }
