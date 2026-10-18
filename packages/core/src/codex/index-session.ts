@@ -1,3 +1,4 @@
+import { createCodexPlanCollector } from '../agent-plan-log.js';
 import path from 'node:path';
 import { Counter, oneLine, type TokenTotals } from '../counters.js';
 import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
@@ -92,6 +93,7 @@ function waitYieldMs(args: string | null): number | null {
  * через одно и то же, поэтому результат у них совпадает.
  */
 export class CodexIndexAccumulator {
+  planCollector = createCodexPlanCollector();
   models = new Counter();
   tools = new Counter();
   roles = new Counter();
@@ -122,6 +124,7 @@ export class CodexIndexAccumulator {
   /** Независимая копия: счётчики, наблюдения и открытые вызовы копируются, прежнее состояние не мутируется. */
   clone(): CodexIndexAccumulator {
     return Object.assign(new CodexIndexAccumulator(), this, {
+      planCollector: this.planCollector.clone(),
       models: this.models.clone(),
       tools: this.tools.clone(),
       roles: this.roles.clone(),
@@ -132,6 +135,7 @@ export class CodexIndexAccumulator {
   }
 
   feed(raw: RawRecord): void {
+    this.planCollector.onRecord(raw);
     const type = str(raw, 'type');
     const payload = asRecord(raw['payload']);
     this.recordTypes.add(type);
@@ -252,6 +256,7 @@ export class CodexIndexAccumulator {
     const title = firstUserMessage === null ? null : oneLine(firstUserMessage);
 
     return {
+      plan: this.planCollector.finish(),
       id: this.id ?? path.basename(file, '.jsonl'),
       // Слага проекта у Codex нет — берём имя каталога из cwd.
       project: cwd === null ? '—' : path.basename(cwd),

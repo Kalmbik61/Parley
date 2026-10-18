@@ -479,3 +479,43 @@ describe('createSessionIndexer', () => {
     expect(startOf(files[2]!)).toBeGreaterThan(0);
   });
 });
+
+
+describe('plan incremental parity', () => {
+  for (const engine of ['claude', 'codex'] as const) {
+    it(`${engine}: late results, duplicate tail, and truncation preserve full-index parity`, async () => {
+      const file = path.join(root, `${engine}-plan.jsonl`);
+      const at = '2026-10-18T10:00:00Z';
+      const call = engine === 'claude'
+        ? { type: 'assistant', timestamp: at, message: { content: [{ type: 'tool_use', id: 'p', name: 'TodoWrite', input: { todos: [{ content: 'A', status: 'in_progress' }] } }] } }
+        : { type: 'response_item', timestamp: at, payload: { type: 'function_call', call_id: 'p', name: 'update_plan', arguments: JSON.stringify({ plan: [{ step: 'A', status: 'in_progress' }] }) } };
+      const result = engine === 'claude'
+        ? { type: 'user', timestamp: at, message: { content: [{ type: 'tool_result', tool_use_id: 'p', content: 'Plan updated' }] } }
+        : { type: 'response_item', timestamp: at, payload: { type: 'function_call_output', call_id: 'p', output: 'Plan updated' } };
+      await writeFile(file, jsonl([call]));
+      if (engine === 'claude') {
+        const first = await extendClaudeSessionIndex(null, file, root);
+        expect(first.index.plan).toBeNull();
+        await appendFile(file, jsonl([result, call, result]));
+        const second = await extendClaudeSessionIndex(first.state, file, root);
+        expect(second.index.plan).toEqual((await indexSessionFile(file, root)).plan);
+        expect(second.index.plan?.summary.current?.subject).toBe('A');
+        expect(first.state.acc.build(root).plan).toBeNull();
+        expect((await extendClaudeSessionIndex(first.state, file, root)).index.plan).toEqual(second.index.plan);
+        await writeFile(file, jsonl([result]));
+        expect((await extendClaudeSessionIndex(second.state, file, root)).index.plan).toBeNull();
+      } else {
+        const first = await extendCodexSessionIndex(null, file);
+        expect(first.index.plan).toBeNull();
+        await appendFile(file, jsonl([result, call, result]));
+        const second = await extendCodexSessionIndex(first.state, file);
+        expect(second.index.plan).toEqual((await indexCodexSession(file)).plan);
+        expect(second.index.plan?.summary.current?.subject).toBe('A');
+        expect(first.state.acc.build(file).plan).toBeNull();
+        expect((await extendCodexSessionIndex(first.state, file)).index.plan).toEqual(second.index.plan);
+        await writeFile(file, jsonl([result]));
+        expect((await extendCodexSessionIndex(second.state, file)).index.plan).toBeNull();
+      }
+    });
+  }
+});
