@@ -31,10 +31,11 @@ export interface RoomHeaderProps {
   /** Комната в архиве: рядом с названием метка `Archived`. */
   archived?: boolean;
   participants: readonly ParticipantModel[];
+  onOpenPlan?: (sessionId: string) => void;
   onOpenSession: (sessionId: string, agentId?: string) => void;
 }
 
-export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, modeControl, recipeChip, historyMenu, browserToggle, usageChip, contextChip, participantContext }: RoomHeaderProps): JSX.Element {
+export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, onOpenPlan, modeControl, recipeChip, historyMenu, browserToggle, usageChip, contextChip, participantContext }: RoomHeaderProps): JSX.Element {
   return (
     <div
       data-room-header=""
@@ -63,6 +64,7 @@ export function RoomHeader({ title, subtitle, archived = false, participants, on
       <ParticipantStrip
         participants={participants}
         onOpenSession={onOpenSession}
+        {...(onOpenPlan === undefined ? {} : { onOpenPlan })}
         {...(participantContext === undefined ? {} : { contextChip: participantContext })}
       />
     </div>
