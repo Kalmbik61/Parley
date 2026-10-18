@@ -92,7 +92,7 @@ export function ParticipantStrip({ participants, onOpenSession, onOpenPlan, cont
                   : 'bg-[color-mix(in_srgb,currentColor_6%,transparent)]',
             )}
           >
-            {chip !== null || showPlanChip || showPlanLine ? (
+            {chip !== null || showPlanChip || showPlanLine || onOpenPlan !== undefined ? (
               <>
                 <button type="button" onClick={open} className="flex w-full flex-col rounded-t-[14px] px-3 pt-[9px] text-left">
                   {header}
@@ -122,7 +122,11 @@ export function ParticipantStrip({ participants, onOpenSession, onOpenPlan, cont
                       {participant.doing ?? participant.task}
                     </button>
                   )}
-                  {showPlanChip && participant.plan != null ? <PlanChip plan={participant.plan} onOpen={openPlan} /> : null}
+                  {showPlanChip && participant.plan != null ? <PlanChip plan={participant.plan} onOpen={openPlan} /> : onOpenPlan ? (
+                    <button type="button" onClick={openPlan} title={S.agentsPanel.openPlan} className="shrink-0 text-xs text-muted-foreground hover:text-foreground hover:underline">
+                      {S.agentsPanel.plan}
+                    </button>
+                  ) : null}
                   {chip !== null ? <span className="shrink-0">{chip}</span> : null}
                 </div>
               </>

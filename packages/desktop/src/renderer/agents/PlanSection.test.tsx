@@ -91,3 +91,12 @@ it('expands when an existing item starts and preserves manual toggles on ordinar
   rerender(view('in_progress'));
   expect(screen.getByText('Details')).toBeTruthy();
 });
+
+
+it('shows room assignments and an honest empty state before personal steps exist', () => {
+  const open = vi.fn();
+  render(<PlanSection plan={null} links={[{ roomId: 'r-01', planId: 'pl-01', itemId: 1, title: 'Build', scope: 'Scope' }]} onOpenRoom={open} />);
+  expect(screen.getByText(/No personal steps published yet/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'pl-01 · item 1: Build' }));
+  expect(open).toHaveBeenCalledWith('r-01');
+});

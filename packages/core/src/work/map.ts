@@ -1,3 +1,4 @@
+import { isPublishedAgentPlan } from '../agent-plan.js';
 import { validateDecisionJournalStorage } from './decision-journal.js';
 import { validatePlanStorage } from './plans.js';
 import { validatePlanEffects } from './plan-effects.js';
@@ -319,7 +320,8 @@ const isSessionShape =
     (version === 1
       ? typeof value.status === 'string' && V1_STATUSES.includes(value.status)
       : typeof value.lifecycle === 'string' && Object.hasOwn(TRANSITIONS, value.lifecycle)) &&
-    Array.isArray(value.history);
+    Array.isArray(value.history) &&
+    (value.agentPlan === undefined || isPublishedAgentPlan(value.agentPlan));
 
 /** У письма v2 адресаты — массив: по нему идут `removeSession` и `recipientsOf`. */
 const isMessageShape =

@@ -91,6 +91,7 @@ test('план из журнала доходит до карточки комн
       env: {
         ...process.env,
         PARLEY_HOME: home,
+        PARLEY_SKIP_VERSION_PROBE: '1', // Personal plans remain usable without Chat support.
         PARLEY_CLAUDE_PROJECTS_DIR: claudeRoot,
         PARLEY_CODEX_SESSIONS_DIR: codexRoot,
         PARLEY_CLAUDE_BIN: path.resolve(dirname, 'stub-echo-agent.mjs'),
@@ -327,6 +328,30 @@ test('план из журнала доходит до карточки комн
     await expect(card.getByRole('button', { name: 'Plan', exact: true })).toBeVisible();
     await expect(panel).toContainText('Plan may be incomplete');
     await expect(panel).not.toContainText('0/1');
+    // A session with no native plan still has an entry point; explicit publication uses the same map watcher.
+    const codexCard = window.locator(`[data-participant="${members[2]}"]`);
+    const currentMap = JSON.parse(await readFile(mapFile, 'utf8')) as WorkMap;
+    const codexSession = currentMap.sessions.find(session => session.id === members[2])!;
+    codexSession.agentPlan = { items: [], explanation: null, partial: false, updatedAt: new Date().toISOString() };
+    await writeFile(`${mapFile}.next`, JSON.stringify(currentMap));
+    await rename(`${mapFile}.next`, mapFile);
+    await expect(codexCard.getByRole('button', { name: 'Plan', exact: true })).toBeVisible();
+    await codexCard.getByRole('button', { name: 'Plan', exact: true }).click();
+    await expect(panel).toContainText('No personal steps published yet');
+    const publishedMap = JSON.parse(await readFile(mapFile, 'utf8')) as WorkMap;
+    publishedMap.sessions.find(session => session.id === members[2])!.agentPlan = {
+      items: [
+        { id: '1', subject: 'Inspect the flow', status: 'completed', description: null, activeForm: null },
+        { id: '2', subject: 'Verify published progress', status: 'in_progress', description: 'Visible without sending the lead a message', activeForm: null },
+      ], explanation: null, partial: false, updatedAt: new Date().toISOString(),
+    };
+    await writeFile(`${mapFile}.next`, JSON.stringify(publishedMap));
+    await rename(`${mapFile}.next`, mapFile);
+    await expect(codexCard).toContainText('Verify published progress');
+    await expect(panel).toContainText('Plan · 1/2');
+    await expect(panel).toContainText('Visible without sending the lead a message');
+    await window.screenshot({ path: path.resolve(dirname, '../test-results/agent-plans/published-800x500.png') });
+
   } finally {
     await stopApp(app);
     await stopHost(home);

@@ -11,22 +11,22 @@ export function PlanSection({
   links,
   onOpenRoom,
 }: {
-  plan: AgentPlan;
+  plan: AgentPlan | null;
   links: ReturnType<typeof roomPlanLinks>;
   onOpenRoom: (roomId: string) => void;
 }): JSX.Element {
-  const summary = planSummary(plan);
+  const summary = plan === null ? null : planSummary(plan);
   return (
     <section
       className="flex min-w-0 flex-col gap-2 border-b border-border pb-3"
       aria-label={S.agentsPanel.plan}
     >
       <h3 className="text-sm font-medium">
-        {plan.partial
+        {plan === null || plan.items.length === 0 || plan.partial || summary === null
           ? S.agentsPanel.plan
           : `${S.agentsPanel.plan} · ${summary.done}/${summary.total}`}
       </h3>
-      {plan.partial ? (
+      {plan?.partial ? (
         <p className="text-xs text-muted-foreground">{S.agentsPanel.planIncomplete}</p>
       ) : null}
       {links.map((link) => (
@@ -38,15 +38,18 @@ export function PlanSection({
           className="text-left text-xs text-primary hover:underline"
         >{`${link.planId} · item ${link.itemId}: ${link.title}`}</button>
       ))}
-      {plan.explanation ? (
+      {plan === null || plan.items.length === 0 ? (
+        <p className="text-xs text-muted-foreground">{S.agentsPanel.noPlan}</p>
+      ) : null}
+      {plan?.explanation ? (
         <p className="whitespace-pre-wrap text-sm text-muted-foreground">{plan.explanation}</p>
       ) : null}
       <ul className="flex min-w-0 flex-col gap-2">
-        {plan.items.map((item, index) => (
+        {plan?.items.map((item, index) => (
           <PlanItemRow key={item.id ?? index} item={item} />
         ))}
       </ul>
-      {plan.omitted > 0 ? (
+      {plan != null && plan.omitted > 0 ? (
         <p className="text-xs text-muted-foreground">{S.agentsPanel.planMore(plan.omitted)}</p>
       ) : null}
     </section>

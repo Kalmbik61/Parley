@@ -46,6 +46,7 @@ const TABLE: Record<string, Hints> = {
   wait_for: READ,
   check_inbox: WRITE,
   report: WRITE,
+  publish_agent_plan: WRITE,
   send_message: WRITE,
   create_room: WRITE,
   add_to_room: WRITE,

@@ -12,6 +12,7 @@
  * в файле нет и не должно быть (приёмка куска 1.5).
  */
 
+import { latestAgentPlan } from '@parley/core/agent-plan';
 import { existsSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -605,7 +606,7 @@ export function createActivityService(
       unread: unreadOf(entry, session.id),
       subagents: activity.subagents,
       model: indexed?.primaryModel ?? null,
-      plan: indexed?.plan ?? null,
+      plan: latestAgentPlan(session.agentPlan, indexed?.plan),
       tasks: liveTasksOf(ref, key, activity),
       waitingFor: activity.waitingFor,
       mailWaiting: mailWaits.get(key) ?? null,

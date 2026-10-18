@@ -90,9 +90,10 @@ it('pins the participant label and plan for a session without a feed', () => {
  expect(screen.getByRole('heading', { name: /Alice/ })).toBeTruthy(); expect(screen.getByText('Alice plan')).toBeTruthy(); expect(screen.getByText('Plan · 0/1')).toBeTruthy();
  act(() => useActivityStore.setState({ byRef: {} }));
 });
-it('old metrics without plan omit the Plan section', () => {
+it('old metrics without plan show a discoverable empty state', () => {
  render(<AgentsPanelView bridge={createFakeBridge()} sessionRef={REF} hasFeed={false} tasks={[]} />);
- expect(screen.queryByText(/^Plan/)).toBeNull();
+ expect(screen.getByRole('heading', { name: 'Plan' })).toBeTruthy();
+ expect(screen.getByText(S.agentsPanel.noPlan)).toBeTruthy();
 });
 
 it('shows Plan above the agent list for a session with a feed', () => {
