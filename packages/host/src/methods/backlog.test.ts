@@ -188,10 +188,12 @@ it.each(['pending', 'sleeping'] as const)('accepts a known %s session target wit
     target: { projectPath: project, workId: created.workId, sessionId: 's-01' } });
   expect(marked.items[0]!.taken).toBe(`${created.workId}/s-01`);
 });
-it('uses canonical room liveness including a sleeping creator-only room, but refuses all-closed/deleted rooms', async () => {
+it('uses explicit working membership for room liveness and refuses owner-only or all-closed rooms', async () => {
   const created = await target();
-  await updateMap(project, created.workId, map => { map.rooms[0]!.creator = 's-01'; map.rooms[0]!.members = []; map.sessions[0]!.lifecycle = 'sleeping'; });
+  await updateMap(project, created.workId, map => { map.rooms[0]!.ownerId = 's-01'; map.rooms[0]!.members = []; map.sessions[0]!.lifecycle = 'sleeping'; });
   const added = await add();
+  await expect(handlers['backlog.take']({ projectPath: project, id: added.items[0]!.id!, version: added.version, target: created })).rejects.toMatchObject({ code: 'not_found' });
+  await updateMap(project, created.workId, map => { map.rooms[0]!.members = ['s-01']; });
   expect((await handlers['backlog.take']({ projectPath: project, id: added.items[0]!.id!, version: added.version, target: created })).items[0]!.taken).toBe(`${created.workId}/${created.roomId}`);
   await updateMap(project, created.workId, map => { map.sessions[0]!.lifecycle = 'closed'; });
   const next = await add('Second'); const item = next.items[1]!;

@@ -744,6 +744,8 @@ describe('WorkSidebar — комнаты (кусок 5)', () => {
     render(<Harness />);
     act(() => cardOf(entry).focus());
     fireEvent.keyDown(cardOf(entry), { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(rowOf(entry, 's-03'));
+    fireEvent.keyDown(rowOf(entry, 's-03'), { key: 'ArrowDown' });
     expect(document.activeElement).toBe(roomOf(entry));
     fireEvent.keyDown(roomOf(entry), { key: 'F10', shiftKey: true });
     expect(screen.queryByRole('menu')).toBeNull();
@@ -755,7 +757,7 @@ describe('WorkSidebar — комнаты (кусок 5)', () => {
     expect(screen.queryByText('Pin')).toBeNull();
   });
 
-  it('карточка → строка комнаты → (свёрнутая: участников нет) следующая сессия карточки; Enter на комнате открывает её', () => {
+  it('карточка → сессия вне комнат → комната без владельца; Enter на комнате открывает её', () => {
     const onOpenRoom = vi.fn();
     const entry = withRoom('w-r');
     setWorks([entry]);
@@ -765,13 +767,15 @@ describe('WorkSidebar — комнаты (кусок 5)', () => {
     expect(rowOf(entry, 's-01')).toBeNull();
     act(() => cardOf(entry).focus());
     fireEvent.keyDown(cardOf(entry), { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(rowOf(entry, 's-03'));
+    fireEvent.keyDown(rowOf(entry, 's-03'), { key: 'ArrowDown' });
     expect(document.activeElement).toBe(roomOf(entry));
     expect(roomOf(entry).getAttribute('aria-selected')).toBe('true');
     expect(stops()).toEqual([roomOf(entry)]);
-    // Свёрнутая комната участников не показывает — следующая по стрелке строка карточки это s-03.
-    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowDown' });
-    expect(document.activeElement).toBe(rowOf(entry, 's-03'));
+    // Комната без владельца стоит после самостоятельной сессии, участники свёрнуты.
     fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(rowOf(entry, 's-03'));
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowDown' });
     expect(document.activeElement).toBe(roomOf(entry));
     // Enter — как клик: комната открыта и развёрнута (правило 2.6 для клика).
     fireEvent.keyDown(roomOf(entry), { key: 'Enter' });
@@ -786,6 +790,7 @@ describe('WorkSidebar — комнаты (кусок 5)', () => {
     render(<Harness />);
     act(() => cardOf(entry).focus());
     fireEvent.keyDown(cardOf(entry), { key: 'ArrowDown' });
+    fireEvent.keyDown(rowOf(entry, 's-03'), { key: 'ArrowDown' });
     fireEvent.keyDown(roomOf(entry), { key: 'ArrowRight' });
     expect(roomExpanded(entry)).toBe(true);
     expect(roomOf(entry).getAttribute('aria-expanded')).toBe('true');
@@ -797,6 +802,7 @@ describe('WorkSidebar — комнаты (кусок 5)', () => {
     expect(document.activeElement).toBe(cardOf(entry));
 
     fireEvent.keyDown(cardOf(entry), { key: 'ArrowDown' });
+    fireEvent.keyDown(rowOf(entry, 's-03'), { key: 'ArrowDown' });
     expect(document.activeElement).toBe(roomOf(entry));
     fireEvent.keyDown(roomOf(entry), { key: 'ArrowLeft' });
     expect(roomExpanded(entry)).toBe(false);

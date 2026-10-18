@@ -24,15 +24,12 @@ import {
   claudeConfigDirFor,
   isClaudeCode,
   providerReadiness,
-  providerReadinessError,
   loadProviders,
-  resolveModelEffort,
   selectableModels,
   supportsEffort,
-  supportsModel,
 } from '../providers.js';
-import { prepareSessionRole, roleFromId, roleId, roleSummaries, sessionRoleCatalog } from '../work/agents.js';
-import { LEAD_ROLE, memberRole, writeBrief } from '../work/brief.js';
+import { roleSummaries, sessionRoleCatalog } from '../work/agents.js';
+import { LEAD_ROLE, memberRole } from '../work/brief.js';
 import { CONTEXT_LIMITS, FIND_SKILL_MAX_BYTES, LETTER_MAX_CHARS, LETTER_SOFT_CHARS, READ_GUIDE_MAX_BYTES, boundResponse, contextBytes, markedExcerpt } from '../work/context-budget.js';
 import {
   PAGE_MAX_BYTES,
@@ -50,7 +47,7 @@ import {
 } from '../work/context-pages.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { unreadFor } from '../work/letters.js';
-import { addMessage, addSession, transitionSession } from '../work/map.js';
+import { addMessage, transitionSession } from '../work/map.js';
 import { readBacklog } from '../work/backlog.js';
 import { listBacklogSuggestions, suggestBacklog } from '../work/backlog-suggestions.js';
 import { rememberProjectMemory } from '../work/memory-suggestions.js';
@@ -62,7 +59,6 @@ import { readProjectPreferences } from '../work/project-preferences.js';
 import { finishSession } from '../work/metrics.js';
 import { PROPOSAL_TEXT_MAX } from '../work/proposals.js';
 import {
-  admitSpawn,
   assertMessageBudget,
   countRecipients,
   deniedForAgent,
@@ -71,10 +67,10 @@ import {
   type ResourceLimits,
 } from '../work/resource-policy.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
-import { addMemberByLead, addRoom, isDescendant, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
+import { addMemberByLead, addRoom, canReadRoom, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
 import { reportedStatus } from '../work/session-state.js';
 import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workPaths } from '../work/store.js';
-import { participantLabel, sessionMention, threadOf } from '../work/thread.js';
+import { participantLabel, sessionMention, agentThreadOf } from '../work/thread.js';
 import {
   HUMAN,
   MESSAGE_KINDS,
@@ -85,7 +81,6 @@ import {
   type WorkMap,
   type WorkSession,
 } from '../work/types.js';
-import { baseBranchOf, isGitRepo, plannedWorktree } from '../work/worktree.js';
 import { BROWSER_UNAVAILABLE, createBrowserTools } from './browser-tools.js';
 import type { McpContext } from './context.js';
 import { watchInbox, type Ring } from './inbox-watch.js';
@@ -377,7 +372,7 @@ const TOOLS: Tool[] = [
     name: 'get_map',
     annotations: READS,
     description:
-      'The compact workspace map: sessions with statuses, rooms, current plan revisions, unread counts and message cursors — plus the list of registry providers with an availability flag in PATH and what the provider accepts at launch (models with their effort levels, and effort, for spawn_session). Long texts, history, summaries, artifacts and messages are not in it: they come as bounded pages through the parameters (a cut field names its full size). Call it first; the detailed guide is the read_guide tool',
+      'The compact workspace map: sessions with statuses, rooms, current plan revisions, unread counts and message cursors — plus the list of registry providers with an availability flag in PATH and what the provider accepts at launch (models with their effort levels). Long texts, history, summaries, artifacts and messages are not in it: they come as bounded pages through the parameters (a cut field names its full size). Call it first; the detailed guide is the read_guide tool',
     inputSchema: {
       type: 'object',
       properties: {
@@ -421,47 +416,6 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'list_roles', annotations: READS, description: 'List current builtin and native roles in the participant working folder, without prompts or file paths.', inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'spawn_session',
-    annotations: WRITES,
-    description:
-      'Creates a session of another agent in this same workspace: checks the provider against the registry and the command in PATH, assembles the brief and creates a pending record. Parley will launch it.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        provider: { type: 'string', description: 'Provider id from get_map.' },
-        label: { type: 'string', description: 'Session role: "plan", "backend", "review".' },
-        task: { type: 'string', description: 'What the new session should do.' },
-        contextFrom: {
-          type: 'array',
-          description: 'Ids of sessions whose summaries and artifacts go into the brief.',
-          items: { type: 'string' },
-        },
-        role: { type: 'string', description: 'Source-qualified role id from list_roles. Provider may override a builtin default; a native role must match the provider (a Claude role also fits GLM).' },
-        agent: {
-          type: 'string',
-          description:
-            'Legacy Claude role alias: exact metadata.name from a native agent definition. A definition with a trimmed tools list must include mcp__parley__*, otherwise the role can neither write to a colleague nor report.',
-        },
-        worktree: {
-          type: 'boolean',
-          description:
-            "Isolate the session in its own git worktree — its edits do not touch the project's working copy until it is decided to merge them (the window's Changes panel). Only for a project with git; Parley itself creates it before the launch.",
-        },
-        model: {
-          type: ['string', 'null'],
-          description:
-            "The new session's model: an id from the models field of its provider in get_map. Not from the list — an error, the session is not created. A provider that does not accept a model as a flag drops the value. Omitted or empty string — the current role default, otherwise the provider default. Exact null explicitly clears the role default and uses the provider CLI default.",
-        },
-        effort: {
-          type: ['string', 'null'],
-          description:
-            "The new session's reasoning effort: one of the efforts of the chosen model in get_map; with the default model, the levels shared by its provider's models. A provider with effort: false drops the value. Omitted or empty string — the current role default, otherwise the provider default. Exact null explicitly clears the role default and uses the provider CLI default.",
-        },
-      },
-      required: ['label', 'task'],
-    },
   },
   {
     name: 'wait_for',
@@ -525,30 +479,30 @@ const TOOLS: Tool[] = [
     name: 'create_room',
     annotations: WRITES,
     description:
-      "Creates a room — a standing circle of conversation for several sessions, usually your own subordinates. The caller becomes the creator and a participant; the other participants get a message about being added. One room per session: both you and the participants leave the workspace's other rooms. The room's lead collects the participants' positions and brings the human a decision (propose_decision): without lead, the lead is you.",
+      "Creates a room owned by the caller, with explicit existing working participants and a lead from that list. Only listed participants move from other rooms. Ownership is separate from working membership: you may own several rooms without joining them. Coordinate through addressed messages to each room's lead.",
     inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string' },
         members: {
           type: 'array',
-          description: 'Ids of the participant sessions from get_map; you do not need to list yourself.',
+          description: 'Nonempty list of existing working session ids from get_map. List yourself only if you will work in this room.',
           items: { type: 'string' },
         },
         lead: {
           type: 'string',
           description:
-            "The lead's id: yours or one of members. Without it you are the lead; not from the room's circle — an error, the room is not created.",
+            "The operational lead's id, required and included in members.",
         },
       },
-      required: ['title', 'members'],
+      required: ['title', 'members', 'lead'],
     },
   },
   {
     name: 'add_to_room',
     annotations: WRITES,
     description:
-      "The lead brings one more session of this workspace into the room — for example, an executor just spawned. Lead only (get_map, the room's lead field); the room is not closed, the session is alive and not yet a participant. One room per session: it leaves the workspace's other rooms, and a line \"@s04 joined the room\" appears in the feed. The new participant gets no message about being added — write to it in the room yourself, saying what you expect.",
+      "The lead brings one more session of this workspace into the room — for example, an existing executor. Lead only (get_map, the room's lead field); the room is not closed, the session is alive and not yet a participant. One room per session: it leaves the workspace's other rooms, and a line \"@s04 joined the room\" appears in the feed. The new participant gets no message about being added — write to it in the room yourself, saying what you expect.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -565,7 +519,7 @@ const TOOLS: Tool[] = [
     name: 'read_room',
     annotations: READS,
     description:
-      "The room's feed for context — the last limit messages within the byte limit, without read marks; `page.next` continues to older ones. Available only to participants.",
+      "The room's feed for context — the last limit messages within the byte limit, without read marks; `page.next` continues to older ones. Available to participants and the room owner.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -603,11 +557,11 @@ const TOOLS: Tool[] = [
     name: 'close_session',
     annotations: CLOSES,
     description:
-      "Closes a session for good: it no longer receives messages, and auto-wake does not start it. The target is the session itself or its descendant. Call it only after the human's explicit consent.",
+      "Closes only the calling session, only after the human's explicit consent. Ownership of a room grants no permission to close its participants.",
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'A session id: your own or a descendant spawned down the chain.' },
+        target: { type: 'string', description: 'Your own session id.' },
       },
       required: ['target'],
     },
@@ -615,7 +569,7 @@ const TOOLS: Tool[] = [
   {
     name: 'read_guide',
     annotations: READS,
-    description: `The detailed guide to Parley: entities, the session lifecycle, rooms and the roles in them (lead, participant), what to put in a report and artifacts, how to wait for a subordinate session, what not to do. Read it when the short descriptions were not enough. Without topic — the whole guide, with topic — one section: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}.`,
+    description: `The detailed guide to Parley: entities, the session lifecycle, rooms and the roles in them (lead, participant), what to put in a report and artifacts, how to wait for another session, what not to do. Read it when the short descriptions were not enough. Without topic — the whole guide, with topic — one section: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -658,17 +612,6 @@ const optionalString = (args: Record<string, unknown>, name: string): string | u
   return value;
 };
 
-/**
- * Прямое письмо видно сессии, если оно в её треде (родитель и дети делят письма, одинокий корень видит все) или
- * оно её собственное; письмо комнаты — участнику комнаты, как в `read_room`. Прежний `get_map` отдавал все письма
- * работы всем, страницы — только то, что сессии положено читать.
- */
-function canReadMessage(map: WorkMap, message: Message, sessionId: string, thread: ReadonlySet<string>): boolean {
-  if (message.roomId === null) return thread.has(message.id) || message.from === sessionId || message.to.includes(sessionId);
-  const room = map.rooms.find((candidate) => candidate.id === message.roomId);
-  return room !== undefined && isMember(room, sessionId);
-}
-
 /** Ограниченные страницы `get_map`: поле, список или письма — по параметрам; без параметров карту отдаёт `getMap`. */
 async function mapPage(context: McpContext, map: WorkMap, args: Record<string, unknown>): Promise<unknown> {
   const maxBytes = clampPageBytes(numberArg(args, 'maxBytes'));
@@ -685,6 +628,7 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
       }
       if (roomId !== undefined) {
         const room = requireRoom(map, roomId);
+        if (context.sessionId === null || !canReadRoom(room, context.sessionId)) throw new Error(`room ${roomId} is not available to this session`);
         const topology = mapTopology(map, context.sessionId).rooms.find((candidate) => candidate.id === roomId);
         const { recipe, recipeLeadNotified, ...rest } = room;
         void recipeLeadNotified;
@@ -723,15 +667,15 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
         const id = optionalString(args, 'id');
         if (id === undefined) throw new Error('argument id is required for field message');
         const message = map.messages.find((candidate) => candidate.id === id);
-        if (message === undefined || !canReadMessage(map, message, caller, new Set(threadOf(map, caller).messages.map((row) => row.id)))) throw new PageError('unknown-target', `message ${id} is not available to this session`);
+        if (message === undefined || !agentThreadOf(map, caller).messages.some((row) => row.id === message.id)) throw new PageError('unknown-target', `message ${id} is not available to this session`);
         return { id, from: message.from, at: message.at, roomId: message.roomId, ...textPage(message.text, cursorRaw, maxBytes) };
       }
       let filter: ((message: Message) => boolean) | undefined;
       if (roomId === undefined) {
-        const thread = new Set(threadOf(map, caller).messages.map((row) => row.id));
-        filter = (message) => canReadMessage(map, message, caller, thread);
+        const visible = new Set(agentThreadOf(map, caller).messages.map((row) => row.id));
+        filter = (message) => visible.has(message.id);
       }
-      else if (!isMember(requireRoom(map, roomId), caller)) throw new Error(`session ${caller} is not a participant of room ${roomId}`);
+      else if (!canReadRoom(requireRoom(map, roomId), caller)) throw new Error(`session ${caller} is not a participant of room ${roomId}`);
       const kind = optionalString(args, 'kind');
       if (kind !== undefined && !(MESSAGE_KINDS as readonly string[]).includes(kind)) throw new Error(`argument kind: one of ${MESSAGE_KINDS.join(', ')}`);
       return messagePage(map, {
@@ -808,112 +752,6 @@ async function report(
     summary: session.summary,
     artifacts: session.artifacts,
   };
-}
-
-async function spawnSession(
-  context: McpContext,
-  sessionId: string,
-  args: Record<string, unknown>,
-): Promise<unknown> {
-  if (args['agent'] !== undefined && args['role'] !== undefined) throw new Error('agent-and-role-conflict');
-  const savedRole = args['role'] === undefined ? (args['agent'] === undefined ? null : { source: 'claude' as const, name: stringArg(args, 'agent') }) : roleFromId(stringArg(args, 'role'));
-  if (!savedRole && args['provider'] === undefined) throw new Error('provider is required without a role');
-  const registry = await loadProviders();
-  // Каталог ролей Claude читает конфигурацию того провайдера, для которого роль берётся (у GLM — `~/.claude`).
-  const requestedEntry = args['provider'] === undefined ? undefined : registry[stringArg(args, 'provider')];
-  const catalog = savedRole ? await (context.roleCatalog ? context.roleCatalog(context.projectPath) : sessionRoleCatalog(context.projectPath, { codex: savedRole.source === 'codex', ...(requestedEntry ? { provider: requestedEntry } : {}) })) : undefined;
-  const provider = args['provider'] === undefined ? (catalog?.roles.find(role => role.id === roleId(savedRole))?.provider ?? 'claude') : stringArg(args, 'provider');
-  const label = stringArg(args, 'label');
-  const task = stringArg(args, 'task');
-  const contextFrom = stringsArg(args, 'contextFrom');
-  // Роль необязательна: без неё сессия идёт обычным агентом провайдера.
-  // Изоляция необязательна: без флага сессия работает прямо в каталоге проекта.
-  const worktree = args['worktree'] === true;
-  // Модель и усилие тоже необязательны; пустая строка — как отсутствие: агенты шлют её на любой
-  // необязательный параметр. Только явный null очищает умолчание роли до умолчания CLI. Вид значений
-  // и принадлежность спискам сверяет `resolveModelEffort` ниже.
-  const model =
-    args['model'] === undefined || args['model'] === '' ? undefined : args['model'] === null ? null : stringArg(args, 'model');
-  const effort =
-    args['effort'] === undefined || args['effort'] === '' ? undefined : args['effort'] === null ? null : stringArg(args, 'effort');
-
-  const entry = registry[provider];
-  if (entry === undefined) {
-    throw new Error(
-      `unknown provider ${provider}; allowed: ${Object.keys(registry).join(', ')}`,
-    );
-  }
-  const refusal = providerReadinessError(entry, await providerReadiness(entry));
-  if (refusal !== null) throw new Error(refusal);
-
-  // Пару проверяем до записи, как и роль: модель не из списка провайдера или уровень не из уровней модели
-  // (у «по умолчанию» — общих уровней моделей провайдера) — отказ, а не `pending`, который нечем
-  // запустить. Правило одно с `sessions.create` хоста — `resolveModelEffort` в core (нормалайзер, 5.3).
-  // Флаг, которого нет в шаблоне запуска провайдера, resolver отбрасывает молча — и модель, и усилие; окно
-  // узнаёт об этом из `providers.list`, агент — из `get_map`. Явный `null` — «Default» без проверки:
-  // он снимает умолчание роли и доезжает до карты, только если провайдер принимает флаг; effort-строка
-  // рядом с `model: null` проверяется по уровням «Default».
-  const resolved = resolveModelEffort(entry, {
-    ...(typeof model === 'string' ? { model } : {}),
-    ...(typeof effort === 'string' ? { effort } : {}),
-  });
-  if ('error' in resolved) throw new Error(resolved.error);
-  const chosenModel = model === null ? (supportsModel(entry) ? null : undefined) : resolved.choice.model;
-  const chosenEffort = effort === null ? (supportsEffort(entry) ? null : undefined) : resolved.choice.effort;
-
-  await prepareSessionRole(context.projectPath, entry, { roleId: roleId(savedRole), provider, mode: 'create' }, catalog);
-
-  // База worktree — та же причина, что и роль: пропускаем до записи в карту, а
-  // не после. `updateMap` мутирует карту синхронно, поэтому асинхронные проверки
-  // git идут заранее (спецификация 8.1).
-  let worktreeBase: string | null = null;
-  if (worktree) {
-    if (!(await isGitRepo(context.projectPath))) {
-      throw new Error('the project has no git — a worktree cannot be created');
-    }
-    const parent = requireSession(await readMap(context.projectPath, context.workId), sessionId);
-    worktreeBase =
-      parent.worktree !== null ? parent.worktree.branch : await baseBranchOf(context.projectPath);
-  }
-
-  const limits = await limitsOf(context);
-  // Облегчённый запуск (C2.2): сессии агента всегда по настройке `leanAgents`. Решение принимается здесь, при
-  // создании, и ложится в запись: `resume`, автозапуск и подъём письмом берут его из карты, а не из настроек.
-  const lean = (await loadConfig()).config.leanAgents;
-  let created = '';
-  const map = await updateMap(context.projectPath, context.workId, (current) => {
-    requireSession(current, sessionId);
-    for (const id of contextFrom) requireSession(current, id);
-    // Допуск и запись сессии — одна мутация под замком карты: отказ не оставляет ни сессии, ни резерва, а параллельные
-    // вызовы разных агентов видят слоты друг друга.
-    const attempt = admitSpawn(current, { actor: sessionId, limits });
-    const session = addSession(current, {
-      provider,
-      label,
-      task,
-      parent: sessionId,
-      contextFrom,
-      role: savedRole,
-      ...(chosenModel === undefined ? {} : { model: chosenModel }),
-      ...(chosenEffort === undefined ? {} : { effort: chosenEffort }),
-      lean,
-    });
-    created = session.id;
-    attempt.session = session.id;
-    if (worktreeBase !== null) {
-      // Сам worktree на диске заводит хост перед запуском (кусок 4.2); здесь —
-      // только план с `createdAt: null`.
-      session.worktree = plannedWorktree(
-        context.projectPath,
-        context.workId,
-        session.id,
-        worktreeBase,
-        context.worktreeRoot ?? DEFAULT_CONFIG.worktreeRoot,
-      );
-    }
-  });
-  await writeBrief(context.projectPath, map, created);
-  return { sessionId: created };
 }
 
 /**
@@ -1075,11 +913,17 @@ async function sendMessage(
     if (roomId !== null) {
       // Запись в комнату: архивная отказывает текстом `RoomRuleError`. Чтение (`requireRoom`) архивную комнату отдаёт.
       const room = requireOpenRoom(current, roomId);
-      if (!isMember(room, sessionId)) {
-        throw new Error(`session ${sessionId} is not a participant of room ${roomId}`);
+      const lead = liveLead(current, room);
+      if (room.ownerId === sessionId) assertDeliverable(current, sessionId);
+      const ownerToLead = room.ownerId === sessionId && to.length === 1 && to[0] === lead;
+      const leadToOwner = lead === sessionId && room.ownerId !== null && to.length === 1 && to[0] === room.ownerId;
+      if (!isMember(room, sessionId) && !ownerToLead) {
+        throw new Error(room.ownerId === sessionId
+          ? 'room owners may send only an addressed message to the current live room lead'
+          : `session ${sessionId} is not a participant of room ${roomId}`);
       }
       for (const memberId of to) {
-        if (!isMember(room, memberId)) {
+        if (!isMember(room, memberId) && !leadToOwner) {
           throw new Error(`session ${memberId} is not a participant of room ${roomId}`);
         }
         assertDeliverable(current, memberId);
@@ -1148,15 +992,15 @@ async function createRoom(
 ): Promise<unknown> {
   const title = stringArg(args, 'title');
   const membersInput = stringsArg(args, 'members');
-  const leadInput = optionalStringArg(args, 'lead');
+  const leadInput = stringArg(args, 'lead');
+  if (membersInput.length === 0) throw new Error('members must include at least one working participant');
 
   const limits = await limitsOf(context);
   let roomId = '';
   await updateMap(context.projectPath, context.workId, (current) => {
     requireSession(current, sessionId);
-    // Повторы схлопнуты, себя в список участников не добавляем — создатель и
-    // так участник (спецификация 6.1).
-    const members = [...new Set(membersInput)].filter((id) => id !== sessionId);
+    const members = [...new Set(membersInput)];
+    const invited = members.filter((id) => id !== sessionId);
     for (const memberId of members) {
       const member = requireSession(current, memberId);
       if (member.lifecycle === 'closed') {
@@ -1165,27 +1009,22 @@ async function createRoom(
     }
     // Приглашение — письмо от создателя каждому участнику: оно расходует тот же бюджет писем, что и `send_message`,
     // иначе исчерпанный лимит обходился бы созданием комнаты.
-    if (members.length > 0) {
-      assertRate(current, sessionId, context.messageRate ?? DEFAULT_CONFIG.messageRate, Date.now(), members.length);
-      assertMessageBudget(current, { actor: sessionId, room: null, messages: members.length, recipients: members.length, limits });
+    if (invited.length > 0) {
+      assertRate(current, sessionId, context.messageRate ?? DEFAULT_CONFIG.messageRate, Date.now(), invited.length);
+      assertMessageBudget(current, { actor: sessionId, room: null, messages: invited.length, recipients: invited.length, limits });
     }
 
-    // Без `lead` ведущий — вызывающий: агент заводит комнату для своих подчинённых и ведёт её сам
-    // (в handoff «Created by S01 · lead S01»). Правило «первый из members» (дизайн комнат, 3.1) — для
-    // `rooms.create` окна и старых карт, здесь оно отдало бы комнату подчинённому. Ведущего не из круга
-    // комнаты `addRoom` отвергает до выдачи номера: комнаты нет, номер не потрачен.
     const room = addRoom(current, {
       title,
       creator: sessionId,
+      ownerId: sessionId,
       members,
-      lead: leadInput ?? sessionId,
+      lead: leadInput,
     });
     roomId = room.id;
-    // Одна комната на сессию (решение 4 дизайна комнат): создатель и участники уходят из прочих комнат работы — как у
-    // `rooms.create` окна (`createHumanRoom`) и у `add_to_room`. Прежние комнаты остаются со своими письмами.
-    for (const memberId of [sessionId, ...members]) leaveOtherRooms(current, memberId, room.id, room.createdAt);
+    for (const memberId of members) leaveOtherRooms(current, memberId, room.id, room.createdAt);
     const notice = joinNotice(room, current);
-    for (const memberId of members) {
+    for (const memberId of invited) {
       addMessage(current, { from: sessionId, to: [memberId], roomId: room.id, kind: 'note', text: notice });
     }
   });
@@ -1223,8 +1062,8 @@ async function readRoom(
 
   const map = await readMap(context.projectPath, context.workId);
   const room = requireRoom(map, roomId);
-  if (!isMember(room, sessionId)) {
-    throw new Error(`session ${sessionId} is not a participant of room ${roomId}`);
+  if (!canReadRoom(room, sessionId)) {
+    throw new Error(`room ${roomId} is not available to this session`);
   }
 
   // Хвост комнаты в пределах байтов: письмо, которое одно не влезает, сокращается с полным размером, а старее —
@@ -1290,9 +1129,9 @@ async function closeSession(
 
   await updateMap(context.projectPath, context.workId, (current) => {
     requireSession(current, target);
-    if (target !== sessionId && !isDescendant(current, sessionId, target)) {
+    if (target !== sessionId) {
       throw new Error(
-        `session ${target} is not subordinate to ${sessionId}: close_session closes only itself or a descendant`,
+        'close_session can only close the calling session',
       );
     }
     transitionSession(current, target, 'closed');
@@ -1460,7 +1299,6 @@ async function dispatch(
   if (sessionId === null) throw new Error(NO_SESSION);
 
   if (name === 'report') return report(context, sessionId, args);
-  if (name === 'spawn_session') return spawnSession(context, sessionId, args);
   if (name === 'wait_for') return waitFor(context, sessionId, args, signal);
   if (name === 'send_message') return sendMessage(context, sessionId, args);
   if (name === 'check_inbox') return checkInbox(context, sessionId);

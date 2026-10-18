@@ -160,7 +160,7 @@ describe('RoomRow — свёрнутая (1.2)', () => {
     const nested = makeWork(WORK, {
       projectPath: PROJECT,
       sessions: [makeSession('s-01', 'root'), makeSession('s-02', 'child', { parent: 's-01' })],
-      rooms: [room({ members: ['s-02'], lead: 's-02' })],
+      rooms: [room({ ownerId: 's-01', members: ['s-02'], lead: 's-02' })],
     });
     renderRow(nested);
     expect(rowEl().style.marginLeft).toBe('20px');
@@ -171,7 +171,7 @@ describe('RoomRow — свёрнутая (1.2)', () => {
     const nested = makeWork(WORK, {
       projectPath: PROJECT,
       sessions: [makeSession('s-01', 'root'), makeSession('s-02', 'child', { parent: 's-01' })],
-      rooms: [room({ members: ['s-02'], lead: 's-02' })],
+      rooms: [room({ ownerId: 's-01', members: ['s-02'], lead: 's-02' })],
     });
     renderRow(nested);
     expect(rowEl().querySelector('[data-tree-guide]')).toBeNull();

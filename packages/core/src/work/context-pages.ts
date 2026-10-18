@@ -492,6 +492,7 @@ export interface RoomTopology {
   id: string;
   title: string;
   creator: string;
+  ownerId: string | null;
   members: string[];
   lead: string | null;
   mode: string;
@@ -620,6 +621,7 @@ export function mapTopology(map: WorkMap, callerId: string | null): MapTopology 
       id: room.id,
       title: bounded(room.title, TOPOLOGY_LIMITS.roomTitle, 'title', cut),
       creator: room.creator,
+      ownerId: room.ownerId,
       members: room.members,
       lead: room.lead ?? null,
       mode: room.mode ?? 'free',

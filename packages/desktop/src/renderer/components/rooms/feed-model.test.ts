@@ -53,6 +53,12 @@ function build(entry: WorkEntry, activity = {}): RoomModel {
 const REF = (sessionId: string) => ({ projectPath: PROJECT, workId: 'w-01', sessionId });
 
 describe('buildRoomModel — шапка', () => {
+  it('различает владельца и рабочего лида, не добавляя владельца в участники', () => {
+    const model = build(entryOf({ room: room({ ownerId: 's-03', members: ['s-01', 's-02'], lead: 's-01' }) }));
+    expect(model.subtitle).toContain('Owner S03 ревью');
+    expect(model.subtitle).toContain('2 agents · lead S01');
+    expect(model.participants.map((participant) => participant.id)).toEqual(['s-01', 's-02']);
+  });
   it('комнаты с таким id нет — null', () => {
     expect(buildRoomModel({ entry: entryOf(), roomId: 'r-99', providers: PROVIDERS, activity: {} })).toBeNull();
   });
@@ -67,7 +73,7 @@ describe('buildRoomModel — шапка', () => {
     const model = build(entryOf({ room: room({ creator: 's-01', members: ['s-01', 's-02', 's-03'] }) }));
     expect(model.subtitle).toBe('Created by S01 архитектор · 3 agents · lead S01 · Платежи');
     const withoutCreatorInMembers = build(entryOf({ room: room({ creator: 's-01', members: ['s-02', 's-03'] }) }));
-    expect(withoutCreatorInMembers.subtitle).toBe('Created by S01 архитектор · 3 agents · lead S01 · Платежи');
+    expect(withoutCreatorInMembers.subtitle).toBe('Created by S01 архитектор · 2 agents · lead S02 · Платежи');
   });
 
   it('один агент — «1 agent»', () => {
@@ -103,7 +109,7 @@ describe('buildRoomModel — лента участников', () => {
   it('порядок: создатель-сессия, затем members; человек не участник-агент; удалённая сессия не выводится', () => {
     const entry = entryOf({ room: room({ creator: 's-03', members: ['s-01', 's-09', 's-02'] }) });
     entry.map.work.deletedSessions = ['s-09'];
-    expect(build(entry).participants.map((participant) => participant.id)).toEqual(['s-03', 's-01', 's-02']);
+    expect(build(entry).participants.map((participant) => participant.id)).toEqual(['s-01', 's-02']);
   });
 
   it('подписи, провайдер, задача и ведущий', () => {

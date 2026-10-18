@@ -38,7 +38,7 @@ import type { RoleCatalog } from '../roles/types.js';
 import type { RequiredRolePermissions } from '../roles/catalog.js';
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { loadBrief, writeBrief } from './brief.js';
-import { BROWSER_PRIORITY_RULE, systemGuidance } from './guidance.js';
+import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, systemGuidance } from './guidance.js';
 import { readParleyMd } from './parley-md.js';
 import { readProjectMemory } from './project-memory.js';
 import type { MemoryItem } from './project-memory.js';
@@ -437,7 +437,7 @@ async function plan(
         // Цель стоит в брифе, который уйдёт тем же запуском (системным слоем или первым сообщением): дважды не нужна.
         omitGoal: brief !== null || (!resuming && mode !== 'new' && !quiet),
       }),
-      bridge,
+      bridge: [entry.id === 'codex' ? CODEX_APPROVAL_GUIDANCE : '', bridge].filter(Boolean).join('\n\n'),
       // Правило — только там, где у агента есть `browser_open`: канал выдан и сервер MCP доходит шаблоном с `{mcpConfig}`.
       ...(options.agent !== undefined && mcpRoute ? { browser: BROWSER_PRIORITY_RULE } : {}),
       ...(brief === null ? {} : { brief }),
@@ -615,35 +615,6 @@ export async function createNewSession(
   });
   if (created === undefined) throw new Error(`session in workspace ${id} was not created`);
   return { workId: id, session: created };
-}
-
-/**
- * Дочерняя сессия выбранной, руками (окно, через хост). Родитель и контекст — выбранная
- * сессия, бриф собирается как у порождённых агентом (`spawn_session`): резюме и
- * артефакты родителя плюс правила. Задачи у неё нет: бриф уходит контекстом в
- * системный промпт, а запрос пишет пользователь первым сообщением (раздел B
- * плана от 2026-09-06).
- */
-export async function createChildSession(
-  projectPath: string,
-  workId: string,
-  parentId: string,
-): Promise<NewSessionResult> {
-  let created: WorkSession | undefined;
-  const map = await updateMap(projectPath, workId, (current) => {
-    const parent = current.sessions.find((item) => item.id === parentId);
-    if (parent === undefined) throw new Error(`session ${parentId} is not in workspace ${workId}`);
-    created = addSession(current, {
-      provider: 'claude',
-      label: NEW_LABEL,
-      task: '',
-      parent: parentId,
-      contextFrom: [parentId],
-    });
-  });
-  if (created === undefined) throw new Error(`session in workspace ${workId} was not created`);
-  await writeBrief(projectPath, map, created.id);
-  return { workId, session: created };
 }
 
 /**

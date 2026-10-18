@@ -718,7 +718,35 @@ describe('сторож Codex: вызов code mode без вывода — «н�
   }
 
   const STUCK_TEXT =
-    /^S\d+ is stuck in a Codex tool call — Codex is probably waiting for an approval in its terminal; answer it there or restart the session$/;
+    /^S\d+ has not returned from a Codex tool call\. Check pending approvals; if already answered, stop the stuck operation and verify its effects before retrying\.$/;
+
+  it('s21: a completed turn with a yielded cell needs attention until the cell finishes', async () => {
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'yielded-cell' });
+    a.terminalSignal(ref, WORKING);
+    const stamp = now();
+    const file = await rollout('yielded-cell', exec(stamp, 'text(await tools.exec_command({cmd:"git fetch"}));') +
+      row({ timestamp: stamp, type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'call_exec', output: 'Script running with cell ID 58\nOutput:\n' } }) +
+      row({ timestamp: stamp, type: 'event_msg', payload: { type: 'task_complete' } }));
+    await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
+    expect(notices('codex-call-wait')).toHaveLength(1);
+    expect(String(notices('codex-call-wait')[0]?.['text'])).toContain('finished its turn with an unfinished tool operation');
+    await settle(400);
+    expect(notices('codex-call-wait')).toHaveLength(1);
+    await appendFile(file, fn(now(), 'wait', '{"cell_id":"58"}', 'finish') +
+      row({ timestamp: now(), type: 'response_item', payload: { type: 'function_call_output', call_id: 'finish', output: 'Script completed\nOutput:\n' } }));
+    await waitFor(() => a.get(ref)?.activity.activity !== 'blocked');
+  }, 15_000);
+
+  it('a yielded cell in an active turn does not trigger the finished-turn alert', async () => {
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'active-cell' });
+    a.terminalSignal(ref, WORKING);
+    const stamp = now();
+    await rollout('active-cell', exec(stamp, 'text(await tools.exec_command({cmd:"pnpm test"}));') +
+      row({ timestamp: stamp, type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'call_exec', output: 'Script running with cell ID 58\nOutput:\n' } }));
+    await settle(700);
+    expect(a.get(ref)?.activity.activity).toBe('working');
+    expect(notices('codex-call-wait')).toHaveLength(0);
+  }, 15_000);
 
   it('exec без вывода дольше ожидания и запаса — blocked и одно уведомление codex-call-wait; вывод возвращает working', async () => {
     const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'stuck-exec' });

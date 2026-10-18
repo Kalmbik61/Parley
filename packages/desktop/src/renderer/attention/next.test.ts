@@ -123,7 +123,17 @@ describe('nextAttentionTarget — комнаты с решением (2.7, ку�
     // Терминал участника комнаты стоит в порядке после самой строки комнаты — следующая вторая комната; до строки — она сама.
     expect(nextAttentionTarget(sections, byWork, {}, session(first, 's-03'))).toEqual(roomOf(second, 'r-01'));
     expect(nextAttentionTarget(sections, byWork, {}, session(first, 's-01'))).toEqual(roomOf(first, 'r-01'));
-    expect(nextAttentionTarget(sections, byWork, {}, session(second, 's-04'))).toEqual(roomOf(first, 'r-01'));
+    // Сессия вне комнаты стоит перед комнатами без владельца в корне этой работы.
+    expect(nextAttentionTarget(sections, byWork, {}, session(second, 's-04'))).toEqual(roomOf(second, 'r-01'));
+  });
+
+  it('владелец-участник встречается в обходе внимания один раз', () => {
+    const entry = withRoom('w-01', '/tmp/a', { ownerId: 's-01', members: ['s-01', 's-02'] });
+    const activity = activityMap([makeActivity(refOf(entry, 's-01'), 'blocked'), makeActivity(refOf(entry, 's-02'), 'blocked')]);
+    const sections = sectionsOf(entry);
+    const byWork = byWorkOf([entry], activity);
+    expect(nextAttentionTarget(sections, byWork, activity, session(entry, 's-01'))).toEqual(session(entry, 's-02'));
+    expect(nextAttentionTarget(sections, byWork, activity, session(entry, 's-02'))).toEqual(session(entry, 's-01'));
   });
 
   it('позиция участника комнаты — там, где стоит строка комнаты, а не по номеру сессии: s-04 после комнаты, s-01 до неё', () => {

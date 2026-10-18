@@ -60,6 +60,8 @@ export interface SessionIndex {
    * заявленное ожидание ячейки (`yield_time_ms`), `null` — не указано. Нет открытых вызовов — поля нет.
    */
   openCodeCall?: { name: 'exec' | 'wait'; at: string; yieldMs: number | null };
+  /** Самая ранняя ячейка code mode с ответом «ещё выполняется», но без результата последующего wait. */
+  pendingCodeCell?: { id: string; at: string };
   durationMs: number | null;
   records: number;
   malformedLines: number;

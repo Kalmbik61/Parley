@@ -12,14 +12,14 @@
  * уведомления нет. Клик ведёт к самой карточке (`cardId` цели), если ответить можно в окне.
  *
  * Пока окно острова живо (спека 2026-10-12), запрос с найденной карточкой показывает остров, а не уведомление: двух
- * сигналов об одном и том же не нужно. Без карточки (ждёт в терминале) и у Codex (вне острова) уведомление остаётся.
+ * сигналов об одном и том же не нужно. Codex показывается в острове и без карточки, с переходом к терминалу.
+ * У остальных провайдеров без карточки уведомление остаётся.
  */
 
 import type { Proposal, Room, SessionActivity, WorkEntry, WorkSession } from '@parley/core';
 import { refKey, type HostNotice, type SessionRef } from '@parley/protocol';
 import { clampNoteText } from '../../shared/app-note.js';
 import type { AppNote, FocusTarget, ParleyBridge } from '../../shared/bridge.js';
-import { ISLAND_EXCLUDED_PROVIDERS } from '../../shared/island.js';
 import { noticeText, S } from '../../shared/strings.js';
 import type { UiFile } from '../../shared/ui-types.js';
 import { replyExcerpt } from '../components/rooms/excerpt.js';
@@ -68,7 +68,7 @@ export interface NotifyDeps {
   pendingAsk(ref: SessionRef): Promise<PendingAsk | null>;
   /**
    * Живо ли окно острова (спека 2026-10-12): пока живо, запрос с найденной карточкой показывает остров, а не
-   * уведомление macOS. Codex и «ждёт без карточки» — уведомлением, как раньше.
+   * уведомление macOS. Codex получает переход к терминалу и без карточки.
    */
   islandOn(): boolean;
 }
@@ -216,8 +216,8 @@ export function createAttentionNotifier(deps: NotifyDeps): {
     if (current === null) return;
     const { entry, session } = current;
     // Остров покажет этот запрос сам (спека 2026-10-12), но только у активной работы: у завершённой он запросы
-    // пропускает. Codex вне острова — его уведомление остаётся.
-    if (found !== null && deps.islandOn() && entry.map.work.status === 'active' && !ISLAND_EXCLUDED_PROVIDERS.has(session.provider)) return;
+    // пропускает. У Codex есть переход к терминалу и без карточки ленты.
+    if (deps.islandOn() && entry.map.work.status === 'active' && (found !== null || session.provider === 'codex')) return;
     let more = 0;
     for (const [other, level] of levels) if (other !== key && level === 'needs-you') more += 1;
     const lines = [
@@ -380,7 +380,7 @@ export function wireAttentionNotifications(
     windowActive: isWindowActive,
     showInWindow: (note) => useWindowNotesStore.getState().show(note),
     hideInWindow: (tag) => useWindowNotesStore.getState().dismiss(tag),
-    islandOn: () => bridge.app.islandActive(),
+    islandOn: () => useUiStore.getState().ui.island.enabled && bridge.app.islandActive(),
     // Ленты нет на старом хосте — вопроса не узнать, уведомление уйдёт с задачей сессии.
     pendingAsk: (ref) =>
       hostMethods(useHostStore.getState().status).has('feed.snapshot')

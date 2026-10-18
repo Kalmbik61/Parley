@@ -241,7 +241,6 @@ describe('startErrorText — отказ запуска называет прич
 
   it.each([
     ['new-sessions', 'work', 'workNewSessions'],
-    ['depth', 'work', 'spawnDepth'],
     ['messages', 'room', 'roomMessages'],
     ['fanout', 'work', 'fanout'],
   ] as const)('reason %s называет свою настройку', (reason, scope, key) => {

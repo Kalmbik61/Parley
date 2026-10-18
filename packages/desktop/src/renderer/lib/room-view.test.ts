@@ -16,7 +16,7 @@ describe('roomSessions — участники-сессии комнаты по �
   it('создатель-сессия первым, затем members; человек, повторы и сессии, которых нет в карте, не входят', () => {
     const room = { ...makeRoom('r-01', 'R'), creator: 's-01', members: ['s-03', 's-02', 's-03', 's-99', 'human'] };
     const found = roomSessions(map([live('s-01'), live('s-02'), live('s-03')]), room);
-    expect(found.map((item) => item.id)).toEqual(['s-01', 's-03', 's-02']);
+    expect(found.map((item) => item.id)).toEqual(['s-03', 's-02']);
   });
 
   it('создатель — человек: только members, порядок записи, закрытые тоже входят', () => {

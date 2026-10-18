@@ -52,7 +52,7 @@ function bigMap(count: number, size: number, init: { kind?: 'decision' } = {}): 
     rooms: [],
   };
   addSession(map, { provider: 'claude', label: 'план', task: 'x' });
-  addSession(map, { provider: 'claude', label: 'код', task: 'y', parent: 's-01' });
+  addSession(map, { provider: 'claude', label: 'код', task: 'y', parent: null }).parent = 's-01';
   addRoom(map, { title: 'Комната', creator: 'human', members: ['s-01', 's-02'], lead: 's-01' });
   for (let i = 0; i < count; i += 1) addMessage(map, { from: 's-02', to: [], roomId: 'r-01', text: `${i}:`.padEnd(size, 'x'), ...init });
   return map;

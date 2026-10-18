@@ -936,10 +936,9 @@ export const S = {
     silenceThreshold: 'Silence threshold, ms',
     messageCap: 'Message cap per hour',
     resumeRate: 'Session wake-ups per hour (0…60)',
-    autoLaunchPending: 'Auto-launch pending sessions',
-    /** Облегчённый запуск агентов комнат и `spawn_session` (спека «меньше ходов и легче контекст», C2.2). */
+    /** Облегчённый запуск агентов комнат (спека «меньше ходов и легче контекст», C2.2). */
     leanAgents: 'Lean agent sessions',
-    leanAgentsHint: 'Agents Parley starts for rooms and spawn_session run without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions.',
+    leanAgentsHint: 'Agents Parley starts for rooms run without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions.',
     /** Скилл `parley` в папку проекта и в worktree сессий при запуске (кусок 10 плана комнат). */
     agentSkills: 'Install agent skills into projects',
     skillNavigator: 'Skill navigator',
@@ -955,7 +954,6 @@ export const S = {
       roomConcurrent: 'Running sessions, room',
       workNewSessions: 'Agent-created sessions, workspace',
       roomNewSessions: 'Agent-created sessions, room',
-      spawnDepth: 'Spawn depth',
       workLaunches: 'Starts and wake-ups per hour, workspace',
       roomLaunches: 'Starts and wake-ups per hour, room',
       workMessages: 'Agent messages per hour, workspace',
@@ -1863,6 +1861,7 @@ export const S = {
         .filter((part) => part !== null)
         .join(' · '),
     waitingInTerminal: 'waiting in terminal',
+    codexTerminalAction: 'Codex needs your attention in the terminal',
     roomBusy: (count: number): string => `${count} in work`,
     roomDone: 'done',
     clearDone: 'Clear',
@@ -1875,6 +1874,7 @@ export const S = {
     always: 'Always',
     deny: 'Deny',
     openInParley: 'Open in Parley',
+    openTerminal: 'Open terminal',
     answeredElsewhere: 'Answered elsewhere',
     failed: "Couldn't send — try again",
     tuckAway: 'Tuck the island away',
@@ -2266,7 +2266,6 @@ function budgetSettingName(reason: string, scope: string): string | null {
     case 'new-sessions': return byScope(L.workNewSessions, L.roomNewSessions);
     case 'launches': return byScope(L.workLaunches, L.roomLaunches);
     case 'messages': return byScope(L.workMessages, L.roomMessages);
-    case 'depth': return L.spawnDepth;
     case 'fanout': return L.fanout;
     default: return null;
   }
@@ -2323,7 +2322,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'resume-limit': 'hourly resume limit reached — messages are waiting',
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
-  'codex-call-wait': 'stuck in a Codex tool call — Codex may be waiting for an approval in its terminal',
+  'codex-call-wait': 'unfinished Codex tool operation — check approvals and verify the result before retrying',
   'skill-foreign': "agent skill not installed — that path already exists and wasn't created by Parley",
   'parley-md-created': 'Parley added PARLEY.md — team rules for your agents',
   'parley-md-unreadable': "PARLEY.md couldn't be read — this session starts without its project rules",

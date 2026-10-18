@@ -201,7 +201,7 @@ only through data:
    │ metrics: tokens, duration, tools           .bak, status transitions) │
    │ hook log → activity, liveness by pid       parley-core CLI (JSON)    │
    │ parley-mcp — 23 tools (24 with find_skill): get_map, report,         │
-   │ spawn_session, wait_for, send_message, check_inbox, rooms,           │
+   │ list_roles, wait_for, send_message, check_inbox, rooms,           │
    │ decisions and plans, backlog, memory, search_history, read_guide     │
    └────────────────────────────────────────────────────────────────────┬─┘
                                                                         │ stdio MCP
@@ -825,8 +825,7 @@ them wait. Archived workspaces are not counted in the counters, the badge and "N
 that needs you", even when shown.
 
 The host itself wakes agents. When an agent has finished its turn and you are not typing
-anything, the host prints a pointer: "New messages (N). Call check_inbox." That is why a
-session spawned by an agent starts by itself, without a dialog.
+anything, the host prints a pointer: "New messages (N). Call check_inbox." New Parley sessions are created by the human; agents coordinate existing sessions.
 
 The core can also be used separately from the UI — it prints only JSON to stdout:
 
@@ -1048,12 +1047,9 @@ The values above are the defaults. Environment variables override the file:
 a workspace and a room".
 
 `resumeRate` is how many times per hour a message may wake a sleeping session
-(`claude --resume`), 0…60; over the limit, the message just waits. `autoLaunch` (on by
-default; the toggle is "Auto-launch pending sessions"): a `pending` session that an agent
-spawned through `spawn_session` is started by the host itself, in the background, if the
-record appeared while the host was already running. Sessions found when a workspace is first
-read are left alone. Sessions you create (⌘T, the new workspace dialog, the CLI) ignore this
-setting.
+(`claude --resume`), 0…60; over the limit, the message just waits. `autoLaunch` is retained as a legacy configuration field; parent-linked pending sessions
+are no longer started automatically. New Parley sessions are created by the human through
+the window or CLI.
 
 `agentSkills` (on by default; the toggle is "Install agent skills into projects") decides
 whether to install the `parley` and `minimal-development` skills into the project folder and into the session's worktree
@@ -1066,13 +1062,13 @@ the toggle, or `PARLEY_SKILL_NAVIGATOR=false` (also `0`, `no`, `off`) turns it o
 "Skill navigator". The ten limit keys of "Work limits" live in the same `config.json`.
 
 `leanAgents` (on by default; the toggle is "Lean agent sessions") starts the agents that
-Parley creates for rooms and through `spawn_session` without your plugins, other MCP servers
+Parley creates for rooms without your plugins, other MCP servers
 and auto-memory, which saves about a third of the context on every turn of Claude Code.
 Parley's own tools and hooks, your skills and the project's `CLAUDE.md` stay. The choice is
 made when a session is created and is kept for its resumes. A session you create from the
 window is lean only with the "Lean session" checkbox in the new session dialog; `false` in
 the file, the toggle, or `PARLEY_LEAN_AGENTS=0` (also `false`, `no`, `off`) turns it off for
-new rooms and spawned sessions.
+new rooms and human-created sessions.
 
 `channelPush` (and the `PARLEY_CHANNEL_PUSH` variable) is the setting for a channel push when
 a session is started from the `parley-core` CLI (see "Core CLI"); the window does not read it
@@ -1270,9 +1266,7 @@ enough) to keep your version. See
 
 In the window a session is created with ⌘T ("New session or room") in the active workspace,
 with the new workspace dialog (⌘N or "New workspace"), and with the menu items of a card
-("New session", "New room") or of the palette ("New session or room", "New room"). A
-`spawn_session` call from an agent creates a `pending` session with a brief; the host itself
-starts it, with no dialog. The window has no import of the `~/.claude` history.
+("New session", "New room") or of the palette ("New session or room", "New room"). Agents invite existing sessions; new sessions are created by the human. The window has no import of the `~/.claude` history.
 
 In the window a session is removed with "Delete" in its menu. A live process is closed as
 usual — SIGHUP, waiting up to three seconds for it to exit, then SIGKILL — and the record
@@ -1316,12 +1310,11 @@ to introduce itself; the server knows who is calling. The tools:
 | --- | --- |
 | `get_map(session?, room?, field?, id?, kind?, cursor?, maxBytes?)` | without arguments, the compact map (sessions, rooms, live plan revisions, unread counters, cursors), plus the registry's providers with an availability mark, a list of models (`models`, each with its effort levels `efforts`) and an effort flag (`effort`); with arguments, one session or room or one field as a bounded page (see "Compact map and pages") |
 | `report(status, summary, artifacts)` | `done` / `failed` — the result, `progress` — an intermediate summary |
-| `spawn_session(label, task, provider?, contextFrom?, role?, agent?, worktree?, model?, effort?)` | a new session in the same workspace; the host itself starts it. `role` is an id from `list_roles` (`agent` is the older alias for a Claude agent), `model` is an `id` from the provider's list in `get_map` (a value not in the list is an error, and the session is not created), `effort` is one of the chosen model's `efforts` there — with the default model, the levels all the provider's models share (a value outside them is an error, and the session is not created); a provider without the effort flag discards the choice. Over a limit of "Work limits" the call is refused |
 | `list_roles()` | the built-in and native roles available in the participant's folder, with source, provider, default model and effort and the read-only mark; no prompts or file paths |
 | `wait_for(target, timeoutSec)` | wait for a session to finish or for a message; on timeout it returns `running` |
 | `send_message(to?, text, kind?, room?, replyTo?)` | a message to a session or to a room: `note`, `question` or `decision`; `replyTo` — the id of the room message it answers, and the window shows a quote of it |
 | `check_inbox()` | unread incoming messages with their kinds; marks them as read (it returns all of them at once, with no limit on their number yet) |
-| `create_room(title, members, lead?)` | creates a conversation room for several sessions; the lead is `lead`, and without it the caller; the caller and the members leave the workspace's other rooms (one room per session) |
+| `create_room(title, members, lead)` | creates an owned room with nonempty explicit working members and an explicit lead among them; the caller becomes owner and joins only if explicitly listed. Members move from their previous working rooms. Ownership permits reading and addressed messages to the live lead, without broadcasts; the lead can reply explicitly to the owner in the room |
 | `read_room(room, limit?)` | the room's feed for context, without touching read marks |
 | `propose_decision(room, text, plan?, …)` | the lead proposes a decision to the human (in Checklist and Verified with a plan); a repeated call before the answer replaces the text |
 | `set_room_mode(room, mode, reason)` | the lead raises the mode of the room (`free` → `checklist` → `verified`); only the human lowers it |
@@ -1356,9 +1349,9 @@ the workspace (the goal is left out when the brief of the same launch already ha
 title or goal that does not fit becomes a reference to the exact `get_map` call, with its size).
 The rules say which tools exist (a line for each group; the room tools take one line together
 with the lead and member roles; `add_to_room` and the details of plans are in the tool itself
-and in `read_guide`), how to use the backlog, memory and search, and a rule: hand a subtask of
-this topic that lives longer than one turn or must run in parallel over to `spawn_session`, and
-keep the agent's own subagents for short exploration tasks and edits. All Parley launches and
+and in `read_guide`), how to use the backlog, memory and search, and the separation of room
+ownership from working membership. Agents invite existing sessions; the human creates new
+Parley sessions. Native provider subagents remain available within task permissions. All Parley launches and
 the `parley-core work session new` command receive it. The system prompt is not stored in the
 transcript, so the insert is sent again on `--resume` as well. A provider with no such flag
 does not get it: the substitution is dropped silently, like the settings file. The brief of a
@@ -1438,8 +1431,13 @@ folder itself or in an agent's directory does not get the skill.
 
 ### Session conversation
 
-**Rooms belong to their members.** An agent creates a room for its subordinates with the
-`create_room(title, members, lead?)` tool. A human does it with the "New session or room"
+**Room ownership and membership are separate.** An agent creates a room with
+`create_room(title, members, lead)`: members must be explicit and nonempty, and the explicit
+lead must belong to them. The caller becomes owner and joins only when explicitly listed.
+An owner can own several rooms while working in one; moving the owner does not move owned
+rooms. Outside membership, the owner can read and address only the live lead, without
+broadcasts. The lead may reply explicitly to the owner in the room; ordinary room traffic
+is not delivered automatically to the owner. A human does it with the "New session or room"
 dialog with two or more agents ("New room" in the card menu and in the palette), or by
 dropping one session onto another in the sidebar. A room stands in a card in the place of its
 members and opens as a tab; the `#`/`#N` menu on the workspace card lists all of them. The
@@ -1454,8 +1452,7 @@ everyone, `@` opens the member menu, and the mentioned members become the addres
 sends, Shift+Enter inserts a line break). An unfinished draft is kept per room until the
 window restarts.
 
-**The lead and the decision.** A room has one lead: the assigned `lead`, or, without one, the
-creator (for an agent) or the first member (for the window and for old maps); a closed lead is
+**The lead and the decision.** A room has one lead: the assigned `lead`, or the first member for old maps; a closed lead is
 replaced by the first live member. For a human's task, every member speaks up in the room with
 one message; the lead collects the positions and calls `propose_decision(room, text)`, and
 does not start work until the human answers. When the decision is accepted, the lead gets the
@@ -1464,7 +1461,7 @@ parts are handed out with mentions such as `@s02`. While a decision waits, it si
 of the room's feed as a card with the buttons "Accept" and "Return for rework". A return is
 the message "Returned for rework: …": the lead reworks the decision and proposes it again. The
 lead can also bring one more session into the room with `add_to_room(room, session)`, for
-example a just-spawned executor: it leaves the workspace's other rooms and does not get a
+example an existing executor: it leaves the workspace's other rooms and does not get a
 message about being added — the lead writes to it in the room on their own. You change the
 lead with "Make lead" in a member row's menu in the sidebar: the feed shows "@s03 is now the
 lead", Parley writes to the new lead (collect the positions and bring you a decision; in a room
@@ -1486,11 +1483,10 @@ button. Pausing auto-wake in the status bar accumulates messages and wakes nobod
 
 **A worktree per session.** The "New session or room" dialog (⌘T) and the new workspace
 dialog have an "In its own worktree" switch; for an agent it is the `worktree: true`
-parameter of `spawn_session`. The host runs `git worktree add` into
+option when the human creates a session. The host runs `git worktree add` into
 `<worktreeRoot>/<project folder name>-<6 hex>/<w-id>-<s-id>` (for example,
 `…/shop-a1b2c3/w-0003-s-02`) with the branch `parley/<w-id>/<s-id>` (for example,
-`parley/w-0003/s-02`). The base is the parent's branch if the parent itself is in a worktree,
-otherwise the branch (or commit) of the project folder. The path is tied to the session:
+`parley/w-0003/s-02`). The base is the branch (or commit) selected when the human creates the session. The path is tied to the session:
 `--resume` runs from the same directory. The "Changes" item in any session's menu opens the
 "Changes" tab of the right sidebar: the diff of the branch and of uncommitted changes against
 the base. The main button changes with the state: "Commit", "Commit all in folder", "Merge
@@ -1600,13 +1596,13 @@ the project root, so an uncommitted edit applies to all sessions.
 
 ### Roles
 
-A session can have a role, chosen in each agent row of "New session or room" or with the
-`role` argument of `spawn_session` (the `list_roles` tool shows what is available). A role is
+A session can have a role, chosen in each agent row of "New session or room" (the `list_roles` tool shows what is available). A role is
 named with its source: `builtin:reviewer`, `claude:<name>`, `codex:<name>`. It is set when the
 session is created and does not change.
 
 | Built-in role | Provider | Model tier | Effort | Read-only |
 | --- | --- | --- | --- | --- |
+| `feature-lead` | Codex | strong (`gpt-6-astra`) | high | yes |
 | `planner` | Claude | strong (`opus`) | high | yes |
 | `architect` | Claude | strong | high | yes |
 | `critic` | Codex | strong (`gpt-6-astra`) | high | yes |
@@ -1615,6 +1611,12 @@ session is created and does not change.
 | `verifier` | Codex | standard (`gpt-6.1-sol`) | medium | no |
 | `debugger` | Claude | strong | high | no |
 | `researcher` | Claude | light (`haiku`) | low | yes |
+
+Feature Lead coordinates owned rooms through their operational leads and validates the combined
+feature outcome without editing application code, tests, scripts or configuration. Ownership
+does not grant working membership or lead authority. Verifier remains writable to run checks
+and generate temporary outputs, but preserves submitted code, tests, fixtures, expected results
+and configuration; it reports PASS, FAIL or NOT VERIFIED for each acceptance criterion.
 
 A built-in role is a text in the session layer plus a default provider, model and effort; what
 you change in the dialog wins over the role, and the role's defaults are computed at every
@@ -1626,7 +1628,7 @@ their prompt, model and tools are applied by the CLI.
 "Read-only" is enforced by the CLI: for Claude `--disallowedTools Edit,Write,NotebookEdit`
 (Bash stays, the ban on writing through the shell is only in the role text), for Codex
 `-c sandbox_mode="read-only"` with approvals on request. A runner that cannot deliver the role
-text or the read-only flag does not start the session: `spawn_session` and the window answer
+text or the read-only flag does not start the session: session creation answers
 with an error naming the custom runner (`role-delivery-unavailable`). If a role file disappears
 later, the session starts without the role and the window shows a `role-missing` notice.
 
@@ -1817,7 +1819,7 @@ reached the agent is told to report and wait for you.
 | `roomMessages` | Agent messages per hour, room | 100 | 1…10000 | `PARLEY_ROOM_MESSAGES` |
 | `fanout` | Message deliveries per hour, workspace | 400 | 1…100000 | `PARLEY_FANOUT` |
 
-Every path that can start a session goes through these limits: `spawn_session`, invitations of
+Every path that can start a session goes through these limits: human-created sessions and invitations of
 `create_room`, `send_message`, a start from the window, auto-launch, resume and a wake-up by
 mail. Stop, close, `report`, reading, and messages from you, from Parley itself and from the
 host are never blocked. The count lives in the workspace map, so a host restart does not give a
@@ -2019,7 +2021,7 @@ levels on offer are those all the provider's models share. The lists:
   ago, successful or not, the host probes again in the background. So the list can be older than
   six hours if no one asks, and after a failure or an offline answer the next probe comes no
   sooner than six hours after the previous one. It keeps the list in `codex-models.json` in
-  Parley's home, so agents' `get_map` and `spawn_session` offer the same models. Codex may
+  Parley's home, so agents' `get_map` offers the same models. Codex may
   refresh its catalog from its server while answering; Parley reads neither Codex's files nor
   its sign-in. Without a network or a sign-in Codex still answers with the catalog built into
   it; Parley takes that answer as a successful probe and keeps it in `codex-models.json` until
@@ -2149,7 +2151,7 @@ Codex approvals in Parley" below.
 **How Parley launches Codex.** Its own settings are passed only with `-c` flags in its own
 sessions: `~/.codex/config.toml` is neither read nor written, and the human's personal
 `notify` is neither replaced nor called by Parley: your own `notify` program keeps running as it does outside Parley. A new session in full (what is in angle brackets is
-substituted per session; `--model` and the effort only if chosen in the dialog or by `spawn_session`):
+substituted per session; `--model` and the effort only if chosen in the dialog):
 
 ```
 codex --no-daemon -a on-request \
@@ -2246,7 +2248,7 @@ same path. What is important to know:
 - The first `Ready` since the process started means the agent is at the prompt, not the end of
   a turn: the state stays dim (`idle`, like a fresh Claude session), but the host is aware of
   the session, so sending from the window and auto-wake are allowed. That way a background
-  session (autoLaunch, `spawn_session`) does not give a false "finished" before its first
+  session (autoLaunch) does not give a false "finished" before its first
   turn. The end of a turn is `Ready` after work, the OSC 9 `Agent turn complete`, or a
   `task_complete` in the rollout log newer than the last terminal signal.
 - Under the host, the silence threshold (`silenceThresholdMs`) does not apply to a Codex

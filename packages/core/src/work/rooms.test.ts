@@ -29,6 +29,8 @@ import {
   roomLead,
   RoomRuleError,
   setRoomLead,
+  setRoomOwner,
+  canReadRoom,
 } from './rooms.js';
 import { HUMAN, PARLEY, SYSTEM, type Room, type WorkMap } from './types.js';
 
@@ -76,6 +78,7 @@ describe('addRoom', () => {
       id: 'r-01',
       title: 'бэкенд',
       creator: 's-01',
+      ownerId: null,
       members: ['s-02', 's-03'],
       createdAt: '2026-09-26T10:05:00.000Z',
       lead: null,
@@ -84,7 +87,6 @@ describe('addRoom', () => {
       recipe: null,
       archivedAt: null,
       memberLog: [
-        { session: 's-01', from: '2026-09-26T10:05:00.000Z', to: null },
         { session: 's-02', from: '2026-09-26T10:05:00.000Z', to: null },
         { session: 's-03', from: '2026-09-26T10:05:00.000Z', to: null },
       ],
@@ -105,8 +107,8 @@ describe('isMember', () => {
     archivedAt: null,
   };
 
-  it('создатель, участник и человек — участники; посторонний — нет', () => {
-    expect(isMember(room, 's-01')).toBe(true);
+  it('участник и человек имеют членство; создатель вне members — нет', () => {
+    expect(isMember(room, 's-01')).toBe(false);
     expect(isMember(room, 's-02')).toBe(true);
     expect(isMember(room, HUMAN)).toBe(true);
     expect(isMember(room, 's-09')).toBe(false);
@@ -143,9 +145,9 @@ describe('isDescendant', () => {
   it('прямой и косвенный потомок — true, сосед и предок — false', () => {
     const map = emptyMap();
     addSession(map, { provider: 'claude', label: 'корень', task: 'x' }); // s-01
-    addSession(map, { provider: 'claude', label: 'дитя', task: 'x', parent: 's-01' }); // s-02
-    addSession(map, { provider: 'claude', label: 'внук', task: 'x', parent: 's-02' }); // s-03
-    addSession(map, { provider: 'claude', label: 'сосед', task: 'x', parent: 's-01' }); // s-04
+    fixtureSession(map, { provider: 'claude', label: 'дитя', task: 'x', parent: 's-01' }); // s-02
+    fixtureSession(map, { provider: 'claude', label: 'внук', task: 'x', parent: 's-02' }); // s-03
+    fixtureSession(map, { provider: 'claude', label: 'сосед', task: 'x', parent: 's-01' }); // s-04
 
     expect(isDescendant(map, 's-01', 's-02')).toBe(true);
     expect(isDescendant(map, 's-01', 's-03')).toBe(true);
@@ -180,12 +182,12 @@ describe('addRoom: ведущий', () => {
     expect(room.proposal).toBeNull();
   });
 
-  it('явный ведущий записывается: участник из members или сам создатель-сессия', () => {
+  it('явный ведущий записывается только как участник из members', () => {
     const map = emptyMap();
     expect(addRoom(map, { title: 'x', creator: HUMAN, members: ['s-01', 's-02'], lead: 's-02' }).lead).toBe(
       's-02',
     );
-    expect(addRoom(map, { title: 'y', creator: 's-01', members: ['s-02'], lead: 's-01' }).lead).toBe('s-01');
+    expect(addRoom(map, { title: 'y', creator: 's-01', members: ['s-01', 's-02'], lead: 's-01' }).lead).toBe('s-01');
   });
 
   it('ведущий — не участник или человек: RoomRuleError, комната не заведена', () => {
@@ -279,12 +281,12 @@ describe('liveLead', () => {
     expect(liveLead(map, first(map))).toBe('s-02');
   });
 
-  it('members никого не оставили — создатель-сессия; создатель-человек не ведущий', () => {
+  it('members никого не оставили — создатель вне состава ведущим не становится', () => {
     const map = emptyMap();
     for (const label of ['a', 'b']) addSession(map, { provider: 'claude', label, task: 'x' });
     addRoom(map, { title: 'агентская', creator: 's-01', members: ['s-02'], lead: 's-02' });
     transitionSession(map, 's-02', 'closed');
-    expect(liveLead(map, first(map))).toBe('s-01');
+    expect(liveLead(map, first(map))).toBeNull();
 
     const human = trio();
     for (const id of ['s-01', 's-02', 's-03']) transitionSession(human, id, 'closed');
@@ -323,7 +325,7 @@ describe('isRoomClosed', () => {
   it('комната сессии-создателя жива, пока жив он сам', () => {
     const map = emptyMap();
     addSession(map, { provider: 'claude', label: 'a', task: 'x' });
-    const room = addRoom(map, { title: 'x', creator: 's-01', members: [] });
+    const room = addRoom(map, { title: 'x', creator: 's-01', members: ['s-01'] });
     expect(isRoomClosed(map, room)).toBe(false);
     transitionSession(map, 's-01', 'closed');
     expect(isRoomClosed(map, room)).toBe(true);
@@ -345,14 +347,14 @@ describe('leaveOtherRooms', () => {
     expect(roomLead(map.rooms[0] as Room)).toBe('s-02');
   });
 
-  it('создатель-сессия уходит из своей комнаты: комната остаётся за человеком', () => {
+  it('создатель-сессия выходит из состава, происхождение комнаты сохраняется', () => {
     const map = emptyMap();
     for (const label of ['a', 'b', 'c']) addSession(map, { provider: 'claude', label, task: 'x' });
-    addRoom(map, { title: 'агентская', creator: 's-01', members: ['s-02'], lead: 's-01' });
+    addRoom(map, { title: 'агентская', creator: 's-01', members: ['s-01', 's-02'], lead: 's-01' });
     addRoom(map, { title: 'другая', creator: HUMAN, members: ['s-03'] });
 
     leaveOtherRooms(map, 's-01', 'r-02');
-    expect(map.rooms[0]).toMatchObject({ creator: HUMAN, members: ['s-02'], lead: null });
+    expect(map.rooms[0]).toMatchObject({ creator: 's-01', members: ['s-02'], lead: null });
     // Иначе isMember по-прежнему считал бы её участницей, а recipientsOf — адресатом рассылок.
     expect(isMember(map.rooms[0] as Room, 's-01')).toBe(false);
   });
@@ -399,28 +401,29 @@ describe('addMember', () => {
     expect(message).toMatchObject({ roomId: 'r-02', from: SYSTEM, text: '@s01 joined the room', at: NOW });
   });
 
-  it('создатель-сессия целевой комнаты, состоящая ещё и в другой, — уходит из другой, в members не пишется', () => {
+  it('явный участник целевой комнаты уходит из другой без дублирования members', () => {
     const map = emptyMap();
     for (const label of ['a', 'b', 'c']) addSession(map, { provider: 'claude', label, task: 'x' });
-    addRoom(map, { title: 'своя', creator: 's-01', members: ['s-02'], lead: 's-01' });
+    addRoom(map, { title: 'своя', creator: 's-01', members: ['s-01', 's-02'], lead: 's-01' });
     addRoom(map, { title: 'чужая', creator: HUMAN, members: ['s-01', 's-03'] });
 
     const message = addMember(map, 'r-01', 's-01');
 
-    expect(map.rooms[0]).toMatchObject({ creator: 's-01', members: ['s-02'], lead: 's-01' });
+    expect(map.rooms[0]).toMatchObject({ creator: 's-01', members: ['s-01', 's-02'], lead: 's-01' });
     expect(map.rooms[1]?.members).toEqual(['s-03']);
     expect(message.text).toBe('@s01 joined the room');
   });
 
-  it('участник только этой комнаты — «уже участник», а с ним и создатель-сессия: карта не тронута', () => {
+  it('повторное участие отвергается; создатель вне состава вступает явно', () => {
     const map = emptyMap();
     for (const label of ['a', 'b']) addSession(map, { provider: 'claude', label, task: 'x' });
     addRoom(map, { title: 'своя', creator: 's-01', members: ['s-02'] });
     const before = JSON.stringify(map);
 
     expect(() => addMember(map, 'r-01', 's-02')).toThrow(/already a participant/);
-    expect(() => addMember(map, 'r-01', 's-01')).toThrow(/already a participant/);
     expect(JSON.stringify(map)).toBe(before);
+    addMember(map, 'r-01', 's-01');
+    expect(map.rooms[0]?.members).toEqual(['s-02', 's-01']);
   });
 
   it('системная запись не будит сессии и не считается непрочитанной человеком', () => {
@@ -703,7 +706,7 @@ describe('setRoomLead', () => {
   it('создатель-сессия может стать ведущим; ведущий-подменщик закрытого получает письмо как прежний', () => {
     const map = emptyMap();
     for (const label of ['a', 'b', 'c']) addSession(map, { provider: 'claude', label, task: 'x' });
-    addRoom(map, { title: 'своя', creator: 's-01', members: ['s-02', 's-03'], lead: 's-02' });
+    addRoom(map, { title: 'своя', creator: 's-01', members: ['s-02', 's-03', 's-01'], lead: 's-02' });
     transitionSession(map, 's-02', 'closed');
     // Назначенный s-02 закрыт — ведёт первый живой из members, s-03.
     expect(liveLead(map, map.rooms[0] as Room)).toBe('s-03');
@@ -974,7 +977,7 @@ describe('archiveRoom', () => {
     for (const label of ['создатель', 'участник', 'удалённый']) {
       addSession(agents, { provider: 'claude', label, task: 'x' });
     }
-    addRoom(agents, { title: 'агентская', creator: 's-01', members: ['s-02', 's-03'], lead: 's-01' });
+    addRoom(agents, { title: 'агентская', creator: 's-01', members: ['s-01', 's-02', 's-03'], lead: 's-01' });
     removeSession(agents, 's-03');
     expect(archiveRoom(agents, 'r-01', NOW)).toEqual(['s-01', 's-02']);
   });
@@ -1204,13 +1207,12 @@ describe('журнал участия (спека расхода токенов,
   const T1 = '2026-10-14T11:00:00.000Z';
   const T2 = '2026-10-14T12:00:00.000Z';
 
-  it('addRoom пишет создателя-сессию и участников с моментом создания; человек в журнал не попадает', () => {
+  it('addRoom пишет только members с моментом создания; создатель и человек вне состава в журнал не попадают', () => {
     const map = emptyMap();
     addSession(map, { provider: 'claude', label: 'a', task: 'x' });
     addSession(map, { provider: 'claude', label: 'b', task: 'x' });
     const byLead = addRoom(map, { title: 'r', creator: 's-01', members: ['s-02'] }, T0);
     expect(byLead.memberLog).toEqual([
-      { session: 's-01', from: T0, to: null },
       { session: 's-02', from: T0, to: null },
     ]);
     const byHuman = addRoom(map, { title: 'h', creator: HUMAN, members: ['s-02'] }, T0);
@@ -1267,5 +1269,56 @@ describe('журнал участия (спека расхода токенов,
     expect(parsed.rooms[0]?.memberLog).toEqual([{ session: 's-01', from: T0, to: null }]);
     expect(parsed.rooms[1]?.memberLog).toBeUndefined();
     expect(parsed.rooms[2]?.memberLog).toBeUndefined();
+  });
+});
+
+/** Исторические parent-связи задаются фикстурой, новый конструктор их не создаёт. */
+function fixtureSession(map: WorkMap, init: Parameters<typeof addSession>[1], at?: string) {
+  const session = addSession(map, { ...init, parent: null }, at);
+  session.parent = init.parent ?? null;
+  return session;
+}
+
+describe('room ownership', () => {
+  it('ownership and moving do not change provenance, lead, or working history', () => {
+    const map = emptyMap();
+    const owner = addSession(map, { provider: 'claude', label: 'owner', task: '' });
+    const worker = addSession(map, { provider: 'codex', label: 'worker', task: '' });
+    const rooms = ['one', 'two', 'three'].map((title) => addRoom(map, { title, creator: owner.id, ownerId: owner.id, members: [worker.id] }));
+    const original = rooms.map((room) => structuredClone(room));
+    leaveOtherRooms(map, owner.id, 'outside');
+    expect(map.rooms).toEqual(original);
+    expect(isMember(rooms[0]!, owner.id)).toBe(false);
+    expect(canReadRoom(rooms[0]!, owner.id)).toBe(true);
+    expect(canReadRoom(rooms[0]!, 's-99')).toBe(false);
+    setRoomOwner(map, rooms[0]!.id, worker.id);
+    expect(rooms[0]).toEqual({ ...original[0], ownerId: worker.id });
+    expect(() => setRoomOwner(map, rooms[0]!.id, 's-99')).toThrow(/owner/);
+    setRoomOwner(map, rooms[0]!.id, null);
+    expect(rooms[0]?.ownerId).toBeNull();
+  });
+
+  it('closing or removing owner preserves rooms and active workers; archive affects working members only', () => {
+    const map = emptyMap();
+    const owner = addSession(map, { provider: 'claude', label: 'owner', task: '' });
+    const worker = addSession(map, { provider: 'codex', label: 'worker', task: '' });
+    const room = addRoom(map, { title: 'one', creator: owner.id, ownerId: owner.id, members: [worker.id] });
+    transitionSession(map, owner.id, 'closed');
+    expect(isRoomClosed(map, room)).toBe(false);
+    expect(room.ownerId).toBe(owner.id);
+    expect(archiveRoom(map, room.id)).toEqual([worker.id]);
+    removeSession(map, owner.id);
+    expect(room.ownerId).toBeNull();
+    expect(room.creator).toBe(owner.id);
+    expect(map.rooms).toHaveLength(1);
+    expect(worker.lifecycle).toBe('pending');
+  });
+
+  it('invalid owner or creator-only lead rejects creation without consuming an id', () => {
+    const map = emptyMap();
+    expect(() => addRoom(map, { title: 'one', creator: 's-01', ownerId: 's-99', members: [] })).toThrow(/owner/);
+    expect(() => addRoom(map, { title: 'one', creator: 's-01', lead: 's-01', members: [] })).toThrow(/participant/);
+    expect(map.work.roomSeq).toBeUndefined();
+    expect(map.rooms).toEqual([]);
   });
 });

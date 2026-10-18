@@ -39,11 +39,12 @@ export function nextRoomId(map: WorkMap): string {
 export interface NewRoom {
   mode?: RoomMode;
   title: string;
-  /** Id сессии-создателя или `human`; создатель — участник, в `members` не пишется. */
+  /** Id сессии-создателя или `human`: неизменяемое происхождение комнаты. */
   creator: string;
+  ownerId?: string | null;
   members: string[];
   /**
-   * Ведущий: участник комнаты (создатель-сессия тоже); человек им быть не может. Без него
+   * Ведущий: участник из members; человек им быть не может. Без него
    * `lead: null` — ведущим считается первый из `members` (`roomLead`).
    */
   lead?: string | null;
@@ -56,13 +57,18 @@ export function addRoom(map: WorkMap, init: NewRoom, at = new Date().toISOString
   const lead = init.lead ?? null;
   if (init.mode !== undefined && !['free', 'checklist', 'verified'].includes(init.mode)) throw new RoomRuleError('invalid room mode');
   // Проверка до `nextRoomId`: отказ не должен тратить номер комнаты.
-  if (lead !== null && (lead === HUMAN || !(lead === init.creator || init.members.includes(lead)))) {
+  if (lead !== null && (lead === HUMAN || !init.members.includes(lead))) {
     throw new RoomRuleError(`lead ${lead} is not a participant of room "${init.title}"`);
+  }
+  const ownerId = init.ownerId ?? null;
+  if (ownerId !== null && !map.sessions.some((session) => session.id === ownerId)) {
+    throw new RoomRuleError(`owner ${ownerId} is not in the map`);
   }
   const room: Room = {
     id: nextRoomId(map),
     title: init.title,
     creator: init.creator,
+    ownerId,
     members: [...init.members],
     createdAt: at,
     lead,
@@ -70,8 +76,8 @@ export function addRoom(map: WorkMap, init: NewRoom, at = new Date().toISOString
     mode: init.mode ?? 'free',
     recipe: init.recipe == null ? null : { id: init.recipe.id, name: init.recipe.name, playbook: init.recipe.playbook },
     archivedAt: null,
-    // Журнал участия (спека расхода токенов, 4.2): создатель-сессия и начальные участники входят в момент создания.
-    memberLog: [...new Set([init.creator, ...init.members])]
+    // Журнал участия (спека расхода токенов, 4.2): начальные рабочие участники входят в момент создания.
+    memberLog: [...new Set(init.members)]
       .filter((id) => id !== HUMAN)
       .map((session) => ({ session, from: at, to: null })),
   };
@@ -95,13 +101,13 @@ function isAlive(map: WorkMap, id: string): boolean {
 }
 
 /**
- * Закрыта ли комната: в ней не осталось живых участников — каждая сессия создателя и
+ * Закрыта ли комната: в ней не осталось живых участников — каждая сессия из
  * `members` закрыта или уже удалена из карты (человек не сессия и комнату не держит).
  * Отдельного признака «закрыта» у комнаты в карте нет: она закрывается вместе со своими
  * сессиями, и решение в такую комнату приносить некому.
  */
 export function isRoomClosed(map: WorkMap, room: Room): boolean {
-  return ![room.creator, ...room.members].some((id) => isAlive(map, id));
+  return !room.members.some((id) => isAlive(map, id));
 }
 
 /**
@@ -112,33 +118,18 @@ export function isRoomArchived(room: Room): boolean {
   return typeof room.archivedAt === 'string';
 }
 
-/**
- * Ведущий, который может действовать: `roomLead`, если он жив, а иначе первый живой из `members`
- * и за ним создатель-сессия. `closed` из карты не откатывается, а `removeSession` не убирает id
- * из `members` — и сменить ведущего нечем. Без подмены комната с ушедшим ведущим осталась бы без
- * права на решение навсегда: `setProposal` не пустил бы никого. Ведущего нет ровно тогда, когда
- * комната закрыта (`isRoomClosed`): круг тот же — создатель и `members`. Запись комнаты
- * (`lead`, `members`) подмена не переписывает.
- */
+/** Живой рабочий ведущий: назначенный участник либо первый живой из members. */
 export function liveLead(map: WorkMap, room: Room): string | null {
   const declared = roomLead(room);
   if (declared !== null && isMember(room, declared) && isAlive(map, declared)) return declared;
-  return [...room.members, room.creator].find((id) => isAlive(map, id)) ?? null;
+  return room.members.find((id) => isAlive(map, id)) ?? null;
 }
 
-/**
- * Правило одной комнаты на сессию (решение 4 дизайна комнат): убирает сессию из всех
- * комнат карты, кроме `exceptRoomId`. Ушедший ведущий оставляет `lead: null`, а создатель-
- * сессия уступает комнату человеку: иначе `isMember` продолжил бы считать её участницей, а
- * `recipientsOf` — адресатом рассылок, то есть она осталась бы в двух комнатах сразу.
- * Ждущее решение ушедшего ведущего остаётся в слоте: человек ответит на него как на любое,
- * а письмо о принятии или возврате пойдёт нынешнему ведущему (`resolveProposal`).
- */
+/** Убирает рабочее членство в других комнатах; владение и происхождение сохраняются. */
 export function leaveOtherRooms(map: WorkMap, sessionId: string, exceptRoomId: string, at = new Date().toISOString()): void {
   for (const room of map.rooms) {
     if (room.id === exceptRoomId) continue;
     room.members = room.members.filter((id) => id !== sessionId);
-    if (room.creator === sessionId) room.creator = HUMAN;
     if (room.lead === sessionId) room.lead = null;
     // Уход — в журнал той комнаты, у которой он есть (спека расхода токенов, 4.2).
     for (const entry of room.memberLog ?? []) if (entry.session === sessionId && entry.to === null) entry.to = at;
@@ -411,7 +402,7 @@ export function deleteRoom(map: WorkMap, roomId: string, at = new Date().toISOSt
   // Участников архивной комнаты архивация могла усыпить: прощальное письмо спящему подняло бы его будильником, поэтому
   // у архивной комнаты письмо получают только работающие (спека архива комнат, 3.6).
   const archived = isRoomArchived(room);
-  const notified = [...new Set([room.creator, ...room.members])].filter(
+  const notified = [...new Set(room.members)].filter(
     (id) =>
       map.sessions.some(
         (session) => session.id === id && (session.lifecycle === 'active' || (session.lifecycle === 'sleeping' && !archived)),
@@ -430,7 +421,7 @@ export function deleteRoom(map: WorkMap, roomId: string, at = new Date().toISOSt
  * (`planEffects` в `queued`) снимаются, а слот `proposal` очищается без ответа — как у плана закрытой комнаты в
  * `reconcileRoomPlans`. Затем в ленту ложится строка «Room archived by the human.».
  *
- * Возвращает id сессий, которых архивация оставила без открытой комнаты: участники (создатель-сессия и `members`, без
+ * Возвращает id сессий, которых архивация оставила без открытой комнаты: участники из `members` (без
  * человека и без сессий, которых уже нет в карте), не числящиеся в другой неархивной комнате. Правило то же, что у
  * прощальных писем `deleteRoom`. Остановить их и написать им, кого не остановили, — дело хоста.
  */
@@ -447,7 +438,7 @@ export function archiveRoom(map: WorkMap, roomId: string, at = new Date().toISOS
   addSystemMessage(map, roomId, 'Room archived by the human.', at);
   room.archivedAt = at;
 
-  return [...new Set([room.creator, ...room.members])].filter(
+  return [...new Set(room.members)].filter(
     (id) =>
       id !== HUMAN &&
       map.sessions.some((session) => session.id === id) &&
@@ -501,11 +492,11 @@ export function reopenRoom(map: WorkMap, roomId: string, at = new Date().toISOSt
 }
 
 /**
- * Участник ли комнаты: создатель — всегда, человек — всегда (спецификация 6.1:
+ * Участник ли комнаты: человек — всегда (спецификация 6.1:
  * «человек — участник всегда и в список не пишется»), иначе — по списку `members`.
  */
 export function isMember(room: Room, id: string): boolean {
-  return id === HUMAN || id === room.creator || room.members.includes(id);
+  return id === HUMAN || room.members.includes(id);
 }
 
 /** Список тегов через запятую, последний — через `and`: `S03`, `S03 and S05`. */
@@ -544,4 +535,18 @@ export function isDescendant(map: WorkMap, ancestor: string, id: string): boolea
     current = byId.get(current.parent);
   }
   return false;
+}
+
+/** Владение не меняет состав, ведущего или историю участия. */
+export function setRoomOwner(map: WorkMap, roomId: string, sessionId: string | null): void {
+  const room = map.rooms.find((candidate) => candidate.id === roomId);
+  if (room === undefined) throw new RoomRuleError(`room ${roomId} is not in the map`);
+  if (sessionId !== null && !map.sessions.some((session) => session.id === sessionId)) {
+    throw new RoomRuleError(`owner ${sessionId} is not in the map`);
+  }
+  room.ownerId = sessionId;
+}
+
+export function canReadRoom(room: Room, sessionId: string): boolean {
+  return isMember(room, sessionId) || room.ownerId === sessionId;
 }

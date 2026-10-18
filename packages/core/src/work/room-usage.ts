@@ -123,7 +123,7 @@ export async function roomUsage(map: WorkMap, roomId: string, resolver: UsageRes
   }
 
   // Порядок строк (3.2): ведущий, текущие участники по составу, вышедшие — по времени ухода.
-  const order = [room.creator, ...room.members];
+  const order = room.members;
   const rank = (member: RoomUsageMember): number => (member.lead ? 0 : member.current ? 1 : 2);
   const lastExit = (member: RoomUsageMember): number => end(member.periods[member.periods.length - 1]?.to ?? null);
   members.sort(

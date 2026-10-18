@@ -31,7 +31,6 @@ describe('loadConfig', () => {
       channelPush: true,
       messageRate: 20,
       resumeRate: 6,
-      autoLaunch: true,
       agentSkills: true,
       skillNavigator: true,
       codexApprovals: false,
@@ -60,7 +59,6 @@ describe('loadConfig', () => {
       silenceThresholdMs: 5000,
       channelPush: false,
       messageRate: 5,
-      autoLaunch: false,
     });
 
     const fromFile = await loadConfig(file(), {});
@@ -69,7 +67,6 @@ describe('loadConfig', () => {
       channelPush: false,
       messageRate: 5,
       resumeRate: 6,
-      autoLaunch: false,
       agentSkills: true,
       skillNavigator: true,
       codexApprovals: false,
@@ -85,14 +82,12 @@ describe('loadConfig', () => {
       PARLEY_SILENCE_MS: '60000',
       PARLEY_CHANNEL_PUSH: '1',
       PARLEY_MESSAGE_RATE: '7',
-      PARLEY_AUTO_LAUNCH: '1',
     });
     expect(fromEnv.config).toEqual({
       silenceThresholdMs: 60_000,
       channelPush: true,
       messageRate: 7,
       resumeRate: 6,
-      autoLaunch: true,
       agentSkills: true,
       skillNavigator: true,
       codexApprovals: false,
@@ -206,12 +201,12 @@ describe('loadConfig', () => {
   });
 
   it('битое поле остаётся дефолтным, остальные читаются', async () => {
-    await write({ silenceThresholdMs: -1, fontSize: 99, autoLaunch: false });
+    await write({ silenceThresholdMs: -1, fontSize: 99, agentSkills: false });
     const loaded = await loadConfig(file(), {});
 
     expect(loaded.config.silenceThresholdMs).toBe(DEFAULT_CONFIG.silenceThresholdMs);
     expect(loaded.config.fontSize).toBe(DEFAULT_CONFIG.fontSize);
-    expect(loaded.config.autoLaunch).toBe(false);
+    expect(loaded.config.agentSkills).toBe(false);
     expect(loaded.warning).toBe(
       'silenceThresholdMs: expected a positive integer; fontSize: expected an integer from 8 to 32',
     );
@@ -220,11 +215,11 @@ describe('loadConfig', () => {
   it('битая переменная окружения не отменяет остальные', async () => {
     const loaded = await loadConfig(file(), {
       PARLEY_SILENCE_MS: 'долго',
-      PARLEY_AUTO_LAUNCH: 'off',
+      PARLEY_AGENT_SKILLS: 'off',
     });
 
     expect(loaded.config.silenceThresholdMs).toBe(DEFAULT_CONFIG.silenceThresholdMs);
-    expect(loaded.config.autoLaunch).toBe(false);
+    expect(loaded.config.agentSkills).toBe(false);
     expect(loaded.warning).toBe('PARLEY_SILENCE_MS: expected a positive integer');
   });
 
@@ -271,11 +266,10 @@ describe('loadConfig', () => {
       ascii: true,
       theme: 'nord',
       messageRate: 5,
-      autoLaunch: false,
     });
     const loaded = await loadConfig(file(), {});
 
-    expect(loaded.config).toEqual({ ...DEFAULT_CONFIG, messageRate: 5, autoLaunch: false });
+    expect(loaded.config).toEqual({ ...DEFAULT_CONFIG, messageRate: 5 });
     expect(loaded.warning).toBeNull();
     expect(loaded.fromEnv).toEqual([]);
   });
@@ -306,22 +300,22 @@ describe('loadConfig', () => {
 
   it('saveConfig сохраняет старые ключи TUI в файле нетронутыми', async () => {
     await write({ prefix: 'w', theme: 'nord', sidebarWidth: 18 });
-    await saveConfig({ autoLaunch: false }, file());
+    await saveConfig({ agentSkills: false }, file());
 
     expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({
       prefix: 'w',
       theme: 'nord',
       sidebarWidth: 18,
-      autoLaunch: false,
+      agentSkills: false,
     });
   });
 
   it('сообщает, какие ключи пришли из окружения', async () => {
     await write({ messageRate: 5 });
-    const loaded = await loadConfig(file(), { PARLEY_AUTO_LAUNCH: '0', PARLEY_CHANNEL_PUSH: 'мимо' });
+    const loaded = await loadConfig(file(), { PARLEY_AGENT_SKILLS: '0', PARLEY_CHANNEL_PUSH: 'мимо' });
 
     // Битая переменная ключ не перекрывает — и в список не попадает.
-    expect(loaded.fromEnv).toEqual(['autoLaunch']);
+    expect(loaded.fromEnv).toEqual(['agentSkills']);
   });
 
   it('без окружения список пуст', async () => {
@@ -347,7 +341,7 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['channelPush', 'CHANNEL_PUSH', '0', false],
     ['messageRate', 'MESSAGE_RATE', '9', 9],
     ['resumeRate', 'RESUME_RATE', '3', 3],
-    ['autoLaunch', 'AUTO_LAUNCH', 'off', false],
+    ['agentSkills', 'AGENT_SKILLS', 'off', false],
     ['agentSkills', 'AGENT_SKILLS', 'no', false],
     ['skillNavigator', 'SKILL_NAVIGATOR', 'off', false],
     ['codexApprovals', 'CODEX_APPROVALS', 'on', true],
@@ -359,7 +353,6 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['roomConcurrent', 'ROOM_CONCURRENT', '4', 4],
     ['workNewSessions', 'WORK_NEW_SESSIONS', '0', 0],
     ['roomNewSessions', 'ROOM_NEW_SESSIONS', '5', 5],
-    ['spawnDepth', 'SPAWN_DEPTH', '2', 2],
     ['workLaunches', 'WORK_LAUNCHES', '50', 50],
     ['roomLaunches', 'ROOM_LAUNCHES', '25', 25],
     ['workMessages', 'WORK_MESSAGES', '300', 300],
@@ -439,7 +432,7 @@ describe('пороги бюджета (P37)', () => {
   });
 
   it('старый файл без порогов читается с умолчаниями и без предупреждения', async () => {
-    await write({ messageRate: 5, autoLaunch: false });
+    await write({ messageRate: 5, agentSkills: false });
     const loaded = await loadConfig(file(), {});
     expect(loaded.warning).toBeNull();
     expect(loaded.config.workConcurrent).toBe(DEFAULT_CONFIG.workConcurrent);
@@ -447,14 +440,12 @@ describe('пороги бюджета (P37)', () => {
   });
 
   it('значение вне границ ключа — предупреждение, порог остаётся умолчанием; ноль нужен только новым сессиям', async () => {
-    await write({ workConcurrent: 0, workNewSessions: 0, spawnDepth: 99, fanout: 2.5 });
+    await write({ workConcurrent: 0, workNewSessions: 0, fanout: 2.5 });
     const loaded = await loadConfig(file(), {});
     expect(loaded.config.workConcurrent).toBe(DEFAULT_CONFIG.workConcurrent);
-    expect(loaded.config.spawnDepth).toBe(DEFAULT_CONFIG.spawnDepth);
     expect(loaded.config.fanout).toBe(DEFAULT_CONFIG.fanout);
     expect(loaded.config.workNewSessions).toBe(0);
     expect(loaded.warning).toContain('workConcurrent: expected an integer from 1 to 64');
-    expect(loaded.warning).toContain('spawnDepth: expected an integer from 1 to 8');
   });
 
   it('parseSetting: теми же границами, что у файла и окружения; пустая строка — не ноль', () => {
@@ -462,7 +453,6 @@ describe('пороги бюджета (P37)', () => {
     expect(parseSetting('workNewSessions', '0')).toEqual({ value: 0 });
     expect(parseSetting('workConcurrent', '0')).toEqual({ error: 'workConcurrent: expected an integer from 1 to 64' });
     expect(parseSetting('fanout', '')).toMatchObject({ error: expect.any(String) });
-    expect(parseSetting('spawnDepth', '9')).toMatchObject({ error: expect.any(String) });
   });
 
   it('человек меняет порог явно: saveConfig пишет ключ, остальные и чужие ключи остаются', async () => {
@@ -512,7 +502,7 @@ describe('parseSetting', () => {
   });
 
   it('булевы ключи — те же множества да/нет, что у окружения', () => {
-    expect(parseSetting('autoLaunch', 'yes')).toEqual({ value: true });
+    expect(parseSetting('agentSkills', 'yes')).toEqual({ value: true });
     expect(parseSetting('channelPush', '0')).toEqual({ value: false });
     expect(parseSetting('channelPush', 'мимо')).toEqual({ error: 'channelPush: expected 0 or 1' });
   });
@@ -541,9 +531,9 @@ describe('parseSetting', () => {
 describe('saveConfig', () => {
   it('файла нет — создаёт каталог и файл с одним ключом', async () => {
     const nested = path.join(home, 'глубже', 'config.json');
-    await saveConfig({ autoLaunch: false }, nested);
+    await saveConfig({ agentSkills: false }, nested);
 
-    expect(JSON.parse(await readFile(nested, 'utf8'))).toEqual({ autoLaunch: false });
+    expect(JSON.parse(await readFile(nested, 'utf8'))).toEqual({ agentSkills: false });
     expect((await readFile(nested, 'utf8')).endsWith('\n')).toBe(true);
   });
 
@@ -556,9 +546,9 @@ describe('saveConfig', () => {
 
   it('битый файл перезаписывается целиком', async () => {
     await write('{ не json');
-    await saveConfig({ autoLaunch: true }, file());
+    await saveConfig({ agentSkills: true }, file());
 
-    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ autoLaunch: true });
+    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ agentSkills: true });
   });
 });
 
@@ -596,7 +586,7 @@ describe('leanAgents setting', () => {
     await write({});
     expect((await loadConfig(file(), { PARLEY_LEAN_AGENTS: '0' })).config.leanAgents).toBe(false);
   });
-  it("settings.set: parseSetting разбирает 'true' и 'false' как autoLaunch, мусор отвергает", () => {
+  it("settings.set: parseSetting разбирает 'true' и 'false' как agentSkills, мусор отвергает", () => {
     expect(parseSetting('leanAgents', 'true')).toEqual({ value: true });
     expect(parseSetting('leanAgents', 'false')).toEqual({ value: false });
     expect(parseSetting('leanAgents', 'FALSE')).toEqual({ value: false });
@@ -627,5 +617,17 @@ describe('codexApprovals setting', () => {
     const value = await loadConfig(file(), {});
     expect(value.config.codexApprovals).toBe(false);
     expect(value.warning).toContain('codexApprovals');
+  });
+});
+
+describe('removed Parley spawn settings', () => {
+  it('ignores saved and environment autoLaunch/spawnDepth without warnings', async () => {
+    await write({ autoLaunch: false, spawnDepth: 8 });
+    const loaded = await loadConfig(file(), { PARLEY_AUTO_LAUNCH: '1', PARLEY_SPAWN_DEPTH: '2' });
+    expect(loaded.config).toEqual(DEFAULT_CONFIG);
+    expect(loaded.config).not.toHaveProperty('autoLaunch');
+    expect(loaded.config).not.toHaveProperty('spawnDepth');
+    expect(loaded.warning).toBeNull();
+    expect(loaded.fromEnv).toEqual([]);
   });
 });

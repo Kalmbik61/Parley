@@ -35,7 +35,7 @@ describe('roomMembership (спека расхода токенов, 4.3, 5.1)', 
     addSession(map, { provider: 'claude', label: 'a', task: 'x' });
     addSession(map, { provider: 'claude', label: 'b', task: 'x' });
     addSession(map, { provider: 'claude', label: 'c', task: 'x' });
-    const old = addRoom(map, { title: 'old', creator: 's-01', members: ['s-02'] }, T0);
+    const old = addRoom(map, { title: 'old', creator: 's-01', members: ['s-01', 's-02'] }, T0);
     addMember(map, old.id, 's-03', T1);
     const fresh = addRoom(map, { title: 'new', creator: HUMAN, members: [] }, T0);
     addMember(map, fresh.id, 's-03', T2);

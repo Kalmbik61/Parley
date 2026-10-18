@@ -1,4 +1,5 @@
 import { recipientsOf } from './letters.js';
+import { canReadRoom } from './rooms.js';
 import { PARLEY } from './types.js';
 import type { Message, WorkMap, WorkSession } from './types.js';
 
@@ -65,6 +66,22 @@ export function threadOf(map: WorkMap, sessionId: string): Thread {
     }),
   );
   return { owner, members, messages };
+}
+
+/** Agent context keeps historical family access, but a lone root cannot read unrelated private mail. */
+export function agentThreadOf(map: WorkMap, sessionId: string): Thread {
+  const thread = threadOf(map, sessionId);
+  const historical = thread.owner === null ? new Set<string>() : new Set(thread.messages.map((message) => message.id));
+  return {
+    ...thread,
+    messages: byTime(map.messages.filter((message) => {
+      if (message.roomId !== null) {
+        const room = map.rooms.find((candidate) => candidate.id === message.roomId);
+        return room !== undefined && canReadRoom(room, sessionId);
+      }
+      return historical.has(message.id) || message.from === sessionId || message.to.includes(sessionId);
+    })),
+  };
 }
 
 /** Решения треда — его письма с `kind: decision`, по времени. */
