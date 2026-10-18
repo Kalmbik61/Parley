@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Тексты окна — только по-английски (`desktop/src/shared/strings.ts`; тест `english-text`). Комментарии и тесты — по-русски, как вокруг.
-- Коммиты — по-английски, в конце `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- Коммиты — по-английски; авторство указывается только для фактических участников.
 - Свёртка плана — только в `@parley/core/agent-plan`. Своего расчёта плана в окне или хосте нет (правило «статусы из одного места»).
 - Новых чтений диска нет: план сворачивается только в существующем проходе индекса.
 - Потолки: `PLAN_ITEMS_LIMIT = 50`, `PLAN_DESCRIPTION_LIMIT = 4096` символов; обрезанное описание кончается на `…`.
@@ -83,7 +83,7 @@
 
 `applyPlanCall` работает только с полным `AgentPlanState`, ограниченный снимок обратно в него не подаётся. `capPlan` вычисляет `summary` по всем пунктам: `total = state.items.length`, `done` — все `completed`, `current` — первый `in_progress`, `next` — первый `pending` только при отсутствии `current`. Затем оставляет первые 50; если `current ?? next` вне этого набора, заменяет им последний выбранный пункт, сохраняя исходный порядок. `omitted = summary.total - items.length`. `description` выбранных пунктов и ссылок `summary.current/next` обрезается до 4096 символов. `planSummary` возвращает сохранённую `summary`, ничего не пересчитывая по ограниченному `items`. `partial` сохраняется; `omitted > 0` само по себе его не выставляет.
 
-- [ ] **Step 1: Write the failing tests** в `agent-plan.test.ts`:
+- [x] **Step 1: Write the failing tests** в `agent-plan.test.ts`:
   Общий helper успешных вызовов задаёт `status: 'done'` и результат; тесты отсутствующего/ошибочного ответа переопределяют их явно. Для проверок сводки сначала вызывается `capPlan(state)`.
   - `создаёт пункты TaskCreate с номером из ответа` — два вызова с `result: { task: { id: '1', subject: 'A' } }` и `'2'` → `items.map(i => [i.id, i.subject, i.status])` равно `[['1','A','pending'],['2','B','pending']]`;
   - `ID из текста и JSON-строки ответа` — текст `Task #7 created successfully: X` и сериализованный `{ task: { id: '7' } }` → id `'7'`;
@@ -97,10 +97,10 @@
   - `capPlan режет до 50 пунктов и описание до 4096` — 60 completed → `items.length === 50`, `omitted === 10`, `summary.done === summary.total === 60`, `partial === false`; описание 5000 символов → длина 4096 и последний символ `…`;
   - `текущий или следующий пункт за пределом 50 сохранён` — 60 пунктов, первые 50 completed, №51 in_progress (второй вариант pending) → пункт №51 в `items` и `summary`, `omitted === 10`, порядок сохранён, описание в summary тоже ограничено;
   - `planSummary: current, next, done` — `[completed, in_progress, pending]` → `current.subject` второго, `next === null`, `done === 1`; без `in_progress` → `next` — первый `pending`.
-- [ ] **Step 2:** `pnpm --filter @parley/core exec vitest run src/agent-plan.test.ts` → FAIL (модуля нет).
-- [ ] **Step 3:** Реализовать `agent-plan.ts` по Interfaces; обновить `package.json` exports, реэкспорт типов в `index.ts`, поле в `protocol/src/types.ts` с JSDoc в духе соседних полей («Поля нет у хоста более ранней версии»).
-- [ ] **Step 4:** Тест → PASS; `pnpm --filter @parley/core build && pnpm --filter @parley/protocol exec tsc --noEmit` → без ошибок.
-- [ ] **Step 5: Commit** — `feat(core): fold agent plans from TaskCreate/TaskUpdate/TodoWrite/update_plan`.
+- [x] **Step 2:** `pnpm --filter @parley/core exec vitest run src/agent-plan.test.ts` → FAIL (модуля нет).
+- [x] **Step 3:** Реализовать `agent-plan.ts` по Interfaces; обновить `package.json` exports, реэкспорт типов в `index.ts`, поле в `protocol/src/types.ts` с JSDoc в духе соседних полей («Поля нет у хоста более ранней версии»).
+- [x] **Step 4:** Тест → PASS; `pnpm --filter @parley/core build && pnpm --filter @parley/protocol exec tsc --noEmit` → без ошибок.
+- [x] **Step 5: Commit** — `feat(core): fold agent plans from TaskCreate/TaskUpdate/TodoWrite/update_plan`.
 
 ### Task 2: План в индексе лога (Claude и Codex)
 
@@ -112,11 +112,13 @@
 - Consumes: `applyPlanCall`, `capPlan`, `PlanCall`, `AgentPlan` (Task 1).
 - Produces:
   ```ts
-  export interface PlanCollector { onRecord(raw: Record<string, unknown>): void; finish(): AgentPlan | null }
+  export interface PlanCollector { onRecord(raw: Record<string, unknown>): void; finish(): AgentPlan | null; clone(): PlanCollector }
   export function createClaudePlanCollector(): PlanCollector;
   export function createCodexPlanCollector(): PlanCollector;
   ```
   и `SessionIndex.plan` — результат `finish()` (`capPlan` полного состояния или `null`). Коллектор не хранит сырые неплановые записи.
+
+**Адаптация к базе реализации `5dbe95b6` (после ревью):** индексы уже дочитывают хвост через `ClaudeIndexAccumulator` / `CodexIndexAccumulator`. Один коллектор хранится в каждом накопителе, вызывается из существующего `feed`, копируется в `clone`, отдаёт снимок через повторяемый немутирующий `finish` в `build`. Таблица плановых вызовов и ожидающих результатов живёт вместе с накопителем; полное состояние свёртки временное. Полное чтение и `extend*SessionIndex` обязаны дать одинаковый план. Дополнительных чтений диска нет. В Files/Tests этой задачи также входит `packages/core/src/session-indexer.test.ts`: ответ в следующем хвосте, повтор в хвосте, неизменность предыдущего состояния, усечение/замена файла для обоих провайдеров. Отдельные тесты коллектора проверяют повторный `finish` и независимость `clone`.
 
 Формы записей Claude из логов 2.1.227–2.1.302 и синтетическая пара Codex:
 ```jsonl
@@ -148,7 +150,7 @@ Codex-коллектор связывает `function_call` и `function_call_ou
   - `session-index.test.ts`: `индекс несёт plan; без плановых вызовов plan === null`;
   - `codex.test.ts`: `индекс Codex несёт plan из успешного update_plan; без поддерживаемых вызовов plan === null`.
 - [ ] **Step 2:** `pnpm --filter @parley/core exec vitest run src/agent-plan-log.test.ts src/session-index.test.ts src/codex/codex.test.ts` → новые тесты FAIL.
-- [ ] **Step 3:** Реализовать коллекторы и подключить их в оба индекса: один коллектор на проход, `onRecord(raw)` в существующем обходчике записей, `plan: collector.finish()` в результат.
+- [ ] **Step 3:** Реализовать коллекторы и подключить их в оба накопителя: `onRecord(raw)` в `feed`, независимый `clone`, `plan: collector.finish()` в `build`. Прогнать `src/session-indexer.test.ts` вместе с остальными тестами задачи.
 - [ ] **Step 4:** Тесты → PASS; весь `pnpm --filter @parley/core test` → PASS.
 - [ ] **Step 5: Замер «после»** тем же скриптом: медиана не больше «до» × 1.1. При превышении оптимизировать отбор по типу записи и ID планового вызова. Не фильтровать все записи только по имени инструмента: ответы не обязаны его содержать, и такая фильтрация потеряет подтверждение результата.
 - [ ] **Step 6: Commit** — `feat(core): carry the agent plan in the session log index`.
