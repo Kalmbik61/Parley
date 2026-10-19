@@ -18,6 +18,10 @@ export function createAssistantHandlers(service: AssistantService): Record<strin
     return { ok: true };
   };
   const state: Handler<'assistant.state'> = async () => service.state();
+  const configure: Handler<'assistant.configure'> = async (params) => {
+    service.configure(params);
+    return { ok: true };
+  };
   const sent: Handler<'assistant.sent'> = async (params) => ({ items: await service.sent(params.ref) });
   return {
     'assistant.ask': ask as AnyHandler,
@@ -26,5 +30,6 @@ export function createAssistantHandlers(service: AssistantService): Record<strin
     'assistant.reset': reset as AnyHandler,
     'assistant.state': state as AnyHandler,
     'assistant.sent': sent as AnyHandler,
+    'assistant.configure': configure as AnyHandler,
   };
 }

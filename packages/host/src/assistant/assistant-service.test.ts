@@ -882,3 +882,61 @@ describe('assistant-service: ревью — карточка и напомина
     expect(turns.at(-1)?.spec.args[1]).toContain('[reminder r1');
   });
 });
+
+describe('assistant-service: зеркало настроек, слушатели и telegram', () => {
+  const REMINDER: Reminder = { id: 'r1', what: 'check the release room', at: '2026-10-19T12:00:00.000Z', every: 10, createdAt: '2026-10-19T11:55:00.000Z', askedAt: '2026-10-19T11:55:00.000Z' };
+  const MIRROR = { enabled: true, provider: 'claude', model: null, language: 'en', voiceModel: null };
+
+  it('onState получает каждое publish; отписка работает', async () => {
+    const service = createAssistantService(deps);
+    const seen: AssistantState[] = [];
+    const off = service.onState((value) => { seen.push(value); });
+    await service.ask(ASK);
+    expect(seen.length).toBe(states.length);
+    expect(seen.at(-1)).toBe(last());
+    off();
+    const before = seen.length;
+    service.reset();
+    expect(seen).toHaveLength(before);
+  });
+
+  it('configure и settings: до configure — null, после — то, что передали', () => {
+    const service = createAssistantService(deps);
+    expect(service.settings()).toBeNull();
+    service.configure(MIRROR);
+    expect(service.settings()).toEqual(MIRROR);
+  });
+
+  it('ask(params, telegram) публикует origin telegram; без origin — island', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK, 'telegram');
+    expect(last().origin).toBe('telegram');
+    await service.ask(ASK);
+    expect(last().origin).toBe('island');
+  });
+
+  it('напоминание при выключенном помощнике: onReminderWhileOff один раз на id, результат skipped, хода нет', async () => {
+    const off = vi.fn();
+    const service = createAssistantService({ ...deps, onReminderWhileOff: off });
+    service.configure({ ...MIRROR, enabled: false });
+    expect(await service.onReminder(REMINDER, false)).toBe('skipped');
+    expect(await service.onReminder(REMINDER, false)).toBe('skipped');
+    expect(off).toHaveBeenCalledTimes(1);
+    expect(off).toHaveBeenCalledWith(REMINDER);
+    expect(await service.onReminder({ ...REMINDER, id: 'r2' }, false)).toBe('skipped');
+    expect(off).toHaveBeenCalledTimes(2);
+    expect(turns).toHaveLength(0);
+  });
+
+  it('напоминание с зеркалом enabled берёт провайдера, модель и язык из зеркала, а не из последнего вопроса', async () => {
+    const GLM = { ...CLAUDE, id: 'glm', label: 'GLM' } as unknown as ProviderEntry;
+    const service = createAssistantService({ ...deps, providers: async () => ({ claude: CLAUDE, glm: GLM }), launchEnv: async (entry) => ({ WHO: entry.id }) });
+    await service.ask({ ...ASK, provider: 'glm' });
+    turns[0]?.end({ ok: true });
+    await flush();
+    service.configure({ ...MIRROR, provider: 'claude', model: 'opus' });
+    expect(await service.onReminder(REMINDER, false)).toBe('fired');
+    expect(turns.at(-1)?.spec.env['WHO']).toBe('claude');
+    expect(turns.at(-1)?.spec.args[1]).toContain('[reminder r1');
+  });
+});
