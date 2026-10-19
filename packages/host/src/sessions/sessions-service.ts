@@ -2,7 +2,7 @@
  * Создание, запуск, остановка и удаление сессий — план, кусок 1.7.
  *
  * `launch()` — общая точка входа что для интерактивного запуска
- * (`sessions.create`/`sessions.resume`), что для фонового autoLaunch: план
+ * (`sessions.create`/`sessions.resume`), что для подъёма письмом: план
  * команды строит core (`planLaunch`/`planResume`/`planNew`), а хост только
  * находит бинарь, собирает окружение и заводит PTY. Канал звонка здесь всегда
  * выключен (`{ channel: false }`) — хост про него ничего не знает (спека 4.2).
@@ -23,7 +23,6 @@ import {
   type SessionRole,
   type RoleCatalog,
   baseBranchOf,
-  createChildSession,
   createNewSession,
   createPendingSession,
   createWorktree,
@@ -63,6 +62,7 @@ import {
   SpawnBudgetError,
   readMap,
   reserveAttempt,
+  roomOfSession,
   ResourceDeniedError,
   sessionTag,
   settleAttempt,
@@ -75,7 +75,6 @@ import {
   type EffortLevel,
   type LaunchPlan,
   type SpawnLimits,
-  type WorkEntry,
   type ProviderEntry,
 } from '@parley/core';
 import { HOST_ERROR_REASONS, refKey } from '@parley/protocol';
@@ -91,7 +90,6 @@ import type { WorksService } from '../works/works-service.js';
 import { gitFailure } from '../worktrees/worktrees-service.js';
 import { createStepTimer } from '../timing.js';
 import { createSkillInstaller } from './agent-skills.js';
-import { autoLaunchCandidates } from './auto-launch.js';
 import { findInterrupted } from './interrupted.js';
 import { resolveModelChoice } from './model-choice.js';
 import { LOOPBACK_KEY_PLACEHOLDER, providerLaunchEnv } from './provider-env.js';
@@ -103,6 +101,8 @@ export interface CreateSessionInput {
   label: string;
   task: string;
   parent: string | null;
+  /** Authenticated caller requesting an ordinary workspace peer. */
+  requestedBy?: string;
   role?: SessionRole | null;
   agent?: string;
   /** Своя рабочая копия git — план пишется сразу, каталог заводит `launch()` (спека 8.1). */
@@ -117,9 +117,8 @@ export interface CreateSessionInput {
   effort?: string | null;
   /**
    * Облегчённый запуск (спека «меньше ходов и легче контекст», C2.2): явный выбор окна. Ложится в запись сессии на
-   * всех путях ниже, и `resume`, автозапуск и подъём письмом берут его оттуда. Без поля (старое окно, одиночная
-   * сессия человека) записи не меняются — сессия без lean. Сессии агентов (`spawn_session`) решают по настройке
-   * `leanAgents` сами при создании записи в core.
+   * всех путях ниже; `resume` и подъём письмом берут его оттуда. Без поля запись не меняется.
+   * При создании участников комнаты окно передаёт значение настройки `leanAgents`.
    */
   lean?: boolean;
 }
@@ -139,7 +138,7 @@ export interface LaunchChoice {
    * созданного агентом, `wake` — будильник. Нет значения — человек. Возобновление будильником подчиняется ещё и
    * личному потолку `resumeRate`.
    */
-  by?: 'human' | 'auto' | 'wake';
+  by?: string;
   /** Указатель первым ходом `resume`, если провайдер его принимает. */
   prompt?: string;
   model?: string | null;
@@ -201,8 +200,6 @@ export interface SessionsFeedOptions {
   agent?: { url(): string | null; register(ref: SessionRef): string; unregister(ref: SessionRef): void };
 }
 
-/** Ключ работы для склейки снимков «до» и «после» в autoLaunch. */
-const workKey = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
 
 /**
  * Агент у своего приглашения (спека нормалайзера, 5.7–5.8): ход окончен — `idle` или ещё не просмотренный
@@ -279,8 +276,7 @@ export function createSessionsService(
 
   // Между чтением карты и `pty.start` есть await-и (план команды, поиск
   // бинаря) — за это время может подоспеть второй вызов на ту же сессию:
-  // ручной `sessions.resume` поверх ещё не отработавшего autoLaunch или два
-  // срабатывания autoLaunch подряд на одном и том же изменении карты.
+  // ручной `sessions.resume` одновременно с подъёмом той же сессии письмом.
   const launching = new Set<string>();
 
   // Запись карты по выходу процесса идёт асинхронно и без ожидания в самом
@@ -313,7 +309,7 @@ export function createSessionsService(
   async function refuseLaunch(
     ref: SessionRef,
     parentId: string | null,
-    by: 'human' | 'auto' | 'wake',
+    by: string,
     error: ResourceDeniedError,
   ): Promise<never> {
     host.log.warn('launch refused by the resource budget', { ref, by, code: error.code, scope: error.scope });
@@ -344,7 +340,7 @@ export function createSessionsService(
     ref: SessionRef,
     parentId: string | null,
     mode: LaunchMode,
-    by: 'human' | 'auto' | 'wake',
+    by: string,
   ): Promise<string> {
     const { config } = await loadConfig();
     let attemptId = '';
@@ -518,7 +514,7 @@ export function createSessionsService(
       // Допуск — до worktree, скилла и процесса: исчерпанный бюджет не создаёт ничего.
       attemptId = await timer.step('reserve', () => reserveLaunch(ref, session.parent, mode, options.by ?? 'human'));
 
-      // Worktree запланирован (`plannedWorktree` в `create()` или `spawn_session`
+      // Worktree запланирован (`plannedWorktree` в `create()` или в старой карте
       // в core), но каталога на диске ещё нет — заводим его перед первым же
       // запуском, в том числе перед `resume` прерванной сессии (спека 8.1–8.3).
       if (session.worktree !== null && session.worktree.createdAt === null) {
@@ -772,7 +768,7 @@ export function createSessionsService(
 
   /**
    * Сессию, заведённую `sessions.create`, тут же откроют в терминале — в
-   * отличие от той, что фоном поднял autoLaunch, отмечаем её увиденной сразу,
+   * отличие от той, что поднята письмом, отмечаем её увиденной сразу,
    * чтобы до первого `pty.attach` она не мигала непрочитанной.
    */
   async function createInteractive(
@@ -786,12 +782,11 @@ export function createSessionsService(
   }
 
   /**
-   * Быстрая и дочерняя сессии core заводит с именем по умолчанию (`addSession`
+   * Быстрые сессии core заводит с именем по умолчанию (`addSession`
    * ставит `defaultSessionName` вместо `NEW_LABEL`) и провайдером claude. Ярлык и
    * провайдер из диалога окна должны остаться — иначе выбор человека молча терялся бы.
    * Пустой ярлык оставляет имя по умолчанию: автозаголовок Claude Code его не меняет
-   * (спека архива комнат, раздел 14). Модель и усилие ложатся в запись так же, как их
-   * пишет `spawn_session`: без выбора полей нет; так же и `lean`.
+   * (спека архива комнат, раздел 14). Модель, усилие и `lean` ложатся в запись только при явном выборе.
    */
   async function applyChoice(
     ref: SessionRef,
@@ -814,27 +809,16 @@ export function createSessionsService(
     });
   }
 
-  /** База worktree ребёнка — ветка родителя, если он сам в worktree, иначе база проекта (как у `spawn_session`). */
-  async function worktreeBaseFor(ref: SessionRef, parentId: string | null): Promise<string> {
-    if (parentId !== null) {
-      const map = await readMap(ref.projectPath, ref.workId);
-      const parent = map.sessions.find((candidate) => candidate.id === parentId);
-      if (parent?.worktree !== null && parent?.worktree !== undefined) return parent.worktree.branch;
-    }
-    return baseBranchOf(ref.projectPath);
-  }
-
   /**
-   * План worktree пишется в карту сразу — тем же путём, что `spawn_session` в
-   * core (кусок 4.1); каталог на диске заводит `launch()` перед первым запуском.
+   * План worktree пишется в карту сразу; каталог на диске заводит `launch()` перед первым запуском.
    *
    * `brief: true` — бриф сессии уже записан без плана (его пишет создание
    * записи): переписываем его по карте с планом, иначе агент не узнает из
    * брифа свою ветку и базу (fix-guide, п. 3). Быстрой сессии `new` бриф не
    * пишется вовсе — ей и заводить его незачем.
    */
-  async function attachWorktreePlan(ref: SessionRef, parentId: string | null, brief: boolean): Promise<void> {
-    const base = await worktreeBaseFor(ref, parentId);
+  async function attachWorktreePlan(ref: SessionRef, brief: boolean): Promise<void> {
+    const base = await baseBranchOf(ref.projectPath);
     const { config } = await loadConfig();
     const updated = await updateMap(ref.projectPath, ref.workId, (map) => {
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -878,6 +862,9 @@ export function createSessionsService(
     logged: { sessionId?: string },
   ): Promise<SessionRef> {
     const { projectPath, workId, provider, label, task, parent, worktree, lean } = input;
+    if (input.requestedBy !== undefined && (workId === null || !task.trim())) throw new HostError('bad_request', 'Agent-created sessions require a workspace and task.');
+    const agentConfig = input.requestedBy === undefined ? undefined : (await loadConfig()).config;
+    if (parent !== null) throw new HostError('bad_request', 'Child sessions are no longer supported. Create a root session and add it to a room.');
     // Secret-dependent GLM must refuse before every create branch. Other providers keep their
     // existing create/launch failure behavior; all launches still use the shared preflight below.
     if ((await timer.step('providers', () => loadProviders()))[provider]?.runner.secret !== undefined) {
@@ -898,12 +885,12 @@ export function createSessionsService(
     const resolved = await timer.step('model', () => resolveModelChoice(provider, input.model ?? undefined, input.effort ?? undefined));
     // `exactOptionalPropertyTypes`: явный `undefined` ключом в `LaunchChoice` не проходит.
     const choice: LaunchChoice = {
+      ...(input.requestedBy === undefined ? {} : { by: input.requestedBy }),
       ...(input.model === null ? { model: null } : resolved.model === undefined ? {} : { model: resolved.model }),
       ...(input.effort === null ? { effort: null } : resolved.effort === undefined ? {} : { effort: resolved.effort }),
     };
 
-    // Проверка до создания сессии, а не после (как и в `spawn_session` core,
-    // кусок 4.1) — иначе в карте осталась бы pending-сессия, которую нечем завести.
+    // Проверка до создания сессии — иначе в карте осталась бы pending-сессия, которую нечем завести.
     if (worktree === true && !(await timer.step('git', () => isGitRepo(projectPath)))) {
       throw new HostError('bad_request', 'the project has no git — a worktree cannot be created');
     }
@@ -913,42 +900,60 @@ export function createSessionsService(
       const ref = { projectPath, workId: created.workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
       await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
-      if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, null, false));
+      if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, false));
       return timer.step('launch', () => createInteractive(ref, 'new', choice));
     }
 
-    if (task === '' && parent === null) {
+    if (task === '') {
       const created = await timer.step('record', () => createNewSession(projectPath, workId));
       const ref = { projectPath, workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
       await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
-      if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, null, false));
+      if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, false));
       return timer.step('launch', () => createInteractive(ref, 'new', choice));
     }
 
-    if (task === '' && parent !== null) {
-      const created = await timer.step('record', () => createChildSession(projectPath, workId, parent));
-      const ref = { projectPath, workId, sessionId: created.session.id };
-      logged.sessionId = ref.sessionId;
-      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
-      if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, parent, true));
-      return timer.step('launch', () => createInteractive(ref, 'launch', choice));
+    let admitted: { ref: SessionRef; attemptId: string } | undefined;
+    try {
+      const sessionId = await timer.step('record', () => createPendingSession(projectPath, workId, {
+        provider,
+        label,
+        task,
+        parent,
+        contextFrom: [],
+        role,
+        ...choice,
+        ...(lean === undefined ? {} : { lean }),
+      }, agentConfig === undefined ? undefined : (map, sessionId) => {
+        const caller = map.sessions.find(s => s.id === input.requestedBy);
+        if (!caller || caller.lifecycle === 'closed') throw new HostError('bad_request', 'The caller session is no longer available.');
+        if (map.work.status === 'archived') throw new HostError('bad_request', 'The workspace is archived.');
+        const limits = limitsFromConfig(agentConfig);
+        const room = roomOfSession(map, caller.id);
+        const used = map.resources?.spawned ?? 0;
+        const roomUsed = room === null ? 0 : map.resources?.spawnedByRoom[room] ?? 0;
+        if (used >= limits.workNewSessions) throw new ResourceDeniedError('new-sessions', 'work', used, limits.workNewSessions);
+        if (room !== null && roomUsed >= limits.roomNewSessions) throw new ResourceDeniedError('new-sessions', 'room', roomUsed, limits.roomNewSessions);
+        const attempt = reserveAttempt(map, { kind: 'launch', actor: caller.id, session: sessionId, owner: generation, limits });
+        admitted = { ref: { projectPath, workId, sessionId }, attemptId: attempt.id };
+        map.resources!.spawned += 1;
+        if (room !== null) map.resources!.spawnedByRoom[room] = roomUsed + 1;
+      }));
+      logged.sessionId = sessionId;
+      const ref = { projectPath, workId, sessionId };
+      if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, true));
+      return await timer.step('launch', () => createInteractive(ref, 'launch', choice));
+    } catch (error) {
+      if (admitted !== undefined) {
+        await settleLaunch(admitted.ref, admitted.attemptId, 'released');
+        throw new HostError(
+          error instanceof HostError ? error.code : 'internal',
+          `Session ${admitted.ref.sessionId} could not be started: ${error instanceof Error ? error.message : String(error)}. Check get_map before retrying create_session.`,
+          { ...(error instanceof HostError ? error.data : {}), ref: admitted.ref },
+        );
+      }
+      throw error;
     }
-
-    const sessionId = await timer.step('record', () => createPendingSession(projectPath, workId, {
-      provider,
-      label,
-      task,
-      parent,
-      contextFrom: parent === null ? [] : [parent],
-      role,
-      ...choice,
-      ...(lean === undefined ? {} : { lean }),
-    }));
-    logged.sessionId = sessionId;
-    const ref = { projectPath, workId, sessionId };
-    if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, parent, true));
-    return timer.step('launch', () => createInteractive(ref, 'launch', choice));
   }
 
   async function stop(ref: SessionRef): Promise<void> {
@@ -1100,42 +1105,8 @@ export function createSessionsService(
     }
   }
 
-  async function runAutoLaunch(snapshot: WorksSnapshot, previous: WorksSnapshot): Promise<void> {
-    const previousByKey = new Map<string, WorkEntry>(
-      previous.entries.map((entry) => [workKey(entry.projectPath, entry.map.work.id), entry]),
-    );
-    // Настройку читаем максимум раз на пачку изменений, и только если в ней
-    // вообще нашёлся кандидат — иначе на каждое `works.changed` без надобности
-    // читался бы файл настроек.
-    let enabled: boolean | undefined;
-
-    for (const entry of snapshot.entries) {
-      const prevEntry = previousByKey.get(workKey(entry.projectPath, entry.map.work.id));
-      const firstRead = works.firstReadDone(entry.projectPath, entry.map.work.id);
-      const candidates = autoLaunchCandidates(prevEntry, entry, firstRead);
-      if (candidates.length === 0) continue;
-
-      if (enabled === undefined) {
-        enabled = (await loadConfig()).config.autoLaunch;
-      }
-      if (!enabled) continue;
-
-      for (const sessionId of candidates) {
-        const ref: SessionRef = {
-          projectPath: entry.projectPath,
-          workId: entry.map.work.id,
-          sessionId,
-        };
-        launch(ref, 'launch', { by: 'auto' }).catch((error: unknown) => {
-          host.log.error('autoLaunch: запуск сессии не удался', { ref, error: String(error) });
-        });
-      }
-    }
-  }
-
-  works.onChange((snapshot, previous) => {
+  works.onChange((snapshot) => {
     stopRetired(snapshot);
-    void runAutoLaunch(snapshot, previous);
   });
 
   /** Та же сессия всё ещё спит — её не подняли и не закрыли с момента сбора. */

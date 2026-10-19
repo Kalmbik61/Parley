@@ -1,3 +1,4 @@
+import type { AgentPlanState } from '../agent-plan.js';
 import type { DecisionJournalIntent } from './decision-journal.js';
 import type { TokenTotals } from '../counters.js';
 import type { EffortLevel } from '../providers.js';
@@ -77,6 +78,8 @@ export interface WorktreeInfo {
 
 export interface WorkSession {
   id: string;
+  /** Explicit personal steps, published by this session; separate from accepted room assignments. */
+  agentPlan?: AgentPlanState;
   provider: WorkProvider;
   /** Роль сессии внутри работы: «план», «бэкенд», «ревью». */
   label: string;
@@ -248,6 +251,8 @@ export interface Room {
   title: string;
   /** Id сессии-создателя или `human`. */
   creator: string;
+  /** Владелец; рабочее участие задаётся только members. */
+  ownerId: string | null;
   /** Id сессий; человек — участник всегда и в список не пишется. */
   members: string[];
   createdAt: string;

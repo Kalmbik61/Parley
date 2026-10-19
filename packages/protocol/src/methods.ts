@@ -128,7 +128,7 @@ export const METHODS = {
     provider: z.string(),
     label: z.string(),
     task: z.string(),
-    parent: z.string().nullable(),
+    parent: z.null(),
     role: z.object({ source: z.enum(['builtin', 'claude', 'codex']), name: z.string().min(1).max(4096) }).nullable().optional(),
     agent: z.string().min(1).max(4096).optional(),
     worktree: z.boolean().optional(),
@@ -223,6 +223,7 @@ export const METHODS = {
   // отдельно, через `sessions.delete` каждой, до `rooms.delete` (`RoomRowMenu`).
   'rooms.rename': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string(), title: renameTitle }),
   'rooms.setLead': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string(), sessionId: z.string() }),
+  'rooms.setOwner': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string(), sessionId: z.string().nullable() }),
   'rooms.delete': z.object({ projectPath: z.string(), workId: z.string(), roomId: z.string() }),
   // Архив комнаты (часть 1 спеки архива комнат, раздел 4): лента остаётся и читается, писать в комнату нельзя, пока
   // человек не вернёт её. `stopSessions` — останавливать ли сессии, у которых после архивации нет другой открытой
@@ -435,6 +436,7 @@ export interface Results extends AssistantMethodResults, CustomProviderMethodRes
   'rooms.rename': { ok: true };
   /** `messageId` — системная строка ленты «@s03 is now the lead». */
   'rooms.setLead': { messageId: string };
+  'rooms.setOwner': { ok: true };
   'rooms.delete': { ok: true };
   'rooms.archive': { ok: true };
   'rooms.reopen': { ok: true };

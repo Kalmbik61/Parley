@@ -41,6 +41,11 @@ describe('native agent compatibility', () => {
   });
 });
 describe('mandatory role delivery', () => {
+  it.each(['claude', 'codex'] as const)('delivers Feature Lead with read-only permissions on %s', async provider => {
+    await expect(prepareSessionRole(project, PROVIDERS[provider], { roleId: 'builtin:feature-lead', provider })).resolves.toMatchObject({
+      readOnly: true, roleText: expect.stringContaining('Do not modify application code, tests, scripts or configuration'),
+    });
+  });
   it('requires both start and resume text and read-only channels before creation', async () => {
     const choice = { roleId: 'builtin:planner', provider: 'claude', mode: 'create' as const };
     await expect(prepareSessionRole(project, PROVIDERS.claude, choice)).resolves.toMatchObject({ readOnly: true, model: 'opus' });

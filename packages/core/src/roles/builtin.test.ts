@@ -3,8 +3,9 @@ import { BUILTIN_ROLES, modelForTier } from './builtin.js';
 import type { RoleTier } from './types.js';
 
 describe('builtin roles', () => {
-  it('provides eight stable original roles with their agreed working boundaries', () => {
+  it('provides nine stable original roles with their agreed working boundaries', () => {
     expect(BUILTIN_ROLES.map((role) => role.id)).toEqual([
+      'builtin:feature-lead',
       'builtin:planner',
       'builtin:architect',
       'builtin:critic',
@@ -22,7 +23,17 @@ describe('builtin roles', () => {
       expect(role.prompt).not.toMatch(/[Ѐ-ӿ]/);
       if (role.readOnly) expect(role.prompt).toMatch(/shell/);
     }
-    expect(BUILTIN_ROLES.find((role) => role.id === 'builtin:verifier')?.readOnly).toBe(false);
+    const featureLead = BUILTIN_ROLES.find((role) => role.id === 'builtin:feature-lead')!;
+    expect(featureLead.readOnly).toBe(true);
+    expect(featureLead.prompt).toContain('application code, tests, scripts or configuration');
+    expect(featureLead.prompt).toContain('Ownership is separate');
+    expect(featureLead.prompt).toContain('Do not poll for routine progress');
+    expect(featureLead.prompt).toContain('Do not acknowledge or relay routine notes');
+    expect(featureLead.prompt).toContain('escalate urgent blockers immediately');
+    const verifier = BUILTIN_ROLES.find((role) => role.id === 'builtin:verifier')!;
+    expect(verifier.readOnly).toBe(false);
+    expect(verifier.prompt).toContain('PASS, FAIL, or NOT VERIFIED');
+    expect(verifier.prompt).toContain('tests, fixtures, expected results, or configuration');
   });
   it('selects the agreed model tiers from the current provider catalog', () => {
     expect(

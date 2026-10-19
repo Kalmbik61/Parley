@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addSession,
+  addRoom,
   buildRoleCatalog,
   codexModelsFile,
   createPendingSession,
@@ -26,7 +27,7 @@ import {
   updateMap,
   workPaths,
 } from '@parley/core';
-import type { WorkEntry, WorktreeInfo } from '@parley/core';
+import type { WorktreeInfo } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
@@ -35,7 +36,6 @@ import { createPtyManager } from '../pty/pty-manager.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
-import { autoLaunchCandidates } from './auto-launch.js';
 import { atPrompt, busyError, createSessionsService, createSwitchLock } from './sessions-service.js';
 import type { SessionsFeedOptions, SessionsService } from './sessions-service.js';
 
@@ -498,15 +498,13 @@ describe('create(): модель и усилие из диалога (дизай
     const work = await createWork(project, { title: 'Работа', goal: '' });
     setEnv('STUB_ARGS_FILE', await tempArgsFile());
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
-    const parent = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'родитель', task: 'т' });
     const base = { projectPath: project, provider: 'claude', label: '' };
     const choice = { model: 'opus', effort: 'xhigh' };
 
-    // Тихий старт, новая работа под быструю сессию, дочерняя без задачи и `pending` с задачей.
+    // Тихий старт, новая работа под быструю сессию, `pending` с задачей.
     const refs = [
       await service.create({ ...base, workId: work.work.id, task: '', parent: null, ...choice }),
       await service.create({ ...base, workId: null, task: '', parent: null, ...choice }),
-      await service.create({ ...base, workId: work.work.id, task: '', parent, ...choice }),
       await service.create({ ...base, workId: work.work.id, task: 'сделай штуку', parent: null, ...choice }),
     ];
     for (const ref of refs) {
@@ -984,94 +982,45 @@ describe('выход процесса', () => {
   });
 });
 
-describe('autoLaunchCandidates', () => {
-  it('только новая pending-с-родителем, появившаяся после первого чтения работы хостом', () => {
-    const entry = (sessions: WorkEntry['map']['sessions']): WorkEntry => ({
-      projectPath: '/tmp/project',
-      map: { work: { id: 'w-01' }, sessions } as WorkEntry['map'],
-    });
-    const pendingWithParent = { id: 's-2', lifecycle: 'pending', parent: 's-1' } as WorkEntry['map']['sessions'][number];
-    const pendingNoParent = { id: 's-3', lifecycle: 'pending', parent: null } as WorkEntry['map']['sessions'][number];
-
-    // До старта хоста: даже если сессия pending-с-родителем, без firstReadDone
-    // это первое чтение работы — трогать её нельзя.
-    expect(autoLaunchCandidates(undefined, entry([pendingWithParent]), false)).toEqual([]);
-
-    // После первого чтения: новая pending-с-родителем — кандидат.
-    expect(autoLaunchCandidates(entry([]), entry([pendingWithParent]), true)).toEqual(['s-2']);
-
-    // Без родителя — не кандидат, даже после первого чтения.
-    expect(autoLaunchCandidates(entry([]), entry([pendingNoParent]), true)).toEqual([]);
-
-    // Уже известная (была и в previous) — не кандидат повторно.
-    expect(autoLaunchCandidates(entry([pendingWithParent]), entry([pendingWithParent]), true)).toEqual([]);
-  });
-});
-
 function service(options: Parameters<typeof createWorksService>[1] = {}): WorksService {
   const created = createWorksService(fakeHost(), options);
   worksServices.push(created);
   return created;
 }
 
-describe('autoLaunch: сервис', () => {
-  it('поднимает только дочернюю pending, дописанную после первого чтения; старую и без родителя — не трогает', async () => {
-    const work = await createWork(project, { title: 'Работа', goal: '' });
-    let parentId = '';
-    await updateMap(project, work.work.id, (map) => {
-      parentId = addSession(map, { provider: 'claude', label: 'родитель', task: 'т' }).id;
-    });
-    let oldNoParentId = '';
-    await updateMap(project, work.work.id, (map) => {
-      oldNoParentId = addSession(map, { provider: 'claude', label: 'без родителя', task: '' }).id;
-    });
-
+describe('legacy pending sessions', () => {
+  it('does not auto-launch a stored legacy child when a map changes', async () => {
+    await saveConfig({ autoLaunch: true });
+    const work = await createWork(project, { title: 'Work', goal: '' });
+    const parent = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Parent', task: '' });
     const works = service({ debounceMs: 30 });
     const pty = createPtyManager(fakeHost());
-    const sessions = createSessionsService(fakeHost(), works, pty, fakeActivity());
-    await works.start();
-
-    let spawnedId = '';
-    await updateMap(project, work.work.id, (map) => {
-      spawnedId = addSession(map, { provider: 'claude', label: 'дочерняя', task: 'т', parent: parentId }).id;
-    });
-
-    await waitFor(
-      async () => (await readMap(project, work.work.id)).sessions.find((s) => s.id === spawnedId)?.lifecycle === 'active',
-      REAL_PROCESS_WAIT_MS,
-      () => updateMap(project, work.work.id, () => undefined),
-    );
-
-    const map = await readMap(project, work.work.id);
-    expect(map.sessions.find((s) => s.id === oldNoParentId)?.lifecycle).toBe('pending');
-    expect(existsSync(path.join(project, 'PARLEY.md'))).toBe(true);
-
-    await sessions.stop({ projectPath: project, workId: work.work.id, sessionId: spawnedId });
-  });
-
-  it('autoLaunch: false в настройках — сессия остаётся pending', async () => {
-    await saveConfig({ autoLaunch: false });
-
-    const work = await createWork(project, { title: 'Работа', goal: '' });
-    let parentId = '';
-    await updateMap(project, work.work.id, (map) => {
-      parentId = addSession(map, { provider: 'claude', label: 'родитель', task: 'т' }).id;
-    });
-
-    const works = service({ debounceMs: 30 });
-    const pty = createPtyManager(fakeHost());
+    const start = vi.spyOn(pty, 'start');
     createSessionsService(fakeHost(), works, pty, fakeActivity());
     await works.start();
-
-    let spawnedId = '';
-    await updateMap(project, work.work.id, (map) => {
-      spawnedId = addSession(map, { provider: 'claude', label: 'дочерняя', task: 'т', parent: parentId }).id;
+    let childId = '';
+    await updateMap(project, work.work.id, map => {
+      const child = addSession(map, { provider: 'claude', label: 'Legacy child', task: 'Work', parent: null });
+      child.parent = parent;
+      childId = child.id;
     });
+    await waitFor(() => works.entry(project, work.work.id)?.map.sessions.some(session => session.id === childId) === true);
+    expect(start).not.toHaveBeenCalled();
+    expect((await readMap(project, work.work.id)).sessions.find(session => session.id === childId)?.lifecycle).toBe('pending');
+  });
 
-    // Ждать нечего: изменение уже пройдёт цикл сервиса, лишь бы не запустилось.
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    const map = await readMap(project, work.work.id);
-    expect(map.sessions.find((s) => s.id === spawnedId)?.lifecycle).toBe('pending');
+  it.each(['', 'Implement the change'])('rejects nonnull parents before any effects (task=%s)', async task => {
+    const work = await createWork(project, { title: 'Work', goal: '' });
+    const parent = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Parent', task: '' });
+    const before = await readMap(project, work.work.id);
+    const files = await readdir(workPaths(project, work.work.id).dir);
+    const pty = createPtyManager(fakeHost());
+    const start = vi.spyOn(pty, 'start');
+    const sessions = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity());
+    await expect(sessions.create({ projectPath: project, workId: work.work.id, provider: 'claude', label: 'Child', task, parent })).rejects.toThrow('Child sessions are no longer supported');
+    expect(await readMap(project, work.work.id)).toEqual(before);
+    expect(await readdir(workPaths(project, work.work.id).dir)).toEqual(files);
+    expect(start).not.toHaveBeenCalled();
   });
 });
 
@@ -1350,13 +1299,7 @@ describe('worktree (план, кусок 4.2)', () => {
     await service.stop(ref);
   });
 
-  it('2: дочерняя сессия со своим worktree, поднятая autoLaunch, — каталог заведён до запуска стаба', async () => {
-    // Тест «autoLaunch: false в настройках» выше по файлу пишет флаг в общий
-    // для процесса `config.json` (сандбокс-дом один на файл) и не возвращает
-    // его назад — без явного включения здесь autoLaunch остался бы выключен и
-    // для этого теста тоже.
-    await saveConfig({ autoLaunch: true });
-
+  it('2: историческая дочерняя сессия со своим worktree, запущенная явно, — каталог заведён до запуска стаба', async () => {
     await initGitProject(project);
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const worktreeRootDir = await tempWorktreeRoot();
@@ -1370,7 +1313,7 @@ describe('worktree (план, кусок 4.2)', () => {
     const sessions = createSessionsService(fakeHost(), works, pty, fakeActivity());
     await works.start();
 
-    // Так `spawn_session({ worktree: true })` пишет план в карту (core, кусок 4.1):
+    // Сохранённый исторический план worktree:
     // каталог на диске к этому моменту ещё не существует, `createdAt` — `null`.
     let childId = '';
     await updateMap(project, work.work.id, (map) => {
@@ -1378,18 +1321,14 @@ describe('worktree (план, кусок 4.2)', () => {
         provider: 'claude',
         label: 'дочерняя',
         task: 'т',
-        parent: parentId,
+        parent: null,
       });
+      child.parent = parentId;
       childId = child.id;
       child.worktree = plannedWorktree(project, work.work.id, child.id, 'main', worktreeRootDir);
     });
 
-    await waitFor(
-      async () =>
-        (await readMap(project, work.work.id)).sessions.find((s) => s.id === childId)?.lifecycle === 'active',
-      REAL_PROCESS_WAIT_MS,
-      () => updateMap(project, work.work.id, () => undefined),
-    );
+    await sessions.launch({ projectPath: project, workId: work.work.id, sessionId: childId }, 'launch');
 
     const map = await readMap(project, work.work.id);
     const child = map.sessions.find((s) => s.id === childId);
@@ -1414,8 +1353,9 @@ describe('worktree (план, кусок 4.2)', () => {
         provider: 'claude',
         label: 'дочерняя',
         task: 'т',
-        parent: parentId,
+        parent: null,
       });
+      child.parent = parentId;
       childId = child.id;
       child.worktree = plannedWorktree(project, work.work.id, child.id, 'main', worktreeRootDir);
     });
@@ -1717,12 +1657,12 @@ describe('скилл parley при запуске сессии (кусок 10 п
   });
 });
 
-describe('модель и усилие из карты: сессия, заведённая spawn_session', () => {
-  it('pending от spawn_session запускается с записанными моделью и усилием: флаги в argv стаба', async () => {
+describe('модель и усилие из сохранённой карты', () => {
+  it('сохранённая pending запускается с записанными моделью и усилием: флаги в argv стаба', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const argsFile = await tempArgsFile();
     setEnv('STUB_ARGS_FILE', argsFile);
-    // Так `spawn_session` агента заводит запись: выбор лежит в карте, а поднимает её хост позже и без диалога.
+    // Сохранённые параметры применяются при явном запуске.
     const sessionId = await createPendingSession(project, work.work.id, {
       provider: 'claude',
       label: 'бэкенд',
@@ -1750,15 +1690,13 @@ describe('lean: решение при создании и запуск по за
     const work = await createWork(project, { title: 'Работа', goal: '' });
     setEnv('STUB_ARGS_FILE', await tempArgsFile());
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
-    const parent = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'родитель', task: 'т' });
     const base = { projectPath: project, provider: 'claude', label: '' };
 
     for (const lean of [true, false]) {
-      // Тихий старт, новая работа под быструю сессию, дочерняя без задачи и `pending` с задачей.
+      // Тихий старт, новая работа под быструю сессию, `pending` с задачей.
       const refs = [
         await service.create({ ...base, workId: work.work.id, task: '', parent: null, lean }),
         await service.create({ ...base, workId: null, task: '', parent: null, lean }),
-        await service.create({ ...base, workId: work.work.id, task: '', parent, lean }),
         await service.create({ ...base, workId: work.work.id, task: 'сделай штуку', parent: null, lean }),
       ];
       for (const ref of refs) {
@@ -1862,11 +1800,11 @@ describe('lean: решение при создании и запуск по за
     expect(resumed).not.toContain(LEAN_FLAG);
   });
 
-  it('pending, заведённая spawn_session с lean в записи, запускается с lean-флагами (как поднимает autoLaunch)', async () => {
+  it('pending с lean в записи запускается явно с lean-флагами', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });
     const argsFile = await tempArgsFile();
     setEnv('STUB_ARGS_FILE', argsFile);
-    // Так `spawn_session` агента заводит запись: решение «lean» лежит в карте, а поднимает её хост позже и без диалога.
+    // Сохранённое решение lean применяется при явном запуске.
     const sessionId = await createPendingSession(project, work.work.id, {
       provider: 'claude',
       label: 'бэкенд',
@@ -1876,7 +1814,7 @@ describe('lean: решение при создании и запуск по за
     const ref: SessionRef = { projectPath: project, workId: work.work.id, sessionId };
 
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
-    await service.launch(ref, 'launch', { by: 'auto' });
+    await service.launch(ref, 'launch');
 
     expect((await readArgs(argsFile)).argv).toContain(LEAN_FLAG);
     await service.stop(ref);
@@ -2436,5 +2374,90 @@ describe('setModel(): смена модели (спека нормалайзер
     expect((await sessionOf(ref))?.model).toBe('sonnet');
     await expect(service.exclusive(ref, async () => 'свободно')).resolves.toBe('свободно');
     await service.stop(ref);
+  });
+});
+
+
+describe('agent-created workspace peers', () => {
+  it('identifies the recorded peer after launch failure and releases its reserved slot', async () => {
+    const work = await createWork(project, { title: 'Peers', goal: '' });
+    const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const pty = createPtyManager(fakeHost());
+    vi.spyOn(pty, 'start').mockRejectedValueOnce(new Error('launch unavailable'));
+    const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity());
+    await expect(service.create({ projectPath: project, workId: work.work.id, provider: 'claude', label: 'Peer', task: 'Implement', parent: null, requestedBy: caller }))
+      .rejects.toThrow(/s-02.*launch unavailable.*get_map/s);
+    const map = await readMap(project, work.work.id);
+    expect(map.sessions.find(s => s.id === 's-02')).toMatchObject({ parent: null, lifecycle: 'pending' });
+    expect(map.resources?.attempts.find(a => a.session === 's-02')).toMatchObject({ state: 'released' });
+    expect(map.resources?.spawned).toBe(1);
+  });
+
+  it('charges the caller room creation budget without joining the new peer to it', async () => {
+    setEnv('PARLEY_ROOM_NEW_SESSIONS', '1');
+    const work = await createWork(project, { title: 'Peers', goal: '' });
+    const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    let roomId = '';
+    await updateMap(project, work.work.id, map => { roomId = addRoom(map, { title: 'Team', creator: caller, ownerId: caller, members: [caller] }).id; });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const input = { projectPath: project, workId: work.work.id, provider: 'claude', label: 'Peer', task: 'Implement', parent: null, requestedBy: caller };
+    try {
+      const peer = await service.create(input);
+      await expect(service.create(input)).rejects.toThrow();
+      const map = await readMap(project, work.work.id);
+      expect(map.resources?.spawnedByRoom[roomId]).toBe(1);
+      expect(map.rooms[0]?.members).not.toContain(peer.sessionId);
+      expect(map.sessions).toHaveLength(2);
+    } finally { await service.stopAll(); }
+  });
+
+  it('admits only one concurrent request at the launch cap and writes no rejected peer', async () => {
+    setEnv('PARLEY_WORK_LAUNCHES', '1');
+    const work = await createWork(project, { title: 'Peers', goal: '' });
+    const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    try {
+      const results = await Promise.allSettled([1, 2].map(i => service.create({ projectPath: project, workId: work.work.id, provider: 'claude', label: `Peer ${i}`, task: 'Implement', parent: null, requestedBy: caller })));
+      expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
+      const map = await readMap(project, work.work.id);
+      expect(map.sessions).toHaveLength(2);
+      expect(map.resources?.spawned).toBe(1);
+    } finally { await service.stopAll(); }
+  });
+
+  it('rejects archived workspaces and exhausted creation budgets atomically', async () => {
+    setEnv('PARLEY_WORK_NEW_SESSIONS', '1');
+    const work = await createWork(project, { title: 'Peers', goal: '' });
+    const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const input = { projectPath: project, workId: work.work.id, provider: 'claude', label: 'Peer', task: 'Implement', parent: null, requestedBy: caller };
+    await updateMap(project, work.work.id, map => { map.work.status = 'archived'; });
+    await expect(service.create(input)).rejects.toThrow('archived');
+    await updateMap(project, work.work.id, map => { map.work.status = 'active'; map.resources = { seq: 0, spawned: 1, spawnedByRoom: {}, attempts: [] }; });
+    await expect(service.create(input)).rejects.toThrow();
+    expect((await readMap(project, work.work.id)).sessions).toHaveLength(1);
+  });
+
+  it('creates a cross-provider root and attributes its reserved launch to the caller', async () => {
+    setEnv('PARLEY_CODEX_BIN', STUB);
+    const work = await createWork(project, { title: 'Peers', goal: '' });
+    const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    try {
+      const ref = await service.create({ projectPath: project, workId: work.work.id, provider: 'codex', label: 'Peer', task: 'Implement', parent: null, requestedBy: caller });
+      const map = await readMap(project, work.work.id);
+      expect(map.sessions.find(s => s.id === ref.sessionId)).toMatchObject({ parent: null, provider: 'codex' });
+      expect(map.resources?.spawned).toBe(1);
+      expect(map.resources?.attempts.find(a => a.session === ref.sessionId)).toMatchObject({ actor: caller, state: 'spent' });
+      expect(map.rooms).toHaveLength(0);
+    } finally { await service.stopAll(); }
+  });
+
+  it('rejects an absent caller without writing a new session', async () => {
+    const work = await createWork(project, { title: 'Peers', goal: '' });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    await expect(service.create({ projectPath: project, workId: work.work.id, provider: 'claude', label: 'Peer', task: 'Implement', parent: null, requestedBy: 's-missing' })).rejects.toThrow('caller');
+    expect((await readMap(project, work.work.id)).sessions).toHaveLength(0);
   });
 });

@@ -37,6 +37,7 @@ import {
   resolveProposal,
   RoomRuleError,
   setRoomLead,
+  setRoomOwner,
   updateMap,
   workPaths,
   type MessageVia,
@@ -116,6 +117,7 @@ export async function createHumanRoom(input: Params<'rooms.create'>): Promise<st
     const room = addRoom(map, {
       title: input.title,
       creator: HUMAN,
+      ownerId: null,
       members,
       lead,
       ...(input.mode === undefined ? {} : { mode: input.mode }),
@@ -271,6 +273,18 @@ export async function renameHumanRoom(input: Params<'rooms.rename'>): Promise<vo
     },
     { touch: false },
   );
+}
+
+export async function setHumanRoomOwner(input: Params<'rooms.setOwner'>): Promise<void> {
+  const { projectPath, workId, roomId, sessionId } = input;
+  assertWork(projectPath, workId);
+  await updateMap(projectPath, workId, (map) => {
+    try {
+      setRoomOwner(map, roomId, sessionId);
+    } catch (error) {
+      throw asHostError(error);
+    }
+  }, { touch: false });
 }
 
 /**

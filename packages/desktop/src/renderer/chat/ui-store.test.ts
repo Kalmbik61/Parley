@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { REVEAL_TTL_MS, resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
+import { bindAgentsPinToLayout, REVEAL_TTL_MS, resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
 
 beforeEach(() => {
   resetChatUiStoreForTests();
@@ -112,4 +112,31 @@ describe('ui-store: панель агентов', () => {
     useChatUiStore.getState().selectAgent('s1', null);
     expect(useChatUiStore.getState().agentPanel['s1']).toBeNull();
   });
+});
+
+import { focusedSessionOf, useLayoutStore } from '../layout/store.js';
+import type { TabSpec } from '../../shared/layout-types.js';
+describe('Agents pin follows actual tab activation without a mounted panel', () => {
+ const key = '/tmp/p w-01';
+ const activate = (tab: TabSpec) => useLayoutStore.setState({ activeWorkKey: key, layouts: { [key]: { root: { type: 'group', id: 'g1', tabs: tab.id === 'terminal:B' ? [tab] : [{ kind: 'terminal', id: 'terminal:B', sessionId: 'B' }, tab], activeTabId: tab.id }, activeGroupId: 'g1', closedTabs: [] } } });
+ it.each(['terminal', 'diff'] as const)('clears on %s activation even when MRU already names B', (kind) => {
+  activate({ kind: 'room', id: 'room:r-01', roomId: 'r-01' });
+  useLayoutStore.setState({ mru: { [key]: ['terminal:B'] }, history: { entries: [{ workKey: key, tabId: 'terminal:B', at: 1 }, { workKey: key, tabId: 'room:r-01', at: 2 }], index: 1 } });
+  expect(focusedSessionOf(useLayoutStore.getState(), key)).toBe('B');
+  const off = bindAgentsPinToLayout();
+  useChatUiStore.getState().pinAgentsSession(key, 'A');
+  activate(kind === 'terminal' ? { kind, id: 'terminal:B', sessionId: 'B' } : { kind, id: 'diff:B', sessionId: 'B', commit: null });
+  expect(focusedSessionOf(useLayoutStore.getState(), key)).toBe('B');
+  expect(useChatUiStore.getState().agentsPin[key]).toBeNull(); off();
+ });
+ it('keeps pins for room/file changes and stops reacting after unsubscribe', () => {
+  activate({ kind: 'terminal', id: 'terminal:B', sessionId: 'B' });
+  const off = bindAgentsPinToLayout(); useChatUiStore.getState().pinAgentsSession(key, 'A');
+  activate({ kind: 'room', id: 'room:r-01', roomId: 'r-01' });
+  activate({ kind: 'file', id: 'file:a', root: { kind: 'project' }, path: 'a' });
+  expect(useChatUiStore.getState().agentsPin[key]).toBe('A');
+  off(); activate({ kind: 'terminal', id: 'terminal:B', sessionId: 'B' });
+  expect(useChatUiStore.getState().agentsPin[key]).toBe('A');
+  resetChatUiStoreForTests(); expect(useChatUiStore.getState().agentsPin).toEqual({});
+ });
 });

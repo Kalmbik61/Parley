@@ -77,8 +77,8 @@ describe('GLM launch boundaries', () => {
     const sessions = service();
     for (const choice of [
       input(), { ...input(), task: '' }, { ...input(), task: '', workId: null },
-      { ...input(), task: '', parent: 's-01' },
     ]) await expect(sessions.create(choice)).rejects.toThrow(/key/i);
+    await expect(sessions.create({ ...input(), task: '', parent: 's-01' })).rejects.toThrow(/Child sessions/);
     expect(await readMap(project, workId)).toEqual(before);
     expect(await readdir(path.join(project, '.parley', 'works'))).toEqual(worksBefore);
     expect(launches).toEqual([]);

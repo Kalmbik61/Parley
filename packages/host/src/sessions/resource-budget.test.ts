@@ -308,8 +308,8 @@ describe('перезапуск хоста', () => {
   });
 });
 
-describe('автозапуск агентской сессии', () => {
-  it('сверх слотов не стартует: pending остаётся, родителю — системное письмо, человеку — launch-failed, процесса нет', async () => {
+describe('явный запуск исторической сессии', () => {
+  it('сверх слотов явный запуск возвращает отказ: pending остаётся, процесса и резерва нет', async () => {
     await saveConfig({ workConcurrent: 2 });
     const work = await createWork(project, { title: 'Работа', goal: '' });
     let parentId = '';
@@ -328,29 +328,24 @@ describe('автозапуск агентской сессии', () => {
 
     let childId = '';
     await updateMap(project, work.work.id, (map) => {
-      childId = addSession(map, { provider: 'claude', label: 'ребёнок', task: 'т', parent: parentId }).id;
+      const child = addSession(map, { provider: 'claude', label: 'ребёнок', task: 'т', parent: null });
+      child.parent = parentId;
+      childId = child.id;
     });
 
-    await waitFor(
-      async () => (await readMap(project, work.work.id)).messages.some((message) => message.text.includes('was not started')),
-      20_000,
-      () => updateMap(project, work.work.id, () => undefined),
-    );
+    await expect(sessions.launch({ projectPath: project, workId: work.work.id, sessionId: childId }, 'launch')).rejects.toThrow('session limit reached');
 
     const map = await readMap(project, work.work.id);
     expect(map.sessions.find((session) => session.id === childId)?.lifecycle).toBe('pending');
     expect(pty.list()).toHaveLength(2);
-    const letters = map.messages.filter((message) => message.from === 'system' && message.to.includes(parentId));
-    expect(letters).toHaveLength(1);
-    expect(letters[0]?.text).toMatch(/^S03 was not started: session limit reached/);
-    expect(letters[0]?.text).toContain('2 of 2');
-    const notice = broadcasts.find((b) => b.event === 'host.notice' && (b.data as { kind: string }).kind === 'launch-failed');
+    expect(map.messages).toEqual([]);
+    const notice = broadcasts.find(event => event.event === 'host.notice' && (event.data as { kind?: string; ref?: SessionRef }).kind === 'launch-failed' && (event.data as { ref?: SessionRef }).ref?.sessionId === childId);
     expect(notice?.data).toMatchObject({ kind: 'launch-failed', ref: { sessionId: childId } });
     // Резерва за отказ не осталось.
     expect((await ledger(work.work.id))?.attempts.filter((attempt) => attempt.state === 'reserved')).toEqual([]);
   });
 
-  it('в пределах слотов ребёнок стартует: автозапуск проходит допуск и тратит резерв от auto', async () => {
+  it('явный запуск исторического ребёнка проходит допуск и тратит человеческий резерв', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });
     let parentId = '';
     await updateMap(project, work.work.id, (map) => {
@@ -358,21 +353,19 @@ describe('автозапуск агентской сессии', () => {
     });
     const works = createWorksService(fakeHost(), { debounceMs: 30 });
     stoppers.push(() => works.stop());
-    host(works);
+    const { sessions } = host(works);
     await works.start();
 
     let childId = '';
     await updateMap(project, work.work.id, (map) => {
-      childId = addSession(map, { provider: 'claude', label: 'ребёнок', task: 'т', parent: parentId }).id;
+      const child = addSession(map, { provider: 'claude', label: 'ребёнок', task: 'т', parent: null });
+      child.parent = parentId;
+      childId = child.id;
     });
-    await waitFor(
-      async () => (await readMap(project, work.work.id)).sessions.find((session) => session.id === childId)?.lifecycle === 'active',
-      20_000,
-      () => updateMap(project, work.work.id, () => undefined),
-    );
+    await sessions.launch({ projectPath: project, workId: work.work.id, sessionId: childId }, 'launch');
     // Исход резерва пишется следом за записью старта.
     await waitFor(async () => (await ledger(work.work.id))?.attempts.find((row) => row.session === childId)?.state === 'spent');
     const attempt = (await ledger(work.work.id))?.attempts.find((row) => row.session === childId);
-    expect(attempt).toMatchObject({ kind: 'launch', state: 'spent', actor: 'auto' });
+    expect(attempt).toMatchObject({ kind: 'launch', state: 'spent', actor: 'human' });
   });
 });

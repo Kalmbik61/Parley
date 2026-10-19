@@ -43,6 +43,7 @@ export interface BrowserEndpointOptions {
 export interface BrowserEndpoint {
   /** Токен запуска сессии для `PARLEY_AGENT_TOKEN`: 32 байта hex. Прежний токен той же сессии отзывается. */
   register(ref: SessionRef): string;
+  authenticate(req: IncomingMessage): SessionRef | undefined;
   /** Отзывает токен сессии: её запросы дальше — 401. */
   unregister(ref: SessionRef): void;
   /** Обработчик пути `AGENT_BROWSER_PATH` для сервера хуков. */
@@ -208,6 +209,12 @@ export function createBrowserEndpoint(options: BrowserEndpointOptions): BrowserE
       if (token === undefined) return;
       tokenOfSession.delete(key);
       byToken.delete(token);
+    },
+    authenticate(req) {
+      const auth = headerOf(req, 'authorization');
+      const token = auth?.startsWith('Bearer ') === true ? auth.slice(7).trim() : '';
+      const ref = byToken.get(token);
+      return ref === undefined ? undefined : { ...ref };
     },
     handle(req, res) {
       const auth = headerOf(req, 'authorization');

@@ -8,7 +8,7 @@ import { DEFAULT_CONFIG } from '../config.js';
 import { addMessage, addSession } from '../work/map.js';
 import { addRoom } from '../work/rooms.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
-import { HUMAN, type WorkMap } from '../work/types.js';
+import { type WorkMap } from '../work/types.js';
 import { createParleyServer } from './tools.js';
 
 /**
@@ -46,6 +46,7 @@ const TABLE: Record<string, Hints> = {
   wait_for: READ,
   check_inbox: WRITE,
   report: WRITE,
+  publish_agent_plan: WRITE,
   send_message: WRITE,
   create_room: WRITE,
   add_to_room: WRITE,
@@ -55,7 +56,6 @@ const TABLE: Record<string, Hints> = {
   plan_submit: WRITE,
   plan_verify: WRITE,
   propose_completion: WRITE,
-  spawn_session: WRITE,
   close_session: DESTROY,
 };
 
@@ -137,9 +137,9 @@ beforeEach(async () => {
   // От s-02 лежит непрочитанное письмо: им проверяется, что чтения отметок прочтения не ставят.
   await updateMap(project, workId, (current) => {
     addSession(current, { provider: 'claude', label: 'план', task: 'составить план' });
-    addSession(current, { provider: 'claude', label: 'бэк', task: 'бэкенд', parent: 's-01' });
-    addSession(current, { provider: 'claude', label: 'тесты', task: 'тесты', parent: 's-01' });
-    addRoom(current, { title: 'Разбор', creator: 's-01', members: ['s-02'], lead: 's-01' });
+    addSession(current, { provider: 'claude', label: 'бэк', task: 'бэкенд', parent: null }).parent = 's-01';
+    addSession(current, { provider: 'claude', label: 'тесты', task: 'тесты', parent: null }).parent = 's-01';
+    addRoom(current, { title: 'Разбор', creator: 's-01', members: ['s-01', 's-02'], lead: 's-01' });
     addMessage(current, { from: 's-02', to: ['s-01'], text: 'Что делаем?', kind: 'question' });
     addMessage(current, { from: 's-02', to: [], text: 'Готов', kind: 'note', roomId: 'r-01' });
   });
@@ -241,10 +241,9 @@ describe('аннотации инструментов parley: правда по 
   const WRITES: { name: string; args: Record<string, unknown> }[] = [
     { name: 'report', args: { status: 'progress', summary: 'идём' } },
     { name: 'send_message', args: { to: 's-02', text: 'привет' } },
-    { name: 'create_room', args: { title: 'Ещё', members: ['s-03'] } },
+    { name: 'create_room', args: { title: 'Ещё', members: ['s-03'], lead: 's-03' } },
     { name: 'add_to_room', args: { room: 'r-01', session: 's-03' } },
     { name: 'propose_decision', args: { room: 'r-01', text: 'делаем так' } },
-    { name: 'spawn_session', args: { provider: 'claude', label: 'ревью', task: 'проверить' } },
     { name: 'check_inbox', args: {} },
   ];
 
@@ -268,11 +267,11 @@ describe('аннотации инструментов parley: правда по 
     ).toEqual([]);
   });
 
-  it('add_to_room уводит сессию из прежней комнаты: та остаётся с письмами и участниками, а lead и creator уходят с сессией', async () => {
+  it('add_to_room уводит сессию из прежней комнаты: та остаётся с письмами и участниками, а lead уходит, creator остаётся историческим', async () => {
     // r-02 создала и ведёт s-03, в ней ещё s-04; ведущий r-01 s-01 зовёт s-03 к себе.
     await updateMap(project, workId, (current) => {
-      addSession(current, { provider: 'claude', label: 'ревью', task: 'ревью', parent: 's-01' });
-      addRoom(current, { title: 'Прежняя', creator: 's-03', members: ['s-04'], lead: 's-03' });
+      addSession(current, { provider: 'claude', label: 'ревью', task: 'ревью', parent: null }).parent = 's-01';
+      addRoom(current, { title: 'Прежняя', creator: 's-03', members: ['s-03', 's-04'], lead: 's-03' });
       addMessage(current, { from: 's-04', to: [], text: 'Начали', kind: 'note', roomId: 'r-02' });
     });
     const client = await connect();
@@ -281,13 +280,13 @@ describe('аннотации инструментов parley: правда по 
     await callOk(client, 'add_to_room', { room: 'r-01', session: 's-03' });
 
     const after = await readMap(project, workId);
-    // Уход виден в записи прежней комнаты: s-03 больше не создатель и не ведущий, участник остался один.
+    // Уход виден в записи прежней комнаты: s-03 больше не участник и не ведущий, участник остался один.
     expect(after.rooms.find((room) => room.id === 'r-02')).toMatchObject({
-      creator: HUMAN,
+      creator: 's-03',
       lead: null,
       members: ['s-04'],
     });
-    expect(after.rooms.find((room) => room.id === 'r-01')?.members).toEqual(['s-02', 's-03']);
+    expect(after.rooms.find((room) => room.id === 'r-01')?.members).toEqual(['s-01', 's-02', 's-03']);
     // Но ни комната, ни её письма, ни другие участники не пропали: «не разрушает» держится и на этой границе.
     for (const [kind, list] of Object.entries(ids(before))) {
       expect(ids(after)[kind as keyof ReturnType<typeof ids>], kind).toEqual(expect.arrayContaining(list));
@@ -300,7 +299,7 @@ describe('аннотации инструментов parley: правда по 
   it('close_session — единственный, что меняет судьбу сессии насовсем: она закрыта и писем не получает', async () => {
     const client = await connect();
 
-    await callOk(client, 'close_session', { target: 's-02' });
+    await callOk(await connect('s-02'), 'close_session', { target: 's-02' });
 
     const after = await readMap(project, workId);
     expect(after.sessions.find((session) => session.id === 's-02')?.lifecycle).toBe('closed');

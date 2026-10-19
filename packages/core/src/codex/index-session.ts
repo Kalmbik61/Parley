@@ -1,3 +1,4 @@
+import { createCodexPlanCollector } from '../agent-plan-log.js';
 import path from 'node:path';
 import { Counter, oneLine, type TokenTotals } from '../counters.js';
 import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
@@ -75,12 +76,11 @@ function execYieldMs(input: string | null): number | null {
   }
 }
 
-/** Ожидание `wait` — `yield_time_ms` из JSON-аргументов; иначе null. */
-function waitYieldMs(args: string | null): number | null {
+/** Аргументы `wait`: срок ожидания и ячейка, чей результат он возвращает. */
+function waitArguments(args: string | null): RawRecord | null {
   if (args === null) return null;
   try {
-    const value = asRecord(JSON.parse(args))?.['yield_time_ms'];
-    return typeof value === 'number' ? value : null;
+    return asRecord(JSON.parse(args));
   } catch {
     return null;
   }
@@ -92,6 +92,7 @@ function waitYieldMs(args: string | null): number | null {
  * через одно и то же, поэтому результат у них совпадает.
  */
 export class CodexIndexAccumulator {
+  planCollector = createCodexPlanCollector();
   models = new Counter();
   tools = new Counter();
   roles = new Counter();
@@ -110,7 +111,8 @@ export class CodexIndexAccumulator {
   observations: UsageObservation[] = [];
   lastTurnEvent: SessionIndex['lastTurnEvent'];
   // Открытые вызовы code mode по call_id (разбор 2026-10-16).
-  openCalls = new Map<string, { name: 'exec' | 'wait'; at: string; yieldMs: number | null }>();
+  openCalls = new Map<string, { name: 'exec' | 'wait'; at: string; yieldMs: number | null; cellId: string | null; active: boolean }>();
+  runningCells = new Map<string, { id: string; at: string }>();
   spawned = false;
   parentId: string | null = null;
   forkedFrom: string | null = null;
@@ -122,16 +124,19 @@ export class CodexIndexAccumulator {
   /** Независимая копия: счётчики, наблюдения и открытые вызовы копируются, прежнее состояние не мутируется. */
   clone(): CodexIndexAccumulator {
     return Object.assign(new CodexIndexAccumulator(), this, {
+      planCollector: this.planCollector.clone(),
       models: this.models.clone(),
       tools: this.tools.clone(),
       roles: this.roles.clone(),
       recordTypes: this.recordTypes.clone(),
       observations: [...this.observations],
       openCalls: new Map(this.openCalls),
+      runningCells: new Map(this.runningCells),
     });
   }
 
   feed(raw: RawRecord): void {
+    this.planCollector.onRecord(raw);
     const type = str(raw, 'type');
     const payload = asRecord(raw['payload']);
     this.recordTypes.add(type);
@@ -174,10 +179,24 @@ export class CodexIndexAccumulator {
         if (callId !== null && at !== null) {
           const name = str(payload, 'name');
           if (kind === 'custom_tool_call' && name === 'exec') {
-            this.openCalls.set(callId, { name: 'exec', at, yieldMs: execYieldMs(str(payload, 'input')) });
+            this.openCalls.set(callId, { name: 'exec', at, yieldMs: execYieldMs(str(payload, 'input')), cellId: null, active: true });
           } else if (kind === 'function_call' && name === 'wait') {
-            this.openCalls.set(callId, { name: 'wait', at, yieldMs: waitYieldMs(str(payload, 'arguments')) });
+            const args = waitArguments(str(payload, 'arguments'));
+            const yieldMs = args?.['yield_time_ms'];
+            this.openCalls.set(callId, { name: 'wait', at, yieldMs: typeof yieldMs === 'number' ? yieldMs : null, cellId: str(args, 'cell_id'), active: true });
           } else if (kind === 'custom_tool_call_output' || kind === 'function_call_output') {
+            const call = this.openCalls.get(callId);
+            if (call !== undefined) {
+              const output = payload['output'];
+              // Только заголовок ответа обёртки: текст вложенной команды не задаёт состояние ячейки.
+              const text = typeof output === 'string' ? output : Array.isArray(output) ? str(asRecord(output[0]), 'text') : null;
+              const runningId = /^Script running with cell ID ([A-Za-z0-9_-]+)(?:\r?\n|$)/.exec(text ?? '')?.[1];
+              if (runningId !== undefined && !this.runningCells.has(runningId)) {
+                this.runningCells.set(runningId, { id: runningId, at: call.at });
+              } else if (call.cellId !== null && /^Script (?:completed|terminated)\b/.test(text ?? '')) {
+                this.runningCells.delete(call.cellId);
+              }
+            }
             this.openCalls.delete(callId);
           }
         }
@@ -191,7 +210,16 @@ export class CodexIndexAccumulator {
         ) {
           this.lastTurnEvent = { type: kind, at };
         }
-        if (kind === 'task_complete' || kind === 'turn_aborted') this.openCalls.clear();
+        // После конца хода вызов не сторожится, но его поздний ответ ещё может завершить ячейку.
+        // Значения заменяются, чтобы дочитывание не мутировало предыдущий снимок накопителя.
+        if (kind === 'task_complete') {
+          for (const [id, call] of this.openCalls) this.openCalls.set(id, { ...call, active: false });
+        }
+        // Явное прерывание снимает предупреждение; это не подтверждение отмены внешних эффектов команды.
+        if (kind === 'turn_aborted') {
+          this.openCalls.clear();
+          this.runningCells.clear();
+        }
         // Заголовок сессии — первая РЕПЛИКА ЧЕЛОВЕКА. Сообщения из response_item
         // для этого не годятся: там же едут системные инструкции и AGENTS.md.
         if (kind === 'user_message') {
@@ -246,12 +274,21 @@ export class CodexIndexAccumulator {
 
     let openCodeCall: SessionIndex['openCodeCall'];
     for (const call of this.openCalls.values()) {
-      if (openCodeCall === undefined || call.at < openCodeCall.at) openCodeCall = call;
+      if (!call.active) continue;
+      if (openCodeCall === undefined || call.at < openCodeCall.at) {
+        openCodeCall = { name: call.name, at: call.at, yieldMs: call.yieldMs };
+      }
+    }
+
+    let pendingCodeCell: SessionIndex['pendingCodeCell'];
+    for (const cell of this.runningCells.values()) {
+      if (pendingCodeCell === undefined || cell.at < pendingCodeCell.at) pendingCodeCell = cell;
     }
 
     const title = firstUserMessage === null ? null : oneLine(firstUserMessage);
 
     return {
+      plan: this.planCollector.finish(),
       id: this.id ?? path.basename(file, '.jsonl'),
       // Слага проекта у Codex нет — берём имя каталога из cwd.
       project: cwd === null ? '—' : path.basename(cwd),
@@ -269,6 +306,7 @@ export class CodexIndexAccumulator {
       lastWorkRecordAt: endedAt,
       ...(lastTurnEvent === undefined ? {} : { lastTurnEvent }),
       ...(openCodeCall === undefined ? {} : { openCodeCall }),
+      ...(pendingCodeCell === undefined ? {} : { pendingCodeCell }),
       durationMs,
       records: this.parsed,
       malformedLines: this.malformed + (pendingMalformed ? 1 : 0),

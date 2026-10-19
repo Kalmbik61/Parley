@@ -13,6 +13,41 @@ Connect your own Anthropic-compatible provider (Kimi, MiniMax, Qwen, DeepSeek, O
 - **Own providers.** Settings → Providers and the "+ Add provider" button in the status bar add a provider from a preset or from your own address, with a name, a key, four model slots (or one model for all), and a "Check" that sends a short test message. Each provider gets its own folder, `~/.parley/providers/<id>/`, with its own sign-in, history and memory. The key is kept in Parley's secrets file and reaches only the process of the provider's session. Requires Claude Code **2.1.302 or newer**.
 - **Bring from Claude Code.** An option that links your `CLAUDE.md`, skills and agents into a provider's folder. These are links: editing them in a provider's session changes the originals your regular Claude sessions use. To change something only for one provider, ask its agent to make a copy first; the agent asks whether a change is for both or only for this provider. MCP servers are not shared: each provider has its own.
 
+## 0.16.1
+
+Agents can create ordinary sessions in their workspace again, and Chat recovers after a failed CLI version check.
+
+### Added
+
+- **Agents can create and launch peer sessions with `create_session`.** Choose Claude, Codex, GLM, or another available provider in the current workspace. New sessions have no parent and inherit no room membership; a room lead can invite them separately. Existing creation and launch limits still apply. ([#84](https://github.com/Kalmbik61/Parley/pull/84))
+
+### Fixed
+
+- **Chat no longer stays disabled after a failed CLI version check.** Unknown versions are checked again, explicit refresh updates known versions, and the disabled Chat tooltip explains whether the version is unknown, too old, or unsupported by the host. ([#84](https://github.com/Kalmbik61/Parley/pull/84))
+
+### Changed
+
+- Agents can publish personal execution steps directly to Parley, including when native planning tools or Chat are unavailable. Room cards always offer a Plan entry point, and the Agents panel explains when steps have not been published yet.
+- Personal plan updates do not send messages or wake the Feature Lead. Room leads and Feature Leads are instructed to consolidate milestone reports, escalate actionable blockers and decisions, and skip routine step-by-step notifications.
+
+## 0.16.0
+
+Agent plans are now visible in room cards and the Agents tab. Feature Lead and agent-owned rooms let agents coordinate existing sessions, while Codex operations that need attention are easier to find.
+
+### Changed
+
+- **Agents coordinate existing sessions instead of creating child sessions.** The `spawn_session` tool and automatic launch of parent-linked pending sessions have been removed. Create new sessions through the window or CLI, then invite them to a room. Integrations using `create_room` must now provide nonempty working members and an explicit lead among them.
+
+### Added
+
+- **Agent-authored plans appear in room participant cards and the Agents tab.** See the current or next step, confirmed progress and descriptions, and open a participant's plan without leaving the room. Claude task IDs also restore subagent steps; incomplete histories are marked explicitly. Large plans retain their full progress counts and current step.
+- **Feature Lead coordinates a feature through rooms.** The new built-in role plans work, coordinates participants and checks the result. An agent can own a room without joining its working members; ownership and room leadership are shown separately in the sidebar.
+
+### Fixed
+
+- **Codex operations that stop producing output surface as needing attention.** A long-running code operation no longer leaves the session looking indefinitely busy when it may need approval.
+- **Codex terminal requests remain reachable from the island.** When a waiting request cannot be shown as an interactive card, the island provides a way to open the session's terminal.
+
 ## 0.15.2
 
 The host does far less work while agents run: it reads only what agents append to their logs, and the island and notifications no longer download whole chats. The assistant on the island shows what you send at once, queues the messages you send while it answers instead of cancelling the answer, can address agents in a room with a mention, and its Send button shows that it is sending.

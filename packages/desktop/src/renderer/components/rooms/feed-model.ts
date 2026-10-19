@@ -26,6 +26,7 @@
  */
 
 import type { Message, MessageKind, SessionLifecycle, WorkEntry, WorkMap, RoomMode, RoomPlan } from '@parley/core';
+import { planSummary, type AgentPlan } from '@parley/core/agent-plan';
 import { dotState, liveStatus, stateWord, type DotState } from '@parley/core/session-state';
 import { refKey, type LiveTask, type MailWait } from '@parley/protocol';
 import { S, providerName } from '../../../shared/strings.js';
@@ -76,6 +77,8 @@ export interface ParticipantModel {
   /** Подкраска карточки: `needs-you` — `accent-200`, `unseen` — `accent-2-200`. */
   attention: Attention;
   task: string;
+  plan: AgentPlan | null;
+  planLine: { kind: 'current' | 'next'; text: string } | null;
   /**
    * Чем занят сейчас: `Subagent: Orca research`, `3 subagents: …`, `Waiting for S03`, `Waiting for messages`.
    * `null` — ничем особым (или хост прежней версии не прислал данных); карточка тогда показывает задачу.
@@ -267,9 +270,8 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
   const liveOf = (sessionId: string): ActivityEntry | undefined =>
     activity[refKey({ projectPath: entry.projectPath, workId: map.work.id, sessionId })];
 
-  // Создатель-сессия в `members` не пишется (`core/work/rooms.ts#addMember`), человек — участник всегда
-  // и списком не хранится: агенты комнаты — создатель и члены без человека, каждый один раз.
-  const memberIds = [...new Set([room.creator, ...room.members])].filter((id) => id !== HUMAN);
+  // Только явное рабочее членство; владение и происхождение не добавляют участника.
+  const memberIds = [...new Set(room.members)].filter((id) => id !== HUMAN);
   const participants: ParticipantModel[] = [];
   for (const id of memberIds) {
     const session = map.sessions.find((candidate) => candidate.id === id);
@@ -285,6 +287,13 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       session.lifecycle === 'active'
         ? doingOf(liveEntry?.metrics?.tasks ?? [], liveEntry?.metrics?.waitingFor ?? null)
         : { doing: null, doingDetail: null, agents: [] };
+    const plan = liveEntry?.metrics?.plan ?? null;
+    const summary = plan === null ? null : planSummary(plan);
+    const planLine: ParticipantModel['planLine'] = summary?.current
+      ? { kind: 'current', text: `▸ ${summary.current.subject}` }
+      : summary?.next
+        ? { kind: 'next', text: S.rooms.planNext(summary.next.subject) }
+        : null;
     const active = session.lifecycle === 'active';
     const context = active ? liveEntry?.metrics?.context : null;
     const compaction = active ? liveEntry?.metrics?.compaction : null;
@@ -304,6 +313,8 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       word: stateWord(state, session.lifecycle),
       attention: sessionAttention(session, live),
       task: session.task,
+      plan,
+      planLine,
       doing,
       doingDetail,
       agents,
@@ -317,6 +328,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
   const createdBy = room.creator === HUMAN ? S.rooms.createdByYou : S.rooms.createdBy(labelOf(map, room.creator));
   const subtitle = [
     createdBy,
+    ...(room.ownerId ? [`Owner ${labelOf(map, room.ownerId)}`] : []),
     S.rooms.agentCount(participants.length),
     ...(lead === null ? [] : [S.rooms.leadIs(sessionTag(lead))]),
     workTitleText(map.work.title),

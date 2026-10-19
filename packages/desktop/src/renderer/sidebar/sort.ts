@@ -217,9 +217,9 @@ export interface CardSessionRow {
 export interface CardRoomRow {
   kind: 'room';
   room: Room;
-  /** Глубина её первого живого участника в дереве сессий (отступ `20·depth`, `TreeGuides.tsx`); комната в конце — 0. */
+  /** Глубина владельца + 1; у комнаты без владельца — 0. */
   depth: number;
-  /** `parent` того участника, что поставил комнату на карточку; комната в конце и архивная — `null`: линии дерева к ней нет. */
+  /** Владелец комнаты для линии дерева; у комнаты без владельца и архивной — `null`. */
   parent: string | null;
   /** Ведущий (`roomLiveLead`), `★` — у него; `null` — живых участников нет, комната закрыта. */
   lead: string | null;
@@ -312,11 +312,10 @@ function buildRoomRow(map: WorkMap, home: Map<string, Room>, showClosed: boolean
 }
 
 /**
- * Строки карточки (спека окна 2026-09-29, 1.2, «Состав строк карточки»): сессии в порядке `treeOrder`;
- * участник комнаты отдельной строкой не выводится — на месте первого встреченного участника стоит строка
- * его комнаты; комнаты без живых участников — в конце, в порядке карты. Место комнаты задаёт её первый ЖИВОЙ
- * участник, а не первый показанный: закрытые скрыты за «N more closed», и от этого переключателя комната
- * не прыгала бы по карточке. Закрытая сессия вне комнаты — строкой, только при `showClosed`.
+ * Сессии-якоря идут в порядке `treeOrder`, принадлежащие им комнаты — сразу под ними.
+ * Владелец остаётся видимым, пока у него есть открытые комнаты, даже если закрыт или состоит
+ * в другой комнате. Комнаты без владельца стоят в корне, в порядке карты. Рабочие участники
+ * показаны внутри комнаты; их ссылки не раскрывают принадлежащие им комнаты повторно.
  *
  * Архивные комнаты (спека архива комнат, 5.1) в основных строках не выводятся — их даёт `archivedRows`, под ссылкой
  * «N archived rooms». Сессия, чья домашняя комната архивная, стоит обычной строкой, если она работает (`staysOnCard`),
@@ -325,22 +324,26 @@ function buildRoomRow(map: WorkMap, home: Map<string, Room>, showClosed: boolean
 export function cardRows(map: WorkMap, showClosed: boolean): CardRow[] {
   const home = homeRooms(map);
   const rows: CardRow[] = [];
-  const emitted = new Set<string>();
-
+  // Владелец — отдельный якорь даже внутри рабочей комнаты. Его ссылка среди участников
+  // не раскрывает поддерево повторно, поэтому self-membership и циклы владения безопасны.
+  const activeRooms = map.rooms.filter((room) => !isRoomArchived(room));
+  const owners = new Set(activeRooms.flatMap((room) => room.ownerId ? [room.ownerId] : []));
   for (const { session, depth } of treeOrder(map.sessions)) {
-    const live = session.lifecycle !== 'closed';
     const room = home.get(session.id);
-    const inArchive = room !== undefined && isRoomArchived(room);
-    if (room === undefined || (inArchive && staysOnCard(session))) {
-      if (live || showClosed) rows.push({ kind: 'session', session, depth, parent: session.parent });
-    } else if (!inArchive && live && !emitted.has(room.id)) {
-      // Спящая и закрытая сессия архивной комнаты (`inArchive`) строки не получает: она уходит с комнатой под ссылку.
-      emitted.add(room.id);
-      rows.push(buildRoomRow(map, home, showClosed, room, depth, session.parent));
+    const anchor = owners.has(session.id);
+    if (anchor || room === undefined || (isRoomArchived(room) && staysOnCard(session))) {
+      if (anchor || showClosed || session.lifecycle !== 'closed') {
+        rows.push({ kind: 'session', session, depth, parent: session.parent });
+        for (const owned of activeRooms.filter((candidate) => candidate.ownerId === session.id)) {
+          rows.push(buildRoomRow(map, home, showClosed, owned, depth + 1, session.id));
+        }
+      }
     }
   }
-  for (const room of map.rooms) {
-    if (!emitted.has(room.id) && !isRoomArchived(room)) rows.push(buildRoomRow(map, home, showClosed, room, 0, null));
+  for (const room of activeRooms) {
+    if (!room.ownerId || !map.sessions.some((session) => session.id === room.ownerId)) {
+      rows.push(buildRoomRow(map, home, showClosed, room, 0, null));
+    }
   }
   return rows;
 }

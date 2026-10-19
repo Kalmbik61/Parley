@@ -253,6 +253,15 @@ describe('комнаты: ведущий и решение (дизайн ком�
     expectTypeOf<Result<'rooms.setLead'>>().toEqualTypeOf<{ messageId: string }>();
   });
 
+  it('rooms.setOwner accepts an existing session id or null and requires the room address', () => {
+    for (const sessionId of ['s-01', null]) {
+      expect(METHODS['rooms.setOwner'].safeParse({ ...room, sessionId }).success).toBe(true);
+    }
+    expect(METHODS['rooms.setOwner'].safeParse(room).success).toBe(false);
+    expect(METHODS['rooms.setOwner'].safeParse({ ...room, sessionId: 1 }).success).toBe(false);
+    expectTypeOf<Result<'rooms.setOwner'>>().toEqualTypeOf<{ ok: true }>();
+  });
+
   it('rooms.delete: только комната — сессии окно удаляет отдельно, через sessions.delete', () => {
     expect(METHODS['rooms.delete'].safeParse(room).success).toBe(true);
     expect(METHODS['rooms.delete'].safeParse({ projectPath: '/p', workId: 'w-0001' }).success).toBe(false);
@@ -315,6 +324,12 @@ describe('комнаты: ведущий и решение (дизайн ком�
 describe('модель, усилие и поля providers.list (дизайн комнат, 3.2)', () => {
   const create = { projectPath: '/p', workId: 'w-0001', provider: 'claude', label: '', task: '', parent: null };
   const parse = (extra: Record<string, unknown>) => METHODS['sessions.create'].safeParse({ ...create, ...extra });
+
+  it('sessions.create rejects new parent links', () => {
+    expect(parse({ parent: null }).success).toBe(true);
+    expect(parse({ parent: 's-01' }).success).toBe(false);
+    expectTypeOf<Params<'sessions.create'>['parent']>().toEqualTypeOf<null>();
+  });
 
   it('sessions.create: model и effort необязательны — старое окно их не шлёт', () => {
     expect(parse({}).success).toBe(true);

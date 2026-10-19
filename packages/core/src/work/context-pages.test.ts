@@ -31,7 +31,7 @@ const emptyMap = (): WorkMap => ({
 function baseMap(): WorkMap {
   const map = emptyMap();
   addSession(map, { provider: 'claude', label: 'план', task: 'Спланировать' });
-  addSession(map, { provider: 'codex', label: 'код', task: 'Написать', parent: 's-01' });
+  addSession(map, { provider: 'codex', label: 'код', task: 'Написать', parent: null }).parent = 's-01';
   addRoom(map, { title: 'Обсуждение', creator: HUMAN, members: ['s-01', 's-02'], lead: 's-01' });
   return map;
 }
@@ -467,6 +467,7 @@ describe('топология для агента', () => {
     const topology = mapTopology(map, 's-01');
     expect(JSON.stringify(topology)).not.toContain('SECRET PLAYBOOK');
     expect(topology.rooms[0]?.recipe).toEqual({ id: 'project:x', name: 'X' });
+    expect(topology.rooms[0]).toHaveProperty('ownerId', map.rooms[0]!.ownerId);
     expect(topology.rooms[0]?.proposal?.cut).toEqual({ text: 10_000 });
     expect(topology.plans.map((row) => row.id)).toEqual(['pl-2']);
     expect(topology.plans[0]?.items[0]?.log).toHaveLength(3);

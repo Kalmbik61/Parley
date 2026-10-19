@@ -101,6 +101,16 @@ afterEach(() => {
 describe('WorkCard (тест 3)', () => {
   const entry = makeWork('w-01', { projectPath: '/Users/me/VoiceStudio', title: 'Редизайн окна' });
 
+  it('shows closed owner above owned rooms with connectors and expands member references without recursion', () => {
+    const owner = makeSession('s-owner', 'Coordinator', { lifecycle: 'closed' });
+    const worker = makeSession('s-worker', 'Builder');
+    const owned = { ...makeRoom('r-owned', 'Owned'), ownerId: owner.id, members: [owner.id, worker.id], lead: worker.id };
+    renderCard(makeWork('w-owner', { sessions: [owner, worker], rooms: [owned] }));
+    expect(card().querySelectorAll('[data-room-row="r-owned"]')).toHaveLength(1);
+    expect(card().querySelectorAll('[data-session-id="s-owner"]')).toHaveLength(1);
+    expect(card().querySelector('[data-room-row="r-owned"] [data-tree-guide="elbow"]')).not.toBeNull();
+  });
+
   it('на корне data-work-key', () => {
     renderCard(entry);
     expect(card().getAttribute('data-work-key')).toBe(workKey('/Users/me/VoiceStudio', 'w-01'));
@@ -543,14 +553,14 @@ describe('WorkCard — комнаты на месте участников (1.2)
   it('участник комнаты отдельной строкой не выводится: на месте первого участника — строка комнаты, остальные — вокруг', () => {
     renderCard(four([room('r-01', ['s-02', 's-03'])]));
     // Свёрнутая комната: участников в DOM нет, есть строка комнаты между s-01 и s-04.
-    expect(rowsOfCard()).toEqual(['s-01', 'r-01', 's-04']);
+    expect(rowsOfCard()).toEqual(['s-01', 's-04', 'r-01']);
     expect(screen.getByText('Room r-01')).toBeTruthy();
   });
 
   it('развёрнутая комната показывает участников внутри себя, а не рядом; число сессий в мете считает и их', () => {
     useUiStore.getState().setRoomExpanded(roomKey(workKey('/tmp/proj', 'w-01'), 'r-01'), true);
     renderCard(four([room('r-01', ['s-02', 's-03'])]));
-    expect(rowsOfCard()).toEqual(['s-01', 'r-01', 's-02', 's-03', 's-04']);
+    expect(rowsOfCard()).toEqual(['s-01', 's-04', 'r-01', 's-02', 's-03']);
     const inside = [...card().querySelectorAll('[data-room-row] [data-session-id]')].map((element) => element.getAttribute('data-session-id'));
     expect(inside).toEqual(['s-02', 's-03']);
     expect(card().querySelector('[data-work-meta]')?.textContent).toContain('4 sessions');
@@ -577,7 +587,7 @@ describe('WorkCard — комнаты на месте участников (1.2)
     useUiStore.getState().setRoomExpanded(roomKey(workKey('/tmp/proj', 'w-01'), 'r-01'), true);
     useUiStore.getState().setRoomExpanded(roomKey(workKey('/tmp/proj', 'w-01'), 'r-02'), true);
     renderCard(four([late, early]));
-    expect(rowsOfCard()).toEqual(['r-01', 's-01', 's-02', 'r-02', 's-03', 's-04']);
+    expect(rowsOfCard()).toEqual(['s-04', 'r-02', 's-03', 'r-01', 's-01', 's-02']);
     // s-02 ровно один раз — в ранней комнате.
     expect(card().querySelectorAll('[data-session-id="s-02"]')).toHaveLength(1);
     expect(card().querySelector('[data-room-row="r-01"] [data-session-id="s-02"]')).not.toBeNull();

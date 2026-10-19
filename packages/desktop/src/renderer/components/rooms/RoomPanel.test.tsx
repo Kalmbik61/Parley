@@ -218,7 +218,7 @@ describe('RoomPanel — лента участников (1.3)', () => {
 
   it('клик по карточке открывает терминал участника', () => {
     const { initial } = renderPanel(entryOf());
-    fireEvent.click(within(document.querySelector('[data-participant="s-03"]') as HTMLElement).getByRole('button'));
+    fireEvent.click(within(document.querySelector('[data-participant="s-03"]') as HTMLElement).getAllByRole('button')[0]!);
     expect(initial.onOpenSession).toHaveBeenCalledWith('s-03');
   });
 

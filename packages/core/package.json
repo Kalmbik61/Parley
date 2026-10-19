@@ -1,6 +1,6 @@
 {
   "name": "@parley/core",
-  "version": "0.15.2",
+  "version": "0.16.1",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -8,6 +8,7 @@
   "exports": {
     ".": "./dist/index.js",
     "./names": "./dist/names.js",
+    "./agent-plan": "./dist/agent-plan.js",
     "./feed-turn": "./dist/feed/turn.js",
     "./assistant": "./dist/assistant/text.js",
     "./session-state": "./dist/work/session-state.js",

@@ -23,6 +23,7 @@
  * (`isTabAlive` в `layout/persistence.ts`), как вкладки удалённой сессии.
  */
 
+import type { WorkSession } from '@parley/core';
 import { useRef, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ParleyBridge } from '../../shared/bridge.js';
@@ -33,7 +34,7 @@ import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
 import { fileTabIds } from '../files/close-guard.js';
 import { useLayoutStore } from '../layout/store.js';
 import { useHostSupports } from '../lib/capabilities.js';
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '../ui/context-menu.js';
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from '../ui/context-menu.js';
 import { DESTRUCTIVE_ITEM } from './CardMenu.js';
 import type { CardRoomRow } from './sort.js';
 import { useSidebarHold } from './use-sidebar-hold.js';
@@ -44,6 +45,7 @@ export interface RoomRowMenuProps {
   projectPath: string;
   workId: string;
   row: CardRoomRow;
+  ownerSessions?: WorkSession[];
   bridge: ParleyBridge;
   /** «Rename» — поле на месте названия в строке комнаты. */
   onRename(): void;
@@ -53,7 +55,7 @@ export interface RoomRowMenuProps {
   children: ReactNode;
 }
 
-export function RoomRowMenu({ workKey, projectPath, workId, row, bridge, onRename, livePlan = false, children }: RoomRowMenuProps): JSX.Element {
+export function RoomRowMenu({ workKey, projectPath, workId, row, ownerSessions = [], bridge, onRename, livePlan = false, children }: RoomRowMenuProps): JSX.Element {
   const { room, sessions, archived, archiveStops } = row;
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState(false);
@@ -63,12 +65,13 @@ export function RoomRowMenu({ workKey, projectPath, workId, row, bridge, onRenam
   const renameChosen = useRef(false);
   useSidebarHold(`room-menu ${workKey} ${room.id}`, open || confirm || confirmArchive);
   const canRename = useHostSupports('rooms.rename');
+  const canSetOwner = useHostSupports('rooms.setOwner');
   const canDelete = useHostSupports('rooms.delete');
   const canArchive = useHostSupports('rooms.archive');
   const canReopen = useHostSupports('rooms.reopen');
   // Открытой комнате — «Archive…», архивной — «Reopen»: одно из двух, и только если хост умеет.
   const canSwitch = archived ? canReopen : canArchive;
-  if (!canRename && !canDelete && !canSwitch) return <>{children}</>;
+  if (!canRename && !canDelete && !canSwitch && !canSetOwner) return <>{children}</>;
 
   const title = room.title === '' ? S.rooms.fallbackTitle : room.title;
 
@@ -126,6 +129,29 @@ export function RoomRowMenu({ workKey, projectPath, workId, row, bridge, onRenam
             <ContextMenuItem data-room-action="reopen" onSelect={reopenRoom}>
               {S.sidebar.roomMenu.reopen}
             </ContextMenuItem>
+          ) : null}
+          {canSetOwner ? (
+            <ContextMenuSub>
+              <ContextMenuSubTrigger data-room-action="owner">{room.ownerId ? 'Change owner' : 'Assign owner'}</ContextMenuSubTrigger>
+              <ContextMenuSubContent>
+                {ownerSessions.map((session) => (
+                  <ContextMenuItem key={session.id} data-room-owner={session.id} onSelect={() => {
+                    bridge.call('rooms.setOwner', { projectPath, workId, roomId: room.id, sessionId: session.id }).catch((error: unknown) => {
+                      console.warn('[parley] rooms.setOwner', error);
+                      toast('Could not change the room owner.');
+                    });
+                  }}>
+                    {session.label || session.id}{room.ownerId === session.id ? ' · Owner' : ''}
+                  </ContextMenuItem>
+                ))}
+                {room.ownerId ? <ContextMenuItem data-room-owner="clear" onSelect={() => {
+                  bridge.call('rooms.setOwner', { projectPath, workId, roomId: room.id, sessionId: null }).catch((error: unknown) => {
+                    console.warn('[parley] rooms.setOwner', error);
+                    toast('Could not change the room owner.');
+                  });
+                }}>Clear owner</ContextMenuItem> : null}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
           ) : null}
           {canRename ? (
             <ContextMenuItem

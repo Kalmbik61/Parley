@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addMessage, addSession, removeSession } from './map.js';
-import { decisionsOf, participantLabel, recentDecisions, sessionTag, threadOf } from './thread.js';
+import { agentThreadOf, decisionsOf, participantLabel, recentDecisions, sessionTag, threadOf } from './thread.js';
 import type { Message, MessageKind, WorkMap } from './types.js';
 
 const emptyMap = (): WorkMap => ({
@@ -34,11 +34,11 @@ const ids = (messages: readonly Message[]): string[] => messages.map((message) =
 const forest = (): WorkMap => {
   const map = emptyMap();
   addSession(map, { provider: 'claude', label: 'план', task: 't' });
-  addSession(map, { provider: 'claude', label: 'бэкенд', task: 't', parent: 's-01' });
-  addSession(map, { provider: 'claude', label: 'тесты', task: 't', parent: 's-02' });
-  addSession(map, { provider: 'claude', label: 'ревью', task: 't', parent: 's-01' });
+  addSession(map, { provider: 'claude', label: 'бэкенд', task: 't', parent: null }).parent = 's-01';
+  addSession(map, { provider: 'claude', label: 'тесты', task: 't', parent: null }).parent = 's-02';
+  addSession(map, { provider: 'claude', label: 'ревью', task: 't', parent: null }).parent = 's-01';
   addSession(map, { provider: 'claude', label: 'релиз', task: 't' });
-  addSession(map, { provider: 'claude', label: 'доки', task: 't', parent: 's-05' });
+  addSession(map, { provider: 'claude', label: 'доки', task: 't', parent: null }).parent = 's-05';
   letter(map, 's-01', 's-02', '10:00', 'note');
   letter(map, 's-02', 's-01', '10:05', 'question');
   letter(map, 's-03', 's-04', '10:10', 'decision');
@@ -146,5 +146,17 @@ describe('recentDecisions', () => {
     expect(total).toBe(3);
     expect(shown.map((message) => message.text)).toEqual(['10:02', '10:04']);
     expect(recentDecisions(thread, 10).shown).toEqual(decisionsOf(thread));
+  });
+});
+
+describe('agentThreadOf', () => {
+  it('preserves historical family mail and the human workspace thread', () => {
+    const map = forest();
+    expect(ids(agentThreadOf(map, 's-01').messages)).toEqual(ids(threadOf(map, 's-01').messages));
+    addSession(map, { provider: 'claude', label: 'owner', task: 'coordinate' });
+    expect(threadOf(map, 's-07').messages).toHaveLength(5);
+    expect(agentThreadOf(map, 's-07').messages).toEqual([]);
+    const own = letter(map, 's-02', 's-07', '10:25', 'note');
+    expect(ids(agentThreadOf(map, 's-07').messages)).toEqual([own.id]);
   });
 });

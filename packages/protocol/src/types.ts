@@ -1,4 +1,4 @@
-import type { ContextFill, UsageSummary, WorkEntry } from '@parley/core';
+import type { AgentPlan, ContextFill, UsageSummary, WorkEntry } from '@parley/core';
 
 /**
  * Лимиты подписки провайдера (спека комнат Organic, 3.5): пятичасовое и недельное окна и время, когда
@@ -132,6 +132,8 @@ export type CompactionPhase = 'pending' | 'running' | 'compacted';
 
 /** Живые цифры сессии для строки статуса и списка — `null`, пока их не видно. */
 export interface LiveMetrics {
+  /** План агента; `null` — плана нет. Поля нет у хоста более ранней версии. */
+  plan?: AgentPlan | null;
   /**
    * Токены с происхождением: кэш (`null` — не сообщено), полный вход, источник, время наблюдения,
    * устарелость и полнота (P36). Без нативных id и путей. Поля нет у хоста более ранней версии: окно

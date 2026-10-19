@@ -1,5 +1,5 @@
 /**
- * Модель острова: счётчики пилюли, группы «в работе» по работам, комнаты по участникам, Codex вне острова, подписи
+ * Модель острова: счётчики пилюли, группы «в работе» по работам, комнаты по участникам, Codex только при запросе действия, подписи
  * сессий; Done (ход окончен, не смотрели): строка с ключом конца хода, Clear, порядок после работы, комната `done`;
  * удержанные ключи: посмотренная (`idle`) сессия с концом хода и ключом в `held` остаётся строкой Done; `seen` у строки
  * Done: ложно для `unseen`, истинно для удержанной `idle`.
@@ -34,7 +34,7 @@ function work() {
 }
 
 describe('модель острова', () => {
-  it('работает и ждёт — в пилюле; Codex вне острова; «finished» — Done, а не работа', () => {
+  it('работает и ждёт — в пилюле; Codex только при запросе действия; «finished» — Done, а не работа', () => {
     const byRef = activityMap([
       makeActivity(ref('s-01'), 'working'),
       makeActivity(ref('s-02'), 'blocked'),
@@ -43,11 +43,11 @@ describe('модель острова', () => {
       makeActivity(ref('s-05'), 'unseen', { turnEndedAt: ENDED }),
     ]);
     const model = islandModel([work()], byRef, new Set([refKey(ref('s-02'))]), NONE, NONE);
-    expect(model).toMatchObject({ working: 2, waiting: 1, done: 1, providers: ['claude', 'glm'], active: true });
+    expect(model).toMatchObject({ working: 2, waiting: 2, done: 1, providers: ['claude', 'codex', 'glm'], active: true });
     expect(model.groups).toHaveLength(1);
     expect(model.groups[0]).toMatchObject({ title: 'Backend', project: 'Доки ВК' });
     const sessions = model.groups[0]?.rows.filter((row) => row.kind === 'session') ?? [];
-    expect(sessions.map((row) => row.kind === 'session' && row.ref.sessionId)).toEqual(['s-01', 's-02', 's-03', 's-05']);
+    expect(sessions.map((row) => row.kind === 'session' && row.ref.sessionId)).toEqual(['s-01', 's-02', 's-03', 's-04', 's-05']);
   });
 
   it('комната в работе, если в работе хоть один её участник', () => {

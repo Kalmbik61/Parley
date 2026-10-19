@@ -12,3 +12,10 @@ it('snapshot contains only original recipe identity/playbook and cannot change w
  const recipe=structuredClone(BUILTIN_RECIPES[0]!);const snapshot=snapshotRecipe(recipe);recipe.playbook='Changed file';recipe.name='Later';expect(snapshot.playbook).not.toBe(recipe.playbook);expect(Object.keys(snapshot)).toEqual(['id','name','playbook']);
  const rows=expandRecipe(BUILTIN_RECIPES[0]!,buildRoleCatalog());expect(rows[0]?.resolved?.provider).toBe('claude');expect(rows[1]?.resolved?.provider).toBe('codex');expect(rows[0]?.choice.model).toBeUndefined();
 });
+
+it('plan and build distinguishes independent inspection from executable verification', () => {
+ const recipe = BUILTIN_RECIPES[0]!;
+ expect(recipe.playbook).toContain('Independent assessment may use inspection');
+ expect(recipe.playbook).toContain('assign executable checks explicitly');
+ expect(recipe.agents.some(agent => agent.role === 'builtin:verifier')).toBe(false);
+});

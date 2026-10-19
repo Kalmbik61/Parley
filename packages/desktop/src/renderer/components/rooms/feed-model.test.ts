@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { capPlan, type AgentPlanItem } from '@parley/core/agent-plan';
 import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
 import type { LiveMetrics, LiveTask, MailWait } from '@parley/protocol';
 import { activityMap, makeActivity, makeLetter, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
@@ -52,6 +53,12 @@ function build(entry: WorkEntry, activity = {}): RoomModel {
 const REF = (sessionId: string) => ({ projectPath: PROJECT, workId: 'w-01', sessionId });
 
 describe('buildRoomModel — шапка', () => {
+  it('различает владельца и рабочего лида, не добавляя владельца в участники', () => {
+    const model = build(entryOf({ room: room({ ownerId: 's-03', members: ['s-01', 's-02'], lead: 's-01' }) }));
+    expect(model.subtitle).toContain('Owner S03 ревью');
+    expect(model.subtitle).toContain('2 agents · lead S01');
+    expect(model.participants.map((participant) => participant.id)).toEqual(['s-01', 's-02']);
+  });
   it('комнаты с таким id нет — null', () => {
     expect(buildRoomModel({ entry: entryOf(), roomId: 'r-99', providers: PROVIDERS, activity: {} })).toBeNull();
   });
@@ -66,7 +73,7 @@ describe('buildRoomModel — шапка', () => {
     const model = build(entryOf({ room: room({ creator: 's-01', members: ['s-01', 's-02', 's-03'] }) }));
     expect(model.subtitle).toBe('Created by S01 архитектор · 3 agents · lead S01 · Платежи');
     const withoutCreatorInMembers = build(entryOf({ room: room({ creator: 's-01', members: ['s-02', 's-03'] }) }));
-    expect(withoutCreatorInMembers.subtitle).toBe('Created by S01 архитектор · 3 agents · lead S01 · Платежи');
+    expect(withoutCreatorInMembers.subtitle).toBe('Created by S01 архитектор · 2 agents · lead S02 · Платежи');
   });
 
   it('один агент — «1 agent»', () => {
@@ -102,7 +109,7 @@ describe('buildRoomModel — лента участников', () => {
   it('порядок: создатель-сессия, затем members; человек не участник-агент; удалённая сессия не выводится', () => {
     const entry = entryOf({ room: room({ creator: 's-03', members: ['s-01', 's-09', 's-02'] }) });
     entry.map.work.deletedSessions = ['s-09'];
-    expect(build(entry).participants.map((participant) => participant.id)).toEqual(['s-03', 's-01', 's-02']);
+    expect(build(entry).participants.map((participant) => participant.id)).toEqual(['s-01', 's-02']);
   });
 
   it('подписи, провайдер, задача и ведущий', () => {
@@ -891,5 +898,34 @@ describe('контекст участника (спека 2026-10-15, 3.2)', () 
     delete old.compaction;
     const model = build(entryOf(), activityMap([makeActivity(REF('s-01'), 'idle', { metrics: old as unknown as LiveMetrics })]));
     expect(model.participants.find((p) => p.id === 's-01')?.context).toBeUndefined();
+  });
+});
+
+
+describe('buildRoomModel — agent plan', () => {
+  const item = (status: AgentPlanItem['status'], subject: string = status): AgentPlanItem => ({ id: null, subject, status, description: null, activeForm: null });
+  const planned = (items: AgentPlanItem[], lifecycle: WorkSession['lifecycle'] = 'active') => {
+    const plan = capPlan({ items, explanation: null, partial: false, updatedAt: '2026-10-18T00:00:00Z' });
+    const live = makeActivity(REF('s-01'), 'working', { metrics: { tokensIn: null, tokensOut: null, durationMs: null, unread: 0, subagents: 0, model: null, plan } });
+    return build(entryOf({ sessions: [makeSession('s-01', 'agent', { lifecycle })] }), activityMap([live])).participants[0]!;
+  };
+  it('uses current, then next, and falls back when all steps are completed', () => {
+    expect(planned([item('pending'), item('in_progress', 'Current')]).planLine).toEqual({ kind: 'current', text: '▸ Current' });
+    expect(planned([item('completed'), item('pending', 'Next')]).planLine).toEqual({ kind: 'next', text: 'Next: Next' });
+    expect(planned([item('completed')]).planLine).toBeNull();
+  });
+  it('retains plans for sleeping and closed participants', () => {
+    for (const lifecycle of ['sleeping', 'closed'] as const) expect(planned([item('pending')], lifecycle).plan).not.toBeNull();
+  });
+  it('old hosts without plan keep the task fallback', () => {
+    const participant = build(entryOf()).participants[0]!;
+    expect(participant.plan).toBeNull();
+    expect(participant.planLine).toBeNull();
+    expect(participant.task).toBe('Спроектировать возвраты');
+  });
+  it('keeps original current step 51 after capping 60 items', () => {
+    const participant = planned(Array.from({ length: 60 }, (_, index) => item(index === 50 ? 'in_progress' : 'completed', `Step ${index + 1}`)));
+    expect(participant.plan?.items).toHaveLength(50);
+    expect(participant.planLine).toEqual({ kind: 'current', text: '▸ Step 51' });
   });
 });

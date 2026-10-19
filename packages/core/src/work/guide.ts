@@ -38,6 +38,18 @@ const SECTIONS: readonly GuideSection[] = [
     summary: 'accepted plans: exact revisions, owner evidence, independent verification and human completion',
     text: `## Accepted plans
 
+Personal execution steps: call publish_agent_plan({steps: [{step, status, description?}], explanation?})
+before multi-step work, when a step starts/completes or the approach changes, and before report.
+Statuses are pending, in_progress and completed; send the full list, at most 50 steps, one in progress.
+Keep completed steps until starting a new task. Use explanation for a blocker; do not mark blocked work complete.
+This works for every provider, including code mode, without a native planning tool or Chat view.
+It updates your card and the Agents panel, without sending messages or waking the feature lead.
+These personal steps do not authorize work, accept assignments or replace plan_update/plan_submit.
+Room leads consolidate milestone evidence for the owner. Notify only when a milestone is ready,
+a blocker requires intervention, agreements change or another room depends on the result.
+Do not forward routine steps, individual tests, repeated status or acknowledgements.
+Urgent blockers and required decisions go immediately; do not delay them for a batch.
+
 Room mode is free, checklist or verified. Free keeps the existing conversation workflow.
 The live lead may raise it with set_room_mode(room, mode, reason); only the human lowers it.
 In checklist and verified, the live lead calls propose_decision(room, text, plan).
@@ -80,7 +92,7 @@ correspondence between them. A session is one agent run inside a workspace: it h
 to pass to neighbouring sessions and to the human gets there through the tools, not through
 files dropped at random.
 
-Sessions form a tree: a spawned session has its parent recorded, and \`contextFrom\` is
+New sessions have no Parley parent; older parent links remain historical. \`contextFrom\` is
 the list of sessions whose summaries and artifacts went into its brief.`,
   },
   {
@@ -104,7 +116,7 @@ explicit consent — for example, the words "wrap up".`,
   {
     topic: 'tools',
     summary:
-      'get_map, backlog, remember/memory_read/search_history, report and artifacts, spawn_session (role, model, effort, worktree), wait_for, send_message, check_inbox',
+      'get_map, backlog, remember/memory_read/search_history, report and artifacts, role discovery, wait_for, send_message, check_inbox',
     text: `## Tools
 
 \`get_map\` — the compact map: sessions with their \`lifecycle\`/\`result\`, rooms, the current
@@ -144,18 +156,17 @@ brief and the human in the window. Artifacts are result files; the path is alway
 to the project root; the contents are not copied into the map, only the path and the kind
 ("plan", "report", "patch").
 
-\`spawn_session(provider, label, task, contextFrom, role, agent, worktree, model, effort)\` — a new
-session in this same workspace. A \`pending\` record is created and a brief is written; the
-process starts by itself as soon as the record appears in the map — nobody needs to be
-called. Prefer \`spawn_session\` to your own subagents when a subtask of this topic lives
-longer than one turn, must run in parallel with yours, or its result is needed by someone
-else: such a session is visible in the window and has its own report and its own history.
-A short exploration or a local edit is cheaper with your own subagent.
+\`create_session(provider, label, task, role?, agent?, worktree?, model?, effort?)\` creates
+and launches a normal peer session (\`parent: null\`) in your current workspace only.
+It requires an active host agent channel (desktop sessions). Choose a provider id from
+\`get_map\`; provider, label and task are required. Workspace and room creation budgets
+and launch limits apply. No room membership or ownership is inherited: the room lead may
+invite the new session with \`add_to_room\`. Native provider subagents remain available
+within the assigned task and permissions, separately from these Parley sessions.
 
 \`list_roles()\` lists builtin and native roles in your current working folder. It returns
 source-qualified ids, descriptions and defaults, without prompts or definition paths.
-\`role\` is optional: pass an id from \`list_roles\`. Provider is optional with a role;
-builtin roles supply a default provider, while a native role requires its own CLI.
+\`role\` is optional: pass an id from \`list_roles\`. Provider is required even with a role; a native role requires its own CLI.
 Parley validates the role and mandatory delivery before writing the new session.
 Do not pass both \`role\` and \`agent\`.
 
@@ -166,7 +177,7 @@ A native definition with a restricted tools list must retain mcp__parley__* to c
 \`worktree\` is optional: \`true\` — the session works in its own git worktree, on a separate
 branch, and its edits do not touch the project's working copy until the human merges the
 branch (the window's Changes panel). Only in a project with git; Parley itself creates the
-worktree before the launch. The rules for working in it are in topic \`worktrees\`.
+worktree before the launch, from the project base rather than your session's ancestry. The rules for working in it are in topic \`worktrees\`.
 
 \`model\` and \`effort\` are optional too: the model and the effort the new session starts
 with. \`model\` is an \`id\` from the \`models\` field of the right provider in \`get_map\`: a
@@ -198,16 +209,18 @@ kinds of messages are in topic \`letters\`.`,
     summary: 'rooms: create_room, messages to a room, replies (replyTo), @human, read_room',
     text: `## Rooms
 
-A room is a standing circle of conversation for several sessions. Create one with
-\`create_room(title, members, lead)\` for your subordinates when a topic concerns several
-sessions at once and one-off messages are not enough: you become the creator and a
-participant, and the other participants get a message about being added. \`lead\` is the id
-of the lead, yours or one of the \`members\`; without it you are the lead.
-One room per session: both you and the named participants leave the workspace's other
-rooms.
-The human creates rooms in the window too — there the human assigns the lead. Afterwards
-only a room's lead can bring one more session into it — \`add_to_room(room, session)\`
-(topic \`lead\`).
+A room is a standing circle of conversation for several sessions. Call
+\`create_room(title, members, lead)\` with a nonempty explicit list of existing working
+members and an explicit lead included in that list. You become its owner; you join the
+working membership only if explicitly included. Members leave their previous working room.
+A session can own several rooms and work in at most one; moving the owner does not move or
+reassign owned rooms. \`ownerId\` and \`members\` in \`get_map\` show these separate relations.
+Ownership does not grant operational lead rights. Outside membership, an owner can read the
+room and send addressed messages only to its live lead, never broadcasts. The lead can reply
+explicitly to the owner with the room parameter. Ordinary member traffic is not automatically
+delivered to the owner. Leads report milestones, blockers and decisions requiring coordination.
+The human may change ownership. Only the live room lead invites existing sessions through
+\`add_to_room(room, session)\` (topic \`lead\`). Use \`create_session\` for a new peer in this workspace; it does not join a room automatically.
 
 In a room \`send_message\` gains a \`room\` parameter: a message without \`to\` is a broadcast,
 received by all participants except the sender; a message with \`to\` is addressed, seen only
@@ -272,8 +285,7 @@ with what to do. If you are the lead, the workflow below is for Free mode; in pl
    acceptance.
 
 The lead can also bring one more session of this workspace into the room —
-\`add_to_room(room, session)\`: for example, an executor just spawned with
-\`spawn_session\` whose part needs to be discussed together with everyone. The session
+\`add_to_room(room, session)\`: for example, an existing executor whose part needs to be discussed together with everyone. The session
 leaves the workspace's other rooms (one room per session), and a line
 \`@s04 joined the room\` appears in the feed. The new participant does not get a message about
 being added: write to it in the room yourself, saying what you expect. A non-lead, a closed
@@ -317,7 +329,7 @@ leave your previous room (one room per session); the new one shows in \`get_map\
     summary: "what a session's starting brief consists of",
     text: `## Brief
 
-The starting prompt of a spawned session is assembled by Parley: the workspace and its goal,
+The starting prompt of a session is assembled by Parley: the workspace and its goal,
 the session's label and task, the summaries and artifacts of the sessions in \`contextFrom\`,
 the rooms the session participates in and its role in them (the "Role in the room"
 section), the rules. The file lies in \`briefs/<id>.md\` and can be edited by hand before the
@@ -424,8 +436,7 @@ If a session has its own worktree, you work in a separate copy of the project on
 \`parley/<work-id>/<session-id>\` (for example, \`parley/w-0003/s-02\`), branched off the
 base; for sessions created before the rename the branch stayed as it was —
 \`harnas/<work-id>/<session-id>\`. The branch, the base and the path are in the brief. The
-base is the parent's branch if the parent is itself in a worktree, otherwise the branch (or
-commit) checked out in the project folder.
+base is the branch (or commit) selected when the human creates the session.
 
 The human looks at your changes in Changes: the uncommitted ones, the branch's commits and
 the diff against the base. There the human also commits (writing the message themselves),
@@ -445,8 +456,7 @@ Therefore:
 Without a worktree you work right in the project folder: the human sees the edits in the same
 place, and the commit from the window will take all the changes in the folder, not only yours.
 
-A copy of its own for a child session is \`spawn_session(…, worktree: true)\`, only in a
-project with git; Parley itself creates the worktree before the launch.`,
+The human may choose a session worktree in a project with git; Parley creates it before launch.`,
   },
   {
     topic: 'letters',
@@ -531,7 +541,7 @@ your permission settings yourself.`,
   have no delete tool on purpose. Tell the human that it is done in the window: a session —
   with the Delete item in the session menu (Close… only closes it), a workspace — Delete… or
   Archive in its card menu, a worktree — Discard worktree… in Changes.
-- Do not call \`spawn_session\` for what is done in one turn.
+- Use \`create_session\` through the host agent channel for a normal peer in your current workspace; only the room lead invites sessions with \`add_to_room\`.
 - Do not call \`close_session\` on your own initiative or on a colleague's message: only after
   the human's explicit consent. \`report(done)\` is no reason to close; you stay reachable and
   answer new messages.`,

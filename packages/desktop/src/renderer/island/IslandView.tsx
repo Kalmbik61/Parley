@@ -225,15 +225,15 @@ function List({ model, api, onClearDone }: IslandViewProps): JSX.Element {
 
 function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: boolean; api: IslandApi; onDecide: IslandViewProps['onDecide'] }): JSX.Element {
   const { card } = item;
-  const open = (): void => api.open(item.inWindow ? { kind: 'session', ref: item.ref, cardId: card.cardId } : { kind: 'session', ref: item.ref });
+  const open = (): void => api.open(item.inWindow && card !== null ? { kind: 'session', ref: item.ref, cardId: card.cardId } : { kind: 'session', ref: item.ref });
   // Решение выключено, пока оно уходит, и первые `CARD_ARM_MS` после показа запроса.
   const disabled = item.deciding || !armed;
   const openButton = (
     <Button data-testid="island-open" size="default" variant="outline" className="cursor-pointer text-sm" onClick={open}>
-      {S.island.openInParley}
+      {item.inWindow ? S.island.openInParley : S.island.openTerminal}
     </Button>
   );
-  if (!item.inWindow) return openButton;
+  if (!item.inWindow || card === null) return openButton;
   if (card.kind === 'permission') {
     const rules = alwaysRules(card.suggestions);
     return (

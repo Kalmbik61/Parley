@@ -75,9 +75,9 @@ function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
 }
 
 /** Мост острова поверх подставного моста окна: хост «подключён», `works.list` и `feed.snapshot` отвечают из таблиц выше. */
-function setup(config: Partial<IslandConfig> = {}) {
+function setup(config: Partial<IslandConfig> = {}, entries = ENTRIES) {
   const fake = createFakeBridge();
-  fake.setHandler('works.list', () => ({ entries: ENTRIES, branches: {} }) as never);
+  fake.setHandler('works.list', () => ({ entries, branches: {} }) as never);
   fake.setHandler('feed.snapshot', ({ ref: target }) => ({ items: CARDS[target.sessionId] ?? [], revision: 1, mode: null, decisions: 'window' }) as never);
   const island = islandApi(config);
   const bridge: IslandBridge = { call: fake.call, on: fake.on, onStatus: fake.onStatus, activitySnapshot: fake.activitySnapshot, island };
@@ -167,6 +167,29 @@ afterEach(() => {
 });
 
 describe('проводка острова', () => {
+  it('Codex без карточки: действие в терминале выдвигает Island, открывает сессию и уходит после ответа', async () => {
+    const entries = [makeWork('w-1', { projectPath: PROJECT, sessions: [makeSession('s-03', 'codex', { provider: 'codex' })] })];
+    const { island, bridge, blocked, working, hover } = setup({ sound: true }, entries);
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await Promise.resolve(); });
+    blocked('s-03');
+    expect(await screen.findByTitle('Codex needs your attention in the terminal')).toBeTruthy();
+    await waitFor(() => expect(isRetracted()).toBe(false));
+    expect(island.beep).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('island-allow')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Open terminal' }));
+    expect(island.open).toHaveBeenCalledWith({ kind: 'session', ref: ref('s-03') });
+    blocked('s-03');
+    expect(island.beep).toHaveBeenCalledTimes(1);
+    working('s-03');
+    await waitFor(() => expect(screen.queryByTestId('island-card')).toBeNull());
+    tuck(hover);
+    blocked('s-03');
+    await screen.findByTitle('Codex needs your attention in the terminal');
+    await waitFor(() => expect(isRetracted()).toBe(false));
+    expect(island.beep).toHaveBeenCalledTimes(2);
+  });
+
   it('новый запрос выбирается в карточке: прежний на экране не остаётся', async () => {
     const { bridge, blocked } = setup();
     render(<IslandApp bridge={bridge} />);
@@ -1164,4 +1187,3 @@ describe('Done на острове', () => {
     expect(screen.getByTestId('island-counters').textContent).toBe('✅ 1 done');
   });
 });
-

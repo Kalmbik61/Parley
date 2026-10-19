@@ -281,23 +281,6 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   />
                 </FieldRow>
 
-                <label className="flex items-center justify-between gap-2 text-sm">
-                  <span>
-                    {S.settings.autoLaunchPending}
-                    {locked.autoLaunch !== undefined ? (
-                      <span className="text-muted-foreground"> {S.settings.lockedBy(locked.autoLaunch)}</span>
-                    ) : null}
-                  </span>
-                  <Switch
-                    checked={config.autoLaunch}
-                    disabled={locked.autoLaunch !== undefined}
-                    onCheckedChange={(checked) => void save('autoLaunch', checked ? 'true' : 'false')}
-                  />
-                </label>
-                {errors.autoLaunch !== undefined ? (
-                  <span className="text-xs text-destructive">{errors.autoLaunch}</span>
-                ) : null}
-
                 {/* Ключа нет у хоста, оставшегося от прежней версии: он lean-запуск не знает, переключатель врал бы. */}
                 {config.leanAgents !== undefined ? (
                   <>
@@ -405,7 +388,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                     <h3 className="m-0 text-sm font-medium">{S.settings.limits.heading}</h3>
                     <p className="m-0 text-xs text-muted-foreground">{S.settings.limits.hint}</p>
                     <div className="grid grid-cols-2 gap-x-3 gap-y-2">
-                      {RESOURCE_LIMIT_KEYS.map((key) => (
+                      {RESOURCE_LIMIT_KEYS.filter((key) => String(key) !== 'spawnDepth').map((key) => (
                         <FieldRow
                           key={key}
                           label={`${S.settings.limits[key]} (${S.settings.limits.range(RESOURCE_LIMIT_BOUNDS[key].min, RESOURCE_LIMIT_BOUNDS[key].max)})`}

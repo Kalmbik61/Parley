@@ -1,3 +1,4 @@
+import { startProviderVersions } from '../providers/versions.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { RequestInfo } from '../context.js';
 import type { LimitsService } from '../limits/limits-service.js';
@@ -5,6 +6,23 @@ import { ZaiQuotaError } from '../limits/zai-quota.js';
 import { createProvidersRefreshLimits } from './providers.js';
 
 describe('providers.refreshLimits', () => {
+  it('refreshes a known old version and safely clears it when probing fails', async () => {
+    let version: string | null = '0.159.0';
+    const versions = startProviderVersions(async () => {
+      if (version === null) throw new Error('probe failed');
+      return version;
+    }, { info: vi.fn(), warn: vi.fn(), error: vi.fn() });
+    await versions.ready;
+    const refresh = vi.fn().mockResolvedValue(undefined);
+    const handler = createProvidersRefreshLimits({ refresh } as unknown as LimitsService, versions);
+    version = '0.162.0';
+    expect(await handler({}, {} as RequestInfo)).toEqual({ ok: true });
+    expect(versions.get('codex')).toBe('0.162.0');
+    version = null;
+    expect(await handler({}, {} as RequestInfo)).toEqual({ ok: true });
+    expect(versions.get('codex')).toBeNull();
+  });
+
   it('awaits all-provider refresh with explicit GLM opt-in', async () => {
     const refresh = vi.fn().mockResolvedValue(undefined);
     const handler = createProvidersRefreshLimits({ refresh } as unknown as LimitsService);

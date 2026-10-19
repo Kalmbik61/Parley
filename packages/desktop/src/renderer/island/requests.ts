@@ -1,11 +1,12 @@
 /**
- * Очередь запросов острова (спека 2026-10-12, раздел 6). Сессия Claude или GLM перешла в «ждёт» — разовый
+ * Очередь запросов острова (спека 2026-10-12, раздел 6). Сессия перешла в «ждёт» — разовый
  * `feed.snapshot` и в очередь все её ждущие карточки; карточки ещё нет (хук ложится позже активности) — повторы по
  * `ASK_RETRY_SCHEDULE_MS`, пока сессия ждёт и карточек у неё нет, и новый снимок при каждом следующем изменении
  * активности этой сессии, пока она ждёт. У каждого снимка свой номер по сессии: ответ не последнего запроса
  * отбрасывается; удавшийся снимок без ждущих карточек убирает прежние карточки сессии (ответили в терминале), а
  * отказавший их не трогает. Сессия перестала ждать — её карточки уходят. Порядок — по времени перехода в «ждёт»,
  * внутри сессии — по ленте.
+ * У Codex до появления карточки сразу показывается переход к терминалу: запрос действия может не иметь хука.
  *
  * На ленты остров не подписывается: подписки на хосте общие на клиента-main, и отписка острова оборвала бы ленту
  * главного окна. Поэтому и решение — свой `feed.decide`, а не `useFeedStore.decide`: тот держит «решается» до дельты
@@ -18,7 +19,8 @@
 import { create } from 'zustand';
 import type { FeedCard, FeedDecision, WorkEntry } from '@parley/core';
 import { refKey, type Result, type SessionRef } from '@parley/protocol';
-import { ISLAND_EXCLUDED_PROVIDERS, type IslandBridge } from '../../shared/island.js';
+import type { IslandBridge } from '../../shared/island.js';
+import { S } from '../../shared/strings.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { askSummary, pendingCards } from '../attention/ask-summary.js';
 import { sessionAttention } from '../attention/derive.js';
@@ -32,7 +34,8 @@ export interface IslandRequest {
   /** `refKey` сессии и `cardId` через `\0`. */
   key: string;
   ref: SessionRef;
-  card: FeedCard;
+  /** null — запрос действия в терминале без карточки ленты. */
+  card: FeedCard | null;
   summary: string;
   /** Ответить можно из Parley (Codex с одобрениями в терминале — нет). */
   inWindow: boolean;
@@ -57,6 +60,8 @@ let call: IslandBridge['call'] | null = null;
 const lastSeen = new Map<string, ActivityEntry | undefined>();
 /** Номер последнего запрошенного снимка по сессии (`refKey`): ответ с другим номером устарел. */
 const requestIds = new Map<string, number>();
+/** Запрос терминала на текущий эпизод ожидания Codex; не зависит от доступности feed.snapshot. */
+const terminalFallbacks = new Map<string, IslandRequest>();
 /** Сквозной счётчик номеров: номер не повторяется, даже когда запись сессии удалена и заведена заново. */
 let requestSeq = 0;
 
@@ -111,9 +116,16 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
       return;
     }
     // Удавшийся снимок без ждущих карточек: прежние ответили в терминале. Отказ сети карточки не трогает.
-    if (snapshot !== null) dropSession(sessionKey);
+    if (snapshot !== null) {
+      const fallback = terminalFallbacks.get(sessionKey);
+      if (fallback === undefined) dropSession(sessionKey);
+      else set((state) => {
+        const items = [...state.items.filter((item) => refKey(item.ref) !== sessionKey), fallback].sort((a, b) => a.since - b.since);
+        return { items, index: clampIndex(state.index, items.length) };
+      });
+    }
     const delay = ASK_RETRY_SCHEDULE_MS[attempt];
-    if (delay === undefined || get().items.some((item) => refKey(item.ref) === sessionKey)) return;
+    if (delay === undefined || get().items.some((item) => refKey(item.ref) === sessionKey && item.card !== null)) return;
     setTimeout(() => {
       if (requestIds.get(sessionKey) === id) void fetchCards(ref, attempt + 1);
     }, delay);
@@ -135,19 +147,29 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
       for (const entry of entries) {
         if (entry.map.work.status !== 'active') continue;
         for (const session of entry.map.sessions) {
-          if (ISLAND_EXCLUDED_PROVIDERS.has(session.provider)) continue;
           const ref = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
           const key = refKey(ref);
           if (sessionAttention(session, byRef[key]?.activity ?? null) !== 'needs-you') continue;
           waitingSince[key] = before[key] ?? now;
+          if (session.provider === 'codex' && !terminalFallbacks.has(key)) {
+            terminalFallbacks.set(key, {
+              key: `${key}\u0000terminal:${waitingSince[key]}`, ref, card: null,
+              summary: S.island.codexTerminalAction, inWindow: false, since: waitingSince[key], deciding: false, note: null,
+            });
+          }
           if (before[key] === undefined || lastSeen.get(key) !== byRef[key]) toFetch.push(ref);
           lastSeen.set(key, byRef[key]);
         }
       }
       for (const key of [...lastSeen.keys()]) if (waitingSince[key] === undefined) lastSeen.delete(key);
       for (const key of [...requestIds.keys()]) if (waitingSince[key] === undefined) requestIds.delete(key);
+      for (const key of [...terminalFallbacks.keys()]) if (waitingSince[key] === undefined) terminalFallbacks.delete(key);
       set((state) => {
         const items = state.items.filter((item) => waitingSince[refKey(item.ref)] !== undefined);
+        for (const [key, fallback] of terminalFallbacks) {
+          if (!items.some((item) => refKey(item.ref) === key)) items.push(fallback);
+        }
+        items.sort((a, b) => a.since - b.since);
         return { waitingSince, items, index: clampIndex(state.index, items.length) };
       });
       for (const ref of toFetch) void fetchCards(ref, 0);
@@ -155,7 +177,7 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
     decide: async (key, decision) => {
       const item = get().items.find((candidate) => candidate.key === key);
       const current = call;
-      if (item === undefined || current === null || item.deciding) return;
+      if (item === undefined || item.card === null || !item.inWindow || current === null || item.deciding) return;
       patch(key, { deciding: true, note: null });
       try {
         const result = await current('feed.decide', { ref: item.ref, cardId: item.card.cardId, decision });
@@ -180,6 +202,7 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
     clear: () => {
       lastSeen.clear();
       requestIds.clear();
+      terminalFallbacks.clear();
       set({ items: [], index: 0, waitingSince: {} });
     },
   };

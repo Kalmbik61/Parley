@@ -1,13 +1,11 @@
-import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_CONFIG, saveConfig } from '../config.js';
-import { BRANCH_PREFIX, MCP_SERVER_NAME } from '../names.js';
+import { DEFAULT_CONFIG } from '../config.js';
+import { MCP_SERVER_NAME } from '../names.js';
 import { PROVIDERS, selectableModels } from '../providers.js';
 import { clearSecret, writeSecret } from '../secrets.js';
 import { LEAD_ROLE, memberRole } from '../work/brief.js';
@@ -32,7 +30,6 @@ import { listBacklogSuggestions } from '../work/backlog-suggestions.js';
 import { acceptMemorySuggestion, listMemorySuggestions, listUndoableMemory } from '../work/memory-suggestions.js';
 import { undoProjectMemory } from '../work/project-memory.js';
 import { setBacklogRule } from '../work/project-preferences.js';
-import { planLaunch } from '../work/launch.js';
 import { buildRoleCatalog } from '../roles/catalog.js';
 import type { RoleCatalog } from '../roles/types.js';
 import { contextFromEnv } from './context.js';
@@ -51,6 +48,7 @@ let workId = '';
 let savedPath: string | undefined;
 
 /** Всё, что пришлось поднять для одного клиента: закрываем в afterEach. */
+const clientSessions = new WeakMap<Client, string | null>();
 const opened: { client: Client; server: ReturnType<typeof createParleyServer> }[] = [];
 
 interface Call {
@@ -110,7 +108,16 @@ async function connect(
   };
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
   opened.push({ client, server });
+  clientSessions.set(client, sessionId);
   return client;
+}
+
+/** Stored legacy-family fixtures preserve historical messaging tests without exposing session creation over MCP. */
+async function addHistoricalSession(client: Client, init: { provider?: string; label: string; task: string }): Promise<void> {
+  await updateMap(project, workId, map => {
+    const created = addSession(map, { ...init, provider: init.provider ?? 'claude', parent: null });
+    created.parent = clientSessions.get(client) ?? null;
+  });
 }
 
 const readMapFile = async (): Promise<WorkMap> =>
@@ -123,24 +130,6 @@ const session = (map: WorkMap, id: string) => {
 };
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-const run = promisify(execFile);
-const git = (dir: string, args: string[]) => run('git', ['-C', dir, ...args]);
-
-/**
- * Репозиторий с одним коммитом на `main` — для тестов `spawn_session
- * { worktree: true }`. Сам инструмент зовёт настоящий git по PATH: `beforeEach`
- * глушит PATH ради проверки провайдеров, здесь он на время теста возвращается.
- */
-async function initGitProject(): Promise<void> {
-  process.env.PATH = savedPath ?? '';
-  await run('git', ['init', '-b', 'main', project]);
-  await git(project, ['config', 'user.email', 'тест@parley']);
-  await git(project, ['config', 'user.name', 'тест']);
-  await writeFile(path.join(project, 'README.md'), 'старт\n', 'utf8');
-  await git(project, ['add', 'README.md']);
-  await git(project, ['commit', '-m', 'первый']);
-}
 
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
@@ -238,6 +227,7 @@ describe('список инструментов', () => {
       'plan_verify',
       'propose_completion',
       'propose_decision',
+      'publish_agent_plan',
       'read_guide',
       'read_room',
       'remember',
@@ -245,7 +235,6 @@ describe('список инструментов', () => {
       'search_history',
       'send_message',
       'set_room_mode',
-      'spawn_session',
       'wait_for',
     ]);
     expect(tools.every((tool) => (tool.description ?? '') !== '')).toBe(true);
@@ -257,11 +246,7 @@ describe('список инструментов', () => {
 
     expect(client.getServerVersion()?.name).toBe(MCP_SERVER_NAME);
     expect(client.getServerVersion()?.name).toBe('parley');
-    // Оговорка у `agent` называет тот же префикс: роль с урезанным `tools` без него ни письма, ни отчёта.
-    const spawn = tools.find((tool) => tool.name === 'spawn_session');
-    const agent = (spawn?.inputSchema.properties?.['agent'] ?? {}) as { description?: string };
-    expect(agent.description).toContain(`mcp__${MCP_SERVER_NAME}__*`);
-    expect(agent.description).not.toContain('mcp__harnas__');
+    expect(tools.some(tool => tool.name === 'spawn_session')).toBe(false);
   });
 
   it('propose_decision: room и text обязательны, описание — про ведущего, ожидание человека и повтор', async () => {
@@ -304,39 +289,7 @@ describe('список инструментов', () => {
     expect(add?.description).toMatch(/gets no message/);
   });
 
-  it('spawn_session: model и effort необязательны, у effort нет enum — уровни у каждой модели свои, описание отсылает к get_map', async () => {
-    const client = await connect('s-01');
-    const { tools } = await client.listTools();
-    const spawn = tools.find((tool) => tool.name === 'spawn_session');
-    const effort = spawn?.inputSchema.properties?.['effort'] as
-      | { type?: string | string[]; enum?: unknown; description?: string }
-      | undefined;
 
-    // Провайдера может дать роль, поэтому он не обязателен; null — явный «Default», снимающий умолчание роли.
-    expect(spawn?.inputSchema.required).toEqual(['label', 'task']);
-    expect(spawn?.inputSchema.properties?.['model']).toMatchObject({ type: ['string', 'null'] });
-    expect(effort?.type).toEqual(['string', 'null']);
-    // Нормалайзер модели и effort (5.6): закрытого списка больше нет — у Claude пять уровней,
-    // у Codex до ultra.
-    expect(effort).not.toHaveProperty('enum');
-    expect(effort?.description).toContain('one of the efforts of the chosen model in get_map');
-    expect(effort?.description).toContain("with the default model, the levels shared by its provider's models");
-    expect(effort?.description).toContain('A provider with effort: false drops the value');
-    expect(effort?.description).toContain('Exact null explicitly clears the role default');
-    expect(JSON.stringify(spawn?.inputSchema.properties?.['model'])).toContain('get_map');
-  });
-
-  it('гид называет в подписи spawn_session все параметры инструмента, в том же порядке', async () => {
-    const client = await connect('s-01');
-    const { tools } = await client.listTools();
-    const spawn = tools.find((tool) => tool.name === 'spawn_session');
-    const signature = /`spawn_session\(([^)]*)\)`/.exec(guideTopic('tools') ?? '')?.[1];
-
-    // Подпись в теме `tools` — то, что агент читает вместо схемы: параметр, которого в ней нет, он не найдёт.
-    expect(signature?.split(',').map((name) => name.trim())).toEqual(
-      Object.keys(spawn?.inputSchema.properties ?? {}),
-    );
-  });
 
   it('send_message: replyTo — необязательная строка; описание — про id из check_inbox или read_room и цитату в окне', async () => {
     const client = await connect('s-01');
@@ -375,12 +328,12 @@ describe('список инструментов', () => {
     for (const name of names) expect(guide?.description).toContain(name);
   });
 
-  it('create_room: lead необязателен, описание называет ведущего по умолчанию', async () => {
+  it('create_room: lead обязателен, описание отделяет владельца от участников', async () => {
     const client = await connect('s-01');
     const { tools } = await client.listTools();
     const createRoom = tools.find((tool) => tool.name === 'create_room');
 
-    expect(createRoom?.inputSchema.required).toEqual(['title', 'members']);
+    expect(createRoom?.inputSchema.required).toEqual(['title', 'members', 'lead']);
     expect(Object.keys(createRoom?.inputSchema.properties ?? {}).sort()).toEqual([
       'lead',
       'members',
@@ -599,7 +552,7 @@ describe('get_map: компактная карта и страницы (P35)', (
   /** s-01 (план) и s-02, комната r-01 из обоих; письма дописывает `fill`. */
   async function seedRoom(): Promise<void> {
     await updateMap(project, workId, (current) => {
-      addSession(current, { provider: 'claude', label: 'код', task: 'писать', parent: 's-01' });
+      addSession(current, { provider: 'claude', label: 'код', task: 'писать', parent: null }).parent = 's-01';
       addRoom(current, { title: 'Обсуждение', creator: HUMAN, members: ['s-01', 's-02'], lead: 's-01' });
     });
   }
@@ -824,72 +777,18 @@ describe('GLM readiness in MCP', () => {
     await writeFile(path.join(home, 'providers.json'), JSON.stringify({ glm: { command: 'wrapper' } }));
     expect(await available()).toBe(false);
   });
-  it('spawn_session refuses before adding a session or worktree plan, then accepts supported GLM', async () => {
-    const client = await connect('s-01');
-    const before = await readMap(project, workId);
-    await versionStub('2.1.287');
-    const args = { provider: 'glm', label: 'test', task: 'test', worktree: true };
-    expect((await call(client, 'spawn_session', args)).isError).toBe(true);
-    expect(await readMap(project, workId)).toEqual(before);
-    await writeSecret('zai', 'fake-key');
-    await versionStub('2.1.286');
-    expect((await call(client, 'spawn_session', args)).isError).toBe(true);
-    expect(await readMap(project, workId)).toEqual(before);
-    await versionStub('2.1.287');
-    expect((await call(client, 'spawn_session', { ...args, worktree: false })).isError).toBe(false);
-    expect(JSON.stringify(await readMap(project, workId))).not.toContain('fake-key');
-  });
 });
 
-describe('роли у GLM в MCP', () => {
-  beforeEach(async () => {
-    await writeFile(process.env.PARLEY_CLAUDE_BIN!, '#!/bin/sh\necho "2.1.287"\n', { mode: 0o755 });
-    await writeSecret('zai', 'fake-key');
-  });
-  const defineAgent = async (dir: string, name: string): Promise<void> => {
-    await mkdir(dir, { recursive: true });
-    await writeFile(path.join(dir, `${name}.md`), `---\nname: ${name}\ndescription: Session role\n---\nRole body.\n`);
-  };
-  it('spawn_session: встроенная роль «только чтение» у GLM принимается и пишется в карту', async () => {
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'glm', role: 'builtin:planner', label: 'Plan', task: 'Plan changes' });
-    expect(session(await readMapFile(), 's-02')).toMatchObject({ provider: 'glm', role: { source: 'builtin', name: 'planner' } });
-  });
-  it('spawn_session: роль Claude у GLM берётся из ~/.claude, а не из CLAUDE_CONFIG_DIR ведущего', async () => {
-    const fakeHome = path.join(home, 'user-home');
-    const configDir = path.join(home, 'lead-config');
-    await defineAgent(path.join(fakeHome, '.claude', 'agents'), 'from-home');
-    await defineAgent(path.join(configDir, 'agents'), 'from-config');
-    vi.stubEnv('HOME', fakeHome);
-    vi.stubEnv('CLAUDE_CONFIG_DIR', configDir);
-    try {
-      const client = await connect('s-01');
-      expect((await call(client, 'spawn_session', { provider: 'glm', role: 'claude:from-config', label: 'A', task: 'A' })).text).toContain('role-missing');
-      expect((await readMapFile()).sessions).toHaveLength(1);
-      await callOk(client, 'spawn_session', { provider: 'glm', role: 'claude:from-home', label: 'B', task: 'B' });
-      expect(session(await readMapFile(), 's-02')).toMatchObject({ provider: 'glm', role: { source: 'claude', name: 'from-home' } });
-      // Ведущему Claude по-прежнему видна конфигурация из его окружения.
-      await callOk(client, 'spawn_session', { provider: 'claude', role: 'claude:from-config', label: 'C', task: 'C' });
-    } finally { vi.unstubAllEnvs(); }
-  });
-  it('spawn_session: роль Codex у GLM — role-provider-mismatch', async () => {
-    const codexRole = { id: 'codex:exact', source: 'codex' as const, provider: 'codex' as const, name: 'exact', description: '', path: '/fixture.toml', prompt: 'Native', model: null, effort: null, sandboxMode: null, readOnly: false };
-    const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], DEFAULT_CONFIG.worktreeRoot, async () => buildRoleCatalog({ roles: [codexRole], diagnostics: [], partial: false }));
-    expect((await call(client, 'spawn_session', { provider: 'glm', role: 'codex:exact', label: 'A', task: 'A' })).text).toContain('role-provider-mismatch');
-    expect((await readMapFile()).sessions).toHaveLength(1);
-  });
-});
 
 describe('без PARLEY_SESSION_ID', () => {
   it('остальные инструменты объясняют, что сессию надо создать через харнесс', async () => {
     const client = await connect(null);
     const calls = [
       call(client, 'report', { status: 'progress', summary: 'что-то' }),
-      call(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }),
       call(client, 'wait_for', { target: 'inbox', timeoutSec: 0 }),
       call(client, 'send_message', { to: 's-01', text: 'привет' }),
       call(client, 'check_inbox'),
-      call(client, 'create_room', { title: 'x', members: ['s-01'] }),
+      call(client, 'create_room', { title: 'x', members: ['s-01', 's-01'], lead: 's-01' }),
       call(client, 'read_room', { room: 'r-01' }),
       call(client, 'propose_decision', { room: 'r-01', text: 'решение' }),
       call(client, 'close_session', { target: 's-01' }),
@@ -989,7 +888,7 @@ describe('report', () => {
 
   it('после close_session — ошибка любым статусом, резюме не меняется', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'close_session', { target: 's-01' });
+    await callOk(await connect('s-01'), 'close_session', { target: 's-01' });
 
     const progress = await call(client, 'report', { status: 'progress', summary: 'x' });
     expect(progress.isError).toBe(true);
@@ -1001,510 +900,14 @@ describe('report', () => {
   });
 });
 
-describe('spawn_session', () => {
-  it('создаёт pending с родителем, брифом и возвращает id', async () => {
-    const client = await connect('s-01');
-    const result = await callOk(client, 'spawn_session', {
-      provider: 'claude',
-      label: 'бэкенд',
-      task: 'реализовать шаги 1–3',
-      contextFrom: ['s-01'],
-    });
 
-    expect(result).toEqual({ sessionId: 's-02' });
-    const stored = session(await readMapFile(), 's-02');
-    expect(stored.lifecycle).toBe('pending');
-    expect(stored.provider).toBe('claude');
-    expect(stored.parent).toBe('s-01');
-    expect(stored.contextFrom).toEqual(['s-01']);
 
-    const brief = await readFile(path.join(workPaths(project, workId).briefs, 's-02.md'), 'utf8');
-    expect(brief).toContain('бэкенд');
-    expect(brief).toContain('реализовать шаги 1–3');
-    expect(brief).toContain('get_map');
-  });
 
-  it('неизвестный провайдер — ошибка с перечнем допустимых, записи нет', async () => {
-    const client = await connect('s-01');
-    const result = await call(client, 'spawn_session', {
-      provider: 'gpt',
-      label: 'бэк',
-      task: 'делать',
-    });
-
-    expect(result.isError).toBe(true);
-    expect(result.text).toContain('claude');
-    expect(result.text).toContain('codex');
-    expect((await readMapFile()).sessions).toHaveLength(1);
-  });
-
-  it('команды нет в PATH — ошибка, записи нет', async () => {
-    const client = await connect('s-01');
-    const result = await call(client, 'spawn_session', {
-      provider: 'codex',
-      label: 'бэк',
-      task: 'делать',
-    });
-
-    expect(result.isError).toBe(true);
-    expect(result.text).toMatch(/PATH/);
-    expect((await readMapFile()).sessions).toHaveLength(1);
-  });
-
-  it('пустая задача — ошибка: тихий старт доступен только окну и CLI', async () => {
-    const client = await connect('s-01');
-    const result = await call(client, 'spawn_session', {
-      provider: 'claude',
-      label: 'бэк',
-      task: '',
-    });
-
-    expect(result.isError).toBe(true);
-    expect(result.text).toContain('task');
-    expect((await readMapFile()).sessions).toHaveLength(1);
-  });
-
-  it('роль агента проверяется по определению проекта и попадает в карту', async () => {
-    await mkdir(path.join(project, '.claude', 'agents'), { recursive: true });
-    await writeFile(path.join(project, '.claude', 'agents', 'reviewer.md'), '---\nname: reviewer\ndescription: Review\n---\nNative role body.', 'utf8');
-    const client = await connect('s-01');
-
-    await callOk(client, 'spawn_session', {
-      provider: 'claude',
-      label: 'ревью',
-      task: 'проверить план',
-      agent: 'reviewer',
-    });
-
-    expect(session(await readMapFile(), 's-02').role).toEqual({ source: 'claude', name: 'reviewer' });
-    expect(Object.hasOwn(session(await readMapFile(), 's-02'), 'agent')).toBe(false);
-  });
-
-  it('определения агента нет — ошибка, записи нет', async () => {
-    const client = await connect('s-01');
-    const result = await call(client, 'spawn_session', {
-      provider: 'claude',
-      label: 'ревью',
-      task: 'проверить план',
-      agent: 'reviewer',
-    });
-
-    expect(result.isError).toBe(true);
-    expect(result.text).toContain('role-missing');
-    expect((await readMapFile()).sessions).toHaveLength(1);
-  });
-
-  it('провайдер без подстановки {agent} — ошибка, записи нет', async () => {
-    // У codex флага роли нет: запись, которую нечем запустить ролью, не заводим.
-    process.env.PARLEY_CODEX_BIN = path.join(binDir, 'claude');
-    const client = await connect('s-01');
-    const result = await call(client, 'spawn_session', {
-      provider: 'codex',
-      label: 'ревью',
-      task: 'проверить план',
-      agent: 'reviewer',
-    });
-
-    expect(result.isError).toBe(true);
-    expect(result.text).toMatch(/role-missing|role-provider-mismatch/);
-    expect((await readMapFile()).sessions).toHaveLength(1);
-  });
-
-  it('неизвестная сессия в contextFrom — ошибка, записи нет', async () => {
-    const client = await connect('s-01');
-    const result = await call(client, 'spawn_session', {
-      provider: 'claude',
-      label: 'бэк',
-      task: 'делать',
-      contextFrom: ['s-09'],
-    });
-
-    expect(result.isError).toBe(true);
-    expect(result.text).toContain('s-09');
-    expect((await readMapFile()).sessions).toHaveLength(1);
-  });
-});
-
-describe('spawn_session worktree', () => {
-  it('проект не git — ошибка, записи нет', async () => {
-    const client = await connect('s-01');
-
-    const result = await call(client, 'spawn_session', {
-      provider: 'claude',
-      label: 'бэк',
-      task: 'делать',
-      worktree: true,
-    });
-
-    expect(result.isError).toBe(true);
-    expect(result.text).toContain('the project has no git');
-    expect((await readMapFile()).sessions).toHaveLength(1);
-  });
-
-  it('git-проект — план worktree с createdAt: null и базой от ветки проекта', async () => {
-    await initGitProject();
-    const worktreeRoot = path.join(home, 'worktrees');
-    const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], worktreeRoot);
-
-    const result = await callOk(client, 'spawn_session', {
-      provider: 'claude',
-      label: 'бэк',
-      task: 'делать',
-      worktree: true,
-    });
-    expect(result).toEqual({ sessionId: 's-02' });
-
-    const stored = session(await readMapFile(), 's-02');
-    expect(stored.worktree).not.toBeNull();
-    expect(stored.worktree?.branch).toBe(`${BRANCH_PREFIX}${workId}/s-02`);
-    expect(stored.worktree?.branch).toBe(`parley/${workId}/s-02`);
-    expect(stored.worktree?.base).toBe('main');
-    expect(stored.worktree?.createdAt).toBeNull();
-    expect(path.dirname(stored.worktree?.path ?? '')).toContain(worktreeRoot);
-  });
-
-  it('ребёнок сессии в worktree берёт базой ветку родителя', async () => {
-    await initGitProject();
-    const worktreeRoot = path.join(home, 'worktrees');
-    const first = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], worktreeRoot);
-    await callOk(first, 'spawn_session', {
-      provider: 'claude',
-      label: 'бэк',
-      task: 'делать',
-      worktree: true,
-    }); // s-02, база — main
-
-    const second = await connect('s-02', 40, DEFAULT_CONFIG.messageRate, false, [], worktreeRoot);
-    await callOk(second, 'spawn_session', {
-      provider: 'claude',
-      label: 'ревью',
-      task: 'проверить',
-      worktree: true,
-    }); // s-03, родитель — s-02, уже в своём worktree
-
-    const parentBranch = session(await readMapFile(), 's-02').worktree?.branch;
-    const child = session(await readMapFile(), 's-03');
-    expect(child.worktree?.base).toBe(parentBranch);
-  });
-});
-
-describe('spawn_session: lean (облегчённый запуск, часть C)', () => {
-  it('leanAgents включена (умолчание): сессия агента пишется с lean: true', async () => {
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
-
-    expect(session(await readMapFile(), 's-02').lean).toBe(true);
-  });
-
-  it('leanAgents выключена: lean не включён; настройка читается заново при каждом вызове', async () => {
-    const client = await connect('s-01');
-    await saveConfig({ leanAgents: false });
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
-    await saveConfig({ leanAgents: true });
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'тесты', task: 'гонять' });
-
-    const stored = await readMapFile();
-    expect(session(stored, 's-02').lean ?? false).toBe(false);
-    expect(session(stored, 's-03').lean).toBe(true);
-  });
-});
-
-describe('spawn_session: модель и усилие', () => {
-  /** Свои провайдеры: шаблоны решают, что доедет до команды. Бинарь — заглушка из `beforeEach`. */
-  async function withProviders(): Promise<void> {
-    await writeFile(
-      path.join(home, 'providers.json'),
-      JSON.stringify({
-        // `{model}` есть, списка нет: значение идёт в команду как есть.
-        smart: { badge: 'Smart', command: 'smart', args: ['--m', '{model}', '{prompt}'] },
-        // Ни `{model}`, ни `{effort}`: выбор отбрасывается.
-        plain: { badge: 'Plain', command: 'plain', args: ['{prompt}'] },
-      }),
-      'utf8',
-    );
-    process.env.PARLEY_SMART_BIN = path.join(binDir, 'claude');
-    process.env.PARLEY_PLAIN_BIN = path.join(binDir, 'claude');
-  }
-  afterEach(() => {
-    delete process.env.PARLEY_SMART_BIN;
-    delete process.env.PARLEY_PLAIN_BIN;
-  });
-
-  it('модель из списка и усилие ложатся в запись сессии', async () => {
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', {
-      provider: 'claude',
-      label: 'бэк',
-      task: 'делать',
-      model: 'opus',
-      effort: 'high',
-    });
-
-    const stored = session(await readMapFile(), 's-02');
-    expect(stored.model).toBe('opus');
-    expect(stored.effort).toBe('high');
-  });
-
-  it('каждая модель списка провайдера проходит', async () => {
-    const client = await connect('s-01');
-    for (const { id } of selectableModels(PROVIDERS.claude) ?? []) {
-      const result = await call(client, 'spawn_session', {
-        provider: 'claude',
-        label: 'бэк',
-        task: 'делать',
-        model: id,
-      });
-      expect(result.isError, `${id}: ${result.text}`).toBe(false);
-    }
-  });
-
-  it('без выбора полей в записи нет: модель и усилие по умолчанию', async () => {
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
-
-    const stored = session(await readMapFile(), 's-02');
-    expect('model' in stored).toBe(false);
-    expect('effort' in stored).toBe(false);
-  });
-
-  it('пустые model и effort — как отсутствие', async () => {
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', {
-      provider: 'claude',
-      label: 'бэк',
-      task: 'делать',
-      model: '',
-      effort: '',
-    });
-
-    const stored = session(await readMapFile(), 's-02');
-    expect('model' in stored).toBe(false);
-    expect('effort' in stored).toBe(false);
-  });
-
-  it('модель не из списка — ошибка с допустимыми, записи нет', async () => {
-    const client = await connect('s-01');
-    // Значение чужого провайдера, иное написание и закреплённая версия — не из списка: сверка точная.
-    for (const model of ['gpt-6-sol', 'Opus', 'claude-opus-5-5']) {
-      const result = await call(client, 'spawn_session', {
-        provider: 'claude',
-        label: 'бэк',
-        task: 'делать',
-        model,
-      });
-
-      expect(result.isError, model).toBe(true);
-      expect(result.text, model).toContain(model);
-      expect(result.text, model).toContain('claude');
-      expect(result.text, model).toContain('opusplan');
-    }
-    expect((await readMapFile()).sessions).toHaveLength(1);
-  });
-
-  it('модель, которую CLI принял бы за флаг или разорвал пробелом, — ошибка, записи нет', async () => {
-    const client = await connect('s-01');
-    for (const model of ['--effort', 'op us', 'x'.repeat(201)]) {
-      const result = await call(client, 'spawn_session', {
-        provider: 'claude',
-        label: 'бэк',
-        task: 'делать',
-        model,
-      });
-      expect(result.isError, model).toBe(true);
-    }
-    expect((await readMapFile()).sessions).toHaveLength(1);
-  });
-
-  it('уровень не из уровней модели — ошибка с допустимыми, записи нет', async () => {
-    process.env.PARLEY_CODEX_BIN = path.join(binDir, 'claude');
-    const client = await connect('s-01');
-    const cases = [
-      { provider: 'claude', model: 'opus', effort: 'ultra', allowed: 'low, medium, high, xhigh, max' },
-      { provider: 'claude', model: 'sonnet', effort: 'extreme', allowed: 'low, medium, high, xhigh, max' },
-      // У Luna нет ultra, хотя у соседних моделей Codex он есть: сверка — по уровням выбранной модели.
-      { provider: 'codex', model: 'gpt-6-luna', effort: 'ultra', allowed: 'low, medium, high, xhigh, max' },
-    ];
-    for (const { provider, model, effort, allowed } of cases) {
-      const result = await call(client, 'spawn_session', {
-        provider,
-        label: 'бэк',
-        task: 'делать',
-        model,
-        effort,
-      });
-
-      expect(result.isError, `${model}/${effort}`).toBe(true);
-      expect(result.text).toContain(`${effort} is not a level of ${model}; allowed: ${allowed}`);
-    }
-    expect((await readMapFile()).sessions).toHaveLength(1);
-  });
-
-  it('модель по умолчанию — общие уровни моделей провайдера: xhigh у claude ложится в запись, ultra у codex — ошибка', async () => {
-    process.env.PARLEY_CODEX_BIN = path.join(binDir, 'claude');
-    const client = await connect('s-01');
-    // Пустая модель — «по умолчанию», как и отсутствие поля.
-    await callOk(client, 'spawn_session', {
-      provider: 'claude',
-      label: 'бэк',
-      task: 'делать',
-      model: '',
-      effort: 'xhigh',
-    });
-    const stored = session(await readMapFile(), 's-02');
-    expect('model' in stored).toBe(false);
-    expect(stored.effort).toBe('xhigh');
-
-    // У моделей Luna нет ultra, поэтому нет его и у «по умолчанию» Codex.
-    const refused = await call(client, 'spawn_session', {
-      provider: 'codex',
-      label: 'бэк',
-      task: 'делать',
-      effort: 'ultra',
-    });
-    expect(refused.isError).toBe(true);
-    expect(refused.text).toContain(
-      'ultra is not a level of the default model; allowed: low, medium, high, xhigh, max',
-    );
-    expect((await readMapFile()).sessions).toHaveLength(2);
-  });
-
-  it('у Haiku уровней нет: effort с ним — ошибка «omit effort», записи нет; без effort — проходит', async () => {
-    const client = await connect('s-01');
-    const refused = await call(client, 'spawn_session', {
-      provider: 'claude',
-      label: 'бэк',
-      task: 'делать',
-      model: 'haiku',
-      effort: 'low',
-    });
-    expect(refused.isError).toBe(true);
-    expect(refused.text).toContain('haiku has no effort levels; omit effort');
-    expect((await readMapFile()).sessions).toHaveLength(1);
-
-    await callOk(client, 'spawn_session', {
-      provider: 'claude',
-      label: 'бэк',
-      task: 'делать',
-      model: 'haiku',
-    });
-    const stored = session(await readMapFile(), 's-02');
-    expect(stored.model).toBe('haiku');
-    expect('effort' in stored).toBe(false);
-  });
-
-  it('уровень не токеном — ошибка, записи нет: значение ушло бы в argv и в кавычки TOML', async () => {
-    const client = await connect('s-01');
-    for (const effort of ['HIGH', 'hi gh', '"max', 'a'.repeat(33), 3]) {
-      const result = await call(client, 'spawn_session', {
-        provider: 'claude',
-        label: 'бэк',
-        task: 'делать',
-        effort,
-      });
-      expect(result.isError, String(effort)).toBe(true);
-    }
-    expect((await readMapFile()).sessions).toHaveLength(1);
-  });
-
-  it('xhigh и ultra ложатся в запись и уезжают в argv ровно одной парой флагов — как выбор из окна', async () => {
-    process.env.PARLEY_CODEX_BIN = path.join(binDir, 'claude');
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', {
-      provider: 'claude',
-      label: 'бэк',
-      task: 'делать',
-      model: 'opus',
-      effort: 'xhigh',
-    });
-    await callOk(client, 'spawn_session', {
-      provider: 'codex',
-      label: 'тесты',
-      task: 'прогнать',
-      model: 'gpt-6.1-sol',
-      effort: 'ultra',
-    });
-
-    const map = await readMapFile();
-    expect(session(map, 's-02')).toMatchObject({ model: 'opus', effort: 'xhigh' });
-    expect(session(map, 's-03')).toMatchObject({ model: 'gpt-6.1-sol', effort: 'ultra' });
-
-    // Хост поднимает pending без диалога: флаги берутся из записи (`planLaunch`).
-    const claude = (await planLaunch(project, workId, session(map, 's-02'))).args;
-    expect(claude.filter((arg) => arg === '--model')).toHaveLength(1);
-    expect(claude.filter((arg) => arg === '--effort')).toHaveLength(1);
-    expect(claude[claude.indexOf('--model') + 1]).toBe('opus');
-    expect(claude[claude.indexOf('--effort') + 1]).toBe('xhigh');
-    const codex = (await planLaunch(project, workId, session(map, 's-03'))).args;
-    expect(codex.filter((arg) => arg === '--model')).toHaveLength(1);
-    expect(codex[codex.indexOf('--model') + 1]).toBe('gpt-6.1-sol');
-    expect(codex.filter((arg) => arg.startsWith('model_reasoning_effort='))).toEqual([
-      'model_reasoning_effort="ultra"',
-    ]);
-  });
-
-  it('codex: своя модель проходит, модель Claude — нет', async () => {
-    process.env.PARLEY_CODEX_BIN = path.join(binDir, 'claude');
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', {
-      provider: 'codex',
-      label: 'бэк',
-      task: 'делать',
-      model: 'gpt-6-sol',
-      effort: 'low',
-    });
-    expect(session(await readMapFile(), 's-02')).toMatchObject({ model: 'gpt-6-sol', effort: 'low' });
-
-    const refused = await call(client, 'spawn_session', {
-      provider: 'codex',
-      label: 'бэк',
-      task: 'делать',
-      model: 'opus',
-    });
-    expect(refused.isError).toBe(true);
-    expect(refused.text).toContain('codex');
-    expect((await readMapFile()).sessions).toHaveLength(2);
-  });
-
-  it('провайдер без списка, но с {model} в шаблоне: значение принимается как есть', async () => {
-    await withProviders();
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', {
-      provider: 'smart',
-      label: 'бэк',
-      task: 'делать',
-      model: 'anything',
-    });
-
-    expect(session(await readMapFile(), 's-02').model).toBe('anything');
-  });
-
-  it('провайдер без флагов в шаблоне выбор отбрасывает молча: запись заводится без него', async () => {
-    await withProviders();
-    const client = await connect('s-01');
-    // В get_map у такого провайдера effort: false: уровень не сверяется ни с чем и отбрасывается молча,
-    // даже тот, которого нет ни у одной модели (так и говорят гид и описание spawn_session).
-    for (const effort of ['high', 'ultra']) {
-      await callOk(client, 'spawn_session', {
-        provider: 'plain',
-        label: 'бэк',
-        task: 'делать',
-        model: 'anything',
-        effort,
-      });
-    }
-
-    for (const id of ['s-02', 's-03']) {
-      const stored = session(await readMapFile(), id);
-      expect('model' in stored, id).toBe(false);
-      expect('effort' in stored, id).toBe(false);
-    }
-  });
-});
 
 describe('send_message и check_inbox', () => {
   it('сообщение доходит и помечается прочитанным один раз', async () => {
     const first = await connect('s-01');
-    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
     const second = await connect('s-02');
 
     const sent = await callOk(second, 'send_message', { to: 's-01', text: 'нужен план' });
@@ -1531,7 +934,7 @@ describe('send_message и check_inbox', () => {
 
   it('чужие сообщения в ящик не попадают', async () => {
     const first = await connect('s-01');
-    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
     await updateMap(project, workId, (map) => {
       addMessage(map, { from: 's-01', to: ['s-02'], text: 'не тебе' });
     });
@@ -1550,7 +953,7 @@ describe('send_message и check_inbox', () => {
 
   it('принимает три вида, четвёртый — ошибка с перечнем, без kind — note', async () => {
     const first = await connect('s-01');
-    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
     const second = await connect('s-02');
 
     await callOk(second, 'send_message', { to: 's-01', text: 'где миграция?', kind: 'question' });
@@ -1575,7 +978,7 @@ describe('send_message и check_inbox', () => {
 
   it('ответ check_inbox и wait_for несёт kind', async () => {
     const first = await connect('s-01');
-    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
     const second = await connect('s-02');
     await callOk(second, 'send_message', { to: 's-01', text: 'где миграция?', kind: 'question' });
 
@@ -1592,7 +995,7 @@ describe('send_message и check_inbox', () => {
 
   it('окно messageRate: третье письмо за час отказано, письмо старше часа не считается', async () => {
     const first = await connect('s-01');
-    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
     const second = await connect('s-02', 40, 2);
 
     await callOk(second, 'send_message', { to: 's-01', text: 'раз' });
@@ -1618,7 +1021,7 @@ describe('send_message и check_inbox', () => {
 
   it('письмо длиннее потолка: отказ с советом писать файл, в карте письма нет', async () => {
     const first = await connect('s-01');
-    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
     const second = await connect('s-02');
 
     const refused = await call(second, 'send_message', { to: 's-01', text: 'я'.repeat(4097) });
@@ -1633,7 +1036,7 @@ describe('send_message и check_inbox', () => {
 
   it('письмо длиннее мягкого порога пишется с предупреждением, короткое — без замечаний', async () => {
     const first = await connect('s-01');
-    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
     const second = await connect('s-02');
 
     const long = await callOk(second, 'send_message', { to: 's-01', text: 'я'.repeat(1500) });
@@ -1649,7 +1052,7 @@ describe('send_message и check_inbox', () => {
 
   it('to массивом из одного элемента — как строка', async () => {
     const first = await connect('s-01');
-    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
     const second = await connect('s-02');
 
     const sent = await callOk(second, 'send_message', { to: ['s-01'], text: 'массивом' });
@@ -1659,7 +1062,7 @@ describe('send_message и check_inbox', () => {
 
   it('без room несколько адресатов в to — ошибка, письмо не создано', async () => {
     const first = await connect('s-01');
-    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
 
     const result = await call(first, 'send_message', { to: ['s-01', 's-02'], text: 'кому?' });
     expect(result.isError).toBe(true);
@@ -1669,8 +1072,8 @@ describe('send_message и check_inbox', () => {
 
   it('закрытому адресату без room — ошибка', async () => {
     const first = await connect('s-01');
-    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
-    await callOk(first, 'close_session', { target: 's-02' });
+    await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
+    await callOk(await connect('s-02'), 'close_session', { target: 's-02' });
 
     const result = await call(first, 'send_message', { to: 's-02', text: 'привет' });
     expect(result.isError).toBe(true);
@@ -1679,165 +1082,96 @@ describe('send_message и check_inbox', () => {
   });
 });
 
-describe('create_room', () => {
-  it('незнакомый участник — ошибка, комната не создаётся', async () => {
-    const client = await connect('s-01');
-    const result = await call(client, 'create_room', { title: 'бэкенд', members: ['s-09'] });
-
-    expect(result.isError).toBe(true);
-    expect(result.text).toContain('s-09');
-    expect((await readMapFile()).rooms).toEqual([]);
-  });
-
-  it('повторы схлопнуты, создатель в members не попадает', async () => {
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
-
-    const result = await callOk(client, 'create_room', {
-      title: 'бэкенд',
-      members: ['s-02', 's-02', 's-03', 's-01'],
-    });
-
-    expect(result).toEqual({ roomId: 'r-01' });
-    const room = (await readMapFile()).rooms[0];
-    expect(room?.creator).toBe('s-01');
-    expect(room?.members).toEqual(['s-02', 's-03']);
-  });
-
-  it('письмо о добавлении уходит всем участникам, кроме создателя', async () => {
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
-    await callOk(client, 'create_room', { title: 'бэкенд', members: ['s-02', 's-03'] });
-
-    const second = await connect('s-02');
-    const inboxSecond = await callOk(second, 'check_inbox');
-    expect((inboxSecond['messages'] as { text: string }[]).map((m) => m.text)).toEqual([
-      'You were added to r-01 "бэкенд" with S02 and S03',
-    ]);
-
-    const third = await connect('s-03');
-    const inboxThird = await callOk(third, 'check_inbox');
-    expect((inboxThird['messages'] as { text: string }[]).map((m) => m.text)).toEqual([
-      'You were added to r-01 "бэкенд" with S02 and S03',
-    ]);
-
-    // Создатель своё же приглашение не получает.
-    expect((await callOk(client, 'check_inbox'))['messages']).toEqual([]);
-  });
-
-  it('закрытый участник — ошибка, комната не создаётся', async () => {
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
-    await callOk(client, 'close_session', { target: 's-02' });
-
-    const result = await call(client, 'create_room', { title: 'x', members: ['s-02'] });
-    expect(result.isError).toBe(true);
-    expect(result.text).toContain('s-02');
-    expect((await readMapFile()).rooms).toEqual([]);
-  });
-
-  /** Id комнат работы, в которых состоит сессия: создатель или участник. */
-  const roomsOf = (map: WorkMap, id: string): string[] =>
-    map.rooms.filter((room) => room.creator === id || room.members.includes(id)).map((room) => room.id);
-
-  it('одна комната на сессию: участник из другой комнаты после create_room состоит только в новой, прежняя остаётся с письмами', async () => {
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'тесты', task: 'делать' }); // s-04
-    const older = await connect('s-02');
-    await callOk(older, 'create_room', { title: 'прежняя', members: ['s-03', 's-04'] }); // r-01: создатель и ведущий s-02
-    expect(roomsOf(await readMapFile(), 's-03')).toEqual(['r-01']);
-
-    // Отказ карту не меняет: s-04 не из круга новой комнаты, ведущим быть не может — s-03 остаётся в r-01.
-    const refused = await call(client, 'create_room', { title: 'новая', members: ['s-03'], lead: 's-04' });
-    expect(refused.isError).toBe(true);
-    expect(roomsOf(await readMapFile(), 's-03')).toEqual(['r-01']);
-
-    expect(await callOk(client, 'create_room', { title: 'новая', members: ['s-03'] })).toEqual({ roomId: 'r-02' });
-    const map = await readMapFile();
-    expect(roomsOf(map, 's-03')).toEqual(['r-02']);
-    expect(map.rooms.find((room) => room.id === 'r-02')).toMatchObject({ creator: 's-01', members: ['s-03'], lead: 's-01' });
-    // Прежняя комната не тронута, кроме ушедшего участника: создатель, ведущий и письма на месте.
-    expect(map.rooms.find((room) => room.id === 'r-01')).toMatchObject({ creator: 's-02', members: ['s-04'], lead: 's-02' });
-    expect(map.messages.filter((message) => message.roomId === 'r-01').map((message) => message.to)).toEqual([['s-03'], ['s-04']]);
-  });
-
-  it('одна комната на сессию: создатель прежней комнаты уступает её человеку и остаётся только в новой', async () => {
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
-    await callOk(client, 'create_room', { title: 'прежняя', members: ['s-02'] }); // r-01: создатель и ведущий s-01
-    expect(roomsOf(await readMapFile(), 's-01')).toEqual(['r-01']);
-
-    await callOk(client, 'create_room', { title: 'новая', members: ['s-03'] }); // r-02
-    const map = await readMapFile();
-    expect(roomsOf(map, 's-01')).toEqual(['r-02']);
-    // Как `leaveOtherRooms`: создатель-сессия уступает комнату человеку, назначенный ведущий уходит с ней; участники остаются.
-    expect(map.rooms.find((room) => room.id === 'r-01')).toMatchObject({ creator: HUMAN, members: ['s-02'], lead: null });
-  });
-});
-
-describe('create_room: ведущий', () => {
-  /** s-01 — вызывающий; s-02 и s-03 заведены заранее. */
-  async function withColleagues(): Promise<Client> {
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
-    return client;
+describe('create_room explicit working membership and ownership', () => {
+  async function colleagues(): Promise<Client> {
+    const caller = await connect('s-01');
+    for (const label of ['Lead A', 'Member A', 'Lead B', 'Lead C']) {
+      await updateMap(project, workId, map => { addSession(map, { provider: 'codex', label, task: '', parent: null }); });
+    }
+    return caller;
   }
 
-  it('без lead ведущий — сам вызывающий, а не первый из members', async () => {
-    const client = await withColleagues();
-    await callOk(client, 'create_room', { title: 'бэкенд', members: ['s-02', 's-03'] });
-
-    const room = (await readMapFile()).rooms[0];
-    expect(room?.lead).toBe('s-01');
-    expect(room?.creator).toBe('s-01');
-    expect(room?.members).toEqual(['s-02', 's-03']);
+  it('requires nonempty members and an explicit lead from that list without mutation', async () => {
+    const caller = await colleagues();
+    const before = await readMapFile();
+    for (const args of [
+      { title: 'Missing lead', members: ['s-02'] },
+      { title: 'Empty members', members: [], lead: 's-01' },
+      { title: 'Outside lead', members: ['s-02'], lead: 's-03' },
+      { title: 'Unknown member', members: ['s-99'], lead: 's-99' },
+    ]) expect((await call(caller, 'create_room', args)).isError).toBe(true);
+    expect(await readMapFile()).toEqual(before);
   });
 
-  it('lead из members — ведущий он, создатель остаётся создателем', async () => {
-    const client = await withColleagues();
-    await callOk(client, 'create_room', {
-      title: 'бэкенд',
-      members: ['s-02', 's-03'],
-      lead: 's-03',
-    });
-
-    const room = (await readMapFile()).rooms[0];
-    expect(room?.lead).toBe('s-03');
-    expect(room?.creator).toBe('s-01');
+  it('deduplicates explicit members and includes the caller only when named', async () => {
+    const caller = await colleagues();
+    await callOk(caller, 'create_room', { title: 'Working', members: ['s-02', 's-02', 's-01'], lead: 's-02' });
+    expect((await readMapFile()).rooms[0]).toMatchObject({ ownerId: 's-01', members: ['s-02', 's-01'], lead: 's-02' });
   });
 
-  it('lead — сам вызывающий, названный явно', async () => {
-    const client = await withColleagues();
-    await callOk(client, 'create_room', { title: 'бэкенд', members: ['s-02'], lead: 's-01' });
-
-    expect((await readMapFile()).rooms[0]?.lead).toBe('s-01');
-  });
-
-  it('lead не из круга комнаты — ошибка, комнаты и писем нет, номер комнаты не потрачен', async () => {
-    const client = await withColleagues();
-
-    // s-03 есть в работе, но в комнату не входит; человек ведущим быть не может; s-77 нет вовсе.
-    for (const lead of ['s-03', HUMAN, 's-77']) {
-      const refused = await call(client, 'create_room', {
-        title: 'бэкенд',
-        members: ['s-02'],
-        lead,
-      });
-      expect(refused.isError, lead).toBe(true);
-      expect(refused.text, lead).toContain(lead);
+  it('creates three owned rooms without moving the caller or enrolling it', async () => {
+    const caller = await colleagues();
+    await updateMap(project, workId, map => { addRoom(map, { title: 'Current work', creator: HUMAN, members: ['s-01'], lead: 's-01' }); });
+    for (const [index, lead] of ['s-02', 's-04', 's-05'].entries()) {
+      await callOk(caller, 'create_room', { title: `Owned ${index}`, members: [lead], lead });
     }
     const map = await readMapFile();
-    expect(map.rooms).toEqual([]);
-    expect(map.messages).toEqual([]);
-    expect(await callOk(client, 'create_room', { title: 'бэкенд', members: ['s-02'] })).toEqual({
-      roomId: 'r-01',
+    expect(map.rooms.filter(room => room.members.includes('s-01')).map(room => room.id)).toEqual(['r-01']);
+    expect(map.rooms.filter(room => room.ownerId === 's-01')).toHaveLength(3);
+    expect(map.sessions.slice(1).every(session => session.parent === null)).toBe(true);
+  });
+
+  it('moves explicit working members while preserving ownership and history', async () => {
+    const caller = await colleagues();
+    await callOk(caller, 'create_room', { title: 'Earlier', members: ['s-02', 's-03'], lead: 's-02' });
+    await callOk(caller, 'create_room', { title: 'Later', members: ['s-03', 's-04'], lead: 's-04' });
+    const map = await readMapFile();
+    expect(map.rooms[0]).toMatchObject({ ownerId: 's-01', creator: 's-01', members: ['s-02'], lead: 's-02' });
+    expect(map.rooms[1]).toMatchObject({ ownerId: 's-01', members: ['s-03', 's-04'], lead: 's-04' });
+    expect(map.messages.some(message => message.roomId === 'r-01')).toBe(true);
+  });
+
+  it('permits owner reads and addressed owner/lead replies, excluding ordinary broadcasts', async () => {
+    const owner = await colleagues();
+    await callOk(owner, 'create_room', { title: 'Owned', members: ['s-02', 's-03'], lead: 's-02' });
+    const lead = await connect('s-02');
+    const member = await connect('s-03');
+    await callOk(lead, 'check_inbox');
+    await callOk(member, 'check_inbox');
+    await callOk(owner, 'send_message', { room: 'r-01', to: 's-02', text: 'Milestone?', kind: 'question' });
+    await callOk(lead, 'send_message', { room: 'r-01', to: 's-01', text: 'Ready for review' });
+    await callOk(member, 'send_message', { room: 'r-01', text: 'Internal progress' });
+    const inbox = await callOk(owner, 'check_inbox');
+    expect((inbox.messages as { text: string }[]).map(message => message.text)).toEqual(['Ready for review']);
+    expect((await callOk(owner, 'read_room', { room: 'r-01' })).messages).toBeDefined();
+    expect((await callOk(owner, 'get_map', { room: 'r-01' })).room).toMatchObject({ ownerId: 's-01' });
+    for (const args of [
+      { room: 'r-01', text: 'Owner broadcast' },
+      { room: 'r-01', to: 's-03', text: 'Bypass lead' },
+    ]) expect((await call(owner, 'send_message', args)).isError).toBe(true);
+    expect((await call(owner, 'add_to_room', { room: 'r-01', session: 's-04' })).isError).toBe(true);
+    expect((await call(owner, 'propose_decision', { room: 'r-01', text: 'Owner decision' })).isError).toBe(true);
+    await updateMap(project, workId, map => { archiveRoom(map, 'r-01'); });
+    expect((await call(owner, 'read_room', { room: 'r-01' })).isError).toBe(false);
+    expect((await call(owner, 'get_map', { room: 'r-01' })).isError).toBe(false);
+    expect((await call(owner, 'get_map', { room: 'r-01', field: 'messages' })).isError).toBe(false);
+    expect((await call(owner, 'send_message', { room: 'r-01', to: 's-02', text: 'Archived' })).isError).toBe(true);
+  });
+
+  it('rejects unavailable leads and closed owners without writing messages', async () => {
+    const owner = await colleagues();
+    await callOk(owner, 'create_room', { title: 'Owned', members: ['s-02'], lead: 's-02' });
+    await updateMap(project, workId, map => { session(map, 's-02').lifecycle = 'closed'; });
+    const before = await readMapFile();
+    expect((await call(owner, 'send_message', { room: 'r-01', to: 's-02', text: 'Unavailable' })).isError).toBe(true);
+    expect(await readMapFile()).toEqual(before);
+    await updateMap(project, workId, map => {
+      session(map, 's-02').lifecycle = 'sleeping';
+      session(map, 's-01').lifecycle = 'closed';
     });
+    const lead = await connect('s-02');
+    expect((await call(lead, 'send_message', { room: 'r-01', to: 's-01', text: 'Closed owner' })).isError).toBe(true);
+    expect((await call(owner, 'send_message', { room: 'r-01', to: 's-02', text: 'Closed sender' })).isError).toBe(true);
   });
 });
 
@@ -1848,10 +1182,10 @@ describe('add_to_room', () => {
    */
   async function setup(): Promise<{ lead: Client; member: Client }> {
     const lead = await connect('s-01');
-    await callOk(lead, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
-    await callOk(lead, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
-    await callOk(lead, 'spawn_session', { provider: 'claude', label: 'тесты', task: 'делать' }); // s-04
-    await callOk(lead, 'create_room', { title: 'комната', members: ['s-02'] });
+    await addHistoricalSession(lead, { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await addHistoricalSession(lead, { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    await addHistoricalSession(lead, { provider: 'claude', label: 'тесты', task: 'делать' }); // s-04
+    await callOk(lead, 'create_room', { title: 'комната', members: ['s-01', 's-02'], lead: 's-01' });
     const member = await connect('s-02');
     await callOk(member, 'check_inbox');
     return { lead, member };
@@ -1865,7 +1199,7 @@ describe('add_to_room', () => {
     const result = await callOk(lead, 'add_to_room', { room: 'r-01', session: 's-04' });
 
     const map = await readMapFile();
-    expect(map.rooms[0]?.members).toEqual(['s-02', 's-04']);
+    expect(map.rooms[0]?.members).toEqual(['s-01', 's-02', 's-04']);
     const line = map.messages.at(-1);
     expect(result).toEqual({ messageId: line?.id });
     expect(line).toMatchObject({
@@ -1883,12 +1217,12 @@ describe('add_to_room', () => {
     const { lead } = await setup();
     // Комнату с s-03 заводит s-04, а не ведущий r-01: тот, заведя её, сам ушёл бы из r-01 (`create_room` тоже проводит одну комнату на сессию).
     const other = await connect('s-04');
-    await callOk(other, 'create_room', { title: 'вторая', members: ['s-03'] }); // r-02, ведущий s-04
+    await callOk(other, 'create_room', { title: 'вторая', members: ['s-04', 's-03'], lead: 's-04' }); // r-02, ведущий s-04
     await callOk(lead, 'add_to_room', { room: 'r-01', session: 's-03' });
 
     const map = await readMapFile();
-    expect(map.rooms.find((room) => room.id === 'r-01')?.members).toEqual(['s-02', 's-03']);
-    expect(map.rooms.find((room) => room.id === 'r-02')?.members).toEqual([]);
+    expect(map.rooms.find((room) => room.id === 'r-01')?.members).toEqual(['s-01', 's-02', 's-03']);
+    expect(map.rooms.find((room) => room.id === 'r-02')?.members).toEqual(['s-04']);
   });
 
   it('участник комнаты вводить не может: ошибка «не ведущий», карта не изменилась', async () => {
@@ -1913,7 +1247,7 @@ describe('add_to_room', () => {
 
   it('ведущий — живой ведущий: назначенный закрыт — вводит первый живой участник', async () => {
     const { lead, member } = await setup();
-    await callOk(lead, 'close_session', { target: 's-01' });
+    await callOk(await connect('s-01'), 'close_session', { target: 's-01' });
     const before = await rawMap();
 
     const closedLead = await call(lead, 'add_to_room', { room: 'r-01', session: 's-04' });
@@ -1921,13 +1255,13 @@ describe('add_to_room', () => {
     expect(await rawMap()).toBe(before);
 
     await callOk(member, 'add_to_room', { room: 'r-01', session: 's-04' });
-    expect((await readMapFile()).rooms[0]?.members).toEqual(['s-02', 's-04']);
+    expect((await readMapFile()).rooms[0]?.members).toEqual(['s-01', 's-02', 's-04']);
   });
 
   it('закрытая комната — ошибка, карта не изменилась', async () => {
     const { lead } = await setup();
-    await callOk(lead, 'close_session', { target: 's-02' });
-    await callOk(lead, 'close_session', { target: 's-01' });
+    await callOk(await connect('s-02'), 'close_session', { target: 's-02' });
+    await callOk(await connect('s-01'), 'close_session', { target: 's-01' });
     const before = await rawMap();
 
     const refused = await call(lead, 'add_to_room', { room: 'r-01', session: 's-04' });
@@ -1938,7 +1272,7 @@ describe('add_to_room', () => {
 
   it('чужая, закрытая сессия и уже участник — ошибка, карта не изменилась', async () => {
     const { lead } = await setup();
-    await callOk(lead, 'close_session', { target: 's-03' });
+    await callOk(await connect('s-03'), 'close_session', { target: 's-03' });
     const before = await rawMap();
 
     const cases: Array<[string, RegExp]> = [
@@ -1990,9 +1324,9 @@ describe('propose_decision', () => {
   /** Комната r-01 создана s-01 (ведущий по умолчанию) с s-02 и s-03; приглашения забраны. */
   async function leadRoom(): Promise<{ lead: Client; a: Client; b: Client }> {
     const lead = await connect('s-01');
-    await callOk(lead, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
-    await callOk(lead, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
-    await callOk(lead, 'create_room', { title: 'комната', members: ['s-02', 's-03'] });
+    await addHistoricalSession(lead, { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await addHistoricalSession(lead, { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    await callOk(lead, 'create_room', { title: 'комната', members: ['s-01', 's-02', 's-03'], lead: 's-01' });
     const a = await connect('s-02');
     const b = await connect('s-03');
     await callOk(a, 'check_inbox');
@@ -2055,7 +1389,7 @@ describe('propose_decision', () => {
 
   it('сессия не из комнаты — тоже не ведущий', async () => {
     const { lead } = await leadRoom();
-    await callOk(lead, 'spawn_session', { provider: 'claude', label: 'сторонний', task: 'делать' }); // s-04
+    await addHistoricalSession(lead, { provider: 'claude', label: 'сторонний', task: 'делать' }); // s-04
     const stranger = await connect('s-04');
     const before = await rawMap();
 
@@ -2066,9 +1400,9 @@ describe('propose_decision', () => {
 
   it('закрытая комната (нет живых участников) — ошибка, карта не изменилась', async () => {
     const { lead } = await leadRoom();
-    await callOk(lead, 'close_session', { target: 's-02' });
-    await callOk(lead, 'close_session', { target: 's-03' });
-    await callOk(lead, 'close_session', { target: 's-01' });
+    await callOk(await connect('s-02'), 'close_session', { target: 's-02' });
+    await callOk(await connect('s-03'), 'close_session', { target: 's-03' });
+    await callOk(await connect('s-01'), 'close_session', { target: 's-01' });
     const before = await rawMap();
 
     const refused = await call(lead, 'propose_decision', { room: 'r-01', text: 'решение' });
@@ -2079,7 +1413,7 @@ describe('propose_decision', () => {
 
   it('ведущий — живой ведущий: ушёл назначенный — решение приносит первый живой участник', async () => {
     const { lead, a, b } = await leadRoom();
-    await callOk(lead, 'close_session', { target: 's-01' });
+    await callOk(await connect('s-01'), 'close_session', { target: 's-01' });
 
     const closedLead = await call(lead, 'propose_decision', { room: 'r-01', text: 'из могилы' });
     expect(closedLead.isError).toBe(true);
@@ -2161,9 +1495,9 @@ describe('send_message и check_inbox в комнате', () => {
   /** Комната с двумя участниками; приглашения уже забраны check_inbox. */
   async function roomSetup(): Promise<{ owner: Client; a: Client; b: Client }> {
     const owner = await connect('s-01');
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
-    await callOk(owner, 'create_room', { title: 'комната', members: ['s-02', 's-03'] });
+    await addHistoricalSession(owner, { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await addHistoricalSession(owner, { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    await callOk(owner, 'create_room', { title: 'комната', members: ['s-01', 's-02', 's-03'], lead: 's-01' });
     const a = await connect('s-02');
     const b = await connect('s-03');
     await callOk(a, 'check_inbox');
@@ -2199,9 +1533,9 @@ describe('send_message и check_inbox в комнате', () => {
 
   it('не участник комнаты — ошибка и отправителю, и как адресату', async () => {
     const owner = await connect('s-01');
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'сторонний', task: 'делать' }); // s-03
-    await callOk(owner, 'create_room', { title: 'комната', members: ['s-02'] });
+    await addHistoricalSession(owner, { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await addHistoricalSession(owner, { provider: 'claude', label: 'сторонний', task: 'делать' }); // s-03
+    await callOk(owner, 'create_room', { title: 'комната', members: ['s-01', 's-02'], lead: 's-01' });
 
     const stranger = await connect('s-03');
     const asSender = await call(stranger, 'send_message', { room: 'r-01', text: 'я тут?' });
@@ -2215,11 +1549,11 @@ describe('send_message и check_inbox в комнате', () => {
 
   it('messageRate на рассылку в комнате считается как одно письмо', async () => {
     const owner = await connect('s-01', 40, 2); // лимит — два письма в час
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    await addHistoricalSession(owner, { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await addHistoricalSession(owner, { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
     // Комната заведена в обход create_room: его приглашения не должны путать счёт.
     await updateMap(project, workId, (map) => {
-      addRoom(map, { title: 'комната', creator: 's-01', members: ['s-02', 's-03'] });
+      addRoom(map, { title: 'комната', creator: 's-01', members: ['s-01', 's-02', 's-03'] });
     });
 
     await callOk(owner, 'send_message', { room: 'r-01', text: 'раз' });
@@ -2334,11 +1668,11 @@ describe('send_message и check_inbox в комнате', () => {
     });
 
     it('в комнате нет живых участников — roomTask нет, письмо и toEveryone остаются', async () => {
-      const { owner, a } = await roomSetup();
+      const { a } = await roomSetup();
       await humanSays();
-      await callOk(owner, 'close_session', { target: 's-02' });
-      await callOk(owner, 'close_session', { target: 's-03' });
-      await callOk(owner, 'close_session', { target: 's-01' });
+      await callOk(await connect('s-02'), 'close_session', { target: 's-02' });
+      await callOk(await connect('s-03'), 'close_session', { target: 's-03' });
+      await callOk(await connect('s-01'), 'close_session', { target: 's-01' });
 
       const [letter] = await inboxOf(a);
       expect(letter).toMatchObject({ text: TASK, toEveryone: true });
@@ -2346,9 +1680,9 @@ describe('send_message и check_inbox в комнате', () => {
     });
 
     it('ведущий закрыт: роль считается по живому ведущему, а не по записи комнаты', async () => {
-      const { owner, a, b } = await roomSetup();
+      const { a, b } = await roomSetup();
       await humanSays();
-      await callOk(owner, 'close_session', { target: 's-01' });
+      await callOk(await connect('s-01'), 'close_session', { target: 's-01' });
 
       // Ведущим становится первый живой из members — s-02.
       const forNewLead = (await inboxOf(a))[0]?.roomTask;
@@ -2380,9 +1714,9 @@ describe('send_message: replyTo — ответ с цитатой (Parley 0.3.0)'
    */
   async function replySetup(): Promise<{ owner: Client; a: Client; b: Client }> {
     const owner = await connect('s-01');
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
-    await callOk(owner, 'create_room', { title: 'комната', members: ['s-02', 's-03'] }); // r-01
+    await addHistoricalSession(owner, { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await addHistoricalSession(owner, { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    await callOk(owner, 'create_room', { title: 'комната', members: ['s-01', 's-02', 's-03'], lead: 's-01' }); // r-01
     const a = await connect('s-02');
     const b = await connect('s-03');
     await callOk(a, 'check_inbox');
@@ -2564,21 +1898,21 @@ describe('send_message: replyTo — ответ с цитатой (Parley 0.3.0)'
 describe('read_room', () => {
   it('не участнику — ошибка, отметки не меняются', async () => {
     const owner = await connect('s-01');
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'сторонний', task: 'делать' }); // s-03
-    await callOk(owner, 'create_room', { title: 'комната', members: ['s-02'] });
+    await addHistoricalSession(owner, { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await addHistoricalSession(owner, { provider: 'claude', label: 'сторонний', task: 'делать' }); // s-03
+    await callOk(owner, 'create_room', { title: 'комната', members: ['s-01', 's-02'], lead: 's-01' });
     await callOk(owner, 'send_message', { room: 'r-01', text: 'привет' });
 
     const stranger = await connect('s-03');
     const result = await call(stranger, 'read_room', { room: 'r-01' });
     expect(result.isError).toBe(true);
-    expect(result.text).toContain('s-03');
+    expect(result.text).toContain('not available');
   });
 
   it('участнику отдаёт последние limit писем, не отмечая прочтение', async () => {
     const owner = await connect('s-01');
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
-    await callOk(owner, 'create_room', { title: 'комната', members: ['s-02'] });
+    await addHistoricalSession(owner, { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await callOk(owner, 'create_room', { title: 'комната', members: ['s-01', 's-02'], lead: 's-01' });
     const second = await connect('s-02');
     await callOk(second, 'check_inbox'); // забрали приглашение
 
@@ -2605,28 +1939,30 @@ describe('close_session', () => {
     expect(session(await readMapFile(), 's-01').lifecycle).toBe('closed');
   });
 
-  it('закрывает прямого потомка', async () => {
+  it('исторический родитель не закрывает ребёнка; ребёнок закрывает себя', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
 
-    await callOk(client, 'close_session', { target: 's-02' });
+    expect((await call(client, 'close_session', { target: 's-02' })).isError).toBe(true);
+    await callOk(await connect('s-02'), 'close_session', { target: 's-02' });
     expect(session(await readMapFile(), 's-02').lifecycle).toBe('closed');
   });
 
-  it('закрывает косвенного потомка', async () => {
+  it('исторический предок не может закрыть потомка; сессия закрывает себя', async () => {
     const owner = await connect('s-01');
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await addHistoricalSession(owner, { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
     const child = await connect('s-02');
-    await callOk(child, 'spawn_session', { provider: 'claude', label: 'внук', task: 'делать' }); // s-03
+    await addHistoricalSession(child, { provider: 'claude', label: 'внук', task: 'делать' }); // s-03
 
-    await callOk(owner, 'close_session', { target: 's-03' });
+    expect((await call(owner, 'close_session', { target: 's-03' })).isError).toBe(true);
+    await callOk(await connect('s-03'), 'close_session', { target: 's-03' });
     expect(session(await readMapFile(), 's-03').lifecycle).toBe('closed');
   });
 
   it('соседа закрыть нельзя', async () => {
     const owner = await connect('s-01');
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    await addHistoricalSession(owner, { provider: 'claude', label: 'бэк', task: 'делать' }); // s-02
+    await addHistoricalSession(owner, { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
     const second = await connect('s-02');
 
     const result = await call(second, 'close_session', { target: 's-03' });
@@ -2636,7 +1972,7 @@ describe('close_session', () => {
 
   it('повторное закрытие — ошибка', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'close_session', { target: 's-01' });
+    await callOk(await connect('s-01'), 'close_session', { target: 's-01' });
 
     const result = await call(client, 'close_session', { target: 's-01' });
     expect(result.isError).toBe(true);
@@ -2656,7 +1992,7 @@ describe('wait_for', () => {
 
   it('по таймауту возвращает running', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
 
     expect(await callOk(client, 'wait_for', { target: 's-02', timeoutSec: 0.2 })).toEqual({
       state: 'running',
@@ -2665,7 +2001,7 @@ describe('wait_for', () => {
 
   it('уже завершённая сессия отвечает сразу и отдаёт резюме', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
     await updateMap(project, workId, (map) => {
       const target = session(map, 's-02');
       target.summary = 'сделано';
@@ -2684,7 +2020,7 @@ describe('wait_for', () => {
 
   it('дожидается записи в карту, сделанной пока висит вызов', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
 
     const pending = callOk(client, 'wait_for', { target: 's-02', timeoutSec: 20 });
     await delay(60);
@@ -2703,7 +2039,7 @@ describe('wait_for', () => {
 
   it('sleeping тоже прекращает ожидание', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
 
     const pending = callOk(client, 'wait_for', { target: 's-02', timeoutSec: 20 });
     await delay(60);
@@ -2783,7 +2119,7 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
 
   it('таймаут по id сессии: Start с её id и End; строка — ровно один JSON с переводом строки', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
 
     expect(await callOk(client, 'wait_for', { target: 's-02', timeoutSec: 0.2 })).toEqual({
       state: 'running',
@@ -2800,7 +2136,7 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
 
   it('итог сессии пришёл, пока вызов висел: Start, затем End', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
     const pending = callOk(client, 'wait_for', { target: 's-02', timeoutSec: 20 });
 
     await linesAre(1);
@@ -2814,7 +2150,7 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
 
   it('сессию удалили, пока вызов висел: ответ deleted, и конец ожидания записан', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
     const pending = callOk(client, 'wait_for', { target: 's-02', timeoutSec: 20 });
 
     await linesAre(1);
@@ -2828,7 +2164,7 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
 
   it('ожидание кончилось ошибкой (карта не читается): End всё равно записан', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
     const pending = call(client, 'wait_for', { target: 's-02', timeoutSec: 20 });
 
     await linesAre(1);
@@ -2840,7 +2176,7 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
 
   it('ответ без ожидания строк не пишет: итог уже есть, письмо уже пришло, id неизвестен', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
     await updateMap(project, workId, (map) => {
       setResult(map, 's-02', 'done');
       addMessage(map, { from: 's-02', to: ['s-01'], text: 'готово' });
@@ -2859,7 +2195,7 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
 
   it('два вызова сразу: строки не перемешиваются, у каждого своя пара', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
 
     await Promise.all([
       callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 0.3 }),
@@ -2914,7 +2250,7 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
 
   it('после отмены сервер жив, а следующий вызов отвечает как обычно и пишет свою пару', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
     const controller = new AbortController();
     const cancelled = client.callTool(
       { name: 'wait_for', arguments: { target: 'inbox', timeoutSec: 20 } },
@@ -2941,7 +2277,7 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
 
   it('отменённое ожидание не мешает идущему: activityOf держит waitingFor за вторым вызовом', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
     const waitingFor = async (): Promise<string | null> =>
       activityOf({ events: await openEvents(eventsDir()).read('s-01') }).waitingFor;
 
@@ -2972,7 +2308,7 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
   it('сбой записи в журнал не ломает ожидание: на месте журнала каталог', async () => {
     await mkdir(journalFile());
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
 
     expect(await callOk(client, 'wait_for', { target: 's-02', timeoutSec: 0.2 })).toEqual({
       state: 'running',
@@ -2989,7 +2325,7 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
   it('каталог events ожидание не создаёт: без него хуков нет, и предупреждение хоста не заглушить', async () => {
     await rm(eventsDir(), { recursive: true, force: true });
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
 
     expect(await callOk(client, 'wait_for', { target: 's-02', timeoutSec: 0.2 })).toEqual({
       state: 'running',
@@ -3019,7 +2355,7 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
 describe('удалённая сессия (план от 2026-09-06, раздел C)', () => {
   it('27: wait_for на id из deletedSessions отвечает deleted сразу', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
     await updateMap(project, workId, (map) => {
       removeSession(map, 's-02');
     });
@@ -3034,7 +2370,7 @@ describe('удалённая сессия (план от 2026-09-06, разде�
 
   it('27: сессия, удалённая пока висит вызов, будит wait_for', async () => {
     const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
 
     const pending = callOk(client, 'wait_for', { target: 's-02', timeoutSec: 20 });
     await delay(60);
@@ -3056,7 +2392,7 @@ describe('удалённая сессия (план от 2026-09-06, разде�
 
   it('28: сервер удалённой сессии не пишет в карту ни одним инструментом', async () => {
     const owner = await connect('s-01');
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(owner, { provider: 'claude', label: 'бэк', task: 'делать' });
     // Сервер сессии `s-02` ещё жив: SessionEnd приходит раньше выхода процесса.
     const orphan = await connect('s-02');
     await updateMap(project, workId, (map) => {
@@ -3066,7 +2402,6 @@ describe('удалённая сессия (план от 2026-09-06, разде�
 
     const calls = [
       call(orphan, 'report', { status: 'done', summary: 'успел' }),
-      call(orphan, 'spawn_session', { provider: 'claude', label: 'ещё', task: 'делать' }),
       call(orphan, 'send_message', { to: 's-01', text: 'я ещё тут' }),
       call(orphan, 'check_inbox'),
     ];
@@ -3091,7 +2426,7 @@ describe('channel: звонок про письмо (разговор агент
   /** Пара «отправитель — адресат»: письмо пишет вторая сессия, звонит первой. */
   async function pair(): Promise<Client> {
     const owner = await connect('s-01');
-    await callOk(owner, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(owner, { provider: 'claude', label: 'бэк', task: 'делать' });
     return connect('s-02');
   }
 
@@ -3110,7 +2445,7 @@ describe('channel: звонок про письмо (разговор агент
   it('письмо звонит один раз, карта не тронута, check_inbox отдаёт его', async () => {
     const rings: Ring[] = [];
     const first = await withChannel('s-01', rings);
-    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
     const second = await connect('s-02');
     await callOk(second, 'send_message', { to: 's-01', text: 'где миграция?', kind: 'question' });
 
@@ -3147,7 +2482,7 @@ describe('channel: звонок про письмо (разговор агент
   it('звонок доходит и при висящем wait_for, письмо остаётся одно', async () => {
     const rings: Ring[] = [];
     const first = await withChannel('s-01', rings);
-    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
     const second = await connect('s-02');
 
     const waiting = callOk(first, 'wait_for', { target: 'inbox', timeoutSec: 5 });
@@ -3163,7 +2498,7 @@ describe('channel: звонок про письмо (разговор агент
   it('без PARLEY_CHANNEL нет ни capability, ни instructions, ни звонка', async () => {
     const rings: Ring[] = [];
     const first = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, rings);
-    await callOk(first, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
     const second = await connect('s-02');
     await callOk(second, 'send_message', { to: 's-01', text: 'привет' });
 
@@ -3196,7 +2531,7 @@ describe('двухсторонний разговор (разговор аген
   /** Две сессии одной работы, у каждой свой сервер со звонком: план и его бэк. */
   async function talkers(ringsA: Ring[], ringsB: Ring[]): Promise<{ plan: Client; back: Client }> {
     const plan = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, true, ringsA);
-    await callOk(plan, 'spawn_session', { provider: 'claude', label: 'бэк', task: 'делать' });
+    await addHistoricalSession(plan, { provider: 'claude', label: 'бэк', task: 'делать' });
     const back = await connect('s-02', 40, DEFAULT_CONFIG.messageRate, true, ringsB);
     return { plan, back };
   }
@@ -3305,41 +2640,8 @@ describe('source-qualified session roles', () => {
     expect(result).toHaveProperty('roles');
     expect(JSON.stringify(result)).not.toContain('/sensitive'); expect(JSON.stringify(result)).not.toContain('prompt');
   });
-  it('derives builtin provider, persists only role and explicit nullable choices', async () => {
-    process.env.PARLEY_CODEX_BIN = path.join(binDir, 'claude');
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { role: 'builtin:critic', label: 'Review', task: 'Review the patch', model: null, effort: null });
-    const created = session(await readMapFile(), 's-02');
-    expect(created).toMatchObject({ provider: 'codex', role: { source: 'builtin', name: 'critic' }, model: null, effort: null });
-    expect(Object.hasOwn(created, 'agent')).toBe(false);
-  });
-  it('agent plus role and mandatory channel gaps refuse before map mutation', async () => {
-    const client = await connect('s-01');
-    expect((await call(client, 'spawn_session', { provider: 'claude', role: 'builtin:planner', agent: 'legacy', label: 'Review', task: 'Review' })).text).toContain('agent-and-role-conflict');
-    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ claude: { resumeArgs: ['--resume', '{providerSessionId}', '--append-system-prompt', '{systemPrompt}'] } }));
-    expect((await call(client, 'spawn_session', { provider: 'claude', role: 'builtin:planner', label: 'Review', task: 'Review' })).text).toContain('role-permissions-unavailable');
-    expect((await readMapFile()).sessions).toHaveLength(1);
-  });
 });
 
-
-describe('role defaults and explicit CLI clears through MCP', () => {
-  it.each([{ model: '', effort: '', cleared: false }, { model: null, effort: null, cleared: true }])('keeps empty strings omitted, clears only exact null ($cleared)', async ({ model, effort, cleared }) => {
-    const client = await connect('s-01');
-    await callOk(client, 'spawn_session', { provider: 'claude', role: 'builtin:planner', label: 'Plan', task: 'Plan changes', model, effort });
-    const stored = session(await readMapFile(), 's-02');
-    expect(Object.hasOwn(stored, 'model')).toBe(cleared);
-    expect(Object.hasOwn(stored, 'effort')).toBe(cleared);
-    const plan = await planLaunch(project, workId, stored);
-    if (cleared) {
-      expect(plan.args).not.toContain('--model');
-      expect(plan.args).not.toContain('--effort');
-    } else {
-      expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('opus');
-      expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('high');
-    }
-  });
-});
 
 
 describe('trusted caller backlog MCP tools', () => {
@@ -3406,7 +2708,7 @@ describe('memory and history MCP tools', () => {
   /** Системная вставка, с которой стартует новая сессия claude. */
   async function newSessionPrompt(client: Client): Promise<string> {
     const id = `s-0${(await readMapFile()).sessions.length + 1}`;
-    await callOk(client, 'spawn_session', { provider: 'claude', label: 'Fresh', task: 'Check the memory' });
+    await addHistoricalSession(client, { provider: 'claude', label: 'Fresh', task: 'Check the memory' });
     const plan = await planLaunch(project, workId, session(await readMapFile(), id));
     return plan.args[plan.args.indexOf('--append-system-prompt') + 1] ?? '';
   }
@@ -3517,8 +2819,8 @@ describe('архивная комната в MCP (архив комнат, 3.3, 
     await updateMap(project, workId, (current) => {
       addSession(current, { provider: 'claude', label: 'бэк', task: 'делать' });
       addSession(current, { provider: 'claude', label: 'ревью', task: 'делать' });
-      addRoom(current, { title: 'архив', creator: 's-01', members: ['s-02'], lead: 's-01' });
-      addRoom(current, { title: 'открытая', creator: 's-03', members: [] });
+      addRoom(current, { title: 'архив', creator: 's-01', members: ['s-01', 's-02'], lead: 's-01' });
+      addRoom(current, { title: 'открытая', creator: 's-03', members: ['s-03'] });
       addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: 'до архива' });
       archiveRoom(current, 'r-01', AT);
     });
@@ -3591,5 +2893,30 @@ describe('архивная комната в MCP (архив комнат, 3.3, 
     const after = await readMap(project, workId);
     expect(after.messages).toHaveLength(before);
     expect(after.messages.filter((m) => m.roomId === 'r-01' && m.from === 'system').map((m) => m.text)).toEqual(['Room archived by the human.']);
+  });
+});
+
+describe('owner private message visibility', () => {
+  it('denies worker private mail in lists and lookups but retains own and owned-room messages', async () => {
+    let privateId = '';
+    let ownId = '';
+    let roomMessageId = '';
+    await updateMap(project, workId, (map) => {
+      addSession(map, { provider: 'claude', label: 'worker', task: 'work' });
+      addSession(map, { provider: 'claude', label: 'reviewer', task: 'review' });
+      const room = addRoom(map, { creator: 's-01', ownerId: 's-01', title: 'owned', members: ['s-02', 's-03'], lead: 's-02' });
+      privateId = addMessage(map, { from: 's-02', to: ['s-03'], text: 'private worker mail', kind: 'decision' }).id;
+      ownId = addMessage(map, { from: 's-02', to: ['s-01'], text: 'direct owner mail', kind: 'note' }).id;
+      roomMessageId = addMessage(map, { from: 's-02', to: [], roomId: room.id, text: 'room mail', kind: 'note' }).id;
+    });
+    const owner = await connect('s-01');
+    const page = await callOk(owner, 'get_map', { field: 'messages' });
+    expect((page.messages as { id: string }[]).map((message) => message.id)).toEqual([ownId]);
+    const roomPage = await callOk(owner, 'get_map', { field: 'messages', room: 'r-01' });
+    expect((roomPage.messages as { id: string }[]).map((message) => message.id)).toEqual([roomMessageId]);
+    expect((await call(owner, 'get_map', { field: 'message', id: privateId })).isError).toBe(true);
+    expect((await callOk(owner, 'get_map', { field: 'message', id: ownId })).id).toBe(ownId);
+    expect((await callOk(owner, 'get_map', { field: 'message', id: roomMessageId })).id).toBe(roomMessageId);
+    expect((await callOk(owner, 'read_room', { room: 'r-01' })).messages).toHaveLength(1);
   });
 });

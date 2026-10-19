@@ -57,6 +57,7 @@ import {
   roomsResolveProposal,
   roomsSend,
   roomsSetLead,
+  roomsSetOwner,
 } from './rooms.js';
 import { createRolesList } from './roles.js';
 import { createRecipesList } from './recipes.js';
@@ -213,7 +214,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog, deps.customCheck) as AnyHandler,
     'providers.setKey': createProvidersSetKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
     'providers.clearKey': createProvidersClearKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
-    ...(deps.limits === undefined ? {} : { 'providers.refreshLimits': createProvidersRefreshLimits(deps.limits) as AnyHandler }),
+    ...(deps.limits === undefined ? {} : { 'providers.refreshLimits': createProvidersRefreshLimits(deps.limits, deps.providerVersions) as AnyHandler }),
     ...(deps.glmCheck === undefined && deps.customCheck === undefined
       ? {}
       : { 'providers.check': createProvidersCheck(deps.providerVersions, deps.glmCheck, deps.customCheck) as AnyHandler }),
@@ -249,6 +250,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'rooms.addMember': roomsAddMember as AnyHandler,
     'rooms.rename': roomsRename as AnyHandler,
     'rooms.setLead': roomsSetLead as AnyHandler,
+    'rooms.setOwner': roomsSetOwner as AnyHandler,
     'rooms.delete': roomsDelete as AnyHandler,
     'rooms.archive': createRoomsArchive(deps.sessions) as AnyHandler,
     'rooms.reopen': roomsReopen as AnyHandler,

@@ -28,6 +28,15 @@ const close = (map: WorkMap, id: string): void => {
 };
 
 describe('блок рецепта в слое', () => {
+  it('does not give the owner the operational lead playbook', () => {
+    const map = roomWithRecipe();
+    const owner = addSession(map, { provider: 'codex', label: 'Feature Lead', task: '' });
+    map.rooms[0]!.ownerId = owner.id;
+    expect(leadRecipeBlock(map, owner.id)).toBeNull();
+    close(map, 's-01');
+    const sent = reconcileRecipeLeads(map);
+    expect(sent.map(message => message.to)).toEqual([['s-02']]);
+  });
   it('начинается строкой с названием, дальше снимок плейбука', () => {
     expect(recipeLeadBlock(recipe)).toBe('Recipe: Payments — you lead this room.\nStep one.\nStep two.');
   });

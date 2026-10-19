@@ -1,3 +1,5 @@
+import type { AgentPlan } from './agent-plan.js';
+import { createClaudePlanCollector } from './agent-plan-log.js';
 import path from 'node:path';
 import { forEachJsonlRecord, type RawRecord } from './jsonl.js';
 import { DEFAULT_TIMELINE_READER, readJsonlTail, type TailCursor, type TimelineReader } from './jsonl-tail.js';
@@ -18,6 +20,7 @@ export type Provider = 'claude' | 'codex' | 'glm';
 export type TitleSource = 'custom' | 'ai' | 'last-prompt' | 'first-text';
 
 export interface SessionIndex {
+  plan?: AgentPlan | null;
   /** sessionId из записей; если его нет — имя файла. */
   id: string;
   /** Слаг каталога проекта в ~/.claude/projects. */
@@ -57,6 +60,8 @@ export interface SessionIndex {
    * заявленное ожидание ячейки (`yield_time_ms`), `null` — не указано. Нет открытых вызовов — поля нет.
    */
   openCodeCall?: { name: 'exec' | 'wait'; at: string; yieldMs: number | null };
+  /** Самая ранняя ячейка code mode с ответом «ещё выполняется», но без результата последующего wait. */
+  pendingCodeCell?: { id: string; at: string };
   durationMs: number | null;
   records: number;
   malformedLines: number;
@@ -162,6 +167,7 @@ interface SubagentObservations {
  * через одно и то же, поэтому результат у них совпадает.
  */
 export class ClaudeIndexAccumulator {
+  planCollector = createClaudePlanCollector();
   models = new Counter();
   tools = new Counter();
   roles = new Counter();
@@ -198,6 +204,7 @@ export class ClaudeIndexAccumulator {
   /** Независимая копия: счётчики и наблюдения копируются, прежнее состояние не мутируется. */
   clone(): ClaudeIndexAccumulator {
     return Object.assign(new ClaudeIndexAccumulator(this.file, this.adapter), this, {
+      planCollector: this.planCollector.clone(),
       models: this.models.clone(),
       tools: this.tools.clone(),
       roles: this.roles.clone(),
@@ -208,6 +215,7 @@ export class ClaudeIndexAccumulator {
   }
 
   feed(raw: RawRecord, lineNo: number): void {
+    this.planCollector.onRecord(raw);
     const record: SessionRecord = this.adapter.toSessionRecord(raw);
 
     this.recordTypes.add(record.type);
@@ -322,6 +330,7 @@ export class ClaudeIndexAccumulator {
       : null;
 
     return {
+      plan: this.planCollector.finish(),
       id: this.sessionId ?? path.basename(file, '.jsonl'),
       project: projectSlug(file, root),
       projectPath: this.cwd,

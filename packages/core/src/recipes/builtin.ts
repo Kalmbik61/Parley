@@ -4,7 +4,7 @@ import type { RecipeDefinition } from './types.js';
 export const BUILTIN_RECIPES: readonly RecipeDefinition[] = [
   {
     id: 'builtin:plan-build', source: 'builtin', name: 'Plan & build',
-    description: 'Clarify, challenge, implement and independently verify a bounded change.', mode: 'verified',
+    description: 'Clarify, challenge, implement and independently assess a bounded change.', mode: 'verified',
     agents: [
       { role: 'builtin:planner', lead: true, worktree: false, count: 1 },
       { role: 'builtin:critic', lead: false, worktree: false, count: 1 },
@@ -16,7 +16,7 @@ Draft a bounded plan, ask the critic for concrete gaps, then revise it.
 Submit the plan for human acceptance with each implementation item's owner, scope, criteria and independent reviewer.
 If the navigator is available, use find_skill with for for the actual owner; assign a skill only when it fits, and assess the reviewer's skills separately.
 Keep implementation changes small and complete, with appropriate behavioral evidence; preserve the human's requirements.
-The reviewer can inspect an executor's worktree branch with git diff from the main checkout.
+The reviewer can inspect an executor's worktree branch with git diff from the main checkout. Independent assessment may use inspection; assign executable checks explicitly to a participant with the required permissions when acceptance criteria require them.
 Resolve blockers and questions, then propose_completion only when the accepted verification requirements are satisfied.
 Suggest remaining work for the backlog.`,
   },

@@ -35,7 +35,7 @@ describe('role catalog and selection', () => {
     expect(
       result.roles.filter((role) => role.id.endsWith(':reviewer')).map((role) => role.id),
     ).toEqual(['builtin:reviewer', 'claude:reviewer', 'codex:reviewer']);
-    expect(new Set(result.roles.map((role) => role.id)).size).toBe(10);
+    expect(new Set(result.roles.map((role) => role.id)).size).toBe(11);
     expect(result.partial).toBe(false);
   });
   it('rejects an ambiguous same-source identity without choosing a guessed winner', () => {

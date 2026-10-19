@@ -28,12 +28,12 @@ export function archivedRoomIds(map: WorkMap): Set<string> {
  * по нему хост выбирает, кого остановить флажком «Also stop its N agents…»; число во флажке считает то же.
  */
 export function agentsLeftWithoutRoom(map: WorkMap, room: Room): WorkSession[] {
-  const ids = [...new Set([room.creator, ...room.members])].filter((id) => id !== HUMAN);
+  const ids = [...new Set(room.members)].filter((id) => id !== HUMAN);
   return ids.flatMap((id) => {
     const session = map.sessions.find((candidate) => candidate.id === id);
     if (session === undefined) return [];
     const inOther = map.rooms.some(
-      (other) => other.id !== room.id && !isRoomArchived(other) && (other.creator === id || other.members.includes(id)),
+      (other) => other.id !== room.id && !isRoomArchived(other) && other.members.includes(id),
     );
     return inOther ? [] : [session];
   });

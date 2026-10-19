@@ -92,6 +92,13 @@ const byId = (providers: ProviderItem[], id: string): ProviderItem => {
 };
 
 describe('providers.list: модели, усилие и версия CLI (дизайн комнат, 3.2)', () => {
+  it('retries an unknown Codex version on list without restarting the host', async () => {
+    let codexCalls = 0;
+    const client = await boot({ probeVersion: async command => command === 'codex' ? (++codexCalls === 1 ? null : '0.162.0') : '2.1.300' });
+    expect(byId(await list(client), 'codex').version).toBe('0.162.0');
+    expect(codexCalls).toBe(2);
+  });
+
   it('claude, codex и glm принимают effort; GLM использует версию Claude Code', async () => {
     process.env['PARLEY_CLAUDE_BIN'] = process.execPath;
     extraEnv.push('PARLEY_CLAUDE_BIN');
