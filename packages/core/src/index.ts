@@ -591,7 +591,7 @@ export type { RememberInput, RememberOptions, MemorySuggestionResult, UndoableMe
 export { formatMemoryFactBlock, MEMORY_MAX_BYTES, MEMORY_TRUNCATION_MARKER } from './work/session-layer.js';
 export type { MemoryLayerWarning, SessionLayerWarning } from './work/session-layer.js';
 
-export { capturePlanNotice, reservePlanEffects, flushPlanEffects, resumablePlanLetter, summarizePlanEffects } from './work/plan-effects.js';
+export { capturePlanNotice, reservePlanEffects, flushPlanEffects, resumablePlanLetter, stalledPlanEffects, summarizePlanEffects } from './work/plan-effects.js';
 export type { PlanEffect, PlanBacklogIntent } from './work/types.js';
 export type { PlanEffectsSummary, PlanReservation } from './work/plan-effects.js';
 

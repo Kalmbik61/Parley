@@ -60,7 +60,7 @@ import { createSender } from './pty/send.js';
 import { createFeedService } from './feed/feed-service.js';
 import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
-import { createPlanEffectsService } from './rooms/plan-effects.js';
+import { createPlanEffectsService, watchTurnEnds } from './rooms/plan-effects.js';
 import { createHistoryService } from './rooms/history-service.js';
 import { sendHumanLetter } from './rooms/rooms-service.js';
 import { createAssistantEndpoint } from './assistant/assistant-endpoint.js';
@@ -225,6 +225,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // с одним текстом: повтор для той же работы только вытеснял бы из строки статуса прежние уведомления.
   const planEffectNoticed = new Set<string>();
   const planEffects = createPlanEffectsService(worksService, {
+    log,
     onFailure: ({ projectPath, workId }) => {
       const key = `${projectPath}\0${workId}`;
       if (planEffectNoticed.has(key)) return;
@@ -406,6 +407,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     { compacting: (ref) => compactionService?.holds(ref) === true, windowCounters },
   );
   handle.context.onShutdown(async () => wakeService.stop());
+  // Конец хода сессии, прочитавшей поручение плана и не начавшей его, — письмо лиду (план комнат, D5). Сервис плана
+  // заведён раньше активности и будильника, поэтому подписка ставится здесь, с ленивой проверкой паузы.
+  const unwatchTurnEnds = watchTurnEnds(activityService, planEffects, () => wakeService.paused());
+  handle.context.onShutdown(async () => unwatchTurnEnds());
 
   compactionService = createCompactionService({
     host: handle.context,

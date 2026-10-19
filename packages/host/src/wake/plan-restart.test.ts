@@ -9,7 +9,9 @@ import {
   setProposal,
   resolveProposal,
   reservePlanEffects,
+  stalledPlanEffects,
   transitionSession,
+  updatePlanItem,
 } from "@parley/core";
 import type { WorkMap } from "@parley/core";
 import type { HostContext } from "../context.js";
@@ -147,3 +149,36 @@ it.each(["cancelled", "forged", "obsolete"] as const)(
     r.wake.stop();
   },
 );
+/** Владелец прочёл письмо поручения и закончил ход; лиду ушло письмо `stalled`, оба спят. */
+function stalledFixture(): WorkMap {
+  const map = mapFixture();
+  const at = new Date().toISOString();
+  map.messages.find(
+    (row) => row.id === map.planEffects![0]!.messageId,
+  )!.readBy["s-02"] = at;
+  transitionSession(map, "s-01", "active", { at });
+  transitionSession(map, "s-01", "sleeping", { at });
+  map.sessions[0]!.providerSessionId = "offline-lead";
+  map.planEffects!.push(...stalledPlanEffects(map, "s-02", at, at));
+  reservePlanEffects(map, 20, at);
+  return map;
+}
+it("restart wakes the lead for a current stalled letter, not the session that read the assignment", async () => {
+  const map = stalledFixture();
+  expect(map.planEffects!.filter((row) => row.kind === "stalled")).toHaveLength(1);
+  const r = rig(map);
+  r.wake.start();
+  await settled();
+  expect(r.launch).toHaveBeenCalledTimes(1);
+  expect(r.launch.mock.calls[0]![0]).toEqual({ ...r.ref, sessionId: "s-01" });
+  r.wake.stop();
+});
+it("restart does not wake the lead for a stalled letter once the session started the item", async () => {
+  const map = stalledFixture();
+  updatePlanItem(map, "pl-01", 0, 1, "s-02", "in_progress");
+  const r = rig(map);
+  r.wake.start();
+  await settled();
+  expect(r.launch).not.toHaveBeenCalled();
+  r.wake.stop();
+});

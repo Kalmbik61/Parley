@@ -3,15 +3,18 @@ import {
   addRoom,
   addSession,
   HUMAN,
+  PARLEY,
   reservePlanEffects,
   resolveProposal,
   setProposal,
+  updatePlanItem,
   flushDecisionJournal,
 } from "@parley/core";
 import type { WorkMap } from "@parley/core";
+import type { ActivityService } from "../activity/activity-service.js";
 import type { WorksService } from "../works/works-service.js";
 import type { PlanEffectsServiceIO } from "./plan-effects.js";
-import { createPlanEffectsService } from "./plan-effects.js";
+import { createPlanEffectsService, watchTurnEnds } from "./plan-effects.js";
 const AT = "2026-10-04T01:00:00.000Z";
 const empty = (): WorkMap => ({
   schemaVersion: 2,
@@ -28,7 +31,7 @@ const empty = (): WorkMap => ({
   messages: [],
 });
 afterEach(() => vi.useRealTimers());
-function fixture(map = empty()) {
+function fixture(map = empty(), rate = 1) {
   let listener: () => void = () => {};
   let present = true;
   let locked = false;
@@ -85,16 +88,19 @@ function fixture(map = empty()) {
     }),
   };
   const failure = vi.fn();
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const service = createPlanEffectsService(works, {
     io,
-    messageRate: async () => 1,
+    messageRate: async () => rate,
     now: () => Date.now(),
     onFailure: failure,
+    log,
   });
   return {
     service,
     io,
     failure,
+    log,
     get writes() {
       return writes;
     },
@@ -105,7 +111,7 @@ function fixture(map = empty()) {
     },
   };
 }
-function planned(): WorkMap {
+function planned(count = 2): WorkMap {
   const map = empty();
   addSession(map, { provider: "codex", label: "Lead", task: "Fixture" }, AT);
   addSession(map, { provider: "codex", label: "Owner", task: "Fixture" }, AT);
@@ -124,7 +130,7 @@ function planned(): WorkMap {
     plan: {
       mode: "checklist",
       goal: "Done",
-      items: [1, 2].map((id) => ({
+      items: Array.from({ length: count }, (_, index) => index + 1).map((id) => ({
         id,
         title: `Item ${id}`,
         owner: "s-02",
@@ -366,4 +372,162 @@ it('semantic journal conflict is excluded per captured file while a new decision
     expect(options?.excludedFiles?.size).toBe(0);old.status='written';return {written:[old.file],failed:[],diagnostics:[]};
   });
   await f.service.flush('/project',map.work.id);expect(old.status).toBe('written');f.service.stop();
+});
+
+describe("turnEnded: a read assignment that the session did not start", () => {
+  const READ = "2026-10-04T01:00:10.000Z";
+  const END = "2026-10-04T01:01:00.000Z";
+  const ref = { projectPath: "/project", workId: "w-01", sessionId: "s-02" };
+  const STALLED =
+    "S02 read assignment pl-01 rev 0 item 1 (ready) and ended its turn without starting, progress, result or blocker. Nudge it in the room or amend the plan.";
+  /** Поручения разосланы, адресат их прочёл по `check_inbox`. */
+  function readAssignments(count = 1): WorkMap {
+    const map = planned(count);
+    reservePlanEffects(map, 20, AT);
+    for (const letter of map.messages.filter((row) => row.from === PARLEY))
+      letter.readBy["s-02"] = READ;
+    return map;
+  }
+  const toLead = (map: WorkMap) =>
+    map.messages.filter((row) => row.from === PARLEY && row.to[0] === "s-01");
+
+  it("appends the stalled effect and reserves the lead's letter in one write", async () => {
+    const map = readAssignments();
+    const f = fixture(map, 20);
+    await f.service.turnEnded(ref, END);
+    expect(f.writes).toBe(1);
+    const letters = toLead(map);
+    expect(letters).toHaveLength(1);
+    expect(letters[0]).toMatchObject({
+      kind: "note",
+      roomId: "r-01",
+      text: STALLED,
+    });
+    expect(
+      map.planEffects!.filter((row) => row.kind === "stalled"),
+    ).toMatchObject([
+      { status: "sent", target: "s-01", messageId: letters[0]!.id },
+    ]);
+    expect(f.log.warn).not.toHaveBeenCalled();
+  });
+
+  it("adds no second letter for a second turn end or after a restart over the same map", async () => {
+    const map = readAssignments();
+    const f = fixture(map, 20);
+    await f.service.turnEnded(ref, END);
+    await f.service.turnEnded(ref, "2026-10-04T01:02:00.000Z");
+    const restarted = fixture(map, 20);
+    await restarted.service.turnEnded(ref, "2026-10-04T01:03:00.000Z");
+    expect(toLead(map)).toHaveLength(1);
+    expect(f.writes).toBe(1);
+    expect(restarted.writes).toBe(0);
+  });
+
+  it("leaves the map alone when nothing was read, the session started the item, or it has no assignments", async () => {
+    const unread = planned(1);
+    reservePlanEffects(unread, 20, AT);
+    const a = fixture(unread, 20);
+    await a.service.turnEnded(ref, END);
+    expect(a.writes).toBe(0);
+    expect(toLead(unread)).toHaveLength(0);
+
+    const started = readAssignments();
+    updatePlanItem(
+      started,
+      "pl-01",
+      0,
+      1,
+      "s-02",
+      "in_progress",
+      undefined,
+      "2026-10-04T01:00:30.000Z",
+    );
+    const b = fixture(started, 20);
+    await b.service.turnEnded(ref, END);
+    expect(b.writes).toBe(0);
+    expect(toLead(started)).toHaveLength(0);
+
+    const c = fixture(readAssignments(), 20);
+    await c.service.turnEnded({ ...ref, sessionId: "s-01" }, END);
+    expect(c.io.updateMap).not.toHaveBeenCalled();
+    const free = fixture(empty(), 20);
+    await free.service.turnEnded(ref, END);
+    expect(free.io.updateMap).not.toHaveBeenCalled();
+  });
+
+  it("logs a failing write and never rejects into the activity listener", async () => {
+    const f = fixture(readAssignments(), 20);
+    f.io.updateMap.mockRejectedValueOnce(new Error("PRIVATE path"));
+    await expect(f.service.turnEnded(ref, END)).resolves.toBeUndefined();
+    expect(f.log.warn).toHaveBeenCalledTimes(1);
+    expect(f.failure).not.toHaveBeenCalled();
+  });
+
+  it("does nothing after stop", async () => {
+    const f = fixture(readAssignments(), 20);
+    f.service.stop();
+    await f.service.turnEnded(ref, END);
+    expect(f.io.updateMap).not.toHaveBeenCalled();
+  });
+});
+
+describe("watchTurnEnds", () => {
+  const ref = { projectPath: "/project", workId: "w-01", sessionId: "s-02" };
+  const live = (turnEndedAt: string | null) =>
+    ({ activity: { turnEndedAt }, metrics: null }) as never;
+  function rig(paused = () => false) {
+    let emit: (target: typeof ref, value: never) => void = () => {};
+    let off = 0;
+    const activity = {
+      onChange: (fn: typeof emit) => {
+        emit = fn;
+        return () => {
+          off++;
+        };
+      },
+    } as unknown as Pick<ActivityService, "onChange">;
+    const service = { turnEnded: vi.fn(async () => {}) };
+    const stop = watchTurnEnds(activity, service, paused);
+    return {
+      emit: (r: typeof ref, v: string | null) => emit(r, live(v)),
+      service,
+      stop,
+      off: () => off,
+    };
+  }
+
+  it("calls turnEnded only when the turn end advances for that session", () => {
+    const r = rig();
+    r.emit(ref, null);
+    expect(r.service.turnEnded).not.toHaveBeenCalled();
+    r.emit(ref, "2026-10-04T01:01:00.000Z");
+    r.emit(ref, "2026-10-04T01:01:00.000Z");
+    r.emit(ref, "2026-10-04T01:00:00.000Z");
+    r.emit(ref, null);
+    expect(r.service.turnEnded).toHaveBeenCalledTimes(1);
+    expect(r.service.turnEnded).toHaveBeenLastCalledWith(
+      ref,
+      "2026-10-04T01:01:00.000Z",
+    );
+    r.emit(ref, "2026-10-04T01:02:00.000Z");
+    expect(r.service.turnEnded).toHaveBeenCalledTimes(2);
+    r.emit({ ...ref, sessionId: "s-03" }, "2026-10-04T01:01:00.000Z");
+    expect(r.service.turnEnded).toHaveBeenCalledTimes(3);
+  });
+
+  it("does nothing while the wake service is paused", () => {
+    let paused = true;
+    const r = rig(() => paused);
+    r.emit(ref, "2026-10-04T01:01:00.000Z");
+    expect(r.service.turnEnded).not.toHaveBeenCalled();
+    paused = false;
+    r.emit(ref, "2026-10-04T01:02:00.000Z");
+    expect(r.service.turnEnded).toHaveBeenCalledTimes(1);
+  });
+
+  it("unsubscribes", () => {
+    const r = rig();
+    r.stop();
+    expect(r.off()).toBe(1);
+  });
 });

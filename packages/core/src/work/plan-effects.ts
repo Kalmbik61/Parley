@@ -4,6 +4,7 @@ import type { SharedWriteOptions, UpdateMapOptions } from "./store.js";
 import { addMessage } from "./map.js";
 import { isMember, isRoomClosed, liveLead, RoomRuleError } from "./rooms.js";
 import { planItemSatisfied, reconcileRoomPlans } from "./plans.js";
+import { sessionTag } from "./thread.js";
 import { PARLEY, HUMAN, SYSTEM } from "./types.js";
 import type {
   Message,
@@ -26,7 +27,12 @@ const KINDS = [
   "completing",
   "mode",
   "completion-returned",
+  "stalled",
 ] as const;
+/** Поручения, прочтение которых без действия лид узнаёт письмом `stalled`. */
+const STALLED_SOURCES = ["ready", "verify", "returned"];
+/** `occurrence` письма `stalled`: вид и `occurrence` исходного поручения, затем сессия. */
+const STALLED_OCCURRENCE = /^(ready|verify|returned):(\d+):(s-\d+)$/;
 const bounded = (value: unknown, max: number): value is string =>
   typeof value === "string" &&
   value.length <= max &&
@@ -155,9 +161,73 @@ export function planEffectOwnsLetter(
     message.text === effect.text
   );
 }
+/** Запись сессии в пункте не раньше `since`: строка `log` либо позиция владельца или проверяющего. */
+function acknowledged(item: PlanItem, session: string, since: number): boolean {
+  const after = (at: string): boolean => Date.parse(at) >= since;
+  return (
+    item.log.some((row) => row.by === session && after(row.at)) ||
+    [item.progress?.owner, item.progress?.verifier].some(
+      (row) => row !== undefined && row.by === session && after(row.at),
+    )
+  );
+}
+/**
+ * Текущее доставленное поручение `source` (`ready`/`verify`/`returned`), которое адресат прочёл и после прочтения
+ * ничем не подтвердил. `null` — прочтения нет, поручение устарело или сессия уже что-то записала в пункт.
+ */
+function unstarted(
+  map: WorkMap,
+  source: PlanEffect,
+): { room: Room; plan: RoomPlan; item: PlanItem; readAt: string } | null {
+  if (
+    source.status !== "sent" ||
+    !STALLED_SOURCES.includes(source.kind) ||
+    !currentPlanEffect(map, source)
+  )
+    return null;
+  const message = map.messages.find((row) => row.id === source.messageId);
+  const readAt = message?.readBy[source.target];
+  if (!message || readAt === undefined || !planEffectOwnsLetter(source, message))
+    return null;
+  const room = map.rooms.find((row) => row.id === source.roomId);
+  const plan = map.plans?.find(
+    (row) =>
+      row.id === source.planId &&
+      row.roomId === source.roomId &&
+      row.rev === source.rev,
+  );
+  const item = plan?.items.find((row) => row.id === source.item);
+  return room &&
+    plan &&
+    item &&
+    !acknowledged(item, source.target, Date.parse(readAt))
+    ? { room, plan, item, readAt }
+    : null;
+}
+/** `stalled` действует, пока исходное поручение текущее и подтверждения от сессии всё ещё нет. */
+function stalledOpen(map: WorkMap, room: Room, value: PlanEffect): boolean {
+  const match = STALLED_OCCURRENCE.exec(value.occurrence);
+  if (!match || liveLead(map, room) !== value.target) return false;
+  const source = map.planEffects?.find(
+    (row) =>
+      row.roomId === value.roomId &&
+      row.planId === value.planId &&
+      row.rev === value.rev &&
+      row.item === value.item &&
+      row.kind === match[1] &&
+      row.occurrence === match[2] &&
+      row.target === match[3],
+  );
+  return (
+    source !== undefined &&
+    source.target !== value.target &&
+    unstarted(map, source) !== null
+  );
+}
 export function currentPlanEffect(map: WorkMap, value: PlanEffect): boolean {
   const room = map.rooms.find((row) => row.id === value.roomId);
   if (!room || !actionable(map, room, value.target)) return false;
+  if (value.kind === "stalled") return stalledOpen(map, room, value);
   const plan = map.plans?.find(
     (row) =>
       row.id === value.planId &&
@@ -244,6 +314,44 @@ export function capturePlanNotice(
   map.planEffects ??= [];
   if (!map.planEffects.some((row) => row.key === value.key))
     map.planEffects.push(value);
+}
+/**
+ * Письма лиду о поручениях, которые `sessionId` прочла и до конца хода (`turnEndedAt`) не начала: ни записи в `log`
+ * пункта, ни позиции после прочтения. Чистая функция: возвращает только эффекты, которых ещё нет в `map.planEffects`
+ * (в том числе отменённых и уже отправленных); дописывает их и резервирует письмо вызывающий под замком карты.
+ */
+export function stalledPlanEffects(
+  map: WorkMap,
+  sessionId: string,
+  turnEndedAt: string,
+  at: string,
+): PlanEffect[] {
+  const ended = Date.parse(turnEndedAt);
+  const found: PlanEffect[] = [];
+  for (const source of map.planEffects ?? []) {
+    if (source.target !== sessionId) continue;
+    const open = unstarted(map, source);
+    if (!open || !(ended >= Date.parse(open.readAt))) continue;
+    const lead = liveLead(map, open.room);
+    if (lead === null || lead === sessionId) continue;
+    const value = effect(
+      open.room,
+      open.plan,
+      open.item,
+      "stalled",
+      `${source.kind}:${source.occurrence}:${sessionId}`,
+      lead,
+      `${sessionTag(sessionId)} read assignment ${open.plan.id} rev ${open.plan.rev} item ${open.item.id} (${source.kind}) and ended its turn without starting, progress, result or blocker. Nudge it in the room or amend the plan.`,
+      at,
+    );
+    if (
+      !found.some((row) => row.key === value.key) &&
+      !map.planEffects!.some((row) => row.key === value.key) &&
+      currentPlanEffect(map, value)
+    )
+      found.push(value);
+  }
+  return found;
 }
 export interface PlanReservation {
   changed: boolean;
@@ -419,12 +527,15 @@ export function validatePlanEffects(map: WorkMap): void {
       !safe(value.rev) ||
       (value.item !== null && (!safe(value.item) || value.item === 0)) ||
       !KINDS.includes(value.kind) ||
-      ["ready", "verify", "returned", "blocked"].includes(value.kind) !==
+      ["ready", "verify", "returned", "blocked", "stalled"].includes(
+        value.kind,
+      ) !==
         (value.item !== null) ||
       (value.kind === "mode"
         ? value.planId !== null || value.rev !== 0
         : value.planId === null) ||
       !bounded(value.occurrence, 2048) ||
+      (value.kind === "stalled" && !STALLED_OCCURRENCE.test(value.occurrence)) ||
       !id(value.target, "s") ||
       !bounded(value.text, 32768) ||
       !date(value.createdAt) ||

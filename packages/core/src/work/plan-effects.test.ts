@@ -6,17 +6,25 @@ import {
   resolveProposal,
   setProposal,
 } from "./proposals.js";
-import { setRoomMode, submitPlanItem, verifyPlanItem } from "./plans.js";
+import {
+  savePlanCheckpoint,
+  setRoomMode,
+  submitPlanItem,
+  updatePlanItem,
+  verifyPlanItem,
+} from "./plans.js";
 import { unreadFor } from "./letters.js";
 import {
   capturePlanNotice,
   cancelledPlanLetter,
+  currentPlanEffect,
   reservePlanEffects,
   resumablePlanLetter,
+  stalledPlanEffects,
   validatePlanEffects,
 } from "./plan-effects.js";
 import { HUMAN, PARLEY } from "./types.js";
-import type { PlanDraft, WorkMap } from "./types.js";
+import type { Message, PlanDraft, PlanEffect, WorkMap } from "./types.js";
 import type { BacklogDocument } from "./backlog.js";
 import type { PlanEffectsIO } from "./plan-effects.js";
 const AT = "2026-10-04T01:00:00.000Z";
@@ -628,4 +636,292 @@ it("closed work never reserves or resumes a plan assignment, but retains capture
   reservePlanEffects(map, 20, AT);
   expect(map.messages).toHaveLength(before);
   expect(JSON.stringify(map.planExports)).toBe(captured);
+});
+
+describe("stalled assignment escalation (D5, C7)", () => {
+  const READ = "2026-10-04T01:00:10.000Z";
+  const END = "2026-10-04T01:01:00.000Z";
+  const stalledText = (tag: string, kind: string, item = 1, rev = 0): string =>
+    `${tag} read assignment pl-01 rev ${rev} item ${item} (${kind}) and ended its turn without starting, progress, result or blocker. Nudge it in the room or amend the plan.`;
+  /** Последнее письмо Parley, которое лежит сессии. */
+  const letterTo = (map: WorkMap, session: string): Message =>
+    map.messages
+      .filter((row) => row.from === PARLEY && row.to[0] === session)
+      .at(-1)!;
+  /** Так хост принимает найденное: эффекты дописываются в карту и тут же резервируются. */
+  const apply = (
+    map: WorkMap,
+    found: PlanEffect[],
+    rate = 20,
+    at = END,
+  ): void => {
+    (map.planEffects ??= []).push(...found);
+    reservePlanEffects(map, rate, at);
+  };
+  /** Владелец начал и сдал пункт: проверяющему ушло письмо `verify`. */
+  const submitted = (): WorkMap => {
+    const map = fixture();
+    reservePlanEffects(map, 20, AT);
+    updatePlanItem(map, "pl-01", 0, 1, "s-02", "in_progress", undefined, AT);
+    submitPlanItem(
+      map,
+      "pl-01",
+      0,
+      1,
+      "s-02",
+      { text: "Measured", artifacts: [] },
+      AT,
+    );
+    reservePlanEffects(map, 20, AT);
+    return map;
+  };
+
+  it("tells the lead exactly once when a read ready assignment is followed by a turn end without action", () => {
+    const map = fixture();
+    reservePlanEffects(map, 20, AT);
+    letterTo(map, "s-02").readBy["s-02"] = READ;
+    const found = stalledPlanEffects(map, "s-02", END, END);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({
+      roomId: "r-01",
+      planId: "pl-01",
+      rev: 0,
+      item: 1,
+      kind: "stalled",
+      occurrence: "ready:0:s-02",
+      target: "s-01",
+      text: stalledText("S02", "ready"),
+      status: "queued",
+      messageId: null,
+    });
+    expect(found[0]!.key).toBe("r-01/pl-01/0/1/stalled/ready:0:s-02/s-01");
+    expect(currentPlanEffect(map, found[0]!)).toBe(true);
+    apply(map, found);
+    const letters = map.messages.filter(
+      (row) => row.from === PARLEY && row.to[0] === "s-01",
+    );
+    expect(letters).toHaveLength(1);
+    expect(letters[0]).toMatchObject({
+      kind: "note",
+      roomId: "r-01",
+      text: stalledText("S02", "ready"),
+    });
+    expect(
+      map.planEffects!.find((row) => row.kind === "stalled"),
+    ).toMatchObject({ status: "sent", messageId: letters[0]!.id });
+    expect(() => validatePlanEffects(map)).not.toThrow();
+    // Второй конец хода и перезапуск хоста (карта с диска) нового письма не дают.
+    expect(
+      stalledPlanEffects(map, "s-02", "2026-10-04T01:02:00.000Z", END),
+    ).toEqual([]);
+    const restarted = parseMap(JSON.stringify(map), "fixture");
+    expect(
+      stalledPlanEffects(restarted, "s-02", "2026-10-04T01:03:00.000Z", END),
+    ).toEqual([]);
+    expect(reservePlanEffects(restarted, 20, END).changed).toBe(false);
+  });
+
+  it("stays silent while the letter is unread or when the turn ended before it was read", () => {
+    const map = fixture();
+    reservePlanEffects(map, 20, AT);
+    expect(stalledPlanEffects(map, "s-02", END, END)).toEqual([]);
+    letterTo(map, "s-02").readBy["s-02"] = "2026-10-04T01:02:00.000Z";
+    expect(stalledPlanEffects(map, "s-02", END, END)).toEqual([]);
+    expect(
+      stalledPlanEffects(map, "s-02", "2026-10-04T01:02:00.000Z", END),
+    ).toHaveLength(1);
+  });
+
+  it("is not raised for another session than the one whose turn ended", () => {
+    const map = fixture();
+    reservePlanEffects(map, 20, AT);
+    letterTo(map, "s-02").readBy["s-02"] = READ;
+    expect(stalledPlanEffects(map, "s-03", END, END)).toEqual([]);
+    expect(stalledPlanEffects(map, "s-01", END, END)).toEqual([]);
+  });
+
+  it("is silent once the owner starts the item after reading it", () => {
+    const map = fixture();
+    reservePlanEffects(map, 20, AT);
+    letterTo(map, "s-02").readBy["s-02"] = READ;
+    updatePlanItem(
+      map,
+      "pl-01",
+      0,
+      1,
+      "s-02",
+      "in_progress",
+      undefined,
+      "2026-10-04T01:00:30.000Z",
+    );
+    expect(stalledPlanEffects(map, "s-02", END, END)).toEqual([]);
+  });
+
+  it("counts a verifier checkpoint saved after reading as acknowledgement, and a verify letter without one as a stall", () => {
+    const map = submitted();
+    letterTo(map, "s-03").readBy["s-03"] = READ;
+    const found = stalledPlanEffects(map, "s-03", END, END);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({
+      occurrence: "verify:2:s-03",
+      target: "s-01",
+      text: stalledText("S03", "verify"),
+    });
+    savePlanCheckpoint(
+      map,
+      "pl-01",
+      0,
+      1,
+      "s-03",
+      { done: "Read the diff", next: "Run the tests" },
+      "2026-10-04T01:00:30.000Z",
+    );
+    expect(stalledPlanEffects(map, "s-03", END, END)).toEqual([]);
+  });
+
+  it("does not take a checkpoint or log entry from before the reading as acknowledgement", () => {
+    const map = submitted();
+    savePlanCheckpoint(
+      map,
+      "pl-01",
+      0,
+      1,
+      "s-03",
+      { done: "Read the diff", next: "Run the tests" },
+      "2026-10-04T01:00:05.000Z",
+    );
+    letterTo(map, "s-03").readBy["s-03"] = READ;
+    expect(stalledPlanEffects(map, "s-03", END, END)).toHaveLength(1);
+    // Возврат на доработку: прежние записи владельца в log (`in_progress`, `done`) не подтверждают новое письмо.
+    verifyPlanItem(
+      map,
+      "pl-01",
+      0,
+      1,
+      "s-03",
+      "returned",
+      "Fix the edge case",
+      AT,
+    );
+    reservePlanEffects(map, 20, AT);
+    const returned = letterTo(map, "s-02");
+    expect(returned.text).toContain("Returned for rework");
+    returned.readBy["s-02"] = READ;
+    const found = stalledPlanEffects(map, "s-02", END, END);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({
+      target: "s-01",
+      text: stalledText("S02", "returned"),
+    });
+    expect(found[0]!.occurrence).toMatch(/^returned:\d+:s-02$/);
+  });
+
+  it("cancels a queued stalled letter when the session acknowledges before delivery", () => {
+    const map = submitted();
+    letterTo(map, "s-03").readBy["s-03"] = READ;
+    // Лимит в одно письмо в час уже занят поручениями: письмо лиду остаётся в очереди.
+    apply(map, stalledPlanEffects(map, "s-03", END, END), 1);
+    const queued = map.planEffects!.find((row) => row.kind === "stalled")!;
+    expect(queued.status).toBe("queued");
+    expect(currentPlanEffect(map, queued)).toBe(true);
+    savePlanCheckpoint(
+      map,
+      "pl-01",
+      0,
+      1,
+      "s-03",
+      { done: "Read the diff", next: "Run the tests" },
+      "2026-10-04T01:01:30.000Z",
+    );
+    expect(currentPlanEffect(map, queued)).toBe(false);
+    reservePlanEffects(map, 20, "2026-10-04T02:30:00.000Z");
+    // reservePlanEffects подменяет записи копиями: статус смотрим заново.
+    expect(
+      map.planEffects!.find((row) => row.key === queued.key)!.status,
+    ).toBe("cancelled");
+    expect(
+      map.messages.filter(
+        (row) => row.from === PARLEY && row.to[0] === "s-01",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("cancels a queued stalled letter when its assignment stops being current", () => {
+    const map = fixture();
+    reservePlanEffects(map, 20, AT);
+    letterTo(map, "s-02").readBy["s-02"] = READ;
+    apply(map, stalledPlanEffects(map, "s-02", END, END), 1);
+    const queued = map.planEffects!.find((row) => row.kind === "stalled")!;
+    expect(queued.status).toBe("queued");
+    updatePlanItem(
+      map,
+      "pl-01",
+      0,
+      1,
+      "s-02",
+      "in_progress",
+      undefined,
+      "2026-10-04T01:01:30.000Z",
+    );
+    reservePlanEffects(map, 20, "2026-10-04T02:30:00.000Z");
+    // reservePlanEffects подменяет записи копиями: статус смотрим заново.
+    expect(
+      map.planEffects!.find((row) => row.key === queued.key)!.status,
+    ).toBe("cancelled");
+    expect(
+      map.messages.filter(
+        (row) => row.from === PARLEY && row.to[0] === "s-01",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("does not raise one when the session is the lead or no other live member can lead", () => {
+    const self = fixture();
+    self.rooms[0]!.lead = "s-02";
+    reservePlanEffects(self, 20, AT);
+    letterTo(self, "s-02").readBy["s-02"] = READ;
+    expect(stalledPlanEffects(self, "s-02", END, END)).toEqual([]);
+    // Заявленный лид закрыт, первым живым участником оказывается сама сессия.
+    const fallback = fixture();
+    reservePlanEffects(fallback, 20, AT);
+    letterTo(fallback, "s-02").readBy["s-02"] = READ;
+    transitionSession(fallback, "s-01", "closed", { at: AT });
+    expect(stalledPlanEffects(fallback, "s-02", END, END)).toEqual([]);
+  });
+
+  it("only escalates ready, verify and returned assignments", () => {
+    const map = fixture();
+    reservePlanEffects(map, 20, AT);
+    transitionSession(map, "s-02", "closed", { at: AT });
+    reservePlanEffects(map, 20, AT);
+    const blocked = letterTo(map, "s-01");
+    expect(blocked.text).toContain("Blocked");
+    blocked.readBy["s-01"] = READ;
+    expect(stalledPlanEffects(map, "s-01", END, END)).toEqual([]);
+  });
+
+  it("validates stored stalled effects and rejects malformed ones", () => {
+    const map = fixture();
+    reservePlanEffects(map, 20, AT);
+    letterTo(map, "s-02").readBy["s-02"] = READ;
+    apply(map, stalledPlanEffects(map, "s-02", END, END));
+    expect(() => validatePlanEffects(map)).not.toThrow();
+    const stored = map.planEffects!.find((row) => row.kind === "stalled")!;
+    const rekey = (value: PlanEffect): PlanEffect => ({
+      ...value,
+      key: `${value.roomId}/${value.planId ?? "mode"}/${value.rev}/${value.item ?? 0}/${value.kind}/${value.occurrence}/${value.target}`,
+    });
+    for (const broken of [
+      rekey({ ...stored, item: null }),
+      rekey({ ...stored, planId: null }),
+      rekey({ ...stored, occurrence: "ready" }),
+      rekey({ ...stored, occurrence: "blocked:0:s-02" }),
+    ]) {
+      const copy = structuredClone(map);
+      copy.planEffects = copy.planEffects!.map((row) =>
+        row.key === stored.key ? broken : row,
+      );
+      expect(() => validatePlanEffects(copy)).toThrow("invalid plan effect");
+    }
+  });
 });

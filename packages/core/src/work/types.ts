@@ -213,7 +213,7 @@ export interface PlanExportIntent {
 /** Durable delivery record: occurrence is an item log offset or a captured source message ID. */
 export interface PlanEffect {
   key: string; roomId: string; planId: string | null; rev: number;
-  item: number | null; kind: 'ready' | 'verify' | 'returned' | 'blocked' | 'completing' | 'mode' | 'completion-returned';
+  item: number | null; kind: 'ready' | 'verify' | 'returned' | 'blocked' | 'completing' | 'mode' | 'completion-returned' | 'stalled';
   occurrence: string; target: string; text: string; createdAt: string;
   status: 'queued' | 'sent' | 'cancelled'; messageId: string | null;
 }

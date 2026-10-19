@@ -3,12 +3,17 @@ import {
   loadConfig,
   readMap,
   reservePlanEffects,
+  stalledPlanEffects,
   summarizePlanEffects,
   updateMap,
   flushPlanEffects,
   flushDecisionJournal,
 } from "@parley/core";
 import type { PlanEffectsSummary, WorkMap } from "@parley/core";
+import { refKey } from "@parley/protocol";
+import type { SessionRef } from "@parley/protocol";
+import type { ActivityService } from "../activity/activity-service.js";
+import type { Log } from "../log.js";
 import type { WorksService } from "../works/works-service.js";
 
 export interface PlanEffectsServiceIO {
@@ -21,6 +26,8 @@ export interface PlanEffectsServiceOptions {
   io?: PlanEffectsServiceIO;
   messageRate?: () => Promise<number>;
   now?: () => number;
+  /** Журнал хоста: сюда попадает сбой `turnEnded`, окну о нём не сообщается. */
+  log?: Pick<Log, "warn">;
   onFailure?(failure: {
     projectPath: string;
     workId: string;
@@ -37,6 +44,11 @@ export interface PlanEffectsService {
   start(): void;
   stop(): void;
   flush(projectPath: string, workId: string): Promise<PlanEffectsSummary>;
+  /**
+   * Сессия закончила ход: если она прочла поручение и ничего в нём не начала, лиду уходит одно письмо (D5).
+   * Сбой пишется в журнал и наружу не бросается: метод зовётся из слушателя активности.
+   */
+  turnEnded(ref: SessionRef, turnEndedAt: string): Promise<void>;
 }
 interface State {
   projectPath: string;
@@ -431,5 +443,64 @@ export function createPlanEffectsService(
       noticed.clear();
     },
     flush: (projectPath, workId) => flush(projectPath, workId, true),
+    async turnEnded(ref, turnEndedAt) {
+      // Отсев по снимку в памяти: у сессии нет доставленных поручений — карту с диска не читаем и не пишем.
+      const held = works.entry(ref.projectPath, ref.workId)?.map.planEffects;
+      if (
+        stopped ||
+        !held?.some((row) => row.target === ref.sessionId && row.status === "sent")
+      )
+        return;
+      try {
+        const rate = await messageRate();
+        const at = new Date(now()).toISOString();
+        await io.updateMap(
+          ref.projectPath,
+          ref.workId,
+          (map) => {
+            const stalled = stalledPlanEffects(
+              map,
+              ref.sessionId,
+              turnEndedAt,
+              at,
+            );
+            if (stalled.length === 0) throw new NoPlanChange();
+            (map.planEffects ??= []).push(...stalled);
+            reservePlanEffects(map, rate, at);
+          },
+          { touch: false },
+        );
+      } catch (error) {
+        if (error instanceof NoPlanChange) return;
+        const log = options.log;
+        if (log !== undefined)
+          log.warn("письмо лиду о непринятом поручении не создано", {
+            workId: ref.workId,
+            sessionId: ref.sessionId,
+            error: String(error),
+          });
+      }
+    },
   };
+}
+/**
+ * Слушатель активности: зовёт `turnEnded`, когда `activity.turnEndedAt` сессии вырос относительно прошлого
+ * виденного значения. На паузе будильника не делает ничего и значение не запоминает, поэтому конец хода,
+ * случившийся на паузе, учтётся при ближайшем событии активности после её снятия.
+ */
+export function watchTurnEnds(
+  activity: Pick<ActivityService, "onChange">,
+  service: Pick<PlanEffectsService, "turnEnded">,
+  paused: () => boolean,
+): () => void {
+  const seen = new Map<string, number>();
+  return activity.onChange((ref, value) => {
+    const ended = value.activity.turnEndedAt;
+    if (ended === null || paused()) return;
+    const at = Date.parse(ended);
+    const key = refKey(ref);
+    if (!(at > (seen.get(key) ?? -Infinity))) return;
+    seen.set(key, at);
+    void service.turnEnded(ref, ended);
+  });
 }
