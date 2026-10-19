@@ -190,3 +190,25 @@ export function capPlan(plan: AgentPlanState): AgentPlan {
 export function planSummary(plan: AgentPlan): AgentPlanSummary {
   return plan.summary;
 }
+
+/** The latest confirmed snapshot wins; explicit clearing also supersedes older native history. */
+export function latestAgentPlan(published: AgentPlanState | undefined, native: AgentPlan | null | undefined): AgentPlan | null {
+  if (published === undefined) return native ?? null;
+  if (native != null && Date.parse(native.updatedAt) > Date.parse(published.updatedAt)) return native;
+  return capPlan(published);
+}
+
+/** Bounded persisted snapshots are validated before the map reaches either host or renderer. */
+export function isPublishedAgentPlan(value: unknown): value is AgentPlanState {
+  const plan = record(value);
+  if (!plan || !Array.isArray(plan.items) || plan.items.length > PLAN_ITEMS_LIMIT || plan.partial !== false ||
+      typeof plan.updatedAt !== 'string' || !Number.isFinite(Date.parse(plan.updatedAt)) ||
+      !(plan.explanation === null || (typeof plan.explanation === 'string' && plan.explanation.length <= PLAN_DESCRIPTION_LIMIT))) return false;
+  return plan.items.every((value: unknown) => {
+    const item = record(value);
+    return item !== null && typeof item.id === 'string' && typeof item.subject === 'string' &&
+      item.subject.trim().length > 0 && item.subject.length <= 512 &&
+      ['pending', 'in_progress', 'completed'].includes(String(item.status)) && item.activeForm === null &&
+      (item.description === null || (typeof item.description === 'string' && item.description.length <= PLAN_DESCRIPTION_LIMIT));
+  });
+}

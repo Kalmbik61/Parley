@@ -1706,3 +1706,25 @@ describe('план в живых метриках', () => {
     expect(a.get(ref)?.metrics?.plan).toBeNull();
   });
 });
+
+
+it('publishes personal plans from map changes without a native log or Chat support', async () => {
+  const { workId, ref } = await activeSession();
+  const w = await works();
+  const a = activity(w);
+  await a.start();
+  await waitFor(() => a.get(ref) !== undefined);
+  const messages = (await readMap(project, workId)).messages;
+  await updateMap(project, workId, map => {
+    map.sessions[0]!.agentPlan = {
+      items: [{ id: '1', subject: 'Implement', status: 'in_progress', description: 'Bounded flow', activeForm: null }],
+      explanation: null, partial: false, updatedAt: new Date().toISOString(),
+    };
+  });
+  await waitFor(() => a.get(ref)?.metrics?.plan?.summary.current?.subject === 'Implement');
+  expect(a.get(ref)?.metrics?.plan?.items[0]?.description).toBe('Bounded flow');
+  expect((activityChanges(ref).at(-1)?.metrics as LiveMetrics).plan?.summary.total).toBe(1);
+  await updateMap(project, workId, map => { map.sessions[0]!.agentPlan!.items[0]!.status = 'completed'; });
+  await waitFor(() => a.get(ref)?.metrics?.plan?.summary.done === 1);
+  expect((await readMap(project, workId)).messages).toEqual(messages);
+});

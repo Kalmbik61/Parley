@@ -172,3 +172,18 @@ describe('свёртка плана агента', () => {
     });
   });
 });
+
+
+import { latestAgentPlan, isPublishedAgentPlan } from './agent-plan.js';
+it('uses the newest confirmed source and keeps explicit clearing', () => {
+  const published = { items: [], explanation: null, partial: false, updatedAt: '2026-10-18T10:00:00Z' };
+  const native = capPlan({ ...published, updatedAt: '2026-10-18T09:00:00Z' });
+  expect(latestAgentPlan(published, native)?.updatedAt).toBe(published.updatedAt);
+  const newer = { ...native, updatedAt: '2026-10-18T11:00:00Z' };
+  expect(latestAgentPlan(published, newer)).toBe(newer);
+  expect(latestAgentPlan(undefined, native)).toBe(native);
+  expect(latestAgentPlan(undefined, null)).toBeNull();
+  expect(isPublishedAgentPlan(published)).toBe(true);
+  expect(isPublishedAgentPlan({ ...published, items: [{}] })).toBe(false);
+  expect(isPublishedAgentPlan({ ...published, updatedAt: 'bad' })).toBe(false);
+});

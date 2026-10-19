@@ -57,7 +57,7 @@ export function AgentsPanel({ bridge, entry }: AgentsPanelProps): JSX.Element {
       tasks={tasks}
       plan={byRef[refKey(sessionRef)]?.metrics?.plan ?? null}
       links={roomPlanLinks(entry, session.id)}
-      pinnedLabel={pin === null ? null : sessionRowLabel(session.id, session.label)}
+      pinnedLabel={sessionRowLabel(session.id, session.label)}
       onOpenRoom={(roomId) => {
         useLayoutStore.getState().setActiveWork(workKey);
         useLayoutStore.getState().apply(workKey, (layout) => openTab(layout, { kind: 'room', id: tabId.room(roomId), roomId }));
@@ -86,7 +86,7 @@ export function AgentsPanelView({ bridge, sessionRef, hasFeed, tasks, plan, link
 
   const planHeader = <>
     {pinnedLabel ? <h2 className="truncate text-sm font-medium">{pinnedLabel}</h2> : null}
-    {plan != null ? <PlanSection plan={plan} links={links} onOpenRoom={onOpenRoom} /> : null}
+    <PlanSection plan={plan ?? null} links={links} onOpenRoom={onOpenRoom} />
   </>;
 
   if (!hasFeed) {

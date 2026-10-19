@@ -222,3 +222,13 @@ describe('ParticipantStrip — agent plan', () => {
     expect(screen.getByText('82%').parentElement?.className).toContain('shrink-0');
   });
 });
+
+
+it('opens the personal plan even when no steps have been published', () => {
+  const open = vi.fn();
+  const session = vi.fn();
+  render(<ParticipantStrip participants={[participant()]} onOpenSession={session} onOpenPlan={open} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Plan' }));
+  expect(open).toHaveBeenCalledWith('s-01');
+  expect(session).not.toHaveBeenCalled();
+});

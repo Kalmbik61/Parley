@@ -4,6 +4,13 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Changed
+
+- Agents can publish personal execution steps directly to Parley, including when native planning tools or Chat are unavailable. Room cards always offer a Plan entry point, and the Agents panel explains when steps have not been published yet.
+- Personal plan updates do not send messages or wake the Feature Lead. Room leads and Feature Leads are instructed to consolidate milestone reports, escalate actionable blockers and decisions, and skip routine step-by-step notifications.
+
 ## 0.16.0
 
 Agent plans are now visible in room cards and the Agents tab. Feature Lead and agent-owned rooms let agents coordinate existing sessions, while Codex operations that need attention are easier to find.

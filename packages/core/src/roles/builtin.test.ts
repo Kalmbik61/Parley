@@ -27,6 +27,9 @@ describe('builtin roles', () => {
     expect(featureLead.readOnly).toBe(true);
     expect(featureLead.prompt).toContain('application code, tests, scripts or configuration');
     expect(featureLead.prompt).toContain('Ownership is separate');
+    expect(featureLead.prompt).toContain('Do not poll for routine progress');
+    expect(featureLead.prompt).toContain('Do not acknowledge or relay routine notes');
+    expect(featureLead.prompt).toContain('escalate urgent blockers immediately');
     const verifier = BUILTIN_ROLES.find((role) => role.id === 'builtin:verifier')!;
     expect(verifier.readOnly).toBe(false);
     expect(verifier.prompt).toContain('PASS, FAIL, or NOT VERIFIED');
