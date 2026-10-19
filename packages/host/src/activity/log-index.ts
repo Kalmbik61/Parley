@@ -295,8 +295,7 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       // Корни, чьи сессии уже в `built`: `watchClaudeRoot` может добавить корень, пока список строится.
       const builtRoots = new Set<string>([mainRoot]);
       try {
-        const { customRoots: _skip, ...metricsRoots } = roots;
-        built = await buildAllSessions({ ...metricsRoots, signal: building.signal });
+        built = await buildAllSessions({ ...roots, signal: building.signal });
         // Корни своих провайдеров — только Claude-формат; Codex в общем списке уже один раз.
         // Цикл ловит и корни, появившиеся за время самой сборки: после последней проверки `await` нет.
         for (let pending = unbuiltRoots(builtRoots); pending.length > 0; pending = unbuiltRoots(builtRoots)) {

@@ -39,6 +39,7 @@ export const customProviderMethodSchemas = {
   'providers.saveCustom': z.object({
     /** `null` — новый провайдер: id выдаёт хост; при правке id неизменен (спека, Review Focus 3). */
     id: customId.nullable(),
+    // eslint-disable-next-line no-control-regex -- управляющие символы в имени запрещены намеренно
     label: z.string().trim().min(1).max(40).regex(/^[^\x00-\x1f]*$/),
     preset: z.string().regex(/^[a-z0-9-]{1,40}$/).nullable(),
     baseUrl: z.string().trim().min(1).max(500),

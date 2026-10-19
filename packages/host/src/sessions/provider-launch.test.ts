@@ -292,7 +292,7 @@ describe('запуск своего провайдера', () => {
     await expect(sessions.launch(ref, 'resume')).rejects.toThrow(/folder/i);
     expect(launches).toHaveLength(1);
   });
-  const providerJson = async (id: string): Promise<Record<string, any>> =>
+  const providerJson = async (id: string): Promise<{ customApiKeyResponses?: { approved: string[]; rejected: string[] }; projects?: Record<string, { hasTrustDialogAccepted?: boolean }> }> =>
     JSON.parse(await readFile(path.join(customProviderDir(id, home), '.claude.json'), 'utf8'));
   const apiKeyLocal: CustomProviderRecord = { ...local, auth: 'api-key' };
 

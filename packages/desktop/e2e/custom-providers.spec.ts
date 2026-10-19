@@ -361,9 +361,9 @@ test.describe('свои провайдеры на изолированном Cla
     expect(errors).toEqual([]);
   });
 
-  test('800×500: плитки и форма без горизонтального скролла в светлой и тёмной темах', async ({}, testInfo) => {
+  test('800×500: плитки и форма без горизонтального скролла в светлой и тёмной темах', async () => {
     // Снимки уходят в папку результатов теста, а не в репозиторий.
-    const shots = testInfo.outputPath('shots');
+    const shots = test.info().outputPath('shots');
     test.setTimeout(120_000);
     const { app, window } = await open();
     await resize(app, 800, 500);

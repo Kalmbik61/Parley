@@ -86,7 +86,6 @@ export function CustomProviderPanel({ providerId, onSaved, onDeleted }: CustomPr
       ++generation.current;
     };
     // Форма сбрасывается только сменой провайдера: правки человека не затираются перечитанным списком.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerId]);
 
   // «Хост слишком старый» — только у подключённого хоста без метода; пока хост не подключён, методов просто не видно.
