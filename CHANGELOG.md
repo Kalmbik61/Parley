@@ -4,6 +4,15 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+Connect your own Anthropic-compatible provider (Kimi, MiniMax, Qwen, DeepSeek, OpenRouter, or any address) as a Claude Code session with its own address, key and models. Your regular Claude Code is not affected: its sign-in, settings and history stay where they were.
+
+### Added
+
+- **Own providers.** Settings → Providers and the "+ Add provider" button in the status bar add a provider from a preset or from your own address, with a name, a key, four model slots (or one model for all), and a "Check" that sends a short test message. Each provider gets its own folder, `~/.parley/providers/<id>/`, with its own sign-in, history and memory. The key is kept in Parley's secrets file and reaches only the process of the provider's session. Requires Claude Code **2.1.302 or newer**.
+- **Bring from Claude Code.** An option that links your `CLAUDE.md`, skills and agents into a provider's folder. These are links: editing them in a provider's session changes the originals your regular Claude sessions use. To change something only for one provider, ask its agent to make a copy first; the agent asks whether a change is for both or only for this provider. MCP servers are not shared: each provider has its own.
+
 ## 0.15.2
 
 The host does far less work while agents run: it reads only what agents append to their logs, and the island and notifications no longer download whole chats. The assistant on the island shows what you send at once, queues the messages you send while it answers instead of cancelling the answer, can address agents in a room with a mention, and its Send button shows that it is sending.
