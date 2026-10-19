@@ -102,10 +102,10 @@ function cardBody(proposal: AssistantProposal, mentions: readonly string[]): JSX
               {S.assistant.card.newRoom} <span className="font-semibold text-foreground">{proposal.where}</span>
             </span>
           </div>
-          <div data-testid="assistant-room-line" className="text-[13px]">
+          <div data-testid="assistant-room-line" className="text-[13px] [overflow-wrap:anywhere]">
             {S.assistant.card.roomLine(proposal.title, proposal.members.join(', '), proposal.lead)}
           </div>
-          {proposal.task === null ? null : <div className="whitespace-pre-wrap border-l-2 border-[var(--color-accent)] pl-2">{proposal.task}</div>}
+          {proposal.task === null ? null : <div className="whitespace-pre-wrap border-l-2 border-[var(--color-accent)] pl-2 [overflow-wrap:anywhere]">{proposal.task}</div>}
         </>
       );
     }
@@ -115,15 +115,23 @@ function cardBody(proposal: AssistantProposal, mentions: readonly string[]): JSX
           <div className="flex min-w-0 items-center gap-2 text-[13px] text-muted-foreground">
             <AssistantMark size={12} />
             <span data-testid="assistant-card-title" className="min-w-0 truncate font-semibold text-foreground">
-              {S.assistant.card.askTitle(decisionVerb(proposal.decision), proposal.target)}
+              {proposal.decision.kind === 'plan' ? S.assistant.card.planTitle(decisionVerb(proposal.decision), proposal.target) : S.assistant.card.askTitle(decisionVerb(proposal.decision), proposal.target)}
             </span>
           </div>
-          <div className="whitespace-pre-wrap">{proposal.card.summary}</div>
+          <div className="whitespace-pre-wrap [overflow-wrap:anywhere]">{proposal.card.summary}</div>
           {proposal.card.detail === null ? null : (
             <pre data-testid="assistant-card-detail" className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-black/20 p-1.5 font-mono text-[12px]">
               {proposal.card.detail}
             </pre>
           )}
+          {/* Выбранные ответы: человек подтверждает именно их; вопрос — первой строкой. */}
+          {proposal.decision.kind === 'question'
+            ? Object.entries(proposal.decision.answers).map(([question, answer]) => (
+                <div key={question} data-testid="assistant-card-answer" className="whitespace-pre-wrap text-[13px] [overflow-wrap:anywhere]">
+                  {S.assistant.card.answerLine(question.split('\n')[0] ?? '', answer)}
+                </div>
+              ))
+            : null}
         </>
       );
     }
@@ -136,7 +144,7 @@ function cardBody(proposal: AssistantProposal, mentions: readonly string[]): JSX
               {proposal.choice === 'accept' ? S.assistant.card.acceptDecision(proposal.target) : S.assistant.card.returnDecision(proposal.proposal.from)}
             </span>
           </div>
-          <div className="max-h-40 overflow-auto whitespace-pre-wrap border-l-2 border-[var(--color-accent)] pl-2">{clip(proposal.proposal.text)}</div>
+          <div className="max-h-40 overflow-auto whitespace-pre-wrap border-l-2 border-[var(--color-accent)] pl-2 [overflow-wrap:anywhere]">{clip(proposal.proposal.text)}</div>
           {proposal.note === null ? null : <div className="text-[13px] text-muted-foreground">{S.assistant.card.note(proposal.note)}</div>}
         </>
       );
@@ -155,7 +163,7 @@ function cardBody(proposal: AssistantProposal, mentions: readonly string[]): JSX
               {S.assistant.wakeNote}
             </div>
           ) : null}
-          <div className="whitespace-pre-wrap border-l-2 border-[var(--color-accent)] pl-2">
+          <div className="whitespace-pre-wrap border-l-2 border-[var(--color-accent)] pl-2 [overflow-wrap:anywhere]">
             {/* Упомянутые — чипами впереди текста, как их нарисует лента комнаты (письмо уйдёт с токенами `@s03`). */}
             {mentions.map((name) => (
               <span key={name} data-testid="assistant-mention" className="mr-1 inline-block rounded-full bg-[color-mix(in_srgb,var(--color-accent)_22%,transparent)] px-[7px] font-semibold">
@@ -258,6 +266,12 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
         {sending === null && host.outcome === 'sent' ? <div data-testid="assistant-sent" className="text-[13px] text-[var(--color-accent)]">{S.assistant.sent}</div> : null}
         {sending === null && host.outcome === 'cancelled' ? <div className="text-[13px] text-muted-foreground">{S.assistant.cancelled}</div> : null}
         {sending === null && host.outcome === 'done' ? <div data-testid="assistant-done" className="text-[13px] text-[var(--color-accent)]">{S.assistant.done}</div> : null}
+        {/* Карточку закрыл хост с причиной (уже отвечена, решение пересмотрено, задача не ушла): карточки уже нет, причина — рядом с итогом. */}
+        {sending === null && proposal === null && props.cardError !== null ? (
+          <div data-testid="assistant-outcome-note" className="text-[13px] text-[var(--status-warning-text)]">
+            {props.cardError}
+          </div>
+        ) : null}
         {proposal === null ? null : (
           <div data-testid="assistant-card" className="flex shrink-0 flex-col gap-2 rounded-md bg-white/5 p-2.5">
             {cardBody(proposal, mentions)}

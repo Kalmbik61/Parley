@@ -58,6 +58,27 @@ describe('стор помощника', () => {
     await store.getState().decide('send');
     expect(store.getState().cardError).toBe('S03 is not running');
   });
+  it('причина закрытия карточки хостом переживает публикацию без карточки; новая карточка её стирает', async () => {
+    const { store } = setup({ call: vi.fn().mockResolvedValue({ applied: false, error: 'Already answered' }) });
+    const proposal = { id: 'p1', target: 'S03', where: 'w', kind: null, text: 't', wake: false };
+    store.getState().applyHost({ ...HOST_IDLE, proposal, phase: 'awaiting-confirm', turn: 1 });
+    const deciding = store.getState().decide('send');
+    store.getState().applyHost({ ...HOST_IDLE, proposal: null, outcome: 'cancelled', turn: 1 });
+    await deciding;
+    expect(store.getState().cardError).toBe('Already answered');
+    store.getState().applyHost({ ...HOST_IDLE, proposal: { ...proposal, id: 'p2' }, phase: 'awaiting-confirm', turn: 2 });
+    expect(store.getState().cardError).toBeNull();
+  });
+  it('ошибка на карточке переживает публикацию с тем же id карточки и стирается новым id', async () => {
+    const { store } = setup({ call: vi.fn().mockResolvedValue({ applied: false, error: 'The agent is not ready for the answer yet — try again' }) });
+    const proposal = { id: 'p1', target: 'S03', where: 'w', kind: null, text: 't', wake: false };
+    store.getState().applyHost({ ...HOST_IDLE, proposal, phase: 'awaiting-confirm', turn: 1 });
+    await store.getState().decide('send');
+    store.getState().applyHost({ ...HOST_IDLE, proposal, phase: 'awaiting-confirm', turn: 2 });
+    expect(store.getState().cardError).toBe('The agent is not ready for the answer yet — try again');
+    store.getState().applyHost({ ...HOST_IDLE, proposal: { ...proposal, id: 'p2' }, phase: 'awaiting-confirm', turn: 3 });
+    expect(store.getState().cardError).toBeNull();
+  });
   it('микрофон кладёт распознанное в поле, не отправляя; таймер выставлен и сброшен', async () => {
     const result = Promise.resolve({ text: 'hello' });
     const { store, deps } = setup({ listen: vi.fn(() => ({ stop: vi.fn(), cancel: vi.fn(), result })) });

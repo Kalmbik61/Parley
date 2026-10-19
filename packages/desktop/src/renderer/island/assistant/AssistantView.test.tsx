@@ -272,8 +272,21 @@ describe('карточки по action', () => {
     expect(screen.getByTestId('assistant-card-title').textContent).toBe('Answer S03 Ruslan?');
     rerender(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: { ...BASE, id: 'p4', action: 'decision', card, decision: { kind: 'plan', choice: 'manual' } } })} />);
     expect(screen.getByTestId('assistant-send').textContent).toBe('Approve each edit');
+    expect(screen.getByTestId('assistant-card-title').textContent).toBe('Approve each edit of S03 Ruslan?');
     rerender(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: { ...BASE, id: 'p5', action: 'decision', card, decision: { kind: 'plan', choice: 'auto-accept' } } })} />);
     expect(screen.getByTestId('assistant-send').textContent).toBe('Accept plan');
+    expect(screen.getByTestId('assistant-card-title').textContent).toBe('Accept plan of S03 Ruslan?');
+  });
+
+  it('карточка вопроса показывает выбранные ответы по строке; у разрешения строк ответов нет', () => {
+    const card = { cardId: 'c-1', kind: 'question', summary: 's', detail: null } as const;
+    const { rerender } = render(
+      <AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: { ...BASE, action: 'decision', card, decision: { kind: 'question', answers: { 'Which db?\nsecond line': 'Postgres', 'Why?': 'Because' } } } })} />,
+    );
+    const lines = screen.getAllByTestId('assistant-card-answer');
+    expect(lines.map((line) => line.textContent)).toEqual(['Which db? → Postgres', 'Why? → Because']);
+    rerender(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: { ...BASE, id: 'p9', action: 'decision', card, decision: { kind: 'permission', behavior: 'allow' } } })} />);
+    expect(screen.queryByTestId('assistant-card-answer')).toBeNull();
   });
 
   it('room-decision return: заголовок с ведущим, текст и «Note: …»; accept — заголовок с комнатой', () => {
@@ -313,8 +326,22 @@ describe('карточки по action', () => {
   it('outcome done показывает «Done ✓»; ошибка карточки остаётся на карточке', () => {
     const { rerender } = render(<AssistantView {...props({}, { outcome: 'done' })} />);
     expect(screen.getByTestId('assistant-done').textContent).toBe('Done ✓');
+    expect(screen.queryByTestId('assistant-outcome-note')).toBeNull();
     rerender(<AssistantView {...props({ cardError: 'Already answered' }, { phase: 'awaiting-confirm', proposal: { ...BASE, action: 'room', title: 'Auth', members: ['S01 Ann'], lead: 'S01 Ann', task: null } })} />);
     expect(screen.getByTestId('assistant-card').textContent).toContain('Already answered');
+    expect(screen.queryByTestId('assistant-outcome-note')).toBeNull();
+  });
+
+  it('карточку закрыл хост (cancelled) — причина видна рядом с итогом', () => {
+    render(<AssistantView {...props({ cardError: 'Already answered' }, { outcome: 'cancelled', proposal: null })} />);
+    expect(screen.getByTestId('assistant-outcome-note').textContent).toBe('Already answered');
+    expect(screen.getByText('Cancelled')).toBeTruthy();
+  });
+
+  it('outcome done с причиной — заметка рядом с «Done ✓»', () => {
+    render(<AssistantView {...props({ cardError: 'Room created, but the task was not sent' }, { outcome: 'done', proposal: null })} />);
+    expect(screen.getByTestId('assistant-done').textContent).toBe('Done ✓');
+    expect(screen.getByTestId('assistant-outcome-note').textContent).toBe('Room created, but the task was not sent');
   });
 
   it('Enter в пустом поле подтверждает карточку не-письма', () => {

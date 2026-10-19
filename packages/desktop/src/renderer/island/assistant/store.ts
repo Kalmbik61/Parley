@@ -123,7 +123,7 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
       }
       const text = items.map((item) => item.text).join('\n\n');
       const sending: Sending = { id: crypto.randomUUID(), text, turn: state.host.turn, instance: state.host.instance ?? null };
-      set({ queue: state.queue.slice(items.length), sending });
+      set({ queue: state.queue.slice(items.length), sending, cardError: null });
       const config = deps.config();
       deps.call('assistant.ask', { text, provider: config.provider, model: config.model, language: config.language, askId: sending.id }).catch(() => {
         if (get().sending === sending) giveBack(text);
@@ -201,7 +201,8 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
           ...(accepted ? { sending: null, history: [...state.history, ...archived].slice(-HISTORY_MAX) } : {}),
           ...(sending !== null && !accepted && sending.instance === null && host.instance !== undefined ? { sending: { ...sending, instance: host.instance } } : {}),
           ...(reveal ? { collapsed: false, byHover: false } : {}),
-          ...(host.proposal === null ? { cardError: null } : {}),
+          // Ошибку на карточке стирает только новая карточка: публикация той же (смена фазы) её не трогает.
+          ...(host.proposal !== null && host.proposal.id !== previous.proposal?.id ? { cardError: null } : {}),
         });
         if (restarted && sending !== null) giveBack(sending.text);
         pump();
@@ -225,7 +226,7 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         // Вопрос в пути тоже отменяется: хост бросит ход, который ещё запускается.
         if (get().sending !== null) void deps?.call('assistant.cancel', {});
         else stopTurn();
-        set({ open: false, collapsed: false, byHover: false, input: 'idle', level: 0, listenStartedAt: null, notice: null, queue: [], sending: null, history: [] });
+        set({ open: false, collapsed: false, byHover: false, input: 'idle', level: 0, listenStartedAt: null, notice: null, cardError: null, queue: [], sending: null, history: [] });
         deps?.keyboard(false);
       },
       collapse: () => {
@@ -272,7 +273,7 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         }
       },
       reset: async () => {
-        set({ queue: [], sending: null, history: [] });
+        set({ queue: [], sending: null, history: [], cardError: null });
         await deps?.call('assistant.reset', {});
       },
     };

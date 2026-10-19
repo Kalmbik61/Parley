@@ -90,11 +90,12 @@ const sameRect = (a: IslandHitRect | null, b: IslandHitRect | null): boolean =>
 
 /**
  * Строка «needs you» в виде помощника. Когда карточка помощника сама решает запрос первой ждущей сессии (`decision`
- * на неё), строка прячется: тот же запрос не показывают дважды.
+ * на неё) и это единственный запрос, строка прячется: тот же запрос не показывают дважды. Если запросов несколько,
+ * строка остаётся: она говорит и о других.
  */
 function pendingFor(name: string | null, total: number, proposal: AssistantProposal | null): { name: string; total: number } | null {
   if (name === null) return null;
-  if (proposal?.action === 'decision' && proposal.target === name) return null;
+  if (total === 1 && proposal?.action === 'decision' && proposal.target === name) return null;
   return { name, total };
 }
 

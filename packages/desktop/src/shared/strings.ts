@@ -2222,10 +2222,6 @@ export const S = {
     sent: 'Sent ✓',
     /** Действие по карточке выполнено (комната создана, решение принято). */
     done: 'Done ✓',
-    /** Карточку уже закрыли в другом месте. */
-    alreadyAnswered: 'Already answered',
-    /** Хост пересобрал карточку — нужно посмотреть заново. */
-    revised: 'Revised, look again',
     /** Карточки подтверждений: комната, решение, запрос разрешения. */
     card: {
       newRoom: 'New room in',
@@ -2242,6 +2238,10 @@ export const S = {
       accept: 'Accept',
       return: 'Return',
       askTitle: (verb: string, name: string): string => `${verb} ${name}?`,
+      /** Заголовок решения по плану: «Accept plan of S03 Ruslan?». */
+      planTitle: (verb: string, name: string): string => `${verb} of ${name}?`,
+      /** Строка выбранного ответа на карточке вопроса: «вопрос → ответ». */
+      answerLine: (question: string, answer: string): string => `${question} → ${answer}`,
       note: (text: string): string => `Note: ${text}`,
     },
     /** Подпись карточки в свёрнутом виде. */
