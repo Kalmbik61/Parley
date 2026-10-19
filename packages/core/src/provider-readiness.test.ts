@@ -71,3 +71,28 @@ it('probeCliVersion runs only --version in the supplied environment', async () =
   await writeFile(binary, '#!/bin/sh\n[ "$1" = "--version" ] || exit 1\necho "2.1.287 (Claude Code)"\n', { mode: 0o755 });
   expect(await probeCliVersion('claude', 30_000, env())).toBe('2.1.287');
 });
+
+describe('providerReadiness своих провайдеров (спека 5.1)', () => {
+  const record = {
+    id: 'custom-kimi', label: 'Kimi', preset: null, baseUrl: 'https://api.moonshot.ai/anthropic', auth: 'bearer' as const,
+    models: { opus: 'm', sonnet: 'm', haiku: 'm', subagent: 'm' }, contextWindow: null, linkClaude: true,
+  };
+  it('нет ключа → needs key; у loopback-адреса ключ не нужен', async () => {
+    const { customProviderEntry } = await import('./custom-providers.js');
+    const { providerReadinessError } = await import('./providers.js');
+    const remote = customProviderEntry(record, home);
+    const readiness = await providerReadiness(remote, { env: env(), version: '2.1.302', keyPresent: false });
+    expect(readiness.needs).toBe('key');
+    expect(providerReadinessError(remote, readiness)).toBe('Kimi requires a saved key in Settings → Providers');
+    const local = customProviderEntry({ ...record, baseUrl: 'http://localhost:4000' }, home);
+    expect(await providerReadiness(local, { env: env(), version: '2.1.302', keyPresent: false })).toMatchObject({ needs: null });
+  });
+  it('claude 2.1.301 → needs cli; текст называет имя провайдера, а не GLM', async () => {
+    const { customProviderEntry } = await import('./custom-providers.js');
+    const { providerReadinessError } = await import('./providers.js');
+    const entry = customProviderEntry(record, home);
+    const readiness = await providerReadiness(entry, { env: env(), version: '2.1.301', keyPresent: true });
+    expect(readiness.needs).toBe('cli');
+    expect(providerReadinessError(entry, readiness)).toBe('Kimi requires Claude Code 2.1.302 or newer; install or update the CLI and check again');
+  });
+});

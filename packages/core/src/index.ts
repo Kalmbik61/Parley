@@ -107,6 +107,21 @@ export {
   supportsEffort,
   supportsModel,
 } from './providers.js';
+export {
+  CUSTOM_MIN_VERSION,
+  CUSTOM_PROVIDER_PREFIX,
+  baseUrlError,
+  customProviderDir,
+  customProviderEntry,
+  customProviderSecret,
+  customProvidersFile,
+  isCustomProviderId,
+  isLoopbackUrl,
+  readCustomProviders,
+  slugProviderId,
+  writeCustomProviders,
+} from './custom-providers.js';
+export type { CustomProviderRecord } from './custom-providers.js';
 export { CLAUDE_EFFORTS, LEGACY_EFFORTS, effortLabel } from './provider-models.js';
 export type { EffortOption, ModelOption } from './provider-models.js';
 export type {

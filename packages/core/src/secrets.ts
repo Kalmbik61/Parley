@@ -5,7 +5,7 @@ import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { parleyHome } from './work/store.js';
 
-export type SecretId = 'zai';
+export type SecretId = 'zai' | `custom:${string}`;
 
 /** Ошибка формата никогда не содержит введённый ключ. */
 export class SecretFormatError extends Error {
