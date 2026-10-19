@@ -2242,6 +2242,7 @@ export const S = {
       accept: 'Accept',
       return: 'Return',
       askTitle: (verb: string, name: string): string => `${verb} ${name}?`,
+      note: (text: string): string => `Note: ${text}`,
     },
     /** Подпись карточки в свёрнутом виде. */
     miniCard: 'Card',

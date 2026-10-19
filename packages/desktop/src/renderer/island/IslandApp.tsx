@@ -44,7 +44,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { refKey } from '@parley/protocol';
+import { refKey, type AssistantProposal } from '@parley/protocol';
 import { markSeenBatches, type IslandBridge, type IslandConfig, type IslandHitRect } from '../../shared/island.js';
 import type { IslandAnchor } from '../../shared/ui-types.js';
 import { isoMs } from '../lib/iso-time.js';
@@ -87,6 +87,16 @@ const releaseHeld = (current: Set<string>): Set<string> => (current.size === 0 ?
 /** Равны ли области (`null` равен только `null`). */
 const sameRect = (a: IslandHitRect | null, b: IslandHitRect | null): boolean =>
   a === null || b === null ? a === b : a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+
+/**
+ * Строка «needs you» в виде помощника. Когда карточка помощника сама решает запрос первой ждущей сессии (`decision`
+ * на неё), строка прячется: тот же запрос не показывают дважды.
+ */
+function pendingFor(name: string | null, total: number, proposal: AssistantProposal | null): { name: string; total: number } | null {
+  if (name === null) return null;
+  if (proposal?.action === 'decision' && proposal.target === name) return null;
+  return { name, total };
+}
 
 /**
  * Общий выход из режима помощника: идущий ход сворачивается в мини-вид, иначе режим закрывается. `true` — режим был
@@ -366,7 +376,7 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
           history: assistant.history,
           deciding: assistant.deciding,
           hotkey: config.assistant.hotkey,
-          pending: items.length === 0 ? null : { name: labels.get(sessionKeyOf(items[0]!))?.session ?? '', total: items.length },
+          pending: pendingFor(items.length === 0 ? null : (labels.get(sessionKeyOf(items[0]!))?.session ?? ''), items.length, assistant.host.proposal),
           onDraft: (text) => useAssistantStore.getState().setDraft(text),
           onSubmit: (text) => void useAssistantStore.getState().submit(text),
           onMic: () => useAssistantStore.getState().toggleListening(),

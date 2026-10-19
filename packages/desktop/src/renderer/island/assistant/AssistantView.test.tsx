@@ -6,7 +6,7 @@
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AssistantState } from '@parley/protocol';
+import type { AssistantProposal, AssistantState } from '@parley/protocol';
 import { AssistantView, type AssistantViewProps } from './AssistantView.js';
 import { HOST_IDLE } from './store.js';
 
@@ -220,5 +220,110 @@ describe('вид помощника', () => {
     render(<AssistantView {...props({ input: 'transcribing' })} />);
     expect((screen.getByTestId('assistant-mic') as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByTestId('assistant-mic-elapsed')).toBeNull();
+  });
+});
+
+describe('карточки по action', () => {
+  const BASE = { id: 'p2', target: 'S03 Ruslan', where: 'Parley · Backend', text: 'text' } as const;
+  const show = (proposal: AssistantProposal, host: Partial<AssistantState> = {}): void => {
+    render(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal, ...host })} />);
+  };
+
+  it('room: заголовок, строка участников, задача и кнопка Create (testid тот же)', () => {
+    show({ ...BASE, action: 'room', title: 'Auth', members: ['S01 Ann', 'S03 Ruslan'], lead: 'S01 Ann', task: 'Split the login work.' });
+    const card = screen.getByTestId('assistant-card');
+    expect(card.textContent).toContain('New room in');
+    expect(card.textContent).toContain('Parley · Backend');
+    expect(screen.getByTestId('assistant-room-line').textContent).toBe('Auth · S01 Ann, S03 Ruslan · lead S01 Ann');
+    expect(card.textContent).toContain('Split the login work.');
+    expect(screen.getByTestId('assistant-send').textContent).toBe('Create');
+    expect(screen.getByTestId('assistant-cancel')).toBeTruthy();
+  });
+
+  it('room без задачи не рисует блок задачи', () => {
+    show({ ...BASE, action: 'room', title: 'Auth', members: ['S01 Ann'], lead: 'S01 Ann', task: null });
+    expect(screen.getByTestId('assistant-card').querySelector('.border-l-2')).toBeNull();
+  });
+
+  it('decision: allow + always — заголовок, суть, подробности в pre и кнопка «Allow, don\'t ask again»', () => {
+    show({
+      ...BASE,
+      action: 'decision',
+      card: { cardId: 'c-1', kind: 'permission', summary: 'Run a shell command', detail: 'rm -rf build' },
+      decision: { kind: 'permission', behavior: 'allow', always: true },
+    });
+    expect(screen.getByTestId('assistant-card-title').textContent).toBe('Allow S03 Ruslan?');
+    expect(screen.getByTestId('assistant-card').textContent).toContain('Run a shell command');
+    const detail = screen.getByTestId('assistant-card-detail');
+    expect(detail.tagName).toBe('PRE');
+    expect(detail.textContent).toBe('rm -rf build');
+    expect(detail.className).toContain('max-h-40');
+    expect(screen.getByTestId('assistant-send').textContent).toBe("Allow, don't ask again");
+  });
+
+  it('decision: deny, question и plan — подписи кнопок и глаголы заголовка', () => {
+    const card = { cardId: 'c-1', kind: 'permission', summary: 's', detail: null } as const;
+    const { rerender } = render(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: { ...BASE, action: 'decision', card, decision: { kind: 'permission', behavior: 'deny' } } })} />);
+    expect(screen.getByTestId('assistant-card-title').textContent).toBe('Deny S03 Ruslan?');
+    expect(screen.getByTestId('assistant-send').textContent).toBe('Deny');
+    expect(screen.queryByTestId('assistant-card-detail')).toBeNull();
+    rerender(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: { ...BASE, id: 'p3', action: 'decision', card, decision: { kind: 'question', answers: { q1: 'Yes' } } } })} />);
+    expect(screen.getByTestId('assistant-send').textContent).toBe('Answer');
+    expect(screen.getByTestId('assistant-card-title').textContent).toBe('Answer S03 Ruslan?');
+    rerender(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: { ...BASE, id: 'p4', action: 'decision', card, decision: { kind: 'plan', choice: 'manual' } } })} />);
+    expect(screen.getByTestId('assistant-send').textContent).toBe('Approve each edit');
+    rerender(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: { ...BASE, id: 'p5', action: 'decision', card, decision: { kind: 'plan', choice: 'auto-accept' } } })} />);
+    expect(screen.getByTestId('assistant-send').textContent).toBe('Accept plan');
+  });
+
+  it('room-decision return: заголовок с ведущим, текст и «Note: …»; accept — заголовок с комнатой', () => {
+    const proposal = { proposalId: 'rp-1', rev: 1, kind: 'decision', from: 'S01 Ruslan', text: 'Use a queue.' } as const;
+    const { rerender } = render(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: { ...BASE, target: 'Auth', action: 'room-decision', proposal, choice: 'return', note: 'Add tests first.' } })} />);
+    expect(screen.getByTestId('assistant-card-title').textContent).toBe('Return to S01 Ruslan for rework?');
+    expect(screen.getByTestId('assistant-card').textContent).toContain('Use a queue.');
+    expect(screen.getByTestId('assistant-card').textContent).toContain('Note: Add tests first.');
+    expect(screen.getByTestId('assistant-send').textContent).toBe('Return');
+    rerender(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: { ...BASE, id: 'p6', target: 'Auth', action: 'room-decision', proposal, choice: 'accept', note: null } })} />);
+    expect(screen.getByTestId('assistant-card-title').textContent).toBe('Accept decision in Auth?');
+    expect(screen.getByTestId('assistant-send').textContent).toBe('Accept');
+    expect(screen.getByTestId('assistant-card').textContent).not.toContain('Note:');
+  });
+
+  it('room-decision обрезает текст предложения до 1500 знаков', () => {
+    const proposal = { proposalId: 'rp-1', rev: 1, kind: 'decision', from: 'S01 Ruslan', text: 'x'.repeat(2000) } as const;
+    show({ ...BASE, target: 'Auth', action: 'room-decision', proposal, choice: 'accept', note: null });
+    expect(screen.getByTestId('assistant-card').textContent).toContain('x'.repeat(1500));
+    expect(screen.getByTestId('assistant-card').textContent).not.toContain('x'.repeat(1501));
+  });
+
+  it('room-decision с текстом длиннее 1500 знаков кончается многоточием, короткий — без него', () => {
+    const base = { proposalId: 'rp-1', rev: 1, kind: 'decision', from: 'S01 Ruslan' } as const;
+    const { rerender } = render(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: { ...BASE, target: 'Auth', action: 'room-decision', proposal: { ...base, text: 'y'.repeat(1600) }, choice: 'accept', note: null } })} />);
+    expect(screen.getByTestId('assistant-card').textContent).toContain(`${'y'.repeat(1500)}…`);
+    rerender(<AssistantView {...props({}, { phase: 'awaiting-confirm', proposal: { ...BASE, id: 'p8', target: 'Auth', action: 'room-decision', proposal: { ...base, text: 'short' }, choice: 'accept', note: null } })} />);
+    expect(screen.getByTestId('assistant-card').textContent).not.toContain('…');
+  });
+
+  it('карточка без action (старый хост) — письмо с кнопкой Send', () => {
+    show({ id: 'p7', target: 'Auth', where: 'Parley · Backend', text: 'Please start with the tests.', kind: null, wake: false });
+    expect(screen.getByTestId('assistant-card').textContent).toContain('Please start with the tests.');
+    expect(screen.getByTestId('assistant-send').textContent).toBe('Send');
+  });
+
+  it('outcome done показывает «Done ✓»; ошибка карточки остаётся на карточке', () => {
+    const { rerender } = render(<AssistantView {...props({}, { outcome: 'done' })} />);
+    expect(screen.getByTestId('assistant-done').textContent).toBe('Done ✓');
+    rerender(<AssistantView {...props({ cardError: 'Already answered' }, { phase: 'awaiting-confirm', proposal: { ...BASE, action: 'room', title: 'Auth', members: ['S01 Ann'], lead: 'S01 Ann', task: null } })} />);
+    expect(screen.getByTestId('assistant-card').textContent).toContain('Already answered');
+  });
+
+  it('Enter в пустом поле подтверждает карточку не-письма', () => {
+    const onDecide = vi.fn();
+    render(<AssistantView {...props({ onDecide }, { phase: 'awaiting-confirm', proposal: { ...BASE, action: 'room', title: 'Auth', members: ['S01 Ann'], lead: 'S01 Ann', task: null } })} />);
+    act(() => {
+      vi.advanceTimersByTime(600);
+    });
+    submitForm();
+    expect(onDecide).toHaveBeenCalledWith('send');
   });
 });

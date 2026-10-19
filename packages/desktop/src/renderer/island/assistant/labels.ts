@@ -37,7 +37,8 @@ export function miniLabel(host: AssistantState, input: InputPhase, sending = fal
     case 'answering':
       return S.assistant.miniWorking;
     case 'awaiting-confirm':
-      return S.assistant.miniConfirm;
+      // Не письмо (комната, решение): «Confirm send» было бы неправдой.
+      return (host.proposal?.action ?? 'message') === 'message' ? S.assistant.miniConfirm : S.assistant.miniCard;
     default:
       return null;
   }

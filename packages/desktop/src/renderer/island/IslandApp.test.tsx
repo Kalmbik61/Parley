@@ -25,6 +25,7 @@ import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { DONE_HOLD_MS, IDLE_RETRACT_MS, IslandApp, RETRACT_MORPH_MS } from './IslandApp.js';
 import { HOST_IDLE, useAssistantStore } from './assistant/store.js';
+import { sessionLabels } from './model.js';
 import { PULL_EXPAND_PX } from './IslandTab.js';
 import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
@@ -477,6 +478,43 @@ describe('проводка острова', () => {
       expect(screen.queryByTestId('assistant-view')).toBeNull();
       expect(screen.getByTestId('assistant-mini').textContent).toBe('Thinking·');
       expect(island.keyboard).toHaveBeenLastCalledWith(false);
+    });
+
+    it('строка needs you прячется, когда карточка помощника решает запрос первой ждущей сессии', async () => {
+      const { assistantOpen, blocked } = await renderAssistant();
+      blocked('s-01');
+      assistantOpen({ listen: false });
+      await screen.findByTestId('assistant-view');
+      expect(await screen.findByTestId('assistant-pending')).toBeTruthy();
+      const name = sessionLabels(ENTRIES).get(refKey(ref('s-01')))!.session;
+      const card = { cardId: 'c-1', kind: 'permission', summary: 'Run a shell command', detail: 'rm -rf build' } as const;
+      act(() => {
+        useAssistantStore.getState().applyHost({
+          ...HOST_IDLE,
+          phase: 'awaiting-confirm',
+          turn: 1,
+          proposal: { id: 'p1', target: name, where: 'Parley · proj', text: 'Allow?', action: 'decision', card, decision: { kind: 'permission', behavior: 'allow' } },
+        });
+      });
+      expect(screen.getByTestId('assistant-card')).toBeTruthy();
+      expect(screen.queryByTestId('assistant-pending')).toBeNull();
+    });
+
+    it('строка needs you остаётся, если карточка решения — про другую сессию', async () => {
+      const { assistantOpen, blocked } = await renderAssistant();
+      blocked('s-01');
+      assistantOpen({ listen: false });
+      await screen.findByTestId('assistant-view');
+      const card = { cardId: 'c-2', kind: 'permission', summary: 'ls', detail: null } as const;
+      act(() => {
+        useAssistantStore.getState().applyHost({
+          ...HOST_IDLE,
+          phase: 'awaiting-confirm',
+          turn: 1,
+          proposal: { id: 'p2', target: 'S99 Nobody', where: 'Parley · proj', text: 'Allow?', action: 'decision', card, decision: { kind: 'permission', behavior: 'allow' } },
+        });
+      });
+      expect(await screen.findByTestId('assistant-pending')).toBeTruthy();
     });
 
     it('ответ после хода остаётся на острове, пока человек сам его не закроет', async () => {
