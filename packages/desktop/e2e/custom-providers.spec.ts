@@ -14,7 +14,6 @@ import { makeTempHome, makeTempProject } from './tmp.js';
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
 const stub = path.join(dirname, 'stub-custom-agent.mjs');
-const shots = path.resolve(dirname, '../../../.omc/reviews/shots');
 const FAKE_KEY = 'e2e-fake-custom-key-never-valid-0001';
 
 interface Ref { projectPath: string; workId: string; sessionId: string }
@@ -146,7 +145,7 @@ test.describe('свои провайдеры на изолированном Cla
     return dialog;
   }
   /** «+» - Kimi - ключ - Save: готовый провайдер `custom-kimi` с настоящей папкой на диске. */
-  async function createKimi(window: Page, label = 'Kimi'): Promise<Locator> {
+  async function createKimi(window: Page, label = 'Kimi', id = 'custom-kimi'): Promise<Locator> {
     const dialog = await openAdd(window);
     await dialog.locator('[data-vendor-tile="kimi"]').click();
     const form = dialog.locator('[data-custom-provider-form]');
@@ -154,8 +153,8 @@ test.describe('свои провайдеры на изолированном Cla
     await form.getByLabel('Name in Parley', { exact: true }).fill(label);
     await form.getByLabel('API key', { exact: true }).fill(FAKE_KEY);
     await form.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(dialog.locator('[data-provider-pill="custom-kimi"]')).toHaveAttribute('aria-checked', 'true');
-    await expect(dialog.locator('[data-custom-provider-form="custom-kimi"]')).toBeVisible();
+    await expect(dialog.locator(`[data-provider-pill="${id}"]`)).toHaveAttribute('aria-checked', 'true');
+    await expect(dialog.locator(`[data-custom-provider-form="${id}"]`)).toBeVisible();
     return dialog;
   }
   async function seed(window: Page): Promise<string> {
@@ -342,16 +341,18 @@ test.describe('свои провайдеры на изолированном Cla
     expect(await readFile(path.join(home, 'secrets.json'), 'utf8').catch(() => '')).not.toContain('custom:custom-kimi');
     expect(await exists(folder)).toBe(true);
 
-    // Повторное создание: тот же id, и Delete с удалением папки.
+    // Повторное создание: папка прежнего осталась, поэтому id новый (custom-kimi-2); Delete с удалением его папки.
     await window.keyboard.press('Escape');
-    const again = await createKimi(window);
-    expect((await stored()).map((item) => item.id)).toEqual(['custom-kimi']);
+    const again = await createKimi(window, 'Kimi', 'custom-kimi-2');
+    const folderAgain = providerDir('custom-kimi-2');
+    expect((await stored()).map((item) => item.id)).toEqual(['custom-kimi-2']);
+    expect(await exists(folder)).toBe(true);
     await again.locator('[data-custom-provider-form]').getByRole('button', { name: 'Delete provider', exact: true }).click();
     const confirmAgain = again.getByRole('group', { name: 'Delete provider', exact: true });
     await confirmAgain.getByRole('checkbox', { name: 'Also delete its folder (history)', exact: true }).click();
     await confirmAgain.getByRole('button', { name: 'Delete', exact: true }).click();
-    await expect(again.locator('[data-provider-pill="custom-kimi"]')).toHaveCount(0);
-    await expect.poll(() => exists(folder)).toBe(false);
+    await expect(again.locator('[data-provider-pill="custom-kimi-2"]')).toHaveCount(0);
+    await expect.poll(() => exists(folderAgain)).toBe(false);
     expect(await stored()).toEqual([]);
     // Оригиналы в <HOME>/.claude целы: удаление папки сняло ссылки, а не их цели.
     expect(await tree(source)).toEqual(sourceBefore);
@@ -360,7 +361,9 @@ test.describe('свои провайдеры на изолированном Cla
     expect(errors).toEqual([]);
   });
 
-  test('800×500: плитки и форма без горизонтального скролла в светлой и тёмной темах', async () => {
+  test('800×500: плитки и форма без горизонтального скролла в светлой и тёмной темах', async ({}, testInfo) => {
+    // Снимки уходят в папку результатов теста, а не в репозиторий.
+    const shots = testInfo.outputPath('shots');
     test.setTimeout(120_000);
     const { app, window } = await open();
     await resize(app, 800, 500);
