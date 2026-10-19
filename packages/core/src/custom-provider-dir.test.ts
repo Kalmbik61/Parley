@@ -258,6 +258,18 @@ describe('prepareCustomProviderDir', () => {
   });
 });
 
+describe('prepareCustomProviderDir: параллельные запуски одного провайдера', () => {
+  it('3-5 одновременных вызовов не падают, ссылки верные', async () => {
+    for (const n of [3, 5]) {
+      await rm(dir, { recursive: true, force: true });
+      await Promise.all(Array.from({ length: n }, () => prepare()));
+      expect(await readlink(path.join(dir, 'CLAUDE.md'))).toBe(path.join(claudeDir, 'CLAUDE.md'));
+      expect(await readlink(path.join(dir, 'skills', 'x'))).toBe(path.join(claudeDir, 'skills', 'x'));
+      expect(await readlink(path.join(dir, 'agents', 'a.md'))).toBe(path.join(claudeDir, 'agents', 'a.md'));
+    }
+  });
+});
+
 describe('removeCustomProviderDir', () => {
   it('удаляет папку, ссылки удаляются как ссылки (источники целы)', async () => {
     await prepare();
@@ -295,6 +307,17 @@ describe('removeCustomProviderDir', () => {
 
 describe('mirrorProjectTrust (спека 6.2, К18)', () => {
   const userFile = (): string => path.join(root, 'user.claude.json');
+
+  it('симлинк на файл человека читается по ссылке', async () => {
+    const real = path.join(root, 'dotfiles.claude.json');
+    await writeFile(real, JSON.stringify({ projects: { '/work/app': { hasTrustDialogAccepted: true } } }));
+    await symlink(real, userFile());
+    await prepare();
+    expect(await mirrorProjectTrust(record.id, '/work/app', { userClaudeJson: userFile(), home })).toBe(true);
+    expect(((await json(path.join(dir, '.claude.json')))['projects'] as Record<string, unknown>)['/work/app']).toEqual({
+      hasTrustDialogAccepted: true,
+    });
+  });
 
   it('доверие для cwd переносится; прочие поля провайдера сохранены; файл пользователя побайтно прежний', async () => {
     const text = JSON.stringify({ projects: { '/work/app': { hasTrustDialogAccepted: true, allowedTools: [] } } });
@@ -408,9 +431,14 @@ describe('syncApiKeyApproval (спека 6.2, К17)', () => {
   it('хвост ключа не попадает никуда, кроме .claude.json провайдера', async () => {
     await prepare();
     await syncApiKeyApproval(record.id, KEY, home);
-    expect(await snapshot(claudeDir)).not.toContain(KEY);
-    for (const name of await readdir(claudeDir)) {
-      expect((await readFile(path.join(claudeDir, name)).catch(() => Buffer.from(''))).toString()).not.toContain(KEY.slice(-20));
-    }
+    // Рекурсивно, ссылки не раскрываются: ищем в настоящих файлах папки Claude Code человека.
+    const walk = async (current: string): Promise<void> => {
+      for (const entry of await readdir(current, { withFileTypes: true })) {
+        const full = path.join(current, entry.name);
+        if (entry.isDirectory()) await walk(full);
+        else if (entry.isFile()) expect((await readFile(full)).toString()).not.toContain(KEY.slice(-20));
+      }
+    };
+    await walk(claudeDir);
   });
 });

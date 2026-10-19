@@ -41,8 +41,12 @@ const statOk = (target: string): Promise<boolean> =>
   );
 
 /** Читает JSON-объект: `missing` — файла нет, `broken` — не разобрался или не объект/не обычный файл (не трогаем). */
-async function readObject(file: string): Promise<{ state: 'ok'; data: Record<string, unknown> } | { state: 'missing' | 'broken' }> {
-  const info = await lstatOrNull(file);
+async function readObject(
+  file: string,
+  options: { follow?: boolean } = {},
+): Promise<{ state: 'ok'; data: Record<string, unknown> } | { state: 'missing' | 'broken' }> {
+  // `follow` — только для файла человека (чтение): симлинк на него (менеджеры дотфайлов) не ломает перенос доверия.
+  const info = await (options.follow === true ? stat(file) : lstat(file)).catch(() => null);
   if (info === null) return { state: 'missing' };
   if (!info.isFile()) return { state: 'broken' };
   try {
@@ -92,13 +96,21 @@ async function reconcileLink(link: string, source: string, name: string, parent:
   const sourceAlive = want && (await statOk(source));
   if (info !== null) {
     if (!info.isSymbolicLink()) return; // настоящая запись побеждает
-    const current = await readlink(link);
+    const current = await readlink(link).catch(() => null);
+    if (current === null) return; // ссылку убрал параллельный запуск того же провайдера
     if (sourceAlive && current === source && (await statOk(link))) return;
     const dangling = !(await statOk(link));
     if (!(dangling || looksLikeOurLink(current, name, parent))) return; // чужая живая ссылка
     await rm(link, { force: true }); // rm снимает саму ссылку и не заходит в цель
   }
-  if (sourceAlive) await symlink(source, link);
+  if (sourceAlive) {
+    try {
+      await symlink(source, link);
+    } catch (error) {
+      // Параллельный запуск того же провайдера успел раньше: запись на месте — не ошибка.
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || (await lstatOrNull(link)) === null) throw error;
+    }
+  }
 }
 
 async function reconcileItems(
@@ -119,7 +131,7 @@ async function reconcileItems(
   const names = sourceInfo?.isDirectory() ? (await readdir(source)).filter((name) => !name.startsWith('.')) : [];
   if (targetInfo === null) {
     if (names.length === 0) return;
-    await mkdir(target, { mode: 0o700 });
+    await mkdir(target, { recursive: true, mode: 0o700 });
   }
   for (const name of names) {
     await reconcileLink(path.join(target, name), path.join(source, name), name, folder, true);
@@ -163,15 +175,13 @@ export async function prepareCustomProviderDir(record: CustomProviderRecord, opt
   );
 
   const want = record.linkClaude;
-  await reconcileLink(
-    path.join(dir, 'CLAUDE.md'),
-    path.join(options.claudeConfigDir, 'CLAUDE.md'),
-    'CLAUDE.md',
-    null,
-    want,
-  );
-  await reconcileItems(dir, options.claudeConfigDir, 'skills', want, warn);
-  await reconcileItems(dir, options.claudeConfigDir, 'agents', want, warn);
+  for (const item of LINKED_CLAUDE_ITEMS) {
+    if (item === 'CLAUDE.md') {
+      await reconcileLink(path.join(dir, item), path.join(options.claudeConfigDir, item), item, null, want);
+    } else {
+      await reconcileItems(dir, options.claudeConfigDir, item, want, warn);
+    }
+  }
 }
 
 /**
@@ -198,7 +208,7 @@ export async function mirrorProjectTrust(
 ): Promise<boolean> {
   const dir = customProviderDir(id, options.home ?? parleyHome());
   if ((await lstatOrNull(dir))?.isDirectory() !== true) return false;
-  const user = await readObject(options.userClaudeJson);
+  const user = await readObject(options.userClaudeJson, { follow: true });
   if (user.state !== 'ok' || !isRecord(user.data['projects'])) return false;
   const projects = user.data['projects'];
   const session = path.resolve(cwd);

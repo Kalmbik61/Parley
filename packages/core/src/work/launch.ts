@@ -161,7 +161,8 @@ async function writtenBrief(
 
 /**
  * Есть ли у Claude Code разговор с этим id: файл `<id>.jsonl` в каком-нибудь каталоге проекта одного из
- * корней истории (`claudeProjectRoots`: `$CLAUDE_CONFIG_DIR/projects`, `~/.claude/projects`; тесты и E2E
+ * корней истории (`claudeProjectRoots`: `$CLAUDE_CONFIG_DIR/projects`, `~/.claude/projects` и `projects` папок своих
+ * провайдеров `~/.parley/providers/custom-*`; тесты и E2E
  * подменяют их `PARLEY_CLAUDE_PROJECTS_DIR`). Каталог по cwd не вычисляется: имя ему строит Claude Code, и у
  * сессии в worktree оно своё.
  *

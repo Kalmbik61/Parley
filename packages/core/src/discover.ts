@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs';
+import { readdirSync, type Dirent } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -52,7 +52,7 @@ export function claudeProjectRoots(
  * Синхронно, только пути; нет каталога `providers` — `[]`.
  */
 export function customProviderProjectRoots(home: string = parleyHome()): string[] {
-  let entries: import('node:fs').Dirent[];
+  let entries: Dirent[];
   try {
     entries = readdirSync(path.join(home, 'providers'), { withFileTypes: true });
   } catch {
@@ -97,7 +97,7 @@ export interface DiscoveredSession {
 const AGENT_PREFIX = 'agent-';
 const JSONL = '.jsonl';
 
-async function readDirSafe(dir: string): Promise<import('node:fs').Dirent[]> {
+async function readDirSafe(dir: string): Promise<Dirent[]> {
   try {
     return await readdir(dir, { withFileTypes: true });
   } catch {
