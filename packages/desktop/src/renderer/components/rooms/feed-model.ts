@@ -383,7 +383,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       return {
         id: message.id,
         sender: { kind, provider: kind === 'agent' ? providerOf(map, message.from) : null },
-        from: message.from === HUMAN && message.via === 'assistant' ? S.participants.viaAssistant(S.participants.human) : labelOf(map, message.from),
+        from: message.from === HUMAN && message.via === 'assistant' ? S.participants.viaAssistant(S.participants.human) : message.from === HUMAN && message.via === 'telegram' ? S.participants.viaTelegram(S.participants.human) : labelOf(map, message.from),
         via: message.via ?? null,
         lead: message.from === lead,
         // Системная строка: `to: [human]` — служебность хоста (`addSystemMessage`), не адресат для показа.

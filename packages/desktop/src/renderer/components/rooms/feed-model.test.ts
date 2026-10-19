@@ -397,6 +397,11 @@ describe('buildRoomModel — сообщения', () => {
     ]);
   });
 
+  it('письмо человека из Telegram — «You (via Telegram)» и via telegram', () => {
+    const entry = entryOf({ messages: [message('m-1', { from: 'human', via: 'telegram', at: '2026-09-27T09:00:00.000Z' })] });
+    expect(build(entry).messages.map((item) => [item.from, item.via])).toEqual([['You (via Telegram)', 'telegram']]);
+  });
+
   it('вид отправителя для аватара и провайдер агента', () => {
     const entry = entryOf({
       messages: [

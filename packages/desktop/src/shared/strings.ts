@@ -2004,6 +2004,7 @@ export const S = {
     human: 'You',
     /** Подпись отправителя, когда письмо ушло через помощника. */
     viaAssistant: (name: string): string => `${name} (via assistant)`,
+    viaTelegram: (name: string): string => `${name} (via Telegram)`,
     /** Так хост подписывает свои строки в комнате и почте — как на снимке handoff `dark-08`. */
     system: 'Parley',
     deletedSuffix: '(deleted)',
