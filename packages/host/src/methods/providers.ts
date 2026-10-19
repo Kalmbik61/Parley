@@ -17,6 +17,7 @@ import type { GlmCheckService } from '../limits/glm-check.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import { ZaiQuotaError } from '../limits/zai-quota.js';
 import type { CustomCheckService } from '../providers/custom-check.js';
+import { serialized } from './custom-providers.js';
 import type { CodexCatalog } from '../providers/codex-catalog.js';
 import type { ProviderVersions } from '../providers/versions.js';
 
@@ -131,13 +132,18 @@ export function createProvidersSetKey(
 ): Handler<'providers.setKey'> {
   return async ({ provider, key }, request) => {
     const { secret, entry } = await providerSecret(provider);
-    let keyHint: string;
-    try {
-      keyHint = await writeSecret(secret, key);
-    } catch (error) {
-      if (error instanceof SecretFormatError) throw new HostError('bad_request', error.message);
-      throw new HostError('internal', 'Unable to save provider key');
-    }
+    // Ключ своего провайдера пишется в той же очереди, что saveCustom/deleteCustom, и запись проверяется заново
+    // внутри неё: параллельное удаление не оставит ключ без провайдера (финальная рецензия).
+    const save = async (): Promise<string> => {
+      if (entry.custom !== undefined) await providerSecret(provider);
+      try {
+        return await writeSecret(secret, key);
+      } catch (error) {
+        if (error instanceof SecretFormatError) throw new HostError('bad_request', error.message);
+        throw new HostError('internal', 'Unable to save provider key');
+      }
+    };
+    const keyHint = entry.custom !== undefined ? await serialized(save) : await save();
     if (entry.custom !== undefined) customCheck?.forget(entry.id);
     else {
       limits?.invalidateGlm();
@@ -158,20 +164,28 @@ export function createProvidersClearKey(
 ): Handler<'providers.clearKey'> {
   return async ({ provider }, request) => {
     const { secret, entry } = await providerSecret(provider);
-    try {
-      await clearSecret(secret);
-    } catch {
-      throw new HostError('internal', 'Unable to clear provider key');
-    }
     if (entry.custom !== undefined) {
+      await serialized(async () => {
+        await providerSecret(provider);
+        try {
+          await clearSecret(secret);
+        } catch {
+          throw new HostError('internal', 'Unable to clear provider key');
+        }
+        // Режим api-key: Claude Code помнит хвост ключа в своей папке; без ключа этой записи быть не должно (К17).
+        try {
+          await syncApiKeyApproval(entry.id, null);
+        } catch {
+          throw new HostError('internal', 'Unable to clear provider key approval');
+        }
+      });
       customCheck?.forget(entry.id);
-      // Режим api-key: Claude Code помнит хвост ключа в своей папке; без ключа этой записи быть не должно (К17).
-      try {
-        await syncApiKeyApproval(entry.id, null);
-      } catch {
-        throw new HostError('internal', 'Unable to clear provider key approval');
-      }
     } else {
+      try {
+        await clearSecret(secret);
+      } catch {
+        throw new HostError('internal', 'Unable to clear provider key');
+      }
       limits?.invalidateGlm();
       // Удалённый ключ уносит и исход своей проверки: отпечаток не должен пережить сам ключ.
       await glmCheck?.forget();

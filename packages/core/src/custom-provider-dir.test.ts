@@ -342,6 +342,7 @@ describe('mirrorProjectTrust (спека 6.2, К18)', () => {
     expect(await mirrorProjectTrust(record.id, via, { userClaudeJson: userFile(), home })).toBe(true);
     const own = (await json(path.join(dir, '.claude.json')))['projects'] as Record<string, unknown>;
     expect(own[realKey]).toEqual({ hasTrustDialogAccepted: true });
+    expect(own[via]).toEqual({ hasTrustDialogAccepted: true });
   });
 
   it('доверие для cwd переносится; прочие поля провайдера сохранены; файл пользователя побайтно прежний', async () => {

@@ -156,14 +156,18 @@ describe('своя сессия не трогает ~/.claude и обычный 
     const treeBefore = await snapshot(claude);
     const jsonBefore = await sha(path.join(home, '.claude.json'));
 
-    await rpc(client, 'providers.saveCustom', draft);
+    const ok = (seen: RawMessage[]) => expect(seen.at(-1)?.error).toBeUndefined();
+    ok(await rpc(client, 'providers.saveCustom', draft));
     // Ссылки на навык и агента появились в папке провайдера — значит, проверка не пустая.
     expect(await readlink(path.join(home, 'providers', 'custom-kimi', 'skills', 'x'))).toBe(path.join(claude, 'skills', 'x'));
-    await rpc(client, 'providers.setKey', { provider: 'custom-kimi', key: KEY });
+    ok(await rpc(client, 'providers.setKey', { provider: 'custom-kimi', key: KEY }));
     expect((await rpc(client, 'providers.check', { provider: 'custom-kimi' })).at(-1)?.result).toMatchObject({ check: { state: 'ok' } });
     const run = await startSession(sandbox, 'custom-kimi');
     expect(run.env['CLAUDE_CONFIG_DIR']).toBe(path.join(home, 'providers', 'custom-kimi'));
-    await rpc(client, 'providers.deleteCustom', { id: 'custom-kimi', removeFolder: true });
+    ok(await rpc(client, 'providers.deleteCustom', { id: 'custom-kimi', removeFolder: true }));
+    // Удаление действительно прошло: папки и ключа нет, иначе «прежние» ~/.claude проверяли бы пустоту.
+    await expect(lstat(path.join(home, 'providers', 'custom-kimi'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(path.join(home, 'secrets.json'), 'utf8').catch(() => '')).not.toContain('custom:custom-kimi');
 
     expect(await snapshot(claude)).toEqual(treeBefore);
     expect(await sha(path.join(home, '.claude.json'))).toBe(jsonBefore);
@@ -206,6 +210,8 @@ describe('своя сессия не трогает ~/.claude и обычный 
     await core.writeCustomProviders([{ ...base, id: 'custom-a' }, { ...base, id: 'custom-b', label: 'B' }], customFile);
     const withCustom = await core.loadProviders(file, codex, customFile);
     expect(Object.keys(withCustom)).toEqual(expect.arrayContaining(['custom-a', 'custom-b']));
+    expect(without['claude']).toBeDefined();
+    expect(without['glm']).toBeDefined();
     expect(withCustom['claude']).toEqual(without['claude']);
     expect(withCustom['glm']).toEqual(without['glm']);
   });
@@ -220,7 +226,10 @@ describe('своя сессия не трогает ~/.claude и обычный 
 
     expect(JSON.stringify(run.argv)).not.toContain(KEY);
     expect(JSON.stringify(list)).not.toContain(KEY);
-    expect(await readFile(hostPaths(home).log, 'utf8').catch(() => '')).not.toContain(KEY);
+    // Лог должен существовать и быть непустым, иначе проверка ничего не проверяет.
+    const log = await readFile(hostPaths(home).log, 'utf8');
+    expect(log.length).toBeGreaterThan(0);
+    expect(log).not.toContain(KEY);
     expect(await readFile(path.join(home, 'custom-providers.json'), 'utf8')).not.toContain(KEY);
     // Ключ есть там, где ему положено: secrets.json и окружение процесса сессии.
     expect(await readFile(path.join(home, 'secrets.json'), 'utf8')).toContain(KEY);
@@ -293,7 +302,9 @@ describe('первый запуск и ключ api-key (спека 6.2, К17, �
     await scan(home);
     // stub-out.json — вывод заглушки (окружение процесса), host.log — проверяется отдельно.
     expect(holders.sort()).toEqual(['secrets.json', 'stub-out.json']);
-    expect(await readFile(hostPaths(home).log, 'utf8').catch(() => '')).not.toContain(tail);
+    const log = await readFile(hostPaths(home).log, 'utf8');
+    expect(log.length).toBeGreaterThan(0);
+    expect(log).not.toContain(tail);
     expect(await sha(path.join(home, '.claude.json'))).toBe(jsonBefore);
 
     await rpc(sandbox.client, 'providers.clearKey', { provider: 'custom-kimi' });

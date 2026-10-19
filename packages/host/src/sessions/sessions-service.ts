@@ -46,6 +46,7 @@ import {
   providerReadiness,
   providerReadinessError,
   prepareCustomProviderDir,
+  readCustomProviders,
   mirrorProjectTrust,
   syncApiKeyApproval,
   userClaudeConfigDir,
@@ -82,6 +83,7 @@ import type { SessionRef, WorksSnapshot } from '@parley/protocol';
 import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
+import { serialized } from '../methods/custom-providers.js';
 import type { HookServer } from '../hooks/hook-server.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
@@ -630,7 +632,12 @@ export function createSessionsService(
       if (entry.custom !== undefined) {
         const custom = entry.custom;
         try {
-          await timer.step('custom-dir', async () => {
+          // Шаги своих провайдеров идут по одному: два запуска одного провайдера не пишут его файл состояния
+          // вперемешку, а удаление провайдера не даёт запуску пересоздать только что убранную папку.
+          await timer.step('custom-dir', () => serialized(async () => {
+            if (!(await readCustomProviders()).some((record) => record.id === custom.id)) {
+              throw new Error('the provider was deleted');
+            }
             await prepareCustomProviderDir(custom, {
               claudeConfigDir: userClaudeConfigDir(),
               warn: (text) => host.log.warn(text, { provider: custom.id }),
@@ -639,7 +646,7 @@ export function createSessionsService(
             // Одобряется то, что реально уйдёт в `ANTHROPIC_API_KEY`: и плейсхолдер loopback без ключа (К17).
             const apiKey = secret ?? (entry.runner.keyOptional === true ? LOOPBACK_KEY_PLACEHOLDER : null);
             await syncApiKeyApproval(custom.id, entry.runner.auth === 'api-key' ? apiKey : null);
-          });
+          }));
         } catch (error) {
           host.log.warn('custom provider folder could not be prepared', { ref, provider: custom.id, error: String(error) });
           host.broadcast('host.notice', {

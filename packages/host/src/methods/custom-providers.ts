@@ -2,7 +2,10 @@ import {
   baseUrlError,
   clearSecret,
   customProviderSecret,
+  isValidCustomProviderId,
+  listCustomSecretIds,
   loadProviders,
+  parleyHome,
   prepareCustomProviderDir,
   readCustomProviders,
   removeCustomProviderDir,
@@ -12,13 +15,18 @@ import {
   writeCustomProviders,
 } from '@parley/core';
 import type { CustomProviderRecord } from '@parley/core';
+import { readdir } from 'node:fs/promises';
+import path from 'node:path';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
 import type { CustomCheckService } from '../providers/custom-check.js';
 
-/** Записи читаются и пишутся целиком: два запроса подряд не должны потерять правку друг друга. */
+/**
+ * Записи читаются и пишутся целиком: два запроса подряд не должны потерять правку друг друга. Та же очередь
+ * держит ключи своих провайдеров, подготовку их папок при запуске и удаление (финальная рецензия).
+ */
 let queue: Promise<unknown> = Promise.resolve();
-function serialized<T>(task: () => Promise<T>): Promise<T> {
+export function serialized<T>(task: () => Promise<T>): Promise<T> {
   const run = queue.then(task, task);
   queue = run.catch(() => undefined);
   return run;
@@ -39,7 +47,15 @@ export function createCustomProviderHandlers(customCheck?: CustomCheckService): 
       const records = await readCustomProviders();
       let id: string;
       if (params.id === null) {
-        const taken = new Set([...Object.keys(await loadProviders()), ...records.map((record) => record.id)]);
+        // Занят и id с оставшейся папкой (удаление без removeFolder) или забытым ключом: новый провайдер
+        // не должен унаследовать чужую историю, доверие и ключ (финальная рецензия).
+        const folders = (await readdir(path.join(parleyHome(), 'providers')).catch(() => [])).filter(isValidCustomProviderId);
+        const taken = new Set([
+          ...Object.keys(await loadProviders()),
+          ...records.map((record) => record.id),
+          ...folders,
+          ...(await listCustomSecretIds()),
+        ]);
         id = slugProviderId(params.label, taken);
       } else {
         id = params.id;
@@ -61,6 +77,8 @@ export function createCustomProviderHandlers(customCheck?: CustomCheckService): 
         await writeCustomProviders(next);
         // Смена linkClaude переставляет или убирает ссылки в папке провайдера.
         await prepareCustomProviderDir(record, { claudeConfigDir: userClaudeConfigDir() });
+        // Режим bearer: хвост ключа, одобренный раньше в api-key, в папке не остаётся (К17).
+        if (record.auth === 'bearer') await syncApiKeyApproval(id, null);
       } catch {
         throw new HostError('internal', 'Unable to save the custom provider');
       }
@@ -74,8 +92,9 @@ export function createCustomProviderHandlers(customCheck?: CustomCheckService): 
       const records = await readCustomProviders();
       if (!records.some((record) => record.id === id)) throw new HostError('bad_request', 'Unknown custom provider');
       try {
-        await writeCustomProviders(records.filter((record) => record.id !== id));
+        // Сначала ключ: упавший clearSecret не оставит ключ без записи, которую уже не удалить из окна.
         await clearSecret(customProviderSecret(id));
+        await writeCustomProviders(records.filter((record) => record.id !== id));
         // Папка может остаться: в ней не должно быть записи об одобренном ключе (К17).
         await syncApiKeyApproval(id, null);
         if (removeFolder) await removeCustomProviderDir(id);

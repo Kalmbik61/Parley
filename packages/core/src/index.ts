@@ -119,6 +119,7 @@ export {
   customProvidersFile,
   isCustomProviderId,
   isLoopbackUrl,
+  isValidCustomProviderId,
   readCustomProviders,
   slugProviderId,
   writeCustomProviders,

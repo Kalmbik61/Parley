@@ -161,10 +161,11 @@ describe('custom providers over RPC', () => {
     expect(await item(client, 'custom-kimi')).toBeUndefined();
     expect(await exists(path.join(home, 'providers', 'custom-kimi'))).toBe(true);
     expect(await readFile(path.join(home, 'secrets.json'), 'utf8').catch(() => '')).not.toContain('custom:custom-kimi');
-    await rpc(client, 'providers.saveCustom', draft);
-    await rpc(client, 'providers.deleteCustom', { id: 'custom-kimi', removeFolder: true });
-    expect(await exists(path.join(home, 'providers', 'custom-kimi'))).toBe(false);
-    expect((await rpc(client, 'providers.deleteCustom', { id: 'custom-kimi', removeFolder: true })).at(-1)?.error)
+    // Папка прежнего custom-kimi осталась, поэтому новый получает другой id.
+    expect((await rpc(client, 'providers.saveCustom', draft)).at(-1)?.result).toEqual({ id: 'custom-kimi-2' });
+    await rpc(client, 'providers.deleteCustom', { id: 'custom-kimi-2', removeFolder: true });
+    expect(await exists(path.join(home, 'providers', 'custom-kimi-2'))).toBe(false);
+    expect((await rpc(client, 'providers.deleteCustom', { id: 'custom-kimi-2', removeFolder: true })).at(-1)?.error)
       .toMatchObject({ code: 'bad_request' });
   });
 
@@ -188,5 +189,45 @@ describe('custom providers over RPC', () => {
     const file = await readFile(path.join(home, 'custom-providers.json'), 'utf8');
     expect(file).not.toContain('synthetic-kimi-key');
     expect(file).not.toMatch(/key|secret|token/i);
+  });
+
+  it('новый провайдер с тем же именем не занимает папку удалённого (removeFolder: false) и забытый ключ', async () => {
+    const client = await boot();
+    await rpc(client, 'providers.saveCustom', draft);
+    await writeFile(path.join(home, 'providers', 'custom-kimi', 'history.txt'), 'old work');
+    await rpc(client, 'providers.deleteCustom', { id: 'custom-kimi', removeFolder: false });
+    // Забытый ключ того же id, например от прерванного удаления.
+    await writeFile(path.join(home, 'secrets.json'), JSON.stringify({ 'custom:custom-kimi-2': { key: 'forgotten-key' } }));
+    const seen = await rpc(client, 'providers.saveCustom', draft);
+    expect(seen.at(-1)?.result).toEqual({ id: 'custom-kimi-3' });
+    expect(await readFile(path.join(home, 'providers', 'custom-kimi', 'history.txt'), 'utf8')).toBe('old work');
+    expect(await item(client, 'custom-kimi-3')).toMatchObject({ needs: 'key', keyHint: null });
+  });
+
+  it('смена auth на bearer убирает хвост ключа из .claude.json провайдера (К17)', async () => {
+    const client = await boot();
+    await rpc(client, 'providers.saveCustom', { ...draft, auth: 'api-key' });
+    const file = path.join(home, 'providers', 'custom-kimi', '.claude.json');
+    const data = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+    await writeFile(file, JSON.stringify({ ...data, customApiKeyResponses: { approved: ['x'], rejected: [] } }));
+    await rpc(client, 'providers.saveCustom', { ...draft, id: 'custom-kimi', auth: 'bearer' });
+    expect(JSON.parse(await readFile(file, 'utf8'))).not.toHaveProperty('customApiKeyResponses');
+  });
+
+  it('setKey параллельно с deleteCustom не оставляет ключ без провайдера', async () => {
+    const client = await boot();
+    for (let round = 0; round < 12; round += 1) {
+      await rpc(client, 'providers.saveCustom', draft);
+      const ids = [nextId++, nextId++];
+      client.send({ id: ids[0], method: 'providers.setKey', params: { provider: 'custom-kimi', key: 'synthetic-kimi-key' } });
+      client.send({ id: ids[1], method: 'providers.deleteCustom', params: { id: 'custom-kimi', removeFolder: true } });
+      const pending = new Set(ids);
+      while (pending.size > 0) {
+        const message = await client.next();
+        if (typeof message.id === 'number') pending.delete(message.id);
+      }
+      const secrets = await readFile(path.join(home, 'secrets.json'), 'utf8').catch(() => '{}');
+      expect(secrets).not.toContain('custom:custom-kimi');
+    }
   });
 });

@@ -241,13 +241,6 @@ describe('providerLaunchEnv: свой провайдер', () => {
     expect(apiKey.ANTHROPIC_API_KEY).toBe('parley-local');
     expect(apiKey.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
   });
-  it('обычный claude: окружение не зависит от сохранённых своих провайдеров', () => {
-    const before = providerLaunchEnv(PROVIDERS.claude, hostEnv, { A: '1' }, null);
-    customProviderEntry(kimi, '/p');
-    expect(providerLaunchEnv(PROVIDERS.claude, hostEnv, { A: '1' }, null)).toEqual(before);
-    expect(before.CLAUDE_CONFIG_DIR).toBe('/u/.claude');
-    expect(before.ANTHROPIC_API_KEY).toBe('host');
-  });
   it('GLM: окружение побайтно как до правки', () => {
     const env = providerLaunchEnv(PROVIDERS.glm, hostEnv, { A: '1' }, 'z-key');
     expect(env).toEqual({

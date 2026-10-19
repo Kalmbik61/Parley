@@ -220,7 +220,7 @@ export async function mirrorProjectTrust(
   const user = await readObject(options.userClaudeJson, { follow: true });
   if (user.state !== 'ok' || !isRecord(user.data['projects'])) return false;
   const projects = user.data['projects'];
-  // Claude Code ключует `projects` реальным путём процесса: ищем под обоими написаниями, пишем под реальным (Review Focus 1).
+  // Claude Code ключует `projects` реальным путём процесса: ищем и пишем под реальным путём и под написанием из сессии (Review Focus 1).
   const resolved = path.resolve(cwd);
   const session = await realpath(resolved).catch(() => resolved);
   let trusted = false;
@@ -239,9 +239,17 @@ export async function mirrorProjectTrust(
     path.join(dir, CLAUDE_JSON),
     (data) => {
       const own = isRecord(data['projects']) ? data['projects'] : {};
-      const entry = isRecord(own[session]) ? own[session] : {};
-      if (entry['hasTrustDialogAccepted'] === true) return false;
-      data['projects'] = { ...own, [session]: { ...entry, hasTrustDialogAccepted: true } };
+      const next: Record<string, unknown> = { ...own };
+      let changed = false;
+      // Под реальным путём (его ключует Claude Code) и под написанием из сессии, если оно другое.
+      for (const key of new Set([session, resolved])) {
+        const entry = isRecord(own[key]) ? own[key] : {};
+        if (entry['hasTrustDialogAccepted'] === true) continue;
+        next[key] = { ...entry, hasTrustDialogAccepted: true };
+        changed = true;
+      }
+      if (!changed) return false;
+      data['projects'] = next;
       return true;
     },
     { create: true },
