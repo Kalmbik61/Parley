@@ -1,5 +1,6 @@
 import {
   clearSecret,
+  syncApiKeyApproval,
   loadProviders,
   providerReadiness,
   readSecret,
@@ -9,12 +10,13 @@ import {
   supportsEffort,
   writeSecret,
 } from '@parley/core';
-import type { SecretId } from '@parley/core';
+import type { ProviderEntry, SecretId } from '@parley/core';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
 import type { GlmCheckService } from '../limits/glm-check.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import { ZaiQuotaError } from '../limits/zai-quota.js';
+import type { CustomCheckService } from '../providers/custom-check.js';
 import type { CodexCatalog } from '../providers/codex-catalog.js';
 import type { ProviderVersions } from '../providers/versions.js';
 
@@ -43,6 +45,7 @@ export function createProvidersList(
   limits?: LimitsService,
   glmCheck?: GlmCheckService,
   catalog?: Pick<CodexCatalog, 'refreshIfStale'>,
+  customCheck?: CustomCheckService,
 ): Handler<'providers.list'> {
   return async () => {
     catalog?.refreshIfStale();
@@ -62,6 +65,15 @@ export function createProvidersList(
           keyPresent: key !== null,
           probeVersion: (command) => versions?.fresh(command) ?? Promise.resolve(null),
         });
+        // Исход последней проверки: у своего провайдера — из его службы, у GLM — из `glmCheck`.
+        const check =
+          entry.runner.secret === undefined
+            ? undefined
+            : entry.custom !== undefined
+              ? customCheck?.current(entry.id, key)
+              : glmCheck === undefined
+                ? undefined
+                : await glmCheck.current(key);
         return {
           id: entry.id,
           label: entry.label,
@@ -72,7 +84,19 @@ export function createProvidersList(
           models: selectableModels(entry),
           effort: supportsEffort(entry),
           argsOverridden: entry.argsOverridden === true,
-          ...(entry.runner.secret === undefined || glmCheck === undefined ? {} : { check: await glmCheck.current(key) }),
+          ...(check === undefined ? {} : { check }),
+          // Описание своего провайдера (спека 5.1): папка — runner.configDir; ключа здесь нет.
+          ...(entry.custom === undefined || entry.runner.configDir === undefined ? {} : {
+            custom: {
+              preset: entry.custom.preset,
+              baseUrl: entry.custom.baseUrl,
+              auth: entry.custom.auth,
+              models: { ...entry.custom.models },
+              contextWindow: entry.custom.contextWindow,
+              linkClaude: entry.custom.linkClaude,
+              folder: entry.runner.configDir,
+            },
+          }),
         };
       }),
     );
@@ -91,18 +115,22 @@ export function createProvidersList(
 }
 
 /** A provider id cannot select an arbitrary field in the secret store. */
-async function providerSecret(provider: string): Promise<SecretId> {
+async function providerSecret(provider: string): Promise<{ secret: SecretId; entry: ProviderEntry }> {
   const registry = await loadProviders();
   const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
-  if (entry?.id !== provider || entry.runner.secret !== 'zai') {
+  if (entry?.id !== provider || entry.runner.secret === undefined) {
     throw new HostError('bad_request', 'Provider does not support a saved key');
   }
-  return entry.runner.secret;
+  return { secret: entry.runner.secret, entry };
 }
 
-export function createProvidersSetKey(limits?: LimitsService, glmCheck?: GlmCheckService): Handler<'providers.setKey'> {
+export function createProvidersSetKey(
+  limits?: LimitsService,
+  glmCheck?: GlmCheckService,
+  customCheck?: CustomCheckService,
+): Handler<'providers.setKey'> {
   return async ({ provider, key }, request) => {
-    const secret = await providerSecret(provider);
+    const { secret, entry } = await providerSecret(provider);
     let keyHint: string;
     try {
       keyHint = await writeSecret(secret, key);
@@ -110,9 +138,12 @@ export function createProvidersSetKey(limits?: LimitsService, glmCheck?: GlmChec
       if (error instanceof SecretFormatError) throw new HostError('bad_request', error.message);
       throw new HostError('internal', 'Unable to save provider key');
     }
-    limits?.invalidateGlm();
-    // Сохранённый заново ключ проверяется заново: прежний исход забывается вместе с файлом.
-    await glmCheck?.forget();
+    if (entry.custom !== undefined) customCheck?.forget(entry.id);
+    else {
+      limits?.invalidateGlm();
+      // Сохранённый заново ключ проверяется заново: прежний исход забывается вместе с файлом.
+      await glmCheck?.forget();
+    }
     request.host.broadcast('providers.changed', { provider });
     return { keyHint };
   };
@@ -120,17 +151,31 @@ export function createProvidersSetKey(limits?: LimitsService, glmCheck?: GlmChec
 
 export const providersSetKey = createProvidersSetKey();
 
-export function createProvidersClearKey(limits?: LimitsService, glmCheck?: GlmCheckService): Handler<'providers.clearKey'> {
+export function createProvidersClearKey(
+  limits?: LimitsService,
+  glmCheck?: GlmCheckService,
+  customCheck?: CustomCheckService,
+): Handler<'providers.clearKey'> {
   return async ({ provider }, request) => {
-    const secret = await providerSecret(provider);
+    const { secret, entry } = await providerSecret(provider);
     try {
       await clearSecret(secret);
     } catch {
       throw new HostError('internal', 'Unable to clear provider key');
     }
-    limits?.invalidateGlm();
-    // Удалённый ключ уносит и исход своей проверки: отпечаток не должен пережить сам ключ.
-    await glmCheck?.forget();
+    if (entry.custom !== undefined) {
+      customCheck?.forget(entry.id);
+      // Режим api-key: Claude Code помнит хвост ключа в своей папке; без ключа этой записи быть не должно (К17).
+      try {
+        await syncApiKeyApproval(entry.id, null);
+      } catch {
+        throw new HostError('internal', 'Unable to clear provider key approval');
+      }
+    } else {
+      limits?.invalidateGlm();
+      // Удалённый ключ уносит и исход своей проверки: отпечаток не должен пережить сам ключ.
+      await glmCheck?.forget();
+    }
     request.host.broadcast('providers.changed', { provider });
     return { ok: true };
   };
@@ -146,12 +191,18 @@ export const providersClearKey = createProvidersClearKey();
  */
 export function createProvidersCheck(
   versions: ProviderVersions | undefined,
-  glmCheck: GlmCheckService,
+  glmCheck: GlmCheckService | undefined,
+  customCheck?: CustomCheckService,
 ): Handler<'providers.check'> {
   return async ({ provider }) => {
     const registry = await loadProviders();
     const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
-    if (entry?.id !== provider || entry.runner.secret !== 'zai') {
+    const isCustom = entry?.custom !== undefined;
+    if (
+      entry?.id !== provider ||
+      entry.runner.secret === undefined ||
+      (isCustom ? customCheck === undefined : entry.runner.secret !== 'zai' || glmCheck === undefined)
+    ) {
       throw new HostError('bad_request', 'Provider does not support a key check');
     }
     let key: string | null;
@@ -165,8 +216,10 @@ export function createProvidersCheck(
       keyPresent: key !== null,
       probeVersion: (command) => versions?.fresh(command) ?? Promise.resolve(null),
     });
-    if (key === null || readiness.needs !== null || readiness.error !== null) return { check: null };
-    return { check: await glmCheck.run(key) };
+    if (readiness.needs !== null || readiness.error !== null) return { check: null };
+    if (isCustom) return { check: await customCheck!.run(entry, key) };
+    if (key === null) return { check: null };
+    return { check: await glmCheck!.run(key) };
   };
 }
 
