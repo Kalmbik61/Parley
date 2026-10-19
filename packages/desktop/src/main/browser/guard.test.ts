@@ -30,6 +30,22 @@ describe('navigationVerdict (тест 2)', () => {
     expect(navigationVerdict('chrome://gpu', 'sub')).toBe('deny');
     expect(navigationVerdict('not a url', 'sub')).toBe('deny');
   });
+
+  it('просмотрщик PDF Chromium (chrome-extension://mhjf…/) — только подфрейм; главный фрейм и любое другое расширение — deny', () => {
+    const viewer = 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html';
+    expect(navigationVerdict(viewer, 'sub')).toBe('allow');
+    expect(navigationVerdict(viewer, 'main')).toBe('deny');
+    // Не только index.html: просмотрщик подгружает свои ресурсы с того же origin.
+    expect(navigationVerdict('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/pdf_embedder.css', 'sub')).toBe('allow');
+    // Любое другое расширение, в том числе с похожим id, — отказ везде.
+    expect(navigationVerdict('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjb/index.html', 'sub')).toBe('deny');
+    expect(navigationVerdict('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjb/index.html', 'main')).toBe('deny');
+    expect(navigationVerdict('chrome-extension://abcdefghijklmnopabcdefghijklmnop/index.html', 'sub')).toBe('deny');
+    // Чужой origin, прячущийся за тем же id: userinfo и поддомен — не наш origin.
+    expect(navigationVerdict('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai@evil/index.html', 'sub')).toBe('deny');
+    expect(navigationVerdict('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai.evil/index.html', 'sub')).toBe('deny');
+    expect(navigationVerdict('chrome-extension://evil@mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html', 'sub')).toBe('deny');
+  });
 });
 
 describe('sanitizeWebviewAttach (тест 3)', () => {
@@ -264,6 +280,52 @@ describe('installBrowserGuard (тест 4)', () => {
     expect(guest.stop).not.toHaveBeenCalled();
     guest.emit('did-start-navigation', fakeEvent({ url: 'file:///etc/hosts', isMainFrame: false }));
     expect(guest.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('did-start-navigation подкадра просмотрщика PDF — без stop() (SIGTRAP в Electron 44); другое расширение подкадром — stop()', () => {
+    const guard = setupGuard();
+    const guest = fakeContents(42, 'webview');
+    guard.created(guest);
+
+    // stop() внутри did-start-navigation подкадра просмотрщика роняет браузерный процесс.
+    guest.emit(
+      'did-start-navigation',
+      fakeEvent({ url: 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html', isMainFrame: false }),
+    );
+    expect(guest.stop).not.toHaveBeenCalled();
+    // Остальное по-прежнему останавливает страницу: file: (ревью 9.1) и чужое расширение.
+    guest.emit('did-start-navigation', fakeEvent({ url: 'file:///etc/hosts', isMainFrame: false }));
+    expect(guest.stop).toHaveBeenCalledTimes(1);
+    guest.emit(
+      'did-start-navigation',
+      fakeEvent({ url: 'chrome-extension://abcdefghijklmnopabcdefghijklmnop/index.html', isMainFrame: false }),
+    );
+    expect(guest.stop).toHaveBeenCalledTimes(2);
+    // Главный фрейм на том же адресе — отказ, как у любого не-http(s).
+    guest.emit(
+      'did-start-navigation',
+      fakeEvent({ url: 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html', isMainFrame: true }),
+    );
+    expect(guest.stop).toHaveBeenCalledTimes(3);
+  });
+
+  it('will-frame-navigate подкадра просмотрщика PDF — без preventDefault; главного фрейма и чужого расширения — с ним', () => {
+    const guard = setupGuard();
+    const guest = fakeContents(42, 'webview');
+    guard.created(guest);
+
+    const viewer = 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html';
+    const sub = fakeEvent({ url: viewer, isMainFrame: false });
+    guest.emit('will-frame-navigate', sub);
+    expect(sub.defaultPrevented).toBe(false);
+
+    const main = fakeEvent({ url: viewer, isMainFrame: true });
+    guest.emit('will-navigate', main);
+    expect(main.defaultPrevented).toBe(true);
+
+    const other = fakeEvent({ url: 'chrome-extension://abcdefghijklmnopabcdefghijklmnop/index.html', isMainFrame: false });
+    guest.emit('will-frame-navigate', other);
+    expect(other.defaultPrevented).toBe(true);
   });
 
   it('гость: setZoomMode(isolated), will-prevent-unload — preventDefault, forwardShortcuts с ним', () => {

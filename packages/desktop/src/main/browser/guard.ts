@@ -16,9 +16,15 @@ import { BROWSER_PARTITION, type BrowserOpenTab } from '../../shared/browser-typ
 export type NavVerdict = 'allow' | 'deny';
 
 /**
+ * Просмотрщик PDF Chromium: при открытии PDF гость грузит его подкадром. Отказ ему (и stop() в
+ * did-start-navigation) роняет браузерный процесс Electron 44 по CHECK (SIGTRAP), а с ним — Parley.
+ */
+const PDF_VIEWER_ORIGIN = 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai';
+
+/**
  * Главный фрейм: только http, https и about:blank. Подфрейм: ещё about:srcdoc, data: и blob: —
- * у них непрозрачное или своё происхождение, к диску доступа нет. file:, javascript:,
- * chrome: и прочее — deny везде.
+ * у них непрозрачное или своё происхождение, к диску доступа нет — и просмотрщик PDF
+ * (PDF_VIEWER_ORIGIN, ровно он). file:, javascript:, chrome:, прочие chrome-extension: — deny везде.
  */
 export function navigationVerdict(url: string, frame: 'main' | 'sub'): NavVerdict {
   let parsed: URL;
@@ -37,6 +43,9 @@ export function navigationVerdict(url: string, frame: 'main' | 'sub'): NavVerdic
     case 'data:':
     case 'blob:':
       return frame === 'sub' ? 'allow' : 'deny';
+    case 'chrome-extension:':
+      // Не parsed.origin: у нестандартной схемы он непрозрачный. «/» после origin отсекает userinfo и суффикс id.
+      return frame === 'sub' && parsed.href.startsWith(`${PDF_VIEWER_ORIGIN}/`) ? 'allow' : 'deny';
     default:
       return 'deny';
   }
