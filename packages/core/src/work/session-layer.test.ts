@@ -245,3 +245,13 @@ describe('стабильный префикс слоя (P34)', () => {
     expect(layers[0]).not.toBe(layers[1]);
   });
 });
+
+describe('links block', () => {
+  it('блок links идёт после bridge и считается в blockBytes.links', () => {
+    const result = buildSessionLayer({ guidance: 'GUIDE', bridge: 'BRIDGE', links: 'LINKS', role: 'ROLE' });
+    expect(result.text).toBe('GUIDE\n\nBRIDGE\n\nLINKS\n\nROLE');
+    expect(result.blockBytes.links).toBe(5);
+    expect(buildSessionLayer({ guidance: 'GUIDE' }).blockBytes.links).toBe(0);
+    expect(buildSessionLayer({ guidance: 'GUIDE' }).text).toBe('GUIDE');
+  });
+});

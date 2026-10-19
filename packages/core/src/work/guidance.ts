@@ -54,6 +54,22 @@ export const BROWSER_PRIORITY_RULE =
   "Use Chrome, Chrome DevTools or Playwright tools only for other sites, for what Parley's browser tools do not do (so far: clicking or typing in the page, running JS, cookies, files, performance traces), or when browser_open is not available.";
 
 /**
+ * Предостережение агенту своего провайдера о ссылках на настройки Claude Code человека (спека своих провайдеров, 5.8).
+ * Отдельный блок слоя сессии рядом с `bridge`, а не строка `stableGuidance`: он есть только у сессий с галочкой
+ * «подтянуть общее». Write/Edit Claude Code сам отправляет агента по настоящему пути ссылки, поэтому без правила
+ * правка ушла бы в основной Claude Code молча. Текст — цитата из спеки, одной строкой.
+ */
+export function linkedSettingsRule(dir: string, source: string): string {
+  return (
+    `This session runs on a custom provider whose Claude Code settings folder is ${dir}, not ~/.claude. ` +
+    `${dir}/CLAUDE.md and the symlinked entries in ${dir}/skills and ${dir}/agents point to the human's main Claude Code settings (${source}): an edit through the link or at the real path changes the main Claude Code too. ` +
+    'Before changing any of them, tell the human so and ask whether the change is for both or only for this provider. ' +
+    "Only for this provider: first replace the link with a copy — copy the original to a temporary name next to the link, delete the link itself (rm without -r and without a trailing slash), rename the copy to the link's name — then edit the copy; Parley keeps copies and does not relink them. " +
+    `Put new skills and agents in ${dir}: they stay with this provider. MCP servers and settings of this provider are already its own.`
+  );
+}
+
+/**
  * Стабильная политика: правила координации без id сессии, названия и цели. Меняется только от настроек запуска
  * (навигатор скиллов), а не от сессии.
  */

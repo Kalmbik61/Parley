@@ -21,6 +21,7 @@ import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type N
 import { claudeProjectRoots } from '../discover.js';
 import { isServiceText, type SessionIndex } from '../session-index.js';
 import { bothEnv } from '../names.js';
+import { userClaudeConfigDir } from '../custom-provider-dir.js';
 import {
   EFFORT_TOKEN,
   loadProviders,
@@ -38,7 +39,7 @@ import type { RoleCatalog } from '../roles/types.js';
 import type { RequiredRolePermissions } from '../roles/catalog.js';
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { loadBrief, writeBrief } from './brief.js';
-import { BROWSER_PRIORITY_RULE, systemGuidance } from './guidance.js';
+import { BROWSER_PRIORITY_RULE, linkedSettingsRule, systemGuidance } from './guidance.js';
 import { readParleyMd } from './parley-md.js';
 import { readProjectMemory } from './project-memory.js';
 import type { MemoryItem } from './project-memory.js';
@@ -99,7 +100,7 @@ export interface LaunchOptions {
    */
   agent?: AgentChannel;
   /** Optional current role/recipe/memory snapshot, never persisted in the session map. */
-  layer?: Omit<SessionLayerInput, 'guidance' | 'bridge' | 'brief' | 'parleyMd'>;
+  layer?: Omit<SessionLayerInput, 'guidance' | 'bridge' | 'links' | 'brief' | 'parleyMd'>;
 }
 
 /** Чем и как поднимать процесс сессии в правой панели. */
@@ -423,6 +424,11 @@ async function plan(
     const bridge = entry.id === 'codex' && await codexBridgeApplies(cwd)
       ? 'Project instructions here were written for Claude Code (CLAUDE.md): they may name skills, slash commands or tools you do not have — skip those parts.'
       : '';
+    // Спека своих провайдеров, 5.8: Write/Edit Claude Code сам отправляет агента по настоящему пути ссылки,
+    // поэтому сессии с подтянутым общим — правило с её папкой; приходит при каждом запуске и возобновлении.
+    const links = entry.custom?.linkClaude === true && entry.runner.configDir !== undefined
+      ? linkedSettingsRule(entry.runner.configDir, userClaudeConfigDir())
+      : '';
     // Плейбук рецепта — только ведущему комнаты и только по карте: поля `options.layer` его не задают.
     const recipeBlock = leadRecipeBlock(map, session.id);
     const layer = buildSessionLayer({
@@ -438,6 +444,7 @@ async function plan(
         omitGoal: brief !== null || (!resuming && mode !== 'new' && !quiet),
       }),
       bridge,
+      links,
       // Правило — только там, где у агента есть `browser_open`: канал выдан и сервер MCP доходит шаблоном с `{mcpConfig}`.
       ...(options.agent !== undefined && mcpRoute ? { browser: BROWSER_PRIORITY_RULE } : {}),
       ...(brief === null ? {} : { brief }),

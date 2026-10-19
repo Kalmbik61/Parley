@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MCP_SERVER_NAME } from '../names.js';
 import { GUIDE } from './guide.js';
 import { contextBytes, GUIDANCE_MAX_BYTES, STABLE_POLICY_MAX_BYTES, textHash } from './context-budget.js';
-import { BROWSER_PRIORITY_RULE, guidanceBudgetProblems, stableGuidance, systemGuidance } from './guidance.js';
+import { BROWSER_PRIORITY_RULE, guidanceBudgetProblems, linkedSettingsRule, stableGuidance, systemGuidance } from './guidance.js';
 import { ACCEPTED_LETTER, RETURNED_LETTER } from './proposals.js';
 import type { WorkMap } from './types.js';
 
@@ -739,5 +739,18 @@ describe('правило приоритета браузера Parley (этап 
   it('вставка и стабильная политика его не несут: они одни и те же байты у каждой сессии', () => {
     expect(stableGuidance()).not.toContain('browser_open');
     expect(systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03')).not.toContain('browser_open');
+  });
+});
+
+describe('linkedSettingsRule', () => {
+  it('текст спеки 5.8 с папкой провайдера и источником, одна строка', () => {
+    const rule = linkedSettingsRule('/h/.parley/providers/custom-kimi', '/h/.claude');
+    expect(rule).toContain('settings folder is /h/.parley/providers/custom-kimi, not ~/.claude');
+    expect(rule).toContain('main Claude Code settings (/h/.claude)');
+    expect(rule).toContain('rm without -r and without a trailing slash');
+    expect(rule).not.toContain('\n');
+    expect(rule).not.toMatch(/[А-Яа-яЁё]/);
+    expect(rule).not.toContain('{dir}');
+    expect(rule).not.toContain('{source}');
   });
 });

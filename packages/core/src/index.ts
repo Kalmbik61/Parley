@@ -361,7 +361,7 @@ export type {
   SkillSkip,
   SkillSkipReason,
 } from './work/skill-install.js';
-export { BROWSER_PRIORITY_RULE, systemGuidance } from './work/guidance.js';
+export { BROWSER_PRIORITY_RULE, linkedSettingsRule, systemGuidance } from './work/guidance.js';
 export {
   SUMMARIZER,
   SUMMARY_TIMEOUT_MS,
