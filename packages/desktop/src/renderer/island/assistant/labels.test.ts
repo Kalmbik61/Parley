@@ -20,6 +20,15 @@ describe('подписи помощника', () => {
     expect(miniLabel(HOST_IDLE, 'idle')).toBeNull();
     expect(miniLabel(HOST_IDLE, 'idle', true)).toBe('Sending·');
   });
+  it('мини-вид: карточка не-письма — «Card», письмо и карточка без action — «Confirm send»', () => {
+    const base = { id: 'p1', target: 'Auth', where: 'Parley · Backend', text: 't' };
+    const room = { ...base, action: 'room', title: 'Auth', members: ['S01 Ann'], lead: 'S01 Ann', task: null } as const;
+    const message = { ...base, action: 'message', kind: null, wake: false } as const;
+    const legacy = { ...base, kind: null, wake: false } as const;
+    expect(miniLabel({ ...HOST_IDLE, phase: 'awaiting-confirm', proposal: room }, 'idle')).toBe('Card');
+    expect(miniLabel({ ...HOST_IDLE, phase: 'awaiting-confirm', proposal: message }, 'idle')).toBe('Confirm send');
+    expect(miniLabel({ ...HOST_IDLE, phase: 'awaiting-confirm', proposal: legacy }, 'idle')).toBe('Confirm send');
+  });
   it('сочетание — значками macOS', () => {
     expect(hotkeyLabel('Alt+Space')).toBe('⌥Space');
     expect(hotkeyLabel('CmdOrCtrl+Shift+J')).toBe('⌘⇧J');

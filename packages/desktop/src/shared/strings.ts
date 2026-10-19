@@ -2220,6 +2220,32 @@ export const S = {
     cancel: 'Cancel',
     enterToSend: 'Enter to send',
     sent: 'Sent ✓',
+    /** Действие по карточке выполнено (комната создана, решение принято). */
+    done: 'Done ✓',
+    /** Карточки подтверждений: комната, решение, запрос разрешения. */
+    card: {
+      newRoom: 'New room in',
+      roomLine: (title: string, members: string, lead: string): string => `${title} · ${members} · lead ${lead}`,
+      create: 'Create',
+      allow: 'Allow',
+      allowAlways: "Allow, don't ask again",
+      deny: 'Deny',
+      answer: 'Answer',
+      acceptPlan: 'Accept plan',
+      approveEachEdit: 'Approve each edit',
+      acceptDecision: (room: string): string => `Accept decision in ${room}?`,
+      returnDecision: (lead: string): string => `Return to ${lead} for rework?`,
+      accept: 'Accept',
+      return: 'Return',
+      askTitle: (verb: string, name: string): string => `${verb} ${name}?`,
+      /** Заголовок решения по плану: «Accept plan of S03 Ruslan?». */
+      planTitle: (verb: string, name: string): string => `${verb} of ${name}?`,
+      /** Строка выбранного ответа на карточке вопроса: «вопрос → ответ». */
+      answerLine: (question: string, answer: string): string => `${question} → ${answer}`,
+      note: (text: string): string => `Note: ${text}`,
+    },
+    /** Подпись карточки в свёрнутом виде. */
+    miniCard: 'Card',
     cancelled: 'Cancelled',
     queued: 'Queued',
     unqueue: 'Remove from queue',

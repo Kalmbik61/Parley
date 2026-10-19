@@ -62,9 +62,10 @@ import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
 import { createHistoryService } from './rooms/history-service.js';
-import { sendHumanLetter } from './rooms/rooms-service.js';
+import { createHumanRoom, resolveRoomProposal, sendHumanLetter } from './rooms/rooms-service.js';
 import { createAssistantEndpoint } from './assistant/assistant-endpoint.js';
 import { createAssistantService, type AssistantService } from './assistant/assistant-service.js';
+import { createReminderStore } from './assistant/reminders.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
@@ -426,6 +427,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   const secretOf = (entry: ProviderEntry): Promise<string | null> =>
     entry.runner.secret === undefined ? Promise.resolve(null) : readSecret(entry.runner.secret);
+  const reminders = createReminderStore({ home: parleyHome(), log: (line) => log.info(line) });
   assistantService = createAssistantService({
     broadcast: (event, data) => handle.context.broadcast(event, data),
     works: worksService,
@@ -434,6 +436,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     send,
     launch: (ref, mode, options) => sessionsService.launch(ref, mode, options),
     sendLetter: (input) => sendHumanLetter(input, { via: 'assistant' }),
+    createRoom: (input) => createHumanRoom(input),
+    resolveRoomProposal: (input) => resolveRoomProposal(input),
     endpoint: { origin: () => hookServer.origin(), setToken: (token) => assistantEndpoint.setToken(token) },
     providers: () => loadProviders(),
     ready: async (entry) => {
@@ -449,9 +453,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     },
     launchEnv: async (entry) => providerLaunchEnv(entry, process.env, {}, await secretOf(entry)),
     binary: (command) => findRunnerBinary(command, process.env),
+    reminders,
     home: parleyHome(),
     log: (line) => log.info(line),
   });
+  const reminderTarget = assistantService;
+  handle.context.onShutdown(async () => reminders.stop());
   handle.context.onShutdown(async () => assistantService?.stop());
 
   // Заполненность контекста Claude/GLM (спека 2026-10-15, 4.3): опрос файлов строки статуса раз в 5 секунд.
@@ -601,6 +608,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       }),
     );
   }
+  // Напоминания — после ворот работ и приёмника хуков: раньше ход помощника упёрся бы в «хоста ещё нет».
+  reminders.start((reminder, late) => reminderTarget.onReminder(reminder, late));
   await activityService.start();
   planEffects.start();
   history.start();

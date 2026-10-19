@@ -14,7 +14,18 @@ import type { Log } from '../log.js';
 /** Основа путей приёмника; адрес для `PARLEY_ASSISTANT_URL` — `<origin сервера хуков>/assistant`. */
 export const ASSISTANT_PATH = '/assistant';
 /** Инструменты режима помощника `parley-mcp` (задача 4) — по пути на каждый. */
-export const ASSISTANT_TOOL_NAMES = ['parley_overview', 'parley_detail', 'propose_message', 'end_conversation'] as const;
+export const ASSISTANT_TOOL_NAMES = [
+  'parley_overview',
+  'parley_detail',
+  'propose_message',
+  'propose_room',
+  'propose_decision',
+  'propose_room_decision',
+  'schedule_check',
+  'list_reminders',
+  'cancel_reminder',
+  'end_conversation',
+] as const;
 /** Предел тела вызова: аргументы инструментов — короткие строки. */
 export const ASSISTANT_BODY_LIMIT = 1024 * 1024;
 

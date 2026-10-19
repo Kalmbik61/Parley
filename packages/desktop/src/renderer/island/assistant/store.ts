@@ -123,7 +123,7 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
       }
       const text = items.map((item) => item.text).join('\n\n');
       const sending: Sending = { id: crypto.randomUUID(), text, turn: state.host.turn, instance: state.host.instance ?? null };
-      set({ queue: state.queue.slice(items.length), sending });
+      set({ queue: state.queue.slice(items.length), sending, cardError: null });
       const config = deps.config();
       deps.call('assistant.ask', { text, provider: config.provider, model: config.model, language: config.language, askId: sending.id }).catch(() => {
         if (get().sending === sending) giveBack(text);
@@ -193,12 +193,17 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         // Принятый вопрос сменил обмен на острове: прошлый уходит выше, в историю.
         const previous = state.host;
         const archived = accepted && previous.question !== null ? [{ id: ++exchanges, question: previous.question, answer: previous.answer === '' ? (previous.error ?? '') : previous.answer }] : [];
+        // Ответ на напоминание приходит без вопроса: открываем помощника сами, но клавиатуру не отбираем.
+        const reminderOpen = host.origin === 'reminder' && host.turn !== previous.turn && !state.open;
         set({
           host,
+          ...(reminderOpen ? { open: true, collapsed: false, byHover: false } : {}),
           ...(accepted ? { sending: null, history: [...state.history, ...archived].slice(-HISTORY_MAX) } : {}),
           ...(sending !== null && !accepted && sending.instance === null && host.instance !== undefined ? { sending: { ...sending, instance: host.instance } } : {}),
           ...(reveal ? { collapsed: false, byHover: false } : {}),
-          ...(host.proposal === null ? { cardError: null } : {}),
+          // Ошибку на карточке стирает только новая карточка: публикация той же (смена фазы) её не трогает.
+          // Новый ход (карточки и итога нет) тоже стирает причину: она жила вместе с итогом прошлой карточки.
+          ...((host.proposal !== null && host.proposal.id !== previous.proposal?.id) || (host.proposal === null && host.outcome === null) ? { cardError: null } : {}),
         });
         if (restarted && sending !== null) giveBack(sending.text);
         pump();
@@ -222,7 +227,7 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         // Вопрос в пути тоже отменяется: хост бросит ход, который ещё запускается.
         if (get().sending !== null) void deps?.call('assistant.cancel', {});
         else stopTurn();
-        set({ open: false, collapsed: false, byHover: false, input: 'idle', level: 0, listenStartedAt: null, notice: null, queue: [], sending: null, history: [] });
+        set({ open: false, collapsed: false, byHover: false, input: 'idle', level: 0, listenStartedAt: null, notice: null, cardError: null, queue: [], sending: null, history: [] });
         deps?.keyboard(false);
       },
       collapse: () => {
@@ -269,7 +274,7 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         }
       },
       reset: async () => {
-        set({ queue: [], sending: null, history: [] });
+        set({ queue: [], sending: null, history: [], cardError: null });
         await deps?.call('assistant.reset', {});
       },
     };
