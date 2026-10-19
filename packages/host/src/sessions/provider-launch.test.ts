@@ -38,7 +38,7 @@ function service(hookUrl = () => 'http://127.0.0.1:1234/hooks') {
       return { ref, pid: process.pid };
     },
   } as unknown as PtyManager;
-  return createSessionsService(host, { onChange: () => () => {} } as unknown as WorksService, pty, { markSeen() {} } as unknown as ActivityService, {
+  return createSessionsService(host, { onChange: () => () => {} } as unknown as WorksService, pty, { markSeen() {}, watchClaudeRoot() {} } as unknown as ActivityService, {
     providerVersions: { ready: Promise.resolve(), get: () => version, fresh: probe },
     hooks: { url: hookUrl, register, unregister() {} },
   });

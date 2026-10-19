@@ -121,6 +121,8 @@ export interface ActivityService {
   codexLogFiles(ref: SessionRef): string[];
   /** Перечитать журнал Codex в индексе логов (`codex-log-poll.ts`). */
   reindexLog(file: string): Promise<void>;
+  /** Следить за корнем истории Claude Code своего провайдера (спека своих провайдеров 5.6); идемпотентно. */
+  watchClaudeRoot(root: string): void;
   /** Пользователь смотрел на сессию: `pty.attach` и `pty.input` (1.6). */
   markSeen(ref: SessionRef, at?: string): void;
   onChange(listener: (ref: SessionRef, value: SessionLive) => void): () => void;
@@ -1101,6 +1103,9 @@ export function createActivityService(
       if (session === undefined || session.provider !== 'codex') return [];
       const main = logIndex.index(session)?.file;
       return [...(main === undefined ? [] : [main]), ...logIndex.childLogs(session).map((child) => child.file)];
+    },
+    watchClaudeRoot(root) {
+      logIndex.watchClaudeRoot(root);
     },
     reindexLog(file) {
       return logIndex.reindex(file);

@@ -8,8 +8,12 @@
  */
 
 import { stat } from 'node:fs/promises';
+import path from 'node:path';
 import {
+  adapterV1,
   buildAllSessions,
+  buildIndex,
+  customProviderProjectRoots,
   claudeSource,
   codexSource,
   defaultRoot,
@@ -71,6 +75,11 @@ export interface LogIndex {
   log(session: WorkSession): ActivityLog | null;
   onChange(listener: (change?: LogChange) => void): () => void;
   /**
+   * Начать следить за ещё одним корнем истории Claude Code (папка `projects` своего провайдера, спека своих
+   * провайдеров 5.6). Идемпотентно; каталог должен уже существовать. До `start()` корень просто запоминается.
+   */
+  watchClaudeRoot(root: string): void;
+  /**
    * Перечитать один rollout-файл Codex и влить в индекс — как событие наблюдателя. На macOS `fs.watch` дозаписи
    * Codex не доставляет, поэтому `codex-log-poll.ts` зовёт это по опросу. Ошибку чтения (кроме «файла нет»)
    * не глотаем, а отдаём вызывающему: поллер ловит её сам и пробует на следующем проходе, как `onError` наблюдателя.
@@ -111,7 +120,18 @@ export interface LogIndexOptions {
   now?: () => number;
 }
 
-export function createLogIndex(roots: MetricsRoots = {}, options: LogIndexOptions = {}): LogIndex {
+/** Корни истории: к основным добавляются корни своих провайдеров (по умолчанию — найденные на диске). */
+export type LogIndexRoots = MetricsRoots & { customRoots?: () => string[] };
+
+export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptions = {}): LogIndex {
+  // Свои корни по умолчанию читаются с диска, только если основной корень не подменён (тесты и E2E уводят хост от истории человека).
+  const customRoots = roots.customRoots ?? (roots.claudeRoot === undefined ? () => customProviderProjectRoots() : () => []);
+  const mainRoot = roots.claudeRoot ?? defaultRoot();
+  /** Корни Claude, за которыми следит или будет следить индекс; в `usageIn` по ним находится корень файла. */
+  const claudeRoots = new Set<string>([mainRoot]);
+  /** Наблюдатели корней, добавленных `watchClaudeRoot` после старта. */
+  const extraWatchers: SessionWatcher[] = [];
+  let started = false;
   const timelineCacheSize = options.timelineCacheSize ?? USAGE_TIMELINE_CACHE_SIZE;
   const subagentTtlMs = options.subagentTtlMs ?? SUBAGENT_DISCOVERY_TTL_MS;
   const now = options.now ?? Date.now;
@@ -268,8 +288,14 @@ export function createLogIndex(roots: MetricsRoots = {}, options: LogIndexOption
       // старт хоста; `stopped` здесь ловит остановку, случившуюся, пока список
       // ещё строился: `stop()` прерывает чтение, и прерванное построение — не сбой.
       let built: SessionIndex[];
+      for (const root of customRoots()) claudeRoots.add(root);
+      const extra = [...claudeRoots].filter((root) => root !== mainRoot);
       try {
-        built = await buildAllSessions({ ...roots, signal: building.signal });
+        const { customRoots: _skip, ...metricsRoots } = roots;
+        built = await buildAllSessions({ ...metricsRoots, signal: building.signal });
+        // Корни своих провайдеров — только Claude-формат; Codex в общем списке уже один раз.
+        for (const root of extra) built = [...built, ...(await buildIndex(root, adapterV1, building.signal))];
+        if (extra.length > 0) built.sort((a, b) => String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? '')));
       } catch (error) {
         if (stopped) return;
         throw error;
@@ -285,10 +311,27 @@ export function createLogIndex(roots: MetricsRoots = {}, options: LogIndexOption
       for (const listener of listeners) listener();
       watcher = watchSessions(
         applyChange,
-        [claudeSource(roots.claudeRoot, undefined, indexer), codexSource(roots.codexRoot, indexer)],
+        [
+          claudeSource(roots.claudeRoot, undefined, indexer),
+          ...extra.map((root) => claudeSource(root, undefined, indexer)),
+          codexSource(roots.codexRoot, indexer),
+        ],
         // Сбой ре-парса одного файла не должен ронять хост — следующее событие
         // попробует снова, как и у остальных наблюдателей хоста.
         { minIntervalMs: LIVE_REINDEX_MIN_INTERVAL_MS, onError: () => {} },
+      );
+      started = true;
+    },
+    watchClaudeRoot(root) {
+      if (stopped || claudeRoots.has(root)) return;
+      claudeRoots.add(root);
+      // До старта корень подхватит сам `start()`; после — свой наблюдатель на этот корень.
+      if (!started) return;
+      extraWatchers.push(
+        watchSessions(applyChange, [claudeSource(root, undefined, indexer)], {
+          minIntervalMs: LIVE_REINDEX_MIN_INTERVAL_MS,
+          onError: () => {},
+        }),
       );
     },
     index: indexOf,
@@ -312,7 +355,8 @@ export function createLogIndex(roots: MetricsRoots = {}, options: LogIndexOption
         }
         return remember(key, withDescendants(own, descendants));
       }
-      const root = roots.claudeRoot ?? defaultRoot();
+      // Корень файла — тот из известных, внутри которого он лежит (у своего провайдера он свой).
+      const root = [...claudeRoots].find((known) => found.file.startsWith(known + path.sep)) ?? mainRoot;
       const subagents = await subagentsOf(found.file, root);
       const key = `claude\u0000${JSON.stringify(windows)}\u0000${await signature([found.file, ...subagents.map((agent) => agent.file)])}`;
       const cached = slices.get(key);
@@ -350,6 +394,8 @@ export function createLogIndex(roots: MetricsRoots = {}, options: LogIndexOption
       stopped = true;
       building.abort();
       watcher?.close();
+      for (const extraWatcher of extraWatchers) extraWatcher.close();
+      extraWatchers.length = 0;
       listeners.clear();
     },
   };

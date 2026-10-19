@@ -601,4 +601,87 @@ describe('createLogIndex', () => {
       expect(calls).toBe(0);
     });
   });
+
+  // Несколько корней Claude: свои провайдеры пишут историю в свою папку (спека своих провайдеров 5.6).
+  describe('корни своих провайдеров', () => {
+    const answer = (id: string, msg: string, at: string, input: number): string =>
+      `${JSON.stringify({ type: 'assistant', sessionId: id, timestamp: at, message: { role: 'assistant', id: msg, usage: { input_tokens: input, output_tokens: 1 } } })}\n`;
+    let customRoot = '';
+    beforeEach(async () => {
+      customRoot = await mkdtemp(path.join(tmpdir(), 'parley-custom-'));
+    });
+    afterEach(async () => {
+      await rm(customRoot, { recursive: true, force: true });
+    });
+    const customIndex = (roots: string[] = [customRoot]): LogIndex => {
+      const created = createLogIndex({ claudeRoot, codexRoot, customRoots: () => roots });
+      indexes.push(created);
+      return created;
+    };
+    const writeCustom = async (root: string, id: string, lines: string): Promise<string> => {
+      const dir = path.join(root, '-proj');
+      await mkdir(dir, { recursive: true });
+      const file = path.join(dir, `${id}.jsonl`);
+      await writeFile(file, lines);
+      return file;
+    };
+
+    it('транскрипт в корне своего провайдера, лежавший до старта, попадает в индекс; index(session) находит его по uuid', async () => {
+      const id = 'c-before';
+      const file = await writeCustom(customRoot, id, `${JSON.stringify({ type: 'custom-title', customTitle: 'свой', sessionId: id })}\n`);
+      const idx = customIndex();
+      await idx.start();
+      const found = idx.index(session({ provider: 'custom-kimi', providerSessionId: id }));
+      expect(found?.title).toBe('свой');
+      expect(found?.file).toBe(file);
+    });
+
+    it('watchClaudeRoot: новый корень после старта — живые записи индексируются; повторный вызов не плодит наблюдателей', async () => {
+      const idx = customIndex([]);
+      await idx.start();
+      idx.watchClaudeRoot(customRoot);
+      idx.watchClaudeRoot(customRoot);
+      let calls = 0;
+      idx.onChange(() => {
+        calls += 1;
+      });
+      const id = 'c-live';
+      const write = (): Promise<string> =>
+        writeCustom(customRoot, id, `${JSON.stringify({ type: 'custom-title', customTitle: 'живой', sessionId: id })}\n`);
+      await write();
+      await waitFor(() => idx.index(session({ provider: 'custom-kimi', providerSessionId: id }))?.title === 'живой', 15_000, write);
+      // Один наблюдатель — одно событие на запись; два дали бы удвоение.
+      const before = calls;
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      expect(calls - before).toBeLessThanOrEqual(1);
+    }, 40_000);
+
+    it('usageIn для custom-сессии считает подагентов от своего корня, не от ~/.claude/projects', async () => {
+      const id = 'c-usage';
+      await writeCustom(customRoot, id, answer(id, 'm1', '2026-10-14T11:00:00.000Z', 10));
+      await mkdir(path.join(customRoot, '-proj', id, 'subagents'), { recursive: true });
+      await writeFile(path.join(customRoot, '-proj', id, 'subagents', 'agent-a1.jsonl'), answer(id, 'a1', '2026-10-14T11:30:00.000Z', 5));
+      const idx = customIndex();
+      await idx.start();
+      const windows = [{ from: '2026-10-14T10:00:00.000Z', to: null }];
+      expect(await idx.usageIn(session({ provider: 'custom-kimi', providerSessionId: id }), windows)).toMatchObject({ input: 15 });
+    });
+
+    it('остановка индекса закрывает и наблюдателей добавленных корней', async () => {
+      const idx = customIndex([]);
+      await idx.start();
+      idx.watchClaudeRoot(customRoot);
+      idx.stop();
+      let calls = 0;
+      idx.onChange(() => {
+        calls += 1;
+      });
+      await writeCustom(customRoot, 'c-after-stop', `${JSON.stringify({ type: 'custom-title', customTitle: 'x', sessionId: 'c-after-stop' })}\n`);
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      expect(calls).toBe(0);
+      expect(idx.index(session({ providerSessionId: 'c-after-stop' }))).toBeUndefined();
+      // Корень, добавленный после остановки, наблюдателя не получает.
+      idx.watchClaudeRoot(customRoot);
+    });
+  });
 });

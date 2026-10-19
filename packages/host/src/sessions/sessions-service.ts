@@ -13,6 +13,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
 import {
   addMessage,
   attemptKindFor,
@@ -636,6 +638,13 @@ export function createSessionsService(
             });
             await mirrorProjectTrust(custom.id, plan.cwd, { userClaudeJson: userClaudeJsonPath() });
             await syncApiKeyApproval(custom.id, entry.runner.auth === 'api-key' ? secret : null);
+            // История своего провайдера пишется в его папку: каталог должен быть до запуска, чтобы индекс логов
+            // успел встать на него наблюдателем (спека 5.6).
+            if (entry.runner.configDir !== undefined) {
+              const projects = path.join(entry.runner.configDir, 'projects');
+              await mkdir(projects, { recursive: true });
+              activity.watchClaudeRoot(projects);
+            }
           });
         } catch (error) {
           host.log.warn('custom provider folder could not be prepared', { ref, provider: custom.id, error: String(error) });
