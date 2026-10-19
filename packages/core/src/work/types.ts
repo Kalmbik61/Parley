@@ -291,7 +291,7 @@ export interface Room {
 }
 
 /** Через кого человек отправил письмо (спека 2026-10-14, 7.4); нет поля — сам, в окне. */
-export type MessageVia = 'assistant';
+export type MessageVia = 'assistant' | 'telegram';
 
 /** Письмо: доставляется по pull, живёт в карте. */
 export interface Message {

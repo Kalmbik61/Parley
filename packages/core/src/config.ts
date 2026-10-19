@@ -57,6 +57,12 @@ export interface ParleyConfig extends ResourceLimits {
   skillNavigator: boolean;
   /** Отвечать на одобрения Codex из окна Parley: хуки Codex при запуске и resume (спека 2026-10-07, решение 9). */
   codexApprovals: boolean;
+  /** Канал Telegram (спека управления через помощника): включён ли он, и какие события в него идут. */
+  telegramEnabled: boolean;
+  telegramNeedsYou: boolean;
+  telegramFinished: boolean;
+  telegramMail: boolean;
+  telegramCards: boolean;
   /**
    * Облегчённый запуск участников комнат, которых Parley заводит по рецепту: без плагинов,
    * чужих MCP-серверов и автопамяти пользователя (спека «меньше ходов и легче контекст», C2.2). Включён по умолчанию;
@@ -84,6 +90,11 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   agentSkills: true,
   skillNavigator: true,
   codexApprovals: false,
+  telegramEnabled: true,
+  telegramNeedsYou: true,
+  telegramFinished: false,
+  telegramMail: true,
+  telegramCards: true,
   leanAgents: true,
   // Терминал окна (кусок 1.3 плана окна, спека 4.3).
   fontFamily: "'SF Mono', Menlo, monospace",
@@ -104,6 +115,11 @@ export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
   agentSkills: 'AGENT_SKILLS',
   skillNavigator: 'SKILL_NAVIGATOR',
   codexApprovals: 'CODEX_APPROVALS',
+  telegramEnabled: 'TELEGRAM_ENABLED',
+  telegramNeedsYou: 'TELEGRAM_NEEDS_YOU',
+  telegramFinished: 'TELEGRAM_FINISHED',
+  telegramMail: 'TELEGRAM_MAIL',
+  telegramCards: 'TELEGRAM_CARDS',
   leanAgents: 'LEAN_AGENTS',
   fontFamily: 'FONT_FAMILY',
   fontSize: 'FONT_SIZE',
@@ -203,6 +219,11 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('agentSkills', (value) => typeof value === 'boolean', 'true or false');
   take('skillNavigator', (value) => typeof value === 'boolean', 'true or false');
   take('codexApprovals', (value) => typeof value === 'boolean', 'true or false');
+  take('telegramEnabled', (value) => typeof value === 'boolean', 'true or false');
+  take('telegramNeedsYou', (value) => typeof value === 'boolean', 'true or false');
+  take('telegramFinished', (value) => typeof value === 'boolean', 'true or false');
+  take('telegramMail', (value) => typeof value === 'boolean', 'true or false');
+  take('telegramCards', (value) => typeof value === 'boolean', 'true or false');
   take('leanAgents', (value) => typeof value === 'boolean', 'true or false');
   take('fontFamily', isFontFamily, 'a non-empty string');
   take('fontSize', isFontSize, FONT_SIZE_EXPECTED);
@@ -224,7 +245,8 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   const nameOf = (key: keyof ParleyConfig): string => envName(env, ENV_NAMES[key]) ?? ENV_NAMES[key];
 
   const flag = (
-    key: 'channelPush' | 'agentSkills' | 'skillNavigator' | 'codexApprovals' | 'leanAgents',
+    key: 'channelPush' | 'agentSkills' | 'skillNavigator' | 'codexApprovals' | 'leanAgents'
+    | 'telegramEnabled' | 'telegramNeedsYou' | 'telegramFinished' | 'telegramMail' | 'telegramCards',
   ): void => {
     const value = text(key);
     if (value === undefined) return;
@@ -254,6 +276,11 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   flag('agentSkills');
   flag('skillNavigator');
   flag('codexApprovals');
+  flag('telegramEnabled');
+  flag('telegramNeedsYou');
+  flag('telegramFinished');
+  flag('telegramMail');
+  flag('telegramCards');
   flag('leanAgents');
 
   const fontFamily = text('fontFamily');
@@ -336,6 +363,11 @@ const BOOLEAN_KEYS: ReadonlySet<keyof ParleyConfig> = new Set([
   'skillNavigator',
   'codexApprovals',
   'leanAgents',
+  'telegramEnabled',
+  'telegramNeedsYou',
+  'telegramFinished',
+  'telegramMail',
+  'telegramCards',
 ]);
 
 /**
