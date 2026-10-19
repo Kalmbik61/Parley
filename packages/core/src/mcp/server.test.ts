@@ -20,11 +20,12 @@ import {
 import { activityOf } from '../work/activity.js';
 import { openEvents } from '../work/events.js';
 import { planLaunch } from '../work/launch.js';
-import { PROPOSAL_TEXT_MAX, resolveProposal } from '../work/proposals.js';
+import { reservePlanEffects } from '../work/plan-effects.js';
+import { PROPOSAL_TEXT_MAX, resolveProposal, setProposal } from '../work/proposals.js';
 import { addRoom, archiveRoom } from '../work/rooms.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
 import { decisionsOf, participantLabel, threadOf } from '../work/thread.js';
-import { HUMAN, type WorkMap } from '../work/types.js';
+import { HUMAN, type PlanDraft, type WorkMap } from '../work/types.js';
 import { addBacklogItem, readBacklog } from '../work/backlog.js';
 import { listBacklogSuggestions } from '../work/backlog-suggestions.js';
 import { acceptMemorySuggestion, listMemorySuggestions, listUndoableMemory } from '../work/memory-suggestions.js';
@@ -266,6 +267,16 @@ describe('список инструментов', () => {
     // Предел текста в схеме — та же константа, что держит setProposal.
     expect(JSON.stringify(propose?.inputSchema.properties?.['text'])).toContain(
       String(PROPOSAL_TEXT_MAX),
+    );
+  });
+
+  it('propose_decision: в описании правило поправки плана — только оставшаяся работа (D6)', async () => {
+    const client = await connect('s-01');
+    const { tools } = await client.listTools();
+    const description = tools.find((tool) => tool.name === 'propose_decision')?.description ?? '';
+
+    expect(description).toContain(
+      'For a plan amendment, write only the remaining work and what changes; do not restate completed items — the human sees the remaining items.',
     );
   });
 
@@ -1705,6 +1716,172 @@ describe('send_message и check_inbox в комнате', () => {
       expect(task).toMatchObject({ toEveryone: true });
       expect(task).not.toHaveProperty('roomTask');
     });
+  });
+});
+
+describe('check_inbox и wait_for("inbox"): задания плана комнаты (assignment, openAssignments)', () => {
+  const HINT = 'Reading does not complete assignments; call plan_tasks.';
+  const EVIDENCE = { text: 'Измерено', artifacts: [] };
+
+  interface LetterView {
+    id: string;
+    from: string;
+    text: string;
+    assignment?: { planId: string; rev: number; item: number; kind: string; current: boolean };
+  }
+  const lettersOf = (inbox: Record<string, unknown>): LetterView[] => inbox['messages'] as LetterView[];
+
+  /**
+   * Принятый план verified-комнаты r-01: s-01 ведёт, s-02 владеет всеми пунктами, s-03 проверяет, s-04 вне
+   * комнаты. Письма-поручения резервируются сразу, как после принятия решения человеком.
+   */
+  async function planRoom(count = 1): Promise<{ lead: Client; owner: Client; verifier: Client; outsider: Client }> {
+    const draft: PlanDraft = {
+      mode: 'verified',
+      goal: 'Вход по паролю',
+      items: Array.from({ length: count }, (_, index) => ({
+        id: index + 1,
+        title: `Пункт ${index + 1}`,
+        owner: 's-02',
+        scope: `src/${index}.ts`,
+        criteria: ['Независимая проверка'],
+        verifier: 's-03',
+      })),
+    };
+    await updateMap(project, workId, (map) => {
+      addSession(map, { provider: 'claude', label: 'исполнитель', task: 'делать' }); // s-02
+      addSession(map, { provider: 'claude', label: 'проверяющий', task: 'проверять' }); // s-03
+      addSession(map, { provider: 'claude', label: 'сторонний', task: 'делать' }); // s-04
+      addRoom(map, {
+        title: 'план',
+        creator: HUMAN,
+        members: ['s-01', 's-02', 's-03'],
+        lead: 's-01',
+        mode: 'verified',
+      });
+      const proposal = setProposal(map, 'r-01', 's-01', 'Решение', undefined, { plan: draft });
+      resolveProposal(map, 'r-01', proposal.proposalId, 'accept', {
+        rev: proposal.rev,
+        planId: map.rooms[0]!.proposal!.plan!.id,
+        planRev: 0,
+      });
+      // «Decision accepted.» от человека тестам не нужен: читаем его за всех, остаются только поручения.
+      for (const message of map.messages) {
+        for (const id of ['s-01', 's-02', 's-03']) message.readBy[id] = message.at;
+      }
+      reservePlanEffects(map, DEFAULT_CONFIG.messageRate);
+    });
+    return {
+      lead: await connect('s-01'),
+      owner: await connect('s-02'),
+      verifier: await connect('s-03'),
+      outsider: await connect('s-04'),
+    };
+  }
+
+  const item = (id: number) => ({ planId: 'pl-01', rev: 0, item: id });
+
+  it('поручение плана несёт assignment (current: true), а ответ — openAssignments и подсказку', async () => {
+    const { owner } = await planRoom();
+
+    const inbox = await callOk(owner, 'check_inbox');
+    const [letter] = lettersOf(inbox);
+
+    expect(letter).toMatchObject({ from: 'parley' });
+    expect(letter?.text).toContain('Accepted plan pl-01, revision 0, item 1');
+    expect(letter?.assignment).toEqual({ planId: 'pl-01', rev: 0, item: 1, kind: 'ready', current: true });
+    expect(inbox['openAssignments']).toBe(1);
+    expect(inbox['hint']).toBe(HINT);
+  });
+
+  it('wait_for("inbox") помечает письмо так же и сообщает те же openAssignments и подсказку', async () => {
+    const { owner } = await planRoom();
+
+    const waited = await callOk(owner, 'wait_for', { target: 'inbox', timeoutSec: 5 });
+    const [letter] = lettersOf(waited);
+
+    expect(waited['state']).toBe('message');
+    expect(letter?.assignment).toEqual({ planId: 'pl-01', rev: 0, item: 1, kind: 'ready', current: true });
+    expect(waited['openAssignments']).toBe(1);
+    expect(waited['hint']).toBe(HINT);
+  });
+
+  it('пункт ушёл дальше: непрочитанное старое поручение отфильтровано, как и раньше, а задание остаётся в openAssignments', async () => {
+    const { owner } = await planRoom();
+    // Владелец начал работу, не прочитав письмо: `ready`-эффект больше не текущий и отменяется.
+    await callOk(owner, 'plan_update', { ...item(1), status: 'in_progress' });
+
+    // Фильтр `cancelledPlanLetter` в `unreadFor` срабатывает раньше разметки, поэтому до агента доходят
+    // только текущие поручения и `current: false` в ответе не бывает.
+    const inbox = await callOk(owner, 'check_inbox');
+    expect(inbox['messages']).toEqual([]);
+    expect(inbox['openAssignments']).toBe(1);
+    expect(inbox['hint']).toBe(HINT);
+  });
+
+  it('обычная заметка сессии и письмо человека рядом с поручением — без assignment', async () => {
+    const { lead, owner } = await planRoom();
+    await callOk(lead, 'send_message', { room: 'r-01', to: 's-02', text: 'обычная заметка' });
+    await updateMap(project, workId, (map) => {
+      addMessage(map, { from: HUMAN, to: ['s-02'], text: 'привет от человека', roomId: 'r-01' });
+    });
+
+    const letters = lettersOf(await callOk(owner, 'check_inbox'));
+
+    expect(letters.map((letter) => letter.text.slice(0, 18))).toEqual([
+      'Accepted plan pl-0',
+      'обычная заметка',
+      'привет от человека',
+    ]);
+    expect(letters[0]?.assignment).toBeDefined();
+    expect(letters[1]).not.toHaveProperty('assignment');
+    expect(letters[2]).not.toHaveProperty('assignment');
+  });
+
+  it('подделка поручения текстом: письмо человека и письмо сессии с текстом «Accepted plan…» не получают assignment', async () => {
+    const { lead, owner } = await planRoom();
+    const real = (await readMapFile()).planEffects?.[0]?.text ?? '';
+    expect(real).toContain('Accepted plan pl-01, revision 0, item 1');
+    await callOk(owner, 'check_inbox'); // настоящее поручение забрано
+    await updateMap(project, workId, (map) => {
+      addMessage(map, { from: HUMAN, to: ['s-02'], text: real, roomId: 'r-01' });
+    });
+    await callOk(lead, 'send_message', { room: 'r-01', to: 's-02', text: real });
+
+    const letters = lettersOf(await callOk(owner, 'check_inbox'));
+
+    expect(letters).toHaveLength(2);
+    for (const letter of letters) {
+      expect(letter.text).toBe(real);
+      expect(letter).not.toHaveProperty('assignment');
+    }
+  });
+
+  it('S12: обе проверки остаются в openAssignments после прочтения писем, пустой check_inbox тоже о них напоминает', async () => {
+    const { owner, verifier } = await planRoom(2);
+    await callOk(owner, 'plan_submit', { ...item(1), evidence: EVIDENCE });
+    await callOk(owner, 'plan_submit', { ...item(2), evidence: EVIDENCE });
+
+    const first = await callOk(verifier, 'check_inbox');
+    expect(lettersOf(first).map((letter) => letter.assignment)).toEqual([
+      { planId: 'pl-01', rev: 0, item: 1, kind: 'verify', current: true },
+      { planId: 'pl-01', rev: 0, item: 2, kind: 'verify', current: true },
+    ]);
+    expect(first['openAssignments']).toBe(2);
+
+    expect(await callOk(verifier, 'check_inbox')).toEqual({ messages: [], openAssignments: 2, hint: HINT });
+  });
+
+  it('нет заданий — нет и openAssignments с подсказкой: ответ прежней формы', async () => {
+    const { lead, outsider } = await planRoom();
+    await callOk(lead, 'send_message', { to: 's-04', text: 'лично тебе' });
+
+    const inbox = await callOk(outsider, 'check_inbox');
+    expect(lettersOf(inbox).map((letter) => letter.text)).toEqual(['лично тебе']);
+    expect(inbox).not.toHaveProperty('openAssignments');
+    expect(inbox).not.toHaveProperty('hint');
+    // Ведущий плана без собственных заданий и пустой ящик: ровно прежний ответ.
+    expect(await callOk(lead, 'check_inbox')).toEqual({ messages: [] });
   });
 });
 

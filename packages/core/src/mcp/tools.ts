@@ -66,6 +66,8 @@ import {
   ResourceDeniedError,
   type ResourceLimits,
 } from '../work/resource-policy.js';
+import { currentPlanEffect, planEffectOwnsLetter } from '../work/plan-effects.js';
+import { planTasksNext } from '../work/plan-tasks.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
 import { PLAN_TASKS_TOOL, planTasks } from './plan-tasks.js';
 import { CREATE_SESSION_TOOL, SESSION_CREATION_UNAVAILABLE, createSession } from './session-tools.js';
@@ -270,10 +272,49 @@ function roomTaskOf(map: WorkMap, message: Message, recipientId: string) {
   };
 }
 
-/** Письмо в ответе `check_inbox` и `wait_for("inbox")`: `messageView` и, для задачи человека всем, `roomTask`. */
+/**
+ * Поручение плана, которым владеет письмо: ссылка на план, ревизию и пункт считается на сервере по эффекту плана
+ * (`planEffectOwnsLetter` сверяет id письма, отправителя Parley, адресата и текст), а не по тексту письма —
+ * «Accepted plan…» в чужом письме полномочий не даёт. Эффект без плана (`mode`) поручением не считается.
+ * `current` — поручение всё ещё действует; устаревшие письма плана `unreadFor` отсекает раньше, поэтому в ответе
+ * `check_inbox` оно практически всегда `true`.
+ */
+function assignmentOf(map: WorkMap, message: Message) {
+  const owner = (map.planEffects ?? []).find((value) => planEffectOwnsLetter(value, message));
+  if (owner === undefined || owner.planId === null) return undefined;
+  return {
+    planId: owner.planId,
+    rev: owner.rev,
+    item: owner.item,
+    kind: owner.kind,
+    current: currentPlanEffect(map, owner),
+  };
+}
+
+/**
+ * Письмо в ответе `check_inbox` и `wait_for("inbox")`: `messageView`, для задачи человека всем — `roomTask`,
+ * для поручения плана — `assignment`.
+ */
 const inboxView = (message: Message, map: WorkMap, recipientId: string) => {
   const roomTask = roomTaskOf(map, message, recipientId);
-  return { ...messageView(message, map), ...(roomTask === undefined ? {} : { roomTask }) };
+  const assignment = assignmentOf(map, message);
+  return {
+    ...messageView(message, map),
+    ...(roomTask === undefined ? {} : { roomTask }),
+    ...(assignment === undefined ? {} : { assignment }),
+  };
+};
+
+/**
+ * Открытые задания плана у сессии. Прочтение письма их не закрывает (S12 прочёл оба поручения проверки и
+ * закончил ход), поэтому ответ `check_inbox` и `wait_for("inbox")` напоминает о них и после прочтения. Нет
+ * заданий — нет полей: ответ остаётся прежней формы.
+ */
+const openAssignmentsNotice = (map: WorkMap, sessionId: string) => {
+  const { total } = planTasksNext(map, sessionId);
+  return total === 0
+    ? {}
+    : { openAssignments: total, hint: 'Reading does not complete assignments; call plan_tasks.' };
 };
 
 /**
@@ -539,7 +580,7 @@ const TOOLS: Tool[] = [
     name: 'propose_decision',
     annotations: WRITES,
     description:
-      "The room's lead proposes a decision: it lands as a card in the window and waits for the human's answer — accept or return for rework. Lead only (get_map, the room's lead field); in a closed room — an error. Call it when the participants' positions are collected; do not start the work before acceptance. A repeat before the human's answer replaces the text (the same proposalId, rev + 1). The answer will reach you as a message: accepted — hand out the parts, returned — redo it and propose again.",
+      "The room's lead proposes a decision: it lands as a card in the window and waits for the human's answer — accept or return for rework. Lead only (get_map, the room's lead field); in a closed room — an error. Call it when the participants' positions are collected; do not start the work before acceptance. A repeat before the human's answer replaces the text (the same proposalId, rev + 1). The answer will reach you as a message: accepted — hand out the parts, returned — redo it and propose again. For a plan amendment, write only the remaining work and what changes; do not restate completed items — the human sees the remaining items.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -804,7 +845,11 @@ async function waitFor(
       const messages = unreadFor(map, sessionId);
       return messages.length === 0
         ? null
-        : { state: 'message', messages: messages.map((message) => inboxView(message, map, sessionId)) };
+        : {
+            state: 'message',
+            messages: messages.map((message) => inboxView(message, map, sessionId)),
+            ...openAssignmentsNotice(map, sessionId),
+          };
     };
   } else {
     // Первая проба идёт до всякого ожидания, поэтому неизвестный id падает
@@ -986,7 +1031,10 @@ async function checkInbox(context: McpContext, sessionId: string): Promise<unkno
     messages = inbox.map((message) => ({ ...message }));
     for (const message of inbox) message.readBy[sessionId] = at;
   });
-  return { messages: messages.map((message) => inboxView(message, map, sessionId)) };
+  return {
+    messages: messages.map((message) => inboxView(message, map, sessionId)),
+    ...openAssignmentsNotice(map, sessionId),
+  };
 }
 
 async function createRoom(
