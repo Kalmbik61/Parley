@@ -235,4 +235,88 @@ test.describe('помощник на острове', () => {
     await island.keyboard.press('Escape');
     await expect(island.getByTestId('assistant-view')).toHaveCount(0);
   });
+
+  /** Запуск приложения со стабом и включённым помощником: общий вход обоих тестов ниже. */
+  async function launchWithAssistant(): Promise<Page> {
+    app = await electron.launch({
+      args: [mainEntry],
+      env: {
+        ...process.env,
+        PARLEY_HOME: home,
+        PARLEY_CLAUDE_BIN: stubAgent,
+        PARLEY_GLM_BIN: path.join(home, 'no-glm'),
+        PARLEY_SKIP_VERSION_PROBE: '',
+        PARLEY_TERMINAL_RENDERER: 'dom',
+        PARLEY_ISLAND: '',
+      },
+    });
+    const window = await mainWindowOf(app);
+    await resizeMain(app, 800, 500);
+    await expect(window.getByTestId('landing')).toBeVisible();
+    await window.evaluate(() => (globalThis as unknown as Parley).parley.app.saveUi({ assistant: { enabled: true, provider: 'claude' } }));
+    return window;
+  }
+
+  /** Палитра ⌘J → «Ask the assistant» → вид помощника на острове. */
+  async function openAssistant(window: Page): Promise<Page> {
+    await window.keyboard.press('Meta+J');
+    await expect(window.locator('[data-palette] [cmdk-input]')).toBeFocused();
+    await window.keyboard.type('Ask the assistant');
+    await expect(window.locator('[data-palette] [role="option"]').first()).toContainText('Ask the assistant');
+    await window.keyboard.press('Enter');
+    await expect.poll(() => islandPage(app!) !== undefined, { message: 'остров создан' }).toBe(true);
+    const island = islandPage(app!)!;
+    await expect(island.getByTestId('assistant-view')).toBeVisible();
+    return island;
+  }
+
+  test('«create room Release» → карточка новой комнаты → Create → «Done ✓» → комната в сайдбаре', async () => {
+    test.setTimeout(120_000);
+    const window = await launchWithAssistant();
+    const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: WORK_TITLE, goal: '' });
+    const { ref } = await call<{ ref: { sessionId: string } }>(window, 'sessions.create', {
+      projectPath: project,
+      workId,
+      provider: 'claude',
+      label: 'planner',
+      task: '',
+      parent: null,
+    });
+    // Обзор помощника строится из снимка работ хоста: ждём работу с сессией в снимке.
+    type WorksList = { entries: Array<{ map: { work: { id: string }; sessions: unknown[] } }> };
+    await expect
+      .poll(
+        async () => (await call<WorksList>(window, 'works.list', {})).entries.find((entry) => entry.map.work.id === workId)?.map.sessions.length ?? 0,
+        { message: 'сессия в снимке работ хоста', timeout: 30_000 },
+      )
+      .toBeGreaterThan(0);
+    expect(ref.sessionId).not.toBe('');
+
+    const island = await openAssistant(window);
+    await island.getByTestId('assistant-input').fill('create room Release');
+    await island.getByTestId('assistant-input').press('Enter');
+    await expect(island.getByTestId('assistant-card')).toContainText('New room in', { timeout: 30_000 });
+    await expect(island.getByTestId('assistant-room-line')).toContainText('Release', { timeout: 30_000 });
+    // Кнопка взводится через 500 мс.
+    await island.waitForTimeout(600);
+    await island.getByTestId('assistant-send').click();
+    await expect(island.getByTestId('assistant-done')).toContainText('Done ✓');
+
+    await expect(window.locator('[data-room-row]').filter({ hasText: 'Release' })).toHaveCount(1);
+  });
+
+  test('«check in 2 seconds» → ответ → Esc → остров сам раскрывается с ответом по напоминанию', async () => {
+    test.setTimeout(120_000);
+    const window = await launchWithAssistant();
+    const island = await openAssistant(window);
+    await island.getByTestId('assistant-input').fill('check in 2 seconds');
+    await island.getByTestId('assistant-input').press('Enter');
+    await expect(island.getByTestId('assistant-answer')).toContainText('I will check in 2 seconds.', { timeout: 30_000 });
+    await island.keyboard.press('Escape');
+    await expect(island.getByTestId('assistant-view')).toHaveCount(0);
+
+    // Через 2 с хост запускает ход по напоминанию: остров открывается сам.
+    await expect(island.getByTestId('assistant-view')).toBeVisible({ timeout: 10_000 });
+    await expect(island.getByTestId('assistant-answer')).toContainText('Reminder: the room is fine.', { timeout: 10_000 });
+  });
 });
