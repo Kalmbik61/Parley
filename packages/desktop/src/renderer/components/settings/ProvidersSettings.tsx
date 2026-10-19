@@ -1,7 +1,7 @@
 /**
  * Settings → Providers (спека своих провайдеров, раздел 4): пилюли Claude Code, Codex, GLM, своих
  * провайдеров и «+ Add provider». Выбранная встроенная показывает карточку подключения без изменений;
- * своя или `'new'` — место под форму (`CustomProviderPanel`, задача 11).
+ * своя или `'new'` — выбор вендора и форма (`CustomProviderPanel`).
  */
 
 import { useEffect, useState } from 'react';
@@ -12,6 +12,7 @@ import { useProvidersStore } from '../../store/providers.js';
 import { useUiStore } from '../../store/ui.js';
 import { AgentIcon } from '../AgentIcon.js';
 import { PILL } from '../providers/pill.js';
+import { CustomProviderPanel } from '../providers/CustomProviderPanel.js';
 import { ProviderCard } from '../providers/ProviderCard.js';
 
 const CORE_IDS = ['claude', 'codex', 'glm'] as const;
@@ -65,10 +66,14 @@ export function ProvidersSettings(): JSX.Element {
           <span>{S.statusBar.addProvider}</span>
         </button>
       </div>
-      {/* Форма своего провайдера (CustomProviderPanel) приходит задачей 11; здесь — только место под неё. */}
       {current !== undefined && current.custom == null ?
         <ProviderCard provider={current} onReload={reload} onRestartHost={() => useUiStore.getState().confirmRestartHost()} /> :
-        <div data-custom-provider-slot={selected} />}
+        <CustomProviderPanel
+          key={selected}
+          providerId={selected}
+          onSaved={(id) => setSelected(id)}
+          onDeleted={() => setSelected('claude')}
+        />}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 /** Общая карточка провайдера. Полный ключ живёт только в локальном поле этого открытия. */
 import { useEffect, useId, useRef, useState } from 'react';
 import { LoaderCircle } from 'lucide-react';
-import { PROVIDER_CHECK_REASONS, type ProviderCheck, type ProviderCheckReason, type Result } from '@parley/protocol';
+import type { ProviderCheck, Result } from '@parley/protocol';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, providerName, S } from '../../../shared/strings.js';
 import { hostMethods } from '../../lib/capabilities.js';
@@ -10,6 +10,7 @@ import { useHostStore } from '../../store/host.js';
 import { Button } from '../../ui/button.js';
 import { Input } from '../../ui/input.js';
 import { AgentIcon } from '../AgentIcon.js';
+import { CheckLine, knownReason, maskedHint, newerCheck } from './check-line.js';
 import { GLM_KEY_URL, PROVIDER_INSTALL } from './provider-install.js';
 
 export interface ProviderCardProps {
@@ -22,58 +23,8 @@ export interface ProviderCardProps {
   open?: boolean;
 }
 
-/** Даже неполный/чужой ответ хоста не должен отразить немаскированную строку. */
-function maskedHint(hint: string): string {
-  return /^[•*]+[^•*]{0,4}$/u.test(hint) ? `••••${hint.replace(/^[•*]+/u, '')}` : '••••';
-}
-
 /** Быстрый ответ не должен погасить спиннер проверки раньше первого заметного кадра. */
 const MIN_CHECK_FEEDBACK_MS = 600;
-
-/**
- * Время проверки — местное и короткое, как в тултипе лимитов строки статуса: «9:30 PM». Исход переживает
- * перезапуск хоста, поэтому не сегодняшняя проверка показывает и дату: «Oct 5, 9:30 PM».
- */
-function clock(iso: string, now = new Date()): string {
-  const at = new Date(iso);
-  return at.toDateString() === now.toDateString()
-    ? at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-    : at.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-}
-
-/** Причина, которую знает это окно: незнакомая (хост новее окна) читается как «незнакомый ответ». */
-const knownReason = (reason: string | undefined): ProviderCheckReason =>
-  (PROVIDER_CHECK_REASONS as readonly (string | undefined)[]).includes(reason)
-    ? (reason as ProviderCheckReason)
-    : 'unsupported_response';
-
-/** Из двух исходов — более поздний: ответ этой карточки или снимок списка (его могло обновить другое окно). */
-function newerCheck(answer: ProviderCheck | null, snapshot: ProviderCheck | null): ProviderCheck | null {
-  if (answer === null) return snapshot;
-  if (snapshot === null) return answer;
-  return Date.parse(snapshot.at) > Date.parse(answer.at) ? snapshot : answer;
-}
-
-/** Строка исхода проверки ключа: «проверено» или подсказка, что делать, и подробности ответа Z.ai. */
-function CheckLine({ check, checking }: { check: ProviderCheck | null; checking: boolean }): JSX.Element | null {
-  if (!checking && check === null) return null;
-  return (
-    <div role="status" aria-busy={checking} className="space-y-0.5 text-xs">
-      {checking || check === null ? (
-        <p className="text-muted-foreground">{S.providerCard.checkingLine}</p>
-      ) : check.state === 'ok' ? (
-        <p className="text-muted-foreground">{S.providerCard.checkedOk(clock(check.at))}</p>
-      ) : (
-        <>
-          <p className="text-destructive">{S.providerCard.checkHint[knownReason(check.reason)]}</p>
-          <p className="tabular-nums text-muted-foreground">
-            {S.providerCard.checkDetails(check.httpStatus, check.code, clock(check.at))}
-          </p>
-        </>
-      )}
-    </div>
-  );
-}
 
 export function ProviderCard({
   provider,
