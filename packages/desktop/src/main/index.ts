@@ -72,6 +72,7 @@ import { testSwitches } from './test-switches.js';
 import { createUiStore, desktopUiPath } from './ui-store.js';
 import { createUpdateChecker, updateCheckAllowed } from './update-check.js';
 import { userDataDir } from './user-data.js';
+import { assistantSettingsOf, createAssistantMirror, hostExtraEnv } from './assistant-mirror.js';
 import { isFileSync, resolveEngine } from './voice/engine.js';
 import { registerVoiceIpc } from './voice/ipc.js';
 import { MIC_SETTINGS_URL, normalizeMicStatus } from './voice/mic.js';
@@ -214,8 +215,16 @@ if (!gotLock) {
             packaged: app.isPackaged,
             resourcesPath: process.resourcesPath,
           });
+          // Пути движка Whisper (бинарник и модель VAD) — для ответов хоста из Telegram (голос).
+          const engine = resolveEngine({
+            isPackaged: app.isPackaged,
+            resourcesPath: process.resourcesPath,
+            devDir: path.resolve(dirname, '../../build/whisper', `darwin-${process.arch}`),
+            pathEnv: shellEnv.env.PATH,
+            isFile: isFileSync,
+          });
           return spawnHost({
-            env: shellEnv.env,
+            env: { ...shellEnv.env, ...hostExtraEnv({ engine }) },
             entry,
             nodeBin,
             stderrFile: path.join(paths.dir, 'host.err'),
@@ -495,6 +504,23 @@ if (!gotLock) {
     }
     const assistantLanguage = (current: UiFile): AssistantLanguage =>
       current.assistant.language ?? systemAssistantLanguage(app.getLocale());
+    // Настройки помощника — хосту для ответов из Telegram: при каждом подключении и сохранении ui.json.
+    const mirrorModels = createModelStore({ dir: voiceModelsDir(), fetch: (url, init) => net.fetch(url, init), freeBytes });
+    let hostMethods: readonly string[] | null = null;
+    const assistantMirror = createAssistantMirror({
+      call: (method, params) => connection.call(method, params),
+      methods: () => hostMethods,
+      log: (line) => console.warn('[parley]', line),
+    });
+    const pushAssistantSettings = async (current: UiFile): Promise<void> => {
+      const downloaded = new Set(await mirrorModels.list());
+      await assistantMirror.push(assistantSettingsOf(current, { downloaded: (id) => downloaded.has(id), path: (id) => mirrorModels.path(id) }, assistantLanguage));
+    };
+    connection.onStatus((status) => {
+      if (status.state !== 'connected') return;
+      hostMethods = status.methods;
+      void uiStore.load().then(pushAssistantSettings).catch((error: unknown) => console.warn('[parley] assistant mirror', error));
+    });
     const islandConfig = async (): Promise<IslandConfig> => {
       const current = await uiStore.load();
       return {
@@ -698,6 +724,7 @@ if (!gotLock) {
         void updates.settingsChanged();
         // Окна об изменениях ui.json не узнают — main перечитывает файл сам (спека 2026-10-12, 5.1).
         void uiStore.load().then((current) => {
+          void pushAssistantSettings(current).catch((error: unknown) => console.warn('[parley] assistant mirror', error));
           // Сбой острова не должен ломать сохранение настроек.
           try {
             syncIsland(current);
