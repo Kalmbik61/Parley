@@ -13,13 +13,15 @@
  * Лимиты подписки (кусок 9b, спека комнат Organic, 3.5) — после версии: полоска пятичасового окна (нет
  * его — недельного) и «58% 5h · 41% wk». Нет данных — сегмент прежний. Проценты целые, округление вниз:
  * не завышать расход и не прыгать при каждом обновлении. От 80 % в любом окне текст и полоска — `accent-700`.
+ * Рядом с процентом — время сброса окна («58% 5h ↻9:30 PM · 41% wk ↻Sat 9:30 PM», P7), если строка достаточно широка
+ * (`LIMIT_RESETS_MIN_WIDTH`); те же времена остаются в тултипе.
  *
  * `noticeLine` приходит уже переведённым текстом (`shared/strings.ts#noticeText`,
  * раунд исправлений 1 куска E.1) — сам компонент `HostNotice` больше не
  * видит и `notice.text` хоста показать не может, даже случайно.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Hourglass, Plus, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import type { LimitWindow, ProviderLimits } from '@parley/protocol';
@@ -66,6 +68,16 @@ export interface StatusBarProps {
 /** От скольки процентов лимит в любом окне считается на исходе: текст и полоска — `accent-700` (спека 3.5). */
 const LIMIT_WARNING_PERCENT = 80;
 
+/**
+ * От какой ширины содержимого строки (без отступов) рядом с процентами пишется время сброса (P7). Строка делит нехватку
+ * места между кнопками-сегментами пропорционально их ширине, а ширину кнопки со сбросами давали бы и сбросы: в окне уже
+ * ~1000 px они отнимали бы место у процентов соседей и у имени Codex (замер E2E 800–1000). Выше порога места хватает, а
+ * то, что не хватило, забирают сами сбросы (многоточие, затем ноль). Ширину меряет `ResizeObserver`, а не контейнерный
+ * запрос: у размерного контейнера Chromium порой не пересчитывает `:disabled` потомков (см. `BrowserChrome.tsx`), а в
+ * строке есть кнопка с `disabled:`.
+ */
+const LIMIT_RESETS_MIN_WIDTH = 1060;
+
 /** Быстрый локальный ответ не должен закончить анимацию до первого заметного кадра. */
 const MIN_REFRESH_FEEDBACK_MS = 600;
 
@@ -77,11 +89,27 @@ const clock = (iso: string): string => new Date(iso).toLocaleTimeString('en-US',
 const weekday = (iso: string): string => new Date(iso).toLocaleDateString('en-US', { weekday: 'short' });
 
 /**
- * Лимиты подписки: трек 44×4 и текст окон. Внутри кнопки сначала сжимаются лимиты,
- * затем версия, затем имя; полоска остаётся. Основа текста 4.5ch переносит слишком
- * короткий остаток во вторую обрезанную строку, чтобы вместо процента не оставалась цифра.
+ * Одно окно в тексте: процент и (если сброс известен) время сброса отдельными спанами. Процент не сжимается; сброс с
+ * многоточием и на порядки сильнее — при нехватке места он уходит первым и исчезает раньше, чем тронут процент.
  */
-function ProviderLimitsMeter({ limits }: { limits: ProviderLimits | null }): JSX.Element | null {
+function LimitWindowText({ percent, reset }: { percent: string; reset: string | null }): JSX.Element {
+  return (
+    <>
+      <span className="shrink-0">{percent}</span>
+      {reset === null ? null : (
+        <span data-limit-reset className="min-w-0 shrink-[1000000000] overflow-hidden text-ellipsis whitespace-pre">{reset}</span>
+      )}
+    </>
+  );
+}
+
+/**
+ * Лимиты подписки: трек 44×4 и текст окон. Внутри кнопки сначала сжимаются лимиты,
+ * затем версия, затем имя; полоска остаётся. Внутри лимитов первыми сжимаются времена сброса
+ * (P7), проценты — после них. Основа текста 4.5ch переносит слишком короткий остаток во вторую
+ * обрезанную строку, чтобы вместо процента не оставалась цифра.
+ */
+function ProviderLimitsMeter({ limits, resets }: { limits: ProviderLimits | null; resets: boolean }): JSX.Element | null {
   const fiveHourLimit = limits?.fiveHour ?? null;
   const weekLimit = limits?.week ?? null;
   const fiveHour = wholePercent(fiveHourLimit);
@@ -89,11 +117,12 @@ function ProviderLimitsMeter({ limits }: { limits: ProviderLimits | null }): JSX
   const bar = fiveHour ?? week;
   if (limits === null || bar === null) return null;
   const warning = (fiveHour ?? 0) >= LIMIT_WARNING_PERCENT || (week ?? 0) >= LIMIT_WARNING_PERCENT;
-  const tooltip = S.statusBar.limitsTooltip(
-    fiveHourLimit?.resetsAt == null ? null : clock(fiveHourLimit.resetsAt),
-    weekLimit?.resetsAt == null ? null : { day: weekday(weekLimit.resetsAt), time: clock(weekLimit.resetsAt) },
-    clock(limits.at),
-  );
+  const fiveHourReset = fiveHourLimit?.resetsAt == null ? null : clock(fiveHourLimit.resetsAt);
+  const weekReset = weekLimit?.resetsAt == null ? null : { day: weekday(weekLimit.resetsAt), time: clock(weekLimit.resetsAt) };
+  const tooltip = S.statusBar.limitsTooltip(fiveHourReset, weekReset, clock(limits.at));
+  // Времена сброса пишутся рядом с процентами только в широкой строке и только у окон, у которых они известны (P7); иначе
+  // текст прежний — одной строкой с многоточием.
+  const inline = resets && (fiveHourReset !== null || weekReset !== null);
   return (
     <span
       data-limits
@@ -107,9 +136,27 @@ function ProviderLimitsMeter({ limits }: { limits: ProviderLimits | null }): JSX
           style={{ width: `${bar}%` }}
         />
       </span>
-      <span className={cn('min-w-0 grow basis-[4.5ch] truncate tabular-nums', warning && 'text-accent-700')}>
-        {S.statusBar.limitsText(fiveHour, week)}
-      </span>
+      {inline ? (
+        <span className={cn('flex min-w-0 grow basis-[4.5ch] overflow-hidden whitespace-nowrap tabular-nums', warning && 'text-accent-700')}>
+          {fiveHour === null ? null : (
+            <LimitWindowText
+              percent={S.statusBar.limitWindowText(fiveHour, '5h')}
+              reset={fiveHourReset === null ? null : S.statusBar.limitReset(fiveHourReset, null)}
+            />
+          )}
+          {fiveHour === null || week === null ? null : <span className="shrink-0 whitespace-pre">{S.statusBar.limitsSeparator}</span>}
+          {week === null ? null : (
+            <LimitWindowText
+              percent={S.statusBar.limitWindowText(week, 'wk')}
+              reset={weekReset === null ? null : S.statusBar.limitReset(weekReset.time, weekReset.day)}
+            />
+          )}
+        </span>
+      ) : (
+        <span className={cn('min-w-0 grow basis-[4.5ch] truncate tabular-nums', warning && 'text-accent-700')}>
+          {S.statusBar.limitsText(fiveHour, week)}
+        </span>
+      )}
     </span>
   );
 }
@@ -133,7 +180,7 @@ const YIELDING_SEGMENT = 'shrink-[1000000000]';
 const segmentFloor = (version: boolean, meter: boolean): number =>
   14 + 7 * (1 + Number(version) + Number(meter)) + (meter ? 4 + 44 : 0);
 
-function ProviderSegment({ provider, onRestartHost }: { provider: ProviderInfo; onRestartHost: () => void }): JSX.Element {
+function ProviderSegment({ provider, resets, onRestartHost }: { provider: ProviderInfo; resets: boolean; onRestartHost: () => void }): JSX.Element {
   const [open, setOpen] = useState(false);
   const reload = useProvidersStore((state) => state.reload);
   const name = providerName(provider.id, provider.label);
@@ -150,7 +197,7 @@ function ProviderSegment({ provider, onRestartHost }: { provider: ProviderInfo; 
       <span className="min-w-0 truncate">{name}</span>
       {version ?
         <span className="min-w-0 shrink-[100000] truncate font-mono text-[11px] text-neutral-700">{provider.version}</span> : null}
-      {limits ? <ProviderLimitsMeter limits={provider.limits} /> : null}
+      {limits ? <ProviderLimitsMeter limits={provider.limits} resets={resets} /> : null}
     </>
   );
   // Свой провайдер: вместо поповера — Settings на нём (спека своих провайдеров, раздел 4).
@@ -214,6 +261,19 @@ export function StatusBar({
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshGeneration = useRef(0);
   const refreshBusy = refreshing || refreshFeedback;
+  // Ширину строки меряет сам компонент (см. `LIMIT_RESETS_MIN_WIDTH`): `contentRect` — содержимое без отступов.
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [roomy, setRoomy] = useState(false);
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (row === null || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[entries.length - 1]?.contentRect.width;
+      if (width !== undefined) setRoomy(width >= LIMIT_RESETS_MIN_WIDTH);
+    });
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => {
     ++refreshGeneration.current;
     setRefreshFeedback(false);
@@ -234,7 +294,7 @@ export function StatusBar({
   // Письма в счёт не входят: они в бейдже и на карточках, а клик ведёт только к сессиям.
   const attentionText = S.statusBar.attention(attention.needsYou, attention.unseen);
   return (
-    <div className="flex h-7 shrink-0 items-center gap-3.5 pb-0.5 pl-[18px] pr-3.5 text-xs text-neutral-800">
+    <div ref={rowRef} className="flex h-7 shrink-0 items-center gap-3.5 pb-0.5 pl-[18px] pr-3.5 text-xs text-neutral-800">
       <button
         type="button"
         title={S.statusBar.refreshLimits}
@@ -259,7 +319,7 @@ export function StatusBar({
         {refreshBusy ? <Hourglass aria-hidden size={14} className="hidden motion-reduce:block" /> : null}
       </button>
       {providers.map((provider) => (
-        <ProviderSegment key={provider.id} provider={provider} onRestartHost={() => onRestartHostOpenChange(true)} />
+        <ProviderSegment key={provider.id} provider={provider} resets={roomy} onRestartHost={() => onRestartHostOpenChange(true)} />
       ))}
       <button
         type="button"

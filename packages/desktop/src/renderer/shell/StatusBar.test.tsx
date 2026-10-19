@@ -638,6 +638,192 @@ describe('StatusBar — лимиты подписок: тултип (кусок 
   });
 });
 
+describe('S.statusBar: время сброса в тексте лимитов (P7)', () => {
+  it('одно окно: «58% 5h», «↻9:30 PM» отдельно, с пробелом впереди; у недели день и время', () => {
+    expect(S.statusBar.limitWindowText(58, '5h')).toBe('58% 5h');
+    expect(S.statusBar.limitWindowText(41, 'wk')).toBe('41% wk');
+    expect(S.statusBar.limitReset('9:30 PM', null)).toBe(' ↻9:30 PM');
+    expect(S.statusBar.limitReset('9:30 PM', 'Sat')).toBe(' ↻Sat 9:30 PM');
+  });
+});
+
+// Время сброса рядом с процентами (P7): те же `resetsAt`, что и в тултипе, но прямо в строке. Только в широкой строке
+// (ширину меряет `ResizeObserver`, как в `BrowserChrome`; контейнерного запроса нет), проценты и сбросы — отдельные спаны:
+// при нехватке места первыми сжимаются сбросы. Вёрстку jsdom не считает — здесь структура и классы; геометрию в живом окне
+// проверяет E2E `limits.spec.ts`.
+describe('StatusBar — лимиты подписок: время сброса рядом с процентами (P7)', () => {
+  type Entry = { callback: ResizeObserverCallback; target: Element | null; disconnected: boolean };
+  const observers: Entry[] = [];
+
+  beforeEach(() => {
+    observers.length = 0;
+    class ResizeObserverStub {
+      private readonly entry: Entry;
+      constructor(callback: ResizeObserverCallback) {
+        this.entry = { callback, target: null, disconnected: false };
+        observers.push(this.entry);
+      }
+      observe(target: Element): void {
+        this.entry.target = target;
+      }
+      unobserve(): void {}
+      disconnect(): void {
+        this.entry.disconnected = true;
+      }
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Строке сообщили новую ширину содержимого (без отступов). */
+  function resizeRow(contentWidth: number): void {
+    act(() => {
+      for (const entry of observers) {
+        entry.callback([{ target: entry.target, contentRect: { width: contentWidth } } as ResizeObserverEntry], {} as ResizeObserver);
+      }
+    });
+  }
+
+  /** Момент по местному времени, как ISO: тест не зависит от часового пояса машины. */
+  const local = (month: number, day: number, hour: number, minute: number): string => new Date(2026, month - 1, day, hour, minute).toISOString();
+  /** Пробел перед AM/PM в зависимости от ICU бывает узким неразрывным — тест его не различает. */
+  const spaced = (text: string | null | undefined): string => (text ?? '').replace(/\s/g, ' ');
+  const resetsIn = (container: HTMLElement, id = 'claude'): HTMLElement[] =>
+    [...(limitsIn(container, id)?.querySelectorAll<HTMLElement>('[data-limit-reset]') ?? [])];
+  const textIn = (container: HTMLElement, id = 'claude'): HTMLElement => limitsIn(container, id)?.lastElementChild as HTMLElement;
+  const at = local(9, 29, 18, 20);
+  // Суббота, 3 октября 2026.
+  const fiveHour = limitWindow(58, local(9, 29, 21, 30));
+  const week = limitWindow(41, local(10, 3, 9, 5));
+
+  it('оба окна в широкой строке: «58% 5h ↻9:30 PM · 41% wk ↻Sat 9:05 AM» — время у пяти часов, день и время у недели', () => {
+    useProvidersStore.setState({ providers: [provider({ id: 'claude', label: 'Claude', limits: { fiveHour, week, at } })] });
+    const { container } = renderPlain();
+    resizeRow(1400);
+    expect(spaced(limitsIn(container)?.textContent)).toBe('58% 5h ↻9:30 PM · 41% wk ↻Sat 9:05 AM');
+    expect(resetsIn(container).map((el) => spaced(el.textContent))).toEqual([' ↻9:30 PM', ' ↻Sat 9:05 AM']);
+  });
+
+  it('строка уже порога (1059 px содержимого) или меры ещё нет — только проценты; 1060 и шире — со сбросами; порог пересекают в обе стороны', () => {
+    useProvidersStore.setState({ providers: [provider({ id: 'claude', label: 'Claude', limits: { fiveHour, week, at } })] });
+    const { container } = renderPlain();
+    expect(limitsIn(container)?.textContent).toBe('58% 5h · 41% wk');
+    expect(resetsIn(container)).toHaveLength(0);
+    resizeRow(1059);
+    expect(limitsIn(container)?.textContent).toBe('58% 5h · 41% wk');
+    resizeRow(1060);
+    expect(spaced(limitsIn(container)?.textContent)).toBe('58% 5h ↻9:30 PM · 41% wk ↻Sat 9:05 AM');
+    resizeRow(800);
+    expect(limitsIn(container)?.textContent).toBe('58% 5h · 41% wk');
+  });
+
+  it('узкая строка — текст прежний: одна строка с многоточием (truncate), как до P7', () => {
+    useProvidersStore.setState({ providers: [provider({ id: 'claude', label: 'Claude', limits: { fiveHour, week, at } })] });
+    const { container } = renderPlain();
+    resizeRow(800);
+    expect(textIn(container).className).toContain('truncate');
+    expect(textIn(container).className).not.toMatch(/(^|\s)flex(\s|$)/);
+  });
+
+  it('время местное, а не UTC: полночь и полдень пишутся 12:05 AM и 12:00 PM', () => {
+    useProvidersStore.setState({
+      providers: [
+        provider({ id: 'claude', label: 'Claude', limits: { fiveHour: limitWindow(58, local(9, 30, 0, 5)), week: limitWindow(41, local(10, 4, 12, 0)), at } }),
+      ],
+    });
+    const { container } = renderPlain();
+    resizeRow(1400);
+    expect(spaced(limitsIn(container)?.textContent)).toBe('58% 5h ↻12:05 AM · 41% wk ↻Sun 12:00 PM');
+  });
+
+  it('окно без resetsAt — только процент: сброс пятичасового неизвестен, недельного известен, и наоборот', () => {
+    useProvidersStore.setState({
+      providers: [
+        provider({ id: 'claude', label: 'Claude', limits: { fiveHour: limitWindow(58, null), week, at } }),
+        provider({ id: 'codex', label: 'Codex', limits: { fiveHour, week: limitWindow(41, null), at } }),
+      ],
+    });
+    const { container } = renderPlain();
+    resizeRow(1400);
+    expect(spaced(limitsIn(container, 'claude')?.textContent)).toBe('58% 5h · 41% wk ↻Sat 9:05 AM');
+    expect(resetsIn(container, 'claude')).toHaveLength(1);
+    expect(spaced(limitsIn(container, 'codex')?.textContent)).toBe('58% 5h ↻9:30 PM · 41% wk');
+    expect(resetsIn(container, 'codex')).toHaveLength(1);
+  });
+
+  it('одно окно: у единственного пятичасового время, у единственного недельного день и время; ни у одного нет сброса — «42% 5h»', () => {
+    useProvidersStore.setState({
+      providers: [
+        provider({ id: 'claude', label: 'Claude', limits: { fiveHour, week: null, at } }),
+        provider({ id: 'codex', label: 'Codex', limits: { fiveHour: null, week, at } }),
+        provider({ id: 'glm', label: 'GLM', limits: { source: 'zai', fiveHour: limitWindow(42.9, null), week: null, at } }),
+      ],
+    });
+    const { container } = renderPlain();
+    resizeRow(1400);
+    expect(spaced(limitsIn(container, 'claude')?.textContent)).toBe('58% 5h ↻9:30 PM');
+    expect(spaced(limitsIn(container, 'codex')?.textContent)).toBe('41% wk ↻Sat 9:05 AM');
+    expect(limitsIn(container, 'glm')?.textContent).toBe('42% 5h');
+    expect(resetsIn(container, 'glm')).toHaveLength(0);
+  });
+
+  it('проценты и сбросы — отдельные спаны: проценты не сжимаются, сбросы с многоточием и на порядки сильнее сжимаются', () => {
+    useProvidersStore.setState({ providers: [provider({ id: 'claude', label: 'Claude', limits: { fiveHour, week, at } })] });
+    const { container } = renderPlain();
+    resizeRow(1400);
+    const text = textIn(container);
+    const classes = text.className.split(/\s+/);
+    for (const cls of ['flex', 'min-w-0', 'grow', 'basis-[4.5ch]', 'overflow-hidden', 'whitespace-nowrap', 'tabular-nums']) expect(classes, cls).toContain(cls);
+    const percents = [...text.children].filter((el) => !el.hasAttribute('data-limit-reset') && /%/.test(el.textContent ?? ''));
+    expect(percents.map((el) => el.textContent)).toEqual(['58% 5h', '41% wk']);
+    for (const el of percents) expect(el.className).toContain('shrink-0');
+    const weight = (el: Element): number => Number(/\bshrink-\[(\d+)\]/.exec(el.className)?.[1] ?? 1);
+    for (const el of resetsIn(container)) {
+      for (const cls of ['min-w-0', 'overflow-hidden', 'text-ellipsis', 'whitespace-pre']) expect(el.className, cls).toContain(cls);
+      expect(weight(el)).toBeGreaterThanOrEqual(1_000_000);
+    }
+    // Разделитель с пробелами — тоже не сжимается и не схлопывает пробелы.
+    const separator = [...text.children].find((el) => el.textContent === ' · ') as HTMLElement;
+    expect(separator.className).toContain('shrink-0');
+    expect(separator.className).toContain('whitespace-pre');
+  });
+
+  it('тултип прежний в обеих строках: те же времена сброса и «Updated»', () => {
+    useProvidersStore.setState({ providers: [provider({ id: 'claude', label: 'Claude', limits: { fiveHour, week, at } })] });
+    const { container } = renderPlain();
+    const expected = '5-hour window resets at 9:30 PM · Weekly window resets Sat 9:05 AM · Updated 6:20 PM';
+    expect(spaced(limitsIn(container)?.getAttribute('title'))).toBe(expected);
+    resizeRow(1400);
+    expect(spaced(limitsIn(container)?.getAttribute('title'))).toBe(expected);
+  });
+
+  it('цвет предупреждения прежний: от 80 % красится весь текст вместе со сбросами, ниже — нет; полоска как была', () => {
+    useProvidersStore.setState({
+      providers: [
+        provider({ id: 'claude', label: 'Claude', limits: { fiveHour: limitWindow(79, local(9, 29, 21, 30)), week, at } }),
+        provider({ id: 'codex', label: 'Codex', limits: { fiveHour: limitWindow(80, local(9, 29, 21, 30)), week, at } }),
+      ],
+    });
+    const { container } = renderPlain();
+    resizeRow(1400);
+    expect(textIn(container, 'claude').className).not.toContain('accent-700');
+    expect(textIn(container, 'codex').className).toContain('text-accent-700');
+    // Сброс — внутри этого же текста и наследует цвет, своего цвета у него нет.
+    expect(textIn(container, 'codex').contains(resetsIn(container, 'codex')[0] as HTMLElement)).toBe(true);
+    expect(resetsIn(container, 'codex')[0]?.className).not.toMatch(/\btext-(?!ellipsis)/);
+    expect(fillIn(container, 'claude').className).toContain('bg-neutral-800');
+    expect(fillIn(container, 'codex').className).toContain('bg-accent-700');
+  });
+
+  it('наблюдатель ширины снимается вместе со строкой', () => {
+    const { unmount } = renderPlain();
+    expect(observers).toHaveLength(1);
+    unmount();
+    expect(observers[0]?.disconnected).toBe(true);
+  });
+});
+
 // Длинные значения (кусок 9b, решение контролёра 3): в 800×500 имя и версия провайдера не выталкивают лимиты, при
 // нехватке места первым сжимается текст лимитов (многоточие), полоска остаётся, правые сегменты не уезжают. Вёрстку
 // jsdom не считает — здесь классы; геометрию в живом окне проверяют E2E `limits.spec.ts`.
