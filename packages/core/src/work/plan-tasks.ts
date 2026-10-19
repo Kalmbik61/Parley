@@ -6,7 +6,11 @@
  * с границами и страницы. Карту функция не меняет и своих статусов не хранит.
  */
 import { createHash } from 'node:crypto';
-import { markedExcerpt } from './context-budget.js';
+import {
+  ASSIGNMENTS_BLOCK_MAX_BYTES,
+  contextBytes,
+  markedExcerpt,
+} from './context-budget.js';
 import { PAGE_MAX_BYTES, viewBytes } from './context-pages.js';
 import {
   planItemDuties,
@@ -55,6 +59,18 @@ const NOTE_MAX = 512;
 const LOG_NOTE_MAX = 256;
 const FINISHED_TITLE_MAX = 80;
 const NEXT_TITLE_MAX = 80;
+
+/** Блок слоя сессии (C6): сколько записей он называет и сколько байт `next` из своей позиции несёт одна запись. */
+const BLOCK_ENTRIES = 5;
+const BLOCK_NEXT_MAX_BYTES = 80;
+const BLOCK_HEAD =
+  'Open room assignments (reading a letter does not finish them; call plan_tasks): ';
+/** Записи, у которых есть что продолжать: своя позиция владельца или проверяющего. */
+const BLOCK_RESUMABLE: ReadonlySet<PlanTaskAction> = new Set([
+  'continue',
+  'rework',
+  'verify',
+]);
 
 export type PlanTaskAction = PlanDutyAction | 'propose-completion';
 
@@ -507,4 +523,36 @@ export function planTasksNext(map: WorkMap, sessionId: string): PlanTasksNext {
       title: cut(entry.item?.title ?? entry.plan.goal, NEXT_TITLE_MAX),
     })),
   };
+}
+
+/** Запись блока: план, ревизия, пункт, действие; у continue/rework/verify — ещё `next` своей актуальной позиции. */
+function blockEntry(entry: Task): string {
+  const head = `${entry.plan.id} rev ${entry.plan.rev}${entry.item === null ? '' : ` #${entry.item.id}`} ${entry.action}`;
+  if (entry.item === null || entry.role === 'lead' || !BLOCK_RESUMABLE.has(entry.action))
+    return head;
+  const checkpoint = checkpointOf(entry.item, entry.role);
+  // Позиция проверяющего с прежней сдачи устарела: как точка возобновления она вводила бы в заблуждение.
+  if (!checkpoint || checkpoint.stale) return head;
+  const next = cut(checkpoint.next.replace(/\s+/g, ' ').trim(), BLOCK_NEXT_MAX_BYTES);
+  return `${head} — next: ${next}`;
+}
+
+/**
+ * Блок открытых заданий для слоя сессии (C6): одна строка-напоминание, пять записей в порядке `plan_tasks` и
+ * «+N more». Пустая строка, если заданий нет. Записи берутся из того же сборщика, что и `planTasksView`, свои
+ * обязанности здесь не выводятся. Блок не длиннее `ASSIGNMENTS_BLOCK_MAX_BYTES`: не влезла запись — она уходит
+ * в «+N more», а не режется. Карту не меняет.
+ */
+export function assignmentsBlock(map: WorkMap, sessionId: string): string {
+  const { tasks } = collect(map, sessionId);
+  if (tasks.length === 0) return '';
+  const entries = tasks.slice(0, BLOCK_ENTRIES).map(blockEntry);
+  const compose = (shown: number): string => {
+    const rest = tasks.length - shown;
+    const parts = [...entries.slice(0, shown), ...(rest > 0 ? [`+${rest} more`] : [])];
+    return `${BLOCK_HEAD}${parts.join('; ')}.`;
+  };
+  let shown = entries.length;
+  while (shown > 0 && contextBytes(compose(shown)) > ASSIGNMENTS_BLOCK_MAX_BYTES) shown--;
+  return compose(shown);
 }

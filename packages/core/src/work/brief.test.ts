@@ -293,6 +293,13 @@ describe('бриф: роль в комнате', () => {
     expect(brief).not.toContain('r-01');
   });
 
+  it('ведущему: личные шаги — в publish_agent_plan, позиции на пунктах плана — в plan_progress', () => {
+    expect(LEAD_ROLE).toContain('publish_agent_plan');
+    expect(LEAD_ROLE).toContain('plan_progress');
+    expect(LEAD_ROLE).not.toContain('Keep personal progress in publish_agent_plan.');
+    expect(buildBrief(mapWithRoom(), 's-02')).toContain('plan_progress');
+  });
+
   it('экспортированные тексты ролей — ровно то, что печатает бриф (их же несёт roomTask в check_inbox)', () => {
     expect(buildBrief(mapWithRoom(), 's-02')).toContain(LEAD_ROLE);
     expect(buildBrief(mapWithRoom(), 's-03')).toContain(memberRole('@s03'));

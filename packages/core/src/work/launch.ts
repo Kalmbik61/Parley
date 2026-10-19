@@ -40,6 +40,7 @@ import type { RequiredRolePermissions } from '../roles/catalog.js';
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { loadBrief, writeBrief } from './brief.js';
 import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, linkedSettingsRule, systemGuidance } from './guidance.js';
+import { assignmentsBlock } from './plan-tasks.js';
 import { readParleyMd } from './parley-md.js';
 import { readProjectMemory } from './project-memory.js';
 import type { MemoryItem } from './project-memory.js';
@@ -448,6 +449,10 @@ async function plan(
         // Цель стоит в брифе, который уйдёт тем же запуском (системным слоем или первым сообщением): дважды не нужна.
         omitGoal: brief !== null || (!resuming && mode !== 'new' && !quiet),
       }),
+      // Открытые задания комнаты — только по карте, как плейбук: читать письмо мало, а прочитанное при `resume` иначе
+      // забылось бы. Несут их лишь раннеры с `{systemPrompt}`/`{developerInstructions}`; у остальных блока нет
+      // (известное ограничение), и задание доходит письмом и чтением `plan_tasks`.
+      assignments: assignmentsBlock(map, session.id),
       bridge: [entry.id === 'codex' ? CODEX_APPROVAL_GUIDANCE : '', bridge].filter(Boolean).join('\n\n'),
       links,
       // Правило — только там, где у агента есть `browser_open`: канал выдан и сервер MCP доходит шаблоном с `{mcpConfig}`.

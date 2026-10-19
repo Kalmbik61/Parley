@@ -30,6 +30,8 @@ import { BROWSER_PRIORITY_RULE } from './guidance.js';
 import { customProvidersFile, writeCustomProviders, type CustomProviderRecord } from '../custom-providers.js';
 import { setResult } from './map.js';
 import { defaultSessionName } from './names.js';
+import { submitPlanItem } from './plans.js';
+import { resolveProposal, setProposal } from './proposals.js';
 import { addRoom } from './rooms.js';
 import { workSettingsJson } from './settings-file.js';
 import { createWork, readMap, updateMap, workPaths } from './store.js';
@@ -1567,6 +1569,78 @@ describe('плейбук рецепта в слое ведущего', () => {
       closed.lifecycle = 'closed';
     });
     expect(codexLayer((await planLaunch(project, workId, await sessionOf(workId, next))).args)).toContain('SECRET LEAD PLAYBOOK');
+  });
+});
+
+describe('открытые задания комнаты в слое сессии (C6)', () => {
+  const BLOCK = 'Open room assignments (reading a letter does not finish them; call plan_tasks):';
+  const systemLayer = (args: string[]): string => args[args.indexOf('--append-system-prompt') + 1] ?? '';
+  const developerLayer = (args: string[]): string => {
+    const arg = args.find((value) => value.startsWith('developer_instructions='));
+    return arg === undefined ? '' : (JSON.parse(arg.slice('developer_instructions='.length)) as string);
+  };
+
+  /** Комната из двух сессий с принятым планом: первая владеет пунктом 1, вторая заданий не имеет. */
+  async function withAssignment(provider: string): Promise<{ workId: string; owner: string; other: string; planId: string }> {
+    const { workId, sessionId: owner } = await pending(provider);
+    const other = await createPendingSession(project, workId, { provider, label: 'второй', task: 'x' });
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'R', creator: 'human', members: [owner, other], lead: owner, mode: 'checklist' });
+      const proposal = setProposal(map, 'r-01', owner, 'Decision', new Date().toISOString(), {
+        plan: { mode: 'checklist', goal: 'Goal', items: [{ id: 1, title: 'Implement', owner, scope: 'src/a.ts' }] },
+      });
+      const plan = map.rooms[0]!.proposal!.plan!;
+      resolveProposal(map, 'r-01', proposal.proposalId, 'accept', { rev: proposal.rev, planId: plan.id, planRev: plan.rev }, new Date().toISOString());
+    });
+    return { workId, owner, other, planId: (await readMap(project, workId)).plans![0]!.id };
+  }
+
+  it('resume с {systemPrompt} несёт блок для сессии с открытым заданием и не несёт для сессии без него', async () => {
+    const { workId, owner, other, planId } = await withAssignment('claude');
+    const id = '7fa0e1ee-cc7b-4a1e-9d4e-000000000010';
+    await claudeTranscript(id);
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((row) => row.id === owner)!.providerSessionId = id;
+    });
+
+    const resumed = await planResume(project, workId, await sessionOf(workId, owner));
+    expect(resumed.args).toContain('--resume');
+    const layer = systemLayer(resumed.args);
+    expect(layer).toContain(`${BLOCK} ${planId} rev 0 #1 start.`);
+    // Блок идёт сразу за вставкой гида: строка сессии стоит раньше него.
+    expect(layer.indexOf(`your session is ${owner}`)).toBeGreaterThan(-1);
+    expect(layer.indexOf(`your session is ${owner}`)).toBeLessThan(layer.indexOf(BLOCK));
+    // Тот же слой собирают launch и new.
+    for (const plan of [await planLaunch(project, workId, await sessionOf(workId, owner)), await planNew(project, workId, await sessionOf(workId, owner))]) {
+      expect(systemLayer(plan.args)).toContain(`${planId} rev 0 #1 start`);
+    }
+    // Участник без заданий блока не получает.
+    expect(systemLayer((await planLaunch(project, workId, await sessionOf(workId, other))).args)).not.toContain('Open room assignments');
+
+    // Пункт сдан (checklist: сдача завершает его) — заданий нет, и блока тоже.
+    await updateMap(project, workId, (map) => {
+      submitPlanItem(map, planId, 0, 1, owner, { text: 'Done', artifacts: [] }, new Date().toISOString());
+    });
+    const after = await planResume(project, workId, await sessionOf(workId, owner));
+    expect(systemLayer(after.args)).not.toContain('Open room assignments');
+  });
+
+  it('Codex: блок в developer_instructions при launch, new и resume', async () => {
+    const { workId, owner, planId } = await withAssignment('codex');
+    const session = { ...await sessionOf(workId, owner), providerSessionId: 'id' };
+    for (const plan of [await planLaunch(project, workId, session), await planNew(project, workId, session), await planResume(project, workId, session)]) {
+      expect(developerLayer(plan.args)).toContain(`${planId} rev 0 #1 start`);
+    }
+  });
+
+  it('ограничение: раннер без системного слоя и developerInstructions блока не получает', async () => {
+    const { workId, owner } = await withAssignment('codex');
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ codex: { args: ['CUSTOM', '{prompt}'], resumeArgs: ['AGAIN', '{providerSessionId}', '{prompt}'] } }));
+    const session = { ...await sessionOf(workId, owner), providerSessionId: 'id' };
+    // Документированное ограничение: слой несут только раннеры с `{systemPrompt}` или `{developerInstructions}`;
+    // без них задание до агента дойдёт только письмом и чтением `plan_tasks`.
+    expect(JSON.stringify((await planLaunch(project, workId, session)).args)).not.toContain('Open room assignments');
+    expect(JSON.stringify((await planResume(project, workId, session)).args)).not.toContain('Open room assignments');
   });
 });
 
