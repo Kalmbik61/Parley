@@ -26,12 +26,26 @@ export interface ProviderVersions {
 
 /**
  * Запускает пробы по реестру на момент старта. Без пробы (`undefined`) ничего не запускается
- * и версий нет. Провайдер, добавленный в `providers.json` уже после старта, не пробуется:
- * проба одна и на старте. Битый реестр или упавшая проба версии не дают — хост от этого не
+ * и версий нет. `fresh` повторяет пробу; параллельные запросы одной команды делят результат. Битый реестр или упавшая проба версии не дают — хост от этого не
  * падает, `providers.list` про сам реестр отчитается своей ошибкой.
  */
 export function startProviderVersions(probe: VersionProbe | undefined, log: Log): ProviderVersions {
   const cache = new Map<string, string | null>();
+  const pending = new Map<string, Promise<string | null>>();
+  const fresh = (command: string): Promise<string | null> => {
+    const current = pending.get(command);
+    if (current !== undefined) return current;
+    if (probe === undefined) return Promise.resolve(null);
+    const result = Promise.resolve().then(() => probe(command)).catch((error: unknown) => {
+      log.warn('проба версии CLI упала', { command, error: String(error) });
+      return null;
+    }).then(version => {
+      cache.set(command, version);
+      return version;
+    }).finally(() => pending.delete(command));
+    pending.set(command, result);
+    return result;
+  };
 
   const run = async (): Promise<void> => {
     if (probe === undefined) return;
@@ -43,26 +57,8 @@ export function startProviderVersions(probe: VersionProbe | undefined, log: Log)
       log.warn('версии CLI не пробуются: реестр провайдеров не читается', { error: String(error) });
       return;
     }
-    await Promise.all(
-      commands.map(async (command) => {
-        try {
-          cache.set(command, await probe(command));
-        } catch (error) {
-          log.warn('проба версии CLI упала', { command, error: String(error) });
-          cache.set(command, null);
-        }
-      }),
-    );
+    await Promise.all(commands.map(fresh));
   };
 
-  return {
-    ready: run(), get: (command) => cache.get(command) ?? null,
-    fresh: async (command) => {
-      if (probe === undefined) return null;
-      let version: string | null;
-      try { version = await probe(command); } catch { version = null; }
-      cache.set(command, version);
-      return version;
-    },
-  };
+  return { ready: run(), get: (command) => cache.get(command) ?? null, fresh };
 }

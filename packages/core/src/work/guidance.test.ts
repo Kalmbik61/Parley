@@ -80,9 +80,12 @@ describe('системная вставка', () => {
     expect(line).toContain('answer with send_message only to a question');
   });
 
-  it('новые сессии создаёт человек; доступны существующие сессии', () => {
+  it('создаёт обычные сессии текущего workspace через канал хоста', () => {
     const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
-    expect(text).toContain('New Parley sessions are created by the human');
+    expect(text).toContain('create_session');
+    expect(text).toContain('current workspace');
+    expect(text).toContain('host agent channel');
+    expect(text).not.toContain('created by the human');
     expect(text).not.toContain('spawn_session');
     expect(text).not.toContain('pending is started by the human');
   });
@@ -209,7 +212,7 @@ function sectionOf(heading: string, next: string): string {
 }
 
 describe('подробный гид', () => {
-  it('объясняет создание сессий человеком, встроенных субагентов и состояние deleted', () => {
+  it('объясняет создание обычных сессий, встроенных субагентов и состояние deleted', () => {
     expect(GUIDE).not.toContain('spawn_session');
     expect(GUIDE).toContain('Native provider subagents remain available');
     expect(GUIDE).toContain('state: deleted');
@@ -247,12 +250,18 @@ describe('подробный гид', () => {
 
   it('сохраняет сведения о ролях сессий', () => {
     expect(GUIDE).toContain(
-      'New Parley sessions are created by the human.',
+      'create_session(provider, label, task, role?, agent?, worktree?, model?, effort?)',
     );
     expect(GUIDE).toContain('.claude/agents/');
+    expect(GUIDE).toContain('parent: null');
+    expect(GUIDE).toContain('active host agent channel');
+    expect(GUIDE).toContain('No room membership or ownership is inherited');
+    expect(GUIDE).toContain('project base');
+    expect(GUIDE).not.toContain('created by the human');
+    expect(GUIDE).not.toContain('only the human creates new Parley sessions');
   });
 
-  it('создание сессии человеком: worktree — своя копия git на отдельной ветке, только в проекте с git, правила — тема worktrees', () => {
+  it('создание сессии: worktree — своя копия git на отдельной ветке, только в проекте с git, правила — тема worktrees', () => {
     const tools = sectionOf('## Tools', '## Rooms');
 
     expect(tools).toMatch(/`worktree` is optional: `true` — the session works in its own git worktree/);
@@ -263,13 +272,13 @@ describe('подробный гид', () => {
     expect(tools).toContain('The rules for working in it are in topic `worktrees`.');
   });
 
-  it('создание сессии человеком: model — id из models провайдера в get_map, не из списка — ошибка; effort — уровни выбранной модели', () => {
+  it('создание сессии: model — id из models провайдера в get_map, не из списка — ошибка; effort — уровни выбранной модели', () => {
     const tools = sectionOf('## Tools', '## Rooms');
 
     expect(tools).toMatch(/`model` is an `id` from the `models` field of the right provider in `get_map`/);
     expect(tools).toMatch(/a value not in the list is an error, and the session is not created/);
     expect(tools).toMatch(/`models: null` has no list/);
-    // Нормалайзер модели и effort (5.6): гид говорит то же, что описание `effort` у spawn_session.
+    // Нормалайзер модели и effort (5.6): гид говорит то же, что описание `effort` у create_session.
     expect(tools).toMatch(/`effort` is the `id` of one of the `efforts` of the chosen model in `get_map`/);
     expect(tools).toMatch(/with the default model, one of the levels shared by its provider's models/);
     expect(tools).toMatch(/A model with `efforts: null` \(Haiku\) has no levels: omit `effort` for it/);
@@ -281,7 +290,7 @@ describe('подробный гид', () => {
     expect(GUIDE).not.toMatch(/`low`, `medium` or `high`/);
   });
 
-  it('создание сессии человеком: выбор хранится в записи — разбуженная письмом сессия возобновляется с той же моделью и effort', () => {
+  it('создание сессии: выбор хранится в записи — разбуженная письмом сессия возобновляется с той же моделью и effort', () => {
     const tools = sectionOf('## Tools', '## Rooms');
 
     // Resume теперь передаёт модель и effort из карты (нормалайзер, 5.4): прежняя оговорка

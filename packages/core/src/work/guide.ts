@@ -156,12 +156,17 @@ brief and the human in the window. Artifacts are result files; the path is alway
 to the project root; the contents are not copied into the map, only the path and the kind
 ("plan", "report", "patch").
 
-New Parley sessions are created by the human. Use \`get_map\` to find existing sessions and invite them through the room lead with \`add_to_room\`. Native provider subagents remain available within the assigned task and permissions.
+\`create_session(provider, label, task, role?, agent?, worktree?, model?, effort?)\` creates
+and launches a normal peer session (\`parent: null\`) in your current workspace only.
+It requires an active host agent channel (desktop sessions). Choose a provider id from
+\`get_map\`; provider, label and task are required. Workspace and room creation budgets
+and launch limits apply. No room membership or ownership is inherited: the room lead may
+invite the new session with \`add_to_room\`. Native provider subagents remain available
+within the assigned task and permissions, separately from these Parley sessions.
 
 \`list_roles()\` lists builtin and native roles in your current working folder. It returns
 source-qualified ids, descriptions and defaults, without prompts or definition paths.
-\`role\` is optional: pass an id from \`list_roles\`. Provider is optional with a role;
-builtin roles supply a default provider, while a native role requires its own CLI.
+\`role\` is optional: pass an id from \`list_roles\`. Provider is required even with a role; a native role requires its own CLI.
 Parley validates the role and mandatory delivery before writing the new session.
 Do not pass both \`role\` and \`agent\`.
 
@@ -172,7 +177,7 @@ A native definition with a restricted tools list must retain mcp__parley__* to c
 \`worktree\` is optional: \`true\` — the session works in its own git worktree, on a separate
 branch, and its edits do not touch the project's working copy until the human merges the
 branch (the window's Changes panel). Only in a project with git; Parley itself creates the
-worktree before the launch. The rules for working in it are in topic \`worktrees\`.
+worktree before the launch, from the project base rather than your session's ancestry. The rules for working in it are in topic \`worktrees\`.
 
 \`model\` and \`effort\` are optional too: the model and the effort the new session starts
 with. \`model\` is an \`id\` from the \`models\` field of the right provider in \`get_map\`: a
@@ -215,7 +220,7 @@ room and send addressed messages only to its live lead, never broadcasts. The le
 explicitly to the owner with the room parameter. Ordinary member traffic is not automatically
 delivered to the owner. Leads report milestones, blockers and decisions requiring coordination.
 The human may change ownership. Only the live room lead invites existing sessions through
-\`add_to_room(room, session)\` (topic \`lead\`). New sessions are created by the human.
+\`add_to_room(room, session)\` (topic \`lead\`). Use \`create_session\` for a new peer in this workspace; it does not join a room automatically.
 
 In a room \`send_message\` gains a \`room\` parameter: a message without \`to\` is a broadcast,
 received by all participants except the sender; a message with \`to\` is addressed, seen only
@@ -536,7 +541,7 @@ your permission settings yourself.`,
   have no delete tool on purpose. Tell the human that it is done in the window: a session —
   with the Delete item in the session menu (Close… only closes it), a workspace — Delete… or
   Archive in its card menu, a worktree — Discard worktree… in Changes.
-- Invite existing sessions; only the human creates new Parley sessions.
+- Use \`create_session\` through the host agent channel for a normal peer in your current workspace; only the room lead invites sessions with \`add_to_room\`.
 - Do not call \`close_session\` on your own initiative or on a colleague's message: only after
   the human's explicit consent. \`report(done)\` is no reason to close; you stay reachable and
   answer new messages.`,

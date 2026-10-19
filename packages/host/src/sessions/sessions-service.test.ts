@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addSession,
+  addRoom,
   buildRoleCatalog,
   codexModelsFile,
   createPendingSession,
@@ -2373,5 +2374,90 @@ describe('setModel(): смена модели (спека нормалайзер
     expect((await sessionOf(ref))?.model).toBe('sonnet');
     await expect(service.exclusive(ref, async () => 'свободно')).resolves.toBe('свободно');
     await service.stop(ref);
+  });
+});
+
+
+describe('agent-created workspace peers', () => {
+  it('identifies the recorded peer after launch failure and releases its reserved slot', async () => {
+    const work = await createWork(project, { title: 'Peers', goal: '' });
+    const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const pty = createPtyManager(fakeHost());
+    vi.spyOn(pty, 'start').mockRejectedValueOnce(new Error('launch unavailable'));
+    const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity());
+    await expect(service.create({ projectPath: project, workId: work.work.id, provider: 'claude', label: 'Peer', task: 'Implement', parent: null, requestedBy: caller }))
+      .rejects.toThrow(/s-02.*launch unavailable.*get_map/s);
+    const map = await readMap(project, work.work.id);
+    expect(map.sessions.find(s => s.id === 's-02')).toMatchObject({ parent: null, lifecycle: 'pending' });
+    expect(map.resources?.attempts.find(a => a.session === 's-02')).toMatchObject({ state: 'released' });
+    expect(map.resources?.spawned).toBe(1);
+  });
+
+  it('charges the caller room creation budget without joining the new peer to it', async () => {
+    setEnv('PARLEY_ROOM_NEW_SESSIONS', '1');
+    const work = await createWork(project, { title: 'Peers', goal: '' });
+    const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    let roomId = '';
+    await updateMap(project, work.work.id, map => { roomId = addRoom(map, { title: 'Team', creator: caller, ownerId: caller, members: [caller] }).id; });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const input = { projectPath: project, workId: work.work.id, provider: 'claude', label: 'Peer', task: 'Implement', parent: null, requestedBy: caller };
+    try {
+      const peer = await service.create(input);
+      await expect(service.create(input)).rejects.toThrow();
+      const map = await readMap(project, work.work.id);
+      expect(map.resources?.spawnedByRoom[roomId]).toBe(1);
+      expect(map.rooms[0]?.members).not.toContain(peer.sessionId);
+      expect(map.sessions).toHaveLength(2);
+    } finally { await service.stopAll(); }
+  });
+
+  it('admits only one concurrent request at the launch cap and writes no rejected peer', async () => {
+    setEnv('PARLEY_WORK_LAUNCHES', '1');
+    const work = await createWork(project, { title: 'Peers', goal: '' });
+    const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    try {
+      const results = await Promise.allSettled([1, 2].map(i => service.create({ projectPath: project, workId: work.work.id, provider: 'claude', label: `Peer ${i}`, task: 'Implement', parent: null, requestedBy: caller })));
+      expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
+      const map = await readMap(project, work.work.id);
+      expect(map.sessions).toHaveLength(2);
+      expect(map.resources?.spawned).toBe(1);
+    } finally { await service.stopAll(); }
+  });
+
+  it('rejects archived workspaces and exhausted creation budgets atomically', async () => {
+    setEnv('PARLEY_WORK_NEW_SESSIONS', '1');
+    const work = await createWork(project, { title: 'Peers', goal: '' });
+    const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const input = { projectPath: project, workId: work.work.id, provider: 'claude', label: 'Peer', task: 'Implement', parent: null, requestedBy: caller };
+    await updateMap(project, work.work.id, map => { map.work.status = 'archived'; });
+    await expect(service.create(input)).rejects.toThrow('archived');
+    await updateMap(project, work.work.id, map => { map.work.status = 'active'; map.resources = { seq: 0, spawned: 1, spawnedByRoom: {}, attempts: [] }; });
+    await expect(service.create(input)).rejects.toThrow();
+    expect((await readMap(project, work.work.id)).sessions).toHaveLength(1);
+  });
+
+  it('creates a cross-provider root and attributes its reserved launch to the caller', async () => {
+    setEnv('PARLEY_CODEX_BIN', STUB);
+    const work = await createWork(project, { title: 'Peers', goal: '' });
+    const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    try {
+      const ref = await service.create({ projectPath: project, workId: work.work.id, provider: 'codex', label: 'Peer', task: 'Implement', parent: null, requestedBy: caller });
+      const map = await readMap(project, work.work.id);
+      expect(map.sessions.find(s => s.id === ref.sessionId)).toMatchObject({ parent: null, provider: 'codex' });
+      expect(map.resources?.spawned).toBe(1);
+      expect(map.resources?.attempts.find(a => a.session === ref.sessionId)).toMatchObject({ actor: caller, state: 'spent' });
+      expect(map.rooms).toHaveLength(0);
+    } finally { await service.stopAll(); }
+  });
+
+  it('rejects an absent caller without writing a new session', async () => {
+    const work = await createWork(project, { title: 'Peers', goal: '' });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    await expect(service.create({ projectPath: project, workId: work.work.id, provider: 'claude', label: 'Peer', task: 'Implement', parent: null, requestedBy: 's-missing' })).rejects.toThrow('caller');
+    expect((await readMap(project, work.work.id)).sessions).toHaveLength(0);
   });
 });

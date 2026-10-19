@@ -1157,6 +1157,9 @@ export const S = {
     segment: { chat: 'Chat', terminal: 'Terminal' },
     viewLabel: 'Session view',
     /** Подсказка выключенного сегмента: Codex, `claude` ниже порога версии ленты или версия неизвестна. */
+    versionUnknown: 'Chat is unavailable because the CLI version could not be verified. Refresh providers to retry.',
+    hostFeedUnsupported: 'This Parley host does not support Chat for this provider. Update Parley to enable it.',
+    providerFeedUnsupported: 'Chat is not supported for this provider.',
     terminalOnlyFor: (provider: string): string =>
       provider === 'codex' ? `Chat needs Codex ${CODEX_FEED_MIN_VERSION} or newer` : `Chat needs Claude Code ${FEED_MIN_VERSION} or newer`,
     /** Заметка ленты Codex: журнал не хранит историю до подключения Parley (`codex-history-in-terminal`). */

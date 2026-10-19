@@ -1,3 +1,6 @@
+import { useHostStore } from '../store/host.js';
+import { useProvidersStore } from '../store/providers.js';
+import { S } from '../../shared/strings.js';
 // packages/desktop/src/renderer/chat/ChatToolbar.test.tsx
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -10,6 +13,8 @@ import { ChatToolbar } from './ChatToolbar.js';
 
 afterEach(() => {
   cleanup();
+  useHostStore.setState({ status: { state: 'connecting' } });
+  useProvidersStore.setState({ providers: [], loaded: false });
   useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
   useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
 });
@@ -71,5 +76,28 @@ describe('ChatToolbar — чип контекста сессии (спека 202
     const usage = screen.getByTestId('chat-usage-chip');
     const chip = screen.getByTestId('ctx');
     expect(usage.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+
+describe('ChatToolbar availability explanation', () => {
+  it.each([
+    [null, ['feed-codex'], S.chat.versionUnknown],
+    ['0.159.0', ['feed-codex'], S.chat.terminalOnlyFor('codex')],
+    ['0.162.0', [], S.chat.hostFeedUnsupported],
+  ] as const)('explains version %s with features %s', (version, features, title) => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.16.0', methods: ['feed.snapshot'], features: [...features] } });
+    useProvidersStore.setState({ providers: [{ id: 'codex', label: 'Codex', available: true, version, limits: null }], loaded: true });
+    render(<ChatToolbar workKey="k" tabId="t" view="terminal" available={false} provider="codex" />);
+    expect(screen.getByTitle(title).contains(screen.getByText('Chat'))).toBe(true);
+    expect((screen.getByText('Chat') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('enables supported Chat without a warning tooltip', () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.16.0', methods: ['feed.snapshot'], features: ['feed-codex'] } });
+    useProvidersStore.setState({ providers: [{ id: 'codex', label: 'Codex', available: true, version: '0.162.0', limits: null }], loaded: true });
+    render(<ChatToolbar workKey="k" tabId="t" view="terminal" available provider="codex" />);
+    expect((screen.getByText('Chat') as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByText('Chat').closest('[title]')).toBeNull();
   });
 });

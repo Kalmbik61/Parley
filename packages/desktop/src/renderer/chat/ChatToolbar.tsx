@@ -1,3 +1,4 @@
+import { useFeedUnavailableReason } from '../lib/feed-view.js';
 /**
  * Тулбар вкладки сессии (план 2026-10-01, Task 3, п. 4): сегмент «Chat | Terminal». Есть в обоих
  * видах — в терминале он над поверхностью (`TerminalSurface` с отступом `TAB_TOOLBAR_PX`), иначе
@@ -211,6 +212,10 @@ function ChoiceMenu({ menu }: { menu: ChoiceMenuProps }): JSX.Element {
 }
 
 export function ChatToolbar({ workKey, tabId, view, available, provider, modeLabelText = null, model = null, modeMenu, choiceMenu, agents, micTargetId, metrics = null, contextChip }: ChatToolbarProps): JSX.Element {
+  const reason = useFeedUnavailableReason(provider);
+  const unavailableTitle = reason === 'unknown-version' ? S.chat.versionUnknown
+    : reason === 'host-unsupported' ? S.chat.hostFeedUnsupported
+      : reason === 'provider-unsupported' ? S.chat.providerFeedUnsupported : S.chat.terminalOnlyFor(provider);
   const entries = useWorksStore(state => state.entries);
   const layout = useLayoutStore(state => state.layouts[workKey]);
   const found = layout ? findTab(layout, tabId) : null;
@@ -229,7 +234,7 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
       style={{ height: TAB_TOOLBAR_PX }}
     >
       {/* `title` — на обёртке: у выключенных кнопок нет событий указателя, подсказка не всплыла бы. */}
-      <span title={available ? undefined : S.chat.terminalOnlyFor(provider)} className="inline-flex">
+      <span title={available ? undefined : unavailableTitle} className="inline-flex">
         <ToggleGroup
           type="single"
           size="sm"

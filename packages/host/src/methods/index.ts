@@ -210,7 +210,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog) as AnyHandler,
     'providers.setKey': createProvidersSetKey(deps.limits, deps.glmCheck) as AnyHandler,
     'providers.clearKey': createProvidersClearKey(deps.limits, deps.glmCheck) as AnyHandler,
-    ...(deps.limits === undefined ? {} : { 'providers.refreshLimits': createProvidersRefreshLimits(deps.limits) as AnyHandler }),
+    ...(deps.limits === undefined ? {} : { 'providers.refreshLimits': createProvidersRefreshLimits(deps.limits, deps.providerVersions) as AnyHandler }),
     ...(deps.glmCheck === undefined ? {} : { 'providers.check': createProvidersCheck(deps.providerVersions, deps.glmCheck) as AnyHandler }),
     'settings.get': settingsGet as AnyHandler,
     'settings.set': settingsSet as AnyHandler,
