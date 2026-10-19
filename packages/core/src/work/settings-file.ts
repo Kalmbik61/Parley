@@ -143,6 +143,8 @@ export interface WorkSettingsOptions {
   /** Nonsecret launch model; provider routing belongs in process env. */
   model?: string;
   hookTokenEnv?: 'PARLEY_HOOK_TOKEN' | 'PARLEY_HOOK_CAPABILITY';
+  /** Свой файл настроек работы вместо общего (спека своих провайдеров 5.2): модель и имя токена у провайдера свои. */
+  fileName?: string;
   /**
    * Адрес приёмника хуков хоста (`http://127.0.0.1:<порт>/hooks`). Нет — в файле только прежние
    * хуки и строка статуса, побайтно как до ленты.
@@ -318,9 +320,11 @@ export async function writeWorkSettings(
   const file =
     options.sessionId !== undefined
       ? path.join(paths.dir, 'settings', `${options.sessionId}.json`)
-      : options.provider === 'glm'
-        ? path.join(paths.dir, 'settings-glm.json')
-        : paths.settings;
+      : options.fileName !== undefined
+        ? path.join(paths.dir, options.fileName)
+        : options.provider === 'glm'
+          ? path.join(paths.dir, 'settings-glm.json')
+          : paths.settings;
   const root = await ensureStateDir(projectPath);
   if (options.sessionId !== undefined) await writeSessionSettings(root, paths.dir, file, workSettingsJson(options));
   await mkdir(paths.events, { recursive: true });

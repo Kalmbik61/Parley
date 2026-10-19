@@ -157,9 +157,9 @@ export const FRAME_EXCEPTIONS: readonly FrameException[] = [
   {
     file: 'packages/host/src/sessions/provider-env.ts',
     rule: 'ключ GLM вне окружения процесса',
-    line: 'if (key !== null) env.ANTHROPIC_AUTH_TOKEN = key;',
+    line: 'else env.ANTHROPIC_AUTH_TOKEN = value;',
     reason:
-      'спека провайдеров 4.3: свежий ключ добавляется только в финальное окружение процесса GLM после очистки, не в план или настройки',
+      'спека провайдеров 4.3 и спека своих провайдеров 5.2: свежий ключ добавляется только в финальное окружение процесса GLM или своего провайдера после очистки, не в план или настройки',
   },
 ];
 

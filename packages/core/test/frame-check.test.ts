@@ -137,7 +137,7 @@ describe('узкие исключения добровольно введённ�
     {
       file: 'packages/host/src/sessions/provider-env.ts',
       rule: 'ключ GLM вне окружения процесса',
-      line: 'if (key !== null) env.ANTHROPIC_AUTH_TOKEN = key;',
+      line: 'else env.ANTHROPIC_AUTH_TOKEN = value;',
     },
   ];
 
