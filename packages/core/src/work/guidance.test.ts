@@ -630,7 +630,7 @@ it('plan hints preserve the fourteen-line bound with either navigator snapshot',
 
 it('the read_guide line names plan_tasks for assignments without a new line or a budget overrun', () => {
   const clause =
-    'In plan rooms, plan_tasks lists your assignments; act with plan_update/plan_progress/plan_submit/plan_verify; read_guide(topic: plans) explains the workflow.';
+    'In plan rooms: plan_tasks lists your work; plan_update/plan_progress/plan_submit/plan_verify act on it; read_guide(topic: plans).';
   for (const skillNavigator of [false, true]) for (const skillList of [undefined, 'names', 'removed'] as const) {
     const options = { skillNavigator, ...(skillList === undefined ? {} : { skillList }) };
     const stable = stableGuidance(options);
