@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistantStreamEvent, ProviderEntry, WorkEntry, WorkMap } from '@parley/core';
 import type { AssistantState } from '@parley/protocol';
+import { HostError } from '../errors.js';
 import { createAssistantService, type AssistantServiceDeps } from './assistant-service.js';
 import type { TurnEnd, TurnSpec } from './turn.js';
 
@@ -13,9 +14,16 @@ const CLAUDE = { id: 'claude', label: 'Claude', runner: { command: 'claude', mcp
 const MAP = {
   schemaVersion: 2,
   work: { id: 'w-1', title: 'Parley', goal: '', status: 'active' },
-  sessions: [{ id: 's-03', label: 'S03 Ruslan', provider: 'claude', task: 'tests', summary: null, lifecycle: 'active' }],
+  sessions: [{ id: 's-03', label: 'S03 Ruslan', provider: 'claude', task: 'tests', summary: null, lifecycle: 'active' },
+    { id: 's-02', label: 'S02 Anna', provider: 'claude', task: 'docs', summary: null, lifecycle: 'active' },
+    { id: 's-09', label: 'S09 Old', provider: 'claude', task: 'old', summary: null, lifecycle: 'closed' },
+  ],
   messages: [],
-  rooms: [{ id: 'r-1', title: 'Auth', creator: 's-03', members: ['s-03'], createdAt: '', lead: null, proposal: null }],
+  rooms: [
+    { id: 'r-1', title: 'Auth', creator: 's-03', members: ['s-03'], createdAt: '', lead: null, proposal: null },
+    { id: 'r-2', title: 'Gate', creator: 's-03', members: ['s-03', 's-02'], createdAt: '', lead: 's-03', proposal: { id: 'p-01', kind: 'decision', from: 's-03', text: 'Ship it', rev: 2, at: '' } },
+    { id: 'r-3', title: 'Quiet', creator: 's-03', members: ['s-03'], createdAt: '', lead: 's-03', proposal: null },
+  ],
 } as unknown as WorkMap;
 
 let home = '';
@@ -35,6 +43,8 @@ beforeEach(async () => {
     send: vi.fn().mockResolvedValue({ inserted: true, submitted: true, reason: null }),
     launch: vi.fn().mockResolvedValue(undefined),
     sendLetter: vi.fn().mockResolvedValue('m-1'),
+    createRoom: vi.fn().mockResolvedValue('r-9'),
+    resolveRoomProposal: vi.fn().mockResolvedValue('m-2'),
     endpoint: { origin: () => 'http://127.0.0.1:9', setToken: (value) => { token = value; } },
     providers: async () => ({ claude: CLAUDE }),
     ready: async () => null,
@@ -325,5 +335,115 @@ describe('assistant-service: спящая сессия', () => {
     await expect(service.decide(id, 'send')).resolves.toEqual({ applied: false, error: 'too many running sessions' });
     expect(last().proposal?.id).toBe(id);
     await expect(service.sent(REF)).resolves.toEqual([]);
+  });
+});
+
+describe('assistant-service: комната и решение ведущего', () => {
+  async function started() {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    return service;
+  }
+  const ROOM = { work: 'Parley', title: 'Auth rework', members: ['S03', 'S02'], task: 'Разберите вход' };
+
+  it('propose_room → карточка room; send создаёт комнату, шлёт задачу и закрывает исходом done', async () => {
+    const service = await started();
+    const reply = await service.tool('propose_room', ROOM);
+    expect(reply.status).toBe(200);
+    expect(last().proposal).toMatchObject({ action: 'room', target: 'Auth rework', title: 'Auth rework', members: ['S03 Ruslan', 'S02 Anna'], lead: 'S03 Ruslan', task: 'Разберите вход' });
+    expect((last().proposal as { text: string }).text.startsWith('Create room "Auth rework" with S03 Ruslan, S02 Anna')).toBe(true);
+    await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: true, error: null });
+    expect(deps.createRoom).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', title: 'Auth rework', members: ['s-03', 's-02'], lead: 's-03' });
+    expect(deps.sendLetter).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', roomId: 'r-9', to: [], text: 'Разберите вход', kind: 'note' });
+    expect(last()).toMatchObject({ proposal: null, outcome: 'done' });
+    turns[0]?.end({ ok: true });
+    await flush();
+    await service.ask({ ...ASK, text: 'дальше' });
+    expect(turns[1]?.spec.args.join(' ')).toContain('room "Auth rework" created');
+  });
+  it('propose_room: lead из участников, без задачи письмо не шлётся', async () => {
+    const service = await started();
+    await service.tool('propose_room', { work: 'Parley', title: 'Docs', members: ['S03', 'S02'], lead: 'S02' });
+    expect(last().proposal).toMatchObject({ lead: 'S02 Anna', task: null });
+    await service.decide(last().proposal!.id, 'send');
+    expect(deps.createRoom).toHaveBeenCalledWith(expect.objectContaining({ lead: 's-02' }));
+    expect(deps.sendLetter).not.toHaveBeenCalled();
+  });
+  it('propose_room: участник чужой работы — 404, закрытый — 409, повтор и чужой lead — 400; карточки нет', async () => {
+    const other = { ...MAP, work: { ...MAP.work, id: 'w-2', title: 'Other' }, sessions: [{ id: 's-07', label: 'S07 Zed', provider: 'claude', task: 'x', summary: null, lifecycle: 'active' }], rooms: [] } as unknown as WorkMap;
+    deps.works = { snapshot: () => ({ entries: [{ projectPath: '/p', map: MAP }, { projectPath: '/q', map: other }] as WorkEntry[], branches: {} }) };
+    const service = await started();
+    expect((await service.tool('propose_room', { ...ROOM, members: ['S03', 'S07'] })).status).toBe(404);
+    expect(await service.tool('propose_room', { ...ROOM, members: ['S03', 'S09'] })).toMatchObject({ status: 409, body: { error: 'S09 Old is closed' } });
+    expect((await service.tool('propose_room', { ...ROOM, members: ['S03', 'S03'] })).status).toBe(400);
+    expect((await service.tool('propose_room', { ...ROOM, lead: 'S09' })).status).toBe(400);
+    expect((await service.tool('propose_room', { ...ROOM, members: ['S03'], lead: 'S02' })).status).toBe(400);
+    expect((await service.tool('propose_room', { ...ROOM, title: ' ' })).status).toBe(400);
+    expect((await service.tool('propose_room', { ...ROOM, task: 'я'.repeat(4001) })).status).toBe(400);
+    expect((await service.tool('propose_room', { ...ROOM, work: 'Auth' })).status).toBe(404);
+    expect(last().proposal).toBeNull();
+  });
+  it('createRoom бросил — decide вернул ошибку, карточка на месте', async () => {
+    deps.createRoom = vi.fn().mockRejectedValue(new Error('S02 is closed'));
+    const service = await started();
+    await service.tool('propose_room', ROOM);
+    const id = last().proposal!.id;
+    await expect(service.decide(id, 'send')).resolves.toEqual({ applied: false, error: 'S02 is closed' });
+    expect(last().proposal?.id).toBe(id);
+    expect(deps.sendLetter).not.toHaveBeenCalled();
+  });
+  it('комната создана, а задача не ушла — карточка закрыта (повтор создал бы вторую), ошибка в окно', async () => {
+    deps.sendLetter = vi.fn().mockRejectedValue(new Error('inbox full'));
+    const service = await started();
+    await service.tool('propose_room', ROOM);
+    await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: true, error: 'Room created, but the task was not sent: inbox full' });
+    expect(last()).toMatchObject({ proposal: null, outcome: 'done' });
+  });
+  it('propose_message в работу — 400', async () => {
+    const service = await started();
+    expect(await service.tool('propose_message', { target: 'Parley', text: 'x' })).toMatchObject({ status: 400 });
+    expect(last().proposal).toBeNull();
+  });
+
+  it('propose_room_decision return с пояснением → карточка; send зовёт resolveRoomProposal, исход done', async () => {
+    const service = await started();
+    const reply = await service.tool('propose_room_decision', { target: 'Gate', choice: 'return', note: 'add tests' });
+    expect(reply.status).toBe(200);
+    expect(last().proposal).toMatchObject({ action: 'room-decision', target: 'Gate', text: 'Ship it', choice: 'return', note: 'add tests', proposal: { proposalId: 'p-01', rev: 2, kind: 'decision', from: 'S03 Ruslan', text: 'Ship it' } });
+    await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: true, error: null });
+    expect(deps.resolveRoomProposal).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', roomId: 'r-2', proposalId: 'p-01', action: 'return', note: 'add tests', rev: 2 });
+    expect(last()).toMatchObject({ proposal: null, outcome: 'done' });
+  });
+  it('accept игнорирует note', async () => {
+    const service = await started();
+    await service.tool('propose_room_decision', { target: 'Gate', choice: 'accept', note: 'неважно' });
+    expect(last().proposal).toMatchObject({ choice: 'accept', note: null });
+    await service.decide(last().proposal!.id, 'send');
+    expect(deps.resolveRoomProposal).toHaveBeenCalledWith(expect.not.objectContaining({ note: expect.anything() }));
+  });
+  it('ведущий переделал решение (conflict) — исход cancelled, «look again», заметка про revised', async () => {
+    deps.resolveRoomProposal = vi.fn().mockRejectedValue(new HostError('conflict', 'the proposal was revised'));
+    const service = await started();
+    await service.tool('propose_room_decision', { target: 'Gate', choice: 'accept' });
+    await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: true, error: 'The lead revised the decision — look again' });
+    expect(last()).toMatchObject({ proposal: null, outcome: 'cancelled' });
+    turns[0]?.end({ ok: true });
+    await flush();
+    await service.ask({ ...ASK, text: 'дальше' });
+    expect(turns[1]?.spec.args.join(' ')).toContain('revised');
+  });
+  it('иная ошибка решения — карточка остаётся', async () => {
+    deps.resolveRoomProposal = vi.fn().mockRejectedValue(new HostError('bad_request', 'nothing to resolve'));
+    const service = await started();
+    await service.tool('propose_room_decision', { target: 'Gate', choice: 'accept' });
+    const id = last().proposal!.id;
+    await expect(service.decide(id, 'send')).resolves.toEqual({ applied: false, error: 'nothing to resolve' });
+    expect(last().proposal?.id).toBe(id);
+  });
+  it('комната без слота — 409; не комната — 404; неверный choice — 400', async () => {
+    const service = await started();
+    expect(await service.tool('propose_room_decision', { target: 'Quiet', choice: 'accept' })).toMatchObject({ status: 409, body: { error: 'Quiet has no decision waiting' } });
+    expect((await service.tool('propose_room_decision', { target: 'S03', choice: 'accept' })).status).toBe(404);
+    expect((await service.tool('propose_room_decision', { target: 'Gate', choice: 'later' })).status).toBe(400);
   });
 });

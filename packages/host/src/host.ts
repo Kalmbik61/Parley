@@ -62,7 +62,7 @@ import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
 import { createHistoryService } from './rooms/history-service.js';
-import { sendHumanLetter } from './rooms/rooms-service.js';
+import { createHumanRoom, resolveRoomProposal, sendHumanLetter } from './rooms/rooms-service.js';
 import { createAssistantEndpoint } from './assistant/assistant-endpoint.js';
 import { createAssistantService, type AssistantService } from './assistant/assistant-service.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
@@ -434,6 +434,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     send,
     launch: (ref, mode, options) => sessionsService.launch(ref, mode, options),
     sendLetter: (input) => sendHumanLetter(input, { via: 'assistant' }),
+    createRoom: (input) => createHumanRoom(input),
+    resolveRoomProposal: (input) => resolveRoomProposal(input),
     endpoint: { origin: () => hookServer.origin(), setToken: (token) => assistantEndpoint.setToken(token) },
     providers: () => loadProviders(),
     ready: async (entry) => {

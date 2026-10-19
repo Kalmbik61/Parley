@@ -60,6 +60,16 @@ describe('приёмник инструментов помощника (спек
     expect(tool).toHaveBeenCalledTimes(1);
   });
 
+  it('propose_room и propose_room_decision доходят до обработчика под своими именами', async () => {
+    const tool = okTool();
+    const { endpoint, post } = await boot(tool);
+    endpoint.setToken('t');
+    expect((await post('propose_room', 't')).status).toBe(200);
+    expect((await post('propose_room_decision', 't')).status).toBe(200);
+    expect(tool).toHaveBeenNthCalledWith(1, 'propose_room', { a: 1 });
+    expect(tool).toHaveBeenNthCalledWith(2, 'propose_room_decision', { a: 1 });
+  });
+
   it('статус и тело обработчика уходят как есть; исключение — 500 с текстом', async () => {
     const tool = okTool();
     tool.mockResolvedValueOnce({ status: 409, body: { error: 'busy' } }).mockRejectedValueOnce(new Error('boom'));

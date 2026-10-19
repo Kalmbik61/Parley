@@ -24,8 +24,10 @@ import {
   type AssistantLanguage,
   type ProviderEntry,
   type SessionLifecycle,
+  type WorkMap,
 } from '@parley/core';
 import type { AssistantDetail, AssistantProposal, AssistantState, EventData, EventName, Params, SendResult, SessionRef } from '@parley/protocol';
+import { HostError } from '../errors.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { FeedService } from '../feed/feed-service.js';
 import { ASSISTANT_PATH, type AssistantReply } from './assistant-endpoint.js';
@@ -37,6 +39,8 @@ import { runTurn, type TurnEnd, type TurnHandle, type TurnSpec } from './turn.js
 export const ASSISTANT_IDLE_MS = 15 * 60_000;
 export const ASSISTANT_TURN_MS = 60_000;
 const MAX_TEXT = 4000;
+const MAX_TITLE = 80;
+const CARD_SHOWN = 'Shown to the person as a card; they will confirm or cancel it. Tell them in one short sentence what you prepared.';
 
 export interface AssistantServiceDeps {
   broadcast<E extends EventName>(event: E, data: EventData<E>): void;
@@ -52,6 +56,10 @@ export interface AssistantServiceDeps {
   launch(ref: SessionRef, mode: 'resume', options: { by: 'human'; prompt: string }): Promise<void>;
   /** `sendHumanLetter` с `via: 'assistant'`. */
   sendLetter(input: Params<'rooms.send'>): Promise<string>;
+  /** `createHumanRoom`: комната из карточки `room`; возвращает id комнаты. */
+  createRoom(input: Params<'rooms.create'>): Promise<string>;
+  /** `resolveRoomProposal`: принять или вернуть решение ведущего из карточки `room-decision`. */
+  resolveRoomProposal(input: Params<'rooms.resolveProposal'>): Promise<string>;
   /** Сервер хуков (`origin`) и приёмник помощника (`setToken`, задача 8). */
   endpoint: { origin(): string | null; setToken(token: string | null): void };
   providers(): Promise<Record<string, ProviderEntry>>;
@@ -89,13 +97,30 @@ interface Conversation {
 
 type RoomTarget = Extract<AssistantTarget, { kind: 'room' }>;
 type SessionTarget = Extract<AssistantTarget, { kind: 'session' }>;
+type WorkTarget = Extract<AssistantTarget, { kind: 'work' }>;
 
-interface Pending {
-  view: AssistantProposal;
-  target: AssistantTarget;
-  /** Упомянутые участники комнаты (id сессий) — `to` письма. */
-  to: string[];
-}
+/** Ждущая карточка. Вид (`kind`) совпадает с `view.action` и сужает остальные поля. */
+type Pending =
+  | {
+      kind: 'message';
+      view: Extract<AssistantProposal, { action?: 'message' }>;
+      target: RoomTarget | SessionTarget;
+      /** Упомянутые участники комнаты (id сессий) — `to` письма. */
+      to: string[];
+    }
+  | {
+      kind: 'room';
+      view: Extract<AssistantProposal, { action: 'room' }>;
+      work: WorkTarget;
+      /** id сессий-участников; `lead` — один из них. */
+      members: string[];
+      lead: string;
+    }
+  | {
+      kind: 'room-decision';
+      view: Extract<AssistantProposal, { action: 'room-decision' }>;
+      room: RoomTarget;
+    };
 
 const EMPTY: AssistantState = { phase: 'idle', detail: null, question: null, answer: '', mood: 'calm', proposal: null, outcome: null, error: null, turn: 0, askId: null };
 
@@ -125,7 +150,7 @@ const stringArg = (input: Record<string, unknown>, key: string): string => (type
 
 function detailOf(name: string, input: Record<string, unknown>, targets: readonly AssistantTarget[]): AssistantDetail {
   if (name === 'parley_overview') return { tool: 'overview', target: null };
-  if (name === 'propose_message') return { tool: 'propose', target: null };
+  if (name === 'propose_message' || name === 'propose_room' || name === 'propose_room_decision') return { tool: 'propose', target: null };
   if (name === 'parley_detail') {
     const found = resolveTarget(targets, stringArg(input, 'target'));
     return { tool: 'detail', target: 'target' in found ? found.target.name : null };
@@ -375,6 +400,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const found = resolveTarget(targets, stringArg(input, 'target'));
     if ('error' in found) return { status: 404, body: { error: found.error } };
     const target = found.target;
+    if (target.kind === 'work') return { status: 400, body: { error: `${target.name} is a work; message a room or a session` } };
     const wanted = Array.isArray(input['mention']) ? input['mention'].filter((item): item is string => typeof item === 'string' && item.trim() !== '') : [];
     let mentioned: SessionTarget[] = [];
     if (target.kind === 'session') {
@@ -389,7 +415,9 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const kind = input['kind'];
     proposals += 1;
     pending = {
+      kind: 'message',
       view: {
+        action: 'message',
         id: `p${proposals}`,
         target: target.name,
         where: target.where,
@@ -402,15 +430,189 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       to: mentioned.map((session) => session.ref.sessionId),
     };
     publish({ proposal: pending.view, outcome: null });
-    return { status: 200, body: { text: 'Shown to the person as a card; they will confirm or cancel it. Tell them in one short sentence what you prepared.' } };
+    return { status: 200, body: { text: CARD_SHOWN } };
   }
 
-  function settle(current: Pending, outcome: 'sent' | 'cancelled'): { applied: true; error: null } {
+  const workMap = (src: OverviewSource, target: { projectPath: string; workId: string }): WorkMap | undefined =>
+    src.entries.find((entry) => entry.projectPath === target.projectPath && entry.map.work.id === target.workId)?.map;
+
+  /** Сессия работы по id, имени («S03», «S03 Ruslan») или id цели; закрытые тоже находятся — о них скажет `unreachable`. */
+  function memberOf(map: WorkMap, wanted: string): { session: { id: string; name: string; lifecycle: SessionLifecycle } } | AssistantReply {
+    const key = wanted.trim().toLowerCase();
+    const all = map.sessions.map((session) => ({ id: session.id, name: participantLabel(map, session.id), lifecycle: session.lifecycle }));
+    const matches = all.filter((session) => key !== '' && (session.id.toLowerCase() === key || key.endsWith(`:${session.id.toLowerCase()}`) || session.name.toLowerCase() === key || session.name.toLowerCase().split(' ')[0] === key));
+    const [only] = matches;
+    if (matches.length === 1 && only !== undefined) return { session: only };
+    if (matches.length > 1) return { status: 400, body: { error: `"${wanted}" matches several sessions of "${map.work.title}": ${matches.map((session) => session.name).join(', ')}` } };
+    return { status: 404, body: { error: `No session "${wanted}" in work "${map.work.title}". Call parley_overview for the current ids.` } };
+  }
+
+  function proposeRoom(input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[]): AssistantReply {
+    const found = resolveTarget(targets, stringArg(input, 'work'));
+    if ('error' in found) return { status: 404, body: { error: found.error } };
+    const work = found.target;
+    if (work.kind !== 'work') return { status: 404, body: { error: `${work.name} is not a work` } };
+    const map = workMap(src, work);
+    if (map === undefined) return { status: 404, body: { error: `No work "${work.name}"` } };
+    const title = stringArg(input, 'title').trim();
+    if (title === '' || title.length > MAX_TITLE) return { status: 400, body: { error: `title must be 1–${MAX_TITLE} characters` } };
+    const wanted = Array.isArray(input['members']) ? input['members'].filter((item): item is string => typeof item === 'string' && item.trim() !== '') : [];
+    if (wanted.length === 0) return { status: 400, body: { error: 'members is empty; name at least one session of the work' } };
+    const members: Array<{ id: string; name: string }> = [];
+    for (const name of wanted) {
+      const result = memberOf(map, name);
+      if (!('session' in result)) return result;
+      const { session } = result;
+      const refusal = unreachable(session.name, session.lifecycle);
+      if (refusal !== null) return { status: 409, body: { error: refusal } };
+      if (members.some((member) => member.id === session.id)) return { status: 400, body: { error: `${session.name} is listed twice in members` } };
+      members.push(session);
+    }
+    const leadWanted = stringArg(input, 'lead').trim();
+    let lead = members[0] as { id: string; name: string };
+    if (leadWanted !== '') {
+      const result = memberOf(map, leadWanted);
+      if (!('session' in result)) return result;
+      const chosen = members.find((member) => member.id === result.session.id);
+      if (chosen === undefined) return { status: 400, body: { error: `lead ${result.session.name} is not among members` } };
+      lead = chosen;
+    }
+    const task = stringArg(input, 'task').trim();
+    if (task.length > MAX_TEXT) return { status: 400, body: { error: `task is longer than ${MAX_TEXT} characters` } };
+    const names = members.map((member) => member.name);
+    proposals += 1;
+    pending = {
+      kind: 'room',
+      view: {
+        action: 'room',
+        id: `p${proposals}`,
+        target: title,
+        where: work.where,
+        text: `Create room "${title}" with ${names.join(', ')} (lead ${lead.name})${task === '' ? '' : `\n${task}`}`,
+        title,
+        members: names,
+        lead: lead.name,
+        task: task === '' ? null : task,
+      },
+      work,
+      members: members.map((member) => member.id),
+      lead: lead.id,
+    };
+    publish({ proposal: pending.view, outcome: null });
+    return { status: 200, body: { text: CARD_SHOWN } };
+  }
+
+  function proposeRoomDecision(input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[]): AssistantReply {
+    const found = resolveTarget(targets, stringArg(input, 'target'));
+    if ('error' in found) return { status: 404, body: { error: found.error } };
+    const room = found.target;
+    if (room.kind !== 'room') return { status: 404, body: { error: `${room.name} is not a room` } };
+    const choice = input['choice'];
+    if (choice !== 'accept' && choice !== 'return') return { status: 400, body: { error: 'choice must be "accept" or "return"' } };
+    const map = workMap(src, room);
+    const slot = map?.rooms.find((candidate) => candidate.id === room.roomId)?.proposal ?? null;
+    if (map === undefined || slot === null) return { status: 409, body: { error: `${room.name} has no decision waiting` } };
+    const note = stringArg(input, 'note').trim();
+    if (note.length > MAX_TEXT) return { status: 400, body: { error: `note is longer than ${MAX_TEXT} characters` } };
+    const kept = choice === 'return' && note !== '' ? note : null;
+    proposals += 1;
+    pending = {
+      kind: 'room-decision',
+      view: {
+        action: 'room-decision',
+        id: `p${proposals}`,
+        target: room.name,
+        where: room.where,
+        text: slot.text,
+        proposal: {
+          proposalId: slot.id,
+          rev: slot.rev,
+          kind: slot.kind ?? 'decision',
+          from: participantLabel(map, slot.from),
+          text: slot.text,
+          ...(slot.planId === undefined ? {} : { planId: slot.planId }),
+          ...(slot.planRev === undefined ? {} : { planRev: slot.planRev }),
+        },
+        choice,
+        note: kept,
+      },
+      room,
+    };
+    publish({ proposal: pending.view, outcome: null });
+    return { status: 200, body: { text: CARD_SHOWN } };
+  }
+
+  /** Закрывает карточку: `reason` попадает в системную заметку модели, `error` — в ответ окну (карточка при этом уже закрыта). */
+  function settle(current: Pending, outcome: 'sent' | 'done' | 'cancelled', reason?: string, error?: string): { applied: true; error: string | null } {
     pending = null;
-    outcomeNote = `[system: proposal ${current.view.id} was ${outcome}]`;
+    outcomeNote = `[system: proposal ${current.view.id} was ${outcome}${reason === undefined ? '' : `: ${reason}`}]`;
     touch();
     publish({ proposal: null, outcome, phase: turn === null ? 'idle' : state.phase });
-    return { applied: true, error: null };
+    return { applied: true, error: error ?? null };
+  }
+
+  async function applyMessage(current: Extract<Pending, { kind: 'message' }>): Promise<{ applied: boolean; error: string | null }> {
+    if (current.target.kind === 'room') {
+      const { projectPath, workId, roomId } = current.target;
+      await deps.sendLetter({ projectPath, workId, roomId, to: current.to, text: withMentions(current.to, current.view.text), kind: current.view.kind ?? 'note' });
+    } else {
+      const { ref, name } = current.target;
+      // Решает состояние сессии сейчас, а не в момент предложения: за время ожидания карточки она могла проснуться или закрыться.
+      const session = deps.works
+        .snapshot()
+        .entries.find((entry) => entry.projectPath === ref.projectPath && entry.map.work.id === ref.workId)
+        ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      const refusal = unreachable(name, session?.lifecycle);
+      if (refusal !== null) return { applied: false, error: refusal };
+      if (session?.lifecycle === 'sleeping') {
+        await deps.launch(ref, 'resume', { by: 'human', prompt: current.view.text });
+      } else {
+        const result = await deps.send({ ref, text: current.view.text, submit: true });
+        if (!result.inserted) return { applied: false, error: `${name} can't take a message now (${result.reason ?? 'busy'})` };
+      }
+      await appendSent(deps.home, ref, current.view.text, new Date(now()).toISOString());
+    }
+    return settle(current, 'sent');
+  }
+
+  async function applyRoom(current: Extract<Pending, { kind: 'room' }>): Promise<{ applied: boolean; error: string | null }> {
+    const { projectPath, workId } = current.work;
+    const { title, task } = current.view;
+    const roomId = await deps.createRoom({ projectPath, workId, title, members: current.members, lead: current.lead });
+    if (task !== null) {
+      try {
+        await deps.sendLetter({ projectPath, workId, roomId, to: [], text: task, kind: 'note' });
+      } catch (error) {
+        // Комната уже есть: карточку не оставляем, иначе повтор создал бы вторую.
+        const message = (error as Error).message;
+        return settle(current, 'done', `room "${title}" created, but its task was not sent: ${message}`, `Room created, but the task was not sent: ${message}`);
+      }
+    }
+    return settle(current, 'done', `room "${title}" created`);
+  }
+
+  async function applyRoomDecision(current: Extract<Pending, { kind: 'room-decision' }>): Promise<{ applied: boolean; error: string | null }> {
+    const { projectPath, workId, roomId } = current.room;
+    const { proposal, choice, note } = current.view;
+    try {
+      await deps.resolveRoomProposal({
+        projectPath,
+        workId,
+        roomId,
+        proposalId: proposal.proposalId,
+        action: choice,
+        ...(note === null ? {} : { note }),
+        rev: proposal.rev,
+        ...(proposal.planId === undefined || proposal.planRev === undefined ? {} : { planId: proposal.planId, planRev: proposal.planRev }),
+      });
+    } catch (error) {
+      // Ведущий успел переделать решение: ответ на старую версию не принимается, карточка устарела.
+      if (error instanceof HostError && error.code === 'conflict') {
+        return settle(current, 'cancelled', 'the lead revised the decision', 'The lead revised the decision — look again');
+      }
+      throw error;
+    }
+    return settle(current, 'done');
   }
 
   return {
@@ -443,30 +645,12 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       if (current === null || current.view.id !== proposalId) return { applied: false, error: 'This card is no longer current' };
       if (decision === 'cancel') return settle(current, 'cancelled');
       try {
-        if (current.target.kind === 'room') {
-          const { projectPath, workId, roomId } = current.target;
-          await deps.sendLetter({ projectPath, workId, roomId, to: current.to, text: withMentions(current.to, current.view.text), kind: current.view.kind ?? 'note' });
-        } else {
-          const { ref, name } = current.target;
-          // Решает состояние сессии сейчас, а не в момент предложения: за время ожидания карточки она могла проснуться или закрыться.
-          const session = deps.works
-            .snapshot()
-            .entries.find((entry) => entry.projectPath === ref.projectPath && entry.map.work.id === ref.workId)
-            ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
-          const refusal = unreachable(name, session?.lifecycle);
-          if (refusal !== null) return { applied: false, error: refusal };
-          if (session?.lifecycle === 'sleeping') {
-            await deps.launch(ref, 'resume', { by: 'human', prompt: current.view.text });
-          } else {
-            const result = await deps.send({ ref, text: current.view.text, submit: true });
-            if (!result.inserted) return { applied: false, error: `${name} can't take a message now (${result.reason ?? 'busy'})` };
-          }
-          await appendSent(deps.home, ref, current.view.text, new Date(now()).toISOString());
-        }
+        if (current.kind === 'room') return await applyRoom(current);
+        if (current.kind === 'room-decision') return await applyRoomDecision(current);
+        return await applyMessage(current);
       } catch (error) {
         return { applied: false, error: (error as Error).message };
       }
-      return settle(current, 'sent');
     },
     reset() {
       asks += 1;
@@ -494,6 +678,10 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         }
         case 'propose_message':
           return propose(input, src, targets);
+        case 'propose_room':
+          return proposeRoom(input, src, targets);
+        case 'propose_room_decision':
+          return proposeRoomDecision(input, src, targets);
         case 'end_conversation':
           current.endAfterTurn = true;
           return { status: 200, body: { text: 'The conversation starts over after this reply.' } };
