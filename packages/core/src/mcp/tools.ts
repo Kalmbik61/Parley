@@ -67,6 +67,7 @@ import {
   type ResourceLimits,
 } from '../work/resource-policy.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
+import { PLAN_TASKS_TOOL, planTasks } from './plan-tasks.js';
 import { CREATE_SESSION_TOOL, SESSION_CREATION_UNAVAILABLE, createSession } from './session-tools.js';
 import { addMemberByLead, addRoom, canReadRoom, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
 import { reportedStatus } from '../work/session-state.js';
@@ -329,6 +330,7 @@ const CLOSES: Annotations = { readOnlyHint: false, destructiveHint: true, openWo
 const TOOLS: Tool[] = [
   AGENT_PLAN_TOOL,
   ...PLAN_TOOLS,
+  PLAN_TASKS_TOOL,
   {
     name: 'backlog_list', annotations: READS,
     description: 'Read this project backlog before suggesting work outside your task. Reads never create files or assign IDs.',
@@ -1301,6 +1303,7 @@ async function dispatch(
   if (sessionId === null) throw new Error(NO_SESSION);
 
   if (name === 'publish_agent_plan') return publishAgentPlan(context, args);
+  if (name === 'plan_tasks') return planTasks(context, sessionId, args);
   if (name === 'report') return report(context, sessionId, args);
   if (name === 'wait_for') return waitFor(context, sessionId, args, signal);
   if (name === 'send_message') return sendMessage(context, sessionId, args);

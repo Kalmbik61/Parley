@@ -5,9 +5,11 @@ import {
   flushPlanEffects,
   reservePlanEffects,
 } from "../work/plan-effects.js";
+import { planTasksNext } from "../work/plan-tasks.js";
 import {
   setRoomMode,
   reconcileRoomPlans,
+  savePlanCheckpoint,
   submitPlanItem,
   updatePlanItem,
   verifyPlanItem,
@@ -155,6 +157,29 @@ export const PLAN_TOOLS: Tool[] = [
     },
   },
   {
+    name: "plan_progress",
+    annotations: WRITE,
+    description:
+      "Save your current position on an accepted plan item you own (after plan_update in_progress) or verify (after the owner submitted). Overwrites your previous checkpoint; does not change status, send messages or verify anything. Call it before ending a turn without plan_submit or plan_verify.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...identity,
+        item,
+        done: { type: "string", minLength: 1, maxLength: 600 },
+        next: { type: "string", minLength: 1, maxLength: 300 },
+        artifacts: {
+          type: "array",
+          maxItems: 5,
+          items: { type: "string", minLength: 1, maxLength: 256 },
+        },
+        blocker: { type: ["string", "null"], minLength: 1, maxLength: 300 },
+      },
+      required: ["planId", "rev", "item", "done", "next"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "propose_completion",
     annotations: WRITE,
     description:
@@ -168,6 +193,13 @@ export const PLAN_TOOLS: Tool[] = [
   },
 ];
 const names = new Set(PLAN_TOOLS.map((tool) => tool.name));
+/** Мутации пункта, чей ответ несёт `next`: остальные инструменты (режим, решение, завершение) отвечают как прежде. */
+const WITH_NEXT = new Set([
+  "plan_update",
+  "plan_submit",
+  "plan_verify",
+  "plan_progress",
+]);
 export const isPlanTool = (name: string): boolean => names.has(name);
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
@@ -193,6 +225,34 @@ function safe(value: unknown, positive = false): value is number {
     Number.isSafeInteger(value) &&
     value >= (positive ? 1 : 0)
   );
+}
+/** Позиция на пункте (C1/C2): типы и границы проверяются здесь, потому что вызов может обойти ListTools. */
+function checkpointInput(args: Record<string, unknown>): {
+  done: string;
+  next: string;
+  artifacts: string[];
+  blocker: string | null;
+} {
+  if (
+    !validText(args.done, 600) ||
+    !validText(args.next, 300) ||
+    (args.artifacts !== undefined &&
+      (!Array.isArray(args.artifacts) ||
+        args.artifacts.length > 5 ||
+        !args.artifacts.every((value) => validText(value, 256)))) ||
+    (args.blocker !== undefined &&
+      args.blocker !== null &&
+      !validText(args.blocker, 300))
+  )
+    throw new RoomRuleError(
+      "invalid plan checkpoint: done 1..600 characters, next 1..300, up to 5 artifacts of 1..256, blocker up to 300",
+    );
+  return {
+    done: args.done,
+    next: args.next,
+    artifacts: (args.artifacts as string[] | undefined) ?? [],
+    blocker: (args.blocker as string | null | undefined) ?? null,
+  };
 }
 function draft(value: unknown): PlanDraft {
   if (!record(value)) throw new RoomRuleError("invalid plan draft");
@@ -294,6 +354,8 @@ export async function planTool(
       throw new RoomRuleError("plan arguments are too large");
     const config = (await loadConfig()).config;
     let proposed: { proposalId: string; rev: number } | undefined;
+    let saved: { role: string; submission: number | null; at: string } | undefined;
+    let next: ReturnType<typeof planTasksNext> | undefined;
     let legacyFree = false;
     await updateMap(context.projectPath, context.workId, (map) => {
       const actor = caller(map, context);
@@ -377,7 +439,9 @@ export async function planTool(
               ? ["planId", "rev", "item", "evidence"]
               : name === "plan_verify"
                 ? ["planId", "rev", "item", "verdict", "note"]
-                : ["planId", "rev", "summary"];
+                : name === "plan_progress"
+                  ? ["planId", "rev", "item", "done", "next", "artifacts", "blocker"]
+                  : ["planId", "rev", "summary"];
         keys(args, allowed);
         if (
           !isPlanTool(name) ||
@@ -445,6 +509,18 @@ export async function planTool(
               actor,
               args.evidence as unknown as PlanEvidence,
             );
+          } else if (name === "plan_progress") {
+            const at = new Date().toISOString();
+            const result = savePlanCheckpoint(
+              map,
+              args.planId,
+              args.rev,
+              args.item,
+              actor,
+              checkpointInput(args),
+              at,
+            );
+            saved = { ...result, at };
           } else {
             if (
               !["verified", "returned"].includes(String(args.verdict)) ||
@@ -464,15 +540,22 @@ export async function planTool(
         }
       }
       reservePlanEffects(map, config.messageRate ?? DEFAULT_CONFIG.messageRate);
+      // Действия вызывающего считаются по карте после мутации: ответ говорит, что делать теперь.
+      if (WITH_NEXT.has(name)) next = planTasksNext(map, actor);
     });
     if (legacyFree && proposed) return proposed;
-    return { ...(proposed ?? {}), effects: await finish(context) };
+    return {
+      ...(proposed ?? {}),
+      ...(saved === undefined ? {} : { saved }),
+      ...(next === undefined ? {} : { next }),
+      effects: await finish(context),
+    };
   } catch (error) {
     if (
       error instanceof PlanConflictError ||
       error instanceof ProposalConflictError
     )
-      throw new Error("Plan revision or item changed; refresh get_map.");
+      throw new Error("Plan revision or item changed; call plan_tasks for the current revision.");
     if (error instanceof RoomRuleError) throw new Error(error.message);
     throw new Error("Plan operation could not be completed.");
   }

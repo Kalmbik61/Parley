@@ -55,6 +55,8 @@ const TABLE: Record<string, Hints> = {
   plan_update: WRITE,
   plan_submit: WRITE,
   plan_verify: WRITE,
+  plan_progress: WRITE,
+  plan_tasks: READ,
   propose_completion: WRITE,
   close_session: DESTROY,
 };
@@ -177,6 +179,7 @@ describe('аннотации инструментов parley: таблица', (
       'get_map',
       'list_roles',
       'memory_read',
+      'plan_tasks',
       'read_guide',
       'read_room',
       'search_history',
@@ -200,6 +203,7 @@ describe('аннотации инструментов parley: правда по 
     await callOk(client, 'backlog_list');
     await callOk(client, 'memory_read');
     await callOk(client, 'search_history', { query: 'делаем' });
+    await callOk(client, 'plan_tasks');
     await callOk(client, 'read_guide');
     await callOk(client, 'read_guide', { topic: 'letters' });
     await callOk(client, 'read_room', { room: 'r-01' });
