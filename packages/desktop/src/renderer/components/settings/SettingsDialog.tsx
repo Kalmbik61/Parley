@@ -39,8 +39,11 @@ import { Switch } from '../../ui/switch.js';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ui/tabs.js';
 import { ToggleGroup, ToggleGroupItem } from '../../ui/toggle-group.js';
 import { VoiceSettings } from '../../voice/VoiceSettings.js';
+import { hostMethods } from '../../lib/capabilities.js';
+import { useHostStore } from '../../store/host.js';
 import { AssistantSettings } from './AssistantSettings.js';
 import { ProvidersSettings } from './ProvidersSettings.js';
+import { TelegramSettings } from './TelegramSettings.js';
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -118,6 +121,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
   const settingsSection = useUiStore((state) => state.settingsSection);
   const setAppearance = useUiStore((state) => state.setAppearance);
   const patchUi = useUiStore((state) => state.patchUi);
+  const hostStatus = useHostStore((state) => state.status);
 
   useEffect(() => {
     if (open) setSection(settingsSection);
@@ -459,6 +463,9 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                 />
                 <p className="text-xs text-muted-foreground">{S.settings.checkForUpdatesHint}</p>
               </>
+            ) : null}
+            {config !== null ? (
+              <TelegramSettings bridge={bridge} config={config} locked={locked} save={save} hostMethods={hostMethods(hostStatus)} />
             ) : null}
           </TabsContent>
 
