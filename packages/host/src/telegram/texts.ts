@@ -40,6 +40,7 @@ export const T = {
   voiceFailed: 'Could not recognize the voice message. Please try again or send text.',
   tooLong: 'That message is too long. Please send a shorter one.',
   noLongerCurrent: 'This request is no longer current.',
+  newConversation: 'Started a new conversation with the assistant.',
   answeredAtMac: 'Already answered on the Mac.',
   expired: 'This card has expired.',
   returnNotePrompt: (from: string): string => `Reply to this message with a note for ${from}.`,
@@ -57,6 +58,21 @@ export const T = {
   cardTitle: (name: string, where: string): string => `${name} - ${where}`,
   expiresWithTurn: 'Valid until the agent turn ends.',
   receipt: (kind: ReceiptKind, time: string): string => `${RECEIPTS[kind]} at ${time}`,
+  permissionTitle: (tool: string): string => `Permission: ${tool}`,
+  questionTitle: 'Question',
+  questionOf: (index: number, total: number): string => `Question ${index} of ${total}`,
+  planTitle: 'Plan',
+  decisionTitle: 'Decision',
+  completionTitle: 'Completion',
+  assistantTo: (target: string, where: string): string => `To ${target} · ${where}`,
+  assistantNewRoom: (where: string): string => `New room in ${where}`,
+  assistantRoomLine: (title: string, members: string, lead: string): string => `${title} · ${members} · lead ${lead}`,
+  assistantNote: (text: string): string => `Note: ${text}`,
+  assistantAnswerLine: (question: string, answer: string): string => `${question} → ${answer}`,
+  assistantAcceptDecision: (room: string): string => `Accept decision in ${room}?`,
+  assistantReturnDecision: (lead: string): string => `Return to ${lead} for rework?`,
+  assistantAskTitle: (verb: string, name: string): string => `${verb} ${name}?`,
+  assistantPlanTitle: (verb: string, name: string): string => `${verb} of ${name}?`,
 } as const;
 
 /** Подписи inline-кнопок. */
@@ -72,4 +88,7 @@ export const B = {
   create: 'Create',
   cancel: 'Cancel',
   acceptDecision: 'Accept',
+  answer: 'Answer',
+  return: 'Return',
+  wakeAndSend: 'Wake and send',
 } as const;
