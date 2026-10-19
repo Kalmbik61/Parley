@@ -8,7 +8,12 @@ import {
   RoomRuleError,
 } from "./rooms.js";
 import { capturePlanSnapshot } from "./plan-snapshots.js";
-import { planItemSatisfied, planSubmission } from "./plan-state.js";
+import {
+  amendmentChanges,
+  planItemReady as ready,
+  planItemSatisfied,
+  planSubmission,
+} from "./plan-state.js";
 import { HUMAN } from "./types.js";
 import type {
   PlanDraft,
@@ -254,23 +259,8 @@ export function proposedRoomPlan(
     completionSummary: null,
   };
 }
-const semantics = (item: PlanItem): string =>
-  JSON.stringify([
-    item.title,
-    item.owner,
-    item.scope,
-    item.after,
-    item.criteria,
-    item.verifier,
-  ]);
 export function planItemsComplete(plan: RoomPlan): boolean {
   return plan.items.every((item) => planItemSatisfied(plan, item));
-}
-function ready(plan: RoomPlan, item: PlanItem): boolean {
-  return item.after.every((id) => {
-    const dependency = plan.items.find((other) => other.id === id);
-    return dependency !== undefined && planItemSatisfied(plan, dependency);
-  });
 }
 function log(
   item: PlanItem,
@@ -326,43 +316,8 @@ export function acceptRoomPlan(
     const plan = { ...structuredClone(proposed), items: validated };
     plan.status = "active";
     plan.acceptedAt = at;
-    const changed = new Set<number>();
-    const promotionExempt = new Set<number>();
     if (existing) {
-      for (const item of plan.items) {
-        const previous = existing.items.find((old) => old.id === item.id);
-        const sameCore =
-          previous &&
-          JSON.stringify([
-            previous.title,
-            previous.owner,
-            previous.scope,
-            previous.after,
-          ]) ===
-            JSON.stringify([item.title, item.owner, item.scope, item.after]);
-        if (
-          existing.mode === "checklist" &&
-          plan.mode === "verified" &&
-          existing.acceptedAt !== null &&
-          previous?.status === "done" &&
-          sameCore
-        )
-          promotionExempt.add(item.id);
-        else if (!previous || semantics(previous) !== semantics(item))
-          changed.add(item.id);
-      }
-      let grew = true;
-      while (grew) {
-        grew = false;
-        for (const item of plan.items)
-          if (
-            !changed.has(item.id) &&
-            item.after.some((id) => changed.has(id))
-          ) {
-            changed.add(item.id);
-            grew = true;
-          }
-      }
+      const { changed, promotionExempt } = amendmentChanges(existing, plan);
       for (const item of plan.items) {
         const previous = existing.items.find((old) => old.id === item.id);
         if (previous && !changed.has(item.id)) {
