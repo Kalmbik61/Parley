@@ -466,6 +466,8 @@ export type {
 } from './work/settings-file.js';
 export { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, codexFeedSupported, feedSupported } from './work/feed-version.js';
 export * from './feed/index.js';
+export { cardDetail, cardGist, pendingCards } from './feed/card-gist.js';
+export type { CardGist } from './feed/card-gist.js';
 export type {
   Capabilities,
   CapabilityAgent,

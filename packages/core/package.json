@@ -10,6 +10,7 @@
     "./names": "./dist/names.js",
     "./agent-plan": "./dist/agent-plan.js",
     "./feed-turn": "./dist/feed/turn.js",
+    "./card-gist": "./dist/feed/card-gist.js",
     "./assistant": "./dist/assistant/text.js",
     "./session-state": "./dist/work/session-state.js",
     "./session-names": "./dist/work/names.js",

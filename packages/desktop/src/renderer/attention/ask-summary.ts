@@ -4,6 +4,8 @@
  * (`feed.snapshot`), на выход — id карточки (цель клика) и короткий текст. Длину не режет: это делает `send()`.
  */
 
+// Подпуть, а не корень: корневой индекс грузит модули только для Node, и тесты в jsdom падают.
+import { cardGist, pendingCards } from '@parley/core/card-gist';
 import type { FeedCard, FeedItem } from '@parley/core';
 import type { FeedDecisions } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
@@ -19,42 +21,18 @@ export interface PendingAsk {
   inWindow: boolean;
 }
 
-/** Первая непустая строка: команда или вопрос бывают многострочными. */
-function firstLine(text: string): string {
-  return text.split(/\r?\n/).find((line) => line.trim() !== '')?.trim() ?? '';
-}
-
-/** Путь внутри проекта — относительно него (с учётом хвостового `/`), иначе как есть. */
-function shownPath(path: string, projectPath: string): string {
-  const root = projectPath.replace(/\/+$/, '');
-  return root !== '' && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path;
-}
-
-function isCard(item: FeedItem): item is FeedCard {
-  return item.kind === 'permission' || item.kind === 'question' || item.kind === 'plan';
-}
-
 export function askSummary(card: FeedCard, projectPath: string): string {
-  if (card.kind === 'plan') return S.notifications.askPlan;
-  if (card.kind === 'question') return S.notifications.askQuestion(firstLine(card.questions[0]?.question ?? ''));
-  const input = card.toolInput;
-  // Команда Claude — строка, Codex присылает argv массивом.
-  const command = Array.isArray(input.command) && input.command.every((part) => typeof part === 'string')
-    ? input.command.join(' ')
-    : input.command;
-  if (typeof command === 'string') return S.notifications.askRun(firstLine(command));
-  for (const key of ['file_path', 'notebook_path', 'path']) {
-    const path = input[key];
-    if (typeof path === 'string') return S.notifications.askTool(card.toolName, shownPath(path, projectPath));
+  const gist = cardGist(card, projectPath);
+  switch (gist.kind) {
+    case 'plan': return S.notifications.askPlan;
+    case 'question': return S.notifications.askQuestion(gist.text);
+    case 'run': return S.notifications.askRun(gist.command);
+    case 'fetch': return S.notifications.askFetch(gist.url);
+    case 'tool': return gist.path === null ? card.toolName : S.notifications.askTool(gist.tool, gist.path);
   }
-  if (typeof input.url === 'string') return S.notifications.askFetch(input.url);
-  return card.toolName;
 }
 
-/** Все карточки, ждущие ответа, по порядку ленты. */
-export function pendingCards(items: readonly FeedItem[]): FeedCard[] {
-  return items.filter((item): item is FeedCard => isCard(item) && item.state === 'pending');
-}
+export { pendingCards };
 
 /** Самая поздняя карточка, ждущая ответа; нет такой — `null`. */
 export function pendingAskOf(
