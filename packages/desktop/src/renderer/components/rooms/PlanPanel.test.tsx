@@ -8,7 +8,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import type { RoomPlan, WorkEntry } from "@parley/core";
+import type { PlanEffect, RoomPlan, WorkEntry } from "@parley/core";
 import { PlanPanel, RoomModeControl, ownerLabel } from "./PlanPanel.js";
 import { useHostStore } from "../../store/host.js";
 import { createFakeBridge } from "../../test-utils/fake-bridge.js";
@@ -1012,6 +1012,78 @@ it("длинные позиции участников тоже перенося
   expect(node.className).toContain("min-w-0");
   expect(node.className).toContain("[overflow-wrap:anywhere]");
   expect(node.querySelector("[data-checkpoint-done]")?.textContent).toBe(long);
+});
+
+// Метка «прочитал и не начал»: письмо лиду `stalled` (D5) про этот план, ревизию и пункт, ещё не отменённое.
+const stalledEffect = (patch: Partial<PlanEffect> = {}): PlanEffect => ({
+  key: "r-01/pl-01/2/1/stalled/ready:0:s-01/s-02",
+  roomId: "r-01",
+  planId: "pl-01",
+  rev: 2,
+  item: 1,
+  kind: "stalled",
+  occurrence: "ready:0:s-01",
+  target: "s-02",
+  text: "S01 read assignment pl-01 rev 2 item 1 (ready) and ended its turn without starting, progress, result or blocker.",
+  createdAt: "2026-10-19T10:00:00.000Z",
+  status: "sent",
+  messageId: "m-001",
+  ...patch,
+});
+const stalledMark = (node: HTMLElement): HTMLElement | null =>
+  node.querySelector<HTMLElement>("[data-plan-stalled]");
+
+it("помечает пункт «Read, not started», если лиду ушло письмо stalled; в подсказке — сессия, что прочла и не начала", () => {
+  const plan = planOf({
+    items: [
+      itemWith(1, { status: "ready" }),
+      itemWith(2, { status: "ready" }),
+    ],
+  });
+  const entry = dutyEntry(plan);
+  entry.map.planEffects = [stalledEffect()];
+  const { container } = render(
+    <PlanPanel entry={entry} roomId="r-01" bridge={createFakeBridge()} />,
+  );
+  const mark = stalledMark(itemNode(container, 1))!;
+  expect(mark.textContent).toBe("Read, not started");
+  expect(mark.getAttribute("title")).toContain("S01 Builder");
+  // Только тот пункт, про который письмо.
+  expect(stalledMark(itemNode(container, 2))).toBeNull();
+});
+
+it("метка stalled не рисуется для отменённого письма, чужой ревизии, чужого плана и другого пункта", () => {
+  const plan = planOf({
+    items: [itemWith(1, { status: "ready" })],
+  });
+  const entry = dutyEntry(plan);
+  entry.map.planEffects = [
+    stalledEffect({ status: "cancelled" }),
+    stalledEffect({ key: "rev", rev: 1 }),
+    stalledEffect({ key: "plan", planId: "pl-02" }),
+    stalledEffect({ key: "item", item: 2 }),
+    stalledEffect({ key: "kind", kind: "ready", occurrence: "0" }),
+  ];
+  const { container } = render(
+    <PlanPanel entry={entry} roomId="r-01" bridge={createFakeBridge()} />,
+  );
+  expect(stalledMark(itemNode(container, 1))).toBeNull();
+});
+
+it("письмо stalled в очереди тоже даёт метку, а отмена снимает её без перезагрузки окна", () => {
+  const plan = planOf({ items: [itemWith(1, { status: "ready" })] });
+  const entry = dutyEntry(plan);
+  entry.map.planEffects = [stalledEffect({ status: "queued", messageId: null })];
+  const view = render(
+    <PlanPanel entry={entry} roomId="r-01" bridge={createFakeBridge()} />,
+  );
+  expect(stalledMark(itemNode(view.container, 1))).not.toBeNull();
+  const acted = dutyEntry(plan);
+  acted.map.planEffects = [stalledEffect({ status: "cancelled" })];
+  view.rerender(
+    <PlanPanel entry={acted} roomId="r-01" bridge={createFakeBridge()} />,
+  );
+  expect(stalledMark(itemNode(view.container, 1))).toBeNull();
 });
 
 it("ownerLabel подписывает человека, сессию и неизвестного участника", () => {

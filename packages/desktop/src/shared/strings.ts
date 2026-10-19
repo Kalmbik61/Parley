@@ -59,6 +59,11 @@ export const S = {
     progress: (mode: string, done: number, total: number, basis: number) => done + '/' + total + (mode === 'checklist' ? ' done' : ' verified') + (basis > 0 ? ' · ' + basis + ' accepted from Checklist' : ''),
     /** Отдельно от `progress`: пункты `done`, ещё не прошедшие проверку, — работа осталась, хотя `verified` её не считает. */
     awaiting: (n: number) => n + ' awaiting verification',
+    /** Метка пункта, о котором лиду ушло письмо `stalled`: сессия прочла поручение, закончила ход и ничего не начала. */
+    stalled: {
+      mark: 'Read, not started',
+      tooltip: (who: string) => who + ' read this assignment and ended its turn without starting, saving progress or reporting a blocker.',
+    },
     /** Кто должен действовать по пункту и почему он ждёт (`planItemDuties` ядра). */
     duty: {
       role: { owner: 'Owner', verifier: 'Verifier', lead: 'Lead' },

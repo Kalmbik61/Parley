@@ -382,6 +382,28 @@ function CheckpointView({
   );
 }
 /**
+ * Сессия, которая прочла поручение по пункту и ничего не начала: письмо лиду `stalled` (D5) про этот план, ревизию и
+ * пункт, ещё не отменённое. Сессия — последняя часть `occurrence` (`kind:occurrence:s-NN`). `null` — метки нет.
+ */
+function stalledSession(
+  entry: WorkEntry | undefined,
+  plan: RoomPlan,
+  item: PlanItem,
+): string | null {
+  const effect = entry?.map.planEffects?.find(
+    (row) =>
+      row.kind === "stalled" &&
+      row.status !== "cancelled" &&
+      row.roomId === plan.roomId &&
+      row.planId === plan.id &&
+      row.rev === plan.rev &&
+      row.item === item.id,
+  );
+  return effect === undefined
+    ? null
+    : (/:(s-\d+)$/.exec(effect.occurrence)?.[1] ?? item.owner);
+}
+/**
  * Read-only content shared by accepted plans, proposed revisions and completion cards. Who must act on each item and the
  * saved owner/verifier positions come from the pure `@parley/core/plan-state` (one table, shared with `plan_tasks`); the
  * live lead is the one the window already shows (`roomLiveLead`). Only an active or completing plan has duties.
@@ -427,6 +449,7 @@ export function PlanSummary({
           const satisfied = planItemSatisfied(plan, item);
           const duties = working ? planItemDuties(plan, item, liveLeadId) : [];
           const submission = planSubmission(item);
+          const stalled = working ? stalledSession(entry, plan, item) : null;
           return (
             <li
               key={item.id}
@@ -441,6 +464,15 @@ export function PlanSummary({
                   {item.id}. {item.title}
                 </strong>
                 <span>{P.itemStatus[item.status]}</span>
+                {stalled === null ? null : (
+                  <span
+                    data-plan-stalled=""
+                    title={P.stalled.tooltip(ownerLabel(entry, stalled))}
+                    className={badgeVariants({ variant: "accent" })}
+                  >
+                    {P.stalled.mark}
+                  </span>
+                )}
                 <span>
                   {P.owner}: {ownerLabel(entry, item.owner)}
                 </span>
