@@ -57,6 +57,23 @@ export const S = {
     owner: 'Owner', scope: 'Scope', dependencies: 'After', criteria: 'Acceptance criteria', verifier: 'Verifier', evidence: 'Evidence', artifacts: 'Artifact references', note: 'Notes',
     basis: (n: number) => 'Done in Checklist · human accepted revision ' + n,
     progress: (mode: string, done: number, total: number, basis: number) => done + '/' + total + (mode === 'checklist' ? ' done' : ' verified') + (basis > 0 ? ' · ' + basis + ' accepted from Checklist' : ''),
+    /** Отдельно от `progress`: пункты `done`, ещё не прошедшие проверку, — работа осталась, хотя `verified` её не считает. */
+    awaiting: (n: number) => n + ' awaiting verification',
+    /** Кто должен действовать по пункту и почему он ждёт (`planItemDuties` ядра). */
+    duty: {
+      role: { owner: 'Owner', verifier: 'Verifier', lead: 'Lead' },
+      action: { start: 'must start', continue: 'must continue', rework: 'must rework the returned item', verify: 'must verify', 'resolve-block': 'must resolve the block', wait: 'is waiting' },
+      dependencies: (ids: number[]) => ids.length > 0 ? 'Waiting for ' + ids.map((id) => '#' + id).join(', ') : 'Waiting for dependencies',
+      verification: (by: string | null) => by === null ? 'Awaiting verification' : 'Awaiting verification by ' + by,
+      submission: (by: string) => 'Waiting for ' + by + ' to submit',
+      blocked: (note: string | null) => note ? 'Blocked: ' + note : 'Blocked',
+    },
+    /** Последняя сохранённая позиция владельца или проверяющего на пункте (`PlanItem.progress`). */
+    checkpoint: {
+      owner: 'Owner position', verifier: 'Verifier position', done: 'Done so far', next: 'Next', blocker: 'Blocker',
+      artifacts: (n: number) => n + (n === 1 ? ' artifact' : ' artifacts'),
+      stale: 'Stale · saved before the latest submission',
+    },
     markDone: 'Mark done', submit: 'Submit evidence', verify: 'Verify item', returnItem: 'Return item', confirmSubmit: 'Confirm submission', confirmVerify: 'Confirm verification', confirmReturn: 'Confirm return', verificationNote: 'Verification note',
     artifactHelp: 'References are plain text, one per line. They are not opened as files.',
     cancelPlan: 'Cancel plan…', cancelWarning: 'Cancel this active plan? Its captured cancellation snapshot will be retained.', confirmCancel: 'Confirm cancellation',

@@ -178,6 +178,33 @@ it('длинные названия пунктов (200+ знаков) пере�
   expect(container.querySelector('[data-plan-remaining]')!.className).toContain('min-w-0');
 });
 
+it('полный план под раскрытием переносит длинное название сам: обёртки с горизонтальной прокруткой нет', async () => {
+  const unbroken = 'Очень-длинное-название-без-пробелов-'.repeat(8);
+  const draft = amendment();
+  draft.items.push(itemOf(12, unbroken));
+  const { container } = renderView(draft);
+  const full = await openFull(container);
+  expect(full.querySelector('.overflow-x-auto')).toBeNull();
+  const title = full.querySelector<HTMLElement>('[data-plan-item="12"] [data-plan-item-title]')!;
+  expect(title.textContent).toBe(`12. ${unbroken}`);
+  expect(title.className).toContain('break-words');
+  expect(title.className).toContain('[overflow-wrap:anywhere]');
+  expect(full.querySelector('[data-plan-summary]')!.className).toContain('min-w-0');
+});
+
+it('подпись владельца берёт общий ownerLabel панели плана: человек и сессия подписаны одинаково в списке и в полном плане', async () => {
+  const draft = amendment();
+  draft.items[2] = { ...draft.items[2]!, owner: 'human' };
+  const entry = decisionEntry(undefined);
+  const { container } = render(
+    <PlanRemainingView remaining={planRemaining(active(), draft)} plan={draft} entry={entry} />,
+  );
+  expect(within(itemById(container, 3)).getByText('Owner: You')).toBeTruthy();
+  expect(within(itemById(container, 4)).getByText('Owner: S01 Builder')).toBeTruthy();
+  const full = await openFull(container);
+  expect(within(full.querySelector<HTMLElement>('[data-plan-item="3"]')!).getByText('Owner: You')).toBeTruthy();
+});
+
 const decisionEntry = (plans: RoomPlan[] | undefined): WorkEntry => {
   const entry = makeWork('w-01', {
     projectPath: '/tmp/one',

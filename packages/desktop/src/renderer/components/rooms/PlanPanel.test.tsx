@@ -6,9 +6,10 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import type { RoomPlan, WorkEntry } from "@parley/core";
-import { PlanPanel, RoomModeControl } from "./PlanPanel.js";
+import { PlanPanel, RoomModeControl, ownerLabel } from "./PlanPanel.js";
 import { useHostStore } from "../../store/host.js";
 import { createFakeBridge } from "../../test-utils/fake-bridge.js";
 import {
@@ -562,4 +563,483 @@ it("does not settle a verification after the same work is archived", async () =>
     true,
   );
   expect(screen.queryByText("Saved.")).toBeNull();
+});
+
+// Кто должен действовать, почему пункт ждёт и последние позиции участников (план 2026-10-19, P5).
+const itemWith = (
+  id: number,
+  patch: Partial<RoomPlan["items"][number]> = {},
+): RoomPlan["items"][number] => ({
+  id,
+  title: `Item ${id}`,
+  owner: "s-01",
+  scope: "src/**",
+  after: [],
+  criteria: ["Works"],
+  verifier: "s-02",
+  status: "waiting",
+  evidence: null,
+  note: null,
+  log: [],
+  ...patch,
+});
+const dutyEntry = (plan: RoomPlan, lead: string | null = "s-01"): WorkEntry => {
+  const entry = makeWork("w-01", {
+    projectPath: "/tmp/one",
+    sessions: [makeSession("s-01", "Builder"), makeSession("s-02", "Checker")],
+    rooms: [
+      {
+        ...makeRoom("r-01", "Delivery"),
+        mode: plan.mode,
+        members: ["s-01", "s-02"],
+        lead,
+      },
+    ],
+  });
+  entry.map.plans = [plan];
+  return entry;
+};
+const itemNode = (container: HTMLElement, id: number): HTMLElement => {
+  const found = container.querySelector<HTMLElement>(
+    `[data-plan-item="${id}"]`,
+  );
+  if (!found) throw new Error(`нет пункта ${id}`);
+  return found;
+};
+const dutiesOf = (node: HTMLElement): string[] =>
+  Array.from(node.querySelectorAll<HTMLElement>("[data-plan-duty]")).map(
+    (duty) => duty.textContent ?? "",
+  );
+
+it("показывает, кто должен действовать, и причину ожидания по таблице planItemDuties", () => {
+  const plan = planOf({
+    items: [
+      itemWith(1, { status: "ready" }),
+      itemWith(2, { status: "in_progress" }),
+      itemWith(3, { status: "waiting", after: [1, 2] }),
+      itemWith(4, { status: "done" }),
+      itemWith(5, { status: "blocked", note: "Need the API key" }),
+      itemWith(6, { status: "returned" }),
+    ],
+  });
+  const { container } = render(
+    <PlanPanel
+      entry={dutyEntry(plan)}
+      roomId="r-01"
+      bridge={createFakeBridge()}
+    />,
+  );
+  expect(dutiesOf(itemNode(container, 1))).toEqual([
+    "Owner S01 Builder must start",
+    "Verifier S02 Checker: Waiting for S01 Builder to submit",
+  ]);
+  expect(dutiesOf(itemNode(container, 2))).toEqual([
+    "Owner S01 Builder must continue",
+    "Verifier S02 Checker: Waiting for S01 Builder to submit",
+  ]);
+  expect(
+    within(itemNode(container, 3)).getByText("Waiting for #1, #2"),
+  ).toBeTruthy();
+  expect(dutiesOf(itemNode(container, 4))).toEqual([
+    "Owner S01 Builder: Awaiting verification by S02 Checker",
+    "Verifier S02 Checker must verify",
+  ]);
+  expect(dutiesOf(itemNode(container, 5))).toEqual([
+    "Owner S01 Builder: Blocked: Need the API key",
+    "Verifier S02 Checker: Waiting for S01 Builder to submit",
+    "Lead S01 Builder must resolve the block",
+  ]);
+  expect(dutiesOf(itemNode(container, 6))[0]).toBe(
+    "Owner S01 Builder must rework the returned item",
+  );
+});
+
+it("лид из окна — живой лид: закрытый назначенный уступает первому живому, блокировку решает он", () => {
+  const plan = planOf({
+    items: [itemWith(1, { status: "blocked", note: null })],
+  });
+  const entry = dutyEntry(plan, "s-01");
+  entry.map.sessions[0]!.lifecycle = "closed";
+  const { container } = render(
+    <PlanPanel entry={entry} roomId="r-01" bridge={createFakeBridge()} />,
+  );
+  expect(dutiesOf(itemNode(container, 1))).toContain(
+    "Lead S02 Checker must resolve the block",
+  );
+  expect(dutiesOf(itemNode(container, 1))).toContain(
+    "Owner S01 Builder: Blocked",
+  );
+});
+
+it("в режиме checklist проверяющего нет, а сделанный пункт обязанностей не даёт", () => {
+  const plan = planOf({
+    mode: "checklist",
+    items: [
+      itemWith(1, { status: "ready", verifier: null }),
+      itemWith(2, { status: "done", verifier: null }),
+    ],
+  });
+  const { container } = render(
+    <PlanPanel
+      entry={dutyEntry(plan)}
+      roomId="r-01"
+      bridge={createFakeBridge()}
+    />,
+  );
+  expect(dutiesOf(itemNode(container, 1))).toEqual([
+    "Owner S01 Builder must start",
+  ]);
+  expect(dutiesOf(itemNode(container, 2))).toEqual([]);
+});
+
+it("у неактивного плана (завершён, отменён) обязанностей нет", () => {
+  const plan = planOf({
+    status: "completed",
+    items: [itemWith(1, { status: "ready" })],
+  });
+  const { container } = render(
+    <PlanPanel
+      entry={dutyEntry(plan)}
+      roomId="r-01"
+      bridge={createFakeBridge()}
+    />,
+  );
+  expect(container.querySelector("[data-plan-duty]")).toBeNull();
+});
+
+type Checkpoint = NonNullable<
+  NonNullable<RoomPlan["items"][number]["progress"]>["owner"]
+>;
+const checkpointOf = (
+  by: string,
+  patch: Partial<Checkpoint> = {},
+): Checkpoint => ({
+  by,
+  at: new Date(Date.now() - 5 * 60_000).toISOString(),
+  submission: null,
+  done: "Parser written",
+  next: "Wire the CLI",
+  artifacts: ["src/parser.ts", "src/cli.ts"],
+  blocker: null,
+  ...patch,
+});
+
+it("показывает последнюю позицию владельца: сделано, дальше, препятствие, число артефактов и время", () => {
+  const plan = planOf({
+    items: [
+      itemWith(1, {
+        status: "in_progress",
+        progress: {
+          owner: checkpointOf("s-01", { blocker: "Waiting for a fixture" }),
+        },
+      }),
+    ],
+  });
+  const { container } = render(
+    <PlanPanel
+      entry={dutyEntry(plan)}
+      roomId="r-01"
+      bridge={createFakeBridge()}
+    />,
+  );
+  const owner = container.querySelector<HTMLElement>(
+    '[data-plan-checkpoint="owner"]',
+  )!;
+  expect(owner.querySelector("[data-checkpoint-done]")?.textContent).toBe(
+    "Parser written",
+  );
+  expect(owner.querySelector("[data-checkpoint-next]")?.textContent).toBe(
+    "Wire the CLI",
+  );
+  expect(owner.querySelector("[data-checkpoint-blocker]")?.textContent).toBe(
+    "Waiting for a fixture",
+  );
+  expect(owner.querySelector("[data-checkpoint-artifacts]")?.textContent).toBe(
+    "2 artifacts",
+  );
+  expect(owner.querySelector("[data-checkpoint-time]")?.textContent).toBe("5m");
+  expect(owner.textContent).toContain("S01 Builder");
+  expect(owner.querySelector("[data-checkpoint-stale]")).toBeNull();
+  expect(
+    container.querySelector('[data-plan-checkpoint="verifier"]'),
+  ).toBeNull();
+});
+
+it("позиция проверяющего с прежней сдачей актуальна, а после повторной сдачи помечена stale", () => {
+  const log = (status: "done" | "returned") => ({
+    at: "2026-10-19T10:00:00.000Z",
+    by: "s-01",
+    status,
+    note: null,
+  });
+  const fresh = planOf({
+    items: [
+      itemWith(1, {
+        status: "done",
+        log: [log("done")],
+        progress: {
+          verifier: checkpointOf("s-02", {
+            submission: 1,
+            blocker: "Tests are slow",
+          }),
+        },
+      }),
+    ],
+  });
+  const view = render(
+    <PlanPanel
+      entry={dutyEntry(fresh)}
+      roomId="r-01"
+      bridge={createFakeBridge()}
+    />,
+  );
+  const verifier = () =>
+    view.container.querySelector<HTMLElement>(
+      '[data-plan-checkpoint="verifier"]',
+    )!;
+  expect(verifier().querySelector("[data-checkpoint-stale]")).toBeNull();
+  expect(
+    verifier().querySelector("[data-checkpoint-blocker]")?.textContent,
+  ).toBe("Tests are slow");
+  const resubmitted = planOf({
+    items: [
+      itemWith(1, {
+        status: "done",
+        log: [log("done"), log("returned"), log("done")],
+        progress: { verifier: checkpointOf("s-02", { submission: 1 }) },
+      }),
+    ],
+  });
+  view.rerender(
+    <PlanPanel
+      entry={dutyEntry(resubmitted)}
+      roomId="r-01"
+      bridge={createFakeBridge()}
+    />,
+  );
+  expect(
+    verifier().querySelector("[data-checkpoint-stale]")?.textContent,
+  ).toBe("Stale · saved before the latest submission");
+  expect(verifier().getAttribute("data-stale")).toBe("");
+});
+
+it("позиция без артефактов и препятствия не рисует лишних строк, один артефакт — в единственном числе", () => {
+  const plan = planOf({
+    items: [
+      itemWith(1, {
+        status: "in_progress",
+        progress: { owner: checkpointOf("s-01", { artifacts: ["a.ts"] }) },
+      }),
+      itemWith(2, {
+        status: "in_progress",
+        progress: { owner: checkpointOf("s-01", { artifacts: [] }) },
+      }),
+    ],
+  });
+  const { container } = render(
+    <PlanPanel
+      entry={dutyEntry(plan)}
+      roomId="r-01"
+      bridge={createFakeBridge()}
+    />,
+  );
+  expect(
+    itemNode(container, 1).querySelector("[data-checkpoint-artifacts]")
+      ?.textContent,
+  ).toBe("1 artifact");
+  expect(
+    itemNode(container, 2).querySelector("[data-checkpoint-artifacts]"),
+  ).toBeNull();
+  expect(
+    itemNode(container, 2).querySelector("[data-checkpoint-blocker]"),
+  ).toBeNull();
+});
+
+it("у сделанного пункта позиции не показываются: точка возобновления уже не нужна", () => {
+  const plan = planOf({
+    items: [
+      itemWith(1, {
+        status: "verified",
+        progress: { owner: checkpointOf("s-01") },
+      }),
+    ],
+  });
+  const { container } = render(
+    <PlanPanel
+      entry={dutyEntry(plan)}
+      roomId="r-01"
+      bridge={createFakeBridge()}
+    />,
+  );
+  expect(container.querySelector("[data-plan-checkpoint]")).toBeNull();
+});
+
+it("прогресс: verified остаётся прежним, пункты done без проверки считаются отдельно и не повышают verified", () => {
+  const plan = planOf({
+    items: [
+      ...[1, 2, 3, 4].map((id) => itemWith(id, { status: "verified" })),
+      ...[5, 6].map((id) => itemWith(id, { status: "done" })),
+      itemWith(7, { status: "ready" }),
+    ],
+  });
+  const { container } = render(
+    <PlanPanel
+      entry={dutyEntry(plan)}
+      roomId="r-01"
+      bridge={createFakeBridge()}
+    />,
+  );
+  expect(screen.getByText("4/7 verified")).toBeTruthy();
+  expect(container.querySelector("[data-plan-awaiting]")?.textContent).toBe(
+    "2 awaiting verification",
+  );
+});
+
+it("прогресс: без пунктов на проверке счётчика нет; в checklist done — это сделано, а не ждёт", () => {
+  const verified = planOf({
+    items: [itemWith(1, { status: "verified" }), itemWith(2, { status: "ready" })],
+  });
+  const view = render(
+    <PlanPanel
+      entry={dutyEntry(verified)}
+      roomId="r-01"
+      bridge={createFakeBridge()}
+    />,
+  );
+  expect(view.container.querySelector("[data-plan-awaiting]")).toBeNull();
+  const checklist = planOf({
+    mode: "checklist",
+    items: [
+      itemWith(1, { status: "done", verifier: null }),
+      itemWith(2, { status: "ready", verifier: null }),
+    ],
+  });
+  view.rerender(
+    <PlanPanel
+      entry={dutyEntry(checklist)}
+      roomId="r-01"
+      bridge={createFakeBridge()}
+    />,
+  );
+  expect(screen.getByText("1/2 done")).toBeTruthy();
+  expect(view.container.querySelector("[data-plan-awaiting]")).toBeNull();
+});
+
+it("прогресс: done, принятый из checklist при повышении, не ждёт проверки", () => {
+  const plan = planOf({
+    rev: 3,
+    items: [
+      itemWith(1, { status: "done", acceptedChecklistRevision: 1 }),
+      itemWith(2, { status: "done" }),
+    ],
+  });
+  const { container } = render(
+    <PlanPanel
+      entry={dutyEntry(plan)}
+      roomId="r-01"
+      bridge={createFakeBridge()}
+    />,
+  );
+  expect(container.querySelector("[data-plan-awaiting]")?.textContent).toBe(
+    "1 awaiting verification",
+  );
+});
+
+it("длинные названия (200+ знаков, без пробелов, с кириллицей и CJK) переносятся и не режутся", () => {
+  const unbroken = "Очень-длинное-название-без-пробелов-".repeat(8);
+  const cjk = "超长标题".repeat(60);
+  const path = "a/".repeat(150);
+  const plan = planOf({
+    goal: unbroken,
+    items: [
+      itemWith(1, { title: unbroken, status: "ready" }),
+      itemWith(2, { title: cjk, status: "ready" }),
+      itemWith(3, { title: path, status: "ready" }),
+    ],
+  });
+  const { container } = render(
+    <PlanPanel
+      entry={dutyEntry(plan)}
+      roomId="r-01"
+      bridge={createFakeBridge()}
+    />,
+  );
+  const titles = Array.from(
+    container.querySelectorAll<HTMLElement>("[data-plan-item-title]"),
+  );
+  expect(titles.map((title) => title.textContent)).toEqual([
+    `1. ${unbroken}`,
+    `2. ${cjk}`,
+    `3. ${path}`,
+  ]);
+  for (const title of titles) {
+    expect(title.className).toContain("min-w-0");
+    expect(title.className).toContain("break-words");
+    expect(title.className).toContain("[overflow-wrap:anywhere]");
+  }
+  const root = container.querySelector<HTMLElement>("[data-plan-summary]")!;
+  expect(root.className).toContain("min-w-0");
+  expect(root.className).toContain("[overflow-wrap:anywhere]");
+  expect(root.querySelector("strong")!.className).toContain("break-words");
+});
+
+it("длинные позиции участников тоже переносятся", () => {
+  const long = "Ж".repeat(600);
+  const plan = planOf({
+    items: [
+      itemWith(1, {
+        status: "in_progress",
+        progress: {
+          owner: checkpointOf("s-01", {
+            done: long,
+            next: long.slice(0, 300),
+            blocker: long.slice(0, 300),
+          }),
+        },
+      }),
+    ],
+  });
+  const { container } = render(
+    <PlanPanel
+      entry={dutyEntry(plan)}
+      roomId="r-01"
+      bridge={createFakeBridge()}
+    />,
+  );
+  const node = container.querySelector<HTMLElement>(
+    '[data-plan-checkpoint="owner"]',
+  )!;
+  expect(node.className).toContain("min-w-0");
+  expect(node.className).toContain("[overflow-wrap:anywhere]");
+  expect(node.querySelector("[data-checkpoint-done]")?.textContent).toBe(long);
+});
+
+it("ownerLabel подписывает человека, сессию и неизвестного участника", () => {
+  const entry = dutyEntry(planOf());
+  expect(ownerLabel(entry, "human")).toBe("You");
+  expect(ownerLabel(entry, "s-02")).toBe("S02 Checker");
+  expect(ownerLabel(entry, "s-77")).toBe("s-77");
+  expect(ownerLabel(undefined, "s-02")).toBe("s-02");
+});
+
+it("одиночный чат без комнаты не получает плановый workflow: ни панели, ни прогресса, ни обязанностей", () => {
+  const plan = planOf({ items: [itemWith(1, { status: "ready" })] });
+  // Комната с планом есть, но чат открыт вне неё.
+  const { container } = render(
+    <PlanPanel
+      entry={dutyEntry(plan)}
+      roomId="r-solo"
+      bridge={createFakeBridge()}
+    />,
+  );
+  expect(container.innerHTML).toBe("");
+  // Работа вообще без комнат и планов — тоже ничего.
+  const solo = makeWork("w-02", {
+    projectPath: "/tmp/one",
+    sessions: [makeSession("s-01", "Builder")],
+  });
+  const empty = render(
+    <PlanPanel entry={solo} roomId="r-01" bridge={createFakeBridge()} />,
+  );
+  expect(empty.container.innerHTML).toBe("");
 });

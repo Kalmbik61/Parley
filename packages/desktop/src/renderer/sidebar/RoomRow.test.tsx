@@ -689,6 +689,48 @@ it('shows done progress without changing the room title or decision/unread indic
  renderRow(entry,{plan,unread:2}); expect(screen.getByText('1/1 done')).toBeTruthy();expect(screen.getByText('Возвраты')).toBeTruthy();expect(screen.getByText('2 new')).toBeTruthy();
 });
 
+describe('RoomRow — пункты плана, ждущие проверки', () => {
+  const planWith = (statuses: import('@parley/core').PlanItemStatus[], mode: 'verified' | 'checklist' = 'verified'): import('@parley/core').RoomPlan => ({
+    id: 'pl-01', roomId: 'r-01', rev: 2, mode, status: 'active', goal: 'Ship', backlog: [],
+    acceptedAt: 'x', completedAt: null, cancelledAt: null, completionSummary: null,
+    items: statuses.map((status, index) => ({ id: index + 1, title: `Item ${index + 1}`, owner: 's-01', scope: 'x', after: [], criteria: [], verifier: mode === 'verified' ? 's-02' : null, status, evidence: null, note: null, log: [] })),
+  });
+  const entryOf = () => makeWork('w-01', { projectPath: PROJECT, rooms: [room()], sessions: sessions('s-01') });
+
+  it('4 verified и 2 на проверке: verified не раздувается, «ждут проверки» — отдельный счётчик', () => {
+    const plan = planWith(['verified', 'verified', 'verified', 'verified', 'done', 'done', 'ready']);
+    const { container } = renderRow(entryOf(), { plan });
+    expect(container.querySelector('[data-room-plan-progress]')?.textContent).toBe('4/7 verified');
+    const awaiting = container.querySelector('[data-room-plan-awaiting]');
+    expect(awaiting?.textContent).toBe('2 awaiting verification');
+  });
+
+  it('счётчик не выталкивает название и время: он на своей строке, а полный текст — в подсказке', () => {
+    const plan = planWith(['done', 'ready']);
+    const { container } = renderRow(entryOf(), { plan });
+    const awaiting = container.querySelector<HTMLElement>('[data-room-plan-awaiting]')!;
+    expect(awaiting.textContent).toBe('1 awaiting verification');
+    expect(awaiting.getAttribute('title')).toBe('1 awaiting verification');
+    expect(header().contains(awaiting)).toBe(false);
+    expect(rowEl().contains(awaiting)).toBe(true);
+  });
+
+  it('нет пунктов на проверке — счётчика нет; в checklist done это сделано, а не ждёт', () => {
+    const { container } = renderRow(entryOf(), { plan: planWith(['verified', 'ready']) });
+    expect(container.querySelector('[data-room-plan-awaiting]')).toBeNull();
+    cleanup();
+    const checklist = renderRow(entryOf(), { plan: planWith(['done', 'ready'], 'checklist') });
+    expect(checklist.container.querySelector('[data-room-plan-progress]')?.textContent).toBe('1/2 done');
+    expect(checklist.container.querySelector('[data-room-plan-awaiting]')).toBeNull();
+  });
+
+  it('без плана у комнаты ни прогресса, ни счётчика', () => {
+    const { container } = renderRow(entryOf());
+    expect(container.querySelector('[data-room-plan-progress]')).toBeNull();
+    expect(container.querySelector('[data-room-plan-awaiting]')).toBeNull();
+  });
+});
+
 describe('RoomRow — меню строки: Rename и Make lead участника', () => {
   beforeEach(() => {
     useHostStore.setState({ status: { state: 'connected', hostVersion: '0.0.0-test', methods: ['rooms.rename', 'rooms.delete', 'rooms.setLead'] } });
