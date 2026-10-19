@@ -4,7 +4,7 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.17.0
 
 Connect your own Anthropic-compatible provider (Kimi, MiniMax, Qwen, DeepSeek, OpenRouter, or any address) as a Claude Code session with its own address, key and models. Your regular Claude Code is not affected: its sign-in, settings and history stay where they were.
 
