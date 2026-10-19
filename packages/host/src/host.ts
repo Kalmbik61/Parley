@@ -47,6 +47,8 @@ import { createCodexLogPoller } from './activity/codex-log-poll.js';
 import { linkTerminalActivity } from './activity/terminal-link.js';
 import { createGlmCheckService } from './limits/glm-check.js';
 import type { GlmCheckOptions } from './limits/glm-check.js';
+import { createCustomCheckService } from './providers/custom-check.js';
+import type { CustomCheckOptions } from './providers/custom-check.js';
 import { createLimitsService } from './limits/limits-service.js';
 import type { LimitsServiceOptions } from './limits/limits-service.js';
 import { startCodexCatalog } from './providers/codex-catalog.js';
@@ -100,6 +102,8 @@ export interface HostOptions {
    * тесты подменяют `fetch`, а E2E окна — исход без сети (`PARLEY_GLM_CHECK_STUB`).
    */
   glmCheck?: GlmCheckOptions;
+  /** Подмена сети проверки своего провайдера (спека 5.5); боевой хост не задаёт. */
+  customCheck?: CustomCheckOptions;
   /**
    * Срок экранов старта Codex, мс (спека комнат Organic, 3.6): не показал `Ready` и `Working` — сессия «нужен
    * ты». Боевой хост не задаёт — 20 секунд; E2E окна сокращает его переменной `PARLEY_CODEX_STARTUP_MS`.
@@ -484,6 +488,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   handle.context.onShutdown(async () => limitsService.stop());
   // Явная проверка ключа Z.ai: тестовое сообщение только по запросу окна; старт хоста в сеть не ходит.
   const glmCheck = createGlmCheckService(handle.context, options.glmCheck);
+  const customCheck = createCustomCheckService(handle.context, options.customCheck);
 
   const backlogService = createBacklogService();
   handle.context.onShutdown(async () => backlogService.close());
@@ -501,6 +506,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     codexCatalog,
     limits: limitsService,
     glmCheck,
+    customCheck,
     works: worksService,
     activity: activityService,
     pty: ptyManager,

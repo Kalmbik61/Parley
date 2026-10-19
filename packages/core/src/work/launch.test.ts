@@ -27,6 +27,7 @@ import {
 } from './launch.js';
 import { writeBrief } from './brief.js';
 import { BROWSER_PRIORITY_RULE } from './guidance.js';
+import { customProvidersFile, writeCustomProviders, type CustomProviderRecord } from '../custom-providers.js';
 import { setResult } from './map.js';
 import { defaultSessionName } from './names.js';
 import { addRoom } from './rooms.js';
@@ -968,6 +969,32 @@ describe('план возобновления', () => {
         expect(plan.args.slice(0, 2)).toEqual(['--resume', id]);
       } finally {
         await Promise.all([home, config].map((dir) => rm(dir, { recursive: true, force: true })));
+      }
+    });
+
+    it('custom-*: транскрипт в папке провайдера → --resume, а не новый запуск (спека своих провайдеров 5.6)', async () => {
+      await writeCustomProviders(
+        [{ id: 'custom-local', label: 'Local', preset: 'other', baseUrl: 'http://127.0.0.1:9/anthropic', auth: 'bearer',
+          models: { opus: 'a', sonnet: 'b', haiku: 'c', subagent: 'b' }, contextWindow: null, linkClaude: false }],
+        customProvidersFile(),
+      );
+      setEnv('PARLEY_CLAUDE_PROJECTS_DIR', undefined);
+      const fakeHome = await mkdtemp(path.join(tmpdir(), 'parley-claude-home-'));
+      try {
+        setEnv('HOME', fakeHome);
+        setEnv('CLAUDE_CONFIG_DIR', undefined);
+        const { workId, sessionId } = await pending('custom-local');
+        await withId(workId, sessionId);
+        // Корень истории провайдера прочитан, но транскрипта в нём нет — «нет» точное.
+        const dir = path.join(home, 'providers', 'custom-local', 'projects', '-p');
+        await mkdir(dir, { recursive: true });
+        const noTranscript = await planResume(project, workId, await sessionOf(workId, sessionId));
+        expect(noTranscript.args).not.toContain('--resume');
+        await writeFile(path.join(dir, `${id}.jsonl`), '{"type":"user"}\n');
+        const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
+        expect(plan.args.slice(0, 2)).toEqual(['--resume', id]);
+      } finally {
+        await rm(fakeHome, { recursive: true, force: true });
       }
     });
 
@@ -2580,5 +2607,57 @@ describe('канал агента к браузеру в запуске (спе�
     const codex = await pending('codex');
     const codexPlan = await planLaunch(project, codex.workId, await sessionOf(codex.workId, codex.sessionId));
     expect(codexPlan.args.join('\n')).not.toContain('PARLEY_AGENT');
+  });
+});
+
+describe('предостережение о ссылках своего провайдера (спека 5.8)', () => {
+  const custom: CustomProviderRecord = {
+    id: 'custom-local',
+    label: 'Local',
+    preset: 'other',
+    // Loopback: ключ не нужен, запуск не упирается в хранилище секретов.
+    baseUrl: 'http://127.0.0.1:9/anthropic',
+    auth: 'bearer',
+    models: { opus: 'm-big', sonnet: 'm-mid', haiku: 'm-small', subagent: 'm-mid' },
+    contextWindow: null,
+    linkClaude: true,
+  };
+  const layerOf = (args: string[]): string => args[args.indexOf('--append-system-prompt') + 1] ?? '';
+  const withCustom = async (record: CustomProviderRecord) => {
+    await writeCustomProviders([record], customProvidersFile());
+    const { workId, sessionId } = await pending('custom-local');
+    return { workId, session: await sessionOf(workId, sessionId) };
+  };
+
+  it('запуск custom-сессии с linkClaude: правило со своей папкой; то же при resume', async () => {
+    const { workId, session } = await withCustom(custom);
+    const dir = path.join(home, 'providers', 'custom-local');
+    const launch = await planLaunch(project, workId, session);
+    expect(layerOf(launch.args)).toContain(`settings folder is ${dir}, not ~/.claude`);
+    const fresh = await planNew(project, workId, session);
+    expect(layerOf(fresh.args)).toContain(`settings folder is ${dir}, not ~/.claude`);
+    await claudeTranscript(session.id);
+    const resumed = await planResume(project, workId, { ...session, providerSessionId: session.id });
+    expect(layerOf(resumed.args)).toContain(`settings folder is ${dir}, not ~/.claude`);
+  });
+
+  it('настройки хуков custom-сессии — с PARLEY_HOOK_CAPABILITY, в своём файле, общий файл Claude не тронут (спека 5.2)', async () => {
+    const { workId, session } = await withCustom(custom);
+    const plan = await planLaunch(project, workId, session, { hookUrl: 'http://127.0.0.1:1/hooks' });
+    const file = plan.args[plan.args.indexOf('--settings') + 1]!;
+    const text = await readFile(file, 'utf8');
+    expect(text).toContain('PARLEY_HOOK_CAPABILITY');
+    expect(file).toBe(path.join(workPaths(project, workId).dir, 'settings-custom-local.json'));
+    expect(file).not.toBe(workPaths(project, workId).settings);
+  });
+
+  it('custom без linkClaude, claude, GLM, codex — правила нет', async () => {
+    const off = await withCustom({ ...custom, linkClaude: false });
+    expect(layerOf((await planLaunch(project, off.workId, off.session)).args)).not.toContain('settings folder is');
+    for (const provider of ['claude', 'glm', 'codex']) {
+      const { workId, sessionId } = await pending(provider);
+      const plan = await planLaunch(project, workId, await sessionOf(workId, sessionId));
+      expect(plan.args.join('\n')).not.toContain('settings folder is');
+    }
   });
 });

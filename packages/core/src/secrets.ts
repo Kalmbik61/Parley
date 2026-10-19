@@ -1,11 +1,11 @@
 /** Единственный секрет Parley — ключ Z.ai, который человек вставил сам. */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parleyHome } from './work/store.js';
 
-export type SecretId = 'zai';
+export type SecretId = 'zai' | `custom:${string}`;
 
 /** Ошибка формата никогда не содержит введённый ключ. */
 export class SecretFormatError extends Error {
@@ -78,25 +78,79 @@ async function writeStore(file: string, data: Record<string, unknown>): Promise<
   }
 }
 
+/** Очередь внутри процесса: в файле теперь несколько ключей (`zai`, `custom:*`), записи «прочитал-изменил-записал» не должны перемежаться. */
+let writeQueue: Promise<unknown> = Promise.resolve();
+const LOCK_WAIT_MS = 10_000;
+const LOCK_STALE_MS = 15_000;
+
+/** Замок для нескольких процессов: файл рядом с секретами, создаётся с `wx`; брошенный замок старше `LOCK_STALE_MS` снимается. */
+async function withFileLock<T>(file: string, task: () => Promise<T>): Promise<T> {
+  const lock = `${file}.lock`;
+  await mkdir(path.dirname(file), { recursive: true });
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      await (await open(lock, 'wx', 0o600)).close();
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const info = await stat(lock).catch(() => null);
+      if (info !== null && Date.now() - info.mtimeMs > LOCK_STALE_MS) {
+        await rm(lock, { force: true });
+        continue;
+      }
+      if (Date.now() > deadline) throw new Error('Secret store is busy');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  try {
+    return await task();
+  } finally {
+    await rm(lock, { force: true });
+  }
+}
+
+function serializedWrite<T>(task: () => Promise<T>): Promise<T> {
+  const run = writeQueue.then(
+    () => withFileLock(secretsPath(), task),
+    () => withFileLock(secretsPath(), task),
+  );
+  writeQueue = run.catch(() => undefined);
+  return run;
+}
+
 /** Сохраняет введённый ключ атомарно и возвращает только подсказку. */
 export async function writeSecret(id: SecretId, raw: string): Promise<string> {
   const key = normalizeSecret(raw);
-  const file = secretsPath();
-  const data = await readStore(file);
-  data[id] = { ...(isRecord(data[id]) ? data[id] : {}), key };
-  await writeStore(file, data);
-  return secretHint(key);
+  return serializedWrite(async () => {
+    const file = secretsPath();
+    const data = await readStore(file);
+    data[id] = { ...(isRecord(data[id]) ? data[id] : {}), key };
+    await writeStore(file, data);
+    return secretHint(key);
+  });
 }
 
 /** Чужие поля остаются; пустой файл после удаления ключа больше не нужен. */
 export async function clearSecret(id: SecretId): Promise<void> {
-  const file = secretsPath();
-  const data = await readStore(file);
-  const hadSecret = Object.hasOwn(data, id);
-  delete data[id];
-  if (Object.keys(data).length === 0) {
-    await rm(file, { force: true });
-  } else if (hadSecret) {
-    await writeStore(file, data);
-  }
+  // Нет файла — нечего убирать, и замок не должен создавать дом Parley.
+  if ((await stat(secretsPath()).catch(() => null)) === null) return;
+  await serializedWrite(async () => {
+    const file = secretsPath();
+    const data = await readStore(file);
+    const hadSecret = Object.hasOwn(data, id);
+    delete data[id];
+    if (Object.keys(data).length === 0) {
+      await rm(file, { force: true });
+    } else if (hadSecret) {
+      await writeStore(file, data);
+    }
+  });
+}
+
+/** Id своих провайдеров, под которыми в файле лежит ключ: id нового провайдера не должен совпасть с забытым ключом. */
+export async function listCustomSecretIds(): Promise<string[]> {
+  return Object.keys(await readStore(secretsPath()))
+    .filter((name) => name.startsWith('custom:'))
+    .map((name) => name.slice('custom:'.length));
 }

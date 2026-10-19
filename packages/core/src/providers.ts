@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { CLAUDE_MODELS, CODEX_MODELS, GLM_MODELS, LEGACY_EFFORTS, effortLabel, type EffortOption, type ModelOption } from './provider-models.js';
+import { customProviderEntry, customProvidersFile, isCustomProviderId, readCustomProviders, type CustomProviderRecord } from './custom-providers.js';
 import { readSecret, type SecretId } from './secrets.js';
 import { parseVersion } from './work/channel.js';
 import type { Provider } from './session-index.js';
@@ -79,6 +80,12 @@ export interface RunnerConfig {
   /** То же со второго хода разговора: продолжение по `{providerSessionId}`. */
   assistantResumeArgs?: string[];
   mcpConfig?: McpConfigKind;
+  /** Своя `CLAUDE_CONFIG_DIR` провайдера (спека своих провайдеров, 5.1); у встроенных нет. */
+  configDir?: string;
+  /** Как ключ уходит в процесс: `Authorization: Bearer` или `x-api-key` (спека, К11). */
+  auth?: 'bearer' | 'api-key';
+  /** Ключ не обязателен — адрес loopback (спека, 5.1). */
+  keyOptional?: true;
 }
 
 /** Запись реестра. Набор id открыт: `providers.json` добавляет свои CLI. */
@@ -108,6 +115,8 @@ export interface ProviderEntry {
    * Поля нет — шаблон встроенный.
    */
   argsOverridden?: true;
+  /** Описание своего провайдера, по которому построена запись (спека своих провайдеров, 5.3). */
+  custom?: CustomProviderRecord;
 }
 
 /** Запись встроенного реестра: id из закрытого списка, всё остальное как у `ProviderEntry`. */
@@ -415,7 +424,7 @@ export function isClaudeCode(entry: ProviderEntry | WorkProvider): boolean {
   return typeof entry === 'string'
     ? Object.values(PROVIDERS).some(
         (provider) => provider.id === entry && provider.family === 'claude',
-      )
+      ) || isCustomProviderId(entry)
     : entry.family === 'claude';
 }
 
@@ -425,7 +434,7 @@ export function isClaudeCode(entry: ProviderEntry | WorkProvider): boolean {
  * агента ему не принадлежит. Одно правило для запуска, каталога ролей и поиска скиллов.
  */
 export function claudeConfigDirFor(entry: ProviderEntry, env: NodeJS.ProcessEnv): string | undefined {
-  return entry.runner.secret === 'zai' ? undefined : env.CLAUDE_CONFIG_DIR;
+  return entry.runner.configDir ?? (entry.runner.secret === 'zai' ? undefined : env.CLAUDE_CONFIG_DIR);
 }
 
 /** Провайдеры, чьи сессии попадают в список. */
@@ -721,11 +730,12 @@ export function probeCliVersion(command: string, timeoutMs = 3000, env: NodeJS.P
 
 /** Custom commands cannot receive the built-in Z.ai authentication contract. */
 export function providerCompatibilityError(entry: ProviderEntry): string | null {
-  if (entry.runner.secret !== 'zai') return null;
-  if (entry.runner.command !== 'claude') return 'GLM requires the official claude command; custom runner commands are unsupported';
+  if (entry.runner.secret === undefined) return null;
+  const name = entry.custom?.label ?? 'GLM';
+  if (entry.runner.command !== 'claude') return `${name} requires the official claude command; custom runner commands are unsupported`;
   const flags = [...(entry.runner.args ?? []), ...(entry.runner.resumeArgs ?? [])];
   return flags.some((arg) => /^--(?:bare|safe-mode|setting-sources)(?:=|$)/.test(arg))
-    ? 'GLM runner template is unsupported: --bare, --safe-mode and --setting-sources conflict with the shared host-managed configuration'
+    ? `${name} runner template is unsupported: --bare, --safe-mode and --setting-sources conflict with the shared host-managed configuration`
     : null;
 }
 
@@ -763,7 +773,7 @@ export async function providerReadiness(entry: ProviderEntry, options: ProviderR
     );
     if (!supported) return { needs: 'cli', error: null, version };
   }
-  if (entry.runner.secret !== undefined && !(options.keyPresent ?? ((await readSecret(entry.runner.secret)) !== null))) {
+  if (entry.runner.secret !== undefined && entry.runner.keyOptional !== true && !(options.keyPresent ?? ((await readSecret(entry.runner.secret)) !== null))) {
     return { needs: 'key', error: null, version };
   }
   return { needs: null, error: null, version };
@@ -774,8 +784,11 @@ export function providerReadinessError(entry: ProviderEntry, readiness: Provider
   if (readiness.error !== null) return readiness.error;
   if (readiness.needs === 'cli') return entry.runner.minVersion === undefined
     ? `command ${entry.runner.command} is not in PATH — provider ${entry.id} is unavailable`
-    : `GLM requires Claude Code ${entry.runner.minVersion} or newer; install or update the CLI and check again`;
-  return readiness.needs === 'key' ? 'GLM requires a saved Z.ai key in Providers' : null;
+    : `${entry.custom?.label ?? 'GLM'} requires Claude Code ${entry.runner.minVersion} or newer; install or update the CLI and check again`;
+  if (readiness.needs !== 'key') return null;
+  return entry.custom === undefined
+    ? 'GLM requires a saved Z.ai key in Providers'
+    : `${entry.custom.label} requires a saved key in Settings → Providers`;
 }
 
 /** Необязательный файл переопределений и дополнений реестра. */
@@ -1054,6 +1067,10 @@ function applyOverride(
   patch: ProviderOverride,
   base: ProviderEntry | undefined,
 ): ProviderEntry {
+  // Префикс принадлежит своим провайдерам окна (спека своих провайдеров, 5.3): руками его не занять.
+  if (base === undefined && isCustomProviderId(id)) {
+    throw new Error(`provider ${id} in ${file}: the custom- prefix is reserved`);
+  }
   const command = patch.command ?? base?.runner.command;
   const label = patch.badge ?? base?.label;
   if (command === undefined || command === '' || label === undefined || label === '') {
@@ -1118,6 +1135,19 @@ function applyOverride(
 export async function loadProviders(
   file = providersFile(),
   codexFile = codexModelsFile(),
+  customFile = customProvidersFile(),
+): Promise<Record<WorkProvider, ProviderEntry>> {
+  const registry = await loadBaseProviders(file, codexFile);
+  // Свои провайдеры (спека 5.3) — после providers.json; занятый id (встроенный или из файла) не перекрывают.
+  for (const record of await readCustomProviders(customFile)) {
+    if (!Object.hasOwn(registry, record.id)) registry[record.id] = customProviderEntry(record);
+  }
+  return registry;
+}
+
+async function loadBaseProviders(
+  file: string,
+  codexFile: string,
 ): Promise<Record<WorkProvider, ProviderEntry>> {
   const registry: Record<WorkProvider, ProviderEntry> = Object.fromEntries(
     Object.values(PROVIDERS).map((entry) => [

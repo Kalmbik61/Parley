@@ -73,6 +73,10 @@ describe('feedAvailable', () => {
 });
 
 describe('feedAvailability — третье состояние «неизвестно»', () => {
+  it('свой провайдер до загрузки списка неизвестен (null), а не терминал: вид не мигает (спека 5.6)', () => {
+    expect(feedAvailability({ hostMethods: FEED, provider: 'custom-kimi', version: null, loaded: false })).toBeNull();
+    expect(feedAvailability({ hostMethods: FEED, provider: 'custom-kimi', version: null, loaded: true })).toBe(false);
+  });
   it('GLM до загрузки списка остаётся неизвестным, после старого ответа без family — недоступен', () => {
     expect(feedAvailability({ hostMethods: FEED, provider: 'glm', version: null, loaded: false })).toBeNull();
     expect(feedAvailability({ hostMethods: FEED, provider: 'glm', version: '2.1.287', loaded: true })).toBe(false);

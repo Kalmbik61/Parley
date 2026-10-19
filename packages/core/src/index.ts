@@ -28,6 +28,8 @@ export type { SchemaAdapter, SessionRecord } from './adapter-v1.js';
 export {
   assistantCwd,
   claudeProjectRoots,
+  claudeRootFor,
+  customProviderProjectRoots,
   claudeProjectSlug,
   defaultRoot,
   discoverSession,
@@ -107,6 +109,32 @@ export {
   supportsEffort,
   supportsModel,
 } from './providers.js';
+export {
+  CUSTOM_MIN_VERSION,
+  CUSTOM_PROVIDER_PREFIX,
+  baseUrlError,
+  customProviderDir,
+  customProviderEntry,
+  customProviderSecret,
+  customProvidersFile,
+  isCustomProviderId,
+  isLoopbackUrl,
+  isValidCustomProviderId,
+  readCustomProviders,
+  slugProviderId,
+  writeCustomProviders,
+} from './custom-providers.js';
+export type { CustomProviderRecord } from './custom-providers.js';
+export {
+  LINKED_CLAUDE_ITEMS,
+  mirrorProjectTrust,
+  prepareCustomProviderDir,
+  removeCustomProviderDir,
+  syncApiKeyApproval,
+  userClaudeConfigDir,
+  userClaudeJsonPath,
+} from './custom-provider-dir.js';
+export type { PrepareOptions as PrepareCustomProviderOptions } from './custom-provider-dir.js';
 export { CLAUDE_EFFORTS, LEGACY_EFFORTS, effortLabel } from './provider-models.js';
 export type { EffortOption, ModelOption } from './provider-models.js';
 export type {
@@ -337,7 +365,7 @@ export type {
   SkillSkip,
   SkillSkipReason,
 } from './work/skill-install.js';
-export { BROWSER_PRIORITY_RULE, systemGuidance } from './work/guidance.js';
+export { BROWSER_PRIORITY_RULE, linkedSettingsRule, systemGuidance } from './work/guidance.js';
 export {
   SUMMARIZER,
   SUMMARY_TIMEOUT_MS,
@@ -376,6 +404,7 @@ export type { ParleyConfig, LoadedConfig } from './config.js';
 export {
   SecretFormatError,
   clearSecret,
+  listCustomSecretIds,
   normalizeSecret,
   readSecret,
   secretHint,

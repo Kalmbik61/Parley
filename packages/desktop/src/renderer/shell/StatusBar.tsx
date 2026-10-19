@@ -20,7 +20,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Hourglass, RefreshCw } from 'lucide-react';
+import { Hourglass, Plus, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import type { LimitWindow, ProviderLimits } from '@parley/protocol';
 import type { HostStatus } from '../../shared/bridge.js';
@@ -33,6 +33,7 @@ import { cn } from '../lib/cn.js';
 import { hostMethods, missingMethods, otherHostBuild } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
 import { useProvidersStore, type ProviderInfo } from '../store/providers.js';
+import { useUiStore } from '../store/ui.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.js';
 import { DiagnosticsSegment } from './DiagnosticsSegment.js';
 import { SEGMENT_BUTTON } from './segment.js';
@@ -142,17 +143,32 @@ function ProviderSegment({ provider, onRestartHost }: { provider: ProviderInfo; 
   // Блок лимитов рисуется, только когда есть хоть одно окно (`ProviderLimitsMeter`); у старого хоста поля нет вовсе.
   const meter = limits && (provider.limits?.fiveHour != null || provider.limits?.week != null);
   const yields = version || meter;
+  const segmentClass = cn('flex min-w-0 items-center gap-[7px] rounded-full text-left transition-colors hover:bg-foreground/8', yields && YIELDING_SEGMENT, !provider.available && 'opacity-50');
+  const segmentContent = (
+    <>
+      <AgentIcon provider={provider.id} size={14} />
+      <span className="min-w-0 truncate">{name}</span>
+      {version ?
+        <span className="min-w-0 shrink-[100000] truncate font-mono text-[11px] text-neutral-700">{provider.version}</span> : null}
+      {limits ? <ProviderLimitsMeter limits={provider.limits} /> : null}
+    </>
+  );
+  // Свой провайдер: вместо поповера — Settings на нём (спека своих провайдеров, раздел 4).
+  if (provider.custom != null)
+    return (
+      <button type="button" data-provider-segment={provider.id} title={title} aria-label={title}
+        style={yields ? { minWidth: segmentFloor(version, meter) } : undefined} className={segmentClass}
+        onClick={() => useUiStore.getState().openSettingsDialog('providers', { provider: provider.id })}>
+        {segmentContent}
+      </button>
+    );
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button type="button" data-provider-segment={provider.id} title={title} aria-label={title}
           style={yields ? { minWidth: segmentFloor(version, meter) } : undefined}
-          className={cn('flex min-w-0 items-center gap-[7px] rounded-full text-left transition-colors hover:bg-foreground/8', yields && YIELDING_SEGMENT, !provider.available && 'opacity-50')}>
-          <AgentIcon provider={provider.id} size={14} />
-          <span className="min-w-0 truncate">{name}</span>
-          {version ?
-            <span className="min-w-0 shrink-[100000] truncate font-mono text-[11px] text-neutral-700">{provider.version}</span> : null}
-          {limits ? <ProviderLimitsMeter limits={provider.limits} /> : null}
+          className={segmentClass}>
+          {segmentContent}
         </button>
       </PopoverTrigger>
       <PopoverContent aria-label={name} side="top" align="start" className="max-h-[calc(100vh-48px)] w-[min(360px,calc(100vw-24px))] overflow-y-auto">
@@ -213,7 +229,7 @@ export function StatusBar({
   const providers = [
     ...CORE_PROVIDERS.map((id): ProviderInfo => snapshot.find((provider) => provider.id === id) ??
       { id, label: providerName(id, id), available: false, version: null, limits: null }),
-    ...snapshot.filter((provider) => provider.available && !CORE_PROVIDERS.some((id) => id === provider.id)),
+    ...snapshot.filter((provider) => (provider.available || provider.custom != null) && !CORE_PROVIDERS.some((id) => id === provider.id)),
   ];
   // Письма в счёт не входят: они в бейдже и на карточках, а клик ведёт только к сессиям.
   const attentionText = S.statusBar.attention(attention.needsYou, attention.unseen);
@@ -245,6 +261,15 @@ export function StatusBar({
       {providers.map((provider) => (
         <ProviderSegment key={provider.id} provider={provider} onRestartHost={() => onRestartHostOpenChange(true)} />
       ))}
+      <button
+        type="button"
+        title={S.statusBar.addProvider}
+        aria-label={S.statusBar.addProvider}
+        className="shrink-0 rounded-full p-0.5 transition-colors hover:bg-foreground/8"
+        onClick={() => useUiStore.getState().openSettingsDialog('providers', { provider: 'new' })}
+      >
+        <Plus aria-hidden size={14} />
+      </button>
       {/* Уведомление хоста — заполнитель: берёт то, что осталось, и уступает первым. */}
       <span className="min-w-0 flex-1 truncate text-right">{noticeLine}</span>
       <div className="flex shrink-0 items-center gap-3.5">

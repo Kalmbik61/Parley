@@ -16,6 +16,7 @@ import type { PlanEffectsService } from '../rooms/plan-effects.js';
 import type { HistoryService } from '../rooms/history-service.js';
 import { createRoomsUsage } from '../rooms/room-usage.js';
 import type { GlmCheckService } from '../limits/glm-check.js';
+import type { CustomCheckService } from '../providers/custom-check.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { CodexCatalog } from '../providers/codex-catalog.js';
 import type { ProviderVersions } from '../providers/versions.js';
@@ -37,6 +38,7 @@ import { createMemoryHandlers } from './memory.js';
 import { hostInfo, hostShutdown } from './host.js';
 import { mailMarkRead } from './mail.js';
 import { createPtyHandlers } from './pty.js';
+import { createCustomProviderHandlers } from './custom-providers.js';
 import {
   createProvidersCheck,
   createProvidersClearKey,
@@ -93,6 +95,8 @@ export interface MethodDeps {
   compaction?: CompactionService;
   /** Явная проверка ключа Z.ai (`providers.check`); без неё метода нет, а в `providers.list` нет `check`. */
   glmCheck?: GlmCheckService;
+  /** Проверка конечной точки своего провайдера (спека 5.5); без неё методы своих провайдеров не проверяют. */
+  customCheck?: CustomCheckService;
   /** Канал агента к браузеру окна (спека браузера 3.7): ответ окна `browser.agentResult`; без него метода нет. */
   browserAgent?: Pick<BrowserEndpoint, 'resolve'>;
   /** Состояние хоста для `host.diagnostics`; методы диагностики регистрируются, только когда заданы и он, и `profiler`. */
@@ -207,11 +211,14 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'works.delete': createWorksDelete(deps.history) as AnyHandler,
     'works.rename': worksRename as AnyHandler,
     'works.setStatus': worksSetStatus as AnyHandler,
-    'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog) as AnyHandler,
-    'providers.setKey': createProvidersSetKey(deps.limits, deps.glmCheck) as AnyHandler,
-    'providers.clearKey': createProvidersClearKey(deps.limits, deps.glmCheck) as AnyHandler,
+    'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog, deps.customCheck) as AnyHandler,
+    'providers.setKey': createProvidersSetKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
+    'providers.clearKey': createProvidersClearKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
     ...(deps.limits === undefined ? {} : { 'providers.refreshLimits': createProvidersRefreshLimits(deps.limits, deps.providerVersions) as AnyHandler }),
-    ...(deps.glmCheck === undefined ? {} : { 'providers.check': createProvidersCheck(deps.providerVersions, deps.glmCheck) as AnyHandler }),
+    ...(deps.glmCheck === undefined && deps.customCheck === undefined
+      ? {}
+      : { 'providers.check': createProvidersCheck(deps.providerVersions, deps.glmCheck, deps.customCheck) as AnyHandler }),
+    ...createCustomProviderHandlers(deps.customCheck),
     'settings.get': settingsGet as AnyHandler,
     'settings.set': settingsSet as AnyHandler,
     'pty.attach': pty.ptyAttach as AnyHandler,

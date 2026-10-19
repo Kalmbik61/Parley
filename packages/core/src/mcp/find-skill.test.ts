@@ -12,6 +12,7 @@ import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
 import type { WorkSession } from '../work/types.js';
 import type { McpContext } from './context.js';
 import { createParleyServer } from './tools.js';
+import { customProvidersFile, writeCustomProviders } from '../custom-providers.js';
 import { readCodexSkillCatalog } from '../skills/context.js';
 
 // Живое чтение каталога Codex (запуск `codex app-server`) под наблюдением: тестам про сохранённый каталог важно, что его нет.
@@ -289,6 +290,34 @@ describe('instance-local find_skill', () => {
       const lead = await connect({ sessionId: 's-01', skillNavigator: true });
       const found = JSON.parse((await find(lead, { query: 'writing plans', for: 's-02' })).text);
       expect(found.skills.map((skill: { description: string }) => skill.description)).toEqual(['Participant config description']);
+    });
+
+    describe('свой провайдер (спека своих провайдеров 5.6)', () => {
+      const record = { id: 'custom-local', label: 'Local', preset: 'other', baseUrl: 'http://127.0.0.1:9/anthropic', auth: 'bearer',
+        models: { opus: 'a', sonnet: 'b', haiku: 'c', subagent: 'b' }, contextWindow: null, linkClaude: false } as const;
+      const query = { query: 'writing plans', for: 's-02' };
+      beforeEach(async () => {
+        delete process.env.PARLEY_CLAUDE_PROJECTS_DIR;
+        await updateMap(project, work, map => { map.sessions[1]!.provider = 'custom-local'; });
+      });
+
+      it('каталог и транскрипт — из папки провайдера, ссылки skills видны', async () => {
+        await writeCustomProviders([record], customProvidersFile());
+        const own = path.join(home, 'providers', 'custom-local');
+        await skillFile(own, 'Provider folder description'); await transcriptIn(own, 'writing-plans');
+        await skillFile(path.join(home, '.claude'), 'Home description');
+        const lead = await connect({ sessionId: 's-01', skillNavigator: true });
+        const found = JSON.parse((await find(lead, query)).text);
+        expect(found).not.toHaveProperty('reason');
+        expect(found.skills.map((skill: { description: string }) => skill.description)).toEqual(['Provider folder description']);
+      });
+
+      it('записи провайдера нет (удалён) — отказ с причиной, без исключения', async () => {
+        const lead = await connect({ sessionId: 's-01', skillNavigator: true });
+        const { result, text } = await find(lead, query);
+        expect(result.isError).not.toBe(true);
+        expect(JSON.parse(text).reason).toContain('no verified native skill route');
+      });
     });
 
     it('без дескриптора участника GLM окружение ведущего не подмешивается, у участника Claude — откат к окружению', async () => {

@@ -122,6 +122,8 @@ export interface ActivityService {
   codexLogFiles(ref: SessionRef): string[];
   /** Перечитать журнал Codex в индексе логов (`codex-log-poll.ts`). */
   reindexLog(file: string): Promise<void>;
+  /** Следить за корнем истории Claude Code своего провайдера (спека своих провайдеров 5.6); идемпотентно. */
+  watchClaudeRoot(root: string): void;
   /** Пользователь смотрел на сессию: `pty.attach` и `pty.input` (1.6). */
   markSeen(ref: SessionRef, at?: string): void;
   onChange(listener: (ref: SessionRef, value: SessionLive) => void): () => void;
@@ -354,10 +356,11 @@ export function createActivityService(
    */
   const subagentCaches = new Map<string, SubagentCache>();
   // Корни истории для `meta.json`: свой корень сервиса (тесты), иначе — где Claude Code держит историю.
-  const metaRoots = options.claudeRoot === undefined ? claudeProjectRoots() : [options.claudeRoot];
+  // Корни считаются при каждом чтении: папка своего провайдера может появиться уже после старта хоста (спека 5.6).
+  const metaRoots = (): string[] => (options.claudeRoot === undefined ? claudeProjectRoots() : [options.claudeRoot]);
   const readMeta =
     options.readSubagentMeta ??
-    ((transcriptPath: string, agentId: string) => readSubagentMeta(transcriptPath, agentId, metaRoots));
+    ((transcriptPath: string, agentId: string) => readSubagentMeta(transcriptPath, agentId, metaRoots()));
   /** Чтения `meta.json` в полёте (ключ сессии и id задачи): одно на задачу, пока оно не вернулось. */
   const metaReads = new Set<string>();
 
@@ -1109,6 +1112,9 @@ export function createActivityService(
       if (session === undefined || session.provider !== 'codex') return [];
       const main = logIndex.index(session)?.file;
       return [...(main === undefined ? [] : [main]), ...logIndex.childLogs(session).map((child) => child.file)];
+    },
+    watchClaudeRoot(root) {
+      logIndex.watchClaudeRoot(root);
     },
     reindexLog(file) {
       return logIndex.reindex(file);

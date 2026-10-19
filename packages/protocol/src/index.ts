@@ -156,3 +156,5 @@ export type {
 } from './browser-agent.js';
 export { assistantMethodSchemas } from './assistant.js';
 export type { AssistantDetail, AssistantMethodResults, AssistantPhase, AssistantProposal, AssistantState } from './assistant.js';
+export { CUSTOM_PROVIDER_PREFIX, customProviderMethodSchemas, isCustomProviderId } from './custom-providers.js';
+export type { CustomProviderAuth, CustomProviderInfo, CustomProviderMethodResults, CustomProviderModels } from './custom-providers.js';

@@ -14,7 +14,7 @@
 
 import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { CODEX_FEED_MIN_VERSION, FEED_CODEX_FEATURE, FEED_MIN_VERSION, refKey, type SessionRef } from '@parley/protocol';
+import { CODEX_FEED_MIN_VERSION, FEED_CODEX_FEATURE, FEED_MIN_VERSION, isCustomProviderId, refKey, type SessionRef } from '@parley/protocol';
 import type { TabSpec, TerminalView } from '../../shared/layout-types.js';
 import { useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
@@ -64,7 +64,7 @@ export function useFeedUnavailableReason(provider: string): FeedUnavailableReaso
 }
 
 /**
- * Доступность с третьим состоянием: Claude/GLM/Codex ждут первый снимок провайдеров.
+ * Доступность с третьим состоянием: Claude/GLM/Codex и свои провайдеры ждут первый снимок провайдеров.
  * Старый хост без family разрешает Chat только id claude. Хост без ленты не ждёт.
  */
 export function feedAvailability(
@@ -73,7 +73,11 @@ export function feedAvailability(
   if (!input.hostMethods.has('feed.snapshot')) return false;
   if (
     !input.loaded &&
-    (input.provider === 'claude' || input.provider === 'glm' || input.provider === 'codex' || input.family === 'claude')
+    (input.provider === 'claude' ||
+      input.provider === 'glm' ||
+      input.provider === 'codex' ||
+      isCustomProviderId(input.provider) ||
+      input.family === 'claude')
   )
     return null;
   if (!input.loaded) return false;

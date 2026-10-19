@@ -2,7 +2,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { defaultCodexRoot, discoverCodexSessions } from '../codex/discover.js';
 import { indexCodexSession } from '../codex/index-session.js';
-import { defaultRoot, discoverSession, discoverSessions } from '../discover.js';
+import { claudeRootFor, discoverSession, discoverSessions } from '../discover.js';
 import { isClaudeCode, type ProviderEntry } from '../providers.js';
 import { indexSessionFile, type SessionIndex } from '../session-index.js';
 import { setResult, transitionSession } from './map.js';
@@ -47,7 +47,7 @@ interface ProviderLog {
  */
 function adapterFor(provider: WorkProvider, roots: MetricsRoots) {
   if (isClaudeCode(provider)) {
-    const root = roots.claudeRoot ?? defaultRoot();
+    const root = roots.claudeRoot ?? claudeRootFor(provider);
     return {
       list: async (): Promise<ProviderLog[]> =>
         (await discoverSessions(root)).map((session) => ({ id: session.id, file: session.file })),

@@ -2249,3 +2249,41 @@ describe('NewSessionOrRoomDialog — Lean agent sessions (C2.2)', () => {
     expect(isChecked(leanBox())).toBe(false);
   });
 });
+
+describe('NewSessionOrRoomDialog — свой провайдер (спека 4.5)', () => {
+  type Providers = Result<'providers.list'>['providers'];
+  const kimi = (available: boolean): Providers[number] =>
+    ({
+      id: 'custom-kimi', label: 'Kimi', available, family: 'claude', needs: available ? null : 'key',
+      keyHint: available ? '••••test' : null,
+      models: [{ id: 'kimi-k3', label: 'kimi-k3' }, { id: 'kimi-k2.7-code', label: 'kimi-k2.7-code' }], effort: false,
+      custom: { preset: 'kimi', baseUrl: 'https://api.kimi.ai/coding/', auth: 'bearer', models: { opus: 'kimi-k3' }, contextWindow: 262144, linkClaude: true, folder: '/tmp/x' },
+    }) as Providers[number];
+
+  it('пилюля с меткой; меню модели — настоящие имена', async () => {
+    bridge.setHandler('providers.list', async () => ({ providers: [...PROVIDERS.slice(0, 2), kimi(true)] }));
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Kimi'));
+    expect(isChecked(providerRadio(0, 'Kimi'))).toBe(true);
+    expect(providerRadio(0, 'Kimi').textContent).toBe('Kimi');
+    expect(await optionNames(modelSelect(0))).toEqual(expect.arrayContaining(['kimi-k3', 'kimi-k2.7-code']));
+    fireEvent.click(screen.getByRole('option', { name: 'kimi-k2.7-code' }));
+  });
+
+  it('Open in Settings закрывает поповер карточки и открывает Settings', async () => {
+    bridge.setHandler('providers.list', async () => ({ providers: [...PROVIDERS.slice(0, 2), kimi(false)] }));
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Kimi'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open in Settings' }));
+    expect(screen.queryByRole('button', { name: 'Open in Settings' })).toBeNull();
+    expect(useUiStore.getState().dialogs.settings).toBe(true);
+  });
+
+  it('неподключённый открывает карточку с Open in Settings', async () => {
+    bridge.setHandler('providers.list', async () => ({ providers: [...PROVIDERS.slice(0, 2), kimi(false)] }));
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Kimi'));
+    expect(await screen.findByRole('button', { name: 'Open in Settings' })).toBeTruthy();
+    expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+  });
+});

@@ -13,6 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import {
   addMessage,
   attemptKindFor,
@@ -43,6 +44,12 @@ import {
   MapLockTimeoutError,
   providerReadiness,
   providerReadinessError,
+  prepareCustomProviderDir,
+  readCustomProviders,
+  mirrorProjectTrust,
+  syncApiKeyApproval,
+  userClaudeConfigDir,
+  userClaudeJsonPath,
   readSecret,
   openEvents,
   planLaunch,
@@ -75,6 +82,7 @@ import type { SessionRef, WorksSnapshot } from '@parley/protocol';
 import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
+import { serialized } from '../methods/custom-providers.js';
 import type { HookServer } from '../hooks/hook-server.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
@@ -84,7 +92,7 @@ import { createStepTimer } from '../timing.js';
 import { createSkillInstaller } from './agent-skills.js';
 import { findInterrupted } from './interrupted.js';
 import { resolveModelChoice } from './model-choice.js';
-import { providerLaunchEnv } from './provider-env.js';
+import { LOOPBACK_KEY_PLACEHOLDER, providerLaunchEnv } from './provider-env.js';
 
 export interface CreateSessionInput {
   projectPath: string;
@@ -610,14 +618,55 @@ export function createSessionsService(
       // Read again after async preparation: key removal/rotation applies to this exact process.
       const runnerSecret = entry.runner.secret;
       const secret = runnerSecret === undefined ? null : await timer.step('secret', () => readSecret(runnerSecret));
-      if (entry.runner.secret !== undefined && secret === null) {
-        throw new HostError('bad_request', 'GLM requires a saved Z.ai key in Providers');
+      if (entry.runner.secret !== undefined && secret === null && entry.runner.keyOptional !== true) {
+        // Ключ могли удалить после проверки готовности: тот же текст отказа, что у `readyProvider`.
+        throw new HostError('bad_request', providerReadinessError(entry, { needs: 'key', error: null, version: null })
+          ?? 'provider key is missing');
+      }
+      // Папка своего провайдера готовится перед каждым запуском, и resume тоже (спека своих провайдеров 6.2, К17–К18):
+      // посев, ссылки, доверие к cwd сессии и подтверждение ключа. Сбой — отказ запуска, не падение хоста.
+      if (entry.custom !== undefined) {
+        const custom = entry.custom;
+        try {
+          // Шаги своих провайдеров идут по одному: два запуска одного провайдера не пишут его файл состояния
+          // вперемешку, а удаление провайдера не даёт запуску пересоздать только что убранную папку.
+          await timer.step('custom-dir', () => serialized(async () => {
+            if (!(await readCustomProviders()).some((record) => record.id === custom.id)) {
+              throw new Error('the provider was deleted');
+            }
+            await prepareCustomProviderDir(custom, {
+              claudeConfigDir: userClaudeConfigDir(),
+              warn: (text) => host.log.warn(text, { provider: custom.id }),
+            });
+            await mirrorProjectTrust(custom.id, plan.cwd, { userClaudeJson: userClaudeJsonPath() });
+            // Одобряется то, что реально уйдёт в `ANTHROPIC_API_KEY`: и плейсхолдер loopback без ключа (К17).
+            const apiKey = secret ?? (entry.runner.keyOptional === true ? LOOPBACK_KEY_PLACEHOLDER : null);
+            await syncApiKeyApproval(custom.id, entry.runner.auth === 'api-key' ? apiKey : null);
+          }));
+        } catch (error) {
+          host.log.warn('custom provider folder could not be prepared', { ref, provider: custom.id, error: String(error) });
+          host.broadcast('host.notice', {
+            kind: 'launch-failed', ref,
+            text: `session ${ref.sessionId} failed to launch: ${custom.label} folder could not be prepared`,
+            at: new Date().toISOString(),
+          });
+          throw new HostError('bad_request', `${custom.label} folder could not be prepared (${(error as Error).message})`);
+        }
+      }
+      // История своего провайдера пишется в `<папка>/projects` (создана `prepareCustomProviderDir`): индекс логов
+      // встаёт на неё наблюдателем до старта процесса (спека 5.6). Сбой наблюдателя запуск не отказывает.
+      if (entry.custom !== undefined && entry.runner.configDir !== undefined) {
+        try {
+          activity.watchClaudeRoot(path.join(entry.runner.configDir, 'projects'));
+        } catch (error) {
+          host.log.warn('custom provider history root could not be watched', { ref, provider: entry.custom.id, error: String(error) });
+        }
       }
       const env = providerLaunchEnv(entry, process.env, plan.env, secret);
       // Свой токен приёмника на каждый запуск (решение А): с ним HTTP-хуки из файла настроек находят
       // сессию. Только при `hookUrl` — без него в файле настроек HTTP-хуков нет, и токен не нужен.
       if (hookUrl !== undefined && hooks !== undefined) {
-        const name = entry.runner.secret === 'zai' ? 'PARLEY_HOOK_CAPABILITY' : 'PARLEY_HOOK_TOKEN';
+        const name = entry.runner.secret !== undefined ? 'PARLEY_HOOK_CAPABILITY' : 'PARLEY_HOOK_TOKEN';
         // Мост хука Codex (`codex-hook-bin`) читает адрес и токен из окружения процесса — у Claude они в файле настроек.
         if (session.provider === 'codex') env['PARLEY_HOOK_URL'] = hookUrl;
         env[name] = hooks.register(

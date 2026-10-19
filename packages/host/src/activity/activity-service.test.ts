@@ -850,6 +850,34 @@ describe('createActivityService: субагенты и ожидание (Parley 
     expect(a.get(ref)?.metrics?.tasks?.[0]?.description).toBe('Docs lookup');
   }, 20_000);
 
+  it('корень своего провайдера, созданный после старта хоста, читается для meta.json субагента (спека 5.6)', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    // Без своего claudeRoot сервис берёт настоящие корни истории; дом подменён временным, настоящий не читается.
+    const savedHome = process.env['HOME'];
+    process.env['HOME'] = home;
+    try {
+      const a = activity(w, { claudeRoot: undefined as unknown as string, silenceThresholdMs: 120_000 });
+      await a.start();
+      await settle();
+      // Провайдер заведён уже после старта: его папка появляется только сейчас.
+      const customRoot = path.join(home, 'providers', 'custom-kimi', 'projects');
+      const customTranscript = path.join(customRoot, '-proj', 'sess.jsonl');
+      const customMeta = path.join(customRoot, '-proj', 'sess', 'subagents', 'agent-a9.meta.json');
+      await mkdir(path.dirname(customMeta), { recursive: true });
+      await writeFile(customMeta, JSON.stringify({ agentType: 'general-purpose', description: 'Custom research' }));
+      await appendFile(
+        journalOf(ref),
+        hook('UserPromptSubmit') +
+          hook('SubagentStart', { agent_id: 'a9', agent_type: '', transcript_path: customTranscript }),
+      );
+      await waitFor(() => a.get(ref)?.metrics?.tasks?.[0]?.description === 'Custom research');
+    } finally {
+      if (savedHome === undefined) delete process.env['HOME'];
+      else process.env['HOME'] = savedHome;
+    }
+  }, 20_000);
+
   it('описание из снимка файла не требует: meta.json не читается — чтение наблюдаемо', async () => {
     const { ref } = await activeSession();
     const w = await works();

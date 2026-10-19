@@ -1,9 +1,13 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearSecret, createPendingSession, createWork, readMap, writeSecret, workPaths, updateMap, plannedWorktree } from '@parley/core';
+import {
+  clearSecret, createPendingSession, createWork, readMap, writeSecret, workPaths, updateMap, plannedWorktree,
+  customProviderEntry, writeCustomProviders, customProvidersFile, customProviderDir, PROVIDERS,
+  type CustomProviderRecord,
+} from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import type { PtyManager } from '../pty/pty-manager.js';
@@ -11,6 +15,7 @@ import type { PtyLaunch } from '../pty/pty-process.js';
 import type { WorksService } from '../works/works-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import { createSessionsService } from './sessions-service.js';
+import { providerLaunchEnv } from './provider-env.js';
 
 let home: string;
 let project: string;
@@ -24,7 +29,7 @@ const capability = 'b'.repeat(64);
 const probe = vi.fn(async () => version);
 const register = vi.fn(() => capability);
 
-function service(hookUrl = () => 'http://127.0.0.1:1234/hooks') {
+function service(hookUrl = () => 'http://127.0.0.1:1234/hooks', watchClaudeRoot: (root: string) => void = () => {}) {
   const host = { log: { info() {}, warn() {}, error() {} }, broadcast: (_: string, data: unknown) => notices.push(data) } as unknown as HostContext;
   const pty = {
     get: () => undefined, on: () => () => {},
@@ -33,7 +38,7 @@ function service(hookUrl = () => 'http://127.0.0.1:1234/hooks') {
       return { ref, pid: process.pid };
     },
   } as unknown as PtyManager;
-  return createSessionsService(host, { onChange: () => () => {} } as unknown as WorksService, pty, { markSeen() {} } as unknown as ActivityService, {
+  return createSessionsService(host, { onChange: () => () => {} } as unknown as WorksService, pty, { markSeen() {}, watchClaudeRoot } as unknown as ActivityService, {
     providerVersions: { ready: Promise.resolve(), get: () => version, fresh: probe },
     hooks: { url: hookUrl, register, unregister() {} },
   });
@@ -200,5 +205,139 @@ describe('GLM launch boundaries', () => {
     await expect(sessions.launch(ref, 'resume')).rejects.toThrow(/2\.1\.287/);
     expect(launches).toHaveLength(2);
     expect(probe).toHaveBeenCalledTimes(4);
+  });
+});
+
+// Свои провайдеры (спека своих провайдеров 5.2, 6.2, К17–К18).
+const kimi: CustomProviderRecord = {
+  id: 'custom-kimi', label: 'Kimi', preset: null, baseUrl: 'https://api.moonshot.ai/anthropic', auth: 'bearer',
+  models: { opus: 'kimi-k2', sonnet: 'kimi-k2', haiku: 'kimi-k2', subagent: 'kimi-k2' }, contextWindow: null, linkClaude: false,
+};
+const local: CustomProviderRecord = { ...kimi, id: 'custom-local', label: 'Local', baseUrl: 'http://127.0.0.1:11434' };
+const hostEnv = {
+  ANTHROPIC_BASE_URL: 'x', ANTHROPIC_API_KEY: 'host', ANTHROPIC_AUTH_TOKEN: 'host-token',
+  CLAUDE_CONFIG_DIR: '/u/.claude', CLAUDE_SECURESTORAGE_CONFIG_DIR: '/u/.claude', PATH: '/bin',
+};
+
+describe('providerLaunchEnv: свой провайдер', () => {
+  const entry = customProviderEntry(kimi, '/p');
+  it('чистит ANTHROPIC_*, CLAUDE_SECURESTORAGE_CONFIG_DIR и CLAUDE_CONFIG_DIR хоста, ставит свою папку', () => {
+    const env = providerLaunchEnv(entry, hostEnv, {}, 'sk-1');
+    expect(env.CLAUDE_CONFIG_DIR).toBe(entry.runner.configDir);
+    expect(env.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBeUndefined();
+    expect(env.ANTHROPIC_BASE_URL).toBe('https://api.moonshot.ai/anthropic');
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe('sk-1');
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+  it("auth 'api-key': ключ в ANTHROPIC_API_KEY, AUTH_TOKEN нет", () => {
+    const env = providerLaunchEnv(customProviderEntry({ ...kimi, auth: 'api-key' }, '/p'), hostEnv, {}, 'sk-1');
+    expect(env.ANTHROPIC_API_KEY).toBe('sk-1');
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+  });
+  it('loopback без ключа: плейсхолдер parley-local в переменной auth', () => {
+    const bearer = providerLaunchEnv(customProviderEntry(local, '/p'), hostEnv, {}, null);
+    expect(bearer.ANTHROPIC_AUTH_TOKEN).toBe('parley-local');
+    const apiKey = providerLaunchEnv(customProviderEntry({ ...local, auth: 'api-key' }, '/p'), hostEnv, {}, null);
+    expect(apiKey.ANTHROPIC_API_KEY).toBe('parley-local');
+    expect(apiKey.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+  });
+  it('GLM: окружение побайтно как до правки', () => {
+    const env = providerLaunchEnv(PROVIDERS.glm, hostEnv, { A: '1' }, 'z-key');
+    expect(env).toEqual({
+      PATH: '/bin', A: '1', ...PROVIDERS.glm.runner.env,
+      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1', ANTHROPIC_AUTH_TOKEN: 'z-key',
+    });
+  });
+});
+
+describe('запуск своего провайдера', () => {
+  let userDir: string;
+  beforeEach(async () => {
+    userDir = path.join(home, 'user-claude');
+    process.env.CLAUDE_CONFIG_DIR = userDir;
+    version = '2.1.302';
+    await writeCustomProviders([kimi, local], customProvidersFile(home));
+  });
+  const customInput = (provider = 'custom-kimi') => ({ ...input(), provider });
+
+  it('ключ в процессе, папка и доверие подготовлены до pty.start; хуки с PARLEY_HOOK_CAPABILITY', async () => {
+    await writeSecret('custom:custom-kimi', 'sk-kimi');
+    await service().create(customInput());
+    const launch = launches[0]!;
+    expect(launch.env).toMatchObject({
+      CLAUDE_CONFIG_DIR: customProviderDir('custom-kimi', home), ANTHROPIC_AUTH_TOKEN: 'sk-kimi',
+      PARLEY_HOOK_CAPABILITY: capability,
+    });
+    expect(launch.env.PARLEY_HOOK_TOKEN).toBeUndefined();
+    const seeded = JSON.parse(await readFile(path.join(customProviderDir('custom-kimi', home), '.claude.json'), 'utf8'));
+    expect(seeded.hasCompletedOnboarding).toBe(true);
+    const file = launch.args[launch.args.indexOf('--settings') + 1]!;
+    expect(await readFile(file, 'utf8')).toContain('PARLEY_HOOK_CAPABILITY');
+    expect(launch.args.join(' ')).not.toContain('sk-kimi');
+  });
+  it('без ключа отказ понятным текстом, процесс не стартует', async () => {
+    await expect(service().create(customInput())).rejects.toThrow(/Kimi requires a saved key in Settings/);
+    expect(launches).toEqual([]);
+  });
+  it('loopback без ключа стартует с плейсхолдером', async () => {
+    await service().create(customInput('custom-local'));
+    expect(launches[0]!.env.ANTHROPIC_AUTH_TOKEN).toBe('parley-local');
+  });
+  it('ошибка подготовки папки — отказ запуска, не падение хоста; и при resume', async () => {
+    await writeSecret('custom:custom-kimi', 'sk-kimi');
+    const sessions = service();
+    const ref = await sessions.create(customInput());
+    await rm(customProviderDir('custom-kimi', home), { recursive: true, force: true });
+    await writeFile(customProviderDir('custom-kimi', home), 'not a directory');
+    await expect(sessions.launch(ref, 'resume')).rejects.toThrow(/folder/i);
+    expect(launches).toHaveLength(1);
+  });
+  const providerJson = async (id: string): Promise<{ customApiKeyResponses?: { approved: string[]; rejected: string[] }; projects?: Record<string, { hasTrustDialogAccepted?: boolean }> }> =>
+    JSON.parse(await readFile(path.join(customProviderDir(id, home), '.claude.json'), 'utf8'));
+  const apiKeyLocal: CustomProviderRecord = { ...local, auth: 'api-key' };
+
+  it('api-key, loopback без ключа: плейсхолдер в env и его хвост одобрен (К17)', async () => {
+    await writeCustomProviders([apiKeyLocal], customProvidersFile(home));
+    await service().create(customInput('custom-local'));
+    expect(launches[0]!.env.ANTHROPIC_API_KEY).toBe('parley-local');
+    expect((await providerJson('custom-local')).customApiKeyResponses.approved).toEqual(['parley-local']);
+  });
+  it('api-key с ключом: хвост ключа одобрен; bearer при resume убирает одобрение', async () => {
+    const key = 'sk-kimi-0123456789012345678901234567';
+    await writeCustomProviders([{ ...kimi, auth: 'api-key' }], customProvidersFile(home));
+    await writeSecret('custom:custom-kimi', key);
+    const sessions = service();
+    const ref = await sessions.create(customInput());
+    expect((await providerJson('custom-kimi')).customApiKeyResponses.approved).toEqual([key.slice(-20)]);
+    await writeCustomProviders([kimi], customProvidersFile(home));
+    await sessions.launch(ref, 'resume');
+    expect((await providerJson('custom-kimi')).customApiKeyResponses).toBeUndefined();
+  });
+  it('доверие к папке копируется из .claude.json человека только для доверенной папки', async () => {
+    await writeSecret('custom:custom-kimi', 'sk-kimi');
+    await mkdir(userDir, { recursive: true });
+    await writeFile(path.join(userDir, '.claude.json'), JSON.stringify({ projects: { [project]: { hasTrustDialogAccepted: true } } }));
+    await service().create(customInput());
+    expect((await providerJson('custom-kimi')).projects?.[project]?.hasTrustDialogAccepted).toBe(true);
+    await writeFile(path.join(userDir, '.claude.json'), JSON.stringify({ projects: {} }));
+    await rm(customProviderDir('custom-kimi', home), { recursive: true, force: true });
+    await service().create(customInput());
+    expect((await providerJson('custom-kimi')).projects?.[project]).toBeUndefined();
+  });
+  it('обычный claude: окружение запуска то же с custom-providers.json и без него', async () => {
+    await service().create({ ...input(), provider: 'claude' });
+    await rm(customProvidersFile(home), { force: true });
+    await service().create({ ...input(), provider: 'claude' });
+    const pick = (env: NodeJS.ProcessEnv) => Object.fromEntries(
+      Object.entries(env).filter(([name]) => name.startsWith('ANTHROPIC_') || name.startsWith('CLAUDE_')));
+    expect(pick(launches[0]!.env)).toEqual(pick(launches[1]!.env));
+    expect(launches[0]!.env.CLAUDE_CONFIG_DIR).toBe(userDir);
+  });
+  it('корень истории отдаётся индексу логов; сбой наблюдателя не отказывает запуск', async () => {
+    await writeSecret('custom:custom-kimi', 'sk-kimi');
+    const roots: string[] = [];
+    await service(undefined, (root) => { roots.push(root); throw new Error('watch broke'); }).create(customInput());
+    expect(roots).toEqual([path.join(customProviderDir('custom-kimi', home), 'projects')]);
+    expect(launches).toHaveLength(1);
   });
 });

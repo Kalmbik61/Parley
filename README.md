@@ -2143,6 +2143,46 @@ Refresh limits. Parallel agents still share your plan's allowance and can receiv
 remain available; `secret`, `family`, provider environment and the minimum version cannot
 be changed through `providers.json`.
 
+### Own providers
+
+Connect an Anthropic-compatible service in **Settings → Providers**, or with **+ Add provider** in the
+status bar. Pick a preset (Kimi, MiniMax, Qwen, DeepSeek, OpenRouter) or **Own address**; a preset fills
+in the address and the model slots, and you can change them. Give the provider a name, paste its key,
+and press **Check** to send one short test message; **Save** keeps it. A connected provider appears in
+the status bar and in the New session and room dialogs. Its sessions run the official Claude Code CLI
+with that provider's address, key and models, so Claude Code **2.1.302 or newer** is required (the
+minimum version on which the isolation below was checked).
+
+Each provider has its own Claude Code settings folder, `~/.parley/providers/<id>/`, with its own
+sign-in, history and memory. Parley never writes into `~/.claude`, and the key lives in Parley's
+secrets file and in the environment of that provider's session only. The key is shown as a mask
+afterwards; **Replace** and **Remove** change it. An address must use `https://` (`http://` only for
+localhost) and must not contain a login, `?` or `#`. The key is sent as a Bearer token for the presets;
+for your own address you choose between a Bearer token and an `x-api-key` header.
+
+A model service without an Anthropic-compatible address is reached through a proxy you run yourself;
+Parley does not translate between protocols. Its address is the proxy's, and the model names are
+whatever the proxy expects. An "Own address" provider must fill in all four model slots, or choose one
+model for all of them: an empty slot breaks subagents and background tasks.
+
+**Bring from Claude Code** (a checkbox in the form) links your `CLAUDE.md`, skills and agents into the
+provider's folder. These are links: editing them in that provider's session changes the originals your
+regular Claude sessions also use. To change something only for one provider, ask its agent to make a
+copy first. The agent should ask whether the change is for both or only for this provider, and on "only
+here" it replaces the link with a copy and edits that. Parley does not relink copies. New skills and
+agents created in a provider's session stay in its folder. MCP servers are not shared: the ones you
+added to Claude Code are not in a provider's session, and an MCP server added in a provider's session
+stays there.
+
+**Delete provider** removes it from the status bar and the dialogs. Its sessions stay in history but
+cannot be resumed. Its folder stays unless you tick **Also delete its folder (history)**.
+
+Isolation was checked on macOS: the provider's sessions use their own folder and their own sign-in
+entry, and the code tests confirm that the regular Claude Code environment is left alone. A live
+check with real keys for each preset, the agent behaviour of the "Bring from Claude Code" rule, and a
+`/logout` in a provider's session are still pending; see the status in
+`docs/specs/2026-10-17-custom-providers-design.md`, section 9. Linux and Windows are not checked.
+
 ### Codex — a room agent
 
 Codex is started by the same window and works in rooms on a par with Claude Code. By default

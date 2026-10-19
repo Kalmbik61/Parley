@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MCP_SERVER_NAME } from '../names.js';
 import { GUIDE } from './guide.js';
 import { contextBytes, GUIDANCE_MAX_BYTES, STABLE_POLICY_MAX_BYTES, textHash } from './context-budget.js';
-import { BROWSER_PRIORITY_RULE, guidanceBudgetProblems, stableGuidance, systemGuidance } from './guidance.js';
+import { BROWSER_PRIORITY_RULE, guidanceBudgetProblems, linkedSettingsRule, stableGuidance, systemGuidance } from './guidance.js';
 import { ACCEPTED_LETTER, RETURNED_LETTER } from './proposals.js';
 import type { WorkMap } from './types.js';
 
@@ -753,6 +753,25 @@ describe('правило приоритета браузера Parley (этап 
   });
 });
 
+describe('linkedSettingsRule', () => {
+  it('текст спеки 5.8 с папкой провайдера и источником, одна строка', () => {
+    const rule = linkedSettingsRule('/h/.parley/providers/custom-kimi', '/h/.claude');
+    expect(rule).toContain('settings folder is /h/.parley/providers/custom-kimi, not ~/.claude');
+    expect(rule).toContain('main Claude Code settings (/h/.claude)');
+    expect(rule).toContain('rm without -r and without a trailing slash');
+    expect(rule).toBe(
+      'This session runs on a custom provider whose Claude Code settings folder is /h/.parley/providers/custom-kimi, not ~/.claude. ' +
+        "/h/.parley/providers/custom-kimi/CLAUDE.md and the symlinked entries in /h/.parley/providers/custom-kimi/skills and /h/.parley/providers/custom-kimi/agents point to the human's main Claude Code settings (/h/.claude): an edit through the link or at the real path changes the main Claude Code too. " +
+        'Before changing any of them, tell the human so and ask whether the change is for both or only for this provider. ' +
+        "Only for this provider: first replace the link with a copy — copy the original to a temporary name next to the link, delete the link itself (rm without -r and without a trailing slash), rename the copy to the link's name — then edit the copy; Parley keeps copies and does not relink them. " +
+        'Put new skills and agents in /h/.parley/providers/custom-kimi: they stay with this provider. MCP servers and settings of this provider are already its own.',
+    );
+    expect(rule).not.toContain('\n');
+    expect(rule).not.toMatch(/[А-Яа-яЁё]/);
+    expect(rule).not.toContain('{dir}');
+    expect(rule).not.toContain('{source}');
+  });
+});
 
 it('uses personal plans for quiet progress and reserves owner pings for material changes', () => {
   const text = stableGuidance();

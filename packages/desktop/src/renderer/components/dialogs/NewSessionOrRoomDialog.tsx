@@ -105,6 +105,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Switch } from '../../ui/switch.js';
 import { TOOLTIP_DELAY_MS, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../ui/tooltip.js';
 import { AgentIcon } from '../AgentIcon.js';
+import { PILL } from '../providers/pill.js';
 import { ProviderCard } from '../providers/ProviderCard.js';
 import { radioGroupKeyDown } from './radio-keys.js';
 import { RecipeSavePanel } from './RecipeSavePanel.js';
@@ -200,10 +201,6 @@ const LIST_HEIGHT = 'max-h-[min(24rem,var(--radix-select-content-available-heigh
  * действует. Правило — на самом пункте, для его последнего потомка, как у триггера.
  */
 const ITEM_CLIP = '[&>span:last-child]:min-w-0 [&>span:last-child]:truncate';
-
-/** Пилюля провайдера (1.5): 34px, значок 14; выбранная — рамка `--ring`, фон `neutral-100`, вес 600; иначе рамка divider. */
-const PILL =
-  'inline-flex h-[34px] shrink-0 items-center gap-[7px] rounded-full border pl-2.5 pr-3 text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-[.45]';
 
 /** Свой наблюдатель для каждого поповера: анимация закрытия старого не отключает новый. */
 function ProviderPopoverContent(props: ComponentPropsWithoutRef<typeof PopoverContent>): JSX.Element {
@@ -935,6 +932,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
                                 <ProviderCard
                                   provider={provider}
                                   onReload={reloadProviders}
+                                  onOpenSettings={() => setProviderCard(null)}
                                   onRestartHost={() => {
                                     setProviderCard(null);
                                     useUiStore.getState().confirmRestartHost();

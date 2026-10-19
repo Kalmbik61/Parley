@@ -137,7 +137,7 @@ describe('узкие исключения добровольно введённ�
     {
       file: 'packages/host/src/sessions/provider-env.ts',
       rule: 'ключ GLM вне окружения процесса',
-      line: 'if (key !== null) env.ANTHROPIC_AUTH_TOKEN = key;',
+      line: 'else env.ANTHROPIC_AUTH_TOKEN = value;',
     },
   ];
 
@@ -223,6 +223,7 @@ describe('исключения рамки: statusline.ts среди них бо�
       'packages/host/src/capabilities/native-plugin-inventory.ts | запись в каталоги агентов',
       'packages/host/src/capabilities/native-targets.ts | запись в каталоги агентов',
       'packages/host/src/capabilities/snapshot.ts | запись в каталоги агентов',
+      'packages/core/src/custom-provider-dir.ts | запись в каталоги агентов',
       'packages/host/src/limits/zai-quota.ts | API провайдеров',
       'packages/host/src/limits/zai-check.ts | API провайдеров',
       'packages/core/src/providers.ts | API провайдеров',
@@ -417,8 +418,8 @@ describe('рамочный тест репозитория (тест 6)', () => 
       [
         'packages/core/src/codex/discover.ts:10',
         'packages/core/src/codex/discover.ts:9',
-        'packages/core/src/providers.ts:17',
-        'packages/core/src/providers.ts:310',
+        'packages/core/src/providers.ts:18',
+        'packages/core/src/providers.ts:319',
         'packages/core/src/work/mcp-config.ts:191',
       ].sort(),
     );

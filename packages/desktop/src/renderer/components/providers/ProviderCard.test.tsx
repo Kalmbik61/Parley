@@ -5,6 +5,7 @@ import type { ProviderCheck, Result } from '@parley/protocol';
 import { encodeIpcError } from '../../../shared/ipc-error.js';
 import { S } from '../../../shared/strings.js';
 import { useHostStore } from '../../store/host.js';
+import { useUiStore } from '../../store/ui.js';
 import { useProvidersStore } from '../../store/providers.js';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { createFakeBridge } from '../../test-utils/fake-bridge.js';
@@ -449,5 +450,57 @@ describe('ProviderCard: аргументы запуска из providers.json (�
     expect(screen.queryByTestId('provider-args')).toBeNull();
     expect(screen.queryByText(S.providerCard.noModelChoice)).toBeNull();
     expect(screen.queryByText(S.providerCard.noEffortChoice)).toBeNull();
+  });
+});
+
+describe('ProviderCard — свой провайдер (спека 4.3)', () => {
+  const custom = (patch: Partial<Provider> = {}): Provider => ({
+    id: 'custom-kimi',
+    label: 'Kimi',
+    available: true,
+    family: 'claude',
+    needs: null,
+    keyHint: '••••test',
+    custom: {
+      preset: 'kimi',
+      baseUrl: 'https://api.kimi.ai/coding/',
+      auth: 'bearer',
+      models: { opus: 'kimi-k3' },
+      contextWindow: 262144,
+      linkClaude: true,
+      folder: '/tmp/x',
+    },
+    ...patch,
+  } as Provider);
+
+  it('показывает имя, состояние и Open in Settings, без поля ключа GLM', () => {
+    useUiStore.setState({ dialogs: { ...useUiStore.getState().dialogs, settings: false } });
+    const spy = vi.spyOn(useUiStore.getState(), 'openSettingsDialog');
+    render(<ProviderCard provider={custom()} onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(screen.getByText('Kimi')).toBeTruthy();
+    expect(screen.getByText('Connected')).toBeTruthy();
+    expect(screen.queryByLabelText('Z.ai API key')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Settings' }));
+    expect(useUiStore.getState().dialogs.settings).toBe(true);
+    expect(useUiStore.getState().settingsProvider).toBe('custom-kimi');
+    spy.mockRestore();
+  });
+
+  it('Open in Settings сначала зовёт onOpenSettings родителя (закрыть поповер)', () => {
+    const order: string[] = [];
+    const onOpenSettings = vi.fn(() => order.push('parent'));
+    const original = useUiStore.getState().openSettingsDialog;
+    useUiStore.setState({ openSettingsDialog: (...args: Parameters<typeof original>) => { order.push('settings'); original(...args); } });
+    render(<ProviderCard provider={custom()} onReload={async () => {}} onRestartHost={() => {}} onOpenSettings={onOpenSettings} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Settings' }));
+    expect(order).toEqual(['parent', 'settings']);
+    useUiStore.setState({ openSettingsDialog: original });
+  });
+
+  it('без ключа — Not connected', () => {
+    render(
+      <ProviderCard provider={custom({ available: false, needs: 'key', keyHint: null })} onReload={async () => {}} onRestartHost={() => {}} />,
+    );
+    expect(screen.getByText('Not connected')).toBeTruthy();
   });
 });

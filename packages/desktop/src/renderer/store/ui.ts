@@ -23,7 +23,7 @@ export interface DialogWork {
 export interface BacklogTakeContext { projectPath: string; id: string; version: string; task: string }
 
 /** Вкладки диалога настроек: `openSettingsDialog(section)` открывает его на нужной. */
-export type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'notifications' | 'browser' | 'voice' | 'assistant';
+export type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'notifications' | 'browser' | 'voice' | 'assistant' | 'providers';
 
 export interface DialogsState {
   /**
@@ -89,6 +89,8 @@ export interface UiState {
   closeProjectPanel(): void;
   /** Вкладка, с которой откроются настройки (`openSettingsDialog(section)`). */
   settingsSection: SettingsSection;
+  /** Провайдер, выбранный в Settings → Providers: id, `'new'` — выбор вендора, `null` — по умолчанию (спека своих провайдеров, раздел 4). */
+  settingsProvider: string | 'new' | null;
   /**
    * Сессии, чей терминал сейчас виден (активная вкладка своей группы,
    * `@parley/protocol#refKey`) — уведомления считают видимой именно такую
@@ -158,7 +160,7 @@ export interface UiState {
   /** `work` — работа диалога (`null` — активная); `room` — открыть сразу комнатой, с двумя агентами. */
   openNewSessionDialog: (work?: DialogWork, options?: { room?: boolean; backlog?: BacklogTakeContext }) => void;
   closeNewSessionDialog: () => void;
-  openSettingsDialog: (section?: SettingsSection) => void;
+  openSettingsDialog: (section?: SettingsSection, options?: { provider?: string | 'new' }) => void;
   closeSettingsDialog: () => void;
   openMergeRoomDialog: (input: NonNullable<DialogsState['mergeRoom']>) => void;
   closeMergeRoomDialog: () => void;
@@ -224,6 +226,7 @@ export const useUiStore = create<UiState>((set, get) => {
     openProjectPanel: (projectPath) => set({ projectPanel: projectPath }),
     closeProjectPanel: () => set({ projectPanel: null }),
     settingsSection: 'appearance',
+    settingsProvider: null,
     visibleSessionRefs: {},
     composerDrafts: {},
     composerAttachments: {},
@@ -288,8 +291,12 @@ export const useUiStore = create<UiState>((set, get) => {
       set((state) => ({
         dialogs: { ...state.dialogs, newSession: { open: false, work: null, room: false } },
       })),
-    openSettingsDialog: (section) =>
-      set((state) => ({ dialogs: { ...state.dialogs, settings: true }, settingsSection: section ?? 'appearance' })),
+    openSettingsDialog: (section, options) =>
+      set((state) => ({
+        dialogs: { ...state.dialogs, settings: true },
+        settingsSection: section ?? 'appearance',
+        settingsProvider: options?.provider ?? null,
+      })),
     closeSettingsDialog: () => set((state) => ({ dialogs: { ...state.dialogs, settings: false } })),
     openMergeRoomDialog: (input) => set((state) => ({ dialogs: { ...state.dialogs, mergeRoom: input } })),
     closeMergeRoomDialog: () => set((state) => ({ dialogs: { ...state.dialogs, mergeRoom: null } })),

@@ -14,6 +14,8 @@ export interface SessionLayerInput {
   /** Приоритет браузера Parley (`BROWSER_PRIORITY_RULE`): только запуску с каналом агента и сервером MCP. */
   browser?: string;
   bridge?: string;
+  /** Предостережение о ссылках своего провайдера (`linkedSettingsRule`, спека 5.8): сразу после `bridge`. */
+  links?: string;
   role?: string;
   /** Native Claude roles use --agent; their prompt must not be duplicated. */
   nativeClaudeRole?: boolean;
@@ -28,7 +30,7 @@ export interface SessionLayerInput {
 }
 
 export type LayerBlockBytes = Record<
-  'guidance' | 'browser' | 'bridge' | 'role' | 'playbook' | 'brief' | 'parleyMd' | 'memoryFacts',
+  'guidance' | 'browser' | 'bridge' | 'links' | 'role' | 'playbook' | 'brief' | 'parleyMd' | 'memoryFacts',
   number
 >;
 export interface SessionLayer {
@@ -115,6 +117,7 @@ export function buildSessionLayer(input: SessionLayerInput): SessionLayer {
     guidance: input.guidance,
     browser: input.browser ?? '',
     bridge: input.bridge ?? '',
+    links: input.links ?? '',
     role: role.text,
     playbook: playbook.text,
     brief: input.brief ?? '',
@@ -130,6 +133,7 @@ export function buildSessionLayer(input: SessionLayerInput): SessionLayer {
     parts.guidance,
     parts.browser,
     parts.bridge,
+    parts.links,
     parts.role,
     parts.playbook,
     parts.brief,

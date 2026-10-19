@@ -21,6 +21,7 @@ import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type N
 import { claudeProjectRoots } from '../discover.js';
 import { isServiceText, type SessionIndex } from '../session-index.js';
 import { bothEnv } from '../names.js';
+import { userClaudeConfigDir } from '../custom-provider-dir.js';
 import {
   EFFORT_TOKEN,
   loadProviders,
@@ -38,7 +39,7 @@ import type { RoleCatalog } from '../roles/types.js';
 import type { RequiredRolePermissions } from '../roles/catalog.js';
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { loadBrief, writeBrief } from './brief.js';
-import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, systemGuidance } from './guidance.js';
+import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, linkedSettingsRule, systemGuidance } from './guidance.js';
 import { readParleyMd } from './parley-md.js';
 import { readProjectMemory } from './project-memory.js';
 import type { MemoryItem } from './project-memory.js';
@@ -99,7 +100,7 @@ export interface LaunchOptions {
    */
   agent?: AgentChannel;
   /** Optional current role/recipe/memory snapshot, never persisted in the session map. */
-  layer?: Omit<SessionLayerInput, 'guidance' | 'bridge' | 'brief' | 'parleyMd'>;
+  layer?: Omit<SessionLayerInput, 'guidance' | 'bridge' | 'links' | 'brief' | 'parleyMd'>;
 }
 
 /** Чем и как поднимать процесс сессии в правой панели. */
@@ -160,7 +161,8 @@ async function writtenBrief(
 
 /**
  * Есть ли у Claude Code разговор с этим id: файл `<id>.jsonl` в каком-нибудь каталоге проекта одного из
- * корней истории (`claudeProjectRoots`: `$CLAUDE_CONFIG_DIR/projects`, `~/.claude/projects`; тесты и E2E
+ * корней истории (`claudeProjectRoots`: `$CLAUDE_CONFIG_DIR/projects`, `~/.claude/projects` и `projects` папок своих
+ * провайдеров `~/.parley/providers/custom-*`; тесты и E2E
  * подменяют их `PARLEY_CLAUDE_PROJECTS_DIR`). Каталог по cwd не вычисляется: имя ему строит Claude Code, и у
  * сессии в worktree оно своё.
  *
@@ -379,7 +381,11 @@ async function plan(
       ...(disablePlugins.length > 0 ? { disablePlugins } : {}),
       // Инструменты `browser_*` у сессии есть, только когда канал агента лёг в конфиг MCP (спека браузера, 5.1).
       ...(options.agent !== undefined && mcpRoute ? { allowBrowser: true } : {}),
-      ...(entry.id === 'glm' ? { provider: 'glm' as const } : {}),
+      ...(entry.id === 'glm'
+        ? { provider: 'glm' as const }
+        : entry.custom !== undefined
+          ? { hookTokenEnv: 'PARLEY_HOOK_CAPABILITY' as const, fileName: `settings-${entry.id}.json` }
+          : {}),
       ...(entry.runner.settingsModel === undefined
         ? {}
         : { model: options.model ?? session.model ?? entry.runner.settingsModel }),
@@ -423,6 +429,11 @@ async function plan(
     const bridge = entry.id === 'codex' && await codexBridgeApplies(cwd)
       ? 'Project instructions here were written for Claude Code (CLAUDE.md): they may name skills, slash commands or tools you do not have — skip those parts.'
       : '';
+    // Спека своих провайдеров, 5.8: Write/Edit Claude Code сам отправляет агента по настоящему пути ссылки,
+    // поэтому сессии с подтянутым общим — правило с её папкой; приходит при каждом запуске и возобновлении.
+    const links = entry.custom?.linkClaude === true && entry.runner.configDir !== undefined
+      ? linkedSettingsRule(entry.runner.configDir, userClaudeConfigDir())
+      : '';
     // Плейбук рецепта — только ведущему комнаты и только по карте: поля `options.layer` его не задают.
     const recipeBlock = leadRecipeBlock(map, session.id);
     const layer = buildSessionLayer({
@@ -438,6 +449,7 @@ async function plan(
         omitGoal: brief !== null || (!resuming && mode !== 'new' && !quiet),
       }),
       bridge: [entry.id === 'codex' ? CODEX_APPROVAL_GUIDANCE : '', bridge].filter(Boolean).join('\n\n'),
+      links,
       // Правило — только там, где у агента есть `browser_open`: канал выдан и сервер MCP доходит шаблоном с `{mcpConfig}`.
       ...(options.agent !== undefined && mcpRoute ? { browser: BROWSER_PRIORITY_RULE } : {}),
       ...(brief === null ? {} : { brief }),

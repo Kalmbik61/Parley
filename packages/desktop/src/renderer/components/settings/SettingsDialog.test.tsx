@@ -662,6 +662,7 @@ describe('SettingsDialog — навигация слева (живая пров�
       'Appearance',
       'Terminal',
       'Agents',
+      'Providers',
       'Notifications',
       'Browser',
       'Voice',

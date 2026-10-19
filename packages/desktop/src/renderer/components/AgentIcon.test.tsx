@@ -95,3 +95,19 @@ describe('AgentIcon — прочие провайдеры: буква (спек�
     expect(container.textContent).toBe('?');
   });
 });
+
+describe('AgentIcon — свои провайдеры (спека 3.7)', () => {
+  it('custom-* — parley.svg, glm по-прежнему буква G', () => {
+    const { container } = render(<AgentIcon provider="custom-kimi" />);
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/parley\.svg$/);
+    cleanup();
+    const glm = render(<AgentIcon provider="glm" />);
+    expect(imageOf(glm.container)).toBeNull();
+    expect(glm.container.textContent).toBe('G');
+  });
+
+  it('удалённый custom-id (нет в сторе) — всё равно значок Parley', () => {
+    const { container } = render(<AgentIcon provider="custom-gone-1" size={20} />);
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/parley\.svg$/);
+  });
+});

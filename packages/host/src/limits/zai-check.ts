@@ -65,7 +65,7 @@ function reasonOfCode(code: number): ProviderCheckReason | null {
   return null;
 }
 
-function reasonOfStatus(status: number): ProviderCheckReason {
+export function reasonOfStatus(status: number): ProviderCheckReason {
   if (status === 401) return 'authentication';
   if (status === 403) return 'key_restricted';
   if (status === 429) return 'rate_limited';

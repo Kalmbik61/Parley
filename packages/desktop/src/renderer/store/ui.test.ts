@@ -387,3 +387,12 @@ it('prepared backlog completion context is ephemeral and clears on plain open/cl
   useUiStore.getState().closeNewSessionDialog(); expect(useUiStore.getState().dialogs.newSession.backlog).toBeUndefined();
   useUiStore.getState().openNewSessionDialog(); expect(useUiStore.getState().dialogs.newSession.backlog).toBeUndefined();
 });
+
+it('openSettingsDialog() without arguments opens appearance with no provider selected; options select a provider (spec 4)', () => {
+  useUiStore.getState().openSettingsDialog('providers', { provider: 'new' });
+  expect(useUiStore.getState()).toMatchObject({ settingsSection: 'providers', settingsProvider: 'new' });
+  useUiStore.getState().openSettingsDialog();
+  expect(useUiStore.getState()).toMatchObject({ settingsSection: 'appearance', settingsProvider: null });
+  useUiStore.getState().openSettingsDialog('voice');
+  expect(useUiStore.getState().settingsProvider).toBeNull();
+});
