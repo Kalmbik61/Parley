@@ -1,12 +1,13 @@
 /** Только вымышленные ключи и временный дом Parley. */
 
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   SecretFormatError,
   clearSecret,
+  listCustomSecretIds,
   normalizeSecret,
   readSecret,
   secretHint,
@@ -185,5 +186,36 @@ describe('clearSecret', () => {
     await clearSecret('zai');
     await clearSecret('zai');
     await expect(stat(home)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+describe('параллельные записи секретов (финальная рецензия)', () => {
+  it('записи разных id одновременно не теряют друг друга, clearSecret рядом не возвращает удалённое', async () => {
+    await writeSecret('custom:custom-gone', 'gone-key');
+    const ids = Array.from({ length: 12 }, (_, index) => `custom:custom-p${index}` as const);
+    await Promise.all([
+      ...ids.map((id) => writeSecret(id, `key-${id}`)),
+      writeSecret('zai', 'zai-key'),
+      clearSecret('custom:custom-gone'),
+    ]);
+    for (const id of ids) expect(await readSecret(id)).toBe(`key-${id}`);
+    expect(await readSecret('zai')).toBe('zai-key');
+    expect(await readSecret('custom:custom-gone')).toBeNull();
+    expect((await readdir(home)).sort()).toEqual(['secrets.json']);
+  });
+
+  it('listCustomSecretIds отдаёт id из custom:*, остальные поля игнорирует', async () => {
+    await write({ zai: { key: 'z' }, 'custom:custom-a': { key: 'a' }, 'custom:custom-b': { key: 'b' }, other: 1 });
+    expect((await listCustomSecretIds()).sort()).toEqual(['custom-a', 'custom-b']);
+  });
+
+  it('оставленный упавшим процессом замок не блокирует запись навсегда', async () => {
+    await mkdir(home, { recursive: true });
+    const lock = path.join(home, 'secrets.json.lock');
+    await writeFile(lock, '', 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await utimes(lock, old, old);
+    await writeSecret('zai', 'zai-key');
+    expect(await readSecret('zai')).toBe('zai-key');
   });
 });

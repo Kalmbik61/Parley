@@ -402,6 +402,7 @@ export type { ParleyConfig, LoadedConfig } from './config.js';
 export {
   SecretFormatError,
   clearSecret,
+  listCustomSecretIds,
   normalizeSecret,
   readSecret,
   secretHint,

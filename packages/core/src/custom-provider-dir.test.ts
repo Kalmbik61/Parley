@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -241,6 +241,18 @@ describe('prepareCustomProviderDir', () => {
     expect(await readlink(path.join(dir, 'skills', 'custom-link'))).toBe(mine);
   });
 
+  it('живая ссылка того же имени на чужой источник не заменяется и не убирается (спека 5.4)', async () => {
+    await prepare();
+    const foreign = path.join(root, 'codex', 'skills', 'x');
+    await mkdir(foreign, { recursive: true });
+    await rm(path.join(dir, 'skills', 'x'));
+    await symlink(foreign, path.join(dir, 'skills', 'x'));
+    await prepare();
+    expect(await readlink(path.join(dir, 'skills', 'x'))).toBe(foreign);
+    await prepare({ ...record, linkClaude: false });
+    expect(await readlink(path.join(dir, 'skills', 'x'))).toBe(foreign);
+  });
+
   it('содержимое claudeDir (пути + sha256) до и после prepare и remove — одинаковое', async () => {
     const before = await snapshot(claudeDir);
     await prepare();
@@ -317,6 +329,19 @@ describe('mirrorProjectTrust (спека 6.2, К18)', () => {
     expect(((await json(path.join(dir, '.claude.json')))['projects'] as Record<string, unknown>)['/work/app']).toEqual({
       hasTrustDialogAccepted: true,
     });
+  });
+
+  it('проект за симлинком: доверие находится по реальному пути и пишется под ним (Review Focus 1)', async () => {
+    const real = path.join(root, 'real-project');
+    const via = path.join(root, 'linked-project');
+    await mkdir(real);
+    await symlink(real, via);
+    const realKey = await realpath(via);
+    await writeFile(userFile(), JSON.stringify({ projects: { [realKey]: { hasTrustDialogAccepted: true } } }));
+    await prepare();
+    expect(await mirrorProjectTrust(record.id, via, { userClaudeJson: userFile(), home })).toBe(true);
+    const own = (await json(path.join(dir, '.claude.json')))['projects'] as Record<string, unknown>;
+    expect(own[realKey]).toEqual({ hasTrustDialogAccepted: true });
   });
 
   it('доверие для cwd переносится; прочие поля провайдера сохранены; файл пользователя побайтно прежний', async () => {

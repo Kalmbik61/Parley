@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, readFile, readdir, readlink, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { customProviderDir, isValidCustomProviderId, type CustomProviderRecord } from './custom-providers.js';
@@ -84,14 +84,16 @@ async function mergeIntoClaudeJson(
   return true;
 }
 
-/** Ссылка вида «наша»: указывает на запись с тем же именем в папке `parent` (`skills`, `agents`) или файл `CLAUDE.md`. */
-function looksLikeOurLink(target: string, name: string, parent: string | null): boolean {
-  if (path.basename(target) !== name) return false;
-  return parent === null || path.basename(path.dirname(target)) === parent;
+/** Файл в папке провайдера: из какой папки Claude Code Parley ставил ссылки в прошлый раз (чтобы узнать свои ссылки после смены источника). */
+const LINK_SOURCE_FILE = '.parley-link-source';
+
+/** Ссылка «наша» только если ведёт ровно на `<известная папка Claude Code>/<относительный путь>`; ссылку пользователя на другой источник не трогаем (спека 5.4). */
+function looksLikeOurLink(target: string, rel: string, roots: readonly string[]): boolean {
+  return roots.some((root) => target === path.join(root, rel));
 }
 
 /** Ставит, переставляет или убирает одну ссылку. Настоящую запись на этом имени не трогает. */
-async function reconcileLink(link: string, source: string, name: string, parent: string | null, want: boolean): Promise<void> {
+async function reconcileLink(link: string, source: string, rel: string, roots: readonly string[], want: boolean): Promise<void> {
   const info = await lstatOrNull(link);
   const sourceAlive = want && (await statOk(source));
   if (info !== null) {
@@ -100,7 +102,7 @@ async function reconcileLink(link: string, source: string, name: string, parent:
     if (current === null) return; // ссылку убрал параллельный запуск того же провайдера
     if (sourceAlive && current === source && (await statOk(link))) return;
     const dangling = !(await statOk(link));
-    if (!(dangling || looksLikeOurLink(current, name, parent))) return; // чужая живая ссылка
+    if (!(dangling || looksLikeOurLink(current, rel, roots))) return; // чужая живая ссылка
     await rm(link, { force: true }); // rm снимает саму ссылку и не заходит в цель
   }
   if (sourceAlive) {
@@ -118,6 +120,7 @@ async function reconcileItems(
   claudeDir: string,
   folder: 'skills' | 'agents',
   want: boolean,
+  roots: readonly string[],
   warn: (message: string) => void,
 ): Promise<void> {
   const target = path.join(dir, folder);
@@ -134,12 +137,12 @@ async function reconcileItems(
     await mkdir(target, { recursive: true, mode: 0o700 });
   }
   for (const name of names) {
-    await reconcileLink(path.join(target, name), path.join(source, name), name, folder, true);
+    await reconcileLink(path.join(target, name), path.join(source, name), path.join(folder, name), roots, true);
   }
   // Лишние ссылки: оригинал исчез (висячая), источник сменился или галочка выключена.
   for (const name of await readdir(target)) {
     if (names.includes(name)) continue;
-    await reconcileLink(path.join(target, name), path.join(source, name), name, folder, false);
+    await reconcileLink(path.join(target, name), path.join(source, name), path.join(folder, name), roots, false);
   }
 }
 
@@ -175,12 +178,18 @@ export async function prepareCustomProviderDir(record: CustomProviderRecord, opt
   );
 
   const want = record.linkClaude;
+  const sourceFile = path.join(dir, LINK_SOURCE_FILE);
+  const previous = (await readFile(sourceFile, 'utf8').catch(() => null))?.trim() || null;
+  const roots = previous === null ? [options.claudeConfigDir] : [options.claudeConfigDir, previous];
   for (const item of LINKED_CLAUDE_ITEMS) {
     if (item === 'CLAUDE.md') {
-      await reconcileLink(path.join(dir, item), path.join(options.claudeConfigDir, item), item, null, want);
+      await reconcileLink(path.join(dir, item), path.join(options.claudeConfigDir, item), item, roots, want);
     } else {
-      await reconcileItems(dir, options.claudeConfigDir, item, want, warn);
+      await reconcileItems(dir, options.claudeConfigDir, item, want, roots, warn);
     }
+  }
+  if (previous !== options.claudeConfigDir && (want || previous !== null)) {
+    await writeFile(sourceFile, `${options.claudeConfigDir}\n`, { mode: 0o600 });
   }
 }
 
@@ -211,15 +220,19 @@ export async function mirrorProjectTrust(
   const user = await readObject(options.userClaudeJson, { follow: true });
   if (user.state !== 'ok' || !isRecord(user.data['projects'])) return false;
   const projects = user.data['projects'];
-  const session = path.resolve(cwd);
+  // Claude Code ключует `projects` реальным путём процесса: ищем под обоими написаниями, пишем под реальным (Review Focus 1).
+  const resolved = path.resolve(cwd);
+  const session = await realpath(resolved).catch(() => resolved);
   let trusted = false;
-  for (let current = session; ; current = path.dirname(current)) {
-    const entry = projects[current];
-    if (isRecord(entry) && entry['hasTrustDialogAccepted'] === true) {
-      trusted = true;
-      break;
+  for (const start of new Set([session, resolved])) {
+    for (let current = start; ; current = path.dirname(current)) {
+      const entry = projects[current];
+      if (isRecord(entry) && entry['hasTrustDialogAccepted'] === true) {
+        trusted = true;
+        break;
+      }
+      if (path.dirname(current) === current) break;
     }
-    if (path.dirname(current) === current) break;
   }
   if (!trusted) return false;
   return mergeIntoClaudeJson(
