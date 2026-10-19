@@ -355,10 +355,11 @@ export function createActivityService(
    */
   const subagentCaches = new Map<string, SubagentCache>();
   // Корни истории для `meta.json`: свой корень сервиса (тесты), иначе — где Claude Code держит историю.
-  const metaRoots = options.claudeRoot === undefined ? claudeProjectRoots() : [options.claudeRoot];
+  // Корни считаются при каждом чтении: папка своего провайдера может появиться уже после старта хоста (спека 5.6).
+  const metaRoots = (): string[] => (options.claudeRoot === undefined ? claudeProjectRoots() : [options.claudeRoot]);
   const readMeta =
     options.readSubagentMeta ??
-    ((transcriptPath: string, agentId: string) => readSubagentMeta(transcriptPath, agentId, metaRoots));
+    ((transcriptPath: string, agentId: string) => readSubagentMeta(transcriptPath, agentId, metaRoots()));
   /** Чтения `meta.json` в полёте (ключ сессии и id задачи): одно на задачу, пока оно не вернулось. */
   const metaReads = new Set<string>();
 

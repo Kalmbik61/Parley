@@ -102,7 +102,8 @@ export async function checkAnthropicEndpoint(
       response = await (options.fetch ?? globalThis.fetch)(messagesUrl(target.baseUrl), {
         method: 'POST',
         headers,
-        body: JSON.stringify({ model: target.model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
+        // Маркер контекста `[1m]` — пометка Claude Code, до API он не доходит (как у `zai-check`).
+        body: JSON.stringify({ model: target.model.replace(/\[1m\]$/u, ''), max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }),
         redirect: 'error',
         signal: controller.signal,
       });

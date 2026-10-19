@@ -13,7 +13,6 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import {
   addMessage,
@@ -93,7 +92,7 @@ import { createSkillInstaller } from './agent-skills.js';
 import { autoLaunchCandidates } from './auto-launch.js';
 import { findInterrupted } from './interrupted.js';
 import { resolveModelChoice } from './model-choice.js';
-import { providerLaunchEnv } from './provider-env.js';
+import { LOOPBACK_KEY_PLACEHOLDER, providerLaunchEnv } from './provider-env.js';
 
 export interface CreateSessionInput {
   projectPath: string;
@@ -637,14 +636,9 @@ export function createSessionsService(
               warn: (text) => host.log.warn(text, { provider: custom.id }),
             });
             await mirrorProjectTrust(custom.id, plan.cwd, { userClaudeJson: userClaudeJsonPath() });
-            await syncApiKeyApproval(custom.id, entry.runner.auth === 'api-key' ? secret : null);
-            // История своего провайдера пишется в его папку: каталог должен быть до запуска, чтобы индекс логов
-            // успел встать на него наблюдателем (спека 5.6).
-            if (entry.runner.configDir !== undefined) {
-              const projects = path.join(entry.runner.configDir, 'projects');
-              await mkdir(projects, { recursive: true });
-              activity.watchClaudeRoot(projects);
-            }
+            // Одобряется то, что реально уйдёт в `ANTHROPIC_API_KEY`: и плейсхолдер loopback без ключа (К17).
+            const apiKey = secret ?? (entry.runner.keyOptional === true ? LOOPBACK_KEY_PLACEHOLDER : null);
+            await syncApiKeyApproval(custom.id, entry.runner.auth === 'api-key' ? apiKey : null);
           });
         } catch (error) {
           host.log.warn('custom provider folder could not be prepared', { ref, provider: custom.id, error: String(error) });
@@ -654,6 +648,15 @@ export function createSessionsService(
             at: new Date().toISOString(),
           });
           throw new HostError('bad_request', `${custom.label} folder could not be prepared (${(error as Error).message})`);
+        }
+      }
+      // История своего провайдера пишется в `<папка>/projects` (создана `prepareCustomProviderDir`): индекс логов
+      // встаёт на неё наблюдателем до старта процесса (спека 5.6). Сбой наблюдателя запуск не отказывает.
+      if (entry.custom !== undefined && entry.runner.configDir !== undefined) {
+        try {
+          activity.watchClaudeRoot(path.join(entry.runner.configDir, 'projects'));
+        } catch (error) {
+          host.log.warn('custom provider history root could not be watched', { ref, provider: entry.custom.id, error: String(error) });
         }
       }
       const env = providerLaunchEnv(entry, process.env, plan.env, secret);

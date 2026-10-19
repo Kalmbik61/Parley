@@ -275,6 +275,9 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       )
     ).join('\u0000');
 
+  /** Корни Claude (кроме основного), которых нет среди `done`. */
+  const unbuiltRoots = (done: ReadonlySet<string>): string[] => [...claudeRoots].filter((root) => !done.has(root));
+
   return {
     childLogs(session) {
       if (session.provider !== 'codex') return [];
@@ -289,13 +292,20 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       // ещё строился: `stop()` прерывает чтение, и прерванное построение — не сбой.
       let built: SessionIndex[];
       for (const root of customRoots()) claudeRoots.add(root);
-      const extra = [...claudeRoots].filter((root) => root !== mainRoot);
+      // Корни, чьи сессии уже в `built`: `watchClaudeRoot` может добавить корень, пока список строится.
+      const builtRoots = new Set<string>([mainRoot]);
       try {
         const { customRoots: _skip, ...metricsRoots } = roots;
         built = await buildAllSessions({ ...metricsRoots, signal: building.signal });
         // Корни своих провайдеров — только Claude-формат; Codex в общем списке уже один раз.
-        for (const root of extra) built = [...built, ...(await buildIndex(root, adapterV1, building.signal))];
-        if (extra.length > 0) built.sort((a, b) => String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? '')));
+        // Цикл ловит и корни, появившиеся за время самой сборки: после последней проверки `await` нет.
+        for (let pending = unbuiltRoots(builtRoots); pending.length > 0; pending = unbuiltRoots(builtRoots)) {
+          for (const root of pending) {
+            builtRoots.add(root);
+            built = [...built, ...(await buildIndex(root, adapterV1, building.signal))];
+          }
+          built.sort((a, b) => String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? '')));
+        }
       } catch (error) {
         if (stopped) return;
         throw error;
@@ -303,17 +313,12 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       if (stopped) return;
       sessions = built;
       rebuild();
-      // Тех, кто уже подписался (`ActivityService.handleLogChange`), нужно
-      // толкнуть и на сам первый список: иначе сессия, чей лог был на диске
-      // ещё до старта хоста, ждала бы первой ЖИВОЙ записи, которой может не
-      // случиться (план, кусок 1.5 — автозаголовок и привязка «на изменениях
-      // логов»).
-      for (const listener of listeners) listener();
+      // Наблюдатели и `started` — без `await` после последней проверки корней: `watchClaudeRoot` не теряет корень.
       watcher = watchSessions(
         applyChange,
         [
           claudeSource(roots.claudeRoot, undefined, indexer),
-          ...extra.map((root) => claudeSource(root, undefined, indexer)),
+          ...[...claudeRoots].filter((root) => root !== mainRoot).map((root) => claudeSource(root, undefined, indexer)),
           codexSource(roots.codexRoot, indexer),
         ],
         // Сбой ре-парса одного файла не должен ронять хост — следующее событие
@@ -321,6 +326,12 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
         { minIntervalMs: LIVE_REINDEX_MIN_INTERVAL_MS, onError: () => {} },
       );
       started = true;
+      // Тех, кто уже подписался (`ActivityService.handleLogChange`), нужно
+      // толкнуть и на сам первый список: иначе сессия, чей лог был на диске
+      // ещё до старта хоста, ждала бы первой ЖИВОЙ записи, которой может не
+      // случиться (план, кусок 1.5 — автозаголовок и привязка «на изменениях
+      // логов»).
+      for (const listener of listeners) listener();
     },
     watchClaudeRoot(root) {
       if (stopped || claudeRoots.has(root)) return;

@@ -16,6 +16,9 @@ const GLM_SELECTORS = new Set([
   'CLAUDE_CODE_DISABLE_ADMIN_ENV_UNION', 'PARLEY_HOOK_TOKEN',
 ]);
 
+/** Ключ-заглушка loopback-адреса без ключа (`keyOptional`): им же подтверждается запрос Claude Code о ключе (К17). */
+export const LOOPBACK_KEY_PLACEHOLDER = 'parley-local';
+
 /** Final process-only transform. The caller reads the key immediately before this call. */
 export function providerLaunchEnv(entry: ProviderEntry, inherited: NodeJS.ProcessEnv, planEnv: Record<string, string>, key: string | null): NodeJS.ProcessEnv {
   const env = { ...agentEnv(inherited), ...planEnv };
@@ -30,7 +33,7 @@ export function providerLaunchEnv(entry: ProviderEntry, inherited: NodeJS.Proces
   if (entry.runner.configDir !== undefined) env.CLAUDE_CONFIG_DIR = entry.runner.configDir;
   env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
   // Ключ-заглушка нужна только локальному адресу без ключа (`keyOptional`), чтобы Claude Code не спрашивал вход.
-  const value = key ?? (entry.runner.keyOptional === true ? 'parley-local' : null);
+  const value = key ?? (entry.runner.keyOptional === true ? LOOPBACK_KEY_PLACEHOLDER : null);
   if (value !== null) {
     if (entry.runner.auth === 'api-key') env.ANTHROPIC_API_KEY = value;
     else env.ANTHROPIC_AUTH_TOKEN = value;

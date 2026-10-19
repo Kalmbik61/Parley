@@ -636,24 +636,56 @@ describe('createLogIndex', () => {
       expect(found?.file).toBe(file);
     });
 
-    it('watchClaudeRoot: новый корень после старта — живые записи индексируются; повторный вызов не плодит наблюдателей', async () => {
+    it('watchClaudeRoot: новый корень после старта — живые записи индексируются', async () => {
       const idx = customIndex([]);
       await idx.start();
       idx.watchClaudeRoot(customRoot);
-      idx.watchClaudeRoot(customRoot);
-      let calls = 0;
-      idx.onChange(() => {
-        calls += 1;
-      });
       const id = 'c-live';
       const write = (): Promise<string> =>
         writeCustom(customRoot, id, `${JSON.stringify({ type: 'custom-title', customTitle: 'живой', sessionId: id })}\n`);
       await write();
       await waitFor(() => idx.index(session({ provider: 'custom-kimi', providerSessionId: id }))?.title === 'живой', 15_000, write);
-      // Один наблюдатель — одно событие на запись; два дали бы удвоение.
-      const before = calls;
-      await new Promise((resolve) => setTimeout(resolve, 700));
-      expect(calls - before).toBeLessThanOrEqual(1);
+    }, 40_000);
+
+    it('повторный watchClaudeRoot не плодит наблюдателей: одна запись даёт не больше событий, чем при одном вызове', async () => {
+      // Один и тот же сценарий для корня с одним вызовом и корня с тремя: число событий onChange не растёт.
+      const events = async (calls: number): Promise<number> => {
+        const root = await mkdtemp(path.join(tmpdir(), 'parley-custom-'));
+        try {
+          const idx = customIndex([]);
+          await idx.start();
+          for (let i = 0; i < calls; i += 1) idx.watchClaudeRoot(root);
+          let count = 0;
+          idx.onChange(() => {
+            count += 1;
+          });
+          const id = `c-once-${calls}`;
+          await writeCustom(root, id, `${JSON.stringify({ type: 'custom-title', customTitle: 'раз', sessionId: id })}\n`);
+          await waitFor(() => idx.index(session({ provider: 'custom-kimi', providerSessionId: id }))?.title === 'раз', 15_000);
+          await new Promise((resolve) => setTimeout(resolve, 600));
+          return count;
+        } finally {
+          await rm(root, { recursive: true, force: true });
+        }
+      };
+      const single = await events(1);
+      const triple = await events(3);
+      expect(triple).toBeLessThanOrEqual(single);
+    }, 40_000);
+
+    it('корень, добавленный через watchClaudeRoot, пока start() ещё строит индекс, не теряется', async () => {
+      const early = await writeCustom(customRoot, 'c-race', `${JSON.stringify({ type: 'custom-title', customTitle: 'гонка', sessionId: 'c-race' })}\n`);
+      const idx = customIndex([]);
+      const starting = idx.start();
+      idx.watchClaudeRoot(customRoot);
+      await starting;
+      // Лежавший до старта транскрипт проиндексирован…
+      expect(idx.index(session({ provider: 'custom-kimi', providerSessionId: 'c-race' }))?.file).toBe(early);
+      // …и корень на наблюдении: живая запись доезжает без перезапуска.
+      const write = (): Promise<string> =>
+        writeCustom(customRoot, 'c-race-live', `${JSON.stringify({ type: 'custom-title', customTitle: 'живой', sessionId: 'c-race-live' })}\n`);
+      await write();
+      await waitFor(() => idx.index(session({ provider: 'custom-kimi', providerSessionId: 'c-race-live' }))?.title === 'живой', 15_000, write);
     }, 40_000);
 
     it('usageIn для custom-сессии считает подагентов от своего корня, не от ~/.claude/projects', async () => {
@@ -680,8 +712,17 @@ describe('createLogIndex', () => {
       await new Promise((resolve) => setTimeout(resolve, 800));
       expect(calls).toBe(0);
       expect(idx.index(session({ providerSessionId: 'c-after-stop' }))).toBeUndefined();
-      // Корень, добавленный после остановки, наблюдателя не получает.
-      idx.watchClaudeRoot(customRoot);
+      // Корень, добавленный после остановки, наблюдателя не получает: запись в него не индексируется.
+      const lateRoot = await mkdtemp(path.join(tmpdir(), 'parley-custom-'));
+      try {
+        idx.watchClaudeRoot(lateRoot);
+        await writeCustom(lateRoot, 'c-late', `${JSON.stringify({ type: 'custom-title', customTitle: 'поздно', sessionId: 'c-late' })}\n`);
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        expect(calls).toBe(0);
+        expect(idx.index(session({ providerSessionId: 'c-late' }))).toBeUndefined();
+      } finally {
+        await rm(lateRoot, { recursive: true, force: true });
+      }
     });
   });
 });

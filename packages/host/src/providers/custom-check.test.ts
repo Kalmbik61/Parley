@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ProviderEntry } from '@parley/core';
-import { checkAnthropicEndpoint, createCustomCheckService, messagesUrl } from './custom-check.js';
+import { CUSTOM_CHECK_MAX_BYTES, checkAnthropicEndpoint, createCustomCheckService, messagesUrl } from './custom-check.js';
 
 const target = { baseUrl: 'https://api.example.com/anthropic', auth: 'bearer' as const, model: 'm-sonnet' };
 const KEY = 'sk-secret-1234567890';
@@ -110,5 +110,63 @@ describe('custom-check', () => {
     expect(broadcast).toHaveBeenCalledTimes(1);
     service.forget('custom-kimi');
     expect(service.current('custom-kimi', KEY)).toBeNull();
+  });
+
+  it('маркер контекста [1m] в модель запроса не попадает', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const spy = (async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(init.body as string));
+      return new Response('{"type":"message"}', { status: 200 });
+    }) as unknown as typeof fetch;
+    await checkAnthropicEndpoint({ ...target, model: 'kimi-k3[1m]' }, KEY, { fetch: spy });
+    expect(bodies[0]!['model']).toBe('kimi-k3');
+  });
+
+  it('предел тела: content-length больше предела и поток больше предела — unsupported_response', async () => {
+    const declared = (async () => new Response('{"type":"message"}', {
+      status: 200, headers: { 'content-length': String(CUSTOM_CHECK_MAX_BYTES + 1) },
+    })) as unknown as typeof fetch;
+    expect(await checkAnthropicEndpoint(target, KEY, { fetch: declared })).toMatchObject({
+      state: 'failed', reason: 'unsupported_response', httpStatus: 200,
+    });
+    let cancelled = false;
+    const chunk = new Uint8Array(64 * 1024).fill(32);
+    const endless = (async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(chunk); },
+      cancel() { cancelled = true; },
+    }), { status: 200 })) as unknown as typeof fetch;
+    expect(await checkAnthropicEndpoint(target, KEY, { fetch: endless, timeoutMs: 5_000 })).toMatchObject({
+      state: 'failed', reason: 'unsupported_response', httpStatus: 200,
+    });
+    expect(cancelled).toBe(true);
+  });
+
+  it('редирект (fetch бросает при redirect: error) — исход network, не отказ', async () => {
+    const redirecting = (async (_url: string, init: RequestInit) => {
+      expect(init.redirect).toBe('error');
+      throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') });
+    }) as unknown as typeof fetch;
+    expect(await checkAnthropicEndpoint(target, KEY, { fetch: redirecting })).toEqual({ state: 'failed', reason: 'network' });
+  });
+
+  it('forget во время идущей проверки: исход не записывается и providers.changed нет', async () => {
+    const broadcast = vi.fn();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const slow = (async () => {
+      await gate;
+      return new Response('{"type":"message"}', { status: 200 });
+    }) as unknown as typeof fetch;
+    const service = createCustomCheckService({ broadcast } as never, { fetch: slow });
+    const entry = {
+      id: 'custom-kimi',
+      custom: { id: 'custom-kimi', baseUrl: target.baseUrl, auth: 'bearer', models: { sonnet: 'm-sonnet' } },
+    } as unknown as ProviderEntry;
+    const running = service.run(entry, KEY);
+    service.forget('custom-kimi');
+    release();
+    await running;
+    expect(service.current('custom-kimi', KEY)).toBeNull();
+    expect(broadcast).not.toHaveBeenCalled();
   });
 });
