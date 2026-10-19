@@ -1070,3 +1070,45 @@ describe('StatusBar — сегмент Diagnostics', () => {
     }
   });
 });
+
+describe('StatusBar: свои провайдеры и «+» (спека своих провайдеров, раздел 4)', () => {
+  const connected: HostStatus = { state: 'connected', hostVersion: '1.0.0', methods: [...REQUIRED_METHODS] };
+  const customInfo = {
+    preset: null, baseUrl: 'https://example.test', auth: 'bearer' as const,
+    models: { opus: 'm', sonnet: 'm', haiku: 'm', subagent: 'm' }, contextWindow: null, linkClaude: false, folder: '/tmp/x',
+  };
+
+  it('«+» в конце строки статуса открывает Settings на Providers с выбором вендора', () => {
+    useUiStore.getState().closeSettingsDialog();
+    renderBar(connected);
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }));
+    expect(useUiStore.getState()).toMatchObject({ settingsSection: 'providers', settingsProvider: 'new' });
+    expect(useUiStore.getState().dialogs.settings).toBe(true);
+  });
+
+  it('свой провайдер без ключа виден приглушённым; клик открывает Settings на нём', () => {
+    useUiStore.getState().closeSettingsDialog();
+    useProvidersStore.setState({
+      providers: [{ id: 'custom-kimi', label: 'Kimi', available: false, version: null, limits: null, custom: customInfo }],
+    });
+    renderBar(connected);
+    const segment = document.querySelector('[data-provider-segment="custom-kimi"]') as HTMLElement;
+    expect(segment).toBeTruthy();
+    expect(segment.className).toContain('opacity-50');
+    fireEvent.click(segment);
+    expect(useUiStore.getState()).toMatchObject({ settingsSection: 'providers', settingsProvider: 'custom-kimi' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('прочие провайдеры из providers.json по-прежнему видны только найденными', () => {
+    useProvidersStore.setState({
+      providers: [
+        { id: 'other-a', label: 'A', available: false, version: null, limits: null },
+        { id: 'other-b', label: 'B', available: true, version: null, limits: null },
+      ],
+    });
+    renderBar(connected);
+    expect(document.querySelector('[data-provider-segment="other-a"]')).toBeNull();
+    expect(document.querySelector('[data-provider-segment="other-b"]')).toBeTruthy();
+  });
+});

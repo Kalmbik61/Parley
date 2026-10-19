@@ -40,6 +40,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ui/tabs.js';
 import { ToggleGroup, ToggleGroupItem } from '../../ui/toggle-group.js';
 import { VoiceSettings } from '../../voice/VoiceSettings.js';
 import { AssistantSettings } from './AssistantSettings.js';
+import { ProvidersSettings } from './ProvidersSettings.js';
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -57,9 +58,10 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   browser: S.settings.sections.browser,
   voice: S.settings.sections.voice,
   assistant: S.settings.sections.assistant,
+  providers: S.settings.sections.providers,
 };
 
-const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'notifications', 'browser', 'voice', 'assistant'];
+const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'providers', 'notifications', 'browser', 'voice', 'assistant'];
 
 type FieldErrors = Partial<Record<keyof ParleyConfig, string>>;
 
@@ -495,6 +497,8 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
           </TabsContent>
 
           <TabsContent value="voice" className="mt-0">{uiLoaded ? <VoiceSettings /> : null}</TabsContent>
+
+          <TabsContent value="providers" className="mt-0"><ProvidersSettings /></TabsContent>
 
           <TabsContent value="assistant" className="mt-0">{uiLoaded ? <AssistantSettings /> : null}</TabsContent>
           </div>
