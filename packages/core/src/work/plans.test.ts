@@ -5,7 +5,7 @@ import {
   removeSession,
   transitionSession,
 } from "./map.js";
-import { addRoom } from "./rooms.js";
+import { addRoom, RoomRuleError } from "./rooms.js";
 import {
   proposeCompletion,
   resolveProposal,
@@ -13,12 +13,15 @@ import {
 } from "./proposals.js";
 import {
   cancelRoomPlan,
+  PlanConflictError,
   reconcileRoomPlans,
+  savePlanCheckpoint,
   setRoomMode,
   submitPlanItem,
   updatePlanItem,
   verifyPlanItem,
 } from "./plans.js";
+import { planSubmission } from "./plan-state.js";
 import { HUMAN } from "./types.js";
 import type { PlanDraft, WorkMap } from "./types.js";
 const AT = "2026-10-04T01:00:00.000Z";
@@ -619,3 +622,359 @@ it.each(["goal", "evidence", "summary"])(
     expect(JSON.stringify(map)).toBe(before);
   },
 );
+
+describe("plan item checkpoints", () => {
+  const save = { done: "Parser done", next: "Wire the tests" };
+  const full = {
+    done: "Parser done",
+    next: "Wire the tests",
+    artifacts: ["src/a.ts", "docs/notes.md"],
+    blocker: "Waiting for a fixture",
+  };
+  const edge = (length: number) => "x".repeat(length);
+  /** Plan accepted, item 1 started by its owner s-02. */
+  function started(mode: "checklist" | "verified" = "verified") {
+    const map = fixture(mode);
+    const plan = accept(map);
+    updatePlanItem(map, plan.id, 0, 1, "s-02", "in_progress", undefined, AT);
+    return { map, plan };
+  }
+  /** Verified plan, item 1 submitted by s-02 and waiting for s-03. */
+  function submitted() {
+    const { map, plan } = started();
+    submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
+    return { map, plan };
+  }
+  const item1 = (map: WorkMap) => map.plans![0]!.items[0]!;
+
+  it("owner saves the latest position without touching status, note, log or evidence", () => {
+    const { map, plan } = started();
+    const before = JSON.stringify(map);
+    const logLength = item1(map).log.length;
+    expect(savePlanCheckpoint(map, plan.id, 0, 1, "s-02", full, AT)).toEqual({
+      role: "owner",
+      submission: null,
+    });
+    expect(item1(map).progress).toEqual({
+      owner: {
+        by: "s-02",
+        at: AT,
+        submission: null,
+        done: "Parser done",
+        next: "Wire the tests",
+        artifacts: ["src/a.ts", "docs/notes.md"],
+        blocker: "Waiting for a fixture",
+      },
+    });
+    expect(item1(map).log).toHaveLength(logLength);
+    // Everything else, including plan effects and the verified count, is byte-for-byte the same.
+    delete item1(map).progress;
+    expect(JSON.stringify(map)).toBe(before);
+  });
+  it("defaults artifacts and blocker and overwrites the previous checkpoint", () => {
+    const { map, plan } = started();
+    savePlanCheckpoint(map, plan.id, 0, 1, "s-02", full, AT);
+    savePlanCheckpoint(
+      map,
+      plan.id,
+      0,
+      1,
+      "s-02",
+      { done: "Second", next: "Third" },
+      "2026-10-04T02:00:00.000Z",
+    );
+    expect(item1(map).progress!.owner).toEqual({
+      by: "s-02",
+      at: "2026-10-04T02:00:00.000Z",
+      submission: null,
+      done: "Second",
+      next: "Third",
+      artifacts: [],
+      blocker: null,
+    });
+  });
+  it("verifier saves a checkpoint bound to the current submission without verifying", () => {
+    const { map, plan } = submitted();
+    const logLength = item1(map).log.length;
+    expect(planSubmission(item1(map))).toBe(logLength);
+    const before = JSON.stringify(map);
+    expect(savePlanCheckpoint(map, plan.id, 0, 1, "s-03", full, AT)).toEqual({
+      role: "verifier",
+      submission: logLength,
+    });
+    expect(item1(map).progress!.verifier).toMatchObject({
+      by: "s-03",
+      submission: logLength,
+      done: "Parser done",
+    });
+    expect(item1(map).progress!.owner).toBeUndefined();
+    expect(item1(map).status).toBe("done");
+    expect(item1(map).log).toHaveLength(logLength);
+    delete item1(map).progress;
+    expect(JSON.stringify(map)).toBe(before);
+  });
+  it("self-verification is impossible: the owner cannot save a verifier checkpoint", () => {
+    const { map, plan } = submitted();
+    expect(() =>
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-02", save, AT),
+    ).toThrow(RoomRuleError);
+    // Even when the item names the owner as its own verifier.
+    item1(map).verifier = "s-02";
+    const before = JSON.stringify(map);
+    expect(() =>
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-02", save, AT),
+    ).toThrow(RoomRuleError);
+    expect(JSON.stringify(map)).toBe(before);
+  });
+  it("the human never saves a verifier checkpoint, even as the named verifier", () => {
+    const { map, plan } = submitted();
+    item1(map).verifier = HUMAN;
+    const before = JSON.stringify(map);
+    expect(() =>
+      savePlanCheckpoint(map, plan.id, 0, 1, HUMAN, save, AT),
+    ).toThrow(RoomRuleError);
+    expect(JSON.stringify(map)).toBe(before);
+  });
+  it("rejects outsiders, other members and the human with a rule error and leaves the map intact", () => {
+    const { map, plan } = started();
+    const outsider = addSession(
+      map,
+      { provider: "claude", label: "Outside", task: "" },
+      AT,
+    );
+    const before = JSON.stringify(map);
+    for (const actor of [outsider.id, "s-01", "s-03", HUMAN])
+      expect(() =>
+        savePlanCheckpoint(map, plan.id, 0, 1, actor, save, AT),
+      ).toThrow(RoomRuleError);
+    expect(JSON.stringify(map)).toBe(before);
+  });
+  it("a checklist item has no verifier path", () => {
+    const { map, plan } = started("checklist");
+    const before = JSON.stringify(map);
+    expect(() =>
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-03", save, AT),
+    ).toThrow(RoomRuleError);
+    expect(JSON.stringify(map)).toBe(before);
+    submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
+    expect(() =>
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-03", save, AT),
+    ).toThrow(RoomRuleError);
+    expect(item1(map).progress).toBeUndefined();
+  });
+  it("a stale revision or unknown plan is a conflict, never a rule error", () => {
+    const { map, plan } = started();
+    const before = JSON.stringify(map);
+    expect(() =>
+      savePlanCheckpoint(map, plan.id, 1, 1, "s-02", save, AT),
+    ).toThrow(PlanConflictError);
+    expect(() =>
+      savePlanCheckpoint(map, "pl-99", 0, 1, "s-02", save, AT),
+    ).toThrow(PlanConflictError);
+    expect(JSON.stringify(map)).toBe(before);
+  });
+  it("owner needs an item in progress and the message says how to start it", () => {
+    const map = fixture();
+    const plan = accept(map);
+    const attempt = () =>
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-02", save, AT);
+    expect(attempt).toThrow(RoomRuleError);
+    expect(attempt).toThrow("start the item with plan_update(in_progress)");
+    updatePlanItem(map, plan.id, 0, 1, "s-02", "blocked", "No access", AT);
+    expect(attempt).toThrow(RoomRuleError);
+    updatePlanItem(map, plan.id, 0, 1, "s-02", "in_progress", undefined, AT);
+    submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
+    expect(attempt).toThrow(RoomRuleError);
+    expect(item1(map).progress).toBeUndefined();
+  });
+  it("verifier needs a submitted item that is not yet verified", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    const attempt = () =>
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-03", save, AT);
+    expect(attempt).toThrow(RoomRuleError);
+    submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
+    verifyPlanItem(map, plan.id, 0, 1, "s-03", "verified", "Reviewed", AT);
+    expect(attempt).toThrow(RoomRuleError);
+    expect(item1(map).progress).toBeUndefined();
+  });
+  it("a plan that is no longer active takes no checkpoints", () => {
+    const { map, plan } = started();
+    cancelRoomPlan(map, plan.id, 0, HUMAN, AT);
+    expect(() =>
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-02", save, AT),
+    ).toThrow();
+    expect(item1(map).progress).toBeUndefined();
+  });
+
+  it.each([
+    ["empty done", { ...save, done: "" }],
+    ["blank done", { ...save, done: "   " }],
+    ["long done", { ...save, done: edge(601) }],
+    ["empty next", { ...save, next: "" }],
+    ["long next", { ...save, next: edge(301) }],
+    ["too many artifacts", { ...save, artifacts: Array(6).fill("a") }],
+    ["empty artifact", { ...save, artifacts: [""] }],
+    ["long artifact", { ...save, artifacts: [edge(257)] }],
+    ["long blocker", { ...save, blocker: edge(301) }],
+    ["blank blocker", { ...save, blocker: "   " }],
+    ["NUL in done", { ...save, done: "bad\0text" }],
+    ["lone surrogate in next", { ...save, next: "bad \ud800" }],
+    ["lone surrogate in artifact", { ...save, artifacts: ["a\ud800"] }],
+  ])("rejects %s without changing the map", (_name, value) => {
+    const { map, plan } = started();
+    const before = JSON.stringify(map);
+    expect(() =>
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-02", value, AT),
+    ).toThrow(RoomRuleError);
+    expect(JSON.stringify(map)).toBe(before);
+  });
+  it("stores an empty blocker as null", () => {
+    const { map, plan } = started();
+    savePlanCheckpoint(
+      map,
+      plan.id,
+      0,
+      1,
+      "s-02",
+      { ...save, blocker: "" },
+      AT,
+    );
+    expect(item1(map).progress!.owner!.blocker).toBeNull();
+  });
+  it("accepts every bound exactly", () => {
+    const { map, plan } = started();
+    savePlanCheckpoint(
+      map,
+      plan.id,
+      0,
+      1,
+      "s-02",
+      {
+        done: edge(600),
+        next: edge(300),
+        artifacts: Array(5).fill(edge(256)),
+        blocker: edge(300),
+      },
+      AT,
+    );
+    expect(item1(map).progress!.owner!.artifacts).toHaveLength(5);
+  });
+
+  it("old maps without progress stay valid and stored checkpoints round-trip", () => {
+    const { map, plan } = submitted();
+    expect(() => parseMap(JSON.stringify(map), "fixture")).not.toThrow();
+    savePlanCheckpoint(map, plan.id, 0, 1, "s-03", full, AT);
+    const reloaded = parseMap(JSON.stringify(map), "fixture");
+    expect(reloaded.plans![0]!.items[0]!.progress).toEqual(item1(map).progress);
+  });
+  type Stored = Record<string, unknown>;
+  it.each([
+    ["long done", (c: Stored) => (c.done = edge(601))],
+    ["empty next", (c: Stored) => (c.next = "")],
+    ["six artifacts", (c: Stored) => (c.artifacts = Array(6).fill("a"))],
+    ["long blocker", (c: Stored) => (c.blocker = edge(301))],
+    ["missing blocker", (c: Stored) => delete c.blocker],
+    ["negative submission", (c: Stored) => (c.submission = -1)],
+  ])("rejects a stored checkpoint with %s", (_name, damage) => {
+    const { map, plan } = started();
+    savePlanCheckpoint(map, plan.id, 0, 1, "s-02", full, AT);
+    damage(item1(map).progress!.owner as unknown as Stored);
+    expect(() => parseMap(JSON.stringify(map), "fixture")).toThrow();
+  });
+  it("rejects stored progress that is not an object of checkpoints", () => {
+    const { map } = started();
+    (item1(map) as unknown as { progress: unknown }).progress = [];
+    expect(() => parseMap(JSON.stringify(map), "fixture")).toThrow();
+  });
+
+  describe("lifecycle", () => {
+    function amend(map: WorkMap, change: (draft: PlanDraft) => void): void {
+      const draft = input("verified");
+      draft.id = map.plans![0]!.id;
+      draft.rev = map.plans![0]!.rev;
+      change(draft);
+      accept(map, draft);
+    }
+    it("an amendment keeps the checkpoint of an unchanged item awaiting review", () => {
+      const { map, plan } = submitted();
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-03", full, AT);
+      const kept = structuredClone(item1(map).progress);
+      amend(map, (draft) => (draft.goal = "Clarified goal"));
+      expect(map.plans![0]!.rev).toBe(1);
+      expect(item1(map).status).toBe("done");
+      expect(item1(map).progress).toEqual(kept);
+    });
+    it("an amendment keeps the owner checkpoint of an unchanged item in progress", () => {
+      const { map, plan } = started();
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-02", full, AT);
+      const kept = structuredClone(item1(map).progress);
+      amend(map, (draft) => (draft.goal = "Clarified goal"));
+      expect(item1(map).status).toBe("in_progress");
+      expect(item1(map).progress).toEqual(kept);
+    });
+    it("an amendment drops checkpoints of changed items", () => {
+      const { map, plan } = started();
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-02", full, AT);
+      amend(map, (draft) => (draft.items[0]!.scope = "src/other.ts"));
+      expect(item1(map).status).toBe("ready");
+      expect(item1(map).progress).toBeUndefined();
+    });
+    it("an amendment drops the verifier checkpoint of a reset item", () => {
+      const { map, plan } = submitted();
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-03", full, AT);
+      amend(map, (draft) => (draft.items[0]!.criteria = ["New criterion"]));
+      expect(item1(map).progress).toBeUndefined();
+    });
+    it("verification drops only the verifier checkpoint", () => {
+      for (const verdict of ["verified", "returned"] as const) {
+        const { map, plan } = started();
+        savePlanCheckpoint(map, plan.id, 0, 1, "s-02", full, AT);
+        submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
+        savePlanCheckpoint(map, plan.id, 0, 1, "s-03", save, AT);
+        verifyPlanItem(map, plan.id, 0, 1, "s-03", verdict, "Seen", AT);
+        expect(item1(map).progress?.verifier).toBeUndefined();
+        expect(item1(map).progress?.owner).toMatchObject({ by: "s-02" });
+      }
+    });
+    it("verification leaves no empty progress object behind", () => {
+      const { map, plan } = submitted();
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-03", save, AT);
+      verifyPlanItem(map, plan.id, 0, 1, "s-03", "verified", "Seen", AT);
+      expect(item1(map).progress).toBeUndefined();
+    });
+    it("a resubmission makes the earlier verifier position differ from the current submission", () => {
+      const { map, plan } = submitted();
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-03", save, AT);
+      const old = item1(map).progress!.verifier!;
+      verifyPlanItem(map, plan.id, 0, 1, "s-03", "returned", "Again", AT);
+      submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
+      expect(old.submission).not.toBe(planSubmission(item1(map)));
+      expect(item1(map).progress?.verifier).toBeUndefined();
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-03", save, AT);
+      expect(item1(map).progress!.verifier!.submission).toBe(
+        planSubmission(item1(map)),
+      );
+    });
+    it("a human return drops the verifier checkpoint of reset dependents", () => {
+      const { map, plan } = submitted();
+      verifyPlanItem(map, plan.id, 0, 1, "s-03", "verified", "Reviewed", AT);
+      submitPlanItem(map, plan.id, 0, 2, "s-01", evidence, AT);
+      savePlanCheckpoint(map, plan.id, 0, 2, "s-03", save, AT);
+      expect(map.plans![0]!.items[1]!.progress?.verifier).toBeDefined();
+      verifyPlanItem(map, plan.id, 0, 1, HUMAN, "returned", "Regression", AT);
+      expect(map.plans![0]!.items[1]!.status).toBe("waiting");
+      expect(map.plans![0]!.items[1]!.progress).toBeUndefined();
+    });
+    it("moving verified to checklist drops verifier checkpoints and keeps the owner's", () => {
+      const { map, plan } = started();
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-02", full, AT);
+      submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
+      savePlanCheckpoint(map, plan.id, 0, 1, "s-03", save, AT);
+      setRoomMode(map, "r-01", HUMAN, "checklist", "Enough checking", {}, AT);
+      expect(item1(map).status).toBe("done");
+      expect(item1(map).progress?.verifier).toBeUndefined();
+      expect(item1(map).progress?.owner).toMatchObject({ by: "s-02" });
+    });
+  });
+});
