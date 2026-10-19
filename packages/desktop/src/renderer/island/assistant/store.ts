@@ -193,8 +193,11 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         // Принятый вопрос сменил обмен на острове: прошлый уходит выше, в историю.
         const previous = state.host;
         const archived = accepted && previous.question !== null ? [{ id: ++exchanges, question: previous.question, answer: previous.answer === '' ? (previous.error ?? '') : previous.answer }] : [];
+        // Ответ на напоминание приходит без вопроса: открываем помощника сами, но клавиатуру не отбираем.
+        const reminderOpen = host.origin === 'reminder' && host.turn !== previous.turn && !state.open;
         set({
           host,
+          ...(reminderOpen ? { open: true, collapsed: false, byHover: false } : {}),
           ...(accepted ? { sending: null, history: [...state.history, ...archived].slice(-HISTORY_MAX) } : {}),
           ...(sending !== null && !accepted && sending.instance === null && host.instance !== undefined ? { sending: { ...sending, instance: host.instance } } : {}),
           ...(reveal ? { collapsed: false, byHover: false } : {}),

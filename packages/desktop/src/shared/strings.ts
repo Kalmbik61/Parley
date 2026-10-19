@@ -2220,6 +2220,31 @@ export const S = {
     cancel: 'Cancel',
     enterToSend: 'Enter to send',
     sent: 'Sent ✓',
+    /** Действие по карточке выполнено (комната создана, решение принято). */
+    done: 'Done ✓',
+    /** Карточку уже закрыли в другом месте. */
+    alreadyAnswered: 'Already answered',
+    /** Хост пересобрал карточку — нужно посмотреть заново. */
+    revised: 'Revised, look again',
+    /** Карточки подтверждений: комната, решение, запрос разрешения. */
+    card: {
+      newRoom: 'New room in',
+      roomLine: (title: string, members: string, lead: string): string => `${title} · ${members} · lead ${lead}`,
+      create: 'Create',
+      allow: 'Allow',
+      allowAlways: "Allow, don't ask again",
+      deny: 'Deny',
+      answer: 'Answer',
+      acceptPlan: 'Accept plan',
+      approveEachEdit: 'Approve each edit',
+      acceptDecision: (room: string): string => `Accept decision in ${room}?`,
+      returnDecision: (lead: string): string => `Return to ${lead} for rework?`,
+      accept: 'Accept',
+      return: 'Return',
+      askTitle: (verb: string, name: string): string => `${verb} ${name}?`,
+    },
+    /** Подпись карточки в свёрнутом виде. */
+    miniCard: 'Card',
     cancelled: 'Cancelled',
     queued: 'Queued',
     unqueue: 'Remove from queue',

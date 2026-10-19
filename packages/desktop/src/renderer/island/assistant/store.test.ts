@@ -236,4 +236,26 @@ describe('стор помощника', () => {
     expect(deps.call).toHaveBeenCalledWith('assistant.ask', expect.objectContaining({ text: 'hello' }));
     expect(store.getState().draft).toBe('');
   });
+
+  it('ответ на напоминание открывает помощника без клавиатуры', () => {
+    const { store, deps } = setup();
+    store.getState().applyHost({ ...HOST_IDLE, origin: 'reminder', turn: 1, phase: 'answering', answer: 'Room is fine' });
+    expect(store.getState().open).toBe(true);
+    expect(store.getState().collapsed).toBe(false);
+    expect(deps.keyboard).not.toHaveBeenCalled();
+  });
+
+  it('ход с origin island закрытого помощника не открывает', () => {
+    const { store } = setup();
+    store.getState().applyHost({ ...HOST_IDLE, origin: 'island', turn: 1, phase: 'answering', answer: 'Room is fine' });
+    expect(store.getState().open).toBe(false);
+  });
+
+  it('повторное состояние того же хода после close() не открывает снова', () => {
+    const { store } = setup();
+    store.getState().applyHost({ ...HOST_IDLE, origin: 'reminder', turn: 1, phase: 'answering', answer: 'Room is fine' });
+    store.getState().close();
+    store.getState().applyHost({ ...HOST_IDLE, origin: 'reminder', turn: 1, phase: 'idle', answer: 'Room is fine' });
+    expect(store.getState().open).toBe(false);
+  });
 });
