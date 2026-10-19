@@ -275,6 +275,47 @@ Claude Code человека):
 предлагает копию (5.8), а человеку об этом говорит подпись под галочкой. Тест (задача 9 плана) проверяет: копия
 по шагам правила и новый навык в папке провайдера оставляют `~/.claude` побайтно прежним.
 
+### 6.2 Проба первого запуска (Claude Code 2.1.303, 2026-10-19)
+Интерактивный `claude` в tmux, чистое окружение (`env -i`), пустая `CLAUDE_CONFIG_DIR`, пустая папка-проект,
+`ANTHROPIC_BASE_URL=https://example.invalid`, `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1`. Установлена 2.1.303
+(новее 2.1.302 из 6.1). Аргументы раннера GLM (`--settings`, `--strict-mcp-config`, `--model`, `--effort`)
+экраны не меняют; `--permission-mode` в них нет.
+
+**Экраны без посева, по порядку** (вход не спрашивают ни с `ANTHROPIC_AUTH_TOKEN`, ни с `ANTHROPIC_API_KEY=Yes`):
+1. выбор темы; 2. только с `ANTHROPIC_API_KEY`: «Detected a custom API key… use this key?» (по умолчанию
+выбрано «No (recommended)» — тогда после него встаёт экран входа Anthropic); 3. «Security notes» (Enter);
+4. «Accessing workspace… Is this a project you trust?» (по умолчанию «No, exit»); 5. поле ввода (плюс неблокирующая
+плашка «Auto mode is now default»).
+
+**Что пишется.** После шагов 1–3 в `$D/.claude.json`: `hasCompletedOnboarding: true`, `lastOnboardingVersion`;
+после 4: `projects[<cwd>].hasTrustDialogAccepted: true`; после 2 «Yes»: `customApiKeyResponses.approved` =
+`[последние 20 символов ключа]` (короткий ключ — целиком). Тема уходит не в `.claude.json`, а в
+`$D/settings.json` (`{"theme":"dark"}`).
+
+**Минимальный посев** (проверено: bearer — сразу поле ввода, ни одного экрана):
+```json
+{ "hasCompletedOnboarding": true, "projects": { "<cwd>": { "hasTrustDialogAccepted": true } } }
+```
+- Достаточно одного `hasCompletedOnboarding`, чтобы пропали тема и «Security notes»; `settings.json` с темой не нужен,
+  `lastOnboardingVersion` не нужен.
+- Для `auth: 'api-key'` добавляется `"customApiKeyResponses": { "approved": ["<последние 20 символов ключа>"], "rejected": [] }`.
+  Без него сессия висит на вопросе про ключ. Это фрагмент ключа в файле папки провайдера: пишется только туда
+  (никогда в `~/.claude`), в логи и ответы протокола не попадает. При смене ключа запись обновляется.
+- Зависит от cwd: только `projects[<cwd>].hasTrustDialogAccepted` (ключ — полный путь сессии). Доверие,
+  записанное для родительской папки, действует и на вложенную (проверено: вложенная папка запустилась без вопроса).
+- Посев делается один раз и только если `.claude.json` провайдера ещё нет или поля не заданы: существующие поля
+  не перезаписываются (слияние), файл остальное Claude Code ведёт сам.
+
+**Доверие к папке.** Parley сам доверие не выставляет (в `packages/core` и `packages/host` нет
+`hasTrustDialogAccepted`, `--dangerously-*`, `--permission-mode`). Обычный Claude вопроса не видит, потому что
+cwd уже принят в `~/.claude.json` пользователя (без `CLAUDE_CONFIG_DIR`; с ней — `$CLAUDE_CONFIG_DIR/.claude.json`,
+см. `host/src/capabilities/claude.ts`). Папка провайдера — другая `CLAUDE_CONFIG_DIR`, поэтому для неё вопрос
+появился бы заново в каждой рабочей папке и «подвесил» бы сессию в Chat. **Решение: перенос нужен.** Перед запуском
+сессии своего провайдера: если в `.claude.json` пользователя (чтение, без записи туда) для cwd сессии или его
+родителя `hasTrustDialogAccepted === true` и в папке провайдера нет живой сессии, записать
+`projects[<cwd>].hasTrustDialogAccepted: true` в `.claude.json` провайдера. Если пользователь не доверял папке в
+обычном Claude, не доверяем и мы: сессия покажет тот же вопрос, что показал бы обычный Claude.
+
 ## 7. Мои решения (не обсуждались — проверь при чтении)
 
 - **К1. Пункт Providers — после Agents** в левом меню Settings.
