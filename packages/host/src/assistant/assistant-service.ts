@@ -93,7 +93,7 @@ export interface AssistantService {
   sent(ref: SessionRef): Promise<Array<{ text: string; at: string }>>;
   tool(name: string, args: unknown): Promise<AssistantReply>;
   /** Срок напоминания (его отдаёт хост в `reminders.start`): ждёт конца идущего хода и сам запускает новый. */
-  onReminder(reminder: Reminder, late: boolean): Promise<'fired' | 'skipped'>;
+  onReminder(reminder: Reminder, late: boolean): Promise<'fired' | 'skipped' | 'later'>;
   stop(): void;
 }
 
@@ -110,8 +110,9 @@ type RoomTarget = Extract<AssistantTarget, { kind: 'room' }>;
 type SessionTarget = Extract<AssistantTarget, { kind: 'session' }>;
 type WorkTarget = Extract<AssistantTarget, { kind: 'work' }>;
 
-/** Ждущая карточка. Вид (`kind`) совпадает с `view.action` и сужает остальные поля. */
-type Pending =
+/** Ждущая карточка. Вид (`kind`) совпадает с `view.action` и сужает остальные поля; `token` — разговор, что её создал. */
+type Pending = PendingBody & { token: string };
+type PendingBody =
   | {
       kind: 'message';
       view: Extract<AssistantProposal, { action?: 'message' }>;
@@ -213,6 +214,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   /** Вопросы, что ещё запускают ход (`ask` не вернулся), и ждущие конца хода напоминания. */
   let inflight = 0;
   let idleWaiters: Array<() => void> = [];
+  let stopped = false;
 
   const publish = (patch: Partial<AssistantState>): void => {
     state = { ...state, ...patch, instance };
@@ -292,14 +294,14 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     releaseWaiters();
   }
 
-  async function start(entry: ProviderEntry, model: string | null, language: AssistantLanguage, text: string, retried: boolean, ask: Ask): Promise<void> {
+  async function start(entry: ProviderEntry, model: string | null, language: AssistantLanguage, text: string, retried: boolean, ask: Ask): Promise<boolean> {
     const current = await ensure(entry, model, language);
     const next = state.turn + 1;
     const askId = ask.id;
     const base = deps.endpoint.origin();
     if (base === null) {
       publish({ ...EMPTY, proposal: state.proposal, phase: 'error', mood: 'error', question: text, error: 'Parley is still starting — try again', turn: next, askId, origin: ask.origin });
-      return;
+      return false;
     }
     const url = `${base}${ASSISTANT_PATH}`;
     const { mcpFile, promptFile } = await files(current, url);
@@ -320,18 +322,18 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     );
     if (command === null) {
       publish({ ...EMPTY, proposal: state.proposal, phase: 'offline', question: text, error: `${entry.label} can't run the assistant`, turn: next, askId, origin: ask.origin });
-      return;
+      return false;
     }
     let binary: string;
     try {
       binary = await deps.binary(command.command);
     } catch {
       publish({ ...EMPTY, proposal: state.proposal, phase: 'offline', question: text, error: `${entry.label} CLI is not installed`, turn: next, askId, origin: ask.origin });
-      return;
+      return false;
     }
     const env = await deps.launchEnv(entry);
     // Пока запуск ждал, человек отменил вопрос (закрыл остров) или задал новый: этот ход не нужен.
-    if (ask.ticket !== asks) return;
+    if (ask.ticket !== asks) return false;
     publish({ phase: 'thinking', detail: null, question: text, answer: '', mood: 'calm', outcome: null, error: null, turn: next, askId, origin: ask.origin });
 
     // Эмоцию решает первый текст после последнего инструмента: GLM ставит метку до инструмента отдельным блоком.
@@ -375,6 +377,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         publish({ phase: 'error', mood: 'error', detail: null, error: 'Something went wrong — try again' });
       })
       .finally(releaseWaiters);
+    return true;
   }
 
   async function finish(end: TurnEnd, entry: ProviderEntry, model: string | null, language: AssistantLanguage, text: string, retried: boolean, current: Conversation, ask: Ask): Promise<void> {
@@ -464,6 +467,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const kind = input['kind'];
     proposals += 1;
     pending = {
+      token: conversation?.token ?? '',
       kind: 'message',
       view: {
         action: 'message',
@@ -531,6 +535,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const names = members.map((member) => member.name);
     proposals += 1;
     pending = {
+      token: conversation?.token ?? '',
       kind: 'room',
       view: {
         action: 'room',
@@ -566,6 +571,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const kept = choice === 'return' && note !== '' ? note : null;
     proposals += 1;
     pending = {
+      token: conversation?.token ?? '',
       kind: 'room-decision',
       view: {
         action: 'room-decision',
@@ -627,6 +633,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const detail = cardDetail(card);
     proposals += 1;
     pending = {
+      token: conversation?.token ?? '',
       kind: 'decision',
       view: {
         action: 'decision',
@@ -671,10 +678,11 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
 
   /** Закрывает карточку: `reason` попадает в системную заметку модели, `error` — в ответ окну (карточка при этом уже закрыта). */
   function settle(current: Pending, outcome: 'sent' | 'done' | 'cancelled', reason?: string, error?: string): { applied: true; error: string | null } {
-    pending = null;
-    outcomeNote = `[system: proposal ${current.view.id} was ${outcome}${reason === undefined ? '' : `: ${reason}`}]`;
+    // Карточку `decide` уже забрал; новую, что предложили за время ожидания, не трогаем. Заметку пишем только
+    // в тот разговор, что создал карточку: после `reset` она ушла бы в чужой.
+    if (conversation?.token === current.token) outcomeNote = `[system: proposal ${current.view.id} was ${outcome}${reason === undefined ? '' : `: ${reason}`}]`;
     touch();
-    publish({ proposal: null, outcome, phase: turn === null ? 'idle' : state.phase });
+    publish({ proposal: pending?.view ?? null, outcome, phase: turn === null ? restPhase() : state.phase });
     return { applied: true, error: error ?? null };
   }
 
@@ -735,6 +743,9 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     } catch (error) {
       // Ведущий успел переделать решение: ответ на старую версию не принимается, карточка устарела.
       if (error instanceof HostError && error.code === 'conflict') {
+        // Решение могли принять в другом месте (тогда слота уже нет) или переделать (тогда id тот же, версия другая).
+        const slot = workMap(source(), current.room)?.rooms.find((candidate) => candidate.id === roomId)?.proposal ?? null;
+        if (slot === null || slot.id !== proposal.proposalId) return settle(current, 'cancelled', 'already answered', 'Already answered');
         return settle(current, 'cancelled', 'the lead revised the decision', 'The lead revised the decision — look again');
       }
       throw error;
@@ -751,7 +762,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   }
 
   /** Запускает ход по вопросу человека (`island`) или по напоминанию (`reminder`). */
-  async function runAsk(params: Params<'assistant.ask'>, origin: AssistantOrigin): Promise<void> {
+  async function runAsk(params: Params<'assistant.ask'>, origin: AssistantOrigin): Promise<'started' | 'failed'> {
     inflight += 1;
     try {
       stopTurn();
@@ -761,14 +772,15 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         const picked = await pick(params.provider);
         if ('offline' in picked) {
           publish({ ...EMPTY, proposal: state.proposal, phase: 'offline', question: params.text, error: picked.offline, turn: state.turn + 1, askId: ask.id, origin });
-          return;
+          return 'failed';
         }
         const model = params.model ?? ASSISTANT_DEFAULT_MODELS[picked.entry.id] ?? null;
-        await start(picked.entry, model, params.language, params.text, false, ask);
+        return (await start(picked.entry, model, params.language, params.text, false, ask)) ? 'started' : 'failed';
       } catch (error) {
         deps.log(`assistant: ask failed: ${(error as Error).message}`);
         // Номер хода и `askId` — и у сбоя: окно по ним узнаёт, что вопрос дошёл, и перестаёт показывать «Sending…».
         publish({ ...EMPTY, proposal: state.proposal, phase: 'error', mood: 'error', question: params.text, error: 'Something went wrong — try again', turn: state.turn + 1, askId: ask.id, origin });
+        return 'failed';
       }
     } finally {
       inflight -= 1;
@@ -776,7 +788,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     }
   }
 
-  const clock = (at: number): string => new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false }).format(at);
+  const clock = (at: number): string => new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(at);
 
   function reminderTool(name: string, input: Record<string, unknown>): AssistantReply {
     if (name === 'list_reminders') {
@@ -824,13 +836,26 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     async decide(proposalId, decision) {
       const current = pending;
       if (current === null || current.view.id !== proposalId) return { applied: false, error: 'This card is no longer current' };
+      // Карточка забирается до первого await: второй `decide` с тем же id не выполнит действие повторно.
+      pending = null;
       if (decision === 'cancel') return settle(current, 'cancelled');
+      // Не вышло — карточка возвращается, если никто не предложил новую и разговор тот же (после `reset` её уже нет).
+      const restore = (): void => {
+        if (pending === null && conversation?.token === current.token) pending = current;
+      };
       try {
-        if (current.kind === 'room') return await applyRoom(current);
-        if (current.kind === 'room-decision') return await applyRoomDecision(current);
-        if (current.kind === 'decision') return await applyDecision(current);
-        return await applyMessage(current);
+        const result =
+          current.kind === 'room'
+            ? await applyRoom(current)
+            : current.kind === 'room-decision'
+              ? await applyRoomDecision(current)
+              : current.kind === 'decision'
+                ? await applyDecision(current)
+                : await applyMessage(current);
+        if (!result.applied) restore();
+        return result;
       } catch (error) {
+        restore();
         return { applied: false, error: (error as Error).message };
       }
     },
@@ -880,20 +905,32 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       }
     },
     async onReminder(reminder, late) {
-      const wanted = lastAsk;
-      const picked = await pick(wanted.provider);
-      if ('offline' in picked) {
-        deps.log(`assistant: reminder ${reminder.id} skipped: ${picked.offline}`);
-        return 'skipped';
+      // Идущий ход не перебиваем: ждём, пока он закончится и никакой вопрос человека не запускается. Параметры
+      // последнего вопроса и провайдера читаем уже после ожидания; если пока выбирали провайдера, человек успел
+      // спросить снова, ждём ещё раз.
+      let wanted = lastAsk;
+      for (;;) {
+        while ((turn !== null || inflight > 0) && !stopped) await new Promise<void>((resolve) => idleWaiters.push(resolve));
+        if (stopped) return 'later';
+        wanted = lastAsk;
+        const picked = await pick(wanted.provider);
+        if (stopped) return 'later';
+        if ('offline' in picked) {
+          deps.log(`assistant: reminder ${reminder.id} skipped: ${picked.offline}`);
+          return 'skipped';
+        }
+        if (turn === null && inflight === 0) break;
       }
-      // Идущий ход не перебиваем: ждём, пока он закончится и никакой вопрос человека не запускается.
-      while (turn !== null || inflight > 0) await new Promise<void>((resolve) => idleWaiters.push(resolve));
-      const flags = `${late ? ', late' : ''}${isLastCheck(reminder) ? ', last check' : ''}`;
-      await runAsk({ text: `[reminder ${reminder.id}, asked at ${reminder.askedAt}${flags}] Check: ${reminder.what}`, ...wanted }, 'reminder');
-      return 'fired';
+      const flags = `${late ? ', late' : ''}${isLastCheck(reminder, now()) ? ', last check' : ''}`;
+      const result = await runAsk({ text: `[reminder ${reminder.id}, asked at ${reminder.askedAt}${flags}] Check: ${reminder.what}`, ...wanted }, 'reminder');
+      return result === 'started' ? 'fired' : 'skipped';
     },
     stop() {
+      stopped = true;
       stopTurn();
+      const waiters = idleWaiters;
+      idleWaiters = [];
+      for (const wake of waiters) wake(); // ждущие напоминания узнают, что хост останавливается
       if (idleTimer !== null) clearTimeout(idleTimer);
       deps.endpoint.setToken(null);
     },

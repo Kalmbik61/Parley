@@ -121,11 +121,11 @@ describe('reminders: срабатывание', () => {
     const created = added(store.add({ what: 'poll', inMinutes: 600, everyMinutes: 600, now: clock }));
     await advance(600 * MIN);
     expect(onDue).toHaveBeenCalledTimes(1);
-    expect(isLastCheck(onDue.mock.calls[0]?.[0] as Reminder)).toBe(false);
+    expect(isLastCheck(onDue.mock.calls[0]?.[0] as Reminder, T0 + 600 * MIN)).toBe(false);
     expect(store.list()[0]?.at).toBe(new Date(T0 + 1200 * MIN).toISOString());
     await advance(600 * MIN);
     expect(onDue).toHaveBeenCalledTimes(2);
-    expect(isLastCheck(onDue.mock.calls[1]?.[0] as Reminder)).toBe(true);
+    expect(isLastCheck(onDue.mock.calls[1]?.[0] as Reminder, T0 + 1200 * MIN)).toBe(true);
     expect(store.list()).toEqual([]);
     expect(created.every).toBe(600);
   });
@@ -153,5 +153,53 @@ describe('reminders: срабатывание', () => {
     store.stop();
     await advance(5 * MIN);
     expect(onDue).not.toHaveBeenCalled();
+  });
+});
+
+describe('reminders: ревью', () => {
+  const overdue = (id: string, minutesAgo: number): Reminder => ({
+    id,
+    what: id,
+    at: new Date(T0 - minutesAgo * MIN).toISOString(),
+    every: null,
+    createdAt: new Date(T0 - 120 * MIN).toISOString(),
+    askedAt: new Date(T0 - 120 * MIN).toISOString(),
+  });
+  const seed = async (content: unknown): Promise<void> => {
+    await mkdir(path.dirname(file()), { recursive: true });
+    await writeFile(file(), JSON.stringify(content));
+  };
+
+  it('три просроченных при старте срабатывают по порядку at', async () => {
+    await seed({ version: 1, reminders: [overdue('r2', 10), overdue('r1', 30), overdue('r3', 5)] });
+    const order: string[] = [];
+    store.start(async (reminder) => {
+      order.push(reminder.id);
+      return 'fired';
+    });
+    await advance(0);
+    expect(order).toEqual(['r1', 'r2', 'r3']);
+    expect(store.list()).toEqual([]);
+  });
+  it("'later' оставляет напоминание и файл как есть и не крутит таймер", async () => {
+    await seed({ version: 1, counter: 1, reminders: [overdue('r1', 5)] });
+    const before = await readFile(file(), 'utf8');
+    const onDue = vi.fn().mockResolvedValue('later');
+    store.start(onDue);
+    await advance(0);
+    await advance(10 * MIN);
+    expect(onDue).toHaveBeenCalledTimes(1);
+    expect(await readFile(file(), 'utf8')).toBe(before);
+    expect(store.list().map((item) => item.id)).toEqual(['r1']);
+  });
+  it('счётчик id хранится в файле: после пустого списка id не повторяется; старый файл без counter читается', async () => {
+    added(store.add({ what: 'a', inMinutes: 5, now: clock }));
+    store.cancel('*');
+    expect((await read()) as unknown as { counter: number }).toMatchObject({ counter: 1, reminders: [] });
+    const again = createReminderStore({ home, now: () => clock, log });
+    expect(added(again.add({ what: 'b', inMinutes: 5, now: clock })).id).toBe('r2');
+    await seed({ version: 1, reminders: [overdue('r7', 5)] });
+    const old = createReminderStore({ home, now: () => clock, log });
+    expect(added(old.add({ what: 'c', inMinutes: 5, now: clock })).id).toBe('r8');
   });
 });

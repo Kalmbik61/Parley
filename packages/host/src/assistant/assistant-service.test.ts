@@ -622,7 +622,7 @@ describe('assistant-service: напоминания', () => {
     expect(last()).toMatchObject({ phase: 'thinking', origin: 'island' });
   });
   it('поздний и последний вызовы помечены в тексте; без вопросов человека язык en', async () => {
-    const service = createAssistantService(deps);
+    const service = createAssistantService({ ...deps, now: () => Date.parse('2026-10-19T12:00:00.000Z') });
     const last24: Reminder = { ...REMINDER, every: 600, at: '2026-10-20T10:00:00.000Z', createdAt: '2026-10-19T11:55:00.000Z' };
     expect(await service.onReminder(last24, true)).toBe('fired');
     expect(turns[0]?.spec.args[1]).toBe('[reminder r1, asked at 2026-10-19T11:55:00.000Z, late, last check] Check: check the release room');
@@ -631,5 +631,108 @@ describe('assistant-service: напоминания', () => {
     const service = createAssistantService({ ...deps, ready: async () => 'Claude CLI is not installed' });
     expect(await service.onReminder(REMINDER, false)).toBe('skipped');
     expect(turns).toHaveLength(0);
+  });
+});
+
+describe('assistant-service: ревью — карточка и напоминания', () => {
+  const ROOM = { work: 'Parley', title: 'Auth rework', members: ['S03', 'S02'], task: 'Разберите вход' };
+  const started = async (override: Partial<AssistantServiceDeps> = {}) => {
+    const service = createAssistantService({ ...deps, ...override });
+    await service.ask(ASK);
+    return service;
+  };
+  const REMINDER: Reminder = { id: 'r1', what: 'check', at: '2026-10-19T12:00:00.000Z', every: null, createdAt: '2026-10-19T11:55:00.000Z', askedAt: '2026-10-19T11:55:00.000Z' };
+
+  it('два decide подряд: действие один раз, второй получает «no longer current»', async () => {
+    let release: (value: string) => void = () => {};
+    deps.createRoom = vi.fn().mockReturnValue(new Promise<string>((resolve) => { release = resolve; }));
+    const service = await started();
+    await service.tool('propose_room', ROOM);
+    const id = last().proposal!.id;
+    const first = service.decide(id, 'send');
+    const second = await service.decide(id, 'send');
+    expect(second).toEqual({ applied: false, error: 'This card is no longer current' });
+    release('r-9');
+    await expect(first).resolves.toMatchObject({ applied: true });
+    expect(deps.createRoom).toHaveBeenCalledTimes(1);
+  });
+  it('карточка, предложенная пока createRoom ждёт, переживает settle', async () => {
+    let release: (value: string) => void = () => {};
+    deps.createRoom = vi.fn().mockReturnValue(new Promise<string>((resolve) => { release = resolve; }));
+    const service = await started();
+    await service.tool('propose_room', ROOM);
+    const deciding = service.decide(last().proposal!.id, 'send');
+    await service.tool('propose_message', { target: 'Auth', text: 'новая' });
+    expect(last().proposal?.id).toBe('p2');
+    release('r-9');
+    await deciding;
+    expect(last().proposal?.id).toBe('p2');
+    await expect(service.decide('p2', 'cancel')).resolves.toMatchObject({ applied: true });
+  });
+  it('не вышло — карточка возвращается и её можно решить снова', async () => {
+    deps.createRoom = vi.fn().mockRejectedValueOnce(new Error('boom')).mockResolvedValue('r-9');
+    const service = await started();
+    await service.tool('propose_room', ROOM);
+    const id = last().proposal!.id;
+    await expect(service.decide(id, 'send')).resolves.toEqual({ applied: false, error: 'boom' });
+    await expect(service.decide(id, 'send')).resolves.toMatchObject({ applied: true });
+  });
+  it('reset во время decide: заметка о карточке не попадает в следующий вопрос', async () => {
+    let release: (value: string) => void = () => {};
+    deps.createRoom = vi.fn().mockReturnValue(new Promise<string>((resolve) => { release = resolve; }));
+    const service = await started();
+    await service.tool('propose_room', ROOM);
+    const deciding = service.decide(last().proposal!.id, 'send');
+    service.reset();
+    release('r-9');
+    await deciding;
+    await service.ask({ ...ASK, text: 'после сброса' });
+    expect(turns.at(-1)?.spec.args.join(' ')).not.toContain('[system: proposal');
+  });
+  it('conflict: решение уже принято в другом месте — «Already answered»; переделано — «revised»', async () => {
+    deps.resolveRoomProposal = vi.fn().mockRejectedValue(new HostError('conflict', 'stale'));
+    const answered = { ...MAP, rooms: MAP.rooms.map((room) => (room.id === 'r-2' ? { ...room, proposal: null } : room)) } as unknown as WorkMap;
+    let map: WorkMap = MAP;
+    const service = await started({ works: { snapshot: () => ({ entries: [{ projectPath: '/p', map }] as WorkEntry[], branches: {} }) } });
+    await service.tool('propose_room_decision', { target: 'Gate', choice: 'accept' });
+    map = answered;
+    await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: true, error: 'Already answered' });
+    map = MAP;
+    await service.tool('propose_room_decision', { target: 'Gate', choice: 'accept' });
+    await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: true, error: 'The lead revised the decision — look again' });
+  });
+  it('stop, пока напоминание ждёт ход, — «later», нового хода нет', async () => {
+    const service = await started();
+    let result: string | null = null;
+    const firing = service.onReminder(REMINDER, false).then((value) => { result = value; });
+    await flush();
+    expect(result).toBeNull();
+    service.stop();
+    await firing;
+    expect(result).toBe('later');
+    expect(turns).toHaveLength(1);
+  });
+  it('хоста ещё нет (endpoint.origin() === null) — напоминание skipped, не fired', async () => {
+    const service = createAssistantService({ ...deps, endpoint: { origin: () => null, setToken: () => {} } });
+    expect(await service.onReminder(REMINDER, false)).toBe('skipped');
+    expect(turns).toHaveLength(0);
+  });
+  it('провайдер сменился вопросом человека, пока напоминание ждало, — ход по новому', async () => {
+    const GLM = { ...CLAUDE, id: 'glm', label: 'GLM' } as unknown as ProviderEntry;
+    const service = createAssistantService({
+      ...deps,
+      providers: async () => ({ claude: CLAUDE, glm: GLM }),
+      launchEnv: async (entry) => ({ WHO: entry.id }),
+    });
+    await service.ask({ ...ASK, provider: 'claude' });
+    let result: string | null = null;
+    const firing = service.onReminder(REMINDER, false).then((value) => { result = value; });
+    await flush();
+    await service.ask({ ...ASK, text: 'теперь glm', provider: 'glm' });
+    turns[1]?.end({ ok: true });
+    await firing;
+    expect(result).toBe('fired');
+    expect(turns.at(-1)?.spec.env['WHO']).toBe('glm');
+    expect(turns.at(-1)?.spec.args[1]).toContain('[reminder r1');
   });
 });

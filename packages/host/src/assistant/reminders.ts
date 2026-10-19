@@ -32,14 +32,25 @@ export interface ReminderStore {
   list(): Reminder[];
   /** `'*'` — все; возвращает, сколько снято. */
   cancel(id: string): number;
-  /** Таймер до ближайшего; просроченные при старте срабатывают по одному с `late = true`. */
-  start(onDue: (reminder: Reminder, late: boolean) => Promise<'fired' | 'skipped'>): void;
+  /** Таймер до ближайшего; просроченные при старте срабатывают по одному с `late = true`. `'later'` — хост останавливается, напоминание остаётся в файле как есть. */
+  start(onDue: (reminder: Reminder, late: boolean) => Promise<'fired' | 'skipped' | 'later'>): void;
   stop(): void;
 }
 
-/** Срабатывание последнее: следующее повторение вышло бы за сутки от создания. */
-export const isLastCheck = (reminder: Reminder): boolean =>
-  reminder.every !== null && Date.parse(reminder.at) + reminder.every * MINUTE_MS - Date.parse(reminder.createdAt) > REMINDER_HORIZON_MS;
+/**
+ * Когда повторяющееся напоминание сработает в следующий раз (мс): на период позже, пропущенные повторения не
+ * догоняются. `null` — у разового нет следующего, а у повторяющегося оно вышло бы за сутки от создания.
+ */
+export function nextDueAt(reminder: Reminder, now: number): number | null {
+  if (reminder.every === null) return null;
+  const step = reminder.every * MINUTE_MS;
+  let next = Date.parse(reminder.at) + step;
+  while (next <= now) next += step;
+  return next - Date.parse(reminder.createdAt) > REMINDER_HORIZON_MS ? null : next;
+}
+
+/** Срабатывание последнее: у повторяющегося нет следующего (то же вычисление, что при сдвиге). */
+export const isLastCheck = (reminder: Reminder, now: number): boolean => reminder.every !== null && nextDueAt(reminder, now) === null;
 
 /** `HH:mm` (24 ч, местное время): ближайшее такое время — сегодня, если оно впереди, иначе завтра. */
 function nextLocalTime(text: string, now: number): number | null {
@@ -70,8 +81,8 @@ export function createReminderStore(deps: { home: string; now?(): number; log(li
   const file = path.join(assistantCwd(deps.home), 'reminders.json');
   let items: Reminder[] = [];
   let loaded = false;
-  let counter = 0;
-  let onDue: ((reminder: Reminder, late: boolean) => Promise<'fired' | 'skipped'>) | null = null;
+  let counter = 0; // хранится в файле: id не повторяются, даже когда список опустел
+  let onDue: ((reminder: Reminder, late: boolean) => Promise<'fired' | 'skipped' | 'later'>) | null = null;
   let timer: NodeJS.Timeout | null = null;
   let ticking = false;
   let stopped = false;
@@ -80,7 +91,7 @@ export function createReminderStore(deps: { home: string; now?(): number; log(li
     try {
       mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
       const tmp = `${file}.tmp`;
-      writeFileSync(tmp, `${JSON.stringify({ version: 1, reminders: items })}\n`, { mode: 0o600 });
+      writeFileSync(tmp, `${JSON.stringify({ version: 1, counter, reminders: items })}\n`, { mode: 0o600 });
       chmodSync(tmp, 0o600);
       renameSync(tmp, file);
     } catch (error) {
@@ -92,8 +103,9 @@ export function createReminderStore(deps: { home: string; now?(): number; log(li
     if (loaded) return;
     loaded = true;
     try {
-      const parsed = JSON.parse(readFileSync(file, 'utf8')) as { reminders?: unknown };
+      const parsed = JSON.parse(readFileSync(file, 'utf8')) as { reminders?: unknown; counter?: unknown };
       if (Array.isArray(parsed.reminders)) items = parsed.reminders.filter(isReminder);
+      if (typeof parsed.counter === 'number' && Number.isFinite(parsed.counter)) counter = parsed.counter;
     } catch {
       // файла нет или он битый — начинаем с пустого
     }
@@ -113,13 +125,10 @@ export function createReminderStore(deps: { home: string; now?(): number; log(li
 
   /** Снимает сработавшее напоминание: разовое удаляется, повторяющееся сдвигается или (после суток) тоже удаляется. */
   function advance(item: Reminder): void {
+    if (!items.some((candidate) => candidate.id === item.id)) return; // пока ход шёл, напоминание отменили
     items = items.filter((candidate) => candidate.id !== item.id);
-    if (item.every === null) return;
-    const step = item.every * MINUTE_MS;
-    let next = dueTime(item) + step;
-    while (next <= now()) next += step; // пропущенные повторения не догоняем
-    if (next - Date.parse(item.createdAt) > REMINDER_HORIZON_MS) return;
-    items.push({ ...item, at: new Date(next).toISOString() });
+    const next = nextDueAt(item, now());
+    if (next !== null) items.push({ ...item, at: new Date(next).toISOString() });
   }
 
   async function tick(): Promise<void> {
@@ -130,15 +139,20 @@ export function createReminderStore(deps: { home: string; now?(): number; log(li
         const due = items.filter((item) => dueTime(item) <= now()).sort((a, b) => dueTime(a) - dueTime(b))[0];
         if (due === undefined || stopped || onDue === null) break;
         const late = now() - dueTime(due) > MINUTE_MS;
-        // Сначала снимаем и записываем: упавший на полпути хост не сработает по тому же напоминанию дважды.
-        advance(due);
-        save();
-        let result: 'fired' | 'skipped' = 'skipped';
+        // Снимаем и записываем уже ПОСЛЕ ответа: остановка хоста посреди ожидания не теряет напоминание.
+        // Цена — упавший хост во время хода может сработать по нему ещё раз.
+        let result: 'fired' | 'skipped' | 'later' = 'skipped';
         try {
           result = await onDue(due, late);
         } catch (error) {
           deps.log(`assistant: reminder ${due.id} failed: ${(error as Error).message}`);
         }
+        if (result === 'later') {
+          stopped = true; // хост останавливается: файл не трогаем и таймер не взводим, иначе просроченное крутилось бы по кругу
+          break;
+        }
+        advance(due);
+        save();
         if (result === 'skipped') deps.log(`assistant: reminder ${due.id} skipped (the assistant cannot run now)`);
       }
     } finally {
