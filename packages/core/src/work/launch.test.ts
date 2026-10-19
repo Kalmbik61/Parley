@@ -950,6 +950,32 @@ describe('план возобновления', () => {
       }
     });
 
+    it('custom-*: транскрипт в папке провайдера → --resume, а не новый запуск (спека своих провайдеров 5.6)', async () => {
+      await writeCustomProviders(
+        [{ id: 'custom-local', label: 'Local', preset: 'other', baseUrl: 'http://127.0.0.1:9/anthropic', auth: 'bearer',
+          models: { opus: 'a', sonnet: 'b', haiku: 'c', subagent: 'b' }, contextWindow: null, linkClaude: false }],
+        customProvidersFile(),
+      );
+      setEnv('PARLEY_CLAUDE_PROJECTS_DIR', undefined);
+      const fakeHome = await mkdtemp(path.join(tmpdir(), 'parley-claude-home-'));
+      try {
+        setEnv('HOME', fakeHome);
+        setEnv('CLAUDE_CONFIG_DIR', undefined);
+        const { workId, sessionId } = await pending('custom-local');
+        await withId(workId, sessionId);
+        // Корень истории провайдера прочитан, но транскрипта в нём нет — «нет» точное.
+        const dir = path.join(home, 'providers', 'custom-local', 'projects', '-p');
+        await mkdir(dir, { recursive: true });
+        const noTranscript = await planResume(project, workId, await sessionOf(workId, sessionId));
+        expect(noTranscript.args).not.toContain('--resume');
+        await writeFile(path.join(dir, `${id}.jsonl`), '{"type":"user"}\n');
+        const plan = await planResume(project, workId, await sessionOf(workId, sessionId));
+        expect(plan.args.slice(0, 2)).toEqual(['--resume', id]);
+      } finally {
+        await rm(fakeHome, { recursive: true, force: true });
+      }
+    });
+
     it('ни один корень истории не прочитать — ответа нет, остаётся --resume', async () => {
       setEnv('PARLEY_CLAUDE_PROJECTS_DIR', path.join(logs, 'нет-такого-каталога'));
       const { workId, sessionId } = await pending('claude');

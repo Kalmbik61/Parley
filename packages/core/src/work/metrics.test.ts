@@ -168,6 +168,20 @@ describe('readSessionMetrics', () => {
   });
 });
 
+describe('метрики своего провайдера (спека своих провайдеров 5.6)', () => {
+  it('custom-*: лог читается из projects его папки, а не из ~/.claude', async () => {
+    const dir = path.join(home, 'providers', 'custom-kimi', 'projects', '-p');
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      path.join(dir, 'abc.jsonl'),
+      line({ type: 'user', sessionId: 'abc', timestamp: '2026-03-12T10:00:00.000Z', message: { role: 'user', content: 'hi' } }),
+    );
+    const found = await readSessionMetrics('custom-kimi', 'abc');
+    expect(found).not.toBeNull();
+    expect(await readSessionMetrics('custom-other', 'abc')).toBeNull();
+  });
+});
+
 describe('linkProviderSession', () => {
   const START = '2026-03-12T09:59:59.000Z';
 

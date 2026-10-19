@@ -11,7 +11,7 @@
 import { spawn } from 'node:child_process';
 import { adapterV1 } from '../adapter-v1.js';
 import { defaultCodexRoot, discoverCodexSessions } from '../codex/discover.js';
-import { defaultRoot, discoverSessions } from '../discover.js';
+import { claudeRootFor, discoverSessions } from '../discover.js';
 import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
 import {
   agentEnv,
@@ -98,7 +98,7 @@ async function transcriptSource(
   roots: MetricsRoots,
 ): Promise<Promise<Line[]> | null> {
   if (isClaudeCode(provider)) {
-    const root = roots.claudeRoot ?? defaultRoot();
+    const root = roots.claudeRoot ?? claudeRootFor(provider);
     const found = (await discoverSessions(root)).find(
       (session) => session.id === providerSessionId,
     );

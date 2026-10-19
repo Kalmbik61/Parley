@@ -1,6 +1,8 @@
+import { readdirSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { customProviderDir, isValidCustomProviderId } from './custom-providers.js';
 import { envValue } from './names.js';
 import { parleyHome } from './work/store.js';
 
@@ -40,7 +42,26 @@ export function claudeProjectRoots(
   const configDir = env['CLAUDE_CONFIG_DIR']?.trim();
   if (configDir !== undefined && configDir !== '') roots.push(path.join(configDir, 'projects'));
   roots.push(path.join(home, '.claude', 'projects'));
+  // Свои провайдеры пишут историю в свою папку (спека своих провайдеров 5.6).
+  roots.push(...customProviderProjectRoots(parleyHome(env, home)));
   return [...new Set(roots)];
+}
+
+/**
+ * Корни истории своих провайдеров: `projects` в подпапках `<home>/providers` с префиксом `custom-` (спека своих провайдеров 5.6).
+ * Синхронно, только пути; нет каталога `providers` — `[]`.
+ */
+export function customProviderProjectRoots(home: string = parleyHome()): string[] {
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = readdirSync(path.join(home, 'providers'), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isDirectory() && isValidCustomProviderId(entry.name))
+    .map((entry) => path.join(customProviderDir(entry.name, home), 'projects'))
+    .sort();
 }
 
 /** Корень истории Claude Code. Каталог только для чтения. */
@@ -48,6 +69,12 @@ export function defaultRoot(): string {
   const override = envValue(process.env, CLAUDE_PROJECTS_DIR_KEY);
   if (override !== undefined) return override;
   return path.join(homedir(), '.claude', 'projects');
+}
+
+/** Корень истории провайдера: свой (`custom-*`) — из его папки, остальные — как у Claude Code (спека 5.6). */
+export function claudeRootFor(provider: string): string {
+  if (isValidCustomProviderId(provider)) return path.join(customProviderDir(provider), 'projects');
+  return defaultRoot();
 }
 
 export interface DiscoveredSubagent {

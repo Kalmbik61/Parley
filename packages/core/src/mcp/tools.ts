@@ -20,7 +20,6 @@ import {
 import { DEFAULT_CONFIG, loadConfig } from '../config.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import {
-  PROVIDERS,
   claudeConfigDirFor,
   isClaudeCode,
   providerReadiness,
@@ -1613,7 +1612,10 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
         // Без дескриптора — окружение, но только у провайдера, который переменную не срезает (`claudeConfigDirFor`).
         const launch = bound ? descriptor : null;
         const homeDir = launch?.roots.homeDir ?? process.env.HOME ?? homedir();
-        const entry = Object.values(PROVIDERS).find(item => item.id === session.provider)!;
+        // Запись берём из реестра: свой провайдер (`custom-*`) живёт не в `PROVIDERS` (спека своих провайдеров 5.6).
+        // Записи нет (провайдер удалён) — тот же отказ, что у неизвестного провайдера, без исключения.
+        const entry = (await loadProviders())[session.provider];
+        if (!entry) return { catalog: null, reason: 'This provider has no verified native skill route.' };
         const fromEnv = claudeConfigDirFor(entry, process.env);
         const configDir = launch ? launch.roots.claudeConfigDir : fromEnv ? path.resolve(cwd, fromEnv) : undefined;
         const rootsEnv: NodeJS.ProcessEnv = { ...process.env };

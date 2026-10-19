@@ -28,6 +28,8 @@ export type { SchemaAdapter, SessionRecord } from './adapter-v1.js';
 export {
   assistantCwd,
   claudeProjectRoots,
+  claudeRootFor,
+  customProviderProjectRoots,
   claudeProjectSlug,
   defaultRoot,
   discoverSession,
