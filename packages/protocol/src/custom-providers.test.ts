@@ -26,6 +26,11 @@ describe('схемы методов своих провайдеров (спек�
       { ...valid, auth: 'basic' },
     ]) expect(METHODS['providers.saveCustom'].safeParse(bad).success).toBe(false);
   });
+  it('saveCustom/deleteCustom: отвергает id с выходом из папки и пробелы в адресе', () => {
+    expect(METHODS['providers.saveCustom'].safeParse({ ...valid, id: 'custom-/../../../.claude' }).success).toBe(false);
+    expect(METHODS['providers.deleteCustom'].safeParse({ id: 'custom-/../x', removeFolder: true }).success).toBe(false);
+    expect(METHODS['providers.saveCustom'].safeParse({ ...valid, baseUrl: ' https://a.com ' }).success).toBe(true);
+  });
   it('deleteCustom: id и removeFolder', () => {
     expect(METHODS['providers.deleteCustom'].safeParse({ id: 'custom-kimi', removeFolder: false }).success).toBe(true);
     expect(METHODS['providers.deleteCustom'].safeParse({ id: 'custom-kimi' }).success).toBe(false);

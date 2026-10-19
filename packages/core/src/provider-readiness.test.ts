@@ -4,7 +4,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PROVIDERS, providerReadiness, probeCliVersion } from './providers.js';
+import { customProviderEntry } from './custom-providers.js';
+import { PROVIDERS, providerReadiness, providerReadinessError, probeCliVersion } from './providers.js';
 import { clearSecret, writeSecret } from './secrets.js';
 
 let home: string;
@@ -78,8 +79,6 @@ describe('providerReadiness своих провайдеров (спека 5.1)',
     models: { opus: 'm', sonnet: 'm', haiku: 'm', subagent: 'm' }, contextWindow: null, linkClaude: true,
   };
   it('нет ключа → needs key; у loopback-адреса ключ не нужен', async () => {
-    const { customProviderEntry } = await import('./custom-providers.js');
-    const { providerReadinessError } = await import('./providers.js');
     const remote = customProviderEntry(record, home);
     const readiness = await providerReadiness(remote, { env: env(), version: '2.1.302', keyPresent: false });
     expect(readiness.needs).toBe('key');
@@ -88,8 +87,6 @@ describe('providerReadiness своих провайдеров (спека 5.1)',
     expect(await providerReadiness(local, { env: env(), version: '2.1.302', keyPresent: false })).toMatchObject({ needs: null });
   });
   it('claude 2.1.301 → needs cli; текст называет имя провайдера, а не GLM', async () => {
-    const { customProviderEntry } = await import('./custom-providers.js');
-    const { providerReadinessError } = await import('./providers.js');
     const entry = customProviderEntry(record, home);
     const readiness = await providerReadiness(entry, { env: env(), version: '2.1.301', keyPresent: true });
     expect(readiness.needs).toBe('cli');

@@ -74,7 +74,7 @@ describe('customProviderEntry', () => {
 });
 
 describe('loadProviders со своими провайдерами', () => {
-  it('добавляет свои записи; встроенные и providers.json побеждают при совпадении id', async () => {
+  it('добавляет свои записи; запись без префикса custom- отбрасывается при чтении', async () => {
     const file = path.join(home, 'custom-providers.json');
     await writeCustomProviders([kimi, { ...kimi, id: 'glm' }], file);
     const registry = await loadProviders(path.join(home, 'none.json'), path.join(home, 'none2.json'), file);
@@ -165,5 +165,39 @@ describe('файл своих провайдеров', () => {
     await writeCustomProviders([kimi], file);
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, providers: [kimi] });
     expect(await readCustomProviders(file)).toEqual([kimi]);
+  });
+});
+
+describe('строгая проверка записей (замечания рецензии)', () => {
+  it('baseUrlError: краевые пробелы и пробел в пути — ошибка', () => {
+    expect(baseUrlError('https://a.com ')).not.toBeNull();
+    expect(baseUrlError(' https://a.com')).not.toBeNull();
+    expect(baseUrlError('https://a.com/a b')).not.toBeNull();
+  });
+  it('customProviderDir бросает на id с выходом из папки', () => {
+    expect(() => customProviderDir('custom-/../../../.claude', home)).toThrow(/Invalid custom provider id/);
+    expect(customProviderDir('custom-kimi', home)).toBe(path.join(home, 'providers', 'custom-kimi'));
+  });
+  it('чтение пропускает опасные и слабые записи, дубль id — побеждает первая', async () => {
+    const file = path.join(home, 'strict.json');
+    const bad: unknown[] = [
+      { ...kimi, id: 'custom-/../../../.claude' },
+      { ...kimi, id: 'custom-a', baseUrl: 'http://evil.example.com' },
+      { ...kimi, id: 'custom-b', baseUrl: 'https://u:p@a.com' },
+      { ...kimi, id: 'custom-c', models: { ...kimi.models, opus: '--flag' } },
+      { ...kimi, id: 'custom-d', models: { ...kimi.models, opus: 'a b' } },
+      { ...kimi, id: 'custom-e', contextWindow: -5 },
+      { ...kimi, id: 'custom-f', contextWindow: 1.5 },
+      { ...kimi, id: 'custom-g', label: '   ' },
+      { ...kimi, label: 'Second' },
+    ];
+    await writeFile(file, JSON.stringify({ version: 1, providers: [kimi, ...bad] }));
+    const read = await readCustomProviders(file);
+    expect(read.map((r) => r.id)).toEqual(['custom-kimi', 'custom-kimi']);
+    const registry = await loadProviders(path.join(home, 'n1.json'), path.join(home, 'n2.json'), file);
+    expect(registry['custom-kimi']?.custom?.label).toBe('Kimi');
+  });
+  it('метка из эмодзи не режет суррогатную пару', () => {
+    expect(customProviderEntry({ ...kimi, label: '😀😀x' }, home).mark).toBe('😀😀');
   });
 });

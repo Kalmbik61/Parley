@@ -21,6 +21,12 @@ export function isCustomProviderId(id: string): boolean {
   return id.startsWith(CUSTOM_PROVIDER_PREFIX);
 }
 
+/** Строгий формат id (спека 5.1, 7): id становится именем папки и частью секрета, поэтому без `/`, `..` и пробелов. */
+const CUSTOM_ID_PATTERN = /^custom-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export function isValidCustomProviderId(id: string): boolean {
+  return id.length <= 40 && CUSTOM_ID_PATTERN.test(id);
+}
+
 export interface CustomProviderRecord {
   id: string;
   label: string;
@@ -37,7 +43,12 @@ export function customProvidersFile(home = parleyHome()): string {
 }
 
 export function customProviderDir(id: string, home = parleyHome()): string {
-  return path.join(home, 'providers', id);
+  const result = path.join(home, 'providers', id);
+  // Защита от выхода из `<home>/providers` (спека 7): папку провайдера потом засевают и удаляют.
+  if (!isValidCustomProviderId(id) || path.dirname(result) !== path.join(home, 'providers')) {
+    throw new Error(`Invalid custom provider id: ${id}`);
+  }
+  return result;
 }
 
 export function customProviderSecret(id: string): SecretId {
@@ -78,6 +89,7 @@ export function isLoopbackUrl(url: string): boolean {
 
 /** `https:`, либо `http:` только для loopback; без логина и пароля, `?` и `#` (спека 5.1, 7). */
 export function baseUrlError(url: string): string | null {
+  if (url !== url.trim() || /\s/.test(url)) return 'The address must not contain spaces';
   const parsed = parseUrl(url);
   if (parsed === null) return 'Enter a full address, for example https://api.example.com/anthropic';
   if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname))) {
@@ -91,18 +103,22 @@ export function baseUrlError(url: string): string | null {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 const isText = (value: unknown): value is string => typeof value === 'string' && value !== '';
+// Слот модели: одно слово, не с дефиса — как в схеме протокола (иначе уйдёт в `--model` флагом).
+const isModelSlot = (value: unknown): value is string =>
+  typeof value === 'string' && value.length <= 200 && /^[^\s-]\S*$/.test(value);
 
 function asRecord(value: unknown): CustomProviderRecord | null {
   if (!isRecord(value) || !isRecord(value['models'])) return null;
   const models = value['models'];
   const { id, label, preset, baseUrl, auth, contextWindow, linkClaude } = value;
-  if (!isText(id) || !isCustomProviderId(id) || !isText(label) || !isText(baseUrl)) return null;
+  if (!isText(id) || !isValidCustomProviderId(id) || !isText(label) || !isText(baseUrl)) return null;
+  if (label.trim() === '' || label.trim().length > 40 || baseUrlError(baseUrl) !== null) return null;
   if (preset !== null && typeof preset !== 'string') return null;
   if (auth !== 'bearer' && auth !== 'api-key') return null;
-  if (contextWindow !== null && (typeof contextWindow !== 'number' || !Number.isFinite(contextWindow))) return null;
+  if (contextWindow !== null && !(typeof contextWindow === 'number' && Number.isInteger(contextWindow) && contextWindow > 0)) return null;
   if (typeof linkClaude !== 'boolean') return null;
   const { opus, sonnet, haiku, subagent } = models;
-  if (!isText(opus) || !isText(sonnet) || !isText(haiku) || !isText(subagent)) return null;
+  if (!isModelSlot(opus) || !isModelSlot(sonnet) || !isModelSlot(haiku) || !isModelSlot(subagent)) return null;
   return {
     id,
     label,
@@ -182,7 +198,7 @@ export function customProviderEntry(record: CustomProviderRecord, home = parleyH
     id: record.id,
     family: 'claude',
     label: record.label,
-    mark: record.label.slice(0, 2),
+    mark: [...record.label].slice(0, 2).join(''),
     hasHistory: true,
     linkBy: 'session-id',
     runner,
