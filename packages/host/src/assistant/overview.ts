@@ -7,10 +7,12 @@
 
 import { createHash } from 'node:crypto';
 import {
+  cardGist,
   participantLabel,
   sessionDotState,
   stateWord,
   type DotState,
+  type FeedCard,
   type SessionLifecycle,
   type WorkEntry,
   type WorkMap,
@@ -20,17 +22,23 @@ import type { SessionRef } from '@parley/protocol';
 import type { SessionLive } from '../activity/activity-service.js';
 
 export type AssistantTarget =
+  | { kind: 'work'; id: string; projectPath: string; workId: string; name: string; where: string }
   | { kind: 'room'; id: string; projectPath: string; workId: string; roomId: string; name: string; where: string }
   | { kind: 'session'; id: string; ref: SessionRef; name: string; where: string; running: boolean; lifecycle: SessionLifecycle };
 
 export interface OverviewSource {
   entries: readonly WorkEntry[];
   live(ref: SessionRef): SessionLive | undefined;
+  /** Ждущие карточки сессии, если сервис их уже достал; нет функции или `undefined` — строка `waits:` без карточки. */
+  cards?(ref: SessionRef): readonly FeedCard[] | undefined;
 }
 
 const STATE_ORDER: Readonly<Record<DotState, number>> = { blocked: 0, working: 1, unseen: 2, idle: 3, pending: 4, done: 5, failed: 6, exited: 7 };
 const ROOM_MESSAGES = 10;
 const PLAN_ITEMS = 12;
+const SESSION_CARDS = 3;
+const DECISION_BRIEF = 200;
+const DECISION_FULL = 1500;
 
 const projectKey = (projectPath: string): string => createHash('sha1').update(projectPath).digest('hex').slice(0, 6);
 const projectName = (projectPath: string): string => projectPath.split('/').filter(Boolean).pop() ?? projectPath;
@@ -48,6 +56,8 @@ export function targetsOf(source: OverviewSource): AssistantTarget[] {
   for (const entry of open(source.entries)) {
     const { map } = entry;
     const prefix = `${projectKey(entry.projectPath)}:${map.work.id}`;
+    // Работа — цель сама по себе: по ней модель создаёт комнату; в каждой работе идёт первой.
+    targets.push({ kind: 'work', id: `work:${prefix}`, projectPath: entry.projectPath, workId: map.work.id, name: map.work.title, where: where(entry) });
     for (const room of map.rooms) {
       if (isArchived(room)) continue;
       targets.push({ kind: 'room', id: `room:${prefix}:${room.id}`, projectPath: entry.projectPath, workId: map.work.id, roomId: room.id, name: room.title, where: where(entry) });
@@ -85,10 +95,28 @@ export function resolveTarget(targets: readonly AssistantTarget[], wanted: strin
   if (matches.length > 1) {
     return { error: `"${key}" matches several targets: ${matches.map((target) => `${target.id} (${target.name}, ${target.where})`).join('; ')}` };
   }
-  return { error: `No room or session "${key}". Call parley_overview for the current ids.` };
+  return { error: `No work, room or session "${key}". Call parley_overview for the current ids.` };
 }
 
-function sessionLine(entry: WorkEntry, session: WorkSession, state: DotState, live: SessionLive | undefined): string {
+/** Строка ждущей карточки для модели: что просят и id карточки, по которому предлагается решение. */
+export function cardLine(card: FeedCard, projectPath: string): string {
+  const gist = cardGist(card, projectPath);
+  const id = `(card ${card.cardId})`;
+  switch (gist.kind) {
+    case 'run':
+      return `permission — ${card.toolName}: ${oneLine(gist.command, 160)} ${id}`;
+    case 'tool':
+      return `permission — ${gist.tool}${gist.path === null ? '' : `: ${oneLine(gist.path, 160)}`} ${id}`;
+    case 'fetch':
+      return `permission — ${card.toolName}: ${oneLine(gist.url, 160)} ${id}`;
+    case 'question':
+      return `question — ${oneLine(gist.text, 160)} ${id}`;
+    case 'plan':
+      return `plan — ${card.kind === 'plan' ? card.plan.split(/\r?\n/).length : 0} lines ${id}`;
+  }
+}
+
+function sessionLine(entry: WorkEntry, session: WorkSession, state: DotState, live: SessionLive | undefined, cards: readonly FeedCard[] | undefined): string {
   const prefix = `${projectKey(entry.projectPath)}:${entry.map.work.id}`;
   const parts = [`  Session ${participantLabel(entry.map, session.id)} [session:${prefix}:${session.id}] ${session.provider}`, stateWord(state, session.lifecycle)];
   // Комната нужна модели, чтобы писать агенту через неё с упоминанием; сессия состоит не больше чем в одной комнате работы.
@@ -98,7 +126,14 @@ function sessionLine(entry: WorkEntry, session: WorkSession, state: DotState, li
   if (typeof session.summary === 'string' && session.summary.trim() !== '') parts.push(`summary: ${oneLine(session.summary, 200)}`);
   const waitingFor = live?.activity.waitingFor ?? null;
   if (state === 'blocked' && waitingFor !== null) parts.push(`waiting for: ${oneLine(waitingFor, 120)}`);
+  if (state === 'blocked') for (const card of (cards ?? []).slice(0, SESSION_CARDS)) parts.push(`waits: ${cardLine(card, entry.projectPath)}`);
   return parts.join(' · ');
+}
+
+/** Решение ведущего, которое ждёт человека: `decision`, а у старых записей без вида — тоже решение. */
+function proposalHead(map: WorkMap, proposal: NonNullable<WorkMap['rooms'][number]['proposal']>): string {
+  const word = proposal.kind === 'completion' ? 'completion' : 'decision';
+  return `${word} from ${participantLabel(map, proposal.from)} (${proposal.id}, rev ${proposal.rev})`;
 }
 
 function planOf(map: WorkMap, roomId: string) {
@@ -118,7 +153,7 @@ export function overviewText(source: OverviewSource, maxChars = 8000): string {
         return { session, live, state: sessionDotState(session, live?.activity.activity ?? null) };
       })
       .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state]);
-    const lines = [`Work "${map.work.title}" (project ${projectName(entry.projectPath)})`];
+    const lines = [`Work "${map.work.title}" [work:${prefix}] (project ${projectName(entry.projectPath)})`];
     for (const room of map.rooms) {
       if (isArchived(room)) continue;
       const members = sessions.filter((item) => room.members.includes(item.session.id));
@@ -130,10 +165,11 @@ export function overviewText(source: OverviewSource, maxChars = 8000): string {
         `  Room "${room.title}" [room:${prefix}:${room.id}]: ${members.length} members, ${working} working` +
           (waiting > 0 ? `, ${waiting} need the person` : '') +
           (room.lead === null ? '' : `, lead ${participantLabel(map, room.lead)}`) +
-          (plan === undefined ? '' : `, plan ${done}/${plan.items.length}: ${oneLine(plan.goal, 120)}`),
+          (plan === undefined ? '' : `, plan ${done}/${plan.items.length}: ${oneLine(plan.goal, 120)}`) +
+          (room.proposal === null ? '' : `, waits: ${proposalHead(map, room.proposal)}: ${oneLine(room.proposal.text, DECISION_BRIEF)}`),
       );
     }
-    for (const item of sessions) lines.push(sessionLine(entry, item.session, item.state, item.live));
+    for (const item of sessions) lines.push(sessionLine(entry, item.session, item.state, item.live, source.cards?.(refOf(entry, item.session))));
     const rank = Math.min(...sessions.map((item) => STATE_ORDER[item.state]), STATE_ORDER.exited);
     blocks.push({ rank, text: lines.join('\n') });
   }
@@ -156,22 +192,29 @@ export function overviewText(source: OverviewSource, maxChars = 8000): string {
 
 /** Подробности одной цели (спека 7.2.2). `lastReply` — последний ответ агента из ленты, только у сессии. */
 export function detailText(source: OverviewSource, target: AssistantTarget, lastReply: string | null): string {
-  const projectPath = target.kind === 'room' ? target.projectPath : target.ref.projectPath;
-  const workId = target.kind === 'room' ? target.workId : target.ref.workId;
+  const projectPath = target.kind === 'session' ? target.ref.projectPath : target.projectPath;
+  const workId = target.kind === 'session' ? target.ref.workId : target.workId;
   const entry = source.entries.find((item) => item.projectPath === projectPath && item.map.work.id === workId);
   if (entry === undefined) return `${target.name} is no longer in Parley.`;
   const { map } = entry;
+  if (target.kind === 'work') {
+    // Одна работа — тот же снимок, что и в обзоре, но только она.
+    return overviewText({ ...source, entries: [entry] });
+  }
   if (target.kind === 'session') {
     const session = map.sessions.find((item) => item.id === target.ref.sessionId);
     if (session === undefined) return `${target.name} is no longer in Parley.`;
     const live = source.live(target.ref);
-    const lines = [sessionLine(entry, session, sessionDotState(session, live?.activity.activity ?? null), live).trim()];
+    const lines = [sessionLine(entry, session, sessionDotState(session, live?.activity.activity ?? null), live, source.cards?.(target.ref)).trim()];
     if (lastReply !== null) lines.push(`Last reply: ${oneLine(lastReply, 1500)}`);
     return lines.join('\n');
   }
   const room = map.rooms.find((item) => item.id === target.roomId);
   if (room === undefined) return `${target.name} is no longer in Parley.`;
   const lines = [`Room "${room.title}" in ${target.where}; members: ${room.members.map((id) => participantLabel(map, id)).join(', ') || 'none'}`];
+  if (room.proposal !== null) {
+    lines.push(`${proposalHead(map, room.proposal).replace(/^./, (c) => c.toUpperCase())}: ${oneLine(room.proposal.text, DECISION_FULL)}`);
+  }
   const plan = planOf(map, room.id);
   if (plan !== undefined) {
     lines.push(`Plan: ${oneLine(plan.goal, 200)}`);

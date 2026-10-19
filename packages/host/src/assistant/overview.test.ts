@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkEntry, WorkMap } from '@parley/core';
+import type { FeedCard, WorkEntry, WorkMap } from '@parley/core';
 import type { SessionLive } from '../activity/activity-service.js';
-import { detailText, overviewText, resolveTarget, targetsOf, type OverviewSource } from './overview.js';
+import { cardLine, detailText, overviewText, resolveTarget, targetsOf, type OverviewSource } from './overview.js';
 
 function session(id: string, label: string, extra: Record<string, unknown> = {}) {
   return { id, label, provider: 'claude', task: `task of ${label}`, summary: null, lifecycle: 'active', ...extra };
@@ -30,8 +30,15 @@ describe('targetsOf и resolveTarget', () => {
   const src = source([entry('/p/one', 'w-1', 'Parley')], { 's-03': live('working'), 's-05': live('idle') });
   it('id по проекту, работе и элементу', () => {
     const ids = targetsOf(src).map((target) => target.id);
-    expect(ids).toHaveLength(3);
-    expect(ids.every((id) => /^(room|session):[0-9a-f]{6}:w-1:/.test(id))).toBe(true);
+    expect(ids).toHaveLength(4);
+    expect(ids.every((id) => /^(work|room|session):[0-9a-f]{6}:w-1(:|$)/.test(id))).toBe(true);
+  });
+  it('работа — цель, первая в своей работе; находится по id и точному названию', () => {
+    const targets = targetsOf(src);
+    expect(targets[0]).toMatchObject({ kind: 'work', name: 'Parley', workId: 'w-1', projectPath: '/p/one' });
+    expect(targets[0]?.id).toMatch(/^work:[0-9a-f]{6}:w-1$/);
+    expect(resolveTarget(targets, 'Parley')).toEqual({ target: targets[0] });
+    expect(resolveTarget(targets, targets[0]?.id ?? '')).toEqual({ target: targets[0] });
   });
   it('находит по id, по имени и по первому слову имени', () => {
     const targets = targetsOf(src);
@@ -51,7 +58,8 @@ describe('targetsOf и resolveTarget', () => {
       rooms: [{ id: 'r-9', title: 'Gone', creator: 's-03', members: [], createdAt: '', lead: null, proposal: null, archivedAt: '2026-10-01' }],
       sessions: [session('s-03', 'S03 Ruslan', { lifecycle: 'closed' })],
     } as unknown as Partial<WorkMap>);
-    expect(targetsOf(source([archived, roomArchived], {}))).toEqual([]);
+    // Остаётся только цель-работа: комната в архиве, сессия закрыта, архивной работы нет вовсе.
+    expect(targetsOf(source([archived, roomArchived], {})).map((target) => target.kind)).toEqual(['work']);
   });
   it('спящая сессия без live — running: false, lifecycle sleeping', () => {
     const sleeping = entry('/p/one', 'w-1', 'Parley', { sessions: [session('s-03', 'S03 Ruslan', { lifecycle: 'sleeping' })] } as unknown as Partial<WorkMap>);
@@ -124,5 +132,73 @@ describe('detailText', () => {
     const src = source([map], {});
     const room = targetsOf(src).find((item) => item.kind === 'room');
     expect(detailText(src, room!, null)).toContain('Как дела?');
+  });
+});
+
+const permissionCard = {
+  kind: 'permission', id: 'c12', cardId: 'c12', at: '', state: 'pending', toolUseId: null, toolName: 'Bash',
+  toolInput: { command: 'rm -rf dist' }, suggestions: [], notified: false,
+} as unknown as FeedCard;
+const questionCard = {
+  kind: 'question', id: 'c13', cardId: 'c13', at: '', state: 'pending', toolUseId: null, toolName: 'AskUserQuestion',
+  toolInput: {}, questions: [{ question: 'Первая строка?\nвторая', options: [] }],
+} as unknown as FeedCard;
+const planCard = {
+  kind: 'plan', id: 'c14', cardId: 'c14', at: '', state: 'pending', toolUseId: null, toolName: 'ExitPlanMode',
+  toolInput: {}, plan: 'a\nb\nc', planFilePath: null,
+} as unknown as FeedCard;
+
+describe('cardLine', () => {
+  it('разрешение, вопрос и план', () => {
+    expect(cardLine(permissionCard, '/p/one')).toBe('permission — Bash: rm -rf dist (card c12)');
+    expect(cardLine(questionCard, '/p/one')).toBe('question — Первая строка? (card c13)');
+    expect(cardLine(planCard, '/p/one')).toBe('plan — 3 lines (card c14)');
+  });
+});
+
+describe('overviewText: ждущие карточки и решения комнат', () => {
+  const blocked = { 's-03': live('working'), 's-05': live('blocked', 'Bash: rm -rf dist') };
+  it('строка работы несёт id работы', () => {
+    expect(overviewText(source([entry('/p/one', 'w-1', 'Parley')], {}))).toMatch(/Work "Parley" \[work:[0-9a-f]{6}:w-1\] \(project one\)/);
+  });
+  it('у blocked-сессии с cards — строка waits: с карточкой', () => {
+    const src = { ...source([entry('/p/one', 'w-1', 'Parley')], blocked), cards: () => [permissionCard] };
+    const text = overviewText(src);
+    expect(text).toContain('waiting for: Bash: rm -rf dist');
+    expect(text).toContain('waits: permission — Bash: rm -rf dist (card c12)');
+  });
+  it('карточек не больше трёх; без cards или с undefined — только waiting for', () => {
+    const many = { ...source([entry('/p/one', 'w-1', 'Parley')], blocked), cards: () => [permissionCard, questionCard, planCard, permissionCard] };
+    expect(overviewText(many).match(/waits: /g)).toHaveLength(3);
+    expect(overviewText(source([entry('/p/one', 'w-1', 'Parley')], blocked))).not.toContain('waits:');
+    const none = { ...source([entry('/p/one', 'w-1', 'Parley')], blocked), cards: () => undefined };
+    expect(overviewText(none)).not.toContain('waits:');
+  });
+  it('карточки не-blocked сессии не показываются', () => {
+    const src = { ...source([entry('/p/one', 'w-1', 'Parley')], { 's-03': live('working') }), cards: () => [permissionCard] };
+    expect(overviewText(src)).not.toContain('waits:');
+  });
+  const proposal = (kind?: 'completion') => ({ ...(kind === undefined ? {} : { kind }), id: 'p-03', from: 's-03', text: 'Принять '.repeat(60), rev: 1, at: '' });
+  const withProposal = (kind?: 'completion') =>
+    entry('/p/one', 'w-1', 'Parley', {
+      rooms: [{ id: 'r-1', title: 'Auth', creator: 's-03', members: ['s-03', 's-05'], createdAt: '', lead: 's-03', proposal: proposal(kind) }],
+    } as unknown as Partial<WorkMap>);
+  it('комната со слотом proposal — waits: decision from … до 200 знаков; completion — completion from', () => {
+    const text = overviewText(source([withProposal()], {}));
+    expect(text).toContain('waits: decision from S03 Ruslan (p-03, rev 1): Принять');
+    const line = text.split('\n').find((item) => item.includes('Room "Auth"')) ?? '';
+    expect(line.split('waits: ')[1]?.length).toBeLessThan(260);
+    expect(overviewText(source([withProposal('completion')], {}))).toContain('waits: completion from S03 Ruslan (p-03, rev 1)');
+  });
+  it('detailText комнаты показывает решение до 1500 знаков', () => {
+    const src = source([withProposal()], {});
+    const room = targetsOf(src).find((item) => item.kind === 'room');
+    const text = detailText(src, room!, null);
+    expect(text).toContain('Decision from S03 Ruslan (p-03, rev 1): Принять');
+    expect(text.split('Decision from ')[1]?.length).toBeGreaterThan(300);
+  });
+  it('detailText работы — её снимок', () => {
+    const src = source([entry('/p/one', 'w-1', 'Parley')], {});
+    expect(detailText(src, targetsOf(src)[0]!, null)).toContain('Room "Auth"');
   });
 });
