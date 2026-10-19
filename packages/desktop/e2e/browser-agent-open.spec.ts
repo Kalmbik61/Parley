@@ -18,7 +18,10 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * - тот же адрес с другим #фрагментом не открывает вторую страницу: ответ называет прежнюю;
  * - предел страниц панели — `bad_request` с советом закрыть одну;
  * - рамка (5.2): фокус клавиатуры, активная вкладка и вид человека не меняются; токен канала лежит в конфиге MCP, а не в
- *   окружении процесса агента, адрес канала — 127.0.0.1.
+ *   окружении процесса агента, адрес канала — 127.0.0.1;
+ * - внешний адрес (решение D7 плана 2026-10-19): `browser_open` открывает любой http(s), а читающие инструменты на такой
+ *   странице отказывают `not_loopback`; `file:` и `javascript:` по-прежнему отказ; redirect с localhost наружу и перезагрузка
+ *   окна вкладку оставляют, чтение запрещено.
  *
  * Агент — заглушка `stub-echo-agent.mjs`: строка `STUB_MCP browser_open {json}` в её терминале зовёт инструмент
  * настоящего `parley-mcp`, поднятого по `--mcp-config` запуска, ровно как это делает Claude Code; результат читается из
@@ -76,7 +79,14 @@ test.describe('агент открывает страницу в браузер�
     argvLog = path.join(home, 'argv.jsonl');
     // Правила проекта уже есть: без них первая сессия кладёт PARLEY.md и показывает свой тост.
     await writeFile(path.join(project, 'PARLEY.md'), 'E2E project rules.\n');
-    server = createServer((_req, res) => void res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!doctype html><title>Agent page</title><h1>Agent page</h1>'));
+    server = createServer((req, res) => {
+      // /bounce — redirect на другой адрес этого же сервера: 0.0.0.0 для Parley не loopback (читать такую страницу нельзя), а сам сервер слушает 127.0.0.1.
+      if (req.url?.startsWith('/bounce') === true) {
+        res.writeHead(302, { location: `http://0.0.0.0:${(server.address() as AddressInfo).port}/landed` }).end();
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!doctype html><title>Agent page</title><h1>Agent page</h1>');
+    });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
@@ -142,19 +152,22 @@ test.describe('агент открывает страницу в браузер�
 
   type Opened = Awaited<ReturnType<typeof openApp>>;
 
-  /** `browser_open` агента `lead`: строка `STUB_MCP` в его терминал, результат инструмента — из журнала заглушки. */
-  async function agentOpens({ window, lead, workId }: Opened, args: Record<string, unknown>): Promise<McpResult> {
+  /** Инструмент `browser_*` агента `lead`: строка `STUB_MCP` в его терминал, результат инструмента — из журнала заглушки. */
+  async function agentTool({ window, lead, workId }: Opened, tool: string, args: Record<string, unknown>): Promise<McpResult> {
     const before = (await readLines<McpResult>(mcpLog)).length;
     await window.evaluate(
       ([ref, line]) => (globalThis as unknown as Parley).parley.notify('pty.input', { ref, data: line }),
-      [{ projectPath: project, workId, sessionId: lead }, `STUB_MCP browser_open ${JSON.stringify(args)}\r`] as const,
+      [{ projectPath: project, workId, sessionId: lead }, `STUB_MCP ${tool} ${JSON.stringify(args)}\r`] as const,
     );
     await expect.poll(async () => (await readLines<McpResult>(mcpLog)).length, { timeout: 30_000 }).toBeGreaterThan(before);
     const entry = (await readLines<McpResult>(mcpLog))[before] as McpResult;
     expect(entry.session).toBe(lead);
-    expect(entry.tool).toBe('browser_open');
+    expect(entry.tool).toBe(tool);
     return entry;
   }
+
+  /** `browser_open` агента `lead`. */
+  const agentOpens = (opened: Opened, args: Record<string, unknown>): Promise<McpResult> => agentTool(opened, 'browser_open', args);
 
   /** Панель хозяина: `session:<id>` или `room:<id>`. */
   const panelOf = (window: Page, owner: string) => window.locator(`[data-testid="browser-panel"][data-panel-owner="${owner}"]`);
@@ -297,6 +310,63 @@ test.describe('агент открывает страницу в браузер�
     await expect(field).toBeFocused();
     await expect(window.getByRole('textbox', { name: 'Address' })).not.toBeFocused();
     expect(await humanState(window)).toEqual(before);
+  });
+
+  test('внешний http(s) открывается, читать его нельзя: not_loopback; file: и javascript: — отказ; redirect с localhost наружу и перезагрузка окна вкладку оставляют', async () => {
+    const opened = await openApp();
+    const { window, lead } = opened;
+    const port = new URL(origin).port;
+    const foreign = `http://0.0.0.0:${port}`;
+    const panel = panelOf(window, `session:${lead}`);
+    /** Страницы панели в `browser_tabs`: ждёт, пока гость загрузится (в списке — origin чужого адреса, размер неизвестен). */
+    const tabsText = async (): Promise<string> => (await agentTool(opened, 'browser_tabs', {})).text;
+
+    // Внешний адрес (для Parley 0.0.0.0 — не loopback, хотя сервер теста отвечает) открывается в браузере чата.
+    const external = await agentOpens(opened, { url: `${foreign}/external?sid=EXTSECRET`, own: true });
+    expect(external.isError, external.text).toBe(false);
+    const id = /Opened (t\d+):/.exec(external.text)?.[1] as string;
+    expect(id, external.text).toBeDefined();
+    await expect(panel).toBeVisible();
+    await expect(panel.getByRole('tab')).toHaveCount(1);
+    await expect.poll(tabsText, { timeout: 20_000, intervals: [500] }).toContain(`${id}  your chat  ${foreign}  size unknown  (loaded, visible, not localhost)`);
+    // В списке только origin: ни пути, ни query.
+    const listed = await tabsText();
+    expect(listed).not.toContain('/external');
+    expect(listed).not.toContain('EXTSECRET');
+
+    // Читать внешнюю страницу нельзя ни одним инструментом.
+    for (const tool of ['browser_console', 'browser_network', 'browser_screenshot']) {
+      const read = await agentTool(opened, tool, { tab: id });
+      expect(read.isError, tool).toBe(true);
+      expect(read.text, tool).toBe(`not_loopback: Page ${id} is not on localhost.`);
+    }
+
+    // Схемы кроме http(s) по-прежнему отказ, вкладок не прибавляется.
+    for (const url of ['file:///etc/hosts', 'javascript:alert(1)']) {
+      const refused = await agentOpens(opened, { url, own: true });
+      expect(refused.isError, url).toBe(true);
+      expect(refused.text, url).toMatch(/^bad_request: Only http\(s\) pages can be opened/);
+    }
+    await expect(panel.getByRole('tab')).toHaveCount(1);
+
+    // Страница localhost, которая уводит наружу: вкладка открыта, читать её после redirect нельзя.
+    const bounce = await agentOpens(opened, { url: `${origin}/bounce`, own: true });
+    expect(bounce.isError, bounce.text).toBe(false);
+    const bounceId = /Opened (t\d+):/.exec(bounce.text)?.[1] as string;
+    await expect(panel.getByRole('tab')).toHaveCount(2);
+    await expect.poll(tabsText, { timeout: 20_000, intervals: [500] }).toContain(`${bounceId}  your chat  ${foreign}  size unknown`);
+    const afterRedirect = await agentTool(opened, 'browser_console', { tab: bounceId });
+    expect(afterRedirect.isError).toBe(true);
+    expect(afterRedirect.text).toBe(`not_loopback: Page ${bounceId} is not on localhost.`);
+
+    // Перезагрузка окна: вкладки восстанавливаются из раскладки, чтение по-прежнему отказ.
+    await window.reload();
+    await expect(panelOf(window, `session:${lead}`)).toBeVisible({ timeout: 30_000 });
+    await expect(panelOf(window, `session:${lead}`).getByRole('tab')).toHaveCount(2);
+    await expect.poll(tabsText, { timeout: 30_000, intervals: [500] }).toContain(`${id}  your chat  ${foreign}  size unknown  (loaded,`);
+    const afterReload = await agentTool(opened, 'browser_console', { tab: id });
+    expect(afterReload.isError).toBe(true);
+    expect(afterReload.text).toBe(`not_loopback: Page ${id} is not on localhost.`);
   });
 
   test('токен канала лежит в конфиге MCP, а не в окружении процесса агента; адрес канала — 127.0.0.1', async () => {

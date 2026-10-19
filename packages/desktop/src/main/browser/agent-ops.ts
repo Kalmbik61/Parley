@@ -3,8 +3,9 @@
  * `open`). Событие хоста `browser.agentOp` приходит сюда (`host-connection.ts#answerBrowserAgentOps`), ответ уходит
  * методом `browser.agentResult`.
  *
- * Агент называет только адрес: работу вкладки задаёт хост по токену сессии (`ref` события), а не аргументы. Адрес должен
- * быть http(s) на loopback (`shared/loopback.ts`) и до окна доходит без учётных данных. Раскладка — дело окна:
+ * Агент называет только адрес: работу вкладки задаёт хост по токену сессии (`ref` события), а не аргументы. Открыть можно
+ * любой http(s) (`openableHref`), до окна он доходит без учётных данных; читать открытую страницу — только на loopback
+ * (`shared/loopback.ts`, проверка `checked`): «можно открыть» и «можно читать» — две разные проверки. Раскладка — дело окна:
  * место вкладки, предел страниц панели, повтор уже открытой страницы и тост решает рендерер (`renderer/browser/agent-open.ts`), main
  * просит его событием `browser:agent-open-tab`, ждёт ответ не дольше `AGENT_LIMITS.openMs` и переводит его в ответ агенту.
  * Страницы панелей main знает по реестру (`registerTab`, наполняет окно): по нему работает `tabs` (этап C), доступ к странице
@@ -94,10 +95,18 @@ export const NOT_MOUNTED_NOTE = "The workspace is not open in Parley's window, s
 /** Отказ при выключенном общем «Let agents use the browser». */
 const AGENTS_OFF = `The human turned off agent access to the browser (Settings → Browser → ${S.settings.letAgentsUseBrowser}).`;
 
-/** Адрес, который агент может открыть: http(s) на loopback, без учётных данных; иначе `null`. Фрагмент (#…) остаётся: им бывают маршруты SPA. */
-export function loopbackHref(raw: string): string | null {
-  if (!isLoopbackUrl(raw)) return null;
-  const parsed = new URL(raw);
+/**
+ * Адрес, который агент может открыть: любой http(s), без учётных данных; иначе `null` (`file:`, `javascript:`, `data:` и
+ * прочие схемы, не-адрес). Фрагмент (#…) остаётся: им бывают маршруты SPA. Читать открытое можно только на loopback (`checked`).
+ */
+export function openableHref(raw: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
   parsed.username = '';
   parsed.password = '';
   return parsed.href;
@@ -206,9 +215,9 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   }
 
   async function openOf(request: BrowserAgentOpEvent, args: BrowserAgentArgs<'open'>): Promise<BrowserAgentOpenResult> {
-    const url = loopbackHref(args.url);
+    const url = openableHref(args.url);
     if (url === null) {
-      throw new AgentOpError('not_loopback', 'Only http(s) pages on localhost can be opened: pass an absolute URL such as http://localhost:5173/.');
+      throw new AgentOpError('bad_request', 'Only http(s) pages can be opened: pass an absolute URL such as https://example.com/ or http://localhost:5173/.');
     }
     const owner = ownerOf(request, args);
     const workKey = workKeyOf(request.ref.projectPath, request.ref.workId);
