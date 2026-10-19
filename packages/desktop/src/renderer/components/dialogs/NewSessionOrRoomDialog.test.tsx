@@ -2265,7 +2265,18 @@ describe('NewSessionOrRoomDialog — свой провайдер (спека 4.5
     await renderDialog();
     fireEvent.click(providerRadio(0, 'Kimi'));
     expect(isChecked(providerRadio(0, 'Kimi'))).toBe(true);
-    await chooseOption(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' }), 'kimi-k2.7-code');
+    expect(providerRadio(0, 'Kimi').textContent).toBe('Kimi');
+    expect(await optionNames(modelSelect(0))).toEqual(expect.arrayContaining(['kimi-k3', 'kimi-k2.7-code']));
+    fireEvent.click(screen.getByRole('option', { name: 'kimi-k2.7-code' }));
+  });
+
+  it('Open in Settings закрывает поповер карточки и открывает Settings', async () => {
+    bridge.setHandler('providers.list', async () => ({ providers: [...PROVIDERS.slice(0, 2), kimi(false)] }));
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Kimi'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open in Settings' }));
+    expect(screen.queryByRole('button', { name: 'Open in Settings' })).toBeNull();
+    expect(useUiStore.getState().dialogs.settings).toBe(true);
   });
 
   it('неподключённый открывает карточку с Open in Settings', async () => {

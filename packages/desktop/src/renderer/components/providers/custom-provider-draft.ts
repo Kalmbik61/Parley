@@ -77,6 +77,12 @@ function parse(url: string): URL | null {
   }
 }
 
+/** Адрес на этом же компьютере: ключ ему не нужен (спека 4.1, 8), проверка идёт и без ключа. */
+export function isLoopbackAddress(url: string): boolean {
+  const parsed = parse(url.trim());
+  return parsed !== null && LOOPBACK.has(parsed.hostname);
+}
+
 /** Первая ошибка черновика текстом для человека или `null`. */
 export function draftError(draft: CustomProviderDraft, keySaved: boolean): string | null {
   const E = S.customProviders.errors;

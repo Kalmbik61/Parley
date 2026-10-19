@@ -10,19 +10,20 @@ import type { ProviderCheck } from '@parley/protocol';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
 import { hostMethods } from '../../lib/capabilities.js';
-import { cn } from '../../lib/cn.js';
 import { useHostStore } from '../../store/host.js';
 import { useProvidersStore } from '../../store/providers.js';
 import { useUiStore } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
 import { Checkbox } from '../../ui/checkbox.js';
 import { Input } from '../../ui/input.js';
+import { AgentIcon } from '../AgentIcon.js';
 import { CheckLine, maskedHint, newerCheck } from './check-line.js';
 import { CUSTOM_PRESETS, type CustomPreset } from './custom-presets.js';
 import {
   draftError,
   draftFromPreset,
   draftFromProvider,
+  isLoopbackAddress,
   saveParams,
   type CustomProviderDraft,
 } from './custom-provider-draft.js';
@@ -88,6 +89,10 @@ export function CustomProviderPanel({ providerId, onSaved, onDeleted }: CustomPr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerId]);
 
+  // «Хост слишком старый» — только у подключённого хоста без метода; пока хост не подключён, методов просто не видно.
+  if (hostStatus.state !== 'connected') {
+    return <p className="text-xs text-muted-foreground">{S.customProviders.hostNotConnected}</p>;
+  }
   if (!methods.has('providers.saveCustom')) {
     return (
       <div className="space-y-2 text-sm">
@@ -115,7 +120,13 @@ export function CustomProviderPanel({ providerId, onSaved, onDeleted }: CustomPr
               onClick={() => setDraft(draftFromPreset(preset, preset?.endpoints[0] ?? null))}
               className="flex flex-col items-start gap-0.5 rounded-xl border border-border px-3 py-2 text-left transition-colors hover:bg-foreground/7"
             >
-              <span className="text-sm font-medium">{preset?.label ?? S.customProviders.ownAddress}</span>
+              <span className="flex items-center gap-1.5 text-sm font-medium">
+                {/* Значок Parley на всех плитках: вендорские значки — следующая работа (спека 3.7). */}
+                <span aria-hidden="true" className="inline-flex">
+                  <AgentIcon provider="custom-x" size={14} />
+                </span>
+                {preset?.label ?? S.customProviders.ownAddress}
+              </span>
               <span className="text-xs text-muted-foreground">{preset?.billing ?? S.customProviders.ownAddressBilling}</span>
             </button>
           ))}
@@ -212,8 +223,10 @@ export function CustomProviderPanel({ providerId, onSaved, onDeleted }: CustomPr
     }
   };
 
-  const check = keySaved ? newerCheck(answer, item?.check ?? null) : null;
-  const canCheck = draft.id !== null && hostStatus.state === 'connected' && methods.has('providers.check');
+  // Адрес на этом же компьютере можно сохранить и проверить без ключа (спека 4.1, 8; хост принимает `key === null`).
+  const keyless = isLoopbackAddress(draft.baseUrl);
+  const check = keySaved || keyless ? newerCheck(answer, item?.check ?? null) : null;
+  const canCheck = draft.id !== null && methods.has('providers.check') && (keySaved || keyless);
   const folderText = S.customProviders.folderLine(custom?.folder ?? S.customProviders.folderFallback);
   const slots = [
     ['opus', S.customProviders.slotOpus],
@@ -398,7 +411,7 @@ export function CustomProviderPanel({ providerId, onSaved, onDeleted }: CustomPr
           </div>
         </div>
       ) : (
-        <div className={cn('flex flex-wrap items-center gap-2')}>
+        <div className="flex flex-wrap items-center gap-2">
           <Button type="button" size="sm" disabled={locked || problem !== null} onClick={() => void save()}>
             {busy ? S.customProviders.saving : S.customProviders.save}
           </Button>
@@ -407,7 +420,7 @@ export function CustomProviderPanel({ providerId, onSaved, onDeleted }: CustomPr
             size="sm"
             variant="outline"
             aria-busy={checking}
-            disabled={locked || !canCheck || !keySaved}
+            disabled={locked || !canCheck}
             onClick={() => void runCheck()}
           >
             {checking ? <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}

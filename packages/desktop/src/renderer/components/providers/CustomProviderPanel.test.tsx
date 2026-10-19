@@ -146,3 +146,100 @@ describe('CustomProviderPanel: старый хост', () => {
     expect(confirm).toHaveBeenCalled();
   });
 });
+
+describe('CustomProviderPanel: правки ревью задач 10–12', () => {
+  const loopback = (): ProviderInfo =>
+    custom({
+      id: 'custom-local', label: 'Local', keyHint: null, available: true,
+      custom: { ...custom().custom!, preset: null, baseUrl: 'http://localhost:8080', folder: '/Users/me/.parley/providers/custom-local' },
+    });
+
+  it('адрес на localhost без ключа: Check доступна и показывает ответ', async () => {
+    useProvidersStore.setState({ providers: [loopback()], reload } as never);
+    bridge.setHandler('providers.check', () => ({
+      check: { state: 'ok', at: '2026-10-19T09:30:00.000Z' },
+    }) as Result<'providers.check'>);
+    render(<CustomProviderPanel providerId="custom-local" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    const button = screen.getByRole('button', { name: S.customProviders.check }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    await waitFor(() => expect(bridge.calls[0]).toMatchObject({ method: 'providers.check', params: { provider: 'custom-local' } }));
+    const status = await screen.findByRole('status');
+    expect(status.textContent).toContain('Test request OK');
+  });
+
+  it('https-адрес без ключа: Check по-прежнему недоступна', () => {
+    useProvidersStore.setState({ providers: [custom({ keyHint: null })], reload } as never);
+    render(<CustomProviderPanel providerId="custom-kimi" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    expect((screen.getByRole('button', { name: S.customProviders.check }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('хост не подключён: нейтральная строка, а не «хост слишком старый»', () => {
+    useHostStore.setState({ status: { state: 'connecting' } });
+    render(<CustomProviderPanel providerId="new" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    expect(screen.getByText(S.customProviders.hostNotConnected)).toBeTruthy();
+    expect(screen.queryByText(S.customProviders.restartRequired)).toBeNull();
+    expect(screen.queryByRole('button', { name: S.customProviders.restartHost })).toBeNull();
+  });
+
+  it('смена плана/региона заменяет адрес, модели и окно контекста', () => {
+    render(<CustomProviderPanel providerId="new" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Qwen/ }));
+    expect(field(S.customProviders.addressField).value).toContain('coding-intl.dashscope');
+    fireEvent.change(screen.getByLabelText(S.customProviders.endpointField), { target: { value: 'token-plan' } });
+    expect(field(S.customProviders.addressField).value).toContain('token-plan.ap-southeast-1');
+    expect(field(S.customProviders.slotOpus).value).toBe('qwen3.8-max');
+    expect(field(S.customProviders.slotHaiku).value).toBe('qwen3.6-flash');
+  });
+
+  it('у своего адреса выбор способа отправки ключа меняет auth в saveCustom', async () => {
+    bridge.setHandler('providers.saveCustom', () => ({ id: 'custom-own' }));
+    render(<CustomProviderPanel providerId="new" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Own address/ }));
+    fireEvent.change(field(S.customProviders.nameField), { target: { value: 'Own' } });
+    fireEvent.change(field(S.customProviders.addressField), { target: { value: 'http://localhost:9000' } });
+    fireEvent.change(screen.getByLabelText(S.customProviders.authField), { target: { value: 'api-key' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: S.customProviders.oneModel }));
+    fireEvent.change(screen.getByLabelText(S.customProviders.oneModelField), { target: { value: 'm1' } });
+    fireEvent.click(screen.getByRole('button', { name: S.customProviders.save }));
+    await waitFor(() => expect(bridge.calls[0]).toMatchObject({ method: 'providers.saveCustom', params: { auth: 'api-key' } }));
+  });
+
+  it('после удачного Save поле ключа пусто', async () => {
+    bridge.setHandler('providers.saveCustom', () => ({ id: 'custom-kimi' }));
+    bridge.setHandler('providers.setKey', () => ({ keyHint: '••••a1b2' }));
+    render(<CustomProviderPanel providerId="new" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Kimi/ }));
+    fireEvent.change(field(S.customProviders.keyField), { target: { value: 'sk-secret-a1b2' } });
+    fireEvent.click(screen.getByRole('button', { name: S.customProviders.save }));
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+    await waitFor(() => expect(field(S.customProviders.keyField).value).toBe(''));
+  });
+
+  it('сбой setKey после saveCustom: повторный Save не создаёт дубль (id уже известен)', async () => {
+    let first = true;
+    bridge.setHandler('providers.saveCustom', () => ({ id: 'custom-kimi' }));
+    bridge.setHandler('providers.setKey', () => {
+      if (first) {
+        first = false;
+        throw encodeIpcError({ code: 'internal', message: 'boom sk-secret-a1b2' });
+      }
+      return { keyHint: '••••a1b2' };
+    });
+    render(<CustomProviderPanel providerId="new" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Kimi/ }));
+    fireEvent.change(field(S.customProviders.keyField), { target: { value: 'sk-secret-a1b2' } });
+    fireEvent.click(screen.getByRole('button', { name: S.customProviders.save }));
+    expect((await screen.findByRole('alert')).textContent).toContain('save the key');
+    expect(field(S.customProviders.keyField).value).toBe('sk-secret-a1b2');
+    fireEvent.click(screen.getByRole('button', { name: S.customProviders.save }));
+    await waitFor(() => expect(bridge.calls.filter((call) => call.method === 'providers.saveCustom')).toHaveLength(2));
+    expect(bridge.calls.filter((call) => call.method === 'providers.saveCustom').map((call) => (call.params as { id: string | null }).id)).toEqual([null, 'custom-kimi']);
+  });
+
+  it('плитка «Own address» и вендора несёт значок Parley', () => {
+    render(<CustomProviderPanel providerId="new" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    for (const tile of document.querySelectorAll('[data-vendor-tile]')) expect(tile.querySelector('[data-agent-icon]')).not.toBeNull();
+  });
+});
+

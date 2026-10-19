@@ -720,6 +720,7 @@ export const S = {
     cancel: 'Cancel',
     restartRequired: 'This host is too old to manage providers. Restart the host to update it.',
     restartHost: 'Restart host',
+    hostNotConnected: 'Host not connected.',
     checkingLine: 'Sending a test request…',
     checkHint: {
       authentication: 'The provider rejected the key. Paste the whole key again or create a new one.',

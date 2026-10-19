@@ -932,6 +932,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
                                 <ProviderCard
                                   provider={provider}
                                   onReload={reloadProviders}
+                                  onOpenSettings={() => setProviderCard(null)}
                                   onRestartHost={() => {
                                     setProviderCard(null);
                                     useUiStore.getState().confirmRestartHost();

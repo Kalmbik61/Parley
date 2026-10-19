@@ -20,6 +20,8 @@ export interface ProviderCardProps {
   onReload: () => Promise<void>;
   /** Открывает существующее подтверждение перезапуска хоста. */
   onRestartHost: () => void;
+  /** Перед открытием Settings из карточки своего провайдера: родитель закрывает свой слой (поповер). */
+  onOpenSettings?: () => void;
   /** Для родителя, который при закрытии оставляет карточку смонтированной. */
   open?: boolean;
 }
@@ -31,6 +33,7 @@ export function ProviderCard({
   provider,
   onReload,
   onRestartHost,
+  onOpenSettings,
   open = true,
 }: ProviderCardProps): JSX.Element | null {
   const [key, setKey] = useState('');
@@ -181,7 +184,10 @@ export function ProviderCard({
           type="button"
           size="sm"
           variant="outline"
-          onClick={() => useUiStore.getState().openSettingsDialog('providers', { provider: provider.id })}
+          onClick={() => {
+            onOpenSettings?.();
+            useUiStore.getState().openSettingsDialog('providers', { provider: provider.id });
+          }}
         >
           {S.customProviders.openInSettings}
         </Button>
