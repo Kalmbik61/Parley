@@ -385,6 +385,18 @@ describe('assistant-service: комната и решение ведущего',
     expect((await service.tool('propose_room', { ...ROOM, work: 'Auth' })).status).toBe(404);
     expect(last().proposal).toBeNull();
   });
+  it('propose_room: полный id сессии чужой работы с тем же s-03 — 404, карточки нет; свой полный id принимается', async () => {
+    const service = await started();
+    const overview = JSON.stringify((await service.tool('parley_overview', {})).body);
+    const own = /session:[0-9a-f]{6}:w-1:s-03/.exec(overview)?.[0];
+    expect(own).toBeDefined();
+    const foreign = own!.replace(':w-1:', ':w-2:');
+    const refused = await service.tool('propose_room', { ...ROOM, members: [foreign] });
+    expect(refused).toMatchObject({ status: 404, body: { error: expect.stringContaining('No session') } });
+    expect((refused.body as { error: string }).error).toContain('in work "Parley"');
+    expect(last().proposal).toBeNull();
+    expect((await service.tool('propose_room', { ...ROOM, members: [own!] })).status).toBe(200);
+  });
   it('createRoom бросил — decide вернул ошибку, карточка на месте', async () => {
     deps.createRoom = vi.fn().mockRejectedValue(new Error('S02 is closed'));
     const service = await started();
@@ -411,7 +423,7 @@ describe('assistant-service: комната и решение ведущего',
     const service = await started();
     const reply = await service.tool('propose_room_decision', { target: 'Gate', choice: 'return', note: 'add tests' });
     expect(reply.status).toBe(200);
-    expect(last().proposal).toMatchObject({ action: 'room-decision', target: 'Gate', text: 'Ship it', choice: 'return', note: 'add tests', proposal: { proposalId: 'p-01', rev: 2, kind: 'decision', from: 'S03 Ruslan', text: 'Ship it' } });
+    expect(last().proposal).toMatchObject({ action: 'room-decision', target: 'Gate', text: 'Return Gate: Ship it', choice: 'return', note: 'add tests', proposal: { proposalId: 'p-01', rev: 2, kind: 'decision', from: 'S03 Ruslan', text: 'Ship it' } });
     await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: true, error: null });
     expect(deps.resolveRoomProposal).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', roomId: 'r-2', proposalId: 'p-01', action: 'return', note: 'add tests', rev: 2 });
     expect(last()).toMatchObject({ proposal: null, outcome: 'done' });
@@ -561,6 +573,93 @@ describe('assistant-service: решение по карточке агента',
     await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: false, error: 'boom' });
     expect(last().proposal).not.toBeNull();
   });
+  it('текст карточки решения начинается с глагола: Allow / Deny / Accept plan / Approve each edit', async () => {
+    snapshots['s-03'] = { items: [card('c1', 'ls'), { kind: 'plan', cardId: 'pl', id: 'pl', state: 'pending', plan: 'step 1\nstep 2' }] };
+    const service = await started();
+    await service.tool('propose_decision', { target: 'S03', decision: { kind: 'permission', behavior: 'allow' } });
+    expect(last().proposal?.text).toMatch(/^Allow S03 Ruslan: Bash: ls/);
+    await service.tool('propose_decision', { target: 'S03', decision: { kind: 'permission', behavior: 'deny' } });
+    expect(last().proposal?.text).toMatch(/^Deny S03 Ruslan: /);
+    await service.tool('propose_decision', { target: 'S03', decision: { kind: 'plan', choice: 'auto-accept' } });
+    expect(last().proposal?.text).toMatch(/^Accept plan S03 Ruslan: Plan/);
+    await service.tool('propose_decision', { target: 'S03', decision: { kind: 'plan', choice: 'manual' } });
+    expect(last().proposal?.text).toMatch(/^Approve each edit S03 Ruslan: Plan/);
+  });
+  describe('вопросы агента', () => {
+    const question = (cardId: string, questions: Array<{ question: string; options: string[]; multiSelect?: boolean }>) => ({
+      kind: 'question', cardId, id: cardId, state: 'pending', toolUseId: null,
+      questions: questions.map((item) => ({ question: item.question, header: null, multiSelect: item.multiSelect ?? false, options: item.options.map((label) => ({ label, description: null })) })),
+    });
+    const ONE = question('q1', [{ question: 'Which DB?', options: ['Postgres', 'SQLite'] }]);
+    const TWO = question('q2', [{ question: 'Which DB?', options: ['Postgres', 'SQLite'] }, { question: 'Which tags?', options: ['a', 'b', 'c'], multiSelect: true }]);
+
+    it('номер вопроса переводится в его текст; ответ по метке без учёта регистра берётся в её написании; текст карточки показывает ответ', async () => {
+      snapshots['s-03'] = { items: [ONE] };
+      const service = await started();
+      const reply = await service.tool('propose_decision', { target: 'S03', decision: { kind: 'question', answers: { Q1: 'sqlite' } } });
+      expect(reply.status).toBe(200);
+      expect(last().proposal).toMatchObject({ decision: { kind: 'question', answers: { 'Which DB?': 'SQLite' } } });
+      expect(last().proposal?.text).toMatch(/^Answer S03 Ruslan: Question: Which DB\?/);
+      expect(last().proposal?.text).toMatch(/\nA: SQLite$/);
+    });
+    it('несколько вопросов: ключ — номер или точный текст, multiSelect нормализуется по частям, строки A1/A2', async () => {
+      snapshots['s-03'] = { items: [TWO] };
+      const service = await started();
+      const reply = await service.tool('propose_decision', { target: 'S03', decision: { kind: 'question', answers: { '1': 'Postgres', 'Which tags?': 'B, a' } } });
+      expect(reply.status).toBe(200);
+      expect(last().proposal).toMatchObject({ decision: { kind: 'question', answers: { 'Which DB?': 'Postgres', 'Which tags?': 'b, a' } } });
+      expect(last().proposal?.text).toMatch(/\nA1: Postgres\nA2: b, a$/);
+    });
+    it('чужой ключ — 400, в сообщении вопросы и варианты; карточки нет', async () => {
+      snapshots['s-03'] = { items: [ONE] };
+      const service = await started();
+      const reply = await service.tool('propose_decision', { target: 'S03', decision: { kind: 'question', answers: { 'Какая база?': 'Postgres' } } });
+      expect(reply.status).toBe(400);
+      expect(JSON.stringify(reply.body)).toContain('1. \\"Which DB?\\" — options: Postgres | SQLite (free text allowed)');
+      expect(last().proposal).toBeNull();
+    });
+    it('два вопроса, ответ только на один — 400', async () => {
+      snapshots['s-03'] = { items: [TWO] };
+      const service = await started();
+      const reply = await service.tool('propose_decision', { target: 'S03', decision: { kind: 'question', answers: { '1': 'Postgres' } } });
+      expect(reply.status).toBe(400);
+      expect(JSON.stringify(reply.body)).toContain('2. \\"Which tags?\\"');
+      expect((await service.tool('propose_decision', { target: 'S03', decision: { kind: 'question', answers: { '1': 'Postgres', '2': '  ' } } })).status).toBe(400);
+    });
+    it('свободный текст остаётся как есть', async () => {
+      snapshots['s-03'] = { items: [ONE] };
+      const service = await started();
+      await service.tool('propose_decision', { target: 'S03', decision: { kind: 'question', answers: { '1': 'MySQL, пожалуй' } } });
+      expect(last().proposal).toMatchObject({ decision: { answers: { 'Which DB?': 'MySQL, пожалуй' } } });
+    });
+    it('parley_detail сессии показывает ждущую карточку с вариантами', async () => {
+      snapshots['s-03'] = { items: [TWO] };
+      const service = await started();
+      const reply = await service.tool('parley_detail', { target: 'S03' });
+      const text = (reply.body as { text: string }).text;
+      expect(text).toContain('Waiting:');
+      expect(text).toContain('(card q2)');
+      expect(text).toContain('Q1: Which DB?');
+      expect(text).toContain('- SQLite');
+      expect(text).toContain('Q2: Which tags?');
+    });
+  });
+  it('feed.decide: хук ещё не удержан (state pending) — карточка остаётся, текст «not ready»', async () => {
+    const service = await started();
+    await service.tool('propose_decision', { target: 'S03', decision: { kind: 'permission', behavior: 'allow' } });
+    decide.mockResolvedValue({ applied: false, state: 'pending' });
+    await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: false, error: 'The agent is not ready for the answer yet — try again' });
+    expect(last().proposal).not.toBeNull();
+    decide.mockResolvedValue({ applied: true, state: 'allowed' });
+    await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: true, error: null });
+  });
+  it('feed.decide: карточка устарела (state stale) — исход cancelled, «Expired»', async () => {
+    const service = await started();
+    await service.tool('propose_decision', { target: 'S03', decision: { kind: 'permission', behavior: 'allow' } });
+    decide.mockResolvedValue({ applied: false, state: 'stale' });
+    await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: true, error: 'Expired — the request is no longer open' });
+    expect(last()).toMatchObject({ proposal: null, outcome: 'cancelled' });
+  });
   it('detail инструмента propose_decision — propose', async () => {
     const service = await started();
     turns[0]?.emit({ type: 'tool', name: 'propose_decision', input: {} });
@@ -582,6 +681,22 @@ describe('assistant-service: напоминания', () => {
     expect(add).toHaveBeenCalledWith({ what: 'check the release room', inMinutes: 5, now: at });
     expect(reply).toEqual({ status: 200, body: { text: `Scheduled r1 for ${clock(at + 5 * 60_000)} (in 5 minutes)` } });
   });
+  it('schedule_check меньше минуты — «in less than a minute»', async () => {
+    const at = Date.UTC(2026, 9, 19, 12, 0, 0);
+    const add = vi.fn().mockReturnValue({ ...REMINDER, at: new Date(at + 20_000).toISOString() });
+    const service = createAssistantService({ ...deps, now: () => at, reminders: { ...deps.reminders, add } });
+    await service.ask(ASK);
+    const reply = await service.tool('schedule_check', { in_minutes: 1, what: 'x' });
+    expect(reply).toEqual({ status: 200, body: { text: `Scheduled r1 for ${clock(at + 20_000)} (in less than a minute)` } });
+  });
+  it('list_reminders: напоминание не сегодня — после времени «tomorrow»', async () => {
+    const now = new Date(2026, 9, 19, 23, 30).getTime();
+    const later = new Date(2026, 9, 20, 7, 0).getTime();
+    const list = vi.fn().mockReturnValue([{ ...REMINDER, at: new Date(later).toISOString() }]);
+    const service = createAssistantService({ ...deps, now: () => now, reminders: { ...deps.reminders, list } });
+    await service.ask(ASK);
+    expect(await service.tool('list_reminders', {})).toEqual({ status: 200, body: { text: `r1 — ${clock(later)} tomorrow — check the release room` } });
+  });
   it('schedule_check: ошибка хранилища — 400 с текстом', async () => {
     const service = createAssistantService({ ...deps, reminders: { ...deps.reminders, add: vi.fn().mockReturnValue({ error: 'Too many reminders (10 at most)' }) } });
     await service.ask(ASK);
@@ -591,7 +706,7 @@ describe('assistant-service: напоминания', () => {
   it('list_reminders и cancel_reminder', async () => {
     const list = vi.fn().mockReturnValue([{ ...REMINDER, every: 10 }, { ...REMINDER, id: 'r2', what: 'once' }]);
     const cancel = vi.fn().mockReturnValue(2);
-    const service = createAssistantService({ ...deps, reminders: { ...deps.reminders, list, cancel } });
+    const service = createAssistantService({ ...deps, now: () => Date.parse(REMINDER.at), reminders: { ...deps.reminders, list, cancel } });
     await service.ask(ASK);
     const time = clock(Date.parse(REMINDER.at));
     expect(await service.tool('list_reminders', {})).toEqual({ status: 200, body: { text: `r1 — ${time} — every 10 min — check the release room\nr2 — ${time} — once` } });
@@ -712,9 +827,40 @@ describe('assistant-service: ревью — карточка и напомина
     expect(result).toBe('later');
     expect(turns).toHaveLength(1);
   });
-  it('хоста ещё нет (endpoint.origin() === null) — напоминание skipped, не fired', async () => {
+  it('хоста ещё нет (endpoint.origin() === null) — напоминание retry: не fired и не потеряно', async () => {
     const service = createAssistantService({ ...deps, endpoint: { origin: () => null, setToken: () => {} } });
-    expect(await service.onReminder(REMINDER, false)).toBe('skipped');
+    expect(await service.onReminder(REMINDER, false)).toBe('retry');
+    expect(turns).toHaveLength(0);
+  });
+  it('человек спросил, пока запускался ход по напоминанию, — retry, хода по напоминанию нет', async () => {
+    let release: (() => void) | null = null;
+    let first = true;
+    const service = createAssistantService({
+      ...deps,
+      launchEnv: () => {
+        if (!first) return Promise.resolve({});
+        first = false;
+        return new Promise((resolve) => { release = () => resolve({}); });
+      },
+    });
+    let result: string | null = null;
+    const firing = service.onReminder(REMINDER, false).then((value) => { result = value; });
+    await vi.waitFor(() => expect(release).not.toBeNull());
+    await service.ask(ASK);
+    release!();
+    await firing;
+    expect(result).toBe('retry');
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.spec.args[1]).toBe(ASK.text);
+  });
+  it('stop(), пока ход ещё запускается (launchEnv в пути), — процесс не стартует', async () => {
+    let release: (() => void) | null = null;
+    const service = createAssistantService({ ...deps, launchEnv: () => new Promise((resolve) => { release = () => resolve({}); }) });
+    const asking = service.ask(ASK);
+    await vi.waitFor(() => expect(release).not.toBeNull());
+    service.stop();
+    release!();
+    await asking;
     expect(turns).toHaveLength(0);
   });
   it('провайдер сменился вопросом человека, пока напоминание ждало, — ход по новому', async () => {

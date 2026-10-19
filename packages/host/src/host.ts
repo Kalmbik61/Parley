@@ -458,7 +458,6 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     log: (line) => log.info(line),
   });
   const reminderTarget = assistantService;
-  reminders.start((reminder, late) => reminderTarget.onReminder(reminder, late));
   handle.context.onShutdown(async () => reminders.stop());
   handle.context.onShutdown(async () => assistantService?.stop());
 
@@ -609,6 +608,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       }),
     );
   }
+  // Напоминания — после ворот работ и приёмника хуков: раньше ход помощника упёрся бы в «хоста ещё нет».
+  reminders.start((reminder, late) => reminderTarget.onReminder(reminder, late));
   await activityService.start();
   planEffects.start();
   history.start();

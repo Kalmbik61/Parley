@@ -57,15 +57,25 @@ function clip(text: string, max: number): string {
 export function cardDetail(card: FeedCard, max = 1500): string | null {
   if (card.kind === 'plan') return clip(card.plan, max);
   if (card.kind === 'question') {
-    const first = card.questions[0];
-    if (first === undefined) return null;
-    const lines = [`Q: ${first.question}`, ...first.options.map((option) => `- ${option.label}`)];
-    return clip(lines.join('\n'), max);
+    if (card.questions.length === 0) return null;
+    const block = (question: (typeof card.questions)[number], label: string): string => [`${label}: ${question.question}`, ...question.options.map((option) => `- ${option.label}`)].join('\n');
+    const [only] = card.questions;
+    if (card.questions.length === 1 && only !== undefined) return clip(block(only, 'Q'), max);
+    return clip(card.questions.map((question, index) => block(question, `Q${index + 1}`)).join('\n\n'), max);
   }
   const command = commandOf(card.toolInput);
   if (command !== null) return clip(command, max);
-  const { old_string: before, new_string: after } = card.toolInput;
+  const { old_string: before, new_string: after, content, edits, new_source: source } = card.toolInput;
   if (typeof before === 'string' && typeof after === 'string') return clip(`${before}\n→\n${after}`, max);
+  if (typeof content === 'string') return clip(content, max);
+  if (typeof source === 'string') return clip(source, max);
+  if (Array.isArray(edits)) {
+    const parts = edits.flatMap((edit: unknown) => {
+      const { old_string: from, new_string: to } = (typeof edit === 'object' && edit !== null ? edit : {}) as Record<string, unknown>;
+      return typeof from === 'string' && typeof to === 'string' ? [`${from}\n→\n${to}`] : [];
+    });
+    if (parts.length > 0) return clip(parts.join('\n---\n'), max);
+  }
   return null;
 }
 

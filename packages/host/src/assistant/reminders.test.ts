@@ -192,6 +192,43 @@ describe('reminders: ревью', () => {
     expect(await readFile(file(), 'utf8')).toBe(before);
     expect(store.list().map((item) => item.id)).toEqual(['r1']);
   });
+  it("'retry' оставляет напоминание в файле и зовёт onDue снова через 5 секунд", async () => {
+    await seed({ version: 1, counter: 1, reminders: [overdue('r1', 5)] });
+    const before = await readFile(file(), 'utf8');
+    const onDue = vi.fn().mockResolvedValueOnce('retry').mockResolvedValue('fired');
+    store.start(onDue);
+    await advance(0);
+    expect(onDue).toHaveBeenCalledTimes(1);
+    expect(await readFile(file(), 'utf8')).toBe(before);
+    expect(store.list().map((item) => item.id)).toEqual(['r1']);
+    await advance(4_000);
+    expect(onDue).toHaveBeenCalledTimes(1);
+    await advance(1_000);
+    expect(onDue).toHaveBeenCalledTimes(2);
+    expect(store.list()).toEqual([]);
+  });
+  it('файл с every: 0 или битой датой — такие напоминания отброшены, start возвращается, в журнале строка', async () => {
+    const good = overdue('r1', 5);
+    await seed({ version: 1, reminders: [{ ...overdue('r2', 5), every: 0 }, { ...overdue('r3', 5), every: 2000 }, { ...overdue('r4', 5), createdAt: 'nope' }, { ...overdue('r5', 5), askedAt: 'nope' }, good] });
+    const onDue = vi.fn().mockResolvedValue('fired');
+    store.start(onDue);
+    await advance(0);
+    expect(onDue).toHaveBeenCalledTimes(1);
+    expect(onDue.mock.calls[0]?.[0]).toMatchObject({ id: 'r1' });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('4 invalid reminder(s) dropped'));
+  });
+  it('сон: таймер не дальше минуты — напоминание через 10 минут не срабатывает раньше срока и срабатывает вовремя', async () => {
+    const onDue = vi.fn().mockResolvedValue('fired');
+    store.start(onDue);
+    added(store.add({ what: 'x', inMinutes: 10, now: clock }));
+    await advance(MIN);
+    expect(onDue).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1); // тик перевзвёл таймер
+    await advance(8 * MIN);
+    expect(onDue).not.toHaveBeenCalled();
+    await advance(MIN);
+    expect(onDue).toHaveBeenCalledTimes(1);
+  });
   it('счётчик id хранится в файле: после пустого списка id не повторяется; старый файл без counter читается', async () => {
     added(store.add({ what: 'a', inMinutes: 5, now: clock }));
     store.cancel('*');

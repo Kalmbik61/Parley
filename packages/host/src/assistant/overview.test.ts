@@ -197,6 +197,19 @@ describe('overviewText: ждущие карточки и решения комн
     expect(text).toContain('Decision from S03 Ruslan (p-03, rev 1): Принять');
     expect(text.split('Decision from ')[1]?.length).toBeGreaterThan(300);
   });
+  it('detailText сессии с ждущей карточкой — раздел Waiting: со строкой карточки и вариантами', () => {
+    const src = source([entry('/p/one', 'w-1', 'Parley')], { 's-03': live('blocked'), 's-05': live('idle') });
+    const target = targetsOf(src).find((item) => item.kind === 'session' && item.name.startsWith('S03'));
+    const card = {
+      kind: 'question', id: 'q1', cardId: 'q1', at: '', state: 'pending', toolUseId: null, toolName: 'AskUserQuestion', toolInput: {},
+      questions: [{ question: 'Which db?', header: null, multiSelect: false, options: [{ label: 'pg', description: null }, { label: 'sqlite', description: null }] }],
+    } as unknown as FeedCard;
+    const text = detailText(src, target!, null, [card]);
+    expect(text).toContain('Waiting:');
+    expect(text).toContain('question — Which db? (card q1)');
+    expect(text).toContain('- sqlite');
+    expect(detailText(src, target!, null)).not.toContain('Waiting:');
+  });
   it('detailText работы — её снимок', () => {
     const src = source([entry('/p/one', 'w-1', 'Parley')], {});
     expect(detailText(src, targetsOf(src)[0]!, null)).toContain('Room "Auth"');

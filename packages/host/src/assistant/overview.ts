@@ -7,6 +7,7 @@
 
 import { createHash } from 'node:crypto';
 import {
+  cardDetail,
   cardGist,
   participantLabel,
   sessionDotState,
@@ -190,8 +191,11 @@ export function overviewText(source: OverviewSource, maxChars = 8000): string {
   return shown.join('\n\n');
 }
 
-/** Подробности одной цели (спека 7.2.2). `lastReply` — последний ответ агента из ленты, только у сессии. */
-export function detailText(source: OverviewSource, target: AssistantTarget, lastReply: string | null): string {
+/**
+ * Подробности одной цели (спека 7.2.2). `lastReply` — последний ответ агента из ленты, только у сессии;
+ * `cards` — её ждущие карточки: с вариантами ответа целиком, чтобы модель отвечала на вопрос по существу.
+ */
+export function detailText(source: OverviewSource, target: AssistantTarget, lastReply: string | null, cards: readonly FeedCard[] = []): string {
   const projectPath = target.kind === 'session' ? target.ref.projectPath : target.projectPath;
   const workId = target.kind === 'session' ? target.ref.workId : target.workId;
   const entry = source.entries.find((item) => item.projectPath === projectPath && item.map.work.id === workId);
@@ -207,6 +211,14 @@ export function detailText(source: OverviewSource, target: AssistantTarget, last
     const live = source.live(target.ref);
     const lines = [sessionLine(entry, session, sessionDotState(session, live?.activity.activity ?? null), live, source.cards?.(target.ref)).trim()];
     if (lastReply !== null) lines.push(`Last reply: ${oneLine(lastReply, 1500)}`);
+    if (cards.length > 0) {
+      lines.push('Waiting:');
+      for (const card of cards) {
+        lines.push(`  ${cardLine(card, entry.projectPath)}`);
+        const detail = cardDetail(card);
+        if (detail !== null && detail !== '') lines.push(...detail.split('\n').map((line) => `    ${line}`));
+      }
+    }
     return lines.join('\n');
   }
   const room = map.rooms.find((item) => item.id === target.roomId);

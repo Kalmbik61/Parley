@@ -93,7 +93,7 @@ export interface AssistantService {
   sent(ref: SessionRef): Promise<Array<{ text: string; at: string }>>;
   tool(name: string, args: unknown): Promise<AssistantReply>;
   /** Срок напоминания (его отдаёт хост в `reminders.start`): ждёт конца идущего хода и сам запускает новый. */
-  onReminder(reminder: Reminder, late: boolean): Promise<'fired' | 'skipped' | 'later'>;
+  onReminder(reminder: Reminder, late: boolean): Promise<'fired' | 'skipped' | 'later' | 'retry'>;
   stop(): void;
 }
 
@@ -148,6 +148,9 @@ interface Ask {
   ticket: number;
   origin: AssistantOrigin;
 }
+
+/** Чем кончился запуск хода: `not-ready` и `evicted` — повторять позже, `failed` — ошибка уже показана окну. */
+type StartReason = 'started' | 'not-ready' | 'evicted' | 'failed';
 
 const firstLine = (text: string): string => text.split('\n')[0]?.trim() ?? '';
 /** Почему сессии в этом состоянии нельзя передать сообщение; `null` — можно (`active` — отправка, `sleeping` — подъём). Нет сессии — закрыта. */
@@ -294,14 +297,14 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     releaseWaiters();
   }
 
-  async function start(entry: ProviderEntry, model: string | null, language: AssistantLanguage, text: string, retried: boolean, ask: Ask): Promise<boolean> {
+  async function start(entry: ProviderEntry, model: string | null, language: AssistantLanguage, text: string, retried: boolean, ask: Ask): Promise<StartReason> {
     const current = await ensure(entry, model, language);
     const next = state.turn + 1;
     const askId = ask.id;
     const base = deps.endpoint.origin();
     if (base === null) {
       publish({ ...EMPTY, proposal: state.proposal, phase: 'error', mood: 'error', question: text, error: 'Parley is still starting — try again', turn: next, askId, origin: ask.origin });
-      return false;
+      return 'not-ready';
     }
     const url = `${base}${ASSISTANT_PATH}`;
     const { mcpFile, promptFile } = await files(current, url);
@@ -322,18 +325,19 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     );
     if (command === null) {
       publish({ ...EMPTY, proposal: state.proposal, phase: 'offline', question: text, error: `${entry.label} can't run the assistant`, turn: next, askId, origin: ask.origin });
-      return false;
+      return 'failed';
     }
     let binary: string;
     try {
       binary = await deps.binary(command.command);
     } catch {
       publish({ ...EMPTY, proposal: state.proposal, phase: 'offline', question: text, error: `${entry.label} CLI is not installed`, turn: next, askId, origin: ask.origin });
-      return false;
+      return 'failed';
     }
     const env = await deps.launchEnv(entry);
     // Пока запуск ждал, человек отменил вопрос (закрыл остров) или задал новый: этот ход не нужен.
-    if (ask.ticket !== asks) return false;
+    // Остановка хоста во время запуска — то же самое: процесс уже не нужен.
+    if (ask.ticket !== asks || stopped) return 'evicted';
     publish({ phase: 'thinking', detail: null, question: text, answer: '', mood: 'calm', outcome: null, error: null, turn: next, askId, origin: ask.origin });
 
     // Эмоцию решает первый текст после последнего инструмента: GLM ставит метку до инструмента отдельным блоком.
@@ -377,7 +381,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         publish({ phase: 'error', mood: 'error', detail: null, error: 'Something went wrong — try again' });
       })
       .finally(releaseWaiters);
-    return true;
+    return 'started';
   }
 
   async function finish(end: TurnEnd, entry: ProviderEntry, model: string | null, language: AssistantLanguage, text: string, retried: boolean, current: Conversation, ask: Ask): Promise<void> {
@@ -489,11 +493,14 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   const workMap = (src: OverviewSource, target: { projectPath: string; workId: string }): WorkMap | undefined =>
     src.entries.find((entry) => entry.projectPath === target.projectPath && entry.map.work.id === target.workId)?.map;
 
-  /** Сессия работы по id, имени («S03», «S03 Ruslan») или id цели; закрытые тоже находятся — о них скажет `unreachable`. */
-  function memberOf(map: WorkMap, wanted: string): { session: { id: string; name: string; lifecycle: SessionLifecycle } } | AssistantReply {
+  /**
+ * Сессия работы по id, имени («S03», «S03 Ruslan») или полному id цели; закрытые тоже находятся — о них скажет `unreachable`.
+ * Полный id принимается только этой работы (`prefix`): номера сессий у каждой работы свои, чужой `s-03` не подходит.
+ */
+  function memberOf(map: WorkMap, wanted: string, prefix: string): { session: { id: string; name: string; lifecycle: SessionLifecycle } } | AssistantReply {
     const key = wanted.trim().toLowerCase();
     const all = map.sessions.map((session) => ({ id: session.id, name: participantLabel(map, session.id), lifecycle: session.lifecycle }));
-    const matches = all.filter((session) => key !== '' && (session.id.toLowerCase() === key || key.endsWith(`:${session.id.toLowerCase()}`) || session.name.toLowerCase() === key || session.name.toLowerCase().split(' ')[0] === key));
+    const matches = all.filter((session) => key !== '' && (session.id.toLowerCase() === key || key === `session:${prefix}:${session.id}`.toLowerCase() || session.name.toLowerCase() === key || session.name.toLowerCase().split(' ')[0] === key));
     const [only] = matches;
     if (matches.length === 1 && only !== undefined) return { session: only };
     if (matches.length > 1) return { status: 400, body: { error: `"${wanted}" matches several sessions of "${map.work.title}": ${matches.map((session) => session.name).join(', ')}` } };
@@ -511,9 +518,10 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     if (title === '' || title.length > MAX_TITLE) return { status: 400, body: { error: `title must be 1–${MAX_TITLE} characters` } };
     const wanted = Array.isArray(input['members']) ? input['members'].filter((item): item is string => typeof item === 'string' && item.trim() !== '') : [];
     if (wanted.length === 0) return { status: 400, body: { error: 'members is empty; name at least one session of the work' } };
+    const prefix = work.id.replace(/^work:/, '');
     const members: Array<{ id: string; name: string }> = [];
     for (const name of wanted) {
-      const result = memberOf(map, name);
+      const result = memberOf(map, name, prefix);
       if (!('session' in result)) return result;
       const { session } = result;
       const refusal = unreachable(session.name, session.lifecycle);
@@ -524,7 +532,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const leadWanted = stringArg(input, 'lead').trim();
     let lead = members[0] as { id: string; name: string };
     if (leadWanted !== '') {
-      const result = memberOf(map, leadWanted);
+      const result = memberOf(map, leadWanted, prefix);
       if (!('session' in result)) return result;
       const chosen = members.find((member) => member.id === result.session.id);
       if (chosen === undefined) return { status: 400, body: { error: `lead ${result.session.name} is not among members` } };
@@ -578,7 +586,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         id: `p${proposals}`,
         target: room.name,
         where: room.where,
-        text: slot.text,
+        text: `${choice === 'accept' ? 'Accept' : 'Return'} ${room.name}: ${slot.text}`,
         proposal: {
           proposalId: slot.id,
           rev: slot.rev,
@@ -595,6 +603,33 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     };
     publish({ proposal: pending.view, outcome: null });
     return { status: 200, body: { text: CARD_SHOWN } };
+  }
+
+  /**
+   * Ответы на вопросы карточки: ключ — номер вопроса (`1`, `Q1`) или его точный текст, как у окна. Покрыть нужно каждый
+   * вопрос; ответ, совпавший с меткой варианта по регистру, берётся в её написании, остальное остаётся свободным текстом.
+   */
+  function checkAnswers(card: Extract<FeedCard, { kind: 'question' }>, given: Record<string, string>): { answers: Record<string, string> } | { error: string } {
+    const answers: Record<string, string> = {};
+    let unknown = false;
+    for (const [rawKey, value] of Object.entries(given)) {
+      const key = rawKey.trim();
+      const number = /^q?(\d+)$/i.exec(key)?.[1];
+      const question = card.questions.find((candidate) => candidate.question.trim() === key) ?? (number === undefined ? undefined : card.questions[Number(number) - 1]);
+      if (question === undefined) {
+        unknown = true;
+        continue;
+      }
+      const labels = question.options.map((option) => option.label);
+      const label = (text: string): string => labels.find((candidate) => candidate.toLowerCase() === text.trim().toLowerCase()) ?? text.trim();
+      const whole = labels.find((candidate) => candidate.toLowerCase() === value.trim().toLowerCase());
+      answers[question.question] = whole ?? (question.multiSelect ? value.split(', ').map(label).join(', ') : value.trim());
+    }
+    if (!unknown && card.questions.every((question) => (answers[question.question] ?? '') !== '')) return { answers };
+    const list = card.questions
+      .map((question, index) => `${index + 1}. "${question.question}"${question.options.length === 0 ? '' : ` — options: ${question.options.map((option) => option.label).join(' | ')}`} (free text allowed)`)
+      .join('; ');
+    return { error: `answers must cover every question, by its number or exact text: ${list}` };
   }
 
   async function proposeDecision(input: Record<string, unknown>, targets: readonly AssistantTarget[]): Promise<AssistantReply> {
@@ -629,8 +664,18 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       decision = { kind: 'permission', behavior: decision.behavior, ...(decision.message === undefined ? {} : { message: decision.message }) };
       note = ' (always is not offered for this request, proposed a one-time allow)';
     }
+    let chosenAnswers: string[] = [];
+    if (decision.kind === 'question' && card.kind === 'question') {
+      const checked = checkAnswers(card, decision.answers);
+      if ('error' in checked) return { status: 400, body: { error: checked.error } };
+      decision = { kind: 'question', answers: checked.answers };
+      chosenAnswers = card.questions.map((question) => checked.answers[question.question] ?? '');
+    }
     const summary = hostSummary(card, projectPath);
     const detail = cardDetail(card);
+    const verb =
+      decision.kind === 'permission' ? (decision.behavior === 'allow' ? 'Allow' : 'Deny') : decision.kind === 'question' ? 'Answer' : decision.choice === 'auto-accept' ? 'Accept plan' : 'Approve each edit';
+    const answerLines = chosenAnswers.map((answer, index) => `\n${chosenAnswers.length === 1 ? 'A' : `A${index + 1}`}: ${answer}`).join('');
     proposals += 1;
     pending = {
       token: conversation?.token ?? '',
@@ -640,7 +685,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         id: `p${proposals}`,
         target: session.name,
         where: session.where,
-        text: summary + (detail === null || detail === '' ? '' : `\n${detail}`),
+        text: `${verb} ${session.name}: ${summary}${detail === null || detail === '' ? '' : `\n${detail}`}${answerLines}`,
         card: { cardId: card.cardId, kind: card.kind, summary, detail },
         decision,
       },
@@ -674,6 +719,16 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       }),
     );
     return map;
+  }
+
+  /** Ждущие карточки одной сессии для `parley_detail`; сбой ленты — без карточек. */
+  async function waitingCardsOf(ref: SessionRef): Promise<readonly FeedCard[]> {
+    if (deps.feed === undefined) return [];
+    try {
+      return pendingCards((await deps.feed.snapshot(ref, undefined, 'attention')).items);
+    } catch {
+      return [];
+    }
   }
 
   /** Закрывает карточку: `reason` попадает в системную заметку модели, `error` — в ответ окну (карточка при этом уже закрыта). */
@@ -757,12 +812,17 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     if (deps.feed === undefined) return { applied: false, error: 'The agent feed is not available' };
     const result = await deps.feed.decide(current.ref, current.view.card.cardId, current.view.decision);
     // Карточку успели закрыть в другом месте (терминал, окно): ответ не ушёл, показываем это, а не успех.
-    if (!result.applied) return settle(current, 'cancelled', 'already answered', 'Already answered');
+    if (!result.applied) {
+      // Хук ещё не удержан: карточка остаётся, человек повторит.
+      if (result.state === 'pending') return { applied: false, error: 'The agent is not ready for the answer yet — try again' };
+      if (result.state === 'stale') return settle(current, 'cancelled', 'expired', 'Expired — the request is no longer open');
+      return settle(current, 'cancelled', 'already answered', 'Already answered');
+    }
     return settle(current, 'done');
   }
 
   /** Запускает ход по вопросу человека (`island`) или по напоминанию (`reminder`). */
-  async function runAsk(params: Params<'assistant.ask'>, origin: AssistantOrigin): Promise<'started' | 'failed'> {
+  async function runAsk(params: Params<'assistant.ask'>, origin: AssistantOrigin): Promise<StartReason> {
     inflight += 1;
     try {
       stopTurn();
@@ -775,7 +835,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
           return 'failed';
         }
         const model = params.model ?? ASSISTANT_DEFAULT_MODELS[picked.entry.id] ?? null;
-        return (await start(picked.entry, model, params.language, params.text, false, ask)) ? 'started' : 'failed';
+        return await start(picked.entry, model, params.language, params.text, false, ask);
       } catch (error) {
         deps.log(`assistant: ask failed: ${(error as Error).message}`);
         // Номер хода и `askId` — и у сбоя: окно по ним узнаёт, что вопрос дошёл, и перестаёт показывать «Sending…».
@@ -793,7 +853,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   function reminderTool(name: string, input: Record<string, unknown>): AssistantReply {
     if (name === 'list_reminders') {
       const all = deps.reminders.list();
-      const text = all.length === 0 ? 'No reminders scheduled' : all.map((item) => `${item.id} — ${clock(Date.parse(item.at))} — ${item.every === null ? '' : `every ${item.every} min — `}${item.what}`).join('\n');
+      const text = all.length === 0 ? 'No reminders scheduled' : all.map((item) => `${item.id} — ${clock(Date.parse(item.at))}${new Date(Date.parse(item.at)).toDateString() === new Date(now()).toDateString() ? '' : ' tomorrow'} — ${item.every === null ? '' : `every ${item.every} min — `}${item.what}`).join('\n');
       return { status: 200, body: { text } };
     }
     if (name === 'cancel_reminder') {
@@ -818,8 +878,10 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       now: stamp,
     });
     if ('error' in added) return { status: 400, body: { error: added.error } };
-    const minutes = Math.max(1, Math.round((Date.parse(added.at) - stamp) / 60_000));
-    return { status: 200, body: { text: `Scheduled ${added.id} for ${clock(Date.parse(added.at))} (in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'})` } };
+    const delay = Date.parse(added.at) - stamp;
+    const minutes = Math.max(1, Math.round(delay / 60_000));
+    const when = delay < 60_000 ? 'in less than a minute' : `in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
+    return { status: 200, body: { text: `Scheduled ${added.id} for ${clock(Date.parse(added.at))} (${when})` } };
   }
 
   return {
@@ -882,8 +944,10 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         case 'parley_detail': {
           const found = resolveTarget(targets, stringArg(input, 'target'));
           if ('error' in found) return { status: 404, body: { error: found.error } };
-          const reply = found.target.kind === 'session' ? await lastReply(found.target.ref) : null;
-          return { status: 200, body: { text: detailText(src, found.target, reply) } };
+          const target = found.target;
+          const reply = target.kind === 'session' ? await lastReply(target.ref) : null;
+          const waiting = target.kind === 'session' ? await waitingCardsOf(target.ref) : [];
+          return { status: 200, body: { text: detailText(src, target, reply, waiting) } };
         }
         case 'propose_message':
           return propose(input, src, targets);
@@ -923,10 +987,12 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       }
       const flags = `${late ? ', late' : ''}${isLastCheck(reminder, now()) ? ', last check' : ''}`;
       const result = await runAsk({ text: `[reminder ${reminder.id}, asked at ${reminder.askedAt}${flags}] Check: ${reminder.what}`, ...wanted }, 'reminder');
-      return result === 'started' ? 'fired' : 'skipped';
+      // Хоста ещё нет или запуск перебит — ход ещё можно провести позже; ошибка уже показана окну.
+      return result === 'started' ? 'fired' : result === 'failed' ? 'skipped' : 'retry';
     },
     stop() {
       stopped = true;
+      asks += 1; // запуск, что ещё в пути, не стартует
       stopTurn();
       const waiters = idleWaiters;
       idleWaiters = [];

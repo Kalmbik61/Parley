@@ -87,7 +87,7 @@ export const ASSISTANT_TOOLS: Tool[] = [
               type: 'object',
               properties: {
                 kind: { type: 'string', enum: ['question'] },
-                answers: { type: 'object', additionalProperties: { type: 'string' }, description: 'The answers, by question, as plain strings.' },
+                answers: { type: 'object', additionalProperties: { type: 'string' }, description: 'The answers as plain strings. A key is the question number ("1", "2") or its exact text; a value is one of its option labels or free text. parley_detail lists the options.' },
               },
               required: ['kind', 'answers'],
               additionalProperties: false,

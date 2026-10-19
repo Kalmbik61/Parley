@@ -67,6 +67,24 @@ describe('cardDetail', () => {
     expect(cardDetail(question('Which db?', ['pg', 'sqlite']))).toBe('Q: Which db?\n- pg\n- sqlite');
   });
 
+  it('несколько вопросов — блоки «Q1:», «Q2:» через пустую строку', () => {
+    const first = question('Which db?', ['pg', 'sqlite']);
+    const second = question('Which tags?', ['a']);
+    const both: FeedQuestionCard = { ...first, questions: [...first.questions, ...second.questions] };
+    expect(cardDetail(both)).toBe('Q1: Which db?\n- pg\n- sqlite\n\nQ2: Which tags?\n- a');
+    expect(cardDetail(both, 10)).toBe('Q1: Which …');
+  });
+
+  it('Write — содержимое файла, NotebookEdit — новый исходник ячейки', () => {
+    expect(cardDetail(permission('Write', { file_path: '/p/a.ts', content: 'const a = 1;' }))).toBe('const a = 1;');
+    expect(cardDetail(permission('NotebookEdit', { notebook_path: '/p/n.ipynb', new_source: 'print(1)' }))).toBe('print(1)');
+  });
+
+  it('MultiEdit — каждая правка «old → new», правки через «---»', () => {
+    const detail = cardDetail(permission('MultiEdit', { file_path: '/p/a.ts', edits: [{ old_string: 'a', new_string: 'b' }, { old_string: 'c', new_string: 'd' }] }));
+    expect(detail).toBe('a\n→\nb\n---\nc\n→\nd');
+  });
+
   it('план длиннее 1500 знаков обрезан с «…»', () => {
     const detail = cardDetail(plan('x'.repeat(2000)));
     expect(detail).toBe(`${'x'.repeat(1500)}…`);
