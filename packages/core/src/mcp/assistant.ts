@@ -1,5 +1,5 @@
 /**
- * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): только четыре инструмента, каждый — POST в маршрут хоста
+ * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): десять инструментов, каждый — POST в маршрут хоста
  * `/assistant/<имя>` с токеном разговора. Карту работ сервер сам не читает: всё знает хост.
  */
 
@@ -44,6 +44,110 @@ export const ASSISTANT_TOOLS: Tool[] = [
       required: ['target', 'text'],
       additionalProperties: false,
     },
+  },
+  {
+    name: 'propose_room',
+    description:
+      'Prepare a new room (group chat of agents) in one work. The work is a work:… id from parley_overview or its exact title; members are session ids or names of sessions of that work; task is the first message sent to the room. Nothing is created: the person sees a card and confirms or cancels it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        work: { type: 'string', description: 'A work:… id from parley_overview, or the exact title of the work.' },
+        title: { type: 'string', description: 'The title of the new room.' },
+        members: { type: 'array', items: { type: 'string' }, description: 'Session ids or exact names of sessions of this work.' },
+        lead: { type: 'string', description: 'Optional: the member who leads the room (session id or exact name).' },
+        task: { type: 'string', description: 'Optional: the first message sent to the room once it exists.' },
+      },
+      required: ['work', 'title', 'members'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'propose_decision',
+    description:
+      'Prepare the answer to a request that a session is waiting on the person for: a permission, a question or a plan. Only for a session that waits for the person right now. Set always only when the card itself offered "don\'t ask again". For a plan both choices approve it: auto-accept applies edits freely, manual asks for each edit as a separate card. Nothing is decided: the person sees a card and confirms or cancels it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: TARGET,
+        decision: {
+          oneOf: [
+            {
+              type: 'object',
+              properties: {
+                kind: { type: 'string', enum: ['permission'] },
+                behavior: { type: 'string', enum: ['allow', 'deny'] },
+                always: { type: 'boolean', enum: [true] },
+              },
+              required: ['kind', 'behavior'],
+              additionalProperties: false,
+            },
+            {
+              type: 'object',
+              properties: {
+                kind: { type: 'string', enum: ['question'] },
+                answers: { type: 'object', additionalProperties: { type: 'string' }, description: 'The answers, by question, as plain strings.' },
+              },
+              required: ['kind', 'answers'],
+              additionalProperties: false,
+            },
+            {
+              type: 'object',
+              properties: {
+                kind: { type: 'string', enum: ['plan'] },
+                choice: { type: 'string', enum: ['auto-accept', 'manual'] },
+              },
+              required: ['kind', 'choice'],
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
+      required: ['target', 'decision'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'propose_room_decision',
+    description:
+      'Prepare the decision or the completion that the lead of a room waits for from the person: accept it, or return it for more work. note is a note to the lead when returning. Nothing is decided: the person sees a card and confirms or cancels it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: TARGET,
+        choice: { type: 'string', enum: ['accept', 'return'] },
+        note: { type: 'string', description: 'Only with return: a note to the lead of the room.' },
+      },
+      required: ['target', 'choice'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'schedule_check',
+    description:
+      'Ask Parley to wake you later to check something; say the time back to the person. This is not a card. Give in_minutes (from now) or at (a local time), and every_minutes to repeat. what is what to check and report.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        in_minutes: { type: 'number', description: 'Wake up after this many minutes.' },
+        at: { type: 'string', description: 'Wake up at this local time, for example 15:30.' },
+        every_minutes: { type: 'number', description: 'Repeat every this many minutes.' },
+        what: { type: 'string', description: 'What to check and report back, in the words the person used.' },
+      },
+      required: ['what'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'list_reminders',
+    description: 'The checks scheduled with schedule_check that have not fired yet, with their ids and times.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'cancel_reminder',
+    description: 'Cancel one scheduled check by its id from list_reminders; "*" cancels all of them.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'A reminder id, or * for all.' } }, required: ['id'], additionalProperties: false },
   },
   {
     name: 'end_conversation',

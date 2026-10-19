@@ -31,6 +31,13 @@ describe('промпт и версии', () => {
     expect(assistantPrompt('zh')).toContain('Reply in Chinese');
     expect(assistantPrompt('zz')).toContain('Reply in zz');
   });
+  it('промпт называет инструменты карточек и напоминаний и не отказывает в одобрении и комнатах', () => {
+    const prompt = assistantPrompt('ru');
+    for (const name of ['propose_decision', 'propose_room', 'propose_room_decision', 'schedule_check', '[reminder']) expect(prompt).toContain(name);
+    expect(prompt).toContain('both choices approve');
+    expect(prompt).not.toContain('cannot approve agent requests');
+    expect(prompt).not.toContain('create rooms');
+  });
   it('versionAtLeast читает версию из вывода --version', () => {
     expect(versionAtLeast('2.1.300 (Claude Code)', '2.1.300')).toBe(true);
     expect(versionAtLeast('2.1.299 (Claude Code)', '2.1.300')).toBe(false);

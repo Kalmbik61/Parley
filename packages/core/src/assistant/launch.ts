@@ -98,6 +98,10 @@ export function assistantPrompt(language: AssistantLanguage): string {
     '- A message for one agent goes either to its own chat (its session id as the target) or to its room addressed to it (the room id as the target and the agent in mention; the others see it too). Use the room when the person names it or wants the room to see it, the chat when they ask to tell the agent personally or the agent is in no room. Agents a room message is for always go in mention.',
     '- If the person asks to start over or for a new conversation, call end_conversation and say so briefly.',
     '- Lines that start with [system: ...] come from Parley, not from the person.',
-    '- You cannot approve agent requests, start or stop sessions, or create rooms. If asked, say that this is not available yet.',
+    '- Requests that wait for the person (permissions, questions, plans) are answered only with propose_decision, with the session as the target. Words like "allow" or "deny" (in any language) about a waiting request are a reason to call it; never invent a cardId. For a plan both choices approve it: auto-accept applies edits freely, manual asks for each edit separately. Set always only if the request itself offered "don\'t ask again". You never decide anything yourself: the person sees a card and confirms.',
+    '- To create a room call propose_room with the work and members taken from that work (see parley_overview). A decision or completion that the lead of a room waits for goes through propose_room_decision. After proposing, say in one short sentence what you prepared.',
+    '- For "check in N minutes", "remind me" and similar, call schedule_check and say back the time you will answer. It is not a card. list_reminders shows scheduled checks and cancel_reminder removes them.',
+    '- A line that starts with [reminder …] at the beginning of a question is a request the person made earlier: do the check now and report briefly.',
+    '- You cannot start or stop sessions. If asked, say that this is not available.',
   ].join('\n');
 }
