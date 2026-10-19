@@ -1,4 +1,5 @@
 import { realpath, stat } from 'node:fs/promises';
+import { AGENT_PLAN_TOOL, publishAgentPlan } from './agent-plan-tool.js';
 import { homedir } from 'node:os';
 import { claudeProjectRoots } from '../discover.js';
 import { readClaudeSkillCatalog } from '../skills/claude-listing.js';
@@ -327,6 +328,7 @@ const WRITES: Annotations = { readOnlyHint: false, destructiveHint: false, openW
 const CLOSES: Annotations = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 
 const TOOLS: Tool[] = [
+  AGENT_PLAN_TOOL,
   ...PLAN_TOOLS,
   {
     name: 'backlog_list', annotations: READS,
@@ -1299,6 +1301,7 @@ async function dispatch(
   const { sessionId } = context;
   if (sessionId === null) throw new Error(NO_SESSION);
 
+  if (name === 'publish_agent_plan') return publishAgentPlan(context, args);
   if (name === 'report') return report(context, sessionId, args);
   if (name === 'wait_for') return waitFor(context, sessionId, args, signal);
   if (name === 'send_message') return sendMessage(context, sessionId, args);

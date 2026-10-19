@@ -86,7 +86,7 @@ const participant = (id: string): HTMLElement => document.querySelector(`[data-p
 describe('RoomBody — переход из ленты участников', () => {
   it('клик по карточке участника — вкладка его сессии, вид не навязывается, просьбы про карточку нет', () => {
     renderBody();
-    fireEvent.click(within(participant('s-02')).getByRole('button'));
+    fireEvent.click(within(participant('s-02')).getByRole('button', { name: /backend/ }));
     expect(tabOf('terminal:s-02')).toEqual({ kind: 'terminal', id: 'terminal:s-02', sessionId: 's-02' });
     expect(useChatUiStore.getState().reveal).toBeNull();
   });

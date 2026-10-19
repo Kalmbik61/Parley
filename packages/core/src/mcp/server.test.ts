@@ -227,6 +227,7 @@ describe('список инструментов', () => {
       'plan_verify',
       'propose_completion',
       'propose_decision',
+      'publish_agent_plan',
       'read_guide',
       'read_room',
       'remember',

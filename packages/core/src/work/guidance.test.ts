@@ -752,3 +752,12 @@ describe('правило приоритета браузера Parley (этап 
     expect(systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03')).not.toContain('browser_open');
   });
 });
+
+
+it('uses personal plans for quiet progress and reserves owner pings for material changes', () => {
+  const text = stableGuidance();
+  expect(text).toContain('Before multi-step work, publish_agent_plan');
+  expect(text).toContain('Personal plans do not message anyone');
+  expect(text).toContain('blockers needing intervention');
+  expect(text).toContain('skip routine steps, test counts and acknowledgements');
+});

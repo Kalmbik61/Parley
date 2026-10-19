@@ -38,6 +38,18 @@ const SECTIONS: readonly GuideSection[] = [
     summary: 'accepted plans: exact revisions, owner evidence, independent verification and human completion',
     text: `## Accepted plans
 
+Personal execution steps: call publish_agent_plan({steps: [{step, status, description?}], explanation?})
+before multi-step work, when a step starts/completes or the approach changes, and before report.
+Statuses are pending, in_progress and completed; send the full list, at most 50 steps, one in progress.
+Keep completed steps until starting a new task. Use explanation for a blocker; do not mark blocked work complete.
+This works for every provider, including code mode, without a native planning tool or Chat view.
+It updates your card and the Agents panel, without sending messages or waking the feature lead.
+These personal steps do not authorize work, accept assignments or replace plan_update/plan_submit.
+Room leads consolidate milestone evidence for the owner. Notify only when a milestone is ready,
+a blocker requires intervention, agreements change or another room depends on the result.
+Do not forward routine steps, individual tests, repeated status or acknowledgements.
+Urgent blockers and required decisions go immediately; do not delay them for a batch.
+
 Room mode is free, checklist or verified. Free keeps the existing conversation workflow.
 The live lead may raise it with set_room_mode(room, mode, reason); only the human lowers it.
 In checklist and verified, the live lead calls propose_decision(room, text, plan).

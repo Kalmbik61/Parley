@@ -1019,14 +1019,16 @@ export const S = {
   /** Вкладка Agents правого сайдбара (спека 2026-10-07, 5.1). */
   agentsPanel: {
     plan: 'Plan',
+    openPlan: 'View agent plan',
+    noPlan: 'No personal steps published yet. The agent’s steps and progress will appear here when it publishes a plan.',
     planMore: (count: number): string => `+${count} more`,
     tab: 'Agents',
     noSession: 'Open a session to see its agents',
-    empty: 'No agents in this session yet',
+    empty: 'No subagents in this session yet',
     finished: (count: number): string => `Finished (${count})`,
     starting: 'Starting…',
     thinking: 'Thinking…',
-    needsChat: 'Agent details need the Chat view of this session',
+    needsChat: 'Subagent details need Chat support. The personal plan is available in either view.',
     back: 'All agents',
     task: 'Task',
     steps: 'Steps',
