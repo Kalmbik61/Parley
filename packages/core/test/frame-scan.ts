@@ -120,6 +120,13 @@ export const FRAME_EXCEPTIONS: readonly FrameException[] = [
       'спека возможностей (2026-10-02): контекст снимка называет путь ~/.claude.json, снимок его только читает',
   },
   {
+    file: 'packages/core/src/custom-provider-dir.ts',
+    rule: 'запись в каталоги агентов',
+    line: "const CLAUDE_JSON = '.claude.json';",
+    reason:
+      'спека своих провайдеров 5.4: посев .claude.json только в папке провайдера в доме Parley; файл человека (userClaudeJsonPath) только читается',
+  },
+  {
     file: 'packages/host/src/limits/zai-quota.ts',
     rule: 'API провайдеров',
     line: "export const ZAI_QUOTA_URL = 'https://api.z.ai/api/monitor/usage/quota/limit';",

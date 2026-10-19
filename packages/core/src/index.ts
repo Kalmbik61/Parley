@@ -122,6 +122,16 @@ export {
   writeCustomProviders,
 } from './custom-providers.js';
 export type { CustomProviderRecord } from './custom-providers.js';
+export {
+  LINKED_CLAUDE_ITEMS,
+  mirrorProjectTrust,
+  prepareCustomProviderDir,
+  removeCustomProviderDir,
+  syncApiKeyApproval,
+  userClaudeConfigDir,
+  userClaudeJsonPath,
+} from './custom-provider-dir.js';
+export type { PrepareOptions as PrepareCustomProviderOptions } from './custom-provider-dir.js';
 export { CLAUDE_EFFORTS, LEGACY_EFFORTS, effortLabel } from './provider-models.js';
 export type { EffortOption, ModelOption } from './provider-models.js';
 export type {

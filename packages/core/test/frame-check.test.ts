@@ -223,6 +223,7 @@ describe('исключения рамки: statusline.ts среди них бо�
       'packages/host/src/capabilities/native-plugin-inventory.ts | запись в каталоги агентов',
       'packages/host/src/capabilities/native-targets.ts | запись в каталоги агентов',
       'packages/host/src/capabilities/snapshot.ts | запись в каталоги агентов',
+      'packages/core/src/custom-provider-dir.ts | запись в каталоги агентов',
       'packages/host/src/limits/zai-quota.ts | API провайдеров',
       'packages/host/src/limits/zai-check.ts | API провайдеров',
       'packages/core/src/providers.ts | API провайдеров',
