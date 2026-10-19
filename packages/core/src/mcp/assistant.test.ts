@@ -35,6 +35,8 @@ describe('parley-mcp в режиме помощника', () => {
     const byName = (name: string): Tool => ASSISTANT_TOOLS.find((tool) => tool.name === name)!;
     const decision = (byName('propose_decision').inputSchema.properties as Record<string, { oneOf: Array<{ properties: { kind: { enum: string[] } } }> }>).decision!;
     expect(decision.oneOf.map((branch) => branch.properties.kind.enum[0])).toEqual(['permission', 'question', 'plan']);
+    expect(byName('propose_decision').inputSchema.properties).toHaveProperty('card');
+    expect(byName('propose_decision').inputSchema.required).not.toContain('card');
     expect(byName('schedule_check').inputSchema.required).toEqual(['what']);
     expect(byName('propose_room').inputSchema.required).toEqual(['work', 'title', 'members']);
     expect(byName('list_reminders').annotations).toEqual({ readOnlyHint: true });

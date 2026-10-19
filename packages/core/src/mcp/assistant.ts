@@ -70,6 +70,7 @@ export const ASSISTANT_TOOLS: Tool[] = [
       type: 'object',
       properties: {
         target: TARGET,
+        card: { type: 'string', description: 'Only when the session has several pending requests of this kind: the card id from the tool reply or parley_overview.' },
         decision: {
           oneOf: [
             {

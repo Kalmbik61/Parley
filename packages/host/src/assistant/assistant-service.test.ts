@@ -447,3 +447,122 @@ describe('assistant-service: комната и решение ведущего',
     expect((await service.tool('propose_room_decision', { target: 'Gate', choice: 'later' })).status).toBe(400);
   });
 });
+
+describe('assistant-service: решение по карточке агента', () => {
+  const card = (cardId: string, command: string, suggestions: unknown[] = []) => ({ kind: 'permission', cardId, id: cardId, state: 'pending', toolUseId: null, toolName: 'Bash', toolInput: { command }, suggestions, notified: false });
+  let snapshots: Record<string, { items: unknown[]; decisions?: 'window' | 'terminal' }>;
+  let snapshot: ReturnType<typeof vi.fn>;
+  let decide: ReturnType<typeof vi.fn>;
+
+  async function started(opts: { blocked?: string[] } = {}) {
+    snapshot = vi.fn(async (ref: { sessionId: string }) => snapshots[ref.sessionId] ?? { items: [] });
+    decide = vi.fn().mockResolvedValue({ applied: true, state: 'allowed' });
+    // Ждущей считается только сессия, которую активность показывает как blocked.
+    const blocked = opts.blocked ?? ['s-03'];
+    const service = createAssistantService({
+      ...deps,
+      activity: { get: (ref) => ({ activity: { activity: blocked.includes(ref.sessionId) ? 'blocked' : 'working', waitingFor: null }, metrics: null }) as never },
+      feed: { snapshot, decide } as never,
+    });
+    await service.ask(ASK);
+    return service;
+  }
+  beforeEach(() => {
+    snapshots = { 's-03': { items: [card('c1', 'rm -rf dist')] } };
+  });
+
+  it('parley_overview опрашивает ленту только у blocked-сессии и показывает ждущую карточку', async () => {
+    const service = await started();
+    const reply = await service.tool('parley_overview', {});
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    expect(snapshot).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', sessionId: 's-03' }, undefined, 'attention');
+    expect(reply).toMatchObject({ status: 200, body: { text: expect.stringContaining('waits: permission — Bash: rm -rf dist') } });
+  });
+  it('parley_overview: сбой ленты — обзор без карточек, не ошибка', async () => {
+    const service = await started();
+    snapshot.mockRejectedValue(new Error('no feed'));
+    const reply = await service.tool('parley_overview', {});
+    expect(reply.status).toBe(200);
+    expect(JSON.stringify(reply.body)).not.toContain('(card ');
+  });
+  it('propose_decision → карточка с summary и деталями; send зовёт feed.decide, исход done', async () => {
+    const service = await started();
+    const reply = await service.tool('propose_decision', { target: 'S03', decision: { kind: 'permission', behavior: 'allow' } });
+    expect(reply.status).toBe(200);
+    expect(last().proposal).toMatchObject({
+      action: 'decision',
+      target: 'S03 Ruslan',
+      card: { cardId: 'c1', kind: 'permission', summary: 'Bash: rm -rf dist', detail: 'rm -rf dist' },
+      decision: { kind: 'permission', behavior: 'allow' },
+    });
+    expect(last().proposal?.text).toContain('rm -rf dist');
+    await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: true, error: null });
+    expect(decide).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', sessionId: 's-03' }, 'c1', { kind: 'permission', behavior: 'allow' });
+    expect(last()).toMatchObject({ proposal: null, outcome: 'done' });
+  });
+  it('always без suggestions снимается, ответ модели говорит про разовое разрешение', async () => {
+    const service = await started();
+    const reply = await service.tool('propose_decision', { target: 'S03', decision: { kind: 'permission', behavior: 'allow', always: true } });
+    expect(JSON.stringify(reply.body)).toContain('one-time');
+    expect(last().proposal).toMatchObject({ decision: { kind: 'permission', behavior: 'allow' } });
+    expect((last().proposal as { decision: object }).decision).not.toHaveProperty('always');
+  });
+  it('always с suggestions остаётся', async () => {
+    snapshots['s-03'] = { items: [card('c1', 'ls', [{ type: 'addRules' }])] };
+    const service = await started();
+    await service.tool('propose_decision', { target: 'S03', decision: { kind: 'permission', behavior: 'allow', always: true } });
+    expect(last().proposal).toMatchObject({ decision: { kind: 'permission', behavior: 'allow', always: true } });
+  });
+  it('две ждущие карточки — 409 со списком cardId — summary; с card выбирается нужная', async () => {
+    snapshots['s-03'] = { items: [card('c1', 'rm -rf dist'), card('c2', 'git push')] };
+    const service = await started();
+    const reply = await service.tool('propose_decision', { target: 'S03', decision: { kind: 'permission', behavior: 'allow' } });
+    expect(reply.status).toBe(409);
+    expect(JSON.stringify(reply.body)).toContain('c1 — Bash: rm -rf dist');
+    expect(JSON.stringify(reply.body)).toContain('c2 — Bash: git push');
+    expect(last().proposal).toBeNull();
+    const picked = await service.tool('propose_decision', { target: 'S03', card: 'c2', decision: { kind: 'permission', behavior: 'deny' } });
+    expect(picked.status).toBe(200);
+    expect(last().proposal).toMatchObject({ card: { cardId: 'c2' } });
+  });
+  it('нет ждущей карточки нужного вида — 409', async () => {
+    const service = await started();
+    const reply = await service.tool('propose_decision', { target: 'S03', decision: { kind: 'plan', choice: 'manual' } });
+    expect(reply).toMatchObject({ status: 409, body: { error: 'S03 Ruslan is not waiting for a plan' } });
+  });
+  it('decisions: terminal — 409 «answers at your Mac only»', async () => {
+    snapshots['s-03'] = { items: [card('c1', 'ls')], decisions: 'terminal' };
+    const service = await started();
+    const reply = await service.tool('propose_decision', { target: 'S03', decision: { kind: 'permission', behavior: 'allow' } });
+    expect(reply).toMatchObject({ status: 409, body: { error: 'S03 Ruslan answers at your Mac only' } });
+  });
+  it('неверное решение — 400; комната вместо сессии — 404', async () => {
+    const service = await started();
+    expect((await service.tool('propose_decision', { target: 'S03', decision: { kind: 'plan', choice: 'edit' } })).status).toBe(400);
+    expect((await service.tool('propose_decision', { target: 'Auth', decision: { kind: 'permission', behavior: 'allow' } })).status).toBe(404);
+  });
+  it('Review Focus 1: feed.decide вернул applied: false — исход cancelled, «Already answered», заметка модели', async () => {
+    const service = await started();
+    await service.tool('propose_decision', { target: 'S03', decision: { kind: 'permission', behavior: 'allow' } });
+    decide.mockResolvedValue({ applied: false, state: 'allowed' });
+    await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: true, error: 'Already answered' });
+    expect(last()).toMatchObject({ proposal: null, outcome: 'cancelled' });
+    turns[0]?.end({ ok: true });
+    await flush();
+    await service.ask({ ...ASK, text: 'дальше' });
+    expect(turns[1]?.spec.args.join(' ')).toContain('already answered');
+  });
+  it('feed.decide бросил — карточка остаётся, ошибка в окно', async () => {
+    const service = await started();
+    await service.tool('propose_decision', { target: 'S03', decision: { kind: 'permission', behavior: 'allow' } });
+    decide.mockRejectedValue(new Error('boom'));
+    await expect(service.decide(last().proposal!.id, 'send')).resolves.toEqual({ applied: false, error: 'boom' });
+    expect(last().proposal).not.toBeNull();
+  });
+  it('detail инструмента propose_decision — propose', async () => {
+    const service = await started();
+    turns[0]?.emit({ type: 'tool', name: 'propose_decision', input: {} });
+    expect(last()).toMatchObject({ phase: 'tool', detail: { tool: 'propose', target: null } });
+    void service;
+  });
+});

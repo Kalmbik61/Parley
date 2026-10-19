@@ -15,18 +15,24 @@ import {
   assistantCwd,
   assistantMcpJson,
   assistantPrompt,
+  cardDetail,
+  cardGist,
   codexInstructionsFile,
   parseClaudeLine,
   parseCodexLine,
   participantLabel,
+  pendingCards,
+  sessionDotState,
   sessionMention,
   splitMood,
   type AssistantLanguage,
+  type FeedCard,
+  type FeedDecision,
   type ProviderEntry,
   type SessionLifecycle,
   type WorkMap,
 } from '@parley/core';
-import type { AssistantDetail, AssistantProposal, AssistantState, EventData, EventName, Params, SendResult, SessionRef } from '@parley/protocol';
+import { feedDecision, refKey, type AssistantDetail, type AssistantProposal, type AssistantState, type EventData, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { FeedService } from '../feed/feed-service.js';
@@ -46,7 +52,7 @@ export interface AssistantServiceDeps {
   broadcast<E extends EventName>(event: E, data: EventData<E>): void;
   works: Pick<WorksService, 'snapshot'>;
   activity: Pick<ActivityService, 'get'>;
-  feed?: Pick<FeedService, 'snapshot'>;
+  feed?: Pick<FeedService, 'snapshot' | 'decide'>;
   /** Общий отправитель хоста (`createSender`) — тот же, что у `pty.send`. */
   send(params: { ref: SessionRef; text: string; submit: boolean }): Promise<SendResult>;
   /**
@@ -120,6 +126,12 @@ type Pending =
       kind: 'room-decision';
       view: Extract<AssistantProposal, { action: 'room-decision' }>;
       room: RoomTarget;
+    }
+  | {
+      kind: 'decision';
+      view: Extract<AssistantProposal, { action: 'decision' }>;
+      /** Сессия, чью карточку решаем; сама карточка — `view.card.cardId`. */
+      ref: SessionRef;
     };
 
 const EMPTY: AssistantState = { phase: 'idle', detail: null, question: null, answer: '', mood: 'calm', proposal: null, outcome: null, error: null, turn: 0, askId: null };
@@ -146,11 +158,27 @@ const withMentions = (to: readonly string[], text: string): string => {
   const missing = to.filter((id) => !new RegExp(`(?<![\\p{L}\\p{N}_@])${pattern(id)}(?![\\p{L}\\p{N}_])`, 'iu').test(text));
   return missing.length === 0 ? text : `${missing.map(sessionMention).join(' ')} ${text}`;
 };
+/** Суть карточки по-английски для карточки помощника: что агент просит или спрашивает. */
+const hostSummary = (card: FeedCard, projectPath: string): string => {
+  const gist = cardGist(card, projectPath);
+  switch (gist.kind) {
+    case 'run':
+      return `${card.toolName}: ${gist.command}`;
+    case 'tool':
+      return gist.path === null ? gist.tool : `${gist.tool} ${gist.path}`;
+    case 'fetch':
+      return `Fetch ${gist.url}`;
+    case 'question':
+      return `Question: ${gist.text}`;
+    case 'plan':
+      return 'Plan';
+  }
+};
 const stringArg = (input: Record<string, unknown>, key: string): string => (typeof input[key] === 'string' ? (input[key] as string) : '');
 
 function detailOf(name: string, input: Record<string, unknown>, targets: readonly AssistantTarget[]): AssistantDetail {
   if (name === 'parley_overview') return { tool: 'overview', target: null };
-  if (name === 'propose_message' || name === 'propose_room' || name === 'propose_room_decision') return { tool: 'propose', target: null };
+  if (name === 'propose_message' || name === 'propose_room' || name === 'propose_room_decision' || name === 'propose_decision') return { tool: 'propose', target: null };
   if (name === 'parley_detail') {
     const found = resolveTarget(targets, stringArg(input, 'target'));
     return { tool: 'detail', target: 'target' in found ? found.target.name : null };
@@ -542,6 +570,84 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return { status: 200, body: { text: CARD_SHOWN } };
   }
 
+  async function proposeDecision(input: Record<string, unknown>, targets: readonly AssistantTarget[]): Promise<AssistantReply> {
+    const found = resolveTarget(targets, stringArg(input, 'target'));
+    if ('error' in found) return { status: 404, body: { error: found.error } };
+    const session = found.target;
+    if (session.kind !== 'session') return { status: 404, body: { error: `${session.name} is not a session` } };
+    const parsed = feedDecision.safeParse(input['decision']);
+    if (!parsed.success) return { status: 400, body: { error: 'decision must be {kind:"permission",behavior:"allow"|"deny"}, {kind:"question",answers:{...}} or {kind:"plan",choice:"auto-accept"|"manual"}' } };
+    let decision: FeedDecision = parsed.data;
+    if (deps.feed === undefined) return { status: 409, body: { error: `${session.name} has no feed to answer` } };
+    let snapshot: Awaited<ReturnType<NonNullable<typeof deps.feed>['snapshot']>>;
+    try {
+      snapshot = await deps.feed.snapshot(session.ref, undefined, 'attention');
+    } catch {
+      return { status: 409, body: { error: `${session.name} has no feed to answer` } };
+    }
+    if (snapshot.decisions === 'terminal') return { status: 409, body: { error: `${session.name} answers at your Mac only` } };
+    const cards = pendingCards(snapshot.items).filter((card) => card.kind === decision.kind);
+    const projectPath = session.ref.projectPath;
+    const wanted = stringArg(input, 'card').trim();
+    const chosen = wanted === '' ? cards : cards.filter((card) => card.cardId === wanted);
+    const [card] = chosen;
+    if (card === undefined) return { status: 409, body: { error: `${session.name} is not waiting for a ${decision.kind}${wanted === '' ? '' : ` with card ${wanted}`}` } };
+    if (chosen.length > 1) {
+      const list = chosen.map((item) => `${item.cardId} — ${hostSummary(item, projectPath)}`).join('; ');
+      return { status: 409, body: { error: `${session.name} has ${chosen.length} pending requests of this kind: ${list}. Say which one (pass its card id as "card").` } };
+    }
+    // «Не спрашивать больше» предлагается не всегда: без вариантов у CLI остаётся разовое разрешение.
+    let note = '';
+    if (decision.kind === 'permission' && decision.always === true && card.kind === 'permission' && card.suggestions.length === 0) {
+      decision = { kind: 'permission', behavior: decision.behavior, ...(decision.message === undefined ? {} : { message: decision.message }) };
+      note = ' (always is not offered for this request, proposed a one-time allow)';
+    }
+    const summary = hostSummary(card, projectPath);
+    const detail = cardDetail(card);
+    proposals += 1;
+    pending = {
+      kind: 'decision',
+      view: {
+        action: 'decision',
+        id: `p${proposals}`,
+        target: session.name,
+        where: session.where,
+        text: summary + (detail === null || detail === '' ? '' : `\n${detail}`),
+        card: { cardId: card.cardId, kind: card.kind, summary, detail },
+        decision,
+      },
+      ref: session.ref,
+    };
+    publish({ proposal: pending.view, outcome: null });
+    return { status: 200, body: { text: CARD_SHOWN + note } };
+  }
+
+  /** Карточки ждущих запросов по сессиям, что стоят `blocked`; остальных не опрашиваем. Сбой ленты — без карточек. */
+  async function waitingCards(src: OverviewSource): Promise<Map<string, readonly FeedCard[]>> {
+    const map = new Map<string, readonly FeedCard[]>();
+    const feed = deps.feed;
+    if (feed === undefined) return map;
+    const refs: SessionRef[] = [];
+    for (const entry of src.entries) {
+      for (const session of entry.map.sessions) {
+        if (session.lifecycle === 'closed') continue;
+        const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
+        if (sessionDotState(session, src.live(ref)?.activity.activity ?? null) === 'blocked') refs.push(ref);
+      }
+    }
+    await Promise.all(
+      refs.map(async (ref) => {
+        try {
+          const { items } = await feed.snapshot(ref, undefined, 'attention');
+          map.set(refKey(ref), pendingCards(items));
+        } catch {
+          // ленты нет — строка сессии без карточек
+        }
+      }),
+    );
+    return map;
+  }
+
   /** Закрывает карточку: `reason` попадает в системную заметку модели, `error` — в ответ окну (карточка при этом уже закрыта). */
   function settle(current: Pending, outcome: 'sent' | 'done' | 'cancelled', reason?: string, error?: string): { applied: true; error: string | null } {
     pending = null;
@@ -615,6 +721,14 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return settle(current, 'done');
   }
 
+  async function applyDecision(current: Extract<Pending, { kind: 'decision' }>): Promise<{ applied: boolean; error: string | null }> {
+    if (deps.feed === undefined) return { applied: false, error: 'The agent feed is not available' };
+    const result = await deps.feed.decide(current.ref, current.view.card.cardId, current.view.decision);
+    // Карточку успели закрыть в другом месте (терминал, окно): ответ не ушёл, показываем это, а не успех.
+    if (!result.applied) return settle(current, 'cancelled', 'already answered', 'Already answered');
+    return settle(current, 'done');
+  }
+
   return {
     async ask(params) {
       stopTurn();
@@ -647,6 +761,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       try {
         if (current.kind === 'room') return await applyRoom(current);
         if (current.kind === 'room-decision') return await applyRoomDecision(current);
+        if (current.kind === 'decision') return await applyDecision(current);
         return await applyMessage(current);
       } catch (error) {
         return { applied: false, error: (error as Error).message };
@@ -668,8 +783,10 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       const src = source();
       const targets = targetsOf(src);
       switch (name) {
-        case 'parley_overview':
-          return { status: 200, body: { text: overviewText(src) } };
+        case 'parley_overview': {
+          const cards = await waitingCards(src);
+          return { status: 200, body: { text: overviewText({ ...src, cards: (ref) => cards.get(refKey(ref)) }) } };
+        }
         case 'parley_detail': {
           const found = resolveTarget(targets, stringArg(input, 'target'));
           if ('error' in found) return { status: 404, body: { error: found.error } };
@@ -682,6 +799,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
           return proposeRoom(input, src, targets);
         case 'propose_room_decision':
           return proposeRoomDecision(input, src, targets);
+        case 'propose_decision':
+          return proposeDecision(input, targets);
         case 'end_conversation':
           current.endAfterTurn = true;
           return { status: 200, body: { text: 'The conversation starts over after this reply.' } };
