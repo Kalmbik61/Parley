@@ -12,6 +12,7 @@
     "./feed-turn": "./dist/feed/turn.js",
     "./card-gist": "./dist/feed/card-gist.js",
     "./assistant": "./dist/assistant/text.js",
+    "./attention": "./dist/work/attention.js",
     "./session-state": "./dist/work/session-state.js",
     "./session-names": "./dist/work/names.js",
     "./resource-policy": "./dist/work/resource-policy.js"

@@ -25,7 +25,7 @@
  * он остаётся текстом), если он лежит в этой же комнате, и пометку «оригинала нет», если нет.
  */
 
-import type { Message, MessageKind, SessionLifecycle, WorkEntry, WorkMap, RoomMode, RoomPlan } from '@parley/core';
+import type { Message, MessageKind, MessageVia, SessionLifecycle, WorkEntry, WorkMap, RoomMode, RoomPlan } from '@parley/core';
 import { planSummary, type AgentPlan } from '@parley/core/agent-plan';
 import { dotState, liveStatus, stateWord, type DotState } from '@parley/core/session-state';
 import { refKey, type LiveTask, type MailWait } from '@parley/protocol';
@@ -122,7 +122,7 @@ export interface MessageModel {
   /** Подпись отправителя: `You`, `System`, `S02 бэкенд`. */
   from: string;
   /** Письмо человека через помощника (спека 2026-10-14, 7.4): подпись «You (via assistant)» и знак помощника. */
-  via: 'assistant' | null;
+  via: MessageVia | null;
   /** Отправитель — ведущий (`★`). */
   lead: boolean;
   /** Адресаты для `→ …`: `all` или ярлыки; `null` — у системной строки адресата не показываем. */
