@@ -188,6 +188,10 @@ docs/design/2026-09-29-rooms-organic/prototype/assets: это hi-fi handoff, к�
 Знаки принадлежат их владельцам: Anthropic — Claude, OpenAI — Codex. Проект их
 не изменял и не выдаёт за свои.
 
+Файл packages/desktop/src/renderer/assets/providers/parley.svg — собственный знак
+проекта Parley, копия docs/media/brand/parley-icon.svg. Окно рисует его у своих
+(пользовательских) провайдеров, пока у них нет вендорских значков.
+
 ------------------------------------------------------------------------------
 Material Icon Theme
 ------------------------------------------------------------------------------

@@ -680,6 +680,7 @@ export const S = {
 
   /** Свои провайдеры (спека 4.3) — `components/providers/CustomProviderPanel.tsx`. */
   customProviders: {
+    openInSettings: 'Open in Settings',
     pickVendor: 'Connect a provider',
     pickVendorHint: 'Any Anthropic-compatible service runs as a Claude Code session with its own address, key and models.',
     ownAddress: 'Own address',

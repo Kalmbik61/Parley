@@ -7,6 +7,7 @@ import { errorText, providerName, S } from '../../../shared/strings.js';
 import { hostMethods } from '../../lib/capabilities.js';
 import { cn } from '../../lib/cn.js';
 import { useHostStore } from '../../store/host.js';
+import { useUiStore } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
 import { Input } from '../../ui/input.js';
 import { AgentIcon } from '../AgentIcon.js';
@@ -164,6 +165,29 @@ export function ProviderCard({
   };
 
   if (!open) return null;
+  // Свой провайдер (спека 4.3): ключ и настройки живут в окне Settings, карточка лишь показывает состояние.
+  // Ветка стоит до Claude, Codex и GLM.
+  if (provider.custom != null) {
+    return (
+      <div className="space-y-3 text-sm text-foreground" data-provider-card={provider.id}>
+        <div className="flex items-center gap-2">
+          <AgentIcon provider={provider.id} size={20} />
+          <h3 className="font-heading">{name}</h3>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {provider.available ? S.providerCard.connected : S.providerCard.notConnected}
+          </span>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => useUiStore.getState().openSettingsDialog('providers', { provider: provider.id })}
+        >
+          {S.customProviders.openInSettings}
+        </Button>
+      </div>
+    );
+  }
   const fiveHour = provider.limits?.fiveHour?.usedPercent;
   const week = provider.limits?.week?.usedPercent;
   // Исход проверки ключа виден только у готового провайдера: без CLI или ключа шапка — Not connected.

@@ -13,9 +13,11 @@
  * провайдера — `<img>`, и брендовый значок оставался при opacity 1 (правки ревью куска 2).
  */
 
+import { isCustomProviderId } from '@parley/protocol';
 import claudeUrl from '../assets/providers/claude.svg';
 import codexLightUrl from '../assets/providers/codex-light.svg';
 import codexUrl from '../assets/providers/codex.svg';
+import parleyUrl from '../assets/providers/parley.svg';
 import { useUiStore } from '../store/ui.js';
 
 /**
@@ -33,6 +35,9 @@ function providerLetter(provider: string): string {
 
 /** Адрес брендового значка; `null` — у провайдера его нет, рисуется буква. */
 function brandIcon(provider: string, dark: boolean): string | null {
+  // Свои провайдеры (спека 3.7): пока значок Parley, вендорские — следующая работа. По id, а не по стору:
+  // удалённый провайдер в старой комнате остаётся со значком.
+  if (isCustomProviderId(provider)) return parleyUrl;
   switch (provider.toLowerCase()) {
     case 'claude':
       return claudeUrl;
