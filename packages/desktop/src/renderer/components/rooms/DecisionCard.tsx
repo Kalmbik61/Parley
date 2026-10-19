@@ -19,6 +19,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import type { WorkEntry } from '@parley/core';
+import { planRemaining } from '@parley/core/plan-state';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
 import { Badge } from '../../ui/badge.js';
@@ -27,6 +28,7 @@ import { Textarea } from '../../ui/textarea.js';
 import type { ProposalModel } from './feed-model.js';
 import { RoomMarkdown } from './RoomMarkdown.js';
 import { PlanSummary } from './PlanPanel.js';
+import { PlanRemainingView } from './PlanRemainingView.js';
 import { SenderAvatar } from './SenderAvatar.js';
 
 /** Предел заметки возврата — схема `rooms.resolveProposal` (`note` до 4000 знаков). */
@@ -62,6 +64,11 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
   const version = [proposal.id, proposal.rev, proposal.planId ?? proposal.plan?.id, proposal.planRev ?? proposal.plan?.rev].join(':');
   const busy = resolving === version;
   const isPlan = proposal.plan !== undefined || proposal.kind === 'completion';
+  const proposedPlan = proposal.plan;
+  /** Поправка: в комнате уже идёт план с тем же id — карточка показывает только то, что после принятия останется несделанным. */
+  const activePlan =
+    proposedPlan &&
+    (entry?.map.plans ?? []).find((plan) => plan.roomId === proposedPlan.roomId && plan.id === proposedPlan.id && (plan.status === 'active' || plan.status === 'completing'));
 
   const layoutRef = useRef(onLayout);
   layoutRef.current = onLayout;
@@ -97,7 +104,16 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
         <span className="text-muted-foreground">{time}</span>
       </div>
       <RoomMarkdown text={proposal.text} labelOf={labelOf} onOpenExternal={onOpenExternal} />
-      {proposal.plan ? <><h4>{S.plans.proposed}</h4><PlanSummary plan={proposal.plan} {...(entry ? {entry} : {})} {...(bridge ? {bridge} : {})}/></> : null}
+      {proposedPlan ? (
+        <>
+          <h4>{S.plans.proposed}</h4>
+          {activePlan ? (
+            <PlanRemainingView remaining={planRemaining(activePlan, proposedPlan)} plan={proposedPlan} {...(entry ? {entry} : {})} {...(bridge ? {bridge} : {})}/>
+          ) : (
+            <PlanSummary plan={proposedPlan} {...(entry ? {entry} : {})} {...(bridge ? {bridge} : {})}/>
+          )}
+        </>
+      ) : null}
       {children}
       {isPlan && !canResolve ? <p>{unavailableReason ?? S.plans.oldHost}</p> : null}
       {!canResolve && !isPlan ? null : returning ? (
