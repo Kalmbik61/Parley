@@ -4,7 +4,17 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.16.1
+
+Agents can create ordinary sessions in their workspace again, and Chat recovers after a failed CLI version check.
+
+### Added
+
+- **Agents can create and launch peer sessions with `create_session`.** Choose Claude, Codex, GLM, or another available provider in the current workspace. New sessions have no parent and inherit no room membership; a room lead can invite them separately. Existing creation and launch limits still apply. ([#84](https://github.com/Kalmbik61/Parley/pull/84))
+
+### Fixed
+
+- **Chat no longer stays disabled after a failed CLI version check.** Unknown versions are checked again, explicit refresh updates known versions, and the disabled Chat tooltip explains whether the version is unknown, too old, or unsupported by the host. ([#84](https://github.com/Kalmbik61/Parley/pull/84))
 
 ### Changed
 
