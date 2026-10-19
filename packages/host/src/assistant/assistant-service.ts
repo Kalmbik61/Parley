@@ -32,13 +32,14 @@ import {
   type SessionLifecycle,
   type WorkMap,
 } from '@parley/core';
-import { feedDecision, refKey, type AssistantDetail, type AssistantProposal, type AssistantState, type EventData, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
+import { feedDecision, refKey, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type AssistantState, type EventData, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { FeedService } from '../feed/feed-service.js';
 import { ASSISTANT_PATH, type AssistantReply } from './assistant-endpoint.js';
 import type { WorksService } from '../works/works-service.js';
 import { detailText, overviewText, resolveTarget, targetsOf, type AssistantTarget, type OverviewSource } from './overview.js';
+import { isLastCheck, type Reminder, type ReminderStore } from './reminders.js';
 import { appendSent, readSent } from './sent-log.js';
 import { runTurn, type TurnEnd, type TurnHandle, type TurnSpec } from './turn.js';
 
@@ -73,6 +74,8 @@ export interface AssistantServiceDeps {
   ready(entry: ProviderEntry): Promise<string | null>;
   launchEnv(entry: ProviderEntry): Promise<NodeJS.ProcessEnv>;
   binary(command: string): Promise<string>;
+  /** Напоминания (`schedule_check`, `list_reminders`, `cancel_reminder`); срабатывание приходит в `onReminder`. */
+  reminders: Pick<ReminderStore, 'add' | 'list' | 'cancel'>;
   home: string;
   log(line: string): void;
   run?(spec: TurnSpec, onEvent: Parameters<typeof runTurn>[1]): TurnHandle;
@@ -89,6 +92,8 @@ export interface AssistantService {
   state(): AssistantState;
   sent(ref: SessionRef): Promise<Array<{ text: string; at: string }>>;
   tool(name: string, args: unknown): Promise<AssistantReply>;
+  /** Срок напоминания (его отдаёт хост в `reminders.start`): ждёт конца идущего хода и сам запускает новый. */
+  onReminder(reminder: Reminder, late: boolean): Promise<'fired' | 'skipped'>;
   stop(): void;
 }
 
@@ -140,6 +145,7 @@ const EMPTY: AssistantState = { phase: 'idle', detail: null, question: null, ans
 interface Ask {
   id: string | null;
   ticket: number;
+  origin: AssistantOrigin;
 }
 
 const firstLine = (text: string): string => text.split('\n')[0]?.trim() ?? '';
@@ -202,6 +208,11 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   let idleTimer: NodeJS.Timeout | null = null;
   /** Билет последнего вопроса: `cancel`, `reset` и новый вопрос сдвигают его, и запуск, что ещё в пути, не стартует. */
   let asks = 0;
+  /** Параметры последнего вопроса человека: по ним идут ходы по напоминаниям. */
+  let lastAsk: Pick<Params<'assistant.ask'>, 'provider' | 'model' | 'language'> = { provider: null, model: null, language: 'en' };
+  /** Вопросы, что ещё запускают ход (`ask` не вернулся), и ждущие конца хода напоминания. */
+  let inflight = 0;
+  let idleWaiters: Array<() => void> = [];
 
   const publish = (patch: Partial<AssistantState>): void => {
     state = { ...state, ...patch, instance };
@@ -266,10 +277,19 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return { mcpFile, promptFile };
   }
 
+  /** Будит ждущие напоминания, когда хода нет и вопрос не запускается; кому не досталось — ждёт снова. */
+  function releaseWaiters(): void {
+    if (turn !== null || inflight > 0) return;
+    const waiters = idleWaiters;
+    idleWaiters = [];
+    for (const wake of waiters) wake();
+  }
+
   function stopTurn(): void {
     const old = turn;
     turn = null;
     old?.cancel();
+    releaseWaiters();
   }
 
   async function start(entry: ProviderEntry, model: string | null, language: AssistantLanguage, text: string, retried: boolean, ask: Ask): Promise<void> {
@@ -278,7 +298,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const askId = ask.id;
     const base = deps.endpoint.origin();
     if (base === null) {
-      publish({ ...EMPTY, proposal: state.proposal, phase: 'error', mood: 'error', question: text, error: 'Parley is still starting — try again', turn: next, askId });
+      publish({ ...EMPTY, proposal: state.proposal, phase: 'error', mood: 'error', question: text, error: 'Parley is still starting — try again', turn: next, askId, origin: ask.origin });
       return;
     }
     const url = `${base}${ASSISTANT_PATH}`;
@@ -299,20 +319,20 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       current.sessionId !== null,
     );
     if (command === null) {
-      publish({ ...EMPTY, proposal: state.proposal, phase: 'offline', question: text, error: `${entry.label} can't run the assistant`, turn: next, askId });
+      publish({ ...EMPTY, proposal: state.proposal, phase: 'offline', question: text, error: `${entry.label} can't run the assistant`, turn: next, askId, origin: ask.origin });
       return;
     }
     let binary: string;
     try {
       binary = await deps.binary(command.command);
     } catch {
-      publish({ ...EMPTY, proposal: state.proposal, phase: 'offline', question: text, error: `${entry.label} CLI is not installed`, turn: next, askId });
+      publish({ ...EMPTY, proposal: state.proposal, phase: 'offline', question: text, error: `${entry.label} CLI is not installed`, turn: next, askId, origin: ask.origin });
       return;
     }
     const env = await deps.launchEnv(entry);
     // Пока запуск ждал, человек отменил вопрос (закрыл остров) или задал новый: этот ход не нужен.
     if (ask.ticket !== asks) return;
-    publish({ phase: 'thinking', detail: null, question: text, answer: '', mood: 'calm', outcome: null, error: null, turn: next, askId });
+    publish({ phase: 'thinking', detail: null, question: text, answer: '', mood: 'calm', outcome: null, error: null, turn: next, askId, origin: ask.origin });
 
     // Эмоцию решает первый текст после последнего инструмента: GLM ставит метку до инструмента отдельным блоком.
     let moodBuffer: string | null = '';
@@ -353,7 +373,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       .catch((error: unknown) => {
         deps.log(`assistant: turn failed: ${(error as Error).message}`);
         publish({ phase: 'error', mood: 'error', detail: null, error: 'Something went wrong — try again' });
-      });
+      })
+      .finally(releaseWaiters);
   }
 
   async function finish(end: TurnEnd, entry: ProviderEntry, model: string | null, language: AssistantLanguage, text: string, retried: boolean, current: Conversation, ask: Ask): Promise<void> {
@@ -729,15 +750,17 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return settle(current, 'done');
   }
 
-  return {
-    async ask(params) {
+  /** Запускает ход по вопросу человека (`island`) или по напоминанию (`reminder`). */
+  async function runAsk(params: Params<'assistant.ask'>, origin: AssistantOrigin): Promise<void> {
+    inflight += 1;
+    try {
       stopTurn();
       asks += 1;
-      const ask: Ask = { id: params.askId ?? null, ticket: asks };
+      const ask: Ask = { id: params.askId ?? null, ticket: asks, origin };
       try {
         const picked = await pick(params.provider);
         if ('offline' in picked) {
-          publish({ ...EMPTY, proposal: state.proposal, phase: 'offline', question: params.text, error: picked.offline, turn: state.turn + 1, askId: ask.id });
+          publish({ ...EMPTY, proposal: state.proposal, phase: 'offline', question: params.text, error: picked.offline, turn: state.turn + 1, askId: ask.id, origin });
           return;
         }
         const model = params.model ?? ASSISTANT_DEFAULT_MODELS[picked.entry.id] ?? null;
@@ -745,8 +768,52 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       } catch (error) {
         deps.log(`assistant: ask failed: ${(error as Error).message}`);
         // Номер хода и `askId` — и у сбоя: окно по ним узнаёт, что вопрос дошёл, и перестаёт показывать «Sending…».
-        publish({ ...EMPTY, proposal: state.proposal, phase: 'error', mood: 'error', question: params.text, error: 'Something went wrong — try again', turn: state.turn + 1, askId: ask.id });
+        publish({ ...EMPTY, proposal: state.proposal, phase: 'error', mood: 'error', question: params.text, error: 'Something went wrong — try again', turn: state.turn + 1, askId: ask.id, origin });
       }
+    } finally {
+      inflight -= 1;
+      releaseWaiters();
+    }
+  }
+
+  const clock = (at: number): string => new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false }).format(at);
+
+  function reminderTool(name: string, input: Record<string, unknown>): AssistantReply {
+    if (name === 'list_reminders') {
+      const all = deps.reminders.list();
+      const text = all.length === 0 ? 'No reminders scheduled' : all.map((item) => `${item.id} — ${clock(Date.parse(item.at))} — ${item.every === null ? '' : `every ${item.every} min — `}${item.what}`).join('\n');
+      return { status: 200, body: { text } };
+    }
+    if (name === 'cancel_reminder') {
+      const id = stringArg(input, 'id').trim();
+      if (id === '') return { status: 400, body: { error: 'id is empty' } };
+      return { status: 200, body: { text: `Cancelled ${deps.reminders.cancel(id)} reminder(s)` } };
+    }
+    const number = (key: string): number | undefined | null => {
+      const value = input[key];
+      return value === undefined ? undefined : typeof value === 'number' ? value : null;
+    };
+    const inMinutes = number('in_minutes');
+    const everyMinutes = number('every_minutes');
+    const at = input['at'];
+    if (inMinutes === null || everyMinutes === null || (at !== undefined && typeof at !== 'string')) return { status: 400, body: { error: 'in_minutes and every_minutes are numbers, at is a string' } };
+    const stamp = now();
+    const added = deps.reminders.add({
+      what: stringArg(input, 'what'),
+      ...(inMinutes === undefined ? {} : { inMinutes }),
+      ...(at === undefined ? {} : { at }),
+      ...(everyMinutes === undefined ? {} : { everyMinutes }),
+      now: stamp,
+    });
+    if ('error' in added) return { status: 400, body: { error: added.error } };
+    const minutes = Math.max(1, Math.round((Date.parse(added.at) - stamp) / 60_000));
+    return { status: 200, body: { text: `Scheduled ${added.id} for ${clock(Date.parse(added.at))} (in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'})` } };
+  }
+
+  return {
+    async ask(params) {
+      lastAsk = { provider: params.provider, model: params.model, language: params.language };
+      await runAsk(params, 'island');
     },
     cancel() {
       asks += 1;
@@ -801,12 +868,29 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
           return proposeRoomDecision(input, src, targets);
         case 'propose_decision':
           return proposeDecision(input, targets);
+        case 'schedule_check':
+        case 'list_reminders':
+        case 'cancel_reminder':
+          return reminderTool(name, input);
         case 'end_conversation':
           current.endAfterTurn = true;
           return { status: 200, body: { text: 'The conversation starts over after this reply.' } };
         default:
           return { status: 404, body: { error: `unknown tool ${name}` } };
       }
+    },
+    async onReminder(reminder, late) {
+      const wanted = lastAsk;
+      const picked = await pick(wanted.provider);
+      if ('offline' in picked) {
+        deps.log(`assistant: reminder ${reminder.id} skipped: ${picked.offline}`);
+        return 'skipped';
+      }
+      // Идущий ход не перебиваем: ждём, пока он закончится и никакой вопрос человека не запускается.
+      while (turn !== null || inflight > 0) await new Promise<void>((resolve) => idleWaiters.push(resolve));
+      const flags = `${late ? ', late' : ''}${isLastCheck(reminder) ? ', last check' : ''}`;
+      await runAsk({ text: `[reminder ${reminder.id}, asked at ${reminder.askedAt}${flags}] Check: ${reminder.what}`, ...wanted }, 'reminder');
+      return 'fired';
     },
     stop() {
       stopTurn();

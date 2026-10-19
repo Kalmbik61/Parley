@@ -6,6 +6,7 @@ import type { AssistantStreamEvent, ProviderEntry, WorkEntry, WorkMap } from '@p
 import type { AssistantState } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import { createAssistantService, type AssistantServiceDeps } from './assistant-service.js';
+import type { Reminder } from './reminders.js';
 import type { TurnEnd, TurnSpec } from './turn.js';
 
 interface FakeTurn { spec: TurnSpec; emit(event: AssistantStreamEvent): void; end(result: TurnEnd): void; cancelled: boolean }
@@ -50,6 +51,7 @@ beforeEach(async () => {
     ready: async () => null,
     launchEnv: async () => ({}),
     binary: async (command) => `/bin/${command}`,
+    reminders: { add: vi.fn(), list: vi.fn().mockReturnValue([]), cancel: vi.fn().mockReturnValue(0) },
     home,
     log: () => {},
     run: (spec, onEvent) => {
@@ -564,5 +566,70 @@ describe('assistant-service: решение по карточке агента',
     turns[0]?.emit({ type: 'tool', name: 'propose_decision', input: {} });
     expect(last()).toMatchObject({ phase: 'tool', detail: { tool: 'propose', target: null } });
     void service;
+  });
+});
+
+describe('assistant-service: напоминания', () => {
+  const REMINDER: Reminder = { id: 'r1', what: 'check the release room', at: '2026-10-19T12:00:00.000Z', every: null, createdAt: '2026-10-19T11:55:00.000Z', askedAt: '2026-10-19T11:55:00.000Z' };
+  const clock = (at: number): string => new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false }).format(at);
+
+  it('schedule_check → ответ «Scheduled r1 for HH:mm (in 5 minutes)»', async () => {
+    const at = Date.UTC(2026, 9, 19, 12, 0, 0);
+    const add = vi.fn().mockReturnValue({ ...REMINDER, at: new Date(at + 5 * 60_000).toISOString() });
+    const service = createAssistantService({ ...deps, now: () => at, reminders: { ...deps.reminders, add } });
+    await service.ask(ASK);
+    const reply = await service.tool('schedule_check', { in_minutes: 5, what: 'check the release room' });
+    expect(add).toHaveBeenCalledWith({ what: 'check the release room', inMinutes: 5, now: at });
+    expect(reply).toEqual({ status: 200, body: { text: `Scheduled r1 for ${clock(at + 5 * 60_000)} (in 5 minutes)` } });
+  });
+  it('schedule_check: ошибка хранилища — 400 с текстом', async () => {
+    const service = createAssistantService({ ...deps, reminders: { ...deps.reminders, add: vi.fn().mockReturnValue({ error: 'Too many reminders (10 at most)' }) } });
+    await service.ask(ASK);
+    expect(await service.tool('schedule_check', { in_minutes: 5, what: 'x' })).toEqual({ status: 400, body: { error: 'Too many reminders (10 at most)' } });
+    expect((await service.tool('schedule_check', { in_minutes: '5', what: 'x' })).status).toBe(400);
+  });
+  it('list_reminders и cancel_reminder', async () => {
+    const list = vi.fn().mockReturnValue([{ ...REMINDER, every: 10 }, { ...REMINDER, id: 'r2', what: 'once' }]);
+    const cancel = vi.fn().mockReturnValue(2);
+    const service = createAssistantService({ ...deps, reminders: { ...deps.reminders, list, cancel } });
+    await service.ask(ASK);
+    const time = clock(Date.parse(REMINDER.at));
+    expect(await service.tool('list_reminders', {})).toEqual({ status: 200, body: { text: `r1 — ${time} — every 10 min — check the release room\nr2 — ${time} — once` } });
+    expect(await service.tool('cancel_reminder', { id: '*' })).toEqual({ status: 200, body: { text: 'Cancelled 2 reminder(s)' } });
+    expect(cancel).toHaveBeenCalledWith('*');
+    list.mockReturnValue([]);
+    expect(await service.tool('list_reminders', {})).toEqual({ status: 200, body: { text: 'No reminders scheduled' } });
+  });
+  it('срабатывание во время хода ждёт его конца, потом ход с origin reminder; вопрос человека — снова island', async () => {
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    expect(last().origin).toBe('island');
+    let result: string | null = null;
+    const firing = service.onReminder(REMINDER, false).then((value) => { result = value; });
+    await flush();
+    await flush();
+    expect(turns).toHaveLength(1);
+    expect(result).toBeNull();
+    turns[0]?.end({ ok: true });
+    await firing;
+    expect(result).toBe('fired');
+    expect(turns).toHaveLength(2);
+    expect(turns[1]?.spec.args[1]).toBe('[reminder r1, asked at 2026-10-19T11:55:00.000Z] Check: check the release room');
+    expect(last()).toMatchObject({ phase: 'thinking', origin: 'reminder' });
+    turns[1]?.end({ ok: true });
+    await flush();
+    await service.ask({ ...ASK, text: 'ещё' });
+    expect(last()).toMatchObject({ phase: 'thinking', origin: 'island' });
+  });
+  it('поздний и последний вызовы помечены в тексте; без вопросов человека язык en', async () => {
+    const service = createAssistantService(deps);
+    const last24: Reminder = { ...REMINDER, every: 600, at: '2026-10-20T10:00:00.000Z', createdAt: '2026-10-19T11:55:00.000Z' };
+    expect(await service.onReminder(last24, true)).toBe('fired');
+    expect(turns[0]?.spec.args[1]).toBe('[reminder r1, asked at 2026-10-19T11:55:00.000Z, late, last check] Check: check the release room');
+  });
+  it('нет готового провайдера — skipped, хода нет', async () => {
+    const service = createAssistantService({ ...deps, ready: async () => 'Claude CLI is not installed' });
+    expect(await service.onReminder(REMINDER, false)).toBe('skipped');
+    expect(turns).toHaveLength(0);
   });
 });
