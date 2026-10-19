@@ -30,6 +30,8 @@ const MAX_DELAY_MS = 2 ** 31 - 1;
 const REARM_MS = 60_000;
 /** Пауза перед повтором, когда помощник сейчас не может взять ход (`'retry'`). */
 const RETRY_MS = 5_000;
+/** Сколько раз подряд повторяем одно напоминание (12 × 5 с = минута), потом оно снимается: хост может так и не стать готовым. */
+const MAX_RETRIES = 12;
 
 type DueResult = 'fired' | 'skipped' | 'later' | 'retry';
 
@@ -97,6 +99,8 @@ export function createReminderStore(deps: { home: string; now?(): number; log(li
   let timer: NodeJS.Timeout | null = null;
   let ticking = false;
   let stopped = false;
+  let retryId: string | null = null; // напоминание, которое повторяем подряд
+  let retries = 0;
 
   function save(): void {
     try {
@@ -167,6 +171,21 @@ export function createReminderStore(deps: { home: string; now?(): number; log(li
         if (result === 'later') {
           stopped = true; // хост останавливается: файл не трогаем и таймер не взводим, иначе просроченное крутилось бы по кругу
           break;
+        }
+        if (result === 'retry') {
+          retries = retryId === due.id ? retries + 1 : 1;
+          retryId = due.id;
+        } else {
+          retryId = null;
+          retries = 0;
+        }
+        if (result === 'retry' && retries > MAX_RETRIES) {
+          deps.log(`assistant: reminder ${due.id} dropped after ${MAX_RETRIES} retries (the assistant could not start)`);
+          retryId = null;
+          retries = 0;
+          advance(due);
+          save();
+          continue;
         }
         if (result === 'retry') {
           // Напоминание остаётся как есть; повтор не через `arm()`: он сработал бы тут же, раз срок уже вышел.

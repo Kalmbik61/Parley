@@ -202,7 +202,8 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
           ...(sending !== null && !accepted && sending.instance === null && host.instance !== undefined ? { sending: { ...sending, instance: host.instance } } : {}),
           ...(reveal ? { collapsed: false, byHover: false } : {}),
           // Ошибку на карточке стирает только новая карточка: публикация той же (смена фазы) её не трогает.
-          ...(host.proposal !== null && host.proposal.id !== previous.proposal?.id ? { cardError: null } : {}),
+          // Новый ход (карточки и итога нет) тоже стирает причину: она жила вместе с итогом прошлой карточки.
+          ...((host.proposal !== null && host.proposal.id !== previous.proposal?.id) || (host.proposal === null && host.outcome === null) ? { cardError: null } : {}),
         });
         if (restarted && sending !== null) giveBack(sending.text);
         pump();

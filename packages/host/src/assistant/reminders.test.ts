@@ -207,6 +207,19 @@ describe('reminders: ревью', () => {
     expect(onDue).toHaveBeenCalledTimes(2);
     expect(store.list()).toEqual([]);
   });
+  it("'retry' без конца — после 12 повторов напоминание снято, onDue больше не зовут", async () => {
+    await seed({ version: 1, counter: 1, reminders: [overdue('r1', 5)] });
+    const onDue = vi.fn().mockResolvedValue('retry');
+    store.start(onDue);
+    await advance(0);
+    for (let round = 0; round < 12; round += 1) await advance(5_000);
+    expect(onDue).toHaveBeenCalledTimes(13);
+    expect(store.list()).toEqual([]);
+    expect((await read()).reminders).toEqual([]);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('reminder r1 dropped after 12 retries'));
+    await advance(60_000);
+    expect(onDue).toHaveBeenCalledTimes(13);
+  });
   it('файл с every: 0 или битой датой — такие напоминания отброшены, start возвращается, в журнале строка', async () => {
     const good = overdue('r1', 5);
     await seed({ version: 1, reminders: [{ ...overdue('r2', 5), every: 0 }, { ...overdue('r3', 5), every: 2000 }, { ...overdue('r4', 5), createdAt: 'nope' }, { ...overdue('r5', 5), askedAt: 'nope' }, good] });

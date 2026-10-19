@@ -66,6 +66,10 @@ describe('стор помощника', () => {
     store.getState().applyHost({ ...HOST_IDLE, proposal: null, outcome: 'cancelled', turn: 1 });
     await deciding;
     expect(store.getState().cardError).toBe('Already answered');
+    store.getState().applyHost({ ...HOST_IDLE, proposal: null, outcome: 'cancelled', turn: 1 });
+    expect(store.getState().cardError).toBe('Already answered');
+    store.getState().applyHost({ ...HOST_IDLE, proposal: null, outcome: null, turn: 2 });
+    expect(store.getState().cardError).toBeNull();
     store.getState().applyHost({ ...HOST_IDLE, proposal: { ...proposal, id: 'p2' }, phase: 'awaiting-confirm', turn: 2 });
     expect(store.getState().cardError).toBeNull();
   });
