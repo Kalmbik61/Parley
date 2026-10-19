@@ -1,4 +1,5 @@
 import type { AssistantState } from './assistant.js';
+import type { TelegramStatus } from './telegram.js';
 import type { BacklogChanged } from './backlog.js';
 import type { BrowserAgentOpEvent } from './browser-agent.js';
 import type { CapabilitySnapshot } from './capability-snapshot.js';
@@ -52,6 +53,7 @@ export interface Events {
    */
   'browser.agentOp': BrowserAgentOpEvent;
   'assistant.changed': AssistantState;
+  'telegram.changed': TelegramStatus;
 }
 
 export type EventName = keyof Events;
