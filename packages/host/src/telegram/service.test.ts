@@ -583,6 +583,20 @@ describe('createTelegramService: комнаты, письма, помощник'
     expect(assistant.ask).not.toHaveBeenCalled();
   });
 
+  it('решение со встроенным планом: Accept передаёт planId и planRev плана, а не полей решения', async () => {
+    await bootLinked();
+    const plan = { id: 'pl-01', roomId: 'r-01', rev: 4, mode: 'checklist', status: 'proposed', goal: 'New goal', items: [], backlog: [], acceptedAt: null, completedAt: null, cancelledAt: null, completionSummary: null };
+    const room = decisionRoom() as { proposal: Record<string, unknown> };
+    room.proposal = { ...room.proposal, rev: 2, plan };
+    setWorks(snap({ rooms: [room] }));
+    await settle();
+
+    push([tap(lastOutId, `pc1:${shortIdOf(sent().at(-1)!)}:y`)]);
+    await settle();
+    expect(resolveRoomProposal).toHaveBeenCalledWith(expect.objectContaining({ action: 'accept', rev: 2, planId: 'pl-01', planRev: 4 }));
+    expect(edits().at(-1)?.params.text).toContain('Accepted');
+  });
+
   it('/skip возвращает без заметки', async () => {
     await bootLinked();
     setWorks(snap({ rooms: [decisionRoom()] }));

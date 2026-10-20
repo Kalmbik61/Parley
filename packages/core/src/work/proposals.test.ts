@@ -8,6 +8,7 @@ import {
   ProposalConflictError,
   resolveProposal,
   RETURNED_LETTER,
+  planRefOf,
   setProposal,
 } from './proposals.js';
 import { addRoom, RoomRuleError } from './rooms.js';
@@ -431,5 +432,23 @@ describe('resolveProposal: версия карточки (rev)', () => {
   it('устаревший proposalId с верным rev — по-прежнему conflict', () => {
     const map = replaced();
     expect(() => resolveProposal(map, 'r-01', 'p-99', 'accept', { rev: 1 })).toThrow(ProposalConflictError);
+  });
+});
+
+describe('planRefOf', () => {
+  const base = { id: 'p-01', from: 's-01', text: 'go', rev: 2, at: '' };
+
+  it('встроенный план главнее полей planId/planRev', () => {
+    const plan = { id: 'pl-01', rev: 4 } as unknown as NonNullable<import('./types.js').Proposal['plan']>;
+    expect(planRefOf({ ...base, plan, planId: 'pl-99', planRev: 9 })).toEqual({ planId: 'pl-01', planRev: 4 });
+  });
+
+  it('без встроенного плана берутся planId и planRev решения о завершении', () => {
+    expect(planRefOf({ ...base, kind: 'completion', planId: 'pl-01', planRev: 4 })).toEqual({ planId: 'pl-01', planRev: 4 });
+  });
+
+  it('у обычного решения плана нет', () => {
+    expect(planRefOf(base)).toBeNull();
+    expect(planRefOf({ ...base, planId: 'pl-01' })).toBeNull();
   });
 });

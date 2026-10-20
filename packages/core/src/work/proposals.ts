@@ -10,7 +10,7 @@ import { addMessage, maxNumber } from './map.js';
 import { addSystemMessage, isRoomClosed, liveLead, requireOpenRoom, RoomRuleError } from './rooms.js';
 import { acceptRoomPlan, completeRoomPlan, requirePlanLead, planItemsComplete, PlanConflictError } from './plans.js';
 import { proposedRoomPlan } from './plans.js';
-import { HUMAN, type PlanDraft, type Room, type WorkMap } from './types.js';
+import { HUMAN, type PlanDraft, type Proposal, type Room, type WorkMap } from './types.js';
 
 /** Предел текста решения в знаках (дизайн комнат, 3.1). */
 export const PROPOSAL_TEXT_MAX = 10_000;
@@ -103,6 +103,17 @@ export function setProposal(
 }
 
 /** Что человек добавляет к ответу на решение. */
+/**
+ * Личность плана, которую `resolveProposal` сверяет с ответом человека: встроенный план решения (`plan`) главнее
+ * полей `planId`/`planRev` (так у поправки плана и у решения о завершении). `null` — у решения плана нет;
+ * клиент с таким решением не передаёт `planId`/`planRev`.
+ */
+export function planRefOf(proposal: Proposal): { planId: string; planRev: number } | null {
+  const planId = proposal.plan?.id ?? proposal.planId;
+  const planRev = proposal.plan?.rev ?? proposal.planRev;
+  return planId === undefined || planRev === undefined ? null : { planId, planRev };
+}
+
 export interface ResolveOptions {
   /** Required for plan-bearing decisions/completions, in addition to proposal rev. */
   planId?: string;
