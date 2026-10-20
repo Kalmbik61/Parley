@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseTomlAssignment, parseTomlValue, type TomlValue } from '../../test/toml-mini.js';
+import { BROWSER_TOOLS_ASK } from '../mcp/browser-tools.js';
 import { MAX_TIMEOUT_SEC } from '../mcp/tools.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import {
@@ -73,7 +74,8 @@ describe('конфиг MCP-сервера на сессию', () => {
         `args=[${JSON.stringify(MCP_SERVER_ENTRY)}],` +
         'env={PARLEY_WORK_DIR="/project/.parley/works/w-0042",PARLEY_SESSION_ID="s-02",' +
         'HARNAS_WORK_DIR="/project/.parley/works/w-0042",HARNAS_SESSION_ID="s-02"},' +
-        `startup_timeout_sec=${CODEX_MCP_STARTUP_TIMEOUT_SEC},tool_timeout_sec=${CODEX_MCP_TOOL_TIMEOUT_SEC}}`,
+        `startup_timeout_sec=${CODEX_MCP_STARTUP_TIMEOUT_SEC},tool_timeout_sec=${CODEX_MCP_TOOL_TIMEOUT_SEC},` +
+        'tools={browser_evaluate={approval_mode="prompt"}}}',
     );
   });
 
@@ -86,7 +88,16 @@ describe('конфиг MCP-сервера на сессию', () => {
       env: SESSION_ENV,
       startup_timeout_sec: CODEX_MCP_STARTUP_TIMEOUT_SEC,
       tool_timeout_sec: CODEX_MCP_TOOL_TIMEOUT_SEC,
+      tools: { browser_evaluate: { approval_mode: 'prompt' } },
     });
+  });
+
+  it('browser_evaluate у Codex спрашивает в каждой сессии Parley: свой approval_mode = "prompt" сильнее «Always allow» из config.toml человека (спайк В12)', () => {
+    const { value } = parseTomlAssignment(codexMcpOverride(params));
+    const tools = (value as { tools: Record<string, { approval_mode: string }> }).tools;
+    // Спрашивают ровно те инструменты, что и у Claude Code (`permissions.ask`), — сейчас только скрипт агента в странице.
+    expect(Object.keys(tools)).toEqual(BROWSER_TOOLS_ASK.map((op) => `browser_${op}`));
+    for (const tool of Object.values(tools)) expect(tool.approval_mode).toBe('prompt');
   });
 
   it('запуск сервера с запасом, а вызов — дольше самого долгого wait_for', () => {
