@@ -2263,6 +2263,8 @@ git commit -m "feat(desktop): browser_evaluate, browser_cookies, browser_storage
 
 ## Задача 20. Окно: занятость, размер от агента, Stop, значок, рамка, точка клика, фокус (‖ с 21)
 
+> **Рецензия пачки 3 (2026-10-20):** main уже шлёт и ждёт: `browser:agent-activity` с `op: 'focus'`, `phase: 'step'`, `focus: { id }` — просьба одолжить фокус странице `id` (окно отвечает `agentFocusReady(id, ok)`, `ok = document.activeElement === <webview>`); `browser:agent-resize` — размер от агента. Main собирает это в `createFocusBorrower` и `createWindowHooks` (`agent-ops.ts`). `guard.check()` на клавиатуру не смотрит; тишину проверяет `guard.keyboardQuiet()` после одалживания фокуса (коммит a6899af4). Тесты 20 и E2E 22a: фокус человека вернулся (Chat), `onFocusCapture` не сменил активную группу.
+
 **Файлы:**
 - Изменить: `packages/desktop/src/renderer/browser/BrowserSurface.tsx`, `packages/desktop/src/renderer/browser/panel/PanelSurface.tsx`, `packages/desktop/src/renderer/browser/panel/agent-registry.ts`
 - Создать: `packages/desktop/src/renderer/browser/agent-activity.ts` (состояние значка, точки и одалживания фокуса по событиям; чистые функции и маленький стор), `agent-activity.test.ts`
