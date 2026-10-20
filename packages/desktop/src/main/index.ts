@@ -30,6 +30,8 @@ import { ISLAND_EVENTS, type AssistantOpenRequest, type IslandConfig } from '../
 import { S } from '../shared/strings.js';
 import type { UiFile } from '../shared/ui-types.js';
 import { createAgentDownloads } from './browser/agent-downloads.js';
+import { createAgentScripts } from './browser/agent-evaluate.js';
+import { createAgentStorage } from './browser/agent-storage.js';
 import { createAgentOps, routeDownload, type AgentOps } from './browser/agent-ops.js';
 import { createAgentWindow } from './browser/agent-window.js';
 import { createTypingClock } from './browser/human-typing.js';
@@ -690,6 +692,9 @@ if (!gotLock) {
     // `loadedWindows` тут не годится: первый же `<webview>` даёт окну `did-start-loading` (а `did-finish-load` — нет), и признак
     // снимался бы насовсем; главный кадр окна от гостей не зависит.
     const ops = createAgentOps({
+      scripts: createAgentScripts({ inspector }),
+      storage: createAgentStorage({ cookies: browserSession.cookies, inspector }),
+      downloads: agentDownloads,
       agentsAllowed: async () => (await uiStore.load()).browser.agentsAllowed,
       openTab: (e) => {
         const window = mainWindow;

@@ -11,7 +11,8 @@ import { workKey } from '../../shared/work-keys.js';
 import { createPageRegistry } from './agent-pages.js';
 import type { InputGuard } from './agent-input.js';
 import { AGENT_LIMITS } from '@parley/protocol';
-import type { BrowserAgentNavigateResult, BrowserAgentOpenResult, BrowserAgentResizeResult, BrowserAgentScreenshotResult } from '@parley/protocol';
+import type { BrowserAgentDownload, BrowserAgentDownloadsResult, BrowserAgentNavigateResult, BrowserAgentOpenResult, BrowserAgentResizeResult, BrowserAgentScreenshotResult } from '@parley/protocol';
+import { createAgentStorage } from './agent-storage.js';
 import { createAgentWindow } from './agent-window.js';
 import { createTypingClock } from './human-typing.js';
 import { agentViewport, createAgentOps, createFocusBorrower, createPageRunner, createWindowHooks, NOT_MOUNTED_NOTE, resolveAgentUrl, routeDownload, AgentOpError, type PageUse } from './agent-ops.js';
@@ -51,6 +52,11 @@ function okResult<T>(result: BrowserAgentResult): T {
   return result.result as T;
 }
 
+const AX_NODES = [
+  { nodeId: '1', ignored: false, role: { value: 'RootWebArea' }, name: { value: 'Settings' }, childIds: ['2'] },
+  { nodeId: '2', ignored: false, role: { value: 'button' }, name: { value: 'Save' }, parentId: '1', backendDOMNodeId: 12 },
+];
+
 const request = (op = 'console'): BrowserAgentOpEvent => ({ opId: 'op-1', ref: REF, label: 'S02', owners: [OWN], op: op as BrowserAgentOpEvent['op'], args: {} });
 
 /** Снимок журнала: одна запись консоли и один упавший запрос. */
@@ -66,7 +72,11 @@ function devtoolsWith(options: { consoleText: string; requestUrl: string }): Dev
 }
 
 /** Полный `createAgentOps` с внешней страницей. */
-function setup(options: { url?: string; requestFocus?: (contents: WebContents, id: string) => boolean; uploadHome?: string; page?: boolean; openReply?: { mounted: boolean }; openMs?: number; resizeMs?: number; resizeApplies?: boolean } = {}) {
+function setup(options: { url?: string; requestFocus?: (contents: WebContents, id: string) => boolean; uploadHome?: string; page?: boolean; openReply?: { mounted: boolean }; openMs?: number; resizeMs?: number; resizeApplies?: boolean; owners?: BrowserAgentOpEvent['owners']; realStorage?: boolean } = {}) {
+  const state = { allowed: true, epoch: 1 };
+  const scripts = { evaluateOf: vi.fn<(contents: unknown, id: string, args: unknown, element: number | null, signal: AbortSignal) => Promise<unknown>>(async () => ({ tab: 't1', url: 'http://localhost:5173/settings', type: 'number', value: '1', truncated: false })) };
+  const downloads = { list: vi.fn<(workKey: string, sessionId: string) => BrowserAgentDownload[]>(() => []), dirOf: vi.fn((work: string, session: string) => `/downloads/${work}/${session}`) };
+  const storage = { cookiesOf: vi.fn(async () => ({})), storageOf: vi.fn(async () => ({})) };
   const guests = new Map<number, Guest>([[7, fakeGuest(7, options.url ?? 'http://localhost:5173/settings')]]);
   const emulationState = new Map<number, ViewportSpec | null>();
   const resize = vi.fn((e: AgentResize): boolean => {
@@ -75,15 +85,22 @@ function setup(options: { url?: string; requestFocus?: (contents: WebContents, i
   });
   const asked: AgentOpenTab[] = [];
   const inspector = {
-    snapshot: vi.fn((): DevtoolsSnapshot | null => ({ epoch: 1, capture: 'on', console: [], network: [] })),
-    send: vi.fn(async (): Promise<unknown> => ({})),
+    snapshot: vi.fn((): DevtoolsSnapshot | null => ({ epoch: state.epoch, capture: 'on', console: [], network: [] })),
+    send: vi.fn(async (_id?: number, method?: string): Promise<unknown> => (method === 'Accessibility.getFullAXTree' ? { nodes: AX_NODES } : {})),
     responseBody: vi.fn(async () => null),
     onEvent: vi.fn(() => () => undefined),
   };
+  const cookieJar = [
+    { name: 'sid', value: 'S3SS', domain: 'localhost', path: '/', secure: false, httpOnly: true, sameSite: 'lax', session: true },
+    { name: 'theme', value: 'dark', domain: 'localhost', path: '/', secure: false, httpOnly: false, sameSite: 'lax', session: true },
+  ];
   const cropRect = vi.fn<(data: Buffer, rect: { x: number; y: number; width: number; height: number }) => Buffer>((data) => data);
   const ctx = { ops: null as unknown as ReturnType<typeof createAgentOps> };
   const ops = createAgentOps({
-    agentsAllowed: async () => true,
+    agentsAllowed: async () => state.allowed,
+    scripts: scripts as never,
+    storage: options.realStorage === true ? createAgentStorage({ cookies: { get: async () => cookieJar, set: async () => undefined, remove: async () => undefined } as never, inspector: inspector as never }) : (storage as never),
+    downloads,
     openTab: (e: AgentOpenTab) => {
       asked.push(e);
       if (options.openReply === undefined) return false;
@@ -111,8 +128,18 @@ function setup(options: { url?: string; requestFocus?: (contents: WebContents, i
   ops.registerTab({ kind: 'hello', generation: GEN });
   const registerPage = (): void => ops.registerTab({ kind: 'page', generation: GEN, webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true });
   if (options.page !== false) registerPage();
-  const run = (op: string, args: unknown = {}): Promise<BrowserAgentResult> => ops.run({ ...request(op), args });
-  return { ops, inspector, guests, run, resize, emulationState, asked, cropRect, registerPage };
+  const run = (op: string, args: unknown = {}): Promise<BrowserAgentResult> => ops.run({ ...request(op), ...(options.owners === undefined ? {} : { owners: options.owners }), args });
+  const control = {
+    state,
+    scripts,
+    storage,
+    downloads,
+    register: (patch: Record<string, unknown> = {}): void => ops.registerTab({ kind: 'page', generation: GEN, webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true, ...patch } as AgentPageRegistration),
+    registerForeign: (patch: Record<string, unknown>): void => ops.registerTab({ kind: 'page', generation: GEN, webContentsId: 8, workKey: WORK, visible: true, ...patch } as AgentPageRegistration),
+    pause: (): void => ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: true }),
+    resume: (): void => ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: false }),
+  };
+  return Object.defineProperty({ ops, inspector, guests, run, resize, emulationState, asked, cropRect, registerPage, ...control }, 'allowed', { set: (value: boolean) => { state.allowed = value; } });
 }
 
 /** Только `createPageRunner` со своим реестром; страницы `t1` (гость 7) и, по просьбе, `t2` (гость 8). */
@@ -600,5 +627,78 @@ describe('navigate, resize, open, снимок элемента (задача 18
 
     // Ссылка прежнего документа — stale_ref, снимка нет.
     expect(codeOf(await ctx.run('screenshot', { tab: 't1', ref: 'e99' }))).toBe('stale_ref');
+  });
+});
+
+
+describe('evaluate, cookies, storage, downloads (задача 19)', () => {
+  it('evaluate на паузе, при выключенном доступе и у занятой страницы — отказ без sendAgentScript', async () => {
+    const ctx = setup();
+    ctx.register({ humanBusy: true });
+    expect(codeOf(await ctx.run('evaluate', { tab: 't1', expression: '1' }))).toBe('human_busy');
+    ctx.register({ humanBusy: false });
+    ctx.pause();
+    expect(codeOf(await ctx.run('evaluate', { tab: 't1', expression: '1' }))).toBe('access_denied');
+    ctx.resume();
+    ctx.allowed = false;
+    expect(codeOf(await ctx.run('evaluate', { tab: 't1', expression: '1' }))).toBe('access_denied');
+    expect(ctx.scripts.evaluateOf).not.toHaveBeenCalled();
+  });
+
+  it('evaluate с ref — элемент из текущего снимка; устаревшая ссылка — stale_ref', async () => {
+    const ctx = setup();
+    const snap = okResult<{ text: string }>(await ctx.run('snapshot', { tab: 't1' }));
+    const ref = /\[ref=(e\d+)\] button "Save"/.exec(snap.text)?.[1] as string;
+    expect(codeOf(await ctx.run('evaluate', { tab: 't1', function: '(el) => el.id', ref }))).toBe('ok');
+    expect(ctx.scripts.evaluateOf.mock.calls[0]?.[3]).toBe(12);
+    ctx.state.epoch = 2;
+    expect(codeOf(await ctx.run('evaluate', { tab: 't1', function: '(el) => el.id', ref }))).toBe('stale_ref');
+    expect(ctx.scripts.evaluateOf).toHaveBeenCalledTimes(1);
+  });
+
+  it('Stop посреди evaluate — access_denied, результат не отдаётся', async () => {
+    const ctx = setup();
+    ctx.scripts.evaluateOf.mockImplementation((_c, _id, _args, _el, signal) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))));
+    const pending = ctx.run('evaluate', { tab: 't1', expression: 'while (true) {}' });
+    await vi.waitFor(() => expect(ctx.scripts.evaluateOf).toHaveBeenCalled());
+    ctx.ops.stop(7);
+    expect(codeOf(await pending)).toBe('access_denied');
+  });
+
+  it('cookies и storage — только у своей страницы: чужая — no_tab, cookies.get не вызван', async () => {
+    const ctx = setup({ owners: [{ kind: 'session', sessionId: 's-02' }] });
+    ctx.registerForeign({ owner: { kind: 'session', sessionId: 's-09' }, pageId: 'bp-foreign' }); // t2 — чат другой сессии
+    expect(codeOf(await ctx.run('cookies', { tab: 't2', action: 'list', values: true }))).toBe('no_tab');
+    expect(codeOf(await ctx.run('storage', { tab: 't2', area: 'local', action: 'list' }))).toBe('no_tab');
+    expect(ctx.storage.cookiesOf).not.toHaveBeenCalled();
+    expect(ctx.storage.storageOf).not.toHaveBeenCalled();
+  });
+
+  it('downloads: список и папка своей сессии; у другой сессии той же работы — свой', async () => {
+    const ctx = setup();
+    ctx.downloads.list.mockReturnValue([{ id: 'd1', tab: 't1', name: 'a.csv', path: '/d/a.csv', url: 'http://localhost/a.csv', state: 'completed', receivedBytes: 3, totalBytes: 3, startedAt: '2026-10-20T10:00:00.000Z' }]);
+    const result = okResult<BrowserAgentDownloadsResult>(await ctx.run('downloads', {}));
+    expect(ctx.downloads.list).toHaveBeenCalledWith('/proj w-1', 's-02');
+    expect(result.downloads).toHaveLength(1);
+    expect(result.dir).toBe(ctx.downloads.dirOf('/proj w-1', 's-02'));
+  });
+
+  it('выключатель посреди evaluate — access_denied, результат не отдаётся (рецензия M4, Фокус ревью 3)', async () => {
+    const ctx = setup();
+    ctx.scripts.evaluateOf.mockImplementation((_c, _id, _args, _el, signal) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))));
+    const pending = ctx.run('evaluate', { tab: 't1', expression: 'new Promise(() => {})' });
+    await vi.waitFor(() => expect(ctx.scripts.evaluateOf).toHaveBeenCalled());
+    ctx.ops.accessChanged(false);
+    const result = await pending;
+    expect(codeOf(result)).toBe('access_denied');
+    expect(messageOf(result)).toContain('Let agents use the browser');
+  });
+
+  it('cookies с настоящим createAgentStorage: values: true — значение httpOnly не уходит в ответ (решение владельца 6, Фокус ревью 4)', async () => {
+    const ctx = setup({ realStorage: true });
+    const text = JSON.stringify(okResult(await ctx.run('cookies', { tab: 't1', action: 'list', values: true })));
+    expect(text).toContain('dark');
+    expect(text).toContain('<httpOnly: hidden>');
+    expect(text).not.toContain('S3SS');
   });
 });

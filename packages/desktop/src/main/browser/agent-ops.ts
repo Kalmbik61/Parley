@@ -20,7 +20,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DownloadItem, WebContents } from 'electron';
 import { AGENT_LIMITS, browserAgentArgs } from '@parley/protocol';
-import type { BrowserAgentArgs, BrowserAgentErrorCode, BrowserAgentNavigateResult, BrowserAgentOpEvent, BrowserAgentOpenResult, BrowserAgentResizeResult, BrowserAgentResult } from '@parley/protocol';
+import type { BrowserAgentArgs, BrowserAgentErrorCode, BrowserAgentDownloadsResult, BrowserAgentNavigateResult, BrowserAgentOpEvent, BrowserAgentOpenResult, BrowserAgentResizeResult, BrowserAgentResult } from '@parley/protocol';
 import { presetSpec, viewportSize } from '../../shared/browser-devtools.js';
 import type { ViewportSpec } from '../../shared/browser-devtools.js';
 import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistration, AgentResize } from '../../shared/browser-types.js';
@@ -30,6 +30,8 @@ import { redactSecretsInText, redactUrlsInText } from '../../shared/redact.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
 import { AgentOpError } from './agent-errors.js';
 import type { AgentDownloads } from './agent-downloads.js';
+import type { AgentScripts } from './agent-evaluate.js';
+import type { AgentStorage } from './agent-storage.js';
 import type { AgentWindow } from './agent-window.js';
 import type { TypingClock } from './human-typing.js';
 import { createAgentCapture } from './agent-capture.js';
@@ -79,6 +81,12 @@ export interface AgentOpsDeps {
   screenDpr?: AgentCaptureDeps['screenDpr'];
   /** Сколько ждать подтверждения окна, что `<webview>` стоит в размере снимка; по умолчанию `AGENT_LIMITS.captureReadyMs`. Тестам — меньше. */
   captureReadyMs?: number;
+  /** Скрипты агента в мире страницы (11): единственный вход `Inspector.sendAgentScript`. */
+  scripts: AgentScripts;
+  /** Куки и хранилище страницы агента (12). */
+  storage: AgentStorage;
+  /** Скачивания агента (10): `downloads` читает список и папку сессии. */
+  downloads: Pick<AgentDownloads, 'list' | 'dirOf'>;
   /** Окно операции агента (15b): скачивания и выбор файла в нём принадлежат агенту. */
   agentWindow: AgentWindow;
   /** Тишина клавиатуры человека (15b, рецензия M3). */
@@ -658,8 +666,29 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
             const args = parsed.data as BrowserAgentArgs<'resize'>;
             return ok(await runner.run(request, args.tab, (contents, _record, guard) => resizeOf(contents, args, guard), { changes: true }));
           }
+          case 'evaluate': {
+            const args = parsed.data as BrowserAgentArgs<'evaluate'>;
+            return ok(await runner.run(request, args.tab, (contents, record, guard) => {
+              // Ссылка — из текущего снимка страницы; устаревшая — stale_ref до всякого скрипта.
+              const element = args.ref === undefined ? null : dom.nodeOf(contents, record, args.ref);
+              return deps.scripts.evaluateOf(contents, record.agentId, args, element, guard.signal);
+            }, { changes: true, window: true }));
+          }
+          case 'cookies': {
+            const args = parsed.data as BrowserAgentArgs<'cookies'>;
+            return ok(await runner.run(request, args.tab, (contents, record) => deps.storage.cookiesOf(contents, record.agentId, args)));
+          }
+          case 'storage': {
+            const args = parsed.data as BrowserAgentArgs<'storage'>;
+            return ok(await runner.run(request, args.tab, (contents, record) => deps.storage.storageOf(contents, record.agentId, args)));
+          }
+          case 'downloads': {
+            // Без страницы, как `tabs`: список и папка сессии запроса.
+            const workKey = workKeyOf(request.ref.projectPath, request.ref.workId);
+            return ok({ dir: deps.downloads.dirOf(workKey, request.ref.sessionId), downloads: deps.downloads.list(workKey, request.ref.sessionId), notes: [] } satisfies BrowserAgentDownloadsResult);
+          }
           default:
-            // До задачи 19; остаётся защитой от операции новее окна.
+            // Остаётся защитой от операции новее окна.
             return failure('unsupported', `This window does not run ${String(request.op)} yet.`);
         }
       } catch (error) {

@@ -94,6 +94,9 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
     cropRect: (data: Buffer) => data,
   };
   const deps = {
+    scripts: { evaluateOf: vi.fn() },
+    storage: { cookiesOf: vi.fn(), storageOf: vi.fn() },
+    downloads: { list: vi.fn(() => []), dirOf: vi.fn(() => '/downloads') },
     agentsAllowed: async () => state.allowed,
     openTab,
     // Страница после ответа окна в этих тестах чаще не регистрируется: ожидание регистрации короткое.
@@ -1502,6 +1505,9 @@ describe('тайм-аут и немедленный повтор с настоя
     const emulation = createEmulation({ inspector });
     const guest = fakeGuest(7);
     const ops = createAgentOps({
+      scripts: { evaluateOf: vi.fn() },
+      storage: { cookiesOf: vi.fn(), storageOf: vi.fn() },
+      downloads: { list: vi.fn(() => []), dirOf: vi.fn(() => '/downloads') },
       agentsAllowed: async () => true,
       openTab: () => true,
       resize: () => false,
@@ -1587,6 +1593,9 @@ describe('замёрзший гость посреди fullPage не клини�
     const guest = fakeGuest(7);
     let evals = 0;
     const ops = createAgentOps({
+      scripts: { evaluateOf: vi.fn() },
+      storage: { cookiesOf: vi.fn(), storageOf: vi.fn() },
+      downloads: { list: vi.fn(() => []), dirOf: vi.fn(() => '/downloads') },
       agentsAllowed: async () => true,
       openTab: () => true,
       resize: () => false,
