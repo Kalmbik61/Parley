@@ -1,4 +1,6 @@
+import { Buffer } from 'node:buffer';
 import http from 'node:http';
+import { clearTimeout, setTimeout } from 'node:timers';
 
 /**
  * Фейковый Telegram Bot API для E2E канала Telegram (план B, задача 14).
