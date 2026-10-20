@@ -382,6 +382,7 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
           onSubmit: (text) => void useAssistantStore.getState().submit(text),
           onMic: () => useAssistantStore.getState().toggleListening(),
           onDecide: (decision) => void useAssistantStore.getState().decide(decision),
+          onTakeKeyboard: () => useAssistantStore.getState().takeKeyboard(),
           onUnqueue: (id) => useAssistantStore.getState().unqueue(id),
           onShowRequests: () => useAssistantStore.getState().close(),
         },

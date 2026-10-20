@@ -291,4 +291,35 @@ describe('стор помощника', () => {
     store.getState().applyHost({ ...HOST_IDLE, origin: 'reminder', turn: 1, phase: 'idle', answer: 'Room is fine' });
     expect(store.getState().open).toBe(false);
   });
+
+  it('остров, открытый напоминанием, не берёт клавиатуру сам; takeKeyboard берёт один раз', () => {
+    const { store, deps } = setup();
+    store.getState().applyHost({ ...HOST_IDLE, origin: 'reminder', turn: 1, phase: 'answering', answer: 'Room is fine' });
+    expect(deps.keyboard).not.toHaveBeenCalled();
+    store.getState().takeKeyboard();
+    store.getState().takeKeyboard();
+    expect(deps.keyboard).toHaveBeenCalledTimes(1);
+    expect(deps.keyboard).toHaveBeenLastCalledWith(true);
+  });
+
+  it('после close() следующее открытие напоминанием снова даёт взять клавиатуру', () => {
+    const { store, deps } = setup();
+    store.getState().applyHost({ ...HOST_IDLE, origin: 'reminder', turn: 1, phase: 'answering', answer: 'a' });
+    store.getState().takeKeyboard();
+    store.getState().close();
+    expect(deps.keyboard).toHaveBeenLastCalledWith(false);
+    store.getState().applyHost({ ...HOST_IDLE, origin: 'reminder', turn: 2, phase: 'answering', answer: 'b' });
+    store.getState().takeKeyboard();
+    expect(deps.keyboard).toHaveBeenLastCalledWith(true);
+    expect(deps.keyboard).toHaveBeenCalledTimes(3);
+  });
+
+  it('после openMode takeKeyboard — без второго вызова; закрытый остров клавиатуру не берёт', () => {
+    const { store, deps } = setup();
+    store.getState().takeKeyboard();
+    expect(deps.keyboard).not.toHaveBeenCalled();
+    store.getState().openMode({ listen: false });
+    store.getState().takeKeyboard();
+    expect(deps.keyboard).toHaveBeenCalledTimes(1);
+  });
 });

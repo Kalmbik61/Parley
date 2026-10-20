@@ -32,6 +32,7 @@ function props(patch: Partial<AssistantViewProps> = {}, host: Partial<AssistantS
     onSubmit: vi.fn(),
     onMic: vi.fn(),
     onDecide: vi.fn(),
+    onTakeKeyboard: vi.fn(),
     onUnqueue: vi.fn(),
     onShowRequests: vi.fn(),
     ...patch,
@@ -70,6 +71,13 @@ describe('вид помощника', () => {
     expect(scroll.contains(screen.getByTestId('assistant-answer'))).toBe(true);
     const shown = screen.getByTitle(question);
     expect(shown.className).toContain('line-clamp-2');
+  });
+
+  it('касание поля ввода забирает клавиатуру у острова, открытого сам', () => {
+    const p = props();
+    render(<AssistantView {...p} />);
+    fireEvent.pointerDown(screen.getByTestId('assistant-input'));
+    expect(p.onTakeKeyboard).toHaveBeenCalled();
   });
 
   it('карточка: адресат и текст; Send выключена первые 500 мс, потом зовёт onDecide', () => {
