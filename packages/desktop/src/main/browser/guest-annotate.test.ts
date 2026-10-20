@@ -46,6 +46,7 @@ interface Controller {
   count(): number;
   armed(): boolean;
   waiting(): boolean;
+  unhover(): void;
 }
 
 function controller(): Controller {
@@ -68,6 +69,12 @@ function badges(): HTMLElement[] {
 
 const pins = (): number => badges().length;
 const nextFrame = (): Promise<void> => new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
+/** Подсветка под курсором, если видна: лежит прямо в <html>, как рамка протяжки, но сплошной линией (та — пунктиром). */
+function hoverBox(): HTMLElement | null {
+  const node = Array.from(document.documentElement.children).find((el): el is HTMLElement => el instanceof HTMLElement && el.tagName === 'DIV' && el.style.borderStyle === 'solid');
+  return node !== undefined && node.style.display !== 'none' ? node : null;
+}
 
 describe('guest-annotate.js в jsdom (спека браузера 4.7; слой меток — по Orca)', () => {
   let form: HTMLFormElement;
@@ -213,6 +220,70 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7; слой 
     dispatchTrusted(button, mouse('mousemove', { clientX: 33, clientY: 32 }));
     dispatchTrusted(button, mouse('mouseup', { clientX: 33, clientY: 32 }));
     expect(((await picking) as { kind: string }).kind).toBe('element');
+  });
+
+  it('наведение — рамка элемента, который получит метку по клику; недоверенный mousemove её не рисует; на время жеста и пока метка у окна (открыт редактор) — нет; режим выключен — снята', async () => {
+    const picking = runScript();
+    button.dispatchEvent(mouse('mousemove', { clientX: 40, clientY: 40 }));
+    expect(hoverBox()).toBeNull();
+    dispatchTrusted(button, mouse('mousemove', { clientX: 40, clientY: 40 }));
+    expect(hoverBox()?.style).toMatchObject({ left: '10px', top: '20px', width: '300px', height: '120px' });
+    dispatchTrusted(button, mouse('mousedown', { clientX: 40, clientY: 40 }));
+    expect(hoverBox()).toBeNull();
+    dispatchTrusted(button, mouse('mouseup', { clientX: 40, clientY: 40 }));
+    await picking;
+    // Метка отдана окну: клик ничего не ставит — и подсветки нет.
+    dispatchTrusted(button, mouse('mousemove', { clientX: 50, clientY: 50 }));
+    expect(hoverBox()).toBeNull();
+    // Окно снова ждёт метку — подсветка с первым движением.
+    const next = runScript();
+    dispatchTrusted(button, mouse('mousemove', { clientX: 50, clientY: 50 }));
+    expect(hoverBox()).not.toBeNull();
+    controller().cancel();
+    await next;
+    expect(hoverBox()).toBeNull();
+  });
+
+  it('над номером готовой метки (клик — правка) подсветки нет; курсор ушёл со страницы (unhover от main) — рамка снята', async () => {
+    const first = runScript();
+    click(button);
+    await first;
+    controller().sync([{ n: 1, key: 'a1' }]);
+    const picking = runScript();
+    // Кружок метки 1 — с центром в левом верхнем углу формы (10, 20), прижат внутрь вьюпорта: (0, 8)–(24, 32).
+    dispatchTrusted(button, mouse('mousemove', { clientX: 12, clientY: 20 }));
+    expect(hoverBox()).toBeNull();
+    dispatchTrusted(button, mouse('mousemove', { clientX: 100, clientY: 80 }));
+    expect(hoverBox()).not.toBeNull();
+    controller().unhover();
+    expect(hoverBox()).toBeNull();
+    // Прокрутка под ушедшим курсором рамку не возвращает: точки курсора больше нет.
+    window.dispatchEvent(new Event('scroll'));
+    expect(hoverBox()).toBeNull();
+    controller().cancel();
+    await picking;
+  });
+
+  it('sync снимает подсветку: следом окно снимает страницу с номерами, рамке под курсором на снимке не место', async () => {
+    const picking = runScript();
+    dispatchTrusted(button, mouse('mousemove', { clientX: 100, clientY: 80 }));
+    expect(hoverBox()).not.toBeNull();
+    controller().sync([]);
+    expect(hoverBox()).toBeNull();
+    dispatchTrusted(button, mouse('mousemove', { clientX: 100, clientY: 80 }));
+    expect(hoverBox()).not.toBeNull();
+    controller().cancel();
+    await picking;
+  });
+
+  it('прокрутка под неподвижным курсором — рамка по новому месту элемента', async () => {
+    const picking = runScript();
+    dispatchTrusted(button, mouse('mousemove', { clientX: 40, clientY: 40 }));
+    form.getBoundingClientRect = () => domRect(10, -80, 300, 120);
+    window.dispatchEvent(new Event('scroll'));
+    expect(hoverBox()?.style.top).toBe('-80px');
+    controller().cancel();
+    await picking;
   });
 
   it('sync рисует номера и отдаёт доли вьюпорта; неизвестный ключ и пропавший элемент — null; count — только нарисованные; пусто — слой вынут', async () => {
