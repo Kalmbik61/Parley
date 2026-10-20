@@ -62,7 +62,6 @@ export function createAgentScripts(deps: { inspector: AgentScriptSender; evalMs?
       throw reason instanceof AgentOpError ? reason : new AgentOpError('timeout', 'The script was stopped.');
     }
     const id = contents.id;
-    let objectId: string | null = null;
     let timedOut = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let onAbort: (() => void) | undefined;
@@ -93,16 +92,24 @@ export function createAgentScripts(deps: { inspector: AgentScriptSender; evalMs?
         const resolved = await inspector.send<{ object?: { objectId?: string } }>(id, 'DOM.resolveNode', {
           backendNodeId: element,
         });
-        objectId = resolved.object?.objectId ?? null;
+        const objectId = resolved.object?.objectId ?? null;
         if (objectId === null) throw new AgentOpError('stale_ref', 'The element is gone; take a new snapshot.');
-        return inspector.sendAgentScript<CdpEvalResponse>(id, 'Runtime.callFunctionOn', {
-          objectId,
-          functionDeclaration: args.function,
-          arguments: [{ objectId }],
-          returnByValue: true,
-          awaitPromise: true,
-          userGesture: false,
-        });
+        try {
+          // Stop, пауза, выключатель или срок пришли, пока ждали resolveNode: гонку уже решил guard, и скрипт в страницу
+          // не уходит (финальная рецензия M2; `terminateExecution` до старта скрипта его не остановит).
+          if (signal.aborted || timedOut) throw new AgentOpError('timeout', 'The script was stopped.');
+          return await inspector.sendAgentScript<CdpEvalResponse>(id, 'Runtime.callFunctionOn', {
+            objectId,
+            functionDeclaration: args.function,
+            arguments: [{ objectId }],
+            returnByValue: true,
+            awaitPromise: true,
+            userGesture: false,
+          });
+        } finally {
+          // Объект узла освобождается и тогда, когда ответ resolveNode пришёл после обрыва.
+          void inspector.send(id, 'Runtime.releaseObject', { objectId }).catch(() => undefined);
+        }
       }
       const expression = args.expression ?? `(${args.function ?? 'undefined'})()`;
       return inspector.sendAgentScript<CdpEvalResponse>(id, 'Runtime.evaluate', {
@@ -145,7 +152,6 @@ export function createAgentScripts(deps: { inspector: AgentScriptSender; evalMs?
     } finally {
       if (timer) clearTimeout(timer);
       if (onAbort) signal.removeEventListener('abort', onAbort);
-      if (objectId !== null) void inspector.send(id, 'Runtime.releaseObject', { objectId }).catch(() => undefined);
     }
   }
 

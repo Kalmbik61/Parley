@@ -159,6 +159,26 @@ describe('скрипт агента в главном мире (решение �
     expect(sender.send).not.toHaveBeenCalled();
   });
 
+  it('Stop во время DOM.resolveNode — callFunctionOn не уходит, объект узла освобождается (финальная рецензия M2)', async () => {
+    const controller = new AbortController();
+    let answer: (value: unknown) => void = () => undefined;
+    const sender = {
+      send: vi.fn((_id: number, method: string): Promise<unknown> =>
+        method === 'DOM.resolveNode' ? new Promise((resolve) => { answer = resolve; }) : Promise.resolve({}),
+      ),
+      sendAgentScript: vi.fn(async () => ({ result: { type: 'number', value: 1 } })),
+    };
+    const { evaluateOf } = createAgentScripts({ inspector: sender as never });
+    const pending = evaluateOf(contents, 't1', { tab: 't1', function: '(el) => el.click()', ref: 'e3' }, 42, controller.signal);
+    await vi.waitFor(() => expect(sender.send).toHaveBeenCalledWith(7, 'DOM.resolveNode', { backendNodeId: 42 }));
+    controller.abort(new AgentOpError('access_denied', 'Stopped by the human (paused by the human).'));
+    await expect(pending).rejects.toMatchObject({ code: 'access_denied' });
+    // Ответ resolveNode пришёл уже после Stop.
+    answer({ object: { objectId: 'node-9' } });
+    await vi.waitFor(() => expect(sender.send).toHaveBeenCalledWith(7, 'Runtime.releaseObject', { objectId: 'node-9' }));
+    expect(sender.sendAgentScript).not.toHaveBeenCalled();
+  });
+
   it('«Execution was terminated» после своего срока — timeout, а не exception (рецензия M6)', async () => {
     const { scripts } = setup({ evaluate: 'terminatedAfter', evalMs: 20 });
     await expect(scripts.evaluateOf(contents, 't1', { tab: 't1', expression: 'while (true) {}' }, null, signal())).rejects.toMatchObject({
