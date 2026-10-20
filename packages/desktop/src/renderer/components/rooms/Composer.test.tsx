@@ -16,6 +16,7 @@ import { useUiStore } from '../../store/ui.js';
 import { fakeDictationDeps } from '../../test-utils/dictation.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { useDictationStore } from '../../voice/dictation-store.js';
+import { focusComposer, setVisibilityCheck } from '../../keys/type-to-focus.js';
 import { Composer, type ComposerMember, type ComposerSubmission } from './Composer.js';
 
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
@@ -998,5 +999,19 @@ describe('Composer — вложения', () => {
     const files = { types: ['Files'], files: [], getData: () => '/Users/me/mock.png' };
     fireEvent.drop(editor(), { dataTransfer: files });
     expect(editor().textContent).toBe('');
+  });
+});
+
+describe('Composer — набор с любого места', () => {
+  afterEach(() => setVisibilityCheck());
+
+  it('смонтированное поле регистрируется и получает фокус, после размонтирования — нет', () => {
+    setVisibilityCheck(() => true);
+    const view = renderComposer();
+    expect(focusComposer()).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: S.rooms.messageField }));
+
+    view.unmount();
+    expect(focusComposer()).toBe(false);
   });
 });
