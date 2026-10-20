@@ -1,10 +1,10 @@
 # Браузер Parley, этап D «Агент управляет браузером» — план (переписан 2026-10-20)
 
-> **Для агентов-исполнителей:** ОБЯЗАТЕЛЕН навык superpowers:subagent-driven-development (рекомендуется) или superpowers:executing-plans. Одна задача — один исполнитель; шаги — чекбоксы (`- [ ]`). Исполнитель читает: раздел «Решения владельца», «Глобальные ограничения», «Общие имена», «Фокус ревью», «Ветки спайка» и свою задачу. Старый план D читается только по ссылкам «как в старом плане, задача N».
+> **Для агентов-исполнителей:** ОБЯЗАТЕЛЕН навык superpowers:subagent-driven-development (рекомендуется) или superpowers:executing-plans. Одна задача — один исполнитель; шаги — чекбоксы (`- [ ]`). Исполнитель читает: раздел «Решения владельца», «Как работать» (коммиты с pathspec, сборки — оркестратор), «Глобальные ограничения», «Общие имена», «Фокус ревью», «Ветки спайка» и свою задачу. Старый план D читается только по ссылкам «как в старом плане, задача N».
 
 > **2026-10-20:** заменяет `2026-10-07-browser-devtools-agent-plan-d-agent-control.md` (написан 2026-10-07, до этапов B2 и C и до модели хозяев 3.10). Его структура и проверенные куски кода используются там, где этот план на них ссылается. Решения владельца 2026-10-20 перекрывают и старый план, и спеку; спеку и документы переписывает задача 23.
 
-**Цель:** агент сессии полностью управляет страницами браузера своего чата и своих комнат на любом http(s)-сайте: открывает и ждёт загрузку, ходит по адресам, читает дерево доступности со ссылками `eN`, кликает, вводит текст, выбирает, тянет, ждёт изменений, меняет размер, снимает элемент, исполняет JS в мире страницы, читает и меняет куки и хранилище текущей страницы, загружает файлы в поля и получает скачанные файлы. Человек видит значок агента со Stop, подсветку рамки и точку клика; пауза панели, Stop и общий выключатель обрывают любую операцию. Скилл `parley-browser` объясняет, как с этим работать.
+**Цель:** агент сессии полностью управляет страницами браузера своего чата и своих комнат на любом http(s)-сайте: открывает и ждёт загрузку, ходит по адресам, читает дерево доступности со ссылками `eN`, кликает, вводит текст, выбирает, тянет, ждёт изменений, меняет размер, снимает элемент, исполняет JS в мире страницы, читает и меняет куки и хранилище текущей страницы, загружает файлы в поля и получает скачанные файлы. Человек видит значок агента со Stop, подсветку рамки и точку клика; пауза панели, Stop и общий выключатель обрывают любую операцию, в том числе идущую. Значения httpOnly-кук агенту не отдаются никогда. Скилл `parley-browser` объясняет, как с этим работать.
 
 **Архитектура:** цепочка та же, что у этапов B2 и C: MCP-сервер core (`browser_*`) → `POST /agent/browser` хоста → `browser.agentOp` окну → main (`agent-ops.ts` и модули рядом) → CDP гостя через `Inspector` с закрытым списком → `browser.agentResult`. Новое в main: дерево доступности (`ax-snapshot.ts`), ссылки и ожидание (`agent-dom.ts`), ввод (`agent-input.ts`), действия (`agent-actions.ts`), окно операции агента (`agent-window.ts`: скачивания и выбор файла во время операции и 2 с после), скрипты агента (`agent-evaluate.ts`, единственный вход к `Runtime.evaluate`), куки и хранилище (`agent-storage.ts`), скачивания (`agent-downloads.ts`). Окно (рендерер) сообщает «человек занят», ставит размер от агента, показывает значок со Stop, рамку и точку клика и, если так решит спайк, «одалживает» фокус `<webview>` на время ввода агента.
 
@@ -25,6 +25,7 @@
 3. Прочая защита старого плана D сохраняется, если не противоречит п. 1–2: Stop обрывает операцию; `human_busy`; `stale_ref`; очередь страницы; пределы; маска значений секретных полей в дереве доступности. Буфер обмена — минимально (решение ниже).
 4. **Загрузка файлов — всё, кроме секретных мест (решение владельца 2026-10-20 по отчёту плана).** После `realpath` путь не лежит внутри `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, `~/.docker`, `~/.kube`, `~/Library/Keychains`, `~/.parley`, `~/.claude`, `~/.codex`, а имя файла — не `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.env` или `.env.*`, `id_rsa`, `id_ed25519`, `id_ecdsa`, `id_dsa` (где угодно; `.pub` — можно, если не в секретной папке). Иначе — `bad_request` «Parley does not upload files from secret locations (~/.ssh, keychains, .env …).», `DOM.setFileInputFiles` не вызывается. Списки — `UPLOAD_SECRET_DIRS`, `UPLOAD_SECRET_NAMES` и чистая `secretUploadPath(real, home)` в `agent-actions.ts` (задача 17). Сравнение — по сегментам пути (`~/.sshx/a` — не секретное место), регистр букв не учитывается (APFS по умолчанию к нему безразлична).
 5. **Куки — общий с человеком раздел `persist:harnas-browser` подтверждён (там же).** Отдельного раздела для страниц агента не делаем; риск описывается в спеке и README (задача 23).
+6. **Значения httpOnly-кук агенту не отдаются никогда (решение владельца 2026-10-20 по рецензии плана).** `browser_cookies list` показывает имена и флаги всех кук адреса; значения (при `values: true`) — только у кук без `httpOnly`; у httpOnly вместо значения — строка `<httpOnly: hidden>` (`HTTPONLY_HIDDEN` в `agent-storage.ts`, задача 12). `set` и `delete` можно и для httpOnly-имени; удаление куки может разлогинить человека — это сказано в описании `browser_cookies`, в скилле и в README.
 
 ## Решения плана по открытым вопросам (утверждает владелец)
 
@@ -32,40 +33,51 @@
 
 | Вопрос | Решение плана | Задачи |
 |---|---|---|
-| Папка скачиваний | `~/.parley/desktop/agent-downloads/<хеш работы, 12 hex>/<id сессии>/`, права каталога 0700, файла 0600; хранится 7 суток (`AGENT_LIMITS.downloadDays`), чистит почасовая уборка main; файл до 200 МБ (`downloadBytes`, больше — отмена с заметкой); в списке сессии — 20 последних. Скачивание, начатое во время операции агента на его странице или 2 с после неё, идёт туда без диалога; остальные — диалог человека, как сейчас | 10, 15, 19 |
-| Граница кук | `browser_cookies` берёт адрес только из `contents.getURL()` страницы агента (аргумента `url` нет): `get({ url })` — куки, которые браузер послал бы на этот адрес, включая httpOnly; `set` — только host-only кука этого адреса (аргумента `domain` нет); `delete` — `remove(url, name)`. Значения в `list` скрыты, `values: true` их показывает | 2, 4, 12 |
-| Маска «явных» чтений | Пассивные чтения (`tabs`, `console`, `network`, `snapshot`, `downloads`, `storage list`, имена кук) — через маску, как сейчас. Явно названные значения (`cookies` с `values: true`, `storage get`, `evaluate`) — как есть: иначе инструмент бесполезен; описания велят не повторять секреты | 4, 11, 12 |
-| Буфер обмена | Нет доступа: разрешения раздела и так отклонены; из команд редактирования CDP в `press` идёт только `selectAll` (⌘A/Ctrl+A); `evaluate` — с `userGesture: false` (ни `execCommand('copy')`, ни `navigator.clipboard` без жеста не работают). Вставка текста — только `type` | 9, 11, 17 |
+| Папка скачиваний | `~/.parley/desktop/agent-downloads/<хеш работы, 12 hex>/<id сессии>/`, права каталога 0700, файла 0600; хранится 7 суток (`AGENT_LIMITS.downloadDays`), чистит почасовая уборка main; файл до 200 МБ (`downloadBytes`, больше — отмена с заметкой); в списке сессии — 20 последних. Скачивание, начатое во время операции агента на его странице или 2 с после неё, идёт туда без диалога; остальные — диалог человека, как сейчас | 10, 15b, 19 |
+| Граница кук | `browser_cookies` берёт адрес только из `contents.getURL()` страницы агента (аргумента `url` нет): `get({ url })` — куки, которые браузер послал бы на этот адрес, включая httpOnly (имена и флаги); `set` — только host-only кука этого адреса (аргумента `domain` нет); `delete` — `remove(url, name)`. Значения в `list` скрыты, `values: true` их показывает — кроме httpOnly: у них всегда `<httpOnly: hidden>` (решение владельца 6) | 2, 4, 12, 19 |
+| Маска «явных» чтений | Пассивные чтения (`tabs`, `console`, `network`, `snapshot`, `downloads`, `storage list`, имена кук) — через маску, как сейчас. Явно названные значения (`cookies` с `values: true` у кук без httpOnly, `storage get`, `evaluate`) — как есть: иначе инструмент бесполезен; описания велят не повторять секреты | 4, 11, 12 |
+| Буфер обмена | **Чтения нет:** разрешения раздела отклонены (`guard.ts`); из команд редактирования CDP в `press` идёт только `selectAll` (⌘A/Ctrl+A); вставка текста — только `type`. **Запись возможна:** CDP-клик агента даёт странице активацию пользователя (около 5 с), и `execCommand('copy')` страницы или скрипта агента может положить текст в буфер обмена человека — принятый риск, спайк В17 его меряет, спека его называет. `evaluate` идёт с `userGesture: false` | 1, 9, 11, 17, 23 |
 | Фреймы чужого origin | Клики и ввод по координатам попадают в любой фрейм (это дело страницы). `snapshot` — дерево главного фрейма, фреймы — строкой `iframe "…"` без содержимого; `evaluate`, куки и хранилище — главный фрейм. Запрета `Input.*` во фреймах нет | 7, 11, 12 |
-| `evaluate`: мир и пределы | Главный мир (`Runtime.evaluate` / `Runtime.callFunctionOn` гостя), `returnByValue`, `awaitPromise`, `userGesture: false`; предел 10 с (`evalMs`: свой таймер и `Runtime.terminateExecution`), ответ до 20 КБ (`evalBytes`); с `ref` функция получает элемент первым аргументом. `Runtime.evaluate` идёт только через `Inspector.sendAgentScript`, его зовёт только `agent-evaluate.ts` (рамочный тест) | 6, 11, 19, 21 |
-| Аннотации MCP | READ `{ readOnlyHint: true, openWorldHint: false }` — `tabs`, `console`, `network`, `screenshot`, `snapshot`, `wait_for`, `downloads`; CONTROL `{ readOnlyHint: false, destructiveHint: false, openWorldHint: false }` — `open`, `navigate`, `action`, `resize`, `cookies`, `storage`; SCRIPT `{ readOnlyHint: false, destructiveHint: true, openWorldHint: true }` — `evaluate`. CONTROL с `openWorldHint: false` — это политика одобрений Parley (решение владельца), а не описание мира: вливаемая ветка ставила `browser_open` `true`, задача 4 возвращает `false` с комментарием | 4 |
-| Коды `not_loopback`, `navigation_blocked` | `not_loopback` остаётся в списке кодов (окно до D его присылает), окно D его не отдаёт. `navigation_blocked` не вводится: http(s) больше ничего не блокирует, прочие схемы отклоняет `bad_request` (аргументы) или молча страж (как у человека) | 2, 3, 15 |
-| `upload` | Действие `browser_action` (`action: 'upload'`, `ref`, `files`), а не отдельный инструмент: та же очередь, `human_busy` и `stale_ref`. Выбор файла, открытый действием агента, перехватывается (`Page.setInterceptFileChooserDialog`) — нативного диалога у человека нет, агенту заметка. Файлы из секретных мест — отказ (решение владельца 4) | 2, 15, 17 |
-| `wait_for` | Опрос дерева доступности (`Accessibility.getFullAXTree`) раз в 250 мс: видимый текст, как в `snapshot`; `DOM.performSearch` не берём — он находит и скрытый текст | 7, 16 |
+| `evaluate`: мир и пределы | Главный мир (`Runtime.evaluate` / `Runtime.callFunctionOn` гостя), `returnByValue`, `awaitPromise`, `userGesture: false`; ответ до 20 КБ (`evalBytes`); с `ref` функция получает элемент первым аргументом. **Срок — один главный таймер** `evalMs` (10 с) в `agent-evaluate.ts`: по нему `Runtime.terminateExecution` и `timeout`; ответ «Execution was terminated» после своего срока — тоже `timeout`. У `Runtime.evaluate` параметр `timeout: evalMs + 1000` — только страховка; у `Inspector.sendAgentScript` свой срок команды `evalMs + 5000` (не `CDP_COMMAND_MS`). `Runtime.evaluate` идёт только через `sendAgentScript`, его зовёт только `agent-evaluate.ts` (рамочный тест). Объект `returnByValue` сериализуется целиком до обрезки — пик памяти main принят | 6, 11, 19, 21 |
+| Аннотации MCP и вопрос про `evaluate` | READ `{ readOnlyHint: true, openWorldHint: false }` — `tabs`, `console`, `network`, `screenshot`, `snapshot`, `wait_for`, `downloads`; CONTROL `{ readOnlyHint: false, destructiveHint: false, openWorldHint: false }` — `open`, `navigate`, `action`, `resize`, `cookies`, `storage`; SCRIPT `{ readOnlyHint: false, destructiveHint: true, openWorldHint: true }` — `evaluate`. CONTROL с `openWorldHint: false` — политика одобрений Parley (решение владельца), а не описание мира: вливаемая ветка ставила `browser_open` `true`, задача 4 возвращает `false` с комментарием. Claude Code: `permissions.allow` — 13 инструментов, `permissions.ask` — `mcp__parley__browser_evaluate` (правила ask сильнее allow: вопрос будет и тогда, когда у человека в настройках есть `allow: ["mcp__parley"]`). Режим `bypassPermissions` у Claude и `approval_policy = never` у Codex не спрашивают — это пишется в README и скилле | 4, 23, 24 |
+| Коды `not_loopback`, `navigation_blocked` | `not_loopback` остаётся в списке кодов (окно до D его присылает), окно D его не отдаёт. `navigation_blocked` не вводится: http(s) больше ничего не блокирует, прочие схемы отклоняет `bad_request` (аргументы) или молча страж (как у человека) | 2, 3, 15a |
+| `upload` | Действие `browser_action` (`action: 'upload'`, `ref`, `files`), а не отдельный инструмент: та же очередь, `human_busy` и `stale_ref`. Выбор файла, открытый действием агента, перехватывается (`Page.setInterceptFileChooserDialog`) — нативного диалога у человека нет, агенту заметка. Файлы из секретных мест — отказ (решение владельца 4). Правило защищает от случайности и prompt-injection, а не от агента с Bash; жёсткие ссылки проходят — так и пишется в спеке | 2, 15b, 17, 23 |
+| `wait_for` | Опрос дерева доступности (`Accessibility.getFullAXTree`) раз в 500 мс (`pollMs`): видимый текст, как в `snapshot`; `DOM.performSearch` не берём — он находит и скрытый текст | 7, 16 |
 | Снимок элемента | Снимок вьюпорта (путь этапа C) и вырезка рамки элемента на main с множителем «ширина PNG / CSS-ширина вьюпорта» (как Select этапа B); CDP `clip` не берём — в `<webview>` он ненадёжен (этап 0, 0.7; план C) | 18 |
-| Точка клика и рамка | Рисует окно поверх `<webview>` (по `stage`), не скрипт в госте: страница их не видит, и они не зависят от событий мыши гостя (у гостя нет `mouseout`, когда курсор уходит на окно — проба 2026-10-20) | 13, 20 |
-| Фокус страницы | `Emulation.setFocusEmulationEnabled({ enabled: true })` ставится гостю один раз при первом вводе агента и не снимается (если спайк В4 покажет blur после возврата фокуса); иначе не ставится | 9 |
+| Точка клика и рамка | Рисует окно поверх `<webview>` (по `stage`), не скрипт в госте: страница их не видит, и они не зависят от событий мыши гостя (у гостя нет `mouseout`, когда курсор уходит на окно — проба 2026-10-20). Точка приходит в пикселях элемента `<webview>` (`AgentActivity.point`): main уже учёл масштаб страницы (`zoomFactor`) или вписывание эмуляции (`scale`) | 13, 17, 20 |
+| Фокус страницы | `Emulation.setFocusEmulationEnabled({ enabled: true })` — в каждой операции с вводом перед первым шагом (отладчик переподключается на навигации, кэш на гостя устаревает), не снимается; только если спайк В4 покажет blur после возврата фокуса | 9 |
+| Фокус окна при вводе агента (рецензия M1) | Фокус `<webview>` (одолженный или от CDP-клика) не должен менять активную группу, «окно в фокусе» и маршрут сочетаний. Пока у гостя открыто окно операции агента (операция и 2 с хвоста), main не шлёт окну `browser:focus` этого гостя (у стража — зависимость `agentFocus(id)`). Окно, одалживая фокус, помечает `webContentsId` (`isLendingFocus(id)`), и `onFocusCapture` у `PanelSurface` и `BrowserSurface` в это время не зовёт `focusTab` | 1, 15b, 20 |
+| Клавиатура в скрытую страницу (M2) | `agentFocusReady(id, ok)`: окно ставит фокус и отвечает `ok = document.activeElement === <webview>`; `ok: false` или нет ответа за `focusMs` — агенту `tab_hidden` «Page tN is not on screen: keyboard input needs the page shown — ask the human to show it». Приёма с `opacity: 0` и снятием `inert` нет. Мышь (CDP-клик) у скрытой после показа страницы — как решит спайк В15 | 1, 5, 9, 15b, 17, 20 |
+| Тишина клавиатуры (M3) | Считает main: `before-input-event` окна и всех гостей → `createTypingClock` (`main/browser/human-typing.ts`); события гостя, на котором сейчас вводит агент, не считаются. Перед одалживанием фокуса и перед каждым `text`/`key` main ждёт `typingIdleMs` тишины, не дольше `focusMs` (10 с), иначе `human_busy` «The human is typing in Parley's window: retry in a moment.». Окно само тишину не ждёт | 9, 15b, 20 |
+| Пауза и выключатель посреди операции (M4) | `AgentOps.accessChanged(allowed)` — из `onUiSaved` и при старте main: синхронный флаг для `guard.check()`; `false` обрывает все идущие операции (`access_denied`, у `evaluate` — `terminateExecution`). Запись реестра `paused: true` обрывает операции всех страниц панели (`runner.stopPanel`). Stop — пауза панели в реестре сразу плюс то же | 15a, 19, 20, 22a |
+| Ожидание `open` (m9) | Регистрация страницы — опрос раз в `pollMs` не дольше `openMs`; ожидание первой загрузки идёт через `runner.run(…, { window: true })` — Stop, пауза, выключатель и окно операции те же, что у прочих операций | 18 |
+| Отмена вызова MCP агентом | Окно доигрывает операцию: отмены окну нет (так было и до D) — строка в рисках | — |
 
 ## Пачки для Workflow
 
-Одна задача — один исполнитель (Sonnet). Рецензия — на пачку, финальная рецензия ветки — Opus (задача 25). Задачи одной пачки, отмеченные «‖», идут параллельно: у них нет общих файлов. «→» — строго по порядку: общие файлы (`packages/protocol/src/browser-agent.ts`, `packages/core/src/mcp/browser-tools.ts`, `packages/desktop/src/main/browser/agent-ops.ts`, `main/index.ts`).
+Одна задача — один исполнитель (Sonnet). Рецензия — на пачку, финальная рецензия ветки — Opus (задача 25). Задачи, отмеченные «‖», идут параллельно: у них нет общих файлов. «→» — строго по порядку: общие файлы (`packages/protocol/src/browser-agent.ts`, `packages/core/src/mcp/browser-tools.ts`, `packages/desktop/src/main/browser/agent-ops.ts`, `main/index.ts`) или общая нагрузка (E2E). Сборки `dist` и проверки между пакетами делает оркестратор после пачки (столбец «Оркестратор после пачки»).
 
-| Пачка | Задачи | Файлы (главные) | Зависит от | Порядок внутри |
-|---|---|---|---|---|
-| 0. База | 0 слияние `feat/browser-external-open`; 1 спайк | merge; `docs/research/2026-10-20-browser-agent-control-spike.md`, этот план | — | 0 → 1 |
-| 1. Контракт | 2 протокол; 3 core: действия; 4 core: скрипт, куки, хранилище, скачивания, разрешения; 5 мост окна и IPC | `protocol/src/browser-agent.ts`; `core/src/mcp/browser-tools.ts`, `core/src/work/settings-file.ts`; `desktop/src/shared/browser-types.ts`, `preload/index.ts`, `main/ipc.ts`, `renderer/test-utils/fake-bridge.ts` | 0 | (2 → 3 → 4) ‖ 5 |
-| 2. Кирпичи | 6 инспектор; 7 `ax-snapshot.ts`; 8 `agent-window.ts`; 9 `agent-input.ts` и `Emulation.fitOf`; 10 `agent-downloads.ts`; 11 `agent-evaluate.ts`; 12 `agent-storage.ts`; 13 значок агента; 14 скилл, указатели, правило приоритета | у каждой — свои новые файлы; 6 — `inspector.ts`, `page-fns.ts`; 9 — `emulation.ts`; 13 — `AgentBadge.tsx`, `BrowserChrome.tsx`, `strings.ts`; 14 — `core/src/work/*` | 1 | все ‖ |
-| 3. Операции main | 15 основа `agent-ops`; 16 `snapshot`, `wait_for`; 17 `action`; 18 `navigate`, `resize`, `open`, `screenshot ref`; 19 `evaluate`, `cookies`, `storage`, `downloads` | `agent-ops.ts`, `agent-pages.ts`, `agent-capture.ts`, `agent-dom.ts`, `agent-actions.ts`, `main/index.ts`, тесты | 2 | 15 → 16 → 17 → 18 → 19 |
-| 4. Окно и проверки | 20 окно: занятость, размер, Stop, значок, рамка, точка, фокус; 21 рамочные тесты; 22 E2E | `BrowserSurface.tsx`, `panel/agent-registry.ts`; `main/browser/*.test.ts` (рамочные); `e2e/browser-agent-control.spec.ts` | 3 | (20 ‖ 21) → 22 |
-| 5. Документы и выпуск | 23 документы; 24 живые проверки (только по согласию); 25 завершение и финальная рецензия | спека, индекс, спека окна, README, CHANGELOG | 4 | 23 → 24 → 25 |
+| Пачка | Задачи | Файлы (главные) | Зависит от | Порядок внутри | Оркестратор после пачки |
+|---|---|---|---|---|---|
+| 0. База | 0 слияние `feat/browser-external-open`; 1 спайк | merge; `docs/research/2026-10-20-browser-agent-control-spike.md`, этот план | — | 0 → 1 | — (задача 0 сама собирает protocol и core: она одна) |
+| 1. Контракт | 2 протокол; 3 core: действия; 4 core: скрипт, куки, хранилище, скачивания, разрешения; 5 мост окна и IPC | `protocol/src/browser-agent.ts`; `core/src/mcp/browser-tools.ts`, `core/src/work/settings-file.ts`, `core/src/work/launch.test.ts`; `desktop/src/shared/browser-types.ts`, `preload/index.ts`, `main/ipc.ts`, `renderer/test-utils/fake-bridge.ts`, `main/browser/agent-ops.ts` (только `default` и заглушки) | 0 | (2 → 3 → 4) ‖ 5 | `pnpm --filter @parley/protocol build && pnpm --filter @parley/core build`; `pnpm --filter @parley/protocol test -- src/browser-agent-contract.test.ts`; `pnpm --filter @parley/host test -- src/agent/browser-contract.test.ts`; `pnpm --filter @parley/desktop test -- src/shared/agent-limits.test.ts`; `pnpm --filter @parley/desktop typecheck` |
+| 2. Кирпичи | 6 инспектор; 7 `ax-snapshot.ts`; 8 `agent-window.ts`; 9 `agent-input.ts` и `Emulation.fitOf`; 10 `agent-downloads.ts`; 11 `agent-evaluate.ts`; 12 `agent-storage.ts`; 13 значок агента; 14 скилл, указатели, правило приоритета | у каждой — свои новые файлы; 6 — `inspector.ts`, `page-fns.ts`; 9 — `emulation.ts`; 13 — `AgentBadge.tsx`, `BrowserChrome.tsx`, `strings.ts`; 14 — `core/src/work/*`, `host/src/sessions/agent-skills.test.ts`, `protocol/src/browser-agent-contract.test.ts` | 1 | все ‖ | `pnpm --filter @parley/core build`; `pnpm --filter @parley/protocol test -- src/browser-agent-contract.test.ts`; `pnpm --filter @parley/host test -- src/sessions/agent-skills.test.ts`; `pnpm --filter @parley/desktop test -- src/main/browser/inspector.test.ts src/english-ui.test.ts` (рамочный тест 6 против файла 11 — M7); `pnpm --filter @parley/desktop typecheck` |
+| 3. Операции main | 15a основа `agent-ops`: runner, Stop, пауза и выключатель, занятость, любые сайты; 15b окно операции, выбор файла, скачивания, фокус и тишина клавиатуры; 16 `snapshot`, `wait_for`; 17 `action`; 18 `navigate`, `resize`, `open`, `screenshot ref`; 19 `evaluate`, `cookies`, `storage`, `downloads` | `agent-ops.ts`, `agent-pages.ts`, `agent-capture.ts`, `agent-dom.ts`, `agent-actions.ts`, `human-typing.ts`, `guard.ts`, `main/index.ts`, `shared/browser-devtools.ts` (`presetSpec`), тесты | 2 | 15a → 15b → 16 → 17 → 18 → 19 | `pnpm --filter @parley/desktop typecheck`; `pnpm --filter @parley/desktop test -- src/english-ui.test.ts` |
+| 4. Окно и проверки | 20 окно: занятость, размер, Stop, значок, рамка, точка, фокус; 21 рамочные тесты; 22a E2E: формы, фокус, переходы, размер, занятость, Stop; 22b E2E: внешний сайт, скрипт, куки, хранилище, файлы | `BrowserSurface.tsx`, `panel/PanelSurface.tsx`, `panel/agent-registry.ts`, `agent-activity.ts`; `main/browser/agent-frame.test.ts`; `e2e/browser-agent-control.spec.ts` (22a), `e2e/browser-agent-control-sites.spec.ts` (22b) | 3 | (20 ‖ 21) → 22a → 22b | `pnpm --filter @parley/desktop typecheck` после 20 и 21 |
+| 5. Документы и выпуск | 23 документы; 24 живые проверки (только по согласию); 25 завершение и финальная рецензия | спека, индекс, спека окна, README, CHANGELOG | 4 | 23 → 24 → 25 | — |
 
-**Рецензия пачки** смотрит: файлы задач не пересекаются там, где задачи шли параллельно; имена — из «Общих имён»; тесты задач зелёные; `pnpm --filter <пакет> build` (protocol, core, host) или `pnpm --filter @parley/desktop typecheck` для затронутых пакетов; `pnpm exec eslint <изменённые файлы>`. Пачки 1 и 2 могут оставить красными два контрактных теста до конца пачки — это сказано в задачах.
+**Рецензия пачки** смотрит: файлы задач не пересекаются там, где задачи шли параллельно; коммиты задач содержат только свои файлы; имена — из «Общих имён»; тесты задач зелёные; проверки оркестратора (столбец выше) зелёные; `pnpm exec eslint <изменённые файлы>`.
 
 ## Как работать
 
 - Worktree `/Users/kalmbik61/Desktop/MY/my_harnas/.claude/worktrees/browser-agent-control`, ветка `feat/browser-agent-control` (от `origin/master` 47823923, v0.18.0). Локальный `master` в корне отстал — не смотреть на него.
-- Пакеты видят друг друга через `dist`: после правки `packages/protocol` — `pnpm --filter @parley/protocol build`; после правки `packages/core` — `pnpm --filter @parley/core build`. Тесты desktop и host читают собранные пакеты.
-- Тесты — только затронутых файлов: `pnpm --filter @parley/<пакет> test -- <файл>` (владелец просит беречь ноутбук; полный прогон не нужен). E2E — только своих спеков: `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop e2e -- e2e/<спек>.ts`.
+- **Сборки `dist` — только оркестратор, между пачками** (`pnpm --filter @parley/protocol build && pnpm --filter @parley/core build`, при правке хоста — и `@parley/host`). Пакеты видят друг друга через `dist`, а `tsc` переписывает его неатомарно: сборка посреди параллельной пачки даёт соседям ложные «cannot find module». Исполнители пачек 1–5 `build` пакетов protocol, core, host не запускают; тест, которому нужен свежий `dist` другого пакета, задача называет, а запускает оркестратор после пачки. Исключения: задача 0 (она одна) и `pnpm --filter @parley/desktop build` перед своими E2E в задачах 22a/22b (пачка 4 идёт подряд).
+- **Коммиты в общем worktree** (параллельные исполнители делят один `.git/index`):
+  - новые файлы — `git add -- <свои новые файлы>`; коммит — только с pathspec: `git commit -m "<subject>" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- <все файлы своей задачи>` (git берёт ровно эти пути и не трогает чужое в индексе);
+  - на `index.lock: File exists` — пауза 2–5 с и повтор, до 5 раз; lock не удалять;
+  - никогда: `git add -A`, `git add .`, `git commit -a`, `--amend`, `git stash`, `git reset`, `git checkout`/`git restore` чужих файлов. Не получилось за 5 повторов — остановиться и сообщить оркестратору.
+- Тесты — только затронутых файлов: `pnpm --filter @parley/<пакет> test -- <файл>` (владелец просит беречь ноутбук; полный прогон не нужен). Задача desktop, которая добавляет тексты для агента или окна (6, 8–13, 15a–20), запускает и `src/english-ui.test.ts`.
+- E2E — только своих спеков и по одному: `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop e2e -- e2e/<спек>.ts --workers=1`.
 - **Нельзя** `prettier --write` (и `pnpm format`) на файлах репозитория: код шире `printWidth` 100, форматтер перепишет чужие строки.
 - Известные флейки E2E и как гонять рантайм-пробы — память `parley-browser-agent-read-audit` (`chat-hooks:502`, `chat-view:106`, `island:261`, `limits:288` красные и на базе; `attention:190`, `room-decision:354/378` — фокус при параллельном прогоне).
 - Коммит на задачу, сообщение по-английски (`AGENTS.md`), последняя строка — `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Push — только по просьбе человека.
@@ -75,17 +87,19 @@
 Действуют ограничения индекса, кроме перекрытых здесь.
 
 - **Где агент работает.** Только страницы панели своего чата и панелей своих комнат (`owners` события, реестр `registerTab`), при включённом `UiFile.browser.agentsAllowed` и без паузы панели. Вкладки человека не регистрируются и агенту недоступны никогда. Чужая страница неотличима от несуществующей (`no_tab`).
-- **Какие страницы.** Любой http(s); `about:blank` — тоже (страница ещё не загружена). `open` и `navigate` принимают только http(s) (`openableHref`), прочее — `bad_request`. Страж гостя (`guard.ts`) не меняется: `file:`, `javascript:`, `chrome:` и прочее отклоняются для всех.
+- **Какие страницы.** Любой http(s); `about:blank` — тоже (страница ещё не загружена). `open` и `navigate` принимают только http(s) (`openableHref`), прочее — `bad_request`. Навигационная часть стража (`navigationVerdict`) не меняется: `file:`, `javascript:`, `chrome:` и прочее отклоняются для всех.
 - **CDP** — только из main и только через `Inspector` с закрытым списком `CDP_ALLOWED` (задача 6). `Runtime.evaluate` и `Runtime.callFunctionOn` с чужой функцией — только `Inspector.sendAgentScript`, его зовёт только `agent-evaluate.ts`. `Runtime.callFunctionOn` через `send` — только с функциями Parley (`REACT_INFO_FN`, `SELECT_OPTION_FN`). Переходы — методами `webContents` (`loadURL`, `navigationHistory.goBack/goForward`, `reload`, `reloadIgnoringCache`), `Page.navigate` в списке нет.
 - **Скрипты main в госте** — как сейчас: только мир `PICK_WORLD_ID` и только константы Parley (без строк агента). `executeJavaScript(` мира страницы в main нет.
-- **Перед каждым шагом ввода** main заново проверяет: доступ не выключен, панель не на паузе, операцию не оборвали, у страницы нет Select или Annotate (`human_busy`).
-- **`human_busy`** — до и во время `action`, `navigate`, `resize`, `evaluate`. Чтения, `wait_for`, `cookies`, `storage`, `downloads` у занятой страницы разрешены.
-- **Окно операции агента** открывают `open`, `navigate`, `action`, `evaluate`; оно живёт до конца операции и ещё `AGENT_LIMITS.guardTailMs` (2 с). В окне: скачивания страницы — в папку сессии, выбор файла перехвачен. Вне окна — как у человека.
-- **Агент не меняет активную вкладку, работу окна и фокус клавиатуры человека.** Если ввод требует фокуса `<webview>` (спайк), окно возвращает фокус туда, где он был, по концу операции.
-- **Данные страницы** в ответах — в ограде core (`pageData`); URL — с маской (`urlForAgent`); значения секретных полей в дереве доступности — `<redacted>`. Явные значения (`evaluate`, `storage get`, `cookies values: true`) — без маски.
+- **Stop, «Pause agents» и общий выключатель обрывают и идущую операцию:** у ожиданий — по `signal`, у `evaluate` — `terminateExecution`, у ввода — следующего шага нет (M4).
+- **Перед каждым шагом ввода** main заново и синхронно проверяет: доступ не выключен (флаг `accessChanged`), панель не на паузе, операцию не оборвали, у страницы нет Select или Annotate (`human_busy`), человек не печатает (тишина `typingIdleMs`).
+- **`human_busy`** — до старта `action`, `navigate`, `resize`, `evaluate`; у `action` — ещё перед каждым шагом ввода. Скрипт `evaluate`, который уже идёт, включённый Select или Annotate не обрывает. Чтения, `wait_for`, `cookies`, `storage`, `downloads` у занятой страницы разрешены.
+- **Окно операции агента** открывают `open`, `navigate`, `action`, `evaluate`; оно живёт до конца операции и ещё `AGENT_LIMITS.guardTailMs` (2 с). В окне: скачивания страницы — в папку сессии, выбор файла перехвачен, `browser:focus` гостя окну не идёт. Вне окна — как у человека.
+- **Агент не меняет активную вкладку, группу, работу окна, «окно в фокусе» и фокус клавиатуры человека** — ни одолженным фокусом, ни фокусом от CDP-клика. Если ввод требует фокуса `<webview>` (спайк), окно возвращает фокус туда, где он был, по концу операции.
+- **Данные страницы** в ответах — в ограде core (`pageData`); URL — с маской (`urlForAgent`); значения секретных полей в дереве доступности — `<redacted>`. Явные значения (`evaluate`, `storage get`, `cookies values: true`) — без маски; значения httpOnly-кук — никогда (решение владельца 6).
 - **Пределы** — только константами `AGENT_LIMITS`, `AGENT_INPUT`, `DEVTOOLS_LIMITS`; числа мимо них — только именованные тайм-ауты рядом с кодом.
 - **Тексты для агента** (описания, ответы, скилл) — английские. Строки окна — `S.browser.panel.*` в `shared/strings.ts` (страж `english-ui`).
 - **Не трогать** `main/browser/guest-annotate.js` и `main/browser/annotate.ts`: их меняет отдельная ветка `fix/annotate-hover` (`__parleyAnnotate.unhover()`, слушатели `input-event`). E2E этого плана только читает `__parleyAnnotate.count()` и `waiting()`.
+- **Из старого плана не копировать:** схему `open` из его задачи 2 (там `z.strictObject({ url })` — пропали бы `own` и `room`; схему `open` этот план не трогает), `clickDotScript` и мир 1001 для точки клика (точку рисует окно), прямые `send('Input.…')` (ввод — только через `AgentInput`), `inputPoint(point, scale)` без `zoom`, проверки loopback.
 - **Живые запуски `claude`, `codex`, GLM** тратят лимит подписки человека: только задача 24 и только после явного «да» человека.
 
 ## Общие имена — контракт этапа D
@@ -113,12 +127,13 @@ export const AGENT_LIMITS = {
   snapshotBytes: 51_200,   // ответ snapshot
   guardTailMs: 2_000,      // окно операции агента после конца операции; столько же держится значок
   settleMs: 300,           // сколько ждать начала перехода после действия
-  pollMs: 250,             // шаг опроса wait_for, регистрации страницы open, размера resize
+  pollMs: 500,             // шаг опроса wait_for (полное дерево доступности), регистрации страницы open, размера resize
   resizeMs: 2_000,         // сколько ждать, пока окно поставит размер от агента
   clickDotMs: 600,         // точка клика (спека 4.8)
   badgeOps: 5,             // подсказка значка — последние операции
-  typingIdleMs: 1_000,     // ввод агента ждёт, пока человек не печатает в окне (правило 2026-10-08)
-  evalMs: 10_000,          // предел скрипта агента
+  typingIdleMs: 1_000,     // ввод агента ждёт столько тишины клавиатуры человека (правило 2026-10-08; считает main)
+  focusMs: 10_000,         // сколько ждать тишины клавиатуры и ответа окна на просьбу о фокусе
+  evalMs: 10_000,          // предел скрипта агента (один главный таймер)
   evalBytes: 20_480,       // ответ evaluate
   storageValue: 8192,      // значение storage get
   uploadFiles: 10,         // файлов в одной загрузке
@@ -150,7 +165,9 @@ export interface BrowserAgentWaitResult { tab: string; url: string; outcome: 'fo
 export interface BrowserAgentResizeResult { tab: string; url: string; viewport: { width: number; height: number; emulated: boolean } | null }
 export interface BrowserAgentEvaluateResult { tab: string; url: string; outcome: 'value' | 'exception';
   text: string; type: string; truncated: boolean }                       // text — JSON значения или текст исключения
-export interface BrowserAgentCookie { name: string; value?: string; domain: string; path: string; secure: boolean;
+export interface BrowserAgentCookie { name: string;
+  value?: string;            // только при values: true; у httpOnly — всегда '<httpOnly: hidden>' (решение владельца 6)
+  domain: string; path: string; secure: boolean;
   httpOnly: boolean; sameSite: string; session: boolean; expires: string | null; size: number }
 export type BrowserAgentCookiesResult = { tab: string; url: string; cookies: BrowserAgentCookie[]; notes: string[] } | { tab: string; url: string; done: string };
 export type BrowserAgentStorageResult =
@@ -162,13 +179,13 @@ export interface BrowserAgentDownload { id: string; tab: string | null; name: st
 export interface BrowserAgentDownloadsResult { dir: string; downloads: BrowserAgentDownload[]; notes: string[] }
 ```
 
-Схемы `browserAgentArgs` — по одной `z.strictObject(…)` с `.refine(…)` на операцию (не `union`: контрактный тест сравнивает `properties`). Поля и правила — задача 2, шаг 1.
+Схемы `browserAgentArgs` — по одной `z.strictObject(…)` с `.refine(…)` на операцию (не `union`: контрактный тест сравнивает `properties`). Поля и правила — задача 2, шаг 3.
 
 ### Core (`packages/core/src/mcp/browser-tools.ts`, задачи 3–4)
 
 - `BROWSER_TOOL_OPS` — те же 14 в том же порядке (сверяет `host/src/agent/browser-contract.test.ts`).
 - `BROWSER_TOOL_LIMITS` — прежние ключи и `loadMs`, `waitMs`, `text`, `snapshotBytes`, `evalMs`, `evalBytes`, `uploadFiles`, `downloads` (числа — как `AGENT_LIMITS`).
-- `BROWSER_TOOLS_ASK = ['evaluate'] as const` — инструменты, которые не разрешаются заранее; `core/src/work/settings-file.ts#BROWSER_PERMISSIONS` = `BROWSER_TOOL_OPS` без них.
+- `BROWSER_TOOLS_ASK = ['evaluate'] as const` — инструменты, которые не разрешаются заранее; `core/src/work/settings-file.ts`: `BROWSER_PERMISSIONS` = `BROWSER_TOOL_OPS` без них (`allow`), `BROWSER_ASK_PERMISSIONS` = они (`ask`), `SettingsFile.permissions` — `{ allow: string[]; ask?: string[] }`.
 - `BROWSER_TOOL_HINTS` — ещё `human_busy`, `stale_ref`, `not_loopback`.
 - `PARLEY_BROWSER_SKILL_NAME`, `PARLEY_BROWSER_SKILL_MD` — `core/src/work/parley-browser-skill.ts` (задача 14), экспорт из `core/src/index.ts`.
 
@@ -185,18 +202,18 @@ export interface AgentActivity {
   webContentsId: number; session: string; op: string;
   phase: 'start' | 'step' | 'end';                                         // step — D: точка клика или просьба о фокусе
   capture?: { width: number; height: number; id: string };                 // C, без изменений
-  point?: { x: number; y: number };                                        // D: точка клика, CSS-пиксели вьюпорта страницы
-  focus?: { id: string };                                                  // D (ветка спайка «одолжить фокус»): поставить фокус на <webview> и подтвердить agentFocusReady(id)
+  point?: { x: number; y: number };                                        // D: точка клика в пикселях элемента <webview> (масштаб страницы и scale эмуляции уже учтены)
+  focus?: { id: string };                                                  // D (ветка «одолжить фокус»): поставить фокус на <webview> и ответить agentFocusReady(id, ok)
 }
 export interface AgentResize { webContentsId: number; viewport: ViewportSpec | null }   // событие browser:agent-resize
 
 // BrowserApi, добавления D:
 onAgentResize(listener: (e: AgentResize) => void): () => void;             // событие 'browser:agent-resize'
 agentStop(webContentsId: number): Promise<void>;                           // канал 'browser:agent-stop'
-agentFocusReady(id: string): Promise<void>;                                // канал 'browser:agent-focus-ready'
+agentFocusReady(id: string, ok: boolean): Promise<void>;                   // канал 'browser:agent-focus-ready'; ok — фокус действительно на <webview>
 ```
 
-`AgentOps` (main) получает методы `stop(webContentsId: number): void` и `focusReady(id: string): void`; `RegisterIpcOptions.browser.agent` — `Pick<AgentOps, 'openTabResult' | 'registerTab' | 'captureReady' | 'stop' | 'focusReady'>`.
+`AgentOps` (main) получает методы `stop(webContentsId: number): void` (пауза панели страницы и обрыв операций всех страниц этой панели), `focusReady(id: string, ok: boolean): void`, `accessChanged(allowed: boolean): void`; `RegisterIpcOptions.browser.agent` — `Pick<AgentOps, 'openTabResult' | 'registerTab' | 'captureReady' | 'stop' | 'focusReady'>`.
 
 ### Main: модули пачки 2
 
@@ -207,6 +224,7 @@ export const PAGE_FNS: ReadonlySet<string>; // REACT_INFO_FN и SELECT_OPTION_FN
 
 // main/browser/inspector.ts (6)
 export const CDP_AGENT_SCRIPT: ReadonlySet<CdpMethod>;  // 'Runtime.evaluate', 'Runtime.callFunctionOn'
+export const AGENT_SCRIPT_COMMAND_MS: number;            // AGENT_LIMITS.evalMs + 5_000 — срок команды sendAgentScript
 interface Inspector { /* … */ sendAgentScript<T = unknown>(id: number, method: 'Runtime.evaluate' | 'Runtime.callFunctionOn', params: Record<string, unknown>): Promise<T> }
 
 // main/browser/ax-snapshot.ts (7)
@@ -215,7 +233,7 @@ export interface AxNode { nodeId: string; ignored: boolean; role?: { value?: unk
 export interface AxSnapshot { text: string; refs: Map<string, number>; truncated: boolean }
 export function axSnapshot(nodes: readonly AxNode[], options: { interactiveOnly: boolean; limitBytes: number }): AxSnapshot;
 export function axHasText(nodes: readonly AxNode[], text: string): boolean;   // видимый текст: имена не игнорируемых узлов и StaticText, без учёта регистра и пробелов
-export function axState(nodes: readonly AxNode[], backendNodeId: number, state: 'checked'): boolean | 'mixed' | null;
+export function axState(nodes: readonly AxNode[], backendNodeId: number, state: 'checked'): boolean | 'mixed' | null; // CDP отдаёт строку 'true' | 'false' | 'mixed' (или boolean)
 
 // main/browser/agent-window.ts (8)
 export interface AgentWindowOwner { pageKey: string; webContentsId: number; workKey: string; sessionId: string; agentId: string }
@@ -232,17 +250,18 @@ export function createAgentWindow(deps?: { tailMs?: number; setTimer?(fn: () => 
 export interface KeySpec { key: string; code: string; keyCode: number; text?: string }
 export interface MouseStep { type: 'mouseMoved' | 'mousePressed' | 'mouseReleased' | 'mouseWheel'; x: number; y: number;
   button?: 'left' | 'none'; buttons?: number; clickCount?: number; deltaX?: number; deltaY?: number }
-export interface InputGuard { signal: AbortSignal; check(): void }   // check бросает AgentOpError (Stop, пауза, human_busy)
+export interface InputGuard { signal: AbortSignal; check(): void }   // check бросает AgentOpError (Stop, пауза, выключатель, human_busy, человек печатает)
 export function inputPoint(point: { x: number; y: number }, fit: { scale: number; mobile: boolean } | null, zoom: number): { x: number; y: number };
+export function viewPoint(point: { x: number; y: number }, fit: { scale: number; mobile: boolean } | null, zoom: number): { x: number; y: number }; // точка для окна: пиксели элемента <webview> (× scale при эмуляции, × zoom без неё)
 export function keySpec(key: string): KeySpec | null;
 export function modifierMask(modifiers: readonly BrowserAgentModifier[]): number;   // Alt 1, Control 2, Meta 4, Shift 8
 export interface AgentInput {
-  mouse(contents: WebContents, steps: readonly MouseStep[], modifiers: number, guard: InputGuard): Promise<void>;
-  key(contents: WebContents, spec: KeySpec, modifiers: number, guard: InputGuard): Promise<void>;
+  mouse(contents: WebContents, steps: readonly MouseStep[], modifiers: number, guard: InputGuard): Promise<void>; // обрыв после mousePressed — один mouseReleased мимо guard
+  key(contents: WebContents, spec: KeySpec, modifiers: number, guard: InputGuard): Promise<void>;                // обрыв после keyDown — один keyUp мимо guard
   text(contents: WebContents, text: string, guard: InputGuard): Promise<void>;
 }
 export function createAgentInput(deps: { inspector: Pick<Inspector, 'send'>;
-  borrowFocus?(contents: WebContents, signal: AbortSignal): Promise<void> }): AgentInput;
+  borrowFocus?(contents: WebContents, signal: AbortSignal): Promise<void> }): AgentInput; // borrowFocus бросает tab_hidden или human_busy
 // main/browser/emulation.ts (9): Emulation.fitOf(id): { scale: number; mobile: boolean } | null — null у Fit
 
 // main/browser/agent-downloads.ts (10)
@@ -266,6 +285,7 @@ export interface AgentScripts {
 export function createAgentScripts(deps: { inspector: AgentScriptSender; evalMs?: number }): AgentScripts;
 
 // main/browser/agent-storage.ts (12)
+export const HTTPONLY_HIDDEN = '<httpOnly: hidden>';      // решение владельца 6
 export interface AgentStorage {
   cookiesOf(contents: WebContents, agentId: string, args: BrowserAgentArgs<'cookies'>): Promise<BrowserAgentCookiesResult>;
   storageOf(contents: WebContents, agentId: string, args: BrowserAgentArgs<'storage'>): Promise<BrowserAgentStorageResult>;
@@ -276,6 +296,32 @@ export function createAgentStorage(deps: { cookies: Pick<Electron.Cookies, 'get'
 ### Main: модули пачки 3
 
 ```ts
+// main/browser/agent-ops.ts (15a) — очередь страницы, срок, Stop, пауза, выключатель, занятость
+export interface PageUse { changes?: boolean; window?: boolean; seen?: boolean }
+export interface PageRunner {
+  run<T>(request: BrowserAgentOpEvent, agentId: string, task: (contents: WebContents, record: PageRecord, guard: InputGuard) => Promise<T>, use?: PageUse): Promise<T>;
+  stopPanel(workKey: string, owner: BrowserOwner, reason: AgentOpError): void;   // обрыв операций всех страниц панели
+  accessChanged(allowed: boolean): void;                                       // false — обрыв всех операций
+}
+export function createPageRunner(deps: { registry: PageRegistry; agentsAllowed(): Promise<boolean>; activity(e: AgentActivity): void;
+  opTimeoutMs?: number; window?: PageWindowHooks }): PageRunner;
+// 15b: окно операции, перехват выбора файла и подавление browser:focus — через этот крючок (в 15a его нет)
+export interface PageWindowHooks { begin(contents: WebContents, record: PageRecord, request: BrowserAgentOpEvent): () => void }
+
+// main/browser/human-typing.ts (15b) — тишина клавиатуры человека (M3)
+export interface TypingClock {
+  track(contents: Pick<WebContents, 'id' | 'on' | 'off'>): () => void;   // before-input-event: keyDown
+  ignore(webContentsId: number, on: boolean): void;                     // гость, на котором сейчас вводит агент
+  idleFor(ms: number): boolean;
+  waitIdle(ms: number, limitMs: number, signal: AbortSignal): Promise<boolean>;  // false — не дождались
+}
+export function createTypingClock(deps?: { now?(): number; setTimer?(fn: () => void, ms: number): () => void }): TypingClock;
+
+// main/browser/agent-ops.ts (15b)
+export function routeDownload(item: DownloadItem, source: Pick<WebContents, 'id'>, deps: { agentWindow: Pick<AgentWindow, 'activeFor' | 'note'>; downloads: Pick<AgentDownloads, 'claim'> }): boolean;
+// AgentOpsDeps (15b): + agentWindow: AgentWindow; typing: TypingClock; requestFocus?(contents: WebContents, id: string): boolean — только шлёт событие окну;
+// ожидание ответа (focusReady), тишины и signal — внутри createAgentOps, не дольше focusMs.
+
 // main/browser/agent-dom.ts (16)
 export interface AgentDom {
   snapshotOf(contents: WebContents, record: PageRecord, args: BrowserAgentArgs<'snapshot'>): Promise<BrowserAgentSnapshotResult>;
@@ -285,7 +331,7 @@ export interface AgentDom {
   waitFor(contents: WebContents, record: PageRecord, args: BrowserAgentArgs<'wait_for'>, signal: AbortSignal): Promise<BrowserAgentWaitResult>;
   checkedOf(contents: WebContents, backendNodeId: number): Promise<boolean | 'mixed' | null>;
 }
-export function createAgentDom(deps: { inspector: Pick<Inspector, 'send' | 'snapshot'>; now?(): number }): AgentDom;
+export function createAgentDom(deps: { inspector: Pick<Inspector, 'send' | 'snapshot'>; now?(): number; waitMs?(): number }): AgentDom;
 
 // main/browser/agent-actions.ts (17)
 export interface AgentActions {
@@ -296,41 +342,48 @@ export function createAgentActions(deps: { inspector: Pick<Inspector, 'send'>; i
   files?: { realpath(p: string): Promise<string>; stat(p: string): Promise<{ isFile(): boolean; size: number }> }; home?: string }): AgentActions;
 export const UPLOAD_SECRET_DIRS: readonly string[];  // от домашней папки: '.ssh', '.aws', '.gnupg', '.config/gh', '.docker', '.kube', 'Library/Keychains', '.parley', '.claude', '.codex'
 export const UPLOAD_SECRET_NAMES: readonly RegExp[]; // /^\.netrc$/, /^\.npmrc$/, /^\.pypirc$/, /^\.git-credentials$/, /^\.env(\..+)?$/, /^id_(rsa|ed25519|ecdsa|dsa)$/
-export function secretUploadPath(real: string, home: string): boolean; // решение владельца 4; без учёта регистра, по сегментам
+export function secretUploadPath(real: string, home: string, realHome?: string): boolean; // решение владельца 4; без учёта регистра, по сегментам; сверка и с home, и с realpath(home)
 export function withNavigation<T>(contents: WebContents, run: () => Promise<T>, signal: AbortSignal): Promise<{ value: T; navigated: boolean; loaded: boolean }>;
+
+// shared/browser-devtools.ts (18): presetSpec(preset, rotated, current: ViewportSpec | null): ViewportSpec — перенесена из ViewportMenu.tsx, окно берёт её отсюда
 ```
 
 ## Фокус ревью
 
 Случаи, которые спека подразумевает, а тесты задач легко пропускают. Под каждый — тест в задаче-владельце.
 
-1. **Ввод агента не попадает в поле человека.** Человек печатает в поле Chat, агент делает `type` в поле страницы. Текст агента — только в странице, в поле Chat — только набранное человеком, фокус вернулся в поле Chat; ввод агента начался не раньше чем через 1 с тишины клавиатуры. Тесты: задача 9 (порядок «одолжить фокус → ввод», ни одной клавиши без подтверждения), задача 20 (окно ждёт `typingIdleMs`, возвращает фокус), задача 22 (E2E).
-2. **`evaluate` не обходит паузу, Stop и выключатель.** На паузе и при выключенном доступе `sendAgentScript` не вызывается; Stop посреди долгого скрипта — `Runtime.terminateExecution`, агенту `access_denied` «paused by the human», результат не отдаётся; у занятой страницы — `human_busy`. Тесты: задачи 11, 19, 22. **Принятый риск:** таймеры и обработчики, которые скрипт агента оставил в странице, после Stop живут до перезагрузки страницы — это записано в спеке (задача 23).
-3. **Куки и хранилище — только текущей страницы агента.** Куки другого адреса (например, сайта, открытого во вкладке человека) агент не получает: адрес берётся только из `contents.getURL()` его страницы, аргумента `url`/`domain` нет; страница чужого хозяина — `no_tab`, `cookies.get` не вызывается. Тесты: задачи 2 (схема без `url` и `domain`), 12, 19, 22.
-4. **Загрузка файла не уходит мимо страницы агента.** `upload` в страницу чужого хозяина — `no_tab`, `DOM.setFileInputFiles` не вызывается; путь — абсолютный, существующий обычный файл (симлинк разворачивается `realpath`), не каталог, не из секретного места (решение владельца 4; проверка — по пути ПОСЛЕ `realpath`, симлинк из `/tmp` на `~/.ssh/id_ed25519` отклоняется), не больше `uploadBytes`, не больше `uploadFiles`; цель — `input[type=file]` (иначе `bad_request`); выбор файла, открытый действием, не показывает человеку диалог. Тесты: задачи 15, 17, 22.
-5. **Секреты маскируются и на внешних сайтах.** На странице `http://example.test/…` (не loopback) `?token=` в URL, `Authorization` в сети, JWT в консоли и значение поля «API key» в дереве доступности приходят агенту как `<redacted>`. Тесты: задачи 7, 15, 22 (E2E через `--host-resolver-rules`).
-6. **Скачивания не путаются.** Скачивание по клику агента — в папку сессии без диалога, путь — в заметке действия и в `browser_downloads`; скачивание по клику человека на той же странице вне окна агента — диалог человека, как раньше; файл больше 200 МБ отменён с заметкой. Тесты: задачи 10, 15, 22.
-7. **Stop посреди операции и устаревшая ссылка.** Stop во время `wait_for` или между шагами `drag` — следующего шага ввода нет, очередь свободна, агенту `access_denied`; ссылка из снимка прежнего документа — `stale_ref`, клика по чужому элементу нет. Тесты: задачи 15, 16, 17, 22.
+1. **Ввод агента не попадает в поле человека и не трогает окно.** Человек печатает в поле Chat (или в своей вкладке браузера), агент делает `type` в поле страницы. Текст агента — только в странице; в поле Chat — только набранное человеком, и следующие нажатия человека тоже идут в Chat; ввод агента начался не раньше чем через 1 с тишины клавиатуры (её считает main по `before-input-event`); активная группа, `windowFocused` и маршрут сочетаний не изменились. Тесты: задача 9 (порядок «одолжить фокус → ввод»), 15b (часы тишины, подавление `browser:focus`), 20 (возврат фокуса, `onFocusCapture` не зовёт `focusTab`), 22a (E2E).
+2. **Клавиатура в скрытую страницу не «удаётся» молча.** `type` или `press` в неактивную страницу панели или в свёрнутую панель — `tab_hidden` с просьбой показать страницу, а не «Typed 3 characters». Тесты: задачи 9, 15b, 17, 20, 22a.
+3. **`evaluate` не обходит паузу, Stop и выключатель — ни до, ни во время.** На паузе и при выключенном доступе `sendAgentScript` не вызывается; Stop, «Pause agents» или выключатель посреди долгого скрипта — `Runtime.terminateExecution`, агенту `access_denied`, результат не отдаётся; у занятой страницы — `human_busy`. Тесты: задачи 11, 15a, 19, 22b. **Принятый риск:** таймеры и обработчики, которые скрипт агента оставил в странице, после Stop живут до перезагрузки страницы — это записано в спеке (задача 23).
+4. **Куки и хранилище — только текущей страницы агента; значения httpOnly — никогда.** Куки другого адреса (например, сайта, открытого во вкладке человека) агент не получает: адрес берётся только из `contents.getURL()` его страницы, аргумента `url`/`domain` нет; страница чужого хозяина — `no_tab`, `cookies.get` не вызывается. Значение httpOnly-куки не попадает в ответ даже с `values: true` (там `<httpOnly: hidden>`), а `set`/`delete` httpOnly-имени работают. Тесты: задачи 2 (схема без `url` и `domain`), 4, 12, 19, 22b.
+5. **Загрузка файла не уходит мимо страницы агента.** `upload` в страницу чужого хозяина — `no_tab`, `DOM.setFileInputFiles` не вызывается; путь — абсолютный, существующий обычный файл (симлинк разворачивается `realpath`), не каталог, не из секретного места (решение владельца 4; проверка — по пути ПОСЛЕ `realpath`, симлинк из `/tmp` на `~/.ssh/id_ed25519` отклоняется), не больше `uploadBytes`, не больше `uploadFiles`; цель — `input[type=file]` (иначе `bad_request`); выбор файла, открытый действием, не показывает человеку диалог. Тесты: задачи 15b, 17, 22b.
+6. **Секреты маскируются и на внешних сайтах.** На странице `http://example.test/…` (не loopback) `?token=` в URL, `Authorization` в сети, JWT в консоли и значение поля «API key» в дереве доступности приходят агенту как `<redacted>`. Тесты: задачи 7, 15a, 22b (E2E через `--host-resolver-rules`).
+7. **Скачивания не путаются.** Скачивание по клику агента — в папку сессии без диалога, путь — в заметке действия и в `browser_downloads`; скачивание по клику человека на той же странице вне окна агента — диалог человека, как раньше; файл больше 200 МБ отменён с заметкой. Тесты: задачи 10, 15b, 22b.
+8. **Stop, пауза и выключатель посреди операции; устаревшая ссылка.** Stop или «Pause agents» во время `wait_for`, между шагами `drag` или на другой странице той же панели — следующего шага ввода нет, нажатая кнопка мыши отпущена, очередь свободна, агенту `access_denied`; ссылка из снимка прежнего документа — `stale_ref`, клика по чужому элементу нет. Тесты: задачи 9, 15a, 16, 17, 22a.
 
 ## Ветки спайка
 
-Задача 1 заполняет столбец «Итог» и, если итог не «по умолчанию», правит названные задачи этого плана (тем же коммитом).
+Задача 1 заполняет столбец «Итог» и, если итог не «по умолчанию», правит названные задачи этого плана (тем же коммитом). **Итог вне строк таблицы** (ни «по умолчанию», ни «иначе») — остановиться и спросить человека, задачи молча не переписывать.
 
 | № | Вопрос | По умолчанию (план написан так) | Иначе | Что меняется | Итог |
 |---|---|---|---|---|---|
-| В1 | CDP `Input.insertText` и `Input.dispatchKeyEvent` гостю, когда фокус — у `<textarea>` окна (окно в фокусе и не в фокусе) | символы уходят в `<textarea>` окна или никуда (замер Orca; этап 0: без фокуса гостя клавиатура не доходит) | доходят в поле гостя | 9: `borrowFocus` не нужен; 5, 20: `focus` в `AgentActivity` и обработка в окне не делаются | |
-| В2 | `guest.sendInputEvent` (WebContents самого гостя, не окна) — `keyDown`/`char`/`keyUp` при фокусе в `<textarea>` окна | так же, как В1 | доходит в поле гостя без фокуса | 9: клавиши и текст — `contents.sendInputEvent` (`char` на символ), `borrowFocus` не нужен; 5, 20 — как в В1 | |
-| В3 | CDP `mousePressed` в гостя: переводит ли фокус окна на `<webview>` (`document.activeElement` окна) | да | нет | 9: мышь не одалживает фокус | |
-| В4 | После возврата фокуса окну видит ли страница `blur` (поле теряет фокус, выпадающий список закрывается); убирает ли это `Emulation.setFocusEmulationEnabled` | да / да | blur не виден | 9: `setFocusEmulationEnabled` не ставится | |
+| В1 | CDP `Input.insertText` и `Input.dispatchKeyEvent` гостю, когда фокус — у `<textarea>` окна (окно в фокусе и не в фокусе) | символы уходят в `<textarea>` окна или никуда (замер Orca; этап 0: без фокуса гостя клавиатура не доходит) | доходят в поле гостя | 9: `borrowFocus` не нужен; 5, 15b, 20: `focus` в `AgentActivity`, `requestFocus` и обработка в окне не делаются | |
+| В2 | `guest.sendInputEvent` (WebContents самого гостя, не окна) — `keyDown`/`char`/`keyUp` при фокусе в `<textarea>` окна; и путь сочетаний: `press` ⌘W или ⌘K агента через `sendInputEvent` и через CDP — превращается ли в `menu:action` окна (`before-input-event` → `forwardGuestShortcuts`) | так же, как В1; через CDP сочетание до окна не доходит | доходит в поле гостя без фокуса | 9: клавиши и текст — `contents.sendInputEvent` (`char` на символ), `borrowFocus` не нужен; сочетания из `FORWARDED` от агента — `bad_request` или пересылка выключена на время ввода агента (15b); 5, 20 — как в В1 | |
+| В3 | CDP `mousePressed` в гостя — по кнопке и по текстовому полю: переводит ли фокус окна на `<webview>` (`document.activeElement` окна) | да (по полю — точно, этап 0) | нет ни там, ни там | 9: мышь не одалживает фокус. При «нет» на кнопке, но «да» на поле — одалживать для всех нажатий (`click`, `double_click`, `drag`, `check`) | |
+| В4 | Рецепт «одолжить фокус»: после возврата фокуса окну (1) куда идут **следующие нажатия человека** (`window.keyboard` Playwright) — в `chat` или в гостя; (2) нужен ли `hostWebContents.focus()` из main вместе с `focus()` элемента; (3) видит ли страница `blur`, убирает ли его `Emulation.setFocusEmulationEnabled` | (1) в `chat`; (2) нужен — main зовёт `host.focus()` перед ответом окна; (3) да / да | (1) в гостя | 9, 15b, 20: (1) «иначе» — остановиться и спросить человека (ввод агента ломает ввод человека); (3) blur не виден — `setFocusEmulationEnabled` не ставится | |
 | В5 | `Input.insertText` в управляемое поле React 18 при фокусе гостя | значение и `onChange` верны (этап 0) | нет | 9: `text` — посимвольно `keyDown` с `text` | |
-| В6 | Множитель точки: эмуляция `scale` 0,6; мобильная при масштабе страницы 2 | `k = эмуляция ? (мобильная ? scale / zoom : scale) : 1` (этап 0) | другой | 9: `inputPoint` и его тест | |
+| В6 | Множитель точки: эмуляция `scale` 0,6; мобильная при масштабе страницы 2 | `k = эмуляция ? (мобильная ? scale / zoom : scale) : 1` (этап 0) | другой | 9: `inputPoint`, `viewPoint` и их тесты | |
 | В7 | `DOMStorage.getDOMStorageItems` / `setDOMStorageItem` / `removeDOMStorageItem` / `clear` на Electron 44: `storageId` | `{ securityOrigin: origin, isLocalStorage }` работает без `DOMStorage.enable` | нужен `storageKey: origin + '/'` или `enable` | 12: `storageIdOf` и тест | |
-| В8 | `Page.setInterceptFileChooserDialog({ enabled: true })` и событие `Page.fileChooserOpened` у гостя `<webview>`; нативного диалога нет | работает | нет | 15: клик агента по `input[type=file]` — `bad_request` («use upload»); скилл — «не кликайте поле файла» | |
+| В8 | `Page.setInterceptFileChooserDialog({ enabled: true })` и событие `Page.fileChooserOpened` у гостя `<webview>`; нативного диалога нет | работает | нет | 15b: клик агента по `input[type=file]` — `bad_request` («use upload»); скилл — «не кликайте поле файла»; спека — программный `input.click()` страницы откроет системное окно человеку | |
 | В9 | `DOM.setFileInputFiles({ files, backendNodeId })`: файл в поле, `input`/`change` в странице | работает | нет | 17: `upload` — `unsupported` с причиной; спека — «загрузки файлов нет» | |
-| В10 | `Runtime.evaluate` с `timeout` и `Runtime.terminateExecution` прерывают `while (true) {}`; после этого страница отвечает | да | нет | 11: только `terminateExecution` по своему таймеру (или наоборот) | |
-| В11 | `will-download` раздела с `item.setSavePath(путь)` внутри события — без диалога, `done` с `completed` | да | диалог всё равно | 10: путь через `setSaveDialogOptions` + отмена — тогда скачивания агента `unsupported` | |
+| В10 | `Runtime.evaluate` с `timeout` и `Runtime.terminateExecution` прерывают `while (true) {}` и зависший `awaitPromise` (`new Promise(() => {})`); после этого страница отвечает | `terminateExecution` прерывает оба; зависший промис отпускается отказом CDP | `terminateExecution` не помогает | 11: ветка «не работает ни одно» — `contents.forcefullyCrashRenderer()` нельзя (страница человека); `reload()` страницы с заметкой агенту «The page was reloaded to stop the script.» — **спросить человека** перед тем, как так делать | |
+| В11 | `will-download` раздела с `item.setSavePath(путь)` внутри события — без диалога, `done` с `completed`; `source.id === guest.id` для `<a download>`, `location = …` и `loadURL` на файл | да / да | диалог всё равно; или `source` — не гость | 10: путь через `setSaveDialogOptions` + отмена — тогда скачивания агента `unsupported`; 15b: при чужом `source` маршрут по `agentWindow` не работает — спросить человека | |
 | В12 | Codex 0.16x: есть ли одобрение по инструменту MCP (`mcp_servers.<имя>.tools.<инструмент>.approval_mode` или похожее) — по документации, без запуска | не используем: Codex решает по аннотациям | есть | только запись в отчёт и в «Решения плана» для владельца; код не меняется | |
-| В13 | `electron.launch({ args: [main, '--host-resolver-rules=MAP example.test 127.0.0.1'] })`: `http://example.test:<порт>/` открывает локальный сервер | да | нет | 22: внешний сайт в E2E — через `http://localhost.test` с той же подменой или пропуск теста с пометкой | |
+| В13 | `electron.launch({ args: [main, '--host-resolver-rules=MAP example.test 127.0.0.1'] })`: `http://example.test:<порт>/` открывает локальный сервер | да | нет | 22b: внешний сайт — по не-loopback IP машины из `os.networkInterfaces()` (сервер слушает `0.0.0.0`); нет такого IP — тест пропускается с пометкой | |
+| В14 | Побочки фокуса гостя: после `w1.focus()` окна и после CDP-клика по полю и по кнопке приходит ли `focus` WebContents гостя (`browser:focus` стража), что с `focus`/`blur` `BrowserWindow` и `document.activeElement` окна — при окне в фокусе и без | `focus` гостя приходит (и одолженный, и от клика) | не приходит | 15b: подавление `browser:focus` не нужно (оставить как защиту — решает рецензия пачки) | |
+| В15 | Скрытая после показа страница (`visibility: hidden`, панель `inert`): (1) ставится ли фокус `<webview>` (`document.activeElement`); (2) проходит ли CDP-клик | (1) нет — `tab_hidden` по `ok: false`; (2) клик проходит (этап 0, 0.2) | (2) клик не проходит | 17: `click` и прочая мышь у невидимой страницы — `tab_hidden` (`seen` → `visible`) | |
+| В16 | CDP-клик по `<select>` на macOS: открывает ли системное меню на экране человека | да | нет | скилл: «по `<select>` не кликать — только `select`» остаётся; при «да» `click` по узлу `SELECT` — `bad_request` «use action select» (17) | |
+| В17 | Буфер обмена: после CDP-клика агента `evaluate` с `document.execCommand('copy')` (выделенный текст) пишет ли в системный буфер; `navigator.clipboard.readText()` отклоняется | пишет / отклоняется | не пишет | только текст спеки (23): запись — принятый риск или её нет | |
 
 ---
 
@@ -382,22 +435,24 @@ git merge --no-ff origin/feat/browser-external-open -m "Merge branch 'feat/brows
 - отладчик гостя — `webContents.fromId(id).debugger.attach('1.3')`, команды — `sendCommand`;
 - каждый вопрос — 3 прогона; окно в фокусе (`win.focus()`) и не в фокусе (другое окно спереди) — где это сказано.
 
-- [ ] **Шаг 1. В1–В6 (ввод).**
-  - В1: `chat.focus()` в окне; `Input.insertText({ text: 'agent' })` и пара `Input.dispatchKeyEvent` `keyDown`/`keyUp` клавиши `a` гостю. Записать `chat.value` и значение поля гостя (поле гостя предварительно сфокусировано `DOM.focus`).
-  - В2: то же через `guest.sendInputEvent({ type: 'keyDown', keyCode: 'a' })`, `{ type: 'char', keyCode: 'a' }`, `{ type: 'keyUp', keyCode: 'a' }`. Помнить: `sendInputEvent` окна-хозяина в гостя не маршрутизируется (проба 2026-10-20) — проверяется `sendInputEvent` самого гостя.
-  - В3: `Input.dispatchMouseEvent` `mousePressed`/`mouseReleased` в центр кнопки гостя при фокусе в `chat`: `document.activeElement` окна до и после.
-  - В4: рецепт «одолжить фокус»: окно запоминает `document.activeElement`, зовёт `w1.focus()`, main шлёт `insertText`, окно возвращает фокус `chat.focus()`. Записать: где текст, есть ли `blur` у поля гостя и у `window` гостя; повторить с `Emulation.setFocusEmulationEnabled({ enabled: true })`.
+- [ ] **Шаг 1. В1–В6, В14, В15 (ввод и фокус).** Нажатия «человека» в окне — только Playwright `_electron` (`window.keyboard`, `window.mouse`): `sendInputEvent` окна-хозяина в гостя не маршрутизируется (проба 2026-10-20).
+  - В1: `chat.focus()` в окне; `Input.insertText({ text: 'agent' })` и пара `Input.dispatchKeyEvent` `keyDown`/`keyUp` клавиши `a` гостю. Записать `chat.value` и значение поля гостя (поле гостя предварительно сфокусировано `DOM.focus`). Окно в фокусе и не в фокусе.
+  - В2: то же через `guest.sendInputEvent({ type: 'keyDown', keyCode: 'a' })`, `{ type: 'char', keyCode: 'a' }`, `{ type: 'keyUp', keyCode: 'a' }` (WebContents самого гостя). Плюс сочетания: `press` ⌘W и ⌘K через `sendInputEvent` и через CDP — видит ли их `before-input-event` гостя (слушатель как в `main/guest-shortcuts.ts`).
+  - В3: `Input.dispatchMouseEvent` `mousePressed`/`mouseReleased` в центр **кнопки** и в центр **текстового поля** гостя при фокусе в `chat`: `document.activeElement` окна до и после.
+  - В4: рецепт «одолжить фокус»: окно запоминает `document.activeElement`, зовёт `w1.focus()`, main шлёт `insertText`, окно возвращает фокус `chat.focus()` — с `win.webContents.focus()` из main и без. Затем `window.keyboard.type('x')` — куда попал символ (`chat` или гость). Записать: есть ли `blur` у поля гостя и у `window` гостя; повторить с `Emulation.setFocusEmulationEnabled({ enabled: true })`.
   - В5: `insertText` в управляемое поле React при фокусе гостя: `value` и `window.__changes`.
   - В6: эмуляция 1280×800 `scale` 0,6 и 375×812 мобильная при `setZoomLevel(2)`: попадание клика по множителю этапа 0.
-- [ ] **Шаг 2. В7–В11 (возможности).** По одному вызову на пункт таблицы, 3 прогона; для В10 — после прерывания кнопка-счётчик кликается.
+  - В14: слушатели `focus` WebContents гостя и `focus`/`blur` `BrowserWindow`; после `w1.focus()` окна и после CDP-клика по полю и по кнопке — что пришло; окно в фокусе и нет.
+  - В15: `w1` внутри `<div inert style="visibility:hidden">` после показа: `w1.focus()` → `document.activeElement`; CDP-клик по кнопке-счётчику → счётчик.
+- [ ] **Шаг 2. В7–В11, В16, В17 (возможности).** По одному вызову на пункт таблицы, 3 прогона. В10 — `while (true) {}` и `new Promise(() => {})`, после прерывания кнопка-счётчик кликается. В11 — `<a download>`, `location.href = '/file.csv'` и `guest.loadURL('/file.csv')`: `source.id` в `will-download` равен id гостя? В16 — CDP-клик по `<select>`: появилось ли системное меню (снимок экрана `screencapture -x`; не проверить без человека — «не проверено», ветка по умолчанию). В17 — выделить текст, CDP-клик по странице, `Runtime.evaluate` с `document.execCommand('copy')` и `userGesture: false` → `clipboard.readText()` в main; `navigator.clipboard.readText()` в странице.
 - [ ] **Шаг 3. В12** — по документации Codex (`developers.openai.com/codex`, `codex --help` без входа и без запросов к модели): ключ одобрения по инструменту MCP. Живой запуск Codex не делать.
-- [ ] **Шаг 4. В13** — Playwright `_electron` в той же пробе или отдельный скрипт: `--host-resolver-rules` и загрузка `http://example.test:<порт>/`.
-- [ ] **Шаг 5. Отчёт.** `docs/research/2026-10-20-browser-agent-control-spike.md`: машина, Electron, таблица «вопрос — доли прогонов — вывод», рецепт ввода, выбранная ветка по каждому В. Заполнить «Итог» в этом плане; для каждого итога «иначе» — внести правку из столбца «Что меняется» в тексты задач (интерфейсы и тесты).
+- [ ] **Шаг 4. В13** — Playwright `_electron` в той же пробе или отдельный скрипт: `--host-resolver-rules` и загрузка `http://example.test:<порт>/`; запасной путь — не-loopback IP из `os.networkInterfaces()`.
+- [ ] **Шаг 5. Отчёт.** `docs/research/2026-10-20-browser-agent-control-spike.md`: машина, Electron, таблица «вопрос — доли прогонов — вывод», рецепт ввода, выбранная ветка по каждому В. Заполнить «Итог» в этом плане; для каждого итога «иначе» — внести правку из столбца «Что меняется» в тексты задач (интерфейсы и тесты). **Итог вне строк таблицы** — не править задачи, остановиться и спросить человека.
 - [ ] **Шаг 6. Коммит.**
 
 ```bash
-git add docs/research/2026-10-20-browser-agent-control-spike.md docs/specs/2026-10-20-browser-agent-control-plan.md
-git commit -m "docs(browser): stage D spike — agent input focus, storage, files, scripts" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- docs/research/2026-10-20-browser-agent-control-spike.md docs/specs/2026-10-20-browser-agent-control-plan.md
+git commit -m "docs(browser): stage D spike — agent input focus, storage, files, scripts" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- docs/research/2026-10-20-browser-agent-control-spike.md docs/specs/2026-10-20-browser-agent-control-plan.md
 ```
 
 ---
@@ -516,7 +571,7 @@ describe('операции управления (этап D)', () => {
     bad('evaluate', [{ tab: 't1' }, { tab: 't1', expression: '1', function: '() => 1' }, { tab: 't1', expression: '1', ref: 'e3' }, { tab: 't1', expression: '' }, { tab: 't1', expression: 'x'.repeat(10_001) }]);
   });
 
-  it('cookies: адрес и домен не принимаются — только страница агента (Фокус ревью 3)', () => {
+  it('cookies: адрес и домен не принимаются — только страница агента (Фокус ревью 4)', () => {
     for (const args of [
       { tab: 't1', action: 'list' },
       { tab: 't1', action: 'list', values: true },
@@ -575,18 +630,18 @@ describe('операции управления (этап D)', () => {
   - `cookies`: `tab, action: z.enum(AGENT_COOKIE_ACTIONS), name?` (1..`cookieName`), `value?` (0..`cookieValue`), `path?` (`/^\//`, до `AGENT_INPUT.url`), `secure?`, `httpOnly?`, `sameSite?: z.enum(['lax', 'strict', 'no_restriction'])`, `expires?: z.number().int().min(0)`, `values?: boolean`; `set` — `name` и `value`; `delete` — `name`; `values` — только с `list`; `path`/`secure`/`httpOnly`/`sameSite`/`expires` — только с `set`;
   - `storage`: `tab, area: z.enum(['local', 'session']), action: z.enum(AGENT_STORAGE_ACTIONS), key?` (1..`storageKey`), `value?` (0..`AGENT_LIMITS.text`); `get`/`delete` — `key`; `set` — `key` и `value`; `list`/`clear` — без `key` и `value`;
   - `downloads`: `z.strictObject({})`.
+  - схему `open` **не трогать** (в ней `url`, `own`, `room`): в старом плане, задача 2, шаг 3 — `open: z.strictObject({ url })`, эту строку не копировать.
   В `index.ts` — новые значения и типы в блоки экспорта `./browser-agent.js` по алфавиту.
 
 - [ ] **Шаг 4. Запустить — проходит.**
-  - `pnpm --filter @parley/protocol test -- src/browser-agent.test.ts` → PASS; `pnpm --filter @parley/protocol build` → без ошибок.
-  - `pnpm --filter @parley/desktop test -- src/shared/agent-limits.test.ts` → PASS (3).
-  - `src/browser-agent-contract.test.ts` протокола и `host/src/agent/browser-contract.test.ts` красные до задачи 4 (у core пять инструментов) — ожидаемо.
+  - `pnpm --filter @parley/protocol test -- src/browser-agent.test.ts` → PASS (тест читает исходники, сборка не нужна).
+  - Сборку протокола, `desktop/src/shared/agent-limits.test.ts` и контрактные тесты протокола и хоста запускает оркестратор после пачки 1 (до задачи 4 они и не могут быть зелёными: у core пять инструментов).
 
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/protocol/src/browser-agent.ts packages/protocol/src/browser-agent.test.ts packages/protocol/src/index.ts packages/desktop/src/shared/agent-limits.test.ts
-git commit -m "feat(protocol): browser control operations — navigate, snapshot, action, wait_for, resize, evaluate, cookies, storage, downloads" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/protocol/src/browser-agent.ts packages/protocol/src/browser-agent.test.ts packages/protocol/src/index.ts packages/desktop/src/shared/agent-limits.test.ts
+git commit -m "feat(protocol): browser control operations — navigate, snapshot, action, wait_for, resize, evaluate, cookies, storage, downloads" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/protocol/src/browser-agent.ts packages/protocol/src/browser-agent.test.ts packages/protocol/src/index.ts packages/desktop/src/shared/agent-limits.test.ts
 ```
 
 ---
@@ -688,13 +743,13 @@ describe('инструменты действий (этап D)', () => {
   - Ответы: `formatNavigate` (`loaded` — «Loaded …», иначе «… is still loading (waited 15 s)»; адрес и заголовок — в `pageData`), `formatSnapshot` (`Accessibility snapshot of t1: N refs. Refs work until the page navigates.` + при `truncated` — совет `interactiveOnly`; текст — `pageData('Page: <url>\n<text>')`), `formatAction` (`done`, при `navigated` — «The page navigated: old refs are stale, take a new browser_snapshot.», `Note:`-строки, `pageData('Page: <url>')`), `formatWait` (`found`, `gone`, `waited`, `timeout` — «… did not appear …» / «… is still there …»), `formatResize`, `formatOpen` (`loaded: true` — «Opened t2 … and it loaded», иначе прежний текст про фон и загрузку; заголовок — в `pageData`). Формы ответов — копии типов протокола в объёме форматирования.
   - `BROWSER_TOOL_HINTS`: `human_busy: 'The human is selecting or annotating in that page: wait a little and retry, or ask the human.'`, `stale_ref: 'Take a new browser_snapshot and use its refs.'`, `not_loopback: "An older Parley window answered: ask the human to update Parley."`.
 
-- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS. `pnpm --filter @parley/core build`. Контрактные тесты протокола и хоста — красные до задачи 4.
+- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS. Сборку core и контрактные тесты — оркестратор после пачки (до задачи 4 они красные: инструментов десять).
 
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/core/src/mcp/browser-tools.ts packages/core/src/mcp/browser-tools.test.ts
-git commit -m "feat(core): browser control tools — navigate, snapshot, action, wait_for, resize, element screenshots" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/core/src/mcp/browser-tools.ts packages/core/src/mcp/browser-tools.test.ts
+git commit -m "feat(core): browser control tools — navigate, snapshot, action, wait_for, resize, element screenshots" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/core/src/mcp/browser-tools.ts packages/core/src/mcp/browser-tools.test.ts
 ```
 
 ---
@@ -703,11 +758,11 @@ git commit -m "feat(core): browser control tools — navigate, snapshot, action,
 
 **Файлы:**
 - Изменить: `packages/core/src/mcp/browser-tools.ts`, `packages/core/src/work/settings-file.ts`, `packages/core/src/index.ts`
-- Тесты: `packages/core/src/mcp/browser-tools.test.ts`, `packages/core/src/work/settings-file.test.ts`
+- Тесты: `packages/core/src/mcp/browser-tools.test.ts`, `packages/core/src/work/settings-file.test.ts`, `packages/core/src/work/launch.test.ts` (тест «в файле --settings заранее разрешены все пять browser_*», ~стр. 1192 — краснеет от этой задачи)
 
 **Интерфейсы:**
 - Берёт: задачу 3.
-- Отдаёт: `browser_evaluate`, `browser_cookies`, `browser_storage`, `browser_downloads`; `BROWSER_TOOL_OPS` — все 14; `BROWSER_TOOLS_ASK`; `BROWSER_TOOL_LIMITS` + `evalMs`, `evalBytes`, `uploadFiles`, `downloads`; аннотации READ / CONTROL / SCRIPT (раздел «Решения плана»); `BROWSER_PERMISSIONS` без `browser_evaluate`.
+- Отдаёт: `browser_evaluate`, `browser_cookies`, `browser_storage`, `browser_downloads`; `BROWSER_TOOL_OPS` — все 14; `BROWSER_TOOLS_ASK`; `BROWSER_TOOL_LIMITS` + `evalMs`, `evalBytes`, `uploadFiles`, `downloads`; аннотации READ / CONTROL / SCRIPT (раздел «Решения плана»); `BROWSER_PERMISSIONS` без `browser_evaluate` (`allow`) и `BROWSER_ASK_PERMISSIONS` = `['mcp__parley__browser_evaluate']` (`ask`, рецензия M8); `SettingsFile.permissions` — `{ allow: string[]; ask?: string[] }`. Схемы MCP: `values` у `browser_cookies` — `default: false` (контрактный тест умолчаний требует `AGENT_DEFAULTS.values`); `required` — `browser_cookies` `['tab', 'action']`, `browser_storage` `['tab', 'area', 'action']`, `browser_evaluate` `['tab']`, `browser_downloads` — нет.
 
 - [ ] **Шаг 1. Падающие тесты.**
 
@@ -731,7 +786,9 @@ describe('скрипт, куки, хранилище, скачивания; ан
 
   it('описания: главный мир и пределы evaluate; общий раздел кук; скрытые значения; папка скачиваний', () => {
     for (const phrase of ["page's main world", 'JSON', '20 KB', '10 s', 'first argument', 'approves']) expect(tool('browser_evaluate')?.description, phrase).toContain(phrase);
-    for (const phrase of ["page's current URL", 'httpOnly', 'shared with the human', 'sign the human out', 'values: true']) expect(tool('browser_cookies')?.description, phrase).toContain(phrase);
+    for (const phrase of ["page's current URL", 'httpOnly', 'never shows the values of httpOnly cookies', 'shared with the human', 'sign the human out', 'values: true']) expect(tool('browser_cookies')?.description, phrase).toContain(phrase);
+    expect(tool('browser_cookies')?.inputSchema).toMatchObject({ required: ['tab', 'action'], properties: { values: { type: 'boolean', default: false } } });
+    expect(tool('browser_storage')?.inputSchema).toMatchObject({ required: ['tab', 'area', 'action'] });
     for (const phrase of ['localStorage', 'sessionStorage', "page's current origin"]) expect(tool('browser_storage')?.description, phrase).toContain(phrase);
     for (const phrase of ['folder of this session', 'file path']) expect(tool('browser_downloads')?.description, phrase).toContain(phrase);
   });
@@ -751,16 +808,17 @@ describe('скрипт, куки, хранилище, скачивания; ан
     expect(thrown.text).toContain('The script threw');
   });
 
-  it('cookies: без значений — совет values: true; со значениями — запрет повторять секреты', async () => {
+  it('cookies: без значений — совет values: true; со значениями — запрет повторять секреты; у httpOnly — <httpOnly: hidden> (решение владельца 6)', async () => {
     const client = await connect(await startEndpoint());
     const cookie = { name: 'sid', domain: 'localhost', path: '/', secure: false, httpOnly: true, sameSite: 'lax', session: true, expires: null, size: 35 };
     answers.push(
       { status: 200, body: { ok: true, result: { tab: 't1', url: 'http://localhost/', cookies: [cookie], notes: [] } } },
-      { status: 200, body: { ok: true, result: { tab: 't1', url: 'http://localhost/', cookies: [{ ...cookie, value: 'S3CR3T' }], notes: [] } } },
+      { status: 200, body: { ok: true, result: { tab: 't1', url: 'http://localhost/', cookies: [{ ...cookie, value: '<httpOnly: hidden>' }, { ...cookie, name: 'theme', httpOnly: false, value: 'dark' }], notes: [] } } },
     );
     expect((await call(client, 'browser_cookies', { tab: 't1', action: 'list' })).text).toContain('values: true');
     const shown = await call(client, 'browser_cookies', { tab: 't1', action: 'list', values: true });
-    expect(shown.text).toContain('sid=S3CR3T');
+    expect(shown.text).toContain('theme=dark');
+    expect(shown.text).toContain('sid=<httpOnly: hidden>');
     expect(shown.text).toContain('never repeat them');
   });
 
@@ -781,36 +839,38 @@ describe('скрипт, куки, хранилище, скачивания; ан
 describe('инструменты браузера разрешены заранее, кроме browser_evaluate (решение владельца 2026-10-20)', () => {
   const ALLOWED = ['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'cookies', 'storage', 'downloads'].map((op) => `mcp__parley__browser_${op}`);
 
-  it('с каналом агента — тринадцать правил, browser_evaluate среди них нет; без канала — поля нет', () => {
-    expect(workSettings({ allowBrowser: true }).permissions).toEqual({ allow: ALLOWED });
-    expect(JSON.stringify(workSettings({ allowBrowser: true }))).not.toContain('browser_evaluate');
+  it('с каналом агента — тринадцать правил allow и browser_evaluate в ask (рецензия M8); без канала — поля нет', () => {
+    expect(workSettings({ allowBrowser: true }).permissions).toEqual({ allow: ALLOWED, ask: ['mcp__parley__browser_evaluate'] });
+    expect(workSettings({ allowBrowser: true }).permissions?.allow).not.toContain('mcp__parley__browser_evaluate');
     expect(workSettings({ allowBrowser: false })).not.toHaveProperty('permissions');
   });
 
   it('имена правил собраны из настоящих имён сервера и инструментов', () => {
     expect(BROWSER_PERMISSIONS).toEqual(BROWSER_TOOLS.filter((tool) => tool.name !== 'browser_evaluate').map((tool) => `mcp__${MCP_SERVER_NAME}__${tool.name}`));
+    expect(BROWSER_ASK_PERMISSIONS).toEqual([`mcp__${MCP_SERVER_NAME}__browser_evaluate`]);
   });
 });
 ```
 
-- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/core test -- src/mcp/browser-tools.test.ts src/work/settings-file.test.ts` → FAIL.
+  В `launch.test.ts` тест «Claude и GLM с каналом: в файле --settings заранее разрешены все пять browser_*» — переименовать («…тринадцать browser_*, browser_evaluate спрашивается») и ждать `{ allow: <13>, ask: ['mcp__parley__browser_evaluate'] }`.
+
+- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/core test -- src/mcp/browser-tools.test.ts src/work/settings-file.test.ts src/work/launch.test.ts` → FAIL.
 
 - [ ] **Шаг 3. Реализовать.**
   - Аннотации — три константы `READ`, `CONTROL`, `SCRIPT` с комментарием: «политика одобрений Parley (решение владельца 2026-10-20): заранее разрешено всё, кроме `browser_evaluate`; у Claude Code — `permissions.allow`, у Codex — эти аннотации. `openWorldHint: false` у CONTROL — сознательно: инструмент водит панель браузера Parley, которую видит и может приостановить человек».
-  - `BROWSER_TOOLS_ASK = ['evaluate'] as const`; в `settings-file.ts`: `BROWSER_PERMISSIONS = BROWSER_TOOL_OPS.filter((op) => !(BROWSER_TOOLS_ASK as readonly string[]).includes(op)).map(…)`; экспорт `BROWSER_TOOLS_ASK` из `core/src/index.ts`.
-  - Описания: `browser_evaluate` — «Run JavaScript in the page's main world (the page's own scripts see the same globals) and get the result as JSON, up to 20 KB. expression: an expression or a promise; function: a function source, called with the element of ref as its first argument when ref is given. An exception thrown by the page comes back as the answer. Stops after 10 s. The human approves this tool.»; `browser_cookies` — фразы теста, «list hides values unless values: true»; `browser_storage`, `browser_downloads` — фразы теста.
+  - `BROWSER_TOOLS_ASK = ['evaluate'] as const`; в `settings-file.ts`: `BROWSER_PERMISSIONS = BROWSER_TOOL_OPS.filter((op) => !(BROWSER_TOOLS_ASK as readonly string[]).includes(op)).map(…)`; `BROWSER_ASK_PERMISSIONS` — `BROWSER_TOOLS_ASK` в том же виде; в `workSettings` — `permissions: { allow: [...BROWSER_PERMISSIONS], ask: [...BROWSER_ASK_PERMISSIONS] }`; экспорт `BROWSER_TOOLS_ASK` из `core/src/index.ts`.
+  - Описания: `browser_evaluate` — «Run JavaScript in the page's main world (the page's own scripts see the same globals) and get the result as JSON, up to 20 KB. expression: an expression or a promise; function: a function source, called with the element of ref as its first argument when ref is given. An exception thrown by the page comes back as the answer. Stops after 10 s. The human approves this tool.»; `browser_cookies` — фразы теста, «list hides values unless values: true; it never shows the values of httpOnly cookies (they hold sign-in sessions), but you may set or delete them — deleting a cookie can sign the human out of that site»; `browser_storage`, `browser_downloads` — фразы теста.
   - Ответы: `formatEvaluate` (`Script result in t1 (<type>…):` / `The script threw in t1:` + `pageData(text)`; при `truncated` — «cut at 20 KB»), `formatCookies` (строка куки: `name[=value]  domain=… path=…[ secure][ httpOnly] sameSite=… session|expires=…  (N B)`; без значений — «Values are hidden: pass values: true to read them.»; со значениями — «Values are secrets of the human's browser session: never repeat them in replies, files or commits.»; `done` — как есть), `formatStorage` (список `key = value`, `get` — значение в ограде или «(no such key)», `done`), `formatDownloads` (строка: `id  state  name  received/total B  path  from url[ (page tN)]`; пусто — «No downloads yet in this session. Files that your pages download go to <dir>.»).
 
 - [ ] **Шаг 4. Запустить — проходит.**
-  - те же тесты → PASS; `pnpm --filter @parley/core build`;
-  - `pnpm --filter @parley/protocol test -- src/browser-agent-contract.test.ts` → PASS (схемы, умолчания, ключи подсказок);
-  - `pnpm --filter @parley/host test -- src/agent/browser-contract.test.ts` → PASS (операции и пределы).
+  - те же тесты → PASS;
+  - сборку core, `src/browser-agent-contract.test.ts` протокола (схемы, умолчания, ключи подсказок) и `src/agent/browser-contract.test.ts` хоста (операции и пределы) запускает оркестратор после пачки 1 — после этой задачи они должны быть зелёными.
 
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/core/src/mcp/browser-tools.ts packages/core/src/mcp/browser-tools.test.ts packages/core/src/work/settings-file.ts packages/core/src/work/settings-file.test.ts packages/core/src/index.ts
-git commit -m "feat(core): browser_evaluate, browser_cookies, browser_storage, browser_downloads; pre-allow every browser tool except evaluate" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/core/src/mcp/browser-tools.ts packages/core/src/mcp/browser-tools.test.ts packages/core/src/work/settings-file.ts packages/core/src/work/settings-file.test.ts packages/core/src/work/launch.test.ts packages/core/src/index.ts
+git commit -m "feat(core): browser_evaluate, browser_cookies, browser_storage, browser_downloads; pre-allow every browser tool except evaluate" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/core/src/mcp/browser-tools.ts packages/core/src/mcp/browser-tools.test.ts packages/core/src/work/settings-file.ts packages/core/src/work/settings-file.test.ts packages/core/src/work/launch.test.ts packages/core/src/index.ts
 ```
 
 ---
@@ -818,11 +878,12 @@ git commit -m "feat(core): browser_evaluate, browser_cookies, browser_storage, b
 ## Задача 5. Окно: типы моста, каналы IPC, заглушки (‖ с 2–4)
 
 **Файлы:**
-- Изменить: `packages/desktop/src/shared/browser-types.ts`, `packages/desktop/src/preload/index.ts`, `packages/desktop/src/main/ipc.ts`, `packages/desktop/src/renderer/test-utils/fake-bridge.ts`, `packages/desktop/src/main/browser/agent-ops.ts` (только методы-заглушки `stop`, `focusReady`)
+- Изменить: `packages/desktop/src/shared/browser-types.ts`, `packages/desktop/src/preload/index.ts`, `packages/desktop/src/main/ipc.ts`, `packages/desktop/src/renderer/test-utils/fake-bridge.ts`, `packages/desktop/src/main/browser/agent-ops.ts` (только `default` в `run` и методы-заглушки `stop`, `focusReady`, `accessChanged`)
 - Тесты: `packages/desktop/src/main/ipc.test.ts`, `packages/desktop/src/preload/index.test.ts`, `packages/desktop/src/renderer/test-utils/fake-bridge.test.ts`
 
 **Интерфейсы:**
-- Отдаёт: «Общие имена → Окно: типы и мост»; `parseAgentRegistration` переносит `humanBusy` (нет — `false`, не boolean — запись отклонена); каналы `browser:agent-stop` (`webContentsId` — целое, иначе отказ), `browser:agent-focus-ready` (`id` — строка до 64); событие `browser:agent-resize`; `FakeBridge.emitAgentResize(e)`; заглушки `AgentOps.stop`, `AgentOps.focusReady` (пустые, с комментарием «задача 15»).
+- Отдаёт: «Общие имена → Окно: типы и мост»; `parseAgentRegistration` переносит `humanBusy` (нет — `false`, не boolean — запись отклонена); каналы `browser:agent-stop` (`webContentsId` — целое, иначе отказ), `browser:agent-focus-ready` (`id` — строка до 64, `ok` — boolean, иначе отказ); событие `browser:agent-resize`; `FakeBridge.emitAgentResize(e)`; заглушки `AgentOps.stop`, `AgentOps.focusReady(id, ok)`, `AgentOps.accessChanged(allowed)` (пустые, с комментарием «задачи 15a и 15b»).
+- **`default` в `run` (рецензия B1).** Пока операций пять, `switch (request.op)` в `agent-ops.ts#run` исчерпывающий; протокол задачи 2 с 14 операциями делает его неисчерпывающим, и typecheck desktop краснеет (`TS2322 … Promise<… | undefined>`). Эта задача — владелец `agent-ops.ts` в пачке 1 — добавляет ``default: return failure('unsupported', `This window does not run ${String(request.op)} yet.`);`` с комментарием «до задач 16–19; остаётся защитой от операции новее окна». Задача 19 его не убирает; теста на него не нужно: неизвестную операцию раньше отсекает проверка схемы (`ARGS[request.op] === undefined`).
 - Если спайк выбрал В1/В2 «доходит без фокуса» — `focus` в `AgentActivity` и канал `browser:agent-focus-ready` не заводятся (правку вносит задача 1).
 
 - [ ] **Шаг 1. Падающие тесты.**
@@ -846,27 +907,30 @@ describe('каналы Stop и фокуса агента', () => {
     await expect(invoke('browser:agent-stop', '7')).rejects.toThrow();
     expect(agent.stop).toHaveBeenCalledTimes(1);
   });
-  it('browser:agent-focus-ready зовёт agent.focusReady со строкой до 64 знаков', async () => {
-    await invoke('browser:agent-focus-ready', 'f-1');
-    expect(agent.focusReady).toHaveBeenCalledWith('f-1');
-    await expect(invoke('browser:agent-focus-ready', 'x'.repeat(65))).rejects.toThrow();
+  it('browser:agent-focus-ready зовёт agent.focusReady(id, ok): id до 64 знаков, ok — boolean (рецензия M2)', async () => {
+    await invoke('browser:agent-focus-ready', 'f-1', true);
+    expect(agent.focusReady).toHaveBeenCalledWith('f-1', true);
+    await invoke('browser:agent-focus-ready', 'f-2', false);
+    expect(agent.focusReady).toHaveBeenLastCalledWith('f-2', false);
+    await expect(invoke('browser:agent-focus-ready', 'x'.repeat(65), true)).rejects.toThrow();
+    await expect(invoke('browser:agent-focus-ready', 'f-3', 'yes')).rejects.toThrow();
   });
 });
 ```
 
-  В `preload/index.test.ts` — по образцу `agentCaptureReady`: `agentStop(7)` → `ipcRenderer.invoke('browser:agent-stop', 7)`, `agentFocusReady('f-1')` → `invoke('browser:agent-focus-ready', 'f-1')`, `onAgentResize` подписывается на `browser:agent-resize` и отписывается. В `fake-bridge.test.ts` — `emitAgentResize` доходит до слушателя `onAgentResize`, `agentStop` пишется в `browserCalls`.
+  В `preload/index.test.ts` — по образцу `agentCaptureReady`: `agentStop(7)` → `ipcRenderer.invoke('browser:agent-stop', 7)`, `agentFocusReady('f-1', true)` → `invoke('browser:agent-focus-ready', 'f-1', true)`, `onAgentResize` подписывается на `browser:agent-resize` и отписывается. В `fake-bridge.test.ts` — `emitAgentResize` доходит до слушателя `onAgentResize`, `agentStop` пишется в `browserCalls`.
 
 - [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop test -- src/main/ipc.test.ts src/preload/index.test.ts src/renderer/test-utils/fake-bridge.test.ts` → FAIL.
 
-- [ ] **Шаг 3. Реализовать.** Типы — дословно из «Общих имён»; `phase` — `'start' | 'step' | 'end'`; IPC-обработчики — по образцу `browser:agent-capture-ready` (проверка гостя не нужна: main сам находит страницу по id). В `agent-ops.ts` у `AgentOps` — `stop(webContentsId: number): void` и `focusReady(id: string): void`, в `createAgentOps` — пустые тела с комментарием. `RegisterIpcOptions.browser.agent` — пять методов; `main/index.ts` уже передаёт `ops` целиком — проверить, что типы сходятся.
+- [ ] **Шаг 3. Реализовать.** Типы — дословно из «Общих имён»; `phase` — `'start' | 'step' | 'end'`; IPC-обработчики — по образцу `browser:agent-capture-ready` (проверка гостя не нужна: main сам находит страницу по id). В `agent-ops.ts` у `AgentOps` — `stop(webContentsId: number): void`, `focusReady(id: string, ok: boolean): void`, `accessChanged(allowed: boolean): void`, в `createAgentOps` — пустые тела с комментарием; в `run` — `default` (см. «Интерфейсы»). `RegisterIpcOptions.browser.agent` — пять методов; `main/index.ts` уже передаёт `ops` целиком — проверить, что типы сходятся.
 
-- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS. `pnpm --filter @parley/desktop typecheck` → без ошибок.
+- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS. `pnpm --filter @parley/desktop typecheck` → без ошибок (против `dist` протокола пачки 0; со свежим `dist` его повторяет оркестратор после пачки — `default` держит его зелёным).
 
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/desktop/src/shared/browser-types.ts packages/desktop/src/preload/index.ts packages/desktop/src/preload/index.test.ts packages/desktop/src/main/ipc.ts packages/desktop/src/main/ipc.test.ts packages/desktop/src/renderer/test-utils/fake-bridge.ts packages/desktop/src/renderer/test-utils/fake-bridge.test.ts packages/desktop/src/main/browser/agent-ops.ts
-git commit -m "feat(desktop): bridge for agent control — human busy, agent resize, Stop and focus channels" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/shared/browser-types.ts packages/desktop/src/preload/index.ts packages/desktop/src/preload/index.test.ts packages/desktop/src/main/ipc.ts packages/desktop/src/main/ipc.test.ts packages/desktop/src/renderer/test-utils/fake-bridge.ts packages/desktop/src/renderer/test-utils/fake-bridge.test.ts packages/desktop/src/main/browser/agent-ops.ts
+git commit -m "feat(desktop): bridge for agent control — human busy, agent resize, Stop and focus channels" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/shared/browser-types.ts packages/desktop/src/preload/index.ts packages/desktop/src/preload/index.test.ts packages/desktop/src/main/ipc.ts packages/desktop/src/main/ipc.test.ts packages/desktop/src/renderer/test-utils/fake-bridge.ts packages/desktop/src/renderer/test-utils/fake-bridge.test.ts packages/desktop/src/main/browser/agent-ops.ts
 ```
 
 ---
@@ -923,10 +987,21 @@ describe('скрипты агента и функции Parley (этап D)', ()
     const { inspector } = setup();
     await expect(inspector.sendAgentScript(8, 'Runtime.evaluate', { expression: '1' })).rejects.toThrow('no browser guest: 8');
   });
+
+  it('срок команды sendAgentScript — AGENT_SCRIPT_COMMAND_MS, а не CDP_COMMAND_MS (рецензия M6)', async () => {
+    const { dbg, inspector, timers } = setup(); // timers — подмена setTimer, как в тестах тайм-аута команды
+    dbg.sendCommand.mockImplementationOnce(() => new Promise(() => {}));
+    const pending = inspector.sendAgentScript(7, 'Runtime.evaluate', { expression: 'x' });
+    timers.advance(CDP_COMMAND_MS);
+    await expect(Promise.race([pending.then(() => 'done', () => 'rejected'), Promise.resolve('waiting')])).resolves.toBe('waiting');
+    timers.advance(AGENT_SCRIPT_COMMAND_MS - CDP_COMMAND_MS);
+    await expect(pending).rejects.toThrow('CDP command timed out: Runtime.evaluate');
+    expect(AGENT_SCRIPT_COMMAND_MS).toBe(AGENT_LIMITS.evalMs + 5_000);
+  });
 });
 ```
 
-  Рамочный тест «в коде main `Runtime.callFunctionOn` зовётся только с `REACT_INFO_FN`» — допускать рядом `functionDeclaration: REACT_INFO_FN` или `functionDeclaration: SELECT_OPTION_FN`; вызовы `sendAgentScript(` в этот поиск не входят (их сторожит задача 21).
+  Рамочный тест «в коде main `Runtime.callFunctionOn` зовётся только с `REACT_INFO_FN`» — допускать рядом `functionDeclaration: REACT_INFO_FN` или `functionDeclaration: SELECT_OPTION_FN`; файл `agent-evaluate.ts` исключить **по имени файла**, как `inspector.ts` (рецензия M7: его пишет параллельная задача 11, и литерал `'Runtime.callFunctionOn'` стоит у него в типе `AgentScriptSender`; его сторожит задача 21). Рецензия пачки 2 прогоняет `inspector.test.ts` после того, как файл задачи 11 появился.
 
   `page-fns.test.ts` (jsdom): `SELECT_OPTION_FN`, собранная `new Function('return ' + SELECT_OPTION_FN)()`, на `<select>` с опциями `red`/`Red`, `blue`/`Blue`: `fn.call(select, 'Blue')` → `{ ok: true, label: 'Blue' }`, `select.value === 'blue'`, слушатели `input` и `change` вызваны по разу (всплывают); `fn.call(select, 'green')` → `{ ok: false, options: ['Red', 'Blue'] }`, значение прежнее; не `<select>` → `{ ok: false, options: [] }`. Не больше 50 опций в ответе.
 
@@ -934,15 +1009,15 @@ describe('скрипты агента и функции Parley (этап D)', ()
 
 - [ ] **Шаг 3. Реализовать.**
   - `page-fns.ts`: `SELECT_OPTION_FN` — строка `function (wanted) { … }` (ES5, без внешних глобалов, кроме встроенных): ищет `option` по `value === wanted`, затем по `textContent.trim() === wanted`; ставит `selected`, шлёт `new Event('input', { bubbles: true })` и `new Event('change', { bubbles: true })`; `PAGE_FNS = new Set([REACT_INFO_FN, SELECT_OPTION_FN])`.
-  - `inspector.ts`: `CDP_ALLOWED` + `STAGE_D`; `cdpCallAllowed` для `Runtime.callFunctionOn` — `PAGE_FNS.has(params?.functionDeclaration)`; `CDP_AGENT_SCRIPT`; `sendAgentScript(id, method, params)` — та же отправка и тайм-аут `CDP_COMMAND_MS`, что у `send`, но проверка — `CDP_AGENT_SCRIPT.has(method)`, иначе `new Error(\`not an agent script method: ${method}\`)`. Комментарий модуля: «`Runtime.evaluate` — только `sendAgentScript`, вход скриптов агента (`agent-evaluate.ts`, решение владельца 2026-10-20)».
+  - `inspector.ts`: `CDP_ALLOWED` + `STAGE_D`; `cdpCallAllowed` для `Runtime.callFunctionOn` — `PAGE_FNS.has(params?.functionDeclaration)`; `CDP_AGENT_SCRIPT`; внутренний `command(contents, method, params, { allowed, timeoutMs })` — проверка и срок параметрами: у `send` — `cdpCallAllowed` и `CDP_COMMAND_MS`, у `sendAgentScript` — `CDP_AGENT_SCRIPT.has(method)` (иначе `new Error(\`not an agent script method: ${method}\`)`) и `AGENT_SCRIPT_COMMAND_MS = AGENT_LIMITS.evalMs + 5_000`. Комментарий модуля: «`Runtime.evaluate` — только `sendAgentScript`, вход скриптов агента (`agent-evaluate.ts`, решение владельца 2026-10-20)».
 
 - [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS.
 
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/desktop/src/main/browser/page-fns.ts packages/desktop/src/main/browser/page-fns.test.ts packages/desktop/src/main/browser/inspector.ts packages/desktop/src/main/browser/inspector.test.ts
-git commit -m "feat(desktop): CDP allow-list for agent control and a separate entry for agent scripts" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/main/browser/page-fns.ts packages/desktop/src/main/browser/page-fns.test.ts packages/desktop/src/main/browser/inspector.ts packages/desktop/src/main/browser/inspector.test.ts
+git commit -m "feat(desktop): CDP allow-list for agent control and a separate entry for agent scripts" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/main/browser/page-fns.ts packages/desktop/src/main/browser/page-fns.test.ts packages/desktop/src/main/browser/inspector.ts packages/desktop/src/main/browser/inspector.test.ts
 ```
 
 ---
@@ -959,7 +1034,7 @@ git commit -m "feat(desktop): CDP allow-list for agent control and a separate en
 - [ ] **Шаг 1. Падающий тест.** Взять тест старого плана, задача 10, шаг 1, целиком (четыре теста, набор `NODES`) и дописать:
 
 ```ts
-it('секрет в значении маскируется и без секретного имени; фрейм — строкой без содержимого (Фокус ревью 5)', () => {
+it('секрет в значении маскируется и без секретного имени; фрейм — строкой без содержимого (Фокус ревью 6)', () => {
   const nodes: AxNode[] = [
     { nodeId: '1', ignored: false, role: { value: 'RootWebArea' }, name: { value: 'Shop' }, childIds: ['2', '3'] },
     { nodeId: '2', parentId: '1', ignored: false, role: { value: 'textbox' }, name: { value: 'Note' }, value: { value: 'Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln' }, backendDOMNodeId: 5 },
@@ -982,6 +1057,11 @@ it('axHasText — видимый текст без учёта регистра �
 it('axState: checked узла по backendNodeId; нет узла — null', () => {
   expect(axState(NODES, 16, 'checked')).toBe('mixed');
   expect(axState(NODES, 12, 'checked')).toBe(false);
+  // CDP отдаёт tristate строкой: 'false' — не «отмечен» (рецензия m4).
+  const tri = (value: unknown): AxNode[] => [{ nodeId: '1', ignored: false, role: { value: 'checkbox' }, properties: [{ name: 'checked', value: { value } }], backendDOMNodeId: 5 }];
+  expect(axState(tri('false'), 5, 'checked')).toBe(false);
+  expect(axState(tri('true'), 5, 'checked')).toBe(true);
+  expect(axState(tri(true), 5, 'checked')).toBe(true);
   expect(axState(NODES, 999, 'checked')).toBeNull();
 });
 ```
@@ -995,8 +1075,8 @@ it('axState: checked узла по backendNodeId; нет узла — null', () 
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/desktop/src/main/browser/ax-snapshot.ts packages/desktop/src/main/browser/ax-snapshot.test.ts
-git commit -m "feat(desktop): accessibility snapshot for agents — refs, masked values, frames as one line" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/main/browser/ax-snapshot.ts packages/desktop/src/main/browser/ax-snapshot.test.ts
+git commit -m "feat(desktop): accessibility snapshot for agents — refs, masked values, frames as one line" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/main/browser/ax-snapshot.ts packages/desktop/src/main/browser/ax-snapshot.test.ts
 ```
 
 ---
@@ -1087,8 +1167,8 @@ describe('окно операции агента (спека 5.2: операци
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/desktop/src/main/browser/agent-window.ts packages/desktop/src/main/browser/agent-window.test.ts
-git commit -m "feat(desktop): agent operation window — the operation plus a 2 s tail, with notes" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/main/browser/agent-window.ts packages/desktop/src/main/browser/agent-window.test.ts
+git commit -m "feat(desktop): agent operation window — the operation plus a 2 s tail, with notes" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/main/browser/agent-window.ts packages/desktop/src/main/browser/agent-window.test.ts
 ```
 
 ---
@@ -1176,6 +1256,27 @@ describe('AgentInput (Фокус ревью 1)', () => {
     await expect(input.mouse(contents, [{ type: 'mouseMoved', x: 1, y: 2 }, { type: 'mousePressed', x: 1, y: 2, button: 'left', clickCount: 1 }], 0, guard)).rejects.toThrow();
     expect(calls.map(([, params]) => params?.type)).toEqual(['mouseMoved']);
   });
+
+  it('обрыв после mousePressed — один mouseReleased мимо guard; после keyDown — один keyUp (рецензия m6, Фокус ревью 8)', async () => {
+    const { calls, input, contents } = setup(false);
+    const controller = new AbortController();
+    const guard = { signal: controller.signal, check: vi.fn(() => { if (calls.some(([, p]) => p?.type === 'mousePressed')) controller.abort(); controller.signal.throwIfAborted(); }) };
+    const steps: MouseStep[] = [{ type: 'mouseMoved', x: 1, y: 2 }, { type: 'mousePressed', x: 1, y: 2, button: 'left', buttons: 1, clickCount: 1 }, { type: 'mouseMoved', x: 50, y: 2, buttons: 1 }, { type: 'mouseReleased', x: 99, y: 2, button: 'left', clickCount: 1 }];
+    await expect(input.mouse(contents, steps, 0, guard)).rejects.toThrow();
+    expect(calls.map(([, p]) => [p?.type, p?.x])).toEqual([['mouseMoved', 1], ['mousePressed', 1], ['mouseReleased', 1]]);
+  });
+
+  it('borrowFocus бросил tab_hidden (страница не на экране) или human_busy (человек печатает) — ни одной команды Input (Фокус ревью 1, 2)', async () => {
+    const { calls, input, guard, contents, borrowFocus } = setup();
+    borrowFocus.mockRejectedValueOnce(new AgentOpError('tab_hidden', 'Page t1 is not on screen: keyboard input needs the page shown — ask the human to show it.'));
+    await expect(input.text(contents, 'Ann', guard)).rejects.toMatchObject({ code: 'tab_hidden' });
+    expect(calls.filter(([method]) => method.startsWith('Input.'))).toEqual([]);
+  });
+
+  it('viewPoint — точка для окна в пикселях элемента <webview>: × zoom без эмуляции, × scale с ней (рецензия m8)', () => {
+    expect(viewPoint({ x: 200, y: 230 }, null, 2)).toEqual({ x: 400, y: 460 });
+    expect(viewPoint({ x: 200, y: 230 }, { scale: 0.6, mobile: false }, 2)).toEqual({ x: 120, y: 138 });
+  });
 });
 ```
 
@@ -1196,7 +1297,7 @@ it('fitOf: Fit — null; пресет — scale вписывания и mobile �
 
 - [ ] **Шаг 3. Реализовать.**
   - `keySpec` — таблица именованных клавиш старого плана (задача 12: Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, Space) и один печатный символ (`Key<Буква>`, `Digit<цифра>`, прочие — `code` пустой, `keyCode` по `charCodeAt` верхнего регистра); `text` — у Enter (`'\r'`), Space (`' '`) и символов; при модификаторе Meta или Control `text` не ставится.
-  - `createAgentInput`: замыкание на операцию не нужно — фокус помнится в `WeakSet<AbortSignal>` (одолжен для этой операции); перед первым `key`/`text` (и `mouse`, если спайк В3 «да») — `borrowFocus(contents, signal)`, затем один раз на гостя (`WeakSet<WebContents>`) `Emulation.setFocusEmulationEnabled({ enabled: true })` (если спайк В4 «да»); `text` — `Input.insertText({ text })`; `key` — `keyDown` (с `text`, `commands: ['selectAll']` только для `a` с Meta или Control), затем `keyUp`; каждый шаг — `guard.check()` и `guard.signal.throwIfAborted()` перед отправкой.
+  - `createAgentInput`: замыкание на операцию не нужно — фокус помнится в `WeakSet<AbortSignal>` (одолжен для этой операции); перед первым `key`/`text` (и `mouse`, если спайк В3 «да») — `borrowFocus(contents, signal)`, затем один раз на операцию (тот же `WeakSet<AbortSignal>`; кэш на гостя устаревает — отладчик переподключается на навигации) `Emulation.setFocusEmulationEnabled({ enabled: true })` (если спайк В4 «да»); `text` — `Input.insertText({ text })`; `key` — `keyDown` (с `text`, `commands: ['selectAll']` только для `a` с Meta или Control), затем `keyUp`; каждый шаг — `guard.check()` и `guard.signal.throwIfAborted()` перед отправкой (тишину клавиатуры человека проверяет `guard.check()` из задачи 15b); обрыв после `mousePressed` — один `mouseReleased` в той же точке мимо `guard`, после `keyDown` — один `keyUp`, затем ошибка. `viewPoint` — `fit === null ? point × zoom : point × fit.scale`. Ошибки `borrowFocus` (`tab_hidden`, `human_busy`) уходят как есть.
   - `Emulation.fitOf(id)`: из `state` — `{ scale: viewportCommands(spec, area).scale, mobile: viewportSize(spec).mobile }`, нет записи — `null`.
 
 - [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS.
@@ -1204,8 +1305,8 @@ it('fitOf: Fit — null; пресет — scale вписывания и mobile �
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/desktop/src/main/browser/agent-input.ts packages/desktop/src/main/browser/agent-input.test.ts packages/desktop/src/main/browser/emulation.ts packages/desktop/src/main/browser/emulation.test.ts
-git commit -m "feat(desktop): agent input — points, keys, text, borrowed guest focus, emulation fit" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/main/browser/agent-input.ts packages/desktop/src/main/browser/agent-input.test.ts packages/desktop/src/main/browser/emulation.ts packages/desktop/src/main/browser/emulation.test.ts
+git commit -m "feat(desktop): agent input — points, keys, text, borrowed guest focus, emulation fit" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/main/browser/agent-input.ts packages/desktop/src/main/browser/agent-input.test.ts packages/desktop/src/main/browser/emulation.ts packages/desktop/src/main/browser/emulation.test.ts
 ```
 
 ---
@@ -1222,7 +1323,7 @@ git commit -m "feat(desktop): agent input — points, keys, text, borrowed guest
 - [ ] **Шаг 1. Падающий тест.** Временный `root` (`mkdtemp`); `DownloadItem` — заглушка-`EventEmitter` с `getFilename`, `getURL`, `getTotalBytes`, `getReceivedBytes`, `setSavePath`, `cancel`, `getState`.
 
 ```ts
-describe('скачивания агента (Фокус ревью 6)', () => {
+describe('скачивания агента (Фокус ревью 7)', () => {
   it('claim — путь в папке сессии без диалога; имя — basename без управляющих символов; повтор имени — (2)', async () => {
     const downloads = createAgentDownloads({ root });
     const first = downloads.claim(item('../../evil\u0007.csv', 'https://example.test/report.csv?token=SECRET'), OWNER);
@@ -1259,23 +1360,25 @@ describe('скачивания агента (Фокус ревью 6)', () => {
     expect(downloads.dirOf('/a w-1', 's-02')).not.toBe(downloads.dirOf('/b w-1', 's-02'));
   });
 
-  it('sweep — файлы старше срока удаляются во всех папках сессий', async () => {
-    // файл с mtime 8 суток назад и свежий: удалён один
+  it('sweep — файлы старше срока удаляются во всех папках сессий; опустевшие папки — тоже', async () => {
+    // файл с mtime 8 суток назад и свежий в разных сессиях: удалён один, папка старого — удалена, свежего — на месте
   });
+
+  it('уже существующая папка сессии с правами 0755 — после claim 0700', async () => { /* mkdir 0o755 заранее */ });
 });
 ```
 
 - [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop test -- src/main/browser/agent-downloads.test.ts` → FAIL.
 
-- [ ] **Шаг 3. Реализовать.** `claim` синхронный (Electron принимает путь только внутри `will-download`): `mkdirSync(dir, { recursive: true, mode: 0o700 })`, имя (`path.basename`, без `\u0000-\u001f`, до 200 кодовых точек, пустое — `download`), свободное имя `existsSync`-перебором `name (N).ext`, `item.setSavePath(path)`; слушатели `updated` (больше `downloadBytes` — `cancel()` и `note: 'Cancelled: larger than 200 MB.'`) и `done` (`state`, `chmod 0o600` при `completed`). Записи — в памяти (по `workKey\nsessionId`, не больше `downloads`, старые выпадают). `sweep` — `cleanupDrops` по каждой папке `<root>/*/*`. Комментарий модуля — про решение «папка скачиваний» из «Решений плана».
+- [ ] **Шаг 3. Реализовать.** `claim` синхронный (Electron принимает путь только внутри `will-download`): `mkdirSync(dir, { recursive: true, mode: 0o700 })` и `chmodSync(dir, 0o700)` (у уже существующей папки `mode` не действует), имя (`path.basename`, без `\u0000-\u001f`, до 200 кодовых точек, пустое — `download`), свободное имя `existsSync`-перебором `name (N).ext`, `item.setSavePath(path)`; слушатели `updated` (больше `downloadBytes` — `cancel()` и `note: 'Cancelled: larger than 200 MB.'`) и `done` (`state`, `chmod 0o600` при `completed`). Записи — в памяти (по `workKey\nsessionId`, не больше `downloads`, старые выпадают). `sweep` — `cleanupDrops` по каждой папке `<root>/*/*`, затем пустые папки сессий и работ удаляются. Комментарий модуля — про решение «папка скачиваний» из «Решений плана».
 
 - [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS.
 
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/desktop/src/main/browser/agent-downloads.ts packages/desktop/src/main/browser/agent-downloads.test.ts
-git commit -m "feat(desktop): agent downloads — a folder per session, size limit, weekly sweep" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/main/browser/agent-downloads.ts packages/desktop/src/main/browser/agent-downloads.test.ts
+git commit -m "feat(desktop): agent downloads — a folder per session, size limit, weekly sweep" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/main/browser/agent-downloads.ts packages/desktop/src/main/browser/agent-downloads.test.ts
 ```
 
 ---
@@ -1292,11 +1395,11 @@ git commit -m "feat(desktop): agent downloads — a folder per session, size lim
 - [ ] **Шаг 1. Падающий тест.**
 
 ```ts
-describe('скрипт агента в главном мире (решение владельца 2026-10-20; Фокус ревью 2)', () => {
+describe('скрипт агента в главном мире (решение владельца 2026-10-20; Фокус ревью 3)', () => {
   it('expression: Runtime.evaluate с returnByValue, awaitPromise, userGesture false и timeout; значение — JSON с типом', async () => {
     const { scripts, sender } = setup({ evaluate: { result: { type: 'object', value: { user: 'ann' } } } });
     const result = await scripts.evaluateOf(contents, 't1', { tab: 't1', expression: 'window.__state' }, null, signal());
-    expect(sender.sendAgentScript).toHaveBeenCalledWith(7, 'Runtime.evaluate', { expression: 'window.__state', returnByValue: true, awaitPromise: true, userGesture: false, timeout: AGENT_LIMITS.evalMs });
+    expect(sender.sendAgentScript).toHaveBeenCalledWith(7, 'Runtime.evaluate', { expression: 'window.__state', returnByValue: true, awaitPromise: true, userGesture: false, timeout: AGENT_LIMITS.evalMs + 1000 });
     expect(result).toEqual({ tab: 't1', url: 'http://localhost:5173/', outcome: 'value', text: '{"user":"ann"}', type: 'object', truncated: false });
   });
 
@@ -1336,6 +1439,11 @@ describe('скрипт агента в главном мире (решение �
     await expect(pending).rejects.toMatchObject({ code: 'access_denied' });
     expect(stopped.sender.send).toHaveBeenCalledWith(7, 'Runtime.terminateExecution', {});
   });
+
+  it('«Execution was terminated» после своего срока — timeout, а не exception (рецензия M6)', async () => {
+    const { scripts } = setup({ evaluate: 'terminatedAfter', evalMs: 20 }); // CDP отвечает exceptionDetails «Execution was terminated» через 30 мс
+    await expect(scripts.evaluateOf(contents, 't1', { tab: 't1', expression: 'while (true) {}' }, null, signal())).rejects.toMatchObject({ code: 'timeout' });
+  });
 });
 ```
 
@@ -1343,15 +1451,15 @@ describe('скрипт агента в главном мире (решение �
 
 - [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop test -- src/main/browser/agent-evaluate.test.ts` → FAIL.
 
-- [ ] **Шаг 3. Реализовать `evaluateOf`.** Гонка: ответ CDP, свой таймер `evalMs` (по нему — `send('Runtime.terminateExecution', {})` и `AgentOpError('timeout', 'The script ran longer than 10 s and was stopped.')`), `signal` (по нему — `terminateExecution` и `signal.reason`, если это `AgentOpError`, иначе `timeout`). `text`: `exceptionDetails` → `exception.description ?? text`; иначе `type === 'undefined'` → `'undefined'`, иначе `JSON.stringify(value)` (`value` нет при несериализуемом — текст «The value could not be returned as JSON (<description>); return a plain value.» с `outcome: 'value'`, `type` из CDP); обрезка по байтам UTF-8 без разрыва кодовой точки. Без маски (решение «маска явных чтений»). `url` — `urlForAgent(contents.getURL())`. Комментарий модуля: «единственный вход скриптов агента (`Inspector.sendAgentScript`); проверки доступа, паузы и `human_busy` — до вызова, в `agent-ops.ts`».
+- [ ] **Шаг 3. Реализовать `evaluateOf`.** Главный — свой таймер `evalMs` (рецензия M6); `timeout: evalMs + 1000` у `Runtime.evaluate` — только страховка, у `callFunctionOn` параметра `timeout` нет. Гонка: ответ CDP, свой таймер `evalMs` (по нему — `send('Runtime.terminateExecution', {})` и `AgentOpError('timeout', 'The script ran longer than 10 s and was stopped.')`), `signal` (по нему — `terminateExecution` и `signal.reason`, если это `AgentOpError`, иначе `timeout`); ответ CDP, пришедший после своего срока или с «Execution was terminated» после него, — тоже `timeout`. `text`: `exceptionDetails` → `exception.description ?? text`; иначе `type === 'undefined'` → `'undefined'`, иначе `JSON.stringify(value)` (`value` нет при несериализуемом — текст «The value could not be returned as JSON (<description>); return a plain value.» с `outcome: 'value'`, `type` из CDP); обрезка по байтам UTF-8 без разрыва кодовой точки. Без маски (решение «маска явных чтений»). `url` — `urlForAgent(contents.getURL())`. Комментарий модуля: «единственный вход скриптов агента (`Inspector.sendAgentScript`); проверки доступа, паузы и `human_busy` — до вызова, в `agent-ops.ts`».
 
 - [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS.
 
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/desktop/src/main/browser/agent-evaluate.ts packages/desktop/src/main/browser/agent-evaluate.test.ts
-git commit -m "feat(desktop): agent scripts in the page's main world — JSON result, page exceptions, 10 s limit" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/main/browser/agent-evaluate.ts packages/desktop/src/main/browser/agent-evaluate.test.ts
+git commit -m "feat(desktop): agent scripts in the page's main world — JSON result, page exceptions, 10 s limit" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/main/browser/agent-evaluate.ts packages/desktop/src/main/browser/agent-evaluate.test.ts
 ```
 
 ---
@@ -1363,21 +1471,36 @@ git commit -m "feat(desktop): agent scripts in the page's main world — JSON re
 
 **Интерфейсы:**
 - Берёт: `AGENT_LIMITS.listEntries`, `.storageValue`; `redactSecretsInText`, `isSecretName`, `REDACTED`; `urlForAgent`; `AgentOpError`.
-- Отдаёт: `AgentStorage`, `createAgentStorage`; внутри — `storageIdOf(origin, local)` по итогу спайка В7.
+- Отдаёт: `AgentStorage`, `createAgentStorage`, `HTTPONLY_HIDDEN`; внутри — `storageIdOf(origin, local)` по итогу спайка В7.
 
 - [ ] **Шаг 1. Падающий тест.**
 
 ```ts
-describe('куки текущей страницы агента (Фокус ревью 3)', () => {
-  it('list — cookies.get({ url: адрес страницы }); значения скрыты; values: true — показаны', async () => {
+describe('куки текущей страницы агента (Фокус ревью 4)', () => {
+  it('list — cookies.get({ url: адрес страницы }); значения скрыты; values: true — показаны, кроме httpOnly (решение владельца 6)', async () => {
     const { storage, cookies } = setup({ url: 'https://shop.example.test/cart?x=1' });
-    cookies.get.mockResolvedValue([{ name: 'sid', value: 'S3CR3T', domain: '.example.test', path: '/', secure: true, httpOnly: true, sameSite: 'lax', session: true }]);
+    cookies.get.mockResolvedValue([
+      { name: 'sid', value: 'S3CR3T', domain: '.example.test', path: '/', secure: true, httpOnly: true, sameSite: 'lax', session: true },
+      { name: 'theme', value: 'dark', domain: 'shop.example.test', path: '/', secure: false, httpOnly: false, sameSite: 'lax', session: true },
+    ]);
     const hidden = await storage.cookiesOf(contents, 't1', { tab: 't1', action: 'list' });
     expect(cookies.get).toHaveBeenCalledWith({ url: 'https://shop.example.test/cart?x=1' });
-    expect(hidden).toMatchObject({ cookies: [{ name: 'sid', domain: '.example.test', httpOnly: true, session: true, expires: null, size: 9 }] });
+    expect(hidden).toMatchObject({ cookies: [{ name: 'sid', domain: '.example.test', httpOnly: true, session: true, expires: null, size: 9 }, { name: 'theme' }] });
     expect(JSON.stringify(hidden)).not.toContain('S3CR3T');
+    expect(JSON.stringify(hidden)).not.toContain('dark');
     const shown = await storage.cookiesOf(contents, 't1', { tab: 't1', action: 'list', values: true });
-    expect(JSON.stringify(shown)).toContain('S3CR3T');
+    if (!('cookies' in shown)) throw new Error('list');
+    expect(shown.cookies.find((c) => c.name === 'theme')?.value).toBe('dark');
+    expect(shown.cookies.find((c) => c.name === 'sid')?.value).toBe(HTTPONLY_HIDDEN);
+    expect(JSON.stringify(shown)).not.toContain('S3CR3T');
+  });
+
+  it('set и delete httpOnly-имени — можно (решение владельца 6)', async () => {
+    const { storage, cookies } = setup({ url: 'https://shop.example.test/cart' });
+    await storage.cookiesOf(contents, 't1', { tab: 't1', action: 'set', name: 'sid', value: 'new', httpOnly: true });
+    expect(cookies.set).toHaveBeenCalledWith(expect.objectContaining({ name: 'sid', httpOnly: true }));
+    await storage.cookiesOf(contents, 't1', { tab: 't1', action: 'delete', name: 'sid' });
+    expect(cookies.remove).toHaveBeenCalledWith('https://shop.example.test/cart', 'sid');
   });
 
   it('set — host-only кука адреса страницы; delete — remove(url, name); страница не http(s) — bad_request', async () => {
@@ -1417,15 +1540,15 @@ describe('localStorage и sessionStorage origin страницы', () => {
 
 - [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop test -- src/main/browser/agent-storage.test.ts` → FAIL.
 
-- [ ] **Шаг 3. Реализовать.** Адрес — только `contents.getURL()`, http(s), иначе `AgentOpError('bad_request', 'Page tN shows no web page yet: open or navigate it first.')`. Куки: `size` — `name.length + value.length`; `expires` — ISO из `expirationDate` или `null`; значение — только при `values: true`, обрезано до `AGENT_INPUT.cookieValue`; список — не больше `listEntries` с заметкой «N more cookies are not shown». Хранилище: `storageIdOf(origin, local)` — `{ securityOrigin: origin, isLocalStorage: local }` (или ветка В7); превью значения в списке — `isSecretName(key) ? REDACTED : redactSecretsInText(значение)`, до 200 кодовых точек; `get` — до `storageValue` с `truncated`; `done` — «Set theme in localStorage of https://app.example.test.» и подобные.
+- [ ] **Шаг 3. Реализовать.** Адрес — только `contents.getURL()`, http(s), иначе `AgentOpError('bad_request', 'Page tN shows no web page yet: open or navigate it first.')`. Куки: `size` — `name.length + value.length`; `expires` — ISO из `expirationDate` или `null`; значение — только при `values: true` и только у кук без `httpOnly` (у httpOnly — всегда `HTTPONLY_HIDDEN`, решение владельца 6; значение httpOnly-куки не выходит из функции ни в каком поле, кроме длины в `size`), обрезано до `AGENT_INPUT.cookieValue`; список — не больше `listEntries` с заметкой «N more cookies are not shown». Хранилище: `storageIdOf(origin, local)` — `{ securityOrigin: origin, isLocalStorage: local }` (или ветка В7); превью значения в списке — `isSecretName(key) ? REDACTED : redactSecretsInText(значение)`, до 200 кодовых точек; `get` — до `storageValue` с `truncated`; `done` — «Set theme in localStorage of https://app.example.test.» и подобные.
 
 - [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS.
 
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/desktop/src/main/browser/agent-storage.ts packages/desktop/src/main/browser/agent-storage.test.ts
-git commit -m "feat(desktop): agent cookies and web storage — scoped to the page's current URL and origin" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/main/browser/agent-storage.ts packages/desktop/src/main/browser/agent-storage.test.ts
+git commit -m "feat(desktop): agent cookies and web storage — scoped to the page's current URL and origin" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/main/browser/agent-storage.ts packages/desktop/src/main/browser/agent-storage.test.ts
 ```
 
 ---
@@ -1456,10 +1579,12 @@ it('ярлык сессии, Stop зовёт onStop, подсказка — по
 
 ```tsx
 // BrowserChrome.test.tsx — дописать
-it('значок агента — перед консолью, только когда agent задан; на ширине 800 строка не вылезает', () => {
-  const { rerender } = render(<BrowserChrome {...baseProps} paused={false} onPause={vi.fn()} agent={null} />);
+// помощник файла — renderChrome(extra): рисует и отдаёт props (стр. 7 теста); baseProps в файле нет
+it('значок агента — перед консолью, только когда agent задан', () => {
+  renderChrome({ paused: false, onPause: vi.fn(), agent: null });
   expect(screen.queryByTestId('agent-badge')).toBeNull();
-  rerender(<BrowserChrome {...baseProps} paused={false} onPause={vi.fn()} agent={{ session: 'S02', recent: [] }} onAgentStop={vi.fn()} />);
+  cleanup();
+  renderChrome({ paused: false, onPause: vi.fn(), agent: { session: 'S02', recent: [] }, onAgentStop: vi.fn() });
   const badge = screen.getByTestId('agent-badge');
   const consoleButton = screen.getByRole('button', { name: S.browser.devtools.toggle });
   expect(badge.compareDocumentPosition(consoleButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -1475,8 +1600,8 @@ it('значок агента — перед консолью, только ко
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/desktop/src/renderer/browser/AgentBadge.tsx packages/desktop/src/renderer/browser/AgentBadge.test.tsx packages/desktop/src/renderer/browser/BrowserChrome.tsx packages/desktop/src/renderer/browser/BrowserChrome.test.tsx packages/desktop/src/shared/strings.ts
-git commit -m "feat(desktop): agent badge with Stop in the browser page bar" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/renderer/browser/AgentBadge.tsx packages/desktop/src/renderer/browser/AgentBadge.test.tsx packages/desktop/src/renderer/browser/BrowserChrome.tsx packages/desktop/src/renderer/browser/BrowserChrome.test.tsx packages/desktop/src/shared/strings.ts
+git commit -m "feat(desktop): agent badge with Stop in the browser page bar" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/renderer/browser/AgentBadge.tsx packages/desktop/src/renderer/browser/AgentBadge.test.tsx packages/desktop/src/renderer/browser/BrowserChrome.tsx packages/desktop/src/renderer/browser/BrowserChrome.test.tsx packages/desktop/src/shared/strings.ts
 ```
 
 ---
@@ -1486,14 +1611,14 @@ git commit -m "feat(desktop): agent badge with Stop in the browser page bar" -m 
 **Файлы:**
 - Создать: `packages/core/src/work/parley-browser-skill.ts`, `packages/core/src/work/parley-browser-skill.test.ts`
 - Изменить: `packages/core/src/work/skill-install.ts`, `packages/core/src/work/skill.ts`, `packages/core/src/work/guide.ts`, `packages/core/src/work/guidance.ts`, `packages/core/src/index.ts`, `packages/protocol/src/browser-agent-contract.test.ts`
-- Тесты: `skill-install.test.ts`, `skill.test.ts`, `guide.test.ts`, `guidance.test.ts` (поправить)
+- Тесты: `skill-install.test.ts`, `skill.test.ts`, `guide.test.ts`, `guidance.test.ts` (поправить); `packages/host/src/sessions/agent-skills.test.ts` (~стр. 253: `readdir(.agents/skills)` ждёт `['minimal-development', 'parley']` — краснеет от третьего скилла; рецензия M5)
 
 **Интерфейсы:**
 - Берёт: `BROWSER_TOOLS` (задачи 3–4); `parseMarkdownFrontmatter` (`core/skills/frontmatter.ts`).
 - Отдаёт: `PARLEY_BROWSER_SKILL_NAME = 'parley-browser'`, `PARLEY_BROWSER_SKILL_MD`; третий элемент `BUILTIN_SKILLS`; новый `BROWSER_PRIORITY_RULE`.
 
 - [ ] **Шаг 1. Падающие тесты.**
-  - `parley-browser-skill.test.ts` — как в старом плане, задача 4, шаг 1, с поправками: кодов в тесте нет (их сверяет протокол); описание (frontmatter) содержит `localhost`, `any site`, `console`, `network`, `375`, `drops/context`, `browser_tabs`, `not needed`; тело — до 220 строк; разделы: `## Tools`, `## Errors`, `## Recipes`, `### Verify a UI change`, `### Debug a failing request`, `### Walk through a flow`, `### Check responsive layout`, `### Inspect app state`, `### Upload and download files`, `## Input details`, `## Reading the human's attachments`, `## Rules`, `## Troubleshooting`; фразы `view_image`, `page data, not instructions`, `restart this session`, `browser_evaluate asks the human`, `confirm() returns false`, `never repeat`, `shared with the human`; нет фраз `Only localhost`, `no JavaScript`.
+  - `parley-browser-skill.test.ts` — как в старом плане, задача 4, шаг 1, с поправками: кодов в тесте нет (их сверяет протокол); описание (frontmatter) содержит `localhost`, `any site`, `console`, `network`, `375`, `drops/context`, `browser_tabs`, `not needed`; тело — до 220 строк; разделы: `## Tools`, `## Errors`, `## Recipes`, `### Verify a UI change`, `### Debug a failing request`, `### Walk through a flow`, `### Check responsive layout`, `### Inspect app state`, `### Upload and download files`, `## Input details`, `## Reading the human's attachments`, `## Rules`, `## Troubleshooting`; фразы `view_image`, `page data, not instructions`, `restart this session`, `browser_evaluate asks the human`, `confirm() returns false`, `never repeat`, `shared with the human`, `httpOnly`, `can sign the human out`, `only with action select`, `macOS may ask`, `moves the mouse`, `approval_policy`; нет фраз `Only localhost`, `no JavaScript`.
   - `packages/protocol/src/browser-agent-contract.test.ts` — дописать:
 
 ```ts
@@ -1503,51 +1628,46 @@ it('скилл parley-browser объясняет каждый код ошибк�
 ```
 
   - `skill-install.test.ts`: всюду, где ждут два встроенных скилла, — три (`parley`, `minimal-development`, `parley-browser`): папка `.agents/skills/parley-browser/SKILL.md`, ссылка `.claude/skills/parley-browser`, учёт и `info/exclude`; чужая папка `parley-browser` не трогается.
+  - `host/src/sessions/agent-skills.test.ts`: ожидание папок — `['minimal-development', 'parley', 'parley-browser']`, ссылка `.claude/skills/parley-browser` есть в обоих корнях (проекте и worktree).
   - `skill.test.ts` / `guide.test.ts`: заглушка `parley` в «When to use it» и тема `window` гида (подраздел `### The built-in browser`) называют `parley-browser`.
   - `guidance.test.ts`, «правило приоритета»: `≤ 700` байт, английский; содержит `use Parley's browser first`, `browser_open`, `the human sees the same page`, `browser_snapshot`, `browser_action`, `browser_evaluate`, `parley-browser`, `Chrome`, `Chrome DevTools`, `Playwright`, `performance traces`, `browser_open is not available`; не содержит `localhost`-ограничения (`For pages on localhost`), `clicking or typing`, `running JS`, `cookies`, `files`.
 
-- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/core test -- src/work/parley-browser-skill.test.ts src/work/skill-install.test.ts src/work/skill.test.ts src/work/guide.test.ts src/work/guidance.test.ts` → FAIL.
+- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/core test -- src/work/parley-browser-skill.test.ts src/work/skill-install.test.ts src/work/skill.test.ts src/work/guide.test.ts src/work/guidance.test.ts` → FAIL. (`host/src/sessions/agent-skills.test.ts` и контрактный тест протокола читают собранный core — их запускает оркестратор после пачки 2.)
 
 - [ ] **Шаг 3. Реализовать.**
-  - Скилл — текст старого плана (задача 4, шаг 3) как основа, переписанный под этот этап: таблица инструментов — все 14 (с `browser_evaluate`, `browser_cookies`, `browser_storage`, `browser_downloads`, действиями `select`, `check`, `uncheck`, `drag`, `upload`); вступление — «панели браузера твоего чата и твоих комнат, любые http(s)-сайты; человек видит каждое действие и может нажать Stop»; таблица «Errors» — все 11 кодов (`not_loopback` — «an older Parley window: ask the human to update Parley»; `human_busy`; `stale_ref`); новые рецепты: «Inspect app state» (`browser_evaluate` с выражением; первый вызов спрашивает человека; исключение — ответ), «Upload and download files» (клик по полю файла даёт заметку; `browser_action upload` с `ref` и абсолютными путями; скачивания — в папку сессии, `browser_downloads`); «Input details»: `type` не очищает поле (⌘A, затем `type`), `select` — по `value` или тексту опции (вместо «первой буквы»), `drag` — мышью, родной HTML5 drag-and-drop может не сработать, `alert`/`confirm`/`prompt` отключены (`confirm() returns false`; при необходимости подменить `window.confirm` через `browser_evaluate`), состояние наведения держится до следующего движения мыши; «Rules»: куки и хранилище общие с человеком (`shared with the human`), удаление куки может разлогинить человека; секреты не повторять (`never repeat`); свежий снимок перед действием; не мешать человеку. До 220 строк.
+  - Скилл — текст старого плана (задача 4, шаг 3) как основа, переписанный под этот этап: таблица инструментов — все 14 (с `browser_evaluate`, `browser_cookies`, `browser_storage`, `browser_downloads`, действиями `select`, `check`, `uncheck`, `drag`, `upload`); вступление — «панели браузера твоего чата и твоих комнат, любые http(s)-сайты; человек видит каждое действие и может нажать Stop»; таблица «Errors» — все 11 кодов (`not_loopback` — «an older Parley window: ask the human to update Parley»; `human_busy`; `stale_ref`); новые рецепты: «Inspect app state» (`browser_evaluate` с выражением; первый вызов спрашивает человека; исключение — ответ), «Upload and download files» (клик по полю файла даёт заметку; `browser_action upload` с `ref` и абсолютными путями; скачивания — в папку сессии, `browser_downloads`); «Input details»: `type` не очищает поле (⌘A, затем `type`), `select` — по `value` или тексту опции (вместо «первой буквы»), `drag` — мышью, родной HTML5 drag-and-drop может не сработать, `alert`/`confirm`/`prompt` отключены (`confirm() returns false`; при необходимости подменить `window.confirm` через `browser_evaluate`), состояние наведения держится до следующего движения мыши; «Input details» ещё: по `<select>` не кликать — выбирать только `action select` (`only with action select`: клик откроет системное меню на экране человека, спайк В16); мышь человека над страницей во время `drag` срывает перетаскивание (`moves the mouse`) — при срыве повторить, попросив человека не двигать мышь над панелью; `upload` файла из `~/Desktop`, `~/Documents` или `~/Downloads` может вызвать запрос доступа macOS (`macOS may ask`) — тогда попросить человека разрешить или положить файл в проект. «Rules»: куки и хранилище общие с человеком (`shared with the human`); значения httpOnly-кук не показываются никогда (`httpOnly`), их можно задать или удалить, а удаление куки может разлогинить человека (`can sign the human out`); секреты не повторять (`never repeat`); свежий снимок перед действием; не мешать человеку. «Troubleshooting»: `browser_evaluate` прошёл без вопроса — значит, у человека `bypassPermissions` или Codex с `approval_policy = never`: это выбор человека, не повод запускать больше скриптов (`approval_policy`). До 220 строк.
   - `skill-install.ts`: `{ name: PARLEY_BROWSER_SKILL_NAME, files: { 'SKILL.md': PARLEY_BROWSER_SKILL_MD } }` третьим в `BUILTIN_SKILLS`; комментарий «Two fixed assets» → «Three».
   - Указатели: в `skill.ts` — строка «For the built-in browser (open, read and drive pages your human sees) load the parley-browser skill.»; в `guide.ts` — подраздел `### The built-in browser` темы `window` с той же мыслью (2–4 строки).
   - `guidance.ts`: `BROWSER_PRIORITY_RULE` = «Use Parley's browser first for web pages you build or check: browser_open shows a page in the browser panel of your chat or room, and the human sees the same page; browser_snapshot, browser_action, browser_navigate, browser_console, browser_network, browser_screenshot and browser_evaluate read and drive it (skill parley-browser). Use Chrome, Chrome DevTools or Playwright only for performance traces or when browser_open is not available.»
   - `core/src/index.ts` — экспорт `PARLEY_BROWSER_SKILL_MD`, `PARLEY_BROWSER_SKILL_NAME`.
 
-- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS; `pnpm --filter @parley/core build`; `pnpm --filter @parley/protocol test -- src/browser-agent-contract.test.ts` → PASS.
+- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS. Сборка core, `src/browser-agent-contract.test.ts` протокола и `src/sessions/agent-skills.test.ts` хоста — оркестратор после пачки 2.
 
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/core/src/work/parley-browser-skill.ts packages/core/src/work/parley-browser-skill.test.ts packages/core/src/work/skill-install.ts packages/core/src/work/skill-install.test.ts packages/core/src/work/skill.ts packages/core/src/work/skill.test.ts packages/core/src/work/guide.ts packages/core/src/work/guide.test.ts packages/core/src/work/guidance.ts packages/core/src/work/guidance.test.ts packages/core/src/index.ts packages/protocol/src/browser-agent-contract.test.ts
-git commit -m "feat(core): parley-browser skill, pointers to it, and a browser priority rule for full control" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/core/src/work/parley-browser-skill.ts packages/core/src/work/parley-browser-skill.test.ts packages/core/src/work/skill-install.ts packages/core/src/work/skill-install.test.ts packages/core/src/work/skill.ts packages/core/src/work/skill.test.ts packages/core/src/work/guide.ts packages/core/src/work/guide.test.ts packages/core/src/work/guidance.ts packages/core/src/work/guidance.test.ts packages/core/src/index.ts packages/protocol/src/browser-agent-contract.test.ts packages/host/src/sessions/agent-skills.test.ts
+git commit -m "feat(core): parley-browser skill, pointers to it, and a browser priority rule for full control" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/core/src/work/parley-browser-skill.ts packages/core/src/work/parley-browser-skill.test.ts packages/core/src/work/skill-install.ts packages/core/src/work/skill-install.test.ts packages/core/src/work/skill.ts packages/core/src/work/skill.test.ts packages/core/src/work/guide.ts packages/core/src/work/guide.test.ts packages/core/src/work/guidance.ts packages/core/src/work/guidance.test.ts packages/core/src/index.ts packages/protocol/src/browser-agent-contract.test.ts packages/host/src/sessions/agent-skills.test.ts
 ```
 
 ---
 
-## Задача 15. Main: основа `agent-ops` — любые сайты, занятость, Stop, окно операции, выбор файла, скачивания
+## Задача 15a. Main: основа `agent-ops` — runner, Stop, пауза и выключатель посреди операции, занятость, любые сайты
 
 **Файлы:**
-- Изменить: `packages/desktop/src/main/browser/agent-ops.ts`, `agent-pages.ts`, `agent-capture.ts`, `packages/desktop/src/main/index.ts`
+- Изменить: `packages/desktop/src/main/browser/agent-ops.ts`, `agent-pages.ts`, `agent-capture.ts`, `packages/desktop/src/main/index.ts` (только `accessChanged`)
 - Тесты: `packages/desktop/src/main/browser/agent-ops.test.ts` (поправить), создать `packages/desktop/src/main/browser/agent-ops-control.test.ts`
 
 **Интерфейсы:**
-- Берёт: `AgentWindow` (8), `AgentDownloads` (10), `AgentPageRegistration.humanBusy`, `AgentOps.stop/focusReady` (5), `Inspector.onEvent`.
-- Отдаёт (задачам 16–19):
-  - `PageRecord` + `humanBusy: boolean`, `seen: boolean` (`visible` хоть раз — спайк 0.2: действия только у страницы, которую человек видел);
-  - `onPage(request, agentId, run, use?: { changes?: boolean; window?: boolean; seen?: boolean })` — `changes` → `human_busy`; `window` → окно операции и перехват выбора файла; `seen` → `tab_hidden` у ни разу не показанной страницы; `run(contents, record, guard: InputGuard)` (было `signal`);
-  - `AgentOpsDeps` + `agentWindow: AgentWindow`, `inspector` — ещё `onEvent`, `borrowFocus?(contents, signal): Promise<void>`;
-  - `createPageRunner(deps: { registry: PageRegistry; agentsAllowed(): Promise<boolean>; agentWindow: AgentWindow; inspector: Pick<Inspector, 'send' | 'onEvent'>; activity(e: AgentActivity): void; opTimeoutMs?: number }): PageRunner`, `PageRunner = { run<T>(request, agentId, task: (contents: WebContents, record: PageRecord, guard: InputGuard) => Promise<T>, use?: { changes?: boolean; window?: boolean; seen?: boolean }): Promise<T>; stop(webContentsId: number): void }` — `createAgentOps` собирает его, задачи 16–19 зовут `runner.run`;
-  - `AgentOps.stop(webContentsId)`: панель страницы — на паузу в реестре сразу, текущая операция страницы — `abort(new AgentOpError('access_denied', 'Stopped by the human: agents are paused in this browser panel (paused by the human).'))`;
-  - `AgentOps.focusReady(id)` — подтверждение окна для `borrowFocus` (main ждёт его не дольше `AGENT_LIMITS.opMs`, с отменой по `signal`).
+- Берёт: `AgentPageRegistration.humanBusy`, заглушки `AgentOps.stop/focusReady/accessChanged` (5); `InputGuard` (9, тип).
+- Отдаёт (задачам 15b–19): `PageUse`, `PageRunner`, `createPageRunner` («Общие имена → пачка 3»); `PageRecord` + `humanBusy: boolean`, `seen: boolean` (`visible` хоть раз — спайк 0.2); `PageRegistry.pauseFor(webContentsId): PageRecord | null`; `AgentOps.stop(webContentsId)` — пауза панели страницы в реестре сразу и `runner.stopPanel(workKey, owner, new AgentOpError('access_denied', 'Stopped by the human: agents are paused in this browser panel (paused by the human).'))`; `AgentOps.accessChanged(allowed)`; запись реестра `paused: true` → `runner.stopPanel(…, access_denied «paused by the human»)`. `createAgentOps` собирает runner и зовёт `runner.run` вместо прежнего `onPage`; `task` получает `guard` (было `signal`).
 
 - [ ] **Шаг 1. Поправить старые тесты и написать падающие.**
-  - В `agent-ops.test.ts` тесты слитой ветки «внешняя страница — not_loopback» и «ушла redirect — not_loopback» заменить: внешняя страница читается (`console`, `network`, `screenshot` → `ok`), `tabs` показывает полный адрес с маской и заголовок (`https://accounts.example.test/signin?sid=<redacted>`, `Sign in`); тест C «страница ушла с localhost посреди снимка — not_loopback» — заменить на «документ сменился посреди снимка — tab_not_loaded» (эпоха уже проверяется).
-  - `agent-ops-control.test.ts` — свой `setup()` (копия помощников `agent-ops.test.ts`: `fakeGuest`, `register`, `codeOf`, `messageOf`, `okResult`) с `agentWindow` (настоящий `createAgentWindow`), заглушкой `inspector.onEvent` (`ctx.emitCdp(id, method, params)`) и вторым помощником `pageSetup()` — `createPageRunner` со своим `createPageRegistry` и страницей `t1` (`ctx.runner`, `ctx.register`, `ctx.page(agentId, use)` — вызов `ctx.runner.run(request, agentId, task, use)`), где `task` увеличивает `ctx.ran`, а при `use.hold` ждёт `ctx.release()`. `devtoolsWith({ consoleText, requestUrl })` — снимок журнала с одной записью консоли и одним упавшим запросом (форма — как в тестах C). Тесты:
+  - В `agent-ops.test.ts` — **все** ожидания loopback, а не только три: после слияния их шесть (ищите `not_loopback`, `loopback` и `localhost` в именах тестов: «внешняя страница — not_loopback», «ушла redirect — not_loopback», «страница ушла с localhost посреди снимка», «tabs: чужой сайт только по origin» и соседние). Новые ожидания: внешняя страница читается (`console`, `network`, `screenshot` → `ok`); `tabs` показывает полный адрес с маской и заголовок (`https://accounts.example.test/signin?sid=<redacted>`, `Sign in`); «документ сменился посреди снимка — tab_not_loaded» (эпоха уже проверяется).
+  - `agent-ops-control.test.ts` — два помощника: `setup()` — полный `createAgentOps` (копия помощников `agent-ops.test.ts`: `fakeGuest`, `register`, `codeOf`, `messageOf`, `okResult`), `pageSetup()` — `createPageRunner` со своим `createPageRegistry` и страницей `t1` (`ctx.runner`, `ctx.register`, `ctx.page(agentId, use)` — вызов `ctx.runner.run(request, agentId, task, use)`, где `task` увеличивает `ctx.ran`, а при `ctx.page(…, { …, hold: true })` ждёт `ctx.release()`; `hold` — опция помощника, не поле `PageUse`). `devtoolsWith({ consoleText, requestUrl })` — снимок журнала с одной записью консоли и одним упавшим запросом (форма — как в тестах C).
 
 ```ts
-describe('любые сайты (решение владельца 2026-10-20; Фокус ревью 5)', () => {
+describe('любые сайты (решение владельца 2026-10-20; Фокус ревью 6)', () => {
   it('внешняя страница: console и network читаются, URL и тексты — с маской', async () => {
     const ctx = setup({ url: 'https://example.test/reset?token=SECRET1' });
     ctx.inspector.snapshot.mockReturnValue(devtoolsWith({ consoleText: 'login failed for Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln', requestUrl: 'https://api.example.test/me?access_token=SECRET2' }));
@@ -1557,41 +1677,44 @@ describe('любые сайты (решение владельца 2026-10-20; �
   });
 });
 
-describe('занятость, Stop, окно операции', () => {
-  it('human_busy: операция с changes у страницы с Select/Annotate — отказ до run; чтение — можно', async () => {
+describe('занятость, Stop, пауза и выключатель (Фокус ревью 3, 8)', () => {
+  it('human_busy: операция с changes у страницы с Select/Annotate — отказ до task; чтение — можно', async () => {
     const ctx = pageSetup();
     ctx.register({ humanBusy: true });
-    await expect(ctx.page('t1', {})).resolves.toBeDefined(); // чтение у занятой страницы — можно
-    expect(ctx.ran).toBe(1);
+    await expect(ctx.page('t1', {})).resolves.toBeDefined();
     await expect(ctx.page('t1', { changes: true })).rejects.toMatchObject({ code: 'human_busy' });
     expect(ctx.ran).toBe(1);
   });
 
-  it('Stop: пауза в реестре сразу, текущая операция страницы — access_denied, следующая — access_denied', async () => {
-    const ctx = pageSetup();
-    const pending = ctx.page('t1', { changes: true, hold: true });
-    await vi.waitFor(() => expect(ctx.ran).toBe(1));
-    ctx.runner.stop(7);
-    await expect(pending).rejects.toMatchObject({ code: 'access_denied', message: expect.stringContaining('paused by the human') });
+  it('Stop: пауза в реестре сразу; идущие операции всех страниц панели — access_denied; следующая — access_denied', async () => {
+    const ctx = pageSetup({ pages: ['t1', 't2'] }); // две страницы одной панели
+    const first = ctx.page('t1', { changes: true, hold: true });
+    const second = ctx.page('t2', { hold: true });
+    await vi.waitFor(() => expect(ctx.ran).toBe(2));
+    ctx.ops.stop(7); // гость страницы t1
+    await expect(first).rejects.toMatchObject({ code: 'access_denied', message: expect.stringContaining('paused by the human') });
+    await expect(second).rejects.toMatchObject({ code: 'access_denied' });
     await expect(ctx.page('t1', {})).rejects.toMatchObject({ code: 'access_denied' });
   });
 
-  it('окно операции: операция с window открывает перехват выбора файла и окно; после хвоста перехват снят', async () => {
-    const ctx = pageSetup({ tailMs: 20 });
-    await ctx.page('t1', { window: true });
-    expect(ctx.inspector.send).toHaveBeenCalledWith(7, 'Page.setInterceptFileChooserDialog', { enabled: true });
-    expect(ctx.agentWindow.activeFor(7)).toMatchObject({ sessionId: 's-02', agentId: 't1' });
-    await vi.waitFor(() => expect(ctx.inspector.send).toHaveBeenCalledWith(7, 'Page.setInterceptFileChooserDialog', { enabled: false }));
+  it('«Pause agents» (запись paused: true) посреди операции — обрыв, как у Stop', async () => {
+    const ctx = pageSetup();
+    const pending = ctx.page('t1', { hold: true });
+    await vi.waitFor(() => expect(ctx.ran).toBe(1));
+    ctx.register({ kind: 'paused', paused: true });
+    await expect(pending).rejects.toMatchObject({ code: 'access_denied', message: expect.stringContaining('paused by the human') });
   });
 
-  it('Page.fileChooserOpened в окне — заметка «use upload»; нативного диалога нет (Фокус ревью 4)', async () => {
+  it('выключатель: accessChanged(false) обрывает идущие операции и синхронно закрывает guard.check; true — снова можно', async () => {
     const ctx = pageSetup();
-    const done = ctx.page('t1', { window: true, hold: true });
+    const pending = ctx.page('t1', { hold: true });
     await vi.waitFor(() => expect(ctx.ran).toBe(1));
-    ctx.emitCdp(7, 'Page.fileChooserOpened', { frameId: 'F', mode: 'selectSingle', backendNodeId: 31 });
-    ctx.release();
-    await done;
-    expect(ctx.agentWindow.take(ctx.pageKey)).toEqual(['The page opened a file chooser; nothing was shown to the human. Take a browser_snapshot and use browser_action with action upload on the file input.']);
+    ctx.runner.accessChanged(false);
+    await expect(pending).rejects.toMatchObject({ code: 'access_denied', message: expect.stringContaining('Let agents use the browser') });
+    expect(() => ctx.lastGuard!.check()).toThrow(expect.objectContaining({ code: 'access_denied' }));
+    ctx.runner.accessChanged(true);
+    ctx.allowed = true;
+    await expect(ctx.page('t1', {})).resolves.toBeDefined();
   });
 
   it('страница, которую человек ни разу не видел, — tab_hidden для seen-операций (этап 0, 0.2)', async () => {
@@ -1605,25 +1728,134 @@ describe('занятость, Stop, окно операции', () => {
 });
 ```
 
-  Прямого тестового входа в `createAgentOps` нет: `agent-ops.ts` экспортирует `createPageRunner(deps)` (прежний `onPage` с реестром, очередью, окном операции и Stop), `createAgentOps` собирает его, тест берёт его же. `use.hold` — только опция теста в задаче `ctx.page`, не поле `use` продукта.
-  - Скачивания — в `agent-ops-control.test.ts` тест на `routeDownload` (экспорт `agent-ops.ts`): `routeDownload(item, source, { agentWindow, downloads, registry })` → активное окно — `downloads.claim` с владельцем окна и `agentWindow.note(…, 'The page started a download: report.csv → <path> (see browser_downloads).')`, ответ `true`; нет окна — `false`, `claim` не вызван (Фокус ревью 6).
+  `ctx.ops` в `pageSetup` — тонкая обёртка `stop(id)` над `registry.pauseFor` и `runner.stopPanel` (та же, что в `createAgentOps`); `ctx.lastGuard` — `guard`, который получила последняя `task`.
 
 - [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop test -- src/main/browser/agent-ops.test.ts src/main/browser/agent-ops-control.test.ts` → FAIL.
 
 - [ ] **Шаг 3. Реализовать.**
-  - `agent-pages.ts`: `PageRecord.humanBusy` (`e.humanBusy === true`), `seen` (`e.visible || previous?.seen === true`); `listTabs` — `url: urlForAgent(record.lastUrl)`, заголовок с маской для всех, размер для всех; `loopback` остаётся полем ответа; `pauseFor(webContentsId): PageRecord | null` — ставит паузу панели записи.
+  - `agent-pages.ts`: `PageRecord.humanBusy` (`e.humanBusy === true`), `seen` (`e.visible || previous?.seen === true`); `listTabs` — `url: urlForAgent(record.lastUrl)`, заголовок с маской для всех, размер для всех; поле `loopback` остаётся; `pauseFor(webContentsId)` — ставит паузу панели записи и отдаёт запись.
   - `agent-capture.ts`: убрать проверку `isLoopbackUrl` после снимка (эпоха остаётся).
-  - `agent-ops.ts`: `checked` без loopback (`isLoopbackUrl` импорт уходит, если больше не нужен); `createPageRunner` — прежний `onPage` плюс: `AbortSignal.any([сигнал очереди, сигнал Stop страницы])`; общий выключатель — `await deps.agentsAllowed()` перед стартом задачи (как сейчас); `guard.check()` синхронный: реестр (пауза панели, `humanBusy` при `changes`) и `signal.throwIfAborted()`; `window` — `agentWindow.begin(...)`, `Page.setInterceptFileChooserDialog { enabled: true }` (один раз на окно; `onIdle` → `enabled: false`), подписка `inspector.onEvent(id, 'Page.fileChooserOpened', …)` на время окна → `agentWindow.note`. Ошибка отмены по Stop отдаётся как `signal.reason`.
-  - `routeDownload(item, source, deps): boolean` — экспорт `agent-ops.ts`.
-  - `main/index.ts`: `const agentWindow = createAgentWindow()`; `const agentDownloads = createAgentDownloads({ root: path.join(parleyHome(), 'desktop', 'agent-downloads') })`; в `download` стража — `designMode.downloadStarted(source.id)`, затем `if (routeDownload(item, source, …)) return;`, затем прежний путь человека; почасовая уборка рядом с `cleanupDrops` агента — `agentDownloads.sweep(AGENT_LIMITS.downloadDays * 24 * 60 * 60 * 1000)`; `createAgentOps({ …, agentWindow, borrowFocus })`, где `borrowFocus` шлёт окну `browser:agent-activity` с `phase: 'step', focus: { id }` и ждёт `ops.focusReady(id)` (по ветке спайка; иначе не передаётся).
+  - `agent-ops.ts`: `checked` без loopback (импорт `isLoopbackUrl` убрать, если больше не нужен); `createPageRunner` — прежний `onPage` и: свой `AbortController` на операцию, `AbortSignal.any([сигнал очереди, сигнал операции])`; реестр идущих операций по `workKey` и хозяину панели (`stopPanel` обрывает все операции панели с `reason`, `accessChanged(false)` — все вообще с текстом `AGENTS_OFF`); общий выключатель — `await deps.agentsAllowed()` перед стартом задачи (как сейчас) **и** синхронный флаг из `accessChanged` в `guard.check()`; `guard.check()` — флаг, пауза панели, `humanBusy` при `use.changes`, `signal.throwIfAborted()`; ошибка обрыва отдаётся как `signal.reason`. `registerTab` с `kind: 'paused', paused: true` — после записи в реестр зовёт `runner.stopPanel`.
+  - `main/index.ts`: `ops.accessChanged((await uiStore.load()).browser.agentsAllowed)` при старте и в `onUiSaved` (рядом с прежней проверкой выключателя, ~стр. 723).
 
-- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS; `pnpm --filter @parley/desktop typecheck` → без ошибок.
+- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS; `pnpm --filter @parley/desktop test -- src/english-ui.test.ts`; `pnpm --filter @parley/desktop typecheck` → без ошибок.
 
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-pages.ts packages/desktop/src/main/browser/agent-capture.ts packages/desktop/src/main/browser/agent-ops.test.ts packages/desktop/src/main/browser/agent-ops-control.test.ts packages/desktop/src/main/index.ts
-git commit -m "feat(desktop): agent operations on any site — human busy, Stop, operation window, file chooser and download routing" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-pages.ts packages/desktop/src/main/browser/agent-capture.ts packages/desktop/src/main/browser/agent-ops.test.ts packages/desktop/src/main/browser/agent-ops-control.test.ts packages/desktop/src/main/index.ts
+git commit -m "feat(desktop): agent operations on any site — page runner, Stop, pause and the off switch abort running operations, human busy" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-pages.ts packages/desktop/src/main/browser/agent-capture.ts packages/desktop/src/main/browser/agent-ops.test.ts packages/desktop/src/main/browser/agent-ops-control.test.ts packages/desktop/src/main/index.ts
+```
+
+---
+
+## Задача 15b. Main: окно операции, выбор файла, скачивания, фокус и тишина клавиатуры
+
+**Файлы:**
+- Создать: `packages/desktop/src/main/browser/human-typing.ts`, `packages/desktop/src/main/browser/human-typing.test.ts`
+- Изменить: `packages/desktop/src/main/browser/agent-ops.ts`, `packages/desktop/src/main/browser/guard.ts`, `packages/desktop/src/main/index.ts`
+- Тесты: `packages/desktop/src/main/browser/agent-ops-control.test.ts` (дописать), `packages/desktop/src/main/browser/guard.test.ts`
+
+**Интерфейсы:**
+- Берёт: `createPageRunner`, `PageWindowHooks` (15a); `AgentWindow` (8); `AgentDownloads` (10); `Inspector.onEvent`.
+- Отдаёт: `PageWindowHooks` в `createAgentOps` (окно операции + перехват выбора файла); `routeDownload` («Общие имена»); `createTypingClock`, `TypingClock`; `AgentOpsDeps` + `agentWindow`, `typing`, `requestFocus?`; `borrowFocus` для `createAgentInput` — внутри `createAgentOps` (ждёт тишину `typingIdleMs` не дольше `focusMs` → иначе `human_busy` «The human is typing in Parley's window: retry in a moment.»; шлёт `requestFocus(contents, id)` (`false` — окна нет → `window_not_connected`); ждёт `focusReady(id, ok)` не дольше `focusMs`; `ok: false` или нет ответа — `tab_hidden` «Page tN is not on screen: keyboard input needs the page shown — ask the human to show it»; по ветке В4 перед ответом main зовёт `host.focus()`); `guard.check()` дополняется проверкой тишины (`typing.idleFor(typingIdleMs)` — иначе `human_busy`), а на время ввода `typing.ignore(guestId, true)`; `BrowserGuardDeps.agentFocus?(webContentsId): boolean` — пока `true`, обработчик `focus` гостя не шлёт окну `browser:focus` (M1).
+
+- [ ] **Шаг 1. Падающие тесты.**
+
+```ts
+// human-typing.test.ts
+describe('тишина клавиатуры человека (рецензия M3)', () => {
+  it('keyDown окна или любого гостя сбрасывает тишину; keyUp и события игнорируемого гостя — нет', () => {
+    const clock = createTypingClock({ now: () => now });
+    const win = fakeContents(1), guest = fakeContents(7);
+    clock.track(win); clock.track(guest);
+    now = 1_000; win.input({ type: 'keyDown', key: 'h' });
+    now = 1_500; expect(clock.idleFor(1_000)).toBe(false);
+    now = 2_001; expect(clock.idleFor(1_000)).toBe(true);
+    clock.ignore(7, true); guest.input({ type: 'keyDown', key: 'a' });
+    expect(clock.idleFor(1_000)).toBe(true);
+    win.input({ type: 'keyUp', key: 'h' });
+    expect(clock.idleFor(1_000)).toBe(true);
+  });
+
+  it('waitIdle: дожидается тишины; не дождался за limit — false; отмена signal — отказ', async () => { /* фейковые таймеры */ });
+});
+```
+
+```ts
+// agent-ops-control.test.ts — дописать
+describe('окно операции, выбор файла, скачивания, фокус', () => {
+  it('операция с window: окно операции и перехват выбора файла; после хвоста перехват снят', async () => {
+    const ctx = setup({ tailMs: 20 });
+    await ctx.pageOp('t1', { window: true });
+    expect(ctx.inspector.send).toHaveBeenCalledWith(7, 'Page.setInterceptFileChooserDialog', { enabled: true });
+    expect(ctx.agentWindow.activeFor(7)).toMatchObject({ sessionId: 's-02', agentId: 't1' });
+    await vi.waitFor(() => expect(ctx.inspector.send).toHaveBeenCalledWith(7, 'Page.setInterceptFileChooserDialog', { enabled: false }));
+  });
+
+  it('Page.fileChooserOpened в окне — заметка «use upload»; системного окна нет (Фокус ревью 5)', async () => {
+    const ctx = setup();
+    const done = ctx.pageOp('t1', { window: true, hold: true });
+    await vi.waitFor(() => expect(ctx.ran).toBe(1));
+    ctx.emitCdp(7, 'Page.fileChooserOpened', { frameId: 'F', mode: 'selectSingle', backendNodeId: 31 });
+    ctx.release();
+    await done;
+    expect(ctx.agentWindow.take(ctx.pageKey)).toEqual(['The page opened a file chooser; nothing was shown to the human. Take a browser_snapshot and use browser_action with action upload on the file input.']);
+  });
+
+  it('routeDownload: в окне агента — claim и заметка, true; вне окна — false, claim не вызван (Фокус ревью 7)', () => {
+    const window = createAgentWindow({ tailMs: 2_000 });
+    const downloads = { claim: vi.fn(() => ({ id: 'd1', name: 'report.csv', path: '/d/report.csv' }) as BrowserAgentDownload) };
+    expect(routeDownload(item('report.csv'), { id: 7 }, { agentWindow: window, downloads })).toBe(false);
+    window.begin(OWNER);
+    expect(routeDownload(item('report.csv'), { id: 7 }, { agentWindow: window, downloads })).toBe(true);
+    expect(downloads.claim).toHaveBeenCalledWith(expect.anything(), { workKey: OWNER.workKey, sessionId: 's-02', agentId: 't1' });
+    expect(window.take(OWNER.pageKey)).toEqual(['The page started a download: report.csv → /d/report.csv (see browser_downloads).']);
+  });
+
+  it('borrowFocus: ждёт тишину, просит окно, ok — дальше; ok: false — tab_hidden; человек печатает дольше focusMs — human_busy (Фокус ревью 1, 2)', async () => {
+    const ctx = setup({ focusMs: 50 });
+    ctx.requestFocus.mockImplementation((_c, id) => { queueMicrotask(() => ctx.ops.focusReady(id, true)); return true; });
+    await expect(ctx.borrow('t1')).resolves.toBeUndefined();
+    ctx.requestFocus.mockImplementation((_c, id) => { queueMicrotask(() => ctx.ops.focusReady(id, false)); return true; });
+    await expect(ctx.borrow('t1')).rejects.toMatchObject({ code: 'tab_hidden', message: expect.stringContaining('keyboard input needs the page shown') });
+    ctx.typing.idleFor = () => false;
+    ctx.typing.waitIdle = async () => false;
+    await expect(ctx.borrow('t1')).rejects.toMatchObject({ code: 'human_busy', message: expect.stringContaining('typing') });
+  });
+});
+```
+
+```ts
+// guard.test.ts — дописать (как соседние тесты focus)
+it('пока agentFocus(id) — focus гостя не шлёт окну browser:focus; потом — шлёт (рецензия M1)', () => {
+  let agent = true;
+  const { guest, host } = installWith({ agentFocus: () => agent });
+  guest.emit('focus');
+  expect(host.send).not.toHaveBeenCalledWith('browser:focus', expect.anything());
+  agent = false;
+  guest.emit('focus');
+  expect(host.send).toHaveBeenCalledWith('browser:focus', { webContentsId: guest.id });
+});
+```
+
+  `ctx.pageOp` — операция через настоящий `createAgentOps` (зонд — `runner.run`, экспонированный в тесте через `setup`, как `pageSetup`, но с крючками окна); `ctx.borrow(agentId)` — `borrowFocus`, который `createAgentOps` отдаёт в `createAgentInput` (тест берёт его из заглушки `createAgentInput`, переданной в `deps`).
+
+- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop test -- src/main/browser/human-typing.test.ts src/main/browser/agent-ops-control.test.ts src/main/browser/guard.test.ts` → FAIL.
+
+- [ ] **Шаг 3. Реализовать.**
+  - `human-typing.ts`: `track` вешает `before-input-event` (только `keyDown`, не автоповтор) и отдаёт отписку; `ignore`; `idleFor`; `waitIdle` — опрос раз в 100 мс до `limitMs` с `signal`.
+  - `agent-ops.ts`: `PageWindowHooks` — `agentWindow.begin(...)`, `Page.setInterceptFileChooserDialog { enabled: true }` (один раз на окно; `onIdle` → `enabled: false`), подписка `inspector.onEvent(id, 'Page.fileChooserOpened', …)` на время окна → `agentWindow.note`; `routeDownload(item, source, deps)`; `borrowFocus` и проверка тишины в `guard.check()` (интерфейс выше); на время операции с вводом `typing.ignore(guestId, true)`, в `finally` — `false`.
+  - `guard.ts`: `BrowserGuardDeps.agentFocus?(webContentsId: number): boolean`; в обработчике `focus` гостя — `if (deps.agentFocus?.(contents.id) === true) return;` перед `send('browser:focus', …)`.
+  - `main/index.ts`: `agentWindow = createAgentWindow()`, `agentDownloads = createAgentDownloads({ root: path.join(parleyHome(), 'desktop', 'agent-downloads') })`, `typing = createTypingClock()` — **до** `installBrowserGuard` (он стоит раньше `createAgentOps`); `typing.track(mainWindow.webContents)` при создании окна; в адаптере `forwardShortcuts` гостя — ещё `typing.track(contents)` (отписка вместе); `agentFocus: (id) => agentWindow.activeFor(id) !== null`; в `download` стража — `designMode.downloadStarted(source.id)`, затем `if (routeDownload(item, source, { agentWindow, downloads: agentDownloads })) return;`, затем прежний путь человека; почасовая уборка рядом с `cleanupDrops` агента — `agentDownloads.sweep(AGENT_LIMITS.downloadDays * 24 * 60 * 60 * 1000)`; `createAgentOps({ …, agentWindow, typing, requestFocus })`, где `requestFocus(contents, id)` шлёт `hostWebContents` событие `browser:agent-activity` с `phase: 'step', focus: { id }` (ветка В1/В2 «доходит» — `requestFocus` не передаётся).
+
+- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS; `pnpm --filter @parley/desktop test -- src/english-ui.test.ts`; `pnpm --filter @parley/desktop typecheck` → без ошибок.
+
+- [ ] **Шаг 5. Коммит.**
+
+```bash
+git add -- packages/desktop/src/main/browser/human-typing.ts packages/desktop/src/main/browser/human-typing.test.ts packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-ops-control.test.ts packages/desktop/src/main/browser/guard.ts packages/desktop/src/main/browser/guard.test.ts packages/desktop/src/main/index.ts
+git commit -m "feat(desktop): agent operation window — file chooser interception, download routing, borrowed focus without moving the window's focus, human typing guard" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/main/browser/human-typing.ts packages/desktop/src/main/browser/human-typing.test.ts packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-ops-control.test.ts packages/desktop/src/main/browser/guard.ts packages/desktop/src/main/browser/guard.test.ts packages/desktop/src/main/index.ts
 ```
 
 ---
@@ -1636,7 +1868,7 @@ git commit -m "feat(desktop): agent operations on any site — human busy, Stop,
 - Тест: `agent-ops-control.test.ts` (дописать)
 
 **Интерфейсы:**
-- Берёт: `axSnapshot`, `axHasText`, `axState` (7); `createPageRunner`, `InputGuard` (15).
+- Берёт: `axSnapshot`, `axHasText`, `axState` (7); `createPageRunner`, `PageRunner.run` (15a); `InputGuard` (9).
 - Отдаёт: `AgentDom`, `createAgentDom` («Общие имена»). Ссылки живут в `AgentDom` по `pageKey` с эпохой `inspector.snapshot(id)?.epoch`: новый снимок заменяет карту, другая эпоха — `stale_ref`.
 
 - [ ] **Шаг 1. Падающие тесты.**
@@ -1644,7 +1876,7 @@ git commit -m "feat(desktop): agent operations on any site — human busy, Stop,
 ```ts
 // agent-dom.test.ts
 describe('ссылки и ожидание (спека 5.1)', () => {
-  it('snapshot: DOM.enable, Accessibility.enable, getFullAXTree; текст и число ссылок; предел snapshotBytes', async () => {
+  it('snapshot: DOM.enable, Accessibility.enable, getFullAXTree — включение перед каждым деревом (Select выключает Accessibility); текст и число ссылок; предел snapshotBytes', async () => {
     const { dom, send } = setup({ nodes: NODES });
     const result = await dom.snapshotOf(contents, record, { tab: 't1' });
     expect(send.mock.calls.map(([, method]) => method)).toEqual(['DOM.enable', 'Accessibility.enable', 'Accessibility.getFullAXTree']);
@@ -1652,7 +1884,7 @@ describe('ссылки и ожидание (спека 5.1)', () => {
     expect(result.text).toContain('[ref=e2] button "Save"');
   });
 
-  it('nodeOf: ссылка из текущего снимка — backendNodeId; неизвестная или после смены эпохи — stale_ref (Фокус ревью 7)', async () => {
+  it('nodeOf: ссылка из текущего снимка — backendNodeId; неизвестная или после смены эпохи — stale_ref (Фокус ревью 8)', async () => {
     const ctx = setup({ nodes: NODES });
     await ctx.dom.snapshotOf(contents, record, { tab: 't1' });
     expect(ctx.dom.nodeOf(contents, record, 'e2')).toBe(12);
@@ -1676,25 +1908,25 @@ describe('ссылки и ожидание (спека 5.1)', () => {
     setTimeout(() => { ctx.nodes = []; }, 30);
     expect(await ctx.dom.waitFor(contents, record, { tab: 't1', gone: 'Save' }, signal())).toMatchObject({ outcome: 'gone' });
     expect(await ctx.dom.waitFor(contents, record, { tab: 't1', ms: 20 }, signal())).toMatchObject({ outcome: 'waited' });
-    ctx.limitMs = 60;
+    ctx.waitLimit = 60; // зависимость-геттер waitMs: () => ctx.waitLimit (по умолчанию AGENT_LIMITS.waitMs)
     expect(await ctx.dom.waitFor(contents, record, { tab: 't1', text: 'Never' }, signal())).toMatchObject({ outcome: 'timeout' });
   });
 });
 ```
 
-  В `agent-ops-control.test.ts`: `snapshot` у страницы, которую человек не видит, — `ok` (спайк 0.2); `wait_for` у занятой страницы — `ok`; Stop посреди `wait_for` — `access_denied`, очередь свободна: следующая операция стартует (Фокус ревью 7).
+  В `agent-ops-control.test.ts`: `snapshot` у страницы, которую человек не видит, — `ok` (спайк 0.2); `wait_for` у занятой страницы — `ok`; Stop и «Pause agents» посреди `wait_for` — `access_denied` сразу, а не через 10 с; очередь свободна: следующая операция стартует (Фокус ревью 8).
 
 - [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop test -- src/main/browser/agent-dom.test.ts src/main/browser/agent-ops-control.test.ts` → FAIL.
 
-- [ ] **Шаг 3. Реализовать.** `snapshotOf`: `DOM.enable` и `Accessibility.enable` один раз на гостя (повтор после навигации допустим), `Accessibility.getFullAXTree` → `axSnapshot(nodes, { interactiveOnly, limitBytes: AGENT_LIMITS.snapshotBytes })`; `url` — `urlForAgent`. `waitFor`: опрос `getFullAXTree` раз в `AGENT_LIMITS.pollMs` до `AGENT_LIMITS.waitMs` (тесту — `limitMs`), с `signal`. В `agent-ops.ts`: `snapshot` — `onPage(…)` без `changes`/`window`/`seen`; `wait_for` — то же.
+- [ ] **Шаг 3. Реализовать.** `snapshotOf`: `DOM.enable` и `Accessibility.enable` перед каждым `Accessibility.getFullAXTree` (без кэша на гостя: Select делает `Accessibility.disable`, отладчик переподключается на навигации — рецензия m5), затем `getFullAXTree` → `axSnapshot(nodes, { interactiveOnly, limitBytes: AGENT_LIMITS.snapshotBytes })`; `url` — `urlForAgent`. `waitFor`: опрос `getFullAXTree` раз в `AGENT_LIMITS.pollMs` (500 мс: у тяжёлой страницы дерево — десятки тысяч узлов) до `deps.waitMs?.() ?? AGENT_LIMITS.waitMs`, с `signal`. В `agent-ops.ts`: `snapshot` — `runner.run(…)` без `changes`/`window`/`seen`; `wait_for` — то же.
 
 - [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS.
 
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/desktop/src/main/browser/agent-dom.ts packages/desktop/src/main/browser/agent-dom.test.ts packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-ops-control.test.ts
-git commit -m "feat(desktop): browser_snapshot and browser_wait_for — refs per document, visible text" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/main/browser/agent-dom.ts packages/desktop/src/main/browser/agent-dom.test.ts packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-ops-control.test.ts
+git commit -m "feat(desktop): browser_snapshot and browser_wait_for — refs per document, visible text" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/main/browser/agent-dom.ts packages/desktop/src/main/browser/agent-dom.test.ts packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-ops-control.test.ts
 ```
 
 ---
@@ -1713,7 +1945,7 @@ git commit -m "feat(desktop): browser_snapshot and browser_wait_for — refs per
 
 ```ts
 describe('action (спека 5.1, 4.8)', () => {
-  it('click по ref: центр × fitOf, mouseMoved/Pressed/Released; точка клика — событием step в CSS-пикселях; что сделано', async () => {
+  it('click по ref: центр × fitOf, mouseMoved/Pressed/Released; точка клика — событием step в пикселях <webview>; что сделано', async () => {
     const ctx = setup({ fit: { scale: 0.6, mobile: false } });
     const result = await ctx.actions.actionOf(contents, record, request, { tab: 't1', action: 'click', ref: 'e2' }, guard());
     expect(ctx.input.mouse).toHaveBeenCalledWith(contents, [
@@ -1721,7 +1953,8 @@ describe('action (спека 5.1, 4.8)', () => {
       { type: 'mousePressed', x: 120, y: 138, button: 'left', buttons: 1, clickCount: 1 },
       { type: 'mouseReleased', x: 120, y: 138, button: 'left', buttons: 0, clickCount: 1 },
     ], 0, expect.anything());
-    expect(ctx.activity).toHaveBeenCalledWith(expect.objectContaining({ phase: 'step', point: { x: 200, y: 230 } }));
+    // точка для окна — viewPoint: пиксели элемента <webview> (рецензия m8); при scale 0,6 — та же, что у ввода
+    expect(ctx.activity).toHaveBeenCalledWith(expect.objectContaining({ phase: 'step', point: { x: 120, y: 138 } }));
     expect(result).toMatchObject({ done: 'Clicked e2.', navigated: false, notes: [] });
   });
 
@@ -1752,7 +1985,7 @@ describe('action (спека 5.1, 4.8)', () => {
 
   it('check: уже отмечен — без клика; не отмечен — клик и проверка; не изменился — заметка', async () => { /* dom.checkedOf: true → done 'e5 is already checked.'; false → click, затем true */ });
 
-  it('drag: нажатие в начале, 10 шагов mouseMoved с buttons 1, отпускание в конце; Stop между шагами — следующих нет (Фокус ревью 7)', async () => {
+  it('drag: нажатие в начале, 10 шагов mouseMoved с buttons 1, отпускание в конце; Stop между шагами — следующих нет (Фокус ревью 8)', async () => {
     const ctx = setup();
     await ctx.actions.actionOf(contents, record, request, { tab: 't1', action: 'drag', x: 10, y: 10, toX: 110, toY: 10 }, guard());
     const steps = ctx.input.mouse.mock.calls[0]?.[1] as MouseStep[];
@@ -1762,7 +1995,7 @@ describe('action (спека 5.1, 4.8)', () => {
     expect(steps.at(-1)).toMatchObject({ type: 'mouseReleased', x: 110, y: 10 });
   });
 
-  it('upload: DOM.setFileInputFiles с путями после realpath; не поле файла, каталог, нет файла, больше предела, несколько без multiple — bad_request без вызова (Фокус ревью 4)', async () => {
+  it('upload: DOM.setFileInputFiles с путями после realpath; не поле файла, каталог, нет файла, больше предела, несколько без multiple — bad_request без вызова (Фокус ревью 5)', async () => {
     const ctx = setup({ files: { '/tmp/a.png': { size: 10 }, '/tmp/dir': 'dir', '/tmp/link.png': { size: 10, real: '/tmp/a.png' }, '/tmp/big.iso': { size: AGENT_LIMITS.uploadBytes + 1 } } });
     const ok = await ctx.actions.actionOf(contents, record, request, { tab: 't1', action: 'upload', ref: 'e8', files: ['/tmp/link.png'] }, guard());
     expect(ctx.send).toHaveBeenCalledWith(7, 'DOM.setFileInputFiles', { files: ['/tmp/a.png'], backendNodeId: 18 });
@@ -1814,19 +2047,19 @@ describe('action (спека 5.1, 4.8)', () => {
 });
 ```
 
-  В `agent-ops-control.test.ts`: `action` у занятой страницы — `human_busy`, `input.mouse` не вызван (Фокус ревью из индекса, п. 4); `action` в страницу чужого хозяина — `no_tab`, ни одной команды (Фокус ревью 4); `upload` в чужую страницу — `no_tab`, `DOM.setFileInputFiles` не вызван.
+  В `agent-ops-control.test.ts`: `action` у занятой страницы — `human_busy`, `input.mouse` не вызван (Фокус ревью из индекса, п. 4); `action` в страницу чужого хозяина — `no_tab`, ни одной команды; `upload` в чужую страницу — `no_tab`, `DOM.setFileInputFiles` не вызван (Фокус ревью 5); `type` в страницу, которую окно не может сфокусировать (заглушка `requestFocus` отвечает `focusReady(id, false)`), — `tab_hidden` «… keyboard input needs the page shown …», `Input.insertText` не вызван (Фокус ревью 2).
 
 - [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop test -- src/main/browser/agent-actions.test.ts src/main/browser/agent-ops-control.test.ts` → FAIL.
 
-- [ ] **Шаг 3. Реализовать.** Точки — `dom.centerOf` (или `x,y` как есть) → `inputPoint(point, emulation.fitOf(id), contents.getZoomFactor())`; точка для окна (`activity` с `phase: 'step'`, `point`) — в CSS-пикселях страницы (до множителя). `double_click`, `hover`, `scroll`, `press`, `type` — как в старом плане, задача 12, шаг 3 (`done`-тексты оттуда). `select` — `DOM.resolveNode` → `Runtime.callFunctionOn(SELECT_OPTION_FN)` → `Runtime.releaseObject`. `check`/`uncheck` — `dom.checkedOf`, клик при несовпадении, повторное чтение. `drag` — 10 промежуточных `mouseMoved`, `buttons: 1`. `upload` — `DOM.describeNode({ backendNodeId })`: `INPUT` с `type=file` (регистр не важен); `files` — `realpath`, затем `secretUploadPath(real, deps.home ?? os.homedir())` (решение владельца 4: да — `bad_request` «Parley does not upload files from secret locations (~/.ssh, keychains, .env …).»), `stat().isFile()`, `size ≤ uploadBytes`, больше одного — нужен атрибут `multiple`; ошибки — `bad_request` с понятной причиной. Проверка всех файлов — до первого вызова CDP. `withNavigation(contents, run, signal)` — слушает `did-start-navigation` (главный фрейм, `!isSameDocument`) во время `run` и ещё `settleMs`; начался — ждёт `did-stop-loading` до `loadMs` (`loaded: false` — заметка «The page is still loading.»). Заметки — `window.take(record pageKey)`. Каждый шаг ввода — через `guard`.
+- [ ] **Шаг 3. Реализовать.** Точки — `dom.centerOf` (или `x,y` как есть) → `inputPoint(point, emulation.fitOf(id), contents.getZoomFactor())`; точка для окна (`activity` с `phase: 'step'`, `point`) — `viewPoint(point, fitOf(id), getZoomFactor())`, пиксели элемента `<webview>`. Ввод — только через `AgentInput`, без прямых `send('Input.…')`; точку рисует окно (не `clickDotScript` старого плана). Клик по узлу `SELECT` — если спайк В16 «да» (системное меню), `bad_request` «Use action select for a <select>.». `double_click`, `hover`, `scroll`, `press`, `type` — как в старом плане, задача 12, шаг 3 (`done`-тексты оттуда). `select` — `DOM.resolveNode` → `Runtime.callFunctionOn(SELECT_OPTION_FN)` → `Runtime.releaseObject`. `check`/`uncheck` — `dom.checkedOf`, клик при несовпадении, повторное чтение. `drag` — 10 промежуточных `mouseMoved`, `buttons: 1`. `upload` — `DOM.describeNode({ backendNodeId })`: `INPUT` с `type=file` (регистр не важен); `files` — `realpath`, затем `secretUploadPath(real, home, realHome)` (`home = deps.home ?? os.homedir()`, `realHome = await realpath(home)` — домашняя папка может быть симлинком; рецензия m15) (решение владельца 4: да — `bad_request` «Parley does not upload files from secret locations (~/.ssh, keychains, .env …).»), `stat().isFile()`, `size ≤ uploadBytes`, больше одного — нужен атрибут `multiple`; ошибки — `bad_request` с понятной причиной. Проверка всех файлов — до первого вызова CDP. `withNavigation(contents, run, signal)` — слушает `did-start-navigation` (в Electron 44 событие несёт объект `details`, как в `main/window.ts` `trackLoadedWindow` и `guard.ts`: `details.isMainFrame && !details.isSameDocument`) во время `run` и ещё `settleMs`; начался — ждёт `did-stop-loading` до `loadMs` (`loaded: false` — заметка «The page is still loading.»). Заметки — `window.take(record pageKey)`. Каждый шаг ввода — через `guard`.
 
 - [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS.
 
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/desktop/src/main/browser/agent-actions.ts packages/desktop/src/main/browser/agent-actions.test.ts packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-ops-control.test.ts packages/desktop/src/main/index.ts
-git commit -m "feat(desktop): browser_action — click, type, press, scroll, select, check, drag, upload" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/main/browser/agent-actions.ts packages/desktop/src/main/browser/agent-actions.test.ts packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-ops-control.test.ts packages/desktop/src/main/index.ts
+git commit -m "feat(desktop): browser_action — click, type, press, scroll, select, check, drag, upload" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/main/browser/agent-actions.ts packages/desktop/src/main/browser/agent-actions.test.ts packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-ops-control.test.ts packages/desktop/src/main/index.ts
 ```
 
 ---
@@ -1834,14 +2067,14 @@ git commit -m "feat(desktop): browser_action — click, type, press, scroll, sel
 ## Задача 18. Main: `navigate`, `resize`, `open` с ожиданием загрузки, `screenshot` с `ref`
 
 **Файлы:**
-- Изменить: `packages/desktop/src/main/browser/agent-ops.ts`, `agent-capture.ts`, `packages/desktop/src/main/index.ts`
-- Тесты: `agent-ops-control.test.ts`, `agent-ops.test.ts` (снимок элемента — рядом с тестами снимка C)
+- Изменить: `packages/desktop/src/main/browser/agent-ops.ts`, `agent-capture.ts`, `packages/desktop/src/main/index.ts`, `packages/desktop/src/shared/browser-devtools.ts` (`presetSpec`), `packages/desktop/src/renderer/browser/ViewportMenu.tsx` (импорт `presetSpec`)
+- Тесты: `agent-ops-control.test.ts`, `agent-ops.test.ts` (снимок элемента — рядом с тестами снимка C), `packages/desktop/src/shared/browser-devtools.test.ts`
 
 **Интерфейсы:**
 - Берёт: `withNavigation` (17); `AgentDom.nodeOf`, `boxOf` (16); `openableHref` (0); `AgentResize` (5); `VIEWPORT_PRESETS`, `viewportSize`.
 - Отдаёт: операции `navigate` (`{ changes: true, window: true }`), `resize` (`{ changes: true }`), `open` с `loaded`/`title`, `screenshot` с `ref`; экспорт `resolveAgentUrl(raw, base): string | null` (путь от `/` — от адреса страницы; итог — через `openableHref`), `agentViewport(args, current: ViewportSpec | null): ViewportSpec | null`; `AgentOpsDeps.resize(e: AgentResize): boolean`; `AgentCaptureDeps.image.cropRect(png, rect): Buffer`.
 
-- [ ] **Шаг 1. Падающие тесты.**
+- [ ] **Шаг 1. Падающие тесты.** Плюс в `shared/browser-devtools.test.ts` — тест `presetSpec` (перенос из `ViewportMenu.tsx`, рецензия m12: main не импортирует `.tsx` окна): прежний DPR пресета; из Fit — 2 у мобильных, 1 у прочих; `ViewportMenu.test.tsx` остаётся зелёным.
 
 ```ts
 describe('navigate, resize, open, снимок элемента', () => {
@@ -1879,6 +2112,8 @@ describe('navigate, resize, open, снимок элемента', () => {
 
   it('open: после ответа окна ждёт регистрацию страницы и загрузку — loaded и заголовок; не смонтирована — без ожидания, NOT_MOUNTED_NOTE', async () => { /* state.reply mounted true + register через 30 мс + did-stop-loading; mounted false — loaded false */ });
 
+  it('open: регистрации нет за openMs — ok с loaded: false и заметкой; Stop во время ожидания загрузки — access_denied (рецензия m9)', async () => { /* register не приходит; затем — приходит, загрузка висит, ops.stop(7) */ });
+
   it('screenshot с ref: прокрутка к элементу, снимок вьюпорта, вырезка рамки × (ширина PNG / CSS-ширина); элемент больше вьюпорта — видимая часть и заметка', async () => {
     // getLayoutMetrics 1280×800, PNG 2560×1600 (DPR 2), box { x: 100, y: 200, width: 300, height: 60 } → cropRect(png, { x: 200, y: 400, width: 600, height: 120 })
   });
@@ -1889,8 +2124,8 @@ describe('navigate, resize, open, снимок элемента', () => {
 
 - [ ] **Шаг 3. Реализовать.**
   - `navigate`: `resolveAgentUrl` → `bad_request` при `null`; переход — методом `webContents` внутри `withNavigation` (у `loadURL` отказ `ERR_ABORTED` — не ошибка: так бывает при скачивании); ответ — `url`, заголовок (маска, 200 знаков), `loaded`, заметки окна.
-  - `resize`: `agentViewport` — пресет: `{ preset, rotated: rotated === true, dpr: <правило presetSpec из ViewportMenu.tsx: прежний DPR пресета или 2 у мобильных, 1 у прочих> }`; размеры — `{ width, height, mobile: false, dpr: текущий dpr или 1 }`; `fit` — `null`. `deps.resize(e)` (в `index.ts` — `hostWebContents.send('browser:agent-resize', e)`; `false` — окна нет → `window_not_connected`); ожидание `emulation.current(id)` равного спецификации (для `null` — `null`) раз в `pollMs` до `resizeMs`.
-  - `open`: после ответа окна при `mounted` — ждать запись реестра с `webContentsId` (раз в `pollMs`), окно операции на время первой загрузки, затем загрузку (`isLoading()`/`did-stop-loading`) до `loadMs`; итог — `loaded`, `title`; при `!mounted` — `loaded: false`, `title: ''` и `NOT_MOUNTED_NOTE`.
+  - `resize`: `agentViewport` — пресет: `{ preset, rotated: rotated === true, dpr: presetSpec(…).dpr }` (`presetSpec` переносится из `renderer/browser/ViewportMenu.tsx` в `shared/browser-devtools.ts`, меню берёт её оттуда; правило — прежний DPR пресета или 2 у мобильных, 1 у прочих); размеры — `{ width, height, mobile: false, dpr: текущий dpr или 1 }`; `fit` — `null`. `deps.resize(e)` (в `index.ts` — `hostWebContents.send('browser:agent-resize', e)`; `false` — окна нет → `window_not_connected`); ожидание `emulation.current(id)` равного спецификации (для `null` — `null`) раз в `pollMs` до `resizeMs`.
+  - `open`: после ответа окна при `mounted` — ждать запись реестра с `webContentsId` раз в `pollMs`, **не дольше `openMs`** (не дождались — `loaded: false` и заметка «The page has not started yet; call browser_tabs in a moment.»); затем ожидание первой загрузки (`isLoading()`/`did-stop-loading`, до `loadMs`) — через `runner.run(request, agentId, …, { window: true })`: Stop, пауза, выключатель и окно операции те же, что у прочих операций (рецензия m9); итог — `loaded`, `title`; при `!mounted` — `loaded: false`, `title: ''` и `NOT_MOUNTED_NOTE`.
   - `screenshot` с `ref`: `dom.nodeOf` → `DOM.scrollIntoViewIfNeeded` → прежний снимок без клипа → `dom.boxOf` в той же эмуляции → пересечение с вьюпортом → `image.cropRect` (в `index.ts` — `nativeImage.crop({ x, y, width, height })`); элемент шире или выше вьюпорта — заметка «The element is larger than the viewport; the screenshot shows its visible part.».
 
 - [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS; `pnpm --filter @parley/desktop typecheck`.
@@ -1898,8 +2133,8 @@ describe('navigate, resize, open, снимок элемента', () => {
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-capture.ts packages/desktop/src/main/browser/agent-ops-control.test.ts packages/desktop/src/main/browser/agent-ops.test.ts packages/desktop/src/main/index.ts
-git commit -m "feat(desktop): browser_navigate and browser_resize, browser_open waits for the load, element screenshots" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-capture.ts packages/desktop/src/main/browser/agent-ops-control.test.ts packages/desktop/src/main/browser/agent-ops.test.ts packages/desktop/src/main/index.ts packages/desktop/src/shared/browser-devtools.ts packages/desktop/src/shared/browser-devtools.test.ts packages/desktop/src/renderer/browser/ViewportMenu.tsx
+git commit -m "feat(desktop): browser_navigate and browser_resize, browser_open waits for the load, element screenshots" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-capture.ts packages/desktop/src/main/browser/agent-ops-control.test.ts packages/desktop/src/main/browser/agent-ops.test.ts packages/desktop/src/main/index.ts packages/desktop/src/shared/browser-devtools.ts packages/desktop/src/shared/browser-devtools.test.ts packages/desktop/src/renderer/browser/ViewportMenu.tsx
 ```
 
 ---
@@ -1914,7 +2149,7 @@ git commit -m "feat(desktop): browser_navigate and browser_resize, browser_open 
 - Берёт: `AgentScripts` (11), `AgentStorage` (12), `AgentDownloads` (10), `AgentDom.nodeOf` (16), `Inspector.sendAgentScript` (6).
 - Отдаёт: четыре операции. `evaluate` — `{ changes: true, window: true }`; `cookies`, `storage` — без `changes`; `downloads` — без страницы (как `tabs`): список сессии `request.ref` и `dir`. `AgentOpsDeps` + `scripts`, `storage`, `downloads`.
 
-- [ ] **Шаг 1. Падающие тесты (Фокус ревью 2, 3).**
+- [ ] **Шаг 1. Падающие тесты (Фокус ревью 3, 4).**
 
 ```ts
 describe('evaluate, cookies, storage, downloads', () => {
@@ -1959,20 +2194,39 @@ describe('evaluate, cookies, storage, downloads', () => {
     expect(result.downloads).toHaveLength(1);
     expect(result.dir).toBe(ctx.downloads.dirOf('/proj w-1', 's-02'));
   });
+
+  it('выключатель посреди evaluate — access_denied, результат не отдаётся (рецензия M4, Фокус ревью 3)', async () => {
+    const ctx = setup();
+    ctx.scripts.evaluateOf.mockImplementation((_c, _id, _args, _el, signal) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))));
+    const pending = ctx.run('evaluate', { tab: 't1', expression: 'new Promise(() => {})' });
+    await vi.waitFor(() => expect(ctx.scripts.evaluateOf).toHaveBeenCalled());
+    ctx.ops.accessChanged(false);
+    const result = await pending;
+    expect(codeOf(result)).toBe('access_denied');
+    expect(messageOf(result)).toContain('Let agents use the browser');
+  });
+
+  it('cookies с настоящим createAgentStorage: values: true — значение httpOnly не уходит в ответ (решение владельца 6, Фокус ревью 4)', async () => {
+    const ctx = setup({ realStorage: true }); // createAgentStorage с заглушкой cookies: sid (httpOnly, S3SS) и theme (dark)
+    const text = JSON.stringify(okResult(await ctx.run('cookies', { tab: 't1', action: 'list', values: true })));
+    expect(text).toContain('dark');
+    expect(text).toContain('<httpOnly: hidden>');
+    expect(text).not.toContain('S3SS');
+  });
 });
 ```
 
 - [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop test -- src/main/browser/agent-ops-control.test.ts` → FAIL.
 
-- [ ] **Шаг 3. Реализовать.** Четыре `case` в `run`; `evaluate` — `element = args.ref === undefined ? null : dom.nodeOf(contents, record, args.ref)`, затем `scripts.evaluateOf(contents, record.agentId, args, element, guard.signal)`; в `index.ts` — `createAgentScripts({ inspector })`, `createAgentStorage({ cookies: browserSession.cookies, inspector })` (раздел `BROWSER_PARTITION`), `agentDownloads` из задачи 15.
+- [ ] **Шаг 3. Реализовать.** Четыре `case` в `run`; `evaluate` — `element = args.ref === undefined ? null : dom.nodeOf(contents, record, args.ref)`, затем `scripts.evaluateOf(contents, record.agentId, args, element, guard.signal)`; в `index.ts` — `createAgentScripts({ inspector })`, `createAgentStorage({ cookies: browserSession.cookies, inspector })` (раздел `BROWSER_PARTITION`), `agentDownloads` из задачи 15b. `default` в `run` (задача 5) остаётся защитой от операции новее окна.
 
-- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS; `pnpm --filter @parley/desktop typecheck`.
+- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS; `pnpm --filter @parley/desktop test -- src/english-ui.test.ts`; `pnpm --filter @parley/desktop typecheck`.
 
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-ops-control.test.ts packages/desktop/src/main/index.ts
-git commit -m "feat(desktop): browser_evaluate, browser_cookies, browser_storage and browser_downloads in the window" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-ops-control.test.ts packages/desktop/src/main/index.ts
+git commit -m "feat(desktop): browser_evaluate, browser_cookies, browser_storage and browser_downloads in the window" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/main/browser/agent-ops.ts packages/desktop/src/main/browser/agent-ops-control.test.ts packages/desktop/src/main/index.ts
 ```
 
 ---
@@ -1980,36 +2234,47 @@ git commit -m "feat(desktop): browser_evaluate, browser_cookies, browser_storage
 ## Задача 20. Окно: занятость, размер от агента, Stop, значок, рамка, точка клика, фокус (‖ с 21)
 
 **Файлы:**
-- Изменить: `packages/desktop/src/renderer/browser/BrowserSurface.tsx`, `packages/desktop/src/renderer/browser/panel/agent-registry.ts`
-- Создать: `packages/desktop/src/renderer/browser/agent-activity.ts` (состояние значка, точки и фокуса по событиям; чистые функции и маленький стор), `agent-activity.test.ts`
-- Тесты: `BrowserSurface.test.tsx`, `panel/agent-registry.test.ts`
+- Изменить: `packages/desktop/src/renderer/browser/BrowserSurface.tsx`, `packages/desktop/src/renderer/browser/panel/PanelSurface.tsx`, `packages/desktop/src/renderer/browser/panel/agent-registry.ts`
+- Создать: `packages/desktop/src/renderer/browser/agent-activity.ts` (состояние значка, точки и одалживания фокуса по событиям; чистые функции и маленький стор), `agent-activity.test.ts`
+- Тесты: `BrowserSurface.test.tsx`, `panel/PanelSurface.test.tsx`, `panel/agent-registry.test.ts`
 
 **Интерфейсы:**
-- Берёт: `AgentBadge`, `BrowserChromeProps.agent`/`onAgentStop` (13); `onAgentResize`, `agentStop`, `agentFocusReady`, `AgentActivity.point`/`focus` (5); `pausePanel` (`panel/actions.ts`); `toggleBrowserMode`, `BrowserTabState.mode`; `setViewport` в `BrowserSurface.tsx`; `AGENT_LIMITS.guardTailMs`, `.clickDotMs`, `.badgeOps`, `.typingIdleMs`.
-- Отдаёт: `reportAgentPage(bridge, workKey, owner, pageId, webContentsId, visible, humanBusy)` (седьмой аргумент); `useAgentActivity(webContentsId)` → `{ acting: { session, recent } | null; dot: { x, y } | null }`; `createFocusLender({ view(): HTMLElement | null; ready(id: string): void; typingIdleMs: number; now(): number })` → `{ borrow(id: string): void; restore(): void; dispose(): void }` (ветка спайка «одолжить фокус»).
+- Берёт: `AgentBadge`, `BrowserChromeProps.agent`/`onAgentStop` (13); `onAgentResize`, `agentStop`, `agentFocusReady(id, ok)`, `AgentActivity.point`/`focus` (5); `pausePanel` (`panel/actions.ts`); `toggleBrowserMode`, `BrowserTabState.mode`; `setViewport` в `BrowserSurface.tsx`; `AGENT_LIMITS.guardTailMs`, `.clickDotMs`, `.badgeOps`.
+- Отдаёт: `reportAgentPage(bridge, workKey, owner, pageId, webContentsId, visible, humanBusy)` (седьмой аргумент); `useAgentActivity(webContentsId)` → `{ acting: { session, recent } | null; dot: { x, y } | null }`; `createFocusLender({ view(): HTMLElement | null; webContentsId: number; ready(id: string, ok: boolean): void })` → `{ borrow(id: string): void; restore(): void; dispose(): void }`; `isLendingFocus(webContentsId: number): boolean` (ветка спайка «одолжить фокус»). Тишину клавиатуры окно **не** ждёт: её считает main (задача 15b, рецензия M3).
 
 - [ ] **Шаг 1. Падающие тесты.**
 
 ```ts
 // agent-activity.test.ts
 it('start — значок с ярлыком; end — значок ещё guardTailMs; recent — последние badgeOps операций', () => { /* фейковые таймеры vitest */ });
-it('step с point — точка на clickDotMs', () => { /* … */ });
-it('фокус (Фокус ревью 1): ждёт typingIdleMs тишины клавиатуры окна, ставит фокус на <webview>, подтверждает; на end возвращает фокус прежнему элементу, если фокус всё ещё на <webview>', async () => {
-  vi.useFakeTimers();
+it('step с point — точка на clickDotMs; point уже в пикселях <webview>', () => { /* … */ });
+
+it('одолжить фокус (Фокус ревью 1): фокус на <webview>, ready(id, true), флаг одалживания; restore — фокус прежнему элементу, флаг снят', () => {
   const chat = document.createElement('textarea'); document.body.append(chat); chat.focus();
   const view = document.createElement('div'); view.tabIndex = 0; document.body.append(view);
   const ready = vi.fn();
-  const focus = createFocusLender({ view: () => view, ready, typingIdleMs: 1_000, now: () => Date.now() });
-  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'x' }));
-  focus.borrow('f-1');
-  await vi.advanceTimersByTimeAsync(900);
-  expect(ready).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(200);
+  const lender = createFocusLender({ view: () => view, webContentsId: 7, ready });
+  lender.borrow('f-1');
   expect(document.activeElement).toBe(view);
-  expect(ready).toHaveBeenCalledWith('f-1');
-  focus.restore();
+  expect(ready).toHaveBeenCalledWith('f-1', true);
+  expect(isLendingFocus(7)).toBe(true);
+  lender.restore();
   expect(document.activeElement).toBe(chat);
+  expect(isLendingFocus(7)).toBe(false);
 });
+
+it('скрытая страница (Фокус ревью 2): <webview> внутри inert — фокус не встал, ready(id, false), фокус человека на месте', () => {
+  const chat = document.createElement('textarea'); document.body.append(chat); chat.focus();
+  const panel = document.createElement('div'); panel.setAttribute('inert', ''); document.body.append(panel);
+  const view = document.createElement('div'); view.tabIndex = 0; panel.append(view);
+  const ready = vi.fn();
+  createFocusLender({ view: () => view, webContentsId: 7, ready }).borrow('f-2');
+  expect(ready).toHaveBeenCalledWith('f-2', false);
+  expect(document.activeElement).toBe(chat);
+  expect(isLendingFocus(7)).toBe(false);
+});
+
+it('restore не трогает фокус, если человек уже ушёл с <webview> сам', () => { /* после borrow chat.focus() вручную, затем restore — фокус в chat, без лишних focus() */ });
 ```
 
 ```tsx
@@ -2017,25 +2282,32 @@ it('фокус (Фокус ревью 1): ждёт typingIdleMs тишины к�
 it('страница панели сообщает humanBusy при Select и Annotate', async () => { /* toggleBrowserMode(tabId, 'annotate') → browserCalls registerTab с humanBusy: true; off → false */ });
 it('агент поставил размер — он ложится в раскладку страницы панели, как выбор человека', async () => { /* emitAgentResize({ webContentsId, viewport: { preset: 'mobile-m', rotated: false, dpr: 2 } }) → updatePanelPage viewport */ });
 it('Stop на значке: пауза панели и agentStop(webContentsId)', async () => { /* emitAgentActivity start → клик Stop → panel.paused, browserCalls agentStop */ });
-it('рамка подсвечена, пока агент действует; точка клика — над <webview> в точке × scale + сдвиг stage', async () => { /* data-agent-acting="true"; [data-testid="agent-dot"] style left/top */ });
+it('рамка подсвечена, пока агент действует; точка клика — над <webview> в (stage.left + x, stage.top + y), без stage — (x, y)', async () => { /* data-agent-acting="true"; [data-testid="agent-dot"] style left/top */ });
+it('пока окно одалживает фокус — фокус <webview> не делает вкладку активной (рецензия M1)', async () => { /* isLendingFocus(id) = true → focusin на <webview> → focusTab не вызван, activeGroupId прежний */ });
+```
+
+```tsx
+// panel/PanelSurface.test.tsx — дописать
+it('onFocusCapture панели не зовёт focusTab, пока окно одалживает фокус гостю этой панели (рецензия M1)', () => { /* … */ });
 ```
 
   `agent-registry.test.ts`: повторный отчёт с другим `humanBusy` уходит, с тем же — нет.
 
-- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop test -- src/renderer/browser/agent-activity.test.ts src/renderer/browser/BrowserSurface.test.tsx src/renderer/browser/panel/agent-registry.test.ts` → FAIL.
+- [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop test -- src/renderer/browser/agent-activity.test.ts src/renderer/browser/BrowserSurface.test.tsx src/renderer/browser/panel/PanelSurface.test.tsx src/renderer/browser/panel/agent-registry.test.ts` → FAIL.
 
 - [ ] **Шаг 3. Реализовать.**
   - `agent-registry.ts`: `humanBusy` в `Sent` и в записи; кеш сравнивает и его.
-  - `agent-activity.ts`: `createFocusLender({ view, ready, typingIdleMs, now })` — `borrow(id)`: ждёт, пока последнее `keydown` окна (слушатель на `window`, фаза capture) старше `typingIdleMs`, не дольше `AGENT_LIMITS.opMs`; запоминает `document.activeElement` (если это не сам `<webview>`), `view.focus()`, `ready(id)`; `restore()`: если `document.activeElement === view` и запомненный элемент ещё в документе — `focus()` ему. Стор значка и точки — по `webContentsId`.
-  - `BrowserSurface.tsx`: `reportAgentPage(…, state.mode !== 'off')`; подписка `onAgentResize` → `setViewport(e.viewport)`; подписка `onAgentActivity` → стор, `focus` → `lender.borrow(id)`, `end` → `lender.restore()`; `BrowserChrome` получает `agent` и `onAgentStop` (`pausePanel(workKey, owner, true)` и `bridge.browser.agentStop(webContentsId)`) у страницы панели; рамка — `ring-2 ring-primary` и `data-agent-acting` на поле страницы; точка — `div` `pointer-events-none` над `<webview>` в `left = stage.left + x × stage.scale` (без `stage` — `x`), 600 мс. Не трогать подписку C на `capture`.
+  - `agent-activity.ts`: `createFocusLender` — `borrow(id)`: запоминает `document.activeElement` (если это не сам `<webview>`), ставит флаг `isLendingFocus(webContentsId)`, `view.focus()`, `ok = document.activeElement === view`; при `!ok` флаг снимается; `ready(id, ok)`. `restore()`: если `document.activeElement === view` и запомненный элемент ещё в документе — `focus()` ему; флаг снимается. Стор значка и точки — по `webContentsId`.
+  - `BrowserSurface.tsx`: `reportAgentPage(…, state.mode !== 'off')`; подписка `onAgentResize` → `setViewport(e.viewport)`; подписка `onAgentActivity` → стор, `focus` → `lender.borrow(id)` (ответ — `bridge.browser.agentFocusReady(id, ok)`), `end` → `lender.restore()`; `focusOwnTab` (`onFocusCapture`) пропускается, пока `isLendingFocus(state.webContentsId)`; `BrowserChrome` получает `agent` и `onAgentStop` (`pausePanel(workKey, owner, true)` и `bridge.browser.agentStop(webContentsId)`) у страницы панели; рамка — `ring-2 ring-primary` и `data-agent-acting` на поле страницы; точка — `div` `pointer-events-none` над `<webview>` в `left = (stage?.left ?? 0) + point.x`, `top = (stage?.top ?? 0) + point.y` (`point` уже в пикселях `<webview>`, рецензия m8), 600 мс. Не трогать подписку C на `capture`.
+  - `PanelSurface.tsx`: `onFocusCapture={focusOwner}` пропускает вызов, пока `isLendingFocus` у гостя активной страницы панели (`onPointerDownCapture` — клик человека — не трогать).
 
-- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS; `pnpm --filter @parley/desktop typecheck`.
+- [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS; `pnpm --filter @parley/desktop test -- src/english-ui.test.ts`; `pnpm --filter @parley/desktop typecheck`.
 
 - [ ] **Шаг 5. Коммит.**
 
 ```bash
-git add packages/desktop/src/renderer/browser/BrowserSurface.tsx packages/desktop/src/renderer/browser/BrowserSurface.test.tsx packages/desktop/src/renderer/browser/agent-activity.ts packages/desktop/src/renderer/browser/agent-activity.test.ts packages/desktop/src/renderer/browser/panel/agent-registry.ts packages/desktop/src/renderer/browser/panel/agent-registry.test.ts
-git commit -m "feat(desktop): the window shows agent control — badge with Stop, frame, click dot; reports human busy, applies agent size, lends focus" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/renderer/browser/BrowserSurface.tsx packages/desktop/src/renderer/browser/BrowserSurface.test.tsx packages/desktop/src/renderer/browser/agent-activity.ts packages/desktop/src/renderer/browser/agent-activity.test.ts packages/desktop/src/renderer/browser/panel/PanelSurface.tsx packages/desktop/src/renderer/browser/panel/PanelSurface.test.tsx packages/desktop/src/renderer/browser/panel/agent-registry.ts packages/desktop/src/renderer/browser/panel/agent-registry.test.ts
+git commit -m "feat(desktop): the window shows agent control — badge with Stop, frame, click dot; reports human busy, applies agent size, lends focus without switching tabs" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/renderer/browser/BrowserSurface.tsx packages/desktop/src/renderer/browser/BrowserSurface.test.tsx packages/desktop/src/renderer/browser/agent-activity.ts packages/desktop/src/renderer/browser/agent-activity.test.ts packages/desktop/src/renderer/browser/panel/PanelSurface.tsx packages/desktop/src/renderer/browser/panel/PanelSurface.test.tsx packages/desktop/src/renderer/browser/panel/agent-registry.ts packages/desktop/src/renderer/browser/panel/agent-registry.test.ts
 ```
 
 ---
@@ -2057,50 +2329,80 @@ git commit -m "feat(desktop): the window shows agent control — badge with Stop
   - `setSavePath(` — только в `agent-downloads.ts` и в пути E2E `main/index.ts` (`__parleySaveAnswer`);
   - `executeJavaScript(` нет нигде в main; `executeJavaScriptInIsolatedWorld(` — только с `PICK_WORLD_ID` (уже есть — не дублировать, сослаться);
   - `Page.navigate` нет в `CDP_ALLOWED`; `Runtime.evaluate` нет в `CDP_ALLOWED`, есть в `CDP_AGENT_SCRIPT`;
-  - в `agent-ops.ts` у `case 'evaluate'` — `changes: true` (по тексту между `case 'evaluate'` и следующим `case`).
+  - в `agent-ops.ts` у `case 'evaluate'` — `changes: true` (по тексту между `case 'evaluate'` и следующим `case`);
+  - `'browser:focus'` шлёт только `guard.ts`, и в том же обработчике есть проверка `agentFocus` (рецензия M1);
+  - в `agent-storage.ts` значение куки попадает в ответ только через ветку, где проверен `httpOnly` (по тексту: рядом с `value:` есть `HTTPONLY_HIDDEN`) — решение владельца 6.
 
 - [ ] **Шаг 2. Запустить.** `pnpm --filter @parley/desktop test -- src/main/browser/agent-frame.test.ts` → PASS (это проверка готового кода; красный тест — находка, её чинит задача-владелец, а не этот тест).
 
 - [ ] **Шаг 3. Коммит.**
 
 ```bash
-git add packages/desktop/src/main/browser/agent-frame.test.ts
-git commit -m "test(desktop): frame tests for agent browser control — single script entry, cookie scope, upload and download paths" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/src/main/browser/agent-frame.test.ts
+git commit -m "test(desktop): frame tests for agent browser control — single script entry, cookie scope, upload and download paths" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/src/main/browser/agent-frame.test.ts
 ```
 
 ---
 
-## Задача 22. E2E: агент управляет страницей
+## Задача 22a. E2E: формы, фокус, переходы, размер, занятость, Stop
 
 **Файлы:**
 - Создать: `packages/desktop/e2e/browser-agent-control.spec.ts`
+- Изменить: `packages/desktop/e2e/browser-agent-read.spec.ts`, `packages/desktop/e2e/browser-agent-open.spec.ts` (ожидания loopback, которые сняла задача 15a)
 
 **Интерфейсы:**
-- Берёт: каркас `e2e/browser-agent-read.spec.ts` (`openApp`, `agentTool`, `openPage`, `tabsLoaded`, `panelOf`, `call`, `readLines`, `guestEval` — скопировать в файл, как принято в репозитории); стаб-агент `STUB_MCP <tool> <json>`; переключатели E2E `__parleyDownloads`/`__parleySaveAnswer`; `globalThis.__parleyAnnotate` (`count()`, `waiting()`) — только чтение.
-- Внешний сайт — `--host-resolver-rules=MAP example.test 127.0.0.1` в `electron.launch` (спайк В13): `http://example.test:<порт>/` — не loopback.
+- Берёт: каркас `e2e/browser-agent-read.spec.ts` (`openApp`, `agentTool`, `openPage`, `tabsLoaded`, `panelOf`, `call`, `readLines`, `guestEval` — скопировать в файл, как принято в репозитории); стаб-агент `STUB_MCP <tool> <json>` (выполняет строки строго по очереди); `globalThis.__parleyAnnotate` (`count()`, `waiting()`) — только чтение.
+- **Панель — явно.** После `browser_open` тест сам открывает панель кнопкой «Browser» и делает страницу активной (`seen` требует, чтобы человек хоть раз её видел; `browser_open` панель открывает, но тест на это не полагается).
 - Ввод человека — только мышью и клавиатурой Playwright по окну (`window.mouse`, `window.keyboard`): `sendInputEvent` окна-хозяина в гостя не маршрутизируется (проба 2026-10-20).
 
-- [ ] **Шаг 1. Тестовый сервер.** Страницы: `/form` (поле `#name` с выводом в `#echo` по `input`; кнопка Save → текст «Saved» через 300 мс; `<select>` Red/Blue; чекбокс; `<input type=file multiple>` с выводом имён; ссылка `/report.csv` с `Content-Disposition: attachment`; `console.error('token=SECRET5')`; `fetch('/api/me?access_token=SECRET6')` → 401); `/next`; `/state` (`window.__state = { user: 'ann' }`, `document.cookie = 'theme=dark'`, `localStorage.k = 'v'`). Кука `sid=S3SS` с `HttpOnly` ставится ответом `/form`.
+- [ ] **Шаг 1. Тестовый сервер.** `/form` (поле `#name` с выводом в `#echo` по `input`; кнопка Save → текст «Saved» через 300 мс; `<select>` Red/Blue; чекбокс; `console.error('token=SECRET5')`; `fetch('/api/me?access_token=SECRET6')` → 401); `/next`.
 
-- [ ] **Шаг 2. Тесты** (каждый — свой `openApp`, как в `browser-agent-read.spec.ts`):
-  1. **Поток формы:** `browser_open` `/form` в свой чат → ответ «… loaded»; `browser_snapshot` `interactiveOnly` → ссылки; `browser_action type` в поле → `#echo` = текст; `click` Save; `browser_wait_for text Saved` → found; `select` Blue; `check`; `browser_console` и `browser_network` → `SECRET5`, `SECRET6` нет, есть `<redacted>`.
-  2. **Ввод не попадает в Chat (Фокус ревью 1):** человек кликает в поле Chat и печатает `hello` (`window.keyboard`), агент сразу шлёт `type` `agent-text` в `#name`; итог: в поле Chat — `hello`, в `#echo` — `agent-text`, `document.activeElement` окна — поле Chat.
-  3. **Переходы и устаревшая ссылка (Фокус ревью 7):** `snapshot` → `browser_navigate url /next` → `browser_action click` старой ссылкой → `stale_ref`; `navigate back` → адрес `/form`.
-  4. **Размер:** `browser_resize preset mobile-m` → в госте `innerWidth` = 375, подпись размера у человека «375 × 812»; `fit` → эмуляции нет.
-  5. **Внешний сайт (Фокус ревью 5):** `browser_open http://example.test:<порт>/form` → `snapshot`, `console`, `network`, `screenshot` — `ok`; `?token=` в адресе и `SECRET5`/`SECRET6` замаскированы.
-  6. **Занятость:** человек включает Annotate (`menu:action browser.annotate`), ждёт `__parleyAnnotate.waiting()`; агент `click` → `human_busy`; `__parleyAnnotate.count()` = 0; чтение `console` — `ok`.
-  7. **Stop (Фокус ревью 7):** агент `wait_for text Never` → человек жмёт Stop на значке → ответ `access_denied` «paused by the human», панель на паузе, следующий `console` — `access_denied`, «Resume agents» снимает.
-  8. **Скрипт (Фокус ревью 2):** `browser_evaluate expression window.__state` → `{"user":"ann"}`; `expression foo` → «The script threw»; `expression while (true) {}` → `timeout`, после него `click` по кнопке — `ok` (страница жива); на паузе — `access_denied`.
-  9. **Куки и хранилище (Фокус ревью 3):** `browser_cookies list` на `/state` → `theme`, `sid` (httpOnly) без значений; `values: true` → `S3SS`; `set` → `document.cookie` в госте содержит; `delete` → нет. Вкладка человека на `http://example.test:<порт>/` с кукой `human=1` — у страницы агента на `127.0.0.1` в списке нет `human`. `browser_storage set/get/list/clear` `localStorage` — видно в госте.
-  10. **Файлы (Фокус ревью 4, 6):** `click` по полю файла → ответ с заметкой «file chooser … upload», в госте `input.files.length` = 0 (выбор перехвачен, системного окна нет); `upload` временным файлом → имя в странице; `click` по ссылке `/report.csv` → заметка со путём в `agent-downloads`, файл там, `browser_downloads` — `completed`; клик человека (`window.mouse`) по той же ссылке вне окна агента → запись в `__parleyDownloads` (диалог человека), в папке агента второго файла нет.
+- [ ] **Шаг 2. Тесты** (каждый — свой `openApp`):
+  1. **Поток формы:** `browser_open` `/form` в свой чат → «… loaded»; панель открыта явно; `browser_snapshot` `interactiveOnly` → ссылки; `browser_action type` в поле → `#echo` = текст; `click` Save; `browser_wait_for text Saved` → found; `select` Blue; `check`; `browser_console` и `browser_network` → `SECRET5`, `SECRET6` нет, есть `<redacted>`.
+  2. **Ввод не трогает окно (Фокус ревью 1):** человек кликает в поле Chat и печатает `hello` (`window.keyboard`), агент сразу шлёт `type` `agent-text` в `#name`; итог: в `#echo` — `agent-text`; в поле Chat — `hello`; после ответа агента человек печатает ` world` — оно тоже в поле Chat; `document.activeElement` окна — поле Chat; `activeGroupId` раскладки и `windowFocused` (`useUiStore`) — как до ввода агента.
+  3. **Человек печатает в своей вкладке браузера (рецензия M3):** человек печатает в поле страницы своей вкладки (`window.keyboard`, длинная строка с паузами 200 мс), агент в это время шлёт `type` в страницу панели; итог: в странице человека — ровно его строка, в странице агента — ровно строка агента; ответ агента пришёл после паузы человека (или `human_busy`, если человек печатал дольше `focusMs`).
+  4. **Скрытая страница (Фокус ревью 2):** вторая страница панели неактивна (или панель свёрнута) — `type` в неё → `tab_hidden` «… keyboard input needs the page shown …»; символов в странице нет.
+  5. **Переходы и устаревшая ссылка (Фокус ревью 8):** `snapshot` → `browser_navigate url /next` → `browser_action click` старой ссылкой → `stale_ref`; `navigate back` → адрес `/form`.
+  6. **Размер:** `browser_resize preset mobile-m` → в госте `innerWidth` = 375, подпись размера у человека «375 × 812»; `fit` → эмуляции нет.
+  7. **Занятость:** человек включает Annotate (`menu:action browser.annotate`), ждёт `__parleyAnnotate.waiting()`; агент `click` → `human_busy`; `__parleyAnnotate.count()` = 0; `console` — `ok`.
+  8. **Stop и «Pause agents» (Фокус ревью 8):** агент `wait_for text Never` → человек жмёт Stop на значке → `access_denied` «paused by the human», панель на паузе, следующий `console` — `access_denied`, «Resume agents» снимает; то же с пунктом «Pause agents» в «⋯» страницы посреди `wait_for`.
 
-- [ ] **Шаг 3. Запустить.** `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop e2e -- e2e/browser-agent-control.spec.ts` → PASS. Повторно — `e2e/browser-agent-read.spec.ts` и `e2e/browser-agent-open.spec.ts` (их ожидания про loopback задачи 15 поменяли — поправить там же, этим коммитом).
+- [ ] **Шаг 3. Запустить.** `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop e2e -- e2e/browser-agent-control.spec.ts --workers=1` → PASS. Затем так же `e2e/browser-agent-read.spec.ts` и `e2e/browser-agent-open.spec.ts`: ожидания про loopback (внешняя страница — `not_loopback`, `tabs` только по origin) заменить на чтение с маской — этим коммитом.
 
 - [ ] **Шаг 4. Коммит.**
 
 ```bash
-git add packages/desktop/e2e/browser-agent-control.spec.ts packages/desktop/e2e/browser-agent-read.spec.ts packages/desktop/e2e/browser-agent-open.spec.ts
-git commit -m "test(desktop): E2E for agent browser control — forms, focus, Stop, scripts, cookies, files, external sites" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- packages/desktop/e2e/browser-agent-control.spec.ts packages/desktop/e2e/browser-agent-read.spec.ts packages/desktop/e2e/browser-agent-open.spec.ts
+git commit -m "test(desktop): E2E for agent browser control — forms, focus, hidden pages, navigation, size, human busy, Stop and pause" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/e2e/browser-agent-control.spec.ts packages/desktop/e2e/browser-agent-read.spec.ts packages/desktop/e2e/browser-agent-open.spec.ts
+```
+
+---
+
+## Задача 22b. E2E: внешний сайт, скрипт, куки, хранилище, файлы
+
+**Файлы:**
+- Создать: `packages/desktop/e2e/browser-agent-control-sites.spec.ts`
+
+**Интерфейсы:**
+- Берёт: те же помощники, что 22a (копия в файл).
+- Внешний сайт — `--host-resolver-rules=MAP example.test 127.0.0.1` в `electron.launch` (спайк В13): `http://example.test:<порт>/` — не loopback. Запасной путь (В13 «иначе») — не-loopback IP машины из `os.networkInterfaces()` (сервер слушает `0.0.0.0`); такого IP нет — тест 1 пропускается с пометкой.
+- Переключатели E2E `__parleyDownloads`/`__parleySaveAnswer`; панель открывается явно, как в 22a.
+
+- [ ] **Шаг 1. Тестовый сервер.** `/form` как в 22a, плюс `<input type=file multiple>` с выводом имён и ссылка `/report.csv` (`Content-Disposition: attachment`); `/state` (`window.__state = { user: 'ann' }`, `document.cookie = 'theme=dark'`, `localStorage.k = 'v'`); кука `sid=S3SS` с `HttpOnly` ставится ответом `/state`.
+
+- [ ] **Шаг 2. Тесты** (каждый — свой `openApp`):
+  1. **Внешний сайт (Фокус ревью 6):** `browser_open http://example.test:<порт>/form?token=SECRET7` → `snapshot`, `console`, `network`, `screenshot` — `ok`; `SECRET5`/`SECRET6`/`SECRET7` замаскированы.
+  2. **Скрипт (Фокус ревью 3):** `browser_evaluate expression window.__state` → `{"user":"ann"}`; `expression foo` → «The script threw»; `expression while (true) {}` → `timeout`, после него `click` по кнопке — `ok` (страница жива); на паузе — `access_denied`; выключатель «Let agents use the browser» посреди `expression new Promise(() => {})` → `access_denied`.
+  3. **Куки и хранилище (Фокус ревью 4):** `browser_cookies list` на `/state` → `theme`, `sid` (httpOnly) без значений; `values: true` → `theme=dark`, у `sid` — `<httpOnly: hidden>`, строки `S3SS` в ответе нет; `set` новой куки → `document.cookie` в госте содержит; `delete` httpOnly-куки `sid` → её нет и в `list`; вкладка человека на `http://example.test:<порт>/` с кукой `human=1` — у страницы агента на `127.0.0.1` в списке нет `human`. `browser_storage set/get/list/clear` `localStorage` — видно в госте.
+  4. **Файлы (Фокус ревью 5, 7):** `click` по полю файла → ответ с заметкой «file chooser … upload», в госте `input.files.length` = 0 (выбор перехвачен, системного окна нет); `upload` временным файлом → имя в странице; (секретные места проверяют модульные тесты задачи 17: настоящий `~/.ssh` E2E не трогает); `click` по ссылке `/report.csv` → заметка с путём в `agent-downloads`, файл там, `browser_downloads` — `completed`. Затем дождаться, пока значок агента пропадёт (`agent-badge` нет — хвост окна операции `guardTailMs` кончился), и кликнуть ту же ссылку мышью человека (`window.mouse`) → запись в `__parleyDownloads` (диалог человека), в папке агента второго файла нет.
+
+- [ ] **Шаг 3. Запустить.** `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop e2e -- e2e/browser-agent-control-sites.spec.ts --workers=1` → PASS.
+
+- [ ] **Шаг 4. Коммит.**
+
+```bash
+git add -- packages/desktop/e2e/browser-agent-control-sites.spec.ts
+git commit -m "test(desktop): E2E for agent browser control — external sites, scripts, cookies without httpOnly values, storage, uploads and downloads" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- packages/desktop/e2e/browser-agent-control-sites.spec.ts
 ```
 
 ---
@@ -2127,17 +2429,17 @@ git commit -m "test(desktop): E2E for agent browser control — forms, focus, St
   - 10 — тесты этапа D; рамочный тест — по задаче 21;
   - 11 — текст 15.1 п. 9 и README (ниже);
   - 12 «Этап D» — состав по этому плану;
-  - 13 — закрыть вопросы ввода и фреймов; **новый пункт о риске:** «Раздел `persist:harnas-browser` общий у человека и агентов. Агент на сайте, где человек вошёл во встроенном браузере, действует от имени человека: читает куки этого адреса (с `values: true` — значения), исполняет JS с его сессией, может удалить куку и разлогинить человека. Скрипт агента может оставить таймеры в странице: после Stop они живут до перезагрузки. Отдельный раздел для страниц агентов — возможное решение позже»; fuse `EnableCookieEncryption` — как было.
+  - 13 — закрыть вопросы ввода и фреймов; **новый пункт о риске:** «Раздел `persist:harnas-browser` общий у человека и агентов. Агент на сайте, где человек вошёл во встроенном браузере, действует от имени человека: читает куки этого адреса (с `values: true` — значения, кроме httpOnly: их значения не отдаются никогда), исполняет JS с его сессией (после одобрения `browser_evaluate`), может задать или удалить любую куку, в том числе httpOnly, и разлогинить человека. Клик агента даёт странице активацию пользователя: страница или скрипт агента может **записать** в буфер обмена человека (читать — нет). Защита загрузки от секретных мест — от случайности и prompt-injection, не от агента с Bash; жёсткие ссылки её проходят. Отмена вызова MCP агентом окну не передаётся — операция доигрывается. `bypassPermissions` у Claude Code и `approval_policy = never` у Codex не спрашивают про `browser_evaluate`. Скрипт агента может оставить таймеры в странице: после Stop они живут до перезагрузки. Отдельный раздел для страниц агентов — возможное решение позже»; fuse `EnableCookieEncryption` — как было.
 - [ ] **Шаг 2. Индекс плана.** Записка в шапке «2026-10-20: этап D — `2026-10-20-browser-agent-control-plan.md`; в «Глобальных ограничениях» пункты «только loopback», «`Runtime.evaluate` нет», «никогда — JS, куки, хранилища, файлы, другие сайты» для этапа D перекрыты решениями владельца 2026-10-20»; строка таблицы «Файлы плана» этапа D — новый файл.
 - [ ] **Шаг 3. Спека окна** `2026-09-26-desktop-orca-ui-design.md`: 12.2 — пункт «**Агент управляет браузером**» вместо «Агент читает браузер» (кратко, ссылки на спеку браузера 3.7, 5.1, 5.2); 15.1 п. 9 — «Агент работает только в браузере своего чата и в браузерах комнат, где он участник: на любых http(s)-сайтах переходит, кликает, вводит, читает консоль, сеть и дерево страницы, снимает экран, меняет размер, загружает файлы в поля, получает скачанные файлы, читает и меняет куки и хранилище текущей страницы, а JS исполняет только после одобрения человека. Вкладки браузера человека агенту недоступны. Действия агента видны человеку; Stop и «Pause agents» ставят панель на паузу, выключатель в настройках выключает всё сразу».
-- [ ] **Шаг 4. README.** «Legal boundary» (строка про embedded browser) — заменить: «the agent uses the embedded browser only in the browser panel of its own chat and of the rooms it belongs to: it opens, reads and drives pages on any http(s) site there, uploads files into page fields (never from secret locations such as ~/.ssh, keychains or .env files), receives downloads in a folder of its session, reads and changes the cookies and storage of the page it is on, and runs JavaScript only after you approve the browser_evaluate tool; the browser's cookies are shared with you, so an agent on a site where you are signed in acts as you; your own browser tabs are closed to it; Stop and Pause agents pause a panel, Settings turns it off;». Раздел об агентах и браузере (~строка 759) и Settings → Browser — те же факты коротко.
-- [ ] **Шаг 5. CHANGELOG** — `## Unreleased` (над `## 0.18.0`), по-английски: «### Added» — «Agents drive their browser panels», «Any site», «Scripts with approval», «Files», «Cookies and storage», «Badge with Stop», «parley-browser skill»; «### Changed» — «Every browser tool is allowed in advance except browser_evaluate».
+- [ ] **Шаг 4. README.** «Legal boundary» (строка про embedded browser) — заменить: «the agent uses the embedded browser only in the browser panel of its own chat and of the rooms it belongs to: it opens, reads and drives pages on any http(s) site there, uploads files into page fields (never from secret locations such as ~/.ssh, keychains or .env files; uploading from Desktop, Documents or Downloads may make macOS ask you for access), receives downloads in a folder of its session, reads and changes the cookies and storage of the page it is on (it never sees the values of httpOnly cookies, but it may set or delete them — deleting one can sign you out), and runs JavaScript only after you approve the browser_evaluate tool (Claude Code in bypassPermissions mode and Codex with approval_policy = never do not ask); the browser's cookies are shared with you, so an agent on a site where you are signed in acts as you; your own browser tabs are closed to it; Stop and Pause agents pause a panel, Settings turns it off;». Раздел об агентах и браузере (~строка 759) и Settings → Browser — те же факты коротко.
+- [ ] **Шаг 5. CHANGELOG** — `## Unreleased` (над `## 0.18.0`), по-английски: «### Added» — «Agents drive their browser panels», «Any site», «Scripts with approval», «Files», «Cookies and storage», «Badge with Stop», «parley-browser skill»; «### Changed» — «Every browser tool is allowed in advance except browser_evaluate, which always asks»; строка «httpOnly cookie values are never shown to agents».
 - [ ] **Шаг 6. Проверка.** `pnpm --filter @parley/desktop test -- src/release-docs.test.ts` → PASS (заголовки CHANGELOG).
 - [ ] **Шаг 7. Коммит.**
 
 ```bash
-git add docs/specs/2026-10-07-browser-devtools-agent-design.md docs/specs/2026-10-07-browser-devtools-agent-plan.md docs/specs/2026-09-26-desktop-orca-ui-design.md README.md CHANGELOG.md
-git commit -m "docs(browser): stage D — full agent control, scripts with approval, any site, files, cookies and storage" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add -- docs/specs/2026-10-07-browser-devtools-agent-design.md docs/specs/2026-10-07-browser-devtools-agent-plan.md docs/specs/2026-09-26-desktop-orca-ui-design.md README.md CHANGELOG.md
+git commit -m "docs(browser): stage D — full agent control, scripts with approval, any site, files, cookies and storage" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- docs/specs/2026-10-07-browser-devtools-agent-design.md docs/specs/2026-10-07-browser-devtools-agent-plan.md docs/specs/2026-09-26-desktop-orca-ui-design.md README.md CHANGELOG.md
 ```
 
 ---
@@ -2146,7 +2448,7 @@ git commit -m "docs(browser): stage D — full agent control, scripts with appro
 
 Перед каждым запуском `claude`, `codex` или GLM — спросить человека и ждать явного «да». Без согласия задача пропускается с пометкой в отчёте.
 
-- [ ] **Шаг 1. Claude Code со скиллом** на учебном приложении (dev-сервер в проекте): правка → `browser_open` → `snapshot` → `action` (форма) → снимки 1280 и 375 → ошибка консоли → починка → повтор. Проверить: `browser_*`, кроме `browser_evaluate`, не спрашивают; `browser_evaluate` спрашивает при первом вызове; ответ «Don't ask again» пишет правило только в файлы проекта, не в `~/.claude`.
+- [ ] **Шаг 1. Claude Code со скиллом** на учебном приложении (dev-сервер в проекте): правка → `browser_open` → `snapshot` → `action` (форма) → снимки 1280 и 375 → ошибка консоли → починка → повтор. Проверить: `browser_*`, кроме `browser_evaluate`, не спрашивают; `browser_evaluate` спрашивает при первом вызове; ответ «Don't ask again» пишет правило только в файлы проекта, не в `~/.claude`; при `{"permissions": {"allow": ["mcp__parley"]}}` в `.claude/settings.local.json` проекта `browser_evaluate` всё равно спрашивает (`permissions.ask`, рецензия M8); значения httpOnly-кук в ответах нет.
 - [ ] **Шаг 2. Codex** — тот же сценарий: спрашивает только про `browser_evaluate`; картинка снимка видна (или `view_image`).
 - [ ] **Шаг 3. GLM** — снимок и одно действие.
 - [ ] **Шаг 4. Отчёт** — в описание будущего PR: что спрашивалось, сколько операций, задержки (`op:"browser.agentOp"` в `host.log`), найденное.
@@ -2156,7 +2458,7 @@ git commit -m "docs(browser): stage D — full agent control, scripts with appro
 ## Задача 25. Завершение этапа и финальная рецензия
 
 - [ ] **Шаг 1.** `pnpm typecheck` и `pnpm exec eslint packages/protocol/src packages/core/src/mcp packages/core/src/work packages/desktop/src/main packages/desktop/src/renderer/browser packages/desktop/src/shared` → без ошибок.
-- [ ] **Шаг 2.** Тесты всех файлов, изменённых веткой: `git diff --name-only origin/master...HEAD | grep -E '\.test\.tsx?$'` — по пакетам `pnpm --filter <пакет> test -- <файлы>`; E2E — `e2e/browser-agent-*.spec.ts`. Полный прогон не нужен.
+- [ ] **Шаг 2.** Тесты: (1) всех файлов, изменённых веткой: `git diff --name-only origin/master...HEAD | grep -E '\.test\.tsx?$'`; (2) всех тестов, которые упоминают затронутые имена (рецензия M5): `rg -l "browser_|BROWSER_|parley-browser|minimal-development|BROWSER_PRIORITY_RULE|agentsAllowed|registerTab" packages/*/src -g '*.test.ts' -g '*.test.tsx'` — по пакетам `pnpm --filter <пакет> test -- <файлы>`; (3) один раз целиком `pnpm --filter @parley/core test` и `pnpm --filter @parley/host test` (они лёгкие; desktop целиком — нет); E2E — `e2e/browser-agent-*.spec.ts` по одному, `--workers=1`.
 - [ ] **Шаг 3. Визуальная проверка** в dev-окне (`pnpm dev`): 800×500 и DPR 2 — значок со Stop не ломает строку, точка клика в нужном месте при эмуляции.
 - [ ] **Шаг 4. Финальная рецензия ветки — Opus** (навык superpowers:requesting-code-review): по «Фокусу ревью» и «Решениям плана»; правки — отдельными коммитами.
 - [ ] **Шаг 5.** Push и PR — только по просьбе человека; описание PR кончается строкой `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
@@ -2165,21 +2467,22 @@ git commit -m "docs(browser): stage D — full agent control, scripts with appro
 
 ## Оценка
 
-26 задач (0–25).
+28 задач: 0–25, задачи 15 и 22 разбиты на 15a/15b и 22a/22b (рецензия M10; номера прочих задач не менялись).
 
-| Пачка | Задачи | Объём (грубо) |
-|---|---|---|
-| 0. База | 2 | слияние — минуты; спайк — 3–5 ч работы агента, ~0 строк продукта |
-| 1. Контракт | 4 | ~1 300 строк (протокол ~350, core ~700, мост ~250), из них половина — тесты |
-| 2. Кирпичи | 9 | ~2 800 строк, параллельно; каждый модуль 150–400 строк кода + тест |
-| 3. Операции main | 5 | ~2 000 строк, последовательно — самая длинная цепочка |
-| 4. Окно и проверки | 3 | ~1 300 строк (окно ~500, рамочные ~200, E2E ~600) |
-| 5. Документы и выпуск | 3 | ~250 строк документов; живые проверки — по согласию |
+| Пачка | Задачи | Порядок | Объём (грубо) |
+|---|---|---|---|
+| 0. База | 0, 1 | подряд | слияние — минуты; спайк (17 вопросов) — 4–6 ч работы агента, ~0 строк продукта |
+| 1. Контракт | 2, 3, 4, 5 | (2 → 3 → 4) ‖ 5 | ~1 400 строк (протокол ~350, core ~750, мост ~300), из них половина — тесты |
+| 2. Кирпичи | 6–14 | все ‖ | ~3 000 строк, параллельно; каждый модуль 150–400 строк кода + тест |
+| 3. Операции main | 15a, 15b, 16, 17, 18, 19 | подряд | ~2 400 строк — самая длинная цепочка (6 задач) |
+| 4. Окно и проверки | 20, 21, 22a, 22b | (20 ‖ 21) → 22a → 22b | ~1 600 строк (окно ~600, рамочные ~200, E2E ~800) |
+| 5. Документы и выпуск | 23, 24, 25 | подряд | ~300 строк документов; живые проверки — только по согласию |
 
-Итого ~7–8 тыс. строк с тестами. Последовательный путь: 0 → 1 → 2 → (2…4 цепочка core) → пачка 3 (5 задач подряд) → 20 → 22 → 23 → 25.
+Итого ~8–9 тыс. строк с тестами. Последовательный путь: 0 → 1 → (2 → 3 → 4) → пачка 2 → 15a → 15b → 16 → 17 → 18 → 19 → 20 → 22a → 22b → 23 → 25 (плюс проверки оркестратора между пачками).
 
 ## Самопроверка плана
 
-- **Покрытие решений владельца:** объём старого D — задачи 3, 7, 13, 16–18, 20; JS — 6, 11, 19; любые сайты — 0, 15, 22; файлы — 10, 15, 17; куки и хранилище — 12, 19; разрешения и аннотации — 4; защита (Stop, `human_busy`, `stale_ref`, очередь, пределы, маска дерева) — 7, 9, 15–17; буфер обмена — 9 (`selectAll`), 11 (`userGesture: false`); спайк 0.4 — 1; документы — 23; живые — 24.
-- **Имена между задачами:** `createPageRunner` и `InputGuard` (15) — в 16–19; `AgentDom` (16) — в 17–19; `withNavigation` (17) — в 18; `fitOf` (9) — в 17; `AgentWindow.take` (8) — в 15, 17, 18; `AgentScriptSender` (11) совместим с `Inspector` (6) по сигнатурам; `reportAgentPage` с `humanBusy` (20) читает `AgentPageRegistration.humanBusy` (5).
-- **Красные между задачами (ожидаемо):** контрактные тесты протокола и хоста — от задачи 2 до 4; тесты `agent-ops.test.ts` про loopback — до задачи 15; E2E `browser-agent-read`/`-open` про loopback — до задачи 22.
+- **Покрытие решений владельца:** объём старого D — задачи 3, 7, 13, 16–18, 20; JS — 6, 11, 19; любые сайты — 0, 15a, 22b; файлы — 10, 15b, 17; секретные места загрузки (решение 4) — 17, 22b; общий раздел кук (решение 5) — 23; значения httpOnly (решение 6) — 4, 12, 19, 21, 22b, 23; куки и хранилище — 12, 19; разрешения, `permissions.ask` и аннотации — 4, 24; защита (Stop, пауза и выключатель посреди операции, `human_busy`, `stale_ref`, очередь, пределы, маска дерева) — 7, 9, 15a, 16, 17; фокус окна, скрытая страница, тишина клавиатуры — 9, 15b, 20, 22a; буфер обмена — 9 (`selectAll`), 11 (`userGesture: false`), 23 (риск записи); спайк 0.4 и новые вопросы В14–В17 — 1; документы — 23; живые — 24.
+- **Пункты рецензии:** B1 — 5; B2 — «Как работать», таблица пачек, все блоки коммитов; M1 — 1 (В14), 15b, 20, 21, 22a; M2 — 1 (В15), 5, 9, 15b, 17, 20, 22a; M3 — 15b, 22a; M4 — 15a, 16, 19, 22a, 22b; M5 — 4, 14, 25; M6 — 6, 11; M7 — 6, таблица пачек; M8 — 4, 23, 24; M9 — «Ветки спайка», 1; M10 — 15a/15b, 22a/22b; m1 — 4; m2 — 15b; m3 — 15b; m4 — 7; m5 — 9, 16; m6 — 9; m7 — 22b; m8 — 9, 17, 20; m9 — 18; m10 — «Глобальные ограничения», 2, 17; m11 — 13; m12 — 18; m13 — «Как работать», шаги desktop-задач; m14 — «Как работать»; m15 — 17, 23; m16 — «Решения плана», 1 (В17), 23; m17 — «Глобальные ограничения»; m18 — 17; m19 — 10; m20 — «Решения плана» (принято).
+- **Имена между задачами:** `PageRunner`, `createPageRunner` (15a) — в 15b–19; `PageWindowHooks`, `createTypingClock`, `routeDownload`, `borrowFocus` (15b) — в 16–19 и `index.ts`; `InputGuard`, `viewPoint` (9) — в 15a–17; `AgentDom` (16) — в 17–19; `withNavigation` (17) — в 18; `fitOf` (9) — в 17; `AgentWindow.take` (8) — в 15b, 17, 18; `AgentScriptSender` (11) совместим с `Inspector` (6) по сигнатурам; `HTTPONLY_HIDDEN` (12) — в 19, 21; `createFocusLender`, `isLendingFocus` (20) — в `BrowserSurface.tsx`, `PanelSurface.tsx`; `reportAgentPage` с `humanBusy` (20) читает `AgentPageRegistration.humanBusy` (5); `agentFocusReady(id, ok)` (5) — в 15b, 20; `presetSpec` (18) — в `ViewportMenu.tsx`.
+- **Красные между задачами (ожидаемо):** контрактные тесты протокола и хоста — от задачи 2 до 4 (их гоняет оркестратор после пачки 1); тесты `agent-ops.test.ts` про loopback — до задачи 15a; E2E `browser-agent-read`/`-open` про loopback — до задачи 22a. **typecheck desktop** — зелёный на всём пути благодаря `default` в `run` (задача 5); красный typecheck — находка, а не «ожидаемо».
