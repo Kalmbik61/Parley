@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BROWSER_TOOLS } from '../mcp/browser-tools.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import {
+  BROWSER_ASK_PERMISSIONS,
   BROWSER_PERMISSIONS,
   FEED_HOOK_EVENTS,
   HOOK_COMMAND,
@@ -474,20 +475,21 @@ describe('GLM settings', () => {
   });
 });
 
-describe('инструменты браузера разрешены заранее (спека браузера, 5.1; S10)', () => {
-  const FIVE = ['tabs', 'console', 'network', 'screenshot', 'open'].map((op) => `mcp__parley__browser_${op}`);
+describe('инструменты браузера разрешены заранее, кроме browser_evaluate (решение владельца 2026-10-20)', () => {
+  const ALLOWED = ['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'cookies', 'storage', 'downloads'].map((op) => `mcp__parley__browser_${op}`);
 
-  it('без канала агента правила нет', () => {
+  it('без канала агента правил нет', () => {
     expect(workSettings()).not.toHaveProperty('permissions');
   });
 
-  it('с каналом агента — permissions.allow ровно пять browser_*; без канала — поля нет', () => {
-    expect(workSettings({ allowBrowser: true }).permissions).toEqual({ allow: FIVE });
+  it('с каналом — тринадцать правил allow и browser_evaluate в ask (рецензия M8); без канала — поля нет', () => {
+    expect(workSettings({ allowBrowser: true }).permissions).toEqual({ allow: ALLOWED, ask: ['mcp__parley__browser_evaluate'] });
+    expect(workSettings({ allowBrowser: true }).permissions?.allow).not.toContain('mcp__parley__browser_evaluate');
     expect(workSettings({ allowBrowser: false })).not.toHaveProperty('permissions');
   });
 
   it('имена правил собраны из настоящих имён сервера и инструментов', () => {
-    expect(BROWSER_PERMISSIONS).toEqual(BROWSER_TOOLS.map((tool) => `mcp__${MCP_SERVER_NAME}__${tool.name}`));
-    expect(BROWSER_PERMISSIONS).toEqual(FIVE);
+    expect(BROWSER_PERMISSIONS).toEqual(BROWSER_TOOLS.filter((tool) => tool.name !== 'browser_evaluate').map((tool) => `mcp__${MCP_SERVER_NAME}__${tool.name}`));
+    expect(BROWSER_ASK_PERMISSIONS).toEqual([`mcp__${MCP_SERVER_NAME}__browser_evaluate`]);
   });
 });

@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
 import { lstat, mkdir, open, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { BROWSER_TOOL_OPS } from '../mcp/browser-tools.js';
+import { BROWSER_TOOL_OPS, BROWSER_TOOLS_ASK } from '../mcp/browser-tools.js';
 import { ENV_PREFIX, LEGACY_ENV_PREFIX, MCP_SERVER_NAME } from '../names.js';
 import { ensureStateDir } from './state-dir.js';
 import { statusLineCommand } from './statusline.js';
@@ -91,14 +91,20 @@ export interface SettingsFile {
   /** Только `false`: плагины, выключенные в этой сессии (мод jev при сокращённом списке скиллов). */
   enabledPlugins?: Record<string, false>;
   /** Правила разрешений сессии; сейчас — только заранее разрешённые инструменты браузера (спека браузера, 5.1). */
-  permissions?: { allow: string[] };
+  permissions?: { allow: string[]; ask?: string[] };
 }
 
 /**
  * Инструменты `browser_*` Parley, как их видит Claude Code: `mcp__<сервер>__<инструмент>` (спека браузера 2026-10-07, 5.1).
  * Имя сервера — тот же `MCP_SERVER_NAME`, под которым он стоит в конфиге MCP сессии.
  */
-export const BROWSER_PERMISSIONS: readonly string[] = BROWSER_TOOL_OPS.map((op) => `mcp__${MCP_SERVER_NAME}__browser_${op}`);
+const browserRule = (op: string): string => `mcp__${MCP_SERVER_NAME}__browser_${op}`;
+
+/** Заранее разрешены все, кроме `BROWSER_TOOLS_ASK` (решение владельца 2026-10-20, п. 2). */
+export const BROWSER_PERMISSIONS: readonly string[] = BROWSER_TOOL_OPS.filter((op) => !(BROWSER_TOOLS_ASK as readonly string[]).includes(op)).map(browserRule);
+
+/** Правила `ask`: Claude Code спрашивает человека (сильнее `allow`, в том числе из его настроек). */
+export const BROWSER_ASK_PERMISSIONS: readonly string[] = BROWSER_TOOLS_ASK.map(browserRule);
 
 /** События, которые лента получает HTTP-хуками (вид «Chat», решение 1). */
 export const FEED_HOOK_EVENTS = [
@@ -156,7 +162,7 @@ export interface WorkSettingsOptions {
   disablePlugins?: readonly string[];
   /**
    * У сессии есть канал агента, значит, есть и инструменты `browser_*`: снять вопрос Claude Code перед первым вызовом
-   * каждого из пяти правилами `permissions.allow` в этом файле (спека браузера, 5.1; в `~/.claude` ничего не пишется).
+   * каждого, кроме browser_evaluate, правилами `permissions.allow` в этом файле (спека браузера, 5.1; в `~/.claude` ничего не пишется).
    * Так же ведёт себя Codex, которому читающие инструменты разрешает `readOnlyHint`.
    */
   allowBrowser?: boolean;
@@ -216,7 +222,7 @@ export function workSettings({
     hooks,
     statusLine: { type: 'command', command: statusLineCommand() },
     ...(model === undefined ? {} : { model }),
-    ...(allowBrowser ? { permissions: { allow: [...BROWSER_PERMISSIONS] } } : {}),
+    ...(allowBrowser ? { permissions: { allow: [...BROWSER_PERMISSIONS], ask: [...BROWSER_ASK_PERMISSIONS] } } : {}),
     ...(disablePlugins.length === 0 ? {} : { enabledPlugins: Object.fromEntries(disablePlugins.map((id) => [id, false as const])) }),
   };
 }

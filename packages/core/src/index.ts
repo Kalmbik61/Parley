@@ -510,7 +510,7 @@ export {
   probeChannelSupport,
 } from './work/channel.js';
 export type { ChannelProbe } from './work/channel.js';
-export { BROWSER_TOOL_HINTS, BROWSER_TOOL_LIMITS, BROWSER_TOOL_OPS, BROWSER_TOOLS, PAGE_DATA_NOTE } from './mcp/browser-tools.js';
+export { BROWSER_TOOL_HINTS, BROWSER_TOOL_LIMITS, BROWSER_TOOL_OPS, BROWSER_TOOLS, BROWSER_TOOLS_ASK, PAGE_DATA_NOTE } from './mcp/browser-tools.js';
 export { contextFromEnv } from './mcp/context.js';
 export type { McpContext } from './mcp/context.js';
 export {
