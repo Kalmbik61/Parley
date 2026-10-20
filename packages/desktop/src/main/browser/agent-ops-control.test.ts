@@ -279,9 +279,9 @@ function windowSetup(options: { tailMs?: number; focusMs?: number } = {}) {
     }),
   };
   const agentWindow = createAgentWindow({ tailMs: options.tailMs ?? 2_000 });
-  const typing = { track: vi.fn(), ignore: vi.fn(), lend: vi.fn(() => () => undefined), idleFor: vi.fn(() => true), waitIdle: vi.fn(async () => true) };
+  const typing = { track: vi.fn(), lend: vi.fn(() => () => undefined), idleFor: vi.fn(() => true), waitIdle: vi.fn(async () => true) };
   const requestFocus = vi.fn<(contents: WebContents, id: string) => boolean>(() => true);
-  const hooks = createWindowHooks({ agentWindow, inspector, typing });
+  const hooks = createWindowHooks({ agentWindow, inspector });
   const runner = createPageRunner({ registry, agentsAllowed: async () => true, activity: () => undefined, window: hooks, typing });
   const borrower = createFocusBorrower({ typing, requestFocus, ...(options.focusMs === undefined ? {} : { focusMs: options.focusMs }) });
   const ctx = {
@@ -319,10 +319,8 @@ describe('окно операции, выбор файла, скачивания
     await vi.waitFor(() => expect(ctx.ran).toBe(1));
     expect(ctx.inspector.send).toHaveBeenCalledWith(7, 'Page.setInterceptFileChooserDialog', { enabled: true });
     expect(ctx.agentWindow.activeFor(7)).toMatchObject({ sessionId: 's-02', agentId: 't1' });
-    expect(ctx.typing.ignore).toHaveBeenCalledWith(7, true);
     ctx.release();
     await done;
-    expect(ctx.typing.ignore).toHaveBeenLastCalledWith(7, false);
     await vi.waitFor(() => expect(ctx.inspector.send).toHaveBeenCalledWith(7, 'Page.setInterceptFileChooserDialog', { enabled: false }));
     expect(ctx.agentWindow.activeFor(7)).toBeNull();
   });
@@ -448,7 +446,7 @@ describe('окно операции, выбор файла, скачивания
     const typing = createTypingClock();
     typing.track(guest as unknown as WebContents);
     const inspector = { send: vi.fn(async (): Promise<unknown> => ({})), onEvent: vi.fn(() => () => undefined) };
-    const runner = createPageRunner({ registry, agentsAllowed: async () => true, activity: () => undefined, window: createWindowHooks({ agentWindow: createAgentWindow({ tailMs: 20 }), inspector, typing }), typing });
+    const runner = createPageRunner({ registry, agentsAllowed: async () => true, activity: () => undefined, window: createWindowHooks({ agentWindow: createAgentWindow({ tailMs: 20 }), inspector }), typing });
     const borrower: ReturnType<typeof createFocusBorrower> = createFocusBorrower({ typing, requestFocus: (_c, id) => { queueMicrotask(() => borrower.focusReady(id, true)); return true; } });
     const press = (): string => {
       let prevented = false;
@@ -472,6 +470,22 @@ describe('окно операции, выбор файла, скачивания
     expect(seen).toEqual(['passed', 'prevented', 'passed']);
     // Нажатие отмечено в тишине: следующее одалживание подождёт.
     expect(typing.idleFor(AGENT_LIMITS.typingIdleMs)).toBe(false);
+  });
+
+  it('нажатие человека в странице агента до одалживания считается в тишину клавиатуры: одалживание его подождёт, а не одолжит фокус сразу и не оборвёт ввод на следующей клавише (финальная рецензия m5)', async () => {
+    const guest = fakeGuest(7);
+    const registry = createPageRegistry({ fromId: (id) => (id === 7 ? (guest as unknown as WebContents) : null) });
+    registry.register({ kind: 'hello', generation: GEN });
+    registry.register({ kind: 'page', generation: GEN, webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true });
+    const typing = createTypingClock();
+    typing.track(guest as unknown as WebContents);
+    const inspector = { send: vi.fn(async (): Promise<unknown> => ({})), onEvent: vi.fn(() => () => undefined) };
+    const runner = createPageRunner({ registry, agentsAllowed: async () => true, activity: () => undefined, window: createWindowHooks({ agentWindow: createAgentWindow({ tailMs: 20 }), inspector }), typing });
+    const quiet = await runner.run(request('action'), 't1', async () => {
+      guest.emit('before-input-event', { preventDefault: () => undefined }, { type: 'keyDown', key: 'z' });
+      return typing.idleFor(AGENT_LIMITS.typingIdleMs);
+    }, { window: true, changes: true });
+    expect(quiet).toBe(false);
   });
 
   it('хвост D1 (финальная рецензия m1): операция кончилась, а окно ещё не подтвердило возврат фокуса — нажатие в странице агента гасится без обрыва; после подтверждения или запасного срока — проходит, аренда клавиатуры свободна', async () => {

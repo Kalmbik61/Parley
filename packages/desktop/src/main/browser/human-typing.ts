@@ -1,24 +1,22 @@
 // packages/desktop/src/main/browser/human-typing.ts
 /**
  * Тишина клавиатуры человека (рецензия M3): агент не вводит текст, пока человек печатает в окне Parley или в любой
- * странице. Считает main по `before-input-event` окна и всех гостей: окно само тишину не ждёт. События гостя, на котором
- * сейчас вводит агент, не считаются (`ignore`), отпускание клавиш и автоповтор — тоже.
+ * странице. Считает main по `before-input-event` окна и всех гостей: окно само тишину не ждёт. Отпускание клавиш и
+ * автоповтор не считаются. CDP-ввод агента (`Input.insertText`, `Input.dispatchKeyEvent`) `before-input-event` не порождает
+ * (проба 2026-10-20 в Electron 44), поэтому нажатие и в странице агента — человека: оно тоже сбрасывает тишину (финальная
+ * рецензия m5 сняла прежнее исключение гостя агента).
  *
- * Пока фокус гостя одолжен агенту (`lend`, D1 живых проверок 2026-10-20), клавиатурное событие этого гостя — нажатие
- * человека: CDP-ввод агента (`Input.insertText`, `Input.dispatchKeyEvent`) `before-input-event` не порождает (проба
- * 2026-10-20 в Electron 44). Такое нажатие гасится (`preventDefault`: в страницу не попадает, за ним Chromium гасит и `char`),
- * сбрасывает тишину и сообщается тому, кто одолжил фокус.
+ * Пока фокус гостя одолжен агенту (`lend`, D1 живых проверок 2026-10-20), такое нажатие гасится (`preventDefault`: в
+ * страницу не попадает, за ним Chromium гасит и `char`), сбрасывает тишину и сообщается тому, кто одолжил фокус.
  */
 import type { WebContents } from 'electron';
 
 export interface TypingClock {
   /** `before-input-event` контента: только нажатие (`keyDown`), не автоповтор. Возвращает отписку. */
   track(contents: Pick<WebContents, 'id' | 'on' | 'off'>): () => void;
-  /** Гость, на котором сейчас вводит агент: его события в тишину не входят. */
-  ignore(webContentsId: number, on: boolean): void;
   /**
    * Фокус гостя одолжен агенту: его `keyDown`, `rawKeyDown` и `char` (и автоповтор) гасятся, сбрасывают тишину и зовут
-   * `onHuman`; `ignore` на них не действует. Возвращает снятие.
+   * `onHuman`. Возвращает снятие.
    */
   lend(webContentsId: number, onHuman: () => void): () => void;
   /** С последнего нажатия человека прошло не меньше `ms`. */
@@ -43,7 +41,6 @@ export function createTypingClock(deps: { now?(): number; setTimer?(fn: () => vo
       const timer = setTimeout(fn, ms);
       return () => clearTimeout(timer);
     });
-  const ignored = new Set<number>();
   /** Гости с одолженным фокусом → кому сообщить о нажатии человека. */
   const lent = new Map<number, () => void>();
   let lastKeyAt = Number.NEGATIVE_INFINITY;
@@ -60,17 +57,13 @@ export function createTypingClock(deps: { now?(): number; setTimer?(fn: () => vo
           onHuman();
           return;
         }
-        if (input.type !== 'keyDown' || input.isAutoRepeat === true || ignored.has(contents.id)) return;
+        if (input.type !== 'keyDown' || input.isAutoRepeat === true) return;
         lastKeyAt = now();
       };
       contents.on('before-input-event', listener as never);
       return () => {
         contents.off('before-input-event', listener as never);
       };
-    },
-    ignore(webContentsId, on) {
-      if (on) ignored.add(webContentsId);
-      else ignored.delete(webContentsId);
     },
     lend(webContentsId, onHuman) {
       lent.set(webContentsId, onHuman);

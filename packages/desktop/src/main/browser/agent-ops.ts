@@ -317,16 +317,16 @@ const FILE_CHOOSER_NOTE =
   'The page opened a file chooser; nothing was shown to the human. Take a browser_snapshot and use browser_action with action upload on the file input.';
 
 /**
- * Окно операции для `createPageRunner` (15b): учёт окна (`agentWindow`), перехват выбора файла на время окна и хвоста,
- * гость, на котором вводит агент, не считается в тишину клавиатуры человека. Перехват включается один раз на окно, а не на
- * каждую операцию, и снимается, когда окно и хвост кончились.
+ * Окно операции для `createPageRunner` (15b): учёт окна (`agentWindow`) и перехват выбора файла на время окна и хвоста.
+ * Перехват включается один раз на окно, а не на каждую операцию, и снимается, когда окно и хвост кончились. Гость агента
+ * из тишины клавиатуры человека не исключается: CDP-ввод агента `before-input-event` не порождает (проба D1), и нажатие в
+ * его странице до одалживания — человека, одалживание должно его подождать (финальная рецензия m5).
  */
 export function createWindowHooks(deps: {
   agentWindow: AgentWindow;
   inspector: Pick<Inspector, 'send' | 'onEvent'>;
-  typing: Pick<TypingClock, 'ignore'>;
 }): PageWindowHooks {
-  const { agentWindow, inspector, typing } = deps;
+  const { agentWindow, inspector } = deps;
   /** Гости с включённым перехватом → отписка от `Page.fileChooserOpened`. */
   const intercepted = new Map<number, () => void>();
   agentWindow.onIdle((id) => {
@@ -351,11 +351,7 @@ export function createWindowHooks(deps: {
         intercepted.set(id, inspector.onEvent(id, 'Page.fileChooserOpened', () => agentWindow.note(id, FILE_CHOOSER_NOTE)));
         void Promise.resolve(inspector.send(id, 'Page.setInterceptFileChooserDialog', { enabled: true })).catch(() => undefined);
       }
-      typing.ignore(id, true);
-      return () => {
-        typing.ignore(id, false);
-        end();
-      };
+      return end;
     },
   };
 }
@@ -614,7 +610,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     registry,
     agentsAllowed: deps.agentsAllowed,
     activity: deps.activity,
-    window: createWindowHooks({ agentWindow: deps.agentWindow, inspector: deps.inspector, typing: deps.typing }),
+    window: createWindowHooks({ agentWindow: deps.agentWindow, inspector: deps.inspector }),
     typing: deps.typing,
     focusReturned: focus.focusReturned,
     ...(deps.opTimeoutMs === undefined ? {} : { opTimeoutMs: deps.opTimeoutMs }),

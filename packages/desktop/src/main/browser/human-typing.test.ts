@@ -23,7 +23,7 @@ function fakeContents(id: number) {
 afterEach(() => vi.useRealTimers());
 
 describe('тишина клавиатуры человека (рецензия M3)', () => {
-  it('keyDown окна или любого гостя сбрасывает тишину; keyUp, автоповтор и события игнорируемого гостя — нет', () => {
+  it('keyDown окна или любого гостя сбрасывает тишину; keyUp и автоповтор — нет', () => {
     let now = 0;
     const clock = createTypingClock({ now: () => now });
     const win = fakeContents(1), guest = fakeContents(7);
@@ -32,9 +32,7 @@ describe('тишина клавиатуры человека (рецензия M
     now = 1_000; win.input({ type: 'keyDown', key: 'h' });
     now = 1_500; expect(clock.idleFor(1_000)).toBe(false);
     now = 2_001; expect(clock.idleFor(1_000)).toBe(true);
-    clock.ignore(7, true); guest.input({ type: 'keyDown', key: 'a' });
-    expect(clock.idleFor(1_000)).toBe(true);
-    clock.ignore(7, false); guest.input({ type: 'keyDown', key: 'a' });
+    guest.input({ type: 'keyDown', key: 'a' });
     expect(clock.idleFor(1_000)).toBe(false);
     now = 4_000;
     win.input({ type: 'keyUp', key: 'h' });
@@ -42,13 +40,12 @@ describe('тишина клавиатуры человека (рецензия M
     expect(clock.idleFor(1_000)).toBe(true);
   });
 
-  it('одолженный фокус (D1): keyDown, rawKeyDown, char и автоповтор гостя гасятся, сбрасывают тишину и зовут onHuman — даже под ignore; keyUp, другой гость и окно — нет; после снятия — как обычно', () => {
+  it('одолженный фокус (D1): keyDown, rawKeyDown, char и автоповтор гостя гасятся, сбрасывают тишину и зовут onHuman; keyUp, другой гость и окно — нет; после снятия — как обычно', () => {
     let now = 0;
     const clock = createTypingClock({ now: () => now });
     const win = fakeContents(1), guest = fakeContents(7), other = fakeContents(8);
     clock.track(win as never); clock.track(guest as never); clock.track(other as never);
     const onHuman = vi.fn();
-    clock.ignore(7, true);
     const unlend = clock.lend(7, onHuman);
 
     now = 5_000;
@@ -70,8 +67,8 @@ describe('тишина клавиатуры человека (рецензия M
     now = 10_000;
     expect(guest.input({ type: 'keyDown', key: 'z' })).toBe(false);
     expect(onHuman).toHaveBeenCalledTimes(4);
-    // Снова под ignore: в тишину не входит.
-    expect(clock.idleFor(1_000)).toBe(true);
+    // Одолжения нет: нажатие проходит в страницу и, как любое нажатие человека, сбрасывает тишину.
+    expect(clock.idleFor(1_000)).toBe(false);
   });
 
   it('снятие старого одалживания не снимает новое на том же госте', () => {
