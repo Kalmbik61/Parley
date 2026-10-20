@@ -51,7 +51,8 @@ describe('AgentInput (Фокус ревью 1)', () => {
     await input.key(contents, keySpec('Enter')!, 0, guard);
     expect(order).toEqual(['borrow', 'Emulation.setFocusEmulationEnabled', 'Input.insertText', 'Input.dispatchKeyEvent', 'Input.dispatchKeyEvent']);
     expect(borrowFocus).toHaveBeenCalledTimes(1);
-    expect(guard.check).toHaveBeenCalledTimes(3);
+    // Перед каждым из трёх шагов и ещё раз после одалживания фокуса.
+    expect(guard.check).toHaveBeenCalledTimes(4);
   });
 
   it('check бросил (Stop) — ни одной команды Input после', async () => {
@@ -128,6 +129,17 @@ describe('AgentInput (Фокус ревью 1)', () => {
     };
     await expect(input.key(contents, keySpec('b')!, 0, guard)).rejects.toThrow();
     expect(calls.map(([, p]) => p?.type)).toEqual(['keyDown', 'keyUp']);
+  });
+
+  it('Stop пришёл, пока окно одалживало фокус, — ни одной команды Input (рецензия пачки 2)', async () => {
+    const { calls, input, contents, borrowFocus } = setup();
+    const controller = new AbortController();
+    const guard = { signal: controller.signal, check: vi.fn(() => controller.signal.throwIfAborted()) };
+    borrowFocus.mockImplementationOnce(async () => {
+      controller.abort(new AgentOpError('access_denied', 'Stopped by the human (paused by the human).'));
+    });
+    await expect(input.text(contents, 'Ann', guard)).rejects.toMatchObject({ code: 'access_denied' });
+    expect(calls.filter(([method]) => method.startsWith('Input.'))).toEqual([]);
   });
 
   it('borrowFocus бросил tab_hidden (окно не поставило фокус) или human_busy (человек печатает) — ни одной команды Input (Фокус ревью 1, 2)', async () => {

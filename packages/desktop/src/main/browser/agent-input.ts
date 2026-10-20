@@ -117,9 +117,13 @@ export function createAgentInput(deps: {
   }
 
   /** Фокус — до первого шага ввода операции; кэша на гостя нет: отладчик переподключается на навигации. */
-  async function ensureFocus(contents: WebContents, signal: AbortSignal): Promise<void> {
+  async function ensureFocus(contents: WebContents, guard: InputGuard): Promise<void> {
+    const { signal } = guard;
     if (deps.borrowFocus === undefined || focused.has(signal)) return;
     await deps.borrowFocus(contents, signal);
+    // Одалживание ждёт тишины клавиатуры человека до 10 с: Stop, пауза или выключатель могли прийти за это время.
+    guard.check();
+    signal.throwIfAborted();
     await send(contents, 'Emulation.setFocusEmulationEnabled', { enabled: true });
     focused.add(signal);
   }
@@ -127,7 +131,7 @@ export function createAgentInput(deps: {
   async function step(contents: WebContents, guard: InputGuard, method: string, params: Record<string, unknown>): Promise<void> {
     guard.check();
     guard.signal.throwIfAborted();
-    await ensureFocus(contents, guard.signal);
+    await ensureFocus(contents, guard);
     await send(contents, method, params);
   }
 

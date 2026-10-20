@@ -1768,6 +1768,8 @@ git commit -m "feat(desktop): agent operations on any site — page runner, Stop
 
 ## Задача 15b. Main: окно операции, выбор файла, скачивания, фокус и тишина клавиатуры
 
+> **Рецензия пачки 2 (2026-10-20):** `AgentDownloadOwner.tab` без значения теперь даёт `tab: null` (было `'t1'`). `routeDownload` обязан передавать в `claim` id страницы-источника (`tN` из `pageKey` окна операции); тест: скачивание со страницы t2 записано с `tab: 't2'`. `agent-input` перепроверяет `guard` после одалживания фокуса, `agent-evaluate` не стартует скрипт при уже оборванном `signal` — 15a/19 продолжают проверять `guard` до вызова.
+
 **Файлы:**
 - Создать: `packages/desktop/src/main/browser/human-typing.ts`, `packages/desktop/src/main/browser/human-typing.test.ts`
 - Изменить: `packages/desktop/src/main/browser/agent-ops.ts`, `packages/desktop/src/main/browser/guard.ts`, `packages/desktop/src/main/index.ts`

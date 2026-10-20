@@ -76,7 +76,7 @@ export function createAgentDownloads(deps: { root: string; now?(): number }): Ag
       counter += 1;
       const record: BrowserAgentDownload = {
         id: `d${counter}`,
-        tab: owner.tab === undefined ? 't1' : owner.tab,
+        tab: owner.tab ?? null,
         name: path.basename(file),
         path: file,
         url: urlForAgent(item.getURL()),

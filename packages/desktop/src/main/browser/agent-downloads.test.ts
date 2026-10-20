@@ -63,6 +63,8 @@ describe('скачивания агента (Фокус ревью 7)', () => {
     expect(first.url).toBe('https://example.test/report.csv?token=<redacted>');
     expect(first).toMatchObject({ state: 'progressing', tab: 't1', name: 'evil.csv' });
     const second = downloads.claim(asItem(item('evil.csv')), OWNER);
+    // Без страницы-источника — tab null, а не чужая t1 (рецензия пачки 2).
+    expect(downloads.claim(asItem(item('other.csv')), { ...OWNER, tab: undefined })).toMatchObject({ tab: null });
     expect(path.basename(second.path)).toBe('evil (2).csv');
     expect((await stat(downloads.dirOf(OWNER.workKey, OWNER.sessionId))).mode & 0o777).toBe(0o700);
   });

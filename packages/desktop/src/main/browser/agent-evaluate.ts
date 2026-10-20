@@ -56,6 +56,11 @@ export function createAgentScripts(deps: { inspector: AgentScriptSender; evalMs?
     element: number | null,
     signal: AbortSignal,
   ): Promise<BrowserAgentEvaluateResult> {
+    // Операцию уже оборвали (пауза, выключатель, Stop): скрипт в страницу не уходит вовсе (Фокус ревью 3).
+    if (signal.aborted) {
+      const reason: unknown = signal.reason;
+      throw reason instanceof AgentOpError ? reason : new AgentOpError('timeout', 'The script was stopped.');
+    }
     const id = contents.id;
     let objectId: string | null = null;
     let timedOut = false;

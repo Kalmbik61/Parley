@@ -150,6 +150,15 @@ describe('скрипт агента в главном мире (решение �
     expect(stopped.sender.send).toHaveBeenCalledWith(7, 'Runtime.terminateExecution', {});
   });
 
+  it('операцию оборвали до вызова (пауза, выключатель, Stop) — скрипт в страницу не уходит вовсе (Фокус ревью 3; рецензия пачки 2)', async () => {
+    const { scripts, sender } = setup({ evaluate: { result: { type: 'number', value: 1 } } });
+    const controller = new AbortController();
+    controller.abort(new AgentOpError('access_denied', 'The human paused agents in this browser panel (paused by the human).'));
+    await expect(scripts.evaluateOf(contents, 't1', { tab: 't1', expression: '1' }, null, controller.signal)).rejects.toMatchObject({ code: 'access_denied' });
+    expect(sender.sendAgentScript).not.toHaveBeenCalled();
+    expect(sender.send).not.toHaveBeenCalled();
+  });
+
   it('«Execution was terminated» после своего срока — timeout, а не exception (рецензия M6)', async () => {
     const { scripts } = setup({ evaluate: 'terminatedAfter', evalMs: 20 });
     await expect(scripts.evaluateOf(contents, 't1', { tab: 't1', expression: 'while (true) {}' }, null, signal())).rejects.toMatchObject({
