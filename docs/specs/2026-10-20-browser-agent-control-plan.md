@@ -1669,6 +1669,8 @@ git commit -m "feat(core): parley-browser skill, pointers to it, and a browser p
 
 ## Задача 15a. Main: основа `agent-ops` — runner, Stop, пауза и выключатель посреди операции, занятость, любые сайты
 
+> **Рецензия пачки 1 (2026-10-20):** заглушки `AgentOps.stop`, `focusReady`, `accessChanged` (задача 5) пусты. Тесты Stop, паузы панели и выключателя посреди операции (Фокус ревью 3 и 8) обязаны идти через эти же методы, а не через обход.
+
 **Файлы:**
 - Изменить: `packages/desktop/src/main/browser/agent-ops.ts`, `agent-pages.ts`, `agent-capture.ts`, `packages/desktop/src/main/index.ts` (только `accessChanged`)
 - Тесты: `packages/desktop/src/main/browser/agent-ops.test.ts` (поправить), создать `packages/desktop/src/main/browser/agent-ops-control.test.ts`
@@ -2089,6 +2091,8 @@ git commit -m "feat(desktop): browser_action — click, type, press, scroll, sel
 ---
 
 ## Задача 18. Main: `navigate`, `resize`, `open` с ожиданием загрузки, `screenshot` с `ref`
+
+> **Рецензия пачки 1 (2026-10-20):** в протоколе `BrowserAgentOpenResult.loaded` и `title` необязательны (окно до этапа D их не шлёт, core пишет агенту «не ждёт загрузки»; коммит 3b9da957). Тест main этой задачи: ответ `open` окна D ВСЕГДА содержит `loaded` и `title`.
 
 **Файлы:**
 - Изменить: `packages/desktop/src/main/browser/agent-ops.ts`, `agent-capture.ts`, `packages/desktop/src/main/index.ts`, `packages/desktop/src/shared/browser-devtools.ts` (`presetSpec`), `packages/desktop/src/renderer/browser/ViewportMenu.tsx` (импорт `presetSpec`)

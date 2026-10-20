@@ -532,7 +532,10 @@ function formatCookies(result: CookiesResult, args: Record<string, unknown>): st
   const lines = result.cookies.map((cookie) => {
     const when = cookie.session ? 'session' : `expires=${cookie.expires ?? 'unknown'}`;
     const flags = `${cookie.secure ? ' secure' : ''}${cookie.httpOnly ? ' httpOnly' : ''}`;
-    return `${cookie.name}${cookie.value === undefined ? '' : `=${cookie.value}`}  domain=${cookie.domain} path=${cookie.path}${flags} sameSite=${cookie.sameSite} ${when}  (${cookie.size} B)`;
+    // Значение httpOnly-куки — сессия человека, агенту его не видать (решение владельца 6). Main его уже не шлёт; это второй
+    // слой на случай ошибки окна.
+    const value = cookie.value === undefined ? undefined : cookie.httpOnly ? '<httpOnly: hidden>' : cookie.value;
+    return `${cookie.name}${value === undefined ? '' : `=${value}`}  domain=${cookie.domain} path=${cookie.path}${flags} sameSite=${cookie.sameSite} ${when}  (${cookie.size} B)`;
   });
   const head = `Cookies of ${result.url} in ${result.tab}: ${result.cookies.length}.`;
   const advice = shown

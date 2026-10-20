@@ -519,6 +519,15 @@ describe('скрипт, куки, хранилище, скачивания; ан
     expect(shown.text).toContain('never repeat them');
   });
 
+  it('cookies: окно прислало значение httpOnly-куки (ошибка main) — core его всё равно не показывает (решение владельца 6, второй слой)', async () => {
+    const client = await connect(await startEndpoint());
+    const cookie = { name: 'sid', domain: 'localhost', path: '/', secure: false, httpOnly: true, sameSite: 'lax', session: true, expires: null, size: 35 };
+    answers.push({ status: 200, body: { ok: true, result: { tab: 't1', url: 'http://localhost/', cookies: [{ ...cookie, value: 'S3SS' }], notes: [] } } });
+    const shown = await call(client, 'browser_cookies', { tab: 't1', action: 'list', values: true });
+    expect(shown.text).not.toContain('S3SS');
+    expect(shown.text).toContain('sid=<httpOnly: hidden>');
+  });
+
   it('storage и downloads: списки в ограде; пустой список скачиваний называет папку', async () => {
     const client = await connect(await startEndpoint());
     answers.push(
