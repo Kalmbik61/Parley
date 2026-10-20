@@ -86,6 +86,8 @@ export interface AssistantStoreState {
   openMode(request: { listen: boolean }): void;
   close(): void;
   collapse(): void;
+  /** Забрать клавиатуру у острова, открытого сам (напоминание, Telegram): панель до этого не фокусируема. */
+  takeKeyboard(): void;
   expand(byHover: boolean): void;
   setDraft(text: string): void;
   submit(text: string): Promise<void>;
@@ -98,6 +100,8 @@ export interface AssistantStoreState {
 export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreState>> {
   let deps: AssistantDeps | null = null;
   let listening: Listening | null = null;
+  // Отдана ли клавиатура панели (`keyboard(true)` без последующего `keyboard(false)`).
+  let keyboardHeld = false;
   /**
    * Что делать с распознанным: `send` — хоткей (⌥Space), голосовой сценарий без рук, вопрос уходит сразу (спека 8.4);
    * `draft` — кнопка микрофона, как диктовка в чатах: текст ложится в поле, отправляет человек Enter-ом.
@@ -216,6 +220,7 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         }
         set({ open: true, collapsed: false, byHover: false, notice: null });
         deps?.keyboard(true);
+        keyboardHeld = true;
         if (request.listen) {
           stopTurn();
           startListening('send');
@@ -229,10 +234,18 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         else stopTurn();
         set({ open: false, collapsed: false, byHover: false, input: 'idle', level: 0, listenStartedAt: null, notice: null, cardError: null, queue: [], sending: null, history: [] });
         deps?.keyboard(false);
+        keyboardHeld = false;
       },
       collapse: () => {
         set({ collapsed: true, byHover: false });
         deps?.keyboard(false);
+        keyboardHeld = false;
+      },
+      takeKeyboard: () => {
+        const state = get();
+        if (!state.open || state.collapsed || keyboardHeld) return;
+        deps?.keyboard(true);
+        keyboardHeld = true;
       },
       expand: (byHover) => set({ collapsed: false, byHover }),
       setDraft: (draft) => set({ draft }),
