@@ -4,6 +4,20 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.18.0
+
+Control Parley from the island assistant and from Telegram. The assistant proposes rooms, answers to agent requests, room decisions and reminders, and you confirm each one on the island; a Telegram bot brings the same cards with buttons, the notifications and the assistant to your phone.
+
+### Added
+
+- **The assistant can propose more than a letter.** Ask it to create a room, to answer an agent's permission, question or plan, or to accept or return a room lead's decision: it shows a card on the island and you press Create, Allow, Deny, Answer, Accept plan or Return. Nothing happens without that press; a card that was already answered elsewhere says so. ([#89](https://github.com/Kalmbik61/Parley/pull/89))
+- **Reminders held by the host.** "Check the room in five minutes", "at 15:30" or "every ten minutes": the host fires the check and the island opens with the answer, also after a host restart. ([#89](https://github.com/Kalmbik61/Parley/pull/89))
+- **Telegram.** Settings → Notifications → Telegram: paste a bot token from @BotFather, link your Telegram with a code or QR born on your Mac, and switch on what you want: requests that need you as cards with Allow / Deny / Answer buttons, finished turns, letters and mentions (reply to a letter to answer it), assistant cards. Text and voice messages go to the assistant; audio is transcribed on your Mac by the same Whisper engine. One bot for one owner and one Mac, strangers get no reply, and everything still passes through you. ([#90](https://github.com/Kalmbik61/Parley/pull/90))
+
+### Fixed
+
+- **Opening a PDF in the built-in browser no longer crashes the app.** The viewer's subframe is allowed by the browser guard. ([#88](https://github.com/Kalmbik61/Parley/pull/88))
+
 ## 0.17.0
 
 Connect your own Anthropic-compatible provider (Kimi, MiniMax, Qwen, DeepSeek, OpenRouter, or any address) as a Claude Code session with its own address, key and models. Your regular Claude Code is not affected: its sign-in, settings and history stay where they were.
