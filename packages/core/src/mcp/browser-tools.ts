@@ -356,7 +356,8 @@ export const BROWSER_TOOL_HINTS: Readonly<Record<string, string>> = {
   no_tab: 'Call browser_tabs for the current page ids.',
   tab_hidden: 'The page has not been shown to the human yet: ask them to open its panel, or read browser_console and browser_network, which work on hidden pages.',
   tab_not_loaded: "The page's panel or workspace is not open in the window, or the page crashed: ask the human to open it or reload the page.",
-  human_busy: 'The human is selecting or annotating in that page: wait a little and retry, or ask the human.',
+  // Причину (Select или Annotate в странице, печать человека) называет текст окна; подсказка годится к любой (D2 живых проверок).
+  human_busy: 'The human is busy in Parley (selecting, annotating or typing): wait a few seconds and retry; if it keeps failing, ask the human.',
   stale_ref: 'Take a new browser_snapshot and use its refs.',
   not_loopback: 'An older Parley window answered: ask the human to update Parley.',
 };

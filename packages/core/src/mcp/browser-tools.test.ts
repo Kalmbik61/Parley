@@ -11,7 +11,7 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BROWSER_TOOL_LIMITS, BROWSER_TOOL_OPS, BROWSER_TOOLS, BROWSER_TOOLS_ASK, BROWSER_UNAVAILABLE, createBrowserTools, fence, PAGE_DATA_NOTE, pageData } from './browser-tools.js';
+import { BROWSER_TOOL_HINTS, BROWSER_TOOL_LIMITS, BROWSER_TOOL_OPS, BROWSER_TOOLS, BROWSER_TOOLS_ASK, BROWSER_UNAVAILABLE, createBrowserTools, fence, PAGE_DATA_NOTE, pageData } from './browser-tools.js';
 import { createParleyServer } from './tools.js';
 
 const TOKEN = 'ab'.repeat(32);
@@ -460,6 +460,24 @@ describe('инструменты действий (этап D)', () => {
     );
     expect((await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e4' })).text).toContain('wait');
     expect((await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e4' })).text).toContain('browser_snapshot');
+  });
+
+  it('подсказка к human_busy годится и к Select/Annotate, и к печати человека: причину не придумывает (D2 живых проверок)', async () => {
+    const hint = BROWSER_TOOL_HINTS.human_busy ?? '';
+    expect(hint).toContain('selecting, annotating or typing');
+    expect(hint).not.toContain('in that page:');
+    const client = await connect(await startEndpoint());
+    const messages = [
+      'The human is selecting or annotating on this page: retry in a moment.',
+      "The human is typing in Parley's window: retry in a moment.",
+      'The human started typing while you held the keyboard; nothing of theirs reached the page. Your action may be partly done: check the page, wait a moment and retry.',
+    ];
+    for (const message of messages) answers.push({ status: 200, body: { ok: false, error: { code: 'human_busy', message } } });
+    for (const message of messages) {
+      const answer = await call(client, 'browser_action', { tab: 't1', action: 'type', text: 'Ann' });
+      expect(answer.isError).toBe(true);
+      expect(answer.text).toBe(`human_busy: ${message} ${hint}`);
+    }
   });
 });
 
