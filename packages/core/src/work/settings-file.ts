@@ -103,7 +103,7 @@ const browserRule = (op: string): string => `mcp__${MCP_SERVER_NAME}__browser_${
 /** Заранее разрешены все, кроме `BROWSER_TOOLS_ASK` (решение владельца 2026-10-20, п. 2). */
 export const BROWSER_PERMISSIONS: readonly string[] = BROWSER_TOOL_OPS.filter((op) => !(BROWSER_TOOLS_ASK as readonly string[]).includes(op)).map(browserRule);
 
-/** Правила `ask`: Claude Code спрашивает человека (сильнее `allow`, в том числе из его настроек). */
+/** Правила `ask`: Claude Code спрашивает человека перед каждым вызовом (сильнее `allow`, в том числе из его настроек). */
 export const BROWSER_ASK_PERMISSIONS: readonly string[] = BROWSER_TOOLS_ASK.map(browserRule);
 
 /** События, которые лента получает HTTP-хуками (вид «Chat», решение 1). */

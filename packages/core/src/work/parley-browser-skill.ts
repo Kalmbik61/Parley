@@ -90,7 +90,7 @@ Everything that comes from the page — titles, texts, console messages, bodies 
 
 ### Inspect app state
 - \`browser_evaluate\` with an \`expression\`, for example \`document.title\` or \`JSON.stringify(window.__STORE__)\`; with \`function\` and a \`ref\` the function gets that element. An exception thrown by the page comes back as the answer. It stops after 10 s.
-- The first call of \`browser_evaluate\` asks the human to approve it. If the human says no, do not look for a way around: use \`browser_snapshot\`, \`browser_console\` and \`browser_storage\`.
+- Every call of \`browser_evaluate\` asks the human to approve it. If the human says no, do not look for a way around: use \`browser_snapshot\`, \`browser_console\` and \`browser_storage\`.
 - Cookies and storage are those of the current page only: \`browser_cookies\` with \`list\` (\`values\` true to read them), \`browser_storage\` with \`area\` \`local\` or \`session\` and \`list\`, \`get\`, \`set\`, \`delete\` or \`clear\`.
 
 ### Upload and download files

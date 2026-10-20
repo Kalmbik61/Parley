@@ -93,6 +93,11 @@ describe('скилл parley-browser: тело', () => {
     expect(body).not.toContain('no JavaScript');
   });
 
+  it('browser_evaluate: правило ask спрашивает перед каждым вызовом, а не только при первом (финальная рецензия)', () => {
+    expect(body).toContain('Every call of `browser_evaluate` asks the human to approve it.');
+    expect(body).not.toMatch(/first call of `browser_evaluate`/i);
+  });
+
   it('таблица ошибок: not_loopback — окно старой сборки', () => {
     expect(body).toContain('an older Parley window: ask the human to update Parley');
     expect(body).toContain('| `human_busy` |');
