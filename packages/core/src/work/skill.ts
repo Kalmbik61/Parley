@@ -48,6 +48,7 @@ This is a stub. The full guide lives in Parley itself and matches the version of
 
 - The session has the \`parley\` MCP server (tools \`get_map\`, \`report\`, \`send_message\`, \`create_room\`, \`propose_decision\`, \`add_to_room\` and others) — you are working inside a Parley workspace.
 - You need to coordinate: the workspace map, inviting existing sessions, messages, rooms, a decision for the human, a report.
+- For the built-in browser (open, read and drive pages your human sees) load the parley-browser skill.
 - There is no \`parley\` server — the skill is not for you: do nothing with it and do not invent tools.
 
 ## How to load the guide

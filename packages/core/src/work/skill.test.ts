@@ -85,6 +85,10 @@ describe('заглушка скилла parley: тело', () => {
     expect(body).not.toContain('created by the human');
   });
 
+  it('отсылает к скиллу parley-browser за встроенным браузером', () => {
+    expect(body).toContain('load the parley-browser skill');
+  });
+
   it('отсылает к read_guide и не пересказывает гид', () => {
     expect(body).toContain('`read_guide`');
     expect(body).toMatch(/Do not retell the guide from memory/);

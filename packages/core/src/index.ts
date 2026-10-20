@@ -358,6 +358,7 @@ export {
 } from './work/find-binary.js';
 export { GUIDE } from './work/guide.js';
 export { SKILL_MD } from './work/skill.js';
+export { PARLEY_BROWSER_SKILL_MD, PARLEY_BROWSER_SKILL_NAME } from './work/parley-browser-skill.js';
 export { installAgentSkill } from './work/skill-install.js';
 export type {
   SkillInstallOptions,
