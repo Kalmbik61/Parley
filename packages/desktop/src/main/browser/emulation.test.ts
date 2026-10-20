@@ -220,3 +220,15 @@ describe('withTemporary — снимок агента в чужом размер
     warn.mockRestore();
   });
 });
+
+describe('fitOf (ввод агента, этап D)', () => {
+  it('Fit — null; пресет — scale вписывания и mobile пресета', async () => {
+    const send = vi.fn(async () => ({}));
+    const emulation = createEmulation({ inspector: { send } });
+    expect(emulation.fitOf(7)).toBeNull();
+    await emulation.set(7, { preset: 'mobile-m', rotated: false, dpr: 2 }, { width: 300, height: 1000 });
+    expect(emulation.fitOf(7)).toEqual({ scale: 0.8, mobile: true });
+    await emulation.set(7, null, { width: 300, height: 1000 });
+    expect(emulation.fitOf(7)).toBeNull();
+  });
+});
