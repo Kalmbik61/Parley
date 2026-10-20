@@ -1,0 +1,136 @@
+// packages/desktop/src/renderer/browser/agent-activity.test.ts
+/**
+ * Состояние значка и точки агента и одалживание фокуса (этап D, задача 20): чистое состояние по событиям
+ * `browser:agent-activity` и перенос фокуса на `<webview>` с возвратом человеку (Фокус ревью 1 и 2).
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AGENT_LIMITS } from '@parley/protocol';
+import { agentActivityOf, createFocusLender, isLendingFocus, resetAgentActivity, applyAgentActivity } from './agent-activity.js';
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  resetAgentRegistryStub();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  document.body.innerHTML = '';
+});
+
+function resetAgentRegistryStub(): void {
+  resetAgentActivity();
+}
+
+describe('значок и точка по событиям', () => {
+  it('start — значок с ярлыком; end — значок ещё guardTailMs; recent — последние badgeOps операций', () => {
+    for (let i = 1; i <= AGENT_LIMITS.badgeOps + 2; i += 1) {
+      applyAgentActivity({ webContentsId: 7, session: 'S01', op: `op${i}`, phase: 'start' });
+      applyAgentActivity({ webContentsId: 7, session: 'S01', op: `op${i}`, phase: 'end' });
+    }
+    applyAgentActivity({ webContentsId: 7, session: 'S01', op: 'last', phase: 'start' });
+    const now = agentActivityOf(7);
+    expect(now.acting?.session).toBe('S01');
+    expect(now.acting?.recent).toHaveLength(AGENT_LIMITS.badgeOps);
+    expect(now.acting?.recent.at(-1)).toBe('last');
+    applyAgentActivity({ webContentsId: 7, session: 'S01', op: 'last', phase: 'end' });
+    expect(agentActivityOf(7).acting).not.toBeNull();
+    vi.advanceTimersByTime(AGENT_LIMITS.guardTailMs);
+    expect(agentActivityOf(7).acting).toBeNull();
+  });
+
+  it('новая операция в хвосте отменяет снятие значка', () => {
+    applyAgentActivity({ webContentsId: 7, session: 'S01', op: 'a', phase: 'start' });
+    applyAgentActivity({ webContentsId: 7, session: 'S01', op: 'a', phase: 'end' });
+    vi.advanceTimersByTime(AGENT_LIMITS.guardTailMs - 100);
+    applyAgentActivity({ webContentsId: 7, session: 'S01', op: 'b', phase: 'start' });
+    vi.advanceTimersByTime(500);
+    expect(agentActivityOf(7).acting).not.toBeNull();
+  });
+
+  it('step с point — точка на clickDotMs; point уже в пикселях <webview>', () => {
+    applyAgentActivity({ webContentsId: 7, session: 'S01', op: 'action', phase: 'start' });
+    applyAgentActivity({ webContentsId: 7, session: 'S01', op: 'action', phase: 'step', point: { x: 12, y: 34 } });
+    expect(agentActivityOf(7).dot).toEqual({ x: 12, y: 34 });
+    vi.advanceTimersByTime(AGENT_LIMITS.clickDotMs);
+    expect(agentActivityOf(7).dot).toBeNull();
+  });
+
+  it('гость без событий — значка и точки нет', () => {
+    expect(agentActivityOf(99)).toEqual({ acting: null, dot: null });
+    expect(agentActivityOf(null)).toEqual({ acting: null, dot: null });
+  });
+});
+
+describe('одалживание фокуса', () => {
+  it('одолжить фокус (Фокус ревью 1): фокус на <webview>, ready(id, true), флаг одалживания; restore — фокус прежнему элементу, флаг снят', () => {
+    const chat = document.createElement('textarea');
+    document.body.append(chat);
+    chat.focus();
+    const view = document.createElement('div');
+    view.tabIndex = 0;
+    document.body.append(view);
+    const ready = vi.fn();
+    const lender = createFocusLender({ view: () => view, webContentsId: 7, ready });
+    lender.borrow('f-1');
+    expect(document.activeElement).toBe(view);
+    expect(ready).toHaveBeenCalledWith('f-1', true);
+    expect(isLendingFocus(7)).toBe(true);
+    lender.restore();
+    expect(document.activeElement).toBe(chat);
+    expect(isLendingFocus(7)).toBe(false);
+  });
+
+  it('скрытая страница (Фокус ревью 2, решение владельца 8): видимость не проверяется — фокус встал, ready(id, true), restore вернул его человеку; <webview> нет — ready(id, false), фокус человека на месте', () => {
+    const chat = document.createElement('textarea');
+    document.body.append(chat);
+    chat.focus();
+    const panel = document.createElement('div');
+    panel.style.visibility = 'hidden';
+    document.body.append(panel);
+    const view = document.createElement('div');
+    view.tabIndex = 0;
+    panel.append(view);
+    const ready = vi.fn();
+    const lender = createFocusLender({ view: () => view, webContentsId: 7, ready });
+    lender.borrow('f-2');
+    expect(ready).toHaveBeenCalledWith('f-2', true);
+    lender.restore();
+    expect(document.activeElement).toBe(chat);
+    createFocusLender({ view: () => null, webContentsId: 8, ready }).borrow('f-3');
+    expect(ready).toHaveBeenCalledWith('f-3', false);
+    expect(document.activeElement).toBe(chat);
+    expect(isLendingFocus(8)).toBe(false);
+  });
+
+  it('restore не трогает фокус, если человек уже ушёл с <webview> сам', () => {
+    const chat = document.createElement('textarea');
+    const other = document.createElement('input');
+    document.body.append(chat, other);
+    chat.focus();
+    const view = document.createElement('div');
+    view.tabIndex = 0;
+    document.body.append(view);
+    const lender = createFocusLender({ view: () => view, webContentsId: 7, ready: vi.fn() });
+    lender.borrow('f-4');
+    other.focus();
+    const spy = vi.spyOn(chat, 'focus');
+    lender.restore();
+    expect(spy).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(other);
+    expect(isLendingFocus(7)).toBe(false);
+  });
+
+  it('dispose возвращает фокус и снимает флаг', () => {
+    const chat = document.createElement('textarea');
+    document.body.append(chat);
+    chat.focus();
+    const view = document.createElement('div');
+    view.tabIndex = 0;
+    document.body.append(view);
+    const lender = createFocusLender({ view: () => view, webContentsId: 7, ready: vi.fn() });
+    lender.borrow('f-5');
+    lender.dispose();
+    expect(document.activeElement).toBe(chat);
+    expect(isLendingFocus(7)).toBe(false);
+  });
+});

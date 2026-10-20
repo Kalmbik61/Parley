@@ -23,10 +23,11 @@ import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
+import { resetAgentActivity } from '../agent-activity.js';
 import { useAnnotateStore } from '../annotate/store.js';
 import { resetDeliveryForTests } from '../context/deliver.js';
 import { useDevtoolsStore } from '../devtools/store.js';
-import { requestAddressFocus, useBrowserStore } from '../store.js';
+import { requestAddressFocus, toggleBrowserMode, useBrowserStore } from '../store.js';
 import { panelAnchor } from './anchor.js';
 import { resetAgentRegistry } from './agent-registry.js';
 import { panelRuntimeKey, usePanelRuntime } from './runtime.js';
@@ -102,6 +103,7 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   bridge = createFakeBridge();
   resetAgentRegistry();
+  resetAgentActivity();
   resetDeliveryForTests();
   vi.mocked(toast).mockClear();
   useWorksStore.setState({
@@ -485,5 +487,101 @@ describe('PanelSurface — страница панели как браузер',
     fireEvent.pointerDown(screen.getByTestId('browser-panel-strip'));
     expect(usePanelRuntime.getState().usedAt[panelRuntimeKey(WORK_KEY, CHAT)]).toBe(5_000);
     vi.useRealTimers();
+  });
+});
+
+describe('PanelSurface — управление агента в окне (этап D, задача 20)', () => {
+  const act1 = (phase: 'start' | 'step' | 'end', extra: Record<string, unknown> = {}, webContentsId = 7): void =>
+    act(() => bridge.emitAgentActivity({ webContentsId, session: 'S02', op: 'action', phase, ...extra }));
+  const mount = (): FakeWebview => {
+    setPanel(CHAT, ['http://localhost:3000/']);
+    showHost(CHAT);
+    renderLayer();
+    const view = arm(webview(P1), 7);
+    fire(view, 'dom-ready');
+    return view;
+  };
+  const field = (): HTMLElement => surface(P1)?.querySelector('[data-testid="browser-field"]') as HTMLElement;
+
+  it('страница сообщает humanBusy при Select и Annotate; выключили — запись без поля (false)', () => {
+    mount();
+    act(() => toggleBrowserMode(P1, 'select'));
+    expect(registrations().at(-1)).toMatchObject({ pageId: P1, webContentsId: 7, humanBusy: true });
+    act(() => toggleBrowserMode(P1, 'select'));
+    const last = registrations().at(-1) as { humanBusy?: boolean; pageId: string };
+    expect(last.pageId).toBe(P1);
+    expect(last.humanBusy).toBeUndefined();
+  });
+
+  it('агент поставил размер — он ложится в раскладку страницы панели, как выбор человека; чужой гость не трогает', () => {
+    mount();
+    const spec = { preset: 'mobile-m', rotated: false, dpr: 2 } as const;
+    act(() => bridge.emitAgentResize({ webContentsId: 9, viewport: spec }));
+    expect(panelNow()?.pages[0]?.viewport).toBeUndefined();
+    act(() => bridge.emitAgentResize({ webContentsId: 7, viewport: spec }));
+    expect(panelNow()?.pages[0]?.viewport).toEqual(spec);
+  });
+
+  it('значок: start — ярлык сессии, Stop — пауза панели и agentStop(webContentsId)', () => {
+    mount();
+    expect(screen.queryByTestId('agent-badge')).toBeNull();
+    act1('start');
+    expect(screen.getByTestId('agent-badge').textContent).toContain('S02');
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(panelNow()?.paused).toBe(true);
+    expect(bridge.browserCalls.filter((call) => call.method === 'agentStop')).toEqual([{ method: 'agentStop', args: [7] }]);
+  });
+
+  it('рамка подсвечена, пока агент действует; точка клика — над <webview> в (x, y) без stage', () => {
+    mount();
+    expect(field().getAttribute('data-agent-acting')).toBeNull();
+    act1('start');
+    expect(field().getAttribute('data-agent-acting')).toBe('true');
+    act1('step', { point: { x: 40, y: 25 } });
+    const dot = screen.getByTestId('agent-dot');
+    expect(dot.style.left).toBe('40px');
+    expect(dot.style.top).toBe('25px');
+  });
+
+  it('просьба о фокусе: фокус на <webview>, agentFocusReady(id, true); end возвращает его человеку (Chat)', () => {
+    const view = mount();
+    view.tabIndex = 0;
+    const chat = document.createElement('textarea');
+    document.body.append(chat);
+    chat.focus();
+    act1('step', { focus: { id: 'f-1' } });
+    expect(document.activeElement).toBe(view);
+    expect(bridge.browserCalls.filter((call) => call.method === 'agentFocusReady')).toEqual([{ method: 'agentFocusReady', args: ['f-1', true] }]);
+    act1('end');
+    expect(document.activeElement).toBe(chat);
+    chat.remove();
+  });
+
+  it('пока окно одалживает фокус, focusin на <webview> не делает вид хозяина активным (рецензия M1); клик человека делает', () => {
+    const view = mount();
+    view.tabIndex = 0;
+    const focusSpy = vi.spyOn(useLayoutStore.getState(), 'apply');
+    act1('step', { focus: { id: 'f-2' } });
+    fireEvent.focusIn(view);
+    expect(focusSpy).not.toHaveBeenCalled();
+    act1('end');
+    fireEvent.focusIn(view);
+    expect(focusSpy).toHaveBeenCalled();
+  });
+
+  it('точка клика гаснет через clickDotMs', () => {
+    vi.useFakeTimers();
+    try {
+      mount();
+      act1('start');
+      act1('step', { point: { x: 1, y: 2 } });
+      expect(screen.getByTestId('agent-dot')).toBeTruthy();
+      act(() => {
+        vi.advanceTimersByTime(AGENT_LIMITS.clickDotMs);
+      });
+      expect(screen.queryByTestId('agent-dot')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

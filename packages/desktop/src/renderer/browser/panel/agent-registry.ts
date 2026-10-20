@@ -20,6 +20,8 @@ interface Sent {
   owner: BrowserOwner;
   webContentsId: number | null;
   visible: boolean;
+  /** У страницы включён Select или Annotate (этап D): агент получает `human_busy`. */
+  humanBusy: boolean;
 }
 /** Что main уже знает: страницы по `workKey` и `pageId`, паузы по `workKey` и ключу хозяина. */
 const pages = new Map<string, Sent>();
@@ -56,14 +58,23 @@ function ensureHello(bridge: ParleyBridge): void {
 }
 
 /** Страница панели: гость и видимость от её поверхности. Тот же отчёт повторно не шлётся. */
-export function reportAgentPage(bridge: ParleyBridge, workKey: string, owner: BrowserOwner, pageId: string, webContentsId: number | null, visible: boolean): void {
+export function reportAgentPage(
+  bridge: ParleyBridge,
+  workKey: string,
+  owner: BrowserOwner,
+  pageId: string,
+  webContentsId: number | null,
+  visible: boolean,
+  humanBusy = false,
+): void {
   const key = `${workKey}\n${pageId}`;
   const known = pages.get(key);
-  if (known?.webContentsId === webContentsId && known.visible === visible) return;
+  if (known?.webContentsId === webContentsId && known.visible === visible && known.humanBusy === humanBusy) return;
   ensureHello(bridge);
-  const sent: Sent = { workKey, owner, webContentsId, visible };
+  const sent: Sent = { workKey, owner, webContentsId, visible, humanBusy };
   pages.set(key, sent);
-  dispatch(bridge, { kind: 'page', generation, webContentsId, workKey, owner, pageId, visible }, () => {
+  // Нет поля `humanBusy` — false (контракт записи): занятость уходит полем только когда она есть.
+  dispatch(bridge, { kind: 'page', generation, webContentsId, workKey, owner, pageId, visible, ...(humanBusy ? { humanBusy } : {}) }, () => {
     // Запись не дошла: забыть её, если за это время её не заменили, — следующий sync пошлёт снова.
     if (pages.get(key) !== sent) return;
     pages.delete(key);
@@ -98,7 +109,7 @@ function sync(bridge: ParleyBridge, state: LayoutState): void {
         if (pages.has(pageKey)) continue;
         const retry = failed.get(pageKey);
         failed.delete(pageKey);
-        reportAgentPage(bridge, workKey, owner, page.id, retry?.webContentsId ?? null, retry?.visible ?? false);
+        reportAgentPage(bridge, workKey, owner, page.id, retry?.webContentsId ?? null, retry?.visible ?? false, retry?.humanBusy ?? false);
       }
     }
   }

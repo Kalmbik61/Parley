@@ -65,6 +65,7 @@ import { DevtoolsPanel } from './devtools/DevtoolsPanel.js';
 import { devtoolsCounters, EMPTY_DEVTOOLS, useDevtoolsStore } from './devtools/store.js';
 import { useDevtoolsFeed } from './devtools/use-devtools-feed.js';
 import { FindBar } from './FindBar.js';
+import { applyAgentActivity, createFocusLender, isLendingFocus, useAgentActivity } from './agent-activity.js';
 import { reportAgentPage } from './panel/agent-registry.js';
 import { moveTabToPanel, pausePanel } from './panel/actions.js';
 import { MoveToMenu } from './panel/MoveToMenu.js';
@@ -512,13 +513,48 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
   // `<webview>` кадр не рисуется, у `opacity: 0` — рисуется. Через `CAPTURE_READY_FRAMES` кадров окно подтверждает `capture.id`,
   // и main снимает. `end`, смена гостя или сторож на срок операции возвращают размер человека.
   const [agentCapture, setAgentCapture] = useState<{ width: number; height: number; id: string } | null>(null);
+  // Одолженный фокус (этап D, путь А): окно ставит его на `<webview>` по просьбе main и возвращает человеку по концу операции.
+  const lenderRef = useRef<ReturnType<typeof createFocusLender> | null>(null);
+  useEffect(() => {
+    const id = state.webContentsId;
+    if (id === null) return undefined;
+    const lender = createFocusLender({
+      view: () => viewRef.current,
+      webContentsId: id,
+      ready: (requestId, ok) => {
+        bridge.browser.agentFocusReady(requestId, ok).catch((error: unknown) => console.warn('[parley] agentFocusReady failed', error));
+      },
+    });
+    lenderRef.current = lender;
+    return () => {
+      lender.dispose();
+      if (lenderRef.current === lender) lenderRef.current = null;
+    };
+  }, [bridge, state.webContentsId]);
+  // Агент поставил размер страницы (`browser:agent-resize`): он ложится в раскладку, как выбор человека.
+  const setViewportRef = useRef<(next: ViewportSpec | null) => void>(() => undefined);
+  useEffect(
+    () =>
+      bridge.browser.onAgentResize((event) => {
+        const own = useBrowserStore.getState().tabs[tabId]?.webContentsId ?? null;
+        if (own !== null && event.webContentsId === own) setViewportRef.current(event.viewport);
+      }),
+    [bridge, tabId],
+  );
+  const agent = useAgentActivity(state.webContentsId);
   useEffect(
     () =>
       bridge.browser.onAgentActivity((event) => {
         const own = useBrowserStore.getState().tabs[tabId]?.webContentsId ?? null;
         if (own === null || event.webContentsId !== own) return;
-        if (event.phase === 'end') setAgentCapture(null);
-        else if (event.capture !== undefined) setAgentCapture(event.capture);
+        applyAgentActivity(event);
+        if (event.phase === 'end') {
+          setAgentCapture(null);
+          lenderRef.current?.restore();
+        } else {
+          if (event.capture !== undefined) setAgentCapture(event.capture);
+          if (event.focus !== undefined) lenderRef.current?.borrow(event.focus.id);
+        }
       }),
     [bridge, tabId],
   );
@@ -612,12 +648,17 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
     }
     patchPage({ viewport: next });
   };
+  setViewportRef.current = setViewport;
 
   // Поверхность — сосед тела группы, а не потомок: клик в строку сама делает свою вкладку активной. Страница панели
   // вкладки не имеет: вид хозяина фокусирует вся панель (`PanelSurface`).
   const focusOwnTab = (): void => {
     if (place.kind !== 'tab') return;
     useLayoutStore.getState().apply(workKey, (layout) => focusTab(layout, tabId));
+  };
+  // Фокус, одолженный окном по просьбе агента, вкладку активной не делает (рецензия M1).
+  const focusOwnTabUnlessLending = (): void => {
+    if (!isLendingFocus(state.webContentsId)) focusOwnTab();
   };
 
   // «⋯ → Move to browser of…» (спека браузера 3.10): адрес и размер уходят в панель хозяина, вкладка закрывается.
@@ -635,17 +676,24 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
   });
   useEffect(() => {
     if (panelOwner === null || panelPageId === null) return;
-    reportAgentPage(bridge, workKey, panelOwner, panelPageId, state.webContentsId, visible);
-  }, [bridge, workKey, panelOwner, panelPageId, state.webContentsId, visible]);
+    reportAgentPage(bridge, workKey, panelOwner, panelPageId, state.webContentsId, visible, state.mode !== 'off');
+  }, [bridge, workKey, panelOwner, panelPageId, state.webContentsId, visible, state.mode]);
   // Панель выгружена, а страница в раскладке жива — main помнит её без гостя. Закрытую страницу воскрешать нельзя:
   // `gone` уже ушёл от подписчика на раскладки, раньше размонтирования.
   useEffect(() => {
     if (panelOwner === null || panelPageId === null) return;
     return () => {
       const layout = useLayoutStore.getState().layouts[workKey];
-      if (layout !== undefined && ownerOfPage(layout, panelPageId) !== null) reportAgentPage(bridge, workKey, panelOwner, panelPageId, null, false);
+      if (layout !== undefined && ownerOfPage(layout, panelPageId) !== null) reportAgentPage(bridge, workKey, panelOwner, panelPageId, null, false, false);
     };
   }, [bridge, workKey, panelOwner, panelPageId]);
+
+  // Stop на значке: пауза панели (агент не вернётся сам) и обрыв идущих операций (main).
+  const stopAgent = (): void => {
+    if (place.kind !== 'panel') return;
+    pausePanel(workKey, place.owner, true);
+    if (state.webContentsId !== null) bridge.browser.agentStop(state.webContentsId).catch((error: unknown) => console.warn('[parley] agentStop failed', error));
+  };
 
   const live = src !== null && state.webContentsId !== null;
   const panel = panelHeight(devtoolsHeight, rootHeight);
@@ -663,7 +711,7 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
       className={cn('absolute flex flex-col overflow-hidden bg-background', place.kind === 'panel' && 'inset-0')}
       style={visible ? { visibility: 'visible' } : agentCapture !== null ? { visibility: 'visible', opacity: 0, pointerEvents: 'none' } : { visibility: 'hidden' }}
       onPointerDownCapture={focusOwnTab}
-      onFocusCapture={focusOwnTab}
+      onFocusCapture={focusOwnTabUnlessLending}
       onKeyDown={(event) => {
         // Esc при фокусе в окне (после клика по ⌖ или ✎ он на кнопке): в странице Esc ловит сам скрипт. Esc, который уже
         // закрыл меню Radix (его события идут по дереву React сквозь портал, в том числе из меню «To») или полосу поиска,
@@ -718,9 +766,16 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
           : {
               paused: panelPaused,
               onPause: (next: boolean) => pausePanel(workKey, place.owner, next),
+              agent: agent.acting,
+              onAgentStop: stopAgent,
             })}
       />
-      <div ref={fieldRef} data-testid="browser-field" className={cn('relative min-h-0 flex-1 overflow-hidden', stage !== null && 'bg-muted')}>
+      <div
+        ref={fieldRef}
+        data-testid="browser-field"
+        data-agent-acting={place.kind === 'panel' && agent.acting !== null ? 'true' : undefined}
+        className={cn('relative min-h-0 flex-1 overflow-hidden', stage !== null && 'bg-muted', place.kind === 'panel' && agent.acting !== null && 'ring-2 ring-inset ring-primary')}
+      >
         {src === null ? (
           <div data-testid="browser-placeholder" className="h-full w-full bg-background" />
         ) : (
@@ -743,6 +798,14 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
           <div data-testid="agent-capture" className="pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 rounded-md border border-border bg-card px-2 py-0.5 text-xs text-muted-foreground shadow-sm">
             {S.browser.panel.agentCapture(agentCapture.width, agentCapture.height)}
           </div>
+        ) : null}
+        {place.kind === 'panel' && agent.dot !== null ? (
+          // Точка клика агента: рисует окно поверх `<webview>`, не скрипт в госте. Точка уже в пикселях `<webview>`.
+          <div
+            data-testid="agent-dot"
+            className="pointer-events-none absolute z-10 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary ring-2 ring-background"
+            style={{ left: (stage?.left ?? 0) + agent.dot.x, top: (stage?.top ?? 0) + agent.dot.y }}
+          />
         ) : null}
         {stage === null ? null : (
           <div

@@ -20,7 +20,9 @@ import { ownerKey, ownerTabId } from '../../layout/ids.js';
 import { useLayoutStore } from '../../layout/store.js';
 import { focusTab } from '../../layout/tree.js';
 import type { SendWithToastDeps } from '../../terminal/send.js';
+import { isLendingFocus } from '../agent-activity.js';
 import { BrowserSurface } from '../BrowserSurface.js';
+import { useBrowserStore } from '../store.js';
 import { panelAnchor } from './anchor.js';
 import { PanelStrip } from './PanelStrip.js';
 import { panelRuntimeKey, usePanelRuntime } from './runtime.js';
@@ -65,6 +67,13 @@ export function PanelSurface({ workKey, owner, panel, visible, bridge, entry, se
     useLayoutStore.getState().apply(workKey, (layout) => focusTab(layout, ownerTabId(owner)));
   };
 
+  // Фокус, который окно одолжило гостю по просьбе агента, вид хозяина активным не делает (рецензия M1); клик человека — делает.
+  const focusOwnerUnlessLending = (): void => {
+    const tabs = useBrowserStore.getState().tabs;
+    // Агент вводит и в скрытые страницы панели (решение владельца 8): смотрим гостей всех её страниц.
+    if (!panel.pages.some((page) => isLendingFocus(tabs[page.id]?.webContentsId ?? null))) focusOwner();
+  };
+
   return (
     <div
       ref={rootRef}
@@ -77,7 +86,7 @@ export function PanelSurface({ workKey, owner, panel, visible, bridge, entry, se
         usePanelRuntime.getState().touch(runtimeKey);
         focusOwner();
       }}
-      onFocusCapture={focusOwner}
+      onFocusCapture={focusOwnerUnlessLending}
     >
       <PanelStrip workKey={workKey} owner={owner} panel={panel} entry={entry} narrow={narrow} />
       <div className="relative min-h-0 flex-1">
