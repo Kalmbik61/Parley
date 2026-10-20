@@ -39,7 +39,8 @@ function patch(id: number, next: Partial<AgentView>): void {
   useActivityStore.setState((state) => {
     const merged: AgentView = { ...(state.byId[id] ?? EMPTY), ...next };
     if (merged.acting === null && merged.dot === null) {
-      const { [id]: _gone, ...rest } = state.byId;
+      const rest = { ...state.byId };
+      delete rest[id];
       return { byId: rest };
     }
     return { byId: { ...state.byId, [id]: merged } };
