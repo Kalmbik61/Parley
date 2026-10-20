@@ -53,6 +53,7 @@ const decisionKey = (entry: WorkEntry, roomId: string): string => `${entry.proje
 function closedAs(entry: WorkEntry, roomId: string): 'accepted' | 'returned' | 'gone' {
   const last = [...entry.map.messages].reverse().find((message) => message.roomId === roomId && message.from === 'human');
   if (last === undefined) return 'gone';
+  // 'Completion accepted.' — литерал из core/src/work/proposals.ts (acceptProposal): константы для него в core нет.
   if (last.text === ACCEPTED_LETTER || last.text === 'Completion accepted.') return 'accepted';
   return last.text.startsWith(RETURNED_LETTER) ? 'returned' : 'gone';
 }

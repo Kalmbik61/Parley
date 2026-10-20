@@ -57,6 +57,9 @@ describe('classify', () => {
   it('/start без кода → code: null', () => {
     expect(classify(message({ text: '/start@parley_bot' }), owner, pending)).toMatchObject({ kind: 'start', code: null });
   });
+  it('/start владельца без живого кода — команда start (справка), а не вопрос помощнику', () => {
+    expect(classify(message({ text: '/start' }), owner, null)).toEqual({ kind: 'command', name: 'start', messageId: 11 });
+  });
   it('/start без pendingLink и без владельца → no-owner', () => {
     expect(classify(message({ text: '/start ABCD' }), null, null)).toEqual({ kind: 'ignored', reason: 'no-owner' });
   });

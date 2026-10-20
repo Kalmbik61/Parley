@@ -4,14 +4,15 @@ import type { PendingLink, TelegramOwner, TgFrom, TgUpdate } from './types.js';
 
 export type Inbound =
   | { kind: 'start'; code: string | null; from: TgFrom; chatId: number }
-  | { kind: 'command'; name: 'status' | 'new' | 'help' | 'skip'; messageId: number }
+  | { kind: 'command'; name: 'status' | 'new' | 'help' | 'skip' | 'start'; messageId: number }
   | { kind: 'text'; text: string; messageId: number; replyTo: number | null }
   | { kind: 'voice'; fileId: string; duration: number; messageId: number }
   | { kind: 'callback'; id: string; data: string; messageId: number | null }
   | { kind: 'foreign-callback'; id: string }
   | { kind: 'ignored'; reason: 'foreign' | 'group' | 'edited' | 'unsupported' | 'no-owner' };
 
-const COMMANDS = ['status', 'new', 'help', 'skip'] as const;
+/** `start` без живого кода привязки (кнопка START клиента) — не вопрос помощнику, а справка. */
+const COMMANDS = ['status', 'new', 'help', 'skip', 'start'] as const;
 
 /** `/name`, `/name@bot` и необязательный хвост; имя в нижнем регистре. */
 function parseCommand(text: string): { name: string; rest: string } | null {

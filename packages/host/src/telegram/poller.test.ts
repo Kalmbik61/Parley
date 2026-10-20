@@ -98,6 +98,17 @@ describe('createPoller', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('409 про webhook: останов и подсказка про webhook, а не conflict', async () => {
+    const { poller, onStatus } = setup([
+      new BotApiError('getUpdates', 409, "Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first", null),
+    ]);
+    poller.start({ skipBacklog: false });
+    await flush();
+    expect(onStatus).toHaveBeenCalledWith('error', 'This bot has a webhook — remove it with @BotFather or deleteWebhook');
+    expect(onStatus).not.toHaveBeenCalledWith('conflict', expect.anything());
+    expect(poller.running()).toBe(false);
+  });
+
   it('401: останов и текст про токен', async () => {
     const { poller, onStatus } = setup([new BotApiError('getUpdates', 401, 'Unauthorized', null)]);
     poller.start({ skipBacklog: false });

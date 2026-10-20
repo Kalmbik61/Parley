@@ -72,6 +72,11 @@ export function createPoller(deps: {
         if (mine.signal.aborted) return;
         const status = error instanceof BotApiError ? error.status : 0;
         const description = error instanceof BotApiError ? error.description : error instanceof Error ? error.message : String(error);
+        if (status === 409 && /webhook/i.test(description)) {
+          if (controller === mine) halt();
+          deps.onStatus('error', 'This bot has a webhook — remove it with @BotFather or deleteWebhook');
+          return;
+        }
         if (status === 409) {
           if (controller === mine) halt();
           deps.onStatus('conflict', description);

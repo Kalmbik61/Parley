@@ -6,12 +6,15 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG, telegramBotId, telegramTokenFingerprint } from '@parley/core';
 import type { FeedCard, FeedItem, ParleyConfig, WorkEntry } from '@parley/core';
-import type { AssistantSettings, AssistantState, SessionRef, WorksSnapshot } from '@parley/protocol';
+import type { AssistantProposal, AssistantSettings, AssistantState, SessionRef, WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
 import { HostError } from '../errors.js';
 import { createTelegramService } from './service.js';
 import type { TelegramService, TelegramServiceDeps } from './service.js';
 import { T } from './texts.js';
+
+const voiceMock = vi.hoisted(() => ({ transcribe: vi.fn() }));
+vi.mock('./voice.js', () => ({ createVoiceTranscriber: () => ({ transcribe: voiceMock.transcribe }) }));
 
 const TOKEN = '123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const CHAT = 5001;
@@ -21,6 +24,7 @@ const WHERE = 'Parley · my_harnas';
 const SETTINGS: AssistantSettings = { enabled: true, provider: 'claude', model: null, language: 'en', voiceModel: null };
 const IDLE_STATE: AssistantState = { phase: 'idle', detail: null, question: null, answer: '', mood: 'calm', proposal: null, outcome: null, error: null, turn: 0 };
 const AT = '2026-10-20T10:00:00Z';
+const PROPOSAL = { id: 'p1', target: 'Backend', where: WHERE, text: 'run the tests', wake: false } as unknown as AssistantProposal;
 
 const PERMISSION = {
   kind: 'permission', id: 'c1', cardId: 'c1', at: AT, state: 'pending', toolUseId: 't1', toolName: 'Bash', toolInput: { command: 'ls' }, suggestions: [{ type: 'addRules' }], notified: false,
@@ -66,7 +70,8 @@ let logs: string[];
 let service: TelegramService;
 let host: { broadcast: ReturnType<typeof vi.fn>; hold: ReturnType<typeof vi.fn>; log: any };
 let feed: { snapshot: ReturnType<typeof vi.fn>; decide: ReturnType<typeof vi.fn>; subscribe: ReturnType<typeof vi.fn>; unsubscribe: ReturnType<typeof vi.fn> };
-let assistant: { ask: ReturnType<typeof vi.fn>; [key: string]: unknown };
+let assistant: { ask: ReturnType<typeof vi.fn>; decide: ReturnType<typeof vi.fn>; reset: ReturnType<typeof vi.fn>; [key: string]: unknown };
+let assistantListener: ((next: AssistantState) => void) | null;
 let sendLetter: ReturnType<typeof vi.fn>;
 let resolveRoomProposal: ReturnType<typeof vi.fn>;
 let secret: { read: ReturnType<typeof vi.fn>; write: ReturnType<typeof vi.fn>; clear: ReturnType<typeof vi.fn> };
@@ -161,6 +166,7 @@ const setActivity = (value: string): void => {
   live['s-01'] = value;
   activityListener?.(REF, { activity: { activity: value }, metrics: null });
 };
+const emitAssistant = (patch: Partial<AssistantState>): void => assistantListener?.({ ...IDLE_STATE, origin: 'telegram', ...patch });
 const setWorks = (next: WorksSnapshot): void => {
   const previous = snapshot;
   snapshot = next;
@@ -231,6 +237,8 @@ beforeEach(async () => {
   worksListener = null;
   activityListener = null;
   feedClient = null;
+  assistantListener = null;
+  voiceMock.transcribe.mockReset();
   logs = [];
   host = { broadcast: vi.fn(), hold: vi.fn(), log: { info: () => {}, warn: () => {}, error: () => {} } };
   feed = {
@@ -249,7 +257,10 @@ beforeEach(async () => {
     cancel: vi.fn(),
     reset: vi.fn(),
     decide: vi.fn(async () => ({ applied: true, error: null })),
-    onState: () => () => undefined,
+    onState: (listener: (next: AssistantState) => void) => {
+      assistantListener = listener;
+      return () => undefined;
+    },
     settings: () => SETTINGS,
     state: () => IDLE_STATE,
   };
@@ -358,6 +369,14 @@ describe('createTelegramService: привязка', () => {
     await expect(service.link()).rejects.toMatchObject({ code: 'conflict', message: 'Set the bot token first' });
   });
 
+  it('link при уже привязанном владельце — conflict «Unlink first», после unlink снова можно', async () => {
+    await bootLinked();
+    await expect(service.link()).rejects.toMatchObject({ code: 'conflict', message: 'Unlink first' });
+
+    await service.unlink();
+    await expect(service.link()).resolves.toMatchObject({ code: expect.any(String) });
+  });
+
   it('/start с кодом от чужого from: владелец записан, команды выставлены, ответ «Linked», хост удержан', async () => {
     service = make();
     await service.start();
@@ -424,7 +443,10 @@ describe('createTelegramService: карточки ленты', () => {
     push([tap(lastOutId, data)]);
     await settle();
     expect(feed.decide).toHaveBeenCalledTimes(1);
-    expect(edits()[1]?.params.text).toBe(T.noLongerCurrent);
+    // Честная квитанция остаётся: текст не трогаем, снимаем только кнопки, а человеку отвечаем тостом.
+    expect(edits()).toHaveLength(1);
+    expect(calls('editMessageReplyMarkup')).toHaveLength(1);
+    expect(calls('answerCallbackQuery').at(-1)?.params.text).toBe(T.noLongerCurrent);
   });
 
   it('decide с applied:false в решённом состоянии закрывает карточку «Answered at your Mac», а не временем нажатия', async () => {
@@ -498,10 +520,12 @@ describe('createTelegramService: карточки ленты', () => {
     push([tap(lastOutId, `pc1:${shortId}:o`)]);
     await settle();
     expect(sent().at(-1)?.params.text).toBe(T.otherPrompt);
+    expect(T.otherPrompt).toContain('/skip');
 
     push([textUpdate('MySQL')]);
     await settle();
     expect(feed.decide).toHaveBeenCalledWith(REF, 'c2', { kind: 'question', answers: { 'Which db?': 'MySQL' } });
+    expect(sent().at(-1)?.params.text).toBe(T.sentAsAnswer('Backend'));
     expect(assistant.ask).not.toHaveBeenCalled();
   });
 
@@ -509,7 +533,7 @@ describe('createTelegramService: карточки ленты', () => {
     await bootLinked();
     feedItems = [{ kind: 'text', id: 'x1', at: AT, messageId: null, text: 'first\nsecond\nthird', streaming: false } as FeedItem];
     setActivity('blocked');
-    await vi.advanceTimersByTimeAsync(4_000);
+    await vi.advanceTimersByTimeAsync(8_000);
     expect(sent()[0]?.params.text).toContain(T.needsYou('Backend', WHERE));
     expect(sent()[0]?.params.text).toContain('second\nthird');
 
@@ -547,6 +571,7 @@ describe('createTelegramService: комнаты, письма, помощник'
     push([tap(lastOutId, `pc1:${shortId}:r`)]);
     await settle();
     expect(sent().at(-1)?.params.text).toBe(T.returnNotePrompt('Backend'));
+    expect(T.returnNotePrompt('Backend')).toContain('/skip');
 
     push([textUpdate('please add tests')]);
     await settle();
@@ -554,6 +579,7 @@ describe('createTelegramService: комнаты, письма, помощник'
       expect.objectContaining({ projectPath: '/p/my_harnas', workId: 'w-01', roomId: 'r-01', proposalId: 'p-01', action: 'return', note: 'please add tests', rev: 0 }),
     );
     expect(edits().at(-1)?.params.text).toContain('Returned');
+    expect(sent().at(-1)?.params.text).toBe(T.sentAsNote('Backend'));
     expect(assistant.ask).not.toHaveBeenCalled();
   });
 
@@ -866,5 +892,176 @@ describe('createTelegramService: очередь, гонки, отвязка', ()
     await settle();
     expect(edits()[0]?.params.text).toContain(T.noLongerCurrent);
     expect(edits()[0]?.params.text).not.toContain(T.restarted);
+  });
+});
+
+describe('createTelegramService: финальное ревью', () => {
+  it('карточка, появившаяся в ленте только к 1500 мс, уходит с кнопками, а уведомление без кнопок не шлётся', async () => {
+    await bootLinked();
+    setActivity('blocked');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(sent()).toEqual([]);
+
+    feedItems = [PERMISSION];
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(sent().some((call) => call.params.reply_markup !== undefined)).toBe(true);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sent().filter((call) => call.params.reply_markup === undefined)).toEqual([]);
+  });
+
+  it('второй запрос подряд при том же blocked приходит второй карточкой', async () => {
+    await bootLinked();
+    await blockWith(PERMISSION);
+    feedItems = [PERMISSION, QUESTION];
+    setActivity('blocked');
+    await settle();
+    expect(sent()).toHaveLength(2);
+    expect(sent().at(-1)?.params.text).toContain('Which db?');
+  });
+
+  it('решение пришло, пока сообщение карточки ещё в очереди: карточка закрывается сразу после отправки', async () => {
+    await bootLinked();
+    gateSends();
+    feedItems = [PERMISSION];
+    setActivity('blocked');
+    await settle();
+    feedClient!.send({ event: 'feed.changed', data: { ref: REF, revision: 2, upsert: [{ ...PERMISSION, state: 'allowed' }], removed: [], mode: null } });
+    expect(edits()).toEqual([]);
+
+    ungateSends();
+    await settle();
+    expect(edits()[0]?.params.text).toContain('Allowed');
+    expect(edits()[0]?.params.reply_markup).toEqual({ inline_keyboard: [] });
+    expect(feed.unsubscribe).toHaveBeenCalledWith(REF, expect.anything());
+  });
+
+  it('карточка помощника, закрытая до отправки, правится квитанцией сразу после отправки', async () => {
+    await bootLinked();
+    gateSends();
+    emitAssistant({ phase: 'awaiting-confirm', proposal: PROPOSAL });
+    await settle();
+    emitAssistant({ phase: 'idle', proposal: null, outcome: 'sent' });
+    expect(edits()).toEqual([]);
+
+    ungateSends();
+    await settle();
+    expect(edits()[0]?.params.text).toContain('Sent');
+  });
+
+  it('pa1 на чужом сообщении не зовёт assistant.decide, на записанном — зовёт', async () => {
+    await bootLinked();
+    emitAssistant({ phase: 'awaiting-confirm', proposal: PROPOSAL });
+    await settle();
+    const recorded = lastOutId;
+
+    push([tap(recorded + 50, 'pa1:p1:send')]);
+    await settle();
+    expect(assistant.decide).not.toHaveBeenCalled();
+    expect(calls('answerCallbackQuery').at(-1)?.params.text).toBe(T.noLongerCurrent);
+    expect(calls('editMessageReplyMarkup')[0]?.params.message_id).toBe(recorded + 50);
+
+    push([tap(recorded, 'pa1:p1:send')]);
+    await settle();
+    expect(assistant.decide).toHaveBeenCalledWith('p1', 'send');
+  });
+
+  it('/help не обещает /unlink, называет /new и отвязку на Mac; /start владельца даёт ту же справку', async () => {
+    await bootLinked();
+    push([textUpdate('/help')]);
+    await settle();
+    const help = sent().at(-1)?.params.text as string;
+    expect(help).toContain('/new');
+    expect(help).toContain('Settings → Notifications → Telegram');
+    expect(help).not.toContain('/unlink');
+
+    push([textUpdate('/start')]);
+    await settle();
+    expect(sent().at(-1)?.params.text).toBe(help);
+    expect(assistant.ask).not.toHaveBeenCalled();
+  });
+
+  it('/skip снимает ожидание «Other…» и говорит об этом, следующий текст идёт помощнику', async () => {
+    await bootLinked();
+    const single = { ...QUESTION, questions: [(QUESTION as any).questions[0]] } as FeedCard;
+    const message = await blockWith(single);
+    push([tap(lastOutId, `pc1:${shortIdOf(message)}:o`)]);
+    await settle();
+
+    push([textUpdate('/skip')]);
+    await settle();
+    expect(sent().at(-1)?.params.text).toBe(T.waitCancelled);
+
+    push([textUpdate('what is going on')]);
+    await settle();
+    expect(feed.decide).not.toHaveBeenCalled();
+    expect(assistant.ask).toHaveBeenCalledWith(expect.objectContaining({ text: 'what is going on' }), 'telegram');
+  });
+
+  it('нажатие кнопки обрабатывается, пока голосовое ещё расшифровывается', async () => {
+    await bootLinked();
+    const message = await blockWith(PERMISSION);
+    let finish: (value: { text: string }) => void = () => {};
+    voiceMock.transcribe.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+
+    push([{ update_id: updateId++, message: { message_id: inId++, date: 0, chat: { id: CHAT, type: 'private' }, from: { id: USER }, voice: { file_id: 'f1', duration: 3 } } }]);
+    push([tap(lastOutId, buttons(message)[0]!.callback_data)]);
+    await settle();
+    expect(feed.decide).toHaveBeenCalledTimes(1);
+
+    finish({ text: 'build it' });
+    await settle();
+    expect(assistant.ask).toHaveBeenCalledWith(expect.objectContaining({ text: 'build it' }), 'telegram');
+  });
+
+  it('второе нажатие по тому же вопросу, пока следующий вопрос уходит, игнорируется', async () => {
+    await bootLinked();
+    const message = await blockWith(QUESTION);
+    const data = `pc1:${shortIdOf(message)}:q0`;
+    gateSends();
+    push([tap(lastOutId, data)]);
+    push([tap(lastOutId, data)]);
+    await settle();
+    ungateSends();
+    await settle();
+    expect(sent().filter((call) => String(call.params.text).includes('Which ORM?'))).toHaveLength(1);
+    expect(feed.decide).not.toHaveBeenCalled();
+  });
+
+  it('setToken с тем же токеном не перезапускает опрос и не закрывает карточки', async () => {
+    await bootLinked();
+    await blockWith(PERMISSION);
+    journal.length = 0;
+
+    await service.setToken(TOKEN);
+    await settle();
+    expect(edits()).toEqual([]);
+    expect(calls('getUpdates').filter((call) => call.params.offset === -1)).toEqual([]);
+    expect(service.status().token).toBe('set');
+  });
+
+  it('письмо длиннее лимита уходит с хвостом «truncated», /new закрывает карточку помощника', async () => {
+    await bootLinked();
+    setWorks(snap({ messages: [{ ...(letter() as object), text: 'x'.repeat(3000) }] }));
+    await settle();
+    expect(sent().at(-1)?.params.text).toContain('truncated');
+
+    emitAssistant({ phase: 'awaiting-confirm', proposal: PROPOSAL });
+    await settle();
+    journal.length = 0;
+    push([textUpdate('/new')]);
+    await settle();
+    expect(assistant.reset).toHaveBeenCalled();
+    expect(edits()[0]?.params.text).toContain(T.noLongerCurrent);
+  });
+
+  it('unlink не ждёт опустошения очереди', async () => {
+    await bootLinked();
+    gateSends();
+    service.reminderWhileOff({ id: 'r1', what: 'x' });
+    await settle();
+    await service.unlink();
+    ungateSends();
+    await settle();
+    expect(service.status().owner).toBeNull();
   });
 });

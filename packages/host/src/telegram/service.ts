@@ -30,7 +30,7 @@ import { createAssistantBridge } from './assistant-bridge.js';
 import type { AssistantBridge } from './assistant-bridge.js';
 import { CALLBACK_CODES, parseCallback } from './callbacks.js';
 import { assistantCardMessage, feedCardMessage, feedDecisionFor, receiptText, roomCardMessage } from './cards.js';
-import { escapeHtml, lastLines } from './format.js';
+import { clipText, escapeHtml, lastLines } from './format.js';
 import { classify } from './ingress.js';
 import { createLinkCode, deepLink, LINK_ATTEMPTS, matchLinkCode } from './link.js';
 import { activityTransition, emptyMemory, sessionWhere, worksTriggers } from './notify.js';
@@ -88,16 +88,11 @@ type FeedSnapshot = Result<'feed.snapshot'>;
 const WAIT_MS = 10 * 60_000;
 const NOTICE_MERGE_MS = 3_000;
 const NOTICE_MAX = 4_000;
-const SNAPSHOT_RETRY_MS = 500;
+/** Когда после перехода в «нужен ты» ещё раз смотреть ленту: хук ложится позже активности (как на острове). */
+const SNAPSHOT_RETRY_MS = [500, 1_500, 4_000] as const;
 const GETME_ATTEMPTS = 3;
 const GETME_TIMEOUT_MS = 15_000;
 const NOTE_MAX = 4_000;
-
-const COMMANDS = [
-  { command: 'status', description: 'What the agents are doing' },
-  { command: 'new', description: 'Start a new conversation with the assistant' },
-  { command: 'help', description: 'What this bot can do' },
-];
 
 const EMOJI: Partial<Record<ReceiptKind, string>> = {
   allowed: '✅',
@@ -111,7 +106,6 @@ const EMOJI: Partial<Record<ReceiptKind, string>> = {
   cancelled: '✖️',
 };
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const isParseError = (error: unknown): boolean => error instanceof BotApiError && error.status === 400 && /can't parse entities/i.test(error.description);
 /** Тот же текст без тегов: запасной вариант, когда Telegram не разобрал HTML. */
 const plainOf = (html: string): string =>
@@ -167,6 +161,15 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   let memory = emptyMemory();
   /** Карточки ленты, чьё сообщение ещё уходит: повторный повод не должен слать их второй раз. */
   const inflight = new Map<string, SessionRef>();
+  /** Ключи карточек комнаты и помощника, чьё сообщение ещё уходит (`room:…`, `assistant:…`). */
+  const sending = new Set<string>();
+  /** Квитанция для карточки, решённой раньше, чем её сообщение ушло: `onSent` закрывает её сразу. Ключи как у `sending` и `feed:<cardId>`. */
+  const closeEarly = new Map<string, string>();
+  /** Карточки с несколькими вопросами, чей следующий вопрос ещё уходит: повторное нажатие не должно слать его снова. */
+  const advancing = new Set<string>();
+  /** Повторные обходы ленты пока сессия `blocked`, по `refKey`. */
+  const watches = new Map<string, Array<ReturnType<typeof setTimeout>>>();
+  let voiceTail: Promise<void> = Promise.resolve();
   /** HTML отправленных карточек: квитанция дописывается под ним. После перезапуска хоста — заголовок по записи. */
   const originals = new Map<string, string>();
   const subscribed = new Map<string, SessionRef>();
@@ -308,6 +311,17 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     });
   };
 
+  /** Снимает кнопки, не трогая текст: сообщение, чью карточку мы уже не помним, может быть честной квитанцией. */
+  const stripKeyboard = (chatId: number, messageId: number): void => {
+    enqueue('card', async (bot) => {
+      try {
+        await bot.call('editMessageReplyMarkup', { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } });
+      } catch (error) {
+        if (!(error instanceof BotApiError) || error.status === 0 || error.status === 429) throw error;
+      }
+    });
+  };
+
   /** Уведомления (не карточки) в пределах трёх секунд уходят одним сообщением. */
   const flushNotices = (): void => {
     noticeTimer = null;
@@ -340,7 +354,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     name: 'telegram',
     features: new Set<string>(),
     send(message) {
-      if ('event' in message && message.event === 'feed.changed') onFeedChanged(message.data as { ref: SessionRef; upsert: FeedItem[]; removed: string[] });
+      if ('event' in message && message.event === 'feed.changed') onFeedChanged(message.data as { ref: SessionRef; upsert: FeedItem[]; removed: string[]; decisions?: string | null });
       return true;
     },
     writableLength: () => 0,
@@ -381,15 +395,32 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     if (record.kind === 'feed') release(record.ref);
   }
 
-  function onFeedChanged(data: { ref: SessionRef; upsert: FeedItem[]; removed: string[] }): void {
+  function onFeedChanged(data: { ref: SessionRef; upsert: FeedItem[]; removed: string[]; decisions?: string | null }): void {
     const key = refKey(data.ref);
     const open = state.cardsFor((card): boolean => card.kind === 'feed' && refKey(card.ref) === key) as Array<[string, FeedRecord]>;
-    if (open.length === 0) return;
+    const fresh: FeedCard[] = [];
     for (const item of data.upsert) {
-      if (!isFeedCard(item) || item.state === 'pending') continue;
+      if (!isFeedCard(item)) continue;
+      if (item.state === 'pending') {
+        fresh.push(item);
+        continue;
+      }
       for (const [shortId, record] of open) if (record.cardId === item.cardId) closeCard(shortId, stateLine(item.state));
+      // Решение пришло, пока сообщение карточки ещё в очереди: закроем её, как только она уйдёт.
+      if (inflight.has(item.cardId)) closeEarly.set(`feed:${item.cardId}`, stateLine(item.state));
     }
-    for (const id of data.removed) for (const [shortId, record] of open) if (record.cardId === id) closeCard(shortId, T.expired);
+    for (const id of data.removed) {
+      for (const [shortId, record] of open) if (record.cardId === id) closeCard(shortId, T.expired);
+      if (inflight.has(id)) closeEarly.set(`feed:${id}`, T.expired);
+    }
+    // Новый запрос подписанной сессии (второй подряд, запоздавший хук) уходит и без повода от активности.
+    if (fresh.length === 0 || cfg?.telegramNeedsYou !== true || !canSend() || !subscribed.has(key)) return;
+    const known = new Set((state.cardsFor((card) => card.kind === 'feed') as Array<[string, FeedRecord]>).map(([, card]) => card.cardId));
+    const found = sessionOf(data.ref);
+    for (const card of fresh) {
+      if (known.has(card.cardId) || inflight.has(card.cardId)) continue;
+      sendFeedCard(data.ref, found?.session.label ?? data.ref.sessionId, whereOf(data.ref), card, data.decisions !== 'terminal');
+    }
   }
 
   // ── Поиск в картах работ ────────────────────────────────────────────────────────────────────────
@@ -401,6 +432,8 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     const session = entry?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
     return entry === undefined || session === undefined ? null : { entry, session };
   };
+  const roomKey = (projectPath: string, workId: string, roomId: string, proposalId: string, rev: number): string =>
+    `room:${projectPath}\u0000${workId}\u0000${roomId}\u0000${proposalId}\u0000${rev}`;
   const whereOf = (ref: SessionRef): string => {
     const found = sessionOf(ref);
     return found === null ? path.basename(ref.projectPath) : sessionWhere(found.entry);
@@ -408,6 +441,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
 
   /** Базовая линия поводов: что уже есть сейчас, о том бот не пишет. */
   function rebase(): void {
+    cancelWatches();
     memory = emptyMemory();
     if (owner() === null) return;
     const snapshot = deps.works.snapshot();
@@ -445,9 +479,12 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       (messageId, chatId) => {
         state.putCard(shortId, { kind: 'feed', ref, cardId: card.cardId, cardKind: card.kind, sessionName: name, chatId, messageId, at: iso(), question: 0 });
         originals.set(shortId, message.text);
+        const early = closeEarly.get(`feed:${card.cardId}`);
+        if (early !== undefined) closeCard(shortId, early);
       },
       () => {
         inflight.delete(card.cardId);
+        closeEarly.delete(`feed:${card.cardId}`);
         release(ref);
       },
     );
@@ -468,7 +505,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
    * Применяет решение; у карточки с несколькими вопросами копит ответы и шлёт следующий вопрос новым сообщением.
    * Возвращает тост для нажатия: пусто — всё принято.
    */
-  async function applyFeedDecision(shortId: string, record: FeedRecord, card: FeedCard, decision: FeedDecision): Promise<string> {
+  async function applyFeedDecision(shortId: string, record: FeedRecord, card: FeedCard, decision: FeedDecision, onApplied?: () => void): Promise<string> {
     if (deps.feed === undefined) return '';
     let final = decision;
     if (card.kind === 'question' && decision.kind === 'question') {
@@ -480,13 +517,21 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
         const message = feedCardMessage(card, { sessionName: record.sessionName, where: whereOf(record.ref), projectPath: record.ref.projectPath, shortId, buttons: true }, next);
         const base = originals.get(shortId) ?? cardHeader(record);
         edit(record.chatId, record.messageId, receiptText(base, escapeHtml(`✅ ${T.assistantAnswerLine(answered.split('\n')[0] ?? '', answer)}`)));
-        send('card', message.text, { keyboard: message.keyboard }, (messageId) => {
-          const fresh = freshFeed(shortId);
-          if (fresh === null) return;
-          state.putCard(shortId, { ...withoutWait(fresh), question: next, answers, messageId });
-          originals.set(shortId, message.text);
-        });
+        advancing.add(shortId);
+        send(
+          'card',
+          message.text,
+          { keyboard: message.keyboard },
+          (messageId) => {
+            const fresh = freshFeed(shortId);
+            if (fresh === null) return;
+            state.putCard(shortId, { ...withoutWait(fresh), question: next, answers, messageId });
+            originals.set(shortId, message.text);
+          },
+          () => advancing.delete(shortId),
+        );
         state.audit({ kind: 'decision', shortId, cardId: record.cardId, result: `question ${record.question + 1} answered` });
+        onApplied?.();
         return '';
       }
       final = { kind: 'question', answers };
@@ -504,6 +549,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     state.audit({ kind: 'decision', shortId, cardId: record.cardId, result: result.applied ? 'applied' : `not applied (${result.state})` });
     if (result.applied) {
       closeCard(shortId, line(decisionReceipt(final)));
+      onApplied?.();
       return '';
     }
     // Хук ещё не удержан: карточка в окне жива, пусть нажмут позже. Любое решённое состояние — ответили у Mac.
@@ -513,9 +559,10 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   }
 
   async function feedAction(shortId: string, record: FeedRecord, code: string): Promise<string> {
+    if (advancing.has(shortId)) return '';
     const card = await findCard(record);
     const fresh = freshFeed(shortId);
-    if (fresh === null) return '';
+    if (fresh === null || advancing.has(shortId)) return '';
     if (card === null) {
       closeCard(shortId, T.expired);
       return '';
@@ -539,6 +586,8 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     const shortId = state.newShortId();
     const from = participantLabel(entry.map, proposal.from);
     const message = roomCardMessage({ roomTitle: room.title, where: sessionWhere(entry), proposal: { ...proposal, from }, shortId });
+    const sendKey = roomKey(entry.projectPath, entry.map.work.id, room.id, proposal.id, proposal.rev);
+    sending.add(sendKey);
     send('card', message.text, { keyboard: message.keyboard }, (messageId, chatId) => {
       state.putCard(shortId, {
         kind: 'room',
@@ -555,10 +604,16 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
         at: iso(),
       });
       originals.set(shortId, message.text);
+      const early = closeEarly.get(sendKey);
+      if (early !== undefined) closeCard(shortId, early);
+    }, () => {
+      sending.delete(sendKey);
+      closeEarly.delete(sendKey);
     });
   }
 
-  async function resolveRoom(shortId: string, record: RoomRecord, action: 'accept' | 'return', note?: string): Promise<void> {
+  /** Возвращает `true`, когда решение применено (не `conflict` и не отказ). */
+  async function resolveRoom(shortId: string, record: RoomRecord, action: 'accept' | 'return', note?: string): Promise<boolean> {
     try {
       await deps.resolveRoomProposal({
         projectPath: record.projectPath,
@@ -574,21 +629,25 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       if (error instanceof HostError && error.code === 'conflict') {
         state.audit({ kind: 'decision', shortId, result: 'revised' });
         closeCard(shortId, line('revised'));
-        return;
+        return false;
       }
       if (error instanceof HostError) {
         log(`telegram: room decision failed: ${error.message}`);
         closeCard(shortId, T.expired);
-        return;
+        return false;
       }
       throw error;
     }
     state.audit({ kind: 'decision', shortId, result: action });
     closeCard(shortId, line(action === 'accept' ? 'accepted' : 'returned'));
+    return true;
   }
 
   async function roomAction(shortId: string, record: RoomRecord, code: string): Promise<void> {
-    if (code === CALLBACK_CODES.accept) return resolveRoom(shortId, record, 'accept');
+    if (code === CALLBACK_CODES.accept) {
+      await resolveRoom(shortId, record, 'accept');
+      return;
+    }
     if (code !== CALLBACK_CODES.returnNote) return;
     const fresh = state.get().cards[shortId];
     if (fresh === undefined || fresh.kind !== 'room') return;
@@ -601,35 +660,69 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   const lastText = (items: readonly FeedItem[]): FeedText | undefined =>
     [...items].reverse().find((item): item is FeedText => item.kind === 'text');
 
-  async function onNeedsYou(ref: SessionRef, entry: WorkEntry, session: WorkSession): Promise<void> {
+  const cancelWatch = (key: string): void => {
+    for (const timer of watches.get(key) ?? []) clearTimeout(timer);
+    watches.delete(key);
+  };
+  const cancelWatches = (): void => {
+    for (const key of [...watches.keys()]) cancelWatch(key);
+  };
+
+  /** Один обход ленты: новые ждущие карточки уходят в чат. `null` — ленты нет или снимок не вышел. */
+  async function sendNewCards(ref: SessionRef, name: string, where: string): Promise<{ pending: number; last: FeedText | undefined } | null> {
+    if (deps.feed === undefined) return null;
+    let snapshot: FeedSnapshot;
+    try {
+      snapshot = await deps.feed.snapshot(ref, undefined, 'attention');
+    } catch (error) {
+      log(`telegram: feed snapshot failed: ${(error as Error).message}`);
+      return null;
+    }
+    if (!canSend()) return null;
+    const cards = pendingCards(snapshot.items);
+    const known = new Set((state.cardsFor((card) => card.kind === 'feed') as Array<[string, FeedRecord]>).map(([, card]) => card.cardId));
+    for (const card of cards) {
+      if (known.has(card.cardId) || inflight.has(card.cardId)) continue;
+      sendFeedCard(ref, name, where, card, snapshot.decisions !== 'terminal');
+    }
+    return { pending: cards.length, last: lastText(snapshot.items) };
+  }
+
+  /**
+   * Сессия перешла в «нужен ты»: хук ложится позже активности, поэтому лента смотрится сразу и ещё раз через
+   * `SNAPSHOT_RETRY_MS`. Уведомление без кнопок уходит, только если последний обход не нашёл ни одной карточки.
+   */
+  function watchBlocked(ref: SessionRef, entry: WorkEntry, session: WorkSession): void {
     if (cfg?.telegramNeedsYou !== true) return;
+    const key = refKey(ref);
+    cancelWatch(key);
     const name = session.label;
     const where = sessionWhere(entry);
-    let snapshot: FeedSnapshot | null = null;
-    if (deps.feed !== undefined) {
-      try {
-        snapshot = await deps.feed.snapshot(ref, undefined, 'attention');
-        if (pendingCards(snapshot.items).length === 0) {
-          await sleep(SNAPSHOT_RETRY_MS);
-          snapshot = await deps.feed.snapshot(ref, undefined, 'attention');
-        }
-      } catch (error) {
-        log(`telegram: feed snapshot failed: ${(error as Error).message}`);
-      }
-    }
-    if (!canSend()) return;
-    const cards = snapshot === null ? [] : pendingCards(snapshot.items);
-    if (snapshot !== null && cards.length > 0) {
-      const known = new Set(state.cardsFor((card) => card.kind === 'feed').map(([, card]) => (card as FeedRecord).cardId));
-      for (const card of cards) {
-        if (known.has(card.cardId) || inflight.has(card.cardId)) continue;
-        sendFeedCard(ref, name, where, card, snapshot.decisions !== 'terminal');
-      }
+    const tell = (last: FeedText | undefined): void => {
+      const tail = last === undefined ? '' : `\n<pre>${escapeHtml(lastLines(last.text))}</pre>`;
+      notice(`${escapeHtml(T.needsYou(name, where))}${tail}`, false);
+    };
+    if (deps.feed === undefined) {
+      tell(undefined);
       return;
     }
-    const last = snapshot === null ? undefined : lastText(snapshot.items);
-    const tail = last === undefined ? '' : `\n<pre>${escapeHtml(lastLines(last.text))}</pre>`;
-    notice(`${escapeHtml(T.needsYou(name, where))}${tail}`, false);
+    let found = false;
+    let last: FeedText | undefined;
+    const check = async (final: boolean): Promise<void> => {
+      if (!canSend() || memory.levels.get(key) !== 'blocked') return;
+      const result = await sendNewCards(ref, name, where);
+      if (result !== null) {
+        found ||= result.pending > 0;
+        last = result.last ?? last;
+      }
+      if (final && !found && canSend() && memory.levels.get(key) === 'blocked') tell(last);
+    };
+    const fail = (error: unknown): void => log(`telegram: needs-you failed: ${(error as Error).message}`);
+    watches.set(
+      key,
+      SNAPSHOT_RETRY_MS.map((delay, index) => setTimeout(() => void check(index === SNAPSHOT_RETRY_MS.length - 1).catch(fail), delay)),
+    );
+    void check(false).catch(fail);
   }
 
   function onActivity(ref: SessionRef, live: { activity: Parameters<typeof activityTransition>[3] }): void {
@@ -637,10 +730,19 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     const found = sessionOf(ref);
     if (found === null) return;
     const trigger = activityTransition(memory, ref, found.session, live.activity);
+    const key = refKey(ref);
     if (trigger === 'needs-you') {
-      void onNeedsYou(ref, found.entry, found.session).catch((error: unknown) => log(`telegram: needs-you failed: ${(error as Error).message}`));
-    } else if (trigger === 'unseen' && cfg?.telegramFinished === true) {
-      notice(escapeHtml(T.finished(found.session.label, sessionWhere(found.entry))), true);
+      watchBlocked(ref, found.entry, found.session);
+    } else if (memory.levels.get(key) === 'blocked') {
+      // Сессия всё ещё ждёт: это может быть следующий запрос подряд или запоздавший хук.
+      if (cfg?.telegramNeedsYou === true) {
+        void sendNewCards(ref, found.session.label, sessionWhere(found.entry)).catch((error: unknown) => log(`telegram: needs-you failed: ${(error as Error).message}`));
+      }
+    } else {
+      cancelWatch(key);
+      if (trigger === 'unseen' && cfg?.telegramFinished === true) {
+        notice(escapeHtml(T.finished(found.session.label, sessionWhere(found.entry))), true);
+      }
     }
   }
 
@@ -653,6 +755,8 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       );
       const text = result === 'gone' ? T.expired : line(result);
       for (const [shortId] of open) closeCard(shortId, text);
+      const sendKey = roomKey(entry.projectPath, entry.map.work.id, roomId, previous.id, previous.rev);
+      if (sending.has(sendKey)) closeEarly.set(sendKey, text);
     }
     if (cfg?.telegramNeedsYou === true) for (const { entry, room } of triggers.decisions) sendRoomCard(entry, room.id);
     if (cfg?.telegramMail !== true) return;
@@ -660,7 +764,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       const from = participantLabel(entry.map, message.from);
       const roomTitle = message.roomId === null ? null : entry.map.rooms.find((room) => room.id === message.roomId)?.title;
       const where = roomTitle === undefined || roomTitle === null ? sessionWhere(entry) : `${roomTitle} · ${sessionWhere(entry)}`;
-      send('card', `<b>${escapeHtml(T.letter(from, where))}</b>\n<pre>${escapeHtml(message.text.slice(0, 1500))}</pre>`, {}, (messageId) => {
+      send('card', `<b>${escapeHtml(T.letter(from, where))}</b>\n<pre>${escapeHtml(clipText(message.text))}</pre>`, {}, (messageId) => {
         state.putLetter(messageId, { projectPath: entry.projectPath, workId: entry.map.work.id, roomId: message.roomId, from: message.from, at: iso() });
       });
     }
@@ -672,16 +776,29 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     if (!canSend()) return;
     const shortId = state.newShortId();
     const message = assistantCardMessage(proposal);
-    send('card', message.text, { keyboard: message.keyboard }, (messageId, chatId) => {
-      state.putCard(shortId, { kind: 'assistant', proposalId: proposal.id, chatId, messageId, at: iso() });
-      originals.set(shortId, message.text);
-    });
+    const sendKey = `assistant:${proposal.id}`;
+    sending.add(sendKey);
+    send(
+      'card',
+      message.text,
+      { keyboard: message.keyboard },
+      (messageId, chatId) => {
+        state.putCard(shortId, { kind: 'assistant', proposalId: proposal.id, chatId, messageId, at: iso() });
+        originals.set(shortId, message.text);
+        const early = closeEarly.get(sendKey);
+        if (early !== undefined) closeCard(shortId, early);
+      },
+      () => {
+        sending.delete(sendKey);
+        closeEarly.delete(sendKey);
+      },
+    );
   }
 
   function closeAssistantCard(proposalId: string, receipt: 'sent' | 'done' | 'cancelled' | 'current'): void {
-    for (const [shortId] of state.cardsFor((card) => card.kind === 'assistant' && card.proposalId === proposalId)) {
-      closeCard(shortId, receipt === 'current' ? T.noLongerCurrent : line(receipt));
-    }
+    const text = receipt === 'current' ? T.noLongerCurrent : line(receipt);
+    for (const [shortId] of state.cardsFor((card) => card.kind === 'assistant' && card.proposalId === proposalId)) closeCard(shortId, text);
+    if (sending.has(`assistant:${proposalId}`)) closeEarly.set(`assistant:${proposalId}`, text);
   }
 
   // ── Входящие ────────────────────────────────────────────────────────────────────────────────────
@@ -693,7 +810,11 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   };
 
   async function answerWaiting(shortId: string, record: FeedRecord | RoomRecord, text: string): Promise<void> {
-    if (record.kind === 'room') return resolveRoom(shortId, record, 'return', text);
+    if (record.kind === 'room') {
+      if (await resolveRoom(shortId, record, 'return', text)) send('notice', T.sentAsNote(record.from), { plain: true });
+      return;
+    }
+    if (advancing.has(shortId)) return;
     const card = await findCard(record);
     const fresh = freshFeed(shortId);
     if (fresh === null) return;
@@ -703,7 +824,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     }
     const decision = feedDecisionFor(card, CALLBACK_CODES.other, text, fresh.question);
     if (decision === null || decision === 'other') return;
-    const toast = await applyFeedDecision(shortId, fresh, card, decision);
+    const toast = await applyFeedDecision(shortId, fresh, card, decision, () => send('notice', T.sentAsAnswer(fresh.sessionName), { plain: true }));
     if (toast !== '') send('notice', toast, { plain: true });
   }
 
@@ -737,6 +858,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
 
   async function onVoice(fileId: string, duration: number, messageId: number): Promise<void> {
     const result = (await voice?.transcribe(fileId, duration)) ?? { error: 'off' as const };
+    if (!canSend()) return;
     if ('error' in result) {
       state.audit({ kind: 'voice', result: result.error });
       const text = result.error === 'off' ? T.voiceOff : result.error === 'too-long' ? T.voiceTooLong : T.voiceFailed;
@@ -748,8 +870,8 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     await onText(result.text, messageId, null);
   }
 
-  async function onCommand(name: 'status' | 'new' | 'help' | 'skip'): Promise<void> {
-    if (name === 'help') {
+  async function onCommand(name: 'status' | 'new' | 'help' | 'skip' | 'start'): Promise<void> {
+    if (name === 'help' || name === 'start') {
       send('notice', T.help, { plain: true });
       return;
     }
@@ -757,9 +879,17 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       const waiting = waitingCard();
       if (waiting === null) return;
       const [shortId, record] = waiting;
-      if (record.kind === 'room') await resolveRoom(shortId, record, 'return');
-      else state.putCard(shortId, withoutWait(record));
+      if (record.kind === 'room') {
+        await resolveRoom(shortId, record, 'return');
+        return;
+      }
+      state.putCard(shortId, withoutWait(record));
+      send('notice', T.waitCancelled, { plain: true });
       return;
+    }
+    if (name === 'new') {
+      // Карточка прежнего разговора больше ничего не решает.
+      for (const [shortId] of state.cardsFor((card) => card.kind === 'assistant')) closeCard(shortId, T.noLongerCurrent);
     }
     await bridge?.onCommand(name);
   }
@@ -787,7 +917,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     syncHold();
     state.audit({ kind: 'link', result: 'linked' });
     await requireApi()
-      .call('setMyCommands', { commands: COMMANDS })
+      .call('setMyCommands', { commands: T.commands })
       .catch((error: unknown) => log(`telegram: setMyCommands failed: ${(error as Error).message}`));
     send('notice', T.linked(deps.macName), { plain: true });
     changed();
@@ -798,8 +928,17 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     const parsed = parseCallback(inbound.data);
     const answer = (text?: string): Promise<unknown> =>
       bot.call('answerCallbackQuery', { callback_query_id: inbound.id, ...(text === undefined || text === '' ? {} : { text }) }).catch(() => undefined);
+    const chatId = owner()?.chatId;
+    const forget = (): string => {
+      // Записи нет: текст сообщения мог быть честной квитанцией, поэтому снимаем только кнопки.
+      if (chatId !== undefined && inbound.messageId !== null) stripKeyboard(chatId, inbound.messageId);
+      return T.noLongerCurrent;
+    };
     if (parsed?.family === 'pa1') {
-      const toast = await bridge?.onCallback(parsed.proposalId, parsed.code);
+      const recorded = state
+        .cardsFor((card) => card.kind === 'assistant' && card.proposalId === parsed.proposalId && card.messageId === inbound.messageId)
+        .length;
+      const toast = recorded === 0 ? forget() : await bridge?.onCallback(parsed.proposalId, parsed.code);
       state.audit({ kind: 'assistant', text: parsed.code, result: toast === undefined || toast === '' ? 'applied' : 'not applied' });
       await answer(toast);
       return;
@@ -807,15 +946,20 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     let toast = '';
     try {
       const record = parsed === null ? undefined : state.get().cards[parsed.shortId];
-      if (parsed === null || record === undefined || record.kind === 'assistant') {
-        const chatId = owner()?.chatId;
-        if (chatId !== undefined && inbound.messageId !== null) edit(chatId, inbound.messageId, escapeHtml(T.noLongerCurrent));
-      } else if (record.kind === 'feed') toast = await feedAction(parsed.shortId, record, parsed.code);
+      if (parsed === null || record === undefined || record.kind === 'assistant') toast = forget();
+      else if (record.kind === 'feed') toast = await feedAction(parsed.shortId, record, parsed.code);
       else await roomAction(parsed.shortId, record, parsed.code);
     } finally {
       await answer(toast);
     }
   }
+
+  const detached = (task: () => Promise<void>): void => {
+    voiceTail = voiceTail.then(task).catch((error: unknown) => {
+      if (error instanceof HostError && canSend()) send('notice', T.couldNot(maskTelegramTokens(error.message)), { plain: true });
+      else log(`telegram: voice failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  };
 
   async function onUpdate(update: TgUpdate): Promise<void> {
     const current = state.get();
@@ -837,7 +981,9 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
         case 'text':
           return await onText(inbound.text, inbound.messageId, inbound.replyTo);
         case 'voice':
-          return await onVoice(inbound.fileId, inbound.duration, inbound.messageId);
+          // Расшифровка долгая: опрос не ждёт её, нажатия кнопок обрабатываются сразу; сами расшифровки идут по очереди.
+          detached(() => onVoice(inbound.fileId, inbound.duration, inbound.messageId));
+          return;
         case 'callback':
           return await onCallback(inbound);
       }
@@ -853,6 +999,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   /** Выключает опрос, очередь и подписки на ленту; записи в state.json остаются. */
   function disable(): void {
     generation += 1;
+    cancelWatches();
     if (noticeTimer !== null) clearTimeout(noticeTimer);
     noticeTimer = null;
     noticeBuffer = [];
@@ -992,11 +1139,16 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
         }),
       );
       const savedHint = await deps.secret.write(candidate);
+      const kind = state.applyToken(telegramBotId(candidate), telegramTokenFingerprint(candidate));
+      state.update({ botUsername: me.username });
+      hint = savedHint;
+      if (kind === 'same' && token === candidate && (poller !== null || cfg?.telegramEnabled !== true)) {
+        // Тот же токен: опрос и открытые карточки не трогаем, обновляем только имя бота и подсказку.
+        changed();
+        return { botUsername: me.username, hint: savedHint };
+      }
       disable();
       token = candidate;
-      hint = savedHint;
-      state.applyToken(telegramBotId(candidate), telegramTokenFingerprint(candidate));
-      state.update({ botUsername: me.username });
       begin(T.noLongerCurrent);
       changed();
       return { botUsername: me.username, hint: savedHint };
@@ -1013,6 +1165,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
 
     async link() {
       if (token === null) throw new HostError('conflict', 'Set the bot token first');
+      if (owner() !== null) throw new HostError('conflict', 'Unlink first');
       const { code, pending } = createLinkCode(now());
       state.update({ pendingLink: pending });
       changed();
@@ -1042,7 +1195,6 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       state.audit({ kind: 'unlink', result: 'unlinked' });
       syncHold();
       changed();
-      await outbox?.idle();
     },
 
     async takeOver() {
