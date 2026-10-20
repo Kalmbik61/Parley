@@ -979,9 +979,11 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
         case 'command':
           return await onCommand(inbound.name);
         case 'text':
-          return await onText(inbound.text, inbound.messageId, inbound.replyTo);
+          // Текст идёт по той же очереди, что и голосовые: порядок сообщений владельца сохраняется.
+          detached(() => onText(inbound.text, inbound.messageId, inbound.replyTo));
+          return;
         case 'voice':
-          // Расшифровка долгая: опрос не ждёт её, нажатия кнопок обрабатываются сразу; сами расшифровки идут по очереди.
+          // Расшифровка долгая: опрос не ждёт её, нажатия кнопок обрабатываются сразу; голосовые и тексты идут по очереди.
           detached(() => onVoice(inbound.fileId, inbound.duration, inbound.messageId));
           return;
         case 'callback':
@@ -1142,7 +1144,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       const kind = state.applyToken(telegramBotId(candidate), telegramTokenFingerprint(candidate));
       state.update({ botUsername: me.username });
       hint = savedHint;
-      if (kind === 'same' && token === candidate && (poller !== null || cfg?.telegramEnabled !== true)) {
+      if (kind === 'same' && token === candidate && (poller?.running() === true || cfg?.telegramEnabled !== true)) {
         // Тот же токен: опрос и открытые карточки не трогаем, обновляем только имя бота и подсказку.
         changed();
         return { botUsername: me.username, hint: savedHint };

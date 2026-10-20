@@ -1064,4 +1064,34 @@ describe('createTelegramService: финальное ревью', () => {
     await settle();
     expect(service.status().owner).toBeNull();
   });
+
+  it('тот же токен после остановки опроса (409) снова запускает опрос с offset -1', async () => {
+    await bootLinked();
+    conflictMode = true;
+    push([]);
+    await settle();
+    expect(service.status().polling).toBe('conflict');
+
+    conflictMode = false;
+    journal.length = 0;
+    await service.setToken(TOKEN);
+    await settle();
+    expect(calls('getUpdates')[0]?.params.offset).toBe(-1);
+    expect(service.status().polling).toBe('ok');
+  });
+
+  it('текст сразу после голосового не обгоняет расшифровку: помощник получает сначала её, потом текст', async () => {
+    await bootLinked();
+    let finish: (value: { text: string }) => void = () => {};
+    voiceMock.transcribe.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+
+    push([{ update_id: updateId++, message: { message_id: inId++, date: 0, chat: { id: CHAT, type: 'private' }, from: { id: USER }, voice: { file_id: 'f1', duration: 3 } } }]);
+    push([textUpdate('and then this')]);
+    await settle();
+    expect(assistant.ask).not.toHaveBeenCalled();
+
+    finish({ text: 'first the voice' });
+    await settle();
+    expect(assistant.ask.mock.calls.map((call) => (call[0] as { text: string }).text)).toEqual(['first the voice', 'and then this']);
+  });
 });
