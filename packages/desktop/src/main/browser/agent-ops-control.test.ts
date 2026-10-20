@@ -333,3 +333,31 @@ describe('окно операции, выбор файла, скачивания
     expect(() => (guard as unknown as InputGuard).check()).not.toThrow();
   });
 });
+
+describe('snapshot и wait_for через createAgentOps (задача 16)', () => {
+  it('snapshot у страницы, которую человек сейчас не видит, и wait_for у занятой страницы — ok (спайк 0.2; чтения при human_busy)', async () => {
+    const ctx = setup();
+    ctx.ops.registerTab({ kind: 'page', generation: GEN, webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: false, humanBusy: true });
+    expect(codeOf(await ctx.run('snapshot', { tab: 't1' }))).toBe('ok');
+    expect(codeOf(await ctx.run('wait_for', { tab: 't1', ms: 5 }))).toBe('ok');
+  });
+
+  it('Stop и «Pause agents» посреди wait_for — access_denied сразу, а не через 10 с; очередь свободна (Фокус ревью 8)', async () => {
+    const ctx = setup();
+    const started = Date.now();
+    const pending = ctx.run('wait_for', { tab: 't1', text: 'Never' });
+    await vi.waitFor(() => expect(ctx.inspector.send).toHaveBeenCalled());
+    ctx.ops.stop(7);
+    const stopped = await pending;
+    expect(codeOf(stopped)).toBe('access_denied');
+    expect(Date.now() - started).toBeLessThan(AGENT_LIMITS.waitMs / 2);
+    // Пауза снята окном: следующая операция стартует, очередь не застряла.
+    ctx.ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: false });
+    expect(codeOf(await ctx.run('snapshot', { tab: 't1' }))).toBe('ok');
+
+    const second = ctx.run('wait_for', { tab: 't1', text: 'Never' });
+    await vi.waitFor(() => expect(ctx.inspector.send.mock.calls.length).toBeGreaterThan(4));
+    ctx.ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: true });
+    expect(codeOf(await second)).toBe('access_denied');
+  });
+});

@@ -30,6 +30,7 @@ import type { AgentDownloads } from './agent-downloads.js';
 import type { AgentWindow } from './agent-window.js';
 import type { TypingClock } from './human-typing.js';
 import { createAgentCapture } from './agent-capture.js';
+import { createAgentDom } from './agent-dom.js';
 import type { AgentCaptureDeps } from './agent-capture.js';
 import { createPageRegistry, listTabs } from './agent-pages.js';
 import type { PageRecord, PageRegistry } from './agent-pages.js';
@@ -424,6 +425,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   // `focus.borrow(agentId)` берёт `createAgentInput` в задаче 17.
   const focus = createFocusBorrower({ typing: deps.typing, ...(deps.requestFocus === undefined ? {} : { requestFocus: deps.requestFocus }), ...(deps.focusMs === undefined ? {} : { focusMs: deps.focusMs }) });
   const reads = createAgentReads({ inspector: deps.inspector });
+  const dom = createAgentDom({ inspector: deps.inspector });
   const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, saveImage: deps.saveImage, image: deps.image, activity: deps.activity, inGuest: deps.inGuest, ...(deps.captureReadyMs === undefined ? {} : { captureReadyMs: deps.captureReadyMs }), ...(deps.guestCallMs === undefined ? {} : { guestCallMs: deps.guestCallMs }), ...(deps.windowHeight === undefined ? {} : { windowHeight: deps.windowHeight }), ...(deps.screenDpr === undefined ? {} : { screenDpr: deps.screenDpr }) });
 
   function askWindow(event: AgentOpenTab): Promise<AgentOpenTabResult | 'no_window' | 'timeout'> {
@@ -498,8 +500,16 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
             const args = parsed.data as BrowserAgentArgs<'screenshot'>;
             return ok(await runner.run(request, args.tab, (contents, record, guard) => capture.screenshotOf(contents, record, request, args, guard.signal)));
           }
+          case 'snapshot': {
+            const args = parsed.data as BrowserAgentArgs<'snapshot'>;
+            return ok(await runner.run(request, args.tab, (contents, record) => dom.snapshotOf(contents, record, args)));
+          }
+          case 'wait_for': {
+            const args = parsed.data as BrowserAgentArgs<'wait_for'>;
+            return ok(await runner.run(request, args.tab, (contents, record, guard) => dom.waitFor(contents, record, args, guard.signal)));
+          }
           default:
-            // До задач 16–19; остаётся защитой от операции новее окна.
+            // До задач 17–19; остаётся защитой от операции новее окна.
             return failure('unsupported', `This window does not run ${String(request.op)} yet.`);
         }
       } catch (error) {
