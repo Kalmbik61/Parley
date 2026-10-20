@@ -200,7 +200,7 @@ describe('метод browser.agentResult и событие browser.agentOp', () 
     expectTypeOf<Result<'browser.agentResult'>>().toEqualTypeOf<{ accepted: boolean }>();
     expectTypeOf<EventData<'browser.agentOp'>>().toEqualTypeOf<BrowserAgentOpEvent>();
     expectTypeOf<Params<'browser.agentResult'>>().toMatchTypeOf<{ opId: string }>();
-    expectTypeOf<BrowserAgentOpenResult>().toEqualTypeOf<{ tab: string; owner: BrowserAgentOwner; url: string; reused: boolean; loaded: boolean; title: string; notes: string[] }>();
+    expectTypeOf<BrowserAgentOpenResult>().toEqualTypeOf<{ tab: string; owner: BrowserAgentOwner; url: string; reused: boolean; loaded?: boolean; title?: string; notes: string[] }>();
     expectTypeOf<BrowserAgentOpEvent['owners']>().toEqualTypeOf<BrowserAgentOwner[]>();
   });
 });

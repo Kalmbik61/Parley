@@ -239,7 +239,7 @@ describe('open (спека 5.1 browser_open)', () => {
 
   it('неизвестная операция — unsupported', async () => {
     const { run, asked } = setup();
-    expect(codeOf(await run({ code: '1' }, REF, 'evaluate'))).toBe('unsupported');
+    expect(codeOf(await run({ code: '1' }, REF, 'teleport'))).toBe('unsupported');
     expect(asked).toEqual([]);
   });
 

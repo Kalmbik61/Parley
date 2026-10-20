@@ -385,9 +385,9 @@ export interface BrowserAgentOpenResult {
   owner: BrowserAgentOwner;
   url: string;
   reused: boolean;
-  /** Страница загружена к концу ожидания (`AGENT_LIMITS.loadMs`). */
-  loaded: boolean;
-  title: string;
+  /** Страница загружена к концу ожидания (`AGENT_LIMITS.loadMs`). Нет — окно до этапа D, оно загрузки не ждёт (core так и пишет агенту). */
+  loaded?: boolean;
+  title?: string;
   notes: string[];
 }
 
