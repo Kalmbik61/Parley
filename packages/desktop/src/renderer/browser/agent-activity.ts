@@ -8,6 +8,11 @@
  * Одалживание фокуса (путь А, решение владельца 7): CDP-ввод агента доходит до гостя только при фокусе на `<webview>`.
  * Окно запоминает `document.activeElement` человека, ставит фокус на `<webview>` и отвечает main; по концу операции возвращает
  * фокус обратно. `hostWebContents.focus()` и `guest.focus()` не зовутся: они отнимают фокус ОС у человека.
+ *
+ * Из гостя в гостя (фокус человека в `<webview>` его вкладки браузера) Chromium переводит фокус ввода во вложенную страницу,
+ * только когда фокус у самого окна: `node.focus()` поверх другого гостя меняет `document.activeElement`, а клавиши идут
+ * в прежнего гостя (E2E 22a, тест 3). Поэтому прежний `<webview>` сначала теряет фокус (`blur()` отдаёт его окну), и лишь
+ * затем фокус встаёт на `<webview>` агента; на возврате — так же через окно.
  */
 import { create } from 'zustand';
 import { AGENT_LIMITS } from '@parley/protocol';
@@ -127,6 +132,9 @@ export interface FocusLender {
   dispose(): void;
 }
 
+/** `<webview>` другой страницы: фокус в нём — фокус ввода вложенной страницы, а не окна. */
+const isGuestView = (element: Element): boolean => element.tagName === 'WEBVIEW';
+
 export function createFocusLender({ view, webContentsId, ready }: FocusLenderOptions): FocusLender {
   let previous: Element | null = null;
 
@@ -136,7 +144,10 @@ export function createFocusLender({ view, webContentsId, ready }: FocusLenderOpt
     previous = null;
     lending.delete(webContentsId);
     // Человек ушёл с `<webview>` сам — его фокус не трогаем.
-    if (node !== null && document.activeElement === node && was instanceof HTMLElement && document.contains(was)) was.focus();
+    if (node === null || document.activeElement !== node || !(was instanceof HTMLElement) || !document.contains(was)) return;
+    // Возврат в гостя человека — через окно, как и одалживание.
+    if (isGuestView(was)) node.blur();
+    was.focus();
   };
 
   return {
@@ -149,11 +160,17 @@ export function createFocusLender({ view, webContentsId, ready }: FocusLenderOpt
       // Повторная просьба в той же операции: прежний элемент человека остаётся тем, кому вернуть фокус.
       if (previous === null && document.activeElement !== node) previous = document.activeElement;
       lending.add(webContentsId);
+      const active = document.activeElement;
+      // Фокус в другом госте: сначала отдать его окну, иначе ввод агента уйдёт в того гостя.
+      const other = active !== node && active instanceof HTMLElement && isGuestView(active) ? active : null;
+      other?.blur();
       node.focus();
       const ok = document.activeElement === node;
       if (!ok) {
         lending.delete(webContentsId);
         previous = null;
+        // Фокус не встал: гость человека получает его обратно.
+        other?.focus();
       }
       ready(id, ok);
     },

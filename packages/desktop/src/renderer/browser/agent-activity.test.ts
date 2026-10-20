@@ -120,6 +120,64 @@ describe('одалживание фокуса', () => {
     expect(isLendingFocus(7)).toBe(false);
   });
 
+  it('фокус человека в <webview> его вкладки (E2E 22a, тест 3): borrow сначала снимает его (blur — фокус окну), затем ставит на <webview> агента; restore — blur агента, затем focus <webview> человека', () => {
+    const human = document.createElement('webview');
+    human.tabIndex = 0;
+    const view = document.createElement('webview');
+    view.tabIndex = 0;
+    document.body.append(human, view);
+    human.focus();
+    const humanBlur = vi.spyOn(human, 'blur');
+    const humanFocus = vi.spyOn(human, 'focus');
+    const viewBlur = vi.spyOn(view, 'blur');
+    const viewFocus = vi.spyOn(view, 'focus');
+    const ready = vi.fn();
+    const lender = createFocusLender({ view: () => view, webContentsId: 7, ready });
+    lender.borrow('f-6');
+    expect(humanBlur).toHaveBeenCalledTimes(1);
+    expect(humanBlur.mock.invocationCallOrder[0]).toBeLessThan(viewFocus.mock.invocationCallOrder[0] as number);
+    expect(document.activeElement).toBe(view);
+    expect(ready).toHaveBeenCalledWith('f-6', true);
+    lender.restore();
+    expect(viewBlur).toHaveBeenCalledTimes(1);
+    expect(viewBlur.mock.invocationCallOrder[0]).toBeLessThan(humanFocus.mock.invocationCallOrder[0] as number);
+    expect(document.activeElement).toBe(human);
+    expect(isLendingFocus(7)).toBe(false);
+  });
+
+  it('фокус человека в поле окна: blur не зовётся ни при borrow, ни при restore — фокус переходит прямо', () => {
+    const chat = document.createElement('textarea');
+    document.body.append(chat);
+    chat.focus();
+    const view = document.createElement('webview');
+    view.tabIndex = 0;
+    document.body.append(view);
+    const chatBlur = vi.spyOn(chat, 'blur');
+    const viewBlur = vi.spyOn(view, 'blur');
+    const lender = createFocusLender({ view: () => view, webContentsId: 7, ready: vi.fn() });
+    lender.borrow('f-7');
+    expect(document.activeElement).toBe(view);
+    lender.restore();
+    expect(document.activeElement).toBe(chat);
+    expect(chatBlur).not.toHaveBeenCalled();
+    expect(viewBlur).not.toHaveBeenCalled();
+  });
+
+  it('фокус на <webview> агента не встал после blur гостя человека — ready(id, false), фокус вернулся в <webview> человека', () => {
+    const human = document.createElement('webview');
+    human.tabIndex = 0;
+    document.body.append(human);
+    human.focus();
+    // Без tabindex элемент фокус не берёт — как `<webview>`, который окно не может сфокусировать.
+    const view = document.createElement('webview');
+    document.body.append(view);
+    const ready = vi.fn();
+    createFocusLender({ view: () => view, webContentsId: 7, ready }).borrow('f-8');
+    expect(ready).toHaveBeenCalledWith('f-8', false);
+    expect(document.activeElement).toBe(human);
+    expect(isLendingFocus(7)).toBe(false);
+  });
+
   it('dispose возвращает фокус и снимает флаг', () => {
     const chat = document.createElement('textarea');
     document.body.append(chat);

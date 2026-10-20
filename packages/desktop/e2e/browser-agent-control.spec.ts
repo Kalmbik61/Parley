@@ -301,10 +301,9 @@ test.describe('агент управляет страницами браузер
   });
 
   test('человек в своей вкладке браузера, агент в странице панели: тексты не смешиваются, фокус человека остаётся у него', async () => {
-    // Известный дефект (найден этим тестом): когда фокус человека стоит в `<webview>` его вкладки, а страница агента скрыта,
-    // текст агента попадает в страницу человека («human-agent-line»), хотя ответ — «Typed 10 characters». Это нарушение
-    // Фокуса ревью 1; тест ждёт верного поведения и помечен `fail`, пока main/окно не чинят одолженный фокус между гостями.
-    test.fail(true, 'agent text lands in the human browser tab when the human focus is in another <webview>');
+    // Фокус человека в `<webview>` его вкладки, страница агента скрыта: `node.focus()` поверх другого гостя фокус ввода
+    // Chromium не переводит, и текст агента уходил в страницу человека. Окно переводит фокус между гостями через себя
+    // (`blur` прежнего `<webview>`) — туда и обратно (`agent-activity.ts`).
     // Параллельную печать человека (`human_busy`) E2E не проверяет: клавиатура Playwright не порождает `before-input-event`
     // ни у окна, ни у гостя (проба 2026-10-20), поэтому тишину клавиатуры закрывают юнит-тесты `human-typing.test.ts`,
     // `agent-ops-control.test.ts`. Здесь — то, что видно снаружи: пауза человека, ввод агента, продолжение человека.
@@ -315,6 +314,13 @@ test.describe('агент управляет страницами браузер
     const tab = await openPage(opened, lead, { url: agentUrl, own: true });
     await showPanel(window, lead);
     const name = await refOf(opened, lead, tab, 'textbox', 'Name');
+    const save = await refOf(opened, lead, tab, 'button', 'Save');
+    /** Адрес гостя, на `<webview>` которого стоит фокус окна; `null` — фокус не на `<webview>`. */
+    const focusedGuest = (): Promise<string | null> =>
+      window.evaluate(() => {
+        const el = document.activeElement as (HTMLElement & { getURL?: () => string }) | null;
+        return el?.tagName === 'WEBVIEW' ? (el.getURL?.() ?? null) : null;
+      });
 
     // Вкладка браузера человека: «+» → «New browser tab» → адрес.
     await window.getByRole('button', { name: 'Open…' }).first().click();
@@ -325,34 +331,46 @@ test.describe('агент управляет страницами браузер
     await address.press('Enter');
     await expect.poll(() => echoOf(opened, humanUrl)).toBe('');
 
-    // Человек кликает мышью по странице (фокус окна — на её <webview>) и печатает в поле.
+    // Человек переходит в свою страницу (фокус окна — на её <webview>) и печатает в поле. Не мышью Playwright: сразу после
+    // загрузки гостя её нажатие нередко достаётся окну, а не гостю, и клавиши уходят в окно (проба 2026-10-20: 6 из 8
+    // прогонов, ещё до ввода агента). Фокус на <webview> ставит `focus()` элемента в окне — путь Chromium «окно → гость», как
+    // после клика человека (`locator.focus()` Playwright <webview> не фокусирует); поле внутри гостя — скрипт теста; клавиши — Playwright.
     const view = window.locator('webview:visible');
     await expect(view).toHaveCount(1);
-    const box = (await view.boundingBox()) as { x: number; y: number };
-    const at = (await guestEval<{ x: number; y: number }>(
-      electronApp,
-      humanUrl,
-      "(() => { const r = document.getElementById('name').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()",
-    )) as { x: number; y: number };
     await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.focus());
-    await window.mouse.click(box.x + at.x, box.y + at.y);
-    // Мышь Playwright до поля внутри гостя не доходит: поле получает фокус от скрипта теста, клавиши — от Playwright.
+    await view.evaluate((element) => (element as HTMLElement).focus());
     await guestEval(electronApp, humanUrl, "document.getElementById('name').focus()");
     await expect.poll(() => guestEval<string>(electronApp, humanUrl, 'document.activeElement.id')).toBe('name');
     await window.waitForTimeout(500);
     await window.keyboard.type('human-');
     await expect.poll(() => echoOf(opened, humanUrl)).toBe('human-');
+    expect(await focusedGuest()).toBe(humanUrl);
+    const before = await humanState(window);
 
     // Пауза человека дольше тишины клавиатуры; агент вводит в свою страницу.
     await window.waitForTimeout(1500);
     const typed = await agentTool(opened, lead, 'browser_action', { tab, action: 'type', ref: name, text: 'agent-line' });
     expect(typed.isError, typed.text).toBe(false);
+    expect(typed.text).toContain('Typed 10 characters');
     expect(await echoOf(opened, agentUrl)).toBe('agent-line');
     expect(await echoOf(opened, humanUrl)).toBe('human-');
 
     // Фокус человека вернулся в его страницу: продолжение набора идёт туда же, а не в страницу агента.
+    expect(await focusedGuest()).toBe(humanUrl);
+    expect(await humanState(window)).toEqual(before);
     await window.keyboard.type('1234');
     await expect.poll(() => echoOf(opened, humanUrl)).toBe('human-1234');
+    expect(await echoOf(opened, agentUrl)).toBe('agent-line');
+
+    // Клик агента одалживает фокус так же (спайк В3): после него нажатия человека — снова в его страницу.
+    await window.waitForTimeout(1500);
+    const clicked = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: save });
+    expect(clicked.isError, clicked.text).toBe(false);
+    await expect.poll(() => guestEval<string>(electronApp, agentUrl, "document.getElementById('status').textContent")).toBe('Saved');
+    expect(await focusedGuest()).toBe(humanUrl);
+    expect(await humanState(window)).toEqual(before);
+    await window.keyboard.type('5');
+    await expect.poll(() => echoOf(opened, humanUrl)).toBe('human-12345');
     expect(await echoOf(opened, agentUrl)).toBe('agent-line');
   });
 
