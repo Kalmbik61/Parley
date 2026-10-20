@@ -79,19 +79,25 @@ describe('объявление инструмента', () => {
     expect(result.text).toContain('restart this session');
   });
 
-  it('с каналом — browser_open: аннотации «пишет, но не разрушает» (Codex не спрашивает человека), строгая схема, описание по-английски называет Chrome, DevTools и Playwright', async () => {
+  it('с каналом — browser_open: аннотации «пишет, не разрушает, выходит наружу» (Codex спрашивает человека), строгая схема, описание по-английски называет Chrome, DevTools и Playwright', async () => {
     const client = await connect(await startEndpoint());
     const tools = (await client.listTools()).tools.filter((tool) => tool.name.startsWith('browser_'));
     expect(tools.map((tool) => tool.name)).toEqual(BROWSER_TOOL_OPS.map((op) => `browser_${op}`));
     const open = tools.find((tool) => tool.name === 'browser_open');
-    expect(open?.annotations).toEqual({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
+    // Открывать можно любой http(s): инструмент выходит за localhost, поэтому openWorldHint — истина.
+    expect(open?.annotations).toEqual({ readOnlyHint: false, destructiveHint: false, openWorldHint: true });
     expect(open?.inputSchema).toMatchObject({ required: ['url'], additionalProperties: false });
     // Куда открыть (спека 5.1): own и room — необязательные.
     expect(Object.keys((open?.inputSchema as { properties: object }).properties)).toEqual(['url', 'own', 'room']);
     expect(open?.description).not.toMatch(/[А-Яа-яЁё]/);
-    for (const phrase of ['Prefer this over Chrome, Chrome DevTools or Playwright', 'localhost', 'without taking the human', 'reused', `at most ${BROWSER_TOOL_LIMITS.panelPages} pages`, 'with own: true', 'exactly one room']) {
+    for (const phrase of ['Prefer this over Chrome, Chrome DevTools or Playwright', 'any http(s) URL', 'Only pages on localhost, *.localhost, 127.0.0.0/8, [::1] can be read', 'without taking the human', 'reused', `at most ${BROWSER_TOOL_LIMITS.panelPages} pages`, 'with own: true', 'exactly one room']) {
       expect(open?.description, phrase).toContain(phrase);
     }
+    const url = (open?.inputSchema as { properties: { url: { description: string } } }).properties.url.description;
+    expect(url).toContain('http(s)');
+    expect(url).toContain('Only localhost pages can be read');
+    // Старая формулировка «только localhost» про открытие не должна остаться.
+    expect(open?.description).not.toContain('Only http(s) on localhost');
   });
 
   it('описание browser_open — не длиннее 600 знаков', () => {
@@ -101,6 +107,7 @@ describe('объявление инструмента', () => {
   it('описания: id вкладок меняются после перезапуска; снимок с размером на время съёмки меняет размер страницы', () => {
     const description = (name: string) => BROWSER_TOOLS.find((tool) => tool.name === name)?.description;
     expect(description('browser_tabs')).toContain('Ids can change after Parley restarts: call browser_tabs again.');
+    expect(description('browser_tabs')).toContain('Any http(s) page can be opened, but only pages on localhost can be read');
     expect(description('browser_screenshot')).toContain("With width/height the page is briefly resized for the capture, then returns to the human's size.");
   });
 
@@ -153,14 +160,14 @@ describe('ошибки', () => {
     const client = await connect(await startEndpoint());
     answers.push(
       { status: 200, body: { ok: false, error: { code: 'access_denied', message: 'The human turned off agent access to the browser.' } } },
-      { status: 200, body: { ok: false, error: { code: 'not_loopback', message: 'Only http(s) pages on localhost can be opened.' } } },
+      { status: 200, body: { ok: false, error: { code: 'not_loopback', message: 'Page t1 is not on localhost.' } } },
       { status: 200, body: { ok: false, error: { code: 'window_not_connected', message: "Parley's window is not connected to the host." } } },
     );
     const denied = await call(client, 'browser_open', { url: PAGE });
     expect(denied.isError).toBe(true);
     expect(denied.text).toBe('access_denied: The human turned off agent access to the browser. Do not retry: the human decides when agents may use the browser.');
-    const outside = await call(client, 'browser_open', { url: 'https://example.com/' });
-    expect(outside.text).toBe('not_loopback: Only http(s) pages on localhost can be opened.');
+    const outside = await call(client, 'browser_console', { tab: 't1' });
+    expect(outside.text).toBe('not_loopback: Page t1 is not on localhost.');
     const away = await call(client, 'browser_open', { url: PAGE });
     expect(away.text).toContain("Ask the human to open Parley's window, then retry.");
   });

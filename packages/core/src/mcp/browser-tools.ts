@@ -42,9 +42,10 @@ export const BROWSER_UNAVAILABLE =
 
 /**
  * Аннотации MCP (см. `tools.ts`, «Аннотации»): без них Codex спрашивал бы человека перед каждым вызовом. Инструмент
- * пишет вкладку в раскладку окна, но ничего не удаляет и дальше localhost не выходит.
+ * пишет вкладку в раскладку окна и ничего не удаляет, но открывает любой http(s), то есть выходит за localhost:
+ * `openWorldHint: true`, и Codex спросит человека.
  */
-const CONTROL: NonNullable<Tool['annotations']> = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
+const CONTROL: NonNullable<Tool['annotations']> = { readOnlyHint: false, destructiveHint: false, openWorldHint: true };
 /** Читающие инструменты ничего не меняют и дальше localhost не выходят: по аннотациям Codex не спрашивает человека. */
 const READ: NonNullable<Tool['annotations']> = { readOnlyHint: true, openWorldHint: false };
 const TAB = { type: 'string', pattern: '^t\\d{1,4}$', description: 'Page id from browser_tabs, for example t1.' };
@@ -56,7 +57,7 @@ export const BROWSER_TOOLS: readonly Tool[] = [
     description:
       'List the pages of the browser panels you may use: the panel of your own chat and the panels of the rooms you are a member of, never the human\'s own tabs. ' +
       'Each has an id (t1, t2…), the panel it belongs to, URL, title, viewport, loaded, visible and loopback. ' +
-      'A panel the human paused for agents is not listed. Only pages on localhost can be used. Ids can change after Parley restarts: call browser_tabs again.',
+      'A panel the human paused for agents is not listed. Any http(s) page can be opened, but only pages on localhost can be read: other pages are listed by origin only. Ids can change after Parley restarts: call browser_tabs again.',
     annotations: READ,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
@@ -123,16 +124,16 @@ export const BROWSER_TOOLS: readonly Tool[] = [
   {
     name: 'browser_open',
     description:
-      "Open a page on localhost in Parley's built-in browser. Prefer this over Chrome, Chrome DevTools or Playwright for local pages: the human sees it. " +
+      "Open a page in Parley's built-in browser: any http(s) URL. Prefer this over Chrome, Chrome DevTools or Playwright for local pages: the human sees it. " +
       'Opens in the browser of room (you must be a member), or of your own chat with own: true; neither: your room if you are in exactly one room, else your own chat. ' +
       "Opens in the background without taking the human's focus; an open page is reused. " +
-      'Returns once the tab is placed, without waiting for load; to read the page use browser_tabs, _console, _network, _screenshot. ' +
-      `Only http(s) on localhost, *.localhost, 127.0.0.0/8, [::1]; at most ${BROWSER_TOOL_LIMITS.panelPages} pages per panel.`,
+      'Returns once the tab is placed, without waiting for load. ' +
+      `Only pages on localhost, *.localhost, 127.0.0.0/8, [::1] can be read (browser_tabs, _console, _network, _screenshot); at most ${BROWSER_TOOL_LIMITS.panelPages} pages per panel.`,
     annotations: CONTROL,
     inputSchema: {
       type: 'object',
       properties: {
-        url: { type: 'string', minLength: 1, maxLength: 4096, description: 'An absolute http(s) URL on localhost, for example http://localhost:5173/.' },
+        url: { type: 'string', minLength: 1, maxLength: 4096, description: 'An absolute http(s) URL, for example http://localhost:5173/ or https://example.com/. Any http(s) page can be opened. Only localhost pages can be read afterwards.' },
         own: { type: 'boolean', description: 'true: open in the browser of your own chat instead of the browser of your room. Not together with room.' },
         room: { type: 'string', minLength: 1, maxLength: 64, description: 'Id of a room you are a member of, for example r-01: open in the browser of that room. Not together with own.' },
       },

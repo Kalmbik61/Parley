@@ -13,7 +13,7 @@ import { PANEL_LIMITS } from '../../renderer/layout/tree.js';
 import { pngSize } from './png.js';
 import { createEmulation } from './emulation.js';
 import { createPageRegistry } from './agent-pages.js';
-import { captureSpec, createAgentOps, loopbackHref, NOT_MOUNTED_NOTE, type AgentOps } from './agent-ops.js';
+import { captureSpec, createAgentOps, NOT_MOUNTED_NOTE, openableHref, type AgentOps } from './agent-ops.js';
 
 const REF = { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' };
 const OTHER_REF = { projectPath: '/proj', workId: 'w-2', sessionId: 's-01' };
@@ -168,25 +168,54 @@ describe('open (спека 5.1 browser_open)', () => {
     expect(asked.map((e) => e.workKey)).toEqual([OTHER_WORK]);
   });
 
-  it('Фокус ревью 2: не loopback и обходные записи — not_loopback, окну ничего', async () => {
+  it('Фокус ревью 2: не http(s) и обходные записи — bad_request, окну ничего', async () => {
     const { run, asked } = setup();
     for (const url of [
-      'https://example.com/',
-      'http://localhost.evil.test/',
-      'http://127.0.0.1.nip.io/',
-      'http://0.0.0.0:5173/',
-      'http://192.168.1.10:5173/',
-      'http://[::ffff:127.0.0.1]/',
-      'http://localhost@evil.com/',
       'file:///etc/hosts',
       'javascript:alert(1)',
       'data:text/html,x',
+      'ftp://example.com/',
+      'chrome://settings',
       'localhost:5173',
       '/relative',
       'not a url',
     ]) {
-      expect(codeOf(await run({ url })), url).toBe('not_loopback');
+      const result = await run({ url });
+      expect(codeOf(result), url).toBe('bad_request');
+      expect(messageOf(result), url).toContain('http(s)');
     }
+    expect(asked).toEqual([]);
+  });
+
+  it('внешний http(s) открывается: окну уходит адрес без учётных данных, ответ — вкладка t1 (открывать можно любой адрес, читать — только localhost)', async () => {
+    const { run, asked } = setup();
+    for (const [url, href] of [
+      ['https://example.test/', 'https://example.test/'],
+      ['http://localhost.evil.test/', 'http://localhost.evil.test/'],
+      ['http://127.0.0.1.nip.io/', 'http://127.0.0.1.nip.io/'],
+      ['http://0.0.0.0:5173/', 'http://0.0.0.0:5173/'],
+      ['http://192.168.1.10:5173/', 'http://192.168.1.10:5173/'],
+      ['http://localhost@evil.com/', 'http://evil.com/'],
+      ['https://user:pw@example.test/a?b=1#/route', 'https://example.test/a?b=1#/route'],
+    ] as const) {
+      asked.length = 0;
+      expect(okResult(await run({ url })), url).toMatchObject({ tab: 't1', owner: OWN, url: href, reused: false });
+      expect(asked.map((e) => e.url), url).toEqual([href]);
+    }
+  });
+
+  it('внешний адрес не обходит отказы: выключатель, пауза панели, чужая комната и own вместе с room — прежние коды, окну ничего', async () => {
+    const off = setup({ allowed: false });
+    expect(codeOf(await off.run({ url: 'https://example.test/' }))).toBe('access_denied');
+    expect(off.asked).toEqual([]);
+
+    const { ops, run, asked } = setup({ owners: [OWN, ROOM] });
+    ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: true });
+    const paused = await run({ url: 'https://example.test/', own: true });
+    expect(codeOf(paused)).toBe('access_denied');
+    expect(messageOf(paused)).toContain('paused by the human');
+    expect(codeOf(await run({ url: 'https://example.test/', room: 'r-99' }))).toBe('access_denied');
+    expect(codeOf(await run({ url: 'https://example.test/', room: 'r-01', own: true }))).toBe('bad_request');
     expect(asked).toEqual([]);
   });
 
@@ -194,8 +223,10 @@ describe('open (спека 5.1 browser_open)', () => {
     const { run, asked } = setup();
     expect(okResult(await run({ url: 'http://user:pw@LOCALHOST:5173/a?b=1#/route' })).url).toBe('http://localhost:5173/a?b=1#/route');
     expect(asked[0]?.url).toBe('http://localhost:5173/a?b=1#/route');
-    expect(loopbackHref('http://127.1/')).toBe('http://127.0.0.1/');
-    expect(loopbackHref('https://example.com/')).toBeNull();
+    expect(openableHref('http://127.1/')).toBe('http://127.0.0.1/');
+    expect(openableHref('https://example.com/')).toBe('https://example.com/');
+    expect(openableHref('file:///etc/hosts')).toBeNull();
+    expect(openableHref('javascript:alert(1)')).toBeNull();
   });
 
   it('общий выключатель «Let agents use the browser» — access_denied, окну ничего', async () => {
@@ -543,6 +574,40 @@ describe('проверки страницы (спека 5.2)', () => {
     expect(codeOf(await run('network', { tab: 't1' }))).toBe('tab_not_loaded');
     register(ops, { webContentsId: null });
     expect(codeOf(await run('console', { tab: 't1' }))).toBe('tab_not_loaded');
+  });
+
+  it('открыть можно любой http(s), читать — только localhost: внешняя страница из browser_open даёт на console, network и screenshot not_loopback с точной причиной, гость не тронут', async () => {
+    const { ops, guests, inspector, saveImage, runOp: run, state } = setup();
+    state.reply = { tabId: 'bp-aaaaaa', reused: false, mounted: true };
+    expect(okResult<{ tab: string }>(await run('open', { url: 'https://example.test/' })).tab).toBe('t1');
+    guests.set(7, fakeGuest(7, 'https://example.test/'));
+    register(ops, {});
+    for (const [op, args] of [['console', { tab: 't1' }], ['network', { tab: 't1' }], ['screenshot', { tab: 't1' }]] as const) {
+      const result = await run(op, args);
+      expect(codeOf(result), op).toBe('not_loopback');
+      expect(messageOf(result), op).toBe('Page t1 is not on localhost.');
+    }
+    expect(inspector.snapshot).not.toHaveBeenCalled();
+    expect(inspector.send).not.toHaveBeenCalled();
+    expect(saveImage).not.toHaveBeenCalled();
+    // В списке страница есть, но только с origin: ни пути, ни заголовка.
+    expect(okResult<Tabs>(await run('tabs', {})).tabs[0]).toMatchObject({ id: 't1', url: 'https://example.test', title: '', viewport: null, loopback: false });
+  });
+
+  it('localhost-страница ушла redirect на внешний адрес: вкладка остаётся в списке, чтение отказывает not_loopback; вернулась на localhost — читается снова', async () => {
+    const { ops, guests, runOp: run, state } = setup();
+    state.reply = { tabId: 'bp-aaaaaa', reused: false, mounted: true };
+    expect(okResult<{ tab: string }>(await run('open', { url: 'http://localhost:5173/login' })).tab).toBe('t1');
+    register(ops, {});
+    expect(codeOf(await run('console', { tab: 't1' }))).toBe('ok');
+    guests.set(7, fakeGuest(7, 'https://accounts.example.test/signin?sid=SECRET9', 'Sign in'));
+    const result = await run('console', { tab: 't1' });
+    expect(codeOf(result)).toBe('not_loopback');
+    expect(messageOf(result)).toBe('Page t1 is not on localhost.');
+    const [tab] = okResult<Tabs>(await run('tabs', {})).tabs;
+    expect(tab).toMatchObject({ id: 't1', url: 'https://accounts.example.test', title: '', loopback: false, loaded: true });
+    guests.set(7, fakeGuest(7, 'http://localhost:5173/home'));
+    expect(codeOf(await run('console', { tab: 't1' }))).toBe('ok');
   });
 });
 
