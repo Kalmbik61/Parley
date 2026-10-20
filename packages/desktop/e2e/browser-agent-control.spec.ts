@@ -15,6 +15,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * - поток формы: ввод, клик, ожидание, select, check; секреты в консоли и сети — маской;
  * - ввод агента не попадает в поле человека и не трогает окно (Фокус ревью 1), в том числе пока человек печатает в своей
  *   вкладке браузера;
+ * - нажатие человека, пришедшее в страницу агента, пока фокус одолжен, гасится, а ввод агента обрывается `human_busy` (D1);
  * - скрытая страница, которую человек видел, принимает ввод; ни разу не показанная — `tab_hidden` (Фокус ревью 2);
  * - переходы и устаревшая ссылка, размер, занятость (Annotate), Stop и «Pause agents» посреди операции (Фокус ревью 8).
  *
@@ -372,6 +373,78 @@ test.describe('агент управляет страницами браузер
     await window.keyboard.type('5');
     await expect.poll(() => echoOf(opened, humanUrl)).toBe('human-12345');
     expect(await echoOf(opened, agentUrl)).toBe('agent-line');
+  });
+
+  test('нажатие человека, пока фокус одолжен агенту: в страницу не попало, ввод агента оборван human_busy; без вмешательства — проходит (D1)', async () => {
+    // Настоящая клавиша, попавшая в страницу агента, приходит гостю `before-input-event` — её модель `guest.sendInputEvent`
+    // (клавиатура Playwright этого события не порождает). CDP-ввод агента `before-input-event` не порождает (проба 2026-10-20),
+    // поэтому погашено только нажатие человека. Миг одалживания — просьба main окну о фокусе (`browser:agent-activity` с
+    // `focus`; событие `focus` гостя под Playwright не приходит, проба 2026-10-20), нажатие — через 100 мс после неё: фокус уже
+    // у страницы (настоящая клавиша раньше в гостя и не придёт), а операция ещё идёт (`settleMs` после ввода).
+    const opened = await openApp();
+    const { window, lead, electronApp } = opened;
+    const url = `${origin}/form`;
+    const tab = await openPage(opened, lead, { url, own: true });
+    await showPanel(window, lead);
+    const name = await refOf(opened, lead, tab, 'textbox', 'Name');
+    const field = window.getByTestId('chat-view').getByRole('textbox', { name: 'Message to Claude' });
+    await field.click();
+    await window.keyboard.type('hi');
+    await expect(field).toHaveValue('hi');
+    const before = await humanState(window);
+
+    // Без вмешательства ввод агента проходит.
+    const plain = await agentTool(opened, lead, 'browser_action', { tab, action: 'type', ref: name, text: 'first' });
+    expect(plain.isError, plain.text).toBe(false);
+    expect(await echoOf(opened, url)).toBe('first');
+
+    // Человек жмёт «Z», пока фокус у страницы агента.
+    await electronApp.evaluate(({ webContents }, u) => {
+      const guest = webContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL() === u);
+      const host = guest?.hostWebContents;
+      const g = globalThis as { __humanKeys?: number; __restoreSend?: () => void };
+      g.__humanKeys = 0;
+      if (guest === undefined || host === undefined || host === null) return;
+      const send = host.send;
+      g.__restoreSend = () => { host.send = send; };
+      host.send = (channel: string, ...args: unknown[]): void => {
+        send.call(host, channel, ...args);
+        const event = args[0] as { focus?: unknown } | undefined;
+        if (channel !== 'browser:agent-activity' || event?.focus === undefined || g.__humanKeys !== 0) return;
+        g.__humanKeys = 1;
+        setTimeout(() => {
+          guest.sendInputEvent({ type: 'keyDown', keyCode: 'Z' });
+          guest.sendInputEvent({ type: 'char', keyCode: 'Z' });
+          guest.sendInputEvent({ type: 'keyUp', keyCode: 'Z' });
+        }, 100);
+      };
+    }, url);
+    const busy = await agentTool(opened, lead, 'browser_action', { tab, action: 'type', ref: name, text: 'second' });
+    expect(await electronApp.evaluate(() => {
+      const g = globalThis as { __humanKeys?: number; __restoreSend?: () => void };
+      g.__restoreSend?.();
+      return g.__humanKeys;
+    })).toBe(1);
+    expect(busy.isError, busy.text).toBe(true);
+    expect(busy.text).toMatch(/^human_busy:/);
+    expect(busy.text).toContain('nothing of theirs reached the page');
+    const value = await guestEval<string>(electronApp, url, "document.getElementById('name').value");
+    expect(value).not.toContain('Z');
+    expect(value?.startsWith('first')).toBe(true);
+    // Фокус вернулся человеку: Chat без текста агента, следующие нажатия — в Chat.
+    await expect(field).toHaveValue('hi');
+    expect(await humanState(window)).toEqual(before);
+    await window.keyboard.type('!');
+    await expect(field).toHaveValue('hi!');
+
+    // Тишина клавиатуры прошла — повтор агента проходит, «Z» в странице так и нет.
+    await window.waitForTimeout(1200);
+    const retried = await agentTool(opened, lead, 'browser_action', { tab, action: 'type', ref: name, text: '-third' });
+    expect(retried.isError, retried.text).toBe(false);
+    const after = await guestEval<string>(electronApp, url, "document.getElementById('name').value");
+    expect(after).not.toContain('Z');
+    expect(after?.endsWith('-third')).toBe(true);
+    await expect(field).toHaveValue('hi!');
   });
 
   test('скрытая страница, которую человек видел, принимает ввод; ни разу не показанная — tab_hidden (Фокус ревью 2)', async () => {

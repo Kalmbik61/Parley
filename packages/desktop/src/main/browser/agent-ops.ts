@@ -139,6 +139,8 @@ const PAUSED = 'The human paused agents in this browser panel (paused by the hum
 const STOPPED = 'Stopped by the human: agents are paused in this browser panel (paused by the human).';
 const HUMAN_TYPING = "The human is typing in Parley's window: retry in a moment.";
 const HUMAN_BUSY = 'The human is selecting or annotating on this page: retry in a moment.';
+/** D1: нажатие человека пришло в страницу, пока фокус одолжен агенту, — погашено, операция оборвана. */
+const HUMAN_KEY = 'The human started typing while you held the keyboard; nothing of theirs reached the page. Your action may be partly done: check the page, wait a moment and retry.';
 
 /** Что операции нужно от страницы: `changes` — меняет страницу (отказ при `human_busy`), `window` — открывает окно операции, `seen` — нужна страница, которую человек видел. */
 export interface PageUse {
@@ -168,8 +170,11 @@ export function createPageRunner(deps: {
   activity(e: AgentActivity): void;
   opTimeoutMs?: number;
   window?: PageWindowHooks;
-  /** Тишина клавиатуры человека: пока он печатает, `guard.keyboardQuiet()` отказывает `human_busy` (15b, рецензия пачки 3). */
-  typing?: Pick<TypingClock, 'idleFor'>;
+  /**
+   * Тишина клавиатуры человека: пока он печатает, `guard.keyboardQuiet()` отказывает `human_busy` (15b, рецензия пачки 3);
+   * `guard.lendFocus()` до конца операции гасит нажатия человека в странице и обрывает операцию `human_busy` (D1).
+   */
+  typing?: Pick<TypingClock, 'idleFor' | 'lend'>;
 }): PageRunner {
   const { registry } = deps;
   const opTimeoutMs = deps.opTimeoutMs ?? AGENT_LIMITS.opMs - 2_000;
@@ -223,6 +228,9 @@ export function createPageRunner(deps: {
       const signal = AbortSignal.any([queueSignal, control.signal]);
       const entry = { panel: `${record.workKey}\n${ownerKey(record.owner)}`, abort: (reason: AgentOpError): void => control.abort(reason) };
       running.add(entry);
+      // Снятие одолженного фокуса (D1): держится до конца операции, пока окно не вернуло фокус человеку. Тип — приведением:
+      // присваивает его замыкание `lendFocus`, иначе TS сузит переменную до `null` в `finally`.
+      let unlend = null as (() => void) | null;
       const guard: InputGuard = {
         signal,
         check() {
@@ -233,6 +241,10 @@ export function createPageRunner(deps: {
         },
         keyboardQuiet() {
           if (deps.typing?.idleFor(AGENT_LIMITS.typingIdleMs) === false) throw new AgentOpError('human_busy', HUMAN_TYPING);
+        },
+        lendFocus() {
+          if (unlend !== null || deps.typing === undefined) return;
+          unlend = deps.typing.lend(contents.id, () => control.abort(new AgentOpError('human_busy', HUMAN_KEY)));
         },
       };
       const endWindow = use.window === true ? (deps.window?.begin(contents, record, request) ?? null) : null;
@@ -252,6 +264,8 @@ export function createPageRunner(deps: {
         running.delete(entry);
         endWindow?.();
         deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'end' });
+        // Окно возвращает фокус человеку по `end`: до него нажатие в странице агента — всё ещё чужое.
+        unlend?.();
       }
     });
   }
@@ -337,7 +351,7 @@ export function routeDownload(
 
 export interface FocusBorrower {
   /** Одалживание фокуса для страницы `agentId` — это `borrowFocus` из `createAgentInput`. Бросает `human_busy`, `window_not_connected`, `tab_hidden`. */
-  borrow(agentId: string): (contents: WebContents, signal: AbortSignal) => Promise<void>;
+  borrow(agentId: string): (contents: WebContents, guard: InputGuard) => Promise<void>;
   /** Ответ окна на просьбу о фокусе; чужой и поздний id молча игнорируется. */
   focusReady(id: string, ok: boolean): void;
 }
@@ -346,6 +360,7 @@ export interface FocusBorrower {
  * Одалживание фокуса `<webview>` для ввода агента (путь А, решения владельца 7 и 8): ждём тишину клавиатуры человека,
  * просим окно поставить фокус и ждём его ответ. `ok` не требует видимости: у скрытой страницы, которую человек видел,
  * фокус встаёт; `tab_hidden` — только отказ фокуса. `host.focus()` и `guest.focus()` не зовутся (спайк В4 (2)).
+ * Фокус считается одолженным (`guard.lendFocus`, D1) с просьбы окну: окно может поставить его раньше, чем main узнает ответ.
  */
 export function createFocusBorrower(deps: {
   typing: Pick<TypingClock, 'waitIdle'>;
@@ -359,9 +374,11 @@ export function createFocusBorrower(deps: {
     focusReady(id, ok) {
       pending.get(id)?.(ok);
     },
-    borrow: (agentId) => async (contents, signal) => {
+    borrow: (agentId) => async (contents, guard) => {
+      const { signal } = guard;
       if (!(await deps.typing.waitIdle(AGENT_LIMITS.typingIdleMs, focusMs, signal))) throw new AgentOpError('human_busy', HUMAN_TYPING);
       signal.throwIfAborted();
+      guard.lendFocus?.();
       const id = randomUUID();
       const answered = new Promise<boolean>((resolve) => {
         const done = (ok: boolean): void => {

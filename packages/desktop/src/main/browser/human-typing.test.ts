@@ -10,8 +10,11 @@ function fakeContents(id: number) {
     id,
     on: vi.fn((_name: string, listener: Listener) => { listeners.add(listener); }),
     off: vi.fn((_name: string, listener: Listener) => { listeners.delete(listener); }),
-    input(input: { type: string; key?: string; isAutoRepeat?: boolean }): void {
-      for (const listener of [...listeners]) listener({}, input);
+    /** Возвращает `true`, если слушатель погасил событие (`preventDefault`). */
+    input(input: { type: string; key?: string; isAutoRepeat?: boolean }): boolean {
+      let prevented = false;
+      for (const listener of [...listeners]) listener({ preventDefault: () => { prevented = true; } }, input);
+      return prevented;
     },
     size: (): number => listeners.size,
   };
@@ -37,6 +40,51 @@ describe('тишина клавиатуры человека (рецензия M
     win.input({ type: 'keyUp', key: 'h' });
     win.input({ type: 'keyDown', key: 'h', isAutoRepeat: true });
     expect(clock.idleFor(1_000)).toBe(true);
+  });
+
+  it('одолженный фокус (D1): keyDown, rawKeyDown, char и автоповтор гостя гасятся, сбрасывают тишину и зовут onHuman — даже под ignore; keyUp, другой гость и окно — нет; после снятия — как обычно', () => {
+    let now = 0;
+    const clock = createTypingClock({ now: () => now });
+    const win = fakeContents(1), guest = fakeContents(7), other = fakeContents(8);
+    clock.track(win as never); clock.track(guest as never); clock.track(other as never);
+    const onHuman = vi.fn();
+    clock.ignore(7, true);
+    const unlend = clock.lend(7, onHuman);
+
+    now = 5_000;
+    expect(guest.input({ type: 'keyUp', key: 'x' })).toBe(false);
+    expect(onHuman).not.toHaveBeenCalled();
+    expect(clock.idleFor(1_000)).toBe(true);
+    for (const press of [{ type: 'keyDown', key: 'x' }, { type: 'rawKeyDown', key: 'x' }, { type: 'char', key: 'x' }, { type: 'keyDown', key: 'x', isAutoRepeat: true }]) {
+      expect(guest.input(press), press.type).toBe(true);
+    }
+    expect(onHuman).toHaveBeenCalledTimes(4);
+    expect(clock.idleFor(1_000)).toBe(false);
+
+    // Чужой гость и окно не гасятся: это ввод человека туда, где у него фокус.
+    expect(other.input({ type: 'keyDown', key: 'y' })).toBe(false);
+    expect(win.input({ type: 'keyDown', key: 'y' })).toBe(false);
+    expect(onHuman).toHaveBeenCalledTimes(4);
+
+    unlend();
+    now = 10_000;
+    expect(guest.input({ type: 'keyDown', key: 'z' })).toBe(false);
+    expect(onHuman).toHaveBeenCalledTimes(4);
+    // Снова под ignore: в тишину не входит.
+    expect(clock.idleFor(1_000)).toBe(true);
+  });
+
+  it('снятие старого одалживания не снимает новое на том же госте', () => {
+    const clock = createTypingClock();
+    const guest = fakeContents(7);
+    clock.track(guest as never);
+    const first = vi.fn(), second = vi.fn();
+    const unlendFirst = clock.lend(7, first);
+    clock.lend(7, second);
+    unlendFirst();
+    expect(guest.input({ type: 'keyDown', key: 'x' })).toBe(true);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(first).not.toHaveBeenCalled();
   });
 
   it('track возвращает отписку', () => {

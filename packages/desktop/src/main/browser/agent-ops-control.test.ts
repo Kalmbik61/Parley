@@ -72,7 +72,7 @@ function devtoolsWith(options: { consoleText: string; requestUrl: string }): Dev
 }
 
 /** Полный `createAgentOps` с внешней страницей. */
-function setup(options: { url?: string; requestFocus?: (contents: WebContents, id: string) => boolean; uploadHome?: string; page?: boolean; openReply?: { mounted: boolean }; openMs?: number; resizeMs?: number; resizeApplies?: boolean; owners?: BrowserAgentOpEvent['owners']; realStorage?: boolean } = {}) {
+function setup(options: { url?: string; requestFocus?: (contents: WebContents, id: string) => boolean; uploadHome?: string; page?: boolean; openReply?: { mounted: boolean }; openMs?: number; resizeMs?: number; resizeApplies?: boolean; owners?: BrowserAgentOpEvent['owners']; realStorage?: boolean; typing?: ReturnType<typeof createTypingClock> } = {}) {
   const state = { allowed: true, epoch: 1 };
   const scripts = { evaluateOf: vi.fn<(contents: unknown, id: string, args: unknown, element: number | null, signal: AbortSignal) => Promise<unknown>>(async () => ({ tab: 't1', url: 'http://localhost:5173/settings', type: 'number', value: '1', truncated: false })) };
   const downloads = { list: vi.fn<(workKey: string, sessionId: string) => BrowserAgentDownload[]>(() => []), dirOf: vi.fn((work: string, session: string) => `/downloads/${work}/${session}`) };
@@ -120,7 +120,7 @@ function setup(options: { url?: string; requestFocus?: (contents: WebContents, i
     inGuest: async () => undefined,
     activity: () => undefined,
     agentWindow: createAgentWindow(),
-    typing: createTypingClock(),
+    typing: options.typing ?? createTypingClock(),
     ...(options.requestFocus === undefined ? {} : { requestFocus: options.requestFocus }),
     ...(options.uploadHome === undefined ? {} : { uploadHome: options.uploadHome }),
   });
@@ -271,7 +271,7 @@ function windowSetup(options: { tailMs?: number; focusMs?: number } = {}) {
     }),
   };
   const agentWindow = createAgentWindow({ tailMs: options.tailMs ?? 2_000 });
-  const typing = { track: vi.fn(), ignore: vi.fn(), idleFor: vi.fn(() => true), waitIdle: vi.fn(async () => true) };
+  const typing = { track: vi.fn(), ignore: vi.fn(), lend: vi.fn(() => () => undefined), idleFor: vi.fn(() => true), waitIdle: vi.fn(async () => true) };
   const requestFocus = vi.fn<(contents: WebContents, id: string) => boolean>(() => true);
   const hooks = createWindowHooks({ agentWindow, inspector, typing });
   const runner = createPageRunner({ registry, agentsAllowed: async () => true, activity: () => undefined, window: hooks, typing });
@@ -295,7 +295,7 @@ function windowSetup(options: { tailMs?: number; focusMs?: number } = {}) {
         return 'done';
       }, pageUse);
     },
-    borrow: (agentId: string) => borrower.borrow(agentId)(guests.get(7) as unknown as WebContents, new AbortController().signal),
+    borrow: (agentId: string) => borrower.borrow(agentId)(guests.get(7) as unknown as WebContents, { signal: new AbortController().signal, check: () => undefined }),
   };
   registry.register({ kind: 'hello', generation: GEN });
   ctx.register();
@@ -403,6 +403,40 @@ describe('окно операции, выбор файла, скачивания
     ctx.typing.idleFor.mockReturnValue(true);
     expect(() => g.keyboardQuiet()).not.toThrow();
   });
+
+  it('нажатие человека в странице агента: в окне операции до одалживания — проходит; с просьбы о фокусе — погашено, операция оборвана human_busy; после неё — проходит (D1)', async () => {
+    const guest = fakeGuest(7);
+    const registry = createPageRegistry({ fromId: (id) => (id === 7 ? (guest as unknown as WebContents) : null) });
+    registry.register({ kind: 'hello', generation: GEN });
+    registry.register({ kind: 'page', generation: GEN, webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true });
+    const typing = createTypingClock();
+    typing.track(guest as unknown as WebContents);
+    const inspector = { send: vi.fn(async (): Promise<unknown> => ({})), onEvent: vi.fn(() => () => undefined) };
+    const runner = createPageRunner({ registry, agentsAllowed: async () => true, activity: () => undefined, window: createWindowHooks({ agentWindow: createAgentWindow({ tailMs: 20 }), inspector, typing }), typing });
+    const borrower: ReturnType<typeof createFocusBorrower> = createFocusBorrower({ typing, requestFocus: (_c, id) => { queueMicrotask(() => borrower.focusReady(id, true)); return true; } });
+    const press = (): string => {
+      let prevented = false;
+      guest.emit('before-input-event', { preventDefault: () => { prevented = true; } }, { type: 'keyDown', key: 'z' });
+      return prevented ? 'prevented' : 'passed';
+    };
+    const seen: string[] = [];
+    let lent: () => void = () => undefined;
+    const borrowed = new Promise<void>((resolve) => { lent = resolve; });
+    const op = runner.run(request('action'), 't1', async (contents, _record, guard) => {
+      seen.push(press());
+      await borrower.borrow('t1')(contents, guard);
+      lent();
+      // Ввод агента «идёт»: операцию заканчивает только обрыв.
+      return new Promise<never>(() => undefined);
+    }, { window: true, changes: true });
+    await borrowed;
+    seen.push(press());
+    await expect(op).rejects.toMatchObject({ code: 'human_busy', message: expect.stringContaining('nothing of theirs reached the page') });
+    seen.push(press());
+    expect(seen).toEqual(['passed', 'prevented', 'passed']);
+    // Нажатие отмечено в тишине: следующее одалживание подождёт.
+    expect(typing.idleFor(AGENT_LIMITS.typingIdleMs)).toBe(false);
+  });
 });
 
 describe('snapshot и wait_for через createAgentOps (задача 16)', () => {
@@ -482,6 +516,34 @@ describe('action через createAgentOps (задача 17)', () => {
     requestFocus.mockClear();
     expect(codeOf(await ctx.run('action', { tab: 't2', action: 'type', text: 'Ann' }))).toBe('tab_hidden');
     expect(requestFocus).not.toHaveBeenCalled();
+  });
+
+  it('человек нажал клавишу, пока фокус одолжен агенту, — нажатие погашено, ввод оборван human_busy, Input.insertText не вызван; без вмешательства ввод проходит (D1)', async () => {
+    const holder = { ops: null as ReturnType<typeof setup>['ops'] | null, human: false, prevented: 0 };
+    const typing = createTypingClock();
+    // Окно ставит фокус, и в этот миг человек жмёт клавишу: `before-input-event` гостя агента.
+    const requestFocus = (contents: WebContents, id: string): boolean => {
+      queueMicrotask(() => {
+        if (holder.human) (contents as unknown as Guest).emit('before-input-event', { preventDefault: () => { holder.prevented += 1; } }, { type: 'keyDown', key: 'z' });
+        holder.ops?.focusReady(id, true);
+      });
+      return true;
+    };
+    const ctx = setup({ typing, requestFocus });
+    holder.ops = ctx.ops;
+    typing.track(ctx.guests.get(7) as unknown as WebContents);
+    ctx.ops.registerTab({ ...REG, visible: true });
+
+    expect(okResult<{ done: string }>(await ctx.run('action', { tab: 't1', action: 'type', text: 'Ann' })).done).toBe('Typed 3 characters.');
+    expect(holder.prevented).toBe(0);
+
+    ctx.inspector.send.mockClear();
+    holder.human = true;
+    const result = await ctx.run('action', { tab: 't1', action: 'type', text: 'Bob' });
+    expect(codeOf(result)).toBe('human_busy');
+    expect(messageOf(result)).toContain('The human started typing while you held the keyboard; nothing of theirs reached the page.');
+    expect(holder.prevented).toBe(1);
+    expect(inputCalls(ctx)).toEqual([]);
   });
 });
 

@@ -51,6 +51,8 @@ describe('AgentInput (Фокус ревью 1)', () => {
     await input.key(contents, keySpec('Enter')!, 0, guard);
     expect(order).toEqual(['borrow', 'Emulation.setFocusEmulationEnabled', 'Input.insertText', 'Input.dispatchKeyEvent', 'Input.dispatchKeyEvent']);
     expect(borrowFocus).toHaveBeenCalledTimes(1);
+    // Одалживанию нужен guard операции: с просьбы о фокусе оно гасит нажатия человека и обрывает операцию (D1).
+    expect(borrowFocus).toHaveBeenCalledWith(contents, guard);
     // Перед каждым из трёх шагов и ещё раз после одалживания фокуса.
     expect(guard.check).toHaveBeenCalledTimes(4);
   });

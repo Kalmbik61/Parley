@@ -44,6 +44,11 @@ export interface InputGuard {
   signal: AbortSignal;
   check(): void;
   keyboardQuiet?(): void;
+  /**
+   * Фокус гостя одолжен агенту с этого вызова до конца операции (D1): нажатие человека, пришедшее в страницу, гасится, а
+   * операция обрывается `human_busy`. Зовёт одалживание фокуса — после тишины и до просьбы окну.
+   */
+  lendFocus?(): void;
 }
 
 type Fit = { scale: number; mobile: boolean } | null;
@@ -111,8 +116,8 @@ const COMMAND_MODIFIERS = 2 | 4;
 
 export function createAgentInput(deps: {
   inspector: Pick<Inspector, 'send'>;
-  /** Бросает `tab_hidden` (окно не поставило фокус) или `human_busy` (человек печатает). */
-  borrowFocus?(contents: WebContents, signal: AbortSignal): Promise<void>;
+  /** Бросает `tab_hidden` (окно не поставило фокус) или `human_busy` (человек печатает); одолжив фокус, зовёт `guard.lendFocus`. */
+  borrowFocus?(contents: WebContents, guard: InputGuard): Promise<void>;
 }): AgentInput {
   /** Операции, которым фокус уже одолжен (ключ — signal операции). */
   const focused = new WeakSet<AbortSignal>();
@@ -125,7 +130,7 @@ export function createAgentInput(deps: {
   async function ensureFocus(contents: WebContents, guard: InputGuard): Promise<void> {
     const { signal } = guard;
     if (deps.borrowFocus === undefined || focused.has(signal)) return;
-    await deps.borrowFocus(contents, signal);
+    await deps.borrowFocus(contents, guard);
     // Одалживание ждёт тишины клавиатуры человека до 10 с: Stop, пауза или выключатель могли прийти за это время.
     guard.check();
     signal.throwIfAborted();
