@@ -10,6 +10,8 @@ import type { CompactionService } from '../compaction/compaction-service.js';
 import { createCompactionMethods } from '../compaction/compaction-methods.js';
 import type { Profiler } from '../diagnostics/profiler.js';
 import type { FeedService } from '../feed/feed-service.js';
+import type { TelegramService } from '../telegram/service.js';
+import { createTelegramHandlers } from './telegram.js';
 import type { HealthService } from '../health/health-service.js';
 import type { Log } from '../log.js';
 import type { PlanEffectsService } from '../rooms/plan-effects.js';
@@ -109,6 +111,8 @@ export interface MethodDeps {
   send?: (params: { ref: SessionRef; text: string; submit: boolean }) => Promise<SendResult>;
   /** Помощник на острове (спека 2026-10-14); без него методов `assistant.*` у хоста нет. */
   assistant?: AssistantService;
+  /** Канал Telegram (план B); без него методов `telegram.*` у хоста нет. */
+  telegram?: TelegramService;
 }
 
 /** Сколько знаков сообщения окна доходит агенту. */
@@ -201,6 +205,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     ...createHistoryHandlers(),
     ...(deps.planEffects ? createPlanHandlers(deps.planEffects) : {}),
     ...(deps.assistant === undefined ? {} : createAssistantHandlers(deps.assistant)),
+    ...(deps.telegram === undefined ? {} : createTelegramHandlers(deps.telegram)),
     'host.info': hostInfo as AnyHandler,
     'host.shutdown': hostShutdown as AnyHandler,
     'works.list': worksList(deps.works) as AnyHandler,
@@ -220,7 +225,12 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
       : { 'providers.check': createProvidersCheck(deps.providerVersions, deps.glmCheck, deps.customCheck) as AnyHandler }),
     ...createCustomProviderHandlers(deps.customCheck),
     'settings.get': settingsGet as AnyHandler,
-    'settings.set': settingsSet as AnyHandler,
+    'settings.set': (async (params, request) => {
+      const result = await settingsSet(params, request);
+      // Настройка записана: канал Telegram включается, выключается или меняет поводы.
+      deps.telegram?.configChanged(result.config);
+      return result;
+    }) as typeof settingsSet as AnyHandler,
     'pty.attach': pty.ptyAttach as AnyHandler,
     'pty.detach': pty.ptyDetach as AnyHandler,
     'pty.send': pty.ptySend as AnyHandler,

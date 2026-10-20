@@ -32,7 +32,7 @@ export interface TelegramStateStore {
   putCard(shortId: string, card: CardRecord): void;
   dropCard(shortId: string): void;
   cardsFor(predicate: (card: CardRecord) => boolean): Array<[string, CardRecord]>;
-  /** Удаляет карточки старше `CARD_TTL_MS`. */
+  /** Удаляет карточки и записи писем старше `CARD_TTL_MS`. */
   pruneCards(): void;
   putLetter(messageId: number, letter: LetterRecord): void;
   letter(messageId: number): LetterRecord | null;
@@ -145,10 +145,12 @@ export function createTelegramState(deps: { home: string; now?(): number; log(li
       return Object.entries(get().cards).filter(([, card]) => predicate(card));
     },
     pruneCards() {
-      const cards = get().cards;
-      const kept = Object.fromEntries(Object.entries(cards).filter(([, card]) => now() - Date.parse(card.at) <= CARD_TTL_MS));
-      if (Object.keys(kept).length === Object.keys(cards).length) return;
-      state = { ...get(), cards: kept };
+      const fresh = (at: string): boolean => now() - Date.parse(at) <= CARD_TTL_MS;
+      const { cards, letters } = get();
+      const keptCards = Object.fromEntries(Object.entries(cards).filter(([, card]) => fresh(card.at)));
+      const keptLetters = Object.fromEntries(Object.entries(letters).filter(([, letter]) => fresh(letter.at)));
+      if (Object.keys(keptCards).length === Object.keys(cards).length && Object.keys(keptLetters).length === Object.keys(letters).length) return;
+      state = { ...get(), cards: keptCards, letters: keptLetters };
       save();
     },
     putLetter(messageId, letter) {

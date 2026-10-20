@@ -105,6 +105,16 @@ describe('createTelegramState', () => {
     expect(Object.keys(store.get().cards)).toEqual(['fresh']);
   });
 
+  it('pruneCards удаляет и старые письма', () => {
+    const store = make();
+    const letter = (at: number) => ({ projectPath: '/p', workId: 'w', roomId: 'r', from: 'a', at: new Date(at).toISOString() });
+    store.putLetter(1, letter(T0 - 8 * 24 * 3_600_000));
+    store.putLetter(2, letter(T0 - 3_600_000));
+    store.pruneCards();
+    expect(store.letter(1)).toBeNull();
+    expect(store.letter(2)).not.toBeNull();
+  });
+
   it('putLetter и letter', () => {
     const store = make();
     const letter = { projectPath: '/p', workId: 'w', roomId: 'r', from: 'a', at: 'x' };

@@ -59,6 +59,8 @@ export type CardRecord =
       messageId: number;
       at: string;
       question: number;
+      /** Ответы на уже пройденные вопросы многовопросной карточки: CLI ждёт все сразу, `feed.decide` — после последнего. */
+      answers?: Record<string, string>;
       wait?: { kind: 'other'; until: string };
     }
   | {

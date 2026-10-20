@@ -1,15 +1,18 @@
 import { AGENT_SESSIONS_PATH, createSessionEndpoint } from './agent/session-endpoint.js';
 import { randomBytes } from 'node:crypto';
 import { mkdir, chmod, link, rename, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   ASSISTANT_MIN_VERSIONS,
   bothEnv,
+  clearSecret,
   findRunnerBinary,
   isMember,
   isRoomArchived,
   isStaleHostLock,
+  loadConfig,
   loadProviders,
   migrateProjects,
   parleyHome,
@@ -21,8 +24,10 @@ import {
   readSecret,
   socketIsAlive,
   versionAtLeast,
+  writeSecret,
   type ProviderEntry,
 } from '@parley/core';
+import { createTelegramService } from './telegram/service.js';
 import { createHostContext } from './context.js';
 import type { HostContext } from './context.js';
 import { createHostServer } from './server.js';
@@ -456,8 +461,36 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     reminders,
     home: parleyHome(),
     log: (line) => log.info(line),
+    onReminderWhileOff: (reminder) => telegram.reminderWhileOff(reminder),
   });
   const reminderTarget = assistantService;
+
+  // Канал Telegram (план B): опрос бота, карточки и письма; остановка раньше помощника, чтобы мост отписался первым.
+  const telegram = createTelegramService({
+    home: parleyHome(),
+    host: handle.context,
+    works: worksService,
+    activity: activityService,
+    feed: feedService,
+    assistant: assistantService,
+    sendLetter: (input) => sendHumanLetter(input, { via: 'telegram' }),
+    resolveRoomProposal: (input) => resolveRoomProposal(input),
+    config: async () => (await loadConfig()).config,
+    secret: {
+      read: () => readSecret('telegram'),
+      write: (value) => writeSecret('telegram', value),
+      clear: () => clearSecret('telegram'),
+    },
+    fetch: globalThis.fetch,
+    ...(process.env.PARLEY_TELEGRAM_API === undefined ? {} : { apiBase: process.env.PARLEY_TELEGRAM_API }),
+    engine:
+      process.env.PARLEY_WHISPER_BIN !== undefined && process.env.PARLEY_WHISPER_VAD !== undefined
+        ? { bin: process.env.PARLEY_WHISPER_BIN, vadModel: process.env.PARLEY_WHISPER_VAD }
+        : null,
+    macName: os.hostname(),
+    log: (line) => log.info(line),
+  });
+  handle.context.onShutdown(async () => telegram.stop());
   handle.context.onShutdown(async () => reminders.stop());
   handle.context.onShutdown(async () => assistantService?.stop());
 
@@ -525,6 +558,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     browserAgent: browserEndpoint,
     send,
     assistant: assistantService,
+    telegram,
     health,
     profiler,
     log: handle.context.log,
@@ -610,6 +644,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   }
   // Напоминания — после ворот работ и приёмника хуков: раньше ход помощника упёрся бы в «хоста ещё нет».
   reminders.start((reminder, late) => reminderTarget.onReminder(reminder, late));
+  await telegram.start();
   await activityService.start();
   planEffects.start();
   history.start();

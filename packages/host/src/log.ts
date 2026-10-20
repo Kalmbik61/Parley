@@ -1,4 +1,5 @@
 import { appendFileSync, existsSync, renameSync, statSync } from 'node:fs';
+import { maskTelegramTokens } from '@parley/core';
 
 export interface Log {
   info(msg: string, data?: object): void;
@@ -14,7 +15,15 @@ export interface Log {
 export function createLog(file: string, options?: { maxBytes?: number }): Log {
   const maxBytes = options?.maxBytes ?? 5 * 1024 * 1024;
 
-  const write = (level: string, msg: string, data?: object): void => {
+  /** Токен бота Telegram не должен попасть в файл ни через сообщение, ни через строковое поле. */
+  const mask = (data: object | undefined): object | undefined =>
+    data === undefined
+      ? undefined
+      : Object.fromEntries(Object.entries(data).map(([key, value]) => [key, typeof value === 'string' ? maskTelegramTokens(value) : value]));
+
+  const write = (level: string, rawMsg: string, rawData?: object): void => {
+    const msg = maskTelegramTokens(rawMsg);
+    const data = mask(rawData);
     if (existsSync(file) && statSync(file).size >= maxBytes) {
       renameSync(file, `${file}.1`);
     }
