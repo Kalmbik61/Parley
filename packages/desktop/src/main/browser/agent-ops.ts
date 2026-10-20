@@ -80,6 +80,12 @@ export interface AgentOps {
   registerTab(e: AgentPageRegistration): void;
   /** Окно подтверждает, что `<webview>` стоит в размере снимка (канал `browser:agent-capture-ready`); чужой и поздний id молча игнорируется. */
   captureReady(id: string): void;
+  /** Stop на значке агента: пауза панели страницы и обрыв операций всех страниц этой панели (канал `browser:agent-stop`). */
+  stop(webContentsId: number): void;
+  /** Ответ окна на просьбу о фокусе (канал `browser:agent-focus-ready`): `ok` — фокус на `<webview>`. */
+  focusReady(id: string, ok: boolean): void;
+  /** Общий выключатель «Let agents use the browser» изменился: при `false` оборвать идущие операции. */
+  accessChanged(allowed: boolean): void;
 }
 
 /** Схема аргументов по имени операции: хост другой версии может прислать незнакомую. */
@@ -267,6 +273,9 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
             const args = parsed.data as BrowserAgentArgs<'screenshot'>;
             return ok(await onPage(request, args.tab, (contents, record, signal) => capture.screenshotOf(contents, record, request, args, signal)));
           }
+          default:
+            // До задач 16–19; остаётся защитой от операции новее окна.
+            return failure('unsupported', `This window does not run ${String(request.op)} yet.`);
         }
       } catch (error) {
         if (error instanceof AgentOpError) return failure(error.code, error.message);
@@ -281,6 +290,15 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     },
     captureReady(id) {
       capture.captureReady(id);
+    },
+    stop() {
+      // Задачи 15a и 15b.
+    },
+    focusReady() {
+      // Задачи 15a и 15b.
+    },
+    accessChanged() {
+      // Задачи 15a и 15b.
     },
   };
 }

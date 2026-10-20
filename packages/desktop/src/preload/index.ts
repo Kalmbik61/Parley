@@ -4,6 +4,7 @@ import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBr
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import type {
   AgentActivity,
+  AgentResize,
   AgentOpenTab,
   AgentOpenTabResult,
   AgentPageRegistration,
@@ -60,6 +61,7 @@ const browserFocusListeners = new Set<(e: { webContentsId: number }) => void>();
 const browserDevtoolsListeners = new Set<(batch: DevtoolsBatch) => void>();
 const browserAgentOpenTabListeners = new Set<(e: AgentOpenTab) => void>();
 const browserAgentActivityListeners = new Set<(e: AgentActivity) => void>();
+const browserAgentResizeListeners = new Set<(e: AgentResize) => void>();
 const windowFocusListeners = new Set<(focused: boolean) => void>();
 const updateListeners = new Set<(info: UpdateInfo) => void>();
 const voiceProgressListeners = new Set<(progress: DownloadProgress) => void>();
@@ -145,6 +147,10 @@ ipcRenderer.on('browser:agent-open-tab', (_event, e: AgentOpenTab) => {
 
 ipcRenderer.on('browser:agent-activity', (_event, e: AgentActivity) => {
   for (const listener of browserAgentActivityListeners) listener(e);
+});
+
+ipcRenderer.on('browser:agent-resize', (_event, e: AgentResize) => {
+  for (const listener of browserAgentResizeListeners) listener(e);
 });
 
 ipcRenderer.on('app:window-focus', (_event, focused: boolean) => {
@@ -381,6 +387,12 @@ const bridge = {
       return () => browserAgentActivityListeners.delete(listener);
     },
     agentCaptureReady: (id: string) => ipcRenderer.invoke('browser:agent-capture-ready', id) as Promise<void>,
+    onAgentResize: (listener: (e: AgentResize) => void) => {
+      browserAgentResizeListeners.add(listener);
+      return () => browserAgentResizeListeners.delete(listener);
+    },
+    agentStop: (webContentsId: number) => ipcRenderer.invoke('browser:agent-stop', webContentsId) as Promise<void>,
+    agentFocusReady: (id: string, ok: boolean) => ipcRenderer.invoke('browser:agent-focus-ready', id, ok) as Promise<void>,
   },
   voice: {
     listModels: () => ipcRenderer.invoke('voice:list-models') as Promise<VoiceModelId[]>,

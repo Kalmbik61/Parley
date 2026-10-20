@@ -227,3 +227,21 @@ describe('fake-bridge: browser.annotate* (этап B браузера)', () => {
     expect(bridge.browserCalls.map((call) => call.method)).toEqual(['annotateStart', 'annotateStart', 'annotateSync', 'annotateCapture']);
   });
 });
+
+describe('fake-bridge: агент управляет браузером (этап D)', () => {
+  it('emitAgentResize доходит до onAgentResize, отписка работает; agentStop и agentFocusReady пишутся в browserCalls', async () => {
+    const bridge = createFakeBridge();
+    const seen: unknown[] = [];
+    const off = bridge.browser.onAgentResize((e) => seen.push(e));
+    bridge.emitAgentResize({ webContentsId: 7, viewport: null });
+    off();
+    bridge.emitAgentResize({ webContentsId: 8, viewport: null });
+    expect(seen).toEqual([{ webContentsId: 7, viewport: null }]);
+    await bridge.browser.agentStop(7);
+    await bridge.browser.agentFocusReady('f-1', true);
+    expect(bridge.browserCalls).toEqual([
+      { method: 'agentStop', args: [7] },
+      { method: 'agentFocusReady', args: ['f-1', true] },
+    ]);
+  });
+});
