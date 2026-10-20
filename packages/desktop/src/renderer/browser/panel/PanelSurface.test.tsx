@@ -552,8 +552,10 @@ describe('PanelSurface — управление агента в окне (эта
     act1('step', { focus: { id: 'f-1' } });
     expect(document.activeElement).toBe(view);
     expect(bridge.browserCalls.filter((call) => call.method === 'agentFocusReady')).toEqual([{ method: 'agentFocusReady', args: ['f-1', true] }]);
-    act1('end');
+    // `end` с `focus` (хвост D1): окно возвращает фокус человеку и подтверждает это main тем же каналом.
+    act1('end', { focus: { id: 'b-1' } });
     expect(document.activeElement).toBe(chat);
+    expect(bridge.browserCalls.filter((call) => call.method === 'agentFocusReady').at(-1)).toEqual({ method: 'agentFocusReady', args: ['b-1', true] });
     chat.remove();
   });
 

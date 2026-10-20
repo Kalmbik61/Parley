@@ -7,7 +7,8 @@
  *
  * Одалживание фокуса (путь А, решение владельца 7): CDP-ввод агента доходит до гостя только при фокусе на `<webview>`.
  * Окно запоминает `document.activeElement` человека, ставит фокус на `<webview>` и отвечает main; по концу операции возвращает
- * фокус обратно. `hostWebContents.focus()` и `guest.focus()` не зовутся: они отнимают фокус ОС у человека.
+ * фокус обратно и подтверждает это main (хвост D1: до подтверждения main гасит нажатия в странице агента).
+ * `hostWebContents.focus()` и `guest.focus()` не зовутся: они отнимают фокус ОС у человека.
  *
  * Из гостя в гостя (фокус человека в `<webview>` его вкладки браузера) Chromium переводит фокус ввода во вложенную страницу,
  * только когда фокус у самого окна: `node.focus()` поверх другого гостя меняет `document.activeElement`, а клавиши идут
@@ -131,7 +132,8 @@ export interface FocusLenderOptions {
 
 export interface FocusLender {
   borrow(id: string): void;
-  restore(): void;
+  /** Конец операции: вернуть фокус человеку; `replyId` (`end` с `focus`, хвост D1) — подтвердить main `ready(replyId, true)`. */
+  restore(replyId?: string): void;
   dispose(): void;
 }
 
@@ -142,7 +144,7 @@ export function createFocusLender({ view, webContentsId, ready }: FocusLenderOpt
   /** Чей фокус вернуть по концу операции; `undefined` — в этой операции фокус не одалживали, `node` — человек сам был в странице агента. */
   let previous: Element | null | undefined;
 
-  const restore = (): void => {
+  const returnFocus = (): void => {
     const node = view();
     const was = previous;
     previous = undefined;
@@ -157,6 +159,12 @@ export function createFocusLender({ view, webContentsId, ready }: FocusLenderOpt
     // Вернуть некуда: `body`, элемент удалён или фокус не взял (финальная рецензия M1). Фокус уходит окну, а не остаётся
     // в странице агента, где одолжения уже нет.
     if (document.activeElement === node) node.blur();
+  };
+
+  // Main до подтверждения гасит нажатия в странице агента (хвост D1): отвечаем, когда фокус уже у человека.
+  const restore = (replyId?: string): void => {
+    returnFocus();
+    if (replyId !== undefined) ready(replyId, true);
   };
 
   return {
@@ -188,6 +196,6 @@ export function createFocusLender({ view, webContentsId, ready }: FocusLenderOpt
       ready(id, ok);
     },
     restore,
-    dispose: restore,
+    dispose: () => restore(),
   };
 }

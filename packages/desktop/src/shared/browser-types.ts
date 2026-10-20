@@ -188,7 +188,10 @@ export interface AgentActivity {
   capture?: { width: number; height: number; id: string };
   /** D: точка клика в пикселях элемента `<webview>` (масштаб страницы и `scale` эмуляции уже учтены). */
   point?: { x: number; y: number };
-  /** D (путь А, решение владельца 7): поставить фокус на `<webview>` и ответить `agentFocusReady(id, ok)`. */
+  /**
+   * D (путь А, решение владельца 7): с `step` — поставить фокус на `<webview>` и ответить `agentFocusReady(id, ok)`; с `end`
+   * (хвост D1) — вернуть фокус человеку и подтвердить `agentFocusReady(id, true)`: до этого main гасит нажатия в странице агента.
+   */
   focus?: { id: string };
 }
 

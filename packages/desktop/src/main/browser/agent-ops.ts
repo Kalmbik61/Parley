@@ -115,7 +115,7 @@ export interface AgentOps {
   captureReady(id: string): void;
   /** Stop на значке агента: пауза панели страницы и обрыв операций всех страниц этой панели (канал `browser:agent-stop`). */
   stop(webContentsId: number): void;
-  /** Ответ окна на просьбу о фокусе (канал `browser:agent-focus-ready`): `ok` — фокус на `<webview>`. */
+  /** Ответ окна на просьбу о фокусе (канал `browser:agent-focus-ready`): `ok` — фокус на `<webview>`; на `end` с `focus` — фокус вернулся человеку. */
   focusReady(id: string, ok: boolean): void;
   /** Общий выключатель «Let agents use the browser» изменился: при `false` оборвать идущие операции. */
   accessChanged(allowed: boolean): void;
@@ -141,6 +141,11 @@ const HUMAN_TYPING = "The human is typing in Parley's window: retry in a moment.
 const HUMAN_BUSY = 'The human is selecting or annotating on this page: retry in a moment.';
 /** D1: нажатие человека пришло в страницу, пока фокус одолжен агенту, — погашено, операция оборвана. */
 const HUMAN_KEY = 'The human started typing while you held the keyboard; nothing of theirs reached the page. Your action may be partly done: check the page, wait a moment and retry.';
+/**
+ * Хвост D1: сколько после `end` ждать подтверждения окна, что фокус вернулся человеку, пока нажатия в странице агента ещё
+ * гасятся. Окно отвечает за миллисекунды; срок — на случай, если ответа нет (окно закрыто, гость без лендера).
+ */
+const FOCUS_RETURN_MS = 300;
 /** B1: клавиатуру окна держит операция ввода другой страницы (другой агент или параллельный вызов того же). */
 const KEYBOARD_BUSY = "Another agent is using the keyboard in Parley's window: retry in a moment.";
 
@@ -177,6 +182,8 @@ export function createPageRunner(deps: {
    * `guard.lendFocus()` до конца операции гасит нажатия человека в странице и обрывает операцию `human_busy` (D1).
    */
   typing?: Pick<TypingClock, 'idleFor' | 'lend'>;
+  /** Ждёт, пока окно подтвердит возврат фокуса человеку по `end` с этим id (`FocusBorrower.focusReturned`); без него одолжение снимается сразу. */
+  focusReturned?(id: string): Promise<void>;
 }): PageRunner {
   const { registry } = deps;
   const opTimeoutMs = deps.opTimeoutMs ?? AGENT_LIMITS.opMs - 2_000;
@@ -270,11 +277,20 @@ export function createPageRunner(deps: {
       } finally {
         running.delete(entry);
         endWindow?.();
-        deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'end' });
-        // Окно возвращает фокус человеку по `end`: до него нажатие в странице агента — всё ещё чужое. Аренда клавиатуры —
-        // после `end`: просьба о фокусе следующей операции придёт окну позже возврата этой.
-        lent?.unlend();
-        lent?.release();
+        const held = lent;
+        // Окно возвращает фокус человеку по `end` и подтверждает это ответом на `focus.id`. До подтверждения (не дольше
+        // `focusReturnMs`) нажатие в странице агента всё ещё чужое: оно гасится, а обрывать уже нечего (финальная рецензия m1).
+        // Аренда клавиатуры — тогда же: просьба о фокусе следующей операции придёт окну после возврата этой.
+        const back = held === null || deps.focusReturned === undefined ? null : randomUUID();
+        // Ожидание ставится до `end`: окно может ответить раньше, чем main вернётся сюда.
+        const returned = back === null || deps.focusReturned === undefined ? null : deps.focusReturned(back);
+        deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'end', ...(back === null ? {} : { focus: { id: back } }) });
+        const free = (): void => {
+          held?.unlend();
+          held?.release();
+        };
+        if (returned === null) free();
+        else void returned.then(free);
       }
     });
   }
@@ -361,8 +377,10 @@ export function routeDownload(
 export interface FocusBorrower {
   /** Одалживание фокуса для страницы `agentId` — это `borrowFocus` из `createAgentInput`. Бросает `human_busy`, `window_not_connected`, `tab_hidden`, `timeout` (клавиатуру держит другая операция). */
   borrow(agentId: string): (contents: WebContents, guard: InputGuard) => Promise<void>;
-  /** Ответ окна на просьбу о фокусе; чужой и поздний id молча игнорируется. */
+  /** Ответ окна на просьбу о фокусе и на `end` с `focus` (фокус вернулся человеку); чужой и поздний id молча игнорируется. */
   focusReady(id: string, ok: boolean): void;
+  /** Ждёт, пока окно подтвердит возврат фокуса по `end` с этим id, не дольше `focusReturnMs`; не отказывает. */
+  focusReturned(id: string): Promise<void>;
 }
 
 /** Аренда по очереди: `acquire` ждёт не дольше `limitMs`, `null` — не дождались; обрыв `signal` — отказ с его причиной. */
@@ -433,8 +451,11 @@ export function createFocusBorrower(deps: {
   typing: Pick<TypingClock, 'waitIdle'>;
   requestFocus?(contents: WebContents, id: string): boolean;
   focusMs?: number;
+  /** Запасной срок подтверждения возврата фокуса; по умолчанию `FOCUS_RETURN_MS`. Тестам — меньше. */
+  focusReturnMs?: number;
 }): FocusBorrower {
   const focusMs = deps.focusMs ?? AGENT_LIMITS.focusMs;
+  const focusReturnMs = deps.focusReturnMs ?? FOCUS_RETURN_MS;
   const pending = new Map<string, (ok: boolean) => void>();
   const keyboard = createLease();
 
@@ -471,6 +492,17 @@ export function createFocusBorrower(deps: {
   return {
     focusReady(id, ok) {
       pending.get(id)?.(ok);
+    },
+    focusReturned(id) {
+      return new Promise((resolve) => {
+        const done = (): void => {
+          clearTimeout(timer);
+          pending.delete(id);
+          resolve();
+        };
+        const timer = setTimeout(done, focusReturnMs);
+        pending.set(id, done);
+      });
     },
     borrow: (agentId) => async (contents, guard) => {
       const { signal } = guard;
@@ -575,15 +607,16 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   /** Ждущие ответа окна: id просьбы → продолжение. */
   const pendingOpens = new Map<string, (result: AgentOpenTabResult | 'no_window' | 'timeout') => void>();
   const registry = createPageRegistry({ fromId: deps.fromId });
+  const focus = createFocusBorrower({ typing: deps.typing, ...(deps.requestFocus === undefined ? {} : { requestFocus: deps.requestFocus }), ...(deps.focusMs === undefined ? {} : { focusMs: deps.focusMs }) });
   const runner = createPageRunner({
     registry,
     agentsAllowed: deps.agentsAllowed,
     activity: deps.activity,
     window: createWindowHooks({ agentWindow: deps.agentWindow, inspector: deps.inspector, typing: deps.typing }),
     typing: deps.typing,
+    focusReturned: focus.focusReturned,
     ...(deps.opTimeoutMs === undefined ? {} : { opTimeoutMs: deps.opTimeoutMs }),
   });
-  const focus = createFocusBorrower({ typing: deps.typing, ...(deps.requestFocus === undefined ? {} : { requestFocus: deps.requestFocus }), ...(deps.focusMs === undefined ? {} : { focusMs: deps.focusMs }) });
   const reads = createAgentReads({ inspector: deps.inspector });
   const dom = createAgentDom({ inspector: deps.inspector });
   const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, dom, saveImage: deps.saveImage, image: deps.image, activity: deps.activity, inGuest: deps.inGuest, ...(deps.captureReadyMs === undefined ? {} : { captureReadyMs: deps.captureReadyMs }), ...(deps.guestCallMs === undefined ? {} : { guestCallMs: deps.guestCallMs }), ...(deps.windowHeight === undefined ? {} : { windowHeight: deps.windowHeight }), ...(deps.screenDpr === undefined ? {} : { screenDpr: deps.screenDpr }) });

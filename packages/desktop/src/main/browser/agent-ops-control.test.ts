@@ -465,6 +465,47 @@ describe('окно операции, выбор файла, скачивания
     // Нажатие отмечено в тишине: следующее одалживание подождёт.
     expect(typing.idleFor(AGENT_LIMITS.typingIdleMs)).toBe(false);
   });
+
+  it('хвост D1 (финальная рецензия m1): операция кончилась, а окно ещё не подтвердило возврат фокуса — нажатие в странице агента гасится без обрыва; после подтверждения или запасного срока — проходит, аренда клавиатуры свободна', async () => {
+    const guest = fakeGuest(7);
+    const registry = createPageRegistry({ fromId: (id) => (id === 7 ? (guest as unknown as WebContents) : null) });
+    registry.register({ kind: 'hello', generation: GEN });
+    registry.register({ kind: 'page', generation: GEN, webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true });
+    const press = (): string => {
+      let prevented = false;
+      guest.emit('before-input-event', { preventDefault: () => { prevented = true; } }, { type: 'keyDown', key: 'z' });
+      return prevented ? 'prevented' : 'passed';
+    };
+    const ends: AgentActivity[] = [];
+    const setupTail = () => {
+      const typing = createTypingClock();
+      typing.track(guest as unknown as WebContents);
+      const borrower: ReturnType<typeof createFocusBorrower> = createFocusBorrower({ typing, focusReturnMs: 40, requestFocus: (_c, id) => { queueMicrotask(() => borrower.focusReady(id, true)); return true; } });
+      const runner = createPageRunner({ registry, agentsAllowed: async () => true, activity: (e) => { if (e.phase === 'end') ends.push(e); }, typing, focusReturned: borrower.focusReturned });
+      const typed = (): Promise<string> => runner.run(request('action'), 't1', async (contents, _record, guard) => {
+        await borrower.borrow('t1')(contents, guard);
+        return 'typed';
+      }, { changes: true });
+      return { borrower, typed };
+    };
+
+    // Окно подтверждает возврат фокуса.
+    const confirmed = setupTail();
+    await expect(confirmed.typed()).resolves.toBe('typed');
+    const id = ends.at(-1)?.focus?.id as string;
+    expect(id).toEqual(expect.any(String));
+    expect(press()).toBe('prevented');
+    confirmed.borrower.focusReady(id, true);
+    await vi.waitFor(() => expect(press()).toBe('passed'));
+
+    // Окно молчит: запасной срок.
+    const silent = setupTail();
+    await expect(silent.typed()).resolves.toBe('typed');
+    expect(press()).toBe('prevented');
+    await vi.waitFor(() => expect(press()).toBe('passed'));
+    // Аренда отпущена вместе с одолжением: следующая операция ввода идёт (тишина — после погашенных нажатий).
+    await expect(silent.typed()).resolves.toBe('typed');
+  });
 });
 
 describe('snapshot и wait_for через createAgentOps (задача 16)', () => {

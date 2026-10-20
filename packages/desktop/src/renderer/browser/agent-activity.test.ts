@@ -247,6 +247,26 @@ describe('одалживание фокуса', () => {
     expect(isLendingFocus(8)).toBe(false);
   });
 
+  it('restore с id (end с focus, хвост D1): ready(id, true) — после возврата фокуса; и тогда, когда фокус не одалживали', () => {
+    const chat = document.createElement('textarea');
+    document.body.append(chat);
+    chat.focus();
+    const view = document.createElement('webview');
+    view.tabIndex = 0;
+    document.body.append(view);
+    const ready = vi.fn((id: string) => {
+      if (id === 'b-1') expect(document.activeElement).toBe(chat);
+    });
+    const lender = createFocusLender({ view: () => view, webContentsId: 7, ready });
+    lender.borrow('f-14');
+    lender.restore('b-1');
+    expect(ready).toHaveBeenLastCalledWith('b-1', true);
+    lender.restore('b-2');
+    expect(ready).toHaveBeenLastCalledWith('b-2', true);
+    lender.restore();
+    expect(ready).toHaveBeenCalledTimes(3);
+  });
+
   it('dispose возвращает фокус и снимает флаг', () => {
     const chat = document.createElement('textarea');
     document.body.append(chat);

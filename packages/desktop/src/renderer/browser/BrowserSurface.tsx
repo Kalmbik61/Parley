@@ -550,7 +550,7 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
         applyAgentActivity(event);
         if (event.phase === 'end') {
           setAgentCapture(null);
-          lenderRef.current?.restore();
+          lenderRef.current?.restore(event.focus?.id);
         } else {
           if (event.capture !== undefined) setAgentCapture(event.capture);
           if (event.focus !== undefined) lenderRef.current?.borrow(event.focus.id);
