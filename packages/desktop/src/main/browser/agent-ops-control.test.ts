@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { BrowserAgentOpEvent, BrowserAgentResult } from '@parley/protocol';
 import type { WebContents } from 'electron';
 import type { DevtoolsSnapshot, ViewportSpec } from '../../shared/browser-devtools.js';
-import type { AgentOpenTab, AgentPageRegistration, AgentResize } from '../../shared/browser-types.js';
+import type { AgentActivity, AgentOpenTab, AgentPageRegistration, AgentResize } from '../../shared/browser-types.js';
 import { workKey } from '../../shared/work-keys.js';
 import { createPageRegistry } from './agent-pages.js';
 import type { InputGuard } from './agent-input.js';
@@ -72,7 +72,7 @@ function devtoolsWith(options: { consoleText: string; requestUrl: string }): Dev
 }
 
 /** Полный `createAgentOps` с внешней страницей. */
-function setup(options: { url?: string; requestFocus?: (contents: WebContents, id: string) => boolean; uploadHome?: string; page?: boolean; openReply?: { mounted: boolean }; openMs?: number; resizeMs?: number; resizeApplies?: boolean; owners?: BrowserAgentOpEvent['owners']; realStorage?: boolean; typing?: ReturnType<typeof createTypingClock> } = {}) {
+function setup(options: { url?: string; requestFocus?: (contents: WebContents, id: string) => boolean; activity?: (e: AgentActivity) => void; uploadHome?: string; page?: boolean; openReply?: { mounted: boolean }; openMs?: number; resizeMs?: number; resizeApplies?: boolean; owners?: BrowserAgentOpEvent['owners']; realStorage?: boolean; typing?: ReturnType<typeof createTypingClock> } = {}) {
   const state = { allowed: true, epoch: 1 };
   const scripts = { evaluateOf: vi.fn<(contents: unknown, id: string, args: unknown, element: number | null, signal: AbortSignal) => Promise<unknown>>(async () => ({ tab: 't1', url: 'http://localhost:5173/settings', type: 'number', value: '1', truncated: false })) };
   const downloads = { list: vi.fn<(workKey: string, sessionId: string) => BrowserAgentDownload[]>(() => []), dirOf: vi.fn((work: string, session: string) => `/downloads/${work}/${session}`) };
@@ -118,7 +118,7 @@ function setup(options: { url?: string; requestFocus?: (contents: WebContents, i
     saveImage: async () => '/drops/shot.png',
     image: { resize: (data: Buffer) => data, stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data, cropRect },
     inGuest: async () => undefined,
-    activity: () => undefined,
+    activity: options.activity ?? (() => undefined),
     agentWindow: createAgentWindow(),
     typing: options.typing ?? createTypingClock(),
     ...(options.requestFocus === undefined ? {} : { requestFocus: options.requestFocus }),
@@ -382,6 +382,34 @@ describe('окно операции, выбор файла, скачивания
     await expect(ctx.borrow('t1')).rejects.toMatchObject({ code: 'window_not_connected' });
   });
 
+  it('аренда клавиатуры (финальная рецензия B1): второе одалживание ждёт, пока первая операция не отпустит аренду; не дождалось за focusMs — timeout «Another agent is using the keyboard»', async () => {
+    const ctx = windowSetup({ focusMs: 60 });
+    ctx.requestFocus.mockImplementation((_c, id) => { queueMicrotask(() => ctx.borrower.focusReady(id, true)); return true; });
+    const guest = { id: 7 } as unknown as WebContents;
+    const releases: Array<() => void> = [];
+    const guard = (): InputGuard => ({ signal: new AbortController().signal, check: () => undefined, lendFocus: (release) => { releases.push(release); } });
+    await ctx.borrower.borrow('t1')(guest, guard());
+    expect(ctx.requestFocus).toHaveBeenCalledTimes(1);
+    const second = ctx.borrower.borrow('t2')(guest, guard());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Первая операция держит фокус: вторая окно не просит.
+    expect(ctx.requestFocus).toHaveBeenCalledTimes(1);
+    releases[0]?.();
+    await expect(second).resolves.toBeUndefined();
+    expect(ctx.requestFocus).toHaveBeenCalledTimes(2);
+    // Вторая держит аренду и не отпускает: третья ждёт focusMs и отказывает, окно не просит.
+    await expect(ctx.borrower.borrow('t3')(guest, guard())).rejects.toMatchObject({ code: 'timeout', message: expect.stringContaining('Another agent is using the keyboard') });
+    expect(ctx.requestFocus).toHaveBeenCalledTimes(2);
+    // Обрыв в очереди — отказ с причиной обрыва, аренда не взята.
+    const stop = new AbortController();
+    const stopped = ctx.borrower.borrow('t4')(guest, { signal: stop.signal, check: () => undefined, lendFocus: (release) => { releases.push(release); } });
+    stop.abort(new AgentOpError('access_denied', 'Stopped by the human.'));
+    await expect(stopped).rejects.toMatchObject({ code: 'access_denied' });
+    releases[1]?.();
+    await expect(ctx.borrower.borrow('t5')(guest, guard())).resolves.toBeUndefined();
+    expect(ctx.requestFocus).toHaveBeenCalledTimes(3);
+  });
+
   it('скрытая страница, которую человек видел (visible: false после true), — borrowFocus просит окно, как у видимой; ok: true — ввод идёт (решение владельца 8)', async () => {
     const ctx = windowSetup({ focusMs: 50 });
     ctx.register({ visible: true });
@@ -544,6 +572,53 @@ describe('action через createAgentOps (задача 17)', () => {
     expect(messageOf(result)).toContain('The human started typing while you held the keyboard; nothing of theirs reached the page.');
     expect(holder.prevented).toBe(1);
     expect(inputCalls(ctx)).toEqual([]);
+  });
+
+  it('две операции ввода на разных страницах одновременно (финальная рецензия B1): одалживания не пересекаются, ввод каждой — в свою страницу, фокус человека вернулся в Chat', async () => {
+    const holder = { ops: null as ReturnType<typeof setup>['ops'] | null };
+    // Модель окна: один фокус ввода на всё окно; у каждого гостя свой лендер, как `createFocusLender`: помнит, чей фокус
+    // вернуть, и возвращает его, только если фокус всё ещё на его `<webview>`. События окна идут по порядку отправки.
+    const win = { focused: 'chat', previous: new Map<number, string>(), log: [] as string[], misdirected: [] as string[] };
+    const requestFocus = (contents: WebContents, id: string): boolean => {
+      setTimeout(() => {
+        if (!win.previous.has(contents.id)) win.previous.set(contents.id, win.focused);
+        win.focused = `guest ${contents.id}`;
+        win.log.push(`focus ${contents.id}`);
+        holder.ops?.focusReady(id, true);
+      }, 1);
+      return true;
+    };
+    const activity = (e: AgentActivity): void => {
+      if (e.phase !== 'end') return;
+      setTimeout(() => {
+        const was = win.previous.get(e.webContentsId);
+        win.previous.delete(e.webContentsId);
+        if (was !== undefined && win.focused === `guest ${e.webContentsId}`) win.focused = was;
+        win.log.push(`end ${e.webContentsId}`);
+        if (e.focus !== undefined) holder.ops?.focusReady(e.focus.id, true);
+      }, 1);
+    };
+    const ctx = setup({ requestFocus, activity });
+    holder.ops = ctx.ops;
+    ctx.guests.set(8, fakeGuest(8));
+    ctx.ops.registerTab({ ...REG, visible: true });
+    ctx.ops.registerTab({ ...REG, pageId: 'bp-bbbbbb', webContentsId: 8, visible: true });
+    ctx.inspector.send.mockImplementation(async (id?: number, method?: string): Promise<unknown> => {
+      // CDP-клавиатура и мышь идут в гостя, у которого фокус ввода окна (спайк В1; E2E 22a, тест 3).
+      if (method?.startsWith('Input.') === true && win.focused !== `guest ${String(id)}`) win.misdirected.push(`${method} of ${String(id)} went to ${win.focused}`);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      return {};
+    });
+    const results = await Promise.all([
+      ctx.run('action', { tab: 't1', action: 'type', text: 'Ann', submit: true }),
+      ctx.run('action', { tab: 't2', action: 'type', text: 'Bob', submit: true }),
+    ]);
+    expect(results.map(codeOf)).toEqual(['ok', 'ok']);
+    expect(inputCalls(ctx).filter((method) => method === 'Input.insertText')).toHaveLength(2);
+    expect(win.misdirected).toEqual([]);
+    await vi.waitFor(() => expect(win.log).toHaveLength(4));
+    expect([['focus 7', 'end 7', 'focus 8', 'end 8'], ['focus 8', 'end 8', 'focus 7', 'end 7']]).toContainEqual(win.log);
+    expect(win.focused).toBe('chat');
   });
 });
 

@@ -141,6 +141,8 @@ const HUMAN_TYPING = "The human is typing in Parley's window: retry in a moment.
 const HUMAN_BUSY = 'The human is selecting or annotating on this page: retry in a moment.';
 /** D1: нажатие человека пришло в страницу, пока фокус одолжен агенту, — погашено, операция оборвана. */
 const HUMAN_KEY = 'The human started typing while you held the keyboard; nothing of theirs reached the page. Your action may be partly done: check the page, wait a moment and retry.';
+/** B1: клавиатуру окна держит операция ввода другой страницы (другой агент или параллельный вызов того же). */
+const KEYBOARD_BUSY = "Another agent is using the keyboard in Parley's window: retry in a moment.";
 
 /** Что операции нужно от страницы: `changes` — меняет страницу (отказ при `human_busy`), `window` — открывает окно операции, `seen` — нужна страница, которую человек видел. */
 export interface PageUse {
@@ -228,9 +230,9 @@ export function createPageRunner(deps: {
       const signal = AbortSignal.any([queueSignal, control.signal]);
       const entry = { panel: `${record.workKey}\n${ownerKey(record.owner)}`, abort: (reason: AgentOpError): void => control.abort(reason) };
       running.add(entry);
-      // Снятие одолженного фокуса (D1): держится до конца операции, пока окно не вернуло фокус человеку. Тип — приведением:
-      // присваивает его замыкание `lendFocus`, иначе TS сузит переменную до `null` в `finally`.
-      let unlend = null as (() => void) | null;
+      // Одолженный фокус (D1) и аренда клавиатуры окна (B1): держатся до конца операции, пока окно не вернуло фокус человеку.
+      // Тип — приведением: присваивает его замыкание `lendFocus`, иначе TS сузит переменную до `null` в `finally`.
+      let lent = null as { unlend(): void; release(): void } | null;
       const guard: InputGuard = {
         signal,
         check() {
@@ -242,9 +244,14 @@ export function createPageRunner(deps: {
         keyboardQuiet() {
           if (deps.typing?.idleFor(AGENT_LIMITS.typingIdleMs) === false) throw new AgentOpError('human_busy', HUMAN_TYPING);
         },
-        lendFocus() {
-          if (unlend !== null || deps.typing === undefined) return;
-          unlend = deps.typing.lend(contents.id, () => control.abort(new AgentOpError('human_busy', HUMAN_KEY)));
+        lendFocus(release) {
+          // Одалживание — одно на операцию (`AgentInput` помнит его по signal): повтор вторую аренду не держит.
+          if (lent !== null) {
+            release();
+            return;
+          }
+          const unlend = deps.typing?.lend(contents.id, () => control.abort(new AgentOpError('human_busy', HUMAN_KEY))) ?? ((): void => undefined);
+          lent = { unlend, release };
         },
       };
       const endWindow = use.window === true ? (deps.window?.begin(contents, record, request) ?? null) : null;
@@ -264,8 +271,10 @@ export function createPageRunner(deps: {
         running.delete(entry);
         endWindow?.();
         deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'end' });
-        // Окно возвращает фокус человеку по `end`: до него нажатие в странице агента — всё ещё чужое.
-        unlend?.();
+        // Окно возвращает фокус человеку по `end`: до него нажатие в странице агента — всё ещё чужое. Аренда клавиатуры —
+        // после `end`: просьба о фокусе следующей операции придёт окну позже возврата этой.
+        lent?.unlend();
+        lent?.release();
       }
     });
   }
@@ -350,10 +359,62 @@ export function routeDownload(
 }
 
 export interface FocusBorrower {
-  /** Одалживание фокуса для страницы `agentId` — это `borrowFocus` из `createAgentInput`. Бросает `human_busy`, `window_not_connected`, `tab_hidden`. */
+  /** Одалживание фокуса для страницы `agentId` — это `borrowFocus` из `createAgentInput`. Бросает `human_busy`, `window_not_connected`, `tab_hidden`, `timeout` (клавиатуру держит другая операция). */
   borrow(agentId: string): (contents: WebContents, guard: InputGuard) => Promise<void>;
   /** Ответ окна на просьбу о фокусе; чужой и поздний id молча игнорируется. */
   focusReady(id: string, ok: boolean): void;
+}
+
+/** Аренда по очереди: `acquire` ждёт не дольше `limitMs`, `null` — не дождались; обрыв `signal` — отказ с его причиной. */
+interface Lease {
+  acquire(signal: AbortSignal, limitMs: number): Promise<(() => void) | null>;
+}
+
+function createLease(): Lease {
+  let busy = false;
+  /** Ждущие по порядку постановки: вызов отдаёт аренду следующему. */
+  const waiting: Array<() => void> = [];
+  const grant = (): (() => void) => {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = waiting.shift();
+      if (next === undefined) busy = false;
+      else next();
+    };
+  };
+  return {
+    acquire(signal, limitMs) {
+      if (signal.aborted) return Promise.reject(signal.reason as Error);
+      if (!busy) {
+        busy = true;
+        return Promise.resolve(grant());
+      }
+      return new Promise((resolve, reject) => {
+        function leave(): void {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', onAbort);
+          const at = waiting.indexOf(turn);
+          if (at >= 0) waiting.splice(at, 1);
+        }
+        function turn(): void {
+          leave();
+          resolve(grant());
+        }
+        function onAbort(): void {
+          leave();
+          reject(signal.reason as Error);
+        }
+        const timer = setTimeout(() => {
+          leave();
+          resolve(null);
+        }, limitMs);
+        waiting.push(turn);
+        signal.addEventListener('abort', onAbort, { once: true });
+      });
+    },
+  };
 }
 
 /**
@@ -361,6 +422,12 @@ export interface FocusBorrower {
  * просим окно поставить фокус и ждём его ответ. `ok` не требует видимости: у скрытой страницы, которую человек видел,
  * фокус встаёт; `tab_hidden` — только отказ фокуса. `host.focus()` и `guest.focus()` не зовутся (спайк В4 (2)).
  * Фокус считается одолженным (`guard.lendFocus`, D1) с просьбы окну: окно может поставить его раньше, чем main узнает ответ.
+ *
+ * Клавиатура окна одна (финальная рецензия B1): две операции ввода сразу (две сессии, комната с двумя агентами, два
+ * параллельных `browser_action` одного агента) перекладывали бы фокус друг у друга — шаги одной уходили бы в страницу
+ * другой, а возврат фокуса человеку шёл бы по цепочке в страницу агента. Поэтому одалживание берёт аренду (одну на
+ * `createFocusBorrower`, а он один на main) до тишины и просьбы окну, ждёт её не дольше `focusMs` и отдаёт в `guard.lendFocus`: runner
+ * отпускает её вместе с одолжением.
  */
 export function createFocusBorrower(deps: {
   typing: Pick<TypingClock, 'waitIdle'>;
@@ -369,6 +436,37 @@ export function createFocusBorrower(deps: {
 }): FocusBorrower {
   const focusMs = deps.focusMs ?? AGENT_LIMITS.focusMs;
   const pending = new Map<string, (ok: boolean) => void>();
+  const keyboard = createLease();
+
+  /** Просьба окну поставить фокус и ожидание ответа не дольше `focusMs`. */
+  async function askFocus(agentId: string, contents: WebContents, signal: AbortSignal): Promise<void> {
+    const id = randomUUID();
+    const answered = new Promise<boolean>((resolve) => {
+      const done = (ok: boolean): void => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
+        pending.delete(id);
+        resolve(ok);
+      };
+      const onAbort = (): void => done(false);
+      const timer = setTimeout(() => done(false), focusMs);
+      pending.set(id, done);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+    let sent = false;
+    try {
+      sent = deps.requestFocus?.(contents, id) ?? false;
+    } catch {
+      // Окно закрыто посреди вызова — как будто его нет.
+    }
+    if (!sent) {
+      pending.get(id)?.(false);
+      throw new AgentOpError('window_not_connected', "Parley's window is not ready: ask the human to open it.");
+    }
+    const ok = await answered;
+    signal.throwIfAborted();
+    if (!ok) throw new AgentOpError('tab_hidden', `Page ${agentId} could not take keyboard focus: ask the human to show the page.`);
+  }
 
   return {
     focusReady(id, ok) {
@@ -376,35 +474,21 @@ export function createFocusBorrower(deps: {
     },
     borrow: (agentId) => async (contents, guard) => {
       const { signal } = guard;
-      if (!(await deps.typing.waitIdle(AGENT_LIMITS.typingIdleMs, focusMs, signal))) throw new AgentOpError('human_busy', HUMAN_TYPING);
-      signal.throwIfAborted();
-      guard.lendFocus?.();
-      const id = randomUUID();
-      const answered = new Promise<boolean>((resolve) => {
-        const done = (ok: boolean): void => {
-          clearTimeout(timer);
-          signal.removeEventListener('abort', onAbort);
-          pending.delete(id);
-          resolve(ok);
-        };
-        const onAbort = (): void => done(false);
-        const timer = setTimeout(() => done(false), focusMs);
-        pending.set(id, done);
-        signal.addEventListener('abort', onAbort, { once: true });
-      });
-      let sent = false;
+      const release = await keyboard.acquire(signal, focusMs);
+      if (release === null) throw new AgentOpError('timeout', KEYBOARD_BUSY);
+      let handed = false;
       try {
-        sent = deps.requestFocus?.(contents, id) ?? false;
-      } catch {
-        // Окно закрыто посреди вызова — как будто его нет.
+        if (!(await deps.typing.waitIdle(AGENT_LIMITS.typingIdleMs, focusMs, signal))) throw new AgentOpError('human_busy', HUMAN_TYPING);
+        signal.throwIfAborted();
+        if (guard.lendFocus !== undefined) {
+          guard.lendFocus(release);
+          handed = true;
+        }
+        await askFocus(agentId, contents, signal);
+      } finally {
+        // Аренду не взял runner (отказ до одолжения или вызов без него): она кончается здесь.
+        if (!handed) release();
       }
-      if (!sent) {
-        pending.get(id)?.(false);
-        throw new AgentOpError('window_not_connected', "Parley's window is not ready: ask the human to open it.");
-      }
-      const ok = await answered;
-      signal.throwIfAborted();
-      if (!ok) throw new AgentOpError('tab_hidden', `Page ${agentId} could not take keyboard focus: ask the human to show the page.`);
     },
   };
 }

@@ -46,9 +46,10 @@ export interface InputGuard {
   keyboardQuiet?(): void;
   /**
    * Фокус гостя одолжен агенту с этого вызова до конца операции (D1): нажатие человека, пришедшее в страницу, гасится, а
-   * операция обрывается `human_busy`. Зовёт одалживание фокуса — после тишины и до просьбы окну.
+   * операция обрывается `human_busy`. Зовёт одалживание фокуса — после тишины и до просьбы окну. `release` — аренда
+   * клавиатуры окна (финальная рецензия B1): её отпускают вместе с одолжением.
    */
-  lendFocus?(): void;
+  lendFocus?(release: () => void): void;
 }
 
 type Fit = { scale: number; mobile: boolean } | null;
@@ -116,7 +117,7 @@ const COMMAND_MODIFIERS = 2 | 4;
 
 export function createAgentInput(deps: {
   inspector: Pick<Inspector, 'send'>;
-  /** Бросает `tab_hidden` (окно не поставило фокус) или `human_busy` (человек печатает); одолжив фокус, зовёт `guard.lendFocus`. */
+  /** Бросает `tab_hidden` (окно не поставило фокус), `human_busy` (человек печатает) или `timeout` (клавиатуру держит другая операция); одолжив фокус, зовёт `guard.lendFocus`. */
   borrowFocus?(contents: WebContents, guard: InputGuard): Promise<void>;
 }): AgentInput {
   /** Операции, которым фокус уже одолжен (ключ — signal операции). */
