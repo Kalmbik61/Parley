@@ -13,6 +13,8 @@ import { PANEL_LIMITS } from '../../renderer/layout/tree.js';
 import { pngSize } from './png.js';
 import { createEmulation } from './emulation.js';
 import { createPageRegistry } from './agent-pages.js';
+import { createAgentWindow } from './agent-window.js';
+import { createTypingClock } from './human-typing.js';
 import { captureSpec, createAgentOps, NOT_MOUNTED_NOTE, openableHref, type AgentOps } from './agent-ops.js';
 
 const REF = { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' };
@@ -100,6 +102,8 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
     saveImage,
     image,
     inGuest,
+    agentWindow: createAgentWindow(),
+    typing: createTypingClock(),
     // Окно подтверждает поверхность снимка сразу после просьбы, как это делает рендерер (если тест не отключил подтверждение).
     activity: (e: AgentActivity) => {
       activity.push(e);
@@ -1501,6 +1505,8 @@ describe('тайм-аут и немедленный повтор с настоя
       saveImage: async () => '/drops/x.png',
       image: { resize: (_data: Buffer, width: number, height: number) => png(width, height), stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data },
       inGuest: async () => undefined,
+      agentWindow: createAgentWindow(),
+      typing: createTypingClock(),
       activity: (e: AgentActivity) => {
         if (e.capture !== undefined) queueMicrotask(() => ops.captureReady((e.capture as { id: string }).id));
       },
@@ -1590,6 +1596,8 @@ describe('замёрзший гость посреди fullPage не клини�
       activity: (e: AgentActivity) => {
         if (e.capture !== undefined) queueMicrotask(() => ops.captureReady((e.capture as { id: string }).id));
       },
+      agentWindow: createAgentWindow(),
+      typing: createTypingClock(),
       ...timing,
     });
     ops.registerTab({ kind: 'hello', generation: GEN });

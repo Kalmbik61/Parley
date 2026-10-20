@@ -23,13 +23,16 @@ import type { WebContents } from 'electron';
 import { configPath, envValue, loadConfig, migrateHome, parleyHome } from '@parley/core';
 import type { AssistantLanguage } from '@parley/core/assistant';
 import { systemAssistantLanguage } from '../shared/assistant-language.js';
-import type { WorksSnapshot } from '@parley/protocol';
+import { AGENT_LIMITS, type WorksSnapshot } from '@parley/protocol';
 import type { FocusTarget, HostStatus } from '../shared/bridge.js';
-import { BROWSER_PARTITION } from '../shared/browser-types.js';
+import { BROWSER_PARTITION, type AgentActivity } from '../shared/browser-types.js';
 import { ISLAND_EVENTS, type AssistantOpenRequest, type IslandConfig } from '../shared/island.js';
 import { S } from '../shared/strings.js';
 import type { UiFile } from '../shared/ui-types.js';
-import { createAgentOps, type AgentOps } from './browser/agent-ops.js';
+import { createAgentDownloads } from './browser/agent-downloads.js';
+import { createAgentOps, routeDownload, type AgentOps } from './browser/agent-ops.js';
+import { createAgentWindow } from './browser/agent-window.js';
+import { createTypingClock } from './browser/human-typing.js';
 import { createAnnotate } from './browser/annotate.js';
 import { contextDir, saveContextFile } from './browser/context-files.js';
 import { createDesignMode, PICK_WORLD_ID } from './browser/design-mode.js';
@@ -327,6 +330,8 @@ if (!gotLock) {
       // первое сообщение (обычно «хост подключён») уйдёт в пустоту. Статус хоста —
       // каждой загрузке: после перезагрузки страница иначе осталась бы на «Connecting…».
       forwardHostToPages(connection, window);
+      // Тишина клавиатуры человека (15b): нажатия в окне Parley; гости подписываются в адаптере стража.
+      typing.track(window.webContents);
       window.webContents.once('did-finish-load', () => {
         forwardAppearanceToWindow(nativeTheme, window);
       });
@@ -379,7 +384,11 @@ if (!gotLock) {
     // до выбора элемента: Select берёт у него снимок, роль и React (спека 3.8).
     const inspector = createInspector({ fromId: (id) => webContents.fromId(id) ?? null });
     forwardBatches(inspector, (id) => webContents.fromId(id) ?? null);
+    const typing = createTypingClock();
     const emulation = createEmulation({ inspector });
+    // Окно операции агента, скачивания агента и тишина клавиатуры человека (15b): до стража, он их читает.
+    const agentWindow = createAgentWindow();
+    const agentDownloads = createAgentDownloads({ root: path.join(parleyHome(), 'desktop', 'agent-downloads') });
     // Снимок элемента Design Mode (кусок 9.3a) — в drops/, как скриншоты из буфера (5.4). Создаётся до
     // стража: загрузка из гостя снимает его выбор (fix-9b).
     const designMode = createDesignMode({
@@ -409,10 +418,20 @@ if (!gotLock) {
         webContents.fromId(e.openerWebContentsId)?.hostWebContents?.send('browser:open-tab', e);
       },
       // hostWebContents читается в момент нажатия: окно пересоздаётся на activate, ссылка устарела бы.
-      forwardShortcuts: (contents) =>
-        forwardGuestShortcuts(contents, (id) => contents.hostWebContents?.send('menu:action', id)),
+      forwardShortcuts: (contents) => {
+        const untrack = typing.track(contents);
+        const unforward = forwardGuestShortcuts(contents, (id) => contents.hostWebContents?.send('menu:action', id));
+        return () => {
+          untrack();
+          unforward();
+        };
+      },
+      // Пока у гостя окно операции агента, его `focus` (одолженный или от CDP-клика) активную вкладку не меняет (M1).
+      agentFocus: (id) => agentWindow.activeFor(id) !== null,
       download: (item, source) => {
         designMode.downloadStarted(source.id);
+        // Скачивание в окне операции агента — в папку его сессии без диалога; остальные — диалог человека.
+        if (routeDownload(item, source, { agentWindow, downloads: agentDownloads })) return;
         if (!logDownloads) {
           promptDownload(item, app.getPath('downloads'));
           return;
@@ -606,6 +625,10 @@ if (!gotLock) {
     setInterval(() => {
       void cleanupDrops(dropsDir(), AGENT_SHOT_MAX_AGE_MS, Date.now(), (name) => name.startsWith(AGENT_SHOT_PREFIX)).catch((error: unknown) => console.warn('[parley] cleanupAgentShots', error));
     }, 60 * 60 * 1000).unref();
+    // Скачанное агентом хранится `downloadDays` суток (15b): та же почасовая уборка.
+    setInterval(() => {
+      void agentDownloads.sweep(AGENT_LIMITS.downloadDays * 24 * 60 * 60 * 1000).catch((error: unknown) => console.warn('[parley] sweepAgentDownloads', error));
+    }, 60 * 60 * 1000).unref();
     const fakeDrops = switches.drops;
 
     const rootsSource: RootsSource = {
@@ -705,6 +728,15 @@ if (!gotLock) {
         return host === undefined || host === null ? null : (BrowserWindow.fromWebContents(host)?.getContentSize()[1] ?? null);
       },
       activity: (e) => webContents.fromId(e.webContentsId)?.hostWebContents?.send('browser:agent-activity', e),
+      agentWindow,
+      typing,
+      // Только просьба окну: ответ приходит каналом `browser:agent-focus-ready`. `focus()` main не зовёт (спайк В4 (2)).
+      requestFocus: (contents, id) => {
+        const host = contents.hostWebContents;
+        if (host === undefined || host === null || host.isDestroyed()) return false;
+        host.send('browser:agent-activity', { webContentsId: contents.id, session: '', op: 'focus', phase: 'step', focus: { id } } satisfies AgentActivity);
+        return true;
+      },
     });
     agentOps = ops;
     // Синхронный флаг выключателя для идущих операций: при старте и в `onUiSaved` (ниже).

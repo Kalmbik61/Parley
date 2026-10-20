@@ -142,7 +142,7 @@ function fakeContents(id: number, type: 'window' | 'webview' | 'remote') {
   return contents;
 }
 
-function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false) {
+function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false, agentFocus?: (id: number) => boolean) {
   const app = new EventEmitter();
   let requestHandler: ((wc: unknown, permission: string, cb: (granted: boolean) => void) => void) | null = null;
   let checkHandler: ((...args: unknown[]) => boolean) | null = null;
@@ -171,6 +171,7 @@ function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false) {
       download,
       fetchFavicon,
       inspect,
+      ...(agentFocus === undefined ? {} : { agentFocus }),
     });
   install();
   const created = (contents: ReturnType<typeof fakeContents>): void => {
@@ -523,6 +524,18 @@ describe('фокус гостя (тест 10 куска 9.2b)', () => {
     const guard = setupGuard();
     const guest = fakeContents(46, 'webview');
     guard.created(guest);
+    guest.emit('focus');
+    expect(guest.hostWebContents.send).toHaveBeenCalledWith('browser:focus', { webContentsId: 46 });
+  });
+
+  it('пока agentFocus(id) — focus гостя не шлёт окну browser:focus; потом — шлёт (рецензия M1)', () => {
+    let agent = true;
+    const guard = setupGuard(() => false, () => agent);
+    const guest = fakeContents(46, 'webview');
+    guard.created(guest);
+    guest.emit('focus');
+    expect(guest.hostWebContents.send).not.toHaveBeenCalledWith('browser:focus', expect.anything());
+    agent = false;
     guest.emit('focus');
     expect(guest.hostWebContents.send).toHaveBeenCalledWith('browser:focus', { webContentsId: 46 });
   });

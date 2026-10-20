@@ -10,7 +10,10 @@ import type { AgentPageRegistration } from '../../shared/browser-types.js';
 import { workKey } from '../../shared/work-keys.js';
 import { createPageRegistry } from './agent-pages.js';
 import type { InputGuard } from './agent-input.js';
-import { createAgentOps, createPageRunner, AgentOpError, type PageUse } from './agent-ops.js';
+import { AGENT_LIMITS } from '@parley/protocol';
+import { createAgentWindow } from './agent-window.js';
+import { createTypingClock } from './human-typing.js';
+import { createAgentOps, createFocusBorrower, createPageRunner, createWindowHooks, routeDownload, AgentOpError, type PageUse } from './agent-ops.js';
 
 const REF = { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' };
 const WORK = workKey(REF.projectPath, REF.workId);
@@ -61,6 +64,8 @@ function setup(options: { url?: string } = {}) {
     image: { resize: (data: Buffer) => data, stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data },
     inGuest: async () => undefined,
     activity: () => undefined,
+    agentWindow: createAgentWindow(),
+    typing: createTypingClock(),
   });
   ops.registerTab({ kind: 'hello', generation: GEN });
   ops.registerTab({ kind: 'page', generation: GEN, webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true });
@@ -179,5 +184,152 @@ describe('занятость, Stop, пауза и выключатель (Фок
     const result = await ctx.run('console', { tab: 't1' });
     expect(codeOf(result)).toBe('access_denied');
     expect(messageOf(result)).toContain('paused by the human');
+  });
+});
+
+
+/** Окно операции: настоящий `createPageRunner` с крючками 15b, журнал CDP-событий — вручную. */
+function windowSetup(options: { tailMs?: number; focusMs?: number } = {}) {
+  const guests = new Map<number, Guest>([[7, fakeGuest(7)]]);
+  const registry = createPageRegistry({ fromId: (id) => (guests.get(id) as unknown as WebContents | undefined) ?? null });
+  const listeners = new Map<string, Array<(params: unknown) => void>>();
+  const inspector = {
+    send: vi.fn(async (): Promise<unknown> => ({})),
+    onEvent: vi.fn((id: number, method: string, listener: (params: unknown) => void) => {
+      const key = `${id}:${method}`;
+      listeners.set(key, [...(listeners.get(key) ?? []), listener]);
+      return () => { listeners.set(key, (listeners.get(key) ?? []).filter((item) => item !== listener)); };
+    }),
+  };
+  const agentWindow = createAgentWindow({ tailMs: options.tailMs ?? 2_000 });
+  const typing = { track: vi.fn(), ignore: vi.fn(), idleFor: vi.fn(() => true), waitIdle: vi.fn(async () => true) };
+  const requestFocus = vi.fn<(contents: WebContents, id: string) => boolean>(() => true);
+  const hooks = createWindowHooks({ agentWindow, inspector, typing });
+  const runner = createPageRunner({ registry, agentsAllowed: async () => true, activity: () => undefined, window: hooks, typing });
+  const borrower = createFocusBorrower({ typing, requestFocus, ...(options.focusMs === undefined ? {} : { focusMs: options.focusMs }) });
+  const ctx = {
+    inspector, agentWindow, typing, requestFocus, borrower, runner,
+    pageKey: `${WORK}\nbp-aaaaaa`,
+    ran: 0,
+    release: (): void => undefined,
+    register(patch: Record<string, unknown> = {}): void {
+      registry.register({ kind: 'page', generation: GEN, webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true, ...patch } as AgentPageRegistration);
+    },
+    emitCdp(id: number, method: string, params: unknown): void {
+      for (const listener of listeners.get(`${id}:${method}`) ?? []) listener(params);
+    },
+    pageOp(agentId: string, use: PageUse & { hold?: boolean }): Promise<unknown> {
+      const { hold, ...pageUse } = use;
+      return runner.run(request(), agentId, async () => {
+        ctx.ran += 1;
+        if (hold === true) await new Promise<void>((resolve) => { ctx.release = resolve; });
+        return 'done';
+      }, pageUse);
+    },
+    borrow: (agentId: string) => borrower.borrow(agentId)(guests.get(7) as unknown as WebContents, new AbortController().signal),
+  };
+  registry.register({ kind: 'hello', generation: GEN });
+  ctx.register();
+  return ctx;
+}
+
+const downloadItem = (name: string) => ({ getFilename: () => name }) as unknown as import('electron').DownloadItem;
+
+describe('окно операции, выбор файла, скачивания, фокус (15b)', () => {
+  it('операция с window: окно операции и перехват выбора файла; после хвоста перехват снят', async () => {
+    const ctx = windowSetup({ tailMs: 20 });
+    const done = ctx.pageOp('t1', { window: true, hold: true });
+    await vi.waitFor(() => expect(ctx.ran).toBe(1));
+    expect(ctx.inspector.send).toHaveBeenCalledWith(7, 'Page.setInterceptFileChooserDialog', { enabled: true });
+    expect(ctx.agentWindow.activeFor(7)).toMatchObject({ sessionId: 's-02', agentId: 't1' });
+    expect(ctx.typing.ignore).toHaveBeenCalledWith(7, true);
+    ctx.release();
+    await done;
+    expect(ctx.typing.ignore).toHaveBeenLastCalledWith(7, false);
+    await vi.waitFor(() => expect(ctx.inspector.send).toHaveBeenCalledWith(7, 'Page.setInterceptFileChooserDialog', { enabled: false }));
+    expect(ctx.agentWindow.activeFor(7)).toBeNull();
+  });
+
+  it('вторая операция внутри хвоста перехват не включает заново и не снимает', async () => {
+    const ctx = windowSetup({ tailMs: 20 });
+    await ctx.pageOp('t1', { window: true });
+    await ctx.pageOp('t1', { window: true });
+    const enables = ctx.inspector.send.mock.calls.filter((call) => (call as unknown[])[2] !== undefined && ((call as unknown[])[2] as { enabled: boolean }).enabled);
+    expect(enables).toHaveLength(1);
+    await vi.waitFor(() => expect(ctx.inspector.send).toHaveBeenCalledWith(7, 'Page.setInterceptFileChooserDialog', { enabled: false }));
+  });
+
+  it('операция без window: окна операции и перехвата нет', async () => {
+    const ctx = windowSetup();
+    await ctx.pageOp('t1', {});
+    expect(ctx.inspector.send).not.toHaveBeenCalled();
+    expect(ctx.agentWindow.activeFor(7)).toBeNull();
+  });
+
+  it('Page.fileChooserOpened в окне — заметка «use upload»; системного окна нет (Фокус ревью 5)', async () => {
+    const ctx = windowSetup();
+    const done = ctx.pageOp('t1', { window: true, hold: true });
+    await vi.waitFor(() => expect(ctx.ran).toBe(1));
+    ctx.emitCdp(7, 'Page.fileChooserOpened', { frameId: 'F', mode: 'selectSingle', backendNodeId: 31 });
+    ctx.release();
+    await done;
+    expect(ctx.agentWindow.take(ctx.pageKey)).toEqual(['The page opened a file chooser; nothing was shown to the human. Take a browser_snapshot and use browser_action with action upload on the file input.']);
+  });
+
+  it('routeDownload: в окне агента — claim и заметка, true; вне окна — false, claim не вызван (Фокус ревью 7)', () => {
+    const agentWindow = createAgentWindow({ tailMs: 2_000 });
+    const claim = vi.fn(() => ({ id: 'd1', name: 'report.csv', path: '/d/report.csv' }) as never);
+    const deps = { agentWindow, downloads: { claim } };
+    const owner = { pageKey: `${WORK}\nbp-bbbbbb`, webContentsId: 7, workKey: WORK, sessionId: 's-02', agentId: 't2' };
+    expect(routeDownload(downloadItem('report.csv'), { id: 7 }, deps)).toBe(false);
+    expect(claim).not.toHaveBeenCalled();
+    agentWindow.begin(owner);
+    expect(routeDownload(downloadItem('report.csv'), { id: 7 }, deps)).toBe(true);
+    // Рецензия пачки 2: в claim уходит страница-источник (t2), а не null.
+    expect(claim).toHaveBeenCalledWith(expect.anything(), { workKey: WORK, sessionId: 's-02', agentId: 't2', tab: 't2' });
+    expect(agentWindow.take(owner.pageKey)).toEqual(['The page started a download: report.csv → /d/report.csv (see browser_downloads).']);
+    // Другой гость вне окна — диалог человека.
+    expect(routeDownload(downloadItem('x.bin'), { id: 9 }, deps)).toBe(false);
+  });
+
+  it('borrowFocus: ждёт тишину, просит окно, ok — дальше; ok: false — tab_hidden; человек печатает дольше focusMs — human_busy (Фокус ревью 1, 2)', async () => {
+    const ctx = windowSetup({ focusMs: 50 });
+    ctx.requestFocus.mockImplementation((_c, id) => { queueMicrotask(() => ctx.borrower.focusReady(id, true)); return true; });
+    await expect(ctx.borrow('t1')).resolves.toBeUndefined();
+    expect(ctx.typing.waitIdle).toHaveBeenCalledWith(AGENT_LIMITS.typingIdleMs, 50, expect.anything());
+    ctx.requestFocus.mockImplementation((_c, id) => { queueMicrotask(() => ctx.borrower.focusReady(id, false)); return true; });
+    await expect(ctx.borrow('t1')).rejects.toMatchObject({ code: 'tab_hidden', message: expect.stringContaining('Page t1 could not take keyboard focus') });
+    ctx.requestFocus.mockClear();
+    ctx.typing.waitIdle.mockImplementation(async () => false);
+    await expect(ctx.borrow('t1')).rejects.toMatchObject({ code: 'human_busy', message: expect.stringContaining('typing') });
+    expect(ctx.requestFocus).not.toHaveBeenCalled();
+  });
+
+  it('borrowFocus: окно не отвечает за focusMs — tab_hidden; окна нет (requestFocus → false) — window_not_connected', async () => {
+    const ctx = windowSetup({ focusMs: 30 });
+    ctx.requestFocus.mockImplementation(() => true);
+    await expect(ctx.borrow('t1')).rejects.toMatchObject({ code: 'tab_hidden' });
+    ctx.requestFocus.mockImplementation(() => false);
+    await expect(ctx.borrow('t1')).rejects.toMatchObject({ code: 'window_not_connected' });
+  });
+
+  it('скрытая страница, которую человек видел (visible: false после true), — borrowFocus просит окно, как у видимой; ok: true — ввод идёт (решение владельца 8)', async () => {
+    const ctx = windowSetup({ focusMs: 50 });
+    ctx.register({ visible: true });
+    ctx.register({ visible: false });
+    ctx.requestFocus.mockImplementation((_c, id) => { queueMicrotask(() => ctx.borrower.focusReady(id, true)); return true; });
+    await expect(ctx.pageOp('t1', { seen: true })).resolves.toBeDefined();
+    await expect(ctx.borrow('t1')).resolves.toBeUndefined();
+    expect(ctx.requestFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it('guard.check: человек печатает — human_busy; потом можно (M3)', async () => {
+    const ctx = windowSetup();
+    let guard: InputGuard | null = null;
+    await ctx.runner.run(request(), 't1', async (_c, _r, g) => { guard = g; return 'x'; }, {});
+    ctx.typing.idleFor.mockReturnValue(false);
+    expect(() => (guard as unknown as InputGuard).check()).toThrow(expect.objectContaining({ code: 'human_busy', message: expect.stringContaining('typing') }));
+    ctx.typing.idleFor.mockReturnValue(true);
+    expect(() => (guard as unknown as InputGuard).check()).not.toThrow();
   });
 });

@@ -18,7 +18,7 @@
  * опираются на те же id.
  */
 import { randomUUID } from 'node:crypto';
-import type { WebContents } from 'electron';
+import type { DownloadItem, WebContents } from 'electron';
 import { AGENT_LIMITS, browserAgentArgs } from '@parley/protocol';
 import type { BrowserAgentArgs, BrowserAgentErrorCode, BrowserAgentOpEvent, BrowserAgentOpenResult, BrowserAgentResult } from '@parley/protocol';
 import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistration } from '../../shared/browser-types.js';
@@ -26,6 +26,9 @@ import type { BrowserOwner } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
 import { AgentOpError } from './agent-errors.js';
+import type { AgentDownloads } from './agent-downloads.js';
+import type { AgentWindow } from './agent-window.js';
+import type { TypingClock } from './human-typing.js';
 import { createAgentCapture } from './agent-capture.js';
 import type { AgentCaptureDeps } from './agent-capture.js';
 import { createPageRegistry, listTabs } from './agent-pages.js';
@@ -50,7 +53,7 @@ export interface AgentOpsDeps {
   openMs?: number;
   /** Гость-страница по id её WebContents; `null` — такого нет. */
   fromId(id: number): WebContents | null;
-  inspector: Pick<Inspector, 'snapshot' | 'send' | 'responseBody'>;
+  inspector: Pick<Inspector, 'snapshot' | 'send' | 'responseBody' | 'onEvent'>;
   emulation: Pick<Emulation, 'current' | 'withTemporary'>;
   /** PNG снимка — в `drops/` (`main/drops.ts#saveImage`); `null` — не сохранился. */
   saveImage(png: Buffer): Promise<string | null>;
@@ -70,6 +73,14 @@ export interface AgentOpsDeps {
   screenDpr?: AgentCaptureDeps['screenDpr'];
   /** Сколько ждать подтверждения окна, что `<webview>` стоит в размере снимка; по умолчанию `AGENT_LIMITS.captureReadyMs`. Тестам — меньше. */
   captureReadyMs?: number;
+  /** Окно операции агента (15b): скачивания и выбор файла в нём принадлежат агенту. */
+  agentWindow: AgentWindow;
+  /** Тишина клавиатуры человека (15b, рецензия M3). */
+  typing: TypingClock;
+  /** Просит окно поставить фокус на `<webview>` (событие `browser:agent-activity` с `focus`); `false` — окна нет. Только шлёт событие. */
+  requestFocus?(contents: WebContents, id: string): boolean;
+  /** Сколько ждать тишины клавиатуры и ответа окна о фокусе; по умолчанию `AGENT_LIMITS.focusMs`. Тестам — меньше. */
+  focusMs?: number;
 }
 
 export interface AgentOps {
@@ -104,6 +115,7 @@ const AGENTS_OFF = `The human turned off agent access to the browser (Settings �
 /** Пауза панели: общий текст для `pageOf`, `registerTab` и Stop. */
 const PAUSED = 'The human paused agents in this browser panel (paused by the human).';
 const STOPPED = 'Stopped by the human: agents are paused in this browser panel (paused by the human).';
+const HUMAN_TYPING = "The human is typing in Parley's window: retry in a moment.";
 const HUMAN_BUSY = 'The human is selecting or annotating on this page: retry in a moment.';
 
 /** Что операции нужно от страницы: `changes` — меняет страницу (отказ при `human_busy`), `window` — открывает окно операции, `seen` — нужна страница, которую человек видел. */
@@ -134,6 +146,8 @@ export function createPageRunner(deps: {
   activity(e: AgentActivity): void;
   opTimeoutMs?: number;
   window?: PageWindowHooks;
+  /** Тишина клавиатуры человека: пока он печатает, `guard.check()` отказывает `human_busy` (15b). */
+  typing?: Pick<TypingClock, 'idleFor'>;
 }): PageRunner {
   const { registry } = deps;
   const opTimeoutMs = deps.opTimeoutMs ?? AGENT_LIMITS.opMs - 2_000;
@@ -193,6 +207,7 @@ export function createPageRunner(deps: {
           if (!allowed) throw new AgentOpError('access_denied', AGENTS_OFF);
           if (registry.isPaused(record.workKey, record.owner)) throw new AgentOpError('access_denied', PAUSED);
           if (use.changes === true && registry.fresh(record)?.humanBusy === true) throw new AgentOpError('human_busy', HUMAN_BUSY);
+          if (deps.typing?.idleFor(AGENT_LIMITS.typingIdleMs) === false) throw new AgentOpError('human_busy', HUMAN_TYPING);
           signal.throwIfAborted();
         },
       };
@@ -228,6 +243,127 @@ export function createPageRunner(deps: {
       if (next) return;
       const reason = new AgentOpError('access_denied', AGENTS_OFF);
       for (const entry of [...running]) entry.abort(reason);
+    },
+  };
+}
+
+/** Заметка агенту: страница открыла выбор файла, человеку ничего не показано. */
+const FILE_CHOOSER_NOTE =
+  'The page opened a file chooser; nothing was shown to the human. Take a browser_snapshot and use browser_action with action upload on the file input.';
+
+/**
+ * Окно операции для `createPageRunner` (15b): учёт окна (`agentWindow`), перехват выбора файла на время окна и хвоста,
+ * гость, на котором вводит агент, не считается в тишину клавиатуры человека. Перехват включается один раз на окно, а не на
+ * каждую операцию, и снимается, когда окно и хвост кончились.
+ */
+export function createWindowHooks(deps: {
+  agentWindow: AgentWindow;
+  inspector: Pick<Inspector, 'send' | 'onEvent'>;
+  typing: Pick<TypingClock, 'ignore'>;
+}): PageWindowHooks {
+  const { agentWindow, inspector, typing } = deps;
+  /** Гости с включённым перехватом → отписка от `Page.fileChooserOpened`. */
+  const intercepted = new Map<number, () => void>();
+  agentWindow.onIdle((id) => {
+    const unsubscribe = intercepted.get(id);
+    if (unsubscribe === undefined) return;
+    intercepted.delete(id);
+    unsubscribe();
+    // Гость мог исчезнуть вместе с окном: снимать нечего.
+    void Promise.resolve(inspector.send(id, 'Page.setInterceptFileChooserDialog', { enabled: false })).catch(() => undefined);
+  });
+  return {
+    begin(contents, record, request) {
+      const id = contents.id;
+      const end = agentWindow.begin({
+        pageKey: `${record.workKey}\n${record.pageId}`,
+        webContentsId: id,
+        workKey: record.workKey,
+        sessionId: request.ref.sessionId,
+        agentId: record.agentId,
+      });
+      if (!intercepted.has(id)) {
+        intercepted.set(id, inspector.onEvent(id, 'Page.fileChooserOpened', () => agentWindow.note(id, FILE_CHOOSER_NOTE)));
+        void Promise.resolve(inspector.send(id, 'Page.setInterceptFileChooserDialog', { enabled: true })).catch(() => undefined);
+      }
+      typing.ignore(id, true);
+      return () => {
+        typing.ignore(id, false);
+        end();
+      };
+    },
+  };
+}
+
+/**
+ * Скачивание во время окна операции агента (или 2 с после) — в папку сессии без диалога, заметка в ответ операции; вне окна
+ * `false`, и страж ведёт скачивание как у человека. В `claim` уходит страница-источник (`tN`).
+ */
+export function routeDownload(
+  item: DownloadItem,
+  source: Pick<WebContents, 'id'>,
+  deps: { agentWindow: Pick<AgentWindow, 'activeFor' | 'note'>; downloads: Pick<AgentDownloads, 'claim'> },
+): boolean {
+  const owner = deps.agentWindow.activeFor(source.id);
+  if (owner === null) return false;
+  const record = deps.downloads.claim(item, { workKey: owner.workKey, sessionId: owner.sessionId, agentId: owner.agentId, tab: owner.agentId });
+  deps.agentWindow.note(source.id, `The page started a download: ${record.name} → ${record.path} (see browser_downloads).`);
+  return true;
+}
+
+export interface FocusBorrower {
+  /** Одалживание фокуса для страницы `agentId` — это `borrowFocus` из `createAgentInput`. Бросает `human_busy`, `window_not_connected`, `tab_hidden`. */
+  borrow(agentId: string): (contents: WebContents, signal: AbortSignal) => Promise<void>;
+  /** Ответ окна на просьбу о фокусе; чужой и поздний id молча игнорируется. */
+  focusReady(id: string, ok: boolean): void;
+}
+
+/**
+ * Одалживание фокуса `<webview>` для ввода агента (путь А, решения владельца 7 и 8): ждём тишину клавиатуры человека,
+ * просим окно поставить фокус и ждём его ответ. `ok` не требует видимости: у скрытой страницы, которую человек видел,
+ * фокус встаёт; `tab_hidden` — только отказ фокуса. `host.focus()` и `guest.focus()` не зовутся (спайк В4 (2)).
+ */
+export function createFocusBorrower(deps: {
+  typing: Pick<TypingClock, 'waitIdle'>;
+  requestFocus?(contents: WebContents, id: string): boolean;
+  focusMs?: number;
+}): FocusBorrower {
+  const focusMs = deps.focusMs ?? AGENT_LIMITS.focusMs;
+  const pending = new Map<string, (ok: boolean) => void>();
+
+  return {
+    focusReady(id, ok) {
+      pending.get(id)?.(ok);
+    },
+    borrow: (agentId) => async (contents, signal) => {
+      if (!(await deps.typing.waitIdle(AGENT_LIMITS.typingIdleMs, focusMs, signal))) throw new AgentOpError('human_busy', HUMAN_TYPING);
+      signal.throwIfAborted();
+      const id = randomUUID();
+      const answered = new Promise<boolean>((resolve) => {
+        const done = (ok: boolean): void => {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', onAbort);
+          pending.delete(id);
+          resolve(ok);
+        };
+        const onAbort = (): void => done(false);
+        const timer = setTimeout(() => done(false), focusMs);
+        pending.set(id, done);
+        signal.addEventListener('abort', onAbort, { once: true });
+      });
+      let sent = false;
+      try {
+        sent = deps.requestFocus?.(contents, id) ?? false;
+      } catch {
+        // Окно закрыто посреди вызова — как будто его нет.
+      }
+      if (!sent) {
+        pending.get(id)?.(false);
+        throw new AgentOpError('window_not_connected', "Parley's window is not ready: ask the human to open it.");
+      }
+      const ok = await answered;
+      signal.throwIfAborted();
+      if (!ok) throw new AgentOpError('tab_hidden', `Page ${agentId} could not take keyboard focus: ask the human to show the page.`);
     },
   };
 }
@@ -277,7 +413,16 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   /** Ждущие ответа окна: id просьбы → продолжение. */
   const pendingOpens = new Map<string, (result: AgentOpenTabResult | 'no_window' | 'timeout') => void>();
   const registry = createPageRegistry({ fromId: deps.fromId });
-  const runner = createPageRunner({ registry, agentsAllowed: deps.agentsAllowed, activity: deps.activity, ...(deps.opTimeoutMs === undefined ? {} : { opTimeoutMs: deps.opTimeoutMs }) });
+  const runner = createPageRunner({
+    registry,
+    agentsAllowed: deps.agentsAllowed,
+    activity: deps.activity,
+    window: createWindowHooks({ agentWindow: deps.agentWindow, inspector: deps.inspector, typing: deps.typing }),
+    typing: deps.typing,
+    ...(deps.opTimeoutMs === undefined ? {} : { opTimeoutMs: deps.opTimeoutMs }),
+  });
+  // `focus.borrow(agentId)` берёт `createAgentInput` в задаче 17.
+  const focus = createFocusBorrower({ typing: deps.typing, ...(deps.requestFocus === undefined ? {} : { requestFocus: deps.requestFocus }), ...(deps.focusMs === undefined ? {} : { focusMs: deps.focusMs }) });
   const reads = createAgentReads({ inspector: deps.inspector });
   const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, saveImage: deps.saveImage, image: deps.image, activity: deps.activity, inGuest: deps.inGuest, ...(deps.captureReadyMs === undefined ? {} : { captureReadyMs: deps.captureReadyMs }), ...(deps.guestCallMs === undefined ? {} : { guestCallMs: deps.guestCallMs }), ...(deps.windowHeight === undefined ? {} : { windowHeight: deps.windowHeight }), ...(deps.screenDpr === undefined ? {} : { screenDpr: deps.screenDpr }) });
 
@@ -377,8 +522,8 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
       const record = registry.pauseFor(webContentsId);
       if (record !== null) runner.stopPanel(record.workKey, record.owner, new AgentOpError('access_denied', STOPPED));
     },
-    focusReady() {
-      // Задача 15b.
+    focusReady(id, ok) {
+      focus.focusReady(id, ok);
     },
     accessChanged(allowed) {
       runner.accessChanged(allowed);
