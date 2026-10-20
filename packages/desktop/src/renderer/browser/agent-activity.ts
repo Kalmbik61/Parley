@@ -136,18 +136,24 @@ export interface FocusLender {
 const isGuestView = (element: Element): boolean => element.tagName === 'WEBVIEW';
 
 export function createFocusLender({ view, webContentsId, ready }: FocusLenderOptions): FocusLender {
-  let previous: Element | null = null;
+  /** Чей фокус вернуть по концу операции; `undefined` — в этой операции фокус не одалживали, `node` — человек сам был в странице агента. */
+  let previous: Element | null | undefined;
 
   const restore = (): void => {
     const node = view();
     const was = previous;
-    previous = null;
+    previous = undefined;
     lending.delete(webContentsId);
-    // Человек ушёл с `<webview>` сам — его фокус не трогаем.
-    if (node === null || document.activeElement !== node || !(was instanceof HTMLElement) || !document.contains(was)) return;
-    // Возврат в гостя человека — через окно, как и одалживание.
-    if (isGuestView(was)) node.blur();
-    was.focus();
+    // Не одалживали, человек сам был в этой странице или ушёл с `<webview>` сам — его фокус не трогаем.
+    if (was === undefined || node === null || document.activeElement !== node || was === node) return;
+    if (was instanceof HTMLElement && document.contains(was)) {
+      // Возврат в гостя человека — через окно, как и одалживание.
+      if (isGuestView(was)) node.blur();
+      was.focus();
+    }
+    // Вернуть некуда: `body`, элемент удалён или фокус не взял (финальная рецензия M1). Фокус уходит окну, а не остаётся
+    // в странице агента, где одолжения уже нет.
+    if (document.activeElement === node) node.blur();
   };
 
   return {
@@ -157,10 +163,10 @@ export function createFocusLender({ view, webContentsId, ready }: FocusLenderOpt
         ready(id, false);
         return;
       }
-      // Повторная просьба в той же операции: прежний элемент человека остаётся тем, кому вернуть фокус.
-      if (previous === null && document.activeElement !== node) previous = document.activeElement;
-      lending.add(webContentsId);
       const active = document.activeElement;
+      // Повторная просьба в той же операции: прежний элемент человека остаётся тем, кому вернуть фокус.
+      if (previous === undefined) previous = active;
+      lending.add(webContentsId);
       // Фокус в другом госте: сначала отдать его окну, иначе ввод агента уйдёт в того гостя.
       const other = active !== node && active instanceof HTMLElement && isGuestView(active) ? active : null;
       other?.blur();
@@ -168,7 +174,7 @@ export function createFocusLender({ view, webContentsId, ready }: FocusLenderOpt
       const ok = document.activeElement === node;
       if (!ok) {
         lending.delete(webContentsId);
-        previous = null;
+        previous = undefined;
         // Фокус не встал: гость человека получает его обратно.
         other?.focus();
       }

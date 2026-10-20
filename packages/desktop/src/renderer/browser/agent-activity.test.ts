@@ -178,6 +178,54 @@ describe('одалживание фокуса', () => {
     expect(isLendingFocus(7)).toBe(false);
   });
 
+  it('фокус был на body (человек кликнул в нефокусируемое место): restore снимает фокус с <webview> агента (финальная рецензия M1)', () => {
+    const view = document.createElement('webview');
+    view.tabIndex = 0;
+    document.body.append(view);
+    expect(document.activeElement).toBe(document.body);
+    const viewBlur = vi.spyOn(view, 'blur');
+    const lender = createFocusLender({ view: () => view, webContentsId: 7, ready: vi.fn() });
+    lender.borrow('f-9');
+    expect(document.activeElement).toBe(view);
+    lender.restore();
+    expect(viewBlur).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).not.toBe(view);
+    expect(isLendingFocus(7)).toBe(false);
+  });
+
+  it('прежний элемент удалён за время операции (поле Chat перемонтировалось): restore снимает фокус с <webview> агента (финальная рецензия M1)', () => {
+    const chat = document.createElement('textarea');
+    document.body.append(chat);
+    chat.focus();
+    const view = document.createElement('webview');
+    view.tabIndex = 0;
+    document.body.append(view);
+    const viewBlur = vi.spyOn(view, 'blur');
+    const lender = createFocusLender({ view: () => view, webContentsId: 7, ready: vi.fn() });
+    lender.borrow('f-10');
+    chat.remove();
+    lender.restore();
+    expect(viewBlur).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).not.toBe(view);
+  });
+
+  it('человек сам был в странице агента или фокус не одалживали: restore фокус с <webview> не снимает', () => {
+    const view = document.createElement('webview');
+    view.tabIndex = 0;
+    document.body.append(view);
+    view.focus();
+    const viewBlur = vi.spyOn(view, 'blur');
+    const lender = createFocusLender({ view: () => view, webContentsId: 7, ready: vi.fn() });
+    // Операция без ввода (снимок): только `end`.
+    lender.restore();
+    expect(document.activeElement).toBe(view);
+    // Операция с вводом, а человек уже был в этой странице.
+    lender.borrow('f-11');
+    lender.restore();
+    expect(document.activeElement).toBe(view);
+    expect(viewBlur).not.toHaveBeenCalled();
+  });
+
   it('dispose возвращает фокус и снимает флаг', () => {
     const chat = document.createElement('textarea');
     document.body.append(chat);
