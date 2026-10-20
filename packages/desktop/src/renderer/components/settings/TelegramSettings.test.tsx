@@ -92,6 +92,32 @@ describe('TelegramSettings', () => {
     await waitFor(() => expect(screen.getByTestId('telegram-qr').querySelector('svg')).not.toBeNull());
   });
 
+  it('по истечении expiresAt код пропадает и виден текст «code expired»', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const expiresAt = new Date(Date.now() + 60_000).toISOString();
+      bridge.setHandler('telegram.link', () => ({ code: 'XY12', expiresAt, deepLink: 'https://t.me/parley_bot?start=XY12' }));
+      mount(base);
+      fireEvent.click(await screen.findByTestId('telegram-link'));
+      expect((await screen.findByTestId('telegram-code')).textContent).toBe('XY12');
+      await act(async () => {
+        vi.advanceTimersByTime(61_000);
+      });
+      expect(screen.queryByTestId('telegram-code')).toBeNull();
+      expect(screen.getByTestId('telegram-code-expired').textContent).toBe(text.codeExpired);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('при выключенном Send to Telegram остальное приглушено и недоступно мышью', async () => {
+    mount(base, config({ telegramEnabled: false }));
+    const body = await screen.findByTestId('telegram-body');
+    expect(body.className).toContain('pointer-events-none');
+    expect(body.contains(screen.getByTestId('telegram-token'))).toBe(true);
+    expect(screen.getByTestId('telegram-enabled').closest('[data-testid="telegram-body"]')).toBeNull();
+  });
+
   it('событие telegram.changed с owner переключает на Linked и открывает четыре переключателя', async () => {
     mount(base);
     await screen.findByTestId('telegram-link');

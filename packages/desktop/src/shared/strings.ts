@@ -1071,6 +1071,8 @@ export const S = {
       link: 'Link Telegram',
       unlink: 'Unlink',
       codeLabel: 'Send this code to the bot',
+      codeValid: 'Valid for 10 minutes',
+      codeExpired: 'The code expired — press Link Telegram again',
       deepLinkLabel: 'Or open the link',
       qrLabel: 'QR code with the link to the bot',
       needsYou: 'Needs you',

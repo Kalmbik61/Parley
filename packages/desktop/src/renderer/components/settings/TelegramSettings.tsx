@@ -25,6 +25,7 @@ export interface TelegramSettingsProps {
 interface LinkState {
   code: string;
   deepLink: string;
+  expiresAt: string;
   svg: string | null;
 }
 
@@ -35,7 +36,22 @@ export function TelegramSettings({ bridge, config, locked, save, hostMethods }: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [link, setLink] = useState<LinkState | null>(null);
+  const [expired, setExpired] = useState(false);
   const text = S.settings.telegram;
+
+  // Код живёт ограниченное время: по `expiresAt` прячем код, ссылку и QR.
+  const expiresAt = link?.expiresAt ?? null;
+  useEffect(() => {
+    setExpired(false);
+    if (expiresAt === null) return;
+    const left = new Date(expiresAt).getTime() - Date.now();
+    if (left <= 0) {
+      setExpired(true);
+      return;
+    }
+    const timer = setTimeout(() => setExpired(true), left);
+    return () => clearTimeout(timer);
+  }, [expiresAt]);
 
   useEffect(() => {
     if (!supported) return;
@@ -87,7 +103,7 @@ export function TelegramSettings({ bridge, config, locked, save, hostMethods }: 
   const createLink = (): Promise<void> =>
     run(text.actions.link, async () => {
       const result = await bridge.call('telegram.link', {});
-      setLink({ code: result.code, deepLink: result.deepLink, svg: null });
+      setLink({ code: result.code, deepLink: result.deepLink, expiresAt: result.expiresAt, svg: null });
       void qrSvg(result.deepLink).then(
         (svg) => setLink((current) => (current?.code === result.code ? { ...current, svg } : current)),
         () => undefined,
@@ -149,6 +165,7 @@ export function TelegramSettings({ bridge, config, locked, save, hostMethods }: 
         </Button>
       ) : null}
 
+      <div className={enabled ? 'flex flex-col gap-3' : 'flex flex-col gap-3 opacity-60 pointer-events-none'} data-testid="telegram-body">
       <div className="flex items-center gap-2">
         <Input
           type="password"
@@ -181,9 +198,16 @@ export function TelegramSettings({ bridge, config, locked, save, hostMethods }: 
           {text.link}
         </Button>
       ) : null}
-      {link !== null && !linked ? (
+      {link !== null && !linked && expired ? (
+        <p data-testid="telegram-code-expired" className="text-xs text-muted-foreground">
+          {text.codeExpired}
+        </p>
+      ) : null}
+      {link !== null && !linked && !expired ? (
         <div className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">{text.codeLabel}</span>
+          <span className="text-xs text-muted-foreground">
+            {text.codeLabel} · {text.codeValid}
+          </span>
           <code data-testid="telegram-code" className="select-all text-base">
             {link.code}
           </code>
@@ -225,6 +249,7 @@ export function TelegramSettings({ bridge, config, locked, save, hostMethods }: 
         </>
       ) : null}
       <p className="text-xs text-muted-foreground">{text.hint}</p>
+      </div>
     </section>
   );
 }
