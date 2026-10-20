@@ -193,8 +193,10 @@ export function createPageRunner(deps: {
   /** Идущие операции: свой обрыв у каждой, ключ панели — работа и хозяин. */
   const running = new Set<{ panel: string; abort(reason: AgentOpError): void }>();
 
-  /** Страница по id агента: доступ (`pageOf`), состояние гостя. */
+  /** Страница по id агента: выключатель, доступ (`pageOf`), состояние гостя. */
   function checked(request: BrowserAgentOpEvent, agentId: string, use: PageUse): { record: PageRecord; contents: WebContents } {
+    // Синхронный флаг: чтение файла настроек, начатое до сохранения, может отдать `true` уже после выключения (финальная рецензия m6).
+    if (!allowed) throw new AgentOpError('access_denied', AGENTS_OFF);
     const record = registry.pageOf(request, agentId);
     const contents = registry.live(record);
     if (contents === null) throw new AgentOpError('tab_not_loaded', `Page ${agentId} is not loaded: its panel or workspace is not open in the window.`);

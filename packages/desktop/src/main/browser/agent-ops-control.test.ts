@@ -237,6 +237,14 @@ describe('занятость, Stop, пауза и выключатель (Фок
     await expect(ctx.page('t1', {})).resolves.toBeDefined();
   });
 
+  it('выключатель выключен, а чтение файла настроек ещё отдаёт true (гонка с сохранением): операция не стартует — access_denied, task не вызван (финальная рецензия m6)', async () => {
+    const ctx = pageSetup();
+    ctx.runner.accessChanged(false);
+    ctx.allowed = true;
+    await expect(ctx.page('t1', {})).rejects.toMatchObject({ code: 'access_denied', message: expect.stringContaining('Let agents use the browser') });
+    expect(ctx.ran).toBe(0);
+  });
+
   it('страница, которую человек ни разу не видел, — tab_hidden для seen-операций (этап 0, 0.2)', async () => {
     const ctx = pageSetup();
     ctx.register({ visible: false });
