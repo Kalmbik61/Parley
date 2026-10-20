@@ -33,6 +33,10 @@ export interface PageRecord {
   visible: boolean;
   lastUrl: string;
   lastTitle: string;
+  /** Человек занят Select или Annotate на странице (D): операции с изменениями получают `human_busy`. */
+  humanBusy: boolean;
+  /** Человек хоть раз видел страницу (`visible` хоть раз, спайк 0.2): только такая принимает ввод агента. */
+  seen: boolean;
 }
 
 export interface PageRegistry {
@@ -50,6 +54,8 @@ export interface PageRegistry {
   /** Запись по ключу на сейчас: за время операции окно могло её обновить или убрать. */
   fresh(record: PageRecord): PageRecord | undefined;
   isPaused(workKey: string, owner: BrowserOwner): boolean;
+  /** Stop на значке: ставит паузу панели страницы с этим гостем и отдаёт запись; гостя в реестре нет — `null`. */
+  pauseFor(webContentsId: number): PageRecord | null;
   /** Страницы запроса для `tabs`: своей работы, доступные хозяину, не на паузе, по порядку id; `known` — работа реестру известна. */
   listed(request: BrowserAgentOpEvent): { records: PageRecord[]; known: boolean };
 }
@@ -124,6 +130,8 @@ export function createPageRegistry(deps: { fromId(id: number): WebContents | nul
         visible: e.visible,
         lastUrl: contents?.getURL() ?? previous?.lastUrl ?? '',
         lastTitle: contents?.getTitle() ?? previous?.lastTitle ?? '',
+        humanBusy: e.humanBusy === true,
+        seen: e.visible || previous?.seen === true,
       });
     },
     pageOf(request, agentId) {
@@ -144,6 +152,12 @@ export function createPageRegistry(deps: { fromId(id: number): WebContents | nul
       return pages.get(pageKey(record.workKey, record.pageId));
     },
     isPaused,
+    pauseFor(webContentsId) {
+      const record = [...pages.values()].find((candidate) => candidate.webContentsId === webContentsId);
+      if (record === undefined) return null;
+      paused.add(panelKey(record.workKey, record.owner));
+      return record;
+    },
     listed(request) {
       const workKey = workKeyOf(request.ref.projectPath, request.ref.workId);
       const records = [...pages.values()]
@@ -185,16 +199,6 @@ async function viewportOf(deps: ListTabsDeps, id: number): Promise<BrowserAgentT
   }
 }
 
-/** Чужой сайт показывается агенту только по origin (путь, запрос и заголовок могут нести секреты); не разобрался или origin непрозрачный — пусто. */
-function originOf(url: string): string {
-  try {
-    const { origin } = new URL(url);
-    return origin === 'null' ? '' : origin;
-  } catch {
-    return '';
-  }
-}
-
 export async function listTabs(registry: PageRegistry, deps: ListTabsDeps, request: BrowserAgentOpEvent): Promise<{ tabs: BrowserAgentTabInfo[]; notes: string[] }> {
   const { records, known } = registry.listed(request);
   const tabs = await Promise.all(
@@ -205,18 +209,17 @@ export async function listTabs(registry: PageRegistry, deps: ListTabsDeps, reque
         record.lastUrl = contents.getURL();
         record.lastTitle = contents.getTitle();
       }
-      const loopback = isLoopbackUrl(record.lastUrl);
       return {
         id: record.agentId,
         owner: record.owner,
-        url: loopback ? urlForAgent(record.lastUrl) : originOf(record.lastUrl),
-        title: loopback ? redactSecretsInText(redactUrlsInText(record.lastTitle)).slice(0, TITLE_LIMIT) : '',
-        // У чужого сайта размер не спрашиваем: гость не loopback не получает от агента ни одного вызова CDP.
-        viewport: loaded && loopback && record.webContentsId !== null ? await viewportOf(deps, record.webContentsId) : null,
+        // Любые сайты (решение владельца 2026-10-20): адрес и заголовок — с маской секретов.
+        url: urlForAgent(record.lastUrl),
+        title: redactSecretsInText(redactUrlsInText(record.lastTitle)).slice(0, TITLE_LIMIT),
+        viewport: loaded && record.webContentsId !== null ? await viewportOf(deps, record.webContentsId) : null,
         loaded,
         // Невыгруженную, но невидимую страницу человек не видит; незагруженную — тем более.
         visible: loaded && record.visible,
-        loopback,
+        loopback: isLoopbackUrl(record.lastUrl),
       };
     }),
   );

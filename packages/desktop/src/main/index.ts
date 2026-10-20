@@ -707,6 +707,8 @@ if (!gotLock) {
       activity: (e) => webContents.fromId(e.webContentsId)?.hostWebContents?.send('browser:agent-activity', e),
     });
     agentOps = ops;
+    // Синхронный флаг выключателя для идущих операций: при старте и в `onUiSaved` (ниже).
+    void uiStore.load().then((current) => ops.accessChanged(current.browser.agentsAllowed));
 
     // Версия окна и последний статус хоста — для `app-info.json` архива диагностики; `onStatus` отдаёт текущий статус сразу.
     const appVersion = app.isPackaged ? app.getVersion() : null;
@@ -724,6 +726,7 @@ if (!gotLock) {
         void updates.settingsChanged();
         // Окна об изменениях ui.json не узнают — main перечитывает файл сам (спека 2026-10-12, 5.1).
         void uiStore.load().then((current) => {
+          ops.accessChanged(current.browser.agentsAllowed);
           void pushAssistantSettings(current).catch((error: unknown) => console.warn('[parley] assistant mirror', error));
           // Сбой острова не должен ломать сохранение настроек.
           try {

@@ -4,8 +4,8 @@
  * методом `browser.agentResult`.
  *
  * Агент называет только адрес: работу вкладки задаёт хост по токену сессии (`ref` события), а не аргументы. Открыть можно
- * любой http(s) (`openableHref`), до окна он доходит без учётных данных; читать открытую страницу — только на loopback
- * (`shared/loopback.ts`, проверка `checked`): «можно открыть» и «можно читать» — две разные проверки. Раскладка — дело окна:
+ * любой http(s) (`openableHref`), до окна он доходит без учётных данных; читать и действовать можно на любом сайте
+ * (решение владельца 2026-10-20: проверка «только loopback» снята), доступ решают хозяин, пауза панели и выключатель. Раскладка — дело окна:
  * место вкладки, предел страниц панели, повтор уже открытой страницы и тост решает рендерер (`renderer/browser/agent-open.ts`), main
  * просит его событием `browser:agent-open-tab`, ждёт ответ не дольше `AGENT_LIMITS.openMs` и переводит его в ответ агенту.
  * Страницы панелей main знает по реестру (`registerTab`, наполняет окно): по нему работает `tabs` (этап C), доступ к странице
@@ -23,14 +23,14 @@ import { AGENT_LIMITS, browserAgentArgs } from '@parley/protocol';
 import type { BrowserAgentArgs, BrowserAgentErrorCode, BrowserAgentOpEvent, BrowserAgentOpenResult, BrowserAgentResult } from '@parley/protocol';
 import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistration } from '../../shared/browser-types.js';
 import type { BrowserOwner } from '../../shared/layout-types.js';
-import { isLoopbackUrl } from '../../shared/loopback.js';
 import { S } from '../../shared/strings.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
 import { AgentOpError } from './agent-errors.js';
 import { createAgentCapture } from './agent-capture.js';
 import type { AgentCaptureDeps } from './agent-capture.js';
 import { createPageRegistry, listTabs } from './agent-pages.js';
-import type { PageRecord } from './agent-pages.js';
+import type { PageRecord, PageRegistry } from './agent-pages.js';
+import type { InputGuard } from './agent-input.js';
 import { createPageQueue } from './agent-queue.js';
 import { createAgentReads } from './agent-reads.js';
 import { clipUrl } from './agent-url.js';
@@ -101,6 +101,137 @@ export const NOT_MOUNTED_NOTE = "The workspace is not open in Parley's window, s
 /** Отказ при выключенном общем «Let agents use the browser». */
 const AGENTS_OFF = `The human turned off agent access to the browser (Settings → Browser → ${S.settings.letAgentsUseBrowser}).`;
 
+/** Пауза панели: общий текст для `pageOf`, `registerTab` и Stop. */
+const PAUSED = 'The human paused agents in this browser panel (paused by the human).';
+const STOPPED = 'Stopped by the human: agents are paused in this browser panel (paused by the human).';
+const HUMAN_BUSY = 'The human is selecting or annotating on this page: retry in a moment.';
+
+/** Что операции нужно от страницы: `changes` — меняет страницу (отказ при `human_busy`), `window` — открывает окно операции, `seen` — нужна страница, которую человек видел. */
+export interface PageUse {
+  changes?: boolean;
+  window?: boolean;
+  seen?: boolean;
+}
+
+/** 15b: окно операции (перехват выбора файла, скачивания, подавление `browser:focus`); в 15a его нет. */
+export interface PageWindowHooks {
+  begin(contents: WebContents, record: PageRecord, request: BrowserAgentOpEvent): () => void;
+}
+
+export interface PageRunner {
+  run<T>(request: BrowserAgentOpEvent, agentId: string, task: (contents: WebContents, record: PageRecord, guard: InputGuard) => Promise<T>, use?: PageUse): Promise<T>;
+  /** Обрыв операций всех страниц панели с этой причиной (Stop, пауза панели). */
+  stopPanel(workKey: string, owner: BrowserOwner, reason: AgentOpError): void;
+  /** Общий выключатель: `false` обрывает все идущие операции. */
+  accessChanged(allowed: boolean): void;
+}
+
+const ownerKey = (owner: BrowserOwner): string => (owner.kind === 'session' ? `session:${owner.sessionId}` : `room:${owner.roomId}`);
+
+export function createPageRunner(deps: {
+  registry: PageRegistry;
+  agentsAllowed(): Promise<boolean>;
+  activity(e: AgentActivity): void;
+  opTimeoutMs?: number;
+  window?: PageWindowHooks;
+}): PageRunner {
+  const { registry } = deps;
+  const opTimeoutMs = deps.opTimeoutMs ?? AGENT_LIMITS.opMs - 2_000;
+  const queue = createPageQueue();
+  /** Синхронный флаг выключателя для `guard.check()`; `agentsAllowed` читает файл настроек и асинхронен. */
+  let allowed = true;
+  /** Идущие операции: свой обрыв у каждой, ключ панели — работа и хозяин. */
+  const running = new Set<{ panel: string; abort(reason: AgentOpError): void }>();
+
+  /** Страница по id агента: доступ (`pageOf`), состояние гостя. */
+  function checked(request: BrowserAgentOpEvent, agentId: string, use: PageUse): { record: PageRecord; contents: WebContents } {
+    const record = registry.pageOf(request, agentId);
+    const contents = registry.live(record);
+    if (contents === null) throw new AgentOpError('tab_not_loaded', `Page ${agentId} is not loaded: its panel or workspace is not open in the window.`);
+    if (contents.isCrashed()) throw new AgentOpError('tab_not_loaded', `The page ${agentId} crashed.`);
+    if (use.seen === true && !record.seen) throw new AgentOpError('tab_hidden', `Page ${agentId} has not been shown to the human yet: ask the human to show the page.`);
+    if (use.changes === true && record.humanBusy) throw new AgentOpError('human_busy', HUMAN_BUSY);
+    return { record, contents };
+  }
+
+  /** Ошибка не `AgentOpError` внутри страницы: оборвали — причина обрыва; записи нет — `no_tab`; гость уничтожен или упал — `tab_not_loaded`; иначе `unsupported`. */
+  function pageFailure(record: PageRecord, contents: WebContents, signal: AbortSignal, error: unknown): AgentOpError {
+    if (error instanceof AgentOpError) return error;
+    if (signal.aborted) return signal.reason instanceof AgentOpError ? signal.reason : new AgentOpError('timeout', 'The operation was cancelled: it took too long.');
+    const message = error instanceof Error ? error.message : String(error);
+    if (registry.fresh(record) === undefined) return new AgentOpError('no_tab', `Page ${record.agentId} was closed during the operation: call browser_tabs.`);
+    let gone = false;
+    try {
+      gone = contents.isDestroyed() || contents.isCrashed();
+    } catch {
+      gone = true;
+    }
+    if (gone) return new AgentOpError('tab_not_loaded', `Page ${record.agentId} went away during the operation (${message.slice(0, 200)}).`);
+    return new AgentOpError('unsupported', message.slice(0, 2000));
+  }
+
+  /**
+   * Операция на странице в её очереди. Срок — с постановки (`deadline`), а не со старта: в очереди ждут до `opTimeoutMs`.
+   * Проверки — сразу (быстрый отказ) и ещё раз перед запуском; `activity end` — в `finally` самой задачи, по её настоящему концу.
+   * Stop, пауза панели и выключатель обрывают идущую задачу: она получает `guard.signal`, а результат отбрасывается.
+   */
+  async function run<T>(request: BrowserAgentOpEvent, agentId: string, task: (contents: WebContents, record: PageRecord, guard: InputGuard) => Promise<T>, use: PageUse = {}): Promise<T> {
+    const deadline = Date.now() + opTimeoutMs;
+    const first = checked(request, agentId, use);
+    return queue.run(`${first.record.workKey}\n${first.record.pageId}`, deadline, async (queueSignal) => {
+      // Пока операция ждала, человек мог выключить доступ, поставить панель на паузу или занять страницу.
+      if (!(await deps.agentsAllowed())) throw new AgentOpError('access_denied', AGENTS_OFF);
+      const { record, contents } = checked(request, agentId, use);
+      queueSignal.throwIfAborted();
+      const control = new AbortController();
+      const signal = AbortSignal.any([queueSignal, control.signal]);
+      const entry = { panel: `${record.workKey}\n${ownerKey(record.owner)}`, abort: (reason: AgentOpError): void => control.abort(reason) };
+      running.add(entry);
+      const guard: InputGuard = {
+        signal,
+        check() {
+          if (!allowed) throw new AgentOpError('access_denied', AGENTS_OFF);
+          if (registry.isPaused(record.workKey, record.owner)) throw new AgentOpError('access_denied', PAUSED);
+          if (use.changes === true && registry.fresh(record)?.humanBusy === true) throw new AgentOpError('human_busy', HUMAN_BUSY);
+          signal.throwIfAborted();
+        },
+      };
+      const endWindow = use.window === true ? (deps.window?.begin(contents, record, request) ?? null) : null;
+      deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'start' });
+      try {
+        // Только обрыв человека (Stop, пауза, выключатель) отпускает очередь сразу; срок очереди держит её до настоящего конца задачи.
+        const aborted = new Promise<never>((_resolve, reject) => {
+          control.signal.addEventListener('abort', () => reject(control.signal.reason), { once: true });
+        });
+        // Незавершённая задача после обрыва не должна оставить необработанный отказ.
+        const working = task(contents, record, guard);
+        working.catch(() => undefined);
+        return await Promise.race([working, aborted]);
+      } catch (error) {
+        throw pageFailure(record, contents, signal, error);
+      } finally {
+        running.delete(entry);
+        endWindow?.();
+        deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'end' });
+      }
+    });
+  }
+
+  return {
+    run,
+    stopPanel(workKey, owner, reason) {
+      const panel = `${workKey}\n${ownerKey(owner)}`;
+      for (const entry of [...running]) if (entry.panel === panel) entry.abort(reason);
+    },
+    accessChanged(next) {
+      allowed = next;
+      if (next) return;
+      const reason = new AgentOpError('access_denied', AGENTS_OFF);
+      for (const entry of [...running]) entry.abort(reason);
+    },
+  };
+}
+
 /**
  * Адрес, который агент может открыть: любой http(s), без учётных данных; иначе `null` (`file:`, `javascript:`, `data:` и
  * прочие схемы, не-адрес). Фрагмент (#…) остаётся: им бывают маршруты SPA. Читать открытое можно только на loopback (`checked`).
@@ -146,60 +277,9 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   /** Ждущие ответа окна: id просьбы → продолжение. */
   const pendingOpens = new Map<string, (result: AgentOpenTabResult | 'no_window' | 'timeout') => void>();
   const registry = createPageRegistry({ fromId: deps.fromId });
-  const queue = createPageQueue();
+  const runner = createPageRunner({ registry, agentsAllowed: deps.agentsAllowed, activity: deps.activity, ...(deps.opTimeoutMs === undefined ? {} : { opTimeoutMs: deps.opTimeoutMs }) });
   const reads = createAgentReads({ inspector: deps.inspector });
   const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, saveImage: deps.saveImage, image: deps.image, activity: deps.activity, inGuest: deps.inGuest, ...(deps.captureReadyMs === undefined ? {} : { captureReadyMs: deps.captureReadyMs }), ...(deps.guestCallMs === undefined ? {} : { guestCallMs: deps.guestCallMs }), ...(deps.windowHeight === undefined ? {} : { windowHeight: deps.windowHeight }), ...(deps.screenDpr === undefined ? {} : { screenDpr: deps.screenDpr }) });
-  const opTimeoutMs = deps.opTimeoutMs ?? AGENT_LIMITS.opMs - 2_000;
-  const pageKey = (workKey: string, pageId: string): string => `${workKey}\n${pageId}`;
-
-  /** Страница по id агента: доступ (`pageOf`), состояние гостя, loopback. */
-  function checked(request: BrowserAgentOpEvent, agentId: string): { record: PageRecord; contents: WebContents } {
-    const record = registry.pageOf(request, agentId);
-    const contents = registry.live(record);
-    if (contents === null) throw new AgentOpError('tab_not_loaded', `Page ${agentId} is not loaded: its panel or workspace is not open in the window.`);
-    if (contents.isCrashed()) throw new AgentOpError('tab_not_loaded', `The page ${agentId} crashed.`);
-    if (!isLoopbackUrl(contents.getURL())) throw new AgentOpError('not_loopback', `Page ${agentId} is not on localhost.`);
-    return { record, contents };
-  }
-
-  /** Ошибка не `AgentOpError` внутри страницы: записи нет — `no_tab`; гость уничтожен или упал — `tab_not_loaded`; иначе `unsupported`. */
-  function pageFailure(record: PageRecord, contents: WebContents, signal: AbortSignal, error: unknown): AgentOpError {
-    if (error instanceof AgentOpError) return error;
-    if (signal.aborted) return new AgentOpError('timeout', 'The operation was cancelled: it took too long.');
-    const message = error instanceof Error ? error.message : String(error);
-    if (registry.fresh(record) === undefined) return new AgentOpError('no_tab', `Page ${record.agentId} was closed during the operation: call browser_tabs.`);
-    let gone = false;
-    try {
-      gone = contents.isDestroyed() || contents.isCrashed();
-    } catch {
-      gone = true;
-    }
-    if (gone) return new AgentOpError('tab_not_loaded', `Page ${record.agentId} went away during the operation (${message.slice(0, 200)}).`);
-    return new AgentOpError('unsupported', message.slice(0, 2000));
-  }
-
-  /**
-   * Операция на странице в её очереди. Срок — с постановки (`deadline`), а не со старта: в очереди ждут до `opTimeoutMs`.
-   * Проверки — сразу (быстрый отказ) и ещё раз перед запуском; `activity end` — в `finally` самой задачи, по её настоящему концу.
-   */
-  async function onPage<T>(request: BrowserAgentOpEvent, agentId: string, run: (contents: WebContents, record: PageRecord, signal: AbortSignal) => Promise<T>): Promise<T> {
-    const deadline = Date.now() + opTimeoutMs;
-    const first = checked(request, agentId);
-    return queue.run(pageKey(first.record.workKey, first.record.pageId), deadline, async (signal) => {
-      // Пока операция ждала, человек мог выключить доступ, поставить панель на паузу или увести страницу на внешний сайт.
-      if (!(await deps.agentsAllowed())) throw new AgentOpError('access_denied', AGENTS_OFF);
-      const { record, contents } = checked(request, agentId);
-      signal.throwIfAborted();
-      deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'start' });
-      try {
-        return await run(contents, record, signal);
-      } catch (error) {
-        throw pageFailure(record, contents, signal, error);
-      } finally {
-        deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'end' });
-      }
-    });
-  }
 
   function askWindow(event: AgentOpenTab): Promise<AgentOpenTabResult | 'no_window' | 'timeout'> {
     return new Promise((resolve) => {
@@ -263,15 +343,15 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
             return ok(await listTabs(registry, deps, request));
           case 'console': {
             const args = parsed.data as BrowserAgentArgs<'console'>;
-            return ok(await onPage(request, args.tab, async (contents, record) => reads.consoleOf(contents, record, args)));
+            return ok(await runner.run(request, args.tab, async (contents, record) => reads.consoleOf(contents, record, args)));
           }
           case 'network': {
             const args = parsed.data as BrowserAgentArgs<'network'>;
-            return ok(await onPage(request, args.tab, (contents, record) => reads.networkOf(contents, record, args)));
+            return ok(await runner.run(request, args.tab, (contents, record) => reads.networkOf(contents, record, args)));
           }
           case 'screenshot': {
             const args = parsed.data as BrowserAgentArgs<'screenshot'>;
-            return ok(await onPage(request, args.tab, (contents, record, signal) => capture.screenshotOf(contents, record, request, args, signal)));
+            return ok(await runner.run(request, args.tab, (contents, record, guard) => capture.screenshotOf(contents, record, request, args, guard.signal)));
           }
           default:
             // До задач 16–19; остаётся защитой от операции новее окна.
@@ -287,18 +367,21 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     },
     registerTab(e) {
       registry.register(e);
+      // «Pause agents» посреди операции: идущие операции панели обрываются, как при Stop.
+      if (e.kind === 'paused' && e.paused) runner.stopPanel(e.workKey, e.owner, new AgentOpError('access_denied', PAUSED));
     },
     captureReady(id) {
       capture.captureReady(id);
     },
-    stop() {
-      // Задачи 15a и 15b.
+    stop(webContentsId) {
+      const record = registry.pauseFor(webContentsId);
+      if (record !== null) runner.stopPanel(record.workKey, record.owner, new AgentOpError('access_denied', STOPPED));
     },
     focusReady() {
-      // Задачи 15a и 15b.
+      // Задача 15b.
     },
-    accessChanged() {
-      // Задачи 15a и 15b.
+    accessChanged(allowed) {
+      runner.accessChanged(allowed);
     },
   };
 }

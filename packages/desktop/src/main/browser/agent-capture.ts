@@ -20,7 +20,6 @@ import type { LayoutMetrics, PageRecord, PageRegistry } from './agent-pages.js';
 import type { Emulation } from './emulation.js';
 import type { Inspector } from './inspector.js';
 import { pngSize } from './png.js';
-import { isLoopbackUrl } from '../../shared/loopback.js';
 
 /** Размер снимка агента: совпал с пресетом в любой ориентации — пресет, иначе Custom; DPR 1 — PNG в CSS-пикселях. */
 export function captureSpec(width: number, height: number): ViewportSpec {
@@ -292,10 +291,7 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
     };
 
     const taken = spec === null ? await capture() : screenDpr > 1 ? await deps.emulation.withTemporary(id, spec, capture, screenDpr) : await deps.emulation.withTemporary(id, spec, capture);
-    // Страница могла уйти с localhost или сменить документ, пока снимали (редирект dev-сервера): чужое в drops не кладём.
-    if (!isLoopbackUrl(contents.getURL())) {
-      throw new AgentOpError('not_loopback', `Page ${record.agentId} left localhost during the screenshot; nothing was saved.`);
-    }
+    // Страница могла сменить документ, пока снимали (редирект): смену ловит эпоха ниже.
     if (deps.inspector.snapshot(id)?.epoch !== epoch0) {
       throw new AgentOpError('tab_not_loaded', `Page ${record.agentId} navigated during the screenshot: take it again.`);
     }

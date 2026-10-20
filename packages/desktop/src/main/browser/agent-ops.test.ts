@@ -433,16 +433,16 @@ describe('реестр страниц панелей и tabs (спека 3.7, 3.
     expect(tab?.title).toHaveLength(200);
   });
 
-  it('не-loopback страница: url — только origin, title пустой, viewport null, Page.getLayoutMetrics не вызван', async () => {
+  it('внешняя страница: tabs показывает полный адрес с маской, заголовок и размер (любые сайты)', async () => {
     const { ops, guests, inspector, emulation, runOp: run } = setup();
     register(ops, {});
     guests.set(7, fakeGuest(7, 'https://example.com/private/path?token=SECRET1#frag', 'Private title for example'));
     emulation.current.mockReturnValue({ preset: 'mobile-m', rotated: false, dpr: 2 });
     const [tab] = okResult<Tabs>(await run('tabs', {})).tabs;
-    expect(tab).toMatchObject({ url: 'https://example.com', title: '', viewport: null, loopback: false, loaded: true });
+    expect(tab).toMatchObject({ url: 'https://example.com/private/path?token=<redacted>#frag', title: 'Private title for example', viewport: { width: 375, height: 812, emulated: true }, loopback: false, loaded: true });
     expect(inspector.send).not.toHaveBeenCalled();
     guests.set(7, fakeGuest(7, 'about:blank', 'Blank'));
-    expect(okResult<Tabs>(await run('tabs', {})).tabs[0]).toMatchObject({ url: '', title: '', viewport: null, loopback: false });
+    expect(okResult<Tabs>(await run('tabs', {})).tabs[0]).toMatchObject({ url: 'about:blank', title: 'Blank', loopback: false });
   });
 
   it('три гостя с зависшим getLayoutMetrics: tabs отвечает меньше чем за 2 с, у них viewport null', async () => {
@@ -561,11 +561,11 @@ function networkEntry(patch: Partial<NetworkEntry>): NetworkEntry {
 }
 
 describe('проверки страницы (спека 5.2)', () => {
-  it('не loopback — not_loopback; страница упала, гость уничтожен или его нет — tab_not_loaded', async () => {
+  it('внешняя страница читается; страница упала, гость уничтожен или его нет — tab_not_loaded', async () => {
     const { ops, guests, runOp: run } = setup();
     register(ops, {});
     guests.set(7, fakeGuest(7, 'https://example.com/'));
-    expect(codeOf(await run('console', { tab: 't1' }))).toBe('not_loopback');
+    expect(codeOf(await run('console', { tab: 't1' }))).toBe('ok');
     guests.set(7, fakeGuest(7));
     guests.get(7)?.isCrashed.mockReturnValue(true);
     expect(codeOf(await run('console', { tab: 't1' }))).toBe('tab_not_loaded');
@@ -576,38 +576,29 @@ describe('проверки страницы (спека 5.2)', () => {
     expect(codeOf(await run('console', { tab: 't1' }))).toBe('tab_not_loaded');
   });
 
-  it('открыть можно любой http(s), читать — только localhost: внешняя страница из browser_open даёт на console, network и screenshot not_loopback с точной причиной, гость не тронут', async () => {
-    const { ops, guests, inspector, saveImage, runOp: run, state } = setup();
+  it('внешняя страница из browser_open: console, network и screenshot читаются; tabs показывает адрес с маской', async () => {
+    const { ops, guests, saveImage, runOp: run, state } = setup();
     state.reply = { tabId: 'bp-aaaaaa', reused: false, mounted: true };
     expect(okResult<{ tab: string }>(await run('open', { url: 'https://example.test/' })).tab).toBe('t1');
     guests.set(7, fakeGuest(7, 'https://example.test/'));
     register(ops, {});
     for (const [op, args] of [['console', { tab: 't1' }], ['network', { tab: 't1' }], ['screenshot', { tab: 't1' }]] as const) {
-      const result = await run(op, args);
-      expect(codeOf(result), op).toBe('not_loopback');
-      expect(messageOf(result), op).toBe('Page t1 is not on localhost.');
+      expect(codeOf(await run(op, args)), op).toBe('ok');
     }
-    expect(inspector.snapshot).not.toHaveBeenCalled();
-    expect(inspector.send).not.toHaveBeenCalled();
-    expect(saveImage).not.toHaveBeenCalled();
-    // В списке страница есть, но только с origin: ни пути, ни заголовка.
-    expect(okResult<Tabs>(await run('tabs', {})).tabs[0]).toMatchObject({ id: 't1', url: 'https://example.test', title: '', viewport: null, loopback: false });
+    expect(saveImage).toHaveBeenCalledTimes(1);
+    expect(okResult<Tabs>(await run('tabs', {})).tabs[0]).toMatchObject({ id: 't1', url: 'https://example.test/', title: 'Settings', loopback: false });
   });
 
-  it('localhost-страница ушла redirect на внешний адрес: вкладка остаётся в списке, чтение отказывает not_loopback; вернулась на localhost — читается снова', async () => {
+  it('страница ушла redirect на внешний адрес: вкладка в списке с адресом без секрета, чтение работает', async () => {
     const { ops, guests, runOp: run, state } = setup();
     state.reply = { tabId: 'bp-aaaaaa', reused: false, mounted: true };
     expect(okResult<{ tab: string }>(await run('open', { url: 'http://localhost:5173/login' })).tab).toBe('t1');
     register(ops, {});
     expect(codeOf(await run('console', { tab: 't1' }))).toBe('ok');
     guests.set(7, fakeGuest(7, 'https://accounts.example.test/signin?sid=SECRET9', 'Sign in'));
-    const result = await run('console', { tab: 't1' });
-    expect(codeOf(result)).toBe('not_loopback');
-    expect(messageOf(result)).toBe('Page t1 is not on localhost.');
-    const [tab] = okResult<Tabs>(await run('tabs', {})).tabs;
-    expect(tab).toMatchObject({ id: 't1', url: 'https://accounts.example.test', title: '', loopback: false, loaded: true });
-    guests.set(7, fakeGuest(7, 'http://localhost:5173/home'));
     expect(codeOf(await run('console', { tab: 't1' }))).toBe('ok');
+    const [tab] = okResult<Tabs>(await run('tabs', {})).tabs;
+    expect(tab).toMatchObject({ id: 't1', url: 'https://accounts.example.test/signin?sid=<redacted>', title: 'Sign in', loopback: false, loaded: true });
   });
 });
 
@@ -1192,21 +1183,6 @@ describe('screenshot (спека 5.1, 8)', () => {
     expect(saveImage).toHaveBeenCalledTimes(1);
   });
 
-  it('страница ушла с localhost посреди fullPage — not_loopback «Page t1 left localhost during the screenshot; nothing was saved.», saveImage не вызван', async () => {
-    const { ops, inspector, guests, saveImage, runOp: run } = setup();
-    register(ops, {});
-    const guest = guests.get(7) as Guest;
-    let shots = 0;
-    inspector.send.mockImplementation(async (id: number, method: string) => {
-      if (method === 'Page.captureScreenshot' && (shots += 1) === 1) guest.getURL.mockReturnValue('https://example.com/login');
-      return sendWith({ content: { width: 1280, height: 2000 }, shot: png(1280, 800) })(id, method);
-    });
-    const result = await run('screenshot', { tab: 't1', fullPage: true });
-    expect(codeOf(result)).toBe('not_loopback');
-    expect(messageOf(result)).toBe('Page t1 left localhost during the screenshot; nothing was saved.');
-    expect(saveImage).not.toHaveBeenCalled();
-  });
-
   it('эпоха сменилась посреди снимка (переход на localhost) — tab_not_loaded «Page t1 navigated during the screenshot: take it again.», saveImage не вызван', async () => {
     const { ops, inspector, snapshots, saveImage, runOp: run } = setup();
     register(ops, {});
@@ -1390,9 +1366,9 @@ describe('проверки перед запуском из очереди (оп
     expect(messageOf(result)).toContain('Let agents use the browser');
   });
 
-  it('страница ушла на внешний адрес — not_loopback; операция не началась', async () => {
+  it('страница ушла на внешний адрес — операция всё равно идёт (любые сайты)', async () => {
     const result = await queued(({ guests }) => guests.set(7, fakeGuest(7, 'https://example.com/')));
-    expect(codeOf(result)).toBe('not_loopback');
+    expect(codeOf(result)).toBe('ok');
   });
 });
 
