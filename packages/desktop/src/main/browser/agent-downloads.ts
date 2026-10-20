@@ -17,7 +17,6 @@ import { urlForAgent } from './agent-url.js';
 export interface AgentDownloadOwner {
   workKey: string;
   sessionId: string;
-  agentId: string | null;
   /** Страница, с которой началось скачивание (`tN`). */
   tab?: string | null;
 }

@@ -7,6 +7,7 @@
 import type { WebContents } from 'electron';
 import { AGENT_LIMITS } from '@parley/protocol';
 import type { BrowserAgentArgs, BrowserAgentSnapshotResult, BrowserAgentWaitResult } from '@parley/protocol';
+import { sleep } from './agent-actions.js';
 import { AgentOpError } from './agent-errors.js';
 import type { PageRecord } from './agent-pages.js';
 import { urlForAgent } from './agent-url.js';
@@ -36,23 +37,6 @@ function boxOfQuad(quad: readonly number[]): { x: number; y: number; width: numb
   const y = Math.min(...ys);
   return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
 }
-
-const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
-  new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      reject(signal.reason);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
 
 export function createAgentDom(deps: { inspector: Pick<Inspector, 'send' | 'snapshot'>; now?(): number; waitMs?(): number }): AgentDom {
   const { inspector } = deps;

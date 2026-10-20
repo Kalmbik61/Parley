@@ -197,7 +197,7 @@ describe('open (спека 5.1 browser_open)', () => {
     expect(asked).toEqual([]);
   });
 
-  it('внешний http(s) открывается: окну уходит адрес без учётных данных, ответ — вкладка t1 (открывать можно любой адрес, читать — только localhost)', async () => {
+  it('внешний http(s) открывается: окну уходит адрес без учётных данных, ответ — вкладка t1 (открывать, читать и действовать можно на любом сайте)', async () => {
     const { run, asked } = setup();
     for (const [url, href] of [
       ['https://example.test/', 'https://example.test/'],

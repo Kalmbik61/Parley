@@ -6,7 +6,7 @@ import { AGENT_LIMITS } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAgentDownloads } from './agent-downloads.js';
 
-const OWNER = { workKey: '/a w-1', sessionId: 's-02', agentId: 'claude', tab: 't1' };
+const OWNER = { workKey: '/a w-1', sessionId: 's-02', tab: 't1' };
 
 let root: string;
 beforeEach(async () => {

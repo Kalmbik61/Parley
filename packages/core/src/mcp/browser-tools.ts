@@ -1,5 +1,5 @@
 /**
- * Инструменты `browser_*` MCP-сервера Parley (спека 2026-10-07-browser-devtools-agent-design.md, 3.7, 5.1; этап D: `browser_navigate`, `_snapshot`, `_action`, `_wait_for`, `_resize`; этап B2:
+ * Инструменты `browser_*` MCP-сервера Parley (спека 2026-10-07-browser-devtools-agent-design.md, 3.7, 5.1; этап D: `browser_navigate`, `_snapshot`, `_action`, `_wait_for`, `_resize`, `_evaluate`, `_cookies`, `_storage`, `_downloads`; этап B2:
  * `browser_open`; этап C: читающие `browser_tabs`, `browser_console`, `browser_network`,
  * `browser_screenshot`). Вызов идёт `fetch` на эндпоинт хоста (`McpContext.agent`: адрес и токен сессии), хост отдаёт
  * операцию окну. Инструменты объявляются, только когда канал есть: сессия, запущенная до обновления, их не видит.
