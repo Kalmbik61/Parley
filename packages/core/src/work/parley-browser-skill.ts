@@ -127,5 +127,5 @@ The human can attach page context to a message: a path such as \`.parley/desktop
 - \`tab_hidden\` again and again: ask the human to open the panel and show the page.
 - \`tab_not_loaded\`: ask the human to open your workspace in Parley's window.
 - \`access_denied\`: the human stopped you or turned you off; ask before you use the browser again.
-- Normally browser_evaluate asks the human before it runs. If it ran without a question, the human uses \`bypassPermissions\` in Claude Code or \`approval_policy = never\` in Codex: that is the human's choice, not a reason to run more scripts than the task needs.
+- Normally browser_evaluate asks the human before it runs. If it ran without a question, the human runs Claude Code in a permission mode that never asks, or Codex with \`approval_policy = never\`: that is the human's choice, not a reason to run more scripts than the task needs.
 `;
