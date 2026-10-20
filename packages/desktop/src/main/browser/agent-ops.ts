@@ -30,10 +30,12 @@ import type { AgentDownloads } from './agent-downloads.js';
 import type { AgentWindow } from './agent-window.js';
 import type { TypingClock } from './human-typing.js';
 import { createAgentCapture } from './agent-capture.js';
+import { createAgentActions } from './agent-actions.js';
 import { createAgentDom } from './agent-dom.js';
 import type { AgentCaptureDeps } from './agent-capture.js';
 import { createPageRegistry, listTabs } from './agent-pages.js';
 import type { PageRecord, PageRegistry } from './agent-pages.js';
+import { createAgentInput } from './agent-input.js';
 import type { InputGuard } from './agent-input.js';
 import { createPageQueue } from './agent-queue.js';
 import { createAgentReads } from './agent-reads.js';
@@ -55,7 +57,7 @@ export interface AgentOpsDeps {
   /** Гость-страница по id её WebContents; `null` — такого нет. */
   fromId(id: number): WebContents | null;
   inspector: Pick<Inspector, 'snapshot' | 'send' | 'responseBody' | 'onEvent'>;
-  emulation: Pick<Emulation, 'current' | 'withTemporary'>;
+  emulation: Pick<Emulation, 'current' | 'withTemporary' | 'fitOf'>;
   /** PNG снимка — в `drops/` (`main/drops.ts#saveImage`); `null` — не сохранился. */
   saveImage(png: Buffer): Promise<string | null>;
   /** Картинки в main — `nativeImage`, в тестах заглушка. */
@@ -82,6 +84,8 @@ export interface AgentOpsDeps {
   requestFocus?(contents: WebContents, id: string): boolean;
   /** Сколько ждать тишины клавиатуры и ответа окна о фокусе; по умолчанию `AGENT_LIMITS.focusMs`. Тестам — меньше. */
   focusMs?: number;
+  /** Домашняя папка для проверки секретных мест при загрузке файла; по умолчанию `os.homedir()`. Тестам — своя. */
+  uploadHome?: string;
 }
 
 export interface AgentOps {
@@ -422,7 +426,6 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     typing: deps.typing,
     ...(deps.opTimeoutMs === undefined ? {} : { opTimeoutMs: deps.opTimeoutMs }),
   });
-  // `focus.borrow(agentId)` берёт `createAgentInput` в задаче 17.
   const focus = createFocusBorrower({ typing: deps.typing, ...(deps.requestFocus === undefined ? {} : { requestFocus: deps.requestFocus }), ...(deps.focusMs === undefined ? {} : { focusMs: deps.focusMs }) });
   const reads = createAgentReads({ inspector: deps.inspector });
   const dom = createAgentDom({ inspector: deps.inspector });
@@ -508,8 +511,22 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
             const args = parsed.data as BrowserAgentArgs<'wait_for'>;
             return ok(await runner.run(request, args.tab, (contents, record, guard) => dom.waitFor(contents, record, args, guard.signal)));
           }
+          case 'action': {
+            const args = parsed.data as BrowserAgentArgs<'action'>;
+            // Ввод агента: одалживание фокуса знает страницу (`borrow(agentId)`), поэтому ввод и действия — на вызов.
+            const actions = createAgentActions({
+              inspector: deps.inspector,
+              input: createAgentInput({ inspector: deps.inspector, borrowFocus: focus.borrow(args.tab) }),
+              dom,
+              emulation: deps.emulation,
+              window: deps.agentWindow,
+              activity: deps.activity,
+              ...(deps.uploadHome === undefined ? {} : { home: deps.uploadHome }),
+            });
+            return ok(await runner.run(request, args.tab, (contents, record, guard) => actions.actionOf(contents, record, request, args, guard), { changes: true, window: true, seen: true }));
+          }
           default:
-            // До задач 17–19; остаётся защитой от операции новее окна.
+            // До задач 18–19; остаётся защитой от операции новее окна.
             return failure('unsupported', `This window does not run ${String(request.op)} yet.`);
         }
       } catch (error) {

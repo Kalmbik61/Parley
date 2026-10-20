@@ -21,7 +21,7 @@ const OWN = { kind: 'session', sessionId: 's-02' } as const;
 const GEN = 'gen-1';
 
 function fakeGuest(id: number, url = 'http://localhost:5173/settings', title = 'Settings') {
-  return { id, getURL: vi.fn(() => url), getTitle: vi.fn(() => title), isDestroyed: vi.fn(() => false), isCrashed: vi.fn(() => false) };
+  return { id, getURL: vi.fn(() => url), getTitle: vi.fn(() => title), isDestroyed: vi.fn(() => false), isCrashed: vi.fn(() => false), getZoomFactor: vi.fn(() => 1), isLoading: vi.fn(() => false), on: vi.fn(), off: vi.fn() };
 }
 type Guest = ReturnType<typeof fakeGuest>;
 
@@ -47,25 +47,28 @@ function devtoolsWith(options: { consoleText: string; requestUrl: string }): Dev
 }
 
 /** Полный `createAgentOps` с внешней страницей. */
-function setup(options: { url?: string } = {}) {
+function setup(options: { url?: string; requestFocus?: (contents: WebContents, id: string) => boolean; uploadHome?: string } = {}) {
   const guests = new Map<number, Guest>([[7, fakeGuest(7, options.url ?? 'http://localhost:5173/settings')]]);
   const inspector = {
     snapshot: vi.fn((): DevtoolsSnapshot | null => ({ epoch: 1, capture: 'on', console: [], network: [] })),
     send: vi.fn(async (): Promise<unknown> => ({})),
     responseBody: vi.fn(async () => null),
+    onEvent: vi.fn(() => () => undefined),
   };
   const ops = createAgentOps({
     agentsAllowed: async () => true,
     openTab: () => false,
     fromId: (id) => (guests.get(id) as unknown as WebContents | undefined) ?? null,
     inspector: inspector as never,
-    emulation: { current: () => null, withTemporary: async (_id: number, _spec: unknown, run: () => Promise<unknown>) => run() } as never,
+    emulation: { current: () => null, fitOf: () => null, withTemporary: async (_id: number, _spec: unknown, run: () => Promise<unknown>) => run() } as never,
     saveImage: async () => '/drops/shot.png',
     image: { resize: (data: Buffer) => data, stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data },
     inGuest: async () => undefined,
     activity: () => undefined,
     agentWindow: createAgentWindow(),
     typing: createTypingClock(),
+    ...(options.requestFocus === undefined ? {} : { requestFocus: options.requestFocus }),
+    ...(options.uploadHome === undefined ? {} : { uploadHome: options.uploadHome }),
   });
   ops.registerTab({ kind: 'hello', generation: GEN });
   ops.registerTab({ kind: 'page', generation: GEN, webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true });
@@ -359,5 +362,57 @@ describe('snapshot и wait_for через createAgentOps (задача 16)', () 
     await vi.waitFor(() => expect(ctx.inspector.send.mock.calls.length).toBeGreaterThan(4));
     ctx.ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: true });
     expect(codeOf(await second)).toBe('access_denied');
+  });
+});
+
+describe('action через createAgentOps (задача 17)', () => {
+  const inputCalls = (ctx: ReturnType<typeof setup>): string[] =>
+    ctx.inspector.send.mock.calls.map((call) => (call as unknown as [number, string])[1]).filter((method) => method.startsWith('Input.'));
+  const REG = { kind: 'page', generation: GEN, webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa' } as const;
+
+  it('human_busy: у занятой страницы action отказывает до ввода; чтение — можно', async () => {
+    const ctx = setup();
+    ctx.ops.registerTab({ ...REG, visible: true, humanBusy: true });
+    expect(codeOf(await ctx.run('action', { tab: 't1', action: 'click', x: 5, y: 5 }))).toBe('human_busy');
+    expect(inputCalls(ctx)).toEqual([]);
+    expect(codeOf(await ctx.run('snapshot', { tab: 't1' }))).toBe('ok');
+  });
+
+  it('страница чужого хозяина — no_tab: ни одной команды, upload не доходит до DOM.setFileInputFiles (Фокус ревью 5)', async () => {
+    const ctx = setup();
+    ctx.ops.registerTab({ ...REG, owner: { kind: 'session', sessionId: 's-99' }, pageId: 'bp-zzzzzz', webContentsId: 8, visible: true });
+    for (const args of [{ tab: 't2', action: 'click', x: 5, y: 5 }, { tab: 't2', action: 'upload', ref: 'e1', files: ['/tmp/a.png'] }]) {
+      expect(codeOf(await ctx.run('action', args))).toBe('no_tab');
+    }
+    expect(ctx.inspector.send.mock.calls.some((call) => (call as unknown as [number, string])[1] === 'DOM.setFileInputFiles')).toBe(false);
+    expect(inputCalls(ctx)).toEqual([]);
+  });
+
+  it('окно не смогло поставить фокус — tab_hidden «could not take keyboard focus», Input.insertText не вызван (Фокус ревью 2)', async () => {
+    const holder: { ops: ReturnType<typeof setup>['ops'] | null } = { ops: null };
+    const ctx = setup({ requestFocus: (_c, id) => { queueMicrotask(() => holder.ops?.focusReady(id, false)); return true; } });
+    holder.ops = ctx.ops;
+    const result = await ctx.run('action', { tab: 't1', action: 'type', text: 'Ann' });
+    expect(codeOf(result)).toBe('tab_hidden');
+    expect(messageOf(result)).toContain('could not take keyboard focus');
+    expect(inputCalls(ctx)).toEqual([]);
+  });
+
+  it('скрытая страница, которую человек видел, принимает ввод; ни разу не показанная — tab_hidden до requestFocus (решение владельца 8)', async () => {
+    const holder: { ops: ReturnType<typeof setup>['ops'] | null } = { ops: null };
+    const requestFocus = vi.fn((_c: WebContents, id: string) => { queueMicrotask(() => holder.ops?.focusReady(id, true)); return true; });
+    const ctx = setup({ requestFocus });
+    holder.ops = ctx.ops;
+    ctx.ops.registerTab({ ...REG, visible: false });
+    const typed = okResult<{ done: string }>(await ctx.run('action', { tab: 't1', action: 'type', text: 'Ann' }));
+    expect(typed.done).toBe('Typed 3 characters.');
+    expect(inputCalls(ctx)).toContain('Input.insertText');
+
+    // Вторая страница панели (t2) ни разу не была видна.
+    ctx.guests.set(8, fakeGuest(8));
+    ctx.ops.registerTab({ ...REG, pageId: 'bp-bbbbbb', webContentsId: 8, visible: false });
+    requestFocus.mockClear();
+    expect(codeOf(await ctx.run('action', { tab: 't2', action: 'type', text: 'Ann' }))).toBe('tab_hidden');
+    expect(requestFocus).not.toHaveBeenCalled();
   });
 });
