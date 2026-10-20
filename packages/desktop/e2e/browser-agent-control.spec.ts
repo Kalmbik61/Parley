@@ -16,6 +16,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * - ввод агента не попадает в поле человека и не трогает окно (Фокус ревью 1), в том числе пока человек печатает в своей
  *   вкладке браузера;
  * - нажатие человека, пришедшее в страницу агента, пока фокус одолжен, гасится, а ввод агента обрывается `human_busy` (D1);
+ * - две сессии вводят одновременно: фокус одалживается по очереди, текст каждой — в своей странице (финальная рецензия B1);
  * - скрытая страница, которую человек видел, принимает ввод; ни разу не показанная — `tab_hidden` (Фокус ревью 2);
  * - переходы и устаревшая ссылка, размер, занятость (Annotate), Stop и «Pause agents» посреди операции (Фокус ревью 8).
  *
@@ -445,6 +446,90 @@ test.describe('агент управляет страницами браузер
     expect(after).not.toContain('Z');
     expect(after?.endsWith('-third')).toBe(true);
     await expect(field).toHaveValue('hi!');
+  });
+
+  test('две сессии вводят одновременно, каждая в свою страницу: одалживания фокуса по очереди, текст каждой — в своей странице, фокус человека вернулся в поле комнаты (финальная рецензия B1)', async () => {
+    // Обе страницы — в панели комнаты, где обе сессии участники: панель видна, вторая страница скрыта, но человек её видел.
+    // Команды уходят в терминалы обеих сессий одним вызовом окна, поэтому операции ввода идут в main одновременно. Порядок
+    // просьб окну о фокусе и `end` main видно по `browser:agent-activity` окна (как в тесте D1).
+    const opened = await openApp();
+    const { window, lead, second, roomId, workKey, workId, electronApp } = opened;
+    const leadUrl = `${origin}/form?lead`;
+    const secondUrl = `${origin}/form?second`;
+    const leadTab = await openPage(opened, lead, { url: leadUrl, room: roomId });
+    const secondTab = await openPage(opened, second, { url: secondUrl, room: roomId });
+
+    await window.locator(`[data-work-key="${workKey}"]:not([role="tab"]) [data-room-row="${roomId}"] > div`).first().click();
+    await expect(window.locator('[data-room-panel]')).toBeVisible();
+    const panel = panelOf(window, `room:${roomId}`);
+    if (!(await panel.isVisible())) await window.getByRole('button', { name: 'Browser', exact: true }).first().click();
+    await expect(panel).toBeVisible();
+    await expect(panel.getByRole('tab')).toHaveCount(2);
+    for (const index of [1, 0]) {
+      await panel.getByRole('tab').nth(index).click();
+      await expect(panel.getByRole('tab').nth(index)).toHaveAttribute('aria-selected', 'true');
+    }
+    const leadName = await refOf(opened, lead, leadTab, 'textbox', 'Name');
+    const secondName = await refOf(opened, second, secondTab, 'textbox', 'Name');
+
+    const field = window.locator('[data-room-panel]').getByRole('textbox', { name: 'Message' });
+    await field.click();
+    await window.keyboard.type('hi');
+    await expect(field).toHaveText('hi');
+    const before = await humanState(window);
+
+    await electronApp.evaluate(({ webContents }, u) => {
+      const host = webContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL() === u)?.hostWebContents;
+      const g = globalThis as { __focusLog?: string[]; __restoreSend?: () => void };
+      g.__focusLog = [];
+      if (host === undefined || host === null) return;
+      const send = host.send;
+      g.__restoreSend = () => { host.send = send; };
+      host.send = (channel: string, ...args: unknown[]): void => {
+        const event = args[0] as { webContentsId?: number; phase?: string; focus?: unknown } | undefined;
+        if (channel === 'browser:agent-activity' && event?.focus !== undefined) g.__focusLog?.push(`${event.phase === 'end' ? 'end' : 'focus'} ${String(event.webContentsId)}`);
+        send.call(host, channel, ...args);
+      };
+    }, leadUrl);
+
+    const logBefore = (await readLines<McpResult>(mcpLog)).length;
+    const line = (tab: string, ref: string, text: string): string => `STUB_MCP browser_action ${JSON.stringify({ tab, action: 'type', ref, text, submit: true })}\r`;
+    await window.evaluate(
+      (inputs) => {
+        for (const input of inputs) (globalThis as unknown as Parley).parley.notify('pty.input', input);
+      },
+      [
+        { ref: { projectPath: project, workId, sessionId: lead }, data: line(leadTab, leadName, 'lead-line') },
+        { ref: { projectPath: project, workId, sessionId: second }, data: line(secondTab, secondName, 'second-line') },
+      ],
+    );
+    await expect.poll(async () => (await readLines<McpResult>(mcpLog)).length, { timeout: 40_000 }).toBeGreaterThanOrEqual(logBefore + 2);
+    const entries = (await readLines<McpResult>(mcpLog)).slice(logBefore);
+    for (const session of [lead, second]) {
+      const entry = entries.find((item) => item.session === session);
+      expect(entry?.tool).toBe('browser_action');
+      expect(entry?.isError, entry?.text).toBe(false);
+      expect(entry?.text).toContain('pressed Enter');
+    }
+    const log = await electronApp.evaluate(() => {
+      const g = globalThis as { __focusLog?: string[]; __restoreSend?: () => void };
+      g.__restoreSend?.();
+      return g.__focusLog ?? [];
+    });
+    // Одалживания не пересекаются: за просьбой о фокусе одной страницы — её `end`, и только потом просьба другой.
+    expect(log, log.join(', ')).toHaveLength(4);
+    expect(log[0]?.replace('focus', 'end')).toBe(log[1]);
+    expect(log[2]?.replace('focus', 'end')).toBe(log[3]);
+    expect(log[0]).not.toBe(log[2]);
+
+    expect(await echoOf(opened, leadUrl)).toBe('lead-line');
+    expect(await echoOf(opened, secondUrl)).toBe('second-line');
+    await expect(field).toHaveText('hi');
+    expect(await humanState(window)).toEqual(before);
+    await window.keyboard.type('!');
+    await expect(field).toHaveText('hi!');
+    expect(await echoOf(opened, leadUrl)).toBe('lead-line');
+    expect(await echoOf(opened, secondUrl)).toBe('second-line');
   });
 
   test('скрытая страница, которую человек видел, принимает ввод; ни разу не показанная — tab_hidden (Фокус ревью 2)', async () => {
