@@ -17,6 +17,8 @@ export interface HostContext {
   onShutdown(hook: () => Promise<void>): void;
   shutdown(reason: string): Promise<void>;
   busy(key: string, isBusy: boolean): void;
+  /** Удержание от простоя без живой сессии (канал Telegram): входит в проверку простоя, но не в `liveSessions()`. */
+  hold(key: string, on: boolean): void;
 }
 
 export interface RequestInfo {
@@ -62,9 +64,10 @@ export interface HostContextHandle {
 export function createHostContext(options: CreateHostContextOptions): HostContextHandle {
   const clients = new Set<Client>();
   const busyKeys = new Set<string>();
+  const holdKeys = new Set<string>();
 
   const notifyIdle = (): void => {
-    options.onIdleChange(clients.size === 0 && busyKeys.size === 0);
+    options.onIdleChange(clients.size === 0 && busyKeys.size === 0 && holdKeys.size === 0);
   };
 
   const context: HostContext = {
@@ -84,6 +87,11 @@ export function createHostContext(options: CreateHostContextOptions): HostContex
     busy(key, isBusy) {
       if (isBusy) busyKeys.add(key);
       else busyKeys.delete(key);
+      notifyIdle();
+    },
+    hold(key, on) {
+      if (on) holdKeys.add(key);
+      else holdKeys.delete(key);
       notifyIdle();
     },
   };

@@ -97,8 +97,8 @@ export type AssistantProposal =
       note: string | null;
     });
 
-/** Откуда пришёл ход: человек спросил на острове или сработало напоминание. Старый хост не шлёт (= `island`). */
-export type AssistantOrigin = 'island' | 'reminder';
+/** Откуда пришёл ход: человек спросил на острове, сработало напоминание или пришло сообщение из Telegram. Старый хост не шлёт (= `island`). */
+export type AssistantOrigin = 'island' | 'reminder' | 'telegram';
 
 export interface AssistantState {
   phase: AssistantPhase;
@@ -141,7 +141,19 @@ export const assistantMethodSchemas = {
   'assistant.reset': z.object({}),
   'assistant.state': z.object({}),
   'assistant.sent': z.object({ ref: sessionRef }),
+  /** Настройки помощника для каналов без окна (Telegram): окно шлёт их при каждом изменении. */
+  'assistant.configure': z.object({
+    enabled: z.boolean(),
+    provider: z.string().min(1).nullable(),
+    model: z.string().min(1).nullable(),
+    language: z.string().regex(/^[a-z]{2,3}$/),
+    /** Абсолютный путь к файлу модели Whisper; `null` — голос не распознаётся. */
+    voiceModel: z.string().min(1).nullable(),
+  }),
 } as const;
+
+/** Параметры `assistant.configure`. */
+export type AssistantSettings = z.infer<(typeof assistantMethodSchemas)['assistant.configure']>;
 
 export interface AssistantMethodResults {
   'assistant.ask': { ok: true };
@@ -149,6 +161,7 @@ export interface AssistantMethodResults {
   'assistant.decide': { applied: boolean; error: string | null };
   'assistant.reset': { ok: true };
   'assistant.state': AssistantState;
+  'assistant.configure': { ok: true };
   /** Что помощник отправил этой сессии в Chat — окно помечает такие сообщения (спека 7.4). */
   'assistant.sent': { items: Array<{ text: string; at: string }> };
 }

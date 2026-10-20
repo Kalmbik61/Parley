@@ -411,6 +411,12 @@ export {
   writeSecret,
 } from './secrets.js';
 export type { SecretId } from './secrets.js';
+export {
+  TELEGRAM_TOKEN_RE,
+  telegramBotId,
+  telegramTokenFingerprint,
+  maskTelegramTokens,
+} from './telegram.js';
 export { DEFAULT_BACKGROUND_HOLD_MS, activityOf, hookedSince } from './work/activity.js';
 export type {
   Activity,

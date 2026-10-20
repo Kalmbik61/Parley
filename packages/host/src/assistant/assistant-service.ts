@@ -32,7 +32,7 @@ import {
   type SessionLifecycle,
   type WorkMap,
 } from '@parley/core';
-import { feedDecision, refKey, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type AssistantState, type EventData, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
+import { feedDecision, refKey, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type AssistantSettings, type AssistantState, type EventData, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { FeedService } from '../feed/feed-service.js';
@@ -78,6 +78,8 @@ export interface AssistantServiceDeps {
   reminders: Pick<ReminderStore, 'add' | 'list' | 'cancel'>;
   home: string;
   log(line: string): void;
+  /** Напоминание сработало, пока помощник выключен в настройках: канал сообщает об этом человеку. */
+  onReminderWhileOff?(reminder: Reminder): void;
   run?(spec: TurnSpec, onEvent: Parameters<typeof runTurn>[1]): TurnHandle;
   now?(): number;
   idleMs?: number;
@@ -85,7 +87,13 @@ export interface AssistantServiceDeps {
 }
 
 export interface AssistantService {
-  ask(params: Params<'assistant.ask'>): Promise<void>;
+  ask(params: Params<'assistant.ask'>, origin?: AssistantOrigin): Promise<void>;
+  /** Слушатель состояния: зовётся после каждого `assistant.changed`. Возвращает отписку. */
+  onState(listener: (state: AssistantState) => void): () => void;
+  /** Зеркало настроек окна (`assistant.configure`), в памяти. */
+  configure(settings: AssistantSettings): void;
+  /** `null` — зеркала нет (старое окно). */
+  settings(): AssistantSettings | null;
   cancel(): void;
   decide(proposalId: string, decision: 'send' | 'cancel'): Promise<{ applied: boolean; error: string | null }>;
   reset(): void;
@@ -218,10 +226,15 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   let inflight = 0;
   let idleWaiters: Array<() => void> = [];
   let stopped = false;
+  let mirror: AssistantSettings | null = null;
+  const stateListeners = new Set<(state: AssistantState) => void>();
+  /** Выключенный помощник сообщает о повторяющемся напоминании один раз. */
+  const notifiedOff = new Set<string>();
 
   const publish = (patch: Partial<AssistantState>): void => {
     state = { ...state, ...patch, instance };
     deps.broadcast('assistant.changed', state);
+    for (const listener of [...stateListeners]) listener(state);
   };
   const source = (): OverviewSource => ({ entries: deps.works.snapshot().entries, live: (ref) => deps.activity.get(ref) });
   const restPhase = (): AssistantState['phase'] => (pending === null ? 'idle' : 'awaiting-confirm');
@@ -885,10 +898,20 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   }
 
   return {
-    async ask(params) {
+    async ask(params, origin = 'island') {
       lastAsk = { provider: params.provider, model: params.model, language: params.language };
-      await runAsk(params, 'island');
+      await runAsk(params, origin);
     },
+    onState(listener) {
+      stateListeners.add(listener);
+      return () => {
+        stateListeners.delete(listener);
+      };
+    },
+    configure(settings) {
+      mirror = settings;
+    },
+    settings: () => mirror,
     cancel() {
       asks += 1;
       if (turn === null) return;
@@ -972,11 +995,18 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       // Идущий ход не перебиваем: ждём, пока он закончится и никакой вопрос человека не запускается. Параметры
       // последнего вопроса и провайдера читаем уже после ожидания; если пока выбирали провайдера, человек успел
       // спросить снова, ждём ещё раз.
+      if (mirror !== null && !mirror.enabled) {
+        if (!notifiedOff.has(reminder.id)) {
+          notifiedOff.add(reminder.id);
+          deps.onReminderWhileOff?.(reminder);
+        }
+        return 'skipped';
+      }
       let wanted = lastAsk;
       for (;;) {
         while ((turn !== null || inflight > 0) && !stopped) await new Promise<void>((resolve) => idleWaiters.push(resolve));
         if (stopped) return 'later';
-        wanted = lastAsk;
+        wanted = mirror?.enabled ? { provider: mirror.provider, model: mirror.model, language: mirror.language } : lastAsk;
         const picked = await pick(wanted.provider);
         if (stopped) return 'later';
         if ('offline' in picked) {

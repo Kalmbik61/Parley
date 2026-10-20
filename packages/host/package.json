@@ -23,6 +23,7 @@
     "@parley/protocol": "workspace:*",
     "@xterm/addon-serialize": "^0.14",
     "@xterm/headless": "^5",
-    "node-pty": "^1"
+    "node-pty": "^1",
+    "ogg-opus-decoder": "1.7.5"
   }
 }

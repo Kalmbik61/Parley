@@ -25,7 +25,7 @@
  * он остаётся текстом), если он лежит в этой же комнате, и пометку «оригинала нет», если нет.
  */
 
-import type { Message, MessageKind, SessionLifecycle, WorkEntry, WorkMap, RoomMode, RoomPlan } from '@parley/core';
+import type { Message, MessageKind, MessageVia, SessionLifecycle, WorkEntry, WorkMap, RoomMode, RoomPlan } from '@parley/core';
 import { planSummary, type AgentPlan } from '@parley/core/agent-plan';
 import { dotState, liveStatus, stateWord, type DotState } from '@parley/core/session-state';
 import { refKey, type LiveTask, type MailWait } from '@parley/protocol';
@@ -122,7 +122,7 @@ export interface MessageModel {
   /** Подпись отправителя: `You`, `System`, `S02 бэкенд`. */
   from: string;
   /** Письмо человека через помощника (спека 2026-10-14, 7.4): подпись «You (via assistant)» и знак помощника. */
-  via: 'assistant' | null;
+  via: MessageVia | null;
   /** Отправитель — ведущий (`★`). */
   lead: boolean;
   /** Адресаты для `→ …`: `all` или ярлыки; `null` — у системной строки адресата не показываем. */
@@ -383,7 +383,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       return {
         id: message.id,
         sender: { kind, provider: kind === 'agent' ? providerOf(map, message.from) : null },
-        from: message.from === HUMAN && message.via === 'assistant' ? S.participants.viaAssistant(S.participants.human) : labelOf(map, message.from),
+        from: message.from === HUMAN && message.via === 'assistant' ? S.participants.viaAssistant(S.participants.human) : message.from === HUMAN && message.via === 'telegram' ? S.participants.viaTelegram(S.participants.human) : labelOf(map, message.from),
         via: message.via ?? null,
         lead: message.from === lead,
         // Системная строка: `to: [human]` — служебность хоста (`addSystemMessage`), не адресат для показа.

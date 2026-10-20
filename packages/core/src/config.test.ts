@@ -34,6 +34,11 @@ describe('loadConfig', () => {
       agentSkills: true,
       skillNavigator: true,
       codexApprovals: false,
+      telegramEnabled: true,
+      telegramNeedsYou: true,
+      telegramFinished: false,
+      telegramMail: true,
+      telegramCards: true,
       leanAgents: true,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
@@ -70,6 +75,11 @@ describe('loadConfig', () => {
       agentSkills: true,
       skillNavigator: true,
       codexApprovals: false,
+      telegramEnabled: true,
+      telegramNeedsYou: true,
+      telegramFinished: false,
+      telegramMail: true,
+      telegramCards: true,
       leanAgents: true,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
@@ -91,6 +101,11 @@ describe('loadConfig', () => {
       agentSkills: true,
       skillNavigator: true,
       codexApprovals: false,
+      telegramEnabled: true,
+      telegramNeedsYou: true,
+      telegramFinished: false,
+      telegramMail: true,
+      telegramCards: true,
       leanAgents: true,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
@@ -345,6 +360,11 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['agentSkills', 'AGENT_SKILLS', 'no', false],
     ['skillNavigator', 'SKILL_NAVIGATOR', 'off', false],
     ['codexApprovals', 'CODEX_APPROVALS', 'on', true],
+    ['telegramEnabled', 'TELEGRAM_ENABLED', 'off', false],
+    ['telegramNeedsYou', 'TELEGRAM_NEEDS_YOU', 'off', false],
+    ['telegramFinished', 'TELEGRAM_FINISHED', 'on', true],
+    ['telegramMail', 'TELEGRAM_MAIL', 'off', false],
+    ['telegramCards', 'TELEGRAM_CARDS', 'off', false],
     ['leanAgents', 'LEAN_AGENTS', 'off', false],
     ['fontFamily', 'FONT_FAMILY', 'Menlo', 'Menlo'],
     ['fontSize', 'FONT_SIZE', '18', 18],
@@ -629,5 +649,24 @@ describe('removed Parley spawn settings', () => {
     expect(loaded.config).not.toHaveProperty('spawnDepth');
     expect(loaded.warning).toBeNull();
     expect(loaded.fromEnv).toEqual([]);
+  });
+});
+
+describe('настройки Telegram', () => {
+  it('умолчания пяти ключей', () => {
+    expect(DEFAULT_CONFIG.telegramEnabled).toBe(true);
+    expect(DEFAULT_CONFIG.telegramNeedsYou).toBe(true);
+    expect(DEFAULT_CONFIG.telegramFinished).toBe(false);
+    expect(DEFAULT_CONFIG.telegramMail).toBe(true);
+    expect(DEFAULT_CONFIG.telegramCards).toBe(true);
+  });
+  it('PARLEY_TELEGRAM_FINISHED=1 включает ключ и запирает его окружением', async () => {
+    const loaded = await loadConfig(file(), { PARLEY_TELEGRAM_FINISHED: '1' });
+    expect(loaded.config.telegramFinished).toBe(true);
+    expect(loaded.fromEnv).toContain('telegramFinished');
+  });
+  it('parseSetting: булев ключ и ошибка на мусоре', () => {
+    expect(parseSetting('telegramEnabled', 'false')).toEqual({ value: false });
+    expect(parseSetting('telegramEnabled', 'maybe')).toEqual({ error: 'telegramEnabled: expected 0 or 1' });
   });
 });

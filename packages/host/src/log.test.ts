@@ -46,4 +46,16 @@ describe('createLog', () => {
     }
     expect(existsSync(`${file}.1`)).toBe(true);
   });
+
+  it('прячет токен бота Telegram в сообщении и в строковых полях', async () => {
+    const file = path.join(dir, 'host.log');
+    const log = createLog(file);
+    const token = '123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    log.error(`сбой ${token}`, { url: `https://api.telegram.org/bot${token}/getMe`, count: 3 });
+
+    const text = await readFile(file, 'utf8');
+    expect(text).not.toContain(token);
+    expect(text).not.toContain('AAAAAAAAAAAAAAAA');
+    expect(JSON.parse(text.trim())).toMatchObject({ count: 3, url: 'https://api.telegram.org/bot<redacted>/getMe' });
+  });
 });

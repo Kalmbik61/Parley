@@ -270,6 +270,14 @@ describe('стор помощника', () => {
     expect(deps.keyboard).not.toHaveBeenCalled();
   });
 
+  it('ход из Telegram открывает помощника без клавиатуры', () => {
+    const { store, deps } = setup();
+    store.getState().applyHost({ ...HOST_IDLE, origin: 'telegram', turn: 1, phase: 'answering', answer: 'Room is fine' });
+    expect(store.getState().open).toBe(true);
+    expect(store.getState().collapsed).toBe(false);
+    expect(deps.keyboard).not.toHaveBeenCalled();
+  });
+
   it('ход с origin island закрытого помощника не открывает', () => {
     const { store } = setup();
     store.getState().applyHost({ ...HOST_IDLE, origin: 'island', turn: 1, phase: 'answering', answer: 'Room is fine' });

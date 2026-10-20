@@ -7,7 +7,17 @@
  * поэтому считается здесь своими функциями, а не через `recipientsOf`.
  */
 
-import type { Message, Room, SessionActivity, WorkEntry, WorkMap, WorkSession } from '@parley/core';
+import type { Message, WorkEntry, WorkMap } from '@parley/core';
+import {
+  ATTENTION_RANK,
+  humanUnreadLetters,
+  humanUnreadMentions as coreHumanUnreadMentions,
+  isHumanMention as coreIsHumanMention,
+  isHumanUnread,
+  roomAwaitsDecision,
+  sessionAttention,
+  type Attention,
+} from '@parley/core/attention';
 import { refKey } from '@parley/protocol';
 import { hasHumanMention } from '../components/rooms/room-remark.js';
 import { isoMs } from '../lib/iso-time.js';
@@ -15,30 +25,12 @@ import { archivedRoomIds, isRoomArchived } from '../lib/room-archive.js';
 import { workKey } from '../lib/tree-order.js';
 import type { ActivityEntry } from '../store/activity.js';
 
-// Те же литералы, что `HUMAN` и `SYSTEM` в `core/work/types.ts`: из core рендерер берёт только типы.
+// Тот же литерал, что `HUMAN` в `core/work/types.ts`: из core рендерер берёт только типы.
 const HUMAN = 'human';
-const SYSTEM = 'system';
 
-export type Attention = 'needs-you' | 'unseen' | 'working' | 'idle' | 'off';
-
-export const ATTENTION_RANK: Record<Attention, 4 | 3 | 2 | 1 | 0> = {
-  'needs-you': 4,
-  unseen: 3,
-  working: 2,
-  idle: 1,
-  off: 0,
-};
-
-/**
- * Ждёт ли комната решения человека (спека окна 2026-09-29, 2.7): в слоте `Room.proposal` лежит решение
- * ведущего. У комнаты карты до 2026-09-29 поля `proposal` нет вовсе — это «не ждёт», а не ошибка. Одно
- * правило на карточку (значок вопроса), строку комнаты, вкладку комнаты (`layout/tab-meta.ts`), ранг работы и
- * «следующую, где нужен ты»: своего выражения `proposal ?? null` рядом с ним писать не надо. Архивная комната решения не
- * ждёт: хост очищает слот при архивации (`archiveRoom`), а правило страхует карту, где слот всё же остался.
- */
-export function roomAwaitsDecision(room: Room): boolean {
-  return !isRoomArchived(room) && (room.proposal ?? null) !== null;
-}
+// Предикаты внимания живут в core (`work/attention.ts`): их считает и хост. Имена и сигнатуры окна прежние.
+export { ATTENTION_RANK, humanUnreadLetters, isHumanUnread, roomAwaitsDecision, sessionAttention };
+export type { Attention };
 
 // Те же литералы, что `RETURNED_LETTER` и `ACCEPTED_LETTER` в `core/work/proposals.ts`: из core рендерер берёт только
 // типы. Сходство держит страж `main/decision-letters-sync.test.ts`.
@@ -62,67 +54,17 @@ export function roomDecisionReturned(map: WorkMap, roomId: string): boolean {
   return answer?.text.startsWith(RETURNED_LETTER) ?? false;
 }
 
-/** Таблица спеки 7.1. */
-export function sessionAttention(session: WorkSession, live: SessionActivity | null): Attention {
-  if (session.lifecycle === 'closed') return 'off';
-  // pending и sleeping: процесса нет, но сессия не закрыта.
-  if (session.lifecycle !== 'active') return 'idle';
-  switch (live?.activity ?? 'idle') {
-    case 'blocked':
-      return 'needs-you';
-    case 'unseen':
-      return 'unseen';
-    case 'working':
-      return 'working';
-    default:
-      return 'idle';
-  }
-}
-
 /**
- * Не прочитано человеком по правилам 3.2: письмо ему или сообщение комнаты, не от него, без
- * readBy.human. То же правило, что `unreadForHuman` в `core/work/letters.ts` (`mail.markRead`
- * хоста): иначе окно отправляло бы на отметку то, что хост не отметит, и наоборот.
- */
-export function isHumanUnread(message: Message): boolean {
-  return (
-    message.from !== HUMAN &&
-    message.readBy[HUMAN] === undefined &&
-    (message.roomId !== null || message.to.includes(HUMAN))
-  );
-}
-
-/**
- * Сообщение комнаты, где человека назвали (Parley 0.3.0): не от него и не от хоста, а в тексте — `@human`. Распознаёт
- * `hasHumanMention` — тот же разбор Markdown, которым лента рисует чип «@you» (`components/rooms/room-remark.ts`):
- * чип есть там и только там, где сообщение считается упоминанием. Прочитано оно или нет, решает `isHumanUnread`.
+ * Сообщение комнаты, где человека назвали (Parley 0.3.0). Распознаёт `hasHumanMention` — тот же разбор Markdown,
+ * которым лента рисует чип «@you» (`components/rooms/room-remark.ts`). Остальное правило — в core.
  */
 export function isHumanMention(message: Message): boolean {
-  return (
-    message.roomId !== null &&
-    message.from !== HUMAN &&
-    message.from !== SYSTEM &&
-    hasHumanMention(message.text)
-  );
+  return coreIsHumanMention(message, hasHumanMention);
 }
 
-/**
- * Прямые письма человеку (roomId === null) с isHumanUnread. Упоминания в комнатах сюда не входят — их берёт
- * `humanUnreadMentions`: письма — это то, что показывает вкладка Mail (`layout/tab-meta.ts`), а упоминание живёт в комнате.
- */
-export function humanUnreadLetters(map: WorkMap): Message[] {
-  return map.messages.filter((message) => message.roomId === null && isHumanUnread(message));
-}
-
-/**
- * Упоминания человека в комнатах (`isHumanMention`) с isHumanUnread, в порядке карты: последнее — самое позднее.
- * Архивная комната не источник внимания (спека архива комнат, 5.3): её старые упоминания не считаются.
- */
+/** Упоминания человека в комнатах с isHumanUnread, без архивных комнат (правило core, разбор Markdown окна). */
 export function humanUnreadMentions(map: WorkMap): Message[] {
-  const archived = archivedRoomIds(map);
-  return map.messages.filter(
-    (message) => isHumanUnread(message) && isHumanMention(message) && !(message.roomId !== null && archived.has(message.roomId)),
-  );
+  return coreHumanUnreadMentions(map, hasHumanMention);
 }
 
 /** Куда ведёт кнопка «для тебя» карточки: в почту — письма важнее — или в комнату самого позднего упоминания. */

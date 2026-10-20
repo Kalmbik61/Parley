@@ -5,6 +5,7 @@
  */
 
 import { Hash, User } from 'lucide-react';
+import type { MessageVia } from '@parley/core';
 import { S } from '../../../shared/strings.js';
 import { cn } from '../../lib/cn.js';
 import { AgentIcon } from '../AgentIcon.js';
@@ -17,7 +18,7 @@ export interface SenderAvatarProps {
   provider: string | null;
   size?: number;
   /** Письмо человека через помощника — вместо значка человека знак помощника. */
-  via?: 'assistant' | null;
+  via?: MessageVia | null;
 }
 
 export function SenderAvatar({ kind, provider, size = 18, via }: SenderAvatarProps): JSX.Element {

@@ -1051,6 +1051,43 @@ export const S = {
      */
     checkForUpdates: 'Check for updates',
     checkForUpdatesHint: 'Looks for a newer Parley release on GitHub at start and once a day',
+    /** Секция Telegram во вкладке Notifications (план B, задача 12). */
+    telegram: {
+      title: 'Telegram',
+      enabled: 'Send to Telegram',
+      statusOff: 'Off',
+      statusNotSetUp: 'Not set up',
+      /** `@bot · ••••abcd · not linked`: `hint` от хоста уже с точками. */
+      notLinked: (bot: string, hint: string): string => `@${bot} · ${hint} · not linked`,
+      linked: (user: string, since: string): string => `Linked: ${user} · since ${since}`,
+      linkedNoName: (since: string): string => `Linked · since ${since}`,
+      error: (message: string): string => `Error: ${message}`,
+      conflict: 'Another Parley is using this bot',
+      takeOver: 'Use this Mac',
+      tokenLabel: 'Bot token',
+      tokenPlaceholder: 'Create a bot with @BotFather and paste its token',
+      check: 'Check',
+      remove: 'Remove',
+      link: 'Link Telegram',
+      unlink: 'Unlink',
+      codeLabel: 'Send this code to the bot',
+      codeValid: 'Valid for 10 minutes',
+      codeExpired: 'The code expired — press Link Telegram again',
+      deepLinkLabel: 'Or open the link',
+      qrLabel: 'QR code with the link to the bot',
+      needsYou: 'Needs you',
+      finished: 'Finished',
+      mail: 'Mail and mentions',
+      cards: 'Assistant cards',
+      hint: 'Messages go through Telegram servers and are stored there. Requests and replies work only while this Mac is awake and Parley is running.',
+      actions: {
+        check: 'check the token',
+        remove: 'remove the token',
+        link: 'create a link code',
+        unlink: 'unlink Telegram',
+        takeOver: 'take over the bot',
+      },
+    },
     /** Секция «Браузер» (кусок 9.1): куки, хранилища и кеш раздела встроенного браузера. */
     clearBrowserData: 'Clear browser data',
     /** Общий выключатель агентов в браузере (спека браузера 4.8, этап B2). */
@@ -1969,6 +2006,7 @@ export const S = {
     human: 'You',
     /** Подпись отправителя, когда письмо ушло через помощника. */
     viaAssistant: (name: string): string => `${name} (via assistant)`,
+    viaTelegram: (name: string): string => `${name} (via Telegram)`,
     /** Так хост подписывает свои строки в комнате и почте — как на снимке handoff `dark-08`. */
     system: 'Parley',
     deletedSuffix: '(deleted)',

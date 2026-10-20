@@ -161,9 +161,12 @@ export type {
   AssistantOrigin,
   AssistantPhase,
   AssistantProposal,
+  AssistantSettings,
   AssistantState,
   ProposalCardView,
   RoomProposalView,
 } from './assistant.js';
+export { telegramMethodSchemas } from './telegram.js';
+export type { TelegramMethodResults, TelegramPolling, TelegramStatus } from './telegram.js';
 export { CUSTOM_PROVIDER_PREFIX, customProviderMethodSchemas, isCustomProviderId } from './custom-providers.js';
 export type { CustomProviderAuth, CustomProviderInfo, CustomProviderMethodResults, CustomProviderModels } from './custom-providers.js';
