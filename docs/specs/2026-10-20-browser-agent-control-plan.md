@@ -23,6 +23,8 @@
    - **Куки и хранилище** — чтение, запись, удаление кук и `localStorage`/`sessionStorage`. Граница — куки текущего адреса страницы (`session.cookies.get({ url })`), не весь раздел; хранилище — origin текущей страницы. Риск общего раздела `persist:harnas-browser` описан в спеке (задача 23).
 2. **Разрешения.** Все `browser_*` разрешены заранее (`permissions.allow` в собственном `--settings` сессии), **кроме `browser_evaluate`**: на него Claude Code спрашивает человека при первом вызове. Аннотации MCP согласованы так, чтобы Codex вёл себя так же: спрашивает только про `browser_evaluate`.
 3. Прочая защита старого плана D сохраняется, если не противоречит п. 1–2: Stop обрывает операцию; `human_busy`; `stale_ref`; очередь страницы; пределы; маска значений секретных полей в дереве доступности. Буфер обмена — минимально (решение ниже).
+4. **Загрузка файлов — всё, кроме секретных мест (решение владельца 2026-10-20 по отчёту плана).** После `realpath` путь не лежит внутри `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, `~/.docker`, `~/.kube`, `~/Library/Keychains`, `~/.parley`, `~/.claude`, `~/.codex`, а имя файла — не `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `.env` или `.env.*`, `id_rsa`, `id_ed25519`, `id_ecdsa`, `id_dsa` (где угодно; `.pub` — можно, если не в секретной папке). Иначе — `bad_request` «Parley does not upload files from secret locations (~/.ssh, keychains, .env …).», `DOM.setFileInputFiles` не вызывается. Списки — `UPLOAD_SECRET_DIRS`, `UPLOAD_SECRET_NAMES` и чистая `secretUploadPath(real, home)` в `agent-actions.ts` (задача 17). Сравнение — по сегментам пути (`~/.sshx/a` — не секретное место), регистр букв не учитывается (APFS по умолчанию к нему безразлична).
+5. **Куки — общий с человеком раздел `persist:harnas-browser` подтверждён (там же).** Отдельного раздела для страниц агента не делаем; риск описывается в спеке и README (задача 23).
 
 ## Решения плана по открытым вопросам (утверждает владелец)
 
@@ -38,7 +40,7 @@
 | `evaluate`: мир и пределы | Главный мир (`Runtime.evaluate` / `Runtime.callFunctionOn` гостя), `returnByValue`, `awaitPromise`, `userGesture: false`; предел 10 с (`evalMs`: свой таймер и `Runtime.terminateExecution`), ответ до 20 КБ (`evalBytes`); с `ref` функция получает элемент первым аргументом. `Runtime.evaluate` идёт только через `Inspector.sendAgentScript`, его зовёт только `agent-evaluate.ts` (рамочный тест) | 6, 11, 19, 21 |
 | Аннотации MCP | READ `{ readOnlyHint: true, openWorldHint: false }` — `tabs`, `console`, `network`, `screenshot`, `snapshot`, `wait_for`, `downloads`; CONTROL `{ readOnlyHint: false, destructiveHint: false, openWorldHint: false }` — `open`, `navigate`, `action`, `resize`, `cookies`, `storage`; SCRIPT `{ readOnlyHint: false, destructiveHint: true, openWorldHint: true }` — `evaluate`. CONTROL с `openWorldHint: false` — это политика одобрений Parley (решение владельца), а не описание мира: вливаемая ветка ставила `browser_open` `true`, задача 4 возвращает `false` с комментарием | 4 |
 | Коды `not_loopback`, `navigation_blocked` | `not_loopback` остаётся в списке кодов (окно до D его присылает), окно D его не отдаёт. `navigation_blocked` не вводится: http(s) больше ничего не блокирует, прочие схемы отклоняет `bad_request` (аргументы) или молча страж (как у человека) | 2, 3, 15 |
-| `upload` | Действие `browser_action` (`action: 'upload'`, `ref`, `files`), а не отдельный инструмент: та же очередь, `human_busy` и `stale_ref`. Выбор файла, открытый действием агента, перехватывается (`Page.setInterceptFileChooserDialog`) — нативного диалога у человека нет, агенту заметка | 2, 15, 17 |
+| `upload` | Действие `browser_action` (`action: 'upload'`, `ref`, `files`), а не отдельный инструмент: та же очередь, `human_busy` и `stale_ref`. Выбор файла, открытый действием агента, перехватывается (`Page.setInterceptFileChooserDialog`) — нативного диалога у человека нет, агенту заметка. Файлы из секретных мест — отказ (решение владельца 4) | 2, 15, 17 |
 | `wait_for` | Опрос дерева доступности (`Accessibility.getFullAXTree`) раз в 250 мс: видимый текст, как в `snapshot`; `DOM.performSearch` не берём — он находит и скрытый текст | 7, 16 |
 | Снимок элемента | Снимок вьюпорта (путь этапа C) и вырезка рамки элемента на main с множителем «ширина PNG / CSS-ширина вьюпорта» (как Select этапа B); CDP `clip` не берём — в `<webview>` он ненадёжен (этап 0, 0.7; план C) | 18 |
 | Точка клика и рамка | Рисует окно поверх `<webview>` (по `stage`), не скрипт в госте: страница их не видит, и они не зависят от событий мыши гостя (у гостя нет `mouseout`, когда курсор уходит на окно — проба 2026-10-20) | 13, 20 |
@@ -291,7 +293,10 @@ export interface AgentActions {
 }
 export function createAgentActions(deps: { inspector: Pick<Inspector, 'send'>; input: AgentInput; dom: AgentDom;
   emulation: Pick<Emulation, 'fitOf'>; window: Pick<AgentWindow, 'take'>; activity(e: AgentActivity): void;
-  files?: { realpath(p: string): Promise<string>; stat(p: string): Promise<{ isFile(): boolean; size: number }> } }): AgentActions;
+  files?: { realpath(p: string): Promise<string>; stat(p: string): Promise<{ isFile(): boolean; size: number }> }; home?: string }): AgentActions;
+export const UPLOAD_SECRET_DIRS: readonly string[];  // от домашней папки: '.ssh', '.aws', '.gnupg', '.config/gh', '.docker', '.kube', 'Library/Keychains', '.parley', '.claude', '.codex'
+export const UPLOAD_SECRET_NAMES: readonly RegExp[]; // /^\.netrc$/, /^\.npmrc$/, /^\.pypirc$/, /^\.git-credentials$/, /^\.env(\..+)?$/, /^id_(rsa|ed25519|ecdsa|dsa)$/
+export function secretUploadPath(real: string, home: string): boolean; // решение владельца 4; без учёта регистра, по сегментам
 export function withNavigation<T>(contents: WebContents, run: () => Promise<T>, signal: AbortSignal): Promise<{ value: T; navigated: boolean; loaded: boolean }>;
 ```
 
@@ -302,7 +307,7 @@ export function withNavigation<T>(contents: WebContents, run: () => Promise<T>, 
 1. **Ввод агента не попадает в поле человека.** Человек печатает в поле Chat, агент делает `type` в поле страницы. Текст агента — только в странице, в поле Chat — только набранное человеком, фокус вернулся в поле Chat; ввод агента начался не раньше чем через 1 с тишины клавиатуры. Тесты: задача 9 (порядок «одолжить фокус → ввод», ни одной клавиши без подтверждения), задача 20 (окно ждёт `typingIdleMs`, возвращает фокус), задача 22 (E2E).
 2. **`evaluate` не обходит паузу, Stop и выключатель.** На паузе и при выключенном доступе `sendAgentScript` не вызывается; Stop посреди долгого скрипта — `Runtime.terminateExecution`, агенту `access_denied` «paused by the human», результат не отдаётся; у занятой страницы — `human_busy`. Тесты: задачи 11, 19, 22. **Принятый риск:** таймеры и обработчики, которые скрипт агента оставил в странице, после Stop живут до перезагрузки страницы — это записано в спеке (задача 23).
 3. **Куки и хранилище — только текущей страницы агента.** Куки другого адреса (например, сайта, открытого во вкладке человека) агент не получает: адрес берётся только из `contents.getURL()` его страницы, аргумента `url`/`domain` нет; страница чужого хозяина — `no_tab`, `cookies.get` не вызывается. Тесты: задачи 2 (схема без `url` и `domain`), 12, 19, 22.
-4. **Загрузка файла не уходит мимо страницы агента.** `upload` в страницу чужого хозяина — `no_tab`, `DOM.setFileInputFiles` не вызывается; путь — абсолютный, существующий обычный файл (симлинк разворачивается `realpath`), не каталог, не больше `uploadBytes`, не больше `uploadFiles`; цель — `input[type=file]` (иначе `bad_request`); выбор файла, открытый действием, не показывает человеку диалог. Тесты: задачи 15, 17, 22.
+4. **Загрузка файла не уходит мимо страницы агента.** `upload` в страницу чужого хозяина — `no_tab`, `DOM.setFileInputFiles` не вызывается; путь — абсолютный, существующий обычный файл (симлинк разворачивается `realpath`), не каталог, не из секретного места (решение владельца 4; проверка — по пути ПОСЛЕ `realpath`, симлинк из `/tmp` на `~/.ssh/id_ed25519` отклоняется), не больше `uploadBytes`, не больше `uploadFiles`; цель — `input[type=file]` (иначе `bad_request`); выбор файла, открытый действием, не показывает человеку диалог. Тесты: задачи 15, 17, 22.
 5. **Секреты маскируются и на внешних сайтах.** На странице `http://example.test/…` (не loopback) `?token=` в URL, `Authorization` в сети, JWT в консоли и значение поля «API key» в дереве доступности приходят агенту как `<redacted>`. Тесты: задачи 7, 15, 22 (E2E через `--host-resolver-rules`).
 6. **Скачивания не путаются.** Скачивание по клику агента — в папку сессии без диалога, путь — в заметке действия и в `browser_downloads`; скачивание по клику человека на той же странице вне окна агента — диалог человека, как раньше; файл больше 200 МБ отменён с заметкой. Тесты: задачи 10, 15, 22.
 7. **Stop посреди операции и устаревшая ссылка.** Stop во время `wait_for` или между шагами `drag` — следующего шага ввода нет, очередь свободна, агенту `access_denied`; ссылка из снимка прежнего документа — `stale_ref`, клика по чужому элементу нет. Тесты: задачи 15, 16, 17, 22.
@@ -1771,6 +1776,37 @@ describe('action (спека 5.1, 4.8)', () => {
     await expect(ctx.actions.actionOf(contents, record, request, { tab: 't1', action: 'upload', ref: 'e8', files: ['/tmp/a.png'] }, guard())).rejects.toMatchObject({ code: 'bad_request' });
   });
 
+  it('upload из секретного места — bad_request без вызова, в том числе через симлинк; обычный файл дома — можно (решение владельца 4)', async () => {
+    const ctx = setup({
+      home: '/Users/me',
+      files: {
+        '/tmp/key': { size: 10, real: '/Users/me/.ssh/id_ed25519' },
+        '/Users/me/app/.env.local': { size: 10 },
+        '/Users/me/Library/Keychains/login.keychain-db': { size: 10 },
+        '/Users/me/backup/id_rsa': { size: 10 },
+        '/Users/me/app/shot.png': { size: 10 },
+      },
+    });
+    for (const file of ['/tmp/key', '/Users/me/app/.env.local', '/Users/me/Library/Keychains/login.keychain-db', '/Users/me/backup/id_rsa']) {
+      ctx.send.mockClear();
+      await expect(ctx.actions.actionOf(contents, record, request, { tab: 't1', action: 'upload', ref: 'e8', files: [file] }, guard()), file).rejects.toMatchObject({ code: 'bad_request', message: expect.stringContaining('secret locations') });
+      expect(ctx.send.mock.calls.some(([, method]) => method === 'DOM.setFileInputFiles')).toBe(false);
+    }
+    await ctx.actions.actionOf(contents, record, request, { tab: 't1', action: 'upload', ref: 'e8', files: ['/Users/me/app/shot.png'] }, guard());
+    expect(ctx.send).toHaveBeenCalledWith(7, 'DOM.setFileInputFiles', { files: ['/Users/me/app/shot.png'], backendNodeId: 18 });
+  });
+
+  it('secretUploadPath: по сегментам и без учёта регистра', () => {
+    const home = '/Users/me';
+    expect(secretUploadPath('/Users/me/.ssh/config', home)).toBe(true);
+    expect(secretUploadPath('/Users/me/.SSH/config', home)).toBe(true);
+    expect(secretUploadPath('/Users/me/.config/gh/hosts.yml', home)).toBe(true);
+    expect(secretUploadPath('/Users/me/.sshx/a.png', home)).toBe(false);
+    expect(secretUploadPath('/Users/me/app/id_ed25519.pub', home)).toBe(false);
+    expect(secretUploadPath('/Users/me/app/.environment.md', home)).toBe(false);
+    expect(secretUploadPath('/Users/me/app/.env.production', home)).toBe(true);
+  });
+
   it('действие вызвало переход — загрузка дождана, navigated, адрес после; заметки окна операции — в ответе', async () => {
     // mouseReleased → гость emit did-start-navigation (main frame, не same-document), через 20 мс did-stop-loading и новый URL;
     // agentWindow.take отдаёт ['The page started a download: report.csv → … (see browser_downloads).']
@@ -1782,7 +1818,7 @@ describe('action (спека 5.1, 4.8)', () => {
 
 - [ ] **Шаг 2. Запустить — падает.** `pnpm --filter @parley/desktop test -- src/main/browser/agent-actions.test.ts src/main/browser/agent-ops-control.test.ts` → FAIL.
 
-- [ ] **Шаг 3. Реализовать.** Точки — `dom.centerOf` (или `x,y` как есть) → `inputPoint(point, emulation.fitOf(id), contents.getZoomFactor())`; точка для окна (`activity` с `phase: 'step'`, `point`) — в CSS-пикселях страницы (до множителя). `double_click`, `hover`, `scroll`, `press`, `type` — как в старом плане, задача 12, шаг 3 (`done`-тексты оттуда). `select` — `DOM.resolveNode` → `Runtime.callFunctionOn(SELECT_OPTION_FN)` → `Runtime.releaseObject`. `check`/`uncheck` — `dom.checkedOf`, клик при несовпадении, повторное чтение. `drag` — 10 промежуточных `mouseMoved`, `buttons: 1`. `upload` — `DOM.describeNode({ backendNodeId })`: `INPUT` с `type=file` (регистр не важен); `files` — `realpath`, `stat().isFile()`, `size ≤ uploadBytes`, больше одного — нужен атрибут `multiple`; ошибки — `bad_request` с понятной причиной. `withNavigation(contents, run, signal)` — слушает `did-start-navigation` (главный фрейм, `!isSameDocument`) во время `run` и ещё `settleMs`; начался — ждёт `did-stop-loading` до `loadMs` (`loaded: false` — заметка «The page is still loading.»). Заметки — `window.take(record pageKey)`. Каждый шаг ввода — через `guard`.
+- [ ] **Шаг 3. Реализовать.** Точки — `dom.centerOf` (или `x,y` как есть) → `inputPoint(point, emulation.fitOf(id), contents.getZoomFactor())`; точка для окна (`activity` с `phase: 'step'`, `point`) — в CSS-пикселях страницы (до множителя). `double_click`, `hover`, `scroll`, `press`, `type` — как в старом плане, задача 12, шаг 3 (`done`-тексты оттуда). `select` — `DOM.resolveNode` → `Runtime.callFunctionOn(SELECT_OPTION_FN)` → `Runtime.releaseObject`. `check`/`uncheck` — `dom.checkedOf`, клик при несовпадении, повторное чтение. `drag` — 10 промежуточных `mouseMoved`, `buttons: 1`. `upload` — `DOM.describeNode({ backendNodeId })`: `INPUT` с `type=file` (регистр не важен); `files` — `realpath`, затем `secretUploadPath(real, deps.home ?? os.homedir())` (решение владельца 4: да — `bad_request` «Parley does not upload files from secret locations (~/.ssh, keychains, .env …).»), `stat().isFile()`, `size ≤ uploadBytes`, больше одного — нужен атрибут `multiple`; ошибки — `bad_request` с понятной причиной. Проверка всех файлов — до первого вызова CDP. `withNavigation(contents, run, signal)` — слушает `did-start-navigation` (главный фрейм, `!isSameDocument`) во время `run` и ещё `settleMs`; начался — ждёт `did-stop-loading` до `loadMs` (`loaded: false` — заметка «The page is still loading.»). Заметки — `window.take(record pageKey)`. Каждый шаг ввода — через `guard`.
 
 - [ ] **Шаг 4. Запустить — проходит.** Та же команда → PASS.
 
@@ -2094,7 +2130,7 @@ git commit -m "test(desktop): E2E for agent browser control — forms, focus, St
   - 13 — закрыть вопросы ввода и фреймов; **новый пункт о риске:** «Раздел `persist:harnas-browser` общий у человека и агентов. Агент на сайте, где человек вошёл во встроенном браузере, действует от имени человека: читает куки этого адреса (с `values: true` — значения), исполняет JS с его сессией, может удалить куку и разлогинить человека. Скрипт агента может оставить таймеры в странице: после Stop они живут до перезагрузки. Отдельный раздел для страниц агентов — возможное решение позже»; fuse `EnableCookieEncryption` — как было.
 - [ ] **Шаг 2. Индекс плана.** Записка в шапке «2026-10-20: этап D — `2026-10-20-browser-agent-control-plan.md`; в «Глобальных ограничениях» пункты «только loopback», «`Runtime.evaluate` нет», «никогда — JS, куки, хранилища, файлы, другие сайты» для этапа D перекрыты решениями владельца 2026-10-20»; строка таблицы «Файлы плана» этапа D — новый файл.
 - [ ] **Шаг 3. Спека окна** `2026-09-26-desktop-orca-ui-design.md`: 12.2 — пункт «**Агент управляет браузером**» вместо «Агент читает браузер» (кратко, ссылки на спеку браузера 3.7, 5.1, 5.2); 15.1 п. 9 — «Агент работает только в браузере своего чата и в браузерах комнат, где он участник: на любых http(s)-сайтах переходит, кликает, вводит, читает консоль, сеть и дерево страницы, снимает экран, меняет размер, загружает файлы в поля, получает скачанные файлы, читает и меняет куки и хранилище текущей страницы, а JS исполняет только после одобрения человека. Вкладки браузера человека агенту недоступны. Действия агента видны человеку; Stop и «Pause agents» ставят панель на паузу, выключатель в настройках выключает всё сразу».
-- [ ] **Шаг 4. README.** «Legal boundary» (строка про embedded browser) — заменить: «the agent uses the embedded browser only in the browser panel of its own chat and of the rooms it belongs to: it opens, reads and drives pages on any http(s) site there, uploads files into page fields, receives downloads in a folder of its session, reads and changes the cookies and storage of the page it is on, and runs JavaScript only after you approve the browser_evaluate tool; the browser's cookies are shared with you, so an agent on a site where you are signed in acts as you; your own browser tabs are closed to it; Stop and Pause agents pause a panel, Settings turns it off;». Раздел об агентах и браузере (~строка 759) и Settings → Browser — те же факты коротко.
+- [ ] **Шаг 4. README.** «Legal boundary» (строка про embedded browser) — заменить: «the agent uses the embedded browser only in the browser panel of its own chat and of the rooms it belongs to: it opens, reads and drives pages on any http(s) site there, uploads files into page fields (never from secret locations such as ~/.ssh, keychains or .env files), receives downloads in a folder of its session, reads and changes the cookies and storage of the page it is on, and runs JavaScript only after you approve the browser_evaluate tool; the browser's cookies are shared with you, so an agent on a site where you are signed in acts as you; your own browser tabs are closed to it; Stop and Pause agents pause a panel, Settings turns it off;». Раздел об агентах и браузере (~строка 759) и Settings → Browser — те же факты коротко.
 - [ ] **Шаг 5. CHANGELOG** — `## Unreleased` (над `## 0.18.0`), по-английски: «### Added» — «Agents drive their browser panels», «Any site», «Scripts with approval», «Files», «Cookies and storage», «Badge with Stop», «parley-browser skill»; «### Changed» — «Every browser tool is allowed in advance except browser_evaluate».
 - [ ] **Шаг 6. Проверка.** `pnpm --filter @parley/desktop test -- src/release-docs.test.ts` → PASS (заголовки CHANGELOG).
 - [ ] **Шаг 7. Коммит.**
