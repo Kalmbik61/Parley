@@ -428,6 +428,20 @@ describe('assistant-service: комната и решение ведущего',
     expect(deps.resolveRoomProposal).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', roomId: 'r-2', proposalId: 'p-01', action: 'return', note: 'add tests', rev: 2 });
     expect(last()).toMatchObject({ proposal: null, outcome: 'done' });
   });
+  it('решение со встроенным планом: карточка и decide несут planId и planRev плана', async () => {
+    const room = (MAP as unknown as { rooms: Array<{ id: string; proposal: Record<string, unknown> }> }).rooms.find((candidate) => candidate.id === 'r-2')!;
+    const original = room.proposal;
+    room.proposal = { ...original, plan: { id: 'pl-01', roomId: 'r-2', rev: 4, mode: 'checklist', status: 'proposed', goal: 'New goal', items: [], backlog: [], acceptedAt: null, completedAt: null, cancelledAt: null, completionSummary: null } };
+    try {
+      const service = await started();
+      await service.tool('propose_room_decision', { target: 'Gate', choice: 'accept' });
+      expect(last().proposal).toMatchObject({ action: 'room-decision', proposal: { planId: 'pl-01', planRev: 4 } });
+      await service.decide(last().proposal!.id, 'send');
+      expect(deps.resolveRoomProposal).toHaveBeenCalledWith(expect.objectContaining({ proposalId: 'p-01', action: 'accept', rev: 2, planId: 'pl-01', planRev: 4 }));
+    } finally {
+      room.proposal = original;
+    }
+  });
   it('accept игнорирует note', async () => {
     const service = await started();
     await service.tool('propose_room_decision', { target: 'Gate', choice: 'accept', note: 'неважно' });

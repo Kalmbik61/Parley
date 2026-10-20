@@ -250,6 +250,7 @@ export {
   ACCEPTED_LETTER,
   ACCEPTED_LINE,
   PROPOSAL_TEXT_MAX,
+  planRefOf,
   ProposalConflictError,
   resolveProposal,
   RETURNED_LETTER,
