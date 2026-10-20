@@ -81,9 +81,11 @@ export function createAgentDom(deps: { inspector: Pick<Inspector, 'send' | 'snap
 
   return {
     async snapshotOf(contents, record, args) {
+      // Эпоха — до дерева: документ, сменившийся, пока дерево снималось, делает ссылки снимка устаревшими сразу.
+      const epoch = epochOf(contents);
       const nodes = await treeOf(contents);
       const snap = axSnapshot(nodes, { interactiveOnly: args.interactiveOnly ?? false, limitBytes: AGENT_LIMITS.snapshotBytes });
-      maps.set(keyOf(record), { epoch: epochOf(contents), refs: snap.refs });
+      maps.set(keyOf(record), { epoch, refs: snap.refs });
       return { tab: args.tab, url: urlForAgent(contents.getURL()), text: snap.text, refs: snap.refs.size, truncated: snap.truncated };
     },
     nodeOf(contents, record, ref) {

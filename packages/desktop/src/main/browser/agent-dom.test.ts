@@ -75,6 +75,20 @@ describe('ссылки и ожидание (спека 5.1)', () => {
     expect(() => ctx.dom.nodeOf(contents, record, ref)).toThrow(expect.objectContaining({ code: 'stale_ref' }));
   });
 
+  it('документ сменился, пока снималось дерево, — ссылки снимка уже устарели: stale_ref (рецензия пачки 3)', async () => {
+    const ctx = setup({ nodes: NODES });
+    ctx.send.mockImplementation(async (_id: number, method: string): Promise<unknown> => {
+      if (method === 'Accessibility.getFullAXTree') {
+        ctx.epoch = 2;
+        return { nodes: ctx.nodes };
+      }
+      return {};
+    });
+    const snap = await ctx.dom.snapshotOf(contents, record, { tab: 't1' });
+    const ref = /\[ref=(e\d+)\] button "Save"/.exec(snap.text)?.[1] as string;
+    expect(() => ctx.dom.nodeOf(contents, record, ref)).toThrow(expect.objectContaining({ code: 'stale_ref' }));
+  });
+
   it('новый снимок заменяет карту ссылок', async () => {
     const ctx = setup({ nodes: NODES });
     await ctx.dom.snapshotOf(contents, record, { tab: 't1' });

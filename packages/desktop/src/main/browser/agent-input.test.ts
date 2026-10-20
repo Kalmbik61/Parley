@@ -131,6 +131,19 @@ describe('AgentInput (Фокус ревью 1)', () => {
     expect(calls.map(([, p]) => p?.type)).toEqual(['keyDown', 'keyUp']);
   });
 
+  it('тишина клавиатуры — после одалживания фокуса и перед каждой командой Input; человек печатает при одолженном фокусе — ни одной команды (рецензия пачки 3)', async () => {
+    const { calls, order, input, contents } = setup();
+    const keyboardQuiet = vi.fn(() => {
+      order.push('quiet');
+      if (calls.some(([method]) => method === 'Input.insertText')) throw new AgentOpError('human_busy', 'The human is typing: retry in a moment.');
+    });
+    const guard = { signal: new AbortController().signal, check: vi.fn(), keyboardQuiet };
+    await input.text(contents, 'Ann', guard);
+    expect(order).toEqual(['borrow', 'Emulation.setFocusEmulationEnabled', 'quiet', 'Input.insertText']);
+    await expect(input.key(contents, keySpec('Enter')!, 0, guard)).rejects.toMatchObject({ code: 'human_busy' });
+    expect(calls.filter(([method]) => method === 'Input.dispatchKeyEvent')).toEqual([]);
+  });
+
   it('Stop пришёл, пока окно одалживало фокус, — ни одной команды Input (рецензия пачки 2)', async () => {
     const { calls, input, contents, borrowFocus } = setup();
     const controller = new AbortController();

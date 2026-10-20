@@ -9,7 +9,7 @@
  * место вкладки, предел страниц панели, повтор уже открытой страницы и тост решает рендерер (`renderer/browser/agent-open.ts`), main
  * просит его событием `browser:agent-open-tab`, ждёт ответ не дольше `AGENT_LIMITS.openMs` и переводит его в ответ агенту.
  * Страницы панелей main знает по реестру (`registerTab`, наполняет окно): по нему работает `tabs` (этап C), доступ к странице
- * решает хозяин из `owners` и пауза панели (`pageOf`). `open` страницу не трогает: ни гостя, ни CDP, ни ожидания загрузки.
+ * решает хозяин из `owners` и пауза панели (`pageOf`). `open` просит окно поставить вкладку, ждёт её регистрации и загрузки (задача 18).
  *
  * Чей браузер получает страницу, решает `ownerOf` по правилу спеки 5.1 и по `owners` события — хозяевам, которых хост
  * вложил по карте работы (3.7, 3.10); хозяин вне списка — `access_denied`. Выбранный хозяин уходит окну в `AgentOpenTab`.
@@ -168,7 +168,7 @@ export function createPageRunner(deps: {
   activity(e: AgentActivity): void;
   opTimeoutMs?: number;
   window?: PageWindowHooks;
-  /** Тишина клавиатуры человека: пока он печатает, `guard.check()` отказывает `human_busy` (15b). */
+  /** Тишина клавиатуры человека: пока он печатает, `guard.keyboardQuiet()` отказывает `human_busy` (15b, рецензия пачки 3). */
   typing?: Pick<TypingClock, 'idleFor'>;
 }): PageRunner {
   const { registry } = deps;
@@ -229,8 +229,10 @@ export function createPageRunner(deps: {
           if (!allowed) throw new AgentOpError('access_denied', AGENTS_OFF);
           if (registry.isPaused(record.workKey, record.owner)) throw new AgentOpError('access_denied', PAUSED);
           if (use.changes === true && registry.fresh(record)?.humanBusy === true) throw new AgentOpError('human_busy', HUMAN_BUSY);
-          if (deps.typing?.idleFor(AGENT_LIMITS.typingIdleMs) === false) throw new AgentOpError('human_busy', HUMAN_TYPING);
           signal.throwIfAborted();
+        },
+        keyboardQuiet() {
+          if (deps.typing?.idleFor(AGENT_LIMITS.typingIdleMs) === false) throw new AgentOpError('human_busy', HUMAN_TYPING);
         },
       };
       const endWindow = use.window === true ? (deps.window?.begin(contents, record, request) ?? null) : null;
@@ -392,7 +394,7 @@ export function createFocusBorrower(deps: {
 
 /**
  * Адрес, который агент может открыть: любой http(s), без учётных данных; иначе `null` (`file:`, `javascript:`, `data:` и
- * прочие схемы, не-адрес). Фрагмент (#…) остаётся: им бывают маршруты SPA. Читать открытое можно только на loopback (`checked`).
+ * прочие схемы, не-адрес). Фрагмент (#…) остаётся: им бывают маршруты SPA. Читать и управлять можно на любом http(s) (решение владельца 2026-10-20).
  */
 export function openableHref(raw: string): string | null {
   let parsed: URL;

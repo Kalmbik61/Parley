@@ -392,14 +392,16 @@ describe('окно операции, выбор файла, скачивания
     expect(ctx.requestFocus).toHaveBeenCalledTimes(1);
   });
 
-  it('guard.check: человек печатает — human_busy; потом можно (M3)', async () => {
+  it('guard.keyboardQuiet: человек печатает — human_busy; потом можно (M3). guard.check на клавиатуру не смотрит: переход, размер и подготовка действия не ждут тишины (рецензия пачки 3)', async () => {
     const ctx = windowSetup();
     let guard: InputGuard | null = null;
     await ctx.runner.run(request(), 't1', async (_c, _r, g) => { guard = g; return 'x'; }, {});
+    const g = guard as unknown as Required<InputGuard>;
     ctx.typing.idleFor.mockReturnValue(false);
-    expect(() => (guard as unknown as InputGuard).check()).toThrow(expect.objectContaining({ code: 'human_busy', message: expect.stringContaining('typing') }));
+    expect(() => g.keyboardQuiet()).toThrow(expect.objectContaining({ code: 'human_busy', message: expect.stringContaining('typing') }));
+    expect(() => g.check()).not.toThrow();
     ctx.typing.idleFor.mockReturnValue(true);
-    expect(() => (guard as unknown as InputGuard).check()).not.toThrow();
+    expect(() => g.keyboardQuiet()).not.toThrow();
   });
 });
 

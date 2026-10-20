@@ -9,8 +9,8 @@
  * `Emulation.setFocusEmulationEnabled` (без неё страница видит `blur` после возврата фокуса). «Одолжено» помнится по
  * `AbortSignal` операции. Без `borrowFocus` (тесты, будущий путь без фокуса) ничего этого не делается.
  *
- * Перед каждым шагом — `guard.check()` (Stop, пауза, выключатель, `human_busy`, тишина клавиатуры человека) и
- * `signal.throwIfAborted()`. Обрыв посреди жеста не оставляет страницу с зажатой кнопкой или клавишей: после `mousePressed`
+ * Перед каждым шагом — `guard.check()` (Stop, пауза, выключатель, `human_busy`) и `signal.throwIfAborted()`; после
+ * одалживания фокуса и перед каждой командой — `guard.keyboardQuiet()` (человек печатает: его нажатие ушло бы в страницу). Обрыв посреди жеста не оставляет страницу с зажатой кнопкой или клавишей: после `mousePressed`
  * уходит один `mouseReleased`, после `keyDown` — один `keyUp`, мимо `guard`.
  */
 import type { WebContents } from 'electron';
@@ -35,10 +35,15 @@ export interface MouseStep {
   deltaY?: number;
 }
 
-/** `check` бросает `AgentOpError` (Stop, пауза, выключатель, human_busy, человек печатает). */
+/**
+ * `check` бросает `AgentOpError` (Stop, пауза, выключатель, human_busy). `keyboardQuiet` — `human_busy`, пока человек печатает:
+ * его зовёт только ввод после одалживания фокуса (нажатие человека ушло бы в страницу); переходу, размеру и подготовке
+ * действия тишина не нужна (рецензия пачки 3).
+ */
 export interface InputGuard {
   signal: AbortSignal;
   check(): void;
+  keyboardQuiet?(): void;
 }
 
 type Fit = { scale: number; mobile: boolean } | null;
@@ -132,6 +137,7 @@ export function createAgentInput(deps: {
     guard.check();
     guard.signal.throwIfAborted();
     await ensureFocus(contents, guard);
+    guard.keyboardQuiet?.();
     await send(contents, method, params);
   }
 
