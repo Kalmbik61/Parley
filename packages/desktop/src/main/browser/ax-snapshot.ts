@@ -131,6 +131,9 @@ export function axSnapshot(nodes: readonly AxNode[], options: { interactiveOnly:
       }
     }
     if (FRAMES.has(role)) return true;
+    // Дети поля с секретным именем повторяют его значение текстом (`StaticText`): значение уже `<redacted>`, детей не
+    // обходим (E2E 22b, Фокус ревью 6). Только у поля — узла со значением: раздел «API key settings» обходится.
+    if (node.value !== undefined && isSecretName(clean(node.name?.value, NAME_LIMIT))) return true;
     for (const childId of node.childIds ?? []) {
       const child = byId.get(childId);
       if (child !== undefined && !visit(child, childDepth)) return false;

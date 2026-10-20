@@ -260,9 +260,7 @@ test.describe('агент: внешний сайт, скрипт, куки, хр
   });
 
   test('значение поля «API key» в дереве доступности маскируется и в дочернем тексте (Фокус ревью 6)', async () => {
-    // Известный дефект (найден этим тестом, задача 7): у textbox значение `<redacted>`, но дочерний узел `text "SECRET8"` его
-    // выдаёт. Тест ждёт верного поведения и помечен `fail`, пока `ax-snapshot.ts` не прячет и дочерний StaticText секретного поля.
-    test.fail(true, 'the secret field value leaks through the child StaticText node of the accessibility tree');
+    // Дочерний `StaticText` секретного поля повторял его значение — этот тест нашёл утечку; `ax-snapshot.ts` детей такого поля не обходит.
     const opened = await openApp([HOST_RULES]);
     const { window, lead } = opened;
     const tab = await openPage(opened, lead, { url: `http://${EXTERNAL_HOST}:${port}/form`, own: true });

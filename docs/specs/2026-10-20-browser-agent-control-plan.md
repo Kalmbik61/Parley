@@ -80,7 +80,7 @@
   - на `index.lock: File exists` — пауза 2–5 с и повтор, до 5 раз; lock не удалять;
   - никогда: `git add -A`, `git add .`, `git commit -a`, `--amend`, `git stash`, `git reset`, `git checkout`/`git restore` чужих файлов. Не получилось за 5 повторов — остановиться и сообщить оркестратору.
 - Тесты — только затронутых файлов: `pnpm --filter @parley/<пакет> test -- <файл>` (владелец просит беречь ноутбук; полный прогон не нужен). Задача desktop, которая добавляет тексты для агента или окна (6, 8–13, 15a–20), запускает и `src/english-ui.test.ts`.
-- E2E — только своих спеков и по одному: `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop e2e -- e2e/<спек>.ts --workers=1`.
+- E2E — только своих спеков и по одному: `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop exec playwright test e2e/<спек>.ts --workers=1`.
 - **Нельзя** `prettier --write` (и `pnpm format`) на файлах репозитория: код шире `printWidth` 100, форматтер перепишет чужие строки.
 - Известные флейки E2E и как гонять рантайм-пробы — память `parley-browser-agent-read-audit` (`chat-hooks:502`, `chat-view:106`, `island:261`, `limits:288` красные и на базе; `attention:190`, `room-decision:354/378` — фокус при параллельном прогоне).
 - Коммит на задачу, сообщение по-английски (`AGENTS.md`), последняя строка — `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Push — только по просьбе человека.
@@ -417,7 +417,7 @@ git merge --no-ff origin/feat/browser-external-open -m "Merge branch 'feat/brows
   - `pnpm --filter @parley/desktop test -- src/main/browser/agent-ops.test.ts` → PASS
   - `pnpm --filter @parley/protocol test -- src/browser-agent-contract.test.ts` → PASS
 
-- [ ] **Шаг 4. E2E ветки.** `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop e2e -- e2e/browser-agent-open.spec.ts` → PASS. Красный тест сверить с известными флейками (раздел «Как работать»); новый красный — остановиться и сообщить.
+- [ ] **Шаг 4. E2E ветки.** `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop exec playwright test e2e/browser-agent-open.spec.ts` → PASS. Красный тест сверить с известными флейками (раздел «Как работать»); новый красный — остановиться и сообщить.
 
 Коммит — сам merge-коммит шага 1.
 
@@ -2405,7 +2405,7 @@ git commit -m "test(desktop): frame tests for agent browser control — single s
   7. **Занятость:** человек включает Annotate (`menu:action browser.annotate`), ждёт `__parleyAnnotate.waiting()`; агент `click` → `human_busy`; `__parleyAnnotate.count()` = 0; `console` — `ok`.
   8. **Stop и «Pause agents» (Фокус ревью 8):** агент `wait_for text Never` → человек жмёт Stop на значке → `access_denied` «paused by the human», панель на паузе, следующий `console` — `access_denied`, «Resume agents» снимает; то же с пунктом «Pause agents» в «⋯» страницы посреди `wait_for`.
 
-- [ ] **Шаг 3. Запустить.** `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop e2e -- e2e/browser-agent-control.spec.ts --workers=1` → PASS. Затем так же `e2e/browser-agent-read.spec.ts` и `e2e/browser-agent-open.spec.ts`: ожидания про loopback (внешняя страница — `not_loopback`, `tabs` только по origin) заменить на чтение с маской — этим коммитом.
+- [ ] **Шаг 3. Запустить.** `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop exec playwright test e2e/browser-agent-control.spec.ts --workers=1` → PASS. Затем так же `e2e/browser-agent-read.spec.ts` и `e2e/browser-agent-open.spec.ts`: ожидания про loopback (внешняя страница — `not_loopback`, `tabs` только по origin) заменить на чтение с маской — этим коммитом.
 
 - [ ] **Шаг 4. Коммит.**
 
@@ -2434,7 +2434,7 @@ git commit -m "test(desktop): E2E for agent browser control — forms, focus, hi
   3. **Куки и хранилище (Фокус ревью 4):** `browser_cookies list` на `/state` → `theme`, `sid` (httpOnly) без значений; `values: true` → `theme=dark`, у `sid` — `<httpOnly: hidden>`, строки `S3SS` в ответе нет; `set` новой куки → `document.cookie` в госте содержит; `delete` httpOnly-куки `sid` → её нет и в `list`; вкладка человека на `http://example.test:<порт>/` с кукой `human=1` — у страницы агента на `127.0.0.1` в списке нет `human`. `browser_storage set/get/list/clear` `localStorage` — видно в госте.
   4. **Файлы (Фокус ревью 5, 7):** `click` по полю файла → ответ с заметкой «file chooser … upload», в госте `input.files.length` = 0 (выбор перехвачен, системного окна нет); `upload` временным файлом → имя в странице; (секретные места проверяют модульные тесты задачи 17: настоящий `~/.ssh` E2E не трогает); `click` по ссылке `/report.csv` → заметка с путём в `agent-downloads`, файл там, `browser_downloads` — `completed`. Затем дождаться, пока значок агента пропадёт (`agent-badge` нет — хвост окна операции `guardTailMs` кончился), и кликнуть ту же ссылку мышью человека (`window.mouse`) → запись в `__parleyDownloads` (диалог человека), в папке агента второго файла нет.
 
-- [ ] **Шаг 3. Запустить.** `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop e2e -- e2e/browser-agent-control-sites.spec.ts --workers=1` → PASS.
+- [ ] **Шаг 3. Запустить.** `pnpm --filter @parley/desktop build && pnpm --filter @parley/desktop exec playwright test e2e/browser-agent-control-sites.spec.ts --workers=1` → PASS.
 
 - [ ] **Шаг 4. Коммит.**
 

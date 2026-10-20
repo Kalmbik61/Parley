@@ -96,6 +96,21 @@ describe('axSnapshot — расширения этапа D', () => {
     expect(text).not.toContain('Pay"');
   });
 
+  it('значение поля с секретным именем не утекает через дочерний текст; раздел с таким именем, но без значения, обходится (E2E 22b, Фокус ревью 6)', () => {
+    const nodes: AxNode[] = [
+      { nodeId: '1', ignored: false, role: { value: 'RootWebArea' }, name: { value: 'Settings' }, childIds: ['2', '5'] },
+      { nodeId: '2', parentId: '1', ignored: false, role: { value: 'textbox' }, name: { value: 'API key' }, value: { value: 'SECRET8' }, childIds: ['3'], backendDOMNodeId: 5 },
+      { nodeId: '3', parentId: '2', ignored: false, role: { value: 'generic' }, childIds: ['4'] },
+      { nodeId: '4', parentId: '3', ignored: false, role: { value: 'StaticText' }, name: { value: 'SECRET8' } },
+      { nodeId: '5', parentId: '1', ignored: false, role: { value: 'group' }, name: { value: 'API key settings' }, childIds: ['6'] },
+      { nodeId: '6', parentId: '5', ignored: false, role: { value: 'button' }, name: { value: 'Rotate' }, backendDOMNodeId: 9 },
+    ];
+    const text = axSnapshot(nodes, { interactiveOnly: false, limitBytes: 51_200 }).text;
+    expect(text).toContain('textbox "API key" value=<redacted>');
+    expect(text).not.toContain('SECRET8');
+    expect(text).toContain('button "Rotate"');
+  });
+
   it('axHasText — видимый текст без учёта регистра и пробелов; игнорируемые узлы не считаются', () => {
     expect(axHasText(NODES, 'remember   ME')).toBe(true); // checkbox под игнорируемым узлом виден
     expect(axHasText(NODES, 'hello')).toBe(true);
