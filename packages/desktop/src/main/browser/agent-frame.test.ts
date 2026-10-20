@@ -59,6 +59,14 @@ describe('рамочные: агент в браузере', () => {
     expect(source).not.toMatch(/args\.(url|domain)\b/);
   });
 
+  it("'Input.dispatch…' и 'Input.insertText' — только в agent-input.ts (и в списке разрешённых CDP inspector.ts; комментарии не в счёт): ни одной CDP-клавиши мимо одалживания фокуса (финальная рецензия m4)", () => {
+    const files = mainSources()
+      .filter(({ file }) => file !== 'browser/inspector.ts')
+      .filter(({ source }) => source.split('\n').some((line) => /Input\.(dispatch\w*|insertText)/.test(line) && !/^\s*(\/\/|\*|\/\*)/.test(line)))
+      .map(({ file }) => file);
+    expect(files).toEqual(['browser/agent-input.ts']);
+  });
+
   it('DOM.setFileInputFiles — только в agent-actions.ts (и в списке разрешённых CDP inspector.ts)', () => {
     const files = filesWith('DOM.setFileInputFiles').filter((file) => file !== 'browser/inspector.ts');
     expect(files).toEqual(['browser/agent-actions.ts']);
