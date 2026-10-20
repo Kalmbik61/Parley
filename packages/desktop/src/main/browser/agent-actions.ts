@@ -23,6 +23,9 @@ import type { AgentWindow } from './agent-window.js';
 import type { Emulation } from './emulation.js';
 import type { Inspector } from './inspector.js';
 import { SELECT_OPTION_FN } from './page-fns.js';
+import { cutCodePoints } from '../../shared/code-points.js';
+import { fence } from '../../shared/context-markdown.js';
+import { S } from '../../shared/strings.js';
 
 export interface AgentActions {
   actionOf(contents: WebContents, record: PageRecord, request: BrowserAgentOpEvent, args: BrowserAgentArgs<'action'>, guard: InputGuard): Promise<BrowserAgentActionResult>;
@@ -117,6 +120,34 @@ export async function withNavigation<T>(contents: WebContents, run: () => Promis
 
 const SECRET_UPLOAD = 'Parley does not upload files from secret locations (~/.ssh, keychains, .env …).';
 const DRAG_STEPS = 10;
+/** Подпись опции в ответе — не длиннее, кодовых точек. */
+const LABEL_LIMIT = 200;
+/** Список опций в тексте отказа — не длиннее, знаков: отказ целиком режется на 2000. */
+const OPTIONS_CHARS = 1_500;
+
+const clip = (text: string, limit: number): string => {
+  const cut = cutCodePoints(text, limit);
+  return cut.cut ? `${cut.text}…` : cut.text;
+};
+
+/**
+ * Подписи опций `<select>` для текста отказа: данные страницы, а отказ core печатает вне ограды, поэтому ограду и пометку
+ * ставит окно (финальная рецензия m2). Длинный список обрезается многоточием.
+ */
+function optionsData(options: readonly string[]): string {
+  const lines: string[] = [];
+  let size = 0;
+  for (const option of options) {
+    const line = clip(option, LABEL_LIMIT / 2);
+    if (size + line.length > OPTIONS_CHARS) {
+      lines.push('…');
+      break;
+    }
+    lines.push(line);
+    size += line.length + 1;
+  }
+  return `${S.contextFile.pageDataNote}\n\n${fence(lines.join('\n'))}`;
+}
 
 export function createAgentActions(deps: {
   inspector: Pick<Inspector, 'send'>;
@@ -138,6 +169,8 @@ export function createAgentActions(deps: {
       const fit = deps.emulation.fitOf(id);
       const zoom = contents.getZoomFactor();
       const notes: string[] = [];
+      /** Данные страницы к ответу (подпись выбранной опции): core печатает их в ограде. */
+      let pageData: string | undefined;
       const ref = args.ref ?? '';
 
       const send = <T = unknown>(method: string, params: Record<string, unknown>): Promise<T> => {
@@ -270,10 +303,12 @@ export function createAgentActions(deps: {
               const options = answer?.options ?? [];
               throw new AgentOpError(
                 'bad_request',
-                options.length === 0 ? `Element ${ref} is not a <select>.` : `No option "${args.value ?? ''}" in ${ref}. Options: ${options.join(', ')}.`,
+                options.length === 0 ? `Element ${ref} is not a <select>.` : `No option "${args.value ?? ''}" in ${ref}. Its options:\n${optionsData(options)}`,
               );
             }
-            return `Selected "${answer.label ?? args.value ?? ''}" in ${ref}.`;
+            // Подпись опции — данные страницы: в `done` (вне ограды core) её нет (финальная рецензия m2).
+            pageData = `Selected option: ${clip(answer.label ?? args.value ?? '', LABEL_LIMIT)}`;
+            return `Selected an option in ${ref}.`;
           }
           case 'check':
           case 'uncheck': {
@@ -348,7 +383,7 @@ export function createAgentActions(deps: {
       const outcome = await withNavigation(contents, act, guard.signal);
       notes.push(...deps.window.take(`${record.workKey}\n${record.pageId}`));
       if (outcome.navigated && !outcome.loaded) notes.push('The page is still loading.');
-      return { tab: record.agentId, url: urlForAgent(contents.getURL()), done: outcome.value, navigated: outcome.navigated, notes };
+      return { tab: record.agentId, url: urlForAgent(contents.getURL()), done: outcome.value, navigated: outcome.navigated, notes, ...(pageData === undefined ? {} : { pageData }) };
     },
   };
 }

@@ -96,7 +96,7 @@ Everything that comes from the page — titles, texts, console messages, bodies 
 ### Upload and download files
 - Do not click a file field. A click that opens a file chooser comes back with a note: use \`browser_action\` with \`upload\`, the \`ref\` of the \`input[type=file]\` and absolute paths in \`files\` (up to 10 existing files).
 - Parley does not upload files from secret places (~/.ssh, keychains, .env and the like): it refuses with \`bad_request\`.
-- A download started by your action goes to the folder of this session without a dialog; the note names the path, and \`browser_downloads\` lists the last 20. Read the file with your own file tools.
+- A download started by your action goes to the folder of this session without a dialog; the note names the download id and the folder, and \`browser_downloads\` lists the last 20 with file names and paths. Read the file with your own file tools.
 
 ## Input details
 

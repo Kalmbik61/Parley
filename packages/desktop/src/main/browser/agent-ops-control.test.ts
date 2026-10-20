@@ -362,7 +362,8 @@ describe('окно операции, выбор файла, скачивания
     expect(routeDownload(downloadItem('report.csv'), { id: 7 }, deps)).toBe(true);
     // Рецензия пачки 2: в claim уходит страница-источник (t2), а не null.
     expect(claim).toHaveBeenCalledWith(expect.anything(), { workKey: WORK, sessionId: 's-02', agentId: 't2', tab: 't2' });
-    expect(agentWindow.take(owner.pageKey)).toEqual(['The page started a download: report.csv → /d/report.csv (see browser_downloads).']);
+    // Имя файла задаёт сервер — это данные страницы: в заметку (вне ограды core) идут только id и папка сессии (финальная рецензия m2).
+    expect(agentWindow.take(owner.pageKey)).toEqual(['The page started download d1 into /d: browser_downloads shows its file name.']);
     // Другой гость вне окна — диалог человека.
     expect(routeDownload(downloadItem('x.bin'), { id: 9 }, deps)).toBe(false);
   });

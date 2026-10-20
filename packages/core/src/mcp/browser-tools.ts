@@ -430,6 +430,8 @@ interface ActionResult {
   done: string;
   navigated: boolean;
   notes: string[];
+  /** Данные страницы к ответу (подпись выбранной опции): только в ограде. */
+  pageData?: string;
 }
 interface WaitResult {
   tab: string;
@@ -457,7 +459,8 @@ function formatSnapshot(result: SnapshotResult): string {
 
 function formatAction(result: ActionResult): string {
   const moved = result.navigated ? ' The page navigated: old refs are stale, take a new browser_snapshot.' : '';
-  return `${result.done}${moved}${noteLines(result.notes)}\n${pageData(`Page: ${result.url}`)}`;
+  const data = result.pageData === undefined ? '' : `\n${result.pageData}`;
+  return `${result.done}${moved}${noteLines(result.notes)}\n${pageData(`Page: ${result.url}${data}`)}`;
 }
 
 /** `timeout` — ответ, не ошибка; что ждали, видно по аргументам. */

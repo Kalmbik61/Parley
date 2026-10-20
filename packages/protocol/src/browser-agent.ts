@@ -516,6 +516,8 @@ export interface BrowserAgentActionResult {
   /** Действие вызвало переход главного фрейма (дождан до `AGENT_LIMITS.loadMs`). */
   navigated: boolean;
   notes: string[];
+  /** Данные страницы к ответу (подпись выбранной опции `select`): core печатает их в ограде под адресом. */
+  pageData?: string;
 }
 
 export interface BrowserAgentWaitResult {

@@ -434,6 +434,13 @@ describe('инструменты действий (этап D)', () => {
     expect(result.text).toContain('Page: http://localhost:5173/next');
   });
 
+  it('action: данные страницы ответа (подпись выбранной опции) — в ограде под адресом, не в первой строке (финальная рецензия m2)', async () => {
+    const client = await connect(await startEndpoint());
+    answers.push({ status: 200, body: { ok: true, result: { tab: 't1', url: 'http://localhost:5173/', done: 'Selected an option in e3.', navigated: false, notes: [], pageData: 'Selected option: Red' } } });
+    const result = await call(client, 'browser_action', { tab: 't1', action: 'select', ref: 'e3', value: 'red' });
+    expect(result.text).toBe(`Selected an option in e3.\n${PAGE_DATA_NOTE}\n\n\`\`\`text\nPage: http://localhost:5173/\nSelected option: Red\n\`\`\``);
+  });
+
   it('wait_for: timeout — не ошибка; navigate: не дождался загрузки — пояснение; resize и open с loaded', async () => {
     const client = await connect(await startEndpoint());
     answers.push(

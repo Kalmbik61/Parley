@@ -18,6 +18,7 @@
  * опираются на те же id.
  */
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import type { DownloadItem, WebContents } from 'electron';
 import { AGENT_LIMITS, browserAgentArgs } from '@parley/protocol';
 import type { BrowserAgentArgs, BrowserAgentErrorCode, BrowserAgentDownloadsResult, BrowserAgentNavigateResult, BrowserAgentOpEvent, BrowserAgentOpenResult, BrowserAgentResizeResult, BrowserAgentResult } from '@parley/protocol';
@@ -368,7 +369,9 @@ export function routeDownload(
   const owner = deps.agentWindow.activeFor(source.id);
   if (owner === null) return false;
   const record = deps.downloads.claim(item, { workKey: owner.workKey, sessionId: owner.sessionId, agentId: owner.agentId, tab: owner.agentId });
-  deps.agentWindow.note(source.id, `The page started a download: ${record.name} → ${record.path} (see browser_downloads).`);
+  // Имя файла задаёт сервер — это данные страницы, а заметка идёт агенту вне ограды: имя и путь — только в огороженном
+  // списке `browser_downloads` (финальная рецензия m2).
+  deps.agentWindow.note(source.id, `The page started download ${record.id} into ${path.dirname(record.path)}: browser_downloads shows its file name.`);
   return true;
 }
 
