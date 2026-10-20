@@ -36,6 +36,8 @@ export interface TelegramStateStore {
   pruneCards(): void;
   putLetter(messageId: number, letter: LetterRecord): void;
   letter(messageId: number): LetterRecord | null;
+  /** Забывает все письма: после отвязки номера сообщений нового чата не должны попасть в письма прежнего владельца. */
+  clearLetters(): void;
   /** Дописывает строку в audit.jsonl; `text` обрезан до 200 знаков. */
   audit(entry: Omit<AuditEntry, 'at'>): void;
 }
@@ -155,6 +157,10 @@ export function createTelegramState(deps: { home: string; now?(): number; log(li
     },
     putLetter(messageId, letter) {
       state = { ...get(), letters: { ...get().letters, [String(messageId)]: letter } };
+      save();
+    },
+    clearLetters() {
+      state = { ...get(), letters: {} };
       save();
     },
     letter(messageId) {

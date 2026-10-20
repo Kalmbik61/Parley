@@ -40,6 +40,8 @@ export const T = {
   voiceFailed: 'Could not recognize the voice message. Please try again or send text.',
   tooLong: 'That message is too long. Please send a shorter one.',
   noLongerCurrent: 'This request is no longer current.',
+  notReadyYet: 'The agent is not ready for the answer yet - try again',
+  couldNot: (reason: string): string => `Could not do that: ${reason}`,
   newConversation: 'Started a new conversation with the assistant.',
   answeredAtMac: 'Already answered on the Mac.',
   expired: 'This card has expired.',

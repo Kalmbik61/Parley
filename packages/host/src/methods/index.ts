@@ -228,7 +228,12 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'settings.set': (async (params, request) => {
       const result = await settingsSet(params, request);
       // Настройка записана: канал Telegram включается, выключается или меняет поводы.
-      deps.telegram?.configChanged(result.config);
+      try {
+        deps.telegram?.configChanged(result.config);
+      } catch (error) {
+        // Настройка уже записана: сбой канала не должен превращать её в ошибку метода.
+        request.host.log.warn('telegram: configChanged failed', { error: String(error) });
+      }
       return result;
     }) as typeof settingsSet as AnyHandler,
     'pty.attach': pty.ptyAttach as AnyHandler,

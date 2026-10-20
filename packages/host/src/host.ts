@@ -644,7 +644,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   }
   // Напоминания — после ворот работ и приёмника хуков: раньше ход помощника упёрся бы в «хоста ещё нет».
   reminders.start((reminder, late) => reminderTarget.onReminder(reminder, late));
-  await telegram.start();
+  // Сбой канала не должен останавливать хост.
+  await telegram.start().catch((error: unknown) => {
+    log.error('telegram не запустился', { error: String(error) });
+  });
   await activityService.start();
   planEffects.start();
   history.start();

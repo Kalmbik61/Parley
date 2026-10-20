@@ -115,6 +115,14 @@ describe('createTelegramState', () => {
     expect(store.letter(2)).not.toBeNull();
   });
 
+  it('clearLetters забывает все письма', () => {
+    const store = make();
+    store.putLetter(11, { projectPath: '/p', workId: 'w', roomId: 'r', from: 'a', at: 'x' });
+    store.clearLetters();
+    expect(store.letter(11)).toBeNull();
+    expect(store.get().letters).toEqual({});
+  });
+
   it('putLetter и letter', () => {
     const store = make();
     const letter = { projectPath: '/p', workId: 'w', roomId: 'r', from: 'a', at: 'x' };

@@ -12,11 +12,13 @@ export interface OutboxJob {
   /** Задание с тем же ключом, уже стоящее в очереди, заменяется (typing, правки одного сообщения). */
   key?: string;
   run(): Promise<void>;
+  /** Задание не будет выполнено: очередь выброшена или оно отброшено после повторов. После успеха не зовётся. */
+  onDrop?(): void;
 }
 
 export interface Outbox {
   enqueue(job: OutboxJob): void;
-  /** Выбрасывает очередь (выключение, 409); текущее задание не повторяется. */
+  /** Выбрасывает очередь (выключение, 409), у каждого стоявшего задания зовётся `onDrop`; текущее задание не повторяется. */
   clear(): void;
   size(): number;
   idle(): Promise<void>;
@@ -53,21 +55,21 @@ export function createOutbox(deps: { log(line: string): void; now?(): number; se
         await job.run();
         return;
       } catch (error) {
-        if (epoch !== startEpoch) return;
+        if (epoch !== startEpoch) return job.onDrop?.();
         if (error instanceof BotApiError && error.status === 429) {
           await sleep(Math.max(1, error.retryAfter ?? 1) * 1000);
-          if (epoch !== startEpoch) return;
+          if (epoch !== startEpoch) return job.onDrop?.();
           continue;
         }
         if (error instanceof BotApiError && error.status === 0 && networkFailures < NETWORK_RETRIES) {
           networkFailures += 1;
           await sleep(NETWORK_RETRY_MS);
-          if (epoch !== startEpoch) return;
+          if (epoch !== startEpoch) return job.onDrop?.();
           continue;
         }
         const reason = error instanceof Error ? error.message : String(error);
         deps.log(`telegram outbox: job dropped (${job.priority}${job.key === undefined ? '' : ` ${job.key}`}): ${reason}`);
-        return;
+        return job.onDrop?.();
       }
     }
   };
@@ -91,9 +93,11 @@ export function createOutbox(deps: { log(line: string): void; now?(): number; se
     },
     clear() {
       epoch += 1;
+      const dropped = [...queues.card, ...queues.notice, ...queues.typing];
       queues.card = [];
       queues.notice = [];
       queues.typing = [];
+      for (const job of dropped) job.onDrop?.();
     },
     size,
     idle() {

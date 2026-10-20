@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -44,6 +44,10 @@ let journal: Call[];
 let replies: Record<string, (params: any, count: number) => Reply>;
 let queue: unknown[][];
 let waiter: ((updates: unknown[]) => void) | null;
+let sendGate: Promise<void> | null;
+let openSendGate: () => void;
+let snapshotGate: Promise<void> | null;
+let openSnapshotGate: () => void;
 let conflictMode: boolean;
 let outId: number;
 let lastOutId: number;
@@ -86,6 +90,7 @@ const fakeFetch = (async (input: string | URL | Request, init?: RequestInit): Pr
       });
     });
   }
+  if (method === 'sendMessage' && sendGate !== null) await sendGate;
   const count = journal.filter((call) => call.method === method).length;
   const custom = replies[method]?.(params, count);
   if (custom !== undefined) return respond(custom.body, custom.status ?? 200);
@@ -95,6 +100,21 @@ const fakeFetch = (async (input: string | URL | Request, init?: RequestInit): Pr
   }
   return respond({ ok: true, result: method === 'getMe' ? { id: 123456789, username: 'parley_bot' } : true });
 }) as typeof fetch;
+
+const gateSends = (): void => {
+  sendGate = new Promise<void>((resolve) => (openSendGate = resolve));
+};
+const ungateSends = (): void => {
+  sendGate = null;
+  openSendGate();
+};
+const gateSnapshot = (): void => {
+  snapshotGate = new Promise<void>((resolve) => (openSnapshotGate = resolve));
+};
+const ungateSnapshot = (): void => {
+  snapshotGate = null;
+  openSnapshotGate();
+};
 
 const push = (updates: unknown[]): void => {
   if (waiter !== null) {
@@ -195,6 +215,8 @@ beforeEach(async () => {
   replies = {};
   queue = [];
   waiter = null;
+  sendGate = null;
+  snapshotGate = null;
   conflictMode = false;
   outId = 100;
   lastOutId = 0;
@@ -212,7 +234,10 @@ beforeEach(async () => {
   logs = [];
   host = { broadcast: vi.fn(), hold: vi.fn(), log: { info: () => {}, warn: () => {}, error: () => {} } };
   feed = {
-    snapshot: vi.fn(async () => ({ items: feedItems, revision: 1, schemaVersion: 1, mode: null, ...(feedTerminal ? { decisions: 'terminal' } : {}) })),
+    snapshot: vi.fn(async () => {
+      if (snapshotGate !== null) await snapshotGate;
+      return { items: feedItems, revision: 1, schemaVersion: 1, mode: null, ...(feedTerminal ? { decisions: 'terminal' } : {}) };
+    }),
     decide: vi.fn(() => ({ applied: true, state: 'allowed' })),
     subscribe: vi.fn((_ref: SessionRef, client: Client) => {
       feedClient = client;
@@ -402,15 +427,30 @@ describe('createTelegramService: карточки ленты', () => {
     expect(edits()[1]?.params.text).toBe(T.noLongerCurrent);
   });
 
-  it('decide с applied:false и state allowed — честная квитанция по состоянию', async () => {
+  it('decide с applied:false в решённом состоянии закрывает карточку «Answered at your Mac», а не временем нажатия', async () => {
     await bootLinked();
     const message = await blockWith(PERMISSION);
     feed.decide.mockReturnValueOnce({ applied: false, state: 'allowed' });
 
     push([tap(lastOutId, buttons(message)[1]!.callback_data)]);
     await settle();
+    expect(edits()[0]?.params.text).toContain(T.answeredAtMac);
+    expect(edits()[0]?.params.text).not.toContain('Allowed at');
+  });
+
+  it('decide с applied:false в pending оставляет карточку и отвечает тостом «not ready yet»', async () => {
+    await bootLinked();
+    const message = await blockWith(PERMISSION);
+    feed.decide.mockReturnValueOnce({ applied: false, state: 'pending' });
+
+    push([tap(lastOutId, buttons(message)[0]!.callback_data)]);
+    await settle();
+    expect(edits()).toEqual([]);
+    expect(calls('answerCallbackQuery').at(-1)?.params.text).toBe(T.notReadyYet);
+
+    push([tap(lastOutId, buttons(message)[0]!.callback_data)]);
+    await settle();
     expect(edits()[0]?.params.text).toContain('Allowed');
-    expect(edits()[0]?.params.text).not.toContain('Denied');
   });
 
   it('псевдо-клиент: feed.changed с denied закрывает карточку, stale — «expired»', async () => {
@@ -671,5 +711,160 @@ describe('createTelegramService: перехват, отвязка, переза�
       expect(line).not.toContain('AAAAAAAAAAAAAAAA');
     }
     expect(JSON.stringify(service.status())).not.toContain(TOKEN);
+  });
+});
+
+describe('createTelegramService: очередь, гонки, отвязка', () => {
+  it('409 при карточке в очереди освобождает подписку и повод: после takeOver карточка уходит', async () => {
+    await bootLinked();
+    gateSends();
+    service.reminderWhileOff({ id: 'r1', what: 'x' });
+    await settle();
+    feedItems = [PERMISSION];
+    setActivity('blocked');
+    await settle();
+    expect(feed.subscribe).toHaveBeenCalled();
+
+    conflictMode = true;
+    push([]);
+    await settle();
+    expect(service.status().polling).toBe('conflict');
+    expect(feed.unsubscribe).toHaveBeenCalledWith(REF, expect.anything());
+
+    ungateSends();
+    await settle();
+    conflictMode = false;
+    journal.length = 0;
+    await service.takeOver();
+    await settle();
+    setActivity('working');
+    setActivity('blocked');
+    await settle();
+    expect(sent().some((call) => call.params.reply_markup !== undefined)).toBe(true);
+  });
+
+  it('закрытие первой карточки сессии не снимает подписку, пока вторая ещё отправляется', async () => {
+    await bootLinked();
+    await blockWith(PERMISSION);
+    feed.unsubscribe.mockClear();
+    gateSends();
+    feedItems = [PERMISSION, QUESTION];
+    setActivity('working');
+    setActivity('blocked');
+    await settle();
+
+    feedClient!.send({ event: 'feed.changed', data: { ref: REF, revision: 2, upsert: [{ ...PERMISSION, state: 'denied' }], removed: [], mode: null } });
+    await settle();
+    expect(feed.unsubscribe).not.toHaveBeenCalled();
+
+    ungateSends();
+    await settle();
+    feedClient!.send({ event: 'feed.changed', data: { ref: REF, revision: 3, upsert: [{ ...QUESTION, state: 'answered' }], removed: [], mode: null } });
+    await settle();
+    expect(feed.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(edits().at(-1)?.params.text).toContain('Answered');
+  });
+
+  it('карточка закрыта событием ленты во время findCard: запись не воскресает, следующий текст идёт помощнику', async () => {
+    await bootLinked();
+    const single = { ...QUESTION, questions: [(QUESTION as any).questions[0]] } as FeedCard;
+    const message = await blockWith(single);
+    const shortId = shortIdOf(message);
+
+    gateSnapshot();
+    push([tap(lastOutId, `pc1:${shortId}:o`)]);
+    await settle();
+    feedClient!.send({ event: 'feed.changed', data: { ref: REF, revision: 2, upsert: [{ ...single, state: 'answered' }], removed: [], mode: null } });
+    await settle();
+    const editsBefore = edits().length;
+    const sentBefore = sent().length;
+
+    ungateSnapshot();
+    await settle();
+    expect(sent()).toHaveLength(sentBefore);
+    expect(edits()).toHaveLength(editsBefore);
+
+    push([textUpdate('what now')]);
+    await settle();
+    expect(assistant.ask).toHaveBeenCalledWith(expect.objectContaining({ text: 'what now' }), 'telegram');
+  });
+
+  it('unlink: стоявшая в очереди карточка не уходит и не записывается, письма забыты', async () => {
+    await bootLinked();
+    setWorks(snap({ messages: [letter()] }));
+    await settle();
+    journal.length = 0;
+
+    gateSends();
+    service.reminderWhileOff({ id: 'r1', what: 'x' });
+    await settle();
+    feedItems = [PERMISSION];
+    setActivity('blocked');
+    await settle();
+
+    const done = service.unlink();
+    ungateSends();
+    await settle();
+    await done;
+    expect(sent().some((call) => call.params.reply_markup !== undefined)).toBe(false);
+    expect(sent().map((call) => call.params.text)).toContain(T.unlinked);
+    const file = JSON.parse(readFileSync(path.join(home, 'telegram', 'state.json'), 'utf8'));
+    expect(file.cards).toEqual({});
+    expect(file.letters).toEqual({});
+    expect(file.owner).toBeNull();
+  });
+
+  it('setToken во время обработки апдейта: устаревший апдейт не двигает offset', async () => {
+    await bootLinked();
+    let release = (): void => {};
+    assistant.ask.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+    push([textUpdate('hi')]);
+    await settle();
+
+    await service.setToken('987654321:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB');
+    release();
+    await settle();
+    const file = JSON.parse(readFileSync(path.join(home, 'telegram', 'state.json'), 'utf8'));
+    expect(file.offset).toBeNull();
+  });
+
+  it('HostError из sendLetter становится уведомлением «Could not do that»', async () => {
+    await bootLinked();
+    setWorks(snap({ messages: [letter()] }));
+    await settle();
+    const noticeId = lastOutId;
+    sendLetter.mockRejectedValueOnce(new HostError('bad_request', 'room is archived'));
+
+    push([textUpdate('thanks', { reply_to_message: { message_id: noticeId } })]);
+    await settle();
+    expect(sent().at(-1)?.params.text).toBe(T.couldNot('room is archived'));
+  });
+
+  it('takeOver пересчитывает базу поводов: письмо, пришедшее во время конфликта, не всплывает', async () => {
+    await bootLinked();
+    conflictMode = true;
+    push([]);
+    await settle();
+    setWorks(snap({ messages: [letter()] }));
+    conflictMode = false;
+    await service.takeOver();
+    await settle();
+    journal.length = 0;
+
+    setWorks(snap({ messages: [letter()], rooms: [] }));
+    await settle();
+    expect(sent()).toEqual([]);
+  });
+
+  it('повторное включение канала закрывает старые карточки квитанцией «no longer current»', async () => {
+    await bootLinked();
+    await blockWith(PERMISSION);
+    journal.length = 0;
+
+    service.configChanged({ ...cfg, telegramEnabled: false });
+    service.configChanged({ ...cfg, telegramEnabled: true });
+    await settle();
+    expect(edits()[0]?.params.text).toContain(T.noLongerCurrent);
+    expect(edits()[0]?.params.text).not.toContain(T.restarted);
   });
 });

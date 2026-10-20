@@ -137,4 +137,32 @@ describe('createOutbox', () => {
     expect(attempts).toBe(1);
     expect(trace).toEqual([]);
   });
+
+  it('clear зовёт onDrop у каждого стоявшего в очереди задания, но не у выполненных', async () => {
+    const outbox = createOutbox({ log });
+    const dropped: string[] = [];
+    let release = (): void => {};
+    outbox.enqueue({ priority: 'card', run: () => new Promise<void>((resolve) => (release = resolve)), onDrop: () => dropped.push('running') });
+    outbox.enqueue({ priority: 'card', run: async () => undefined, onDrop: () => dropped.push('c1') });
+    outbox.enqueue({ priority: 'notice', run: async () => undefined, onDrop: () => dropped.push('n1') });
+    outbox.clear();
+    release();
+    await outbox.idle();
+    expect(dropped.sort()).toEqual(['c1', 'n1']);
+  });
+
+  it('задание, отброшенное после повторов, зовёт onDrop; успешное — нет', async () => {
+    const outbox = createOutbox({ log });
+    const dropped: string[] = [];
+    outbox.enqueue({
+      priority: 'card',
+      run: async () => {
+        throw new BotApiError('sendMessage', 400, 'Bad Request', null);
+      },
+      onDrop: () => dropped.push('bad'),
+    });
+    outbox.enqueue({ priority: 'card', run: async () => undefined, onDrop: () => dropped.push('ok') });
+    await outbox.idle();
+    expect(dropped).toEqual(['bad']);
+  });
 });

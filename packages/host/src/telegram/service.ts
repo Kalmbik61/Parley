@@ -162,9 +162,11 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   let lastError: string | null = null;
   let lastUpdateAt: string | null = null;
   let held = false;
+  /** Растёт при каждом `begin()` и `disable()`: апдейты и смещение старого опроса игнорируются. */
+  let generation = 0;
   let memory = emptyMemory();
   /** Карточки ленты, чьё сообщение ещё уходит: повторный повод не должен слать их второй раз. */
-  const inflight = new Set<string>();
+  const inflight = new Map<string, SessionRef>();
   /** HTML отправленных карточек: квитанция дописывается под ним. После перезапуска хоста — заголовок по записи. */
   const originals = new Map<string, string>();
   const subscribed = new Map<string, SessionRef>();
@@ -249,7 +251,10 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     }
   }
 
-  /** Сообщение владельцу; `onSent` зовётся с id отправленного сообщения, `settled` — всегда по завершении задания. */
+  /**
+   * Сообщение владельцу. `onSent` зовётся с id отправленного сообщения (если владелец за это время не сменился),
+   * `settled` — когда задание больше не ждёт: после отправки, при отбрасывании очереди и после неудачи.
+   */
   const send = (
     priority: Priority,
     text: string,
@@ -258,17 +263,19 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     settled?: () => void,
   ): void => {
     const chatId = owner()?.chatId;
-    if (chatId === undefined) {
+    if (chatId === undefined || outbox === null) {
       settled?.();
       return;
     }
-    enqueue(priority, async (bot) => {
-      try {
-        const messageId = await post(bot, chatId, text, options);
-        onSent?.(messageId, chatId);
-      } finally {
+    outbox.enqueue({
+      priority,
+      run: async () => {
+        if (api === null) return;
+        const messageId = await post(api, chatId, text, options);
+        if (owner()?.chatId === chatId) onSent?.(messageId, chatId);
         settled?.();
-      }
+      },
+      ...(settled === undefined ? {} : { onDrop: settled }),
     });
   };
 
@@ -353,6 +360,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   const release = (ref: SessionRef): void => {
     const key = refKey(ref);
     if (!subscribed.has(key)) return;
+    if ([...inflight.values()].some((pending) => refKey(pending) === key)) return;
     if (state.cardsFor((card) => card.kind === 'feed' && refKey(card.ref) === key).length > 0) return;
     deps.feed?.unsubscribe(ref, feedClient);
     subscribed.delete(key);
@@ -428,7 +436,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   function sendFeedCard(ref: SessionRef, name: string, where: string, card: FeedCard, buttons: boolean): void {
     const shortId = state.newShortId();
     const message = feedCardMessage(card, { sessionName: name, where, projectPath: ref.projectPath, shortId, buttons }, 0);
-    inflight.add(card.cardId);
+    inflight.set(card.cardId, ref);
     subscribe(ref);
     send(
       'card',
@@ -438,7 +446,10 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
         state.putCard(shortId, { kind: 'feed', ref, cardId: card.cardId, cardKind: card.kind, sessionName: name, chatId, messageId, at: iso(), question: 0 });
         originals.set(shortId, message.text);
       },
-      () => inflight.delete(card.cardId),
+      () => {
+        inflight.delete(card.cardId);
+        release(ref);
+      },
     );
   }
 
@@ -447,9 +458,18 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     return decision.kind === 'plan' ? 'accepted' : 'answered';
   };
 
-  /** Применяет решение; у карточки с несколькими вопросами копит ответы и шлёт следующий вопрос новым сообщением. */
-  async function applyFeedDecision(shortId: string, record: FeedRecord, card: FeedCard, decision: FeedDecision): Promise<void> {
-    if (deps.feed === undefined) return;
+  /** Свежая запись карточки ленты: после каждого `await` прежняя могла быть закрыта событием ленты. */
+  const freshFeed = (shortId: string): FeedRecord | null => {
+    const record = state.get().cards[shortId];
+    return record !== undefined && record.kind === 'feed' ? record : null;
+  };
+
+  /**
+   * Применяет решение; у карточки с несколькими вопросами копит ответы и шлёт следующий вопрос новым сообщением.
+   * Возвращает тост для нажатия: пусто — всё принято.
+   */
+  async function applyFeedDecision(shortId: string, record: FeedRecord, card: FeedCard, decision: FeedDecision): Promise<string> {
+    if (deps.feed === undefined) return '';
     let final = decision;
     if (card.kind === 'question' && decision.kind === 'question') {
       const answers = { ...record.answers, ...decision.answers };
@@ -461,12 +481,13 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
         const base = originals.get(shortId) ?? cardHeader(record);
         edit(record.chatId, record.messageId, receiptText(base, escapeHtml(`✅ ${T.assistantAnswerLine(answered.split('\n')[0] ?? '', answer)}`)));
         send('card', message.text, { keyboard: message.keyboard }, (messageId) => {
-          if (state.get().cards[shortId] === undefined) return;
-          state.putCard(shortId, { ...withoutWait(record), question: next, answers, messageId });
+          const fresh = freshFeed(shortId);
+          if (fresh === null) return;
+          state.putCard(shortId, { ...withoutWait(fresh), question: next, answers, messageId });
           originals.set(shortId, message.text);
         });
         state.audit({ kind: 'decision', shortId, cardId: record.cardId, result: `question ${record.question + 1} answered` });
-        return;
+        return '';
       }
       final = { kind: 'question', answers };
     }
@@ -476,28 +497,37 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     } catch (error) {
       if (error instanceof HostError && error.code === 'not_found') {
         closeCard(shortId, T.expired);
-        return;
+        return '';
       }
       throw error;
     }
     state.audit({ kind: 'decision', shortId, cardId: record.cardId, result: result.applied ? 'applied' : `not applied (${result.state})` });
-    closeCard(shortId, result.applied ? line(decisionReceipt(final)) : stateLine(result.state));
+    if (result.applied) {
+      closeCard(shortId, line(decisionReceipt(final)));
+      return '';
+    }
+    // Хук ещё не удержан: карточка в окне жива, пусть нажмут позже. Любое решённое состояние — ответили у Mac.
+    if (result.state === 'pending') return T.notReadyYet;
+    closeCard(shortId, T.answeredAtMac);
+    return '';
   }
 
-  async function feedAction(shortId: string, record: FeedRecord, code: string): Promise<void> {
+  async function feedAction(shortId: string, record: FeedRecord, code: string): Promise<string> {
     const card = await findCard(record);
+    const fresh = freshFeed(shortId);
+    if (fresh === null) return '';
     if (card === null) {
       closeCard(shortId, T.expired);
-      return;
+      return '';
     }
-    const decision = feedDecisionFor(card, code, undefined, record.question);
-    if (decision === null) return;
+    const decision = feedDecisionFor(card, code, undefined, fresh.question);
+    if (decision === null) return '';
     if (decision === 'other') {
-      state.putCard(shortId, { ...record, wait: { kind: 'other', until: new Date(now() + WAIT_MS).toISOString() } });
+      state.putCard(shortId, { ...fresh, wait: { kind: 'other', until: new Date(now() + WAIT_MS).toISOString() } });
       send('notice', T.otherPrompt, { plain: true });
-      return;
+      return '';
     }
-    await applyFeedDecision(shortId, record, card, decision);
+    return applyFeedDecision(shortId, fresh, card, decision);
   }
 
   // ── Карточки комнаты ────────────────────────────────────────────────────────────────────────────
@@ -560,7 +590,9 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   async function roomAction(shortId: string, record: RoomRecord, code: string): Promise<void> {
     if (code === CALLBACK_CODES.accept) return resolveRoom(shortId, record, 'accept');
     if (code !== CALLBACK_CODES.returnNote) return;
-    state.putCard(shortId, { ...record, wait: { kind: 'note', until: new Date(now() + WAIT_MS).toISOString() } });
+    const fresh = state.get().cards[shortId];
+    if (fresh === undefined || fresh.kind !== 'room') return;
+    state.putCard(shortId, { ...fresh, wait: { kind: 'note', until: new Date(now() + WAIT_MS).toISOString() } });
     send('notice', T.returnNotePrompt(record.from), { plain: true });
   }
 
@@ -663,13 +695,16 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   async function answerWaiting(shortId: string, record: FeedRecord | RoomRecord, text: string): Promise<void> {
     if (record.kind === 'room') return resolveRoom(shortId, record, 'return', text);
     const card = await findCard(record);
+    const fresh = freshFeed(shortId);
+    if (fresh === null) return;
     if (card === null) {
       closeCard(shortId, T.expired);
       return;
     }
-    const decision = feedDecisionFor(card, CALLBACK_CODES.other, text, record.question);
+    const decision = feedDecisionFor(card, CALLBACK_CODES.other, text, fresh.question);
     if (decision === null || decision === 'other') return;
-    await applyFeedDecision(shortId, record, card, decision);
+    const toast = await applyFeedDecision(shortId, fresh, card, decision);
+    if (toast !== '') send('notice', toast, { plain: true });
   }
 
   async function replyToLetter(chatId: number, messageId: number, replyTo: number, text: string): Promise<boolean> {
@@ -769,15 +804,17 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       await answer(toast);
       return;
     }
-    await answer();
-    const record = parsed === null ? undefined : state.get().cards[parsed.shortId];
-    if (parsed === null || record === undefined || record.kind === 'assistant') {
-      const chatId = owner()?.chatId;
-      if (chatId !== undefined && inbound.messageId !== null) edit(chatId, inbound.messageId, escapeHtml(T.noLongerCurrent));
-      return;
+    let toast = '';
+    try {
+      const record = parsed === null ? undefined : state.get().cards[parsed.shortId];
+      if (parsed === null || record === undefined || record.kind === 'assistant') {
+        const chatId = owner()?.chatId;
+        if (chatId !== undefined && inbound.messageId !== null) edit(chatId, inbound.messageId, escapeHtml(T.noLongerCurrent));
+      } else if (record.kind === 'feed') toast = await feedAction(parsed.shortId, record, parsed.code);
+      else await roomAction(parsed.shortId, record, parsed.code);
+    } finally {
+      await answer(toast);
     }
-    if (record.kind === 'feed') await feedAction(parsed.shortId, record, parsed.code);
-    else await roomAction(parsed.shortId, record, parsed.code);
   }
 
   async function onUpdate(update: TgUpdate): Promise<void> {
@@ -791,17 +828,23 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       return;
     }
     lastUpdateAt = iso();
-    switch (inbound.kind) {
-      case 'start':
-        return onStart(inbound);
-      case 'command':
-        return onCommand(inbound.name);
-      case 'text':
-        return onText(inbound.text, inbound.messageId, inbound.replyTo);
-      case 'voice':
-        return onVoice(inbound.fileId, inbound.duration, inbound.messageId);
-      case 'callback':
-        return onCallback(inbound);
+    try {
+      switch (inbound.kind) {
+        case 'start':
+          return await onStart(inbound);
+        case 'command':
+          return await onCommand(inbound.name);
+        case 'text':
+          return await onText(inbound.text, inbound.messageId, inbound.replyTo);
+        case 'voice':
+          return await onVoice(inbound.fileId, inbound.duration, inbound.messageId);
+        case 'callback':
+          return await onCallback(inbound);
+      }
+    } catch (error) {
+      if (!(error instanceof HostError)) throw error;
+      log(`telegram: update failed: ${error.message}`);
+      send('notice', T.couldNot(maskTelegramTokens(error.message)), { plain: true });
     }
   }
 
@@ -809,6 +852,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
 
   /** Выключает опрос, очередь и подписки на ленту; записи в state.json остаются. */
   function disable(): void {
+    generation += 1;
     if (noticeTimer !== null) clearTimeout(noticeTimer);
     noticeTimer = null;
     noticeBuffer = [];
@@ -826,17 +870,19 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   }
 
   /** Карточки прошлого запуска закрываются квитанцией: решить их из бота уже нельзя. */
-  function closeStaleCards(): void {
+  function closeStaleCards(text: string): void {
     state.pruneCards();
     for (const [shortId, record] of state.cardsFor(() => true)) {
-      const html = closedText(shortId, record, T.restarted);
+      const html = closedText(shortId, record, text);
       state.dropCard(shortId);
       edit(record.chatId, record.messageId, html);
     }
   }
 
-  function begin(): void {
+  /** `staleText` — квитанция для карточек, оставшихся от прошлого запуска: хост перезапущен или канал включили заново. */
+  function begin(staleText: string): void {
     if (cfg?.telegramEnabled !== true || token === null) return;
+    const mine = (generation += 1);
     const bot = createBotApi({
       token,
       ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }),
@@ -853,13 +899,17 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       log,
     });
     rebase();
-    if (owner() !== null) closeStaleCards();
+    if (owner() !== null) closeStaleCards(staleText);
     poller = createPoller({
       api: bot,
       offset: () => state.get().offset,
-      setOffset: (next) => state.update({ offset: next }),
+      setOffset: (next) => {
+        if (mine === generation) state.update({ offset: next });
+      },
       seen: (updateId) => state.seen(updateId),
-      onUpdate,
+      onUpdate: async (update) => {
+        if (mine === generation) await onUpdate(update);
+      },
       onStatus: (next, error) => setPolling(next, error === null ? null : maskTelegramTokens(error)),
       log,
     });
@@ -916,7 +966,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
         deps.works.onChange((snapshot) => onWorks(snapshot)),
         deps.activity.onChange((ref, live) => onActivity(ref, live)),
       );
-      begin();
+      begin(T.restarted);
       // База для `changed()`: окно уже знает это состояние из `telegram.status`, повторять его событием незачем.
       lastBroadcast = statusKey();
     },
@@ -947,7 +997,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       hint = savedHint;
       state.applyToken(telegramBotId(candidate), telegramTokenFingerprint(candidate));
       state.update({ botUsername: me.username });
-      begin();
+      begin(T.noLongerCurrent);
       changed();
       return { botUsername: me.username, hint: savedHint };
     },
@@ -970,8 +1020,23 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     },
 
     async unlink() {
-      if (owner() !== null) send('notice', T.unlinked, { plain: true });
-      for (const [shortId] of state.cardsFor(() => true)) closeCard(shortId, line('unlinked'));
+      const chatId = owner()?.chatId;
+      // Всё, что ещё стоит в очереди, к прежнему владельцу уже не уходит; правки и «Unlinked» ставятся после очистки.
+      const receipts = state.cardsFor(() => true).map(([shortId, record]) => ({ shortId, record, html: closedText(shortId, record, line('unlinked')) }));
+      if (noticeTimer !== null) clearTimeout(noticeTimer);
+      noticeTimer = null;
+      noticeBuffer = [];
+      noticeSilent = true;
+      outbox?.clear();
+      unsubscribeAll();
+      inflight.clear();
+      originals.clear();
+      for (const { shortId, record, html } of receipts) {
+        state.dropCard(shortId);
+        edit(record.chatId, record.messageId, html);
+      }
+      if (chatId !== undefined) send('notice', T.unlinked, { plain: true });
+      state.clearLetters();
       state.update({ owner: null, pendingLink: null });
       memory = emptyMemory();
       state.audit({ kind: 'unlink', result: 'unlinked' });
@@ -982,7 +1047,8 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
 
     async takeOver() {
       if (cfg?.telegramEnabled !== true || token === null) throw new HostError('conflict', 'Telegram is not active');
-      if (poller === null) begin();
+      rebase();
+      if (poller === null) begin(T.noLongerCurrent);
       else poller.start({ skipBacklog: true });
       syncHold();
     },
@@ -993,7 +1059,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       if (!started) return;
       if (!config.telegramEnabled) {
         if (was || poller !== null) disable();
-      } else if (!was || poller === null) begin();
+      } else if (!was || poller === null) begin(T.noLongerCurrent);
       changed();
     },
 
