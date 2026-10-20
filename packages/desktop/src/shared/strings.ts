@@ -1744,6 +1744,11 @@ export const S = {
       resumeAgents: 'Resume agents',
       /** Подпись на странице, пока агент снимает её в чужом размере (спека 4.8). */
       agentCapture: (width: number, height: number): string => `Agent capture ${width}×${height}`,
+      /** Значок агента в строке страницы (этап D): кто работает на странице и кнопка Stop. */
+      agentActing: (session: string): string => `${session} is using this page`,
+      agentStop: 'Stop',
+      agentStopHint: 'Stop the agent and pause agents in this browser',
+      agentRecent: (recent: string[]): string => `Recent: ${recent.join(', ')}`,
     },
   },
 

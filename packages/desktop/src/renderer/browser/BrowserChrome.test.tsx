@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { S } from '../../shared/strings.js';
 import { BrowserChrome, type BrowserChromeProps } from './BrowserChrome.js';
 
 afterEach(cleanup);
@@ -237,5 +238,15 @@ describe('BrowserChrome — без контейнерного запроса (P2
     resizeRow(400);
     const buttons = within(screen.getByTestId('browser-chrome')).getAllByRole('button') as HTMLButtonElement[];
     expect(buttons.filter((button) => button.disabled).map((button) => button.getAttribute('aria-label'))).toEqual(['Back', 'Forward']);
+  });
+
+  it('значок агента — перед консолью, только когда agent задан', () => {
+    renderChrome({ paused: false, onPause: vi.fn(), agent: null });
+    expect(screen.queryByTestId('agent-badge')).toBeNull();
+    cleanup();
+    renderChrome({ paused: false, onPause: vi.fn(), agent: { session: 'S02', recent: [] }, onAgentStop: vi.fn() });
+    const badge = screen.getByTestId('agent-badge');
+    const consoleButton = screen.getByRole('button', { name: S.browser.devtools.toggle });
+    expect(badge.compareDocumentPosition(consoleButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

@@ -27,6 +27,7 @@ import { S } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu.js';
 import { AddressBar } from './AddressBar.js';
+import { AgentBadge } from './AgentBadge.js';
 import type { BrowserMode } from './store.js';
 import { ViewportMenu } from './ViewportMenu.js';
 
@@ -67,6 +68,9 @@ export interface BrowserChromeProps {
   /** Агенты панели на паузе (спека 4.8) — только у страницы панели; `onPause` есть тоже только у неё. */
   paused?: boolean;
   onPause?(next: boolean): void;
+  /** Агент работает на странице (этап D): значок перед консолью; только у страницы панели. */
+  agent?: { session: string; recent: string[] } | null;
+  onAgentStop?(): void;
 }
 
 /** Ширина содержимого строки (без отступов), с которой видна подпись кнопки размера: порог прежнего контейнерного запроса. */
@@ -148,6 +152,7 @@ export function BrowserChrome(props: BrowserChromeProps): JSX.Element {
         <PencilLine className="size-3.5" aria-hidden="true" />
       </ModeButton>
       {props.targetMenu}
+      {props.agent != null ? <AgentBadge session={props.agent.session} recent={props.agent.recent} onStop={() => props.onAgentStop?.()} /> : null}
       <button
         type="button"
         aria-label={S.browser.devtools.toggle}
