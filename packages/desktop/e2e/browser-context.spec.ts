@@ -887,6 +887,10 @@ test.describe('контекст из браузера в чат (этап B)', (
     // рамку снимает main, увидев мышь у окна.
     await window.mouse.move(page.x + 10, page.y - 10);
     await expect.poll(hover).toBeNull();
+    // Курсор вернулся — рамка снова есть: движения после ухода гость не отбрасывает (timeStamp события и performance.now()
+    // у Chromium — от одного начала отсчёта).
+    await window.mouse.move(page.x + save.x + save.width / 2, page.y + save.y + save.height / 2, { steps: 3 });
+    await expect.poll(hover).toEqual(save);
   });
 
   test('N1: метка у правого нижнего угла при открытой панели DevTools — редактор целиком в поле страницы, не на панели', async () => {

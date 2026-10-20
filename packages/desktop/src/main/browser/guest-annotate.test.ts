@@ -264,16 +264,36 @@ describe('guest-annotate.js в jsdom (спека браузера 4.7; слой 
     await picking;
   });
 
-  it('sync снимает подсветку: следом окно снимает страницу с номерами, рамке под курсором на снимке не место', async () => {
+  it('unhover от main: движение старше ухода курсора (ввод гостя выровнен по кадру и пришёл позже вызова) рамку не возвращает, новое — возвращает', async () => {
     const picking = runScript();
     dispatchTrusted(button, mouse('mousemove', { clientX: 100, clientY: 80 }));
     expect(hoverBox()).not.toBeNull();
-    controller().sync([]);
+    // В Chromium timeStamp события и performance.now() — от одного начала отсчёта; в jsdom timeStamp — Date.now().
+    const now = vi.spyOn(performance, 'now').mockReturnValue(Date.now() + 60_000);
+    controller().unhover();
     expect(hoverBox()).toBeNull();
-    dispatchTrusted(button, mouse('mousemove', { clientX: 100, clientY: 80 }));
+    dispatchTrusted(button, mouse('mousemove', { clientX: 101, clientY: 80 }));
+    expect(hoverBox()).toBeNull();
+    now.mockReturnValue(Date.now() - 60_000);
+    controller().unhover();
+    dispatchTrusted(button, mouse('mousemove', { clientX: 101, clientY: 80 }));
     expect(hoverBox()).not.toBeNull();
     controller().cancel();
     await picking;
+  });
+
+  it('новое ожидание не верит старой точке курсора (он мог уйти в редактор окна без слежки main): прокрутка до первого движения рамку не рисует', async () => {
+    const first = runScript();
+    dispatchTrusted(button, mouse('mousemove', { clientX: 40, clientY: 40 }));
+    click(button, 40, 40);
+    await first;
+    const next = runScript();
+    window.dispatchEvent(new Event('scroll'));
+    expect(hoverBox()).toBeNull();
+    dispatchTrusted(button, mouse('mousemove', { clientX: 40, clientY: 40 }));
+    expect(hoverBox()).not.toBeNull();
+    controller().cancel();
+    await next;
   });
 
   it('прокрутка под неподвижным курсором — рамка по новому месту элемента', async () => {

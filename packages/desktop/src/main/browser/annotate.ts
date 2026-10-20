@@ -30,8 +30,9 @@ const PIN_KEY = /^a\d{1,6}$/;
 /** До трёх элементов под рамкой (спека 4.7). */
 const MAX_UNDER = 3;
 const CANCEL_SCRIPT = 'globalThis.__parleyAnnotate?.cancel()';
-const COUNT_SCRIPT = 'globalThis.__parleyAnnotate?.count() ?? 0';
 const UNHOVER_SCRIPT = 'globalThis.__parleyAnnotate?.unhover()';
+// Перед снимком: подсветка под курсором снята (на снимке ей не место), затем счёт меток.
+const COUNT_SCRIPT = `${UNHOVER_SCRIPT}, globalThis.__parleyAnnotate?.count() ?? 0`;
 
 /** Ответ скрипта после проверки: у метки на элементе — ещё точка и прокрутка для CDP (в окно не уходят). */
 type ValidAnnotationPick = AnnotationRegionTarget | (AnnotationElementTarget & { point: Point | null; scroll: Point }) | { kind: 'edit'; n: number };
@@ -156,8 +157,8 @@ export function createAnnotate(deps: {
       const onGone = (): void => finish(null);
       // Подсветка под курсором (guest-annotate.js) есть, пока скрипт ждёт метку. Ухода курсора с <webview> гость не видит:
       // Chromium не шлёт ему ни mouseout, ни mouseleave (проба Electron 44), а хозяин не видит входа на страницу. Main видит
-      // ввод обоих: мышь у окна после движения по странице — подсветка снимается, одним вызовом на уход. Сначала `over` —
-      // да: подсветка могла остаться от прежнего ожидания.
+      // ввод обоих: мышь у окна после движения по странице — подсветка снимается, одним вызовом на уход. Начальное
+      // `over = true`: первое движение у окна снимает рамку на всякий случай.
       const host = contents.hostWebContents ?? null;
       let over = true;
       const unhover = (): void => {

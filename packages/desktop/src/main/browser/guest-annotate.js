@@ -59,11 +59,12 @@
     // Рамка протяжки — пока человек тянет; вне слоя, чтобы рисоваться без кадра.
     const box = document.createElement('div');
     box.style.cssText = `position:fixed;display:none;box-sizing:border-box;border:2px dashed ${COLOR};z-index:2147483647;pointer-events:none;`;
-    // Подсветка под курсором — тоже вне слоя: слой вынут, пока меток нет.
+    // Подсветка под курсором — тоже вне слоя: слой вынут, пока меток нет. Под слоем меток (z-index ниже хоста): заливка
+    // большого элемента не ложится на номера соседних меток.
     const hover = document.createElement('div');
     hover.style.cssText =
       `position:fixed;display:none;left:0;top:0;box-sizing:border-box;border:2px solid ${COLOR};border-radius:2px;` +
-      'background:rgba(245,158,11,0.08);z-index:2147483647;pointer-events:none;';
+      'background:rgba(245,158,11,0.08);z-index:2147483645;pointer-events:none;';
 
     const targets = new Map(); // ключ → { el } у элемента или { rect } у рамки (координаты документа)
     const nodes = new Map(); // ключ → { outline, badge } в shadow-корне
@@ -77,6 +78,7 @@
     let down = null;
     let dragging = false;
     let hoverAt = null; // последняя точка курсора человека над страницей
+    let leftAt = -Infinity; // когда main сказал, что курсор ушёл со страницы (unhover), — время performance.now()
     let frame = 0;
 
     /** Хост слоя: `position: fixed` на весь вьюпорт, закрытый shadow-корень (Orca ensureOverlay). */
@@ -322,6 +324,9 @@
     function onMove(event) {
       if (!event.isTrusted) return;
       if (down === null) {
+        // Движение старше ухода курсора: ввод гостя выровнен по кадру и может прийти позже вызова unhover — рамка ожила
+        // бы у края и осталась висеть.
+        if (event.timeStamp <= leftAt) return;
         hoverAt = { x: event.clientX, y: event.clientY };
         showHover();
         return;
@@ -406,6 +411,8 @@
       pick() {
         arm();
         settle(null);
+        // Курсор с прошлого ожидания мог уйти в окно (редактор, лоток), а слежки main тогда не было: старой точке не верить.
+        hideHover();
         return new Promise((resolve) => {
           pending = resolve;
         });
@@ -417,9 +424,6 @@
       sync(list) {
         pins = list.filter((pin) => targets.has(pin.key));
         provisional = null;
-        // Перед снимком с номерами окно всегда перерисовывает метки (addAnnotationsToChat): подсветке на нём не место.
-        // Вернётся с первым движением курсора.
-        hideHover();
         updateMarkers();
         return list.map((pin) => {
           const rect = viewRect(pin.key);
@@ -439,8 +443,10 @@
       waiting() {
         return pending !== null;
       },
-      // Курсор ушёл со страницы на окно Parley (редактор, лоток, чат): рамке не висеть и не попасть на снимок.
+      // Курсор ушёл со страницы на окно Parley (редактор, лоток, чат), или main снимает страницу с номерами для чата:
+      // рамке не висеть и не попасть на снимок. Вернётся с первым движением курсора после этого.
       unhover() {
+        leftAt = performance.now();
         hideHover();
       },
     };

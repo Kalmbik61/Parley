@@ -330,7 +330,7 @@ describe('createAnnotate — все вызовы страницы идут в м
     expect(codes).toEqual([
       'GUEST_SCRIPT',
       'globalThis.__parleyAnnotate?.sync([{"n":1,"key":"a1"}]) ?? null',
-      'globalThis.__parleyAnnotate?.count() ?? 0',
+      'globalThis.__parleyAnnotate?.unhover(), globalThis.__parleyAnnotate?.count() ?? 0',
       'globalThis.__parleyAnnotate?.cancel()',
     ]);
     expect(worlds).toEqual(codes.map(() => PICK_WORLD_ID));
