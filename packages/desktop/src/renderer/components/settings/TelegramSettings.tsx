@@ -165,7 +165,7 @@ export function TelegramSettings({ bridge, config, locked, save, hostMethods }: 
         </Button>
       ) : null}
 
-      <div className={enabled ? 'flex flex-col gap-3' : 'flex flex-col gap-3 opacity-60 pointer-events-none'} data-testid="telegram-body">
+      <div className={enabled ? 'flex flex-col gap-3' : 'flex flex-col gap-3 opacity-60'} data-testid="telegram-body">
       <div className="flex items-center gap-2">
         <Input
           type="password"

@@ -110,12 +110,17 @@ describe('TelegramSettings', () => {
     }
   });
 
-  it('при выключенном Send to Telegram остальное приглушено и недоступно мышью', async () => {
-    mount(base, config({ telegramEnabled: false }));
+  it('при выключенном Send to Telegram остальное приглушено, но кнопки работают', async () => {
+    bridge.setHandler('telegram.unlink', () => ({ ok: true }));
+    bridge.setHandler('telegram.clearToken', () => ({ ok: true }));
+    mount(linked, config({ telegramEnabled: false }));
     const body = await screen.findByTestId('telegram-body');
-    expect(body.className).toContain('pointer-events-none');
-    expect(body.contains(screen.getByTestId('telegram-token'))).toBe(true);
-    expect(screen.getByTestId('telegram-enabled').closest('[data-testid="telegram-body"]')).toBeNull();
+    expect(body.className).toContain('opacity-60');
+    expect(body.className).not.toContain('pointer-events-none');
+    fireEvent.click(screen.getByTestId('telegram-unlink'));
+    await waitFor(() => expect(bridge.calls.some((call) => call.method === 'telegram.unlink')).toBe(true));
+    fireEvent.click(screen.getByTestId('telegram-remove'));
+    await waitFor(() => expect(bridge.calls.some((call) => call.method === 'telegram.clearToken')).toBe(true));
   });
 
   it('событие telegram.changed с owner переключает на Linked и открывает четыре переключателя', async () => {
