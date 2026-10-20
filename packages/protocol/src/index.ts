@@ -125,9 +125,14 @@ export { SHARED_FILE_PATH, HISTORY_SEARCH_MAX_LIMIT, HISTORY_SEARCH_DEFAULT_LIMI
 export type { HistoryHitView, HistorySearchView, HistoryMethodName, HistoryMethodParams, HistoryMethodResults } from './history.js';
 
 export {
+  AGENT_ACTIONS,
+  AGENT_COOKIE_ACTIONS,
   AGENT_INPUT,
   AGENT_LIMITS,
+  AGENT_MODIFIERS,
+  AGENT_STORAGE_ACTIONS,
   AGENT_VIEWPORT,
+  AGENT_VIEWPORT_PRESETS,
   AGENT_DEFAULTS,
   BROWSER_AGENT_ERROR_CODES,
   BROWSER_AGENT_FEATURE,
@@ -138,10 +143,19 @@ export {
   browserAgentResultParams,
 } from './browser-agent.js';
 export type {
+  BrowserAgentAction,
+  BrowserAgentActionResult,
   BrowserAgentArgs,
   BrowserAgentConsoleEntry,
   BrowserAgentConsoleResult,
+  BrowserAgentCookie,
+  BrowserAgentCookiesResult,
+  BrowserAgentDownload,
+  BrowserAgentDownloadsResult,
   BrowserAgentErrorCode,
+  BrowserAgentEvaluateResult,
+  BrowserAgentModifier,
+  BrowserAgentNavigateResult,
   BrowserAgentNetworkResult,
   BrowserAgentOp,
   BrowserAgentOpEvent,
@@ -149,10 +163,14 @@ export type {
   BrowserAgentOwner,
   BrowserAgentRequestDetail,
   BrowserAgentRequestSummary,
+  BrowserAgentResizeResult,
   BrowserAgentResult,
   BrowserAgentScreenshotResult,
+  BrowserAgentSnapshotResult,
+  BrowserAgentStorageResult,
   BrowserAgentTabInfo,
   BrowserAgentTabsResult,
+  BrowserAgentWaitResult,
 } from './browser-agent.js';
 export { assistantMethodSchemas } from './assistant.js';
 export type {
