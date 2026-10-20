@@ -226,6 +226,27 @@ describe('одалживание фокуса', () => {
     expect(viewBlur).not.toHaveBeenCalled();
   });
 
+  it('цепочка двух лендеров (страховка к аренде клавиатуры main, финальная рецензия B1): фокус возвращается в Chat, а не в <webview> первого агента', () => {
+    const chat = document.createElement('textarea');
+    document.body.append(chat);
+    chat.focus();
+    const first = document.createElement('webview');
+    first.tabIndex = 0;
+    const second = document.createElement('webview');
+    second.tabIndex = 0;
+    document.body.append(first, second);
+    const a = createFocusLender({ view: () => first, webContentsId: 7, ready: vi.fn() });
+    const b = createFocusLender({ view: () => second, webContentsId: 8, ready: vi.fn() });
+    a.borrow('f-12');
+    b.borrow('f-13');
+    expect(document.activeElement).toBe(second);
+    a.restore();
+    b.restore();
+    expect(document.activeElement).toBe(chat);
+    expect(isLendingFocus(7)).toBe(false);
+    expect(isLendingFocus(8)).toBe(false);
+  });
+
   it('dispose возвращает фокус и снимает флаг', () => {
     const chat = document.createElement('textarea');
     document.body.append(chat);

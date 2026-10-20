@@ -111,8 +111,11 @@ export function resetAgentActivity(): void {
   useActivityStore.setState({ byId: {} });
 }
 
-/** Гости, которым окно сейчас одалживает фокус: их `focus` не делает вкладку или группу активной (рецензия M1). */
-const lending = new Set<number>();
+/**
+ * Гости, которым окно сейчас одалживает фокус → их `<webview>` и элемент человека, которому фокус вернуть. `focus` такого
+ * гостя не делает вкладку или группу активной (рецензия M1); одалживание поверх чужого берёт элемент человека (B1).
+ */
+const lending = new Map<number, { node: Element; previous: Element | null }>();
 
 export function isLendingFocus(webContentsId: number | null): boolean {
   return webContentsId !== null && lending.has(webContentsId);
@@ -164,9 +167,13 @@ export function createFocusLender({ view, webContentsId, ready }: FocusLenderOpt
         return;
       }
       const active = document.activeElement;
-      // Повторная просьба в той же операции: прежний элемент человека остаётся тем, кому вернуть фокус.
-      if (previous === undefined) previous = active;
-      lending.add(webContentsId);
+      // Повторная просьба в той же операции: прежний элемент человека остаётся тем, кому вернуть фокус. Фокус одолжен
+      // другой странице (страховка к аренде клавиатуры main, финальная рецензия B1): вернуть его — человеку, а не в чужой `<webview>`.
+      if (previous === undefined) {
+        const lent = [...lending.values()].find((entry) => entry.node === active);
+        previous = lent === undefined ? active : lent.previous;
+      }
+      lending.set(webContentsId, { node, previous });
       // Фокус в другом госте: сначала отдать его окну, иначе ввод агента уйдёт в того гостя.
       const other = active !== node && active instanceof HTMLElement && isGuestView(active) ? active : null;
       other?.blur();
