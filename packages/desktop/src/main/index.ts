@@ -697,6 +697,13 @@ if (!gotLock) {
         window.webContents.send('browser:agent-open-tab', e);
         return true;
       },
+      // Размер от агента: вкладку ставит окно (раскладка и эмуляция — его дело); ответа нет, main смотрит `emulation.current`.
+      resize: (e) => {
+        const host = webContents.fromId(e.webContentsId)?.hostWebContents;
+        if (host === undefined || host === null || host.isDestroyed()) return false;
+        host.send('browser:agent-resize', e);
+        return true;
+      },
       fromId: (id) => webContents.fromId(id) ?? null,
       inspector,
       emulation,
@@ -714,6 +721,7 @@ if (!gotLock) {
           const image = nativeImage.createFromBuffer(png);
           return image.crop({ x: 0, y: top, width: image.getSize().width, height }).toPNG();
         },
+        cropRect: (png, rect) => nativeImage.createFromBuffer(png).crop(rect).toPNG(),
       },
       inGuest: (guest, code) => guest.executeJavaScriptInIsolatedWorld(PICK_WORLD_ID, [{ code }]),
       screenDpr: async (guest) => {

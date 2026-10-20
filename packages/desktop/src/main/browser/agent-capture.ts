@@ -15,6 +15,7 @@ import { VIEWPORT_PRESETS, viewportSize } from '../../shared/browser-devtools.js
 import type { ViewportPreset, ViewportSpec } from '../../shared/browser-devtools.js';
 import type { AgentActivity } from '../../shared/browser-types.js';
 import { AgentOpError } from './agent-errors.js';
+import type { AgentDom } from './agent-dom.js';
 import { urlForAgent } from './agent-url.js';
 import type { LayoutMetrics, PageRecord, PageRegistry } from './agent-pages.js';
 import type { Emulation } from './emulation.js';
@@ -74,7 +75,11 @@ export interface AgentCaptureDeps {
     stitch(parts: Buffer[]): Buffer;
     /** Строки PNG `top`…`top + height` (в пикселях картинки) на всю её ширину. */
     crop(png: Buffer, top: number, height: number): Buffer;
+    /** Прямоугольник PNG (в пикселях картинки): снимок элемента (`ref`). */
+    cropRect(png: Buffer, rect: { x: number; y: number; width: number; height: number }): Buffer;
   };
+  /** Ссылки `eN` и рамка узла: снимок элемента (`ref`). */
+  dom: Pick<AgentDom, 'nodeOf' | 'boxOf'>;
   activity(e: AgentActivity): void;
   /**
    * Код main в мире гостя, изолированном от скриптов страницы (прокрутка fullPage): ответ — значение последнего выражения.
@@ -162,6 +167,16 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
 
   async function screenshotOf(contents: WebContents, record: PageRecord, request: BrowserAgentOpEvent, args: BrowserAgentArgs<'screenshot'>, signal: AbortSignal): Promise<BrowserAgentScreenshotResult> {
     const id = contents.id;
+    // Снимок элемента: ссылка проверяется и страница прокручивается к узлу до всего прочего (чужой документ — stale_ref).
+    let element: number | null = null;
+    if (args.ref !== undefined) {
+      element = deps.dom.nodeOf(contents, record, args.ref);
+      try {
+        await deps.inspector.send(id, 'DOM.scrollIntoViewIfNeeded', { backendNodeId: element });
+      } catch {
+        throw new AgentOpError('stale_ref', `The ref ${args.ref} is no longer on the page: take a new browser_snapshot and use its refs.`);
+      }
+    }
     const metrics = await deps.inspector.send<LayoutMetrics>(id, 'Page.getLayoutMetrics');
     // Эпоха документа до съёмки: после неё сверяется, что страница не сменилась посреди снимка (аудит 3.2, R2).
     const epoch0 = deps.inspector.snapshot(id)?.epoch;
@@ -211,6 +226,25 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
 
     const notes: string[] = [];
     /**
+     * Вырезка рамки элемента из снимка вьюпорта: рамка берётся в той же эмуляции, множитель — «ширина PNG / CSS-ширина вьюпорта»
+     * (CDP `clip` в `<webview>` ненадёжен). Видимая часть рамки; от элемента вне вьюпорта — `bad_request`.
+     */
+    const cropElement = async (png: Buffer, node: number, factor: number): Promise<Buffer> => {
+      const box = await deps.dom.boxOf(contents, node);
+      const left = Math.max(0, box.x);
+      const top = Math.max(0, box.y);
+      const right = Math.min(view.width, box.x + box.width);
+      const bottom = Math.min(view.height, box.y + box.height);
+      if (right <= left || bottom <= top) {
+        throw new AgentOpError('bad_request', `The element ${args.ref ?? ''} is outside the viewport: scroll to it or take a browser_snapshot again.`);
+      }
+      if ((right - left < box.width || bottom - top < box.height) && factor === 1) notes.push('The element is larger than the viewport; the screenshot shows its visible part.');
+      const ratio = pngSize(png).width / view.width;
+      const x = Math.floor(left * ratio);
+      const y = Math.floor(top * ratio);
+      return deps.image.cropRect(png, { x, y, width: Math.max(1, Math.ceil(right * ratio) - x), height: Math.max(1, Math.ceil(bottom * ratio) - y) });
+    };
+    /**
      * Клип с масштабом уменьшает PNG прямо в Chromium, без декода на main, но на экране с DPR > 1 он ненадёжен: сразу после
      * смены размера Chromium отдаёт то верный кадр, то неверную четверть страницы (спайк 0, В3; повтор пробы на DPR 2 дал то же).
      * Поэтому клип — только на экране с DPR 1; fullPage его не берёт: полосы склеиваются на main, длинная сторона режется после
@@ -234,7 +268,8 @@ export function createAgentCapture(deps: AgentCaptureDeps): AgentCapture {
       if (args.fullPage !== true) {
         const scale = scaleFor(view.width, view.height, factor);
         const clip = { x: now.cssLayoutViewport.pageX, y: now.cssLayoutViewport.pageY, width: view.width, height: view.height, scale };
-        return { png: await shoot(canClip && scale < 1 ? clip : null), viewport: view, clipped: canClip };
+        const png = await shoot(canClip && scale < 1 ? clip : null);
+        return { png: element === null ? png : await cropElement(png, element, factor), viewport: view, clipped: canClip };
       }
       // Высота страницы — уже при нужном размере (под временной эмуляцией вёрстка другая).
       const content = Math.max(view.height, Math.ceil(now.cssContentSize.height));

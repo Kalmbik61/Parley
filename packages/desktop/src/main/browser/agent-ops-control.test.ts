@@ -5,15 +5,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BrowserAgentOpEvent, BrowserAgentResult } from '@parley/protocol';
 import type { WebContents } from 'electron';
-import type { DevtoolsSnapshot } from '../../shared/browser-devtools.js';
-import type { AgentPageRegistration } from '../../shared/browser-types.js';
+import type { DevtoolsSnapshot, ViewportSpec } from '../../shared/browser-devtools.js';
+import type { AgentOpenTab, AgentPageRegistration, AgentResize } from '../../shared/browser-types.js';
 import { workKey } from '../../shared/work-keys.js';
 import { createPageRegistry } from './agent-pages.js';
 import type { InputGuard } from './agent-input.js';
 import { AGENT_LIMITS } from '@parley/protocol';
+import type { BrowserAgentNavigateResult, BrowserAgentOpenResult, BrowserAgentResizeResult, BrowserAgentScreenshotResult } from '@parley/protocol';
 import { createAgentWindow } from './agent-window.js';
 import { createTypingClock } from './human-typing.js';
-import { createAgentOps, createFocusBorrower, createPageRunner, createWindowHooks, routeDownload, AgentOpError, type PageUse } from './agent-ops.js';
+import { agentViewport, createAgentOps, createFocusBorrower, createPageRunner, createWindowHooks, NOT_MOUNTED_NOTE, resolveAgentUrl, routeDownload, AgentOpError, type PageUse } from './agent-ops.js';
 
 const REF = { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' };
 const WORK = workKey(REF.projectPath, REF.workId);
@@ -21,7 +22,25 @@ const OWN = { kind: 'session', sessionId: 's-02' } as const;
 const GEN = 'gen-1';
 
 function fakeGuest(id: number, url = 'http://localhost:5173/settings', title = 'Settings') {
-  return { id, getURL: vi.fn(() => url), getTitle: vi.fn(() => title), isDestroyed: vi.fn(() => false), isCrashed: vi.fn(() => false), getZoomFactor: vi.fn(() => 1), isLoading: vi.fn(() => false), on: vi.fn(), off: vi.fn() };
+  const state = { url, loading: false };
+  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+  return {
+    id,
+    state,
+    getURL: vi.fn(() => state.url),
+    getTitle: vi.fn(() => title),
+    isDestroyed: vi.fn(() => false),
+    isCrashed: vi.fn(() => false),
+    getZoomFactor: vi.fn(() => 1),
+    isLoading: vi.fn(() => state.loading),
+    on: vi.fn((event: string, listener: (...args: unknown[]) => void) => { listeners.set(event, (listeners.get(event) ?? new Set()).add(listener)); }),
+    off: vi.fn((event: string, listener: (...args: unknown[]) => void) => { listeners.get(event)?.delete(listener); }),
+    emit(event: string, ...args: unknown[]): void { for (const listener of [...(listeners.get(event) ?? [])]) listener(...args); },
+    loadURL: vi.fn(async (next: string) => { state.url = next; }),
+    reload: vi.fn(),
+    reloadIgnoringCache: vi.fn(),
+    navigationHistory: { canGoBack: vi.fn(() => true), canGoForward: vi.fn(() => true), goBack: vi.fn(), goForward: vi.fn() },
+  };
 }
 type Guest = ReturnType<typeof fakeGuest>;
 
@@ -47,22 +66,40 @@ function devtoolsWith(options: { consoleText: string; requestUrl: string }): Dev
 }
 
 /** Полный `createAgentOps` с внешней страницей. */
-function setup(options: { url?: string; requestFocus?: (contents: WebContents, id: string) => boolean; uploadHome?: string } = {}) {
+function setup(options: { url?: string; requestFocus?: (contents: WebContents, id: string) => boolean; uploadHome?: string; page?: boolean; openReply?: { mounted: boolean }; openMs?: number; resizeMs?: number; resizeApplies?: boolean } = {}) {
   const guests = new Map<number, Guest>([[7, fakeGuest(7, options.url ?? 'http://localhost:5173/settings')]]);
+  const emulationState = new Map<number, ViewportSpec | null>();
+  const resize = vi.fn((e: AgentResize): boolean => {
+    if (options.resizeApplies !== false) emulationState.set(e.webContentsId, e.viewport);
+    return true;
+  });
+  const asked: AgentOpenTab[] = [];
   const inspector = {
     snapshot: vi.fn((): DevtoolsSnapshot | null => ({ epoch: 1, capture: 'on', console: [], network: [] })),
     send: vi.fn(async (): Promise<unknown> => ({})),
     responseBody: vi.fn(async () => null),
     onEvent: vi.fn(() => () => undefined),
   };
+  const cropRect = vi.fn<(data: Buffer, rect: { x: number; y: number; width: number; height: number }) => Buffer>((data) => data);
+  const ctx = { ops: null as unknown as ReturnType<typeof createAgentOps> };
   const ops = createAgentOps({
     agentsAllowed: async () => true,
-    openTab: () => false,
+    openTab: (e: AgentOpenTab) => {
+      asked.push(e);
+      if (options.openReply === undefined) return false;
+      const reply = options.openReply;
+      queueMicrotask(() => ctx.ops.openTabResult(e.requestId, { tabId: 'bp-aaaaaa', reused: false, mounted: reply.mounted }));
+      return true;
+    },
+    ...(options.openMs === undefined ? {} : { openMs: options.openMs }),
+    ...(options.resizeMs === undefined ? {} : { resizeMs: options.resizeMs }),
+    pollMs: 10,
+    resize,
     fromId: (id) => (guests.get(id) as unknown as WebContents | undefined) ?? null,
     inspector: inspector as never,
-    emulation: { current: () => null, fitOf: () => null, withTemporary: async (_id: number, _spec: unknown, run: () => Promise<unknown>) => run() } as never,
+    emulation: { current: (id: number) => emulationState.get(id) ?? null, fitOf: () => null, withTemporary: async (_id: number, _spec: unknown, run: () => Promise<unknown>) => run() } as never,
     saveImage: async () => '/drops/shot.png',
-    image: { resize: (data: Buffer) => data, stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data },
+    image: { resize: (data: Buffer) => data, stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data, cropRect },
     inGuest: async () => undefined,
     activity: () => undefined,
     agentWindow: createAgentWindow(),
@@ -70,10 +107,12 @@ function setup(options: { url?: string; requestFocus?: (contents: WebContents, i
     ...(options.requestFocus === undefined ? {} : { requestFocus: options.requestFocus }),
     ...(options.uploadHome === undefined ? {} : { uploadHome: options.uploadHome }),
   });
+  ctx.ops = ops;
   ops.registerTab({ kind: 'hello', generation: GEN });
-  ops.registerTab({ kind: 'page', generation: GEN, webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true });
+  const registerPage = (): void => ops.registerTab({ kind: 'page', generation: GEN, webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true });
+  if (options.page !== false) registerPage();
   const run = (op: string, args: unknown = {}): Promise<BrowserAgentResult> => ops.run({ ...request(op), args });
-  return { ops, inspector, guests, run };
+  return { ops, inspector, guests, run, resize, emulationState, asked, cropRect, registerPage };
 }
 
 /** Только `createPageRunner` со своим реестром; страницы `t1` (гость 7) и, по просьбе, `t2` (гость 8). */
@@ -414,5 +453,152 @@ describe('action через createAgentOps (задача 17)', () => {
     requestFocus.mockClear();
     expect(codeOf(await ctx.run('action', { tab: 't2', action: 'type', text: 'Ann' }))).toBe('tab_hidden');
     expect(requestFocus).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('navigate, resize, open, снимок элемента (задача 18)', () => {
+  it('resolveAgentUrl: путь — от адреса страницы; другие схемы — null', () => {
+    expect(resolveAgentUrl('/settings?x=1', 'https://app.example.test/a/b')).toBe('https://app.example.test/settings?x=1');
+    expect(resolveAgentUrl('https://example.com/', 'http://localhost/')).toBe('https://example.com/');
+    for (const raw of ['file:///etc/hosts', 'javascript:alert(1)', 'chrome://settings']) expect(resolveAgentUrl(raw, 'http://localhost/'), raw).toBeNull();
+    expect(resolveAgentUrl('/x', 'about:blank')).toBeNull();
+  });
+
+  it('agentViewport: пресет с DPR правила меню; свой размер — не мобильный, DPR текущий или 1; fit — null', () => {
+    expect(agentViewport({ tab: 't1', preset: 'mobile-m' }, null)).toEqual({ preset: 'mobile-m', rotated: false, dpr: 2 });
+    expect(agentViewport({ tab: 't1', preset: 'laptop', rotated: true }, { preset: 'tablet', rotated: false, dpr: 3 })).toEqual({ preset: 'laptop', rotated: true, dpr: 3 });
+    expect(agentViewport({ tab: 't1', width: 500, height: 400 }, null)).toEqual({ width: 500, height: 400, mobile: false, dpr: 1 });
+    expect(agentViewport({ tab: 't1', width: 500, height: 400 }, { preset: 'mobile-m', rotated: false, dpr: 2 })).toEqual({ width: 500, height: 400, mobile: false, dpr: 2 });
+    expect(agentViewport({ tab: 't1', fit: true }, { preset: 'mobile-m', rotated: false, dpr: 2 })).toBeNull();
+  });
+
+  it('navigate url: loadURL, ждёт загрузку, ответ — адрес и заголовок с маской; back/forward/reload/hard — методы webContents', async () => {
+    const ctx = setup();
+    const guest = ctx.guests.get(7) as Guest;
+    const result = okResult<BrowserAgentNavigateResult>(await ctx.run('navigate', { tab: 't1', url: 'https://example.test/login?token=SECRET' }));
+    expect(guest.loadURL).toHaveBeenCalledWith('https://example.test/login?token=SECRET');
+    expect(result).toMatchObject({ tab: 't1', url: 'https://example.test/login?token=<redacted>', loaded: true });
+    expect(JSON.stringify(result)).not.toContain('SECRET');
+    await ctx.run('navigate', { tab: 't1', back: true });
+    expect(guest.navigationHistory.goBack).toHaveBeenCalled();
+    await ctx.run('navigate', { tab: 't1', forward: true });
+    expect(guest.navigationHistory.goForward).toHaveBeenCalled();
+    await ctx.run('navigate', { tab: 't1', reload: true });
+    expect(guest.reload).toHaveBeenCalled();
+    await ctx.run('navigate', { tab: 't1', reload: true, hard: true });
+    expect(guest.reloadIgnoringCache).toHaveBeenCalled();
+    expect(codeOf(await ctx.run('navigate', { tab: 't1', url: 'file:///etc/hosts' }))).toBe('bad_request');
+    expect(guest.loadURL).toHaveBeenCalledTimes(1);
+  });
+
+  it('navigate: ERR_ABORTED не ошибка (скачивание); другой отказ загрузки — loaded: false и заметка; назад без истории — заметка', async () => {
+    const ctx = setup();
+    const guest = ctx.guests.get(7) as Guest;
+    guest.loadURL.mockRejectedValueOnce(new Error('ERR_ABORTED (-3) loading "https://example.test/file.zip"'));
+    expect(okResult<BrowserAgentNavigateResult>(await ctx.run('navigate', { tab: 't1', url: 'https://example.test/file.zip' }))).toMatchObject({ loaded: true });
+    guest.loadURL.mockRejectedValueOnce(new Error('ERR_NAME_NOT_RESOLVED (-105) loading "https://nope.test/"'));
+    const failed = okResult<BrowserAgentNavigateResult>(await ctx.run('navigate', { tab: 't1', url: 'https://nope.test/' }));
+    expect(failed.loaded).toBe(false);
+    expect(failed.notes.join(' ')).toContain('ERR_NAME_NOT_RESOLVED');
+    guest.navigationHistory.canGoBack.mockReturnValue(false);
+    const none = okResult<BrowserAgentNavigateResult>(await ctx.run('navigate', { tab: 't1', back: true }));
+    expect(guest.navigationHistory.goBack).not.toHaveBeenCalled();
+    expect(none.notes.join(' ')).toContain('no page to go back');
+  });
+
+  it('navigate у занятой страницы — human_busy, loadURL не вызван', async () => {
+    const ctx = setup();
+    ctx.ops.registerTab({ kind: 'page', generation: GEN, webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true, humanBusy: true });
+    expect(codeOf(await ctx.run('navigate', { tab: 't1', url: 'https://example.test/' }))).toBe('human_busy');
+    expect((ctx.guests.get(7) as Guest).loadURL).not.toHaveBeenCalled();
+  });
+
+  it('resize: событие окну с ViewportSpec пресета (DPR — как правило меню размеров), ждёт emulation.current; fit — null', async () => {
+    const ctx = setup();
+    const result = okResult<BrowserAgentResizeResult>(await ctx.run('resize', { tab: 't1', preset: 'mobile-m' }));
+    expect(ctx.resize).toHaveBeenCalledWith({ webContentsId: 7, viewport: { preset: 'mobile-m', rotated: false, dpr: 2 } });
+    expect(result.viewport).toEqual({ width: 375, height: 812, emulated: true });
+    const fit = okResult<BrowserAgentResizeResult>(await ctx.run('resize', { tab: 't1', fit: true }));
+    expect(ctx.resize).toHaveBeenLastCalledWith({ webContentsId: 7, viewport: null });
+    expect(fit.viewport).toBeNull();
+  });
+
+  it('resize: окно не поставило размер за resizeMs — timeout; окна нет — window_not_connected', async () => {
+    const ctx = setup({ resizeApplies: false, resizeMs: 60 });
+    expect(codeOf(await ctx.run('resize', { tab: 't1', preset: 'laptop' }))).toBe('timeout');
+    ctx.resize.mockReturnValueOnce(false);
+    expect(codeOf(await ctx.run('resize', { tab: 't1', preset: 'laptop' }))).toBe('window_not_connected');
+  });
+
+  it('open: после ответа окна ждёт регистрацию страницы и загрузку — loaded и заголовок; не смонтирована — без ожидания, NOT_MOUNTED_NOTE', async () => {
+    const ctx = setup({ page: false, openReply: { mounted: true } });
+    const guest = ctx.guests.get(7) as Guest;
+    guest.state.loading = true;
+    setTimeout(() => ctx.registerPage(), 30);
+    setTimeout(() => { guest.state.loading = false; guest.emit('did-stop-loading'); }, 80);
+    const result = okResult<BrowserAgentOpenResult>(await ctx.run('open', { url: 'https://example.test/' }));
+    expect(result).toMatchObject({ tab: 't1', loaded: true, title: 'Settings', notes: [] });
+
+    const unmounted = setup({ page: false, openReply: { mounted: false } });
+    const skipped = okResult<BrowserAgentOpenResult>(await unmounted.run('open', { url: 'https://example.test/' }));
+    expect(skipped).toMatchObject({ loaded: false, title: '', notes: [NOT_MOUNTED_NOTE] });
+  });
+
+  it('open: регистрации нет за openMs — ok с loaded: false и заметкой; Stop во время ожидания загрузки — access_denied (рецензия m9)', async () => {
+    const quiet = setup({ page: false, openReply: { mounted: true }, openMs: 60 });
+    const pending = okResult<BrowserAgentOpenResult>(await quiet.run('open', { url: 'https://example.test/' }));
+    expect(pending).toMatchObject({ loaded: false, title: '' });
+    expect(pending.notes.join(' ')).toContain('browser_tabs');
+
+    const ctx = setup({ openReply: { mounted: true } });
+    (ctx.guests.get(7) as Guest).state.loading = true;
+    const running = ctx.run('open', { url: 'https://example.test/' });
+    await vi.waitFor(() => expect((ctx.guests.get(7) as Guest).on).toHaveBeenCalledWith('did-stop-loading', expect.anything()));
+    ctx.ops.stop(7);
+    expect(codeOf(await running)).toBe('access_denied');
+  });
+
+  it('screenshot с ref: прокрутка к элементу, снимок вьюпорта, вырезка рамки × (ширина PNG / CSS-ширина); элемент больше вьюпорта — видимая часть и заметка', async () => {
+    const ctx = setup();
+    let box = { x: 100, y: 200, width: 300, height: 60 };
+    const shot = Buffer.alloc(24);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(shot);
+    shot.writeUInt32BE(2560, 16);
+    shot.writeUInt32BE(1600, 20);
+    ctx.inspector.send.mockImplementation(async (_id: number, method: string): Promise<unknown> => {
+      switch (method) {
+        case 'Accessibility.getFullAXTree':
+          return { nodes: [
+            { nodeId: '1', ignored: false, role: { value: 'RootWebArea' }, name: { value: 'Page' }, childIds: ['2'], backendDOMNodeId: 1 },
+            { nodeId: '2', parentId: '1', ignored: false, role: { value: 'button' }, name: { value: 'Save' }, properties: [{ name: 'focusable', value: { value: true } }], backendDOMNodeId: 12 },
+          ] };
+        case 'Page.getLayoutMetrics':
+          return { layoutViewport: { clientWidth: 2560, clientHeight: 1600 }, cssLayoutViewport: { clientWidth: 1280, clientHeight: 800, pageX: 0, pageY: 0 }, cssContentSize: { x: 0, y: 0, width: 1280, height: 2000 } };
+        case 'Page.captureScreenshot':
+          return { data: shot.toString('base64') };
+        case 'DOM.getBoxModel': {
+          const { x, y, width, height } = box;
+          return { model: { content: [x, y, x + width, y, x + width, y + height, x, y + height] } };
+        }
+        default:
+          return {};
+      }
+    });
+    okResult(await ctx.run('snapshot', { tab: 't1' }));
+    const result = okResult<BrowserAgentScreenshotResult>(await ctx.run('screenshot', { tab: 't1', ref: 'e1' }));
+    expect(ctx.inspector.send).toHaveBeenCalledWith(7, 'DOM.scrollIntoViewIfNeeded', { backendNodeId: 12 });
+    expect(ctx.cropRect).toHaveBeenCalledWith(expect.anything(), { x: 200, y: 400, width: 600, height: 120 });
+    expect(result.notes ?? []).toEqual([]);
+
+    // Элемент шире вьюпорта: берётся видимая часть.
+    box = { x: -100, y: 200, width: 1600, height: 60 };
+    ctx.cropRect.mockClear();
+    const wide = okResult<BrowserAgentScreenshotResult>(await ctx.run('screenshot', { tab: 't1', ref: 'e1' }));
+    expect(ctx.cropRect).toHaveBeenCalledWith(expect.anything(), { x: 0, y: 400, width: 2560, height: 120 });
+    expect(wide.notes?.join(' ')).toContain('larger than the viewport');
+
+    // Ссылка прежнего документа — stale_ref, снимка нет.
+    expect(codeOf(await ctx.run('screenshot', { tab: 't1', ref: 'e99' }))).toBe('stale_ref');
   });
 });

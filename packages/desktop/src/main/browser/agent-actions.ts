@@ -56,7 +56,7 @@ export function secretUploadPath(real: string, home: string, realHome?: string):
   return false;
 }
 
-const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
+export const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
   new Promise((resolve, reject) => {
     if (signal.aborted) {
       reject(signal.reason);
@@ -74,7 +74,7 @@ const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
   });
 
 /** Ждёт конец загрузки до `ms`; `true` — дождались, `false` — срок вышел или гость умер. Обрыв — отказ с причиной. */
-function settleLoad(contents: WebContents, ms: number, signal: AbortSignal): Promise<boolean> {
+export function settleLoad(contents: WebContents, ms: number, signal: AbortSignal): Promise<boolean> {
   if (!contents.isLoading()) return Promise.resolve(true);
   return new Promise((resolve, reject) => {
     const finish = (action: () => void): void => {

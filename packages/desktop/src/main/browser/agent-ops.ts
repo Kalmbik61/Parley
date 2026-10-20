@@ -20,17 +20,20 @@
 import { randomUUID } from 'node:crypto';
 import type { DownloadItem, WebContents } from 'electron';
 import { AGENT_LIMITS, browserAgentArgs } from '@parley/protocol';
-import type { BrowserAgentArgs, BrowserAgentErrorCode, BrowserAgentOpEvent, BrowserAgentOpenResult, BrowserAgentResult } from '@parley/protocol';
-import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistration } from '../../shared/browser-types.js';
+import type { BrowserAgentArgs, BrowserAgentErrorCode, BrowserAgentNavigateResult, BrowserAgentOpEvent, BrowserAgentOpenResult, BrowserAgentResizeResult, BrowserAgentResult } from '@parley/protocol';
+import { presetSpec, viewportSize } from '../../shared/browser-devtools.js';
+import type { ViewportSpec } from '../../shared/browser-devtools.js';
+import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistration, AgentResize } from '../../shared/browser-types.js';
 import type { BrowserOwner } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
+import { redactSecretsInText, redactUrlsInText } from '../../shared/redact.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
 import { AgentOpError } from './agent-errors.js';
 import type { AgentDownloads } from './agent-downloads.js';
 import type { AgentWindow } from './agent-window.js';
 import type { TypingClock } from './human-typing.js';
 import { createAgentCapture } from './agent-capture.js';
-import { createAgentActions } from './agent-actions.js';
+import { createAgentActions, settleLoad, sleep, withNavigation } from './agent-actions.js';
 import { createAgentDom } from './agent-dom.js';
 import type { AgentCaptureDeps } from './agent-capture.js';
 import { createPageRegistry, listTabs } from './agent-pages.js';
@@ -39,7 +42,7 @@ import { createAgentInput } from './agent-input.js';
 import type { InputGuard } from './agent-input.js';
 import { createPageQueue } from './agent-queue.js';
 import { createAgentReads } from './agent-reads.js';
-import { clipUrl } from './agent-url.js';
+import { clipUrl, urlForAgent } from './agent-url.js';
 import type { Emulation } from './emulation.js';
 import type { Inspector } from './inspector.js';
 
@@ -84,6 +87,12 @@ export interface AgentOpsDeps {
   requestFocus?(contents: WebContents, id: string): boolean;
   /** Сколько ждать тишины клавиатуры и ответа окна о фокусе; по умолчанию `AGENT_LIMITS.focusMs`. Тестам — меньше. */
   focusMs?: number;
+  /** Просит окно поставить размер вкладки (`browser:agent-resize`); `false` — окна нет. Ответа нет: размер видно по `emulation.current`. */
+  resize(e: AgentResize): boolean;
+  /** Шаг ожидания регистрации страницы `open` и размера `resize`; по умолчанию `AGENT_LIMITS.pollMs`. Тестам — меньше. */
+  pollMs?: number;
+  /** Сколько ждать, пока окно поставит размер; по умолчанию `AGENT_LIMITS.resizeMs`. Тестам — меньше. */
+  resizeMs?: number;
   /** Домашняя папка для проверки секретных мест при загрузке файла; по умолчанию `os.homedir()`. Тестам — своя. */
   uploadHome?: string;
 }
@@ -391,6 +400,41 @@ export function openableHref(raw: string): string | null {
 }
 
 /**
+ * Адрес для `navigate`: абсолютный http(s) как есть, путь от `/` — от адреса страницы; иное (`file:`, `javascript:`, `chrome:`,
+ * не-адрес, страница без http(s)-адреса) — `null`. Итог проходит `openableHref` (без учётных данных).
+ */
+export function resolveAgentUrl(raw: string, base: string): string | null {
+  const direct = openableHref(raw);
+  if (direct !== null) return direct;
+  if (!raw.startsWith('/') || raw.startsWith('//')) return null;
+  try {
+    return openableHref(new URL(raw, base).href);
+  } catch {
+    return null;
+  }
+}
+
+/** Размер для окна по аргументам `resize`: пресет (DPR — правило меню), свой размер (не мобильный, DPR текущий или 1) или `fit` (`null`). */
+export function agentViewport(args: BrowserAgentArgs<'resize'>, current: ViewportSpec | null): ViewportSpec | null {
+  if (args.fit === true) return null;
+  if (args.preset !== undefined) return presetSpec(args.preset, args.rotated === true, current);
+  return { width: args.width ?? 0, height: args.height ?? 0, mobile: false, dpr: current?.dpr ?? 1 };
+}
+
+/** Один и тот же размер: `current` отдаёт спеку как есть, но порядок полей не гарантирован. */
+function sameViewport(a: ViewportSpec | null, b: ViewportSpec | null): boolean {
+  if (a === null || b === null) return a === b;
+  if ('preset' in a || 'preset' in b) return 'preset' in a && 'preset' in b && a.preset === b.preset && a.rotated === b.rotated && a.dpr === b.dpr;
+  return a.width === b.width && a.height === b.height && a.mobile === b.mobile && a.dpr === b.dpr;
+}
+
+/** Заголовок страницы для ответа: маска и не длиннее 200 знаков (как в `tabs`). */
+const titleForAgent = (title: string): string => redactSecretsInText(redactUrlsInText(title)).slice(0, 200);
+
+/** Заметка агенту: окно ответило, но страница ещё не появилась в реестре. */
+const NOT_STARTED_NOTE = 'The page has not started yet; call browser_tabs in a moment.';
+
+/**
  * Хозяин для `open` (спека 5.1): с `room` — браузер этой комнаты, если она в `owners`; с `own` — браузер чата сессии;
  * без обоих — браузер комнаты, когда сессия участник ровно одной, иначе браузер чата. `own` вместе с `room` схема
  * протокола отвергает раньше, здесь это тоже `bad_request`: проверка у каждой стороны своя.
@@ -415,6 +459,8 @@ export function ownerOf(request: BrowserAgentOpEvent, args: BrowserAgentArgs<'op
 
 export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   const openMs = deps.openMs ?? AGENT_LIMITS.openMs;
+  const pollMs = deps.pollMs ?? AGENT_LIMITS.pollMs;
+  const resizeMs = deps.resizeMs ?? AGENT_LIMITS.resizeMs;
   /** Ждущие ответа окна: id просьбы → продолжение. */
   const pendingOpens = new Map<string, (result: AgentOpenTabResult | 'no_window' | 'timeout') => void>();
   const registry = createPageRegistry({ fromId: deps.fromId });
@@ -429,7 +475,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   const focus = createFocusBorrower({ typing: deps.typing, ...(deps.requestFocus === undefined ? {} : { requestFocus: deps.requestFocus }), ...(deps.focusMs === undefined ? {} : { focusMs: deps.focusMs }) });
   const reads = createAgentReads({ inspector: deps.inspector });
   const dom = createAgentDom({ inspector: deps.inspector });
-  const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, saveImage: deps.saveImage, image: deps.image, activity: deps.activity, inGuest: deps.inGuest, ...(deps.captureReadyMs === undefined ? {} : { captureReadyMs: deps.captureReadyMs }), ...(deps.guestCallMs === undefined ? {} : { guestCallMs: deps.guestCallMs }), ...(deps.windowHeight === undefined ? {} : { windowHeight: deps.windowHeight }), ...(deps.screenDpr === undefined ? {} : { screenDpr: deps.screenDpr }) });
+  const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, dom, saveImage: deps.saveImage, image: deps.image, activity: deps.activity, inGuest: deps.inGuest, ...(deps.captureReadyMs === undefined ? {} : { captureReadyMs: deps.captureReadyMs }), ...(deps.guestCallMs === undefined ? {} : { guestCallMs: deps.guestCallMs }), ...(deps.windowHeight === undefined ? {} : { windowHeight: deps.windowHeight }), ...(deps.screenDpr === undefined ? {} : { screenDpr: deps.screenDpr }) });
 
   function askWindow(event: AgentOpenTab): Promise<AgentOpenTabResult | 'no_window' | 'timeout'> {
     return new Promise((resolve) => {
@@ -467,7 +513,86 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
         ? new AgentOpError('bad_request', `This browser panel already has ${AGENT_LIMITS.panelPages} pages, the most Parley allows. Ask the human to close one.`)
         : new AgentOpError('window_not_connected', "Parley's window does not know this workspace yet: try again in a moment.");
     }
-    return { tab: registry.agentIdFor(workKey, answer.tabId), owner, url: clipUrl(url), reused: answer.reused, notes: answer.mounted ? [] : [NOT_MOUNTED_NOTE] };
+    const agentId = registry.agentIdFor(workKey, answer.tabId);
+    const base = { tab: agentId, owner, url: clipUrl(url), reused: answer.reused };
+    if (!answer.mounted) return { ...base, loaded: false, title: '', notes: [NOT_MOUNTED_NOTE] };
+    // Страницу регистрирует окно, когда `<webview>` готов: ждём запись не дольше `openMs`, дальше — загрузку через runner.
+    const until = Date.now() + openMs;
+    while (!registered(request, agentId)) {
+      const left = until - Date.now();
+      if (left <= 0) return { ...base, loaded: false, title: '', notes: [NOT_STARTED_NOTE] };
+      await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, left)));
+    }
+    return runner.run(request, agentId, async (contents, record, guard) => {
+      const loaded = await settleLoad(contents, AGENT_LIMITS.loadMs, guard.signal);
+      return { ...base, loaded, title: titleForAgent(contents.getTitle()), notes: deps.agentWindow.take(`${record.workKey}\n${record.pageId}`) };
+    }, { window: true });
+  }
+
+  /** Страница агента уже в реестре и у неё есть живой гость. Пауза и чужой хозяин — отказ, как у прочих операций. */
+  function registered(request: BrowserAgentOpEvent, agentId: string): boolean {
+    try {
+      return registry.live(registry.pageOf(request, agentId)) !== null;
+    } catch (error) {
+      if (error instanceof AgentOpError && error.code === 'no_tab') return false;
+      throw error;
+    }
+  }
+
+  /** `navigate`: переход методом `webContents`; загрузку ждёт `withNavigation` до `loadMs`. */
+  async function navigateOf(contents: WebContents, record: PageRecord, args: BrowserAgentArgs<'navigate'>, guard: InputGuard): Promise<BrowserAgentNavigateResult> {
+    const target = args.url === undefined ? null : resolveAgentUrl(args.url, contents.getURL());
+    if (args.url !== undefined && target === null) {
+      throw new AgentOpError('bad_request', 'Only http(s) pages can be opened: pass an absolute URL such as https://example.com/, or a path starting with / on the current site.');
+    }
+    const notes: string[] = [];
+    const failure = { text: null as string | null };
+    const history = contents.navigationHistory;
+    const act = async (): Promise<void> => {
+      guard.check();
+      if (target !== null) {
+        // ERR_ABORTED — не ошибка: так отвечает переход, ставший скачиванием. Загрузку ждёт withNavigation, а не обещание.
+        contents.loadURL(target).catch((error: unknown) => {
+          const text = error instanceof Error ? error.message : String(error);
+          if (!/ERR_ABORTED/.test(text)) failure.text = text;
+        });
+      } else if (args.back === true) {
+        if (history.canGoBack()) history.goBack();
+        else notes.push('There is no page to go back to.');
+      } else if (args.forward === true) {
+        if (history.canGoForward()) history.goForward();
+        else notes.push('There is no page to go forward to.');
+      } else if (args.hard === true) {
+        contents.reloadIgnoringCache();
+      } else {
+        contents.reload();
+      }
+    };
+    const outcome = await withNavigation(contents, act, guard.signal);
+    if (failure.text !== null) notes.push(`The page failed to load: ${titleForAgent(failure.text)}`);
+    return {
+      tab: args.tab,
+      url: urlForAgent(contents.getURL()),
+      title: titleForAgent(contents.getTitle()),
+      loaded: outcome.loaded && failure.text === null,
+      notes: [...notes, ...deps.agentWindow.take(`${record.workKey}\n${record.pageId}`)],
+    };
+  }
+
+  /** `resize`: просит окно, ждёт, пока размер встанет (`emulation.current`), не дольше `resizeMs`. */
+  async function resizeOf(contents: WebContents, args: BrowserAgentArgs<'resize'>, guard: InputGuard): Promise<BrowserAgentResizeResult> {
+    const id = contents.id;
+    const spec = agentViewport(args, deps.emulation.current(id));
+    guard.check();
+    if (!deps.resize({ webContentsId: id, viewport: spec })) throw new AgentOpError('window_not_connected', "Parley's window is not ready: ask the human to open it.");
+    const until = Date.now() + resizeMs;
+    while (!sameViewport(deps.emulation.current(id), spec)) {
+      const left = until - Date.now();
+      if (left <= 0) throw new AgentOpError('timeout', `Parley's window did not apply the size within ${Math.round(resizeMs / 1000)} s.`);
+      await sleep(Math.min(pollMs, left), guard.signal);
+    }
+    const size = spec === null ? null : viewportSize(spec);
+    return { tab: args.tab, url: urlForAgent(contents.getURL()), viewport: size === null ? null : { width: size.width, height: size.height, emulated: true } };
   }
 
   return {
@@ -525,8 +650,16 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
             });
             return ok(await runner.run(request, args.tab, (contents, record, guard) => actions.actionOf(contents, record, request, args, guard), { changes: true, window: true, seen: true }));
           }
+          case 'navigate': {
+            const args = parsed.data as BrowserAgentArgs<'navigate'>;
+            return ok(await runner.run(request, args.tab, (contents, record, guard) => navigateOf(contents, record, args, guard), { changes: true, window: true }));
+          }
+          case 'resize': {
+            const args = parsed.data as BrowserAgentArgs<'resize'>;
+            return ok(await runner.run(request, args.tab, (contents, _record, guard) => resizeOf(contents, args, guard), { changes: true }));
+          }
           default:
-            // До задач 18–19; остаётся защитой от операции новее окна.
+            // До задачи 19; остаётся защитой от операции новее окна.
             return failure('unsupported', `This window does not run ${String(request.op)} yet.`);
         }
       } catch (error) {

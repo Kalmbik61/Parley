@@ -27,7 +27,7 @@ const room = (roomId: string): BrowserAgentOwner => ({ kind: 'room', roomId });
 
 /** Гость-страница: URL и заголовок задаются, уничтожение и падение — флаги. */
 function fakeGuest(id: number, url = 'http://localhost:5173/settings', title = 'Settings') {
-  return { id, getURL: vi.fn(() => url), getTitle: vi.fn(() => title), isDestroyed: vi.fn(() => false), isCrashed: vi.fn(() => false) };
+  return { id, getURL: vi.fn(() => url), getTitle: vi.fn(() => title), isDestroyed: vi.fn(() => false), isCrashed: vi.fn(() => false), isLoading: vi.fn(() => false), on: vi.fn(), off: vi.fn() };
 }
 type Guest = ReturnType<typeof fakeGuest>;
 const EMPTY: DevtoolsSnapshot = { epoch: 1, capture: 'on', console: [], network: [] };
@@ -91,11 +91,14 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
     resize: vi.fn((_data: Buffer, width: number, height: number) => png(width, height)),
     stitch: (parts: Buffer[]) => png(parts[0] ? parts[0].readUInt32BE(16) : 0, parts.reduce((sum, part) => sum + part.readUInt32BE(20), 0)),
     crop: (data: Buffer, _top: number, height: number) => png(data.readUInt32BE(16), height),
+    cropRect: (data: Buffer) => data,
   };
   const deps = {
     agentsAllowed: async () => state.allowed,
     openTab,
-    ...(overrides.openMs === undefined ? {} : { openMs: overrides.openMs }),
+    // Страница после ответа окна в этих тестах чаще не регистрируется: ожидание регистрации короткое.
+    openMs: overrides.openMs ?? 50,
+    resize: () => false,
     fromId: (id) => (guests.get(id) as unknown as WebContents | undefined) ?? null,
     inspector,
     emulation,
@@ -146,7 +149,7 @@ function okResult<T = BrowserAgentOpenResult>(result: BrowserAgentResult): T {
 describe('open (спека 5.1 browser_open)', () => {
   it('просьба окну — работа из ref события, адрес, сессия и её номер; ответ агенту — id вкладки t1, адрес, reused и заметки', async () => {
     const { run, asked } = setup();
-    expect(okResult(await run({ url: PAGE }))).toEqual({ tab: 't1', owner: OWN, url: PAGE, reused: false, notes: [] });
+    expect(okResult(await run({ url: PAGE }))).toEqual({ tab: 't1', owner: OWN, url: PAGE, reused: false, loaded: false, title: '', notes: [expect.stringContaining('browser_tabs')] });
     expect(asked).toEqual([{ requestId: expect.any(String) as unknown as string, workKey: WORK, url: PAGE, sessionId: 's-02', session: 'S02', owner: OWN }]);
   });
 
@@ -265,7 +268,7 @@ describe('open (спека 5.1 browser_open)', () => {
 
   it('работа не смонтирована — вкладка добавлена, ответ ok с заметкой, а не отказ', async () => {
     const { run } = setup({ reply: { tabId: 'browser:aaaaaa', reused: false, mounted: false } });
-    expect(okResult(await run({ url: PAGE }))).toEqual({ tab: 't1', owner: OWN, url: PAGE, reused: false, notes: [NOT_MOUNTED_NOTE] });
+    expect(okResult(await run({ url: PAGE }))).toEqual({ tab: 't1', owner: OWN, url: PAGE, reused: false, loaded: false, title: '', notes: [NOT_MOUNTED_NOTE] });
   });
 });
 
@@ -369,8 +372,10 @@ describe('окно ушло или молчит (Фокус ревью, п. 4)',
     await Promise.resolve();
     expect(asked).toHaveLength(2);
     ops.openTabResult(asked[1]?.requestId ?? '', { tabId: 'browser:bbbbbb', reused: false, mounted: true });
-    expect(okResult(await second).url).toBe('http://localhost:5173/second');
+    // Ответ на вторую просьбу первую не закрыл: она ещё ждёт и принимает свой ответ (после ответа `open` ждёт страницу до openMs).
+    await Promise.resolve();
     ops.openTabResult(asked[0]?.requestId ?? '', { tabId: 'browser:aaaaaa', reused: false, mounted: true });
+    expect(okResult(await second).url).toBe('http://localhost:5173/second');
     expect(okResult(await first).url).toBe(PAGE);
   });
 });
@@ -1499,11 +1504,12 @@ describe('тайм-аут и немедленный повтор с настоя
     const ops = createAgentOps({
       agentsAllowed: async () => true,
       openTab: () => true,
+      resize: () => false,
       fromId: () => guest as unknown as WebContents,
       inspector,
       emulation,
       saveImage: async () => '/drops/x.png',
-      image: { resize: (_data: Buffer, width: number, height: number) => png(width, height), stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data },
+      image: { resize: (_data: Buffer, width: number, height: number) => png(width, height), stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data, cropRect: (data: Buffer) => data },
       inGuest: async () => undefined,
       agentWindow: createAgentWindow(),
       typing: createTypingClock(),
@@ -1583,11 +1589,12 @@ describe('замёрзший гость посреди fullPage не клини�
     const ops = createAgentOps({
       agentsAllowed: async () => true,
       openTab: () => true,
+      resize: () => false,
       fromId: () => guest as unknown as WebContents,
       inspector,
       emulation,
       saveImage: async () => '/drops/x.png',
-      image: { resize: (_data: Buffer, width: number, height: number) => png(width, height), stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data },
+      image: { resize: (_data: Buffer, width: number, height: number) => png(width, height), stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data, cropRect: (data: Buffer) => data },
       // Первый вызов — исходная прокрутка; со второго гость не отвечает вовсе (упал или завис).
       inGuest: (_contents: WebContents, code: string) => {
         evals += 1;
