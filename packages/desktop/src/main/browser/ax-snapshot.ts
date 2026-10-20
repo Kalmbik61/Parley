@@ -79,6 +79,15 @@ function statesOf(node: AxNode): string[] {
   });
 }
 
+/**
+ * Дети поля с секретным именем повторяют его значение текстом (`StaticText`): их не обходят ни снимок (значение поля уже
+ * `<redacted>`; E2E 22b, Фокус ревью 6), ни поиск текста `wait_for` — иначе значение подбирается (финальная рецензия m3).
+ * Только у поля — узла со значением: раздел «API key settings» обходится.
+ */
+function secretField(node: AxNode): boolean {
+  return node.value !== undefined && isSecretName(clean(node.name?.value, NAME_LIMIT));
+}
+
 export function axSnapshot(nodes: readonly AxNode[], options: { interactiveOnly: boolean; limitBytes: number }): AxSnapshot {
   const byId = new Map(nodes.map((node) => [node.nodeId, node] as const));
   const refs = new Map<string, number>();
@@ -131,9 +140,7 @@ export function axSnapshot(nodes: readonly AxNode[], options: { interactiveOnly:
       }
     }
     if (FRAMES.has(role)) return true;
-    // Дети поля с секретным именем повторяют его значение текстом (`StaticText`): значение уже `<redacted>`, детей не
-    // обходим (E2E 22b, Фокус ревью 6). Только у поля — узла со значением: раздел «API key settings» обходится.
-    if (node.value !== undefined && isSecretName(clean(node.name?.value, NAME_LIMIT))) return true;
+    if (secretField(node)) return true;
     for (const childId of node.childIds ?? []) {
       const child = byId.get(childId);
       if (child !== undefined && !visit(child, childDepth)) return false;
@@ -147,8 +154,8 @@ export function axSnapshot(nodes: readonly AxNode[], options: { interactiveOnly:
 }
 
 /**
- * Обход тем же правилом, что у `axSnapshot`: пропускаются `SKIPPED`, дети фреймов и повторы; игнорируемые узлы
- * не отдаются, но их дети обходятся. `false` из `onNode` останавливает обход.
+ * Обход тем же правилом, что у `axSnapshot`: пропускаются `SKIPPED`, дети фреймов, дети поля с секретным именем и повторы;
+ * игнорируемые узлы не отдаются, но их дети обходятся. `false` из `onNode` останавливает обход.
  */
 function walk(nodes: readonly AxNode[], onNode: (node: AxNode, role: string) => boolean | void): void {
   const byId = new Map(nodes.map((node) => [node.nodeId, node] as const));
@@ -159,7 +166,7 @@ function walk(nodes: readonly AxNode[], onNode: (node: AxNode, role: string) => 
     const role = stringOf(node.role?.value);
     if (SKIPPED.has(role)) return true;
     if (!node.ignored && onNode(node, role) === false) return false;
-    if (FRAMES.has(role)) return true;
+    if (FRAMES.has(role) || secretField(node)) return true;
     for (const childId of node.childIds ?? []) {
       const child = byId.get(childId);
       if (child !== undefined && !visit(child)) return false;

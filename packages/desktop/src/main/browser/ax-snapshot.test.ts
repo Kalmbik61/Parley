@@ -109,6 +109,9 @@ describe('axSnapshot — расширения этапа D', () => {
     expect(text).toContain('textbox "API key" value=<redacted>');
     expect(text).not.toContain('SECRET8');
     expect(text).toContain('button "Rotate"');
+    // wait_for (axHasText) — то же правило: найти значение подбором нельзя (финальная рецензия m3); раздел обходится.
+    expect(axHasText(nodes, 'SECRET')).toBe(false);
+    expect(axHasText(nodes, 'Rotate')).toBe(true);
   });
 
   it('axHasText — видимый текст без учёта регистра и пробелов; игнорируемые узлы не считаются', () => {
