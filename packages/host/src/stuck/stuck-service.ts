@@ -217,7 +217,7 @@ export function createStuckService(
   /**
    * Эпизод кончился. Не докладывали — только снять таймер. Доложенное снимается из карты; живой сессии (`active`) ещё и
    * «back» в комнату, а для лимита, входа и старта — письмо тем же получателям. Спящая, закрытая и удалённая — молча (8.7).
-   * `silent` — эпизод заменён другим видом: «back» о нём было бы неправдой.
+   * `silent` — «back» о нём было бы неправдой: эпизод заменён другим видом либо это первая сверка после старта хоста.
    */
   async function finish(ref: SessionRef, key: string, episode: Episode, silent: boolean): Promise<void> {
     clearTimeout(episode.timer);
@@ -262,13 +262,15 @@ export function createStuckService(
     const first = !seen.has(key);
     seen.add(key);
     // Сверка после старта хоста (4.4): доложенное в карте принимается за идущий эпизод и дальше идёт обычными
-    // правилами — совпал вид: писем нет; need нет: «back» живой и молча спящей; другой вид: замена без «back».
+    // правилами — совпал вид: писем нет; need нет: `stuck` снимается молча; другой вид: замена без «back».
     const known = session.stuck ?? null;
     if (first && known !== null && !episodes.has(key)) episodes.set(key, { need: known, told: known, timer: undefined });
 
     const episode = episodes.get(key);
     if (need === null) {
-      if (episode !== undefined) await finish(ref, key, episode, false);
+      // На первой сверке после старта «back» писать нельзя, даже живой сессии: после перезапуска хоста нужда, выведенная
+      // запасным путём (лимит по журналу), потеряна, и «back» был бы ложным. «Back» — для эпизодов, что видела сама служба.
+      if (episode !== undefined) await finish(ref, key, episode, first);
       return;
     }
     if (episode === undefined) {

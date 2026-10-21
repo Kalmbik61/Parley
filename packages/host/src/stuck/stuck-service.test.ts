@@ -619,14 +619,21 @@ describe('служба «застрял» — сверка по первому o
     expect((await readMap(project, workId)).messages).toHaveLength(before);
   });
 
-  it('stuck есть, need нет у живой: «back» (и письмо для лимита)', async () => {
-    const [lead, worker] = await reported(needOf('limit'));
-    boot();
-    await emit(worker, null);
-    await until(async () => (await stuckOf(worker)) === null);
-    const map = await readMap(project, workId);
-    expect(lines(map).at(-1)?.text).toBe(backLine(worker, 'limit'));
-    expect(letters(map).at(-1)).toMatchObject({ to: [lead], text: backLetter(worker, 'limit') });
+  it('stuck есть, need нет у живой на первой сверке: stuck снят молча — ни строки, ни письма (решение 12)', async () => {
+    for (const kind of ['limit', 'sign-in', 'approval'] as const) {
+      const [, worker] = await reported(needOf(kind));
+      const before = (await readMap(project, workId)).messages.length;
+      boot();
+      await emit(worker, null);
+      await until(async () => (await stuckOf(worker)) === null);
+      await quiet();
+      const map = await readMap(project, workId);
+      expect(map.messages, kind).toHaveLength(before);
+      expect(lines(map), kind).toHaveLength(0);
+      expect(letters(map), kind).toHaveLength(0);
+      stoppers.pop()?.();
+      listeners = [];
+    }
   });
 
   it('stuck есть, need нет у спящей или закрытой: stuck снят молча', async () => {
