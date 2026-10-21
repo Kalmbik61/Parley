@@ -6,6 +6,7 @@
  */
 
 import type {
+  ConsentCard,
   EventData,
   EventName,
   MethodName,
@@ -128,6 +129,12 @@ export interface FakeBridge extends ParleyBridge {
    * по умолчанию пусто. Явный `setHandler('trust.list' | 'trust.revoke', …)` сильнее.
    */
   setTrustFolders(folders: TrustRecord[]): void;
+  /**
+   * Карточки согласий, которые отдаёт `consents.list` (только ждущие); `consents.decide` переводит карточку в
+   * `allowed`/`denied` без рассылки — событие тест шлёт сам: `emit('consents.changed', …)`. По умолчанию пусто.
+   * Явный `setHandler('consents.list' | 'consents.decide', …)` сильнее.
+   */
+  setConsentCards(cards: ConsentCard[]): void;
   /** Вызовы `app.saveDiagnostics` и ответ на них (по умолчанию — архив собран, хост ответил); `Error` — отказ. */
   readonly saveDiagnosticsCalls: Array<{ profile: boolean }>;
   setSaveDiagnosticsAnswer(answer: DiagnosticsSaveResult | Error): void;
@@ -252,9 +259,23 @@ export interface FakeBridge extends ParleyBridge {
 export function createFakeBridge(): FakeBridge {
   const handlers = new Map<MethodName, Handler>();
   let trustFolders: TrustRecord[] = [];
+  let consentCards: ConsentCard[] = [];
   /** Ответы без `setHandler`: у остальных методов обработчик обязателен, у согласий на папки хватает списка в памяти. */
   const defaultHandlers: Partial<Record<MethodName, Handler>> = {
     'trust.list': () => ({ folders: trustFolders.map((record) => ({ ...record })) }),
+    'trust.grant': (({ folder, by }: { folder: string; by: TrustRecord['by'] }) => {
+      const record: TrustRecord = { folder, grantedAt: new Date(0).toISOString(), by };
+      trustFolders = [...trustFolders.filter((item) => item.folder !== folder), record];
+      return { folder: { ...record } };
+    }) as Handler,
+    'consents.list': () => ({ items: consentCards.filter((card) => card.state === 'pending').map((card) => ({ ...card })) }),
+    'consents.decide': (({ id, decision }: { id: string; decision: 'allow' | 'deny' }) => {
+      const card = consentCards.find((item) => item.id === id);
+      if (card === undefined) return { applied: false, state: 'denied' };
+      if (card.state !== 'pending') return { applied: false, state: card.state };
+      card.state = decision === 'allow' ? 'allowed' : 'denied';
+      return { applied: true, state: card.state };
+    }) as Handler,
     'trust.revoke': (({ folder }: { folder: string }) => {
       const removed = trustFolders.some((record) => record.folder === folder);
       trustFolders = trustFolders.filter((record) => record.folder !== folder);
@@ -379,6 +400,9 @@ export function createFakeBridge(): FakeBridge {
     },
     setTrustFolders: (folders) => {
       trustFolders = folders.map((record) => ({ ...record }));
+    },
+    setConsentCards: (cards) => {
+      consentCards = cards.map((card) => ({ ...card }));
     },
     notified,
     calls,

@@ -17,6 +17,8 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 export interface ConfirmDialogProps {
   open: boolean;
   title: string;
+  /** Полный текст всплывающей подсказки заголовка, когда `title` сокращён (путь папки в диалоге доверия). */
+  titleHint?: string;
   description?: string;
   confirmLabel: string;
   /** Вид кнопки подтверждения: `destructive` (по умолчанию) — необратимое, `default` — обычное действие. */
@@ -45,6 +47,7 @@ export interface ConfirmDialogProps {
 export function ConfirmDialog({
   open,
   title,
+  titleHint,
   description,
   confirmLabel,
   confirmVariant = 'destructive',
@@ -79,7 +82,7 @@ export function ConfirmDialog({
         // Три кнопки в ряд не влезают в 320px: с вторым действием — шире, в пределах окна.
         className={secondary === undefined ? 'w-80 max-w-80' : 'w-[30rem] max-w-[calc(100vw-2rem)]'}
       >
-        <DialogTitle>{title}</DialogTitle>
+        <DialogTitle {...(titleHint === undefined ? null : { title: titleHint })}>{title}</DialogTitle>
         {description !== undefined ? <DialogDescription>{description}</DialogDescription> : null}
         {checkbox === undefined ? null : (
           <label className="flex items-center gap-2 text-sm">

@@ -878,6 +878,20 @@ export const S = {
       agentRequired: 'Select an agent',
     },
     /**
+     * Диалог «Trust <папка> for agents?» (спека 2026-10-21, 4.2) — `components/dialogs/TrustFolderDialog.tsx`: в композере
+     * новой работы и по карточке согласия, которую хост держит за запуск Codex (`ConsentPrompt`).
+     */
+    trustFolder: {
+      title: (folder: string): string => `Trust ${folder} for agents?`,
+      /** Кто просил (карточка согласия): «S03 Ruslan · create_session». */
+      requestedBy: (who: string): string => `Requested by ${who}.`,
+      body:
+        "Codex in this folder and its worktrees starts without its own trust screen, gets write access to the working folder (workspace-write) and runs the repository's own .codex/ configuration — config, hooks, rules and MCP servers. The consent lasts until you revoke it in Settings → Projects. For Claude Code nothing changes yet.",
+      confirm: 'Trust',
+      /** Чем запуск попал в карточку: `agent` — `create_session` агента. */
+      via: { agent: 'create_session', resume: 'resume', launch: 'launch' },
+    },
+    /**
      * Снимок работ не принёс созданное за 10 с — вкладка не открыта вслепую (`lib/open-when-listed.ts`):
      * по виду того, что создали.
      */
@@ -1316,6 +1330,9 @@ export const S = {
     /** Строка над полем ввода Codex: хуки включены в настройках, но Codex их не одобрил (`decisions: 'terminal'`). */
     codexHooksHint: "Codex hasn't trusted Parley's hooks yet — on the next start choose “Trust all and continue”, or approve them in /hooks",
     gotIt: 'Got it',
+    /** Сессия Codex ждёт согласия на папку (карточка согласия хоста, спека 2026-10-21, 4.2): строка над полем ввода. */
+    waitingForTrust: 'Waiting for folder trust',
+    trustFolder: 'Trust folder',
     loading: 'Loading the conversation…',
     empty: 'Nothing here yet',
     feedUnavailable: "Couldn't load the conversation — open the terminal",
@@ -2113,6 +2130,8 @@ export const S = {
       saveSettings: 'save settings',
       loadTrustedFolders: 'load trusted folders',
       revokeTrust: 'revoke trust',
+      checkFolderTrust: 'check the folder trust',
+      grantTrust: 'trust the folder',
       renameWorkspace: 'rename workspace',
       markWorkspaceDone: 'mark workspace as done',
       reopenWorkspace: 'reopen workspace',

@@ -1,6 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { refKey, type SessionRef } from '@parley/protocol';
-import type { ParleyConfig } from '@parley/core';
 import type { FocusTarget, ParleyBridge } from '../shared/bridge.js';
 import { getHostClient } from './host-client.js';
 import { sessionAttention } from './attention/derive.js';
@@ -16,9 +15,12 @@ import { openParleyEditor } from './sidebar/SectionMenu.js';
 import { S } from '../shared/strings.js';
 import { WindowCloseQuestion } from './files/SaveChangesDialog.js';
 import { AppShell } from './shell/AppShell.js';
+import { ConsentPrompt } from './components/dialogs/ConsentPrompt.js';
 import { SettingsDialog } from './components/settings/SettingsDialog.js';
 import { useFeedStore } from './chat/store.js';
 import { useActivityStore } from './store/activity.js';
+import { useHostConfigStore } from './store/config.js';
+import { useConsentsStore } from './store/consents.js';
 import { useHostStore } from './store/host.js';
 import { useNoticesStore } from './store/notices.js';
 import { useProvidersStore } from './store/providers.js';
@@ -170,8 +172,10 @@ export function App(): JSX.Element {
   // Конфигурация хранится здесь ради терминала — панелям нужны живые
   // `fontFamily`/`fontSize` как значения, а не как CSS-переменные: xterm
   // красит канвой. Тему окна (тёмная/светлая) панели берут из `useUiStore`
-  // напрямую (кусок 1.3 плана окна, спека 4.7).
-  const [config, setConfig] = useState<ParleyConfig | null>(null);
+  // напрямую (кусок 1.3 плана окна, спека 4.7). Конфигурация лежит в `store/config.ts`: подсказка Chat про хуки Codex
+  // читает из неё `codexWriteApprovals` (спека 2026-10-21, 5.2).
+  const config = useHostConfigStore((state) => state.config);
+  const setConfig = useHostConfigStore((state) => state.set);
 
   const settingsOpen = useUiStore((state) => state.dialogs.settings);
   const openSettingsDialog = useUiStore((state) => state.openSettingsDialog);
@@ -191,6 +195,8 @@ export function App(): JSX.Element {
 
     const disposers = [
       useWorksStore.getState().init(bridge),
+      // Карточки согласия на папку (спека 2026-10-21, 4.4): диалог по ним — `ConsentPrompt` ниже, строка в Chat — `ChatView`.
+      useConsentsStore.getState().init(bridge),
       useActivityStore.getState().init(bridge),
       useUiStore.getState().init(bridge),
       useNoticesStore.getState().init(bridge),
@@ -309,6 +315,7 @@ export function App(): JSX.Element {
         onOpenChange={(open) => (open ? openSettingsDialog() : closeSettingsDialog())}
         onConfigChange={setConfig}
       />
+      <ConsentPrompt />
       <Toaster />
       <WindowNotes />
     </>
