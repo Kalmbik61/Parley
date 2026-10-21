@@ -1070,7 +1070,7 @@ export function createActivityService(
     const metrics = metricsFor(ref, key, entry, session, activity, index);
 
     // Сторож Codex: долгий вызов без вывода или конец хода с ещё незавершённой ячейкой (s21).
-    let codexStuck = false;
+    let codexStuck: { since: string; detail: string | null } | null = null;
     const pendingCell = driven && index?.lastTurnEvent?.type === 'task_complete' ? index.pendingCodeCell : undefined;
     const call = pendingCell === undefined
       ? driven && activity.activity === 'working' ? index?.openCodeCall : undefined
@@ -1085,14 +1085,17 @@ export function createActivityService(
         clearCodexCallTimer(key);
       } else if (now >= stuckAt) {
         clearCodexCallTimer(key);
-        codexStuck = true;
+        const text = `${sessionTag(ref.sessionId)} ${pendingCell === undefined ? 'has not returned from a Codex tool call' : 'finished its turn with an unfinished tool operation'}. Check pending approvals; if already answered, stop the stuck operation and verify its effects before retrying.`;
+        // Начало эпизода — время вызова (у незавершённой ячейки — её время), а не `now`: срок сторожа в ветке ячейки
+        // равен «сейчас», и `since` уезжал бы на каждом пересчёте.
+        codexStuck = { since: call.at, detail: clampDetail(text) };
         const noticeKey = pendingCell === undefined ? call.at : `cell:${pendingCell.id}:${pendingCell.at}`;
         if (codexCallNotified.get(key) !== noticeKey) {
           codexCallNotified.set(key, noticeKey);
           host.broadcast('host.notice', {
             kind: 'codex-call-wait',
             ref,
-            text: `${sessionTag(ref.sessionId)} ${pendingCell === undefined ? 'has not returned from a Codex tool call' : 'finished its turn with an unfinished tool operation'}. Check pending approvals; if already answered, stop the stuck operation and verify its effects before retrying.`,
+            text,
             at: new Date(now).toISOString(),
           });
         }
@@ -1111,16 +1114,29 @@ export function createActivityService(
     derivedActivity.set(key, activity.activity);
     // Удержанный вопрос агента или застрявший вызов: публикуется 'blocked', а таймер тишины и метрики — по настоящему
     // значению. Если свёртка и так 'blocked', её `need` (одобрение, экран старта) точнее и остаётся. Вопросу в окне
-    // соответствует `need` вопроса; застрявшему вызову Codex — нет: сторож не знает, чего ждёт ход, и несогласованный
-    // с `blocked` лимит или вход (`reportedNeed`) к нему не пристёгивается.
+    // соответствует `need` вопроса; застрявшему вызову Codex — одобрение: сторож не знает, чего ждёт ход, но самая
+    // частая причина — неотвеченный запрос к человеку, и текст его уведомления становится `detail`. `need` из
+    // событий самого CLI (лимит, вход: ход ими оборван, а не стоит) главнее — они остаются, сторож к ним ничего не
+    // добавляет: `blocked` с таким `need` несогласован (`reportedNeed`).
     const held = questionHeldKeys.get(key);
     const waiting: SessionActivity =
       activity.activity === 'blocked'
         ? activity
         : held !== undefined
           ? { ...activity, activity: 'blocked', need: questionNeedOf(held) }
-          : codexStuck
-            ? { ...activity, activity: 'blocked', need: null }
+          : codexStuck !== null && activity.need === null
+            ? {
+                ...activity,
+                activity: 'blocked',
+                need: {
+                  kind: 'approval',
+                  since: codexStuck.since,
+                  detail: codexStuck.detail,
+                  resetsAt: null,
+                  window: null,
+                  account: null,
+                },
+              }
             : activity;
     const need = publishedNeed(key, session, waiting.need, now);
     const published: SessionActivity = need === waiting.need ? waiting : { ...waiting, need };

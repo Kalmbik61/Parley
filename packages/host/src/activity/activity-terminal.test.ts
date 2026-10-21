@@ -995,4 +995,101 @@ describe('сторож Codex: вызов code mode без вывода — «н�
     expect(a.get(ref)?.activity.activity).toBe('blocked');
     expect(notices('codex-call-wait')).toHaveLength(0);
   }, 15_000);
+
+  // Служебная запись в rollout после конца хода: пересчёт сессии без новых событий хода.
+  const tokenCount = () => row({ timestamp: now(), type: 'event_msg', payload: { type: 'token_count' } });
+
+  it('a stuck call yields an approval need: since is the call time and does not move on recompute, detail is the notice text', async () => {
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'stuck-need' });
+    a.terminalSignal(ref, WORKING);
+    const callAt = now();
+    const file = await rollout(
+      'stuck-need',
+      exec(callAt, '// @exec: {"yield_time_ms": 1}\ntext(await tools.mcp__parley__check_inbox({}));'),
+      callAt,
+    );
+
+    await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
+    const text = String(notices('codex-call-wait')[0]?.['text']);
+    expect(a.get(ref)?.activity.need).toEqual({
+      kind: 'approval',
+      since: callAt,
+      detail: text,
+      resetsAt: null,
+      window: null,
+      account: null,
+    });
+
+    // Пересчёт позже: начало эпизода остаётся временем вызова.
+    await appendFile(file, tokenCount());
+    await settle(400);
+    expect(a.get(ref)?.activity.need?.since).toBe(callAt);
+
+    // Вывод пришёл — ход идёт, ожидания нет.
+    await appendFile(file, execOutput(now()));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+    expect(a.get(ref)?.activity.need).toBeNull();
+  }, 15_000);
+
+  it('a finished turn with an unfinished cell yields an approval need with the cell time, not the time of each recompute', async () => {
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'cell-need' });
+    a.terminalSignal(ref, WORKING);
+    const stamp = now();
+    const file = await rollout(
+      'cell-need',
+      exec(stamp, 'text(await tools.exec_command({cmd:"git fetch"}));') +
+        row({ timestamp: stamp, type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'call_exec', output: 'Script running with cell ID 58\nOutput:\n' } }) +
+        row({ timestamp: stamp, type: 'event_msg', payload: { type: 'task_complete' } }),
+      stamp,
+    );
+
+    await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
+    const text = String(notices('codex-call-wait')[0]?.['text']);
+    expect(a.get(ref)?.activity.need).toEqual({
+      kind: 'approval',
+      since: stamp,
+      detail: text,
+      resetsAt: null,
+      window: null,
+      account: null,
+    });
+
+    // В этой ветке срок сторожа — «сейчас»: каждый пересчёт видит его заново, а начало эпизода не уезжает.
+    await settle(300);
+    await appendFile(file, tokenCount());
+    await settle(300);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(a.get(ref)?.activity.need?.since).toBe(stamp);
+  }, 15_000);
+
+  it('a stuck cell while the fold holds a limit need: the limit need stays, the watcher adds no approval', async () => {
+    const limitText =
+      "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro) or try again at Jan 5th, 2031 7:27 PM.";
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'cell-limit' });
+    a.terminalSignal(ref, WORKING);
+    const stamp = now();
+    await rollout(
+      'cell-limit',
+      exec(stamp, 'text(await tools.exec_command({cmd:"git fetch"}));') +
+        row({ timestamp: stamp, type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'call_exec', output: 'Script running with cell ID 58\nOutput:\n' } }) +
+        row({
+          timestamp: stamp,
+          type: 'event_msg',
+          payload: {
+            type: 'task_complete',
+            last_agent_message: null,
+            error: { message: limitText, codex_error_info: 'usage_limit_exceeded' },
+          },
+        }),
+      stamp,
+    );
+
+    // Сторож сработал на том же пересчёте, что увидел ошибку лимита.
+    await waitFor(() => notices('codex-call-wait').length === 1);
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    expect(a.get(ref)?.activity.need).toMatchObject({ kind: 'limit', since: stamp, detail: limitText });
+    expect(a.get(ref)?.activity.activity).not.toBe('blocked');
+    await settle(300);
+    expect(a.get(ref)?.activity.need?.kind).toBe('limit');
+  }, 15_000);
 });
