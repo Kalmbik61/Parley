@@ -13,7 +13,7 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { realpath } from 'node:fs/promises';
-import { loadConfig } from '../config.js';
+import { codexHooksWanted, loadConfig } from '../config.js';
 import { codexHookFlags } from './codex-hooks.js';
 import { findRunnerBinary } from './find-binary.js';
 import { CLAUDE_LEAN_ENV, CLAUDE_LEAN_FLAGS, codexLeanFlags, readCodexMcpServerIds, readUserPluginIds } from './lean.js';
@@ -396,7 +396,7 @@ async function plan(
   // Codex остановил бы старт экраном ревью.
   if (
     entry.id === 'codex' &&
-    launchConfig.codexApprovals &&
+    codexHooksWanted(launchConfig) &&
     options.hookUrl !== undefined &&
     options.codexHookCommand !== undefined
   ) {

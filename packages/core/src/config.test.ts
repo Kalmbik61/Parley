@@ -4,7 +4,16 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG, ENV_NAMES, configPath, loadConfig, parseSetting, saveConfig } from './config.js';
+import {
+  CODEX_WRITE_APPROVALS_VALUES,
+  DEFAULT_CONFIG,
+  ENV_NAMES,
+  codexHooksWanted,
+  configPath,
+  loadConfig,
+  parseSetting,
+  saveConfig,
+} from './config.js';
 import { DEFAULT_WORKTREE_ROOT } from './names.js';
 import { DEFAULT_RESOURCE_LIMITS } from './work/resource-policy.js';
 
@@ -33,7 +42,7 @@ describe('loadConfig', () => {
       resumeRate: 6,
       agentSkills: true,
       skillNavigator: true,
-      codexApprovals: false,
+      codexWriteApprovals: 'auto',
       telegramEnabled: true,
       telegramNeedsYou: true,
       telegramFinished: false,
@@ -74,7 +83,7 @@ describe('loadConfig', () => {
       resumeRate: 6,
       agentSkills: true,
       skillNavigator: true,
-      codexApprovals: false,
+      codexWriteApprovals: 'auto',
       telegramEnabled: true,
       telegramNeedsYou: true,
       telegramFinished: false,
@@ -100,7 +109,7 @@ describe('loadConfig', () => {
       resumeRate: 6,
       agentSkills: true,
       skillNavigator: true,
-      codexApprovals: false,
+      codexWriteApprovals: 'auto',
       telegramEnabled: true,
       telegramNeedsYou: true,
       telegramFinished: false,
@@ -359,7 +368,7 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['agentSkills', 'AGENT_SKILLS', 'off', false],
     ['agentSkills', 'AGENT_SKILLS', 'no', false],
     ['skillNavigator', 'SKILL_NAVIGATOR', 'off', false],
-    ['codexApprovals', 'CODEX_APPROVALS', 'on', true],
+    ['codexWriteApprovals', 'CODEX_WRITE_APPROVALS', 'parley', 'parley'],
     ['telegramEnabled', 'TELEGRAM_ENABLED', 'off', false],
     ['telegramNeedsYou', 'TELEGRAM_NEEDS_YOU', 'off', false],
     ['telegramFinished', 'TELEGRAM_FINISHED', 'on', true],
@@ -620,23 +629,83 @@ describe('leanAgents setting', () => {
   });
 });
 
-describe('codexApprovals setting', () => {
-  it('выключена по умолчанию; включается файлом и окружением', async () => {
-    expect(DEFAULT_CONFIG.codexApprovals).toBe(false);
-    expect((await loadConfig(file(), {})).config.codexApprovals).toBe(false);
-    await write({ codexApprovals: true });
-    expect((await loadConfig(file(), {})).config.codexApprovals).toBe(true);
-    expect((await loadConfig(file(), { PARLEY_CODEX_APPROVALS: '0' })).config.codexApprovals).toBe(false);
-    await write({});
-    expect((await loadConfig(file(), { PARLEY_CODEX_APPROVALS: '1' })).config.codexApprovals).toBe(true);
-    expect(parseSetting('codexApprovals', 'true')).toEqual({ value: true });
-    expect(parseSetting('codexApprovals', 'false')).toEqual({ value: false });
+describe('codexWriteApprovals setting', () => {
+  /** Временный `config.json` с данными файла и `loadConfig(file, env)` — как в соседних тестах. */
+  const loadFrom = async (fileData: unknown, env: NodeJS.ProcessEnv = {}) => {
+    await write(fileData);
+    return loadConfig(file(), env);
+  };
+
+  it('codexWriteApprovals: умолчание auto, значения из файла и среды', async () => {
+    expect(DEFAULT_CONFIG.codexWriteApprovals).toBe('auto');
+    expect((await loadFrom({})).config.codexWriteApprovals).toBe('auto');
+    expect((await loadFrom({ codexWriteApprovals: 'parley' })).config.codexWriteApprovals).toBe('parley');
+    expect((await loadFrom({}, { PARLEY_CODEX_WRITE_APPROVALS: 'terminal' })).config.codexWriteApprovals).toBe(
+      'terminal',
+    );
+    // Окружение сильнее файла.
+    expect(
+      (await loadFrom({ codexWriteApprovals: 'parley' }, { PARLEY_CODEX_WRITE_APPROVALS: 'terminal' })).config
+        .codexWriteApprovals,
+    ).toBe('terminal');
+    expect(CODEX_WRITE_APPROVALS_VALUES).toEqual(['auto', 'parley', 'terminal']);
   });
-  it('неверное значение — ошибка с именем настройки, остаётся умолчание', async () => {
-    await write({ codexApprovals: 'invalid' });
-    const value = await loadConfig(file(), {});
-    expect(value.config.codexApprovals).toBe(false);
-    expect(value.warning).toContain('codexApprovals');
+
+  it('неверное значение: предупреждение с именем настройки, остаётся умолчание', async () => {
+    const fromFile = await loadFrom({ codexWriteApprovals: 'yes' });
+    expect(fromFile.config.codexWriteApprovals).toBe('auto');
+    expect(fromFile.warning).toMatch(/codexWriteApprovals: expected auto, parley or terminal/);
+
+    const fromEnv = await loadFrom({}, { PARLEY_CODEX_WRITE_APPROVALS: 'yes' });
+    expect(fromEnv.config.codexWriteApprovals).toBe('auto');
+    expect(fromEnv.warning).toMatch(/PARLEY_CODEX_WRITE_APPROVALS: expected auto, parley or terminal/);
+    expect(fromEnv.fromEnv).toEqual([]);
+  });
+
+  it('codexApprovals переносится: true → parley, false → terminal, новый ключ сильнее', async () => {
+    const migrated = await loadFrom({ codexApprovals: true });
+    expect(migrated.config.codexWriteApprovals).toBe('parley');
+    expect(migrated.warning).toBeNull();
+    expect((await loadFrom({ codexApprovals: false })).config.codexWriteApprovals).toBe('terminal');
+    expect((await loadFrom({ codexApprovals: true, codexWriteApprovals: 'auto' })).config.codexWriteApprovals).toBe(
+      'auto',
+    );
+    // Прежний ключ не попадает в настройки: читатель видит только новый.
+    expect(migrated.config).not.toHaveProperty('codexApprovals');
+  });
+
+  it('PARLEY_CODEX_APPROVALS переносится так же; PARLEY_CODEX_WRITE_APPROVALS сильнее', async () => {
+    const on = await loadFrom({}, { PARLEY_CODEX_APPROVALS: '1' });
+    expect(on.config.codexWriteApprovals).toBe('parley');
+    expect(on.fromEnv).toEqual(['codexWriteApprovals']);
+    expect((await loadFrom({}, { PARLEY_CODEX_APPROVALS: '0' })).config.codexWriteApprovals).toBe('terminal');
+    expect((await loadFrom({}, { HARNAS_CODEX_APPROVALS: 'on' })).config.codexWriteApprovals).toBe('parley');
+    expect(
+      (await loadFrom({}, { PARLEY_CODEX_APPROVALS: '1', PARLEY_CODEX_WRITE_APPROVALS: 'auto' })).config
+        .codexWriteApprovals,
+    ).toBe('auto');
+    // Переменная перекрывает и новый ключ файла.
+    expect((await loadFrom({ codexWriteApprovals: 'auto' }, { PARLEY_CODEX_APPROVALS: '1' })).config.codexWriteApprovals).toBe(
+      'parley',
+    );
+    const bad = await loadFrom({}, { PARLEY_CODEX_APPROVALS: 'maybe' });
+    expect(bad.config.codexWriteApprovals).toBe('auto');
+    expect(bad.warning).toContain('PARLEY_CODEX_APPROVALS: expected 0 or 1');
+  });
+
+  it('codexHooksWanted: только parley', () => {
+    expect(codexHooksWanted({ codexWriteApprovals: 'parley' })).toBe(true);
+    expect(codexHooksWanted({ codexWriteApprovals: 'auto' })).toBe(false);
+    expect(codexHooksWanted({ codexWriteApprovals: 'terminal' })).toBe(false);
+  });
+
+  it('parseSetting codexWriteApprovals', () => {
+    expect(parseSetting('codexWriteApprovals', 'parley')).toEqual({ value: 'parley' });
+    expect(parseSetting('codexWriteApprovals', 'auto')).toEqual({ value: 'auto' });
+    expect(parseSetting('codexWriteApprovals', 'terminal')).toEqual({ value: 'terminal' });
+    expect(parseSetting('codexWriteApprovals', 'on')).toEqual({
+      error: 'codexWriteApprovals: expected auto, parley or terminal',
+    });
   });
 });
 
