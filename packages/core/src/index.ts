@@ -171,9 +171,11 @@ export {
 } from './work/map.js';
 export { defaultSessionName } from './work/names.js';
 export {
+  NEED_WORDS,
   STATE_WORDS,
   dotState,
   liveStatus,
+  needWord,
   reportedStatus,
   sessionDotState,
   stateWord,

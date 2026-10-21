@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  NEED_WORDS,
   STATE_WORDS,
   dotState,
   liveStatus,
+  needWord,
   reportedStatus,
   sessionDotState,
   stateWord,
@@ -122,5 +124,13 @@ describe('STATE_WORDS', () => {
       done: 'done',
       failed: 'failed',
     });
+  });
+});
+
+describe('needWord', () => {
+  it('одно слово на вид need (спека подписок 7, правило 2026-10-17)', () => {
+    expect(needWord('limit')).toBe('limit');
+    expect(needWord('startup')).toBe('starting');
+    expect(Object.keys(NEED_WORDS)).toEqual(['approval', 'question', 'limit', 'sign-in', 'startup']);
   });
 });
