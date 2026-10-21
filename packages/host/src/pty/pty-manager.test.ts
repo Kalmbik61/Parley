@@ -443,8 +443,8 @@ describe('PtyManager: сигналы терминала codex (спека ком
     const list = kinds(signals);
     expect(list[0]).toBe('ready');
     expect(list.indexOf('working')).toBeGreaterThan(list.indexOf('ready'));
-    expect(signals).toContainEqual({ kind: 'needs-you', reason: 'approval-requested' });
-    expect(signals).toContainEqual({ kind: 'needs-you', reason: 'action-required' });
+    expect(signals).toContainEqual({ kind: 'needs-you', reason: 'approval-requested', detail: 'ls -la' });
+    expect(signals).toContainEqual({ kind: 'needs-you', reason: 'action-required', detail: null });
     await manager.stop(sessionRef, { graceMs: 200 });
   });
 

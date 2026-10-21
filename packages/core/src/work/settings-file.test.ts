@@ -204,6 +204,33 @@ describe('HTTP-хуки ленты вида «Chat» (план 2026-10-01, ре�
     expect(hooks['UserPromptSubmit']?.[0]?.hooks.map((hook) => hook.type)).toEqual(['command']);
   });
 
+  // `StopFailure` — событие, которого нет в старом Claude Code и которое он мог бы отвергнуть в `--settings`.
+  // Журнальный `cat >>` ему ставится только там, где хост уже решил, что `claude` новый (`hookUrl`), — как и
+  // HTTP-хук ленты. Ниже порога ленты ошибку лимита находит запасной путь по журналу сессии.
+  it('StopFailure с hookUrl: в группе cat >> в журнал первым, HTTP-хук ленты вторым', () => {
+    const byDefault = workSettings({ hookUrl: URL }).hooks;
+    const alone = workSettings({ hookUrl: URL, hookEvents: ['StopFailure'] }).hooks;
+
+    for (const hooks of [byDefault, alone]) {
+      const group = hooks['StopFailure'];
+      expect(group).toHaveLength(1);
+      expect(group?.[0]?.hooks.map((hook) => hook.type)).toEqual(['command', 'http']);
+      expect(group?.[0]?.hooks[0]).toEqual({ type: 'command', command: HOOK_COMMAND });
+    }
+    // Место ключа среди событий ленты прежнее: меняется только содержимое его группы.
+    expect(Object.keys(alone)).toEqual([...HOOK_EVENTS, 'StopFailure']);
+  });
+
+  it('StopFailure без hookUrl или вне hookEvents: ключа в файле нет вовсе', () => {
+    expect(workSettings().hooks).not.toHaveProperty('StopFailure');
+    expect(workSettings({ hookEvents: ['StopFailure'] }).hooks).not.toHaveProperty('StopFailure');
+    expect(
+      workSettings({ hookUrl: URL, hookEvents: ['Stop', 'MessageDisplay'] }).hooks,
+    ).not.toHaveProperty('StopFailure');
+    expect(workSettingsJson()).not.toContain('StopFailure');
+    expect(workSettingsJson({ hookEvents: ['StopFailure'] })).toBe(legacyJson());
+  });
+
   it('в файле только хуки и строка статуса — рамка (Review Focus 5)', () => {
     expect(Object.keys(workSettings({ hookUrl: URL }))).toEqual(['hooks', 'statusLine']);
   });

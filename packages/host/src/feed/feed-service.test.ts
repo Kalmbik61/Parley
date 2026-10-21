@@ -747,19 +747,36 @@ describe('удержание хуков и решения', () => {
     expect(ofKind(items, 'question')[0]?.state).toBe('pending');
   });
 
-  it('удержанный вопрос: службе активности — questionHeld(ref, true) один раз; ответ окна — false', () => {
+  it('удержанный вопрос: службе активности — questionHeld(ref, true, текст первого вопроса) один раз; ответ окна — false', () => {
     start();
     const held = vi.mocked(fakes.deps.activity.questionHeld);
     send(prompt('go'));
     const request = send(pre('q1', 'AskUserQuestion', { questions: QUESTIONS }));
     expect(request.responses).toEqual([]);
-    expect(held.mock.calls).toEqual([[REF, true]]);
+    expect(held.mock.calls).toEqual([[REF, true, 'Which fruit?']]);
 
     service.decide(REF, 'question:q1', { kind: 'question', answers: { 'Which fruit?': 'Pear' } });
     expect(held.mock.calls).toEqual([
-      [REF, true],
+      [REF, true, 'Which fruit?'],
       [REF, false],
     ]);
+  });
+
+  it('удержанный вопрос: из нескольких вопросов в detail — текст первого; без текста вопроса — null', () => {
+    start();
+    const held = vi.mocked(fakes.deps.activity.questionHeld);
+    send(prompt('go'));
+    send(
+      pre('q1', 'AskUserQuestion', {
+        questions: [{ question: 'Which DB?', options: [] }, { question: 'Which cache?', options: [] }],
+      }),
+    );
+    expect(held.mock.calls).toEqual([[REF, true, 'Which DB?']]);
+
+    service.decide(REF, 'question:q1', { kind: 'question', answers: { 'Which DB?': 'pg' } });
+    held.mockClear();
+    send(pre('q2', 'AskUserQuestion', { questions: [] }));
+    expect(held.mock.calls).toEqual([[REF, true, null]]);
   });
 
   it('вопрос: CLI закрыл запрос сам — questionHeld(ref, false)', () => {
@@ -769,7 +786,7 @@ describe('удержание хуков и решения', () => {
     const request = send(pre('q1', 'AskUserQuestion', { questions: QUESTIONS }));
     request.abandon();
     expect(held.mock.calls).toEqual([
-      [REF, true],
+      [REF, true, 'Which fruit?'],
       [REF, false],
     ]);
   });
@@ -782,7 +799,7 @@ describe('удержание хуков и решения', () => {
     send(pre('q1', 'AskUserQuestion', { questions: QUESTIONS }));
     vi.advanceTimersByTime(3_600_000);
     expect(held.mock.calls).toEqual([
-      [REF, true],
+      [REF, true, 'Which fruit?'],
       [REF, false],
     ]);
   });
@@ -794,7 +811,7 @@ describe('удержание хуков и решения', () => {
     send(pre('q1', 'AskUserQuestion', { questions: QUESTIONS }));
     void service.stop();
     expect(held.mock.calls).toEqual([
-      [REF, true],
+      [REF, true, 'Which fruit?'],
       [REF, false],
     ]);
   });

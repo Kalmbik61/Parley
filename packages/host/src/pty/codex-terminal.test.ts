@@ -20,8 +20,14 @@ const title = (text: string, terminator?: string): string => osc(`0;${text}`, te
 
 const WORKING: CodexSignal = { kind: 'working' };
 const READY: CodexSignal = { kind: 'ready' };
-const ACTION: CodexSignal = { kind: 'needs-you', reason: 'action-required' };
-const APPROVAL: CodexSignal = { kind: 'needs-you', reason: 'approval-requested' };
+const ACTION: CodexSignal = { kind: 'needs-you', reason: 'action-required', detail: null };
+/** Одобрение: `detail` — хвост строки уведомления (команда или «edit <файл>»). */
+const approval = (detail: string | null): CodexSignal => ({
+  kind: 'needs-you',
+  reason: 'approval-requested',
+  detail,
+});
+const APPROVAL = approval('cargo test --workspace');
 
 /** Ход целиком, как он выглядит в потоке: старт TUI, приглашение, работа, одобрение, конец. */
 const SESSION_STREAM = [
@@ -119,10 +125,15 @@ describe('classifyTitle', () => {
 });
 
 describe('classifyNotification', () => {
-  it('одобрение: Approval requested и Codex wants to edit', () => {
-    expect(classifyNotification('Approval requested: cargo test')).toEqual(APPROVAL);
-    expect(classifyNotification('  Approval requested: rm -rf build')).toEqual(APPROVAL);
-    expect(classifyNotification('Codex wants to edit src/main.rs')).toEqual(APPROVAL);
+  it('одобрение: Approval requested и Codex wants to edit — detail несёт хвост строки', () => {
+    expect(classifyNotification('Approval requested: ls -la')).toEqual(approval('ls -la'));
+    expect(classifyNotification('  Approval requested: rm -rf build  ')).toEqual(approval('rm -rf build'));
+    expect(classifyNotification('Codex wants to edit src/a.ts')).toEqual(approval('edit src/a.ts'));
+  });
+
+  it('одобрение без текста после двоеточия — detail null', () => {
+    expect(classifyNotification('Approval requested:')).toEqual(approval(null));
+    expect(classifyNotification('Approval requested:   ')).toEqual(approval(null));
   });
 
   it('конец хода — только фраза без ответа', () => {
@@ -234,8 +245,14 @@ describe('поток терминала Codex', () => {
   });
 
   it('длинная, но закрытая последовательность разбирается: терминатор в том же куске', () => {
-    const long = `Approval requested: ${'x'.repeat(MAX_OSC_LENGTH * 2)}`;
-    expect(run(osc(`9;${long}`), (data) => [data])).toEqual([APPROVAL]);
+    const tail = 'x'.repeat(MAX_OSC_LENGTH * 2);
+    const signals = run(osc(`9;Approval requested: ${tail}`), (data) => [data]);
+    expect(signals).toHaveLength(1);
+    const signal = signals[0];
+    expect(signal).toMatchObject({ kind: 'needs-you', reason: 'approval-requested' });
+    // Текст не режется разбором: до `NEED_DETAIL_MAX` его сокращает свёртка активности. Сравнение булевым, чтобы
+    // при расхождении в вывод не попадали шестнадцать тысяч знаков.
+    expect(signal?.kind === 'needs-you' && signal.detail === tail).toBe(true);
   });
 
   it('многократные вызовы на пустых и обычных кусках ничего не портят', () => {

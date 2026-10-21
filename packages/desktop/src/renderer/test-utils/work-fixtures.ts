@@ -102,6 +102,7 @@ export function makeActivity(
       lastEventAt: patch.lastEventAt === undefined ? '2026-09-27T09:00:00.000Z' : patch.lastEventAt,
       source: 'hooks',
       hooksMissing: false,
+      need: null,
     },
     metrics: patch.metrics ?? null,
   };

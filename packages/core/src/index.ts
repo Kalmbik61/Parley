@@ -429,6 +429,21 @@ export type {
   SessionActivity,
 } from './work/activity.js';
 export {
+  LIMIT_RETRY_MS,
+  LIMIT_RETURN_GRACE_MS,
+  LIMIT_RETURNS_MAX,
+  NEED_DETAIL_MAX,
+  STUCK_REPORT_MS,
+  classifyClaudeFailure,
+  clampDetail,
+  codexFailureError,
+  parseResetText,
+  pickResetsAt,
+  zonedInstant,
+} from './work/stuck.js';
+export type { ApiFailure, NeedKind, ResetGuess, SessionNeed } from './work/stuck.js';
+export {
+  PARLEY_STARTUP_NOTIFICATION,
   PERMISSION_ANSWERED_EVENT,
   TERMINAL_WORKING_EVENT,
   bareEvent,

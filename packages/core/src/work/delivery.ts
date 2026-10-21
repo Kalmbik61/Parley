@@ -49,7 +49,8 @@ export type DeliveryAction =
         | 'busy'
         | 'draft'
         | 'in-flight'
-        | 'no-hooks';
+        | 'no-hooks'
+        | 'stuck';
     }
   | {
       kind: 'type-pointer';
@@ -130,6 +131,12 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
 
   const letters = unread.filter((message) => message.deleted !== true);
   if (letters.length === 0) return { kind: 'none', reason: 'no-letters' };
+  // Сессия ждёт человека или сброса лимита (`need`, спека «Застрявшие сессии», 6.1): указатель в её терминал не
+  // печатается, пока эпизод не кончится. Правило раньше `already-pointed`, `no-hooks` и `busy`: человек должен видеть,
+  // что сессия застряла, и когда указатель напечатан до этого, а у экрана старта причина «застрял» точнее «нет хуков».
+  // Только у активной сессии: старый снимок с `need` не мешает письму поднять спящую (7.2) и не меняет `not-live`
+  // у остальных. `!= null`: после `?.` у отсутствующей активности `undefined`, а не `null`.
+  if (session.lifecycle === 'active' && activity?.need != null) return { kind: 'none', reason: 'stuck' };
   if (letters.every((message) => pointed.has(message.id))) {
     return { kind: 'none', reason: 'already-pointed' };
   }

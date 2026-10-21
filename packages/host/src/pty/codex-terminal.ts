@@ -25,8 +25,15 @@ export type CodexSignal =
   | { kind: 'working' }
   /** Слово `Ready` в заголовке: агент у приглашения. */
   | { kind: 'ready' }
-  /** Человеку нужно ответить: заголовок `Action Required` или уведомление об одобрении. */
-  | { kind: 'needs-you'; reason: 'action-required' | 'approval-requested' }
+  /**
+   * Человеку нужно ответить: заголовок `Action Required` или уведомление об одобрении. `detail` — хвост строки
+   * уведомления («ls -la», «edit src/a.ts»); у заголовка и уведомления без текста — `null`.
+   */
+  | {
+      kind: 'needs-you';
+      reason: 'action-required' | 'approval-requested';
+      detail: string | null;
+    }
   /** Уведомление `agent-turn-complete` без текста ответа: ход закончен. */
   | { kind: 'turn-complete' }
   /** Заголовок или уведомление, которых не узнали: состояния не меняют. */
@@ -59,24 +66,36 @@ const READY_WORD = /\bReady\b/;
  * показывает спиннер.
  */
 export function classifyTitle(title: string): CodexSignal {
-  if (ACTION_REQUIRED.test(title)) return { kind: 'needs-you', reason: 'action-required' };
+  if (ACTION_REQUIRED.test(title)) {
+    return { kind: 'needs-you', reason: 'action-required', detail: null };
+  }
   if (BRAILLE_PATTERNS.test(title) || WORKING_WORD.test(title)) return { kind: 'working' };
   if (READY_WORD.test(title)) return { kind: 'ready' };
   return { kind: 'unknown', source: 'title' };
 }
 
+const APPROVAL_PREFIX = 'Approval requested:';
+const EDIT_PREFIX = 'Codex wants to ';
+
+/** Одобрение с хвостом строки уведомления; пустой хвост — `null`. */
+const approval = (tail: string): CodexSignal => ({
+  kind: 'needs-you',
+  reason: 'approval-requested',
+  detail: tail.trim() === '' ? null : tail.trim(),
+});
+
 /**
  * Уведомление OSC 9 → сигнал. Текст не типизирован (тип уведомления Codex в OSC 9 не пишет), поэтому
  * классификация — по началу строки, и узкая: `Approval requested: <команда>` и `Codex wants to edit
- * <файл>` — одобрение; `Agent turn complete` без ответа — конец хода. С ответом агента вместо этой
- * фразы (`agent-turn-complete` кладёт в текст до двухсот знаков ответа) уведомление не узнаётся:
+ * <файл>` — одобрение (его `detail` — хвост строки: `ls -la`, `edit src/a.ts`); `Agent turn complete` без
+ * ответа — конец хода. С ответом агента вместо этой фразы (`agent-turn-complete` кладёт в текст до двухсот
+ * знаков ответа) уведомление не узнаётся:
  * конец хода тогда подтверждают заголовок `Ready` и `task_complete` в журнале (`notify` человека не подменяется, спека 2026-10-07, 5.5).
  */
 export function classifyNotification(text: string): CodexSignal {
   const trimmed = text.trim();
-  if (/^Approval requested:/.test(trimmed) || /^Codex wants to edit\b/.test(trimmed)) {
-    return { kind: 'needs-you', reason: 'approval-requested' };
-  }
+  if (trimmed.startsWith(APPROVAL_PREFIX)) return approval(trimmed.slice(APPROVAL_PREFIX.length));
+  if (/^Codex wants to edit\b/.test(trimmed)) return approval(trimmed.slice(EDIT_PREFIX.length));
   if (trimmed === 'Agent turn complete') return { kind: 'turn-complete' };
   return { kind: 'unknown', source: 'notification' };
 }

@@ -6,10 +6,12 @@ import { DEFAULT_TIMELINE_READER, readJsonlTail, type TailCursor, type TimelineR
 import { adapterV1, type SchemaAdapter, type SessionRecord } from './adapter-v1.js';
 import { Counter, oneLine, SYNTHETIC_MODEL, type TokenTotals } from './counters.js';
 import type { DiscoveredSubagent } from './discover.js';
+import { blocksText } from './feed/reduce.js';
 import { isPointerText } from './work/delivery.js';
 import { createUsageLedger, type UsageObservation, type UsageSummary, type UsageWindow } from './work/usage-ledger.js';
 import { extendUsageTimeline, type UsageTimeline } from './work/usage-timeline.js';
 import { claudeUsageObservation, noteClaudeSidechain, replayClaudeUsage, type ClaudeSidechain } from './work/usage-observations.js';
+import { isRecord, textOf } from './work/events.js';
 
 export type Provider = 'claude' | 'codex' | 'glm';
 
@@ -54,6 +56,12 @@ export interface SessionIndex {
   lastTurnEvent?: {
     type: 'task_started' | 'task_complete' | 'turn_aborted';
     at: string;
+    /**
+     * Только у `task_complete`, которым ход кончился ошибкой: `info` — её вид (`codex_error_info`: строка или
+     * объект с полями, как в логе), `message` — текст ошибки (пустой, если лог его не назвал). Описывает только
+     * это событие: следующее событие хода записывается без неё.
+     */
+    error?: { info: unknown; message: string };
   };
   /**
    * Самый ранний вызов code mode Codex (`exec` или `wait`) без вывода после последнего конца хода. `yieldMs` —
@@ -62,6 +70,14 @@ export interface SessionIndex {
   openCodeCall?: { name: 'exec' | 'wait'; at: string; yieldMs: number | null };
   /** Самая ранняя ячейка code mode с ответом «ещё выполняется», но без результата последующего wait. */
   pendingCodeCell?: { id: string; at: string };
+  /**
+   * Самая поздняя запись ассистента с ошибкой API (`isApiErrorMessage: true`; только Claude Code и GLM):
+   * финальный отказ вроде лимита подписки, а не повтор запроса (`system/api_error`). `error` — поле `error`
+   * записи (`rate_limit`, `authentication_failed`…; `null`, если его нет), `text` — текст блоков её
+   * `message.content`. Успешный ответ после неё поле не снимает: сравнивает потребитель, по времени. Нет
+   * поля — таких записей нет.
+   */
+  lastApiError?: { at: string; error: string | null; text: string };
   durationMs: number | null;
   records: number;
   malformedLines: number;
@@ -185,6 +201,7 @@ export class ClaudeIndexAccumulator {
   endedAt: string | null = null;
   lastUserRecordAt: string | null = null;
   lastWorkRecordAt: string | null = null;
+  lastApiError: SessionIndex['lastApiError'];
 
   // Заголовки дописываются в файл снова и снова — побеждает последний.
   title: string | null = null;
@@ -269,6 +286,22 @@ export class ClaudeIndexAccumulator {
       if (record.role !== null && (this.lastWorkRecordAt === null || at > this.lastWorkRecordAt)) {
         this.lastWorkRecordAt = at;
       }
+      // Финальную ошибку API (лимит, вход, оплата) Claude Code пишет синтетическим ответом ассистента с
+      // отметкой; повторы запроса (`system/api_error`) её не несут. Побеждает запись с самым поздним
+      // временем — как у осей выше.
+      if (
+        record.role === 'assistant' &&
+        raw['isApiErrorMessage'] === true &&
+        (this.lastApiError === undefined || at >= this.lastApiError.at)
+      ) {
+        const message = raw['message'];
+        this.lastApiError = {
+          at,
+          error: textOf(raw['error']),
+          // Текст блоков ответа, как у карточки ошибки ленты (`feedFromTranscript`); текста нет — `''`.
+          text: blocksText(isRecord(message) ? message['content'] : null) ?? '',
+        };
+      }
     }
   }
 
@@ -344,6 +377,7 @@ export class ClaudeIndexAccumulator {
       endedAt,
       lastUserRecordAt: this.lastUserRecordAt,
       lastWorkRecordAt: this.lastWorkRecordAt,
+      ...(this.lastApiError === undefined ? {} : { lastApiError: this.lastApiError }),
       durationMs,
       records: this.parsed,
       malformedLines: this.malformed + (pendingMalformed ? 1 : 0),
