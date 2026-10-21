@@ -13,8 +13,9 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { realpath } from 'node:fs/promises';
-import { codexHooksWanted, loadConfig } from '../config.js';
+import { loadConfig, type CodexWriteApprovals } from '../config.js';
 import { codexHookFlags } from './codex-hooks.js';
+import { codexPolicyArgs, trustArgs } from './codex-policy.js';
 import { findRunnerBinary } from './find-binary.js';
 import { CLAUDE_LEAN_ENV, CLAUDE_LEAN_FLAGS, codexLeanFlags, readCodexMcpServerIds, readUserPluginIds } from './lean.js';
 import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
@@ -39,7 +40,7 @@ import type { RoleCatalog } from '../roles/types.js';
 import type { RequiredRolePermissions } from '../roles/catalog.js';
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { loadBrief, writeBrief } from './brief.js';
-import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, linkedSettingsRule, systemGuidance } from './guidance.js';
+import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, CODEX_TOOL_EXAMPLES, linkedSettingsRule, systemGuidance } from './guidance.js';
 import { readParleyMd } from './parley-md.js';
 import { readProjectMemory } from './project-memory.js';
 import type { MemoryItem } from './project-memory.js';
@@ -88,10 +89,21 @@ export interface LaunchOptions {
    */
   hookUrl?: string;
   /**
-   * Команда хуков Codex — путь запускателя `PARLEY_HOME/bin/parley-codex-hook`. Вместе с `hookUrl` и настройкой
-   * `codexApprovals` даёт `-c hooks.…` в аргументах запуска Codex (спека 2026-10-07, 5.6).
+   * Команда хуков Codex — путь запускателя `PARLEY_HOME/bin/parley-codex-hook`. Вместе с `hookUrl` и режимом `parley`
+   * настройки `codexWriteApprovals` даёт `-c hooks.…` в аргументах запуска Codex (спека 2026-10-07, 5.6; 2026-10-21, 5.2).
    */
   codexHookCommand?: string;
+  /**
+   * Доверие к папке, которое хост выдал запуску Codex: `realpath` папки проекта и cwd сессии (спека 2026-10-21, 4.3).
+   * С ним в шаблон ложится `{trust}` — `-c projects={…}` из `trustArgs`, и Codex не показывает экран доверия. Нет поля —
+   * подстановка выпадает. Остальным провайдерам игнорируется.
+   */
+  trust?: { project: string; cwd: string };
+  /**
+   * Режим одобрений пишущих ролей Codex, который хост выбрал после пробы версии (`auto` ниже `CODEX_AUTO_MIN_VERSION`
+   * идёт как `terminal`). Нет поля — режим из настроек запуска (`codexWriteApprovals`).
+   */
+  codexWriteApprovals?: CodexWriteApprovals;
   /**
    * Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): адрес эндпоинта хоста и токен этого запуска. Уходит
    * только в конфиг MCP-сервера (файл `--mcp-config` у Claude и GLM, `-c mcp_servers.parley` у Codex), в окружение
@@ -211,6 +223,8 @@ async function plan(
   const nativeContextRevision = randomUUID();
   const entry = await entryOf(session.provider);
   const skillNavigator = launchConfig.skillNavigator;
+  // Режим одобрений пишущих ролей Codex: решение хоста (проба версии) важнее настройки; и политика, и хуки идут от него.
+  const writeApprovals = options.codexWriteApprovals ?? launchConfig.codexWriteApprovals;
   // Облегчённый запуск решён при создании сессии и хранится в её записи: запуск, resume и подъём письмом читают одно и то же.
   const lean = session.lean === true;
   // GLM — тот же Claude Code, но хост срезает у него `CLAUDE_CONFIG_DIR` (provider-env.ts): конфигурация — `~/.claude`.
@@ -260,12 +274,17 @@ async function plan(
   // Сервер `parley`, а с ним `find_skill`, доходит до агента только шаблоном с `{mcpConfig}`.
   const mcpRoute = template.includes('{mcpConfig}') && entry.runner.mcpConfig !== undefined;
 
+  // Доверие к папке — только Codex, только то, что выдал хост (`options.trust`), и только если шаблон несёт `{trust}`:
+  // иначе пара не уйдёт в процесс, и в родной контекст навигатора ей тоже нечего попадать (диагностика пробела ниже).
+  const trust = entry.id === 'codex' && options.trust !== undefined && template.includes('{trust}') ? trustArgs(options.trust) : undefined;
+
   // Native context of the launch is computed before the command: the Codex reduction needs it confirmed.
   // Only the actual chosen template/environment enters the LOCAL descriptor.
   let nativeVerified = false;
   let nativeDescriptor: NativeContextDescriptor | null = null;
   if (skillNavigator) {
-    const projection = entry.id === 'codex' ? projectSkillRunnerContext(entry, template) : { verified: false, configArgs: [] };
+    // Пара доверия идёт в проекцию отдельно: без неё `codex app-server` отключил бы проектные слои недоверенной папки.
+    const projection = entry.id === 'codex' ? projectSkillRunnerContext(entry, template, trust ?? []) : { verified: false, configArgs: [] };
     let descriptor: NativeContextDescriptor | null = null;
     try {
       const homeDir = await realpath(process.env.HOME ?? homedir());
@@ -324,6 +343,8 @@ async function plan(
     skillNavigator,
     skillListReduced: skillList !== undefined,
     nativeContextRevision,
+    // Короткий набор инструментов — только у Codex: Claude читает файл `--mcp-config` (он ниже, без профиля).
+    ...(entry.id === 'codex' ? { toolProfile: 'short' as const } : {}),
     env: process.env,
     ...(channel ? { channel } : {}),
     ...(options.agent === undefined ? {} : { agent: options.agent }),
@@ -367,6 +388,11 @@ async function plan(
   // агента читать нечего.
   if (role.nativeAgent !== null) subs.agent = role.nativeAgent;
   if (role.sandboxMode !== null) subs.sandbox = `sandbox_mode=${JSON.stringify(role.sandboxMode)}`;
+  // Политика одобрений Codex — по роли и режиму, одинаково при запуске и `resume` (спека 2026-10-21, 5.1); доверие — как выдал хост.
+  if (entry.id === 'codex') {
+    subs.approvals = codexPolicyArgs(role, writeApprovals);
+    if (trust !== undefined) subs.trust = trust;
+  }
   if (role.readOnly && isClaudeCode(entry)) subs.disallowedTools = 'Edit,Write,NotebookEdit';
   assertRoleDelivery(entry, role, [template]);
   if (template.includes('{settingsFile}')) {
@@ -392,11 +418,11 @@ async function plan(
     });
   }
   if (skillList === 'removed') subs.skillCatalog = CODEX_SKILL_CATALOG_OVERRIDE;
-  // Хуки Codex — только по согласию человека (`codexApprovals`, по умолчанию выключено): без доверия в `/hooks`
-  // Codex остановил бы старт экраном ревью.
+  // Хуки Codex — только в режиме `parley` настройки `codexWriteApprovals` (спека 2026-10-21, 5.2): без доверия в `/hooks`
+  // Codex остановил бы старт экраном ревью, а в `auto` хук `PermissionRequest` шёл бы раньше авторевьюера.
   if (
     entry.id === 'codex' &&
-    codexHooksWanted(launchConfig) &&
+    writeApprovals === 'parley' &&
     options.hookUrl !== undefined &&
     options.codexHookCommand !== undefined
   ) {
@@ -414,6 +440,14 @@ async function plan(
     diagnostics.push({
       code: 'provider-override-gap',
       message: 'Custom Codex runner has no {developerInstructions}; add this placeholder to deliver the Parley session layer through Codex.',
+    });
+  }
+  // Свой шаблон Codex без `{trust}` или `{approvals}` не передаст ни доверие к папке, ни политику одобрений: свои флаги
+  // у него остаются, запуск не падает (спека 2026-10-21, 4.3 и 5.1).
+  if (entry.id === 'codex' && !(template.includes('{trust}') && template.includes('{approvals}'))) {
+    diagnostics.push({
+      code: 'provider-override-gap',
+      message: 'Custom Codex runner has no {trust}/{approvals}; add these placeholders so Parley can pass folder trust and the approval policy. The runner keeps its own flags.',
     });
   }
   // One current layer for launch/new/resume; only its provider channel differs.
@@ -444,11 +478,12 @@ async function plan(
       nativeClaudeRole,
       guidance: systemGuidance(map, session.id, {
         skillNavigator: skillNavigator && !nativeClaudeRole && template.includes('{mcpConfig}') && mcp !== undefined,
+        ...(entry.id === 'codex' ? { toolProfile: 'short' as const } : {}),
         ...(skillList === undefined ? {} : { skillList }),
         // Цель стоит в брифе, который уйдёт тем же запуском (системным слоем или первым сообщением): дважды не нужна.
         omitGoal: brief !== null || (!resuming && mode !== 'new' && !quiet),
       }),
-      bridge: [entry.id === 'codex' ? CODEX_APPROVAL_GUIDANCE : '', bridge].filter(Boolean).join('\n\n'),
+      bridge: [entry.id === 'codex' ? CODEX_APPROVAL_GUIDANCE : '', entry.id === 'codex' ? CODEX_TOOL_EXAMPLES : '', bridge].filter(Boolean).join('\n\n'),
       links,
       // Правило — только там, где у агента есть `browser_open`: канал выдан и сервер MCP доходит шаблоном с `{mcpConfig}`.
       ...(options.agent !== undefined && mcpRoute ? { browser: BROWSER_PRIORITY_RULE } : {}),
