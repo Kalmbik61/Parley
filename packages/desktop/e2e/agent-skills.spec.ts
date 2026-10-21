@@ -189,7 +189,7 @@ test.describe('скилл parley в проекте', () => {
     expect(await readFile(skillFile(project), 'utf8')).toContain('name: parley');
   });
 
-  test('переключатель «Answer Codex approvals in Parley» в Settings: по умолчанию выключен, включается и пишется в конфиг; на 800×500 подсказка не вылезает', async () => {
+  test('три режима «Codex approvals» в Settings: по умолчанию Auto-review, выбор пишется в конфиг; на 800×500 варианты и подсказка не вылезают', async () => {
     const { app, window } = await openApp();
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 800, height: 500 }));
     await newSession(window, project);
@@ -200,20 +200,37 @@ test.describe('скилл parley в проекте', () => {
     await expect(window.getByRole('dialog')).toContainText('Settings');
     await window.getByRole('tab', { name: 'Agents' }).click();
 
-    const toggle = window.getByRole('switch', { name: 'Answer Codex approvals in Parley' });
-    await toggle.scrollIntoViewIfNeeded();
-    await expect(toggle).toBeVisible();
-    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    const writeMode = async (): Promise<string> =>
+      (await call<{ config: { codexWriteApprovals: string } }>(window, 'settings.get', {})).config.codexWriteApprovals;
+    const group = window.getByRole('radiogroup', { name: 'Codex approvals (new and resumed sessions)' });
+    await group.scrollIntoViewIfNeeded();
+    await expect(group).toBeVisible();
+    await expect(group.getByRole('radio')).toHaveCount(3);
+    // Умолчание — auto; подсказки про доверие хукам при нём нет.
+    await expect(group.getByRole('radio', { checked: true })).toContainText('Auto-review');
+    expect(await writeMode()).toBe('auto');
     const hint = window.getByRole('dialog').getByText(/Trust all and continue/);
-    await expect(hint).toBeVisible();
-    const hintBox = await hint.boundingBox();
+    await expect(hint).toHaveCount(0);
+
     const dialogBox = await window.getByRole('dialog').boundingBox();
-    expect((hintBox?.x ?? 0) + (hintBox?.width ?? 0)).toBeLessThanOrEqual((dialogBox?.x ?? 0) + (dialogBox?.width ?? 0) + 0.5);
-    await toggle.click();
-    await expect(toggle).toHaveAttribute('aria-checked', 'true');
-    expect((await call<{ config: { codexApprovals: boolean } }>(window, 'settings.get', {})).config.codexApprovals).toBe(true);
+    const inside = async (locator: ReturnType<Page['locator']>): Promise<void> => {
+      const box = await locator.boundingBox();
+      expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual((dialogBox?.x ?? 0) + (dialogBox?.width ?? 0) + 0.5);
+    };
+    for (const radio of await group.getByRole('radio').all()) await inside(radio);
+
+    await group.getByRole('radio', { name: /^Ask in Parley/ }).click();
+    await expect(group.getByRole('radio', { checked: true })).toContainText('Ask in Parley');
+    expect(await writeMode()).toBe('parley');
+    await expect(hint).toBeVisible();
+    await inside(hint);
     const shots = path.resolve(dirname, '../test-results/codex-chat');
     await mkdir(shots, { recursive: true });
     await window.screenshot({ path: path.join(shots, 'approvals-setting-800x500.png') });
+
+    await group.getByRole('radio', { name: /^Ask in the terminal/ }).click();
+    await expect(group.getByRole('radio', { checked: true })).toContainText('Ask in the terminal');
+    expect(await writeMode()).toBe('terminal');
+    await expect(hint).toHaveCount(0);
   });
 });

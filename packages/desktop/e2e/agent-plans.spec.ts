@@ -12,6 +12,7 @@ import type { WorkMap } from '@parley/core';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
+import { seedTrust } from './trust-seed.js';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const jsonl = (records: unknown[]): string =>
@@ -86,6 +87,8 @@ test('план из журнала доходит до карточки комн
   try {
     await mkdir(path.join(claudeRoot, '-fixture'), { recursive: true });
     await mkdir(path.join(codexRoot, '2026', '10', '18'), { recursive: true });
+    // Сессия Codex в проекте без согласия удерживалась бы до решения человека (спека 2026-10-21, 4.2).
+    await seedTrust(home, project);
     app = await electron.launch({
       args: [path.resolve(dirname, '../out/main/index.js')],
       env: {

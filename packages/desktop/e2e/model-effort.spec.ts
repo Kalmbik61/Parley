@@ -5,6 +5,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
+import { seedTrust } from './trust-seed.js';
 
 /**
  * Нормалайзер модели и effort (спека 2026-10-06, раздел 8, строка E2E). Диалог новой сессии показывает модели и уровни
@@ -105,6 +106,8 @@ test.describe('модель и effort: диалог по каталогу Codex 
       PARLEY_TERMINAL_RENDERER: 'dom',
       ...extraEnv,
     };
+    // Сессия Codex в проекте без согласия удерживалась бы до решения человека (спека 2026-10-21, 4.2).
+    await seedTrust(home, project);
     const app = await electron.launch({ args: [mainEntry], env });
     running = app;
     const window = await app.firstWindow();
