@@ -195,7 +195,9 @@ same model and effort.
 \`wait_for(target, timeoutSec)\` — wait for a session by its id or for an incoming message
 (\`target: "inbox"\`). On timeout you get \`{"state":"running"}\` — decide yourself whether to
 call again. The answer \`state: deleted\` means the human deleted the session: there is
-nothing left to wait for, re-plan the work without it. An unknown id is an error right
+nothing left to wait for, re-plan the work without it. The answer \`state: "stuck"\` means the
+session waits for the human (an approval, a question, a usage limit, a sign-in): do not call
+\`wait_for\` for it again, see topic \`stuck\`. An unknown id is an error right
 away — it is a typo. Giving a new job to a session that has already handed in its
 \`report\`? Do not wait for it with \`wait_for(target)\` — it returns the old result at once.
 Wait with \`wait_for("inbox")\`: it will wake on the session's reply message.
@@ -344,9 +346,9 @@ participant is not "silent". The reason comes in Parley's message and in \`stuck
 - If Parley's message names other accounts of the same CLI that are free in Parley right now, add one more option to
   that message: start a replacement on the named account and hand it the stuck participant's part. Never start a
   replacement on your own: ask \`@human\` first and wait for the answer. After a yes: \`create_session\` with that
-  \`provider\`, \`add_to_room\` for the new session, write it the task with a pointer to the stuck participant's fields
-  in \`get_map\` (\`task\`, \`summary\`, \`history\`, \`artifacts\`), and tell the stuck participant in a message that its
-  part was taken over: it reads it when it is back.
+  \`provider\` and a \`task\` that points at the stuck participant's fields in \`get_map\` (\`task\`, \`summary\`,
+  \`history\`, \`artifacts\`), then \`add_to_room\` for the new session, and then tell the stuck participant in a message
+  that its part was taken over: it reads it when it is back.
 - If the human gives the part to another participant, tell the stuck one in a message too: it reads it when it is
   back.
 - If you are not the lead, do not call the human about it: the lead does.

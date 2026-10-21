@@ -49,10 +49,22 @@ describe('темы гида', () => {
     expect(text).toContain('start a replacement on the named account');
     // Ответ человека обязателен до `create_session`.
     expect(text).toContain('Never start a replacement on your own: ask `@human` first and wait for the answer.');
-    // После «да»: create_session на этом провайдере, add_to_room, задача с указателем на карту, письмо застрявшему.
-    expect(text).toContain('After a yes: `create_session` with that `provider`, `add_to_room` for the new session');
-    expect(text).toContain('tell the stuck participant in a message that its part was taken over');
+    // После «да»: create_session (task обязателен — с указателем на поля застрявшего в карте), потом add_to_room,
+    // потом письмо застрявшему (решение 10 итогового ревью).
+    expect(text).toContain(
+      "After a yes: `create_session` with that `provider` and a `task` that points at the stuck participant's fields in `get_map`",
+    );
+    expect(text.indexOf('`create_session` with that `provider`')).toBeLessThan(text.indexOf('then `add_to_room` for the new session'));
+    expect(text.indexOf('then `add_to_room` for the new session')).toBeLessThan(
+      text.indexOf('tell the stuck participant in a message that its part was taken over'),
+    );
     expect(text.indexOf('ask `@human` first')).toBeLessThan(text.indexOf('After a yes'));
+  });
+
+  it('тема tools: wait_for кончается и состоянием stuck, со ссылкой на тему stuck', () => {
+    const text = (guideTopic('tools') ?? '').replace(/\s+/g, ' ');
+    expect(text).toContain('The answer `state: "stuck"` means the session waits for the human');
+    expect(text).toContain('do not call `wait_for` for it again, see topic `stuck`');
   });
 
   it('раздел темы не пуст и начинается своим заголовком', () => {
