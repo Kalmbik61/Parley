@@ -56,6 +56,12 @@ describe('темы гида', () => {
     }
   });
 
+  it('тема window называет скилл parley-browser в подразделе про встроенный браузер', () => {
+    const text = guideTopic('window') ?? '';
+    expect(text).toContain('### The built-in browser');
+    expect(text).toContain('parley-browser');
+  });
+
   it('указатель check_inbox лежит в теме про письма', () => {
     expect(guideTopic('letters')).toContain('## The pointer');
     expect(guideTopic('letters')).toContain('New messages (N). Call check_inbox.');

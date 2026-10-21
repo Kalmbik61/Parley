@@ -45,7 +45,8 @@ import {
   type ExceptionParams,
   type LogParams,
 } from './cdp-entries.js';
-import { REACT_INFO_FN } from './react-info.js';
+import { AGENT_LIMITS } from '@parley/protocol';
+import { PAGE_FNS } from './page-fns.js';
 
 export type CdpMethod = string;
 
@@ -81,20 +82,49 @@ export const CDP_ALLOWED: ReadonlySet<CdpMethod> = new Set<CdpMethod>([
   'Runtime.releaseObject',
   'Page.captureScreenshot',
   'Page.getLayoutMetrics',
+  // Этап D: управление страницей агентом (ввод, дерево доступности, файлы, хранилище). `Runtime.evaluate` сюда не
+  // входит — только `sendAgentScript` (решение владельца 2026-10-20).
+  'Accessibility.getFullAXTree',
+  'DOM.getBoxModel',
+  'DOM.scrollIntoViewIfNeeded',
+  'DOM.focus',
+  'DOM.setFileInputFiles',
+  'Input.dispatchMouseEvent',
+  'Input.dispatchKeyEvent',
+  'Input.insertText',
+  'Page.setInterceptFileChooserDialog',
+  'Emulation.setFocusEmulationEnabled',
+  'Runtime.terminateExecution',
+  'DOMStorage.enable',
+  'DOMStorage.disable',
+  'DOMStorage.getDOMStorageItems',
+  'DOMStorage.setDOMStorageItem',
+  'DOMStorage.removeDOMStorageItem',
+  'DOMStorage.clear',
 ]);
 
 /**
+ * Методы скриптов агента: только `Inspector.sendAgentScript`, его зовёт только `agent-evaluate.ts` (чужой код в мире
+ * страницы — решение владельца 2026-10-20). `Runtime.evaluate` — единственный вход, которого нет в `CDP_ALLOWED`.
+ */
+export const CDP_AGENT_SCRIPT: ReadonlySet<CdpMethod> = new Set<CdpMethod>(['Runtime.evaluate', 'Runtime.callFunctionOn']);
+
+/**
  * Можно ли так позвать CDP (спека браузера 3.3): метод — из закрытого списка, а `Runtime.callFunctionOn` — только с
- * `REACT_INFO_FN` (3.8). Это единственное исполнение кода в мире страницы; JS агента сюда не попадает никогда.
+ * функциями Parley (`PAGE_FNS`: `REACT_INFO_FN` 3.8, `SELECT_OPTION_FN`). JS агента сюда не попадает — для него
+ * `sendAgentScript`.
  */
 export function cdpCallAllowed(method: string, params?: Record<string, unknown>): boolean {
   if (!CDP_ALLOWED.has(method)) return false;
-  if (method === 'Runtime.callFunctionOn') return params?.functionDeclaration === REACT_INFO_FN;
+  if (method === 'Runtime.callFunctionOn') return typeof params?.functionDeclaration === 'string' && PAGE_FNS.has(params.functionDeclaration);
   return true;
 }
 
 /** Тайм-аут команды CDP (спайк 0.1): без страницы `enable` висит; дольше него `ready` страницу вкладки не держит. */
 export const CDP_COMMAND_MS = 10_000;
+
+/** Срок команды скрипта агента: главный таймер `evalMs` в `agent-evaluate.ts` срабатывает раньше (решения плана D). */
+export const AGENT_SCRIPT_COMMAND_MS = AGENT_LIMITS.evalMs + 5_000;
 
 export interface Inspector {
   attach(contents: WebContents): void;
@@ -107,6 +137,8 @@ export interface Inspector {
   clear(id: number): void;
   responseBody(id: number, requestId: string, limit: number): Promise<ResponseBody | null>;
   send<T = unknown>(id: number, method: CdpMethod, params?: Record<string, unknown>): Promise<T>;
+  /** Скрипт агента: `Runtime.evaluate` и `Runtime.callFunctionOn` с любой функцией. Зовёт только `agent-evaluate.ts`. */
+  sendAgentScript<T = unknown>(id: number, method: 'Runtime.evaluate' | 'Runtime.callFunctionOn', params?: Record<string, unknown>): Promise<T>;
   onBatch(listener: (batch: DevtoolsBatch) => void): () => void;
   /** Гость уничтожен, журнал снят: тем, у кого есть состояние по id гостя (размер вкладки), пора его забыть. */
   onDestroyed(listener: (id: number) => void): () => void;
@@ -221,10 +253,17 @@ export function createInspector(deps: {
   const destroyedListeners = new Set<(id: number) => void>();
   const eventListeners = new Map<number, Map<string, Set<(params: unknown) => void>>>();
 
-  function command<T>(contents: WebContents, method: CdpMethod, params?: Record<string, unknown>): Promise<T> {
-    if (!cdpCallAllowed(method, params)) return Promise.reject(new Error(`CDP method not allowed: ${method}`));
+  /** Проверка и срок — параметрами: у `send` это `cdpCallAllowed` и `CDP_COMMAND_MS`, у `sendAgentScript` — свои. */
+  function command<T>(
+    contents: WebContents,
+    method: CdpMethod,
+    params?: Record<string, unknown>,
+    options: { allowed: boolean; timeoutMs: number } = { allowed: cdpCallAllowed(method, params), timeoutMs: CDP_COMMAND_MS },
+  ): Promise<T> {
+    if (!options.allowed) return Promise.reject(new Error(`CDP method not allowed: ${method}`));
+    const timeoutMs = options.timeoutMs;
     return new Promise<T>((resolve, reject) => {
-      const cancel = setTimer(() => reject(new Error(`CDP command timed out: ${method}`)), CDP_COMMAND_MS);
+      const cancel = setTimer(() => reject(new Error(`CDP command timed out: ${method}`)), timeoutMs);
       contents.debugger.sendCommand(method, params).then(
         (result: unknown) => {
           cancel();
@@ -576,6 +615,13 @@ export function createInspector(deps: {
       if (contents === null) return Promise.reject(new Error(`no browser guest: ${id}`));
       if (journals.get(id)?.attached !== true) return Promise.reject(new Error(`capture unavailable: ${id}`));
       return command<T>(contents, method, params);
+    },
+    sendAgentScript<T>(id: number, method: 'Runtime.evaluate' | 'Runtime.callFunctionOn', params?: Record<string, unknown>): Promise<T> {
+      if (!CDP_AGENT_SCRIPT.has(method)) return Promise.reject(new Error(`not an agent script method: ${method}`));
+      const contents = live(id);
+      if (contents === null) return Promise.reject(new Error(`no browser guest: ${id}`));
+      if (journals.get(id)?.attached !== true) return Promise.reject(new Error(`capture unavailable: ${id}`));
+      return command<T>(contents, method, params, { allowed: true, timeoutMs: AGENT_SCRIPT_COMMAND_MS });
     },
     onBatch(listener) {
       batchListeners.add(listener);

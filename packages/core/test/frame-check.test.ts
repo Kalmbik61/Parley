@@ -420,7 +420,7 @@ describe('рамочный тест репозитория (тест 6)', () => 
         'packages/core/src/codex/discover.ts:9',
         'packages/core/src/providers.ts:18',
         'packages/core/src/providers.ts:319',
-        'packages/core/src/work/mcp-config.ts:191',
+        'packages/core/src/work/mcp-config.ts:192',
       ].sort(),
     );
   });
@@ -494,7 +494,7 @@ describe('строка статуса не пишет в каталоги аге
 });
 
 describe('скилл агентов не пишет в каталоги агента (юридическая рамка, кусок 10)', () => {
-  // Скиллы `parley` и `minimal-development` кладутся в проект и в worktree сессий, а `~/.claude`, `~/.codex`, `~/.agents` и
+  // Скиллы `parley`, `minimal-development` и `parley-browser` кладутся в проект и в worktree сессий, а `~/.claude`, `~/.codex`, `~/.agents` и
   // `~/.claude.json` не трогаются ни при каких условиях: ни установкой, ни учётом, ни строками exclude.
   it('домашняя папка после установки в проект и в worktree не изменилась ни на байт', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'frame-skill-'));
@@ -521,15 +521,17 @@ describe('скилл агентов не пишет в каталоги аген
       await installAgentSkill({ projectPath: path.join(home, '.claude') });
 
       expect(await snapshot(home)).toEqual(before);
-      // А в проекте и в worktree скиллы легли (parley и внутренний minimal-development, P39):
+      // А в проекте и в worktree скиллы легли (parley, внутренний minimal-development, P39, и parley-browser, этап D браузера):
       // проверка не прошла бы на пустом месте.
       expect(await readdir(path.join(project, '.agents', 'skills'))).toEqual([
         'minimal-development',
         'parley',
+        'parley-browser',
       ]);
       expect(await readdir(path.join(worktree, '.claude', 'skills'))).toEqual([
         'minimal-development',
         'parley',
+        'parley-browser',
       ]);
     } finally {
       if (savedHome === undefined) delete process.env['HOME'];

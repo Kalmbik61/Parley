@@ -15,7 +15,7 @@ import { LayoutTooLargeError, type LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
 import { createNotesStore, type NotesStore } from './notes-store.js';
 import type { NotesFile } from '../shared/notes-types.js';
-import { forwardHostToPages, forwardHostToWindow, registerIpc, withIpcError } from './ipc.js';
+import { forwardHostToPages, forwardHostToWindow, parseAgentRegistration, registerIpc, withIpcError } from './ipc.js';
 import { createRootsRegistry, FilesDeniedError, type RootsRegistry } from './roots.js';
 
 /** Подставной `ipcMain`: сохраняет обработчики и умеет их дёргать, как настоящий `invoke`. */
@@ -77,7 +77,7 @@ const emulation = {
   })),
 };
 /** Ответы окна на просьбы агента (этап B2): main/browser/agent-ops.ts подменён — мост проверяет только форму. */
-const agentOps = { openTabResult: vi.fn(), registerTab: vi.fn(), captureReady: vi.fn() };
+const agentOps = { openTabResult: vi.fn(), registerTab: vi.fn(), captureReady: vi.fn(), stop: vi.fn(), focusReady: vi.fn() };
 
 /** Подставной webContents для моста `browser:*`: EventEmitter плюс то, что трогает мост. */
 function fakeBrowserContents(
@@ -1508,6 +1508,31 @@ describe('канал агента — только для main (этап B2, с�
     expect(agentOps.captureReady).toHaveBeenCalledTimes(1);
   });
 
+  it('agent-stop: целый webContentsId — в agent.stop; иначе bad_request без вызова (этап D)', async () => {
+    const { ipcMain } = setup();
+    agentOps.stop.mockClear();
+    await ipcMain.invoke('browser:agent-stop', 7);
+    expect(agentOps.stop).toHaveBeenCalledWith(7);
+    for (const raw of ['7', 1.5, null, undefined]) {
+      expect(await codeOf(ipcMain.invoke('browser:agent-stop', raw)), JSON.stringify(raw)).toBe('bad_request');
+    }
+    expect(agentOps.stop).toHaveBeenCalledTimes(1);
+  });
+
+  // ok: false — только «фокус не встал»; скрытая страница отвечает ok: true (решение владельца 8) — канал это не различает
+  it('agent-focus-ready: id до 64 знаков, ok — boolean; иначе bad_request (этап D)', async () => {
+    const { ipcMain } = setup();
+    agentOps.focusReady.mockClear();
+    await ipcMain.invoke('browser:agent-focus-ready', 'f-1', true);
+    expect(agentOps.focusReady).toHaveBeenCalledWith('f-1', true);
+    await ipcMain.invoke('browser:agent-focus-ready', 'f-2', false);
+    expect(agentOps.focusReady).toHaveBeenLastCalledWith('f-2', false);
+    for (const [id, ok] of [['x'.repeat(65), true], ['', true], [7, true], ['f-3', 'yes'], ['f-3', undefined]] as const) {
+      expect(await codeOf(ipcMain.invoke('browser:agent-focus-ready', id, ok)), JSON.stringify([id, ok])).toBe('bad_request');
+    }
+    expect(agentOps.focusReady).toHaveBeenCalledTimes(2);
+  });
+
   it('register-tab: hello, страница панели с живым гостем раздела, gone и пауза панели — в реестр агента; неверное и вкладка человека — bad_request', async () => {
     const guest = fakeBrowserContents(7, 'webview');
     const { ipcMain } = setup({ webContents: new Map<number, unknown>([[7, guest], [1, fakeBrowserContents(1, 'window')]]) });
@@ -1518,10 +1543,10 @@ describe('канал агента — только для main (этап B2, с�
     expect(agentOps.registerTab).toHaveBeenLastCalledWith(hello);
     const page = { kind: 'page', generation, webContentsId: 7, workKey: '/p w-1', owner: { kind: 'session', sessionId: 's-02' }, pageId: 'bp-abc123', visible: false };
     await ipcMain.invoke('browser:register-tab', page);
-    expect(agentOps.registerTab).toHaveBeenLastCalledWith(page);
+    expect(agentOps.registerTab).toHaveBeenLastCalledWith({ ...page, humanBusy: false });
     const unloaded = { ...page, webContentsId: null };
     await ipcMain.invoke('browser:register-tab', unloaded);
-    expect(agentOps.registerTab).toHaveBeenLastCalledWith(unloaded);
+    expect(agentOps.registerTab).toHaveBeenLastCalledWith({ ...unloaded, humanBusy: false });
     const pause = { kind: 'paused', generation, workKey: '/p w-1', owner: { kind: 'room', roomId: 'r-01' }, paused: true };
     await ipcMain.invoke('browser:register-tab', pause);
     expect(agentOps.registerTab).toHaveBeenLastCalledWith(pause);
@@ -1927,5 +1952,14 @@ describe('app:save-recipe project recipe boundary', () => {
     openPath.mockResolvedValue('/private editor error');
     expect(await ipcMain.invoke('app:save-recipe', request())).toEqual({ status: 'saved', id: 'project:payments-change', opened: false });
     expect(await readFile(file(), 'utf8')).toContain('Payments change');
+  });
+});
+
+describe('реестр страниц агента: humanBusy (этап D)', () => {
+  const page = { kind: 'page', generation: 'g1', webContentsId: 7, workKey: '/p w-1', owner: { kind: 'session', sessionId: 's-02' }, pageId: 'bp-aaaaaa', visible: true };
+  it('humanBusy переносится; нет поля — false; не boolean — запись отклонена', () => {
+    expect(parseAgentRegistration({ ...page, humanBusy: true })).toMatchObject({ kind: 'page', humanBusy: true });
+    expect(parseAgentRegistration(page)).toMatchObject({ kind: 'page', humanBusy: false });
+    expect(parseAgentRegistration({ ...page, humanBusy: 'yes' })).toBeNull();
   });
 });

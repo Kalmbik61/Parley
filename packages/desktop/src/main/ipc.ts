@@ -185,7 +185,9 @@ export function parseAgentRegistration(raw: unknown): AgentPageRegistration | nu
   const { webContentsId, pageId, visible } = raw;
   if (!isPage(pageId) || typeof visible !== 'boolean') return null;
   if (webContentsId !== null && !Number.isInteger(webContentsId)) return null;
-  return { kind: 'page', generation, webContentsId: webContentsId as number | null, workKey, owner, pageId, visible };
+  const { humanBusy } = raw;
+  if (humanBusy !== undefined && typeof humanBusy !== 'boolean') return null;
+  return { kind: 'page', generation, webContentsId: webContentsId as number | null, workKey, owner, pageId, visible, humanBusy: humanBusy ?? false };
 }
 
 export function parseAgentOpenTabResult(raw: unknown): AgentOpenTabResult | null {
@@ -283,7 +285,7 @@ export interface RegisterIpcOptions {
     /** Размер вьюпорта (спека 2026-10-07, 4.2): main/browser/emulation.ts#createEmulation. */
     emulation: Pick<Emulation, 'set'>;
     /** Ответы окна на просьбы агента (спека браузера 3.7, этап B2): main/browser/agent-ops.ts. */
-    agent: Pick<AgentOps, 'openTabResult' | 'registerTab' | 'captureReady'>;
+    agent: Pick<AgentOps, 'openTabResult' | 'registerTab' | 'captureReady' | 'stop' | 'focusReady'>;
   };
 }
 
@@ -895,6 +897,26 @@ export function registerIpc(options: RegisterIpcOptions): void {
     withIpcError(async (_event, id: unknown) => {
       if (typeof id !== 'string' || id.length === 0 || id.length > 64) throw new HostError('bad_request', 'invalid agent capture id');
       browser.agent.captureReady(id);
+    }),
+  );
+
+  // Stop на значке агента (этап D): main сам находит страницу и её панель по id, гость не проверяется.
+  ipcMain.handle(
+    'browser:agent-stop',
+    withIpcError(async (_event, id: unknown) => {
+      if (typeof id !== 'number' || !Number.isInteger(id)) throw new HostError('bad_request', 'invalid agent stop id');
+      browser.agent.stop(id);
+    }),
+  );
+
+  // Ответ окна на просьбу о фокусе (этап D, путь А): `ok` — фокус на `<webview>`; видимость окно не проверяет (решение владельца 8).
+  ipcMain.handle(
+    'browser:agent-focus-ready',
+    withIpcError(async (_event, id: unknown, ok: unknown) => {
+      if (typeof id !== 'string' || id.length === 0 || id.length > 64 || typeof ok !== 'boolean') {
+        throw new HostError('bad_request', 'invalid agent focus reply');
+      }
+      browser.agent.focusReady(id, ok);
     }),
   );
 

@@ -17,6 +17,7 @@ import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBr
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody } from '../../shared/browser-devtools.js';
 import type {
   AgentActivity,
+  AgentResize,
   AgentOpenTab,
   AnnotationPick,
   AnnotationPosition,
@@ -203,6 +204,8 @@ export interface FakeBridge extends ParleyBridge {
   emitAgentOpenTab(e: AgentOpenTab): void;
   /** Агент действует на странице: событие `browser:agent-activity` слушателям `browser.onAgentActivity` (этап C). */
   emitAgentActivity(e: AgentActivity): void;
+  /** Агент поменял размер страницы: событие `browser:agent-resize` слушателям `browser.onAgentResize` (этап D). */
+  emitAgentResize(e: AgentResize): void;
   /** Фокус окна macOS: событие `app:window-focus` слушателям `app.onWindowFocus` (кусок 9.2b). */
   emitWindowFocus(focused: boolean): void;
   /** Ответ browser.pickStart; по умолчанию null. Отказ — объект с code, как у прочих отказов подставного моста. */
@@ -318,6 +321,7 @@ export function createFakeBridge(): FakeBridge {
   const browserFocusListeners = new Set<(e: { webContentsId: number }) => void>();
   const agentOpenTabListeners = new Set<(e: AgentOpenTab) => void>();
   const agentActivityListeners = new Set<(e: AgentActivity) => void>();
+  const agentResizeListeners = new Set<(e: AgentResize) => void>();
   const windowFocusListeners = new Set<(focused: boolean) => void>();
   let voiceModels: VoiceModelId[] = [];
   let transcribeResult: TranscribeResult = { text: 'dictated text' };
@@ -478,6 +482,9 @@ export function createFakeBridge(): FakeBridge {
     },
     emitAgentActivity: (e) => {
       for (const listener of agentActivityListeners) listener(e);
+    },
+    emitAgentResize: (e) => {
+      for (const listener of agentResizeListeners) listener(e);
     },
     emitWindowFocus: (focused) => {
       for (const listener of windowFocusListeners) listener(focused);
@@ -665,6 +672,16 @@ export function createFakeBridge(): FakeBridge {
       },
       agentCaptureReady: async (id) => {
         browserCalls.push({ method: 'agentCaptureReady', args: [id] });
+      },
+      onAgentResize: (listener) => {
+        agentResizeListeners.add(listener);
+        return () => agentResizeListeners.delete(listener);
+      },
+      agentStop: async (webContentsId) => {
+        browserCalls.push({ method: 'agentStop', args: [webContentsId] });
+      },
+      agentFocusReady: async (id, ok) => {
+        browserCalls.push({ method: 'agentFocusReady', args: [id, ok] });
       },
     },
     files: {

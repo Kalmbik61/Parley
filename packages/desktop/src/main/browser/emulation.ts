@@ -74,6 +74,8 @@ export interface Emulation {
   /** `deviceScaleFactor` — подмена DPR команды (снимок агента на экране с DPR > 1, см. `withTemporary`); `current` отдаёт `spec` как есть. */
   set(id: number, spec: ViewportSpec | null, area: ViewportArea, deviceScaleFactor?: number): Promise<{ scale: number }>;
   current(id: number): ViewportSpec | null;
+  /** Вписывание и мобильность размера человека для пересчёта точек ввода агента; `null` — Fit (эмуляции нет). */
+  fitOf(id: number): { scale: number; mobile: boolean } | null;
   /** Гость уничтожен: размер его вкладки не помним (id не переиспользуются, но `current` не должен отдавать чужой след). */
   forget(id: number): void;
   /** C: снимок агента в чужом размере — размер на время `run`, потом размер и поле человека (спека 2 п. 10). */
@@ -116,6 +118,11 @@ export function createEmulation(deps: { inspector: Pick<Inspector, 'send'> }): E
     current(id) {
       const entry = state.get(id);
       return entry === undefined ? null : copySpec(entry.spec);
+    },
+    fitOf(id) {
+      const entry = state.get(id);
+      if (entry === undefined) return null;
+      return { scale: viewportCommands(entry.spec, entry.area).scale, mobile: viewportSize(entry.spec).mobile };
     },
     forget(id) {
       state.delete(id);

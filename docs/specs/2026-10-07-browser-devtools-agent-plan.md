@@ -4,6 +4,8 @@
 
 > **2026-10-16:** ревизия по реверс-проверке (`docs/audits/2026-10-16/Parley-rea-reverse-check-2026-10-16.md`, папка не в git). До этапа D: повторить спайк 0.4 с фокусом в `<textarea>` окна — по замеру Orca ввод агента через CDP `Input.*` в `<webview>` уходит в поле хозяина (спека 5.1, заметка); переписать планы C и D под 3.10 (owners, реестр страниц панелей, правило 5.1), как переписывается B2; хосту журналировать `op:"browser.agentOp"` (спека 3.7). Состояние на 2026-10-16: A и B выпущены, B2 влит PR #64 (журнал этапа — `.superpowers/sdd/2026-10-14-browser-panels/` в основной копии), спека в master актуальна. Идёт этап C: сперва переписка этого плана под 3.10 в ветке `feat/browser-agent-read`, потом исполнение. Живой проверки B2 в dev-окне не было.
 
+> **2026-10-20:** этап D — `2026-10-20-browser-agent-control-plan.md`; в «Глобальных ограничениях» пункты «только loopback», «`Runtime.evaluate` нет», «никогда — JS, куки, хранилища, файлы, другие сайты» для этапа D перекрыты решениями владельца 2026-10-20.
+
 > **Для исполнителей-агентов:** обязательный навык — superpowers:subagent-driven-development (рекомендуется) или superpowers:executing-plans. Задачи выполняются по одной. Шаги отмечены флажками (`- [ ]`).
 
 **Цель:**
@@ -30,7 +32,7 @@
 | B. Контекст в чат | `…-plan-b-context.md` | `feat/browser-context` | `.claude/worktrees/browser-context` | L |
 | B2. Браузер чата и комнаты, агент открывает страницу | `…-plan-b2-open.md` | влит PR #64 (ветка и worktree убраны) | — | L |
 | C. Агент читает | `…-plan-c-agent-read.md` | `feat/browser-agent-read` | `.claude/worktrees/browser-agent-read` | M |
-| D. Агент управляет | `…-plan-d-agent-control.md` | `feat/browser-agent-control` | `.claude/worktrees/browser-agent-control` | L |
+| D. Агент управляет | `2026-10-20-browser-agent-control-plan.md` | `feat/browser-agent-control` | `.claude/worktrees/browser-agent-control` | L |
 
 **Порядок:** 0 → A → B → B2 → C → D.
 - B зависит от A. B2 берёт у A раскладку вкладок и пределы, а у B ничего не берёт, но идёт после него (решение 2026-10-13) и проверен на коде ветки B.

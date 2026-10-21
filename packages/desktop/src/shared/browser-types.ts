@@ -135,8 +135,8 @@ export interface SavedContext {
 
 /**
  * Агент просит окно открыть вкладку (событие `browser:agent-open-tab`, спека браузера 2026-10-07, 3.5, 5.1 `browser_open`;
- * этап B2). Адрес main уже проверил: http(s) на loopback, без учётных данных. Работу называет хост по токену сессии, а не
- * агент.
+ * этап B2). Адрес main уже проверил: http(s) без учётных данных, хост любой (открывать, читать и действовать можно на любом
+ * сайте, решение владельца 2026-10-20). Работу называет хост по токену сессии, а не агент.
  */
 export interface AgentOpenTab {
   requestId: string;
@@ -167,7 +167,9 @@ export type AgentOpenTabResult =
  */
 export type AgentPageRegistration =
   | { kind: 'hello'; generation: string }
-  | { kind: 'page'; generation: string; webContentsId: number | null; workKey: string; owner: BrowserOwner; pageId: string; visible: boolean }
+  | { kind: 'page'; generation: string; webContentsId: number | null; workKey: string; owner: BrowserOwner; pageId: string; visible: boolean;
+      /** D: человек занят Select или Annotate на странице; нет поля — false. */
+      humanBusy?: boolean }
   | { kind: 'gone'; generation: string; workKey: string; pageId: string }
   | { kind: 'paused'; generation: string; workKey: string; owner: BrowserOwner; paused: boolean };
 
@@ -177,12 +179,26 @@ export interface AgentActivity {
   /** Короткий номер сессии-агента: `S02`. */
   session: string;
   op: string;
-  phase: 'start' | 'end';
+  /** `step` (этап D): точка клика или просьба о фокусе. */
+  phase: 'start' | 'step' | 'end';
   /**
    * Снимок в чужом размере или у невидимой страницы: окно ставит `<webview>` в этот размер (слева-сверху), рисует подпись
    * «Agent capture W×H» и `opacity: 0` у скрытой страницы, затем подтверждает `id` через `agentCaptureReady`.
    */
   capture?: { width: number; height: number; id: string };
+  /** D: точка клика в пикселях элемента `<webview>` (масштаб страницы и `scale` эмуляции уже учтены). */
+  point?: { x: number; y: number };
+  /**
+   * D (путь А, решение владельца 7): с `step` — поставить фокус на `<webview>` и ответить `agentFocusReady(id, ok)`; с `end`
+   * (хвост D1) — вернуть фокус человеку и подтвердить `agentFocusReady(id, true)`: до этого main гасит нажатия в странице агента.
+   */
+  focus?: { id: string };
+}
+
+/** Агент поменял размер страницы (событие `browser:agent-resize`, этап D): окно ставит вьюпорт вкладки. */
+export interface AgentResize {
+  webContentsId: number;
+  viewport: ViewportSpec | null;
 }
 
 // Интерфейс растёт вместе с мостом: pickStart и pickCancel — с 9.3a.
@@ -237,4 +253,10 @@ export interface BrowserApi {
   onAgentActivity(listener: (e: AgentActivity) => void): () => void;
   /** Окно поставило `<webview>` в размер снимка (`capture.id` события `browser:agent-activity`): main снимает только после этого. */
   agentCaptureReady(id: string): Promise<void>;
+  /** Агент поменял размер страницы (`browser:agent-resize`, этап D). */
+  onAgentResize(listener: (e: AgentResize) => void): () => void;
+  /** Человек нажал Stop на значке агента (`browser:agent-stop`): пауза панели страницы и обрыв операций её панели. */
+  agentStop(webContentsId: number): Promise<void>;
+  /** Окно ответило на `focus` события активности (`browser:agent-focus-ready`); `ok` — фокус на `<webview>`, видимость не требуется. */
+  agentFocusReady(id: string, ok: boolean): Promise<void>;
 }

@@ -733,17 +733,19 @@ describe('бюджет вставки в байтах (P34)', () => {
 });
 
 describe('правило приоритета браузера Parley (этап B2)', () => {
-  it('короткое, по-английски, называет browser_open и всех, кого он обгоняет, и оставляет им то, чего он не делает', () => {
+  it('короткое, по-английски, называет browser_open и всех, кого он обгоняет, и оставляет им только трассы производительности', () => {
     expect(BROWSER_PRIORITY_RULE).not.toMatch(/[А-Яа-яЁё]/);
     expect(contextBytes(BROWSER_PRIORITY_RULE)).toBeLessThanOrEqual(700);
     expect(BROWSER_PRIORITY_RULE).toContain("use Parley's browser first");
-    expect(BROWSER_PRIORITY_RULE).toContain('browser_open');
-    expect(BROWSER_PRIORITY_RULE).toContain('the human sees the same page');
-    expect(BROWSER_PRIORITY_RULE).toContain('browser_tabs');
-    expect(BROWSER_PRIORITY_RULE).not.toContain('reading or clicking');
+    for (const needed of ['browser_open', 'the human sees the same page', 'browser_snapshot', 'browser_action', 'browser_evaluate', 'parley-browser']) {
+      expect(BROWSER_PRIORITY_RULE, needed).toContain(needed);
+    }
     for (const other of ['Chrome', 'Chrome DevTools', 'Playwright']) expect(BROWSER_PRIORITY_RULE, other).toContain(other);
-    for (const left of ['other sites', 'running JS', 'cookies', 'files', 'performance traces', 'browser_open is not available']) {
+    for (const left of ['performance traces', 'browser_open is not available']) {
       expect(BROWSER_PRIORITY_RULE, left).toContain(left);
+    }
+    for (const gone of ['For pages on localhost', 'clicking or typing', 'running JS', 'cookies', 'files']) {
+      expect(BROWSER_PRIORITY_RULE, gone).not.toContain(gone);
     }
   });
 

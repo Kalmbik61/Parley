@@ -5,8 +5,9 @@
  * `feed.decide`; ответа хуку без клика человека здесь нет.
  *
  * Тело по `toolInput`: `Bash` — команда и описание; `Edit`/`MultiEdit` — путь и «до/после» (хунков на
- * этапе запроса нет); `Write` — путь и свёрнутое содержимое; прочее, в том числе MCP, — свёрнутые
- * аргументы JSON. Длинное переносится и прокручивается внутри карточки, кнопки переносятся рядом.
+ * этапе запроса нет); `Write` — путь и свёрнутое содержимое; `browser_evaluate` Parley — аргументы сразу, код как есть
+ * (D4 живых проверок 2026-10-20: человек одобряет скрипт, видя его); прочее, в том числе MCP, — свёрнутые аргументы JSON.
+ * Длинное переносится и прокручивается внутри карточки, кнопки переносятся рядом.
  */
 
 import { useState } from 'react';
@@ -22,6 +23,21 @@ import { CardNote } from './CardNote.js';
 import { useCardDecision } from './use-card-decision.js';
 
 const BLOCK = 'm-0 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-border bg-muted/40 px-2 py-1 font-mono text-xs [overflow-wrap:anywhere]';
+
+/** Скрипт агента в странице: так его зовут и Claude Code, и лента Codex (`mcp__<сервер>__<инструмент>`). */
+const BROWSER_EVALUATE = 'mcp__parley__browser_evaluate';
+/** Аргументы `browser_evaluate`, в которых код. */
+const SCRIPT_KEYS = new Set(['expression', 'function']);
+
+/** Аргументы скрипта строками: код — с новой строки как есть (без экранирования JSON), прочие строки — как есть, иное — JSON. */
+function scriptArguments(input: Record<string, unknown>): string {
+  return Object.entries(input)
+    .map(([key, value]) => {
+      if (typeof value !== 'string') return `${key}: ${JSON.stringify(value)}`;
+      return SCRIPT_KEYS.has(key) ? `${key}:\n${value}` : `${key}: ${value}`;
+    })
+    .join('\n');
+}
 
 function str(input: Record<string, unknown>, key: string): string | null {
   const value = input[key];
@@ -110,6 +126,14 @@ function Details({ item }: { item: FeedPermissionCard }): JSX.Element {
     );
   }
   const { name } = toolHeadline(item.toolName, input);
+  if (item.toolName === BROWSER_EVALUATE) {
+    return (
+      <>
+        <span className="font-mono text-xs [overflow-wrap:anywhere]">{name}</span>
+        <pre data-testid="card-arguments" className={BLOCK}>{scriptArguments(input)}</pre>
+      </>
+    );
+  }
   return (
     <>
       <span className="font-mono text-xs [overflow-wrap:anywhere]">{name}</span>

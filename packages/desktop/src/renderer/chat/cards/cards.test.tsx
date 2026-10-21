@@ -183,6 +183,24 @@ describe('PermissionCard', () => {
     expect(screen.getByTestId('card-arguments').textContent).toContain('"a": 1');
   });
 
+  it('browser_evaluate Parley — аргументы сразу, без «Show arguments»: код как есть, моноширинный блок с пределом высоты и прокруткой; прочие инструменты — свёрнуты (D4)', () => {
+    const fn = '(el) => {\n  return el.value;\n}';
+    const { rerender } = render(<Card item={permission({ toolName: 'mcp__parley__browser_evaluate', toolInput: { tab: 't1', function: fn, ref: 'e4' } })} />);
+    expect(screen.getByTestId('chat-card').textContent).toContain('parley · browser_evaluate');
+    expect(screen.queryByText(S.chat.card.showArguments)).toBeNull();
+    const pre = screen.getByTestId('card-arguments');
+    expect(pre.tagName).toBe('PRE');
+    expect(pre.textContent).toBe(`tab: t1\nfunction:\n${fn}\nref: e4`);
+    for (const name of ['font-mono', 'max-h-48', 'overflow-auto', 'whitespace-pre-wrap']) expect(pre.className, name).toContain(name);
+    rerender(<Card item={permission({ toolName: 'mcp__parley__browser_evaluate', toolInput: { tab: 't2', expression: 'window.__lastSubmit' } })} />);
+    expect(screen.getByTestId('card-arguments').textContent).toBe('tab: t2\nexpression:\nwindow.__lastSubmit');
+    // Прочие инструменты Parley — как раньше: аргументы под «Show arguments».
+    rerender(<Card item={permission({ toolName: 'mcp__parley__browser_action', toolInput: { tab: 't1', action: 'click', ref: 'e4' } })} />);
+    expect(screen.queryByTestId('card-arguments')).toBeNull();
+    fireEvent.click(screen.getByText(S.chat.card.showArguments));
+    expect(screen.getByTestId('card-arguments').textContent).toContain('"action": "click"');
+  });
+
   it('обрезанный вход — строка inputTruncated', () => {
     render(<Card item={permission({ truncated: true })} />);
     expect(screen.getByTestId('chat-card').textContent).toContain(S.chat.inputTruncated);

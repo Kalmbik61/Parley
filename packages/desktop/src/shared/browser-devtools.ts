@@ -142,6 +142,11 @@ export function viewportSize(spec: ViewportSpec): { width: number; height: numbe
     : { width: preset.width, height: preset.height, mobile: preset.mobile, dpr: spec.dpr };
 }
 
+/** Пресет с DPR прежнего размера; из Fit — 2x у мобильных, 1x у прочих (правило меню размеров; им же пользуется `browser_resize`). */
+export function presetSpec(preset: ViewportPreset, rotated: boolean, current: ViewportSpec | null): ViewportSpec {
+  return { preset, rotated, dpr: current?.dpr ?? (VIEWPORT_PRESETS[preset].mobile ? 2 : 1) };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

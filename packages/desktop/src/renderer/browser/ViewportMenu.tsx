@@ -9,6 +9,7 @@ import { MonitorSmartphone } from 'lucide-react';
 import { useRef, useState } from 'react';
 import {
   DEVTOOLS_LIMITS,
+  presetSpec as presetSpecOf,
   VIEWPORT_PRESETS,
   viewportSize,
   type ViewportDpr,
@@ -41,9 +42,9 @@ function isDpr(value: number): value is ViewportDpr {
   return value === 1 || value === 2 || value === 3;
 }
 
-/** Пресет с DPR прежнего размера; из Fit — 2x у мобильных, 1x у прочих. */
+/** Пресет с DPR прежнего размера; из Fit — 2x у мобильных, 1x у прочих (правило — `shared/browser-devtools.ts`). */
 export function presetSpec(preset: ViewportPreset, current: ViewportSpec | null): ViewportSpec {
-  return { preset, rotated: false, dpr: current?.dpr ?? (VIEWPORT_PRESETS[preset].mobile ? 2 : 1) };
+  return presetSpecOf(preset, false, current);
 }
 
 /** Повёрнутый размер; свой размер, который после поворота вышел бы за пределы раздела 8, — null. */

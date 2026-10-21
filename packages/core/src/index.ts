@@ -359,6 +359,7 @@ export {
 } from './work/find-binary.js';
 export { GUIDE } from './work/guide.js';
 export { SKILL_MD } from './work/skill.js';
+export { PARLEY_BROWSER_SKILL_MD, PARLEY_BROWSER_SKILL_NAME } from './work/parley-browser-skill.js';
 export { installAgentSkill } from './work/skill-install.js';
 export type {
   SkillInstallOptions,
@@ -511,7 +512,7 @@ export {
   probeChannelSupport,
 } from './work/channel.js';
 export type { ChannelProbe } from './work/channel.js';
-export { BROWSER_TOOL_HINTS, BROWSER_TOOL_LIMITS, BROWSER_TOOL_OPS, BROWSER_TOOLS, PAGE_DATA_NOTE } from './mcp/browser-tools.js';
+export { BROWSER_TOOL_HINTS, BROWSER_TOOL_LIMITS, BROWSER_TOOL_OPS, BROWSER_TOOLS, BROWSER_TOOLS_ASK, PAGE_DATA_NOTE } from './mcp/browser-tools.js';
 export { contextFromEnv } from './mcp/context.js';
 export type { McpContext } from './mcp/context.js';
 export {

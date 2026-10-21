@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 import type { WebContents } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEVTOOLS_LIMITS, type DevtoolsBatch } from '../../shared/browser-devtools.js';
-import { CDP_ALLOWED, CDP_COMMAND_MS, cdpCallAllowed, createInspector, forwardBatches } from './inspector.js';
+import { AGENT_LIMITS } from '@parley/protocol';
+import { AGENT_SCRIPT_COMMAND_MS, CDP_ALLOWED, CDP_COMMAND_MS, cdpCallAllowed, createInspector, forwardBatches } from './inspector.js';
+import { SELECT_OPTION_FN } from './page-fns.js';
 import { REACT_INFO_FN } from './react-info.js';
 
 afterEach(() => {
@@ -717,10 +719,31 @@ describe('пачки окну (раздел 8; Фокус ревью 1)', () => 
   });
 });
 
+const STAGE_D = [
+  'Accessibility.getFullAXTree',
+  'DOM.getBoxModel',
+  'DOM.scrollIntoViewIfNeeded',
+  'DOM.focus',
+  'DOM.setFileInputFiles',
+  'Input.dispatchMouseEvent',
+  'Input.dispatchKeyEvent',
+  'Input.insertText',
+  'Page.setInterceptFileChooserDialog',
+  'Emulation.setFocusEmulationEnabled',
+  'Runtime.terminateExecution',
+  'DOMStorage.enable',
+  'DOMStorage.disable',
+  'DOMStorage.getDOMStorageItems',
+  'DOMStorage.setDOMStorageItem',
+  'DOMStorage.removeDOMStorageItem',
+  'DOMStorage.clear',
+];
+
 describe('команды CDP (спека 3.3)', () => {
-  it('закрытый список этапов A и B; Runtime.evaluate в нём нет', () => {
+  it('закрытый список A–D; Runtime.evaluate в нём нет', () => {
     expect([...CDP_ALLOWED].sort()).toEqual(
       [
+        ...STAGE_D,
         'Accessibility.disable',
         'Accessibility.enable',
         'Accessibility.getPartialAXTree',
@@ -875,10 +898,10 @@ describe('закрытый список CDP — этап B (спека брау�
     expect(dbg.sendCommand).toHaveBeenCalledWith('Runtime.callFunctionOn', good);
   });
 
-  it('рамочный: в коде main Runtime.callFunctionOn зовётся только с REACT_INFO_FN', () => {
+  it('рамочный: в коде main Runtime.callFunctionOn зовётся только с функциями Parley', () => {
     const mainDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
     const files = (readdirSync(mainDir, { recursive: true }) as string[]).filter(
-      (file) => file.endsWith('.ts') && !file.includes('.test.') && path.basename(file) !== 'inspector.ts',
+      (file) => file.endsWith('.ts') && !file.includes('.test.') && path.basename(file) !== 'inspector.ts' && path.basename(file) !== 'agent-evaluate.ts',
     );
     let calls = 0;
     for (const file of files) {
@@ -886,9 +909,54 @@ describe('закрытый список CDP — этап B (спека брау�
       for (const match of text.matchAll(/'Runtime\.callFunctionOn'/g)) {
         calls += 1;
         const at = match.index ?? 0;
-        expect(text.slice(at, at + 200), file).toContain('functionDeclaration: REACT_INFO_FN');
+        expect(text.slice(at, at + 200), file).toMatch(/functionDeclaration: (REACT_INFO_FN|SELECT_OPTION_FN)/);
       }
     }
     expect(calls).toBeGreaterThan(0);
+  });
+});
+
+describe('скрипты агента и функции Parley (этап D)', () => {
+  it('send: Runtime.evaluate — отказ; callFunctionOn — только REACT_INFO_FN и SELECT_OPTION_FN', async () => {
+    const { dbg, inspector } = setup();
+    dbg.sendCommand.mockClear();
+    await expect(inspector.send(7, 'Runtime.evaluate', { expression: '1' })).rejects.toThrow('CDP method not allowed: Runtime.evaluate');
+    await expect(inspector.send(7, 'Runtime.callFunctionOn', { objectId: 'o', functionDeclaration: 'function () { return 1; }' })).rejects.toThrow('not allowed');
+    expect(dbg.sendCommand).not.toHaveBeenCalled();
+    await inspector.send(7, 'Runtime.callFunctionOn', { objectId: 'o', functionDeclaration: SELECT_OPTION_FN, arguments: [{ value: 'Blue' }] });
+    expect(dbg.sendCommand).toHaveBeenCalledWith('Runtime.callFunctionOn', expect.objectContaining({ functionDeclaration: SELECT_OPTION_FN }));
+  });
+
+  it('sendAgentScript: только Runtime.evaluate и Runtime.callFunctionOn с любой функцией; прочее — отказ без sendCommand', async () => {
+    const { dbg, inspector } = setup();
+    dbg.sendCommand.mockClear();
+    dbg.sendCommand.mockResolvedValueOnce({ result: { type: 'number', value: 2 } });
+    await expect(inspector.sendAgentScript(7, 'Runtime.evaluate', { expression: '1 + 1', returnByValue: true })).resolves.toEqual({ result: { type: 'number', value: 2 } });
+    await inspector.sendAgentScript(7, 'Runtime.callFunctionOn', { objectId: 'o', functionDeclaration: '(el) => el.value' });
+    await expect(inspector.sendAgentScript(7, 'Page.navigate' as 'Runtime.evaluate', { url: 'file:///etc/hosts' })).rejects.toThrow('not an agent script method');
+    expect(dbg.sendCommand.mock.calls.map(([method]) => method)).toEqual(['Runtime.evaluate', 'Runtime.callFunctionOn']);
+  });
+
+  it('sendAgentScript к чужому или отцепившемуся гостю — отказ, как send', async () => {
+    const { inspector } = setup();
+    await expect(inspector.sendAgentScript(8, 'Runtime.evaluate', { expression: '1' })).rejects.toThrow('no browser guest: 8');
+  });
+
+  it('срок команды sendAgentScript — AGENT_SCRIPT_COMMAND_MS, а не CDP_COMMAND_MS (рецензия M6)', async () => {
+    quietWarnings();
+    const { dbg, inspector, clock } = setup();
+    dbg.sendCommand.mockImplementationOnce(() => new Promise(() => {}));
+    const pending = inspector.sendAgentScript(7, 'Runtime.evaluate', { expression: 'x' });
+    const state = { done: false };
+    void pending.then(
+      () => (state.done = true),
+      () => (state.done = true),
+    );
+    clock.tick(CDP_COMMAND_MS);
+    await settle();
+    expect(state.done).toBe(false);
+    clock.tick(AGENT_SCRIPT_COMMAND_MS - CDP_COMMAND_MS);
+    await expect(pending).rejects.toThrow('CDP command timed out: Runtime.evaluate');
+    expect(AGENT_SCRIPT_COMMAND_MS).toBe(AGENT_LIMITS.evalMs + 5_000);
   });
 });

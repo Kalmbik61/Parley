@@ -154,6 +154,26 @@ describe('preload: последний статус и тема', () => {
     expect(ipcRenderer.invoke).toHaveBeenCalledWith('browser:agent-capture-ready', 'c-77');
   });
 
+  it('browser.agentStop и agentFocusReady зовут browser:agent-stop и browser:agent-focus-ready (этап D)', async () => {
+    const bridge = await loadPreload();
+    const { ipcRenderer } = await import('electron');
+    await bridge.browser.agentStop(7);
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith('browser:agent-stop', 7);
+    await bridge.browser.agentFocusReady('f-1', true);
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith('browser:agent-focus-ready', 'f-1', true);
+  });
+
+  it('browser.onAgentResize: событие browser:agent-resize приходит подписчику, отписка снимает его (этап D)', async () => {
+    const bridge = await loadPreload();
+    const listener = vi.fn();
+    const off = bridge.browser.onAgentResize(listener);
+    emit('browser:agent-resize', { webContentsId: 7, viewport: null });
+    off();
+    emit('browser:agent-resize', { webContentsId: 7, viewport: null });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith({ webContentsId: 7, viewport: null });
+  });
+
   it('browser.registerTab зовёт browser:register-tab; onAgentActivity: событие приходит подписчику, отписка снимает его (этап C)', async () => {
     const bridge = await loadPreload();
     const { ipcRenderer } = await import('electron');

@@ -13,7 +13,9 @@ import { PANEL_LIMITS } from '../../renderer/layout/tree.js';
 import { pngSize } from './png.js';
 import { createEmulation } from './emulation.js';
 import { createPageRegistry } from './agent-pages.js';
-import { captureSpec, createAgentOps, loopbackHref, NOT_MOUNTED_NOTE, type AgentOps } from './agent-ops.js';
+import { createAgentWindow } from './agent-window.js';
+import { createTypingClock } from './human-typing.js';
+import { captureSpec, createAgentOps, NOT_MOUNTED_NOTE, openableHref, type AgentOps } from './agent-ops.js';
 
 const REF = { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' };
 const OTHER_REF = { projectPath: '/proj', workId: 'w-2', sessionId: 's-01' };
@@ -25,7 +27,7 @@ const room = (roomId: string): BrowserAgentOwner => ({ kind: 'room', roomId });
 
 /** Гость-страница: URL и заголовок задаются, уничтожение и падение — флаги. */
 function fakeGuest(id: number, url = 'http://localhost:5173/settings', title = 'Settings') {
-  return { id, getURL: vi.fn(() => url), getTitle: vi.fn(() => title), isDestroyed: vi.fn(() => false), isCrashed: vi.fn(() => false) };
+  return { id, getURL: vi.fn(() => url), getTitle: vi.fn(() => title), isDestroyed: vi.fn(() => false), isCrashed: vi.fn(() => false), isLoading: vi.fn(() => false), on: vi.fn(), off: vi.fn() };
 }
 type Guest = ReturnType<typeof fakeGuest>;
 const EMPTY: DevtoolsSnapshot = { epoch: 1, capture: 'on', console: [], network: [] };
@@ -89,17 +91,25 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
     resize: vi.fn((_data: Buffer, width: number, height: number) => png(width, height)),
     stitch: (parts: Buffer[]) => png(parts[0] ? parts[0].readUInt32BE(16) : 0, parts.reduce((sum, part) => sum + part.readUInt32BE(20), 0)),
     crop: (data: Buffer, _top: number, height: number) => png(data.readUInt32BE(16), height),
+    cropRect: (data: Buffer) => data,
   };
   const deps = {
+    scripts: { evaluateOf: vi.fn() },
+    storage: { cookiesOf: vi.fn(), storageOf: vi.fn() },
+    downloads: { list: vi.fn(() => []), dirOf: vi.fn(() => '/downloads') },
     agentsAllowed: async () => state.allowed,
     openTab,
-    ...(overrides.openMs === undefined ? {} : { openMs: overrides.openMs }),
+    // Страница после ответа окна в этих тестах чаще не регистрируется: ожидание регистрации короткое.
+    openMs: overrides.openMs ?? 50,
+    resize: () => false,
     fromId: (id) => (guests.get(id) as unknown as WebContents | undefined) ?? null,
     inspector,
     emulation,
     saveImage,
     image,
     inGuest,
+    agentWindow: createAgentWindow(),
+    typing: createTypingClock(),
     // Окно подтверждает поверхность снимка сразу после просьбы, как это делает рендерер (если тест не отключил подтверждение).
     activity: (e: AgentActivity) => {
       activity.push(e);
@@ -142,7 +152,7 @@ function okResult<T = BrowserAgentOpenResult>(result: BrowserAgentResult): T {
 describe('open (спека 5.1 browser_open)', () => {
   it('просьба окну — работа из ref события, адрес, сессия и её номер; ответ агенту — id вкладки t1, адрес, reused и заметки', async () => {
     const { run, asked } = setup();
-    expect(okResult(await run({ url: PAGE }))).toEqual({ tab: 't1', owner: OWN, url: PAGE, reused: false, notes: [] });
+    expect(okResult(await run({ url: PAGE }))).toEqual({ tab: 't1', owner: OWN, url: PAGE, reused: false, loaded: false, title: '', notes: [expect.stringContaining('browser_tabs')] });
     expect(asked).toEqual([{ requestId: expect.any(String) as unknown as string, workKey: WORK, url: PAGE, sessionId: 's-02', session: 'S02', owner: OWN }]);
   });
 
@@ -168,25 +178,54 @@ describe('open (спека 5.1 browser_open)', () => {
     expect(asked.map((e) => e.workKey)).toEqual([OTHER_WORK]);
   });
 
-  it('Фокус ревью 2: не loopback и обходные записи — not_loopback, окну ничего', async () => {
+  it('Фокус ревью 2: не http(s) и обходные записи — bad_request, окну ничего', async () => {
     const { run, asked } = setup();
     for (const url of [
-      'https://example.com/',
-      'http://localhost.evil.test/',
-      'http://127.0.0.1.nip.io/',
-      'http://0.0.0.0:5173/',
-      'http://192.168.1.10:5173/',
-      'http://[::ffff:127.0.0.1]/',
-      'http://localhost@evil.com/',
       'file:///etc/hosts',
       'javascript:alert(1)',
       'data:text/html,x',
+      'ftp://example.com/',
+      'chrome://settings',
       'localhost:5173',
       '/relative',
       'not a url',
     ]) {
-      expect(codeOf(await run({ url })), url).toBe('not_loopback');
+      const result = await run({ url });
+      expect(codeOf(result), url).toBe('bad_request');
+      expect(messageOf(result), url).toContain('http(s)');
     }
+    expect(asked).toEqual([]);
+  });
+
+  it('внешний http(s) открывается: окну уходит адрес без учётных данных, ответ — вкладка t1 (открывать, читать и действовать можно на любом сайте)', async () => {
+    const { run, asked } = setup();
+    for (const [url, href] of [
+      ['https://example.test/', 'https://example.test/'],
+      ['http://localhost.evil.test/', 'http://localhost.evil.test/'],
+      ['http://127.0.0.1.nip.io/', 'http://127.0.0.1.nip.io/'],
+      ['http://0.0.0.0:5173/', 'http://0.0.0.0:5173/'],
+      ['http://192.168.1.10:5173/', 'http://192.168.1.10:5173/'],
+      ['http://localhost@evil.com/', 'http://evil.com/'],
+      ['https://user:pw@example.test/a?b=1#/route', 'https://example.test/a?b=1#/route'],
+    ] as const) {
+      asked.length = 0;
+      expect(okResult(await run({ url })), url).toMatchObject({ tab: 't1', owner: OWN, url: href, reused: false });
+      expect(asked.map((e) => e.url), url).toEqual([href]);
+    }
+  });
+
+  it('внешний адрес не обходит отказы: выключатель, пауза панели, чужая комната и own вместе с room — прежние коды, окну ничего', async () => {
+    const off = setup({ allowed: false });
+    expect(codeOf(await off.run({ url: 'https://example.test/' }))).toBe('access_denied');
+    expect(off.asked).toEqual([]);
+
+    const { ops, run, asked } = setup({ owners: [OWN, ROOM] });
+    ops.registerTab({ kind: 'paused', generation: GEN, workKey: WORK, owner: OWN, paused: true });
+    const paused = await run({ url: 'https://example.test/', own: true });
+    expect(codeOf(paused)).toBe('access_denied');
+    expect(messageOf(paused)).toContain('paused by the human');
+    expect(codeOf(await run({ url: 'https://example.test/', room: 'r-99' }))).toBe('access_denied');
+    expect(codeOf(await run({ url: 'https://example.test/', room: 'r-01', own: true }))).toBe('bad_request');
     expect(asked).toEqual([]);
   });
 
@@ -194,8 +233,10 @@ describe('open (спека 5.1 browser_open)', () => {
     const { run, asked } = setup();
     expect(okResult(await run({ url: 'http://user:pw@LOCALHOST:5173/a?b=1#/route' })).url).toBe('http://localhost:5173/a?b=1#/route');
     expect(asked[0]?.url).toBe('http://localhost:5173/a?b=1#/route');
-    expect(loopbackHref('http://127.1/')).toBe('http://127.0.0.1/');
-    expect(loopbackHref('https://example.com/')).toBeNull();
+    expect(openableHref('http://127.1/')).toBe('http://127.0.0.1/');
+    expect(openableHref('https://example.com/')).toBe('https://example.com/');
+    expect(openableHref('file:///etc/hosts')).toBeNull();
+    expect(openableHref('javascript:alert(1)')).toBeNull();
   });
 
   it('общий выключатель «Let agents use the browser» — access_denied, окну ничего', async () => {
@@ -208,7 +249,7 @@ describe('open (спека 5.1 browser_open)', () => {
 
   it('неизвестная операция — unsupported', async () => {
     const { run, asked } = setup();
-    expect(codeOf(await run({ code: '1' }, REF, 'evaluate'))).toBe('unsupported');
+    expect(codeOf(await run({ code: '1' }, REF, 'teleport'))).toBe('unsupported');
     expect(asked).toEqual([]);
   });
 
@@ -230,7 +271,7 @@ describe('open (спека 5.1 browser_open)', () => {
 
   it('работа не смонтирована — вкладка добавлена, ответ ok с заметкой, а не отказ', async () => {
     const { run } = setup({ reply: { tabId: 'browser:aaaaaa', reused: false, mounted: false } });
-    expect(okResult(await run({ url: PAGE }))).toEqual({ tab: 't1', owner: OWN, url: PAGE, reused: false, notes: [NOT_MOUNTED_NOTE] });
+    expect(okResult(await run({ url: PAGE }))).toEqual({ tab: 't1', owner: OWN, url: PAGE, reused: false, loaded: false, title: '', notes: [NOT_MOUNTED_NOTE] });
   });
 });
 
@@ -334,8 +375,10 @@ describe('окно ушло или молчит (Фокус ревью, п. 4)',
     await Promise.resolve();
     expect(asked).toHaveLength(2);
     ops.openTabResult(asked[1]?.requestId ?? '', { tabId: 'browser:bbbbbb', reused: false, mounted: true });
-    expect(okResult(await second).url).toBe('http://localhost:5173/second');
+    // Ответ на вторую просьбу первую не закрыл: она ещё ждёт и принимает свой ответ (после ответа `open` ждёт страницу до openMs).
+    await Promise.resolve();
     ops.openTabResult(asked[0]?.requestId ?? '', { tabId: 'browser:aaaaaa', reused: false, mounted: true });
+    expect(okResult(await second).url).toBe('http://localhost:5173/second');
     expect(okResult(await first).url).toBe(PAGE);
   });
 });
@@ -402,16 +445,16 @@ describe('реестр страниц панелей и tabs (спека 3.7, 3.
     expect(tab?.title).toHaveLength(200);
   });
 
-  it('не-loopback страница: url — только origin, title пустой, viewport null, Page.getLayoutMetrics не вызван', async () => {
+  it('внешняя страница: tabs показывает полный адрес с маской, заголовок и размер (любые сайты)', async () => {
     const { ops, guests, inspector, emulation, runOp: run } = setup();
     register(ops, {});
     guests.set(7, fakeGuest(7, 'https://example.com/private/path?token=SECRET1#frag', 'Private title for example'));
     emulation.current.mockReturnValue({ preset: 'mobile-m', rotated: false, dpr: 2 });
     const [tab] = okResult<Tabs>(await run('tabs', {})).tabs;
-    expect(tab).toMatchObject({ url: 'https://example.com', title: '', viewport: null, loopback: false, loaded: true });
+    expect(tab).toMatchObject({ url: 'https://example.com/private/path?token=<redacted>#frag', title: 'Private title for example', viewport: { width: 375, height: 812, emulated: true }, loopback: false, loaded: true });
     expect(inspector.send).not.toHaveBeenCalled();
     guests.set(7, fakeGuest(7, 'about:blank', 'Blank'));
-    expect(okResult<Tabs>(await run('tabs', {})).tabs[0]).toMatchObject({ url: '', title: '', viewport: null, loopback: false });
+    expect(okResult<Tabs>(await run('tabs', {})).tabs[0]).toMatchObject({ url: 'about:blank', title: 'Blank', loopback: false });
   });
 
   it('три гостя с зависшим getLayoutMetrics: tabs отвечает меньше чем за 2 с, у них viewport null', async () => {
@@ -530,11 +573,11 @@ function networkEntry(patch: Partial<NetworkEntry>): NetworkEntry {
 }
 
 describe('проверки страницы (спека 5.2)', () => {
-  it('не loopback — not_loopback; страница упала, гость уничтожен или его нет — tab_not_loaded', async () => {
+  it('внешняя страница читается; страница упала, гость уничтожен или его нет — tab_not_loaded', async () => {
     const { ops, guests, runOp: run } = setup();
     register(ops, {});
     guests.set(7, fakeGuest(7, 'https://example.com/'));
-    expect(codeOf(await run('console', { tab: 't1' }))).toBe('not_loopback');
+    expect(codeOf(await run('console', { tab: 't1' }))).toBe('ok');
     guests.set(7, fakeGuest(7));
     guests.get(7)?.isCrashed.mockReturnValue(true);
     expect(codeOf(await run('console', { tab: 't1' }))).toBe('tab_not_loaded');
@@ -543,6 +586,31 @@ describe('проверки страницы (спека 5.2)', () => {
     expect(codeOf(await run('network', { tab: 't1' }))).toBe('tab_not_loaded');
     register(ops, { webContentsId: null });
     expect(codeOf(await run('console', { tab: 't1' }))).toBe('tab_not_loaded');
+  });
+
+  it('внешняя страница из browser_open: console, network и screenshot читаются; tabs показывает адрес с маской', async () => {
+    const { ops, guests, saveImage, runOp: run, state } = setup();
+    state.reply = { tabId: 'bp-aaaaaa', reused: false, mounted: true };
+    expect(okResult<{ tab: string }>(await run('open', { url: 'https://example.test/' })).tab).toBe('t1');
+    guests.set(7, fakeGuest(7, 'https://example.test/'));
+    register(ops, {});
+    for (const [op, args] of [['console', { tab: 't1' }], ['network', { tab: 't1' }], ['screenshot', { tab: 't1' }]] as const) {
+      expect(codeOf(await run(op, args)), op).toBe('ok');
+    }
+    expect(saveImage).toHaveBeenCalledTimes(1);
+    expect(okResult<Tabs>(await run('tabs', {})).tabs[0]).toMatchObject({ id: 't1', url: 'https://example.test/', title: 'Settings', loopback: false });
+  });
+
+  it('страница ушла redirect на внешний адрес: вкладка в списке с адресом без секрета, чтение работает', async () => {
+    const { ops, guests, runOp: run, state } = setup();
+    state.reply = { tabId: 'bp-aaaaaa', reused: false, mounted: true };
+    expect(okResult<{ tab: string }>(await run('open', { url: 'http://localhost:5173/login' })).tab).toBe('t1');
+    register(ops, {});
+    expect(codeOf(await run('console', { tab: 't1' }))).toBe('ok');
+    guests.set(7, fakeGuest(7, 'https://accounts.example.test/signin?sid=SECRET9', 'Sign in'));
+    expect(codeOf(await run('console', { tab: 't1' }))).toBe('ok');
+    const [tab] = okResult<Tabs>(await run('tabs', {})).tabs;
+    expect(tab).toMatchObject({ id: 't1', url: 'https://accounts.example.test/signin?sid=<redacted>', title: 'Sign in', loopback: false, loaded: true });
   });
 });
 
@@ -1127,21 +1195,6 @@ describe('screenshot (спека 5.1, 8)', () => {
     expect(saveImage).toHaveBeenCalledTimes(1);
   });
 
-  it('страница ушла с localhost посреди fullPage — not_loopback «Page t1 left localhost during the screenshot; nothing was saved.», saveImage не вызван', async () => {
-    const { ops, inspector, guests, saveImage, runOp: run } = setup();
-    register(ops, {});
-    const guest = guests.get(7) as Guest;
-    let shots = 0;
-    inspector.send.mockImplementation(async (id: number, method: string) => {
-      if (method === 'Page.captureScreenshot' && (shots += 1) === 1) guest.getURL.mockReturnValue('https://example.com/login');
-      return sendWith({ content: { width: 1280, height: 2000 }, shot: png(1280, 800) })(id, method);
-    });
-    const result = await run('screenshot', { tab: 't1', fullPage: true });
-    expect(codeOf(result)).toBe('not_loopback');
-    expect(messageOf(result)).toBe('Page t1 left localhost during the screenshot; nothing was saved.');
-    expect(saveImage).not.toHaveBeenCalled();
-  });
-
   it('эпоха сменилась посреди снимка (переход на localhost) — tab_not_loaded «Page t1 navigated during the screenshot: take it again.», saveImage не вызван', async () => {
     const { ops, inspector, snapshots, saveImage, runOp: run } = setup();
     register(ops, {});
@@ -1325,9 +1378,9 @@ describe('проверки перед запуском из очереди (оп
     expect(messageOf(result)).toContain('Let agents use the browser');
   });
 
-  it('страница ушла на внешний адрес — not_loopback; операция не началась', async () => {
+  it('страница ушла на внешний адрес — операция всё равно идёт (любые сайты)', async () => {
     const result = await queued(({ guests }) => guests.set(7, fakeGuest(7, 'https://example.com/')));
-    expect(codeOf(result)).toBe('not_loopback');
+    expect(codeOf(result)).toBe('ok');
   });
 });
 
@@ -1452,14 +1505,20 @@ describe('тайм-аут и немедленный повтор с настоя
     const emulation = createEmulation({ inspector });
     const guest = fakeGuest(7);
     const ops = createAgentOps({
+      scripts: { evaluateOf: vi.fn() },
+      storage: { cookiesOf: vi.fn(), storageOf: vi.fn() },
+      downloads: { list: vi.fn(() => []), dirOf: vi.fn(() => '/downloads') },
       agentsAllowed: async () => true,
       openTab: () => true,
+      resize: () => false,
       fromId: () => guest as unknown as WebContents,
       inspector,
       emulation,
       saveImage: async () => '/drops/x.png',
-      image: { resize: (_data: Buffer, width: number, height: number) => png(width, height), stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data },
+      image: { resize: (_data: Buffer, width: number, height: number) => png(width, height), stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data, cropRect: (data: Buffer) => data },
       inGuest: async () => undefined,
+      agentWindow: createAgentWindow(),
+      typing: createTypingClock(),
       activity: (e: AgentActivity) => {
         if (e.capture !== undefined) queueMicrotask(() => ops.captureReady((e.capture as { id: string }).id));
       },
@@ -1534,13 +1593,17 @@ describe('замёрзший гость посреди fullPage не клини�
     const guest = fakeGuest(7);
     let evals = 0;
     const ops = createAgentOps({
+      scripts: { evaluateOf: vi.fn() },
+      storage: { cookiesOf: vi.fn(), storageOf: vi.fn() },
+      downloads: { list: vi.fn(() => []), dirOf: vi.fn(() => '/downloads') },
       agentsAllowed: async () => true,
       openTab: () => true,
+      resize: () => false,
       fromId: () => guest as unknown as WebContents,
       inspector,
       emulation,
       saveImage: async () => '/drops/x.png',
-      image: { resize: (_data: Buffer, width: number, height: number) => png(width, height), stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data },
+      image: { resize: (_data: Buffer, width: number, height: number) => png(width, height), stitch: (parts: Buffer[]) => parts[0] as Buffer, crop: (data: Buffer) => data, cropRect: (data: Buffer) => data },
       // Первый вызов — исходная прокрутка; со второго гость не отвечает вовсе (упал или завис).
       inGuest: (_contents: WebContents, code: string) => {
         evals += 1;
@@ -1549,6 +1612,8 @@ describe('замёрзший гость посреди fullPage не клини�
       activity: (e: AgentActivity) => {
         if (e.capture !== undefined) queueMicrotask(() => ops.captureReady((e.capture as { id: string }).id));
       },
+      agentWindow: createAgentWindow(),
+      typing: createTypingClock(),
       ...timing,
     });
     ops.registerTab({ kind: 'hello', generation: GEN });

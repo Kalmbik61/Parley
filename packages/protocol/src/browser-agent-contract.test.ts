@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { BROWSER_TOOL_HINTS, BROWSER_TOOL_OPS, BROWSER_TOOLS } from '@parley/core';
+import { BROWSER_TOOL_HINTS, BROWSER_TOOL_OPS, BROWSER_TOOLS, PARLEY_BROWSER_SKILL_MD } from '@parley/core';
 import { AGENT_DEFAULTS, BROWSER_AGENT_ERROR_CODES, browserAgentArgs } from './browser-agent.js';
 
 const KEYS = ['type', 'minimum', 'maximum', 'minLength', 'maxLength', 'pattern', 'enum'] as const;
@@ -50,5 +50,9 @@ describe('схемы MCP core и zod протокола', () => {
     for (const code of Object.keys(BROWSER_TOOL_HINTS)) {
       expect(BROWSER_AGENT_ERROR_CODES as readonly string[], code).toContain(code);
     }
+  });
+
+  it('скилл parley-browser объясняет каждый код ошибки канала', () => {
+    for (const code of BROWSER_AGENT_ERROR_CODES) expect(PARLEY_BROWSER_SKILL_MD, code).toContain(`| \`${code}\` |`);
   });
 });

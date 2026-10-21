@@ -6,6 +6,21 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Agents drive their browser panels.** An agent opens pages, waits for them to load, navigates (address, back, forward, reload), reads the accessibility tree with `eN` references, clicks, double-clicks, hovers, types, presses keys, scrolls, selects, checks, drags, waits for text, resizes the page and screenshots a page or one element. It works only in the browser panel of its own chat and of the rooms it belongs to; your own browser tabs stay closed to it.
+- **Any site.** Agents act and read on any `http(s)` page of their panels, not only on `localhost`. Secrets in addresses, the console, the network log and form fields are still masked as `<redacted>`.
+- **Scripts, cookies and storage with approval.** `browser_evaluate` runs JavaScript in the page, and `browser_cookies` and `browser_storage` read and change cookies and storage, only after you approve each call, so an agent led astray by a page cannot read your session tokens without a question. Claude Code asks before every call; Claude Code in bypassPermissions mode and Codex with `approval_policy = never` do not ask.
+- **Files.** Agents upload files into file fields (never from secret locations such as `~/.ssh`, keychains or `.env` files) and receive downloads in a folder of their session, kept for seven days.
+- **Cookies and storage.** Agents read and change (after your approval) the cookies and the `localStorage` / `sessionStorage` of the page they are on. The browser's cookies are shared with you, so an agent on a site where you are signed in acts as you.
+- **Badge with Stop.** While an agent works, the page row shows its badge with a Stop button, the page frame is highlighted and a dot marks the click. Stop, "Pause agents" and the switch in Settings interrupt an operation that is already running.
+- **`parley-browser` skill.** A built-in skill that explains these tools to Claude, GLM and Codex sessions.
+
+### Changed
+
+- Every browser tool is allowed in advance except `browser_evaluate`, `browser_cookies` and `browser_storage`, which always ask.
+- httpOnly cookie values are never shown to agents.
+
 ### Fixed
 
 - **Annotate outlines the element under the pointer.** With Annotate on, hovering the page draws an amber frame around the element a click would pin, as Select does; before, the frame showed up only after the click. It hides over a pin's number (a click there edits it), while you drag a region, while a comment is open, and when the pointer leaves the page, so it never ends up in the screenshot that goes to the chat.

@@ -101,7 +101,7 @@ export function guardWebviewAttach(contents: Pick<WebContents, 'on'>): void {
 /** Обработчики гостя `<webview>`: окна, навигация, масштаб, уход со страницы, клавиши. */
 function guardGuest(
   contents: WebContents,
-  deps: Pick<BrowserGuardDeps, 'openTab' | 'forwardShortcuts' | 'fetchFavicon' | 'inspect'>,
+  deps: Pick<BrowserGuardDeps, 'openTab' | 'forwardShortcuts' | 'fetchFavicon' | 'inspect' | 'agentFocus'>,
 ): void {
   // Журнал консоли и сети — первым: до первой загрузки гостя, иначе её запросы и ранние сообщения прошли бы мимо
   // (спайк 0.1). Сбой журнала клетку не отменяет: исключение отсюда оставило бы гостя с allowpopups без обработчиков
@@ -138,6 +138,8 @@ function guardGuest(
   // Клик в страницу DOM окна не видит: вкладку страницы активной делает окно по этому событию,
   // оно же держит «окно в фокусе» (спека 7.2, 12.2). Ответ — окну-хозяину гостя.
   contents.on('focus', () => {
+    // Фокус, одолженный агентом (или от его клика), активную вкладку и «окно в фокусе» не меняет (рецензия M1).
+    if (deps.agentFocus?.(contents.id) === true) return;
     contents.hostWebContents?.send('browser:focus', { webContentsId: contents.id });
   });
   // Слушатель клавиш снимается вместе с гостем, а не ждёт сборки мусора.
@@ -198,6 +200,8 @@ interface BrowserGuardDeps {
   fetchFavicon(iconUrl: string, pageUrl: string): Promise<string | null>;
   /** Журнал консоли и сети гостя (спека 2026-10-07-browser-devtools-agent-design.md, 3.3): index.ts — `inspector.attach`. */
   inspect(contents: WebContents): void;
+  /** Пока `true` (у гостя открыто окно операции агента), `focus` гостя окну не шлётся: `browser:focus` менял бы активную вкладку. */
+  agentFocus?(webContentsId: number): boolean;
 }
 
 /**

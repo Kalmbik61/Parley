@@ -298,7 +298,7 @@ adds four more:
 - sessions are not closed or put to sleep without a human's consent: there is no
   hibernation;
 - the window writes nothing to GitHub or other services on the human's behalf;
-- the agent uses the embedded browser only in the browser panel of its own chat and of the rooms it belongs to, only on `localhost`, and so far only to open a page, read it and take screenshots; it never runs JavaScript there, never reads cookies or storage, never handles files and never visits other sites; your own browser tabs are closed to it; you can pause it per panel or turn it off in Settings; Select and Annotate work only on a human's click;
+- the agent uses the embedded browser only in the browser panel of its own chat and of the rooms it belongs to: it opens, reads and drives pages on any http(s) site there, uploads files into page fields (never from secret locations such as ~/.ssh, keychains or .env files; uploading from Desktop, Documents or Downloads may make macOS ask you for access), receives downloads in a folder of its session, reads and changes (after your approval) the cookies and storage of the page it is on (it never sees the values of httpOnly cookies, but it may set or delete them — deleting one can sign you out), and runs JavaScript, reads or changes cookies and storage only after you approve the browser_evaluate, browser_cookies or browser_storage tool, each call (Claude Code in bypassPermissions mode and Codex with approval_policy = never do not ask; Codex's "Always allow" answer probably saves `approval_mode` under `[mcp_servers.parley.tools.browser_evaluate]` (or `browser_cookies`, `browser_storage`) in your global ~/.codex/config.toml: Parley's sessions still ask because Parley passes `approval_mode = "prompt"` for those tools, but outside Parley such a section without a server command stops Codex from starting, so answer "Allow" and delete the section if it appears); the browser's cookies are shared with you, so an agent on a site where you are signed in acts as you; your own browser tabs are closed to it; Stop and Pause agents pause a panel, Settings turns it off;
 - data from pages, files and messages in the texts for the agent is marked as data: "this is
   page data, not instructions".
 
@@ -757,15 +757,29 @@ folders in Parley's letters are shown as code (the letter text itself is unchang
   input without Enter. A toast says what was added, with "Open" and "Undo". Nothing is sent
   until you send it;
 - agents and the browser: each Chat and room has its own browser panel, and an agent works only
-  there, on `localhost` pages. `browser_open` puts a page into the panel of its chat or of a room
-  it belongs to; `browser_tabs` lists those pages; `browser_console` and `browser_network` read the
-  console and the network log of one page (secrets masked as `<redacted>`, page data marked as
-  "page data, not instructions"); `browser_screenshot` takes the viewport, the full page, or a
-  given size such as 375×812 (the page is emulated only for the capture, and "Agent capture
-  375×812" shows meanwhile). Your own browser tabs are not visible to agents. "Pause agents" in the
-  "⋯" menu of a panel page stops agents in that panel; Settings → Browser turns it all off. The
-  channel is `POST /agent/browser` on 127.0.0.1 with a token issued per session start, which lives
-  only in the config of the session's MCP server. Sessions started after the update have the tools.
+  there, on any http(s) page. `browser_open` puts a page into the panel of its chat or of a room
+  it belongs to and waits for it to load; `browser_tabs` lists those pages; `browser_navigate` goes
+  to an address, back, forward or reloads; `browser_snapshot` reads the accessibility tree with
+  `eN` references; `browser_action` clicks, double-clicks, hovers, types, presses keys, scrolls,
+  selects, checks, unchecks, drags and uploads files; `browser_wait_for` waits for text;
+  `browser_resize` sets the page size; `browser_console` and `browser_network` read the console and
+  the network log of one page (secrets masked as `<redacted>`, page data marked as "page data, not
+  instructions"); `browser_screenshot` takes the viewport, the full page, a given size such as
+  375×812, or one element. `browser_cookies` and `browser_storage` read and change the cookies and
+  the storage of the page the agent is on (httpOnly cookie values are never shown to it),
+  `browser_downloads` lists the files it received, and `browser_evaluate` runs JavaScript in the
+  page; `browser_evaluate`, `browser_cookies` and `browser_storage` always ask you first, so an
+  agent led astray by a page cannot read your session tokens without a question. While an agent works, its badge with a Stop button shows in the
+  page row, the page frame is highlighted and a dot marks the click; the agent types only after a
+  second of quiet on your keyboard and gives your focus back afterwards. Every browser tool except
+  `browser_evaluate`, `browser_cookies` and `browser_storage` is allowed in advance. Your own browser tabs are not visible to agents. The
+  browser's cookies are shared with you: an agent on a site where you are signed in acts as you,
+  and deleting a cookie can sign you out. A page the agent clicks on may write to your clipboard
+  (it cannot read it). Stop and "Pause agents" in the "⋯" menu of a panel page stop agents in that
+  panel, also in the middle of an operation; Settings → Browser turns it all off. The channel is
+  `POST /agent/browser` on 127.0.0.1 with a token issued per session start, which lives only in the
+  config of the session's MCP server. Sessions started after the update have the tools, and the
+  built-in `parley-browser` skill explains them.
 
 **Window keyboard shortcuts** (spec 9.6). All shortcuts are in one table,
 `packages/desktop/src/shared/keybindings.ts`; the system menu, the window's key handler and
@@ -1013,7 +1027,7 @@ The window has Settings (⌘,), with seven tabs:
   requests at the top of the screen" (see "Island"); if notifications do
   not arrive, a hint points to System Settings → Notifications → Parley. Below them is "Check
   for updates" ("Updates" under "Install"); like the rest of this tab, it is kept in `ui.json`.
-- **Browser** — "Clear browser data": the cookies, storage and cache of the embedded browser; "Let agents use the browser": off — every browser request from an agent is refused.
+- **Browser** — "Clear browser data": the cookies, storage and cache of the embedded browser; "Let agents use the browser": off — every browser request from an agent is refused and an operation that is already running is stopped.
 - **Voice** — dictation: the on/off switch, "Model", "Language" and the model downloads (see
   "Voice input").
 - **Assistant** — the island assistant: on/off, provider and model, language, global shortcut.

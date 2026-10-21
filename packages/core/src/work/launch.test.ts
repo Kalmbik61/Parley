@@ -1189,14 +1189,14 @@ describe('правило приоритета браузера Parley в зап�
     expect(withRule.replace(`\n\n${BROWSER_PRIORITY_RULE}`, '')).toBe(without);
   });
 
-  it('Claude и GLM с каналом: в файле --settings заранее разрешены все пять browser_*; без канала правил нет', async () => {
-    const five = ['tabs', 'console', 'network', 'screenshot', 'open'].map((op) => `mcp__parley__browser_${op}`);
+  it('Claude и GLM с каналом: в файле --settings заранее разрешены одиннадцать browser_*, а evaluate, cookies и storage спрашиваются; без канала правил нет', async () => {
+    const allowed = ['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'downloads'].map((op) => `mcp__parley__browser_${op}`);
     for (const provider of ['claude', 'glm']) {
       const { workId, sessionId } = await pending('claude');
       const session = { ...(await sessionOf(workId, sessionId)), provider };
       const withChannel = await planLaunch(project, workId, session, { agent });
       const file = withChannel.args[withChannel.args.indexOf('--settings') + 1] as string;
-      expect(JSON.parse(await readFile(file, 'utf8')).permissions, provider).toEqual({ allow: five });
+      expect(JSON.parse(await readFile(file, 'utf8')).permissions, provider).toEqual({ allow: allowed, ask: ['evaluate', 'cookies', 'storage'].map((op) => `mcp__parley__browser_${op}`) });
       const without = await planLaunch(project, workId, session);
       const plain = without.args[without.args.indexOf('--settings') + 1];
       if (plain !== undefined) expect(JSON.parse(await readFile(plain, 'utf8')), provider).not.toHaveProperty('permissions');

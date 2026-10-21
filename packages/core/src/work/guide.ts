@@ -409,6 +409,12 @@ values are cut with the mark \`…(truncated)\`. In \`annotations\`, the numbere
 the fences are the human's comments — those are the requests; the numbers match the pins on
 the screenshot. If there is no request, ask what to do with it.
 
+### The built-in browser
+
+The window has a built-in browser with a panel for your chat and for each room. To open, read
+and drive its pages (any http(s) site, the human sees the same page) use the \`browser_*\` tools
+of this server and load the \`parley-browser\` skill: it has the tools, the errors and the recipes.
+
 ### Request to resolve a conflict
 
     Branch parley/w-0003/s-02 has merge conflicts with master in:

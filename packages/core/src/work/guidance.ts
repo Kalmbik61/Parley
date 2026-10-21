@@ -50,13 +50,14 @@ function findSkillHint(skillList: GuidanceOptions['skillList']): string {
 }
 
 /**
- * Приоритет браузера Parley для страниц на localhost (спека браузера 2026-10-07, этап B2). Отдельный блок слоя сессии, а не
- * строка `stableGuidance`: он идёт только запуску с каналом агента и сервером MCP (`launch.ts`), а у остальных его нет —
- * нельзя велеть агенту звать инструмент, которого у него нет. Вставка и политика остаются теми же байтами у всех сессий.
+ * Приоритет браузера Parley для страниц, которые агент строит или проверяет (спека браузера 2026-10-07, этапы B2 и D).
+ * Отдельный блок слоя сессии, а не строка `stableGuidance`: он идёт только запуску с каналом агента и сервером MCP
+ * (`launch.ts`), а у остальных его нет — нельзя велеть агенту звать инструмент, которого у него нет. Вставка и политика
+ * остаются теми же байтами у всех сессий.
  */
 export const BROWSER_PRIORITY_RULE =
-  "For pages on localhost, use Parley's browser first: browser_open shows the page in the browser panel of your chat or room, and the human sees the same page; browser_tabs, browser_console, browser_network and browser_screenshot read it. " +
-  "Use Chrome, Chrome DevTools or Playwright tools only for other sites, for what Parley's browser tools do not do (so far: clicking or typing in the page, running JS, cookies, files, performance traces), or when browser_open is not available.";
+  "For web pages you build or check, use Parley's browser first: browser_open shows a page in the browser panel of your chat or room, and the human sees the same page; browser_snapshot, browser_action, browser_navigate, browser_console, browser_network, browser_screenshot and browser_evaluate read and drive it (skill parley-browser). " +
+  'Use Chrome, Chrome DevTools or Playwright only for performance traces or when browser_open is not available.';
 
 /**
  * Предостережение агенту своего провайдера о ссылках на настройки Claude Code человека (спека своих провайдеров, 5.8).

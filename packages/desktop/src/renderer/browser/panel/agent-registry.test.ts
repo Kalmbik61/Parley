@@ -134,3 +134,20 @@ describe('реестр страниц панелей для main (этап C, с
     warn.mockRestore();
   });
 });
+
+describe('humanBusy страницы (этап D)', () => {
+  it('занятость уходит полем, снятие — записью без поля; тот же отчёт повторно не шлётся', () => {
+    hydrateWithPanel(['bp-aaaaaa']);
+    reportAgentPage(bridge, WORK, OWNER, 'bp-aaaaaa', 7, true, false);
+    const before = pageRegistrations().length;
+    reportAgentPage(bridge, WORK, OWNER, 'bp-aaaaaa', 7, true, false);
+    expect(pageRegistrations()).toHaveLength(before);
+    reportAgentPage(bridge, WORK, OWNER, 'bp-aaaaaa', 7, true, true);
+    expect(pageRegistrations().at(-1)).toMatchObject({ pageId: 'bp-aaaaaa', webContentsId: 7, humanBusy: true });
+    reportAgentPage(bridge, WORK, OWNER, 'bp-aaaaaa', 7, true, true);
+    expect(pageRegistrations()).toHaveLength(before + 1);
+    reportAgentPage(bridge, WORK, OWNER, 'bp-aaaaaa', 7, true, false);
+    expect(pageRegistrations()).toHaveLength(before + 2);
+    expect(pageRegistrations().at(-1)).not.toHaveProperty('humanBusy');
+  });
+});

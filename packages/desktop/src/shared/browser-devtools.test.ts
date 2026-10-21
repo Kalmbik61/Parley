@@ -4,6 +4,7 @@ import {
   isFailed,
   isViewportSpec,
   MOBILE_USER_AGENT,
+  presetSpec,
   VIEWPORT_PRESETS,
   viewportSize,
   type NetworkEntry,
@@ -70,6 +71,13 @@ describe('размеры вьюпорта (спека 4.2)', () => {
     expect(viewportSize({ preset: 'mobile-m', rotated: false, dpr: 2 })).toEqual({ width: 375, height: 812, mobile: true, dpr: 2 });
     expect(viewportSize({ preset: 'mobile-m', rotated: true, dpr: 3 })).toEqual({ width: 812, height: 375, mobile: true, dpr: 3 });
     expect(viewportSize({ width: 1024, height: 700, mobile: false, dpr: 1 })).toEqual({ width: 1024, height: 700, mobile: false, dpr: 1 });
+  });
+
+  it('presetSpec: DPR прежнего размера; из Fit — 2x у мобильных, 1x у прочих; поворот переносится', () => {
+    expect(presetSpec('mobile-m', false, null)).toEqual({ preset: 'mobile-m', rotated: false, dpr: 2 });
+    expect(presetSpec('laptop', false, null)).toEqual({ preset: 'laptop', rotated: false, dpr: 1 });
+    expect(presetSpec('tablet', false, { preset: 'mobile-s', rotated: true, dpr: 3 })).toEqual({ preset: 'tablet', rotated: false, dpr: 3 });
+    expect(presetSpec('desktop', true, null)).toEqual({ preset: 'desktop', rotated: true, dpr: 1 });
   });
 
   it('мобильный UA — iPhone Safari', () => {

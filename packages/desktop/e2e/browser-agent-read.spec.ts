@@ -366,19 +366,22 @@ test.describe('агент читает страницы браузера чат�
       .toContain('Auth failed');
     for (const secret of BUDGET_SECRETS) expect(consoleText, secret).not.toContain(secret);
 
-    // Страница комнаты ушла на чужой сайт (главный фрейм гостя data: не пускает, поэтому 0.0.0.0 — не loopback для Parley, а
-    // сервер теста слушает на 127.0.0.1): в списке остаётся origin, без пути, query и заголовка.
+    // Страница комнаты ушла на чужой сайт (0.0.0.0 для Parley не loopback, а сервер теста слушает 127.0.0.1): решение владельца
+    // 2026-10-20 снимает проверку loopback — в списке адрес и заголовок с маской, страницу можно читать.
     const foreignPort = new URL(origin).port;
-    await guestEval(electronApp, `${origin}/leave`, `location.href = 'http://0.0.0.0:${foreignPort}/private?sid=EXTSECRET'`).catch(() => null);
+    const foreign = `http://0.0.0.0:${foreignPort}`;
+    await guestEval(electronApp, `${origin}/leave`, `location.href = '${foreign}/private?sid=EXTSECRET'`).catch(() => null);
     await expect
       .poll(async () => (await agentTool(opened, lead, 'browser_tabs')).text, { timeout: 20_000, intervals: [500] })
-      .toContain(`http://0.0.0.0:${foreignPort}`);
+      .toContain(`${leaveId}  room ${roomId}  ${foreign}/private?sid=<redacted>`);
     const tabs = (await agentTool(opened, lead, 'browser_tabs')).text;
-    expect(tabs).not.toContain('Private');
-    expect(tabs).not.toContain('/private');
+    expect(tabs).toContain('not localhost');
+    expect(tabs).toContain('title: Private');
     expect(tabs).not.toContain('EXTSECRET');
     expect(tabs).not.toContain('data:');
-    expect(tabs).toContain(leaveId);
+    const external = await agentTool(opened, lead, 'browser_console', { tab: leaveId });
+    expect(external.isError, external.text).toBe(false);
+    expect(external.text).not.toContain('EXTSECRET');
 
     // Пауза: browser_open отказывает.
     const panel = panelOf(window, `session:${lead}`);
