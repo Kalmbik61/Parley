@@ -14,7 +14,7 @@
  * областям окна; параметризованные тексты — функции.
  */
 import { STATE_WORDS } from '@parley/core/session-state';
-import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
+import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type ConsentCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
 import type { IpcErrorInfo } from './ipc-error.js';
 
@@ -2038,6 +2038,15 @@ export const S = {
     tuckAway: 'Tuck the island away',
     showIsland: 'Show the island',
     idle: 'No agents running',
+    /** Карточка согласия на папку (спека 2026-10-21, 4.4): запуск Codex ждёт, пока человек не решит. */
+    consentTitle: 'Trust folder for agents?',
+    consentTrust: 'Trust',
+    consentRequestedBy: (who: string, source: string): string => `requested by ${who} · ${source}`,
+    /** Откуда запрос (`requestedBy.source`): `agent` — `create_session` агента, `resume` — подъём сессии, `launch` — запуск. */
+    consentSource: { agent: 'create_session', resume: 'resume', launch: 'launch' } satisfies Record<ConsentCard['requestedBy']['source'], string>,
+    consentDone: 'Done ✓',
+    consentAnswered: 'Already answered',
+    consentFailed: "Couldn't decide",
   },
 
   /** Тексты общих участников переписки — `lib/participant-tag.ts`. */

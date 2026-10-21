@@ -5,13 +5,14 @@
  * разрешения и вопроса, стрелки очереди, «Open in Parley», пометки, отступ под чёлку, пауза
  * кнопок решения после показа карточки (таймеры подставные), перетаскивание за форму и курсоры, убранный остров
  * (форма сжимается в брусок или в `✅ N`, не уезжает), плавный размер формы (замер содержимого, переход, появление),
- * размеры текста.
+ * размеры текста; карточка согласия на папку встаёт раньше карточек ленты, но не раньше раскрытого помощника.
  */
 
 import { createRef } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedCard } from '@parley/core';
+import type { ConsentCard } from '@parley/protocol';
 import type { IslandApi } from '../../shared/island.js';
 import { S } from '../../shared/strings.js';
 import type { IslandModel } from './model.js';
@@ -83,6 +84,7 @@ function viewProps(patch: Partial<IslandViewProps> = {}): IslandViewProps {
     onDragStart: vi.fn(), onDragEnd: vi.fn(),
     onToggleList: vi.fn(), onHide: vi.fn(), onClearDone: vi.fn(), onSelect: vi.fn(), onDecide: vi.fn(),
     assistant: null,
+    consent: null,
     ...patch,
   };
 }
@@ -976,5 +978,60 @@ describe('помощник на острове', () => {
     cleanup();
     render(<IslandView {...viewProps()} />);
     expect(screen.queryByTestId('assistant-dot')).toBeNull();
+  });
+});
+
+describe('карточка согласия на острове', () => {
+  const CONSENT: ConsentCard = {
+    id: 'c-01', kind: 'folder-trust', folder: '/tmp/proj', projectPath: '/tmp/proj',
+    requestedBy: { source: 'agent', sessionId: 's-03', label: 'S03 Ruslan' }, at: '2026-10-21T10:00:00.000Z', state: 'pending',
+  };
+  const consent = (patch: Partial<NonNullable<IslandViewProps['consent']>> = {}): NonNullable<IslandViewProps['consent']> => ({
+    card: CONSENT, deciding: false, note: null, onDecide: vi.fn(), ...patch,
+  });
+
+  it('есть и ждущий запрос ленты, и согласие — показано согласие, запрос ждёт за ним', () => {
+    view({ items: [permissionItem()], consent: consent() });
+    expect(screen.getByText('Trust folder for agents?')).toBeTruthy();
+    expect(screen.getByTestId('island-consent-trust')).toBeTruthy();
+    expect(screen.queryByTestId('island-allow')).toBeNull();
+    expect(screen.queryByTestId('island-pill')).toBeNull();
+  });
+
+  it('согласия нет — карточка ленты, как прежде', () => {
+    view({ items: [permissionItem()], consent: null });
+    expect(screen.getByTestId('island-allow')).toBeTruthy();
+    expect(screen.queryByTestId('island-consent-trust')).toBeNull();
+  });
+
+  it('помощник раскрыт — вид помощника важнее согласия', () => {
+    render(<IslandView {...viewProps({ consent: consent(), assistant: assistantProps({ open: true }) })} />);
+    expect(screen.getByTestId('assistant-view')).toBeTruthy();
+    expect(screen.queryByTestId('island-consent-trust')).toBeNull();
+  });
+
+  it('помощник свёрнут — согласие показано', () => {
+    render(<IslandView {...viewProps({ consent: consent(), assistant: assistantProps({ open: true, collapsed: true, busy: true, mini: 'Thinking·' }) })} />);
+    expect(screen.getByTestId('island-consent-trust')).toBeTruthy();
+  });
+
+  it('Trust зовёт onDecide(id, "allow") после паузы; убранный остров согласия не рисует', () => {
+    const c = consent();
+    view({ consent: c });
+    fireEvent.click(screen.getByTestId('island-consent-trust'));
+    expect(c.onDecide).toHaveBeenCalledWith('c-01', 'allow');
+    cleanup();
+    view({ consent: c, retracted: true, doneCount: 0 });
+    expect(screen.queryByTestId('island-consent-trust')).toBeNull();
+  });
+
+  it('новый показ острова (showId) снова ставит паузу кнопок той же карточки', () => {
+    const c = consent();
+    const first = viewProps({ consent: c, showId: 1 });
+    const { rerender } = render(<IslandView {...first} />);
+    arm();
+    expect((screen.getByTestId('island-consent-trust') as HTMLButtonElement).disabled).toBe(false);
+    rerender(<IslandView {...first} showId={2} />);
+    expect((screen.getByTestId('island-consent-trust') as HTMLButtonElement).disabled).toBe(true);
   });
 });

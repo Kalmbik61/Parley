@@ -1,11 +1,17 @@
 import { METHODS } from '@parley/protocol';
 import { describe, expect, it } from 'vitest';
-import { ISLAND_MARK_SEEN_LIMIT, ISLAND_METHODS, markSeenBatches } from './island.js';
+import { ISLAND_EVENTS, ISLAND_MARK_SEEN_LIMIT, ISLAND_METHODS, markSeenBatches } from './island.js';
 
 describe('остров: белый список методов хоста', () => {
   it('каждое имя из ISLAND_METHODS — метод протокола (опечатка не оставит остров без данных молча)', () => {
     const known = new Set<string>(Object.keys(METHODS));
     for (const method of ISLAND_METHODS) expect(known.has(method), method).toBe(true);
+  });
+
+  it('согласия на папку: остров вызывает consents.list / consents.decide и получает consents.changed', () => {
+    expect(ISLAND_METHODS.has('consents.list')).toBe(true);
+    expect(ISLAND_METHODS.has('consents.decide')).toBe(true);
+    expect(ISLAND_EVENTS.has('consents.changed')).toBe(true);
   });
 });
 
