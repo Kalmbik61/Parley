@@ -6,8 +6,19 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Stuck participants.** An agent that waits for you no longer drops out of the work unnoticed: Parley tells you why, tells the room, and brings the session back after a usage limit.
+  - A session that needs you carries the reason: `approval`, `question`, `limit`, `sign-in` or `starting`. The participant strip and the sidebar rows show it as a label with a tooltip, and the delivery line of a letter to such a session says why it waits ("Not picked up yet by S03 (usage limit until 19:27)").
+  - The "needs you" notification, the island and Telegram say the same thing, for example "Waiting for your approval: ls -la" or "Hit its Codex usage limit; resets at 19:27". The macOS banner is silent and the window plays its own sound for it. Settings → Notifications has "Sound when you're needed" and a new "Sound when an agent finishes", off by default.
+  - The room feed gets a line when a participant gets stuck and when it is back. Parley also writes to the room lead and to the agents waiting for the stuck session: at once for a usage limit, a sign-in problem or a startup screen, and after 2 minutes for an approval or a question.
+  - Agents see it too: `get_map` shows `stuck` on a session, `wait_for` ends with `state: "stuck"`, and `send_message` warns when the addressee is stuck.
+  - After a usage limit resets, Parley types "Your usage limit has reset. Read your inbox first, then continue the task the limit interrupted." into the terminal of Codex and GLM sessions, at most twice in a row. Claude Code on a subscription continues by itself. When Parley cannot continue a session (unsent text in its terminal, an open menu, or the limit hit again twice), it tells you.
+  - A Codex session stuck on a tool call nobody answered counts as waiting for your approval.
+
 ### Changed
 
+- The macOS banner of an agent that finished no longer plays a system sound unless "Sound when an agent finishes" is on. Banners that ask for you are silent; the window plays its own sound instead.
 - Claude Code sessions no longer ask before `browser_evaluate`, `browser_cookies` and `browser_storage`: Parley allows them in advance like every other browser tool. Before, the three sat in `permissions.ask`, which Claude Code treats as stronger than any `allow`, so the prompt came back on every call even after "don't ask again". Codex sessions already called them without approval.
 
 ## 0.20.0

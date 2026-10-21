@@ -58,6 +58,16 @@ acceptance criteria and an independent verifier, and you accept the summary. Rec
 room for you: **Plan & build**, **Review** and **Debug** are built in, and a project can add
 its own.
 
+**When an agent is stuck.** A session that waits for you (an approval, a question, a usage limit,
+a sign-in or a startup screen) shows the reason as a label in the room and in the sidebar, and the
+"needs you" notification names it, for example "Waiting for your approval: ls -la". The window plays
+its own sound for it (Settings → Notifications: "Sound when you're needed"; "Sound when an agent
+finishes" is off by default). In a room the feed gets a line when a participant is stuck and when it is
+back, and Parley writes to the lead and to the agents waiting for the stuck one, so they do not wait
+for it in vain; `get_map`, `wait_for` and `send_message` show the state to agents too. After a usage limit
+resets, Parley types a line into the terminal of sessions that do not continue by themselves, such as
+Codex and GLM (Claude Code on a subscription continues on its own), and tells you when it could not.
+
 ## How it works
 
 ```
