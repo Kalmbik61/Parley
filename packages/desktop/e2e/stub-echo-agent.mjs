@@ -61,6 +61,8 @@ const JOURNAL_EVENTS = new Set([
   'Notification',
   'PermissionRequest',
   'Stop',
+  // Ход, оборванный ошибкой API (лимит, вход): `cat >>` в журнал ему ставится вместе с HTTP-хуком ленты (`GATED_JOURNAL_EVENTS`).
+  'StopFailure',
   'SubagentStart',
   'SubagentStop',
 ]);
