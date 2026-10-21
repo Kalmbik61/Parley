@@ -491,21 +491,24 @@ describe('инструменты действий (этап D)', () => {
 describe('скрипт, куки, хранилище, скачивания; аннотации (решения владельца 2026-10-20)', () => {
   const tool = (name: string) => BROWSER_TOOLS.find((candidate) => candidate.name === name);
 
-  it('аннотации: только browser_evaluate заставит Codex спросить человека', () => {
+  it('аннотации: человека спрашивают про evaluate, cookies и storage (решения 2 и 9)', () => {
     const READ = { readOnlyHint: true, openWorldHint: false };
     const CONTROL = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
     const SCRIPT = { readOnlyHint: false, destructiveHint: true, openWorldHint: true };
+    // set/delete/clear — не readOnly, удаление куки выходит из сайта; мира за пределами раздела Parley инструмент не трогает.
+    const SECRETS = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
     const expected: Record<string, object> = {
       browser_tabs: READ, browser_console: READ, browser_network: READ, browser_screenshot: READ, browser_snapshot: READ, browser_wait_for: READ, browser_downloads: READ,
-      browser_open: CONTROL, browser_navigate: CONTROL, browser_action: CONTROL, browser_resize: CONTROL, browser_cookies: CONTROL, browser_storage: CONTROL,
+      browser_open: CONTROL, browser_navigate: CONTROL, browser_action: CONTROL, browser_resize: CONTROL, browser_cookies: SECRETS, browser_storage: SECRETS,
       browser_evaluate: SCRIPT,
     };
     expect(Object.fromEntries(BROWSER_TOOLS.map((t) => [t.name, t.annotations]))).toEqual(expected);
-    expect([...BROWSER_TOOLS_ASK]).toEqual(['evaluate']);
+    expect([...BROWSER_TOOLS_ASK]).toEqual(['evaluate', 'cookies', 'storage']);
   });
 
   it('описания: главный мир и пределы evaluate; общий раздел кук; скрытые значения; папка скачиваний', () => {
     for (const phrase of ["page's main world", 'JSON', '20 KB', '10 s', 'first argument', 'approves']) expect(tool('browser_evaluate')?.description, phrase).toContain(phrase);
+    for (const name of ['browser_evaluate', 'browser_cookies', 'browser_storage']) expect(tool(name)?.description, name).toContain('Parley asks the human before each call');
     for (const phrase of ["page's current URL", 'httpOnly', 'never shows the values of httpOnly cookies', 'shared with the human', 'sign the human out', 'values: true']) expect(tool('browser_cookies')?.description, phrase).toContain(phrase);
     expect(tool('browser_cookies')?.inputSchema).toMatchObject({ required: ['tab', 'action'], properties: { values: { type: 'boolean', default: false } } });
     expect(tool('browser_storage')?.inputSchema).toMatchObject({ required: ['tab', 'area', 'action'] });

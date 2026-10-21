@@ -198,7 +198,7 @@ function codexServerEnv({
  *
  * `tools` — одобрение по инструменту (спайк В12): `browser_*` из `BROWSER_TOOLS_ASK` — `approval_mode = "prompt"`, Codex
  * спрашивает человека в каждой сессии Parley. Ответ «Always allow», вероятно, ложится в личный `config.toml`
- * (`[mcp_servers.parley.tools.browser_evaluate] approval_mode`), а `-c` Codex сливает с файлом по ключам, и свой ключ
+ * (`[mcp_servers.parley.tools.browser_evaluate] approval_mode`, так же cookies и storage), а `-c` Codex сливает с файлом по ключам, и свой ключ
  * сильнее ключа файла (проба `codex mcp get` 0.162 с временным `CODEX_HOME`, 2026-10-20): без него такой ответ
  * действовал бы во всех сессиях Parley во всех проектах.
  */

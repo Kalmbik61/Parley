@@ -75,7 +75,7 @@ describe('конфиг MCP-сервера на сессию', () => {
         'env={PARLEY_WORK_DIR="/project/.parley/works/w-0042",PARLEY_SESSION_ID="s-02",' +
         'HARNAS_WORK_DIR="/project/.parley/works/w-0042",HARNAS_SESSION_ID="s-02"},' +
         `startup_timeout_sec=${CODEX_MCP_STARTUP_TIMEOUT_SEC},tool_timeout_sec=${CODEX_MCP_TOOL_TIMEOUT_SEC},` +
-        'tools={browser_evaluate={approval_mode="prompt"}}}',
+        'tools={browser_evaluate={approval_mode="prompt"},browser_cookies={approval_mode="prompt"},browser_storage={approval_mode="prompt"}}}',
     );
   });
 
@@ -88,14 +88,15 @@ describe('конфиг MCP-сервера на сессию', () => {
       env: SESSION_ENV,
       startup_timeout_sec: CODEX_MCP_STARTUP_TIMEOUT_SEC,
       tool_timeout_sec: CODEX_MCP_TOOL_TIMEOUT_SEC,
-      tools: { browser_evaluate: { approval_mode: 'prompt' } },
+      tools: { browser_evaluate: { approval_mode: 'prompt' }, browser_cookies: { approval_mode: 'prompt' }, browser_storage: { approval_mode: 'prompt' } },
     });
   });
 
-  it('browser_evaluate у Codex спрашивает в каждой сессии Parley: свой approval_mode = "prompt" сильнее «Always allow» из config.toml человека (спайк В12)', () => {
+  it('browser_evaluate, browser_cookies, browser_storage у Codex спрашивают в каждой сессии Parley: свой approval_mode = "prompt" сильнее «Always allow» из config.toml человека (спайк В12)', () => {
     const { value } = parseTomlAssignment(codexMcpOverride(params));
     const tools = (value as { tools: Record<string, { approval_mode: string }> }).tools;
-    // Спрашивают ровно те инструменты, что и у Claude Code (`permissions.ask`), — сейчас только скрипт агента в странице.
+    // Спрашивают ровно те инструменты, что и у Claude Code (`permissions.ask`), — скрипт агента в странице, куки и хранилище (решение 9).
+    expect(Object.keys(tools)).toEqual(['browser_evaluate', 'browser_cookies', 'browser_storage']);
     expect(Object.keys(tools)).toEqual(BROWSER_TOOLS_ASK.map((op) => `browser_${op}`));
     for (const tool of Object.values(tools)) expect(tool.approval_mode).toBe('prompt');
   });

@@ -100,7 +100,7 @@ export interface SettingsFile {
  */
 const browserRule = (op: string): string => `mcp__${MCP_SERVER_NAME}__browser_${op}`;
 
-/** Заранее разрешены все, кроме `BROWSER_TOOLS_ASK` (решение владельца 2026-10-20, п. 2). */
+/** Заранее разрешены все, кроме `BROWSER_TOOLS_ASK` (решения владельца 2026-10-20, п. 2, и 2026-10-21, п. 9). */
 export const BROWSER_PERMISSIONS: readonly string[] = BROWSER_TOOL_OPS.filter((op) => !(BROWSER_TOOLS_ASK as readonly string[]).includes(op)).map(browserRule);
 
 /** Правила `ask`: Claude Code спрашивает человека перед каждым вызовом (сильнее `allow`, в том числе из его настроек). */
@@ -162,7 +162,7 @@ export interface WorkSettingsOptions {
   disablePlugins?: readonly string[];
   /**
    * У сессии есть канал агента, значит, есть и инструменты `browser_*`: снять вопрос Claude Code перед первым вызовом
-   * каждого, кроме browser_evaluate, правилами `permissions.allow` в этом файле (спека браузера, 5.1; в `~/.claude` ничего не пишется).
+   * каждого, кроме browser_evaluate, browser_cookies и browser_storage, правилами `permissions.allow` в этом файле (спека браузера, 5.1; в `~/.claude` ничего не пишется).
    * Так же ведёт себя Codex, которому читающие инструменты разрешает `readOnlyHint`.
    */
   allowBrowser?: boolean;
