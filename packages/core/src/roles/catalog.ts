@@ -146,6 +146,9 @@ export function resolveRoleChoice(
     (sandboxMode === null || sandboxRank[required.sandboxMode] < sandboxRank[sandboxMode])
   )
     sandboxMode = required.sandboxMode;
+  // Роль Codex без своей песочницы и сессия без роли пишут: `workspace-write` явно, а не по умолчанию Codex, который
+  // тред может сохранить иным (спека 2026-10-21, 5.1). Другим провайдерам песочница не задаётся.
+  if (provider === 'codex' && sandboxMode === null) sandboxMode = 'workspace-write';
   if (readOnly && provider === 'codex') sandboxMode = 'read-only';
   const prompt = role?.source === 'builtin' || role?.source === 'codex' ? role.prompt : '';
   const roleText =

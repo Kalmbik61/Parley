@@ -173,7 +173,8 @@ describe('role catalog and selection', () => {
       model: 'provider-default',
       effort: 'medium',
       readOnly: false,
-      sandboxMode: null,
+      // Codex без роли пишет: песочница явная, а не умолчание Codex.
+      sandboxMode: 'workspace-write',
     });
     expect(
       resolveRoleChoice(buildRoleCatalog(), {
@@ -186,6 +187,34 @@ describe('role catalog and selection', () => {
     ).toMatchObject({ model: null, effort: null });
   });
 
+  it('Codex: пишущая роль получает явную workspace-write, роль только для чтения — read-only', () => {
+    const catalog = buildRoleCatalog();
+    expect(resolveRoleChoice(catalog, { roleId: 'builtin:executor', provider: 'codex' })).toMatchObject({
+      provider: 'codex',
+      readOnly: false,
+      sandboxMode: 'workspace-write',
+    });
+    expect(resolveRoleChoice(catalog, { roleId: 'builtin:critic' })).toMatchObject({
+      provider: 'codex',
+      readOnly: true,
+      sandboxMode: 'read-only',
+    });
+  });
+  it('Codex: роль из .codex/agents с собственной песочницей сохраняет её', () => {
+    const open = { ...codex, readOnly: false, sandboxMode: 'danger-full-access' as const };
+    expect(resolveRoleChoice(buildRoleCatalog(native([open])), { roleId: codex.id })).toMatchObject({
+      readOnly: false,
+      sandboxMode: 'danger-full-access',
+    });
+  });
+  it('другим провайдерам песочница не задаётся', () => {
+    expect(
+      resolveRoleChoice(buildRoleCatalog(), { roleId: 'builtin:executor', provider: 'claude' }),
+    ).toMatchObject({ provider: 'claude', sandboxMode: null });
+    expect(
+      resolveRoleChoice(buildRoleCatalog(), { roleId: 'builtin:executor', provider: 'glm' }),
+    ).toMatchObject({ provider: 'glm', sandboxMode: null });
+  });
   it('keeps required permissions when a role changed to a less restrictive file', () => {
     const relaxed = { ...codex, readOnly: false, sandboxMode: 'workspace-write' as const };
     expect(
