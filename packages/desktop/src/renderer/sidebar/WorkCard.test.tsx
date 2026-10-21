@@ -18,7 +18,7 @@ import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
-import { activityMap, makeActivity, makeLetter, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { activityMap, makeActivity, makeLetter, makeNeed, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { showArchivedRooms, showClosedSessions, WorkCard, type WorkCardProps } from './WorkCard.js';
 
 vi.mock('sonner', () => ({ toast: vi.fn() }));
@@ -218,6 +218,14 @@ describe('WorkCard (тест 3)', () => {
     it('живая сессия с итогом report(done) и activity working — значок working, не done', () => {
       renderCard(makeWork('w-01', { sessions: [makeSession('s-01', 'a', { result: 'done' })] }), { activity: activityMap([makeActivity(ref('s-01'), 'working')]) });
       expect(glyph()).toBe('working');
+    });
+
+    it('сессия с need (лимит) при activity unseen — значок blocked: срочнее working (итоговое ревью, находка 1)', () => {
+      const work = makeWork('w-01', { sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b')] });
+      renderCard(work, {
+        activity: activityMap([makeActivity(ref('s-01'), 'working'), makeActivity(ref('s-02'), 'unseen', { need: makeNeed('limit') })]),
+      });
+      expect(glyph()).toBe('blocked');
     });
 
     it('закрытые сессии значок не задают; без живых — пустое место 12px', () => {

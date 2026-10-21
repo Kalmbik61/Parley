@@ -11,8 +11,9 @@
 
 import { Check, ChevronDown } from 'lucide-react';
 import type { WorkEntry, WorkSession } from '@parley/core';
-import { dotState, liveStatus } from '@parley/core/session-state';
+import { sessionDotStateWithNeed } from '@parley/core/session-state';
 import { S } from '../../../shared/strings.js';
+import { sessionNeed } from '../../attention/derive.js';
 import { AgentStateDot } from '../../components/AgentStateDot.js';
 import { cn } from '../../lib/cn.js';
 import { sessionRowLabel, sessionTag } from '../../lib/participant.js';
@@ -78,7 +79,7 @@ export function SendMenu({ entry, defaultSessionId, label, disabled = false, onS
                 className="gap-2 text-xs"
               >
                 <Check className={cn('size-3 shrink-0', session.id === defaultSessionId ? 'opacity-100' : 'opacity-0')} aria-hidden="true" />
-                <AgentStateDot state={dotState(liveStatus(session), activity?.activity.activity ?? null)} lifecycle={session.lifecycle} size="sm" />
+                <AgentStateDot state={sessionDotStateWithNeed(session, activity?.activity.activity ?? null, sessionNeed(session, activity?.activity ?? null))} lifecycle={session.lifecycle} size="sm" />
                 <span className="min-w-0 flex-1 truncate">{sessionRowLabel(session.id, session.label)}</span>
                 {live ? (
                   lastEventAt === null ? null : (

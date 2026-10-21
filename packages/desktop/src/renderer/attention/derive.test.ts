@@ -689,6 +689,8 @@ describe('метки need', () => {
     expect(mailWaitText('stuck', makeNeed('approval'), NOW)).toBe('waiting for your approval');
     expect(mailWaitText('stuck', makeNeed('question'), NOW)).toBe('asked you a question');
     expect(mailWaitText('stuck', makeNeed('sign-in', { account: 'auth' }), NOW)).toBe('signed out');
+    // Проблема аккаунта или оплаты — не «вышел из аккаунта»: как «Account problem in …» у needReason.
+    expect(mailWaitText('stuck', makeNeed('sign-in', { account: 'account' }), NOW)).toBe('account problem');
     expect(mailWaitText('stuck', makeNeed('startup'), NOW)).toBe('waiting at startup');
   });
 

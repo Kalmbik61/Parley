@@ -37,11 +37,11 @@ import { memo, useRef, useState } from 'react';
 import { create } from 'zustand';
 import { AtSign, Hash, Mail, Plus } from 'lucide-react';
 import type { SessionLifecycle, WorkEntry } from '@parley/core';
-import { dotState, liveStatus, type DotState } from '@parley/core/session-state';
+import { sessionDotStateWithNeed, type DotState } from '@parley/core/session-state';
 import { refKey } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
-import { forYouTarget, roomAwaitsDecision, type WorkAttention } from '../attention/derive.js';
+import { forYouTarget, roomAwaitsDecision, sessionNeed, type WorkAttention } from '../attention/derive.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { useHostSupports } from '../lib/capabilities.js';
 import { cn } from '../lib/cn.js';
@@ -95,7 +95,9 @@ function urgentGlyph(
   for (const session of entry.map.sessions) {
     if (session.lifecycle === 'closed') continue;
     const ref = refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id });
-    const state = dotState(liveStatus(session), activity[ref]?.activity.activity ?? null);
+    // Сессия с `need` (лимит, вход…) — `blocked`, даже когда ход закончен (спека подписок 7): значок карточки тот же, что у строки.
+    const live = activity[ref]?.activity ?? null;
+    const state = sessionDotStateWithNeed(session, live?.activity ?? null, sessionNeed(session, live));
     const rank = URGENCY.indexOf(state);
     if (best === null || rank < best.rank) best = { state, lifecycle: session.lifecycle, rank };
   }

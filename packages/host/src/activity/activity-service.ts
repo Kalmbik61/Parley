@@ -1088,7 +1088,12 @@ export function createActivityService(
         const text = `${sessionTag(ref.sessionId)} ${pendingCell === undefined ? 'has not returned from a Codex tool call' : 'finished its turn with an unfinished tool operation'}. Check pending approvals; if already answered, stop the stuck operation and verify its effects before retrying.`;
         // Начало эпизода — время вызова (у незавершённой ячейки — её время), а не `now`: срок сторожа в ветке ячейки
         // равен «сейчас», и `since` уезжал бы на каждом пересчёте.
-        codexStuck = { since: call.at, detail: clampDetail(text) };
+        // `detail` попадает в строку комнаты и письмо ведущему: он нейтральный, без указания «проверь и остановись» —
+        // агент мог бы принять его за своё. Полный текст с инструкцией остаётся только в уведомлении хоста (`codex-call-wait`).
+        codexStuck = {
+          since: call.at,
+          detail: pendingCell === undefined ? 'a Codex tool call has not returned' : 'its turn finished with an unfinished tool operation',
+        };
         const noticeKey = pendingCell === undefined ? call.at : `cell:${pendingCell.id}:${pendingCell.at}`;
         if (codexCallNotified.get(key) !== noticeKey) {
           codexCallNotified.set(key, noticeKey);

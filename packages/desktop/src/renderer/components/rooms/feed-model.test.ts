@@ -232,11 +232,18 @@ describe('buildRoomModel — чего участник ждёт от челов�
     expect(needOf(entryOf({ sessions: mixed }), activity).map(([, value]) => value)).toEqual([null, null, null]);
   });
 
-  it('внимание участника с need — needs-you, слово состояния прежнее (причину рисует лента)', () => {
+  it('внимание участника с need — needs-you, точка blocked, слово needs you (причину вместо слова рисует лента)', () => {
     const activity = activityMap([makeActivity(REF('s-02'), 'unseen', { need })]);
     const stuck = build(entryOf(), activity).participants[1];
     expect(stuck?.attention).toBe('needs-you');
-    expect(stuck?.word).toBe('done · unseen');
+    expect(stuck?.state).toBe('blocked');
+    expect(stuck?.word).toBe('needs you');
+  });
+
+  it('спящий участник с остатком need: точка по статусу карты, не blocked', () => {
+    const sleeping = entryOf().map.sessions.map((session) => (session.id === 's-02' ? { ...session, lifecycle: 'sleeping' as const } : session));
+    const activity = activityMap([makeActivity(REF('s-02'), 'idle', { need })]);
+    expect(build(entryOf({ sessions: sleeping }), activity).participants[1]?.state).toBe('exited');
   });
 });
 

@@ -48,7 +48,7 @@ import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } fro
 import { GitBranch, Mail } from 'lucide-react';
 import { useDndContext, useDraggable } from '@dnd-kit/core';
 import type { WorkSession } from '@parley/core';
-import { dotState, liveStatus, stateWord } from '@parley/core/session-state';
+import { sessionDotStateWithNeed, stateWord } from '@parley/core/session-state';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { needLabel, needTooltip, sessionAttention, sessionNeed } from '../attention/derive.js';
@@ -208,9 +208,10 @@ export const SessionRow = memo(function SessionRow({
     waitNotice?.kind === 'startup-wait' && eventAfter(live?.lastEventAt ?? null, waitNotice.at);
   const waitKind = startupResolved ? null : (waitNotice?.kind ?? null);
   const trustWait = waitKind !== null;
-  const state = dotState(liveStatus(session), live?.activity ?? null);
-  // Нужен человек — слово причины вместо слова состояния, подсказка в тултипе строки (спека застрявших 7.3).
+  // Нужен человек — слово причины вместо слова состояния, подсказка в тултипе строки (спека застрявших 7.3); точка
+  // такой сессии — `blocked`, даже когда ход закончен (лимит и вход оставляют `unseen`/`idle`).
   const need = sessionNeed(session, live);
+  const state = sessionDotStateWithNeed(session, live?.activity ?? null, need);
   const word = need === null ? stateWord(state, session.lifecycle) : needLabel(need, now.getTime());
   const attention = sessionAttention(session, live);
   const closed = session.lifecycle === 'closed';

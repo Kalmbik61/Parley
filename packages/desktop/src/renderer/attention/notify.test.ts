@@ -1036,19 +1036,30 @@ describe('createAttentionNotifier.onHostNotice (тесты 10 и 11 куска 4
     expect(h.chimes).toBe(0);
   });
 
-  it('limit-return-blocked — то же уведомление со звуком: «limit has reset», текст хоста по-русски не попадает', () => {
+  it('limit-return-blocked — то же уведомление со звуком: «limit has reset», в теле причина из текста хоста (спека 7.4)', () => {
     const h = harness([redesign()]);
-    h.notifier.onHostNotice(notice('limit-return-blocked', ref3, 'лимит сброшен, но меню открыто'));
+    const reason = 'The limit has reset, but S03 could not continue: a menu is open in its terminal';
+    h.notifier.onHostNotice(notice('limit-return-blocked', ref3, reason));
     expect(h.notes).toEqual([
       {
         title: 'Redesign · S03 backend — limit has reset',
-        body: 'The limit has reset, but Parley could not continue this session — check its terminal.',
+        body: reason,
         tag: `notice:limit-return-blocked:${refKey(ref3)}`,
         target: { kind: 'session', ref: ref3 },
         silent: true,
       },
     ]);
     expect(h.chimes).toBe(1);
+  });
+
+  it('limit-return-blocked без текста хоста — общая фраза окна; русский текст других видов в тело не попадает', () => {
+    const h = harness([redesign()]);
+    h.notifier.onHostNotice(notice('limit-return-blocked', ref3, '  '));
+    h.notifier.onHostNotice(notice('launch-failed', ref2, 'лимит сброшен, но меню открыто'));
+    expect(h.notes.map((note) => note.body)).toEqual([
+      'The limit has reset, but Parley could not continue this session — check its terminal.',
+      "Couldn't launch this session.",
+    ]);
     expect(JSON.stringify(h.notes)).not.toMatch(/[Ѐ-ӿ]/);
   });
 

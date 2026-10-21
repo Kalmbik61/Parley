@@ -999,7 +999,7 @@ describe('сторож Codex: вызов code mode без вывода — «н�
   // Служебная запись в rollout после конца хода: пересчёт сессии без новых событий хода.
   const tokenCount = () => row({ timestamp: now(), type: 'event_msg', payload: { type: 'token_count' } });
 
-  it('a stuck call yields an approval need: since is the call time and does not move on recompute, detail is the notice text', async () => {
+  it('a stuck call yields an approval need: since is the call time and does not move on recompute, detail is neutral', async () => {
     const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'stuck-need' });
     a.terminalSignal(ref, WORKING);
     const callAt = now();
@@ -1010,11 +1010,13 @@ describe('сторож Codex: вызов code mode без вывода — «н�
     );
 
     await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
-    const text = String(notices('codex-call-wait')[0]?.['text']);
+    // Инструкция («Check pending approvals…») — только в уведомлении хоста; в `detail` она попала бы в строку комнаты и
+    // письмо ведущему, и агент мог бы принять её за свою (итоговое ревью, находка 6).
+    expect(String(notices('codex-call-wait')[0]?.['text'])).toMatch(STUCK_TEXT);
     expect(a.get(ref)?.activity.need).toEqual({
       kind: 'approval',
       since: callAt,
-      detail: text,
+      detail: 'a Codex tool call has not returned',
       resetsAt: null,
       window: null,
       account: null,
@@ -1044,11 +1046,11 @@ describe('сторож Codex: вызов code mode без вывода — «н�
     );
 
     await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
-    const text = String(notices('codex-call-wait')[0]?.['text']);
+    expect(String(notices('codex-call-wait')[0]?.['text'])).toContain('Check pending approvals; if already answered');
     expect(a.get(ref)?.activity.need).toEqual({
       kind: 'approval',
       since: stamp,
-      detail: text,
+      detail: 'its turn finished with an unfinished tool operation',
       resetsAt: null,
       window: null,
       account: null,

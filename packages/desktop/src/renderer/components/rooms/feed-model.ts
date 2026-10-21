@@ -27,7 +27,7 @@
 
 import type { Message, MessageKind, MessageVia, SessionLifecycle, SessionNeed, WorkEntry, WorkMap, RoomMode, RoomPlan } from '@parley/core';
 import { planSummary, type AgentPlan } from '@parley/core/agent-plan';
-import { dotState, liveStatus, stateWord, type DotState } from '@parley/core/session-state';
+import { sessionDotStateWithNeed, stateWord, type DotState } from '@parley/core/session-state';
 import { refKey, type LiveTask, type MailWait } from '@parley/protocol';
 import { S, providerName } from '../../../shared/strings.js';
 import {
@@ -285,7 +285,9 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
     if (session === undefined) continue;
     const liveEntry = liveOf(id);
     const live = liveEntry?.activity ?? null;
-    const state = dotState(liveStatus(session), live?.activity ?? null);
+    // Точка участника с `need` — `blocked`, даже когда ход закончен (лимит и вход оставляют `unseen`/`idle`), как у строки сессии.
+    const need = sessionNeed(session, live);
+    const state = sessionDotStateWithNeed(session, live?.activity ?? null, need);
     const providerDisplay = providerName(session.provider, providers.find((entryProvider) => entryProvider.id === session.provider)?.label ?? session.provider);
     const model = modelName(liveEntry?.metrics?.model ?? null);
     // Хост прежней версии полей не присылает — тогда участник ничем особым не занят.
@@ -317,7 +319,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       state,
       lifecycle: session.lifecycle,
       word: stateWord(state, session.lifecycle),
-      need: sessionNeed(session, live),
+      need,
       attention: sessionAttention(session, live),
       task: session.task,
       plan,

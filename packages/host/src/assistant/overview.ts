@@ -1,25 +1,33 @@
 /**
  * Что помощник знает о работах (спека 2026-10-14, 7.2): компактный снимок всех открытых работ, подробности одной
  * комнаты или сессии и разбор цели, которую назвала модель. Чистые функции: снимок работ и активность — на входе.
- * Состояния сессий берутся из единого модуля core (`sessionDotState`, `stateWord`), своего расчёта у помощника нет:
- * решение человека 2026-10-17 о паритете статусов с окном и агентами.
+ * Состояния сессий берутся из единого модуля core (`sessionDotStateWithNeed`, `stateWord`), своего расчёта у помощника
+ * нет: решение человека 2026-10-17 о паритете статусов с окном и агентами. Сессия, которой нужен человек (`need`: лимит,
+ * вход, одобрение…), — `blocked` и считается ждущей, а вместо слова состояния в её строке слово и причина `need`
+ * (спека подписок 7, итоговое ревью).
  */
 
 import { createHash } from 'node:crypto';
 import {
   cardDetail,
   cardGist,
+  needReason,
+  needWord,
   participantLabel,
-  sessionDotState,
+  providerLabel,
+  sessionDotStateWithNeed,
   stateWord,
   type DotState,
   type FeedCard,
+  type ProviderEntry,
   type SessionLifecycle,
+  type SessionNeed,
   type WorkEntry,
   type WorkMap,
   type WorkSession,
 } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
+import { sessionNeed } from '@parley/core/attention';
 import type { SessionLive } from '../activity/activity-service.js';
 
 export type AssistantTarget =
@@ -32,6 +40,12 @@ export interface OverviewSource {
   live(ref: SessionRef): SessionLive | undefined;
   /** Ждущие карточки сессии, если сервис их уже достал; нет функции или `undefined` — строка `waits:` без карточки. */
   cards?(ref: SessionRef): readonly FeedCard[] | undefined;
+  /**
+   * Реестр провайдеров для имени в причине `need` («Hit its Claude Code 2 usage limit»); нет реестра — имя по id, как у
+   * Telegram. Время сброса в причине считается от `now`.
+   */
+  providers?: Readonly<Record<string, Pick<ProviderEntry, 'id' | 'label'>>> | undefined;
+  now?: Date | undefined;
 }
 
 const STATE_ORDER: Readonly<Record<DotState, number>> = { blocked: 0, working: 1, unseen: 2, idle: 3, pending: 4, done: 5, failed: 6, exited: 7 };
@@ -117,9 +131,30 @@ export function cardLine(card: FeedCard, projectPath: string): string {
   }
 }
 
-function sessionLine(entry: WorkEntry, session: WorkSession, state: DotState, live: SessionLive | undefined, cards: readonly FeedCard[] | undefined): string {
+/** Чего нужно от человека у живой сессии: `need` из активности (у спящей и закрытой — `null`). */
+const needOf = (session: WorkSession, live: SessionLive | undefined): SessionNeed | null => sessionNeed(session, live?.activity ?? null);
+
+/**
+ * Слово в строке сессии: слово состояния, а у сессии с `need` — слово вида и причина из core (`needWord`, `needReason`),
+ * как в окне, на острове и в Telegram.
+ */
+function stateText(source: OverviewSource, session: WorkSession, state: DotState, need: SessionNeed | null): string {
+  if (need === null) return stateWord(state, session.lifecycle);
+  const label = providerLabel(source.providers?.[session.provider] ?? { id: session.provider, label: '' });
+  return `${needWord(need.kind)} — ${needReason(need, source.now ?? new Date(), label)}`;
+}
+
+function sessionLine(
+  source: OverviewSource,
+  entry: WorkEntry,
+  session: WorkSession,
+  state: DotState,
+  need: SessionNeed | null,
+  live: SessionLive | undefined,
+  cards: readonly FeedCard[] | undefined,
+): string {
   const prefix = `${projectKey(entry.projectPath)}:${entry.map.work.id}`;
-  const parts = [`  Session ${participantLabel(entry.map, session.id)} [session:${prefix}:${session.id}] ${session.provider}`, stateWord(state, session.lifecycle)];
+  const parts = [`  Session ${participantLabel(entry.map, session.id)} [session:${prefix}:${session.id}] ${session.provider}`, stateText(source, session, state, need)];
   // Комната нужна модели, чтобы писать агенту через неё с упоминанием; сессия состоит не больше чем в одной комнате работы.
   const room = entry.map.rooms.find((candidate) => !isArchived(candidate) && candidate.members.includes(session.id));
   if (room !== undefined) parts.push(`in room "${room.title}"`);
@@ -151,7 +186,8 @@ export function overviewText(source: OverviewSource, maxChars = 8000): string {
       .filter((session) => session.lifecycle !== 'closed')
       .map((session) => {
         const live = source.live(refOf(entry, session));
-        return { session, live, state: sessionDotState(session, live?.activity.activity ?? null) };
+        const need = needOf(session, live);
+        return { session, live, need, state: sessionDotStateWithNeed(session, live?.activity.activity ?? null, need) };
       })
       .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state]);
     const lines = [`Work "${map.work.title}" [work:${prefix}] (project ${projectName(entry.projectPath)})`];
@@ -170,7 +206,7 @@ export function overviewText(source: OverviewSource, maxChars = 8000): string {
           (room.proposal === null ? '' : `, waits: ${proposalHead(map, room.proposal)}: ${oneLine(room.proposal.text, DECISION_BRIEF)}`),
       );
     }
-    for (const item of sessions) lines.push(sessionLine(entry, item.session, item.state, item.live, source.cards?.(refOf(entry, item.session))));
+    for (const item of sessions) lines.push(sessionLine(source, entry, item.session, item.state, item.need, item.live, source.cards?.(refOf(entry, item.session))));
     const rank = Math.min(...sessions.map((item) => STATE_ORDER[item.state]), STATE_ORDER.exited);
     blocks.push({ rank, text: lines.join('\n') });
   }
@@ -209,7 +245,9 @@ export function detailText(source: OverviewSource, target: AssistantTarget, last
     const session = map.sessions.find((item) => item.id === target.ref.sessionId);
     if (session === undefined) return `${target.name} is no longer in Parley.`;
     const live = source.live(target.ref);
-    const lines = [sessionLine(entry, session, sessionDotState(session, live?.activity.activity ?? null), live, source.cards?.(target.ref)).trim()];
+    const need = needOf(session, live);
+    const state = sessionDotStateWithNeed(session, live?.activity.activity ?? null, need);
+    const lines = [sessionLine(source, entry, session, state, need, live, source.cards?.(target.ref)).trim()];
     if (lastReply !== null) lines.push(`Last reply: ${oneLine(lastReply, 1500)}`);
     if (cards.length > 0) {
       lines.push('Waiting:');

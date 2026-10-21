@@ -11,7 +11,8 @@ import type { HistoryEntry } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
 import { emptyLayout, openTab } from '../layout/tree.js';
 import { workKey } from '../lib/tree-order.js';
-import { makeLetter, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import type { ActivityEntry } from '../store/activity.js';
+import { activityMap, makeActivity, makeLetter, makeNeed, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { buildDocuments, filesQuery, rankDocuments, SECTION_LIMITS, type PaletteDoc, type PaletteSection } from './documents.js';
 import type { PaletteMode } from './store.js';
 
@@ -37,6 +38,7 @@ interface Input {
   layouts?: Record<string, WorkLayout>;
   history?: HistoryEntry[];
   attention?: Record<string, WorkAttention>;
+  activity?: Record<string, ActivityEntry>;
   branches?: Record<string, string | null>;
   mode?: PaletteMode;
   activeWorkKey?: string | null;
@@ -50,7 +52,7 @@ function build(input: Input): PaletteDoc[] {
     input.attention ?? Object.fromEntries(input.works.map((entry) => [keyOf(entry), workAttention(entry, {})]));
   return buildDocuments({
     works: input.works,
-    activity: {},
+    activity: input.activity ?? {},
     attention,
     branches: input.branches ?? {},
     order: input.works.map(keyOf),
@@ -241,6 +243,18 @@ describe('buildDocuments (тест 5)', () => {
       build({ works: [], wakePaused: paused }).find((d) => d.id === 'action:wake.toggle')?.title;
     expect(wake(true)).toBe('Resume auto-wake');
     expect(wake(false)).toBe('Pause auto-wake');
+  });
+
+  it('сессия с need (лимит) при activity unseen — точка blocked и слово needs you (итоговое ревью, находка 1)', () => {
+    const work = makeWork('w-01', { projectPath: '/tmp/a', title: 'A', sessions: [makeSession('s-01', 'план'), makeSession('s-02', 'второй')] });
+    const ref = { projectPath: '/tmp/a', workId: 'w-01', sessionId: 's-01' };
+    const activity = activityMap([makeActivity(ref, 'unseen', { need: makeNeed('limit') })]);
+    const docs = build({ works: [work], activity }).filter((d) => d.section === 'sessions');
+    expect(docs.map((d) => [d.title, d.state])).toEqual([
+      ['S01 план', 'blocked'],
+      ['S02 второй', 'idle'],
+    ]);
+    expect(docs[0]?.subtitle).toContain('needs you');
   });
 
   it('точка работы — по уровню внимания: needs-you → blocked, off — без точки', () => {

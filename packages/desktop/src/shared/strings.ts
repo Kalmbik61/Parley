@@ -429,6 +429,8 @@ export const S = {
       limitUntil: (word: string, when: string): string => `usage ${word} until ${when}`,
       limitReset: (word: string): string => `usage ${word} has reset`,
       signedOut: 'signed out',
+      /** Вместо `signedOut`, когда проблема в аккаунте или оплате (`account: 'account'`), а не во входе (`needReason`: «Account problem in …»). */
+      accountProblem: 'account problem',
       startup: 'waiting at startup',
     },
   },
@@ -2525,6 +2527,9 @@ export function startErrorText(failure: IpcErrorInfo, action: string): string {
  * вызывающей стороны (`store/notices.ts`), а человеку — текст по виду
  * уведомления. Слова — как у хоста, гида и README: письма — «messages»,
  * строка, которую хост набирает в терминал агента, — «pointer».
+ * Исключение — тело macOS-уведомления `limit-return-blocked`: причину («…could not continue: a menu is open in its
+ * terminal», спека застрявших 7.4) знает только хост, и `attention/notify.ts` берёт его английский текст; фраза ниже —
+ * запасная (строка статуса, пустой текст).
  */
 const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'map-lock': 'workspace map is locked — try again in a moment',

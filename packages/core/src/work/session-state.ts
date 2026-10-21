@@ -20,7 +20,7 @@
  * строках окна и слов видов не хранит.
  */
 
-import type { NeedKind } from './stuck.js';
+import type { NeedKind, SessionNeed } from './stuck.js';
 
 /**
  * Прежний единый статус сессии (карта v1). В карте его больше нет: с v2 он собирается из двух осей функциями
@@ -98,6 +98,21 @@ export function dotState(status: SessionStatus, activity: Activity | null): DotS
 /** Состояние точки прямо из сессии: `dotState(liveStatus(session), activity)`. */
 export function sessionDotState(session: SessionAxes, activity: Activity | null): DotState {
   return dotState(liveStatus(session), activity);
+}
+
+/**
+ * Состояние точки с учётом `need` (спека подписок 7, итоговое ревью): сессия, которой нужен человек, — `blocked`,
+ * даже когда ход закончен и activity говорит `unseen` или `idle` (лимит и вход оставляют ход законченным). «Живая» —
+ * как у `sessionNeed`: `lifecycle === 'active'`; у спящей, ожидающей и закрытой `need` не считается (запись активности
+ * могла остаться от прошлого процесса), и точка — по статусу карты.
+ */
+export function sessionDotStateWithNeed(
+  session: SessionAxes,
+  activity: Activity | null,
+  need: SessionNeed | null,
+): DotState {
+  if (need !== null && session.lifecycle === 'active') return 'blocked';
+  return sessionDotState(session, activity);
 }
 
 /**

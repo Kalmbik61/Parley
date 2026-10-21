@@ -93,7 +93,7 @@ export function mailWaitText(reason: MailWait | null, need: SessionNeed | null, 
         return limit.reset ? S.need.mail.limitReset(word) : S.need.mail.limitUntil(word, limit.when);
       }
       case 'sign-in':
-        return S.need.mail.signedOut;
+        return need.account === 'account' ? S.need.mail.accountProblem : S.need.mail.signedOut;
       case 'startup':
         return S.need.mail.startup;
     }

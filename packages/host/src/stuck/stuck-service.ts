@@ -15,10 +15,12 @@ import {
   backLetter,
   backLine,
   envValue,
+  isClaudeCode,
   isRoomArchived,
   liveLead,
   loadProviders,
   PARLEY,
+  PROVIDERS,
   parleyNote,
   providerLabel,
   roomOfSession,
@@ -131,6 +133,16 @@ export function createStuckService(
     }
   }
 
+  /**
+   * Имя семейства CLI для заголовка «Other <family> accounts» письма о лимите (спека подписок 4.4, решение 11):
+   * Claude Code (`claude`, `glm`, свои аккаунты `custom-*`) или Codex; у незнакомого семейства — имя самого провайдера.
+   */
+  function familyName(id: string, provider: string): string {
+    if (isClaudeCode(id)) return providerLabel(PROVIDERS.claude);
+    if (id.toLowerCase() === PROVIDERS.codex.id) return providerLabel(PROVIDERS.codex);
+    return provider;
+  }
+
   async function alternativesFor(provider: string): Promise<readonly LimitAlternative[]> {
     try {
       return await alternatives(provider);
@@ -194,7 +206,8 @@ export function createStuckService(
       episodes.delete(key);
       return;
     }
-    const who = { id: session.id, provider: await providerName(session.provider) };
+    const provider = await providerName(session.provider);
+    const who = { id: session.id, provider, family: familyName(session.provider, provider) };
     // Единственное место, где собирается письмо: тексты и состав письма о лимите — в core (`stuckLetter`, `limitLetter`).
     const letter = stuckLetter(who, need, at, need.kind === 'limit' ? await alternativesFor(session.provider) : []);
     if (unsubscribe === undefined || episodes.get(key) !== episode) return;

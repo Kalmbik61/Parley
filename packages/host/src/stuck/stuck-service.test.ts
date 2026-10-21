@@ -176,7 +176,11 @@ const sessionOf = (map: WorkMap, id: string): WorkSession => {
 
 const lines = (map: WorkMap): Message[] => map.messages.filter((message) => message.from === SYSTEM);
 const letters = (map: WorkMap): Message[] => map.messages.filter((message) => message.from === PARLEY);
-const whoOf = (id: string, provider = 'Claude Code'): { id: string; provider: string } => ({ id, provider });
+const whoOf = (
+  id: string,
+  provider = 'Claude Code',
+  family = 'Claude Code',
+): { id: string; provider: string; family: string } => ({ id, provider, family });
 const stuckOf = async (id: string): Promise<SessionNeed | null | undefined> =>
   sessionOf(await readMap(project, workId), id).stuck;
 
@@ -369,13 +373,32 @@ describe('служба «застрял» — доклад (спека заст�
       }),
     );
     const [, worker] = await makeWork((map, [a, b]) => inRoom(a, b)(map), 'custom-x');
-    boot({ alternatives: async () => [] });
+    const free: LimitAlternative = { id: 'claude', label: 'Claude Code', limits: null };
+    boot({ alternatives: async () => [free] });
     const need = needOf('limit');
     await emit(worker, need);
     await until(async () => (await stuckOf(worker)) != null);
     const map = await readMap(project, workId);
     expect(lines(map)[0]?.text).toBe(stuckLine(whoOf(worker, 'Claude Code X'), need, after(0), false));
     expect(lines(map)[0]?.text).toContain('Claude Code X usage limit');
+    // Заголовок письма называет семейство CLI, а не имя застрявшего аккаунта (решение 11).
+    const letter = letters(map)[0]?.text ?? '';
+    expect(letter).toContain('hit its Claude Code X usage limit');
+    expect(letter).toContain('Other Claude Code accounts in Parley right now: Claude Code — no limits known.');
+    expect(letter).not.toContain('Other Claude Code X accounts');
+  });
+
+  it('Codex: заголовок письма о лимите — «Other Codex accounts»', async () => {
+    const [, worker] = await makeWork((map, [a, b]) => inRoom(a, b)(map), 'codex');
+    boot({ alternatives: async () => [{ id: 'codex-2', label: 'Codex 2', limits: null }] });
+    const need = needOf('limit');
+    await emit(worker, need);
+    await until(async () => (await stuckOf(worker)) != null);
+    const map = await readMap(project, workId);
+    expect(letters(map)[0]?.text).toBe(
+      stuckLetter(whoOf(worker, 'Codex', 'Codex'), need, after(0), [{ id: 'codex-2', label: 'Codex 2', limits: null }]),
+    );
+    expect(letters(map)[0]?.text).toContain('Other Codex accounts in Parley right now: Codex 2 — no limits known.');
   });
 
   it('застрял ведущий: письма только отправителям непрочитанных, не человеку и не системе; строка с хвостом про «Make lead»', async () => {

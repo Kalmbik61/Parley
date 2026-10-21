@@ -916,7 +916,7 @@ describe('тексты о застрявшей сессии', () => {
   const NOW = local(21, 17, 17);
   const SINCE = local(21, 14, 2).toISOString();
   const RESETS = local(21, 19, 27).toISOString();
-  const S03 = { id: 's-03', provider: 'Codex' };
+  const S03 = { id: 's-03', provider: 'Codex', family: 'Codex' };
   const need = (over: Partial<SessionNeed>): SessionNeed => ({
     kind: 'approval',
     since: SINCE,
@@ -963,7 +963,7 @@ describe('тексты о застрявшей сессии', () => {
 
     it('limit называет провайдера и местное время сброса; без времени и с нечитаемым — «the reset time is unknown»', () => {
       expect(stuckLine(S03, limit, NOW, false)).toBe('@s03 hit its Codex usage limit; it resets at 19:27');
-      expect(stuckLine({ id: 's-03', provider: 'Claude Code 2' }, limit, NOW, false)).toBe(
+      expect(stuckLine({ id: 's-03', provider: 'Claude Code 2', family: 'Claude Code' }, limit, NOW, false)).toBe(
         '@s03 hit its Claude Code 2 usage limit; it resets at 19:27',
       );
       expect(stuckLine(S03, need({ kind: 'limit', resetsAt: local(22, 3, 5).toISOString() }), NOW, false)).toBe(
@@ -978,7 +978,7 @@ describe('тексты о застрявшей сессии', () => {
     });
 
     it('sign-in — вход или аккаунт, с текстом ошибки и без', () => {
-      const who = { id: 's-03', provider: 'Claude Code' };
+      const who = { id: 's-03', provider: 'Claude Code', family: 'Claude Code' };
       const signedOut = need({ kind: 'sign-in', account: 'auth', detail: 'Not logged in · Please run /login' });
       expect(stuckLine(who, signedOut, NOW, false)).toBe(
         '@s03 is signed out of Claude Code: Not logged in · Please run /login',
@@ -1012,7 +1012,7 @@ describe('тексты о застрявшей сессии', () => {
 
     it('упоминание — как sessionMention: s-03 → @s03, чужая форма id печатается как есть', () => {
       for (const id of ['s-03', 's-123', 'manual']) {
-        expect(stuckLine({ id, provider: 'Codex' }, need({ kind: 'question' }), NOW, false)).toBe(
+        expect(stuckLine({ id, provider: 'Codex', family: 'Codex' }, need({ kind: 'question' }), NOW, false)).toBe(
           `${sessionMention(id)} asked you a question in its terminal`,
         );
       }
@@ -1051,7 +1051,7 @@ describe('тексты о застрявшей сессии', () => {
   });
 
   describe('stuckLetter: sign-in', () => {
-    const who = { id: 's-03', provider: 'Claude Code' };
+    const who = { id: 's-03', provider: 'Claude Code', family: 'Claude Code' };
 
     it('вход — слово человека, ведущему просьба спросить @human', () => {
       const signedOut = need({ kind: 'sign-in', account: 'auth', detail: 'Not logged in · Please run /login' });
@@ -1075,7 +1075,15 @@ describe('тексты о застрявшей сессии', () => {
     const when = agentClock(RESETS, NOW);
     const nextMonday = local(27, 10, 0).toISOString();
     const base = (over: Partial<Parameters<typeof limitLetter>[0]> = {}): string =>
-      limitLetter({ mention: '@s03', provider: 'Codex', resetsAt: RESETS, now: NOW, alternatives: [], ...over });
+      limitLetter({
+        mention: '@s03',
+        provider: 'Codex',
+        family: 'Codex',
+        resetsAt: RESETS,
+        now: NOW,
+        alternatives: [],
+        ...over,
+      });
     const win = (usedPercent: number, resetsAt: string | null): LimitWindow => ({ usedPercent, resetsAt });
     const free = (over: Partial<LimitAlternative> = {}): LimitAlternative => ({
       id: 'claude',
@@ -1100,15 +1108,18 @@ describe('тексты о застрявшей сессии', () => {
     });
 
     it('с альтернативами — абзац о свободных аккаунтах и вариант replacement (спека подписок 5.8)', () => {
-      const text = base({ provider: 'Claude Code 2', alternatives: [free()] });
+      // Застрял аккаунт «Claude Code 2»: заголовок называет семейство CLI, а не имя застрявшего (решение 11).
+      const text = base({ provider: 'Claude Code 2', family: 'Claude Code', alternatives: [free()] });
+      expect(text).toContain('@s03 hit its Claude Code 2 usage limit;');
+      expect(text).not.toContain('Other Claude Code 2 accounts');
       expect(text).toContain(
-        `Other Claude Code 2 accounts in Parley right now: Claude Code (weekly 31 % used, resets ${agentClock(nextMonday, NOW)}).`,
+        `Other Claude Code accounts in Parley right now: Claude Code (weekly 31 % used, resets ${agentClock(nextMonday, NOW)}).`,
       );
       expect(text).toContain('create_session (provider: "claude") — but only after @human agrees.');
       expect(text).toContain("(name who), start a replacement on Claude Code and hand it @s03's part, or continue without it.");
       // Абзац стоит перед последним предложением, а не после него.
       expect(text.endsWith('Then wait for the answer (read_guide topic: stuck).')).toBe(true);
-      expect(text.indexOf('Other Claude Code 2 accounts')).toBeLessThan(text.indexOf('Then wait for the answer'));
+      expect(text.indexOf('Other Claude Code accounts')).toBeLessThan(text.indexOf('Then wait for the answer'));
     });
 
     it('аккаунт без известных лимитов — «no limits known»', () => {
@@ -1129,7 +1140,7 @@ describe('тексты о застрявшей сессии', () => {
 
     it('несколько аккаунтов: список через «; », каждому — его id в create_session, в вариантах — все имена', () => {
       const second = free({ id: 'custom-claude-3', label: 'Claude Code 3', limits: null });
-      const text = base({ provider: 'Claude Code 2', alternatives: [free(), second] });
+      const text = base({ provider: 'Claude Code 2', family: 'Claude Code', alternatives: [free(), second] });
       expect(text).toContain('Claude Code (weekly 31 % used, resets');
       expect(text).toContain('; Claude Code 3 — no limits known.');
       expect(text).toContain('create_session (provider: "claude" for Claude Code, "custom-claude-3" for Claude Code 3)');

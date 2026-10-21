@@ -541,6 +541,20 @@ describe('SessionRow — причина «нужен ты»', () => {
     expect(tooltip.textContent).toContain('Has a question: Which branch?');
   });
 
+  it('точка живой сессии с need — blocked, хотя ход закончен (unseen/idle); итоговое ревью, находка 1', () => {
+    const dot = (): string | null => row().querySelector('[data-testid="agent-state-dot"]')?.getAttribute('data-state') ?? null;
+    const view = renderNeed(makeNeed('limit'), 'unseen');
+    expect(dot()).toBe('blocked');
+    view.unmount();
+    renderNeed(makeNeed('sign-in', { account: 'auth' }), 'idle');
+    expect(dot()).toBe('blocked');
+  });
+
+  it('спящая сессия с остатком need: точка по статусу карты, а не blocked', () => {
+    renderNeed(makeNeed('limit'), 'idle', makeSession('s-01', 'a', { lifecycle: 'sleeping' }));
+    expect(row().querySelector('[data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('exited');
+  });
+
   it('спящая сессия с остатком need в записи активности — слово состояния, не причина', () => {
     renderNeed(makeNeed('limit'), 'idle', makeSession('s-01', 'a', { lifecycle: 'sleeping' }));
     expect(screen.getByText(S.states.asleep)).toBeTruthy();

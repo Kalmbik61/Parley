@@ -111,6 +111,17 @@ const NOTICE_EVENT: Partial<Record<HostNotice['kind'], string>> = {
   'limit-return-blocked': S.notifications.limitReturnBlocked,
 };
 
+/**
+ * Тело уведомления хоста. У `limit-return-blocked` — текст самого хоста с причиной («The limit has reset, but S03 could
+ * not continue: a menu is open in its terminal», спека застрявших 7.4): общая фраза окна причины не знает. Хост пишет его
+ * по-английски (`wake/wake-service.ts`); пустой текст — таблица окна. У прочих видов хостовый текст в тело не идёт.
+ */
+function noticeBody(notice: HostNotice): string {
+  if (notice.kind !== 'limit-return-blocked') return noticeText(notice);
+  const text = notice.text.trim();
+  return text === '' ? noticeText(notice) : text;
+}
+
 /** Чего ждёт сессия, пока она «нужен ты»: нужна для текста и для группы «лимит у провайдера». */
 interface WaitingNeed {
   ref: SessionRef;
@@ -463,7 +474,7 @@ export function createAttentionNotifier(deps: NotifyDeps): {
         {
           title: S.notifications.sessionTitle(workTitleText(entry.map.work.title), sessionRowLabel(session.id, session.label), event),
           // Без ярлыка: он уже в заголовке.
-          body: noticeText(notice),
+          body: noticeBody(notice),
           tag: `notice:${notice.kind}:${refKey(notice.ref)}`,
           target: { kind: 'session', ref: notice.ref },
         },

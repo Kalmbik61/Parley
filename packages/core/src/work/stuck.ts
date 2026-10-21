@@ -489,6 +489,12 @@ export function needReason(need: SessionNeed, now: Date, provider: string): stri
 export interface StuckWho {
   id: string;
   provider: string;
+  /**
+   * Имя семейства CLI для людей и агентов: `Claude Code` или `Codex` (у незнакомого семейства — само имя провайдера).
+   * Нужно письму о лимите: заголовок «Other <family> accounts» объединяет все аккаунты одного CLI, а не повторяет имя
+   * застрявшего («Claude Code 2») (спека подписок 4.4, решение 11).
+   */
+  family: string;
 }
 
 /**
@@ -608,16 +614,19 @@ function alternativeText(item: LimitAlternative, now: Date): string {
  * Письмо Parley о лимите (спека застрявших 5.2; спека подписок 4.4, 5.8), которое получает ведущий. Когда есть другие
  * вошедшие аккаунты того же CLI, в вариантах для `@human` добавляется замена, а перед последним предложением —
  * абзац о них: что замену ведущий заводит `create_session` только после согласия `@human`, сам — нет (решение 6).
- * `provider` — имя для людей (`providerLabel`), `mention` — `@s03`.
+ * `provider` — имя для людей (`providerLabel`), `mention` — `@s03`; `family` — имя семейства CLI для заголовка
+ * «Other <family> accounts» (у аккаунта `provider` — «Claude Code 2», а замену ищут среди «Claude Code»).
  */
 export function limitLetter(input: {
   mention: string;
   provider: string;
+  /** Имя семейства CLI (`StuckWho.family`): только в заголовке «Other <family> accounts». */
+  family: string;
   resetsAt: string | null;
   now: Date;
   alternatives: readonly LimitAlternative[];
 }): string {
-  const { mention, provider, resetsAt, now, alternatives } = input;
+  const { mention, provider, family, resetsAt, now, alternatives } = input;
   const resets = readableTime(resetsAt);
   const when = resets === null ? 'the reset time is unknown' : `it resets at ${agentClock(resets, now)}`;
   const after = resets === null ? 'when the limit lifts' : 'after the reset';
@@ -632,7 +641,7 @@ export function limitLetter(input: {
   const others =
     alternatives.length === 0
       ? ''
-      : ` Other ${provider} accounts in Parley right now: ${alternatives.map((item) => alternativeText(item, now)).join('; ')}. A replacement can be started on a free one with create_session (provider: ${ids}) — but only after @human agrees.`;
+      : ` Other ${family} accounts in Parley right now: ${alternatives.map((item) => alternativeText(item, now)).join('; ')}. A replacement can be started on a free one with create_session (provider: ${ids}) — but only after @human agrees.`;
   return `${mention} hit its ${provider} usage limit; ${when}. Messages to ${mention} wait; ${after} Parley delivers them and asks ${mention} to continue. Do not hand its part to anyone on your own. If you lead this room, write one message to @human: who is out, until when, what waits on it, and the options — wait for the reset, give its part to another participant (name who), ${replacement}or continue without it.${others} Then wait for the answer (read_guide topic: stuck).`;
 }
 
@@ -650,7 +659,7 @@ export function stuckLetter(
   const at = mentionOf(who.id);
   switch (need.kind) {
     case 'limit':
-      return limitLetter({ mention: at, provider: who.provider, resetsAt: need.resetsAt, now, alternatives });
+      return limitLetter({ mention: at, provider: who.provider, family: who.family, resetsAt: need.resetsAt, now, alternatives });
     case 'sign-in': {
       const account = need.account === 'account';
       const state = account ? `has an account problem in ${who.provider}` : `is signed out of ${who.provider}`;

@@ -7,6 +7,7 @@ import {
   needWord,
   reportedStatus,
   sessionDotState,
+  sessionDotStateWithNeed,
   stateWord,
   type Activity,
   type DotState,
@@ -14,6 +15,7 @@ import {
   type SessionResult,
   type SessionStatus,
 } from './session-state.js';
+import type { SessionNeed } from './stuck.js';
 
 describe('reportedStatus и liveStatus', () => {
   // Таблица двух осей (план этапа 3, 3.1): бриф и MCP ставят итог выше процесса, окно и помощник у живой — нет.
@@ -82,6 +84,39 @@ describe('sessionDotState', () => {
 
   it('спящая сессия с итогом показывает итог', () => {
     expect(sessionDotState({ lifecycle: 'sleeping', result: 'failed' }, 'working')).toBe('failed');
+  });
+});
+
+describe('sessionDotStateWithNeed', () => {
+  const need: SessionNeed = {
+    kind: 'limit',
+    since: '2026-10-21T12:00:00.000Z',
+    detail: null,
+    resetsAt: null,
+    window: null,
+    account: null,
+  };
+
+  it('у живой сессии с need точка blocked, что бы ни говорила activity', () => {
+    for (const activity of ['working', 'blocked', 'unseen', 'idle', null] as const) {
+      expect(sessionDotStateWithNeed({ lifecycle: 'active' }, activity, need)).toBe('blocked');
+    }
+  });
+
+  it('итог живой сессии need не отменяет', () => {
+    expect(sessionDotStateWithNeed({ lifecycle: 'active', result: 'done' }, 'unseen', need)).toBe('blocked');
+  });
+
+  it('без need — как sessionDotState', () => {
+    expect(sessionDotStateWithNeed({ lifecycle: 'active' }, 'unseen', null)).toBe('unseen');
+    expect(sessionDotStateWithNeed({ lifecycle: 'active' }, null, null)).toBe('idle');
+  });
+
+  it('у спящей, ожидающей и закрытой need не считается: точка по статусу карты', () => {
+    expect(sessionDotStateWithNeed({ lifecycle: 'sleeping' }, 'idle', need)).toBe('exited');
+    expect(sessionDotStateWithNeed({ lifecycle: 'sleeping', result: 'failed' }, null, need)).toBe('failed');
+    expect(sessionDotStateWithNeed({ lifecycle: 'closed' }, null, need)).toBe('exited');
+    expect(sessionDotStateWithNeed({ lifecycle: 'pending' }, null, need)).toBe('pending');
   });
 });
 

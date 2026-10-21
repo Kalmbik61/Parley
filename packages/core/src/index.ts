@@ -178,6 +178,7 @@ export {
   needWord,
   reportedStatus,
   sessionDotState,
+  sessionDotStateWithNeed,
   stateWord,
 } from './work/session-state.js';
 export type { DotState, SessionAxes, StateWordKey } from './work/session-state.js';

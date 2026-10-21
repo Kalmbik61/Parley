@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { FeedCard, WorkEntry, WorkMap } from '@parley/core';
+import type { FeedCard, SessionNeed, WorkEntry, WorkMap } from '@parley/core';
 import type { SessionLive } from '../activity/activity-service.js';
 import { cardLine, detailText, overviewText, resolveTarget, targetsOf, type OverviewSource } from './overview.js';
 
@@ -21,6 +21,19 @@ function entry(projectPath: string, workId: string, title: string, overrides: Pa
 }
 const live = (activity: string, waitingFor: string | null = null): SessionLive =>
   ({ activity: { activity, waitingFor }, metrics: null }) as unknown as SessionLive;
+
+const needOf = (kind: SessionNeed['kind'], over: Partial<SessionNeed> = {}): SessionNeed => ({
+  kind,
+  since: '2026-10-21T12:00:00.000Z',
+  detail: null,
+  resetsAt: null,
+  window: null,
+  account: null,
+  ...over,
+});
+/** Живая сессия, которой нужен человек: ход закончен (`unseen`/`idle`), а `need` стоит (лимит и вход оставляют ход законченным). */
+const liveNeed = (activity: string, need: SessionNeed): SessionLive =>
+  ({ activity: { activity, waitingFor: null, need }, metrics: null }) as unknown as SessionLive;
 
 function source(entries: WorkEntry[], states: Record<string, SessionLive>): OverviewSource {
   return { entries, live: (ref) => states[ref.sessionId] };
@@ -87,6 +100,35 @@ describe('overviewText', () => {
     expect(text).toMatch(/Session S05 Vera \[[^\]]+\] claude · needs you · /);
     expect(text).toContain('1 need the person');
   });
+  it('сессия с need (лимит) — ждущая, хотя activity говорит unseen: слово вида и причина вместо слова состояния', () => {
+    const text = overviewText(source([entry('/p/one', 'w-1', 'Parley')], { 's-03': live('working'), 's-05': liveNeed('unseen', needOf('limit')) }));
+    expect(text).toMatch(/Session S05 Vera \[[^\]]+\] claude · limit — Hit its Claude Code usage limit; the reset time is unknown · /);
+    expect(text).not.toContain('done · unseen');
+    expect(text).toContain('1 need the person');
+    // Ждущая — первой, перед работающей.
+    expect(text.indexOf('Session S05 Vera')).toBeLessThan(text.indexOf('Session S03 Ruslan'));
+  });
+  it('need у сессии с activity idle (вход): тоже ждущая, причина называет аккаунт по реестру', () => {
+    const providers = { 'custom-x': { id: 'custom-x', label: 'Claude Code X' } };
+    const account = entry('/p/one', 'w-1', 'Parley', {
+      sessions: [session('s-03', 'S03 Ruslan'), session('s-05', 'S05 Vera', { provider: 'custom-x' })],
+    } as unknown as Partial<WorkMap>);
+    const text = overviewText({
+      ...source([account], { 's-03': live('idle'), 's-05': liveNeed('idle', needOf('sign-in', { account: 'auth', detail: 'Not logged in' })) }),
+      providers,
+    });
+    expect(text).toMatch(/Session S05 Vera \[[^\]]+\] custom-x · sign-in — Signed out of Claude Code X: Not logged in · /);
+    expect(text).toContain('1 need the person');
+    expect(text).not.toMatch(/Session S05 Vera[^\n]* idle/);
+  });
+  it('need у спящей сессии не считается: запись активности могла остаться от прошлого процесса', () => {
+    const sleeping = entry('/p/one', 'w-1', 'Parley', {
+      sessions: [session('s-03', 'S03 Ruslan', { lifecycle: 'sleeping' }), session('s-05', 'S05 Vera')],
+    } as unknown as Partial<WorkMap>);
+    const text = overviewText(source([sleeping], { 's-03': liveNeed('idle', needOf('limit')), 's-05': live('idle') }));
+    expect(text).toMatch(/Session S03 Ruslan \[[^\]]+\] claude · asleep · /);
+    expect(text).not.toContain('need the person');
+  });
   it('у сессии — её комната: модель пишет агенту через неё с упоминанием; вне комнаты — без пометки', () => {
     const rooms = [{ id: 'r-1', title: 'Auth', creator: 's-03', members: ['s-03'], createdAt: '', lead: null, proposal: null }];
     const text = overviewText(source([entry('/p/one', 'w-1', 'Parley', { rooms } as Partial<WorkMap>)], { 's-03': live('working'), 's-05': live('idle') }));
@@ -124,6 +166,11 @@ describe('detailText', () => {
     const src = source([entry('/p/one', 'w-1', 'Parley')], { 's-03': live('idle') });
     const target = targetsOf(src).find((item) => item.kind === 'session' && item.name === 'S03 Ruslan');
     expect(detailText(src, target!, 'Тесты зелёные.')).toContain('Last reply: Тесты зелёные.');
+  });
+  it('сессия с need — слово вида и причина, как в обзоре', () => {
+    const src = source([entry('/p/one', 'w-1', 'Parley')], { 's-03': liveNeed('unseen', needOf('limit')) });
+    const target = targetsOf(src).find((item) => item.kind === 'session' && item.name === 'S03 Ruslan');
+    expect(detailText(src, target!, null)).toContain('claude · limit — Hit its Claude Code usage limit; the reset time is unknown');
   });
   it('комната — последние сообщения', () => {
     const map = entry('/p/one', 'w-1', 'Parley', {
