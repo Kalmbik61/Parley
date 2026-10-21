@@ -185,6 +185,19 @@ describe('NewWorkComposer — диктовка (спека 3.2)', () => {
   });
 });
 
+describe('NewWorkComposer — ⌘Enter во время диктовки', () => {
+  it('диктовка идёт: ⌘Enter завершает её, работа не создаётся', async () => {
+    const finish = vi.spyOn(useDictationStore.getState(), 'finishBeforeSend').mockReturnValue(true);
+    await renderComposer();
+    typeTitle('title');
+    fireEvent.keyDown(promptField(), { key: 'Enter', metaKey: true });
+    expect(finish).toHaveBeenCalledWith('new-workspace');
+    await act(async () => {});
+    expect(callsOf('works.create')).toHaveLength(0);
+    finish.mockRestore();
+  });
+});
+
 describe('NewWorkComposer — вид (1.7)', () => {
   it('поля 1.7: Project, Agent, Title, First prompt; Cancel и Create workspace; прежних полей нет', async () => {
     await renderComposer();

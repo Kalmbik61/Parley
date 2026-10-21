@@ -903,6 +903,30 @@ describe('диктовка в поле комнаты (спека 3.2)', () => {
   });
 });
 
+describe('Composer — Enter/Send во время диктовки', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('диктовка идёт: Enter и кнопка Send завершают её, письмо не уходит', () => {
+    const finish = vi.spyOn(useDictationStore.getState(), 'finishBeforeSend').mockReturnValue(true);
+    const { onSend } = renderComposer();
+    type('набранное');
+    press('Enter');
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(finish).toHaveBeenCalledTimes(2);
+    expect(finish).toHaveBeenCalledWith(`room:${KEY}`);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('диктовки нет: Enter отправляет как раньше', () => {
+    const finish = vi.spyOn(useDictationStore.getState(), 'finishBeforeSend').mockReturnValue(false);
+    const { onSend } = renderComposer();
+    type('набранное');
+    press('Enter');
+    expect(finish).toHaveBeenCalledWith(`room:${KEY}`);
+    expect(onSend).toHaveBeenCalledWith({ to: [], text: 'набранное' });
+  });
+});
+
 describe('Composer — вложения', () => {
   beforeEach(() => {
     bridge = createFakeBridge();

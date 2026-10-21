@@ -39,6 +39,7 @@ import { S } from '../../shared/strings.js';
 import { registerComposer } from '../keys/type-to-focus.js';
 import { keepCaretVisible } from '../lib/keep-caret-visible.js';
 import { Button } from '../ui/button.js';
+import { useDictationStore } from '../voice/dictation-store.js';
 import { MicButton } from '../voice/MicButton.js';
 import { useTextareaDictation } from '../voice/targets.js';
 import { pasteHasOnlyImage } from '../terminal/drop.js';
@@ -197,7 +198,10 @@ export function Composer({
   };
 
   const canSend = text.trim() !== '' || attachments.length > 0;
+  // Идёт запись в это поле — Send остаётся доступным: нажатие завершает диктовку, а не отправляет.
+  const dictating = useDictationStore((s) => s.phase === 'recording' && s.targetId === dictationId);
   const submit = (): void => {
+    if (useDictationStore.getState().finishBeforeSend(dictationId)) return;
     if (!canSend) return;
     onSubmit(text, attachments);
     field.current?.focus();
@@ -299,7 +303,7 @@ export function Composer({
             {S.chat.stop}
           </Button>
         )}
-        <Button type="button" onClick={submit} disabled={!canSend} variant={busy ? 'outline' : 'default'}>
+        <Button type="button" onClick={submit} disabled={!canSend && !dictating} variant={busy ? 'outline' : 'default'}>
           {busy ? S.chat.composer.queue : S.chat.composer.send}
         </Button>
       </div>
