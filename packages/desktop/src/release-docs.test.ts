@@ -1,8 +1,10 @@
 /**
  * Документы первого релиза (README, CHANGELOG; план релиза 0.1.0, V7, правки ревью F): то, что они обещают человеку об
  * обновлении, совпадает с тем, что делает код, а имя прежнего проекта и русский текст в них не всплывают — это
- * лицо репозитория для человека, который его открыл впервые. Тексты окна, которые документ цитирует («Restart
- * host…», «Check for updates»), берутся из `shared/strings.ts`: переименовали кнопку — тест напомнит о README.
+ * лицо репозитория для человека, который его открыл впервые. С PR #98 README — короткий обзор, а не подробное
+ * руководство: тест проверяет только то, что он ещё обещает (раздел «Updates», шаг «Allow the first launch»,
+ * «Requirements»). Тексты окна, которые документ цитирует («Notifications»), берутся из `shared/strings.ts`:
+ * переименовали раздел — тест напомнит о README.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -14,12 +16,13 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const readme = readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
 const changelog = readFileSync(path.join(repoRoot, 'CHANGELOG.md'), 'utf8');
 
-/** Раздел README третьего уровня: от `### Название` до следующего заголовка. */
+/** Раздел README: от `## Название` или `### Название` до следующего заголовка любого уровня. */
 function section(title: string): string {
-  const start = readme.indexOf(`\n### ${title}\n`);
-  expect(start, `раздел «${title}» в README`).toBeGreaterThan(-1);
-  const next = readme.indexOf('\n#', start + 1);
-  return readme.slice(start, next === -1 ? undefined : next);
+  const match = new RegExp(`\\n#{2,3} ${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n`).exec(readme);
+  expect(match, `раздел «${title}» в README`).not.toBeNull();
+  const start = match?.index ?? 0;
+  const next = readme.slice(start + 1).search(/\n#{1,6} /);
+  return readme.slice(start, next === -1 ? undefined : start + 1 + next);
 }
 
 /** Текст без переносов строк внутри абзацев: фразы документа не должны зависеть от того, где он сломан. */
@@ -35,89 +38,45 @@ describe('README и CHANGELOG — для человека, который отк
   });
 });
 
-describe('README, «Updates»: обещания совпадают с кодом', () => {
+describe('README, «Updates» и первый запуск: обещания совпадают с кодом', () => {
   const updates = flat(section('Updates'));
 
-  it('цитирует тексты окна так, как они написаны в strings.ts', () => {
-    expect(updates).toContain(`"${S.update.available('X.Y.Z')}"`);
-    expect(updates).toContain(`"${S.update.download}"`);
-    expect(updates).toContain(`"${S.update.later}"`);
-    expect(updates).toContain(`"${S.actions.restartHost}"`);
-    expect(updates).toContain(`"${S.statusBar.hostOutdated}"`);
-    expect(updates).toContain(`"${S.settings.checkForUpdates}"`);
-    expect(updates).toContain(S.settings.sections.notifications);
+  it('называет раздел настроек так, как он написан в strings.ts', () => {
+    expect(updates).toContain(`Settings → ${S.settings.sections.notifications}`);
   });
 
-  it('приватность: запрос обычный, без токена и куки, но GitHub видит IP-адрес — «не спрашивает» в любом случае не обещано', () => {
-    expect(updates).toMatch(/no token and no cookies/);
-    expect(updates).toMatch(/GitHub does see the request itself, so your IP address/);
-    expect(updates).not.toMatch(/Either way the window does not ask GitHub/);
-  });
-
-  it('переменная PARLEY_UPDATE_CHECK=off читается из снятого окружения оболочки: не ответила за срок — не видна, помогает переключатель', () => {
-    expect(updates).toContain('`PARLEY_UPDATE_CHECK=off`');
-    expect(updates).toMatch(/shell did not answer in time.*not seen/);
-    expect(updates).toMatch(/only the switch in Settings/);
-  });
-
-  it('«Later» — только закрыть тост, версию закрывают «Download» и смахивание: так написано и так делает update-notice', () => {
-    expect(updates).toMatch(
-      /"Download", or swiping the toast away.*does not come back for that version/,
-    );
-    expect(updates).toMatch(/"Later" only closes the toast/);
-    const notice = readFileSync(
-      path.join(repoRoot, 'packages', 'desktop', 'src', 'renderer', 'update', 'update-notice.ts'),
-      'utf8',
-    );
-    // Кнопка «Later» — пустой обработчик; запись версии стоит у «Download» и у смахивания.
-    expect(notice).toMatch(/cancel: \{ label: S\.update\.later, onClick: \(\) => \{\} \}/);
-    expect(notice).toMatch(/onDismiss: \(\) => dismiss\(version\)/);
-  });
-
-  it('из исходников (pnpm dev:desktop) проверки нет — как в main/index.ts', () => {
-    expect(updates).toMatch(/started from source \(`pnpm dev:desktop`\) does not check/);
+  it('само не обновляется — в коде нет автоустановки', () => {
+    expect(updates).toContain('it does not update itself');
     const main = readFileSync(
       path.join(repoRoot, 'packages', 'desktop', 'src', 'main', 'index.ts'),
       'utf8',
     );
-    expect(main).toContain('updateCheckAllowed(shellEnv.env, app.isPackaged)');
+    expect(main).not.toMatch(/autoUpdater/);
   });
 
-  it('после замены приложения окно само просит перезапустить хост прежней сборки (0.2.0): у живых агентов в командах пути внутри старого приложения', () => {
-    expect(updates).toMatch(/the host still runs from the previous app/);
-    expect(updates).toContain(`"${S.actions.restartHost}"`);
-    expect(updates).toContain(`"${S.statusBar.hostOutdated}"`);
-    expect(updates).toMatch(/status line.*MCP server.*Codex/);
-    // Хост прежней сборки — для macOS другое приложение: доступ к папкам спрашивается по кругу.
-    expect(updates).toMatch(/keep asking for access to a folder/);
-    expect(updates).toMatch(/Live agents are interrupted and come back through `--resume`/);
+  it('⌘Q останавливает и агентов: выход идёт через сторож will-quit, который гасит хост', () => {
+    expect(updates).toContain('Quit Parley with ⌘Q (this also stops its agents)');
+    const main = path.join(repoRoot, 'packages', 'desktop', 'src', 'main');
+    const guard = readFileSync(path.join(main, 'quit-guard.ts'), 'utf8');
+    expect(guard).toContain("app.on('will-quit', onWillQuit)");
+    expect(guard).toContain('await deps.stopHost()');
+    const index = readFileSync(path.join(main, 'index.ts'), 'utf8');
+    expect(index).toContain('guardAppQuit(app, {');
+    expect(index).toContain('await connection.stopHost()');
   });
 
-  it('подпись ad hoc: шаги первого запуска повторяются при каждом обновлении, и macOS может спросить доступ к папкам снова', () => {
-    expect(updates).toMatch(/signed ad hoc/);
-    expect(updates).toMatch(/"First launch" steps repeat/);
-    expect(updates).toMatch(/Documents, Desktop and Downloads/);
-  });
-});
-
-describe('README, «Build `Parley.app`»: что лежит в собранном приложении', () => {
-  it('рядом со встроенным node едет его LICENSE — как кладёт fetch-node и проверяет verify-packaged-apps.sh', () => {
-    const build = flat(section('Build `Parley.app`'));
-
-    expect(build).toContain('`Contents/Resources/node/bin/node`');
-    expect(build).toContain('`Contents/Resources/node/LICENSE`');
-    const verify = readFileSync(
-      path.join(repoRoot, 'scripts', 'release', 'verify-packaged-apps.sh'),
-      'utf8',
+  it('после замены приложения команду xattr нужно выполнить снова — она есть в шаге «Allow the first launch»', () => {
+    expect(updates).toContain('run the `xattr` command again');
+    expect(section('2. Allow the first launch')).toContain(
+      'xattr -dr com.apple.quarantine /Applications/Parley.app',
     );
-    expect(verify).toContain('"$resources/node/LICENSE"');
   });
 });
 
 describe('README и CHANGELOG: Intel-сборка не проверена на Intel', () => {
   it('README, «Requirements»', () => {
     expect(flat(section('Requirements'))).toMatch(
-      /Intel build is made on an Apple Silicon machine.*not been tested on an Intel Mac/,
+      /The Intel build has not been tested on an Intel Mac yet/,
     );
   });
 
