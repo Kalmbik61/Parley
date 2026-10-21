@@ -1808,6 +1808,60 @@ describe('возврат после сброса лимита', () => {
     expect(rig.written).toEqual([]);
   });
 
+  it('многочасовой срок: ни раньше, ни позже срока, ступенями по минуте', async () => {
+    const rig = await limitRig();
+    rig.hit({ resetsAt: new Date(T0 + 5 * 60 * MINUTE).toISOString() });
+
+    // Срок — сброс через 5 часов и запас 2 минуты.
+    await rig.advance(5 * 60 * MINUTE + 119_999);
+    expect(rig.written).toEqual([]);
+
+    await rig.advance(1);
+    expect(returnText(rig)).toHaveLength(1);
+  });
+
+  it('Mac спал: часы ушли за срок, а таймер стоял — возврат на ближайшей ступени, не через часы', async () => {
+    const rig = await limitRig();
+    rig.hit({ resetsAt: new Date(T0 + 5 * 60 * MINUTE).toISOString() });
+    await rig.advance(1000);
+
+    // Сон: настенные часы прыгнули на 6 часов, а отсчёт таймеров не двинулся.
+    vi.setSystemTime(T0 + 6 * 60 * MINUTE);
+    expect(rig.written).toEqual([]);
+
+    // Одна ступень (минута): таймер сверяет срок с часами, а не со своим отсчётом.
+    await rig.advance(60_000);
+    expect(returnText(rig)).toHaveLength(1);
+  });
+
+  it('Mac спал, ступень ещё не сработала: любой пересчёт сессии видит, что срок прошёл', async () => {
+    const rig = await limitRig();
+    rig.hit({ resetsAt: new Date(T0 + 5 * 60 * MINUTE).toISOString() });
+
+    vi.setSystemTime(T0 + 6 * 60 * MINUTE);
+    rig.poke();
+
+    expect(returnText(rig)).toHaveLength(1);
+  });
+
+  it('отказ (черновик), а затем новый лимит без видимого хода: `since` новее отказа — новый эпизод, не молчание', async () => {
+    const rig = await limitRig(FAST);
+    rig.draft.on = true;
+    rig.hit();
+    await rig.advance(DUE_MS);
+    expect(rig.blocked()).toHaveLength(1);
+    expect(rig.written).toEqual([]);
+
+    // Человек убрал черновик и написал сам; ход и ошибка лимита уложились в одну склейку активности.
+    rig.draft.on = false;
+    await rig.advance(1000);
+    rig.hit();
+    await rig.advance(DUE_MS);
+
+    expect(returnText(rig)).toHaveLength(1);
+    expect(rig.blocked()).toHaveLength(1);
+  });
+
   it('Codex: просьба вставкой, клавиша отправки через паузу Codex', async () => {
     const rig = await limitRig(FAST, 'codex');
     rig.hit();

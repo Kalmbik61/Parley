@@ -113,8 +113,11 @@ const PASTE_MODE_RETRIES = 15;
  */
 const CHOICE_RETRIES = 150;
 
-/** Самый длинный срок `setTimeout`: больше — Node срабатывает сразу. Недельный лимит укладывается с запасом. */
-const MAX_TIMER_MS = 2_147_483_647;
+/**
+ * Ступень таймера возврата. Срок бывает в часах и днях, а таймер Node на macOS не идёт, пока Mac спит: один длинный
+ * `setTimeout` после сна срабатывал бы на часы позже срока. Поэтому ждём ступенями по минуте и на каждой смотрим на часы.
+ */
+const LIMIT_TIMER_STEP_MS = 60_000;
 
 /**
  * Эпизод лимита сессии, пока Parley ждёт срока возврата (спека застрявших 6.3). Ведётся по сессии, а не по точному
@@ -128,12 +131,13 @@ interface LimitEpisode {
   timer: NodeJS.Timeout | undefined;
   /** Срок наступил: условия проверяются на каждом пересчёте, пока возврат не напечатан и не отказан. */
   reached: boolean;
-  /** Исход принят — возврат напечатан либо отказан уведомлением; до конца эпизода второй раз не пробуем. */
-  settled: boolean;
+  /**
+   * Когда исход принят (мс): возврат напечатан либо отказан уведомлением; до конца эпизода второй раз не пробуем.
+   * `need` с более поздним `since` — уже новый эпизод, а не тот же. `null` — исхода ещё нет.
+   */
+  settledAt: number | null;
   /** Когда впервые увидели, что окно провайдера снова свободно (мс): срок встал на это время плюс запас, один раз. */
   freeAt: number | null;
-  /** Когда возврат напечатан (мс): `need` с более поздним `since` — уже новый эпизод, а не тот же. */
-  printedAt: number | null;
 }
 
 /** Состояние одной попытки доставки указателя, живёт между пересчётами сессии. */
@@ -637,8 +641,8 @@ export function createWakeService(
   }
 
   /**
-   * Взводит таймер эпизода на `due`. Срок уже прошёл — таймера нет, эпизод сразу `reached`. Дольше самого длинного
-   * `setTimeout` ждём ступенями: на ступени срок проверяется заново.
+   * Взводит таймер эпизода на `due`. Срок уже прошёл — таймера нет, эпизод сразу `reached`. Ждём ступенями
+   * `LIMIT_TIMER_STEP_MS`: на каждой срок сверяется с часами, а не с отсчётом таймера, который во сне стоит.
    */
   function armLimit(ref: SessionRef, episode: LimitEpisode, requested: number): void {
     clearTimeout(episode.timer);
@@ -654,10 +658,14 @@ export function createWakeService(
     episode.reached = false;
     episode.timer = setTimeout(() => {
       episode.timer = undefined;
-      if (episode.due - Date.now() > 1000) armLimit(ref, episode, episode.due);
-      else episode.reached = true;
+      // Ступень кончилась раньше срока (или таймер Node сработал на миллисекунду раньше часов): ждём остаток.
+      if (episode.due > Date.now()) {
+        armLimit(ref, episode, episode.due);
+        return;
+      }
+      episode.reached = true;
       recompute(ref);
-    }, Math.min(delay, MAX_TIMER_MS));
+    }, Math.min(delay, LIMIT_TIMER_STEP_MS));
     // Хост живёт клиентами и сессиями, а не этим таймером (срок бывает в днях): он не должен удерживать процесс.
     episode.timer.unref?.();
   }
@@ -702,14 +710,16 @@ export function createWakeService(
       return;
     }
     let episode = state.limit;
-    // Возврат напечатан, а `need` с более поздним `since`: ход и ошибка уложились в одну склейку активности, `need` не
-    // был пуст ни разу — лимит новый, а не тот же.
-    if (episode?.printedAt != null && Date.parse(need.since) > episode.printedAt) {
+    // Исход принят (возврат напечатан или отказан), а `need` с более поздним `since`: ход и ошибка уложились в одну
+    // склейку активности, `need` не был пуст ни разу — лимит новый, а не тот же.
+    if (episode?.settledAt != null && Date.parse(need.since) > episode.settledAt) {
       dropLimit(state);
-      state.returnTurn = null;
-      // Ход по просьбе был: указатель не «в полёте», и предохранитель, ждавший его начала, не нужен.
-      clearTimers(state);
-      state.inFlight = false;
+      // Возврат был напечатан, а хода не видели: указатель не «в полёте», и предохранитель, ждавший его начала, не нужен.
+      if (state.returnTurn === 'pending') {
+        state.returnTurn = null;
+        clearTimers(state);
+        state.inFlight = false;
+      }
       episode = undefined;
     }
     if (episode === undefined) {
@@ -718,22 +728,27 @@ export function createWakeService(
         due: 0,
         timer: undefined,
         reached: false,
-        settled: false,
+        settledAt: null,
         freeAt: null,
-        printedAt: null,
       };
       state.limit = episode;
       armLimit(ref, episode, limitReturnDue(need, limitGraceMs, limitRetryMs));
-    } else if (!episode.settled && need.resetsAt !== null && need.resetsAt !== episode.resetsAt) {
+    } else if (episode.settledAt === null && need.resetsAt !== null && need.resetsAt !== episode.resetsAt) {
       // Время сброса появилось или уточнилось (квота GLM, данные провайдера): срок идёт от него.
       episode.resetsAt = need.resetsAt;
       armLimit(ref, episode, limitReturnDue(need, limitGraceMs, limitRetryMs));
+    }
+    // Срок по часам прошёл, а таймер ещё не сработал (Mac спал, цикл событий стоял): не ждём его ступени.
+    if (!episode.reached && Date.now() >= episode.due) {
+      clearTimeout(episode.timer);
+      episode.timer = undefined;
+      episode.reached = true;
     }
     // Время сброса неизвестно, а окно провайдера снова свободно: срок встаёт на это время плюс тот же запас, что после
     // известного сброса, — Claude мог продолжить сам, и «сразу» значит «не через 15 минут» (6.3). Один раз за эпизод.
     if (
       !episode.reached &&
-      !episode.settled &&
+      episode.settledAt === null &&
       episode.freeAt === null &&
       options.limits !== undefined &&
       limitWindowFree(need, options.limits.get(session.provider))
@@ -741,7 +756,7 @@ export function createWakeService(
       episode.freeAt = Date.now();
       if (episode.freeAt + limitGraceMs < episode.due) armLimit(ref, episode, episode.freeAt + limitGraceMs);
     }
-    if (episode.reached && !episode.settled) tryLimitReturn(ref, state, entry, session, handle, episode, act);
+    if (episode.reached && episode.settledAt === null) tryLimitReturn(ref, state, entry, session, handle, episode, act);
   }
 
   /**
@@ -764,7 +779,7 @@ export function createWakeService(
 
     const block = returnBlock({ hasDraft: handle.hasDraft(), screen: pty.screenText(ref), returns: state.returns });
     if (block !== null) {
-      episode.settled = true;
+      episode.settledAt = Date.now();
       notice(
         'limit-return-blocked',
         ref,
@@ -793,8 +808,7 @@ export function createWakeService(
       { text: limitReturnText(letters, entry.map.rooms), letterIds, ...traceOf(letters, letterIds) },
       codex,
     );
-    episode.settled = true;
-    episode.printedAt = Date.now();
+    episode.settledAt = Date.now();
     state.returns += 1;
     state.returnTurn = 'pending';
     host.log.info('будильник: возврат после сброса лимита', { ref, returns: state.returns, letters: letterIds.length });
