@@ -510,6 +510,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activity: activityService,
     feed: feedService,
     assistant: assistantService,
+    // `by: 'telegram'` называет канал решения в trust.json: кто выдал доверие папке.
+    consents: {
+      list: () => consentsService.list(),
+      decide: (id, decision) => consentsService.decide(id, decision, 'telegram'),
+      onChange: (listener) => consentsService.onChange(listener),
+    },
     sendLetter: (input) => sendHumanLetter(input, { via: 'telegram' }),
     resolveRoomProposal: (input) => resolveRoomProposal(input),
     config: async () => (await loadConfig()).config,
