@@ -76,6 +76,8 @@ import { createHookServer } from './hooks/hook-server.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { providerLaunchEnv } from './sessions/provider-env.js';
 import { createReadyJournal } from './sessions/ready-journal.js';
+import { limitAlternatives } from './stuck/limit-alternatives.js';
+import { createStuckService, stuckReportFromEnv } from './stuck/stuck-service.js';
 import { createWakeService } from './wake/wake-service.js';
 import { createWorktreesService } from './worktrees/worktrees-service.js';
 import { readHostVersion } from './version.js';
@@ -284,6 +286,15 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     limits: limitsService,
   });
   handle.context.onShutdown(() => activityService.stop());
+
+  // Служба «застрял» (спека застрявших 4.4): эпизоды ожидания человека — в карту, в ленту комнаты и письмом ведущему.
+  // Альтернативы для письма о лимите (спека подписок 5.8) — другие вошедшие аккаунты того же CLI; службы входа на этом
+  // этапе нет, `signedIn` всегда `null`, и список пуст.
+  const stuckService = createStuckService(handle.context, worksService, activityService, {
+    reportMs: stuckReportFromEnv(process.env),
+    alternatives: (provider) => limitAlternatives(provider, { limits: limitsService, signedIn: () => null }),
+  });
+  handle.context.onShutdown(async () => stuckService.stop());
 
   // Живые PTY сессий (1.6). На остановке хоста добиваются вместе с ним —
   // иначе процесс агента остаётся сиротой без хоста, который бы его закрыл.
@@ -652,6 +663,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   await telegram.start().catch((error: unknown) => {
     log.error('telegram не запустился', { error: String(error) });
   });
+  // До активности: сверка эпизодов с картой идёт по первому изменению каждой сессии (спека застрявших 4.4), а оно
+  // приходит из самого `activityService.start()`.
+  stuckService.start();
   await activityService.start();
   planEffects.start();
   history.start();
