@@ -4,6 +4,28 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.20.0
+
+Create a workspace without agents, start several sessions side by side without a room, and dictate the note when you return a room decision for rework.
+
+### Added
+
+- **A workspace without agents.** New workspace now opens with no agents, and Create workspace makes an empty workspace. "Add agent" adds the same rows as New session or room (provider, role, model, effort). One agent starts a session. With two or more, "Put them in a room" (on by default) creates a room with a lead and posts your first prompt to the room; turned off, it starts separate sessions that each get the prompt as their task. ([#101](https://github.com/Kalmbik61/Parley/pull/101))
+- **Separate sessions without a room.** New session or room has the same switch: turn it off to add several sessions side by side to a workspace. Recipes and the room mode apply only to rooms. ([#101](https://github.com/Kalmbik61/Parley/pull/101))
+- **Dictate the rework note.** The note of "Return for rework" on a room decision has a mic button and takes ⌘⇧M; "Send to lead" waits until the dictation lands in the note. ([#101](https://github.com/Kalmbik61/Parley/pull/101))
+
+### Changed
+
+- Messages you send from Chat while a turn is running wait in the window until the turn ends, by itself or by Stop, and then go out in order. A waiting message has "Send now" and a remove button. ([#99](https://github.com/Kalmbik61/Parley/pull/99))
+- Built-in roles: the Feature Lead creates new sessions itself with `create_session`, the Critic checks decisions as well as plans, the Reviewer checks whether tests cover the change, and the Debugger adds a regression test when the failure can be reproduced. ([#99](https://github.com/Kalmbik61/Parley/pull/99), [#100](https://github.com/Kalmbik61/Parley/pull/100))
+- The README is shorter. ([#98](https://github.com/Kalmbik61/Parley/pull/98))
+
+### Fixed
+
+- After Stop, a message sent from Chat during the turn no longer hangs as "Queued". ([#99](https://github.com/Kalmbik61/Parley/pull/99))
+- Enter or Send while dictating finishes the dictation instead of sending the text typed so far; the transcript lands in the field and the next Enter sends it. This covers Chat, rooms and the first prompt of New workspace. ([#99](https://github.com/Kalmbik61/Parley/pull/99))
+- The "Return for rework" form and its note survive switching away from the room tab. ([#99](https://github.com/Kalmbik61/Parley/pull/99))
+
 ## 0.19.0
 
 Agents drive their browser panels on any site, Codex no longer asks before Parley's own tools, and typing anywhere in the window goes to the open Chat or room.
