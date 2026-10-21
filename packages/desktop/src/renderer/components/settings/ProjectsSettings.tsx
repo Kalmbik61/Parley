@@ -8,22 +8,11 @@ import type { TrustRecord } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
+import { shortenMiddle } from '../../lib/shorten-middle.js';
 import { Button } from '../../ui/button.js';
 
 export interface ProjectsSettingsProps {
   bridge: ParleyBridge;
-}
-
-/** Длиннее — середина пути заменяется на «…»: начало (где лежит) и конец (что за папка) важнее середины. */
-const PATH_MAX = 56;
-
-/** Сокращение середины по кодовым точкам; полный путь остаётся в `title` строки. */
-function shortenMiddle(path: string, max: number = PATH_MAX): string {
-  const chars = Array.from(path);
-  if (chars.length <= max) return path;
-  const tail = Math.ceil((max - 1) * 0.6);
-  const head = max - 1 - tail;
-  return `${chars.slice(0, head).join('')}…${chars.slice(chars.length - tail).join('')}`;
 }
 
 export function ProjectsSettings({ bridge }: ProjectsSettingsProps): JSX.Element {
