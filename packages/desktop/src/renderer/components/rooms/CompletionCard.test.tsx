@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
@@ -11,6 +11,7 @@ import type { RoomPlan } from "@parley/core";
 import { CompletionCard } from "./CompletionCard.js";
 import { createFakeBridge } from "../../test-utils/fake-bridge.js";
 import { makeWork } from "../../test-utils/work-fixtures.js";
+import { useUiStore } from "../../store/ui.js";
 const plan: RoomPlan = {
   id: "pl-01",
   roomId: "r-01",
@@ -62,6 +63,11 @@ const props = () => ({
   onLayout: vi.fn(),
 });
 afterEach(cleanup);
+
+// Форма «Return for rework» живёт в decisionDrafts окна — между тестами её сбрасываем.
+beforeEach(() => {
+  useUiStore.setState({ decisionDrafts: {} });
+});
 it("shows current verified evidence and accepts once; Return remains a human proposal response", async () => {
   const p = props();
   render(<CompletionCard {...p} />);

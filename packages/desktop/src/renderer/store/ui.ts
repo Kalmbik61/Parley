@@ -106,6 +106,13 @@ export interface UiState {
    */
   composerDrafts: Record<string, string>;
   /**
+   * Форма «Return for rework» в карточке решения (`DecisionCard`): ключ — `${draftKey комнаты}\n${id решения}`,
+   * значение — открыта ли форма и текст заметки. Только в памяти окна, в `ui.json` не пишется: переживает смену
+   * вкладок и работ (тело комнаты размонтируется), но не перезапуск окна. Закрытой формы с пустой заметкой
+   * в записи нет.
+   */
+  decisionDrafts: Record<string, { open: boolean; note: string }>;
+  /**
    * Вложения поля ввода комнаты — абсолютные пути (скрепка и файлы, брошенные на вкладку комнаты), по тому же ключу и с
    * той же жизнью, что черновик: в памяти окна, переживают смену вкладок. Пустого списка в записи нет.
    */
@@ -153,6 +160,8 @@ export interface UiState {
   setWindowFocused: (focused: boolean) => void;
   /** Поле ввода комнаты зовёт на каждую правку; пустой текст убирает запись. */
   setComposerDraft: (draftKey: string, draft: string) => void;
+  /** `null` или закрытая форма с пустой заметкой убирает запись. */
+  setDecisionDraft: (key: string, draft: { open: boolean; note: string } | null) => void;
   /** Вложения поля ввода комнаты; пустой список убирает запись. */
   setComposerAttachments: (draftKey: string, paths: readonly string[]) => void;
   openNewWorkDialog: (projectPath?: string | null, title?: string) => void;
@@ -229,6 +238,7 @@ export const useUiStore = create<UiState>((set, get) => {
     settingsProvider: null,
     visibleSessionRefs: {},
     composerDrafts: {},
+    decisionDrafts: {},
     composerAttachments: {},
     ui: DEFAULT_UI,
     uiLoaded: false,
@@ -266,6 +276,18 @@ export const useUiStore = create<UiState>((set, get) => {
           return { composerDrafts: Object.fromEntries(Object.entries(state.composerDrafts).filter(([key]) => key !== draftKey)) };
         }
         return { composerDrafts: { ...state.composerDrafts, [draftKey]: draft } };
+      }),
+
+    setDecisionDraft: (key, draft) =>
+      set((state) => {
+        const next = draft === null || (!draft.open && draft.note === '') ? null : draft;
+        const current = state.decisionDrafts[key];
+        // Тот же вид — тот же стор: поле заметки зовёт это на каждый `input`.
+        if (next === null ? current === undefined : current !== undefined && current.open === next.open && current.note === next.note) return state;
+        if (next === null) {
+          return { decisionDrafts: Object.fromEntries(Object.entries(state.decisionDrafts).filter(([k]) => k !== key)) };
+        }
+        return { decisionDrafts: { ...state.decisionDrafts, [key]: { open: next.open, note: next.note } } };
       }),
 
     setComposerAttachments: (draftKey, paths) =>

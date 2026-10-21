@@ -47,3 +47,32 @@ describe('useUiStore.composerDrafts', () => {
     dispose();
   });
 });
+
+describe('useUiStore.decisionDrafts', () => {
+  beforeEach(() => {
+    useUiStore.setState({ decisionDrafts: {} });
+  });
+
+  it('запись по ключу; закрытая форма с заметкой хранится', () => {
+    useUiStore.getState().setDecisionDraft('k', { open: false, note: 'текст' });
+    expect(useUiStore.getState().decisionDrafts).toEqual({ k: { open: false, note: 'текст' } });
+  });
+
+  it('null и закрытая форма с пустой заметкой убирают запись', () => {
+    useUiStore.getState().setDecisionDraft('k', { open: true, note: '' });
+    useUiStore.getState().setDecisionDraft('k', null);
+    expect(useUiStore.getState().decisionDrafts).toEqual({});
+    useUiStore.getState().setDecisionDraft('k', { open: true, note: 'a' });
+    useUiStore.getState().setDecisionDraft('k', { open: false, note: '' });
+    expect(useUiStore.getState().decisionDrafts).toEqual({});
+  });
+
+  it('то же значение стор не меняет', () => {
+    useUiStore.getState().setDecisionDraft('k', { open: true, note: 'a' });
+    const before = useUiStore.getState().decisionDrafts;
+    useUiStore.getState().setDecisionDraft('k', { open: true, note: 'a' });
+    expect(useUiStore.getState().decisionDrafts).toBe(before);
+    useUiStore.getState().setDecisionDraft('other', null);
+    expect(useUiStore.getState().decisionDrafts).toBe(before);
+  });
+});
