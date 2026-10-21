@@ -2,7 +2,8 @@
  * Диктовка окна (спека 3.2–3.4, 6): одна запись на окно, одна очередь распознавания. Цели — поле комнаты, поле чата,
  * первый промпт «New workspace», терминал сессии — регистрируются сами и умеют вставить текст. Store решает, когда
  * писать, куда отдавать результат и что показать при ошибке. Зависимости окна (мост, запись, тосты, таймеры) —
- * через `configure`: тесты подставляют свои.
+ * через `configure`: тесты подставляют свои. Enter/Send в поле во время диктовки не отправляют, а завершают запись
+ * (`finishBeforeSend`): текст встанет в поле, человек проверит и отправит сам.
  */
 import { create } from 'zustand';
 import { S } from '../../shared/strings.js';
@@ -52,6 +53,12 @@ export interface DictationState {
   isConfigured(): boolean;
   toggle(targetId: string): Promise<void>;
   cancel(): void;
+  /**
+   * Вызывается в начале отправки поля-цели. Идёт запись в эту цель — завершает её (как `toggle` по активной цели) и
+   * возвращает `true`; идёт распознавание в эту цель — `true` (текст вот-вот встанет); иначе (тихо, либо пишется или
+   * распознаётся другая цель) — `false`, ничего не делает. При `true` поле не отправляет.
+   */
+  finishBeforeSend(targetId: string): boolean;
   /** Горячая клавиша — строгий вариант (цель с фокусом или идущая запись); палитра и меню — `fallback: true`. */
   toggleFocused(options?: FocusedOptions): boolean;
   canToggleFocused(options?: FocusedOptions): boolean;
@@ -256,6 +263,16 @@ export function createDictationStore() {
         stopListening();
         current?.cancel();
         set(IDLE);
+      },
+
+      finishBeforeSend(targetId) {
+        const { phase, targetId: active } = get();
+        if (active !== targetId) return false;
+        if (phase === 'recording') {
+          void finish();
+          return true;
+        }
+        return phase === 'transcribing';
       },
 
       toggleFocused(options) {

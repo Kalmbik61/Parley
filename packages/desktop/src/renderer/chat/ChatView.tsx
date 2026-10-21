@@ -8,10 +8,12 @@
  * Карточки разрешения, вопроса и плана — с кнопками (`cards/`, кусок 4a): решения уходят `feed.decide`.
  *
  * Ввод (решение 8, очередь — спека 2026-10-16, 4.3): поле и вложения очищаются сразу, а сообщение встаёт в очередь
- * окна (`chat-outbox.ts`) — серым «Waiting» в конце ленты — и уходит `pty.send` с Enter строго по одному. Очередь сама
- * повторяет `busy` и `blocked`; окончательный отказ — «Not sent» с Retry и ×, тост прежний (`showSendToast`). Ушедшее
- * во время хода — серый «Queued», пока не придёт промпт с тем же текстом. Поле больше не возвращает набранное: не
- * ушедшее видно в ленте. Очередь живёт вне вида, поэтому переживает смену вида и вкладки.
+ * окна (`chat-outbox.ts`) — серым в конце ленты — и уходит `pty.send` с Enter строго по одному. Пока идёт ход, сообщение
+ * держит окно (серый «Queued» с «Send now» и ×) и уходит само, когда ход закрылся, в том числе по Stop; «Send now»
+ * отдаёт его в CLI сразу — тогда это серый «Queued» CLI, пока не придёт промпт с тем же текстом, и отменить его
+ * нельзя. Очередь сама повторяет `busy` и `blocked`; окончательный отказ — «Not sent» с Retry и ×, тост прежний
+ * (`showSendToast`). Поле больше не возвращает набранное: не ушедшее видно в ленте. Очередь живёт вне вида, поэтому
+ * переживает смену вида и вкладки.
  * «Stop» — `feed.interrupt` хоста (Esc агенту и присмотр за исходом); у хоста без метода — Esc в терминал (`pty.input`).
  * Тоста «Sent to S01» в чате нет — отправленное видно в самой ленте; отказы и их тосты прежние.
  * Черновик и серые «Queued» живут в `ui-store.ts` по сессии, очередь окна — в `lib/outbox.ts`; всё переживает смену вида и вкладки.
@@ -87,7 +89,7 @@ import { useAssistantSent, viaAssistantIds } from './assistant-sent.js';
 import { ChatEnvContext, type ChatEnv } from './chat-env.js';
 import { chatOutbox, promptCount } from './chat-outbox.js';
 import { promptHistory } from './history.js';
-import { useOutboxItems } from '../lib/outbox.js';
+import { useOutboxFlying, useOutboxItems } from '../lib/outbox.js';
 import { ChatToolbar, modeLabel, type ModeChoice } from './ChatToolbar.js';
 import { openAgentsPanel } from '../agents/open-agents.js';
 import { useCapabilitiesStore } from './capabilities-store.js';
@@ -244,9 +246,10 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const attachments = useChatUiStore((state) => state.attachments[sessionKey] ?? NO_PATHS);
   const queued = useChatUiStore((state) => state.queued[sessionKey] ?? NO_QUEUED);
   const outboxItems = useOutboxItems(chatOutbox, sessionKey);
+  const flyingId = useOutboxFlying(chatOutbox, sessionKey);
   const outbox = useMemo(
-    () => outboxItems.map((item) => ({ id: item.id, text: item.payload.text, failed: item.status === 'failed' })),
-    [outboxItems],
+    () => outboxItems.map((item) => ({ id: item.id, text: item.payload.text, failed: item.status === 'failed', flying: item.id === flyingId })),
+    [outboxItems, flyingId],
   );
   const history = useMemo(
     () => promptHistory(items, [...queued.map((entry) => entry.text), ...outboxItems.map((item) => item.payload.text)]),
@@ -455,6 +458,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             queued={queued}
             outbox={outbox}
             onRetryOutbox={(id) => chatOutbox.retry(sessionKey, id, { requestedAt: Date.now() })}
+            onSendNowOutbox={(id) => chatOutbox.prioritize(sessionKey, id, { now: true })}
             onRemoveOutbox={(id) => chatOutbox.remove(sessionKey, id)}
             note={noteOf(feed)}
             {...(feed?.status === 'error' ? { onRetry: () => useFeedStore.getState().retry(sessionRef) } : {})}

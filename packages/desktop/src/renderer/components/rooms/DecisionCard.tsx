@@ -11,7 +11,8 @@
  * показанную версию (`id` + `rev`) не вернулся, кнопки заняты: второе нажатие `Accept` не даёт второго
  * вызова. После успеха они остаются занятыми, пока карточка не сменится: хост отвечает на повтор
  * `conflict`ом, и человек увидел бы тост о том, чего не было. Новая версия текста (`rev` вырос) заменяет
- * текст на месте, форма возврата и заметка при этом остаются.
+ * текст на месте, форма возврата и заметка при этом остаются. Форма и заметка переживают и размонтирование
+ * вкладки комнаты: с `draftKey` они лежат в `useUiStore.decisionDrafts` (по комнате и id решения, не `rev`).
  * Пока ответ в пути, в нажатой кнопке крутится спиннер; если хост ещё не открыл снимок работ, под кнопками
  * подпись, что ответ уйдёт после старта (разбор 2026-10-14: после перезапуска Accept висел до 30 с молча).
  */
@@ -20,6 +21,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import type { WorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
+import { useUiStore } from '../../store/ui.js';
 import { S } from '../../../shared/strings.js';
 import { Badge } from '../../ui/badge.js';
 import { Button } from '../../ui/button.js';
@@ -31,6 +33,9 @@ import { SenderAvatar } from './SenderAvatar.js';
 
 /** Предел заметки возврата — схема `rooms.resolveProposal` (`note` до 4000 знаков). */
 const NOTE_MAX = 4000;
+
+/** Ключ формы возврата в `useUiStore.decisionDrafts`. */
+export const decisionDraftKey = (roomDraftKey: string, proposalId: string): string => `${roomDraftKey}\n${proposalId}`;
 
 export interface DecisionCardProps {
   unavailableReason?: string;
@@ -49,11 +54,25 @@ export interface DecisionCardProps {
   onLayout: () => void;
   /** Хост ответил на `works.list`; `false` — ответ на решение ждёт старта хоста. По умолчанию `true`. */
   hostReady?: boolean;
+  /** Ключ черновика комнаты: с ним форма возврата и заметка живут в сторе окна, без него — в состоянии карточки. */
+  draftKey?: string;
 }
 
-export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResolve, onResolve, onLayout, children, entry, bridge, unavailableReason, hostReady = true }: DecisionCardProps): JSX.Element {
-  const [returning, setReturning] = useState(false);
-  const [note, setNote] = useState('');
+export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResolve, onResolve, onLayout, children, entry, bridge, unavailableReason, hostReady = true, draftKey }: DecisionCardProps): JSX.Element {
+  const [localReturning, setLocalReturning] = useState(false);
+  const [localNote, setLocalNote] = useState('');
+  const storeKey = draftKey === undefined ? null : decisionDraftKey(draftKey, proposal.id);
+  const stored = useUiStore((state) => (storeKey === null ? undefined : state.decisionDrafts[storeKey]));
+  const returning = storeKey === null ? localReturning : (stored?.open ?? false);
+  const note = storeKey === null ? localNote : (stored?.note ?? '');
+  const setDraft = (open: boolean, text: string): void => {
+    if (storeKey === null) {
+      setLocalReturning(open);
+      setLocalNote(text);
+    } else {
+      useUiStore.getState().setDecisionDraft(storeKey, { open, note: text });
+    }
+  };
   /** Версия карточки, на которую уже ушёл ответ; `null` — отвечать можно. */
   const [resolving, setResolving] = useState<string | null>(null);
   /** Какое действие в пути — спиннер рисуется в его кнопке. */
@@ -78,6 +97,7 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
     const accepted = await onResolve(action, action === 'return' ? note.trim() : '');
     inFlight.current = false;
     if (!accepted) setResolving(null);
+    else if (storeKey !== null) useUiStore.getState().setDecisionDraft(storeKey, null);
   };
 
   const spinner = <LoaderCircle data-busy-spinner="" aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" />;
@@ -105,7 +125,7 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
           <Textarea
             disabled={busy || !canResolve}
             value={note}
-            onChange={(event) => { if (!busy && canResolve) setNote(event.target.value); }}
+            onChange={(event) => { if (!busy && canResolve) setDraft(true, event.target.value); }}
             placeholder={S.rooms.returnPlaceholder}
             aria-label={S.rooms.returnPlaceholder}
             maxLength={NOTE_MAX}
@@ -116,7 +136,7 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
               {busy && pending === 'return' ? spinner : null}
               {S.rooms.sendToLead}
             </Button>
-            <Button type="button" variant="outline" disabled={busy || !canResolve} onClick={() => setReturning(false)}>
+            <Button type="button" variant="outline" disabled={busy || !canResolve} onClick={() => setDraft(false, note)}>
               {S.common.cancel}
             </Button>
           </div>
@@ -129,7 +149,7 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
               {busy && pending === 'accept' ? spinner : null}
               {S.rooms.accept}
             </Button>
-            <Button type="button" variant="outline" disabled={busy || !canResolve} onClick={() => setReturning(true)}>
+            <Button type="button" variant="outline" disabled={busy || !canResolve} onClick={() => setDraft(true, note)}>
               {S.rooms.returnForRework}
             </Button>
           </div>

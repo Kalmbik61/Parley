@@ -42,6 +42,7 @@ import { sessionTag } from '../../lib/participant.js';
 import { useUiStore } from '../../store/ui.js';
 import { dragHasFiles, pasteHasOnlyImage } from '../../terminal/drop.js';
 import { Button } from '../../ui/button.js';
+import { useDictationStore } from '../../voice/dictation-store.js';
 import { MicButton } from '../../voice/MicButton.js';
 import { useEditableDictation } from '../../voice/targets.js';
 import { composeRoomMessage } from './attachments.js';
@@ -180,6 +181,7 @@ export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): 
   };
 
   const submit = (): void => {
+    if (useDictationStore.getState().finishBeforeSend(`room:${draftKey}`)) return;
     const editor = editorRef.current;
     if (editor === null) return;
     const content = readEditor(editor);

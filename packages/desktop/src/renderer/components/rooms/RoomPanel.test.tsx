@@ -68,7 +68,7 @@ beforeEach(() => {
   bridge = createFakeBridge();
   roomOutbox.resetForTests();
   bridge.setHandler('rooms.send', () => ({ messageId: 'm-new' }));
-  useUiStore.setState({ composerDrafts: {}, composerAttachments: {}, windowFocused: true, documentVisible: true });
+  useUiStore.setState({ composerDrafts: {}, decisionDrafts: {}, composerAttachments: {}, windowFocused: true, documentVisible: true });
   useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS] } });
   vi.mocked(toast).mockClear();
   // Меню упоминаний прокручивает выбранный пункт в видимую область; в jsdom `scrollIntoView` нет.

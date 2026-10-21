@@ -529,6 +529,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
               entry={entry}
               bridge={bridge}
               key={model.proposal.id}
+              draftKey={draftKey}
               proposal={model.proposal}
               time={relativeTime(model.proposal.at, now)}
               labelOf={labelOf}

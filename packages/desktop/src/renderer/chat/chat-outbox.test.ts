@@ -13,7 +13,9 @@ import { useActivityStore } from '../store/activity.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity } from '../test-utils/work-fixtures.js';
-import { attemptChatSend, CHAT_RETRY_MS, type ChatOutboxPayload } from './chat-outbox.js';
+import { useWorksStore } from '../store/works.js';
+import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { attemptChatSend, CHAT_AWAIT_PROMPT_MS, CHAT_RETRY_MS, chatOutbox, type ChatOutboxPayload } from './chat-outbox.js';
 import { resetFeedStoreForTests, useFeedStore } from './store.js';
 import { resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
 
@@ -49,6 +51,7 @@ beforeEach(() => {
   deps = { bridge, session: () => null, openSession: () => undefined };
   resetFeedStoreForTests();
   resetChatUiStoreForTests();
+  chatOutbox.resetForTests();
   useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'idle')]), loaded: true });
   vi.mocked(toast).mockClear();
   vi.mocked(toast.error).mockClear();
@@ -56,6 +59,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  chatOutbox.resetForTests();
+  useWorksStore.setState(useWorksStore.getInitialState(), true);
   useActivityStore.setState({ byRef: {}, loaded: false });
 });
 
@@ -144,3 +149,112 @@ describe('attemptChatSend', () => {
     expect(vi.mocked(toast.error).mock.calls.map((call) => call[0])).toEqual([S.send.noPasteMode('S01')]);
   });
 });
+
+describe('chatOutbox — затвор на время хода', () => {
+  const sentTexts = (): string[] => bridge.calls.filter((call) => call.method === 'pty.send').map((call) => (call.params as { text: string }).text);
+  const payload = (text: string, now?: boolean): ChatOutboxPayload => ({
+    ref: REF,
+    text,
+    deps,
+    requestedAt: REQUESTED_AT,
+    ...(now === undefined ? {} : { now }),
+  });
+  const live = (): void => {
+    useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: '/tmp/p', sessions: [makeSession('s-01', 'S01')] })] });
+  };
+  const flush = async (): Promise<void> => {
+    await vi.advanceTimersByTimeAsync(0);
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+  });
+
+  it('живая сессия с идущим ходом: сообщение не уходит; ход закрылся — уходит', async () => {
+    live();
+    setFeed([prompt('p1', 'go')]);
+    chatOutbox.enqueue(KEY, payload('later'));
+    await flush();
+    expect(sentTexts()).toEqual([]);
+    expect(chatOutbox.items(KEY)).toHaveLength(1);
+    setFeed([prompt('p1', 'go'), turn('u1')]);
+    await flush();
+    expect(sentTexts()).toEqual(['later']);
+  });
+
+  it('now: уходит несмотря на ход и становится серым «Queued» CLI', async () => {
+    live();
+    setFeed([prompt('p1', 'go')]);
+    const id = chatOutbox.enqueue(KEY, payload('urgent', true));
+    await flush();
+    expect(sentTexts()).toEqual(['urgent']);
+    expect(useChatUiStore.getState().queued[KEY]).toEqual([{ id, text: 'urgent', seen: 0 }]);
+  });
+
+  it('сессия не живая: ход в ленте очередь не держит', async () => {
+    setFeed([prompt('p1', 'go')]);
+    chatOutbox.enqueue(KEY, payload('now'));
+    await flush();
+    expect(sentTexts()).toEqual(['now']);
+  });
+
+  it('после отправки без хода следующее ждёт промпт и закрытие его хода', async () => {
+    live();
+    setFeed([]);
+    chatOutbox.enqueue(KEY, payload('one'));
+    await flush();
+    chatOutbox.enqueue(KEY, payload('two'));
+    await flush();
+    expect(sentTexts()).toEqual(['one']);
+    setFeed([prompt('p1', 'one')]);
+    await flush();
+    expect(sentTexts()).toEqual(['one']);
+    setFeed([prompt('p1', 'one'), turn('u1')]);
+    await flush();
+    expect(sentTexts()).toEqual(['one', 'two']);
+  });
+
+  it('промпт так и не пришёл (слэш-команда): следующее уходит через CHAT_AWAIT_PROMPT_MS', async () => {
+    live();
+    setFeed([]);
+    chatOutbox.enqueue(KEY, payload('/clear'));
+    await flush();
+    chatOutbox.enqueue(KEY, payload('two'));
+    await vi.advanceTimersByTimeAsync(CHAT_AWAIT_PROMPT_MS - 1);
+    expect(sentTexts()).toEqual(['/clear']);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sentTexts()).toEqual(['/clear', 'two']);
+  });
+
+  it('ленты нет, активность working: сообщение не уходит; activity стала idle — уходит', async () => {
+    live();
+    useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'working')]), loaded: true });
+    chatOutbox.enqueue(KEY, payload('later'));
+    await flush();
+    expect(sentTexts()).toEqual([]);
+    useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'idle')]), loaded: true });
+    await flush();
+    expect(sentTexts()).toEqual(['later']);
+  });
+
+  it('ход идёт, ленту убрали из стора (закрыли вкладку), активность working: всё ещё не уходит', async () => {
+    live();
+    useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'working')]), loaded: true });
+    setFeed([prompt('p1', 'go')]);
+    chatOutbox.enqueue(KEY, payload('later'));
+    await flush();
+    useFeedStore.setState({ feeds: {} });
+    await flush();
+    expect(sentTexts()).toEqual([]);
+  });
+
+  it('лента грузится (loading), активность idle: сообщение уходит', async () => {
+    live();
+    useFeedStore.setState({ feeds: { [KEY]: { items: [], revision: 0, mode: null, decisions: null, status: 'loading' } } });
+    chatOutbox.enqueue(KEY, payload('later'));
+    await flush();
+    expect(sentTexts()).toEqual(['later']);
+  });
+});
+

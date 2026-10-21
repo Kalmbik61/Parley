@@ -251,6 +251,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
   };
 
   const submit = async (): Promise<void> => {
+    if (useDictationStore.getState().finishBeforeSend('new-workspace')) return;
     if (busy) return;
     if (createdWork !== null) {
       await createSession(createdWork, provider ?? '');

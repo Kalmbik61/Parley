@@ -61,7 +61,7 @@ let bridge: FakeBridge;
 
 beforeEach(() => {
   bridge = createFakeBridge();
-  useUiStore.setState({ composerDrafts: {}, windowFocused: true, documentVisible: true });
+  useUiStore.setState({ composerDrafts: {}, decisionDrafts: {}, windowFocused: true, documentVisible: true });
   useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'context.messages'] } });
   useRoomPagesStore.setState({ chains: {}, loading: {} });
   useWorksStore.setState({ entries: [], branches: {}, loading: false, error: null });

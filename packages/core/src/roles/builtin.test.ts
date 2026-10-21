@@ -30,6 +30,8 @@ describe('builtin roles', () => {
     expect(featureLead.prompt).toContain('Do not poll for routine progress');
     expect(featureLead.prompt).toContain('Do not acknowledge or relay routine notes');
     expect(featureLead.prompt).toContain('escalate urgent blockers immediately');
+    expect(featureLead.prompt).toContain('create_session');
+    expect(featureLead.prompt).not.toContain('created by the human');
     const verifier = BUILTIN_ROLES.find((role) => role.id === 'builtin:verifier')!;
     expect(verifier.readOnly).toBe(false);
     expect(verifier.prompt).toContain('PASS, FAIL, or NOT VERIFIED');

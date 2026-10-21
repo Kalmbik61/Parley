@@ -339,4 +339,45 @@ describe('dictation-store (спека 3.2–3.4, 6)', () => {
     await h.store.getState().toggle('room');
     expect(h.store.getState()).toMatchObject({ phase: 'recording', targetId: 'room' });
   });
+
+  describe('finishBeforeSend — Enter/Send во время диктовки', () => {
+    it('идёт запись в эту цель: true, запись завершается, текст встаёт в цель, затем idle', async () => {
+      const h = harness();
+      cleanup.push(h.dispose);
+      await h.store.getState().toggle('room');
+      expect(h.store.getState().finishBeforeSend('room')).toBe(true);
+      expect(h.store.getState().phase).toBe('transcribing');
+      await vi.waitFor(() => expect(h.target.insert).toHaveBeenCalledWith('hello world'));
+      await vi.waitFor(() => expect(h.store.getState()).toMatchObject({ phase: 'idle', targetId: null }));
+    });
+
+    it('идёт распознавание этой цели: true, второго распознавания нет', async () => {
+      const h = harness();
+      cleanup.push(h.dispose);
+      await h.store.getState().toggle('room');
+      expect(h.store.getState().finishBeforeSend('room')).toBe(true);
+      expect(h.store.getState().phase).toBe('transcribing');
+      expect(h.store.getState().finishBeforeSend('room')).toBe(true);
+      await vi.waitFor(() => expect(h.store.getState().phase).toBe('idle'));
+      expect(h.deps.voice.transcribe).toHaveBeenCalledTimes(1);
+      expect(h.target.insert).toHaveBeenCalledTimes(1);
+    });
+
+    it('тихо: false, ничего не происходит', () => {
+      const h = harness();
+      cleanup.push(h.dispose);
+      expect(h.store.getState().finishBeforeSend('room')).toBe(false);
+      expect(h.store.getState().phase).toBe('idle');
+      expect(h.deps.voice.transcribe).not.toHaveBeenCalled();
+    });
+
+    it('пишется другая цель: false, та запись продолжается', async () => {
+      const h = harness();
+      cleanup.push(h.dispose);
+      await h.store.getState().toggle('room');
+      expect(h.store.getState().finishBeforeSend('chat')).toBe(false);
+      expect(h.store.getState()).toMatchObject({ phase: 'recording', targetId: 'room' });
+      expect(h.recording.stop).not.toHaveBeenCalled();
+    });
+  });
 });

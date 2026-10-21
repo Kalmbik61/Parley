@@ -56,11 +56,12 @@ export interface QueuedPrompt {
   text: string;
 }
 
-/** Сообщение в очереди окна (`chat-outbox.ts`): ждёт отправки или не ушло. */
+/** Сообщение в очереди окна (`chat-outbox.ts`): ждёт отправки или не ушло; `flying` — отправка уже идёт. */
 export interface OutboxPrompt {
   id: string;
   text: string;
   failed: boolean;
+  flying: boolean;
 }
 
 const NO_OUTBOX: readonly OutboxPrompt[] = [];
@@ -73,6 +74,7 @@ export interface FeedListProps {
   /** Очередь окна — после «Queued»: ждёт отправки (`waiting`) или не ушло (`failed`, с Retry и ×). */
   outbox?: readonly OutboxPrompt[];
   onRetryOutbox?: (id: string) => void;
+  onSendNowOutbox?: (id: string) => void;
   onRemoveOutbox?: (id: string) => void;
   /** Подпись пустой ленты: загрузка, пусто, ошибка; `null` — не нужна. */
   note: string | null;
@@ -151,7 +153,7 @@ const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, 
   }
 });
 
-export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onRemoveOutbox, note, onRetry, working, reveal, onRevealed, viaIds }: FeedListProps): JSX.Element {
+export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onSendNowOutbox, onRemoveOutbox, note, onRetry, working, reveal, onRevealed, viaIds }: FeedListProps): JSX.Element {
   const latest = items.at(-1);
   const activeRetry = latest?.kind === 'error' && latest.retry !== undefined && latest.retry.resolved !== true ? latest : null;
   const rows: Row[] = [
@@ -299,8 +301,9 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onR
                     <PromptItem
                       text={row.outbox.text}
                       state={row.outbox.failed ? 'failed' : 'waiting'}
-                      onRetry={() => onRetryOutbox?.(row.outbox.id)}
-                      onRemove={() => onRemoveOutbox?.(row.outbox.id)}
+                      {...(row.outbox.failed ? { onRetry: () => onRetryOutbox?.(row.outbox.id) } : {})}
+                      {...(row.outbox.failed || !row.outbox.flying ? { onRemove: () => onRemoveOutbox?.(row.outbox.id) } : {})}
+                      {...(!row.outbox.failed && !row.outbox.flying ? { onSendNow: () => onSendNowOutbox?.(row.outbox.id) } : {})}
                     />
                   )}
                 </div>
