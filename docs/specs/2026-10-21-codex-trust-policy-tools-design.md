@@ -226,7 +226,7 @@ Call report exactly once at the end (status failed if the task is not done), the
 
 ### 6.3 Указатель и остановка
 
-Указатель «New messages (N)… Call check_inbox.» (`core/src/work/delivery.ts`) не меняется. Правило остановки — в блоке 6.2 и одной фразой в общей политике (строка про `report`): «Before finishing you must call report — otherwise the result will not go anywhere; after report, end the turn». Отдельного сторожа повторов нет (раздел 8).
+Указатель «New messages (N)… Call check_inbox.» (`core/src/work/delivery.ts`) не меняется. Правило остановки — в блоке 6.2 и одной фразой в общей политике (строка про `report`): «Call report before finishing, then end the turn; without it the result goes nowhere.» — той же длины в байтах, что прежняя фраза, чтобы запас бюджета политики (4096 / 8192) не уменьшился. Отдельного сторожа повторов нет (раздел 8).
 
 ### 6.4 Как измерить
 

@@ -158,7 +158,7 @@ it('trustArgs: one key when cwd is the project, two otherwise, quotes escaped', 
 - Test: `packages/core/src/work/mcp-config.test.ts`, `packages/core/src/mcp/context.test.ts`, `packages/core/src/work/guidance.test.ts`, `packages/core/src/work/guide.test.ts`
 
 **Interfaces:**
-- Produces: `export type ToolProfile = 'short'`; `McpConfigParams.toolProfile?: ToolProfile` → переменная `TOOL_PROFILE` (под обоими префиксами, как `SKILL_NAVIGATOR`); `McpContext.toolProfile?: ToolProfile` из `envValue(env, 'TOOL_PROFILE')`; `export const SHORT_PROFILE_HIDDEN_TOOLS = ['remember', 'memory_read', 'search_history'] as const`; `GuidanceOptions.toolProfile?: ToolProfile`; `guide(options?: { skillNavigator?: boolean; toolProfile?: ToolProfile })` и `guideTopic(topic, options?)` с тем же объектом (прежняя булева форма вызова сохраняется перегрузкой или заменяется у всех вызывающих — на выбор исполнителя); `export const CODEX_TOOL_EXAMPLES: string` — текст из спеки 6.2 дословно; в `stableGuidance` последняя строка получает окончание «…; after report, end the turn.».
+- Produces: `export type ToolProfile = 'short'`; `McpConfigParams.toolProfile?: ToolProfile` → переменная `TOOL_PROFILE` (под обоими префиксами, как `SKILL_NAVIGATOR`); `McpContext.toolProfile?: ToolProfile` из `envValue(env, 'TOOL_PROFILE')`; `export const SHORT_PROFILE_HIDDEN_TOOLS = ['remember', 'memory_read', 'search_history'] as const`; `GuidanceOptions.toolProfile?: ToolProfile`; `guide(options?: { skillNavigator?: boolean; toolProfile?: ToolProfile })` и `guideTopic(topic, options?)` с тем же объектом (прежняя булева форма вызова сохраняется перегрузкой или заменяется у всех вызывающих — на выбор исполнителя); `export const CODEX_TOOL_EXAMPLES: string` — текст из спеки 6.2 дословно; в `stableGuidance` последняя фраза строки про `report` заменяется на «Call report before finishing, then end the turn; without it the result goes nowhere.» (та же длина в байтах, что у прежней фразы: запас бюджета не меняется).
 
 - [ ] **Шаг 1: тесты**
 
@@ -181,7 +181,7 @@ it('CODEX_TOOL_EXAMPLES names real tools and real argument keys', () => {
   expect(Buffer.byteLength(CODEX_TOOL_EXAMPLES)).toBeLessThanOrEqual(1024);
 });
 it('stable guidance ends the report line with the stop rule', () => {
-  expect(stableGuidance()).toMatch(/call report — otherwise the result will not go anywhere; after report, end the turn\.$/m);
+  expect(stableGuidance()).toMatch(/Call report before finishing, then end the turn; without it the result goes nowhere\.$/m);
 });
 ```
 `guide.test.ts`: `guide({ toolProfile: 'short' })` не содержит `memory_read`, `guide()` содержит. `mcp-config.test.ts`: `mcpConfigJson({ …, toolProfile: 'short' })` даёт `PARLEY_TOOL_PROFILE: 'short'` и `HARNAS_TOOL_PROFILE: 'short'`; `codexMcpOverride({ …, toolProfile: 'short' })` содержит `PARLEY_TOOL_PROFILE="short"`; без поля переменной нет. `context.test.ts`: `PARLEY_TOOL_PROFILE=short` → `context.toolProfile === 'short'`, иначе `undefined`. Тест сервера (в `mcp/tools.test.ts`, если есть, иначе новый `mcp/server-profile.test.ts`): `createParleyServer({ …, toolProfile: 'short' })` — список `tools/list` не содержит трёх имён и содержит `backlog_list`; без профиля содержит все.
@@ -392,6 +392,16 @@ it('stable guidance ends the report line with the stop rule', () => {
 - [ ] **Шаг 4: коммит** `docs: Codex trust, approval modes and short tool profile`.
 
 ---
+
+## Поправки по ходу исполнения
+
+Что исполнители волн 1–2 нашли в коде сверх плана (учтено в задачах ниже):
+
+- Задача 2: `nativeRolePairs` в `work/agents.ts` тоже отвергал незнакомые элементы шаблона — теперь пропускает `{approvals}` и `{trust}`, как `{codexHooks}`. Умолчание `workspace-write` не входит в `assertRoleDelivery`: добавлен признак `sandboxRequired` (песочница требуется, если она не умолчание Parley у пишущей роли Codex не из `.codex/agents`), иначе свой `providers.json` без `{sandbox}` отказывал бы запуску.
+- Задача 5: `work/native-context.ts`, `valid()` (~строка 70) принимает в `configArgs` дескриптора только ключи `skills.config` и `project_root_markers`; пара `projects=…` из `trustArgs` провалила бы `writeNativeContext`, и навигатор скиллов молча отключался бы у каждой доверенной сессии. Задача 5 расширяет `valid()`: принимается ровно пара в форме `trustArgs` (`projects={"<abs>"={trust_level="trusted"}(,"<abs>"={trust_level="trusted"})?}` с абсолютными путями), и тест на это — в `native-context.test.ts`.
+- Задача 6: `host/src/sessions/sessions-service.test.ts:367` ожидает `['--no-daemon', '-a', 'on-request']` и перечисляет переопределения `-c`; после задач 2 и 5 ожидания меняются (без `-a`, с `approval_policy`, `sandbox_mode`, `projects`).
+- Задача 3: правило остановки — фраза той же длины в байтах, что прежняя (см. 6.3 спеки), чтобы граничный тест бюджета (цель 4096 байт, навигатор, `removed`) не выходил за 8192. `GUIDE_TOPICS[tools].summary` остаётся статическим списком; скрытые в `short` инструменты не объявляются в `tools/list`, но прямой `tools/call` по имени по-прежнему отвечает (не отказ).
+- Задача 4: `readTrust` считает пустым любой нечитаемый файл, не только отсутствующий; `tsc` протокола требует собранного `packages/core/dist` (`pnpm -F @parley/core build`), а `host/src/server.test.ts` сверяет список методов `hello.methods` с `METHODS` — он красный до регистрации обработчиков в задаче 6.
 
 ## Самопроверка плана
 
