@@ -63,7 +63,7 @@ async function overflowOf(window: Page, name: string): Promise<string[]> {
 }
 
 /** Кнопки подвала диалогов окна (и крестик заголовка): они обязаны быть видны при любой высоте окна. */
-const FOOTER_BUTTON = /^(Cancel|Create|Create workspace|Create room|Start session|Retry|Done|Close|Delete.*)$/;
+const FOOTER_BUTTON = /^(Cancel|Create|Create workspace|Create room|Start session|Start sessions|Retry|Done|Close|Delete.*)$/;
 
 /**
  * Высота диалогов (находка живой проверки review-3.5-rr2): диалог целиком в окне, а каждая
@@ -167,6 +167,12 @@ for (const size of [
       const composer = window.getByRole('dialog');
       await expect(composer.getByRole('radiogroup', { name: 'Project' }).getByRole('radio', { checked: true })).toHaveAttribute('title', project);
       await composer.getByLabel(/^Title/).fill(LONG_TITLE);
+      // Диалог открыт без агентов: блок «Agents» и первый промпт появляются после «Add agent». Два агента — виден и
+      // переключатель «Put them in a room», строки и подвал проверяются вместе с ним.
+      await expect(composer.getByLabel(/^First prompt/)).toHaveCount(0);
+      for (let i = 0; i < 2; i += 1) await composer.getByRole('button', { name: 'Add agent' }).click();
+      await expect(composer.locator('[data-agent-row]')).toHaveCount(2);
+      await expect(composer.getByRole('switch', { name: 'Put them in a room' })).toBeVisible();
       await composer.getByLabel(/^First prompt/).fill(`${LONG_LABEL} ${'long prompt '.repeat(80)}`);
       problems.push(...(await overflowOf(window, 'New workspace')));
       problems.push(...(await footerProblemsOf(window, 'New workspace')));
@@ -184,6 +190,13 @@ for (const size of [
       await window.getByRole('dialog').getByPlaceholder('Optional').fill(LONG_LABEL);
       problems.push(...(await overflowOf(window, 'New session')));
       problems.push(...(await footerProblemsOf(window, 'New session')));
+      // Два агента при выключенном «Put them in a room»: «New sessions» и «Start sessions» — тот же диалог, другой подвал.
+      const sessions = window.getByRole('dialog');
+      await sessions.getByRole('button', { name: 'Add agent' }).click();
+      await sessions.getByRole('switch', { name: 'Put them in a room' }).click();
+      await expect(sessions.getByRole('heading', { name: 'New sessions' })).toBeVisible();
+      problems.push(...(await overflowOf(window, 'New sessions')));
+      problems.push(...(await footerProblemsOf(window, 'New sessions')));
       await closeDialog(window);
 
       // «New room» — тот же диалог, открытый комнатой; пять агентов и название комнаты в 120 символов.
