@@ -11,7 +11,7 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BROWSER_TOOL_HINTS, BROWSER_TOOL_LIMITS, BROWSER_TOOL_OPS, BROWSER_TOOLS, BROWSER_TOOLS_ASK, BROWSER_UNAVAILABLE, createBrowserTools, fence, PAGE_DATA_NOTE, pageData } from './browser-tools.js';
+import { BROWSER_TOOL_HINTS, BROWSER_TOOL_LIMITS, BROWSER_TOOL_OPS, BROWSER_TOOLS, BROWSER_UNAVAILABLE, createBrowserTools, fence, PAGE_DATA_NOTE, pageData } from './browser-tools.js';
 import { createParleyServer } from './tools.js';
 
 const TOKEN = 'ab'.repeat(32);
@@ -503,12 +503,11 @@ describe('скрипт, куки, хранилище, скачивания; ан
       browser_evaluate: SCRIPT,
     };
     expect(Object.fromEntries(BROWSER_TOOLS.map((t) => [t.name, t.annotations]))).toEqual(expected);
-    expect([...BROWSER_TOOLS_ASK]).toEqual(['evaluate', 'cookies', 'storage']);
   });
 
   it('описания: главный мир и пределы evaluate; общий раздел кук; скрытые значения; папка скачиваний', () => {
     for (const phrase of ["page's main world", 'JSON', '20 KB', '10 s', 'first argument']) expect(tool('browser_evaluate')?.description, phrase).toContain(phrase);
-    for (const name of ['browser_evaluate', 'browser_cookies', 'browser_storage']) expect(tool(name)?.description, name).toContain('In Claude Code Parley asks the human before each call; in Codex it runs without a question');
+    for (const name of ['browser_evaluate', 'browser_cookies', 'browser_storage']) expect(tool(name)?.description, name).toContain('Parley allows it in advance, without a question to the human, so call it only when the task needs it');
     for (const phrase of ["page's current URL", 'httpOnly', 'never shows the values of httpOnly cookies', 'shared with the human', 'sign the human out', 'values: true']) expect(tool('browser_cookies')?.description, phrase).toContain(phrase);
     expect(tool('browser_cookies')?.inputSchema).toMatchObject({ required: ['tab', 'action'], properties: { values: { type: 'boolean', default: false } } });
     expect(tool('browser_storage')?.inputSchema).toMatchObject({ required: ['tab', 'area', 'action'] });

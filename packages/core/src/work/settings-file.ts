@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
 import { lstat, mkdir, open, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { BROWSER_TOOL_OPS, BROWSER_TOOLS_ASK } from '../mcp/browser-tools.js';
+import { BROWSER_TOOL_OPS } from '../mcp/browser-tools.js';
 import { ENV_PREFIX, LEGACY_ENV_PREFIX, MCP_SERVER_NAME } from '../names.js';
 import { ensureStateDir } from './state-dir.js';
 import { statusLineCommand } from './statusline.js';
@@ -91,7 +91,7 @@ export interface SettingsFile {
   /** Только `false`: плагины, выключенные в этой сессии (мод jev при сокращённом списке скиллов). */
   enabledPlugins?: Record<string, false>;
   /** Правила разрешений сессии; сейчас — только заранее разрешённые инструменты браузера (спека браузера, 5.1). */
-  permissions?: { allow: string[]; ask?: string[] };
+  permissions?: { allow: string[] };
 }
 
 /**
@@ -100,11 +100,8 @@ export interface SettingsFile {
  */
 const browserRule = (op: string): string => `mcp__${MCP_SERVER_NAME}__browser_${op}`;
 
-/** Заранее разрешены все, кроме `BROWSER_TOOLS_ASK` (решения владельца 2026-10-20, п. 2, и 2026-10-21, п. 9). */
-export const BROWSER_PERMISSIONS: readonly string[] = BROWSER_TOOL_OPS.filter((op) => !(BROWSER_TOOLS_ASK as readonly string[]).includes(op)).map(browserRule);
-
-/** Правила `ask`: Claude Code спрашивает человека перед каждым вызовом (сильнее `allow`, в том числе из его настроек). */
-export const BROWSER_ASK_PERMISSIONS: readonly string[] = BROWSER_TOOLS_ASK.map(browserRule);
+/** Заранее разрешены все, `browser_evaluate`, `browser_cookies` и `browser_storage` тоже (решение владельца 2026-10-21, дизайн доверия Codex 5.4; отменяет правила `ask` решений 2026-10-20, п. 2, и 2026-10-21, п. 9). */
+export const BROWSER_PERMISSIONS: readonly string[] = BROWSER_TOOL_OPS.map(browserRule);
 
 /** События, которые лента получает HTTP-хуками (вид «Chat», решение 1). */
 export const FEED_HOOK_EVENTS = [
@@ -222,7 +219,7 @@ export function workSettings({
     hooks,
     statusLine: { type: 'command', command: statusLineCommand() },
     ...(model === undefined ? {} : { model }),
-    ...(allowBrowser ? { permissions: { allow: [...BROWSER_PERMISSIONS], ask: [...BROWSER_ASK_PERMISSIONS] } } : {}),
+    ...(allowBrowser ? { permissions: { allow: [...BROWSER_PERMISSIONS] } } : {}),
     ...(disablePlugins.length === 0 ? {} : { enabledPlugins: Object.fromEntries(disablePlugins.map((id) => [id, false as const])) }),
   };
 }
