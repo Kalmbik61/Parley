@@ -7,6 +7,7 @@
 import { ACTIONS, matchesAccelerator } from '../../shared/keybindings.js';
 import type { ActionDef, ActionId, KeyLike } from '../../shared/keybindings.js';
 import type { FocusContext } from './focus-context.js';
+import { focusComposer, shouldTypeToFocus } from './type-to-focus.js';
 
 export type ResolvedKey = ActionId | { kind: 'palette.row'; index: number }; // index 0–8 — ⌘1–9
 
@@ -176,8 +177,15 @@ export function installKeyHandler(input: {
   };
   const { paletteOpen } = input;
   const onKeyDown = (event: KeyboardEvent): void => {
-    const resolved = resolveAction(event, input.context(), paletteOpen());
-    if (resolved === null) return;
+    const context = input.context();
+    const resolved = resolveAction(event, context, paletteOpen());
+    if (resolved === null) {
+      // Сочетание окна не нашлось: печатный символ вне полей уходит в поле сообщения. Без
+      // preventDefault — браузер доставит символ уже в сфокусированное поле.
+      const hasOpenDialog = document.querySelector('[role="dialog"], [role="alertdialog"]') !== null;
+      if (shouldTypeToFocus(event, context, paletteOpen(), hasOpenDialog)) focusComposer();
+      return;
+    }
     if (typeof resolved !== 'string') {
       event.preventDefault();
       event.stopPropagation();

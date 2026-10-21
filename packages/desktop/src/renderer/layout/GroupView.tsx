@@ -150,6 +150,8 @@ export interface GroupViewProps {
 export function GroupView({ workKey, group, entry, singleGroup }: GroupViewProps): JSX.Element {
   const host = useLayoutBody();
   const activeTab = group.tabs.find((candidate) => candidate.id === group.activeTabId) ?? null;
+  // Метка для набора текста с любого места (`keys/type-to-focus.ts`): поле берётся из этой группы.
+  const groupFocused = useLayoutStore((state) => state.layouts[workKey]?.activeGroupId === group.id);
 
   // Тело группы — якорь поверхностей слоя (спека 5.5): `anchor-name` через
   // `setProperty`, в `CSSProperties` @types/react 18 его нет.
@@ -175,6 +177,7 @@ export function GroupView({ workKey, group, entry, singleGroup }: GroupViewProps
   return (
     <div
       data-group-id={group.id}
+      data-group-focused={groupFocused ? 'true' : undefined}
       className="flex h-full min-h-0 min-w-0 flex-1 flex-col"
       onPointerDownCapture={() => useLayoutStore.getState().apply(workKey, (layout) => focusGroup(layout, group.id))}
     >
