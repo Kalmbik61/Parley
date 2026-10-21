@@ -414,6 +414,11 @@ it('stable guidance ends the report line with the stop rule', () => {
 
 - Задача 9: `ANSWER_HOLD_MS` в коде не было — объявлен в `island/consents/store.ts` (8000 мс); `note` стора — `'done' | 'elsewhere' | 'failed' | null`; стор удерживает карточку на время своего решения, иначе событие хоста закрыло бы её раньше «Done ✓»; `CARD_ARM_MS` вынесен в `island/arm.ts` (иначе цикл импортов); источник запроса показывается как `create_session` / `resume` / `launch`; при раскрытом помощнике карточка согласия скрыта и в строке «needs you» не считается — возможное продолжение после приёмки.
 
+Что нашли исполнители волны 5 и доработки 10б:
+
+- 10б: композер спрашивает хост методом `trust.check { folder }` → `{ trusted }` (realpath на хосте), а не сравнивает пути сам; строка «Waiting for folder trust» вынесена в `renderer/components/WaitingForTrust.tsx` и показана и в терминальном виде (`TerminalSurface`, рядом с `NotRunningCard`, `data-testid="terminal-waiting-for-trust"`), потому что новая сессия открывается терминалом.
+- E2E: `sessions.create` из окна отдаёт только `{ ref }` — флаг `held` есть лишь у инструмента агента `create_session`; удержание в E2E проверяется по `works.list` (`pending`) и `consents.list`; посев доверия — `e2e/trust-seed.ts` (`seedTrust(home, folder)`), его зовут все спеки, запускающие Codex, и `cards.spec.ts` (композер); шаблоны своего Codex в `parley-integration.spec.ts` получили `{approvals}` и `{trust}`, иначе уведомление `provider-override-gap` (одно на код за жизнь хоста) заслоняло бы `{skillCatalog}`; стор конфига окна (`renderer/store/config.ts`) наполняется при подключении и из диалога настроек, `settings.set` с другой стороны моста в нём не отражается — подсказка про хуки в Chat зависит от него; тест острова ««×» прячет остров…» красный независимо от этой работы: с коммита `e54918bc` (origin/master, 2026-10-13) кнопка называется «Tuck the island away» (`island-tuck`), тест ждёт прежнюю подпись — отдельная правка.
+
 ## Самопроверка плана
 
 - Покрытие спеки: 4.1 → задача 4; 4.2 → 6, 10, 11; 4.3 → 2, 5, 6; 4.4 → 4, 6, 7, 9; 5.1–5.2 → 1, 2, 5, 6, 8; 5.4 → ветка `fix/claude-browser-tools-allow` (вне плана, уже запушена); 6.1–6.3 → 3, 5; 6.4 и раздел 9 → 12; раздел 7 — все задачи.
