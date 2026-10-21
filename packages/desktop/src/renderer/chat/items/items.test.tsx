@@ -333,10 +333,10 @@ describe('PromptItem — вложения: хвостовые упоминани
     expect(onRetry).toHaveBeenCalledTimes(1);
     expect(onRemove).toHaveBeenCalledTimes(1);
     view.unmount();
-    renderPrompt(<PromptItem text="later" state="waiting" />);
+    const sending = renderPrompt(<PromptItem text="later" state="waiting" />);
     expect(screen.getByTestId('chat-queued').textContent).toContain(S.outbox.sending);
     expect(screen.queryAllByRole('button')).toEqual([]);
-    view.unmount();
+    sending.unmount();
     const onSendNow = vi.fn();
     renderPrompt(<PromptItem text="later" state="waiting" onSendNow={onSendNow} onRemove={onRemove} />);
     const waiting = screen.getByTestId('chat-queued');
