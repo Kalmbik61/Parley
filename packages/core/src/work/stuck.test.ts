@@ -13,18 +13,28 @@ import {
   NEED_DETAIL_MAX,
   STUCK_REPORT_MS,
   agentClock,
+  backLetter,
+  backLine,
   classifyClaudeFailure,
   clampDetail,
   codexFailureError,
+  limitLetter,
   localClock,
   needReason,
   parseResetText,
   pickResetsAt,
   providerLabel,
+  stuckHint,
+  stuckLetter,
+  stuckLine,
+  stuckReason,
+  stuckWarning,
   zonedInstant,
+  type LimitAlternative,
   type ResetGuess,
   type SessionNeed,
 } from './stuck.js';
+import { sessionMention } from './thread.js';
 
 const MOSCOW = 'Europe/Moscow'; // UTC+3 круглый год
 const NEW_YORK = 'America/New_York'; // EST −5, EDT −4: в 2026-м часы переводят 8 марта и 1 ноября
@@ -895,5 +905,268 @@ describe('needReason', () => {
     expect(needReason(need({ kind: 'sign-in', account: 'account', detail: 'billing' }), NOW, 'GLM')).toBe(
       'Account problem in GLM: billing',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Строки ленты, письма Parley и подсказки MCP (спека застрявших 5.2–5.3, спека подписок 4.4, 5.8).
+// ---------------------------------------------------------------------------------------------
+
+describe('тексты о застрявшей сессии', () => {
+  const NOW = local(21, 17, 17);
+  const SINCE = local(21, 14, 2).toISOString();
+  const RESETS = local(21, 19, 27).toISOString();
+  const S03 = { id: 's-03', provider: 'Codex' };
+  const need = (over: Partial<SessionNeed>): SessionNeed => ({
+    kind: 'approval',
+    since: SINCE,
+    detail: null,
+    resetsAt: null,
+    window: null,
+    account: null,
+    ...over,
+  });
+  const limit = need({ kind: 'limit', resetsAt: RESETS, window: 'session' });
+
+  describe('stuckReason', () => {
+    it('семь причин из спеки 5.3; сброс не сегодня — с датой, нечитаемый — как неизвестный', () => {
+      expect(stuckReason(need({ kind: 'approval' }), NOW)).toBe('waiting for approval');
+      expect(stuckReason(need({ kind: 'question' }), NOW)).toBe('asked a question');
+      expect(stuckReason(limit, NOW)).toBe('usage limit until 19:27 local time');
+      expect(stuckReason(need({ kind: 'limit', resetsAt: local(24, 17, 0).toISOString() }), NOW)).toBe(
+        'usage limit until Oct 24, 17:00 local time',
+      );
+      expect(stuckReason(need({ kind: 'limit' }), NOW)).toBe('usage limit, reset time unknown');
+      expect(stuckReason(need({ kind: 'limit', resetsAt: 'garbage' }), NOW)).toBe('usage limit, reset time unknown');
+      expect(stuckReason(need({ kind: 'sign-in', account: 'auth' }), NOW)).toBe('signed out');
+      expect(stuckReason(need({ kind: 'sign-in', account: 'account' }), NOW)).toBe('account problem');
+      expect(stuckReason(need({ kind: 'startup' }), NOW)).toBe('waiting at startup');
+    });
+  });
+
+  describe('stuckLine', () => {
+    it('approval — с командой и без неё (без двоеточия и хвоста)', () => {
+      expect(stuckLine(S03, need({ detail: 'npm install' }), NOW, false)).toBe(
+        '@s03 is waiting for your approval in its terminal: npm install',
+      );
+      expect(stuckLine(S03, need({}), NOW, false)).toBe('@s03 is waiting for your approval in its terminal');
+    });
+
+    it('question и startup — фиксированные строки, detail в них не попадает', () => {
+      expect(stuckLine(S03, need({ kind: 'question', detail: 'Which database?' }), NOW, false)).toBe(
+        '@s03 asked you a question in its terminal',
+      );
+      expect(stuckLine(S03, need({ kind: 'startup', detail: 'Do you trust this folder?' }), NOW, false)).toBe(
+        '@s03 has been waiting in its terminal since launch (sign-in, folder trust or another startup screen)',
+      );
+    });
+
+    it('limit называет провайдера и местное время сброса; без времени и с нечитаемым — «the reset time is unknown»', () => {
+      expect(stuckLine(S03, limit, NOW, false)).toBe('@s03 hit its Codex usage limit; it resets at 19:27');
+      expect(stuckLine({ id: 's-03', provider: 'Claude Code 2' }, limit, NOW, false)).toBe(
+        '@s03 hit its Claude Code 2 usage limit; it resets at 19:27',
+      );
+      expect(stuckLine(S03, need({ kind: 'limit', resetsAt: local(22, 3, 5).toISOString() }), NOW, false)).toBe(
+        '@s03 hit its Codex usage limit; it resets at Oct 22, 03:05',
+      );
+      expect(stuckLine(S03, need({ kind: 'limit' }), NOW, false)).toBe(
+        '@s03 hit its Codex usage limit; the reset time is unknown',
+      );
+      expect(stuckLine(S03, need({ kind: 'limit', resetsAt: 'garbage' }), NOW, false)).toBe(
+        '@s03 hit its Codex usage limit; the reset time is unknown',
+      );
+    });
+
+    it('sign-in — вход или аккаунт, с текстом ошибки и без', () => {
+      const who = { id: 's-03', provider: 'Claude Code' };
+      const signedOut = need({ kind: 'sign-in', account: 'auth', detail: 'Not logged in · Please run /login' });
+      expect(stuckLine(who, signedOut, NOW, false)).toBe(
+        '@s03 is signed out of Claude Code: Not logged in · Please run /login',
+      );
+      expect(stuckLine(who, need({ kind: 'sign-in', account: 'auth' }), NOW, false)).toBe(
+        '@s03 is signed out of Claude Code',
+      );
+      expect(stuckLine(who, need({ kind: 'sign-in', account: 'account', detail: 'billing' }), NOW, false)).toBe(
+        '@s03 has an account problem in Claude Code: billing',
+      );
+      expect(stuckLine(who, need({ kind: 'sign-in', account: 'account' }), NOW, false)).toBe(
+        '@s03 has an account problem in Claude Code',
+      );
+    });
+
+    it('ведущий: хвост «leads this room» только у limit и sign-in', () => {
+      const tail = ' @s03 leads this room: you can make another participant the lead.';
+      expect(stuckLine(S03, limit, NOW, true)).toBe(`@s03 hit its Codex usage limit; it resets at 19:27${tail}`);
+      expect(stuckLine(S03, need({ kind: 'sign-in', account: 'auth' }), NOW, true)).toBe(
+        `@s03 is signed out of Codex${tail}`,
+      );
+      expect(stuckLine(S03, need({ detail: 'ls' }), NOW, true)).not.toContain('leads this room');
+      expect(stuckLine(S03, need({ kind: 'question' }), NOW, true)).not.toContain('leads this room');
+      expect(stuckLine(S03, need({ kind: 'startup' }), NOW, true)).not.toContain('leads this room');
+      expect(stuckLine(S03, limit, NOW, false)).not.toContain('leads this room');
+    });
+
+    it('упоминание — как sessionMention: s-03 → @s03, чужая форма id печатается как есть', () => {
+      for (const id of ['s-03', 's-123', 'manual']) {
+        expect(stuckLine({ id, provider: 'Codex' }, need({ kind: 'question' }), NOW, false)).toBe(
+          `${sessionMention(id)} asked you a question in its terminal`,
+        );
+      }
+    });
+  });
+
+  describe('backLine', () => {
+    it('снят лимит и вход — с пометкой, остальное — просто «is back»', () => {
+      expect(backLine('s-03', 'limit')).toBe('@s03 is back (the usage limit has reset)');
+      expect(backLine('s-03', 'sign-in')).toBe('@s03 is back (signed in)');
+      expect(backLine('s-03', 'approval')).toBe('@s03 is back');
+      expect(backLine('s-03', 'question')).toBe('@s03 is back');
+      expect(backLine('s-03', 'startup')).toBe('@s03 is back');
+    });
+  });
+
+  describe('stuckLetter: approval, question, startup', () => {
+    it('approval — вид и команда в скобках, время начала по местным часам, ссылка на тему stuck', () => {
+      expect(stuckLetter(S03, need({ detail: 'npm install' }), NOW)).toBe(
+        '@s03 is waiting for the human in its terminal (approval: npm install) since 14:02. It cannot read messages until the human acts; the human has been notified. Do not hand its part to anyone and do not decide without it: do only what does not depend on it, or end your turn. Its reply comes as usual once it continues (read_guide topic: stuck).',
+      );
+    });
+
+    it('без detail скобки несут один вид; question и startup — свой вид', () => {
+      expect(stuckLetter(S03, need({}), NOW)).toContain('in its terminal (approval) since 14:02.');
+      expect(stuckLetter(S03, need({ kind: 'question', detail: 'Which database?' }), NOW)).toContain(
+        'in its terminal (question: Which database?) since 14:02.',
+      );
+      expect(stuckLetter(S03, need({ kind: 'startup' }), NOW)).toContain('in its terminal (startup) since 14:02.');
+    });
+
+    it('эпизод начался не сегодня — дата перед часами', () => {
+      const old = need({ since: local(20, 23, 40).toISOString() });
+      expect(stuckLetter(S03, old, NOW)).toContain('(approval) since Oct 20, 23:40.');
+    });
+  });
+
+  describe('stuckLetter: sign-in', () => {
+    const who = { id: 's-03', provider: 'Claude Code' };
+
+    it('вход — слово человека, ведущему просьба спросить @human', () => {
+      const signedOut = need({ kind: 'sign-in', account: 'auth', detail: 'Not logged in · Please run /login' });
+      expect(stuckLetter(who, signedOut, NOW)).toBe(
+        '@s03 is signed out of Claude Code (Not logged in · Please run /login) and cannot work until the human signs in. Messages to @s03 wait. Do not hand its part to anyone on your own. If you lead this room, tell @human what waits on @s03 and ask whether to wait or give its part to another participant; then wait for the answer (read_guide topic: stuck).',
+      );
+    });
+
+    it('без detail — без скобок; проблема аккаунта называется проблемой аккаунта', () => {
+      expect(stuckLetter(who, need({ kind: 'sign-in', account: 'auth' }), NOW)).toContain(
+        '@s03 is signed out of Claude Code and cannot work until the human signs in.',
+      );
+      expect(stuckLetter(who, need({ kind: 'sign-in', account: 'account', detail: 'billing' }), NOW)).toContain(
+        '@s03 has an account problem in Claude Code (billing) and cannot work until the human fixes it.',
+      );
+    });
+  });
+
+  describe('limitLetter и stuckLetter для limit', () => {
+    // 17:17 → 19:27 — через 2 ч 10 мин; часы и пояс печатает agentClock, он проверен выше.
+    const when = agentClock(RESETS, NOW);
+    const nextMonday = local(27, 10, 0).toISOString();
+    const base = (over: Partial<Parameters<typeof limitLetter>[0]> = {}): string =>
+      limitLetter({ mention: '@s03', provider: 'Codex', resetsAt: RESETS, now: NOW, alternatives: [], ...over });
+    const win = (usedPercent: number, resetsAt: string | null): LimitWindow => ({ usedPercent, resetsAt });
+    const free = (over: Partial<LimitAlternative> = {}): LimitAlternative => ({
+      id: 'claude',
+      label: 'Claude Code',
+      limits: { fiveHour: null, week: win(31, nextMonday), at: NOW.toISOString() },
+      ...over,
+    });
+
+    it('без альтернатив — письмо спеки застрявших 5.2 дословно, абзаца о других аккаунтах нет', () => {
+      expect(base()).toBe(
+        `@s03 hit its Codex usage limit; it resets at ${when}. Messages to @s03 wait; after the reset Parley delivers them and asks @s03 to continue. Do not hand its part to anyone on your own. If you lead this room, write one message to @human: who is out, until when, what waits on it, and the options — wait for the reset, give its part to another participant (name who), or continue without it. Then wait for the answer (read_guide topic: stuck).`,
+      );
+      expect(base()).not.toContain('Other Codex accounts');
+      expect(base()).not.toContain('replacement');
+    });
+
+    it('время сброса неизвестно — «the reset time is unknown» вместо часов', () => {
+      const text = base({ resetsAt: null });
+      expect(text).toContain('@s03 hit its Codex usage limit; the reset time is unknown. Messages to @s03 wait;');
+      expect(text).not.toContain('local time');
+      expect(base({ resetsAt: 'garbage' })).toBe(text);
+    });
+
+    it('с альтернативами — абзац о свободных аккаунтах и вариант replacement (спека подписок 5.8)', () => {
+      const text = base({ provider: 'Claude Code 2', alternatives: [free()] });
+      expect(text).toContain(
+        `Other Claude Code 2 accounts in Parley right now: Claude Code (weekly 31 % used, resets ${agentClock(nextMonday, NOW)}).`,
+      );
+      expect(text).toContain('create_session (provider: "claude") — but only after @human agrees.');
+      expect(text).toContain("(name who), start a replacement on Claude Code and hand it @s03's part, or continue without it.");
+      // Абзац стоит перед последним предложением, а не после него.
+      expect(text.endsWith('Then wait for the answer (read_guide topic: stuck).')).toBe(true);
+      expect(text.indexOf('Other Claude Code 2 accounts')).toBeLessThan(text.indexOf('Then wait for the answer'));
+    });
+
+    it('аккаунт без известных лимитов — «no limits known»', () => {
+      const text = base({ alternatives: [free({ limits: null })] });
+      expect(text).toContain('Other Codex accounts in Parley right now: Claude Code — no limits known.');
+    });
+
+    it('аккаунт, у которого оба окна пусты, — тоже «no limits known»', () => {
+      const text = base({ alternatives: [free({ limits: { fiveHour: null, week: null, at: NOW.toISOString() } })] });
+      expect(text).toContain('right now: Claude Code — no limits known.');
+    });
+
+    it('окна: пятичасовое и недельное печатаются вместе, окно без времени сброса — без «resets»', () => {
+      const limits = { fiveHour: win(12.4, null), week: win(31, nextMonday), at: NOW.toISOString() };
+      const text = base({ alternatives: [free({ limits })] });
+      expect(text).toContain(`Claude Code (5-hour 12 % used; weekly 31 % used, resets ${agentClock(nextMonday, NOW)})`);
+    });
+
+    it('несколько аккаунтов: список через «; », каждому — его id в create_session, в вариантах — все имена', () => {
+      const second = free({ id: 'custom-claude-3', label: 'Claude Code 3', limits: null });
+      const text = base({ provider: 'Claude Code 2', alternatives: [free(), second] });
+      expect(text).toContain('Claude Code (weekly 31 % used, resets');
+      expect(text).toContain('; Claude Code 3 — no limits known.');
+      expect(text).toContain('create_session (provider: "claude" for Claude Code, "custom-claude-3" for Claude Code 3)');
+      expect(text).toContain("start a replacement on Claude Code or Claude Code 3 and hand it @s03's part");
+    });
+
+    it('stuckLetter для limit — то же письмо; альтернативы приходят четвёртым аргументом', () => {
+      expect(stuckLetter(S03, limit, NOW)).toBe(base());
+      expect(stuckLetter(S03, limit, NOW, [free()])).toBe(base({ alternatives: [free()] }));
+    });
+  });
+
+  describe('backLetter', () => {
+    it('письмо о возврате: лимит, вход и старт — со своей пометкой', () => {
+      expect(backLetter('s-03', 'limit')).toBe(
+        '@s03 is back (the usage limit has reset). Messages that waited are being delivered.',
+      );
+      expect(backLetter('s-03', 'sign-in')).toBe(
+        '@s03 is back (signed in). Messages that waited are being delivered.',
+      );
+      expect(backLetter('s-03', 'startup')).toBe(
+        '@s03 is back (started). Messages that waited are being delivered.',
+      );
+    });
+  });
+
+  describe('stuckHint и stuckWarning', () => {
+    it('подсказка wait_for: причина в скобках, не ждать снова, Parley напишет сам', () => {
+      expect(stuckHint(S03.id, limit, NOW)).toBe(
+        '@s03 waits for the human (usage limit until 19:27 local time). Do not wait_for it again: end your turn or wait_for("inbox") — Parley writes to you when it is back.',
+      );
+      expect(stuckHint(S03.id, need({}), NOW)).toContain('(waiting for approval)');
+    });
+
+    it('предупреждение send_message: причина и «reads this when it is back»', () => {
+      expect(stuckWarning(S03.id, limit, NOW)).toBe(
+        '@s03 is stuck (usage limit until 19:27 local time): it reads this when it is back',
+      );
+      expect(stuckWarning(S03.id, need({ kind: 'sign-in', account: 'auth' }), NOW)).toBe(
+        '@s03 is stuck (signed out): it reads this when it is back',
+      );
+    });
   });
 });

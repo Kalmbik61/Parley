@@ -22,6 +22,7 @@ import { openEvents } from '../work/events.js';
 import { planLaunch } from '../work/launch.js';
 import { PROPOSAL_TEXT_MAX, resolveProposal } from '../work/proposals.js';
 import { addRoom, archiveRoom } from '../work/rooms.js';
+import type { SessionNeed } from '../work/stuck.js';
 import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
 import { decisionsOf, participantLabel, threadOf } from '../work/thread.js';
 import { HUMAN, type WorkMap } from '../work/types.js';
@@ -2918,5 +2919,162 @@ describe('owner private message visibility', () => {
     expect((await callOk(owner, 'get_map', { field: 'message', id: ownId })).id).toBe(ownId);
     expect((await callOk(owner, 'get_map', { field: 'message', id: roomMessageId })).id).toBe(roomMessageId);
     expect((await callOk(owner, 'read_room', { room: 'r-01' })).messages).toHaveLength(1);
+  });
+});
+
+describe('застрявшая сессия: get_map, wait_for и send_message (спека застрявших 5.3)', () => {
+  const need = (over: Partial<SessionNeed> = {}): SessionNeed => ({
+    kind: 'approval',
+    since: '2026-10-21T14:02:00.000Z',
+    detail: 'npm install',
+    resetsAt: null,
+    window: null,
+    account: null,
+    ...over,
+  });
+  const setStuck = (id: string, value: SessionNeed | null): Promise<unknown> =>
+    updateMap(project, workId, (map) => {
+      session(map, id).stuck = value;
+    });
+  const HINT_APPROVAL =
+    '@s02 waits for the human (waiting for approval). Do not wait_for it again: end your turn or wait_for("inbox") — Parley writes to you when it is back.';
+
+  /** s-01 ведёт комнату r-01, в ней s-02 и s-03. */
+  async function stuckSetup(): Promise<Client> {
+    const lead = await connect('s-01');
+    await addHistoricalSession(lead, { provider: 'codex', label: 'бэк', task: 'делать' }); // s-02
+    await addHistoricalSession(lead, { provider: 'claude', label: 'ревью', task: 'делать' }); // s-03
+    await callOk(lead, 'create_room', { title: 'комната', members: ['s-01', 's-02', 's-03'], lead: 's-01' }); // r-01
+    return lead;
+  }
+
+  it('get_map: stuck у сессии из карты, а у сессий без поля — null', async () => {
+    const lead = await stuckSetup();
+    await setStuck('s-02', need());
+
+    const { sessions } = (await callOk(lead, 'get_map'))['map'] as {
+      sessions: { id: string; stuck: SessionNeed | null }[];
+    };
+
+    expect(sessions.find((item) => item.id === 's-02')?.stuck).toEqual(need());
+    expect(sessions.find((item) => item.id === 's-03')?.stuck).toBeNull();
+  });
+
+  it('wait_for на застрявшую сессию отвечает сразу: state stuck, потребность и подсказка не ждать снова', async () => {
+    const lead = await stuckSetup();
+    await setStuck('s-02', need());
+
+    const started = Date.now();
+    const answer = await callOk(lead, 'wait_for', { target: 's-02', timeoutSec: 30 });
+
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(answer).toEqual({ state: 'stuck', sessionId: 's-02', stuck: need(), hint: HINT_APPROVAL });
+  });
+
+  it('wait_for: причина лимита называет время сброса по местным часам', async () => {
+    const lead = await stuckSetup();
+    const resetsAt = new Date(Date.now() + 3 * 3_600_000).toISOString();
+    await setStuck('s-02', need({ kind: 'limit', detail: null, resetsAt, window: 'session' }));
+
+    const answer = await callOk(lead, 'wait_for', { target: 's-02', timeoutSec: 30 });
+
+    expect(answer['hint']).toMatch(/^@s02 waits for the human \(usage limit until (?:[A-Z][a-z]{2} \d{1,2}, )?\d{2}:\d{2} local time\)\. /);
+  });
+
+  it('итог важнее stuck: у сессии есть result — прежний ответ без stuck и hint', async () => {
+    const lead = await stuckSetup();
+    await updateMap(project, workId, (map) => {
+      session(map, 's-02').stuck = need();
+      session(map, 's-02').summary = 'сделано';
+      setResult(map, 's-02', 'done');
+    });
+
+    expect(await callOk(lead, 'wait_for', { target: 's-02', timeoutSec: 5 })).toEqual({
+      state: 'done',
+      sessionId: 's-02',
+      summary: 'сделано',
+      artifacts: [],
+    });
+  });
+
+  it('stuck: null — сессия ещё работает, wait_for по таймауту отвечает running', async () => {
+    const lead = await stuckSetup();
+    await setStuck('s-02', null);
+
+    expect(await callOk(lead, 'wait_for', { target: 's-02', timeoutSec: 0.2 })).toEqual({ state: 'running' });
+  });
+
+  it('висящий wait_for просыпается, когда хост записал stuck', async () => {
+    const lead = await stuckSetup();
+
+    const pending = callOk(lead, 'wait_for', { target: 's-02', timeoutSec: 20 });
+    await delay(60);
+    await setStuck('s-02', need());
+
+    expect(await pending).toEqual({ state: 'stuck', sessionId: 's-02', stuck: need(), hint: HINT_APPROVAL });
+  });
+
+  it('описания wait_for и send_message говорят про stuck', async () => {
+    const lead = await stuckSetup();
+    const { tools } = await lead.listTools();
+    const description = (name: string): string => tools.find((tool) => tool.name === name)?.description ?? '';
+
+    expect(description('wait_for')).toContain(
+      '{"state":"stuck"} means the session waits for the human or for its usage limit: do not wait for it again — Parley writes to you when it is back.',
+    );
+    expect(description('send_message')).toContain('stuck');
+  });
+
+  it('send_message в комнату: застрявший адресат даёт warning, письмо записано', async () => {
+    const lead = await stuckSetup();
+    await setStuck('s-02', need());
+
+    const sent = await callOk(lead, 'send_message', { room: 'r-01', text: 'Как дела?' });
+
+    expect(sent['warning']).toBe('@s02 is stuck (waiting for approval): it reads this when it is back');
+    const stored = (await readMapFile()).messages.find((message) => message.id === sent['messageId']);
+    expect(stored).toMatchObject({ roomId: 'r-01', text: 'Как дела?' });
+  });
+
+  it('несколько застрявших адресатов — предупреждения через «; »; прямое письмо тоже предупреждает', async () => {
+    const lead = await stuckSetup();
+    await setStuck('s-02', need());
+    await setStuck('s-03', need({ kind: 'sign-in', account: 'auth', detail: null }));
+
+    const broadcast = await callOk(lead, 'send_message', { room: 'r-01', text: 'Всем' });
+    expect(broadcast['warning']).toBe(
+      '@s02 is stuck (waiting for approval): it reads this when it is back; @s03 is stuck (signed out): it reads this when it is back',
+    );
+
+    const direct = await callOk(lead, 'send_message', { to: 's-03', text: 'Лично' });
+    expect(direct['warning']).toBe('@s03 is stuck (signed out): it reads this when it is back');
+  });
+
+  it('явный адресат: предупреждает только о нём, не о других участниках комнаты', async () => {
+    const lead = await stuckSetup();
+    await setStuck('s-02', need());
+
+    const toOther = await callOk(lead, 'send_message', { room: 'r-01', to: ['s-03'], text: 'Тебе' });
+    expect(toOther).not.toHaveProperty('warning');
+
+    const toStuck = await callOk(lead, 'send_message', { room: 'r-01', to: ['s-02'], text: 'Тебе' });
+    expect(toStuck['warning']).toBe('@s02 is stuck (waiting for approval): it reads this when it is back');
+  });
+
+  it('без застрявших ответ прежний — один messageId', async () => {
+    const lead = await stuckSetup();
+
+    expect(await callOk(lead, 'send_message', { room: 'r-01', text: 'Всем' })).toEqual({ messageId: expect.any(String) });
+  });
+
+  it('stuck вместе с незнакомым полем: оба предупреждения через «; »', async () => {
+    const lead = await stuckSetup();
+    await setStuck('s-02', need());
+
+    const sent = await callOk(lead, 'send_message', { room: 'r-01', text: 'Всем', reply_to: 'm-01' });
+
+    expect(sent['warning']).toBe(
+      'unknown parameters ignored: reply_to (did you mean replyTo?); @s02 is stuck (waiting for approval): it reads this when it is back',
+    );
   });
 });

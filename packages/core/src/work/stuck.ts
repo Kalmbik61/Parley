@@ -4,10 +4,11 @@
  * «сейчас» и пояс приходят параметрами. Свёртка активности и хост берут отсюда типы и разбор, поэтому сам
  * модуль ничего из `activity.ts` не тянет: цикла нет. В конце — тексты для человека: часы машины, имя
  * провайдера и одна строка причины `needReason` для уведомления окна, острова и Telegram (спека подписок К16);
- * поэтому окно берёт модуль подпутём `@parley/core/stuck`, как `@parley/core/session-state`.
+ * поэтому окно берёт модуль подпутём `@parley/core/stuck`, как `@parley/core/session-state`. Дальше — строки
+ * ленты комнаты, письма Parley и подсказки MCP о застрявшей сессии (спека застрявших 5.2–5.3, подписок 5.8).
  */
 
-import type { ProviderLimits } from '../limits.js';
+import type { LimitWindow, ProviderLimits } from '../limits.js';
 import type { ProviderEntry } from '../providers.js';
 
 /** Что нужно от человека: одобрение, ответ на вопрос, сброс лимита, вход или экран при старте. */
@@ -474,4 +475,198 @@ export function needReason(need: SessionNeed, now: Date, provider: string): stri
     case 'startup':
       return 'Waiting in its terminal since launch (sign-in, folder trust or another startup screen)';
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Строки ленты комнаты, письма Parley и подсказки MCP (спека застрявших 5.2–5.3, спека подписок 4.4, 5.8).
+// Английские: их читают агенты и человек. Время для человека — `localClock`, для агента — `agentClock`.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Сессия, о которой текст, и имя её провайдера для людей и агентов (`providerLabel`): у аккаунта это его имя
+ * («Claude Code 2»), а не id и не просто «Claude Code» (спека подписок 4.4, 5.8).
+ */
+export interface StuckWho {
+  id: string;
+  provider: string;
+}
+
+/**
+ * Упоминание сессии: `s-03` → `@s03`, чужая форма id — `@id`; то же правило, что у `sessionMention` из
+ * `thread.ts` (тест сверяет оба). Своё, а не импорт: `thread.ts` через `letters.ts` тянет диск, а модуль идёт в
+ * окно подпутём `@parley/core/stuck`.
+ */
+function mentionOf(id: string): string {
+  const match = /^s-(\d+)$/.exec(id);
+  return match === null ? `@${id}` : `@s${match[1]}`;
+}
+
+/** `iso`, если это читаемая метка времени; иначе `null` — в тексте это «время неизвестно». */
+const readableTime = (iso: string | null): string | null =>
+  iso !== null && !Number.isNaN(Date.parse(iso)) ? iso : null;
+
+/** `: <detail>` или пусто. */
+const detailTail = (detail: string | null): string => (detail === null ? '' : `: ${detail}`);
+
+/**
+ * Причина в скобках подсказки `wait_for` и предупреждения `send_message` (спека застрявших 5.3):
+ * `waiting for approval`, `usage limit until 19:27 local time`, `signed out`…
+ */
+export function stuckReason(need: SessionNeed, now: Date): string {
+  switch (need.kind) {
+    case 'approval':
+      return 'waiting for approval';
+    case 'question':
+      return 'asked a question';
+    case 'limit': {
+      const resets = readableTime(need.resetsAt);
+      return resets === null ? 'usage limit, reset time unknown' : `usage limit until ${localClock(resets, now)} local time`;
+    }
+    case 'sign-in':
+      return need.account === 'account' ? 'account problem' : 'signed out';
+    case 'startup':
+      return 'waiting at startup';
+  }
+}
+
+/** Строка ленты без хвоста про ведущего. */
+function lineText(who: StuckWho, need: SessionNeed, now: Date): string {
+  const at = mentionOf(who.id);
+  switch (need.kind) {
+    case 'approval':
+      return `${at} is waiting for your approval in its terminal${detailTail(need.detail)}`;
+    case 'question':
+      return `${at} asked you a question in its terminal`;
+    case 'limit': {
+      const resets = readableTime(need.resetsAt);
+      const when = resets === null ? 'the reset time is unknown' : `it resets at ${localClock(resets, now)}`;
+      return `${at} hit its ${who.provider} usage limit; ${when}`;
+    }
+    case 'sign-in':
+      return need.account === 'account'
+        ? `${at} has an account problem in ${who.provider}${detailTail(need.detail)}`
+        : `${at} is signed out of ${who.provider}${detailTail(need.detail)}`;
+    case 'startup':
+      return `${at} has been waiting in its terminal since launch (sign-in, folder trust or another startup screen)`;
+  }
+}
+
+/**
+ * Строка ленты комнаты о застрявшей сессии — для человека (спека застрявших 5.2): время — местное, `HH:mm`.
+ * Застрял ведущий, вид `limit` или `sign-in` — к строке добавляется подсказка про «Make lead».
+ */
+export function stuckLine(who: StuckWho, need: SessionNeed, now: Date, isLead: boolean): string {
+  const line = lineText(who, need, now);
+  const mayHandOver = need.kind === 'limit' || need.kind === 'sign-in';
+  return isLead && mayHandOver ?`${line} ${mentionOf(who.id)} leads this room: you can make another participant the lead.` : line;
+}
+
+/** Пометка «вернулась» у строки: лимит сброшен, вход выполнен; у остальных видов — без пометки. */
+const backNote = (kind: NeedKind): string =>
+  kind === 'limit' ? ' (the usage limit has reset)' : kind === 'sign-in' ? ' (signed in)' : '';
+
+/** Строка ленты, когда эпизод кончился: `@s03 is back (the usage limit has reset)`. */
+export function backLine(sessionId: string, kind: NeedKind): string {
+  return `${mentionOf(sessionId)} is back${backNote(kind)}`;
+}
+
+/**
+ * Письмо Parley агенту о том, что сессия вернулась: для `limit`, `sign-in` и `startup` (у `approval` и `question`
+ * выход виден строкой ленты, ответ придёт сам).
+ */
+export function backLetter(sessionId: string, kind: NeedKind): string {
+  const note = kind === 'startup' ? ' (started)' : backNote(kind);
+  return `${mentionOf(sessionId)} is back${note}. Messages that waited are being delivered.`;
+}
+
+/** Другой вошедший аккаунт того же CLI (спека подписок 5.8): имя для людей, id для `create_session`, лимиты. */
+export interface LimitAlternative {
+  id: string;
+  label: string;
+  /** Лимиты аккаунта; `null` — хост их не знает. */
+  limits: ProviderLimits | null;
+}
+
+/** Окно лимита аккаунта: `weekly 31 % used, resets 10:00 local time (UTC+03:00), in 5 d 21 h`. */
+function windowText(name: string, limitWindow: LimitWindow, now: Date): string {
+  const resets = readableTime(limitWindow.resetsAt);
+  return `${name} ${Math.round(limitWindow.usedPercent)} % used${resets === null ? '' : `, resets ${agentClock(resets, now)}`}`;
+}
+
+/** Аккаунт в абзаце письма: с окнами лимитов или «no limits known». */
+function alternativeText(item: LimitAlternative, now: Date): string {
+  const windows: string[] = [];
+  if (item.limits?.fiveHour) windows.push(windowText('5-hour', item.limits.fiveHour, now));
+  if (item.limits?.week) windows.push(windowText('weekly', item.limits.week, now));
+  return windows.length === 0 ? `${item.label} — no limits known` : `${item.label} (${windows.join('; ')})`;
+}
+
+/**
+ * Письмо Parley о лимите (спека застрявших 5.2; спека подписок 4.4, 5.8), которое получает ведущий. Когда есть другие
+ * вошедшие аккаунты того же CLI, в вариантах для `@human` добавляется замена, а перед последним предложением —
+ * абзац о них: что замену ведущий заводит `create_session` только после согласия `@human`, сам — нет (решение 6).
+ * `provider` — имя для людей (`providerLabel`), `mention` — `@s03`.
+ */
+export function limitLetter(input: {
+  mention: string;
+  provider: string;
+  resetsAt: string | null;
+  now: Date;
+  alternatives: readonly LimitAlternative[];
+}): string {
+  const { mention, provider, resetsAt, now, alternatives } = input;
+  const resets = readableTime(resetsAt);
+  const when = resets === null ? 'the reset time is unknown' : `it resets at ${agentClock(resets, now)}`;
+  const after = resets === null ? 'when the limit lifts' : 'after the reset';
+  const replacement =
+    alternatives.length === 0
+      ? ''
+      : `start a replacement on ${alternatives.map((item) => item.label).join(' or ')} and hand it ${mention}'s part, `;
+  // Один аккаунт — просто его id; несколько — id с именем, чтобы ведущий не гадал, какой id чей.
+  const ids = alternatives
+    .map((item) => (alternatives.length === 1 ? `"${item.id}"` : `"${item.id}" for ${item.label}`))
+    .join(', ');
+  const others =
+    alternatives.length === 0
+      ? ''
+      : ` Other ${provider} accounts in Parley right now: ${alternatives.map((item) => alternativeText(item, now)).join('; ')}. A replacement can be started on a free one with create_session (provider: ${ids}) — but only after @human agrees.`;
+  return `${mention} hit its ${provider} usage limit; ${when}. Messages to ${mention} wait; ${after} Parley delivers them and asks ${mention} to continue. Do not hand its part to anyone on your own. If you lead this room, write one message to @human: who is out, until when, what waits on it, and the options — wait for the reset, give its part to another participant (name who), ${replacement}or continue without it.${others} Then wait for the answer (read_guide topic: stuck).`;
+}
+
+/**
+ * Письмо Parley агенту о застрявшей сессии на вход в эпизод (спека застрявших 5.2): ведущему и тем, кто ждёт её
+ * ответа. Время — `agentClock`, а в скобках вид и `detail`: `(approval: npm install)`. `alternatives` нужны одному
+ * виду — `limit`.
+ */
+export function stuckLetter(
+  who: StuckWho,
+  need: SessionNeed,
+  now: Date,
+  alternatives: readonly LimitAlternative[] = [],
+): string {
+  const at = mentionOf(who.id);
+  switch (need.kind) {
+    case 'limit':
+      return limitLetter({ mention: at, provider: who.provider, resetsAt: need.resetsAt, now, alternatives });
+    case 'sign-in': {
+      const account = need.account === 'account';
+      const state = account ? `has an account problem in ${who.provider}` : `is signed out of ${who.provider}`;
+      const detail = need.detail === null ? '' : ` (${need.detail})`;
+      return `${at} ${state}${detail} and cannot work until the human ${account ? 'fixes it' : 'signs in'}. Messages to ${at} wait. Do not hand its part to anyone on your own. If you lead this room, tell @human what waits on ${at} and ask whether to wait or give its part to another participant; then wait for the answer (read_guide topic: stuck).`;
+    }
+    case 'approval':
+    case 'question':
+    case 'startup':
+      return `${at} is waiting for the human in its terminal (${need.kind}${detailTail(need.detail)}) since ${localClock(need.since, now)}. It cannot read messages until the human acts; the human has been notified. Do not hand its part to anyone and do not decide without it: do only what does not depend on it, or end your turn. Its reply comes as usual once it continues (read_guide topic: stuck).`;
+  }
+}
+
+/** Подсказка в ответе `wait_for` на застрявшую сессию (спека застрявших 5.3): не ждать её снова, Parley напишет сам. */
+export function stuckHint(sessionId: string, need: SessionNeed, now: Date): string {
+  return `${mentionOf(sessionId)} waits for the human (${stuckReason(need, now)}). Do not wait_for it again: end your turn or wait_for("inbox") — Parley writes to you when it is back.`;
+}
+
+/** Предупреждение `send_message`, когда адресат застрял: письмо уходит, но прочтёт он его по возвращении. */
+export function stuckWarning(sessionId: string, need: SessionNeed, now: Date): string {
+  return `${mentionOf(sessionId)} is stuck (${stuckReason(need, now)}): it reads this when it is back`;
 }

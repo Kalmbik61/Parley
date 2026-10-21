@@ -3,6 +3,7 @@ import type { DecisionJournalIntent } from './decision-journal.js';
 import type { TokenTotals } from '../counters.js';
 import type { EffortLevel } from '../providers.js';
 import type { RecipeSnapshot } from '../recipes/types.js';
+import type { SessionNeed } from './stuck.js';
 import type { FrozenUsage } from './usage-ledger.js';
 import type { SessionLifecycle, SessionResult } from './session-state.js';
 
@@ -147,6 +148,12 @@ export interface WorkSession {
    * сессии и одинаково применяется при `resume`. Нет поля = `false`: карты до этого куска читаются без миграции.
    */
   lean?: boolean;
+  /**
+   * Чего сессия ждёт от человека и не может продолжить без него (спека застрявших 5.1): одобрение, ответ, сброс
+   * лимита, вход, экран при старте. Пишет только хост и только по порогу (3.5); снимает по концу эпизода.
+   * Нет поля — то же, что `null`: миграции карты не нужно.
+   */
+  stuck?: SessionNeed | null;
 }
 
 /**

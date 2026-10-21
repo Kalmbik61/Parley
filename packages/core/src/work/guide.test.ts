@@ -14,12 +14,45 @@ describe('темы гида', () => {
     for (const item of GUIDE_TOPICS) expect(item.summary.trim(), item.topic).not.toBe('');
   });
 
-  it('темы гида — комнаты, ведущий, участник, письма, worktree и окно среди них', () => {
+  it('темы гида — комнаты, ведущий, участник, застрявший, письма, worktree и окно среди них', () => {
     const names = GUIDE_TOPICS.map((item) => item.topic);
 
-    for (const needed of ['rooms', 'lead', 'member', 'letters', 'worktrees', 'window']) {
+    for (const needed of ['rooms', 'lead', 'member', 'stuck', 'letters', 'worktrees', 'window']) {
       expect(names).toContain(needed);
     }
+  });
+
+  it('тема stuck: заголовок, строка «что внутри» и правила для ведущего и участника (спека застрявших 5.4)', () => {
+    expect(guideTopic('stuck')).toMatch(/^### When a participant is stuck\n/);
+    expect(GUIDE_TOPICS.find((item) => item.topic === 'stuck')?.summary).toBe(
+      'a participant waits for the human or its usage limit: what to do and what not to do',
+    );
+    const text = (guideTopic('stuck') ?? '').replace(/\s+/g, ' ');
+    expect(text).toContain('`stuck` of `get_map`');
+    expect(text).toContain('Do not write `@human` about it again.');
+    expect(text).toContain('If you are not the lead, do not call the human about it: the lead does.');
+    expect(text).toContain('`wait_for` on a stuck participant returns `{"state":"stuck"}` at once');
+  });
+
+  it('тема lead, шаг 1: застрявший участник, о котором написал Parley, не молчит — отсылка к теме stuck', () => {
+    const text = (guideTopic('lead') ?? '').replace(/\s+/g, ' ');
+
+    expect(text).toContain(
+      'it can be replaced by a repeated call. A participant Parley reported as stuck is not silent: see topic `stuck`.',
+    );
+  });
+
+  it('тема stuck: при limit ведущий пишет @human и ждёт ответа, замену на свободном аккаунте не заводит сам (решение 6 спеки подписок)', () => {
+    const text = (guideTopic('stuck') ?? '').replace(/\s+/g, ' ');
+    // Одно сообщение с вариантами, включая замену на названном свободном аккаунте.
+    expect(text).toContain('write one message to `@human`');
+    expect(text).toContain('start a replacement on the named account');
+    // Ответ человека обязателен до `create_session`.
+    expect(text).toContain('Never start a replacement on your own: ask `@human` first and wait for the answer.');
+    // После «да»: create_session на этом провайдере, add_to_room, задача с указателем на карту, письмо застрявшему.
+    expect(text).toContain('After a yes: `create_session` with that `provider`, `add_to_room` for the new session');
+    expect(text).toContain('tell the stuck participant in a message that its part was taken over');
+    expect(text.indexOf('ask `@human` first')).toBeLessThan(text.indexOf('After a yes'));
   });
 
   it('раздел темы не пуст и начинается своим заголовком', () => {

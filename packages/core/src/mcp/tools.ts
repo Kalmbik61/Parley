@@ -46,7 +46,7 @@ import {
   textPage,
 } from '../work/context-pages.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
-import { unreadFor } from '../work/letters.js';
+import { recipientsOf, unreadFor } from '../work/letters.js';
 import { addMessage, transitionSession } from '../work/map.js';
 import { readBacklog } from '../work/backlog.js';
 import { listBacklogSuggestions, suggestBacklog } from '../work/backlog-suggestions.js';
@@ -70,6 +70,7 @@ import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tool
 import { CREATE_SESSION_TOOL, SESSION_CREATION_UNAVAILABLE, createSession } from './session-tools.js';
 import { addMemberByLead, addRoom, canReadRoom, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
 import { reportedStatus } from '../work/session-state.js';
+import { stuckHint, stuckWarning } from '../work/stuck.js';
 import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workPaths } from '../work/store.js';
 import { participantLabel, sessionMention, agentThreadOf } from '../work/thread.js';
 import {
@@ -98,11 +99,12 @@ const POLL_MS = 2000;
 
 /**
  * Состояние, на котором `wait_for` перестаёт ждать (спецификация 7.1): у цели
- * есть итог или процесса больше нет — ушла в `sleeping` или `closed`. `null` —
- * цель ещё работает.
+ * есть итог, она ждёт человека (`stuck`: спека застрявших 5.3 — итога ещё нет, но и ждать её незачем) или
+ * процесса больше нет — ушла в `sleeping` или `closed`. `null` — цель ещё работает.
  */
 function finishedState(session: WorkSession): string | null {
   if (session.result !== null) return session.result;
+  if ((session.stuck ?? null) !== null) return 'stuck';
   return session.lifecycle === 'sleeping' || session.lifecycle === 'closed'
     ? session.lifecycle
     : null;
@@ -423,7 +425,7 @@ const TOOLS: Tool[] = [
     name: 'wait_for',
     annotations: READS,
     description:
-      'Waits for a session to finish (target is its id) or for an incoming message (target = "inbox"). On timeout it returns {"state":"running"} — decide yourself whether to call again. {"state":"deleted"} means the human deleted the session: there is nothing left to wait for. Giving a new job to a session that has already handed in its report? Wait for its answer with target = "inbox", not by id: by id the old result comes back at once.',
+      'Waits for a session to finish (target is its id) or for an incoming message (target = "inbox"). On timeout it returns {"state":"running"} — decide yourself whether to call again. {"state":"deleted"} means the human deleted the session: there is nothing left to wait for. {"state":"stuck"} means the session waits for the human or for its usage limit: do not wait for it again — Parley writes to you when it is back. Giving a new job to a session that has already handed in its report? Wait for its answer with target = "inbox", not by id: by id the old result comes back at once.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -440,7 +442,7 @@ const TOOLS: Tool[] = [
     name: 'send_message',
     annotations: WRITES,
     description:
-      'Puts a message into the correspondence. Without room — to exactly one addressee in the workspace. With room — the sender and the addressees must be participants of the room; an empty or missing to is a broadcast to all participants. Answer only a question: a note and a decision need no answer.',
+      'Puts a message into the correspondence. Without room — to exactly one addressee in the workspace. With room — the sender and the addressees must be participants of the room; an empty or missing to is a broadcast to all participants. Answer only a question: a note and a decision need no answer. If an addressee is stuck (waiting for the human or for its usage limit), the message is still sent and the answer carries a warning: the addressee reads it when it is back.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -822,6 +824,15 @@ async function waitFor(
       const session = requireSession(map, target);
       existed = true;
       const state = finishedState(session);
+      // Застрявшая: итога нет, она ждёт человека. Ответ несёт потребность и подсказку не ждать её снова (5.3).
+      if (state === 'stuck' && session.stuck != null) {
+        return {
+          state,
+          sessionId: target,
+          stuck: session.stuck,
+          hint: stuckHint(target, session.stuck, new Date()),
+        };
+      }
       return state !== null
         ? {
             state,
@@ -905,7 +916,7 @@ async function sendMessage(
 
   const limits = await limitsOf(context);
   let created = '';
-  await updateMap(context.projectPath, context.workId, (current) => {
+  const written = await updateMap(context.projectPath, context.workId, (current) => {
     // Отправителя проверяем наравне с получателем: сервер удалённой сессии ещё
     // жив, и без проверки в карту легло бы письмо от несуществующего адресата,
     // ответить на которое нечем (план от 2026-09-06, раздел C).
@@ -968,9 +979,17 @@ async function sendMessage(
       created = addMessage(current, { from: sessionId, to: [target], text, kind }).id;
     }
   });
+  // Адресат (явный или по рассылке комнаты) застрял: письмо уже записано, но прочтёт он его по возвращении (5.3).
+  const sent = written.messages.find((message) => message.id === created);
+  const now = new Date();
+  const stuckNotes = (sent === undefined ? [] : recipientsOf(sent, written)).flatMap((id) => {
+    const need = written.sessions.find((candidate) => candidate.id === id)?.stuck;
+    return need == null ? [] : [stuckWarning(id, need, now)];
+  });
   const warnings = [
     text.length > LETTER_SOFT_CHARS ? `long letter (${text.length} chars): prefer a file and a path` : null,
     unknownParamsWarning(args),
+    ...stuckNotes,
   ].filter((warning): warning is string => warning !== null);
   return warnings.length === 0 ? { messageId: created } : { messageId: created, warning: warnings.join('; ') };
 }

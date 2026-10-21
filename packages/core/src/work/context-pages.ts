@@ -2,6 +2,7 @@ import { markedExcerpt, textHash } from './context-budget.js';
 import { unreadFor, unreadForHuman } from './letters.js';
 import { isRoomArchived } from './rooms.js';
 import { reportedStatus } from './session-state.js';
+import type { SessionNeed } from './stuck.js';
 import type { Message, MapCompact, RoomPlan, WorkMap, WorkSession } from './types.js';
 
 /**
@@ -477,6 +478,8 @@ export interface SessionTopology {
   role: WorkSession['role'];
   model?: string | null;
   effort?: WorkSession['effort'];
+  /** Чего сессия ждёт от человека (спека застрявших 5.3); `null` — ничего, и когда поля нет в карте. */
+  stuck: SessionNeed | null;
   worktree: { path: string; branch: string; base: string } | null;
   task: string;
   summary: string | null;
@@ -587,6 +590,7 @@ export function mapTopology(map: WorkMap, callerId: string | null): MapTopology 
       role: session.role ?? null,
       ...(session.model === undefined ? {} : { model: session.model }),
       ...(session.effort === undefined ? {} : { effort: session.effort }),
+      stuck: session.stuck ?? null,
       worktree: session.worktree === null ? null : { path: session.worktree.path, branch: session.worktree.branch, base: session.worktree.base },
       task: bounded(session.task, TOPOLOGY_LIMITS.task, 'task', cut),
       summary: session.summary === null ? null : bounded(session.summary, TOPOLOGY_LIMITS.summary, 'summary', cut),

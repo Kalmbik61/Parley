@@ -258,7 +258,8 @@ with what to do. If you are the lead, the workflow below is for Free mode; in pl
 1. Collect the positions: each participant answers in the room with one message. Wait for
    them with \`wait_for("inbox")\`, read the whole feed with \`read_room\`. If someone stays
    silent for long, do not wait forever: propose a decision on the positions you have; it can
-   be replaced by a repeated call.
+   be replaced by a repeated call. A participant Parley reported as stuck is not silent: see
+   topic \`stuck\`.
 2. Propose a decision: \`propose_decision(room, text)\`. The text is the whole decision: what
    we do and which part each person takes; name participants with mentions \`@s02\` (the
    session number without the hyphen: \`s-02\` → \`@s02\`), the window draws such a mention as
@@ -323,6 +324,34 @@ The human set a task for everyone in the room. Such a message arrives from \`che
 
 You may also be brought into a room along the way: the lead calls \`add_to_room\`, and you
 leave your previous room (one room per session); the new one shows in \`get_map\`.`,
+  },
+  {
+    topic: 'stuck',
+    summary: 'a participant waits for the human or its usage limit: what to do and what not to do',
+    text: `### When a participant is stuck
+
+Parley tells you when a participant cannot go on without the human, and tells you again when it is back. Such a
+participant is not "silent". The reason comes in Parley's message and in \`stuck\` of \`get_map\`:
+
+- \`approval\`, \`question\`, \`startup\` — the participant waits for the human in its terminal: a permission request,
+  a question, a sign-in or folder-trust screen. The human has already been notified. Do not hand its part to anyone
+  and do not decide without it: do only what does not depend on it, or end your turn. Do not write \`@human\` about
+  it again.
+- \`limit\`, \`sign-in\` — the participant hit its usage limit or is signed out. Do not hand its part to anyone on your
+  own. If you lead the room, write one message to \`@human\`: who is out, why, until when, what waits on it, and the
+  options — wait for the reset (Parley brings the participant back by itself), give its part to another participant
+  (name who), or continue without it. Then wait for the answer and do only what does not depend on the participant.
+- If Parley's message names other accounts of the same CLI that are free in Parley right now, add one more option to
+  that message: start a replacement on the named account and hand it the stuck participant's part. Never start a
+  replacement on your own: ask \`@human\` first and wait for the answer. After a yes: \`create_session\` with that
+  \`provider\`, \`add_to_room\` for the new session, write it the task with a pointer to the stuck participant's fields
+  in \`get_map\` (\`task\`, \`summary\`, \`history\`, \`artifacts\`), and tell the stuck participant in a message that its
+  part was taken over: it reads it when it is back.
+- If the human gives the part to another participant, tell the stuck one in a message too: it reads it when it is
+  back.
+- If you are not the lead, do not call the human about it: the lead does.
+- \`wait_for\` on a stuck participant returns \`{"state":"stuck"}\` at once: do not call it again for that participant;
+  end your turn or \`wait_for("inbox")\`.`,
   },
   {
     topic: 'brief',
