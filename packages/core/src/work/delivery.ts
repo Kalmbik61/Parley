@@ -98,12 +98,36 @@ const POINTER_TEXT = /^\s*New messages \(\d+\)(?: in r-[\s\S]*)?\. Call check_in
 const CUT_POINTER_TEXT = /^\s*New messages \(\d+\) in r-[\s\S]*…$/;
 
 /**
- * Текст — указатель Parley на письма (`pointerText`), а не реплика человека: хост набирает его в терминал
- * агента сам. Ни заголовком сессии, ни её ярлыком он быть не может — автозаголовок (`autoTitleOf`) его не берёт.
- * Формат живёт здесь, рядом с `pointerText`: поменялся текст — меняется и распознавание (delivery.test.ts).
+ * Просьба продолжить после сброса лимита (спека застрявших 6.3): хост набирает её в терминал сессии, когда лимит
+ * сбросился, а сессия сама не продолжила. «Read your inbox first» — защита: если человек отдал часть задачи другому,
+ * ведущий уже написал об этом.
+ */
+export const LIMIT_RETURN_TEXT =
+  'Your usage limit has reset. Read your inbox first, then continue the task the limit interrupted.';
+
+/**
+ * Текст возврата после сброса лимита (6.3): просьба продолжить и, если письма ждут, через пробел указатель на них
+ * (`pointerText`) — письма держались, пока шёл эпизод, и сессия узнаёт о них тем же ходом.
+ */
+export function limitReturnText(letters: readonly Message[], rooms: readonly Room[]): string {
+  return letters.length === 0 ? LIMIT_RETURN_TEXT : `${LIMIT_RETURN_TEXT} ${pointerText(letters, rooms)}`;
+}
+
+const isBarePointer = (text: string): boolean => POINTER_TEXT.test(text) || CUT_POINTER_TEXT.test(text);
+
+/**
+ * Текст — указатель Parley на письма (`pointerText`) или возврат после сброса лимита (`limitReturnText`), а не реплика
+ * человека: хост набирает его в терминал агента сам. Ни заголовком сессии, ни её ярлыком он быть не может —
+ * автозаголовок (`autoTitleOf`) его не берёт. Формат живёт здесь, рядом с `pointerText`: поменялся текст — меняется и
+ * распознавание (delivery.test.ts).
  */
 export function isPointerText(text: string): boolean {
-  return POINTER_TEXT.test(text) || CUT_POINTER_TEXT.test(text);
+  if (isBarePointer(text)) return true;
+  const head = text.trimStart();
+  if (!head.startsWith(LIMIT_RETURN_TEXT)) return false;
+  const rest = head.slice(LIMIT_RETURN_TEXT.length);
+  // Просьба одна, либо за ней через пробел указатель — целый или обрезанный `oneLine`.
+  return rest.trim() === '' || (/^\s/.test(rest) && isBarePointer(rest));
 }
 
 /**

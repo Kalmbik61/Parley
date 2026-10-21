@@ -78,6 +78,7 @@ import { providerLaunchEnv } from './sessions/provider-env.js';
 import { createReadyJournal } from './sessions/ready-journal.js';
 import { limitAlternatives } from './stuck/limit-alternatives.js';
 import { createStuckService, stuckReportFromEnv } from './stuck/stuck-service.js';
+import { limitReturnFromEnv } from './wake/limit-return.js';
 import { createWakeService } from './wake/wake-service.js';
 import { createWorktreesService } from './worktrees/worktrees-service.js';
 import { readHostVersion } from './version.js';
@@ -428,7 +429,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activityService,
     ptyManager,
     sessionsService,
-    { compacting: (ref) => compactionService?.holds(ref) === true, windowCounters },
+    {
+      compacting: (ref) => compactionService?.holds(ref) === true,
+      windowCounters,
+      // Возврат после сброса лимита (спека застрявших 6.3): окно провайдера из службы лимитов, сроки — рычаги E2E.
+      limits: limitsService,
+      limitReturn: limitReturnFromEnv(process.env),
+    },
   );
   handle.context.onShutdown(async () => wakeService.stop());
 

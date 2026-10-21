@@ -4,7 +4,7 @@ import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/pro
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addMessage,
   addRoom,
@@ -12,6 +12,7 @@ import {
   archiveRoom,
   createWork,
   DEFAULT_RESOURCE_LIMITS,
+  LIMIT_RETURN_TEXT,
   readMap,
   reserveAttempt,
   saveConfig,
@@ -23,11 +24,14 @@ import {
   updateMap,
   workPaths,
 } from '@parley/core';
+import type { ProviderLimits, SessionActivity, SessionNeed } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createActivityService } from '../activity/activity-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
+import { CODEX_SUBMIT_DELAY_MS } from '../pty/codex-input.js';
 import { createPtyManager } from '../pty/pty-manager.js';
+import type { PtyManager } from '../pty/pty-manager.js';
 import { createHumanRoom, deleteHumanRoom, sendHumanLetter, setHumanRoomLead } from '../rooms/rooms-service.js';
 import { createSessionsService } from '../sessions/sessions-service.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
@@ -1336,4 +1340,441 @@ describe('WakeService: журнал задержек доставки (mail.deli
     expect(record?.['ms']).toBeGreaterThanOrEqual(0);
     expect(JSON.stringify(logInfos)).not.toContain('тело письма');
   }, 20_000);
+});
+
+/**
+ * Возврат после сброса лимита (спека застрявших 6.3, 6.4). Процесс, активность и карта подменены, время — фальшивое:
+ * настоящий лимит ждёт минуты, а проверять нужно, что именно и когда будильник печатает в терминал.
+ */
+describe('возврат после сброса лимита', () => {
+  const T0 = Date.parse('2026-10-22T10:00:00.000Z');
+  const ENTER_MS = 30;
+  const MINUTE = 60_000;
+  /** Короткие сроки: по ним возврат наступает через 2 с после удара без времени сброса. */
+  const FAST = { limitReturn: { graceMs: 500, retryMs: 2000 } };
+  const DUE_MS = 2100;
+
+  const activityOf = (activity: SessionActivity['activity'], patch: Partial<SessionActivity> = {}): SessionActivity => ({
+    activity,
+    subagents: 0,
+    tasks: [],
+    waitingFor: null,
+    heldByBackground: false,
+    turnEndedAt: null,
+    lastEventAt: new Date(Date.now()).toISOString(),
+    source: 'hooks',
+    hooksMissing: false,
+    need: null,
+    ...patch,
+  });
+
+  interface LimitRig {
+    wake: WakeService;
+    /** Всё, что хост напечатал в терминал сессии. */
+    written: string[];
+    /** Тексты уведомлений хоста `limit-return-blocked`. */
+    blocked: () => string[];
+    /** Лимит: ход кончился ошибкой, `since` — сейчас; `state` — что показывает активность (по умолчанию простой). */
+    hit: (patch?: Partial<SessionNeed>, state?: SessionActivity['activity']) => void;
+    /** Ход идёт (`working`) — как после просьбы продолжить или после промпта человека. */
+    working: () => void;
+    /** Ход кончился чисто: у приглашения, без `need`. */
+    idle: () => void;
+    /** Письмо в карту и пересчёт. */
+    letter: () => void;
+    screen: string[];
+    draft: { on: boolean };
+    limitsData: { value: ProviderLimits | null };
+    /** Событие активности без смены состояния (метрики) — пересчёт будильника. */
+    poke: () => void;
+    exit: () => void;
+    advance: (ms: number) => Promise<void>;
+  }
+
+  let wakes: WakeService[] = [];
+
+  async function limitRig(wakeOptions: WakeServiceOptions = {}, provider = 'claude'): Promise<LimitRig> {
+    const { workId, sessionId } = await activeSession();
+    const map = await readMap(project, workId);
+    const session = map.sessions.find((candidate) => candidate.id === sessionId);
+    if (session !== undefined) session.provider = provider;
+    const ref: SessionRef = { projectPath: project, workId, sessionId };
+    const entry = { projectPath: project, map };
+
+    // Файлы работы подготовлены на настоящих часах; дальше отсчёт фальшивый.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.setSystemTime(T0);
+
+    type Live = { activity: SessionActivity; metrics: null };
+    let live: Live = { activity: activityOf('idle'), metrics: null };
+    const activityListeners = new Set<(ref: SessionRef, value: Live) => void>();
+    const ptyListeners = new Map<string, Set<(...args: unknown[]) => void>>();
+    let alive = true;
+    const written: string[] = [];
+    const draft = { on: false };
+    const screen: string[] = ['❯ '];
+    const limitsData: { value: ProviderLimits | null } = { value: null };
+
+    const publish = (activity: SessionActivity): void => {
+      live = { activity, metrics: null };
+      for (const listener of [...activityListeners]) listener(ref, live);
+    };
+
+    const handle = {
+      ref,
+      pid: 4242,
+      startedAt: 0,
+      cols: 80,
+      rows: 24,
+      provider,
+      hasDraft: () => draft.on,
+      bracketedPaste: () => true,
+    };
+    const pty = {
+      get: () => (alive ? handle : undefined),
+      write: (_ref: SessionRef, data: string) => written.push(data),
+      screenText: () => screen,
+      setHostDraft: () => {},
+      on: (event: string, listener: (...args: unknown[]) => void) => {
+        let set = ptyListeners.get(event);
+        if (set === undefined) ptyListeners.set(event, (set = new Set()));
+        const listeners = set;
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as unknown as PtyManager;
+    const works = {
+      entry: () => entry,
+      snapshot: () => ({ entries: [entry] }),
+      onChange: () => () => {},
+    } as unknown as WorksService;
+    const activity = {
+      get: () => live,
+      onChange: (listener: (ref: SessionRef, value: Live) => void) => {
+        activityListeners.add(listener);
+        return () => activityListeners.delete(listener);
+      },
+      mailWaiting: () => {},
+    } as unknown as ActivityService;
+
+    const wake = createWakeService(fakeHost(), works, activity, pty, { launch: async () => {} }, {
+      enterDelayMs: ENTER_MS,
+      limits: { get: () => limitsData.value },
+      ...wakeOptions,
+    });
+    wake.start();
+    wakes.push(wake);
+
+    return {
+      wake,
+      written,
+      screen,
+      draft,
+      limitsData,
+      blocked: () =>
+        broadcasts
+          .filter((item) => item.event === 'host.notice')
+          .map((item) => item.data as { kind: string; text: string })
+          .filter((notice) => notice.kind === 'limit-return-blocked')
+          .map((notice) => notice.text),
+      hit: (patch = {}, state = 'idle') =>
+        publish(
+          activityOf(state, {
+            turnEndedAt: new Date(Date.now()).toISOString(),
+            need: {
+              kind: 'limit',
+              since: new Date(Date.now()).toISOString(),
+              detail: "You've hit your session limit",
+              resetsAt: null,
+              window: null,
+              account: null,
+              ...patch,
+            },
+          }),
+        ),
+      working: () => publish(activityOf('working')),
+      idle: () => publish(activityOf('idle', { turnEndedAt: new Date(Date.now()).toISOString() })),
+      letter: () => {
+        addMessage(map, { from: 's-00', to: [sessionId], text: 'письмо, пока шёл лимит' });
+        publish(live.activity);
+      },
+      poke: () => publish(live.activity),
+      exit: () => {
+        alive = false;
+        for (const listener of ptyListeners.get('exit') ?? []) listener(ref, { exitCode: 0 });
+      },
+      advance: async (ms) => {
+        await vi.advanceTimersByTimeAsync(ms);
+      },
+    };
+  }
+
+  const returnText = (rig: LimitRig): string[] => rig.written.filter((chunk) => chunk.startsWith('Your usage limit'));
+  const enters = (rig: LimitRig): number => rig.written.filter((chunk) => chunk === '\r').length;
+
+  /** Лимит, возврат и ход по просьбе (он начался); `clean` — ход кончился без ошибки лимита. */
+  async function cycle(rig: LimitRig, clean = false): Promise<void> {
+    rig.hit();
+    await rig.advance(DUE_MS);
+    await rig.advance(ENTER_MS + 5);
+    rig.working();
+    if (clean) rig.idle();
+  }
+
+  afterEach(() => {
+    for (const wake of wakes) wake.stop();
+    wakes = [];
+    vi.useRealTimers();
+  });
+
+  it('время сброса известно: через сброс и две минуты в терминале просьба продолжить и Enter', async () => {
+    const rig = await limitRig();
+    rig.hit({ resetsAt: new Date(T0 + 10 * MINUTE).toISOString() });
+
+    await rig.advance(10 * MINUTE + 119_000);
+    expect(rig.written).toEqual([]);
+
+    await rig.advance(1010);
+    expect(rig.written).toEqual([LIMIT_RETURN_TEXT]);
+    await rig.advance(ENTER_MS);
+    expect(rig.written).toEqual([LIMIT_RETURN_TEXT, '\r']);
+    expect(rig.blocked()).toEqual([]);
+  });
+
+  it('письма ждут: после просьбы — указатель на них, а указанные письма второй раз не печатаются', async () => {
+    const rig = await limitRig();
+    rig.hit({ resetsAt: new Date(T0 + 1000).toISOString() });
+    rig.letter();
+    // Письмо держится, пока идёт эпизод: указатель отдельно не печатается.
+    expect(rig.written).toEqual([]);
+
+    await rig.advance(1000 + 120_000 + 10);
+    expect(rig.written).toEqual([`${LIMIT_RETURN_TEXT} ${pointer(1)}`]);
+
+    // Просьба начала ход, лимит снят: письмо уже указано, второго указателя нет.
+    await rig.advance(ENTER_MS);
+    rig.working();
+    rig.idle();
+    await rig.advance(5000);
+    expect(rig.written.filter((chunk) => chunk.includes('check_inbox'))).toHaveLength(1);
+  });
+
+  it('времени сброса нет: возврат через срок после удара, не раньше', async () => {
+    const rig = await limitRig(FAST);
+    rig.hit();
+
+    await rig.advance(1999);
+    expect(rig.written).toEqual([]);
+    await rig.advance(2);
+    expect(returnText(rig)).toHaveLength(1);
+    await rig.advance(ENTER_MS + 5);
+    expect(enters(rig)).toBe(1);
+  });
+
+  it('сдвиг `since` в том же эпизоде срок не переносит', async () => {
+    const rig = await limitRig(FAST);
+    rig.hit();
+    await rig.advance(1500);
+    // Индекс лога догнал журнал: та же нужда, но `since` теперь позже.
+    rig.hit();
+    await rig.advance(600);
+    expect(returnText(rig)).toHaveLength(1);
+  });
+
+  it('время сброса появилось в том же эпизоде: срок переставляется на него', async () => {
+    const rig = await limitRig(FAST);
+    const since = new Date(T0).toISOString();
+    rig.hit({ since });
+    await rig.advance(500);
+    rig.hit({ since, resetsAt: new Date(T0 + 5000).toISOString() });
+
+    // Прежний срок (2 с) прошёл бы раньше сброса.
+    await rig.advance(2500);
+    expect(rig.written).toEqual([]);
+    await rig.advance(3100);
+    expect(returnText(rig)).toHaveLength(1);
+  });
+
+  it('нужда снята раньше срока (Claude продолжил сам, человек написал): ничего не печатается, уведомления нет', async () => {
+    const rig = await limitRig(FAST);
+    rig.hit({ resetsAt: new Date(T0 + 1000).toISOString() });
+
+    await rig.advance(1200);
+    rig.working();
+    await rig.advance(10_000);
+
+    expect(rig.written).toEqual([]);
+    expect(rig.blocked()).toEqual([]);
+  });
+
+  it('черновик человека: уведомление с причиной, а не печать', async () => {
+    const rig = await limitRig(FAST);
+    rig.draft.on = true;
+    rig.hit();
+
+    await rig.advance(DUE_MS);
+    expect(rig.written).toEqual([]);
+    expect(rig.blocked()).toEqual(['The limit has reset, but S01 could not continue: unsent text in its terminal']);
+
+    // Эпизод остаётся, но уведомление одно: черновик снят — повторно не печатаем и не уведомляем.
+    rig.draft.on = false;
+    rig.poke();
+    await rig.advance(10_000);
+    expect(rig.written).toEqual([]);
+    expect(rig.blocked()).toHaveLength(1);
+  });
+
+  it('на экране меню лимита: уведомление, печати нет', async () => {
+    const rig = await limitRig(FAST);
+    rig.screen.push('❯ 1. Wait here, then continue automatically at 7:27pm');
+    rig.hit();
+
+    await rig.advance(DUE_MS);
+    expect(rig.written).toEqual([]);
+    expect(rig.blocked()).toEqual(['The limit has reset, but S01 could not continue: a menu is open in its terminal']);
+  });
+
+  it('будильник на паузе: ждёт, а после resume() возвращает сессию', async () => {
+    const rig = await limitRig(FAST);
+    rig.hit();
+    rig.wake.pause();
+
+    await rig.advance(5000);
+    expect(rig.written).toEqual([]);
+    expect(rig.blocked()).toEqual([]);
+
+    rig.wake.resume();
+    expect(returnText(rig)).toHaveLength(1);
+  });
+
+  it('сессия занята в момент срока: ждёт приглашения и возвращает на ближайшем пересчёте', async () => {
+    const rig = await limitRig(FAST);
+    const since = new Date(T0).toISOString();
+    rig.hit({ since }, 'working');
+
+    await rig.advance(DUE_MS);
+    expect(rig.written).toEqual([]);
+    expect(rig.blocked()).toEqual([]);
+
+    rig.hit({ since }, 'idle');
+    expect(returnText(rig)).toHaveLength(1);
+  });
+
+  it('третий возврат подряд не печатается — уведомление: «it hit the limit again twice»', async () => {
+    const rig = await limitRig(FAST);
+
+    await cycle(rig);
+    await cycle(rig);
+    expect(returnText(rig)).toHaveLength(2);
+    rig.hit();
+    await rig.advance(DUE_MS);
+
+    expect(returnText(rig)).toHaveLength(2);
+    expect(rig.blocked()).toEqual(['The limit has reset, but S01 could not continue: it hit the limit again twice']);
+  });
+
+  it('лимит повторился, а хост хода не видел: `since` новее печати — новый эпизод, возврат снова', async () => {
+    const rig = await limitRig(FAST);
+    rig.hit();
+    await rig.advance(DUE_MS);
+    await rig.advance(ENTER_MS + 5);
+    expect(returnText(rig)).toHaveLength(1);
+
+    // Ход и ошибка уложились в одну склейку активности: между ними `need` не был пуст ни разу.
+    await rig.advance(1000);
+    rig.hit();
+    await rig.advance(DUE_MS);
+
+    expect(returnText(rig)).toHaveLength(2);
+  });
+
+  it('ход по просьбе кончился без ошибки лимита: счётчик сброшен, третий возврат разрешён', async () => {
+    const rig = await limitRig(FAST);
+
+    await cycle(rig, true);
+    await cycle(rig);
+    await cycle(rig);
+
+    // Без сброса после первого чистого хода третий возврат упёрся бы в «два подряд».
+    expect(returnText(rig)).toHaveLength(3);
+    expect(rig.blocked()).toEqual([]);
+  });
+
+  it('промпт человека сбрасывает счётчик', async () => {
+    const rig = await limitRig(FAST);
+
+    await cycle(rig);
+    await cycle(rig);
+    rig.hit();
+    await rig.advance(DUE_MS);
+    expect(rig.blocked()).toHaveLength(1);
+
+    // Человек написал сам: ход не от будильника, возвраты снова разрешены.
+    rig.working();
+    rig.hit();
+    await rig.advance(DUE_MS);
+
+    expect(returnText(rig)).toHaveLength(3);
+    expect(rig.blocked()).toHaveLength(1);
+  });
+
+  it('время сброса неизвестно, а данные провайдера показывают свободное окно: возврат сразу, не через срок', async () => {
+    const rig = await limitRig({ limitReturn: { graceMs: 500, retryMs: 600_000 } });
+    rig.hit();
+    await rig.advance(1000);
+    expect(rig.written).toEqual([]);
+
+    rig.limitsData.value = {
+      fiveHour: { usedPercent: 2, resetsAt: new Date(T0 + 5 * 60 * MINUTE).toISOString() },
+      week: null,
+      at: new Date(Date.now()).toISOString(),
+    };
+    rig.poke();
+
+    expect(returnText(rig)).toHaveLength(1);
+  });
+
+  it('данные провайдера старше удара возврата не ускоряют', async () => {
+    const rig = await limitRig({ limitReturn: { graceMs: 500, retryMs: 600_000 } });
+    rig.limitsData.value = {
+      fiveHour: { usedPercent: 2, resetsAt: null },
+      week: null,
+      at: new Date(T0 - MINUTE).toISOString(),
+    };
+    rig.hit();
+    await rig.advance(1000);
+    rig.poke();
+
+    expect(rig.written).toEqual([]);
+  });
+
+  it('процесс вышел посреди эпизода: к сроку ничего не печатается', async () => {
+    const rig = await limitRig(FAST);
+    rig.hit();
+    await rig.advance(500);
+    rig.exit();
+
+    await rig.advance(10_000);
+    expect(rig.written).toEqual([]);
+    expect(rig.blocked()).toEqual([]);
+  });
+
+  it('остановка будильника снимает таймер возврата', async () => {
+    const rig = await limitRig(FAST);
+    rig.hit();
+    rig.wake.stop();
+
+    await rig.advance(10_000);
+    expect(rig.written).toEqual([]);
+  });
+
+  it('Codex: просьба вставкой, клавиша отправки через паузу Codex', async () => {
+    const rig = await limitRig(FAST, 'codex');
+    rig.hit();
+
+    await rig.advance(2010);
+    expect(rig.written).toEqual([`\u001b[200~${LIMIT_RETURN_TEXT}\u001b[201~`]);
+    await rig.advance(CODEX_SUBMIT_DELAY_MS);
+    expect(rig.written.at(-1)).toBe('\r');
+  });
 });

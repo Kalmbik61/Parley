@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionActivity } from './activity.js';
 import { oneLine } from '../counters.js';
-import { deliveryAction, isPointerText, pointerText } from './delivery.js';
+import { deliveryAction, isPointerText, LIMIT_RETURN_TEXT, limitReturnText, pointerText } from './delivery.js';
 import type { SessionNeed } from './stuck.js';
 import type { Message, Room, WorkSession } from './types.js';
 
@@ -195,6 +195,48 @@ describe('isPointerText', () => {
       'Проверь new messages (1). Call check_inbox.',
       'New messages (1) in the inbox…',
       'Проверка входящих сообщений',
+    ]) {
+      expect(isPointerText(text), text).toBe(false);
+    }
+  });
+});
+
+describe('limitReturnText — возврат после сброса лимита (спека «Застрявшие сессии», 6.3)', () => {
+  const rooms = [roomOf('r-01', 'Second'), roomOf('r-02', 'Ревью «схемы»')];
+
+  it('без писем — одна просьба продолжить, байт в байт', () => {
+    expect(LIMIT_RETURN_TEXT).toBe(
+      'Your usage limit has reset. Read your inbox first, then continue the task the limit interrupted.',
+    );
+    expect(limitReturnText([], rooms)).toBe(LIMIT_RETURN_TEXT);
+  });
+
+  it('с письмами — через пробел указатель на них', () => {
+    const letters = [messageOf({ id: 'm-01', roomId: 'r-01' }), messageOf({ id: 'm-02', roomId: 'r-01' })];
+    expect(limitReturnText(letters, rooms)).toBe(`${LIMIT_RETURN_TEXT} ${pointerText(letters, rooms)}`);
+    expect(limitReturnText([messageOf()], rooms)).toBe(`${LIMIT_RETURN_TEXT} New messages (1). Call check_inbox.`);
+  });
+
+  it('isPointerText узнаёт возврат — и обрезанный oneLine, и с длинным названием комнаты', () => {
+    const long = [roomOf('r-01', 'очень длинное название '.repeat(10))];
+    for (const text of [
+      limitReturnText([], rooms),
+      limitReturnText([messageOf()], rooms),
+      limitReturnText([messageOf({ roomId: 'r-02' }), messageOf({ id: 'm-02' })], rooms),
+      limitReturnText([messageOf({ roomId: 'r-01' })], long),
+    ]) {
+      expect(isPointerText(text), text).toBe(true);
+      expect(isPointerText(oneLine(text)), text).toBe(true);
+    }
+    expect(oneLine(limitReturnText([messageOf({ roomId: 'r-01' })], long)).endsWith('…')).toBe(true);
+  });
+
+  it('чужое после просьбы или вместо указателя — не указатель', () => {
+    for (const text of [
+      `${LIMIT_RETURN_TEXT} А потом почини парсер`,
+      `${LIMIT_RETURN_TEXT} New messages (1). Call check_inbox. А потом почини парсер`,
+      `Проверь: ${LIMIT_RETURN_TEXT}`,
+      'Your usage limit has reset.',
     ]) {
       expect(isPointerText(text), text).toBe(false);
     }

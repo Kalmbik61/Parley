@@ -9,6 +9,9 @@
  * сервис здесь решает, КОГДА её позвать (по событиям `works`/`activity`/`draft`
  * и по `resume`, без опроса), и держит между вызовами состояние попытки: какие
  * письма уже указаны и не в полёте ли уже указатель.
+ *
+ * Тем же путём печати сессию, упёршуюся в лимит, возвращают после сброса (спека «Застрявшие сессии», 6.3):
+ * срок, предохранители и тексты отказа — в `limit-return.ts`, таймер и счётчик возвратов — здесь.
  */
 
 import { performance } from 'node:perf_hooks';
@@ -18,6 +21,9 @@ import {
   deliveryAction,
   hookedSince,
   HUMAN,
+  LIMIT_RETRY_MS,
+  LIMIT_RETURN_GRACE_MS,
+  limitReturnText,
   loadConfig,
   loadProviders,
   openEvents,
@@ -31,6 +37,7 @@ import {
   type DeliveryAction,
   type DeliveryInput,
   type Message,
+  type SessionActivity,
   type WorkEntry,
   type WorkSession,
 } from '@parley/core';
@@ -42,12 +49,14 @@ import type { WindowCounters } from '../health/window-counters.js';
 import { HostError } from '../errors.js';
 import { CODEX_SUBMIT_DELAY_MS, codexPaste, codexSubmitKey } from '../pty/codex-input.js';
 import { choiceInProgress } from '../pty/effort-switch.js';
-import type { PtyManager } from '../pty/pty-manager.js';
+import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import { typeAndSubmit } from '../pty/type-and-submit.js';
 import { deliverRecipeToNewLeads } from '../rooms/rooms-service.js';
+import type { LimitsService } from '../limits/limits-service.js';
 import type { Attempt } from '../pty/type-and-submit.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import type { WorksService } from '../works/works-service.js';
+import { limitReturnDue, limitWindowFree, returnBlock, returnBlockReason } from './limit-return.js';
 import { ResumeLimiter } from './resume-limiter.js';
 
 export interface WakeServiceOptions {
@@ -63,6 +72,13 @@ export interface WakeServiceOptions {
   resumeFailWindowMs?: number;
   /** Сжатие контекста ждёт или идёт (`CompactionService.holds`, спека 2026-10-15, 5.4): указатель не печатается. */
   compacting?: (ref: SessionRef) => boolean;
+  /**
+   * Лимиты провайдеров хоста: время сброса неизвестно, а данные новее удара показывают свободное окно — сессию возвращают
+   * сразу, не дожидаясь `retryMs` (спека застрявших 6.3). Без них — только срок.
+   */
+  limits?: Pick<LimitsService, 'get'>;
+  /** Сроки возврата после сброса лимита; по умолчанию `LIMIT_RETURN_GRACE_MS` и `LIMIT_RETRY_MS`. Рычаги E2E. */
+  limitReturn?: { graceMs?: number; retryMs?: number };
 }
 
 export interface WakeService {
@@ -96,6 +112,27 @@ const PASTE_MODE_RETRIES = 15;
  * пересчёт каждые 200 мс, до 30 с; дальше — до следующего события сессии.
  */
 const CHOICE_RETRIES = 150;
+
+/** Самый длинный срок `setTimeout`: больше — Node срабатывает сразу. Недельный лимит укладывается с запасом. */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * Эпизод лимита сессии, пока Parley ждёт срока возврата (спека застрявших 6.3). Ведётся по сессии, а не по точному
+ * `since`: индекс лога сдвигает `since` в том же эпизоде, и срок от этого уходить не должен.
+ */
+interface LimitEpisode {
+  /** Время сброса, по которому взят срок: появилось или сменилось — срок переставляется; сдвиг `since` — нет. */
+  resetsAt: string | null;
+  /** Когда пора вернуть сессию (мс от начала эпохи). */
+  due: number;
+  timer: NodeJS.Timeout | undefined;
+  /** Срок наступил: условия проверяются на каждом пересчёте, пока возврат не напечатан и не отказан. */
+  reached: boolean;
+  /** Исход принят — возврат напечатан либо отказан уведомлением; до конца эпизода второй раз не пробуем. */
+  settled: boolean;
+  /** Когда возврат напечатан (мс): `need` с более поздним `since` — уже новый эпизод, а не тот же. */
+  printedAt: number | null;
+}
 
 /** Состояние одной попытки доставки указателя, живёт между пересчётами сессии. */
 /** Причины, при которых письма живой сессии лежат и ждут сами по себе: о них — строка в логе. */
@@ -157,6 +194,15 @@ interface AttemptState {
   pasteRetries: number;
   /** Повторов пересчёта, пока идёт смена модели или effort (`CHOICE_RETRIES`); без смены счёт начинается заново. */
   choiceRetries: number;
+  /** Идущий эпизод лимита, срока возврата которого Parley ждёт; `undefined` — сессия не в лимите. */
+  limit: LimitEpisode | undefined;
+  /**
+   * Автовозвратов подряд (6.3): сбрасывается ходом без ошибки лимита и ходом не от будильника, то есть промптом
+   * человека. Живёт у сессии, а не у эпизода: возврат начинает ход, и ход снова упирается в лимит уже новым эпизодом.
+   */
+  returns: number;
+  /** Ход по нашему возврату: напечатан и не начался (`pending`), идёт (`running`); `null` — такого хода нет. */
+  returnTurn: 'pending' | 'running' | null;
 }
 
 
@@ -209,6 +255,8 @@ export function createWakeService(
   const enterDelayMs = options.enterDelayMs ?? DEFAULT_ENTER_DELAY_MS;
   const pointerTimeoutMs = options.pointerTimeoutMs ?? DEFAULT_POINTER_TIMEOUT_MS;
   const resumeFailWindowMs = options.resumeFailWindowMs ?? DEFAULT_RESUME_FAIL_WINDOW_MS;
+  const limitGraceMs = options.limitReturn?.graceMs ?? LIMIT_RETURN_GRACE_MS;
+  const limitRetryMs = options.limitReturn?.retryMs ?? LIMIT_RETRY_MS;
 
   // Как `silenceThresholdMs` в активности: настройка читается на старте.
   let resumeRate = DEFAULT_CONFIG.resumeRate;
@@ -248,6 +296,9 @@ export function createWakeService(
         pasteRetry: undefined,
         pasteRetries: 0,
         choiceRetries: 0,
+        limit: undefined,
+        returns: 0,
+        returnTurn: null,
       };
       attempts.set(key, state);
     }
@@ -530,6 +581,7 @@ export function createWakeService(
         // ход всё равно не будет замечен.
         clearTimers(state);
         state.inFlight = false;
+        abandonReturn(state);
         notice('pointer-timeout', ref, `session ${ref.sessionId} did not start a turn after the pointer`);
       }, pointerTimeoutMs);
     }
@@ -546,12 +598,14 @@ export function createWakeService(
         // не набираем, следующий подъём — только на новое письмо.
         clearTimers(state);
         state.inFlight = false;
+        abandonReturn(state);
         notice('pointer-cancelled', ref, `the pointer for session ${ref.sessionId} was cancelled by human input`);
       } else if (outcome === 'blocked') {
         // Агент показал диалог за паузу перед Enter: отвечать на него нельзя (рамка 15.1).
         // Указатель остаётся в поле ввода, письма — в `pointed`, как при вводе человека.
         clearTimers(state);
         state.inFlight = false;
+        abandonReturn(state);
         notice(
           'pointer-cancelled',
           ref,
@@ -568,6 +622,173 @@ export function createWakeService(
     });
   }
 
+  /** Возврат не дошёл до хода (указатель пропал, человек начал печатать, диалог): хода «по нашей просьбе» ждать нечего. */
+  function abandonReturn(state: AttemptState): void {
+    if (state.returnTurn === 'pending') state.returnTurn = null;
+  }
+
+  /** Эпизод лимита кончился или сессии больше нет: таймер возврата снимается, ничего не печатается. */
+  function dropLimit(state: AttemptState): void {
+    if (state.limit === undefined) return;
+    clearTimeout(state.limit.timer);
+    state.limit = undefined;
+  }
+
+  /**
+   * Взводит таймер эпизода на `due`. Срок уже прошёл — таймера нет, эпизод сразу `reached`. Дольше самого длинного
+   * `setTimeout` ждём ступенями: на ступени срок проверяется заново.
+   */
+  function armLimit(ref: SessionRef, episode: LimitEpisode, requested: number): void {
+    clearTimeout(episode.timer);
+    episode.timer = undefined;
+    // Непонятное время в `need` (NaN) срока не даёт: ждём повторный срок от сейчас, а не печатаем сразу.
+    const due = Number.isNaN(requested) ? Date.now() + limitRetryMs : requested;
+    episode.due = due;
+    const delay = due - Date.now();
+    if (delay <= 0) {
+      episode.reached = true;
+      return;
+    }
+    episode.reached = false;
+    episode.timer = setTimeout(() => {
+      episode.timer = undefined;
+      if (episode.due - Date.now() > 1000) armLimit(ref, episode, episode.due);
+      else episode.reached = true;
+      recompute(ref);
+    }, Math.min(delay, MAX_TIMER_MS));
+    // Хост живёт клиентами и сессиями, а не этим таймером (срок бывает в днях): он не должен удерживать процесс.
+    episode.timer.unref?.();
+  }
+
+  /**
+   * Возврат после сброса лимита (спека застрявших 6.3). Эпизод берётся из `need` активности сессии: пока он `limit` и
+   * процесс жив, на срок (`limitReturnDue`) взведён один таймер. Claude Code с собственным ожиданием продолжит сам —
+   * начало хода снимет `need`, и к сроку печатать будет нечего; остальных (Codex, GLM, Claude без ожидания) Parley
+   * возвращает печатью. Зовётся на каждом пересчёте сессии: ведёт эпизод, счётчик возвратов и, когда срок наступил,
+   * пробует вернуть сессию.
+   */
+  function trackLimit(
+    ref: SessionRef,
+    state: AttemptState,
+    entry: WorkEntry,
+    session: WorkSession,
+    handle: PtyHandle | undefined,
+  ): void {
+    if (handle === undefined) {
+      // Процесс вышел: эпизод кончился без «back», спящую Parley сам не поднимает (6.3).
+      state.returnTurn = null;
+      dropLimit(state);
+      return;
+    }
+    const act: SessionActivity | undefined = activity.get(ref)?.activity;
+
+    // Счётчик возвратов (6.3): ход начался не от будильника — это промпт человека; ход по возврату кончился без
+    // ошибки лимита — сессия вернулась по-настоящему. Кончился ошибкой (`need` не пуст) — счёт остаётся.
+    if (act !== undefined) {
+      if (act.activity === 'working' && !act.heldByBackground) {
+        if (state.returnTurn === 'pending') state.returnTurn = 'running';
+        else if (state.returnTurn === null) state.returns = 0;
+      } else if ((act.activity === 'idle' || act.activity === 'unseen') && state.returnTurn === 'running') {
+        state.returnTurn = null;
+        if (act.need === null) state.returns = 0;
+      }
+    }
+
+    const need = session.lifecycle === 'active' ? (act?.need ?? null) : null;
+    if (need === null || need.kind !== 'limit') {
+      dropLimit(state);
+      return;
+    }
+    let episode = state.limit;
+    // Возврат напечатан, а `need` с более поздним `since`: ход и ошибка уложились в одну склейку активности, `need` не
+    // был пуст ни разу — лимит новый, а не тот же.
+    if (episode?.printedAt != null && Date.parse(need.since) > episode.printedAt) {
+      dropLimit(state);
+      state.returnTurn = null;
+      // Ход по просьбе был: указатель не «в полёте», и предохранитель, ждавший его начала, не нужен.
+      clearTimers(state);
+      state.inFlight = false;
+      episode = undefined;
+    }
+    if (episode === undefined) {
+      episode = { resetsAt: need.resetsAt, due: 0, timer: undefined, reached: false, settled: false, printedAt: null };
+      state.limit = episode;
+      armLimit(ref, episode, limitReturnDue(need, limitGraceMs, limitRetryMs));
+    } else if (!episode.settled && need.resetsAt !== null && need.resetsAt !== episode.resetsAt) {
+      // Время сброса появилось или уточнилось (квота GLM, данные провайдера): срок идёт от него.
+      episode.resetsAt = need.resetsAt;
+      armLimit(ref, episode, limitReturnDue(need, limitGraceMs, limitRetryMs));
+    }
+    // Время сброса неизвестно, а окно провайдера снова свободно — возвращаем сразу, не дожидаясь повторного срока.
+    if (
+      !episode.reached &&
+      !episode.settled &&
+      options.limits !== undefined &&
+      limitWindowFree(need, options.limits.get(session.provider))
+    ) {
+      clearTimeout(episode.timer);
+      episode.timer = undefined;
+      episode.reached = true;
+    }
+    if (episode.reached && !episode.settled) tryLimitReturn(ref, state, entry, session, handle, episode, act);
+  }
+
+  /**
+   * Срок возврата наступил. Не вовремя — ждём, повтор на следующем пересчёте (конец хода, `resume()`): сессия не у
+   * приглашения, будильник на паузе, свой указатель ещё в полёте. Помешали черновик, меню лимита или два возврата подряд —
+   * печатать нельзя, человек получает `limit-return-blocked` с причиной, эпизод остаётся (6.3, 6.4). Иначе — тот же путь,
+   * что у указателя: печать и Enter.
+   */
+  function tryLimitReturn(
+    ref: SessionRef,
+    state: AttemptState,
+    entry: WorkEntry,
+    session: WorkSession,
+    handle: PtyHandle,
+    episode: LimitEpisode,
+    act: SessionActivity | undefined,
+  ): void {
+    if (isPaused || state.typing !== undefined || state.inFlight) return;
+    if (act?.activity !== 'unseen' && act?.activity !== 'idle') return;
+
+    const block = returnBlock({ hasDraft: handle.hasDraft(), screen: pty.screenText(ref), returns: state.returns });
+    if (block !== null) {
+      episode.settled = true;
+      notice(
+        'limit-return-blocked',
+        ref,
+        `The limit has reset, but ${sessionTag(ref.sessionId)} could not continue: ${returnBlockReason(block)}`,
+      );
+      return;
+    }
+    const codex = handle.provider === 'codex';
+    // Как у указателя: Codex только вставкой, а режима вставки на экране может ещё не быть; смена модели или effort идёт.
+    if (codex && !handle.bracketedPaste()) {
+      retryLater(ref, state, 'paste');
+      return;
+    }
+    if (choiceNow(ref)) {
+      retryLater(ref, state, 'choice');
+      return;
+    }
+    state.pasteRetries = 0;
+    state.choiceRetries = 0;
+
+    const letters = unreadFor(entry.map, session.id).filter((message) => message.deleted !== true);
+    const letterIds = letters.map((message) => message.id);
+    beginAttempt(
+      ref,
+      state,
+      { text: limitReturnText(letters, entry.map.rooms), letterIds, ...traceOf(letters, letterIds) },
+      codex,
+    );
+    episode.settled = true;
+    episode.printedAt = Date.now();
+    state.returns += 1;
+    state.returnTurn = 'pending';
+    host.log.info('будильник: возврат после сброса лимита', { ref, returns: state.returns, letters: letterIds.length });
+  }
+
   function recompute(ref: SessionRef): void {
     if (!started) return;
     const entry = works.entry(ref.projectPath, ref.workId);
@@ -578,6 +799,7 @@ export function createWakeService(
 
     const state = stateFor(refKey(ref));
     const handle = pty.get(ref);
+    trackLimit(ref, state, entry, session, handle);
 
     if (handle === undefined) {
       const letters = unreadFor(entry.map, session.id).length > 0;
@@ -796,6 +1018,8 @@ export function createWakeService(
       unsubscribeExit = pty.on('exit', (ref, exit) => {
         const state = stateFor(refKey(ref));
         clearTimers(state);
+        dropLimit(state);
+        state.returnTurn = null;
         state.inFlight = false;
         state.pointerAfter = null;
         // Уснувшую будят новые письма, а не те, что лежали при выходе: иначе
@@ -839,7 +1063,10 @@ export function createWakeService(
       unsubscribeDraft?.();
       unsubscribeHostDraft?.();
       unsubscribeExit?.();
-      for (const state of attempts.values()) clearTimers(state);
+      for (const state of attempts.values()) {
+        clearTimers(state);
+        dropLimit(state);
+      }
       attempts.clear();
     },
   };
