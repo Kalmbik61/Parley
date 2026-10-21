@@ -1395,14 +1395,56 @@ describe('createAttentionNotifier.onActivity — причина need, сигна
     expect(h.chimes).toBe(0);
   });
 
-  it('остров показал запрос с карточкой — уведомления macOS нет, а сигнал звучит: звук на переходе уровня, не в send()', async () => {
+  // Решение 6: один звук на переход в needs-you. Запрос, который показывает остров, звучит его собственным сигналом
+  // (`IslandApp`, `beep`), поэтому сигнал окна молчит; признак «остров показывает» — тот же, что глушит баннер.
+  it('(а) остров включён и показывает сессию: ни баннера, ни сигнала окна — звучит сигнал острова', async () => {
+    const withCard = harness([redesign()]);
+    withCard.island = true;
+    withCard.asks = [{ cardId: 'c-1', summary: 'Run: npm test', inWindow: true }];
+    hit(withCard, ref2, 'blocked', makeNeed('approval', { detail: 'npm test' }));
+    await settle();
+    expect(withCard.notes).toEqual([]);
+    expect(withCard.chimes).toBe(0);
+
+    // Codex остров показывает и без карточки — переходом к терминалу, причём с `need` (лимит) тоже.
+    const codex = harness([codexPair()]);
+    codex.island = true;
+    hit(codex, ref2, 'unseen', makeNeed('limit', { resetsAt: resetAt(16, 27) }));
+    await settle();
+    expect(codex.notes).toEqual([]);
+    expect(codex.chimes).toBe(0);
+  });
+
+  it('(б) остров выключен: баннер беззвучный, звенит окно один раз', async () => {
     const h = harness([redesign()]);
-    h.island = true;
+    h.island = false;
     h.asks = [{ cardId: 'c-1', summary: 'Run: npm test', inWindow: true }];
     hit(h, ref2, 'blocked', makeNeed('approval', { detail: 'npm test' }));
     await settle();
-    expect(h.notes).toEqual([]);
+    expect(h.notes).toHaveLength(1);
+    expect(h.notes[0]?.silent).toBe(true);
     expect(h.chimes).toBe(1);
+  });
+
+  it('(в) остров включён, но этой потребности в нём нет: Claude без карточки (лимит) и завершённая работа — окно звенит', async () => {
+    // Лимит у Claude: карточки ленты нет, остров запроса не покажет — баннер и сигнал окна.
+    const limit = harness([entry('Redesign', [session('s-02', 'executor')])]);
+    limit.island = true;
+    hit(limit, ref2, 'unseen', makeNeed('limit', { resetsAt: resetAt(16, 27) }));
+    await settle();
+    expect(limit.notes).toHaveLength(1);
+    expect(limit.chimes).toBe(1);
+
+    // Работа завершена: остров её запросы пропускает, даже при найденной карточке.
+    const done = redesign();
+    done.map.work.status = 'done';
+    const finished = harness([done]);
+    finished.island = true;
+    finished.asks = [{ cardId: 'c-1', summary: 'Run: npm test', inWindow: true }];
+    hit(finished, ref2, 'blocked', makeNeed('approval', { detail: 'npm test' }));
+    await settle();
+    expect(finished.notes).toHaveLength(1);
+    expect(finished.chimes).toBe(1);
   });
 
   it('остров, цель видна — сигнала нет; sound: false — сигнала нет, баннер остаётся; needsYou: false — ничего', async () => {
