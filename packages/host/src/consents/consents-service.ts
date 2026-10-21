@@ -284,7 +284,7 @@ export function createConsentsService(deps: ConsentsDeps): ConsentsService {
       trimDecided();
       save();
       const action = decision === 'allow' ? deps.continueLaunch : deps.refuseLaunch;
-      const label = decision === 'allow' ? 'продолжение' : 'отказ';
+      const label = decision === 'allow' ? 'continuation' : 'refusal';
       // В фоне: запуск процесса занимает секунды, а ответ человеку («Done ✓», «Trusted ✓») ждать его не должен.
       for (const hold of holds) void run(label, hold, action);
       emit({ upsert: [], removed: [id] });

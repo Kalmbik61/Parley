@@ -77,7 +77,7 @@ export const useConsentsStore = create<ConsentsState>((set) => ({
     };
   },
   decide: async (id, decision) => {
-    if (current === null) throw new Error('consents: нет подключения');
+    if (current === null) throw new Error('consents: not connected');
     const { applied } = await current.call('consents.decide', { id, decision });
     return { applied };
   },
