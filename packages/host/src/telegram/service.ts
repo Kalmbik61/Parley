@@ -17,7 +17,7 @@ import {
 } from '@parley/core';
 import type { FeedCard, FeedCardState, FeedDecision, FeedItem, FeedText, ParleyConfig, WorkEntry, WorkSession } from '@parley/core';
 import { refKey } from '@parley/protocol';
-import type { AssistantProposal, Params, Result, SessionRef, TelegramPolling, TelegramStatus } from '@parley/protocol';
+import type { AssistantProposal, ConsentCard, Params, Result, SessionRef, TelegramPolling, TelegramStatus } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { AssistantService } from '../assistant/assistant-service.js';
 import type { Client } from '../client.js';
@@ -30,7 +30,7 @@ import type { BotApi } from './api.js';
 import { createAssistantBridge } from './assistant-bridge.js';
 import type { AssistantBridge } from './assistant-bridge.js';
 import { CALLBACK_CODES, parseCallback } from './callbacks.js';
-import { assistantCardMessage, feedCardMessage, feedDecisionFor, receiptText, roomCardMessage } from './cards.js';
+import { assistantCardMessage, consentCardMessage, feedCardMessage, feedDecisionFor, receiptText, roomCardMessage } from './cards.js';
 import { clipText, escapeHtml, lastLines } from './format.js';
 import { classify } from './ingress.js';
 import { createLinkCode, deepLink, LINK_ATTEMPTS, matchLinkCode } from './link.js';
@@ -52,6 +52,12 @@ export interface TelegramServiceDeps {
   activity: Pick<ActivityService, 'get' | 'onChange'>;
   feed?: Pick<FeedService, 'snapshot' | 'decide' | 'subscribe' | 'unsubscribe'>;
   assistant: Pick<AssistantService, 'ask' | 'cancel' | 'reset' | 'decide' | 'onState' | 'settings' | 'state'>;
+  /** Карточки согласия на папку (`ConsentsService` хоста): структурно, без импорта модуля согласий. */
+  consents?: {
+    list(): ConsentCard[];
+    decide(id: string, decision: 'allow' | 'deny'): Promise<{ applied: boolean; state: ConsentCard['state'] }>;
+    onChange(listener: (change: { upsert: ConsentCard[]; removed: string[] }) => void): () => void;
+  };
   /** `sendHumanLetter(input, { via: 'telegram' })`. */
   sendLetter(input: Params<'rooms.send'>): Promise<string>;
   resolveRoomProposal(input: Params<'rooms.resolveProposal'>): Promise<string>;
@@ -83,6 +89,7 @@ export interface TelegramService {
 
 type FeedRecord = Extract<CardRecord, { kind: 'feed' }>;
 type RoomRecord = Extract<CardRecord, { kind: 'room' }>;
+type ConsentRecord = Extract<CardRecord, { kind: 'consent' }>;
 type SendOptions = { keyboard?: InlineKeyboard | null; silent?: boolean; plain?: boolean };
 type FeedSnapshot = Result<'feed.snapshot'>;
 
@@ -168,6 +175,8 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   const closeEarly = new Map<string, string>();
   /** Карточки с несколькими вопросами, чей следующий вопрос ещё уходит: повторное нажатие не должно слать его снова. */
   const advancing = new Set<string>();
+  /** Согласия, по которым `consents.decide` ещё идёт: своё решение закрывает карточку само, событие хоста её не трогает. */
+  const deciding = new Set<string>();
   /** Повторные обходы ленты пока сессия `blocked`, по `refKey`. */
   const watches = new Map<string, Array<ReturnType<typeof setTimeout>>>();
   let voiceTail: Promise<void> = Promise.resolve();
@@ -343,6 +352,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
 
   const cardHeader = (record: CardRecord): string => {
     if (record.kind === 'feed') return `<b>${escapeHtml(record.sessionName)}</b>`;
+    if (record.kind === 'consent') return `<b>${escapeHtml(T.consentHeader)}</b>`;
     return record.kind === 'room' ? `<b>${escapeHtml(record.roomTitle)}</b>` : '';
   };
   const closedText = (shortId: string, record: CardRecord, text: string): string => {
@@ -802,10 +812,83 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     if (sending.has(`assistant:${proposalId}`)) closeEarly.set(`assistant:${proposalId}`, text);
   }
 
+  // ── Карточки согласия на папку ─────────────────────────────────────────────────────────────────
+
+  /** `S03 Ruslan (agent)`; без названной сессии — только источник запуска. */
+  const consentLabel = ({ requestedBy }: ConsentCard): string => {
+    const who = requestedBy.label ?? requestedBy.sessionId;
+    return who === undefined ? requestedBy.source : `${who} (${requestedBy.source})`;
+  };
+
+  function sendConsentCard(card: ConsentCard): void {
+    const sendKey = `consent:${card.id}`;
+    if (cfg?.telegramCards !== true || sending.has(sendKey)) return;
+    if (state.cardsFor((record) => record.kind === 'consent' && record.consentId === card.id).length > 0) return;
+    const shortId = state.newShortId();
+    const message = consentCardMessage({ card, projectName: path.basename(card.projectPath), requestedByLabel: consentLabel(card), shortId });
+    sending.add(sendKey);
+    send(
+      'card',
+      message.text,
+      { keyboard: message.keyboard },
+      (messageId, chatId) => {
+        state.putCard(shortId, { kind: 'consent', consentId: card.id, chatId, messageId, at: iso() });
+        originals.set(shortId, message.text);
+        const early = closeEarly.get(sendKey);
+        if (early !== undefined) closeCard(shortId, early);
+      },
+      () => {
+        sending.delete(sendKey);
+        closeEarly.delete(sendKey);
+      },
+    );
+  }
+
+  /** Карточка закрыта решением в другом месте (окно, остров) или убрана хостом. */
+  function closeConsentCard(consentId: string): void {
+    if (deciding.has(consentId)) return;
+    for (const [shortId] of state.cardsFor((card) => card.kind === 'consent' && card.consentId === consentId)) closeCard(shortId, T.answeredAtMac);
+    const sendKey = `consent:${consentId}`;
+    if (sending.has(sendKey)) closeEarly.set(sendKey, T.answeredAtMac);
+  }
+
+  function onConsentsChanged(change: { upsert: ConsentCard[]; removed: string[] }): void {
+    if (!canSend()) return;
+    for (const card of change.upsert) {
+      if (card.state === 'pending') sendConsentCard(card);
+      else closeConsentCard(card.id);
+    }
+    for (const id of change.removed) closeConsentCard(id);
+  }
+
+  /** Старт канала: согласия, что ждут с прошлого запуска, уходят в чат (прежние карточки к этому моменту закрыты). */
+  function sendPendingConsents(): void {
+    if (!canSend()) return;
+    for (const card of deps.consents?.list() ?? []) if (card.state === 'pending') sendConsentCard(card);
+  }
+
+  async function consentAction(shortId: string, record: ConsentRecord, code: string): Promise<void> {
+    if (deps.consents === undefined) {
+      closeCard(shortId, T.noLongerCurrent);
+      return;
+    }
+    if (deciding.has(record.consentId)) return;
+    const decision = code === CALLBACK_CODES.allow ? 'allow' : 'deny';
+    deciding.add(record.consentId);
+    let result: { applied: boolean; state: ConsentCard['state'] };
+    try {
+      result = await deps.consents.decide(record.consentId, decision);
+    } finally {
+      deciding.delete(record.consentId);
+    }
+    state.audit({ kind: 'decision', shortId, result: result.applied ? decision : `not applied (${result.state})` });
+    closeCard(shortId, !result.applied ? T.answeredAtMac : decision === 'allow' ? T.trusted : T.denied);
+  }
+
   // ── Входящие ────────────────────────────────────────────────────────────────────────────────────
 
   const waitingCard = (): [string, FeedRecord | RoomRecord] | null => {
-    const waiting = state.cardsFor((card) => card.kind !== 'assistant' && card.wait !== undefined && Date.parse(card.wait.until) > now()) as Array<[string, FeedRecord | RoomRecord]>;
+    const waiting = state.cardsFor((card) => card.kind !== 'assistant' && card.kind !== 'consent' && card.wait !== undefined && Date.parse(card.wait.until) > now()) as Array<[string, FeedRecord | RoomRecord]>;
     waiting.sort(([, a], [, b]) => Date.parse(b.wait?.until ?? '') - Date.parse(a.wait?.until ?? ''));
     return waiting[0] ?? null;
   };
@@ -949,6 +1032,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       const record = parsed === null ? undefined : state.get().cards[parsed.shortId];
       if (parsed === null || record === undefined || record.kind === 'assistant') toast = forget();
       else if (record.kind === 'feed') toast = await feedAction(parsed.shortId, record, parsed.code);
+      else if (record.kind === 'consent') await consentAction(parsed.shortId, record, parsed.code);
       else await roomAction(parsed.shortId, record, parsed.code);
     } finally {
       await answer(toast);
@@ -1064,6 +1148,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       log,
     });
     poller.start({ skipBacklog: true });
+    sendPendingConsents();
     syncHold();
   }
 
@@ -1116,6 +1201,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
         deps.works.onChange((snapshot) => onWorks(snapshot)),
         deps.activity.onChange((ref, live) => onActivity(ref, live)),
       );
+      if (deps.consents !== undefined) unsubs.push(deps.consents.onChange((change) => onConsentsChanged(change)));
       begin(T.restarted);
       // База для `changed()`: окно уже знает это состояние из `telegram.status`, повторять его событием незачем.
       lastBroadcast = statusKey();

@@ -2,7 +2,7 @@
 
 import { cardDetail } from '@parley/core/card-gist';
 import type { FeedCard, FeedDecision, FeedQuestionCard, Proposal } from '@parley/core';
-import type { AssistantProposal } from '@parley/protocol';
+import type { AssistantProposal, ConsentCard } from '@parley/protocol';
 import { CALLBACK_CODES } from './callbacks.js';
 import { clipText, escapeHtml } from './format.js';
 import { B, T } from './texts.js';
@@ -82,6 +82,15 @@ export function roomCardMessage(input: { roomTitle: string; where: string; propo
   return {
     text: lines.join('\n'),
     keyboard: [[button(B.acceptDecision, pc1(input.shortId, CALLBACK_CODES.accept)), button(B.returnNote, pc1(input.shortId, CALLBACK_CODES.returnNote))]],
+  };
+}
+
+/** Карточка согласия на папку (спека 2026-10-21, 4.4): Trust и Deny — те же коды `a` и `d`, что у разрешения в ленте. */
+export function consentCardMessage(input: { card: ConsentCard; projectName: string; requestedByLabel: string; shortId: string }): { text: string; keyboard: InlineKeyboard } {
+  const lines = [`<b>${escapeHtml(T.consentTitle)}</b>`, escapeHtml(input.card.folder), escapeHtml(T.consentRequestedBy(input.requestedByLabel, input.projectName))];
+  return {
+    text: lines.join('\n'),
+    keyboard: [[button(B.trust, pc1(input.shortId, CALLBACK_CODES.allow)), button(B.deny, pc1(input.shortId, CALLBACK_CODES.deny))]],
   };
 }
 

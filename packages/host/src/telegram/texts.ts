@@ -83,6 +83,11 @@ export const T = {
   assistantReturnDecision: (lead: string): string => `Return to ${lead} for rework?`,
   assistantAskTitle: (verb: string, name: string): string => `${verb} ${name}?`,
   assistantPlanTitle: (verb: string, name: string): string => `${verb} of ${name}?`,
+  consentHeader: 'Trust folder',
+  consentTitle: 'Trust folder for agents?',
+  consentRequestedBy: (label: string, project: string): string => `Requested by ${label} · ${project}`,
+  trusted: 'Trusted ✓',
+  denied: 'Denied',
 } as const;
 
 /** Подписи inline-кнопок. */
@@ -101,4 +106,5 @@ export const B = {
   answer: 'Answer',
   return: 'Return',
   wakeAndSend: 'Wake and send',
+  trust: 'Trust',
 } as const;

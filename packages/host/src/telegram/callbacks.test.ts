@@ -5,6 +5,10 @@ describe('parseCallback', () => {
   it('разбирает карточку pc1', () => {
     expect(parseCallback('pc1:aB3dE9fG:q2')).toEqual({ family: 'pc1', shortId: 'aB3dE9fG', code: 'q2' });
   });
+  it('разбирает кнопки карточки согласия: pc1:<shortId>:a и :d', () => {
+    expect(parseCallback('pc1:abc:a')).toEqual({ family: 'pc1', shortId: 'abc', code: CALLBACK_CODES.allow });
+    expect(parseCallback('pc1:abc:d')).toEqual({ family: 'pc1', shortId: 'abc', code: CALLBACK_CODES.deny });
+  });
   it('разбирает карточку помощника pa1', () => {
     expect(parseCallback('pa1:p7:send')).toEqual({ family: 'pa1', proposalId: 'p7', code: 'send' });
   });
