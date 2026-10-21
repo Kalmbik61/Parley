@@ -529,6 +529,30 @@ describe('окно операции, выбор файла, скачивания
     // Аренда отпущена вместе с одолжением: следующая операция ввода идёт (тишина — после погашенных нажатий).
     await expect(silent.typed()).resolves.toBe('typed');
   });
+
+  it('исключение в конце операции (окно не приняло end) не держит аренду клавиатуры навсегда: следующий ввод идёт (повторная рецензия, minor-1)', async () => {
+    const guest = fakeGuest(7);
+    const registry = createPageRegistry({ fromId: (id) => (id === 7 ? (guest as unknown as WebContents) : null) });
+    registry.register({ kind: 'hello', generation: GEN });
+    registry.register({ kind: 'page', generation: GEN, webContentsId: 7, workKey: WORK, owner: OWN, pageId: 'bp-aaaaaa', visible: true });
+    const typing = createTypingClock();
+    typing.track(guest as unknown as WebContents);
+    const borrower: ReturnType<typeof createFocusBorrower> = createFocusBorrower({ typing, focusMs: 200, focusReturnMs: 20, requestFocus: (_c, id) => { queueMicrotask(() => borrower.focusReady(id, true)); return true; } });
+    let broken = true;
+    const activity = (e: AgentActivity): void => {
+      if (e.phase === 'end' && broken) {
+        broken = false;
+        throw new Error('window gone');
+      }
+    };
+    const runner = createPageRunner({ registry, agentsAllowed: async () => true, activity, typing, focusReturned: borrower.focusReturned });
+    const typed = (): Promise<string> => runner.run(request('action'), 't1', async (contents, _record, guard) => {
+      await borrower.borrow('t1')(contents, guard);
+      return 'typed';
+    }, { changes: true });
+    await expect(typed()).rejects.toThrow('window gone');
+    await expect(typed()).resolves.toBe('typed');
+  });
 });
 
 describe('snapshot и wait_for через createAgentOps (задача 16)', () => {

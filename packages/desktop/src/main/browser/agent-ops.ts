@@ -279,21 +279,27 @@ export function createPageRunner(deps: {
         throw pageFailure(record, contents, signal, error);
       } finally {
         running.delete(entry);
-        endWindow?.();
         const held = lent;
-        // Окно возвращает фокус человеку по `end` и подтверждает это ответом на `focus.id`. До подтверждения (не дольше
-        // `focusReturnMs`) нажатие в странице агента всё ещё чужое: оно гасится, а обрывать уже нечего (финальная рецензия m1).
-        // Аренда клавиатуры — тогда же: просьба о фокусе следующей операции придёт окну после возврата этой.
-        const back = held === null || deps.focusReturned === undefined ? null : randomUUID();
-        // Ожидание ставится до `end`: окно может ответить раньше, чем main вернётся сюда.
-        const returned = back === null || deps.focusReturned === undefined ? null : deps.focusReturned(back);
-        deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'end', ...(back === null ? {} : { focus: { id: back } }) });
         const free = (): void => {
           held?.unlend();
           held?.release();
         };
-        if (returned === null) free();
-        else void returned.then(free);
+        let returned: Promise<unknown> | null = null;
+        // Сбой окна или журнала в конце операции не должен держать общую аренду клавиатуры навсегда (повторная рецензия,
+        // minor-1): освобождение назначается во внутреннем finally при любом исходе.
+        try {
+          endWindow?.();
+          // Окно возвращает фокус человеку по `end` и подтверждает это ответом на `focus.id`. До подтверждения (не дольше
+          // `focusReturnMs`) нажатие в странице агента всё ещё чужое: оно гасится, а обрывать уже нечего (финальная рецензия
+          // m1). Аренда клавиатуры — тогда же: просьба о фокусе следующей операции придёт окну после возврата этой.
+          const back = held === null || deps.focusReturned === undefined ? null : randomUUID();
+          // Ожидание ставится до `end`: окно может ответить раньше, чем main вернётся сюда.
+          returned = back === null || deps.focusReturned === undefined ? null : deps.focusReturned(back);
+          deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'end', ...(back === null ? {} : { focus: { id: back } }) });
+        } finally {
+          if (returned === null) free();
+          else void returned.then(free, free);
+        }
       }
     });
   }
