@@ -18,16 +18,24 @@ const VOLUME = 0.2;
 /** Один `AudioContext` на окно: браузер ограничивает их число, а создание дорогое. */
 let audio: AudioContext | null = null;
 
+/** Предупреждение уже было: звук, который не заводится, не должен засорять консоль на каждом сигнале. */
+let warned = false;
+function warnOnce(error: unknown): void {
+  if (warned) return;
+  warned = true;
+  console.warn('[parley] chime failed', error);
+}
+
 /**
  * Проигрывает сигнал: два синуса по `TONE_LENGTH_S`, атака `ATTACK_S`, дальше спад до тишины. Контекст, который
- * браузер усыпил (`suspended`, пока человек не касался окна), будится `resume()`. Любая ошибка WebAudio — одно
- * предупреждение в консоль: уведомление важнее звука, и падать из-за него нельзя.
+ * браузер усыпил (`suspended`, пока человек не касался окна), будится `resume()`. Любая ошибка WebAudio, и отказ
+ * `resume()` тоже, — одно предупреждение в консоль на окно: уведомление важнее звука, и падать из-за него нельзя.
  */
 export function playChimeTone(): void {
   try {
     audio ??= new AudioContext();
     const context = audio;
-    if (context.state === 'suspended') void context.resume().catch(() => undefined);
+    if (context.state === 'suspended') void context.resume().catch(warnOnce);
     const base = context.currentTime;
     TONES_HZ.forEach((frequency, index) => {
       const start = base + (TONE_STARTS_S[index] ?? 0);
@@ -44,7 +52,7 @@ export function playChimeTone(): void {
       oscillator.stop(start + TONE_LENGTH_S);
     });
   } catch (error: unknown) {
-    console.warn('[parley] chime failed', error);
+    warnOnce(error);
   }
 }
 

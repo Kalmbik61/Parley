@@ -10,6 +10,7 @@ import { refKey, type HostNotice, type SessionRef } from '@parley/protocol';
 import type { AppNote, FocusTarget } from '../../shared/bridge.js';
 import { providerName } from '../../shared/strings.js';
 import { DEFAULT_UI, type UiFile } from '../../shared/ui-types.js';
+import { AudioContextStub } from '../test-utils/audio.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { makeNeed } from '../test-utils/work-fixtures.js';
 import { useActivityStore } from '../store/activity.js';
@@ -18,7 +19,7 @@ import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
 import type { PendingAsk } from './ask-summary.js';
-import { createAttentionNotifier, wireAttentionNotifications } from './notify.js';
+import { createAttentionNotifier, NEED_SETTLE_MS, wireAttentionNotifications } from './notify.js';
 import { useWindowNotesStore, type WindowNote } from './window-notes.js';
 
 function session(id: string, label: string, overrides: Partial<WorkSession> = {}): WorkSession {
@@ -241,12 +242,15 @@ describe('createAttentionNotifier.onActivity (тест 2 куска 4.3)', () =>
   describe('«нужен ты» с вопросом: строка ask, строка проекта, повтор, цель-карточка', () => {
     const run: PendingAsk = { cardId: 'c-1', summary: 'Run: npm test', inWindow: true };
 
-    it('ask найден — тело «Run: …» и имя проекта, цель с cardId; запрос один, без паузы', async () => {
+    it('ask найден — тело «Run: …» и имя проекта, цель с cardId; запрос один, без паузы повтора (после паузы NEED_SETTLE_MS)', async () => {
       const h = harness([redesign()]);
       h.asks = [run];
       h.notifier.onActivity(ref2, live('working'));
       h.notifier.onActivity(ref2, live('blocked'));
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(NEED_SETTLE_MS - 1);
+      expect(h.notes).toEqual([]);
+      expect(h.pendingAsk).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
       expect(h.notes).toMatchObject([
         { body: 'Run: npm test\np', target: { kind: 'session', ref: ref2, cardId: 'c-1' } },
       ]);
@@ -264,12 +268,12 @@ describe('createAttentionNotifier.onActivity (тест 2 куска 4.3)', () =>
       expect(h.notes[0]?.target).toEqual({ kind: 'session', ref: ref2 });
     });
 
-    it('карточка не нашлась дважды — через 500 мс запасной текст: первая строка задачи и проект, цель без cardId', async () => {
+    it('карточка не нашлась дважды — через 500 мс после паузы запасной текст: первая строка задачи и проект, цель без cardId', async () => {
       const h = harness([redesign()]);
       h.asks = [null, null];
       h.notifier.onActivity(ref2, live('working'));
       h.notifier.onActivity(ref2, live('blocked'));
-      await vi.advanceTimersByTimeAsync(499);
+      await vi.advanceTimersByTimeAsync(NEED_SETTLE_MS + 499);
       expect(h.notes).toEqual([]);
       await vi.advanceTimersByTimeAsync(1);
       expect(h.pendingAsk).toHaveBeenCalledTimes(2);
@@ -1122,6 +1126,8 @@ describe('wireAttentionNotifications на подставном мосте и н�
   }
 
   beforeEach(() => {
+    // Настоящий сигнал окна звонит и здесь; без подставного AudioContext jsdom печатал бы `chime failed`.
+    vi.stubGlobal('AudioContext', AudioContextStub);
     bridge = createFakeBridge();
     useActivityStore.setState({ byRef: {} });
     useWindowNotesStore.setState({ notes: [] });
@@ -1137,6 +1143,7 @@ describe('wireAttentionNotifications на подставном мосте и н�
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('повтор blocked двух сессий — база; третья working → blocked — одно; после переподключения повтор снова база', async () => {
@@ -1384,6 +1391,42 @@ describe('createAttentionNotifier.onActivity — причина need, сигна
     await settle();
     expect(h.notes).toEqual([]);
     expect(h.chimes).toBe(0);
+  });
+
+  // Спека застрявших 3.2, 7.1: уведомление уходит через NEED_SETTLE_MS после входа в needs-you, с последним `need`.
+  it('карточка нашлась сразу, но сессия вышла из needs-you за 0,5 с — ни уведомления, ни сигнала, ни запроса карточки', async () => {
+    const h = harness([redesign()]);
+    h.asks = [{ cardId: 'c-1', summary: 'Run: npm test', inWindow: true }];
+    hit(h, ref2, 'blocked', makeNeed('approval', { detail: 'npm test' }));
+    await vi.advanceTimersByTimeAsync(NEED_SETTLE_MS / 2);
+    h.notifier.onActivity(ref2, live('working'));
+    await settle();
+    expect(h.notes).toEqual([]);
+    expect(h.chimes).toBe(0);
+    expect(h.pendingAsk).not.toHaveBeenCalled();
+  });
+
+  it('вошла, вышла и снова вошла за паузу — одно уведомление и один сигнал, а не по одному на вход', async () => {
+    const h = harness([redesign()]);
+    hit(h, ref2, 'blocked', makeNeed('approval', { detail: 'ls -la' }));
+    await vi.advanceTimersByTimeAsync(300);
+    h.notifier.onActivity(ref2, live('working'));
+    h.notifier.onActivity(ref2, liveNeed('blocked', makeNeed('approval', { detail: 'ls -la' })));
+    await settle();
+    expect(h.notes).toHaveLength(1);
+    expect(h.chimes).toBe(1);
+  });
+
+  it('need уточнился за паузу (question -> approval): в баннере последний, баннер и сигнал одни', async () => {
+    const h = harness([redesign()]);
+    hit(h, ref2, 'blocked', makeNeed('question'));
+    await vi.advanceTimersByTimeAsync(NEED_SETTLE_MS / 2);
+    // Тот же уровень «нужен ты»: повода для нового уведомления нет, но `need` обновился.
+    h.notifier.onActivity(ref2, liveNeed('blocked', makeNeed('approval', { detail: 'ls -la' })));
+    await settle();
+    expect(h.notes).toHaveLength(1);
+    expect(h.notes[0]?.body.split('\n')[0]).toBe('Waiting for your approval: ls -la');
+    expect(h.chimes).toBe(1);
   });
 
   it('цель видна — ни уведомления, ни сигнала', async () => {

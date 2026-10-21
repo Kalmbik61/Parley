@@ -51,7 +51,7 @@ describe('createChime', () => {
 });
 
 /** Подставной AudioContext: журнал осцилляторов и огибающих. */
-function fakeAudio(state: 'running' | 'suspended' = 'running') {
+function fakeAudio(state: 'running' | 'suspended' = 'running', resumeImpl: () => Promise<undefined> = async () => undefined) {
   const oscillators: Array<{
     type: string;
     frequency: { value: number };
@@ -63,7 +63,7 @@ function fakeAudio(state: 'running' | 'suspended' = 'running') {
     gain: { value: number; setValueAtTime: ReturnType<typeof vi.fn>; linearRampToValueAtTime: ReturnType<typeof vi.fn> };
     connect: ReturnType<typeof vi.fn>;
   }> = [];
-  const resume = vi.fn(async () => undefined);
+  const resume = vi.fn(resumeImpl);
   const instances: unknown[] = [];
   class FakeContext {
     state = state;
@@ -128,6 +128,24 @@ describe('playChimeTone', () => {
     fresh.playChimeTone();
     expect(audio.instances).toHaveLength(1);
     expect(audio.resume).toHaveBeenCalled();
+  });
+
+  it('resume() отказал — один console.warn на окно, а не молчание и не по предупреждению на каждый сигнал', async () => {
+    vi.resetModules();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const audio = fakeAudio('suspended', async () => {
+      throw new Error('autoplay blocked');
+    });
+    (globalThis as { AudioContext?: unknown }).AudioContext = audio.FakeContext;
+    const fresh = await import('./chime.js');
+    expect(() => fresh.playChimeTone()).not.toThrow();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(warn).toHaveBeenCalledTimes(1);
+    fresh.playChimeTone();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it('ошибка WebAudio — один console.warn и никакого исключения', async () => {

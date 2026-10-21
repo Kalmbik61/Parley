@@ -8,7 +8,8 @@
  *
  * «Нужен ты» у сессии — уведомление с вопросом: первая строка тела говорит, что именно просят (команда, правка, вопрос,
  * план — `ask-summary.ts`, из ленты сессии), а без карточки — чего ждёт сессия (`need`, причина из `needReason` ядра,
- * спека застрявших 7.4), вторая — проект и сколько ещё сессий ждут. Карточка из хука может лечь
+ * спека застрявших 7.4), вторая — проект и сколько ещё сессий ждут. Уведомление уходит через `NEED_SETTLE_MS` после
+ * входа в «нужен ты», с последним `need`. Карточка из хука может лечь
  * чуть позже активности, поэтому пустой ответ повторяется один раз через `ASK_RETRY_MS`; если человек успел ответить,
  * уведомления нет. Клик ведёт к самой карточке (`cardId` цели), если ответить можно в окне. Лимит у нескольких сессий
  * одного провайдера — одно уведомление на провайдера (7.1).
@@ -93,6 +94,12 @@ export interface NotifyDeps {
 
 /** Пауза перед повторным запросом карточки: хук с ней может прийти чуть позже события активности. */
 const ASK_RETRY_MS = 500;
+
+/**
+ * Пауза между входом в «нужен ты» и уведомлением (спека застрявших 3.2, 7.1): `need` за неё уточняется, а «вошла и
+ * вышла» не даёт ни баннера, ни звука. Идёт до запроса карточки, поэтому и найденная сразу карточка её не обходит.
+ */
+export const NEED_SETTLE_MS = 1_000;
 
 /**
  * Уведомления хоста, которые ведут к сессии (таблица спеки 7.4), и событие их заголовка. `trust-wait` и `startup-wait`
@@ -251,18 +258,25 @@ export function createAttentionNotifier(deps: NotifyDeps): {
   };
 
   /**
-   * «Нужен ты»: узнаёт, что спрашивают, и только тогда шлёт. Пока шёл запрос (и пауза повтора), человек мог ответить —
-   * тогда уровень сессии уже не `needs-you` и уведомления нет. Общего состояния, кроме `levels`, нет: два перехода
-   * подряд шлют независимо, а macOS заменяет уведомление по тегу.
+   * «Нужен ты»: ждёт `NEED_SETTLE_MS`, узнаёт, что спрашивают, и только тогда шлёт (спека застрявших 3.2, 7.1). За
+   * паузу `need` успевает уточниться (Codex без OSC 9 даёт `question`, следующий OSC 9 поднимает его до `approval`) —
+   * в тексте последний; вышла из «нужен ты» раньше (человек ответил, ход пошёл) — уведомления и сигнала нет. Новый
+   * переход в «нужен ты» отменяет предыдущий ещё не отправленный (`attempts`): на одно ожидание — одно уведомление.
    */
+  const attempts = new Map<string, number>();
   const notifyNeedsYou = async (ref: SessionRef, key: string): Promise<void> => {
+    const attempt = (attempts.get(key) ?? 0) + 1;
+    attempts.set(key, attempt);
+    const stale = (): boolean => attempts.get(key) !== attempt || levels.get(key) !== 'needs-you';
+    await new Promise((resolve) => setTimeout(resolve, NEED_SETTLE_MS));
+    if (stale()) return;
     const ask = async (): Promise<PendingAsk | null> => deps.pendingAsk(ref).catch(() => null);
     let found = await ask();
     if (found === null) {
       await new Promise((resolve) => setTimeout(resolve, ASK_RETRY_MS));
       found = await ask();
     }
-    if (levels.get(key) !== 'needs-you') return;
+    if (stale()) return;
     const current = findSession(deps.entries(), ref);
     if (current === null) return;
     const { entry, session } = current;

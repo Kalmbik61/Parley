@@ -34,6 +34,7 @@ import { groups } from './layout/tree.js';
 import { S } from '../shared/strings.js';
 import type { TabSpec } from '../shared/layout-types.js';
 import { workKey } from '../shared/work-keys.js';
+import { AudioContextStub } from './test-utils/audio.js';
 
 // Тест 4 куска 4.3 проверяет вызов тоста, а не его разметку; `Toaster` остаётся настоящим.
 vi.mock('sonner', async (importOriginal) => ({
@@ -57,6 +58,8 @@ let bridge: FakeBridge;
 
 beforeEach(() => {
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+  // Сигнал «нужно действие» окна звонит и здесь: без подставного AudioContext jsdom печатал бы `chime failed`.
+  vi.stubGlobal('AudioContext', AudioContextStub);
   useWorksStore.setState({ entries: [], branches: {}, loading: false, error: null });
   useActivityStore.setState({ byRef: {} });
   useNoticesStore.setState({ notices: [] });

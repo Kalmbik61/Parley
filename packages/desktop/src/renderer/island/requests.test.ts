@@ -80,6 +80,28 @@ describe('очередь запросов острова', () => {
     expect(useIslandRequests.getState().items[0]?.summary).toBe('Codex needs your attention in the terminal');
   });
 
+  it('need Codex уточнился в том же ожидании (question -> approval, позже новый resetsAt): текст в острове обновляется, ключ и since прежние', async () => {
+    const { call } = bridge({});
+    useIslandRequests.getState().bind(call as never);
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-03'), 'blocked', { need: makeNeed('question') })]));
+    const first = useIslandRequests.getState().items[0]!;
+    expect(first.summary).toBe('Asked you a question in its terminal');
+
+    // Тот же эпизод ожидания: вид поднялся до `approval` — остров называет его, а не прежнюю причину.
+    const approval = makeNeed('approval', { detail: 'ls -la' });
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-03'), 'blocked', { need: approval })]));
+    expect(useIslandRequests.getState().items).toHaveLength(1);
+    expect(useIslandRequests.getState().items[0]).toMatchObject({ key: first.key, since: first.since, summary: 'Waiting for your approval: ls -la' });
+
+    // Лимит с уточнённым временем сброса: меняется только час в тексте.
+    vi.setSystemTime(new Date(2026, 9, 21, 13, 0));
+    useIslandRequests.getState().clear();
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-03'), 'unseen', { need: makeNeed('limit', { resetsAt: new Date(2026, 9, 21, 16, 27).toISOString() }) })]));
+    const limit = useIslandRequests.getState().items[0]!;
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-03'), 'unseen', { need: makeNeed('limit', { resetsAt: new Date(2026, 9, 21, 18, 5).toISOString() }) })]));
+    expect(useIslandRequests.getState().items[0]).toMatchObject({ key: limit.key, summary: 'Hit its Codex usage limit; resets at 18:05' });
+  });
+
   it('Codex упёрся в лимит (ход закончен, но need есть) — в острове причина с часом сброса', async () => {
     const { call } = bridge({});
     useIslandRequests.getState().bind(call as never);

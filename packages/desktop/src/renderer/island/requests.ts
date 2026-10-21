@@ -152,15 +152,22 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
           const key = refKey(ref);
           if (sessionAttention(session, byRef[key]?.activity ?? null) !== 'needs-you') continue;
           waitingSince[key] = before[key] ?? now;
-          if (session.provider === 'codex' && !terminalFallbacks.has(key)) {
+          if (session.provider === 'codex') {
             // Причина «needs you» — одна на окно, остров и Telegram (спека подписок К16): текст `needReason` ядра; общая
             // фраза про терминал остаётся только сессии без `need` (хост прежней версии или ожидание без причины).
+            // `need` в том же ожидании уточняется (вопрос -> одобрение, позже время сброса), поэтому текст пересчитывается
+            // на каждом `sync`; ключ и `since` запроса прежние.
             const need = sessionNeed(session, byRef[key]?.activity ?? null);
-            terminalFallbacks.set(key, {
-              key: `${key}\u0000terminal:${waitingSince[key]}`, ref, card: null,
-              summary: need === null ? S.island.codexTerminalAction : needReason(need, new Date(now), providerName(session.provider, '')),
-              inWindow: false, since: waitingSince[key], deciding: false, note: null,
-            });
+            const summary = need === null ? S.island.codexTerminalAction : needReason(need, new Date(now), providerName(session.provider, ''));
+            const known = terminalFallbacks.get(key);
+            if (known === undefined) {
+              terminalFallbacks.set(key, {
+                key: `${key}\u0000terminal:${waitingSince[key]}`, ref, card: null,
+                summary, inWindow: false, since: waitingSince[key], deciding: false, note: null,
+              });
+            } else if (known.summary !== summary) {
+              terminalFallbacks.set(key, { ...known, summary });
+            }
           }
           if (before[key] === undefined || lastSeen.get(key) !== byRef[key]) toFetch.push(ref);
           lastSeen.set(key, byRef[key]);
@@ -170,7 +177,13 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
       for (const key of [...requestIds.keys()]) if (waitingSince[key] === undefined) requestIds.delete(key);
       for (const key of [...terminalFallbacks.keys()]) if (waitingSince[key] === undefined) terminalFallbacks.delete(key);
       set((state) => {
-        const items = state.items.filter((item) => waitingSince[refKey(item.ref)] !== undefined);
+        const items = state.items
+          .filter((item) => waitingSince[refKey(item.ref)] !== undefined)
+          // Запрос терминала уже в очереди — обновляется только текст причины, остальное (ключ, since) как было.
+          .map((item) => {
+            const fallback = terminalFallbacks.get(refKey(item.ref));
+            return fallback !== undefined && fallback.key === item.key && fallback.summary !== item.summary ? { ...item, summary: fallback.summary } : item;
+          });
         for (const [key, fallback] of terminalFallbacks) {
           if (!items.some((item) => refKey(item.ref) === key)) items.push(fallback);
         }
