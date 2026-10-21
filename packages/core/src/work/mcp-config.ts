@@ -38,6 +38,15 @@ export const AGENT_TOKEN_ENV = 'PARLEY_AGENT_TOKEN';
 const agentEnv = (agent: AgentChannel | undefined): Record<string, string> =>
   agent === undefined ? {} : { [AGENT_URL_ENV]: agent.url, [AGENT_TOKEN_ENV]: agent.token };
 
+/**
+ * Профиль набора инструментов сервера `parley`. `short` — для сессий Codex: сервер не объявляет три инструмента памяти
+ * (`SHORT_PROFILE_HIDDEN_TOOLS`), а вставка и гид молчат о них (спека Codex 2026-10-21, 6.1). Нет поля — полный набор.
+ */
+export type ToolProfile = 'short';
+
+/** Инструменты, которые профиль `short` не объявляет: `backlog_*`, комнаты, планы и браузер остаются. */
+export const SHORT_PROFILE_HIDDEN_TOOLS = ['remember', 'memory_read', 'search_history'] as const;
+
 export interface McpConfigParams {
   /** Путь к `<проект>/.parley/works/<work-id>/` — переменная `PARLEY_WORK_DIR` сервера (и прежняя `HARNAS_WORK_DIR`). */
   workDir: string;
@@ -45,6 +54,8 @@ export interface McpConfigParams {
   /** Родной список скиллов этого запуска сокращён: сервер объявляет это в описании `find_skill`. Только `true` попадает в окружение. */
   skillListReduced?: boolean;
   nativeContextRevision?: string;
+  /** Профиль инструментов этого запуска: `PARLEY_TOOL_PROFILE` (и прежняя `HARNAS_TOOL_PROFILE`) в окружении сервера. */
+  toolProfile?: ToolProfile;
   /**
    * Канал агента к браузеру окна (спека браузера 3.7): с ним сервер объявляет инструмент `browser_open`. Хост выдаёт его
    * каждому запуску; нет — старый хост или сервер хуков не поднялся, и инструментов браузера у сессии нет.
@@ -96,6 +107,7 @@ export function mcpConfig({
   skillNavigator,
   skillListReduced,
   nativeContextRevision,
+  toolProfile,
   agent,
 }: McpConfigParams): McpConfigFile {
   return {
@@ -111,6 +123,7 @@ export function mcpConfig({
             ...(skillNavigator === undefined ? {} : { SKILL_NAVIGATOR: skillNavigator ? '1' : '0' }),
             ...(skillListReduced === true ? { SKILL_LIST_REDUCED: '1' } : {}),
             ...(nativeContextRevision === undefined ? {} : { NATIVE_CONTEXT_REVISION: nativeContextRevision }),
+            ...(toolProfile === undefined ? {} : { TOOL_PROFILE: toolProfile }),
           }),
           ...agentEnv(agent),
         },
@@ -156,7 +169,7 @@ const OWN_VARIABLE = new RegExp(`^(?:${ENV_PREFIX}|${LEGACY_ENV_PREFIX})[A-Z0-9_
  * агента — тоже только свой: хост, поднятый из сессии агента, унаследовал бы её адрес и токен.
  */
 const SESSION_VARIABLES = new Set([
-  ...Object.keys(bothEnv({ WORK_DIR: '', SESSION_ID: '', CHANNEL: '', SKILL_NAVIGATOR: '', SKILL_LIST_REDUCED: '', NATIVE_CONTEXT_REVISION: '' })),
+  ...Object.keys(bothEnv({ WORK_DIR: '', SESSION_ID: '', CHANNEL: '', SKILL_NAVIGATOR: '', SKILL_LIST_REDUCED: '', NATIVE_CONTEXT_REVISION: '', TOOL_PROFILE: '' })),
   ...Object.keys(bothEnv({ AGENT_URL: '', AGENT_TOKEN: '' })),
 ]);
 
@@ -168,8 +181,9 @@ function codexServerEnv({
   skillNavigator,
   skillListReduced,
   nativeContextRevision,
+  toolProfile,
   agent,
-}: Pick<McpConfigParams, 'workDir' | 'sessionId' | 'env' | 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision' | 'agent'>): Array<[string, string]> {
+}: Pick<McpConfigParams, 'workDir' | 'sessionId' | 'env' | 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision' | 'toolProfile' | 'agent'>): Array<[string, string]> {
   const inherited = Object.entries(env ?? {})
     .filter(
       (entry): entry is [string, string] =>
@@ -183,6 +197,7 @@ function codexServerEnv({
     ...(skillNavigator === undefined ? {} : { SKILL_NAVIGATOR: skillNavigator ? '1' : '0' }),
     ...(skillListReduced === true ? { SKILL_LIST_REDUCED: '1' } : {}),
     ...(nativeContextRevision === undefined ? {} : { NATIVE_CONTEXT_REVISION: nativeContextRevision }),
+    ...(toolProfile === undefined ? {} : { TOOL_PROFILE: toolProfile }),
   })), ...Object.entries(agentEnv(agent)), ...inherited];
 }
 
