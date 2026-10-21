@@ -4,27 +4,32 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.19.0
+
+Agents drive their browser panels on any site, Codex no longer asks before Parley's own tools, and typing anywhere in the window goes to the open Chat or room.
 
 ### Added
 
-- **Agents drive their browser panels.** An agent opens pages, waits for them to load, navigates (address, back, forward, reload), reads the accessibility tree with `eN` references, clicks, double-clicks, hovers, types, presses keys, scrolls, selects, checks, drags, waits for text, resizes the page and screenshots a page or one element. It works only in the browser panel of its own chat and of the rooms it belongs to; your own browser tabs stay closed to it.
-- **Any site.** Agents act and read on any `http(s)` page of their panels, not only on `localhost`. Secrets in addresses, the console, the network log and form fields are still masked as `<redacted>`.
-- **Scripts, cookies and storage with approval in Claude Code.** `browser_evaluate` runs JavaScript in the page, and `browser_cookies` and `browser_storage` read and change cookies and storage; in Claude Code each call waits for your approval (except in bypassPermissions mode), so an agent led astray by a page cannot read your session tokens without a question. Codex sessions call them without approval, like all of Parley's tools.
-- **Files.** Agents upload files into file fields (never from secret locations such as `~/.ssh`, keychains or `.env` files) and receive downloads in a folder of their session, kept for seven days.
-- **Cookies and storage.** Agents read and change (in Claude Code, after your approval) the cookies and the `localStorage` / `sessionStorage` of the page they are on. The browser's cookies are shared with you, so an agent on a site where you are signed in acts as you.
-- **Badge with Stop.** While an agent works, the page row shows its badge with a Stop button, the page frame is highlighted and a dot marks the click. Stop, "Pause agents" and the switch in Settings interrupt an operation that is already running.
-- **`parley-browser` skill.** A built-in skill that explains these tools to Claude, GLM and Codex sessions.
+- **Agents drive their browser panels.** An agent opens pages, waits for them to load, navigates (address, back, forward, reload), reads the accessibility tree with `eN` references, clicks, double-clicks, hovers, types, presses keys, scrolls, selects, checks, drags, waits for text, resizes the page and screenshots a page or one element. It works only in the browser panel of its own chat and of the rooms it belongs to; your own browser tabs stay closed to it. ([#95](https://github.com/Kalmbik61/Parley/pull/95))
+- **Any site.** Agents act and read on any `http(s)` page of their panels, not only on `localhost`. Secrets in addresses, the console, the network log and form fields are still masked as `<redacted>`. ([#95](https://github.com/Kalmbik61/Parley/pull/95))
+- **Scripts, cookies and storage with approval in Claude Code.** `browser_evaluate` runs JavaScript in the page, and `browser_cookies` and `browser_storage` read and change cookies and storage; in Claude Code each call waits for your approval (except in bypassPermissions mode), so an agent led astray by a page cannot read your session tokens without a question. Codex sessions call them without approval, like all of Parley's tools. ([#95](https://github.com/Kalmbik61/Parley/pull/95), [#97](https://github.com/Kalmbik61/Parley/pull/97))
+- **Files.** Agents upload files into file fields (never from secret locations such as `~/.ssh`, keychains or `.env` files) and receive downloads in a folder of their session, kept for seven days. ([#95](https://github.com/Kalmbik61/Parley/pull/95))
+- **Cookies and storage.** Agents read and change (in Claude Code, after your approval) the cookies and the `localStorage` / `sessionStorage` of the page they are on. The browser's cookies are shared with you, so an agent on a site where you are signed in acts as you. ([#95](https://github.com/Kalmbik61/Parley/pull/95))
+- **Badge with Stop.** While an agent works, the page row shows its badge with a Stop button, the page frame is highlighted and a dot marks the click. Stop, "Pause agents" and the switch in Settings interrupt an operation that is already running. ([#95](https://github.com/Kalmbik61/Parley/pull/95))
+- **`parley-browser` skill.** A built-in skill that explains these tools to Claude, GLM and Codex sessions. ([#95](https://github.com/Kalmbik61/Parley/pull/95))
+- **Type anywhere to write a message.** With a Chat or a room open, a printable key pressed outside any field focuses its message box and the character lands there, as in Telegram. Shortcuts, the terminal, the editor, other fields, open dialogs and the palette are left alone. ([#96](https://github.com/Kalmbik61/Parley/pull/96))
 
 ### Changed
 
-- In Claude Code, every browser tool is allowed in advance except `browser_evaluate`, `browser_cookies` and `browser_storage`, which always ask.
-- Codex sessions no longer ask before calling Parley's own tools (for example `create_session`, `close_session` and the browser tools).
-- httpOnly cookie values are never shown to agents.
+- In Claude Code, every browser tool is allowed in advance except `browser_evaluate`, `browser_cookies` and `browser_storage`, which always ask. ([#95](https://github.com/Kalmbik61/Parley/pull/95))
+- Codex sessions no longer ask before calling Parley's own tools (for example `create_session`, `close_session` and the browser tools). ([#97](https://github.com/Kalmbik61/Parley/pull/97))
+- httpOnly cookie values are never shown to agents. ([#95](https://github.com/Kalmbik61/Parley/pull/95))
 
 ### Fixed
 
-- **Annotate outlines the element under the pointer.** With Annotate on, hovering the page draws an amber frame around the element a click would pin, as Select does; before, the frame showed up only after the click. It hides over a pin's number (a click there edits it), while you drag a region, while a comment is open, and when the pointer leaves the page, so it never ends up in the screenshot that goes to the chat.
+- **Annotate outlines the element under the pointer.** With Annotate on, hovering the page draws an amber frame around the element a click would pin, as Select does; before, the frame showed up only after the click. It hides over a pin's number (a click there edits it), while you drag a region, while a comment is open, and when the pointer leaves the page, so it never ends up in the screenshot that goes to the chat. ([#94](https://github.com/Kalmbik61/Parley/pull/94))
+- **Accepting a room decision from Telegram or the assistant works when the decision carries a plan.** Before, Accept on a plan amendment or a completion ended as "Revised" while the decision stayed open in Parley. ([#92](https://github.com/Kalmbik61/Parley/pull/92))
+- **The island takes the keyboard on the first touch.** When the island opened for a reminder or a Telegram turn, typing into its field and Esc did nothing after Send or a cancelled dictation until you reopened it with the hotkey. ([#93](https://github.com/Kalmbik61/Parley/pull/93))
 
 ## 0.18.0
 
