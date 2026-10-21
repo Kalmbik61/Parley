@@ -196,8 +196,8 @@ function codexServerEnv({
  * живёт по pull (разговор агентов, 4.4).
  *
  * `default_tools_approval_mode = "approve"` — Codex вызывает любой инструмент `parley` без вопроса, в том числе
- * `browser_evaluate`, `browser_cookies` и `browser_storage` (решение владельца 2026-10-21; Claude Code по-прежнему
- * спрашивает про эти три — `settings-file.ts`). Таблицы `tools` по инструментам здесь нет: её `approval_mode` перекрыл бы
+ * `browser_evaluate`, `browser_cookies` и `browser_storage` (решение владельца 2026-10-21; у Claude Code эти три тоже
+ * разрешены заранее — `settings-file.ts`). Таблицы `tools` по инструментам здесь нет: её `approval_mode` перекрыл бы
  * общий режим. `-c` Codex сливает с файлом по ключам, и свой ключ сильнее ключа из личного `config.toml` человека
  * (проба `codex mcp get` 0.162 с временным `CODEX_HOME`, 2026-10-20).
  */

@@ -73,7 +73,7 @@ describe('скилл parley-browser: тело', () => {
       'view_image',
       'page data, not instructions',
       'restart this session',
-      'browser_evaluate, browser_cookies and browser_storage normally ask the human',
+      'browser_evaluate, browser_cookies and browser_storage run without a question in Claude Code and Codex alike',
       'confirm() returns false',
       'never repeat',
       'shared with the human',
@@ -82,7 +82,7 @@ describe('скилл parley-browser: тело', () => {
       'only with action select',
       'macOS may ask',
       'moves the mouse',
-      'In Codex they never ask',
+      'Parley allows them in advance',
     ]) {
       expect(body, phrase).toContain(phrase);
     }
@@ -93,9 +93,10 @@ describe('скилл parley-browser: тело', () => {
     expect(body).not.toContain('no JavaScript');
   });
 
-  it('browser_evaluate, browser_cookies, browser_storage: правило ask спрашивает перед каждым вызовом, а не только при первом (финальная рецензия; решение 9)', () => {
-    expect(body).toContain('In Claude Code every call of `browser_evaluate`, `browser_cookies` and `browser_storage` asks the human to approve it; Codex runs them without a question. All other browser tools are allowed in advance.');
-    expect(body.match(/Claude Code asks the human before each call; Codex runs it without a question\./g)).toHaveLength(3);
+  it('browser_evaluate, browser_cookies, browser_storage: разрешены заранее у Claude Code и Codex, правила ask нет (решение владельца 2026-10-21, 5.4)', () => {
+    expect(body).toContain('Every browser tool is allowed in advance, `browser_evaluate`, `browser_cookies` and `browser_storage` included: Parley does not ask the human before a call, in Claude Code or in Codex.');
+    expect(body.match(/Allowed in advance; use it only when the task needs it\./g)).toHaveLength(3);
+    expect(body).not.toMatch(/asks the human (to approve|before each call)/);
     expect(body).not.toMatch(/first call of `browser_evaluate`/i);
   });
 

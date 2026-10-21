@@ -4,6 +4,12 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Changed
+
+- Claude Code sessions no longer ask before `browser_evaluate`, `browser_cookies` and `browser_storage`: Parley allows them in advance like every other browser tool. Before, the three sat in `permissions.ask`, which Claude Code treats as stronger than any `allow`, so the prompt came back on every call even after "don't ask again". Codex sessions already called them without approval.
+
 ## 0.20.0
 
 Create a workspace without agents, start several sessions side by side without a room, and dictate the note when you return a room decision for rework.
