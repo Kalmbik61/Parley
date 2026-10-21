@@ -28,7 +28,7 @@
  * у текстовых полей `:focus-visible` срабатывает всегда.
  */
 
-import { useCallback, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react';
 import { Paperclip } from 'lucide-react';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
@@ -36,6 +36,7 @@ import { S } from '../../../shared/strings.js';
 import { AttachmentChip } from '../../chat/AttachmentChip.js';
 import { addAttachments } from '../../chat/attachments.js';
 import { pasteClipboardImage } from '../../chat/paste-image.js';
+import { registerComposer } from '../../keys/type-to-focus.js';
 import { keepCaretVisible } from '../../lib/keep-caret-visible.js';
 import { sessionTag } from '../../lib/participant.js';
 import { useUiStore } from '../../store/ui.js';
@@ -108,6 +109,8 @@ const NO_ATTACHMENTS: readonly string[] = [];
 
 export function Composer({ members, bridge, draftKey, onSend }: ComposerProps): JSX.Element {
   const editorRef = useRef<HTMLDivElement | null>(null);
+  // Поле открыто для набора с любого места окна (`keys/type-to-focus.ts`).
+  useEffect(() => (editorRef.current === null ? undefined : registerComposer(editorRef.current)), []);
   const attachments = useUiStore((state) => state.composerAttachments[draftKey] ?? NO_ATTACHMENTS);
   const setAttachments = (paths: readonly string[]): void => useUiStore.getState().setComposerAttachments(draftKey, paths);
   const [blank, setBlank] = useState(true);

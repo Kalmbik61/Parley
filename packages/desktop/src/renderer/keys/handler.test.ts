@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ActionId, KeyLike } from '../../shared/keybindings.js';
 import type { FocusContext } from './focus-context.js';
+import { registerComposer, setVisibilityCheck } from './type-to-focus.js';
 import { IMPLEMENTED_ACTIONS, installKeyHandler, isActionAvailable, resolveAction } from './handler.js';
 
 /** ⌘-нажатие буквы или цифры; `extra` дописывает модификаторы и прочее. */
@@ -340,4 +341,32 @@ it('capabilities palette action needs both safe snapshot methods, without an acc
  expect(isActionAvailable('project.capabilities', new Set(['capabilities.get']))).toBe(false);
  expect(isActionAvailable('project.capabilities', new Set(['capabilities.get', 'capabilities.refresh']))).toBe(true);
  expect(isActionAvailable('project.capabilities', new Set())).toBe(false);
+
+  describe('набор с любого места', () => {
+    afterEach(() => setVisibilityCheck());
+
+    it('буква без модификаторов фокусирует поле сообщения и не гасится', () => {
+      setVisibilityCheck(() => true);
+      document.body.innerHTML = '<textarea id="composer"></textarea>';
+      const composer = document.getElementById('composer') as HTMLTextAreaElement;
+      const unregister = registerComposer(composer);
+      const { run } = install();
+
+      const event = keydown({ key: 'a', code: 'KeyA' });
+
+      expect(document.activeElement).toBe(composer);
+      expect(event.defaultPrevented).toBe(false);
+      expect(run).not.toHaveBeenCalled();
+      unregister();
+    });
+
+    it('без поля сообщения ничего не происходит, ⌘-буква по-прежнему действие окна', () => {
+      const { run } = install();
+      const plain = keydown({ key: 'a', code: 'KeyA' });
+      const combo = keydown({ key: 'd', code: 'KeyD', metaKey: true });
+      expect(plain.defaultPrevented).toBe(false);
+      expect(combo.defaultPrevented).toBe(true);
+      expect(run).toHaveBeenCalledWith('group.splitRight');
+    });
+  });
 });

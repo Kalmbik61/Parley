@@ -36,6 +36,7 @@ import {
 import { Paperclip, Square } from 'lucide-react';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
+import { registerComposer } from '../keys/type-to-focus.js';
 import { keepCaretVisible } from '../lib/keep-caret-visible.js';
 import { Button } from '../ui/button.js';
 import { MicButton } from '../voice/MicButton.js';
@@ -103,6 +104,8 @@ export function Composer({
   history = NO_HISTORY,
 }: ComposerProps): JSX.Element {
   const field = useRef<HTMLTextAreaElement>(null);
+  // Поле открыто для набора с любого места окна (`keys/type-to-focus.ts`).
+  useEffect(() => (field.current === null ? undefined : registerComposer(field.current)), []);
   useEffect(() => {
     if (visible) field.current?.focus();
   }, [visible]);
