@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { Message, Proposal, Room, SessionActivity, WorkEntry, WorkSession } from '@parley/core';
-import { refKey } from '@parley/protocol';
+import type { Message, Proposal, Room, SessionActivity, SessionNeed, WorkEntry, WorkSession } from '@parley/core';
+import { refKey, type MailWait } from '@parley/protocol';
 import type { ActivityEntry } from '../store/activity.js';
+import { makeNeed } from '../test-utils/work-fixtures.js';
 import {
   ATTENTION_RANK,
   attentionOf,
@@ -10,11 +11,15 @@ import {
   humanUnreadMentions,
   isHumanMention,
   isHumanUnread,
+  mailWaitText,
+  needLabel,
+  needTooltip,
   roomAwaitsDecision,
   roomDecisionReturned,
   roomUnreadForHuman,
   sameWorkAttention,
   sessionAttention,
+  sessionNeed,
   workAttention,
 } from './derive.js';
 
@@ -643,5 +648,74 @@ describe('архивная комната не учитывается во вн�
     // Та же строка в открытой комнате — обычное событие работы.
     const open = workAttention(withRooms([room('r-01')], [archiveLine]), {});
     expect(open.lastEventAt).toBe('2026-10-08T13:00:00.000Z');
+  });
+});
+
+// Спека застрявших 7.3: слово причины, подсказка и текст строки доставки. Слова видов — из `needWord` (core);
+// здесь — обрамление и время сброса. Время строится из частей даты, а не из ISO: результат не зависит от пояса машины.
+describe('метки need', () => {
+  const NOW = new Date(2026, 9, 21, 12, 0).getTime();
+  const at = (day: number, hour: number, minute: number): string => new Date(2026, 9, day, hour, minute).toISOString();
+  const limit = (resetsAt: string | null): SessionNeed => makeNeed('limit', { resetsAt });
+
+  it('слово вида из core: approval, question, starting, sign-in', () => {
+    expect(needLabel(makeNeed('approval'), NOW)).toBe('approval');
+    expect(needLabel(makeNeed('question'), NOW)).toBe('question');
+    expect(needLabel(makeNeed('startup'), NOW)).toBe('starting');
+    expect(needLabel(makeNeed('sign-in', { account: 'auth' }), NOW)).toBe('sign-in');
+    expect(needLabel(makeNeed('sign-in', { account: 'account' }), NOW)).toBe('sign-in');
+  });
+
+  it('лимит: сегодня — время, другой день — дата и время, после сброса — reset, без времени — слово', () => {
+    expect(needLabel(limit(at(21, 19, 27)), NOW)).toBe('limit · 19:27');
+    expect(needLabel(limit(at(22, 3, 5)), NOW)).toBe('limit · Oct 22, 03:05');
+    expect(needLabel(limit(at(14, 19, 27)), NOW)).toBe('limit · reset');
+    expect(needLabel(limit(at(21, 12, 0)), NOW)).toBe('limit · reset');
+    expect(needLabel(limit(null), NOW)).toBe('limit');
+    expect(needLabel(limit('не время'), NOW)).toBe('limit');
+  });
+
+  it('подсказка: обрамление и detail; без detail — одно обрамление', () => {
+    expect(needTooltip(makeNeed('approval', { detail: 'Bash: rm -rf dist' }))).toBe('Waiting for approval: Bash: rm -rf dist');
+    expect(needTooltip(makeNeed('approval'))).toBe('Waiting for approval');
+    expect(needTooltip(makeNeed('question', { detail: 'Which branch?' }))).toBe('Has a question: Which branch?');
+    expect(needTooltip(makeNeed('limit', { detail: "You've hit your limit" }))).toBe("Usage limit reached: You've hit your limit");
+    expect(needTooltip(makeNeed('sign-in', { account: 'auth' }))).toBe('Needs sign-in');
+    expect(needTooltip(makeNeed('sign-in', { account: 'account', detail: 'Account on hold' }))).toBe('Account problem: Account on hold');
+    expect(needTooltip(makeNeed('startup', { detail: 'Trust this folder?' }))).toBe('Waiting while starting: Trust this folder?');
+  });
+
+  it('mailWaitText: stuck берёт текст из need — по виду', () => {
+    expect(mailWaitText('stuck', makeNeed('approval'), NOW)).toBe('waiting for your approval');
+    expect(mailWaitText('stuck', makeNeed('question'), NOW)).toBe('asked you a question');
+    expect(mailWaitText('stuck', makeNeed('sign-in', { account: 'auth' }), NOW)).toBe('signed out');
+    expect(mailWaitText('stuck', makeNeed('startup'), NOW)).toBe('waiting at startup');
+  });
+
+  it('mailWaitText: лимит — до времени, после сброса и без времени', () => {
+    expect(mailWaitText('stuck', limit(at(21, 19, 27)), NOW)).toBe('usage limit until 19:27');
+    expect(mailWaitText('stuck', limit(at(22, 3, 5)), NOW)).toBe('usage limit until Oct 22, 03:05');
+    expect(mailWaitText('stuck', limit(at(14, 19, 27)), NOW)).toBe('usage limit has reset');
+    expect(mailWaitText('stuck', limit(null), NOW)).toBe('usage limit');
+  });
+
+  it('mailWaitText: прочие причины — таблица окна; stuck без need, незнакомая причина — waiting; null — null', () => {
+    expect(mailWaitText('busy', null, NOW)).toBe('busy');
+    // need бывает у сессии и при другой причине (письмо ждёт её живую занятость) — текст всё равно по причине.
+    expect(mailWaitText('draft', makeNeed('approval'), NOW)).toBe('unsent text in its terminal');
+    expect(mailWaitText('stuck', null, NOW)).toBe('waiting');
+    expect(mailWaitText('from-a-newer-host' as MailWait, null, NOW)).toBe('waiting');
+    expect(mailWaitText(null, makeNeed('approval'), NOW)).toBeNull();
+  });
+});
+
+describe('sessionNeed и sessionAttention окна', () => {
+  it('need — needs-you у живой, спящая с need — idle (общее правило core)', () => {
+    const need = makeNeed('limit');
+    const withNeed: SessionActivity = { ...live('idle'), need };
+    expect(sessionAttention(session('s-01'), withNeed)).toBe('needs-you');
+    expect(sessionAttention(session('s-01', 'sleeping'), withNeed)).toBe('idle');
+    expect(sessionNeed(session('s-01'), withNeed)).toBe(need);
+    expect(sessionNeed(session('s-01', 'sleeping'), withNeed)).toBeNull();
   });
 });

@@ -7,7 +7,8 @@
  * `blocked` — `accent-200`, `unseen` — `accent-2-200`, иначе `currentColor 6%`; наведение — рамка внутри
  * `currentColor 28%`. Тултип — `Claude Code · Opus 5.5`: провайдер и модель из живых метрик, а пока
  * модель неизвестна — один провайдер; усилие не показывается, его никто не хранит. Клик открывает терминал
- * участника.
+ * участника. Участнику, которому нужен человек (`need`), вместо слова состояния — слово причины (`needLabel`:
+ * `approval`, `limit · 19:27`…), в подсказке слова — обрамление и `detail` (спека застрявших 7.3).
  *
  * Строка субагентов («Subagent: …», «3 subagents: …») — бейдж с поповером (`AgentsBadge`, кусок 4b плана 2026-10-01):
  * клик по агенту в поповере открывает сессию участника на карточке этого агента (`onOpenSession` вторым аргументом).
@@ -21,6 +22,7 @@
 import { planSummary } from '@parley/core/agent-plan';
 import type { ReactNode } from 'react';
 import { S } from '../../../shared/strings.js';
+import { needLabel, needTooltip } from '../../attention/derive.js';
 import { RoleChip } from '../../lib/role-summary.js';
 import { cn } from '../../lib/cn.js';
 import { AgentIcon } from '../AgentIcon.js';
@@ -36,9 +38,11 @@ export interface ParticipantStripProps {
   /** Чип контекста участника (спека 2026-10-15, 3.2): во второй строке справа, вне кнопки открытия. */
   onOpenPlan?: (sessionId: string) => void;
   contextChip?: (participant: ParticipantModel) => ReactNode;
+  /** «Сейчас» окна — для времени сброса лимита в слове причины (`RoomPanel` тикает раз в 30 с). */
+  now: Date;
 }
 
-export function ParticipantStrip({ participants, onOpenSession, onOpenPlan, contextChip }: ParticipantStripProps): JSX.Element {
+export function ParticipantStrip({ participants, onOpenSession, onOpenPlan, contextChip, now }: ParticipantStripProps): JSX.Element {
   return (
     <div
       role="group"
@@ -53,6 +57,8 @@ export function ParticipantStrip({ participants, onOpenSession, onOpenPlan, cont
         const summary = participant.plan == null ? null : planSummary(participant.plan);
         const showPlanChip = participant.plan != null && summary !== null && (participant.plan.partial || summary.done < summary.total);
         const showPlanLine = participant.doing === null && participant.plan != null && participant.planLine != null;
+        // Нужен человек — слово причины вместо слова состояния, `detail` в подсказке слова (спека застрявших 7.3).
+        const need = participant.need ?? null;
         const header = (
           <span className="flex w-full min-w-0 items-center gap-1.5 text-xs">
             <AgentStateDot state={participant.state} lifecycle={participant.lifecycle} />
@@ -65,6 +71,7 @@ export function ParticipantStrip({ participants, onOpenSession, onOpenPlan, cont
               </span>
             ) : null}
             <span
+              {...(need === null ? {} : { title: needTooltip(need) })}
               className={cn(
                 'shrink-0 text-[11px]',
                 participant.attention === 'needs-you'
@@ -74,7 +81,7 @@ export function ParticipantStrip({ participants, onOpenSession, onOpenPlan, cont
                     : 'text-neutral-700',
               )}
             >
-              {participant.word}
+              {need === null ? participant.word : needLabel(need, now.getTime())}
             </span>
           </span>
         );

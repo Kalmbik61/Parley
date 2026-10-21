@@ -3,7 +3,7 @@
  * `WorkSession`/`WorkEntry` на все его тесты вместо копии в каждом файле.
  */
 
-import type { Activity, Message, Room, WorkEntry, WorkSession, WorkStatus } from '@parley/core';
+import type { Activity, Message, NeedKind, Room, SessionNeed, WorkEntry, WorkSession, WorkStatus } from '@parley/core';
 import { refKey, type LiveMetrics, type SessionRef } from '@parley/protocol';
 import type { ActivityEntry } from '../store/activity.js';
 
@@ -88,6 +88,8 @@ export function makeActivity(
     turnEndedAt?: string | null;
     metrics?: LiveMetrics | null;
     heldByBackground?: boolean;
+    /** Чего сессия ждёт от человека (спека застрявших 3.1); по умолчанию ничего. */
+    need?: SessionNeed | null;
   } = {},
 ): ActivityEntry {
   return {
@@ -102,10 +104,15 @@ export function makeActivity(
       lastEventAt: patch.lastEventAt === undefined ? '2026-09-27T09:00:00.000Z' : patch.lastEventAt,
       source: 'hooks',
       hooksMissing: false,
-      need: null,
+      need: patch.need ?? null,
     },
     metrics: patch.metrics ?? null,
   };
+}
+
+/** Потребность сессии (спека застрявших 3.1): по умолчанию без текста, времени сброса, окна и вида входа. */
+export function makeNeed(kind: NeedKind, patch: Partial<SessionNeed> = {}): SessionNeed {
+  return { kind, since: '2026-10-21T09:00:00.000Z', detail: null, resetsAt: null, window: null, account: null, ...patch };
 }
 
 export function activityMap(entries: ActivityEntry[]): Record<string, ActivityEntry> {

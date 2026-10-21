@@ -15,7 +15,8 @@
  * (`SessionRow` с `inRoom`), `★` у ведущего.
  *
  * Фон: решение ждёт — `accent-200`, выбрана — `text 9 %`, развёрнута — `text 4 %` (hover 6 %); подкраска бьёт заливки,
- * как у строки сессии. Вторичный текст на этих заливках держит 4.5:1 не везде: на hover свёрнутой строки в неактивной
+ * как у строки сессии. Той же подкраской, значком вопроса и словом `needs you` комната отмечена, когда живому
+ * участнику нужен человек (`need`, спека застрявших 7.3) — если решение не ждёт; у архивной комнаты этого нет. Вторичный текст на этих заливках держит 4.5:1 не везде: на hover свёрнутой строки в неактивной
  * карточке (заливка карточки и строки складываются) `neutral-700` — 3.86:1 в светлой теме, поэтому там, как у строки
  * сессии, на hover весь текст берёт основной цвет; в развёрнутой комнате внутри неактивной карточки под курсором —
  * 4.25:1, поэтому вторичный текст внутри неё — `neutral-800` (пары — `styles/tokens.test.ts`).
@@ -50,7 +51,7 @@ import type { WorkSession } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { providerName, S } from '../../shared/strings.js';
-import { roomAwaitsDecision } from '../attention/derive.js';
+import { roomAwaitsDecision, sessionNeed } from '../attention/derive.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -154,15 +155,23 @@ export function RoomRow({
   const selected = tab === 'selected';
   const expanded = override ?? tab !== null;
   const pending = roomAwaitsDecision(room);
-  const bold = selected || unread > 0 || pending;
-  // Решение важнее всего; упоминание человека — важнее простого «N new».
+  // Живому участнику нужен человек (`need`, спека застрявших 7.3): комната подсвечена той же подсветкой, что у ждущего
+  // решения. Архивная комната внимания не просит (спека архива комнат, 5.3); закрытый и спящий участник `need` не имеет.
+  const stuck =
+    !row.archived &&
+    row.sessions.some((session) => sessionNeed(session, activity[refKey({ projectPath, workId, sessionId: session.id })]?.activity ?? null) !== null);
+  const needsYou = pending || stuck;
+  const bold = selected || unread > 0 || needsYou;
+  // Решение важнее всего, затем участник, которому нужен человек; упоминание человека — важнее простого «N new».
   const word = pending
     ? S.sidebar.roomDecision
-    : mentioned
-      ? S.sidebar.roomMentioned(unread)
-      : unread > 0
-        ? S.sidebar.roomNew(unread)
-        : '';
+    : stuck
+      ? S.states.blocked
+      : mentioned
+        ? S.sidebar.roomMentioned(unread)
+        : unread > 0
+          ? S.sidebar.roomNew(unread)
+          : '';
   const title = room.title === '' ? S.rooms.fallbackTitle : room.title;
   const tooltip = S.sidebar.roomTooltip(
     row.lead === null ? null : sessionTag(row.lead),
@@ -221,7 +230,7 @@ export function RoomRow({
         // под курсором — как у строки сессии.
         over
           ? DROP_TARGET_FILL
-          : pending
+          : needsYou
             ? 'bg-accent-200 hover:bg-accent-200'
             : selected
               ? 'bg-work-sidebar-accent hover:bg-work-sidebar-accent'
@@ -232,14 +241,14 @@ export function RoomRow({
         // вместо `--state-inactive`: на стопках «заливка комнаты + заливка участника» тёмная neutral-600 даёт 2.67–2.92:1.
         expanded
           ? '[--work-sidebar-muted-foreground:var(--color-neutral-800)] [--state-inactive:var(--color-neutral-700)]'
-          : !pending &&
+          : !needsYou &&
               !selected &&
               'hover:[--work-sidebar-foreground:var(--color-text)] hover:[--work-sidebar-muted-foreground:var(--color-text)]',
         over && DROP_TARGET_INK,
       )}
     >
       <div title={tooltip} className="flex h-[18px] items-center gap-1.5">
-        {pending ? <AgentStateDot state="blocked" lifecycle="active" /> : <span className="inline-block size-3 shrink-0" />}
+        {needsYou ? <AgentStateDot state="blocked" lifecycle="active" /> : <span className="inline-block size-3 shrink-0" />}
         <Hash className="size-[13px] shrink-0 text-work-sidebar-muted-foreground" aria-hidden="true" />
         {renaming ? (
           <RoomInlineRename projectPath={projectPath} workId={workId} room={room} bridge={bridge} onDone={() => setRenaming(false)} />
@@ -247,7 +256,7 @@ export function RoomRow({
           <span className={cn('min-w-0 flex-1 truncate', bold ? 'font-bold' : 'font-normal')}>{title}</span>
         )}
         {plan ? <span data-room-plan-progress="" className="shrink-0 text-[11px]" title={planProgress(plan)}>{planProgress(plan)}</span> : null}
-        {word === '' ? null : <span className={cn('shrink-0 text-[11px]', pending ? 'text-accent-800' : 'text-neutral-800')}>{word}</span>}
+        {word === '' ? null : <span className={cn('shrink-0 text-[11px]', needsYou ? 'text-accent-800' : 'text-neutral-800')}>{word}</span>}
         <button
           type="button"
           // Шеврон открывается стрелками на самой строке (→ и ←); в порядок Tab он не входит, как остальные строки списка.

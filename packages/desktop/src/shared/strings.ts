@@ -13,6 +13,7 @@
  * mail, письмо → message, будильник → auto-wake и т. д. Группы ниже по
  * областям окна; параметризованные тексты — функции.
  */
+import type { NeedKind } from '@parley/core';
 import { STATE_WORDS } from '@parley/core/session-state';
 import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
@@ -384,6 +385,39 @@ export const S = {
    * значков для скринридера и слово итога в тултипе.
    */
   states: STATE_WORDS,
+
+  /**
+   * Чего сессия ждёт от человека — `SessionNeed` (спека застрявших 7.3, спека подписок 7). Слова видов (`approval`,
+   * `limit`, `starting`…) живут в core (`needWord`, `@parley/core/session-state`) и приходят параметром `word`; здесь —
+   * только обрамление вокруг них (`attention/derive.ts` собирает слово, время и обрамление вместе).
+   */
+  need: {
+    /** Метка с временем сброса лимита: `limit · 19:27`, не сегодня — `limit · Oct 14, 19:27`. */
+    withTime: (word: string, when: string): string => `${word} · ${when}`,
+    /** Метка лимита, время сброса которого прошло. */
+    reset: (word: string): string => `${word} · reset`,
+    /** Подсказка метки: чего ждёт сессия (`detail` добавляется после двоеточия). */
+    lead: {
+      approval: (word: string): string => `Waiting for ${word}`,
+      question: (word: string): string => `Has a ${word}`,
+      limit: (word: string): string => `Usage ${word} reached`,
+      'sign-in': (word: string): string => `Needs ${word}`,
+      startup: (word: string): string => `Waiting while ${word}`,
+    } satisfies Record<NeedKind, (word: string) => string>,
+    /** Вместо `lead['sign-in']`, когда проблема в аккаунте или оплате (`account: 'account'`), а не во входе. */
+    accountLead: 'Account problem',
+    withDetail: (lead: string, detail: string): string => `${lead}: ${detail}`,
+    /** Текст строки доставки под сообщением, когда письмо не забрано из-за застрявшей сессии (`MailWait` `stuck`). */
+    mail: {
+      approval: (word: string): string => `waiting for your ${word}`,
+      question: (word: string): string => `asked you a ${word}`,
+      limit: (word: string): string => `usage ${word}`,
+      limitUntil: (word: string, when: string): string => `usage ${word} until ${when}`,
+      limitReset: (word: string): string => `usage ${word} has reset`,
+      signedOut: 'signed out',
+      startup: 'waiting at startup',
+    },
+  },
 
   /** Экран пустого окна (нет ни одной работы) — `shell/Landing.tsx`. */
   landing: {
@@ -952,6 +986,8 @@ export const S = {
       'resume-limit': 'resume limit reached',
       pending: 'not launched',
     } satisfies Record<MailWait, string>,
+    /** Причина, которой окно не знает (хост новее окна): вместо пустой скобки (`mailWaitText`). */
+    mailWaitUnknown: 'waiting',
     /** Подпись точки «непрочитано» у сообщения. */
     newMessage: 'New',
     /** Чип `@human` в тексте сообщения (Parley 0.3.0): так агент обращается к человеку; `title` — вторая строка. */

@@ -6,8 +6,10 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import type { SessionNeed } from '@parley/core';
 import { capPlan, type AgentPlan } from '@parley/core/agent-plan';
 import type { LiveTask } from '@parley/protocol';
+import { makeNeed } from '../../test-utils/work-fixtures.js';
 import type { ParticipantModel } from './feed-model.js';
 import { ParticipantStrip } from './ParticipantStrip.js';
 
@@ -155,6 +157,57 @@ describe('ParticipantStrip — тесная первая строка с рол�
     expect(within(chip).getByText('architect · Builtin').className).toMatch(/\btruncate\b/);
     expect(within(card('s-01')).getByTitle('Lead').className).toContain('shrink-0');
     expect(within(card('s-01')).getByText('done · unseen').className).toContain('shrink-0');
+  });
+});
+
+// Спека застрявших 7.3: у участника, которому нужен человек, слово состояния заменяет причина (слово вида — из core),
+// подсказка слова — обрамление и `detail`.
+describe('ParticipantStrip — причина «нужен ты»', () => {
+  const NOW = new Date(2026, 9, 21, 12, 0);
+  const reset = (day: number, hour: number, minute: number): string => new Date(2026, 9, day, hour, minute).toISOString();
+  const stuck = (need: SessionNeed, patch: Partial<ParticipantModel> = {}): ParticipantModel =>
+    participant({ need, attention: 'needs-you', state: 'unseen', word: 'done · unseen', ...patch });
+  const strip = (participants: ParticipantModel[]) =>
+    render(<ParticipantStrip participants={participants} onOpenSession={vi.fn()} now={NOW} />);
+
+  it('слово причины вместо слова состояния, подсказка слова — обрамление и detail', () => {
+    strip([stuck(makeNeed('approval', { detail: 'Bash: npm test' }))]);
+    const word = within(card('s-01')).getByText('approval');
+    expect(word.getAttribute('title')).toBe('Waiting for approval: Bash: npm test');
+    expect(word.className).toContain('text-accent-800');
+    expect(within(card('s-01')).queryByText('done · unseen')).toBeNull();
+    expect(card('s-01').className).toContain('bg-accent-200');
+  });
+
+  it('лимит со временем сброса: limit · 19:27; после сброса: limit · reset', () => {
+    strip([stuck(makeNeed('limit', { resetsAt: reset(21, 19, 27) }))]);
+    expect(within(card('s-01')).getByText('limit · 19:27')).toBeTruthy();
+    cleanup();
+    strip([stuck(makeNeed('limit', { resetsAt: reset(20, 19, 27) }))]);
+    expect(within(card('s-01')).getByText('limit · reset')).toBeTruthy();
+  });
+
+  it('слово startup — starting; вход — sign-in', () => {
+    strip([stuck(makeNeed('startup'))]);
+    expect(within(card('s-01')).getByText('starting')).toBeTruthy();
+    cleanup();
+    strip([stuck(makeNeed('sign-in', { account: 'auth' }))]);
+    expect(within(card('s-01')).getByText('sign-in')).toBeTruthy();
+  });
+
+  it('без need — слово состояния и без подсказки', () => {
+    strip([participant({ word: 'working' })]);
+    const word = within(card('s-01')).getByText('working');
+    expect(word.getAttribute('title')).toBeNull();
+  });
+
+  // 800×500: ярлык в 80 знаков и самое длинное слово причины — слово остаётся целым, сжимается ярлык.
+  it('длинный ярлык и слово «limit · Oct 22, 19:27»: ярлык сжимается многоточием, слово не сжимается', () => {
+    strip([stuck(makeNeed('limit', { resetsAt: reset(22, 19, 27) }), { label: `S01 ${'я'.repeat(76)}` })]);
+    const name = within(card('s-01')).getByText(/^S01 я+$/);
+    expect(name.className).toContain('min-w-[5ch]');
+    expect(name.className).toContain('truncate');
+    expect(within(card('s-01')).getByText('limit · Oct 22, 19:27').className).toContain('shrink-0');
   });
 });
 
