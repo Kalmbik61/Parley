@@ -118,7 +118,7 @@ test.describe('карточки сайдбара и диалог новой ра
     await expect(window.locator(`[data-work-key="${second.key}"] [data-session-id="${s2}"] [data-state="blocked"]`)).toHaveCount(1);
   });
 
-  test('диалог «New workspace»: проект от «+» заголовка, название из первого промпта или введённое (⌘Enter); у каждой работы своя первая сессия', async () => {
+  test('диалог «New workspace»: проект от «+» заголовка; без агентов — только работа с введённым названием (⌘Enter); с агентом — название из первого промпта и первая сессия', async () => {
     const { window } = await launch();
     // Проект уже известен по этой работе — «+» заголовка есть с первого кадра. Сессии в ней
     // нет: первая работа нового проекта без сессии попадает в снимок и так (core 087d3c8).
@@ -130,23 +130,28 @@ test.describe('карточки сайдбара и диалог новой ра
     const chosen = dialog.getByRole('radiogroup', { name: 'Project' }).getByRole('radio', { checked: true });
     await expect(chosen).toHaveAttribute('title', project);
 
-    // Агента диалог подставляет по ответу providers.list. Под нагрузкой «Create workspace» успевали нажать
-    // раньше: проверка молча отказывала («Select an agent»), и название оставалось.
-    await expect(dialog.getByRole('radiogroup', { name: 'Agent' }).getByRole('radio', { checked: true })).toHaveText('Claude Code');
+    // Диалог открывается без агентов: ни строки агента, ни первого промпта — только «Add agent».
+    await expect(dialog.getByRole('radiogroup', { name: 'Agent 1' })).toHaveCount(0);
+    await expect(dialog.getByLabel(/^First prompt/)).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'Add agent' })).toBeVisible();
 
-    // Без названия: оно берётся из первой строки промпта, до 40 знаков.
-    await dialog.getByLabel(/^First prompt/).fill('e2e-cards-from-prompt\nsecond line of the task');
-    await dialog.getByRole('button', { name: 'Create workspace' }).click();
+    // Без агентов создаётся только работа: введённое название и ⌘Enter.
+    await dialog.getByLabel(/^Title/).fill('e2e-cards-typed');
+    await dialog.getByLabel(/^Title/).press('Meta+Enter');
     await expect(dialog).toBeHidden(DIALOG_CLOSED);
 
-    // Второй раз — введённое название и ⌘Enter.
+    // Второй раз — «Add agent»: появляется первый промпт; без названия оно берётся из его первой строки, до 40 знаков.
     await window.getByRole('button', { name: /^New workspace in / }).click();
     const again = window.getByRole('dialog');
-    await again.getByLabel(/^Title/).fill('e2e-cards-typed');
-    await again.getByLabel(/^Title/).press('Meta+Enter');
+    await again.getByRole('button', { name: 'Add agent' }).click();
+    // Агента строка подставляет по ответу providers.list. Под нагрузкой «Create workspace» успевали нажать
+    // раньше: проверка молча отказывала («Select an agent»), и название оставалось.
+    await expect(again.getByRole('radiogroup', { name: 'Agent 1' }).getByRole('radio', { checked: true })).toHaveText('Claude');
+    await again.getByLabel(/^First prompt/).fill('e2e-cards-from-prompt\nsecond line of the task');
+    await again.getByRole('button', { name: 'Create workspace' }).click();
     await expect(again).toBeHidden(DIALOG_CLOSED);
 
-    // Обе работы — с первой сессией; у первой её задача — весь промпт, у второй — тихий старт; последняя активна, терминал открыт.
+    // Работа без агентов — без сессий; с агентом — с первой сессией, её задача — весь промпт; последняя активна, терминал открыт.
     const created = async (): Promise<Array<{ title: string; sessions: number; task: string }>> => {
       const snapshot = await call<{ entries: Array<{ map: { work: { title: string }; sessions: Array<{ task: string }> } }> }>(window, 'works.list', {});
       return snapshot.entries
@@ -156,13 +161,13 @@ test.describe('карточки сайдбара и диалог новой ра
     };
     await expect.poll(created, DIALOG_CLOSED).toEqual([
       { title: 'e2e-cards-from-prompt', sessions: 1, task: 'e2e-cards-from-prompt\nsecond line of the task' },
-      { title: 'e2e-cards-typed', sessions: 1, task: '' },
+      { title: 'e2e-cards-typed', sessions: 0, task: '' },
     ]);
     await expect(window.locator('[data-work-key]:not([role="tab"])')).toHaveCount(3);
     await expect(window.locator('#titlebar-tabs [role="tab"][data-tab-id^="terminal:"]')).toHaveCount(1);
   });
 
-  test('диалог в новом проекте: «Choose a folder…» — папка в сегменте проектов; работа с первой сессией видна в сайдбаре', async () => {
+  test('диалог в новом проекте: «Choose a folder…» — папка в сегменте проектов; работа без агентов видна в сайдбаре без сессий', async () => {
     const { electronApp, window } = await launch();
     // Нативный выбор папки E2E не нажмёт — `showOpenDialog` в main отвечает сразу этим проектом.
     await electronApp.evaluate(({ dialog }, dir) => {
@@ -179,7 +184,7 @@ test.describe('карточки сайдбара и диалог новой ра
     await dialog.getByRole('button', { name: 'Create workspace' }).click();
     await expect(dialog).toBeHidden(DIALOG_CLOSED);
 
-    // Работа видна с первой сессией: диалог 1.7 сессию запускает всегда.
+    // Работа видна и без сессий: агентов в диалоге нет, создаётся только работа.
     const card = window.locator('[data-work-key]:not([role="tab"])');
     await expect(card).toHaveCount(1);
     await expect(card).toContainText('e2e-cards-bare');
@@ -189,7 +194,7 @@ test.describe('карточки сайдбара и диалог новой ра
       {},
     );
     expect(snapshot.entries.map((entry) => ({ title: entry.map.work.title, sessions: entry.map.sessions.length }))).toEqual([
-      { title: 'e2e-cards-bare', sessions: 1 },
+      { title: 'e2e-cards-bare', sessions: 0 },
     ]);
     const workId = snapshot.entries[0]?.map.work.id ?? '';
     await expect(card).toHaveAttribute('data-work-key', `${project} ${workId}`);

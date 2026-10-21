@@ -1,8 +1,10 @@
 /**
  * Диалог «New workspace» (кусок 7 плана «Organic», спека окна 2026-09-29, 1.7; поведение — спека Orca-UI 6.6): пределы
- * полей `validateDraft`, название из первого промпта, порядок `works.create` → `sessions.create`, вкладка новой
- * сессии — только после снимка работ, «Retry» повторяет лишь `sessions.create`, агент по умолчанию, проект,
- * «In its own worktree». Полей прежней формы (цель, ярлык, «Start a session», «Create more») больше нет.
+ * полей `validateDraft`, название из первого промпта, порядок `works.create` → `sessions.create` → `rooms.create` →
+ * `rooms.send`, работа без агентов (только `works.create`), «Put them in a room» (комната или отдельные сессии), первый
+ * промпт в комнате, вкладка новой сессии или комнаты — только после снимка работ, «Retry» повторяет лишь недостающее,
+ * агент по умолчанию, проект, «In its own worktree». Полей прежней формы (цель, ярлык, «Start a session», «Create more»)
+ * больше нет.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -20,11 +22,14 @@ import { useWorksStore } from '../store/works.js';
 import { recordOnInsert } from '../test-utils/dom-insert.js';
 import { fakeDictationDeps } from '../test-utils/dictation.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
-import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { chooseOption, installRadixSelectPolyfills } from '../test-utils/radix-select.js';
+import { makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { useDictationStore } from '../voice/dictation-store.js';
 import { NewWorkComposer, titleFromPrompt, validateDraft, type NewWorkDraft } from './NewWorkComposer.js';
 
 vi.mock('sonner', () => ({ toast: vi.fn() }));
+
+installRadixSelectPolyfills();
 
 afterEach(() => {
   cleanup();
@@ -46,7 +51,7 @@ const PROVIDERS = [
 ];
 
 function draft(patch: Partial<NewWorkDraft> = {}): NewWorkDraft {
-  return { projectPath: PROJECT, title: 'T', prompt: '', provider: 'claude', ...patch };
+  return { projectPath: PROJECT, title: 'T', prompt: '', agentCount: 1, ...patch };
 }
 
 describe('validateDraft (тест 1)', () => {
@@ -76,8 +81,10 @@ describe('validateDraft (тест 1)', () => {
     expect(validateDraft(draft({ prompt: 't'.repeat(20000) }))).toEqual({});
   });
 
-  it('без агента — «Select an agent»', () => {
-    expect(validateDraft(draft({ provider: null })).provider).toBe('Select an agent');
+  it('без агентов названию не из чего взяться — «Enter a title»; введённое название проходит', () => {
+    expect(validateDraft(draft({ agentCount: 0, title: '', prompt: '' })).title).toBe('Enter a title');
+    expect(validateDraft(draft({ agentCount: 0, title: '  ', prompt: '' })).title).toBe('Enter a title');
+    expect(validateDraft(draft({ agentCount: 0, title: 'Solo', prompt: '' }))).toEqual({});
   });
 });
 
@@ -102,15 +109,21 @@ describe('titleFromPrompt (1.7: «Taken from the first prompt if empty»)', () =
 });
 
 let bridge: FakeBridge;
+/** Номер следующей сессии, которую вернёт `sessions.create`: s-01, s-02, … */
+let nextSession = 1;
 
 beforeEach(() => {
+  nextSession = 1;
   bridge = createFakeBridge();
   bridge.setHandler('providers.list', async () => ({ providers: PROVIDERS }));
+  bridge.setHandler('roles.list', async () => ({ roles: [], diagnostics: [], partial: false }));
   bridge.setHandler('worktrees.available', async () => ({ available: true }));
   bridge.setHandler('works.create', async () => ({ workId: 'w-new' }));
   bridge.setHandler('sessions.create', async (params) => ({
-    ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: 's-01' },
+    ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: `s-${String(nextSession++).padStart(2, '0')}` },
   }));
+  bridge.setHandler('rooms.create', async () => ({ roomId: 'r-01' }));
+  bridge.setHandler('rooms.send', async () => ({ messageId: 'm-01' }));
   useWorksStore.setState({ entries: [makeWork('w-old', { projectPath: PROJECT })], branches: {}, loading: false, error: null });
   useLayoutStore.setState({
     activeWorkKey: null,
@@ -138,6 +151,16 @@ async function renderComposer(onOpenChange: (open: boolean) => void = () => {}):
 const titleField = (): HTMLInputElement => screen.getByLabelText(/^Title/) as HTMLInputElement;
 const promptField = (): HTMLTextAreaElement => screen.getByLabelText(/^First prompt/) as HTMLTextAreaElement;
 const create = (): HTMLButtonElement => screen.getByRole('button', { name: S.dialogs.newWork.submit }) as HTMLButtonElement;
+const rows = (): HTMLElement[] => [...screen.getByRole('dialog').querySelectorAll<HTMLElement>('[data-agent-row]')];
+const providerRadio = (row: number, name: string): HTMLElement =>
+  within(within(rows()[row] as HTMLElement).getByRole('radiogroup', { name: `Agent ${row + 1}` })).getByRole('radio', { name });
+const roomSwitch = (): HTMLButtonElement | null => screen.queryByRole('switch', { name: 'Put them in a room' }) as HTMLButtonElement | null;
+const worktreeSwitch = (): HTMLButtonElement | null => screen.queryByRole('switch', { name: S.dialogs.newSession.inOwnWorktree }) as HTMLButtonElement | null;
+
+async function addAgent(times = 1): Promise<void> {
+  for (let i = 0; i < times; i += 1) fireEvent.click(screen.getByRole('button', { name: S.dialogs.newSession.addAgent }));
+  await act(async () => {});
+}
 
 function typeTitle(value: string): void {
   fireEvent.change(titleField(), { target: { value } });
@@ -147,19 +170,26 @@ function typePrompt(value: string): void {
   fireEvent.change(promptField(), { target: { value } });
 }
 
-const callsOf = (method: string): unknown[] =>
-  bridge.calls.filter((call) => call.method === method).map((call) => call.params);
+const callsOf = (method: string): Array<Record<string, unknown>> =>
+  bridge.calls.filter((call) => call.method === method).map((call) => call.params as Record<string, unknown>);
 
-function emitNewWork(): void {
+/** Снимок работ принёс новую работу: с сессиями и, если есть, комнатой. */
+function emitNewWork(sessions: string[] = ['s-01'], roomId: string | null = null): void {
+  const room = roomId === null ? [] : [{ ...makeRoom(roomId, 'Room 1'), members: sessions, lead: sessions[0] ?? '' }];
   act(() =>
     useWorksStore.setState({
       entries: [
         makeWork('w-old', { projectPath: PROJECT }),
-        makeWork('w-new', { projectPath: PROJECT, sessions: [makeSession('s-01', '')] }),
+        makeWork('w-new', { projectPath: PROJECT, sessions: sessions.map((id) => makeSession(id, '')), rooms: room }),
       ],
     }),
   );
 }
+
+const openTabs = (): string[] => {
+  const layout = useLayoutStore.getState().layouts[NEW_KEY];
+  return layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id));
+};
 
 describe('NewWorkComposer — диктовка (спека 3.2)', () => {
   it('⌘⇧M в поле первого промпта внутри диалога — диктовка; Esc записи не закрывает диалог', async () => {
@@ -167,6 +197,7 @@ describe('NewWorkComposer — диктовка (спека 3.2)', () => {
     const dispose = useDictationStore.getState().configure(fakeDictationDeps('hello from voice'));
     const onOpenChange = vi.fn();
     await renderComposer(onOpenChange);
+    await addAgent();
     const prompt = promptField();
     prompt.focus();
     fireEvent.keyDown(prompt, { key: 'M', code: 'KeyM', metaKey: true, shiftKey: true });
@@ -189,6 +220,7 @@ describe('NewWorkComposer — ⌘Enter во время диктовки', () => 
   it('диктовка идёт: ⌘Enter завершает её, работа не создаётся', async () => {
     const finish = vi.spyOn(useDictationStore.getState(), 'finishBeforeSend').mockReturnValue(true);
     await renderComposer();
+    await addAgent();
     typeTitle('title');
     fireEvent.keyDown(promptField(), { key: 'Enter', metaKey: true });
     expect(finish).toHaveBeenCalledWith('new-workspace');
@@ -199,14 +231,18 @@ describe('NewWorkComposer — ⌘Enter во время диктовки', () => 
 });
 
 describe('NewWorkComposer — вид (1.7)', () => {
-  it('поля 1.7: Project, Agent, Title, First prompt; Cancel и Create workspace; прежних полей нет', async () => {
+  it('без агентов: Project, Title, блок Agents с «Add agent»; промпта, worktree и переключателя комнаты нет; прежних полей нет', async () => {
     await renderComposer();
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'New workspace' })).toBeTruthy();
     expect(within(dialog).getByText('Project')).toBeTruthy();
-    expect(within(dialog).getByText('Agent')).toBeTruthy();
-    expect(titleField().placeholder).toBe('Taken from the first prompt if empty');
-    expect(promptField().placeholder).toBe('What should the agent do?');
+    expect(within(dialog).getByText('Agents')).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: S.dialogs.newSession.addAgent })).toBeTruthy();
+    expect(rows()).toHaveLength(0);
+    expect(titleField().placeholder).toBe('Name the workspace');
+    expect(screen.queryByLabelText(/^First prompt/)).toBeNull();
+    expect(worktreeSwitch()).toBeNull();
+    expect(roomSwitch()).toBeNull();
     expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeTruthy();
     expect(create()).toBeTruthy();
     // Цели, «Start a session», ярлыка и «Create more» больше нет.
@@ -214,6 +250,41 @@ describe('NewWorkComposer — вид (1.7)', () => {
     expect(within(dialog).queryByText('Label')).toBeNull();
     expect(within(dialog).queryByRole('checkbox')).toBeNull();
     expect(within(dialog).queryByRole('switch', { name: 'Start a session' })).toBeNull();
+  });
+
+  it('первый агент: строка, поле First prompt, worktree; название берётся из промпта; переключателя комнаты ещё нет', async () => {
+    await renderComposer();
+    await addAgent();
+    expect(rows()).toHaveLength(1);
+    expect(promptField().placeholder).toBe('What should the agent do?');
+    expect(titleField().placeholder).toBe('Taken from the first prompt if empty');
+    expect(worktreeSwitch()).toBeTruthy();
+    expect(roomSwitch()).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(Lead|Make lead)$/ })).toBeNull();
+    // Строка — та же, что в «New session or room»: роль, пилюли провайдеров, «×».
+    expect(providerRadio(0, 'Claude').getAttribute('aria-checked')).toBe('true');
+    expect(providerRadio(0, 'Codex').getAttribute('aria-checked')).toBe('false');
+    expect(within(rows()[0] as HTMLElement).getByRole('button', { name: S.dialogs.newSession.removeAgent })).toBeTruthy();
+  });
+
+  it('второй агент: переключатель «Put them in a room» включён, у строк звёзды ведущего; убрали агента — переключатель пропал', async () => {
+    await renderComposer();
+    await addAgent(2);
+    expect(roomSwitch()?.getAttribute('aria-checked')).toBe('true');
+    expect(screen.getAllByRole('button', { name: /^(Lead|Make lead)$/ }).map((star) => star.getAttribute('aria-pressed'))).toEqual(['true', 'false']);
+    fireEvent.click(roomSwitch() as HTMLElement);
+    expect(screen.queryByRole('button', { name: /^(Lead|Make lead)$/ })).toBeNull();
+    fireEvent.click(within(rows()[1] as HTMLElement).getByRole('button', { name: S.dialogs.newSession.removeAgent }));
+    expect(roomSwitch()).toBeNull();
+  });
+
+  it('удаление последнего агента возвращает работу без агентов: промпт и worktree пропали', async () => {
+    await renderComposer();
+    await addAgent();
+    fireEvent.click(within(rows()[0] as HTMLElement).getByRole('button', { name: S.dialogs.newSession.removeAgent }));
+    expect(rows()).toHaveLength(0);
+    expect(screen.queryByLabelText(/^First prompt/)).toBeNull();
+    expect(worktreeSwitch()).toBeNull();
   });
 
   it('проекты — сегмент из имён папок, полный путь во всплывающей подсказке; проект открывшего выбран', async () => {
@@ -320,17 +391,75 @@ describe('NewWorkComposer — вид (1.7)', () => {
     expect(within(screen.getByRole('radiogroup', { name: 'Project' })).getByRole('radio', { name: 'p' }).getAttribute('aria-checked')).toBe('true');
   });
 
-  it('агент — сегмент только доступных провайдеров, подписи как в строке статуса', async () => {
+  it('пилюли провайдеров — как в «New session or room»: доступные и недоступный, выбор меняет агента', async () => {
     await renderComposer();
-    const agent = screen.getByRole('radiogroup', { name: 'Agent' });
-    expect(within(agent).getAllByRole('radio').map((item) => item.textContent)).toEqual(['Claude Code', 'Codex']);
-    expect(within(agent).getByRole('radio', { name: 'Claude Code' }).getAttribute('aria-checked')).toBe('true');
+    await addAgent();
+    expect(providerRadio(0, 'Cursor')).toBeTruthy();
+    fireEvent.click(providerRadio(0, 'Codex'));
+    expect(providerRadio(0, 'Codex').getAttribute('aria-checked')).toBe('true');
+    expect(providerRadio(0, 'Claude').getAttribute('aria-checked')).toBe('false');
   });
 });
 
-describe('NewWorkComposer — отправка', () => {
+describe('NewWorkComposer — работа без агентов', () => {
+  it('создаётся только works.create: ни sessions.create, ни rooms.create; работа становится активной, вкладки нет; диалог закрывается', async () => {
+    const opened: boolean[] = [];
+    await renderComposer((open) => opened.push(open));
+    typeTitle('  Solo work ');
+    fireEvent.click(create());
+
+    await waitFor(() => expect(opened).toEqual([false]));
+    expect(callsOf('works.create')).toEqual([{ projectPath: PROJECT, title: 'Solo work', goal: '' }]);
+    expect(callsOf('sessions.create')).toEqual([]);
+    expect(callsOf('rooms.create')).toEqual([]);
+    expect(callsOf('rooms.send')).toEqual([]);
+
+    // Работа становится активной только когда снимок принёс её; вкладки у пустой работы нет.
+    expect(useLayoutStore.getState().activeWorkKey).toBeNull();
+    emitNewWork([]);
+    expect(useLayoutStore.getState().activeWorkKey).toBe(NEW_KEY);
+    act(() => useLayoutStore.getState().hydrate(NEW_KEY, null));
+    expect(openTabs()).toEqual([]);
+  });
+
+  it('название обязательно: пустое — «Enter a title», ничего не отправляется', async () => {
+    await renderComposer();
+    fireEvent.click(create());
+    expect(await screen.findByText('Enter a title')).toBeTruthy();
+    expect(callsOf('works.create')).toHaveLength(0);
+    // Пробелы и невидимые знаки — тоже пусто.
+    typeTitle(`  ${ZWSP} `);
+    fireEvent.click(create());
+    expect(await screen.findByText('Enter a title')).toBeTruthy();
+    expect(callsOf('works.create')).toHaveLength(0);
+  });
+
+  it('промпт, написанный до удаления агента, в пустую работу не попадает', async () => {
+    await renderComposer();
+    await addAgent();
+    typePrompt('Will be dropped');
+    fireEvent.click(within(rows()[0] as HTMLElement).getByRole('button', { name: S.dialogs.newSession.removeAgent }));
+    fireEvent.click(create());
+    expect(await screen.findByText('Enter a title')).toBeTruthy();
+    expect(callsOf('works.create')).toHaveLength(0);
+  });
+
+  it('ошибка works.create — текст createWorkspace', async () => {
+    bridge.setHandler('works.create', async () => {
+      throw { code: 'internal', message: 'сбой' };
+    });
+    await renderComposer();
+    typeTitle('title');
+    fireEvent.click(create());
+    expect(await screen.findByText("Couldn't create workspace: host error.")).toBeTruthy();
+    expect(callsOf('sessions.create')).toHaveLength(0);
+  });
+});
+
+describe('NewWorkComposer — один агент', () => {
   it('тест 2: works.create с обрезанным названием и пустой целью, затем sessions.create с промптом и worktree; вкладка — только после снимка', async () => {
     await renderComposer();
+    await addAgent();
     typeTitle(`  ${ZWSP}title${ZWSP} `);
     typePrompt('Fix the login flow');
     const worktree = await screen.findByRole('switch', { name: S.dialogs.newSession.inOwnWorktree });
@@ -348,6 +477,7 @@ describe('NewWorkComposer — отправка', () => {
       parent: null,
       worktree: true,
     });
+    expect(callsOf('rooms.create')).toEqual([]);
 
     // Снимка ещё нет — ни активной работы, ни вкладки в очереди: иначе мелькнуло бы «Session deleted».
     await act(async () => {});
@@ -357,13 +487,26 @@ describe('NewWorkComposer — отправка', () => {
     emitNewWork();
     expect(useLayoutStore.getState().activeWorkKey).toBe(NEW_KEY);
     act(() => useLayoutStore.getState().hydrate(NEW_KEY, null));
-    const layout = useLayoutStore.getState().layouts[NEW_KEY];
-    expect(layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id))).toEqual([tabId.terminal('s-01')]);
+    expect(openTabs()).toEqual([tabId.terminal('s-01')]);
     expect(useUiStore.getState().ui.lastProvider).toBe('claude');
+  });
+
+  it('модель строки уходит в sessions.create, как в «New session or room»', async () => {
+    bridge.setHandler('providers.list', async () => ({
+      providers: [{ id: 'claude', label: 'Claude', available: true, models: [{ id: 'opus', label: 'Opus' }, { id: 'sonnet', label: 'Sonnet' }], effort: true }],
+    }));
+    await renderComposer();
+    await addAgent();
+    await chooseOption(within(rows()[0] as HTMLElement).getByRole('combobox', { name: 'Model' }), 'Sonnet');
+    typeTitle('title');
+    fireEvent.click(create());
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'claude', model: 'sonnet' });
   });
 
   it('пустое название — из первого промпта: первая строка, до 40 знаков', async () => {
     await renderComposer();
+    await addAgent();
     typePrompt(`\n${'w'.repeat(60)}\nsecond`);
     fireEvent.click(create());
     await waitFor(() => expect(callsOf('works.create')).toHaveLength(1));
@@ -373,6 +516,7 @@ describe('NewWorkComposer — отправка', () => {
 
   it('пустой промпт — тихий старт (task пуст), название обязательно', async () => {
     await renderComposer();
+    await addAgent();
     fireEvent.click(create());
     expect(await screen.findByText('Enter a title or a first prompt')).toBeTruthy();
     expect(callsOf('works.create')).toHaveLength(0);
@@ -391,6 +535,7 @@ describe('NewWorkComposer — отправка', () => {
     });
     const opened: boolean[] = [];
     await renderComposer((open) => opened.push(open));
+    await addAgent();
     typeTitle('title');
     fireEvent.click(create());
 
@@ -415,6 +560,7 @@ describe('NewWorkComposer — отправка', () => {
       throw { code: 'conflict', message: 'raw host text', data: { code: 'resource-budget', reason: 'concurrent', scope: 'work', limit: 10, used: 10 } };
     });
     await renderComposer(() => {});
+    await addAgent();
     typeTitle('title');
     fireEvent.click(create());
 
@@ -430,28 +576,18 @@ describe('NewWorkComposer — отправка', () => {
       return { ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: 's-01' } };
     });
     await renderComposer();
+    await addAgent();
     typeTitle('title');
     typePrompt('first');
     fireEvent.click(create());
     await screen.findByText("Couldn't create session: host error.");
 
     fail = false;
-    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Agent' })).getByRole('radio', { name: 'Codex' }));
+    fireEvent.click(providerRadio(0, 'Codex'));
     typePrompt('second');
     fireEvent.click(screen.getByRole('button', { name: S.common.retry }));
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(2));
     expect(callsOf('sessions.create')[1]).toMatchObject({ provider: 'codex', task: 'second' });
-  });
-
-  it('ошибка works.create — текст createWorkspace, sessions.create не зовётся', async () => {
-    bridge.setHandler('works.create', async () => {
-      throw { code: 'internal', message: 'сбой' };
-    });
-    await renderComposer();
-    typeTitle('title');
-    fireEvent.click(create());
-    expect(await screen.findByText("Couldn't create workspace: host error.")).toBeTruthy();
-    expect(callsOf('sessions.create')).toHaveLength(0);
   });
 
   it('ошибки полей не шлют ничего', async () => {
@@ -464,6 +600,7 @@ describe('NewWorkComposer — отправка', () => {
 
   it('⌘Enter — то же, что «Create workspace»', async () => {
     await renderComposer();
+    await addAgent();
     typeTitle('title');
     fireEvent.keyDown(titleField(), { key: 'Enter', metaKey: true });
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
@@ -472,15 +609,199 @@ describe('NewWorkComposer — отправка', () => {
   it('удачное создание закрывает диалог: onOpenChange(false)', async () => {
     const opened: boolean[] = [];
     await renderComposer((open) => opened.push(open));
+    await addAgent();
     typeTitle('title');
     fireEvent.click(create());
     await waitFor(() => expect(opened).toEqual([false]));
   });
 });
 
+describe('NewWorkComposer — несколько агентов', () => {
+  it('«Put them in a room» выключен: по sessions.create на агента с одним и тем же task, комнаты и письма нет; вкладка первой сессии', async () => {
+    const opened: boolean[] = [];
+    await renderComposer((open) => opened.push(open));
+    await addAgent(2);
+    fireEvent.click(providerRadio(1, 'Codex'));
+    fireEvent.click(roomSwitch() as HTMLElement);
+    typeTitle('Parallel');
+    typePrompt('Do the thing');
+    fireEvent.click(create());
+
+    await waitFor(() => expect(opened).toEqual([false]));
+    expect(callsOf('works.create')).toEqual([{ projectPath: PROJECT, title: 'Parallel', goal: '' }]);
+    expect(callsOf('sessions.create').map((params) => [params['workId'], params['provider'], params['label'], params['task']])).toEqual([
+      ['w-new', 'claude', '', 'Do the thing'],
+      ['w-new', 'codex', '', 'Do the thing'],
+    ]);
+    expect(callsOf('rooms.create')).toEqual([]);
+    expect(callsOf('rooms.send')).toEqual([]);
+    expect(useUiStore.getState().ui.lastProvider).toBe('codex');
+
+    emitNewWork(['s-01', 's-02']);
+    act(() => useLayoutStore.getState().hydrate(NEW_KEY, null));
+    expect(openTabs()).toEqual([tabId.terminal('s-01')]);
+  });
+
+  it('«Put them in a room» включён по умолчанию: sessions.create тихо, rooms.create с ведущим, вкладка комнаты', async () => {
+    const opened: boolean[] = [];
+    await renderComposer((open) => opened.push(open));
+    await addAgent(2);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Make lead' })[0] as HTMLElement);
+    typeTitle('Team');
+    fireEvent.click(create());
+
+    await waitFor(() => expect(opened).toEqual([false]));
+    expect(callsOf('sessions.create').map((params) => params['task'])).toEqual(['', '']);
+    expect(callsOf('rooms.create')).toEqual([
+      { projectPath: PROJECT, workId: 'w-new', title: 'Room 1', members: ['s-01', 's-02'], lead: 's-02', quiet: true },
+    ]);
+    // Промпта нет — в комнату ничего не отправляется.
+    expect(callsOf('rooms.send')).toEqual([]);
+
+    emitNewWork(['s-01', 's-02'], 'r-01');
+    act(() => useLayoutStore.getState().hydrate(NEW_KEY, null));
+    expect(openTabs()).toEqual([tabId.room('r-01')]);
+  });
+
+  it('комната: первый промпт уходит в неё письмом человека всем участникам после rooms.create', async () => {
+    const order: string[] = [];
+    bridge.setHandler('rooms.create', async () => {
+      order.push('rooms.create');
+      return { roomId: 'r-01' };
+    });
+    bridge.setHandler('rooms.send', async () => {
+      order.push('rooms.send');
+      return { messageId: 'm-01' };
+    });
+    const opened: boolean[] = [];
+    await renderComposer((open) => opened.push(open));
+    await addAgent(2);
+    typePrompt('Discuss the plan');
+    fireEvent.click(create());
+
+    await waitFor(() => expect(opened).toEqual([false]));
+    // Название — из промпта, а сессии комнаты стартуют без задачи.
+    expect(callsOf('works.create')[0]).toEqual({ projectPath: PROJECT, title: 'Discuss the plan', goal: '' });
+    expect(callsOf('sessions.create').map((params) => params['task'])).toEqual(['', '']);
+    expect(order).toEqual(['rooms.create', 'rooms.send']);
+    expect(callsOf('rooms.send')).toEqual([
+      { projectPath: PROJECT, workId: 'w-new', roomId: 'r-01', to: [], text: 'Discuss the plan', kind: 'note', requestedAt: expect.any(Number) },
+    ]);
+  });
+
+  it('комната: sessions.create не пересоздаётся при сбое второй — Retry запускает только её, затем комнату и промпт', async () => {
+    let call = 0;
+    let fail = true;
+    bridge.setHandler('sessions.create', async (params) => {
+      call += 1;
+      if (call === 2 && fail) throw { code: 'internal', message: 'сбой' };
+      return { ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: `s-${String(nextSession++).padStart(2, '0')}` } };
+    });
+    const opened: boolean[] = [];
+    await renderComposer((open) => opened.push(open));
+    await addAgent(2);
+    typeTitle('Team');
+    typePrompt('Go');
+    fireEvent.click(create());
+    await screen.findByText("Couldn't create session: host error.");
+    expect(callsOf('rooms.create')).toEqual([]);
+    expect(callsOf('rooms.send')).toEqual([]);
+    expect(opened).toEqual([]);
+
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: S.common.retry }));
+    await waitFor(() => expect(opened).toEqual([false]));
+    expect(callsOf('works.create')).toHaveLength(1);
+    expect(callsOf('sessions.create')).toHaveLength(3);
+    expect(callsOf('rooms.create')).toHaveLength(1);
+    expect(callsOf('rooms.send')).toHaveLength(1);
+  });
+
+  it('комната: rooms.create упал — Retry повторяет только его и не запускает сессии заново', async () => {
+    let fail = true;
+    bridge.setHandler('rooms.create', async () => {
+      if (fail) throw { code: 'internal', message: 'сбой' };
+      return { roomId: 'r-01' };
+    });
+    const opened: boolean[] = [];
+    await renderComposer((open) => opened.push(open));
+    await addAgent(2);
+    typeTitle('Team');
+    fireEvent.click(create());
+    expect(await screen.findByText("Couldn't create room: host error.")).toBeTruthy();
+    expect(opened).toEqual([]);
+
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: S.common.retry }));
+    await waitFor(() => expect(opened).toEqual([false]));
+    expect(callsOf('works.create')).toHaveLength(1);
+    expect(callsOf('sessions.create')).toHaveLength(2);
+    expect(callsOf('rooms.create')).toHaveLength(2);
+  });
+
+  it('комната: rooms.send упал — ошибка, диалог открыт; Retry шлёт только промпт, комнату заново не создаёт', async () => {
+    let fail = true;
+    bridge.setHandler('rooms.send', async () => {
+      if (fail) throw { code: 'internal', message: 'сбой' };
+      return { messageId: 'm-01' };
+    });
+    const opened: boolean[] = [];
+    await renderComposer((open) => opened.push(open));
+    await addAgent(2);
+    typeTitle('Team');
+    typePrompt('Hello room');
+    fireEvent.click(create());
+    expect(await screen.findByText(/The room is ready, but the first prompt was not sent\./)).toBeTruthy();
+    expect(opened).toEqual([]);
+    // Состав и комната уже есть — менять их нельзя.
+    expect(roomSwitch()?.disabled).toBe(true);
+
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: S.common.retry }));
+    await waitFor(() => expect(opened).toEqual([false]));
+    expect(callsOf('works.create')).toHaveLength(1);
+    expect(callsOf('sessions.create')).toHaveLength(2);
+    expect(callsOf('rooms.create')).toHaveLength(1);
+    expect(callsOf('rooms.send')).toHaveLength(2);
+  });
+
+  it('участники комнаты уходят с lean из настройки leanAgents; без комнаты поля lean нет', async () => {
+    bridge.setHandler('settings.get', async () => ({ config: { leanAgents: true } as never, locked: {} }));
+    await renderComposer();
+    await addAgent(2);
+    typeTitle('Team');
+    fireEvent.click(create());
+    await waitFor(() => expect(callsOf('rooms.create')).toHaveLength(1));
+    expect(callsOf('sessions.create').map((params) => params['lean'])).toEqual([true, true]);
+
+    cleanup();
+    bridge.calls.length = 0;
+    nextSession = 1;
+    await renderComposer();
+    await addAgent(2);
+    fireEvent.click(roomSwitch() as HTMLElement);
+    typeTitle('Apart');
+    fireEvent.click(create());
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(2));
+    expect(callsOf('sessions.create').every((params) => !('lean' in params))).toBe(true);
+  });
+
+  it('worktree строки: значок у каждой строки при двух агентах уходит в свою сессию', async () => {
+    await renderComposer();
+    await addAgent(2);
+    fireEvent.click(roomSwitch() as HTMLElement);
+    fireEvent.click(within(rows()[1] as HTMLElement).getByRole('button', { name: S.recipes.worktreeField }));
+    typeTitle('Apart');
+    fireEvent.click(create());
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(2));
+    expect(callsOf('sessions.create').map((params) => params['worktree'])).toEqual([false, true]);
+  });
+});
+
 describe('NewWorkComposer — агент по умолчанию', () => {
   async function submitAndProvider(): Promise<Record<string, unknown>> {
     await renderComposer();
+    await addAgent();
     typeTitle('title');
     fireEvent.click(create());
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
@@ -507,9 +828,10 @@ describe('NewWorkComposer — агент по умолчанию', () => {
     expect(await submitAndProvider()).toMatchObject({ provider: 'codex' });
   });
 
-  it('выбор агента в сегменте — он уходит в sessions.create и запоминается', async () => {
+  it('выбор агента в строке — он уходит в sessions.create и запоминается', async () => {
     await renderComposer();
-    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Agent' })).getByRole('radio', { name: 'Codex' }));
+    await addAgent();
+    fireEvent.click(providerRadio(0, 'Codex'));
     typeTitle('title');
     fireEvent.click(create());
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
@@ -532,6 +854,7 @@ describe('NewWorkComposer — раунд исправлений 1', () => {
     );
     const opened: boolean[] = [];
     await renderComposer((open) => opened.push(open));
+    await addAgent();
     typeTitle('title');
     const pressAll = (): void => {
       fireEvent.click(create());
@@ -553,9 +876,36 @@ describe('NewWorkComposer — раунд исправлений 1', () => {
     expect(callsOf('sessions.create')).toHaveLength(1);
   });
 
+  it('закрыли диалог, пока идёт запуск, — остальные агенты и комната не создаются', async () => {
+    let releaseFirst: () => void = () => {};
+    bridge.setHandler(
+      'sessions.create',
+      (params) =>
+        new Promise((resolve) => {
+          releaseFirst = () => resolve({ ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: 's-01' } });
+        }),
+    );
+    const element = (open: boolean): JSX.Element => (
+      <NewWorkComposer open={open} bridge={bridge} projectPath={PROJECT} title="" onOpenChange={() => {}} />
+    );
+    const view = render(element(true));
+    await act(async () => {});
+    await addAgent(2);
+    typeTitle('Team');
+    fireEvent.click(create());
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    view.rerender(element(false));
+    await act(async () => releaseFirst());
+    await act(async () => {});
+    expect(callsOf('sessions.create')).toHaveLength(1);
+    expect(callsOf('rooms.create')).toEqual([]);
+    expect(callsOf('rooms.send')).toEqual([]);
+  });
+
   it('снимок не принёс работу за 10 с — подписка снята, тост, вкладка не открывается', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     await renderComposer();
+    await addAgent();
     typeTitle('title');
     fireEvent.click(create());
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
@@ -575,6 +925,7 @@ describe('NewWorkComposer — раунд исправлений 1', () => {
   it('снимок пришёл до 10 с — работа активна, тоста нет', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     await renderComposer();
+    await addAgent();
     typeTitle('title');
     fireEvent.click(create());
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
@@ -589,6 +940,7 @@ describe('NewWorkComposer — раунд исправлений 1', () => {
   it('размонтирование снимает ожидание: ни активации, ни тоста', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     await renderComposer();
+    await addAgent();
     typeTitle('title');
     fireEvent.click(create());
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
@@ -609,40 +961,55 @@ describe('NewWorkComposer — раунд исправлений 2 (агент п
     return async () => act(async () => release());
   }
 
-  it('providers.list пришёл после открытия, затем Create — без «Select an agent», с агентом по умолчанию', async () => {
+  it('providers.list пришёл после открытия, затем Create — с агентом по умолчанию', async () => {
     const release = deferProviders();
     render(<NewWorkComposer open bridge={bridge} projectPath={PROJECT} title="" onOpenChange={() => {}} />);
     await waitFor(() => expect(callsOf('providers.list')).toHaveLength(1));
+    await addAgent();
     await release();
-    expect(within(screen.getByRole('radiogroup', { name: 'Agent' })).getByRole('radio', { name: 'Claude Code' }).getAttribute('aria-checked')).toBe('true');
+    expect(providerRadio(0, 'Claude').getAttribute('aria-checked')).toBe('true');
     typeTitle('title');
     fireEvent.click(create());
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
-    expect(screen.queryByText(S.dialogs.newWork.agentRequired)).toBeNull();
     expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'claude' });
   });
 
-  it('Create раньше ответа providers.list — диалог дожидается его и создаёт с агентом по умолчанию, ошибки агента нет', async () => {
+  it('агент добавлен раньше ответа providers.list — Create неактивна и ничего не создаёт, пока список не пришёл', async () => {
     const release = deferProviders();
     render(<NewWorkComposer open bridge={bridge} projectPath={PROJECT} title="" onOpenChange={() => {}} />);
+    await addAgent();
     typeTitle('title');
+    expect(create().disabled).toBe(true);
     fireEvent.click(create());
+    fireEvent.keyDown(titleField(), { key: 'Enter', metaKey: true });
     await act(async () => {});
-    expect(screen.queryByText(S.dialogs.newWork.agentRequired)).toBeNull();
     expect(callsOf('works.create')).toHaveLength(0);
     await release();
+    expect(create().disabled).toBe(false);
+    fireEvent.click(create());
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
-    expect(screen.queryByText(S.dialogs.newWork.agentRequired)).toBeNull();
     expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'claude' });
   });
 
-  it('«In its own worktree» — только у git-проекта (worktrees.available)', async () => {
+  it('работа без агентов не ждёт providers.list', async () => {
+    deferProviders();
+    render(<NewWorkComposer open bridge={bridge} projectPath={PROJECT} title="" onOpenChange={() => {}} />);
+    typeTitle('title');
+    expect(create().disabled).toBe(false);
+    fireEvent.click(create());
+    await waitFor(() => expect(callsOf('works.create')).toHaveLength(1));
+  });
+
+  it('«In its own worktree» — только с агентом и у git-проекта (worktrees.available)', async () => {
     bridge.setHandler('worktrees.available', async () => ({ available: false }));
     await renderComposer();
-    expect(screen.queryByRole('switch', { name: S.dialogs.newSession.inOwnWorktree })).toBeNull();
+    await addAgent();
+    expect(worktreeSwitch()).toBeNull();
     cleanup();
     bridge.setHandler('worktrees.available', async () => ({ available: true }));
     await renderComposer();
+    expect(worktreeSwitch()).toBeNull();
+    await addAgent();
     expect(await screen.findByRole('switch', { name: S.dialogs.newSession.inOwnWorktree })).toBeTruthy();
   });
 });
@@ -657,28 +1024,28 @@ describe('NewWorkComposer — начальное название (кусок 6.
 });
 
 describe('NewWorkComposer — форма на открытии', () => {
-  it('повторное открытие: название и промпт появляются уже сброшенными — сброс до отрисовки, а не после неё', async () => {
+  it('повторное открытие: название, промпт и агенты сброшены до отрисовки, а не после неё', async () => {
     const element = (open: boolean): JSX.Element => (
       <NewWorkComposer open={open} bridge={bridge} projectPath={PROJECT} title="" onOpenChange={() => {}} />
     );
     const view = render(element(true));
     await act(async () => {});
+    await addAgent(2);
     typeTitle('Old title');
     fireEvent.change(promptField(), { target: { value: 'Old prompt' } });
     view.rerender(element(false));
     expect(screen.queryByRole('dialog')).toBeNull();
 
-    // Что поля показывают в тот миг, когда диалог попал в DOM: с `useEffect` сброса тут стояли бы прежние «Old …».
+    // Что поля показывают в тот миг, когда диалог попал в DOM: с `useEffect` сброса тут стояли бы прежние «Old …» и два агента.
     const shown = recordOnInsert((inserted) => {
       const title = inserted.querySelector<HTMLInputElement>('input');
-      const prompt = inserted.querySelector<HTMLTextAreaElement>('textarea');
-      return title === null || prompt === null ? null : { title: title.value, prompt: prompt.value };
+      return title === null ? null : { title: title.value, agents: inserted.querySelectorAll('[data-agent-row]').length, prompt: inserted.querySelector('textarea') === null };
     });
     try {
       view.rerender(element(true));
     } finally {
       shown.stop();
     }
-    expect(shown.seen).toEqual([{ title: '', prompt: '' }]);
+    expect(shown.seen).toEqual([{ title: '', agents: 0, prompt: true }]);
   });
 });

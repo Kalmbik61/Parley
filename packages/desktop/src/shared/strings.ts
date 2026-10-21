@@ -760,14 +760,17 @@ export const S = {
     defaultRoomTitle: (n: number): string => `Room ${n}`,
     /**
      * Диалог «New session or room» (кусок 7 плана «Organic», спека окна 2026-09-29, 1.5) —
-     * `components/dialogs/NewSessionOrRoomDialog.tsx`: один агент — сессия, два и больше — комната с ведущим.
+     * `components/dialogs/NewSessionOrRoomDialog.tsx`: один агент — сессия, два и больше — комната с ведущим или, при
+     * выключенном «Put them in a room», отдельные сессии.
      */
     newSession: {
       roleField: 'Role',
       noRole: 'No role',
       titleSession: 'New session',
       titleRoom: 'New room',
+      titleSessions: 'New sessions',
       hintSession: 'Add another agent to make it a room.',
+      hintSessions: 'Each agent starts as its own session in the workspace, with no room.',
       hintRoom: 'The agents discuss the task you write in the room. The lead brings you a decision.',
       workspaceField: 'Workspace',
       /** Пункт списка работ: название работы и папка проекта — данные, идут как есть. */
@@ -796,6 +799,8 @@ export const S = {
       removeAgent: 'Remove agent',
       addAgent: 'Add agent',
       inOwnWorktree: 'In its own worktree',
+      /** Переключатель при двух агентах и больше: включён — комната, выключен — отдельные сессии. */
+      putInRoom: 'Put them in a room',
       /** Одиночная сессия человека по умолчанию не lean; участники комнаты берут настройку `leanAgents`. */
       leanSession: 'Lean session',
       /** Знак «?» у поля: имя кнопки для скринридера — `About Mode`; текст подсказки — в `hints`. */
@@ -806,7 +811,8 @@ export const S = {
         workspace: 'The workspace the new agents join. A workspace is one task in a project: its sessions and rooms share one map and know about each other.',
         roomName: 'The room’s title in the sidebar and on its tab. If empty, the room is called “Room 1”, “Room 2” and so on.',
         sessionName: 'The session’s name in the sidebar and on its tab. If empty, the session gets a name by its number — Ralph, Anatoly, Ruslan and so on. Rename it any time from its menu.',
-        agents: 'One agent starts a session; two or more make a room.\nRole — optional ready-made instructions with a default provider, model and effort; what you pick in the row wins. Builtin roles come with Parley; “·\u00A0Claude” and “·\u00A0Codex” are your own agents from that CLI and run only there.\n🔒 — a read-only role: the CLI does not let the agent edit files.\nModel and effort — which model runs and how hard it thinks; Default keeps the CLI’s own setting.\nIn a room, ★ picks the lead, who collects the positions and brings you the decision; the branch icon gives one agent its own worktree.',
+        agents: 'One agent starts a session; two or more make a room, or separate sessions if you switch “Put them in a room” off.\nRole — optional ready-made instructions with a default provider, model and effort; what you pick in the row wins. Builtin roles come with Parley; “·\u00A0Claude” and “·\u00A0Codex” are your own agents from that CLI and run only there.\n🔒 — a read-only role: the CLI does not let the agent edit files.\nModel and effort — which model runs and how hard it thinks; Default keeps the CLI’s own setting.\nIn a room, ★ picks the lead, who collects the positions and brings you the decision; the branch icon gives one agent its own worktree.',
+        putInRoom: 'On: the agents discuss your task in one room and the lead brings you a decision. Off: each agent works as its own session.',
         worktree: 'Each agent works in its own Git worktree: a separate folder on a new branch, so agents do not overwrite each other’s edits. You review and merge the work in the Changes tab. Needs a Git repository.',
         leanSession: 'Starts the agent without your plugins, other MCP servers and auto-memory — about a third less context per turn on Claude Code. Parley’s own tools and hooks, your skills and the project CLAUDE.md stay. Other MCP servers are not connected to lean sessions. Agents of a room follow Settings → Agents.',
         /** Перед строками режимов — `S.plans.modes` и `S.plans.modeHelp`, те же, что в панели плана комнаты. */
@@ -814,7 +820,11 @@ export const S = {
       },
       summarySession:(work: string): string => `One session in ${work}`,
       summaryRoom: (agents: number, work: string): string => `Room with ${agents} agents in ${work}`,
+      summarySessions: (agents: number, work: string): string => `${agents} separate sessions in ${work}`,
+      /** Выбран рецепт или режим, а комнаты не будет: переключатель выключен. */
+      separateDropsRecipe: 'A recipe and a mode apply to rooms. With “Put them in a room” off this starts separate sessions without them.',
       submitSession: 'Start session',
+      submitSessions: 'Start sessions',
       submitRoom: 'Create room',
       selectWorkRequired: 'No workspace selected',
       providerUnavailable: (name: string): string => `${name} is unavailable. Connect it or choose another agent.`,
@@ -841,21 +851,29 @@ export const S = {
       leadField: 'Lead',
       submit: 'Create room',
     },
-    /** Диалог «New workspace» (1.7) — `sidebar/NewWorkComposer.tsx` (спека Orca-UI 6.6 — поведение, 1.7 — поля). */
+    /**
+     * Диалог «New workspace» (1.7) — `sidebar/NewWorkComposer.tsx` (спека Orca-UI 6.6 — поведение, 1.7 — поля): работа и,
+     * по желанию, агенты в ней (строки — как в «New session or room», тексты — `newSession`).
+     */
     newWork: {
       title: 'New workspace',
       chooseFolder: 'Choose a folder…',
       titleField: 'Title',
       titlePlaceholder: 'Taken from the first prompt if empty',
+      /** Агентов нет — первого промпта нет, название обязательно. */
+      titlePlaceholderRequired: 'Name the workspace',
       promptField: 'First prompt',
       promptPlaceholder: 'What should the agent do?',
       submit: 'Create workspace',
       selectFolderRequired: 'Select a project folder',
       projectField: 'Project',
-      agentField: 'Agent',
       titleLength: 'Title: 1–120 characters',
       /** Ни названия, ни первого промпта: названию не из чего взяться. */
       titleOrPromptRequired: 'Enter a title or a first prompt',
+      /** Агентов нет — первого промпта тоже, и названию не из чего взяться. */
+      titleRequired: 'Enter a title',
+      /** Комната создана, а первый промпт в неё не ушёл: «Retry» повторяет только его. */
+      firstPromptNotSent: 'The room is ready, but the first prompt was not sent.',
       promptTooLong: 'First prompt: up to 20,000 characters',
       agentRequired: 'Select an agent',
     },

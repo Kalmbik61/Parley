@@ -13,6 +13,7 @@
  * `conflict`ом, и человек увидел бы тост о том, чего не было. Новая версия текста (`rev` вырос) заменяет
  * текст на месте, форма возврата и заметка при этом остаются. Форма и заметка переживают и размонтирование
  * вкладки комнаты: с `draftKey` они лежат в `useUiStore.decisionDrafts` (по комнате и id решения, не `rev`).
+ * В заметку можно диктовать голосом (микрофон справа от поля, ⌘⇧M в поле); `Send to lead` сперва дожидается конца записи.
  * Пока ответ в пути, в нажатой кнопке крутится спиннер; если хост ещё не открыл снимок работ, под кнопками
  * подпись, что ответ уйдёт после старта (разбор 2026-10-14: после перезапуска Accept висел до 30 с молча).
  */
@@ -26,6 +27,9 @@ import { S } from '../../../shared/strings.js';
 import { Badge } from '../../ui/badge.js';
 import { Button } from '../../ui/button.js';
 import { Textarea } from '../../ui/textarea.js';
+import { MicButton } from '../../voice/MicButton.js';
+import { useDictationStore } from '../../voice/dictation-store.js';
+import { isVoiceShortcut, useTextareaDictation } from '../../voice/targets.js';
 import type { ProposalModel } from './feed-model.js';
 import { RoomMarkdown } from './RoomMarkdown.js';
 import { PlanSummary } from './PlanPanel.js';
@@ -73,6 +77,9 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
       useUiStore.getState().setDecisionDraft(storeKey, { open, note: text });
     }
   };
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  /** Цель диктовки: на карточку своя (комната + решение), пока она смонтирована. */
+  const dictationId = `decision-return:${draftKey ?? ''}:${proposal.id}`;
   /** Версия карточки, на которую уже ушёл ответ; `null` — отвечать можно. */
   const [resolving, setResolving] = useState<string | null>(null);
   /** Какое действие в пути — спиннер рисуется в его кнопке. */
@@ -81,6 +88,8 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
   const version = [proposal.id, proposal.rev, proposal.planId ?? proposal.plan?.id, proposal.planRev ?? proposal.plan?.rev].join(':');
   const busy = resolving === version;
   const isPlan = proposal.plan !== undefined || proposal.kind === 'completion';
+  // Поле есть только при открытой форме; цель регистрируется всегда, `element` вернёт `null` при закрытой.
+  useTextareaDictation(dictationId, noteRef, (value) => { if (!busy && canResolve) setDraft(true, value); });
 
   const layoutRef = useRef(onLayout);
   layoutRef.current = onLayout;
@@ -122,17 +131,30 @@ export function DecisionCard({ proposal, time, labelOf, onOpenExternal, canResol
       {isPlan && !canResolve ? <p>{unavailableReason ?? S.plans.oldHost}</p> : null}
       {!canResolve && !isPlan ? null : returning ? (
         <div className="flex flex-col gap-2">
-          <Textarea
-            disabled={busy || !canResolve}
-            value={note}
-            onChange={(event) => { if (!busy && canResolve) setDraft(true, event.target.value); }}
-            placeholder={S.rooms.returnPlaceholder}
-            aria-label={S.rooms.returnPlaceholder}
-            maxLength={NOTE_MAX}
-            className="min-h-16 rounded-[14px] border-[color-mix(in_srgb,currentColor_22%,transparent)] bg-[color-mix(in_srgb,currentColor_5%,transparent)]"
-          />
+          <div className="flex items-start gap-2">
+            <Textarea
+              ref={noteRef}
+              disabled={busy || !canResolve}
+              value={note}
+              onChange={(event) => { if (!busy && canResolve) setDraft(true, event.target.value); }}
+              onKeyDown={(event) => {
+                if (!isVoiceShortcut(event.nativeEvent)) return;
+                event.preventDefault();
+                void useDictationStore.getState().toggle(dictationId);
+              }}
+              placeholder={S.rooms.returnPlaceholder}
+              aria-label={S.rooms.returnPlaceholder}
+              maxLength={NOTE_MAX}
+              className="min-h-16 min-w-0 flex-1 rounded-[14px] border-[color-mix(in_srgb,currentColor_22%,transparent)] bg-[color-mix(in_srgb,currentColor_5%,transparent)]"
+            />
+            <MicButton targetId={dictationId} size="sm" />
+          </div>
           <div className="flex flex-wrap gap-2">
-            <Button type="button" disabled={busy || !canResolve} onClick={() => void answer('return')}>
+            <Button type="button" disabled={busy || !canResolve} onClick={() => {
+              // Запись ещё идёт — текст сперва должен лечь в заметку, ответ уйдёт следующим нажатием.
+              if (useDictationStore.getState().finishBeforeSend(dictationId)) return;
+              void answer('return');
+            }}>
               {busy && pending === 'return' ? spinner : null}
               {S.rooms.sendToLead}
             </Button>

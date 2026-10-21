@@ -1,8 +1,9 @@
 /**
  * Диалог «New session or room» (кусок 7 плана «Organic», спека окна 2026-09-29, 1.5, 2.1): один агент — один
  * `sessions.create` без `rooms.create`; N агентов — N `sessions.create` (тихий старт) и `rooms.create` с `lead` и
- * `quiet: true`; частичный сбой — итог по агентам и «Retry» только упавшим; контролы модели и усилия по `models` и
- * `effort` провайдера; «In its own worktree»; агент по умолчанию; работа диалога.
+ * `quiet: true`, а при выключенном «Put them in a room» — только N `sessions.create`; частичный сбой — итог по агентам и
+ * «Retry» только упавшим; контролы модели и усилия по `models` и `effort` провайдера; «In its own worktree»; агент по
+ * умолчанию; работа диалога.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -115,7 +116,7 @@ async function renderDialog(
   return { onOpenChange };
 }
 
-const dialog = (): HTMLElement => screen.getByRole('dialog', { name: /^(New (session|room)|Save as recipe)$/ });
+const dialog = (): HTMLElement => screen.getByRole('dialog', { name: /^(New (sessions?|room)|Save as recipe)$/ });
 const rows = (): HTMLElement[] => [...dialog().querySelectorAll<HTMLElement>('[data-agent-row]')];
 const button = (name: string | RegExp): HTMLButtonElement => screen.getByRole('button', { name }) as HTMLButtonElement;
 const providerRadio = (row: number, name: string): HTMLElement =>
@@ -1677,6 +1678,33 @@ describe('рецепты комнат (P26, спека рецептов 6.1, 6.2
       expect(modeSelect().textContent).toBe('Checklist');
     });
   });
+
+  it('«Put them in a room» выключен: выбор рецепта спрятан, заметка о потерянном рецепте; выбор рецепта включает переключатель', async () => {
+    await renderDialog();
+    await pick('Review');
+    const roomSwitch = (): HTMLElement => screen.getByRole('switch', { name: 'Put them in a room' });
+    fireEvent.click(roomSwitch());
+    await act(async () => {});
+    expect(within(dialog()).queryByRole('combobox', { name: 'Recipe' })).toBeNull();
+    expect(dialog().querySelector('[data-recipe-dropped]')?.textContent).toMatch(/separate sessions without them/);
+    // Убрали агента — выбор рецепта снова виден (рецепт при одной строке расширяет состав), и выбор включает переключатель.
+    fireEvent.click(within(rows()[1] as HTMLElement).getByRole('button', { name: 'Remove agent' }));
+    await pick('Plan & build');
+    expect(rows()).toHaveLength(4);
+    expect(roomSwitch().getAttribute('aria-checked')).toBe('true');
+    expect(dialog().querySelector('[data-recipe-dropped]')).toBeNull();
+  });
+
+  it('«Put them in a room» выключен: рецепт игнорируется — rooms.create нет', async () => {
+    const { onOpenChange } = await renderDialog();
+    await pick('Review');
+    fireEvent.click(screen.getByRole('switch', { name: 'Put them in a room' }));
+    await act(async () => {});
+    fireEvent.click(button('Start sessions'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')).toHaveLength(2);
+    expect(callsOf('rooms.create')).toEqual([]);
+  });
 });
 
 describe('бюджет работы при старте (P37)', () => {
@@ -2285,5 +2313,124 @@ describe('NewSessionOrRoomDialog — свой провайдер (спека 4.5
     fireEvent.click(providerRadio(0, 'Kimi'));
     expect(await screen.findByRole('button', { name: 'Open in Settings' })).toBeTruthy();
     expect(isChecked(providerRadio(0, 'Claude'))).toBe(true);
+  });
+});
+
+describe('NewSessionOrRoomDialog — «Put them in a room»', () => {
+  const roomSwitch = (): HTMLButtonElement => screen.getByRole('switch', { name: 'Put them in a room' }) as HTMLButtonElement;
+  const hasRoomSwitch = (): boolean => screen.queryByRole('switch', { name: 'Put them in a room' }) !== null;
+  const turnOff = async (): Promise<void> => {
+    fireEvent.click(roomSwitch());
+    await act(async () => {});
+  };
+  const stubSettings = (config: Record<string, unknown>): void => {
+    bridge.setHandler('settings.get', async () => ({ config: config as never, locked: {} }));
+  };
+
+  it('переключатель — от двух агентов, включён по умолчанию; у одного агента его нет', async () => {
+    await renderDialog();
+    expect(hasRoomSwitch()).toBe(false);
+    await addAgent();
+    expect(roomSwitch().getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('heading', { name: 'New room' })).toBeTruthy();
+    fireEvent.click(within(rows()[1] as HTMLElement).getByRole('button', { name: 'Remove agent' }));
+    expect(hasRoomSwitch()).toBe(false);
+  });
+
+  it('у переключателя есть «?» с подсказкой о комнате и отдельных сессиях', async () => {
+    await renderDialog({ room: true });
+    act(() => button(S.dialogs.newSession.hintLabel('Put them in a room')).focus());
+    expect(screen.getByRole('tooltip').textContent).toBe(S.dialogs.newSession.hints.putInRoom);
+  });
+
+  it('выключен: заголовок, сводка и кнопка про сессии; звезд ведущего, режима и названия нет', async () => {
+    await renderDialog({ room: true });
+    await turnOff();
+    expect(screen.getByRole('heading', { name: 'New sessions' })).toBeTruthy();
+    expect(screen.getByText('2 separate sessions in Payments')).toBeTruthy();
+    expect(button('Start sessions')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^(Lead|Make lead)$/ })).toBeNull();
+    expect(within(dialog()).queryByRole('combobox', { name: 'Mode' })).toBeNull();
+    expect(screen.queryByPlaceholderText('What the agents will discuss')).toBeNull();
+    expect(screen.queryByPlaceholderText('Optional')).toBeNull();
+    expect(rows()).toHaveLength(2);
+  });
+
+  it('выключен: по sessions.create на агента, rooms.create нет, пустой ярлык; вкладка первой сессии; диалог закрывается', async () => {
+    useLayoutStore.setState({ layouts: { [KEY]: { root: { type: 'group', id: 'g-1', tabs: [], activeTabId: null }, activeGroupId: 'g-1', closedTabs: [] } }, hydrated: { [KEY]: true } });
+    const { onOpenChange } = await renderDialog({ room: true });
+    fireEvent.click(providerRadio(1, 'Codex'));
+    await turnOff();
+    fireEvent.click(button('Start sessions'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')).toHaveLength(2);
+    expect(callsOf('sessions.create').map((params) => [params['provider'], params['label'], params['task']])).toEqual([['claude', '', ''], ['codex', '', '']]);
+    expect(callsOf('rooms.create')).toEqual([]);
+    expect(useUiStore.getState().ui.lastProvider).toBe('codex');
+
+    act(() =>
+      useWorksStore.setState({
+        entries: [
+          makeWork('w-01', { projectPath: PROJECT, title: 'Payments', sessions: [makeSession('s-01', ''), makeSession('s-02', '')] }),
+          makeWork('w-02', { projectPath: '/tmp/other' }),
+        ],
+      }),
+    );
+    const layout = useLayoutStore.getState().layouts[KEY];
+    expect(layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id))).toEqual([tabId.terminal('s-01')]);
+  });
+
+  it('выключен: частичный сбой — диалог открыт, итог по агентам, Retry повторяет только упавшего, комнаты нет', async () => {
+    let call = 0;
+    let fail = true;
+    bridge.setHandler('sessions.create', async (params) => {
+      call += 1;
+      if (call === 2 && fail) throw { code: 'internal', message: 'сбой' };
+      return { ref: { projectPath: params.projectPath, workId: params.workId ?? '', sessionId: `s-${String(nextSession++).padStart(2, '0')}` } };
+    });
+    const { onOpenChange } = await renderDialog({ room: true });
+    await turnOff();
+    fireEvent.click(button('Start sessions'));
+    await screen.findByText("Couldn't create session: host error.");
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(callsOf('rooms.create')).toEqual([]);
+    expect(roomSwitch().disabled).toBe(true);
+
+    fail = false;
+    fireEvent.click(button('Retry'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create')).toHaveLength(3);
+    expect(callsOf('rooms.create')).toEqual([]);
+  });
+
+  it('выключен: порога размера комнаты нет — состав из двух проходит при roomConcurrent 1, а при включённом блокируется', async () => {
+    stubSettings({ ...DEFAULT_RESOURCE_LIMITS, roomConcurrent: 1 });
+    await renderDialog({ room: true });
+    const blocked = (): string | null => dialog().querySelector('[data-budget-blocked]')?.textContent ?? null;
+    await waitFor(() => expect(blocked()).not.toBeNull());
+    expect(button('Create room').disabled).toBe(true);
+    await turnOff();
+    expect(blocked()).toBeNull();
+    expect(button('Start sessions').disabled).toBe(false);
+  });
+
+  it('выключен: «Lean session» виден и уходит в обе сессии', async () => {
+    stubSettings({ leanAgents: false });
+    const { onOpenChange } = await renderDialog({ room: true });
+    await turnOff();
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Lean session' }));
+    fireEvent.click(button('Start sessions'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('sessions.create').map((params) => params['lean'])).toEqual([true, true]);
+  });
+
+  it('включить обратно — снова комната с ведущим', async () => {
+    const { onOpenChange } = await renderDialog({ room: true });
+    await turnOff();
+    await turnOff();
+    expect(screen.getByRole('heading', { name: 'New room' })).toBeTruthy();
+    fireEvent.click(button('Create room'));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(callsOf('rooms.create')).toHaveLength(1);
   });
 });
