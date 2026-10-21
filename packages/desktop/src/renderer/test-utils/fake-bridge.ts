@@ -12,6 +12,7 @@ import type {
   NotificationName,
   Params,
   Result,
+  TrustRecord,
 } from '@parley/protocol';
 import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../../shared/bridge.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody } from '../../shared/browser-devtools.js';
@@ -122,6 +123,11 @@ export interface FakeBridge extends ParleyBridge {
   /** Вызовы `app.saveRecipe` и ответ на них (по умолчанию — `saved`). */
   readonly saveRecipeCalls: RecipeSaveRequest[];
   setSaveRecipeAnswer(answer: (request: RecipeSaveRequest) => RecipeSaveResult | Promise<RecipeSaveResult>): void;
+  /**
+   * Папки с согласием, которые отдаёт `trust.list` и из которых убирает `trust.revoke` (спека 2026-10-21, 4.1);
+   * по умолчанию пусто. Явный `setHandler('trust.list' | 'trust.revoke', …)` сильнее.
+   */
+  setTrustFolders(folders: TrustRecord[]): void;
   /** Вызовы `app.saveDiagnostics` и ответ на них (по умолчанию — архив собран, хост ответил); `Error` — отказ. */
   readonly saveDiagnosticsCalls: Array<{ profile: boolean }>;
   setSaveDiagnosticsAnswer(answer: DiagnosticsSaveResult | Error): void;
@@ -245,6 +251,16 @@ export interface FakeBridge extends ParleyBridge {
 
 export function createFakeBridge(): FakeBridge {
   const handlers = new Map<MethodName, Handler>();
+  let trustFolders: TrustRecord[] = [];
+  /** Ответы без `setHandler`: у остальных методов обработчик обязателен, у согласий на папки хватает списка в памяти. */
+  const defaultHandlers: Partial<Record<MethodName, Handler>> = {
+    'trust.list': () => ({ folders: trustFolders.map((record) => ({ ...record })) }),
+    'trust.revoke': (({ folder }: { folder: string }) => {
+      const removed = trustFolders.some((record) => record.folder === folder);
+      trustFolders = trustFolders.filter((record) => record.folder !== folder);
+      return { removed };
+    }) as Handler,
+  };
   const eventListeners = new Map<EventName, Set<(data: unknown) => void>>();
   const statusListeners = new Set<(status: HostStatus) => void>();
   const menuListeners = new Set<(id: ActionId) => void>();
@@ -360,6 +376,9 @@ export function createFakeBridge(): FakeBridge {
   const bridge: FakeBridge = {
     setHandler: (method, handler) => {
       handlers.set(method, handler as Handler);
+    },
+    setTrustFolders: (folders) => {
+      trustFolders = folders.map((record) => ({ ...record }));
     },
     notified,
     calls,
@@ -773,7 +792,7 @@ export function createFakeBridge(): FakeBridge {
 
     call: async (method, params) => {
       calls.push({ method, params });
-      const handler = handlers.get(method);
+      const handler = handlers.get(method) ?? defaultHandlers[method];
       if (handler === undefined) throw new Error(`fake-bridge: нет обработчика для ${method}`);
       return handler(params as never) as never;
     },

@@ -1022,6 +1022,7 @@ export const S = {
       voice: 'Voice',
       assistant: 'Assistant',
       providers: 'Providers',
+      projects: 'Projects',
     },
     lockedBy: (value: string): string => `(set by ${value})`,
     appearanceSystem: 'System',
@@ -1039,8 +1040,21 @@ export const S = {
     agentSkills: 'Install agent skills into projects',
     skillNavigator: 'Skill navigator',
     skillNavigatorHint: 'Applies to new and resumed sessions.',
-    codexApprovals: 'Answer Codex approvals in Parley',
-    codexApprovalsHint: 'Codex only · applies to new and resumed sessions. On the next start Codex asks once to trust Parley’s hooks — choose “Trust all and continue”.',
+    /** Три режима одобрений пишущих ролей Codex (спека 2026-10-21, 5.2). */
+    codexWriteApprovals: 'Codex approvals (new and resumed sessions)',
+    codexWriteApprovalsOptions: {
+      auto: "Auto-review (Codex's reviewer decides; nothing to answer)",
+      parley: "Ask in Parley (cards on the island and in Telegram; Codex asks once to trust Parley's hooks)",
+      terminal: 'Ask in the terminal',
+    },
+    /** Только при «Ask in Parley»: хуки Codex доверяет человек, один раз, в `/hooks`. */
+    codexWriteApprovalsHookHint: 'On the next start Codex asks once to trust Parley’s hooks — choose “Trust all and continue”.',
+    /** Секция Projects: согласия на папки, выданные агентам (спека 2026-10-21, 4.1). */
+    projectsHint: 'Agents (Codex) start in these folders without their own trust screen; revoking applies to the next launch.',
+    projectsEmpty: 'No trusted folders yet',
+    projectsRevoke: 'Revoke',
+    projectsGrantedAt: (iso: string): string => new Date(iso).toLocaleDateString('en-US', { dateStyle: 'medium' }),
+    projectsBy: (by: string): string => `by ${by}`,
     worktreeRoot: 'Worktree root',
     /** Пороги бюджета работы и комнаты (P37) — подраздел «Agents». */
     limits: {
@@ -2087,6 +2101,8 @@ export const S = {
       saveRecipe: 'save recipe',
       loadSettings: 'load settings',
       saveSettings: 'save settings',
+      loadTrustedFolders: 'load trusted folders',
+      revokeTrust: 'revoke trust',
       renameWorkspace: 'rename workspace',
       markWorkspaceDone: 'mark workspace as done',
       reopenWorkspace: 'reopen workspace',
