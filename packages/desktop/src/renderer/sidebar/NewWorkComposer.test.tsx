@@ -4,7 +4,7 @@
  * `rooms.send`, работа без агентов (только `works.create`), «Put them in a room» (комната или отдельные сессии), первый
  * промпт в комнате, вкладка новой сессии или комнаты — только после снимка работ, «Retry» повторяет лишь недостающее,
  * агент по умолчанию, проект, «In its own worktree». Полей прежней формы (цель, ярлык, «Start a session», «Create more»)
- * больше нет. Перед `works.create` — согласие на папку (спека 2026-10-21, 4.2 п. 1): `trust.list`, диалог «Trust … for agents?».
+ * больше нет. Перед `works.create` — согласие на папку (спека 2026-10-21, 4.2 п. 1): `trust.check`, диалог «Trust … for agents?».
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -1054,11 +1054,11 @@ describe('NewWorkComposer — форма на открытии', () => {
 
 describe('NewWorkComposer — доверие к папке (спека 2026-10-21, 4.2 п. 1)', () => {
   const trustDialog = (): Promise<HTMLElement> => screen.findByRole('dialog', { name: `Trust ${PROJECT} for agents?` });
-  const callOrder = (): string[] => bridge.calls.map((call) => call.method).filter((method) => ['trust.list', 'trust.grant', 'works.create', 'sessions.create'].includes(method));
+  const callOrder = (): string[] => bridge.calls.map((call) => call.method).filter((method) => ['trust.check', 'trust.grant', 'works.create', 'sessions.create'].includes(method));
 
   beforeEach(() => bridge.setTrustFolders([]));
 
-  it('папки нет в trust.list — диалог, works.create до «Trust» не зовётся; «Trust» — trust.grant window, затем works.create', async () => {
+  it('папка не доверена (trust.check) — диалог, works.create до «Trust» не зовётся; «Trust» — trust.grant window, затем works.create', async () => {
     const opened: boolean[] = [];
     await renderComposer((open) => opened.push(open));
     typeTitle('Solo work');
@@ -1072,7 +1072,10 @@ describe('NewWorkComposer — доверие к папке (спека 2026-10-2
     await waitFor(() => expect(opened).toEqual([false]));
     expect(callsOf('trust.grant')).toEqual([{ folder: PROJECT, by: 'window' }]);
     expect(callsOf('works.create')).toEqual([{ projectPath: PROJECT, title: 'Solo work', goal: '' }]);
-    expect(callOrder()).toEqual(['trust.list', 'trust.grant', 'works.create']);
+    expect(callOrder()).toEqual(['trust.check', 'trust.grant', 'works.create']);
+    // Окно спрашивает хост о выбранной папке, а список доверенных сам не читает и пути не сравнивает.
+    expect(callsOf('trust.check')).toEqual([{ folder: PROJECT }]);
+    expect(callsOf('trust.list')).toHaveLength(0);
   });
 
   it('«Cancel» — назад в композер: ни trust.grant, ни works.create; Create снова доступен и спрашивает заново', async () => {
@@ -1091,10 +1094,10 @@ describe('NewWorkComposer — доверие к папке (спека 2026-10-2
 
     fireEvent.click(create());
     expect(await trustDialog()).toBeTruthy();
-    expect(callsOf('trust.list')).toHaveLength(2);
+    expect(callsOf('trust.check')).toHaveLength(2);
   });
 
-  it('папка в trust.list — диалога нет, works.create сразу', async () => {
+  it('папка доверена — диалога нет, works.create сразу', async () => {
     bridge.setTrustFolders([{ folder: PROJECT, grantedAt: '2026-10-21T10:00:00.000Z', by: 'island' }]);
     const opened: boolean[] = [];
     await renderComposer((open) => opened.push(open));
@@ -1102,7 +1105,7 @@ describe('NewWorkComposer — доверие к папке (спека 2026-10-2
     fireEvent.click(create());
     await waitFor(() => expect(opened).toEqual([false]));
     expect(screen.queryByRole('dialog', { name: /for agents\?$/ })).toBeNull();
-    expect(callOrder()).toEqual(['trust.list', 'works.create']);
+    expect(callOrder()).toEqual(['trust.check', 'works.create']);
   });
 
   it('согласие спрашивается и при агентах любого провайдера: sessions.create — только после «Trust»', async () => {
@@ -1113,12 +1116,25 @@ describe('NewWorkComposer — доверие к папке (спека 2026-10-2
     fireEvent.click(create());
     fireEvent.click(within(await trustDialog()).getByRole('button', { name: S.dialogs.trustFolder.confirm }));
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
-    expect(callOrder()).toEqual(['trust.list', 'trust.grant', 'works.create', 'sessions.create']);
+    expect(callOrder()).toEqual(['trust.check', 'trust.grant', 'works.create', 'sessions.create']);
   });
 
-  it('хост прежней сборки без trust.list — спрашивать нечего, работа создаётся', async () => {
-    bridge.setHandler('trust.list', async () => {
-      throw { code: 'unknown_method', message: 'unknown method: trust.list' };
+  it('папка, доверенная под realpath (путь через ссылку), диалога не вызывает: решает ответ хоста, а не список', async () => {
+    // В списке — realpath, выбран путь через ссылку; хост знает, что это одна папка.
+    bridge.setTrustFolders([{ folder: `/private${PROJECT}`, grantedAt: '2026-10-21T10:00:00.000Z', by: 'window' }]);
+    bridge.setHandler('trust.check', async () => ({ trusted: true }));
+    const opened: boolean[] = [];
+    await renderComposer((open) => opened.push(open));
+    typeTitle('Solo work');
+    fireEvent.click(create());
+    await waitFor(() => expect(opened).toEqual([false]));
+    expect(screen.queryByRole('dialog', { name: /for agents\?$/ })).toBeNull();
+    expect(callsOf('works.create')).toHaveLength(1);
+  });
+
+  it('хост прежней сборки без trust.check — спрашивать нечего, работа создаётся', async () => {
+    bridge.setHandler('trust.check', async () => {
+      throw { code: 'unknown_method', message: 'unknown method: trust.check' };
     });
     const opened: boolean[] = [];
     await renderComposer((open) => opened.push(open));
@@ -1128,8 +1144,8 @@ describe('NewWorkComposer — доверие к папке (спека 2026-10-2
     expect(callsOf('works.create')).toHaveLength(1);
   });
 
-  it('trust.list отказал иначе — ошибка в диалоге, работа не создаётся, форма не заперта', async () => {
-    bridge.setHandler('trust.list', async () => {
+  it('trust.check отказал иначе — ошибка в диалоге, работа не создаётся, форма не заперта', async () => {
+    bridge.setHandler('trust.check', async () => {
       throw { code: 'internal', message: 'сбой' };
     });
     await renderComposer();

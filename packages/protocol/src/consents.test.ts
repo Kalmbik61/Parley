@@ -6,9 +6,9 @@ import { METHODS } from './methods.js';
 import type { Result } from './methods.js';
 
 describe('согласия и доверие к папке: методы окна', () => {
-  it('все пять методов входят в общую таблицу протокола', () => {
+  it('все шесть методов входят в общую таблицу протокола', () => {
     for (const name of Object.keys(consentMethodSchemas)) expect(Object.keys(METHODS)).toContain(name);
-    expect(Object.keys(consentMethodSchemas).sort()).toEqual(['consents.decide', 'consents.list', 'trust.grant', 'trust.list', 'trust.revoke']);
+    expect(Object.keys(consentMethodSchemas).sort()).toEqual(['consents.decide', 'consents.list', 'trust.check', 'trust.grant', 'trust.list', 'trust.revoke']);
   });
 
   it('consents.decide принимает allow и deny, отвергает прочее и пустой id', () => {
@@ -23,6 +23,9 @@ describe('согласия и доверие к папке: методы окн�
     expect(METHODS['trust.grant'].safeParse({ folder: '/p', by: 'telegram' }).success).toBe(true);
     expect(METHODS['trust.grant'].safeParse({ folder: '/p', by: 'agent' }).success).toBe(false);
     expect(METHODS['trust.grant'].safeParse({ folder: '', by: 'window' }).success).toBe(false);
+    expect(METHODS['trust.check'].safeParse({ folder: '/p' }).success).toBe(true);
+    expect(METHODS['trust.check'].safeParse({ folder: '' }).success).toBe(false);
+    expect(METHODS['trust.check'].safeParse({}).success).toBe(false);
     expect(METHODS['trust.revoke'].safeParse({ folder: '/p' }).success).toBe(true);
     expect(METHODS['trust.revoke'].safeParse({}).success).toBe(false);
     expect(METHODS['consents.list'].safeParse({}).success).toBe(true);
@@ -33,6 +36,7 @@ describe('согласия и доверие к папке: методы окн�
     expectTypeOf<Result<'consents.list'>>().toEqualTypeOf<{ items: ConsentCard[] }>();
     expectTypeOf<Result<'consents.decide'>>().toEqualTypeOf<{ applied: boolean; state: ConsentCard['state'] }>();
     expectTypeOf<Result<'trust.list'>>().toEqualTypeOf<{ folders: TrustRecord[] }>();
+    expectTypeOf<Result<'trust.check'>>().toEqualTypeOf<{ trusted: boolean }>();
     expectTypeOf<Result<'trust.grant'>>().toEqualTypeOf<{ folder: TrustRecord }>();
     expectTypeOf<Result<'trust.revoke'>>().toEqualTypeOf<{ removed: boolean }>();
     expectTypeOf<EventData<'consents.changed'>>().toEqualTypeOf<{ upsert: ConsentCard[]; removed: string[] }>();

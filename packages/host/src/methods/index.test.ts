@@ -89,7 +89,7 @@ it('методы диагностики есть только при health и p
 });
 
 it('consents.* и trust.* регистрируются, только если сервис согласий передан, и снимка работ не ждут', () => {
-  const names = ['consents.list', 'consents.decide', 'trust.list', 'trust.grant', 'trust.revoke'] as const;
+  const names = ['consents.list', 'consents.decide', 'trust.list', 'trust.check', 'trust.grant', 'trust.revoke'] as const;
   const { deps } = fakeDeps(Promise.resolve());
   for (const name of names) expect(createHostHandlers(deps).methods).not.toHaveProperty(name);
 

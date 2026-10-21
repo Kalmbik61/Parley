@@ -16,10 +16,10 @@
  * человека всем участникам (`rooms.send` с пустым `to`, как из композера комнаты). Пустой промпт — ничего не отправляется.
  * Название комнаты — «Room 1»: у новой работы комнат ещё нет.
  *
- * Согласие на папку (спека 2026-10-21, 4.2 п. 1): между проверкой формы и `works.create` окно спрашивает `trust.list`; папки
- * нет в списке — диалог «Trust … for agents?» (`TrustFolderDialog`), и без «Trust» работа не создаётся, какой бы
+ * Согласие на папку (спека 2026-10-21, 4.2 п. 1): между проверкой формы и `works.create` окно спрашивает `trust.check`; папка
+ * не доверена — диалог «Trust … for agents?» (`TrustFolderDialog`), и без «Trust» работа не создаётся, какой бы
  * провайдер ни был выбран. «Trust» — `trust.grant` (`by: 'window'`) и дальше всё как обычно; «Cancel» — назад в композер.
- * Хост прежней сборки без `trust.list` (`unknown_method`) запусков не удерживает — спрашивать у него нечего.
+ * Хост прежней сборки без `trust.check` (`unknown_method`) запусков не удерживает — спрашивать у него нечего.
  *
  * Порядок вызовов — `works.create`, затем `sessions.create` по строкам, затем `rooms.create` и `rooms.send` (если нужны).
  * Если что-то после первого упало, работа уже есть: диалог показывает ошибку и «Retry», который по нажатию повторяет
@@ -415,14 +415,13 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
     trustGateRef.current = gate;
     let trusted = true;
     try {
-      const { folders } = await bridge.call('trust.list', {});
-      // Хост записывает realpath папки: путь, выбранный человеком, сверяется с тем, что хост отдал.
-      trusted = folders.some((record) => record.folder === projectPath);
+      // Хост хранит realpath папки и сверяет по нему сам: путь через символическую ссылку окну не сравнить.
+      ({ trusted } = await bridge.call('trust.check', { folder: projectPath }));
     } catch (err) {
       const info = decodeIpcError(err);
-      // Хост прежней сборки трёх методов `trust.*` не знает и запусков не удерживает: спрашивать нечего.
+      // Хост прежней сборки методов `trust.*` не знает и запусков не удерживает: спрашивать нечего.
       if (info.code !== 'unknown_method') {
-        console.warn('[parley] trust.list', info.message);
+        console.warn('[parley] trust.check', info.message);
         if (gate.cancelled) return;
         setError(errorText(info.code, S.errors.actions.checkFolderTrust));
         setBusy(false);

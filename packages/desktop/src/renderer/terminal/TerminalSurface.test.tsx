@@ -7,15 +7,16 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ILink } from '@xterm/xterm';
-import { refKey, type SessionRef } from '@parley/protocol';
+import { refKey, type ConsentCard, type SessionRef } from '@parley/protocol';
 import { toast } from 'sonner';
 import { bufferKey } from '../files/buffer.js';
 import { useFilesStore } from '../files/store.js';
 import { useLayoutStore } from '../layout/store.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { workKey } from '../lib/tree-order.js';
+import { useConsentsStore } from '../store/consents.js';
 import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
 import { useProvidersStore } from '../store/providers.js';
@@ -26,6 +27,7 @@ import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { lineFromText, xtermMock } from '../test-utils/xterm-mock.js';
 import { TerminalSurface } from './TerminalSurface.js';
 import { useDictationStore } from '../voice/dictation-store.js';
+import { S } from '../../shared/strings.js';
 import { terminalSurfaces } from './surface-registry.js';
 
 const state = vi.hoisted(() => ({ xtermPaste: vi.fn() }));
@@ -580,6 +582,78 @@ describe('TerminalSurface — оживление сессии (раунд main-r
     act(() => put('active'));
     await waitFor(() => expect(attaches()).toBe(1));
     expect(screen.queryByTestId('terminal-not-running')).toBeNull();
+  });
+});
+
+// Спека 2026-10-21, 4.2 п. 2: удержанная до согласия сессия Codex открывается в терминале — строка ждёт и здесь.
+describe('TerminalSurface — Codex ждёт согласия на папку', () => {
+  const CARD: ConsentCard = {
+    id: 'c-01',
+    kind: 'folder-trust',
+    folder: '/tmp/proj',
+    projectPath: '/tmp/proj',
+    requestedBy: { source: 'agent', sessionId: 's-03', workId: 'w-01', label: 'S01' },
+    at: '2026-10-21T10:00:00.000Z',
+    state: 'pending',
+  };
+  const waitingLine = (): HTMLElement | null => screen.queryByTestId('terminal-waiting-for-trust');
+  const put = (patch: Parameters<typeof makeSession>[2]): void =>
+    useWorksStore.setState({
+      entries: [makeWork('w-01', { projectPath: '/tmp/proj', sessions: [makeSession('s-01', 'один', patch)] })],
+      branches: {},
+      loading: false,
+      error: null,
+    });
+  const withCard = (card: ConsentCard = CARD): void => {
+    act(() => useConsentsStore.setState({ cards: [card] }));
+  };
+
+  afterEach(() => {
+    useConsentsStore.setState({ cards: [], asking: null });
+  });
+
+  it('pending-сессия Codex и ждущая карточка проекта — строка рядом с карточкой «not started» и кнопка «Trust folder» открывает диалог по карточке', () => {
+    put({ lifecycle: 'pending', provider: 'codex' });
+    renderSurface();
+    expect(waitingLine()).toBeNull();
+    withCard();
+    expect(screen.getByTestId('terminal-not-running')).toBeTruthy();
+    expect(waitingLine()?.textContent).toContain(S.chat.waitingForTrust);
+    // Строка Chat — другой видимый вид; у терминала свой id.
+    expect(screen.queryByTestId('chat-waiting-for-trust')).toBeNull();
+    fireEvent.click(within(waitingLine() as HTMLElement).getByRole('button', { name: S.chat.trustFolder }));
+    expect(useConsentsStore.getState().asking).toBe('c-01');
+  });
+
+  it('спящая сессия — тоже; карточку решили — строки нет', () => {
+    put({ lifecycle: 'sleeping', provider: 'codex' });
+    renderSurface();
+    withCard();
+    expect(waitingLine()).not.toBeNull();
+    act(() => useConsentsStore.setState({ cards: [] }));
+    expect(waitingLine()).toBeNull();
+  });
+
+  it('живая сессия, карточка другого проекта, сессия не Codex — строки нет; сессия ожила — строка уходит', () => {
+    put({ lifecycle: 'active', provider: 'codex' });
+    const view = renderSurface();
+    withCard();
+    expect(waitingLine()).toBeNull();
+    view.unmount();
+
+    put({ lifecycle: 'pending', provider: 'codex' });
+    const other = renderSurface();
+    withCard({ ...CARD, projectPath: '/tmp/other', folder: '/tmp/other' });
+    expect(waitingLine()).toBeNull();
+    withCard();
+    expect(waitingLine()).not.toBeNull();
+    act(() => put({ lifecycle: 'active', provider: 'codex' }));
+    expect(waitingLine()).toBeNull();
+    other.unmount();
+
+    put({ lifecycle: 'pending', provider: 'claude' });
+    renderSurface();
+    expect(waitingLine()).toBeNull();
   });
 });
 

@@ -194,7 +194,7 @@ describe('список методов в hello', () => {
     // Расход токенов комнаты: без метода окно значок не показывает (useHostSupports).
     expect(methods).toContain('rooms.usage');
     // Согласия на папку для Codex (спека 2026-10-21, 4.4): без них окно, остров и Settings → Projects молчат.
-    for (const name of ['consents.list', 'consents.decide', 'trust.list', 'trust.grant', 'trust.revoke']) {
+    for (const name of ['consents.list', 'consents.decide', 'trust.list', 'trust.check', 'trust.grant', 'trust.revoke']) {
       expect(methods).toContain(name);
     }
     client.close();

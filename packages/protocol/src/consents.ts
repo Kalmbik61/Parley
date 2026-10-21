@@ -32,6 +32,8 @@ export const consentMethodSchemas = {
   'consents.list': z.object({}),
   'consents.decide': z.object({ id: z.string().min(1), decision: z.enum(['allow', 'deny']) }),
   'trust.list': z.object({}),
+  /** Доверена ли папка: хост сам берёт realpath, окно путь не сверяет (`/tmp` и `/private/tmp` — одна папка). */
+  'trust.check': z.object({ folder: z.string().min(1) }),
   'trust.grant': z.object({ folder: z.string().min(1), by: z.enum(['window', 'island', 'telegram']) }),
   'trust.revoke': z.object({ folder: z.string().min(1) }),
 } as const;
@@ -41,6 +43,7 @@ export interface ConsentMethodResults {
   /** Второе решение по той же карточке — `applied: false` (как у `feed.decide`). */
   'consents.decide': { applied: boolean; state: ConsentCard['state'] };
   'trust.list': { folders: TrustRecord[] };
+  'trust.check': { trusted: boolean };
   'trust.grant': { folder: TrustRecord };
   'trust.revoke': { removed: boolean };
 }

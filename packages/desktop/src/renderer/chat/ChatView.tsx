@@ -90,6 +90,7 @@ import { dragHasFiles } from '../terminal/drop.js';
 import { resumeSession, type SendWithToastDeps } from '../terminal/send.js';
 import { composeRoomMessage } from '../components/rooms/attachments.js';
 import { ContextChip } from '../components/context/ContextChip.js';
+import { WaitingForTrust } from '../components/WaitingForTrust.js';
 import { fitDefaultInstructions } from '../lib/context-format.js';
 import { addAttachments, composePrompt } from './attachments.js';
 import { useAssistantSent, viaAssistantIds } from './assistant-sent.js';
@@ -478,14 +479,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
         </ImagePreviewHost>
         {showCard ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
         {showBanner ? <WaitingBanner workKey={workKey} tabId={tab.id} /> : null}
-        {trustCard === undefined ? null : (
-          <div data-testid="chat-waiting-for-trust" className="mx-3 mb-2 flex min-w-0 items-center gap-2 rounded-lg bg-foreground/5 px-3 py-2 text-xs">
-            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{S.chat.waitingForTrust}</span>
-            <Button type="button" size="xs" variant="ghost" className="shrink-0" onClick={() => useConsentsStore.getState().ask(trustCard.id)}>
-              {S.chat.trustFolder}
-            </Button>
-          </div>
-        )}
+        {trustCard === undefined ? null : <WaitingForTrust cardId={trustCard.id} testId="chat-waiting-for-trust" className="mx-3 mb-2" />}
         {showHooksHint ? (
           <div data-testid="codex-hooks-hint" className="mx-3 mb-2 flex min-w-0 items-center gap-2 rounded-lg bg-foreground/5 px-3 py-2 text-xs">
             <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{S.chat.codexHooksHint}</span>

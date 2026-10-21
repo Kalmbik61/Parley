@@ -125,8 +125,9 @@ export interface FakeBridge extends ParleyBridge {
   readonly saveRecipeCalls: RecipeSaveRequest[];
   setSaveRecipeAnswer(answer: (request: RecipeSaveRequest) => RecipeSaveResult | Promise<RecipeSaveResult>): void;
   /**
-   * Папки с согласием, которые отдаёт `trust.list` и из которых убирает `trust.revoke` (спека 2026-10-21, 4.1);
-   * по умолчанию пусто. Явный `setHandler('trust.list' | 'trust.revoke', …)` сильнее.
+   * Папки с согласием, которые отдаёт `trust.list`, по которым отвечает `trust.check` (точное совпадение строки пути:
+   * realpath в тесте не нужен) и из которых убирает `trust.revoke` (спека 2026-10-21, 4.1); по умолчанию пусто.
+   * Явный `setHandler('trust.list' | 'trust.check' | 'trust.revoke', …)` сильнее.
    */
   setTrustFolders(folders: TrustRecord[]): void;
   /**
@@ -263,6 +264,7 @@ export function createFakeBridge(): FakeBridge {
   /** Ответы без `setHandler`: у остальных методов обработчик обязателен, у согласий на папки хватает списка в памяти. */
   const defaultHandlers: Partial<Record<MethodName, Handler>> = {
     'trust.list': () => ({ folders: trustFolders.map((record) => ({ ...record })) }),
+    'trust.check': (({ folder }: { folder: string }) => ({ trusted: trustFolders.some((record) => record.folder === folder) })) as Handler,
     'trust.grant': (({ folder, by }: { folder: string; by: TrustRecord['by'] }) => {
       const record: TrustRecord = { folder, grantedAt: new Date(0).toISOString(), by };
       trustFolders = [...trustFolders.filter((item) => item.folder !== folder), record];

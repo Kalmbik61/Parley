@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -67,6 +67,29 @@ it('trust.grant → trust.list → trust.revoke: запись в trust.json вы
     expect(await handlers['trust.revoke']?.({ folder }, request)).toEqual({ removed: true });
     expect(await handlers['trust.revoke']?.({ folder }, request)).toEqual({ removed: false });
     expect(await handlers['trust.list']?.({}, request)).toEqual({ folders: [] });
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+});
+
+it('trust.check: доверена ли папка — по realpath, путь через символическую ссылку та же папка', async () => {
+  const { handlers } = build();
+  const folder = await mkdtemp(path.join(tmpdir(), 'parley-consent-check-'));
+  const link = path.join(home, 'link-to-folder');
+  try {
+    await symlink(folder, link);
+    expect(await handlers['trust.check']?.({ folder }, request)).toEqual({ trusted: false });
+    expect(await handlers['trust.check']?.({ folder: link }, request)).toEqual({ trusted: false });
+
+    await handlers['trust.grant']?.({ folder, by: 'window' }, request);
+    expect(await handlers['trust.check']?.({ folder }, request)).toEqual({ trusted: true });
+    // Хост хранит realpath: путь через ссылку и путь по realpath не различаются.
+    expect(await handlers['trust.check']?.({ folder: link }, request)).toEqual({ trusted: true });
+    expect(await handlers['trust.check']?.({ folder: await realpath(folder) }, request)).toEqual({ trusted: true });
+    expect(await handlers['trust.check']?.({ folder: path.join(folder, 'other') }, request)).toEqual({ trusted: false });
+
+    await handlers['trust.revoke']?.({ folder: link }, request);
+    expect(await handlers['trust.check']?.({ folder }, request)).toEqual({ trusted: false });
   } finally {
     await rm(folder, { recursive: true, force: true });
   }
