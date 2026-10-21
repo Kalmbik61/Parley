@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedCard } from '@parley/core';
-import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { activityMap, makeActivity, makeNeed, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { ASK_RETRY_SCHEDULE_MS, ELSEWHERE_MS, useIslandRequests } from './requests.js';
 
 const PROJECT = '/tmp/proj';
@@ -61,6 +61,34 @@ describe('очередь запросов острова', () => {
     expect(useIslandRequests.getState().items.find((item) => item.ref.sessionId === 's-03')).toMatchObject({ card: null, inWindow: false });
     expect(snapshot).toHaveBeenCalledTimes(2);
     expect(snapshot).toHaveBeenCalledWith({ ref: ref('s-01'), scope: 'attention' });
+  });
+
+  // Спека подписок К16: причина «needs you» одна на окно, остров и Telegram — текст из ядра (`needReason`).
+  it('Codex с need: переход к терминалу называет причину; без need — прежний «Codex needs your attention»', async () => {
+    const { call } = bridge({});
+    useIslandRequests.getState().bind(call as never);
+    const approval = makeNeed('approval', { detail: 'ls -la' });
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-03'), 'blocked', { need: approval })]));
+    expect(useIslandRequests.getState().items[0]).toMatchObject({
+      card: null,
+      inWindow: false,
+      summary: 'Waiting for your approval: ls -la',
+    });
+
+    useIslandRequests.getState().clear();
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-03'), 'blocked')]));
+    expect(useIslandRequests.getState().items[0]?.summary).toBe('Codex needs your attention in the terminal');
+  });
+
+  it('Codex упёрся в лимит (ход закончен, но need есть) — в острове причина с часом сброса', async () => {
+    const { call } = bridge({});
+    useIslandRequests.getState().bind(call as never);
+    // Час сброса собран из частей по местному времени — набор не зависит от пояса машины.
+    const resetsAt = new Date(2026, 9, 21, 16, 27).toISOString();
+    vi.setSystemTime(new Date(2026, 9, 21, 13, 0));
+    const limit = makeNeed('limit', { resetsAt, window: 'session' });
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-03'), 'unseen', { need: limit })]));
+    expect(useIslandRequests.getState().items[0]?.summary).toBe('Hit its Codex usage limit; resets at 16:27');
   });
 
   it('карточки ещё нет — первый повтор через 500 мс', async () => {

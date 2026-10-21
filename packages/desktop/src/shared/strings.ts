@@ -15,6 +15,7 @@
  */
 import type { NeedKind } from '@parley/core';
 import { STATE_WORDS } from '@parley/core/session-state';
+import { providerLabel } from '@parley/core/stuck';
 import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
 import type { IpcErrorInfo } from './ipc-error.js';
@@ -407,6 +408,19 @@ export const S = {
     /** Вместо `lead['sign-in']`, когда проблема в аккаунте или оплате (`account: 'account'`), а не во входе. */
     accountLead: 'Account problem',
     withDetail: (lead: string, detail: string): string => `${lead}: ${detail}`,
+    /** Уведомление о лимите (спека застрявших 7.1): один заголовок на аккаунт, `provider` — его имя (`providerName`). */
+    limitTitle: (provider: string): string => `${provider} usage limit reached`,
+    /**
+     * Тело уведомления о лимите: ярлыки ждущих сессий этого аккаунта и до какого часа. Часа нет — сброс неизвестен.
+     * `tags` — `S01, S03`; число решает глагол.
+     */
+    limitBody: (tags: readonly string[], until: string | null): string => {
+      const who = tags.join(', ');
+      if (until === null) return `${who} ${tags.length === 1 ? 'waits' : 'wait'} for the limit reset (time unknown)`;
+      return `${who} ${tags.length === 1 ? 'waits' : 'wait'} until ${until}`;
+    },
+    /** Хвост тела уведомления для сессии в комнате (спека застрявших 7.1): `· room Backend`. */
+    inRoom: (room: string): string => `· room ${room}`,
     /** Текст строки доставки под сообщением, когда письмо не забрано из-за застрявшей сессии (`MailWait` `stuck`). */
     mail: {
       approval: (word: string): string => `waiting for your ${word}`,
@@ -1097,7 +1111,8 @@ export const S = {
     notifyNeedsYou: 'Needs you',
     notifyFinished: 'Finished',
     notifyMail: 'Mail and mentions to you',
-    notifySound: 'Sound',
+    notifySound: "Sound when you're needed",
+    notifyFinishedSound: 'Sound when an agent finishes',
     notifyIsland: 'Island with requests at the top of the screen',
     /** Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */
     notificationsHint: 'Not getting notifications? System Settings → Notifications → Parley',
@@ -2002,9 +2017,10 @@ export const S = {
     sessionTitle: (workspace: string, session: string, event: string): string => `${workspace} · ${session} — ${event}`,
     needsYou: 'needs you',
     finished: 'finished',
-    trustWait: 'waiting for folder trust',
     launchFailed: "couldn't launch",
     resumeFailed: "couldn't resume",
+    /** Заголовок уведомления хоста `limit-return-blocked` (спека застрявших 7.1): лимит сброшен, а сессию вернуть не вышло. */
+    limitReturnBlocked: 'limit has reset',
     /** «<работа> · письмо | вопрос | решение от S01» по `Message.kind`. */
     mailTitle: (workspace: string, kind: 'note' | 'question' | 'decision', from: string): string =>
       `${workspace} · ${kind === 'question' ? 'question' : kind === 'decision' ? 'decision' : 'message'} from ${from}`,
@@ -2424,16 +2440,8 @@ export const S = {
  * комнаты («2 Claude Code agents»).
  */
 export function providerName(id: string, label: string): string {
-  switch (id.toLowerCase()) {
-    case 'claude':
-      return 'Claude Code';
-    case 'codex':
-      return 'Codex';
-    case 'glm':
-      return 'GLM';
-    default:
-      return label === '' ? id : label;
-  }
+  // Таблица имён — одна, в ядре (`providerLabel`): её же берут причина «needs you» и текст Telegram (спека подписок К16).
+  return providerLabel({ id, label });
 }
 
 /** Английский текст по коду ошибки протокола (`ErrorCode` из `@parley/protocol`, плюс наш `'failed'`). */
@@ -2529,6 +2537,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'resume-limit': 'hourly resume limit reached — messages are waiting',
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
+  'limit-return-blocked': 'the limit has reset, but Parley could not continue this session — check its terminal',
   'codex-call-wait': 'unfinished Codex tool operation — check approvals and verify the result before retrying',
   'skill-foreign': "agent skill not installed — that path already exists and wasn't created by Parley",
   'parley-md-created': 'Parley added PARLEY.md — team rules for your agents',

@@ -176,7 +176,7 @@ describe('App — провайдеры строки статуса (Organic, 1.1
 // самого текста переехали в `attention/notify.test.ts` (тест 11 куска 4.3); здесь — сквозная
 // регрессия через подставной мост.
 describe('App — русский notice.text до уведомления не доходит (тест 11 куска 4.3)', () => {
-  it('host.notice trust-wait с русским text — в appNotified этого text нет', async () => {
+  it('host.notice limit-return-blocked с русским text — в appNotified этого text нет', async () => {
     useWorksStore.setState({ entries: [work('w-01', '2026-01-01', [session('s-03', 'backend')])], branches: {}, loading: false, error: null });
     render(<App />);
     await act(async () => {
@@ -185,7 +185,7 @@ describe('App — русский notice.text до уведомления не д
 
     act(() => {
       bridge.emit('host.notice', {
-        kind: 'trust-wait',
+        kind: 'limit-return-blocked',
         ref: { projectPath: '/tmp/w-01', workId: 'w-01', sessionId: 's-03' },
         text: 'русский текст хоста, который никто не должен увидеть',
         at: '2026-01-01T00:00:00.000Z',
@@ -195,8 +195,8 @@ describe('App — русский notice.text до уведомления не д
     expect(bridge.appNotified).toHaveLength(1);
     expect(JSON.stringify(bridge.appNotified)).not.toContain('русский текст хоста');
     expect(bridge.appNotified[0]).toMatchObject({
-      title: 'w-01 · S03 backend — waiting for folder trust',
-      body: 'Not responding since launch — may be waiting for folder trust.',
+      title: 'w-01 · S03 backend — limit has reset',
+      body: 'The limit has reset, but Parley could not continue this session — check its terminal.',
     });
   });
 });

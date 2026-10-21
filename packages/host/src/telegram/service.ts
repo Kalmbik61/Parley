@@ -7,15 +7,29 @@
 import path from 'node:path';
 import {
   maskTelegramTokens,
+  needReason,
   participantLabel,
   pendingCards,
   planRefOf,
+  providerLabel,
   secretHint,
   TELEGRAM_TOKEN_RE,
   telegramBotId,
   telegramTokenFingerprint,
 } from '@parley/core';
-import type { FeedCard, FeedCardState, FeedDecision, FeedItem, FeedText, ParleyConfig, WorkEntry, WorkSession } from '@parley/core';
+import { sessionNeed } from '@parley/core/attention';
+import type {
+  FeedCard,
+  FeedCardState,
+  FeedDecision,
+  FeedItem,
+  FeedText,
+  ParleyConfig,
+  ProviderEntry,
+  SessionActivity,
+  WorkEntry,
+  WorkSession,
+} from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { AssistantProposal, Params, Result, SessionRef, TelegramPolling, TelegramStatus } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -51,6 +65,11 @@ export interface TelegramServiceDeps {
   works: Pick<WorksService, 'snapshot' | 'onChange'>;
   activity: Pick<ActivityService, 'get' | 'onChange'>;
   feed?: Pick<FeedService, 'snapshot' | 'decide' | 'subscribe' | 'unsubscribe'>;
+  /**
+   * Реестр провайдеров хоста (`loadProviders()`): имя провайдера в причине «needs you» (спека подписок К16). Нет —
+   * или id не найден — имя строится по одному id.
+   */
+  providers?(): Promise<Record<string, Pick<ProviderEntry, 'id' | 'label'>>>;
   assistant: Pick<AssistantService, 'ask' | 'cancel' | 'reset' | 'decide' | 'onState' | 'settings' | 'state'>;
   /** `sendHumanLetter(input, { via: 'telegram' })`. */
   sendLetter(input: Params<'rooms.send'>): Promise<string>;
@@ -693,18 +712,32 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
    * Сессия перешла в «нужен ты»: хук ложится позже активности, поэтому лента смотрится сразу и ещё раз через
    * `SNAPSHOT_RETRY_MS`. Уведомление без кнопок уходит, только если последний обход не нашёл ни одной карточки.
    */
-  function watchBlocked(ref: SessionRef, entry: WorkEntry, session: WorkSession): void {
+  function watchBlocked(ref: SessionRef, entry: WorkEntry, session: WorkSession, triggered: SessionActivity | null): void {
     if (cfg?.telegramNeedsYou !== true) return;
     const key = refKey(ref);
     cancelWatch(key);
     const name = session.label;
     const where = sessionWhere(entry);
-    const tell = (last: FeedText | undefined): void => {
-      const tail = last === undefined ? '' : `\n<pre>${escapeHtml(lastLines(last.text))}</pre>`;
-      notice(`${escapeHtml(T.needsYou(name, where))}${tail}`, false);
+    /**
+     * « — <причина>» у сессии с `need` (спека подписок К16): текст `needReason` ядра, как в окне и на острове. `need`
+     * берётся на момент сообщения, а не перехода: хук и время сброса ложатся чуть позже активности. Без `need` — пусто.
+     */
+    const reason = async (): Promise<string> => {
+      const need = sessionNeed(session, deps.activity.get(ref)?.activity ?? triggered);
+      if (need === null) return '';
+      const registry = await deps.providers?.().catch(() => undefined);
+      return ` — ${needReason(need, new Date(now()), providerLabel(registry?.[session.provider] ?? { id: session.provider, label: '' }))}`;
     };
+    const tell = async (last: FeedText | undefined): Promise<void> => {
+      const why = await reason();
+      // Пока читался реестр, человек мог ответить: «нужен ты» уже снят.
+      if (!canSend() || memory.levels.get(key) !== 'blocked') return;
+      const tail = last === undefined ? '' : `\n<pre>${escapeHtml(lastLines(last.text))}</pre>`;
+      notice(`${escapeHtml(`${T.needsYou(name, where)}${why}`)}${tail}`, false);
+    };
+    const fail = (error: unknown): void => log(`telegram: needs-you failed: ${(error as Error).message}`);
     if (deps.feed === undefined) {
-      tell(undefined);
+      void tell(undefined).catch(fail);
       return;
     }
     let found = false;
@@ -716,9 +749,8 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
         found ||= result.pending > 0;
         last = result.last ?? last;
       }
-      if (final && !found && canSend() && memory.levels.get(key) === 'blocked') tell(last);
+      if (final && !found && canSend() && memory.levels.get(key) === 'blocked') await tell(last);
     };
-    const fail = (error: unknown): void => log(`telegram: needs-you failed: ${(error as Error).message}`);
     watches.set(
       key,
       SNAPSHOT_RETRY_MS.map((delay, index) => setTimeout(() => void check(index === SNAPSHOT_RETRY_MS.length - 1).catch(fail), delay)),
@@ -733,7 +765,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     const trigger = activityTransition(memory, ref, found.session, live.activity);
     const key = refKey(ref);
     if (trigger === 'needs-you') {
-      watchBlocked(ref, found.entry, found.session);
+      watchBlocked(ref, found.entry, found.session, live.activity);
     } else if (memory.levels.get(key) === 'blocked') {
       // Сессия всё ещё ждёт: это может быть следующий запрос подряд или запоздавший хук.
       if (cfg?.telegramNeedsYou === true) {

@@ -480,6 +480,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     works: worksService,
     activity: activityService,
     feed: feedService,
+    providers: () => loadProviders(),
     assistant: assistantService,
     sendLetter: (input) => sendHumanLetter(input, { via: 'telegram' }),
     resolveRoomProposal: (input) => resolveRoomProposal(input),

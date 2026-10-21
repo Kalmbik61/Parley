@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG, telegramBotId, telegramTokenFingerprint } from '@parley/core';
-import type { FeedCard, FeedItem, ParleyConfig, WorkEntry } from '@parley/core';
+import type { FeedCard, FeedItem, ParleyConfig, SessionNeed, WorkEntry } from '@parley/core';
 import type { AssistantProposal, AssistantSettings, AssistantState, SessionRef, WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
 import { HostError } from '../errors.js';
@@ -61,6 +61,8 @@ let cfg: ParleyConfig;
 let secretValue: string | null;
 let snapshot: WorksSnapshot;
 let live: Record<string, string>;
+/** Чего ждёт сессия `s-01` (`SessionActivity.need`); `null` — ничего. */
+let liveNeed: SessionNeed | null;
 let feedItems: FeedItem[];
 let feedTerminal: boolean;
 let worksListener: ((next: WorksSnapshot, previous: WorksSnapshot) => void) | null;
@@ -162,10 +164,24 @@ const snap = (over: Record<string, unknown> = {}): WorksSnapshot => ({ entries: 
 const letter = (): unknown => ({ id: 'm-01', roomId: null, from: 's-01', to: ['human'], at: AT, text: 'hello', kind: 'note', readBy: {} });
 const decisionRoom = (): unknown => ({ id: 'r-01', title: 'Auth', members: ['s-01'], proposal: { id: 'p-01', from: 's-01', text: 'ship it', rev: 0, at: AT } });
 
-const setActivity = (value: string): void => {
+const setActivity = (value: string, need: SessionNeed | null = null): void => {
   live['s-01'] = value;
-  activityListener?.(REF, { activity: { activity: value }, metrics: null });
+  liveNeed = need;
+  activityListener?.(REF, { activity: { activity: value, need }, metrics: null });
 };
+/** Потребность сессии (спека застрявших 3.1) с умолчаниями. */
+const needOf = (kind: SessionNeed['kind'], over: Partial<SessionNeed> = {}): SessionNeed => ({
+  kind,
+  since: AT,
+  detail: null,
+  resetsAt: null,
+  window: null,
+  account: null,
+  ...over,
+});
+/** Карта с сессией Codex `s-01`: имя провайдера в тексте причины берётся из реестра по `session.provider`. */
+const codexSnap = (): WorksSnapshot =>
+  snap({ sessions: [{ id: 's-01', label: 'Backend', lifecycle: 'active', result: null, provider: 'codex' }] });
 const emitAssistant = (patch: Partial<AssistantState>): void => assistantListener?.({ ...IDLE_STATE, origin: 'telegram', ...patch });
 const setWorks = (next: WorksSnapshot): void => {
   const previous = snapshot;
@@ -179,10 +195,13 @@ function make(): TelegramService {
     host,
     works: { snapshot: () => snapshot, onChange: (listener: any) => ((worksListener = listener), () => (worksListener = null)) },
     activity: {
-      get: (ref: SessionRef) => (live[ref.sessionId] === undefined ? undefined : { activity: { activity: live[ref.sessionId] }, metrics: null }),
+      get: (ref: SessionRef) =>
+        live[ref.sessionId] === undefined ? undefined : { activity: { activity: live[ref.sessionId], need: liveNeed }, metrics: null },
       onChange: (listener: any) => ((activityListener = listener), () => (activityListener = null)),
     },
     feed,
+    // Реестр провайдеров хоста (`loadProviders`): имя провайдера для причины «needs you».
+    providers: async () => ({ claude: { id: 'claude', label: 'claude' }, codex: { id: 'codex', label: 'Codex' } }),
     assistant,
     sendLetter,
     resolveRoomProposal,
@@ -232,6 +251,7 @@ beforeEach(async () => {
   secretValue = null;
   snapshot = snap();
   live = { 's-01': 'working' };
+  liveNeed = null;
   feedItems = [];
   feedTerminal = false;
   worksListener = null;
@@ -544,6 +564,42 @@ describe('createTelegramService: карточки ленты', () => {
     await settle();
     expect(sent().at(-1)?.params.reply_markup).toBeUndefined();
     expect(sent().at(-1)?.params.text).toContain(T.waitingAtMac('Backend'));
+  });
+
+  // Спека подписок К16: причина «needs you» одна на окно, остров и Telegram — текст `needReason` ядра.
+  it('need вида limit: «needs you» с причиной — провайдер из реестра и час сброса по местному времени', async () => {
+    vi.setSystemTime(new Date(2026, 9, 21, 13, 0));
+    snapshot = codexSnap();
+    await bootLinked();
+    const resetsAt = new Date(2026, 9, 21, 16, 27).toISOString();
+    setActivity('unseen', needOf('limit', { resetsAt, window: 'session' }));
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(sent()).toHaveLength(1);
+    expect(sent()[0]?.params.text).toContain(`${T.needsYou('Backend', WHERE)} — Hit its Codex usage limit; resets at 16:27`);
+  });
+
+  it('need вида approval без карточки: причина с командой после «needs you»', async () => {
+    snapshot = codexSnap();
+    await bootLinked();
+    setActivity('blocked', needOf('approval', { detail: 'ls -la' }));
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(sent()[0]?.params.text).toContain(`${T.needsYou('Backend', WHERE)} — Waiting for your approval: ls -la`);
+  });
+
+  it('без need текст прежний, а при telegramNeedsYou не true сообщений нет и с need', async () => {
+    snapshot = codexSnap();
+    await bootLinked();
+    setActivity('blocked');
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(sent()[0]?.params.text).toContain(T.needsYou('Backend', WHERE));
+    expect(sent()[0]?.params.text).not.toContain(' — ');
+
+    journal.length = 0;
+    service.configChanged({ ...cfg, telegramNeedsYou: false });
+    setActivity('working');
+    setActivity('unseen', needOf('limit'));
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(sent()).toEqual([]);
   });
 
   it('HTML не разобран (400) — повтор тем же текстом без parse_mode и без тегов', async () => {

@@ -206,7 +206,7 @@ test.describe('решение ведущего: настоящий parley-mcp, �
     await expect(roomTab).toHaveClass(/bg-accent-200/);
     await expect
       .poll(() => decisionNotes(electronApp), { timeout: 5_000 })
-      .toEqual([{ title: NOTE_TITLE, body: 'e2e-room · S01 collected positions', silent: false, closed: false }]);
+      .toEqual([{ title: NOTE_TITLE, body: 'e2e-room · S01 collected positions', silent: true, closed: false }]);
     // Окно без фокуса — карточки в окне нет.
     await expect(window.locator('[data-window-note]')).toHaveCount(0);
 
@@ -225,8 +225,8 @@ test.describe('решение ведущего: настоящий parley-mcp, �
     await expect
       .poll(() => decisionNotes(electronApp), { timeout: 5_000 })
       .toEqual([
-        { title: NOTE_TITLE, body: 'e2e-room · S01 collected positions', silent: false, closed: true },
-        { title: NOTE_TITLE, body: 'e2e-room · S01 revised the decision', silent: false, closed: false },
+        { title: NOTE_TITLE, body: 'e2e-room · S01 collected positions', silent: true, closed: true },
+        { title: NOTE_TITLE, body: 'e2e-room · S01 revised the decision', silent: true, closed: false },
       ]);
 
     // 3. Accept: решение — сообщение `decision` от ведущего в ленте и в блоке Decisions, строка «You accepted the decision», карточки нет.
@@ -332,7 +332,7 @@ test.describe('решение ведущего: настоящий parley-mcp, �
     await agentCalls(second.window, leadRef, 'propose_decision', { room: roomId, text: PROPOSAL_REVISED });
     await expect
       .poll(() => decisionNotes(second.electronApp), { timeout: 10_000 })
-      .toEqual([{ title: NOTE_TITLE, body: 'e2e-room · S01 revised the decision', silent: false, closed: false }]);
+      .toEqual([{ title: NOTE_TITLE, body: 'e2e-room · S01 revised the decision', silent: true, closed: false }]);
 
     // Переподключение к хосту: «Restart host» — окно то же, связь новая, подписки заводятся заново, первый снимок — база.
     await second.window.evaluate(() => (globalThis as unknown as { parley: { app: { restartHost: () => Promise<void> } } }).parley.app.restartHost());
@@ -346,8 +346,8 @@ test.describe('решение ведущего: настоящий parley-mcp, �
     await expect
       .poll(() => decisionNotes(second.electronApp), { timeout: 10_000 })
       .toEqual([
-        { title: NOTE_TITLE, body: 'e2e-room · S01 revised the decision', silent: false, closed: true },
-        { title: NOTE_TITLE, body: 'e2e-room · S01 revised the decision', silent: false, closed: false },
+        { title: NOTE_TITLE, body: 'e2e-room · S01 revised the decision', silent: true, closed: true },
+        { title: NOTE_TITLE, body: 'e2e-room · S01 revised the decision', silent: true, closed: false },
       ]);
   });
 

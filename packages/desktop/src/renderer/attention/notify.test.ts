@@ -8,8 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Message, Proposal, Room, SessionActivity, WorkEntry, WorkSession } from '@parley/core';
 import { refKey, type HostNotice, type SessionRef } from '@parley/protocol';
 import type { AppNote, FocusTarget } from '../../shared/bridge.js';
+import { providerName } from '../../shared/strings.js';
 import { DEFAULT_UI, type UiFile } from '../../shared/ui-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { makeNeed } from '../test-utils/work-fixtures.js';
 import { useActivityStore } from '../store/activity.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
@@ -83,6 +85,8 @@ interface Harness {
   island: boolean;
   windowNotes: WindowNote[];
   hidden: string[];
+  /** Сколько раз окно позвонило своим сигналом «нужно действие» (спека застрявших 7.2). */
+  chimes: number;
   /** Что отдаёт `pendingAsk` (по очереди: последнее значение повторяется); по умолчанию — карточки нет. */
   asks: Array<PendingAsk | null>;
   pendingAsk: ReturnType<typeof vi.fn>;
@@ -99,6 +103,7 @@ function harness(entries: WorkEntry[]): Harness {
     island: false,
     windowNotes: [],
     hidden: [],
+    chimes: 0,
     asks: [null],
     pendingAsk: vi.fn(),
     notifier: null as unknown as ReturnType<typeof createAttentionNotifier>,
@@ -115,6 +120,10 @@ function harness(entries: WorkEntry[]): Harness {
     hideInWindow: (tag) => h.hidden.push(tag),
     pendingAsk: h.pendingAsk,
     islandOn: () => h.island,
+    chime: () => {
+      h.chimes += 1;
+    },
+    providerName: (id) => providerName(id, ''),
   });
   return h;
 }
@@ -153,7 +162,7 @@ describe('createAttentionNotifier.onActivity (тест 2 куска 4.3)', () =>
         body: 'Fix the login form\np',
         tag: `session:${refKey(ref2)}`,
         target: { kind: 'session', ref: ref2 },
-        silent: false,
+        silent: true,
       },
     ]);
   });
@@ -201,13 +210,14 @@ describe('createAttentionNotifier.onActivity (тест 2 куска 4.3)', () =>
     expect(h.pendingAsk).not.toHaveBeenCalled();
   });
 
-  it('sound: false → silent: true', async () => {
+  it('sound: false → баннер всё равно беззвучный, а своего сигнала нет', async () => {
     const h = harness([redesign()]);
     h.prefs = { ...h.prefs, sound: false };
     h.notifier.onActivity(ref2, live('working'));
     h.notifier.onActivity(ref2, live('blocked'));
     await settle();
     expect(h.notes[0]?.silent).toBe(true);
+    expect(h.chimes).toBe(0);
   });
 
   it.each(['closed', 'sleeping'] as const)('сессия %s с blocked в активности — нет', async (lifecycle) => {
@@ -381,9 +391,11 @@ describe('createAttentionNotifier.onWorks (тесты 3 и 9 куска 4.3)', (
         body: 'Which API?',
         tag: 'mail:/tmp/p w-01',
         target: { kind: 'mail', projectPath: '/tmp/p', workId: 'w-01' },
-        silent: false,
+        silent: true,
       },
     ]);
+    // Письмо человеку — «нужно действие» (спека застрявших 7.2): баннер беззвучный, звенит окно.
+    expect(h.chimes).toBe(1);
   });
 
   it('note и decision — «message from» и «decision from»', () => {
@@ -464,7 +476,7 @@ describe('createAttentionNotifier.onWorks — решение ведущего в
         body: 'Возвраты · S01 collected positions',
         tag: TAG,
         target: TARGET,
-        silent: false,
+        silent: true,
       },
     ]);
     expect(h.windowNotes).toEqual([]);
@@ -611,6 +623,7 @@ describe('createAttentionNotifier.onWorks — решение ведущего в
     h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01', 1))])]);
     expect(h.windowNotes).toEqual([]);
     expect(h.notes).toEqual([]);
+    expect(h.chimes).toBe(0);
   });
 
   it('prefs().needsYou: false — ни карточки, ни уведомления; решение при этом запомнено — включение не повторяет его', () => {
@@ -635,12 +648,29 @@ describe('createAttentionNotifier.onWorks — решение ведущего в
     expect(h.notes).toHaveLength(1);
   });
 
-  it('sound: false → silent: true у уведомления macOS', () => {
+  it('sound: false → у уведомления macOS silent: true и своего сигнала нет; sound: true — silent: true и один сигнал', () => {
     const h = started();
     h.prefs = { ...h.prefs, sound: false };
     h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
     expect(h.notes[0]?.silent).toBe(true);
+    expect(h.chimes).toBe(0);
+
+    const loud = started();
+    loud.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    expect(loud.notes[0]?.silent).toBe(true);
+    expect(loud.chimes).toBe(1);
   });
+
+  // Спека застрявших 7.2: решение звенит и тогда, когда оно показано карточкой в самом окне.
+  it('решение при окне в фокусе: карточка в окне тоже звенит, уведомления macOS нет', () => {
+    const h = started();
+    h.active = true;
+    h.notifier.onWorks([roomsEntry([room('r-01', 'Возвраты', proposal('p-01'))])]);
+    expect(h.windowNotes).toHaveLength(1);
+    expect(h.notes).toEqual([]);
+    expect(h.chimes).toBe(1);
+  });
+
 
   it('ответ человека гасит карточку в окне — один раз, по тегу комнаты', () => {
     const h = started();
@@ -754,11 +784,12 @@ describe('createAttentionNotifier.onWorks — упоминание челове�
         body: 'Ready for review, @you second line',
         tag: TAG,
         target: TARGET,
-        silent: false,
+        silent: true,
       },
     ]);
     // Карточкой в окне показываются только решения.
     expect(h.windowNotes).toEqual([]);
+    expect(h.chimes).toBe(1);
   });
 
   it('первый снимок — база: упоминание, ждавшее на старте окна, не уведомляет; следующее — уведомляет', () => {
@@ -895,11 +926,12 @@ describe('createAttentionNotifier.onWorks — упоминание челове�
     ]);
   });
 
-  it('sound: false → silent: true; длинная первая строка — выдержка в 140 знаков и «…», заголовок цел', () => {
+  it('sound: false → silent: true без сигнала; длинная первая строка — выдержка в 140 знаков и «…», заголовок цел', () => {
     const h = started();
     h.prefs = { ...h.prefs, sound: false };
     h.notifier.onWorks([withMessages([mention('m-1', { text: `@human ${'😀'.repeat(201)}` })])]);
     expect(h.notes[0]?.silent).toBe(true);
+    expect(h.chimes).toBe(0);
     // «@you » — пять знаков, остальные 135 — эмодзи: всего 140 знаков и «…».
     expect(h.notes[0]?.body).toBe(`@you ${'😀'.repeat(135)}…`);
     expect(h.notes[0]?.title).toBe('S02 mentioned you in Mobile APP');
@@ -971,7 +1003,7 @@ describe('createAttentionNotifier.onHostNotice (тесты 10 и 11 куска 4
         body: "Couldn't launch this session.",
         tag: `notice:launch-failed:${refKey(ref2)}`,
         target: { kind: 'session', ref: ref2 },
-        silent: false,
+        silent: true,
       },
     ]);
   });
@@ -982,26 +1014,46 @@ describe('createAttentionNotifier.onHostNotice (тесты 10 и 11 куска 4
     expect(h.notes).toMatchObject([{ title: "Redesign · S02 executor — couldn't resume", body: "Couldn't resume this session." }]);
   });
 
-  it('тест 11: trust-wait с кириллическим text — текста нет, кириллицы в уведомлении нет вовсе', () => {
+  it('launch-failed и resume-failed звенят своим сигналом: «нужно действие», баннер беззвучный', () => {
+    const h = harness([redesign()]);
+    h.notifier.onHostNotice(notice('launch-failed', ref2));
+    h.notifier.onHostNotice(notice('resume-failed', ref3));
+    expect(h.notes.map((note) => note.silent)).toEqual([true, true]);
+    expect(h.chimes).toBe(2);
+  });
+
+  // Спека застрявших 7.1: trust-wait и startup-wait не дают своих уведомлений — их заменяет `need` вида `startup`,
+  // иначе на один экран пришло бы два уведомления.
+  it('trust-wait и startup-wait — без уведомления и без сигнала', () => {
     const h = harness([redesign()]);
     h.notifier.onHostNotice(notice('trust-wait', ref3, 'сессия не отвечает с запуска'));
+    h.notifier.onHostNotice(notice('startup-wait', ref3, 'ждёт на старте'));
+    expect(h.notes).toEqual([]);
+    expect(h.chimes).toBe(0);
+  });
+
+  it('limit-return-blocked — то же уведомление со звуком: «limit has reset», текст хоста по-русски не попадает', () => {
+    const h = harness([redesign()]);
+    h.notifier.onHostNotice(notice('limit-return-blocked', ref3, 'лимит сброшен, но меню открыто'));
     expect(h.notes).toEqual([
       {
-        title: 'Redesign · S03 backend — waiting for folder trust',
-        body: 'Not responding since launch — may be waiting for folder trust.',
-        tag: `notice:trust-wait:${refKey(ref3)}`,
+        title: 'Redesign · S03 backend — limit has reset',
+        body: 'The limit has reset, but Parley could not continue this session — check its terminal.',
+        tag: `notice:limit-return-blocked:${refKey(ref3)}`,
         target: { kind: 'session', ref: ref3 },
-        silent: false,
+        silent: true,
       },
     ]);
+    expect(h.chimes).toBe(1);
     expect(JSON.stringify(h.notes)).not.toMatch(/[Ѐ-ӿ]/);
   });
 
   it('тест 11: ref: null — уведомления нет; сессии нет в снимке — нет', () => {
     const h = harness([redesign()]);
-    h.notifier.onHostNotice(notice('trust-wait', null));
-    h.notifier.onHostNotice(notice('trust-wait', { ...ref2, sessionId: 's-99' }));
+    h.notifier.onHostNotice(notice('limit-return-blocked', null));
+    h.notifier.onHostNotice(notice('launch-failed', { ...ref2, sessionId: 's-99' }));
     expect(h.notes).toEqual([]);
+    expect(h.chimes).toBe(0);
   });
 
   it('прочие виды (map-lock, resume-limit) — нет', () => {
@@ -1247,5 +1299,215 @@ describe('wireAttentionNotifications на подставном мосте и н�
     setRoom(null);
     expect(useWindowNotesStore.getState().notes).toEqual([]);
     off();
+  });
+});
+
+describe('createAttentionNotifier.onActivity — причина need, сигнал и лимиты (спека застрявших 7.1, 7.2, 7.4)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // «Сейчас» — 13:00 21 октября по местному времени: часы сброса ниже собраны из частей, пояс машины не важен.
+    vi.setSystemTime(new Date(2026, 9, 21, 13, 0));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const resetAt = (hour: number, minute: number): string => new Date(2026, 9, 21, hour, minute).toISOString();
+  const liveNeed = (activity: SessionActivity['activity'], need: ReturnType<typeof makeNeed>): SessionActivity => ({
+    ...live(activity),
+    need,
+  });
+  const codexPair = (): WorkEntry =>
+    entry('Redesign', [
+      session('s-02', 'executor', { provider: 'codex' }),
+      session('s-03', 'backend', { provider: 'codex' }),
+    ]);
+  /** Сессия прошла `working` → состояние с `need`: первое значение — база, переход даёт уведомление. */
+  const hit = (h: Harness, ref: SessionRef, activity: SessionActivity['activity'], need: ReturnType<typeof makeNeed>): void => {
+    h.notifier.onActivity(ref, live('working'));
+    h.notifier.onActivity(ref, liveNeed(activity, need));
+  };
+
+  it('approval: текст — причина вместо задачи сессии, баннер беззвучный, звенит окно один раз', async () => {
+    const h = harness([redesign()]);
+    hit(h, ref2, 'blocked', makeNeed('approval', { detail: 'ls -la' }));
+    await settle();
+    expect(h.notes).toEqual([
+      {
+        title: 'Redesign · S02 executor — needs you',
+        body: 'Waiting for your approval: ls -la\np',
+        tag: `session:${refKey(ref2)}`,
+        target: { kind: 'session', ref: ref2 },
+        silent: true,
+      },
+    ]);
+    expect(h.chimes).toBe(1);
+  });
+
+  it('вид решает текст: question, startup и sign-in — по одной строке из ядра', async () => {
+    const h = harness([redesign()]);
+    hit(h, ref2, 'blocked', makeNeed('question', { detail: 'Which database?' }));
+    hit(h, ref3, 'blocked', makeNeed('startup'));
+    await settle();
+    expect(h.notes.map((note) => note.body.split('\n')[0])).toEqual([
+      'Asked you a question in its terminal',
+      'Waiting in its terminal since launch (sign-in, folder trust or another startup screen)',
+    ]);
+    const signIn = harness([redesign()]);
+    hit(signIn, ref2, 'unseen', makeNeed('sign-in', { account: 'auth', detail: 'Please run /login' }));
+    await settle();
+    expect(signIn.notes[0]?.body.split('\n')[0]).toBe('Signed out of Claude Code: Please run /login');
+  });
+
+  it('карточка найдена — тело берёт её строку («Run: …»), причина не перебивает более точный текст', async () => {
+    const h = harness([redesign()]);
+    h.asks = [{ cardId: 'c-1', summary: 'Run: npm test', inWindow: true }];
+    hit(h, ref2, 'blocked', makeNeed('approval', { detail: 'Claude needs your permission to use Bash' }));
+    await settle();
+    expect(h.notes[0]?.body).toBe('Run: npm test\np');
+  });
+
+  it('сессия в комнате: к причине в конце «· room <имя>»', async () => {
+    const h = harness([
+      entry('Redesign', [session('s-02', 'executor')], [], [room('r-01', 'Backend', null, { members: ['s-02'] })]),
+    ]);
+    hit(h, ref2, 'blocked', makeNeed('approval', { detail: 'ls -la' }));
+    await settle();
+    expect(h.notes[0]?.body).toBe('Waiting for your approval: ls -la · room Backend\np');
+  });
+
+  it('вошла в needs-you и вышла за 0,5 с — ни уведомления, ни сигнала', async () => {
+    const h = harness([redesign()]);
+    hit(h, ref2, 'blocked', makeNeed('approval', { detail: 'ls -la' }));
+    await vi.advanceTimersByTimeAsync(300);
+    h.notifier.onActivity(ref2, live('working'));
+    await settle();
+    expect(h.notes).toEqual([]);
+    expect(h.chimes).toBe(0);
+  });
+
+  it('цель видна — ни уведомления, ни сигнала', async () => {
+    const h = harness([redesign()]);
+    h.visible.add(JSON.stringify({ kind: 'session', ref: ref2 }));
+    hit(h, ref2, 'blocked', makeNeed('approval', { detail: 'ls -la' }));
+    await settle();
+    expect(h.notes).toEqual([]);
+    expect(h.chimes).toBe(0);
+  });
+
+  it('остров показал запрос с карточкой — уведомления macOS нет, а сигнал звучит: звук на переходе уровня, не в send()', async () => {
+    const h = harness([redesign()]);
+    h.island = true;
+    h.asks = [{ cardId: 'c-1', summary: 'Run: npm test', inWindow: true }];
+    hit(h, ref2, 'blocked', makeNeed('approval', { detail: 'npm test' }));
+    await settle();
+    expect(h.notes).toEqual([]);
+    expect(h.chimes).toBe(1);
+  });
+
+  it('остров, цель видна — сигнала нет; sound: false — сигнала нет, баннер остаётся; needsYou: false — ничего', async () => {
+    const visible = harness([redesign()]);
+    visible.island = true;
+    visible.asks = [{ cardId: 'c-1', summary: 'Run: npm test', inWindow: true }];
+    // Цель с карточкой: гарнитура сверяет её по JSON, а настоящая `isTargetVisible` `cardId` не смотрит.
+    visible.visible.add(JSON.stringify({ kind: 'session', ref: ref2, cardId: 'c-1' }));
+    hit(visible, ref2, 'blocked', makeNeed('approval'));
+    await settle();
+    expect(visible.chimes).toBe(0);
+
+    const quiet = harness([redesign()]);
+    quiet.prefs = { ...quiet.prefs, sound: false };
+    hit(quiet, ref2, 'blocked', makeNeed('approval'));
+    await settle();
+    expect(quiet.notes).toHaveLength(1);
+    expect(quiet.chimes).toBe(0);
+
+    const off = harness([redesign()]);
+    off.prefs = { ...off.prefs, needsYou: false };
+    hit(off, ref2, 'blocked', makeNeed('approval'));
+    await settle();
+    expect(off.notes).toEqual([]);
+    expect(off.chimes).toBe(0);
+  });
+
+  it('два лимита одного провайдера — один тег limit:<провайдер>, заголовок «… usage limit reached», в тексте оба ярлыка и час', async () => {
+    const h = harness([codexPair()]);
+    const limit = makeNeed('limit', { resetsAt: resetAt(16, 27) });
+    hit(h, ref2, 'unseen', limit);
+    await settle();
+    expect(h.notes).toEqual([
+      {
+        title: 'Codex usage limit reached',
+        body: 'S02 waits until 16:27',
+        tag: 'limit:codex',
+        target: { kind: 'session', ref: ref2 },
+        silent: true,
+      },
+    ]);
+    hit(h, ref3, 'unseen', limit);
+    await settle();
+    expect(h.notes.map((note) => note.tag)).toEqual(['limit:codex', 'limit:codex']);
+    expect(h.notes[1]).toMatchObject({ title: 'Codex usage limit reached', body: 'S02, S03 wait until 16:27' });
+    expect(h.chimes).toBe(2);
+  });
+
+  it('лимит без времени сброса — «time unknown»; аккаунт называется именем, которое отдаёт providerName', async () => {
+    const h = harness([entry('Redesign', [session('s-02', 'executor', { provider: 'custom-claude-2' })])]);
+    h.notifier.onActivity(ref2, live('working'));
+    h.notifier.onActivity(ref2, liveNeed('unseen', makeNeed('limit')));
+    await settle();
+    // Подставной `providerName` теста знает только id; в окне имя аккаунта приносит стор провайдеров (метка хоста).
+    expect(h.notes[0]).toMatchObject({
+      title: 'custom-claude-2 usage limit reached',
+      body: 'S02 waits for the limit reset (time unknown)',
+      tag: 'limit:custom-claude-2',
+    });
+  });
+
+  it('лимит: клик ведёт в комнату сессии, без комнаты — к сессии', async () => {
+    const inRoom = harness([
+      entry('Redesign', [session('s-02', 'executor', { provider: 'codex' })], [], [room('r-01', 'Backend', null, { members: ['s-02'] })]),
+    ]);
+    hit(inRoom, ref2, 'unseen', makeNeed('limit', { resetsAt: resetAt(16, 27) }));
+    await settle();
+    expect(inRoom.notes[0]?.target).toEqual({ kind: 'room', projectPath: '/tmp/p', workId: 'w-01', roomId: 'r-01' });
+
+    const alone = harness([codexPair()]);
+    hit(alone, ref2, 'unseen', makeNeed('limit', { resetsAt: resetAt(16, 27) }));
+    await settle();
+    expect(alone.notes[0]?.target).toEqual({ kind: 'session', ref: ref2 });
+  });
+
+  it('лимит: одна из двух сессий вернулась к работе до отправки — в тексте остаётся ждущая', async () => {
+    const h = harness([codexPair()]);
+    const limit = makeNeed('limit', { resetsAt: resetAt(16, 27) });
+    hit(h, ref2, 'unseen', limit);
+    hit(h, ref3, 'unseen', limit);
+    h.notifier.onActivity(ref2, live('working'));
+    await settle();
+    expect(h.notes.at(-1)?.body).toBe('S03 waits until 16:27');
+  });
+
+  it('finished: без звука по умолчанию, со звуком при finishedSound; сигнала «нужно действие» нет', () => {
+    const quiet = harness([redesign()]);
+    quiet.notifier.onActivity(ref2, live('working'));
+    quiet.notifier.onActivity(ref2, live('unseen'));
+    expect(quiet.notes[0]?.silent).toBe(true);
+
+    const loud = harness([redesign()]);
+    loud.prefs = { ...loud.prefs, finishedSound: true };
+    loud.notifier.onActivity(ref2, live('working'));
+    loud.notifier.onActivity(ref2, live('unseen'));
+    expect(loud.notes[0]?.silent).toBe(false);
+    expect(quiet.chimes + loud.chimes).toBe(0);
+  });
+
+  it('finished при видимой цели — ни баннера, ни звука', () => {
+    const h = harness([redesign()]);
+    h.prefs = { ...h.prefs, finishedSound: true };
+    h.visible.add(JSON.stringify({ kind: 'session', ref: ref2 }));
+    h.notifier.onActivity(ref2, live('working'));
+    h.notifier.onActivity(ref2, live('unseen'));
+    expect(h.notes).toEqual([]);
   });
 });

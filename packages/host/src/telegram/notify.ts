@@ -4,7 +4,7 @@
  */
 
 import path from 'node:path';
-import { humanUnreadLetters, humanUnreadMentions, plainHumanMention, roomAwaitsDecision } from '@parley/core/attention';
+import { humanUnreadLetters, humanUnreadMentions, plainHumanMention, roomAwaitsDecision, sessionNeed } from '@parley/core/attention';
 import { sessionDotState, type Activity } from '@parley/core/session-state';
 import { ACCEPTED_LETTER, RETURNED_LETTER, type Message, type Room, type SessionActivity, type WorkEntry, type WorkSession } from '@parley/core';
 import { refKey, type SessionRef, type WorksSnapshot } from '@parley/protocol';
@@ -22,10 +22,15 @@ export function emptyMemory(): NotifyMemory {
   return { levels: new Map(), letters: null, decisions: new Map() };
 }
 
-/** Переход сессии в «нужен ты» или «не просмотрено». Первое значение сессии — база, повтор того же уровня — не повод. */
+/**
+ * Переход сессии в «нужен ты» или «не просмотрено». Первое значение сессии — база, повтор того же уровня — не повод.
+ * Живая сессия с `need` — «нужен ты», как в окне (`sessionAttention`, спека подписок К16): лимит и слетевший вход
+ * оставляют ход законченным, но человеку пора вмешаться.
+ */
 export function activityTransition(memory: NotifyMemory, ref: SessionRef, session: WorkSession, live: SessionActivity | null): 'needs-you' | 'unseen' | null {
   const dot = sessionDotState(session, live?.activity ?? null);
-  const level: Activity | 'closed' = dot === 'working' || dot === 'blocked' || dot === 'unseen' || dot === 'idle' ? dot : 'closed';
+  const level: Activity | 'closed' =
+    sessionNeed(session, live) !== null ? 'blocked' : dot === 'working' || dot === 'blocked' || dot === 'unseen' || dot === 'idle' ? dot : 'closed';
   const key = refKey(ref);
   const previous = memory.levels.get(key);
   memory.levels.set(key, level);

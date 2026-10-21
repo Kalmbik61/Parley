@@ -17,7 +17,8 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * `attention.spec.ts`): настоящее всплыло бы на экране человека. Фокус окна тест задаёт событием `focus` рендерера —
  * фокус ОС между параллельными окнами гуляет.
  *
- * Тест остаётся в наборе: задача 7 меняет его ожидания (баннер беззвучный, звук играет окно, текст — причина).
+ * Спека застрявших 7.1 и 7.2: баннер «нужно действие» беззвучный (`silent: true`), звенит окно своим сигналом
+ * (`__parleyChimes` растёт), а в тексте — причина (`need`), а не задача сессии.
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -92,7 +93,7 @@ test.describe('уведомление «needs you» у Codex в комнате (
     await rm(project, { recursive: true, force: true });
   });
 
-  test('Codex просит одобрения при открытой вкладке комнаты — уведомление «needs you» в журнале, не беззвучное; AudioContext скрытого окна', async () => {
+  test('Codex просит одобрения при открытой вкладке комнаты — уведомление «needs you» в журнале: беззвучное, с причиной; окно звенит сам; AudioContext скрытого окна', async () => {
     test.setTimeout(90_000);
     const env = {
       ...process.env,
@@ -138,8 +139,15 @@ test.describe('уведомление «needs you» у Codex в комнате (
 
     // Ярлык сессии в заголовке — `S02 codex` (`s-02` → `S02`).
     const title = `e2e-stuck · S${codex.slice(2)} codex — needs you`;
-    await expect.poll(() => loggedNotes(electronApp), { timeout: 5_000 }).toContainEqual(expect.objectContaining({ title, silent: false }));
-    expect((await loggedNotes(electronApp)).filter((note) => note.title === title)).toHaveLength(1);
+    // Баннер беззвучный (`silent: true`), в тексте — причина: одобрение в терминале, сессия в комнате — хвост `· room`.
+    await expect
+      .poll(() => loggedNotes(electronApp), { timeout: 5_000 })
+      .toContainEqual(expect.objectContaining({ title, silent: true, body: expect.stringContaining('Waiting for your approval') }));
+    const needNotes = (await loggedNotes(electronApp)).filter((note) => note.title === title);
+    expect(needNotes).toHaveLength(1);
+    expect(needNotes[0]?.body).toContain('· room e2e-room');
+    // Звенит окно: счётчик сигнала растёт (`attention/chime.ts`), звук баннера macOS при этом выключен.
+    expect(await window.evaluate(() => (globalThis as { __parleyChimes?: number }).__parleyChimes ?? 0)).toBeGreaterThanOrEqual(1);
 
     // Скрытое окно: звук «нужен ты» должно играть оно (спека 7.2), поэтому важно, не усыпил ли Chromium аудио без окна.
     // `hide()` на macOS не меняет `document.visibilityState` (он `hidden` только у свёрнутого окна) — скрытие проверяем в main.

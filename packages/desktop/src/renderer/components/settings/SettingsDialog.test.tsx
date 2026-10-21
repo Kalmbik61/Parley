@@ -80,7 +80,7 @@ describe('SettingsDialog — тест 1 куска 1.4: секции спеки 
     expect(screen.queryByDisplayValue('mocha')).toBeNull();
 
     switchTo('Notifications');
-    await screen.findByLabelText('Sound');
+    await screen.findByLabelText("Sound when you're needed");
     expect(screen.queryByText('Theme')).toBeNull();
     expect(screen.queryByDisplayValue('mocha')).toBeNull();
   });
@@ -103,12 +103,33 @@ describe('SettingsDialog — тест 1 куска 1.4: секции спеки 
     openSettings(bridge);
 
     switchTo('Notifications');
-    const soundToggle = await screen.findByLabelText('Sound');
+    const soundToggle = await screen.findByLabelText("Sound when you're needed");
     fireEvent.click(soundToggle);
 
     await waitFor(() =>
       expect(saveUiSpy).toHaveBeenCalledWith({
         notifications: { ...DEFAULT_UI.notifications, sound: false },
+      }),
+    );
+  });
+
+  // Спека застрявших 7.5: два звука с подписями «Sound when you're needed» (включён) и «Sound when an agent finishes» (выключен).
+  it('два переключателя звука: «нужно действие» включён, «agent finishes» выключен и сохраняется отдельно', async () => {
+    const bridge = createFakeBridge();
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    openSettings(bridge);
+
+    switchTo('Notifications');
+    const needed = await screen.findByLabelText("Sound when you're needed");
+    const finished = await screen.findByLabelText('Sound when an agent finishes');
+    expect(needed.getAttribute('aria-checked')).toBe('true');
+    expect(finished.getAttribute('aria-checked')).toBe('false');
+    expect(screen.queryByLabelText('Sound')).toBeNull();
+
+    fireEvent.click(finished);
+    await waitFor(() =>
+      expect(saveUiSpy).toHaveBeenCalledWith({
+        notifications: { ...DEFAULT_UI.notifications, finishedSound: true },
       }),
     );
   });

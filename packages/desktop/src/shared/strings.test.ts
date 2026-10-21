@@ -40,6 +40,7 @@ const NOTICE_KINDS: NoticeKind[] = [
   'recipe-playbook-truncated',
   'compact-cancelled',
   'compact-failed',
+  'limit-return-blocked',
 ];
 
 /** `notice.text` — заведомо чужой для окна маркер (раунд исправлений 1 куска E.1) — чтобы поймать случайную подстановку. */
@@ -305,6 +306,13 @@ describe('noticeText', () => {
     const ref = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-03' };
     expect(noticeText(hostNotice('startup-wait', ref), 'S03 codex')).toBe(
       'S03 codex: waiting at startup — Codex may need sign-in or folder trust in its terminal.',
+    );
+  });
+
+  it('limit-return-blocked — лимит сброшен, а сессию вернуть не вышло (спека застрявших 7.1)', () => {
+    expect(S.notifications.limitReturnBlocked).toBe('limit has reset');
+    expect(noticeText(hostNotice('limit-return-blocked'))).toBe(
+      'The limit has reset, but Parley could not continue this session — check its terminal.',
     );
   });
 

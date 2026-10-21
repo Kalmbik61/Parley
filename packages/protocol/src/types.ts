@@ -206,7 +206,10 @@ export type NoticeKind =
   // Даже компактный снимок работ не влезает в кадр: окно остаётся с прежним, пока данные не уменьшатся (P35).
   | 'snapshot-too-large'
   | 'compact-cancelled'
-  | 'compact-failed';
+  | 'compact-failed'
+  // Лимит сброшен, а Parley не смог вернуть сессию: меню на экране, неотправленный текст или лимит снова дважды
+  // подряд (спека застрявших 4.5, 6.3). Окно даёт ему то же уведомление со звуком, что и «нужно действие».
+  | 'limit-return-blocked';
 
 export interface HostNotice {
   kind: NoticeKind;

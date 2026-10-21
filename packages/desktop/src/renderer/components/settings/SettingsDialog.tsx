@@ -437,6 +437,11 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   checked={ui.notifications.sound}
                   onCheckedChange={(checked) => toggleNotification('sound', checked)}
                 />
+                <NotificationRow
+                  label={S.settings.notifyFinishedSound}
+                  checked={ui.notifications.finishedSound}
+                  onCheckedChange={(checked) => toggleNotification('finishedSound', checked)}
+                />
                 {/*
                   Патч — только `enabled`, не `{ ...ui.island, enabled }`: `displayId` и `anchor` main пишет в
                   ui.json сам, мимо рендерера, так что копия `ui.island` здесь устарела, а целый объект перезаписал бы их.
