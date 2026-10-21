@@ -1,7 +1,6 @@
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BROWSER_TOOLS_ASK } from '../mcp/browser-tools.js';
 import { bothEnv, ENV_PREFIX, LEGACY_ENV_PREFIX, MCP_SERVER_NAME } from '../names.js';
 import type { McpConfigKind } from '../providers.js';
 import { ensureStateDir } from './state-dir.js';
@@ -196,11 +195,11 @@ function codexServerEnv({
  * (`codexServerEnv`). `channel` здесь не учитывается: звонок — возможность Claude Code, codex
  * живёт по pull (разговор агентов, 4.4).
  *
- * `tools` — одобрение по инструменту (спайк В12): `browser_*` из `BROWSER_TOOLS_ASK` — `approval_mode = "prompt"`, Codex
- * спрашивает человека в каждой сессии Parley. Ответ «Always allow», вероятно, ложится в личный `config.toml`
- * (`[mcp_servers.parley.tools.browser_evaluate] approval_mode`, так же cookies и storage), а `-c` Codex сливает с файлом по ключам, и свой ключ
- * сильнее ключа файла (проба `codex mcp get` 0.162 с временным `CODEX_HOME`, 2026-10-20): без него такой ответ
- * действовал бы во всех сессиях Parley во всех проектах.
+ * `default_tools_approval_mode = "approve"` — Codex вызывает любой инструмент `parley` без вопроса, в том числе
+ * `browser_evaluate`, `browser_cookies` и `browser_storage` (решение владельца 2026-10-21; Claude Code по-прежнему
+ * спрашивает про эти три — `settings-file.ts`). Таблицы `tools` по инструментам здесь нет: её `approval_mode` перекрыл бы
+ * общий режим. `-c` Codex сливает с файлом по ключам, и свой ключ сильнее ключа из личного `config.toml` человека
+ * (проба `codex mcp get` 0.162 с временным `CODEX_HOME`, 2026-10-20).
  */
 export function codexMcpOverride(params: McpConfigParams): string {
   const env = `{${codexServerEnv(params)
@@ -208,10 +207,10 @@ export function codexMcpOverride(params: McpConfigParams): string {
     .join(',')}}`;
   const launch = serverLaunch(params.command);
   const args = `[${launch.args.map(tomlString).join(',')}]`;
-  const tools = `{${BROWSER_TOOLS_ASK.map((op) => `browser_${op}={approval_mode="prompt"}`).join(',')}}`;
   return (
     `mcp_servers.${MCP_SERVER_NAME}={command=${tomlString(launch.command)},args=${args},env=${env},` +
-    `startup_timeout_sec=${CODEX_MCP_STARTUP_TIMEOUT_SEC},tool_timeout_sec=${CODEX_MCP_TOOL_TIMEOUT_SEC},tools=${tools}}`
+    `default_tools_approval_mode="approve",` +
+    `startup_timeout_sec=${CODEX_MCP_STARTUP_TIMEOUT_SEC},tool_timeout_sec=${CODEX_MCP_TOOL_TIMEOUT_SEC}}`
   );
 }
 

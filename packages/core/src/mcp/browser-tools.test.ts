@@ -507,8 +507,8 @@ describe('скрипт, куки, хранилище, скачивания; ан
   });
 
   it('описания: главный мир и пределы evaluate; общий раздел кук; скрытые значения; папка скачиваний', () => {
-    for (const phrase of ["page's main world", 'JSON', '20 KB', '10 s', 'first argument', 'approves']) expect(tool('browser_evaluate')?.description, phrase).toContain(phrase);
-    for (const name of ['browser_evaluate', 'browser_cookies', 'browser_storage']) expect(tool(name)?.description, name).toContain('Parley asks the human before each call');
+    for (const phrase of ["page's main world", 'JSON', '20 KB', '10 s', 'first argument']) expect(tool('browser_evaluate')?.description, phrase).toContain(phrase);
+    for (const name of ['browser_evaluate', 'browser_cookies', 'browser_storage']) expect(tool(name)?.description, name).toContain('In Claude Code Parley asks the human before each call; in Codex it runs without a question');
     for (const phrase of ["page's current URL", 'httpOnly', 'never shows the values of httpOnly cookies', 'shared with the human', 'sign the human out', 'values: true']) expect(tool('browser_cookies')?.description, phrase).toContain(phrase);
     expect(tool('browser_cookies')?.inputSchema).toMatchObject({ required: ['tab', 'action'], properties: { values: { type: 'boolean', default: false } } });
     expect(tool('browser_storage')?.inputSchema).toMatchObject({ required: ['tab', 'area', 'action'] });

@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseTomlAssignment, parseTomlValue, type TomlValue } from '../../test/toml-mini.js';
-import { BROWSER_TOOLS_ASK } from '../mcp/browser-tools.js';
 import { MAX_TIMEOUT_SEC } from '../mcp/tools.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import {
@@ -74,8 +73,8 @@ describe('конфиг MCP-сервера на сессию', () => {
         `args=[${JSON.stringify(MCP_SERVER_ENTRY)}],` +
         'env={PARLEY_WORK_DIR="/project/.parley/works/w-0042",PARLEY_SESSION_ID="s-02",' +
         'HARNAS_WORK_DIR="/project/.parley/works/w-0042",HARNAS_SESSION_ID="s-02"},' +
-        `startup_timeout_sec=${CODEX_MCP_STARTUP_TIMEOUT_SEC},tool_timeout_sec=${CODEX_MCP_TOOL_TIMEOUT_SEC},` +
-        'tools={browser_evaluate={approval_mode="prompt"},browser_cookies={approval_mode="prompt"},browser_storage={approval_mode="prompt"}}}',
+        'default_tools_approval_mode="approve",' +
+        `startup_timeout_sec=${CODEX_MCP_STARTUP_TIMEOUT_SEC},tool_timeout_sec=${CODEX_MCP_TOOL_TIMEOUT_SEC}}`,
     );
   });
 
@@ -86,19 +85,18 @@ describe('конфиг MCP-сервера на сессию', () => {
       command: process.execPath,
       args: [MCP_SERVER_ENTRY],
       env: SESSION_ENV,
+      default_tools_approval_mode: 'approve',
       startup_timeout_sec: CODEX_MCP_STARTUP_TIMEOUT_SEC,
       tool_timeout_sec: CODEX_MCP_TOOL_TIMEOUT_SEC,
-      tools: { browser_evaluate: { approval_mode: 'prompt' }, browser_cookies: { approval_mode: 'prompt' }, browser_storage: { approval_mode: 'prompt' } },
     });
   });
 
-  it('browser_evaluate, browser_cookies, browser_storage у Codex спрашивают в каждой сессии Parley: свой approval_mode = "prompt" сильнее «Always allow» из config.toml человека (спайк В12)', () => {
+  it('Codex вызывает любой инструмент parley без вопроса: общий режим approve и никакой таблицы tools по инструментам (решение владельца 2026-10-21)', () => {
     const { value } = parseTomlAssignment(codexMcpOverride(params));
-    const tools = (value as { tools: Record<string, { approval_mode: string }> }).tools;
-    // Спрашивают ровно те инструменты, что и у Claude Code (`permissions.ask`), — скрипт агента в странице, куки и хранилище (решение 9).
-    expect(Object.keys(tools)).toEqual(['browser_evaluate', 'browser_cookies', 'browser_storage']);
-    expect(Object.keys(tools)).toEqual(BROWSER_TOOLS_ASK.map((op) => `browser_${op}`));
-    for (const tool of Object.values(tools)) expect(tool.approval_mode).toBe('prompt');
+    const table = value as Record<string, TomlValue>;
+    // Таблица `tools.<инструмент>.approval_mode` перекрыла бы общий режим — её нет, в том числе для browser_evaluate, browser_cookies, browser_storage.
+    expect(table['default_tools_approval_mode']).toBe('approve');
+    expect(table).not.toHaveProperty('tools');
   });
 
   it('запуск сервера с запасом, а вызов — дольше самого долгого wait_for', () => {
