@@ -123,8 +123,11 @@ function fakeGuest() {
   let count: unknown = 1;
   let syncAnswer: unknown = null;
   let hang = false;
+  // Окно Parley, в котором стоит <webview>: его ввод main видит отдельно от ввода гостя.
+  const host = new EventEmitter();
   const guest = Object.assign(new EventEmitter(), {
     id: 7,
+    hostWebContents: host,
     isDestroyed: vi.fn().mockReturnValue(false),
     isCrashed: vi.fn().mockReturnValue(false),
     capturePage: vi.fn(async () => ({ isEmpty: () => false, toPNG: () => Buffer.from('visible-png') })),
@@ -144,6 +147,7 @@ function fakeGuest() {
   });
   return {
     guest,
+    host,
     scripts,
     codes,
     worlds,
@@ -225,6 +229,37 @@ describe('createAnnotate.start', () => {
     expect(await annotate.start(404)).toBeNull();
   });
 
+  it('подсветка под курсором: мышь у окна-хозяина после движения по странице — один unhover в мире 1001 на каждый уход; после ответа слежки нет', async () => {
+    const { guest, host, scripts, annotate, scriptCalled, codes, worlds } = setup();
+    const unhovers = (): number => codes.filter((code) => code === 'globalThis.__parleyAnnotate?.unhover()').length;
+    const input = (target: EventEmitter, type: string): boolean => target.emit('input-event', {}, { type });
+    const pending = annotate.start(7);
+    await scriptCalled();
+    // Подсветка могла остаться от прежнего ожидания: первое движение у хозяина снимает её на всякий случай.
+    input(host, 'mouseMove');
+    input(host, 'mouseMove');
+    expect(unhovers()).toBe(1);
+    // Курсор вернулся на страницу и снова ушёл: ещё один вызов, а не по вызову на каждое движение у хозяина.
+    input(guest, 'mouseMove');
+    input(host, 'keyDown');
+    expect(unhovers()).toBe(1);
+    input(host, 'mouseMove');
+    input(host, 'mouseWheel');
+    expect(unhovers()).toBe(2);
+    // Курсор ушёл за окно прямо со страницы — гость получил mouseLeave.
+    input(guest, 'mouseMove');
+    input(guest, 'mouseLeave');
+    expect(unhovers()).toBe(3);
+    expect(worlds.slice(1)).toEqual([PICK_WORLD_ID, PICK_WORLD_ID, PICK_WORLD_ID]);
+    scripts[0]?.resolve(null);
+    await pending;
+    expect(guest.listenerCount('input-event')).toBe(0);
+    expect(host.listenerCount('input-event')).toBe(0);
+    input(guest, 'mouseMove');
+    input(host, 'mouseMove');
+    expect(unhovers()).toBe(3);
+  });
+
   it('cancel — null, скрипт отмены в мире 1001', async () => {
     const { guest, annotate, scriptCalled } = setup();
     const pending = annotate.start(7);
@@ -295,7 +330,7 @@ describe('createAnnotate — все вызовы страницы идут в м
     expect(codes).toEqual([
       'GUEST_SCRIPT',
       'globalThis.__parleyAnnotate?.sync([{"n":1,"key":"a1"}]) ?? null',
-      'globalThis.__parleyAnnotate?.count() ?? 0',
+      'globalThis.__parleyAnnotate?.unhover(), globalThis.__parleyAnnotate?.count() ?? 0',
       'globalThis.__parleyAnnotate?.cancel()',
     ]);
     expect(worlds).toEqual(codes.map(() => PICK_WORLD_ID));
