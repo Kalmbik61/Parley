@@ -4,6 +4,12 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Fixed
+
+- The session row menu no longer offers Resume for a closed session: the host does not bring closed sessions back, so the click did nothing. Sleeping sessions keep Resume.
+
 ## 0.20.0
 
 Create a workspace without agents, start several sessions side by side without a room, and dictate the note when you return a room decision for rework.
