@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DecisionCard, decisionDraftKey, type DecisionCardProps } from './DecisionCard.js';
 import { useUiStore } from '../../store/ui.js';
+import { useDictationStore } from '../../voice/dictation-store.js';
 import { S } from '../../../shared/strings.js';
 
 const proposal = (id: string, rev = 1): DecisionCardProps['proposal'] => ({
@@ -95,4 +96,24 @@ it('без draftKey состояние локальное и стор не тр�
   first.unmount();
   render(<DecisionCard {...props()} />);
   expect(screen.queryByPlaceholderText(S.rooms.returnPlaceholder)).toBeNull();
+});
+
+it('после «Return for rework» рядом с заметкой есть микрофон со своей целью', () => {
+  render(<DecisionCard {...props({ draftKey: 'w/r-01' })} />);
+  expect(screen.queryByTestId('mic')).toBeNull();
+  openForm();
+  expect(screen.getByTestId('mic').dataset.target).toBe('decision-return:w/r-01:p-01');
+});
+
+it('идёт диктовка: Send to lead завершает её и ответ не уходит', async () => {
+  const finish = vi.spyOn(useDictationStore.getState(), 'finishBeforeSend').mockReturnValue(true);
+  const onResolve = vi.fn(async () => true);
+  render(<DecisionCard {...props({ draftKey: 'w/r-01', onResolve })} />);
+  openForm();
+  fireEvent.change(noteField(), { target: { value: 'note' } });
+  fireEvent.click(screen.getByRole('button', { name: S.rooms.sendToLead }));
+  expect(finish).toHaveBeenCalledWith('decision-return:w/r-01:p-01');
+  await Promise.resolve();
+  expect(onResolve).not.toHaveBeenCalled();
+  finish.mockRestore();
 });
