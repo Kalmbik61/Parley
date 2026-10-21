@@ -124,7 +124,7 @@ test.describe('Codex — агент комнаты (кусок 11a)', () => {
     const segment = window.getByRole('button', { name: '1 needs you' });
     await expect(segment).toBeVisible({ timeout: 5_000 });
     await expect(dot('blocked')).toHaveCount(1);
-    await expect(row()).toContainText('needs you');
+    await expect(row()).toContainText('approval');
     const tab = window.locator(`[role="tab"][data-tab-id="terminal:${ref.sessionId}"]`);
     await expect(tab.locator('[data-state="blocked"]')).toHaveCount(1);
 
