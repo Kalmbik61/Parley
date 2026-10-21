@@ -865,6 +865,34 @@ test.describe('контекст из браузера в чат (этап B)', (
     await expect.poll(() => pageClicks(electronApp, url)).toEqual({ saved: '1', cancelled: '' });
   });
 
+  test('Annotate: наведение обводит элемент, который получит метку по клику; курсор ушёл со страницы — рамки нет', async () => {
+    const { electronApp, window, url } = await openPage({ chat: false });
+    await startAnnotate(electronApp, window, url);
+    const rectOf = (code: string): Promise<Box | null> =>
+      guestEval<Box | null>(
+        electronApp,
+        url,
+        `(() => { const node = ${code}; if (!node || node.style?.display === 'none') return null; const r = node.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) }; })()`,
+      );
+    const save = await rectOf(`document.querySelector('#save')`);
+    if (save === null) throw new Error('нет гостя');
+    // Подсветка лежит прямо в <html> гостя (вне слоя меток) сплошной рамкой; рамка протяжки — пунктиром.
+    const hover = (): Promise<Box | null> => rectOf(`Array.from(document.documentElement.children).find((el) => el.tagName === 'DIV' && el.style.borderStyle === 'solid')`);
+    // Курсор — мышью окна, а не sendInputEvent гостя: ввод идёт через окно, как от настоящей мыши, и main видит и вход на
+    // страницу, и уход с неё.
+    const page = await boxOf(window.locator('webview'), 'страница');
+    await window.mouse.move(page.x + save.x + save.width / 2, page.y + save.y + save.height / 2);
+    await expect.poll(hover).toEqual(save);
+    // Строка вкладки над страницей — окно Parley, не гость. Гость ухода не видит (Chromium не шлёт ему mouseout):
+    // рамку снимает main, увидев мышь у окна.
+    await window.mouse.move(page.x + 10, page.y - 10);
+    await expect.poll(hover).toBeNull();
+    // Курсор вернулся — рамка снова есть: движения после ухода гость не отбрасывает (timeStamp события и performance.now()
+    // у Chromium — от одного начала отсчёта).
+    await window.mouse.move(page.x + save.x + save.width / 2, page.y + save.y + save.height / 2, { steps: 3 });
+    await expect.poll(hover).toEqual(save);
+  });
+
   test('N1: метка у правого нижнего угла при открытой панели DevTools — редактор целиком в поле страницы, не на панели', async () => {
     const { electronApp, window, url, screenDpr } = await openPage({ chat: false });
     await menu(electronApp, 'browser.console');

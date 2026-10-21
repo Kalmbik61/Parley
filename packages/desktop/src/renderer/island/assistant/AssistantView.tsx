@@ -50,6 +50,8 @@ export interface AssistantViewProps {
   onSubmit(text: string): void;
   onMic(): void;
   onDecide(decision: 'send' | 'cancel'): void;
+  /** Первое касание вида забирает клавиатуру: открытый сам остров не фокусируем. */
+  onTakeKeyboard(): void;
   onUnqueue(id: number): void;
   onShowRequests(): void;
 }
@@ -219,7 +221,7 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
   };
   const question = sending ?? host.question;
   return (
-    <div data-testid="assistant-view" className="island-reveal flex w-[420px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm" style={{ maxHeight: props.maxHeight }}>
+    <div data-testid="assistant-view" onPointerDownCapture={props.onTakeKeyboard} className="island-reveal flex w-[420px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm" style={{ maxHeight: props.maxHeight }}>
       {pending === null ? null : (
         <button type="button" data-testid="assistant-pending" className="flex cursor-pointer items-center gap-2 self-start rounded px-1 text-[13px] text-foreground/80 hover:bg-white/10" onClick={props.onShowRequests}>
           <span className="size-[7px] rounded-full bg-[var(--color-accent)]" />
@@ -321,6 +323,7 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
           maxLength={ASK_MAX}
           placeholder={S.assistant.placeholder}
           className="min-w-0 flex-1 bg-transparent py-1 outline-none placeholder:text-muted-foreground"
+          onFocus={props.onTakeKeyboard}
           onChange={(event) => props.onDraft(event.target.value)}
         />
         {input === 'listening' ? (

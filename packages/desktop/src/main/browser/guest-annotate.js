@@ -23,7 +23,10 @@
 // - на beforeunload слой не снимается: мир умирает вместе с документом, а скачивание и отменённый переход документ не
 //   меняют — метки должны остаться;
 // - у цели есть рамка (у элемента сплошная, у области пунктир), номер — кружок с центром в её левом верхнем углу, прижатый
-//   внутрь вьюпорта (у цели вплотную к краю иначе слой обрезал бы его); скрытый display:none элемент — пропавший.
+//   внутрь вьюпорта (у цели вплотную к краю иначе слой обрезал бы его); скрытый display:none элемент — пропавший;
+// - под курсором, как у Select, — рамка элемента, который получит метку по клику (с лёгкой заливкой, чтобы не спутать
+//   с поставленной меткой). Ухода курсора с <webview> гость не видит — Chromium не шлёт ему ни mouseout, ни mouseleave
+//   (проба Electron 44): рамку снимает main вызовом unhover(), увидев мышь у окна Parley (annotate.ts).
 (() => {
   if (globalThis.__parleyAnnotate === undefined) {
     // Помощники DOM — guest-dom.js в той же строке перед этим файлом (задача 2).
@@ -56,6 +59,12 @@
     // Рамка протяжки — пока человек тянет; вне слоя, чтобы рисоваться без кадра.
     const box = document.createElement('div');
     box.style.cssText = `position:fixed;display:none;box-sizing:border-box;border:2px dashed ${COLOR};z-index:2147483647;pointer-events:none;`;
+    // Подсветка под курсором — тоже вне слоя: слой вынут, пока меток нет. Под слоем меток (z-index ниже хоста): заливка
+    // большого элемента не ложится на номера соседних меток.
+    const hover = document.createElement('div');
+    hover.style.cssText =
+      `position:fixed;display:none;left:0;top:0;box-sizing:border-box;border:2px solid ${COLOR};border-radius:2px;` +
+      'background:rgba(245,158,11,0.08);z-index:2147483645;pointer-events:none;';
 
     const targets = new Map(); // ключ → { el } у элемента или { rect } у рамки (координаты документа)
     const nodes = new Map(); // ключ → { outline, badge } в shadow-корне
@@ -68,6 +77,8 @@
     let pending = null;
     let down = null;
     let dragging = false;
+    let hoverAt = null; // последняя точка курсора человека над страницей
+    let leftAt = -Infinity; // когда main сказал, что курсор ушёл со страницы (unhover), — время performance.now()
     let frame = 0;
 
     /** Хост слоя: `position: fixed` на весь вьюпорт, закрытый shadow-корень (Orca ensureOverlay). */
@@ -189,7 +200,7 @@
     }
 
     function own(el) {
-      return el === host || el === box;
+      return el === host || el === box || el === hover;
     }
 
     function viewport() {
@@ -225,6 +236,33 @@
         if (x >= at.x && x <= at.x + BADGE_PX && y >= at.y && y <= at.y + BADGE_PX) return pin.n;
       }
       return null;
+    }
+
+    /**
+     * Рамка под курсором: элемент, который получит метку по клику. Её нет, пока метка у окна (открыт редактор — клик
+     * ничего не ставит), во время жеста (там рамка протяжки) и над номером готовой метки (клик — правка).
+     */
+    function showHover() {
+      const el =
+        hoverAt === null || pending === null || down !== null || hitPin(hoverAt.x, hoverAt.y) !== null
+          ? null
+          : document.elementFromPoint(hoverAt.x, hoverAt.y);
+      if (!el || own(el)) {
+        hover.style.display = 'none';
+        return;
+      }
+      const r = el.getBoundingClientRect();
+      if (!hover.isConnected) document.documentElement.appendChild(hover);
+      hover.style.display = 'block';
+      hover.style.left = `${r.left}px`;
+      hover.style.top = `${r.top}px`;
+      hover.style.width = `${r.width}px`;
+      hover.style.height = `${r.height}px`;
+    }
+
+    function hideHover() {
+      hoverAt = null;
+      hover.style.display = 'none';
     }
 
     function pinElement(x, y) {
@@ -280,10 +318,19 @@
       if (event.button !== 0) return;
       down = { x: event.clientX, y: event.clientY };
       dragging = false;
+      hover.style.display = 'none';
     }
 
     function onMove(event) {
-      if (!event.isTrusted || down === null) return;
+      if (!event.isTrusted) return;
+      if (down === null) {
+        // Движение старше ухода курсора: ввод гостя выровнен по кадру и может прийти позже вызова unhover — рамка ожила
+        // бы у края и осталась висеть.
+        if (event.timeStamp <= leftAt) return;
+        hoverAt = { x: event.clientX, y: event.clientY };
+        showHover();
+        return;
+      }
       if (!dragging && Math.hypot(event.clientX - down.x, event.clientY - down.y) <= DRAG_PX) return;
       dragging = true;
       if (!box.isConnected) document.documentElement.appendChild(box);
@@ -318,6 +365,11 @@
       if (pick !== null) settle(pick);
     }
 
+    /** Прокрутка под неподвижным курсором: под ним уже другое место страницы. */
+    function onScroll() {
+      if (hoverAt !== null) showHover();
+    }
+
     function onKey(event) {
       if (!event.isTrusted || event.key !== 'Escape') return;
       block(event);
@@ -332,6 +384,7 @@
       window.addEventListener('mousedown', onDown, true);
       window.addEventListener('mousemove', onMove, true);
       window.addEventListener('mouseup', onUp, true);
+      window.addEventListener('scroll', onScroll, true);
       window.addEventListener('keydown', onKey, true);
     }
 
@@ -342,10 +395,12 @@
       window.removeEventListener('mousedown', onDown, true);
       window.removeEventListener('mousemove', onMove, true);
       window.removeEventListener('mouseup', onUp, true);
+      window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('keydown', onKey, true);
       down = null;
       dragging = false;
       box.style.display = 'none';
+      hideHover();
     }
 
     // Метки идут за элементами: прокрутка любого контейнера (capture) и ресайз — пересчёт в следующем кадре.
@@ -356,6 +411,8 @@
       pick() {
         arm();
         settle(null);
+        // Курсор с прошлого ожидания мог уйти в окно (редактор, лоток), а слежки main тогда не было: старой точке не верить.
+        hideHover();
         return new Promise((resolve) => {
           pending = resolve;
         });
@@ -385,6 +442,12 @@
       },
       waiting() {
         return pending !== null;
+      },
+      // Курсор ушёл со страницы на окно Parley (редактор, лоток, чат), или main снимает страницу с номерами для чата:
+      // рамке не висеть и не попасть на снимок. Вернётся с первым движением курсора после этого.
+      unhover() {
+        leftAt = performance.now();
+        hideHover();
       },
     };
   }

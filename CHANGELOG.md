@@ -21,6 +21,10 @@ All notable changes to Parley are documented in this file.
 - Every browser tool is allowed in advance except `browser_evaluate`, `browser_cookies` and `browser_storage`, which always ask.
 - httpOnly cookie values are never shown to agents.
 
+### Fixed
+
+- **Annotate outlines the element under the pointer.** With Annotate on, hovering the page draws an amber frame around the element a click would pin, as Select does; before, the frame showed up only after the click. It hides over a pin's number (a click there edits it), while you drag a region, while a comment is open, and when the pointer leaves the page, so it never ends up in the screenshot that goes to the chat.
+
 ## 0.18.0
 
 Control Parley from the island assistant and from Telegram. The assistant proposes rooms, answers to agent requests, room decisions and reminders, and you confirm each one on the island; a Telegram bot brings the same cards with buttons, the notifications and the assistant to your phone.
