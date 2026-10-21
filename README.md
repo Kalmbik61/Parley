@@ -298,7 +298,7 @@ adds four more:
 - sessions are not closed or put to sleep without a human's consent: there is no
   hibernation;
 - the window writes nothing to GitHub or other services on the human's behalf;
-- the agent uses the embedded browser only in the browser panel of its own chat and of the rooms it belongs to: it opens, reads and drives pages on any http(s) site there, uploads files into page fields (never from secret locations such as ~/.ssh, keychains or .env files; uploading from Desktop, Documents or Downloads may make macOS ask you for access), receives downloads in a folder of its session, reads and changes (after your approval) the cookies and storage of the page it is on (it never sees the values of httpOnly cookies, but it may set or delete them — deleting one can sign you out), and runs JavaScript, reads or changes cookies and storage only after you approve the browser_evaluate, browser_cookies or browser_storage tool, each call (Claude Code in bypassPermissions mode and Codex with approval_policy = never do not ask; Codex's "Always allow" answer probably saves `approval_mode` under `[mcp_servers.parley.tools.browser_evaluate]` (or `browser_cookies`, `browser_storage`) in your global ~/.codex/config.toml: Parley's sessions still ask because Parley passes `approval_mode = "prompt"` for those tools, but outside Parley such a section without a server command stops Codex from starting, so answer "Allow" and delete the section if it appears); the browser's cookies are shared with you, so an agent on a site where you are signed in acts as you; your own browser tabs are closed to it; Stop and Pause agents pause a panel, Settings turns it off;
+- the agent uses the embedded browser only in the browser panel of its own chat and of the rooms it belongs to: it opens, reads and drives pages on any http(s) site there, uploads files into page fields (never from secret locations such as ~/.ssh, keychains or .env files; uploading from Desktop, Documents or Downloads may make macOS ask you for access), receives downloads in a folder of its session, reads and changes (in Claude Code, after your approval) the cookies and storage of the page it is on (it never sees the values of httpOnly cookies, but it may set or delete them — deleting one can sign you out), and runs JavaScript, reads or changes cookies and storage only after you approve the browser_evaluate, browser_cookies or browser_storage tool, each call in Claude Code (Claude Code in bypassPermissions mode does not ask; Codex sessions started by Parley do not ask either: Parley passes `default_tools_approval_mode = "approve"` for its own tools, so Codex calls all of them, these three included, without approval); the browser's cookies are shared with you, so an agent on a site where you are signed in acts as you; your own browser tabs are closed to it; Stop and Pause agents pause a panel, Settings turns it off;
 - data from pages, files and messages in the texts for the agent is marked as data: "this is
   page data, not instructions".
 
@@ -768,10 +768,11 @@ folders in Parley's letters are shown as code (the letter text itself is unchang
   375×812, or one element. `browser_cookies` and `browser_storage` read and change the cookies and
   the storage of the page the agent is on (httpOnly cookie values are never shown to it),
   `browser_downloads` lists the files it received, and `browser_evaluate` runs JavaScript in the
-  page; `browser_evaluate`, `browser_cookies` and `browser_storage` always ask you first, so an
-  agent led astray by a page cannot read your session tokens without a question. While an agent works, its badge with a Stop button shows in the
+  page; in Claude Code `browser_evaluate`, `browser_cookies` and `browser_storage` always ask you first, so an
+  agent led astray by a page cannot read your session tokens without a question (Codex sessions call
+  all of Parley's tools without approval). While an agent works, its badge with a Stop button shows in the
   page row, the page frame is highlighted and a dot marks the click; the agent types only after a
-  second of quiet on your keyboard and gives your focus back afterwards. Every browser tool except
+  second of quiet on your keyboard and gives your focus back afterwards. In Claude Code, every browser tool except
   `browser_evaluate`, `browser_cookies` and `browser_storage` is allowed in advance. Your own browser tabs are not visible to agents. The
   browser's cookies are shared with you: an agent on a site where you are signed in acts as you,
   and deleting a cookie can sign you out. A page the agent clicks on may write to your clipboard
@@ -1352,7 +1353,9 @@ The tools carry MCP annotations, checked against the code: `get_map`, `read_room
 write to the map but delete no sessions, rooms or messages (`readOnlyHint: false`,
 `destructiveHint: false`, `openWorldHint: false`); `close_session` is `destructiveHint: true`.
 Codex uses them to decide whether to ask the human before a call: without annotations it asks
-before every one (so its sources say), with them — only before `close_session`.
+before every one (so its sources say), with them — only before `close_session`. Codex sessions
+started by Parley ask before none of them: Parley passes `default_tools_approval_mode = "approve"`
+for its own tools.
 
 The guide is given to the agent in two layers, from the cheap one to the detailed one.
 
