@@ -78,6 +78,21 @@ describe('create_session MCP', () => {
     expect(requests).toEqual([{ url: '/agent/sessions', authorization: `Bearer ${TOKEN}`, body: args }]);
   });
 
+  it('held: folder-trust — ответ хоста и фраза про ожидание согласия человека', async () => {
+    const client = await connect(await startEndpoint());
+    answer.body = { ok: true, result: { sessionId: 's-02', provider: 'codex', held: 'folder-trust' } };
+    const result = await call(client);
+    expect(result.isError).not.toBe(true);
+    const [json, sentence] = result.text.split('\n');
+    expect(JSON.parse(json!)).toEqual({ sessionId: 's-02', provider: 'codex', held: 'folder-trust' });
+    expect(sentence).toBe('The session waits for the human to trust the folder; it starts by itself after that.');
+  });
+
+  it('без held фразы про ожидание нет', async () => {
+    const client = await connect(await startEndpoint());
+    expect((await call(client)).text).not.toContain('trust the folder');
+  });
+
   it('explains unavailable host support without mutating a map', async () => {
     const result = await call(await connect());
     expect(result.isError).toBe(true);

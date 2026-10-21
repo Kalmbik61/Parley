@@ -950,6 +950,7 @@ export const S = {
       resuming: 'resuming',
       'resume-limit': 'resume limit reached',
       pending: 'not launched',
+      'folder-trust': 'waiting for folder trust',
     } satisfies Record<MailWait, string>,
     /** Подпись точки «непрочитано» у сообщения. */
     newMessage: 'New',
@@ -2523,6 +2524,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'compact-cancelled': 'compaction cancelled — the agent stopped',
   'compact-failed': "compaction didn't go through — check the agent's terminal",
   'snapshot-too-large': 'workspace data is too large to show — delete or archive old workspaces',
+  'codex-auto-unsupported': 'Codex is too old for Auto-review — approvals are asked in the terminal; update Codex to use it',
 };
 
 /**

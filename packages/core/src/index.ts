@@ -399,12 +399,14 @@ export type {
 export {
   DEFAULT_CONFIG,
   ENV_NAMES,
+  codexHooksWanted,
   configPath,
   loadConfig,
   parseSetting,
   saveConfig,
 } from './config.js';
-export type { ParleyConfig, LoadedConfig } from './config.js';
+export type { CodexWriteApprovals, ParleyConfig, LoadedConfig } from './config.js';
+export { CODEX_AUTO_MIN_VERSION } from './work/codex-policy.js';
 export {
   SecretFormatError,
   clearSecret,

@@ -731,9 +731,11 @@ async function sleepingPair(
 }
 
 interface ResumeRig {
+  works: WorksService;
   pty: ReturnType<typeof createPtyManager>;
   sessions: SessionsService;
   activity: ReturnType<typeof createActivityService>;
+  wake: WakeService;
   stream: () => string;
 }
 
@@ -771,7 +773,7 @@ async function resumeRig(
   // два наблюдателя работ читают их независимо, и позднее, но устаревшее чтение
   // перекрыло бы снимок со свежим письмом. Письма шлём после затишья.
   await settle(200);
-  return { pty, sessions, activity, stream: () => stream };
+  return { works, pty, sessions, activity, wake, stream: () => stream };
 }
 
 async function tempArgsFile(): Promise<string> {
@@ -922,6 +924,87 @@ describe('WakeService: подъём спящей письмом', () => {
     expect(sessions.live(ref)).toBe(false);
     expect((await readMap(project, workId)).sessions.find((s) => s.id === target)?.lifecycle).toBe('sleeping');
   }, 20_000);
+
+  it('5в: запуск Codex удержан до согласия на папку (held) — письма ждут без сбоя, повторов нет, счёт часа цел, retry поднимает', async () => {
+    const { workId, target } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    const limiter = new ResumeLimiter(() => 6);
+    let held = true;
+    const modes: string[] = [];
+    const { sessions, activity, wake } = await resumeRig({ limiter }, (real) => ({
+      ...real,
+      launch: async (target, mode, options) => {
+        modes.push(mode);
+        return held ? 'held' : real.launch(target, mode, options);
+      },
+    }));
+
+    await sendLetter(workId, target, 'первое');
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'folder-trust', 5000);
+    // Пока согласия нет, новое письмо новой просьбы не рождает: пауза держится, а не каждое событие карты.
+    await sendLetter(workId, target, 'второе');
+    await settle(300);
+
+    expect(modes).toEqual(['resume']);
+    expect(activity.get(ref)?.metrics?.mailWaiting).toBe('folder-trust');
+    expect(notices('resume-failed')).toEqual([]);
+    expect(notices('resume-limit')).toEqual([]);
+    expect(sessions.live(ref)).toBe(false);
+    const waiting = await readMap(project, workId);
+    expect(unreadFor(waiting, target)).toHaveLength(2);
+    expect(waiting.messages.some((m) => m.from === SYSTEM)).toBe(false);
+    // Удержание не расходует счёт часа: все шесть подъёмов ещё доступны.
+    for (let i = 0; i < 6; i += 1) expect(limiter.tryTake(ref)).toBe(true);
+    expect(limiter.tryTake(ref)).toBe(false);
+    limiter.release(ref);
+
+    // Согласие пришло — `retry` снимает удержание, письма поднимают сессию обычным путём.
+    held = false;
+    wake.retry(ref);
+    await waitFor(() => sessions.live(ref), 8000);
+    expect(modes).toEqual(['resume', 'resume']);
+    expect(notices('resume-failed')).toEqual([]);
+  }, 30_000);
+
+  it('5г: перезапуск хоста при удержанном подъёме — новый будильник считает письма указанными, но retry поднимает сессию с обоими', async () => {
+    const { workId, target } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    const first = await resumeRig({}, (real) => ({ ...real, launch: async () => 'held' as const }));
+
+    await sendLetter(workId, target, 'первое');
+    await waitFor(() => first.activity.get(ref)?.metrics?.mailWaiting === 'folder-trust', 5000);
+    await sendLetter(workId, target, 'второе');
+    await settle(300);
+
+    // «Перезапуск»: прежнего будильника нет, новый стартует над той же картой — его старт записывает лежащие письма
+    // спящей как указанные, и сам по себе он её не поднимает.
+    first.wake.stop();
+    const launches: Array<{ mode: string; options: { by?: string; prompt?: string } | undefined }> = [];
+    const second = createWakeService(
+      fakeHost(),
+      first.works,
+      first.activity,
+      first.pty,
+      {
+        launch: async (_ref, mode, options) => {
+          launches.push({ mode, options });
+          return 'started' as const;
+        },
+      },
+      { enterDelayMs: 30 },
+    );
+    stoppers.push(async () => second.stop());
+    second.start();
+    await settle(300);
+    expect(launches).toEqual([]);
+    expect(unreadFor(await readMap(project, workId), target)).toHaveLength(2);
+
+    // Согласие пришло: `retry` заново считает письма спящей неуказанными — подъём с указателем на оба.
+    second.retry(ref);
+    await waitFor(() => launches.length > 0, 5000);
+    expect(launches).toEqual([{ mode: 'resume', options: { by: 'wake', prompt: pointer(2) } }]);
+  }, 30_000);
 
   it('6: стаб выходит сразу — отправителю письмо от system, есть resume-failed', async () => {
     const { workId, target, sender } = await sleepingPair();

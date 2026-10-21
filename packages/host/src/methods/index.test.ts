@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RequestInfo } from '../context.js';
 import type { AssistantService } from '../assistant/assistant-service.js';
+import type { ConsentsService } from '../consents/consents-service.js';
 import { createHostHandlers, WORKS_GATED_METHODS, WORKS_GATED_NOTIFICATIONS } from './index.js';
 import type { MethodDeps } from './index.js';
 
@@ -85,6 +86,18 @@ it('методы диагностики есть только при health и p
     profiler: { status: () => ({ state: 'idle' }), files: async () => [], start: () => ({ state: 'idle' }), stop: async () => {} },
   } as never).methods;
   for (const name of names) expect(withBoth[name]).toBeTypeOf('function');
+});
+
+it('consents.* и trust.* регистрируются, только если сервис согласий передан, и снимка работ не ждут', () => {
+  const names = ['consents.list', 'consents.decide', 'trust.list', 'trust.grant', 'trust.revoke'] as const;
+  const { deps } = fakeDeps(Promise.resolve());
+  for (const name of names) expect(createHostHandlers(deps).methods).not.toHaveProperty(name);
+
+  const { methods } = createHostHandlers({ ...deps, consents: {} as unknown as ConsentsService });
+  for (const name of names) {
+    expect(methods[name]).toBeTypeOf('function');
+    expect(WORKS_GATED_METHODS as readonly string[]).not.toContain(name);
+  }
 });
 
 it('registers both explicit native skill sharing actions', () => {

@@ -9,6 +9,7 @@ import {
   bothEnv,
   clearSecret,
   findRunnerBinary,
+  grantTrust,
   isMember,
   isRoomArchived,
   isStaleHostLock,
@@ -21,6 +22,7 @@ import {
   providerReadiness,
   providerReadinessError,
   readHostLock,
+  readMap,
   readSecret,
   socketIsAlive,
   versionAtLeast,
@@ -47,6 +49,8 @@ import { createHostHandlers } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
 import { createCompactionService, type CompactionService } from './compaction/compaction-service.js';
+import { createConsentsService } from './consents/consents-service.js';
+import { createHeldLaunchActions } from './consents/held-launches.js';
 import { createContextService } from './context/context-service.js';
 import { createCodexLogPoller } from './activity/codex-log-poll.js';
 import { linkTerminalActivity } from './activity/terminal-link.js';
@@ -355,7 +359,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Создание, запуск и автозапуск сессий (1.7). На остановке хоста гасит все
   // живые PTY сам — той же дорогой, что и явный `sessions.stop`. Сессии `claude` с лентой получают
   // адрес приёмника и свой токен (подкусок 2c).
-  // Запускатель хука Codex заводится при первой надобности (включённая `codexApprovals`), а не при каждом старте хоста.
+  // Запускатель хука Codex заводится при первой надобности (режим `parley` настройки `codexWriteApprovals`), а не при каждом старте хоста.
   // Не записался — запуск идёт без хуков (Codex спросит одобрение в терминале), а следующий запуск пробует снова.
   let codexHookCommand: Promise<string | undefined> | undefined;
   const codexHookCommandOnce = (): Promise<string | undefined> => {
@@ -370,12 +374,40 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     });
     return codexHookCommand;
   };
-  const sessionsService = createSessionsService(
+  // Согласия человека на папку (спека 2026-10-21, 4.2 и 4.4): запуск Codex без согласия на проект ждёт здесь. Служба
+  // заводится до сессий и будильника, а продолжает запуски через них — привязка поздняя, замыкания читают их позже.
+  /* eslint-disable prefer-const -- поздняя привязка: продолжение запусков читает сервисы, созданные ниже */
+  let sessionsService!: ReturnType<typeof createSessionsService>;
+  let wakeService!: ReturnType<typeof createWakeService>;
+  /* eslint-enable prefer-const */
+  const consentsService = createConsentsService({
+    home: parleyHome(),
+    host: handle.context,
+    trust: { grant: (folder, by) => grantTrust(folder, by) },
+    ...createHeldLaunchActions({
+      launch: (ref, mode, launchOptions) => sessionsService.launch(ref, mode, launchOptions),
+      close: (ref) => sessionsService.close(ref),
+      retry: (ref) => wakeService.retry(ref),
+    }),
+    // Держать больше нечего: процесс уже идёт, сессия закрыта, запущена другим путём или исчезла вместе с работой.
+    isLive: async (ref: SessionRef): Promise<boolean> => {
+      if (ptyManager.get(ref) !== undefined) return true;
+      try {
+        const session = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
+        return session === undefined || session.lifecycle === 'closed' || session.lifecycle === 'active';
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === 'ENOENT';
+      }
+    },
+  });
+  handle.context.onShutdown(async () => consentsService.stop());
+  sessionsService = createSessionsService(
     handle.context,
     worksService,
     ptyManager,
     activityService,
     {
+      consents: consentsService,
       hooks: hookServer,
       providerVersions,
       codexHookCommand: codexHookCommandOnce,
@@ -403,7 +435,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // простаивающему агенту без канала и поднимает спящих письмом. Останавливается
   // вместе с хостом — иначе его таймеры Enter/предохранителя пережили бы
   // закрытые PTY.
-  const wakeService = createWakeService(
+  wakeService = createWakeService(
     handle.context,
     worksService,
     activityService,
@@ -439,7 +471,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activity: activityService,
     feed: feedService,
     send,
-    launch: (ref, mode, options) => sessionsService.launch(ref, mode, options),
+    launch: async (ref, mode, options) => {
+      // Запуск Codex ждёт согласия человека на папку: письмо ассистента не доставлено, он скажет об этом и не отметит «sent».
+      if ((await sessionsService.launch(ref, mode, options)) === 'held') {
+        throw new HostError('conflict', 'The session waits for the human to trust the folder. Send the message again after it is allowed.');
+      }
+    },
     sendLetter: (input) => sendHumanLetter(input, { via: 'assistant' }),
     createRoom: (input) => createHumanRoom(input),
     resolveRoomProposal: (input) => resolveRoomProposal(input),
@@ -552,6 +589,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     pty: ptyManager,
     sessions: sessionsService,
     wake: wakeService,
+    consents: consentsService,
     compaction: compactionService,
     worktrees: worktreesService,
     feed: feedService,
