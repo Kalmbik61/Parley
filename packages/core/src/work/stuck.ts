@@ -558,7 +558,10 @@ function lineText(who: StuckWho, need: SessionNeed, now: Date): string {
 export function stuckLine(who: StuckWho, need: SessionNeed, now: Date, isLead: boolean): string {
   const line = lineText(who, need, now);
   const mayHandOver = need.kind === 'limit' || need.kind === 'sign-in';
-  return isLead && mayHandOver ?`${line} ${mentionOf(who.id)} leads this room: you can make another participant the lead.` : line;
+  if (!isLead || !mayHandOver) return line;
+  // Подсказка — отдельное предложение: строка кончается без точки, а `detail` ошибки может кончаться ею сам.
+  const stop = /[.!?]$/.test(line) ? '' : '.';
+  return `${line}${stop} ${mentionOf(who.id)} leads this room: you can make another participant the lead.`;
 }
 
 /** Пометка «вернулась» у строки: лимит сброшен, вход выполнен; у остальных видов — без пометки. */

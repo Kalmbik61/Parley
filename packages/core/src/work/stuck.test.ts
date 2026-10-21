@@ -996,9 +996,13 @@ describe('тексты о застрявшей сессии', () => {
 
     it('ведущий: хвост «leads this room» только у limit и sign-in', () => {
       const tail = ' @s03 leads this room: you can make another participant the lead.';
-      expect(stuckLine(S03, limit, NOW, true)).toBe(`@s03 hit its Codex usage limit; it resets at 19:27${tail}`);
+      expect(stuckLine(S03, limit, NOW, true)).toBe(`@s03 hit its Codex usage limit; it resets at 19:27.${tail}`);
       expect(stuckLine(S03, need({ kind: 'sign-in', account: 'auth' }), NOW, true)).toBe(
-        `@s03 is signed out of Codex${tail}`,
+        `@s03 is signed out of Codex.${tail}`,
+      );
+      // Текст ошибки уже кончается точкой — вторая не нужна.
+      expect(stuckLine(S03, need({ kind: 'sign-in', account: 'auth', detail: 'Please log in.' }), NOW, true)).toBe(
+        `@s03 is signed out of Codex: Please log in.${tail}`,
       );
       expect(stuckLine(S03, need({ detail: 'ls' }), NOW, true)).not.toContain('leads this room');
       expect(stuckLine(S03, need({ kind: 'question' }), NOW, true)).not.toContain('leads this room');
