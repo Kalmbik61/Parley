@@ -32,10 +32,17 @@ describe('builtin roles', () => {
     expect(featureLead.prompt).toContain('escalate urgent blockers immediately');
     expect(featureLead.prompt).toContain('create_session');
     expect(featureLead.prompt).not.toContain('created by the human');
+    expect(featureLead.prompt).not.toContain('Read owned rooms');
     const verifier = BUILTIN_ROLES.find((role) => role.id === 'builtin:verifier')!;
     expect(verifier.readOnly).toBe(false);
     expect(verifier.prompt).toContain('PASS, FAIL, or NOT VERIFIED');
     expect(verifier.prompt).toContain('tests, fixtures, expected results, or configuration');
+    const critic = BUILTIN_ROLES.find((role) => role.id === 'builtin:critic')!;
+    expect(critic.prompt).toContain('plan or decision');
+    const reviewer = BUILTIN_ROLES.find((role) => role.id === 'builtin:reviewer')!;
+    expect(reviewer.prompt).toContain('tests cover the changed behavior');
+    const debuggerRole = BUILTIN_ROLES.find((role) => role.id === 'builtin:debugger')!;
+    expect(debuggerRole.prompt).toContain('regression test');
   });
   it('selects the agreed model tiers from the current provider catalog', () => {
     expect(
