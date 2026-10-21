@@ -84,7 +84,8 @@ describe('TelegramSettings', () => {
   });
 
   it('Link показывает код, ссылку и SVG-картинку', async () => {
-    bridge.setHandler('telegram.link', () => ({ code: 'XY12', expiresAt: '2026-10-20T11:00:00.000Z', deepLink: 'https://t.me/parley_bot?start=XY12' }));
+    const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    bridge.setHandler('telegram.link', () => ({ code: 'XY12', expiresAt, deepLink: 'https://t.me/parley_bot?start=XY12' }));
     mount(base);
     fireEvent.click(await screen.findByTestId('telegram-link'));
     expect((await screen.findByTestId('telegram-code')).textContent).toBe('XY12');
