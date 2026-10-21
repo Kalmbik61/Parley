@@ -74,7 +74,7 @@ export interface WakeServiceOptions {
   compacting?: (ref: SessionRef) => boolean;
   /**
    * Лимиты провайдеров хоста: время сброса неизвестно, а данные новее удара показывают свободное окно — сессию возвращают
-   * сразу, не дожидаясь `retryMs` (спека застрявших 6.3). Без них — только срок.
+   * через тот же запас, что после известного сброса, не дожидаясь `retryMs` (спека застрявших 6.3). Без них — только срок.
    */
   limits?: Pick<LimitsService, 'get'>;
   /** Сроки возврата после сброса лимита; по умолчанию `LIMIT_RETURN_GRACE_MS` и `LIMIT_RETRY_MS`. Рычаги E2E. */
@@ -130,6 +130,8 @@ interface LimitEpisode {
   reached: boolean;
   /** Исход принят — возврат напечатан либо отказан уведомлением; до конца эпизода второй раз не пробуем. */
   settled: boolean;
+  /** Когда впервые увидели, что окно провайдера снова свободно (мс): срок встал на это время плюс запас, один раз. */
+  freeAt: number | null;
   /** Когда возврат напечатан (мс): `need` с более поздним `since` — уже новый эпизод, а не тот же. */
   printedAt: number | null;
 }
@@ -711,7 +713,15 @@ export function createWakeService(
       episode = undefined;
     }
     if (episode === undefined) {
-      episode = { resetsAt: need.resetsAt, due: 0, timer: undefined, reached: false, settled: false, printedAt: null };
+      episode = {
+        resetsAt: need.resetsAt,
+        due: 0,
+        timer: undefined,
+        reached: false,
+        settled: false,
+        freeAt: null,
+        printedAt: null,
+      };
       state.limit = episode;
       armLimit(ref, episode, limitReturnDue(need, limitGraceMs, limitRetryMs));
     } else if (!episode.settled && need.resetsAt !== null && need.resetsAt !== episode.resetsAt) {
@@ -719,16 +729,17 @@ export function createWakeService(
       episode.resetsAt = need.resetsAt;
       armLimit(ref, episode, limitReturnDue(need, limitGraceMs, limitRetryMs));
     }
-    // Время сброса неизвестно, а окно провайдера снова свободно — возвращаем сразу, не дожидаясь повторного срока.
+    // Время сброса неизвестно, а окно провайдера снова свободно: срок встаёт на это время плюс тот же запас, что после
+    // известного сброса, — Claude мог продолжить сам, и «сразу» значит «не через 15 минут» (6.3). Один раз за эпизод.
     if (
       !episode.reached &&
       !episode.settled &&
+      episode.freeAt === null &&
       options.limits !== undefined &&
       limitWindowFree(need, options.limits.get(session.provider))
     ) {
-      clearTimeout(episode.timer);
-      episode.timer = undefined;
-      episode.reached = true;
+      episode.freeAt = Date.now();
+      if (episode.freeAt + limitGraceMs < episode.due) armLimit(ref, episode, episode.freeAt + limitGraceMs);
     }
     if (episode.reached && !episode.settled) tryLimitReturn(ref, state, entry, session, handle, episode, act);
   }

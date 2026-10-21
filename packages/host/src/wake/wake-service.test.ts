@@ -1718,7 +1718,7 @@ describe('возврат после сброса лимита', () => {
     expect(rig.blocked()).toHaveLength(1);
   });
 
-  it('время сброса неизвестно, а данные провайдера показывают свободное окно: возврат сразу, не через срок', async () => {
+  it('время сброса неизвестно, а данные провайдера показывают свободное окно: возврат через запас от этого момента, не через срок', async () => {
     const rig = await limitRig({ limitReturn: { graceMs: 500, retryMs: 600_000 } });
     rig.hit();
     await rig.advance(1000);
@@ -1730,6 +1730,46 @@ describe('возврат после сброса лимита', () => {
       at: new Date(Date.now()).toISOString(),
     };
     rig.poke();
+    // Запас тот же, что после известного сброса: Claude мог продолжить сам.
+    expect(rig.written).toEqual([]);
+    await rig.advance(499);
+    expect(rig.written).toEqual([]);
+
+    await rig.advance(2);
+    expect(returnText(rig)).toHaveLength(1);
+  });
+
+  it('окно свободно, но к запасу Claude продолжил сам: ничего не печатается', async () => {
+    const rig = await limitRig({ limitReturn: { graceMs: 500, retryMs: 600_000 } });
+    rig.hit();
+    rig.limitsData.value = {
+      fiveHour: { usedPercent: 2, resetsAt: null },
+      week: null,
+      at: new Date(Date.now() + 1).toISOString(),
+    };
+    await rig.advance(10);
+    rig.poke();
+    await rig.advance(300);
+    rig.working();
+
+    await rig.advance(10_000);
+    expect(rig.written).toEqual([]);
+    expect(rig.blocked()).toEqual([]);
+  });
+
+  it('свободное окно видно повторно: срок не отодвигается', async () => {
+    const rig = await limitRig({ limitReturn: { graceMs: 500, retryMs: 600_000 } });
+    rig.hit();
+    await rig.advance(10);
+    rig.limitsData.value = {
+      fiveHour: { usedPercent: 2, resetsAt: null },
+      week: null,
+      at: new Date(Date.now()).toISOString(),
+    };
+    rig.poke();
+    await rig.advance(300);
+    rig.poke();
+    await rig.advance(250);
 
     expect(returnText(rig)).toHaveLength(1);
   });
