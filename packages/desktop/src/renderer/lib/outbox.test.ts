@@ -82,16 +82,14 @@ describe('outbox — очередь отправки', () => {
     expect(started.map((entry) => entry.text)).toEqual(['a', 'a', 'b']);
   });
 
-  it('× убирает failed, и очередь идёт дальше; pending × не убирает', async () => {
+  it('× убирает failed, и очередь идёт дальше; элемент в полёте × не убирает', async () => {
     const { outbox, started } = manual();
     const a = outbox.enqueue('k', 'a');
-    const b = outbox.enqueue('k', 'b');
+    outbox.enqueue('k', 'b');
     outbox.remove('k', a);
     expect(outbox.items('k')).toHaveLength(2);
     started[0]?.done.resolve({ kind: 'failed' });
     await flush();
-    outbox.remove('k', b);
-    expect(outbox.items('k')).toHaveLength(2);
     outbox.remove('k', a);
     expect(outbox.items('k').map((item) => item.payload)).toEqual(['b']);
     expect(started.map((entry) => entry.text)).toEqual(['a', 'b']);
@@ -203,5 +201,95 @@ describe('outbox — очередь отправки', () => {
     await flush();
     expect(outbox.items('k')).toEqual([]);
     expect(outbox.store.getState().flying).toEqual({});
+  });
+
+  it('ready=false держит голову: попытка не начинается; kick после открытия затвора отправляет', async () => {
+    let open = false;
+    const started: string[] = [];
+    const outbox = createOutbox<string>(
+      (_key, item) => {
+        started.push(item.payload);
+        return Promise.resolve({ kind: 'sent' });
+      },
+      { ready: () => open },
+    );
+    outbox.enqueue('k', 'a');
+    outbox.enqueue('k', 'b');
+    expect(started).toEqual([]);
+    expect(outbox.store.getState().flying.k).toBeUndefined();
+    outbox.kick('k');
+    expect(started).toEqual([]);
+    open = true;
+    outbox.kick('k');
+    await flush();
+    expect(started).toEqual(['a', 'b']);
+  });
+
+  it('kick занятой или пустой очереди — ничего', () => {
+    const { outbox, started } = manual();
+    outbox.kick('k');
+    outbox.enqueue('k', 'a');
+    outbox.kick('k');
+    expect(started).toHaveLength(1);
+  });
+
+  it('ждущий pending убирается, элемент в полёте — нет', async () => {
+    const { outbox, started } = manual();
+    const a = outbox.enqueue('k', 'a');
+    const b = outbox.enqueue('k', 'b');
+    outbox.remove('k', a);
+    expect(outbox.items('k')).toHaveLength(2);
+    outbox.remove('k', b);
+    expect(outbox.items('k').map((item) => item.payload)).toEqual(['a']);
+    started[0]?.done.resolve({ kind: 'sent' });
+    await flush();
+    expect(started).toHaveLength(1);
+  });
+
+  it('prioritize ставит ждущий элемент впереди ранних, сливает patch и пускает его, если очередь свободна', async () => {
+    interface Letter {
+      text: string;
+      now?: boolean;
+    }
+    const started: Array<{ payload: Letter; done: Deferred<AttemptResult> }> = [];
+    let open = false;
+    const outbox = createOutbox<Letter>(
+      (_key, item) => {
+        const done = deferred<AttemptResult>();
+        started.push({ payload: item.payload, done });
+        return done.promise;
+      },
+      { ready: (_key, item) => open || item.payload.now === true },
+    );
+    outbox.enqueue('k', { text: 'a' });
+    outbox.enqueue('k', { text: 'b' });
+    const c = outbox.enqueue('k', { text: 'c' });
+    expect(started).toHaveLength(0);
+    outbox.prioritize('k', c, { now: true });
+    expect(started.map((entry) => entry.payload)).toEqual([{ text: 'c', now: true }]);
+    expect(outbox.items('k').map((item) => item.payload.text)).toEqual(['c', 'a', 'b']);
+    // Элемент в полёте и неизвестный id не трогаются.
+    outbox.prioritize('k', c, { text: 'x' });
+    outbox.prioritize('k', 'nope');
+    expect(outbox.items('k')[0]?.payload.text).toBe('c');
+    open = true;
+    started[0]?.done.resolve({ kind: 'sent' });
+    await flush();
+    expect(started.map((entry) => entry.payload.text)).toEqual(['c', 'a']);
+  });
+
+  it('prioritize при элементе в полёте ставит элемент сразу за ним', () => {
+    const { outbox } = manual();
+    outbox.enqueue('k', 'a');
+    outbox.enqueue('k', 'b');
+    const c = outbox.enqueue('k', 'c');
+    outbox.prioritize('k', c);
+    expect(outbox.items('k').map((item) => item.payload)).toEqual(['a', 'c', 'b']);
+  });
+
+  it('без ready поведение прежнее: попытка начинается в enqueue', () => {
+    const { outbox, started } = manual();
+    outbox.enqueue('k', 'a');
+    expect(started).toHaveLength(1);
   });
 });

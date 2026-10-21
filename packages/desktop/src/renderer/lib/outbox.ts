@@ -7,6 +7,10 @@
  * Драйвер живёт на уровне модуля, а не в эффекте компонента: вид Chat и вкладка комнаты размонтируются при смене
  * вкладки, а очередь от этого вставать не должна. Хранится в памяти окна; закрытие окна её теряет, как черновик.
  * Свободная очередь начинает попытку синхронно в `enqueue`: вызов моста уходит в том же такте, что и Enter.
+ *
+ * Владелец может держать очередь затвором (`options.ready`): пока он закрыт, голова остаётся `pending` и не уходит;
+ * когда затвор мог открыться, владелец зовёт `kick`. Ждущий элемент (не в полёте) можно убрать (`remove`) или
+ * пустить вперёд очереди (`prioritize`).
  */
 
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
@@ -43,8 +47,12 @@ export interface Outbox<P> {
    * повтором: так ручной Retry обновляет метку времени отправки (`{ ...payload, ...patch }`).
    */
   retry(key: string, id: string, patch?: Partial<P>): void;
-  /** Убрать `failed` или `sent`; `pending` не убирается (спека, 5). */
+  /** Убрать `failed`, `sent` или ждущий `pending`; элемент в полёте не убирается (спека, 5). */
   remove(key: string, id: string): void;
+  /** Ждущий `pending` не в полёте: слить `patch` в payload и поставить следующим на отправку, затем `pump`. Прочее — ничего. */
+  prioritize(key: string, id: string, patch?: Partial<P>): void;
+  /** Ещё раз попробовать начать попытку: затвор `ready` мог открыться. Занятая или пустая очередь — ничего. */
+  kick(key: string): void;
   items(key: string): readonly OutboxItem<P>[];
   /** Только для тестов: пустая очередь, исходы начатых попыток гасятся. */
   resetForTests(): void;
@@ -52,7 +60,15 @@ export interface Outbox<P> {
 
 const NONE: readonly never[] = [];
 
-export function createOutbox<P>(attempt: (key: string, item: OutboxItem<P>) => Promise<AttemptResult>): Outbox<P> {
+export interface OutboxOptions<P> {
+  /** Затвор: `false` — голова очереди ещё не может уходить, она остаётся `pending` до `kick`. */
+  ready?: (key: string, item: OutboxItem<P>) => boolean;
+}
+
+export function createOutbox<P>(
+  attempt: (key: string, item: OutboxItem<P>) => Promise<AttemptResult>,
+  options: OutboxOptions<P> = {},
+): Outbox<P> {
   const store = create<OutboxState<P>>(() => ({ byKey: {}, flying: {} }));
   let nextId = 0;
   /** Поколение: `resetForTests` гасит попытки, начатые до сброса. */
@@ -110,6 +126,7 @@ export function createOutbox<P>(attempt: (key: string, item: OutboxItem<P>) => P
     if (store.getState().flying[key] !== undefined) return;
     const next = items(key).find((item) => item.status !== 'sent');
     if (next === undefined || next.status === 'failed') return;
+    if (options.ready !== undefined && !options.ready(key, next)) return;
     setFlying(key, next.id);
     run(key, next.id, epoch);
   }
@@ -131,8 +148,26 @@ export function createOutbox<P>(attempt: (key: string, item: OutboxItem<P>) => P
     },
     remove(key, id) {
       const item = items(key).find((entry) => entry.id === id);
-      if (item === undefined || item.status === 'pending') return;
+      if (item === undefined || (item.status === 'pending' && store.getState().flying[key] === id)) return;
       patch(key, id, null);
+      pump(key);
+    },
+    prioritize(key, id, payloadPatch) {
+      const item = items(key).find((entry) => entry.id === id);
+      if (item?.status !== 'pending' || store.getState().flying[key] === id) return;
+      const moved = payloadPatch === undefined ? item : { ...item, payload: { ...item.payload, ...payloadPatch } };
+      const flyingId = store.getState().flying[key];
+      setItems(key, (was) => {
+        const rest = was.filter((entry) => entry.id !== id);
+        // Следующим идёт первый не `sent` после элемента в полёте; при свободной очереди — первый не `sent`.
+        const after = flyingId === undefined ? -1 : rest.findIndex((entry) => entry.id === flyingId);
+        let at = after + 1;
+        while (at < rest.length && rest[at]?.status === 'sent') at += 1;
+        return [...rest.slice(0, at), moved, ...rest.slice(at)];
+      });
+      pump(key);
+    },
+    kick(key) {
       pump(key);
     },
     items,

@@ -361,6 +361,7 @@ export const S = {
   outbox: {
     sending: 'Sending…',
     waiting: 'Waiting',
+    sendNow: 'Send now',
     notSent: 'Not sent',
     remove: 'Remove',
   },

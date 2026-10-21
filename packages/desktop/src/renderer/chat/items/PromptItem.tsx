@@ -8,7 +8,7 @@
  * браузера с тем же именем, что у его `.md`, отдельным чипом не показывается: его миниатюра — в чипе `.md`.
  *
  * Очередь окна (спека 2026-10-16, 4.3): серый элемент бывает трёх видов — `queued` (уже в очереди CLI во время хода),
- * `waiting` (ждёт отправки окном) и `failed` («Not sent» с Retry и ×). У всех `data-testid="chat-queued"` и `data-state`.
+ * `waiting` (ждёт отправки окном: пока не ушло, у него «Send now» и ×; в полёте — «Sending…») и `failed` («Not sent» с Retry и ×). У всех `data-testid="chat-queued"` и `data-state`.
  *
  * Под настоящим промптом — Copy и Send again (`MessageActions`, спека 2026-10-16, 3.1): Copy кладёт текст как
  * ушёл, с упоминаниями `@"путь"`, без пустых краёв; Send again ставит его как есть в очередь отправки.
@@ -33,13 +33,15 @@ export interface PromptItemProps {
   state?: 'queued' | 'waiting' | 'failed';
   /** `failed`: Retry. */
   onRetry?: () => void;
-  /** `failed`: × — убрать не ушедшее. */
+  /** `waiting`: «Send now» — отдать в CLI, не дожидаясь конца хода. */
+  onSendNow?: () => void;
+  /** `waiting` (не в полёте) и `failed`: × — убрать не ушедшее. */
   onRemove?: () => void;
   /** Сообщение отправил помощник (спека 2026-10-14, 7.4): над пузырём «via assistant». */
   via?: boolean;
 }
 
-export function PromptItem({ text, images = 0, state, onRetry, onRemove, via }: PromptItemProps): JSX.Element {
+export function PromptItem({ text, images = 0, state, onRetry, onSendNow, onRemove, via }: PromptItemProps): JSX.Element {
   // Мост — только для миниатюр: `useChatEnv()` вне окружения бросает, а промпт без него рисуется (чипы без картинок).
   const env = useContext(ChatEnvContext);
   const bridge = env?.bridge ?? null;
@@ -81,7 +83,18 @@ export function PromptItem({ text, images = 0, state, onRetry, onRemove, via }: 
           </span>
         ) : null}
         {state === 'queued' ? <span className="text-xs">{S.chat.queued}</span> : null}
-        {state === 'waiting' ? <span className="text-xs">{S.outbox.waiting}</span> : null}
+        {state === 'waiting' && onSendNow === undefined && onRemove === undefined ? <span className="text-xs">{S.outbox.sending}</span> : null}
+        {state === 'waiting' && (onSendNow !== undefined || onRemove !== undefined) ? (
+          <span className="flex items-center gap-2 text-xs">
+            <span>{S.chat.queued}</span>
+            <Button type="button" size="xs" variant="outline" onClick={onSendNow}>
+              {S.outbox.sendNow}
+            </Button>
+            <Button type="button" size="icon-xs" variant="ghost" aria-label={S.outbox.remove} title={S.outbox.remove} onClick={onRemove}>
+              <X className="size-3.5" aria-hidden="true" />
+            </Button>
+          </span>
+        ) : null}
         {state === 'failed' ? (
           <span className="flex items-center gap-2 text-xs">
             <span className="text-[var(--status-warning-text)]">{S.outbox.notSent}</span>

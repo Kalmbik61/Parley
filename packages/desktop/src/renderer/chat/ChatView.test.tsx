@@ -1549,7 +1549,7 @@ describe('ChatView — очередь отправки', () => {
     await act(async () => {});
     expect(sentTexts()).toEqual(['first']);
     expect(states()).toEqual(['failed', 'waiting']);
-    fireEvent.click(screen.getByRole('button', { name: S.outbox.remove }));
+    fireEvent.click(within(screen.getAllByTestId('chat-queued')[0]!).getByRole('button', { name: S.outbox.remove }));
     await act(async () => {});
     expect(sentTexts()).toEqual(['first', 'second']);
     expect(states()).toEqual([]);
@@ -1634,6 +1634,53 @@ describe('ChatView — очередь отправки', () => {
     fireEvent.click(within(screen.getByTestId('chat-prompt')).getByRole('button', { name: S.chat.actions.sendAgain }));
     await act(async () => {});
     expect(sentTexts()).toEqual(['again @"/a/b.txt" ']);
+  });
+
+  /** Живая сессия (lifecycle `active`) в сторе работ: только у неё ход держит очередь. */
+  const goLive = (): void => {
+    useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: '/tmp/p', sessions: [makeSession('s-01', 'S01')] })] });
+  };
+
+  it('во время хода сообщение держит окно: серое с «Send now» и ×, pty.send не уходит; × снимает без отправки', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    goLive();
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'go')]);
+    type('later');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await act(async () => {});
+    const grey = screen.getByTestId('chat-queued');
+    expect(grey.getAttribute('data-state')).toBe('waiting');
+    expect(within(grey).getByRole('button', { name: S.outbox.sendNow })).not.toBeNull();
+    expect(sentTexts()).toEqual([]);
+    fireEvent.click(within(grey).getByRole('button', { name: S.outbox.remove }));
+    await act(async () => {});
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
+    setFeed([prompt('p1', 'go'), turn('u1')], 2);
+    await act(async () => {});
+    expect(sentTexts()).toEqual([]);
+  });
+
+  it('«Send now» отдаёт ждущее сообщение в CLI во время хода; ход закрылся — второе уходит само', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    goLive();
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'go')]);
+    type('first');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    type('second');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    await act(async () => {});
+    expect(sentTexts()).toEqual([]);
+    const second = screen.getAllByTestId('chat-queued')[1]!;
+    fireEvent.click(within(second).getByRole('button', { name: S.outbox.sendNow }));
+    await act(async () => {});
+    expect(sentTexts()).toEqual(['second']);
+    // Ушедшее стало серым «Queued» CLI — без кнопок; первое всё ещё ждёт.
+    expect(states()).toEqual(['queued', 'waiting']);
+    setFeed([prompt('p1', 'go'), turn('u1'), prompt('p2', 'second'), turn('u2')], 2);
+    await act(async () => {});
+    expect(sentTexts()).toEqual(['second', 'first']);
   });
 });
 
@@ -2115,3 +2162,4 @@ describe('ChatView — история ↑/↓ (спека 2026-10-16, 3.2)', () 
     expect(chips()).toEqual([]);
   });
 });
+

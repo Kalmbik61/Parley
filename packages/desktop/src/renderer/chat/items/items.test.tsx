@@ -321,7 +321,7 @@ describe('PromptItem — вложения: хвостовые упоминани
     expect(grey.textContent).toBe(`notes.txtnext${S.chat.queued}`);
   });
 
-  it('не ушедший элемент — «Not sent», Retry и × зовут свои колбэки; ждущий — «Waiting» без кнопок', () => {
+  it('не ушедший элемент — «Not sent», Retry и × зовут свои колбэки; ждущий в полёте — «Sending…» без кнопок; ждущий — «Queued» с «Send now» и ×', () => {
     const onRetry = vi.fn();
     const onRemove = vi.fn();
     const view = renderPrompt(<PromptItem text="later" state="failed" onRetry={onRetry} onRemove={onRemove} />);
@@ -334,8 +334,17 @@ describe('PromptItem — вложения: хвостовые упоминани
     expect(onRemove).toHaveBeenCalledTimes(1);
     view.unmount();
     renderPrompt(<PromptItem text="later" state="waiting" />);
-    expect(screen.getByTestId('chat-queued').textContent).toContain(S.outbox.waiting);
+    expect(screen.getByTestId('chat-queued').textContent).toContain(S.outbox.sending);
     expect(screen.queryAllByRole('button')).toEqual([]);
+    view.unmount();
+    const onSendNow = vi.fn();
+    renderPrompt(<PromptItem text="later" state="waiting" onSendNow={onSendNow} onRemove={onRemove} />);
+    const waiting = screen.getByTestId('chat-queued');
+    expect(waiting.textContent).toContain(S.chat.queued);
+    fireEvent.click(within(waiting).getByRole('button', { name: S.outbox.sendNow }));
+    fireEvent.click(within(waiting).getByRole('button', { name: S.outbox.remove }));
+    expect(onSendNow).toHaveBeenCalledTimes(1);
+    expect(onRemove).toHaveBeenCalledTimes(2);
   });
 
   it('лента: промпт и серый элемент очереди рисуют упоминания чипами', () => {
