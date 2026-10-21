@@ -2,10 +2,13 @@
  * Застрявшие сессии: чего сессия ждёт от человека (`SessionNeed`), разбор ошибок API Claude и Codex и
  * времени сброса лимита (спека «Застрявшие сессии», 3.1–3.4). Модуль чистый: ни диска, ни часов — записи,
  * «сейчас» и пояс приходят параметрами. Свёртка активности и хост берут отсюда типы и разбор, поэтому сам
- * модуль ничего из `activity.ts` не тянет: цикла нет.
+ * модуль ничего из `activity.ts` не тянет: цикла нет. В конце — тексты для человека: часы машины, имя
+ * провайдера и одна строка причины `needReason` для уведомления окна, острова и Telegram (спека подписок К16);
+ * поэтому окно берёт модуль подпутём `@parley/core/stuck`, как `@parley/core/session-state`.
  */
 
 import type { ProviderLimits } from '../limits.js';
+import type { ProviderEntry } from '../providers.js';
 
 /** Что нужно от человека: одобрение, ответ на вопрос, сброс лимита, вход или экран при старте. */
 export type NeedKind = 'approval' | 'question' | 'limit' | 'sign-in' | 'startup';
@@ -378,4 +381,97 @@ export function pickResetsAt(
     return { resetsAt: new Date(now).toISOString(), window: guess.window };
   }
   return guess; // времени в тексте нет, и сказать его нечем: resetsAt остаётся null
+}
+
+// ---------------------------------------------------------------------------------------------
+// Тексты причины (спека застрявших 7.4, спека подписок 4.4, 5.8, К16). Английские, одни на окно, остров и
+// Telegram. Часы — по местному времени машины, «сейчас» приходит параметром.
+// ---------------------------------------------------------------------------------------------
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+const pad2 = (value: number): string => String(value).padStart(2, '0');
+
+/**
+ * Имя провайдера для человека: `claude` — «Claude Code», `codex` — «Codex», `glm` — «GLM» (id без учёта регистра,
+ * как у `providerName` окна), у прочих — `label` записи реестра, а пустой `label` — сам id. Аккаунты
+ * (`custom-claude-2`) называются по `label`, который отдаёт хост (спека подписок 5.9, К1).
+ */
+export function providerLabel(entry: Pick<ProviderEntry, 'id' | 'label'>): string {
+  switch (entry.id.toLowerCase()) {
+    case 'claude':
+      return 'Claude Code';
+    case 'codex':
+      return 'Codex';
+    case 'glm':
+      return 'GLM';
+    default:
+      return entry.label || entry.id;
+  }
+}
+
+/**
+ * Время `iso` по часам машины: `19:27`, а не сегодня (по дню `now`) — `Oct 14, 19:27`. Нечитаемая строка
+ * возвращается как есть: текст причины не должен падать из-за плохой метки.
+ */
+export function localClock(iso: string, now: Date): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return iso;
+  const clock = `${pad2(at.getHours())}:${pad2(at.getMinutes())}`;
+  return at.toDateString() === now.toDateString() ? clock : `${MONTH_NAMES[at.getMonth()]} ${at.getDate()}, ${clock}`;
+}
+
+/** Смещение пояса машины в тот момент: `UTC+03:00`, `UTC-05:00`. */
+function utcOffset(at: Date): string {
+  const minutes = -at.getTimezoneOffset();
+  const abs = Math.abs(minutes);
+  return `UTC${minutes < 0 ? '-' : '+'}${pad2(Math.floor(abs / 60))}:${pad2(abs % 60)}`;
+}
+
+/** Сколько осталось: `2 h 10 min`, `25 min`, `2 h`; от суток — `3 d 4 h`, `3 d`. Минуты округляются вверх. */
+function untilText(ms: number): string {
+  const total = Math.ceil(ms / MINUTE_MS);
+  const days = Math.floor(total / 1440);
+  const hours = Math.floor((total % 1440) / 60);
+  const minutes = total % 60;
+  if (days > 0) return hours === 0 ? `${days} d` : `${days} d ${hours} h`;
+  if (hours > 0) return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`;
+  return `${minutes} min`;
+}
+
+/**
+ * Время для агента, который не знает пояса человека: `19:27 local time (UTC+03:00), in 2 h 10 min` (не сегодня —
+ * `Oct 14, 19:27 …`, от суток — `in 3 d 4 h`, прошло — `already passed`). Смещение берётся на сам момент, а не
+ * на «сейчас»: перевод часов между ними не должен сдвинуть названный час. Нечитаемая строка — как есть.
+ */
+export function agentClock(iso: string, now: Date): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return iso;
+  const left = at.getTime() - now.getTime();
+  return `${localClock(iso, now)} local time (${utcOffset(at)}), ${left <= 0 ? 'already passed' : `in ${untilText(left)}`}`;
+}
+
+/**
+ * Одна строка «чего ждёт сессия» для уведомления окна, острова и Telegram (спека застрявших 7.4, подписок К16).
+ * `provider` — имя провайдера для человека (`providerLabel`): у аккаунтов оно называет аккаунт. Вопрос и экран
+ * старта текст `detail` не повторяют: отвечать надо в терминале.
+ */
+export function needReason(need: SessionNeed, now: Date, provider: string): string {
+  switch (need.kind) {
+    case 'approval':
+      return need.detail === null ? 'Waiting for your approval in its terminal' : `Waiting for your approval: ${need.detail}`;
+    case 'question':
+      return 'Asked you a question in its terminal';
+    case 'limit': {
+      const known = need.resetsAt !== null && !Number.isNaN(Date.parse(need.resetsAt));
+      const when = known ? `resets at ${localClock(need.resetsAt as string, now)}` : 'the reset time is unknown';
+      return `Hit its ${provider} usage limit; ${when}`;
+    }
+    case 'sign-in': {
+      const lead = need.account === 'account' ? `Account problem in ${provider}` : `Signed out of ${provider}`;
+      return need.detail === null ? lead : `${lead}: ${need.detail}`;
+    }
+    case 'startup':
+      return 'Waiting in its terminal since launch (sign-in, folder trust or another startup screen)';
+  }
 }

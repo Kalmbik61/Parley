@@ -12,13 +12,18 @@ import {
   LIMIT_RETURNS_MAX,
   NEED_DETAIL_MAX,
   STUCK_REPORT_MS,
+  agentClock,
   classifyClaudeFailure,
   clampDetail,
   codexFailureError,
+  localClock,
+  needReason,
   parseResetText,
   pickResetsAt,
+  providerLabel,
   zonedInstant,
   type ResetGuess,
+  type SessionNeed,
 } from './stuck.js';
 
 const MOSCOW = 'Europe/Moscow'; // UTC+3 круглый год
@@ -769,5 +774,126 @@ describe('pickResetsAt', () => {
         window: 'week',
       });
     });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Часы машины и тексты причины (спека застрявших 7.4, спека подписок 4.4, 5.8, К16).
+// Даты собраны из частей по местному времени — набор не зависит от пояса машины.
+// ---------------------------------------------------------------------------------------------
+
+/** Местное время `2026-10-21 hh:mm` (месяц — октябрь). */
+const local = (day: number, hour: number, minute = 0): Date => new Date(2026, 9, day, hour, minute);
+
+describe('localClock', () => {
+  const NOW = local(21, 13, 0);
+
+  it('сегодня — только часы и минуты с нулём впереди', () => {
+    expect(localClock(local(21, 16, 27).toISOString(), NOW)).toBe('16:27');
+    expect(localClock(local(21, 9, 5).toISOString(), NOW)).toBe('09:05');
+    expect(localClock(local(21, 0, 0).toISOString(), NOW)).toBe('00:00');
+  });
+
+  it('другой день — «Oct 14, 19:27»', () => {
+    expect(localClock(local(22, 3, 5).toISOString(), NOW)).toBe('Oct 22, 03:05');
+    expect(localClock(local(14, 19, 27).toISOString(), NOW)).toBe('Oct 14, 19:27');
+  });
+
+  it('непонятная строка возвращается как есть', () => {
+    expect(localClock('not a date', NOW)).toBe('not a date');
+  });
+});
+
+describe('agentClock', () => {
+  const NOW = local(21, 13, 0);
+  const offset = (at: Date): string => {
+    const total = -at.getTimezoneOffset();
+    const abs = Math.abs(total);
+    const pad = (value: number): string => String(value).padStart(2, '0');
+    return `UTC${total < 0 ? '-' : '+'}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+  };
+
+  it('часы, пояс на тот момент и сколько осталось: «in 2 h 10 min»', () => {
+    const at = local(21, 15, 10);
+    expect(agentClock(at.toISOString(), NOW)).toBe(`15:10 local time (${offset(at)}), in 2 h 10 min`);
+  });
+
+  it('меньше часа — минуты, ровно часы — без «0 min»', () => {
+    expect(agentClock(local(21, 13, 25).toISOString(), NOW)).toContain(', in 25 min');
+    expect(agentClock(local(21, 15, 0).toISOString(), NOW)).toContain(', in 2 h');
+    expect(agentClock(local(21, 15, 0).toISOString(), NOW)).not.toContain('0 min');
+  });
+
+  it('дальше суток — дни и часы, дата в часах: «in 3 d 4 h»', () => {
+    const at = local(24, 17, 0);
+    expect(agentClock(at.toISOString(), NOW)).toBe(`Oct 24, 17:00 local time (${offset(at)}), in 3 d 4 h`);
+  });
+
+  it('время прошло — «already passed»', () => {
+    expect(agentClock(local(21, 12, 0).toISOString(), NOW)).toContain(', already passed');
+  });
+});
+
+describe('providerLabel', () => {
+  it('встроенные имена, у своих — label, пустой label — id', () => {
+    expect(providerLabel({ id: 'claude', label: 'claude' })).toBe('Claude Code');
+    expect(providerLabel({ id: 'codex', label: 'Codex' })).toBe('Codex');
+    expect(providerLabel({ id: 'glm', label: 'zai' })).toBe('GLM');
+    expect(providerLabel({ id: 'custom-claude-2', label: 'Claude Code 2' })).toBe('Claude Code 2');
+    expect(providerLabel({ id: 'aider', label: '' })).toBe('aider');
+  });
+
+  it('id встроенных — без учёта регистра, как providerName окна', () => {
+    expect(providerLabel({ id: 'Codex', label: '' })).toBe('Codex');
+  });
+});
+
+describe('needReason', () => {
+  const NOW = local(21, 13, 0);
+  const SINCE = local(21, 10, 0).toISOString();
+  const need = (over: Partial<SessionNeed>): SessionNeed => ({
+    kind: 'approval',
+    since: SINCE,
+    detail: null,
+    resetsAt: null,
+    window: null,
+    account: null,
+    ...over,
+  });
+
+  it('limit называет провайдера и время сброса (спека подписок 4.4, 5.8)', () => {
+    const limit = need({ kind: 'limit', resetsAt: local(21, 16, 27).toISOString(), window: 'session' });
+    expect(needReason(limit, NOW, 'Claude Code 2')).toBe('Hit its Claude Code 2 usage limit; resets at 16:27');
+  });
+
+  it('limit не сегодня — дата перед часами; без времени и с нечитаемым временем — «reset time is unknown»', () => {
+    expect(needReason(need({ kind: 'limit', resetsAt: local(22, 3, 5).toISOString() }), NOW, 'Codex')).toBe(
+      'Hit its Codex usage limit; resets at Oct 22, 03:05',
+    );
+    expect(needReason(need({ kind: 'limit' }), NOW, 'Codex')).toBe('Hit its Codex usage limit; the reset time is unknown');
+    expect(needReason(need({ kind: 'limit', resetsAt: 'garbage' }), NOW, 'Codex')).toBe(
+      'Hit its Codex usage limit; the reset time is unknown',
+    );
+  });
+
+  it('approval — с командой или без неё; question и startup — фиксированные фразы', () => {
+    expect(needReason(need({ kind: 'approval', detail: 'ls -la' }), NOW, 'Codex')).toBe('Waiting for your approval: ls -la');
+    expect(needReason(need({ kind: 'approval' }), NOW, 'Codex')).toBe('Waiting for your approval in its terminal');
+    expect(needReason(need({ kind: 'question', detail: 'Which database?' }), NOW, 'Codex')).toBe(
+      'Asked you a question in its terminal',
+    );
+    expect(needReason(need({ kind: 'startup' }), NOW, 'Codex')).toBe(
+      'Waiting in its terminal since launch (sign-in, folder trust or another startup screen)',
+    );
+  });
+
+  it('sign-in называет провайдера и текст ошибки; проблема аккаунта — своя фраза', () => {
+    expect(needReason(need({ kind: 'sign-in', account: 'auth', detail: 'Please run /login' }), NOW, 'GLM')).toBe(
+      'Signed out of GLM: Please run /login',
+    );
+    expect(needReason(need({ kind: 'sign-in', account: 'auth' }), NOW, 'GLM')).toBe('Signed out of GLM');
+    expect(needReason(need({ kind: 'sign-in', account: 'account', detail: 'billing' }), NOW, 'GLM')).toBe(
+      'Account problem in GLM: billing',
+    );
   });
 });

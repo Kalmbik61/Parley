@@ -14,6 +14,7 @@
     "./assistant": "./dist/assistant/text.js",
     "./attention": "./dist/work/attention.js",
     "./session-state": "./dist/work/session-state.js",
+    "./stuck": "./dist/work/stuck.js",
     "./session-names": "./dist/work/names.js",
     "./resource-policy": "./dist/work/resource-policy.js"
   },

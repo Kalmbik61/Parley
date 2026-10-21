@@ -436,11 +436,15 @@ export {
   LIMIT_RETURNS_MAX,
   NEED_DETAIL_MAX,
   STUCK_REPORT_MS,
+  agentClock,
   classifyClaudeFailure,
   clampDetail,
   codexFailureError,
+  localClock,
+  needReason,
   parseResetText,
   pickResetsAt,
+  providerLabel,
   zonedInstant,
 } from './work/stuck.js';
 export type { ApiFailure, NeedKind, ResetGuess, SessionNeed } from './work/stuck.js';
