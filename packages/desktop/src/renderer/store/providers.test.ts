@@ -581,6 +581,20 @@ describe('useProvidersStore — вход в аккаунт', () => {
     dispose();
   });
 
+  it('forgetSignIn стирает вывод и итог аккаунта (вышел или удалён), не трогая состояние входа строки', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => account({ signingIn: true }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    bridge.emit('providers.signInOutput', { provider: 'custom-claude-2', data: 'old' });
+    bridge.emit('providers.signInOutput', { provider: 'custom-claude-3', data: 'other' });
+    useProvidersStore.getState().forgetSignIn('custom-claude-2');
+    expect(useProvidersStore.getState().signInOutput).toEqual({ 'custom-claude-3': 'other' });
+    expect(useProvidersStore.getState().signInResult['custom-claude-2']).toBeUndefined();
+    expect(signingIn()).toBe(true);
+    dispose();
+  });
+
   it('после отписки события входа в стор не попадают', async () => {
     const bridge = createFakeBridge();
     bridge.setHandler('providers.list', () => account());

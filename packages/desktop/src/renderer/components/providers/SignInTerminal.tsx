@@ -28,9 +28,9 @@ export interface SignInTerminalProps {
   /** Id аккаунта. */
   provider: string;
   /**
-   * Процесс входа уже поднят хостом. Размер уходит хосту, только пока он жив: при монтировании посреди входа и в
-   * момент, когда `running` становится `true` (процесс поднялся уже после монтирования — раньше `resize` пропал бы
-   * впустую).
+   * Процесс входа поднят хостом и жив. Размер и ввод уходят хосту, только пока он жив: размер — при монтировании посреди
+   * входа и в момент, когда `running` становится `true` (процесс поднялся уже после монтирования — раньше `resize`
+   * пропал бы впустую); ввод после выхода процесса и до ответа хоста отбрасывается.
    */
   running: boolean;
 }
@@ -57,6 +57,8 @@ export function SignInTerminal({ provider, running }: SignInTerminalProps): JSX.
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(container);
+    // Вход начался или Settings открыли посреди него: код из браузера вставляется без лишнего клика.
+    term.focus();
     fit.fit();
 
     const sendSize = (): void => {
@@ -73,6 +75,9 @@ export function SignInTerminal({ provider, running }: SignInTerminalProps): JSX.
       if (event.provider === provider) term.write(event.data);
     });
     const onData = term.onData((data) => {
+      // Принимать ввод некому, пока процесса нет: он ещё не поднят (ответа `providers.signIn` нет) или уже вышел, а
+      // терминал с итогом ещё на экране.
+      if (!runningRef.current) return;
       void bridge.call('providers.signInInput', { provider, data }).catch(() => {
         // Вход уже закончился: набранное некому принять.
       });

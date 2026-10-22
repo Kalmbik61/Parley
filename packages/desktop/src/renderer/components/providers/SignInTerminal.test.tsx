@@ -71,6 +71,23 @@ describe('SignInTerminal', () => {
     ]);
   });
 
+  it('ввод уходит, только пока процесс входа жив: после выхода и до ответа хоста набранное не отправляется', () => {
+    const { rerender } = render(<SignInTerminal provider="custom-claude-2" running={false} />);
+    act(() => xtermMock.terminals[0]!.onDataHandler?.('до ответа хоста'));
+    rerender(<SignInTerminal provider="custom-claude-2" running />);
+    act(() => xtermMock.terminals[0]!.onDataHandler?.('code\r'));
+    rerender(<SignInTerminal provider="custom-claude-2" running={false} />);
+    act(() => xtermMock.terminals[0]!.onDataHandler?.('после выхода'));
+    expect(bridge.calls.filter((call) => call.method === 'providers.signInInput')).toEqual([
+      { method: 'providers.signInInput', params: { provider: 'custom-claude-2', data: 'code\r' } },
+    ]);
+  });
+
+  it('фокус на терминале с монтирования: код из браузера вставляется без лишнего клика', () => {
+    render(<SignInTerminal provider="custom-claude-2" running={false} />);
+    expect(xtermMock.callsOf('focus')).toHaveLength(1);
+  });
+
   it('размер уходит хосту после монтирования и после изменения контейнера, с тишиной 50 мс', () => {
     render(<SignInTerminal provider="custom-claude-2" running />);
     expect(resizes()).toEqual([{ provider: 'custom-claude-2', cols: 80, rows: 24 }]);

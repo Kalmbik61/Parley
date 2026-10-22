@@ -336,3 +336,87 @@ describe('AccountPanel: удаление', () => {
     expect(bridge.calls[0]).toEqual({ method: 'providers.deleteCustom', params: { id: 'custom-claude-2', removeFolder: true } });
   });
 });
+
+describe('AccountPanel: правки ревью задачи 8', () => {
+  const inputs = (): unknown[] => bridge.calls.filter((call) => call.method === 'providers.signInInput').map((call) => call.params);
+
+  it('после выхода процесса набранное в терминале на хост не уходит', async () => {
+    useProvidersStore.setState({ providers: [account('custom-claude-2', { signingIn: true })] });
+    const dispose = useProvidersStore.getState().init(bridge);
+    render(<Bound id="custom-claude-2" />);
+    act(() => xtermMock.terminals[0]!.onDataHandler?.('code\r'));
+    expect(inputs()).toEqual([{ provider: 'custom-claude-2', data: 'code\r' }]);
+    act(() => bridge.emit('providers.signInExit', { provider: 'custom-claude-2', exitCode: 0, signedIn: true }));
+    await screen.findByText(S.accounts.signInDone);
+    act(() => xtermMock.terminals[0]!.onDataHandler?.('late\r'));
+    expect(inputs()).toHaveLength(1);
+    dispose();
+  });
+
+  it('Sign out после входа убирает и терминал, и итог входа: «Signed in.» не остаётся рядом с Not signed in', async () => {
+    bridge.setHandler('providers.signOut', () => ({ ok: true }));
+    bridge.setHandler('providers.authStatus', () => ({ signedIn: true, detail: null }));
+    const signedOut = account('custom-claude-2', { signedIn: false });
+    const reload = vi.fn(async () => {
+      useProvidersStore.setState({ providers: [signedOut] });
+    });
+    useProvidersStore.setState({ providers: [account('custom-claude-2', { signingIn: true })], reload } as never);
+    const dispose = useProvidersStore.getState().init(bridge);
+    bridge.setHandler('providers.list', () => ({ providers: [account('custom-claude-2', { signedIn: true }, { available: true, needs: null })] }) as never);
+    render(<Bound id="custom-claude-2" />);
+    act(() => bridge.emit('providers.signInOutput', { provider: 'custom-claude-2', data: 'Open https://example.test\r\n' }));
+    act(() => bridge.emit('providers.signInExit', { provider: 'custom-claude-2', exitCode: 0, signedIn: true }));
+    await screen.findByText(S.accounts.signInDone);
+    await waitFor(() => expect(state().textContent).toBe('Signed in'));
+    fireEvent.click(button('Sign out'));
+    await waitFor(() => expect(state().textContent).toBe('Not signed in'));
+    expect(document.querySelector('[data-sign-in-result]')).toBeNull();
+    expect(document.querySelector('[data-sign-in-terminal]')).toBeNull();
+    expect(useProvidersStore.getState().signInOutput['custom-claude-2']).toBeUndefined();
+    dispose();
+  });
+
+  it('удаление аккаунта стирает его накопленный вывод входа', async () => {
+    bridge.setHandler('providers.deleteCustom', () => ({ ok: true }));
+    useProvidersStore.setState({ providers: [account()], signInOutput: { 'custom-claude-2': 'old output' } });
+    render(<Bound id="custom-claude-2" />);
+    fireEvent.click(button('Delete'));
+    fireEvent.click(button(S.customProviders.deleteConfirmButton));
+    await waitFor(() => expect(bridge.calls.some((call) => call.method === 'providers.deleteCustom')).toBe(true));
+    await waitFor(() => expect(useProvidersStore.getState().signInOutput['custom-claude-2']).toBeUndefined());
+  });
+
+  it('новый аккаунт: сохранён, а список не перечитался — повторный Save правит его, а не создаёт второй', async () => {
+    bridge.setHandler('providers.saveCustom', () => ({ id: 'custom-claude-2' }));
+    const reload = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error('список не пришёл'))
+      .mockResolvedValue(undefined);
+    useProvidersStore.setState({ reload } as never);
+    const onSaved = vi.fn();
+    render(<AccountPanel provider={null} onSaved={onSaved} onDeleted={vi.fn()} />);
+    fireEvent.click(button('Save'));
+    await screen.findByRole('alert');
+    fireEvent.click(button('Save'));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith('custom-claude-2'));
+    const saves = bridge.calls.filter((call) => call.method === 'providers.saveCustom');
+    expect(saves.map((call) => (call.params as { id: string | null }).id)).toEqual([null, 'custom-claude-2']);
+  });
+
+  it('вид записи берётся у сохранённого аккаунта, а не зашит в форме', async () => {
+    bridge.setHandler('providers.saveCustom', () => ({ id: 'codex-two' }));
+    useProvidersStore.setState({ providers: [account('codex-two', { kind: 'codex-account' })] });
+    render(<Bound id="codex-two" />);
+    fireEvent.click(button('Save'));
+    await waitFor(() => expect(bridge.calls).toHaveLength(1));
+    expect(bridge.calls[0]!.params).toMatchObject({ kind: 'codex-account', id: 'codex-two' });
+  });
+
+  it('вход начался — фокус в терминале', () => {
+    bridge.setHandler('providers.signIn', () => ({ ok: true }));
+    useProvidersStore.setState({ providers: [account()] });
+    render(<Bound id="custom-claude-2" />);
+    fireEvent.click(button('Sign in'));
+    expect(xtermMock.callsOf('focus')).toHaveLength(1);
+  });
+});

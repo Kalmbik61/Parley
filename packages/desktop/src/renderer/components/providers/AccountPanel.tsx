@@ -31,6 +31,7 @@ export function AccountPanel({ provider, onSaved, onDeleted }: AccountPanelProps
   const providers = useProvidersStore((state) => state.providers);
   const reload = useProvidersStore((state) => state.reload);
   const beginSignIn = useProvidersStore((state) => state.beginSignIn);
+  const forgetSignIn = useProvidersStore((state) => state.forgetSignIn);
   const result = useProvidersStore((state) => (provider === null ? undefined : state.signInResult[provider.id]));
   const [name, setName] = useState(provider?.label ?? '');
   const [link, setLink] = useState(account?.link ?? true);
@@ -44,6 +45,8 @@ export function AccountPanel({ provider, onSaved, onDeleted }: AccountPanelProps
   const [started, setStarted] = useState(account?.signingIn === true);
   const [detail, setDetail] = useState<string | null>(null);
   const generation = useRef(0);
+  /** Id нового аккаунта после успешного `saveCustom`: сбой перечитывания списка не должен породить дубль при повторном Save. */
+  const savedId = useRef<string | null>(null);
   const nameId = useId();
 
   const signedIn = account?.signedIn ?? null;
@@ -86,11 +89,12 @@ export function AccountPanel({ provider, onSaved, onDeleted }: AccountPanelProps
     setError(null);
     try {
       const { id } = await window.parley.call('providers.saveCustom', {
-        kind: 'claude-account',
-        id: provider?.id ?? null,
+        kind: account?.kind ?? 'claude-account',
+        id: provider?.id ?? savedId.current,
         label: name.trim(),
         link,
       });
+      savedId.current = id;
       await reload();
       if (current === generation.current) onSaved(id);
     } catch (err: unknown) {
@@ -136,6 +140,9 @@ export function AccountPanel({ provider, onSaved, onDeleted }: AccountPanelProps
     setError(null);
     try {
       await window.parley.call('providers.signOut', { provider: provider.id });
+      // Терминал и итог входа относились к прежнему входу: рядом с «Not signed in» «Signed in.» остаться не должно.
+      forgetSignIn(provider.id);
+      setRuns(0);
       await reload();
     } catch (err: unknown) {
       fail(err, S.accounts.signOutFailed, current);
@@ -151,6 +158,7 @@ export function AccountPanel({ provider, onSaved, onDeleted }: AccountPanelProps
     setError(null);
     try {
       await window.parley.call('providers.deleteCustom', { id: provider.id, removeFolder });
+      forgetSignIn(provider.id);
       await reload();
       if (current === generation.current) onDeleted();
     } catch (err: unknown) {

@@ -64,6 +64,8 @@ export interface ProvidersState {
   signInResult: Record<string, { exitCode: number; signedIn: boolean }>;
   /** Вход начат из окна: прежние вывод и итог стираются, строка списка помечается `signingIn` до ответа хоста. */
   beginSignIn: (provider: string) => void;
+  /** Вывод и итог входа аккаунта больше не нужны (вышел из аккаунта, аккаунт удалён): память не держит чужой вывод. */
+  forgetSignIn: (provider: string) => void;
   refreshLimits: () => Promise<void>;
   /** Свежий снимок того же подключения; более поздний запрос побеждает. */
   reload: () => Promise<void>;
@@ -153,6 +155,14 @@ export const useProvidersStore = create<ProvidersState>((set) => {
         delete signInOutput[provider];
         delete signInResult[provider];
         return { signInOutput, signInResult, providers: patchAccount(state.providers, provider, { signingIn: true }) };
+      }),
+    forgetSignIn: (provider) =>
+      set((state) => {
+        const signInOutput = { ...state.signInOutput };
+        const signInResult = { ...state.signInResult };
+        delete signInOutput[provider];
+        delete signInResult[provider];
+        return { signInOutput, signInResult };
       }),
     refreshLimits,
     reload,
