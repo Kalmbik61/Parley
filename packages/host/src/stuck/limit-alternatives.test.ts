@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -77,6 +77,28 @@ describe('limitAlternatives — другие вошедшие аккаунты �
     process.env['PARLEY_CLAUDE_BIN'] = path.join(home, 'no-such-claude');
     try {
       expect(await limitAlternatives('claude', { limits: noLimits, signedIn: () => true })).toEqual([]);
+    } finally {
+      if (saved === undefined) delete process.env['PARLEY_CLAUDE_BIN'];
+      else process.env['PARLEY_CLAUDE_BIN'] = saved;
+    }
+  });
+
+  it('вошедший аккаунт проходит готовность с signedIn: true — без подмены её его же вход не отказывает (задача 6)', async () => {
+    // Настоящая `providerReadiness`: заглушка `claude` печатает версию выше минимума аккаунта.
+    const stub = path.join(home, 'claude-stub');
+    await writeFile(stub, '#!/bin/sh\necho "2.1.306 (Claude Code)"\n');
+    await chmod(stub, 0o755);
+    await writeFile(
+      path.join(home, 'custom-providers.json'),
+      JSON.stringify({ version: 1, providers: [{ kind: 'claude-account', id: 'custom-claude-2', label: 'Claude Code 2', link: false }] }),
+    );
+    const saved = process.env['PARLEY_CLAUDE_BIN'];
+    process.env['PARLEY_CLAUDE_BIN'] = stub;
+    try {
+      const signedIn = await limitAlternatives('claude', { limits: noLimits, signedIn: (id) => id === 'custom-claude-2' });
+      expect(signedIn).toEqual([{ id: 'custom-claude-2', label: 'Claude Code 2', limits: null }]);
+      // Служба входа молчит (null) — аккаунт не подтверждён, готовность его не спасает.
+      expect(await limitAlternatives('claude', { limits: noLimits, signedIn: () => null })).toEqual([]);
     } finally {
       if (saved === undefined) delete process.env['PARLEY_CLAUDE_BIN'];
       else process.env['PARLEY_CLAUDE_BIN'] = saved;

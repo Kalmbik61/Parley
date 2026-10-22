@@ -7,6 +7,8 @@ import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
+import type { PtyLaunch } from '../pty/pty-process.js';
+import type { AuthExec, AuthServiceOptions, PtySpawn } from '../providers/auth-service.js';
 
 let host: RunningHost | undefined;
 let home: string;
@@ -28,7 +30,10 @@ afterEach(async () => {
   else process.env['CLAUDE_CONFIG_DIR'] = previousClaudeDir;
 });
 
-async function boot(options: { fetch?: typeof globalThis.fetch; version?: string } = {}) {
+/** Проверка входа, которая не отвечает: `signedIn` остаётся «не проверялось», пока тест сам не подменит службу входа. */
+const silentAuth: AuthServiceOptions = { exec: () => new Promise(() => {}) };
+
+async function boot(options: { fetch?: typeof globalThis.fetch; version?: string; auth?: AuthServiceOptions } = {}) {
   home = await tempHome();
   const binary = path.join(home, 'claude-stub');
   await writeFile(binary, '#!/bin/sh\n', 'utf8');
@@ -39,6 +44,7 @@ async function boot(options: { fetch?: typeof globalThis.fetch; version?: string
   host = await startHost({
     home,
     probeVersion: async () => options.version ?? '2.1.302',
+    auth: options.auth ?? silentAuth,
     ...(options.fetch === undefined ? {} : { customCheck: { fetch: options.fetch } }),
   });
   const client = connectRaw(hostPaths(home).socket);
@@ -335,5 +341,133 @@ describe('аккаунты Claude Code по RPC (спека подписок 5.1
     expect((await rpc(client, 'providers.saveCustom', account)).at(-1)?.result).toEqual({ id: 'custom-claude-4' });
     await rpc(client, 'providers.deleteCustom', { id: 'custom-claude-4', removeFolder: true });
     expect(await exists(path.join(home, 'providers', 'custom-claude-4'))).toBe(false);
+  });
+});
+
+// Служба входа по RPC (спека подписок 5.5, К5, К14, К17): настоящий хост, фальшивые команды CLI и PTY.
+const SIGNED_IN = JSON.stringify({ loggedIn: true, email: 'me@example.com', subscriptionType: 'max' });
+const SIGNED_OUT = JSON.stringify({ loggedIn: false, authMethod: 'none' });
+const ACCOUNT = 'custom-claude-2';
+
+function stubSpawn() {
+  const processes: Array<{ launch: PtyLaunch; written: string[]; resizes: Array<[number, number]>; emit(data: string): void; exit(exitCode: number): void }> = [];
+  const spawn: PtySpawn = (launch) => {
+    const data = new Set<(chunk: string) => void>();
+    const exits = new Set<(exit: { exitCode: number; signal: number | null }) => void>();
+    const written: string[] = [];
+    const resizes: Array<[number, number]> = [];
+    processes.push({
+      launch,
+      written,
+      resizes,
+      emit: (chunk) => data.forEach((listener) => listener(chunk)),
+      exit: (exitCode) => exits.forEach((listener) => listener({ exitCode, signal: null })),
+    });
+    return {
+      pid: 1,
+      write: (chunk) => void written.push(chunk),
+      resize: (cols, rows) => void resizes.push([cols, rows]),
+      kill: () => exits.forEach((listener) => listener({ exitCode: 0, signal: 1 })),
+      onData: (listener) => (data.add(listener), () => data.delete(listener)),
+      onExit: (listener) => (exits.add(listener), () => exits.delete(listener)),
+    };
+  };
+  return { spawn, processes };
+}
+
+/** Следующее событие с этим именем; остальные сообщения пропускаются. */
+async function eventNamed(client: TestClient, name: string): Promise<unknown> {
+  for (;;) {
+    const message = await client.next();
+    if (message.event === name) return message.data;
+  }
+}
+
+describe('вход в аккаунт по RPC (спека подписок 5.5, К5, К14, К17)', () => {
+  it('saveCustom проверяет вход в фоне: providers.list — signedIn из службы, authStatus — signedIn и подпись', async () => {
+    const calls: string[][] = [];
+    const exec: AuthExec = async (_command, args) => (calls.push(args), { code: 0, stdout: SIGNED_IN });
+    const client = await boot({ version: '2.1.306', auth: { exec } });
+    await rpc(client, 'providers.saveCustom', account);
+    await vi.waitFor(async () => {
+      expect(await item(client, ACCOUNT)).toMatchObject({ available: true, needs: null, custom: { signedIn: true, signingIn: false } });
+    });
+    expect(calls).toEqual([['auth', 'status', '--json']]);
+    expect((await rpc(client, 'providers.authStatus', { provider: ACCOUNT })).at(-1)?.result)
+      .toEqual({ signedIn: true, detail: 'me@example.com · max' });
+  });
+
+  it('вход: signIn → вывод и выход событиями; signingIn в списке; второй вход — conflict; ввод и размер доходят до процесса', async () => {
+    const { spawn, processes } = stubSpawn();
+    const client = await boot({ version: '2.1.306', auth: { exec: async () => ({ code: 1, stdout: SIGNED_OUT }), spawn } });
+    await rpc(client, 'providers.saveCustom', account);
+
+    expect((await rpc(client, 'providers.signIn', { provider: ACCOUNT })).at(-1)?.result).toEqual({ ok: true });
+    expect(processes[0]?.launch).toMatchObject({ args: ['auth', 'login', '--claudeai'], cwd: path.join(home, 'providers', ACCOUNT) });
+    expect(await item(client, ACCOUNT)).toMatchObject({ custom: { signingIn: true } });
+
+    processes[0]?.emit('Paste code here if prompted > ');
+    expect(await eventNamed(client, 'providers.signInOutput')).toEqual({ provider: ACCOUNT, data: 'Paste code here if prompted > ' });
+
+    expect((await rpc(client, 'providers.signIn', { provider: ACCOUNT })).at(-1)?.error)
+      .toMatchObject({ code: 'conflict', message: 'another sign-in is running' });
+    expect((await rpc(client, 'providers.signInInput', { provider: ACCOUNT, data: 'the-code\r' })).at(-1)?.result).toEqual({ ok: true });
+    expect((await rpc(client, 'providers.signInResize', { provider: ACCOUNT, cols: 120, rows: 30 })).at(-1)?.result).toEqual({ ok: true });
+    expect(processes[0]?.written).toEqual(['the-code\r']);
+    expect(processes[0]?.resizes).toEqual([[120, 30]]);
+
+    processes[0]?.exit(0);
+    expect(await eventNamed(client, 'providers.signInExit')).toEqual({ provider: ACCOUNT, exitCode: 0, signedIn: false });
+    expect(await item(client, ACCOUNT)).toMatchObject({ custom: { signedIn: false, signingIn: false } });
+  });
+
+  it('cancelSignIn убивает процесс; signOut зовёт logout и перепроверяет вход', async () => {
+    const { spawn, processes } = stubSpawn();
+    const calls: string[][] = [];
+    const exec: AuthExec = async (_command, args) => (calls.push(args), { code: 0, stdout: args[1] === 'status' ? SIGNED_IN : '' });
+    const client = await boot({ version: '2.1.306', auth: { exec, spawn } });
+    await rpc(client, 'providers.saveCustom', account);
+
+    await rpc(client, 'providers.signIn', { provider: ACCOUNT });
+    expect((await rpc(client, 'providers.cancelSignIn', { provider: ACCOUNT })).at(-1)?.result).toEqual({ ok: true });
+    expect(await eventNamed(client, 'providers.signInExit')).toMatchObject({ provider: ACCOUNT, exitCode: 129 });
+
+    calls.length = 0;
+    expect((await rpc(client, 'providers.signOut', { provider: ACCOUNT })).at(-1)?.result).toEqual({ ok: true });
+    expect(calls).toEqual([['auth', 'logout'], ['auth', 'status', '--json']]);
+    expect(processes).toHaveLength(1);
+  });
+
+  it('шесть методов отказывают не аккаунту: встроенный claude, свой провайдер с адресом, неизвестный id — bad_request', async () => {
+    const client = await boot({ version: '2.1.306' });
+    await rpc(client, 'providers.saveCustom', draft);
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ['providers.authStatus', {}],
+      ['providers.signIn', {}],
+      ['providers.signInInput', { data: 'x' }],
+      ['providers.signInResize', { cols: 80, rows: 24 }],
+      ['providers.cancelSignIn', {}],
+      ['providers.signOut', {}],
+    ];
+    for (const provider of ['claude', 'glm', 'custom-kimi', 'custom-nothing']) {
+      for (const [method, extra] of calls) {
+        const seen = await rpc(client, method, { provider, ...extra });
+        expect(seen.at(-1)?.error, `${method} ${provider}`).toMatchObject({ code: 'bad_request', message: `${provider} is not an account` });
+      }
+    }
+  });
+
+  it('удалённый аккаунт забыт службой: новый на том же id не наследует вход', async () => {
+    let status = SIGNED_IN;
+    const exec: AuthExec = async () => ({ code: 0, stdout: status });
+    const client = await boot({ version: '2.1.306', auth: { exec } });
+    await rpc(client, 'providers.saveCustom', account);
+    await vi.waitFor(async () => expect((await item(client, ACCOUNT))?.custom).toMatchObject({ signedIn: true }));
+
+    await rpc(client, 'providers.deleteCustom', { id: ACCOUNT, removeFolder: true });
+    status = SIGNED_OUT;
+    expect((await rpc(client, 'providers.saveCustom', account)).at(-1)?.result).toEqual({ id: ACCOUNT });
+    // Без `forget` кэш (30 с) вернул бы прежнее `true`.
+    await vi.waitFor(async () => expect((await item(client, ACCOUNT))?.custom).toMatchObject({ signedIn: false }));
   });
 });

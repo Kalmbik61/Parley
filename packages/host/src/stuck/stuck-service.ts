@@ -16,6 +16,7 @@ import {
   backLine,
   envValue,
   isClaudeCode,
+  isManagedProviderId,
   isRoomArchived,
   liveLead,
   loadProviders,
@@ -50,6 +51,11 @@ export interface StuckServiceOptions {
    * без лимитов и без службы входа, то есть пусто; хост подставляет свои службы.
    */
   alternatives?: (provider: string) => Promise<readonly LimitAlternative[]>;
+  /**
+   * Служба доложила эпизод `sign-in` у сессии аккаунта (`custom-`/`codex-`): служба входа проверяет вход этого провайдера
+   * заново (спека подписок 5.5, К5). Не аккаунт получатель отсеивает сам. Бросил — доклад всё равно записывается.
+   */
+  onSignIn?: (providerId: string) => void;
 }
 
 /**
@@ -205,6 +211,13 @@ export function createStuckService(
     if (session === undefined) {
       episodes.delete(key);
       return;
+    }
+    if (need.kind === 'sign-in' && isManagedProviderId(session.provider)) {
+      try {
+        options.onSignIn?.(session.provider);
+      } catch (error) {
+        host.log.error('служба входа не приняла эпизод sign-in', { provider: session.provider, error: String(error) });
+      }
     }
     const provider = await providerName(session.provider);
     const who = { id: session.id, provider, family: familyName(session.provider, provider) };

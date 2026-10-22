@@ -17,6 +17,7 @@ import { HostError } from '../errors.js';
 import type { GlmCheckService } from '../limits/glm-check.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import { ZaiQuotaError } from '../limits/zai-quota.js';
+import type { AuthService } from '../providers/auth-service.js';
 import type { CustomCheckService } from '../providers/custom-check.js';
 import { serialized } from './custom-providers.js';
 import type { CodexCatalog } from '../providers/codex-catalog.js';
@@ -285,8 +286,17 @@ export function createProvidersCheck(
   };
 }
 
-export function createProvidersRefreshLimits(limits: LimitsService, versions?: ProviderVersions): Handler<'providers.refreshLimits'> {
+/**
+ * Ручное обновление лимитов. Заодно (К5) перепроверяется вход аккаунтов подписки — в фоне, ответ его не ждёт: смену
+ * состояния окно получит событием `providers.changed`.
+ */
+export function createProvidersRefreshLimits(
+  limits: LimitsService,
+  versions?: ProviderVersions,
+  auth?: Pick<AuthService, 'refreshAll'>,
+): Handler<'providers.refreshLimits'> {
   return async () => {
+    void auth?.refreshAll();
     try {
       await Promise.all([
         limits.refresh(true),

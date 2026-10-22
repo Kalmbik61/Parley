@@ -353,6 +353,41 @@ describe('служба «застрял» — доклад (спека заст�
     expect(logErrors).toHaveLength(1);
   });
 
+  it('эпизод sign-in у сессии аккаунта зовёт onSignIn с id провайдера; другие виды и встроенный claude — нет (К5)', async () => {
+    const asked: string[] = [];
+    const [, account] = await makeWork((map, [a, b]) => inRoom(a, b)(map), 'custom-claude-2');
+    boot({ onSignIn: (provider) => asked.push(provider) });
+
+    await emit(account, needOf('limit'));
+    await until(async () => (await stuckOf(account)) != null);
+    expect(asked).toEqual([]);
+
+    await emit(account, null);
+    await emit(account, needOf('sign-in', { detail: 'Not logged in', account: 'auth' }));
+    await until(async () => (await stuckOf(account))?.kind === 'sign-in');
+    expect(asked).toEqual(['custom-claude-2']);
+
+    // Встроенный claude служба входа не знает: его эпизод sign-in ничего не просит.
+    const [, builtin] = await makeWork((map, [a, b]) => inRoom(a, b)(map));
+    await emit(builtin, needOf('sign-in', { detail: 'Not logged in', account: 'auth' }));
+    await until(async () => (await stuckOf(builtin)) != null);
+    expect(asked).toEqual(['custom-claude-2']);
+  });
+
+  it('onSignIn бросил — доклад всё равно записан', async () => {
+    const [, account] = await makeWork((map, [a, b]) => inRoom(a, b)(map), 'custom-claude-2');
+    boot({
+      onSignIn: () => {
+        throw new Error('служба входа сломана');
+      },
+    });
+    const need = needOf('sign-in', { detail: 'Not logged in', account: 'auth' });
+    await emit(account, need);
+    await until(async () => (await stuckOf(account)) != null);
+    expect(await stuckOf(account)).toEqual(need);
+    expect(logErrors).toHaveLength(1);
+  });
+
   it('аккаунт называется по label реестра (`custom-providers.json`), а не по id', async () => {
     await writeFile(
       path.join(home, 'custom-providers.json'),

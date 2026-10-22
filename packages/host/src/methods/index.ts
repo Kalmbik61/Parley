@@ -18,6 +18,7 @@ import type { PlanEffectsService } from '../rooms/plan-effects.js';
 import type { HistoryService } from '../rooms/history-service.js';
 import { createRoomsUsage } from '../rooms/room-usage.js';
 import type { GlmCheckService } from '../limits/glm-check.js';
+import type { AuthService } from '../providers/auth-service.js';
 import type { CustomCheckService } from '../providers/custom-check.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { CodexCatalog } from '../providers/codex-catalog.js';
@@ -29,6 +30,7 @@ import type { WorksService } from '../works/works-service.js';
 import type { WorktreesService } from '../worktrees/worktrees-service.js';
 import { createCapabilitiesHandlers, createCapabilitiesList } from './capabilities.js';
 import { createAssistantHandlers } from './assistant.js';
+import { createAuthHandlers } from './auth.js';
 import { createBacklogHandlers } from './backlog.js';
 import { contextMessages, contextText } from './context-pages.js';
 import { createChangesHandlers } from './changes.js';
@@ -41,7 +43,6 @@ import { hostInfo, hostShutdown } from './host.js';
 import { mailMarkRead } from './mail.js';
 import { createPtyHandlers } from './pty.js';
 import { createCustomProviderHandlers } from './custom-providers.js';
-import type { AccountAuth } from './providers.js';
 import {
   createProvidersCheck,
   createProvidersClearKey,
@@ -100,8 +101,12 @@ export interface MethodDeps {
   glmCheck?: GlmCheckService;
   /** Проверка конечной точки своего провайдера (спека 5.5); без неё методы своих провайдеров не проверяют. */
   customCheck?: CustomCheckService;
-  /** Состояние входа аккаунтов подписки (спека подписок 5.5) для `providers.list`; без него `signedIn: null`, `signingIn: false`. */
-  auth?: AccountAuth;
+  /**
+   * Служба входа в аккаунты подписки (спека подписок 5.5): `providers.list` берёт у неё `signedIn` и `signingIn`, шесть
+   * методов входа (`providers.authStatus`, `signIn`, …) — её команды. Без неё `signedIn: null`, `signingIn: false`, а
+   * методов входа у хоста нет.
+   */
+  auth?: AuthService;
   /** Канал агента к браузеру окна (спека браузера 3.7): ответ окна `browser.agentResult`; без него метода нет. */
   browserAgent?: Pick<BrowserEndpoint, 'resolve'>;
   /** Состояние хоста для `host.diagnostics`; методы диагностики регистрируются, только когда заданы и он, и `profiler`. */
@@ -222,11 +227,14 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog, deps.customCheck, deps.auth) as AnyHandler,
     'providers.setKey': createProvidersSetKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
     'providers.clearKey': createProvidersClearKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
-    ...(deps.limits === undefined ? {} : { 'providers.refreshLimits': createProvidersRefreshLimits(deps.limits, deps.providerVersions) as AnyHandler }),
+    ...(deps.limits === undefined
+      ? {}
+      : { 'providers.refreshLimits': createProvidersRefreshLimits(deps.limits, deps.providerVersions, deps.auth) as AnyHandler }),
     ...(deps.glmCheck === undefined && deps.customCheck === undefined
       ? {}
       : { 'providers.check': createProvidersCheck(deps.providerVersions, deps.glmCheck, deps.customCheck) as AnyHandler }),
-    ...createCustomProviderHandlers(deps.customCheck),
+    ...createCustomProviderHandlers(deps.customCheck, deps.auth),
+    ...(deps.auth === undefined ? {} : createAuthHandlers(deps.auth)),
     'settings.get': settingsGet as AnyHandler,
     'settings.set': (async (params, request) => {
       const result = await settingsSet(params, request);

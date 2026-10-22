@@ -18,11 +18,14 @@ export interface LimitAlternativesDeps {
   /** Лимиты аккаунтов: `null` в `limits` альтернативы — хост их не знает. */
   limits: { get(providerId: string): ProviderLimits | null };
   /**
-   * Вошёл ли аккаунт: `true` — да, `false` — нет, `null` — служба входа не знает. На этапе 1 службы входа нет и всегда
-   * `null`: в список попадает только тот, кого она подтвердила.
+   * Вошёл ли аккаунт: `true` — да, `false` — нет, `null` — служба входа не знает. В список попадает только тот, кого она
+   * подтвердила; хост подставляет `auth.status`.
    */
   signedIn: (id: string) => boolean | null;
-  /** Готовность к запуску; по умолчанию — `providerReadiness`. Подмена — для тестов, чтобы не искать `claude` в PATH. */
+  /**
+   * Готовность к запуску; по умолчанию — `providerReadiness` с `signedIn: true` (аккаунт уже прошёл `signedIn` выше,
+   * иначе готовность отказывала бы каждому по его же входу). Подмена — для тестов, чтобы не искать `claude` в PATH.
+   */
   readiness?: (entry: ProviderEntry) => Promise<ProviderReadiness>;
 }
 
@@ -34,7 +37,7 @@ export async function limitAlternatives(provider: string, deps: LimitAlternative
   const registry = await loadProviders();
   const family = registry[provider]?.family;
   if (family === undefined) return [];
-  const readiness = deps.readiness ?? ((entry: ProviderEntry) => providerReadiness(entry));
+  const readiness = deps.readiness ?? ((entry: ProviderEntry) => providerReadiness(entry, { signedIn: true }));
   const result: LimitAlternative[] = [];
   for (const entry of Object.values(registry)) {
     if (entry.id === provider || entry.family !== family || deps.signedIn(entry.id) !== true) continue;

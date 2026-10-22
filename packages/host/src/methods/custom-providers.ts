@@ -24,6 +24,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
+import type { AuthService } from '../providers/auth-service.js';
 import type { CustomCheckService } from '../providers/custom-check.js';
 
 /**
@@ -84,7 +85,10 @@ function endpointRecordOf(params: Exclude<SaveParams, AccountParams>, id: string
  * `providers.saveCustom` / `providers.deleteCustom` (спека 5.1, 5.4, Review Focus 3; подписки 5.1, 5.9, 10). Ключ здесь не
  * участвует: он идёт через `providers.setKey` и в файл записей не попадает; у аккаунта ключа нет вовсе.
  */
-export function createCustomProviderHandlers(customCheck?: CustomCheckService): {
+export function createCustomProviderHandlers(
+  customCheck?: CustomCheckService,
+  auth?: Pick<AuthService, 'refresh' | 'forget'>,
+): {
   'providers.saveCustom': Handler<'providers.saveCustom'>;
   'providers.deleteCustom': Handler<'providers.deleteCustom'>;
 } {
@@ -127,6 +131,8 @@ export function createCustomProviderHandlers(customCheck?: CustomCheckService): 
       }
       customCheck?.forget(id);
       request.host.broadcast('providers.changed', { provider: id });
+      // Сохранённый аккаунт сразу проверяется на вход (К5); ответ проверку не ждёт, смену состояния окно получит событием.
+      if (isAccountRecord(record)) void auth?.refresh(id);
       return { id };
     });
 
@@ -148,6 +154,8 @@ export function createCustomProviderHandlers(customCheck?: CustomCheckService): 
         throw new HostError('internal', 'Unable to delete the custom provider');
       }
       customCheck?.forget(id);
+      // Новый аккаунт на освободившемся id не должен унаследовать прежнее состояние входа (и вход, если он идёт).
+      if (isAccountRecord(existing)) auth?.forget(id);
       request.host.broadcast('providers.changed', { provider: id });
       return { ok: true as const };
     });

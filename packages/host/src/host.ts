@@ -52,6 +52,8 @@ import { createCodexLogPoller } from './activity/codex-log-poll.js';
 import { linkTerminalActivity } from './activity/terminal-link.js';
 import { createGlmCheckService } from './limits/glm-check.js';
 import type { GlmCheckOptions } from './limits/glm-check.js';
+import { createAuthService } from './providers/auth-service.js';
+import type { AuthServiceOptions } from './providers/auth-service.js';
 import { createCustomCheckService } from './providers/custom-check.js';
 import type { CustomCheckOptions } from './providers/custom-check.js';
 import { createLimitsService } from './limits/limits-service.js';
@@ -113,6 +115,8 @@ export interface HostOptions {
   glmCheck?: GlmCheckOptions;
   /** Подмена сети проверки своего провайдера (спека 5.5); боевой хост не задаёт. */
   customCheck?: CustomCheckOptions;
+  /** Подмена команд CLI и PTY службы входа в аккаунты подписки (спека подписок 5.5); боевой хост не задаёт. */
+  auth?: AuthServiceOptions;
   /**
    * Срок экранов старта Codex, мс (спека комнат Organic, 3.6): не показал `Ready` и `Working` — сессия «нужен
    * ты». Боевой хост не задаёт — 20 секунд; E2E окна сокращает его переменной `PARLEY_CODEX_STARTUP_MS`.
@@ -288,12 +292,18 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   handle.context.onShutdown(() => activityService.stop());
 
+  // Вход в аккаунты подписки (спека подписок 5.5): состояние по команде самого CLI, вход в своём маленьком PTY. Создаётся
+  // до сессий и службы «застрял»: обе берут у неё `status`. Проверка на старте (К5) идёт в фоне, старт хоста её не ждёт.
+  const authService = createAuthService(handle.context, options.auth);
+  handle.context.onShutdown(async () => authService.stop());
+
   // Служба «застрял» (спека застрявших 4.4): эпизоды ожидания человека — в карту, в ленту комнаты и письмом ведущему.
-  // Альтернативы для письма о лимите (спека подписок 5.8) — другие вошедшие аккаунты того же CLI; службы входа на этом
-  // этапе нет, `signedIn` всегда `null`, и список пуст.
+  // Альтернативы для письма о лимите (спека подписок 5.8) — другие вошедшие аккаунты того же CLI, подтверждённые службой
+  // входа; эпизод `sign-in` у сессии аккаунта просит службу входа проверить вход заново (К5).
   const stuckService = createStuckService(handle.context, worksService, activityService, {
     reportMs: stuckReportFromEnv(process.env),
-    alternatives: (provider) => limitAlternatives(provider, { limits: limitsService, signedIn: () => null }),
+    alternatives: (provider) => limitAlternatives(provider, { limits: limitsService, signedIn: (id) => authService.status(id) }),
+    onSignIn: (provider) => void authService.refresh(provider),
   });
   handle.context.onShutdown(async () => stuckService.stop());
 
@@ -398,6 +408,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     {
       hooks: hookServer,
       providerVersions,
+      signedIn: (id) => authService.status(id),
       codexHookCommand: codexHookCommandOnce,
       agent: {
         url: () => {
@@ -474,7 +485,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     ready: async (entry) => {
       await providerVersions.ready;
       const key = await secretOf(entry);
-      const readiness = await providerReadiness(entry, { keyPresent: key !== null, probeVersion: (command) => providerVersions.fresh(command) });
+      const readiness = await providerReadiness(entry, {
+        keyPresent: key !== null,
+        probeVersion: (command) => providerVersions.fresh(command),
+        // Аккаунт подписки готов только со входом (спека подписок 5.5): без этого помощник отказывал бы и вошедшему.
+        signedIn: authService.status(entry.id),
+      });
       if (readiness.needs !== null || readiness.error !== null) return providerReadinessError(entry, readiness) ?? `${entry.label} is not ready`;
       const min = ASSISTANT_MIN_VERSIONS[entry.runner.command];
       const version = providerVersions.get(entry.runner.command);
@@ -569,6 +585,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     limits: limitsService,
     glmCheck,
     customCheck,
+    auth: authService,
     works: worksService,
     activity: activityService,
     pty: ptyManager,
@@ -673,6 +690,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // До активности: сверка эпизодов с картой идёт по первому изменению каждой сессии (спека застрявших 4.4), а оно
   // приходит из самого `activityService.start()`.
   stuckService.start();
+  // Состояние входа аккаунтов (К5): в фоне, `providers.changed` придёт, когда ответы CLI будут разобраны.
+  void authService.refreshAll();
   await activityService.start();
   planEffects.start();
   history.start();
