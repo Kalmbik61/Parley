@@ -2,7 +2,7 @@ import { readdirSync, type Dirent } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { customProviderDir, isValidCustomProviderId } from './custom-providers.js';
+import { CODEX_ACCOUNT_PREFIX, customProviderDir, isCustomProviderId, isValidCustomProviderId } from './custom-providers.js';
 import { envValue } from './names.js';
 import { parleyHome } from './work/store.js';
 
@@ -49,6 +49,7 @@ export function claudeProjectRoots(
 
 /**
  * Корни истории своих провайдеров: `projects` в подпапках `<home>/providers` с префиксом `custom-` (спека своих провайдеров 5.6).
+ * Папки `codex-*` (аккаунты Codex) — не корни Claude и сюда не попадают (спека подписок 5.1, К8).
  * Синхронно, только пути; нет каталога `providers` — `[]`.
  */
 export function customProviderProjectRoots(home: string = parleyHome()): string[] {
@@ -59,7 +60,7 @@ export function customProviderProjectRoots(home: string = parleyHome()): string[
     return [];
   }
   return entries
-    .filter((entry) => entry.isDirectory() && isValidCustomProviderId(entry.name))
+    .filter((entry) => entry.isDirectory() && isCustomProviderId(entry.name) && isValidCustomProviderId(entry.name))
     .map((entry) => path.join(customProviderDir(entry.name, home), 'projects'))
     .sort();
 }
@@ -73,6 +74,8 @@ export function defaultRoot(): string {
 
 /** Корень истории провайдера: свой (`custom-*`) — из его папки, остальные — как у Claude Code (спека 5.6). */
 export function claudeRootFor(provider: string): string {
+  // У аккаунта Codex нет корня Claude; зовут эту функцию только для семейства Claude (спека подписок 5.1).
+  if (provider.startsWith(CODEX_ACCOUNT_PREFIX)) throw new Error(`Provider ${provider} has no Claude history root`);
   if (isValidCustomProviderId(provider)) return path.join(customProviderDir(provider), 'projects');
   return defaultRoot();
 }

@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { customProviderDir, isValidCustomProviderId, type CustomProviderRecord } from './custom-providers.js';
+import { customProviderDir, isValidCustomProviderId, type CustomEndpointRecord } from './custom-providers.js';
 import { parleyHome } from './work/store.js';
 
 /** Что подтягивается ссылками из папки Claude Code человека (спека 5.4). */
@@ -156,9 +156,10 @@ export interface PrepareOptions {
 
 /**
  * Готовит папку провайдера перед запуском (спека 5.4, 6.2): папка 0700, `projects/`, посев
- * `hasCompletedOnboarding` слиянием и сверка ссылок. Идемпотентна.
+ * `hasCompletedOnboarding` слиянием и сверка ссылок. Идемпотентна. ВРЕМЕННО принимает только `endpoint`:
+ * аккаунт подписки (спека подписок 5.4) подключает следующая задача плана — ссылки по его `link`.
  */
-export async function prepareCustomProviderDir(record: CustomProviderRecord, options: PrepareOptions): Promise<void> {
+export async function prepareCustomProviderDir(record: CustomEndpointRecord, options: PrepareOptions): Promise<void> {
   const dir = customProviderDir(record.id, options.home ?? parleyHome());
   const warn = options.warn ?? (() => undefined);
   await mkdir(path.dirname(dir), { recursive: true });

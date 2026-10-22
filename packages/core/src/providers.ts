@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { CLAUDE_MODELS, CODEX_MODELS, GLM_MODELS, LEGACY_EFFORTS, effortLabel, type EffortOption, type ModelOption } from './provider-models.js';
-import { customProviderEntry, customProvidersFile, isCustomProviderId, readCustomProviders, type CustomProviderRecord } from './custom-providers.js';
+import { accountProviderEntry, customProviderEntry, customProvidersFile, isAccountRecord, isCustomProviderId, isManagedProviderId, readCustomProviders, type CustomAccountRecord, type CustomEndpointRecord } from './custom-providers.js';
 import { readSecret, type SecretId } from './secrets.js';
 import { parseVersion } from './work/channel.js';
 import type { Provider } from './session-index.js';
@@ -115,8 +115,14 @@ export interface ProviderEntry {
    * Поля нет — шаблон встроенный.
    */
   argsOverridden?: true;
-  /** Описание своего провайдера, по которому построена запись (спека своих провайдеров, 5.3). */
-  custom?: CustomProviderRecord;
+  /** Описание своего провайдера с адресом, по которому построена запись (спека своих провайдеров, 5.3). */
+  custom?: CustomEndpointRecord;
+  /**
+   * Запись аккаунта подписки, по которой построена запись (спека подписок 5.2). ВРЕМЕННО отдельным полем: хост и окно
+   * читают `custom.baseUrl` и другие поля адреса, а у аккаунта их нет. Задачи хоста и окна сольют поле в `custom`
+   * (тип — `CustomProviderRecord`), и читатели сузят его через `isAccountRecord`.
+   */
+  account?: CustomAccountRecord;
 }
 
 /** Запись встроенного реестра: id из закрытого списка, всё остальное как у `ProviderEntry`. */
@@ -740,7 +746,8 @@ export function providerCompatibilityError(entry: ProviderEntry): string | null 
 }
 
 export interface ProviderReadiness {
-  needs: 'cli' | 'key' | null;
+  /** `sign-in` — у аккаунта подписки нет входа (спека подписок 5.5); CLI и версия при этом в порядке. */
+  needs: 'cli' | 'key' | 'sign-in' | null;
   /** Incompatible runner, distinct from an install/key action. */
   error: string | null;
   version: string | null;
@@ -753,6 +760,11 @@ export interface ProviderReadinessOptions {
   probeVersion?: (command: string) => Promise<string | null>;
   /** Optional snapshot when the caller has already read the key for its hint. */
   keyPresent?: boolean;
+  /**
+   * Вошёл ли аккаунт подписки (его даёт служба входа хоста, спека подписок 5.5): `null` — не проверялось,
+   * для аккаунта это тоже «нужен вход». Остальные провайдеры поле не читают.
+   */
+  signedIn?: boolean | null;
 }
 
 /** Shared preflight, before map/settings/worktree changes. Never returns a key. */
@@ -773,6 +785,8 @@ export async function providerReadiness(entry: ProviderEntry, options: ProviderR
     );
     if (!supported) return { needs: 'cli', error: null, version };
   }
+  // Вход — после CLI и версии: без подходящего `claude` проверять его не у кого (спека подписок 5.5).
+  if (entry.account !== undefined && options.signedIn !== true) return { needs: 'sign-in', error: null, version };
   if (entry.runner.secret !== undefined && entry.runner.keyOptional !== true && !(options.keyPresent ?? ((await readSecret(entry.runner.secret)) !== null))) {
     return { needs: 'key', error: null, version };
   }
@@ -782,9 +796,12 @@ export async function providerReadiness(entry: ProviderEntry, options: ProviderR
 /** Safe refusal text shared by MCP and host; includes no credentials. */
 export function providerReadinessError(entry: ProviderEntry, readiness: ProviderReadiness): string | null {
   if (readiness.error !== null) return readiness.error;
+  // Аккаунт подписки называется своим именем (`entry.label`, стандартное уже посчитано), остальные — как раньше.
+  const name = entry.account !== undefined ? entry.label : (entry.custom?.label ?? 'GLM');
+  if (readiness.needs === 'sign-in') return `${name} is not signed in: open Settings → Providers and press Sign in`;
   if (readiness.needs === 'cli') return entry.runner.minVersion === undefined
     ? `command ${entry.runner.command} is not in PATH — provider ${entry.id} is unavailable`
-    : `${entry.custom?.label ?? 'GLM'} requires Claude Code ${entry.runner.minVersion} or newer; install or update the CLI and check again`;
+    : `${name} requires Claude Code ${entry.runner.minVersion} or newer; install or update the CLI and check again`;
   if (readiness.needs !== 'key') return null;
   return entry.custom === undefined
     ? 'GLM requires a saved Z.ai key in Providers'
@@ -1067,9 +1084,10 @@ function applyOverride(
   patch: ProviderOverride,
   base: ProviderEntry | undefined,
 ): ProviderEntry {
-  // Префикс принадлежит своим провайдерам окна (спека своих провайдеров, 5.3): руками его не занять.
-  if (base === undefined && isCustomProviderId(id)) {
-    throw new Error(`provider ${id} in ${file}: the custom- prefix is reserved`);
+  // Префиксы принадлежат окну: `custom-` — своим провайдерам и аккаунтам Claude (спека своих провайдеров, 5.3),
+  // `codex-` — аккаунтам Codex (спека подписок 5.1, К8). Руками их не занять.
+  if (base === undefined && isManagedProviderId(id)) {
+    throw new Error(`provider ${id} in ${file}: the custom- and codex- prefixes are reserved`);
   }
   const command = patch.command ?? base?.runner.command;
   const label = patch.badge ?? base?.label;
@@ -1138,9 +1156,13 @@ export async function loadProviders(
   customFile = customProvidersFile(),
 ): Promise<Record<WorkProvider, ProviderEntry>> {
   const registry = await loadBaseProviders(file, codexFile);
-  // Свои провайдеры (спека 5.3) — после providers.json; занятый id (встроенный или из файла) не перекрывают.
+  // Свои провайдеры (спека 5.3) и аккаунты подписок (спека подписок 5.2) — после providers.json; занятый id
+  // (встроенный или из файла) не перекрывают. Аккаунту нужна запись `claude` уже со всеми переопределениями.
   for (const record of await readCustomProviders(customFile)) {
-    if (!Object.hasOwn(registry, record.id)) registry[record.id] = customProviderEntry(record);
+    if (Object.hasOwn(registry, record.id)) continue;
+    if (!isAccountRecord(record)) registry[record.id] = customProviderEntry(record);
+    // Аккаунт Codex — этап 3: хост до тех пор такую запись не создаёт, а чужую пропускаем молча.
+    else if (record.kind === 'claude-account') registry[record.id] = accountProviderEntry(record, registry);
   }
   return registry;
 }

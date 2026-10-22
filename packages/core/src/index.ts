@@ -110,21 +110,28 @@ export {
   supportsModel,
 } from './providers.js';
 export {
+  ACCOUNT_MIN_VERSION_CLAUDE,
+  CODEX_ACCOUNT_PREFIX,
   CUSTOM_MIN_VERSION,
   CUSTOM_PROVIDER_PREFIX,
+  accountLabel,
+  accountProviderEntry,
   baseUrlError,
   customProviderDir,
   customProviderEntry,
   customProviderSecret,
   customProvidersFile,
+  defaultAccountLabel,
+  isAccountRecord,
   isCustomProviderId,
   isLoopbackUrl,
+  isManagedProviderId,
   isValidCustomProviderId,
   readCustomProviders,
   slugProviderId,
   writeCustomProviders,
 } from './custom-providers.js';
-export type { CustomProviderRecord } from './custom-providers.js';
+export type { CustomAccountRecord, CustomEndpointRecord, CustomProviderRecord } from './custom-providers.js';
 export {
   LINKED_CLAUDE_ITEMS,
   mirrorProjectTrust,
