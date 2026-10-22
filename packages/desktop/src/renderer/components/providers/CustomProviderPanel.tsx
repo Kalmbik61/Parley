@@ -2,6 +2,9 @@
  * Выбор вендора и форма своего провайдера (спека своих провайдеров, 4.3): шаг 1 — плитки пресетов, шаг 2 — поля.
  * Полный ключ живёт только в локальном поле этой формы; в параметры `providers.saveCustom` и в тексты ошибок он не
  * попадает (ошибки — по коду, как в `ProviderCard`).
+ *
+ * Аккаунты подписки (спека подписок 4.1): две плитки перед вендорами, а сохранённый аккаунт и только что выбранная
+ * плитка Claude Code рисуются формой `AccountPanel` — адреса и ключа у аккаунта нет.
  */
 
 import { useEffect, useId, useRef, useState } from 'react';
@@ -17,9 +20,11 @@ import { Button } from '../../ui/button.js';
 import { Checkbox } from '../../ui/checkbox.js';
 import { Input } from '../../ui/input.js';
 import { AgentIcon } from '../AgentIcon.js';
+import { AccountPanel } from './AccountPanel.js';
 import { CheckLine, maskedHint, newerCheck } from './check-line.js';
-import { CUSTOM_PRESETS, type CustomPreset } from './custom-presets.js';
+import { ACCOUNT_TILES, CUSTOM_PRESETS, type CustomPreset } from './custom-presets.js';
 import {
+  accountOf,
   draftError,
   draftFromPreset,
   draftFromProvider,
@@ -60,6 +65,8 @@ export function CustomProviderPanel({ providerId, onSaved, onDeleted }: CustomPr
   const [draft, setDraft] = useState<CustomProviderDraft | null>(() =>
     item !== undefined && custom != null ? draftFromProvider({ id: item.id, label: item.label, custom }) : null,
   );
+  /** Выбрана плитка нового аккаунта Claude Code: вместо формы адреса — `AccountPanel` без сохранённой записи. */
+  const [newAccount, setNewAccount] = useState(false);
   const [replacing, setReplacing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -75,6 +82,7 @@ export function CustomProviderPanel({ providerId, onSaved, onDeleted }: CustomPr
   useEffect(() => {
     ++generation.current;
     setDraft(item !== undefined && custom != null ? draftFromProvider({ id: item.id, label: item.label, custom }) : null);
+    setNewAccount(false);
     setReplacing(false);
     setBusy(false);
     setChecking(false);
@@ -103,6 +111,14 @@ export function CustomProviderPanel({ providerId, onSaved, onDeleted }: CustomPr
     );
   }
 
+  // Аккаунт подписки: сохранённый или только что выбранный плиткой (спека подписок 4.1).
+  if (item !== undefined && accountOf(custom) !== null) {
+    return <AccountPanel provider={item} onSaved={onSaved} onDeleted={onDeleted} />;
+  }
+  if (providerId === 'new' && newAccount) {
+    return <AccountPanel provider={null} onSaved={onSaved} onDeleted={onDeleted} />;
+  }
+
   if (providerId === 'new' && draft === null) {
     return (
       <div className="space-y-3" data-custom-provider-step="vendor">
@@ -111,6 +127,28 @@ export function CustomProviderPanel({ providerId, onSaved, onDeleted }: CustomPr
           <p className="text-xs text-muted-foreground">{S.customProviders.pickVendorHint}</p>
         </div>
         <div className="grid grid-cols-3 gap-2">
+          {ACCOUNT_TILES.map((tile) => {
+            // Плитка Codex неактивна до этапа 3; хост от прежней сборки методов входа не знает (спека подписок 10).
+            const hint = tile.comingSoon === true ? S.accounts.comingSoon : methods.has('providers.signIn') ? null : S.accounts.needsRestart;
+            return (
+              <button
+                key={tile.id}
+                type="button"
+                data-vendor-tile={tile.id}
+                disabled={hint !== null}
+                onClick={() => setNewAccount(true)}
+                className="flex flex-col items-start gap-0.5 rounded-xl border border-border px-3 py-2 text-left transition-colors hover:bg-foreground/7 disabled:opacity-50 disabled:hover:bg-transparent"
+              >
+                <span className="flex items-center gap-1.5 text-sm font-medium">
+                  <span aria-hidden="true" className="inline-flex">
+                    <AgentIcon provider={tile.id === 'codex-account' ? 'codex' : 'claude'} size={14} />
+                  </span>
+                  {tile.label}
+                </span>
+                <span className="text-xs text-muted-foreground">{hint ?? tile.billing}</span>
+              </button>
+            );
+          })}
           {[...CUSTOM_PRESETS, null].map((preset: CustomPreset | null) => (
             <button
               key={preset?.id ?? 'own'}

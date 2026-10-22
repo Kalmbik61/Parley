@@ -37,6 +37,22 @@ export interface CustomPreset {
   endpoints: readonly CustomPresetEndpoint[];
 }
 
+/**
+ * Плитки аккаунтов подписки на шаге выбора вендора (спека подписок 4.1): стоят перед вендорами. Аккаунт Codex до этапа 3
+ * (хост его отказывает) — плитка есть, но неактивна.
+ */
+export interface AccountTile {
+  id: 'claude-account' | 'codex-account';
+  label: string;
+  billing: string;
+  comingSoon?: true;
+}
+
+export const ACCOUNT_TILES: readonly AccountTile[] = [
+  { id: 'claude-account', label: 'Another Claude Code account', billing: 'Your own subscription, signed in from Parley' },
+  { id: 'codex-account', label: 'Another Codex account', billing: 'Your own subscription, signed in from Parley', comingSoon: true },
+];
+
 const same = (model: string): CustomProviderModels => ({ opus: model, sonnet: model, haiku: model, subagent: model });
 
 export const CUSTOM_PRESETS: readonly CustomPreset[] = [

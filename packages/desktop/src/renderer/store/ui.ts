@@ -92,6 +92,11 @@ export interface UiState {
   /** Провайдер, выбранный в Settings → Providers: id, `'new'` — выбор вендора, `null` — по умолчанию (спека своих провайдеров, раздел 4). */
   settingsProvider: string | 'new' | null;
   /**
+   * Просьба карточки аккаунта «Sign in» (спека подписок 4.2): форма выбранного аккаунта в Settings сама начинает вход и
+   * снимает флаг. Только для `settingsProvider`; любое следующее открытие Settings флаг сбрасывает.
+   */
+  settingsSignIn: boolean;
+  /**
    * Сессии, чей терминал сейчас виден (активная вкладка своей группы,
    * `@parley/protocol#refKey`) — уведомления считают видимой именно такую
    * сессию. Видимых терминалов может быть несколько, по одному на группу.
@@ -169,7 +174,7 @@ export interface UiState {
   /** `work` — работа диалога (`null` — активная); `room` — открыть сразу комнатой, с двумя агентами. */
   openNewSessionDialog: (work?: DialogWork, options?: { room?: boolean; backlog?: BacklogTakeContext }) => void;
   closeNewSessionDialog: () => void;
-  openSettingsDialog: (section?: SettingsSection, options?: { provider?: string | 'new' }) => void;
+  openSettingsDialog: (section?: SettingsSection, options?: { provider?: string | 'new'; signIn?: boolean }) => void;
   closeSettingsDialog: () => void;
   openMergeRoomDialog: (input: NonNullable<DialogsState['mergeRoom']>) => void;
   closeMergeRoomDialog: () => void;
@@ -236,6 +241,7 @@ export const useUiStore = create<UiState>((set, get) => {
     closeProjectPanel: () => set({ projectPanel: null }),
     settingsSection: 'appearance',
     settingsProvider: null,
+    settingsSignIn: false,
     visibleSessionRefs: {},
     composerDrafts: {},
     decisionDrafts: {},
@@ -318,6 +324,7 @@ export const useUiStore = create<UiState>((set, get) => {
         dialogs: { ...state.dialogs, settings: true },
         settingsSection: section ?? 'appearance',
         settingsProvider: options?.provider ?? null,
+        settingsSignIn: options?.signIn === true,
       })),
     closeSettingsDialog: () => set((state) => ({ dialogs: { ...state.dialogs, settings: false } })),
     openMergeRoomDialog: (input) => set((state) => ({ dialogs: { ...state.dialogs, mergeRoom: input } })),

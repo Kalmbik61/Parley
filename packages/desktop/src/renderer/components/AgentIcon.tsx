@@ -18,7 +18,9 @@ import claudeUrl from '../assets/providers/claude.svg';
 import codexLightUrl from '../assets/providers/codex-light.svg';
 import codexUrl from '../assets/providers/codex.svg';
 import parleyUrl from '../assets/providers/parley.svg';
+import { useProvidersStore, type ProviderInfo } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
+import { kindOf } from './providers/custom-provider-draft.js';
 
 /**
  * Раунд исправлений 1 (находки ревью B №2 и №5): id провайдера — открытый
@@ -33,8 +35,22 @@ function providerLetter(provider: string): string {
   return firstCodePoint === undefined ? '?' : firstCodePoint.toUpperCase();
 }
 
+/**
+ * Семейство CLI аккаунта подписки (спека подписок 5.9): значок аккаунта — значок его CLI, а не Parley. Берётся из строки
+ * `providers.list` (`family` отдаёт хост); у записи с адресом, хоть она и запускается через `claude`, значка CLI нет.
+ * Протокол пока знает только `family: 'claude'`; Codex — по виду аккаунта до этапа 3.
+ */
+function accountFamily(row: ProviderInfo | undefined): 'claude' | 'codex' | null {
+  const kind = kindOf(row?.custom);
+  if (kind === 'claude-account') return row?.family ?? 'claude';
+  return kind === 'codex-account' ? 'codex' : null;
+}
+
 /** Адрес брендового значка; `null` — у провайдера его нет, рисуется буква. */
-function brandIcon(provider: string, dark: boolean): string | null {
+function brandIcon(provider: string, dark: boolean, family: 'claude' | 'codex' | null): string | null {
+  // Аккаунт подписки — значок семейства (спека подписок 5.9), стоит до правила своих провайдеров.
+  if (family === 'claude') return claudeUrl;
+  if (family === 'codex') return dark ? codexLightUrl : codexUrl;
   // Свои провайдеры (спека 3.7): пока значок Parley, вендорские — следующая работа. По id, а не по стору:
   // удалённый провайдер в старой комнате остаётся со значком.
   if (isCustomProviderId(provider)) return parleyUrl;
@@ -57,7 +73,9 @@ export interface AgentIconProps {
 
 export function AgentIcon({ provider, size = 12, label }: AgentIconProps): JSX.Element {
   const dark = useUiStore((state) => state.dark);
-  const src = brandIcon(provider, dark);
+  // Селектор отдаёт строку или `null`: значок перерисовывается только при смене семейства.
+  const family = useProvidersStore((state) => accountFamily(state.providers.find((row) => row.id === provider)));
+  const src = brandIcon(provider, dark, family);
   if (src !== null) {
     return (
       <img

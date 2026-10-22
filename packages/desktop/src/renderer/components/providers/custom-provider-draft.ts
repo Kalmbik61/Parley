@@ -4,6 +4,7 @@
  */
 
 import type {
+  CustomAccountInfo,
   CustomEndpointInfo,
   CustomProviderAuth,
   CustomProviderInfo,
@@ -63,6 +64,16 @@ export function kindOf(custom: CustomProviderInfo | null | undefined): CustomPro
 
 function isEndpointInfo(custom: CustomProviderInfo): custom is CustomEndpointInfo {
   return kindOf(custom) === 'endpoint';
+}
+
+function isAccountInfo(custom: CustomProviderInfo): custom is CustomAccountInfo {
+  const kind = kindOf(custom);
+  return kind === 'claude-account' || kind === 'codex-account';
+}
+
+/** Запись аккаунта подписки или `null` (нет записи или запись с адресом): так окно читает поля `signedIn`, `signingIn`, `link`. */
+export function accountOf(custom: CustomProviderInfo | null | undefined): CustomAccountInfo | null {
+  return custom != null && isAccountInfo(custom) ? custom : null;
 }
 
 /** Черновик записи с адресом; у аккаунта подписки нет ни адреса, ни моделей — `null` (его форма `AccountPanel`). */

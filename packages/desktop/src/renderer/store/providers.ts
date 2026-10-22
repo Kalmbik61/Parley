@@ -3,10 +3,13 @@
  * подключения и запроса не дают старому ответу вернуть удалённый ключ. Метаданные
  * старого хоста необязательны; версия/лимиты без поля читаются как null. Чужие
  * claude.ai лимиты GLM отбрасываются и в списке, и в событиях.
+ *
+ * Вход в аккаунты подписки (спека подписок 4.1, 10): хост вывод входа не повторяет, поэтому стор с `init` копит его
+ * по провайдеру (хвост 64 КБ) — Settings, открытые заново посреди входа, показывают уже напечатанное.
  */
 
 import { create } from 'zustand';
-import type { Result } from '@parley/protocol';
+import type { CustomAccountInfo, Result } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 
@@ -20,6 +23,30 @@ export interface ProviderInfo extends Omit<
   limits: NonNullable<Result<'providers.list'>['providers'][number]['limits']> | null;
 }
 
+/** Сколько знаков вывода входа держит стор на аккаунт: хвост, а не всё (вход печатает пару строк, предел — страховка). */
+const SIGN_IN_BUFFER_CHARS = 64 * 1024;
+
+/**
+ * Строки списка с изменённым состоянием входа аккаунта `id`; тот же массив, если менять нечего (подписчики строки статуса
+ * не перерисовываются от каждого куска вывода).
+ */
+function patchAccount(
+  providers: ProviderInfo[],
+  id: string,
+  patch: Partial<Pick<CustomAccountInfo, 'signedIn' | 'signingIn'>>,
+): ProviderInfo[] {
+  let changed = false;
+  const next = providers.map((provider) => {
+    const custom = provider.custom;
+    if (provider.id !== id || custom == null || (custom.kind !== 'claude-account' && custom.kind !== 'codex-account')) return provider;
+    const keys = Object.keys(patch) as Array<keyof typeof patch>;
+    if (keys.every((key) => custom[key] === patch[key])) return provider;
+    changed = true;
+    return { ...provider, custom: { ...custom, ...patch } };
+  });
+  return changed ? next : providers;
+}
+
 export interface ProvidersState {
   /** В порядке ответа хоста; строка статуса сама упорядочивает основные провайдеры. */
   providers: ProviderInfo[];
@@ -31,6 +58,12 @@ export interface ProvidersState {
   loaded: boolean;
   /** Ручное обновление всех источников; повторные клики разделяют один запрос. */
   refreshing: boolean;
+  /** Вывод процесса входа по id аккаунта с момента `init` (хвост `SIGN_IN_BUFFER_CHARS`); хост его не повторяет. */
+  signInOutput: Record<string, string>;
+  /** Итог последнего входа за жизнь окна (выход процесса): терминал входа показывает его строкой. */
+  signInResult: Record<string, { exitCode: number; signedIn: boolean }>;
+  /** Вход начат из окна: прежние вывод и итог стираются, строка списка помечается `signingIn` до ответа хоста. */
+  beginSignIn: (provider: string) => void;
   refreshLimits: () => Promise<void>;
   /** Свежий снимок того же подключения; более поздний запрос побеждает. */
   reload: () => Promise<void>;
@@ -111,6 +144,16 @@ export const useProvidersStore = create<ProvidersState>((set) => {
     providers: [],
     loaded: false,
     refreshing: false,
+    signInOutput: {},
+    signInResult: {},
+    beginSignIn: (provider) =>
+      set((state) => {
+        const signInOutput = { ...state.signInOutput };
+        const signInResult = { ...state.signInResult };
+        delete signInOutput[provider];
+        delete signInResult[provider];
+        return { signInOutput, signInResult, providers: patchAccount(state.providers, provider, { signingIn: true }) };
+      }),
     refreshLimits,
     reload,
     init: (bridge) => {
@@ -139,6 +182,25 @@ export const useProvidersStore = create<ProvidersState>((set) => {
             : state,
         );
       });
+      // Вывод значит, что процесс входа жив: строка помечается `signingIn`, даже если окно открыли уже посреди входа.
+      const offSignInOutput = bridge.on('providers.signInOutput', ({ provider, data }) => {
+        if (connection !== currentConnection) return;
+        set((state) => ({
+          signInOutput: {
+            ...state.signInOutput,
+            [provider]: `${state.signInOutput[provider] ?? ''}${data}`.slice(-SIGN_IN_BUFFER_CHARS),
+          },
+          providers: patchAccount(state.providers, provider, { signingIn: true }),
+        }));
+      });
+      const offSignInExit = bridge.on('providers.signInExit', ({ provider, exitCode, signedIn }) => {
+        if (connection !== currentConnection) return;
+        set((state) => ({
+          signInResult: { ...state.signInResult, [provider]: { exitCode, signedIn } },
+          providers: patchAccount(state.providers, provider, { signingIn: false, signedIn }),
+        }));
+        void reload().catch(() => {});
+      });
       return () => {
         if (connection === currentConnection) {
           ++connection;
@@ -146,6 +208,8 @@ export const useProvidersStore = create<ProvidersState>((set) => {
           refreshPromise = null;
           set({ refreshing: false });
         }
+        offSignInExit();
+        offSignInOutput();
         offLimits();
         offChanged();
       };

@@ -28,6 +28,7 @@ import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, providerName, S } from '../../shared/strings.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { ConfirmDialog } from '../components/dialogs/ConfirmDialog.js';
+import { kindOf } from '../components/providers/custom-provider-draft.js';
 import { ProviderCard } from '../components/providers/ProviderCard.js';
 import { cn } from '../lib/cn.js';
 import { hostMethods, missingMethods, otherHostBuild } from '../lib/capabilities.js';
@@ -153,8 +154,9 @@ function ProviderSegment({ provider, onRestartHost }: { provider: ProviderInfo; 
       {limits ? <ProviderLimitsMeter limits={provider.limits} /> : null}
     </>
   );
-  // Свой провайдер: вместо поповера — Settings на нём (спека своих провайдеров, раздел 4).
-  if (provider.custom != null)
+  // Свой провайдер с адресом: вместо поповера — Settings на нём (спека своих провайдеров, раздел 4). Аккаунт подписки
+  // (спека подписок 4.2) открывает поповер с карточкой, как основные: состояние, лимиты, Sign in и Open in Settings.
+  if (kindOf(provider.custom) === 'endpoint')
     return (
       <button type="button" data-provider-segment={provider.id} title={title} aria-label={title}
         style={yields ? { minWidth: segmentFloor(version, meter) } : undefined} className={segmentClass}
@@ -172,7 +174,12 @@ function ProviderSegment({ provider, onRestartHost }: { provider: ProviderInfo; 
         </button>
       </PopoverTrigger>
       <PopoverContent aria-label={name} side="top" align="start" className="max-h-[calc(100vh-48px)] w-[min(360px,calc(100vw-24px))] overflow-y-auto">
-        <ProviderCard provider={provider} onReload={reload} onRestartHost={() => { setOpen(false); onRestartHost(); }} />
+        <ProviderCard
+          provider={provider}
+          onReload={reload}
+          onRestartHost={() => { setOpen(false); onRestartHost(); }}
+          onOpenSettings={() => setOpen(false)}
+        />
       </PopoverContent>
     </Popover>
   );

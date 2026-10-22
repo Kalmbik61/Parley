@@ -804,6 +804,44 @@ export const S = {
     },
   },
 
+  /**
+   * Аккаунты подписки (спека подписок 4.1, 4.2) — `components/providers/AccountPanel.tsx`, `SignInTerminal.tsx`,
+   * карточка аккаунта в `ProviderCard.tsx`. Этап 2 — аккаунты Claude Code; тексты Codex добавит этап 3.
+   */
+  accounts: {
+    comingSoon: 'Coming soon',
+    /** Плитка на хосте без методов входа: хост остался от прежней сборки. */
+    needsRestart: 'Restart the host to use accounts',
+    /** Стандартное имя нового аккаунта — только подсказка в поле: настоящее имя выдаёт хост при сохранении. */
+    defaultName: (n: number): string => `Claude Code ${n}`,
+    nameField: 'Name',
+    bringFromClaude: 'Bring from Claude Code',
+    folderLine: (folder: string): string =>
+      `Own Claude Code settings: ${folder} — sign-in, history and memory separate from your regular Claude Code.`,
+    signInCaption:
+      'Sign in with a different account than your regular Claude Code; the same account twice gives no extra limit.',
+    signedIn: 'Signed in',
+    notSignedIn: 'Not signed in',
+    checking: 'Checking…',
+    signingIn: 'Signing in…',
+    signIn: 'Sign in',
+    cancel: 'Cancel',
+    signOut: 'Sign out',
+    save: 'Save',
+    saving: 'Saving…',
+    delete: 'Delete',
+    deleteFolder: 'Also delete its folder',
+    /** Итог входа под терминалом, когда процесс вышел. */
+    signInDone: 'Signed in.',
+    signInFailed: 'Sign-in did not complete.',
+    terminalLabel: 'Sign-in terminal',
+    saveFailed: 'save the account',
+    signInStartFailed: 'start the sign-in',
+    cancelFailed: 'cancel the sign-in',
+    signOutFailed: 'sign out',
+    deleteFailed: 'delete the account',
+  },
+
   /** Общие диалоги, не привязанные к своей области (mail/rooms/settings/…). */
   dialogs: {
     /** Название комнаты, если человек его не ввёл (диалоги 1.5 и 1.6, 2.1): по числу комнат работы. */

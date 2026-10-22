@@ -10,6 +10,7 @@ import { useHostStore } from '../../store/host.js';
 import { useProvidersStore, type ProviderInfo } from '../../store/providers.js';
 import { useUiStore } from '../../store/ui.js';
 import { CustomProviderPanel } from './CustomProviderPanel.js';
+import { ACCOUNT_TILES } from './custom-presets.js';
 
 const METHODS = [...REQUIRED_METHODS, 'providers.setKey', 'providers.clearKey', 'providers.check', 'providers.saveCustom', 'providers.deleteCustom'];
 const custom = (patch: Partial<ProviderInfo> = {}): ProviderInfo => ({
@@ -243,3 +244,79 @@ describe('CustomProviderPanel: правки ревью задач 10–12', () =
   });
 });
 
+
+describe('CustomProviderPanel: аккаунты подписки (спека подписок 4.1)', () => {
+  const accountRow = (patch: Partial<ProviderInfo> = {}): ProviderInfo =>
+    ({
+      id: 'custom-claude-2', label: 'Claude Code 2', available: false, family: 'claude', needs: 'sign-in', version: '2.1.306', limits: null,
+      custom: { kind: 'claude-account', link: true, folder: '/Users/me/.parley/providers/custom-claude-2', signedIn: false, signingIn: false },
+      ...patch,
+    }) as ProviderInfo;
+  const tiles = (): string[] => [...document.querySelectorAll('[data-vendor-tile]')].map((el) => el.getAttribute('data-vendor-tile')!);
+
+  beforeEach(() => setHost([...METHODS, 'providers.signIn']));
+
+  it('ACCOUNT_TILES: Claude Code и Codex, строка про подписку; Codex до этапа 3 — comingSoon', () => {
+    expect(ACCOUNT_TILES.map((tile) => tile.id)).toEqual(['claude-account', 'codex-account']);
+    expect(ACCOUNT_TILES[0]).toMatchObject({ label: 'Another Claude Code account', billing: 'Your own subscription, signed in from Parley' });
+    expect(ACCOUNT_TILES[0]!.comingSoon).toBeUndefined();
+    expect(ACCOUNT_TILES[1]).toMatchObject({ label: 'Another Codex account', comingSoon: true });
+  });
+
+  it('две плитки аккаунтов стоят первыми, дальше вендоры и «Own address»', () => {
+    render(<CustomProviderPanel providerId="new" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    expect(tiles()).toEqual(['claude-account', 'codex-account', 'kimi', 'minimax', 'qwen', 'deepseek', 'openrouter', 'own']);
+    const claude = document.querySelector('[data-vendor-tile="claude-account"]')!;
+    expect(claude.textContent).toContain('Another Claude Code account');
+    expect(claude.textContent).toContain('Your own subscription, signed in from Parley');
+  });
+
+  it('плитка Codex есть, но неактивна и говорит «Coming soon»', () => {
+    render(<CustomProviderPanel providerId="new" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    const codex = document.querySelector('[data-vendor-tile="codex-account"]') as HTMLButtonElement;
+    expect(codex.disabled).toBe(true);
+    expect(codex.textContent).toContain('Another Codex account');
+    expect(codex.textContent).toContain(S.accounts.comingSoon);
+    fireEvent.click(codex);
+    expect(document.querySelector('[data-account-form]')).toBeNull();
+  });
+
+  it('плитка Claude Code открывает форму аккаунта вместо формы адреса', () => {
+    render(<CustomProviderPanel providerId="new" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(document.querySelector('[data-vendor-tile="claude-account"]')!);
+    expect(document.querySelector('[data-account-form="new"]')).toBeTruthy();
+    expect(screen.queryByLabelText(S.customProviders.addressField)).toBeNull();
+    expect((screen.getByLabelText(S.accounts.nameField) as HTMLInputElement).placeholder).toBe('Claude Code 2');
+  });
+
+  it('хост без providers.signIn (старый): плитка неактивна и просит перезапуск', () => {
+    setHost(METHODS);
+    render(<CustomProviderPanel providerId="new" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    const claude = document.querySelector('[data-vendor-tile="claude-account"]') as HTMLButtonElement;
+    expect(claude.disabled).toBe(true);
+    expect(claude.textContent).toContain(S.accounts.needsRestart);
+  });
+
+  it('сохранённый аккаунт показывает форму аккаунта, а не форму адреса', () => {
+    useProvidersStore.setState({ providers: [accountRow()], reload } as never);
+    render(<CustomProviderPanel providerId="custom-claude-2" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    expect(document.querySelector('[data-account-form="custom-claude-2"]')).toBeTruthy();
+    expect(screen.queryByLabelText(S.customProviders.addressField)).toBeNull();
+    expect(document.querySelector('[data-custom-provider-missing]')).toBeNull();
+  });
+
+  it('Save нового аккаунта: onSaved(id) родителя', async () => {
+    bridge.setHandler('providers.saveCustom', () => ({ id: 'custom-claude-2' }));
+    const onSaved = vi.fn();
+    render(<CustomProviderPanel providerId="new" onSaved={onSaved} onDeleted={vi.fn()} />);
+    fireEvent.click(document.querySelector('[data-vendor-tile="claude-account"]')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith('custom-claude-2'));
+  });
+
+  it('запись своего провайдера без kind (хост до подписок) по-прежнему открывается формой адреса', () => {
+    render(<CustomProviderPanel providerId="custom-kimi" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    expect(document.querySelector('[data-custom-provider-form="custom-kimi"]')).toBeTruthy();
+    expect(document.querySelector('[data-account-form]')).toBeNull();
+  });
+});

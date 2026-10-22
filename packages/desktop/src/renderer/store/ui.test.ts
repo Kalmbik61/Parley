@@ -396,3 +396,14 @@ it('openSettingsDialog() without arguments opens appearance with no provider sel
   useUiStore.getState().openSettingsDialog('voice');
   expect(useUiStore.getState().settingsProvider).toBeNull();
 });
+
+it('openSettingsDialog with signIn asks the selected account to start its sign-in; any later open clears the request (subscriptions spec 4.2)', () => {
+  expect(useUiStore.getState().settingsSignIn).toBe(false);
+  useUiStore.getState().openSettingsDialog('providers', { provider: 'custom-claude-2', signIn: true });
+  expect(useUiStore.getState()).toMatchObject({ settingsProvider: 'custom-claude-2', settingsSignIn: true });
+  useUiStore.getState().openSettingsDialog('providers', { provider: 'custom-claude-2' });
+  expect(useUiStore.getState().settingsSignIn).toBe(false);
+  useUiStore.getState().openSettingsDialog('providers', { provider: 'custom-claude-2', signIn: true });
+  useUiStore.getState().openSettingsDialog();
+  expect(useUiStore.getState().settingsSignIn).toBe(false);
+});
