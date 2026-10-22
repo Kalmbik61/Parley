@@ -1,12 +1,19 @@
 import type { Handler } from '../context.js';
+import { HostError } from '../errors.js';
 import { accountEntry } from '../providers/auth-service.js';
 import type { AuthService } from '../providers/auth-service.js';
 
+/** Вход этого аккаунта не идёт: ввод, размер и отмена принимать некому (`bad_request`, спека подписок 5.5). */
+function requireSignIn(auth: AuthService, provider: string): void {
+  if (!auth.signingIn(provider)) throw new HostError('bad_request', `no sign-in is running for ${provider}`);
+}
+
 /**
  * Шесть методов входа в аккаунт подписки (спека подписок 5.5, К14): состояние, вход в своём маленьком PTY, ввод кода
- * из браузера, размер терминала, отмена и выход. Провайдер — всегда аккаунт реестра: встроенный `claude`, GLM, свой
- * провайдер с адресом и неизвестный id получают `bad_request` (`<id> is not an account`). Вывод и выход процесса входа
- * окно получает событиями `providers.signInOutput` и `providers.signInExit`, не ответом.
+ * из браузера, размер терминала, отмена и выход. Состояние, вход и выход берут аккаунт из реестра: встроенный `claude`,
+ * GLM, свой провайдер с адресом и неизвестный id получают `bad_request` (`<id> is not an account`). Ввод, размер и
+ * отмена реестр не читают: им нужен идущий вход этого id, иначе `bad_request` (`no sign-in is running for <id>`). Вывод
+ * и выход процесса входа окно получает событиями `providers.signInOutput` и `providers.signInExit`, не ответом.
  */
 export function createAuthHandlers(auth: AuthService): {
   'providers.authStatus': Handler<'providers.authStatus'>;
@@ -27,18 +34,20 @@ export function createAuthHandlers(auth: AuthService): {
       await auth.signIn(provider);
       return { ok: true };
     },
+    // Ввод, размер и отмена не читают реестр: замок службы входа держит только аккаунт (`signingIn`), а await перед
+    // `auth.input` пустил бы два быстрых нажатия в разном порядке. Обработчик отрабатывает синхронно, как пришёл запрос.
     'providers.signInInput': async ({ provider, data }) => {
-      await accountEntry(provider);
+      requireSignIn(auth, provider);
       auth.input(provider, data);
       return { ok: true };
     },
     'providers.signInResize': async ({ provider, cols, rows }) => {
-      await accountEntry(provider);
+      requireSignIn(auth, provider);
       auth.resize(provider, cols, rows);
       return { ok: true };
     },
     'providers.cancelSignIn': async ({ provider }) => {
-      await accountEntry(provider);
+      requireSignIn(auth, provider);
       auth.cancel(provider);
       return { ok: true };
     },

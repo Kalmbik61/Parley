@@ -49,8 +49,11 @@ export interface AuthService {
   detail(id: string): string | null;
   /** Процесс входа этого аккаунта жив. */
   signingIn(id: string): boolean;
-  /** Команда статуса, не чаще раза в `minGapMs` на аккаунт (К5), иначе кэш. Не отказывает; не аккаунт — `false`. */
-  refresh(id: string): Promise<boolean>;
+  /**
+   * Команда статуса, не чаще раза в `minGapMs` на аккаунт (К5), иначе кэш. Не отказывает; не аккаунт — `false`.
+   * `force` — мимо кэша: эпизод `sign-in` у сессии говорит, что вход слетел, и 30 секунд старого `true` не нужны.
+   */
+  refresh(id: string, force?: boolean): Promise<boolean>;
   /** `refresh` для каждого аккаунта реестра: старт хоста и ручное обновление. Не отказывает. */
   refreshAll(): Promise<void>;
   /** Поднимает PTY входа; `conflict`, если вход (любого аккаунта) уже идёт. Возвращается сразу после старта процесса. */
@@ -62,6 +65,12 @@ export interface AuthService {
   cancel(id: string): void;
   /** `logout` CLI, затем свежая проверка. */
   signOut(id: string): Promise<void>;
+  /**
+   * `logout` CLI перед удалением аккаунта (спека подписок 10, решение 12): вход лежит в связке ключей под именем папки, и
+   * новый аккаунт на том же id унаследовал бы его. Не смотрит на кэш состояния (оно могло устареть или быть `null`), идущий
+   * вход этого аккаунта обрывает; не отказывает — сбой попадает в журнал по коду, удаление идёт дальше.
+   */
+  logout(id: string): Promise<void>;
   /** Аккаунт удалён: кэш забыт, идущая проверка его не запишет, идущий вход прерван. */
   forget(id: string): void;
   stop(): void;
@@ -224,11 +233,18 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
     if (running !== undefined && !force) return running;
     const cached = states.get(id);
     if (!force && cached !== undefined && now() - cached.at < minGapMs) return Promise.resolve(cached.signedIn);
+    const started = generation(id);
     const next: Promise<boolean> = (running ?? Promise.resolve(false))
       .then(() => run(id))
       .catch((error: unknown) => {
         // Команда не запустилась или не уложилась в срок: состояние прежнее, окно в 30 с не занимается — повтор сразу.
         host.log.warn('вход аккаунта: проверка состояния не удалась', { id, ...describeFailure(error) });
+        // Первая проверка не удалась: «не знаем» навсегда не оставляем — `false`, чтобы окно показало состояние и Sign in
+        // (спека подписок 10); `at` в далёком прошлом, поэтому следующая проверка не ждёт 30 с.
+        if (!stopped && started === generation(id) && !states.has(id)) {
+          states.set(id, { signedIn: false, detail: null, at: Number.NEGATIVE_INFINITY });
+          host.broadcast('providers.changed', { provider: id });
+        }
         return states.get(id)?.signedIn ?? false;
       })
       .finally(() => {
@@ -280,7 +296,7 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
     status: (id) => states.get(id)?.signedIn ?? null,
     detail: (id) => states.get(id)?.detail ?? null,
     signingIn: (id) => lock !== null && lock.id === id && lock.process !== null,
-    refresh: (id) => check(id, false),
+    refresh: (id, force = false) => check(id, force),
 
     async refreshAll() {
       try {
@@ -353,6 +369,19 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
       } finally {
         // Что бы ни случилось с `logout`, правду говорит свежая проверка.
         await check(id, true);
+      }
+    },
+
+    async logout(id) {
+      try {
+        const entry = await accountEntry(id);
+        // Идущий вход дописал бы вход в связку ключей после выхода.
+        cancel(id);
+        const { binary, cwd, env } = launchOf(entry);
+        const result = await exec(binary, authCommands(entry).logout, env, cwd);
+        if (result.code !== 0) host.log.warn('вход аккаунта: logout перед удалением вернул ошибку', { id, code: result.code });
+      } catch (error) {
+        host.log.warn('вход аккаунта: logout перед удалением не удался', { id, ...describeFailure(error) });
       }
     },
 

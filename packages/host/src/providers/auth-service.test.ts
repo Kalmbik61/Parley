@@ -267,15 +267,58 @@ describe('refresh — состояние входа по команде CLI (К5
     expect(eventsOf(events, 'providers.changed')).toEqual([{ provider: ID }]);
   });
 
-  it('команда не запустилась (exec отказал): статус прежний, refresh не отказывает, окно повторится сразу', async () => {
+  it('первая проверка не удалась (exec отказал): status false, а не «не знаем» навсегда; окно повторится сразу', async () => {
     const { exec, calls } = fakeExec(new Error('spawn ENOENT'), { stdout: SIGNED_IN });
-    const { auth, warnings } = boot({ exec });
+    const { auth, warnings, events } = boot({ exec });
     expect(await auth.refresh(ID)).toBe(false);
-    expect(auth.status(ID)).toBeNull();
+    expect(auth.status(ID)).toBe(false);
     expect(warnings).toHaveLength(1);
+    // Состояние появилось — окно перечитывает строку и показывает Sign in.
+    expect(eventsOf(events, 'providers.changed')).toEqual([{ provider: ID }]);
     // Сбой не занимает окно в 30 с: следующая проверка идёт сразу.
     expect(await auth.refresh(ID)).toBe(true);
     expect(calls).toHaveLength(2);
+    expect(auth.status(ID)).toBe(true);
+  });
+
+  it('проверка упала при известном состоянии: оно прежнее', async () => {
+    let clock = 0;
+    const { exec } = fakeExec({ stdout: SIGNED_IN }, new Error('spawn ENOENT'));
+    const { auth, events } = boot({ exec, now: () => clock });
+    expect(await auth.refresh(ID)).toBe(true);
+    events.length = 0;
+    clock += 60_000;
+    expect(await auth.refresh(ID)).toBe(true);
+    expect(auth.status(ID)).toBe(true);
+    expect(eventsOf(events, 'providers.changed')).toEqual([]);
+  });
+
+  it('упавшая проверка удалённого аккаунта (forget) состояния не пишет', async () => {
+    let fail!: (error: Error) => void;
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => (started = resolve));
+    const exec: AuthExec = () => {
+      started();
+      return new Promise((_resolve, reject) => (fail = reject));
+    };
+    const { auth } = boot({ exec });
+    const pending = auth.refresh(ID);
+    await running;
+    auth.forget(ID);
+    fail(new Error('spawn ENOENT'));
+    await pending;
+    expect(auth.status(ID)).toBeNull();
+  });
+
+  it('refresh(id, true) идёт мимо кэша 30 с', async () => {
+    const { exec, calls } = fakeExec({ stdout: SIGNED_IN }, { stdout: SIGNED_OUT });
+    const { auth } = boot({ exec, now: () => 1 });
+    expect(await auth.refresh(ID)).toBe(true);
+    expect(await auth.refresh(ID)).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(await auth.refresh(ID, true)).toBe(false);
+    expect(calls).toHaveLength(2);
+    expect(auth.status(ID)).toBe(false);
   });
 
   it('не аккаунт или удалённый id: false без команды', async () => {
@@ -607,5 +650,55 @@ describe('signOut — claude auth logout, затем проверка', () => {
     await auth.signIn(ID);
     await expect(auth.signOut(ID)).rejects.toMatchObject({ code: 'conflict' });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('logout — выход перед удалением аккаунта (решение 12)', () => {
+  it('зовёт только [auth, logout] в папке и окружении аккаунта: состояние не нужно (null), проверки после нет', async () => {
+    const { exec, calls } = fakeExec({ stdout: 'Successfully logged out' });
+    const { auth } = boot({ exec });
+    expect(auth.status(ID)).toBeNull();
+
+    await auth.logout(ID);
+
+    expect(calls.map((call) => call.args)).toEqual([['auth', 'logout']]);
+    expect(calls[0]).toMatchObject({ command: '/stub/claude', cwd: folder(ID) });
+    expect(calls[0]!.env['CLAUDE_CONFIG_DIR']).toBe(folder(ID));
+    expect(calls[0]!.env['ANTHROPIC_API_KEY']).toBeUndefined();
+    expect(auth.status(ID)).toBeNull();
+  });
+
+  it('не отказывает: команда не запустилась — журнал по коду, без stderr; ненулевой код — тоже запись', async () => {
+    const failure = Object.assign(new Error('Command failed: /stub/claude auth logout\nsecret stderr text'), { code: 2, killed: false });
+    const first = boot({ exec: fakeExec(failure).exec });
+    await expect(first.auth.logout(ID)).resolves.toBeUndefined();
+    expect(first.warnings).toHaveLength(1);
+    expect(first.fields[0]).toMatchObject({ id: ID, code: 2, killed: false });
+    expect(JSON.stringify(first.fields)).not.toContain('secret stderr text');
+
+    const second = boot({ exec: fakeExec({ code: 1, stdout: 'nope' }).exec });
+    await expect(second.auth.logout(ID)).resolves.toBeUndefined();
+    expect(second.fields[0]).toMatchObject({ id: ID, code: 1 });
+  });
+
+  it('не аккаунт — команд нет, отказа нет', async () => {
+    const { exec, calls } = fakeExec({ stdout: '' });
+    const { auth } = boot({ exec });
+    await expect(auth.logout('glm')).resolves.toBeUndefined();
+    await expect(auth.logout('custom-nothing')).resolves.toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('идущий вход этого аккаунта обрывается до выхода', async () => {
+    const { spawn, processes } = fakeSpawn();
+    const { exec, calls } = fakeExec({ stdout: '' });
+    const { auth } = boot({ exec, spawn });
+    await auth.signIn(ID);
+
+    await auth.logout(ID);
+
+    expect(processes[0]!.signals).toEqual(['SIGHUP']);
+    // Первой идёт команда выхода; проверка после выхода процесса входа (finishSignIn) приходит позже.
+    expect(calls[0]!.args).toEqual(['auth', 'logout']);
   });
 });

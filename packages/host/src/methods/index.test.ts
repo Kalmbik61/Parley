@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { RequestInfo } from '../context.js';
 import type { AssistantService } from '../assistant/assistant-service.js';
@@ -49,6 +52,37 @@ it('assistant.* регистрируются, только если сервис
   const assistant = {} as unknown as AssistantService;
   expect(createHostHandlers({ ...deps, assistant }).methods['assistant.ask']).toBeTypeOf('function');
   expect(createHostHandlers(deps).methods['assistant.ask']).toBeUndefined();
+});
+
+it('providers.deleteCustom спрашивает живые PTY хоста: папку провайдера с живой сессией не удаляют (спека подписок 10)', async () => {
+  const home = await mkdtemp(path.join(tmpdir(), 'parley-methods-'));
+  const previous = process.env['PARLEY_HOME'];
+  process.env['PARLEY_HOME'] = home;
+  try {
+    const record = {
+      kind: 'endpoint', id: 'custom-kimi', label: 'Kimi', preset: null, baseUrl: 'https://api.example.com/anthropic', auth: 'bearer',
+      models: { opus: 'm', sonnet: 'm', haiku: 'm', subagent: 'm' }, contextWindow: null, linkClaude: false,
+    };
+    await writeFile(path.join(home, 'custom-providers.json'), JSON.stringify({ version: 1, providers: [record] }));
+    await mkdir(path.join(home, 'providers', 'custom-kimi'), { recursive: true });
+    let provider: string | null = 'custom-kimi';
+    const pty = { on: () => () => {}, list: () => [{ provider: 'custom-claude-2' }, { provider }] };
+    const { deps } = fakeDeps(Promise.resolve());
+    const remove = createHostHandlers({ ...deps, pty } as unknown as MethodDeps).methods['providers.deleteCustom'] as unknown as (
+      params: { id: string; removeFolder: boolean },
+      request: unknown,
+    ) => Promise<unknown>;
+    const request = { host: { broadcast: () => {} } };
+
+    await expect(remove({ id: 'custom-kimi', removeFolder: true }, request)).rejects.toMatchObject({ code: 'conflict' });
+    // Сессия закончилась (или идёт у другого провайдера): папка удаляется.
+    provider = null;
+    await expect(remove({ id: 'custom-kimi', removeFolder: true }, request)).resolves.toEqual({ ok: true });
+  } finally {
+    if (previous === undefined) delete process.env['PARLEY_HOME'];
+    else process.env['PARLEY_HOME'] = previous;
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 it('registers the window-only project memory and history search methods', () => {

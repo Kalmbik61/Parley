@@ -60,7 +60,8 @@ async function takenIds(records: readonly CustomProviderRecord[]): Promise<Set<s
 
 /**
  * Пустое имя аккаунта хост заменяет стандартным и записывает его в файл: имена не сползают после удалений
- * (спека подписок 5.9). При правке номер считает аккаунты до записи, при создании — все, как `accountLabel`.
+ * (спека подписок 5.9). Номер имени — номер выданного slug (`custom-claude-3` → «Claude Code 3», решение 7), поэтому
+ * два аккаунта не получают одно имя; пустое имя при правке возвращает имя по id.
  */
 function accountRecordOf(params: AccountParams, id: string, records: readonly CustomProviderRecord[]): CustomAccountRecord {
   const record: CustomAccountRecord = { kind: params.kind, id, label: params.label, link: params.link };
@@ -87,7 +88,9 @@ function endpointRecordOf(params: Exclude<SaveParams, AccountParams>, id: string
  */
 export function createCustomProviderHandlers(
   customCheck?: CustomCheckService,
-  auth?: Pick<AuthService, 'refresh' | 'forget'>,
+  auth?: Pick<AuthService, 'refresh' | 'forget' | 'logout'>,
+  /** Идёт ли сейчас сессия этого провайдера (живой PTY): папку с живыми сессиями не удаляем (спека подписок 10). */
+  liveProvider?: (id: string) => boolean,
 ): {
   'providers.saveCustom': Handler<'providers.saveCustom'>;
   'providers.deleteCustom': Handler<'providers.deleteCustom'>;
@@ -141,6 +144,14 @@ export function createCustomProviderHandlers(
       const records = await readCustomProviders();
       const existing = records.find((record) => record.id === id);
       if (existing === undefined) throw new HostError('bad_request', 'Unknown custom provider');
+      // Папка с живыми сессиями не удаляется (спека подписок 10); запись без папки — как прежде, сессии дорабатывают ход.
+      if (removeFolder && liveProvider?.(id) === true) {
+        const name = isAccountRecord(existing) ? accountLabel(existing, records) : existing.label;
+        throw new HostError('conflict', `${name} has running sessions: stop them before deleting its folder`);
+      }
+      // Вход аккаунта лежит в связке ключей под именем его папки, и новый аккаунт на том же id унаследовал бы его: выход
+      // идёт до удаления записи (спека подписок 10, решение 12). Сбой выхода журналируется и удалению не мешает.
+      if (isAccountRecord(existing)) await auth?.logout(id);
       // У аккаунта подписки ключа и одобрения ключа нет (спека подписок 5.3, К12): чистить нечего.
       const hasKey = !isAccountRecord(existing);
       try {

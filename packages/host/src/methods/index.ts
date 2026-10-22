@@ -233,7 +233,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     ...(deps.glmCheck === undefined && deps.customCheck === undefined
       ? {}
       : { 'providers.check': createProvidersCheck(deps.providerVersions, deps.glmCheck, deps.customCheck) as AnyHandler }),
-    ...createCustomProviderHandlers(deps.customCheck, deps.auth),
+    ...createCustomProviderHandlers(deps.customCheck, deps.auth, (id) => deps.pty.list().some((handle) => handle.provider === id)),
     ...(deps.auth === undefined ? {} : createAuthHandlers(deps.auth)),
     'settings.get': settingsGet as AnyHandler,
     'settings.set': (async (params, request) => {

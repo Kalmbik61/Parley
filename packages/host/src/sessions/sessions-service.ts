@@ -190,9 +190,11 @@ export interface SessionsFeedOptions {
   providerVersions?: ProviderVersions;
   /**
    * Вошёл ли аккаунт подписки с этим id (служба входа, спека подписок 5.4): `true` — вошёл, `false` и `null` (не знаем) —
-   * нет. Не передан — аккаунты считаются невошедшими и запуск отказывает текстом о входе (`readyProvider`).
+   * нет. Ответ может быть обещанием: пока кэш входа пуст (старт хоста, первая проверка идёт), хост отдаёт её исход, и
+   * вошедший аккаунт не отказывает из-за «не знаем» (спека подписок 10). Не передан — аккаунты считаются невошедшими и
+   * запуск отказывает текстом о входе (`readyProvider`). Спрашивается только у аккаунтов.
    */
-  signedIn?: (id: string) => boolean | null;
+  signedIn?: (id: string) => boolean | null | Promise<boolean | null>;
   /** Injectable native limit query; production queries the runtime before spawn. */
   spawnLimits?: () => Promise<SpawnLimits | null>;
   /** Current snapshot injection for isolated tests, never a persisted default. */
@@ -445,7 +447,7 @@ export function createSessionsService(
     if (entry === undefined) throw new HostError('bad_request', `unknown provider ${provider}`);
     const readiness = await providerReadiness(entry, {
       ...(providerVersions === undefined ? {} : { probeVersion: (command) => providerVersions.fresh(command) }),
-      signedIn: feed.signedIn?.(entry.id) ?? null,
+      signedIn: entry.account === undefined ? null : ((await feed.signedIn?.(entry.id)) ?? null),
     });
     const refusal = providerReadinessError(entry, readiness);
     if (refusal !== null) throw new HostError('bad_request', refusal);

@@ -297,6 +297,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // до сессий и службы «застрял»: обе берут у неё `status`. Проверка на старте (К5) идёт в фоне, старт хоста её не ждёт.
   const authService = createAuthService(handle.context, options.auth);
   handle.context.onShutdown(async () => authService.stop());
+  // Вошёл ли аккаунт для запуска сессии и помощника: кэш службы входа, а пока он пуст (старт хоста, первая проверка ещё
+  // идёт) — исход самой проверки, общей с фоновой. Иначе вошедший аккаунт отказывал бы первые секунды после старта (спека
+  // подписок 10); упавшая проверка пишет `false`, а не оставляет «не знаем» навсегда.
+  const accountSignedIn = (id: string): boolean | Promise<boolean> => authService.status(id) ?? authService.refresh(id);
 
   // Служба «застрял» (спека застрявших 4.4): эпизоды ожидания человека — в карту, в ленту комнаты и письмом ведущему.
   // Альтернативы для письма о лимите (спека подписок 5.8) — другие вошедшие аккаунты того же CLI, подтверждённые службой
@@ -304,7 +308,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const stuckService = createStuckService(handle.context, worksService, activityService, {
     reportMs: stuckReportFromEnv(process.env),
     alternatives: (provider) => limitAlternatives(provider, { limits: limitsService, signedIn: (id) => authService.status(id) }),
-    onSignIn: (provider) => void authService.refresh(provider),
+    // Эпизод говорит, что вход слетел: кэш входа (30 с) заведомо устарел, проверка идёт мимо него.
+    onSignIn: (provider) => void authService.refresh(provider, true),
   });
   handle.context.onShutdown(async () => stuckService.stop());
 
@@ -419,7 +424,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     {
       hooks: hookServer,
       providerVersions,
-      signedIn: (id) => authService.status(id),
+      signedIn: accountSignedIn,
       codexHookCommand: codexHookCommandOnce,
       agent: {
         url: () => {
@@ -500,7 +505,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         keyPresent: key !== null,
         probeVersion: (command) => providerVersions.fresh(command),
         // Аккаунт подписки готов только со входом (спека подписок 5.5): без этого помощник отказывал бы и вошедшему.
-        signedIn: authService.status(entry.id),
+        signedIn: entry.account === undefined ? null : await accountSignedIn(entry.id),
       });
       if (readiness.needs !== null || readiness.error !== null) return providerReadinessError(entry, readiness) ?? `${entry.label} is not ready`;
       const min = ASSISTANT_MIN_VERSIONS[entry.runner.command];

@@ -9,6 +9,7 @@ import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
 import type { PtyLaunch } from '../pty/pty-process.js';
 import type { AuthExec, AuthServiceOptions, PtySpawn } from '../providers/auth-service.js';
+import { createCustomProviderHandlers } from './custom-providers.js';
 
 let host: RunningHost | undefined;
 let home: string;
@@ -31,7 +32,10 @@ afterEach(async () => {
 });
 
 /** Проверка входа, которая не отвечает: `signedIn` остаётся «не проверялось», пока тест сам не подменит службу входа. */
-const silentAuth: AuthServiceOptions = { exec: () => new Promise(() => {}) };
+const silentAuth: AuthServiceOptions = {
+  // Выход при удалении аккаунта отвечает сразу: молчащий выход держал бы очередь `serialized` всех тестов файла.
+  exec: (_command, args) => (args[1] === 'logout' ? Promise.resolve({ code: 0, stdout: '' }) : new Promise(() => {})),
+};
 
 async function boot(options: { fetch?: typeof globalThis.fetch; version?: string; auth?: AuthServiceOptions } = {}) {
   home = await tempHome();
@@ -339,8 +343,39 @@ describe('аккаунты Claude Code по RPC (спека подписок 5.1
     // Имя уцелевшего не сползло (Ruling 6), а оставшаяся папка занимает id.
     expect(await item(client, 'custom-claude-3')).toMatchObject({ label: 'Claude Code 3' });
     expect((await rpc(client, 'providers.saveCustom', account)).at(-1)?.result).toEqual({ id: 'custom-claude-4' });
+    // Имя следует за номером в id, а не за числом аккаунтов (решение 7): «3» уже занято, поэтому не «3».
+    expect(await item(client, 'custom-claude-4')).toMatchObject({ label: 'Claude Code 4' });
     await rpc(client, 'providers.deleteCustom', { id: 'custom-claude-4', removeFolder: true });
     expect(await exists(path.join(home, 'providers', 'custom-claude-4'))).toBe(false);
+  });
+
+  it('решение 7: id и имя выдаются вместе — после удалений с папкой стандартные имена не повторяются', async () => {
+    const client = await boot({ version: '2.1.306' });
+    await rpc(client, 'providers.saveCustom', account);
+    await rpc(client, 'providers.saveCustom', account);
+    await rpc(client, 'providers.deleteCustom', { id: 'custom-claude-2', removeFolder: true });
+    // Двойка свободна, живёт «Claude Code 3»: счёт «число аккаунтов + 2» дал бы новому тоже «3».
+    expect((await rpc(client, 'providers.saveCustom', account)).at(-1)?.result).toEqual({ id: 'custom-claude-2' });
+    expect(await item(client, 'custom-claude-2')).toMatchObject({ label: 'Claude Code 2' });
+    expect(await item(client, 'custom-claude-3')).toMatchObject({ label: 'Claude Code 3' });
+
+    // Живут 2, 3, 4; удалена средняя — новый занимает её место, а не получает «4» второй раз.
+    await rpc(client, 'providers.saveCustom', account);
+    await rpc(client, 'providers.deleteCustom', { id: 'custom-claude-3', removeFolder: true });
+    expect((await rpc(client, 'providers.saveCustom', account)).at(-1)?.result).toEqual({ id: 'custom-claude-3' });
+    expect(await item(client, 'custom-claude-3')).toMatchObject({ label: 'Claude Code 3' });
+    const labels = (await recordsFile()).map((record) => (record as { label: string }).label);
+    expect([...labels].sort()).toEqual(['Claude Code 2', 'Claude Code 3', 'Claude Code 4']);
+  });
+
+  it('пустое имя при правке возвращает имя по id, а своё имя в id не входит', async () => {
+    const client = await boot({ version: '2.1.306' });
+    await rpc(client, 'providers.saveCustom', account);
+    await rpc(client, 'providers.saveCustom', account);
+    await rpc(client, 'providers.saveCustom', { ...account, id: 'custom-claude-3', label: 'Work' });
+    expect(await item(client, 'custom-claude-3')).toMatchObject({ label: 'Work' });
+    await rpc(client, 'providers.saveCustom', { ...account, id: 'custom-claude-3' });
+    expect(await item(client, 'custom-claude-3')).toMatchObject({ label: 'Claude Code 3' });
   });
 });
 
@@ -438,15 +473,12 @@ describe('вход в аккаунт по RPC (спека подписок 5.5, 
     expect(processes).toHaveLength(1);
   });
 
-  it('шесть методов отказывают не аккаунту: встроенный claude, свой провайдер с адресом, неизвестный id — bad_request', async () => {
+  it('состояние, вход и выход отказывают не аккаунту: встроенный claude, свой провайдер с адресом, неизвестный id — bad_request', async () => {
     const client = await boot({ version: '2.1.306' });
     await rpc(client, 'providers.saveCustom', draft);
     const calls: Array<[string, Record<string, unknown>]> = [
       ['providers.authStatus', {}],
       ['providers.signIn', {}],
-      ['providers.signInInput', { data: 'x' }],
-      ['providers.signInResize', { cols: 80, rows: 24 }],
-      ['providers.cancelSignIn', {}],
       ['providers.signOut', {}],
     ];
     for (const provider of ['claude', 'glm', 'custom-kimi', 'custom-nothing']) {
@@ -457,17 +489,178 @@ describe('вход в аккаунт по RPC (спека подписок 5.5, 
     }
   });
 
-  it('удалённый аккаунт забыт службой: новый на том же id не наследует вход', async () => {
+  it('ввод, размер и отмена реестр не читают: без идущего входа этого id — bad_request, у не-аккаунта тоже', async () => {
+    const { spawn } = stubSpawn();
+    const client = await boot({ version: '2.1.306', auth: { exec: async () => ({ code: 1, stdout: SIGNED_OUT }), spawn } });
+    await rpc(client, 'providers.saveCustom', draft);
+    await rpc(client, 'providers.saveCustom', account);
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ['providers.signInInput', { data: 'x' }],
+      ['providers.signInResize', { cols: 80, rows: 24 }],
+      ['providers.cancelSignIn', {}],
+    ];
+    // Аккаунт есть, но вход не идёт; встроенный, свой с адресом и неизвестный id входов не имеют вовсе.
+    for (const provider of [ACCOUNT, 'claude', 'glm', 'custom-kimi', 'custom-nothing']) {
+      for (const [method, extra] of calls) {
+        const seen = await rpc(client, method, { provider, ...extra });
+        expect(seen.at(-1)?.error, `${method} ${provider}`).toMatchObject({ code: 'bad_request', message: `no sign-in is running for ${provider}` });
+      }
+    }
+  });
+
+  it('несколько вводов подряд без ожидания ответа доходят до процесса в том же порядке', async () => {
+    const { spawn, processes } = stubSpawn();
+    const client = await boot({ version: '2.1.306', auth: { exec: async () => ({ code: 1, stdout: SIGNED_OUT }), spawn } });
+    await rpc(client, 'providers.saveCustom', account);
+    await rpc(client, 'providers.signIn', { provider: ACCOUNT });
+
+    const typed = [...'the-code-from-browser\r'];
+    const ids = typed.map(() => nextId++);
+    typed.forEach((data, at) => client.send({ id: ids[at], method: 'providers.signInInput', params: { provider: ACCOUNT, data } }));
+    const pending = new Set(ids);
+    while (pending.size > 0) {
+      const message = await client.next();
+      if (typeof message.id === 'number') pending.delete(message.id);
+    }
+    expect(processes[0]?.written).toEqual(typed);
+  });
+
+  it('удалённый аккаунт забыт службой и разлогинен самим удалением: новый на том же id не наследует вход', async () => {
+    // Вход «лежит в связке ключей»: его снимает только настоящий `auth logout`, вручную статус здесь не переключается.
     let status = SIGNED_IN;
-    const exec: AuthExec = async () => ({ code: 0, stdout: status });
+    const exec: AuthExec = async (_command, args) => {
+      if (args[1] === 'logout') {
+        status = SIGNED_OUT;
+        return { code: 0, stdout: '' };
+      }
+      return { code: 0, stdout: status };
+    };
     const client = await boot({ version: '2.1.306', auth: { exec } });
     await rpc(client, 'providers.saveCustom', account);
     await vi.waitFor(async () => expect((await item(client, ACCOUNT))?.custom).toMatchObject({ signedIn: true }));
 
+    // Без предварительного Sign out.
     await rpc(client, 'providers.deleteCustom', { id: ACCOUNT, removeFolder: true });
-    status = SIGNED_OUT;
+    expect(status).toBe(SIGNED_OUT);
     expect((await rpc(client, 'providers.saveCustom', account)).at(-1)?.result).toEqual({ id: ACCOUNT });
     // Без `forget` кэш (30 с) вернул бы прежнее `true`.
     await vi.waitFor(async () => expect((await item(client, ACCOUNT))?.custom).toMatchObject({ signedIn: false }));
+  });
+
+  it('удаление аккаунта: выход идёт до удаления записи и папки, в окружении аккаунта (решение 12)', async () => {
+    const seen: Array<{ args: string[]; cwd: string; config: string | undefined; folder: boolean; records: number }> = [];
+    const exec: AuthExec = async (_command, args, env, cwd) => {
+      if (args[1] === 'logout') {
+        seen.push({ args, cwd, config: env['CLAUDE_CONFIG_DIR'], folder: await exists(cwd), records: (await recordsFile()).length });
+      }
+      return { code: 0, stdout: args[1] === 'status' ? SIGNED_IN : '' };
+    };
+    const client = await boot({ version: '2.1.306', auth: { exec } });
+    await rpc(client, 'providers.saveCustom', account);
+    const dir = path.join(home, 'providers', ACCOUNT);
+
+    expect((await rpc(client, 'providers.deleteCustom', { id: ACCOUNT, removeFolder: true })).at(-1)?.result).toEqual({ ok: true });
+
+    // На момент выхода папка и запись ещё на месте; после ответа их нет.
+    expect(seen).toEqual([{ args: ['auth', 'logout'], cwd: dir, config: dir, folder: true, records: 1 }]);
+    expect(await exists(dir)).toBe(false);
+    expect(await recordsFile()).toEqual([]);
+  });
+
+  it('упавший выход удалению не мешает; у своего провайдера с адресом выхода нет', async () => {
+    const calls: string[][] = [];
+    const exec: AuthExec = async (_command, args) => {
+      calls.push(args);
+      if (args[1] === 'logout') throw new Error('spawn ENOENT');
+      return { code: 0, stdout: SIGNED_IN };
+    };
+    const client = await boot({ version: '2.1.306', auth: { exec } });
+    await rpc(client, 'providers.saveCustom', account);
+    expect((await rpc(client, 'providers.deleteCustom', { id: ACCOUNT, removeFolder: true })).at(-1)?.result).toEqual({ ok: true });
+    expect(await item(client, ACCOUNT)).toBeUndefined();
+    expect(await exists(path.join(home, 'providers', ACCOUNT))).toBe(false);
+    expect(calls.filter((args) => args[1] === 'logout')).toHaveLength(1);
+
+    await rpc(client, 'providers.saveCustom', draft);
+    await rpc(client, 'providers.deleteCustom', { id: 'custom-kimi', removeFolder: true });
+    expect(calls.filter((args) => args[1] === 'logout')).toHaveLength(1);
+  });
+
+  it('у аккаунта нет ключа: удаление не трогает ни секреты, ни одобрение ключа в папке (спека подписок 5.3, К12)', async () => {
+    const client = await boot({ version: '2.1.306' });
+    await rpc(client, 'providers.saveCustom', account);
+    // Чужой ключ под тем же id и хвост одобрения в папке: `clearSecret` и `syncApiKeyApproval` стёрли бы оба.
+    const secrets = path.join(home, 'secrets.json');
+    await writeFile(secrets, JSON.stringify({ [`custom:${ACCOUNT}`]: { key: 'stray-key' } }));
+    const file = path.join(home, 'providers', ACCOUNT, '.claude.json');
+    const data = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+    await writeFile(file, JSON.stringify({ ...data, customApiKeyResponses: { approved: ['x'], rejected: [] } }));
+
+    expect((await rpc(client, 'providers.deleteCustom', { id: ACCOUNT, removeFolder: false })).at(-1)?.result).toEqual({ ok: true });
+
+    expect(await readFile(secrets, 'utf8')).toContain(`custom:${ACCOUNT}`);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toHaveProperty('customApiKeyResponses');
+  });
+});
+
+// Папка с живыми сессиями не удаляется (спека подписок 10): хост передаёт обработчикам, идёт ли сессия провайдера.
+describe('deleteCustom и живые сессии (спека подписок 10)', () => {
+  const request = { host: { broadcast: vi.fn() } } as never;
+  function handlers(live: (id: string) => boolean) {
+    const auth = { refresh: vi.fn(async () => true), forget: vi.fn(), logout: vi.fn(async () => {}) };
+    return { auth, remove: createCustomProviderHandlers(undefined, auth, live)['providers.deleteCustom'] };
+  }
+
+  it('аккаунт: removeFolder при живой сессии — conflict с именем; выход не зовётся, запись и папка целы', async () => {
+    const client = await boot({ version: '2.1.306' });
+    await rpc(client, 'providers.saveCustom', account);
+    const { auth, remove } = handlers((id) => id === ACCOUNT);
+    const dir = path.join(home, 'providers', ACCOUNT);
+
+    await expect(remove({ id: ACCOUNT, removeFolder: true }, request)).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'Claude Code 2 has running sessions: stop them before deleting its folder',
+    });
+    expect(auth.logout).not.toHaveBeenCalled();
+    expect(auth.forget).not.toHaveBeenCalled();
+    expect(await recordsFile()).toHaveLength(1);
+    expect(await exists(dir)).toBe(true);
+
+    // Без removeFolder запись уходит, как прежде: сессии дорабатывают ход, папка остаётся.
+    await expect(remove({ id: ACCOUNT, removeFolder: false }, request)).resolves.toEqual({ ok: true });
+    expect(auth.logout).toHaveBeenCalledWith(ACCOUNT);
+    expect(auth.forget).toHaveBeenCalledWith(ACCOUNT);
+    expect(await recordsFile()).toEqual([]);
+    expect(await exists(dir)).toBe(true);
+  });
+
+  it('аккаунт: сессий не осталось — папка удаляется', async () => {
+    const client = await boot({ version: '2.1.306' });
+    await rpc(client, 'providers.saveCustom', account);
+    let live = true;
+    const { remove } = handlers(() => live);
+    await expect(remove({ id: ACCOUNT, removeFolder: true }, request)).rejects.toMatchObject({ code: 'conflict' });
+    live = false;
+    await expect(remove({ id: ACCOUNT, removeFolder: true }, request)).resolves.toEqual({ ok: true });
+    expect(await exists(path.join(home, 'providers', ACCOUNT))).toBe(false);
+  });
+
+  it('свой провайдер с адресом: то же правило', async () => {
+    const client = await boot({ version: '2.1.306' });
+    await rpc(client, 'providers.saveCustom', draft);
+    const { auth, remove } = handlers((id) => id === 'custom-kimi');
+    const dir = path.join(home, 'providers', 'custom-kimi');
+
+    await expect(remove({ id: 'custom-kimi', removeFolder: true }, request)).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'Kimi has running sessions: stop them before deleting its folder',
+    });
+    expect(await recordsFile()).toHaveLength(1);
+    expect(await exists(dir)).toBe(true);
+
+    await expect(remove({ id: 'custom-kimi', removeFolder: false }, request)).resolves.toEqual({ ok: true });
+    expect(auth.logout).not.toHaveBeenCalled();
+    expect(await recordsFile()).toEqual([]);
+    expect(await exists(dir)).toBe(true);
   });
 });

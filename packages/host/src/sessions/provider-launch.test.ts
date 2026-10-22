@@ -39,7 +39,7 @@ const register = vi.fn(() => capability);
 function service(
   hookUrl = () => 'http://127.0.0.1:1234/hooks',
   watchClaudeRoot: (root: string) => void = () => {},
-  signedIn?: (id: string) => boolean | null,
+  signedIn?: (id: string) => boolean | null | Promise<boolean | null>,
 ) {
   const host = { log: { info() {}, warn() {}, error() {} }, broadcast: (_: string, data: unknown) => notices.push(data) } as unknown as HostContext;
   const pty = {
@@ -433,5 +433,29 @@ describe('запуск аккаунта подписки', () => {
     signed = null;
     await expect(sessions.launch(ref, 'resume')).rejects.toThrow(/is not signed in/);
     expect(launches).toHaveLength(1);
+  });
+  it('состояние входа неизвестно (null): запуск ждёт проверку — вошёл запускается, не вошёл отказывает (спека подписок 10)', async () => {
+    // Так хост склеивает кэш службы входа и проверку: `status ?? refresh` (host.ts, `accountSignedIn`).
+    const status = (): boolean | null => null;
+    const refresh = vi.fn(async () => true);
+    await service(undefined, undefined, () => status() ?? refresh()).create(accountInput());
+    // Готовность проверяется при создании и при запуске, поэтому не один раз: в хосте оба вопроса делят кэш службы входа.
+    expect(refresh).toHaveBeenCalled();
+    expect(launches).toHaveLength(1);
+
+    const refused = vi.fn(async () => false);
+    const before = await readMap(project, workId);
+    await expect(service(undefined, undefined, () => status() ?? refused()).create(accountInput())).rejects.toThrow(/is not signed in/);
+    expect(refused).toHaveBeenCalled();
+    expect(launches).toHaveLength(1);
+    expect(await readMap(project, workId)).toEqual(before);
+  });
+  it('вход спрашивается только у аккаунтов: запуск провайдера с ключом службу входа не зовёт', async () => {
+    await writeSecret('zai', 'fake-key');
+    version = '2.1.304';
+    const asked = vi.fn((): boolean | null => null);
+    await service(undefined, undefined, asked).create(input());
+    expect(launches).toHaveLength(1);
+    expect(asked).not.toHaveBeenCalled();
   });
 });
