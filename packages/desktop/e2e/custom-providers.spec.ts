@@ -133,8 +133,8 @@ test.describe('свои провайдеры на изолированном Cla
     window.on('pageerror', (error) => errors.push(error.message));
     await resize(app, 1400, 900);
     await expect(window.getByTestId('landing')).toBeVisible();
-    // Версия стаба 2.1.303 - не ниже минимальной для своих провайдеров (2.1.302).
-    await expect(segment(window, 'claude')).toContainText('2.1.303');
+    // Версия стаба 2.1.304 - не ниже минимальной для своих провайдеров (2.1.302) и для аккаунтов подписки (2.1.304).
+    await expect(segment(window, 'claude')).toContainText('2.1.304');
     return { app, window };
   }
   async function openAdd(window: Page): Promise<Locator> {
