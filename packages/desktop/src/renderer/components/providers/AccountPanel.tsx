@@ -226,8 +226,9 @@ export function AccountPanel({ provider, onSaved, onDeleted }: AccountPanelProps
           <span data-account-state={state.key} className="font-medium">
             {state.text}
           </span>
+          {/* Длинные значения при 800×500 (спека подписок 10): почта без мест переноса не должна раздвигать панель. */}
           {signedIn === true && !signingIn && detail !== null ? (
-            <span data-account-detail="" className="text-muted-foreground">
+            <span data-account-detail="" className="min-w-0 break-all text-muted-foreground">
               {detail}
             </span>
           ) : null}
