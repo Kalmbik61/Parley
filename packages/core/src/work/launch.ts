@@ -21,13 +21,14 @@ import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type N
 import { claudeProjectRoots } from '../discover.js';
 import { isServiceText, type SessionIndex } from '../session-index.js';
 import { bothEnv } from '../names.js';
-import { userClaudeConfigDir } from '../custom-provider-dir.js';
+import { userClaudeConfigDir, wantLinks } from '../custom-provider-dir.js';
 import {
   EFFORT_TOKEN,
   loadProviders,
   providerCompatibilityError,
   isClaudeCode,
   claudeConfigDirFor,
+  managedRecord,
   resumeCommand,
   startCommand,
   type EffortLevel,
@@ -431,7 +432,9 @@ async function plan(
       : '';
     // Спека своих провайдеров, 5.8: Write/Edit Claude Code сам отправляет агента по настоящему пути ссылки,
     // поэтому сессии с подтянутым общим — правило с её папкой; приходит при каждом запуске и возобновлении.
-    const links = entry.custom?.linkClaude === true && entry.runner.configDir !== undefined
+    // Спека подписок 6: подтянутое общее — это `wantLinks` записи окна, а не только `linkClaude` своего провайдера.
+    const managed = managedRecord(entry);
+    const links = managed !== undefined && wantLinks(managed) && entry.runner.configDir !== undefined
       ? linkedSettingsRule(entry.runner.configDir, userClaudeConfigDir())
       : '';
     // Плейбук рецепта — только ведущему комнаты и только по карте: поля `options.layer` его не задают.

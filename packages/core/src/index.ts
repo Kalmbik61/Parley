@@ -142,6 +142,7 @@ export {
   syncApiKeyApproval,
   userClaudeConfigDir,
   userClaudeJsonPath,
+  wantLinks,
 } from './custom-provider-dir.js';
 export type { PrepareOptions as PrepareCustomProviderOptions } from './custom-provider-dir.js';
 export { CLAUDE_EFFORTS, LEGACY_EFFORTS, effortLabel } from './provider-models.js';

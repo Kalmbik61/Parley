@@ -12,6 +12,7 @@ import {
   syncApiKeyApproval,
   userClaudeConfigDir,
   userClaudeJsonPath,
+  wantLinks,
 } from './custom-provider-dir.js';
 
 const record: CustomProviderRecord = {
@@ -267,6 +268,53 @@ describe('prepareCustomProviderDir', () => {
   it('неверный id — отказ, ничего не создано', async () => {
     await expect(prepare({ ...record, id: 'custom-../x' })).rejects.toThrow();
     expect(await exists(path.join(home, 'providers'))).toBe(false);
+  });
+});
+
+describe('аккаунт подписки: папка и ссылки по его link (спека подписок 5.4, 6)', () => {
+  const account: CustomProviderRecord = { kind: 'claude-account', id: 'custom-acc', label: '', link: true };
+  const accountDir = (): string => path.join(home, 'providers', account.id);
+
+  it('wantLinks: у своего провайдера — linkClaude, у аккаунта — link', () => {
+    expect(wantLinks(record)).toBe(true);
+    expect(wantLinks({ ...record, linkClaude: false })).toBe(false);
+    expect(wantLinks(account)).toBe(true);
+    expect(wantLinks({ ...account, link: false })).toBe(false);
+  });
+
+  it('link: ссылки CLAUDE.md, skills/*, agents/*; .claude.json засеян, settings.json не подтягивается', async () => {
+    await prepare(account);
+    const target = accountDir();
+    expect((await lstat(target)).isDirectory()).toBe(true);
+    expect((await json(path.join(target, '.claude.json')))['hasCompletedOnboarding']).toBe(true);
+    expect((await lstat(path.join(target, 'skills'))).isSymbolicLink()).toBe(false);
+    expect(await readlink(path.join(target, 'skills', 'x'))).toBe(path.join(claudeDir, 'skills', 'x'));
+    expect(await readlink(path.join(target, 'agents', 'a.md'))).toBe(path.join(claudeDir, 'agents', 'a.md'));
+    expect(await readlink(path.join(target, 'CLAUDE.md'))).toBe(path.join(claudeDir, 'CLAUDE.md'));
+    expect(await exists(path.join(target, 'settings.json'))).toBe(false);
+  });
+
+  it('без link: папка, projects/ и .claude.json есть, ссылок нет', async () => {
+    await prepare({ ...account, link: false });
+    const target = accountDir();
+    expect((await lstat(target)).isDirectory()).toBe(true);
+    expect((await lstat(path.join(target, 'projects'))).isDirectory()).toBe(true);
+    expect((await json(path.join(target, '.claude.json')))['hasCompletedOnboarding']).toBe(true);
+    expect(await exists(path.join(target, 'CLAUDE.md'))).toBe(false);
+    expect(await exists(path.join(target, 'skills'))).toBe(false);
+    expect(await exists(path.join(target, 'agents'))).toBe(false);
+  });
+
+  it('link выключили — ссылки убраны, копия навыка в папке аккаунта не тронута', async () => {
+    await prepare(account);
+    const target = accountDir();
+    await rm(path.join(target, 'skills', 'x'));
+    await mkdir(path.join(target, 'skills', 'x'));
+    await writeFile(path.join(target, 'skills', 'x', 'SKILL.md'), 'copy');
+    await prepare({ ...account, link: false });
+    expect(await exists(path.join(target, 'CLAUDE.md'))).toBe(false);
+    expect(await exists(path.join(target, 'agents', 'a.md'))).toBe(false);
+    expect(await readFile(path.join(target, 'skills', 'x', 'SKILL.md'), 'utf8')).toBe('copy');
   });
 });
 

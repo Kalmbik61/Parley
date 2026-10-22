@@ -2660,4 +2660,29 @@ describe('предостережение о ссылках своего пров
       expect(plan.args.join('\n')).not.toContain('settings folder is');
     }
   });
+
+  // Спека подписок 6: аккаунт Claude Code с `link` получает то же правило со своей папкой, что и свой провайдер с `linkClaude`.
+  const account: CustomProviderRecord = { kind: 'claude-account', id: 'custom-acc', label: '', link: true };
+  const withAccount = async (record: CustomProviderRecord) => {
+    await writeCustomProviders([record], customProvidersFile());
+    const { workId, sessionId } = await pending(record.id);
+    return { workId, session: await sessionOf(workId, sessionId) };
+  };
+
+  it('сессия аккаунта с link: правило со своей папкой при запуске, новом запуске и resume', async () => {
+    const { workId, session } = await withAccount(account);
+    const dir = path.join(home, 'providers', 'custom-acc');
+    const launch = await planLaunch(project, workId, session);
+    expect(layerOf(launch.args)).toContain(`settings folder is ${dir}, not ~/.claude`);
+    const fresh = await planNew(project, workId, session);
+    expect(layerOf(fresh.args)).toContain(`settings folder is ${dir}, not ~/.claude`);
+    await claudeTranscript(session.id);
+    const resumed = await planResume(project, workId, { ...session, providerSessionId: session.id });
+    expect(layerOf(resumed.args)).toContain(`settings folder is ${dir}, not ~/.claude`);
+  });
+
+  it('сессия аккаунта без link — правила нет', async () => {
+    const { workId, session } = await withAccount({ ...account, link: false });
+    expect(layerOf((await planLaunch(project, workId, session)).args)).not.toContain('settings folder is');
+  });
 });
