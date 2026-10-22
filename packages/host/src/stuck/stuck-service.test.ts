@@ -23,6 +23,9 @@ import {
   type LimitAlternative,
   type Message,
   type NeedKind,
+  type ProviderEntry,
+  type ProviderLimits,
+  type ProviderReadiness,
   type SessionNeed,
   type WorkMap,
   type WorkSession,
@@ -31,6 +34,7 @@ import type { SessionRef } from '@parley/protocol';
 import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import type { WorksService } from '../works/works-service.js';
+import { limitAlternatives } from './limit-alternatives.js';
 import { createStuckService, stuckReportFromEnv } from './stuck-service.js';
 import type { StuckServiceOptions } from './stuck-service.js';
 
@@ -421,6 +425,71 @@ describe('служба «застрял» — доклад (спека заст�
     expect(letter).toContain('hit its Claude Code X usage limit');
     expect(letter).toContain('Other Claude Code accounts in Parley right now: Claude Code — no limits known.');
     expect(letter).not.toContain('Other Claude Code X accounts');
+  });
+
+  it('лимит у claude: письмо ведущему называет вошедший аккаунт с лимитами недели (спека подписок 5.8)', async () => {
+    await writeFile(
+      path.join(home, 'custom-providers.json'),
+      JSON.stringify({ version: 1, providers: [{ kind: 'claude-account', id: 'custom-claude-2', label: 'Claude Code 2', link: false }] }),
+    );
+    const [lead, worker] = await makeWork((map, [a, b]) => inRoom(a, b)(map));
+    const week: ProviderLimits = {
+      fiveHour: null,
+      week: { usedPercent: 31, resetsAt: '2026-10-26T07:00:00.000Z' },
+      at: START,
+    };
+    boot({
+      alternatives: (provider) =>
+        limitAlternatives(provider, {
+          limits: { get: (id) => (id === 'custom-claude-2' ? week : null) },
+          signedIn: (id) => id === 'custom-claude-2',
+          // Без поиска `claude` в PATH; у `glm` в тестовом доме нет ключа Z.ai.
+          readiness: async (entry: ProviderEntry): Promise<ProviderReadiness> => ({
+            needs: entry.id === 'glm' ? 'key' : null,
+            error: null,
+            version: null,
+          }),
+        }),
+    });
+    await emit(worker, needOf('limit'));
+    await until(async () => (await stuckOf(worker)) != null);
+    const letter = letters(await readMap(project, workId))[0];
+    expect(letter?.to).toEqual([lead]);
+    expect(letter?.text).toContain('Other Claude Code accounts in Parley right now: Claude Code 2 (weekly 31 % used');
+    expect(letter?.text).toContain('create_session (provider: "custom-claude-2")');
+  });
+
+  it('лимит у аккаунта: письмо называет глобальный Claude Code, если он готов; не вошедший аккаунт — нет (решение 8)', async () => {
+    await writeFile(
+      path.join(home, 'custom-providers.json'),
+      JSON.stringify({
+        version: 1,
+        providers: [
+          { kind: 'claude-account', id: 'custom-claude-2', label: 'Claude Code 2', link: false },
+          { kind: 'claude-account', id: 'custom-claude-3', label: 'Claude Code 3', link: false },
+        ],
+      }),
+    );
+    const [, worker] = await makeWork((map, [a, b]) => inRoom(a, b)(map), 'custom-claude-2');
+    boot({
+      alternatives: (provider) =>
+        limitAlternatives(provider, {
+          limits: { get: () => null },
+          // Служба входа знает только аккаунты; третий не вошёл, а у `claude` для неё состояния нет (null).
+          signedIn: (id) => (id === 'custom-claude-3' ? false : null),
+          readiness: async (entry: ProviderEntry): Promise<ProviderReadiness> => ({
+            needs: entry.id === 'glm' ? 'key' : null,
+            error: null,
+            version: null,
+          }),
+        }),
+    });
+    await emit(worker, needOf('limit'));
+    await until(async () => (await stuckOf(worker)) != null);
+    const text = letters(await readMap(project, workId))[0]?.text ?? '';
+    expect(text).toContain('Other Claude Code accounts in Parley right now: Claude Code — no limits known.');
+    expect(text).toContain('create_session (provider: "claude")');
+    expect(text).not.toContain('Claude Code 3');
   });
 
   it('Codex: заголовок письма о лимите — «Other Codex accounts»', async () => {
