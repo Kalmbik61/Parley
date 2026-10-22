@@ -231,7 +231,7 @@ test.describe('переход по уведомлению и «просмотр�
     ).toHaveCount(1, { timeout: 5_000 });
     await hookEvent(second.workId, sessionId, { hook_event_name: 'Stop' });
 
-    const expected = { title: 'e2e-notify · S01 one — finished', body: '', silent: false };
+    const expected = { title: 'e2e-notify · S01 one — finished', body: '', silent: true };
     await expect.poll(() => loggedNotes(electronApp), { timeout: 5_000 }).toContainEqual(expected);
     // Уведомление одно, пачки нет.
     expect((await loggedNotes(electronApp)).filter((note) => note.title === expected.title)).toHaveLength(1);

@@ -6,11 +6,15 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
+import { useProvidersStore, type ProviderInfo } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { AgentIcon } from './AgentIcon.js';
 
 beforeEach(() => useUiStore.setState({ dark: false }));
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useProvidersStore.setState({ providers: [] });
+});
 
 const imageOf = (container: HTMLElement): HTMLImageElement | null => container.querySelector('img');
 
@@ -109,5 +113,41 @@ describe('AgentIcon — свои провайдеры (спека 3.7)', () => {
   it('удалённый custom-id (нет в сторе) — всё равно значок Parley', () => {
     const { container } = render(<AgentIcon provider="custom-gone-1" size={20} />);
     expect(imageOf(container)?.getAttribute('src')).toMatch(/parley\.svg$/);
+  });
+});
+
+// Аккаунт подписки (спека подписок 5.9): значок по семейству CLI из `providers.list`, а не по id. Своё место с адресом
+// (`endpoint`) остаётся со значком Parley, хотя тоже запускается через `claude` и тоже несёт `family: 'claude'`.
+describe('AgentIcon — аккаунты подписки (спека подписок 5.9)', () => {
+  const row = (id: string, custom: Record<string, unknown>, family: 'claude' | null = 'claude'): ProviderInfo =>
+    ({ id, label: id, available: true, family, version: null, limits: null, custom }) as ProviderInfo;
+  const account = { kind: 'claude-account', link: true, folder: '/x', signedIn: true, signingIn: false };
+  const endpoint = { preset: null, baseUrl: 'https://a.example.com', auth: 'bearer', models: {}, contextWindow: null, linkClaude: true, folder: '/x' };
+
+  it('custom-claude-2 с family claude — значок Claude', () => {
+    useProvidersStore.setState({ providers: [row('custom-claude-2', account)] });
+    const { container } = render(<AgentIcon provider="custom-claude-2" />);
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/claude\.svg$/);
+  });
+
+  it('свой провайдер с адресом (в том числе без kind у хоста до подписок) — значок Parley', () => {
+    useProvidersStore.setState({ providers: [row('custom-kimi', endpoint), row('custom-glm2', { ...endpoint, kind: 'endpoint' })] });
+    const kimi = render(<AgentIcon provider="custom-kimi" />);
+    expect(imageOf(kimi.container)?.getAttribute('src')).toMatch(/parley\.svg$/);
+    kimi.unmount();
+    const other = render(<AgentIcon provider="custom-glm2" />);
+    expect(imageOf(other.container)?.getAttribute('src')).toMatch(/parley\.svg$/);
+  });
+
+  it('custom-* без записи в сторе — значок Parley, как раньше', () => {
+    const { container } = render(<AgentIcon provider="custom-claude-2" />);
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/parley\.svg$/);
+  });
+
+  it('значок следует за стором на лету: запись появилась — значок сменился', () => {
+    const { container } = render(<AgentIcon provider="custom-claude-2" />);
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/parley\.svg$/);
+    act(() => useProvidersStore.setState({ providers: [row('custom-claude-2', account)] }));
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/claude\.svg$/);
   });
 });

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionActivity } from './activity.js';
 import { oneLine } from '../counters.js';
-import { deliveryAction, isPointerText, pointerText } from './delivery.js';
+import { deliveryAction, isPointerText, LIMIT_RETURN_TEXT, limitReturnText, pointerText } from './delivery.js';
+import type { SessionNeed } from './stuck.js';
 import type { Message, Room, WorkSession } from './types.js';
 
 const sessionOf = (patch: Partial<WorkSession> = {}): WorkSession => ({
@@ -55,6 +56,7 @@ const activityOf = (
   lastEventAt: null,
   source: 'hooks',
   hooksMissing: false,
+  need: null,
   ...patch,
 });
 
@@ -199,6 +201,48 @@ describe('isPointerText', () => {
   });
 });
 
+describe('limitReturnText — возврат после сброса лимита (спека «Застрявшие сессии», 6.3)', () => {
+  const rooms = [roomOf('r-01', 'Second'), roomOf('r-02', 'Ревью «схемы»')];
+
+  it('без писем — одна просьба продолжить, байт в байт', () => {
+    expect(LIMIT_RETURN_TEXT).toBe(
+      'Your usage limit has reset. Read your inbox first, then continue the task the limit interrupted.',
+    );
+    expect(limitReturnText([], rooms)).toBe(LIMIT_RETURN_TEXT);
+  });
+
+  it('с письмами — через пробел указатель на них', () => {
+    const letters = [messageOf({ id: 'm-01', roomId: 'r-01' }), messageOf({ id: 'm-02', roomId: 'r-01' })];
+    expect(limitReturnText(letters, rooms)).toBe(`${LIMIT_RETURN_TEXT} ${pointerText(letters, rooms)}`);
+    expect(limitReturnText([messageOf()], rooms)).toBe(`${LIMIT_RETURN_TEXT} New messages (1). Call check_inbox.`);
+  });
+
+  it('isPointerText узнаёт возврат — и обрезанный oneLine, и с длинным названием комнаты', () => {
+    const long = [roomOf('r-01', 'очень длинное название '.repeat(10))];
+    for (const text of [
+      limitReturnText([], rooms),
+      limitReturnText([messageOf()], rooms),
+      limitReturnText([messageOf({ roomId: 'r-02' }), messageOf({ id: 'm-02' })], rooms),
+      limitReturnText([messageOf({ roomId: 'r-01' })], long),
+    ]) {
+      expect(isPointerText(text), text).toBe(true);
+      expect(isPointerText(oneLine(text)), text).toBe(true);
+    }
+    expect(oneLine(limitReturnText([messageOf({ roomId: 'r-01' })], long)).endsWith('…')).toBe(true);
+  });
+
+  it('чужое после просьбы или вместо указателя — не указатель', () => {
+    for (const text of [
+      `${LIMIT_RETURN_TEXT} А потом почини парсер`,
+      `${LIMIT_RETURN_TEXT} New messages (1). Call check_inbox. А потом почини парсер`,
+      `Проверь: ${LIMIT_RETURN_TEXT}`,
+      'Your usage limit has reset.',
+    ]) {
+      expect(isPointerText(text), text).toBe(false);
+    }
+  });
+});
+
 describe('deliveryAction', () => {
   const base: Parameters<typeof deliveryAction>[0] = {
     session: sessionOf(),
@@ -309,6 +353,92 @@ describe('deliveryAction', () => {
     expect(
       deliveryAction({ ...base, hooked: false, session: sessionOf({ lifecycle: 'sleeping' }), activity: null }).kind,
     ).toBe('resume');
+  });
+
+  describe('need — сессия ждёт человека или сброса лимита (спека «Застрявшие сессии», 6.1)', () => {
+    const needOf = (kind: SessionNeed['kind'], patch: Partial<SessionNeed> = {}): SessionNeed => ({
+      kind,
+      since: '2026-10-12T10:00:00.000Z',
+      detail: null,
+      resetsAt: null,
+      window: null,
+      account: null,
+      ...patch,
+    });
+    const limit = needOf('limit', {
+      detail: "You've hit your limit",
+      resetsAt: '2026-10-12T19:27:00.000Z',
+      window: 'session',
+    });
+    const stuck = { kind: 'none', reason: 'stuck' } as const;
+
+    it('unseen и idle с need limit и письмом — none(stuck); тот же снимок без need — указатель', () => {
+      for (const state of ['unseen', 'idle'] as const) {
+        expect(deliveryAction({ ...base, activity: activityOf(state, { need: limit }) }), state).toEqual(stuck);
+        expect(deliveryAction({ ...base, activity: activityOf(state, { need: null }) }), state).toEqual({
+          kind: 'type-pointer',
+          text: 'New messages (1). Call check_inbox.',
+          letterIds: ['m-01'],
+        });
+      }
+    });
+
+    it('любой вид need держит письма: одобрение и вопрос у blocked раньше были busy, экран старта — no-hooks', () => {
+      for (const kind of ['approval', 'question'] as const) {
+        expect(deliveryAction({ ...base, activity: activityOf('blocked', { need: needOf(kind) }) }), kind).toEqual(stuck);
+      }
+      // Экран старта: хуков с запуска ещё нет, но «застрял» точнее, чем «нет хуков».
+      expect(
+        deliveryAction({ ...base, hooked: false, activity: activityOf('blocked', { need: needOf('startup') }) }),
+      ).toEqual(stuck);
+      expect(
+        deliveryAction({ ...base, activity: activityOf('idle', { need: needOf('sign-in', { account: 'auth' }) }) }),
+      ).toEqual(stuck);
+    });
+
+    it('need — только у живой сессии: пауза, закрытая, pending и отсутствие писем отвечают по-прежнему, черновик и указатель в полёте уступают ему', () => {
+      const waiting = { ...base, activity: activityOf('unseen', { need: limit }) };
+
+      expect(deliveryAction({ ...waiting, paused: true })).toEqual({ kind: 'none', reason: 'paused' });
+      expect(deliveryAction({ ...waiting, session: sessionOf({ lifecycle: 'closed' }) })).toEqual({
+        kind: 'none',
+        reason: 'closed',
+      });
+      expect(deliveryAction({ ...waiting, unread: [] })).toEqual({ kind: 'none', reason: 'no-letters' });
+      expect(deliveryAction({ ...waiting, session: sessionOf({ lifecycle: 'pending' }) })).toEqual({
+        kind: 'none',
+        reason: 'not-live',
+      });
+
+      expect(deliveryAction({ ...waiting, hasDraft: true })).toEqual(stuck);
+      expect(deliveryAction({ ...waiting, inFlight: true })).toEqual(stuck);
+    });
+
+    it('указатель на все письма уже напечатан, а сессия застряла — none(stuck), а не already-pointed; без need — как раньше', () => {
+      // Человек должен видеть, что сессия застряла, и когда указатель был напечатан ещё до этого.
+      const pointed = new Set(['m-01']);
+
+      expect(deliveryAction({ ...base, pointed, activity: activityOf('unseen', { need: limit }) })).toEqual(stuck);
+      expect(deliveryAction({ ...base, pointed, activity: activityOf('unseen', { need: null }) })).toEqual({
+        kind: 'none',
+        reason: 'already-pointed',
+      });
+    });
+
+    it('спящую need не держит: пришёл старый снимок — письмо по-прежнему поднимает её, сверх лимита — resume-limit', () => {
+      const sleeping = sessionOf({ lifecycle: 'sleeping' });
+      const old = activityOf('unseen', { need: limit });
+
+      expect(deliveryAction({ ...base, session: sleeping, activity: old })).toEqual({
+        kind: 'resume',
+        text: 'New messages (1). Call check_inbox.',
+        letterIds: ['m-01'],
+      });
+      expect(deliveryAction({ ...base, session: sleeping, activity: old, resumeAllowed: false })).toEqual({
+        kind: 'none',
+        reason: 'resume-limit',
+      });
+    });
   });
 
   describe('queueWhileBusy — Codex принимает письмо занятому агенту в очередь (Tab)', () => {

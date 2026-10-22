@@ -25,15 +25,16 @@
  * он остаётся текстом), если он лежит в этой же комнате, и пометку «оригинала нет», если нет.
  */
 
-import type { Message, MessageKind, MessageVia, SessionLifecycle, WorkEntry, WorkMap, RoomMode, RoomPlan } from '@parley/core';
+import type { Message, MessageKind, MessageVia, SessionLifecycle, SessionNeed, WorkEntry, WorkMap, RoomMode, RoomPlan } from '@parley/core';
 import { planSummary, type AgentPlan } from '@parley/core/agent-plan';
-import { dotState, liveStatus, stateWord, type DotState } from '@parley/core/session-state';
+import { sessionDotStateWithNeed, stateWord, type DotState } from '@parley/core/session-state';
 import { refKey, type LiveTask, type MailWait } from '@parley/protocol';
 import { S, providerName } from '../../../shared/strings.js';
 import {
   isHumanMention,
   isHumanUnread,
   sessionAttention,
+  sessionNeed,
   type Attention,
 } from '../../attention/derive.js';
 import { DECISIONS_SHOWN, recipientsOf } from '../../lib/mail-view.js';
@@ -74,6 +75,11 @@ export interface ParticipantModel {
   lifecycle: SessionLifecycle;
   /** Слово состояния: `working`, `needs you`… */
   word: string;
+  /**
+   * Чего живая сессия ждёт от человека (`SessionActivity.need`, спека застрявших 7.3); `null` — ничего, а у спящей и
+   * закрытой всегда. Слово причины вместо `word` рисует лента участников: ей нужно «сейчас» для времени сброса.
+   */
+  need: SessionNeed | null;
   /** Подкраска карточки: `needs-you` — `accent-200`, `unseen` — `accent-2-200`. */
   attention: Attention;
   task: string;
@@ -151,7 +157,7 @@ export interface MessageModel {
    */
   delivery: {
     picked: Array<{ tag: string; at: string }>;
-    waiting: Array<{ tag: string; reason: MailWait | null }>;
+    waiting: Array<{ tag: string; reason: MailWait | null; need?: SessionNeed }>;
   };
   /** Цитата, если сообщение — ответ (`Message.replyTo`); `null` — не ответ. */
   reply: ReplyModel | null;
@@ -279,7 +285,9 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
     if (session === undefined) continue;
     const liveEntry = liveOf(id);
     const live = liveEntry?.activity ?? null;
-    const state = dotState(liveStatus(session), live?.activity ?? null);
+    // Точка участника с `need` — `blocked`, даже когда ход закончен (лимит и вход оставляют `unseen`/`idle`), как у строки сессии.
+    const need = sessionNeed(session, live);
+    const state = sessionDotStateWithNeed(session, live?.activity ?? null, need);
     const providerDisplay = providerName(session.provider, providers.find((entryProvider) => entryProvider.id === session.provider)?.label ?? session.provider);
     const model = modelName(liveEntry?.metrics?.model ?? null);
     // Хост прежней версии полей не присылает — тогда участник ничем особым не занят.
@@ -311,6 +319,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       state,
       lifecycle: session.lifecycle,
       word: stateWord(state, session.lifecycle),
+      need,
       attention: sessionAttention(session, live),
       task: session.task,
       plan,
@@ -370,7 +379,16 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       // Забравший остаётся в строке и после закрытия сессии: это запись о том, что было. Ждать же закрытую
       // незачем — она письмо уже не заберёт.
       if (pickedAt !== undefined) delivery.picked.push({ tag: sessionTag(id), at: pickedAt });
-      else if (isAlive(map, id)) delivery.waiting.push({ tag: sessionTag(id), reason: liveOf(id)?.metrics?.mailWaiting ?? null });
+      else if (isAlive(map, id)) {
+        // `need` — причина `stuck` для строки доставки (7.3); спящей и ожидающей запуска его нет.
+        const session = map.sessions.find((candidate) => candidate.id === id);
+        const need = session === undefined ? null : sessionNeed(session, liveOf(id)?.activity ?? null);
+        delivery.waiting.push({
+          tag: sessionTag(id),
+          reason: liveOf(id)?.metrics?.mailWaiting ?? null,
+          ...(need === null ? {} : { need }),
+        });
+      }
     }
     return delivery;
   };

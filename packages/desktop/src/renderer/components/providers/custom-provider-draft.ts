@@ -3,7 +3,16 @@
  * превращение в параметры `providers.saveCustom`. Ключ в параметры не входит — он уходит отдельно `providers.setKey`.
  */
 
-import type { CustomProviderAuth, CustomProviderInfo, CustomProviderModels, Params } from '@parley/protocol';
+import { CUSTOM_PROVIDER_PREFIX } from '@parley/protocol';
+import type {
+  CustomAccountInfo,
+  CustomEndpointInfo,
+  CustomProviderAuth,
+  CustomProviderInfo,
+  CustomProviderKind,
+  CustomProviderModels,
+  Params,
+} from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
 import type { CustomPreset, CustomPresetEndpoint } from './custom-presets.js';
 
@@ -45,8 +54,45 @@ export function draftFromPreset(preset: CustomPreset | null, endpoint: CustomPre
   };
 }
 
-export function draftFromProvider(item: { id: string; label: string; custom: CustomProviderInfo }): CustomProviderDraft {
+/**
+ * Вид записи в `providers.list.custom` (спека подписок 5.1, 5.9): нет записи — `null`; хост до подписок вида не отдаёт,
+ * и запись без `kind` читается как `endpoint`. Поля адреса и моделей окно читает только после такой проверки.
+ */
+export function kindOf(custom: CustomProviderInfo | null | undefined): CustomProviderKind | null {
+  if (custom == null) return null;
+  return custom.kind ?? 'endpoint';
+}
+
+function isEndpointInfo(custom: CustomProviderInfo): custom is CustomEndpointInfo {
+  return kindOf(custom) === 'endpoint';
+}
+
+function isAccountInfo(custom: CustomProviderInfo): custom is CustomAccountInfo {
+  const kind = kindOf(custom);
+  return kind === 'claude-account' || kind === 'codex-account';
+}
+
+/** Запись аккаунта подписки или `null` (нет записи или запись с адресом): так окно читает поля `signedIn`, `signingIn`, `link`. */
+export function accountOf(custom: CustomProviderInfo | null | undefined): CustomAccountInfo | null {
+  return custom != null && isAccountInfo(custom) ? custom : null;
+}
+
+/**
+ * Номер стандартного имени нового аккаунта Claude Code: первый свободный среди известных окну id `custom-claude-N`, с
+ * двойки — как slug, который выдаст хост (спека подписок 5.1, решение 7: имя следует за slug). Оставшуюся папку удалённого
+ * аккаунта или забытый ключ окно не видит, а хост видит и сдвигает номер: поле имени только подсказка, имя пишет хост.
+ */
+export function nextAccountNumber(ids: readonly string[]): number {
+  const taken = new Set(ids);
+  let n = 2;
+  while (taken.has(`${CUSTOM_PROVIDER_PREFIX}claude-${n}`)) n += 1;
+  return n;
+}
+
+/** Черновик записи с адресом; у аккаунта подписки нет ни адреса, ни моделей — `null` (его форма `AccountPanel`). */
+export function draftFromProvider(item: { id: string; label: string; custom: CustomProviderInfo }): CustomProviderDraft | null {
   const { custom } = item;
+  if (!isEndpointInfo(custom)) return null;
   const { opus, sonnet, haiku, subagent } = custom.models;
   return {
     id: item.id,

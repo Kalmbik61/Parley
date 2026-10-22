@@ -13,6 +13,9 @@
 //     STUB_WORK       — ход: заголовок со спиннером, пока не придёт STUB_READY или STUB_NOTE
 //     STUB_READY      — конец хода: `Ready`
 //     STUB_APPROVAL   — вопрос человеку: OSC 9 `Approval requested: …` и заголовок Action Required
+//     STUB_LIMIT [текст] — лимит подписки (спека застрявших, 3.3 и 9): ход кончается ошибкой — в журнале треда
+//                       `task_complete` с `error: { message, codex_error_info: 'usage_limit_exceeded' }` (нужен
+//                       STUB_CODEX_SESSIONS), заголовок `Ready`, как у Codex; без текста — сообщение без времени сброса
 //     STUB_NOTE <текст> — уведомление OSC 9 с этим текстом; спиннер молча замолкает, заголовок `Ready` не
 //                       пишется. `STUB_NOTE Agent turn complete` — конец хода, как его видит хост без
 //                       подмены `notify` (спека 2026-10-07, 5.5)
@@ -275,6 +278,13 @@ function submit(text, key) {
     stopSpinner();
     out('\x1b]9;Approval requested: ls -la\x07');
     title(`[ ! ] Action Required | ${THREAD}`);
+  } else if (text === 'STUB_LIMIT' || text.startsWith('STUB_LIMIT ')) {
+    // Лимит подписки: Codex кончает ход ошибкой и сразу пишет заголовок `Ready` — хост находит лимит по журналу треда.
+    const message = text.slice('STUB_LIMIT'.length).trim() || "You've hit your usage limit. Try again later.";
+    ensureTurn();
+    endTurn('task_complete', { error: { message, codex_error_info: 'usage_limit_exceeded' }, duration_ms: 1000 });
+    stopSpinner();
+    title(`Ready | ${THREAD}`);
   } else if (text === 'STUB_NOTE' || text.startsWith('STUB_NOTE ')) {
     stopSpinner();
     out(`\x1b]9;${text.slice('STUB_NOTE'.length).trim()}\x07`);

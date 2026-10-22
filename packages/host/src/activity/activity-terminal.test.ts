@@ -122,8 +122,9 @@ async function codexSession(
 
 const WORKING: CodexSignal = { kind: 'working' };
 const READY: CodexSignal = { kind: 'ready' };
-const ACTION: CodexSignal = { kind: 'needs-you', reason: 'action-required' };
-const APPROVAL: CodexSignal = { kind: 'needs-you', reason: 'approval-requested' };
+const ACTION: CodexSignal = { kind: 'needs-you', reason: 'action-required', detail: null };
+/** OSC 9 «Approval requested: ls -la» — то, что печатает `STUB_APPROVAL` перед заголовком Action Required. */
+const APPROVAL: CodexSignal = { kind: 'needs-you', reason: 'approval-requested', detail: 'ls -la' };
 
 function changes(ref: SessionRef): string[] {
   return broadcasts
@@ -570,6 +571,7 @@ describe('экраны старта codex — «нужен ты» с причи�
     expect(a.get(ref)?.activity.activity).toBe('idle');
 
     await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
+    expect(a.get(ref)?.activity.need).toMatchObject({ kind: 'startup', detail: null });
     expect(notices('startup-wait')).toHaveLength(1);
     expect(notices('startup-wait')[0]).toMatchObject({ kind: 'startup-wait', ref });
     expect(String(notices('startup-wait')[0]?.['text'])).toMatch(
@@ -604,6 +606,7 @@ describe('экраны старта codex — «нужен ты» с причи�
 
     a.terminalSignal(ref, READY);
     expect(a.get(ref)?.activity.activity).toBe('idle');
+    expect(a.get(ref)?.activity.need).toBeNull();
     expect(changes(ref)).not.toContain('unseen');
   }, 20_000);
 
@@ -637,6 +640,173 @@ describe('экраны старта codex — «нужен ты» с причи�
     await settle(400);
     expect(notices('startup-wait')).toHaveLength(0);
     void ref;
+  }, 20_000);
+});
+
+describe('need у codex: причина ожидания человека (спека «Застрявшие сессии», 3.2)', () => {
+  it('поток STUB_APPROVAL (OSC 9, затем заголовок) — approval с командой; мигание заголовка вид не понижает', async () => {
+    const { a, ref } = await started();
+    a.terminalSignal(ref, WORKING);
+    a.terminalSignal(ref, APPROVAL);
+    a.terminalSignal(ref, ACTION);
+
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    const need = a.get(ref)?.activity.need;
+    expect(need).toMatchObject({
+      kind: 'approval',
+      detail: 'ls -la',
+      resetsAt: null,
+      window: null,
+      account: null,
+    });
+
+    // Заголовок мигает, пока Codex ждёт человека: ни вид, ни начало эпизода не меняются.
+    await settle(30);
+    a.terminalSignal(ref, ACTION);
+    expect(a.get(ref)?.activity.need).toEqual(need);
+
+    // Ответили: кадр спиннера снимает ожидание.
+    a.terminalSignal(ref, WORKING);
+    expect(a.get(ref)?.activity.need).toBeNull();
+  });
+
+  it('один заголовок Action Required — question без текста', async () => {
+    const { a, ref } = await started();
+    a.terminalSignal(ref, WORKING);
+    a.terminalSignal(ref, ACTION);
+
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(a.get(ref)?.activity.need).toMatchObject({ kind: 'question', detail: null });
+  });
+
+  it('заголовок, затем OSC 9 об одобрении — approval с прежним since', async () => {
+    const { a, ref } = await started();
+    a.terminalSignal(ref, WORKING);
+    a.terminalSignal(ref, ACTION);
+    const question = a.get(ref)?.activity.need;
+    expect(question?.kind).toBe('question');
+
+    await settle(30);
+    a.terminalSignal(ref, APPROVAL);
+    expect(a.get(ref)?.activity.need).toMatchObject({
+      kind: 'approval',
+      detail: 'ls -la',
+      since: question?.since,
+    });
+  });
+});
+
+describe('need у codex: лимит и вход из rollout (спека «Застрявшие сессии», 3.2)', () => {
+  // Настоящая форма записи: `error` лежит в самом `task_complete` (core/codex/codex.test.ts).
+  const LIMIT_TEXT =
+    "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro) or try again at Jan 5th, 2031 7:27 PM.";
+  const AUTH_TEXT = 'Your access token could not be refreshed. Please log out and sign in again.';
+
+  /** Rollout сессии `thread`, ход которой кончился ошибкой Codex в момент `at`. */
+  async function failedRollout(
+    thread: string,
+    at: string,
+    error: { message: string; codex_error_info: unknown },
+  ): Promise<void> {
+    const dir = path.join(codexRoot, '2026', '10', '13');
+    await mkdir(dir, { recursive: true });
+    const line = (timestamp: string, type: string, payload: Record<string, unknown>): string =>
+      `${JSON.stringify({ timestamp, type, payload })}\n`;
+    await writeFile(
+      path.join(dir, `rollout-2026-10-13T10-00-00-${thread}.jsonl`),
+      line(at, 'session_meta', { id: thread, cwd: project, source: 'cli' }) +
+        line(at, 'event_msg', { type: 'task_started', turn_id: 't1' }) +
+        line(at, 'event_msg', {
+          type: 'task_complete',
+          turn_id: 't1',
+          last_agent_message: null,
+          error,
+        }),
+    );
+  }
+
+  it('usage_limit_exceeded, а следом Ready — limit с временем из «try again at»; новый ход его снимает', async () => {
+    const { a, ref } = await started({}, { providerSessionId: 'rollout-limit' });
+    a.terminalSignal(ref, WORKING);
+    await settle(40);
+    const at = new Date().toISOString();
+    await failedRollout('rollout-limit', at, {
+      message: LIMIT_TEXT,
+      codex_error_info: 'usage_limit_exceeded',
+    });
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+
+    // Codex пишет заголовок Ready сразу за ошибкой: конец хода от терминала новее ошибки и её не теряет.
+    await settle(30);
+    a.terminalSignal(ref, READY);
+    expect(a.get(ref)?.activity.activity).toBe('unseen');
+    expect(a.get(ref)?.activity.need).toEqual({
+      kind: 'limit',
+      since: at,
+      detail: LIMIT_TEXT,
+      // Пояс — машины хоста: время без привязки к поясу тест строит от него же.
+      resetsAt: new Date(2031, 0, 5, 19, 27).toISOString(),
+      window: null,
+      account: null,
+    });
+
+    // Ход кончен и просмотрен — лимит остаётся: ждёт он человека, а не просмотра.
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.activity).toBe('idle');
+    expect(a.get(ref)?.activity.need?.kind).toBe('limit');
+
+    a.terminalSignal(ref, WORKING);
+    expect(a.get(ref)?.activity.need).toBeNull();
+  }, 20_000);
+
+  it('unauthorized — sign-in (вход)', async () => {
+    const { a, ref } = await started({}, { providerSessionId: 'rollout-auth' });
+    a.terminalSignal(ref, WORKING);
+    await settle(40);
+    await failedRollout('rollout-auth', new Date().toISOString(), {
+      message: AUTH_TEXT,
+      codex_error_info: 'unauthorized',
+    });
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'sign-in');
+
+    await settle(30);
+    a.terminalSignal(ref, READY);
+    expect(a.get(ref)?.activity.need).toMatchObject({
+      kind: 'sign-in',
+      account: 'auth',
+      detail: AUTH_TEXT,
+      resetsAt: null,
+    });
+  }, 20_000);
+
+  it('ошибка, которую Codex повторяет сам (rate_limit_exceeded), need не даёт', async () => {
+    const { a, ref } = await started({}, { providerSessionId: 'rollout-retry' });
+    a.terminalSignal(ref, WORKING);
+    await settle(40);
+    await failedRollout('rollout-retry', new Date().toISOString(), {
+      message: 'Rate limit reached, retrying',
+      codex_error_info: 'rate_limit_exceeded',
+    });
+    // Конец хода по rollout виден как `Stop`: сессия не работает, а need нет.
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
+    expect(a.get(ref)?.activity.need).toBeNull();
+  }, 20_000);
+
+  it('новый процесс (resume) ошибку прошлого не наследует', async () => {
+    const { a, ref } = await started({}, { providerSessionId: 'rollout-resume' });
+    a.terminalSignal(ref, WORKING);
+    await settle(40);
+    await failedRollout('rollout-resume', new Date().toISOString(), {
+      message: LIMIT_TEXT,
+      codex_error_info: 'usage_limit_exceeded',
+    });
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+
+    await settle(30);
+    a.terminalStarted(ref);
+    a.terminalSignal(ref, READY);
+    expect(a.get(ref)?.activity.activity).toBe('idle');
+    expect(a.get(ref)?.activity.need).toBeNull();
   }, 20_000);
 });
 
@@ -824,5 +994,104 @@ describe('сторож Codex: вызов code mode без вывода — «н�
     await settle(700);
     expect(a.get(ref)?.activity.activity).toBe('blocked');
     expect(notices('codex-call-wait')).toHaveLength(0);
+  }, 15_000);
+
+  // Служебная запись в rollout после конца хода: пересчёт сессии без новых событий хода.
+  const tokenCount = () => row({ timestamp: now(), type: 'event_msg', payload: { type: 'token_count' } });
+
+  it('a stuck call yields an approval need: since is the call time and does not move on recompute, detail is neutral', async () => {
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'stuck-need' });
+    a.terminalSignal(ref, WORKING);
+    const callAt = now();
+    const file = await rollout(
+      'stuck-need',
+      exec(callAt, '// @exec: {"yield_time_ms": 1}\ntext(await tools.mcp__parley__check_inbox({}));'),
+      callAt,
+    );
+
+    await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
+    // Инструкция («Check pending approvals…») — только в уведомлении хоста; в `detail` она попала бы в строку комнаты и
+    // письмо ведущему, и агент мог бы принять её за свою (итоговое ревью, находка 6).
+    expect(String(notices('codex-call-wait')[0]?.['text'])).toMatch(STUCK_TEXT);
+    expect(a.get(ref)?.activity.need).toEqual({
+      kind: 'approval',
+      since: callAt,
+      detail: 'a Codex tool call has not returned',
+      resetsAt: null,
+      window: null,
+      account: null,
+    });
+
+    // Пересчёт позже: начало эпизода остаётся временем вызова.
+    await appendFile(file, tokenCount());
+    await settle(400);
+    expect(a.get(ref)?.activity.need?.since).toBe(callAt);
+
+    // Вывод пришёл — ход идёт, ожидания нет.
+    await appendFile(file, execOutput(now()));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+    expect(a.get(ref)?.activity.need).toBeNull();
+  }, 15_000);
+
+  it('a finished turn with an unfinished cell yields an approval need with the cell time, not the time of each recompute', async () => {
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'cell-need' });
+    a.terminalSignal(ref, WORKING);
+    const stamp = now();
+    const file = await rollout(
+      'cell-need',
+      exec(stamp, 'text(await tools.exec_command({cmd:"git fetch"}));') +
+        row({ timestamp: stamp, type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'call_exec', output: 'Script running with cell ID 58\nOutput:\n' } }) +
+        row({ timestamp: stamp, type: 'event_msg', payload: { type: 'task_complete' } }),
+      stamp,
+    );
+
+    await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
+    expect(String(notices('codex-call-wait')[0]?.['text'])).toContain('Check pending approvals; if already answered');
+    expect(a.get(ref)?.activity.need).toEqual({
+      kind: 'approval',
+      since: stamp,
+      detail: 'its turn finished with an unfinished tool operation',
+      resetsAt: null,
+      window: null,
+      account: null,
+    });
+
+    // В этой ветке срок сторожа — «сейчас»: каждый пересчёт видит его заново, а начало эпизода не уезжает.
+    await settle(300);
+    await appendFile(file, tokenCount());
+    await settle(300);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(a.get(ref)?.activity.need?.since).toBe(stamp);
+  }, 15_000);
+
+  it('a stuck cell while the fold holds a limit need: the limit need stays, the watcher adds no approval', async () => {
+    const limitText =
+      "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro) or try again at Jan 5th, 2031 7:27 PM.";
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'cell-limit' });
+    a.terminalSignal(ref, WORKING);
+    const stamp = now();
+    await rollout(
+      'cell-limit',
+      exec(stamp, 'text(await tools.exec_command({cmd:"git fetch"}));') +
+        row({ timestamp: stamp, type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'call_exec', output: 'Script running with cell ID 58\nOutput:\n' } }) +
+        row({
+          timestamp: stamp,
+          type: 'event_msg',
+          payload: {
+            type: 'task_complete',
+            last_agent_message: null,
+            error: { message: limitText, codex_error_info: 'usage_limit_exceeded' },
+          },
+        }),
+      stamp,
+    );
+
+    // Сторож сработал на том же пересчёте, что увидел ошибку лимита.
+    await waitFor(() => notices('codex-call-wait').length === 1);
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    expect(a.get(ref)?.activity.need).toMatchObject({ kind: 'limit', since: stamp, detail: limitText });
+    expect(a.get(ref)?.activity.activity).not.toBe('blocked');
+    await settle(300);
+    expect(a.get(ref)?.activity.need?.kind).toBe('limit');
   }, 15_000);
 });

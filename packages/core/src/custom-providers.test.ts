@@ -1,25 +1,35 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  ACCOUNT_MIN_VERSION_CLAUDE,
   CUSTOM_MIN_VERSION,
   CUSTOM_PROVIDER_PREFIX,
+  accountLabel,
+  accountProviderEntry,
   baseUrlError,
   customProviderDir,
   customProviderEntry,
   customProviderSecret,
   customProvidersFile,
+  defaultAccountLabel,
+  defaultAccountSlug,
+  isAccountRecord,
   isCustomProviderId,
   isLoopbackUrl,
+  isManagedProviderId,
+  isValidCustomProviderId,
   readCustomProviders,
   slugProviderId,
   writeCustomProviders,
-  type CustomProviderRecord,
+  type CustomAccountRecord,
+  type CustomEndpointRecord,
 } from './custom-providers.js';
-import { PROVIDERS, claudeConfigDirFor, isClaudeCode, loadProviders } from './providers.js';
+import { PROVIDERS, claudeConfigDirFor, isClaudeCode, isManagedEntry, loadProviders, managedRecord, ownsHookToken } from './providers.js';
 
-const kimi: CustomProviderRecord = {
+const kimi: CustomEndpointRecord = {
+  kind: 'endpoint',
   id: 'custom-kimi',
   label: 'Kimi',
   preset: 'kimi',
@@ -89,7 +99,7 @@ describe('loadProviders со своими провайдерами', () => {
     const pj = path.join(home, 'providers.json');
     await writeFile(pj, JSON.stringify({ 'custom-x': { badge: 'X', command: 'x' } }));
     await expect(loadProviders(pj, path.join(home, 'n.json'), path.join(home, 'c.json'))).rejects.toThrow(
-      /custom- prefix is reserved/,
+      /the custom- and codex- prefixes are reserved/,
     );
   });
   it('без файла своих провайдеров — реестр побайтно прежний', async () => {
@@ -199,5 +209,203 @@ describe('строгая проверка записей (замечания р�
   });
   it('метка из эмодзи не режет суррогатную пару', () => {
     expect(customProviderEntry({ ...kimi, label: '😀😀x' }, home).mark).toBe('😀😀');
+  });
+});
+
+describe('запись аккаунта (спека подписок 5.1)', () => {
+  const account: CustomAccountRecord = { kind: 'claude-account', id: 'custom-claude-2', label: '', link: true };
+  const none = (name: string): string => path.join(home, name);
+
+  it('asRecord: запись без kind — endpoint; claude-account без адреса и ключа', async () => {
+    const file = path.join(home, 'custom-providers.json');
+    const legacy: Record<string, unknown> = { ...kimi };
+    delete legacy['kind'];
+    await writeFile(file, JSON.stringify({ version: 1, providers: [legacy, account] }));
+    const read = await readCustomProviders(file);
+    expect(read).toEqual([kimi, account]);
+    expect(isAccountRecord(read[0]!)).toBe(false);
+    expect(isAccountRecord(read[1]!)).toBe(true);
+    expect(Object.keys(read[1]!).sort()).toEqual(['id', 'kind', 'label', 'link']);
+  });
+  it('asRecord: аккаунт хранит только свои поля, адрес и чужие поля отбрасывает', async () => {
+    const file = path.join(home, 'custom-providers.json');
+    const noisy = { ...account, baseUrl: 'https://x.example', models: kimi.models, secret: 'k' };
+    await writeFile(file, JSON.stringify({ version: 1, providers: [noisy] }));
+    expect(await readCustomProviders(file)).toEqual([account]);
+  });
+  it('asRecord: kind и префикс id должны сходиться; плохая метка и link — запись пропускается', async () => {
+    const file = path.join(home, 'custom-providers.json');
+    const bad: unknown[] = [
+      { ...account, id: 'codex-claude-2' },
+      { kind: 'codex-account', id: 'custom-codex-2', label: '', link: true },
+      { ...kimi, id: 'codex-kimi' },
+      { ...account, id: 'custom-a', kind: 'unknown-account' },
+      { ...account, id: 'custom-b', label: '   ' },
+      { ...account, id: 'custom-c', label: 'x'.repeat(41) },
+      { ...account, id: 'custom-d', link: 'yes' },
+      { ...account, id: 'custom-/../e' },
+    ];
+    await writeFile(file, JSON.stringify({ version: 1, providers: bad }));
+    expect(await readCustomProviders(file)).toEqual([]);
+    const good = { kind: 'codex-account', id: 'codex-two', label: 'Work', link: false };
+    await writeFile(file, JSON.stringify({ version: 1, providers: [good] }));
+    expect(await readCustomProviders(file)).toEqual([good]);
+  });
+  it('isValidCustomProviderId принимает codex-two, isCustomProviderId — нет (К8)', () => {
+    expect(isValidCustomProviderId('codex-two')).toBe(true);
+    expect(isValidCustomProviderId('custom-two')).toBe(true);
+    expect(isCustomProviderId('codex-two')).toBe(false);
+    expect(isManagedProviderId('codex-two')).toBe(true);
+    expect(isManagedProviderId('custom-two')).toBe(true);
+    expect(isManagedProviderId('glm')).toBe(false);
+    for (const id of ['codex-', 'codex-Two', 'codex-a b', 'codex-a--b', 'codex', 'other-a', `codex-${'a'.repeat(40)}`]) {
+      expect(isValidCustomProviderId(id), id).toBe(false);
+    }
+    expect(customProviderDir('codex-two', home)).toBe(path.join(home, 'providers', 'codex-two'));
+  });
+  it('defaultAccountLabel: второй аккаунт — 2, третий — 3; endpoint и другой CLI не считаются (К1)', () => {
+    const codex: CustomAccountRecord = { kind: 'codex-account', id: 'codex-2', label: '', link: true };
+    expect(defaultAccountLabel('claude-account', [])).toBe('Claude Code 2');
+    expect(defaultAccountLabel('claude-account', [kimi, codex])).toBe('Claude Code 2');
+    expect(defaultAccountLabel('claude-account', [kimi, account])).toBe('Claude Code 3');
+    expect(defaultAccountLabel('claude-account', [account, { ...account, id: 'custom-claude-3' }])).toBe('Claude Code 4');
+    expect(defaultAccountLabel('codex-account', [account, codex])).toBe('Codex 3');
+  });
+  it('defaultAccountSlug: первый свободный номер с двойки, id по виду (спека подписок 5.1)', () => {
+    expect(defaultAccountSlug('claude-account', new Set())).toBe('custom-claude-2');
+    expect(defaultAccountSlug('claude-account', new Set(['custom-claude-2', 'custom-claude-4']))).toBe('custom-claude-3');
+    expect(defaultAccountSlug('codex-account', new Set(['custom-claude-2']))).toBe('codex-codex-2');
+    expect(isValidCustomProviderId(defaultAccountSlug('claude-account', new Set()))).toBe(true);
+  });
+  it('accountLabel: своё имя главнее; стандартное считает аккаунты до этого, а не его самого', () => {
+    const second: CustomAccountRecord = { ...account, id: 'custom-claude-3' };
+    expect(accountLabel({ ...account, label: 'Work' }, [account])).toBe('Work');
+    expect(accountLabel(account, [account, second])).toBe('Claude Code 2');
+    expect(accountLabel(second, [account, second])).toBe('Claude Code 3');
+    // записи ещё нет в списке (новая) — считаются все
+    expect(accountLabel(second, [account])).toBe('Claude Code 3');
+    expect(accountLabel(account, [kimi])).toBe('Claude Code 2');
+  });
+  it('стандартное имя следует за номером в id: после удалений два аккаунта не получают одно имя (решение 7)', () => {
+    const third: CustomAccountRecord = { ...account, id: 'custom-claude-3', label: 'Claude Code 3' };
+    const fourth: CustomAccountRecord = { ...account, id: 'custom-claude-4', label: 'Claude Code 4' };
+    // Второй удалён, его id снова свободен: новый аккаунт — «Claude Code 2», а не «3» (число аккаунтов + 2).
+    expect(defaultAccountLabel('claude-account', [third], 'custom-claude-2')).toBe('Claude Code 2');
+    expect(accountLabel({ ...account, label: '' }, [third])).toBe('Claude Code 2');
+    // Третий удалён из середины: пустое место занимает «3», четвёртый остаётся «4».
+    expect(accountLabel({ ...account, id: 'custom-claude-3' }, [account, fourth])).toBe('Claude Code 3');
+    expect(defaultAccountLabel('codex-account', [], 'codex-codex-5')).toBe('Codex 5');
+    // Номер читается только из id этого CLI; чужой или нестандартный id — запасной счёт (число + 2).
+    expect(defaultAccountLabel('claude-account', [account], 'codex-codex-5')).toBe('Claude Code 3');
+    expect(defaultAccountLabel('claude-account', [account], 'custom-claude-work')).toBe('Claude Code 3');
+    expect(defaultAccountLabel('claude-account', [account], 'custom-claude-02')).toBe('Claude Code 3');
+    expect(accountLabel({ ...account, id: 'custom-claude-work' }, [account])).toBe('Claude Code 3');
+  });
+
+  it('accountProviderEntry: копия раннера claude из реестра после providers.json, своя папка, без секрета и env (спека 5.2, К11, К12)', async () => {
+    const providersJson = path.join(home, 'providers.json');
+    await writeFile(providersJson, JSON.stringify({
+      claude: { command: '/opt/claude/bin/claude', args: ['--session-id', '{sessionUuid}', '{prompt}'], printArgs: ['-p', '{prompt}'] },
+    }));
+    const registry = await loadProviders(providersJson, none('codex.json'), none('custom.json'));
+    const entry = accountProviderEntry(account, registry, home);
+    const claude = registry['claude']!;
+    expect(entry.runner.command).toBe('/opt/claude/bin/claude');
+    expect(entry.runner.args).toEqual(['--session-id', '{sessionUuid}', '{prompt}']);
+    expect(entry.runner.args).not.toBe(claude.runner.args);
+    expect(entry.runner.resumeArgs).toEqual(claude.runner.resumeArgs);
+    expect(entry.runner.resumeArgs).not.toBe(claude.runner.resumeArgs);
+    expect(entry.runner.printArgs).toEqual(['-p', '{prompt}']);
+    expect(entry.runner.assistantArgs).toEqual(claude.runner.assistantArgs);
+    expect(entry.runner.assistantResumeArgs).toEqual(claude.runner.assistantResumeArgs);
+    expect(entry.runner.mcpConfig).toBe(claude.runner.mcpConfig);
+    expect(entry.runner.configDir).toBe(path.join(home, 'providers', 'custom-claude-2'));
+    expect(entry.runner.minVersion).toBe(ACCOUNT_MIN_VERSION_CLAUDE);
+    for (const field of ['secret', 'auth', 'env', 'keyOptional'] as const) expect(entry.runner[field], field).toBeUndefined();
+    expect(entry.id).toBe('custom-claude-2');
+    expect(entry.label).toBe('Claude Code 2');
+    expect(entry.mark).toBe('Cl');
+    expect(entry.family).toBe('claude');
+    expect(entry.hasHistory).toBe(true);
+    expect(entry.linkBy).toBe('session-id');
+    expect(entry.models).toBe(claude.models);
+    expect(entry.account).toEqual(account);
+    expect(entry.custom).toBeUndefined();
+    // правка args человеком доходит до аккаунта вместе с подсказкой карточки (К11)
+    expect(claude.argsOverridden).toBe(true);
+    expect(entry.argsOverridden).toBe(true);
+    expect(claude.runner.configDir).toBeUndefined();
+    expect(isClaudeCode(entry)).toBe(true);
+    expect(claudeConfigDirFor(entry, { CLAUDE_CONFIG_DIR: '/x' })).toBe(path.join(home, 'providers', 'custom-claude-2'));
+  });
+  it('accountProviderEntry: имя из записи; метка из эмодзи не режет пару; версия — 2.1.304', () => {
+    const registry = { claude: PROVIDERS.claude };
+    expect(accountProviderEntry({ ...account, label: '😀😀x' }, registry, home).mark).toBe('😀😀');
+    expect(accountProviderEntry({ ...account, label: 'Work' }, registry, home).label).toBe('Work');
+    expect(ACCOUNT_MIN_VERSION_CLAUDE).toBe('2.1.304');
+    // встроенный шаблон без правки человека — подсказки нет
+    expect(accountProviderEntry(account, registry, home).argsOverridden).toBeUndefined();
+  });
+  it('managedRecord / isManagedEntry: endpoint и аккаунт — записи окна, обычный claude и glm — нет', () => {
+    const endpoint = customProviderEntry(kimi, home);
+    const accountEntry = accountProviderEntry(account, { claude: PROVIDERS.claude }, home);
+    expect(managedRecord(endpoint)).toBe(kimi);
+    expect(managedRecord(accountEntry)).toBe(account);
+    expect(managedRecord(PROVIDERS.claude)).toBeUndefined();
+    expect(managedRecord(PROVIDERS.glm)).toBeUndefined();
+    expect(isManagedEntry(endpoint)).toBe(true);
+    expect(isManagedEntry(accountEntry)).toBe(true);
+    expect(isManagedEntry(PROVIDERS.claude)).toBe(false);
+    expect(isManagedEntry(PROVIDERS.glm)).toBe(false);
+  });
+  it('ownsHookToken: glm, endpoint и аккаунт — свой токен хуков; обычные claude и codex — общий (спека подписок 5.3, К13)', () => {
+    expect(ownsHookToken(PROVIDERS.glm)).toBe(true);
+    expect(ownsHookToken(customProviderEntry(kimi, home))).toBe(true);
+    expect(ownsHookToken(accountProviderEntry(account, { claude: PROVIDERS.claude }, home))).toBe(true);
+    expect(ownsHookToken(PROVIDERS.claude)).toBe(false);
+    expect(ownsHookToken(PROVIDERS.codex)).toBe(false);
+  });
+  it('accountProviderEntry: codex-аккаунт до этапа 3 бросает', () => {
+    const codex: CustomAccountRecord = { kind: 'codex-account', id: 'codex-2', label: '', link: true };
+    expect(() => accountProviderEntry(codex, { claude: PROVIDERS.claude }, home)).toThrow('codex accounts arrive in stage 3');
+  });
+
+  it('loadProviders: аккаунты после providers.json в порядке файла, стандартные имена идут по порядку; endpoint рядом как раньше', async () => {
+    const file = none('custom.json');
+    const second: CustomAccountRecord = { ...account, id: 'custom-claude-3' };
+    const named: CustomAccountRecord = { ...account, id: 'custom-work', label: 'Work' };
+    await writeCustomProviders([account, kimi, second, named], file);
+    const registry = await loadProviders(none('p.json'), none('c.json'), file);
+    expect(registry['custom-claude-2']?.label).toBe('Claude Code 2');
+    expect(registry['custom-claude-3']?.label).toBe('Claude Code 3');
+    expect(registry['custom-work']?.label).toBe('Work');
+    expect(registry['custom-claude-2']?.account).toEqual(account);
+    expect(path.basename(registry['custom-claude-2']!.runner.configDir!)).toBe('custom-claude-2');
+    expect(registry['custom-kimi']?.custom).toEqual(kimi);
+    expect(registry['custom-kimi']?.account).toBeUndefined();
+  });
+  it('loadProviders: чужой codex-account молча пропускается до этапа 3, остальные живут', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const file = none('custom.json');
+      await writeCustomProviders([{ kind: 'codex-account', id: 'codex-2', label: '', link: true }, account], file);
+      const registry = await loadProviders(none('p.json'), none('c.json'), file);
+      expect(registry['codex-2']).toBeUndefined();
+      expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'custom-claude-2', 'glm']);
+      // этап 3: запись читается (хост считает по ней номера), но в реестр не попадает
+      expect((await readCustomProviders(file)).map((record) => record.id)).toEqual(['codex-2', 'custom-claude-2']);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+  it('loadProviders: аккаунт не перекрывает занятый id; без аккаунтов реестр прежний', async () => {
+    const file = none('custom.json');
+    await writeCustomProviders([kimi, { ...account, id: 'custom-kimi' }], file);
+    const registry = await loadProviders(none('p.json'), none('c.json'), file);
+    expect(registry['custom-kimi']?.custom).toEqual(kimi);
+    expect(registry['custom-kimi']?.account).toBeUndefined();
+    await writeCustomProviders([kimi], file);
+    expect(Object.keys(await loadProviders(none('p.json'), none('c.json'), file)).sort()).toEqual(['claude', 'codex', 'custom-kimi', 'glm']);
   });
 });

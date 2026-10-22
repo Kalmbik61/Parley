@@ -143,7 +143,8 @@ async function startSession(sandbox: Sandbox, provider: string) {
     projectPath: sandbox.project, workId, provider, label: '', task: 'do it', parent: null,
   });
   expect(seen.at(-1)?.error).toBeUndefined();
-  return JSON.parse(await waitFile(sandbox.out)) as { argv: string[]; env: Record<string, string>; cwd: string };
+  const ref = (seen.at(-1)?.result as { ref: unknown }).ref;
+  return { ...(JSON.parse(await waitFile(sandbox.out)) as { argv: string[]; env: Record<string, string>; cwd: string }), ref };
 }
 
 const trustedJson = (project: string) => ({ numStartups: 3, projects: { [project]: { hasTrustDialogAccepted: true } } });
@@ -164,6 +165,11 @@ describe('своя сессия не трогает ~/.claude и обычный 
     expect((await rpc(client, 'providers.check', { provider: 'custom-kimi' })).at(-1)?.result).toMatchObject({ check: { state: 'ok' } });
     const run = await startSession(sandbox, 'custom-kimi');
     expect(run.env['CLAUDE_CONFIG_DIR']).toBe(path.join(home, 'providers', 'custom-kimi'));
+    // Папку с живой сессией хост не удаляет (спека подписок 10): отказ по настоящему PTY, сессию надо остановить.
+    expect((await rpc(client, 'providers.deleteCustom', { id: 'custom-kimi', removeFolder: true })).at(-1)?.error)
+      .toMatchObject({ code: 'conflict', message: 'Kimi has running sessions: stop them before deleting its folder' });
+    expect((await lstat(path.join(home, 'providers', 'custom-kimi'))).isDirectory()).toBe(true);
+    ok(await rpc(client, 'sessions.stop', { ref: run.ref }));
     ok(await rpc(client, 'providers.deleteCustom', { id: 'custom-kimi', removeFolder: true }));
     // Удаление действительно прошло: папки и ключа нет, иначе «прежние» ~/.claude проверяли бы пустоту.
     await expect(lstat(path.join(home, 'providers', 'custom-kimi'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -247,8 +253,9 @@ describe('своя сессия не трогает ~/.claude и обычный 
     expect(run.env).not.toHaveProperty('CLAUDE_SECURESTORAGE_CONFIG_DIR');
   });
 
-  it('префикс custom- одинаков в @parley/core и @parley/protocol', () => {
+  it('префиксы custom- и codex- одинаковы в @parley/core и @parley/protocol', () => {
     expect(core.CUSTOM_PROVIDER_PREFIX).toBe(protocol.CUSTOM_PROVIDER_PREFIX);
+    expect(core.CODEX_ACCOUNT_PREFIX).toBe(protocol.CODEX_ACCOUNT_PREFIX);
   });
 });
 

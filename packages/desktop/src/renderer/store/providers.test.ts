@@ -495,3 +495,113 @@ describe('useProvidersStore — ручное обновление лимитов
     expect(bridge.calls).toHaveLength(1);
   });
 });
+
+// Вход в аккаунт подписки (спека подписок 4.1, 5.5, 10): хост вывод входа не повторяет, поэтому окно держит
+// ограниченный буфер с момента `init` — повторно открытые Settings показывают уже напечатанное.
+describe('useProvidersStore — вход в аккаунт', () => {
+  const account = (patch: Record<string, unknown> = {}): Result<'providers.list'> => ({
+    providers: [{
+      id: 'custom-claude-2', label: 'Claude Code 2', available: false, family: 'claude', needs: 'sign-in', version: '2.1.306',
+      custom: { kind: 'claude-account', link: true, folder: '/h/.parley/providers/custom-claude-2', signedIn: false, signingIn: false, ...patch },
+    }],
+  } as Result<'providers.list'>);
+  const row = () => useProvidersStore.getState().providers[0]!;
+  const signingIn = () => (row().custom as { signingIn: boolean }).signingIn;
+
+  beforeEach(() => {
+    useProvidersStore.setState({ signInOutput: {}, signInResult: {} });
+  });
+
+  it('вывод входа копится по провайдеру с момента init и не попадает в чужой', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => account());
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    bridge.emit('providers.signInOutput', { provider: 'custom-claude-2', data: 'Open https://x' });
+    bridge.emit('providers.signInOutput', { provider: 'custom-claude-2', data: ' and paste the code' });
+    bridge.emit('providers.signInOutput', { provider: 'custom-claude-3', data: 'other' });
+    expect(useProvidersStore.getState().signInOutput).toEqual({
+      'custom-claude-2': 'Open https://x and paste the code',
+      'custom-claude-3': 'other',
+    });
+    dispose();
+  });
+
+  it('буфер ограничен 64 КБ: остаётся хвост', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => account());
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    bridge.emit('providers.signInOutput', { provider: 'custom-claude-2', data: `${'a'.repeat(70_000)}tail` });
+    const buffer = useProvidersStore.getState().signInOutput['custom-claude-2']!;
+    expect(buffer).toHaveLength(64 * 1024);
+    expect(buffer.endsWith('tail')).toBe(true);
+    dispose();
+  });
+
+  it('вывод значит, что процесс жив: signingIn у строки выставляется', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => account());
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    expect(signingIn()).toBe(false);
+    bridge.emit('providers.signInOutput', { provider: 'custom-claude-2', data: 'x' });
+    expect(signingIn()).toBe(true);
+    dispose();
+  });
+
+  it('выход: итог запоминается, signingIn снимается, signedIn берётся из события, список перечитывается', async () => {
+    const bridge = createFakeBridge();
+    let signedIn = false;
+    bridge.setHandler('providers.list', () => account({ signedIn, signingIn: false }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    bridge.emit('providers.signInOutput', { provider: 'custom-claude-2', data: 'x' });
+    signedIn = true;
+    bridge.emit('providers.signInExit', { provider: 'custom-claude-2', exitCode: 0, signedIn: true });
+    expect(useProvidersStore.getState().signInResult['custom-claude-2']).toEqual({ exitCode: 0, signedIn: true });
+    expect(signingIn()).toBe(false);
+    expect((row().custom as { signedIn: boolean }).signedIn).toBe(true);
+    await flush();
+    expect(bridge.calls.filter(({ method }) => method === 'providers.list')).toHaveLength(2);
+    dispose();
+  });
+
+  it('beginSignIn стирает прежний вывод и итог и помечает вход начатым', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => account());
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    bridge.emit('providers.signInOutput', { provider: 'custom-claude-2', data: 'old' });
+    bridge.emit('providers.signInExit', { provider: 'custom-claude-2', exitCode: 129, signedIn: false });
+    useProvidersStore.getState().beginSignIn('custom-claude-2');
+    expect(useProvidersStore.getState().signInOutput['custom-claude-2']).toBeUndefined();
+    expect(useProvidersStore.getState().signInResult['custom-claude-2']).toBeUndefined();
+    expect(signingIn()).toBe(true);
+    dispose();
+  });
+
+  it('forgetSignIn стирает вывод и итог аккаунта (вышел или удалён), не трогая состояние входа строки', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => account({ signingIn: true }));
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    bridge.emit('providers.signInOutput', { provider: 'custom-claude-2', data: 'old' });
+    bridge.emit('providers.signInOutput', { provider: 'custom-claude-3', data: 'other' });
+    useProvidersStore.getState().forgetSignIn('custom-claude-2');
+    expect(useProvidersStore.getState().signInOutput).toEqual({ 'custom-claude-3': 'other' });
+    expect(useProvidersStore.getState().signInResult['custom-claude-2']).toBeUndefined();
+    expect(signingIn()).toBe(true);
+    dispose();
+  });
+
+  it('после отписки события входа в стор не попадают', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('providers.list', () => account());
+    const dispose = useProvidersStore.getState().init(bridge);
+    await flush();
+    dispose();
+    bridge.emit('providers.signInOutput', { provider: 'custom-claude-2', data: 'late' });
+    expect(useProvidersStore.getState().signInOutput).toEqual({});
+  });
+});

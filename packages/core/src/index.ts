@@ -96,6 +96,9 @@ export {
   providerReadinessError,
   loadProviders,
   isClaudeCode,
+  isManagedEntry,
+  managedRecord,
+  ownsHookToken,
   claudeConfigDirFor,
   modelChoiceError,
   printCommand,
@@ -110,21 +113,29 @@ export {
   supportsModel,
 } from './providers.js';
 export {
+  ACCOUNT_MIN_VERSION_CLAUDE,
+  CODEX_ACCOUNT_PREFIX,
   CUSTOM_MIN_VERSION,
   CUSTOM_PROVIDER_PREFIX,
+  accountLabel,
+  accountProviderEntry,
   baseUrlError,
   customProviderDir,
   customProviderEntry,
   customProviderSecret,
   customProvidersFile,
+  defaultAccountLabel,
+  defaultAccountSlug,
+  isAccountRecord,
   isCustomProviderId,
   isLoopbackUrl,
+  isManagedProviderId,
   isValidCustomProviderId,
   readCustomProviders,
   slugProviderId,
   writeCustomProviders,
 } from './custom-providers.js';
-export type { CustomProviderRecord } from './custom-providers.js';
+export type { CustomAccountRecord, CustomEndpointRecord, CustomProviderRecord } from './custom-providers.js';
 export {
   LINKED_CLAUDE_ITEMS,
   mirrorProjectTrust,
@@ -133,6 +144,7 @@ export {
   syncApiKeyApproval,
   userClaudeConfigDir,
   userClaudeJsonPath,
+  wantLinks,
 } from './custom-provider-dir.js';
 export type { PrepareOptions as PrepareCustomProviderOptions } from './custom-provider-dir.js';
 export { CLAUDE_EFFORTS, LEGACY_EFFORTS, effortLabel } from './provider-models.js';
@@ -171,11 +183,14 @@ export {
 } from './work/map.js';
 export { defaultSessionName } from './work/names.js';
 export {
+  NEED_WORDS,
   STATE_WORDS,
   dotState,
   liveStatus,
+  needWord,
   reportedStatus,
   sessionDotState,
+  sessionDotStateWithNeed,
   stateWord,
 } from './work/session-state.js';
 export type { DotState, SessionAxes, StateWordKey } from './work/session-state.js';
@@ -216,6 +231,7 @@ export {
   leaveOtherRooms,
   liveLead,
   nextRoomId,
+  parleyNote,
   renameRoom,
   renameSession,
   reopenRoom,
@@ -433,6 +449,40 @@ export type {
   SessionActivity,
 } from './work/activity.js';
 export {
+  LIMIT_RETRY_MS,
+  LIMIT_RETURN_GRACE_MS,
+  LIMIT_RETURNS_MAX,
+  NEED_DETAIL_MAX,
+  STUCK_REPORT_MS,
+  agentClock,
+  backLetter,
+  backLine,
+  classifyClaudeFailure,
+  clampDetail,
+  codexFailureError,
+  limitLetter,
+  localClock,
+  needReason,
+  parseResetText,
+  pickResetsAt,
+  providerLabel,
+  stuckHint,
+  stuckLetter,
+  stuckLine,
+  stuckReason,
+  stuckWarning,
+  zonedInstant,
+} from './work/stuck.js';
+export type {
+  ApiFailure,
+  LimitAlternative,
+  NeedKind,
+  ResetGuess,
+  SessionNeed,
+  StuckWho,
+} from './work/stuck.js';
+export {
+  PARLEY_STARTUP_NOTIFICATION,
   PERMISSION_ANSWERED_EVENT,
   TERMINAL_WORKING_EVENT,
   bareEvent,
@@ -449,7 +499,7 @@ export type {
   EventsWatcher,
   WatchEventsOptions,
 } from './work/events.js';
-export { deliveryAction, isPointerText, pointerText } from './work/delivery.js';
+export { deliveryAction, isPointerText, LIMIT_RETURN_TEXT, limitReturnText, pointerText } from './work/delivery.js';
 export type { DeliveryAction, DeliveryInput } from './work/delivery.js';
 export {
   START_TOLERANCE_MS,
@@ -519,6 +569,7 @@ export type { ChannelProbe } from './work/channel.js';
 export { BROWSER_TOOL_HINTS, BROWSER_TOOL_LIMITS, BROWSER_TOOL_OPS, BROWSER_TOOLS, PAGE_DATA_NOTE } from './mcp/browser-tools.js';
 export { contextFromEnv } from './mcp/context.js';
 export type { McpContext } from './mcp/context.js';
+export type { ProviderRow } from './mcp/provider-rows.js';
 export {
   DEFAULT_TIMEOUT_SEC,
   MAX_TIMEOUT_SEC,

@@ -3,9 +3,10 @@
  * на хосте, бриф и инструменты MCP агентов. Раньше этот вывод жил в трёх местах и расходился: помощник считал
  * запущенную сессию выключенной. Теперь окно, помощник и бриф импортируют его отсюда.
  *
- * Модуль чистый: ни Node-импортов, ни импортов из других файлов core (типы объявлены здесь). Поэтому его берёт и
- * окно через подпуть `@parley/core/session-state`, как `@parley/core/assistant`. В protocol его положить нельзя:
- * protocol сам зависит от core.
+ * Модуль чистый: ни Node-импортов, ни значений из других файлов core (типы объявлены здесь; единственный
+ * импорт — типа `NeedKind` из `stuck.ts`, он стирается при сборке). Поэтому его берёт и окно через подпуть
+ * `@parley/core/session-state`, как `@parley/core/assistant`. В protocol его положить нельзя: protocol сам
+ * зависит от core.
  *
  * Статус из двух осей выводится двумя способами, и оба нужны намеренно:
  * - `reportedStatus` — итог важнее процесса. Сессия, сдавшая `done`, показывается готовой, жив её процесс или нет.
@@ -14,8 +15,12 @@
  *   так что состояние ведёт activity. Итог видят только спящая и закрытая сессии. Так рисуют точку окно и помощник.
  *
  * Слова состояния (`STATE_WORDS`) английские и лежат здесь, а не в строках окна: по решению человека у окна,
- * помощника и агентов одна таблица. `S.states` окна её импортирует.
+ * помощника и агентов одна таблица. `S.states` окна её импортирует. Так же устроены слова `need` — чего сессия
+ * ждёт от человека (`NEED_WORDS`, спека подписок 7): обрамление фразы («Waiting for approval: …») остаётся в
+ * строках окна и слов видов не хранит.
  */
+
+import type { NeedKind, SessionNeed } from './stuck.js';
 
 /**
  * Прежний единый статус сессии (карта v1). В карте его больше нет: с v2 он собирается из двух осей функциями
@@ -96,6 +101,21 @@ export function sessionDotState(session: SessionAxes, activity: Activity | null)
 }
 
 /**
+ * Состояние точки с учётом `need` (спека подписок 7, итоговое ревью): сессия, которой нужен человек, — `blocked`,
+ * даже когда ход закончен и activity говорит `unseen` или `idle` (лимит и вход оставляют ход законченным). «Живая» —
+ * как у `sessionNeed`: `lifecycle === 'active'`; у спящей, ожидающей и закрытой `need` не считается (запись активности
+ * могла остаться от прошлого процесса), и точка — по статусу карты.
+ */
+export function sessionDotStateWithNeed(
+  session: SessionAxes,
+  activity: Activity | null,
+  need: SessionNeed | null,
+): DotState {
+  if (need !== null && session.lifecycle === 'active') return 'blocked';
+  return sessionDotState(session, activity);
+}
+
+/**
  * Девять слов состояния сессии (спека окна 4.2). Строчными — так их пишет строка сессии; те же слова —
  * имена значков для скринридера и слово итога в тултипе, а помощник и агенты называют ими состояния сессий.
  */
@@ -118,4 +138,21 @@ export const STATE_WORDS: Readonly<Record<StateWordKey, string>> = {
 export function stateWord(state: DotState, lifecycle: SessionLifecycle): string {
   if (state === 'exited') return lifecycle === 'closed' ? STATE_WORDS.closed : STATE_WORDS.asleep;
   return STATE_WORDS[state];
+}
+
+/**
+ * Слово на каждый вид `need` (спека подписок 7): одно у окна, острова, Telegram и брифа. `startup` называется
+ * `starting` — «ждёт на старте», а не существительное. Порядок ключей — порядок `NeedKind`.
+ */
+export const NEED_WORDS: Readonly<Record<NeedKind, string>> = {
+  approval: 'approval',
+  question: 'question',
+  limit: 'limit',
+  'sign-in': 'sign-in',
+  startup: 'starting',
+};
+
+/** Слово вида `need` из таблицы `NEED_WORDS`. */
+export function needWord(kind: NeedKind): string {
+  return NEED_WORDS[kind];
 }

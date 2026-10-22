@@ -203,6 +203,37 @@ describe('tabMeta — tint: подкраска вкладки (Organic, 1.1)', (
     expect(tabMeta(roomTab, quiet).tint).toBeNull();
   });
 
+  // Спека застрявших 7.3: вкладка комнаты подсвечивается, если живому участнику нужен человек (`extras.needSessions`).
+  describe('комната с участником, которому нужен человек', () => {
+    const roomTab = { kind: 'room', id: 'room:r-01', roomId: 'r-01' } as const;
+    const withNeeds = (...ids: string[]): TabMetaExtras => ({
+      ...EMPTY_EXTRAS,
+      needSessions: new Set(ids.map((sessionId) => refKey({ projectPath: '/tmp/p', workId: 'w', sessionId }))),
+    });
+    const members = { ...makeRoom('r-01', 'Возвраты'), members: ['s-02'] };
+
+    it('участник с need — accent; без need и без extras — без подкраски', () => {
+      const e = entry([session('s-02', 'исполнитель')], [members]);
+      expect(tabMeta(roomTab, e, withNeeds('s-02')).tint).toBe('accent');
+      expect(tabMeta(roomTab, e, withNeeds()).tint).toBeNull();
+      expect(tabMeta(roomTab, e).tint).toBeNull();
+    });
+
+    it('need у не участника комнаты не считается', () => {
+      const e = entry([session('s-02', 'исполнитель'), session('s-03', 'ревью')], [members]);
+      expect(tabMeta(roomTab, e, withNeeds('s-03')).tint).toBeNull();
+    });
+
+    it('закрытый и спящий участник не считается; архивная комната не подсвечивается', () => {
+      const closed = { ...session('s-02', 'исполнитель'), lifecycle: 'closed' } as WorkSession;
+      expect(tabMeta(roomTab, entry([closed], [members]), withNeeds('s-02')).tint).toBeNull();
+      const sleeping = { ...session('s-02', 'исполнитель'), lifecycle: 'sleeping' } as WorkSession;
+      expect(tabMeta(roomTab, entry([sleeping], [members]), withNeeds('s-02')).tint).toBeNull();
+      const archived = { ...members, archivedAt: '2026-10-08T12:00:00.000Z' };
+      expect(tabMeta(roomTab, entry([session('s-02', 'исполнитель')], [archived]), withNeeds('s-02')).tint).toBeNull();
+    });
+  });
+
   it('комната старой карты — без lead и proposal — читается, подкраски нет', () => {
     const old = entry([], [{ id: 'r-01', title: 'Старая', creator: 'human', members: [], createdAt: '2026-01-01T00:00:00.000Z' } as Room]);
     expect(tabMeta({ kind: 'room', id: 'room:r-01', roomId: 'r-01' }, old).tint).toBeNull();

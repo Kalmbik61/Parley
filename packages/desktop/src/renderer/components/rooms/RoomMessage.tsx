@@ -32,9 +32,11 @@
  * (`chat/items/PromptItem.tsx`); сообщения агентов и системы — слева, без пузыря.
  */
 
+import type { SessionNeed } from '@parley/core';
 import type { MailWait } from '@parley/protocol';
 import { LoaderCircle } from 'lucide-react';
 import { S } from '../../../shared/strings.js';
+import { mailWaitText } from '../../attention/derive.js';
 import { cn } from '../../lib/cn.js';
 import { isoMs } from '../../lib/iso-time.js';
 import { relativeTime } from '../../lib/relative-time.js';
@@ -78,9 +80,17 @@ function clockTime(iso: string): string {
  */
 const DELIVERING: ReadonlySet<MailWait> = new Set<MailWait>(['resuming', 'in-flight', 'pointed']);
 
-/** `S01 (busy), S03` — теги ждущих, после тега в скобках причина от хоста. */
-function waitingTags(waiting: ReadonlyArray<{ tag: string; reason: MailWait | null }>): string {
-  return waiting.map(({ tag, reason }) => (reason === null ? tag : `${tag} (${S.rooms.mailWait[reason]})`)).join(', ');
+/**
+ * `S01 (busy), S03` — теги ждущих, после тега в скобках причина от хоста. У `stuck` текст берётся из `need` ждущей
+ * сессии: `S03 (usage limit until 19:27)` (спека застрявших 7.3).
+ */
+function waitingTags(waiting: ReadonlyArray<{ tag: string; reason: MailWait | null; need?: SessionNeed }>, now: Date): string {
+  return waiting
+    .map(({ tag, reason, need }) => {
+      const text = mailWaitText(reason, need ?? null, now.getTime());
+      return text === null ? tag : `${tag} (${text})`;
+    })
+    .join(', ');
 }
 
 /** Цитата — одна строка с обрезкой и акцентной чертой слева; у кнопки и у заглушки «оригинала нет» вид общий. */
@@ -209,12 +219,12 @@ export function RoomMessage({
                     aria-hidden="true"
                     className="mr-1 inline-block size-3 animate-spin align-[-2px] motion-reduce:animate-none"
                   />
-                  {S.rooms.delivering(waitingTags(delivering))}
+                  {S.rooms.delivering(waitingTags(delivering, now))}
                 </span>
               ),
               stalled.length === 0 ? null : (
                 <span key="waiting" data-message-waiting="">
-                  {S.rooms.notPickedUp(waitingTags(stalled))}
+                  {S.rooms.notPickedUp(waitingTags(stalled, now))}
                 </span>
               ),
             ]

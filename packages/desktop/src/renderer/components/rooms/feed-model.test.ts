@@ -8,7 +8,8 @@ import { describe, expect, it } from 'vitest';
 import { capPlan, type AgentPlanItem } from '@parley/core/agent-plan';
 import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
 import type { LiveMetrics, LiveTask, MailWait } from '@parley/protocol';
-import { activityMap, makeActivity, makeLetter, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
+import type { ActivityEntry } from '../../store/activity.js';
+import { activityMap, makeActivity, makeLetter, makeNeed, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
 import { buildRoomModel, type RoomModel } from './feed-model.js';
 
 const PROJECT = '/tmp/proj';
@@ -200,6 +201,49 @@ describe('buildRoomModel — модель участника из живых м�
       ['s-02', 'Haiku 4.5'],
       ['s-03', null],
     ]);
+  });
+});
+
+// Спека застрявших 7.3: участник несёт `need` живой сессии — слово причины рисует лента участников.
+describe('buildRoomModel — чего участник ждёт от человека (need)', () => {
+  const need = makeNeed('limit', { resetsAt: '2026-10-21T16:27:00.000Z' });
+  const needOf = (entry: WorkEntry, activity: Record<string, ActivityEntry>) =>
+    build(entry, activity).participants.map((participant) => [participant.id, participant.need]);
+
+  it('живая сессия с need — need как есть; без need и без активности — null', () => {
+    const activity = activityMap([makeActivity(REF('s-02'), 'unseen', { need })]);
+    expect(needOf(entryOf(), activity)).toEqual([
+      ['s-01', null],
+      ['s-02', need],
+      ['s-03', null],
+    ]);
+    expect(needOf(entryOf(), {})).toEqual([
+      ['s-01', null],
+      ['s-02', null],
+      ['s-03', null],
+    ]);
+  });
+
+  it('спящая и закрытая сессия с остатком need в записи активности — null', () => {
+    const mixed = sessions();
+    mixed[1] = makeSession('s-02', 'бэкенд', { lifecycle: 'sleeping' });
+    mixed[2] = makeSession('s-03', 'ревью', { lifecycle: 'closed' });
+    const activity = activityMap([makeActivity(REF('s-02'), 'idle', { need }), makeActivity(REF('s-03'), 'idle', { need })]);
+    expect(needOf(entryOf({ sessions: mixed }), activity).map(([, value]) => value)).toEqual([null, null, null]);
+  });
+
+  it('внимание участника с need — needs-you, точка blocked, слово needs you (причину вместо слова рисует лента)', () => {
+    const activity = activityMap([makeActivity(REF('s-02'), 'unseen', { need })]);
+    const stuck = build(entryOf(), activity).participants[1];
+    expect(stuck?.attention).toBe('needs-you');
+    expect(stuck?.state).toBe('blocked');
+    expect(stuck?.word).toBe('needs you');
+  });
+
+  it('спящий участник с остатком need: точка по статусу карты, не blocked', () => {
+    const sleeping = entryOf().map.sessions.map((session) => (session.id === 's-02' ? { ...session, lifecycle: 'sleeping' as const } : session));
+    const activity = activityMap([makeActivity(REF('s-02'), 'idle', { need })]);
+    expect(build(entryOf({ sessions: sleeping }), activity).participants[1]?.state).toBe('exited');
   });
 });
 
@@ -795,6 +839,28 @@ describe('buildRoomModel — доставка: кто забрал сообще�
     expect(toHuman?.delivery).toEqual({ picked: [], waiting: [] });
     expect(system?.delivery).toEqual({ picked: [], waiting: [] });
     expect(mixed?.delivery).toEqual({ picked: [], waiting: [{ tag: 'S02', reason: null }] });
+  });
+
+  it('ждущий несёт need своей живой сессии (спека застрявших 7.3); без need поля в записи нет', () => {
+    const need = makeNeed('limit', { resetsAt: '2026-10-21T16:27:00.000Z' });
+    const entry = entryOf({ messages: [message('m-1')] });
+    const activity = activityMap([
+      makeActivity(REF('s-02'), 'unseen', { need, metrics: { tokensIn: null, tokensOut: null, durationMs: null, unread: 0, subagents: 0, model: null, mailWaiting: 'stuck' } }),
+    ]);
+    expect(deliveryOf(entry, activity)?.waiting).toEqual([
+      { tag: 'S01', reason: null },
+      { tag: 'S02', reason: 'stuck', need },
+      { tag: 'S03', reason: null },
+    ]);
+  });
+
+  it('need спящей сессии в запись доставки не попадает', () => {
+    const need = makeNeed('limit');
+    const sleeping = sessions();
+    sleeping[1] = makeSession('s-02', 'бэкенд', { lifecycle: 'sleeping' });
+    const entry = entryOf({ sessions: sleeping, messages: [message('m-1')] });
+    const waiting = deliveryOf(entry, activityMap([makeActivity(REF('s-02'), 'idle', { need })]))?.waiting;
+    expect(waiting?.find((item) => item.tag === 'S02')).toEqual({ tag: 'S02', reason: null });
   });
 
   it('причина — metrics.mailWaiting сессии; нет активности, нет метрик, нет поля и null дают reason: null', () => {

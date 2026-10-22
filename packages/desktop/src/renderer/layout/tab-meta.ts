@@ -14,6 +14,7 @@ import { workKey as workKeyOf } from '../../shared/work-keys.js';
 import { humanUnreadLetters, roomAwaitsDecision, type Attention } from '../attention/derive.js';
 import { bufferKey } from '../files/buffer.js';
 import { sessionRowLabel, sessionTag } from '../lib/participant.js';
+import { isRoomArchived } from '../lib/room-archive.js';
 
 /**
  * Данные хранилищ для `tabMeta` одним входом (кусок 4.2): `tabMeta` остаётся чистой, а
@@ -23,9 +24,11 @@ export interface TabMetaExtras {
   attention: Record<string /* refKey */, Attention>;   // 4.2
   dirtyTabIds: ReadonlySet<string>;                     // 7.3a: bufferKey грязных буферов — не голые id вкладок
   browser: Record<string /* tabId */, { title: string | null; favicon: string | null }>;  // 9.2a: browser/store.ts
+  /** refKey живых сессий, которым нужен человек (`SessionActivity.need`): подкраска вкладки комнаты (спека застрявших 7.3). */
+  needSessions: ReadonlySet<string>;
 }
 
-export const EMPTY_EXTRAS: TabMetaExtras = { attention: {}, dirtyTabIds: new Set(), browser: {} };
+export const EMPTY_EXTRAS: TabMetaExtras = { attention: {}, dirtyTabIds: new Set(), browser: {}, needSessions: new Set() };
 
 /** Подкраска вкладки-пилюли (спека окна 2026-09-29, 1.1): `accent` — accent-200, `accent-2` — accent-2-200. */
 export type TabTint = 'accent' | 'accent-2';
@@ -41,7 +44,8 @@ export interface TabMeta {
   needsYou: boolean;
   /**
    * Подкраска пилюли (Organic, 1.1): сессия `needs-you` — `accent`, `unseen` — `accent-2`; комната с
-   * ждущим решением и почта с непрочитанным человеком письмом — `accent`; у прочих видов нет.
+   * ждущим решением (или живым участником, которому нужен человек) и почта с непрочитанным человеком письмом —
+   * `accent`; у прочих видов нет.
    */
   tint: TabTint | null;
   /** Вкладка file с несохранённым буфером своей работы (кусок 7.3a). */
@@ -164,7 +168,18 @@ export function tabMeta(tab: TabSpec, entry: WorkEntry | null, extras: TabMetaEx
       const room = entry?.map.rooms.find((candidate) => candidate.id === tab.roomId) ?? null;
       // Решение ждёт человека — то же правило, что у строки комнаты и карточки (`roomAwaitsDecision`).
       const awaiting = room !== null && roomAwaitsDecision(room);
-      return { title: truncateTitle(room?.title ?? S.rooms.fallbackTitle), icon: 'room', session: null, ...empty, tint: awaiting ? 'accent' : null };
+      // И живому участнику нужен человек (`need`, спека застрявших 7.3) — как у строки комнаты в сайдбаре: архивная
+      // комната внимания не просит, закрытый и спящий участник `need` не имеет.
+      const stuck =
+        entry !== null &&
+        room !== null &&
+        !isRoomArchived(room) &&
+        room.members.some(
+          (id) =>
+            findSession(entry, id)?.lifecycle === 'active' &&
+            extras.needSessions.has(refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: id })),
+        );
+      return { title: truncateTitle(room?.title ?? S.rooms.fallbackTitle), icon: 'room', session: null, ...empty, tint: awaiting || stuck ? 'accent' : null };
     }
     case 'diff': {
       const shortHash = tab.commit === null ? null : tab.commit.slice(0, 7);

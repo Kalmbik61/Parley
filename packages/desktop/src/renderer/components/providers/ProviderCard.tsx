@@ -12,6 +12,7 @@ import { Button } from '../../ui/button.js';
 import { Input } from '../../ui/input.js';
 import { AgentIcon } from '../AgentIcon.js';
 import { CheckLine, knownReason, maskedHint, newerCheck } from './check-line.js';
+import { accountOf } from './custom-provider-draft.js';
 import { GLM_KEY_URL, PROVIDER_INSTALL } from './provider-install.js';
 
 export interface ProviderCardProps {
@@ -168,6 +169,71 @@ export function ProviderCard({
   };
 
   if (!open) return null;
+  // Аккаунт подписки (спека подписок 4.2): вход и настройки живут в Settings, карточка показывает состояние, лимиты и
+  // ведёт туда. Ветка стоит до остальных своих провайдеров, Claude, Codex и GLM.
+  const account = accountOf(provider.custom);
+  if (account !== null) {
+    const accountFiveHour = provider.limits?.fiveHour?.usedPercent;
+    const accountWeek = provider.limits?.week?.usedPercent;
+    // CLI старше минимума или его нет (спека подписок 10): входить нечем, состояние входа не узнать — карточка называет
+    // требование вместо «Checking…» и кнопки Sign in.
+    const cliProblem = provider.needs === 'cli' ? S.accounts.needsCli(name) : null;
+    const state = account.signingIn
+      ? S.accounts.signingIn
+      : account.signedIn === true
+        ? S.accounts.signedIn
+        : account.signedIn === false
+          ? S.accounts.notSignedIn
+          : S.accounts.checking;
+    return (
+      <div className="space-y-3 text-sm text-foreground" data-provider-card={provider.id}>
+        <div className="flex items-center gap-2">
+          <AgentIcon provider={provider.id} size={20} />
+          <h3 className="font-heading">{name}</h3>
+          {cliProblem === null ? <span className="ml-auto text-xs text-muted-foreground">{state}</span> : null}
+        </div>
+        {cliProblem === null ? null : (
+          <p data-account-needs-cli="" className="break-words text-xs text-muted-foreground">
+            {cliProblem}
+          </p>
+        )}
+        {provider.version == null ? null : <p className="font-mono text-xs text-muted-foreground">{provider.version}</p>}
+        {provider.available && (accountFiveHour !== undefined || accountWeek !== undefined) ? (
+          <p className="text-xs tabular-nums text-muted-foreground">
+            {S.statusBar.limitsText(
+              accountFiveHour === undefined ? null : Math.floor(accountFiveHour),
+              accountWeek === undefined ? null : Math.floor(accountWeek),
+            )}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap gap-2">
+          {account.signedIn === true || cliProblem !== null ? null : (
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                onOpenSettings?.();
+                useUiStore.getState().openSettingsDialog('providers', { provider: provider.id, signIn: true });
+              }}
+            >
+              {S.accounts.signIn}
+            </Button>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              onOpenSettings?.();
+              useUiStore.getState().openSettingsDialog('providers', { provider: provider.id });
+            }}
+          >
+            {S.customProviders.openInSettings}
+          </Button>
+        </div>
+      </div>
+    );
+  }
   // Свой провайдер (спека 4.3): ключ и настройки живут в окне Settings, карточка лишь показывает состояние.
   // Ветка стоит до Claude, Codex и GLM.
   if (provider.custom != null) {

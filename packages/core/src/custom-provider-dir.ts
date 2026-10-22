@@ -10,7 +10,12 @@ import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { customProviderDir, isValidCustomProviderId, type CustomProviderRecord } from './custom-providers.js';
+import {
+  customProviderDir,
+  isAccountRecord,
+  isValidCustomProviderId,
+  type CustomProviderRecord,
+} from './custom-providers.js';
 import { parleyHome } from './work/store.js';
 
 /** Что подтягивается ссылками из папки Claude Code человека (спека 5.4). */
@@ -155,8 +160,17 @@ export interface PrepareOptions {
 }
 
 /**
- * Готовит папку провайдера перед запуском (спека 5.4, 6.2): папка 0700, `projects/`, посев
- * `hasCompletedOnboarding` слиянием и сверка ссылок. Идемпотентна.
+ * Нужны ли папке провайдера ссылки на общее из папки Claude Code человека (спека подписок 6): у своего провайдера
+ * с адресом это `linkClaude`, у аккаунта подписки — `link` («Bring from …»). Единственное место, где это решается.
+ */
+export function wantLinks(record: CustomProviderRecord): boolean {
+  return isAccountRecord(record) ? record.link : record.linkClaude;
+}
+
+/**
+ * Готовит папку провайдера перед запуском (спека 5.4, 6.2; спека подписок 5.4): папка 0700, `projects/`, посев
+ * `hasCompletedOnboarding` слиянием и сверка ссылок по `wantLinks`. Одинакова для своего провайдера и для аккаунта
+ * подписки. Идемпотентна.
  */
 export async function prepareCustomProviderDir(record: CustomProviderRecord, options: PrepareOptions): Promise<void> {
   const dir = customProviderDir(record.id, options.home ?? parleyHome());
@@ -177,7 +191,7 @@ export async function prepareCustomProviderDir(record: CustomProviderRecord, opt
     { create: true },
   );
 
-  const want = record.linkClaude;
+  const want = wantLinks(record);
   const sourceFile = path.join(dir, LINK_SOURCE_FILE);
   const previous = (await readFile(sourceFile, 'utf8').catch(() => null))?.trim() || null;
   const roots = previous === null ? [options.claudeConfigDir] : [options.claudeConfigDir, previous];

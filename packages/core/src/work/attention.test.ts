@@ -8,12 +8,16 @@ import {
   plainHumanMention,
   roomAwaitsDecision,
   sessionAttention,
+  sessionNeed,
 } from './attention.js';
 import type { SessionActivity } from './activity.js';
+import type { SessionNeed } from './stuck.js';
 import type { Message, Room, WorkMap, WorkSession } from './types.js';
 
 const session = (lifecycle: string): WorkSession => ({ id: 's1', lifecycle }) as unknown as WorkSession;
-const live = (activity: string): SessionActivity => ({ activity }) as unknown as SessionActivity;
+const live = (activity: string, need?: SessionNeed | null): SessionActivity =>
+  ({ activity, ...(need === undefined ? {} : { need }) }) as unknown as SessionActivity;
+const limitNeed: SessionNeed = { kind: 'limit', since: '2026-10-21T10:00:00.000Z', detail: null, resetsAt: null, window: null, account: null };
 
 function message(over: Partial<Message> & { id: string }): Message {
   return {
@@ -52,6 +56,39 @@ describe('sessionAttention', () => {
   it('ранги упорядочены от off к needs-you', () => {
     expect(ATTENTION_RANK['needs-you']).toBeGreaterThan(ATTENTION_RANK.unseen);
     expect(ATTENTION_RANK.idle).toBeGreaterThan(ATTENTION_RANK.off);
+  });
+
+  // Спека застрявших 7.3: `need` — «нужен ты» до разбора activity; лимит и вход оставляют ход законченным (3.1).
+  it('живая сессия с need — needs-you при любой activity', () => {
+    for (const activity of ['working', 'unseen', 'idle', 'blocked']) {
+      expect(sessionAttention(session('active'), live(activity, limitNeed))).toBe('needs-you');
+    }
+  });
+
+  it('need у спящей — idle, у закрытой — off, у ожидающей запуска — idle: процесса нет, ждать человека некому', () => {
+    expect(sessionAttention(session('sleeping'), live('idle', limitNeed))).toBe('idle');
+    expect(sessionAttention(session('pending'), live('idle', limitNeed))).toBe('idle');
+    expect(sessionAttention(session('closed'), live('idle', limitNeed))).toBe('off');
+  });
+
+  it('need: null и хост прежней версии без поля — как раньше (спека застрявших 8, п. 10)', () => {
+    expect(sessionAttention(session('active'), live('unseen', null))).toBe('unseen');
+    expect(sessionAttention(session('active'), live('unseen'))).toBe('unseen');
+  });
+});
+
+describe('sessionNeed', () => {
+  it('need живой сессии — как есть; без need, без activity и у хоста прежней версии — null', () => {
+    expect(sessionNeed(session('active'), live('idle', limitNeed))).toBe(limitNeed);
+    expect(sessionNeed(session('active'), live('idle', null))).toBeNull();
+    expect(sessionNeed(session('active'), live('idle'))).toBeNull();
+    expect(sessionNeed(session('active'), null)).toBeNull();
+  });
+
+  it('у спящей, ожидающей запуска и закрытой — null, даже если запись активности осталась', () => {
+    for (const lifecycle of ['sleeping', 'pending', 'closed']) {
+      expect(sessionNeed(session(lifecycle), live('idle', limitNeed))).toBeNull();
+    }
   });
 });
 

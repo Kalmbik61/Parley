@@ -7,7 +7,7 @@
  * поэтому считается здесь своими функциями, а не через `recipientsOf`.
  */
 
-import type { Message, WorkEntry, WorkMap } from '@parley/core';
+import type { Message, SessionNeed, WorkEntry, WorkMap } from '@parley/core';
 import {
   ATTENTION_RANK,
   humanUnreadLetters,
@@ -16,9 +16,12 @@ import {
   isHumanUnread,
   roomAwaitsDecision,
   sessionAttention,
+  sessionNeed,
   type Attention,
 } from '@parley/core/attention';
-import { refKey } from '@parley/protocol';
+import { needWord } from '@parley/core/session-state';
+import { refKey, type MailWait } from '@parley/protocol';
+import { S } from '../../shared/strings.js';
 import { hasHumanMention } from '../components/rooms/room-remark.js';
 import { isoMs } from '../lib/iso-time.js';
 import { archivedRoomIds, isRoomArchived } from '../lib/room-archive.js';
@@ -29,8 +32,75 @@ import type { ActivityEntry } from '../store/activity.js';
 const HUMAN = 'human';
 
 // Предикаты внимания живут в core (`work/attention.ts`): их считает и хост. Имена и сигнатуры окна прежние.
-export { ATTENTION_RANK, humanUnreadLetters, isHumanUnread, roomAwaitsDecision, sessionAttention };
+export { ATTENTION_RANK, humanUnreadLetters, isHumanUnread, roomAwaitsDecision, sessionAttention, sessionNeed };
 export type { Attention };
+
+// Время сброса лимита — по часам машины, `HH:mm` (спека застрявших 7.3); дата другого дня — `Oct 14`.
+const CLOCK = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
+
+/**
+ * Когда сбросится лимит `need` (3.4): `when` — `19:27`, не сегодня — `Oct 14, 19:27`; `reset` — время уже прошло;
+ * `null` — времени нет или оно не разбирается.
+ */
+function limitReset(need: SessionNeed, now: number): { when: string; reset: boolean } | null {
+  const at = need.resetsAt === null ? null : isoMs(need.resetsAt);
+  if (at === null) return null;
+  const date = new Date(at);
+  const clock = CLOCK.format(date);
+  const when = date.toDateString() === new Date(now).toDateString() ? clock : `${DAY.format(date)}, ${clock}`;
+  return { when, reset: at <= now };
+}
+
+/**
+ * Метка `need` в строке сессии и на карточке участника (спека застрявших 7.3): слово вида — `needWord` из core, у
+ * лимита рядом время сброса. Обрамление — `S.need`.
+ */
+export function needLabel(need: SessionNeed, now: number): string {
+  const word = needWord(need.kind);
+  if (need.kind !== 'limit') return word;
+  const limit = limitReset(need, now);
+  if (limit === null) return word;
+  return limit.reset ? S.need.reset(word) : S.need.withTime(word, limit.when);
+}
+
+/** Подсказка метки: чего ждёт сессия, затем `detail` (команда, текст вопроса или ошибки). */
+export function needTooltip(need: SessionNeed): string {
+  const lead =
+    need.kind === 'sign-in' && need.account === 'account'
+      ? S.need.accountLead
+      : S.need.lead[need.kind](needWord(need.kind));
+  return need.detail === null ? lead : S.need.withDetail(lead, need.detail);
+}
+
+/**
+ * Причина в строке доставки под сообщением (`MailWait`, спека застрявших 7.3): у `stuck` — по `need` ждущей сессии
+ * (`waiting for your approval`, `usage limit until 19:27`…), у прочих причин — таблица окна. Причина, которой окно
+ * не знает (хост новее окна), — общее `waiting`, а не пустая скобка; `null` — причины нет.
+ */
+export function mailWaitText(reason: MailWait | null, need: SessionNeed | null, now: number): string | null {
+  if (reason === null) return null;
+  if (reason === 'stuck' && need !== null) {
+    const word = needWord(need.kind);
+    switch (need.kind) {
+      case 'approval':
+        return S.need.mail.approval(word);
+      case 'question':
+        return S.need.mail.question(word);
+      case 'limit': {
+        const limit = limitReset(need, now);
+        if (limit === null) return S.need.mail.limit(word);
+        return limit.reset ? S.need.mail.limitReset(word) : S.need.mail.limitUntil(word, limit.when);
+      }
+      case 'sign-in':
+        return need.account === 'account' ? S.need.mail.accountProblem : S.need.mail.signedOut;
+      case 'startup':
+        return S.need.mail.startup;
+    }
+  }
+  const known: Partial<Record<string, string>> = S.rooms.mailWait;
+  return known[reason] ?? S.rooms.mailWaitUnknown;
+}
 
 // Те же литералы, что `RETURNED_LETTER` и `ACCEPTED_LETTER` в `core/work/proposals.ts`: из core рендерер берёт только
 // типы. Сходство держит страж `main/decision-letters-sync.test.ts`.

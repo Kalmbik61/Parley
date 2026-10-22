@@ -10,13 +10,18 @@ import type { ActivityService } from './activity-service.js';
 /** Подписывает сервис активности на процесс и сигналы codex; возвращает отписку. */
 export function linkTerminalActivity(
   pty: Pick<PtyManager, 'on' | 'get'>,
-  activity: Pick<ActivityService, 'terminalStarted' | 'terminalSignal' | 'terminalStopped'>,
+  activity: Pick<
+    ActivityService,
+    'terminalStarted' | 'terminalSignal' | 'terminalStopped' | 'processStarted'
+  >,
 ): () => void {
   const off = [
     // Ручка уже в `get()`: событие `start` идёт после регистрации процесса. Срок экранов старта и
-    // чистое состояние — только у codex; у остальных `provider` другой, и хуки ведут их сами.
+    // чистое состояние — у codex; у остальных `provider` другой, и хуки ведут их сами, а хосту важен лишь момент запуска:
+    // от него считаются срок экрана старта и «новые» строки журнала (`processStarted`).
     pty.on('start', (ref) => {
       if (pty.get(ref)?.provider === 'codex') activity.terminalStarted(ref);
+      else activity.processStarted(ref);
     }),
     pty.on('signal', (ref, signal) => activity.terminalSignal(ref, signal)),
     // Без состояния (не codex) `terminalStopped` ничего не делает.

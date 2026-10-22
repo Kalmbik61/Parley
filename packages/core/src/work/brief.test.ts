@@ -335,6 +335,29 @@ describe('бриф: роль в комнате', () => {
     );
   });
 
+  it('ведущему: о застрявшем участнике — тема stuck, а не передача части самому (спека застрявших 5.4)', () => {
+    const brief = buildBrief(mapWithRoom(), 's-02');
+
+    const line = brief
+      .split('\n')
+      .find((candidate) => candidate.startsWith('- r-01 "Бэкенд": you are the lead.'));
+    expect(line?.endsWith(
+      " If Parley reports a participant as stuck, do not hand its part to others on your own: follow topic `stuck` of `read_guide`.",
+    )).toBe(true);
+    expect(LEAD_ROLE.endsWith('follow topic `stuck` of `read_guide`.')).toBe(true);
+  });
+
+  it('участнику: о застрявшем участнике человека не звать — это делает ведущий', () => {
+    const brief = buildBrief(mapWithRoom(), 's-03');
+
+    const line = brief
+      .split('\n')
+      .find((candidate) => candidate.startsWith('- r-01 "Бэкенд": the lead is'));
+    expect(line?.endsWith(
+      ' If Parley reports a participant as stuck, do not call the human about it: the lead does.',
+    )).toBe(true);
+  });
+
   it('участнику: задача человека требует ответа, даже если письмо — note', () => {
     const brief = buildBrief(mapWithRoom(), 's-03');
 

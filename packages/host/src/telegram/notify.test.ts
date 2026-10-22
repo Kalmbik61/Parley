@@ -33,6 +33,25 @@ describe('activityTransition', () => {
     activityTransition(memory, ref, session(), live('idle'));
     expect(activityTransition(memory, ref, session('closed'), live('blocked'))).toBeNull();
   });
+  // Спека подписок К16: «needs you» в Telegram — тот же уровень, что в окне. Лимит и слетевший вход оставляют ход
+  // законченным (`unseen`/`idle`), но `need` у живой сессии значит «нужен ты» (core `sessionAttention`).
+  const withNeed = (activity: SessionActivity['activity'], kind: string): SessionActivity =>
+    ({ activity, need: { kind } }) as unknown as SessionActivity;
+  it('живая сессия с need при законченном ходе (лимит, вход) — needs-you; повтор — null', () => {
+    const memory = emptyMemory();
+    activityTransition(memory, ref, session(), live('working'));
+    expect(activityTransition(memory, ref, session(), withNeed('unseen', 'limit'))).toBe('needs-you');
+    expect(activityTransition(memory, ref, session(), withNeed('unseen', 'limit'))).toBeNull();
+    expect(activityTransition(memory, ref, session(), live('working'))).toBeNull();
+    expect(activityTransition(memory, ref, session(), withNeed('idle', 'sign-in'))).toBe('needs-you');
+  });
+  it('need у спящей и закрытой сессии — не повод', () => {
+    for (const lifecycle of ['sleeping', 'closed'] as const) {
+      const memory = emptyMemory();
+      activityTransition(memory, ref, session(lifecycle), live('idle'));
+      expect(activityTransition(memory, ref, session(lifecycle), withNeed('unseen', 'limit'))).toBeNull();
+    }
+  });
 });
 
 const message = (id: string, over: Partial<Message> = {}): Message =>

@@ -9,6 +9,7 @@ import type { RequestInfo } from '../context.js';
 import { startHost } from '../host.js';
 import type { HostOptions, RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
+import type { ProviderVersions } from '../providers/versions.js';
 import { createProvidersList } from './providers.js';
 
 let hosts: RunningHost[] = [];
@@ -509,5 +510,44 @@ describe('providers.list: каталог Codex от CLI и argsOverridden (сп�
     await handler({}, {} as RequestInfo);
 
     expect(refreshIfStale).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('providers.list: аккаунт подписки и состояние входа (спека подписок 5.1, 5.5)', () => {
+  const record = { kind: 'claude-account', id: 'custom-claude-2', label: 'Claude Code 2', link: false };
+  // Версия выше минимума аккаунта: «старый CLI» не перекроет «нужен вход».
+  const versions: ProviderVersions = { ready: Promise.resolve(), get: () => '2.1.306', fresh: async () => '2.1.306' };
+
+  async function accountRows(status: boolean | null, signingIn = false) {
+    process.env['PARLEY_CLAUDE_BIN'] = process.execPath;
+    extraEnv.push('PARLEY_CLAUDE_BIN');
+    await boot({
+      prepare: (home) => writeFile(path.join(home, 'custom-providers.json'), JSON.stringify({ version: 1, providers: [record] }), 'utf8'),
+    });
+    const asked: string[] = [];
+    const auth = { status: (id: string) => (asked.push(id), status), signingIn: () => signingIn };
+    const { providers } = await createProvidersList(versions, undefined, undefined, undefined, undefined, auth)({}, {} as RequestInfo);
+    return { row: providers.find((provider) => provider.id === 'custom-claude-2'), providers, asked };
+  }
+
+  it('вошёл: available, signedIn true; состояние спрашивается только у аккаунта', async () => {
+    const { row, providers, asked } = await accountRows(true);
+    expect(row).toMatchObject({
+      label: 'Claude Code 2', available: true, needs: null, family: 'claude',
+      custom: { kind: 'claude-account', link: false, signedIn: true, signingIn: false },
+    });
+    expect(row?.custom).toMatchObject({ folder: expect.stringContaining('custom-claude-2') });
+    expect(providers.map((provider) => provider.id)).toEqual(['claude', 'codex', 'glm', 'custom-claude-2']);
+    expect(asked).toEqual(['custom-claude-2']);
+  });
+
+  it('не вошёл: needs sign-in, available false, signedIn false', async () => {
+    expect((await accountRows(false)).row).toMatchObject({ available: false, needs: 'sign-in', custom: { signedIn: false } });
+  });
+
+  it('не проверялось, вход идёт: signedIn null, signingIn true, всё ещё needs sign-in', async () => {
+    expect((await accountRows(null, true)).row).toMatchObject({
+      available: false, needs: 'sign-in', custom: { signedIn: null, signingIn: true },
+    });
   });
 });

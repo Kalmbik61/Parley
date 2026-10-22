@@ -3,6 +3,7 @@ import { EFFORT_TOKEN_RE, PROTOCOL_VERSION } from './index.js';
 import type { EffortOption } from './index.js';
 import { METHODS, NOTIFICATIONS } from './methods.js';
 import type { Params, PermissionModeChoice, Result } from './methods.js';
+import type { CustomAccountInfo, CustomProviderInfo } from './custom-providers.js';
 import type { EventData } from './events.js';
 import type { FeedDecisions } from './feed.js';
 import type { Capabilities, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderCheck, ProviderCheckReason, ProviderLimits } from './types.js';
@@ -37,7 +38,7 @@ describe('provider key protocol additions', () => {
 
   it('keeps list additions optional and exposes only a hint in mutation results', () => {
     type Provider = Result<'providers.list'>['providers'][number];
-    expectTypeOf<Provider['needs']>().toEqualTypeOf<'cli' | 'key' | null | undefined>();
+    expectTypeOf<Provider['needs']>().toEqualTypeOf<'cli' | 'key' | 'sign-in' | null | undefined>();
     expectTypeOf<Provider['keyHint']>().toEqualTypeOf<string | null | undefined>();
     expectTypeOf<Provider['family']>().toEqualTypeOf<'claude' | null | undefined>();
     expectTypeOf<Result<'providers.setKey'>>().toEqualTypeOf<{ keyHint: string }>();
@@ -387,7 +388,7 @@ describe('модель, усилие и поля providers.list (дизайн к
       id: string;
       label: string;
       available: boolean;
-      needs?: 'cli' | 'key' | null;
+      needs?: 'cli' | 'key' | 'sign-in' | null;
       keyHint?: string | null;
       family?: 'claude' | null;
       models?: Array<{
@@ -400,6 +401,7 @@ describe('модель, усилие и поля providers.list (дизайн к
       version?: string | null;
       limits?: ProviderLimits | null;
       check?: ProviderCheck | null;
+      custom?: CustomProviderInfo | null;
     }>();
     // Хост до дизайна комнат отдаёт элементы без новых полей — тип обязан это допускать.
     const legacy: Result<'providers.list'> = { providers: [{ id: 'claude', label: 'Claude', available: true }] };
@@ -718,5 +720,87 @@ describe('sessions.rename (часть 2 спеки архива комнат, 15
       label: string;
     }>();
     expectTypeOf<Result<'sessions.rename'>>().toEqualTypeOf<{ ok: true }>();
+  });
+});
+
+describe('вход в аккаунт подписки (спека подписок 5.5)', () => {
+  const NEW_METHODS = [
+    'providers.authStatus',
+    'providers.signIn',
+    'providers.signInInput',
+    'providers.signInResize',
+    'providers.cancelSignIn',
+    'providers.signOut',
+  ] as const;
+
+  it('шесть новых методов есть в METHODS и требуют провайдера строкой', () => {
+    for (const name of NEW_METHODS) {
+      expect(METHODS, name).toHaveProperty([name]);
+      expect(METHODS[name].safeParse({}).success, name).toBe(false);
+      expect(METHODS[name].safeParse({ provider: 42 }).success, name).toBe(false);
+    }
+    for (const name of ['providers.authStatus', 'providers.signIn', 'providers.cancelSignIn', 'providers.signOut'] as const) {
+      expect(METHODS[name].safeParse({ provider: 'custom-claude-2' }).success, name).toBe(true);
+    }
+  });
+
+  it('signInInput: данные не длиннее 4096', () => {
+    const parse = (data: unknown) => METHODS['providers.signInInput'].safeParse({ provider: 'custom-claude-2', data });
+    expect(parse('code-from-browser\r').success).toBe(true);
+    expect(parse('x'.repeat(4096)).success).toBe(true);
+    expect(parse('x'.repeat(4097)).success).toBe(false);
+    expect(parse(42).success).toBe(false);
+    expect(METHODS['providers.signInInput'].safeParse({ provider: 'custom-claude-2' }).success).toBe(false);
+  });
+
+  it('signInResize: cols 20..500 и rows 5..200, целые', () => {
+    const parse = (cols: unknown, rows: unknown) => METHODS['providers.signInResize'].safeParse({ provider: 'codex-two', cols, rows });
+    expect(parse(20, 5).success).toBe(true);
+    expect(parse(500, 200).success).toBe(true);
+    expect(parse(19, 24).success).toBe(false);
+    expect(parse(501, 24).success).toBe(false);
+    expect(parse(80, 4).success).toBe(false);
+    expect(parse(80, 201).success).toBe(false);
+    expect(parse(80.5, 24).success).toBe(false);
+    expect(parse('80', 24).success).toBe(false);
+  });
+
+  it('результаты и события входа', () => {
+    expectTypeOf<Result<'providers.authStatus'>>().toEqualTypeOf<{ signedIn: boolean; detail: string | null }>();
+    expectTypeOf<Result<'providers.signIn'>>().toEqualTypeOf<{ ok: true }>();
+    expectTypeOf<Result<'providers.signInInput'>>().toEqualTypeOf<{ ok: true }>();
+    expectTypeOf<Result<'providers.signInResize'>>().toEqualTypeOf<{ ok: true }>();
+    expectTypeOf<Result<'providers.cancelSignIn'>>().toEqualTypeOf<{ ok: true }>();
+    expectTypeOf<Result<'providers.signOut'>>().toEqualTypeOf<{ ok: true }>();
+    expectTypeOf<Params<'providers.signInInput'>>().toEqualTypeOf<{ provider: string; data: string }>();
+    expectTypeOf<Params<'providers.signInResize'>>().toEqualTypeOf<{ provider: string; cols: number; rows: number }>();
+    expectTypeOf<EventData<'providers.signInOutput'>>().toEqualTypeOf<{ provider: string; data: string }>();
+    expectTypeOf<EventData<'providers.signInExit'>>().toEqualTypeOf<{ provider: string; exitCode: number; signedIn: boolean }>();
+  });
+
+  it('типы записи: providers.list.custom — запись с адресом (kind необязателен) или аккаунт', () => {
+    type Provider = Result<'providers.list'>['providers'][number];
+    expectTypeOf<Provider['custom']>().toEqualTypeOf<CustomProviderInfo | null | undefined>();
+    // Хост и окно до подписок: запись с адресом без `kind` остаётся допустимой.
+    const endpoint = {
+      preset: null,
+      baseUrl: 'https://api.example.com',
+      auth: 'bearer',
+      models: { opus: 'm', sonnet: 'm', haiku: 'm', subagent: 'm' },
+      contextWindow: null,
+      linkClaude: true,
+      folder: '/home/u/.parley/providers/custom-x',
+    } satisfies CustomProviderInfo;
+    expect(endpoint).not.toHaveProperty('kind');
+    const account = {
+      kind: 'claude-account',
+      link: true,
+      folder: '/home/u/.parley/providers/custom-claude-2',
+      signedIn: null,
+      signingIn: false,
+    } satisfies CustomAccountInfo;
+    // Аккаунт — часть общего типа записи, а не отдельная форма: окно сужает его по `kind`.
+    expectTypeOf(account).toMatchTypeOf<CustomProviderInfo>();
+    expectTypeOf(account.signedIn).toEqualTypeOf<null>();
   });
 });

@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { customProviderEntry } from './custom-providers.js';
+import { ACCOUNT_MIN_VERSION_CLAUDE, accountProviderEntry, customProviderEntry } from './custom-providers.js';
 import { PROVIDERS, providerReadiness, providerReadinessError, probeCliVersion } from './providers.js';
 import { clearSecret, writeSecret } from './secrets.js';
 
@@ -91,5 +91,54 @@ describe('providerReadiness своих провайдеров (спека 5.1)',
     const readiness = await providerReadiness(entry, { env: env(), version: '2.1.301', keyPresent: true });
     expect(readiness.needs).toBe('cli');
     expect(providerReadinessError(entry, readiness)).toBe('Kimi requires Claude Code 2.1.302 or newer; install or update the CLI and check again');
+  });
+});
+
+describe('providerReadiness аккаунта (спека подписок 5.5)', () => {
+  const accountEntry = () =>
+    accountProviderEntry({ kind: 'claude-account', id: 'custom-claude-2', label: '', link: true }, { claude: PROVIDERS.claude }, home);
+
+  it.each([null, false, undefined])('вход не подтверждён (%s) → needs sign-in, после проверок CLI и версии', async (signedIn) => {
+    const entry = accountEntry();
+    const readiness = await providerReadiness(entry, {
+      env: env(), version: ACCOUNT_MIN_VERSION_CLAUDE, ...(signedIn === undefined ? {} : { signedIn }),
+    });
+    expect(readiness).toEqual({ needs: 'sign-in', error: null, version: ACCOUNT_MIN_VERSION_CLAUDE });
+    expect(providerReadinessError(entry, readiness)).toBe('Claude Code 2 is not signed in: open Settings → Providers and press Sign in');
+  });
+  it('вход подтверждён → готов; ключ не спрашивается', async () => {
+    const readiness = await providerReadiness(accountEntry(), { env: env(), version: '2.1.400', signedIn: true });
+    expect(readiness).toEqual({ needs: null, error: null, version: '2.1.400' });
+    expect(providerReadinessError(accountEntry(), readiness)).toBeNull();
+  });
+  it('старый CLI главнее входа; текст называет имя аккаунта и версию', async () => {
+    const entry = accountEntry();
+    for (const signedIn of [true, null] as const) {
+      const readiness = await providerReadiness(entry, { env: env(), version: '2.1.303', signedIn });
+      expect(readiness.needs).toBe('cli');
+      expect(providerReadinessError(entry, readiness)).toBe(
+        'Claude Code 2 requires Claude Code 2.1.304 or newer; install or update the CLI and check again',
+      );
+    }
+  });
+  it('нет claude в PATH → needs cli, даже если вход подтверждён', async () => {
+    expect(await providerReadiness(accountEntry(), { env: { PATH: '' }, signedIn: true })).toMatchObject({ needs: 'cli' });
+  });
+  it('своё имя аккаунта попадает в тексты отказа', async () => {
+    const entry = accountProviderEntry({ kind: 'claude-account', id: 'custom-work', label: 'Work', link: true }, { claude: PROVIDERS.claude }, home);
+    const readiness = await providerReadiness(entry, { env: env(), version: ACCOUNT_MIN_VERSION_CLAUDE, signedIn: null });
+    expect(providerReadinessError(entry, readiness)).toBe('Work is not signed in: open Settings → Providers and press Sign in');
+  });
+  it('endpoint, glm и обычный claude от signedIn не зависят', async () => {
+    const endpoint = customProviderEntry({
+      id: 'custom-kimi', label: 'Kimi', preset: null, baseUrl: 'https://api.moonshot.ai/anthropic', auth: 'bearer' as const,
+      models: { opus: 'm', sonnet: 'm', haiku: 'm', subagent: 'm' }, contextWindow: null, linkClaude: true,
+    }, home);
+    for (const signedIn of [null, false, true] as const) {
+      expect(await providerReadiness(endpoint, { env: env(), version: '2.1.302', keyPresent: true, signedIn })).toMatchObject({ needs: null });
+      expect(await providerReadiness(endpoint, { env: env(), version: '2.1.302', keyPresent: false, signedIn })).toMatchObject({ needs: 'key' });
+      expect(await providerReadiness(PROVIDERS.glm, { env: env(), version: '2.1.287', keyPresent: true, signedIn })).toMatchObject({ needs: null });
+      expect(await providerReadiness(PROVIDERS.claude, { env: env(), signedIn })).toMatchObject({ needs: null });
+    }
   });
 });

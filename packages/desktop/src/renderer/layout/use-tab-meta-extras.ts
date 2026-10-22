@@ -12,7 +12,7 @@ import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { WorkEntry } from '@parley/core';
 import { refKey } from '@parley/protocol';
-import { sessionAttention, type Attention } from '../attention/derive.js';
+import { sessionAttention, sessionNeed, type Attention } from '../attention/derive.js';
 import { useBrowserStore, type BrowserTabState } from '../browser/store.js';
 import { dirtyBufferKeys, useFilesStore } from '../files/store.js';
 import { useActivityStore, type ActivityEntry } from '../store/activity.js';
@@ -30,6 +30,21 @@ function attentionBySession(entries: WorkEntry[], byRef: Record<string, Activity
   return out;
 }
 
+/**
+ * refKey живых сессий снимка, которым нужен человек (`SessionActivity.need`, спека застрявших 7.3). Массив, а не
+ * множество: `useShallow` сравнивает его поэлементно, и вкладки на метрики не перерисовываются.
+ */
+export function needSessionKeys(entries: WorkEntry[], byRef: Record<string, ActivityEntry>): string[] {
+  const keys: string[] = [];
+  for (const entry of entries) {
+    for (const session of entry.map.sessions) {
+      const key = refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id });
+      if (sessionNeed(session, byRef[key]?.activity ?? null) !== null) keys.push(key);
+    }
+  }
+  return keys;
+}
+
 /** Id, заголовок и favicon вкладок браузера плоским списком: поверхностное сравнение — по значениям. */
 function browserFields(tabs: Record<string, BrowserTabState>): Array<string | null> {
   return Object.entries(tabs).flatMap(([id, tab]) => [id, tab.title, tab.favicon]);
@@ -43,6 +58,7 @@ function browserFields(tabs: Record<string, BrowserTabState>): Array<string | nu
 export function useTabMetaExtras(): TabMetaExtras {
   const entries = useWorksStore((state) => state.entries);
   const attention = useActivityStore(useShallow((state) => attentionBySession(entries, state.byRef)));
+  const needKeys = useActivityStore(useShallow((state) => needSessionKeys(entries, state.byRef)));
   const dirtyKeys = useFilesStore(useShallow((state) => dirtyBufferKeys(state.buffers)));
   // Загрузка и «назад / вперёд» страницы строки вкладок не перерисовывают — только заголовок и favicon (9.2a).
   const pageFields = useBrowserStore(useShallow((state) => browserFields(state.tabs)));
@@ -54,7 +70,7 @@ export function useTabMetaExtras(): TabMetaExtras {
     return out;
   }, [pageFields]);
   return useMemo(
-    () => ({ ...EMPTY_EXTRAS, attention, dirtyTabIds: new Set(dirtyKeys), browser }),
-    [attention, dirtyKeys, browser],
+    () => ({ ...EMPTY_EXTRAS, attention, dirtyTabIds: new Set(dirtyKeys), browser, needSessions: new Set(needKeys) }),
+    [attention, dirtyKeys, browser, needKeys],
   );
 }

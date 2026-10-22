@@ -506,6 +506,20 @@ describe('assistant-service: решение по карточке агента',
     expect(snapshot).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', sessionId: 's-03' }, undefined, 'attention');
     expect(reply).toMatchObject({ status: 200, body: { text: expect.stringContaining('waits: permission — Bash: rm -rf dist') } });
   });
+  it('parley_overview: сессия с need (лимит) — ждущая, причина с именем провайдера; детали — то же (итоговое ревью, находка 1)', async () => {
+    const need = { kind: 'limit', since: '2026-10-22T10:00:00.000Z', detail: null, resetsAt: null, window: null, account: null };
+    const service = createAssistantService({
+      ...deps,
+      activity: { get: (ref) => ({ activity: { activity: ref.sessionId === 's-03' ? 'unseen' : 'working', waitingFor: null, need: ref.sessionId === 's-03' ? need : null }, metrics: null }) as never },
+      providers: async () => ({ claude: { ...CLAUDE, label: 'Claude Code 2' } }),
+    });
+    await service.ask(ASK);
+    const overview = (await service.tool('parley_overview', {})).body as { text: string };
+    expect(overview.text).toMatch(/Session S03 Ruslan \[[^\]]+\] claude · limit — Hit its Claude Code usage limit; the reset time is unknown · /);
+    expect(overview.text).not.toContain('done · unseen');
+    const detail = (await service.tool('parley_detail', { target: 'S03' })).body as { text: string };
+    expect(detail.text).toContain('claude · limit — Hit its Claude Code usage limit; the reset time is unknown');
+  });
   it('parley_overview: сбой ленты — обзор без карточек, не ошибка', async () => {
     const service = await started();
     snapshot.mockRejectedValue(new Error('no feed'));

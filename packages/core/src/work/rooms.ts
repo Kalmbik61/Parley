@@ -296,9 +296,10 @@ export function renameSession(map: WorkMap, sessionId: string, label: string): v
 /**
  * Письмо `parley` в комнате по действию человека. Человеку непрочитанным не значится — его отметка стоит с самой
  * записи, как у системной строки (`addSystemMessage`): о том, что сделал сам, «нового» у него быть не должно.
- * Адресату-сессии письмо непрочитано и будит её обычным будильником.
+ * Адресату-сессии письмо непрочитано и будит её обычным будильником. Экспорт — для хоста: письма службы «застрял»
+ * (спека застрявших 5.2) пишутся тем же способом, что и письма о смене ведущего.
  */
-function parleyNote(map: WorkMap, roomId: string, to: string, text: string, at: string): Message {
+export function parleyNote(map: WorkMap, roomId: string, to: string, text: string, at: string): Message {
   const message = addMessage(map, { from: PARLEY, to: [to], roomId, kind: 'note', text }, at);
   message.readBy[HUMAN] = at;
   return message;

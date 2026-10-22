@@ -14,20 +14,38 @@ import { parleyHome } from './work/store.js';
 
 /** Префикс объявлен здесь заново: ядро не импортирует протокол, равенство с ним проверяет задача 9 плана. */
 export const CUSTOM_PROVIDER_PREFIX = 'custom-';
+/** Префикс аккаунтов Codex (спека подписок 5.1, К8); объявлен заново по той же причине. */
+export const CODEX_ACCOUNT_PREFIX = 'codex-';
 /** Версия Claude Code, на которой проверена изоляция папки (спека 6.1). */
 export const CUSTOM_MIN_VERSION = '2.1.302';
+/**
+ * Старейшая версия Claude Code, на которой проверены `claude auth login/status/logout` и вход в своей папке
+ * (спека подписок 9.1, решение 3: 2.1.302–2.1.303 в проверке не участвовали).
+ */
+export const ACCOUNT_MIN_VERSION_CLAUDE = '2.1.304';
 
 export function isCustomProviderId(id: string): boolean {
   return id.startsWith(CUSTOM_PROVIDER_PREFIX);
 }
 
-/** Строгий формат id (спека 5.1, 7): id становится именем папки и частью секрета, поэтому без `/`, `..` и пробелов. */
-const CUSTOM_ID_PATTERN = /^custom-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** Оба префикса, которыми владеет окно: `custom-` (свои провайдеры и аккаунты Claude) и `codex-` (аккаунты Codex). */
+export function isManagedProviderId(id: string): boolean {
+  return isCustomProviderId(id) || id.startsWith(CODEX_ACCOUNT_PREFIX);
+}
+
+/**
+ * Строгий формат id (спека 5.1, 7): id становится именем папки и частью секрета, поэтому без `/`, `..` и пробелов.
+ * Принимает оба префикса (спека подписок 5.1, К8); кто из них у какой записи — решает `asRecord` по `kind`.
+ */
+const CUSTOM_ID_PATTERN = /^(?:custom|codex)-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export function isValidCustomProviderId(id: string): boolean {
   return id.length <= 40 && CUSTOM_ID_PATTERN.test(id);
 }
 
-export interface CustomProviderRecord {
+/** Свой провайдер с адресом и ключом (спека своих провайдеров 5.1). */
+export interface CustomEndpointRecord {
+  /** Хост пишет его явно; нет поля (файл до подписок, тесты) — это `endpoint`, миграции нет (спека подписок 5.1). */
+  kind?: 'endpoint';
   id: string;
   label: string;
   preset: string | null;
@@ -36,6 +54,22 @@ export interface CustomProviderRecord {
   models: { opus: string; sonnet: string; haiku: string; subagent: string };
   contextWindow: number | null;
   linkClaude: boolean;
+}
+
+/** Ещё один аккаунт Claude Code или Codex того же человека: ни адреса, ни ключа (спека подписок 5.1). */
+export interface CustomAccountRecord {
+  kind: 'claude-account' | 'codex-account';
+  id: string;
+  /** Пустая строка — стандартное имя (`accountLabel`). */
+  label: string;
+  /** «Bring from …»: ссылки на общее из папки человека (у `endpoint` это `linkClaude`). */
+  link: boolean;
+}
+
+export type CustomProviderRecord = CustomEndpointRecord | CustomAccountRecord;
+
+export function isAccountRecord(record: CustomProviderRecord): record is CustomAccountRecord {
+  return record.kind === 'claude-account' || record.kind === 'codex-account';
 }
 
 export function customProvidersFile(home = parleyHome()): string {
@@ -107,11 +141,33 @@ const isText = (value: unknown): value is string => typeof value === 'string' &&
 const isModelSlot = (value: unknown): value is string =>
   typeof value === 'string' && value.length <= 200 && /^[^\s-]\S*$/.test(value);
 
+/** Метка аккаунта: пустая — стандартное имя, иначе как у `endpoint` (не пробелы, до 40 символов). */
+const isAccountLabel = (value: unknown): value is string =>
+  typeof value === 'string' && (value === '' || (value.trim() !== '' && value.trim().length <= 40));
+
+/**
+ * Запись без `kind` — `endpoint`, миграции нет (спека подписок 5.1). У аккаунта поля адреса и ключа не читаются
+ * и не сохраняются; префикс id сходится с `kind`: `custom-` у Claude, `codex-` у Codex (К8).
+ */
 function asRecord(value: unknown): CustomProviderRecord | null {
-  if (!isRecord(value) || !isRecord(value['models'])) return null;
+  if (!isRecord(value)) return null;
+  const kind = value['kind'];
+  if (kind === 'claude-account' || kind === 'codex-account') return asAccountRecord(value, kind);
+  return kind === undefined || kind === 'endpoint' ? asEndpointRecord(value) : null;
+}
+
+function asAccountRecord(value: Record<string, unknown>, kind: CustomAccountRecord['kind']): CustomAccountRecord | null {
+  const { id, label, link } = value;
+  if (!isText(id) || !isValidCustomProviderId(id) || !isAccountLabel(label) || typeof link !== 'boolean') return null;
+  const prefix = kind === 'claude-account' ? CUSTOM_PROVIDER_PREFIX : CODEX_ACCOUNT_PREFIX;
+  return id.startsWith(prefix) ? { kind, id, label, link } : null;
+}
+
+function asEndpointRecord(value: Record<string, unknown>): CustomEndpointRecord | null {
+  if (!isRecord(value['models'])) return null;
   const models = value['models'];
   const { id, label, preset, baseUrl, auth, contextWindow, linkClaude } = value;
-  if (!isText(id) || !isValidCustomProviderId(id) || !isText(label) || !isText(baseUrl)) return null;
+  if (!isText(id) || !isCustomProviderId(id) || !isValidCustomProviderId(id) || !isText(label) || !isText(baseUrl)) return null;
   if (label.trim() === '' || label.trim().length > 40 || baseUrlError(baseUrl) !== null) return null;
   if (preset !== null && typeof preset !== 'string') return null;
   if (auth !== 'bearer' && auth !== 'api-key') return null;
@@ -120,6 +176,7 @@ function asRecord(value: unknown): CustomProviderRecord | null {
   const { opus, sonnet, haiku, subagent } = models;
   if (!isModelSlot(opus) || !isModelSlot(sonnet) || !isModelSlot(haiku) || !isModelSlot(subagent)) return null;
   return {
+    kind: 'endpoint',
     id,
     label,
     preset,
@@ -162,7 +219,7 @@ export async function writeCustomProviders(
 }
 
 /** Запись → `ProviderEntry` по раннеру GLM (спека 5.2); окружение без ключа, ключ добавляет `providerLaunchEnv`. */
-export function customProviderEntry(record: CustomProviderRecord, home = parleyHome()): ProviderEntry {
+export function customProviderEntry(record: CustomEndpointRecord, home = parleyHome()): ProviderEntry {
   const glm = PROVIDERS['glm'].runner;
   const { opus, sonnet, haiku, subagent } = record.models;
   const runner: RunnerConfig = {
@@ -204,5 +261,103 @@ export function customProviderEntry(record: CustomProviderRecord, home = parleyH
     runner,
     models,
     custom: record,
+  };
+}
+
+const ACCOUNT_BASE_NAME = { 'claude-account': 'Claude Code', 'codex-account': 'Codex' } as const;
+
+const accountSlugBase = (kind: CustomAccountRecord['kind']): string =>
+  kind === 'claude-account' ? `${CUSTOM_PROVIDER_PREFIX}claude` : `${CODEX_ACCOUNT_PREFIX}codex`;
+
+/** Номер из id, выданного `defaultAccountSlug` (`custom-claude-3` → 3); другой id — `null`. */
+function accountNumberOf(kind: CustomAccountRecord['kind'], id: string): number | null {
+  const prefix = `${accountSlugBase(kind)}-`;
+  if (!id.startsWith(prefix)) return null;
+  const digits = id.slice(prefix.length);
+  return /^[1-9]\d*$/.test(digits) ? Number(digits) : null;
+}
+
+/**
+ * Стандартное имя аккаунта: глобальный живёт без номера (К1), добавленные — «Claude Code 2», «Codex 2», … Номер берётся
+ * из id (`custom-claude-3` → «Claude Code 3»): имя следует за slug, и после удалений два аккаунта не получают одно имя
+ * (спека подписок 5.1, решение 7). Id нестандартный или не передан — число аккаунтов этого CLI в `records` плюс 2;
+ * `endpoint` и аккаунты другого CLI не считаются.
+ */
+export function defaultAccountLabel(
+  kind: CustomAccountRecord['kind'],
+  records: readonly CustomProviderRecord[],
+  id?: string,
+): string {
+  const n = (id === undefined ? null : accountNumberOf(kind, id)) ?? records.filter((record) => record.kind === kind).length + 2;
+  return `${ACCOUNT_BASE_NAME[kind]} ${n}`;
+}
+
+/**
+ * Id нового аккаунта (спека подписок 5.1): `custom-claude-2`, `custom-claude-3`, … (у Codex `codex-codex-2`) — первый
+ * свободный в `taken`. Имя в id не входит: оно меняется, а id и папка аккаунта нет.
+ */
+export function defaultAccountSlug(kind: CustomAccountRecord['kind'], taken: ReadonlySet<string>): string {
+  const base = accountSlugBase(kind);
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base}-${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+/**
+ * Имя аккаунта: своё или стандартное (спека подписок 5.9, одно место вычисления). Стандартное следует за номером в id;
+ * счёт аккаунтов — запасной путь для нестандартного id: тогда, если запись есть в `records`, считаются только аккаунты
+ * до неё (номер не меняется, когда появляются следующие), а новой записи (в списке её ещё нет) достаётся номер за всеми.
+ */
+export function accountLabel(record: CustomAccountRecord, records: readonly CustomProviderRecord[]): string {
+  if (record.label !== '') return record.label;
+  const at = records.findIndex((item) => item.id === record.id);
+  return defaultAccountLabel(record.kind, at === -1 ? records : records.slice(0, at), record.id);
+}
+
+/**
+ * Запись аккаунта → `ProviderEntry` (спека подписок 5.2). Раннер — копия записи `claude` из реестра после
+ * `providers.json` (К11): те же флаги, модели и переопределения человека. Своя `CLAUDE_CONFIG_DIR` и
+ * `minVersion`; ни ключа, ни адреса, ни `env` (К12): вход лежит в самой папке, состояние даёт CLI.
+ * Номер стандартного имени считается по аккаунтам, которые уже в `registry`.
+ */
+export function accountProviderEntry(
+  record: CustomAccountRecord,
+  registry: Readonly<Record<string, ProviderEntry>>,
+  home = parleyHome(),
+): ProviderEntry {
+  // Этап 3 заменяет это ветвлением по семейству: раннер копируется из записи `codex`.
+  if (record.kind !== 'claude-account') throw new Error('codex accounts arrive in stage 3');
+  const claude = registry['claude'];
+  if (claude === undefined) throw new Error('the claude provider is missing from the registry');
+  const base = claude.runner;
+  const runner: RunnerConfig = {
+    command: base.command,
+    configDir: customProviderDir(record.id, home),
+    minVersion: ACCOUNT_MIN_VERSION_CLAUDE,
+    ...(base.settingsModel === undefined ? {} : { settingsModel: base.settingsModel }),
+    ...(base.args === undefined ? {} : { args: [...base.args] }),
+    ...(base.resumeArgs === undefined ? {} : { resumeArgs: [...base.resumeArgs] }),
+    ...(base.printArgs === undefined ? {} : { printArgs: [...base.printArgs] }),
+    ...(base.assistantArgs === undefined ? {} : { assistantArgs: [...base.assistantArgs] }),
+    ...(base.assistantResumeArgs === undefined ? {} : { assistantResumeArgs: [...base.assistantResumeArgs] }),
+    ...(base.mcpConfig === undefined ? {} : { mcpConfig: base.mcpConfig }),
+  };
+  const label = accountLabel(
+    record,
+    Object.values(registry).flatMap((entry) => (entry.account === undefined ? [] : [entry.account])),
+  );
+  return {
+    id: record.id,
+    family: 'claude',
+    label,
+    mark: [...label].slice(0, 2).join(''),
+    hasHistory: true,
+    linkBy: 'session-id',
+    runner,
+    ...(claude.models === undefined ? {} : { models: claude.models }),
+    // Шаблон запуска человек переопределил в providers.json — подсказка в карточке аккаунта следует за ним (К11).
+    ...(claude.argsOverridden === undefined ? {} : { argsOverridden: true as const }),
+    account: record,
   };
 }

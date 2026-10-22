@@ -105,6 +105,16 @@ describe('заглушка скилла parley: тело', () => {
     expect(body).toMatch(/Before finishing, call `report`/);
   });
 
+  it('правило про застрявшего участника: он не молчит, часть самому не отдавать — тема stuck (спека застрявших 5.4)', () => {
+    expect(body).toContain(
+      '- A participant Parley reports as stuck (waiting for the human or for its usage limit) is not silent: do not hand its part to others on your own — `read_guide` topic `stuck`.',
+    );
+    // Правило стоит сразу за правилом про `propose_decision`.
+    const rules = body.split('\n');
+    const decision = rules.findIndex((line) => line.startsWith("- Only a room's lead brings the human a decision"));
+    expect(rules[decision + 1]).toContain('A participant Parley reports as stuck');
+  });
+
   it('правило про письма: коллегам — только на question, но задача человека в комнате требует ответа, даже если письмо — note', () => {
     // Заглушку агент читает первой: исключение, которое есть в гиде (тема `member`) и в системной вставке,
     // должно быть и здесь, иначе «на `note` не отвечай» перекроет задачу человека.

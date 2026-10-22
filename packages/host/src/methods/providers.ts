@@ -11,15 +11,56 @@ import {
   writeSecret,
 } from '@parley/core';
 import type { ProviderEntry, SecretId } from '@parley/core';
+import type { CustomProviderInfo } from '@parley/protocol';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
 import type { GlmCheckService } from '../limits/glm-check.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import { ZaiQuotaError } from '../limits/zai-quota.js';
+import type { AuthService } from '../providers/auth-service.js';
 import type { CustomCheckService } from '../providers/custom-check.js';
 import { serialized } from './custom-providers.js';
 import type { CodexCatalog } from '../providers/codex-catalog.js';
 import type { ProviderVersions } from '../providers/versions.js';
+
+/**
+ * Состояние входа аккаунтов подписки для `providers.list` (спека подписок 5.5): его даёт служба входа, пока её нет —
+ * ничего не передаётся, и аккаунт `needs: 'sign-in'`.
+ */
+export interface AccountAuth {
+  /** `true` — вошёл, `false` — нет, `null` — ещё не проверяли. */
+  status(id: string): boolean | null;
+  /** Идёт ли вход этого аккаунта (процесс жив). */
+  signingIn(id: string): boolean;
+}
+
+/**
+ * Описание своего провайдера или аккаунта подписки в строке `providers.list` (спека 5.1, подписок 5.1): папка —
+ * `runner.configDir`; ключа здесь нет, у аккаунта нет и адреса.
+ */
+function customInfo(entry: ProviderEntry, signedIn: boolean | null, auth: AccountAuth | undefined): CustomProviderInfo | undefined {
+  const folder = entry.runner.configDir;
+  if (folder === undefined) return undefined;
+  if (entry.custom !== undefined) {
+    return {
+      preset: entry.custom.preset,
+      baseUrl: entry.custom.baseUrl,
+      auth: entry.custom.auth,
+      models: { ...entry.custom.models },
+      contextWindow: entry.custom.contextWindow,
+      linkClaude: entry.custom.linkClaude,
+      folder,
+    };
+  }
+  if (entry.account === undefined) return undefined;
+  return {
+    kind: entry.account.kind,
+    link: entry.account.link,
+    folder,
+    signedIn,
+    signingIn: auth?.signingIn(entry.id) ?? false,
+  };
+}
 
 /**
  * `available` — провайдер готов к запуску: команда видна в PATH (или через `PARLEY_*_BIN`-оверрайд
@@ -40,6 +81,9 @@ import type { ProviderVersions } from '../providers/versions.js';
  * придёт событием `providers.changed`, а устаревший список просит обновить в фоне (`refreshIfStale`).
  * `argsOverridden` — `args` провайдера взяты из `providers.json`: окно объясняет этим пропавший выбор модели или
  * effort.
+ *
+ * Аккаунт подписки (спека подписок 5.1, 5.5): `custom` — `{ kind, link, folder, signedIn, signingIn }`, без адреса и ключа;
+ * состояние входа даёт `auth`, без неё — `signedIn: null`, и аккаунт `needs: 'sign-in'`.
  */
 export function createProvidersList(
   versions?: ProviderVersions,
@@ -47,6 +91,7 @@ export function createProvidersList(
   glmCheck?: GlmCheckService,
   catalog?: Pick<CodexCatalog, 'refreshIfStale'>,
   customCheck?: CustomCheckService,
+  auth?: AccountAuth,
 ): Handler<'providers.list'> {
   return async () => {
     catalog?.refreshIfStale();
@@ -72,9 +117,12 @@ export function createProvidersList(
             throw new HostError('internal', 'Unable to read provider key');
           }
         }
+        // Состояние входа спрашивается только у аккаунта подписки.
+        const signedIn = entry.account === undefined ? null : (auth?.status(entry.id) ?? null);
         const readiness = await providerReadiness(entry, {
           keyPresent: key !== null,
           probeVersion,
+          signedIn,
         });
         // Исход последней проверки: у своего провайдера — из его службы, у GLM — из `glmCheck`.
         const check =
@@ -85,6 +133,7 @@ export function createProvidersList(
               : glmCheck === undefined
                 ? undefined
                 : await glmCheck.current(key);
+        const custom = customInfo(entry, signedIn, auth);
         return {
           id: entry.id,
           label: entry.label,
@@ -96,18 +145,7 @@ export function createProvidersList(
           effort: supportsEffort(entry),
           argsOverridden: entry.argsOverridden === true,
           ...(check === undefined ? {} : { check }),
-          // Описание своего провайдера (спека 5.1): папка — runner.configDir; ключа здесь нет.
-          ...(entry.custom === undefined || entry.runner.configDir === undefined ? {} : {
-            custom: {
-              preset: entry.custom.preset,
-              baseUrl: entry.custom.baseUrl,
-              auth: entry.custom.auth,
-              models: { ...entry.custom.models },
-              contextWindow: entry.custom.contextWindow,
-              linkClaude: entry.custom.linkClaude,
-              folder: entry.runner.configDir,
-            },
-          }),
+          ...(custom === undefined ? {} : { custom }),
         };
       }),
     );
@@ -247,8 +285,17 @@ export function createProvidersCheck(
   };
 }
 
-export function createProvidersRefreshLimits(limits: LimitsService, versions?: ProviderVersions): Handler<'providers.refreshLimits'> {
+/**
+ * Ручное обновление лимитов. Заодно (К5) перепроверяется вход аккаунтов подписки — в фоне, ответ его не ждёт: смену
+ * состояния окно получит событием `providers.changed`.
+ */
+export function createProvidersRefreshLimits(
+  limits: LimitsService,
+  versions?: ProviderVersions,
+  auth?: Pick<AuthService, 'refreshAll'>,
+): Handler<'providers.refreshLimits'> {
   return async () => {
+    void auth?.refreshAll();
     try {
       await Promise.all([
         limits.refresh(true),

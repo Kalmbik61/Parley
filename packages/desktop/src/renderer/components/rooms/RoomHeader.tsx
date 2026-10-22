@@ -33,9 +33,11 @@ export interface RoomHeaderProps {
   participants: readonly ParticipantModel[];
   onOpenPlan?: (sessionId: string) => void;
   onOpenSession: (sessionId: string, agentId?: string) => void;
+  /** «Сейчас» окна — для времени сброса лимита в слове причины участника (`ParticipantStrip`). */
+  now: Date;
 }
 
-export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, onOpenPlan, modeControl, recipeChip, historyMenu, browserToggle, usageChip, contextChip, participantContext }: RoomHeaderProps): JSX.Element {
+export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, onOpenPlan, modeControl, recipeChip, historyMenu, browserToggle, usageChip, contextChip, participantContext, now }: RoomHeaderProps): JSX.Element {
   return (
     <div
       data-room-header=""
@@ -64,6 +66,7 @@ export function RoomHeader({ title, subtitle, archived = false, participants, on
       <ParticipantStrip
         participants={participants}
         onOpenSession={onOpenSession}
+        now={now}
         {...(onOpenPlan === undefined ? {} : { onOpenPlan })}
         {...(participantContext === undefined ? {} : { contextChip: participantContext })}
       />

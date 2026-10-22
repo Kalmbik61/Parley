@@ -12,6 +12,9 @@
  * (`--color-text`): в приглушённом поддереве (done-карточка, закрытая строка) основной цвет сайдбара уже
  * равен вторичному, и подмена «вторичный := основной» на hover ничего не меняла (правки ревью куска 2).
  *
+ * Живой сессии, которой нужен человек (`need`), слово состояния заменяет слово причины (`approval`, `limit · 19:27`,
+ * `starting`…; `attention/derive.ts#needLabel`), а тултип строки добавляет обрамление и `detail` (спека застрявших 7.3).
+ *
  * Перетаскивание — контракт 2.6, как у строки прежнего дерева сессий: `DndContext`
  * один на окно (`AppShell`), тащатся только строки активной работы (спека 6.4) — у
  * остальных активатор выключен и курсор `not-allowed`. Атрибуты @dnd-kit (`role`,
@@ -45,10 +48,10 @@ import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } fro
 import { GitBranch, Mail } from 'lucide-react';
 import { useDndContext, useDraggable } from '@dnd-kit/core';
 import type { WorkSession } from '@parley/core';
-import { dotState, liveStatus, stateWord } from '@parley/core/session-state';
+import { sessionDotStateWithNeed, stateWord } from '@parley/core/session-state';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
-import { sessionAttention } from '../attention/derive.js';
+import { needLabel, needTooltip, sessionAttention, sessionNeed } from '../attention/derive.js';
 import { openAgentInPanel } from '../agents/open-agents.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentsBadge } from '../components/AgentsBadge.js';
@@ -205,8 +208,11 @@ export const SessionRow = memo(function SessionRow({
     waitNotice?.kind === 'startup-wait' && eventAfter(live?.lastEventAt ?? null, waitNotice.at);
   const waitKind = startupResolved ? null : (waitNotice?.kind ?? null);
   const trustWait = waitKind !== null;
-  const state = dotState(liveStatus(session), live?.activity ?? null);
-  const word = stateWord(state, session.lifecycle);
+  // Нужен человек — слово причины вместо слова состояния, подсказка в тултипе строки (спека застрявших 7.3); точка
+  // такой сессии — `blocked`, даже когда ход закончен (лимит и вход оставляют `unseen`/`idle`).
+  const need = sessionNeed(session, live);
+  const state = sessionDotStateWithNeed(session, live?.activity ?? null, need);
+  const word = need === null ? stateWord(state, session.lifecycle) : needLabel(need, now.getTime());
   const attention = sessionAttention(session, live);
   const closed = session.lifecycle === 'closed';
   const label = sessionRowLabel(session.id, session.label);
@@ -365,16 +371,27 @@ export const SessionRow = memo(function SessionRow({
       </HoverCardTrigger>
       </SessionRowMenu>
       <HoverCardContent side="right" align="start" className="w-72 space-y-1.5 p-3 text-xs">
-        <SessionTooltip session={session} activity={activity} word={word} />
+        <SessionTooltip session={session} activity={activity} word={word} needTip={need === null ? null : needTooltip(need)} />
       </HoverCardContent>
     </HoverCard>
   );
 });
 
-function SessionTooltip({ session, activity, word }: { session: WorkSession; activity: ActivityEntry | null; word: string }): JSX.Element {
+function SessionTooltip({
+  session,
+  activity,
+  word,
+  needTip,
+}: {
+  session: WorkSession;
+  activity: ActivityEntry | null;
+  word: string;
+  /** Чего ждёт сессия от человека (`needTooltip`); `null` — ничего. */
+  needTip: string | null;
+}): JSX.Element {
   const task = session.task.length > TASK_PREVIEW ? `${session.task.slice(0, TASK_PREVIEW)}…` : session.task;
   // Слово итога: у сессии с итогом — он сам (`result` — только 'done' | 'failed'), иначе
-  // текущее состояние строки.
+  // текущее состояние строки (при `need` — слово причины).
   const outcome = session.result === null ? word : stateWord(session.result, session.lifecycle);
   const metrics = activity?.metrics ?? null;
   return (
@@ -385,6 +402,7 @@ function SessionTooltip({ session, activity, word }: { session: WorkSession; act
         <p className="whitespace-pre-wrap break-words text-muted-foreground">{session.summary}</p>
       ) : null}
       <div>{outcome}</div>
+      {needTip === null ? null : <div className="break-words">{needTip}</div>}
       {metrics?.model !== null && metrics?.model !== undefined ? <div className="font-mono">{metrics.model}</div> : null}
       {metrics !== null ? <div className="text-muted-foreground">{formatMetricsLine(metrics)}</div> : null}
       {session.worktree !== null ? <div className="font-mono">⎇ {session.worktree.branch}</div> : null}

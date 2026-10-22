@@ -47,12 +47,38 @@ describe('createUiStore', () => {
   it('save сливает вложенный объект целиком, а не по полям (план, «ui.json»)', async () => {
     const store = createUiStore(file);
     await store.save({
-      notifications: { needsYou: false, finished: false, mail: false, sound: false },
+      notifications: { needsYou: false, finished: false, mail: false, sound: false, finishedSound: true },
     });
 
     await expect(store.load()).resolves.toEqual({
       ...DEFAULT_UI,
-      notifications: { needsYou: false, finished: false, mail: false, sound: false },
+      notifications: { needsYou: false, finished: false, mail: false, sound: false, finishedSound: true },
+    });
+  });
+
+  // Спека застрявших 7.5: «Sound when an agent finishes» (`finishedSound`) по умолчанию выключен, переноса не нужно —
+  // кто выключил `sound`, у того выключены оба, а `ui.json` без нового поля читается как `finishedSound: false`.
+  it('ui.json без finishedSound → false; явный sound: false сохраняется (спека застрявших 7.5)', async () => {
+    await mkdir(path.dirname(file), { recursive: true });
+    const old = { needsYou: true, finished: true, mail: true };
+    await writeFile(file, JSON.stringify({ version: 1, notifications: { ...old, sound: false } }), 'utf8');
+    const store = createUiStore(file);
+    expect((await store.load()).notifications).toEqual({ ...old, sound: false, finishedSound: false });
+
+    await writeFile(file, JSON.stringify({ version: 1, notifications: { ...old, sound: true } }), 'utf8');
+    expect((await createUiStore(file).load()).notifications).toEqual({ ...old, sound: true, finishedSound: false });
+  });
+
+  it('частичный патч finishedSound не трогает остальные уведомления', async () => {
+    const store = createUiStore(file);
+    await store.save({ notifications: { needsYou: false, finished: true, mail: false, sound: true, finishedSound: false } });
+    await store.save({ notifications: { finishedSound: true } } as Partial<Omit<UiFile, 'version'>>);
+    expect((await store.load()).notifications).toEqual({
+      needsYou: false,
+      finished: true,
+      mail: false,
+      sound: true,
+      finishedSound: true,
     });
   });
 
@@ -97,14 +123,14 @@ describe('createUiStore', () => {
   it('частичный вложенный патч оставляет нетронутые подполя как было (тест 12)', async () => {
     const store = createUiStore(file);
     await store.save({
-      notifications: { needsYou: true, finished: true, mail: false, sound: true },
+      notifications: { needsYou: true, finished: true, mail: false, sound: true, finishedSound: false },
     });
 
     await store.save({ notifications: { sound: false } });
 
     await expect(store.load()).resolves.toEqual({
       ...DEFAULT_UI,
-      notifications: { needsYou: true, finished: true, mail: false, sound: false },
+      notifications: { needsYou: true, finished: true, mail: false, sound: false, finishedSound: false },
     });
   });
 

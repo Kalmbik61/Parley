@@ -70,6 +70,14 @@ describe('история своих провайдеров (спека свои�
     ]);
   });
 
+  it('customProviderProjectRoots: папки codex-* (аккаунты Codex) — не корни Claude (спека подписок 5.1, К8)', async () => {
+    await mkdir(path.join(home, 'providers', 'custom-a'), { recursive: true });
+    await mkdir(path.join(home, 'providers', 'codex-b'), { recursive: true });
+    expect(customProviderProjectRoots(home)).toEqual([path.join(home, 'providers', 'custom-a', 'projects')]);
+    const env = { PARLEY_HOME: home } as NodeJS.ProcessEnv;
+    expect(claudeProjectRoots(env, userHome)).not.toContain(path.join(home, 'providers', 'codex-b', 'projects'));
+  });
+
   it('claudeProjectRoots: ~/.claude/projects и корни custom-* в доме Parley; подмена — только она', async () => {
     await mkdir(path.join(home, 'providers', 'custom-kimi'), { recursive: true });
     const env = { PARLEY_HOME: home } as NodeJS.ProcessEnv;
@@ -84,5 +92,9 @@ describe('история своих провайдеров (спека свои�
     expect(claudeRootFor('custom-kimi')).toBe(path.join(home, 'providers', 'custom-kimi', 'projects'));
     expect(claudeRootFor('claude')).toBe(defaultRoot());
     expect(claudeRootFor('glm')).toBe(defaultRoot());
+  });
+
+  it('claudeRootFor: у аккаунта Codex нет корня Claude — исключение, а не чужая папка (спека подписок 5.1)', () => {
+    expect(() => claudeRootFor('codex-two')).toThrow(/codex/);
   });
 });

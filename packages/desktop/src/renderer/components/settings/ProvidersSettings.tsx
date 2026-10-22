@@ -2,6 +2,10 @@
  * Settings → Providers (спека своих провайдеров, раздел 4): пилюли Claude Code, Codex, GLM, своих
  * провайдеров и «+ Add provider». Выбранная встроенная показывает карточку подключения без изменений;
  * своя или `'new'` — выбор вендора и форма (`CustomProviderPanel`).
+ *
+ * Аккаунты подписки (спека подписок 4.1) — те же пилюли после трёх основных. Если при открытии идёт вход (Settings
+ * закрыли посреди него, спека 10) и Settings не просили открыться на другом провайдере, выбран этот аккаунт: терминал
+ * входа виден сразу.
  */
 
 import { useEffect, useState } from 'react';
@@ -14,6 +18,7 @@ import { AgentIcon } from '../AgentIcon.js';
 import { radioGroupKeyDown } from '../dialogs/radio-keys.js';
 import { PILL } from '../providers/pill.js';
 import { CustomProviderPanel } from '../providers/CustomProviderPanel.js';
+import { accountOf } from '../providers/custom-provider-draft.js';
 import { ProviderCard } from '../providers/ProviderCard.js';
 
 const CORE_IDS = ['claude', 'codex', 'glm'] as const;
@@ -22,7 +27,9 @@ export function ProvidersSettings(): JSX.Element {
   const providers = useProvidersStore((state) => state.providers);
   const reload = useProvidersStore((state) => state.reload);
   const requested = useUiStore((state) => state.settingsProvider);
-  const [selected, setSelected] = useState<string | 'new'>(requested ?? 'claude');
+  const [selected, setSelected] = useState<string | 'new'>(
+    () => requested ?? providers.find((provider) => accountOf(provider.custom)?.signingIn === true)?.id ?? 'claude',
+  );
   useEffect(() => {
     if (requested !== null) setSelected(requested);
   }, [requested]);

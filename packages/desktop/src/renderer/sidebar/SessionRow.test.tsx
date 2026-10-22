@@ -12,7 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
-import type { Activity, WorkSession } from '@parley/core';
+import type { Activity, SessionNeed, WorkSession } from '@parley/core';
 import type { HostNotice, LiveMetrics, LiveTask } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
 import { formatMetricsLine } from '../lib/metrics-line.js';
@@ -21,7 +21,7 @@ import { useHostStore } from '../store/host.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
-import { makeActivity, makeSession } from '../test-utils/work-fixtures.js';
+import { makeActivity, makeNeed, makeSession } from '../test-utils/work-fixtures.js';
 import { SessionRow } from './SessionRow.js';
 
 // «Открыть» строку поповера агентов — переход окна (`chat/open-agent.ts`, свой тест): здесь важно лишь, что строка зовёт его.
@@ -477,6 +477,100 @@ describe('SessionRow — тултип (тест 13)', () => {
     expect(text).toContain('claude-opus');
     expect(text).toContain(formatMetricsLine(metrics));
     expect(screen.getAllByText('claude-opus').length).toBeGreaterThan(0);
+  });
+});
+
+// Спека застрявших 7.3: слово причины вместо слова состояния, подсказка — обрамление и `detail`.
+describe('SessionRow — причина «нужен ты»', () => {
+  const REF = { projectPath: PROJECT, workId: WORK, sessionId: 's-01' };
+  // «Сейчас» окна — 10:00Z, пояс машины любой: сброс строится из частей локальной даты относительно NOW.
+  const at = (dayShift: number, hour: number, minute: number): string =>
+    new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() + dayShift, hour, minute).toISOString();
+  const renderNeed = (need: SessionNeed, activity: Activity = 'unseen', session = makeSession('s-01', 'исполнитель')) =>
+    render(
+      <SessionRow
+        workKey={KEY}
+        projectPath={PROJECT}
+        workId={WORK}
+        bridge={BRIDGE}
+        session={session}
+        depth={0}
+        activity={makeActivity(REF, activity, { need })}
+        now={NOW}
+        draggable
+        selected={false}
+        onOpen={() => {}}
+      />,
+    );
+
+  it('слово причины вместо слова состояния; строка подкрашена как «нужен ты»', () => {
+    renderNeed(makeNeed('approval', { detail: 'Bash: npm test' }));
+    const word = screen.getByText('approval');
+    expect(word.className).toContain('text-accent-800');
+    expect(row().className).toContain('bg-accent-200');
+    expect(row().textContent).not.toContain(S.states.unseen);
+  });
+
+  it('лимит: limit · время, после сброса — limit · reset, без времени — limit', () => {
+    const view = renderNeed(makeNeed('limit', { resetsAt: at(1, 3, 5) }));
+    expect(screen.getByText(/^limit · .*03:05$/)).toBeTruthy();
+    view.unmount();
+    const past = renderNeed(makeNeed('limit', { resetsAt: at(-1, 19, 27) }));
+    expect(screen.getByText('limit · reset')).toBeTruthy();
+    past.unmount();
+    renderNeed(makeNeed('limit'));
+    expect(screen.getByText('limit')).toBeTruthy();
+  });
+
+  it('startup — starting, вход — sign-in', () => {
+    const view = renderNeed(makeNeed('startup'));
+    expect(screen.getByText('starting')).toBeTruthy();
+    view.unmount();
+    renderNeed(makeNeed('sign-in', { account: 'account' }));
+    expect(screen.getByText('sign-in')).toBeTruthy();
+  });
+
+  it('тултип строки: обрамление и detail', async () => {
+    renderNeed(makeNeed('question', { detail: 'Which branch?' }));
+    act(() => row().focus());
+    const tooltip = await waitFor(() => {
+      const element = document.querySelector<HTMLElement>('[data-session-tooltip]');
+      if (element === null) throw new Error('тултипа нет');
+      return element;
+    });
+    expect(tooltip.textContent).toContain('Has a question: Which branch?');
+  });
+
+  it('точка живой сессии с need — blocked, хотя ход закончен (unseen/idle); итоговое ревью, находка 1', () => {
+    const dot = (): string | null => row().querySelector('[data-testid="agent-state-dot"]')?.getAttribute('data-state') ?? null;
+    const view = renderNeed(makeNeed('limit'), 'unseen');
+    expect(dot()).toBe('blocked');
+    view.unmount();
+    renderNeed(makeNeed('sign-in', { account: 'auth' }), 'idle');
+    expect(dot()).toBe('blocked');
+  });
+
+  it('спящая сессия с остатком need: точка по статусу карты, а не blocked', () => {
+    renderNeed(makeNeed('limit'), 'idle', makeSession('s-01', 'a', { lifecycle: 'sleeping' }));
+    expect(row().querySelector('[data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('exited');
+  });
+
+  it('спящая сессия с остатком need в записи активности — слово состояния, не причина', () => {
+    renderNeed(makeNeed('limit'), 'idle', makeSession('s-01', 'a', { lifecycle: 'sleeping' }));
+    expect(screen.getByText(S.states.asleep)).toBeTruthy();
+    expect(screen.queryByText('limit')).toBeNull();
+  });
+
+  // 800×500: ярлык в 80 знаков и самое длинное слово причины — слово остаётся целым, сжимается ярлык.
+  it('ярлык в 80 знаков и «limit · Oct 14, 19:27»: ярлык сжимается многоточием, слово и время не сжимаются', () => {
+    const label = 'я'.repeat(80);
+    renderNeed(makeNeed('limit', { resetsAt: at(1, 19, 27) }), 'unseen', makeSession('s-01', label));
+    const name = screen.getByText(`S01 ${label}`);
+    expect(name.className).toContain('min-w-[5ch]');
+    expect(name.className).toContain('flex-1');
+    expect(name.className).toContain('truncate');
+    expect(screen.getByText(/^limit · .*19:27$/).className).toContain('shrink-0');
+    expect(row().className).toContain('min-w-0');
   });
 });
 

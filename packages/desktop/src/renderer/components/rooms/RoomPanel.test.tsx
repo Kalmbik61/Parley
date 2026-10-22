@@ -23,7 +23,7 @@ import { useHostStore } from '../../store/host.js';
 import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
-import { activityMap, makeActivity, makeLetter, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
+import { activityMap, makeActivity, makeLetter, makeNeed, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
 import { RoomPanel, type RoomPanelProps } from './RoomPanel.js';
 import { roomOutbox } from './room-outbox.js';
 
@@ -1346,6 +1346,34 @@ describe('RoomPanel — строка доставки: кто забрал со�
     expect(waitingPart()?.textContent).toBe('▤ Not picked up yet by S01 (auto-wake paused), S03');
   });
 
+  // Спека застрявших 7.3: у `stuck` текст берётся из `need` ждущего; в ленте участников у него то же слово причины.
+  it('stuck: текст из need участника — «usage limit until 19:27»; лента участников пишет «limit · 19:27»', () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(2026, 9, 21, 12, 0) });
+    try {
+      const need = makeNeed('limit', { resetsAt: new Date(2026, 9, 21, 19, 27).toISOString() });
+      const activity = activityMap([
+        makeActivity(REF('s-03'), 'unseen', {
+          need,
+          metrics: { tokensIn: null, tokensOut: null, durationMs: null, unread: 0, subagents: 0, model: null, mailWaiting: 'stuck' },
+        }),
+      ]);
+      renderPanel(entryOf({ messages: [message('m-1', { readBy: { human: 'x', 's-01': 'x', 's-02': 'x' } })] }), { activity });
+      expect(waitingPart()?.textContent).toBe('▤ Not picked up yet by S03 (usage limit until 19:27)');
+      expect(within(document.querySelector('[data-participant="s-03"]') as HTMLElement).getByText('limit · 19:27')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stuck без need (хост прежней версии не прислал) и незнакомая причина — «waiting»', () => {
+    const entry = entryOf({ messages: [message('m-1', { to: ['s-01'] })] });
+    renderPanel(entry, { activity: withDoing({ 's-01': { mailWaiting: 'stuck' } }) });
+    expect(waitingPart()?.textContent).toBe('▤ Not picked up yet by S01 (waiting)');
+    cleanup();
+    renderPanel(entry, { activity: withDoing({ 's-01': { mailWaiting: 'from-a-newer-host' as MailWait } }) });
+    expect(waitingPart()?.textContent).toBe('▤ Not picked up yet by S01 (waiting)');
+  });
+
   // Разбор 2026-10-14: после Accept спящие просыпаются десятки секунд, а строка стояла неподвижной. Причины, при
   // которых Parley сам доводит письмо (поднимает, напечатал указатель), — со спиннером; те, где
   // нужен человек или письма не будет без него, — прежней строкой.
@@ -1394,6 +1422,7 @@ describe('RoomPanel — строка доставки: кто забрал со�
   it('каждая причина хоста — своими словами в скобках после тега', () => {
     const words: Record<MailWait, string> = {
       busy: 'busy',
+      stuck: 'waiting',
       draft: 'unsent text in its terminal',
       'no-hooks': 'waiting in its terminal',
       'in-flight': 'notified, not started',

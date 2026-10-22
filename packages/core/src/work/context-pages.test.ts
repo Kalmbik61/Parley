@@ -17,6 +17,7 @@ import {
 } from './context-pages.js';
 import { addMessage, addSession } from './map.js';
 import { addRoom } from './rooms.js';
+import type { SessionNeed } from './stuck.js';
 import { HUMAN, type Message, type WorkMap } from './types.js';
 
 const emptyMap = (): WorkMap => ({
@@ -451,6 +452,28 @@ describe('топология для агента', () => {
     expect(topology.sessions[0]).toMatchObject({ id: 's-01', lifecycle: 'pending', historyCount: 2, artifactCount: 0 });
     expect(topology.sessions[0]?.lastEvent?.event).toBe('active');
     expect(topology.sessions[1]?.cut).toBeUndefined();
+  });
+
+  it('stuck: потребность из карты как есть, а нет поля в карте — null (спека застрявших 5.1, 5.3)', () => {
+    const map = baseMap();
+    const need: SessionNeed = {
+      kind: 'limit',
+      since: '2026-10-21T14:02:00.000Z',
+      detail: null,
+      resetsAt: '2026-10-21T16:27:00.000Z',
+      window: 'session',
+      account: null,
+    };
+    map.sessions[1]!.stuck = need;
+    map.sessions[0]!.stuck = null;
+
+    const topology = mapTopology(map, 's-01');
+
+    expect(topology.sessions[0]?.stuck).toBeNull();
+    expect(topology.sessions[1]?.stuck).toEqual(need);
+    // Старая карта без поля: ключ в ответе есть и равен null, а не пропал.
+    delete map.sessions[1]!.stuck;
+    expect(mapTopology(map, 's-01').sessions[1]).toHaveProperty('stuck', null);
   });
 
   it('комната: плейбук рецепта не виден, ждущее решение сокращено; в планах только действующие ревизии с хвостом журнала', () => {

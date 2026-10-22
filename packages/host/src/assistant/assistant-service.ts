@@ -238,6 +238,14 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     for (const listener of [...stateListeners]) listener(state);
   };
   const source = (): OverviewSource => ({ entries: deps.works.snapshot().entries, live: (ref) => deps.activity.get(ref) });
+  /**
+   * Реестр провайдеров и часы для строки `need` в обзоре (имя аккаунта и время сброса в причине); сбой реестра —
+   * без имён, строка называет провайдера по id.
+   */
+  const reasonContext = async (): Promise<Pick<OverviewSource, 'providers' | 'now'>> => ({
+    providers: await deps.providers().catch(() => undefined),
+    now: new Date(now()),
+  });
   const restPhase = (): AssistantState['phase'] => (pending === null ? 'idle' : 'awaiting-confirm');
 
   function endConversation(): void {
@@ -962,7 +970,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       switch (name) {
         case 'parley_overview': {
           const cards = await waitingCards(src);
-          return { status: 200, body: { text: overviewText({ ...src, cards: (ref) => cards.get(refKey(ref)) }) } };
+          return { status: 200, body: { text: overviewText({ ...src, ...(await reasonContext()), cards: (ref) => cards.get(refKey(ref)) }) } };
         }
         case 'parley_detail': {
           const found = resolveTarget(targets, stringArg(input, 'target'));
@@ -970,7 +978,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
           const target = found.target;
           const reply = target.kind === 'session' ? await lastReply(target.ref) : null;
           const waiting = target.kind === 'session' ? await waitingCardsOf(target.ref) : [];
-          return { status: 200, body: { text: detailText(src, target, reply, waiting) } };
+          return { status: 200, body: { text: detailText({ ...src, ...(await reasonContext()) }, target, reply, waiting) } };
         }
         case 'propose_message':
           return propose(input, src, targets);

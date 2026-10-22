@@ -36,6 +36,13 @@ export interface Events {
    */
   'providers.limitsChanged': { id: string; limits: ProviderLimits | null };
   /**
+   * Вывод процесса входа в аккаунт подписки (спека подписок 5.5): сырые данные PTY для xterm окна.
+   * Отдельный путь от `pty.output`: у входа нет `SessionRef`.
+   */
+  'providers.signInOutput': { provider: string; data: string };
+  /** Процесс входа завершился; `signedIn` — исход `providers.authStatus` сразу после выхода (спека подписок 5.5). */
+  'providers.signInExit': { provider: string; exitCode: number; signedIn: boolean };
+  /**
    * Дельта ленты сессии (план 2026-10-01, Task 2) — только подписчикам `feed.subscribe`. `upsert` —
    * новые и изменённые элементы, `removed` — `id` вытесненных из кольца; `revision` идёт подряд за
    * `revision` снимка. `mode` — текущий режим разрешений ленты (может прийти и без элементов).

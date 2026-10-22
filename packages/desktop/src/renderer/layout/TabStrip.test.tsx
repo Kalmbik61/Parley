@@ -11,7 +11,7 @@ import type { Room, WorkEntry, WorkSession } from '@parley/core';
 import type { GroupNode } from '../../shared/layout-types.js';
 import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
-import { activityMap as keyed, makeActivity } from '../test-utils/work-fixtures.js';
+import { activityMap as keyed, makeActivity, makeNeed } from '../test-utils/work-fixtures.js';
 import { EMPTY_HISTORY } from './history.js';
 import { useLayoutStore } from './store.js';
 import { keepActiveOnResize, revealScrollLeft, TabStrip } from './TabStrip.js';
@@ -220,6 +220,16 @@ describe('TabStrip — внимание (кусок 4.2)', () => {
     expect(el.getAttribute('data-unread')).toBe('true');
     expect(el.querySelector('[data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('blocked');
     expect(tabEl('terminal:s-01').getAttribute('data-unread')).toBe('false');
+  });
+
+  it('сессия с need (лимит) при activity unseen — точка вкладки blocked: вкладку красит sessionAttention (итоговое ревью, находка 1)', () => {
+    mount(entry([session('s-01', 'план'), session('s-02', 'исполнитель')]));
+    act(() => {
+      useActivityStore.setState({ byRef: keyed([makeActivity(ref, 'unseen', { need: makeNeed('limit') })]) });
+    });
+    const el = tabEl('terminal:s-02');
+    expect(el.getAttribute('data-unread')).toBe('true');
+    expect(el.querySelector('[data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('blocked');
   });
 
   it('решение 2: новые метрики без смены внимания — строка не перерисована; смена внимания — значок вопроса', () => {

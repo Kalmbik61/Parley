@@ -13,13 +13,13 @@
  */
 
 import type { WorkEntry, WorkSession } from '@parley/core';
-import { dotState, liveStatus, stateWord, type DotState } from '@parley/core/session-state';
+import { sessionDotStateWithNeed, stateWord, type DotState } from '@parley/core/session-state';
 import { refKey } from '@parley/protocol';
 import { toast } from 'sonner';
 import type { ActionDef, ActionId } from '../../shared/keybindings.js';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { providerName, S } from '../../shared/strings.js';
-import type { WorkAttention } from '../attention/derive.js';
+import { sessionNeed, type WorkAttention } from '../attention/derive.js';
 import type { HistoryEntry } from '../layout/history.js';
 import { whenShown } from '../attention/focus-target.js';
 import { tabId } from '../layout/ids.js';
@@ -132,11 +132,11 @@ export function buildDocuments(input: {
       if (opened) void focusOpened(key, tab, entry);
     };
 
-    const sessionState = (session: WorkSession): DotState =>
-      dotState(
-        liveStatus(session),
-        activity[refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id })]?.activity.activity ?? null,
-      );
+    // Сессия с `need` — `blocked`, как у строки сайдбара (спека подписок 7).
+    const sessionState = (session: WorkSession): DotState => {
+      const live = activity[refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id })]?.activity ?? null;
+      return sessionDotStateWithNeed(session, live?.activity ?? null, sessionNeed(session, live));
+    };
 
     if (layout !== undefined) {
       groups(layout)

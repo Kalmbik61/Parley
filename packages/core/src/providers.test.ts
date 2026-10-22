@@ -900,6 +900,18 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
     await expect(loadProviders()).rejects.toThrow(/мой.*a new provider needs badge and command/);
   });
 
+  it.each(['codex-mine', 'custom-mine'])('id %s в providers.json — отказ: префиксы custom- и codex- заняты окном (спека подписок 5.1)', async (id) => {
+    await write({ [id]: { badge: 'Mine', command: 'mine' } });
+    await expect(loadProviders()).rejects.toThrow(`provider ${id} in ${providersFile()}: the custom- and codex- prefixes are reserved`);
+  });
+
+  it('встроенные id (claude, codex, glm) без префиксов по-прежнему переопределяются', async () => {
+    await write({ codex: { badge: 'Cx' }, claude: { badge: 'Cl' } });
+    const registry = await loadProviders();
+    expect(registry['codex']?.label).toBe('Cx');
+    expect(registry['claude']?.label).toBe('Cl');
+  });
+
   it('битый файл — ошибка, а не тихий откат к встроенному реестру', async () => {
     await writeFile(providersFile(), '{не json', 'utf8');
     await expect(loadProviders()).rejects.toThrow(/provider registry .* cannot be parsed/);

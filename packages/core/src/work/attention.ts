@@ -8,6 +8,7 @@
  */
 
 import type { SessionActivity } from './activity.js';
+import type { SessionNeed } from './stuck.js';
 import type { Message, Room, WorkMap, WorkSession } from './types.js';
 
 // Те же литералы, что `HUMAN` и `SYSTEM` в `types.ts`: значения не импортируем, чтобы модуль остался чистым.
@@ -36,11 +37,23 @@ export function roomAwaitsDecision(room: Room): boolean {
   return !isArchived(room) && (room.proposal ?? null) !== null;
 }
 
+/**
+ * Чего живая сессия ждёт от человека (`SessionActivity.need`, спека застрявших 3.1). У спящей, ожидающей запуска и
+ * закрытой — `null`: процесса нет, ждать человека в терминале некому, а запись активности могла остаться от прошлого
+ * процесса. У хоста прежней версии поля нет — тоже `null` (спека застрявших 8, п. 10).
+ */
+export function sessionNeed(session: Pick<WorkSession, 'lifecycle'>, live: SessionActivity | null): SessionNeed | null {
+  return session.lifecycle === 'active' ? (live?.need ?? null) : null;
+}
+
 /** Таблица спеки 7.1. */
 export function sessionAttention(session: WorkSession, live: SessionActivity | null): Attention {
   if (session.lifecycle === 'closed') return 'off';
   // pending и sleeping: процесса нет, но сессия не закрыта.
   if (session.lifecycle !== 'active') return 'idle';
+  // `need` — «нужен ты» до разбора activity: лимит и вход оставляют ход законченным (`unseen`/`idle`), но человеку
+  // всё равно пора вмешаться (спека застрявших 7.3; `!= null` — у хоста прежней версии поля нет).
+  if (live?.need != null) return 'needs-you';
   switch (live?.activity ?? 'idle') {
     case 'blocked':
       return 'needs-you';

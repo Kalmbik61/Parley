@@ -3,7 +3,7 @@ import type { AgentChannel } from '../work/mcp-config.js';
 
 export const CREATE_SESSION_TOOL: Tool = {
   name: 'create_session',
-  description: 'Creates and starts an independent session in this same workspace, using any available provider from get_map. It is a peer, with no parent and no room membership. Give it a task; a room lead can later invite it with add_to_room. Workspace creation and launch limits apply.',
+  description: 'Creates and starts an independent session in this same workspace, using any available provider from get_map. It is a peer, with no parent and no room membership. Give it a task; a room lead can later invite it with add_to_room. Workspace creation and launch limits apply. An account of the same CLI (for example custom-claude-2) is a separate subscription with its own limits — see providers[].limits in get_map.',
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   inputSchema: {
     type: 'object',

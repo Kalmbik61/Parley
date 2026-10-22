@@ -160,7 +160,7 @@ test.describe('окно принимает события main после заг
     await hookEvent(project, workId, sessionId, { hook_event_name: 'Stop' });
     await expect
       .poll(() => loggedNotes(electronApp), { timeout: 10_000 })
-      .toContainEqual({ title: 'e2e-ready · S01 agent — finished', body: '', silent: false });
+      .toContainEqual({ title: 'e2e-ready · S01 agent — finished', body: '', silent: true });
 
     // Клик по записи журнала делает то же, что клик по настоящему уведомлению: main поднимает окно и шлёт ему цель.
     await electronApp.evaluate(() => {

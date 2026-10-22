@@ -1112,3 +1112,65 @@ describe('StatusBar: свои провайдеры и «+» (спека свои
     expect(document.querySelector('[data-provider-segment="other-b"]')).toBeTruthy();
   });
 });
+
+describe('StatusBar: сегмент аккаунта подписки (спека подписок 4.2)', () => {
+  const account = (custom: Record<string, unknown> = {}, patch: Partial<ProviderInfo> = {}): ProviderInfo =>
+    provider({
+      id: 'custom-claude-2', label: 'Claude Code 2', available: false, version: '2.1.306', family: 'claude', needs: 'sign-in',
+      custom: { kind: 'claude-account', link: true, folder: '/tmp/x', signedIn: false, signingIn: false, ...custom },
+      ...patch,
+    } as never);
+  const limits = { fiveHour: { usedPercent: 58.9, resetsAt: null }, week: { usedPercent: 41.2, resetsAt: null }, at: '2026-10-22T09:00:00.000Z' };
+
+  beforeEach(() => {
+    useUiStore.getState().closeSettingsDialog();
+  });
+
+  it('стоит после трёх основных; не вошёл — приглушён, без версии и лимитов', () => {
+    useProvidersStore.setState({ providers: [account({}, { limits })] });
+    const { container } = renderPlain();
+    expect(segments(container).map((el) => el.getAttribute('data-provider-segment'))).toEqual(['claude', 'codex', 'glm', 'custom-claude-2']);
+    const segment = container.querySelector<HTMLElement>('[data-provider-segment="custom-claude-2"]')!;
+    expect(segment.className).toContain('opacity-50');
+    expect(segment.textContent).toBe('Claude Code 2');
+  });
+
+  it('вошёл: брендовый значок Claude, версия CLI и лимиты наравне с основными', () => {
+    useProvidersStore.setState({ providers: [account({ signedIn: true }, { available: true, needs: null, limits })] });
+    const { container } = renderPlain();
+    const segment = container.querySelector<HTMLElement>('[data-provider-segment="custom-claude-2"]')!;
+    expect(segment.querySelector('img')?.getAttribute('src')).toMatch(/claude\.svg$/);
+    expect(segment.textContent).toContain('2.1.306');
+    expect(segment.textContent).toContain(S.statusBar.limitsText(58, 41));
+    expect(segment.className).not.toContain('opacity-50');
+  });
+
+  it('клик открывает поповер с карточкой аккаунта, а не Settings', () => {
+    useProvidersStore.setState({ providers: [account()] });
+    renderPlain();
+    fireEvent.click(document.querySelector('[data-provider-segment="custom-claude-2"]')!);
+    const card = screen.getByRole('dialog', { name: 'Claude Code 2' });
+    expect(card.querySelector('[data-provider-card="custom-claude-2"]')).toBeTruthy();
+    expect(screen.getByText('Not signed in')).toBeTruthy();
+    expect(useUiStore.getState().dialogs.settings).toBe(false);
+  });
+
+  it('Sign in в поповере закрывает его и открывает Settings на аккаунте с просьбой войти', () => {
+    useProvidersStore.setState({ providers: [account()] });
+    renderPlain();
+    fireEvent.click(document.querySelector('[data-provider-segment="custom-claude-2"]')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    expect(screen.queryByRole('dialog', { name: 'Claude Code 2' })).toBeNull();
+    expect(useUiStore.getState()).toMatchObject({ settingsSection: 'providers', settingsProvider: 'custom-claude-2', settingsSignIn: true });
+    expect(useUiStore.getState().dialogs.settings).toBe(true);
+  });
+
+  it('Open in Settings в поповере закрывает его и открывает Settings на аккаунте', () => {
+    useProvidersStore.setState({ providers: [account({ signedIn: true }, { available: true, needs: null })] });
+    renderPlain();
+    fireEvent.click(document.querySelector('[data-provider-segment="custom-claude-2"]')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Settings' }));
+    expect(screen.queryByRole('dialog', { name: 'Claude Code 2' })).toBeNull();
+    expect(useUiStore.getState()).toMatchObject({ settingsProvider: 'custom-claude-2', settingsSignIn: false });
+  });
+});

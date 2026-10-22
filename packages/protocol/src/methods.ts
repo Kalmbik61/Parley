@@ -343,11 +343,15 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
       id: string;
       label: string;
       available: boolean;
-      /** Missing CLI/version, missing saved key, or ready; optional for older hosts. */
-      needs?: 'cli' | 'key' | null;
+      /** Missing CLI/version, missing saved key, account not signed in (subscriptions spec 5.5), or ready; optional for older hosts. */
+      needs?: 'cli' | 'key' | 'sign-in' | null;
       /** Only a masked hint is returned for providers that use a saved key. */
       keyHint?: string | null;
-      /** Trusted built-in CLI family; older hosts omit this field. */
+      /**
+       * Trusted built-in CLI family; older hosts omit this field. Temporarily `'claude' | null` only: the window's feed
+       * availability checks type `family` that narrowly, so `'codex'` (Codex accounts, subscriptions spec 5.2, stage 3)
+       * is added in the task that updates those consumers.
+       */
       family?: 'claude' | null;
       // Три поля ниже необязательны, как `hello.methods`: хост переживает окно, а `PROTOCOL_VERSION`
       // остаётся 1, поэтому новое окно с хостом, оставшимся с живыми сессиями, получит элементы без

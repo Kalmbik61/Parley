@@ -18,7 +18,7 @@ import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
-import { activityMap, makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { activityMap, makeActivity, makeNeed, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { RoomRow, type RoomRowProps } from './RoomRow.js';
 import { archivedRows, cardRows, type CardRoomRow } from './sort.js';
 
@@ -422,6 +422,49 @@ describe('RoomRow — фон и слово состояния (1.2)', () => {
     renderRow(fourAgents({ proposal }), { unread: 2 });
     expect(header().textContent).toContain('decision');
     expect(header().textContent).not.toContain('2 new');
+  });
+
+  // Спека застрявших 7.3: комната подсвечивается и тогда, когда живому участнику нужен человек (`need`), а решения нет.
+  describe('участник, которому нужен человек (спека застрявших 7.3)', () => {
+    const ref = (sessionId: string) => ({ projectPath: PROJECT, workId: WORK, sessionId });
+    const stuckActivity = (sessionId = 's-02') =>
+      activityMap([makeActivity(ref(sessionId), 'unseen', { need: makeNeed('limit') })]);
+
+    it('есть живой участник с need — accent-200 (и на hover), слово «needs you» accent-800, значок вопроса, название жирное', () => {
+      renderRow(fourAgents(), { activity: stuckActivity() });
+      expect(rowEl().className).toContain('bg-accent-200');
+      expect(rowEl().className).toContain('hover:bg-accent-200');
+      expect(rowEl().querySelector('[data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('blocked');
+      const word = screen.getByText(S.states.blocked);
+      expect(word.className).toContain('text-accent-800');
+      expect(screen.getByText('Возвраты').className).toContain('font-bold');
+    });
+
+    it('решение важнее: слово «decision»; необходимость человека важнее «N new» и упоминания', () => {
+      renderRow(fourAgents({ proposal }), { activity: stuckActivity() });
+      expect(header().textContent).toContain('decision');
+      expect(header().textContent).not.toContain(S.states.blocked);
+      cleanup();
+      renderRow(fourAgents(), { activity: stuckActivity(), unread: 2, mentioned: true });
+      expect(header().textContent).toContain(S.states.blocked);
+      expect(header().textContent).not.toContain('new');
+    });
+
+    it('без need — прежний вид; need у закрытого и у спящего участника не считается', () => {
+      renderRow(fourAgents(), { activity: activityMap([makeActivity(ref('s-02'), 'unseen')]) });
+      expect(rowEl().className).not.toContain('bg-accent-200');
+      expect(header().textContent).not.toContain(S.states.blocked);
+      cleanup();
+      const closed = fourAgents({}, { sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' }), makeSession('s-03', 'c', { lifecycle: 'sleeping' }), makeSession('s-04', 'd')] });
+      renderRow(closed, { activity: activityMap([makeActivity(ref('s-02'), 'idle', { need: makeNeed('limit') }), makeActivity(ref('s-03'), 'idle', { need: makeNeed('sign-in') })]) });
+      expect(rowEl().className).not.toContain('bg-accent-200');
+    });
+
+    it('архивная комната не подсвечивается, даже если участник жив и ему нужен человек', () => {
+      renderRow(fourAgents({ archivedAt: '2026-10-08T12:00:00.000Z' }), { activity: stuckActivity() });
+      expect(rowEl().className).not.toContain('bg-accent-200');
+      expect(header().textContent).not.toContain(S.states.blocked);
+    });
   });
 
   it('выбрана — text 9 % (и на hover), название жирное; hover свёрнутой — тот же text 9 %, без заливки в покое', () => {

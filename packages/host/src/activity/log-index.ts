@@ -382,7 +382,11 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
         ? null
         : // Не `endedAt`: итоги хуков и длительность хода Claude Code пишет уже после `Stop`, и по ним
           // закончившая ход сессия числилась бы `working` ещё порог тишины — письма ей всё это время ждали бы.
-          { lastRecordAt: found.lastWorkRecordAt, lastUserRecordAt: found.lastUserRecordAt };
+          {
+            lastRecordAt: found.lastWorkRecordAt,
+            lastUserRecordAt: found.lastUserRecordAt,
+            ...(found.lastApiError === undefined ? {} : { lastApiError: found.lastApiError }),
+          };
     },
     async reindex(file) {
       if (stopped) return;

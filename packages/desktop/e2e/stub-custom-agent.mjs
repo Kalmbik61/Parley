@@ -1,16 +1,78 @@
 #!/usr/bin/env node
-// Изолированный Claude Code для E2E своих провайдеров (спека 2026-10-17, 6): только stdin и HTTP-хуки на loopback.
-// В файл признаков пишет булевы признаки и пути, а не ключ, заголовки или argv. Транскрипт — в $CLAUDE_CONFIG_DIR/projects
-// (у обычной сессии без переменной — в $HOME/.claude/projects, как у настоящего Claude Code).
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+// Изолированный Claude Code для E2E своих провайдеров (спека 2026-10-17, 6) и аккаунтов подписки (спека 2026-10-21, 9):
+// только stdin и HTTP-хуки на loopback. В файл признаков пишет булевы признаки и пути, а не ключ, заголовки или argv.
+// Транскрипт — в $CLAUDE_CONFIG_DIR/projects (у обычной сессии без переменной — в $HOME/.claude/projects, как у
+// настоящего Claude Code). Подкоманды `auth status|login|logout` — вход аккаунта, см. ниже.
+import { spawn } from 'node:child_process';
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { Buffer } from 'node:buffer';
 import http from 'node:http';
 import path from 'node:path';
+import readline from 'node:readline';
+import { clearTimeout, setTimeout } from 'node:timers';
 import { URL } from 'node:url';
 
+// 2.1.304 — не ниже минимальной версии аккаунтов подписки (ACCOUNT_MIN_VERSION_CLAUDE, спека подписок 9.1).
 if (process.argv[2] === '--version') {
-  process.stdout.write('2.1.303 (Claude Code)\n');
+  process.stdout.write('2.1.304 (Claude Code)\n');
   process.exit(0);
+}
+
+// `claude auth status --json | login --claudeai | logout` (спека подписок 5.5, 9.1). Состояние входа — файл
+// stub-auth.json в $CLAUDE_CONFIG_DIR: как у настоящего CLI, вход живёт в самой папке аккаунта. Без CLAUDE_CONFIG_DIR
+// заглушка ничего не пишет и не читает: настоящий ~ она не трогает никогда. STUB_AUTH_LOG=<файл> — по строке JSON на вызов.
+if (process.argv[2] === 'auth') {
+  const sub = process.argv[3];
+  const configDir = process.env.CLAUDE_CONFIG_DIR || null;
+  const authFile = configDir === null ? null : path.join(configDir, 'stub-auth.json');
+  const log = (data) => {
+    if (!process.env.STUB_AUTH_LOG) return;
+    // Имена унаследованных ключей и токена, не значения: вход аккаунта идёт в чистом окружении (спека подписок 5.3).
+    const inherited = (prefix) => Object.keys(process.env).filter((name) => name.toUpperCase().startsWith(prefix));
+    appendFileSync(process.env.STUB_AUTH_LOG, `${JSON.stringify({
+      command: sub, configDir, anthropicVars: inherited('ANTHROPIC_'), oauthVars: inherited('CLAUDE_CODE_OAUTH'),
+      managedVarSet: process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST !== undefined, ...data,
+    })}\n`);
+  };
+  const readAuth = () => {
+    try { return authFile === null ? null : readFileSync(authFile, 'utf8').trim(); }
+    catch { return null; }
+  };
+  if (sub === 'status') {
+    const state = readAuth();
+    log({ loggedIn: state !== null });
+    // Не вошедший CLI отвечает JSON с loggedIn: false и ненулевым кодом (спека 5.5): решает поле, а не код.
+    process.stdout.write(`${state ?? '{"loggedIn":false,"authMethod":"none"}'}\n`);
+    process.exit(state === null ? 1 : 0);
+  }
+  if (sub === 'login') {
+    if (authFile === null) { process.stderr.write('stub: no CLAUDE_CONFIG_DIR\n'); process.exit(1); }
+    // Вывод настоящего CLI (спека 9.1); терминал входа — PTY, строки кончаются \r\n.
+    process.stdout.write('Opening browser to sign in…\r\n');
+    process.stdout.write("If the browser didn't open, visit: https://stub.invalid/login\r\n");
+    process.stdout.write('Paste code here if prompted > ');
+    // Строка со stdin или тайм-аут (STUB_LOGIN_WAIT_MS, по умолчанию секунда) — что раньше: вход без набранного кода тоже проходит.
+    const code = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), Number(process.env.STUB_LOGIN_WAIT_MS ?? 1000));
+      process.stdin.setEncoding('utf8');
+      process.stdin.once('data', (chunk) => { clearTimeout(timer); resolve(String(chunk).replace(/[\r\n]+$/, '')); });
+    });
+    writeFileSync(authFile, `${JSON.stringify({
+      loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty', email: process.env.STUB_AUTH_EMAIL || 'second@example.test',
+      orgName: 'Stub org', subscriptionType: 'max', configDirectory: configDir,
+    })}\n`);
+    log({ code });
+    process.stdout.write('\r\nLogin successful.\r\n');
+    process.exit(0);
+  }
+  if (sub === 'logout') {
+    if (authFile !== null) rmSync(authFile, { force: true });
+    log({});
+    process.stdout.write('Successfully logged out from your Anthropic account.\n');
+    process.exit(0);
+  }
+  process.stderr.write(`stub: unknown auth command ${String(sub)}\n`);
+  process.exit(2);
 }
 
 const valueOf = (flag) => {
@@ -58,6 +120,10 @@ record(process.env.STUB_LAUNCH_LOG, {
   fakeKeyInArgv: process.argv.some((arg) => arg.includes(fakeKey)),
   fakeKeyInSettings: JSON.stringify(settings).includes(fakeKey),
   managedByHost: process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST === '1',
+  // Имена, не значения: аккаунту подписки не должно достаться ничего из ANTHROPIC_* и CLAUDE_CODE_OAUTH_* (спека подписок 5.3).
+  managedVarSet: process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST !== undefined,
+  anthropicVars: Object.keys(process.env).filter((name) => name.toUpperCase().startsWith('ANTHROPIC_')),
+  oauthVars: Object.keys(process.env).filter((name) => name.toUpperCase().startsWith('CLAUDE_CODE_OAUTH')),
   opusModel: process.env.ANTHROPIC_DEFAULT_OPUS_MODEL ?? null,
   sonnetModel: process.env.ANTHROPIC_DEFAULT_SONNET_MODEL ?? null,
   haikuModel: process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL ?? null,
@@ -93,6 +159,62 @@ function postHook(text) {
   request.end(payload);
 }
 
+// `STUB_MCP <инструмент> <json>` в терминале — вызов инструмента настоящего `parley-mcp`, как делает модель (то же, что в
+// stub-echo-agent.mjs): сервер запускается по `--mcp-config`, результат каждого вызова — строкой JSON в STUB_MCP_LOG.
+// Нужен, чтобы `get_map` из сессии `claude` показал строки аккаунтов с лимитами от хоста (спека подписок 5.8).
+let mcpReady = null;
+let mcpQueue = Promise.resolve();
+function startMcp() {
+  const file = valueOf('--mcp-config');
+  if (file === undefined) throw new Error('нет --mcp-config: харнесс не передал конфиг MCP');
+  const server = JSON.parse(readFileSync(file, 'utf8')).mcpServers?.parley;
+  if (server === undefined) throw new Error('в конфиге MCP нет сервера parley');
+  const child = spawn(server.command, server.args ?? [], { env: { ...process.env, ...server.env }, stdio: ['pipe', 'pipe', 'inherit'] });
+  process.on('exit', () => child.kill());
+  const waiting = new Map();
+  let nextId = 1;
+  readline.createInterface({ input: child.stdout }).on('line', (line) => {
+    let message;
+    try { message = JSON.parse(line); } catch { return; }
+    const wait = waiting.get(message.id);
+    if (wait === undefined) return;
+    waiting.delete(message.id);
+    if (message.error !== undefined) wait.reject(new Error(message.error.message));
+    else wait.resolve(message.result);
+  });
+  child.on('exit', () => {
+    for (const wait of waiting.values()) wait.reject(new Error('parley-mcp завершился'));
+    waiting.clear();
+    mcpReady = null;
+  });
+  const send = (message) => child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
+  const request = (method, params) => new Promise((resolve, reject) => {
+    const id = nextId++;
+    waiting.set(id, { resolve, reject });
+    send({ id, method, params });
+  });
+  return request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'stub-custom-agent', version: '0.0.0' } }).then(() => {
+    send({ method: 'notifications/initialized' });
+    return request;
+  });
+}
+async function callMcp(line) {
+  const space = line.indexOf(' ');
+  const tool = space === -1 ? line : line.slice(0, space);
+  let entry;
+  try {
+    mcpReady ??= startMcp();
+    const request = await mcpReady;
+    const result = await request('tools/call', { name: tool, arguments: space === -1 ? {} : JSON.parse(line.slice(space + 1)) });
+    let text = (result.content ?? []).map((part) => part.text ?? '').join('');
+    try { text = JSON.stringify(JSON.parse(text)); } catch { /* не JSON (текст ошибки) - как есть */ }
+    entry = { tool, isError: result.isError === true, text };
+  } catch (error) {
+    entry = { tool, isError: true, text: error.message };
+  }
+  record(process.env.STUB_MCP_LOG, { session: process.env.PARLEY_SESSION_ID, ...entry });
+}
+
 let buffer = '';
 let pending = '';
 let pasting = false;
@@ -102,7 +224,10 @@ function typed(text) {
   for (const char of text) {
     if (char === '\r' || char === '\n') {
       if (buffer.startsWith('STUB_HOOK ')) postHook(buffer.slice('STUB_HOOK '.length));
-      else if (buffer) process.stdout.write(`echo: ${buffer}\r\n`);
+      else if (buffer.includes('STUB_MCP ')) {
+        const command = buffer.slice(buffer.indexOf('STUB_MCP ') + 'STUB_MCP '.length);
+        mcpQueue = mcpQueue.then(() => callMcp(command));
+      } else if (buffer) process.stdout.write(`echo: ${buffer}\r\n`);
       buffer = '';
     } else if (char === '\x03') buffer = '';
     else buffer += char;

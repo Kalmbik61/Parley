@@ -504,3 +504,103 @@ describe('ProviderCard — свой провайдер (спека 4.3)', () => 
     expect(screen.getByText('Not connected')).toBeTruthy();
   });
 });
+
+describe('ProviderCard — аккаунт подписки (спека подписок 4.2)', () => {
+  const account = (custom: Record<string, unknown> = {}, patch: Partial<Provider> = {}): Provider =>
+    ({
+      id: 'custom-claude-2',
+      label: 'Claude Code 2',
+      available: false,
+      family: 'claude',
+      needs: 'sign-in',
+      version: '2.1.306',
+      custom: { kind: 'claude-account', link: true, folder: '/tmp/x', signedIn: false, signingIn: false, ...custom },
+      ...patch,
+    }) as Provider;
+  const limits = { fiveHour: { usedPercent: 58.9, resetsAt: null }, week: { usedPercent: 41.2, resetsAt: null }, at: AT };
+
+  beforeEach(() => {
+    useUiStore.setState({ dialogs: { ...useUiStore.getState().dialogs, settings: false }, settingsProvider: null, settingsSignIn: false });
+  });
+
+  it('не вошёл: значок, имя, Not signed in; Sign in и Open in Settings; поля ключа GLM нет', () => {
+    const { container } = render(<ProviderCard provider={account()} onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(container.querySelector('[data-provider-card="custom-claude-2"]')).toBeTruthy();
+    expect(container.querySelector('img[data-agent-icon]')).toBeTruthy();
+    expect(screen.getByText('Claude Code 2')).toBeTruthy();
+    expect(screen.getByText('Not signed in')).toBeTruthy();
+    expect(screen.queryByText('Connected')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open in Settings' })).toBeTruthy();
+    expect(screen.queryByLabelText('Z.ai API key')).toBeNull();
+  });
+
+  it('Sign in открывает Settings на аккаунте с просьбой начать вход, сначала закрыв слой родителя', () => {
+    const order: string[] = [];
+    const onOpenSettings = vi.fn(() => order.push('parent'));
+    const original = useUiStore.getState().openSettingsDialog;
+    useUiStore.setState({ openSettingsDialog: (...args: Parameters<typeof original>) => { order.push('settings'); original(...args); } });
+    render(<ProviderCard provider={account()} onReload={async () => {}} onRestartHost={() => {}} onOpenSettings={onOpenSettings} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    expect(order).toEqual(['parent', 'settings']);
+    expect(useUiStore.getState()).toMatchObject({ settingsSection: 'providers', settingsProvider: 'custom-claude-2', settingsSignIn: true });
+    expect(useUiStore.getState().dialogs.settings).toBe(true);
+    useUiStore.setState({ openSettingsDialog: original });
+  });
+
+  it('Open in Settings открывает Settings на аккаунте без просьбы войти', () => {
+    render(<ProviderCard provider={account()} onReload={async () => {}} onRestartHost={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Settings' }));
+    expect(useUiStore.getState()).toMatchObject({ settingsProvider: 'custom-claude-2', settingsSignIn: false });
+  });
+
+  it('вошёл: Signed in, версия CLI, лимиты как у основных; кнопки Sign in нет', () => {
+    render(
+      <ProviderCard
+        provider={account({ signedIn: true }, { available: true, needs: null, limits })}
+        onReload={async () => {}}
+        onRestartHost={() => {}}
+      />,
+    );
+    expect(screen.getByText('Signed in')).toBeTruthy();
+    expect(screen.getByText('2.1.306')).toBeTruthy();
+    expect(screen.getByText(S.statusBar.limitsText(58, 41))).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open in Settings' })).toBeTruthy();
+  });
+
+  it('не вошёл: лимитов нет, даже если хост прислал прежние', () => {
+    render(<ProviderCard provider={account({}, { limits })} onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(screen.queryByText(S.statusBar.limitsText(58, 41))).toBeNull();
+  });
+
+  it('вход идёт: Signing in…; Sign in остаётся — он ведёт к терминалу в Settings', () => {
+    render(<ProviderCard provider={account({ signingIn: true })} onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(screen.getByText('Signing in…')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
+  });
+
+  it('вход не проверен (null): Checking…, войти можно', () => {
+    render(<ProviderCard provider={account({ signedIn: null })} onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(screen.getByText('Checking…')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
+  });
+
+  it('CLI старше минимума (needs: cli): карточка называет требование; ни «Checking…», ни Sign in; Open in Settings остаётся', () => {
+    const { container } = render(
+      <ProviderCard provider={account({ signedIn: null }, { needs: 'cli', version: '2.1.302' })} onReload={async () => {}} onRestartHost={() => {}} />,
+    );
+    expect(screen.getByText('Claude Code 2 requires Claude Code 2.1.304 or newer')).toBeTruthy();
+    expect(container.querySelector('[data-account-needs-cli]')).toBeTruthy();
+    expect(screen.queryByText('Checking…')).toBeNull();
+    expect(screen.queryByText('Not signed in')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open in Settings' })).toBeTruthy();
+    expect(screen.getByText('2.1.302')).toBeTruthy();
+  });
+
+  it('CLI в порядке (needs: sign-in): требования к версии нет', () => {
+    const { container } = render(<ProviderCard provider={account()} onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(container.querySelector('[data-account-needs-cli]')).toBeNull();
+  });
+});

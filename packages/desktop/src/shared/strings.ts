@@ -13,7 +13,9 @@
  * mail, письмо → message, будильник → auto-wake и т. д. Группы ниже по
  * областям окна; параметризованные тексты — функции.
  */
+import type { NeedKind } from '@parley/core';
 import { STATE_WORDS } from '@parley/core/session-state';
+import { providerLabel } from '@parley/core/stuck';
 import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type ConsentCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
 import type { IpcErrorInfo } from './ipc-error.js';
@@ -36,6 +38,12 @@ const CONTEXT_NOUNS: Record<ContextKind | 'mixed', readonly [string, string]> = 
   annotations: ['annotation', 'annotations'],
   mixed: ['item', 'items'],
 };
+
+/**
+ * Самая старая версия Claude Code, на которой работают аккаунты подписки (спека подписок 9.2, 10). Копия
+ * `ACCOUNT_MIN_VERSION_CLAUDE` ядра: ядро тянет `node:fs`, а таблица строк — чистый модуль; равенство держит `strings.test.ts`.
+ */
+const ACCOUNT_MIN_CLAUDE_VERSION = '2.1.304';
 
 export const S = {
   plans: {
@@ -384,6 +392,54 @@ export const S = {
    * значков для скринридера и слово итога в тултипе.
    */
   states: STATE_WORDS,
+
+  /**
+   * Чего сессия ждёт от человека — `SessionNeed` (спека застрявших 7.3, спека подписок 7). Слова видов (`approval`,
+   * `limit`, `starting`…) живут в core (`needWord`, `@parley/core/session-state`) и приходят параметром `word`; здесь —
+   * только обрамление вокруг них (`attention/derive.ts` собирает слово, время и обрамление вместе).
+   */
+  need: {
+    /** Метка с временем сброса лимита: `limit · 19:27`, не сегодня — `limit · Oct 14, 19:27`. */
+    withTime: (word: string, when: string): string => `${word} · ${when}`,
+    /** Метка лимита, время сброса которого прошло. */
+    reset: (word: string): string => `${word} · reset`,
+    /** Подсказка метки: чего ждёт сессия (`detail` добавляется после двоеточия). */
+    lead: {
+      approval: (word: string): string => `Waiting for ${word}`,
+      question: (word: string): string => `Has a ${word}`,
+      limit: (word: string): string => `Usage ${word} reached`,
+      'sign-in': (word: string): string => `Needs ${word}`,
+      startup: (word: string): string => `Waiting while ${word}`,
+    } satisfies Record<NeedKind, (word: string) => string>,
+    /** Вместо `lead['sign-in']`, когда проблема в аккаунте или оплате (`account: 'account'`), а не во входе. */
+    accountLead: 'Account problem',
+    withDetail: (lead: string, detail: string): string => `${lead}: ${detail}`,
+    /** Уведомление о лимите (спека застрявших 7.1): один заголовок на аккаунт, `provider` — его имя (`providerName`). */
+    limitTitle: (provider: string): string => `${provider} usage limit reached`,
+    /**
+     * Тело уведомления о лимите: ярлыки ждущих сессий этого аккаунта и до какого часа. Часа нет — сброс неизвестен.
+     * `tags` — `S01, S03`; число решает глагол.
+     */
+    limitBody: (tags: readonly string[], until: string | null): string => {
+      const who = tags.join(', ');
+      if (until === null) return `${who} ${tags.length === 1 ? 'waits' : 'wait'} for the limit reset (time unknown)`;
+      return `${who} ${tags.length === 1 ? 'waits' : 'wait'} until ${until}`;
+    },
+    /** Хвост тела уведомления для сессии в комнате (спека застрявших 7.1): `· room Backend`. */
+    inRoom: (room: string): string => `· room ${room}`,
+    /** Текст строки доставки под сообщением, когда письмо не забрано из-за застрявшей сессии (`MailWait` `stuck`). */
+    mail: {
+      approval: (word: string): string => `waiting for your ${word}`,
+      question: (word: string): string => `asked you a ${word}`,
+      limit: (word: string): string => `usage ${word}`,
+      limitUntil: (word: string, when: string): string => `usage ${word} until ${when}`,
+      limitReset: (word: string): string => `usage ${word} has reset`,
+      signedOut: 'signed out',
+      /** Вместо `signedOut`, когда проблема в аккаунте или оплате (`account: 'account'`), а не во входе (`needReason`: «Account problem in …»). */
+      accountProblem: 'account problem',
+      startup: 'waiting at startup',
+    },
+  },
 
   /** Экран пустого окна (нет ни одной работы) — `shell/Landing.tsx`. */
   landing: {
@@ -754,6 +810,50 @@ export const S = {
     },
   },
 
+  /**
+   * Аккаунты подписки (спека подписок 4.1, 4.2) — `components/providers/AccountPanel.tsx`, `SignInTerminal.tsx`,
+   * карточка аккаунта в `ProviderCard.tsx`. Этап 2 — аккаунты Claude Code; тексты Codex добавит этап 3.
+   */
+  accounts: {
+    comingSoon: 'Coming soon',
+    /** Плитка на хосте без методов входа: хост остался от прежней сборки. */
+    needsRestart: 'Restart the host to use accounts',
+    /** Стандартное имя нового аккаунта — только подсказка в поле: настоящее имя выдаёт хост при сохранении. */
+    defaultName: (n: number): string => `Claude Code ${n}`,
+    nameField: 'Name',
+    bringFromClaude: 'Bring from Claude Code',
+    folderLine: (folder: string): string =>
+      `Own Claude Code settings: ${folder} — sign-in, history and memory separate from your regular Claude Code.`,
+    signInCaption:
+      'Sign in with a different account than your regular Claude Code; the same account twice gives no extra limit.',
+    signedIn: 'Signed in',
+    notSignedIn: 'Not signed in',
+    checking: 'Checking…',
+    /** Вместо состояния входа, когда CLI старше минимума или его нет (`needs: 'cli'`, спека подписок 10): входить нечем. */
+    needsCli: (name: string): string => `${name} requires Claude Code ${ACCOUNT_MIN_CLAUDE_VERSION} or newer`,
+    /** Второй Sign in при идущем входе другого аккаунта: хост отвечает `conflict` (замок входа один на хост, К17). */
+    signInBusy: 'Another account is signing in — finish or cancel it first.',
+    /** Delete с «Also delete its folder», пока у аккаунта идут сессии: хост отвечает `conflict` (спека подписок 10). */
+    deleteRunning: 'This account has running sessions — stop them before deleting its folder.',
+    signingIn: 'Signing in…',
+    signIn: 'Sign in',
+    cancel: 'Cancel',
+    signOut: 'Sign out',
+    save: 'Save',
+    saving: 'Saving…',
+    delete: 'Delete',
+    deleteFolder: 'Also delete its folder',
+    /** Итог входа под терминалом, когда процесс вышел. */
+    signInDone: 'Signed in.',
+    signInFailed: 'Sign-in did not complete.',
+    terminalLabel: 'Sign-in terminal',
+    saveFailed: 'save the account',
+    signInStartFailed: 'start the sign-in',
+    cancelFailed: 'cancel the sign-in',
+    signOutFailed: 'sign out',
+    deleteFailed: 'delete the account',
+  },
+
   /** Общие диалоги, не привязанные к своей области (mail/rooms/settings/…). */
   dialogs: {
     /** Название комнаты, если человек его не ввёл (диалоги 1.5 и 1.6, 2.1): по числу комнат работы. */
@@ -955,6 +1055,7 @@ export const S = {
      */
     mailWait: {
       busy: 'busy',
+      stuck: 'waiting',
       draft: 'unsent text in its terminal',
       'no-hooks': 'waiting in its terminal',
       'in-flight': 'notified, not started',
@@ -966,6 +1067,8 @@ export const S = {
       pending: 'not launched',
       'folder-trust': 'waiting for folder trust',
     } satisfies Record<MailWait, string>,
+    /** Причина, которой окно не знает (хост новее окна): вместо пустой скобки (`mailWaitText`). */
+    mailWaitUnknown: 'waiting',
     /** Подпись точки «непрочитано» у сообщения. */
     newMessage: 'New',
     /** Чип `@human` в тексте сообщения (Parley 0.3.0): так агент обращается к человеку; `title` — вторая строка. */
@@ -1089,7 +1192,8 @@ export const S = {
     notifyNeedsYou: 'Needs you',
     notifyFinished: 'Finished',
     notifyMail: 'Mail and mentions to you',
-    notifySound: 'Sound',
+    notifySound: "Sound when you're needed",
+    notifyFinishedSound: 'Sound when an agent finishes',
     notifyIsland: 'Island with requests at the top of the screen',
     /** Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */
     notificationsHint: 'Not getting notifications? System Settings → Notifications → Parley',
@@ -1997,9 +2101,10 @@ export const S = {
     sessionTitle: (workspace: string, session: string, event: string): string => `${workspace} · ${session} — ${event}`,
     needsYou: 'needs you',
     finished: 'finished',
-    trustWait: 'waiting for folder trust',
     launchFailed: "couldn't launch",
     resumeFailed: "couldn't resume",
+    /** Заголовок уведомления хоста `limit-return-blocked` (спека застрявших 7.1): лимит сброшен, а сессию вернуть не вышло. */
+    limitReturnBlocked: 'limit has reset',
     /** «<работа> · письмо | вопрос | решение от S01» по `Message.kind`. */
     mailTitle: (workspace: string, kind: 'note' | 'question' | 'decision', from: string): string =>
       `${workspace} · ${kind === 'question' ? 'question' : kind === 'decision' ? 'decision' : 'message'} from ${from}`,
@@ -2432,16 +2537,8 @@ export const S = {
  * комнаты («2 Claude Code agents»).
  */
 export function providerName(id: string, label: string): string {
-  switch (id.toLowerCase()) {
-    case 'claude':
-      return 'Claude Code';
-    case 'codex':
-      return 'Codex';
-    case 'glm':
-      return 'GLM';
-    default:
-      return label === '' ? id : label;
-  }
+  // Таблица имён — одна, в ядре (`providerLabel`): её же берут причина «needs you» и текст Telegram (спека подписок К16).
+  return providerLabel({ id, label });
 }
 
 /** Английский текст по коду ошибки протокола (`ErrorCode` из `@parley/protocol`, плюс наш `'failed'`). */
@@ -2525,6 +2622,9 @@ export function startErrorText(failure: IpcErrorInfo, action: string): string {
  * вызывающей стороны (`store/notices.ts`), а человеку — текст по виду
  * уведомления. Слова — как у хоста, гида и README: письма — «messages»,
  * строка, которую хост набирает в терминал агента, — «pointer».
+ * Исключение — тело macOS-уведомления `limit-return-blocked`: причину («…could not continue: a menu is open in its
+ * terminal», спека застрявших 7.4) знает только хост, и `attention/notify.ts` берёт его английский текст; фраза ниже —
+ * запасная (строка статуса, пустой текст).
  */
 const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'map-lock': 'workspace map is locked — try again in a moment',
@@ -2537,6 +2637,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'resume-limit': 'hourly resume limit reached — messages are waiting',
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
+  'limit-return-blocked': 'the limit has reset, but Parley could not continue this session — check its terminal',
   'codex-call-wait': 'unfinished Codex tool operation — check approvals and verify the result before retrying',
   'skill-foreign': "agent skill not installed — that path already exists and wasn't created by Parley",
   'parley-md-created': 'Parley added PARLEY.md — team rules for your agents',

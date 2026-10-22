@@ -204,6 +204,33 @@ describe('HTTP-хуки ленты вида «Chat» (план 2026-10-01, ре�
     expect(hooks['UserPromptSubmit']?.[0]?.hooks.map((hook) => hook.type)).toEqual(['command']);
   });
 
+  // `StopFailure` — событие, которого нет в старом Claude Code и которое он мог бы отвергнуть в `--settings`.
+  // Журнальный `cat >>` ему ставится только там, где хост уже решил, что `claude` новый (`hookUrl`), — как и
+  // HTTP-хук ленты. Ниже порога ленты ошибку лимита находит запасной путь по журналу сессии.
+  it('StopFailure с hookUrl: в группе cat >> в журнал первым, HTTP-хук ленты вторым', () => {
+    const byDefault = workSettings({ hookUrl: URL }).hooks;
+    const alone = workSettings({ hookUrl: URL, hookEvents: ['StopFailure'] }).hooks;
+
+    for (const hooks of [byDefault, alone]) {
+      const group = hooks['StopFailure'];
+      expect(group).toHaveLength(1);
+      expect(group?.[0]?.hooks.map((hook) => hook.type)).toEqual(['command', 'http']);
+      expect(group?.[0]?.hooks[0]).toEqual({ type: 'command', command: HOOK_COMMAND });
+    }
+    // Место ключа среди событий ленты прежнее: меняется только содержимое его группы.
+    expect(Object.keys(alone)).toEqual([...HOOK_EVENTS, 'StopFailure']);
+  });
+
+  it('StopFailure без hookUrl или вне hookEvents: ключа в файле нет вовсе', () => {
+    expect(workSettings().hooks).not.toHaveProperty('StopFailure');
+    expect(workSettings({ hookEvents: ['StopFailure'] }).hooks).not.toHaveProperty('StopFailure');
+    expect(
+      workSettings({ hookUrl: URL, hookEvents: ['Stop', 'MessageDisplay'] }).hooks,
+    ).not.toHaveProperty('StopFailure');
+    expect(workSettingsJson()).not.toContain('StopFailure');
+    expect(workSettingsJson({ hookEvents: ['StopFailure'] })).toBe(legacyJson());
+  });
+
   it('в файле только хуки и строка статуса — рамка (Review Focus 5)', () => {
     expect(Object.keys(workSettings({ hookUrl: URL }))).toEqual(['hooks', 'statusLine']);
   });
@@ -471,6 +498,23 @@ describe('GLM settings', () => {
       allowedEnvVars: ['PARLEY_HOOK_CAPABILITY', 'PARLEY_SESSION_ID'],
     });
     expect(JSON.stringify(settings)).not.toContain('ANTHROPIC');
+  });
+});
+
+describe('токен хуков, заданный явно (спека подписок 5.3, К13)', () => {
+  const hookUrl = 'http://127.0.0.1:53123/hooks';
+  const httpOf = (settings: ReturnType<typeof workSettings>) => settings.hooks['Stop']?.[0]?.hooks.find((hook) => hook.type === 'http');
+
+  it('hookTokenEnv главнее умолчания по provider: аккаунт и свой провайдер получают PARLEY_HOOK_CAPABILITY, не будучи glm', () => {
+    expect(httpOf(workSettings({ hookTokenEnv: 'PARLEY_HOOK_CAPABILITY', hookUrl }))).toMatchObject({
+      headers: { Authorization: 'Bearer $PARLEY_HOOK_CAPABILITY' },
+      allowedEnvVars: ['PARLEY_HOOK_CAPABILITY', 'PARLEY_SESSION_ID'],
+    });
+  });
+
+  it('без hookTokenEnv умолчание прежнее: у glm PARLEY_HOOK_CAPABILITY, у остальных PARLEY_HOOK_TOKEN', () => {
+    expect(httpOf(workSettings({ provider: 'glm', hookUrl }))).toMatchObject({ headers: { Authorization: 'Bearer $PARLEY_HOOK_CAPABILITY' } });
+    expect(httpOf(workSettings({ hookUrl }))).toMatchObject({ headers: { Authorization: 'Bearer $PARLEY_HOOK_TOKEN' } });
   });
 });
 

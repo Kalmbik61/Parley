@@ -29,6 +29,17 @@ describe('providers.refreshLimits', () => {
     expect(await handler({}, {} as RequestInfo)).toEqual({ ok: true });
     expect(refresh).toHaveBeenCalledWith(true);
   });
+  it('просит службу входа перепроверить аккаунты (К5), но её не ждёт', async () => {
+    const refresh = vi.fn().mockResolvedValue(undefined);
+    let finish!: () => void;
+    const refreshAll = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
+    const handler = createProvidersRefreshLimits({ refresh } as unknown as LimitsService, undefined, { refreshAll });
+    // Ответ не ждёт зависшую проверку входа.
+    expect(await handler({}, {} as RequestInfo)).toEqual({ ok: true });
+    expect(refreshAll).toHaveBeenCalledTimes(1);
+    finish();
+  });
+
   it('returns only a safe error when any GLM request fails', async () => {
     const refresh = vi.fn().mockRejectedValue(new Error('upstream leaked synthetic-key'));
     const handler = createProvidersRefreshLimits({ refresh } as unknown as LimitsService);

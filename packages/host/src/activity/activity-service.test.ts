@@ -7,6 +7,7 @@ import {
   addSession,
   createWork,
   freezeUsage,
+  hookedSince,
   readMap,
   transitionSession,
   updateMap,
@@ -15,10 +16,11 @@ import {
   NEW_LABEL,
   UNTITLED_WORK,
 } from '@parley/core';
-import type { UsageSummary } from '@parley/core';
+import type { ProviderLimits, UsageSummary } from '@parley/core';
 import type { EventData, EventName, LiveMetrics, SessionRef } from '@parley/protocol';
 import { refKey } from '@parley/protocol';
 import type { HostContext } from '../context.js';
+import type { LimitsService } from '../limits/limits-service.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { createActivityService, wholeSessionUsage } from './activity-service.js';
@@ -118,6 +120,7 @@ const hook = (name: string, extra: Record<string, unknown> = {}): string =>
  * сборки (метка на диске: `addSession` сама её уже не оставляет), `label: ''` — имя по умолчанию.
  */
 async function activeSession(over: {
+  provider?: string;
   launchedBy?: 'tui' | 'cli' | 'host';
   providerSessionId?: string | null;
   label?: string;
@@ -128,7 +131,7 @@ async function activeSession(over: {
   let sessionId = '';
   await updateMap(project, map.work.id, (current) => {
     const created = addSession(current, {
-      provider: 'claude',
+      provider: over.provider ?? 'claude',
       label: over.label ?? 'план',
       task: 'сделать',
     });
@@ -1160,6 +1163,645 @@ describe('удержанный вопрос агента (план 2026-10-01, �
     const unknown: SessionRef = { projectPath: project, workId: 'w-нет', sessionId: 's-99' };
     expect(() => a.questionHeld(unknown, true)).not.toThrow();
     expect(() => a.questionHeld(unknown, false)).not.toThrow();
+  }, 20_000);
+});
+
+describe('need: потребность сессии (спека «Застрявшие сессии», 3.2, 3.4, 4.3)', () => {
+  const journal = (ref: SessionRef): string =>
+    path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`);
+
+  /** Дата с годом: время сброса не зависит ни от часов машины, ни от года, в котором идёт тест. */
+  const SESSION_LIMIT = "You've hit your session limit · resets Jan 5 2031 at 4pm (Europe/Moscow)";
+  const SESSION_LIMIT_AT = '2031-01-05T13:00:00.000Z';
+  const GLM_LIMIT = 'Usage limit reached for 5 hour. Your limit will reset at 2031-01-05 19:03:01';
+  /** Тексты ошибки без времени сброса: его неоткуда взять, кроме данных провайдера. */
+  const LIMIT_NO_TIME = "You've hit your limit";
+  const GLM_LIMIT_NO_TIME = 'Usage limit reached for 5 hour.';
+
+  const failure = (text: string): string =>
+    hook('StopFailure', { error: 'rate_limit', last_assistant_message: text });
+
+  /** Служба лимитов с подменным ответом `get` и счётчиком `refresh`; `onRefresh` вносит квоту, как настоящее чтение. */
+  function fakeLimits(onRefresh?: () => ProviderLimits | null) {
+    let current: ProviderLimits | null = null;
+    const refresh = vi.fn<LimitsService['refresh']>(async () => {
+      if (onRefresh !== undefined) current = onRefresh();
+    });
+    const get = vi.fn<LimitsService['get']>(() => current);
+    const limits: Pick<LimitsService, 'get' | 'refresh'> = { get, refresh };
+    return {
+      limits,
+      get,
+      refresh,
+      set: (next: ProviderLimits | null) => {
+        current = next;
+      },
+    };
+  }
+
+  const exhausted = (resetsAt: string): ProviderLimits => ({
+    fiveHour: { usedPercent: 100, resetsAt },
+    week: { usedPercent: 10, resetsAt: null },
+    at: new Date().toISOString(),
+  });
+
+  it('StopFailure rate_limit в журнале — limit: текст ошибки, окно и время сброса из текста', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(SESSION_LIMIT));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+
+    expect(a.get(ref)?.activity.activity).toBe('unseen');
+    expect(a.get(ref)?.activity.need).toMatchObject({
+      kind: 'limit',
+      detail: SESSION_LIMIT,
+      resetsAt: SESSION_LIMIT_AT,
+      window: 'session',
+      account: null,
+    });
+  }, 20_000);
+
+  it('окно провайдера на 100 % с будущим сбросом главнее времени из текста; службе лимитов — провайдер сессии', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const fake = fakeLimits();
+    fake.set(exhausted('2031-01-04T20:00:00.000Z'));
+    const a = activity(w, { limits: fake.limits });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(SESSION_LIMIT));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+
+    expect(a.get(ref)?.activity.need).toMatchObject({
+      resetsAt: '2031-01-04T20:00:00.000Z',
+      window: 'session',
+    });
+    expect(fake.get).toHaveBeenCalledWith('claude');
+    // Не GLM: квоту Z.ai никто не перечитывает.
+    expect(fake.refresh).not.toHaveBeenCalled();
+  }, 20_000);
+
+  it('GLM без окна провайдера: refresh(true) ровно один раз за эпизод, по готовности время сброса из квоты', async () => {
+    const { ref } = await activeSession({ provider: 'glm' });
+    const w = await works();
+    const fake = fakeLimits(() => exhausted('2031-01-05T11:00:00.000Z'));
+    const a = activity(w, { limits: fake.limits });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(GLM_LIMIT_NO_TIME));
+    // В тексте времени нет: пока квота не перечитана, `resetsAt` пуст, а окно, которое отдала служба лимитов, его задаёт.
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    await waitFor(() => a.get(ref)?.activity.need?.resetsAt === '2031-01-05T11:00:00.000Z');
+    expect(fake.refresh).toHaveBeenCalledTimes(1);
+    expect(fake.refresh).toHaveBeenCalledWith(true);
+    expect(a.get(ref)?.activity.need).toMatchObject({ kind: 'limit', window: 'session' });
+  }, 20_000);
+
+  it('GLM, квота окна не дала: пересчёты внутри эпизода refresh не повторяют, новый эпизод — перечитывает снова', async () => {
+    const { ref } = await activeSession({ provider: 'glm' });
+    const w = await works();
+    const fake = fakeLimits();
+    const a = activity(w, { limits: fake.limits });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(GLM_LIMIT));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    await waitFor(() => fake.refresh.mock.calls.length === 1);
+
+    // Пересчёты того же эпизода: просмотр и пассивное событие журнала.
+    a.markSeen(ref);
+    await appendFile(journal(ref), hook('Notification', { notification_type: 'idle_prompt' }));
+    await settle(400);
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need?.kind).toBe('limit');
+    expect(fake.refresh).toHaveBeenCalledTimes(1);
+
+    // Человек написал — эпизод кончился; следующий лимит — новый эпизод.
+    await appendFile(journal(ref), hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.need === null);
+    await appendFile(journal(ref), failure(GLM_LIMIT));
+    await waitFor(() => fake.refresh.mock.calls.length === 2);
+    expect(a.get(ref)?.activity.need?.kind).toBe('limit');
+  }, 20_000);
+
+  it('GLM: окно провайдера уже дало время — квоту не перечитывают', async () => {
+    const { ref } = await activeSession({ provider: 'glm' });
+    const w = await works();
+    const fake = fakeLimits();
+    fake.set(exhausted('2031-01-05T11:00:00.000Z'));
+    const a = activity(w, { limits: fake.limits });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(GLM_LIMIT));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    await settle(200);
+
+    expect(a.get(ref)?.activity.need?.resetsAt).toBe('2031-01-05T11:00:00.000Z');
+    expect(fake.refresh).not.toHaveBeenCalled();
+  }, 20_000);
+
+  it('время сброса держится весь эпизод: «уже сброшен» не уезжает на пересчётах и не рассылается заново', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    let clock = Date.now();
+    const fake = fakeLimits();
+    // Данные провайдера новее удара, все окна ниже 100 %, а в тексте времени нет: лимит «уже сброшен», `resetsAt` — сейчас.
+    fake.set({
+      fiveHour: { usedPercent: 40, resetsAt: new Date(clock + 3_600_000).toISOString() },
+      week: { usedPercent: 10, resetsAt: null },
+      at: new Date(clock + 600_000).toISOString(),
+    });
+    const a = activity(w, { limits: fake.limits, now: () => clock });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(LIMIT_NO_TIME));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    const first = a.get(ref)?.activity.need?.resetsAt;
+    expect(first).toBe(new Date(clock).toISOString());
+
+    // Пересчёт через 30 с: правило «сейчас» дало бы новое время, а эпизод держит первое.
+    const broadcast = activityChanges(ref).length;
+    clock += 30_000;
+    await createWork(project, { title: 'Ещё одна' });
+    await settle(300);
+    expect(a.get(ref)?.activity.need?.resetsAt).toBe(first);
+    expect(activityChanges(ref).length).toBe(broadcast);
+  }, 20_000);
+
+  it('окно провайдера пропало после сброса — время эпизода не откатывается; после снятия need выбирается заново', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    let clock = Date.now();
+    const fake = fakeLimits();
+    const firstReset = new Date(clock + 60_000).toISOString();
+    fake.set(exhausted(firstReset));
+    const a = activity(w, { limits: fake.limits, now: () => clock });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(LIMIT_NO_TIME));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    expect(a.get(ref)?.activity.need).toMatchObject({ resetsAt: firstReset, window: 'session' });
+
+    // Сброс прошёл: служба лимитов окно уже не отдаёт (`dropExpiredWindows`), а эпизод всё ещё идёт.
+    clock = Date.parse(firstReset) + 1000;
+    fake.set(null);
+    await createWork(project, { title: 'Ещё одна' });
+    await settle(300);
+    expect(a.get(ref)?.activity.need).toMatchObject({ resetsAt: firstReset, window: 'session' });
+
+    // Человек написал — эпизод кончился; следующий лимит выбирает время заново, по новому окну.
+    const secondReset = new Date(clock + 3_600_000).toISOString();
+    fake.set(exhausted(secondReset));
+    await appendFile(journal(ref), hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.need === null);
+    await appendFile(journal(ref), failure(LIMIT_NO_TIME));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    expect(a.get(ref)?.activity.need).toMatchObject({ resetsAt: secondReset, window: 'session' });
+  }, 20_000);
+
+  it('спящая сессия с ошибкой лимита в журнале — need: null; пока она жива, он есть', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(SESSION_LIMIT));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+
+    await updateMap(project, ref.workId, (map) => {
+      transitionSession(map, ref.sessionId, 'sleeping');
+    });
+    await waitFor(() => a.get(ref)?.activity.need === null);
+    // Журнал не менялся: ход всё так же окончен ошибкой, но процесса, который ждал бы человека, нет.
+    expect(a.get(ref)?.activity.activity).toBe('unseen');
+    expect(a.current().find((entry) => refKey(entry.ref) === refKey(ref))?.activity.need).toBeNull();
+  }, 20_000);
+
+  it('Claude, запущенный хостом, молчит срок после старта — blocked и startup; первое событие журнала снимает', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w, { trustWaitMs: 300 });
+    const launched = Date.now();
+    await a.start();
+
+    // Срок наступает сам, без события: пересчёт на нём заводит таймер.
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'startup');
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(a.get(ref)?.activity.need).toMatchObject({ kind: 'startup', detail: null });
+    // Экран старта — не хук: «хост в курсе» и «сессия стартовала» (вид Chat) от него не наступают.
+    expect(a.get(ref)?.activity.lastEventAt).toBeNull();
+    expect(hookedSince(a.get(ref)?.activity, launched)).toBe(false);
+
+    await appendFile(journal(ref), hook('SessionStart', { source: 'startup' }));
+    await waitFor(() => a.get(ref)?.activity.need === null);
+    // Событие настоящее: экран старта не превращается в «закончил ход».
+    expect(a.get(ref)?.activity.activity).toBe('idle');
+    expect(a.get(ref)?.activity.lastEventAt).not.toBeNull();
+    expect(activityChanges(ref).map((change) => change.activity)).not.toContain('unseen');
+  }, 20_000);
+
+  it('экран старта наступает ровно на сроке (20 с по умолчанию) после запуска; since — момент истечения срока', async () => {
+    const { ref } = await activeSession();
+    const startedAt = Date.parse(
+      (await readMap(project, ref.workId)).sessions.find((s) => s.id === ref.sessionId)?.startedAt ?? '',
+    );
+    let clock = startedAt + 1000;
+    const w = await works();
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    await settle();
+    expect(a.get(ref)?.activity.need).toBeNull();
+
+    clock = startedAt + 19_999;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need).toBeNull();
+
+    clock = startedAt + 20_000;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(a.get(ref)?.activity.need).toMatchObject({
+      kind: 'startup',
+      since: new Date(startedAt + 20_000).toISOString(),
+    });
+  }, 20_000);
+
+  /**
+   * Сессия возобновлена: процесс прошлого запуска ушёл, в журнале остались его строки (`oldRun`), а `startedAt` — первый
+   * запуск. По умолчанию прошлый запуск кончился чисто.
+   */
+  async function resumedSession(
+    oldRun: string = hook('SessionStart', { source: 'startup' }) +
+      hook('UserPromptSubmit') +
+      hook('Stop') +
+      hook('SessionEnd'),
+    over: { providerSessionId?: string } = {},
+  ): Promise<{ ref: SessionRef }> {
+    const { ref } = await activeSession(over);
+    await appendFile(journal(ref), oldRun);
+    await updateMap(project, ref.workId, (map) => {
+      transitionSession(map, ref.sessionId, 'sleeping');
+    });
+    await updateMap(project, ref.workId, (map) => {
+      transitionSession(map, ref.sessionId, 'active');
+    });
+    return { ref };
+  }
+
+  it('возобновлённая сессия: журнал прошлого запуска не пуст, новый процесс молчит срок — startup; первая новая строка снимает', async () => {
+    const { ref } = await resumedSession();
+    const w = await works();
+    let clock = Date.now();
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    // Журнал прошлого запуска прочитан: у активности есть время последнего события.
+    await waitFor(() => a.get(ref)?.activity.lastEventAt != null);
+
+    // Хост поднял новый процесс: журнал на этот миг — прошлое, считаются только строки после него; срок — от запуска.
+    const launched = clock;
+    a.processStarted(ref);
+    clock = launched + 19_999;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need).toBeNull();
+
+    clock = launched + 20_000;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(a.get(ref)?.activity.need).toMatchObject({
+      kind: 'startup',
+      since: new Date(launched + 20_000).toISOString(),
+    });
+    // События прошлого запуска — не хуки нового процесса: «хост в курсе» и «сессия стартовала» не наступили.
+    expect(a.get(ref)?.activity.lastEventAt).toBeNull();
+    expect(hookedSince(a.get(ref)?.activity, launched)).toBe(false);
+
+    await appendFile(journal(ref), hook('SessionStart', { source: 'resume' }));
+    await waitFor(() => a.get(ref)?.activity.need === null);
+    expect(a.get(ref)?.activity.activity).not.toBe('blocked');
+    expect(a.get(ref)?.activity.lastEventAt).not.toBeNull();
+  }, 20_000);
+
+  it('возобновлённая сессия: новый процесс успел написать строку до срока — экрана старта нет', async () => {
+    const { ref } = await resumedSession();
+    const w = await works();
+    let clock = Date.now();
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    await waitFor(() => a.get(ref)?.activity.lastEventAt != null);
+    const before = a.get(ref)?.activity.lastEventAt;
+
+    const launched = clock;
+    a.processStarted(ref);
+    await appendFile(journal(ref), hook('SessionStart', { source: 'resume' }));
+    await waitFor(() => a.get(ref)?.activity.lastEventAt !== before);
+
+    clock = launched + 60_000;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need).toBeNull();
+    expect(a.get(ref)?.activity.activity).not.toBe('blocked');
+  }, 20_000);
+
+  it('возобновление: журнал оканчивается одобрением — новый процесс начинает с чистого, экран старта по сроку', async () => {
+    const { ref } = await resumedSession(
+      hook('SessionStart', { source: 'startup' }) +
+        hook('UserPromptSubmit') +
+        hook('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'ls' } }),
+    );
+    const w = await works();
+    let clock = Date.now() + 5_000;
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    // Пока хост нового процесса не видел, хвост журнала для свёртки — живое ожидание.
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'approval');
+    const lastEventAt = a.get(ref)?.activity.lastEventAt;
+
+    const launched = clock;
+    a.processStarted(ref);
+    // Одобрение просил прошлый процесс: граница нового снимает его и кончает оборванный ход, не дожидаясь хука.
+    expect(a.get(ref)?.activity.need).toBeNull();
+    expect(a.get(ref)?.activity.activity).not.toBe('blocked');
+    // Граница — не хук нового процесса: время последнего события прежнее, «хост в курсе» не наступило.
+    expect(a.get(ref)?.activity.lastEventAt).toBe(lastEventAt);
+    expect(hookedSince(a.get(ref)?.activity, launched)).toBe(false);
+
+    // Процесс молчит срок — экран старта (а не старое одобрение), и он встаёт после границы.
+    clock = launched + 20_000;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(a.get(ref)?.activity.need).toMatchObject({
+      kind: 'startup',
+      since: new Date(launched + 20_000).toISOString(),
+    });
+    expect(a.get(ref)?.activity.lastEventAt).toBeNull();
+
+    // Первая настоящая строка нового процесса — как и раньше: `SessionStart` повторяет переход границы.
+    await appendFile(journal(ref), hook('SessionStart', { source: 'resume' }));
+    await waitFor(() => a.get(ref)?.activity.need === null);
+    expect(a.get(ref)?.activity.activity).not.toBe('blocked');
+    expect(a.get(ref)?.activity.lastEventAt).not.toBeNull();
+  }, 20_000);
+
+  it('возобновление: журнал оканчивается лимитом — новый процесс начинает с чистого; свой лимит нового процесса — новый эпизод', async () => {
+    const { ref } = await resumedSession(hook('UserPromptSubmit') + failure(SESSION_LIMIT));
+    const w = await works();
+    const clock = Date.now() + 5_000;
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    const stale = a.get(ref)?.activity.need;
+
+    a.processStarted(ref);
+    expect(a.get(ref)?.activity.need).toBeNull();
+    expect(a.get(ref)?.activity.activity).toBe('unseen');
+
+    // Строки после границы — настоящие: лимит, в который новый процесс упёрся сам, — другой эпизод.
+    await appendFile(
+      journal(ref),
+      hook('SessionStart', { source: 'resume' }) + hook('UserPromptSubmit') + failure(SESSION_LIMIT),
+    );
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    expect(Date.parse(a.get(ref)?.activity.need?.since ?? '')).toBeGreaterThan(Date.parse(stale?.since ?? ''));
+  }, 20_000);
+
+  it('возобновление: ошибка API в логе прошлого запуска (запасной путь лимита) новым процессом не наследуется', async () => {
+    // Хуки `StopFailure` не дошли: лимит прошлого запуска виден одному логу. Граница стоит по времени запуска —
+    // новее записи об ошибке, и запасной путь ход, закончившийся на ней, больше не считает текущим.
+    const { ref } = await resumedSession(hook('UserPromptSubmit'), { providerSessionId: 's-api' });
+    const w = await works();
+    const clock = Date.now() + 5_000;
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    await settle();
+
+    const record = (value: Record<string, unknown>): string => JSON.stringify({ sessionId: 's-api', ...value });
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await writeFile(
+      path.join(claudeRoot, '-proj', 's-api.jsonl'),
+      `${[
+        record({
+          type: 'user',
+          timestamp: new Date(Date.now() - 1_000).toISOString(),
+          message: { role: 'user', content: 'продолжай' },
+        }),
+        record({
+          type: 'assistant',
+          timestamp: new Date(Date.now() + 2_000).toISOString(),
+          isApiErrorMessage: true,
+          error: 'rate_limit',
+          apiErrorStatus: 429,
+          message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: SESSION_LIMIT }] },
+        }),
+      ].join('\n')}\n`,
+    );
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit', 15_000);
+
+    a.processStarted(ref);
+    expect(a.get(ref)?.activity.need).toBeNull();
+  }, 30_000);
+
+  /** Служба активности со своим журналом хоста: тест видит, что и с чем она записала. */
+  function activityWithLog(
+    worksService: WorksService,
+    log: { warn?: ReturnType<typeof vi.fn>; error?: ReturnType<typeof vi.fn> },
+    options: ActivityServiceOptions = {},
+  ): ActivityService {
+    const service = createActivityService(
+      { ...fakeHost(), log: { info: () => {}, warn: log.warn ?? (() => {}), error: log.error ?? (() => {}) } },
+      worksService,
+      { silenceThresholdMs: 30_000, claudeRoot, codexRoot, ...options },
+    );
+    services.push(service);
+    return service;
+  }
+
+  it('запуск процесса: сбой пересчёта не уходит в слушатель start менеджера PTY, а пишется в журнал хоста', async () => {
+    const { ref } = await activeSession();
+    const { ref: codexRef } = await activeSession({ provider: 'codex' });
+    const w = await works();
+    // Слушатели `start` у менеджера PTY идут без защиты: бросок оборвал бы `pty.start` уже после запуска процесса.
+    let broken = false;
+    const flaky: WorksService = {
+      ...w,
+      entry: (projectPath, workId) => {
+        if (broken) throw new Error('сбой');
+        return w.entry(projectPath, workId);
+      },
+    };
+    const error = vi.fn();
+    const a = activityWithLog(flaky, { error });
+    await a.start();
+    await settle();
+
+    broken = true;
+    expect(() => a.processStarted(ref)).not.toThrow();
+    expect(() => a.terminalStarted(codexRef)).not.toThrow();
+    broken = false;
+
+    expect(error).toHaveBeenCalledTimes(2);
+    expect(error.mock.calls.map((call) => (call[1] as { ref: SessionRef }).ref)).toEqual([ref, codexRef]);
+  }, 20_000);
+
+  it('процесс вышел — запись о запуске забыта: прежний счёт строк больше не держит экран старта и границу', async () => {
+    const { ref } = await resumedSession();
+    const w = await works();
+    let clock = Date.now();
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    await waitFor(() => a.get(ref)?.activity.lastEventAt != null);
+
+    const launched = clock;
+    a.processStarted(ref);
+    clock = launched + 20_000;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need?.kind).toBe('startup');
+
+    a.terminalStopped(ref);
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need).toBeNull();
+  }, 20_000);
+
+  /** Начало работы сессии `ref` по карте: от него считается срок экрана старта, когда хост запуска не видел. */
+  const startedAtOf = async (ref: SessionRef): Promise<number> =>
+    Date.parse(
+      (await readMap(project, ref.workId)).sessions.find((session) => session.id === ref.sessionId)?.startedAt ?? '',
+    );
+
+  it('Claude без хуков: запись транскрипта после запуска — экрана старта нет (экран входа транскрипт не пишет)', async () => {
+    const { ref } = await activeSession({ providerSessionId: 's-hookless' });
+    const startedAt = await startedAtOf(ref);
+    let clock = startedAt + 1_000;
+    const w = await works();
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    await settle();
+
+    // Журнал молчит и транскрипта нет: срок вышел — экран старта.
+    clock = startedAt + 20_000;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need?.kind).toBe('startup');
+
+    // Транскрипт показал работу после запуска: человек экран прошёл, хуки просто не доходят — «ждёт на старте» залипло бы.
+    const record = (value: Record<string, unknown>): string => JSON.stringify({ sessionId: 's-hookless', ...value });
+    await mkdir(path.join(claudeRoot, '-proj'), { recursive: true });
+    await writeFile(
+      path.join(claudeRoot, '-proj', 's-hookless.jsonl'),
+      `${[
+        record({
+          type: 'user',
+          timestamp: new Date(startedAt + 5_000).toISOString(),
+          message: { role: 'user', content: 'привет' },
+        }),
+        record({
+          type: 'assistant',
+          timestamp: new Date(startedAt + 6_000).toISOString(),
+          message: { role: 'assistant', content: [{ type: 'text', text: 'ок' }] },
+        }),
+      ].join('\n')}\n`,
+    );
+    await waitFor(() => a.get(ref)?.activity.need === null, 15_000);
+  }, 30_000);
+
+  it('сессия без каталога events/: экран старта не прячет hooksMissing — он считается по настоящему журналу', async () => {
+    const { ref } = await activeSession({ createEventsDir: false });
+    const startedAt = await startedAtOf(ref);
+    let clock = startedAt + 1_000;
+    const w = await works();
+    const a = activity(w, { now: () => clock });
+    await a.start();
+    await waitFor(() => a.get(ref) !== undefined);
+    expect(a.get(ref)?.activity.hooksMissing).toBe(true);
+
+    clock = startedAt + 20_000;
+    a.markSeen(ref);
+    expect(a.get(ref)?.activity.need?.kind).toBe('startup');
+    expect(a.get(ref)?.activity.hooksMissing).toBe(true);
+  }, 20_000);
+
+  it('GLM: перечитывание квоты отказало — одна строка в журнале хоста, время сброса остаётся из текста', async () => {
+    const { ref } = await activeSession({ provider: 'glm' });
+    const w = await works();
+    const warn = vi.fn();
+    const refresh = vi.fn<LimitsService['refresh']>(async () => {
+      throw new Error('нет ключа Z.ai');
+    });
+    const a = activityWithLog(w, { warn }, { limits: { get: () => null, refresh } });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(GLM_LIMIT));
+    await waitFor(() => refresh.mock.calls.length === 1);
+    const quotaWarnings = (): unknown[][] =>
+      warn.mock.calls.filter((call) => String(call[0]).includes('квота Z.ai'));
+    await waitFor(() => quotaWarnings().length === 1);
+
+    expect(quotaWarnings()[0]?.[1]).toEqual({ ref, error: 'Error: нет ключа Z.ai' });
+    expect(a.get(ref)?.activity.need).toMatchObject({ kind: 'limit', resetsAt: '2031-01-05T11:03:01.000Z' });
+  }, 20_000);
+
+  it('экран старта ждут только от запущенных хостом: сессия чужого запуска молчит без need', async () => {
+    const { ref } = await activeSession({ launchedBy: 'cli' });
+    const w = await works();
+    const a = activity(w, { trustWaitMs: 150 });
+    await a.start();
+    await settle(600);
+
+    expect(a.get(ref)?.activity.need).toBeNull();
+    expect(a.get(ref)?.activity.activity).toBe('idle');
+  }, 20_000);
+
+  it('questionHeld(ref, true, текст) — blocked с need вопроса: detail из текста, since — момент удержания', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+    await appendFile(journal(ref), hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+
+    const before = Date.now();
+    a.questionHeld(ref, true, 'Which DB?');
+    const need = a.get(ref)?.activity.need;
+    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(need).toMatchObject({
+      kind: 'question',
+      detail: 'Which DB?',
+      resetsAt: null,
+      window: null,
+      account: null,
+    });
+    expect(Date.parse(need?.since ?? '')).toBeGreaterThanOrEqual(before);
+    expect(Date.parse(need?.since ?? '')).toBeLessThanOrEqual(Date.now());
+
+    a.questionHeld(ref, false);
+    expect(a.get(ref)?.activity.need).toBeNull();
+    expect(a.get(ref)?.activity.activity).toBe('working');
+  }, 20_000);
+
+  it('удержанный вопрос при свёртке, которая и так blocked, её need не заменяет', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+    await appendFile(
+      journal(ref),
+      hook('UserPromptSubmit') +
+        hook('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'ls' } }),
+    );
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'approval');
+
+    a.questionHeld(ref, true, 'Which DB?');
+    expect(a.get(ref)?.activity.need).toMatchObject({ kind: 'approval', detail: 'ls' });
   }, 20_000);
 });
 

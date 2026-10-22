@@ -69,7 +69,11 @@ export interface UiFile {
    */
   hiddenProjects: string[];
   showDoneWorks: boolean;
-  notifications: { needsYou: boolean; finished: boolean; mail: boolean; sound: boolean };
+  /**
+   * `sound` — звук «Sound when you're needed» (свой сигнал окна, `renderer/attention/chime.ts`); `finishedSound` —
+   * «Sound when an agent finishes» (системный звук баннера, по умолчанию выключен; спека застрявших 7.5).
+   */
+  notifications: { needsYou: boolean; finished: boolean; mail: boolean; sound: boolean; finishedSound: boolean };
   diffView: 'inline' | 'split';
   filesShowIgnored: boolean;
   lastProvider: string | null;
@@ -103,7 +107,7 @@ export const DEFAULT_UI: UiFile = {
   collapsedProjects: [],
   hiddenProjects: [],
   showDoneWorks: true,
-  notifications: { needsYou: true, finished: true, mail: true, sound: true },
+  notifications: { needsYou: true, finished: true, mail: true, sound: true, finishedSound: false },
   diffView: 'split',
   filesShowIgnored: false,
   lastProvider: null,
@@ -251,6 +255,7 @@ function normalizeNotifications(value: unknown): UiFile['notifications'] {
     finished: bool('finished'),
     mail: bool('mail'),
     sound: bool('sound'),
+    finishedSound: bool('finishedSound'),
   };
 }
 

@@ -365,6 +365,188 @@ describe('indexSessionFile', () => {
   });
 });
 
+describe('indexSessionFile: ошибка API (lastApiError)', () => {
+  const LIMIT_TEXT = "You've hit your session limit · resets 2:50pm (Europe/Moscow)";
+
+  const human = (at: string): string =>
+    line({
+      type: 'user',
+      sessionId: 'e1',
+      timestamp: at,
+      message: { role: 'user', content: 'продолжай' },
+    });
+  const reply = (at: string): string =>
+    line({
+      type: 'assistant',
+      sessionId: 'e1',
+      timestamp: at,
+      message: {
+        role: 'assistant',
+        model: 'claude-opus-5',
+        content: [{ type: 'text', text: 'готово' }],
+      },
+    });
+  /** Финальная ошибка API так, как её пишет Claude Code: синтетический ответ ассистента с отметкой. */
+  const apiError = (at: string, error: string | null, text: string): string =>
+    line({
+      type: 'assistant',
+      sessionId: 'e1',
+      timestamp: at,
+      isApiErrorMessage: true,
+      ...(error === null ? {} : { error, apiErrorStatus: 429 }),
+      message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text }] },
+    });
+
+  it('человек → ответ → запись ошибки: lastApiError с временем, кодом ошибки и текстом', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      'e1',
+      human('2026-10-12T10:00:00.000Z') +
+        reply('2026-10-12T10:00:05.000Z') +
+        apiError('2026-10-12T10:01:00.000Z', 'rate_limit', LIMIT_TEXT),
+    );
+
+    const index = await indexSessionFile(file, root);
+
+    // Ровно три поля: код HTTP-ответа и прочие поля записи в индекс не едут.
+    expect(index.lastApiError).toEqual({
+      at: '2026-10-12T10:01:00.000Z',
+      error: 'rate_limit',
+      text: LIMIT_TEXT,
+    });
+  });
+
+  it('самая поздняя ошибка побеждает, а успешный ответ после неё её не снимает', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      'e2',
+      human('2026-10-12T10:00:00.000Z') +
+        apiError('2026-10-12T10:01:00.000Z', 'authentication_failed', 'Please run /login') +
+        apiError('2026-10-12T10:02:00.000Z', 'rate_limit', LIMIT_TEXT) +
+        reply('2026-10-12T10:03:00.000Z'),
+    );
+
+    const index = await indexSessionFile(file, root);
+
+    expect(index.lastApiError).toEqual({
+      at: '2026-10-12T10:02:00.000Z',
+      error: 'rate_limit',
+      text: LIMIT_TEXT,
+    });
+  });
+
+  it('порядок строк не важен: побеждает запись с самым поздним временем', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      'e3',
+      apiError('2026-10-12T10:02:00.000Z', 'rate_limit', LIMIT_TEXT) +
+        apiError('2026-10-12T10:01:00.000Z', 'authentication_failed', 'Please run /login'),
+    );
+
+    expect((await indexSessionFile(file, root)).lastApiError).toEqual({
+      at: '2026-10-12T10:02:00.000Z',
+      error: 'rate_limit',
+      text: LIMIT_TEXT,
+    });
+  });
+
+  it('обычная сессия, повторы, отметка не у ассистента и запись без времени — ошибкой не считаются', async () => {
+    const plain = await writeSession(
+      '-Users-me-proj',
+      'e4',
+      human('2026-10-12T10:00:00.000Z') + reply('2026-10-12T10:00:05.000Z'),
+    );
+    expect(await indexSessionFile(plain, root)).not.toHaveProperty('lastApiError');
+
+    const lookalikes = await writeSession(
+      '-Users-me-proj',
+      'e5',
+      // Повтор запроса: `system/api_error` ход не кончает и ошибкой сессии не является.
+      line({
+        type: 'system',
+        subtype: 'api_error',
+        timestamp: '2026-10-12T10:00:01.000Z',
+        retryInMs: 2000,
+        retryAttempt: 1,
+        maxRetries: 10,
+        error: { status: 429, message: 'rate limited' },
+      }) +
+        line({
+          type: 'assistant',
+          timestamp: '2026-10-12T10:00:02.000Z',
+          isApiErrorMessage: false,
+          error: 'rate_limit',
+          message: { role: 'assistant', content: [{ type: 'text', text: LIMIT_TEXT }] },
+        }) +
+        line({
+          type: 'user',
+          timestamp: '2026-10-12T10:00:03.000Z',
+          isApiErrorMessage: true,
+          message: { role: 'user', content: LIMIT_TEXT },
+        }) +
+        // Без времени запись не сравнить с остальными осями: ошибкой сессии она не становится.
+        line({
+          type: 'assistant',
+          isApiErrorMessage: true,
+          error: 'rate_limit',
+          message: { role: 'assistant', content: [{ type: 'text', text: LIMIT_TEXT }] },
+        }),
+    );
+    expect(await indexSessionFile(lookalikes, root)).not.toHaveProperty('lastApiError');
+  });
+
+  it('текст — блоки text через перевод строки, прочие блоки пропущены; нет поля error — null', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      'e6',
+      line({
+        type: 'assistant',
+        timestamp: '2026-10-12T10:00:00.000Z',
+        isApiErrorMessage: true,
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'API Error: Request rejected (429)' },
+            { type: 'tool_use', name: 'Bash' },
+            { type: 'text', text: 'Usage limit reached' },
+          ],
+        },
+      }),
+    );
+
+    expect((await indexSessionFile(file, root)).lastApiError).toEqual({
+      at: '2026-10-12T10:00:00.000Z',
+      error: null,
+      text: 'API Error: Request rejected (429)\nUsage limit reached',
+    });
+  });
+
+  it.each([
+    ['строка вместо блоков', 'e7a', 'Credit balance is too low', 'Credit balance is too low'],
+    ['пустой список блоков', 'e7b', [], ''],
+    ['не строка и не список', 'e7c', { oops: true }, ''],
+  ])('content: %s', async (_name, id, content, text) => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      id,
+      line({
+        type: 'assistant',
+        timestamp: '2026-10-12T10:00:00.000Z',
+        isApiErrorMessage: true,
+        error: 'billing_error',
+        message: { role: 'assistant', content },
+      }),
+    );
+
+    // Ошибка без текста всё равно ошибка: её вид (`error`) решает, нужна ли человеку помощь.
+    expect((await indexSessionFile(file, root)).lastApiError).toEqual({
+      at: '2026-10-12T10:00:00.000Z',
+      error: 'billing_error',
+      text,
+    });
+  });
+});
+
 describe('заголовок сессии', () => {
   it('побеждает последняя запись custom-title', async () => {
     const file = await writeSession(

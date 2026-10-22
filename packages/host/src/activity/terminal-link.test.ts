@@ -4,19 +4,19 @@
  * (спека комнат Organic, 3.6). Настоящий codex не запускается.
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addSession, createWork, transitionSession, updateMap } from '@parley/core';
+import { addSession, createWork, transitionSession, updateMap, workPaths } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createPtyManager } from '../pty/pty-manager.js';
 import type { PtyLaunch } from '../pty/pty-process.js';
 import { createWorksService } from '../works/works-service.js';
 import { createActivityService } from './activity-service.js';
-import type { ActivityService } from './activity-service.js';
+import type { ActivityService, ActivityServiceOptions } from './activity-service.js';
 import { linkTerminalActivity } from './terminal-link.js';
 
 const CODEX_STUB = fileURLToPath(new URL('../../test/stub-codex.mjs', import.meta.url));
@@ -70,7 +70,12 @@ const waitFor = async (check: () => boolean, timeoutMs = 8000): Promise<void> =>
 };
 
 /** Работа с одной активной сессией заданного провайдера и всё, что нужно, чтобы поднять в ней PTY. */
-async function rig(provider: string, launchEnv: NodeJS.ProcessEnv = {}, startupWaitMs = 60_000) {
+async function rig(
+  provider: string,
+  launchEnv: NodeJS.ProcessEnv = {},
+  startupWaitMs = 60_000,
+  serviceOptions: ActivityServiceOptions = {},
+) {
   const map = await createWork(project, { title: 'Работа' });
   let sessionId = '';
   await updateMap(project, map.work.id, (current) => {
@@ -88,6 +93,7 @@ async function rig(provider: string, launchEnv: NodeJS.ProcessEnv = {}, startupW
     startupWaitMs,
     claudeRoot,
     codexRoot,
+    ...serviceOptions,
   });
   const pty = createPtyManager(host);
   const unlink = linkTerminalActivity(pty, activity);
@@ -132,8 +138,11 @@ describe('linkTerminalActivity', () => {
     await waitFor(() => state(activity, ref) === 'working');
     pty.input(ref, 'STUB_APPROVAL\r');
     await waitFor(() => state(activity, ref) === 'blocked');
+    // Поток заглушки — OSC 9 с командой, затем заголовок Action Required: одобрение, а не вопрос.
+    expect(activity.get(ref)?.activity.need).toMatchObject({ kind: 'approval', detail: 'ls -la' });
     pty.input(ref, 'STUB_WORK\r');
     await waitFor(() => state(activity, ref) === 'working');
+    expect(activity.get(ref)?.activity.need).toBeNull();
     pty.input(ref, 'STUB_READY\r');
     await waitFor(() => state(activity, ref) === 'unseen');
   }, 30_000);
@@ -189,6 +198,24 @@ describe('linkTerminalActivity', () => {
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(state(activity, ref)).not.toBe('working');
     expect(state(activity, ref)).not.toBe('unseen');
+  }, 30_000);
+
+  it('claude: журнал прошлого запуска не пуст, новый процесс молчит срок — startup (хост видит запуск процесса)', async () => {
+    const { ref, pty, activity, launch } = await rig('claude', {}, 60_000, { trustWaitMs: 300 });
+    // Журнал прошлого запуска заведён после старта служб: его подхватит ближайшее изменение карты.
+    const events = workPaths(project, ref.workId).events;
+    await mkdir(events, { recursive: true });
+    await appendFile(
+      path.join(events, `${ref.sessionId}.jsonl`),
+      `${JSON.stringify({ hook_event_name: 'SessionStart' })}\n${JSON.stringify({ hook_event_name: 'Stop' })}\n`,
+    );
+    await updateMap(project, ref.workId, () => undefined);
+    await waitFor(() => activity.get(ref)?.activity.lastEventAt != null);
+
+    pty.start(ref, launch({ provider: 'claude' }));
+    await waitFor(() => activity.get(ref)?.activity.need?.kind === 'startup');
+    expect(state(activity, ref)).toBe('blocked');
+    expect(activity.get(ref)?.activity.lastEventAt).toBeNull();
   }, 30_000);
 
   it('новый процесс той же сессии (resume) начинает без состояния прошлого', async () => {

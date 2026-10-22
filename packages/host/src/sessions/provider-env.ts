@@ -22,15 +22,22 @@ export const LOOPBACK_KEY_PLACEHOLDER = 'parley-local';
 /** Final process-only transform. The caller reads the key immediately before this call. */
 export function providerLaunchEnv(entry: ProviderEntry, inherited: NodeJS.ProcessEnv, planEnv: Record<string, string>, key: string | null): NodeJS.ProcessEnv {
   const env = { ...agentEnv(inherited), ...planEnv };
-  // Любой провайдер с ключом в хранилище (GLM и свои, спека своих провайдеров 5.2) получает чистое окружение.
-  if (entry.runner.secret === undefined) return env;
+  // Любой провайдер с ключом в хранилище (GLM и свои, спека своих провайдеров 5.2) или со своей папкой настроек (аккаунт
+  // подписки, спека подписок 5.3) получает чистое окружение: ни ключи хоста, ни его OAuth-токен не перебьют вход аккаунта.
+  if (entry.runner.secret === undefined && entry.runner.configDir === undefined) return env;
+  // Аккаунту без ключа вход подсказывает только его папка: refresh-токен, области и client id хоста тоже срезаются
+  // (спека подписок 5.3); у GLM и своих провайдеров с ключом срез прежний.
+  const noKey = entry.runner.secret === undefined;
   for (const name of Object.keys(env)) {
     const upper = name.toUpperCase();
-    if (upper.startsWith('ANTHROPIC_') || upper.startsWith('CLAUDE_CODE_USE_') || GLM_SELECTORS.has(upper)) delete env[name];
+    if (upper.startsWith('ANTHROPIC_') || upper.startsWith('CLAUDE_CODE_USE_') || GLM_SELECTORS.has(upper)
+      || (noKey && upper.startsWith('CLAUDE_CODE_OAUTH_'))) delete env[name];
   }
   Object.assign(env, entry.runner.env);
   // Своя папка настроек провайдера; у GLM её нет, и `CLAUDE_CONFIG_DIR` остаётся снятым.
   if (entry.runner.configDir !== undefined) env.CLAUDE_CONFIG_DIR = entry.runner.configDir;
+  // Аккаунт без ключа входит сам: метка «провайдером управляет хост» и ключ — только при ключе в хранилище (К12).
+  if (entry.runner.secret === undefined) return env;
   env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
   // Ключ-заглушка нужна только локальному адресу без ключа (`keyOptional`), чтобы Claude Code не спрашивал вход.
   const value = key ?? (entry.runner.keyOptional === true ? LOOPBACK_KEY_PLACEHOLDER : null);

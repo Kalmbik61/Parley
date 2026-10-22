@@ -267,6 +267,12 @@ const recordOf = (value: unknown): Record<string, unknown> =>
     ? (value as Record<string, unknown>)
     : {};
 
+/** Текст первого вопроса `AskUserQuestion` по его `tool_input`; `null` — вопросов или их текста нет. */
+const firstQuestionOf = (toolInput: Record<string, unknown>): string | null => {
+  const questions = toolInput['questions'];
+  return Array.isArray(questions) ? textOf(recordOf(questions[0])['question']) : null;
+};
+
 const itemBytes = (item: FeedItem): number => Buffer.byteLength(JSON.stringify(item), 'utf8');
 
 /** Путь строго внутри одного из корней — тот же приём, что у `meta.json` субагента (0.2.0). */
@@ -362,11 +368,14 @@ export function createFeedService(
 
   function syncHeld(ref: SessionRef): void {
     const key = refKey(ref);
-    const held = rawPending.list(ref).some((info) => info.hookEvent === 'PreToolUse');
+    const question = rawPending.list(ref).find((info) => info.hookEvent === 'PreToolUse');
+    const held = question !== undefined;
     if (held === questionHeld.has(key)) return;
     if (held) questionHeld.set(key, ref);
     else questionHeld.delete(key);
-    deps.activity.questionHeld(ref, held);
+    // Вместе с удержанием уходит текст первого вопроса: из него `detail` потребности «вопрос агента».
+    if (question === undefined) deps.activity.questionHeld(ref, false);
+    else deps.activity.questionHeld(ref, true, firstQuestionOf(question.rawToolInput));
   }
 
   /** Удержанные хуки; каждое место, где удержание меняется, сверяет «вопрос удержан» со службой активности. */

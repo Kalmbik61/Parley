@@ -23,6 +23,16 @@ function str(source: RawRecord | null, key: string): string | null {
   return typeof value === 'string' && value !== '' ? value : null;
 }
 
+/**
+ * `error` события `task_complete` — `{ message, codex_error_info }`: ход кончился ошибкой (лимит, вход…).
+ * Не объект — ошибки нет. Нет `message` — текст пустой: вид ошибки (`codex_error_info`) решает и без него.
+ */
+function turnError(payload: RawRecord): { info: unknown; message: string } | null {
+  const error = asRecord(payload['error']);
+  if (error === null) return null;
+  return { info: error['codex_error_info'], message: str(error, 'message') ?? '' };
+}
+
 /** Первый текстовый блок content[] — там `{type: 'input_text', text}`. */
 function firstContentText(payload: RawRecord): string | null {
   const content = payload['content'];
@@ -208,7 +218,9 @@ export class CodexIndexAccumulator {
           at !== null &&
           (kind === 'task_started' || kind === 'task_complete' || kind === 'turn_aborted')
         ) {
-          this.lastTurnEvent = { type: kind, at };
+          // Ошибка описывает только это событие: следующее строится заново и старую не наследует.
+          const error = kind === 'task_complete' ? turnError(payload) : null;
+          this.lastTurnEvent = error === null ? { type: kind, at } : { type: kind, at, error };
         }
         // После конца хода вызов не сторожится, но его поздний ответ ещё может завершить ячейку.
         // Значения заменяются, чтобы дочитывание не мутировало предыдущий снимок накопителя.
