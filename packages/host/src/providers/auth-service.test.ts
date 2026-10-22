@@ -62,14 +62,19 @@ interface Event {
   data: unknown;
 }
 
-function fakeHost(): { host: HostContext; events: Event[]; warnings: string[] } {
+function fakeHost(): { host: HostContext; events: Event[]; warnings: string[]; fields: object[] } {
   const events: Event[] = [];
   const warnings: string[] = [];
+  const fields: object[] = [];
   const host = {
-    log: { info: () => {}, warn: (message: string) => warnings.push(message), error: () => {} },
+    log: {
+      info: () => {},
+      warn: (message: string, data?: object) => (warnings.push(message), fields.push(data ?? {})),
+      error: () => {},
+    },
     broadcast: (event: string, data: unknown) => events.push({ event, data }),
   } as unknown as HostContext;
-  return { host, events, warnings };
+  return { host, events, warnings, fields };
 }
 
 interface FakeProcess extends PtyProcess {
@@ -78,11 +83,13 @@ interface FakeProcess extends PtyProcess {
   written: string[];
   resizes: Array<[number, number]>;
   kills: number;
+  signals: Array<NodeJS.Signals | undefined>;
   emit(data: string): void;
   exit(info?: Partial<ExitInfo>): void;
 }
 
-function fakeSpawn(): { spawn: PtySpawn; processes: FakeProcess[] } {
+/** `ignoreHup` — процесс не реагирует на SIGHUP и выходит только по SIGKILL (как зависший `claude auth login`). */
+function fakeSpawn(options: { ignoreHup?: boolean } = {}): { spawn: PtySpawn; processes: FakeProcess[] } {
   const processes: FakeProcess[] = [];
   const spawn: PtySpawn = (launch, size) => {
     const dataListeners = new Set<(data: string) => void>();
@@ -94,12 +101,15 @@ function fakeSpawn(): { spawn: PtySpawn; processes: FakeProcess[] } {
       written: [],
       resizes: [],
       kills: 0,
+      signals: [],
       write: (data) => void process_.written.push(data),
       resize: (cols, rows) => void process_.resizes.push([cols, rows]),
       // SIGHUP, как у настоящего node-pty: процесс завершается по сигналу, код 0.
-      kill: () => {
+      kill: (signal) => {
         process_.kills += 1;
-        process_.exit({ exitCode: 0, signal: 1 });
+        process_.signals.push(signal);
+        if (signal === 'SIGKILL') process_.exit({ exitCode: 0, signal: 9 });
+        else if (options.ignoreHup !== true) process_.exit({ exitCode: 0, signal: 1 });
       },
       onData: (listener) => (dataListeners.add(listener), () => dataListeners.delete(listener)),
       onExit: (listener) => (exitListeners.add(listener), () => exitListeners.delete(listener)),
@@ -126,11 +136,11 @@ function fakeExec(...replies: Array<{ code?: number; stdout: string } | Error>):
   return { exec, calls };
 }
 
-function boot(options: AuthServiceOptions = {}): { auth: AuthService; events: Event[]; warnings: string[] } {
-  const { host, events, warnings } = fakeHost();
+function boot(options: AuthServiceOptions = {}): { auth: AuthService; events: Event[]; warnings: string[]; fields: object[] } {
+  const { host, events, warnings, fields } = fakeHost();
   const auth = createAuthService(host, options);
   stoppers.push(() => auth.stop());
-  return { auth, events, warnings };
+  return { auth, events, warnings, fields };
 }
 
 const eventsOf = (events: Event[], name: string): unknown[] => events.filter((item) => item.event === name).map((item) => item.data);
@@ -284,6 +294,28 @@ describe('refresh — состояние входа по команде CLI (К5
     expect(calls.map((call) => call.cwd).sort()).toEqual([folder(ID), folder(OTHER)].sort());
     expect(auth.status(ID)).toBe(true);
     expect(auth.status(OTHER)).toBe(true);
+  });
+
+  it('forget во время чтения реестра тоже отменяет запись исхода', async () => {
+    const { auth } = boot({ exec: fakeExec({ stdout: SIGNED_IN }).exec });
+    const pending = auth.refresh(ID);
+    // Проверка уже началась и ждёт реестр с диска, команда ещё не запущена.
+    await Promise.resolve();
+    await Promise.resolve();
+    auth.forget(ID);
+    expect(await pending).toBe(false);
+    expect(auth.status(ID)).toBeNull();
+  });
+
+  it('журнал: код и первая строка сообщения, без stderr команды', async () => {
+    const failure = Object.assign(new Error('Command failed: /stub/claude auth status --json\nsecret stderr text'), { code: 2, killed: false });
+    const { exec } = fakeExec(failure);
+    const { auth, fields } = boot({ exec });
+    await auth.refresh(ID);
+    const logged = JSON.stringify(fields);
+    expect(logged).toContain('Command failed');
+    expect(logged).not.toContain('secret stderr text');
+    expect(fields[0]).toMatchObject({ id: ID, code: 2, killed: false });
   });
 
   it('forget: кэш забыт; идущая проверка уже не запишет устаревший исход (id мог получить новую папку)', async () => {
@@ -461,6 +493,45 @@ describe('signIn — свой маленький PTY (К14, К17)', () => {
     expect(processes[0]!.kills).toBe(1);
     expect(auth.signingIn(ID)).toBe(false);
     expect(eventsOf(events, 'providers.signInExit')).toEqual([{ provider: ID, exitCode: 129, signedIn: false }]);
+  });
+
+  it('cancel: SIGHUP, а процесс не вышел — через killGraceMs SIGKILL; замок держится до выхода и снимается на нём', async () => {
+    const { spawn, processes } = fakeSpawn({ ignoreHup: true });
+    const { auth, events } = boot({ spawn, exec: fakeExec({ stdout: SIGNED_OUT }).exec, killGraceMs: 40 });
+    await auth.signIn(ID);
+
+    auth.cancel(ID);
+    expect(processes[0]!.signals).toEqual(['SIGHUP']);
+    // Процесс игнорирует SIGHUP: вход всё ещё идёт, другой вход невозможен.
+    expect(auth.signingIn(ID)).toBe(true);
+    await expect(auth.signIn(OTHER)).rejects.toMatchObject({ code: 'conflict' });
+
+    await exited(events);
+    expect(processes[0]!.signals).toEqual(['SIGHUP', 'SIGKILL']);
+    expect(eventsOf(events, 'providers.signInExit')).toEqual([{ provider: ID, exitCode: 137, signedIn: false }]);
+    expect(auth.signingIn(ID)).toBe(false);
+    await auth.signIn(OTHER);
+    expect(auth.signingIn(OTHER)).toBe(true);
+  });
+
+  it('штатный выход после SIGHUP гасит SIGKILL: позже процесс не добивается', async () => {
+    const { spawn, processes } = fakeSpawn();
+    const { auth, events } = boot({ spawn, exec: fakeExec({ stdout: SIGNED_OUT }).exec, killGraceMs: 30 });
+    await auth.signIn(ID);
+    auth.cancel(ID);
+    await exited(events);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(processes[0]!.signals).toEqual(['SIGHUP']);
+  });
+
+  it('stop тоже добивает процесс, не реагирующий на SIGHUP; после stop signIn отказан', async () => {
+    const { spawn, processes } = fakeSpawn({ ignoreHup: true });
+    const { auth } = boot({ spawn, exec: fakeExec({ stdout: SIGNED_OUT }).exec, killGraceMs: 30 });
+    await auth.signIn(ID);
+    auth.stop();
+    expect(processes[0]!.signals).toEqual(['SIGHUP']);
+    await vi.waitFor(() => expect(processes[0]!.signals).toEqual(['SIGHUP', 'SIGKILL']));
+    await expect(auth.signIn(ID)).rejects.toMatchObject({ code: 'conflict', message: 'the host is shutting down' });
   });
 
   it('таймаут = cancel', async () => {

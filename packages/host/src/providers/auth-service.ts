@@ -38,6 +38,8 @@ export interface AuthServiceOptions {
   timeoutMs?: number;
   /** Не чаще одной проверки состояния на аккаунт за это время, мс (К5). По умолчанию 30 секунд. */
   minGapMs?: number;
+  /** Сколько ждать выхода после SIGHUP, мс, прежде чем добить процесс входа SIGKILL. По умолчанию 3 секунды, как у сессий. */
+  killGraceMs?: number;
 }
 
 export interface AuthService {
@@ -79,6 +81,8 @@ const SIGN_IN_TIMEOUT_MS = 600_000;
 const STATUS_MIN_GAP_MS = 30_000;
 /** Одноразовая команда CLI не должна висеть дольше этого: сеть у `auth status` не нужна, но CLI мог зависнуть. */
 const EXEC_TIMEOUT_MS = 30_000;
+/** Через сколько после SIGHUP процесс входа добивается SIGKILL (как `PtyManager.stop`, спека 4.1). */
+const KILL_GRACE_MS = 3000;
 /** Ссылка входа длинная; окно присылает свой размер через `providers.signInResize`. */
 const DEFAULT_SIZE = { cols: 100, rows: 24 };
 
@@ -152,11 +156,25 @@ const execCli: AuthExec = (command, args, env, cwd) =>
 /** Выход по сигналу (отмена, таймаут) не должен выглядеть успехом: сигнал — как в оболочке, 128 + номер. */
 const exitCodeOf = ({ exitCode, signal }: ExitInfo): number => (signal !== null && signal !== 0 ? 128 + signal : exitCode);
 
+/**
+ * Для журнала хоста: код, флаги и первая строка сообщения. Ошибка `execFile` несёт ещё и stderr команды, а он в журнал
+ * не идёт (в нём может оказаться что угодно, что напечатал CLI).
+ */
+function describeFailure(error: unknown): { code?: unknown; killed?: unknown; signal?: unknown; message: string } {
+  if (typeof error !== 'object' || error === null) return { message: String(error).split('\n')[0]!.slice(0, 200) };
+  const { code, killed, signal, message } = error as { code?: unknown; killed?: unknown; signal?: unknown; message?: unknown };
+  return { code, killed, signal, message: String(message ?? error).split('\n')[0]!.slice(0, 200) };
+}
+
 interface SignInRun {
   id: string;
   /** `null`, пока реестр читается и процесс ещё не запущен: замок уже занят (два `signIn` подряд не пройдут оба). */
   process: PtyProcess | null;
+  /** Таймаут входа. */
   timer: NodeJS.Timeout | undefined;
+  /** SIGKILL после SIGHUP, если процесс не вышел. */
+  killTimer: NodeJS.Timeout | undefined;
+  exited: boolean;
 }
 
 export function createAuthService(host: HostContext, options: AuthServiceOptions = {}): AuthService {
@@ -165,6 +183,7 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
   const now = options.now ?? Date.now;
   const timeoutMs = options.timeoutMs ?? SIGN_IN_TIMEOUT_MS;
   const minGapMs = options.minGapMs ?? STATUS_MIN_GAP_MS;
+  const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
 
   const states = new Map<string, { signedIn: boolean; detail: string | null; at: number }>();
   const inflight = new Map<string, Promise<boolean>>();
@@ -177,13 +196,14 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
 
   /** Одна проверка: команда статуса в окружении аккаунта; `providers.changed` только при смене состояния. */
   async function run(id: string): Promise<boolean> {
+    // До чтения реестра: `forget` во время чтения тоже должен отменить запись исхода.
+    const started = generation(id);
     const entry = await findAccount(id);
     if (entry === undefined) {
       states.delete(id);
       return false;
     }
     if (stopped) return states.get(id)?.signedIn ?? false;
-    const started = generation(id);
     const commands = authCommands(entry);
     const { binary, cwd, env } = launchOf(entry);
     const result = await exec(binary, commands.status, env, cwd);
@@ -208,7 +228,7 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
       .then(() => run(id))
       .catch((error: unknown) => {
         // Команда не запустилась или не уложилась в срок: состояние прежнее, окно в 30 с не занимается — повтор сразу.
-        host.log.warn('вход аккаунта: проверка состояния не удалась', { id, error: String(error) });
+        host.log.warn('вход аккаунта: проверка состояния не удалась', { id, ...describeFailure(error) });
         return states.get(id)?.signedIn ?? false;
       })
       .finally(() => {
@@ -219,13 +239,30 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
   }
 
   async function finishSignIn(finished: SignInRun, exit: ExitInfo): Promise<void> {
+    finished.exited = true;
     clearTimeout(finished.timer);
+    clearTimeout(finished.killTimer);
     if (lock === finished) lock = null;
     if (stopped) return;
     const signedIn = await check(finished.id, true);
     host.broadcast('providers.signInExit', { provider: finished.id, exitCode: exitCodeOf(exit), signedIn });
     // `signingIn` стал false, даже если состояние входа не изменилось (отмена): окно перечитывает строку провайдера.
     host.broadcast('providers.changed', { provider: finished.id });
+  }
+
+  /**
+   * SIGHUP, а не вышел за `killGraceMs` — SIGKILL (как `PtyManager.stop`): замок снимается только на выходе процесса, и
+   * `claude auth login`, не реагирующий на SIGHUP, держал бы его до перезапуска хоста.
+   */
+  function terminate(target: SignInRun): void {
+    const child = target.process;
+    if (child === null || target.exited) return;
+    child.kill('SIGHUP');
+    if (target.killTimer !== undefined) return;
+    target.killTimer = setTimeout(() => {
+      if (!target.exited) child.kill('SIGKILL');
+    }, killGraceMs);
+    target.killTimer.unref();
   }
 
   function cancel(id: string): void {
@@ -236,7 +273,7 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
       lock = null;
       return;
     }
-    current.process.kill();
+    terminate(current);
   }
 
   return {
@@ -255,14 +292,15 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
             .map((entry) => check(entry.id, false)),
         );
       } catch (error) {
-        host.log.warn('вход аккаунтов: реестр не прочитался', { error: String(error) });
+        host.log.warn('вход аккаунтов: реестр не прочитался', describeFailure(error));
       }
     },
 
     async signIn(id, size = DEFAULT_SIZE) {
+      if (stopped) throw new HostError('conflict', 'the host is shutting down');
       // Замок занимается до первого await: два вызова подряд не пройдут оба.
       if (lock !== null) throw new HostError('conflict', 'another sign-in is running');
-      const started: SignInRun = { id, process: null, timer: undefined };
+      const started: SignInRun = { id, process: null, timer: undefined, killTimer: undefined, exited: false };
       lock = started;
       let child: PtyProcess;
       try {
@@ -273,7 +311,7 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
       } catch (error) {
         if (lock === started) lock = null;
         if (error instanceof HostError) throw error;
-        host.log.warn('вход аккаунта: процесс не запустился', { id, error: String(error) });
+        host.log.warn('вход аккаунта: процесс не запустился', { id, ...describeFailure(error) });
         throw new HostError('internal', 'Unable to start the sign-in');
       }
       started.process = child;
@@ -310,7 +348,7 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
       try {
         await exec(binary, commands.logout, env, cwd);
       } catch (error) {
-        host.log.warn('вход аккаунта: logout не удался', { id, error: String(error) });
+        host.log.warn('вход аккаунта: logout не удался', { id, ...describeFailure(error) });
         throw new HostError('internal', 'Unable to sign out');
       } finally {
         // Что бы ни случилось с `logout`, правду говорит свежая проверка.
@@ -331,7 +369,7 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
       lock = null;
       if (current === null) return;
       clearTimeout(current.timer);
-      current.process?.kill();
+      terminate(current);
     },
   };
 }
