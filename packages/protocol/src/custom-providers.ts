@@ -69,8 +69,9 @@ export type AnyCustomProviderInfo = CustomEndpointInfo | CustomAccountInfo;
 
 /**
  * Описание в `providers.list.custom`. ВРЕМЕННО только форма с адресом: окно до подписок (`draftFromProvider`) читает
- * её поля напрямую, а хост аккаунтов пока не отдаёт, поэтому на промежуточных коммитах ветки (решение 2) тип не
- * шире правды. Тот, кто начнёт отдавать и рисовать аккаунты в `providers.list`, меняет его на `AnyCustomProviderInfo`.
+ * её поля напрямую, и на промежуточных коммитах ветки (решение 2) тип не шире того, что оно умеет. Хост аккаунты уже
+ * отдаёт (`customInfo` в `host/src/methods/providers.ts`, с помеченным приведением к этому типу); задача окна меняет тип
+ * на `AnyCustomProviderInfo` вместе с `draftFromProvider` и снимает приведение.
  */
 export type CustomProviderInfo = CustomEndpointInfo;
 
@@ -115,11 +116,9 @@ const saveCustomRecord = z.discriminatedUnion('kind', [endpointRecord, accountRe
 export type CustomProviderSaveParams = z.infer<typeof saveCustomRecord>;
 
 export const customProviderMethodSchemas = {
-  // Во время разбора принимаются обе формы, но тип параметров пока «запись с адресом»: так хост и окно до подписок
-  // (обработчик читает `params.baseUrl`, форма шлёт запись без `kind`) собираются без правок на промежуточных
-  // коммитах ветки (решение 2). ВРЕМЕННО: приведение снимает задача хоста про `saveCustom` аккаунта, после неё
-  // `Params<'providers.saveCustom'>` равен `CustomProviderSaveParams`.
-  'providers.saveCustom': saveCustomRecord as unknown as z.ZodType<z.infer<typeof endpointRecord>>,
+  // Обе формы разбираются и в типе: `Params<'providers.saveCustom'>` равен `CustomProviderSaveParams`, обработчик хоста
+  // сужает его по `kind` (спека подписок 5.1; приведение к форме с адресом решения 2 снято задачей хоста).
+  'providers.saveCustom': saveCustomRecord,
   'providers.deleteCustom': z.object({ id: customId, removeFolder: z.boolean() }),
   // Состояние входа и вход в аккаунт (спека подписок 5.5): отдельный путь PTY, не `pty-manager` сессий.
   'providers.authStatus': signInProvider,

@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 import { defaultRoot, discoverSessions } from './discover.js';
-import { commandInPath, loadProviders } from './providers.js';
+import { commandInPath, isManagedEntry, loadProviders } from './providers.js';
 import type { ProviderEntry } from './providers.js';
 import { buildSchemaReport } from './schema-report.js';
 import { buildIndex, buildSessionTree } from './session-tree.js';
@@ -162,8 +162,10 @@ async function newWorkSession(argv: string[]): Promise<void> {
     throw new Error(`unknown provider ${provider}; allowed: ${Object.keys(registry).join(', ')}`);
   }
   // Printed CLI commands have no host boundary for process-only secret delivery.
-  if (entry.runner.secret !== undefined) {
-    throw new Error('GLM requires launch through the Parley host; this CLI command cannot inject its saved key');
+  // Аккаунту подписки напечатанная команда не подставит его `CLAUDE_CONFIG_DIR`: процесс вошёл бы в глобальный
+  // аккаунт человека (спека подписок 5.3).
+  if (isManagedEntry(entry) || entry.runner.secret !== undefined) {
+    throw new Error(`${entry.label} requires launch through the Parley host; this CLI command cannot pass its settings folder or saved key`);
   }
   if (!(await commandInPath(entry.runner.command))) {
     throw new Error(

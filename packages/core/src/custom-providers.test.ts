@@ -14,6 +14,7 @@ import {
   customProviderSecret,
   customProvidersFile,
   defaultAccountLabel,
+  defaultAccountSlug,
   isAccountRecord,
   isCustomProviderId,
   isLoopbackUrl,
@@ -269,6 +270,12 @@ describe('запись аккаунта (спека подписок 5.1)', () =
     expect(defaultAccountLabel('claude-account', [kimi, account])).toBe('Claude Code 3');
     expect(defaultAccountLabel('claude-account', [account, { ...account, id: 'custom-claude-3' }])).toBe('Claude Code 4');
     expect(defaultAccountLabel('codex-account', [account, codex])).toBe('Codex 3');
+  });
+  it('defaultAccountSlug: первый свободный номер с двойки, id по виду (спека подписок 5.1)', () => {
+    expect(defaultAccountSlug('claude-account', new Set())).toBe('custom-claude-2');
+    expect(defaultAccountSlug('claude-account', new Set(['custom-claude-2', 'custom-claude-4']))).toBe('custom-claude-3');
+    expect(defaultAccountSlug('codex-account', new Set(['custom-claude-2']))).toBe('codex-codex-2');
+    expect(isValidCustomProviderId(defaultAccountSlug('claude-account', new Set()))).toBe(true);
   });
   it('accountLabel: своё имя главнее; стандартное считает аккаунты до этого, а не его самого', () => {
     const second: CustomAccountRecord = { ...account, id: 'custom-claude-3' };

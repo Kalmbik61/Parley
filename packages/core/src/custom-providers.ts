@@ -44,7 +44,7 @@ export function isValidCustomProviderId(id: string): boolean {
 
 /** Свой провайдер с адресом и ключом (спека своих провайдеров 5.1). */
 export interface CustomEndpointRecord {
-  /** ВРЕМЕННО необязательно: хост до своей задачи собирает запись без `kind`, а нет поля — это `endpoint` (спека подписок 5.1). */
+  /** Хост пишет его явно; нет поля (файл до подписок, тесты) — это `endpoint`, миграции нет (спека подписок 5.1). */
   kind?: 'endpoint';
   id: string;
   label: string;
@@ -272,6 +272,18 @@ const ACCOUNT_BASE_NAME = { 'claude-account': 'Claude Code', 'codex-account': 'C
  */
 export function defaultAccountLabel(kind: CustomAccountRecord['kind'], records: readonly CustomProviderRecord[]): string {
   return `${ACCOUNT_BASE_NAME[kind]} ${records.filter((record) => record.kind === kind).length + 2}`;
+}
+
+/**
+ * Id нового аккаунта (спека подписок 5.1): `custom-claude-2`, `custom-claude-3`, … (у Codex `codex-codex-2`) — первый
+ * свободный в `taken`. Имя в id не входит: оно меняется, а id и папка аккаунта нет.
+ */
+export function defaultAccountSlug(kind: CustomAccountRecord['kind'], taken: ReadonlySet<string>): string {
+  const base = kind === 'claude-account' ? `${CUSTOM_PROVIDER_PREFIX}claude` : `${CODEX_ACCOUNT_PREFIX}codex`;
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base}-${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
 }
 
 /**

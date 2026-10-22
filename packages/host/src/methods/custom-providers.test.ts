@@ -1,4 +1,4 @@
-import { chmod, lstat, readFile, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, readlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Result } from '@parley/protocol';
@@ -28,7 +28,7 @@ afterEach(async () => {
   else process.env['CLAUDE_CONFIG_DIR'] = previousClaudeDir;
 });
 
-async function boot(options: { fetch?: typeof globalThis.fetch } = {}) {
+async function boot(options: { fetch?: typeof globalThis.fetch; version?: string } = {}) {
   home = await tempHome();
   const binary = path.join(home, 'claude-stub');
   await writeFile(binary, '#!/bin/sh\n', 'utf8');
@@ -38,7 +38,7 @@ async function boot(options: { fetch?: typeof globalThis.fetch } = {}) {
   process.env['CLAUDE_CONFIG_DIR'] = path.join(home, 'user-claude');
   host = await startHost({
     home,
-    probeVersion: async () => '2.1.302',
+    probeVersion: async () => options.version ?? '2.1.302',
     ...(options.fetch === undefined ? {} : { customCheck: { fetch: options.fetch } }),
   });
   const client = connectRaw(hostPaths(home).socket);
@@ -229,5 +229,111 @@ describe('custom providers over RPC', () => {
       const secrets = await readFile(path.join(home, 'secrets.json'), 'utf8').catch(() => '{}');
       expect(secrets).not.toContain('custom:custom-kimi');
     }
+  });
+});
+
+// Аккаунты Claude Code (спека подписок 5.1, 5.5, 5.9, 10). Версия CLI — выше минимума аккаунта (2.1.304), иначе
+// «старый CLI» перекроет «нужен вход».
+const account = { kind: 'claude-account', id: null, label: '', link: true };
+
+const recordsFile = async () =>
+  (JSON.parse(await readFile(path.join(home, 'custom-providers.json'), 'utf8')) as { providers: unknown[] }).providers;
+
+describe('аккаунты Claude Code по RPC (спека подписок 5.1, 5.5, 5.9)', () => {
+  it('saveCustom без имени: custom-claude-2, имя «Claude Code 2» в записи без адреса, папка с .claude.json и ссылками', async () => {
+    const client = await boot({ version: '2.1.306' });
+    await mkdir(path.join(home, 'user-claude'), { recursive: true });
+    await writeFile(path.join(home, 'user-claude', 'CLAUDE.md'), 'rules');
+    const seen = await rpc(client, 'providers.saveCustom', account);
+    expect(seen.at(-1)?.result).toEqual({ id: 'custom-claude-2' });
+    expect(seen).toContainEqual({ event: 'providers.changed', data: { provider: 'custom-claude-2' } });
+    // Ruling 6: стандартное имя записано в label, чтобы не сползать после удалений; ни адреса, ни ключа в записи нет.
+    expect(await recordsFile()).toEqual([{ kind: 'claude-account', id: 'custom-claude-2', label: 'Claude Code 2', link: true }]);
+    const dir = path.join(home, 'providers', 'custom-claude-2');
+    expect(JSON.parse(await readFile(path.join(dir, '.claude.json'), 'utf8'))).toMatchObject({ hasCompletedOnboarding: true });
+    expect(await readlink(path.join(dir, 'CLAUDE.md'))).toBe(path.join(home, 'user-claude', 'CLAUDE.md'));
+    const row = await item(client, 'custom-claude-2');
+    expect(row).toMatchObject({
+      label: 'Claude Code 2', available: false, needs: 'sign-in', family: 'claude',
+      custom: { kind: 'claude-account', link: true, folder: dir, signedIn: null, signingIn: false },
+    });
+    expect(row).not.toHaveProperty('keyHint');
+    // У аккаунта нет ключа: сохранить его некуда.
+    expect((await rpc(client, 'providers.setKey', { provider: 'custom-claude-2', key: 'synthetic-key' })).at(-1)?.error)
+      .toMatchObject({ code: 'bad_request' });
+  });
+
+  it('следующие аккаунты: custom-claude-3 и «Claude Code 3»; своё имя в id не входит', async () => {
+    const client = await boot({ version: '2.1.306' });
+    await rpc(client, 'providers.saveCustom', account);
+    expect((await rpc(client, 'providers.saveCustom', account)).at(-1)?.result).toEqual({ id: 'custom-claude-3' });
+    expect(await item(client, 'custom-claude-3')).toMatchObject({ label: 'Claude Code 3' });
+    expect((await rpc(client, 'providers.saveCustom', { ...account, label: 'Work' })).at(-1)?.result).toEqual({ id: 'custom-claude-4' });
+    expect(await item(client, 'custom-claude-4')).toMatchObject({ label: 'Work' });
+  });
+
+  it('id аккаунта обходит занятое: запись своего провайдера, оставшуюся папку и забытый ключ', async () => {
+    const client = await boot({ version: '2.1.306' });
+    // Запись с адресом, чей id совпал со стандартным slug аккаунта.
+    await rpc(client, 'providers.saveCustom', { ...draft, label: 'Claude 2' });
+    await mkdir(path.join(home, 'providers', 'custom-claude-3'), { recursive: true });
+    await writeFile(path.join(home, 'secrets.json'), JSON.stringify({ 'custom:custom-claude-4': { key: 'forgotten-key' } }));
+    expect((await rpc(client, 'providers.saveCustom', account)).at(-1)?.result).toEqual({ id: 'custom-claude-5' });
+  });
+
+  it('правка аккаунта: id и папка прежние, имя и link меняются; пустое имя остаётся стандартным, ссылки снимаются', async () => {
+    const client = await boot({ version: '2.1.306' });
+    await mkdir(path.join(home, 'user-claude'), { recursive: true });
+    await writeFile(path.join(home, 'user-claude', 'CLAUDE.md'), 'rules');
+    await rpc(client, 'providers.saveCustom', account);
+    await rpc(client, 'providers.saveCustom', account);
+    const link = path.join(home, 'providers', 'custom-claude-2', 'CLAUDE.md');
+    expect(await exists(link)).toBe(true);
+    const seen = await rpc(client, 'providers.saveCustom', { ...account, id: 'custom-claude-2', label: 'Work', link: false });
+    expect(seen.at(-1)?.result).toEqual({ id: 'custom-claude-2' });
+    expect(await exists(link)).toBe(false);
+    expect(await item(client, 'custom-claude-2')).toMatchObject({ label: 'Work', custom: { link: false } });
+    // Пустое имя при правке: стандартное по числу аккаунтов до этого, а не по всем (второй остаётся «3»).
+    await rpc(client, 'providers.saveCustom', { ...account, id: 'custom-claude-3' });
+    expect(await item(client, 'custom-claude-3')).toMatchObject({ label: 'Claude Code 3' });
+    await rpc(client, 'providers.saveCustom', { ...account, id: 'custom-claude-2' });
+    expect(await item(client, 'custom-claude-2')).toMatchObject({ label: 'Claude Code 2' });
+  });
+
+  it('вид сверяется: аккаунт Codex пока отказан; вид против префикса id; запись другого вида не правится', async () => {
+    const client = await boot({ version: '2.1.306' });
+    const codex = await rpc(client, 'providers.saveCustom', { ...account, kind: 'codex-account' });
+    expect(codex.at(-1)?.error).toMatchObject({ code: 'bad_request', message: 'Codex accounts are not supported by this host yet' });
+    expect(await exists(path.join(home, 'custom-providers.json'))).toBe(false);
+    expect((await rpc(client, 'providers.saveCustom', { ...account, id: 'codex-two' })).at(-1)?.error)
+      .toMatchObject({ code: 'bad_request', message: 'The id does not match the kind of the provider' });
+    expect((await rpc(client, 'providers.saveCustom', { ...draft, id: 'codex-two' })).at(-1)?.error)
+      .toMatchObject({ code: 'bad_request', message: 'The id does not match the kind of the provider' });
+
+    await rpc(client, 'providers.saveCustom', draft);
+    await rpc(client, 'providers.saveCustom', account);
+    const before = await recordsFile();
+    // Запись с адресом не правится как аккаунт и наоборот: id верный, вид не совпал с записью.
+    expect((await rpc(client, 'providers.saveCustom', { ...account, id: 'custom-kimi', label: 'Work' })).at(-1)?.error)
+      .toMatchObject({ code: 'bad_request' });
+    expect((await rpc(client, 'providers.saveCustom', { ...draft, id: 'custom-claude-2' })).at(-1)?.error)
+      .toMatchObject({ code: 'bad_request' });
+    expect(await recordsFile()).toEqual(before);
+  });
+
+  it('deleteCustom аккаунта: запись убрана; папка остаётся или удаляется по removeFolder', async () => {
+    const client = await boot({ version: '2.1.306' });
+    await rpc(client, 'providers.saveCustom', account);
+    await rpc(client, 'providers.saveCustom', account);
+    const kept = await rpc(client, 'providers.deleteCustom', { id: 'custom-claude-2', removeFolder: false });
+    expect(kept.at(-1)?.result).toEqual({ ok: true });
+    expect(kept).toContainEqual({ event: 'providers.changed', data: { provider: 'custom-claude-2' } });
+    expect(await item(client, 'custom-claude-2')).toBeUndefined();
+    expect(await exists(path.join(home, 'providers', 'custom-claude-2'))).toBe(true);
+    // Имя уцелевшего не сползло (Ruling 6), а оставшаяся папка занимает id.
+    expect(await item(client, 'custom-claude-3')).toMatchObject({ label: 'Claude Code 3' });
+    expect((await rpc(client, 'providers.saveCustom', account)).at(-1)?.result).toEqual({ id: 'custom-claude-4' });
+    await rpc(client, 'providers.deleteCustom', { id: 'custom-claude-4', removeFolder: true });
+    expect(await exists(path.join(home, 'providers', 'custom-claude-4'))).toBe(false);
   });
 });

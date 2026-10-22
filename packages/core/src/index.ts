@@ -125,6 +125,7 @@ export {
   customProviderSecret,
   customProvidersFile,
   defaultAccountLabel,
+  defaultAccountSlug,
   isAccountRecord,
   isCustomProviderId,
   isLoopbackUrl,

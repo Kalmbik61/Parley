@@ -25,9 +25,13 @@ export function providerLaunchEnv(entry: ProviderEntry, inherited: NodeJS.Proces
   // Любой провайдер с ключом в хранилище (GLM и свои, спека своих провайдеров 5.2) или со своей папкой настроек (аккаунт
   // подписки, спека подписок 5.3) получает чистое окружение: ни ключи хоста, ни его OAuth-токен не перебьют вход аккаунта.
   if (entry.runner.secret === undefined && entry.runner.configDir === undefined) return env;
+  // Аккаунту без ключа вход подсказывает только его папка: refresh-токен, области и client id хоста тоже срезаются
+  // (спека подписок 5.3); у GLM и своих провайдеров с ключом срез прежний.
+  const noKey = entry.runner.secret === undefined;
   for (const name of Object.keys(env)) {
     const upper = name.toUpperCase();
-    if (upper.startsWith('ANTHROPIC_') || upper.startsWith('CLAUDE_CODE_USE_') || GLM_SELECTORS.has(upper)) delete env[name];
+    if (upper.startsWith('ANTHROPIC_') || upper.startsWith('CLAUDE_CODE_USE_') || GLM_SELECTORS.has(upper)
+      || (noKey && upper.startsWith('CLAUDE_CODE_OAUTH_'))) delete env[name];
   }
   Object.assign(env, entry.runner.env);
   // Своя папка настроек провайдера; у GLM её нет, и `CLAUDE_CONFIG_DIR` остаётся снятым.

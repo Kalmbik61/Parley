@@ -370,6 +370,14 @@ describe('providerLaunchEnv: аккаунт Claude', () => {
     }
     expect(env.PATH).toBe('/bin');
   });
+  it('без ключа срезается всё CLAUDE_CODE_OAUTH_*: refresh-токен, области, client id (спека 5.3, закалка)', () => {
+    const env = providerLaunchEnv(account, {
+      ...inherited, CLAUDE_CODE_OAUTH_REFRESH_TOKEN: 'refresh', CLAUDE_CODE_OAUTH_SCOPES: 'user:inference', CLAUDE_CODE_OAUTH_CLIENT_ID: 'id',
+      CLAUDE_CODE_OTHER: 'kept',
+    }, {}, null);
+    for (const name of Object.keys(env)) expect(name.startsWith('CLAUDE_CODE_OAUTH_'), name).toBe(false);
+    expect(env.CLAUDE_CODE_OTHER).toBe('kept');
+  });
   it('даже переданный ключ в окружение аккаунта не попадает', () => {
     const env = providerLaunchEnv(account, inherited, {}, 'sk-stray');
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();

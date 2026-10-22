@@ -247,8 +247,9 @@ describe('своя сессия не трогает ~/.claude и обычный 
     expect(run.env).not.toHaveProperty('CLAUDE_SECURESTORAGE_CONFIG_DIR');
   });
 
-  it('префикс custom- одинаков в @parley/core и @parley/protocol', () => {
+  it('префиксы custom- и codex- одинаковы в @parley/core и @parley/protocol', () => {
     expect(core.CUSTOM_PROVIDER_PREFIX).toBe(protocol.CUSTOM_PROVIDER_PREFIX);
+    expect(core.CODEX_ACCOUNT_PREFIX).toBe(protocol.CODEX_ACCOUNT_PREFIX);
   });
 });
 

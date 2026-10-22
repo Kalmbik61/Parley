@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { CODEX_ACCOUNT_PREFIX, isCodexAccountId, isCustomProviderId, isManagedProviderId } from './custom-providers.js';
+import type { CustomProviderSaveParams } from './custom-providers.js';
 import { METHODS } from './methods.js';
+import type { Params } from './methods.js';
 
 const valid = {
   kind: 'endpoint',
@@ -66,6 +68,9 @@ describe('вид записи своих провайдеров (спека по
     expect(METHODS['providers.saveCustom'].safeParse({ ...account, kind: undefined }).success).toBe(false);
   });
 
+  it('Params<saveCustom> — честный союз записи с адресом и аккаунта, без приведения (решение 4)', () => {
+    expectTypeOf<Params<'providers.saveCustom'>>().toEqualTypeOf<CustomProviderSaveParams>();
+  });
   it('saveCustom: принимает аккаунт Claude и Codex, новый (id null) и существующий, с пустым именем', () => {
     expect(METHODS['providers.saveCustom'].safeParse(account).success).toBe(true);
     expect(METHODS['providers.saveCustom'].safeParse({ ...account, id: 'custom-claude-2', label: 'Work', link: false }).success).toBe(true);

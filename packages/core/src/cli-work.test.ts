@@ -170,6 +170,19 @@ describe('parley-core work session new', () => {
     expect(result.stderr).not.toContain('fake-zai-key');
     expect(await readMapFile('w-0001')).toEqual(before);
   });
+  it('аккаунт подписки: напечатанная команда не знает его папку настроек — отказ до записи карты (спека подписок 5.3)', async () => {
+    await newWork('Аккаунт');
+    await writeFile(
+      path.join(home, 'custom-providers.json'),
+      JSON.stringify({ version: 1, providers: [{ kind: 'claude-account', id: 'custom-claude-2', label: '', link: false }] }),
+    );
+    const before = await readMapFile('w-0001');
+    const result = await cli('work', 'session', 'new', '--work', 'w-0001', '--provider', 'custom-claude-2', '--label', 'test', '--task', 'test');
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('requires launch through the Parley host');
+    expect(result.stdout).toBe('');
+    expect(await readMapFile('w-0001')).toEqual(before);
+  }, 60_000);
   it('навигатор включён по умолчанию: снимок в конфиге MCP — 1, а PARLEY_SKILL_NAVIGATOR=0 его выключает', async () => {
     await newWork('Навигатор');
     const mcpEnv = async (extra: NodeJS.ProcessEnv): Promise<Record<string, string>> => {

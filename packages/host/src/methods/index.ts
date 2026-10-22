@@ -41,6 +41,7 @@ import { hostInfo, hostShutdown } from './host.js';
 import { mailMarkRead } from './mail.js';
 import { createPtyHandlers } from './pty.js';
 import { createCustomProviderHandlers } from './custom-providers.js';
+import type { AccountAuth } from './providers.js';
 import {
   createProvidersCheck,
   createProvidersClearKey,
@@ -99,6 +100,8 @@ export interface MethodDeps {
   glmCheck?: GlmCheckService;
   /** Проверка конечной точки своего провайдера (спека 5.5); без неё методы своих провайдеров не проверяют. */
   customCheck?: CustomCheckService;
+  /** Состояние входа аккаунтов подписки (спека подписок 5.5) для `providers.list`; без него `signedIn: null`, `signingIn: false`. */
+  auth?: AccountAuth;
   /** Канал агента к браузеру окна (спека браузера 3.7): ответ окна `browser.agentResult`; без него метода нет. */
   browserAgent?: Pick<BrowserEndpoint, 'resolve'>;
   /** Состояние хоста для `host.diagnostics`; методы диагностики регистрируются, только когда заданы и он, и `profiler`. */
@@ -216,7 +219,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'works.delete': createWorksDelete(deps.history) as AnyHandler,
     'works.rename': worksRename as AnyHandler,
     'works.setStatus': worksSetStatus as AnyHandler,
-    'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog, deps.customCheck) as AnyHandler,
+    'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog, deps.customCheck, deps.auth) as AnyHandler,
     'providers.setKey': createProvidersSetKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
     'providers.clearKey': createProvidersClearKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
     ...(deps.limits === undefined ? {} : { 'providers.refreshLimits': createProvidersRefreshLimits(deps.limits, deps.providerVersions) as AnyHandler }),
