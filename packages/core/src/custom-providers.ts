@@ -326,6 +326,8 @@ export function accountProviderEntry(
     linkBy: 'session-id',
     runner,
     ...(claude.models === undefined ? {} : { models: claude.models }),
+    // Шаблон запуска человек переопределил в providers.json — подсказка в карточке аккаунта следует за ним (К11).
+    ...(claude.argsOverridden === undefined ? {} : { argsOverridden: true as const }),
     account: record,
   };
 }

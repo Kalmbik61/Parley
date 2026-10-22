@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { CLAUDE_MODELS, CODEX_MODELS, GLM_MODELS, LEGACY_EFFORTS, effortLabel, type EffortOption, type ModelOption } from './provider-models.js';
-import { accountProviderEntry, customProviderEntry, customProvidersFile, isAccountRecord, isCustomProviderId, isManagedProviderId, readCustomProviders, type CustomAccountRecord, type CustomEndpointRecord } from './custom-providers.js';
+import { accountProviderEntry, customProviderEntry, customProvidersFile, isAccountRecord, isCustomProviderId, isManagedProviderId, readCustomProviders, type CustomAccountRecord, type CustomEndpointRecord, type CustomProviderRecord } from './custom-providers.js';
 import { readSecret, type SecretId } from './secrets.js';
 import { parseVersion } from './work/channel.js';
 import type { Provider } from './session-index.js';
@@ -118,11 +118,21 @@ export interface ProviderEntry {
   /** Описание своего провайдера с адресом, по которому построена запись (спека своих провайдеров, 5.3). */
   custom?: CustomEndpointRecord;
   /**
-   * Запись аккаунта подписки, по которой построена запись (спека подписок 5.2). ВРЕМЕННО отдельным полем: хост и окно
-   * читают `custom.baseUrl` и другие поля адреса, а у аккаунта их нет. Задачи хоста и окна сольют поле в `custom`
-   * (тип — `CustomProviderRecord`), и читатели сузят его через `isAccountRecord`.
+   * Запись аккаунта подписки, по которой построена запись (спека подписок 5.2). Отдельное поле навсегда: у аккаунта
+   * нет адреса и ключа, а читатели `custom` берут `custom.baseUrl` и другие поля адреса. Условие «свой провайдер или
+   * аккаунт» проверяют через `managedRecord` и `isManagedEntry`, а не вручную по двум полям.
    */
   account?: CustomAccountRecord;
+}
+
+/** Запись окна у провайдера, которым владеет окно (свой с адресом или аккаунт подписки): `custom ?? account`. */
+export function managedRecord(entry: ProviderEntry): CustomProviderRecord | undefined {
+  return entry.custom ?? entry.account;
+}
+
+/** Записью реестра владеет окно (свой провайдер или аккаунт), а не встроенный реестр и не `providers.json`. */
+export function isManagedEntry(entry: ProviderEntry): boolean {
+  return managedRecord(entry) !== undefined;
 }
 
 /** Запись встроенного реестра: id из закрытого списка, всё остальное как у `ProviderEntry`. */
@@ -796,8 +806,8 @@ export async function providerReadiness(entry: ProviderEntry, options: ProviderR
 /** Safe refusal text shared by MCP and host; includes no credentials. */
 export function providerReadinessError(entry: ProviderEntry, readiness: ProviderReadiness): string | null {
   if (readiness.error !== null) return readiness.error;
-  // Аккаунт подписки называется своим именем (`entry.label`, стандартное уже посчитано), остальные — как раньше.
-  const name = entry.account !== undefined ? entry.label : (entry.custom?.label ?? 'GLM');
+  // Провайдер окна называется своим именем (`entry.label`: у аккаунта с пустой меткой стандартное уже посчитано).
+  const name = isManagedEntry(entry) ? entry.label : 'GLM';
   if (readiness.needs === 'sign-in') return `${name} is not signed in: open Settings → Providers and press Sign in`;
   if (readiness.needs === 'cli') return entry.runner.minVersion === undefined
     ? `command ${entry.runner.command} is not in PATH — provider ${entry.id} is unavailable`

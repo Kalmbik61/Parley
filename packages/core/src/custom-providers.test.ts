@@ -25,7 +25,7 @@ import {
   type CustomAccountRecord,
   type CustomEndpointRecord,
 } from './custom-providers.js';
-import { PROVIDERS, claudeConfigDirFor, isClaudeCode, loadProviders } from './providers.js';
+import { PROVIDERS, claudeConfigDirFor, isClaudeCode, isManagedEntry, loadProviders, managedRecord } from './providers.js';
 
 const kimi: CustomEndpointRecord = {
   kind: 'endpoint',
@@ -309,6 +309,9 @@ describe('запись аккаунта (спека подписок 5.1)', () =
     expect(entry.models).toBe(claude.models);
     expect(entry.account).toEqual(account);
     expect(entry.custom).toBeUndefined();
+    // правка args человеком доходит до аккаунта вместе с подсказкой карточки (К11)
+    expect(claude.argsOverridden).toBe(true);
+    expect(entry.argsOverridden).toBe(true);
     expect(claude.runner.configDir).toBeUndefined();
     expect(isClaudeCode(entry)).toBe(true);
     expect(claudeConfigDirFor(entry, { CLAUDE_CONFIG_DIR: '/x' })).toBe(path.join(home, 'providers', 'custom-claude-2'));
@@ -318,6 +321,20 @@ describe('запись аккаунта (спека подписок 5.1)', () =
     expect(accountProviderEntry({ ...account, label: '😀😀x' }, registry, home).mark).toBe('😀😀');
     expect(accountProviderEntry({ ...account, label: 'Work' }, registry, home).label).toBe('Work');
     expect(ACCOUNT_MIN_VERSION_CLAUDE).toBe('2.1.304');
+    // встроенный шаблон без правки человека — подсказки нет
+    expect(accountProviderEntry(account, registry, home).argsOverridden).toBeUndefined();
+  });
+  it('managedRecord / isManagedEntry: endpoint и аккаунт — записи окна, обычный claude и glm — нет', () => {
+    const endpoint = customProviderEntry(kimi, home);
+    const accountEntry = accountProviderEntry(account, { claude: PROVIDERS.claude }, home);
+    expect(managedRecord(endpoint)).toBe(kimi);
+    expect(managedRecord(accountEntry)).toBe(account);
+    expect(managedRecord(PROVIDERS.claude)).toBeUndefined();
+    expect(managedRecord(PROVIDERS.glm)).toBeUndefined();
+    expect(isManagedEntry(endpoint)).toBe(true);
+    expect(isManagedEntry(accountEntry)).toBe(true);
+    expect(isManagedEntry(PROVIDERS.claude)).toBe(false);
+    expect(isManagedEntry(PROVIDERS.glm)).toBe(false);
   });
   it('accountProviderEntry: codex-аккаунт до этапа 3 бросает', () => {
     const codex: CustomAccountRecord = { kind: 'codex-account', id: 'codex-2', label: '', link: true };

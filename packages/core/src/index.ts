@@ -96,6 +96,8 @@ export {
   providerReadinessError,
   loadProviders,
   isClaudeCode,
+  isManagedEntry,
+  managedRecord,
   claudeConfigDirFor,
   modelChoiceError,
   printCommand,
