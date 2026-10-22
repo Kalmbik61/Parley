@@ -407,6 +407,31 @@ master действует правило «статусы из одного ме
 - первый запуск сессии аккаунта Codex в пустом `CODEX_HOME` с флагом доверия (5.6) — нет ли других экранов;
 - унаследованные переменные, которые перебивают вход (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`), — список для 5.3.
 
+### 9.1 Итоги задачи 0 (Claude Code 2.1.306, macOS, 2026-10-22)
+Проба в пустой папке scratchpad с настоящим вторым аккаунтом человека (вход в браузере, код вставлен в терминал);
+папка и запись входа после пробы удалены.
+- `claude auth login --claudeai` в не-TTY фоне **не годится**: CLI печатает ссылку и ждёт код на stdin («Paste code
+  here if prompted»). Вход идёт через страницу `platform.claude.com/oauth/code/callback`, которая показывает код;
+  локального обратного вызова нет. Значит, PTY входа (5.5, К14) обязателен, и поле ввода кода нужно всегда.
+- `claude auth status --json` после входа: `loggedIn: true`, `authMethod: "claude.ai"`, `apiProvider: "firstParty"`,
+  `email`, `orgId`, `orgName`, `subscriptionType` (`"max"`), `projectsDirectory`, `configDirectory`. Для карточки
+  аккаунта: «Signed in as <email> · <subscriptionType>».
+- Глобальный `claude auth status --json` до и после входа/выхода в папке — байт в байт тот же; в двух папках —
+  разные аккаунты.
+- Запись связки ключей аккаунта: `Claude Code-credentials-26ecb921`, где `26ecb921` = первые 8 hex `sha256` пути
+  папки **без** завершающей косой черты (совпадает со спекой своих провайдеров 6.1). После `claude auth logout` в
+  папке запись исчезла, глобальная `Claude Code-credentials` осталась.
+- Сессия в папке **без** `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST` (`claude -p … --model haiku`) отвечает на
+  подписке аккаунта (К12 подтверждено). Проба `/login`/`/logout` внутри интерактивной сессии не делалась —
+  эквивалентно проверены `auth login`/`auth logout` в той же папке; обновление токена дольше часа не проверялось.
+- Унаследованные переменные: `CLAUDE_CODE_OAUTH_TOKEN=x` **перебивает** вход (`authMethod: "oauth_token"`) —
+  срезать обязательно. `ANTHROPIC_API_KEY=x` и `ANTHROPIC_AUTH_TOKEN=x` при входе по claude.ai в `-p` ответ не
+  перебили (ключ из окружения без одобрения не применяется) — всё равно срезаются по 5.3, это защита, а не
+  исправление.
+- Версии: `claude auth login/status/logout` есть в 2.1.304 (самая старая установленная; 2.1.302–303 на машине
+  нет). `ACCOUNT_MIN_VERSION_CLAUDE = '2.1.304'` — самая старая проверенная; изоляция папки проверена по коду
+  2.1.302 раньше (спека своих провайдеров 6.1).
+
 **Тесты** (без «веры»):
 - изоляция Claude: сессия аккаунта получает `CLAUDE_CONFIG_DIR=<папка>`, без `CLAUDE_SECURESTORAGE_CONFIG_DIR`,
   без `ANTHROPIC_*` и `CLAUDE_CODE_OAUTH_TOKEN*`; соседняя сессия глобального Claude ничего из этого не получает;
