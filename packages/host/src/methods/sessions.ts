@@ -64,7 +64,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
       // а `CreateSessionInput.worktree?: boolean` явного `undefined` ключом не
       // принимает — той же дорогой, что `LaunchOptions.prompt` в `launch.ts`.
       const { worktree, model, effort, role, agent, lean, ...rest } = params;
-      const ref = await deps.sessions.create({
+      const created = await deps.sessions.create({
         ...rest,
         ...(role === undefined ? {} : { role }),
         ...(agent === undefined ? {} : { agent }),
@@ -73,7 +73,8 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
         ...(effort === undefined ? {} : { effort }),
         ...(lean === undefined ? {} : { lean }),
       });
-      return { ref };
+      // `held` (запуск Codex ждёт согласия на папку) в ответ окна не идёт: `ref` остаётся чистым указателем.
+      return { ref: { projectPath: created.projectPath, workId: created.workId, sessionId: created.sessionId } };
     },
 
     sessionsResume: async (params) => {

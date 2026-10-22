@@ -186,5 +186,7 @@ export type {
 } from './assistant.js';
 export { telegramMethodSchemas } from './telegram.js';
 export type { TelegramMethodResults, TelegramPolling, TelegramStatus } from './telegram.js';
+export { consentMethodSchemas } from './consents.js';
+export type { ConsentCard, ConsentMethodResults, TrustRecord } from './consents.js';
 export { CUSTOM_PROVIDER_PREFIX, customProviderMethodSchemas, isCustomProviderId } from './custom-providers.js';
 export type { CustomProviderAuth, CustomProviderInfo, CustomProviderMethodResults, CustomProviderModels } from './custom-providers.js';

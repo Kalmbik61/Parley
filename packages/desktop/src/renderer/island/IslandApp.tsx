@@ -55,6 +55,7 @@ import { startRecording } from '../voice/recorder.js';
 import { listen } from './assistant/listen.js';
 import { miniLabel } from './assistant/labels.js';
 import { assistantBusy, useAssistantStore } from './assistant/store.js';
+import { useConsentsStore } from './consents/store.js';
 import { IslandTab } from './IslandTab.js';
 import { IslandView, sessionKeyOf, type IslandAssistantProps } from './IslandView.js';
 import { islandModel, sessionLabels, type IslandRow } from './model.js';
@@ -122,6 +123,9 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   const byRef = useActivityStore((state) => state.byRef);
   const items = useIslandRequests((state) => state.items);
   const index = useIslandRequests((state) => state.index);
+  const consents = useConsentsStore((state) => state.items);
+  const consentDeciding = useConsentsStore((state) => state.deciding);
+  const consentNote = useConsentsStore((state) => state.note);
   /** Ключи запросов, что остров уже показывал: показанный раз не поднимает окно и не звучит повторно. */
   const seen = useRef(new Set<string>());
   /** Скрытые Clear ключи Done: память острова до перезапуска, при переподключении не сбрасывается. */
@@ -141,6 +145,7 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
         setConnected(ok);
         if (!ok) {
           useIslandRequests.getState().clear();
+          useConsentsStore.getState().replace([]);
           // После переподключения всё ещё ждущая карточка — новая: возвращает окно, выбирается и звучит.
           seen.current.clear();
         }
@@ -229,7 +234,17 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     };
   }, [connected, bridge]);
 
-  const idle = !model.active && items.length === 0 && !assistant.open && !busy;
+  // Карточки согласия: начальный список и изменения хоста (как у помощника). Подписка раньше списка: событие, пришедшее
+  // следом за запросом, не потеряется; карточки хоста переживают его перезапуск, и после переподключения список снова новый.
+  useEffect(() => {
+    if (!connected) return undefined;
+    useConsentsStore.getState().configure({ call: bridge.call });
+    const off = bridge.on('consents.changed', (change) => useConsentsStore.getState().apply(change));
+    void bridge.call('consents.list', {}).then((result) => useConsentsStore.getState().replace(result.items)).catch(() => {});
+    return off;
+  }, [connected, bridge]);
+
+  const idle = !model.active && items.length === 0 && consents.length === 0 && !assistant.open && !busy;
   /** Убран ли остров: в покое при открытии — да, при работе или очереди — нет. */
   const [retracted, setRetracted] = useState(idle);
   // `hovered` здесь не трогаем: его ведёт только main, и локальный сброс разошёлся бы с ним, пока курсор над зоной нажатия.
@@ -264,11 +279,18 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
       seen.current.add(item.key);
       if (firstFresh === -1) firstFresh = at;
     });
-    if (firstFresh === -1) return;
-    useIslandRequests.getState().select(firstFresh);
+    // Новая карточка согласия (id `c-NN` не пересекается с ключами запросов) выдвигает остров и звучит так же.
+    let freshConsent = false;
+    for (const card of consents) {
+      if (seen.current.has(card.id)) continue;
+      seen.current.add(card.id);
+      freshConsent = true;
+    }
+    if (firstFresh === -1 && !freshConsent) return;
+    if (firstFresh !== -1) useIslandRequests.getState().select(firstFresh);
     setRetracted(false);
     if (config.sound) bridge.island.beep();
-  }, [items, config.sound, bridge]);
+  }, [items, consents, config.sound, bridge]);
   // Агенты начали работу — остров выдвигается. Эффект идёт только при смене признака: стрелка среди работы его не возвращает.
   useEffect(() => {
     if (model.active) setRetracted(false);
@@ -414,6 +436,11 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
         onSelect={(next) => useIslandRequests.getState().select(next)}
         onDecide={(key, decision) => void useIslandRequests.getState().decide(key, decision)}
         assistant={assistantProps}
+        consent={
+          consents[0] === undefined
+            ? null
+            : { card: consents[0], deciding: consentDeciding === consents[0].id, note: consentNote, onDecide: (id, decision) => void useConsentsStore.getState().decide(id, decision) }
+        }
       />
       {retracted ? (
         <IslandTab

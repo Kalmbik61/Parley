@@ -4,6 +4,7 @@ import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { stateDir } from './state-dir.js';
+import { trustArgs } from './codex-policy.js';
 import { tomlString } from './mcp-config.js';
 import type { SkillCatalog } from '../skills/catalog.js';
 import type { NativeSkill, SkillUnavailableReason } from '../skills/types.js';
@@ -55,6 +56,34 @@ export function projectNativeSkillConfigArgs(args: readonly string[]): string[] 
   }
   return projected;
 }
+/**
+ * Значение пары `-c projects={…}` доверия к папке — ровно в той форме, что строит `trustArgs` (спека Codex 2026-10-21, 4.3):
+ * одна или две записи `"<абсолютный путь>"={trust_level="trusted"}`. Строка разбирается как TOML и собирается заново тем
+ * же `trustArgs`: другие ключи и уровни доверия, относительные пути, комментарии и пробелы в форму не попадают.
+ */
+function trustValue(text: string): boolean {
+  let parsed: Record<string, unknown>;
+  try { parsed = parseToml(text); } catch { return false; }
+  const table = parsed.projects;
+  if (Object.keys(parsed).length !== 1 || !record(table)) return false;
+  const folders = Object.keys(table);
+  if (folders.length < 1 || folders.length > 2) return false;
+  if (!folders.every(folder => path.isAbsolute(folder) && record(table[folder]) &&
+    Object.keys(table[folder]).length === 1 && table[folder].trust_level === 'trusted')) return false;
+  return trustArgs({ project: folders[0]!, cwd: folders[folders.length - 1]! })[1] === text;
+}
+/** Аргументы дескриптора: проекция навыков (`projectNativeSkillConfigArgs`) и не больше одной пары доверия `projects=`. */
+function validConfigArgs(args: string[]): boolean {
+  const trusted: number[] = [];
+  for (let i = 0; i < args.length; i += 2) if (args[i] === '-c' && args[i + 1]!.startsWith('projects=')) trusted.push(i);
+  if (trusted.length > 1) return false;
+  let skills = args;
+  if (trusted.length === 1) {
+    if (!trustValue(args[trusted[0]! + 1]!)) return false;
+    skills = [...args.slice(0, trusted[0]), ...args.slice(trusted[0]! + 2)];
+  }
+  return JSON.stringify(projectNativeSkillConfigArgs(skills)) === JSON.stringify(skills);
+}
 function valid(value: unknown): value is NativeContextDescriptor {
   if (!record(value) || value.version !== 1 || typeof value.revision !== 'string' ||
     !/^[a-f0-9-]{36}$/.test(value.revision) || typeof value.provider !== 'string' ||
@@ -67,7 +96,7 @@ function valid(value: unknown): value is NativeContextDescriptor {
   if (Object.keys(value).some(key => !['version', 'revision', 'provider', 'cwd', 'verified', 'command', 'configArgs', 'roots', 'process'].includes(key)) ||
     Object.keys(value.roots).some(key => !['homeDir', 'codexHome', 'claudeConfigDir'].includes(key))) return false;
   if (value.configArgs.length % 2 !== 0) return false;
-  if (JSON.stringify(projectNativeSkillConfigArgs(value.configArgs as string[])) !== JSON.stringify(value.configArgs)) return false;
+  if (!validConfigArgs(value.configArgs as string[])) return false;
   if (value.process !== undefined && (!record(value.process) || !Number.isSafeInteger(value.process.pid) ||
     Number(value.process.pid) < 1 || typeof value.process.startedAtProcess !== 'string' || !value.process.startedAtProcess)) return false;
   return true;

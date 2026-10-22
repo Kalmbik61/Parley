@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FeedPermissionCard, FeedPlanCard, FeedQuestionCard, Proposal } from '@parley/core';
-import type { AssistantProposal } from '@parley/protocol';
-import { assistantCardMessage, feedCardMessage, feedDecisionFor, questionKeyboard, receiptText, roomCardMessage, type CardMeta } from './cards.js';
+import type { AssistantProposal, ConsentCard } from '@parley/protocol';
+import { assistantCardMessage, consentCardMessage, feedCardMessage, feedDecisionFor, questionKeyboard, receiptText, roomCardMessage, type CardMeta } from './cards.js';
 
 const meta: CardMeta = { sessionName: 'S03 Ruslan', where: 'Parley · my_harnas', projectPath: '/p/my_harnas', shortId: 'aB3dE9fG', buttons: true };
 
@@ -138,5 +138,35 @@ describe('assistantCardMessage', () => {
 describe('receiptText', () => {
   it('исходный текст, пустая строка, итог', () => {
     expect(receiptText('<b>a</b>', 'Allowed at 10:00')).toBe('<b>a</b>\n\nAllowed at 10:00');
+  });
+});
+
+describe('consentCardMessage', () => {
+  const card: ConsentCard = {
+    id: 'c-01',
+    kind: 'folder-trust',
+    folder: '/Users/me/code/<app> & co',
+    projectPath: '/Users/me/code/my_harnas',
+    requestedBy: { source: 'agent', sessionId: 's-03', label: 'S03 Ruslan' },
+    at: '2026-10-21T10:00:00Z',
+    state: 'pending',
+  };
+  it('текст: заголовок, папка, «Requested by …»; HTML экранирован', () => {
+    const { text } = consentCardMessage({ card, projectName: 'my_harnas', requestedByLabel: 'S03 Ruslan (agent)', shortId: 'cn1' });
+    expect(text).toBe('<b>Trust folder for agents?</b>\n/Users/me/code/&lt;app&gt; &amp; co\nRequested by S03 Ruslan (agent) · my_harnas');
+  });
+  it('подпись запросившего тоже экранирована', () => {
+    const { text } = consentCardMessage({ card, projectName: 'a<b>', requestedByLabel: '<x>', shortId: 'cn1' });
+    expect(text).toContain('Requested by &lt;x&gt; · a&lt;b&gt;');
+    expect(text).not.toContain('<x>');
+  });
+  it('клавиатура: Trust и Deny → pc1:<shortId>:a и :d', () => {
+    const { keyboard } = consentCardMessage({ card, projectName: 'my_harnas', requestedByLabel: 'agent', shortId: 'cn1' });
+    expect(keyboard).toEqual([
+      [
+        { text: 'Trust', callback_data: 'pc1:cn1:a' },
+        { text: 'Deny', callback_data: 'pc1:cn1:d' },
+      ],
+    ]);
   });
 });

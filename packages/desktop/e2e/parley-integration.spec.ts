@@ -8,6 +8,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
+import { seedTrust } from './trust-seed.js';
 
 /**
  * Сквозная офлайн-проверка апгрейда Parley (P32a, этап 11 единого плана): матрица приёмки на настоящем хосте и окне Electron,
@@ -184,6 +185,8 @@ test.describe('сквозная проверка апгрейда Parley, офл
       STUB_MCP_LOG: mcpLog,
       ...extraEnv,
     });
+    // Сессия Codex в проекте без согласия удерживалась бы до решения человека (спека 2026-10-21, 4.2).
+    await seedTrust(home, project);
     app = await electron.launch({ args: [mainEntry], env });
     window = await app.firstWindow();
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ x: 0, y: 0, width: 1400, height: 900 }));
@@ -506,9 +509,11 @@ test.describe('сквозная проверка апгрейда Parley, офл
     expect(other.reason).toContain('unverified');
 
     // Запись `codex` в providers.json с неизвестным флагом: контекст не подтверждён, сокращения нет, подсказка без обещаний.
+    // `{approvals}` и `{trust}` в своих шаблонах есть: хост предупреждает о пробеле `provider-override-gap` один раз на жизнь
+    // (ключ — код), и их отсутствие заняло бы место уведомления про `{skillCatalog}` ниже (спека 2026-10-21, 4.3).
     await put(
       path.join(home, 'providers.json'),
-      `${JSON.stringify({ codex: { args: ['--profile', 'custom', '-c', '{mcpConfig}', '-c', '{developerInstructions}', '-c', '{skillCatalog}', '{prompt}'] } })}\n`,
+      `${JSON.stringify({ codex: { args: ['--profile', 'custom', '-c', '{mcpConfig}', '-c', '{developerInstructions}', '-c', '{skillCatalog}', '{approvals}', '{trust}', '{prompt}'] } })}\n`,
     );
     const unknown = await newSession(workId, { provider: 'codex' });
     const unknownLaunch = await lastLaunch(unknown);
@@ -519,7 +524,7 @@ test.describe('сквозная проверка апгрейда Parley, офл
     await expect.poll(hostLog).toContain(BUDGET_UNVERIFIED);
 
     // Запись без `{skillCatalog}`: сокращение молча не выдумывается, человек получает адресное объяснение.
-    await put(path.join(home, 'providers.json'), `${JSON.stringify({ codex: { args: ['-c', '{mcpConfig}', '-c', '{developerInstructions}', '{prompt}'] } })}\n`);
+    await put(path.join(home, 'providers.json'), `${JSON.stringify({ codex: { args: ['-c', '{mcpConfig}', '-c', '{developerInstructions}', '{approvals}', '{trust}', '{prompt}'] } })}\n`);
     const gap = await newSession(workId, { provider: 'codex' });
     const gapLaunch = await lastLaunch(gap);
     expect(codexConfigs(gapLaunch.argv)).not.toContain('skills.include_instructions=false');

@@ -16,6 +16,11 @@
  * человека всем участникам (`rooms.send` с пустым `to`, как из композера комнаты). Пустой промпт — ничего не отправляется.
  * Название комнаты — «Room 1»: у новой работы комнат ещё нет.
  *
+ * Согласие на папку (спека 2026-10-21, 4.2 п. 1): между проверкой формы и `works.create` окно спрашивает `trust.check`; папка
+ * не доверена — диалог «Trust … for agents?» (`TrustFolderDialog`), и без «Trust» работа не создаётся, какой бы
+ * провайдер ни был выбран. «Trust» — `trust.grant` (`by: 'window'`) и дальше всё как обычно; «Cancel» — назад в композер.
+ * Хост прежней сборки без `trust.check` (`unknown_method`) запусков не удерживает — спрашивать у него нечего.
+ *
  * Порядок вызовов — `works.create`, затем `sessions.create` по строкам, затем `rooms.create` и `rooms.send` (если нужны).
  * Если что-то после первого упало, работа уже есть: диалог показывает ошибку и «Retry», который по нажатию повторяет
  * только упавшее — проект и название тогда заперты, чтобы не казалось, что повтор создаст работу с новым названием; уже
@@ -42,6 +47,7 @@ import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, providerName, S } from '../../shared/strings.js';
 import { AgentRowsEditor } from '../components/dialogs/AgentRowsEditor.js';
 import { FieldHint } from '../components/dialogs/FieldHint.js';
+import { TrustFolderDialog } from '../components/dialogs/TrustFolderDialog.js';
 import {
   infoOf,
   providerIdOf,
@@ -166,6 +172,13 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
   /** Комната создана, а первый промпт в неё не ушёл — «Retry» повторяет только отправку. */
   const [createdRoom, setCreatedRoom] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Папка, согласия на которую ждёт диалог доверия; `null` — диалога нет. */
+  const [trustFolder, setTrustFolder] = useState<string | null>(null);
+  /**
+   * Идущая проверка согласия или ответ на диалог. Закрытие композера и новое открытие ставят ей `cancelled`: дальше она
+   * ничего не делает — не открывает диалог и не создаёт работу.
+   */
+  const trustGateRef = useRef<{ cancelled: boolean } | null>(null);
   /** Снятия ожиданий снимка (`openWhenListed`) — все гасятся при размонтировании. */
   const pendingRef = useRef(new Set<() => void>());
   /**
@@ -183,6 +196,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
 
   useEffect(() => {
     if (launchRef.current !== null) launchRef.current.cancelled = true;
+    if (trustGateRef.current !== null) trustGateRef.current.cancelled = true;
   }, [open, initialProject, initialTitle]);
 
   // Каждое открытие — с чистой формой: проект открывшего (от «+» заголовка) или проект активной работы, название из
@@ -210,6 +224,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
     setCreatedWork(null);
     setCreatedRoom(null);
     setBusy(false);
+    setTrustFolder(null);
   }, [open, initialProject, initialTitle]);
 
   const { providers, providersLoading, providersError, providersRef, providersReady, reloadProviders, defaultId } = useDialogProviders(open, bridge, setAgents);
@@ -396,16 +411,68 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
     if (projectPath === null || Object.keys(errors).length > 0) return;
     setBusy(true);
     setError(null);
+    const gate = { cancelled: false };
+    trustGateRef.current = gate;
+    let trusted = true;
+    try {
+      // Хост хранит realpath папки и сверяет по нему сам: путь через символическую ссылку окну не сравнить.
+      ({ trusted } = await bridge.call('trust.check', { folder: projectPath }));
+    } catch (err) {
+      const info = decodeIpcError(err);
+      // Хост прежней сборки методов `trust.*` не знает и запусков не удерживает: спрашивать нечего.
+      if (info.code !== 'unknown_method') {
+        console.warn('[parley] trust.check', info.message);
+        if (gate.cancelled) return;
+        setError(errorText(info.code, S.errors.actions.checkFolderTrust));
+        setBusy(false);
+        return;
+      }
+    }
+    if (gate.cancelled) return;
+    if (!trusted) {
+      // Форма остаётся запертой (`busy`) на время диалога; «Trust» продолжает отсюда, «Cancel» отпускает форму.
+      setTrustFolder(projectPath);
+      return;
+    }
+    await createWork(projectPath);
+  };
+
+  /** `works.create` и всё, что идёт за ним; папка уже доверена. */
+  const createWork = async (folder: string): Promise<void> => {
     let workId: string;
     try {
-      ({ workId } = await bridge.call('works.create', { projectPath, title: effectiveTitle({ title, prompt: hasAgents ? prompt : '' }), goal: '' }));
+      ({ workId } = await bridge.call('works.create', { projectPath: folder, title: effectiveTitle({ title, prompt: hasAgents ? prompt : '' }), goal: '' }));
     } catch (err) {
       console.warn('[parley] works.create', err);
       setError(errorText(decodeIpcError(err).code, S.errors.actions.createWorkspace));
       setBusy(false);
       return;
     }
-    await launchInto({ projectPath, workId });
+    await launchInto({ projectPath: folder, workId });
+  };
+
+  /** «Trust» в диалоге: запись согласия окном, затем создание работы. */
+  const trustAndCreate = async (folder: string): Promise<void> => {
+    const gate = trustGateRef.current;
+    setTrustFolder(null);
+    try {
+      await bridge.call('trust.grant', { folder, by: 'window' });
+    } catch (err) {
+      const info = decodeIpcError(err);
+      console.warn('[parley] trust.grant', info.message);
+      if (gate?.cancelled === true) return;
+      setError(errorText(info.code, S.errors.actions.grantTrust));
+      setBusy(false);
+      return;
+    }
+    if (gate?.cancelled === true) return;
+    await createWork(folder);
+  };
+
+  /** «Cancel» в диалоге: назад в композер, ничего не создано. */
+  const cancelTrust = (): void => {
+    setTrustFolder(null);
+    setBusy(false);
   };
 
   const text = S.dialogs.newWork;
@@ -414,6 +481,7 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
   const shownError = error ?? (hasAgents ? providersError ?? availabilityError : null);
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         aria-describedby={undefined}
@@ -552,5 +620,13 @@ export function NewWorkComposer({ open, projectPath: initialProject, title: init
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    {/* Рядом с диалогом, а не внутри: ⌘Enter и клики диалога доверия не всплывают в форму композера. */}
+    <TrustFolderDialog
+      open={trustFolder !== null}
+      folder={trustFolder ?? ''}
+      onTrust={() => trustFolder !== null && void trustAndCreate(trustFolder)}
+      onCancel={cancelTrust}
+    />
+    </>
   );
 }

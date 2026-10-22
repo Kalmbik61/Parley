@@ -1403,6 +1403,7 @@ describe('RoomPanel — строка доставки: кто забрал со�
       resuming: 'resuming',
       'resume-limit': 'resume limit reached',
       pending: 'not launched',
+      'folder-trust': 'waiting for folder trust',
     };
     const delivering = new Set<MailWait>(['in-flight', 'pointed', 'resuming']);
     for (const [reason, text] of Object.entries(words) as Array<[MailWait, string]>) {

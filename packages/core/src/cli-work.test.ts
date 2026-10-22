@@ -513,7 +513,9 @@ describe('parley-core work session new', () => {
 
   it('codex: напечатанная команда — та же, что запускает окно: PARLEY_* в env сервера, notify человека не подменяется', async () => {
     // Codex режет серверу MCP окружение: дом харнесса (`PARLEY_HOME`) должен лежать в таблице `env` явно, а конец
-    // хода Codex — OSC 9 и журнал, `notify` человека не подменяется.
+    // хода Codex — OSC 9 и журнал, `notify` человека не подменяется. Ключи политики `sandbox_mode`,
+    // `approval_policy` и `approvals_reviewer` идут из `{sandbox}` и `{approvals}` (заметка дизайна 2026-10-21, §5.1);
+    // пары `projects` нет: тестовый проект CLI не доверенный.
     await newWork('Авторизация');
     const printed = await ok(
       'work',
@@ -534,6 +536,9 @@ describe('parley-core work session new', () => {
     expect(overrides.map((override) => override.split('=')[0])).toEqual([
       'mcp_servers.parley',
       'developer_instructions',
+      'sandbox_mode',
+      'approval_policy',
+      'approvals_reviewer',
       'project_doc_fallback_filenames',
       'tui.terminal_title',
       'tui.notifications',

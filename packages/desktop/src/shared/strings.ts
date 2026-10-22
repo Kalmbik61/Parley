@@ -14,7 +14,7 @@
  * областям окна; параметризованные тексты — функции.
  */
 import { STATE_WORDS } from '@parley/core/session-state';
-import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
+import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type ConsentCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
 import type { IpcErrorInfo } from './ipc-error.js';
 
@@ -878,6 +878,20 @@ export const S = {
       agentRequired: 'Select an agent',
     },
     /**
+     * Диалог «Trust <папка> for agents?» (спека 2026-10-21, 4.2) — `components/dialogs/TrustFolderDialog.tsx`: в композере
+     * новой работы и по карточке согласия, которую хост держит за запуск Codex (`ConsentPrompt`).
+     */
+    trustFolder: {
+      title: (folder: string): string => `Trust ${folder} for agents?`,
+      /** Кто просил (карточка согласия): «S03 Ruslan · create_session». */
+      requestedBy: (who: string): string => `Requested by ${who}.`,
+      body:
+        "Codex in this folder and its worktrees starts without its own trust screen, gets write access to the working folder (workspace-write) and runs the repository's own .codex/ configuration — config, hooks, rules and MCP servers. The consent lasts until you revoke it in Settings → Projects. For Claude Code nothing changes yet.",
+      confirm: 'Trust',
+      /** Чем запуск попал в карточку: `agent` — `create_session` агента. */
+      via: { agent: 'create_session', resume: 'resume', launch: 'launch' },
+    },
+    /**
      * Снимок работ не принёс созданное за 10 с — вкладка не открыта вслепую (`lib/open-when-listed.ts`):
      * по виду того, что создали.
      */
@@ -950,6 +964,7 @@ export const S = {
       resuming: 'resuming',
       'resume-limit': 'resume limit reached',
       pending: 'not launched',
+      'folder-trust': 'waiting for folder trust',
     } satisfies Record<MailWait, string>,
     /** Подпись точки «непрочитано» у сообщения. */
     newMessage: 'New',
@@ -1022,6 +1037,7 @@ export const S = {
       voice: 'Voice',
       assistant: 'Assistant',
       providers: 'Providers',
+      projects: 'Projects',
     },
     lockedBy: (value: string): string => `(set by ${value})`,
     appearanceSystem: 'System',
@@ -1039,8 +1055,21 @@ export const S = {
     agentSkills: 'Install agent skills into projects',
     skillNavigator: 'Skill navigator',
     skillNavigatorHint: 'Applies to new and resumed sessions.',
-    codexApprovals: 'Answer Codex approvals in Parley',
-    codexApprovalsHint: 'Codex only · applies to new and resumed sessions. On the next start Codex asks once to trust Parley’s hooks — choose “Trust all and continue”.',
+    /** Три режима одобрений пишущих ролей Codex (спека 2026-10-21, 5.2). */
+    codexWriteApprovals: 'Codex approvals (new and resumed sessions)',
+    codexWriteApprovalsOptions: {
+      auto: "Auto-review (Codex's reviewer decides; nothing to answer)",
+      parley: "Ask in Parley (cards on the island and in Telegram; Codex asks once to trust Parley's hooks)",
+      terminal: 'Ask in the terminal',
+    },
+    /** Только при «Ask in Parley»: хуки Codex доверяет человек, один раз, в `/hooks`. */
+    codexWriteApprovalsHookHint: 'On the next start Codex asks once to trust Parley’s hooks — choose “Trust all and continue”.',
+    /** Секция Projects: согласия на папки, выданные агентам (спека 2026-10-21, 4.1). */
+    projectsHint: 'Agents (Codex) start in these folders without their own trust screen; revoking applies to the next launch.',
+    projectsEmpty: 'No trusted folders yet',
+    projectsRevoke: 'Revoke',
+    projectsGrantedAt: (iso: string): string => new Date(iso).toLocaleDateString('en-US', { dateStyle: 'medium' }),
+    projectsBy: (by: string): string => `by ${by}`,
     worktreeRoot: 'Worktree root',
     /** Пороги бюджета работы и комнаты (P37) — подраздел «Agents». */
     limits: {
@@ -1301,6 +1330,9 @@ export const S = {
     /** Строка над полем ввода Codex: хуки включены в настройках, но Codex их не одобрил (`decisions: 'terminal'`). */
     codexHooksHint: "Codex hasn't trusted Parley's hooks yet — on the next start choose “Trust all and continue”, or approve them in /hooks",
     gotIt: 'Got it',
+    /** Сессия Codex ждёт согласия на папку (карточка согласия хоста, спека 2026-10-21, 4.2): строка над полем ввода. */
+    waitingForTrust: 'Waiting for folder trust',
+    trustFolder: 'Trust folder',
     loading: 'Loading the conversation…',
     empty: 'Nothing here yet',
     feedUnavailable: "Couldn't load the conversation — open the terminal",
@@ -2023,6 +2055,15 @@ export const S = {
     tuckAway: 'Tuck the island away',
     showIsland: 'Show the island',
     idle: 'No agents running',
+    /** Карточка согласия на папку (спека 2026-10-21, 4.4): запуск Codex ждёт, пока человек не решит. */
+    consentTitle: 'Trust folder for agents?',
+    consentTrust: 'Trust',
+    consentRequestedBy: (who: string, source: string): string => `requested by ${who} · ${source}`,
+    /** Откуда запрос (`requestedBy.source`): `agent` — `create_session` агента, `resume` — подъём сессии, `launch` — запуск. */
+    consentSource: { agent: 'create_session', resume: 'resume', launch: 'launch' } satisfies Record<ConsentCard['requestedBy']['source'], string>,
+    consentDone: 'Done ✓',
+    consentAnswered: 'Already answered',
+    consentFailed: "Couldn't decide",
   },
 
   /** Тексты общих участников переписки — `lib/participant-tag.ts`. */
@@ -2087,6 +2128,10 @@ export const S = {
       saveRecipe: 'save recipe',
       loadSettings: 'load settings',
       saveSettings: 'save settings',
+      loadTrustedFolders: 'load trusted folders',
+      revokeTrust: 'revoke trust',
+      checkFolderTrust: 'check the folder trust',
+      grantTrust: 'trust the folder',
       renameWorkspace: 'rename workspace',
       markWorkspaceDone: 'mark workspace as done',
       reopenWorkspace: 'reopen workspace',
@@ -2507,6 +2552,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'compact-cancelled': 'compaction cancelled — the agent stopped',
   'compact-failed': "compaction didn't go through — check the agent's terminal",
   'snapshot-too-large': 'workspace data is too large to show — delete or archive old workspaces',
+  'codex-auto-unsupported': 'Codex is too old for Auto-review — approvals are asked in the terminal; update Codex to use it',
 };
 
 /**

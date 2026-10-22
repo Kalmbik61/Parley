@@ -15,6 +15,7 @@ import {
   createPendingSession,
   createWork,
   createWorktree,
+  grantTrust,
   defaultSessionName,
   NEW_LABEL,
   plannedWorktree,
@@ -358,24 +359,34 @@ describe('create(): модель и усилие из диалога (дизай
     expect(argv).toContain('model_reasoning_effort="medium"');
   });
 
-  it('codex: итоговые флаги запуска — свои настройки харнесса, без обходов', async () => {
+  it('codex: итоговые флаги запуска — свои настройки харнесса, без обходов; доверенный проект получает projects', async () => {
     setEnv('PARLEY_CODEX_BIN', STUB);
+    // Доверие записано в `trust.json` домашней папки теста: сессия в нём стартует без экрана доверия Codex.
+    setEnv('PARLEY_HOME', await mkdtemp(path.join(tmpdir(), 'parley-sessions-home-')));
+    await grantTrust(project, 'window');
     const argv = await launched('codex', {});
 
     // Не считая бинаря и скрипта заглушки: то, что получил бы настоящий codex.
     const args = argv.slice(2);
-    expect(args.slice(0, 3)).toEqual(['--no-daemon', '-a', 'on-request']);
+    // Флага `-a on-request` больше нет: политика одобрений приходит ключами `-c` (`approval_policy`).
+    expect(args[0]).toBe('--no-daemon');
+    expect(args).not.toContain('-a');
     const overrides = args.flatMap((arg, index) => (args[index - 1] === '-c' ? [arg] : []));
     expect(overrides.map((override) => override.split('=')[0])).toEqual([
       'mcp_servers.parley',
       'developer_instructions',
+      'sandbox_mode',
+      'approval_policy',
+      'projects',
       'project_doc_fallback_filenames',
       'tui.terminal_title',
       'tui.notifications',
       'tui.notification_method',
       'tui.notification_condition',
     ]);
-    expect(args.join(' ')).not.toMatch(/never|dangerous|yolo|full-auto|danger-full|projects|hooks/);
+    // Ключ доверия — realpath проекта (на macOS `/var` и `/private/var` — одна папка).
+    expect(overrides.find((override) => override.startsWith('projects='))).toContain(await realpath(project));
+    expect(args.join(' ')).not.toMatch(/never|dangerous|yolo|full-auto|danger-full|hooks/);
   });
 
   it('процесс стартует с provider из карты: codex — для разбора терминала, claude — без него', async () => {
@@ -712,7 +723,7 @@ describe('launch(): лента вида «Chat» — адрес приёмник
     await launched.stop();
   });
 
-  it('codex — при выключенной codexApprovals и «подходящей» версии — без токена', async () => {
+  it('codex — вне режима parley и при «подходящей» версии — без токена', async () => {
     const { hooks, registered } = fakeHooks();
     const launched = await launchWith(
       'codex',
@@ -730,7 +741,7 @@ describe('launch(): лента вида «Chat» — адрес приёмник
   const hookArgv = (argv: string[]): string[] => argv.filter((arg) => arg.startsWith('hooks.'));
   const codexHookCommand = async (): Promise<string> => '/home/me/.parley/bin/parley-codex-hook';
 
-  it('codex ≥ 0.160 при выключенной codexApprovals (умолчание): ни токена, ни адреса, ни hooks.* в argv', async () => {
+  it('codex ≥ 0.160 вне режима parley (умолчание auto): ни токена, ни адреса, ни hooks.* в argv', async () => {
     const { hooks, registered } = fakeHooks();
     const launched = await launchWith(
       'codex',
@@ -746,12 +757,12 @@ describe('launch(): лента вида «Chat» — адрес приёмник
     await launched.stop();
   });
 
-  it('codex ≥ 0.160 при включённой codexApprovals: токен, адрес и 7 пар -c hooks.… в argv', async () => {
+  it('codex ≥ 0.160 в режиме parley: токен, адрес и 7 пар -c hooks.… в argv', async () => {
     const { hooks, registered } = fakeHooks();
     const launched = await launchWith(
       'codex',
       { hooks, providerVersions: fakeVersions({ codex: '0.160.0' }), codexHookCommand },
-      { PARLEY_CODEX_BIN: STUB, PARLEY_CODEX_APPROVALS: '1' },
+      { PARLEY_CODEX_BIN: STUB, PARLEY_CODEX_WRITE_APPROVALS: 'parley' },
     );
 
     expect(registered).toHaveLength(1);
@@ -763,12 +774,12 @@ describe('launch(): лента вида «Chat» — адрес приёмник
     await launched.stop();
   });
 
-  it('codex 0.159 (ниже порога) даже при включённой codexApprovals — без токена и хуков', async () => {
+  it('codex 0.159 (ниже порога) даже в режиме parley — без токена и хуков', async () => {
     const { hooks, registered } = fakeHooks();
     const launched = await launchWith(
       'codex',
       { hooks, providerVersions: fakeVersions({ codex: '0.159.0' }), codexHookCommand },
-      { PARLEY_CODEX_BIN: STUB, PARLEY_CODEX_APPROVALS: '1' },
+      { PARLEY_CODEX_BIN: STUB, PARLEY_CODEX_WRITE_APPROVALS: 'parley' },
     );
 
     expect(registered).toEqual([]);
@@ -1910,8 +1921,13 @@ describe('session layer warnings and final spawn budget', () => {
     const service = createSessionsService(host, fakeWorks(), pty, fakeActivity(), { spawnLimits: roomy });
     const otherProject = await mkdtemp(path.join(tmpdir(), 'parley-layer-other-'));
     try {
-      for (const dir of [project, otherProject]) await service.launch(await makeRef(dir, 'codex'), 'launch').catch(() => {});
-      expect(warn.mock.calls.filter((call) => JSON.stringify(call).includes('provider-override-gap'))).toHaveLength(2);
+      const gapWarnings = (): number => warn.mock.calls.filter((call) => JSON.stringify(call).includes('provider-override-gap')).length;
+      // В журнал каждый запуск пишет все свои пробелы шаблона (`{developerInstructions}`, `{trust}`/`{approvals}`), второй проект — столько же.
+      await service.launch(await makeRef(project, 'codex'), 'launch').catch(() => {});
+      const perLaunch = gapWarnings();
+      expect(perLaunch).toBeGreaterThan(0);
+      await service.launch(await makeRef(otherProject, 'codex'), 'launch').catch(() => {});
+      expect(gapWarnings()).toBe(2 * perLaunch);
       expect(broadcasts.filter((item) => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'provider-override-gap')).toHaveLength(1);
     } finally { await rm(otherProject, { recursive: true, force: true }); }
     await service.stopAll();

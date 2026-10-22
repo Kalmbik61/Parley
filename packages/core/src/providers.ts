@@ -138,10 +138,16 @@ export interface ProviderInfo extends Omit<ProviderEntry, 'id'> {
  * - `notify` человека не подменяется: конец хода Codex — OSC 9 и журнал (`task_complete`), спека 2026-10-07, 5.5;
  * - `skills.include_instructions` — родной каталог скиллов (`{skillCatalog}`): значение есть только при включённом
  *   навигаторе и подтверждённом пути загрузки, иначе пара выпадает и каталог остаётся полным.
- * Хуки Codex (`{codexHooks}`, `hooks.*`) включаются только по согласию человека — настройка `codexApprovals`
- * (спека 2026-10-07, решение 9); доверие выдаёт сам человек в Codex, харнесс его себе не пишет.
+ * - `{sandbox}` — `sandbox_mode` роли (`workspace-write` по умолчанию, `read-only` у ролей только для чтения);
+ * - `{approvals}` — политика одобрений ключами `-c approval_policy=…` и `approvals_reviewer=…` (`work/codex-policy.ts`):
+ *   по роли и настройке `codexWriteApprovals`, одни и те же пары при запуске и `resume`; флага `-a` в шаблоне нет
+ *   (спека 2026-10-21, решения 9–11);
+ * - `{trust}` — пара `-c projects={"<папка>"={trust_level="trusted"}}` (`trustArgs`): доверие к папке по согласию
+ *   человека, которое хранит сам Parley (`trust.json`) и передаёт флагом; в `~/.codex` ничего не пишется. Нет
+ *   согласия — подстановка выпадает (запуск до этого не доходит, спека 2026-10-21, 4.2–4.3).
+ * Хуки Codex (`{codexHooks}`, `hooks.*`) включаются только в режиме `parley` настройки `codexWriteApprovals`
+ * (спека 2026-10-21, решение 19): хуки не получают доверия, их одобряет человек в `/hooks`.
  * `{leanFlags}` — пары `-c mcp_servers.<id>.enabled=false` чужих серверов; есть только у lean-сессии (`work/lean.ts`).
- * Так же не выдаётся доверие к папке (`projects`): экран доверия проходит человек в терминале Codex.
  */
 const CODEX_CONFIG_FLAGS: readonly string[] = [
   '-c',
@@ -150,6 +156,8 @@ const CODEX_CONFIG_FLAGS: readonly string[] = [
   '{developerInstructions}',
   '-c',
   '{sandbox}',
+  '{approvals}',
+  '{trust}',
   '-c',
   'project_doc_fallback_filenames=["CLAUDE.md"]',
   '-c',
@@ -167,19 +175,17 @@ const CODEX_CONFIG_FLAGS: readonly string[] = [
 ];
 
 /**
- * Флаги запуска новой сессии Codex: `-c` (`CODEX_CONFIG_FLAGS`) и два флага сверх них.
+ * Флаги запуска новой сессии Codex: `-c` (`CODEX_CONFIG_FLAGS`) и один флаг сверх них.
  * - `--no-daemon` — Codex с 0.157 по умолчанию идёт через общий фоновый демон, и тогда MCP-серверы и
  *   уведомления были бы детьми демона с его окружением, без `PARLEY_*` и `HARNAS_*`. Любой `-c` и так держит
- *   запуск «встроенным», флаг делает это явным;
- * - `-a on-request` — вопросы одобрений идут человеку в терминал агента (это и умолчание Codex, но
- *   личный конфиг человека мог его сменить). Флаг заменяет в сессиях харнесса и личную политику
- *   одобрений человека, в том числе более строгую, если она задана в его конфиге. `never` нельзя: вызов
- *   инструмента, требующий одобрения, при нём отклоняется — сервер `parley` перестал бы работать.
- * При `resume` их нет: спека говорит «те же `-c`», принимает ли `resume` эти флаги после id, на живом Codex
- * не проверено (отказ разбора флагов провалил бы каждый подъём спящей сессии), а тред хранит политику
- * одобрений и без них.
+ *   запуск «встроенным», флаг делает это явным.
+ * Флага `-a on-request` больше нет: политика одобрений приходит ключами `-c` через `{approvals}` и по роли
+ * (у ролей только для чтения это `never`, и сервер `parley` при нём работает — его инструменты одобрены конфигом
+ * сервера), а `-c` одинаково принимают и запуск, и `resume`. При `resume` `--no-daemon` по-прежнему нет: принимает ли
+ * `resume` этот флаг после id, на живом Codex не проверено (отказ разбора флагов провалил бы каждый подъём
+ * спящей сессии).
  */
-const CODEX_PARLEY_FLAGS: readonly string[] = ['--no-daemon', '-a', 'on-request', ...CODEX_CONFIG_FLAGS];
+const CODEX_PARLEY_FLAGS: readonly string[] = ['--no-daemon', ...CODEX_CONFIG_FLAGS];
 
 /**
  * Ход помощника (спека 2026-10-14, приложение A.2): только MCP помощника, без встроенных инструментов, без
@@ -476,6 +482,10 @@ export interface RunnerSubstitutions {
   skillCatalog?: string;
   /** Готовые пары `-c hooks.<Event>=…` (`work/codex-hooks.ts`): подставляются на место элемента, без значения — выпадают. */
   codexHooks?: readonly string[];
+  /** Готовые пары `-c approval_policy=…`, `approvals_reviewer=…` (`work/codex-policy.ts`): разворачиваются на месте элемента, без значения — выпадают. */
+  approvals?: readonly string[];
+  /** Готовая пара `-c projects={…}` с доверием к папке (`trustArgs`): разворачивается на месте элемента, без значения — выпадает. */
+  trust?: readonly string[];
   /** Готовые флаги облегчённого запуска (`work/lean.ts`): `--strict-mcp-config` у Claude, пары `-c …enabled=false` у Codex; без значения — выпадают. */
   leanFlags?: readonly string[];
   /** Модель новой сессии из диалога окна: `--model` у claude и codex. */
@@ -491,7 +501,7 @@ export interface RunnerSubstitutions {
 
 // `notify` остался в списке ради старых записей providers.json: значения нет, и пара `-c {notify}` выпадает.
 const PLACEHOLDER =
-  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|codexHooks|model|effort|disallowedTools|sandbox|leanFlags)\}$/;
+  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|codexHooks|approvals|trust|model|effort|disallowedTools|sandbox|leanFlags)\}$/;
 
 /**
  * Усилие можно подставить и внутрь строки шаблона (`model_reasoning_effort="{effort}"`):
@@ -559,8 +569,8 @@ export function substituteArgs(template: readonly string[], subs: RunnerSubstitu
       continue;
     }
     if (value === undefined) {
-      // У `{codexHooks}` и `{leanFlags}` своего флага перед элементом нет — соседний флаг чужой.
-      if (match[1] !== 'codexHooks' && match[1] !== 'leanFlags') dropWithFlag();
+      // У `{codexHooks}`, `{approvals}`, `{trust}` и `{leanFlags}` своего флага перед элементом нет — соседний флаг чужой.
+      if (!['codexHooks', 'approvals', 'trust', 'leanFlags'].includes(match[1]!)) dropWithFlag();
       continue;
     }
     args.push(value as string);

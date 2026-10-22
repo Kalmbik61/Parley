@@ -27,7 +27,7 @@ const CONFIG = {
   agentSkills: true,
   // Как у хоста по умолчанию (с 2026-10-06).
   skillNavigator: true,
-  codexApprovals: false,
+  codexWriteApprovals: 'auto',
   // Как у хоста по умолчанию.
   leanAgents: true,
   fontFamily: 'Menlo',
@@ -545,39 +545,92 @@ describe('SettingsDialog — вкладка Voice', () => {
 });
 
 describe('SettingsDialog — Codex approvals', () => {
-  it('defaults off and saves both ways', async () => {
-    const bridge = createFakeBridge();
-    bridge.setHandler('settings.get', () => ({ config: CONFIG, locked: {} }));
-    bridge.setHandler('settings.set', ({ key, value }) => ({ config: { ...CONFIG, [key]: value === 'true' } }));
-    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
-    switchTo('Agents');
-    const toggle = await screen.findByRole('switch', { name: 'Answer Codex approvals in Parley' });
-    expect(toggle.getAttribute('aria-checked')).toBe('false');
-    fireEvent.click(toggle);
-    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
-    expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'codexApprovals', value: 'true' } });
-    fireEvent.click(toggle);
-    await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
-    expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'codexApprovals', value: 'false' } });
-  });
+  const OPTIONS = S.settings.codexWriteApprovalsOptions;
 
-  it('shows the env lock', async () => {
-    const bridge = createFakeBridge();
-    openSettings(bridge, { codexApprovals: 'PARLEY_CODEX_APPROVALS' });
-    switchTo('Agents');
-    await screen.findByText(/set by PARLEY_CODEX_APPROVALS/);
-    expect((screen.getByRole('switch', { name: 'Answer Codex approvals in Parley' }) as HTMLButtonElement).disabled).toBe(true);
-  });
-
-  it('hides the field for an older host', async () => {
-    const bridge = createFakeBridge();
-    const oldHost: Partial<typeof CONFIG> = { ...CONFIG };
-    delete oldHost.codexApprovals;
-    bridge.setHandler('settings.get', () => ({ config: oldHost as typeof CONFIG, locked: {} }));
+  const openAgents = async (
+    bridge: ReturnType<typeof createFakeBridge>,
+    config: Record<string, unknown> = CONFIG,
+    locked: Record<string, string> = {},
+  ): Promise<void> => {
+    bridge.setHandler('settings.get', () => ({ config: config as typeof CONFIG, locked }));
+    bridge.setHandler('settings.set', ({ key, value }) => ({ config: { ...config, [key]: value } as typeof CONFIG }));
     render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
     switchTo('Agents');
     await screen.findByText('Worktree root');
-    expect(screen.queryByRole('switch', { name: 'Answer Codex approvals in Parley' })).toBeNull();
+  };
+
+  it('shows the three modes, marks the current one and saves the pick', async () => {
+    const bridge = createFakeBridge();
+    await openAgents(bridge);
+    const group = await screen.findByRole('radiogroup', { name: S.settings.codexWriteApprovals });
+    expect(within(group).getAllByRole('radio').map((option) => option.textContent)).toEqual([
+      "Auto-review (Codex's reviewer decides; nothing to answer)",
+      "Ask in Parley (cards on the island and in Telegram; Codex asks once to trust Parley's hooks)",
+      'Ask in the terminal',
+    ]);
+    expect(within(group).getByRole('radio', { name: OPTIONS.auto }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.queryByText(S.settings.codexWriteApprovalsHookHint)).toBeNull();
+
+    const parley = within(group).getByRole('radio', { name: OPTIONS.parley });
+    fireEvent.click(parley);
+    await waitFor(() => expect(parley.getAttribute('aria-checked')).toBe('true'));
+    expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'codexWriteApprovals', value: 'parley' } });
+    // Подсказка про /hooks — только у «Ask in Parley».
+    expect(screen.getByText(S.settings.codexWriteApprovalsHookHint)).toBeTruthy();
+
+    fireEvent.click(within(group).getByRole('radio', { name: OPTIONS.terminal }));
+    await waitFor(() => expect(parley.getAttribute('aria-checked')).toBe('false'));
+    expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'codexWriteApprovals', value: 'terminal' } });
+    expect(screen.queryByText(S.settings.codexWriteApprovalsHookHint)).toBeNull();
+  });
+
+  it('a repeated click on the chosen mode saves nothing', async () => {
+    const bridge = createFakeBridge();
+    await openAgents(bridge);
+    const group = await screen.findByRole('radiogroup', { name: S.settings.codexWriteApprovals });
+    fireEvent.click(within(group).getByRole('radio', { name: OPTIONS.auto }));
+    expect(bridge.calls.filter((call) => call.method === 'settings.set')).toEqual([]);
+  });
+
+  it('shows the env lock and disables the modes', async () => {
+    const bridge = createFakeBridge();
+    await openAgents(bridge, CONFIG, { codexWriteApprovals: 'PARLEY_CODEX_WRITE_APPROVALS' });
+    await screen.findByText(/set by PARLEY_CODEX_WRITE_APPROVALS/);
+    const group = screen.getByRole('radiogroup', { name: S.settings.codexWriteApprovals });
+    for (const option of within(group).getAllByRole('radio')) expect((option as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows a save error under the group', async () => {
+    const bridge = createFakeBridge();
+    await openAgents(bridge);
+    bridge.setHandler('settings.set', () => {
+      throw new Error('boom');
+    });
+    const group = await screen.findByRole('radiogroup', { name: S.settings.codexWriteApprovals });
+    fireEvent.click(within(group).getByRole('radio', { name: OPTIONS.terminal }));
+    await screen.findByText(/Couldn't save settings/);
+  });
+
+  it('hides the group for an older host', async () => {
+    const bridge = createFakeBridge();
+    const oldHost: Record<string, unknown> = { ...CONFIG };
+    delete oldHost.codexWriteApprovals;
+    await openAgents(bridge, oldHost);
+    expect(screen.queryByRole('radiogroup', { name: S.settings.codexWriteApprovals })).toBeNull();
+  });
+});
+
+describe('SettingsDialog — Projects', () => {
+  it('has a Projects tab after Agents that lists the trusted folders', async () => {
+    const bridge = createFakeBridge();
+    bridge.setTrustFolders([{ folder: '/Users/me/Desktop/alpha', grantedAt: '2026-10-21T10:00:00.000Z', by: 'window' }]);
+    openSettings(bridge);
+
+    const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent);
+    expect(tabs.indexOf('Projects')).toBe(tabs.indexOf('Agents') + 1);
+
+    switchTo('Projects');
+    expect(await screen.findByText('/Users/me/Desktop/alpha')).toBeTruthy();
   });
 });
 
@@ -662,6 +715,7 @@ describe('SettingsDialog — навигация слева (живая пров�
       'Appearance',
       'Terminal',
       'Agents',
+      'Projects',
       'Providers',
       'Notifications',
       'Browser',

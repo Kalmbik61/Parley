@@ -9,8 +9,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { FeedItem, WorkSession } from '@parley/core';
-import { refKey, type Capabilities, type SendResult, type SessionRef } from '@parley/protocol';
+import type { FeedItem, ParleyConfig, WorkSession } from '@parley/core';
+import { refKey, type Capabilities, type ConsentCard, type SendResult, type SessionRef } from '@parley/protocol';
 import type { DirEntry } from '../../shared/files-types.js';
 import { S } from '../../shared/strings.js';
 import type { TerminalView } from '../../shared/layout-types.js';
@@ -19,6 +19,8 @@ import { TerminalBody } from '../layout/bodies/TerminalBody.js';
 import { useLayoutStore } from '../layout/store.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useActivityStore } from '../store/activity.js';
+import { useHostConfigStore } from '../store/config.js';
+import { useConsentsStore } from '../store/consents.js';
 import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
@@ -109,6 +111,8 @@ afterEach(() => {
   useProvidersStore.setState({ providers: [], loaded: false });
   useActivityStore.setState({ byRef: {}, loaded: false });
   useWorksStore.setState(useWorksStore.getInitialState(), true);
+  useHostConfigStore.setState({ config: null });
+  useConsentsStore.setState({ cards: [], asking: null });
 });
 
 describe('TerminalBody — вид вкладки', () => {
@@ -1922,7 +1926,13 @@ describe('ChatView — Codex', () => {
       });
     };
 
-    it('decisions terminal — строка с кнопками; «Got it» прячет её', () => {
+    /** Режим одобрений из настроек хоста: подсказка про хуки Parley есть только при `parley`. */
+    const setMode = (mode: ParleyConfig['codexWriteApprovals'] | null): void => {
+      act(() => useHostConfigStore.setState({ config: mode === null ? null : ({ codexWriteApprovals: mode } as ParleyConfig) }));
+    };
+
+    it('decisions terminal при codexWriteApprovals parley — строка с кнопками; «Got it» прячет её', () => {
+      setMode('parley');
       setDecisions('terminal');
       const hint = screen.getByTestId('codex-hooks-hint');
       expect(hint.textContent).toContain(S.chat.codexHooksHint);
@@ -1933,11 +1943,87 @@ describe('ChatView — Codex', () => {
     });
 
     it('decisions window и null — строки нет', () => {
+      setMode('parley');
       setDecisions('window');
       expect(screen.queryByTestId('codex-hooks-hint')).toBeNull();
       setDecisions(null);
       expect(screen.queryByTestId('codex-hooks-hint')).toBeNull();
     });
+
+    it('auto, terminal и настройки ещё нет — строки нет, даже когда Codex хуки не одобрил', () => {
+      setDecisions('terminal');
+      expect(screen.queryByTestId('codex-hooks-hint')).toBeNull();
+      setMode('auto');
+      expect(screen.queryByTestId('codex-hooks-hint')).toBeNull();
+      setMode('terminal');
+      expect(screen.queryByTestId('codex-hooks-hint')).toBeNull();
+      setMode('parley');
+      expect(screen.getByTestId('codex-hooks-hint')).toBeTruthy();
+    });
+  });
+});
+
+describe('ChatView — Codex ждёт согласия на папку (спека 2026-10-21, 4.2 п. 2)', () => {
+  const CODEX_OK = { id: 'codex', label: 'Codex', available: true, version: '0.162.0', limits: null };
+  const CARD: ConsentCard = {
+    id: 'c-01',
+    kind: 'folder-trust',
+    folder: '/tmp/p',
+    projectPath: '/tmp/p',
+    requestedBy: { source: 'agent', sessionId: 's-03', workId: 'w-01', label: 'S01' },
+    at: '2026-10-21T10:00:00.000Z',
+    state: 'pending',
+  };
+  const waitingLine = (): HTMLElement | null => screen.queryByTestId('chat-waiting-for-trust');
+
+  function mount(patch: Partial<WorkSession>): void {
+    const session = makeSession('s-01', 'S01', { provider: 'codex', ...patch });
+    useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: '/tmp/p', sessions: [session] })], branches: {}, loading: false, error: null });
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.8.0', methods: FEED_METHODS, features: ['feed-codex'] } });
+    useProvidersStore.setState({ providers: [CLAUDE_OK, CODEX_OK], loaded: true });
+    renderBody(session, 'chat');
+    setFeed([]);
+    // Без вида Chat строка не проверялась бы вовсе.
+    expect(screen.getByTestId('chat-view')).toBeTruthy();
+  }
+
+  const withCard = (card: ConsentCard = CARD): void => {
+    act(() => useConsentsStore.setState({ cards: [card] }));
+  };
+
+  it('ждущая карточка проекта у pending-сессии — строка и кнопка «Trust folder», открывающая диалог по карточке', () => {
+    mount({ lifecycle: 'pending' });
+    expect(waitingLine()).toBeNull();
+    withCard();
+    expect(waitingLine()?.textContent).toContain(S.chat.waitingForTrust);
+    fireEvent.click(within(waitingLine() as HTMLElement).getByRole('button', { name: S.chat.trustFolder }));
+    expect(useConsentsStore.getState().asking).toBe('c-01');
+  });
+
+  it('у спящей сессии — тоже; карточка просившей сессии (requestedBy.sessionId) связи не задаёт, значим проект', () => {
+    mount({ lifecycle: 'sleeping' });
+    withCard({ ...CARD, requestedBy: { source: 'agent', sessionId: 's-09' } });
+    expect(waitingLine()).not.toBeNull();
+  });
+
+  it('живая сессия, карточка другого проекта, сессия не Codex, карточку решили — строки нет', () => {
+    mount({ lifecycle: 'active' });
+    withCard();
+    expect(waitingLine()).toBeNull();
+    cleanup();
+
+    mount({ lifecycle: 'pending' });
+    withCard({ ...CARD, projectPath: '/tmp/other', folder: '/tmp/other' });
+    expect(waitingLine()).toBeNull();
+    withCard();
+    expect(waitingLine()).not.toBeNull();
+    act(() => useConsentsStore.setState({ cards: [] }));
+    expect(waitingLine()).toBeNull();
+    cleanup();
+
+    mount({ lifecycle: 'pending', provider: 'claude' });
+    withCard();
+    expect(waitingLine()).toBeNull();
   });
 });
 

@@ -451,3 +451,26 @@ describe('writeMcpConfig: токен канала агента (спека бр�
     expect(await readFile(file, 'utf8')).not.toContain('AGENT');
   });
 });
+
+describe('профиль инструментов в окружении сервера', () => {
+  it('Claude и Codex: TOOL_PROFILE=short под обоими префиксами; без поля переменной нет', () => {
+    const snapshot = { ...params, toolProfile: 'short' as const };
+    const json = JSON.parse(mcpConfigJson(snapshot)).mcpServers[MCP_SERVER_NAME].env as Record<string, string>;
+    expect(json.PARLEY_TOOL_PROFILE).toBe('short');
+    expect(json.HARNAS_TOOL_PROFILE).toBe('short');
+    const override = codexMcpOverride(snapshot);
+    expect(override).toContain('PARLEY_TOOL_PROFILE="short"');
+    const table = parseTomlAssignment(override).value as { env: Record<string, string> };
+    expect(table.env.PARLEY_TOOL_PROFILE).toBe('short');
+    expect(table.env.HARNAS_TOOL_PROFILE).toBe('short');
+    expect(mcpConfig(params).mcpServers[MCP_SERVER_NAME]!.env).not.toHaveProperty('PARLEY_TOOL_PROFILE');
+    expect(codexMcpOverride(params)).not.toContain('TOOL_PROFILE');
+  });
+
+  it('унаследованный от хоста TOOL_PROFILE не перекрывает профиль запуска и не протекает без него', () => {
+    const inherited = { PARLEY_TOOL_PROFILE: 'short', HARNAS_TOOL_PROFILE: 'short' };
+    expect(codexMcpOverride({ ...params, env: inherited })).not.toContain('TOOL_PROFILE');
+    const table = parseTomlAssignment(codexMcpOverride({ ...params, toolProfile: 'short', env: { PARLEY_TOOL_PROFILE: 'other' } })).value as { env: Record<string, string> };
+    expect(table.env.PARLEY_TOOL_PROFILE).toBe('short');
+  });
+});

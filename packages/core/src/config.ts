@@ -23,6 +23,24 @@ import {
 import { parleyHome } from './work/store.js';
 
 /**
+ * Как решаются одобрения пишущих ролей Codex (спека 2026-10-21, 5.2): `auto` — авторевьюер самого Codex, `parley` — хуки
+ * Parley и карточки в окне, на острове и в Telegram, `terminal` — человек отвечает в терминале сессии.
+ */
+export type CodexWriteApprovals = 'auto' | 'parley' | 'terminal';
+
+export const CODEX_WRITE_APPROVALS_VALUES: readonly CodexWriteApprovals[] = ['auto', 'parley', 'terminal'];
+
+const isCodexWriteApprovals = (value: unknown): value is CodexWriteApprovals =>
+  (CODEX_WRITE_APPROVALS_VALUES as readonly unknown[]).includes(value);
+
+const CODEX_WRITE_APPROVALS_EXPECTED = 'auto, parley or terminal';
+
+/** Хуки Codex (`-c hooks.*`) ставятся только в режиме `parley`: в `auto` хук идёт раньше авторевьюера и ломает его. */
+export function codexHooksWanted(config: Pick<ParleyConfig, 'codexWriteApprovals'>): boolean {
+  return config.codexWriteApprovals === 'parley';
+}
+
+/**
  * Пороги бюджета работы и комнаты (`work/resource-policy.ts`) — те же ключи, что у `ResourceLimits`: человек видит и
  * меняет их в настройках окна. Это счётчики запусков, сессий и писем, а не денежный лимит.
  */
@@ -55,8 +73,11 @@ export interface ParleyConfig extends ResourceLimits {
    * итогам живых проверок; выключается настройкой, переключателем окна или `PARLEY_SKILL_NAVIGATOR=0`.
    */
   skillNavigator: boolean;
-  /** Отвечать на одобрения Codex из окна Parley: хуки Codex при запуске и resume (спека 2026-10-07, решение 9). */
-  codexApprovals: boolean;
+  /**
+   * Одобрения пишущих ролей Codex (спека 2026-10-21, 5.2). Прежний булев `codexApprovals` переносится: `true` → `parley`,
+   * `false` → `terminal` (файл и `PARLEY_CODEX_APPROVALS`, пока нового ключа нет).
+   */
+  codexWriteApprovals: CodexWriteApprovals;
   /** Канал Telegram (спека управления через помощника): включён ли он, и какие события в него идут. */
   telegramEnabled: boolean;
   telegramNeedsYou: boolean;
@@ -89,7 +110,7 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   resumeRate: 6,
   agentSkills: true,
   skillNavigator: true,
-  codexApprovals: false,
+  codexWriteApprovals: 'auto',
   telegramEnabled: true,
   telegramNeedsYou: true,
   telegramFinished: false,
@@ -114,7 +135,7 @@ export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
   resumeRate: 'RESUME_RATE',
   agentSkills: 'AGENT_SKILLS',
   skillNavigator: 'SKILL_NAVIGATOR',
-  codexApprovals: 'CODEX_APPROVALS',
+  codexWriteApprovals: 'CODEX_WRITE_APPROVALS',
   telegramEnabled: 'TELEGRAM_ENABLED',
   telegramNeedsYou: 'TELEGRAM_NEEDS_YOU',
   telegramFinished: 'TELEGRAM_FINISHED',
@@ -218,7 +239,11 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('resumeRate', isResumeRate, RESUME_RATE_EXPECTED);
   take('agentSkills', (value) => typeof value === 'boolean', 'true or false');
   take('skillNavigator', (value) => typeof value === 'boolean', 'true or false');
-  take('codexApprovals', (value) => typeof value === 'boolean', 'true or false');
+  take('codexWriteApprovals', isCodexWriteApprovals, CODEX_WRITE_APPROVALS_EXPECTED);
+  // Перенос прежнего булева ключа: новый ключ, если он есть в файле (хоть и битый), сильнее.
+  if (data.codexWriteApprovals === undefined && typeof data.codexApprovals === 'boolean') {
+    patch.codexWriteApprovals = data.codexApprovals ? 'parley' : 'terminal';
+  }
   take('telegramEnabled', (value) => typeof value === 'boolean', 'true or false');
   take('telegramNeedsYou', (value) => typeof value === 'boolean', 'true or false');
   take('telegramFinished', (value) => typeof value === 'boolean', 'true or false');
@@ -235,6 +260,9 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
 const TRUE = new Set(['1', 'true', 'yes', 'on']);
 const FALSE = new Set(['0', 'false', 'no', 'off']);
 
+/** Прежняя булева переменная `PARLEY_CODEX_APPROVALS` (и `HARNAS_…`): ключа в `ENV_NAMES` у неё больше нет. */
+const LEGACY_CODEX_APPROVALS_ENV = 'CODEX_APPROVALS';
+
 /** Значения из окружения: тут всё строки, поэтому числа и флаги разбираются. */
 function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   const patch: ConfigPatch = {};
@@ -245,7 +273,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   const nameOf = (key: keyof ParleyConfig): string => envName(env, ENV_NAMES[key]) ?? ENV_NAMES[key];
 
   const flag = (
-    key: 'channelPush' | 'agentSkills' | 'skillNavigator' | 'codexApprovals' | 'leanAgents'
+    key: 'channelPush' | 'agentSkills' | 'skillNavigator' | 'leanAgents'
     | 'telegramEnabled' | 'telegramNeedsYou' | 'telegramFinished' | 'telegramMail' | 'telegramCards',
   ): void => {
     const value = text(key);
@@ -275,7 +303,21 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   }
   flag('agentSkills');
   flag('skillNavigator');
-  flag('codexApprovals');
+
+  const codexWriteApprovals = text('codexWriteApprovals');
+  if (codexWriteApprovals !== undefined) {
+    if (isCodexWriteApprovals(codexWriteApprovals)) patch.codexWriteApprovals = codexWriteApprovals;
+    else complain(`${nameOf('codexWriteApprovals')}: expected ${CODEX_WRITE_APPROVALS_EXPECTED}`);
+  } else {
+    // Прежняя переменная работает, только пока новая не задана: 1 → parley, 0 → terminal.
+    const legacy = envValue(env, LEGACY_CODEX_APPROVALS_ENV);
+    if (legacy !== undefined) {
+      const lower = legacy.toLowerCase();
+      if (TRUE.has(lower)) patch.codexWriteApprovals = 'parley';
+      else if (FALSE.has(lower)) patch.codexWriteApprovals = 'terminal';
+      else complain(`${envName(env, LEGACY_CODEX_APPROVALS_ENV) ?? LEGACY_CODEX_APPROVALS_ENV}: expected 0 or 1`);
+    }
+  }
   flag('telegramEnabled');
   flag('telegramNeedsYou');
   flag('telegramFinished');
@@ -361,7 +403,6 @@ const BOOLEAN_KEYS: ReadonlySet<keyof ParleyConfig> = new Set([
   'channelPush',
   'agentSkills',
   'skillNavigator',
-  'codexApprovals',
   'leanAgents',
   'telegramEnabled',
   'telegramNeedsYou',
@@ -382,6 +423,10 @@ export function parseSetting<K extends keyof ParleyConfig>(
   if (key === 'fontFamily') {
     if (isFontFamily(text)) return { value: text as ParleyConfig[K] };
     return { error: `${key}: expected a non-empty string` };
+  }
+  if (key === 'codexWriteApprovals') {
+    if (isCodexWriteApprovals(text)) return { value: text as ParleyConfig[K] };
+    return { error: `${key}: expected ${CODEX_WRITE_APPROVALS_EXPECTED}` };
   }
   if (key === 'worktreeRoot') {
     if (isWorktreeRoot(text)) return { value: text as ParleyConfig[K] };

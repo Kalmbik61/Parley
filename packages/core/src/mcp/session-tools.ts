@@ -27,6 +27,8 @@ const CHECK_MAP = 'Check get_map before retrying: the host may already have crea
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const error = (text: string): CallToolResult => ({ content: [{ type: 'text', text }], isError: true });
 
+const FOLDER_TRUST_HELD = 'The session waits for the human to trust the folder; it starts by itself after that.';
+
 /** The host derives the workspace from the token; the model cannot select a different scope. */
 export async function createSession(agent: AgentChannel, args: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult> {
   let response: Response;
@@ -47,6 +49,10 @@ export async function createSession(agent: AgentChannel, args: Record<string, un
   let body: unknown;
   try { body = await response.json(); } catch { return error(`Parley's host sent an unreadable answer. ${CHECK_MAP}`); }
   if (isRecord(body) && body.ok === true && isRecord(body.result) && typeof body.result.sessionId === 'string' && body.result.sessionId && typeof body.result.provider === 'string' && body.result.provider) {
+    // Запуск Codex удержан до согласия человека на папку (спека 2026-10-21, 4.2): ответ пришёл сразу, сессия стартует сама.
+    if (body.result.held === 'folder-trust') {
+      return { content: [{ type: 'text', text: JSON.stringify(body.result) }, { type: 'text', text: FOLDER_TRUST_HELD }] };
+    }
     return { content: [{ type: 'text', text: JSON.stringify(body.result) }] };
   }
   if (isRecord(body) && body.ok === false && isRecord(body.error) && typeof body.error.code === 'string' && typeof body.error.message === 'string') {

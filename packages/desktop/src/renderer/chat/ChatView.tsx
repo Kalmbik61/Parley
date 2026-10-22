@@ -21,8 +21,13 @@
  * Codex (спека 2026-10-07, 5.4): лента из журнала; меню модели, effort и режима — подписи; подсказок `/` нет;
  * вложения — списком путей, как в комнате.
  *
- * Подсказка про хуки (Codex, спека 2026-10-07, 5.7): настройка `codexApprovals` включена, а Codex хуки не одобрил
- * (`decisions: 'terminal'` ленты) — строка над полем ввода с кнопками «Open terminal» и «Got it» (прячет до закрытия окна).
+ * Подсказка про хуки (Codex, спека 2026-10-07, 5.7): режим «Ask in Parley» (`codexWriteApprovals: 'parley'`, спека
+ * 2026-10-21, 5.2), а Codex хуки не одобрил (`decisions: 'terminal'` ленты) — строка над полем ввода с кнопками «Open
+ * terminal» и «Got it» (прячет до закрытия окна). Настройку читает `store/config.ts`: пока хост её не отдал, строки нет.
+ *
+ * Согласие на папку (Codex, спека 2026-10-21, 4.2 п. 2): запуск без доверия удержан, у сессии без процесса (`pending`,
+ * `sleeping`) есть ждущая карточка её проекта — строка «Waiting for folder trust» над полем ввода и кнопка «Trust
+ * folder», которая открывает тот же диалог, что и карточка в окне (`ConsentPrompt`).
  *
  * Агенты (кусок 4b): «N agents running» в тулбаре — по карточкам `agent` ленты со статусом `running`; клик по ней и по
  * бейджу агентов в сайдбаре и комнате ведут в панель Agents правого сайдбара (`agents/open-agents.ts`); нет места — ставят просьбу показать карточку (`ui-store.ts`), которую исполняет лента. Пока
@@ -75,6 +80,8 @@ import { cn } from '../lib/cn.js';
 import { effortChoices } from '../lib/effort-choices.js';
 import { sessionRowLabel } from '../lib/participant.js';
 import { activityFor, useActivityStore, type ActivityEntry } from '../store/activity.js';
+import { useHostConfigStore } from '../store/config.js';
+import { trustCardFor, useConsentsStore } from '../store/consents.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { useWorksStore } from '../store/works.js';
@@ -83,6 +90,7 @@ import { dragHasFiles } from '../terminal/drop.js';
 import { resumeSession, type SendWithToastDeps } from '../terminal/send.js';
 import { composeRoomMessage } from '../components/rooms/attachments.js';
 import { ContextChip } from '../components/context/ContextChip.js';
+import { WaitingForTrust } from '../components/WaitingForTrust.js';
 import { fitDefaultInstructions } from '../lib/context-format.js';
 import { addAttachments, composePrompt } from './attachments.js';
 import { useAssistantSent, viaAssistantIds } from './assistant-sent.js';
@@ -381,7 +389,10 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     openAgentsPanel(sessionRef, agentId);
   };
   const hooksHintDismissed = useChatUiStore((state) => state.hooksHintDismissed[sessionKey] === true);
-  const showHooksHint = codex && feed?.decisions === 'terminal' && !hooksHintDismissed;
+  // Хуки Parley Codex одобряет сам человек только в режиме «Ask in Parley»; в `auto` и `terminal` их нет вовсе.
+  const hooksWanted = useHostConfigStore((state) => state.config?.codexWriteApprovals === 'parley');
+  const showHooksHint = codex && hooksWanted && feed?.decisions === 'terminal' && !hooksHintDismissed;
+  const trustCard = useConsentsStore((state) => trustCardFor(state.cards, sessionRef.projectPath, session?.lifecycle, provider));
   const showTerminal = (): void => {
     useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tab.id, { view: 'terminal' }));
   };
@@ -468,6 +479,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
         </ImagePreviewHost>
         {showCard ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
         {showBanner ? <WaitingBanner workKey={workKey} tabId={tab.id} /> : null}
+        {trustCard === undefined ? null : <WaitingForTrust cardId={trustCard.id} testId="chat-waiting-for-trust" className="mx-3 mb-2" />}
         {showHooksHint ? (
           <div data-testid="codex-hooks-hint" className="mx-3 mb-2 flex min-w-0 items-center gap-2 rounded-lg bg-foreground/5 px-3 py-2 text-xs">
             <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{S.chat.codexHooksHint}</span>

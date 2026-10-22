@@ -110,7 +110,8 @@ export interface LiveTask {
  * - `sleeping` — сессия спит, и эти письма её не будят (лежали до старта хоста, подъём недоступен);
  * - `resuming` — хост поднимает сессию;
  * - `resume-limit` — исчерпан лимит подъёмов в час;
- * - `pending` — сессия ещё не запускалась.
+ * - `pending` — сессия ещё не запускалась;
+ * - `folder-trust` — запуск Codex удержан до согласия человека на папку проекта (спека 2026-10-21, 4.2).
  */
 export type MailWait =
   | 'busy'
@@ -122,7 +123,8 @@ export type MailWait =
   | 'sleeping'
   | 'resuming'
   | 'resume-limit'
-  | 'pending';
+  | 'pending'
+  | 'folder-trust';
 
 /**
  * Сжатие контекста сессии (спека 2026-10-15, 5.6): просьба ждёт, пока агент освободится; идёт; закончено, а новой
@@ -204,7 +206,9 @@ export type NoticeKind =
   // Даже компактный снимок работ не влезает в кадр: окно остаётся с прежним, пока данные не уменьшатся (P35).
   | 'snapshot-too-large'
   | 'compact-cancelled'
-  | 'compact-failed';
+  | 'compact-failed'
+  // `codexWriteApprovals = auto`, а Codex старше версии с `approvals_reviewer`: запуск идёт как `terminal` (спека 2026-10-21, 5.2).
+  | 'codex-auto-unsupported';
 
 export interface HostNotice {
   kind: NoticeKind;

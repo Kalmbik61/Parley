@@ -77,6 +77,25 @@ Parley.app (window)  ◀── unix socket ──▶  parley-host  ◀── PTY
   never closes a session or puts it to sleep on its own; quitting the app (⌘Q) asks first and
   stops the running agents.
 
+### Codex: folder trust and approvals
+
+**Folder trust.** Left alone, Codex stops on its own "do you trust this folder?" screen in a
+terminal you may not be watching. Parley asks you instead, once per project folder: when you
+create work in a folder and, if a Codex launch comes from somewhere else (an agent creating a
+session, a letter waking a sleeping one), as a card on the island and, if Telegram is linked,
+in Telegram. That launch waits until you answer. Trusting a folder lets Codex start there without
+its own screen, write inside the project and its worktrees, and run what the repository itself
+configures in `.codex/` (settings, hooks, rules, MCP servers). The consent is kept in Parley's
+own `trust.json` and handed to Codex as a launch flag; Parley never writes to `~/.codex`.
+Settings → Projects lists the trusted folders and revokes them. Claude Code keeps its own trust
+screen.
+
+**Approvals.** Roles that only read (critic, reviewer, planner and the like) run in a read-only
+sandbox and never ask; the sandbox rejects writes. Roles that write get a workspace-write
+sandbox, and Settings → Agents decides who answers their approvals: *Auto-review* (the default:
+Codex's own reviewer decides, nothing to answer), *Ask in Parley* (a card on the island, in the
+window and in Telegram; Codex asks once to trust Parley's hooks) or *Ask in the terminal*.
+
 ## Install and use
 
 ### 1. Download
@@ -131,6 +150,8 @@ new app. Your data lives outside the app and stays.
 - git in `PATH`; 2.38 or newer to see merge conflicts before you merge.
 - Chat view (optional) needs Claude Code 2.1.286 or newer, or Codex 0.160.0 or newer. Older
   versions work in the terminal.
+- Auto-review of Codex approvals (the default) needs Codex 0.162.0 or newer; on an older Codex the
+  sessions ask in the terminal.
 
 Node.js is not needed: the app carries its own. Linux and Windows are not supported yet.
 

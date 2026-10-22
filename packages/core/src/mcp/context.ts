@@ -4,7 +4,7 @@ import type { WorkSession } from '../work/types.js';
 import path from 'node:path';
 import type { RoleCatalog } from '../roles/types.js';
 import { envName, envValue, LEGACY_STATE_DIR, STATE_DIR, STATE_DIRS } from '../names.js';
-import { AGENT_TOKEN_ENV, AGENT_URL_ENV, type AgentChannel } from '../work/mcp-config.js';
+import { AGENT_TOKEN_ENV, AGENT_URL_ENV, type AgentChannel, type ToolProfile } from '../work/mcp-config.js';
 
 /**
  * Кто звонит и куда писать. Сервер живёт по одному процессу на сессию и узнаёт
@@ -21,6 +21,8 @@ export interface McpContext {
   /** Родной список скиллов этого запуска сокращён (снимок запуска, как и `skillNavigator`). */
   skillListReduced?: boolean;
   nativeContextRevision?: string;
+  /** Профиль инструментов запуска (снимок окружения): `short` прячет три инструмента памяти; нет — полный набор. */
+  toolProfile?: ToolProfile;
   /** Internal isolated adapter fixture; never protocol/environment input. */
   skillCatalog?: (session: WorkSession, cwd: string) => Promise<SkillCatalog | null>;
   workId: string;
@@ -112,6 +114,8 @@ export function contextFromEnv(env: NodeJS.ProcessEnv = process.env): McpContext
     skillNavigator: envValue(env, 'SKILL_NAVIGATOR') === '1',
     ...(envValue(env, 'SKILL_LIST_REDUCED') === '1' ? { skillListReduced: true } : {}),
     ...(envValue(env, 'NATIVE_CONTEXT_REVISION') === undefined ? {} : { nativeContextRevision: envValue(env, 'NATIVE_CONTEXT_REVISION')! }),
+    // Только точное `short`: чужое значение — не наша настройка, и сервер объявляет полный набор.
+    ...(envValue(env, 'TOOL_PROFILE') === 'short' ? { toolProfile: 'short' as const } : {}),
     ...(agent === undefined ? {} : { agent }),
   };
 }

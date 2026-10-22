@@ -5,6 +5,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
+import { seedTrust } from './trust-seed.js';
 
 /**
  * Карточки сайдбара (кусок 3.5, приёмка этапа 3, спека 6.2 и 6.6): порядок по вниманию, а не
@@ -87,6 +88,8 @@ test.describe('карточки сайдбара и диалог новой ра
 
   async function launch(): Promise<{ electronApp: ElectronApplication; window: Page }> {
     const env = { ...process.env, PARLEY_HOME: home, PARLEY_CLAUDE_BIN: stubAgent, PARLEY_TERMINAL_RENDERER: 'dom' };
+    // Диалог «New workspace» спрашивает согласие на папку (спека 2026-10-21, 4.2 п. 1); здесь проверяется не оно, а сам диалог.
+    await seedTrust(home, project);
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();

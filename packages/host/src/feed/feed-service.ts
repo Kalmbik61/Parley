@@ -34,6 +34,7 @@ import {
   claudeProjectRoots,
   closeFeedTurn,
   codexAgentMeta,
+  codexHooksWanted,
   emptyCodexAgentMeta,
   emptyCodexCursor,
   emptyFeedState,
@@ -136,8 +137,11 @@ export interface FeedServiceOptions {
   pendingTimeoutMs?: number;
   /** Срок ожидания хуков Codex после старта процесса; по умолчанию `CODEX_HOOK_GRACE_MS`. */
   codexHookGraceMs?: number;
-  /** Включена ли настройка `codexApprovals`; по умолчанию — из `config.json`. Выключена — подсказки про хуки нет. */
-  codexApprovals?: () => Promise<boolean>;
+  /**
+   * Нужны ли хуки Codex — режим `parley` настройки `codexWriteApprovals` (`codexHooksWanted`); по умолчанию — из
+   * `config.json`. Не нужны — подсказки про хуки нет.
+   */
+  codexHooks?: () => Promise<boolean>;
   /** Срок после Esc из чата, за который CLI сам пишет о прерывании; по умолчанию `INTERRUPT_GRACE_MS`. */
   interruptGraceMs?: number;
   now?: () => number;
@@ -313,8 +317,8 @@ export function createFeedService(
   const now = options.now ?? Date.now;
   const interruptGraceMs = options.interruptGraceMs ?? INTERRUPT_GRACE_MS;
   const codexHookGraceMs = options.codexHookGraceMs ?? CODEX_HOOK_GRACE_MS;
-  const codexApprovals =
-    options.codexApprovals ?? (async (): Promise<boolean> => (await loadConfig()).config.codexApprovals);
+  const codexHooks =
+    options.codexHooks ?? (async (): Promise<boolean> => codexHooksWanted((await loadConfig()).config));
   const roots = options.roots ?? (() => claudeProjectRoots());
   const readRecords = options.readRecords ?? readRecordsTail;
 
@@ -1078,11 +1082,11 @@ export function createFeedService(
 
   /**
    * Процесс Codex стартовал: если за `codexHookGraceMs` ни один хук не пришёл, одобрения отвечает
-   * терминал (Codex не доверил хукам Parley или их нет). Только при включённой `codexApprovals`.
+   * терминал (Codex не доверил хукам Parley или их нет). Только в режиме `parley` (`codexHooksWanted`).
    */
   async function armCodexGrace(ref: SessionRef): Promise<void> {
     try {
-      if (sessionOf(ref).provider !== 'codex' || !(await codexApprovals())) return;
+      if (sessionOf(ref).provider !== 'codex' || !(await codexHooks())) return;
     } catch (error) {
       // Новая сессия попадает в карту работ чуть позже старта процесса: таймер взведём, когда она появится.
       if (error instanceof HostError && error.code === 'not_found') graceWaiting.set(refKey(ref), ref);

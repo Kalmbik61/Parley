@@ -75,6 +75,12 @@ export interface WakeService {
   inFlight(ref: SessionRef): boolean;
   /** Пауза перед Enter из WakeServiceOptions — одна на будильник и pty.send. */
   readonly enterDelayMs: number;
+  /**
+   * Согласие на папку пришло (спека 2026-10-21, 4.2): удержание подъёма снимается, пауза после отказа бюджета —
+   * тоже, и сессия пересчитывается: письма, оставшиеся непрочитанными, поднимают её обычным путём. У спящей сессии
+   * без процесса письма заново считаются неуказанными — и после перезапуска хоста тоже.
+   */
+  retry(ref: SessionRef): void;
 }
 
 const DEFAULT_ENTER_DELAY_MS = 500;
@@ -99,7 +105,7 @@ const CHOICE_RETRIES = 150;
 
 /** Состояние одной попытки доставки указателя, живёт между пересчётами сессии. */
 /** Причины, при которых письма живой сессии лежат и ждут сами по себе: о них — строка в логе. */
-const LOGGED_REASONS: ReadonlySet<MailWait> = new Set<MailWait>(['busy', 'draft', 'in-flight', 'no-hooks']);
+const LOGGED_REASONS: ReadonlySet<MailWait> = new Set<MailWait>(['busy', 'draft', 'in-flight', 'no-hooks', 'folder-trust']);
 
 interface AttemptState {
   /** Id писем, на которые указатель уже печатали, — второй раз не набираем. */
@@ -151,6 +157,12 @@ interface AttemptState {
    * снятие чьего-то резерва.
    */
   budgetDeniedAt: number | null;
+  /**
+   * Подъём Codex удержан до согласия человека на папку (`launch` → `held`): письма ждут, а не считаются указанными, и
+   * новых попыток нет, пока `retry` не снимет удержание (иначе каждое событие карты заводило бы новую просьбу). Живой
+   * процесс тоже снимает его: сессию подняли другим путём.
+   */
+  trustHeld: boolean;
   /** Повтор пересчёта, пока у Codex нет режима вставки (`PASTE_MODE_RETRIES`). */
   pasteRetry: NodeJS.Timeout | undefined;
   /** Сколько повторов уже было; с режимом вставки на экране счёт начинается заново. */
@@ -245,6 +257,7 @@ export function createWakeService(
         pointerAfter: null,
         resumeUnavailable: false,
         budgetDeniedAt: null,
+        trustHeld: false,
         pasteRetry: undefined,
         pasteRetries: 0,
         choiceRetries: 0,
@@ -439,11 +452,27 @@ export function createWakeService(
       else state.pointerAfter = state.resumedAt;
 
       const launchStartedAt = performance.now();
+      let outcome: Awaited<ReturnType<SessionsService['launch']>>;
       try {
-        await sessions.launch(ref, 'resume', withPrompt ? { by: 'wake', prompt: action.text } : { by: 'wake' });
+        outcome = await sessions.launch(ref, 'resume', withPrompt ? { by: 'wake', prompt: action.text } : { by: 'wake' });
       } catch (error) {
         logDelivery(ref, action, 'resume', launchStartedAt, 'failed');
         throw error;
+      }
+      if (outcome === 'held') {
+        // Запуск Codex ждёт согласия человека на папку: процесса нет, слот часа не потрачен, письма не прочитаны, а сбоя
+        // нет — ни письма отправителям, ни уведомления. Как отказ бюджета, но снимает удержание согласие (`retry`).
+        logDelivery(ref, action, 'resume', launchStartedAt, 'held');
+        state.earlyExit = undefined;
+        state.resumedAt = null;
+        state.pointerAfter = null;
+        limiter.release(ref);
+        for (const id of action.letterIds) state.pointed.delete(id);
+        state.trustHeld = true;
+        // `resuming` снимается до публикации: вложенный пересчёт, который она вызывает, иначе записал бы «resuming».
+        state.resuming = false;
+        publishWaiting(ref, state, 'folder-trust');
+        return;
       }
       logDelivery(ref, action, 'resume', launchStartedAt, 'launched');
       const earlyExit = state.earlyExit;
@@ -615,13 +644,16 @@ export function createWakeService(
       // Лимит берём только под настоящий подъём: каждый пересчёт без писем
       // иначе съедал бы его впустую.
       let action = deliveryAction(input);
-      const backedOff = state.budgetDeniedAt !== null && Date.now() - state.budgetDeniedAt < BUDGET_RETRY_MS;
+      const backedOff =
+        state.trustHeld || (state.budgetDeniedAt !== null && Date.now() - state.budgetDeniedAt < BUDGET_RETRY_MS);
+      // Подъём хотели, но удержание согласия не пускает: письма ждут человека, а не часовой лимит.
+      const trustBlocked = action.kind === 'resume' && state.trustHeld;
       if (action.kind === 'resume' && (backedOff || !limiter.tryTake(ref))) {
         action = deliveryAction({ ...input, resumeAllowed: false });
       }
       if (action.kind === 'resume') {
         void resumeSession(ref, session, state, { ...action, ...traceOf(input.unread, action.letterIds) });
-      } else if (action.kind === 'none' && action.reason === 'resume-limit') limitNotice(ref);
+      } else if (action.kind === 'none' && action.reason === 'resume-limit' && !trustBlocked) limitNotice(ref);
       publishWaiting(
         ref,
         state,
@@ -629,17 +661,20 @@ export function createWakeService(
           ? null
           : action.kind === 'resume'
             ? 'resuming'
-            : action.kind === 'none' && action.reason === 'resume-limit'
-              ? 'resume-limit'
-              : action.kind === 'none' && action.reason === 'paused'
-                ? 'paused'
-                : 'sleeping',
+            : trustBlocked
+              ? 'folder-trust'
+              : action.kind === 'none' && action.reason === 'resume-limit'
+                ? 'resume-limit'
+                : action.kind === 'none' && action.reason === 'paused'
+                  ? 'paused'
+                  : 'sleeping',
       );
       return;
     }
 
     // Процесс поднят — человеком или нами: следующий сон снова можно будить письмом.
     state.resumeUnavailable = false;
+    state.trustHeld = false;
     const live = activity.get(ref);
     if (state.pointerAfter !== null) {
       const endedAt = live?.activity.turnEndedAt ?? null;
@@ -752,6 +787,17 @@ export function createWakeService(
     enterDelayMs,
 
     inFlight: (ref) => attempts.get(refKey(ref))?.typing !== undefined,
+
+    retry(ref) {
+      const state = stateFor(refKey(ref));
+      state.trustHeld = false;
+      state.budgetDeniedAt = null;
+      // Спящая сессия без процесса: каждое её непрочитанное письмо снова свежее — именно это и делает будильник при
+      // подъёме. Без этого после перезапуска хоста старт (`ensureKnown`) уже записал бы такие письма как указанные, и
+      // согласие ничего бы не подняло. У живого процесса `pointed` не трогаем: повторный указатель задвоил бы доставку.
+      if (pty.get(ref) === undefined) state.pointed.clear();
+      recompute(ref);
+    },
 
     start() {
       if (started) return;

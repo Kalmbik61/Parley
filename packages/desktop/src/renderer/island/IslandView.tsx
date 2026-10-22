@@ -26,6 +26,9 @@
  * `useIslandReplies` по `doneKey` (единственное исключение из «всё пропсами»: стор только для чтения). Пилюля
  * показывает `✅ N done` рядом со счётчиками работы, а под списком — тихая «Clear», что прячет все видимые Done. Она стоит
  * вне прокручиваемой части списка: длинный список едет под ней, а кнопка остаётся на месте.
+ *
+ * Карточка согласия на папку (спека 2026-10-21, 4.4) держит запуск Codex, поэтому встаёт раньше карточек ленты, пока
+ * помощник не раскрыт (`ConsentView`, свой стор `consents/store.ts`).
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react';
@@ -39,7 +42,9 @@ import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { relativeTime } from '../lib/relative-time.js';
 import { Button } from '../ui/button.js';
+import { CARD_ARM_MS } from './arm.js';
 import { AssistantView, type AssistantViewProps } from './assistant/AssistantView.js';
+import { ConsentView, type ConsentViewProps } from './consents/ConsentView.js';
 import { useShapeDrag } from './drag.js';
 import type { IslandModel, IslandRow } from './model.js';
 import { useIslandReplies } from './replies.js';
@@ -48,14 +53,8 @@ import { simpleChoices } from './simple-question.js';
 import { Swarm } from './swarm/Swarm.js';
 import { swarmSpecFor } from './swarm/spec.js';
 
-/**
- * Сколько кнопки решения (Allow / Always / Deny / варианты ответа) выключены после каждого показа карточки: остров
- * появляется под курсором у верхнего края экрана, а `acceptFirstMouse` пропускает первый клик — без паузы случайный
- * клик по чужому окну разрешил бы команду. Пауза — на показ и на карточку: заново после скрытия и нового появления
- * острова (`showId`) и при переходе к любой карточке, в том числе уже виденной. «Open in Parley» и стрелки не
- * защищены: они ничего не решают.
- */
-export const CARD_ARM_MS = 500;
+/** Пауза кнопок решения после показа карточки — в `arm.ts` (её же берёт карточка согласия); здесь для импортов вида. */
+export { CARD_ARM_MS };
 
 /**
  * Что под видом помощника должно остаться в кадре: ряд стрелки ⌃ (`pt-1.5` + `h-5` + `pb-2` = 34 px) и запас на тень
@@ -71,6 +70,9 @@ export interface IslandAssistantProps {
   mini: string | null;
   onOpen(): void;
 }
+
+/** Карточка согласия на папку (спека 2026-10-21, 4.4): ждущая первая и состояние решения по ней. */
+export type IslandConsentProps = ConsentViewProps;
 
 export interface IslandViewProps {
   model: IslandModel;
@@ -102,6 +104,8 @@ export interface IslandViewProps {
   onDecide(key: string, decision: FeedDecision): void;
   /** Помощник (спека 2026-10-14, раздел 8); `null` — выключен в настройках. */
   assistant: IslandAssistantProps | null;
+  /** Карточка согласия (держит запуск Codex): показывается раньше карточек ленты; `null` — ждущих нет. */
+  consent: IslandConsentProps | null;
 }
 
 export const sessionKeyOf = (item: IslandRequest): string => item.key.slice(0, item.key.lastIndexOf('\u0000'));
@@ -319,7 +323,7 @@ function Card(props: IslandViewProps): JSX.Element | null {
 }
 
 export function IslandView(props: IslandViewProps): JSX.Element {
-  const { model, items, listOpen, config, retracted, doneCount, hovered, shapeRef, api, onDragStart, onDragEnd, onHide, assistant } = props;
+  const { model, items, listOpen, config, retracted, doneCount, hovered, shapeRef, api, onDragStart, onDragEnd, onHide, assistant, consent, showId } = props;
   const drag = useShapeDrag(api, { onDragStart, onDragEnd, onSwipeUp: onHide });
   const contentRef = useRef<HTMLDivElement>(null);
   /** Размер содержимого в пикселях; до первого замера `null` — у формы нет явных `width`/`height`. */
@@ -368,6 +372,9 @@ export function IslandView(props: IslandViewProps): JSX.Element {
           <>
             {assistantBig ? (
               <AssistantView {...assistant.view} maxHeight={`calc(100vh - ${config.topInset + ASSISTANT_BOTTOM_RESERVE_PX}px)`} />
+            ) : consent !== null ? (
+              // Ключ с номером показа: новый показ острова заново ставит паузу кнопок, как у карточек ленты.
+              <ConsentView key={`${showId}\u0000${consent.card.id}`} {...consent} />
             ) : items.length > 0 ? (
               <Card {...props} />
             ) : (

@@ -350,6 +350,8 @@ export {
 export type { LaunchOptions, LaunchPlan, NewSessionResult, StartedProcess } from './work/launch.js';
 export { querySpawnLimits, validateSpawnBudget, SpawnBudgetError } from './work/session-layer.js';
 export type { SpawnLimits } from './work/session-layer.js';
+export { grantTrust, isTrusted, listTrust, readTrust, revokeTrust, trustFilePath, trustKey } from './work/trust.js';
+export type { TrustFile, TrustRecord } from './work/trust.js';
 export {
   BinaryNotFoundError,
   findBinary,
@@ -397,12 +399,14 @@ export type {
 export {
   DEFAULT_CONFIG,
   ENV_NAMES,
+  codexHooksWanted,
   configPath,
   loadConfig,
   parseSetting,
   saveConfig,
 } from './config.js';
-export type { ParleyConfig, LoadedConfig } from './config.js';
+export type { CodexWriteApprovals, ParleyConfig, LoadedConfig } from './config.js';
+export { CODEX_AUTO_MIN_VERSION } from './work/codex-policy.js';
 export {
   SecretFormatError,
   clearSecret,

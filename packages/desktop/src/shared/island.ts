@@ -108,14 +108,16 @@ export const ISLAND_METHODS: ReadonlySet<string> = new Set([
   'assistant.decide',
   'assistant.reset',
   'assistant.state',
+  'consents.list',
+  'consents.decide',
 ]);
 
 /**
- * События хоста, которые main пересылает окну острова (`forwardHostToPages` с `events`): список работ и активность
- * сессий. Остальное (`pty.output` всех сессий, лимиты, `feed.changed` и т. д.) острову не нужно — иначе поток вывода
+ * События хоста, которые main пересылает окну острова (`forwardHostToPages` с `events`): список работ, активность
+ * сессий, состояние помощника и карточки согласия на папку. Остальное (`pty.output` всех сессий, лимиты, `feed.changed` и т. д.) острову не нужно — иначе поток вывода
  * терминалов шёл бы в его renderer впустую. Тип `EventName` ловит опечатку при сборке.
  */
-export const ISLAND_EVENTS: ReadonlySet<EventName> = new Set<EventName>(['works.changed', 'activity.changed', 'assistant.changed']);
+export const ISLAND_EVENTS: ReadonlySet<EventName> = new Set<EventName>(['works.changed', 'activity.changed', 'assistant.changed', 'consents.changed']);
 
 /** У Codex остров показывает запросы действий; обычная работа и Done остаются вне острова. */
 export const ISLAND_ATTENTION_ONLY_PROVIDERS: ReadonlySet<string> = new Set(['codex']);

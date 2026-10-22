@@ -5,6 +5,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
+import { seedTrust } from './trust-seed.js';
 
 /**
  * Codex — агент комнаты (кусок 11a плана «Organic», спека окна 2026-09-29, 3.6): состояние сессии без хуков
@@ -80,6 +81,8 @@ test.describe('Codex — агент комнаты (кусок 11a)', () => {
   /** Окно с заглушкой codex и одной запущенной сессией codex (тихий старт — задачи нет), терминал открыт. */
   async function launch(extraEnv: NodeJS.ProcessEnv = {}): Promise<void> {
     const env = { ...process.env, PARLEY_HOME: home, PARLEY_CODEX_BIN: stubCodex, PARLEY_TERMINAL_RENDERER: 'dom', ...extraEnv };
+    // Сессия Codex в проекте без согласия удерживалась бы до решения человека (спека 2026-10-21, 4.2).
+    await seedTrust(home, project);
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     window = await electronApp.firstWindow();

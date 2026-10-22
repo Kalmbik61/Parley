@@ -163,3 +163,29 @@ it('the unconditional plans topic never names a disabled skill tool; enabled ful
   expect(guide(false)).not.toContain('find_skill');
   expect(guide(true)).toContain('find_skill');
 });
+
+describe('профиль short в гиде', () => {
+  it('guide({ toolProfile: "short" }) не знает о памяти; полный гид знает', () => {
+    for (const name of ['remember', 'memory_read', 'search_history']) {
+      expect(guide(), name).toContain(name);
+      expect(guide({ toolProfile: 'short' }), name).not.toContain(name);
+      expect(guideTopic('tools', { toolProfile: 'short' }) ?? '', name).not.toContain(name);
+    }
+    expect(guideTopic('tools', { toolProfile: 'short' })).toContain('backlog_suggest');
+    expect(guideTopic('tools', { toolProfile: 'short' })).toContain('report(status, summary, artifacts)');
+  });
+
+  it('short убирает только абзац о памяти: остальные темы и объект без профиля совпадают с прежним гидом', () => {
+    expect(guide({})).toBe(GUIDE);
+    expect(guide({ skillNavigator: false })).toBe(GUIDE);
+    for (const { topic } of GUIDE_TOPICS) {
+      if (topic !== 'tools') expect(guideTopic(topic, { toolProfile: 'short' }), topic).toBe(guideTopic(topic));
+    }
+    const full = guideTopic('tools') ?? '';
+    const short = guideTopic('tools', { toolProfile: 'short' }) ?? '';
+    expect(short.length).toBeLessThan(full.length);
+    expect(short).not.toMatch(/\n\n\n/);
+    expect(guide({ skillNavigator: true, toolProfile: 'short' })).toContain('find_skill');
+    expect(guide({ skillNavigator: true, toolProfile: 'short' })).not.toContain('memory_read');
+  });
+});
