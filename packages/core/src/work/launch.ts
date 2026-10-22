@@ -29,6 +29,7 @@ import {
   isClaudeCode,
   claudeConfigDirFor,
   managedRecord,
+  ownsHookToken,
   resumeCommand,
   startCommand,
   type EffortLevel,
@@ -382,11 +383,13 @@ async function plan(
       ...(disablePlugins.length > 0 ? { disablePlugins } : {}),
       // Инструменты `browser_*` у сессии есть, только когда канал агента лёг в конфиг MCP (спека браузера, 5.1).
       ...(options.agent !== undefined && mcpRoute ? { allowBrowser: true } : {}),
-      ...(entry.id === 'glm'
-        ? { provider: 'glm' as const }
-        : entry.custom !== undefined
-          ? { hookTokenEnv: 'PARLEY_HOOK_CAPABILITY' as const, fileName: `settings-${entry.id}.json` }
-          : {}),
+      // Свой токен хуков и свой файл настроек — у GLM, своего провайдера и аккаунта подписки (спека подписок 5.3, К13).
+      ...(ownsHookToken(entry)
+        ? {
+          hookTokenEnv: 'PARLEY_HOOK_CAPABILITY' as const,
+          ...(entry.id === 'glm' ? { provider: 'glm' as const } : { fileName: `settings-${entry.id}.json` }),
+        }
+        : {}),
       ...(entry.runner.settingsModel === undefined
         ? {}
         : { model: options.model ?? session.model ?? entry.runner.settingsModel }),

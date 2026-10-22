@@ -501,6 +501,23 @@ describe('GLM settings', () => {
   });
 });
 
+describe('токен хуков, заданный явно (спека подписок 5.3, К13)', () => {
+  const hookUrl = 'http://127.0.0.1:53123/hooks';
+  const httpOf = (settings: ReturnType<typeof workSettings>) => settings.hooks['Stop']?.[0]?.hooks.find((hook) => hook.type === 'http');
+
+  it('hookTokenEnv главнее умолчания по provider: аккаунт и свой провайдер получают PARLEY_HOOK_CAPABILITY, не будучи glm', () => {
+    expect(httpOf(workSettings({ hookTokenEnv: 'PARLEY_HOOK_CAPABILITY', hookUrl }))).toMatchObject({
+      headers: { Authorization: 'Bearer $PARLEY_HOOK_CAPABILITY' },
+      allowedEnvVars: ['PARLEY_HOOK_CAPABILITY', 'PARLEY_SESSION_ID'],
+    });
+  });
+
+  it('без hookTokenEnv умолчание прежнее: у glm PARLEY_HOOK_CAPABILITY, у остальных PARLEY_HOOK_TOKEN', () => {
+    expect(httpOf(workSettings({ provider: 'glm', hookUrl }))).toMatchObject({ headers: { Authorization: 'Bearer $PARLEY_HOOK_CAPABILITY' } });
+    expect(httpOf(workSettings({ hookUrl }))).toMatchObject({ headers: { Authorization: 'Bearer $PARLEY_HOOK_TOKEN' } });
+  });
+});
+
 describe('все инструменты браузера разрешены заранее, browser_evaluate, browser_cookies и browser_storage тоже (решение владельца 2026-10-21, 5.4)', () => {
   const ALLOWED = ['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'evaluate', 'cookies', 'storage', 'downloads'].map((op) => `mcp__parley__browser_${op}`);
 

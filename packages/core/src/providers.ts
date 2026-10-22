@@ -135,6 +135,15 @@ export function isManagedEntry(entry: ProviderEntry): boolean {
   return managedRecord(entry) !== undefined;
 }
 
+/**
+ * У провайдера свой токен хуков `PARLEY_HOOK_CAPABILITY` и свой файл настроек `settings-<id>.json` (спека подписок 5.3,
+ * К13): GLM, свой провайдер с адресом и аккаунт подписки. Общий `PARLEY_HOOK_TOKEN` остаётся у `claude` и `codex`.
+ * Единственное место признака: `launch.ts` и хост берут его здесь, а не проверяют `custom` или `secret` поодиночке.
+ */
+export function ownsHookToken(entry: ProviderEntry): boolean {
+  return entry.id === 'glm' || isManagedEntry(entry);
+}
+
 /** Запись встроенного реестра: id из закрытого списка, всё остальное как у `ProviderEntry`. */
 export interface ProviderInfo extends Omit<ProviderEntry, 'id'> {
   id: Provider;

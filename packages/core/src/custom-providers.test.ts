@@ -25,7 +25,7 @@ import {
   type CustomAccountRecord,
   type CustomEndpointRecord,
 } from './custom-providers.js';
-import { PROVIDERS, claudeConfigDirFor, isClaudeCode, isManagedEntry, loadProviders, managedRecord } from './providers.js';
+import { PROVIDERS, claudeConfigDirFor, isClaudeCode, isManagedEntry, loadProviders, managedRecord, ownsHookToken } from './providers.js';
 
 const kimi: CustomEndpointRecord = {
   kind: 'endpoint',
@@ -335,6 +335,13 @@ describe('запись аккаунта (спека подписок 5.1)', () =
     expect(isManagedEntry(accountEntry)).toBe(true);
     expect(isManagedEntry(PROVIDERS.claude)).toBe(false);
     expect(isManagedEntry(PROVIDERS.glm)).toBe(false);
+  });
+  it('ownsHookToken: glm, endpoint и аккаунт — свой токен хуков; обычные claude и codex — общий (спека подписок 5.3, К13)', () => {
+    expect(ownsHookToken(PROVIDERS.glm)).toBe(true);
+    expect(ownsHookToken(customProviderEntry(kimi, home))).toBe(true);
+    expect(ownsHookToken(accountProviderEntry(account, { claude: PROVIDERS.claude }, home))).toBe(true);
+    expect(ownsHookToken(PROVIDERS.claude)).toBe(false);
+    expect(ownsHookToken(PROVIDERS.codex)).toBe(false);
   });
   it('accountProviderEntry: codex-аккаунт до этапа 3 бросает', () => {
     const codex: CustomAccountRecord = { kind: 'codex-account', id: 'codex-2', label: '', link: true };

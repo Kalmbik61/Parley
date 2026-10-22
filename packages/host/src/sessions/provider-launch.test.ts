@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearSecret, createPendingSession, createWork, readMap, writeSecret, workPaths, updateMap, plannedWorktree,
-  customProviderEntry, writeCustomProviders, customProvidersFile, customProviderDir, PROVIDERS,
+  customProviderEntry, accountProviderEntry, writeCustomProviders, customProvidersFile, customProviderDir, PROVIDERS,
   type CustomProviderRecord,
 } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
@@ -16,6 +16,13 @@ import type { WorksService } from '../works/works-service.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import { createSessionsService } from './sessions-service.js';
 import { providerLaunchEnv } from './provider-env.js';
+
+// Чтения хранилища секретов хостом: у аккаунта подписки ключа нет, и `secrets.json` при запуске не читается (спека подписок 5.3).
+const secretReads = vi.hoisted(() => ({ ids: [] as string[] }));
+vi.mock('@parley/core', async (importOriginal) => {
+  const core = await importOriginal<typeof import('@parley/core')>();
+  return { ...core, readSecret: (id: Parameters<typeof core.readSecret>[0]) => { secretReads.ids.push(id); return core.readSecret(id); } };
+});
 
 let home: string;
 let project: string;
@@ -29,7 +36,11 @@ const capability = 'b'.repeat(64);
 const probe = vi.fn(async () => version);
 const register = vi.fn(() => capability);
 
-function service(hookUrl = () => 'http://127.0.0.1:1234/hooks', watchClaudeRoot: (root: string) => void = () => {}) {
+function service(
+  hookUrl = () => 'http://127.0.0.1:1234/hooks',
+  watchClaudeRoot: (root: string) => void = () => {},
+  signedIn?: (id: string) => boolean | null,
+) {
   const host = { log: { info() {}, warn() {}, error() {} }, broadcast: (_: string, data: unknown) => notices.push(data) } as unknown as HostContext;
   const pty = {
     get: () => undefined, on: () => () => {},
@@ -41,6 +52,7 @@ function service(hookUrl = () => 'http://127.0.0.1:1234/hooks', watchClaudeRoot:
   return createSessionsService(host, { onChange: () => () => {} } as unknown as WorksService, pty, { markSeen() {}, watchClaudeRoot } as unknown as ActivityService, {
     providerVersions: { ready: Promise.resolve(), get: () => version, fresh: probe },
     hooks: { url: hookUrl, register, unregister() {} },
+    ...(signedIn === undefined ? {} : { signedIn }),
   });
 }
 const input = () => ({ projectPath: project, workId, provider: 'glm', label: '', task: 'test', parent: null });
@@ -54,7 +66,7 @@ beforeEach(async () => {
   const work = await createWork(project, { title: 'test', goal: '' });
   workId = work.work.id;
   launches = []; notices = []; version = '2.1.287';
-  probe.mockClear(); register.mockClear();
+  probe.mockClear(); register.mockClear(); secretReads.ids.length = 0;
 });
 afterEach(async () => {
   for (const name of Object.keys(process.env)) if (!(name in savedEnv)) delete process.env[name];
@@ -338,6 +350,80 @@ describe('запуск своего провайдера', () => {
     const roots: string[] = [];
     await service(undefined, (root) => { roots.push(root); throw new Error('watch broke'); }).create(customInput());
     expect(roots).toEqual([path.join(customProviderDir('custom-kimi', home), 'projects')]);
+    expect(launches).toHaveLength(1);
+  });
+});
+
+// Аккаунт подписки Claude Code: своя папка без ключа (спека подписок 5.3, К12, К13).
+const accountRecord: CustomProviderRecord = { kind: 'claude-account', id: 'custom-claude-2', label: '', link: false };
+
+describe('providerLaunchEnv: аккаунт Claude', () => {
+  const account = accountProviderEntry(accountRecord, { claude: PROVIDERS.claude }, '/p');
+  const inherited = {
+    ...hostEnv, CLAUDE_CODE_OAUTH_TOKEN: 'oauth', CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1', PARLEY_HOOK_TOKEN: 'stale',
+  };
+  it('своя папка, срезанные ключи и OAuth-переменные, без MANAGED_BY_HOST и без ключа (спека 5.3, К12)', () => {
+    const env = providerLaunchEnv(account, inherited, {}, null);
+    expect(env.CLAUDE_CONFIG_DIR).toBe(account.runner.configDir);
+    for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_SECURESTORAGE_CONFIG_DIR', 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST', 'PARLEY_HOOK_TOKEN']) {
+      expect(env[name], name).toBeUndefined();
+    }
+    expect(env.PATH).toBe('/bin');
+  });
+  it('даже переданный ключ в окружение аккаунта не попадает', () => {
+    const env = providerLaunchEnv(account, inherited, {}, 'sk-stray');
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+  it('обычный claude: ничего не срезается (прежнее поведение)', () => {
+    const env = providerLaunchEnv(PROVIDERS.claude, inherited, { A: '1' }, null);
+    expect(env).toEqual({ ...inherited, A: '1' });
+  });
+});
+
+describe('запуск аккаунта подписки', () => {
+  const accountInput = () => ({ ...input(), provider: 'custom-claude-2' });
+  const accountDir = () => customProviderDir('custom-claude-2', home);
+  beforeEach(async () => {
+    process.env.CLAUDE_CONFIG_DIR = path.join(home, 'user-claude');
+    // Файл настроек аккаунта — свой, а не файл сессии навигатора (он включён по умолчанию).
+    process.env.PARLEY_SKILL_NAVIGATOR = '0';
+    version = '2.1.304';
+    await writeCustomProviders([accountRecord], customProvidersFile(home));
+  });
+
+  it('свой токен хуков, свой файл настроек, наблюдатель истории; ключ не читается (спека 5.3, К12, К13)', async () => {
+    const roots: string[] = [];
+    await service(undefined, (root) => { roots.push(root); }, () => true).create(accountInput());
+    const launch = launches[0]!;
+    expect(launch.env).toMatchObject({ CLAUDE_CONFIG_DIR: accountDir(), PARLEY_HOOK_CAPABILITY: capability });
+    expect(launch.env.PARLEY_HOOK_TOKEN).toBeUndefined();
+    expect(launch.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+    expect(launch.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    const file = launch.args[launch.args.indexOf('--settings') + 1]!;
+    expect(file).toBe(path.join(workPaths(project, workId).dir, 'settings-custom-claude-2.json'));
+    expect(await readFile(file, 'utf8')).toContain('PARLEY_HOOK_CAPABILITY');
+    expect(roots).toEqual([path.join(accountDir(), 'projects')]);
+    expect(secretReads.ids).toEqual([]);
+    // Папка подготовлена тем же путём, что у своих провайдеров, но одобрять нечего: ключа у аккаунта нет.
+    const seeded = JSON.parse(await readFile(path.join(accountDir(), '.claude.json'), 'utf8'));
+    expect(seeded.hasCompletedOnboarding).toBe(true);
+    expect(seeded.customApiKeyResponses).toBeUndefined();
+  });
+  it('не вошёл: отказ текстом о входе до записей в карту и до процесса', async () => {
+    const before = await readMap(project, workId);
+    await expect(service(undefined, undefined, () => false).create(accountInput())).rejects.toThrow(/is not signed in/);
+    expect(await readMap(project, workId)).toEqual(before);
+    expect(launches).toEqual([]);
+    expect(secretReads.ids).toEqual([]);
+  });
+  it('без службы входа аккаунт считается невошедшим; resume после выхода тоже отказывает', async () => {
+    await expect(service().create(accountInput())).rejects.toThrow(/is not signed in/);
+    let signed: boolean | null = true;
+    const sessions = service(undefined, undefined, () => signed);
+    const ref = await sessions.create(accountInput());
+    signed = null;
+    await expect(sessions.launch(ref, 'resume')).rejects.toThrow(/is not signed in/);
     expect(launches).toHaveLength(1);
   });
 });

@@ -41,6 +41,10 @@ import {
   loadConfig,
   loadProviders,
   isClaudeCode,
+  isAccountRecord,
+  isManagedEntry,
+  managedRecord,
+  ownsHookToken,
   MapLockTimeoutError,
   providerReadiness,
   providerReadinessError,
@@ -184,6 +188,11 @@ export interface SessionsService {
 export interface SessionsFeedOptions {
   hooks?: Pick<HookServer, 'url' | 'register' | 'unregister'>;
   providerVersions?: ProviderVersions;
+  /**
+   * Вошёл ли аккаунт подписки с этим id (служба входа, спека подписок 5.4): `true` — вошёл, `false` и `null` (не знаем) —
+   * нет. Не передан — аккаунты считаются невошедшими и запуск отказывает текстом о входе (`readyProvider`).
+   */
+  signedIn?: (id: string) => boolean | null;
   /** Injectable native limit query; production queries the runtime before spawn. */
   spawnLimits?: () => Promise<SpawnLimits | null>;
   /** Current snapshot injection for isolated tests, never a persisted default. */
@@ -436,6 +445,7 @@ export function createSessionsService(
     if (entry === undefined) throw new HostError('bad_request', `unknown provider ${provider}`);
     const readiness = await providerReadiness(entry, {
       ...(providerVersions === undefined ? {} : { probeVersion: (command) => providerVersions.fresh(command) }),
+      signedIn: feed.signedIn?.(entry.id) ?? null,
     });
     const refusal = providerReadinessError(entry, readiness);
     if (refusal !== null) throw new HostError('bad_request', refusal);
@@ -623,50 +633,55 @@ export function createSessionsService(
         throw new HostError('bad_request', providerReadinessError(entry, { needs: 'key', error: null, version: null })
           ?? 'provider key is missing');
       }
-      // Папка своего провайдера готовится перед каждым запуском, и resume тоже (спека своих провайдеров 6.2, К17–К18):
-      // посев, ссылки, доверие к cwd сессии и подтверждение ключа. Сбой — отказ запуска, не падение хоста.
-      if (entry.custom !== undefined) {
-        const custom = entry.custom;
+      // Папка своего провайдера и аккаунта подписки готовится перед каждым запуском, и resume тоже (спека своих
+      // провайдеров 6.2, К17–К18; спека подписок 5.3): посев, ссылки, доверие к cwd сессии и, только у провайдера с
+      // адресом, подтверждение ключа. Сбой — отказ запуска, не падение хоста.
+      const record = managedRecord(entry);
+      if (record !== undefined) {
         try {
           // Шаги своих провайдеров идут по одному: два запуска одного провайдера не пишут его файл состояния
           // вперемешку, а удаление провайдера не даёт запуску пересоздать только что убранную папку.
           await timer.step('custom-dir', () => serialized(async () => {
-            if (!(await readCustomProviders()).some((record) => record.id === custom.id)) {
+            if (!(await readCustomProviders()).some((candidate) => candidate.id === record.id)) {
               throw new Error('the provider was deleted');
             }
-            await prepareCustomProviderDir(custom, {
+            await prepareCustomProviderDir(record, {
               claudeConfigDir: userClaudeConfigDir(),
-              warn: (text) => host.log.warn(text, { provider: custom.id }),
+              warn: (text) => host.log.warn(text, { provider: record.id }),
             });
-            await mirrorProjectTrust(custom.id, plan.cwd, { userClaudeJson: userClaudeJsonPath() });
-            // Одобряется то, что реально уйдёт в `ANTHROPIC_API_KEY`: и плейсхолдер loopback без ключа (К17).
-            const apiKey = secret ?? (entry.runner.keyOptional === true ? LOOPBACK_KEY_PLACEHOLDER : null);
-            await syncApiKeyApproval(custom.id, entry.runner.auth === 'api-key' ? apiKey : null);
+            await mirrorProjectTrust(record.id, plan.cwd, { userClaudeJson: userClaudeJsonPath() });
+            // У аккаунта ключа нет, одобрять нечего. Иначе одобряется то, что реально уйдёт в `ANTHROPIC_API_KEY`:
+            // и плейсхолдер loopback без ключа (К17).
+            if (!isAccountRecord(record)) {
+              const apiKey = secret ?? (entry.runner.keyOptional === true ? LOOPBACK_KEY_PLACEHOLDER : null);
+              await syncApiKeyApproval(record.id, entry.runner.auth === 'api-key' ? apiKey : null);
+            }
           }));
         } catch (error) {
-          host.log.warn('custom provider folder could not be prepared', { ref, provider: custom.id, error: String(error) });
+          host.log.warn('custom provider folder could not be prepared', { ref, provider: record.id, error: String(error) });
           host.broadcast('host.notice', {
             kind: 'launch-failed', ref,
-            text: `session ${ref.sessionId} failed to launch: ${custom.label} folder could not be prepared`,
+            text: `session ${ref.sessionId} failed to launch: ${entry.label} folder could not be prepared`,
             at: new Date().toISOString(),
           });
-          throw new HostError('bad_request', `${custom.label} folder could not be prepared (${(error as Error).message})`);
+          throw new HostError('bad_request', `${entry.label} folder could not be prepared (${(error as Error).message})`);
         }
       }
-      // История своего провайдера пишется в `<папка>/projects` (создана `prepareCustomProviderDir`): индекс логов
-      // встаёт на неё наблюдателем до старта процесса (спека 5.6). Сбой наблюдателя запуск не отказывает.
-      if (entry.custom !== undefined && entry.runner.configDir !== undefined) {
+      // История своего провайдера и аккаунта пишется в `<папка>/projects` (создана `prepareCustomProviderDir`): индекс
+      // логов встаёт на неё наблюдателем до старта процесса (спека 5.6). Сбой наблюдателя запуск не отказывает.
+      if (isManagedEntry(entry) && entry.runner.configDir !== undefined) {
         try {
           activity.watchClaudeRoot(path.join(entry.runner.configDir, 'projects'));
         } catch (error) {
-          host.log.warn('custom provider history root could not be watched', { ref, provider: entry.custom.id, error: String(error) });
+          host.log.warn('custom provider history root could not be watched', { ref, provider: entry.id, error: String(error) });
         }
       }
       const env = providerLaunchEnv(entry, process.env, plan.env, secret);
       // Свой токен приёмника на каждый запуск (решение А): с ним HTTP-хуки из файла настроек находят
       // сессию. Только при `hookUrl` — без него в файле настроек HTTP-хуков нет, и токен не нужен.
       if (hookUrl !== undefined && hooks !== undefined) {
-        const name = entry.runner.secret !== undefined ? 'PARLEY_HOOK_CAPABILITY' : 'PARLEY_HOOK_TOKEN';
+        // Тот же признак, что у `launch.ts` в файле настроек: имя переменной в файле и в окружении не разойдутся (К13).
+        const name = ownsHookToken(entry) ? 'PARLEY_HOOK_CAPABILITY' : 'PARLEY_HOOK_TOKEN';
         // Мост хука Codex (`codex-hook-bin`) читает адрес и токен из окружения процесса — у Claude они в файле настроек.
         if (session.provider === 'codex') env['PARLEY_HOOK_URL'] = hookUrl;
         env[name] = hooks.register(
@@ -867,7 +882,10 @@ export function createSessionsService(
     if (parent !== null) throw new HostError('bad_request', 'Child sessions are no longer supported. Create a root session and add it to a room.');
     // Secret-dependent GLM must refuse before every create branch. Other providers keep their
     // existing create/launch failure behavior; all launches still use the shared preflight below.
-    if ((await timer.step('providers', () => loadProviders()))[provider]?.runner.secret !== undefined) {
+    // Аккаунт подписки отказывает так же рано: своя папка вместо ключа (спека подписок 5.5), и без входа
+    // сессия не должна оставить в карте `pending`, которую нечем запустить.
+    const early = (await timer.step('providers', () => loadProviders()))[provider]?.runner;
+    if (early?.secret !== undefined || early?.configDir !== undefined) {
       await timer.step('providers', () => readyProvider(provider));
     }
     // Модель и усилие — раньше всего: пара не из каталога провайдера отвергается до первой записи в карте (иначе

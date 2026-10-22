@@ -2681,6 +2681,15 @@ describe('предостережение о ссылках своего пров
     expect(layerOf(resumed.args)).toContain(`settings folder is ${dir}, not ~/.claude`);
   });
 
+  it('настройки хуков сессии аккаунта — с PARLEY_HOOK_CAPABILITY, в своём файле, общий файл Claude не тронут (спека подписок 5.3, К13)', async () => {
+    const { workId, session } = await withAccount(account);
+    const plan = await planLaunch(project, workId, session, { hookUrl: 'http://127.0.0.1:1/hooks' });
+    const file = plan.args[plan.args.indexOf('--settings') + 1]!;
+    expect(await readFile(file, 'utf8')).toContain('PARLEY_HOOK_CAPABILITY');
+    expect(file).toBe(path.join(workPaths(project, workId).dir, 'settings-custom-acc.json'));
+    expect(file).not.toBe(workPaths(project, workId).settings);
+  });
+
   it('сессия аккаунта без link — правила нет', async () => {
     const { workId, session } = await withAccount({ ...account, link: false });
     expect(layerOf((await planLaunch(project, workId, session)).args)).not.toContain('settings folder is');

@@ -98,6 +98,7 @@ export {
   isClaudeCode,
   isManagedEntry,
   managedRecord,
+  ownsHookToken,
   claudeConfigDirFor,
   modelChoiceError,
   printCommand,
