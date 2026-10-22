@@ -4,7 +4,7 @@
 
 **Goal:** из окна Parley добавляется ещё один аккаунт Claude Code того же человека: имя, своя папка `~/.parley/providers/<id>/`, вход из Parley через `claude auth login` в браузере; он полноценный провайдер с собственными лимитами, а агенты видят в `get_map` лимиты и доступность всех провайдеров от хоста и получают при лимите участника письмо со свободными аккаунтами.
 
-**Architecture:** запись вида `claude-account` в том же `custom-providers.json` и тот же раздел Settings → Providers, что у своих провайдеров (PR #86). Запись реестра строится из реестровой записи `claude` после `providers.json` с `configDir` и без ключа; окружение запуска — та же ветка изоляции, что у ключевых провайдеров, но без ключа и без `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`. Состояние входа узнаёт хост у самого CLI (`claude auth status --json`), вход идёт в отдельном маленьком PTY; агентам строки провайдеров отдаёт хост по `GET /agent/providers`.
+**Architecture:** запись вида `claude-account` в том же `custom-providers.json` и тот же раздел Settings → Providers, что у своих провайдеров (PR #86). Запись реестра строится из реестровой записи `claude` после `providers.json` с `configDir` и без ключа; окружение запуска — та же ветка изоляции, что у ключевых провайдеров, но без ключа и без `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`. Состояние входа узнаёт хост у самого CLI (`claude auth status --json`), вход идёт в отдельном маленьком PTY; агентам строки провайдеров отдаёт хост по `POST /agent/providers`.
 
 **Tech Stack:** TypeScript, pnpm-монорепо, zod, vitest, React + Radix + zustand, xterm (окно), node-pty (хост), Playwright.
 
@@ -218,7 +218,7 @@ export function authCommands(entry: ProviderEntry): { status: string[]; login: s
 - Test: `providers-endpoint.test.ts`, `provider-rows.test.ts`, `packages/core/src/mcp/server.test.ts`.
 
 **Interfaces:**
-- Хост: `export const AGENT_PROVIDERS_PATH = '/agent/providers'`; `createProvidersEndpoint({ authenticate, list: () => Promise<ProviderRow[]> })` — `GET`, тот же `authenticate`, ответ `{ ok: true, result: { providers } }`; `list` — строки `providers.list` без `keyHint`/`check`/`custom`: `export interface ProviderRow { id; label; family: 'claude' | 'codex' | null; available; needs; models; effort; limits: ProviderLimits | null }`.
+- Хост: `export const AGENT_PROVIDERS_PATH = '/agent/providers'`; `createProvidersEndpoint({ authenticate, list: () => Promise<ProviderRow[]> })` — `POST` с пустым телом (сервер хуков принимает на путях агента только `POST`), тот же `authenticate`, ответ `{ ok: true, result: { providers } }`; `list` — строки `providers.list` без `keyHint`/`check`/`custom`: `export interface ProviderRow { id; label; family: 'claude' | 'codex' | null; available; needs; models; effort; limits: ProviderLimits | null }`.
 - Ядро: `export async function fetchProviderRows(agent: AgentChannel, signal: AbortSignal): Promise<ProviderRow[] | null>` (таймаут 5 с, `null` при любой ошибке); `getMap`: при `context.agent` — строки от хоста (`{id, label, family, available, models, effort, limits}`), иначе прежние строки + `note: 'host unreachable: sign-in state and limits unknown'`.
 - `CREATE_SESSION_TOOL.description` += ` An account of the same CLI (for example custom-claude-2) is a separate subscription with its own limits — see providers[].limits in get_map.`
 

@@ -68,6 +68,17 @@ for it in vain; `get_map`, `wait_for` and `send_message` show the state to agent
 resets, Parley types a line into the terminal of sessions that do not continue by themselves, such as
 Codex and GLM (Claude Code on a subscription continues on its own), and tells you when it could not.
 
+**Another Claude Code account.** Settings → Providers → "+ Add provider" → "Another Claude Code
+account" adds a second subscription of yours, signed in from Parley: `claude auth login` runs in a
+small terminal inside Settings, so your regular Claude Code stays signed in as it was. The account
+keeps its own folder (`~/.parley/providers/custom-claude-N/`: sign-in, history, memory) and can
+link your `CLAUDE.md`, skills and agents. It is a full provider: sessions, rooms, Chat, roles, the
+assistant and `create_session` for agents all work with it, and the status bar shows its own
+limits. When a room participant hits a usage limit, the lead's letter lists the other signed-in
+accounts of the same CLI and the lead asks you before starting a replacement. It needs Claude Code
+2.1.304 or newer; Parley asks `claude auth status` for the sign-in state and never reads the keychain
+or any credential file.
+
 ## How it works
 
 ```

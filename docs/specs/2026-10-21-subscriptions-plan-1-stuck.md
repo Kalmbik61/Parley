@@ -164,7 +164,7 @@ it('limitLetter без альтернатив — текст спеки заст
 });
 it('limitLetter с альтернативами — абзац о свободных аккаунтах и вариант replacement (спека подписок 5.8)', () => {
   const text = limitLetter({ mention: '@s03', provider: 'Claude Code 2', resetsAt: null, now, alternatives: [{ id: 'claude', label: 'Claude Code', limits: { fiveHour: null, week: { usedPercent: 31, resetsAt: '2026-10-27T10:00:00+03:00' }, at: now.toISOString() } }] });
-  expect(text).toContain('Other Claude Code 2 accounts in Parley right now: Claude Code (weekly 31 % used, resets');
+  expect(text).toContain('Other Claude Code accounts in Parley right now: Claude Code (weekly 31 % used, resets');
   expect(text).toContain('create_session (provider: "claude")');
   expect(text).toContain('only after @human agrees');
   expect(text).toContain("start a replacement on Claude Code and hand it @s03's part");
