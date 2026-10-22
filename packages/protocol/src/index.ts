@@ -187,4 +187,4 @@ export type {
 export { telegramMethodSchemas } from './telegram.js';
 export type { TelegramMethodResults, TelegramPolling, TelegramStatus } from './telegram.js';
 export { CODEX_ACCOUNT_PREFIX, CUSTOM_PROVIDER_PREFIX, customProviderMethodSchemas, isCodexAccountId, isCustomProviderId, isManagedProviderId } from './custom-providers.js';
-export type { AnyCustomProviderInfo, CustomAccountInfo, CustomEndpointInfo, CustomProviderAuth, CustomProviderInfo, CustomProviderKind, CustomProviderMethodResults, CustomProviderSaveParams, CustomProviderModels } from './custom-providers.js';
+export type { CustomAccountInfo, CustomEndpointInfo, CustomProviderAuth, CustomProviderInfo, CustomProviderKind, CustomProviderMethodResults, CustomProviderSaveParams, CustomProviderModels } from './custom-providers.js';

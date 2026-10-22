@@ -3,7 +3,7 @@ import { EFFORT_TOKEN_RE, PROTOCOL_VERSION } from './index.js';
 import type { EffortOption } from './index.js';
 import { METHODS, NOTIFICATIONS } from './methods.js';
 import type { Params, PermissionModeChoice, Result } from './methods.js';
-import type { AnyCustomProviderInfo, CustomProviderInfo } from './custom-providers.js';
+import type { CustomAccountInfo, CustomProviderInfo } from './custom-providers.js';
 import type { EventData } from './events.js';
 import type { FeedDecisions } from './feed.js';
 import type { Capabilities, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderCheck, ProviderCheckReason, ProviderLimits } from './types.js';
@@ -776,7 +776,7 @@ describe('вход в аккаунт подписки (спека подписо
     expectTypeOf<EventData<'providers.signInExit'>>().toEqualTypeOf<{ provider: string; exitCode: number; signedIn: boolean }>();
   });
 
-  it('типы записи: providers.list.custom пока только с адресом (kind необязателен), аккаунт — AnyCustomProviderInfo', () => {
+  it('типы записи: providers.list.custom — запись с адресом (kind необязателен) или аккаунт', () => {
     type Provider = Result<'providers.list'>['providers'][number];
     expectTypeOf<Provider['custom']>().toEqualTypeOf<CustomProviderInfo | null | undefined>();
     // Хост и окно до подписок: запись с адресом без `kind` остаётся допустимой.
@@ -796,7 +796,9 @@ describe('вход в аккаунт подписки (спека подписо
       folder: '/home/u/.parley/providers/custom-claude-2',
       signedIn: null,
       signingIn: false,
-    } satisfies AnyCustomProviderInfo;
+    } satisfies CustomAccountInfo;
+    // Аккаунт — часть общего типа записи, а не отдельная форма: окно сужает его по `kind`.
+    expectTypeOf(account).toMatchTypeOf<CustomProviderInfo>();
     expectTypeOf(account.signedIn).toEqualTypeOf<null>();
   });
 });

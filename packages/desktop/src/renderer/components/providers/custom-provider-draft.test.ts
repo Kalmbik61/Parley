@@ -1,7 +1,7 @@
 /** Черновик формы своего провайдера (спека своих провайдеров, 4.3). */
 import { describe, expect, it } from 'vitest';
 import { CUSTOM_PRESETS } from './custom-presets.js';
-import { draftError, draftFromPreset, draftFromProvider, saveParams } from './custom-provider-draft.js';
+import { draftError, draftFromPreset, draftFromProvider, kindOf, saveParams } from './custom-provider-draft.js';
 
 const kimi = CUSTOM_PRESETS[0]!;
 const filled = () => ({ ...draftFromPreset(kimi, kimi.endpoints[0]!), key: 'sk-test' });
@@ -79,5 +79,33 @@ describe('draftFromProvider', () => {
       },
     });
     expect(draft).toMatchObject({ id: 'custom-kimi', preset: 'kimi', oneModel: true, linkClaude: false, key: '' });
+  });
+});
+
+const endpointInfo = {
+  preset: null, baseUrl: 'https://a.example.com', auth: 'bearer' as const,
+  models: { opus: 'm', sonnet: 'm', haiku: 'm', subagent: 'm' }, contextWindow: null, linkClaude: true, folder: '/h/.parley/providers/custom-x',
+};
+const accountInfo = {
+  kind: 'claude-account' as const, link: true, folder: '/h/.parley/providers/custom-claude-2', signedIn: null, signingIn: false,
+};
+
+describe('kindOf (спека подписок 5.1)', () => {
+  it('нет записи — null; запись без kind (хост до подписок) — endpoint; с kind — он', () => {
+    expect(kindOf(undefined)).toBeNull();
+    expect(kindOf(null)).toBeNull();
+    expect(kindOf(endpointInfo)).toBe('endpoint');
+    expect(kindOf({ ...endpointInfo, kind: 'endpoint' })).toBe('endpoint');
+    expect(kindOf(accountInfo)).toBe('claude-account');
+    expect(kindOf({ ...accountInfo, kind: 'codex-account' })).toBe('codex-account');
+  });
+});
+
+describe('draftFromProvider: аккаунт', () => {
+  it('у аккаунта нет полей адреса — черновика нет', () => {
+    expect(draftFromProvider({ id: 'custom-claude-2', label: 'Claude Code 2', custom: accountInfo })).toBeNull();
+  });
+  it('запись без kind по-прежнему даёт черновик', () => {
+    expect(draftFromProvider({ id: 'custom-x', label: 'X', custom: endpointInfo })).toMatchObject({ id: 'custom-x', baseUrl: 'https://a.example.com' });
   });
 });

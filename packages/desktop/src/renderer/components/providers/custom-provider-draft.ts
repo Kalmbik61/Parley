@@ -3,7 +3,14 @@
  * превращение в параметры `providers.saveCustom`. Ключ в параметры не входит — он уходит отдельно `providers.setKey`.
  */
 
-import type { CustomProviderAuth, CustomProviderInfo, CustomProviderModels, Params } from '@parley/protocol';
+import type {
+  CustomEndpointInfo,
+  CustomProviderAuth,
+  CustomProviderInfo,
+  CustomProviderKind,
+  CustomProviderModels,
+  Params,
+} from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
 import type { CustomPreset, CustomPresetEndpoint } from './custom-presets.js';
 
@@ -45,8 +52,23 @@ export function draftFromPreset(preset: CustomPreset | null, endpoint: CustomPre
   };
 }
 
-export function draftFromProvider(item: { id: string; label: string; custom: CustomProviderInfo }): CustomProviderDraft {
+/**
+ * Вид записи в `providers.list.custom` (спека подписок 5.1, 5.9): нет записи — `null`; хост до подписок вида не отдаёт,
+ * и запись без `kind` читается как `endpoint`. Поля адреса и моделей окно читает только после такой проверки.
+ */
+export function kindOf(custom: CustomProviderInfo | null | undefined): CustomProviderKind | null {
+  if (custom == null) return null;
+  return custom.kind ?? 'endpoint';
+}
+
+function isEndpointInfo(custom: CustomProviderInfo): custom is CustomEndpointInfo {
+  return kindOf(custom) === 'endpoint';
+}
+
+/** Черновик записи с адресом; у аккаунта подписки нет ни адреса, ни моделей — `null` (его форма `AccountPanel`). */
+export function draftFromProvider(item: { id: string; label: string; custom: CustomProviderInfo }): CustomProviderDraft | null {
   const { custom } = item;
+  if (!isEndpointInfo(custom)) return null;
   const { opus, sonnet, haiku, subagent } = custom.models;
   return {
     id: item.id,

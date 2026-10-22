@@ -64,16 +64,11 @@ export interface CustomAccountInfo {
   signingIn: boolean;
 }
 
-/** Запись любого вида: с адресом или аккаунт подписки. */
-export type AnyCustomProviderInfo = CustomEndpointInfo | CustomAccountInfo;
-
 /**
- * Описание в `providers.list.custom`. ВРЕМЕННО только форма с адресом: окно до подписок (`draftFromProvider`) читает
- * её поля напрямую, и на промежуточных коммитах ветки (решение 2) тип не шире того, что оно умеет. Хост аккаунты уже
- * отдаёт (`customInfo` в `host/src/methods/providers.ts`, с помеченным приведением к этому типу); задача окна меняет тип
- * на `AnyCustomProviderInfo` вместе с `draftFromProvider` и снимает приведение.
+ * Описание в `providers.list.custom` (спека подписок 5.1): запись с адресом или аккаунт подписки. Окно сужает по виду
+ * (`kindOf` в `custom-provider-draft.ts`): у записи без `kind` вид `endpoint`, чужих полей она не читает.
  */
-export type CustomProviderInfo = CustomEndpointInfo;
+export type CustomProviderInfo = CustomEndpointInfo | CustomAccountInfo;
 
 // Модель: одно слово, не с дефиса (CLI принял бы за флаг), непустая — как у `sessions.create.model`.
 // Строгий id (спека 5.1, 7): совпадает с проверкой ядра, чтобы id не вышел из папки провайдеров.

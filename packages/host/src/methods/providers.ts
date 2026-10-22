@@ -11,7 +11,7 @@ import {
   writeSecret,
 } from '@parley/core';
 import type { ProviderEntry, SecretId } from '@parley/core';
-import type { AnyCustomProviderInfo, CustomProviderInfo } from '@parley/protocol';
+import type { CustomProviderInfo } from '@parley/protocol';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
 import type { GlmCheckService } from '../limits/glm-check.js';
@@ -53,14 +53,13 @@ function customInfo(entry: ProviderEntry, signedIn: boolean | null, auth: Accoun
     };
   }
   if (entry.account === undefined) return undefined;
-  const info = {
+  return {
     kind: entry.account.kind,
     link: entry.account.link,
     folder,
     signedIn,
     signingIn: auth?.signingIn(entry.id) ?? false,
-  } satisfies AnyCustomProviderInfo;
-  return info as unknown as CustomProviderInfo; // временно до задачи 8: тип строки пока форма с адресом
+  };
 }
 
 /**
