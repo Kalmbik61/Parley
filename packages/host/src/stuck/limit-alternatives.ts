@@ -19,8 +19,8 @@ export interface LimitAlternativesDeps {
   limits: { get(providerId: string): ProviderLimits | null };
   /**
    * Вошёл ли аккаунт подписки: `true` — да, `false` — нет, `null` — служба входа не знает. В список попадает только тот
-   * аккаунт, кого она подтвердила; хост подставляет `auth.status`. Не аккаунтов (`claude`, `glm`, свои с адресом) не
-   * спрашивают: состояния входа у них нет, их готовность говорит сама за себя (решение 8).
+   * аккаунт, кого она подтвердила; хост подставляет `auth.status`. Глобальный `claude` не спрашивают: состояния входа
+   * у него нет, его готовность говорит сама за себя (решение 8).
    */
   signedIn: (id: string) => boolean | null;
   /**
@@ -31,11 +31,12 @@ export interface LimitAlternativesDeps {
 }
 
 /**
- * Записи реестра того же семейства, что у `provider`, кроме него самого: вошедшие и готовые к запуску (нет `needs` и
- * `error`). Вошедшим аккаунт подписки считается по службе входа (`signedIn`); не аккаунт семейства — глобальный
- * `claude`, `glm` — вошедшим считается всегда, а решает одна готовность (решение 8, спека подписок 5.8): иначе
- * застрявшему аккаунту нечего было бы предложить, кроме других аккаунтов, а глобальный Claude Code — самая очевидная
- * замена. Провайдер без семейства (Codex) или неизвестный — пусто.
+ * Записи реестра того же семейства, что у `provider`, кроме него самого, без ключа (`runner.secret`) — глобальный CLI и
+ * аккаунты подписки, — вошедшие и готовые к запуску (нет `needs` и `error`). Вошедшим аккаунт подписки считается по
+ * службе входа (`signedIn`); глобальный `claude` — всегда, а решает одна готовность (решение 8, спека подписок 5.8):
+ * иначе застрявшему аккаунту нечего было бы предложить, кроме других аккаунтов. Провайдеры с ключом — GLM и свои с
+ * адресом (Kimi и подобные) — чужие модели, а не «другие аккаунты Claude Code» (решение 10). Провайдер без семейства
+ * (Codex) или неизвестный — пусто.
  */
 export async function limitAlternatives(provider: string, deps: LimitAlternativesDeps): Promise<LimitAlternative[]> {
   const registry = await loadProviders();
@@ -44,7 +45,7 @@ export async function limitAlternatives(provider: string, deps: LimitAlternative
   const readiness = deps.readiness ?? ((entry: ProviderEntry) => providerReadiness(entry, { signedIn: true }));
   const result: LimitAlternative[] = [];
   for (const entry of Object.values(registry)) {
-    if (entry.id === provider || entry.family !== family) continue;
+    if (entry.id === provider || entry.family !== family || entry.runner.secret !== undefined) continue;
     if (entry.account !== undefined && deps.signedIn(entry.id) !== true) continue;
     const state = await readiness(entry);
     if (state.needs !== null || state.error !== null) continue;

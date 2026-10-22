@@ -10,7 +10,7 @@ let home = '';
 /** Запись `custom-providers.json`: второй аккаунт Claude Code (вход проверяет служба входа). */
 const account = (id: string, label: string): Record<string, unknown> => ({ kind: 'claude-account', id, label, link: false });
 
-/** Запись `custom-providers.json`: свой провайдер с адресом и ключом — не аккаунт, входа у него нет. */
+/** Запись `custom-providers.json`: свой провайдер с адресом и ключом (Kimi и подобные) — не аккаунт, чужая модель. */
 const endpoint = (id: string, label: string): Record<string, unknown> => ({
   id,
   label,
@@ -25,13 +25,12 @@ const endpoint = (id: string, label: string): Record<string, unknown> => ({
 const READY: ProviderReadiness = { needs: null, error: null, version: null };
 const NEEDS_KEY: ProviderReadiness = { needs: 'key', error: null, version: null };
 
-/** Готовность-заглушка (без поиска `claude` в PATH): все готовы, кроме перечисленных — им не хватает ключа. */
+/** Готовность-заглушка (без поиска `claude` в PATH и чтения ключей): все готовы, кроме перечисленных — им не хватает ключа. */
 const readyExcept =
   (...ids: string[]) =>
   async (entry: ProviderEntry): Promise<ProviderReadiness> =>
     ids.includes(entry.id) ? NEEDS_KEY : READY;
-/** У `glm` в тестовом доме нет сохранённого ключа Z.ai, остальные готовы. */
-const ready = readyExcept('glm');
+const ready = readyExcept();
 const noLimits = { get: (): ProviderLimits | null => null };
 
 async function writeRegistry(...providers: Array<Record<string, unknown>>): Promise<void> {
@@ -131,7 +130,7 @@ describe('limitAlternatives — другие вошедшие аккаунты �
   });
 });
 
-describe('limitAlternatives — не аккаунты семейства: вошедшим считает чистая готовность (решение 8, спека подписок 5.8)', () => {
+describe('limitAlternatives — глобальный CLI: вошедшим считает чистая готовность; провайдеры с ключом не в списке (решения 8 и 10)', () => {
   it('застрял аккаунт: глобальный Claude Code в списке, хотя служба входа его не знает (null)', async () => {
     const week: ProviderLimits = {
       fiveHour: null,
@@ -146,14 +145,14 @@ describe('limitAlternatives — не аккаунты семейства: вош
     expect(result).toEqual([{ id: 'claude', label: 'Claude Code', limits: week }]);
   });
 
-  it('застрял глобальный claude: аккаунт — только по входу службы, `glm` — без ключа не в списке', async () => {
+  it('застрял глобальный claude: аккаунт — только по входу службы', async () => {
     const deps = { limits: noLimits, readiness: ready };
     expect(await limitAlternatives('claude', { ...deps, signedIn: () => null })).toEqual([]);
     expect(await limitAlternatives('claude', { ...deps, signedIn: () => false })).toEqual([]);
     expect((await limitAlternatives('claude', { ...deps, signedIn: () => true })).map((item) => item.id)).toEqual(['custom-claude-2']);
   });
 
-  it('не аккаунт с чистой готовностью (glm с ключом) — в списке, а вход службы не спрашивают', async () => {
+  it('GLM с готовым ключом — не в списке (чужая модель); вход службы спрашивают только про аккаунт', async () => {
     const asked: string[] = [];
     const result = await limitAlternatives('claude', {
       limits: noLimits,
@@ -161,13 +160,13 @@ describe('limitAlternatives — не аккаунты семейства: вош
         asked.push(id);
         return false;
       },
-      readiness: readyExcept(),
+      readiness: ready,
     });
-    expect(result.map((item) => item.id)).toEqual(['glm']);
+    expect(result).toEqual([]);
     expect(asked).toEqual(['custom-claude-2']);
   });
 
-  it('не аккаунт без ключа, без CLI или с ошибкой раннера — не в списке, как бы ни ответил вход', async () => {
+  it('глобальный claude без CLI, с ошибкой раннера или ключом в готовности — не в списке, как бы ни ответил вход', async () => {
     for (const readiness of [
       { needs: 'cli', error: null, version: null },
       { needs: 'key', error: null, version: null },
@@ -182,11 +181,15 @@ describe('limitAlternatives — не аккаунты семейства: вош
     }
   });
 
-  it('свой провайдер с адресом тоже не аккаунт: его готовность решает, вход — нет', async () => {
-    await writeRegistry(endpoint('custom-x', 'Claude Code X'));
-    const deps = { limits: noLimits, signedIn: () => false };
-    expect((await limitAlternatives('claude', { ...deps, readiness: ready })).map((item) => item.id)).toEqual(['custom-x']);
-    expect(await limitAlternatives('claude', { ...deps, readiness: readyExcept('glm', 'custom-x') })).toEqual([]);
+  it('свой провайдер с адресом и сохранённым ключом — не в списке, даже с чистой готовностью и «вошёл»', async () => {
+    await writeRegistry(endpoint('custom-x', 'Kimi'));
+    for (const signedIn of [true, false, null]) {
+      const result = await limitAlternatives('claude', { limits: noLimits, signedIn: () => signedIn, readiness: ready });
+      expect(result.map((item) => item.id), String(signedIn)).not.toContain('custom-x');
+    }
+    // Застрявший сам на таком провайдере: заменой ему служит глобальный CLI, а не другая чужая модель.
+    const fromEndpoint = await limitAlternatives('custom-x', { limits: noLimits, signedIn: () => true, readiness: ready });
+    expect(fromEndpoint.map((item) => item.id)).toEqual(['claude']);
   });
 
   it('готовность по умолчанию — настоящая: глобальный claude без CLI в PATH не попадает в список', async () => {

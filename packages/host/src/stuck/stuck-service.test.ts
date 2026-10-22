@@ -23,7 +23,6 @@ import {
   type LimitAlternative,
   type Message,
   type NeedKind,
-  type ProviderEntry,
   type ProviderLimits,
   type ProviderReadiness,
   type SessionNeed,
@@ -443,12 +442,8 @@ describe('служба «застрял» — доклад (спека заст�
         limitAlternatives(provider, {
           limits: { get: (id) => (id === 'custom-claude-2' ? week : null) },
           signedIn: (id) => id === 'custom-claude-2',
-          // Без поиска `claude` в PATH; у `glm` в тестовом доме нет ключа Z.ai.
-          readiness: async (entry: ProviderEntry): Promise<ProviderReadiness> => ({
-            needs: entry.id === 'glm' ? 'key' : null,
-            error: null,
-            version: null,
-          }),
+          // Без поиска `claude` в PATH: все готовы.
+          readiness: async (): Promise<ProviderReadiness> => ({ needs: null, error: null, version: null }),
         }),
     });
     await emit(worker, needOf('limit'));
@@ -477,11 +472,7 @@ describe('служба «застрял» — доклад (спека заст�
           limits: { get: () => null },
           // Служба входа знает только аккаунты; третий не вошёл, а у `claude` для неё состояния нет (null).
           signedIn: (id) => (id === 'custom-claude-3' ? false : null),
-          readiness: async (entry: ProviderEntry): Promise<ProviderReadiness> => ({
-            needs: entry.id === 'glm' ? 'key' : null,
-            error: null,
-            version: null,
-          }),
+          readiness: async (): Promise<ProviderReadiness> => ({ needs: null, error: null, version: null }),
         }),
     });
     await emit(worker, needOf('limit'));
