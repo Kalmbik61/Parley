@@ -767,9 +767,11 @@ describe('вход в аккаунт подписки (спека подписо
 
   it('результаты и события входа', () => {
     expectTypeOf<Result<'providers.authStatus'>>().toEqualTypeOf<{ signedIn: boolean; detail: string | null }>();
-    for (const name of ['providers.signIn', 'providers.signInInput', 'providers.signInResize', 'providers.cancelSignIn', 'providers.signOut'] as const) {
-      expectTypeOf<Result<typeof name>>().toEqualTypeOf<{ ok: true }>();
-    }
+    expectTypeOf<Result<'providers.signIn'>>().toEqualTypeOf<{ ok: true }>();
+    expectTypeOf<Result<'providers.signInInput'>>().toEqualTypeOf<{ ok: true }>();
+    expectTypeOf<Result<'providers.signInResize'>>().toEqualTypeOf<{ ok: true }>();
+    expectTypeOf<Result<'providers.cancelSignIn'>>().toEqualTypeOf<{ ok: true }>();
+    expectTypeOf<Result<'providers.signOut'>>().toEqualTypeOf<{ ok: true }>();
     expectTypeOf<Params<'providers.signInInput'>>().toEqualTypeOf<{ provider: string; data: string }>();
     expectTypeOf<Params<'providers.signInResize'>>().toEqualTypeOf<{ provider: string; cols: number; rows: number }>();
     expectTypeOf<EventData<'providers.signInOutput'>>().toEqualTypeOf<{ provider: string; data: string }>();

@@ -50,7 +50,8 @@ describe('вид записи своих провайдеров (спека по
 
   it('saveCustom: запись с адресом принимается и с kind endpoint, и без kind (читается как endpoint)', () => {
     expect(METHODS['providers.saveCustom'].safeParse(valid).success).toBe(true);
-    const { kind: _kind, ...withoutKind } = valid;
+    const withoutKind: Record<string, unknown> = { ...valid };
+    delete withoutKind.kind;
     const parsed = METHODS['providers.saveCustom'].safeParse(withoutKind);
     expect(parsed.success).toBe(true);
     // Не аккаунт: поля адреса и ключа на месте, вида нет или он endpoint.
@@ -62,7 +63,8 @@ describe('вид записи своих провайдеров (спека по
   });
 
   it('saveCustom: у формы аккаунта kind обязателен и закрыт', () => {
-    const { kind: _kind, ...withoutKind } = account;
+    const withoutKind: Record<string, unknown> = { ...account };
+    delete withoutKind.kind;
     expect(METHODS['providers.saveCustom'].safeParse(withoutKind).success).toBe(false);
     expect(METHODS['providers.saveCustom'].safeParse({ ...withoutKind, id: 'codex-two', label: 'Personal' }).success).toBe(false);
     expect(METHODS['providers.saveCustom'].safeParse({ ...account, kind: undefined }).success).toBe(false);
