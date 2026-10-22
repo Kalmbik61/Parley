@@ -68,6 +68,7 @@ import {
 } from '../work/resource-policy.js';
 import { PLAN_DRAFT_SCHEMA, PLAN_TOOLS, isPlanTool, planTool } from './plan-tools.js';
 import { CREATE_SESSION_TOOL, SESSION_CREATION_UNAVAILABLE, createSession } from './session-tools.js';
+import { fetchProviderRows } from './provider-rows.js';
 import { addMemberByLead, addRoom, canReadRoom, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
 import { reportedStatus } from '../work/session-state.js';
 import { stuckHint, stuckWarning } from '../work/stuck.js';
@@ -588,9 +589,21 @@ const TOOLS: Tool[] = [
   },
 ];
 
-async function getMap(context: McpContext, args: Record<string, unknown> = {}): Promise<unknown> {
+/** Подпись к локальным строкам, когда хост не ответил (спека подписок 5.8): вход аккаунтов и лимиты из процесса MCP не видны. */
+const HOST_UNREACHABLE_NOTE = 'host unreachable: sign-in state and limits unknown';
+
+async function getMap(context: McpContext, args: Record<string, unknown> = {}, signal?: AbortSignal): Promise<unknown> {
   const map = await readMap(context.projectPath, context.workId);
   if (Object.keys(args).length > 0) return mapPage(context, map, args);
+  // Строки провайдеров с входом аккаунтов и лимитами отдаёт хост (спека подписок 5.8, К7): процесс MCP не видит ни кэша
+  // входа, ни других работ. `limits` — только когда известны, чтобы карта оставалась компактной.
+  const hostRows = context.agent === undefined ? null : await fetchProviderRows(context.agent, signal ?? new AbortController().signal);
+  if (hostRows !== null) {
+    const providers = hostRows.map(({ id, label, family, available, models, effort, limits }) => ({
+      id, label, family, available, models, effort, ...(limits === null ? {} : { limits }),
+    }));
+    return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId), providers };
+  }
   const registry = await loadProviders();
   const providers = await Promise.all(
     Object.values(registry).map(async (entry) => {
@@ -606,7 +619,7 @@ async function getMap(context: McpContext, args: Record<string, unknown> = {}): 
     }),
   );
   // Плейбук рецепта получает только ведущий (слоем и письмом): в топологии агенту видны id и имя рецепта.
-  return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId), providers };
+  return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId), providers, note: HOST_UNREACHABLE_NOTE };
 }
 
 const optionalString = (args: Record<string, unknown>, name: string): string | undefined => {
@@ -1305,7 +1318,7 @@ async function dispatch(
 ): Promise<unknown> {
   if (name === 'backlog_list' || name === 'backlog_suggest') return backlogTool(context, name, args);
   if (name === 'remember' || name === 'memory_read' || name === 'search_history') return memoryTool(context, name, args);
-  if (name === 'get_map') return getMap(context, args);
+  if (name === 'get_map') return getMap(context, args, signal);
   if (name === 'list_roles') {
     const map = await readMap(context.projectPath, context.workId);
     const caller = map.sessions.find(item => item.id === context.sessionId);

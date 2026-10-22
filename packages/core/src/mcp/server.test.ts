@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -33,6 +34,7 @@ import { undoProjectMemory } from '../work/project-memory.js';
 import { setBacklogRule } from '../work/project-preferences.js';
 import { buildRoleCatalog } from '../roles/catalog.js';
 import type { RoleCatalog } from '../roles/types.js';
+import type { AgentChannel } from '../work/mcp-config.js';
 import { contextFromEnv } from './context.js';
 import type { Ring } from './inbox-watch.js';
 import {
@@ -85,6 +87,7 @@ async function connect(
   rings: Ring[] = [],
   worktreeRoot = DEFAULT_CONFIG.worktreeRoot,
   roleCatalog?: (cwd: string) => Promise<RoleCatalog>,
+  agent?: AgentChannel,
 ): Promise<Client> {
   const context = {
     projectPath: project,
@@ -96,6 +99,7 @@ async function connect(
     channel,
     worktreeRoot,
     ...(roleCatalog ? { roleCatalog } : {}),
+    ...(agent ? { agent } : {}),
   };
   const server = createParleyServer(context);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -544,6 +548,83 @@ describe('get_map', () => {
 
     expect(result['sessionId']).toBeNull();
     expect((result['map'] as WorkMap).work.id).toBe(workId);
+  });
+});
+
+describe('get_map: строки провайдеров от хоста (спека подписок 5.8, К7)', () => {
+  const hostServers: Server[] = [];
+  afterEach(async () => {
+    await Promise.all(hostServers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+  });
+  const limits = { fiveHour: { usedPercent: 42, resetsAt: '2026-10-22T15:00:00.000Z' }, week: null, at: '2026-10-22T12:00:00.000Z' };
+  const hostRows = [
+    { id: 'claude', label: 'Claude Code', family: 'claude', available: true, needs: null, models: [{ id: 'opus', label: 'Opus' }], effort: true, limits },
+    { id: 'custom-claude-2', label: 'Claude Code 2', family: 'claude', available: false, needs: 'sign-in', models: null, effort: false, limits: null },
+  ];
+  /** Хост-заглушка с точкой `/agent/providers`: отвечает строками `rows`. */
+  async function fakeHost(rows: unknown): Promise<AgentChannel> {
+    const server = createServer((req, res) => {
+      req.resume();
+      res.writeHead(req.method === 'POST' && req.url === '/agent/providers' ? 200 : 404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, result: { providers: rows } }));
+    });
+    hostServers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return { url: `http://127.0.0.1:${(server.address() as { port: number }).port}/agent/browser`, token: 'a'.repeat(64) };
+  }
+  type MapRow = { id: string; label: string; family: string | null; available: boolean; models: unknown; effort: boolean; limits?: unknown };
+
+  it('с каналом агента providers — строки хоста: family, лимиты и вход; limits только когда известны', async () => {
+    const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], DEFAULT_CONFIG.worktreeRoot, undefined, await fakeHost(hostRows));
+    const result = await callOk(client, 'get_map');
+    const providers = result['providers'] as MapRow[];
+
+    expect(providers).toEqual([
+      { id: 'claude', label: 'Claude Code', family: 'claude', available: true, models: [{ id: 'opus', label: 'Opus' }], effort: true, limits },
+      { id: 'custom-claude-2', label: 'Claude Code 2', family: 'claude', available: false, models: null, effort: false },
+    ]);
+    expect('limits' in providers[1]!).toBe(false);
+    expect(result['note']).toBeUndefined();
+  });
+
+  it('без канала агента — прежние локальные строки и note о недоступном хосте', async () => {
+    const client = await connect('s-01');
+    const result = await callOk(client, 'get_map');
+    const providers = result['providers'] as MapRow[];
+
+    expect(result['note']).toBe('host unreachable: sign-in state and limits unknown');
+    expect(providers.find((entry) => entry.id === 'claude')).toMatchObject({ id: 'claude', available: true });
+    expect(providers.some((entry) => 'limits' in entry)).toBe(false);
+  });
+
+  it('хост не ответил (порт закрыт, 404, кривое тело) — то же: локальные строки и note', async () => {
+    const closed = createServer();
+    await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve));
+    const { port } = closed.address() as { port: number };
+    await new Promise<void>((resolve) => closed.close(() => resolve()));
+    const channels: AgentChannel[] = [
+      { url: `http://127.0.0.1:${port}/agent/browser`, token: 'a'.repeat(64) },
+      await fakeHost('not-a-list'),
+    ];
+    for (const agent of channels) {
+      const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], DEFAULT_CONFIG.worktreeRoot, undefined, agent);
+      const result = await callOk(client, 'get_map');
+      expect(result['note']).toBe('host unreachable: sign-in state and limits unknown');
+      expect((result['providers'] as MapRow[]).find((entry) => entry.id === 'claude')?.available).toBe(true);
+    }
+  });
+
+  it('постраничные ответы get_map хоста не спрашивают', async () => {
+    const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], DEFAULT_CONFIG.worktreeRoot, undefined, await fakeHost(hostRows));
+    const page = await callOk(client, 'get_map', { field: 'goal' });
+    expect(page['providers']).toBeUndefined();
+    expect(page['note']).toBeUndefined();
+  });
+
+  it('описание create_session отсылает к providers[].limits: аккаунт того же CLI — отдельная подписка', async () => {
+    const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], DEFAULT_CONFIG.worktreeRoot, undefined, await fakeHost(hostRows));
+    const tool = (await client.listTools()).tools.find((item) => item.name === 'create_session');
+    expect(tool?.description).toContain('An account of the same CLI (for example custom-claude-2) is a separate subscription with its own limits — see providers[].limits in get_map.');
   });
 });
 

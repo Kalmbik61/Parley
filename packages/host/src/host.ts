@@ -1,3 +1,4 @@
+import { AGENT_PROVIDERS_PATH, createProvidersEndpoint, providerRowsOf } from './agent/providers-endpoint.js';
 import { AGENT_SESSIONS_PATH, createSessionEndpoint } from './agent/session-endpoint.js';
 import { randomBytes } from 'node:crypto';
 import { mkdir, chmod, link, rename, rm, writeFile } from 'node:fs/promises';
@@ -29,7 +30,7 @@ import {
 } from '@parley/core';
 import { createTelegramService } from './telegram/service.js';
 import { createHostContext } from './context.js';
-import type { HostContext } from './context.js';
+import type { HostContext, RequestInfo } from './context.js';
 import { createHostServer } from './server.js';
 import { HostError } from './errors.js';
 import { createLog } from './log.js';
@@ -42,7 +43,7 @@ import { createProfiler } from './diagnostics/profiler.js';
 import { hostPaths, MAX_SOCKET_PATH_BYTES } from './paths.js';
 import type { HostPaths } from './paths.js';
 import { HOST_ERROR_REASONS } from '@parley/protocol';
-import type { SessionRef } from '@parley/protocol';
+import type { Result, SessionRef } from '@parley/protocol';
 import { createHostHandlers } from './methods/index.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
@@ -357,6 +358,16 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     authenticate: (req) => browserEndpoint.authenticate(req),
     create: (input) => sessionsService.create(input),
   });
+  // Строки провайдеров для агента (спека подписок 5.8, К7): тот же `providers.list`, что у окна, без ключа и проверок.
+  // Обработчик собирается ниже, когда готовы службы проверки ключей, поэтому привязка поздняя.
+  let listProviders: (() => Promise<Result<'providers.list'>>) | undefined;
+  const providersEndpoint = createProvidersEndpoint({
+    authenticate: (req) => browserEndpoint.authenticate(req),
+    list: async () => {
+      if (listProviders === undefined) throw new Error('the host is still starting');
+      return providerRowsOf(await listProviders());
+    },
+  });
   const hookServer = createHookServer({
     log,
     onHook: (request) => {
@@ -368,7 +379,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       }
       feedService.onHook(request);
     },
-    routes: { [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
+    routes: { [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
   });
 
   // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт, а
@@ -602,6 +613,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     profiler,
     log: handle.context.log,
   });
+  // `providers.list` не читает ни параметры, ни запрос: заглушки только для типа обработчика.
+  const providersListHandler = handlers.methods['providers.list'];
+  if (providersListHandler !== undefined) {
+    listProviders = () => providersListHandler({} as never, {} as RequestInfo) as Promise<Result<'providers.list'>>;
+  }
   health.start();
   handle.context.onShutdown(async () => health.stop());
   const server = createHostServer({
