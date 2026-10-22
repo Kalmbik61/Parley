@@ -596,11 +596,12 @@ async function getMap(context: McpContext, args: Record<string, unknown> = {}, s
   const map = await readMap(context.projectPath, context.workId);
   if (Object.keys(args).length > 0) return mapPage(context, map, args);
   // Строки провайдеров с входом аккаунтов и лимитами отдаёт хост (спека подписок 5.8, К7): процесс MCP не видит ни кэша
-  // входа, ни других работ. `limits` — только когда известны, чтобы карта оставалась компактной.
+  // входа, ни других работ. `needs` (почему недоступен: `sign-in`, `key`, `cli`) и `limits` — только когда известны, чтобы
+  // карта оставалась компактной; агент отличает «не вошёл» от «старый CLI» (спека подписок 5.8).
   const hostRows = context.agent === undefined ? null : await fetchProviderRows(context.agent, signal ?? new AbortController().signal);
   if (hostRows !== null) {
-    const providers = hostRows.map(({ id, label, family, available, models, effort, limits }) => ({
-      id, label, family, available, models, effort, ...(limits === null ? {} : { limits }),
+    const providers = hostRows.map(({ id, label, family, available, needs, models, effort, limits }) => ({
+      id, label, family, available, ...(needs === null ? {} : { needs }), models, effort, ...(limits === null ? {} : { limits }),
     }));
     return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId), providers };
   }

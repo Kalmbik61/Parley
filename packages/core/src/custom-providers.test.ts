@@ -286,6 +286,21 @@ describe('запись аккаунта (спека подписок 5.1)', () =
     expect(accountLabel(second, [account])).toBe('Claude Code 3');
     expect(accountLabel(account, [kimi])).toBe('Claude Code 2');
   });
+  it('стандартное имя следует за номером в id: после удалений два аккаунта не получают одно имя (решение 7)', () => {
+    const third: CustomAccountRecord = { ...account, id: 'custom-claude-3', label: 'Claude Code 3' };
+    const fourth: CustomAccountRecord = { ...account, id: 'custom-claude-4', label: 'Claude Code 4' };
+    // Второй удалён, его id снова свободен: новый аккаунт — «Claude Code 2», а не «3» (число аккаунтов + 2).
+    expect(defaultAccountLabel('claude-account', [third], 'custom-claude-2')).toBe('Claude Code 2');
+    expect(accountLabel({ ...account, label: '' }, [third])).toBe('Claude Code 2');
+    // Третий удалён из середины: пустое место занимает «3», четвёртый остаётся «4».
+    expect(accountLabel({ ...account, id: 'custom-claude-3' }, [account, fourth])).toBe('Claude Code 3');
+    expect(defaultAccountLabel('codex-account', [], 'codex-codex-5')).toBe('Codex 5');
+    // Номер читается только из id этого CLI; чужой или нестандартный id — запасной счёт (число + 2).
+    expect(defaultAccountLabel('claude-account', [account], 'codex-codex-5')).toBe('Claude Code 3');
+    expect(defaultAccountLabel('claude-account', [account], 'custom-claude-work')).toBe('Claude Code 3');
+    expect(defaultAccountLabel('claude-account', [account], 'custom-claude-02')).toBe('Claude Code 3');
+    expect(accountLabel({ ...account, id: 'custom-claude-work' }, [account])).toBe('Claude Code 3');
+  });
 
   it('accountProviderEntry: копия раннера claude из реестра после providers.json, своя папка, без секрета и env (спека 5.2, К11, К12)', async () => {
     const providersJson = path.join(home, 'providers.json');

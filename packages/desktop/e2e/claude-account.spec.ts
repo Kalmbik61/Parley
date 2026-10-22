@@ -460,7 +460,7 @@ test.describe('аккаунты Claude Code на изолированном Clau
     expect(errors).toEqual([]);
   });
 
-  test('Sign out - «Not signed in»; Delete с «Also delete its folder» - аккаунта и папки нет, ~/.claude цел', async () => {
+  test('Sign out - «Not signed in»; Delete без Sign out снимает вход (logout), с «Also delete its folder» - аккаунта и папки нет, ~/.claude цел', async () => {
     test.setTimeout(120_000);
     const { window } = await open();
     const claudeDir = path.join(user, '.claude');
@@ -483,17 +483,41 @@ test.describe('аккаунты Claude Code на изолированном Clau
     await window.keyboard.press('Escape');
     await expect(segment(window, id)).toHaveClass(/opacity-50/);
 
-    // Delete: подтверждение с галочкой про папку.
+    // Delete без предварительного Sign out (решение 12): вход снимает само удаление. Папка остаётся, поэтому исчезнувший
+    // stub-auth.json - заслуга `claude auth logout`, а не удаления папки.
     await window.getByRole('button', { name: 'Add provider', exact: true }).click();
     await dialog.locator(`[data-provider-pill="${id}"]`).click();
+    await signIn(dialog, id);
+    expect(await exists(path.join(folder, 'stub-auth.json'))).toBe(true);
     await form.getByRole('button', { name: 'Delete', exact: true }).click();
-    const confirm = dialog.getByRole('group', { name: 'Delete', exact: true });
-    await expect(confirm).toContainText('Delete Claude Code 2?');
-    await confirm.getByRole('checkbox', { name: 'Also delete its folder', exact: true }).click();
-    await confirm.getByRole('button', { name: 'Delete', exact: true }).click();
+    const keep = dialog.getByRole('group', { name: 'Delete', exact: true });
+    await expect(keep.getByRole('checkbox', { name: 'Also delete its folder', exact: true })).toHaveAttribute('aria-checked', 'false');
+    await keep.getByRole('button', { name: 'Delete', exact: true }).click();
     await expect(dialog.locator(`[data-provider-pill="${id}"]`)).toHaveCount(0);
     await expect(segment(window, id)).toHaveCount(0);
-    await expect.poll(() => exists(folder)).toBe(false);
+    expect(await exists(folder)).toBe(true);
+    expect(await exists(path.join(folder, 'stub-auth.json'))).toBe(false);
+    const logouts = (await authCalls()).filter((item) => item.command === 'logout');
+    expect(logouts).toHaveLength(2);
+    expect(logouts[1]).toMatchObject({ configDir: folder, anthropicVars: [], oauthVars: [] });
+    expect(await stored()).toEqual([]);
+
+    // Второй аккаунт: оставшаяся папка занимает прежний id. Delete с галочкой про папку - аккаунта и папки нет.
+    await window.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    const second = await createAccount(window);
+    expect(second.id).not.toBe(id);
+    const secondFolder = providerDir(second.id);
+    await dialog.locator(`[data-account-form="${second.id}"]`).getByRole('button', { name: 'Delete', exact: true }).click();
+    const confirm = dialog.getByRole('group', { name: 'Delete', exact: true });
+    await expect(confirm).toContainText(`Delete Claude Code ${second.id.slice('custom-claude-'.length)}?`);
+    await confirm.getByRole('checkbox', { name: 'Also delete its folder', exact: true }).click();
+    await confirm.getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(dialog.locator(`[data-provider-pill="${second.id}"]`)).toHaveCount(0);
+    await expect(segment(window, second.id)).toHaveCount(0);
+    await expect.poll(() => exists(secondFolder)).toBe(false);
+    // Выход идёт и у аккаунта, который не входил: удалению нужен только он сам.
+    expect((await authCalls()).filter((item) => item.command === 'logout').at(-1)).toMatchObject({ configDir: secondFolder });
     expect(await stored()).toEqual([]);
     // Удаление папки сняло ссылки, а не их цели.
     expect({ dir: await tree(claudeDir), json: await fileMark(path.join(user, '.claude.json')) }).toEqual(before);
@@ -539,8 +563,13 @@ test.describe('аккаунты Claude Code на изолированном Clau
       // Терминал входа: стаб ждёт код, терминал и кнопка Cancel на экране.
       await form.getByRole('button', { name: 'Sign in', exact: true }).click();
       const terminal = form.locator('[data-sign-in-terminal]');
-      // На 800x500 терминал ниже края диалога, а xterm не рисует строки, пока терминал не виден: человек прокрутил бы к нему.
-      await terminal.scrollIntoViewIfNeeded();
+      // На 800x500 терминал был бы ниже края диалога: он сам прокручивается на виду (SignInTerminal), без прокрутки от
+      // человека - иначе ссылка входа не видна. Проверка: нижний край терминала открыт (под этой точкой он, а не обрезка).
+      await expect.poll(() => terminal.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.bottom - 6);
+        return hit !== null && element.contains(hit);
+      })).toBe(true);
       await expect(terminal.locator('.xterm-rows')).toContainText('Paste code here if prompted >');
       await expect(form.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible();
       await noHorizontalOverflow(dialog);

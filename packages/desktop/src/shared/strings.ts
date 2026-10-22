@@ -39,6 +39,12 @@ const CONTEXT_NOUNS: Record<ContextKind | 'mixed', readonly [string, string]> = 
   mixed: ['item', 'items'],
 };
 
+/**
+ * Самая старая версия Claude Code, на которой работают аккаунты подписки (спека подписок 9.2, 10). Копия
+ * `ACCOUNT_MIN_VERSION_CLAUDE` ядра: ядро тянет `node:fs`, а таблица строк — чистый модуль; равенство держит `strings.test.ts`.
+ */
+const ACCOUNT_MIN_CLAUDE_VERSION = '2.1.304';
+
 export const S = {
   plans: {
     workClosed: 'Reopen this workspace to change the plan.',
@@ -823,6 +829,12 @@ export const S = {
     signedIn: 'Signed in',
     notSignedIn: 'Not signed in',
     checking: 'Checking…',
+    /** Вместо состояния входа, когда CLI старше минимума или его нет (`needs: 'cli'`, спека подписок 10): входить нечем. */
+    needsCli: (name: string): string => `${name} requires Claude Code ${ACCOUNT_MIN_CLAUDE_VERSION} or newer`,
+    /** Второй Sign in при идущем входе другого аккаунта: хост отвечает `conflict` (замок входа один на хост, К17). */
+    signInBusy: 'Another account is signing in — finish or cancel it first.',
+    /** Delete с «Also delete its folder», пока у аккаунта идут сессии: хост отвечает `conflict` (спека подписок 10). */
+    deleteRunning: 'This account has running sessions — stop them before deleting its folder.',
     signingIn: 'Signing in…',
     signIn: 'Sign in',
     cancel: 'Cancel',

@@ -94,7 +94,7 @@ const endpointRecord = z.object({
   linkClaude: z.boolean(),
 });
 
-// Аккаунт подписки (спека подписок 5.1): имя может быть пустым — тогда хост берёт стандартное (`Claude 2`).
+// Аккаунт подписки (спека подписок 5.1): имя может быть пустым — тогда хост берёт стандартное (`Claude Code 2`).
 const accountRecord = z.object({
   kind: z.enum(['claude-account', 'codex-account']),
   id: customId.nullable(),

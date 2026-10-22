@@ -175,6 +175,9 @@ export function ProviderCard({
   if (account !== null) {
     const accountFiveHour = provider.limits?.fiveHour?.usedPercent;
     const accountWeek = provider.limits?.week?.usedPercent;
+    // CLI старше минимума или его нет (спека подписок 10): входить нечем, состояние входа не узнать — карточка называет
+    // требование вместо «Checking…» и кнопки Sign in.
+    const cliProblem = provider.needs === 'cli' ? S.accounts.needsCli(name) : null;
     const state = account.signingIn
       ? S.accounts.signingIn
       : account.signedIn === true
@@ -187,8 +190,13 @@ export function ProviderCard({
         <div className="flex items-center gap-2">
           <AgentIcon provider={provider.id} size={20} />
           <h3 className="font-heading">{name}</h3>
-          <span className="ml-auto text-xs text-muted-foreground">{state}</span>
+          {cliProblem === null ? <span className="ml-auto text-xs text-muted-foreground">{state}</span> : null}
         </div>
+        {cliProblem === null ? null : (
+          <p data-account-needs-cli="" className="break-words text-xs text-muted-foreground">
+            {cliProblem}
+          </p>
+        )}
         {provider.version == null ? null : <p className="font-mono text-xs text-muted-foreground">{provider.version}</p>}
         {provider.available && (accountFiveHour !== undefined || accountWeek !== undefined) ? (
           <p className="text-xs tabular-nums text-muted-foreground">
@@ -199,7 +207,7 @@ export function ProviderCard({
           </p>
         ) : null}
         <div className="flex flex-wrap gap-2">
-          {account.signedIn === true ? null : (
+          {account.signedIn === true || cliProblem !== null ? null : (
             <Button
               type="button"
               size="sm"

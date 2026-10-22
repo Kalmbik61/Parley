@@ -3,6 +3,7 @@
  * превращение в параметры `providers.saveCustom`. Ключ в параметры не входит — он уходит отдельно `providers.setKey`.
  */
 
+import { CUSTOM_PROVIDER_PREFIX } from '@parley/protocol';
 import type {
   CustomAccountInfo,
   CustomEndpointInfo,
@@ -74,6 +75,18 @@ function isAccountInfo(custom: CustomProviderInfo): custom is CustomAccountInfo 
 /** Запись аккаунта подписки или `null` (нет записи или запись с адресом): так окно читает поля `signedIn`, `signingIn`, `link`. */
 export function accountOf(custom: CustomProviderInfo | null | undefined): CustomAccountInfo | null {
   return custom != null && isAccountInfo(custom) ? custom : null;
+}
+
+/**
+ * Номер стандартного имени нового аккаунта Claude Code: первый свободный среди известных окну id `custom-claude-N`, с
+ * двойки — как slug, который выдаст хост (спека подписок 5.1, решение 7: имя следует за slug). Оставшуюся папку удалённого
+ * аккаунта или забытый ключ окно не видит, а хост видит и сдвигает номер: поле имени только подсказка, имя пишет хост.
+ */
+export function nextAccountNumber(ids: readonly string[]): number {
+  const taken = new Set(ids);
+  let n = 2;
+  while (taken.has(`${CUSTOM_PROVIDER_PREFIX}claude-${n}`)) n += 1;
+  return n;
 }
 
 /** Черновик записи с адресом; у аккаунта подписки нет ни адреса, ни моделей — `null` (его форма `AccountPanel`). */

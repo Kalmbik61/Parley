@@ -572,17 +572,19 @@ describe('get_map: строки провайдеров от хоста (спек
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     return { url: `http://127.0.0.1:${(server.address() as { port: number }).port}/agent/browser`, token: 'a'.repeat(64) };
   }
-  type MapRow = { id: string; label: string; family: string | null; available: boolean; models: unknown; effort: boolean; limits?: unknown };
+  type MapRow = { id: string; label: string; family: string | null; available: boolean; needs?: string; models: unknown; effort: boolean; limits?: unknown };
 
-  it('с каналом агента providers — строки хоста: family, лимиты и вход; limits только когда известны', async () => {
+  it('с каналом агента providers — строки хоста: family, needs, лимиты и вход; needs и limits только когда известны', async () => {
     const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], DEFAULT_CONFIG.worktreeRoot, undefined, await fakeHost(hostRows));
     const result = await callOk(client, 'get_map');
     const providers = result['providers'] as MapRow[];
 
     expect(providers).toEqual([
       { id: 'claude', label: 'Claude Code', family: 'claude', available: true, models: [{ id: 'opus', label: 'Opus' }], effort: true, limits },
-      { id: 'custom-claude-2', label: 'Claude Code 2', family: 'claude', available: false, models: null, effort: false },
+      { id: 'custom-claude-2', label: 'Claude Code 2', family: 'claude', available: false, needs: 'sign-in', models: null, effort: false },
     ]);
+    // Готовый провайдер несёт компактную строку без `needs`; недоступный называет причину.
+    expect('needs' in providers[0]!).toBe(false);
     expect('limits' in providers[1]!).toBe(false);
     expect(result['note']).toBeUndefined();
   });

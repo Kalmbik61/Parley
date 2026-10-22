@@ -62,7 +62,7 @@ afterEach(() => {
 });
 
 describe('AccountPanel: новый аккаунт', () => {
-  it('имя необязательное: плейсхолдер — стандартное имя, считает окно (число аккаунтов Claude + 2)', () => {
+  it('имя необязательное: плейсхолдер — стандартное имя, считает окно (первый свободный номер среди custom-claude-N)', () => {
     const { unmount } = render(<AccountPanel provider={null} onSaved={vi.fn()} onDeleted={vi.fn()} />);
     expect(field().value).toBe('');
     expect(field().placeholder).toBe('Claude Code 2');
@@ -70,6 +70,18 @@ describe('AccountPanel: новый аккаунт', () => {
     useProvidersStore.setState({ providers: [account('custom-claude-2'), account('custom-claude-3', {}, { label: 'Work' })] });
     render(<AccountPanel provider={null} onSaved={vi.fn()} onDeleted={vi.fn()} />);
     expect(field().placeholder).toBe('Claude Code 4');
+  });
+
+  it('решение 7: после удалений плейсхолдер следует за slug, который выдаст хост, а не за числом аккаунтов', () => {
+    // Живёт один аккаунт — «3»: счёт «число + 2» дал бы тоже «3», а хост выдаст custom-claude-2.
+    useProvidersStore.setState({ providers: [account('custom-claude-3')] });
+    const { unmount } = render(<AccountPanel provider={null} onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    expect(field().placeholder).toBe('Claude Code 2');
+    unmount();
+    // Живут 2 и 4: свободна тройка.
+    useProvidersStore.setState({ providers: [account('custom-claude-2'), account('custom-claude-4')] });
+    render(<AccountPanel provider={null} onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    expect(field().placeholder).toBe('Claude Code 3');
   });
 
   it('аккаунт другого вида и свои провайдеры в счёт не входят', () => {
@@ -170,6 +182,27 @@ describe('AccountPanel: сохранённый аккаунт', () => {
     expect(state().textContent).toBe('Checking…');
     expect(state().getAttribute('data-account-state')).toBe('unknown');
     expect(button('Sign in')).toBeTruthy();
+  });
+
+  it('CLI старше минимума (needs: cli): форма называет требование, а не «Checking…»; Sign in и Sign out нет', () => {
+    useProvidersStore.setState({ providers: [account('custom-claude-2', { signedIn: null }, { needs: 'cli', version: '2.1.302' })] });
+    render(<Bound id="custom-claude-2" />);
+    expect(state().textContent).toBe('Claude Code 2 requires Claude Code 2.1.304 or newer');
+    expect(state().getAttribute('data-account-state')).toBe('needs-cli');
+    expect(document.body.textContent).not.toContain('Checking…');
+    expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull();
+    // Имя, ссылки и удаление доступны и без CLI.
+    expect(button('Save')).toBeTruthy();
+    expect(button('Delete')).toBeTruthy();
+  });
+
+  it('needs: cli и settingsSignIn: вход не начинается', () => {
+    useProvidersStore.setState({ providers: [account('custom-claude-2', {}, { needs: 'cli', version: null })] });
+    useUiStore.setState({ settingsProvider: 'custom-claude-2', settingsSignIn: true });
+    render(<Bound id="custom-claude-2" />);
+    expect(bridge.calls.filter((call) => call.method === 'providers.signIn')).toHaveLength(0);
+    expect(document.querySelector('[data-sign-in-terminal]')).toBeNull();
   });
 
   it('вошёл: Signed in, подпись из providers.authStatus (почта и план), кнопка Sign out вместо Sign in', async () => {
@@ -286,7 +319,7 @@ describe('AccountPanel: вход', () => {
 
   it('отказ providers.signIn — код ошибки под формой и список перечитывается', async () => {
     bridge.setHandler('providers.signIn', () => {
-      throw encodeIpcError({ code: 'conflict', message: 'another sign-in is running' });
+      throw encodeIpcError({ code: 'internal', message: 'leak /Users/me/secret' });
     });
     const reload = vi.fn(async () => {});
     useProvidersStore.setState({ providers: [account()], reload } as never);
@@ -294,8 +327,39 @@ describe('AccountPanel: вход', () => {
     fireEvent.click(button('Sign in'));
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain(S.accounts.signInStartFailed);
-    expect(alert.textContent).toContain('conflicting state');
+    expect(alert.textContent).toContain('host error');
+    expect(document.body.textContent).not.toContain('secret');
     expect(reload).toHaveBeenCalled();
+  });
+
+  it('второй Sign in при входе другого аккаунта (conflict): понятный текст вместо «conflicting state»', async () => {
+    bridge.setHandler('providers.signIn', () => {
+      throw encodeIpcError({ code: 'conflict', message: 'another sign-in is running' });
+    });
+    useProvidersStore.setState({ providers: [account()] });
+    render(<Bound id="custom-claude-2" />);
+    fireEvent.click(button('Sign in'));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe('Another account is signing in — finish or cancel it first.');
+    expect(alert.textContent).toBe(S.accounts.signInBusy);
+  });
+
+  it('терминал входа выводится на виду: scrollIntoView при появлении (800×500)', async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      bridge.setHandler('providers.signIn', () => ({ ok: true }));
+      useProvidersStore.setState({ providers: [account()] });
+      render(<Bound id="custom-claude-2" />);
+      expect(scroll).not.toHaveBeenCalled();
+      fireEvent.click(button('Sign in'));
+      await waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
+      expect(scroll).toHaveBeenCalledWith({ block: 'nearest' });
+      // Прокручивается рамка терминала целиком, а не только его внутренняя область: иначе нижний край рамки остаётся обрезан.
+      expect((scroll.mock.contexts[0] as HTMLElement).hasAttribute('data-sign-in-terminal')).toBe(true);
+    } finally {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+    }
   });
 
   it('Sign in из карточки (settingsSignIn): вход начинается сам, один раз, флаг снимается', async () => {
@@ -334,6 +398,21 @@ describe('AccountPanel: удаление', () => {
     fireEvent.click(button(S.customProviders.deleteConfirmButton));
     await waitFor(() => expect(onDeleted).toHaveBeenCalled());
     expect(bridge.calls[0]).toEqual({ method: 'providers.deleteCustom', params: { id: 'custom-claude-2', removeFolder: true } });
+  });
+
+  it('папка с живыми сессиями (conflict): текст про сессии вместо «conflicting state», форма остаётся', async () => {
+    bridge.setHandler('providers.deleteCustom', () => {
+      throw encodeIpcError({ code: 'conflict', message: 'Claude Code 2 has running sessions: stop them before deleting its folder' });
+    });
+    const onDeleted = vi.fn();
+    useProvidersStore.setState({ providers: [account()] });
+    render(<Bound id="custom-claude-2" onDeleted={onDeleted} />);
+    fireEvent.click(button('Delete'));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Also delete its folder' }));
+    fireEvent.click(button(S.customProviders.deleteConfirmButton));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe('This account has running sessions — stop them before deleting its folder.');
+    expect(onDeleted).not.toHaveBeenCalled();
   });
 });
 

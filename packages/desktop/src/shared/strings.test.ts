@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PAGE_DATA_NOTE } from '@parley/core';
+import { ACCOUNT_MIN_VERSION_CLAUDE, PAGE_DATA_NOTE } from '@parley/core';
 import type { ErrorCode, HostNotice, NoticeKind } from '@parley/protocol';
 import { errorText, noticeText, providerName, S, startErrorText } from './strings.js';
 
@@ -400,5 +400,11 @@ it('S.island.donePeek — выглядывающий остров «✅ N», б�
 describe('пометка данных страницы', () => {
   it('PAGE_DATA_NOTE core равна S.contextFile.pageDataNote', () => {
     expect(PAGE_DATA_NOTE).toBe(S.contextFile.pageDataNote);
+  });
+});
+
+describe('аккаунты подписки: минимальная версия CLI (спека подписок 10)', () => {
+  it('текст «нужен Claude Code» называет ту же версию, что ACCOUNT_MIN_VERSION_CLAUDE ядра', () => {
+    expect(S.accounts.needsCli('Claude Code 2')).toBe(`Claude Code 2 requires Claude Code ${ACCOUNT_MIN_VERSION_CLAUDE} or newer`);
   });
 });

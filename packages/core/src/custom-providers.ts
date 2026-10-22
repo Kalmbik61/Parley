@@ -266,12 +266,30 @@ export function customProviderEntry(record: CustomEndpointRecord, home = parleyH
 
 const ACCOUNT_BASE_NAME = { 'claude-account': 'Claude Code', 'codex-account': 'Codex' } as const;
 
+const accountSlugBase = (kind: CustomAccountRecord['kind']): string =>
+  kind === 'claude-account' ? `${CUSTOM_PROVIDER_PREFIX}claude` : `${CODEX_ACCOUNT_PREFIX}codex`;
+
+/** Номер из id, выданного `defaultAccountSlug` (`custom-claude-3` → 3); другой id — `null`. */
+function accountNumberOf(kind: CustomAccountRecord['kind'], id: string): number | null {
+  const prefix = `${accountSlugBase(kind)}-`;
+  if (!id.startsWith(prefix)) return null;
+  const digits = id.slice(prefix.length);
+  return /^[1-9]\d*$/.test(digits) ? Number(digits) : null;
+}
+
 /**
- * Стандартное имя следующего аккаунта: глобальный живёт без номера (К1), добавленные — «Claude Code 2», «Codex 2», …
- * Номер — число аккаунтов этого CLI в `records` плюс 2; `endpoint` и аккаунты другого CLI не считаются.
+ * Стандартное имя аккаунта: глобальный живёт без номера (К1), добавленные — «Claude Code 2», «Codex 2», … Номер берётся
+ * из id (`custom-claude-3` → «Claude Code 3»): имя следует за slug, и после удалений два аккаунта не получают одно имя
+ * (спека подписок 5.1, решение 7). Id нестандартный или не передан — число аккаунтов этого CLI в `records` плюс 2;
+ * `endpoint` и аккаунты другого CLI не считаются.
  */
-export function defaultAccountLabel(kind: CustomAccountRecord['kind'], records: readonly CustomProviderRecord[]): string {
-  return `${ACCOUNT_BASE_NAME[kind]} ${records.filter((record) => record.kind === kind).length + 2}`;
+export function defaultAccountLabel(
+  kind: CustomAccountRecord['kind'],
+  records: readonly CustomProviderRecord[],
+  id?: string,
+): string {
+  const n = (id === undefined ? null : accountNumberOf(kind, id)) ?? records.filter((record) => record.kind === kind).length + 2;
+  return `${ACCOUNT_BASE_NAME[kind]} ${n}`;
 }
 
 /**
@@ -279,7 +297,7 @@ export function defaultAccountLabel(kind: CustomAccountRecord['kind'], records: 
  * свободный в `taken`. Имя в id не входит: оно меняется, а id и папка аккаунта нет.
  */
 export function defaultAccountSlug(kind: CustomAccountRecord['kind'], taken: ReadonlySet<string>): string {
-  const base = kind === 'claude-account' ? `${CUSTOM_PROVIDER_PREFIX}claude` : `${CODEX_ACCOUNT_PREFIX}codex`;
+  const base = accountSlugBase(kind);
   for (let n = 2; ; n += 1) {
     const candidate = `${base}-${n}`;
     if (!taken.has(candidate)) return candidate;
@@ -287,14 +305,14 @@ export function defaultAccountSlug(kind: CustomAccountRecord['kind'], taken: Rea
 }
 
 /**
- * Имя аккаунта: своё или стандартное (спека подписок 5.9, одно место вычисления). Если запись есть в `records`,
- * считаются только аккаунты до неё — тогда её номер не меняется, когда появляются следующие; новой записи
- * (в списке её ещё нет) достаётся номер за всеми.
+ * Имя аккаунта: своё или стандартное (спека подписок 5.9, одно место вычисления). Стандартное следует за номером в id;
+ * счёт аккаунтов — запасной путь для нестандартного id: тогда, если запись есть в `records`, считаются только аккаунты
+ * до неё (номер не меняется, когда появляются следующие), а новой записи (в списке её ещё нет) достаётся номер за всеми.
  */
 export function accountLabel(record: CustomAccountRecord, records: readonly CustomProviderRecord[]): string {
   if (record.label !== '') return record.label;
   const at = records.findIndex((item) => item.id === record.id);
-  return defaultAccountLabel(record.kind, at === -1 ? records : records.slice(0, at));
+  return defaultAccountLabel(record.kind, at === -1 ? records : records.slice(0, at), record.id);
 }
 
 /**

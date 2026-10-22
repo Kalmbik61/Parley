@@ -37,6 +37,7 @@ export interface SignInTerminalProps {
 
 export function SignInTerminal({ provider, running }: SignInTerminalProps): JSX.Element {
   const dark = useUiStore((state) => state.dark);
+  const frameRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sendSizeRef = useRef<(() => void) | null>(null);
   const runningRef = useRef(running);
@@ -60,6 +61,9 @@ export function SignInTerminal({ provider, running }: SignInTerminalProps): JSX.
     // Вход начался или Settings открыли посреди него: код из браузера вставляется без лишнего клика.
     term.focus();
     fit.fit();
+    // Терминал появляется под формой вместе со входом; при 800×500 он уходил за нижний край панели — ссылку входа не
+    // видно, код вставлять некуда (спека подписок 10). Прокручивается минимум, чтобы рамка с терминалом целиком была на виду.
+    frameRef.current?.scrollIntoView?.({ block: 'nearest' });
 
     const sendSize = (): void => {
       if (!runningRef.current) return;
@@ -119,6 +123,7 @@ export function SignInTerminal({ provider, running }: SignInTerminalProps): JSX.
 
   return (
     <div
+      ref={frameRef}
       data-sign-in-terminal=""
       role="group"
       aria-label={S.accounts.terminalLabel}

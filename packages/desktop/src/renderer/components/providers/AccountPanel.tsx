@@ -16,7 +16,7 @@ import { useUiStore } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
 import { Checkbox } from '../../ui/checkbox.js';
 import { Input } from '../../ui/input.js';
-import { accountOf, kindOf } from './custom-provider-draft.js';
+import { accountOf, nextAccountNumber } from './custom-provider-draft.js';
 import { SignInTerminal } from './SignInTerminal.js';
 
 export interface AccountPanelProps {
@@ -52,6 +52,9 @@ export function AccountPanel({ provider, onSaved, onDeleted }: AccountPanelProps
   const signedIn = account?.signedIn ?? null;
   const signingIn = account?.signingIn === true;
   const showTerminal = provider !== null && (runs > 0 || signingIn);
+  // CLI старше минимума или его нет (`needs: 'cli'`, спека подписок 10): состояние входа не узнать и войти нечем — вместо
+  // «Checking…» и кнопки Sign in форма называет требование.
+  const cliProblem = provider !== null && provider.needs === 'cli' ? S.accounts.needsCli(provider.label) : null;
 
   useEffect(
     () => () => {
@@ -78,9 +81,14 @@ export function AccountPanel({ provider, onSaved, onDeleted }: AccountPanelProps
     };
   }, [provider?.id, signedIn]);
 
-  /** Только код ошибки: текст хоста может содержать локальный путь. */
-  const fail = (err: unknown, action: string, current: number): void => {
-    if (current === generation.current) setError(errorText(decodeIpcError(err).code, action));
+  /**
+   * Только код ошибки: текст хоста может содержать локальный путь. `conflict` расшифровывается своим текстом, если он
+   * есть (занятый замок входа, живые сессии при удалении папки): «conflicting state» человеку ничего не говорит.
+   */
+  const fail = (err: unknown, action: string, current: number, conflictText?: string): void => {
+    if (current !== generation.current) return;
+    const { code } = decodeIpcError(err);
+    setError(code === 'conflict' && conflictText !== undefined ? conflictText : errorText(code, action));
   };
 
   const save = async (): Promise<void> => {
@@ -115,7 +123,7 @@ export function AccountPanel({ provider, onSaved, onDeleted }: AccountPanelProps
       await window.parley.call('providers.signIn', { provider: provider.id });
       if (current === generation.current) setStarted(true);
     } catch (err: unknown) {
-      fail(err, S.accounts.signInStartFailed, current);
+      fail(err, S.accounts.signInStartFailed, current, S.accounts.signInBusy);
       if (current === generation.current) setRuns(0);
       // Строка списка помечена входом по ожиданию (`beginSignIn`): правду о ней знает хост.
       await reload().catch(() => {});
@@ -162,7 +170,7 @@ export function AccountPanel({ provider, onSaved, onDeleted }: AccountPanelProps
       await reload();
       if (current === generation.current) onDeleted();
     } catch (err: unknown) {
-      fail(err, S.accounts.deleteFailed, current);
+      fail(err, S.accounts.deleteFailed, current, S.accounts.deleteRunning);
     } finally {
       if (current === generation.current) setBusy(false);
     }
@@ -176,20 +184,23 @@ export function AccountPanel({ provider, onSaved, onDeleted }: AccountPanelProps
     const ui = useUiStore.getState();
     if (!ui.settingsSignIn || ui.settingsProvider !== provider.id) return;
     useUiStore.setState({ settingsSignIn: false });
-    if (signedIn !== true && !signingIn) void signIn();
+    if (signedIn !== true && !signingIn && cliProblem === null) void signIn();
   }, [provider?.id, signInRequested]);
 
-  // Стандартное имя нового аккаунта — только подсказка в поле: настоящее имя выдаёт хост при сохранении (спека 5.9).
-  const defaultName = S.accounts.defaultName(providers.filter((row) => kindOf(row.custom) === 'claude-account').length + 2);
+  // Стандартное имя нового аккаунта — только подсказка в поле: настоящее имя выдаёт хост при сохранении (спека 5.9), с тем
+  // же номером, что в выданном slug (решение 7).
+  const defaultName = S.accounts.defaultName(nextAccountNumber(providers.map((row) => row.id)));
   const folder = account?.folder ?? S.customProviders.folderFallback;
   const state =
     signingIn
       ? { key: 'signing-in', text: S.accounts.signingIn }
-      : signedIn === true
-        ? { key: 'signed-in', text: S.accounts.signedIn }
-        : signedIn === false
-          ? { key: 'not-signed-in', text: S.accounts.notSignedIn }
-          : { key: 'unknown', text: S.accounts.checking };
+      : cliProblem !== null
+        ? { key: 'needs-cli', text: cliProblem }
+        : signedIn === true
+          ? { key: 'signed-in', text: S.accounts.signedIn }
+          : signedIn === false
+            ? { key: 'not-signed-in', text: S.accounts.notSignedIn }
+            : { key: 'unknown', text: S.accounts.checking };
 
   return (
     <div className="space-y-3 text-sm text-foreground" data-account-form={provider?.id ?? 'new'}>
@@ -223,7 +234,7 @@ export function AccountPanel({ provider, onSaved, onDeleted }: AccountPanelProps
 
       {provider === null ? null : (
         <p className="flex flex-wrap items-baseline gap-x-2 text-xs">
-          <span data-account-state={state.key} className="font-medium">
+          <span data-account-state={state.key} className="min-w-0 break-words font-medium">
             {state.text}
           </span>
           {/* Длинные значения при 800×500 (спека подписок 10): почта без мест переноса не должна раздвигать панель. */}
@@ -265,7 +276,7 @@ export function AccountPanel({ provider, onSaved, onDeleted }: AccountPanelProps
             <Button type="button" size="sm" variant="outline" onClick={() => void cancelSignIn()}>
               {S.accounts.cancel}
             </Button>
-          ) : signedIn === true ? (
+          ) : cliProblem !== null ? null : signedIn === true ? (
             <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void signOut()}>
               {S.accounts.signOut}
             </Button>

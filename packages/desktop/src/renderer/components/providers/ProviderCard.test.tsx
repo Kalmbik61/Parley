@@ -585,4 +585,22 @@ describe('ProviderCard — аккаунт подписки (спека подп�
     expect(screen.getByText('Checking…')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
   });
+
+  it('CLI старше минимума (needs: cli): карточка называет требование; ни «Checking…», ни Sign in; Open in Settings остаётся', () => {
+    const { container } = render(
+      <ProviderCard provider={account({ signedIn: null }, { needs: 'cli', version: '2.1.302' })} onReload={async () => {}} onRestartHost={() => {}} />,
+    );
+    expect(screen.getByText('Claude Code 2 requires Claude Code 2.1.304 or newer')).toBeTruthy();
+    expect(container.querySelector('[data-account-needs-cli]')).toBeTruthy();
+    expect(screen.queryByText('Checking…')).toBeNull();
+    expect(screen.queryByText('Not signed in')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open in Settings' })).toBeTruthy();
+    expect(screen.getByText('2.1.302')).toBeTruthy();
+  });
+
+  it('CLI в порядке (needs: sign-in): требования к версии нет', () => {
+    const { container } = render(<ProviderCard provider={account()} onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(container.querySelector('[data-account-needs-cli]')).toBeNull();
+  });
 });
