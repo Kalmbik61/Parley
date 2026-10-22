@@ -1781,7 +1781,7 @@ describe('хуки Codex', () => {
   });
 
   it('первый хук сессии Codex — decisions window; PermissionRequest удерживается и отвечается решением окна', async () => {
-    start({ codexApprovals: async () => true });
+    start({ codexHooks: async () => true });
     const client = fakeClient();
     service.subscribe(REF, client);
     send(hook('SessionStart', { source: 'startup' }));
@@ -1797,7 +1797,7 @@ describe('хуки Codex', () => {
   });
 
   it('дельта несёт decisions, когда пришёл первый хук', async () => {
-    start({ codexApprovals: async () => true });
+    start({ codexHooks: async () => true });
     const client = fakeClient();
     service.subscribe(REF, client);
     await service.snapshot(REF);
@@ -1810,7 +1810,7 @@ describe('хуки Codex', () => {
   it('хуков нет за 15 с после старта процесса — decisions terminal, лента на журнале работает', async () => {
     vi.useFakeTimers();
     try {
-      start({ codexHookGraceMs: 15_000, codexApprovals: async () => true });
+      start({ codexHookGraceMs: 15_000, codexHooks: async () => true });
       fakes.emitStart(REF);
       await vi.advanceTimersByTimeAsync(15_000);
       expect((await service.snapshot(REF)).decisions).toBe('terminal');
@@ -1823,7 +1823,7 @@ describe('хуки Codex', () => {
     vi.useFakeTimers();
     try {
       fakes = fakeFeedDeps([]);
-      start({ codexHookGraceMs: 15_000, codexApprovals: async () => true });
+      start({ codexHookGraceMs: 15_000, codexHooks: async () => true });
       fakes.emitStart(REF);
       await vi.advanceTimersByTimeAsync(1_000);
       fakes.setSessions([{ ref: REF, provider: 'codex' }]);
@@ -1834,10 +1834,10 @@ describe('хуки Codex', () => {
     }
   });
 
-  it('настройка codexApprovals выключена — таймера доверия нет, decisions не задан', async () => {
+  it('режим не parley (хуки не нужны) — таймера доверия нет, decisions не задан', async () => {
     vi.useFakeTimers();
     try {
-      start({ codexHookGraceMs: 15_000, codexApprovals: async () => false });
+      start({ codexHookGraceMs: 15_000, codexHooks: async () => false });
       fakes.emitStart(REF);
       await vi.advanceTimersByTimeAsync(60_000);
       expect((await service.snapshot(REF)).decisions).toBeUndefined();
@@ -1846,10 +1846,31 @@ describe('хуки Codex', () => {
     }
   });
 
+  // Настоящие таймеры: настройка читается с диска (`loadConfig`), и под фальшивыми таймерами это чтение не поспевает за их ходом.
+  const decisionsAfterGrace = async (mode: string): Promise<unknown> => {
+    process.env['PARLEY_CODEX_WRITE_APPROVALS'] = mode;
+    try {
+      start({ codexHookGraceMs: 30 });
+      fakes.emitStart(REF);
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      return (await service.snapshot(REF)).decisions;
+    } finally {
+      delete process.env['PARLEY_CODEX_WRITE_APPROVALS'];
+    }
+  };
+
+  it('без опции хуки берутся из настройки: codexWriteApprovals = parley — таймер доверия есть', async () => {
+    expect(await decisionsAfterGrace('parley')).toBe('terminal');
+  });
+
+  it('без опции хуки берутся из настройки: codexWriteApprovals = auto — таймера доверия нет', async () => {
+    expect(await decisionsAfterGrace('auto')).toBeUndefined();
+  });
+
   it('хук пришёл раньше срока — терминалом сессия не становится', async () => {
     vi.useFakeTimers();
     try {
-      start({ codexHookGraceMs: 15_000, codexApprovals: async () => true });
+      start({ codexHookGraceMs: 15_000, codexHooks: async () => true });
       fakes.emitStart(REF);
       await vi.advanceTimersByTimeAsync(1_000);
       send(hook('SessionStart', { source: 'startup' }));
@@ -1863,7 +1884,7 @@ describe('хуки Codex', () => {
   it('удержание PermissionRequest Codex — не дольше 590 с, потом карточка stale и пустой ответ', async () => {
     vi.useFakeTimers();
     try {
-      start({ codexApprovals: async () => true });
+      start({ codexHooks: async () => true });
       send(hook('SessionStart'));
       const held = send(permissionBash('ls'));
       vi.advanceTimersByTime(590_000);
@@ -1876,7 +1897,7 @@ describe('хуки Codex', () => {
   });
 
   it('хук без карточки получает пустой ответ сразу', () => {
-    start({ codexApprovals: async () => true });
+    start({ codexHooks: async () => true });
     const request = send(hook('SessionStart'));
     expect(request.responses).toEqual([{}]);
   });
@@ -1895,7 +1916,7 @@ describe('хуки Codex', () => {
         .join('\n') + '\n',
     );
     fakes.setLogFile(file);
-    start({ codexApprovals: async () => true });
+    start({ codexHooks: async () => true });
     await service.snapshot(REF);
     send(hook('SessionStart', { source: 'startup' }));
     const held = send(permissionBash('pnpm test'));
@@ -1915,7 +1936,7 @@ describe('хуки Codex', () => {
   });
 
   it('Codex у приглашения (активность idle) — удержанный PermissionRequest продолжает ждать окна', async () => {
-    start({ codexApprovals: async () => true });
+    start({ codexHooks: async () => true });
     send(hook('SessionStart', { source: 'startup' }));
     const held = send(permissionBash('pnpm test'));
 
@@ -1928,7 +1949,7 @@ describe('хуки Codex', () => {
   });
 
   it('выход процесса Codex по-прежнему отпускает удержанный PermissionRequest: карточка stale, хуку {}', async () => {
-    start({ codexApprovals: async () => true });
+    start({ codexHooks: async () => true });
     send(hook('SessionStart', { source: 'startup' }));
     const held = send(permissionBash('pnpm test'));
     fakes.emitExit(REF);
@@ -1938,7 +1959,7 @@ describe('хуки Codex', () => {
   });
 
   it('Codex закрыл запрос сам — карточка elsewhere', async () => {
-    start({ codexApprovals: async () => true });
+    start({ codexHooks: async () => true });
     const request = send(permissionBash('ls'));
     request.abandon();
     const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'permission');
@@ -1947,7 +1968,7 @@ describe('хуки Codex', () => {
 
   it('PostToolUse со скриншотом в tool_response идёт через тот же обход: файл в imagesDir, хук отвечен', async () => {
     const imagesDir = path.join(await tempRoot(), 'feed-images');
-    start({ codexApprovals: async () => true, imagesDir });
+    start({ codexHooks: async () => true, imagesDir });
     const png = makePng();
 
     const request = send(

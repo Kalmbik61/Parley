@@ -49,7 +49,7 @@ const CODEX_TUI_ARGS = [
   'tui.notification_condition="always"',
 ];
 /** Всё, что codex получает при запуске без единой подстановки. */
-const CODEX_STATIC_ARGS = ['--no-daemon', '-a', 'on-request', ...CODEX_TUI_ARGS];
+const CODEX_STATIC_ARGS = ['--no-daemon', ...CODEX_TUI_ARGS];
 
 describe('реестр провайдеров', () => {
   it('claude возобновляет сессию через --resume', () => {
@@ -78,7 +78,7 @@ describe('реестр провайдеров', () => {
 
   it('без id запускается чистая сессия', () => {
     expect(startCommand(PROVIDERS.claude)).toEqual({ command: 'claude', args: [] });
-    // У codex и без подстановок остаются его постоянные флаги (`--no-daemon`, `-a on-request`, `tui.*`).
+    // У codex и без подстановок остаются его постоянные флаги (`--no-daemon`, `tui.*`).
     expect(startCommand(PROVIDERS.codex)).toEqual({ command: 'codex', args: CODEX_STATIC_ARGS });
   });
 
@@ -261,8 +261,6 @@ describe('подстановка аргументов запуска', () => {
       command: 'codex',
       args: [
         '--no-daemon',
-        '-a',
-        'on-request',
         '-c',
         'mcp_servers.parley={command="parley-mcp"}',
         ...CODEX_TUI_ARGS,
@@ -375,8 +373,6 @@ describe('модель и усилие новой сессии (дизайн к�
       }).args,
     ).toEqual([
       '--no-daemon',
-      '-a',
-      'on-request',
       '-c',
       'mcp_servers.parley={command="parley-mcp"}',
       ...CODEX_TUI_ARGS,
@@ -394,8 +390,6 @@ describe('модель и усилие новой сессии (дизайн к�
         .args,
     ).toEqual([
       '--no-daemon',
-      '-a',
-      'on-request',
       '-c',
       'mcp_servers.parley={}',
       ...CODEX_TUI_ARGS,
@@ -1313,8 +1307,6 @@ describe('codex: запуск и возобновление (спека комн
       command: 'codex',
       args: [
         '--no-daemon',
-        '-a',
-        'on-request',
         '-c',
         subs.mcpConfig,
         '-c',
@@ -1505,18 +1497,20 @@ describe('codex: запуск и возобновление (спека комн
     expect(PROVIDERS.codex.runner.resumeArgs).not.toContain('-a');
   });
 
-  it('политика одобрений — явно on-request при запуске, а обходов нет ни в запуске, ни в resume', () => {
-    const launched = startCommand(PROVIDERS.codex, subs).args;
-    expect(launched[launched.indexOf('-a') + 1]).toBe('on-request');
+  it('политика одобрений — ключом -c из {approvals}, без флага -a; обходов нет ни в запуске, ни в resume', () => {
+    const withPolicy = { ...subs, approvals: ['-c', 'approval_policy="on-request"'] };
+    const launched = startCommand(PROVIDERS.codex, withPolicy).args;
+    expect(launched).toContain('approval_policy="on-request"');
+    expect(launched).not.toContain('-a');
     expect(launched).toContain('--no-daemon');
     for (const args of [
       launched,
-      resumeCommand(PROVIDERS.codex, { ...subs, providerSessionId: 'uuid-1' }).args,
+      resumeCommand(PROVIDERS.codex, { ...withPolicy, providerSessionId: 'uuid-1' }).args,
     ]) {
       const line = args.join(' ');
-      // Вызовы `parley` при `never` отклоняются, а остальное — самовыдача прав или доверия.
+      // Без `{approvals}` и `{trust}` политику и доверие шаблон не выдаёт: остальное — самовыдача прав или доверия.
       for (const forbidden of [
-        /(^| )-a never/,
+        /(^| )-a( |$)/,
         /--ask-for-approval/,
         /--dangerously/,
         /--yolo/,
@@ -1540,8 +1534,38 @@ describe('codex: запуск и возобновление (спека комн
     const template = [
       ...(PROVIDERS.codex.runner.args ?? []),
       ...(PROVIDERS.codex.runner.resumeArgs ?? []),
-    ].join(' ').replaceAll('{codexHooks}', '');
+    ].join(' ').replaceAll('{codexHooks}', '').replaceAll('{approvals}', '').replaceAll('{trust}', '');
     expect(template).not.toMatch(/never|dangerous|yolo|full-auto|danger-full|projects|hooks|trust/i);
+    // Политика — только подстановкой `{approvals}`: литерального `-a …` в шаблонах нет.
+    expect(template).not.toMatch(/(^| )-a( |$)/);
+  });
+
+  it('{approvals} и {trust} — самостоятельные элементы шаблона: разворачиваются парами -c при запуске и resume', () => {
+    const approvals = ['-c', 'approval_policy="never"'];
+    const trust = ['-c', 'projects={}'];
+    for (const template of [PROVIDERS.codex.runner.args, PROVIDERS.codex.runner.resumeArgs]) {
+      expect(template).toContain('{approvals}');
+      expect(template).toContain('{trust}');
+      // Сразу за `-c {sandbox}`: политика и доверие идут вместе с песочницей.
+      const at = template!.indexOf('{sandbox}');
+      expect(template!.slice(at, at + 3)).toEqual(['{sandbox}', '{approvals}', '{trust}']);
+    }
+    const subsWithPolicy = { ...subs, approvals, trust };
+    for (const { args } of [
+      startCommand(PROVIDERS.codex, subsWithPolicy),
+      resumeCommand(PROVIDERS.codex, { ...subsWithPolicy, providerSessionId: 'uuid-1' }),
+    ]) {
+      expect(args).toContain('approval_policy="never"');
+      expect(args).toContain('projects={}');
+      expect(args).not.toContain('on-request');
+      // Пары развёрнуты целиком: перед значением стоит свой `-c`.
+      expect(args[args.indexOf('approval_policy="never"') - 1]).toBe('-c');
+      expect(args[args.indexOf('projects={}') - 1]).toBe('-c');
+    }
+    // Подстановка без значения выпадает, соседний флаг остаётся чужим.
+    const bare = startCommand(PROVIDERS.codex, subs).args;
+    expect(bare.join(' ')).not.toMatch(/approval_policy|projects=/);
+    expect(bare).toContain('--no-daemon');
   });
 
   it('реестр не содержит подстановки {notify}', () => {

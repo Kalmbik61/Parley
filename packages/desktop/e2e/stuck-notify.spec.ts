@@ -5,6 +5,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
+import { seedTrust } from './trust-seed.js';
 
 /**
  * Проба «застрявших сессий» на коде как есть (задача 0 плана 2026-10-12, спека 10 и 10.1, п. 1 и 3): шлёт ли окно
@@ -103,6 +104,8 @@ test.describe('уведомление «needs you» у Codex в комнате (
       PARLEY_TERMINAL_RENDERER: 'dom',
       PARLEY_NOTIFICATIONS: 'log',
     };
+    // Сессия Codex в проекте без согласия удерживалась бы до решения человека (спека 2026-10-21, 4.2).
+    await seedTrust(home, project);
     const electronApp = await electron.launch({ args: [mainEntry], env });
     app = electronApp;
     const window = await electronApp.firstWindow();

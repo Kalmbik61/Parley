@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SkillCatalog } from '../skills/catalog.js';
 import type { NativeSkill } from '../skills/types.js';
+import { trustArgs } from './codex-policy.js';
 import { nativeContextMatches, projectNativeSkillConfigArgs, readNativeContext, readNativeSkillCatalog, stampNativeContext, writeNativeContext, writeNativeSkillCatalog, type NativeContextDescriptor } from './native-context.js';
 let project: string;
 let descriptor: NativeContextDescriptor;
@@ -81,6 +82,55 @@ describe('local participant context descriptor', () => {
     expect(projectNativeSkillConfigArgs(['-c', 'project_root_markers=["../escape"]'])).toBeNull();
     await writeNativeContext(project, work, session, { ...descriptor, configArgs: args! });
     expect(await readFile(file(), 'utf8')).not.toContain('SECRET');
+  });
+});
+
+describe('пара доверия к папке в configArgs дескриптора', () => {
+  const pair = (folder: string, extra = ''): string[] => ['-c', `projects={${JSON.stringify(folder)}={trust_level="trusted"${extra}}}`];
+  const skills = ['-c', 'skills.config=[{name="review",enabled=false}]', '-c', 'project_root_markers=[".git"]'];
+
+  it('принимает пару в форме trustArgs: одна запись, две записи, рядом с проекцией навыков', async () => {
+    const worktree = path.join(project, '.claude/worktrees/wt');
+    for (const configArgs of [
+      pair(project),
+      trustArgs({ project, cwd: project }),
+      trustArgs({ project, cwd: worktree }),
+      [...skills, ...trustArgs({ project, cwd: worktree })],
+      [...trustArgs({ project, cwd: project }), ...skills],
+    ]) {
+      expect(await writeNativeContext(project, work, session, { ...descriptor, configArgs }), configArgs.join(' ')).toBe(true);
+      expect((await readNativeContext(project, work, session))?.configArgs).toEqual(configArgs);
+    }
+    // Путь с кавычкой и обратным слэшем проходит так же, как его пишет trustArgs.
+    const odd = trustArgs({ project: path.join(project, 'a "q" \\b'), cwd: path.join(project, 'a "q" \\b') });
+    expect(await writeNativeContext(project, work, session, { ...descriptor, configArgs: odd })).toBe(true);
+  });
+
+  it('отвергает относительный путь, лишние ключи, иной уровень доверия, третью запись, вторую пару, комментарий и чужую форму', async () => {
+    const a = path.join(project, 'a'); const b = path.join(project, 'b'); const c = path.join(project, 'c');
+    const entry = (folder: string) => `${JSON.stringify(folder)}={trust_level="trusted"}`;
+    const rejected: Array<[string, string[]]> = [
+      ['относительный путь', pair('rel/path')],
+      ['относительный второй путь', ['-c', `projects={${entry(a)},"rel"={trust_level="trusted"}}`]],
+      ['лишний ключ записи', pair(a, ',secret="SECRET"')],
+      ['иной уровень доверия', ['-c', `projects={${JSON.stringify(a)}={trust_level="untrusted"}}`]],
+      ['третья запись', ['-c', `projects={${entry(a)},${entry(b)},${entry(c)}}`]],
+      ['вторая пара доверия', [...pair(a), ...pair(b)]],
+      ['лишний ключ верхнего уровня', ['-c', `projects={${entry(a)}}\nsandbox_mode="danger-full-access"`]],
+      ['комментарий', ['-c', `projects={${entry(a)}} # SECRET`]],
+      ['пробелы вне формы', ['-c', `projects = {${entry(a)}}`]],
+      ['пустая таблица', ['-c', 'projects={}']],
+      ['подключ projects.<путь>', ['-c', `projects.x={trust_level="trusted"}`]],
+      ['не -c', ['--config', `projects={${entry(a)}}`]],
+      ['пара доверия с мусором навыков', [...skills.slice(0, 2), ...pair(a), '-c', 'sandbox_mode="danger-full-access"']],
+    ];
+    for (const [name, configArgs] of rejected) {
+      expect(await writeNativeContext(project, work, session, { ...descriptor, configArgs }), name).toBe(false);
+    }
+    // Отказ не оставляет прежнего дескриптора подтверждённым: чтение пусто.
+    await rm(file(), { force: true });
+    expect(await writeNativeContext(project, work, session, { ...descriptor, configArgs: pair('rel/path') })).toBe(false);
+    expect(await readNativeContext(project, work, session)).toBeNull();
   });
 });
 

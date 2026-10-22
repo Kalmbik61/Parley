@@ -11,13 +11,15 @@
  * держится ещё `RETRACT_MORPH_MS` (пока форма сжимается), выдвинули раньше — уходит в тот же миг. Убранный остров — та же
  * форма, сжатая в брусок; с непросмотренными Done (просмотренные в число не входят) вместо бруска в ней «✅ N». Поверх
  * убранной формы лежит прозрачная зона нажатия `island-tab` (подпись, размер, клик и потяжка вниз).
+ * Карточки согласия на папку: начальный `consents.list` и событие `consents.changed` показывают карточку раньше запросов
+ * ленты, она выдвигает остров и звучит один раз, не даёт острову убраться в покое, Trust уходит в `consents.decide`.
  * Пауза кнопок решения и анимация формы проверены в `IslandView.test.tsx`.
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedCard } from '@parley/core';
-import { refKey } from '@parley/protocol';
+import { refKey, type ConsentCard } from '@parley/protocol';
 import type { IslandApi, IslandBridge, IslandConfig } from '../../shared/island.js';
 import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
@@ -25,6 +27,7 @@ import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { DONE_HOLD_MS, IDLE_RETRACT_MS, IslandApp, RETRACT_MORPH_MS } from './IslandApp.js';
 import { HOST_IDLE, useAssistantStore } from './assistant/store.js';
+import { useConsentsStore } from './consents/store.js';
 import { sessionLabels } from './model.js';
 import { PULL_EXPAND_PX } from './IslandTab.js';
 import { useIslandReplies } from './replies.js';
@@ -76,9 +79,10 @@ function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
 }
 
 /** Мост острова поверх подставного моста окна: хост «подключён», `works.list` и `feed.snapshot` отвечают из таблиц выше. */
-function setup(config: Partial<IslandConfig> = {}, entries = ENTRIES) {
+function setup(config: Partial<IslandConfig> = {}, entries = ENTRIES, consents: ConsentCard[] = []) {
   const fake = createFakeBridge();
   fake.setHandler('works.list', () => ({ entries, branches: {} }) as never);
+  fake.setHandler('consents.list', () => ({ items: consents }));
   fake.setHandler('feed.snapshot', ({ ref: target }) => ({ items: CARDS[target.sessionId] ?? [], revision: 1, mode: null, decisions: 'window' }) as never);
   const island = islandApi(config);
   const bridge: IslandBridge = { call: fake.call, on: fake.on, onStatus: fake.onStatus, activitySnapshot: fake.activitySnapshot, island };
@@ -119,7 +123,7 @@ function setup(config: Partial<IslandConfig> = {}, entries = ENTRIES) {
       vi.mocked(island.onAssistantBlur).mock.calls.at(-1)![0]();
     });
   };
-  return { island, bridge, blocked, working, disconnect, reconnect, hover, assistantOpen, assistantBlur };
+  return { fake, island, bridge, blocked, working, disconnect, reconnect, hover, assistantOpen, assistantBlur };
 }
 
 /** Помощник включён в настройках острова. */
@@ -156,6 +160,7 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   useIslandRequests.getState().clear();
   useIslandReplies.getState().prune(new Set());
+  useConsentsStore.getState().replace([]);
   useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
   useActivityStore.setState({ byRef: {}, loaded: false });
   useAssistantStore.setState({ host: HOST_IDLE, open: false, collapsed: false, byHover: false, input: 'idle', level: 0, draft: '', notice: null, cardError: null });
@@ -1223,5 +1228,134 @@ describe('Done на острове', () => {
     hover(true);
     expect(screen.getByTestId('island-done')).toBeTruthy();
     expect(screen.getByTestId('island-counters').textContent).toBe('✅ 1 done');
+  });
+});
+
+describe('согласия на папку', () => {
+  const CONSENT: ConsentCard = {
+    id: 'c-01', kind: 'folder-trust', folder: '/tmp/proj', projectPath: '/tmp/proj',
+    requestedBy: { source: 'agent', sessionId: 's-01', label: 'S01 a' }, at: '2026-10-21T10:00:00.000Z', state: 'pending',
+  };
+  const SECOND: ConsentCard = { ...CONSENT, id: 'c-02', folder: '/tmp/other', projectPath: '/tmp/other' };
+
+  it('начальный consents.list: карточка видна, остров выдвинут', async () => {
+    const { fake, bridge } = setup({}, ENTRIES, [CONSENT]);
+    render(<IslandApp bridge={bridge} />);
+    expect(await screen.findByTestId('island-consent-trust')).toBeTruthy();
+    expect(fake.calls.some((call) => call.method === 'consents.list')).toBe(true);
+    expect(screen.getByTestId('island-consent-folder').textContent).toBe('/tmp/proj');
+    await waitFor(() => expect(isRetracted()).toBe(false));
+  });
+
+  it('consents.changed: upsert показывает карточку, removed убирает', async () => {
+    const { fake, bridge } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByTestId('island-consent-trust')).toBeNull();
+    act(() => fake.emit('consents.changed', { upsert: [CONSENT], removed: [] }));
+    expect(await screen.findByTestId('island-consent-trust')).toBeTruthy();
+    act(() => fake.emit('consents.changed', { upsert: [], removed: ['c-01'] }));
+    expect(screen.queryByTestId('island-consent-trust')).toBeNull();
+    expect(screen.getByTestId('island-pill')).toBeTruthy();
+  });
+
+  it('подписка на consents.changed снимается при размонтировании', async () => {
+    const { fake, bridge } = setup();
+    const view = render(<IslandApp bridge={bridge} />);
+    await act(async () => { await Promise.resolve(); });
+    view.unmount();
+    act(() => fake.emit('consents.changed', { upsert: [CONSENT], removed: [] }));
+    expect(useConsentsStore.getState().items).toEqual([]);
+  });
+
+  it('новая карточка выдвигает убранный остров и звучит один раз; повтор той же и решённая — без звука', async () => {
+    const { island, fake, bridge } = setup({ sound: true });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(isRetracted()).toBe(true);
+    act(() => fake.emit('consents.changed', { upsert: [CONSENT], removed: [] }));
+    await waitFor(() => expect(isRetracted()).toBe(false));
+    expect(island.beep).toHaveBeenCalledTimes(1);
+    act(() => fake.emit('consents.changed', { upsert: [{ ...CONSENT, folder: '/tmp/proj' }], removed: [] }));
+    expect(island.beep).toHaveBeenCalledTimes(1);
+    act(() => fake.emit('consents.changed', { upsert: [SECOND], removed: [] }));
+    await waitFor(() => expect(island.beep).toHaveBeenCalledTimes(2));
+  });
+
+  it('без Sound карточка выдвигает остров молча', async () => {
+    const { island, fake, bridge } = setup({ sound: false });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await Promise.resolve(); });
+    act(() => fake.emit('consents.changed', { upsert: [CONSENT], removed: [] }));
+    await waitFor(() => expect(isRetracted()).toBe(false));
+    expect(island.beep).not.toHaveBeenCalled();
+  });
+
+  it('согласие раньше запроса ленты: запрос ждёт, пока карточку не закроют', async () => {
+    const { fake, bridge, blocked } = setup();
+    render(<IslandApp bridge={bridge} />);
+    blocked('s-01');
+    await screen.findByTitle('Run: rm -rf build');
+    act(() => fake.emit('consents.changed', { upsert: [CONSENT], removed: [] }));
+    expect(await screen.findByTestId('island-consent-trust')).toBeTruthy();
+    expect(screen.queryByTestId('island-allow')).toBeNull();
+    act(() => fake.emit('consents.changed', { upsert: [], removed: ['c-01'] }));
+    expect(await screen.findByTestId('island-allow')).toBeTruthy();
+  });
+
+  it('Trust после паузы зовёт consents.decide и показывает «Done ✓»', async () => {
+    const { fake, bridge } = setup({}, ENTRIES, [CONSENT]);
+    fake.setHandler('consents.decide', () => ({ applied: true, state: 'allowed' }));
+    render(<IslandApp bridge={bridge} />);
+    const trust = (await screen.findByTestId('island-consent-trust')) as HTMLButtonElement;
+    await waitFor(() => expect(trust.disabled).toBe(false));
+    fireEvent.click(trust);
+    expect((await screen.findByTestId('island-consent-done')).textContent).toBe('Done ✓');
+    expect(fake.calls).toContainEqual({ method: 'consents.decide', params: { id: 'c-01', decision: 'allow' } });
+  });
+
+  it('Deny — decision: "deny"; ответили в другом месте — «Already answered»', async () => {
+    const { fake, bridge } = setup({}, ENTRIES, [CONSENT]);
+    fake.setHandler('consents.decide', () => ({ applied: false, state: 'allowed' }));
+    render(<IslandApp bridge={bridge} />);
+    const deny = (await screen.findByTestId('island-consent-deny')) as HTMLButtonElement;
+    await waitFor(() => expect(deny.disabled).toBe(false));
+    fireEvent.click(deny);
+    expect(await screen.findByText('Already answered')).toBeTruthy();
+    expect(fake.calls).toContainEqual({ method: 'consents.decide', params: { id: 'c-01', decision: 'deny' } });
+  });
+
+  it('хост отключился — карточки уходят; вернулся — список читается заново', async () => {
+    const { fake, bridge, disconnect, reconnect } = setup({}, ENTRIES, [CONSENT]);
+    render(<IslandApp bridge={bridge} />);
+    await screen.findByTestId('island-consent-trust');
+    disconnect();
+    expect(useConsentsStore.getState().items).toEqual([]);
+    reconnect();
+    expect(await screen.findByTestId('island-consent-trust')).toBeTruthy();
+    expect(fake.calls.filter((call) => call.method === 'consents.list')).toHaveLength(2);
+  });
+
+  describe('покой', () => {
+    const advance = (ms: number): void => {
+      act(() => {
+        vi.advanceTimersByTime(ms);
+      });
+    };
+
+    it('пока карточка ждёт, остров в покое не убирается; закрыли — отсчёт обычный', () => {
+      vi.useFakeTimers();
+      const { bridge } = setup();
+      render(<IslandApp bridge={bridge} />);
+      act(() => useConsentsStore.getState().replace([CONSENT]));
+      expect(isRetracted()).toBe(false);
+      advance(IDLE_RETRACT_MS * 3);
+      expect(isRetracted()).toBe(false);
+      act(() => useConsentsStore.getState().replace([]));
+      advance(IDLE_RETRACT_MS - 1);
+      expect(isRetracted()).toBe(false);
+      advance(1);
+      expect(isRetracted()).toBe(true);
+    });
   });
 });

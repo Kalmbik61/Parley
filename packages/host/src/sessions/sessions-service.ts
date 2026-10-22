@@ -35,9 +35,12 @@ import {
   findRunnerBinary,
   GitStateError,
   InvalidRevisionError,
+  CODEX_AUTO_MIN_VERSION,
   codexFeedSupported,
+  codexHooksWanted,
   feedSupported,
   isGitRepo,
+  isTrusted,
   loadConfig,
   loadProviders,
   isClaudeCode,
@@ -73,10 +76,13 @@ import {
   startSession,
   SYSTEM,
   transitionSession,
+  trustKey,
   updateMap,
   workPaths,
   writeBrief,
+  type CodexWriteApprovals,
   type EffortLevel,
+  type ParleyConfig,
   type LaunchPlan,
   type SpawnLimits,
   type ProviderEntry,
@@ -84,6 +90,7 @@ import {
 import { HOST_ERROR_REASONS, refKey } from '@parley/protocol';
 import type { SessionRef, WorksSnapshot } from '@parley/protocol';
 import type { ActivityService, SessionLive } from '../activity/activity-service.js';
+import type { ConsentsService } from '../consents/consents-service.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import { serialized } from '../methods/custom-providers.js';
@@ -129,6 +136,12 @@ export interface CreateSessionInput {
 
 export type LaunchMode = 'launch' | 'resume' | 'new';
 
+/** Исход `launch()`: `held` — запуск Codex остановлен до согласия человека на папку проекта (спека 2026-10-21, 4.2). */
+export type LaunchOutcome = 'started' | 'held';
+
+/** Созданная сессия; `held` — её запуск ждёт согласия на папку, запись `pending` уже в карте. */
+export type CreatedSession = SessionRef & { held?: 'folder-trust' };
+
 /**
  * Попыток записать старт процесса в карту, пока `map.lock` занят: подъём всей работы после перезапуска хоста
  * держал замок дольше 3 с (2026-10-09), а процесс к этому моменту уже идёт.
@@ -150,9 +163,13 @@ export interface LaunchChoice {
 }
 
 export interface SessionsService {
-  create(input: CreateSessionInput): Promise<SessionRef>;
-  /** `prompt` — указатель первым ходом `resume`; `model` и `effort` перекрывают выбор из карты. */
-  launch(ref: SessionRef, mode: LaunchMode, options?: LaunchChoice): Promise<void>;
+  create(input: CreateSessionInput): Promise<CreatedSession>;
+  /**
+   * `prompt` — указатель первым ходом `resume`; `model` и `effort` перекрывают выбор из карты. `held` — запуск Codex
+   * остановлен до согласия на папку (карточка заведена, бюджет не занят, ничего не создано); `started` — и при раннем
+   * выходе (запуск уже идёт, процесс жив).
+   */
+  launch(ref: SessionRef, mode: LaunchMode, options?: LaunchChoice): Promise<LaunchOutcome>;
   stop(ref: SessionRef): Promise<void>;
   /** Насовсем: `closed` в карте и остановка PTY, если он жив. */
   close(ref: SessionRef): Promise<void>;
@@ -201,9 +218,14 @@ export interface SessionsFeedOptions {
   roleCatalog?: (cwd: string) => Promise<RoleCatalog>;
   /**
    * Команда хуков Codex — путь запускателя `PARLEY_HOME/bin/parley-codex-hook` (спека 2026-10-07, 5.6). Зовётся только
-   * при включённой настройке `codexApprovals` и адресе приёмника; нет — хуки Codex не включаются.
+   * в режиме `parley` настройки `codexWriteApprovals` и при адресе приёмника; нет — хуки Codex не включаются.
    */
   codexHookCommand?: () => Promise<string | undefined>;
+  /**
+   * Согласия человека на папку (спека 2026-10-21, 4.2): запуск Codex в проекте без записи в `trust.json` останавливается
+   * и заводит карточку. Без сервиса (изолированные тесты) такой запуск не удерживается.
+   */
+  consents?: Pick<ConsentsService, 'request'>;
   /**
    * Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): адрес эндпоинта (`null` — не слушает) и токены на
    * запуск. Всем провайдерам, в отличие от хуков ленты; без него сессии запускаются без инструмента `browser_open`.
@@ -251,6 +273,20 @@ export function createSwitchLock(): SwitchLock {
     }
   };
   return Object.assign(lock, { held: (ref: SessionRef): boolean => running.has(refKey(ref)) });
+}
+
+/**
+ * Режим одобрений пишущих ролей Codex для запуска (спека 2026-10-21, 5.2). `auto` требует Codex не ниже
+ * `CODEX_AUTO_MIN_VERSION`: на старом (и на версии, которую не удалось узнать) незнакомый ключ `approvals_reviewer`
+ * сорвал бы старт сессии, поэтому запуск идёт как `terminal`. Прочие режимы от версии не зависят. Сравнение версий —
+ * то же, что у `codexFeedSupported`.
+ */
+export function effectiveCodexWriteApprovals(
+  config: Pick<ParleyConfig, 'codexWriteApprovals'>,
+  version: string | null,
+): CodexWriteApprovals {
+  if (config.codexWriteApprovals !== 'auto') return config.codexWriteApprovals;
+  return version !== null && feedSupported(version, CODEX_AUTO_MIN_VERSION) ? 'auto' : 'terminal';
 }
 
 export function createSessionsService(
@@ -424,22 +460,56 @@ export function createSessionsService(
 
   /**
    * Адрес приёмника хуков для запуска — `claude` не ниже `FEED_MIN_VERSION` и `codex` не ниже
-   * `CODEX_FEED_MIN_VERSION`, у Codex ещё и при включённой настройке `codexApprovals` (хукам нужно доверие человека,
-   * спека 2026-10-07, решение 9). Версия — проба старта хоста по команде провайдера (короткая, ждём её); нет версии,
-   * старый CLI и прочие провайдеры — без хуков, окно покажет терминал.
+   * `CODEX_FEED_MIN_VERSION`, у Codex ещё и в режиме `parley` настройки `codexWriteApprovals` (хукам нужно доверие
+   * человека, спека 2026-10-07, решение 9; `codexHooksWanted`). Версия — проба старта хоста по команде провайдера
+   * (короткая, ждём её); нет версии, старый CLI и прочие провайдеры — без хуков, окно покажет терминал.
    */
   async function feedHookUrl(provider: string): Promise<string | undefined> {
     const codex = provider === 'codex';
     if ((!isClaudeCode(provider) && !codex) || hooks === undefined || providerVersions === undefined) return undefined;
     const url = hooks.url();
     if (url === null) return undefined;
-    if (codex && !(await loadConfig()).config.codexApprovals) return undefined;
+    if (codex && !codexHooksWanted((await loadConfig()).config)) return undefined;
     await providerVersions.ready;
     const entry = (await loadProviders())[provider];
     if (entry === undefined) return undefined;
     const version = providerVersions.get(entry.runner.command);
     if (version === null) return undefined;
     return (codex ? codexFeedSupported(version) : feedSupported(version)) ? url : undefined;
+  }
+
+  /** Версия CLI провайдера из пробы старта хоста (ждём её, как `feedHookUrl`); проб нет или версия не узнана — `null`. */
+  async function providerVersionOf(provider: string): Promise<string | null> {
+    if (providerVersions === undefined) return null;
+    await providerVersions.ready;
+    const entry = (await loadProviders())[provider];
+    return entry === undefined ? null : providerVersions.get(entry.runner.command);
+  }
+
+  // Уведомление о старом Codex — раз на процесс хоста, а не на каждый запуск.
+  let autoUnsupportedNoticed = false;
+
+  /**
+   * Режим одобрений запуска Codex (спека 2026-10-21, 5.2): настройка и проба версии. `auto` на старом Codex —
+   * `terminal`, и об этом одно уведомление `codex-auto-unsupported` на процесс хоста.
+   */
+  async function codexApprovalsFor(ref: SessionRef, provider: string): Promise<CodexWriteApprovals> {
+    const { config } = await loadConfig();
+    const version = await providerVersionOf(provider);
+    const mode = effectiveCodexWriteApprovals(config, version);
+    if (config.codexWriteApprovals === 'auto' && mode === 'terminal' && !autoUnsupportedNoticed) {
+      autoUnsupportedNoticed = true;
+      host.log.warn('codex: режим auto не поддержан этой версией, запуск как terminal', { version, min: CODEX_AUTO_MIN_VERSION });
+      if (version !== null) {
+        host.broadcast('host.notice', {
+          kind: 'codex-auto-unsupported',
+          ref,
+          text: `Codex ${version} is older than ${CODEX_AUTO_MIN_VERSION}: Auto-review is unavailable, approvals are asked in the terminal. Update Codex to use it.`,
+          at: new Date().toISOString(),
+        });
+      }
+    }
+    return mode;
   }
 
   async function readyProvider(provider: string): Promise<ProviderEntry> {
@@ -487,17 +557,18 @@ export function createSessionsService(
     ref: SessionRef,
     mode: LaunchMode,
     options: LaunchChoice = {},
-  ): Promise<void> {
+  ): Promise<LaunchOutcome> {
     const key = refKey(ref);
-    if (launching.has(key) || closing.has(key)) return;
+    if (launching.has(key) || closing.has(key)) return 'started';
     const live = pty.get(ref);
     if (live !== undefined) {
       await repairLive(ref, live);
-      return;
+      return 'started';
     }
     launching.add(key);
     const timer = createStepTimer();
     let failed = true;
+    let held = false;
     let loggedProvider: string | undefined;
     // Резерв слота бюджета держится до исхода: процесс стартовал — `spent`, любой отказ до старта — `released`.
     let attemptId: string | null = null;
@@ -523,6 +594,38 @@ export function createSessionsService(
       // Before planned worktree creation, settings, skills and hook registration; repeated every launch.
       // Первым: отказ готовности провайдера не оставляет следа в карте, в том числе резерва бюджета.
       const entry = await timer.step('provider', () => readyProvider(session.provider));
+
+      // Согласие человека на папку (спека 2026-10-21, 4.2) — до бюджета, worktree, скилла и PARLEY.md: удержанный запуск
+      // ничего не оставляет. Только Codex: у Claude, GLM и своих провайдеров экрана доверия Parley не заменяет.
+      // Нет согласия — карточка и `held`; есть — ключи доверия считаются ниже, уже после создания worktree.
+      let trusted = false;
+      if (session.provider === 'codex') {
+        trusted = await timer.step('trust', () => isTrusted(ref.projectPath));
+        if (!trusted && feed.consents !== undefined) {
+          const by = options.by ?? 'human';
+          // Кто просил: подъём и ручной resume — `resume`, человек — `launch`, агент (`create_session`, автозапуск) —
+          // `agent`; сессия просившего — родитель записи или тот, чей id пришёл как `by` (`create_session` ставит его).
+          const requester = session.parent ?? (map.sessions.some((candidate) => candidate.id === by) ? by : undefined);
+          feed.consents.request(
+            {
+              projectPath: ref.projectPath,
+              folder: await trustKey(ref.projectPath),
+              requestedBy: {
+                source: mode === 'resume' ? 'resume' : by === 'human' ? 'launch' : 'agent',
+                ...(requester === undefined ? {} : { sessionId: requester }),
+                workId: ref.workId,
+                label: session.label,
+              },
+            },
+            // `new` — быстрая сессия без промпта; после согласия она поднимается обычным запуском.
+            { ref, mode: mode === 'resume' ? 'resume' : 'launch', by },
+          );
+          held = true;
+          failed = false;
+          return 'held';
+        }
+      }
+
       // Допуск — до worktree, скилла и процесса: исчерпанный бюджет не создаёт ничего.
       attemptId = await timer.step('reserve', () => reserveLaunch(ref, session.parent, mode, options.by ?? 'human'));
 
@@ -599,8 +702,23 @@ export function createSessionsService(
       const agentUrl = feed.agent?.url() ?? null;
       if (agentUrl !== null && feed.agent !== undefined) agentChannel = { url: agentUrl, token: feed.agent.register(ref) };
       const planFn = mode === 'resume' ? planResume : mode === 'new' ? planNew : planLaunch;
+      // Политика одобрений и ключи доверия — только Codex. Ключи — realpath: cwd сессии (worktree) к этому месту уже
+      // создан на диске, а до создания `/tmp` и `/private/tmp` дали бы разные ключи, и Codex показал бы экран доверия.
+      // Поля `trust` и `codexWriteApprovals` появляются в `LaunchOptions` core вместе с подстановками `{trust}` и
+      // `{approvals}` (задача 5): спред их не проверяет.
+      const trust = trusted
+        ? {
+            project: await trustKey(ref.projectPath),
+            cwd: await trustKey(session.worktree?.path ?? ref.projectPath),
+          }
+        : undefined;
+      const codexApprovals = session.provider === 'codex'
+        ? await timer.step('approvals', () => codexApprovalsFor(ref, session.provider))
+        : undefined;
       const plan = await timer.step('plan', () => planFn(ref.projectPath, ref.workId, session, {
         channel: false,
+        ...(trust === undefined ? {} : { trust }),
+        ...(codexApprovals === undefined ? {} : { codexWriteApprovals: codexApprovals }),
         ...(roleCatalog === undefined ? {} : { roleCatalog }),
         ...(hookUrl === undefined ? {} : { hookUrl }),
         ...(codexHookCommand === undefined ? {} : { codexHookCommand }),
@@ -759,6 +877,7 @@ export function createSessionsService(
       } finally {
         starting.delete(key);
       }
+      return 'started';
     } catch (error) {
       if (error instanceof HostError) host.broadcast('host.notice', {
         kind: 'launch-failed', ref,
@@ -778,6 +897,7 @@ export function createSessionsService(
         by: options.by ?? 'human',
         ...(loggedProvider === undefined ? {} : { provider: loggedProvider }),
         ...timer.result(),
+        ...(held ? { held: true } : {}),
         ...(failed ? { failed: true } : {}),
       });
     }
@@ -786,16 +906,17 @@ export function createSessionsService(
   /**
    * Сессию, заведённую `sessions.create`, тут же откроют в терминале — в
    * отличие от той, что поднята письмом, отмечаем её увиденной сразу,
-   * чтобы до первого `pty.attach` она не мигала непрочитанной.
+   * чтобы до первого `pty.attach` она не мигала непрочитанной. Запуск Codex, удержанный до согласия на папку,
+   * отдаёт `held`: запись `pending` в карте уже есть, процесс стартует сам после решения человека.
    */
   async function createInteractive(
     ref: SessionRef,
     mode: LaunchMode,
     choice: LaunchChoice,
-  ): Promise<SessionRef> {
-    await launch(ref, mode, choice);
+  ): Promise<CreatedSession> {
+    const outcome = await launch(ref, mode, choice);
     activity.markSeen(ref);
-    return ref;
+    return outcome === 'held' ? { ...ref, held: 'folder-trust' } : ref;
   }
 
   /**
@@ -853,7 +974,7 @@ export function createSessionsService(
     if (brief && planned) await writeBrief(ref.projectPath, updated, ref.sessionId);
   }
 
-  async function create(input: CreateSessionInput): Promise<SessionRef> {
+  async function create(input: CreateSessionInput): Promise<CreatedSession> {
     const timer = createStepTimer();
     const logged: { sessionId?: string } = {};
     let failed = true;
@@ -877,7 +998,7 @@ export function createSessionsService(
     input: CreateSessionInput,
     timer: ReturnType<typeof createStepTimer>,
     logged: { sessionId?: string },
-  ): Promise<SessionRef> {
+  ): Promise<CreatedSession> {
     const { projectPath, workId, provider, label, task, parent, worktree, lean } = input;
     if (input.requestedBy !== undefined && (workId === null || !task.trim())) throw new HostError('bad_request', 'Agent-created sessions require a workspace and task.');
     const agentConfig = input.requestedBy === undefined ? undefined : (await loadConfig()).config;
@@ -933,6 +1054,10 @@ export function createSessionsService(
       return timer.step('launch', () => createInteractive(ref, 'new', choice));
     }
 
+    // Codex в проекте без согласия человека: запись `pending` создаётся, а резерв бюджета не берётся — его возьмёт
+    // `launch()` после решения (спека 2026-10-21, 4.2). `launch()` проверит согласие сам, здесь — только чтобы не занять слот.
+    const awaitsConsent = await timer.step('trust', async () =>
+      provider === 'codex' && feed.consents !== undefined && !(await isTrusted(projectPath)));
     let admitted: { ref: SessionRef; attemptId: string } | undefined;
     try {
       const sessionId = await timer.step('record', () => createPendingSession(projectPath, workId, {
@@ -954,15 +1079,24 @@ export function createSessionsService(
         const roomUsed = room === null ? 0 : map.resources?.spawnedByRoom[room] ?? 0;
         if (used >= limits.workNewSessions) throw new ResourceDeniedError('new-sessions', 'work', used, limits.workNewSessions);
         if (room !== null && roomUsed >= limits.roomNewSessions) throw new ResourceDeniedError('new-sessions', 'room', roomUsed, limits.roomNewSessions);
-        const attempt = reserveAttempt(map, { kind: 'launch', actor: caller.id, session: sessionId, owner: generation, limits });
-        admitted = { ref: { projectPath, workId, sessionId }, attemptId: attempt.id };
+        if (!awaitsConsent) {
+          const attempt = reserveAttempt(map, { kind: 'launch', actor: caller.id, session: sessionId, owner: generation, limits });
+          admitted = { ref: { projectPath, workId, sessionId }, attemptId: attempt.id };
+        } else {
+          // Резерв слота возьмёт `launch()` после решения человека; счётчики созданных сессий растут уже сейчас.
+          map.resources ??= { seq: 0, spawned: 0, spawnedByRoom: {}, attempts: [] };
+        }
         map.resources!.spawned += 1;
         if (room !== null) map.resources!.spawnedByRoom[room] = roomUsed + 1;
       }));
       logged.sessionId = sessionId;
       const ref = { projectPath, workId, sessionId };
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, true));
-      return await timer.step('launch', () => createInteractive(ref, 'launch', choice));
+      const created = await timer.step('launch', () => createInteractive(ref, 'launch', choice));
+      // Согласие пропало между проверкой и запуском (отозвано): резерв, взятый при создании, возвращается.
+      const reserved = admitted as { ref: SessionRef; attemptId: string } | undefined;
+      if (created.held !== undefined && reserved !== undefined) await settleLaunch(reserved.ref, reserved.attemptId, 'released');
+      return created;
     } catch (error) {
       if (admitted !== undefined) {
         await settleLaunch(admitted.ref, admitted.attemptId, 'released');

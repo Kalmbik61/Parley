@@ -5,6 +5,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Loc
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
+import { seedTrust } from './trust-seed.js';
 
 /**
  * Комната с застрявшими участниками (спека застрявших сессий 2026-10-12, раздел 9 «E2E» и раздел 8; задача 11 плана,
@@ -258,6 +259,8 @@ test.describe('комната с застрявшими участниками �
       PARLEY_LIMIT_RETURN_GRACE_MS: '500',
       ...extraEnv,
     };
+    // Сессия Codex в проекте без согласия удерживалась бы до решения человека (спека 2026-10-21, 4.2).
+    await seedTrust(home, project);
     const app = await electron.launch({ args: [mainEntry, `--force-device-scale-factor=${dpr}`], env });
     running = app;
     const window = await app.firstWindow();

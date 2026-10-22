@@ -1,5 +1,5 @@
 import { readNativeContext, readNativeSkillCatalog } from './native-context.js';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -494,16 +494,16 @@ describe('план запуска', () => {
     expect(plan.env).toEqual(sessionEnv(workPaths(project, workId).dir, sessionId));
   });
 
-  it('codex: хуки (-c hooks.…) только при codexApprovals, hookUrl и команде — и при запуске, и при resume', async () => {
+  it('codex: хуки (-c hooks.…) только в режиме parley настройки codexWriteApprovals, при hookUrl и команде — и при запуске, и при resume', async () => {
     const { workId, sessionId } = await pending('codex');
     const session = await sessionOf(workId, sessionId);
     const options = { hookUrl: 'http://127.0.0.1:41234/hooks', codexHookCommand: '/home/me/.parley/bin/parley-codex-hook' };
     const hookArgs = (args: string[]): string[] => args.filter((arg) => arg.startsWith('hooks.'));
 
-    // Флаг выключен (умолчание): ни одного hooks.* даже с адресом и командой.
+    // Режим по умолчанию (auto): ни одного hooks.* даже с адресом и командой.
     expect(hookArgs((await planLaunch(project, workId, session, options)).args)).toEqual([]);
 
-    setEnv('PARLEY_CODEX_APPROVALS', '1');
+    setEnv('PARLEY_CODEX_WRITE_APPROVALS', 'parley');
     const launched = await planLaunch(project, workId, session, options);
     expect(hookArgs(launched.args)).toHaveLength(7);
     for (const arg of hookArgs(launched.args)) expect(launched.args[launched.args.indexOf(arg) - 1]).toBe('-c');
@@ -518,7 +518,7 @@ describe('план запуска', () => {
   it('codex: текст хуков побайтно одинаков между запусками', async () => {
     const { workId, sessionId } = await pending('codex');
     const session = await sessionOf(workId, sessionId);
-    setEnv('PARLEY_CODEX_APPROVALS', '1');
+    setEnv('PARLEY_CODEX_WRITE_APPROVALS', 'parley');
     const options = { hookUrl: 'http://127.0.0.1:1/hooks', codexHookCommand: '/h/bin/parley-codex-hook' };
     const first = (await planLaunch(project, workId, session, options)).args.filter((arg) => arg.startsWith('hooks.'));
     const second = (await planLaunch(project, workId, session, { ...options, hookUrl: 'http://127.0.0.1:2/hooks' })).args.filter((arg) => arg.startsWith('hooks.'));
@@ -1189,14 +1189,14 @@ describe('правило приоритета браузера Parley в зап�
     expect(withRule.replace(`\n\n${BROWSER_PRIORITY_RULE}`, '')).toBe(without);
   });
 
-  it('Claude и GLM с каналом: в файле --settings заранее разрешены одиннадцать browser_*, а evaluate, cookies и storage спрашиваются; без канала правил нет', async () => {
-    const allowed = ['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'downloads'].map((op) => `mcp__parley__browser_${op}`);
+  it('Claude и GLM с каналом: в файле --settings заранее разрешены все четырнадцать browser_*, спрашивать нечего; без канала правил нет', async () => {
+    const allowed = ['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'evaluate', 'cookies', 'storage', 'downloads'].map((op) => `mcp__parley__browser_${op}`);
     for (const provider of ['claude', 'glm']) {
       const { workId, sessionId } = await pending('claude');
       const session = { ...(await sessionOf(workId, sessionId)), provider };
       const withChannel = await planLaunch(project, workId, session, { agent });
       const file = withChannel.args[withChannel.args.indexOf('--settings') + 1] as string;
-      expect(JSON.parse(await readFile(file, 'utf8')).permissions, provider).toEqual({ allow: allowed, ask: ['evaluate', 'cookies', 'storage'].map((op) => `mcp__parley__browser_${op}`) });
+      expect(JSON.parse(await readFile(file, 'utf8')).permissions, provider).toEqual({ allow: allowed });
       const without = await planLaunch(project, workId, session);
       const plain = without.args[without.args.indexOf('--settings') + 1];
       if (plain !== undefined) expect(JSON.parse(await readFile(plain, 'utf8')), provider).not.toHaveProperty('permissions');
@@ -1491,10 +1491,12 @@ describe('common session layer delivery', () => {
     const launch = await planLaunch(project, workId, session);
     expect(launch.args[0]).toBe('CUSTOM');
     expect(launch.args).toHaveLength(2);
-    expect(launch.diagnostics?.map((warning) => warning.code)).toEqual(['provider-override-gap']);
+    // Два пробела шаблона: слоя нет ({developerInstructions}) и политике с доверием передаться нечем ({approvals}, {trust}).
+    expect(launch.diagnostics?.map((warning) => warning.code)).toEqual(['provider-override-gap', 'provider-override-gap']);
+    expect(launch.diagnostics?.[1]?.message).toContain('{trust}/{approvals}');
     const resume = await planResume(project, workId, { ...session, providerSessionId: 'id' }, { prompt: 'POINTER' });
     expect(resume.args).toEqual(['AGAIN', 'id', 'POINTER']);
-    expect(resume.warnings).toHaveLength(1);
+    expect(resume.warnings).toHaveLength(2);
     await expect(planLaunch(project, workId, session, { layer: { role: 'MANDATORY ROLE' } }))
       .rejects.toThrow('role-delivery-unavailable');
   });
@@ -2102,8 +2104,10 @@ describe('сокращение родного списка скиллов вме
       const plan = await planner(project, workId, { ...(await sessionOf(workId, sessionId)), providerSessionId: 'native-thread' });
       expect(plan.args.join(' ')).not.toContain('skills.include_instructions');
       expect(plan.env).not.toHaveProperty('PARLEY_SKILL_LIST_REDUCED');
-      expect(plan.diagnostics?.map((warning) => warning.code)).toEqual(['provider-override-gap']);
+      // Свой шаблон без {skillCatalog} и без {trust}/{approvals}: два пробела, первым идёт каталог навыков.
+      expect(plan.diagnostics?.map((warning) => warning.code)).toEqual(['provider-override-gap', 'provider-override-gap']);
       expect(plan.diagnostics?.[0]?.message).toContain('{skillCatalog}');
+      expect(plan.diagnostics?.[1]?.message).toContain('{trust}/{approvals}');
       const layer = JSON.parse(plan.args.find((arg) => arg.startsWith('developer_instructions='))!.slice('developer_instructions='.length)) as string;
       expect(layer).toContain('find_skill — skills by task, if needed.');
       expect(layer).not.toContain('no native skill list');
@@ -2118,7 +2122,8 @@ describe('сокращение родного списка скиллов вме
     } }));
     const plan = await planNew(project, workId, await sessionOf(workId, sessionId));
     expect(plan.args.join(' ')).not.toContain('skills.include_instructions');
-    expect(plan.diagnostics?.map((warning) => warning.code)).toEqual([]);
+    // Про каталог навыков жаловаться нечего ({skillCatalog} в шаблоне есть); остался только пробел {trust}/{approvals}.
+    expect(plan.diagnostics?.map((warning) => warning.message)).toEqual([expect.stringContaining('{trust}/{approvals}')]);
     expect(plan.warnings.join(' ')).toContain('full native skill list');
   });
 
@@ -2504,7 +2509,8 @@ describe('lean-режим в плане запуска', () => {
       claude: { args: ['--mcp-config', '{mcpConfig}', '--settings', '{settingsFile}', '--append-system-prompt', '{systemPrompt}', '{prompt}'] },
       codex: { args: ['-c', '{mcpConfig}', '-c', '{developerInstructions}', '{prompt}'] },
     };
-    const gap = (plan: { diagnostics?: Array<{ code: string; message: string }> }) => plan.diagnostics?.filter(warning => warning.code === 'provider-override-gap') ?? [];
+    // Только пробел {leanFlags}: свой шаблон Codex без {trust}/{approvals} получает ещё и свою диагностику.
+    const gap = (plan: { diagnostics?: Array<{ code: string; message: string }> }) => plan.diagnostics?.filter(warning => warning.code === 'provider-override-gap' && warning.message.includes('{leanFlags}')) ?? [];
     for (const provider of ['claude', 'codex'] as const) {
       const lean = await sessionWith(provider, true);
       const notLean = await sessionWith(provider, false);
@@ -2693,5 +2699,208 @@ describe('предостережение о ссылках своего пров
   it('сессия аккаунта без link — правила нет', async () => {
     const { workId, session } = await withAccount({ ...account, link: false });
     expect(layerOf((await planLaunch(project, workId, session)).args)).not.toContain('settings folder is');
+  });
+});
+
+describe('Codex: политика одобрений, доверие к папке и короткий набор инструментов (спека 2026-10-21)', () => {
+  const hookOptions = { hookUrl: 'http://127.0.0.1:41234/hooks', codexHookCommand: '/home/me/.parley/bin/parley-codex-hook' };
+  const codexLayer = (args: string[]): string => {
+    const arg = args.find((value) => value.startsWith('developer_instructions='));
+    if (arg === undefined) throw new Error('developer layer missing');
+    return JSON.parse(arg.slice('developer_instructions='.length)) as string;
+  };
+  const hooksOf = (args: string[]): string[] => codexConfigValues(args).filter((value) => value.startsWith('hooks.'));
+  const trustOf = (args: string[]): string[] => codexConfigValues(args).filter((value) => value.startsWith('projects='));
+  /** Сессия Codex со встроенной ролью (или без неё) и запись с id треда для `resume`. */
+  async function codexWith(role?: string) {
+    const created = await createWork(project, { title: 'Policy', goal: '' });
+    const id = await createPendingSession(project, created.work.id, { provider: 'codex', label: '', task: 'x',
+      ...(role === undefined ? {} : { role: { source: 'builtin' as const, name: role } }) });
+    return { workId: created.work.id, sessionId: id, session: { ...(await sessionOf(created.work.id, id)), providerSessionId: 'native-thread' } };
+  }
+  const planners = [['planNew', planNew], ['planLaunch', planLaunch], ['planResume', planResume]] as const;
+
+  it.each(planners)('пишущая роль и сессия без роли при auto (%s): on-request, авторевьюер, workspace-write; ни -a, ни хуков', async (_name, planner) => {
+    setEnv('PARLEY_CODEX_WRITE_APPROVALS', 'auto');
+    for (const role of ['executor', undefined]) {
+      const { workId, session } = await codexWith(role);
+      const plan = await planner(project, workId, session, hookOptions);
+      const values = codexConfigValues(plan.args);
+      expect(values, String(role)).toEqual(expect.arrayContaining(['approval_policy="on-request"', 'approvals_reviewer="auto_review"', 'sandbox_mode="workspace-write"']));
+      expect(plan.args, String(role)).not.toContain('-a');
+      expect(hooksOf(plan.args), String(role)).toEqual([]);
+    }
+  });
+
+  it.each(['auto', 'parley', 'terminal'] as const)('роль только для чтения при %s: never и read-only, авторевьюера нет', async (mode) => {
+    setEnv('PARLEY_CODEX_WRITE_APPROVALS', mode);
+    const { workId, session } = await codexWith('critic');
+    for (const [, planner] of planners) {
+      const values = codexConfigValues((await planner(project, workId, session, hookOptions)).args);
+      expect(values).toEqual(expect.arrayContaining(['approval_policy="never"', 'sandbox_mode="read-only"']));
+      expect(values.some((value) => value.startsWith('approvals_reviewer='))).toBe(false);
+      expect(values).not.toContain('approval_policy="on-request"');
+    }
+  });
+
+  it.each(planners)('parley (%s): on-request без авторевьюера и хуки у каждой роли — и пишущей, и только для чтения', async (_name, planner) => {
+    setEnv('PARLEY_CODEX_WRITE_APPROVALS', 'parley');
+    for (const role of ['executor', 'critic']) {
+      const { workId, session } = await codexWith(role);
+      const plan = await planner(project, workId, session, hookOptions);
+      expect(hooksOf(plan.args), role).toEqual(expect.arrayContaining([expect.stringMatching(/^hooks\.PermissionRequest=/)]));
+      expect(codexConfigValues(plan.args).some((value) => value.startsWith('approvals_reviewer=')), role).toBe(false);
+      expect(plan.args, role).not.toContain('-a');
+    }
+    const writer = await codexWith('executor');
+    expect(codexConfigValues((await planner(project, writer.workId, writer.session, hookOptions)).args)).toContain('approval_policy="on-request"');
+    // Без адреса или команды хуков по-прежнему нет.
+    expect(hooksOf((await planner(project, writer.workId, writer.session, { hookUrl: hookOptions.hookUrl })).args)).toEqual([]);
+  });
+
+  it('terminal: on-request без авторевьюера и без хуков', async () => {
+    setEnv('PARLEY_CODEX_WRITE_APPROVALS', 'terminal');
+    const { workId, session } = await codexWith('executor');
+    const plan = await planLaunch(project, workId, session, hookOptions);
+    const values = codexConfigValues(plan.args);
+    expect(values).toContain('approval_policy="on-request"');
+    expect(values.some((value) => value.startsWith('approvals_reviewer='))).toBe(false);
+    expect(hooksOf(plan.args)).toEqual([]);
+  });
+
+  it('режим хоста (проба версии) важнее настройки — и для политики, и для хуков', async () => {
+    const { workId, session } = await codexWith('executor');
+    setEnv('PARLEY_CODEX_WRITE_APPROVALS', 'auto');
+    const lowered = await planLaunch(project, workId, session, { ...hookOptions, codexWriteApprovals: 'terminal' });
+    expect(codexConfigValues(lowered.args).some((value) => value.startsWith('approvals_reviewer='))).toBe(false);
+    expect(hooksOf(lowered.args)).toEqual([]);
+    setEnv('PARLEY_CODEX_WRITE_APPROVALS', 'parley');
+    const overridden = await planLaunch(project, workId, session, { ...hookOptions, codexWriteApprovals: 'auto' });
+    expect(codexConfigValues(overridden.args)).toContain('approvals_reviewer="auto_review"');
+    expect(hooksOf(overridden.args)).toEqual([]);
+  });
+
+  it('resume берёт политику из текущей настройки: смена режима между запусками меняет пары', async () => {
+    const { workId, session } = await codexWith('executor');
+    setEnv('PARLEY_CODEX_WRITE_APPROVALS', 'auto');
+    expect(codexConfigValues((await planResume(project, workId, session)).args)).toContain('approvals_reviewer="auto_review"');
+    setEnv('PARLEY_CODEX_WRITE_APPROVALS', 'terminal');
+    const resumed = await planResume(project, workId, session);
+    expect(codexConfigValues(resumed.args)).toContain('approval_policy="on-request"');
+    expect(codexConfigValues(resumed.args).some((value) => value.startsWith('approvals_reviewer='))).toBe(false);
+  });
+
+  it.each(planners)('доверие (%s): пара projects с realpath проекта; без options.trust — ни одного projects=', async (_name, planner) => {
+    const { workId, session } = await codexWith('executor');
+    const root = await realpath(project);
+    expect(trustOf((await planner(project, workId, session)).args)).toEqual([]);
+    const plan = await planner(project, workId, session, { trust: { project: root, cwd: root } });
+    expect(trustOf(plan.args)).toEqual([`projects={${JSON.stringify(root)}={trust_level="trusted"}}`]);
+    expect(plan.args[plan.args.indexOf(trustOf(plan.args)[0]!) - 1]).toBe('-c');
+    // Не из ~/.codex: пара не пишет в файлы Codex, а стоит только в аргументах.
+    expect(plan.env).not.toHaveProperty('CODEX_HOME');
+  });
+
+  it('доверие при worktree: вторая пара в той же таблице; путь с кавычкой и обратным слэшем экранируется', async () => {
+    const { workId, session } = await codexWith('executor');
+    const project1 = '/tmp/proj "q" \\b';
+    const worktree = '/tmp/proj "q" \\b/.claude/worktrees/wt';
+    const plan = await planLaunch(project, workId, session, { trust: { project: project1, cwd: worktree } });
+    const [arg] = trustOf(plan.args);
+    expect(arg).toBe(`projects={${JSON.stringify(project1)}={trust_level="trusted"},${JSON.stringify(worktree)}={trust_level="trusted"}}`);
+    const table = parseTomlAssignment(arg!).value as Record<string, Record<string, string>>;
+    expect(Object.keys(table)).toEqual([project1, worktree]);
+    expect(table[project1]).toEqual({ trust_level: 'trusted' });
+  });
+
+  it('у Claude и GLM нет ни политики, ни доверия, ни профиля инструментов, ни примеров', async () => {
+    setEnv('PARLEY_CODEX_WRITE_APPROVALS', 'parley');
+    for (const provider of ['claude', 'glm']) {
+      const { workId, sessionId } = await pending('claude');
+      const session = { ...(await sessionOf(workId, sessionId)), provider };
+      const plan = await planLaunch(project, workId, session, { ...hookOptions, trust: { project: '/tmp/p', cwd: '/tmp/p' }, codexWriteApprovals: 'auto' });
+      const joined = plan.args.join('\n');
+      expect(joined, provider).not.toContain('approval_policy');
+      expect(joined, provider).not.toContain('approvals_reviewer');
+      expect(joined, provider).not.toContain('projects=');
+      expect(joined, provider).not.toContain('tools.mcp__parley__');
+      expect(joined, provider).toContain('Memory: remember');
+      const file = plan.args[plan.args.indexOf('--mcp-config') + 1] as string;
+      expect(JSON.parse(await readFile(file, 'utf8')).mcpServers.parley.env, provider).not.toHaveProperty('PARLEY_TOOL_PROFILE');
+    }
+  });
+
+  it.each(planners)('короткий набор (%s): PARLEY_TOOL_PROFILE=short в сервере, примеры вызовов в слое, без фразы о памяти', async (_name, planner) => {
+    const { workId, session } = await codexWith('executor');
+    const plan = await planner(project, workId, session);
+    const server = parseTomlAssignment(plan.args.find((arg) => arg.startsWith('mcp_servers.parley='))!).value as { env: Record<string, string> };
+    expect(server.env.PARLEY_TOOL_PROFILE).toBe('short');
+    expect(server.env.HARNAS_TOOL_PROFILE).toBe('short');
+    const layer = codexLayer(plan.args);
+    expect(layer).toContain('tools.mcp__parley__report(');
+    expect(layer).not.toContain('Memory: remember');
+    expect(layer).toContain('then end the turn; without it the result goes nowhere.');
+  });
+
+  it('пользовательский шаблон Codex без {trust} или без {approvals}: одна диагностика provider-override-gap, свои флаги остаются; с обоими — нет', async () => {
+    const { workId, session } = await codexWith('executor');
+    const own = ['-a', 'never', '-c', '{mcpConfig}', '-c', '{developerInstructions}'];
+    const gaps = (plan: { diagnostics?: Array<{ code: string; message: string }> }) =>
+      (plan.diagnostics ?? []).filter((item) => item.code === 'provider-override-gap' && item.message.includes('{trust}/{approvals}'));
+    const message = 'Custom Codex runner has no {trust}/{approvals}; add these placeholders so Parley can pass folder trust and the approval policy. The runner keeps its own flags.';
+    const trust = { project: '/tmp/p', cwd: '/tmp/p' };
+    for (const [extra, expected] of [[[], 1], [['{approvals}'], 1], [['{trust}'], 1], [['{approvals}', '{trust}'], 0]] as const) {
+      await writeFile(path.join(home, 'providers.json'), JSON.stringify({ codex: { args: [...own, ...extra, '{prompt}'] } }));
+      const plan = await planLaunch(project, workId, session, { trust });
+      expect(gaps(plan), extra.join(',')).toHaveLength(expected);
+      if (expected > 0) {
+        expect(gaps(plan)[0]!.message).toBe(message);
+        expect(plan.warnings).toContain(message);
+      }
+      // Свои флаги шаблона остаются как есть; что подстановкам нечего занять — не сбой запуска.
+      expect(plan.args.slice(0, 2)).toEqual(['-a', 'never']);
+      expect(trustOf(plan.args).length > 0).toBe(extra.includes('{trust}'));
+      expect(codexConfigValues(plan.args).some((value) => value.startsWith('approval_policy=')), extra.join(',')).toBe(extra.includes('{approvals}'));
+    }
+  });
+
+  it('встроенный шаблон Codex не жалуется на пробел {trust}/{approvals}', async () => {
+    const { workId, session } = await codexWith('executor');
+    expect((await planLaunch(project, workId, session)).diagnostics?.filter((item) => item.message.includes('{trust}'))).toEqual([]);
+  });
+
+  it('свой шаблон Codex без {trust}: пары доверия нет ни в аргументах, ни в родном контексте навигатора', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const asked: Array<{ configArgs?: readonly string[] }> = [];
+    codexSkillRoute.catalog = async (options) => { asked.push(options); return codexCatalog; };
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ codex: {
+      args: ['-c', '{mcpConfig}', '-c', '{developerInstructions}', '-c', '{skillCatalog}', '{prompt}'],
+    } }));
+    const { workId, sessionId, session } = await codexWith('executor');
+    const root = await realpath(project);
+    const plan = await planNew(project, workId, session, { trust: { project: root, cwd: root } });
+    expect(plan.args.join('\n')).not.toContain('projects=');
+    const descriptor = (await readNativeContext(project, workId, sessionId))!;
+    expect(descriptor.verified).toBe(true);
+    expect(descriptor.configArgs.join('\n')).not.toContain('projects=');
+    expect(asked[0]?.configArgs).toEqual([]);
+    expect(plan.diagnostics?.some((item) => item.message.includes('{trust}/{approvals}'))).toBe(true);
+  });
+
+  it('родной контекст навигатора получает пару доверия: дескриптор подтверждён, каталог читается с ней же', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const asked: Array<{ configArgs?: readonly string[] }> = [];
+    codexSkillRoute.catalog = async (options) => { asked.push(options); return codexCatalog; };
+    const { workId, sessionId, session } = await codexWith('executor');
+    const root = await realpath(project);
+    const pair = ['-c', `projects={${JSON.stringify(root)}={trust_level="trusted"}}`];
+    const plan = await planNew(project, workId, session, { trust: { project: root, cwd: root } });
+    const descriptor = (await readNativeContext(project, workId, sessionId))!;
+    expect(descriptor.verified).toBe(true);
+    expect(descriptor.configArgs).toEqual(pair);
+    expect(asked[0]?.configArgs).toEqual(pair);
+    // Навигатор жив и у доверенной сессии: родной список убран, предупреждения о неподтверждённом нет.
+    expect(codexConfigValues(plan.args)).toContain(SKILL_FLAG);
+    expect(plan.warnings.join(' ')).not.toContain('full native skill list');
   });
 });

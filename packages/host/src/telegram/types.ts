@@ -79,7 +79,9 @@ export type CardRecord =
       at: string;
       wait?: { kind: 'note'; until: string };
     }
-  | { kind: 'assistant'; proposalId: string; chatId: number; messageId: number; at: string };
+  | { kind: 'assistant'; proposalId: string; chatId: number; messageId: number; at: string }
+  /** Карточка согласия на папку (`consents.*` хоста): решает `consents.decide`, ожидания текста у неё нет. */
+  | { kind: 'consent'; consentId: string; chatId: number; messageId: number; at: string };
 
 export interface LetterRecord {
   projectPath: string;

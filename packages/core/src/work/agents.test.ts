@@ -129,7 +129,16 @@ describe('native runner context consistency', () => {
   it.each(['--sandbox', '-s', '--sandbox=workspace-write', '-sdanger-full-access', '--dangerously-bypass-approvals-and-sandbox', '--yolo', '--approve-for-me', '--not-so-yolo', 'sandbox_mode="danger-full-access"', 'permissions.default="custom"', '--config=sandbox_mode="danger-full-access"', '-csandbox_mode="danger-full-access"', '--config=permissions.default="custom"', '-cpermissions.default="custom"'])('refuses mandatory sandbox conflicts for builtin roles but preserves plain runners (%s)', async literal => {
     const entry = { ...PROVIDERS.codex, runner: { ...PROVIDERS.codex.runner, args: [...PROVIDERS.codex.runner.args!, literal] } };
     await expect(prepareSessionRole(project, entry, { provider: 'codex', roleId: 'builtin:planner' })).rejects.toThrow('role-permissions-unavailable');
-    await expect(prepareSessionRole(project, entry, { provider: 'codex' })).resolves.toMatchObject({ role: null, readOnly: false, sandboxMode: null });
+    // Сессия без роли: `workspace-write` — умолчание Parley, а не требование роли, поэтому конфликт с флагами раннера не отказывает.
+    await expect(prepareSessionRole(project, entry, { provider: 'codex' })).resolves.toMatchObject({ role: null, readOnly: false, sandboxMode: 'workspace-write' });
+  });
+  it('умолчание workspace-write не требует {sandbox} у своего раннера; своя песочница роли из .codex/agents — требует', async () => {
+    const template = ['-c', '{mcpConfig}', '-c', '{developerInstructions}', '{prompt}'];
+    const entry = { ...PROVIDERS.codex, runner: { ...PROVIDERS.codex.runner, args: template, resumeArgs: template } };
+    await expect(prepareSessionRole(project, entry, { provider: 'codex' })).resolves.toMatchObject({ sandboxMode: 'workspace-write' });
+    const own = buildRoleCatalog({ roles: [{ id: 'codex:own', source: 'codex', provider: 'codex', name: 'own', description: '', path: '/fixture.toml', prompt: 'Own.', model: null, effort: null, sandboxMode: 'workspace-write', readOnly: false }], diagnostics: [], partial: false });
+    await expect(prepareSessionRole(project, entry, { provider: 'codex', roleId: 'codex:own' }, own)).rejects.toThrow('role-permissions-unavailable');
+    await expect(prepareSessionRole(project, PROVIDERS.codex, { provider: 'codex', roleId: 'codex:own' }, own)).resolves.toMatchObject({ sandboxMode: 'workspace-write' });
   });
 });
 
@@ -223,6 +232,21 @@ describe('chosen native runner context projection', () => {
   it('supports actual default start/resume templates without reading a fresh registry', () => {
     for (const template of [PROVIDERS.codex.runner.args!, PROVIDERS.codex.runner.resumeArgs!])
       expect(projectSkillRunnerContext(PROVIDERS.codex, template)).toEqual({ verified: true, configArgs: [] });
+  });
+  it('{approvals} и {trust} — служебные подстановки Parley: проверка контекста остаётся, в снимок они не попадают', () => {
+    const template = ['--no-daemon', '-c', '{mcpConfig}', '-c', '{sandbox}', '{approvals}', '{trust}', '{codexHooks}', '{prompt}'];
+    expect(projectSkillRunnerContext(PROVIDERS.codex, template)).toEqual({ verified: true, configArgs: [] });
+    expect(projectSkillRunnerContext(PROVIDERS.codex, ['resume', '{providerSessionId}', '-c', '{sandbox}', '{approvals}', '{trust}', '{prompt}']))
+      .toEqual({ verified: true, configArgs: [] });
+  });
+  it('extraConfigArgs (доверие к папке) дописываются после проекции; у непроверенного шаблона их нет', () => {
+    const trust = ['-c', 'projects={"/p"={trust_level="trusted"}}'];
+    expect(projectSkillRunnerContext(PROVIDERS.codex, PROVIDERS.codex.runner.args!, trust)).toEqual({ verified: true, configArgs: trust });
+    const template = ['-c', 'skills.config=[{name="review",enabled=false}]', '{prompt}'];
+    expect(projectSkillRunnerContext(PROVIDERS.codex, template, trust)).toEqual({ verified: true,
+      configArgs: ['-c', 'skills.config=[{name="review",enabled=false}]', ...trust] });
+    expect(projectSkillRunnerContext(PROVIDERS.codex, ['--profile', 'x'], trust)).toEqual({ verified: false, configArgs: [] });
+    expect(projectSkillRunnerContext(PROVIDERS.claude, PROVIDERS.claude.runner.args!, trust)).toEqual({ verified: false, configArgs: [] });
   });
   it('{skillCatalog} — служебная подстановка Parley: проверка контекста остаётся, в снимок она не попадает', () => {
     const template = ['-c', '{mcpConfig}', '-c', '{skillCatalog}', '-c', 'skills.config=[{name="review",enabled=false}]', '{prompt}'];

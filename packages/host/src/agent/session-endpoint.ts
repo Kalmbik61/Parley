@@ -7,7 +7,7 @@ export const AGENT_SESSIONS_PATH = '/agent/sessions';
 
 export function createSessionEndpoint(options: {
   authenticate(req: IncomingMessage): SessionRef | undefined;
-  create(input: CreateSessionInput): Promise<SessionRef>;
+  create(input: CreateSessionInput): Promise<SessionRef & { held?: 'folder-trust' }>;
 }) {
   return {
     handle(req: IncomingMessage, res: ServerResponse): void {
@@ -55,7 +55,7 @@ export function createSessionEndpoint(options: {
               ...(args['effort'] === undefined ? {} : { effort: args['effort'] as string | null }),
               ...(args['worktree'] === undefined ? {} : { worktree: args['worktree'] as boolean }),
             });
-            reply({ ok: true, result: { sessionId: created.sessionId, provider: args['provider'] } });
+            reply({ ok: true, result: { sessionId: created.sessionId, provider: args['provider'], ...(created.held === undefined ? {} : { held: created.held }) } });
           } catch (error) {
             reply({ ok: false, error: { code: error instanceof Error && 'code' in error ? String(error.code) : 'bad_request', message: error instanceof Error ? error.message : String(error) } });
           }

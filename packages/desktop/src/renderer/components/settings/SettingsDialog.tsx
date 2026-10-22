@@ -42,6 +42,7 @@ import { VoiceSettings } from '../../voice/VoiceSettings.js';
 import { hostMethods } from '../../lib/capabilities.js';
 import { useHostStore } from '../../store/host.js';
 import { AssistantSettings } from './AssistantSettings.js';
+import { ProjectsSettings } from './ProjectsSettings.js';
 import { ProvidersSettings } from './ProvidersSettings.js';
 import { TelegramSettings } from './TelegramSettings.js';
 
@@ -62,11 +63,18 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   voice: S.settings.sections.voice,
   assistant: S.settings.sections.assistant,
   providers: S.settings.sections.providers,
+  projects: S.settings.sections.projects,
 };
 
-const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'providers', 'notifications', 'browser', 'voice', 'assistant'];
+const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'projects', 'providers', 'notifications', 'browser', 'voice', 'assistant'];
 
 type FieldErrors = Partial<Record<keyof ParleyConfig, string>>;
+
+/**
+ * Режимы одобрений пишущих ролей Codex в порядке показа. Значения ядра (`CODEX_WRITE_APPROVALS_VALUES`) отсюда не
+ * импортируются: индекс `@parley/core` тянет в рендерер код с `fs`, а тип берётся из `ParleyConfig`.
+ */
+const CODEX_WRITE_MODES: readonly ParleyConfig['codexWriteApprovals'][] = ['auto', 'parley', 'terminal'];
 
 function FieldRow({
   label,
@@ -355,25 +363,43 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   </>
                 ) : null}
 
-                {config.codexApprovals !== undefined ? (
+                {/* Ключа нет у хоста, оставшегося от прежней версии (там булев `codexApprovals`): `settings.set` его бы
+                    отклонил, группа врала бы. */}
+                {config.codexWriteApprovals !== undefined ? (
                   <>
-                    <label className="flex items-center justify-between gap-2 text-sm">
-                      <span>
-                        {S.settings.codexApprovals}
-                        {locked.codexApprovals !== undefined ? (
-                          <span className="text-muted-foreground"> {S.settings.lockedBy(locked.codexApprovals)}</span>
-                        ) : null}
-                      </span>
-                      <Switch
-                        aria-label={S.settings.codexApprovals}
-                        checked={config.codexApprovals}
-                        disabled={locked.codexApprovals !== undefined}
-                        onCheckedChange={checked => void save('codexApprovals', checked ? 'true' : 'false')}
-                      />
-                    </label>
-                    <span className="text-xs text-muted-foreground">{S.settings.codexApprovalsHint}</span>
-                    {errors.codexApprovals !== undefined ? (
-                      <span className="text-xs text-destructive">{errors.codexApprovals}</span>
+                    <span className="text-sm">
+                      {S.settings.codexWriteApprovals}
+                      {locked.codexWriteApprovals !== undefined ? (
+                        <span className="text-muted-foreground"> {S.settings.lockedBy(locked.codexWriteApprovals)}</span>
+                      ) : null}
+                    </span>
+                    {/* Подписи длинные (спека 5.2): варианты столбцом на всю ширину, а не пилюлей в одну строку. */}
+                    <ToggleGroup
+                      type="single"
+                      aria-label={S.settings.codexWriteApprovals}
+                      value={config.codexWriteApprovals}
+                      disabled={locked.codexWriteApprovals !== undefined}
+                      className="w-full flex-col items-stretch rounded-[18px]"
+                      onValueChange={(value) => {
+                        // Повторный клик по выбранному варианту Radix сообщает пустой строкой — режим не снимается.
+                        if (value !== '') void save('codexWriteApprovals', value);
+                      }}
+                    >
+                      {CODEX_WRITE_MODES.map((mode) => (
+                        <ToggleGroupItem
+                          key={mode}
+                          value={mode}
+                          className="h-auto justify-start whitespace-normal border-l-0 border-t text-left first:border-t-0"
+                        >
+                          {S.settings.codexWriteApprovalsOptions[mode]}
+                        </ToggleGroupItem>
+                      ))}
+                    </ToggleGroup>
+                    {config.codexWriteApprovals === 'parley' ? (
+                      <span className="text-xs text-muted-foreground">{S.settings.codexWriteApprovalsHookHint}</span>
+                    ) : null}
+                    {errors.codexWriteApprovals !== undefined ? (
+                      <span className="text-xs text-destructive">{errors.codexWriteApprovals}</span>
                     ) : null}
                   </>
                 ) : null}
@@ -492,6 +518,8 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
           </TabsContent>
 
           <TabsContent value="voice" className="mt-0">{uiLoaded ? <VoiceSettings /> : null}</TabsContent>
+
+          <TabsContent value="projects" className="mt-0"><ProjectsSettings bridge={bridge} /></TabsContent>
 
           <TabsContent value="providers" className="mt-0"><ProvidersSettings /></TabsContent>
 

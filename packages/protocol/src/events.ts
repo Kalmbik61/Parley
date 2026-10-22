@@ -1,5 +1,6 @@
 import type { AssistantState } from './assistant.js';
 import type { TelegramStatus } from './telegram.js';
+import type { ConsentCard } from './consents.js';
 import type { BacklogChanged } from './backlog.js';
 import type { BrowserAgentOpEvent } from './browser-agent.js';
 import type { CapabilitySnapshot } from './capability-snapshot.js';
@@ -61,6 +62,11 @@ export interface Events {
   'browser.agentOp': BrowserAgentOpEvent;
   'assistant.changed': AssistantState;
   'telegram.changed': TelegramStatus;
+  /**
+   * Изменились карточки согласий (спека 2026-10-21, 4.4): `upsert` — новые и изменённые, `removed` — `id` решённых
+   * и снятых. Окна, остров и Telegram по нему показывают и закрывают карточку «доверять ли папке».
+   */
+  'consents.changed': { upsert: ConsentCard[]; removed: string[] };
 }
 
 export type EventName = keyof Events;

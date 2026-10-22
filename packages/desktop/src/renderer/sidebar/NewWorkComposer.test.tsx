@@ -4,7 +4,7 @@
  * `rooms.send`, работа без агентов (только `works.create`), «Put them in a room» (комната или отдельные сессии), первый
  * промпт в комнате, вкладка новой сессии или комнаты — только после снимка работ, «Retry» повторяет лишь недостающее,
  * агент по умолчанию, проект, «In its own worktree». Полей прежней формы (цель, ярлык, «Start a session», «Create more»)
- * больше нет.
+ * больше нет. Перед `works.create` — согласие на папку (спека 2026-10-21, 4.2 п. 1): `trust.check`, диалог «Trust … for agents?».
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -124,6 +124,8 @@ beforeEach(() => {
   }));
   bridge.setHandler('rooms.create', async () => ({ roomId: 'r-01' }));
   bridge.setHandler('rooms.send', async () => ({ messageId: 'm-01' }));
+  // Папки тестов уже доверены: диалог доверия — предмет отдельного describe ниже.
+  bridge.setTrustFolders(['/tmp/p', '/tmp/two', '/tmp/fresh', '/tmp/gone'].map((folder) => ({ folder, grantedAt: '2026-10-21T10:00:00.000Z', by: 'window' as const })));
   useWorksStore.setState({ entries: [makeWork('w-old', { projectPath: PROJECT })], branches: {}, loading: false, error: null });
   useLayoutStore.setState({
     activeWorkKey: null,
@@ -1047,5 +1049,134 @@ describe('NewWorkComposer — форма на открытии', () => {
       shown.stop();
     }
     expect(shown.seen).toEqual([{ title: '', agents: 0, prompt: true }]);
+  });
+});
+
+describe('NewWorkComposer — доверие к папке (спека 2026-10-21, 4.2 п. 1)', () => {
+  const trustDialog = (): Promise<HTMLElement> => screen.findByRole('dialog', { name: `Trust ${PROJECT} for agents?` });
+  const callOrder = (): string[] => bridge.calls.map((call) => call.method).filter((method) => ['trust.check', 'trust.grant', 'works.create', 'sessions.create'].includes(method));
+
+  beforeEach(() => bridge.setTrustFolders([]));
+
+  it('папка не доверена (trust.check) — диалог, works.create до «Trust» не зовётся; «Trust» — trust.grant window, затем works.create', async () => {
+    const opened: boolean[] = [];
+    await renderComposer((open) => opened.push(open));
+    typeTitle('Solo work');
+    fireEvent.click(create());
+    const dialog = await trustDialog();
+    expect(dialog.textContent).toContain('.codex/');
+    expect(callsOf('works.create')).toHaveLength(0);
+    expect(callsOf('trust.grant')).toHaveLength(0);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: S.dialogs.trustFolder.confirm }));
+    await waitFor(() => expect(opened).toEqual([false]));
+    expect(callsOf('trust.grant')).toEqual([{ folder: PROJECT, by: 'window' }]);
+    expect(callsOf('works.create')).toEqual([{ projectPath: PROJECT, title: 'Solo work', goal: '' }]);
+    expect(callOrder()).toEqual(['trust.check', 'trust.grant', 'works.create']);
+    // Окно спрашивает хост о выбранной папке, а список доверенных сам не читает и пути не сравнивает.
+    expect(callsOf('trust.check')).toEqual([{ folder: PROJECT }]);
+    expect(callsOf('trust.list')).toHaveLength(0);
+  });
+
+  it('«Cancel» — назад в композер: ни trust.grant, ни works.create; Create снова доступен и спрашивает заново', async () => {
+    const opened: boolean[] = [];
+    await renderComposer((open) => opened.push(open));
+    typeTitle('Solo work');
+    fireEvent.click(create());
+    fireEvent.click(within(await trustDialog()).getByRole('button', { name: S.common.cancel }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: `Trust ${PROJECT} for agents?` })).toBeNull());
+    await act(async () => {});
+    expect(callsOf('trust.grant')).toHaveLength(0);
+    expect(callsOf('works.create')).toHaveLength(0);
+    expect(opened).toEqual([]);
+    expect(titleField().value).toBe('Solo work');
+    expect(create().disabled).toBe(false);
+
+    fireEvent.click(create());
+    expect(await trustDialog()).toBeTruthy();
+    expect(callsOf('trust.check')).toHaveLength(2);
+  });
+
+  it('папка доверена — диалога нет, works.create сразу', async () => {
+    bridge.setTrustFolders([{ folder: PROJECT, grantedAt: '2026-10-21T10:00:00.000Z', by: 'island' }]);
+    const opened: boolean[] = [];
+    await renderComposer((open) => opened.push(open));
+    typeTitle('Solo work');
+    fireEvent.click(create());
+    await waitFor(() => expect(opened).toEqual([false]));
+    expect(screen.queryByRole('dialog', { name: /for agents\?$/ })).toBeNull();
+    expect(callOrder()).toEqual(['trust.check', 'works.create']);
+  });
+
+  it('согласие спрашивается и при агентах любого провайдера: sessions.create — только после «Trust»', async () => {
+    await renderComposer();
+    await addAgent();
+    typeTitle('Work');
+    typePrompt('Do it');
+    fireEvent.click(create());
+    fireEvent.click(within(await trustDialog()).getByRole('button', { name: S.dialogs.trustFolder.confirm }));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callOrder()).toEqual(['trust.check', 'trust.grant', 'works.create', 'sessions.create']);
+  });
+
+  it('папка, доверенная под realpath (путь через ссылку), диалога не вызывает: решает ответ хоста, а не список', async () => {
+    // В списке — realpath, выбран путь через ссылку; хост знает, что это одна папка.
+    bridge.setTrustFolders([{ folder: `/private${PROJECT}`, grantedAt: '2026-10-21T10:00:00.000Z', by: 'window' }]);
+    bridge.setHandler('trust.check', async () => ({ trusted: true }));
+    const opened: boolean[] = [];
+    await renderComposer((open) => opened.push(open));
+    typeTitle('Solo work');
+    fireEvent.click(create());
+    await waitFor(() => expect(opened).toEqual([false]));
+    expect(screen.queryByRole('dialog', { name: /for agents\?$/ })).toBeNull();
+    expect(callsOf('works.create')).toHaveLength(1);
+  });
+
+  it('хост прежней сборки без trust.check — спрашивать нечего, работа создаётся', async () => {
+    bridge.setHandler('trust.check', async () => {
+      throw { code: 'unknown_method', message: 'unknown method: trust.check' };
+    });
+    const opened: boolean[] = [];
+    await renderComposer((open) => opened.push(open));
+    typeTitle('Solo work');
+    fireEvent.click(create());
+    await waitFor(() => expect(opened).toEqual([false]));
+    expect(callsOf('works.create')).toHaveLength(1);
+  });
+
+  it('trust.check отказал иначе — ошибка в диалоге, работа не создаётся, форма не заперта', async () => {
+    bridge.setHandler('trust.check', async () => {
+      throw { code: 'internal', message: 'сбой' };
+    });
+    await renderComposer();
+    typeTitle('Solo work');
+    fireEvent.click(create());
+    expect(await screen.findByText("Couldn't check the folder trust: host error.")).toBeTruthy();
+    expect(callsOf('works.create')).toHaveLength(0);
+    expect(create().disabled).toBe(false);
+  });
+
+  it('trust.grant отказал — ошибка, работа не создаётся', async () => {
+    bridge.setHandler('trust.grant', async () => {
+      throw { code: 'internal', message: 'сбой' };
+    });
+    await renderComposer();
+    typeTitle('Solo work');
+    fireEvent.click(create());
+    fireEvent.click(within(await trustDialog()).getByRole('button', { name: S.dialogs.trustFolder.confirm }));
+    expect(await screen.findByText("Couldn't trust the folder: host error.")).toBeTruthy();
+    expect(callsOf('works.create')).toHaveLength(0);
+    expect(create().disabled).toBe(false);
+  });
+
+  it('диалог настроен на проект, выбранный сейчас: другая папка — своя запись trust.grant', async () => {
+    useWorksStore.setState({ entries: [makeWork('w-old', { projectPath: PROJECT }), makeWork('w-two', { projectPath: '/tmp/two' })] });
+    await renderComposer();
+    fireEvent.click(screen.getByRole('radio', { name: 'two' }));
+    typeTitle('Solo work');
+    fireEvent.click(create());
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Trust /tmp/two for agents?' })).getByRole('button', { name: S.dialogs.trustFolder.confirm }));
+    await waitFor(() => expect(callsOf('works.create')).toHaveLength(1));
+    expect(callsOf('trust.grant')).toEqual([{ folder: '/tmp/two', by: 'window' }]);
   });
 });

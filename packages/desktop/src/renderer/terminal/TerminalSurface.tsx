@@ -18,7 +18,8 @@
  *
  * Неживая сессия (раунд main-r2, п. 2) и ещё не запущенная (Organic, 1.8) — карточка над терминалом
  * (`NotRunningCard.tsx`): кикер `asleep`, `closed` или `not started`, название, текст, мета и, где уместно,
- * Resume. Терминал под ней прежний: xterm держит последний вывод.
+ * Resume. Терминал под ней прежний: xterm держит последний вывод. Сессия Codex, удержанная до согласия на папку
+ * (спека 2026-10-21, 4.2 п. 2), получает под карточкой строку «Waiting for folder trust» (`WaitingForTrust.tsx`).
  *
  * Кусок 2.6 (спека 5.4): корень — droppable `terminal` с `sessionId`, только
  * пока поверхность видима: скрытые терминалы группы лежат на месте видимого,
@@ -52,6 +53,8 @@ import { usePaletteStore } from '../palette/store.js';
 import { ErrorBoundary } from '../shell/ErrorBoundary.js';
 import { useUiStore } from '../store/ui.js';
 import { useDictationStore } from '../voice/dictation-store.js';
+import { WaitingForTrust } from '../components/WaitingForTrust.js';
+import { trustCardFor, useConsentsStore } from '../store/consents.js';
 import { useWorksStore } from '../store/works.js';
 import { openInBrowserTab } from '../browser/store.js';
 import { isFileLink, LinkMenu, openLinkInEditor, openLinkPath, type LinkMenuState } from './LinkMenu.js';
@@ -236,6 +239,13 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     const lifecycle = sessionOf(sessionRef, state.entries)?.lifecycle;
     return lifecycle === 'sleeping' || lifecycle === 'closed' || lifecycle === 'pending';
   });
+  // Удержанная до согласия на папку сессия Codex (спека 2026-10-21, 4.2 п. 2) открывается именно здесь: строка
+  // «Waiting for folder trust» с кнопкой, как в Chat. Селекторы отдают строки — перерисовка только при их смене.
+  const lifecycle = useWorksStore((state) => sessionOf(sessionRef, state.entries)?.lifecycle);
+  const provider = useWorksStore((state) => sessionOf(sessionRef, state.entries)?.provider);
+  const trustCardId = useConsentsStore((state) =>
+    provider === undefined ? undefined : trustCardFor(state.cards, sessionRef.projectPath, lifecycle, provider)?.id,
+  );
   const [searchOpen, setSearchOpen] = useState(false);
   const [linkMenu, setLinkMenu] = useState<LinkMenuState | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -442,6 +452,9 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
           работ в это время прежний, а Resume звать некому. Карточка вернётся со связью, если
           сессия и по свежему снимку неживая (после «Restart host» — так и будет). */}
       {showCard && !offline ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
+      {trustCardId === undefined ? null : (
+        <WaitingForTrust cardId={trustCardId} testId="terminal-waiting-for-trust" className="mx-6 mt-3 max-w-[520px] shrink-0" />
+      )}
       {searchOpen ? (
         <SearchBar
           ref={inputRef}

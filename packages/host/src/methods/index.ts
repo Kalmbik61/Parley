@@ -1,3 +1,4 @@
+import { parleyHome } from '@parley/core';
 import { BROWSER_AGENT_ERROR_CODES } from '@parley/protocol';
 import type { BrowserAgentErrorCode, BrowserAgentResult, MethodName, NotificationName, Params, SendResult, SessionRef } from '@parley/protocol';
 import type { BrowserEndpoint } from '../agent/browser-endpoint.js';
@@ -7,6 +8,7 @@ import type { ActivityService } from '../activity/activity-service.js';
 import type { Client } from '../client.js';
 import type { AnyHandler, AnyNotificationHandler, RequestInfo } from '../context.js';
 import type { CompactionService } from '../compaction/compaction-service.js';
+import type { ConsentsService } from '../consents/consents-service.js';
 import { createCompactionMethods } from '../compaction/compaction-methods.js';
 import type { Profiler } from '../diagnostics/profiler.js';
 import type { FeedService } from '../feed/feed-service.js';
@@ -32,6 +34,7 @@ import { createCapabilitiesHandlers, createCapabilitiesList } from './capabiliti
 import { createAssistantHandlers } from './assistant.js';
 import { createAuthHandlers } from './auth.js';
 import { createBacklogHandlers } from './backlog.js';
+import { createConsentHandlers } from './consents.js';
 import { contextMessages, contextText } from './context-pages.js';
 import { createChangesHandlers } from './changes.js';
 import { createDiagnosticsHandlers } from './diagnostics.js';
@@ -121,6 +124,8 @@ export interface MethodDeps {
   assistant?: AssistantService;
   /** Канал Telegram (план B); без него методов `telegram.*` у хоста нет. */
   telegram?: TelegramService;
+  /** Согласия человека на папку (спека 2026-10-21, 4.4); без них методов `consents.*` и `trust.*` у хоста нет. */
+  consents?: ConsentsService;
 }
 
 /** Сколько знаков сообщения окна доходит агенту. */
@@ -214,6 +219,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     ...(deps.planEffects ? createPlanHandlers(deps.planEffects) : {}),
     ...(deps.assistant === undefined ? {} : createAssistantHandlers(deps.assistant)),
     ...(deps.telegram === undefined ? {} : createTelegramHandlers(deps.telegram)),
+    // Снимка работ не читают: не в `WORKS_GATED_METHODS`, окно спрашивает согласие ещё до создания работы.
+    ...(deps.consents === undefined ? {} : createConsentHandlers({ consents: deps.consents, home: parleyHome() })),
     'host.info': hostInfo as AnyHandler,
     'host.shutdown': hostShutdown as AnyHandler,
     'works.list': worksList(deps.works) as AnyHandler,

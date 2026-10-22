@@ -12,6 +12,7 @@ import {
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
+import { seedTrust } from './trust-seed.js';
 
 /**
  * Вид Chat у Codex на журнале (план 2026-10-07, часть C, Task 17; спека 3, 5.2–5.7): лента строится из rollout-файла
@@ -19,7 +20,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  * в `STUB_CODEX_SESSIONS` (он же `PARLEY_CODEX_SESSIONS_DIR` хоста), команды `STUB_*` пишут в журнал элементы
  * (`STUB_CMD`, `STUB_EDIT`, `STUB_SAY`, `STUB_SUBAGENT`) — отправка окна (`pty.send`) и поле Chat. Проба версий
  * включена (`PARLEY_SKIP_VERSION_PROBE: ''`), claude и glm тоже подменены: настоящие CLI в E2E не запускаются.
- * Хуки Codex (Task 22, поправка к части D): настройка `codexApprovals` включается `settings.set` до создания сессии;
+ * Хуки Codex (Task 22, поправка к части D): режим `codexWriteApprovals: 'parley'` включается окружением `PARLEY_CODEX_WRITE_APPROVALS`;
  * `STUB_CODEX_HOOKS_TRUSTED=1` — стаб вызывает хуки из `-c hooks.*` (доверие дано), без него — как неодобренные;
  * срок подсказки сокращён `PARLEY_CODEX_HOOK_GRACE_MS`. `STUB_ARGV_LOG` — argv стаба для проверки `-c hooks.*`.
  * `E2E_DPR=2` запускает окно с `--force-device-scale-factor=2`. Снимки — в `test-results/codex-chat/` (не коммитятся).
@@ -127,8 +128,8 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
 
   /**
    * Окно со стабом Codex нужной версии и одной запущенной сессией; открыта вкладка сессии. `hooks`: `off` —
-   * настройка `codexApprovals` выключена (по умолчанию), `trusted` — включена и стаб вызывает хуки, `untrusted` —
-   * включена, но хуки не одобрены.
+   * режим `codexWriteApprovals` по умолчанию (хуки не нужны), `trusted` — `parley` и стаб вызывает хуки, `untrusted` —
+   * `parley`, но хуки не одобрены.
    */
   async function open(
     width: number,
@@ -151,7 +152,12 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
       STUB_ARGV_LOG: argvLog,
       PARLEY_CODEX_HOOK_GRACE_MS: '1000',
       STUB_CODEX_HOOKS_TRUSTED: hooks === 'trusted' ? '1' : '',
+      // Режим «Ask in Parley» — окружением, а не `settings.set` по мосту: окно читает настройки при подключении и из
+      // диалога настроек, поэтому подсказка про хуки в Chat узнала бы о режиме, заданном позже мимо диалога, не сразу.
+      ...(hooks === 'off' ? {} : { PARLEY_CODEX_WRITE_APPROVALS: 'parley' }),
     };
+    // Сессия Codex в проекте без согласия удерживалась бы до решения человека (спека 2026-10-21, 4.2).
+    await seedTrust(home, project);
     const app = await electron.launch({
       args: [mainEntry, `--force-device-scale-factor=${dpr}`],
       env,
@@ -162,9 +168,6 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
     await expect(window.getByTestId('landing')).toBeVisible();
     const errors: string[] = [];
     window.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
-    if (hooks !== 'off') {
-      await call(window, 'settings.set', { key: 'codexApprovals', value: 'true' });
-    }
     const work = await call<{ workId: string }>(window, 'works.create', {
       projectPath: project,
       title: 'e2e-codex-chat',
@@ -334,8 +337,9 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
       .split('\n')
       .filter((row) => row !== '')
       .map((row) => JSON.parse(row) as { argv: string[]; env: Record<string, string> })
-      // Клиент ролей хоста (`app-server --stdio`) — не сессия под терминалом.
-      .filter((launch) => launch.argv[0] !== 'app-server');
+      // Клиент ролей хоста (`app-server --stdio`) — не сессия под терминалом; у него в начале пара `-c projects=…`
+      // (читатель ролей получает доверие папки, спека 2026-10-21, 4.3), поэтому `app-server` не обязательно первый.
+      .filter((launch) => !launch.argv.includes('app-server'));
   }
 
   /** Терминальный ответ стаба на `STUB_PERMISSION`: строка `approved`, `denied` или `prompt` на экране. */

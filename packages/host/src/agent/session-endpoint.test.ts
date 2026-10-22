@@ -34,6 +34,11 @@ describe('agent session endpoint', () => {
     expect(JSON.parse(response.body)).toEqual({ ok: true, result: { sessionId: 's-02', provider: 'codex' } });
     expect(create).toHaveBeenCalledWith({ ...args, projectPath: ref.projectPath, workId: ref.workId, requestedBy: ref.sessionId, parent: null, lean: true, role: { source: 'builtin', name: 'executor' }, model: 'model', effort: 'high', worktree: true });
   });
+  it('удержанный до согласия на папку запуск отвечает сразу с held: folder-trust', async () => {
+    const { post, create } = await setup();
+    create.mockResolvedValueOnce({ ...ref, sessionId: 's-03', held: 'folder-trust' } as never);
+    expect(JSON.parse((await post(args)).body)).toEqual({ ok: true, result: { sessionId: 's-03', provider: 'codex', held: 'folder-trust' } });
+  });
   it('rejects missing or revoked bearer tokens', async () => {
     const { post, create, registry } = await setup();
     expect((await post(args, '')).status).toBe(401);

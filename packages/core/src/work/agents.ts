@@ -44,8 +44,9 @@ function nativeConfigArgs(entry: ProviderEntry): { args: string[]; unsupported: 
     const args: string[] = [];
     for (let i = 0; i < template.length; i++) {
       const item = template[i]!;
-      // `{codexHooks}` разворачивается в готовые пары `-c hooks.*` отдельным элементом; в родной проекции его нет.
-      if (item === '{codexHooks}' || item === '{leanFlags}') continue;
+      // `{codexHooks}`, `{approvals}` и `{trust}` разворачиваются в готовые пары `-c` отдельными элементами; в родной
+      // проекции их нет (доверие читатель ролей получает отдельно, `projectSkillRunnerContext`).
+      if (item === '{codexHooks}' || item === '{approvals}' || item === '{trust}' || item === '{leanFlags}') continue;
       if (item === '-c' || item === '--config') {
         const value = template[++i];
         if (value === undefined) return { args: [], unsupported: true };
@@ -63,7 +64,7 @@ function nativeConfigArgs(entry: ProviderEntry): { args: string[]; unsupported: 
   return { args: projections[0]!, unsupported: false };
 }
 /** Selected launch/resume template only; no fresh registry lookup or secret argument snapshot. */
-export function projectSkillRunnerContext(entry: ProviderEntry, template: readonly string[]): { verified: boolean; configArgs: string[] } {
+export function projectSkillRunnerContext(entry: ProviderEntry, template: readonly string[], extraConfigArgs: readonly string[] = []): { verified: boolean; configArgs: string[] } {
   if (entry.id !== 'codex') return { verified: false, configArgs: [] };
   const configArgs: string[] = [];
   const knownGenerated = new Set(['tui.terminal_title', 'tui.notifications', 'tui.notification_method',
@@ -71,7 +72,7 @@ export function projectSkillRunnerContext(entry: ProviderEntry, template: readon
   const generated = new Set(['{mcpConfig}', '{developerInstructions}', '{notify}', '{skillCatalog}', '{sandbox}', 'model_reasoning_effort="{effort}"']);
   for (let i = 0; i < template.length; i++) {
     const item = template[i]!;
-    if (item === '--no-daemon' || item === '{prompt}' || item === '{codexHooks}' || item === '{leanFlags}') continue;
+    if (item === '--no-daemon' || item === '{prompt}' || item === '{codexHooks}' || item === '{approvals}' || item === '{trust}' || item === '{leanFlags}') continue;
     if (i === 0 && item === 'resume' && template[i + 1] === '{providerSessionId}') { i++; continue; }
     if (item === '--model' && template[i + 1] === '{model}') { i++; continue; }
     if (item === '-a' && template[i + 1] === 'on-request') { i++; continue; }
@@ -88,7 +89,8 @@ export function projectSkillRunnerContext(entry: ProviderEntry, template: readon
     configArgs.push('-c', value);
   }
   const projected = projectNativeSkillConfigArgs(configArgs);
-  return projected === null ? { verified: false, configArgs: [] } : { verified: true, configArgs: projected };
+  // Дополнительные пары (`-c projects={…}` с доверием к папке) идут после проекции навыков: её они не проходят и не должны.
+  return projected === null ? { verified: false, configArgs: [] } : { verified: true, configArgs: [...projected, ...extraConfigArgs] };
 }
 
 export interface SessionRoleCatalogOptions {
@@ -134,7 +136,7 @@ function nativeRolePairs(template: readonly string[], codex: boolean): Map<strin
   for (let i = 0; i < template.length; i++) {
     const flag = template[i]!;
     // `{leanFlags}` — готовые флаги облегчённого запуска отдельным элементом, у Claude и у Codex.
-    if (flag === '{leanFlags}' || (codex && (flag === '--no-daemon' || flag === '{codexHooks}'))) continue;
+    if (flag === '{leanFlags}' || (codex && (flag === '--no-daemon' || flag === '{codexHooks}' || flag === '{approvals}' || flag === '{trust}'))) continue;
     if (codex && i === 0 && flag === 'resume' && template[i + 1] === '{providerSessionId}') { i++; continue; }
     if (flag === '{prompt}' && i === template.length - 1) continue;
     if (!valueFlags.has(flag)) return null;
@@ -158,8 +160,13 @@ function singleRoleConfig(pairs: Map<string, string[]>, slot: string, key: strin
 
 /** Validate both start and resume before creation; revalidate the actual channel on every launch. */
 export function assertRoleDelivery(entry: ProviderEntry, choice: ResolvedRoleChoice, templates = [entry.runner.args ?? [], entry.runner.resumeArgs ?? []]): void {
+  // У Codex `workspace-write` у сессии без роли и у роли не из `.codex/agents` — умолчание Parley (`resolveRoleChoice`), а не
+  // требование роли: в проверку доставки оно не входит, и свой `providers.json` без `{sandbox}` получает диагностику, а не
+  // отказ (спека 2026-10-21, 5.1). У других провайдеров песочница — всегда требование и по-прежнему отказывает.
+  const sandboxRequired = choice.sandboxMode !== null
+    && !(entry.id === 'codex' && choice.sandboxMode === 'workspace-write' && !choice.readOnly && choice.role?.source !== 'codex');
   for (const template of templates) {
-    if (entry.id === 'codex' && (choice.readOnly || choice.sandboxMode !== null)) {
+    if (entry.id === 'codex' && (choice.readOnly || sandboxRequired)) {
       // Native flags can supersede sandbox_mode=-c. Refuse ambiguous custom delivery.
       // rust-v0.156.1 codex-rs/utils/cli/src/shared_options.rs: sandbox/-s,
       // dangerously-bypass-approvals-and-sandbox/yolo, approve-for-me/not-so-yolo.
@@ -171,7 +178,7 @@ export function assertRoleDelivery(entry: ProviderEntry, choice: ResolvedRoleCho
       });
       if (conflict) throw new RoleChoiceError('role-permissions-unavailable');
     }
-    const required = choice.nativeAgent !== null || choice.roleText !== '' || choice.sandboxMode !== null || choice.readOnly;
+    const required = choice.nativeAgent !== null || choice.roleText !== '' || sandboxRequired || choice.readOnly;
     if (!required) continue; // Plain custom runners keep their existing compatibility/warning behavior.
     const pairs = nativeRolePairs(template, entry.id === 'codex');
     if (!pairs) throw new RoleChoiceError('role-permissions-unavailable');
@@ -183,7 +190,7 @@ export function assertRoleDelivery(entry: ProviderEntry, choice: ResolvedRoleCho
     if (choice.roleText && !(entry.id === 'codex'
       ? singleRoleConfig(pairs, '{developerInstructions}', 'developer_instructions')
       : singleRoleValue(pairs, '--append-system-prompt', '{systemPrompt}'))) throw new RoleChoiceError('role-permissions-unavailable');
-    if (choice.sandboxMode !== null && (entry.id !== 'codex' || !sandbox)) throw new RoleChoiceError('role-permissions-unavailable');
+    if (sandboxRequired && (entry.id !== 'codex' || !sandbox)) throw new RoleChoiceError('role-permissions-unavailable');
     if (choice.readOnly && (isClaudeCode(entry)
       ? !singleRoleValue(pairs, '--disallowedTools', '{disallowedTools}')
       : entry.id !== 'codex' || !sandbox)) throw new RoleChoiceError('role-permissions-unavailable');

@@ -57,6 +57,7 @@ import { readProjectMemory } from '../work/project-memory.js';
 import type { MemoryKind } from '../work/project-memory.js';
 import { readProjectPreferences } from '../work/project-preferences.js';
 import { finishSession } from '../work/metrics.js';
+import { SHORT_PROFILE_HIDDEN_TOOLS } from '../work/mcp-config.js';
 import { PROPOSAL_TEXT_MAX } from '../work/proposals.js';
 import {
   assertMessageBudget,
@@ -329,7 +330,8 @@ const WRITES: Annotations = { readOnlyHint: false, destructiveHint: false, openW
 /** Закрытие сессии насовсем: письма ей больше не приходят, а вернуть её агенту нечем. */
 const CLOSES: Annotations = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 
-const TOOLS: Tool[] = [
+/** Список инструментов сервера (без браузерных и `create_session`, их объявляет `createParleyServer`): экспорт нужен тестам, что сверяют по нему примеры слоя. */
+export const TOOLS: Tool[] = [
   AGENT_PLAN_TOOL,
   ...PLAN_TOOLS,
   {
@@ -1144,9 +1146,10 @@ export function boundedGuide(text: string, what: string, limit = READ_GUIDE_MAX_
 
 function readGuide(context: McpContext, args: Record<string, unknown>): string {
   const raw = args['topic'];
-  if (raw === undefined || raw === '') return boundedGuide(guide(context.skillNavigator === true), 'The whole guide');
+  const options = { skillNavigator: context.skillNavigator === true, ...(context.toolProfile === undefined ? {} : { toolProfile: context.toolProfile }) };
+  if (raw === undefined || raw === '') return boundedGuide(guide(options), 'The whole guide');
   if (typeof raw !== 'string') throw new Error('argument topic: expected a string');
-  const text = guideTopic(raw.trim().toLowerCase(), context.skillNavigator === true);
+  const text = guideTopic(raw.trim().toLowerCase(), options);
   if (text === null) {
     throw new Error(
       `unknown guide topic "${raw}"; topics: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}`,
@@ -1592,8 +1595,10 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
   // Инструмент браузера окна (спека браузера 2026-10-07, 3.7) — только при канале агента в окружении сервера.
   const browser = context.agent === undefined ? null : createBrowserTools(context.agent, { clientName: () => server.getClientVersion()?.name });
   const sessionAgent = sessionId === null ? undefined : context.agent;
+  // Профиль `short` (Codex): три инструмента памяти не объявляются; вызов такого имени уходит в обычный разбор, как и любое неизвестное.
+  const declaredInProfile = (tool: Tool): boolean => context.toolProfile !== 'short' || !(SHORT_PROFILE_HIDDEN_TOOLS as readonly string[]).includes(tool.name);
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [...TOOLS, ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL] : []), ...(navigator ? [await navigator.list()] : [])],
+    tools: [...TOOLS.filter(declaredInProfile), ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL] : []), ...(navigator ? [await navigator.list()] : [])],
   }));
   // Тред Codex привязывается один раз за жизнь сервера — с первого вызова, где `_meta.threadId` есть.
   let threadBound = false;

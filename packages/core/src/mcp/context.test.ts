@@ -47,3 +47,13 @@ describe('канал агента к браузеру (спека браузер
     }
   });
 });
+
+describe('профиль инструментов запуска', () => {
+  it('только short из PARLEY_TOOL_PROFILE (и запасного HARNAS_) включает профиль; иначе поля нет', () => {
+    expect(contextFromEnv(base).toolProfile).toBeUndefined();
+    expect(contextFromEnv({ ...base, PARLEY_TOOL_PROFILE: 'short' }).toolProfile).toBe('short');
+    expect(contextFromEnv({ ...base, HARNAS_TOOL_PROFILE: 'short' }).toolProfile).toBe('short');
+    expect(contextFromEnv({ ...base, PARLEY_TOOL_PROFILE: 'full' }).toolProfile).toBeUndefined();
+    expect(contextFromEnv({ ...base, PARLEY_TOOL_PROFILE: '' }).toolProfile).toBeUndefined();
+  });
+});

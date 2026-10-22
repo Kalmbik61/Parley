@@ -1,3 +1,5 @@
+import type { ToolProfile } from './mcp-config.js';
+
 /**
  * Второй слой гида для агента: подробный текст по запросу. Отдаётся
  * инструментом `read_guide` MCP-сервера — ресурсом его сделать нельзя, у
@@ -31,6 +33,22 @@ interface GuideSection {
 }
 
 const TITLE = '# Parley: how to use it';
+
+/**
+ * Абзац `tools` о памяти (`remember`, `memory_read`, `search_history`): профиль `short` его не получает, потому что
+ * сервер этих инструментов не объявляет. Вынесен константой, чтобы вырезать ровно его, а полный гид остался побайтно прежним.
+ */
+const MEMORY_PARAGRAPH = `\`remember(kind, fact, details?, why, onHumanRequest?)\` — one lasting project fact, lesson or
+agreement (kind: fact, lesson, agreement): short, one per call, with a reason; not what the
+code, git, PARLEY.md or CLAUDE.md already say. The human accepts it first: the answer is
+suggested: ms-NN. Set onHumanRequest only when the human has just asked you to remember it:
+the answer is remembered: m-NNN, and the human sees that you claimed their request. A repeat
+answers already remembered. The phrases of the project memory already come with your
+instructions (the Project memory block); \`memory_read(ids?)\` adds the details of all entries
+or of the given ids. \`search_history(query, scope?, limit?)\` — the past of this project: all
+words of the query in one entry; scope is decisions, memory, plans, backlog, history, sessions
+or all (default); limit 1 to 30. Before something big, search for earlier decisions and
+lessons. It does not search skills.`;
 
 const SECTIONS: readonly GuideSection[] = [
   {
@@ -137,17 +155,7 @@ answers added: b-NNN, suggested: sg-NN, or already in backlog: an existing ID. T
 cannot edit, remove or close existing items. Before completion, collect worthwhile loose
 ends as suggestions. A project with its own TODOS.md specifies its policy in PARLEY.md.
 
-\`remember(kind, fact, details?, why, onHumanRequest?)\` — one lasting project fact, lesson or
-agreement (kind: fact, lesson, agreement): short, one per call, with a reason; not what the
-code, git, PARLEY.md or CLAUDE.md already say. The human accepts it first: the answer is
-suggested: ms-NN. Set onHumanRequest only when the human has just asked you to remember it:
-the answer is remembered: m-NNN, and the human sees that you claimed their request. A repeat
-answers already remembered. The phrases of the project memory already come with your
-instructions (the Project memory block); \`memory_read(ids?)\` adds the details of all entries
-or of the given ids. \`search_history(query, scope?, limit?)\` — the past of this project: all
-words of the query in one entry; scope is decisions, memory, plans, backlog, history, sessions
-or all (default); limit 1 to 30. Before something big, search for earlier decisions and
-lessons. It does not search skills.
+${MEMORY_PARAGRAPH}
 
 \`report(status, summary, artifacts)\` — \`done\` or \`failed\`: the result is handed in, the
 session stays reachable. \`progress\` is a summary along the way; the result does not change.
@@ -585,19 +593,34 @@ your permission settings yourself.`,
   },
 ];
 
-/** Весь гид: заголовок и все разделы по порядку — то, что `read_guide` отдаёт без темы. */
-export function guide(skillNavigator = false): string {
-  return `${TITLE}\n\n${SECTIONS.map(section => sectionText(section, skillNavigator)).join('\n\n')}\n`;
+/**
+ * Параметры гида запуска: навигатор скиллов и профиль инструментов. Булево значение — прежняя форма вызова
+ * (только навигатор), её держат существующие вызывающие и тесты.
+ */
+export interface GuideOptions {
+  skillNavigator?: boolean;
+  /** `short` — раздел `tools` без абзаца о памяти: сервер этих инструментов сессии не объявляет. */
+  toolProfile?: ToolProfile;
 }
 
-function sectionText(section: GuideSection, skillNavigator: boolean): string {
-  if (!skillNavigator) return section.text;
+const asOptions = (options: boolean | GuideOptions): GuideOptions =>
+  typeof options === 'boolean' ? { skillNavigator: options } : options;
+
+/** Весь гид: заголовок и все разделы по порядку — то, что `read_guide` отдаёт без темы. */
+export function guide(options: boolean | GuideOptions = {}): string {
+  const resolved = asOptions(options);
+  return `${TITLE}\n\n${SECTIONS.map(section => sectionText(section, resolved)).join('\n\n')}\n`;
+}
+
+function sectionText(section: GuideSection, { skillNavigator = false, toolProfile }: GuideOptions): string {
+  const base = section.topic === 'tools' && toolProfile === 'short' ? section.text.replace(`${MEMORY_PARAGRAPH}\n\n`, '') : section.text;
+  if (!skillNavigator) return base;
   const hint = section.topic === 'tools'
     ? 'find_skill searches native skills by task words, if needed. An empty result or an unverified loading route is valid: continue without a skill, or use the full native CLI list. Load a match only by the native route in its result; your role and permissions take precedence.'
     : section.topic === 'lead'
       ? 'Before proposing a plan, you may use find_skill with query and for (a participant session id in this workspace) to check which native skills fit their task. This is optional: a skill may be unnecessary, or its loading route unavailable.'
       : '';
-  return hint ? `${section.text}\n\n${hint}` : section.text;
+  return hint ? `${base}\n\n${hint}` : base;
 }
 
 /** Default guide has no navigator hints, including for older sessions. */
@@ -609,7 +632,7 @@ export const GUIDE_TOPICS: readonly { topic: string; summary: string }[] = SECTI
 );
 
 /** Текст одного раздела гида; `null` — такой темы нет. */
-export function guideTopic(topic: string, skillNavigator = false): string | null {
+export function guideTopic(topic: string, options: boolean | GuideOptions = {}): string | null {
   const section = SECTIONS.find((candidate) => candidate.topic === topic);
-  return section === undefined ? null : `${sectionText(section, skillNavigator)}\n`;
+  return section === undefined ? null : `${sectionText(section, asOptions(options))}\n`;
 }
