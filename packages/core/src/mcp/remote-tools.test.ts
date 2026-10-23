@@ -23,14 +23,22 @@ const servers: Server[] = [];
 let home = '';
 let project = '';
 const opened: { client: Client; server: ReturnType<typeof createParleyServer> }[] = [];
+/** Всё, что тест записал в stderr процесса: строки диагностики MCP в вывод прогона не просачиваются. */
+let stderrWrites: string[] = [];
 
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
   project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
   process.env.PARLEY_HOME = home;
+  stderrWrites = [];
+  vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+    stderrWrites.push(String(chunk));
+    return true;
+  });
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const { client, server } of opened.splice(0)) {
     await client.close();
     await server.close();
@@ -140,6 +148,8 @@ const ok = (result: unknown): { ok: true; result: unknown } => ({ ok: true, resu
 const TOOL_OK = { content: [{ type: 'text', text: '{}' }] };
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const textOf = (result: { content: unknown[] }): string => (result.content[0] as { text: string }).text;
+/** Строки диагностики процесса MCP, записанные в stderr (с префиксом `parley-mcp: `). */
+const mcpLines = (): string[] => stderrWrites.filter((line) => line.startsWith('parley-mcp: '));
 
 describe('createRemoteToolRunner: инструменты агента через хост (спека хранилища 6.3, 6.4)', () => {
   it('list и call уходят на /agent/tools с токеном, launch и _meta', async () => {
@@ -474,6 +484,119 @@ describe('запасной исполнитель при хосте без ма�
 
     expect(textOf(result)).toBe(HOST_NOT_RESPONDING);
     expect(fallback.calls).toHaveLength(0);
+  });
+});
+
+describe('сбой list при заданном запасном исполнителе (спека хранилища 6.4)', () => {
+  it.each([
+    ['503 дольше бюджета', (res: ServerResponse) => reply(res, 503)],
+    ['500', (res: ServerResponse) => reply(res, 500)],
+    ['401', (res: ServerResponse) => reply(res, 401)],
+    ['413', (res: ServerResponse) => reply(res, 413)],
+    ['нечитаемое тело', (res: ServerResponse) => reply(res, 200, undefined, 'not json')],
+    ['tools не массив', (res: ServerResponse) => reply(res, 200, ok({ tools: 'nope' }))],
+  ] as const)('хост сбоит (%s): этому list отвечает запасной исполнитель, а call по-прежнему идёт хосту', async (_name, onList) => {
+    const { agent, seen } = await fakeHost((_req, res, entry) => (entry.body['op'] === 'list' ? onList(res) : reply(res, 200, ok(TOOL_OK))));
+    const fallback = fallbackStub();
+    const runner = createRemoteToolRunner(agent, {}, { fallback: fallback.runner, retryDelaysMs: [10], retryBudgetMs: 50 });
+    const listsAsked = (): number => seen.filter((entry) => entry.body['op'] === 'list').length;
+
+    expect((await runner.list()).map((tool) => tool.name)).toEqual(['local_tool']);
+    const result = await runner.call('get_map', {}, undefined);
+
+    // Исполнитель не переключился: вызов ушёл хосту, а запасной его не видел.
+    expect(result).toEqual(TOOL_OK);
+    expect(fallback.calls).toHaveLength(0);
+    expect(seen.at(-1)!.body['op']).toBe('call');
+    // И следующий list снова спрашивает хост, а не запасной напрямую.
+    const asked = listsAsked();
+    await runner.list();
+    expect(listsAsked()).toBeGreaterThan(asked);
+    expect(fallback.lists).toHaveLength(2);
+  });
+
+  it('хост недоступен (порт закрыт): list отвечает запасной исполнитель, call — HOST_NOT_RESPONDING', async () => {
+    const closed = createServer();
+    await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve));
+    const { port } = closed.address() as { port: number };
+    await new Promise<void>((resolve) => closed.close(() => resolve()));
+    const fallback = fallbackStub();
+    const agent: AgentChannel = { url: `http://127.0.0.1:${port}/agent/browser`, token: TOKEN };
+    const runner = createRemoteToolRunner(agent, {}, { fallback: fallback.runner, retryDelaysMs: [10], retryBudgetMs: 50 });
+
+    expect((await runner.list()).map((tool) => tool.name)).toEqual(['local_tool']);
+    expect(textOf(await runner.call('get_map', {}, undefined))).toBe(HOST_NOT_RESPONDING);
+    expect(fallback.calls).toHaveLength(0);
+  });
+
+  it('404 на call после сбоя list всё равно переключает насовсем', async () => {
+    const { agent, seen } = await fakeHost((_req, res, entry) => reply(res, entry.body['op'] === 'list' ? 503 : 404));
+    const fallback = fallbackStub();
+    const runner = createRemoteToolRunner(agent, {}, { fallback: fallback.runner, retryDelaysMs: [10], retryBudgetMs: 50 });
+
+    expect((await runner.list()).map((tool) => tool.name)).toEqual(['local_tool']);
+    expect(textOf(await runner.call('get_map', {}, undefined))).toBe('from fallback: get_map');
+    const asked = seen.length;
+
+    expect((await runner.list()).map((tool) => tool.name)).toEqual(['local_tool']);
+    expect(textOf(await runner.call('check_inbox', {}, undefined))).toBe('from fallback: check_inbox');
+    // Хоста больше не спрашивают ни о списке, ни о вызове.
+    expect(seen).toHaveLength(asked);
+  });
+});
+
+describe('строки диагностики в stderr процесса MCP (спека хранилища 6.4, 6.5)', () => {
+  it('переход на запасной исполнитель после 404 пишет одну строку на процесс, сколько бы вызовов ни ждало ответа', async () => {
+    const { agent } = await hostWithoutRoute();
+    const runner = createRemoteToolRunner(agent, {}, { fallback: fallbackStub().runner });
+
+    await Promise.all([runner.call('get_map', {}, undefined), runner.call('check_inbox', {}, undefined)]);
+    await runner.call('get_map', {}, undefined);
+    await runner.list();
+
+    expect(mcpLines()).toHaveLength(1);
+    expect(mcpLines()[0]).toMatch(/^parley-mcp: .*\/agent\/tools.*404.*directly/);
+  });
+
+  it('каждый вызов, кончившийся HOST_NOT_RESPONDING, пишет строку с его именем и числом попыток', async () => {
+    const { agent } = await fakeHost((_req, res) => reply(res, 503));
+    const runner = createRemoteToolRunner(agent, {}, { retryDelaysMs: [10], retryBudgetMs: 50 });
+
+    await runner.call('get_map', {}, undefined);
+    await runner.call('send_message', { to: 's-02', text: 'x' }, undefined);
+
+    expect(mcpLines()).toHaveLength(2);
+    expect(mcpLines()[0]).toMatch(/^parley-mcp: .*call get_map.*after \d+ attempts/);
+    expect(mcpLines()[1]).toMatch(/^parley-mcp: .*call send_message.*after \d+ attempts/);
+    // Ни аргументы вызова, ни токен в строку не попадают.
+    expect(mcpLines().join('')).not.toMatch(/s-02|a{64}/);
+  });
+
+  it('list, кончившийся HOST_NOT_RESPONDING, тоже пишет строку, даже если ему отвечает запасной исполнитель', async () => {
+    const { agent } = await fakeHost((_req, res) => reply(res, 503));
+    const runner = createRemoteToolRunner(agent, {}, { fallback: fallbackStub().runner, retryDelaysMs: [10], retryBudgetMs: 50 });
+
+    await runner.list();
+
+    expect(mcpLines()).toHaveLength(1);
+    expect(mcpLines()[0]).toMatch(/^parley-mcp: .*\blist\b.*after \d+ attempts/);
+  });
+
+  it('штатные исходы молчат: результат, 401, отказ с 200 и отмена вызывающим', async () => {
+    const ok200 = await fakeHost((_req, res) => reply(res, 200, ok(TOOL_OK)));
+    await createRemoteToolRunner(ok200.agent, {}).call('get_map', {}, undefined);
+    const expired = await fakeHost((_req, res) => reply(res, 401));
+    await createRemoteToolRunner(expired.agent, {}).call('get_map', {}, undefined);
+    const refused = await fakeHost((_req, res) => reply(res, 200, { ok: false, error: { code: 'bad_request', message: 'launch must be an object' } }));
+    await createRemoteToolRunner(refused.agent, {}).call('get_map', {}, undefined);
+    const silent = await fakeHost(() => { /* держит запрос, не отвечая */ });
+    const controller = new AbortController();
+    const pending = createRemoteToolRunner(silent.agent, {}).call('wait_for', { target: 'inbox' }, undefined, controller.signal);
+    await vi.waitFor(() => expect(silent.seen).toHaveLength(1), { timeout: 2000, interval: 10 });
+    controller.abort();
+    expect(textOf(await pending)).toBe('Cancelled.');
+
+    expect(mcpLines()).toEqual([]);
   });
 });
 

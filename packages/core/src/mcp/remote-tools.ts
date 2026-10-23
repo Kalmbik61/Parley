@@ -89,7 +89,9 @@ export interface RemoteToolOptions {
    * работающего канала остаётся на прямом пути, пока карта — `map.json`). Ответ 404 значит хост прежней сборки: так бывает
    * сразу после обновления, когда хост ещё старый и запускает сессии, а сервер MCP на диске уже новый. Первый такой ответ
    * на `list` или `call` переключает исполнителя до конца процесса: этот вызов и все следующие идут в запасной. Не задан —
-   * 404 остаётся отказом с текстом. Переключает только 404: молчание хоста, 401 и 5xx — не повод открывать карту мимо него.
+   * 404 остаётся отказом с текстом. Насовсем переключает только 404: молчание хоста, 401 и 5xx — не повод открывать карту
+   * мимо него. Второе дело запасного — список: любой сбой `list` отвечает этому одному запросу он же, без переключения
+   * (спека хранилища 6.4).
    */
   fallback?: ToolRunner;
 }
@@ -98,6 +100,15 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const failure = (text: string): CallToolResult => ({ content: [{ type: 'text', text }], isError: true });
+
+/**
+ * Строка диагностики в stderr процесса MCP (stdout занят протоколом). Агент видит только текст отказа, а тому, кто
+ * разбирается, почему процессы MCP ушли к `map.json` или не достучались до хоста, нужна эта строка: без неё хост с
+ * неверным маршрутом молча вернул бы их к карте (спека хранилища 6.4, 6.5). Аргументы вызова и токен в неё не попадают.
+ */
+const note = (text: string): void => {
+  process.stderr.write(`parley-mcp: ${text}\n`);
+};
 
 /** Ответ хоста на один запрос: статус и тело. */
 interface Reply {
@@ -184,7 +195,9 @@ function requestTimeoutMs(name: string, args: Record<string, unknown>, callTimeo
  * несёт тот же `callId`, так что потерянный ответ не удваивает запись. Отказы 401 и 413 и ответы, которых хост не даёт,
  * не повторяются: повтор ничего не изменил бы. Отмена вызывающим (`signal`) обрывает запрос и ожидание сразу, без повтора.
  * Буфера писем в этом процессе нет: письмо отправлено, только когда хост подтвердил. Хост без маршрута (404) при
- * заданном `options.fallback` уступает место запасному исполнителю до конца процесса (спека хранилища 6.5).
+ * заданном `options.fallback` уступает место запасному исполнителю до конца процесса (спека хранилища 6.5); любой иной
+ * сбой `list` при нём отвечает запасной разово (6.4). О переходе на запасной и о запросе, кончившемся «хост не
+ * отвечает», процесс пишет строку в stderr (`parley-mcp: …`).
  */
 export function createRemoteToolRunner(agent: AgentChannel, launch: ToolLaunch, options: RemoteToolOptions = {}): ToolRunner {
   const retryBudgetMs = options.retryBudgetMs ?? RETRY_BUDGET_MS;
@@ -198,6 +211,8 @@ export function createRemoteToolRunner(agent: AgentChannel, launch: ToolLaunch, 
   /** Ответ — 404 и запасной задан: переходим на него насовсем и отдаём его, чтобы он ответил и на этот вызов. */
   function switchToFallback(answer: Answer): ToolRunner | null {
     if (fallback === undefined || !('text' in answer) || answer.missingRoute !== true) return null;
+    // Вызовы, ждавшие ответа вместе, получают 404 все сразу: строка нужна одна на процесс, от первого.
+    if (direct === null) note(`the host has no ${AGENT_TOOLS_PATH} route (HTTP 404); reading the map directly for the rest of this process`);
     direct = fallback;
     return fallback;
   }
@@ -222,7 +237,10 @@ export function createRemoteToolRunner(agent: AgentChannel, launch: ToolLaunch, 
       const now = performance.now();
       firstFailure ??= now;
       const pause = retryDelaysMs[Math.min(failures, retryDelaysMs.length - 1)] ?? 0;
-      if (now - firstFailure + pause > retryBudgetMs) return { text: HOST_NOT_RESPONDING };
+      if (now - firstFailure + pause > retryBudgetMs) {
+        note(`Parley host is not responding to ${body.op === 'call' ? `call ${body.name}` : 'list'}: gave up after ${failures + 1} attempts`);
+        return { text: HOST_NOT_RESPONDING };
+      }
       try {
         await sleep(pause, undefined, signal === undefined ? undefined : { signal });
       } catch {
@@ -237,11 +255,15 @@ export function createRemoteToolRunner(agent: AgentChannel, launch: ToolLaunch, 
       const answer = await exchange({ op: 'list', launch }, LIST_TIMEOUT_MS);
       const local = switchToFallback(answer);
       if (local !== null) return local.list();
+      const tools = 'text' in answer ? undefined : answer.result['tools'];
+      if (Array.isArray(tools)) return tools as Tool[];
+      // Список — не вызов: клиент просит его при подключении, а `listChanged` сервер не объявляет, так что один сбой
+      // (хост занят, сеть, 401, 5xx после окна повторов, нечитаемый ответ) мог бы оставить агента без инструментов
+      // Parley на всю сессию. Набор у местного исполнителя тот же, поэтому этому запросу отвечает он, не переключаясь на
+      // прямой путь: вызовы по-прежнему идут хосту, и при его молчании агент получает честный отказ (спека хранилища 6.4).
+      if (fallback !== undefined) return fallback.list();
       // Списку отвечать результатом с `isError` нечем: отказ идёт ошибкой протокола с тем же текстом.
-      if ('text' in answer) throw new Error(answer.text);
-      const tools = answer.result['tools'];
-      if (!Array.isArray(tools)) throw new Error(UNREADABLE_ANSWER);
-      return tools as Tool[];
+      throw new Error('text' in answer ? answer.text : UNREADABLE_ANSWER);
     },
     async call(name, args, meta, signal): Promise<CallToolResult> {
       if (direct !== null) return direct.call(name, args, meta, signal);
