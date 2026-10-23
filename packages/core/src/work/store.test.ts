@@ -14,6 +14,7 @@ import {
   createWork,
   deleteSessionFiles,
   deleteWorkFiles,
+  MAP_SNAPSHOT_LIMIT,
   MapLockTimeoutError,
   pruneWorksIndex,
   readMap,
@@ -47,6 +48,14 @@ describe('shared storage primitives', () => {
     await expect(readSharedFile(project)).rejects.toMatchObject({ code: 'shared-file-unreadable' });
     await writeFile(file, Buffer.alloc(1024 * 1024 + 1));
     await expect(readSharedFile(file)).rejects.toMatchObject({ code: 'shared-file-too-large' });
+  });
+  it('reads past the default bound only when the caller raises it', async () => {
+    const file = path.join(project, 'big.json');
+    await writeFile(file, 'x'.repeat(2 * 1024 * 1024));
+    await expect(readSharedFile(file)).rejects.toMatchObject({ code: 'shared-file-too-large' });
+    const snapshot = await readSharedFile(file, MAP_SNAPSHOT_LIMIT);
+    expect(snapshot.text).toHaveLength(2 * 1024 * 1024);
+    await expect(readSharedFile(file, 1024)).rejects.toMatchObject({ code: 'shared-file-too-large' });
   });
   it('rejects symlink/FIFO readers and symlink state directories without following them', async () => {
     const target = path.join(project, 'target'); await writeFile(target, 'private');

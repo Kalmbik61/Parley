@@ -668,19 +668,26 @@ export async function withBacklogChoice(paths: SharedProjectPaths): Promise<Shar
 
 export interface SharedFileSnapshot { text: string; version: string }
 const SHARED_FILE_LIMIT = 1024 * 1024;
+/**
+ * Потолок чтения для карты работы. Карта — собственный файл Parley, а не общий файл проекта: переписка
+ * раздувает её за 1 МиБ, и общий потолок делал такую карту нечитаемой для бэклога. Карту читают как
+ * `readSharedFile(file, MAP_SNAPSHOT_LIMIT)`; `writeSharedFile` остаётся на 1 МиБ — картам он не нужен
+ * (спека хранилища 6.9).
+ */
+export const MAP_SNAPSHOT_LIMIT = 256 * 1024 * 1024;
 export const MISSING_SHARED_VERSION = 'missing';
 
 /** Nonblocking regular-file reads; strict UTF-8 prevents lossless Markdown replacement of bad bytes. */
-export async function readSharedFile(file: string): Promise<SharedFileSnapshot> {
+export async function readSharedFile(file: string, limit = SHARED_FILE_LIMIT): Promise<SharedFileSnapshot> {
   for (let attempt = 0; attempt < 3; attempt++) {
-    try { return await readSharedFileOnce(file); }
+    try { return await readSharedFileOnce(file, limit); }
     catch (error) {
       if (!(error instanceof SharedStateError) || error.code !== 'backlog-conflict') throw error;
     }
   }
   throw new SharedStateError('backlog-conflict');
 }
-async function readSharedFileOnce(file: string): Promise<SharedFileSnapshot> {
+async function readSharedFileOnce(file: string, limit: number): Promise<SharedFileSnapshot> {
   let handle: FileHandle;
   try { handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) {
@@ -690,7 +697,7 @@ async function readSharedFileOnce(file: string): Promise<SharedFileSnapshot> {
   try {
     const before = await handle.stat({ bigint: true });
     if (!before.isFile()) throw new SharedStateError('shared-file-unreadable');
-    if (before.size > BigInt(SHARED_FILE_LIMIT)) throw new SharedStateError('shared-file-too-large');
+    if (before.size > BigInt(limit)) throw new SharedStateError('shared-file-too-large');
     const bytes = Buffer.alloc(Number(before.size) + 1);
     let length = 0;
     while (length < bytes.length) {
