@@ -110,7 +110,10 @@ export function workPaths(projectPath: string, workId: string): WorkPaths {
 }
 
 export interface WriteOptions {
-  /** Блокировка, не снятая за это время, — ошибка вызова, а не тихое ожидание. */
+  /**
+   * Блокировка, не снятая за это время, — ошибка вызова, а не тихое ожидание. Время идёт с момента, когда до вызова
+   * дошла очередь писателей этого процесса (спека хранилища 6.9).
+   */
   lockTimeoutMs?: number;
 }
 
@@ -276,16 +279,41 @@ async function releaseLock(handle: FileHandle, lockFile: string): Promise<void> 
   }
 }
 
+/**
+ * Очередь писателей этого процесса по пути файла блокировки (спека хранилища 6.9, этап 1): значение — «хвост»,
+ * промис, который выполнится, когда уйдёт последний из вставших. Внутри процесса хоста писатели одного замка встают
+ * в цепочку и берут файловый замок по одному, а не опрашивают файл наперегонки каждые `RETRY_MS`: при десятках
+ * одновременных записей одной карты хвост упирался в `lockTimeoutMs`, хотя замок держал сам процесс. Файловый замок
+ * остаётся как был — для других процессов (CLI, сессии без канала): `lockTimeoutMs` считается только для него и с того
+ * момента, когда очередь дошла. У ожидания в очереди своего таймаута нет: оно кончается, когда каждый, кто впереди,
+ * закончит или упадёт по своему. Запись снимает уходящий писатель, если за ним никого нет.
+ */
+const lockQueues = new Map<string, Promise<void>>();
+
 async function withLock<T>(
   lockFile: string,
   timeoutMs: number,
   body: () => Promise<T>,
 ): Promise<T> {
-  const handle = await acquireLock(lockFile, timeoutMs);
+  const ahead = lockQueues.get(lockFile);
+  let leave!: () => void;
+  const turn = new Promise<void>((resolve) => {
+    leave = resolve;
+  });
+  lockQueues.set(lockFile, turn);
   try {
-    return await body();
+    await ahead;
+    const handle = await acquireLock(lockFile, timeoutMs);
+    try {
+      return await body();
+    } finally {
+      await releaseLock(handle, lockFile);
+    }
   } finally {
-    await releaseLock(handle, lockFile);
+    // Очередь отпускаем в любом исходе, и после падения тоже, — иначе идущие следом ждали бы вечно. Наш файл
+    // блокировки к этому моменту уже снят, так что без чужого замка следующий берёт его с первой попытки.
+    if (lockQueues.get(lockFile) === turn) lockQueues.delete(lockFile);
+    leave();
   }
 }
 

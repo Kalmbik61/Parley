@@ -583,6 +583,64 @@ describe('updateMap', () => {
     expect(new Set(map.sessions.map((session) => session.id)).size).toBe(10);
   });
 
+  it('50 одновременных updateMap одного процесса проходят без MapLockTimeoutError и все применяются', async () => {
+    await createWork(project, { title: 'Авторизация' });
+
+    await Promise.all(
+      Array.from({ length: 50 }, (_unused, i) =>
+        updateMap(
+          project,
+          'w-0001',
+          (map) => {
+            addSession(map, { provider: 'claude', label: `s${i}`, task: 't' });
+          },
+          { lockTimeoutMs: 100 },
+        ),
+      ),
+    );
+
+    expect((await readMap(project, 'w-0001')).sessions).toHaveLength(50);
+  });
+
+  it('писатели в очереди падают по таймауту по одному: ожидание в очереди его не съедает', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    // Файловый замок занят «чужим процессом» (живой pid): трое одинаковых писателей встают в очередь процесса,
+    // и каждому отсчёт своих 100 мс начинается, только когда дошла его очередь.
+    await writeFile(workPaths(project, 'w-0001').lock, `${process.pid}\n`, { flag: 'wx' });
+
+    const started = Date.now();
+    const results = await Promise.allSettled(
+      Array.from({ length: 3 }, () =>
+        updateMap(project, 'w-0001', () => {}, { lockTimeoutMs: 100 }),
+      ),
+    );
+
+    expect(results.map((result) => result.status)).toEqual(['rejected', 'rejected', 'rejected']);
+    for (const result of results) {
+      expect((result as PromiseRejectedResult).reason).toBeInstanceOf(MapLockTimeoutError);
+    }
+    expect(Date.now() - started).toBeGreaterThanOrEqual(290);
+  });
+
+  it('мутация, упавшая под замком, не вешает очередь: идущие за ней применяются', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const fail = (): void => {
+      throw new Error('мутация упала');
+    };
+
+    // Двое падают, третий — в любом порядке прихода — должен применить своё: за каждым упавшим кто-то да стоит.
+    const results = await Promise.allSettled([
+      updateMap(project, 'w-0001', fail),
+      updateMap(project, 'w-0001', fail),
+      updateMap(project, 'w-0001', (map) => {
+        map.work.goal = 'применено';
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(2);
+    expect((await readMap(project, 'w-0001')).work.goal).toBe('применено');
+  });
+
   it('два параллельных процесса-писателя не теряют записи', async () => {
     await createWork(project, { title: 'Авторизация' });
     const writer = (prefix: string) =>
