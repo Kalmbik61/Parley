@@ -84,6 +84,14 @@ export interface RemoteToolOptions {
   retryDelaysMs?: readonly number[];
   /** Срок одного запроса `call` (не `wait_for`); по умолчанию 120 с. */
   callTimeoutMs?: number;
+  /**
+   * Исполнитель в этом процессе на случай, когда у хоста нет маршрута `/agent/tools` (спека хранилища 6.5: сессия без
+   * работающего канала остаётся на прямом пути, пока карта — `map.json`). Ответ 404 значит хост прежней сборки: так бывает
+   * сразу после обновления, когда хост ещё старый и запускает сессии, а сервер MCP на диске уже новый. Первый такой ответ
+   * на `list` или `call` переключает исполнителя до конца процесса: этот вызов и все следующие идут в запасной. Не задан —
+   * 404 остаётся отказом с текстом. Переключает только 404: молчание хоста, 401 и 5xx — не повод открывать карту мимо него.
+   */
+  fallback?: ToolRunner;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -132,13 +140,17 @@ function post(url: URL, token: string, payload: string, signal: AbortSignal): Pr
   });
 }
 
-/** Что осталось от обмена: поле `result` ответа хоста или текст для агента. */
-type Answer = { result: Record<string, unknown> } | { text: string };
+/**
+ * Что осталось от обмена: поле `result` ответа хоста или текст для агента. `missingRoute` — хост ответил 404, то есть
+ * маршрута у него нет (приёмник хуков так отвечает на любой неизвестный путь): по нему включается запасной исполнитель.
+ */
+type Answer = { result: Record<string, unknown> } | { text: string; missingRoute?: true };
 
 /** Ответ хоста, который повторять не нужно: статус и конверт `{ ok, result | error }`. */
 function answerOf(reply: Reply): Answer {
   if (reply.status === 401) return { text: SESSION_LINK_EXPIRED };
   if (reply.status === 413) return { text: ARGUMENTS_TOO_LARGE };
+  if (reply.status === 404) return { text: hostRefused(404), missingRoute: true };
   if (reply.status !== 200) return { text: hostRefused(reply.status) };
   let body: unknown;
   try {
@@ -171,13 +183,24 @@ function requestTimeoutMs(name: string, args: Record<string, unknown>, callTimeo
  * окно с первой неудачи вызова укладывается в `retryBudgetMs`; дальше агент получает честное «хост не отвечает». Повтор
  * несёт тот же `callId`, так что потерянный ответ не удваивает запись. Отказы 401 и 413 и ответы, которых хост не даёт,
  * не повторяются: повтор ничего не изменил бы. Отмена вызывающим (`signal`) обрывает запрос и ожидание сразу, без повтора.
- * Буфера писем в этом процессе нет: письмо отправлено, только когда хост подтвердил.
+ * Буфера писем в этом процессе нет: письмо отправлено, только когда хост подтвердил. Хост без маршрута (404) при
+ * заданном `options.fallback` уступает место запасному исполнителю до конца процесса (спека хранилища 6.5).
  */
 export function createRemoteToolRunner(agent: AgentChannel, launch: ToolLaunch, options: RemoteToolOptions = {}): ToolRunner {
   const retryBudgetMs = options.retryBudgetMs ?? RETRY_BUDGET_MS;
   const retryDelaysMs = options.retryDelaysMs ?? RETRY_DELAYS_MS;
   const callTimeoutMs = options.callTimeoutMs ?? CALL_TIMEOUT_MS;
+  const { fallback } = options;
   const url = new URL(AGENT_TOOLS_PATH, agent.url);
+  // Запасной исполнитель, к которому перешли после 404; пока `null` — всё идёт к хосту.
+  let direct: ToolRunner | null = null;
+
+  /** Ответ — 404 и запасной задан: переходим на него насовсем и отдаём его, чтобы он ответил и на этот вызов. */
+  function switchToFallback(answer: Answer): ToolRunner | null {
+    if (fallback === undefined || !('text' in answer) || answer.missingRoute !== true) return null;
+    direct = fallback;
+    return fallback;
+  }
 
   async function exchange(body: RemoteToolRequest, timeoutMs: number, signal?: AbortSignal): Promise<Answer> {
     const payload = JSON.stringify(body);
@@ -210,7 +233,10 @@ export function createRemoteToolRunner(agent: AgentChannel, launch: ToolLaunch, 
 
   return {
     async list(): Promise<Tool[]> {
+      if (direct !== null) return direct.list();
       const answer = await exchange({ op: 'list', launch }, LIST_TIMEOUT_MS);
+      const local = switchToFallback(answer);
+      if (local !== null) return local.list();
       // Списку отвечать результатом с `isError` нечем: отказ идёт ошибкой протокола с тем же текстом.
       if ('text' in answer) throw new Error(answer.text);
       const tools = answer.result['tools'];
@@ -218,12 +244,15 @@ export function createRemoteToolRunner(agent: AgentChannel, launch: ToolLaunch, 
       return tools as Tool[];
     },
     async call(name, args, meta, signal): Promise<CallToolResult> {
+      if (direct !== null) return direct.call(name, args, meta, signal);
       const callId = randomUUID();
       const answer = await exchange(
         { op: 'call', launch, name, args, ...(meta === undefined ? {} : { meta }), callId },
         requestTimeoutMs(name, args, callTimeoutMs),
         signal,
       );
+      const local = switchToFallback(answer);
+      if (local !== null) return local.call(name, args, meta, signal);
       if ('text' in answer) return failure(answer.text);
       return Array.isArray(answer.result['content']) ? (answer.result as unknown as CallToolResult) : failure(UNREADABLE_ANSWER);
     },

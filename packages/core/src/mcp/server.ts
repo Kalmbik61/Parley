@@ -8,7 +8,7 @@ import { envValue } from '../names.js';
 import { createAssistantServer } from './assistant.js';
 import { contextFromEnv } from './context.js';
 import { createRemoteToolRunner, launchOf } from './remote-tools.js';
-import { createParleyServer } from './tools.js';
+import { createParleyServer, createToolRunner } from './tools.js';
 
 async function main(): Promise<number> {
   let server;
@@ -28,10 +28,12 @@ async function main(): Promise<number> {
       };
       // Сессия запущена хостом (есть канал агента и id): инструменты исполняет он, и этот процесс карту не открывает
       // (спека хранилища 6.3). Без канала или сессии (старая, запущенная человеком или не Parley) — прежний путь,
-      // прямое чтение карты (6.5).
+      // прямое чтение карты (6.5). Хост прежней сборки отвечает на `/agent/tools` 404 (сразу после обновления он ещё
+      // старый, а этот сервер уже новый): тогда удалённый исполнитель до конца процесса отдаёт всё запасному — тому же
+      // местному исполнителю, что у сессии без канала, — вместо отказа каждому инструменту до перезапуска хоста (6.5).
       server =
         context.agent !== undefined && context.sessionId !== null
-          ? createParleyServer(context, createRemoteToolRunner(context.agent, launchOf(context)))
+          ? createParleyServer(context, createRemoteToolRunner(context.agent, launchOf(context), { fallback: createToolRunner(context) }))
           : createParleyServer(context);
     }
   } catch (error) {

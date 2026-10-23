@@ -15,7 +15,7 @@ import {
   createRemoteToolRunner,
   launchOf,
 } from './remote-tools.js';
-import { createParleyServer } from './tools.js';
+import { createParleyServer, type ToolRunner } from './tools.js';
 
 const TOKEN = 'a'.repeat(64);
 const servers: Server[] = [];
@@ -92,6 +92,48 @@ function reply(res: ServerResponse, status: number, body?: unknown, raw?: string
   }
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(raw ?? JSON.stringify(body));
+}
+
+/**
+ * Хост прежней сборки без маршрута `/agent/tools`: то же, что приёмник хуков делает с неизвестным путём (`hook-server.ts`,
+ * `reject`) — 404 без тела, тело запроса не читается, сокет закрывается сразу после ответа. В `seen` — строки запросов.
+ */
+async function hostWithoutRoute(): Promise<{ agent: AgentChannel; seen: string[] }> {
+  const seen: string[] = [];
+  const server = createServer((req, res) => {
+    seen.push(`${req.method} ${req.url}`);
+    res.writeHead(404, { 'Content-Length': '0', Connection: 'close' });
+    res.end(() => req.socket.destroy());
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as { port: number };
+  return { agent: { url: `http://127.0.0.1:${port}/agent/browser`, token: TOKEN }, seen };
+}
+
+/** Что звали у подставного запасного исполнителя. */
+interface FallbackCall {
+  name: string;
+  args: Record<string, unknown>;
+  meta: Record<string, unknown> | undefined;
+  signal: AbortSignal | undefined;
+}
+
+/** Подставной запасной исполнитель: записывает вызовы, на `call` отвечает текстом `from fallback: <имя>`. */
+function fallbackStub(): { runner: ToolRunner; lists: number[]; calls: FallbackCall[] } {
+  const lists: number[] = [];
+  const calls: FallbackCall[] = [];
+  const runner: ToolRunner = {
+    list: async () => {
+      lists.push(lists.length + 1);
+      return [{ name: 'local_tool', inputSchema: { type: 'object' } }];
+    },
+    call: async (name, args, meta, signal) => {
+      calls.push({ name, args, meta, signal });
+      return { content: [{ type: 'text', text: `from fallback: ${name}` }] };
+    },
+  };
+  return { runner, lists, calls };
 }
 
 const ok = (result: unknown): { ok: true; result: unknown } => ({ ok: true, result });
@@ -347,6 +389,91 @@ describe('createRemoteToolRunner: инструменты агента через
       expect(result).toEqual({ isError: true, content: [{ type: 'text', text: 'Cancelled.' }] });
       expect(seen).toHaveLength(0);
     });
+  });
+});
+
+describe('запасной исполнитель при хосте без маршрута (спека хранилища 6.5)', () => {
+  it('404 на call: вызов отвечает запасной исполнитель, второй вызов хоста уже не трогает', async () => {
+    const { agent, seen } = await hostWithoutRoute();
+    const fallback = fallbackStub();
+    const runner = createRemoteToolRunner(agent, {}, { fallback: fallback.runner });
+    const controller = new AbortController();
+
+    const first = await runner.call('get_map', { field: 'x' }, { threadId: 'T' }, controller.signal);
+    const second = await runner.call('check_inbox', {}, undefined);
+
+    expect(textOf(first)).toBe('from fallback: get_map');
+    expect(textOf(second)).toBe('from fallback: check_inbox');
+    expect(seen).toEqual(['POST /agent/tools']);
+    // Вызов целиком, с аргументами, `_meta` и сигналом отмены, достаётся запасному исполнителю.
+    expect(fallback.calls).toEqual([
+      { name: 'get_map', args: { field: 'x' }, meta: { threadId: 'T' }, signal: controller.signal },
+      { name: 'check_inbox', args: {}, meta: undefined, signal: undefined },
+    ]);
+  });
+
+  it('404 на list: список отдаёт запасной исполнитель, и следующие list и call — тоже он', async () => {
+    const { agent, seen } = await hostWithoutRoute();
+    const fallback = fallbackStub();
+    const runner = createRemoteToolRunner(agent, {}, { fallback: fallback.runner });
+
+    expect((await runner.list()).map((tool) => tool.name)).toEqual(['local_tool']);
+    expect(textOf(await runner.call('get_map', {}, undefined))).toBe('from fallback: get_map');
+    expect((await runner.list()).map((tool) => tool.name)).toEqual(['local_tool']);
+
+    expect(seen).toHaveLength(1);
+    expect(fallback.lists).toHaveLength(2);
+    expect(fallback.calls).toHaveLength(1);
+  });
+
+  it('два вызова сразу до первого ответа: оба получают ответ запасного исполнителя', async () => {
+    const { agent } = await hostWithoutRoute();
+    const fallback = fallbackStub();
+    const runner = createRemoteToolRunner(agent, {}, { fallback: fallback.runner });
+
+    const [a, b] = await Promise.all([runner.call('get_map', {}, undefined), runner.call('check_inbox', {}, undefined)]);
+
+    expect([textOf(a), textOf(b)]).toEqual(['from fallback: get_map', 'from fallback: check_inbox']);
+    expect(fallback.calls.map((call) => call.name).sort()).toEqual(['check_inbox', 'get_map']);
+  });
+
+  it('без запасного исполнителя 404 остаётся отказом с текстом — и у call, и у list', async () => {
+    const { agent, seen } = await hostWithoutRoute();
+    const runner = createRemoteToolRunner(agent, {});
+
+    const result = await runner.call('get_map', {}, undefined);
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe("Parley's host refused the request (HTTP 404).");
+    await expect(runner.list()).rejects.toThrow("Parley's host refused the request (HTTP 404).");
+    // Без запасного хост спрашивается каждый раз: переключаться не на что.
+    expect(seen).toHaveLength(2);
+  });
+
+  it.each([
+    ['401', 401, SESSION_LINK_EXPIRED],
+    ['500', 500, "Parley's host refused the request (HTTP 500)."],
+    ['503 дольше бюджета', 503, HOST_NOT_RESPONDING],
+  ] as const)('запасной включает только 404: ответ %s остаётся отказом', async (_name, status, text) => {
+    const { agent } = await fakeHost((_req, res) => reply(res, status));
+    const fallback = fallbackStub();
+    const runner = createRemoteToolRunner(agent, {}, { fallback: fallback.runner, retryDelaysMs: [10], retryBudgetMs: 50 });
+
+    expect(textOf(await runner.call('get_map', {}, undefined))).toBe(text);
+    expect(fallback.calls).toHaveLength(0);
+  });
+
+  it('недоступный хост — не повод открывать карту: порт закрыт — HOST_NOT_RESPONDING, запасной не зовётся', async () => {
+    const closed = createServer();
+    await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve));
+    const { port } = closed.address() as { port: number };
+    await new Promise<void>((resolve) => closed.close(() => resolve()));
+    const fallback = fallbackStub();
+    const agent: AgentChannel = { url: `http://127.0.0.1:${port}/agent/browser`, token: TOKEN };
+
+    const result = await createRemoteToolRunner(agent, {}, { fallback: fallback.runner, retryDelaysMs: [10], retryBudgetMs: 50 }).call('get_map', {}, undefined);
+
+    expect(textOf(result)).toBe(HOST_NOT_RESPONDING);
+    expect(fallback.calls).toHaveLength(0);
   });
 });
 
