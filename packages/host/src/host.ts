@@ -50,6 +50,7 @@ import type { HostPaths } from './paths.js';
 import { HOST_ERROR_REASONS } from '@parley/protocol';
 import type { Result, SessionRef } from '@parley/protocol';
 import { createHostHandlers } from './methods/index.js';
+import { createCachedCatalog } from './methods/role-catalog-cache.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
 import { createCompactionService, type CompactionService } from './compaction/compaction-service.js';
@@ -381,15 +382,20 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     authenticate: (req) => browserEndpoint.authenticate(req),
     list: listProviderRows,
   });
+  // Каталог ролей хоста один на окно (`roles.list`, `recipes.list`) и агентов (`list_roles`): без общего кэша каждый
+  // `list_roles` агента заново читал бы конфигурацию Codex (`codex app-server`, до 8 с) — так хост уже подвисал.
+  const roleCatalog = createCachedCatalog();
   // Инструменты агента исполняются здесь, в процессе хоста (спека хранилища 6.3, 6.9): карту работы открывает только хост.
   // Строки провайдеров для `get_map` — те же, что у `/agent/providers`: ходить к себе по HTTP незачем; `wait_for` будит
-  // изменение работ службы, а не `fs.watch`. Токен тот же, что у остальных маршрутов агента.
+  // изменение работ службы, а не `fs.watch`; `list_roles` берёт общий кэш каталога. Токен тот же, что у остальных
+  // маршрутов агента.
   const toolsEndpoint = createToolsEndpoint({
     authenticate: (req) => browserEndpoint.authenticate(req),
     contextFor: (ref, launch) =>
       hostToolContext(ref, launch, {
         providerRows: listProviderRows,
         onWorksChange: (listener) => worksService.onChange(() => listener()),
+        roleCatalog: (cwd) => roleCatalog(cwd, { codex: true }),
       }),
     log,
   });
@@ -655,6 +661,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   handle.context.onShutdown(async () => profiler.stop());
 
   const handlers = createHostHandlers({
+    roleCatalog,
     backlog: backlogService,
     planEffects,
     history,

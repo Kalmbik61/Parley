@@ -1,4 +1,4 @@
-import { loadConfig, workPaths, type McpContext, type ProviderRow, type ToolLaunch } from '@parley/core';
+import { loadConfig, workPaths, type McpContext, type ProviderRow, type RoleCatalog, type ToolLaunch } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 
 /**
@@ -12,6 +12,9 @@ import type { SessionRef } from '@parley/protocol';
  *
  * Потолок писем и корень worktree живут в настройках, не в окружении: процесс MCP читал их при старте, исполнитель — при
  * создании, то есть на время жизни своего `launch`.
+ *
+ * Каталог ролей для `list_roles` хост даёт свой, общий с окном и кэшированный: без него исполнитель при каждом вызове сам
+ * читает конфигурацию Codex (`codex app-server`, до 8 с), и вызовы агентов нагружали бы хост (спека хранилища 6.3).
  */
 export async function hostToolContext(
   ref: SessionRef,
@@ -21,6 +24,8 @@ export async function hostToolContext(
     providerRows(): Promise<ProviderRow[]>;
     /** Подписка на изменение работ хоста: она будит `wait_for` вместо `fs.watch`. Возвращает отписку. */
     onWorksChange(listener: () => void): () => void;
+    /** Каталог ролей для `list_roles` (кэш хоста, тот же, что у `roles.list`); нет — исполнитель читает каталог сам. */
+    roleCatalog?: (cwd: string) => Promise<RoleCatalog>;
   },
 ): Promise<McpContext> {
   const { config } = await loadConfig();
@@ -42,5 +47,6 @@ export async function hostToolContext(
       }
     },
     mapChanges: deps.onWorksChange,
+    ...(deps.roleCatalog === undefined ? {} : { roleCatalog: deps.roleCatalog }),
   };
 }

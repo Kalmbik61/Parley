@@ -84,6 +84,11 @@ export interface MethodDeps {
   worktrees: WorktreesService;
   /** Лента вида «Chat» (`feed.*`); без неё методов ленты у хоста нет. */
   feed?: FeedService;
+  /**
+   * Кэшированный каталог ролей хоста для `roles.list` и `recipes.list`. Хост отдаёт его же инструментам агентов
+   * (`list_roles`), чтобы кэш был один; без него методы заводят свой.
+   */
+  roleCatalog?: ReturnType<typeof createCachedCatalog>;
   /** Live project backlog subscriptions; manual methods also work without this service. */
   backlog?: BacklogService;
   /** One host authority for durable plan delivery and export retries. */
@@ -206,8 +211,9 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const worktrees = createWorktreesHandlers(deps);
   const changes = createChangesHandlers(deps);
   const capabilities = createCapabilitiesHandlers();
-  // Один кэш на `roles.list` и `recipes.list`: оба просят один и тот же каталог по одному `cwd`.
-  const roleCatalog = createCachedCatalog();
+  // Один кэш на `roles.list` и `recipes.list`: оба просят один и тот же каталог по одному `cwd`. Хост делит его и с
+  // инструментами агентов, поэтому берёт готовый из `deps`.
+  const roleCatalog = deps.roleCatalog ?? createCachedCatalog();
 
   const compaction = deps.compaction === undefined ? null : createCompactionMethods(deps.compaction);
 

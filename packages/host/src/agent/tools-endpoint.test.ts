@@ -16,6 +16,7 @@ import {
   DEFAULT_CONFIG,
   addMessage,
   addSession,
+  buildRoleCatalog,
   createRemoteToolRunner,
   createWork,
   readMap,
@@ -587,6 +588,14 @@ describe('hostToolContext', () => {
     const rows: ProviderRow[] = [{ id: 'claude', label: 'Claude Code', family: 'claude', available: true, needs: null, models: null, effort: true, limits: null }];
     const context = await hostToolContext(scope(), {}, { providerRows: async () => rows, onWorksChange: () => () => {} });
     await expect(context.providerRows?.(new AbortController().signal)).resolves.toEqual(rows);
+  });
+
+  it('puts the given role catalog into the context, and has none of its own when none is given', async () => {
+    const roleCatalog = vi.fn(async () => buildRoleCatalog());
+    const shared = await hostToolContext(scope(), {}, { providerRows: noRows, onWorksChange: () => () => {}, roleCatalog });
+    expect(shared.roleCatalog).toBe(roleCatalog);
+    const own = await hostToolContext(scope(), {}, { providerRows: noRows, onWorksChange: () => () => {} });
+    expect('roleCatalog' in own).toBe(false);
   });
 
   it('lets the token scope win over a launch that names scope fields', async () => {
