@@ -313,8 +313,10 @@ async function writeAtomic(file: string, text: string): Promise<void> {
  * их часто: разбор неизменного файла каждый раз занимал поток. Сверка — по личности файла из `stat`
  * (`dev:ino:size:mtimeNs:ctimeNs`): запись идёт атомарным rename (новый inode), правка на месте меняет время и размер,
  * так что устаревшую карту кэш не отдаст. Принимает и выдаёт он копии (`structuredClone`): вызывающие свободно
- * меняют полученную карту, и общий объект испортил бы её всем читателям сразу. Записей не больше `MAP_CACHE_LIMIT`,
- * сверх лимита уходит самая давняя по вставке.
+ * меняют полученную карту, и общий объект испортил бы её всем читателям сразу. После записи в него ложится не изменённый
+ * в памяти объект, а то, что вернёт свежий разбор записанного текста: разбор достраивает умолчания, убирает испорченное
+ * и отвергает неверное, и писавший процесс не должен читать карту иначе, чем любой другой. Записей не больше
+ * `MAP_CACHE_LIMIT`, сверх лимита уходит самая давняя по вставке.
  */
 export const MAP_CACHE_LIMIT = 32;
 
@@ -348,12 +350,24 @@ function cachedMap(file: string, identity: string | null): WorkMap | undefined {
   return structuredClone(entry.map);
 }
 
-/** Кладёт в кэш копию карты; сверх `MAP_CACHE_LIMIT` вытесняется самая давняя по вставке. */
+/**
+ * Кладёт карту в кэш как есть: вызывающий отдаёт объект, которого больше ни у кого нет (свежий разбор или своя копия).
+ * Сверх `MAP_CACHE_LIMIT` вытесняется самая давняя по вставке.
+ */
 function rememberMap(file: string, identity: string, map: WorkMap): void {
-  mapCache.set(file, { identity, map: structuredClone(map) });
+  mapCache.set(file, { identity, map });
   for (const oldest of mapCache.keys()) {
     if (mapCache.size <= MAP_CACHE_LIMIT) break;
     mapCache.delete(oldest);
+  }
+}
+
+/** Что вернёт свежий разбор записанного текста; `undefined` — разбор его отверг, и читателю с диска он откажет так же. */
+function reparse(text: string, file: string): WorkMap | undefined {
+  try {
+    return parseMap(text, file);
+  } catch {
+    return undefined;
   }
 }
 
@@ -369,7 +383,7 @@ export async function readMap(projectPath: string, workId: string): Promise<Work
   const cached = cachedMap(file, identity);
   if (cached !== undefined) return cached;
   const map = parseMap(await readFile(file, 'utf8'), file);
-  if (identity !== null) rememberMap(file, identity, map);
+  if (identity !== null) rememberMap(file, identity, structuredClone(map));
   return map;
 }
 
@@ -643,12 +657,17 @@ export async function updateMap(
     if (await backupDue(paths.bak, Date.now())) {
       await writeAtomic(paths.bak, raw ?? (await readFile(paths.map, 'utf8')));
     }
-    await writeAtomic(paths.map, serialize(current));
-    // В кэш — после записи и под тем же замком: личность нового файла берём, пока его никто не переписал. Не вышло
-    // (каталог работы снесли) — запись снимаем, а не бросаем: карта уже записана, и ошибка заставила бы повторить мутацию.
+    const text = serialize(current);
+    await writeAtomic(paths.map, text);
+    // В кэш — после записи и под тем же замком, и не `current`, а то, что вернёт свежий разбор записанного текста
+    // (спека хранилища 6.9): иначе писавший процесс читал бы карту иначе, чем любой другой. Личность файла берём до
+    // разбора: перепишут его за время разбора — запись просто не совпадёт со следующей сверкой. Не вышло (каталог
+    // работы снесли; разбор отверг только что записанное) — запись снимаем и молчим: карта уже записана, ошибка
+    // заставила бы повторить мутацию, а следующее чтение или обновление прочтёт файл с диска и откажет, как прежде.
     const written = await mapIdentity(paths.map);
-    if (written === null) mapCache.delete(paths.map);
-    else rememberMap(paths.map, written, current);
+    const reread = written === null ? undefined : reparse(text, paths.map);
+    if (written !== null && reread !== undefined) rememberMap(paths.map, written, reread);
+    else mapCache.delete(paths.map);
     return current;
   }).catch(whenGone);
 }

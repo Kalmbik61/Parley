@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { contextFile } from '../context-fill.js';
-import { addSession } from './map.js';
+import { addSession, parseMap } from './map.js';
 import type { WorkMap } from './types.js';
 import {
   createWork,
@@ -317,7 +317,7 @@ describe('updateMap', () => {
     expect(raw.rooms).toEqual([]);
     expect(raw.sessions[0]).toMatchObject({ lifecycle: 'sleeping', result: null });
     expect(raw.messages[0]).toMatchObject({ to: ['s-01'], readBy: {}, roomId: null });
-    expect(await readMap(project, 'w-0001')).toEqual(updated);
+    expect(parseMap(await readFile(paths.map, 'utf8'), paths.map)).toEqual(updated);
   });
 
   it('пишет карту, кладёт прежнюю версию в .bak и обновляет индекс', async () => {
@@ -332,7 +332,7 @@ describe('updateMap', () => {
 
     expect(updated.sessions[0]?.id).toBe('s-01');
     expect(await readFile(paths.bak, 'utf8')).toBe(before);
-    expect(await readMap(project, 'w-0001')).toEqual(updated);
+    expect(parseMap(await readFile(paths.map, 'utf8'), paths.map)).toEqual(updated);
     expect(updated.work.updatedAt >= JSON.parse(before).work.updatedAt).toBe(true);
     expect((await readWorksIndex()).works).toEqual([
       {
@@ -500,6 +500,35 @@ describe('updateMap', () => {
     ).rejects.toThrow('стоп');
 
     expect((await readMap(project, 'w-0001')).work.title).toBe('Авторизация');
+  });
+
+  it('после записи кэш отдаёт то же, что свежий разбор файла', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    // `parseMap` убирает effort, не прошедший токен: писавший процесс не должен читать его иначе, чем свежий.
+    await updateMap(project, 'w-0001', (map) => {
+      addSession(map, { provider: 'claude', label: 'план', task: 't', effort: 'bad"value' });
+    });
+    const fresh = parseMap(await readFile(paths.map, 'utf8'), paths.map);
+    expect(fresh.sessions[0]!.effort).toBeUndefined();
+
+    const before = mapCacheStats();
+    const cached = await readMap(project, 'w-0001');
+
+    expect(mapCacheStats().misses).toBe(before.misses);
+    expect(cached.sessions[0]!.effort).toBe(fresh.sessions[0]!.effort);
+    expect(cached).toEqual(fresh);
+  });
+
+  it('карта, которую свежий разбор отвергнет, не остаётся в кэше: чтение и обновление падают, как с диска', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await updateMap(project, 'w-0001', (map) => {
+      const session = addSession(map, { provider: 'claude', label: 'план', task: 't' });
+      Object.assign(session, { role: { source: 'bogus', name: 'x' } });
+    });
+
+    await expect(readMap(project, 'w-0001')).rejects.toThrow('invalid session role');
+    await expect(updateMap(project, 'w-0001', () => {})).rejects.toThrow('invalid session role');
   });
 
   it('кэш вмещает не больше MAP_CACHE_LIMIT карт: самая давняя по вставке вытесняется', async () => {
