@@ -575,7 +575,7 @@ export async function updateMap(
     // Порядок записей в индексе при этом остаётся порядком записей карты.
     await withWorksIndex(lockTimeoutMs, (index) => upsert(index, entryOf(projectPath, current)));
     // Копия — не каждой записью, а когда прежней нет или она устарела (спека хранилища 6.9).
-    if (await backupDue(paths.bak, Date.now())) await writeFile(paths.bak, raw, 'utf8');
+    if (await backupDue(paths.bak, Date.now())) await writeAtomic(paths.bak, raw);
     await writeAtomic(paths.map, serialize(current));
     return current;
   }).catch(whenGone);
@@ -693,14 +693,17 @@ export interface SharedFileSnapshot { text: string; version: string }
 const SHARED_FILE_LIMIT = 1024 * 1024;
 /**
  * Потолок чтения для карты работы. Карта — собственный файл Parley, а не общий файл проекта: переписка
- * раздувает её за 1 МиБ, и общий потолок делал такую карту нечитаемой для бэклога. Карту читают как
- * `readSharedFile(file, MAP_SNAPSHOT_LIMIT)`; `writeSharedFile` остаётся на 1 МиБ — картам он не нужен
- * (спека хранилища 6.9).
+ * раздувает её за 1 МиБ, и общий потолок делал такую карту нечитаемой для бэклога. Так карту читает бэклог
+ * хоста (`knownMap`): `readSharedFile(file, MAP_SNAPSHOT_LIMIT)`; `writeSharedFile` остаётся на 1 МиБ —
+ * картам он не нужен (спека хранилища 6.9).
  */
 export const MAP_SNAPSHOT_LIMIT = 256 * 1024 * 1024;
 export const MISSING_SHARED_VERSION = 'missing';
 
-/** Nonblocking regular-file reads; strict UTF-8 prevents lossless Markdown replacement of bad bytes. */
+/**
+ * Nonblocking regular-file reads; strict UTF-8 prevents lossless Markdown replacement of bad bytes.
+ * `limit` bounds the file size in bytes and defaults to `SHARED_FILE_LIMIT` (1 MiB).
+ */
 export async function readSharedFile(file: string, limit = SHARED_FILE_LIMIT): Promise<SharedFileSnapshot> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try { return await readSharedFileOnce(file, limit); }
