@@ -343,6 +343,64 @@ describe('updateMap', () => {
     ]);
   });
 
+  it('вторая запись в течение 10 минут не переписывает .bak', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    const created = await readFile(paths.map, 'utf8');
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Первая';
+    });
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Вторая';
+    });
+
+    expect(await readFile(paths.bak, 'utf8')).toBe(created);
+  });
+
+  it('копия старше 10 минут обновляется: в ней версия перед этой записью', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Первая';
+    });
+    const before = await readFile(paths.map, 'utf8');
+    const old = new Date(Date.now() - 11 * 60 * 1000);
+    await utimes(paths.bak, old, old);
+
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Вторая';
+    });
+
+    expect(await readFile(paths.bak, 'utf8')).toBe(before);
+  });
+
+  it('пропавший .bak кладётся следующей записью', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    await rm(paths.bak);
+    const before = await readFile(paths.map, 'utf8');
+
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Первая';
+    });
+
+    expect(await readFile(paths.bak, 'utf8')).toBe(before);
+  });
+
+  it('.bak из будущего (часы сдвинули) не застревает', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    const future = new Date(Date.now() + 60 * 60 * 1000);
+    await utimes(paths.bak, future, future);
+    const before = await readFile(paths.map, 'utf8');
+
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Первая';
+    });
+
+    expect(await readFile(paths.bak, 'utf8')).toBe(before);
+  });
+
   it('после записи в каталоге работы не остаётся временных файлов', async () => {
     await createWork(project, { title: 'Авторизация' });
     await updateMap(project, 'w-0001', (map) => {

@@ -58,8 +58,9 @@ export async function markHumanRead(
   const pending = (map: WorkMap): Message[] =>
     map.messages.filter((message) => wanted.has(message.id) && unreadForHuman(message));
 
-  // Сперва чтение без лока: updateMap пишет индекс, .bak и карту всегда, и повтор
-  // пачки окна разослал бы works.changed всем клиентам впустую.
+  // Сперва чтение без лока: updateMap пишет индекс и карту всегда (.bak — не чаще раза в
+  // MAP_BACKUP_INTERVAL_MS, спека хранилища 6.9), и повтор пачки окна разослал бы works.changed
+  // всем клиентам впустую.
   let current: WorkMap;
   try {
     current = await readMap(projectPath, workId);
