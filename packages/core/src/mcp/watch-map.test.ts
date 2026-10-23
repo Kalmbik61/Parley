@@ -84,7 +84,8 @@ describe('waitForMap', () => {
       undefined,
       changes,
     );
-    await tick();
+    // Подписка заводится после первой пробы: ждём её, а не спим, и только тогда даём пробе увидеть «готово».
+    await vi.waitFor(() => expect(listener).not.toBeNull());
     ready = true;
     await touch(mapFile);
     listener!();
@@ -95,7 +96,7 @@ describe('waitForMap', () => {
 
   it('пока файл карты не менялся, проба не зовётся', async () => {
     let calls = 0;
-    let listener!: () => void;
+    let listener: (() => void) | null = null;
     const changes: MapChanges = (onChange) => {
       listener = onChange;
       return () => {};
@@ -112,20 +113,21 @@ describe('waitForMap', () => {
       abort.signal,
       changes,
     );
-    await tick();
-    listener();
-    listener();
+    await vi.waitFor(() => expect(listener).not.toBeNull());
+    listener!();
+    listener!();
+    // Отсутствие пробы ждать нечем: пауза даёт лишнему вызову, если бы он был, успеть.
     await tick();
     expect(calls).toBe(1);
     await touch(mapFile);
-    listener();
+    listener!();
     await vi.waitFor(() => expect(calls).toBe(2));
     abort.abort();
     await expect(waiting).resolves.toBeNull();
   });
 
   it('два сигнала подряд на изменившейся карте зовут пробу один раз', async () => {
-    const { changes, fire } = source();
+    const { changes, fire, listening } = source();
     let calls = 0;
     const waiting = waitForMap(
       mapFile,
@@ -138,12 +140,13 @@ describe('waitForMap', () => {
       cancel.signal,
       changes,
     );
-    await tick();
+    await vi.waitFor(() => expect(listening()).toBe(true));
     await touch(mapFile);
     fire();
     fire();
     fire();
     await vi.waitFor(() => expect(calls).toBe(2));
+    // Лишних проб не было бы и позже: пауза даёт им, если бы они были, успеть.
     await tick();
     expect(calls).toBe(2);
     cancel.abort();
