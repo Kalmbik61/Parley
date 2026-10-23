@@ -234,6 +234,13 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
     },
     setHitRect: (rect) => {
       hitRect = rect;
+      // Опрос мог остановиться, пока остров на экране (`isVisible()` на миг дал `false`), а `island:visible` от renderer приходит
+      // только при смене значения — без этого окно оставалось бы сквозным до перезапуска. Область шлётся при каждой смене формы.
+      const current = live();
+      if (rect !== null && pollTimer === null && current !== null && current.isVisible()) {
+        deps.log('island hover polling restarted');
+        startPolling();
+      }
     },
     setVisible: (visible) => {
       const current = live();
