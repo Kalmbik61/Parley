@@ -504,9 +504,31 @@ export async function createWork(
 }
 
 /**
+ * Как часто `updateMap` обновляет `map.json.bak` (спека хранилища 6.9). Раньше копия переписывалась каждой
+ * записью карты целиком, а карты бывают в мегабайты: запись удваивалась.
+ */
+export const MAP_BACKUP_INTERVAL_MS = 10 * 60 * 1000;
+
+/**
+ * Пора ли класть копию: файла нет (человек удалил) — пора сразу; иначе — когда с её последней записи
+ * прошло не меньше интервала. Разность берётся по модулю: после сдвига часов назад у копии mtime в будущем,
+ * и без модуля она не обновлялась бы, пока часы не дойдут до этого времени.
+ */
+async function backupDue(file: string, now: number): Promise<boolean> {
+  try {
+    return Math.abs(now - (await stat(file)).mtimeMs) >= MAP_BACKUP_INTERVAL_MS;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  }
+}
+
+/**
  * Единственный способ изменить карту: читаем и пишем под блокировкой `map.lock`,
- * поэтому параллельные писатели не затирают друг друга. Прежняя версия уходит
- * в `map.json.bak`, новая появляется атомарным `rename`. Битую карту не трогаем.
+ * поэтому параллельные писатели не затирают друг друга. Новая версия появляется
+ * атомарным `rename`. Прежняя уходит в `map.json.bak` не каждой записью, а когда копии нет
+ * или с её записи прошло `MAP_BACKUP_INTERVAL_MS` (спека хранилища 6.9); `createWork` кладёт её
+ * сразу. Битую карту не трогаем.
  */
 /** Только у updateMap: createWork, deleteWorkFiles и pruneWorksIndex берут прежний WriteOptions. */
 export interface UpdateMapOptions extends WriteOptions {
@@ -552,7 +574,8 @@ export async function updateMap(
     // означать «карта не переписана», иначе ретрай вызывающего продублирует мутацию.
     // Порядок записей в индексе при этом остаётся порядком записей карты.
     await withWorksIndex(lockTimeoutMs, (index) => upsert(index, entryOf(projectPath, current)));
-    await writeFile(paths.bak, raw, 'utf8');
+    // Копия — не каждой записью, а когда прежней нет или она устарела (спека хранилища 6.9).
+    if (await backupDue(paths.bak, Date.now())) await writeAtomic(paths.bak, raw);
     await writeAtomic(paths.map, serialize(current));
     return current;
   }).catch(whenGone);
@@ -668,19 +691,29 @@ export async function withBacklogChoice(paths: SharedProjectPaths): Promise<Shar
 
 export interface SharedFileSnapshot { text: string; version: string }
 const SHARED_FILE_LIMIT = 1024 * 1024;
+/**
+ * Потолок чтения для карты работы. Карта — собственный файл Parley, а не общий файл проекта: переписка
+ * раздувает её за 1 МиБ, и общий потолок делал такую карту нечитаемой для бэклога. Так карту читает бэклог
+ * хоста (`knownMap`): `readSharedFile(file, MAP_SNAPSHOT_LIMIT)`; `writeSharedFile` остаётся на 1 МиБ —
+ * картам он не нужен (спека хранилища 6.9).
+ */
+export const MAP_SNAPSHOT_LIMIT = 256 * 1024 * 1024;
 export const MISSING_SHARED_VERSION = 'missing';
 
-/** Nonblocking regular-file reads; strict UTF-8 prevents lossless Markdown replacement of bad bytes. */
-export async function readSharedFile(file: string): Promise<SharedFileSnapshot> {
+/**
+ * Nonblocking regular-file reads; strict UTF-8 prevents lossless Markdown replacement of bad bytes.
+ * `limit` bounds the file size in bytes and defaults to `SHARED_FILE_LIMIT` (1 MiB).
+ */
+export async function readSharedFile(file: string, limit = SHARED_FILE_LIMIT): Promise<SharedFileSnapshot> {
   for (let attempt = 0; attempt < 3; attempt++) {
-    try { return await readSharedFileOnce(file); }
+    try { return await readSharedFileOnce(file, limit); }
     catch (error) {
       if (!(error instanceof SharedStateError) || error.code !== 'backlog-conflict') throw error;
     }
   }
   throw new SharedStateError('backlog-conflict');
 }
-async function readSharedFileOnce(file: string): Promise<SharedFileSnapshot> {
+async function readSharedFileOnce(file: string, limit: number): Promise<SharedFileSnapshot> {
   let handle: FileHandle;
   try { handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) {
@@ -690,7 +723,7 @@ async function readSharedFileOnce(file: string): Promise<SharedFileSnapshot> {
   try {
     const before = await handle.stat({ bigint: true });
     if (!before.isFile()) throw new SharedStateError('shared-file-unreadable');
-    if (before.size > BigInt(SHARED_FILE_LIMIT)) throw new SharedStateError('shared-file-too-large');
+    if (before.size > BigInt(limit)) throw new SharedStateError('shared-file-too-large');
     const bytes = Buffer.alloc(Number(before.size) + 1);
     let length = 0;
     while (length < bytes.length) {

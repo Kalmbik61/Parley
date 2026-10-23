@@ -1,7 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  SharedStateError, inspectSharedIgnore, isRoomArchived, isRoomClosed, acceptBacklogSuggestion, addBacklogItem, dismissBacklogSuggestion, listBacklogSuggestions,
+  MAP_SNAPSHOT_LIMIT, SharedStateError, inspectSharedIgnore, isRoomArchived, isRoomClosed, acceptBacklogSuggestion, addBacklogItem, dismissBacklogSuggestion, listBacklogSuggestions,
   parseBacklog, parseMap, readBacklog, readProjectPreferences, readSharedFile, setBacklogFile, setBacklogRule, sharedProjectPaths,
   takeBacklogItem, updateBacklogItem, removeBacklogItem, workPaths, worksIndexPath,
 } from '@parley/core';
@@ -30,7 +30,8 @@ async function knownMap(projectPath: string, workId: string) {
   const canonicalProject = await realpath(projectPath);
   const file = workPaths(canonicalProject, workId).map;
   if (await realpath(file) !== file) throw new SharedStateError('shared-state-unsafe');
-  const snapshot = await readSharedFile(file);
+  // Карта — собственный файл Parley: читаем её с потолком карт, а не с общим в 1 МиБ (спека хранилища 6.9).
+  const snapshot = await readSharedFile(file, MAP_SNAPSHOT_LIMIT);
   const map = parseMap(snapshot.text, file);
   if (map.work.id !== workId || map.sessions.length > 100_000) throw new SharedStateError('shared-state-unsafe');
   return { map, canonicalProject, revision: snapshot.version };

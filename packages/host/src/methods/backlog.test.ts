@@ -1,8 +1,8 @@
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addRoom, addSession, archiveRoom, createWork, readMap, sharedProjectPaths, suggestBacklog, transitionSession, updateMap, workPaths, worksIndexPath } from '@parley/core';
+import { addMessage, addRoom, addSession, archiveRoom, createWork, readMap, sharedProjectPaths, suggestBacklog, transitionSession, updateMap, workPaths, worksIndexPath } from '@parley/core';
 import { createBacklogHandlers } from './backlog.js';
 
 let root: string;
@@ -152,6 +152,34 @@ describe('human backlog handlers', () => {
     await writeFile(worksIndexPath(), JSON.stringify({ schemaVersion: 1, works: [{ id: created.workId, projectPath: project }] }));
     await rm(workPaths(project, created.workId).map);
     expect((await get()).suggestions[0]!.author).toBeUndefined();
+  });
+  async function padPastOneMiB(workId: string, roomId: string): Promise<void> {
+    await updateMap(project, workId, map => {
+      for (let i = 0; i < 300; i++) addMessage(map, { from: 'human', to: [], roomId, text: 'x'.repeat(4000) });
+    });
+    expect((await stat(workPaths(project, workId).map)).size).toBeGreaterThan(1024 * 1024);
+  }
+  it('take reaches a live room of a map larger than 1 MiB', async () => {
+    const created = await target(); await padPastOneMiB(created.workId, created.roomId);
+    const added = await add(); const id = added.items[0]!.id!;
+    const marked = await handlers['backlog.take']({ projectPath: project, id, version: added.version, target: created });
+    expect(marked.items[0]!.taken).toBe(`${created.workId}/${created.roomId}`);
+  });
+  it('projects the author from a map larger than 1 MiB', async () => {
+    const created = await target(); await padPastOneMiB(created.workId, created.roomId);
+    const session = (await readMap(project, created.workId)).sessions[0]!;
+    await handlers['backlog.preferences.set']({ projectPath: project, rule: 'ask' });
+    await suggestBacklog(project, { kind: 'idea', title: 'Suggestion', why: 'Consider', workId: created.workId, sessionId: session.id });
+    expect((await get()).suggestions[0]!.author).toMatchObject({ workId: created.workId, sessionId: session.id, label: 'Reviewer' });
+  });
+  it('a symlinked map is still not a target', async () => {
+    const created = await target(); const map = workPaths(project, created.workId).map;
+    const copy = path.join(root, 'elsewhere.json'); await writeFile(copy, await readFile(map, 'utf8'));
+    await rm(map); await symlink(copy, map);
+    const added = await add(); const id = added.items[0]!.id!;
+    await expect(handlers['backlog.take']({ projectPath: project, id, version: added.version, target: created }))
+      .rejects.toMatchObject({ code: 'not_found' });
+    expect((await get()).items[0]!.taken).toBeUndefined();
   });
 
 });
