@@ -308,10 +308,69 @@ async function writeAtomic(file: string, text: string): Promise<void> {
   await rename(tmp, file);
 }
 
-/** Читает карту работы. Битый файл — ошибка, догадки не строим. */
+/**
+ * Разобранные карты процесса по пути `map.json` (спека хранилища 6.9, этап 1). Карты бывают в мегабайты, а читают
+ * их часто: разбор неизменного файла каждый раз занимал поток. Сверка — по личности файла из `stat`
+ * (`dev:ino:size:mtimeNs:ctimeNs`): запись идёт атомарным rename (новый inode), правка на месте меняет время и размер,
+ * так что устаревшую карту кэш не отдаст. Принимает и выдаёт он копии (`structuredClone`): вызывающие свободно
+ * меняют полученную карту, и общий объект испортил бы её всем читателям сразу. Записей не больше `MAP_CACHE_LIMIT`,
+ * сверх лимита уходит самая давняя по вставке.
+ */
+export const MAP_CACHE_LIMIT = 32;
+
+const mapCache = new Map<string, { identity: string; map: WorkMap }>();
+let mapCacheHits = 0;
+let mapCacheMisses = 0;
+
+/** Сколько раз карту взяли из кэша и сколько раз пришлось читать с диска. Только для тестов: из `index.ts` не экспортируется. */
+export function mapCacheStats(): { hits: number; misses: number } {
+  return { hits: mapCacheHits, misses: mapCacheMisses };
+}
+
+/** Личность файла карты. `stat` не удался (файла нет, нет доступа) — `null`: кэш не участвует, ошибку отдаст само чтение. */
+async function mapIdentity(file: string): Promise<string | null> {
+  try {
+    const info = await stat(file, { bigint: true });
+    return [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(':');
+  } catch {
+    return null;
+  }
+}
+
+/** Копия закэшированной карты, если файл с тех пор не менялся; иначе `undefined`. Попадания и промахи считаются здесь. */
+function cachedMap(file: string, identity: string | null): WorkMap | undefined {
+  const entry = mapCache.get(file);
+  if (identity === null || entry === undefined || entry.identity !== identity) {
+    mapCacheMisses += 1;
+    return undefined;
+  }
+  mapCacheHits += 1;
+  return structuredClone(entry.map);
+}
+
+/** Кладёт в кэш копию карты; сверх `MAP_CACHE_LIMIT` вытесняется самая давняя по вставке. */
+function rememberMap(file: string, identity: string, map: WorkMap): void {
+  mapCache.set(file, { identity, map: structuredClone(map) });
+  for (const oldest of mapCache.keys()) {
+    if (mapCache.size <= MAP_CACHE_LIMIT) break;
+    mapCache.delete(oldest);
+  }
+}
+
+/**
+ * Читает карту работы. Битый файл — ошибка, догадки не строим. Неизменный файл разбирается один раз,
+ * дальше карта приходит из кэша процесса — копией (спека хранилища 6.9).
+ */
 export async function readMap(projectPath: string, workId: string): Promise<WorkMap> {
   const file = workPaths(projectPath, workId).map;
-  return parseMap(await readFile(file, 'utf8'), file);
+  // `stat` до чтения: если карту перепишут между ними, в кэше окажется новое содержимое под старой личностью,
+  // и следующее чтение просто разберёт её ещё раз.
+  const identity = await mapIdentity(file);
+  const cached = cachedMap(file, identity);
+  if (cached !== undefined) return cached;
+  const map = parseMap(await readFile(file, 'utf8'), file);
+  if (identity !== null) rememberMap(file, identity, map);
+  return map;
 }
 
 /**
@@ -560,8 +619,14 @@ export async function updateMap(
   };
 
   return withLock(paths.lock, lockTimeoutMs, async () => {
-    const raw = await readFile(paths.map, 'utf8');
-    const current = parseMap(raw, paths.map);
+    // Карта из кэша процесса — без чтения и разбора файла (спека хранилища 6.9). Сырой текст нужен только для `.bak`:
+    // с диска он берётся по месту, и только если копию пора обновлять.
+    let raw: string | undefined;
+    let current = cachedMap(paths.map, await mapIdentity(paths.map));
+    if (current === undefined) {
+      raw = await readFile(paths.map, 'utf8');
+      current = parseMap(raw, paths.map);
+    }
     // Карта, разошедшаяся с именем каталога, — повод отказаться: иначе в индексе
     // осела бы запись с чужим id, которую в списке работ нечем открыть.
     if (current.work.id !== workId) {
@@ -575,8 +640,15 @@ export async function updateMap(
     // Порядок записей в индексе при этом остаётся порядком записей карты.
     await withWorksIndex(lockTimeoutMs, (index) => upsert(index, entryOf(projectPath, current)));
     // Копия — не каждой записью, а когда прежней нет или она устарела (спека хранилища 6.9).
-    if (await backupDue(paths.bak, Date.now())) await writeAtomic(paths.bak, raw);
+    if (await backupDue(paths.bak, Date.now())) {
+      await writeAtomic(paths.bak, raw ?? (await readFile(paths.map, 'utf8')));
+    }
     await writeAtomic(paths.map, serialize(current));
+    // В кэш — после записи и под тем же замком: личность нового файла берём, пока его никто не переписал. Не вышло
+    // (каталог работы снесли) — запись снимаем, а не бросаем: карта уже записана, и ошибка заставила бы повторить мутацию.
+    const written = await mapIdentity(paths.map);
+    if (written === null) mapCache.delete(paths.map);
+    else rememberMap(paths.map, written, current);
     return current;
   }).catch(whenGone);
 }

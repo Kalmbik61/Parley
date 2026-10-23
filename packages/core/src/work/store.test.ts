@@ -14,7 +14,9 @@ import {
   createWork,
   deleteSessionFiles,
   deleteWorkFiles,
+  MAP_CACHE_LIMIT,
   MAP_SNAPSHOT_LIMIT,
+  mapCacheStats,
   MapLockTimeoutError,
   pruneWorksIndex,
   readMap,
@@ -404,6 +406,23 @@ describe('updateMap', () => {
     expect(await readFile(paths.bak, 'utf8')).toBe(before);
   });
 
+  it('после обновления копии по сроку в каталоге работы не остаётся .tmp', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    const old = new Date(Date.now() - 11 * 60 * 1000);
+    await utimes(paths.bak, old, old);
+    const before = await readFile(paths.map, 'utf8');
+
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Новая';
+    });
+
+    expect(
+      (await readdir(workPaths(project, 'w-0001').dir)).filter((name) => name.endsWith('.tmp')),
+    ).toEqual([]);
+    expect(await readFile(paths.bak, 'utf8')).toBe(before);
+  });
+
   it('после записи в каталоге работы не остаётся временных файлов', async () => {
     await createWork(project, { title: 'Авторизация' });
     await updateMap(project, 'w-0001', (map) => {
@@ -432,6 +451,72 @@ describe('updateMap', () => {
 
     expect(await readFile(paths.map, 'utf8')).toBe('{ сломано');
     expect(await readFile(paths.bak, 'utf8')).toBe(before);
+  });
+
+  it('повторное чтение неизменной карты идёт из кэша и не делит объект с вызывающим', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const before = mapCacheStats();
+    const first = await readMap(project, 'w-0001');
+    first.work.title = 'испорчено снаружи';
+
+    expect((await readMap(project, 'w-0001')).work.title).toBe('Авторизация');
+    expect(mapCacheStats().hits - before.hits).toBeGreaterThanOrEqual(1);
+  });
+
+  it('карту переписали мимо кэша — следующее чтение видит новую версию', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await readMap(project, 'w-0001');
+    const paths = workPaths(project, 'w-0001');
+    const raw = JSON.parse(await readFile(paths.map, 'utf8')) as WorkMap;
+    raw.work.title = 'Снаружи';
+    await writeFile(`${paths.map}.ext`, JSON.stringify(raw));
+    await rename(`${paths.map}.ext`, paths.map);
+
+    expect((await readMap(project, 'w-0001')).work.title).toBe('Снаружи');
+  });
+
+  it('updateMap неизменной карты не читает файл, а результат и кэш независимы', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await readMap(project, 'w-0001');
+    const before = mapCacheStats();
+    const updated = await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Новая';
+    });
+    updated.work.title = 'испорчено снаружи';
+
+    expect((await readMap(project, 'w-0001')).work.title).toBe('Новая');
+    expect(mapCacheStats().misses).toBe(before.misses);
+  });
+
+  it('брошенная мутация не портит кэш', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await readMap(project, 'w-0001');
+
+    await expect(
+      updateMap(project, 'w-0001', (map) => {
+        map.work.title = 'Наполовину';
+        throw new Error('стоп');
+      }),
+    ).rejects.toThrow('стоп');
+
+    expect((await readMap(project, 'w-0001')).work.title).toBe('Авторизация');
+  });
+
+  it('кэш вмещает не больше MAP_CACHE_LIMIT карт: самая давняя по вставке вытесняется', async () => {
+    const ids: string[] = [];
+    for (let n = 0; n <= MAP_CACHE_LIMIT; n += 1) {
+      ids.push((await createWork(project, { title: `Работа ${n}` })).work.id);
+    }
+    // MAP_CACHE_LIMIT + 1 разборов подряд: первая карта вытеснена последней.
+    for (const id of ids) await readMap(project, id);
+
+    const missesOf = async (id: string): Promise<number> => {
+      const before = mapCacheStats().misses;
+      await readMap(project, id);
+      return mapCacheStats().misses - before;
+    };
+    expect(await missesOf(ids[1]!)).toBe(0);
+    expect(await missesOf(ids[0]!)).toBe(1);
   });
 
   it('занятая блокировка — ошибка, а не ожидание', async () => {
