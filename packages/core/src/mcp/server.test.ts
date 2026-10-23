@@ -3255,5 +3255,12 @@ describe('createToolRunner: инструменты Parley без транспо�
       await delay(200);
       expect(rings).toHaveLength(0);
     });
+
+    it('с исполнителем сервер не объявляет claude/channel и его instructions даже при channel: true — звонить некому', async () => {
+      const client = await connectStub({ projectPath: project, workId, workDir: workPaths(project, workId).dir, sessionId: 's-01', channel: true });
+
+      expect(client.getServerCapabilities()?.experimental).toBeUndefined();
+      expect(client.getInstructions()).toBeUndefined();
+    });
   });
 });

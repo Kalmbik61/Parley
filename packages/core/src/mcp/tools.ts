@@ -1622,13 +1622,15 @@ export function createToolRunner(context: McpContext): ToolRunner {
 /**
  * Сервер MCP одной сессии. Инструменты Parley исполняет `runner`; не передан — свой, в этом процессе (так живут сессии
  * без канала агента). Переданный исполнитель (удалённый, спека хранилища 6.9) карту в этом процессе не открывает,
- * поэтому сторож входящих — он читает карту сам — запускается только без него.
+ * поэтому сторож входящих — он читает карту сам — запускается только без него, а `claude/channel` с его instructions
+ * сервер не объявляет: звонков в таком режиме не будет.
  */
 export function createParleyServer(context: McpContext, runner?: ToolRunner): Server<Request, ChannelNotification> {
   // Сессии нет — звонить некому: сервер без `PARLEY_SESSION_ID` умеет только
-  // отдавать карту и гид (4.2).
+  // отдавать карту и гид (4.2). Нет и сторожа (удалённый исполнитель) — звонить тоже некому: объявить capability значило
+  // бы обещать агенту звонки, которых он не дождётся (спека хранилища 6.9).
   const { sessionId } = context;
-  const channel = context.channel && sessionId !== null;
+  const channel = context.channel && sessionId !== null && runner === undefined;
   const server = new Server<Request, ChannelNotification>(
     { name: MCP_SERVER_NAME, version: '0.0.0' },
     {
@@ -1637,7 +1639,7 @@ export function createParleyServer(context: McpContext, runner?: ToolRunner): Se
     },
   );
 
-  if (channel && runner === undefined) {
+  if (channel) {
     let stop: (() => void) | null = null;
     // Сторож стартует после `initialized`: до него клиент уведомления не ждёт.
     server.oninitialized = () => {
