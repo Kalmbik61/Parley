@@ -502,5 +502,27 @@ describe('окно острова', () => {
       expect(vi.getTimerCount()).toBe(0);
       expect(windows[0]?.mouseCalls).toEqual([[true, { forward: false }]]);
     });
+
+    it('опрос, остановленный мимо контроллера, оживает, когда окно снова видно и renderer шлёт область', () => {
+      const { controller, windows, setCursor, onHover } = shown();
+      windows[0]?.hide();
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      expect(vi.getTimerCount()).toBe(0);
+      windows[0]?.showInactive();
+      controller.setHitRect(SHAPE);
+      expect(vi.getTimerCount()).toBe(1);
+      setCursor(INSIDE);
+      vi.advanceTimersByTime(HOVER_POLL_MS);
+      expect(onHover).toHaveBeenLastCalledWith(true);
+      expect(windows[0]?.mouseCalls.at(-1)).toEqual([false, { forward: false }]);
+    });
+
+    it('область от renderer не заводит опрос у скрытого окна', () => {
+      const { controller, windows } = shown();
+      controller.setVisible(false);
+      controller.setHitRect(SHAPE);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(windows[0]?.visible).toBe(false);
+    });
   });
 });
