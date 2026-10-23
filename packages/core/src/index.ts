@@ -575,7 +575,10 @@ export {
   MAX_TIMEOUT_SEC,
   RATE_WINDOW_MS,
   createParleyServer,
+  createToolRunner,
 } from './mcp/tools.js';
+export type { ToolRunner } from './mcp/tools.js';
+export type { MapChanges } from './mcp/watch-map.js';
 export { HUMAN, MESSAGE_KINDS, SYSTEM, PARLEY } from './work/types.js';
 export type {
   Artifact,
