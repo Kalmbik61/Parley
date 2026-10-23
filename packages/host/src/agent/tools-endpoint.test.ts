@@ -7,7 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer, request, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { connect, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -147,6 +147,41 @@ const sendCall = (text: string, callId: string = randomUUID()) => ({ op: 'call',
 const waitCall = (callId: string = randomUUID()) => ({ op: 'call', launch: {}, name: 'wait_for', args: { target: 'inbox', timeoutSec: 600 }, callId });
 const textOf = (envelope: Envelope): string => ((envelope.result as { content: { text: string }[] }).content[0] as { text: string }).text;
 const toolNames = (envelope: Envelope): string[] => (envelope.result as { tools: { name: string }[] }).tools.map((tool) => tool.name);
+
+/**
+ * Только заголовки с заявленным `Content-Length`, без тела: хост обязан отказать по одному заголовку, не дожидаясь тела
+ * (иначе тест повис бы). Статус при этом приходит всегда: клиент, ещё пишущий мегабайт тела, мог бы получить сброс
+ * соединения вместо ответа, и тест на 413 мигал бы под нагрузкой.
+ */
+function statusForDeclaredLength(url: string, token: string, contentLength: number): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const target = new URL(url);
+    const socket = connect({ host: target.hostname, port: Number(target.port) });
+    let received = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk: string) => {
+      received += chunk;
+    });
+    socket.on('error', reject);
+    socket.on('close', () => {
+      const status = /^HTTP\/1\.1 (\d{3}) /.exec(received)?.[1];
+      if (status === undefined) reject(new Error(`no HTTP status in the reply: ${JSON.stringify(received.slice(0, 80))}`));
+      else resolve(Number(status));
+    });
+    socket.write(
+      [
+        `POST ${target.pathname} HTTP/1.1`,
+        `Host: ${target.host}`,
+        `Authorization: Bearer ${token}`,
+        'Content-Type: application/json',
+        `Content-Length: ${contentLength}`,
+        'Connection: close',
+        '',
+        '',
+      ].join('\r\n'),
+    );
+  });
+}
 
 describe('маршрут /agent/tools: инструменты агента в процессе хоста (спека хранилища 6.3)', () => {
   it('runs a tool for the bearer session and writes the map in the host process', async () => {
@@ -289,9 +324,11 @@ describe('маршрут /agent/tools: инструменты агента в п
   });
 
   it('401 without a token, 413 past 1 MiB, 200 KB arguments pass', async () => {
-    const { raw, post } = await boot();
+    const { url, token, raw, post, contextFor } = await boot();
     expect((await raw({ op: 'list', launch: {} }, { token: null })).status).toBe(401);
-    expect((await raw({ op: 'call', launch: {}, name: 'get_map', args: { pad: 'x'.repeat(AGENT_TOOLS_REQUEST_BYTES) }, callId: randomUUID() })).status).toBe(413);
+    // 413 — по заявленной длине, до чтения тела (оно здесь вообще не отправляется) и до исполнителя.
+    expect(await statusForDeclaredLength(url, token, AGENT_TOOLS_REQUEST_BYTES + 1)).toBe(413);
+    expect(contextFor).not.toHaveBeenCalled();
     // Принято тело, а не ответ инструмента: `get_map` может отвергнуть лишний `pad`, но это `result` с `ok: true`.
     const big = await post({ op: 'call', launch: {}, name: 'get_map', args: { pad: 'x'.repeat(200_000) }, callId: randomUUID() });
     expect(big.ok).toBe(true);
