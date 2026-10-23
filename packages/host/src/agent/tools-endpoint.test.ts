@@ -93,9 +93,12 @@ async function boot(options: { now?: () => number } = {}) {
       },
     });
   const contextFor = vi.fn(standard);
+  // Журнал маршрута — свой, отдельный от журнала реестра токенов: тест смотрит только на то, что пишет `/agent/tools`.
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const endpoint = createToolsEndpoint({
     authenticate: (req) => registry.authenticate(req),
     contextFor,
+    log,
     ...(options.now === undefined ? {} : { now: options.now }),
   });
   // Закрытия соединений считает сам тест: его слушатель `close` ставится раньше хостового, и когда счётчик вырос,
@@ -127,6 +130,7 @@ async function boot(options: { now?: () => number } = {}) {
     url,
     endpoint,
     contextFor,
+    log,
     /** Обычная сборка контекста: тест подменяет `contextFor` на раз и зовёт её же после задержки. */
     standard,
     providerRows,
@@ -362,6 +366,32 @@ describe('маршрут /agent/tools: инструменты агента в п
     expect((await raw({ op: 'list', launch: {} }, { token: 'f'.repeat(64) })).status).toBe(401);
     registry.unregister(ref);
     expect((await raw({ op: 'list', launch: {} })).status).toBe(401);
+  });
+
+  it('logs a warn for each refusal of the route, with the reason and without the token or the request body', async () => {
+    const { url, token, raw, contextFor, log } = await boot();
+    const foreign = 'f'.repeat(64);
+    // 401: чужой токен.
+    expect((await raw({ op: 'list', launch: {} }, { token: foreign })).status).toBe(401);
+    // 413: заявленная длина больше потолка.
+    expect(await statusForDeclaredLength(url, token, AGENT_TOOLS_REQUEST_BYTES + 1)).toBe(413);
+    // bad_request: в теле метка, которой в журнале быть не должно.
+    await raw({ op: 'nope', launch: {}, marker: 'SECRET-BODY-MARKER' });
+    // internal: сбой сборки исполнителя.
+    contextFor.mockImplementationOnce(async () => {
+      throw new Error('settings are unreadable');
+    });
+    await raw({ op: 'list', launch: {} });
+
+    const scope = { projectPath: project, workId, sessionId: 's-01' };
+    expect(log.warn.mock.calls).toEqual([
+      ['agent tools: request refused', { status: 401, reason: expect.any(String) }],
+      ['agent tools: request refused', { status: 413, reason: expect.any(String) }],
+      ['agent tools: request refused', { code: 'bad_request', reason: 'op must be "list" or "call".', ...scope }],
+      ['agent tools: request refused', { code: 'internal', reason: 'settings are unreadable', ...scope }],
+    ]);
+    const logged = JSON.stringify(log.warn.mock.calls);
+    for (const secret of [foreign, token, 'SECRET-BODY-MARKER']) expect(logged).not.toContain(secret);
   });
 
   it('checks the token again before replying: a token revoked while the call ran gets 401, not the result', async () => {

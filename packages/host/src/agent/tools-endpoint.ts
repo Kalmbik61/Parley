@@ -9,6 +9,7 @@ import {
   type ToolRunner,
 } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
+import type { Log } from '../log.js';
 
 /**
  * Сколько после конца вызова хост помнит его результат по `callId` (спека хранилища 6.4): клиент повторяет запрос с тем же
@@ -122,6 +123,9 @@ const toolFailure = (error: unknown): CallResult => ({
  *
  * Исполнитель создаётся на сессию и живёт, пока снимок запуска (`launch`) тот же; новый снимок — новый исполнитель.
  *
+ * Каждый отказ маршрута — 401, 413, `bad_request`, `internal` — хост пишет в журнал предупреждением с причиной, но без
+ * тела запроса и токена (спека хранилища 6.4): иначе неверный маршрут или сбой сборки исполнителя видел бы один агент.
+ *
  * Повтор (6.4): вызов с уже виденным `callId` отдаёт тот же результат — и идущему, и законченному. Запоминание — на
  * `CALL_REPLAY_TTL_MS` после конца вызова, не больше `CALL_REPLAY_LIMIT` на сессию. Исключение — `wait_for` и `get_map`,
  * которые шли, когда клиент закрыл соединение: они видят отмену, их запись снимается, и повтор с тем же `callId`
@@ -131,8 +135,11 @@ const toolFailure = (error: unknown): CallResult => ({
 export function createToolsEndpoint(options: {
   authenticate(req: IncomingMessage): SessionRef | undefined;
   contextFor(ref: SessionRef, launch: ToolLaunch): Promise<McpContext>;
+  /** Журнал хоста: сюда идут отказы маршрута с причиной. */
+  log: Log;
   now?: () => number;
 }): { handle(req: IncomingMessage, res: ServerResponse): void; forget(ref: SessionRef): void } {
+  const { log } = options;
   const now = options.now ?? Date.now;
   const sessions = new Map<string, SessionTools>();
 
@@ -206,8 +213,9 @@ export function createToolsEndpoint(options: {
 
   return {
     handle(req, res) {
-      /** Отказ без тела; соединение закрывается, недочитанное тело дальше не читается. */
-      const refuse = (status: number): void => {
+      /** Отказ без тела; соединение закрывается, недочитанное тело дальше не читается. Причина идёт в журнал, не клиенту. */
+      const refuse = (status: 401 | 413, reason: string): void => {
+        log.warn('agent tools: request refused', { status, reason });
         if (!res.headersSent && !res.destroyed) {
           res.writeHead(status, { Connection: 'close' });
           res.end();
@@ -217,15 +225,15 @@ export function createToolsEndpoint(options: {
       const reply = (body: RemoteToolResponse): void => {
         if (res.writableEnded || res.destroyed) return;
         // Токен могли снять, пока вызов шёл: ответ без права на него не уходит (как у соседних маршрутов).
-        if (options.authenticate(req) === undefined) return refuse(401);
+        if (options.authenticate(req) === undefined) return refuse(401, 'the session token was revoked while the call ran');
         const text = JSON.stringify(body);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(text);
       };
 
       const ref = options.authenticate(req);
-      if (ref === undefined) return refuse(401);
-      if (Number(req.headers['content-length'] ?? 0) > AGENT_TOOLS_REQUEST_BYTES) return refuse(413);
+      if (ref === undefined) return refuse(401, 'no valid session token');
+      if (Number(req.headers['content-length'] ?? 0) > AGENT_TOOLS_REQUEST_BYTES) return refuse(413, 'the declared Content-Length is over the limit');
 
       // Клиент закрыл соединение, не дождавшись ответа (агент прервал ход, срок запроса вышел): его вызов отменяется.
       // `res`, а не `req`: `req` закрывается сразу после чтения тела (Node 22), а не с уходом клиента.
@@ -243,7 +251,7 @@ export function createToolsEndpoint(options: {
         if (size > AGENT_TOOLS_REQUEST_BYTES) {
           rejected = true;
           chunks.length = 0;
-          refuse(413);
+          refuse(413, 'the body outgrew the limit while streaming');
           return;
         }
         chunks.push(chunk);
@@ -255,7 +263,7 @@ export function createToolsEndpoint(options: {
         if (rejected) return;
         void (async () => {
           try {
-            if (options.authenticate(req) === undefined) return refuse(401);
+            if (options.authenticate(req) === undefined) return refuse(401, 'the session token was revoked before the body was read');
             const request = parseRequest(Buffer.concat(chunks, size).toString('utf8'));
             const tools = toolsOf(ref, request.launch);
             const runner = await tools.runner;
@@ -264,10 +272,11 @@ export function createToolsEndpoint(options: {
             if (request.op === 'list') return reply({ ok: true, result: { tools: await runner.list() } });
             return reply({ ok: true, result: await callOf(tools, runner, request, controller).result });
           } catch (error) {
-            reply({
-              ok: false,
-              error: { code: error instanceof BadRequest ? 'bad_request' : 'internal', message: error instanceof Error ? error.message : String(error) },
-            });
+            const code = error instanceof BadRequest ? 'bad_request' : 'internal';
+            const message = error instanceof Error ? error.message : String(error);
+            // В журнал — код, причина и сессия; тело запроса не идёт.
+            log.warn('agent tools: request refused', { code, reason: message, projectPath: ref.projectPath, workId: ref.workId, sessionId: ref.sessionId });
+            reply({ ok: false, error: { code, message } });
           }
         })();
       });

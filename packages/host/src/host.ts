@@ -391,6 +391,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         providerRows: listProviderRows,
         onWorksChange: (listener) => worksService.onChange(() => listener()),
       }),
+    log,
   });
   const hookServer = createHookServer({
     log,
