@@ -41,7 +41,7 @@ export type Ring = {
 
 export interface InboxWatchOptions {
   notify: (ring: Ring) => Promise<void>;
-  /** Как часто перечитывать карту, если `fs.watch` промолчал. */
+  /** Как часто сверять `stat` карты, если `fs.watch` промолчал: перечитывается она, только когда файл изменился (спека хранилища 6.9). */
   pollMs: number;
   /** Ожидание в `waitForMap` за один оборот; тесты укорачивают. */
   waitMs?: number;
