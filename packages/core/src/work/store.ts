@@ -340,11 +340,13 @@ async function writeAtomic(file: string, text: string): Promise<void> {
  * Разобранные карты процесса по пути `map.json` (спека хранилища 6.9, этап 1). Карты бывают в мегабайты, а читают
  * их часто: разбор неизменного файла каждый раз занимал поток. Сверка — по личности файла из `stat`
  * (`dev:ino:size:mtimeNs:ctimeNs`): запись идёт атомарным rename (новый inode), правка на месте меняет время и размер,
- * так что устаревшую карту кэш не отдаст. Принимает и выдаёт он копии (`structuredClone`): вызывающие свободно
- * меняют полученную карту, и общий объект испортил бы её всем читателям сразу. После записи в него ложится не изменённый
- * в памяти объект, а то, что вернёт свежий разбор записанного текста: разбор достраивает умолчания, убирает испорченное
- * и отвергает неверное, и писавший процесс не должен читать карту иначе, чем любой другой. Записей не больше
- * `MAP_CACHE_LIMIT`, сверх лимита уходит самая давняя по вставке.
+ * так что устаревшую карту кэш не отдаст. `readMap` кладёт в кэш копию и выдаёт копии (`structuredClone`): вызывающие
+ * свободно меняют полученную карту, и общий объект испортил бы её всем читателям сразу. `updateMap` копию не берёт:
+ * на попадании он забирает объект из кэша себе (запись снимается), мутирует его сам, а после записи кладёт в кэш не этот
+ * объект, а то, что вернёт свежий разбор записанного текста: разбор достраивает умолчания, убирает испорченное и
+ * отвергает неверное, и писавший процесс не должен читать карту иначе, чем любой другой. Брошенная мутация или отказ
+ * записи оставляют кэш без записи: следующее чтение разберёт файл с диска, а не увидит наполовину изменённый объект.
+ * Записей не больше `MAP_CACHE_LIMIT`, сверх лимита уходит самая давняя по вставке.
  */
 export const MAP_CACHE_LIMIT = 32;
 
@@ -367,15 +369,33 @@ async function mapIdentity(file: string): Promise<string | null> {
   }
 }
 
-/** Копия закэшированной карты, если файл с тех пор не менялся; иначе `undefined`. Попадания и промахи считаются здесь. */
-function cachedMap(file: string, identity: string | null): WorkMap | undefined {
+/** Закэшированный объект карты, если файл с тех пор не менялся; иначе `undefined`. Попадания и промахи считаются здесь. */
+function cachedEntry(file: string, identity: string | null): WorkMap | undefined {
   const entry = mapCache.get(file);
   if (identity === null || entry === undefined || entry.identity !== identity) {
     mapCacheMisses += 1;
     return undefined;
   }
   mapCacheHits += 1;
-  return structuredClone(entry.map);
+  return entry.map;
+}
+
+/** Копия закэшированной карты для читателя, если файл с тех пор не менялся; иначе `undefined`. */
+function cachedMap(file: string, identity: string | null): WorkMap | undefined {
+  const map = cachedEntry(file, identity);
+  return map === undefined ? undefined : structuredClone(map);
+}
+
+/**
+ * Сам закэшированный объект, без копии, и запись при этом снимается: карта переходит вызывающему, кэш её больше не
+ * держит (спека хранилища 6.9). Только для `updateMap`, который мутирует её под замком и после записи кладёт в кэш
+ * свежий разбор. Что бы ни случилось с обновлением до записи (мутация бросила, отказал замок индекса), в кэше нет ничего,
+ * что видело бы наполовину изменённый объект.
+ */
+function takeCachedMap(file: string, identity: string | null): WorkMap | undefined {
+  const map = cachedEntry(file, identity);
+  if (map !== undefined) mapCache.delete(file);
+  return map;
 }
 
 /**
@@ -661,10 +681,11 @@ export async function updateMap(
   };
 
   return withLock(paths.lock, lockTimeoutMs, async () => {
-    // Карта из кэша процесса — без чтения и разбора файла (спека хранилища 6.9). Сырой текст нужен только для `.bak`:
-    // с диска он берётся по месту, и только если копию пора обновлять.
+    // Карта из кэша процесса — без чтения и разбора файла и без копии (спека хранилища 6.9): запись из кэша снимается, и
+    // ниже её заменит свежий разбор записанного. Сырой текст нужен только для `.bak`: с диска он берётся по месту, и
+    // только если копию пора обновлять.
     let raw: string | undefined;
-    let current = cachedMap(paths.map, await mapIdentity(paths.map));
+    let current = takeCachedMap(paths.map, await mapIdentity(paths.map));
     if (current === undefined) {
       raw = await readFile(paths.map, 'utf8');
       current = parseMap(raw, paths.map);

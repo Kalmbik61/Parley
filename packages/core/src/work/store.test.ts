@@ -6,7 +6,7 @@ import { tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { contextFile } from '../context-fill.js';
 import { addSession, parseMap } from './map.js';
 import type { WorkMap } from './types.js';
@@ -500,6 +500,70 @@ describe('updateMap', () => {
     ).rejects.toThrow('стоп');
 
     expect((await readMap(project, 'w-0001')).work.title).toBe('Авторизация');
+  });
+
+  it('updateMap на попадании в кэш берёт карту во владение: копии нет, а результат и кэш не делят объект', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await readMap(project, 'w-0001');
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    try {
+      const before = mapCacheStats();
+      const updated = await updateMap(project, 'w-0001', (map) => {
+        map.work.title = 'Новая';
+      });
+
+      expect(mapCacheStats().hits - before.hits).toBe(1);
+      expect(clone).not.toHaveBeenCalled();
+      // Карту, что вернул `updateMap`, мутировали в кэше: после записи запись кэша — свежий разбор, а не этот объект.
+      updated.work.title = 'испорчено снаружи';
+      expect((await readMap(project, 'w-0001')).work.title).toBe('Новая');
+    } finally {
+      clone.mockRestore();
+    }
+  });
+
+  it('брошенная мутация на попадании в кэш не оставляет следов: следующее чтение — то, что на диске', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    await readMap(project, 'w-0001');
+    const before = mapCacheStats();
+
+    await expect(
+      updateMap(project, 'w-0001', (map) => {
+        map.work.title = 'Наполовину';
+        addSession(map, { provider: 'claude', label: 'план', task: 't' });
+        throw new Error('стоп');
+      }),
+    ).rejects.toThrow('стоп');
+    // Мутация шла над кэшированным объектом, а не над копией: иначе тест ничего бы не сторожил.
+    expect(mapCacheStats().hits - before.hits).toBe(1);
+
+    const after = await readMap(project, 'w-0001');
+    expect(after.work.title).toBe('Авторизация');
+    expect(after.sessions).toEqual([]);
+    expect(after).toEqual(parseMap(await readFile(paths.map, 'utf8'), paths.map));
+  });
+
+  it('отказ блокировки индекса на попадании в кэш не оставляет следов: ретрай не двоит запись', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await readMap(project, 'w-0001');
+    const indexLock = path.join(home, 'works-index.lock');
+    await writeFile(indexLock, '', { flag: 'wx' });
+    const append = (map: WorkMap): void => {
+      addSession(map, { provider: 'claude', label: 'план', task: 't' });
+    };
+    const before = mapCacheStats();
+
+    await expect(updateMap(project, 'w-0001', append, { lockTimeoutMs: 100 })).rejects.toThrow(
+      /lock .*works-index\.lock was not released within 100 ms/,
+    );
+    expect(mapCacheStats().hits - before.hits).toBe(1);
+    expect((await readMap(project, 'w-0001')).sessions).toEqual([]);
+
+    await rm(indexLock);
+    await updateMap(project, 'w-0001', append);
+
+    expect((await readMap(project, 'w-0001')).sessions).toHaveLength(1);
   });
 
   it('после записи кэш отдаёт то же, что свежий разбор файла', async () => {
