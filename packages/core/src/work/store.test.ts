@@ -390,12 +390,15 @@ describe('updateMap', () => {
   it('.bak из будущего (часы сдвинули) не застревает', async () => {
     await createWork(project, { title: 'Авторизация' });
     const paths = workPaths(project, 'w-0001');
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Первая';
+    });
     const future = new Date(Date.now() + 60 * 60 * 1000);
     await utimes(paths.bak, future, future);
     const before = await readFile(paths.map, 'utf8');
 
     await updateMap(project, 'w-0001', (map) => {
-      map.work.title = 'Первая';
+      map.work.title = 'Вторая';
     });
 
     expect(await readFile(paths.bak, 'utf8')).toBe(before);
