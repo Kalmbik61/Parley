@@ -773,6 +773,9 @@ export function submitAttempt(
     sha !== null ||
     input.manifest.version !== 1 ||
     input.manifest.text.length > 4096 ||
+    input.manifest.artifacts.some((artifact) =>
+      artifact.storedAs !== '' || !artifact.path || artifact.path.startsWith('/') ||
+      artifact.path.includes('\\') || artifact.path.split('/').includes('..')) ||
     hash(submission) !== input.submissionKey ||
     hash({ sha, ...body }) !== manifestHash
   )
@@ -802,6 +805,7 @@ export function receipt(
     inputsOk: boolean;
     artifactsCopied: boolean;
     artifactHashesOk: boolean;
+    artifacts: HandoffManifest['artifacts'];
     captureOp: string;
     copyOp: string;
   },
@@ -846,6 +850,15 @@ export function receipt(
   const capture = a.ops.find((op) => op.key === input.captureOp)!;
   if (capture.result?.sha !== input.sha || capture.result.tree !== input.tree)
     throw new RoomRuleError('capture-mismatch');
+  if (
+    input.artifacts.length !== attempt.manifest.artifacts.length ||
+    input.artifacts.some((artifact, index) => {
+      const original = attempt.manifest!.artifacts[index]!;
+      return artifact.path !== original.path || artifact.sha256 !== original.sha256 ||
+        !artifact.storedAs || artifact.storedAs.startsWith('/') ||
+        artifact.storedAs.includes('\\') || artifact.storedAs.split('/').includes('..');
+    })
+  ) throw new RoomRuleError('artifacts-mismatch');
   const reason =
     input.sha !== attempt.baseSha && !input.descendantOfBase
       ? 'sha-before-base'
@@ -857,6 +870,7 @@ export function receipt(
   attempt.sha = input.sha;
   attempt.tree = input.tree;
   attempt.manifest.sha = input.sha;
+  attempt.manifest.artifacts = structuredClone(input.artifacts);
   const { hash: _old, ...body } = attempt.manifest;
   attempt.manifest.hash = hash(body);
   attempt.receipt = {

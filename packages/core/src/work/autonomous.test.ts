@@ -236,6 +236,7 @@ function submitted(
     inputsOk: options.inputsOk ?? true,
     artifactsCopied: options.artifactsCopied ?? true,
     artifactHashesOk: options.artifactHashesOk ?? true,
+    artifacts: manifest.artifacts.map((artifact, index) => ({ ...artifact, storedAs: `artifacts/${index}-${artifact.sha256}` })),
     captureOp,
     copyOp,
   };
@@ -728,6 +729,27 @@ describe('автономные правила', () => {
     const again = receipt(repeated, { ...first.input, sha: 'ignored-retry-sha' });
     expect(again.plan).toEqual(first.plan);
     expect(last(again.plan).receipt).toEqual(last(first.plan).receipt);
+  });
+
+  it('пути копий задаёт движок при записи квитанции', () => {
+    const artifact = { path: 'result.txt', sha256: 'a'.repeat(64), storedAs: '' };
+    const first = submitted(running(), { manifest: { artifacts: [artifact] } });
+    expect(last(first.plan).manifest!.artifacts).toEqual([{ ...artifact, storedAs: `artifacts/0-${artifact.sha256}` }]);
+    const { hash: _hash, ...body } = last(first.plan).manifest!;
+    expect(last(first.plan).manifest!.hash).toBe(digest(body));
+    for (const artifacts of [[], [{ ...artifact, path: 'other.txt', storedAs: 'artifacts/result' }], [{ ...artifact, sha256: 'b'.repeat(64), storedAs: 'artifacts/result' }], [{ ...artifact, storedAs: '../escape' }]]) {
+      const plan = structuredClone(first.plan);
+      last(plan).receipt = null;
+      last(plan).status = 'running';
+      last(plan).manifest = structuredClone(first.manifest);
+      expect(() => receipt(plan, { ...first.input, artifacts })).toThrow('artifacts-mismatch');
+    }
+  });
+
+  it.each(['artifacts/chosen-by-agent', '/absolute', '../escape'])('не принимает путь копии от агента: %s', storedAs => {
+    const plan = running();
+    const hand = handoff(plan, { artifacts: [{ path: 'result.txt', sha256: 'a'.repeat(64), storedAs }] });
+    expect(() => submitAttempt(plan, { ...context(plan), attemptId: last(plan).id, submissionKey: hand.key, manifest: hand.manifest })).toThrow('invalid manifest');
   });
 
   it('повтор отказа с тем же submissionKey сохраняет отрицательную квитанцию', () => {
