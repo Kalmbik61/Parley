@@ -6,10 +6,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MIGRATION_RECORD, migrateHome, migrateProjects } from './migrate.js';
+import { MIGRATION_RECORD, migrateHome, migrateProjects, rewriteArtifactRefs } from './migrate.js';
 import type { MigrationEntry } from './migrate.js';
 import { processStartedAt } from './work/liveness.js';
 import { closeWorkDb } from './work/db.js';
+import { migrateMapsToDb } from './work/migrate-to-db.js';
 import { addSession, nextWorkId, transitionSession } from './work/map.js';
 import { createWork, readMap, readStoredMap, readWorksIndex, updateMap, workPaths, worksIndexPath } from './work/store.js';
 import type { WorkMap, WorkSession } from './work/types.js';
@@ -793,7 +794,11 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     const before = await readMap(project, workId);
     const indexBefore = await readFile(worksIndexPath(), 'utf8');
 
-    expect(await migrateProjects({ now })).toMatchObject([{ status: 'moved' }]);
+    const results = await migrateProjects({ now });
+    expect(results).toMatchObject([{ status: 'moved' }]);
+    // Сам перенос карты в базе не трогает: их правит отдельный шаг после переезда карт (спека хранилища 6.6).
+    expect((await readMap(project, workId)).sessions[0]?.artifacts[0]?.path).toBe(note);
+    await rewriteArtifactRefs(results);
 
     const after = await readMap(project, workId);
     const session = after.sessions.find((candidate) => candidate.id === sessionId);
@@ -812,6 +817,46 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     // Правка не событие работы: updatedAt стоит на месте, индекс не менялся.
     expect(after.work.updatedAt).toBe(before.work.updatedAt);
     expect(await readFile(worksIndexPath(), 'utf8')).toBe(indexBefore);
+  });
+
+  it('пути артефактов правятся только у проектов, которые переехали: занятый проект остаётся при .harnas и при своих путях', async () => {
+    const { project, workId } = await legacyProject('shop');
+    const note = `.harnas/works/${workId}/artifacts/note.txt`;
+    await update(project, workId, (map) => {
+      addSession(map, { provider: 'claude', label: 'план', task: 'задача' }).artifacts = [{ kind: 'заметка', path: note }];
+    });
+    await writeFile(path.join(legacyDir(project), 'works', workId, 'map.lock'), '');
+
+    const results = await migrateProjects({ now });
+    await rewriteArtifactRefs(results);
+
+    expect(results).toMatchObject([{ status: 'skipped', reason: 'locked' }]);
+    expect((await readMap(project, workId)).sessions[0]?.artifacts[0]?.path).toBe(note);
+  });
+
+  it('первый старт из одних файлов: каталоги → карты в базу → пути артефактов; строки есть, пути переписаны, map.v2.json рядом', async () => {
+    const project = path.join(root, 'shop');
+    const map = legacyMap('w-0001', 'Старая');
+    const note = `.harnas/works/${map.work.id}/artifacts/note.txt`;
+    addSession(map, { provider: 'claude', label: 'план', task: 'задача' }).artifacts = [{ kind: 'заметка', path: note }];
+    await writeLegacyWork(home, project, '.harnas', map);
+    await writeFile(path.join(project, '.harnas', 'works', 'w-0001', 'artifacts', 'note.txt'), 'заметка\n');
+    // Только файлы прежней сборки: в базе ни одной строки.
+    expect((await readWorksIndex()).works).toEqual([]);
+
+    const moved = await migrateProjects({ now });
+    const maps = await migrateMapsToDb();
+    await rewriteArtifactRefs(moved);
+
+    expect(moved).toEqual([{ projectPath: project, status: 'moved', from: legacyDir(project), to: currentDir(project) }]);
+    expect(maps).toEqual({ migrated: [{ projectPath: project, workId: 'w-0001' }], failed: [], skipped: [] });
+    expect((await readWorksIndex()).works.map((work) => work.id)).toEqual(['w-0001']);
+    const artifact = (await readMap(project, 'w-0001')).sessions[0]?.artifacts[0];
+    expect(artifact?.path).toBe('.parley/works/w-0001/artifacts/note.txt');
+    expect(await exists(path.join(project, artifact?.path ?? ''))).toBe(true);
+    expect(await exists(path.join(currentDir(project), 'works', 'w-0001', 'map.v2.json'))).toBe(true);
+    expect(await exists(path.join(currentDir(project), 'works', 'w-0001', 'map.json'))).toBe(false);
+    expect(await exists(path.join(home, 'works-index.v2.json'))).toBe(true);
   });
 
   it('сохранённые брифы: относительные пути в каталог состояния переписываются, абсолютные и чужие — нет', async () => {

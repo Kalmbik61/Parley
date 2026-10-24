@@ -330,7 +330,9 @@ export type { MapWrittenEvent, NewWork, UpdateMapOptions, WorkPaths, WriteOption
 export { ensureStateDir, isDirectorySync, stateDir } from './work/state-dir.js';
 export { isStaleHostLock, parseHostLock, readHostLock, socketIsAlive } from './host-lock.js';
 export type { HostLock } from './host-lock.js';
-export { MIGRATION_RECORD, migrateHome, migrateProjects } from './migrate.js';
+export { MIGRATION_RECORD, migrateHome, migrateProjects, rewriteArtifactRefs } from './migrate.js';
+export { migrateMapsToDb } from './work/migrate-to-db.js';
+export type { MapMigrationResult } from './work/migrate-to-db.js';
 export type {
   MigrateHomeOptions,
   MigrationEntry,

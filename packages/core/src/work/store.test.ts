@@ -15,6 +15,7 @@ import {
   createWork,
   deleteSessionFiles,
   deleteWorkFiles,
+  insertMigratedMap,
   MAP_CACHE_LIMIT,
   MAP_SNAPSHOT_LIMIT,
   mapCacheStats,
@@ -979,6 +980,77 @@ describe('onMapWritten, workExists и replaceStoredMap', () => {
 
   it('replaceStoredMap на работе, которой нет, — WorkNotFoundError', () => {
     expect(() => replaceStoredMap(project, 'w-9999', {})).toThrow(WorkNotFoundError);
+  });
+});
+
+describe('insertMigratedMap — вставка карты прежнего файла (спека хранилища 6.6)', () => {
+  const migratedMap = (): WorkMap => {
+    const map: WorkMap = {
+      schemaVersion: 2,
+      work: {
+        id: 'w-0004',
+        title: 'Из файла',
+        goal: '',
+        status: 'active',
+        createdAt: '2026-10-04T01:00:00.000Z',
+        updatedAt: '2026-10-04T01:00:00.000Z',
+      },
+      sessions: [],
+      messages: [],
+      rooms: [],
+    };
+    addSession(map, { provider: 'claude', label: 'Первая', task: '' });
+    addMessage(map, { from: 's-01', to: ['human'], text: 'привет' });
+    return map;
+  };
+
+  it('кладёт строку работы и строки списков, версия — часы, подписчик узнаёт о работе после коммита', async () => {
+    const seen: { projectPath: string; workId: string; version: number }[] = [];
+    const stop = onMapWritten((event) => seen.push(event));
+    const before = Date.now();
+    let checked = false;
+
+    insertMigratedMap(project, 'w-0004', migratedMap(), () => {
+      // Внутри транзакции уже видны ещё не записанные строки, и подписчик о работе ещё не знает.
+      checked = readStoredMap(project, 'w-0004').sessions.length === 1 && seen.length === 0;
+    });
+    stop();
+
+    expect(checked).toBe(true);
+    expect(versionOf('w-0004')).toBeGreaterThanOrEqual(before);
+    expect(seen).toEqual([{ projectPath: project, workId: 'w-0004', version: versionOf('w-0004') }]);
+    expect(await readMap(project, 'w-0004')).toMatchObject({ work: { title: 'Из файла' }, messages: [{ text: 'привет' }] });
+    expect((await readWorksIndex()).works).toEqual([
+      { id: 'w-0004', projectPath: project, title: 'Из файла', status: 'active', updatedAt: '2026-10-04T01:00:00.000Z' },
+    ]);
+  });
+
+  it('check бросил — откат целиком: ни строки работы, ни строк списков, ни события', () => {
+    const seen: number[] = [];
+    const stop = onMapWritten((event) => seen.push(event.version));
+
+    expect(() =>
+      insertMigratedMap(project, 'w-0004', migratedMap(), () => {
+        throw new Error('сверка не сошлась');
+      }),
+    ).toThrow('сверка не сошлась');
+    stop();
+
+    expect(workExists(project, 'w-0004')).toBe(false);
+    expect(Number((workDb().prepare('SELECT COUNT(*) AS n FROM entries').get() as { n: number }).n)).toBe(0);
+    expect(seen).toEqual([]);
+  });
+
+  it('работа с таким id уже есть — ошибка, прежние строки не тронуты', async () => {
+    insertMigratedMap(project, 'w-0004', migratedMap(), () => undefined);
+    const before = versionOf('w-0004');
+    const other = migratedMap();
+    other.work.title = 'Вторая вставка';
+
+    expect(() => insertMigratedMap(project, 'w-0004', other, () => undefined)).toThrow();
+
+    expect(versionOf('w-0004')).toBe(before);
+    expect((await readMap(project, 'w-0004')).work.title).toBe('Из файла');
   });
 });
 

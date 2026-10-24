@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addSession, createWork, processStartedAt, transitionSession, updateMap } from '@parley/core';
+import { addSession, createWork, processStartedAt, readMap, readWorksIndex, transitionSession, workExists } from '@parley/core';
 import type { WorkMap } from '@parley/core';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../test/helpers.js';
 import { HostAlreadyRunning, startHost } from './host.js';
@@ -16,7 +16,9 @@ import { hostPaths } from './paths.js';
  * Перенос каталогов состояния проектов на старте хоста (R6): `<проект>/.harnas` → `<проект>/.parley` — под замком
  * единственности, до сокета и наблюдателей. Логика и её стражи (живая сессия, `map.lock`, симлинк, `.parley` уже
  * есть) проверены в core (`migrate.test.ts`); здесь — что хост её зовёт вовремя, не падает от её отказов и
- * показывает работу из переехавшего каталога.
+ * показывает работу из переехавшего каталога. Работы лежат файлами прежней сборки (`map.json` и `works-index.json`
+ * дома): на первом старте хост сперва переносит каталоги, затем переселяет карты в базу, затем правит пути артефактов
+ * (спека хранилища 6.6).
  */
 
 const git = (dir: string, args: string[]) => promisify(execFile)('git', ['-C', dir, ...args]);
@@ -40,6 +42,35 @@ async function newHome(): Promise<string> {
   return home;
 }
 
+/** Пустая карта работы — такой её оставляла прежняя сборка. */
+const legacyMap = (id: string, title: string): WorkMap => ({
+  schemaVersion: 2,
+  work: { id, title, goal: '', status: 'active', createdAt: '2026-09-30T18:00:00.000Z', updatedAt: '2026-09-30T18:00:00.000Z' },
+  sessions: [],
+  messages: [],
+  rooms: [],
+});
+
+/**
+ * Работа в формате до базы: `map.json` в каталоге состояния проекта и запись в `works-index.json` дома. Базы не
+ * касается — хост должен переселить её сам.
+ */
+async function writeLegacyWork(home: string, project: string, stateDirName: string, map: WorkMap): Promise<void> {
+  const dir = path.join(project, stateDirName, 'works', map.work.id);
+  await mkdir(path.join(dir, 'artifacts'), { recursive: true });
+  await mkdir(path.join(dir, 'briefs'), { recursive: true });
+  await writeFile(path.join(dir, 'map.json'), `${JSON.stringify(map, null, 2)}\n`);
+  const indexFile = path.join(home, 'works-index.json');
+  let works: unknown[] = [];
+  try {
+    works = (JSON.parse(await readFile(indexFile, 'utf8')) as { works: unknown[] }).works;
+  } catch {
+    // Индекса ещё нет.
+  }
+  works.push({ id: map.work.id, projectPath: project, title: map.work.title, status: map.work.status, updatedAt: map.work.updatedAt });
+  await writeFile(indexFile, `${JSON.stringify({ schemaVersion: 1, works }, null, 2)}\n`);
+}
+
 /** Проект, каким его оставила прежняя сборка: каталог состояния `.harnas` с одной работой, индекс — в доме. */
 async function legacyProject(
   home: string,
@@ -47,17 +78,10 @@ async function legacyProject(
 ): Promise<{ project: string; workId: string }> {
   const project = await mkdtemp(path.join(tmpdir(), 'parley-host-migrate-'));
   projects.push(project);
-  await mkdir(path.join(project, '.harnas'));
-  const previous = process.env['PARLEY_HOME'];
-  process.env['PARLEY_HOME'] = home;
-  try {
-    const { work } = await createWork(project, { title: 'Старая работа' });
-    if (seed !== undefined) await updateMap(project, work.id, seed);
-    return { project, workId: work.id };
-  } finally {
-    if (previous === undefined) delete process.env['PARLEY_HOME'];
-    else process.env['PARLEY_HOME'] = previous;
-  }
+  const map = legacyMap('w-0001', 'Старая работа');
+  seed?.(map);
+  await writeLegacyWork(home, project, '.harnas', map);
+  return { project, workId: map.work.id };
 }
 
 async function listWorks(home: string): Promise<Array<{ projectPath: string; map: WorkMap }>> {
@@ -88,7 +112,8 @@ describe('startHost переносит каталог состояния про�
     hosts.push(running);
 
     expect(existsSync(path.join(project, '.harnas'))).toBe(false);
-    expect(existsSync(path.join(project, '.parley', 'works', workId, 'map.json'))).toBe(true);
+    // Карта переехала в базу вслед за каталогом: файла нет, рядом — его копия.
+    expect(existsSync(path.join(project, '.parley', 'works', workId, 'map.v2.json'))).toBe(true);
     expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n');
 
     const record = JSON.parse(await readFile(path.join(home, 'migrated-from-harnas.json'), 'utf8')) as {
@@ -141,7 +166,8 @@ describe('startHost переносит каталог состояния про�
     hosts.push(running);
 
     expect(existsSync(path.join(project, '.parley'))).toBe(false);
-    expect(existsSync(path.join(project, '.harnas', 'works', workId, 'map.json'))).toBe(true);
+    // Каталог остался прежним, а карта всё равно в базе: переезд карты ждёт только `map.lock`, а не живой процесс.
+    expect(existsSync(path.join(project, '.harnas', 'works', workId, 'map.v2.json'))).toBe(true);
     expect(existsSync(path.join(home, 'migrated-from-harnas.json'))).toBe(false);
     expect(await logged(home)).toContainEqual(
       expect.objectContaining({
@@ -171,9 +197,11 @@ describe('startHost переносит каталог состояния про�
     hosts.push(running);
 
     expect(existsSync(path.join(project, '.parley'))).toBe(false);
-    expect(existsSync(path.join(project, '.harnas', 'works', workId, 'map.json'))).toBe(true);
-    // Отслеживаемое на месте: git не видит ни одного удалённого файла (аренда хоста `host.lease` — новый, не отслеживаемый).
-    expect((await git(project, ['status', '--porcelain'])).stdout).not.toMatch(/^ ?D /m);
+    expect(existsSync(path.join(project, '.harnas', 'works', workId, 'map.v2.json'))).toBe(true);
+    // Отслеживаемое на месте: из репозитория ушёл один `map.json` — карта переехала в базу, файл переименован (спека
+    // хранилища 6.6). Аренда хоста `host.lease` — новый, не отслеживаемый файл.
+    const status = (await git(project, ['status', '--porcelain'])).stdout;
+    expect(status.split('\n').filter((line) => /^ ?D /.test(line))).toEqual([` D .harnas/works/${workId}/map.json`]);
     expect(await logged(home)).toContainEqual(
       expect.objectContaining({
         level: 'info',
@@ -201,7 +229,8 @@ describe('startHost переносит каталог состояния про�
     const running = await startHost({ home });
     hosts.push(running);
 
-    expect(existsSync(path.join(project, '.parley', 'works', 'w-0001', 'map.json'))).toBe(true);
+    // Работа уже в базе (файла карты у неё нет): каталог её файлов на месте, о переносе — ни слова.
+    expect(existsSync(path.join(project, '.parley', 'works', 'w-0001'))).toBe(true);
     expect((await logged(home)).filter((line) => line.msg.includes('каталог состояния'))).toEqual([]);
     expect(existsSync(path.join(home, 'migrated-from-harnas.json'))).toBe(false);
   });
@@ -230,5 +259,82 @@ describe('startHost переносит каталог состояния про�
     // Первый хост мог успеть заметить новую работу и записать в неё аренду — карта и каталог на месте.
     expect(existsSync(path.join(project, '.parley'))).toBe(false);
     expect(existsSync(path.join(project, '.harnas', 'works', workId, 'map.json'))).toBe(true);
+  });
+});
+
+describe('startHost moves workspace maps into the database (storage spec 6.6)', () => {
+  /** Подключённый клиент, прошедший `hello`: события, которые хост шлёт сразу после него, лежат в его очереди. */
+  async function connect(home: string) {
+    const paths = hostPaths(home);
+    const client = connectRaw(paths.socket);
+    await waitConnected(client.socket);
+    await hello(client, await readFile(paths.token, 'utf8'));
+    return client;
+  }
+
+  it('a host started on a home with an old map.json publishes the work in its first snapshot and leaves map.v2.json beside it', async () => {
+    const home = await newHome();
+    const project = await mkdtemp(path.join(tmpdir(), 'parley-host-migrate-'));
+    projects.push(project);
+    await writeLegacyWork(home, project, '.parley', legacyMap('w-0001', 'Work from a file'));
+
+    const running = await startHost({ home });
+    hosts.push(running);
+
+    const entries = await listWorks(home);
+    expect(entries.map((entry) => [entry.projectPath, entry.map.work.title])).toEqual([[project, 'Work from a file']]);
+    const dir = path.join(project, '.parley', 'works', 'w-0001');
+    expect(existsSync(path.join(dir, 'map.v2.json'))).toBe(true);
+    expect(existsSync(path.join(dir, 'map.json'))).toBe(false);
+    expect(existsSync(path.join(home, 'works-index.json'))).toBe(false);
+    expect(existsSync(path.join(home, 'works-index.v2.json'))).toBe(true);
+  });
+
+  it('first start from files only: the folder moves, the map lands in the database, artifact paths are rewritten', async () => {
+    const home = await newHome();
+    const { project, workId } = await legacyProject(home, (map) => {
+      addSession(map, { provider: 'claude', label: 'plan', task: 'task' }).artifacts = [
+        { kind: 'plan', path: `.harnas/works/${map.work.id}/artifacts/plan.md` },
+      ];
+    });
+    await writeFile(path.join(project, '.harnas', 'works', workId, 'artifacts', 'plan.md'), 'plan\n');
+    // Только файлы прежней сборки: базы с работами у дома ещё нет.
+    expect(existsSync(path.join(home, 'parley.db'))).toBe(false);
+
+    const running = await startHost({ home });
+    hosts.push(running);
+
+    expect(existsSync(path.join(project, '.harnas'))).toBe(false);
+    const dir = path.join(project, '.parley', 'works', workId);
+    expect(existsSync(path.join(dir, 'map.v2.json'))).toBe(true);
+    expect(existsSync(path.join(dir, 'map.json'))).toBe(false);
+    // Строки в базе, а пути артефактов в них уже под новым именем: правка шла после переезда карт, а не до него.
+    expect(workExists(project, workId)).toBe(true);
+    expect((await readWorksIndex()).works.map((work) => work.id)).toEqual([workId]);
+    const artifact = (await readMap(project, workId)).sessions[0]?.artifacts[0];
+    expect(artifact?.path).toBe(`.parley/works/${workId}/artifacts/plan.md`);
+    expect(existsSync(path.join(project, artifact?.path ?? ''))).toBe(true);
+  });
+
+  it('a map that cannot be moved stays in its file, and a window that connects gets a map-migration-failed notice', async () => {
+    const home = await newHome();
+    const project = await mkdtemp(path.join(tmpdir(), 'parley-host-migrate-'));
+    projects.push(project);
+    await writeLegacyWork(home, project, '.parley', legacyMap('w-0001', 'Broken'));
+    const file = path.join(project, '.parley', 'works', 'w-0001', 'map.json');
+    await writeFile(file, '{ broken');
+
+    const running = await startHost({ home });
+    hosts.push(running);
+
+    const client = await connect(home);
+    let message = await client.next();
+    while (message.event !== 'host.notice') message = await client.next();
+    client.close();
+    expect(message.data).toEqual({ kind: 'map-migration-failed', ref: null, text: file, at: expect.any(String) });
+    expect(await readFile(file, 'utf8')).toBe('{ broken');
+    expect(workExists(project, 'w-0001')).toBe(false);
+    expect(existsSync(path.join(home, 'works-index.json'))).toBe(true);
+    expect(await listWorks(home)).toEqual([]);
   });
 });

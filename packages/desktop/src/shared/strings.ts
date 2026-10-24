@@ -2629,6 +2629,7 @@ export function startErrorText(failure: IpcErrorInfo, action: string): string {
 const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'map-lock': 'workspace map is locked — try again in a moment',
   'map-corrupt': "workspace map couldn't be read",
+  'map-migration-failed': "a workspace couldn't be moved to the new storage; it stays in its old file",
   'hooks-missing': 'Claude Code hooks did not report — falling back to log-based status',
   'launch-failed': "couldn't launch this session",
   'pointer-timeout': 'no response after the pointer',

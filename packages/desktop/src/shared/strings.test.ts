@@ -20,6 +20,7 @@ const PROTOCOL_CODES: ErrorCode[] = [
 const NOTICE_KINDS: NoticeKind[] = [
   'map-lock',
   'map-corrupt',
+  'map-migration-failed',
   'hooks-missing',
   'launch-failed',
   'pointer-timeout',
@@ -327,6 +328,12 @@ describe('noticeText', () => {
   it('skill-foreign (ref: null) — английский смысл: скилл не поставлен, путь чужой', () => {
     expect(noticeText(hostNotice('skill-foreign'))).toBe(
       "Agent skill not installed — that path already exists and wasn't created by Parley.",
+    );
+  });
+
+  it('map-migration-failed (ref: null) — работа осталась в прежнем файле (спека хранилища 6.6)', () => {
+    expect(noticeText(hostNotice('map-migration-failed'))).toBe(
+      "A workspace couldn't be moved to the new storage; it stays in its old file.",
     );
   });
 

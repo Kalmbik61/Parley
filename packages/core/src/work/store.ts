@@ -161,9 +161,10 @@ const STALE_UNOWNED_LOCK_MS = 10_000;
 /**
  * Осиротела ли блокировка: pid хозяина мёртв; файл без pid (прежняя версия, окно между `open` и записью) —
  * старше 10 с. Не обычный файл (висячий симлинк, каталог) и любая ошибка чтения — не осиротела: ждём до таймаута,
- * как до перехвата, а не крутим цикл.
+ * как до перехвата, а не крутим цикл. Её же спрашивает переезд прежних карт: живой замок `map.lock` — работа занята
+ * процессом прежней сборки (спека хранилища 6.6).
  */
-async function isOrphaned(file: string): Promise<boolean> {
+export async function isOrphaned(file: string): Promise<boolean> {
   try {
     const info = await lstat(file);
     if (!info.isFile()) return false;
@@ -366,6 +367,8 @@ const UPSERT_ENTRY = `INSERT INTO entries (project_path, work_id, kind, key, ord
   ON CONFLICT (project_path, work_id, kind, key) DO UPDATE SET ord = excluded.ord, json = excluded.json`;
 const DELETE_ENTRY =
   'DELETE FROM entries WHERE project_path = ? AND work_id = ? AND kind = ? AND key = ?';
+const INSERT_WORK = `INSERT INTO works (project_path, id, title, status, updated_at, version, work_json, extra_json)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
 const UPDATE_WORK = `UPDATE works SET title = ?, status = ?, updated_at = ?, work_json = ?, extra_json = ?,
   version = version + 1 WHERE project_path = ? AND id = ? RETURNING version`;
 
@@ -569,6 +572,43 @@ export function replaceStoredMap(projectPath: string, workId: string, data: unkn
 }
 
 /**
+ * Только для переезда прежнего `map.json` (спека хранилища 6.6): вставляет строку работы и строки её списков одной
+ * транзакцией и зовёт `check` до `COMMIT` — внутри транзакции видны ещё не записанные строки, и `readStoredMap` собирает
+ * из них карту для сверки. Бросил `check` (или вставка) — `ROLLBACK`, в базе ничего не остаётся. Версия — часы, как у
+ * `createWork`. Подписчики `onMapWritten` узнают о работе после коммита.
+ */
+export function insertMigratedMap(
+  projectPath: string,
+  workId: string,
+  map: WorkMap,
+  check: () => void,
+): void {
+  const db = storeDb();
+  const version = writeTransaction(db, DEFAULT_LOCK_TIMEOUT_MS, () => {
+    const rows = mapToRows(map);
+    const work = map.work as unknown as Record<string, unknown>;
+    const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+    const at = Date.now();
+    sql(db, INSERT_WORK).run(
+      projectPath,
+      workId,
+      text(work['title']),
+      text(work['status']),
+      text(work['updatedAt']),
+      at,
+      rows.work,
+      rows.extra,
+    );
+    for (const row of rows.rows) {
+      sql(db, UPSERT_ENTRY).run(projectPath, workId, row.kind, row.key, row.ord, row.json);
+    }
+    check();
+    return at;
+  });
+  emitMapWritten({ projectPath, workId, version });
+}
+
+/**
  * Читает карту работы из базы. Нет строки — `WorkNotFoundError`; карта, которую `normalizeMap` не принимает, — ошибка,
  * догадки не строим. Неизменная работа загружается один раз, дальше карта приходит из кэша процесса копией (спека
  * хранилища 6.9).
@@ -761,11 +801,7 @@ export async function createWork(
     // совпал бы с версией в кэше другого процесса, и тот отдал бы карту прежней работы (спека хранилища 6.9).
     const version = Date.now();
     try {
-      sql(
-        db,
-        `INSERT INTO works (project_path, id, title, status, updated_at, version, work_json, extra_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
+      sql(db, INSERT_WORK).run(
         projectPath,
         id,
         map.work.title,
