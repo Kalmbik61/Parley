@@ -33,7 +33,11 @@ import type {
 } from './types.js';
 
 const now = '2026-10-24T10:00:00.000Z';
-const context = (plan: RoomPlan) => ({ actor: ENGINE, rev: plan.rev, now });
+const context = (plan: RoomPlan) => ({
+  actor: ENGINE,
+  rev: plan.rev,
+  now: plan.autonomous?.attempts.at(-1)?.startedAt ?? now,
+});
 const auto = (plan: RoomPlan) => plan.autonomous!;
 const last = (plan: RoomPlan) => auto(plan).attempts.at(-1)!;
 const lastOp = (plan: RoomPlan) => auto(plan).ops.at(-1)!;
@@ -280,6 +284,16 @@ function checks(
           phase: options.integration ? 'integration' : 'attempt',
           sha: result.sha,
           specId: spec.id,
+          ...(options.integration
+            ? {
+                integrationOp: auto(next).ops.findLast(
+                  (op) =>
+                    ['merge', 'noop-integration'].includes(op.kind) &&
+                    op.state === 'done' &&
+                    op.result?.sha === auto(next).integration.candidateHead,
+                )!.key,
+              }
+            : {}),
         },
         { checkResult: result },
       );
@@ -301,6 +315,70 @@ function accepted(plan = submitted().plan) {
   });
   expect(verdict.accepted).toBe(true);
   return { plan: verdict.plan, results: checked.results };
+}
+function qualitativeChecks(
+  plan: RoomPlan,
+  attemptId: string,
+  integrationOp?: string,
+  close = true,
+) {
+  const attempt = auto(plan).attempts.find((entry) => entry.id === attemptId)!;
+  const phase = integrationOp ? 'integration' : 'attempt';
+  const sha = integrationOp ? auto(plan).integration.candidateHead! : attempt.sha!;
+  const owner = integrationOp
+    ? auto(plan).ops.find((op) => op.key === integrationOp)!.attemptId!
+    : attemptId;
+  const payload = integrationOp
+    ? { purpose: 'integration-verifier', sha }
+    : { role: 'verifier', phase, sha };
+  const existing = integrationOp
+    ? auto(plan).ops.findLast(
+        (op, index) =>
+          op.kind === 'create-session' &&
+          op.state === 'done' &&
+          op.payload.integrationOp === integrationOp &&
+          index > auto(plan).ops.findLastIndex((entry) => entry.kind === 'resume') &&
+          !auto(plan).ops.some(
+            (closed) =>
+              closed.kind === 'close-session' &&
+              closed.state === 'done' &&
+              closed.payload.sessionId === op.result?.sessionId,
+          ),
+      )
+    : undefined;
+  const sessionId =
+    (existing?.result?.sessionId as string | undefined) ?? `verifier-${auto(plan).ops.length}`;
+  let next = plan;
+  if (!existing) {
+    next = operation(next, 'create-session', owner, payload, { sessionId });
+    next = operation(next, 'launch', owner, { ...payload, sessionId });
+  }
+  const result: CheckResult = {
+    id: `quality-${auto(next).ops.length}`,
+    attemptId,
+    specId: 'verifier:0',
+    sha,
+    argvHash: '',
+    envHash: '',
+    by: sessionId,
+    verdict: 'pass',
+    inputsOk: true,
+    exitCode: null,
+    summary: 'Критерий пройден',
+    outputTail: null,
+    at: context(next).now,
+    durationMs: 0,
+  };
+  next = operation(
+    next,
+    'check',
+    attemptId,
+    { phase, sha, ...(integrationOp ? { integrationOp } : {}) },
+    { checkResult: result },
+  );
+  next = recordCheck(next, { ...context(next), attemptId, result, opKey: lastOp(next).key });
+  if (close) next = operation(next, 'close-session', owner, { sessionId });
+  return { plan: next, result, sessionId };
 }
 function queued(plan = accepted().plan): RoomPlan {
   return enqueue(plan, { ...context(plan), attemptId: last(plan).id });
@@ -347,6 +425,287 @@ const returned = (plan: RoomPlan, signature = 'failure-a') =>
   });
 
 describe('автономные правила', () => {
+  it('повторный рестарт после успешной починки сохраняет verified и доказательства зависимого', () => {
+    const first = running();
+    const restarted = reconcileAfterRestart(first, {
+      ...context(first),
+      observations: [],
+      integrationHead: { sha: 'base', parents: [], opKey: null },
+    });
+    const resumed = resume(restarted, { ...context(restarted), requestedBy: HUMAN });
+    const repaired = integrated(queued(accepted(submitted(running(resumed)).plan).plan));
+    const dependent = integrated(queued(accepted(submitted(running(repaired, 2)).plan).plan));
+    const saved = structuredClone(dependent.items.slice(0, 2));
+    const next = reconcileAfterRestart(dependent, {
+      ...context(dependent),
+      observations: [],
+      integrationHead: { sha: auto(dependent).integration.verifiedHead, parents: [], opKey: null },
+    });
+    expect(next.items.slice(0, 2)).toEqual(saved);
+    expect(auto(next).attempts.map((attempt) => attempt.status)).toEqual([
+      'aborted',
+      'integrated',
+      'integrated',
+    ]);
+    expect(auto(next).halted?.reason).toBe('restart');
+  });
+
+  it('после позднего дефекта интеграция зависимого проверяет актуальную починку без старой попытки', () => {
+    const original = integrated();
+    const returned = lateDefect(original, room(), {
+      ...context(original),
+      attemptId: last(original).id,
+      reason: 'Дефект',
+    }).plan;
+    const repaired = integrated(queued(accepted(submitted(running(returned)).plan).plan));
+    const current = last(repaired).id;
+    const merged = candidate(queued(accepted(submitted(running(repaired, 2)).plan).plan));
+    const checked = checks(merged.plan, {
+      integration: true,
+      attemptIds: [current, last(merged.plan).id],
+    });
+    const next = integrate(checked.plan, {
+      ...context(checked.plan),
+      attemptId: last(checked.plan).id,
+      opKey: merged.opKey,
+      results: checked.results,
+      verifiers: [],
+    });
+    expect(next.items.slice(0, 2).map((item) => item.status)).toEqual(['verified', 'verified']);
+    expect(auto(next).attempts[0]!.status).toBe('integrated');
+    expect(auto(next).attempts[0]!.checks).toEqual(auto(repaired).attempts[0]!.checks);
+  });
+
+  it('новые интеграционные проверяющие перепроверяют критерий на двух головах и сохраняют происхождение', () => {
+    const initial = fixture();
+    auto(initial).coverage[1]![0] = ['verifier'];
+    const submittedPlan = submitted(running(initial)).plan;
+    const attemptId = last(submittedPlan).id;
+    const acceptance = qualitativeChecks(submittedPlan, attemptId);
+    const verdict = coverageVerdict(acceptance.plan, {
+      ...context(acceptance.plan),
+      attemptId,
+      results: [],
+      verifiers: [acceptance.result],
+    });
+    expect(verdict.accepted).toBe(true);
+    const firstMerge = candidate(queued(verdict.plan));
+    const firstQuality = qualitativeChecks(firstMerge.plan, attemptId, firstMerge.opKey);
+    const first = integrate(firstQuality.plan, {
+      ...context(firstQuality.plan),
+      attemptId,
+      opKey: firstMerge.opKey,
+      results: [],
+      verifiers: [firstQuality.result],
+    });
+    const secondMerge = candidate(queued(accepted(submitted(running(first, 2)).plan).plan));
+    const secondQuality = qualitativeChecks(secondMerge.plan, attemptId, secondMerge.opKey);
+    const checked = checks(secondQuality.plan, { integration: true });
+    const next = integrate(checked.plan, {
+      ...context(checked.plan),
+      attemptId: last(checked.plan).id,
+      opKey: secondMerge.opKey,
+      results: checked.results,
+      verifiers: [secondQuality.result],
+    });
+    expect(next.items.slice(0, 2).map((item) => item.status)).toEqual(['verified', 'verified']);
+    expect(auto(next).attempts[0]!.verifier).toBe(acceptance.sessionId);
+    expect(
+      new Set([acceptance.sessionId, firstQuality.sessionId, secondQuality.sessionId]).size,
+    ).toBe(3);
+    expect(auto(next).budget.spent).toMatchObject({ sessions: 5, verifiers: 3, launches: 5 });
+    expect(auto(next).budget.reservations).toEqual([]);
+    for (const quality of [acceptance, firstQuality, secondQuality])
+      expect(
+        auto(next).ops.some(
+          (op) =>
+            op.kind === 'close-session' &&
+            op.payload.sessionId === quality.sessionId &&
+            op.state === 'done',
+        ),
+      ).toBe(true);
+  });
+
+  it('рестарт останавливает интеграционного проверяющего verified-пункта и требует нового после resume', () => {
+    const initial = fixture();
+    auto(initial).coverage[1]![0] = ['verifier'];
+    const captured = submitted(running(initial)).plan,
+      id = last(captured).id;
+    const acceptance = qualitativeChecks(captured, id);
+    const accepted = coverageVerdict(acceptance.plan, {
+      ...context(acceptance.plan),
+      attemptId: id,
+      results: [],
+      verifiers: [acceptance.result],
+    }).plan;
+    const firstMerge = candidate(queued(accepted));
+    const firstCheck = qualitativeChecks(firstMerge.plan, id, firstMerge.opKey);
+    const first = integrate(firstCheck.plan, {
+      ...context(firstCheck.plan),
+      attemptId: id,
+      opKey: firstMerge.opKey,
+      results: [],
+      verifiers: [firstCheck.result],
+    });
+    const dependent = checks(submitted(running(first, 2)).plan);
+    const secondAccepted = coverageVerdict(dependent.plan, {
+      ...context(dependent.plan),
+      attemptId: last(dependent.plan).id,
+      results: dependent.results,
+      verifiers: [],
+    }).plan;
+    const secondMerge = candidate(queued(secondAccepted));
+    const interrupted = qualitativeChecks(secondMerge.plan, id, secondMerge.opKey, false);
+    const restarted = reconcileAfterRestart(interrupted.plan, {
+      ...context(interrupted.plan),
+      observations: [],
+      integrationHead: {
+        sha: auto(interrupted.plan).integration.candidateHead!,
+        parents: [auto(interrupted.plan).integration.verifiedHead, last(interrupted.plan).sha!],
+        opKey: secondMerge.opKey,
+      },
+    });
+    expect(auto(restarted).attempts[0]!.status).toBe('integrated');
+    expect(restarted.items[0]!.status).toBe('verified');
+    const stops = auto(restarted).ops.filter(
+      (op) =>
+        op.payload.sessionId === interrupted.sessionId &&
+        ['stop-session', 'close-session'].includes(op.kind) &&
+        op.state === 'intended',
+    );
+    expect(stops.map((op) => op.kind)).toEqual(['stop-session', 'close-session']);
+    let resumed = resume(restarted, { ...context(restarted), requestedBy: HUMAN });
+    for (const op of stops)
+      resumed = settleOp(resumed, {
+        ...context(resumed),
+        key: op.key,
+        outcome: 'done',
+        result: {},
+      });
+    const engine = checks(resumed, { integration: true });
+    expect(() =>
+      integrate(engine.plan, {
+        ...context(engine.plan),
+        attemptId: last(engine.plan).id,
+        opKey: secondMerge.opKey,
+        results: engine.results,
+        verifiers: [interrupted.result],
+      }),
+    ).toThrow('integration-coverage-incomplete');
+    const fresh = qualitativeChecks(engine.plan, id, secondMerge.opKey);
+    const next = integrate(fresh.plan, {
+      ...context(fresh.plan),
+      attemptId: last(fresh.plan).id,
+      opKey: secondMerge.opKey,
+      results: engine.results,
+      verifiers: [fresh.result],
+    });
+    expect(last(next).status).toBe('integrated');
+    expect(auto(next).attempts[0]!.verifier).toBe(acceptance.sessionId);
+    expect(fresh.sessionId).not.toBe(interrupted.sessionId);
+  });
+
+  it('интеграционный проверяющий старого verified-пункта расходует бюджет текущего кандидата', () => {
+    const initial = fixture();
+    auto(initial).coverage[1]![0] = ['verifier'];
+    const captured = submitted(running(initial)).plan,
+      id = last(captured).id;
+    const acceptance = qualitativeChecks(captured, id);
+    const acceptedFirst = coverageVerdict(acceptance.plan, {
+      ...context(acceptance.plan),
+      attemptId: id,
+      results: [],
+      verifiers: [acceptance.result],
+    }).plan;
+    const firstMerge = candidate(queued(acceptedFirst));
+    const firstQuality = qualitativeChecks(firstMerge.plan, id, firstMerge.opKey);
+    const first = integrate(firstQuality.plan, {
+      ...context(firstQuality.plan),
+      attemptId: id,
+      opKey: firstMerge.opKey,
+      results: [],
+      verifiers: [firstQuality.result],
+    });
+    let later = startAttempt(first, {
+      ...context(first),
+      now: '2026-10-24T11:00:00.000Z',
+      item: 2,
+      branch: 'later-attempt',
+      baseSha: auto(first).integration.verifiedHead,
+    });
+    later = settleOp(later, {
+      ...context(later),
+      key: lastOp(later).key,
+      outcome: 'done',
+      result: { sessionId: 'later-worker' },
+    });
+    later = operation(later, 'launch', last(later).id, {
+      role: 'worker',
+      sessionId: 'later-worker',
+    });
+    const merged = candidate(queued(accepted(submitted(later).plan).plan));
+    const quality = qualitativeChecks(merged.plan, auto(first).attempts[0]!.id, merged.opKey);
+    expect(auto(quality.plan).halted).toBeNull();
+    expect(auto(quality.plan).budget.spent.verifiers).toBe(3);
+    expect(auto(quality.plan).attempts[0]!.status).toBe('integrated');
+  });
+
+  it('один проверяющий кандидата даёт качественные вердикты для текущего и ранее verified-пункта', () => {
+    const initial = fixture();
+    auto(initial).coverage[1]![0] = ['verifier'];
+    auto(initial).coverage[2]![0] = ['verifier'];
+    const captured = submitted(running(initial)).plan,
+      firstId = last(captured).id;
+    const acceptedFirst = qualitativeChecks(captured, firstId);
+    const firstPlan = coverageVerdict(acceptedFirst.plan, {
+      ...context(acceptedFirst.plan),
+      attemptId: firstId,
+      results: [],
+      verifiers: [acceptedFirst.result],
+    }).plan;
+    const firstMerge = candidate(queued(firstPlan));
+    const firstQuality = qualitativeChecks(firstMerge.plan, firstId, firstMerge.opKey);
+    const first = integrate(firstQuality.plan, {
+      ...context(firstQuality.plan),
+      attemptId: firstId,
+      opKey: firstMerge.opKey,
+      results: [],
+      verifiers: [firstQuality.result],
+    });
+    const secondCapture = submitted(running(first, 2)).plan,
+      secondId = last(secondCapture).id;
+    const secondAcceptance = qualitativeChecks(secondCapture, secondId);
+    const secondPlan = coverageVerdict(secondAcceptance.plan, {
+      ...context(secondAcceptance.plan),
+      attemptId: secondId,
+      results: [],
+      verifiers: [secondAcceptance.result],
+    }).plan;
+    const secondMerge = candidate(queued(secondPlan));
+    const oldItem = qualitativeChecks(secondMerge.plan, firstId, secondMerge.opKey, false);
+    const newItem = qualitativeChecks(oldItem.plan, secondId, secondMerge.opKey);
+    expect(newItem.sessionId).toBe(oldItem.sessionId);
+    const next = integrate(newItem.plan, {
+      ...context(newItem.plan),
+      attemptId: secondId,
+      opKey: secondMerge.opKey,
+      results: [],
+      verifiers: [oldItem.result, newItem.result],
+    });
+    expect(next.items.slice(0, 2).map((item) => item.status)).toEqual(['verified', 'verified']);
+    expect(
+      auto(next).ops.filter(
+        (op) =>
+          op.kind === 'create-session' &&
+          op.payload.purpose === 'integration-verifier' &&
+          op.payload.sha === auto(next).integration.verifiedHead,
+      ),
+    ).toHaveLength(1);
+    expect(auto(next).attempts.map((attempt) => attempt.verifier)).toEqual([
+      acceptedFirst.sessionId,
+      secondAcceptance.sessionId,
+    ]);
+  });
   it('новая попытка дописывается и не перезаписывает прежнюю попытку и её журнал', () => {
     const first = returned(submitted().plan);
     const saved = structuredClone(last(first));
@@ -547,38 +906,11 @@ describe('автономные правила', () => {
   });
 
   it('качественный критерий требует независимого pass на точном sha', () => {
-    let plan = submitted().plan;
-    auto(plan).coverage[1]![0] = ['verifier'];
-    last(plan).verifier = 'verifier';
-    const result: CheckResult = {
-      id: 'quality-1',
-      specId: 'verifier:0',
-      attemptId: last(plan).id,
-      sha: last(plan).sha!,
-      verdict: 'pass',
-      by: 'verifier',
-      argvHash: '',
-      envHash: '',
-      inputsOk: true,
-      exitCode: null,
-      summary: 'Критерий пройден',
-      outputTail: null,
-      at: now,
-      durationMs: 0,
-    };
-    plan = operation(
-      plan,
-      'check',
-      last(plan).id,
-      { phase: 'attempt', sha: result.sha },
-      { checkResult: result },
-    );
-    plan = recordCheck(plan, {
-      ...context(plan),
-      attemptId: last(plan).id,
-      result,
-      opKey: lastOp(plan).key,
-    });
+    const initial = submitted().plan;
+    auto(initial).coverage[1]![0] = ['verifier'];
+    const quality = qualitativeChecks(initial, last(initial).id);
+    const plan = quality.plan,
+      result = quality.result;
     const input = { ...context(plan), attemptId: last(plan).id, results: [], verifiers: [result] };
     expect(coverageVerdict(plan, input).accepted).toBe(true);
     expect(
@@ -1294,7 +1626,7 @@ describe('автономные правила', () => {
       merged.plan,
       'check',
       last(merged.plan).id,
-      { phase: 'integration', sha: result.sha },
+      { phase: 'integration', sha: result.sha, integrationOp: merged.opKey },
       { checkResult: result },
     );
     const next = integrate(checked, {

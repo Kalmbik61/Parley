@@ -23,6 +23,10 @@ import type {
  * session {role, sessionId?}, copy-artifacts {captureOp}, check {phase, sha, specId?},
  * merge/noop {sha, verifiedHead, containedInVerifiedHead?}. Settled captures return {sha, tree};
  * settled checks return {checkResult}. Compose coverageVerdict + enqueue in one transaction.
+ * Integration checks include {phase: 'integration', sha, integrationOp}. The candidate's
+ * verifier session uses {purpose: 'integration-verifier', sha}; phase/integrationOp are captured
+ * in its intent. Its provenance stays in ops; attempt.verifier retains the acceptance verifier.
+ * A replacement requires the previous session to be closed.
  */
 interface Context {
   actor: string;
@@ -173,8 +177,21 @@ function appendOp(
   return op;
 }
 function stopSessions(plan: RoomPlan, attempt: PlanAttempt, now: string): void {
-  for (const sessionId of new Set([attempt.worker, attempt.verifier])) {
+  const created = state(plan)
+    .ops.filter(
+      (op) => op.kind === 'create-session' && op.attemptId === attempt.id && op.state === 'done',
+    )
+    .map((op) => op.result?.sessionId)
+    .filter((id): id is string => typeof id === 'string');
+  for (const sessionId of new Set([attempt.worker, attempt.verifier, ...created])) {
     if (!sessionId) continue;
+    if (
+      state(plan).ops.some(
+        (op) =>
+          op.kind === 'close-session' && op.payload.sessionId === sessionId && op.state === 'done',
+      )
+    )
+      continue;
     for (const kind of ['stop-session', 'close-session'] as const)
       if (
         !state(plan).ops.some(
@@ -242,8 +259,7 @@ function haltDraft(
       transition(plan, attempt, 'aborted', now, detail);
       itemStatus(itemOf(plan, attempt.item), 'returned', now, detail);
     }
-    if (!terminal.has(attempt.status) || attempt.status === 'aborted')
-      stopSessions(plan, attempt, now);
+    stopSessions(plan, attempt, now);
   }
   recalculate(plan);
 }
@@ -268,25 +284,63 @@ function activeLaunches(plan: RoomPlan, sessionId?: string): number {
       .map((op) => op.payload.sessionId),
   ).size;
 }
+function currentIntegrationOp(plan: RoomPlan): AutonomousOp | undefined {
+  const a = state(plan),
+    i = a.integration;
+  return a.ops.findLast(
+    (op) =>
+      ['merge', 'noop-integration'].includes(op.kind) &&
+      op.state === 'done' &&
+      op.attemptId === i.queue[0] &&
+      i.candidateHead !== null &&
+      op.result?.sha === i.candidateHead &&
+      op.payload.verifiedHead === i.verifiedHead,
+  );
+}
+function integrationVerifier(plan: RoomPlan): string | null {
+  const a = state(plan),
+    integration = currentIntegrationOp(plan);
+  if (!integration) return null;
+  const resume = a.ops.findLastIndex((op) => op.kind === 'resume');
+  const creation = a.ops.findLast(
+    (op, index) =>
+      index > resume &&
+      op.kind === 'create-session' &&
+      op.attemptId === integration.attemptId &&
+      op.payload.role === 'verifier' &&
+      op.payload.purpose === 'integration-verifier' &&
+      op.payload.phase === 'integration' &&
+      op.payload.integrationOp === integration.key &&
+      op.payload.sha === a.integration.candidateHead &&
+      op.state !== 'failed',
+  );
+  return creation?.state === 'done' && typeof creation.result?.sessionId === 'string'
+    ? creation.result.sessionId
+    : null;
+}
 function withinTime(plan: RoomPlan, attempt: PlanAttempt, now: string): boolean {
   const a = state(plan);
-  const checks = attempt.checks
-    .map((id) =>
-      a.ops.find(
-        (op) =>
-          op.kind === 'check' &&
-          op.state === 'done' &&
-          op.attemptId === attempt.id &&
-          (op.result?.checkResult as CheckResult | undefined)?.id === id,
-      ),
+  const checks = new Map<string, CheckResult>();
+  for (const op of a.ops) {
+    if (op.kind !== 'check' || op.state !== 'done') continue;
+    const result = op.result?.checkResult as CheckResult | undefined;
+    if (
+      !result ||
+      !a.attempts.some((owner) => owner.id === op.attemptId && owner.checks.includes(result.id))
     )
-    .filter((op) => op !== undefined);
+      continue;
+    const owner =
+      op.payload.phase === 'integration'
+        ? a.ops.find((merge) => merge.key === op.payload.integrationOp)?.attemptId
+        : op.attemptId;
+    if (owner === attempt.id) checks.set(result.id, result);
+  }
   const minutes =
-    Math.max(0, Math.ceil((Date.parse(now) - Date.parse(attempt.startedAt)) / 60_000)) +
-    checks.reduce(
-      (sum, op) => sum + Math.ceil((op.result!.checkResult as CheckResult).durationMs / 60_000),
+    Math.max(
       0,
-    );
+      Math.ceil((Date.parse(attempt.endedAt ?? now) - Date.parse(attempt.startedAt)) / 60_000),
+    ) +
+    [...checks.values()].reduce((sum, result) => sum + Math.ceil(result.durationMs / 60_000), 0);
   if (minutes <= a.budget.limits.minutesPerAttempt) return true;
   haltDraft(plan, 'budget', 'minutesPerAttempt limit', now);
   return false;
@@ -307,7 +361,12 @@ function reserveDraft(
   }
   if (state(plan).ops.some((op) => op.key === key && op.state !== 'intended'))
     throw new RoomRuleError('reservation-settled');
-  if (!withinTime(plan, attemptOf(plan, attemptId), now)) return false;
+  const op = state(plan).ops.find((entry) => entry.key === key);
+  const charged =
+    op?.payload.phase === 'integration'
+      ? (currentIntegrationOp(plan)?.attemptId ?? attemptId)
+      : attemptId;
+  if (!withinTime(plan, attemptOf(plan, charged), now)) return false;
   const count = budget.reservations.filter((entry) => entry.kind === kind).length;
   if (
     (kind === 'session' && budget.spent.sessions + count >= budget.limits.sessions) ||
@@ -351,6 +410,24 @@ export function intendOp(
   const next = edit(plan, input);
   const existing = input.key && state(next).ops.find((op) => op.key === input.key);
   if (
+    ['create-session', 'launch'].includes(input.kind) &&
+    input.payload.purpose === 'integration-verifier'
+  ) {
+    if (input.payload.role !== undefined && input.payload.role !== 'verifier')
+      throw new RoomRuleError('invalid session role');
+    input = {
+      ...input,
+      payload: {
+        ...input.payload,
+        role: 'verifier',
+        phase: 'integration',
+        integrationOp:
+          input.payload.integrationOp ??
+          (existing ? existing.payload.integrationOp : currentIntegrationOp(next)?.key),
+      },
+    };
+  }
+  if (
     !existing &&
     !['stop-session', 'close-session', 'merge-abort', 'cleanup', 'resume'].includes(input.kind)
   )
@@ -358,6 +435,20 @@ export function intendOp(
   if (input.attemptId) attemptOf(next, input.attemptId);
   if (!existing && input.attemptId) {
     const attempt = attemptOf(next, input.attemptId);
+    const integration = input.payload.phase === 'integration';
+    const integrationOp = currentIntegrationOp(next);
+    if (
+      integration &&
+      ['create-session', 'launch'].includes(input.kind) &&
+      (input.payload.role !== 'verifier' ||
+        input.payload.purpose !== 'integration-verifier' ||
+        !integrationOp ||
+        attempt.id !== integrationOp.attemptId ||
+        input.payload.integrationOp !== integrationOp.key ||
+        input.payload.sha !== state(next).integration.candidateHead ||
+        !['queued', 'integrated'].includes(attempt.status))
+    )
+      throw new RoomRuleError('integration-verifier-not-needed');
     if (
       ['create-session', 'launch'].includes(input.kind) &&
       !['worker', 'verifier'].includes(String(input.payload.role))
@@ -371,7 +462,18 @@ export function intendOp(
           op.attemptId === attempt.id &&
           op.state !== 'failed' &&
           (input.kind === 'create-session'
-            ? op.payload.role === input.payload.role
+            ? op.payload.role === input.payload.role &&
+              (integration
+                ? op.payload.phase === 'integration' &&
+                  op.payload.integrationOp === input.payload.integrationOp &&
+                  (op.state === 'intended' ||
+                    !state(next).ops.some(
+                      (closed) =>
+                        closed.kind === 'close-session' &&
+                        closed.state === 'done' &&
+                        closed.payload.sessionId === op.result?.sessionId,
+                    ))
+                : op.payload.phase !== 'integration')
             : input.kind === 'launch'
               ? op.payload.sessionId === input.payload.sessionId && op.state === 'intended'
               : true),
@@ -387,7 +489,8 @@ export function intendOp(
     if (
       input.kind === 'create-session' &&
       (input.payload.role === 'verifier'
-        ? !['submitted', 'checking'].includes(attempt.status) || attempt.verifier !== null
+        ? !integration &&
+          (!['submitted', 'checking'].includes(attempt.status) || attempt.verifier !== null)
         : attempt.status !== 'starting' || attempt.worker !== null)
     )
       throw new RoomRuleError('session-not-needed');
@@ -395,9 +498,13 @@ export function intendOp(
       input.kind === 'launch' &&
       (typeof input.payload.sessionId !== 'string' ||
         input.payload.sessionId !==
-          (input.payload.role === 'verifier' ? attempt.verifier : attempt.worker) ||
+          (input.payload.role === 'verifier'
+            ? integration
+              ? integrationVerifier(next)
+              : attempt.verifier
+            : attempt.worker) ||
         (input.payload.role === 'verifier'
-          ? !['submitted', 'checking'].includes(attempt.status)
+          ? !integration && !['submitted', 'checking'].includes(attempt.status)
           : attempt.status !== 'starting'))
     )
       throw new RoomRuleError('session-not-launchable');
@@ -430,7 +537,8 @@ export function intendOp(
       input.kind === 'check' &&
       (!['submitted', 'checking', 'queued', 'integrated'].includes(attempt.status) ||
         (input.payload.phase === 'integration' &&
-          input.payload.sha !== state(next).integration.candidateHead))
+          (input.payload.sha !== state(next).integration.candidateHead ||
+            input.payload.integrationOp !== integrationOp?.key)))
     )
       throw new RoomRuleError('attempt-not-checkable');
   }
@@ -527,7 +635,7 @@ export function settleOp(
       a.budget.spent.sessions++;
       if (op.payload.role === 'verifier') {
         a.budget.spent.verifiers++;
-        if (attempt && !fenced.has(attempt.status))
+        if (attempt && !fenced.has(attempt.status) && op.payload.phase !== 'integration')
           attempt.verifier = input.result.sessionId as string;
       } else if (attempt && !fenced.has(attempt.status))
         attempt.worker = input.result.sessionId as string;
@@ -553,6 +661,14 @@ export function settleOp(
       if (attempt?.status === 'starting' && op.payload.role !== 'verifier')
         transition(next, attempt, 'running', input.now, null, op.key);
     }
+    if (
+      attempt &&
+      ['create-session', 'launch'].includes(op.kind) &&
+      (fenced.has(attempt.status) ||
+        (op.payload.phase === 'integration' &&
+          (a.halted || op.payload.integrationOp !== currentIntegrationOp(next)?.key)))
+    )
+      stopSessions(next, attempt, input.now);
   }
   a.budget.reservations = a.budget.reservations.filter((entry) => entry.key !== op.key);
   if (attempt) transition(next, attempt, attempt.status, input.now, input.outcome, op.key);
@@ -775,7 +891,21 @@ export function recordCheck(
     attempt = attemptOf(next, input.attemptId),
     result = input.result;
   requireRunning(next);
-  if (!['submitted', 'checking', 'accepted'].includes(attempt.status) || !validReceipt(attempt))
+  const op = a.ops.find(
+    (entry) =>
+      entry.key === input.opKey &&
+      entry.kind === 'check' &&
+      entry.attemptId === attempt.id &&
+      entry.state === 'done',
+  );
+  const integration = op?.payload.phase === 'integration';
+  const integrationOp = currentIntegrationOp(next);
+  if (
+    !(integration ? ['queued', 'integrated'] : ['submitted', 'checking', 'accepted']).includes(
+      attempt.status,
+    ) ||
+    !validReceipt(attempt)
+  )
     throw new RoomRuleError('attempt-not-checkable');
   const stale = staleReason(next, attempt);
   if (stale) {
@@ -787,15 +917,17 @@ export function recordCheck(
   const qualitative =
     criterion !== undefined &&
     a.coverage[attempt.item]?.[Number(criterion)]?.includes('verifier') &&
-    result.by === attempt.verifier &&
-    result.by !== attempt.worker;
-  const op = a.ops.find(
-    (entry) =>
-      entry.key === input.opKey &&
-      entry.kind === 'check' &&
-      entry.attemptId === attempt.id &&
-      entry.state === 'done',
-  );
+    result.by === (integration ? integrationVerifier(next) : attempt.verifier) &&
+    result.by !== attempt.worker &&
+    a.ops.some(
+      (entry) =>
+        entry.kind === 'launch' &&
+        entry.state === 'done' &&
+        entry.payload.sessionId === result.by &&
+        (integration
+          ? entry.payload.integrationOp === integrationOp?.key
+          : entry.payload.phase !== 'integration'),
+    );
   if (
     (!qualitative &&
       (!spec ||
@@ -803,10 +935,12 @@ export function recordCheck(
         result.argvHash !== hash(spec.argv) ||
         result.envHash !== hash(spec.env))) ||
     !op ||
-    op.payload.phase !== 'attempt' ||
+    (integration
+      ? !integrationOp || op.payload.integrationOp !== integrationOp.key
+      : op.payload.phase !== 'attempt') ||
     canonical(op.result?.checkResult) !== canonical(result) ||
     result.attemptId !== attempt.id ||
-    result.sha !== attempt.sha ||
+    result.sha !== (integration ? a.integration.candidateHead : attempt.sha) ||
     !Number.isFinite(result.durationMs) ||
     result.durationMs < 0
   )
@@ -827,8 +961,15 @@ export function recordCheck(
   attempt.checks.push(result.id);
   a.seq.check++;
   a.budget.spent.minutes += Math.ceil(result.durationMs / 60_000);
-  transition(next, attempt, 'checking', input.now, null, input.opKey);
-  withinTime(next, attempt, input.now);
+  transition(
+    next,
+    attempt,
+    integration ? attempt.status : 'checking',
+    input.now,
+    null,
+    input.opKey,
+  );
+  withinTime(next, integration ? attemptOf(next, a.integration.queue[0]!) : attempt, input.now);
   return next;
 }
 function coverage(
@@ -852,6 +993,7 @@ function coverage(
         op.attemptId === attempt.id &&
         op.state === 'done' &&
         op.payload.phase === (recorded ? 'attempt' : 'integration') &&
+        (recorded || op.payload.integrationOp === currentIntegrationOp(plan)?.key) &&
         canonical(op.result?.checkResult) === canonical(result),
     );
   for (let criterion = 0; criterion < item.criteria.length; criterion++) {
@@ -865,13 +1007,13 @@ function coverage(
               entry.attemptId === attempt.id &&
               entry.specId === `verifier:${criterion}` &&
               entry.sha === sha &&
-              (!recorded || attempt.checks.includes(entry.id)),
+              attempt.checks.includes(entry.id),
           );
           return (
             !result ||
             !persisted(result) ||
             !result.inputsOk ||
-            result.by !== attempt.verifier ||
+            result.by !== (recorded ? attempt.verifier : integrationVerifier(plan)) ||
             result.by === attempt.worker ||
             result.verdict !== 'pass' ||
             !Number.isFinite(result.durationMs) ||
@@ -989,7 +1131,13 @@ export function integrate(
   const checked = [
     attempt,
     ...a.attempts.filter(
-      (entry) => entry.status === 'integrated' && itemOf(next, entry.item).status === 'verified',
+      (entry) =>
+        entry.status === 'integrated' &&
+        itemOf(next, entry.item).status === 'verified' &&
+        entry ===
+          a.attempts.findLast(
+            (current) => current.item === entry.item && current.status === 'integrated',
+          ),
     ),
   ];
   if (
@@ -1014,7 +1162,7 @@ export function integrate(
   transition(next, attempt, 'integrated', input.now, null, op.key);
   const item = itemOf(next, attempt.item);
   item.evidence = {
-    text: `sha=${attempt.sha}; verifiedHead=${i.verifiedHead}; criteriaVersion=${attempt.criteriaVersion}; receipt=${attempt.receipt?.id}; checks=${input.results.map((entry) => entry.id).join(',')}`,
+    text: `sha=${attempt.sha}; verifiedHead=${i.verifiedHead}; criteriaVersion=${attempt.criteriaVersion}; receipt=${attempt.receipt?.id}; checks=${[...input.results, ...input.verifiers].map((entry) => entry.id).join(',')}`,
     artifacts: attempt.manifest?.artifacts.map((artifact) => artifact.storedAs) ?? [],
   };
   itemStatus(item, 'verified', input.now);
@@ -1220,9 +1368,8 @@ export function reconcileAfterRestart(
     if (
       ['starting', 'running', 'checking'].includes(attempt.status) ||
       (attempt.status === 'submitted' && !validReceipt(attempt))
-    )
+    ) {
       transition(next, attempt, 'aborted', input.now, 'restart');
-    if (attempt.status === 'aborted') {
       stopSessions(next, attempt, input.now);
       itemStatus(itemOf(next, attempt.item), 'returned', input.now, 'restart');
     }
