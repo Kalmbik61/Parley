@@ -720,7 +720,7 @@ export function validatePlanStorage(map: WorkMap): void {
       !/^pl-\d+$/.test(plan.id) ||
       ids.has(plan.id) ||
       !map.rooms.some((room) => room.id === plan.roomId) ||
-      !["checklist", "verified"].includes(plan.mode) ||
+      !["checklist", "verified", "autonomous"].includes(plan.mode) ||
       !["proposed", "active", "completing", "completed", "cancelled"].includes(
         plan.status,
       ) ||
