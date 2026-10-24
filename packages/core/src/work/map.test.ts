@@ -1208,3 +1208,19 @@ describe('room ownership migration', () => {
     expect(map).toEqual(before);
   });
 });
+
+
+describe('clone workspace', () => {
+  it('preserves valid clone metadata and accepts old maps', () => {
+    const map = emptyMap();
+    const session = addSession(map, { provider: 'codex', label: 'worker', task: 'work' });
+    expect(parseMap(JSON.stringify(map)).sessions[0]?.workspace).toBeUndefined();
+    Object.assign(session, { workspace: { kind: 'clone', path: '/tmp/clone', branch: 'attempts/at-0001', sha: 'abc' } });
+    expect(parseMap(JSON.stringify(map)).sessions[0]?.workspace).toEqual(session.workspace);
+  });
+  it.each([{ kind: 'worktree', path: '/tmp/c', branch: 'a', sha: 'abc' }, { kind: 'clone', path: '', branch: 'a', sha: 'abc' }, { kind: 'clone', path: '/tmp/c', branch: 'a' }])('rejects malformed clone metadata %j', workspace => {
+    const map = emptyMap();
+    Object.assign(addSession(map, { provider: 'codex', label: 'worker', task: 'work' }), { workspace });
+    expect(() => parseMap(JSON.stringify(map))).toThrow();
+  });
+});

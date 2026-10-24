@@ -2397,6 +2397,25 @@ describe('setModel(): смена модели (спека нормалайзер
 
 
 describe('agent-created workspace peers', () => {
+  it('persists engine clone cwd and rejects ordinary clone assignment', async () => {
+    const work = await createWork(project, { title: 'Engine clone', goal: '' });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const workspace = { kind: 'clone' as const, path: path.join(project, 'clone'), branch: 'attempts/at-0001', sha: 'a'.repeat(40) };
+    await mkdir(workspace.path);
+    const input = { projectPath: project, workId: work.work.id, provider: 'claude', label: 'Worker', task: 'Implement', parent: null, workspace };
+    await expect(service.create(input)).rejects.toMatchObject({ code: 'bad_request' });
+    const ref = await service.create({ ...input, requestedBy: ENGINE, deferLaunch: true });
+    const session = (await readMap(project, work.work.id)).sessions.find(row => row.id === ref.sessionId)!;
+    expect(session.workspace).toEqual(workspace);
+    expect(session.worktree).toBeNull();
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    try {
+      await service.launch(ref, 'launch', { by: ENGINE });
+      expect(await realpath((await readArgs(argsFile)).cwd)).toBe(await realpath(workspace.path));
+    } finally { await service.stopAll(); }
+  });
+
   it('charges plan-namespaced engine identities to their own room creation budgets', async () => {
     setEnv('PARLEY_ROOM_NEW_SESSIONS', '1');
     const work = await createWork(project, { title: 'Two engine plans', goal: '' });

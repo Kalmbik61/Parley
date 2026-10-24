@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { addRoom, addSession, ENGINE, HUMAN, parseMap, setProposal, startAttempt, type AttemptChannelRequest, type CheckResult, type RoomPlan, type WorkMap } from '@parley/core';
+import { addRoom, addSession, ENGINE, HUMAN, parseMap, resume, setProposal, startAttempt, type AttemptChannelRequest, type CheckResult, type RoomPlan, type WorkMap } from '@parley/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAutonomousEngine, resolveAutonomousProposal, type EngineIO } from './autonomous-engine.js';
 import { attemptsEngineGitPath, type AttemptsProposal } from '../agent/attempts-endpoint.js';
@@ -512,4 +512,329 @@ describe('autonomous engine', () => {
     expect(f.map().rooms[0]!.proposal).toBeNull();
     expect(f.map().messages.some(row => row.text.includes('Amendment revision changed'))).toBe(true);
   });
+});
+
+
+describe('autonomous integration', () => {
+  it('integrates independent candidates serially and checks only integrated items plus the candidate', async () => {
+    const f = await fixture(false, 2);
+    await f.engine.flush(f.projectPath, 'w-01');
+    for (const i of [0, 1]) {
+      await fs.writeFile(path.join(f.clone(i), `item-${i + 1}.txt`), 'implemented');
+      expect(await f.submit(i)).toMatchObject({ ok: true });
+    }
+    const calls: string[] = [];
+    const runner = f.io.runner;
+    f.io.runner = vi.fn(async (ctx, spec, sha, attemptId) => {
+      calls.push(spec.id);
+      await exec('git', [`--git-dir=${attemptsEngineGitPath(f.projectPath, 'w-01')}`, 'cat-file', '-e', `${sha}:item-${spec.item}.txt`]);
+      return runner(ctx, spec, sha, attemptId);
+    });
+    await f.engine.flush(f.projectPath, 'w-01');
+    expect(f.read().items.map(item => item.status)).toEqual(['verified', 'verified']);
+    expect(calls).toEqual(['test-1', 'test-1', 'test-2']);
+    expect(f.read().autonomous!.integration.queue).toEqual([]);
+    const head = f.read().autonomous!.integration.verifiedHead;
+    expect(await f.git('rev-parse', f.read().autonomous!.integration.branch)).toBe(head);
+    expect(await f.git('rev-parse', 'HEAD')).toBe(f.sha);
+    await expect(fs.stat(f.clone())).rejects.toMatchObject({ code: 'ENOENT' });
+    const create = vi.mocked(f.io.sessions.create).mock.calls[0]![0];
+    expect(create.workspace).toMatchObject({ kind: 'clone', path: f.clone(), sha: f.sha });
+  });
+
+  it('rechecks an unchanged old-base submission on verifiedHead without moving the head', async () => {
+    const f = await fixture(false, 2); await f.engine.flush(f.projectPath, 'w-01');
+    await fs.writeFile(path.join(f.clone(), 'item-1.txt'), 'A');
+    await f.submit(); await f.engine.flush(f.projectPath, 'w-01');
+    const head = f.read().autonomous!.integration.verifiedHead;
+    expect(head).not.toBe(f.sha);
+    await f.submit(1); await f.engine.flush(f.projectPath, 'w-01');
+    expect(f.attempt(1).status).toBe('integrated');
+    expect(f.read().autonomous!.integration.verifiedHead).toBe(head);
+    expect(f.read().autonomous!.ops.find(op => op.kind === 'noop-integration')).toMatchObject({ state: 'done', result: { sha: head } });
+    expect(vi.mocked(f.io.runner).mock.calls.slice(-2).map(args => args[2])).toEqual([head, head]);
+  });
+});
+
+
+it('requires a fresh integration verifier for every qualitative item on each candidate', async () => {
+  const f = await fixture(true, 2); await f.engine.flush(f.projectPath, 'w-01');
+  const verify = (index: number, sessionId: string, sha: string, note: string) => f.engine.verify({ projectPath: f.projectPath, workId: 'w-01', sessionId }, 'pl-01', 1,
+    { action: 'verify', attemptId: f.attempt(index).id, sha, criterion: 0, verdict: 'pass', note });
+  for (const i of [0, 1]) {
+    await fs.writeFile(path.join(f.clone(i), `item-${i}.txt`), i === 0 ? 'screen A calls helper B' : 'helper B changes');
+    await f.submit(i);
+    expect(await verify(i, f.attempt(i).verifier!, f.attempt(i).sha!, 'acceptance')).toMatchObject({ ok: true });
+  }
+  await f.engine.flush(f.projectPath, 'w-01');
+  const first = f.read().autonomous!.ops.findLast(op => op.payload.purpose === 'integration-verifier' && op.kind === 'create-session')!;
+  const candidate = f.read().autonomous!.integration.candidateHead!;
+  expect(f.attempt().status).toBe('queued');
+  expect(f.read().autonomous!.integration.verifiedHead).toBe(f.sha);
+  expect(await verify(0, f.attempt().verifier!, candidate, 'old verifier')).toMatchObject({ ok: false });
+  expect(await verify(0, String(first.result!.sessionId), candidate, 'fresh A')).toMatchObject({ ok: true });
+  expect(f.attempt().status).toBe('integrated');
+  const second = f.read().autonomous!.ops.findLast(op => op.payload.purpose === 'integration-verifier' && op.kind === 'create-session')!;
+  expect(second.key).not.toBe(first.key);
+  const head = f.read().autonomous!.integration.candidateHead!;
+  expect(await verify(1, String(second.result!.sessionId), head, 'fresh B')).toMatchObject({ ok: true });
+  expect(f.attempt(1).status).toBe('queued');
+  expect(await verify(0, String(first.result!.sessionId), head, 'stale')).toMatchObject({ ok: false });
+  expect(await verify(0, String(second.result!.sessionId), head, 'A with changed helper')).toMatchObject({ ok: true });
+  expect(f.attempt(1).status).toBe('integrated');
+  expect(f.read().autonomous!.budget.spent.verifiers).toBe(4);
+  const creates = vi.mocked(f.io.sessions.create).mock.calls.filter(([input]) => input.role?.name === 'verifier');
+  expect(creates.every(([input]) => input.workspace === undefined)).toBe(true);
+  expect(creates.at(-1)![0].task).toContain('helper B changes');
+  expect(creates.at(-1)![0].task).toContain('at-0001');
+  expect(f.map().sessions.find(row => row.id === second.result!.sessionId)?.lifecycle).toBe('closed');
+});
+
+it('rolls back candidate failures and preserves the done merge witness', async () => {
+  const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01');
+  await fs.writeFile(path.join(f.clone(), 'implementation.txt'), 'change'); await f.submit();
+  const runner = f.io.runner;
+  f.io.runner = vi.fn(async (...args) => ({ ...await runner(...args), verdict: 'fail', summary: 'candidate fails' }));
+  await f.engine.flush(f.projectPath, 'w-01');
+  expect(f.attempt().status).toBe('returned');
+  const a = f.read().autonomous!;
+  expect(a.integration.verifiedHead).toBe(f.sha); expect(a.integration.candidateHead).toBeNull();
+  expect(a.ops.find(op => op.kind === 'merge')).toMatchObject({ state: 'done' });
+  expect(a.ops.find(op => op.kind === 'merge-abort')).toMatchObject({ state: 'done' });
+  expect((await exec('git', [`--git-dir=${attemptsEngineGitPath(f.projectPath, 'w-01')}`, 'rev-parse', a.integration.branch])).stdout.trim()).toBe(f.sha);
+  expect(a.attempts.filter(attempt => attempt.item === 1 && attempt.status === 'running')).toHaveLength(1);
+});
+
+it('cleans the disposable integration checkout before the next merge', async () => {
+  const f = await fixture(false, 2); await f.engine.flush(f.projectPath, 'w-01');
+  await fs.writeFile(path.join(f.clone(), 'A.txt'), 'A'); await f.submit(); await f.engine.flush(f.projectPath, 'w-01');
+  const dir = path.join(f.projectPath, '.parley/works/w-01/autonomous/pl-01/integration');
+  await fs.writeFile(path.join(dir, 'dirty.txt'), 'untracked');
+  await f.submit(1); await f.engine.flush(f.projectPath, 'w-01');
+  expect(f.read().autonomous!.integration.suspended).toBeNull();
+  expect(f.attempt(1).status).toBe('integrated');
+  await expect(fs.stat(path.join(dir, 'dirty.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+
+it.each(['merge', 'integrate', 'noop'] as const)('recovers a %s crash and reruns candidate checks before advancing the queue', async crash => {
+  const f = await fixture(false, 2); await f.engine.flush(f.projectPath, 'w-01');
+  await fs.writeFile(path.join(f.clone(), 'A.txt'), 'A'); await f.submit();
+  if (crash === 'noop') {
+    await f.engine.flush(f.projectPath, 'w-01');
+    await f.submit(1);
+  } else {
+    await fs.writeFile(path.join(f.clone(1), 'B.txt'), 'B'); await f.submit(1);
+  }
+  const update = f.io.updateMap;
+  let injected = false;
+  f.io.updateMap = async (project, work, mutate) => update(project, work, async draft => {
+    await mutate(draft);
+    const a = draft.plans![0]!.autonomous!;
+    const hit = crash === 'integrate' ? a.attempts[0]!.status === 'integrated' :
+      a.ops.some(op => op.kind === (crash === 'noop' ? 'noop-integration' : 'merge') && op.state === 'done');
+    if (!injected && hit) { injected = true; throw new Error('integration crash'); }
+  });
+  await expect(f.engine.flush(f.projectPath, 'w-01')).rejects.toThrow('integration crash');
+  await f.engine.stop(); f.io.updateMap = update;
+  const before = f.read().autonomous!.integration.verifiedHead;
+  const restarted = f.make(true); restarted.start(); await restarted.flush(f.projectPath, 'w-01');
+  expect(f.read().autonomous!.halted?.reason).toBe('restart');
+  const candidate = f.read().autonomous!.integration.candidateHead;
+  expect(candidate).not.toBeNull();
+  expect(f.read().autonomous!.integration.verifiedHead).toBe(before);
+  const runner = f.io.runner;
+  const calls: string[] = [];
+  f.io.runner = vi.fn(async (...args) => { calls.push(args[2]); return runner(...args); });
+  f.map().plans![0] = resume(f.read(), { actor: ENGINE, rev: 1, now: now.toISOString(), requestedBy: HUMAN });
+  await restarted.flush(f.projectPath, 'w-01');
+  expect(calls[0]).toBe(candidate);
+  expect(f.read().items.every(item => item.status === 'verified')).toBe(true);
+  if (crash === 'noop') expect(f.read().autonomous!.integration.verifiedHead).toBe(before);
+});
+
+it('resets an unconfirmed integration head during recovery', async () => {
+  const f = await fixture(true); await f.engine.flush(f.projectPath, 'w-01'); await f.submit();
+  await f.engine.verify({ projectPath: f.projectPath, workId: 'w-01', sessionId: f.attempt().verifier! }, 'pl-01', 1,
+    { action: 'verify', attemptId: f.attempt().id, sha: f.attempt().sha!, criterion: 0, verdict: 'pass', note: 'accept' });
+  await f.engine.flush(f.projectPath, 'w-01'); await f.engine.stop();
+  const dir = path.join(f.projectPath, '.parley/works/w-01/autonomous/pl-01/integration');
+  await exec('git', ['-C', dir, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@test', 'commit', '--allow-empty', '-m', 'unconfirmed']);
+  const restarted = f.make(true); restarted.start(); await restarted.flush(f.projectPath, 'w-01');
+  expect(f.read().autonomous!.integration.candidateHead).toBeNull();
+  expect((await exec('git', ['-C', dir, 'rev-parse', 'HEAD'])).stdout.trim()).toBe(f.sha);
+  expect(f.read().autonomous!.ops.some(op => op.kind === 'merge-abort' && op.state === 'done')).toBe(true);
+});
+
+
+it('aborts a conflicting merge, continues the queue, and creates one repair from verifiedHead', async () => {
+  const f = await fixture(false, 3); await f.engine.flush(f.projectPath, 'w-01');
+  for (const i of [0, 1]) await fs.writeFile(path.join(f.clone(i), 'shared.txt'), i === 0 ? 'A' : 'B');
+  await fs.writeFile(path.join(f.clone(2), 'independent.txt'), 'C');
+  for (const i of [0, 1, 2]) await f.submit(i);
+  await f.engine.flush(f.projectPath, 'w-01');
+  expect(f.attempt().status).toBe('integrated');
+  expect(f.attempt(1).status).toBe('returned');
+  expect(f.attempt(1).log.some(row => row.note === 'conflict')).toBe(true);
+  expect(f.attempt(2).status).toBe('integrated');
+  const a = f.read().autonomous!;
+  expect(a.ops.find(op => op.kind === 'merge' && op.attemptId === f.attempt(1).id)).toMatchObject({ state: 'failed', result: { reason: 'integration-conflict' } });
+  const repair = a.attempts.filter(row => row.item === 2 && row.n === 2);
+  expect(repair).toHaveLength(1);
+  expect(repair[0]).toMatchObject({ status: 'running', baseSha: a.integration.verifiedHead });
+  expect(a.integration.suspended).toBeNull();
+  expect(a.halted).toBeNull();
+  const dir = path.join(f.projectPath, '.parley/works/w-01/autonomous/pl-01/integration');
+  await expect(fs.stat(path.join(dir, '.git', 'MERGE_HEAD'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('returns a regressing candidate while retaining evidence at verifiedHead and briefs its repair with prior item failures', async () => {
+  const f = await fixture(false, 2); await f.engine.flush(f.projectPath, 'w-01');
+  await fs.writeFile(path.join(f.clone(), 'A.txt'), 'A'); await f.submit(); await f.engine.flush(f.projectPath, 'w-01');
+  const evidence = structuredClone(f.read().items[0]!.evidence);
+  const head = f.read().autonomous!.integration.verifiedHead;
+  await fs.writeFile(path.join(f.clone(1), 'B.txt'), 'regresses A'); await f.submit(1);
+  const runner = f.io.runner;
+  f.io.runner = vi.fn(async (...args) => ({ ...await runner(...args), ...(args[1].item === 1 ? { verdict: 'fail' as const, summary: 'A breaks through helper B' } : {}) }));
+  await f.engine.flush(f.projectPath, 'w-01');
+  expect(f.attempt(1).status).toBe('returned');
+  expect(f.read().items[0]).toMatchObject({ status: 'verified', evidence });
+  expect(f.read().autonomous!.integration.verifiedHead).toBe(head);
+  const brief = vi.mocked(f.io.sessions.create).mock.calls.at(-1)![0].task;
+  expect(brief).toContain('A breaks through helper B');
+  expect(brief).toContain('regresses A');
+  expect(brief).toContain('"item":1');
+});
+
+it('releases dependencies only after integration, with the verified head as their clone base', async () => {
+  const f = await fixture(false, 2);
+  f.read().items[1]!.after = [1]; f.read().items[1]!.status = 'waiting';
+  await f.engine.flush(f.projectPath, 'w-01');
+  expect(f.read().autonomous!.attempts).toHaveLength(1);
+  await fs.writeFile(path.join(f.clone(), 'A.txt'), 'A'); await f.submit();
+  expect(f.attempt().status).toBe('queued');
+  expect(f.read().autonomous!.attempts).toHaveLength(1);
+  await f.engine.flush(f.projectPath, 'w-01');
+  expect(f.attempt(1)).toMatchObject({ item: 2, status: 'running', baseSha: f.read().autonomous!.integration.verifiedHead });
+});
+
+it('refuses a divergent project integration mirror without publishing an unchecked candidate', async () => {
+  const f = await fixture(true); await f.engine.flush(f.projectPath, 'w-01');
+  await fs.writeFile(path.join(f.clone(), 'A.txt'), 'A'); await f.submit();
+  await f.engine.verify({ projectPath: f.projectPath, workId: 'w-01', sessionId: f.attempt().verifier! }, 'pl-01', 1,
+    { action: 'verify', attemptId: f.attempt().id, sha: f.attempt().sha!, criterion: 0, verdict: 'pass', note: 'accept' });
+  await f.engine.flush(f.projectPath, 'w-01');
+  const branch = f.read().autonomous!.integration.branch;
+  await expect(f.git('rev-parse', '--verify', branch)).rejects.toThrow();
+  const unrelated = await f.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@test', 'commit-tree', `${f.sha}^{tree}`, '-p', f.sha, '-m', 'Project branch changed');
+  await f.git('update-ref', `refs/heads/${branch}`, unrelated);
+  const creation = f.read().autonomous!.ops.findLast(op => op.kind === 'create-session' && op.payload.purpose === 'integration-verifier')!;
+  expect(await f.engine.verify({ projectPath: f.projectPath, workId: 'w-01', sessionId: String(creation.result!.sessionId) }, 'pl-01', 1,
+    { action: 'verify', attemptId: f.attempt().id, sha: f.read().autonomous!.integration.candidateHead!, criterion: 0, verdict: 'pass', note: 'fresh' })).toMatchObject({ ok: false });
+  expect(await f.git('rev-parse', branch)).toBe(unrelated);
+  expect(await f.git('rev-parse', 'HEAD')).toBe(f.sha);
+});
+
+
+it('blocks repeated identical integration failures through the existing no-progress rule', async () => {
+  const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01');
+  const runner = f.io.runner;
+  f.io.runner = vi.fn(async (...args) => ({ ...await runner(...args), ...(f.read().autonomous!.ops.findLast(op => op.kind === 'check')?.payload.phase === 'integration' ? { verdict: 'fail' as const, summary: 'same integration defect' } : {}) }));
+  for (const index of [0, 1]) {
+    await fs.writeFile(path.join(f.clone(index), 'A.txt'), 'same defect');
+    await f.submit(index); await f.engine.flush(f.projectPath, 'w-01');
+  }
+  expect(f.attempt(1).status).toBe('blocked');
+  expect(f.attempt(1).failureSignature).toBe(f.attempt().failureSignature);
+  expect(f.read().autonomous!.halted?.reason).toBe('no_progress');
+  expect(f.read().autonomous!.integration.verifiedHead).toBe(f.sha);
+});
+
+it('recreates a broken disposable integration clone before processing the next candidate', async () => {
+  const f = await fixture(false, 2); await f.engine.flush(f.projectPath, 'w-01');
+  await fs.writeFile(path.join(f.clone(), 'A.txt'), 'A'); await f.submit(); await f.engine.flush(f.projectPath, 'w-01');
+  const dir = path.join(f.projectPath, '.parley/works/w-01/autonomous/pl-01/integration');
+  await fs.rm(path.join(dir, '.git'), { recursive: true, force: true });
+  await f.submit(1); await f.engine.flush(f.projectPath, 'w-01');
+  expect(f.attempt(1).status).toBe('integrated');
+  expect(f.read().autonomous!.ops.filter(op => op.kind === 'clone' && op.payload.purpose === 'integration' && op.state === 'done')).toHaveLength(2);
+});
+
+it('allocates a new check result ID after a crash between effect settlement and check recording', async () => {
+  const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01');
+  await fs.writeFile(path.join(f.clone(), 'A.txt'), 'A'); await f.submit();
+  const update = f.io.updateMap;
+  let injected = false;
+  f.io.updateMap = async (project, work, mutate) => update(project, work, async draft => {
+    await mutate(draft);
+    const a = draft.plans![0]!.autonomous!;
+    const op = a.ops.findLast(row => row.kind === 'check' && row.payload.phase === 'integration');
+    const result = op?.result?.checkResult as CheckResult | undefined;
+    if (!injected && result && a.attempts.some(attempt => attempt.checks.includes(result.id))) { injected = true; throw new Error('record crash'); }
+  });
+  await expect(f.engine.flush(f.projectPath, 'w-01')).rejects.toThrow('record crash');
+  await f.engine.stop(); f.io.updateMap = update;
+  const previousId = (f.read().autonomous!.ops.findLast(op => op.kind === 'check')!.result!.checkResult as CheckResult).id;
+  const restarted = f.make(true); restarted.start(); await restarted.flush(f.projectPath, 'w-01');
+  f.map().plans![0] = resume(f.read(), { actor: ENGINE, rev: 1, now: now.toISOString(), requestedBy: HUMAN });
+  await restarted.flush(f.projectPath, 'w-01');
+  expect(f.attempt().status).toBe('integrated');
+  expect(vi.mocked(f.io.runner).mock.calls.at(-1)![0].resultId).not.toBe(previousId);
+});
+
+
+it('accepts another attempt verifier while a candidate integration verifier is pending', async () => {
+  const f = await fixture(true, 2); await f.engine.flush(f.projectPath, 'w-01');
+  for (const i of [0, 1]) { await fs.writeFile(path.join(f.clone(i), `item-${i}.txt`), 'work'); await f.submit(i); }
+  const verify = (index: number) => f.engine.verify({ projectPath: f.projectPath, workId: 'w-01', sessionId: f.attempt(index).verifier! }, 'pl-01', 1,
+    { action: 'verify', attemptId: f.attempt(index).id, sha: f.attempt(index).sha!, criterion: 0, verdict: 'pass', note: 'accept' });
+  expect(await verify(0)).toMatchObject({ ok: true });
+  await f.engine.flush(f.projectPath, 'w-01');
+  expect(f.read().autonomous!.integration.candidateHead).not.toBeNull();
+  expect(await verify(1)).toMatchObject({ ok: true });
+  expect(f.attempt(1).status).toBe('queued');
+});
+
+
+it('starts a fresh qualitative verifier after restart and ignores verdicts from the old session', async () => {
+  const f = await fixture(true); await f.engine.flush(f.projectPath, 'w-01');
+  await fs.writeFile(path.join(f.clone(), 'A.txt'), 'A'); await f.submit();
+  await f.engine.verify({ projectPath: f.projectPath, workId: 'w-01', sessionId: f.attempt().verifier! }, 'pl-01', 1,
+    { action: 'verify', attemptId: f.attempt().id, sha: f.attempt().sha!, criterion: 0, verdict: 'pass', note: 'accept' });
+  await f.engine.flush(f.projectPath, 'w-01'); await f.engine.stop();
+  const old = f.read().autonomous!.ops.findLast(op => op.kind === 'create-session' && op.payload.purpose === 'integration-verifier')!;
+  const sha = f.read().autonomous!.integration.candidateHead!;
+  const restarted = f.make(true); restarted.start(); await restarted.flush(f.projectPath, 'w-01');
+  f.map().plans![0] = resume(f.read(), { actor: ENGINE, rev: 1, now: now.toISOString(), requestedBy: HUMAN });
+  await restarted.flush(f.projectPath, 'w-01');
+  const fresh = f.read().autonomous!.ops.findLast(op => op.kind === 'create-session' && op.payload.purpose === 'integration-verifier')!;
+  expect(fresh.result!.sessionId).not.toBe(old.result!.sessionId);
+  const request = { action: 'verify' as const, attemptId: f.attempt().id, sha, criterion: 0, verdict: 'pass' as const, note: 'fresh' };
+  expect(await restarted.verify({ projectPath: f.projectPath, workId: 'w-01', sessionId: String(old.result!.sessionId) }, 'pl-01', 1, request)).toMatchObject({ ok: false });
+  expect(await restarted.verify({ projectPath: f.projectPath, workId: 'w-01', sessionId: String(fresh.result!.sessionId) }, 'pl-01', 1, request)).toMatchObject({ ok: true });
+  expect(f.attempt().status).toBe('integrated');
+});
+
+it('aborts MERGE_HEAD on startup when a merge never produced its commit witness', async () => {
+  const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01');
+  await fs.writeFile(path.join(f.clone(), 'A.txt'), 'A'); await f.submit();
+  const git = f.io.git, update = f.io.updateMap;
+  f.io.git = async (args, options) => {
+    if (args.includes('--no-ff')) {
+      await git([...args.slice(0, args.indexOf('merge') + 1), '--no-ff', '--no-commit', args.at(-1)!], options);
+      throw new Error('merge interrupted');
+    }
+    return git(args, options);
+  };
+  f.io.updateMap = async (project, work, mutate) => update(project, work, async draft => {
+    await mutate(draft);
+    if (draft.plans![0]!.autonomous!.ops.some(op => op.kind === 'merge' && op.state === 'failed')) throw new Error('crash before merge settled');
+  });
+  await expect(f.engine.flush(f.projectPath, 'w-01')).rejects.toThrow('crash before merge settled');
+  await f.engine.stop(); f.io.git = git; f.io.updateMap = update;
+  const restarted = f.make(true); restarted.start(); await restarted.flush(f.projectPath, 'w-01');
+  expect(f.read().autonomous!.ops.find(op => op.kind === 'merge')).toMatchObject({ state: 'failed' });
+  const dir = path.join(f.projectPath, '.parley/works/w-01/autonomous/pl-01/integration');
+  await expect(fs.stat(path.join(dir, '.git', 'MERGE_HEAD'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect((await exec('git', ['-C', dir, 'rev-parse', 'HEAD'])).stdout.trim()).toBe(f.sha);
 });

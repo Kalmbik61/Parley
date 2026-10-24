@@ -89,7 +89,9 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
   // папку перед запуском, — к чтению брифа агентом она уже на месте.
   // Указатель на гид — по имени темы (`topic` у `read_guide`), а не по заголовку раздела:
   // заголовок агент в `read_guide` передать не может, а тема и раздел не совпадают.
-  if (session.worktree !== null) {
+  if (session.workspace) {
+    lines.push(`Clone: isolated clone of the integration branch at ${session.workspace.sha}; the engine captures your tree on attempt_submit; do not commit, do not touch git, do not write outside this folder. Folder: \`${session.workspace.path}\`.`, '');
+  } else if (session.worktree !== null) {
     const { branch, base, path: folder } = session.worktree;
     lines.push(
       `Worktree: branch \`${branch}\` off base \`${base}\`, folder \`${folder}\`.`,

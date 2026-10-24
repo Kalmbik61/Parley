@@ -234,7 +234,7 @@ async function plan(
   const incompatibility = providerCompatibilityError(entry);
   if (incompatibility !== null) throw new Error(incompatibility);
   const paths = workPaths(projectPath, workId);
-  const cwd = session.worktree?.path ?? projectPath;
+  const cwd = session.workspace?.path ?? session.worktree?.path ?? projectPath;
 
   const role = await prepareSessionRole(cwd, entry, { roleId: roleId(sessionRole(session)), provider: session.provider, mode: 'existing',
     ...(options.model === undefined && session.model === undefined ? {} : { model: options.model === undefined ? session.model! : options.model }),

@@ -600,6 +600,7 @@ export type {
   WorkStatus,
   WorksIndex,
   WorktreeInfo,
+  CloneWorkspace,
 } from './work/types.js';
 
 export { createParleyMd, ensureParleyMd } from './work/parley-md.js';

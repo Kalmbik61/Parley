@@ -842,3 +842,13 @@ describe('brief agent message visibility', () => {
     expect(brief).toContain('OWNED_ROOM_DECISION');
   });
 });
+
+
+it('describes the engine clone without worktree instructions', () => {
+  const map = mapWithSessions();
+  Object.assign(map.sessions[1]!, { workspace: { kind: 'clone', path: '/tmp/clone', branch: 'attempts/at-0001', sha: 'abc123' } });
+  const brief = buildBrief(map, 's-02');
+  expect(brief).toContain('Clone: isolated clone of the integration branch at abc123');
+  expect(brief).toContain('do not commit');
+  expect(brief).not.toContain('Worktree:');
+});

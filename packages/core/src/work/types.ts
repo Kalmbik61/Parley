@@ -62,6 +62,13 @@ export interface SessionMetrics {
  */
 export type WorkProvider = string;
 
+export interface CloneWorkspace {
+  kind: 'clone';
+  path: string;
+  branch: string;
+  sha: string;
+}
+
 /**
  * Своя рабочая копия git для сессии (спецификация 8.1, 8.2): путь и ветка
  * планируются заранее (`plannedWorktree` в `work/worktree.ts`), а на диске
@@ -133,6 +140,7 @@ export interface WorkSession {
    * `null` (кусок 4.1 плана worktree).
    */
   worktree: WorktreeInfo | null;
+  workspace?: CloneWorkspace | null;
   /**
    * Явный выбор модели и усилия из окна или `spawn_session`: с ним строятся и запуск, и `resume`
    * (`plan` в `launch.ts`), а выбор запуска его перекрывает. Нет поля — выбора нет: умолчание

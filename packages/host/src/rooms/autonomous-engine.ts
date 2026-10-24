@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import {
   ENGINE, addMember, coverageVerdict, enqueue, failureSignature, halt, intendOp,
   liveLead, parleyNote, PlanConflictError, ProposalConflictError, readMap, receipt, reconcileAfterRestart, recordCheck, resolveProposal,
-  returnAttempt, settleOp, startAttempt, submitAttempt, supersedeByAmendment, updateMap, workPaths,
+  integrate, returnAttempt, settleOp, startAttempt, submitAttempt, supersedeByAmendment, updateMap, workPaths,
   type AutonomousOp, type CheckResult, type HandoffManifest, type PlanAttempt,
   type RoomPlan, type WorkMap,
 } from '@parley/core';
@@ -210,9 +210,9 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
   async function effect(loc: Location, op: AutonomousOp, execute: () => Promise<Record<string, unknown>>): Promise<AutonomousOp> {
     if (op.state !== 'intended') return op;
     if (stopped) throw new Error('engine-stopped');
-    if (!['stop-session', 'close-session'].includes(op.kind)) requireRecovered(loc.projectPath, loc.workId);
+    if (!['stop-session', 'close-session', 'merge-abort', 'cleanup'].includes(op.kind)) requireRecovered(loc.projectPath, loc.workId);
     const latest = await load(loc);
-    if (!['stop-session', 'close-session'].includes(op.kind) &&
+    if (!['stop-session', 'close-session', 'merge-abort', 'cleanup'].includes(op.kind) &&
       (latest.autonomous!.halted || (op.attemptId && fenced.has(attemptOf(latest, op.attemptId).status)))) {
       await settled(loc, op, 'failed', { reason: 'attempt-fenced' });
       throw new Error('attempt-fenced');
@@ -221,7 +221,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     try { result = await execute(); }
     catch (error) {
       await settled(loc, op, 'failed', { reason: errorText(error) });
-      await change(loc, plan => halt(plan, { ...context(plan, at()), reason: /resource|limit|budget|denied/i.test(errorText(error)) ? 'budget' : 'human', detail: `${op.kind}: ${errorText(error)}` }));
+      if (errorText(error) !== 'integration-conflict') await change(loc, plan => halt(plan, { ...context(plan, at()), reason: /resource|limit|budget|denied/i.test(errorText(error)) ? 'budget' : 'human', detail: `${op.kind}: ${errorText(error)}` }));
       throw error;
     }
     // A crash/failing write here leaves the original intention for startup reconciliation.
@@ -249,7 +249,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
   }
   async function initialize(loc: Location): Promise<void> {
     const plan = await load(loc);
-    const previous = plan.autonomous!.ops.find(row => row.kind === 'clone' && row.payload.purpose === 'engine');
+    const previous = plan.autonomous!.ops.find(row => row.kind === 'clone' && row.payload.purpose === 'engine' && row.state !== 'failed');
     if (previous?.state === 'done') return;
     const op = previous ?? await intend(loc, 'clone', null, { purpose: 'engine', baseSha: plan.autonomous!.integration.baseSha, branch: plan.autonomous!.integration.branch });
     await effect(loc, op, async () => {
@@ -265,6 +265,12 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     const a = plan.autonomous!, item = plan.items.find(row => row.id === attempt.item)!;
     const dependencies = a.attempts.filter(row => item.after.includes(row.item) && ['accepted', 'queued', 'integrated'].includes(row.status));
     const previous = a.attempts.filter(row => row.item === item.id && row.n < attempt.n);
+    const integrationFailures = await Promise.all(a.ops.filter(op => ['merge', 'noop-integration'].includes(op.kind) && previous.some(row => row.id === op.attemptId)).map(async op => {
+      const results = a.ops.filter(row => row.kind === 'check' && row.payload.integrationOp === op.key && row.state === 'done').map(row => row.result?.checkResult as CheckResult).filter(Boolean);
+      return { attemptId: op.attemptId, candidateHead: op.result?.sha, checks: results.map(result => ({ ...result, item: a.attempts.find(row => row.id === result.attemptId)?.item })),
+        diff: typeof op.result?.sha === 'string' ? await text(loc, ['diff', '--no-ext-diff', '--no-textconv', `${op.payload.verifiedHead}..${op.result.sha}`]) : null,
+        tails: await outputTails(loc, results) };
+    }));
     const tails = await outputTails(loc, previous.flatMap(row => thisResults(plan, row)));
     return [
       `Goal: ${plan.goal}`, `Attempt: ${attempt.id}; plan ${plan.id} rev ${plan.rev}; baseSha ${attempt.baseSha}`,
@@ -272,10 +278,17 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       `Accepted dependencies (use these attempt IDs in dependsOn): ${JSON.stringify(dependencies.map(row => ({ attemptId: row.id, facts: row.manifest?.facts, artifacts: row.manifest?.artifacts })))}`,
       `Previous attempts: ${JSON.stringify(previous.map(row => ({ manifest: row.manifest, failure: row.failureSignature, checks: thisResults(plan, row) })))}`,
       `Previous check output tails: ${JSON.stringify(tails)}`,
+      `Previous integration failures (candidate-wide checks, owner items and diff): ${JSON.stringify(integrationFailures)}`,
       `Frozen inputs: ${JSON.stringify(a.checks.filter(row => row.item === item.id).flatMap(row => row.inputs))}`,
       'Work only inside the clone. Do not modify git or write outside the clone. Submit only through attempt_submit.',
       'Manifest: {version:1,criteriaVersion,dependsOn,coverage:"covered"|"partial"|"failed"|"unstarted",scope,facts:[],hypotheses:[],notFound:[],gaps:[],text (<=4096),artifacts:[{path,sha256,storedAs:""}],hash,submittedAt}. The engine captures sha and copies artifacts.',
     ].join('\n');
+  }
+  function nextCheckId(plan: RoomPlan): string {
+    const a = plan.autonomous!;
+    const allocated = a.ops.flatMap(op => [op.payload.resultId, (op.result?.checkResult as CheckResult | undefined)?.id]);
+    const sequence = Math.max(a.seq.check, ...allocated.map(id => typeof id === 'string' && /^ck-\d+$/.test(id) ? Number(id.slice(3)) : 0));
+    return `ck-${String(sequence + 1).padStart(4, '0')}`;
   }
   function thisResults(plan: RoomPlan, attempt: PlanAttempt): CheckResult[] {
     return plan.autonomous!.ops.filter(op => op.kind === 'check' && op.state === 'done' && op.attemptId === attempt.id)
@@ -304,7 +317,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
         const map = await io.readMap(loc.projectPath, loc.workId);
         const existing = map.sessions.find(row => row.label === sessionLabel(loc, attemptId, create));
         if (existing) return { sessionId: existing.id };
-        const input: CreateSessionInput = { projectPath: loc.projectPath, workId: loc.workId, requestedBy: ENGINE, deferLaunch: true, parent: null, provider: selected.provider, label: sessionLabel(loc, attemptId, create), task, role: { source: 'builtin', name: role === 'worker' ? 'executor' : 'verifier' }, ...(selected.model === undefined ? {} : { model: selected.model }) };
+        const input: CreateSessionInput = { projectPath: loc.projectPath, workId: loc.workId, requestedBy: ENGINE, deferLaunch: true, parent: null, ...(role === 'worker' ? { workspace: { kind: 'clone' as const, path: cloneDirectory(loc, attemptId), branch: attempt.branch, sha: attempt.baseSha } } : {}), provider: selected.provider, label: sessionLabel(loc, attemptId, create), task, role: { source: 'builtin', name: role === 'worker' ? 'executor' : 'verifier' }, ...(selected.model === undefined ? {} : { model: selected.model }) };
         const ref = await io.sessions.create(input);
         return { sessionId: ref.sessionId };
       });
@@ -466,7 +479,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       await serialCheck(async () => {
         const current = await load(loc);
         if (stopped || current.autonomous!.halted) return;
-        const resultId = `ck-${String(current.autonomous!.seq.check + 1).padStart(4, '0')}`;
+        const resultId = nextCheckId(current);
         const op = await intend(loc, 'check', attemptId, { phase: 'attempt', sha: attempt.sha, specId: spec.id, resultId });
         let result: CheckResult;
         try { result = await io.runner({ projectPath: loc.projectPath, workId: loc.workId, planId: loc.planId, resultId, now: io.now }, spec, attempt.sha!, attemptId); }
@@ -500,9 +513,254 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     if (attempt.verifier && !plan.autonomous!.ops.some(op => op.kind === 'close-session' && op.payload.sessionId === attempt.verifier)) await intend(loc, 'close-session', attemptId, { sessionId: attempt.verifier });
     await drainSessions(loc);
   }
+  const integrationDirectory = (loc: Location) => path.join(workPaths(loc.projectPath, loc.workId).dir, 'autonomous', loc.planId, 'integration');
+  function integrationAttempts(plan: RoomPlan): PlanAttempt[] {
+    const a = plan.autonomous!;
+    return a.attempts.filter(attempt => attempt.id === a.integration.queue[0] ||
+      (attempt.status === 'integrated' && plan.items.find(item => item.id === attempt.item)?.status === 'verified' &&
+        a.attempts.findLast(row => row.item === attempt.item && row.status === 'integrated') === attempt));
+  }
+  function candidateOperation(plan: RoomPlan): AutonomousOp | undefined {
+    const a = plan.autonomous!;
+    return a.ops.findLast(op => ['merge', 'noop-integration'].includes(op.kind) && op.state === 'done' &&
+      op.attemptId === a.integration.queue[0] && op.result?.sha === a.integration.candidateHead && op.payload.verifiedHead === a.integration.verifiedHead);
+  }
+  function integrationResults(plan: RoomPlan, operation: AutonomousOp): CheckResult[] {
+    const a = plan.autonomous!, resume = a.ops.findLastIndex(op => op.kind === 'resume');
+    return a.ops.filter((op, index) => index > resume && op.kind === 'check' && op.state === 'done' &&
+      op.payload.phase === 'integration' && op.payload.integrationOp === operation.key)
+      .map(op => op.result?.checkResult as CheckResult).filter(result => result && result.sha === a.integration.candidateHead &&
+        a.attempts.some(attempt => attempt.id === result.attemptId && attempt.checks.includes(result.id)));
+  }
+  function candidateVerifier(plan: RoomPlan, operation: AutonomousOp): AutonomousOp | undefined {
+    const a = plan.autonomous!, resume = a.ops.findLastIndex(op => op.kind === 'resume');
+    return a.ops.findLast((op, index) => index > resume && op.kind === 'create-session' && op.state !== 'failed' &&
+      op.payload.purpose === 'integration-verifier' && op.payload.integrationOp === operation.key);
+  }
+  async function integrationCheckout(loc: Location, attemptId: string): Promise<void> {
+    const plan = await load(loc), dir = integrationDirectory(loc), i = plan.autonomous!.integration;
+    const clone = async () => {
+      const op = await intend(loc, 'clone', null, { purpose: 'integration', dir, branch: i.branch, sha: i.verifiedHead });
+      await effect(loc, op, async () => {
+        await git(loc, ['clone', '--no-hardlinks', '--no-checkout', '--', attemptsEngineGitPath(loc.projectPath, loc.workId), dir]);
+        await git(loc, ['-C', dir, 'checkout', '-b', i.branch, i.verifiedHead]);
+        return { dir, sha: i.verifiedHead };
+      });
+    };
+    if (await exists(dir)) {
+      const op = await intend(loc, 'merge-abort', attemptId, { purpose: 'prepare-integration', sha: i.verifiedHead });
+      try {
+        if (await exists(path.join(dir, '.git', 'MERGE_HEAD'))) await git(loc, ['-C', dir, 'merge', '--abort']);
+        await git(loc, ['-C', dir, 'reset', '--hard', i.verifiedHead]);
+        await git(loc, ['-C', dir, 'clean', '-fdx']);
+        await bare(loc, ['update-ref', `refs/heads/${i.branch}`, i.verifiedHead]);
+      } catch (error) {
+        await settled(loc, op, 'failed', { reason: errorText(error) });
+      }
+      if ((await load(loc)).autonomous!.ops.find(row => row.key === op.key)?.state === 'intended') {
+        await settled(loc, op, 'done', { sha: i.verifiedHead });
+        return;
+      }
+      const cleanup = await intend(loc, 'cleanup', null, { purpose: 'integration', dir });
+      await effect(loc, cleanup, async () => { await io.fs.rm(dir, { recursive: true, force: true }); return { removed: true }; });
+    }
+    await clone();
+  }
+  async function rollback(loc: Location): Promise<void> {
+    const plan = await load(loc);
+    for (const op of plan.autonomous!.ops.filter(row => row.kind === 'merge-abort' && row.state === 'intended')) {
+      await effect(loc, op, async () => {
+        const dir = integrationDirectory(loc), sha = String(op.payload.sha ?? plan.autonomous!.integration.verifiedHead);
+        if (await exists(path.join(dir, '.git', 'MERGE_HEAD'))) await git(loc, ['-C', dir, 'merge', '--abort']);
+        if (await exists(dir)) await git(loc, ['-C', dir, 'reset', '--hard', sha]);
+        await bare(loc, ['update-ref', `refs/heads/${plan.autonomous!.integration.branch}`, sha]);
+        return { sha };
+      });
+    }
+  }
+  async function failIntegration(loc: Location, operation: AutonomousOp, reason: 'conflict' | 'integration'): Promise<void> {
+    await change(loc, plan => {
+      const failed = integrationResults(plan, operation).filter(result => result.verdict !== 'pass');
+      return returnAttempt(plan, { ...context(plan, at()), attemptId: operation.attemptId!, reason,
+        signature: failureSignature({ checks: failed.filter(result => !result.specId.startsWith('verifier:')),
+          criteria: failed.filter(result => result.specId.startsWith('verifier:')).map(result => ({ criterion: Number(result.specId.split(':')[1]), verdict: result.verdict })), reasons: [reason] }) });
+    });
+    await rollback(loc);
+    await drainSessions(loc);
+  }
+  async function mirrorIntegration(loc: Location): Promise<void> {
+    const plan = await load(loc), i = plan.autonomous!.integration;
+    if (i.candidateHead || !plan.autonomous!.attempts.some(attempt => attempt.status === 'integrated')) return;
+    if (plan.autonomous!.ops.some(op => op.kind === 'clone' && op.payload.purpose === 'mirror' && op.payload.sha === i.verifiedHead && op.state === 'done')) return;
+    const op = await intend(loc, 'clone', null, { purpose: 'mirror', sha: i.verifiedHead });
+    await effect(loc, op, async () => {
+      // Fetch without '+' refuses a non-fast-forward project ref and never checks out its tree.
+      await git(loc, ['-C', loc.projectPath, 'fetch', '--no-tags', '--', attemptsEngineGitPath(loc.projectPath, loc.workId), `refs/heads/${i.branch}:refs/heads/${i.branch}`]);
+      return { sha: i.verifiedHead };
+    });
+  }
+  async function cleanupIntegrated(loc: Location): Promise<void> {
+    const plan = await load(loc);
+    for (const attempt of plan.autonomous!.attempts.filter(row => row.status === 'integrated')) {
+      let op = plan.autonomous!.ops.findLast(row => row.kind === 'cleanup' && row.attemptId === attempt.id && row.state !== 'failed');
+      if (op?.state === 'done') continue;
+      op ??= await intend(loc, 'cleanup', attempt.id, { dir: cloneDirectory(loc, attempt.id) });
+      await effect(loc, op, async () => { await io.fs.rm(cloneDirectory(loc, attempt.id), { recursive: true, force: true }); return { removed: true }; });
+    }
+  }
+  async function spawnIntegrationVerifier(loc: Location, operation: AutonomousOp): Promise<void> {
+    let plan = await load(loc);
+    const sha = plan.autonomous!.integration.candidateHead!;
+    const payload = { purpose: 'integration-verifier', phase: 'integration', integrationOp: operation.key, role: 'verifier', sha };
+    let op = candidateVerifier(plan, operation) ?? await intend(loc, 'create-session', operation.attemptId, payload);
+    if (op.state === 'failed' || (await load(loc)).autonomous!.halted) return;
+    if (op.state === 'intended') {
+      const attempts = integrationAttempts(plan), results = integrationResults(plan, operation);
+      const diff = await text(loc, ['diff', '--no-ext-diff', '--no-textconv', `${plan.autonomous!.integration.verifiedHead}..${sha}`]);
+      const task = [`Read-only integration verifier; candidateHead ${sha}; integrationOp ${operation.key}.`,
+        'Use only these engine-owned artifacts. Do not read source code or execute commands. Return attempt_verify for every listed attempt and qualitative criterion, using candidateHead as sha.',
+        `Attempts and criteria: ${JSON.stringify(attempts.map(attempt => ({ attemptId: attempt.id, criteriaVersion: attempt.criteriaVersion, criteria: plan.items.find(item => item.id === attempt.item)!.criteria, qualitative: Object.entries(plan.autonomous!.coverage[attempt.item] ?? {}).filter(([, ids]) => ids.includes('verifier')).map(([criterion]) => Number(criterion)), manifest: attempt.manifest })))}`,
+        `Diff: ${diff}`, `Checks: ${JSON.stringify(results)}`, `Output tails: ${JSON.stringify(await outputTails(loc, results))}`].join('\n');
+      const creation = op;
+      op = await effect(loc, creation, async () => {
+        const map = await io.readMap(loc.projectPath, loc.workId);
+        const existing = map.sessions.find(row => row.label === sessionLabel(loc, operation.attemptId!, creation));
+        if (existing) return { sessionId: existing.id };
+        const ref = await io.sessions.create({ projectPath: loc.projectPath, workId: loc.workId, requestedBy: ENGINE, deferLaunch: true, parent: null,
+          provider: options.verifier.provider, ...(options.verifier.model === undefined ? {} : { model: options.verifier.model }),
+          label: sessionLabel(loc, operation.attemptId!, creation), task, role: { source: 'builtin', name: 'verifier' } });
+        return { sessionId: ref.sessionId };
+      });
+    }
+    plan = await load(loc);
+    if (plan.autonomous!.halted) return;
+    const sessionId = String(op.result!.sessionId);
+    if (!plan.autonomous!.ops.some(row => row.kind === 'launch' && row.state === 'done' && row.payload.sessionId === sessionId)) {
+      const launch = await intend(loc, 'launch', operation.attemptId, { ...payload, sessionId });
+      if (launch.state !== 'intended') return;
+      await effect(loc, launch, async () => {
+        if (await io.sessions.launch({ projectPath: loc.projectPath, workId: loc.workId, sessionId }, 'launch', { by: ENGINE }) !== 'started') throw new Error('session-launch-held');
+        return { sessionId };
+      });
+    }
+  }
+  async function integrateQueue(loc: Location): Promise<void> {
+    while (!stopped) {
+      let plan = await load(loc), a = plan.autonomous!;
+      if (a.halted || a.integration.suspended || !a.integration.queue.length) return;
+      const attempt = attemptOf(plan, a.integration.queue[0]!);
+      let operation = candidateOperation(plan);
+      if (!operation) {
+        await integrationCheckout(loc, attempt.id);
+        let contained = attempt.sha === a.integration.verifiedHead;
+        if (!contained) {
+          try { await bare(loc, ['merge-base', '--is-ancestor', attempt.sha!, a.integration.verifiedHead]); contained = true; }
+          catch (error) { if ((error as { code?: unknown }).code !== 1) throw error; }
+        }
+        operation = await intend(loc, contained ? 'noop-integration' : 'merge', attempt.id,
+          { attemptId: attempt.id, sha: attempt.sha, verifiedHead: a.integration.verifiedHead, containedInVerifiedHead: contained });
+        // The rule performs the third dependency check and may supersede instead of intending.
+        plan = await load(loc);
+        if (attemptOf(plan, attempt.id).status !== 'queued' || !['merge', 'noop-integration'].includes(operation.kind)) return;
+        let conflict = false;
+        const mergeOperation = operation;
+        try { operation = await effect(loc, operation, async () => {
+          if (contained) return { sha: a.integration.verifiedHead };
+          const dir = integrationDirectory(loc);
+          await git(loc, ['-C', dir, 'fetch', '--no-tags', '--', attemptsEngineGitPath(loc.projectPath, loc.workId), attempt.sha!]);
+          try { await git(loc, ['-C', dir, 'merge', '--no-ff', '--no-edit', '-m', commitMessage(loc, operation!), attempt.sha!]); }
+          catch (error) {
+            if (!await exists(path.join(dir, '.git', 'MERGE_HEAD'))) throw error;
+            conflict = true;
+            throw new Error('integration-conflict');
+          }
+          const sha = (await git(loc, ['-C', dir, 'rev-parse', 'HEAD'])).toString('utf8').trim();
+          await bare(loc, ['fetch', '--no-tags', '--', dir, `refs/heads/${a.integration.branch}`]);
+          await bare(loc, ['update-ref', `refs/heads/${a.integration.branch}`, sha, a.integration.verifiedHead]);
+          return { sha };
+        }); } catch (error) {
+          if (!conflict || (await load(loc)).autonomous!.ops.find(row => row.key === mergeOperation.key)?.state !== 'failed') throw error;
+          await intend(loc, 'merge-abort', attempt.id, { sha: a.integration.verifiedHead });
+          await rollback(loc);
+          await failIntegration(loc, mergeOperation, 'conflict');
+          continue;
+        }
+      }
+      plan = await load(loc); a = plan.autonomous!;
+      const checked = integrationAttempts(plan);
+      checks: for (const owner of checked) {
+        for (const spec of a.checks.filter(row => row.item === owner.item)) {
+          plan = await load(loc);
+          if (plan.autonomous!.halted) return;
+          if (integrationResults(plan, operation).some(result => result.attemptId === owner.id && result.specId === spec.id)) continue;
+          await serialCheck(async () => {
+            const current = await load(loc);
+            if (stopped || current.autonomous!.halted) return;
+            const resultId = nextCheckId(current);
+            const sha = current.autonomous!.integration.candidateHead!;
+            const op = await intend(loc, 'check', owner.id, { phase: 'integration', integrationOp: operation!.key, sha, specId: spec.id, resultId });
+            let result: CheckResult;
+            try { result = await io.runner({ projectPath: loc.projectPath, workId: loc.workId, planId: loc.planId, resultId, now: io.now }, spec, sha, owner.id); }
+            catch (error) {
+              await settled(loc, op, 'failed', { reason: errorText(error) });
+              await change(loc, current => halt(current, { ...context(current, at()), reason: 'human', detail: `integration check: ${errorText(error)}` }));
+              throw error;
+            }
+            await record(loc, owner.id, op, result);
+          });
+          plan = await load(loc);
+          const result = integrationResults(plan, operation).findLast(row => row.attemptId === owner.id && row.specId === spec.id);
+          if (result && result.verdict !== 'pass') { await failIntegration(loc, operation, 'integration'); break checks; }
+          if (plan.autonomous!.halted) return;
+        }
+      }
+      plan = await load(loc);
+      if (plan.autonomous!.integration.candidateHead === null) continue;
+      const results = integrationResults(plan, operation);
+      const failed = results.find(result => result.verdict !== 'pass');
+      const missing = checked.some(owner => Object.entries(plan.autonomous!.coverage[owner.item] ?? {}).some(([criterion, ids]) =>
+        ids.includes('verifier') && !results.some(row => row.attemptId === owner.id && row.specId === `verifier:${criterion}`)));
+      if (missing && !failed) { await spawnIntegrationVerifier(loc, operation); return; }
+      const verifier = candidateVerifier(plan, operation);
+      if (verifier?.state === 'done' && !plan.autonomous!.ops.some(op => op.kind === 'close-session' && op.payload.sessionId === verifier.result!.sessionId)) {
+        await intend(loc, 'close-session', operation.attemptId, { sessionId: verifier.result!.sessionId });
+        await drainSessions(loc);
+      }
+      if (failed) { await failIntegration(loc, operation, 'integration'); continue; }
+      await change(loc, current => integrate(current, { ...context(current, at()), attemptId: operation!.attemptId!, opKey: operation!.key,
+        results: results.filter(row => row.by === ENGINE), verifiers: results.filter(row => row.by !== ENGINE) }));
+      if ((await load(loc)).autonomous!.halted) return;
+      await mirrorIntegration(loc);
+      await cleanupIntegrated(loc);
+    }
+  }
+  async function verifyIntegration(loc: Location, sessionId: string, rev: number, request: Parameters<AutonomousEngine['verify']>[3]): Promise<AttemptsResult> {
+    const plan = await load(loc);
+    const operation = candidateOperation(plan);
+    if (!operation) throw new Error('integration-not-ready');
+    const creation = candidateVerifier(plan, operation);
+    if (creation?.state !== 'done' || creation.result?.sessionId !== sessionId) throw new Error('not-integration-verifier');
+    const attempt = integrationAttempts(plan).find(row => row.id === request.attemptId);
+    if (!attempt || plan.rev !== rev || attempt.criteriaVersion !== plan.autonomous!.criteriaVersion[attempt.item]) throw new Error('stale-criteria');
+    if (request.sha !== plan.autonomous!.integration.candidateHead) throw new Error('sha-mismatch');
+    if (!plan.autonomous!.coverage[attempt.item]?.[request.criterion]?.includes('verifier')) throw new Error('criterion-not-covered');
+    const existing = integrationResults(plan, operation).find(row => row.attemptId === attempt.id && row.specId === `verifier:${request.criterion}`);
+    if (existing) {
+      if (existing.verdict !== request.verdict || existing.summary !== request.note) throw new Error('check-conflict');
+      return { ok: true, result: { check: existing.id } };
+    }
+    const result: CheckResult = { id: nextCheckId(plan), specId: `verifier:${request.criterion}`, attemptId: attempt.id,
+      sha: request.sha, argvHash: hash([]), envHash: hash({}), inputsOk: true, verdict: request.verdict, by: sessionId, exitCode: null,
+      summary: request.note, outputTail: null, at: at(), durationMs: 0 };
+    const op = await intend(loc, 'check', attempt.id, { phase: 'integration', integrationOp: operation.key, sha: request.sha, criterion: request.criterion, criteriaVersion: attempt.criteriaVersion, resultId: result.id });
+    await record(loc, attempt.id, op, result);
+    await integrateQueue(loc);
+    return { ok: true, result: { check: result.id } };
+  }
   async function recover(loc: Location): Promise<void> {
     const plan = await load(loc), map = await io.readMap(loc.projectPath, loc.workId);
     const observations: Parameters<typeof reconcileAfterRestart>[1]['observations'] = [];
+    let needsAbort = plan.autonomous!.ops.some(op => op.kind === 'merge-abort' && op.state === 'intended');
     for (const op of plan.autonomous!.ops.filter(row => row.state === 'intended')) {
       let result: Record<string, unknown> | null = null;
       if (op.kind === 'create-session' && op.attemptId) {
@@ -538,11 +796,32 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
         opKey = plan.autonomous!.ops.find(op => ['merge', 'noop-integration'].includes(op.kind) && commit.split('\n\n').slice(1).join('\n\n').trim() === commitMessage(loc, op))?.key ?? null;
       }
     }
+    const dir = integrationDirectory(loc);
+    if (await exists(path.join(dir, '.git'))) {
+      const merging = await exists(path.join(dir, '.git', 'MERGE_HEAD'));
+      const checkoutHead = (await git(loc, ['-C', dir, 'rev-parse', 'HEAD'])).toString('utf8').trim();
+      const commit = (await git(loc, ['-C', dir, 'cat-file', 'commit', checkoutHead])).toString('utf8').trim();
+      const merge = plan.autonomous!.ops.findLast(op => op.kind === 'merge' && op.state !== 'failed' && op.attemptId === plan.autonomous!.integration.queue[0]);
+      const checkoutParents = [...commit.matchAll(/^parent (.+)$/gm)].map(match => match[1]!);
+      const witnessed = merge && commit.split('\n\n').slice(1).join('\n\n').trim() === commitMessage(loc, merge) &&
+        JSON.stringify(checkoutParents) === JSON.stringify([plan.autonomous!.integration.verifiedHead, attemptOf(plan, merge.attemptId!).sha]);
+      if (!merging && witnessed) {
+        await bare(loc, ['fetch', '--no-tags', '--', dir, 'HEAD']);
+        await bare(loc, ['update-ref', `refs/heads/${plan.autonomous!.integration.branch}`, checkoutHead]);
+        head = checkoutHead; parents = checkoutParents; opKey = merge.key;
+      } else if (merging || checkoutHead !== plan.autonomous!.integration.verifiedHead && !witnessed) {
+        head = checkoutHead; parents = []; opKey = null;
+        needsAbort = true;
+      }
+    }
     await change(loc, (current, map) => {
       const next = reconcileAfterRestart(current, { ...context(current, at()), observations, integrationHead: { sha: head, parents, opKey } });
       for (const op of next.autonomous!.ops.filter(row => row.kind === 'create-session' && row.state === 'done')) joinCreated(map, next, String(op.result!.sessionId));
       return next;
     });
+    if (needsAbort && !(await load(loc)).autonomous!.ops.some(op => op.kind === 'merge-abort' && op.state === 'intended'))
+      await intend(loc, 'merge-abort', plan.autonomous!.integration.queue[0] ?? null, { sha: plan.autonomous!.integration.verifiedHead });
+    await rollback(loc);
     await drainSessions(loc);
   }
   async function cycle(projectPath: string, workId: string): Promise<void> {
@@ -552,6 +831,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     for (const original of map.plans?.filter(active) ?? []) {
       const loc = { projectPath, workId, planId: original.id };
       await drainSessions(loc);
+      await rollback(loc);
       let plan = await load(loc);
       if (plan.autonomous!.halted) continue;
       if (!['codex', 'claude'].includes(options.provider)) {
@@ -583,7 +863,11 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
         else if (['submitted', 'checking'].includes(attempt.status)) await checkAttempt(loc, attempt.id);
         else if (attempt.status === 'starting') await spawn(loc, attempt.id, 'worker');
       }
+      await mirrorIntegration(loc);
+      await cleanupIntegrated(loc);
+      await integrateQueue(loc);
       plan = await load(loc);
+      if (plan.autonomous!.integration.candidateHead || plan.autonomous!.integration.suspended) continue;
       for (const item of plan.items.filter(row => ['ready', 'returned'].includes(row.status))) {
         plan = await load(loc);
         if (stopped || plan.autonomous!.halted) break;
@@ -677,6 +961,8 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
         const loc = { projectPath: ref.projectPath, workId: ref.workId, planId };
         try {
           requireRecovered(ref.projectPath, ref.workId);
+          const current = await load(loc);
+          if (current.autonomous!.integration.candidateHead !== null && ['queued', 'integrated'].includes(attemptOf(current, request.attemptId).status)) return await verifyIntegration(loc, ref.sessionId, rev, request);
           let result!: CheckResult;
           let operation!: AutonomousOp;
           await change(loc, plan => {
@@ -691,8 +977,8 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
               if (existing.verdict !== request.verdict || existing.summary !== request.note) throw new Error('check-conflict');
               result = existing; return plan;
             }
-            result = { id: `ck-${String(plan.autonomous!.seq.check + 1).padStart(4, '0')}`, specId: `verifier:${request.criterion}`, attemptId: attempt.id, sha: request.sha, argvHash: hash([]), envHash: hash({}), inputsOk: true, verdict: request.verdict, by: ref.sessionId, exitCode: null, summary: request.note, outputTail: null, at: at(), durationMs: 0 };
-            const next = intendOp(plan, { ...context(plan, at()), kind: 'check', attemptId: attempt.id, payload: { phase: 'attempt', sha: request.sha, criterion: request.criterion, criteriaVersion: attempt.criteriaVersion } });
+            result = { id: nextCheckId(plan), specId: `verifier:${request.criterion}`, attemptId: attempt.id, sha: request.sha, argvHash: hash([]), envHash: hash({}), inputsOk: true, verdict: request.verdict, by: ref.sessionId, exitCode: null, summary: request.note, outputTail: null, at: at(), durationMs: 0 };
+            const next = intendOp(plan, { ...context(plan, at()), kind: 'check', attemptId: attempt.id, payload: { phase: 'attempt', sha: request.sha, criterion: request.criterion, criteriaVersion: attempt.criteriaVersion, resultId: result.id } });
             operation = next.autonomous!.ops.at(-1)!;
             return next;
           });

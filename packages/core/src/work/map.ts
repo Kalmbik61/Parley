@@ -108,6 +108,7 @@ export interface NewSession {
   effort?: EffortLevel | null;
   /** Облегчённый запуск (C2.2): решение при создании; без поля — запись как до этого куска. */
   lean?: boolean;
+  workspace?: WorkSession['workspace'];
 }
 
 /**
@@ -146,6 +147,7 @@ export function addSession(
     artifacts: [],
     role: init.role ?? (init.agent == null ? null : { source: 'claude', name: init.agent }),
     worktree: null,
+    ...(init.workspace === undefined ? {} : { workspace: init.workspace }),
     ...(init.model === undefined ? {} : { model: init.model }),
     ...(init.effort === undefined ? {} : { effort: init.effort }),
     ...(init.lean === undefined ? {} : { lean: init.lean }),
@@ -321,7 +323,10 @@ const isSessionShape =
       ? typeof value.status === 'string' && V1_STATUSES.includes(value.status)
       : typeof value.lifecycle === 'string' && Object.hasOwn(TRANSITIONS, value.lifecycle)) &&
     Array.isArray(value.history) &&
-    (value.agentPlan === undefined || isPublishedAgentPlan(value.agentPlan));
+    (value.agentPlan === undefined || isPublishedAgentPlan(value.agentPlan)) &&
+    (value.workspace === undefined || value.workspace === null ||
+      (isRecord(value.workspace) && value.workspace.kind === 'clone' &&
+        [value.workspace.path, value.workspace.branch, value.workspace.sha].every(isNonemptyString)));
 
 /** У письма v2 адресаты — массив: по нему идут `removeSession` и `recipientsOf`. */
 const isMessageShape =

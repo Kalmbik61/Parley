@@ -2801,6 +2801,16 @@ describe('Codex: политика одобрений, доверие к папк
     expect(plan.env).not.toHaveProperty('CODEX_HOME');
   });
 
+  it.each(planners)('clone cwd (%s) selects native context and trust roots', async (_name, planner) => {
+    const { workId, session } = await codexWith('executor');
+    const clone = path.join(project, 'engine-clone');
+    await mkdir(clone);
+    session.workspace = { kind: 'clone', path: clone, branch: 'attempts/at-0001', sha: 'abc123' };
+    const plan = await planner(project, workId, session, { trust: { project: await realpath(project), cwd: await realpath(clone) } });
+    expect(plan.cwd).toBe(clone);
+    expect(trustOf(plan.args)[0]).toContain(JSON.stringify(await realpath(clone)));
+  });
+
   it('доверие при worktree: вторая пара в той же таблице; путь с кавычкой и обратным слэшем экранируется', async () => {
     const { workId, session } = await codexWith('executor');
     const project1 = '/tmp/proj "q" \\b';
