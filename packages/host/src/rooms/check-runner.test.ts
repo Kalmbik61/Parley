@@ -73,7 +73,7 @@ async function fixture() {
   await exec('git', ['clone', '--bare', '--no-hardlinks', projectPath, engine]);
   const ctx = { projectPath, workId: 'w-01', planId: 'pl-01', resultId: 'cr-01' };
   const spec: CheckSpec = { id: 'check', item: 1, argv: [process.execPath, '-e', 'console.log("ok")'], cwd: '.', env: {}, inputs: [], timeoutMs: 2000, frozenAt: '2026-10-24T00:00:00.000Z' };
-  const checkDir = path.join(projectPath, '.parley/works/w-01/autonomous/pl-01/attempts/at-01/checks/check/cr-01');
+  const checkDir = path.join(projectPath, '.parley/works/w-01/autonomous/pl-01/attempts/at-01/checks/check-977a0be5b459b8914ab7c286cbb34e09/cr-01');
   return { ctx, spec, sha, git, engine, checkDir };
 }
 
@@ -268,7 +268,7 @@ it('preserves independent output tails for two result IDs', async () => {
   expect(await readFile(first.outputTail!, 'utf8')).toBe('run-1\n');
   expect(await readFile(second.outputTail!, 'utf8')).toBe('run-2\n');
 });
-it.each(['unit:core', '.', 'x'.repeat(128)])('runs an accepted logical spec ID safely: %s', async id => {
+it.each(['unit:core', 'unit/core', 'unit\0core', '.', 'x'.repeat(129), '\ud800'])('runs an accepted logical spec ID safely: %s', async id => {
   const f = await fixture(); f.spec.id = id;
   const result = await run(f.ctx, f.spec, f.sha, 'at-01');
   expect(result).toMatchObject({ specId: id, verdict: 'pass' });
@@ -276,8 +276,8 @@ it.each(['unit:core', '.', 'x'.repeat(128)])('runs an accepted logical spec ID s
   expect(components.at(-3)!.length).toBeLessThanOrEqual(64);
   expect(components.at(-2)).toBe('cr-01');
 });
-it.each(['unit/core', 'unit\0core'])('rejects an unsafe logical spec ID: %s', async id => {
-  const f = await fixture(); f.spec.id = id;
+it('rejects an empty logical spec ID', async () => {
+  const f = await fixture(); f.spec.id = '';
   expect(await run(f.ctx, f.spec, f.sha, 'at-01')).toMatchObject({ verdict: 'error', summary: 'invalid-check', outputTail: null });
 });
 
@@ -314,4 +314,18 @@ it('rejects a colliding result ID without truncating its existing evidence', asy
   const retry = await run(f.ctx, f.spec, f.sha, 'at-01');
   expect(retry).toMatchObject({ verdict: 'error', summary: 'result-already-exists', outputTail: null });
   expect(await readFile(first.outputTail!, 'utf8')).toBe('ok\n');
+});
+
+it('keeps different long IDs and a short lookalike in distinct safe directories', async () => {
+  const f = await fixture();
+  const firstId = 'x'.repeat(129);
+  const lookalike = `${'x'.repeat(31)}-${createHash('sha256').update(JSON.stringify(firstId)).digest('hex').slice(0, 32)}`;
+  const paths: string[] = [];
+  for (const id of [firstId, `${'x'.repeat(128)}y`, lookalike]) {
+    const result = await run(f.ctx, { ...f.spec, id }, f.sha, 'at-01');
+    expect(result).toMatchObject({ specId: id, verdict: 'pass' });
+    paths.push(result.outputTail!);
+  }
+  expect(new Set(paths).size).toBe(3);
+  for (const file of paths) expect(await readFile(file, 'utf8')).toBe('ok\n');
 });

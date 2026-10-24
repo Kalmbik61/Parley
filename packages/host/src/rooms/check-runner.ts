@@ -28,7 +28,8 @@ const identifier = (value: string) => /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(value)
 function specDirectory(id: string): string {
   let encoded: string;
   try { encoded = encodeURIComponent(id).replace(/\./g, '%2E'); } catch { return hash(id); }
-  return encoded.length <= 64 ? encoded : `${encoded.slice(0, 31)}-${hash(id).slice(0, 32)}`;
+  // Hash every ID so a short literal cannot alias a truncated long ID's directory.
+  return `${encoded.slice(0, 31)}-${hash(id).slice(0, 32)}`;
 }
 const stamp = (date: Date) => date.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '+0000');
 
@@ -79,7 +80,7 @@ export async function run(ctx: CheckRunnerContext, spec: CheckSpec, sha: string,
       result.summary = 'env-not-allowed'; return result;
     }
     if (![ctx.workId, ctx.planId, attemptId, ctx.resultId].every(identifier)
-      || !spec.id || spec.id.length > 128 || /[/\0]/.test(spec.id)
+      || !spec.id
       || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(sha)
       || !spec.argv.length || !spec.argv[0] || !(spec.timeoutMs > 0 && spec.timeoutMs <= 2_147_483_647)) {
       result.summary = 'invalid-check'; return result;
