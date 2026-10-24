@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -103,6 +103,10 @@ describe('parley-core work prune', () => {
 
     expect(removed).toEqual([expect.objectContaining({ id: 'w-0002', title: 'Снесённая' })]);
     expect((await readIndex()).works.map((work) => work.id)).toEqual(['w-0001']);
+    // Работа снята вместе с письмами и планами — JSON-копия карты лежит в доме.
+    const copies = await readdir(path.join(home, 'pruned'));
+    expect(copies).toEqual([expect.stringMatching(/^w-0002-\d{4}-\d{2}-\d{2}T\d{6}\.\d{3}Z\.json$/)]);
+    expect((JSON.parse(await readFile(path.join(home, 'pruned', copies[0]!), 'utf8')) as WorkMap).work.title).toBe('Снесённая');
   }, 60_000);
 });
 
@@ -693,8 +697,9 @@ describe('parley-core work session new', () => {
     expect(nonsense.stdout).toBe('');
     expect(nonsense.stderr).toContain('Unknown command: work чепуха');
     expect(nonsense.stderr).toContain('a new workspace in the project');
-    expect(nonsense.stderr).toContain('remove from the list the workspaces');
+    expect(nonsense.stderr).toContain('delete from the database the workspaces');
     expect(nonsense.stderr).toContain('whose project or folder is gone');
+    expect(nonsense.stderr).toContain('copy of each goes to <home>/pruned/');
   }, 60_000);
 });
 

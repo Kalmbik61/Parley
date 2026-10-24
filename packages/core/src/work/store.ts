@@ -1,4 +1,4 @@
-import { constants, existsSync, mkdirSync } from 'node:fs';
+import { constants, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { TextDecoder } from 'node:util';
 import {
@@ -780,40 +780,72 @@ export async function readWorksIndex(file?: string): Promise<WorksIndex> {
   return { schemaVersion: 1, works };
 }
 
+/** Папка в доме, куда `pruneWorksIndex` кладёт JSON-копию карты перед тем, как снять работу из базы. */
+const PRUNED_DIR = 'pruned';
+
 /**
  * Снимает из базы работы, у которых каталога на диске больше нет: каталог работы снесли руками, проект удалили или
  * он переехал. Автоматически при чтении так не делается — закреплённая чужая работа на отключённом диске выглядит
- * так же. Возвращает снятые записи.
+ * так же. «Нет» — только `ENOENT`/`ENOTDIR` от `stat`; любая другая ошибка (права, сбой диска) работу оставляет и
+ * называется в `report`, остальных не останавливая. Снятие стирает и письма, и сессии, и планы работы, поэтому перед ним
+ * карта пишется JSON-файлом в `<дом>/pruned/<номер>-<время UTC>.json` (спека хранилища 6.9); не записалась — работа остаётся.
+ * Возвращает снятые записи.
  */
 export async function pruneWorksIndex({
   lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS,
-}: WriteOptions = {}): Promise<WorkIndexEntry[]> {
+  report = () => undefined,
+}: WriteOptions & { report?: (line: string) => void } = {}): Promise<WorkIndexEntry[]> {
   const db = storeDb();
-  const removed: WorkIndexEntry[] = [];
+  const gone: WorkIndexEntry[] = [];
   for (const entry of listWorks(db)) {
-    const alive = await stat(workPaths(entry.projectPath, entry.id).dir)
-      .then((info) => info.isDirectory())
-      .catch(() => false);
-    if (!alive) removed.push(entry);
+    const dir = workPaths(entry.projectPath, entry.id).dir;
+    try {
+      if (!(await stat(dir)).isDirectory()) gone.push(entry);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') gone.push(entry);
+      else report(`workspace ${entry.id} (${entry.projectPath}) kept: cannot check ${dir} (${code ?? (error as Error).message})`);
+    }
   }
-  if (removed.length === 0) return removed;
-  const gone = writeTransaction(db, lockTimeoutMs, () => {
+  if (gone.length === 0) return gone;
+  const removed: WorkIndexEntry[] = [];
+  const events = writeTransaction(db, lockTimeoutMs, () => {
     const versions: MapWrittenEvent[] = [];
-    for (const entry of removed) {
+    for (const entry of gone) {
+      // Копия и снятие в одной транзакции записи: между ними карту никто не изменит.
+      try {
+        savePrunedCopy(entry);
+      } catch (error) {
+        report(`workspace ${entry.id} (${entry.projectPath}) kept: its copy could not be saved (${(error as Error).message})`);
+        continue;
+      }
       const version = versionOf(db, entry.projectPath, entry.id);
       sql(db, 'DELETE FROM works WHERE project_path = ? AND id = ?').run(
         entry.projectPath,
         entry.id,
       );
       mapCache.delete(cacheKey(entry.projectPath, entry.id));
+      removed.push(entry);
       if (version !== undefined) {
         versions.push({ projectPath: entry.projectPath, workId: entry.id, version, removed: true });
       }
     }
     return versions;
   });
-  for (const event of gone) emitMapWritten(event);
+  for (const event of events) emitMapWritten(event);
   return removed;
+}
+
+/**
+ * Пишет карту работы (то, что отдаёт `readStoredMap`) в `<дом>/pruned/<номер>-<время UTC без двоеточий>.json`; существующий
+ * файл не затирает. Вызывается внутри транзакции записи — читает на её снимке.
+ */
+function savePrunedCopy(entry: WorkIndexEntry): void {
+  const map = readStoredMap(entry.projectPath, entry.id);
+  const dir = path.join(parleyHome(), PRUNED_DIR);
+  mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/:/g, '');
+  writeFileSync(path.join(dir, `${entry.id}-${stamp}.json`), `${JSON.stringify(map, null, 2)}\n`, { flag: 'wx' });
 }
 
 export interface NewWork {

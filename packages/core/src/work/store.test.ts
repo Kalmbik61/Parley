@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -1376,6 +1376,70 @@ describe('pruneWorksIndex', () => {
 
     expect(await pruneWorksIndex()).toEqual([]);
     expect(await readWorksIndex()).toEqual(before);
+  });
+
+  it('перед снятием кладёт карту JSON-файлом в <дом>/pruned/<номер>-<время UTC без двоеточий>.json, письма на месте', async () => {
+    const gone = await createWork(other, { title: 'Снесённая' });
+    await updateMap(other, gone.work.id, (map) => {
+      addSession(map, { provider: 'claude', label: 'Автор', task: 'Задача' });
+      addSession(map, { provider: 'codex', label: 'Читатель', task: 'Задача' });
+      addMessage(map, { from: 's-01', to: ['s-02'], text: 'письмо, которое не должно пропасть' });
+    });
+    await rm(other, { recursive: true, force: true });
+    const report = vi.fn();
+
+    const removed = await pruneWorksIndex({ report });
+
+    expect(removed).toEqual([expect.objectContaining({ id: gone.work.id, projectPath: other })]);
+    expect(report).not.toHaveBeenCalled();
+    const files = await readdir(path.join(home, 'pruned'));
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(new RegExp(`^${gone.work.id}-\\d{4}-\\d{2}-\\d{2}T\\d{6}\\.\\d{3}Z\\.json$`));
+    const copy = JSON.parse(await readFile(path.join(home, 'pruned', files[0]!), 'utf8')) as WorkMap;
+    expect(copy.work.id).toBe(gone.work.id);
+    expect(copy.sessions.map((session) => session.label)).toEqual(['Автор', 'Читатель']);
+    expect(copy.messages.map((message) => message.text)).toEqual(['письмо, которое не должно пропасть']);
+    expect(workExists(other, gone.work.id)).toBe(false);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'ошибка stat не «нет»: работа с нечитаемым каталогом остаётся и названа в report, остальные снимаются',
+    async () => {
+      const gone = await createWork(project, { title: 'Снесённая' });
+      const unreadable = await createWork(other, { title: 'За закрытым каталогом' });
+      await rm(workPaths(project, gone.work.id).dir, { recursive: true, force: true });
+      const report = vi.fn();
+      // `stat` каталога работы упирается в права на каталог состояния: EACCES, а не ENOENT.
+      await chmod(path.join(other, '.parley'), 0o000);
+      try {
+        const removed = await pruneWorksIndex({ report });
+
+        expect(removed.map((entry) => entry.id)).toEqual([gone.work.id]);
+        expect(workExists(other, unreadable.work.id)).toBe(true);
+        expect(workExists(project, gone.work.id)).toBe(false);
+        expect(report).toHaveBeenCalledTimes(1);
+        expect(report.mock.calls[0]![0]).toEqual(expect.stringContaining(unreadable.work.id));
+        expect(report.mock.calls[0]![0]).toEqual(expect.stringContaining('EACCES'));
+        // Копия только у снятой.
+        expect(await readdir(path.join(home, 'pruned'))).toEqual([expect.stringMatching(new RegExp(`^${gone.work.id}-`))]);
+      } finally {
+        await chmod(path.join(other, '.parley'), 0o700);
+      }
+    },
+  );
+
+  it('копия не записалась (на месте <дом>/pruned лежит файл): работа остаётся, об этом сказано в report, остальные продолжаются', async () => {
+    const first = await createWork(project, { title: 'Первая' });
+    await rm(workPaths(project, first.work.id).dir, { recursive: true, force: true });
+    await writeFile(path.join(home, 'pruned'), 'не каталог\n');
+    const report = vi.fn();
+
+    const removed = await pruneWorksIndex({ report });
+
+    expect(removed).toEqual([]);
+    expect(workExists(project, first.work.id)).toBe(true);
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(report.mock.calls[0]![0]).toEqual(expect.stringContaining('its copy could not be saved'));
   });
 });
 

@@ -41,8 +41,9 @@ const USAGE = `parley-core — an index of Claude Code sessions as JSON
   parley-core work new --title <t> [--goal <g>] [--cwd <path>]
                                             a new workspace in the project
   parley-core work list [--all]             workspaces of all projects
-  parley-core work prune                    remove from the list the workspaces
-                                            whose project or folder is gone
+  parley-core work prune                    delete from the database the workspaces
+                                            whose project or folder is gone; a JSON
+                                            copy of each goes to <home>/pruned/
   parley-core work map --work <id> [--cwd <path>]
                                             the workspace map
   parley-core work session new --work <id> --provider <p> --label <l>
@@ -249,8 +250,9 @@ async function workCommand(rest: string[], argv: string[]): Promise<number> {
   }
 
   if (subcommand === 'prune') {
-    // Записи без каталога работы на диске: работу снесли мимо Parley или проект уехал.
-    print(await pruneWorksIndex());
+    // Записи без каталога работы на диске: работу снесли мимо Parley или проект уехал. Не проверенные (права, сбой диска)
+    // и не сохранённые остаются; о них — строка в stderr.
+    print(await pruneWorksIndex({ report: (line) => process.stderr.write(`${line}\n`) }));
     return 0;
   }
 
