@@ -1079,7 +1079,7 @@ export function createSessionsService(
         if (map.work.status === 'archived') throw new HostError('bad_request', 'The workspace is archived.');
         const limits = limitsFromConfig(agentConfig);
         const room = input.requestedBy === ENGINE
-          ? map.plans?.find(plan => plan.mode === 'autonomous' && plan.autonomous?.ops.some(op => op.kind === 'create-session' && label === `${op.attemptId} ${op.payload.role} ${op.key}`))?.roomId ?? null
+          ? map.plans?.find(plan => plan.mode === 'autonomous' && plan.autonomous?.ops.some(op => op.kind === 'create-session' && label === `${plan.id}/${op.attemptId}/${op.payload.role}/${op.key}`))?.roomId ?? null
           : roomOfSession(map, caller!.id);
         const used = map.resources?.spawned ?? 0;
         const roomUsed = room === null ? 0 : map.resources?.spawnedByRoom[room] ?? 0;

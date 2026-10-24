@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { addRoom, addSession, ENGINE, HUMAN, parseMap, setProposal, type AttemptChannelRequest, type CheckResult, type RoomPlan, type WorkMap } from '@parley/core';
+import { addRoom, addSession, ENGINE, HUMAN, parseMap, setProposal, startAttempt, type AttemptChannelRequest, type CheckResult, type RoomPlan, type WorkMap } from '@parley/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAutonomousEngine, resolveAutonomousProposal, type EngineIO } from './autonomous-engine.js';
 import { attemptsEngineGitPath, type AttemptsProposal } from '../agent/attempts-endpoint.js';
@@ -62,7 +62,7 @@ async function fixture(qualitative = false, count = 1) {
         session.lifecycle = 'pending';
         return { projectPath, workId: 'w-01', sessionId: session.id };
       }),
-      launch: vi.fn(async ref => { expect(map.rooms[0]!.members).toContain(ref.sessionId); events.push('launch'); map.sessions.find(s => s.id === ref.sessionId)!.lifecycle = 'active'; return 'started' as const; }),
+      launch: vi.fn(async ref => { expect(map.rooms.some(room => room.members.includes(ref.sessionId))).toBe(true); events.push('launch'); map.sessions.find(s => s.id === ref.sessionId)!.lifecycle = 'active'; return 'started' as const; }),
       stop: vi.fn(async ref => { events.push('stop'); map.sessions.find(s => s.id === ref.sessionId)!.lifecycle = 'sleeping'; }),
       close: vi.fn(async ref => { events.push('close'); map.sessions.find(s => s.id === ref.sessionId)!.lifecycle = 'closed'; }),
     },
@@ -71,21 +71,66 @@ async function fixture(qualitative = false, count = 1) {
       return { id: ctx.resultId, specId: spec.id, attemptId, sha: captured, argvHash: digest(spec.argv), envHash: digest(spec.env), inputsOk: true, verdict: 'pass', by: ENGINE, exitCode: 0, summary: 'pass', outputTail: null, at: now.toISOString(), durationMs: 1 };
     }),
   };
-  const make = (restart = false) => { const engine = createAutonomousEngine(io, { provider: 'codex', verifier: { provider: 'claude', model: 'sonnet' }, ...(restart ? { works: { snapshot: () => ({ entries: [{ projectPath, map }] }) as any, onChange: () => () => {} } } : {}) }); engines.push(engine); return engine; };
+  const make = (restart = false, onFailure = vi.fn()) => { const engine = createAutonomousEngine(io, { provider: 'codex', verifier: { provider: 'claude', model: 'sonnet' }, onFailure, ...(restart ? { works: { snapshot: () => ({ entries: [{ projectPath, map }] }) as any, onChange: () => () => {} } } : {}) }); engines.push(engine); return engine; };
   const engine = make();
-  const read = () => map.plans![0]!;
-  const attempt = (index = 0) => read().autonomous!.attempts[index]!;
-  const clone = (index = 0) => path.join(projectPath, '.parley/works/w-01/autonomous/pl-01/attempts', attempt(index).id, 'clone');
-  const submit = (index = 0, artifacts: { path: string; sha256: string; storedAs: string }[] = []) => {
+  const read = (planId = 'pl-01') => map.plans!.find(plan => plan.id === planId)!;
+  const attempt = (index = 0, planId = 'pl-01') => read(planId).autonomous!.attempts[index]!;
+  const clone = (index = 0, planId = 'pl-01') => path.join(projectPath, `.parley/works/w-01/autonomous/${planId}/attempts`, attempt(index, planId).id, 'clone');
+  const submission = (index = 0, artifacts: { path: string; sha256: string; storedAs: string }[] = [], planId = 'pl-01') => {
     const body = { version: 1 as const, criteriaVersion: 1, dependsOn: [], coverage: 'covered' as const, scope: 'src', facts: ['Done'], hypotheses: [], notFound: [], gaps: [], text: 'Done', artifacts, submittedAt: now.toISOString() };
     const manifest = { ...body, hash: digest({ ...body, sha: null }) };
-    const request: Extract<AttemptChannelRequest, { action: 'submit' }> = { action: 'submit', attemptId: attempt(index).id, submissionKey: digest(manifest), manifest };
-    return engine.submit({ projectPath, workId: 'w-01', sessionId: attempt(index).worker! }, 'pl-01', read().rev, request);
+    const request: Extract<AttemptChannelRequest, { action: 'submit' }> = { action: 'submit', attemptId: attempt(index, planId).id, submissionKey: digest(manifest), manifest };
+    return request;
   };
-  return { projectPath, git, io, events, engine, make, read, attempt, clone, submit, map: () => map, sha };
+  const submit = (index = 0, artifacts: { path: string; sha256: string; storedAs: string }[] = [], planId = 'pl-01') => engine.submit({ projectPath, workId: 'w-01', sessionId: attempt(index, planId).worker! }, planId, read(planId).rev, submission(index, artifacts, planId));
+  return { projectPath, git, io, events, engine, make, read, attempt, clone, submit, submission, map: () => map, sha };
 }
 
 describe('autonomous engine', () => {
+  function secondPlan(f: Awaited<ReturnType<typeof fixture>>, template = f.read()) {
+    const lead = addSession(f.map(), { provider: 'codex', label: 'Second lead', task: 'Lead' });
+    const room = addRoom(f.map(), { creator: HUMAN, title: 'Second plan', members: [lead.id], lead: lead.id, mode: 'autonomous' });
+    const plan = structuredClone(template);
+    plan.id = 'pl-02'; plan.roomId = room.id;
+    plan.autonomous!.integration.branch = 'parley/w-01/integration/pl-02';
+    f.map().plans!.push(plan);
+  }
+
+  it('isolates session and capture identities for two plans sharing a work', async () => {
+    const f = await fixture(); secondPlan(f);
+    await f.engine.flush(f.projectPath, 'w-01');
+    const first = f.attempt(), second = f.attempt(0, 'pl-02');
+    expect(first.id).toBe('at-0001'); expect(second.id).toBe('at-0001');
+    expect(second.worker).not.toBe(first.worker);
+    expect(f.io.sessions.create).toHaveBeenCalledTimes(2);
+    for (const planId of ['pl-01', 'pl-02']) {
+      await fs.writeFile(path.join(f.clone(0, planId), 'result.txt'), planId);
+      expect(await f.submit(0, [], planId)).toMatchObject({ ok: true });
+      const attempt = f.attempt(0, planId);
+      expect(attempt.receipt).toMatchObject({ sha: attempt.sha, valid: true });
+      const git = (...args: string[]) => exec('git', [`--git-dir=${attemptsEngineGitPath(f.projectPath, 'w-01')}`, ...args]);
+      expect((await git('show', `${attempt.sha}:result.txt`)).stdout).toBe(planId);
+      expect((await git('rev-parse', `refs/attempts/${planId}/at-0001`)).stdout.trim()).toBe(attempt.sha);
+      const capture = f.read(planId).autonomous!.ops.find(op => op.kind === 'capture')!;
+      expect((await git('show', '-s', '--format=%B', attempt.sha!)).stdout.trim()).toBe(`${planId} ${capture.key} at-0001`);
+    }
+    expect(f.attempt(0, 'pl-02').sha).not.toBe(f.attempt().sha);
+  });
+
+  it('never reuses a previous plan capture when a later plan has the same base', async () => {
+    const f = await fixture(); const template = structuredClone(f.read());
+    await f.engine.flush(f.projectPath, 'w-01');
+    await fs.writeFile(path.join(f.clone(), 'result.txt'), 'first plan'); await f.submit();
+    const firstSha = f.attempt().sha;
+    f.read().status = 'cancelled';
+    // Remove label overlap here to exercise capture identity independently of session lookup.
+    f.map().sessions.find(session => session.id === f.attempt().worker)!.label = 'retired first worker';
+    secondPlan(f, template); await f.engine.flush(f.projectPath, 'w-01');
+    await fs.writeFile(path.join(f.clone(0, 'pl-02'), 'result.txt'), 'second plan');
+    expect(await f.submit(0, [], 'pl-02')).toMatchObject({ ok: true });
+    expect(f.attempt(0, 'pl-02').sha).not.toBe(firstSha);
+    expect((await exec('git', [`--git-dir=${attemptsEngineGitPath(f.projectPath, 'w-01')}`, 'show', `${f.attempt(0, 'pl-02').sha}:result.txt`])).stdout).toBe('second plan');
+  });
   it('does nothing before Go; creates an isolated attempt after acceptance', async () => {
     const f = await fixture();
     f.read().status = 'proposed';
@@ -260,6 +305,68 @@ describe('autonomous engine', () => {
     if (kind === 'create-session') expect(f.attempt().worker).toBeTruthy();
     if (kind === 'capture') expect(f.read().autonomous!.ops.find(op => op.kind === 'capture')!.result!.sha).toMatch(/^[a-f0-9]{40}$/);
     expect(f.io.sessions.stop).toHaveBeenCalled();
+  });
+
+  it('fences the whole work and agent requests until a failed recovery write is retried', async () => {
+    const f = await fixture(); secondPlan(f);
+    f.map().plans![0] = startAttempt(f.read(), { actor: ENGINE, rev: 1, now: now.toISOString(), item: 1, branch: 'attempt', baseSha: f.sha });
+    const update = f.io.updateMap;
+    let armed = true;
+    f.io.updateMap = async (project, work, mutate, ...rest) => update(project, work, async map => {
+      await mutate(map);
+      if (armed && map.plans![0]!.autonomous!.halted?.reason === 'restart') { armed = false; throw new Error('recovery write unavailable'); }
+    }, ...rest);
+    const onFailure = vi.fn(), restarted = f.make(true, onFailure);
+    restarted.start();
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalled());
+    expect(f.events).toEqual([]);
+    expect(f.read().autonomous!.halted).toBeNull();
+    const ref = { projectPath: f.projectPath, workId: 'w-01', sessionId: 's-01' };
+    expect(await restarted.submit(ref, 'pl-01', 1, f.submission())).toMatchObject({ ok: false, error: { code: 'engine-recovering' } });
+    expect(await restarted.verify(ref, 'pl-01', 1, { action: 'verify', attemptId: 'at-0001', sha: f.sha, criterion: 0, verdict: 'pass', note: 'No execution during recovery' })).toMatchObject({ ok: false, error: { code: 'engine-recovering' } });
+    await restarted.flush(f.projectPath, 'w-01');
+    expect(f.read().autonomous!.halted?.reason).toBe('restart');
+    expect(f.read('pl-02').autonomous!.halted?.reason).toBe('restart');
+    expect(f.attempt().status).toBe('aborted');
+    expect(f.events).toEqual([]);
+    await expect(fs.stat(attemptsEngineGitPath(f.projectPath, 'w-01'))).rejects.toThrow();
+  });
+
+  it('refuses work and agent requests before startup reconciliation has begun', async () => {
+    const f = await fixture();
+    f.map().plans![0] = startAttempt(f.read(), { actor: ENGINE, rev: 1, now: now.toISOString(), item: 1, branch: 'attempt', baseSha: f.sha });
+    const restarted = f.make(true);
+    const ref = { projectPath: f.projectPath, workId: 'w-01', sessionId: 's-01' };
+    expect(await restarted.submit(ref, 'pl-01', 1, f.submission())).toMatchObject({ ok: false, error: { code: 'engine-recovering' } });
+    expect(await restarted.verify(ref, 'pl-01', 1, { action: 'verify', attemptId: 'at-0001', sha: f.sha, criterion: 0, verdict: 'pass', note: 'Before startup' })).toMatchObject({ ok: false, error: { code: 'engine-recovering' } });
+    await expect(restarted.flush(f.projectPath, 'w-01')).rejects.toThrow('engine-recovering');
+    expect(f.events).toEqual([]);
+    restarted.start(); await restarted.flush(f.projectPath, 'w-01');
+    expect(f.read().autonomous!.halted?.reason).toBe('restart');
+    expect(f.events).toEqual([]);
+  });
+
+  it('keeps recovery fenced when reading Git evidence fails once', async () => {
+    const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01'); await f.engine.stop();
+    f.attempt().status = 'starting'; f.events.length = 0;
+    const git = f.io.git;
+    let armed = true;
+    const mutations: string[][] = [];
+    f.io.git = async (args, options) => {
+      if (['clone', 'add', 'commit-tree', 'update-ref', 'fetch'].some(command => args.includes(command))) mutations.push(args);
+      if (armed && args.includes('cat-file')) { armed = false; throw new Error('git evidence unavailable'); }
+      return git(args, options);
+    };
+    const onFailure = vi.fn(), restarted = f.make(true, onFailure); restarted.start();
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalled());
+    expect(f.read().autonomous!.halted).toBeNull();
+    expect(f.events).toEqual([]);
+    expect(mutations).toEqual([]);
+    await restarted.flush(f.projectPath, 'w-01');
+    expect(f.read().autonomous!.halted?.reason).toBe('restart');
+    expect(f.attempt().status).toBe('aborted');
+    expect(f.events.every(event => ['stop', 'close'].includes(event))).toBe(true);
+    expect(mutations).toEqual([]);
   });
 
   it('retains submitted receipts on restart and never reruns checks until human resume', async () => {

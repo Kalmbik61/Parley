@@ -25,11 +25,12 @@ import {
   SKILL_MD,
   SYSTEM,
   ENGINE,
+  startAttempt,
   transitionSession,
   updateMap,
   workPaths,
 } from '@parley/core';
-import type { WorktreeInfo } from '@parley/core';
+import type { RoomPlan, WorktreeInfo } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
@@ -2396,6 +2397,36 @@ describe('setModel(): смена модели (спека нормалайзер
 
 
 describe('agent-created workspace peers', () => {
+  it('charges plan-namespaced engine identities to their own room creation budgets', async () => {
+    setEnv('PARLEY_ROOM_NEW_SESSIONS', '1');
+    const work = await createWork(project, { title: 'Two engine plans', goal: '' });
+    const leads = await Promise.all([1, 2].map(i => createPendingSession(project, work.work.id, { provider: 'claude', label: `Lead ${i}`, task: 'Lead', parent: null, contextFrom: [] })));
+    const roomIds: string[] = [];
+    await updateMap(project, work.work.id, map => {
+      map.plans = leads.map((lead, index) => {
+        const room = addRoom(map, { title: `Plan ${index}`, creator: lead, members: [lead], lead, mode: 'autonomous' }); roomIds.push(room.id);
+        const at = new Date().toISOString(), sha = 'a'.repeat(40);
+        const plan: RoomPlan = {
+          id: `pl-0${index + 1}`, roomId: room.id, rev: 1, mode: 'autonomous', status: 'active', goal: 'Implement', backlog: [], acceptedAt: at, completedAt: null, cancelledAt: null, completionSummary: null,
+          items: [{ id: 1, title: 'Implement', owner: ENGINE, verifier: ENGINE, scope: 'src', after: [], criteria: ['Works'], status: 'ready', evidence: null, note: null, log: [] }],
+          autonomous: { criteriaVersion: { 1: 1 }, checks: [], coverage: { 1: { 0: ['verifier'] } },
+            budget: { limits: { attemptsPerItem: 3, repairWaves: 3, minutesPerAttempt: 30, sessions: 10, concurrent: 4 }, spent: { attempts: 0, repairWaves: 0, sessions: 0, verifiers: 0, minutes: 0, launches: 0 }, reservations: [] },
+            integration: { branch: `integration/pl-0${index + 1}`, baseSha: sha, verifiedHead: sha, candidateHead: null, queue: [], suspended: null }, attempts: [], ops: [], halted: null, seq: { attempt: 0, receipt: 0, check: 0, op: 0 } },
+        };
+        return startAttempt(plan, { actor: ENGINE, rev: 1, now: at, item: 1, branch: 'attempt', baseSha: sha });
+      });
+    });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const input = { projectPath: project, workId: work.work.id, provider: 'claude', task: 'Implement', parent: null, requestedBy: ENGINE, deferLaunch: true };
+    for (const planId of ['pl-01', 'pl-02']) {
+      await service.create({ ...input, label: `${planId}/at-0001/worker/op-0001` });
+      await expect(service.create({ ...input, label: `${planId}/at-0001/worker/op-0001` })).rejects.toThrow();
+    }
+    await service.create({ ...input, label: 'pl-unknown/at-0001/worker/op-0001' });
+    const map = await readMap(project, work.work.id);
+    expect(map.resources?.spawnedByRoom).toEqual(Object.fromEntries(roomIds.map(id => [id, 1])));
+    expect(map.resources?.spawned).toBe(3);
+  });
   it('defers engine creation until its separately journaled launch', async () => {
     const work = await createWork(project, { title: 'Engine', goal: '' });
     const pty = createPtyManager(fakeHost());

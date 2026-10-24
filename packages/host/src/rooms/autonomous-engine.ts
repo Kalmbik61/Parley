@@ -69,7 +69,13 @@ function serialCheck<T>(effect: () => Promise<T>): Promise<T> {
   checkQueue = result.catch(() => {});
   return result;
 }
-interface WorkState { tail: Promise<unknown>; scheduled: boolean }
+interface WorkState {
+  tail: Promise<unknown>;
+  scheduled: boolean;
+  recovering: Set<string>;
+  recoveryFailures: number;
+  retryAt: number;
+}
 interface Location { projectPath: string; workId: string; planId: string }
 class NoEngineChange extends Error {}
 
@@ -120,20 +126,28 @@ export function resolveAutonomousProposal(
 export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOptions): AutonomousEngine {
   const states = new Map<string, WorkState>();
   let stopped = false;
+  let started = options.works === undefined;
   let off: (() => void) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const at = () => io.now().toISOString();
   function state(projectPath: string, workId: string): WorkState {
     const key = `${projectPath}\0${workId}`;
     let value = states.get(key);
-    if (!value) { value = { tail: Promise.resolve(), scheduled: false }; states.set(key, value); }
+    if (!value) { value = { tail: Promise.resolve(), scheduled: false, recovering: new Set(), recoveryFailures: 0, retryAt: 0 }; states.set(key, value); }
     return value;
   }
   function exclusive<T>(projectPath: string, workId: string, effect: () => Promise<T>): Promise<T> {
     const current = state(projectPath, workId);
-    const result = current.tail.then(() => { if (stopped) throw new Error('engine-stopped'); return effect(); });
-    current.tail = result.catch(() => {});
+    const execute = () => { if (stopped) throw new Error('engine-stopped'); return effect(); };
+    const result = current.tail.then(execute, execute);
+    current.tail = result;
+    // Observe rejection without turning the durable recovery barrier into a successful tail.
+    void result.catch(() => {});
     return result;
+  }
+  const recovering = (projectPath: string, workId: string) => !started || state(projectPath, workId).recovering.size > 0;
+  function requireRecovered(projectPath: string, workId: string) {
+    if (recovering(projectPath, workId)) throw new Error('engine-recovering');
   }
   async function load(loc: Location): Promise<RoomPlan> {
     const map = await io.readMap(loc.projectPath, loc.workId);
@@ -169,7 +183,14 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
   }
   const bare = (loc: Location, args: string[], env?: NodeJS.ProcessEnv) => git(loc, [`--git-dir=${attemptsEngineGitPath(loc.projectPath, loc.workId)}`, ...args], env);
   const text = async (loc: Location, args: string[]) => (await bare(loc, args)).toString('utf8').trim();
-  function sessionLabel(attemptId: string, op: AutonomousOp) { return `${attemptId} ${op.payload.role} ${op.key}`; }
+  async function refSha(loc: Location, ref: string): Promise<string | null> {
+    try { await bare(loc, ['show-ref', '--verify', '--quiet', ref]); }
+    catch (error) { if ((error as { code?: unknown }).code === 1) return null; throw error; }
+    return text(loc, ['rev-parse', '--verify', ref]);
+  }
+  function sessionLabel(loc: Location, attemptId: string, op: AutonomousOp) { return `${loc.planId}/${attemptId}/${op.payload.role}/${op.key}`; }
+  const commitMessage = (loc: Location, op: AutonomousOp) => `${loc.planId} ${op.key} ${op.attemptId}`;
+  const attemptRef = (loc: Location, attemptId: string) => `refs/attempts/${loc.planId}/${attemptId}`;
   async function intend(loc: Location, kind: AutonomousOp['kind'], attemptId: string | null, payload: Record<string, unknown>): Promise<AutonomousOp> {
     const plan = await change(loc, current => intendOp(current, { ...context(current, at()), kind, attemptId, payload }));
     return plan.autonomous!.ops.at(-1)!;
@@ -189,6 +210,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
   async function effect(loc: Location, op: AutonomousOp, execute: () => Promise<Record<string, unknown>>): Promise<AutonomousOp> {
     if (op.state !== 'intended') return op;
     if (stopped) throw new Error('engine-stopped');
+    if (!['stop-session', 'close-session'].includes(op.kind)) requireRecovered(loc.projectPath, loc.workId);
     const latest = await load(loc);
     if (!['stop-session', 'close-session'].includes(op.kind) &&
       (latest.autonomous!.halted || (op.attemptId && fenced.has(attemptOf(latest, op.attemptId).status)))) {
@@ -280,9 +302,9 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       const create = op;
       await effect(loc, create, async () => {
         const map = await io.readMap(loc.projectPath, loc.workId);
-        const existing = map.sessions.find(row => row.label === sessionLabel(attemptId, create));
+        const existing = map.sessions.find(row => row.label === sessionLabel(loc, attemptId, create));
         if (existing) return { sessionId: existing.id };
-        const input: CreateSessionInput = { projectPath: loc.projectPath, workId: loc.workId, requestedBy: ENGINE, deferLaunch: true, parent: null, provider: selected.provider, label: sessionLabel(attemptId, create), task, role: { source: 'builtin', name: role === 'worker' ? 'executor' : 'verifier' }, ...(selected.model === undefined ? {} : { model: selected.model }) };
+        const input: CreateSessionInput = { projectPath: loc.projectPath, workId: loc.workId, requestedBy: ENGINE, deferLaunch: true, parent: null, provider: selected.provider, label: sessionLabel(loc, attemptId, create), task, role: { source: 'builtin', name: role === 'worker' ? 'executor' : 'verifier' }, ...(selected.model === undefined ? {} : { model: selected.model }) };
         const ref = await io.sessions.create(input);
         return { sessionId: ref.sessionId };
       });
@@ -334,8 +356,8 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       await bare(loc, ['add', '-A', '--', '.'], env);
       const tree = (await bare(loc, ['write-tree'], env)).toString('utf8').trim();
       const baseTree = await text(loc, ['rev-parse', `${attempt.baseSha}^{tree}`]);
-      const sha = tree === baseTree ? attempt.baseSha : (await bare(loc, ['commit-tree', tree, '-p', attempt.baseSha, '-m', `${op.key} ${attempt.id}`], { ...env, GIT_AUTHOR_NAME: `attempt ${attempt.id}` })).toString('utf8').trim();
-      await bare(loc, ['update-ref', `refs/attempts/${attempt.id}`, sha]);
+      const sha = tree === baseTree ? attempt.baseSha : (await bare(loc, ['commit-tree', tree, '-p', attempt.baseSha, '-m', commitMessage(loc, op)], { ...env, GIT_AUTHOR_NAME: `attempt ${loc.planId}/${attempt.id}` })).toString('utf8').trim();
+      await bare(loc, ['update-ref', attemptRef(loc, attempt.id), sha]);
       await io.fs.rm(index, { force: true });
       return { sha, tree, baseTree };
     });
@@ -349,17 +371,15 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       if (type !== 'commit') continue;
       const commit = await text(loc, ['cat-file', 'commit', sha!]);
       const parents = [...commit.matchAll(/^parent (.+)$/gm)].map(match => match[1]);
-      if (commit.split('\n\n').slice(1).join('\n\n').trim() === `${op.key} ${attempt.id}` && parents.length === 1 && parents[0] === attempt.baseSha) {
+      if (commit.split('\n\n').slice(1).join('\n\n').trim() === commitMessage(loc, op) && parents.length === 1 && parents[0] === attempt.baseSha) {
         return { sha, tree: /^tree (.+)$/m.exec(commit)![1], baseTree: await text(loc, ['rev-parse', `${attempt.baseSha}^{tree}`]) };
       }
     }
     // Unchanged captures are witnessed by an attempt ref pointing exactly at baseSha.
-    try {
-      if (await text(loc, ['rev-parse', '--verify', `refs/attempts/${attempt.id}`]) === attempt.baseSha) {
-        const tree = await text(loc, ['rev-parse', `${attempt.baseSha}^{tree}`]);
-        return { sha: attempt.baseSha, tree, baseTree: tree };
-      }
-    } catch { /* No attempt ref yet. */ }
+    if (await refSha(loc, attemptRef(loc, attempt.id)) === attempt.baseSha) {
+      const tree = await text(loc, ['rev-parse', `${attempt.baseSha}^{tree}`]);
+      return { sha: attempt.baseSha, tree, baseTree: tree };
+    }
     return null;
   }
   async function frozenInputs(loc: Location, plan: RoomPlan, attempt: PlanAttempt, sha: string): Promise<boolean> {
@@ -486,7 +506,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     for (const op of plan.autonomous!.ops.filter(row => row.state === 'intended')) {
       let result: Record<string, unknown> | null = null;
       if (op.kind === 'create-session' && op.attemptId) {
-        const session = map.sessions.find(row => row.label === sessionLabel(op.attemptId!, op));
+        const session = map.sessions.find(row => row.label === sessionLabel(loc, op.attemptId!, op));
         if (session) result = { sessionId: session.id };
       } else if (['launch', 'stop-session', 'close-session'].includes(op.kind)) {
         const session = map.sessions.find(row => row.id === op.payload.sessionId);
@@ -510,12 +530,13 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     }
     let head = plan.autonomous!.integration.verifiedHead, parents: string[] = [], opKey: string | null = null;
     if (await exists(attemptsEngineGitPath(loc.projectPath, loc.workId))) {
-      try {
-        head = await text(loc, ['rev-parse', `refs/heads/${plan.autonomous!.integration.branch}`]);
+      const observed = await refSha(loc, `refs/heads/${plan.autonomous!.integration.branch}`);
+      if (observed) {
+        head = observed;
         const commit = await text(loc, ['cat-file', 'commit', head]);
         parents = [...commit.matchAll(/^parent (.+)$/gm)].map(match => match[1]!);
-        opKey = plan.autonomous!.ops.find(op => ['merge', 'noop-integration'].includes(op.kind) && commit.split('\n\n').slice(1).join('\n\n').trim() === `${op.key} ${op.attemptId}`)?.key ?? null;
-      } catch { /* Missing/unconfirmed branch is never proof of integration. */ }
+        opKey = plan.autonomous!.ops.find(op => ['merge', 'noop-integration'].includes(op.kind) && commit.split('\n\n').slice(1).join('\n\n').trim() === commitMessage(loc, op))?.key ?? null;
+      }
     }
     await change(loc, (current, map) => {
       const next = reconcileAfterRestart(current, { ...context(current, at()), observations, integrationHead: { sha: head, parents, opKey } });
@@ -525,6 +546,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     await drainSessions(loc);
   }
   async function cycle(projectPath: string, workId: string): Promise<void> {
+    requireRecovered(projectPath, workId);
     const map = await io.readMap(projectPath, workId);
     if (map.work.status !== 'active') return;
     for (const original of map.plans?.filter(active) ?? []) {
@@ -575,13 +597,32 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       }
     }
   }
+  async function processWork(projectPath: string, workId: string, manual = false): Promise<void> {
+    if (!started) throw new Error('engine-recovering');
+    const current = state(projectPath, workId);
+    if (current.recovering.size) {
+      if (!manual && io.now().getTime() < current.retryAt) return;
+      try {
+        for (const planId of current.recovering) {
+          await recover({ projectPath, workId, planId });
+          current.recovering.delete(planId);
+        }
+        current.recoveryFailures = 0;
+        current.retryAt = 0;
+      } catch (error) {
+        current.retryAt = io.now().getTime() + Math.min(30_000, 1000 * 2 ** Math.min(current.recoveryFailures++, 5));
+        throw error;
+      }
+    }
+    await cycle(projectPath, workId);
+  }
   function schedule(projectPath: string, workId: string) {
     const current = state(projectPath, workId);
     if (current.scheduled || stopped) return;
     current.scheduled = true;
     void exclusive(projectPath, workId, async () => {
       current.scheduled = false;
-      await cycle(projectPath, workId);
+      await processWork(projectPath, workId);
     }).catch(error => options.onFailure?.(error));
   }
   return {
@@ -590,20 +631,23 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       // Snapshot plans before subscribing: plans accepted later are Go, not restarts.
       for (const entry of options.works.snapshot().entries) {
         for (const plan of entry.map.plans?.filter(active) ?? []) {
-          void exclusive(entry.projectPath, entry.map.work.id, () => recover({ projectPath: entry.projectPath, workId: entry.map.work.id, planId: plan.id })).catch(error => options.onFailure?.(error));
+          state(entry.projectPath, entry.map.work.id).recovering.add(plan.id);
         }
       }
+      started = true;
       const scan = () => { for (const entry of options.works!.snapshot().entries) if (entry.map.plans?.some(active)) schedule(entry.projectPath, entry.map.work.id); };
       off = options.works.onChange(scan);
       const poll = () => { if (stopped) return; scan(); timer = setTimeout(poll, 1000); timer.unref?.(); };
       poll();
     },
-    async stop() { stopped = true; off?.(); if (timer) clearTimeout(timer); await Promise.all([...states.values()].map(value => value.tail)); },
-    flush: (projectPath, workId) => exclusive(projectPath, workId, () => cycle(projectPath, workId)),
+    async stop() { stopped = true; off?.(); if (timer) clearTimeout(timer); await Promise.allSettled([...states.values()].map(value => value.tail)); },
+    flush: (projectPath, workId) => exclusive(projectPath, workId, () => processWork(projectPath, workId, true)),
     async submit(ref, planId, rev, request) {
+      if (recovering(ref.projectPath, ref.workId)) return denied(new Error('engine-recovering'));
       return exclusive(ref.projectPath, ref.workId, async () => {
         const loc = { projectPath: ref.projectPath, workId: ref.workId, planId };
         try {
+          requireRecovered(ref.projectPath, ref.workId);
           await change(loc, plan => {
             const attempt = attemptOf(plan, request.attemptId);
             if (ref.sessionId !== attempt.worker) throw new Error('not-worker');
@@ -628,9 +672,11 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       });
     },
     async verify(ref, planId, rev, request) {
+      if (recovering(ref.projectPath, ref.workId)) return denied(new Error('engine-recovering'));
       return exclusive(ref.projectPath, ref.workId, async () => {
         const loc = { projectPath: ref.projectPath, workId: ref.workId, planId };
         try {
+          requireRecovered(ref.projectPath, ref.workId);
           let result!: CheckResult;
           let operation!: AutonomousOp;
           await change(loc, plan => {
