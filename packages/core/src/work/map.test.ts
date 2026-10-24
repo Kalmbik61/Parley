@@ -3,7 +3,9 @@ import {
   addMessage,
   addSession,
   canTransition,
+  normalizeMap,
   parseMap,
+  parseMapText,
   removeSession,
   setResult,
   transitionSession,
@@ -829,6 +831,53 @@ describe('parseMap', () => {
     expect(() => parseMap(v2('[]', '[{"id":"m-01","to":"s-01"}]'), 'map.json')).toThrow(
       /cannot be parsed: unexpected shape/,
     );
+  });
+});
+
+describe('parseMapText и normalizeMap', () => {
+  it('parseMap равна normalizeMap(parseMapText(...)): и для v2, и для v1, и для отказов', () => {
+    const v2 = JSON.stringify(emptyMap());
+    const v1 = JSON.stringify({
+      ...emptyV1(),
+      sessions: [{ id: 's-01', status: 'failed', history: [{ status: 'failed', at: '2026-09-02T11:00:00.000Z' }] }],
+      messages: [{ id: 'm-01', from: 's-01', to: 's-02', at: 'x', text: 't', readAt: null }],
+    });
+
+    for (const raw of [v2, v1]) {
+      expect(parseMap(raw, 'map.json')).toEqual(normalizeMap(parseMapText(raw, 'map.json'), 'map.json'));
+    }
+    const failure = (run: () => unknown): string => {
+      try {
+        run();
+      } catch (error) {
+        return (error as Error).message;
+      }
+      return 'no error';
+    };
+    for (const raw of ['{', JSON.stringify({ schemaVersion: 3 })]) {
+      const viaParse = failure(() => parseMap(raw, 'map.json'));
+      expect(viaParse).toMatch(/^map map\.json cannot be parsed: /);
+      expect(failure(() => normalizeMap(parseMapText(raw, 'map.json'), 'map.json'))).toBe(viaParse);
+    }
+  });
+
+  it('parseMapText отдаёт сырой объект без разбора формы, а имя источника попадает в текст отказа', () => {
+    expect(parseMapText('{"schemaVersion":99}', 'x')).toEqual({ schemaVersion: 99 });
+    expect(() => parseMapText('not json', 'works/w-0001')).toThrow(/^map works\/w-0001 cannot be parsed: /);
+  });
+
+  it('normalizeMap идемпотентна: повторный разбор уже разобранной карты ничего не меняет', () => {
+    const v1 = {
+      ...emptyV1(),
+      sessions: [{ id: 's-01', status: 'idle', history: [{ status: 'idle', at: '2026-09-02T11:00:00.000Z' }] }],
+      messages: [{ id: 'm-01', from: 's-01', to: 's-02', at: 'x', text: 't', readAt: null }],
+    };
+    const once = normalizeMap(v1, 'map.json');
+    const snapshot = structuredClone(once);
+    const twice = normalizeMap(once, 'map.json');
+
+    expect(twice).toEqual(snapshot);
+    expect(normalizeMap(structuredClone(snapshot), 'map.json')).toEqual(snapshot);
   });
 });
 

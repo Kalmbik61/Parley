@@ -337,13 +337,27 @@ const isMessageShape =
  * v1 поднимается до v2 в памяти; на диск v2 ляжет первой же мутацией.
  */
 export function parseMap(raw: string, file: string): WorkMap {
-  let data: unknown;
-  try {
-    data = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`map ${file} cannot be parsed: ${(error as Error).message}`);
-  }
+  return normalizeMap(parseMapText(raw, file), file);
+}
 
+/**
+ * Первая половина `parseMap`: текст в сырой объект, форму не проверяет (спека хранилища 6.2). Имя источника —
+ * только для текста отказа: это файл `map.json` или работа, чьи строки собраны из базы.
+ */
+export function parseMapText(raw: string, source: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`map ${source} cannot be parsed: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * Вторая половина `parseMap`: проверка формы, подъём v1 до v2, миграции записей и проверки карты целиком
+ * (спека хранилища 6.2). Нужна отдельно потому, что карту из базы собирает `rowsToMap`, а не `JSON.parse`.
+ * Правит `data` на месте и идемпотентна: уже разобранная карта проходит без изменений.
+ */
+export function normalizeMap(data: unknown, source: string): WorkMap {
   const work = isRecord(data) ? data.work : undefined;
   const version = isRecord(data) ? data.schemaVersion : undefined;
   if (
@@ -357,7 +371,7 @@ export function parseMap(raw: string, file: string): WorkMap {
     !data.sessions.every(isSessionShape(version)) ||
     !data.messages.every(isMessageShape(version))
   ) {
-    throw new Error(`map ${file} cannot be parsed: unexpected shape`);
+    throw new Error(`map ${source} cannot be parsed: unexpected shape`);
   }
 
   if (version === 1) {
