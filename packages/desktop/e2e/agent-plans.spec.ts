@@ -336,7 +336,8 @@ test('план из журнала доходит до карточки комн
     const codexSession = currentMap.sessions.find(session => session.id === members[2])!;
     codexSession.agentPlan = { items: [], explanation: null, partial: false, updatedAt: new Date().toISOString() };
     replaceStoredMapE2E(home, project, workId, currentMap);
-    await expect(codexCard.getByRole('button', { name: 'Plan', exact: true })).toBeVisible();
+    // The write goes past the host (a second process); the host notices it within ~0.5 s, so a long timeout only covers a loaded machine.
+    await expect(codexCard.getByRole('button', { name: 'Plan', exact: true })).toBeVisible({ timeout: 30_000 });
     await codexCard.getByRole('button', { name: 'Plan', exact: true }).click();
     await expect(panel).toContainText('No personal steps published yet');
     const publishedMap = readStoredMapE2E(home, project, workId);
@@ -347,7 +348,7 @@ test('план из журнала доходит до карточки комн
       ], explanation: null, partial: false, updatedAt: new Date().toISOString(),
     };
     replaceStoredMapE2E(home, project, workId, publishedMap);
-    await expect(codexCard).toContainText('Verify published progress');
+    await expect(codexCard).toContainText('Verify published progress', { timeout: 30_000 });
     await expect(panel).toContainText('Plan · 1/2');
     await expect(panel).toContainText('Visible without sending the lead a message');
     await window.screenshot({ path: path.resolve(dirname, '../test-results/agent-plans/published-800x500.png') });

@@ -1,7 +1,4 @@
-import { readStoredMap, replaceStoredMap, type WorkMap } from '@parley/core';
-// `closeWorkDb` из корня ядра не экспортируется (его зовут хост и тесты ядра), а `exports` пакета подпути не открывает:
-// берём из собранного `dist` по относительному пути — это тот же модуль, что грузит `@parley/core` (общий дескриптор).
-import { closeWorkDb } from '../../core/dist/work/db.js';
+import { closeWorkDb, readStoredMap, replaceStoredMap, type WorkMap } from '@parley/core';
 
 /**
  * Карты работ лежат в базе `<PARLEY_HOME>/parley.db`, а не в `map.json` (хранилище на SQLite). E2E читают и подменяют
@@ -18,9 +15,10 @@ function inHome<T>(home: string, action: () => T): T {
   try {
     return action();
   } finally {
-    closeWorkDb();
+    // Переменная возвращается первой: ошибка закрытия не должна оставить чужой дом в окружении Playwright.
     if (before === undefined) delete process.env['PARLEY_HOME'];
     else process.env['PARLEY_HOME'] = before;
+    closeWorkDb();
   }
 }
 
