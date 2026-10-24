@@ -627,6 +627,11 @@ export { readProjectPreferences, setBacklogFile, setBacklogRule } from './work/p
 export type { BacklogRule, ProjectPreferences } from './work/project-preferences.js';
 
 export { PLAN_ITEM_MAX, PLAN_TEXT_MAX, PlanConflictError, activeRoomPlan, planItemSatisfied, planItemsComplete, cancelRoomPlan, reconcileRoomPlans, setRoomMode, submitPlanItem, updatePlanItem, verifyPlanItem } from './work/plans.js';
+export {
+  intendOp, settleOp, startAttempt, submitAttempt, receipt, recordCheck, coverageVerdict,
+  returnAttempt, enqueue, integrate, suspend, supersedeByAmendment, lateDefect, halt,
+  reconcileAfterRestart, resume, reserve, release, failureSignature,
+} from './work/autonomous.js';
 export { capturePlanSnapshot, flushPlanSnapshots, PlanSnapshotError } from './work/plan-snapshots.js';
 export type { PlanSnapshotFlushResult } from './work/plan-snapshots.js';
 export { proposeCompletion } from './work/proposals.js';
