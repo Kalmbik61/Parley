@@ -5,8 +5,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import type { WorkMap } from '@parley/core';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { readStoredMapE2E } from './stored-map.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
 import { seedTrust } from './trust-seed.js';
 
@@ -287,8 +289,8 @@ test.describe('сквозная проверка апгрейда Parley, офл
   const notices = (): Promise<Array<{ kind: string; text: string; ref?: unknown }>> =>
     window.evaluate(() => (globalThis as unknown as { __notices: Array<{ kind: string; text: string }> }).__notices);
 
-  const diskMap = async (workId: string, dir = project): Promise<{ sessions: Array<Record<string, unknown>>; rooms: Array<Record<string, unknown>>; plans?: Array<Record<string, unknown>> }> =>
-    JSON.parse(await readFile(path.join(dir, '.parley', 'works', workId, 'map.json'), 'utf8')) as { sessions: []; rooms: [] };
+  /** Карта работы в базе дома теста (с прежних `map.json` карты лежат там: `stored-map.ts`). */
+  const diskMap = async (workId: string, dir = project): Promise<WorkMap> => readStoredMapE2E(home, dir, workId);
 
   const hostLog = (): Promise<string> => readFile(path.join(home, 'host', 'host.log'), 'utf8').catch(() => '');
 

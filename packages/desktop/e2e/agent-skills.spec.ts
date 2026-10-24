@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { readStoredMapE2E } from './stored-map.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
@@ -123,10 +124,8 @@ test.describe('скилл parley в проекте', () => {
 
     const { workId, sessionId } = await newSession(window, project, true);
 
-    // Карта — на диске сразу; снимок работ у хоста обновляется по наблюдателю и мог отстать.
-    const map = JSON.parse(await readFile(path.join(project, '.parley', 'works', workId, 'map.json'), 'utf8')) as {
-      sessions: Array<{ id: string; worktree: { path: string } | null }>;
-    };
+    // Карта — в базе сразу; снимок работ у хоста обновляется по наблюдателю и мог отстать.
+    const map = readStoredMapE2E(home, project, workId);
     const worktree = map.sessions.find((session) => session.id === sessionId)?.worktree?.path;
     if (worktree === undefined) throw new Error('у сессии нет worktree');
 

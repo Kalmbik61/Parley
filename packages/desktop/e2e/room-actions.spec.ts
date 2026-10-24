@@ -1,9 +1,10 @@
-import { readFile, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { readStoredMapE2E } from './stored-map.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
@@ -63,8 +64,7 @@ test.describe('управление комнатой из сайдбара', () 
     return { window, workId, roomId, ids };
   }
 
-  const mapOf = async (workId: string): Promise<MapShape> =>
-    JSON.parse(await readFile(path.join(project, '.parley', 'works', workId, 'map.json'), 'utf8')) as MapShape;
+  const mapOf = async (workId: string): Promise<MapShape> => readStoredMapE2E(home, project, workId);
 
   test('Rename: поле в фокусе, Enter сохраняет; Make lead переносит ★ и пишет строку ленты; Delete… без флажка оставляет сессии', async () => {
     test.setTimeout(90_000);

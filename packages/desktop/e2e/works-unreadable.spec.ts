@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +12,10 @@ import { makeTempHome } from './tmp.js';
  * падал в первом чтении работ, и works.list не отвечал никогда: окно висело на пустом сайдбаре.
  * Теперь works.list отвечает отказом с причиной `works-unreadable`: окно показывает причину по-
  * английски, Landing не рисует и сохранённые раскладки не отсеивает (пустой список — не ответ).
+ *
+ * Карты живут в базе, а `works-index.json` — только прежний индекс: его читает переезд карт в базу на старте хоста
+ * (`migrateMapsToDb`). Нечитаемый прежний индекс переезд не пропускает: проектов не назвать, и пустая таблица работ
+ * не сошла бы за «работ нет». Отказ тот же `works-unreadable`, а сам файл остаётся как был (в `works-index.v2.json` не уходит).
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -18,7 +23,7 @@ const mainEntry = path.resolve(dirname, '../out/main/index.js');
 
 type Parley = { parley: { call: (method: string, params: unknown) => Promise<unknown> } };
 
-test.describe('битый works-index.json на старте хоста (lane-r5)', () => {
+test.describe('битый прежний works-index.json при переезде карт на старте хоста (lane-r5)', () => {
   let home: string;
   let app: ElectronApplication | null = null;
 
@@ -58,5 +63,7 @@ test.describe('битый works-index.json на старте хоста (lane-r5
     expect(listed).toContain('works-unreadable');
     expect(await readFile(layouts, 'utf8')).toBe(savedLayouts);
     expect(await readFile(index, 'utf8')).toBe('{ broken');
+    // Переезд не завершён: индекс не переименован в страховочную копию.
+    expect(existsSync(path.join(home, 'works-index.v2.json'))).toBe(false);
   });
 });

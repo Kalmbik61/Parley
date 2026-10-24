@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -8,9 +8,9 @@ import {
   type ElectronApplication,
   type Page,
 } from '@playwright/test';
-import type { WorkMap } from '@parley/core';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { readStoredMapE2E, replaceStoredMapE2E } from './stored-map.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
 import { seedTrust } from './trust-seed.js';
 
@@ -131,8 +131,7 @@ test('план из журнала доходит до карточки комн
       quiet: true,
     });
     // Задаём только привязки провайдеров; метрики и планы проходят через настоящий индекс и activity service.
-    const mapFile = path.join(project, '.parley', 'works', workId, 'map.json');
-    const map = JSON.parse(await readFile(mapFile, 'utf8')) as WorkMap;
+    const map = readStoredMapE2E(home, project, workId);
     const nativeIds = [
       'fixture-claude-a',
       'fixture-claude-b',
@@ -146,7 +145,7 @@ test('план из журнала доходит до карточки комн
     }
     // Назначение плана комнаты связывается с тем же участником, но не подменяет его собственный план.
     map.rooms.find((room) => room.id === roomId)!.mode = 'checklist';
-    map.planSeq = 1;
+    map.work.planSeq = 1;
     map.plans = [
       {
         id: 'pl-01',
@@ -177,7 +176,7 @@ test('план из журнала доходит до карточки комн
         ],
       },
     ];
-    await writeFile(mapFile, JSON.stringify(map));
+    replaceStoredMapE2E(home, project, workId, map);
     const claudeFile = path.join(claudeRoot, '-fixture', `${nativeIds[0]}.jsonl`);
     await writeFile(claudeFile, claudePlan(nativeIds[0]!, project));
     await writeFile(
@@ -331,25 +330,23 @@ test('план из журнала доходит до карточки комн
     await expect(card.getByRole('button', { name: 'Plan', exact: true })).toBeVisible();
     await expect(panel).toContainText('Plan may be incomplete');
     await expect(panel).not.toContainText('0/1');
-    // A session with no native plan still has an entry point; explicit publication uses the same map watcher.
+    // A session with no native plan still has an entry point; explicit publication goes through the database like any other map write.
     const codexCard = window.locator(`[data-participant="${members[2]}"]`);
-    const currentMap = JSON.parse(await readFile(mapFile, 'utf8')) as WorkMap;
+    const currentMap = readStoredMapE2E(home, project, workId);
     const codexSession = currentMap.sessions.find(session => session.id === members[2])!;
     codexSession.agentPlan = { items: [], explanation: null, partial: false, updatedAt: new Date().toISOString() };
-    await writeFile(`${mapFile}.next`, JSON.stringify(currentMap));
-    await rename(`${mapFile}.next`, mapFile);
+    replaceStoredMapE2E(home, project, workId, currentMap);
     await expect(codexCard.getByRole('button', { name: 'Plan', exact: true })).toBeVisible();
     await codexCard.getByRole('button', { name: 'Plan', exact: true }).click();
     await expect(panel).toContainText('No personal steps published yet');
-    const publishedMap = JSON.parse(await readFile(mapFile, 'utf8')) as WorkMap;
+    const publishedMap = readStoredMapE2E(home, project, workId);
     publishedMap.sessions.find(session => session.id === members[2])!.agentPlan = {
       items: [
         { id: '1', subject: 'Inspect the flow', status: 'completed', description: null, activeForm: null },
         { id: '2', subject: 'Verify published progress', status: 'in_progress', description: 'Visible without sending the lead a message', activeForm: null },
       ], explanation: null, partial: false, updatedAt: new Date().toISOString(),
     };
-    await writeFile(`${mapFile}.next`, JSON.stringify(publishedMap));
-    await rename(`${mapFile}.next`, mapFile);
+    replaceStoredMapE2E(home, project, workId, publishedMap);
     await expect(codexCard).toContainText('Verify published progress');
     await expect(panel).toContainText('Plan · 1/2');
     await expect(panel).toContainText('Visible without sending the lead a message');

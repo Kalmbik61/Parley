@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { readStoredMapE2E } from './stored-map.js';
 import { assertUnderTmpdir, makeTempHome, makeTempProject, trackRunHome } from './tmp.js';
 
 /**
@@ -21,6 +22,9 @@ import { assertUnderTmpdir, makeTempHome, makeTempProject, trackRunHome } from '
  * переехали `rename`-ом, работа видна в сайдбаре, `.parley/.gitignore` на месте, окно читает данные из нового дома
  * (тема из `desktop/ui.json`, настройка из `config.json` через хост), а userData остался прежним
  * `<appData>/@harnas/desktop`.
+ *
+ * Тот же старт переносит карты в базу (`<дом>/parley.db`): засеянный `map.json` после старта хоста лежит как
+ * `map.v2.json`, прежний `works-index.json` — как `works-index.v2.json`, а работа собрана из строк базы и видна в окне.
  */
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -101,7 +105,7 @@ test.describe('перенос данных harnas → parley при старте
     return { electronApp, window: await electronApp.firstWindow() };
   }
 
-  test('окно стартует: ~/.harnas и проект со старым .harnas переехали, работа видна, userData прежний', async () => {
+  test('окно стартует: ~/.harnas и проект со старым .harnas переехали, карта ушла в базу, работа видна, userData прежний', async () => {
     test.setTimeout(60_000);
     await seedLegacy();
 
@@ -113,7 +117,9 @@ test.describe('перенос данных harnas → parley при старте
     const home = path.join(userHome, '.parley');
     expect(existsSync(path.join(userHome, '.harnas'))).toBe(false);
     expect(JSON.parse(await readFile(path.join(home, 'config.json'), 'utf8'))).toEqual({ fontSize: 17 });
-    expect(existsSync(path.join(home, 'works-index.json'))).toBe(true);
+    // Прежний индекс работ переехал вместе с домом и после переезда карт в базу лежит под именем `works-index.v2.json`.
+    expect(existsSync(path.join(home, 'works-index.json'))).toBe(false);
+    expect(existsSync(path.join(home, 'works-index.v2.json'))).toBe(true);
     // Хост поднят в новом доме, а не в прежнем.
     expect(existsSync(path.join(home, 'host', 'host.sock'))).toBe(true);
 
@@ -121,7 +127,11 @@ test.describe('перенос данных harnas → parley при старте
     expect(existsSync(path.join(project, '.harnas'))).toBe(false);
     const work = path.join(project, '.parley', 'works', 'w-0001');
     expect(await readFile(path.join(work, 'artifacts', 'note.txt'), 'utf8')).toBe(NOTE);
-    expect(JSON.parse(await readFile(path.join(work, 'map.json'), 'utf8'))).toMatchObject({ work: { id: 'w-0001', title: TITLE } });
+    // Карта: файла `map.json` больше нет, он лежит как `map.v2.json` (страховка), а работа читается из базы нового дома.
+    expect(existsSync(path.join(work, 'map.json'))).toBe(false);
+    expect(JSON.parse(await readFile(path.join(work, 'map.v2.json'), 'utf8'))).toMatchObject({ work: { id: 'w-0001', title: TITLE } });
+    expect(existsSync(path.join(home, 'parley.db'))).toBe(true);
+    expect(readStoredMapE2E(home, project, 'w-0001')).toMatchObject({ work: { id: 'w-0001', title: TITLE, status: 'active' } });
     expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n');
 
     // Записи о переносах — в новом доме: дом, затем проект.
