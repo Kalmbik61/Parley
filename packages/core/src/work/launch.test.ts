@@ -28,6 +28,7 @@ import {
 import { writeBrief } from './brief.js';
 import { BROWSER_PRIORITY_RULE } from './guidance.js';
 import { customProvidersFile, writeCustomProviders, type CustomProviderRecord } from '../custom-providers.js';
+import { PROVIDERS } from '../providers.js';
 import { setResult } from './map.js';
 import { defaultSessionName } from './names.js';
 import { addRoom } from './rooms.js';
@@ -2838,11 +2839,14 @@ describe('Codex: политика одобрений, доверие к папк
     expect(codexConfigValues(plan.args)).not.toContain('sandbox_mode="workspace-write"');
   });
 
-  it('rejects an autonomous custom runner that bypasses mandatory permissions', async () => {
+  it.each([
+    ['codex', 'args'], ['codex', 'resumeArgs'], ['claude', 'args'], ['claude', 'resumeArgs'],
+  ] as const)('rejects custom autonomous %s %s', async (provider, field) => {
     const { workId, session } = await codexWith('executor');
+    session.provider = provider;
     session.workspace = { kind: 'clone', path: project, branch: 'attempt', sha: 'abc' };
     session.role = null;
-    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ codex: { args: ['-c', '{sandbox}', '{approvals}', '-c', '{developerInstructions}', '--dangerously-bypass-approvals-and-sandbox', '{prompt}'] } }));
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ [provider]: { [field]: [...PROVIDERS[provider].runner[field]!, '--unexpected-autonomous-argument'] } }));
     await expect(planLaunch(project, workId, session)).rejects.toThrow('confinement-unavailable');
   });
 
@@ -2964,4 +2968,42 @@ it('launches Claude artifact workspaces with sandbox settings and explicit read-
   expect(plan.args[plan.args.indexOf('--disallowedTools') + 1]).toBe('Edit,Write,NotebookEdit,Bash');
   const settings = JSON.parse(await readFile(plan.args[plan.args.indexOf('--settings') + 1]!, 'utf8'));
   expect(settings.sandbox).toEqual({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true });
+});
+
+it('uses workspace permissions while preserving Claude role text and engine model choices', async () => {
+  const { workId, sessionId } = await pending('claude');
+  const session = await sessionOf(workId, sessionId);
+  session.workspace = { kind: 'clone', path: project, branch: 'attempt', sha: 'abc' };
+  session.role = { source: 'builtin', name: 'planner' };
+  session.model = 'sonnet'; session.effort = 'high';
+  const plan = await planLaunch(project, workId, session);
+  expect(plan.args).not.toContain('--disallowedTools');
+  expect(plan.args[plan.args.indexOf('--append-system-prompt') + 1]).toContain('Your role in this workspace: Planner');
+  expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('sonnet');
+  expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('high');
+});
+
+it('ignores native Codex role permissions but retains role text and engine model/effort', async () => {
+  const { workId, sessionId } = await pending('codex');
+  const session = await sessionOf(workId, sessionId);
+  session.workspace = { kind: 'clone', path: project, branch: 'attempt', sha: 'abc' };
+  session.role = { source: 'codex', name: 'review' };
+  session.model = 'gpt-6.1-sol'; session.effort = 'high';
+  const roleCatalog = { roles: [{ id: 'codex:review', source: 'codex' as const, provider: 'codex' as const, name: 'Review', description: '', path: '/fixture.toml', prompt: 'Role text remains', model: 'role-model', effort: 'xhigh', sandboxMode: 'read-only' as const, readOnly: true }], diagnostics: [], partial: false };
+  const plan = await planLaunch(project, workId, session, { roleCatalog });
+  expect(plan.args).toContain('sandbox_mode="workspace-write"');
+  expect(plan.args).not.toContain('sandbox_mode="read-only"');
+  expect(plan.args).toContain('approval_policy="never"');
+  expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('gpt-6.1-sol');
+  expect(plan.args).toContain('model_reasoning_effort="high"');
+  expect(plan.args.join(' ')).toContain('Role text remains');
+});
+
+it('refuses autonomous Claude roles that require native permission delivery', async () => {
+  const { workId, sessionId } = await pending('claude');
+  const session = await sessionOf(workId, sessionId);
+  session.workspace = { kind: 'clone', path: project, branch: 'attempt', sha: 'abc' };
+  session.role = { source: 'claude', name: 'native-reviewer' };
+  const roleCatalog = { roles: [{ id: 'claude:native-reviewer', source: 'claude' as const, provider: 'claude' as const, name: 'native-reviewer', description: '', path: '/fixture/native-reviewer.md', nativeAgent: 'native-reviewer', readOnly: false }], diagnostics: [], partial: false };
+  await expect(planLaunch(project, workId, session, { roleCatalog })).rejects.toThrow('confinement-unavailable');
 });

@@ -25,6 +25,7 @@ import { bothEnv } from '../names.js';
 import { userClaudeConfigDir, wantLinks } from '../custom-provider-dir.js';
 import {
   EFFORT_TOKEN,
+  PROVIDERS,
   loadProviders,
   providerCompatibilityError,
   isClaudeCode,
@@ -223,7 +224,7 @@ async function plan(
   // Immutable for this launch and its MCP child, including resume.
   const { config: launchConfig } = await loadConfig();
   const nativeContextRevision = randomUUID();
-  const entry = await entryOf(session.provider);
+  let entry = await entryOf(session.provider);
   const skillNavigator = launchConfig.skillNavigator;
   // Режим одобрений пишущих ролей Codex: решение хоста (проба версии) важнее настройки; и политика, и хуки идут от него.
   const writeApprovals = options.codexWriteApprovals ?? launchConfig.codexWriteApprovals;
@@ -238,12 +239,19 @@ async function plan(
   // Read-only Codex ограничивает запись, но не чтение вне cwd; чтение только артефактов — правило брифа, не граница изоляции чтения.
   const workspace = session.workspace;
   if (workspace && !['codex', 'claude'].includes(session.provider)) throw new Error('confinement-unavailable: unsupported autonomous provider');
+  if (workspace) {
+    const trusted = entry.id === 'codex' ? PROVIDERS.codex.runner : PROVIDERS.claude.runner;
+    if ((['args', 'resumeArgs'] as const).some(key => JSON.stringify(entry.runner[key] ?? []) !== JSON.stringify(trusted[key] ?? [])))
+      throw new Error('confinement-unavailable: autonomous runner arguments must match the built-in policy');
+    entry = { ...entry, runner: { ...entry.runner, args: [...(trusted.args ?? [])], resumeArgs: [...(trusted.resumeArgs ?? [])] } };
+  }
 
   const role = await prepareSessionRole(cwd, entry, { roleId: roleId(sessionRole(session)), provider: session.provider, mode: 'existing',
     ...(options.model === undefined && session.model === undefined ? {} : { model: options.model === undefined ? session.model! : options.model }),
     ...(options.effort === undefined && session.effort === undefined ? {} : { effort: options.effort === undefined ? session.effort! : options.effort }),
-    ...(options.requiredPermissions ? { requiredPermissions: options.requiredPermissions } : {}),
+    ...(!workspace && options.requiredPermissions ? { requiredPermissions: options.requiredPermissions } : {}),
   }, options.roleCatalog);
+  if (workspace && role.nativeAgent !== null) throw new Error('confinement-unavailable: autonomous roles must be delivered as text');
 
   // Тихий старт: задачи у сессии нет — бриф уходит контекстом в системный
   // промпт, а не первым сообщением, и агент ждёт запроса пользователя
@@ -262,15 +270,6 @@ async function plan(
 
   // Navigator launches isolate the generated settings file per session; off keeps the work path.
   const template = (resuming ? entry.runner.resumeArgs : entry.runner.args) ?? [];
-  if (workspace && (entry.id === 'codex'
-    ? !template.includes('{sandbox}') || !template.includes('{approvals}')
-    : !template.includes('{settingsFile}') || workspace.kind === 'artifacts' && !template.includes('{disallowedTools}')))
-    throw new Error('confinement-unavailable: autonomous policy cannot reach the runner');
-  if (workspace && template.some(raw => {
-    const arg = raw.startsWith('--config=') ? raw.slice(9) : raw.startsWith('-c') && raw !== '-c' ? raw.slice(2) : raw;
-    return ['--dangerously-bypass-approvals-and-sandbox', '--yolo', '--approve-for-me', '--not-so-yolo', '--full-auto', '--dangerously-skip-permissions', '--allow-dangerously-skip-permissions', '--sandbox', '-s', '--ask-for-approval', '-a', '--permission-mode'].some(flag => arg === flag || arg.startsWith(`${flag}=`)) ||
-      /^-(?:s|a)[^-].+/.test(arg) || /^\s*(approval_policy|approvals_reviewer|sandbox_mode|sandbox_workspace_write|permissions)[.\s=]/.test(arg);
-  })) throw new Error('confinement-unavailable: autonomous runner overrides mandatory permissions');
 
   // Звонок доходит только туда, куда уехал флаг канала: без `{channel}` в
   // шаблоне ставить `PARLEY_CHANNEL` некому и незачем.
@@ -284,7 +283,7 @@ async function plan(
   }
 
   // Нативная роль Claude берёт список инструментов у себя: Skill и `find_skill` ей не гарантированы (спека, 6.1).
-  const nativeClaudeRole = role.nativeAgent !== null || (isClaudeCode(entry) && options.layer?.nativeClaudeRole === true);
+  const nativeClaudeRole = !workspace && (role.nativeAgent !== null || (isClaudeCode(entry) && options.layer?.nativeClaudeRole === true));
   // Сервер `parley`, а с ним `find_skill`, доходит до агента только шаблоном с `{mcpConfig}`.
   const mcpRoute = template.includes('{mcpConfig}') && entry.runner.mcpConfig !== undefined;
 
@@ -409,7 +408,7 @@ async function plan(
       : codexPolicyArgs(role, writeApprovals);
     if (trust !== undefined) subs.trust = trust;
   }
-  if ((role.readOnly || workspace?.kind === 'artifacts') && isClaudeCode(entry)) subs.disallowedTools = workspace?.kind === 'artifacts' ? 'Edit,Write,NotebookEdit,Bash' : 'Edit,Write,NotebookEdit';
+  if ((workspace ? workspace.kind === 'artifacts' : role.readOnly) && isClaudeCode(entry)) subs.disallowedTools = workspace?.kind === 'artifacts' ? 'Edit,Write,NotebookEdit,Bash' : 'Edit,Write,NotebookEdit';
   assertRoleDelivery(entry, role, [template]);
   if (template.includes('{settingsFile}')) {
     // Плагины пользователя lean выключает вместе с модом jev одним списком. Файл — свой у сессии: в общем файле работы
