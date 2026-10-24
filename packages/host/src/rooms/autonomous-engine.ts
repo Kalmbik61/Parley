@@ -191,6 +191,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
   function sessionLabel(loc: Location, attemptId: string, op: AutonomousOp) { return `${loc.planId}/${attemptId}/${op.payload.role}/${op.key}`; }
   const commitMessage = (loc: Location, op: AutonomousOp) => `${loc.planId} ${op.key} ${op.attemptId}`;
   const attemptRef = (loc: Location, attemptId: string) => `refs/attempts/${loc.planId}/${attemptId}`;
+  const candidateRef = (loc: Location, attemptId: string) => `refs/candidates/${loc.planId}/${attemptId}`;
   async function intend(loc: Location, kind: AutonomousOp['kind'], attemptId: string | null, payload: Record<string, unknown>): Promise<AutonomousOp> {
     const plan = await change(loc, current => intendOp(current, { ...context(current, at()), kind, attemptId, payload }));
     return plan.autonomous!.ops.at(-1)!;
@@ -553,7 +554,6 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
         if (await exists(path.join(dir, '.git', 'MERGE_HEAD'))) await git(loc, ['-C', dir, 'merge', '--abort']);
         await git(loc, ['-C', dir, 'reset', '--hard', i.verifiedHead]);
         await git(loc, ['-C', dir, 'clean', '-fdx']);
-        await bare(loc, ['update-ref', `refs/heads/${i.branch}`, i.verifiedHead]);
       } catch (error) {
         await settled(loc, op, 'failed', { reason: errorText(error) });
       }
@@ -573,7 +573,6 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
         const dir = integrationDirectory(loc), sha = String(op.payload.sha ?? plan.autonomous!.integration.verifiedHead);
         if (await exists(path.join(dir, '.git', 'MERGE_HEAD'))) await git(loc, ['-C', dir, 'merge', '--abort']);
         if (await exists(dir)) await git(loc, ['-C', dir, 'reset', '--hard', sha]);
-        await bare(loc, ['update-ref', `refs/heads/${plan.autonomous!.integration.branch}`, sha]);
         return { sha };
       });
     }
@@ -594,6 +593,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     if (plan.autonomous!.ops.some(op => op.kind === 'clone' && op.payload.purpose === 'mirror' && op.payload.sha === i.verifiedHead && op.state === 'done')) return;
     const op = await intend(loc, 'clone', null, { purpose: 'mirror', sha: i.verifiedHead });
     await effect(loc, op, async () => {
+      await bare(loc, ['update-ref', `refs/heads/${i.branch}`, i.verifiedHead]);
       // Fetch without '+' refuses a non-fast-forward project ref and never checks out its tree.
       await git(loc, ['-C', loc.projectPath, 'fetch', '--no-tags', '--', attemptsEngineGitPath(loc.projectPath, loc.workId), `refs/heads/${i.branch}:refs/heads/${i.branch}`]);
       return { sha: i.verifiedHead };
@@ -675,8 +675,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
             throw new Error('integration-conflict');
           }
           const sha = (await git(loc, ['-C', dir, 'rev-parse', 'HEAD'])).toString('utf8').trim();
-          await bare(loc, ['fetch', '--no-tags', '--', dir, `refs/heads/${a.integration.branch}`]);
-          await bare(loc, ['update-ref', `refs/heads/${a.integration.branch}`, sha, a.integration.verifiedHead]);
+          await bare(loc, ['fetch', '--no-tags', '--', dir, `+HEAD:${candidateRef(loc, attempt.id)}`]);
           return { sha };
         }); } catch (error) {
           if (!conflict || (await load(loc)).autonomous!.ops.find(row => row.key === mergeOperation.key)?.state !== 'failed') throw error;
@@ -760,7 +759,6 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
   async function recover(loc: Location): Promise<void> {
     const plan = await load(loc), map = await io.readMap(loc.projectPath, loc.workId);
     const observations: Parameters<typeof reconcileAfterRestart>[1]['observations'] = [];
-    let needsAbort = plan.autonomous!.ops.some(op => op.kind === 'merge-abort' && op.state === 'intended');
     for (const op of plan.autonomous!.ops.filter(row => row.state === 'intended')) {
       let result: Record<string, unknown> | null = null;
       if (op.kind === 'create-session' && op.attemptId) {
@@ -786,42 +784,29 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       }
       observations.push({ key: op.key, outcome: result ? 'done' : 'failed', result: result ?? { reason: 'restart-unconfirmed' } });
     }
-    let head = plan.autonomous!.integration.verifiedHead, parents: string[] = [], opKey: string | null = null;
+    const integration = plan.autonomous!.integration;
+    let head = integration.verifiedHead, parents: string[] = [], opKey: string | null = null;
+    let branchMismatch = false;
     if (await exists(attemptsEngineGitPath(loc.projectPath, loc.workId))) {
-      const observed = await refSha(loc, `refs/heads/${plan.autonomous!.integration.branch}`);
-      if (observed) {
-        head = observed;
-        const commit = await text(loc, ['cat-file', 'commit', head]);
-        parents = [...commit.matchAll(/^parent (.+)$/gm)].map(match => match[1]!);
-        opKey = plan.autonomous!.ops.find(op => ['merge', 'noop-integration'].includes(op.kind) && commit.split('\n\n').slice(1).join('\n\n').trim() === commitMessage(loc, op))?.key ?? null;
-      }
-    }
-    const dir = integrationDirectory(loc);
-    if (await exists(path.join(dir, '.git'))) {
-      const merging = await exists(path.join(dir, '.git', 'MERGE_HEAD'));
-      const checkoutHead = (await git(loc, ['-C', dir, 'rev-parse', 'HEAD'])).toString('utf8').trim();
-      const commit = (await git(loc, ['-C', dir, 'cat-file', 'commit', checkoutHead])).toString('utf8').trim();
-      const merge = plan.autonomous!.ops.findLast(op => op.kind === 'merge' && op.state !== 'failed' && op.attemptId === plan.autonomous!.integration.queue[0]);
-      const checkoutParents = [...commit.matchAll(/^parent (.+)$/gm)].map(match => match[1]!);
-      const witnessed = merge && commit.split('\n\n').slice(1).join('\n\n').trim() === commitMessage(loc, merge) &&
-        JSON.stringify(checkoutParents) === JSON.stringify([plan.autonomous!.integration.verifiedHead, attemptOf(plan, merge.attemptId!).sha]);
-      if (!merging && witnessed) {
-        await bare(loc, ['fetch', '--no-tags', '--', dir, 'HEAD']);
-        await bare(loc, ['update-ref', `refs/heads/${plan.autonomous!.integration.branch}`, checkoutHead]);
-        head = checkoutHead; parents = checkoutParents; opKey = merge.key;
-      } else if (merging || checkoutHead !== plan.autonomous!.integration.verifiedHead && !witnessed) {
-        head = checkoutHead; parents = []; opKey = null;
-        needsAbort = true;
+      const branchHead = await refSha(loc, `refs/heads/${integration.branch}`);
+      branchMismatch = branchHead !== integration.verifiedHead;
+      const operation = plan.autonomous!.ops.findLast(op => ['merge', 'noop-integration'].includes(op.kind) && op.state !== 'failed' && op.attemptId === integration.queue[0]);
+      if (operation?.kind === 'merge') {
+        const observed = await refSha(loc, candidateRef(loc, operation.attemptId!));
+        if (observed) {
+          head = observed;
+          const commit = await text(loc, ['cat-file', 'commit', head]);
+          parents = [...commit.matchAll(/^parent (.+)$/gm)].map(match => match[1]!);
+          if (commit.split('\n\n').slice(1).join('\n\n').trim() === commitMessage(loc, operation)) opKey = operation.key;
+        }
       }
     }
     await change(loc, (current, map) => {
-      const next = reconcileAfterRestart(current, { ...context(current, at()), observations, integrationHead: { sha: head, parents, opKey } });
+      let next = reconcileAfterRestart(current, { ...context(current, at()), observations, integrationHead: { sha: head, parents, opKey } });
+      if (branchMismatch) next = halt(next, { ...context(next, at()), reason: 'restart', detail: `Integration branch ${integration.branch} differs from verifiedHead; inspect before resuming` });
       for (const op of next.autonomous!.ops.filter(row => row.kind === 'create-session' && row.state === 'done')) joinCreated(map, next, String(op.result!.sessionId));
       return next;
     });
-    if (needsAbort && !(await load(loc)).autonomous!.ops.some(op => op.kind === 'merge-abort' && op.state === 'intended'))
-      await intend(loc, 'merge-abort', plan.autonomous!.integration.queue[0] ?? null, { sha: plan.autonomous!.integration.verifiedHead });
-    await rollback(loc);
     await drainSessions(loc);
   }
   async function cycle(projectPath: string, workId: string): Promise<void> {
@@ -831,11 +816,22 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     for (const original of map.plans?.filter(active) ?? []) {
       const loc = { projectPath, workId, planId: original.id };
       await drainSessions(loc);
-      await rollback(loc);
       let plan = await load(loc);
       if (plan.autonomous!.halted) continue;
+      await rollback(loc);
       if (!['codex', 'claude'].includes(options.provider)) {
         await change(loc, current => halt(current, { ...context(current, at()), reason: 'confinement', detail: `Unsupported executor provider: ${options.provider}` }));
+        continue;
+      }
+      const integrationVerifier = plan.autonomous!.ops.findLast(op => op.kind === 'launch' && op.state === 'done' && op.payload.purpose === 'integration-verifier' &&
+        !plan.autonomous!.ops.some(end => ['stop-session', 'close-session'].includes(end.kind) && end.state === 'done' && end.payload.sessionId === op.payload.sessionId));
+      if (integrationVerifier && io.now().getTime() - Date.parse(integrationVerifier.settledAt ?? integrationVerifier.at) > plan.autonomous!.budget.limits.minutesPerAttempt * 60_000) {
+        const sessionId = String(integrationVerifier.payload.sessionId);
+        const session = map.sessions.find(row => row.id === sessionId);
+        const stop = await intend(loc, 'stop-session', integrationVerifier.attemptId, { sessionId });
+        await sessionOperation(loc, stop);
+        await change(loc, current => halt(current, { ...context(current, at()), reason: 'stuck', detail: `Integration verifier ${sessionId}: ${session?.stuck ? `stuck ${session.stuck.kind} since ${session.stuck.since}` : 'minutesPerAttempt exceeded'}` }));
+        await drainSessions(loc);
         continue;
       }
       const expired = plan.autonomous!.attempts.find(attempt => ['starting', 'running', 'checking'].includes(attempt.status) && io.now().getTime() - Date.parse(attempt.startedAt) > plan.autonomous!.budget.limits.minutesPerAttempt * 60_000);
