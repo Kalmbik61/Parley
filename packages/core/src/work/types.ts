@@ -196,7 +196,9 @@ export interface AutonomousDraft {
 /**
  * POST /agent/attempts: токен в Authorization: Bearer, актор и работа определяются хостом.
  * Хост повторно проверяет права, режим и rev; возвращает {ok:true,result} либо
- * {ok:false,error:{code,message}}. requestKey идемпотентен для предложения этой сессии;
+ * {ok:false,error:{code,message}}. requestKey — sha256 канонического JSON
+ * {roomId, planId: planId ?? null, rev: rev ?? null, text, draft: plan}, вычисленный ядром;
+ * он идемпотентен для предложения этой сессии;
  * amendment сохраняет состояние исполнения до принятия человеком, без повторной инициализации.
  */
 export type AttemptChannelRequest =

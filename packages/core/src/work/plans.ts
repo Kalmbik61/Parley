@@ -634,7 +634,7 @@ export function verifyPlanItem(
 ): void {
   edit(map, (draft) => {
     const plan = mutablePlan(draft, id, rev, actor);
-    if (plan.mode === "autonomous" && actor !== ENGINE)
+    if (plan.mode === "autonomous")
       throw new RoomRuleError("autonomous plan is driven by the engine");
     const item = itemOf(plan, itemId);
     const humanReturn =
@@ -642,15 +642,11 @@ export function verifyPlanItem(
       verdict === "returned" &&
       ["done", "verified"].includes(item.status);
     if (
-      (plan.mode !== "verified" && plan.mode !== "autonomous") ||
+      plan.mode !== "verified" ||
       (!humanReturn && (plan.status !== "active" || item.status !== "done"))
     )
       throw new PlanConflictError();
-    if (
-      actor !== HUMAN &&
-      !(plan.mode === "autonomous" && actor === ENGINE) &&
-      (actor !== item.verifier || actor === item.owner)
-    )
+    if (actor !== HUMAN && (actor !== item.verifier || actor === item.owner))
       throw new RoomRuleError("only the independent verifier can verify");
     if (!["verified", "returned"].includes(verdict) || !text(note))
       throw new RoomRuleError("verification needs a note");

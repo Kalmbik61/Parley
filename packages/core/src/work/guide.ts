@@ -75,10 +75,10 @@ This is the stage 1 exception to the explicit human consent rule for session clo
 agents do not create or close autonomous workers/verifiers themselves.
 The lead decomposes the goal into items with criteria and check specifications, assigns
 ENGINE (engine) as every owner and verifier, and proposes the plan and budget through
-propose_decision(room, text, plan, requestKey). plan.autonomous contains budget limits,
+propose_decision(room, text, plan). plan.autonomous contains budget limits,
 checks (id, item, argv, cwd, env, input paths, timeoutMs), and coverage. Give every criterion
-nonempty coverage with that item's check IDs and/or verifier. requestKey is a client
-idempotency key: keep it unchanged when retrying the same proposal. For an amendment,
+nonempty coverage with that item's check IDs and/or verifier. Retry with the same draft and decision text;
+core derives the idempotency key automatically. For an amendment,
 include the current plan id and rev (or top-level planId/rev); the host preserves execution
 state until human acceptance. The host pins git facts and frozen inputs in the proposal;
 human acceptance is Go. Do not write code as the autonomous lead. Read manifests and cards,

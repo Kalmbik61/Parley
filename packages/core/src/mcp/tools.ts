@@ -548,7 +548,6 @@ export const TOOLS: Tool[] = [
       properties: {
         room: { type: 'string', description: 'Room id from get_map.' },
         plan: PLAN_DRAFT_SCHEMA,
-        requestKey: { type: 'string', minLength: 1, maxLength: 128, description: 'Required for autonomous proposals: a client idempotency key; keep it unchanged when retrying the same request.' },
         kind: { type: 'string', enum: ['decision', 'completion'] },
         planId: { type: 'string', pattern: '^pl-[0-9]+$', maxLength: 128 },
         rev: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },

@@ -263,7 +263,7 @@ describe('бриф: роль в комнате', () => {
     expect(brief).toContain('check specifications');
     expect(brief).toContain('budget');
     expect(brief).toContain('propose_decision');
-    expect(brief).toContain('requestKey');
+    expect(brief).not.toContain('requestKey');
     expect(brief).toContain('manifests and cards');
     expect(brief).toContain('Do not write code');
     expect(brief).not.toContain('Accepted — hand out the parts');

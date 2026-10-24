@@ -184,7 +184,7 @@ describe("autonomous plan rules", () => {
     // A room mode change must not reopen legacy mutation of the accepted autonomous plan.
     map.rooms[0]!.mode = "verified";
     const before = JSON.stringify(map);
-    for (const actor of ["s-01", "s-02", "s-03", HUMAN]) {
+    for (const actor of ["s-01", "s-02", "s-03", HUMAN, ENGINE]) {
       for (const operation of [
         () => updatePlanItem(map, "pl-01", 0, 1, actor, "in_progress"),
         () => submitPlanItem(map, "pl-01", 0, 1, actor, evidence),
@@ -202,32 +202,29 @@ describe("autonomous plan rules", () => {
     ).not.toThrow();
     expect(JSON.stringify(map)).toBe(before);
   });
-  it("allows the core engine verifier and leaves completion to the engine", () => {
+  it("refuses participant and ENGINE verification even for a done autonomous item", () => {
     const map = autonomousMap();
-    acceptRoomPlan(
-      map,
-      proposedRoomPlan(map, "r-01", "s-01", autonomousDraft()),
-      AT,
-    );
-    const item = map.plans![0]!.items[0]!;
-    item.status = "done";
-    item.evidence = evidence;
-    verifyPlanItem(
-      map,
-      "pl-01",
-      0,
-      1,
-      ENGINE,
-      "verified",
-      "Integrated with full coverage",
-      AT,
-    );
-    expect(map.plans![0]!.items[0]!.log.at(-1)).toMatchObject({
-      by: ENGINE,
-      status: "verified",
-      note: "Integrated with full coverage",
-    });
-    expect(map.plans![0]!.status).toBe("active");
+    const input = autonomousDraft();
+    input.items.push({ ...input.items[0]!, id: 2, after: [1] });
+    acceptRoomPlan(map, proposedRoomPlan(map, "r-01", "s-01", input), AT);
+    map.plans![0]!.items[0]!.status = "done";
+    map.plans![0]!.items[0]!.evidence = evidence;
+    const before = JSON.stringify(map);
+    for (const actor of ["s-02", ENGINE])
+      expect(() =>
+        verifyPlanItem(
+          map,
+          "pl-01",
+          0,
+          1,
+          actor,
+          "verified",
+          "Claimed integrated",
+          AT,
+        ),
+      ).toThrow("autonomous plan is driven by the engine");
+    expect(JSON.stringify(map)).toBe(before);
+    expect(map.plans![0]!.items[1]!.status).toBe("waiting");
   });
   it.each([
     [

@@ -1,4 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { createHash } from "node:crypto";
 import { DEFAULT_CONFIG, loadConfig } from "../config.js";
 import { PageError } from "../work/context-pages.js";
 import {
@@ -250,6 +251,16 @@ const names = new Set(PLAN_TOOLS.map((tool) => tool.name));
 export const isPlanTool = (name: string): boolean => names.has(name);
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (record(value))
+    return `{${Object.keys(value)
+      .filter((key) => value[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`)
+      .join(",")}}`;
+  return JSON.stringify(value) ?? "null";
+}
 function keys(
   value: Record<string, unknown>,
   allowed: readonly string[],
@@ -392,23 +403,12 @@ export async function planTool(
         requireOpenRoom(map, args.room).mode === "autonomous" &&
         args.kind !== "completion"
       ) {
-        keys(args, [
-          "room",
-          "text",
-          "plan",
-          "kind",
-          "planId",
-          "rev",
-          "requestKey",
-        ]);
+        keys(args, ["room", "text", "plan", "kind", "planId", "rev"]);
         if (
           !validText(args.text) ||
-          !validText(args.requestKey, 128) ||
           (args.kind !== undefined && args.kind !== "decision")
         )
-          throw new RoomRuleError(
-            "autonomous proposals need text and a stable requestKey",
-          );
+          throw new RoomRuleError("autonomous proposals need decision text");
         const input = draft(args.plan);
         if (
           (args.planId !== undefined && args.planId !== input.id) ||
@@ -427,13 +427,24 @@ export async function planTool(
         }
         const plan = input as PlanDraft & { autonomous: AutonomousDraft };
         validateAutonomousDraft(map, args.room, actor, plan, args.text.length);
+        const requestKey = createHash("sha256")
+          .update(
+            canonical({
+              roomId: args.room,
+              planId: plan.id ?? null,
+              rev: plan.rev ?? null,
+              text: args.text,
+              draft: plan,
+            }),
+          )
+          .digest("hex");
         return await sendAttemptRequest(
           context,
           {
             action: "propose-plan",
             roomId: args.room,
             text: args.text,
-            requestKey: args.requestKey,
+            requestKey,
             plan,
             ...(plan.id === undefined
               ? {}

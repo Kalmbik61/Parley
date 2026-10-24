@@ -306,7 +306,6 @@ describe("autonomous agent channel", () => {
     const args = {
       room: "r-01",
       text: "Go",
-      requestKey: "proposal-1",
       plan: autonomous,
     };
     for (let repeat = 0; repeat < 2; repeat++) {
@@ -318,17 +317,61 @@ describe("autonomous agent channel", () => {
         action: "propose-plan",
         roomId: "r-01",
         text: "Go",
-        requestKey: "proposal-1",
+        requestKey: expect.stringMatching(/^[a-f0-9]{64}$/),
         plan: autonomous,
       },
       {
         action: "propose-plan",
         roomId: "r-01",
         text: "Go",
-        requestKey: "proposal-1",
+        requestKey: expect.stringMatching(/^[a-f0-9]{64}$/),
         plan: autonomous,
       },
     ]);
+    expect(requests[0]!.body).toMatchObject({
+      requestKey:
+        "edfeb8f9ec75edadc1ad8ccc988dfa3022958e991441cb25133491e2a7658209",
+    });
+    const reordered = {
+      autonomous: {
+        coverage: autonomous.autonomous.coverage,
+        checks: autonomous.autonomous.checks,
+        budget: {
+          concurrent: 2,
+          sessions: 6,
+          minutesPerAttempt: 10,
+          repairWaves: 2,
+          attemptsPerItem: 3,
+        },
+      },
+      items: autonomous.items,
+      goal: autonomous.goal,
+      mode: autonomous.mode,
+    };
+    expect(
+      (await call("s-01", "propose_decision", { ...args, plan: reordered }))
+        .failed,
+    ).toBe(false);
+    expect(requests.at(-1)!.body).toEqual(requests[0]!.body);
+    expect(
+      (
+        await call("s-01", "propose_decision", {
+          ...args,
+          plan: { ...autonomous, goal: "Changed scope" },
+        })
+      ).failed,
+    ).toBe(false);
+    expect(
+      (requests.at(-1)!.body as { requestKey: string }).requestKey,
+    ).not.toBe((requests[0]!.body as { requestKey: string }).requestKey);
+    const changedText = await call("s-01", "propose_decision", {
+      ...args,
+      text: "Corrected decision wording",
+    });
+    expect(changedText.failed, changedText.text).toBe(false);
+    expect(
+      (requests.at(-1)!.body as { requestKey: string }).requestKey,
+    ).not.toBe((requests[0]!.body as { requestKey: string }).requestKey);
     expect(JSON.stringify(await readMap(project, context.workId))).toBe(before);
     await updateMap(project, context.workId, (map) => {
       map.rooms[0]!.mode = "verified";
@@ -338,7 +381,6 @@ describe("autonomous agent channel", () => {
     const amendment = { ...autonomous, id: "pl-01", rev: 0 };
     const result = await call("s-01", "propose_decision", {
       ...args,
-      requestKey: "amendment-1",
       plan: amendment,
     });
     expect(result.failed, result.text).toBe(false);
@@ -346,7 +388,8 @@ describe("autonomous agent channel", () => {
       action: "propose-plan",
       roomId: "r-01",
       text: "Go",
-      requestKey: "amendment-1",
+      requestKey:
+        "dc1d141119cde0b965a93d83e3f79a28c87b35b61a7b68bfb2160612d87d4974",
       planId: "pl-01",
       rev: 0,
       plan: amendment,
@@ -376,12 +419,12 @@ describe("autonomous agent channel", () => {
       [
         "s-02",
         "propose_decision",
-        { room: "r-01", text: "Go", requestKey: "p1", plan: autonomous },
+        { room: "r-01", text: "Go", plan: autonomous },
       ],
       [
         "s-01",
         "propose_decision",
-        { room: "r-01", text: "Go", plan: autonomous },
+        { room: "r-01", text: "Go", requestKey: "forged", plan: autonomous },
       ],
     ] as const)
       expect((await call(actor, name, args)).failed, name).toBe(true);
@@ -469,7 +512,6 @@ describe("autonomous agent channel", () => {
           await call("s-01", "propose_decision", {
             room: "r-01",
             text: "Change",
-            requestKey: "amend-2",
             plan,
           })
         ).failed,
@@ -477,13 +519,37 @@ describe("autonomous agent channel", () => {
     expect(requests).toHaveLength(0);
     expect(JSON.stringify(await readMap(project, context.workId))).toBe(before);
   });
+  it("hashes numeric coverage keys in canonical lexical order", async () => {
+    const requests = attemptChannel();
+    await updateMap(project, context.workId, (map) => {
+      map.rooms[0]!.mode = "autonomous";
+    });
+    const plan = {
+      ...autonomous,
+      items: [2, 10].map((id) => ({ ...autonomous.items[0]!, id })),
+      autonomous: {
+        ...autonomous.autonomous,
+        checks: [],
+        coverage: { 2: { 0: ["verifier"] }, 10: { 0: ["verifier"] } },
+      },
+    };
+    const result = await call("s-01", "propose_decision", {
+      room: "r-01",
+      text: "Go",
+      plan,
+    });
+    expect(result.failed, result.text).toBe(false);
+    expect(requests[0]!.body).toMatchObject({
+      requestKey:
+        "fc839279a2260f54cc97caedbaccaceec1398503e5c8a03e35b50c022eb183f4",
+    });
+  });
   it("accepts top-level planId/rev for an autonomous amendment", async () => {
     await autonomousAccepted();
     const requests = attemptChannel();
     const result = await call("s-01", "propose_decision", {
       room: "r-01",
       text: "Amend",
-      requestKey: "amend-top",
       planId: "pl-01",
       rev: 0,
       plan: autonomous,
@@ -493,7 +559,7 @@ describe("autonomous agent channel", () => {
       action: "propose-plan",
       planId: "pl-01",
       rev: 0,
-      requestKey: "amend-top",
+      requestKey: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
   });
   it("refuses legacy plan_* tools for all autonomous participants", async () => {
@@ -557,7 +623,9 @@ describe("autonomous agent channel", () => {
   });
   it("keeps completed attempt cards readable and explains invalid cursors", async () => {
     await autonomousAccepted();
-    await updateMap(project, context.workId, (map) => { map.plans![0]!.status = "completed"; });
+    await updateMap(project, context.workId, (map) => {
+      map.plans![0]!.status = "completed";
+    });
     const result = await call("s-01", "attempt_status", {});
     expect(result.failed, result.text).toBe(false);
     expect(JSON.parse(result.text).attempts[0].id).toBe("at-0001");

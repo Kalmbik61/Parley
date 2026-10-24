@@ -47,7 +47,7 @@ describe('системная вставка', () => {
     expect(text).toContain('attempt_*');
     expect(text).toContain('engine');
     expect(text).toContain('engine creates and closes');
-    expect(GUIDE).toContain('requestKey');
+    expect(GUIDE).toContain('same draft');
     expect(GUIDE).toContain('every criterion');
     expect(GUIDE).toContain('code');
     expect(GUIDE).toContain('manifests and cards');
