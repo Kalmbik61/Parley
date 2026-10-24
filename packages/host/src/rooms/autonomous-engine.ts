@@ -6,7 +6,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import {
   ENGINE, HUMAN, addMember, cancelRoomPlan, coverageVerdict, enqueue, failureSignature, halt, intendOp,
-  liveLead, parleyNote, planItemsComplete, proposeCompletion, PROPOSAL_TEXT_MAX, PlanConflictError, ProposalConflictError, readMap, receipt, reconcileAfterRestart, recordCheck, resolveProposal,
+  liveLead, parleyNote, planItemsComplete, proposeCompletion, PROPOSAL_TEXT_MAX, PlanConflictError, ProposalConflictError, RoomRuleError, readMap, receipt, reconcileAfterRestart, recordCheck, resolveProposal,
   integrate, returnAttempt, settleOp, startAttempt, submitAttempt, supersedeByAmendment, updateMap, workPaths,
   type AutonomousOp, type CheckResult, type HandoffManifest, type PlanAttempt,
   type RoomPlan, type WorkMap,
@@ -88,6 +88,11 @@ export function resolveAutonomousProposal(
   const room = map.rooms.find(row => row.id === roomId);
   const proposal = room?.proposal as AttemptsProposal | null | undefined;
   const amendment = proposal?.autonomousAmendment;
+  if (action === 'return' && proposal?.kind === 'completion' && map.plans?.some(plan => plan.id === proposal.planId && plan.mode === 'autonomous')) {
+    if (proposal.id !== proposalId || options?.rev !== proposal.rev || options?.planId !== proposal.planId || options?.planRev !== proposal.planRev)
+      throw new ProposalConflictError('plan identity/revision must match the displayed proposal');
+    throw new RoomRuleError('autonomous-completion-needs-item: select an item to return');
+  }
   if (action !== 'accept' || !amendment) return resolveProposal(map, roomId, proposalId, action, options, now).messageId;
   // Validate the exact card the human saw before changing either revision.
   if (proposal!.id !== proposalId || options?.rev !== proposal!.rev || options?.planId !== proposal!.plan?.id || options?.planRev !== proposal!.plan?.rev) throw new ProposalConflictError('plan identity/revision must match the displayed proposal');

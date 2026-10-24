@@ -8,7 +8,7 @@ import { addRoom, addSession, archiveRoom, cancelRoomPlan, ENGINE, HUMAN, parseM
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAutonomousEngine, resolveAutonomousProposal, type EngineIO } from './autonomous-engine.js';
 import { attemptsEngineGitPath, type AttemptsProposal } from '../agent/attempts-endpoint.js';
-import { resumeAutonomousPlan } from './rooms-service.js';
+import { resolveRoomProposal, resumeAutonomousPlan } from './rooms-service.js';
 import { createPlanHandlers } from '../methods/rooms.js';
 
 const exec = promisify(execFile);
@@ -1467,4 +1467,59 @@ it('tells the human to cancel the autonomous plan before lowering room mode', as
   await expect(handlers['rooms.setMode']({ projectPath: f.projectPath, workId: 'w-01', roomId: 'r-01', mode: 'free', reason: 'Human request', confirmCancel: true }, {} as any))
     .rejects.toMatchObject({ code: 'bad_request', message: 'Cancel the autonomous plan first.' });
   expect(await fs.readFile(file, 'utf8')).toBe(before);
+});
+
+describe('human return of autonomous completion', () => {
+  async function completion() {
+    const f = await fixture();
+    await f.engine.flush(f.projectPath, 'w-01'); await f.submit(); await f.engine.flush(f.projectPath, 'w-01');
+    const proposal = f.map().rooms[0]!.proposal!;
+    const file = await saveFixture(f);
+    const input = { projectPath: f.projectPath, workId: 'w-01', roomId: 'r-01', proposalId: proposal.id, rev: proposal.rev, planId: 'pl-01', planRev: 1, action: 'return' as const, note: 'Human requests another look' };
+    return { f, proposal, file, input };
+  }
+
+  it('refuses a generic completion return through the real API without changing the card or map', async () => {
+    const { f, proposal, file, input } = await completion();
+    const before = await fs.readFile(file, 'utf8');
+    await expect(resolveRoomProposal(input)).rejects.toMatchObject({ code: 'bad_request', message: 'autonomous-completion-needs-item: select an item to return' });
+    expect(await fs.readFile(file, 'utf8')).toBe(before);
+    Object.assign(f.map(), await readDiskMap(f.projectPath, 'w-01'));
+    const map = JSON.stringify(f.map()), events = [...f.events];
+    await f.engine.flush(f.projectPath, 'w-01');
+    expect(JSON.stringify(f.map())).toBe(map);
+    expect(f.map().rooms[0]!.proposal).toEqual(proposal);
+    expect(f.events).toEqual(events);
+    expect(f.read().autonomous!.halted).toBeNull();
+  });
+
+  it('retains revision conflicts for stale generic return requests without mutation', async () => {
+    const { file, input } = await completion();
+    const before = await fs.readFile(file, 'utf8');
+    for (const stale of [{ ...input, proposalId: 'p-stale' }, { ...input, rev: input.rev + 1 }, { ...input, planId: 'pl-02' }, { ...input, planRev: 0 }])
+      await expect(resolveRoomProposal(stale)).rejects.toMatchObject({ code: 'conflict' });
+    expect(await fs.readFile(file, 'utf8')).toBe(before);
+  });
+
+  it('still accepts the completion card through the real API', async () => {
+    const { f, input } = await completion();
+    await resolveRoomProposal({ ...input, action: 'accept' });
+    const map = await readDiskMap(f.projectPath, 'w-01');
+    expect(map.plans![0]!.status).toBe('completed');
+    expect(map.rooms[0]!.proposal).toBeNull();
+  });
+
+  it('returns the selected item through the late-defect adapter and starts its replacement', async () => {
+    const { f, input } = await completion();
+    await expect(resolveRoomProposal(input)).rejects.toMatchObject({ code: 'bad_request' });
+    const handlers = createPlanHandlers({ start() {}, stop() {}, flush: async () => summarizePlanEffects(await readDiskMap(f.projectPath, 'w-01')) });
+    await handlers['plans.verify']({ projectPath: f.projectPath, workId: 'w-01', planId: 'pl-01', rev: 1, item: 1, verdict: 'returned', note: 'Fix this item' }, {} as any);
+    Object.assign(f.map(), await readDiskMap(f.projectPath, 'w-01'));
+    expect(f.read().status).toBe('active');
+    expect(f.read().autonomous!.halted).toBeNull();
+    expect(f.read().items[0]!.status).toBe('returned');
+    expect(f.map().rooms[0]!.proposal).toBeNull();
+    await f.engine.flush(f.projectPath, 'w-01');
+    expect(f.attempt(1)).toMatchObject({ item: 1, n: 2, status: 'running' });
+  });
 });
