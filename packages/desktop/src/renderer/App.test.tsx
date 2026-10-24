@@ -693,6 +693,21 @@ describe('App — связь вернулась (слияние lane-r3 и main-
   });
 });
 
+// Хост повторяет стартовое уведомление клиенту сразу после `hello`, а окно подписывается на события только в статусе
+// connected: уведомление приходит раньше подписки. Его держит main, окно берёт снимок.
+describe('App — уведомление хоста, пришедшее до подписки окна', () => {
+  it('map-migration-failed из снимка main показано в строке статуса по-английски', async () => {
+    bridge.setNoticesSnapshot([
+      { kind: 'map-migration-failed', ref: null, text: '/p/.parley/works/w-0001/map.json', at: '2026-10-24T00:00:00.000Z' },
+    ]);
+    render(<App />);
+
+    expect(
+      await screen.findByText("A workspace couldn't be moved to the new storage; it stays in its old file."),
+    ).toBeTruthy();
+  });
+});
+
 // Раунд lane-r5, п. 1: хост не прочитал работы на старте (битый works-index.json) — works.list
 // отвечает internal с причиной works-unreadable. Пустой список не должен сойти за ответ хоста:
 // сохранённые вкладки не стираются, человек видит сбой, а не Landing.
