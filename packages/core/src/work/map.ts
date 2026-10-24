@@ -418,6 +418,9 @@ function isAutonomousPlan(value: unknown): boolean {
       String(Number(item)) === item && isSafeCount(Number(item)) && Number(item) > 0 && isRecord(criteria) &&
       Object.entries(criteria).every(([index, checks]) =>
         String(Number(index)) === index && isSafeCount(Number(index)) && isStringArray(checks))) &&
+    isRecord(value.criteriaVersion) && Object.entries(value.criteriaVersion).every(([item, version]) =>
+      String(Number(item)) === item && isSafeCount(Number(item)) && Number(item) > 0 &&
+      isSafeCount(version) && (version as number) >= 1) &&
     isIntegration(value.integration) && Array.isArray(value.attempts) && value.attempts.every(isPlanAttempt) &&
     Array.isArray(value.ops) && value.ops.every(isAutonomousOp) &&
     (value.halted === null || (isRecord(value.halted) && isString(value.halted.reason) &&

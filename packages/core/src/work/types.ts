@@ -206,6 +206,7 @@ export interface AutonomousPlan {               // RoomPlan.autonomous, толь
   budget: AutonomousBudget;
   checks: CheckSpec[];                           // заморожены при Go
   coverage: Record<number, Record<number, Array<string | 'verifier'>>>; // item → criterion index → требуемые checkId и/или вердикт проверяющего
+  criteriaVersion: Record<number, number>;       // пункт → текущая версия критериев, ≥ 1; при Go движок пишет 1 для каждого пункта; растёт только через amendment (§2 п. 2)
   integration: Integration;
   attempts: PlanAttempt[];
   ops: AutonomousOp[];                           // журнал операций с внешним эффектом

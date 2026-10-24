@@ -373,6 +373,7 @@ describe('parseMap', () => {
         inputs: [{ path: 'package.json', blob: 'base-blob' }], timeoutMs: 1000, frozenAt: at,
       }],
       coverage: { 1: { 0: ['ck-spec-01', 'verifier'] } },
+      criteriaVersion: { 1: 1 },
       integration: {
         branch: 'integration', baseSha: 'base', verifiedHead: 'base', candidateHead: 'capture',
         queue: ['at-0001'], suspended: { reason: 'Проверка', attemptId: 'at-0001', at },
@@ -415,6 +416,13 @@ describe('parseMap', () => {
     const parsed = parseMap(JSON.stringify(map), 'map.json');
     expect(parsed).toEqual(map);
     expect(parsed.plans?.[0]?.autonomous?.coverage[1]?.[0]).toEqual(['ck-spec-01', 'verifier']);
+    expect(parsed.plans?.[0]?.autonomous?.criteriaVersion[1]).toBe(1);
+  });
+
+  it('допускает пустую карту текущих версий критериев', () => {
+    const map = autonomousMap();
+    Object.assign(map.plans[0]!.autonomous, { criteriaVersion: {} });
+    expect(parseMap(JSON.stringify(map), 'map.json')).toEqual(map);
   });
 
   it.each([
@@ -489,6 +497,16 @@ describe('parseMap', () => {
     ['budget.spent', undefined],
     ['checks', undefined],
     ['coverage', undefined],
+    ['criteriaVersion', undefined],
+    ['criteriaVersion', null],
+    ['criteriaVersion', []],
+    ['criteriaVersion.01', 1],
+    ['criteriaVersion.0', 1],
+    ['criteriaVersion.9007199254740992', 1],
+    ['criteriaVersion.1', 0],
+    ['criteriaVersion.1', 1.5],
+    ['criteriaVersion.1', Number.MAX_SAFE_INTEGER + 1],
+    ['criteriaVersion.1', '1'],
     ['integration', undefined],
     ['budget', null],
     ['budget.limits.sessions', 1.5],
