@@ -89,8 +89,10 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
   // папку перед запуском, — к чтению брифа агентом она уже на месте.
   // Указатель на гид — по имени темы (`topic` у `read_guide`), а не по заголовку раздела:
   // заголовок агент в `read_guide` передать не может, а тема и раздел не совпадают.
-  if (session.workspace) {
-    lines.push(`Clone: isolated clone of the integration branch at ${session.workspace.sha}; the engine captures your tree on attempt_submit; do not commit, do not touch git, do not write outside this folder. Folder: \`${session.workspace.path}\`.`, '');
+  if (session.workspace?.kind === 'artifacts') {
+    lines.push(`Artifacts: engine-owned review evidence in \`${session.workspace.path}\`. Read only these artifacts; do not read source code or execute commands.`, '');
+  } else if (session.workspace?.kind === 'clone') {
+    lines.push(`Clone: isolated clone of the integration branch at ${session.workspace.sha}; the engine captures your tree on attempt_submit; do not commit, do not touch git, do not write outside this folder. Use .parley-tmp inside this clone as your only temporary directory; the engine excludes it from captured trees. Folder: \`${session.workspace.path}\`.`, '');
   } else if (session.worktree !== null) {
     const { branch, base, path: folder } = session.worktree;
     lines.push(

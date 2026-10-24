@@ -852,3 +852,13 @@ it('describes the engine clone without worktree instructions', () => {
   expect(brief).toContain('do not commit');
   expect(brief).not.toContain('Worktree:');
 });
+
+
+it('describes an artifact-only reviewer workspace', () => {
+  const map = mapWithSessions();
+  map.sessions[1]!.workspace = { kind: 'artifacts', path: '/engine/review/op-01' };
+  const brief = buildBrief(map, 's-02');
+  expect(brief).toContain('Artifacts: engine-owned review evidence');
+  expect(brief).toContain('do not read source code or execute commands');
+  expect(brief).not.toContain('Worktree:'); expect(brief).not.toContain('Clone:');
+});

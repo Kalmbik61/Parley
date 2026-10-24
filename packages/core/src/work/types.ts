@@ -62,6 +62,11 @@ export interface SessionMetrics {
  */
 export type WorkProvider = string;
 
+export interface ArtifactsWorkspace {
+  kind: 'artifacts';
+  path: string;
+}
+
 export interface CloneWorkspace {
   kind: 'clone';
   path: string;
@@ -140,7 +145,7 @@ export interface WorkSession {
    * `null` (кусок 4.1 плана worktree).
    */
   worktree: WorktreeInfo | null;
-  workspace?: CloneWorkspace | null;
+  workspace?: CloneWorkspace | ArtifactsWorkspace | null;
   /**
    * Явный выбор модели и усилия из окна или `spawn_session`: с ним строятся и запуск, и `resume`
    * (`plan` в `launch.ts`), а выбор запуска его перекрывает. Нет поля — выбора нет: умолчание

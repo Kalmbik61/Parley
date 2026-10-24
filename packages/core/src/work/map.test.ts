@@ -1224,3 +1224,10 @@ describe('clone workspace', () => {
     expect(() => parseMap(JSON.stringify(map))).toThrow();
   });
 });
+
+
+it('parses engine artifact workspaces without clone branch metadata', () => {
+  const map = emptyMap();
+  Object.assign(addSession(map, { provider: 'codex', label: 'Review', task: 'Review' }), { workspace: { kind: 'artifacts', path: '/engine/review/op-01' } });
+  expect(parseMap(JSON.stringify(map)).sessions[0]?.workspace).toEqual({ kind: 'artifacts', path: '/engine/review/op-01' });
+});

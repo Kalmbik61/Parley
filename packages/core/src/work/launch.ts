@@ -235,6 +235,9 @@ async function plan(
   if (incompatibility !== null) throw new Error(incompatibility);
   const paths = workPaths(projectPath, workId);
   const cwd = session.workspace?.path ?? session.worktree?.path ?? projectPath;
+  // Read-only Codex ограничивает запись, но не чтение вне cwd; чтение только артефактов — правило брифа, не граница изоляции чтения.
+  const workspace = session.workspace;
+  if (workspace && !['codex', 'claude'].includes(session.provider)) throw new Error('confinement-unavailable: unsupported autonomous provider');
 
   const role = await prepareSessionRole(cwd, entry, { roleId: roleId(sessionRole(session)), provider: session.provider, mode: 'existing',
     ...(options.model === undefined && session.model === undefined ? {} : { model: options.model === undefined ? session.model! : options.model }),
@@ -259,6 +262,15 @@ async function plan(
 
   // Navigator launches isolate the generated settings file per session; off keeps the work path.
   const template = (resuming ? entry.runner.resumeArgs : entry.runner.args) ?? [];
+  if (workspace && (entry.id === 'codex'
+    ? !template.includes('{sandbox}') || !template.includes('{approvals}')
+    : !template.includes('{settingsFile}') || workspace.kind === 'artifacts' && !template.includes('{disallowedTools}')))
+    throw new Error('confinement-unavailable: autonomous policy cannot reach the runner');
+  if (workspace && template.some(raw => {
+    const arg = raw.startsWith('--config=') ? raw.slice(9) : raw.startsWith('-c') && raw !== '-c' ? raw.slice(2) : raw;
+    return ['--dangerously-bypass-approvals-and-sandbox', '--yolo', '--approve-for-me', '--not-so-yolo', '--full-auto', '--dangerously-skip-permissions', '--allow-dangerously-skip-permissions', '--sandbox', '-s', '--ask-for-approval', '-a', '--permission-mode'].some(flag => arg === flag || arg.startsWith(`${flag}=`)) ||
+      /^-(?:s|a)[^-].+/.test(arg) || /^\s*(approval_policy|approvals_reviewer|sandbox_mode|sandbox_workspace_write|permissions)[.\s=]/.test(arg);
+  })) throw new Error('confinement-unavailable: autonomous runner overrides mandatory permissions');
 
   // Звонок доходит только туда, куда уехал флаг канала: без `{channel}` в
   // шаблоне ставить `PARLEY_CHANNEL` некому и незачем.
@@ -389,13 +401,15 @@ async function plan(
   // Проверка имени осталась там, где создавалась запись, — второй раз файл
   // агента читать нечего.
   if (role.nativeAgent !== null) subs.agent = role.nativeAgent;
-  if (role.sandboxMode !== null) subs.sandbox = `sandbox_mode=${JSON.stringify(role.sandboxMode)}`;
+  if (workspace || role.sandboxMode !== null) subs.sandbox = `sandbox_mode=${JSON.stringify(workspace ? workspace.kind === 'clone' ? 'workspace-write' : 'read-only' : role.sandboxMode)}`;
   // Политика одобрений Codex — по роли и режиму, одинаково при запуске и `resume` (спека 2026-10-21, 5.1); доверие — как выдал хост.
   if (entry.id === 'codex') {
-    subs.approvals = codexPolicyArgs(role, writeApprovals);
+    subs.approvals = workspace ? ['-c', 'approval_policy="never"', ...(workspace.kind === 'clone'
+      ? ['-c', 'sandbox_workspace_write.exclude_slash_tmp=true', '-c', 'sandbox_workspace_write.exclude_tmpdir_env_var=true'] : [])]
+      : codexPolicyArgs(role, writeApprovals);
     if (trust !== undefined) subs.trust = trust;
   }
-  if (role.readOnly && isClaudeCode(entry)) subs.disallowedTools = 'Edit,Write,NotebookEdit';
+  if ((role.readOnly || workspace?.kind === 'artifacts') && isClaudeCode(entry)) subs.disallowedTools = workspace?.kind === 'artifacts' ? 'Edit,Write,NotebookEdit,Bash' : 'Edit,Write,NotebookEdit';
   assertRoleDelivery(entry, role, [template]);
   if (template.includes('{settingsFile}')) {
     // Плагины пользователя lean выключает вместе с модом jev одним списком. Файл — свой у сессии: в общем файле работы
@@ -405,7 +419,8 @@ async function plan(
     }
     subs.settingsFile = await writeWorkSettings(projectPath, workId, {
       ...(options.hookUrl === undefined ? {} : { hookUrl: options.hookUrl }),
-      ...(skillNavigator || lean ? { sessionId: session.id } : {}),
+      ...(skillNavigator || lean || workspace ? { sessionId: session.id } : {}),
+      ...(workspace ? { autonomous: true } : {}),
       ...(disablePlugins.length > 0 ? { disablePlugins } : {}),
       // Инструменты `browser_*` у сессии есть, только когда канал агента лёг в конфиг MCP (спека браузера, 5.1).
       ...(options.agent !== undefined && mcpRoute ? { allowBrowser: true } : {}),
@@ -426,7 +441,7 @@ async function plan(
   // Codex остановил бы старт экраном ревью, а в `auto` хук `PermissionRequest` шёл бы раньше авторевьюера.
   if (
     entry.id === 'codex' &&
-    writeApprovals === 'parley' &&
+    !workspace && writeApprovals === 'parley' &&
     options.hookUrl !== undefined &&
     options.codexHookCommand !== undefined
   ) {
@@ -489,7 +504,7 @@ async function plan(
         // Цель стоит в брифе, который уйдёт тем же запуском (системным слоем или первым сообщением): дважды не нужна.
         omitGoal: brief !== null || (!resuming && mode !== 'new' && !quiet),
       }),
-      bridge: [entry.id === 'codex' ? CODEX_APPROVAL_GUIDANCE : '', entry.id === 'codex' ? CODEX_TOOL_EXAMPLES : '', bridge].filter(Boolean).join('\n\n'),
+      bridge: [entry.id === 'codex' && !workspace ? CODEX_APPROVAL_GUIDANCE : '', entry.id === 'codex' ? CODEX_TOOL_EXAMPLES : '', bridge].filter(Boolean).join('\n\n'),
       links,
       // Правило — только там, где у агента есть `browser_open`: канал выдан и сервер MCP доходит шаблоном с `{mcpConfig}`.
       ...(options.agent !== undefined && mcpRoute ? { browser: BROWSER_PRIORITY_RULE } : {}),
@@ -546,6 +561,7 @@ async function plan(
   }
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
+  if (workspace && entry.id === 'claude') args.unshift('--permission-mode', 'acceptEdits');
   validateLayerArguments(args, blockBytes, subs.systemPrompt);
   if (skillNavigator && skillList === undefined && (!nativeVerified || codexListUnread)) {
     warnings.push('Skill navigator availability is unverified for this launch; the full native skill list remains enabled.');
@@ -566,6 +582,7 @@ async function plan(
         ...(skillList === undefined ? {} : { SKILL_LIST_REDUCED: '1' }) }),
       ...(isClaudeCode(entry) && skillList === 'names' ? CLAUDE_SKILL_BUDGET_ENV : {}),
       ...(lean && isClaudeCode(entry) ? CLAUDE_LEAN_ENV : {}),
+      ...(workspace ? { TMPDIR: path.join(workspace.path, '.parley-tmp') } : {}),
     },
     providerSessionId,
     warnings,

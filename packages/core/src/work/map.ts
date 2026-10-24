@@ -325,8 +325,9 @@ const isSessionShape =
     Array.isArray(value.history) &&
     (value.agentPlan === undefined || isPublishedAgentPlan(value.agentPlan)) &&
     (value.workspace === undefined || value.workspace === null ||
-      (isRecord(value.workspace) && value.workspace.kind === 'clone' &&
-        [value.workspace.path, value.workspace.branch, value.workspace.sha].every(isNonemptyString)));
+      (isRecord(value.workspace) && isNonemptyString(value.workspace.path) &&
+        (value.workspace.kind === 'artifacts' || value.workspace.kind === 'clone' &&
+          [value.workspace.branch, value.workspace.sha].every(isNonemptyString))));
 
 /** У письма v2 адресаты — массив: по нему идут `removeSession` и `recipientsOf`. */
 const isMessageShape =

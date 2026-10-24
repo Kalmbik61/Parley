@@ -601,6 +601,7 @@ export type {
   WorksIndex,
   WorktreeInfo,
   CloneWorkspace,
+  ArtifactsWorkspace,
 } from './work/types.js';
 
 export { createParleyMd, ensureParleyMd } from './work/parley-md.js';

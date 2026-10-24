@@ -222,7 +222,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     try { result = await execute(); }
     catch (error) {
       await settled(loc, op, 'failed', { reason: errorText(error) });
-      if (errorText(error) !== 'integration-conflict') await change(loc, plan => halt(plan, { ...context(plan, at()), reason: /resource|limit|budget|denied/i.test(errorText(error)) ? 'budget' : 'human', detail: `${op.kind}: ${errorText(error)}` }));
+      if (errorText(error) !== 'integration-conflict') await change(loc, plan => halt(plan, { ...context(plan, at()), reason: errorText(error).includes('confinement-unavailable') ? 'confinement' : /resource|limit|budget|denied/i.test(errorText(error)) ? 'budget' : 'human', detail: `${op.kind}: ${errorText(error)}` }));
       throw error;
     }
     // A crash/failing write here leaves the original intention for startup reconciliation.
@@ -248,10 +248,18 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       await sessionOperation(loc, op);
     }
   }
+  async function reservedTemporaryPath(loc: Location, sha: string, project = false): Promise<boolean> {
+    const args = ['ls-tree', sha, '--', '.parley-tmp'];
+    const tracked = project ? await git(loc, ['-C', loc.projectPath, ...args]) : await bare(loc, args);
+    if (!tracked.length) return false;
+    await change(loc, plan => halt(plan, { ...context(plan, at()), reason: 'human', detail: 'reserved path .parley-tmp is tracked' }));
+    return true;
+  }
   async function initialize(loc: Location): Promise<void> {
     const plan = await load(loc);
     const previous = plan.autonomous!.ops.find(row => row.kind === 'clone' && row.payload.purpose === 'engine' && row.state !== 'failed');
     if (previous?.state === 'done') return;
+    if (await reservedTemporaryPath(loc, plan.autonomous!.integration.baseSha, true)) return;
     const op = previous ?? await intend(loc, 'clone', null, { purpose: 'engine', baseSha: plan.autonomous!.integration.baseSha, branch: plan.autonomous!.integration.branch });
     await effect(loc, op, async () => {
       const repo = attemptsEngineGitPath(loc.projectPath, loc.workId), integration = plan.autonomous!.integration;
@@ -295,22 +303,52 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     return plan.autonomous!.ops.filter(op => op.kind === 'check' && op.state === 'done' && op.attemptId === attempt.id)
       .map(op => op.result?.checkResult as CheckResult).filter(row => row && attempt.checks.includes(row.id));
   }
+  async function prepareReview(loc: Location, plan: RoomPlan, creation: AutonomousOp, attempts: PlanAttempt[], base: string, sha: string, results: CheckResult[]): Promise<string> {
+    const dir = path.join(directory(loc, creation.attemptId!), 'review', creation.key);
+    const previous = plan.autonomous!.ops.find(op => op.kind === 'clone' && op.payload.purpose === 'review' && op.payload.createOp === creation.key && op.state !== 'failed');
+    const op = previous ?? await intend(loc, 'clone', creation.attemptId, { purpose: 'review', createOp: creation.key, dir, sha });
+    await effect(loc, op, async () => {
+      await io.fs.mkdir(dir, { recursive: true });
+      await io.fs.mkdir(path.join(dir, '.parley-tmp'), { recursive: true });
+      const diff = await bare(loc, ['diff', '--no-ext-diff', '--no-textconv', `${base}..${sha}`]);
+      await io.fs.writeFile(path.join(dir, 'diff.patch'), diff);
+      await io.fs.writeFile(path.join(dir, 'manifests.json'), JSON.stringify(attempts.map(attempt => ({ id: attempt.id, item: attempt.item, manifest: attempt.manifest })), null, 2));
+      await io.fs.writeFile(path.join(dir, 'criteria.json'), JSON.stringify(attempts.map(attempt => ({ id: attempt.id, criteriaVersion: attempt.criteriaVersion, criteria: plan.items.find(item => item.id === attempt.item)!.criteria, coverage: plan.autonomous!.coverage[attempt.item] })), null, 2));
+      await io.fs.writeFile(path.join(dir, 'checks.json'), JSON.stringify({ results, tails: await outputTails(loc, results) }, null, 2));
+      for (const attempt of attempts) {
+        const artifacts = path.join(dir, 'artifacts', attempt.id);
+        await io.fs.mkdir(artifacts, { recursive: true });
+        for (const [index, artifact] of (attempt.manifest?.artifacts ?? []).entries()) {
+          await io.fs.writeFile(path.join(artifacts, `${index}-${artifact.sha256}`), await artifactBytes(artifactPath(loc, attempt.id, index, artifact.sha256)));
+        }
+      }
+      return { dir, sha };
+    });
+    return dir;
+  }
   async function spawn(loc: Location, attemptId: string, role: 'worker' | 'verifier'): Promise<void> {
     let plan = await load(loc), attempt = attemptOf(plan, attemptId);
+    if (role === 'verifier' && !['codex', 'claude'].includes(options.verifier.provider)) {
+      await change(loc, current => halt(current, { ...context(current, at()), reason: 'confinement', detail: `Unsupported verifier provider: ${options.verifier.provider}` }));
+      return;
+    }
     let op = plan.autonomous!.ops.find(row => row.kind === 'create-session' && row.attemptId === attemptId && row.payload.role === role);
     op ??= await intend(loc, 'create-session', attemptId, { role });
     if (op.state === 'failed' || (await load(loc)).autonomous!.halted) return;
     if (op.state === 'intended') {
       if (role === 'worker') {
+        if (await reservedTemporaryPath(loc, attempt.baseSha)) return;
         const dir = cloneDirectory(loc, attemptId);
         const cloneOp = await intend(loc, 'clone', attemptId, { dir, sha: attempt.baseSha, branch: attempt.branch });
         await effect(loc, cloneOp, async () => {
           await io.fs.mkdir(path.dirname(dir), { recursive: true });
           await git(loc, ['clone', '--no-hardlinks', '--no-checkout', '--', attemptsEngineGitPath(loc.projectPath, loc.workId), dir]);
           await git(loc, ['-C', dir, 'checkout', '--detach', attempt.baseSha]);
+          await io.fs.mkdir(path.join(dir, '.parley-tmp'), { recursive: true });
           return { dir, sha: attempt.baseSha };
         });
       }
+      const review = role === 'verifier' ? await prepareReview(loc, plan, op, [attempt], attempt.baseSha, attempt.sha!, thisResults(plan, attempt)) : null;
       const task = role === 'worker' ? await workerBrief(loc, plan, attempt) : await verifierBrief(loc, plan, attempt);
       const selected = role === 'worker' ? { provider: options.provider, model: options.model } : options.verifier;
       const create = op;
@@ -318,7 +356,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
         const map = await io.readMap(loc.projectPath, loc.workId);
         const existing = map.sessions.find(row => row.label === sessionLabel(loc, attemptId, create));
         if (existing) return { sessionId: existing.id };
-        const input: CreateSessionInput = { projectPath: loc.projectPath, workId: loc.workId, requestedBy: ENGINE, deferLaunch: true, parent: null, ...(role === 'worker' ? { workspace: { kind: 'clone' as const, path: cloneDirectory(loc, attemptId), branch: attempt.branch, sha: attempt.baseSha } } : {}), provider: selected.provider, label: sessionLabel(loc, attemptId, create), task, role: { source: 'builtin', name: role === 'worker' ? 'executor' : 'verifier' }, ...(selected.model === undefined ? {} : { model: selected.model }) };
+        const input: CreateSessionInput = { projectPath: loc.projectPath, workId: loc.workId, requestedBy: ENGINE, deferLaunch: true, parent: null, ...(role === 'worker' ? { workspace: { kind: 'clone' as const, path: cloneDirectory(loc, attemptId), branch: attempt.branch, sha: attempt.baseSha } } : { workspace: { kind: 'artifacts' as const, path: review! } }), provider: selected.provider, label: sessionLabel(loc, attemptId, create), task, role: { source: 'builtin', name: role === 'worker' ? 'executor' : 'verifier' }, ...(selected.model === undefined ? {} : { model: selected.model }) };
         const ref = await io.sessions.create(input);
         return { sessionId: ref.sessionId };
       });
@@ -368,6 +406,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       const env = { GIT_INDEX_FILE: index, GIT_WORK_TREE: cloneDirectory(loc, attempt.id) };
       await bare(loc, ['read-tree', attempt.baseSha], env);
       await bare(loc, ['add', '-A', '--', '.'], env);
+      await bare(loc, ['rm', '-r', '--cached', '--ignore-unmatch', '-q', '--', '.parley-tmp'], env);
       const tree = (await bare(loc, ['write-tree'], env)).toString('utf8').trim();
       const baseTree = await text(loc, ['rev-parse', `${attempt.baseSha}^{tree}`]);
       const sha = tree === baseTree ? attempt.baseSha : (await bare(loc, ['commit-tree', tree, '-p', attempt.baseSha, '-m', commitMessage(loc, op)], { ...env, GIT_AUTHOR_NAME: `attempt ${loc.planId}/${attempt.id}` })).toString('utf8').trim();
@@ -610,12 +649,17 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
   }
   async function spawnIntegrationVerifier(loc: Location, operation: AutonomousOp): Promise<void> {
     let plan = await load(loc);
+    if (!['codex', 'claude'].includes(options.verifier.provider)) {
+      await change(loc, current => halt(current, { ...context(current, at()), reason: 'confinement', detail: `Unsupported verifier provider: ${options.verifier.provider}` }));
+      return;
+    }
     const sha = plan.autonomous!.integration.candidateHead!;
     const payload = { purpose: 'integration-verifier', phase: 'integration', integrationOp: operation.key, role: 'verifier', sha };
     let op = candidateVerifier(plan, operation) ?? await intend(loc, 'create-session', operation.attemptId, payload);
     if (op.state === 'failed' || (await load(loc)).autonomous!.halted) return;
     if (op.state === 'intended') {
       const attempts = integrationAttempts(plan), results = integrationResults(plan, operation);
+      const review = await prepareReview(loc, plan, op, attempts, plan.autonomous!.integration.verifiedHead, sha, results);
       const diff = await text(loc, ['diff', '--no-ext-diff', '--no-textconv', `${plan.autonomous!.integration.verifiedHead}..${sha}`]);
       const task = [`Read-only integration verifier; candidateHead ${sha}; integrationOp ${operation.key}.`,
         'Use only these engine-owned artifacts. Do not read source code or execute commands. Return attempt_verify for every listed attempt and qualitative criterion, using candidateHead as sha.',
@@ -628,7 +672,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
         if (existing) return { sessionId: existing.id };
         const ref = await io.sessions.create({ projectPath: loc.projectPath, workId: loc.workId, requestedBy: ENGINE, deferLaunch: true, parent: null,
           provider: options.verifier.provider, ...(options.verifier.model === undefined ? {} : { model: options.verifier.model }),
-          label: sessionLabel(loc, operation.attemptId!, creation), task, role: { source: 'builtin', name: 'verifier' } });
+          workspace: { kind: 'artifacts', path: review }, label: sessionLabel(loc, operation.attemptId!, creation), task, role: { source: 'builtin', name: 'verifier' } });
         return { sessionId: ref.sessionId };
       });
     }

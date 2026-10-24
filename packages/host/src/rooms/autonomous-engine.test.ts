@@ -586,7 +586,7 @@ it('requires a fresh integration verifier for every qualitative item on each can
   expect(f.attempt(1).status).toBe('integrated');
   expect(f.read().autonomous!.budget.spent.verifiers).toBe(4);
   const creates = vi.mocked(f.io.sessions.create).mock.calls.filter(([input]) => input.role?.name === 'verifier');
-  expect(creates.every(([input]) => input.workspace === undefined)).toBe(true);
+  expect(creates.every(([input]) => input.workspace?.kind === 'artifacts')).toBe(true);
   expect(creates.at(-1)![0].task).toContain('helper B changes');
   expect(creates.at(-1)![0].task).toContain('at-0001');
   expect(f.map().sessions.find(row => row.id === second.result!.sessionId)?.lifecycle).toBe('closed');
@@ -909,4 +909,82 @@ it('halts on a bare integration branch mismatch without repairing Git during rec
   const restarted = f.make(true); restarted.start(); await restarted.flush(f.projectPath, 'w-01');
   expect(f.read().autonomous!.halted?.detail).toContain('differs from verifiedHead');
   expect(mutations).toEqual([]);
+});
+
+
+it('gives worker and both verifier types engine-owned workspaces and temporary directories', async () => {
+  const f = await fixture(true); await f.engine.flush(f.projectPath, 'w-01');
+  const tmp = path.join(f.clone(), '.parley-tmp');
+  expect((await fs.stat(tmp)).isDirectory()).toBe(true);
+  await fs.writeFile(path.join(f.clone(), 'implementation.txt'), 'worker code');
+  await fs.writeFile(path.join(f.clone(), 'evidence.txt'), 'review evidence');
+  const artifactHash = createHash('sha256').update('review evidence').digest('hex');
+  const runner = f.io.runner;
+  f.io.runner = vi.fn(async (...args) => {
+    const result = await runner(...args);
+    const file = path.join(f.projectPath, '.parley/works/w-01/autonomous/pl-01', `${args[0].resultId}.tail`);
+    await fs.writeFile(file, 'engine-owned check output');
+    return { ...result, outputTail: path.relative(f.projectPath, file) };
+  });
+  await f.submit(0, [{ path: 'evidence.txt', sha256: artifactHash, storedAs: '' }]);
+  const acceptance = vi.mocked(f.io.sessions.create).mock.calls.at(-1)![0];
+  expect(acceptance.workspace).toMatchObject({ kind: 'artifacts' });
+  const review = acceptance.workspace!.path;
+  expect(await fs.readFile(path.join(review, 'artifacts', f.attempt().id, `0-${artifactHash}`), 'utf8')).toBe('review evidence');
+  expect(await fs.readFile(path.join(review, 'checks.json'), 'utf8')).toContain('engine-owned check output');
+  expect(await fs.readFile(path.join(review, 'diff.patch'), 'utf8')).toContain('worker code');
+  expect(JSON.parse(await fs.readFile(path.join(review, 'manifests.json'), 'utf8'))[0].id).toBe(f.attempt().id);
+  await expect(fs.stat(path.join(review, 'implementation.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+  await f.engine.verify({ projectPath: f.projectPath, workId: 'w-01', sessionId: f.attempt().verifier! }, 'pl-01', 1,
+    { action: 'verify', attemptId: f.attempt().id, sha: f.attempt().sha!, criterion: 0, verdict: 'pass', note: 'accepted' });
+  await f.engine.flush(f.projectPath, 'w-01');
+  const integration = vi.mocked(f.io.sessions.create).mock.calls.at(-1)![0];
+  expect(integration.workspace).toMatchObject({ kind: 'artifacts' });
+  expect(integration.workspace!.path).not.toBe(review);
+  expect(await fs.readFile(path.join(integration.workspace!.path, 'checks.json'), 'utf8')).toContain(f.read().autonomous!.integration.candidateHead!);
+});
+
+
+
+it('excludes .parley-tmp from captures even when clone gitignore explicitly includes it', async () => {
+  const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01');
+  await fs.writeFile(path.join(f.clone(), '.gitignore'), '.parley/\n!/.parley-tmp/\n!/.parley-tmp/**\n');
+  await fs.writeFile(path.join(f.clone(), '.parley-tmp', 'temporary.txt'), 'temporary bytes');
+  await fs.writeFile(path.join(f.clone(), 'retained.txt'), 'temporary bytes');
+  expect(await f.submit()).toMatchObject({ ok: true });
+  const args = [`--git-dir=${attemptsEngineGitPath(f.projectPath, 'w-01')}`];
+  expect((await exec('git', [...args, 'ls-tree', '-r', f.attempt().sha!, '--', '.parley-tmp'])).stdout).toBe('');
+  expect((await exec('git', [...args, 'show', `${f.attempt().sha}:retained.txt`])).stdout).toBe('temporary bytes');
+  expect(await fs.readFile(path.join(f.clone(), '.parley-tmp', 'temporary.txt'), 'utf8')).toBe('temporary bytes');
+});
+
+it('halts before Go when the base tracks the reserved temporary path', async () => {
+  const f = await fixture();
+  await fs.mkdir(path.join(f.projectPath, '.parley-tmp'));
+  await fs.writeFile(path.join(f.projectPath, '.parley-tmp', 'tracked.txt'), 'tracked');
+  await f.git('add', '.parley-tmp');
+  await f.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@test', 'commit', '-m', 'Reserved path');
+  const base = await f.git('rev-parse', 'HEAD');
+  f.read().autonomous!.integration.baseSha = base; f.read().autonomous!.integration.verifiedHead = base;
+  await f.engine.flush(f.projectPath, 'w-01');
+  expect(f.read().autonomous!.halted).toMatchObject({ reason: 'human', detail: 'reserved path .parley-tmp is tracked' });
+  expect(f.read().autonomous!.attempts).toHaveLength(0);
+  expect(f.io.sessions.create).not.toHaveBeenCalled();
+});
+
+it('halts instead of launching a verifier provider without an audited policy', async () => {
+  const f = await fixture(true);
+  const engine = createAutonomousEngine(f.io, { provider: 'codex', verifier: { provider: 'glm' } }); engines.push(engine);
+  await engine.flush(f.projectPath, 'w-01');
+  await engine.submit({ projectPath: f.projectPath, workId: 'w-01', sessionId: f.attempt().worker! }, 'pl-01', 1, f.submission());
+  expect(f.read().autonomous!.halted?.reason).toBe('confinement');
+  expect(vi.mocked(f.io.sessions.create).mock.calls.filter(([input]) => input.role?.name === 'verifier')).toHaveLength(0);
+});
+
+
+it('classifies a refused autonomous launcher policy as a confinement halt', async () => {
+  const f = await fixture();
+  vi.mocked(f.io.sessions.launch).mockRejectedValueOnce(new Error('confinement-unavailable: runner policy missing'));
+  await expect(f.engine.flush(f.projectPath, 'w-01')).rejects.toThrow('confinement-unavailable');
+  expect(f.read().autonomous!.halted?.reason).toBe('confinement');
 });

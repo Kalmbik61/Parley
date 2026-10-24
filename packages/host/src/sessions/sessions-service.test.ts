@@ -2397,6 +2397,29 @@ describe('setModel(): смена модели (спека нормалайзер
 
 
 describe('agent-created workspace peers', () => {
+  it.each(['codex', 'claude'] as const)('enforces autonomous %s policy and TMPDIR at the actual spawn', async provider => {
+    const work = await createWork(project, { title: 'Autonomous launch', goal: '' });
+    const pty = createPtyManager(fakeHost()), spawn = vi.spyOn(pty, 'start');
+    const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity());
+    const attempt = path.join(project, 'attempt');
+    const clone = path.join(attempt, 'clone'); await mkdir(clone, { recursive: true }); await mkdir(path.join(clone, '.parley-tmp'));
+    try {
+      const worker = await service.create({ projectPath: project, workId: work.work.id, provider, label: 'Worker', task: 'Implement', parent: null, requestedBy: ENGINE,
+        deferLaunch: true, workspace: { kind: 'clone', path: clone, branch: 'attempt', sha: 'a'.repeat(40) } });
+      await service.launch(worker, 'launch', { by: ENGINE });
+      const options = spawn.mock.calls.at(-1)![1];
+      expect(options.cwd).toBe(clone);
+      expect(options.env?.TMPDIR).toBe(path.join(clone, '.parley-tmp'));
+      expect(options.env?.HOME).toBe(process.env.HOME);
+      if (provider === 'claude') {
+        expect(options.args).toEqual(expect.arrayContaining(['--permission-mode', 'acceptEdits']));
+        const file = options.args[options.args.indexOf('--settings') + 1]!;
+        expect(JSON.parse(await readFile(file, 'utf8')).sandbox).toEqual({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true });
+        expect(file).toContain(`/settings/${worker.sessionId}.json`);
+      } else expect(options.args).toEqual(expect.arrayContaining(['approval_policy="never"', 'sandbox_workspace_write.exclude_slash_tmp=true', 'sandbox_workspace_write.exclude_tmpdir_env_var=true']));
+    } finally { await service.stopAll(); }
+  });
+
   it('persists engine clone cwd and rejects ordinary clone assignment', async () => {
     const work = await createWork(project, { title: 'Engine clone', goal: '' });
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());

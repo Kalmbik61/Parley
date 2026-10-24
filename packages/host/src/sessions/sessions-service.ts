@@ -802,6 +802,7 @@ export function createSessionsService(
         }
       }
       const env = providerLaunchEnv(entry, process.env, plan.env, secret);
+      if (session.workspace && plan.env.TMPDIR !== undefined) env.TMPDIR = plan.env.TMPDIR;
       // Свой токен приёмника на каждый запуск (решение А): с ним HTTP-хуки из файла настроек находят
       // сессию. Только при `hookUrl` — без него в файле настроек HTTP-хуков нет, и токен не нужен.
       if (hookUrl !== undefined && hooks !== undefined) {
@@ -1005,7 +1006,7 @@ export function createSessionsService(
     logged: { sessionId?: string },
   ): Promise<CreatedSession> {
     const { projectPath, workId, provider, label, task, parent, worktree, lean } = input;
-    if (input.workspace !== undefined && (input.requestedBy !== ENGINE || worktree === true || !input.workspace || input.workspace.kind !== 'clone' || !path.isAbsolute(input.workspace.path) || !input.workspace.branch || !input.workspace.sha)) throw new HostError('bad_request', 'Only the engine may assign a clone workspace.');
+    if (input.workspace !== undefined && (input.requestedBy !== ENGINE || worktree === true || !input.workspace || !['clone', 'artifacts'].includes(input.workspace.kind) || !path.isAbsolute(input.workspace.path) || input.workspace.kind === 'clone' && (!input.workspace.branch || !input.workspace.sha))) throw new HostError('bad_request', 'Only the engine may assign an autonomous workspace.');
     if (input.deferLaunch && input.requestedBy !== ENGINE) throw new HostError('bad_request', 'Only the engine may defer a session launch.');
     if (input.requestedBy !== undefined && (workId === null || !task.trim())) throw new HostError('bad_request', 'Agent-created sessions require a workspace and task.');
     const agentConfig = input.requestedBy === undefined ? undefined : (await loadConfig()).config;

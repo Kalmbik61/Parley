@@ -536,3 +536,9 @@ describe('все инструменты браузера разрешены за
     expect(BROWSER_PERMISSIONS).toEqual(BROWSER_TOOLS.map((tool) => `mcp__${MCP_SERVER_NAME}__${tool.name}`));
   });
 });
+
+
+it('writes the audited sandbox block only for autonomous settings', () => {
+  expect(workSettings().sandbox).toBeUndefined();
+  expect(workSettings({ autonomous: true }).sandbox).toEqual({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true });
+});

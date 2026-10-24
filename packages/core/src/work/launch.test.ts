@@ -2811,6 +2811,41 @@ describe('Codex: политика одобрений, доверие к папк
     expect(trustOf(plan.args)[0]).toContain(JSON.stringify(await realpath(clone)));
   });
 
+  it.each(planners)('autonomous clone (%s) enforces audited Codex policy independently of role/settings', async (_name, planner) => {
+    const { workId, session } = await codexWith('verifier');
+    const clone = path.join(project, 'attempt', 'clone'); await mkdir(clone, { recursive: true });
+    session.workspace = { kind: 'clone', path: clone, branch: 'attempts/at-0001', sha: 'abc' };
+    const plan = await planner(project, workId, session, { ...hookOptions, codexWriteApprovals: 'auto' });
+    expect(codexConfigValues(plan.args)).toEqual(expect.arrayContaining([
+      'approval_policy="never"', 'sandbox_mode="workspace-write"',
+      'sandbox_workspace_write.exclude_slash_tmp=true', 'sandbox_workspace_write.exclude_tmpdir_env_var=true',
+    ]));
+    expect(codexConfigValues(plan.args).filter(arg => arg.startsWith('sandbox_mode='))).toEqual(['sandbox_mode="workspace-write"']);
+    expect(codexConfigValues(plan.args).filter(arg => arg.startsWith('approval_policy='))).toEqual(['approval_policy="never"']);
+    expect(codexConfigValues(plan.args).some(arg => arg.startsWith('approvals_reviewer='))).toBe(false);
+    expect(hooksOf(plan.args)).toEqual([]);
+    expect(plan.cwd).toBe(clone); expect(plan.env.TMPDIR).toBe(path.join(clone, '.parley-tmp'));
+    expect(plan.env).not.toHaveProperty('HOME');
+  });
+
+  it('autonomous artifact workspace forces read-only/never even for the executor role', async () => {
+    const { workId, session } = await codexWith('executor');
+    const review = path.join(project, 'attempt', 'review', 'op-0010'); await mkdir(review, { recursive: true });
+    Object.assign(session, { workspace: { kind: 'artifacts', path: review } });
+    const plan = await planLaunch(project, workId, session);
+    expect(plan.cwd).toBe(review);
+    expect(codexConfigValues(plan.args)).toEqual(expect.arrayContaining(['approval_policy="never"', 'sandbox_mode="read-only"']));
+    expect(codexConfigValues(plan.args)).not.toContain('sandbox_mode="workspace-write"');
+  });
+
+  it('rejects an autonomous custom runner that bypasses mandatory permissions', async () => {
+    const { workId, session } = await codexWith('executor');
+    session.workspace = { kind: 'clone', path: project, branch: 'attempt', sha: 'abc' };
+    session.role = null;
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ codex: { args: ['-c', '{sandbox}', '{approvals}', '-c', '{developerInstructions}', '--dangerously-bypass-approvals-and-sandbox', '{prompt}'] } }));
+    await expect(planLaunch(project, workId, session)).rejects.toThrow('confinement-unavailable');
+  });
+
   it('доверие при worktree: вторая пара в той же таблице; путь с кавычкой и обратным слэшем экранируется', async () => {
     const { workId, session } = await codexWith('executor');
     const project1 = '/tmp/proj "q" \\b';
@@ -2913,4 +2948,20 @@ describe('Codex: политика одобрений, доверие к папк
     expect(codexConfigValues(plan.args)).toContain(SKILL_FLAG);
     expect(plan.warnings.join(' ')).not.toContain('full native skill list');
   });
+});
+
+
+it('launches Claude artifact workspaces with sandbox settings and explicit read-only tools', async () => {
+  const { workId, sessionId } = await pending('claude');
+  const session = await sessionOf(workId, sessionId);
+  const review = path.join(project, 'review', 'op-01'); await mkdir(review, { recursive: true });
+  session.workspace = { kind: 'artifacts', path: review };
+  session.role = { source: 'builtin', name: 'executor' };
+  const plan = await planLaunch(project, workId, session);
+  expect(plan.cwd).toBe(review);
+  expect(plan.env.TMPDIR).toBe(path.join(review, '.parley-tmp'));
+  expect(plan.args[plan.args.indexOf('--permission-mode') + 1]).toBe('acceptEdits');
+  expect(plan.args[plan.args.indexOf('--disallowedTools') + 1]).toBe('Edit,Write,NotebookEdit,Bash');
+  const settings = JSON.parse(await readFile(plan.args[plan.args.indexOf('--settings') + 1]!, 'utf8'));
+  expect(settings.sandbox).toEqual({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true });
 });
