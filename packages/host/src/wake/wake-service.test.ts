@@ -1090,7 +1090,7 @@ describe('WakeService: подъём спящей письмом', () => {
 
   it('6b: запуск сам остановил процесс и ответил ошибкой — сбой сообщается раз и причиной запуска', async () => {
     const { workId, target, sender } = await sleepingPair();
-    const reason = 'lock map.lock was not released within 3000 ms';
+    const reason = 'lock /home/.parley/parley.db was not released within 3000 ms';
     await resumeRig({}, (sessions) => ({
       ...sessions,
       // Как `launch`, когда старт не записался в карту: процесс поднят, остановлен, вызывающему — ошибка.

@@ -158,10 +158,10 @@ describe('human backlog handlers', () => {
     expect((await get()).suggestions[0]!.author).toMatchObject({ projectPath: project, workId: created.workId, sessionId: session.id, label: 'Reviewer', role: null });
     // The revision names the work version in the database: any later write to the work changes it.
     const first = (await get()).suggestions[0]!.author!.revision;
-    expect(first).toBe(`${project}:${created.workId}:${workVersion(project, created.workId)}`);
+    expect(first).toBe(`${created.workId}:${workVersion(project, created.workId)}`);
     await updateMap(project, created.workId, current => { current.work.goal = 'moved on'; });
     const second = (await get()).suggestions[0]!.author!.revision;
-    expect(second).toBe(`${project}:${created.workId}:${workVersion(project, created.workId)}`);
+    expect(second).toBe(`${created.workId}:${workVersion(project, created.workId)}`);
     expect(second).not.toBe(first);
     const foreign = path.join(root, 'foreign'); await mkdir(foreign);
     const foreignWork = await createWork(foreign, { title: 'Other' });

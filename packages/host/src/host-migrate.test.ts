@@ -323,6 +323,22 @@ describe('startHost moves workspace maps into the database (storage spec 6.6)', 
     expect(existsSync(path.join(project, artifact?.path ?? ''))).toBe(true);
   });
 
+  it('a clean stop closes the database: the WAL is folded into parley.db and no -wal is left behind', async () => {
+    const home = await newHome();
+    await legacyProject(home);
+
+    const running = await startHost({ home });
+    hosts.push(running);
+    // Хост уже читал и писал базу (переезд), поэтому журнал есть, пока дескриптор открыт.
+    expect(existsSync(path.join(home, 'parley.db-wal'))).toBe(true);
+    await running.context.shutdown('test');
+    await running.closed;
+
+    // Только проверки файлов: любое чтение ядра в этом процессе открыло бы базу заново.
+    expect(existsSync(path.join(home, 'parley.db'))).toBe(true);
+    expect(existsSync(path.join(home, 'parley.db-wal'))).toBe(false);
+  });
+
   it('a map that cannot be moved stays in its file, and a window that connects gets a map-migration-failed notice', async () => {
     const home = await newHome();
     const project = await mkdtemp(path.join(tmpdir(), 'parley-host-migrate-'));

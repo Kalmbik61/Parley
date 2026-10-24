@@ -10,6 +10,8 @@ import {
   addSession,
   createWork,
   deleteWorkFiles,
+  MapLockTimeoutError,
+  readMap,
   readStoredMap,
   replaceStoredMap,
   transitionSession,
@@ -17,12 +19,19 @@ import {
   workPaths,
   workVersion,
 } from '@parley/core';
-import type { Room } from '@parley/core';
+import type { Room, WorkMap } from '@parley/core';
 import type { EventData, EventName } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createWindowCounters } from '../health/window-counters.js';
 import { createWorksService } from './works-service.js';
 import type { WorksService } from './works-service.js';
+
+// `readMap` обёрнут шпионом, который по умолчанию зовёт настоящий: тесты битой карты считают его вызовы и подсовывают отказ
+// занятой базы, которого на живой WAL-базе не вызвать.
+vi.mock('@parley/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@parley/core')>();
+  return { ...actual, readMap: vi.fn(actual.readMap) };
+});
 
 /** Второе соединение с базой дома: держит запись и читает размеры, как это делает чужой процесс (CLI, MCP агента без канала). */
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
@@ -108,12 +117,10 @@ describe('источники', () => {
     expect(ids.sort()).toEqual([`${projectA}:${a.work.id}`, `${projectB}:${b.work.id}`].sort());
   });
 
-  // Ожидание по условию, а не фиксированные 100 мс: с 087d3c8 индекс пишется
-  // последним, и отсчёт начинается одновременно с его fs-событием — задержка
-  // наблюдателя под нагрузкой не укладывалась в фиксированное окно. Дебаунс
-  // проверяется числом рассылок: записи карты и индекса склеиваются в одну. Дебаунс — с запасом на
-  // разброс между fs-событиями под нагрузкой (при 50 мс запоздавшее событие той же записи могло дать вторую рассылку),
-  // ожидание появления — тоже с запасом: это верхняя граница, а не пауза.
+  // Ожидание по условию, а не фиксированные 100 мс: запись видна по событию хранилища и по опросу базы (раз в 500 мс),
+  // и под нагрузкой это не укладывалось в фиксированное окно. Дебаунс проверяется числом рассылок: запись работы и её
+  // строк склеивается в одну. Дебаунс — с запасом на разброс между событиями под нагрузкой (при 50 мс запоздавшее
+  // событие той же записи могло дать вторую рассылку), ожидание появления — тоже с запасом: это верхняя граница, а не пауза.
   it('новая работа появляется одной рассылкой works.changed', async () => {
     const debounceMs = 250;
     const s = service({ debounceMs });
@@ -317,6 +324,73 @@ describe('битая карта', () => {
     await createWork(projectB, { title: 'Толчок' });
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(broadcasts.filter((b) => b.event === 'host.notice')).toHaveLength(1);
+  });
+
+  const corruptNotices = (): number =>
+    broadcasts.filter((b) => b.event === 'host.notice' && (b.data as { kind: string }).kind === 'map-corrupt').length;
+
+  /** Работа проекта A с комнатой, которую `normalizeMap` не принимает, и её же исправная карта. */
+  async function brokenWork(): Promise<{ id: string; good: WorkMap; broken: WorkMap }> {
+    const created = await createWork(projectA, { title: 'Работа' });
+    const good = readStoredMap(projectA, created.work.id);
+    const broken = structuredClone(good);
+    broken.rooms.push(bogusRoom());
+    replaceStoredMap(projectA, created.work.id, broken);
+    return { id: created.work.id, good, broken };
+  }
+
+  /** Ждёт, пока сервис закончит ещё один проход обновления (номер снимка растёт после проверки битых работ). */
+  async function nextPass(s: WorksService, trigger: () => unknown): Promise<void> {
+    const before = s.windowSnapshot()?.revision ?? 0;
+    await trigger();
+    await vi.waitFor(() => expect(s.windowSnapshot()?.revision ?? 0).toBeGreaterThan(before), { timeout: 3000, interval: 10 });
+  }
+
+  it('занятая база — не повреждение: уведомления нет, а на следующем проходе битая работа названа', async () => {
+    await brokenWork();
+    vi.mocked(readMap).mockImplementationOnce(async () => {
+      throw new MapLockTimeoutError('parley.db', 5000);
+    });
+
+    const s = service({ debounceMs: 20 });
+    await s.start();
+    expect(corruptNotices()).toBe(0);
+
+    await nextPass(s, () => createWork(projectB, { title: 'Толчок' }));
+    expect(corruptNotices()).toBe(1);
+  });
+
+  it('работа, что починилась и сломалась снова, даёт новое host.notice(map-corrupt)', async () => {
+    const { id, good, broken } = await brokenWork();
+    const s = service({ debounceMs: 20 });
+    await s.start();
+    expect(corruptNotices()).toBe(1);
+
+    await nextPass(s, () => replaceStoredMap(projectA, id, good));
+    expect(s.entry(projectA, id)).toBeDefined();
+    await nextPass(s, () => replaceStoredMap(projectA, id, broken));
+
+    expect(s.entry(projectA, id)).toBeUndefined();
+    expect(corruptNotices()).toBe(2);
+  });
+
+  it('битая работа грузится один раз на версию, а не на каждый проход; новая версия — новая загрузка без нового уведомления', async () => {
+    const { id, broken } = await brokenWork();
+    const loads = (): number => vi.mocked(readMap).mock.calls.filter(([projectPath]) => projectPath === projectA).length;
+    vi.mocked(readMap).mockClear();
+    const s = service({ debounceMs: 20 });
+    await s.start();
+    expect(loads()).toBe(1);
+
+    await nextPass(s, () => createWork(projectB, { title: 'Толчок' }));
+    await nextPass(s, () => createWork(projectB, { title: 'Ещё толчок' }));
+    expect(loads()).toBe(1);
+
+    const other = structuredClone(broken);
+    other.work.goal = 'другая версия, всё ещё битая';
+    await nextPass(s, () => replaceStoredMap(projectA, id, other));
+    expect(loads()).toBe(2);
+    expect(corruptNotices()).toBe(1);
   });
 });
 

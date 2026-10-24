@@ -14,6 +14,7 @@
 import {
   compactWorkMap,
   gitBranch,
+  isDatabaseBusy,
   MapLockTimeoutError,
   processStartedAt,
   readMap,
@@ -23,6 +24,7 @@ import {
   removeHostLease,
   watchWorks,
   WorkNotFoundError,
+  workVersion,
   writeHostLease,
 } from '@parley/core';
 import type { HostLease, WorkEntry, WorksWatcher } from '@parley/core';
@@ -35,7 +37,7 @@ import type { WindowCounters } from '../health/window-counters.js';
 export interface WorksServiceOptions {
   /** Сколько подряд изменений склеивается в одну рассылку `works.changed`. */
   debounceMs?: number;
-  /** Таймаут `map.lock` для записей сервиса (живость, аренда). */
+  /** Сколько запись сервиса (живость, аренда) ждёт занятую базу работ, мс. */
   lockTimeoutMs?: number;
   /** Счётчики окна строки состояния: один `refresh` — одна запись. */
   windowCounters?: WindowCounters;
@@ -97,6 +99,8 @@ export function createWorksService(
   const leased = new Set<string>();
   const readAlready = new Set<string>();
   const notifiedCorrupt = new Set<string>();
+  /** Работа → версия, на которой она не загрузилась: до следующей записи её не перечитываем. */
+  const corruptAt = new Map<string, number>();
 
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
@@ -212,12 +216,35 @@ export function createWorksService(
 
     for (const item of index.works) {
       const key = workKey(item.projectPath, item.id);
-      if (present.has(key)) continue;
+      if (present.has(key)) {
+        // Работа читается: следующая поломка — новая, о ней скажем снова.
+        notifiedCorrupt.delete(key);
+        corruptAt.delete(key);
+        continue;
+      }
+      // Та же версия, что уже не загрузилась, не загрузится и сейчас: полная загрузка большой карты стоит десятых долей
+      // секунды цикла хоста, а проход идёт на каждую запись любой работы. Грузим один раз на версию.
+      let version: number | undefined;
+      try {
+        version = workVersion(item.projectPath, item.id);
+      } catch {
+        continue; // База не ответила: проверим на следующем проходе.
+      }
+      if (version === undefined) {
+        corruptAt.delete(key);
+        continue;
+      }
+      if (corruptAt.get(key) === version) continue;
       try {
         await readMap(item.projectPath, item.id);
         // Загрузилась — просто гонка со свежим чтением, не работа битая.
+        notifiedCorrupt.delete(key);
+        corruptAt.delete(key);
       } catch (error) {
         if (error instanceof WorkNotFoundError) continue;
+        // База занята — не повреждение: молчим и пробуем на следующем проходе.
+        if (isDatabaseBusy(error)) continue;
+        corruptAt.set(key, version);
         if (notifiedCorrupt.has(key)) continue;
         notifiedCorrupt.add(key);
         const reason = error instanceof Error ? error.message : String(error);

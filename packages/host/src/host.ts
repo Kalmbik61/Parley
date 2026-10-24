@@ -12,6 +12,7 @@ import {
   ASSISTANT_MIN_VERSIONS,
   bothEnv,
   clearSecret,
+  closeWorkDb,
   findRunnerBinary,
   grantTrust,
   isMember,
@@ -832,6 +833,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       await hook().catch((error: unknown) => {
         log.error('хук остановки упал', { error: String(error) });
       });
+    }
+    // База работ — после всех хуков, службу работ (опрос базы) в их числе: журнал WAL сводится в файл базы здесь, а не
+    // восстанавливается следующим стартом (спека хранилища 6.1).
+    try {
+      closeWorkDb();
+    } catch (error) {
+      log.error('база работ не закрылась', { error: String(error) });
     }
 
     // `server.close()` дожидается закрытия всех соединений — без явного

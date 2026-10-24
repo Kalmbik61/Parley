@@ -67,7 +67,7 @@ export const worksDelete: Handler<'works.delete'> = createWorksDelete();
 /**
  * Работы нет — `not_found`, а не `internal`. Карта читается заранее, как в
  * `worksDelete` (битая карта — тоже `not_found`), а работу, удалённую уже после
- * этой проверки (`works.delete` другого клиента во время ожидания `map.lock`),
+ * этой проверки (`works.delete` другого клиента, пока запись ждала базу),
  * core сообщает `WorkNotFoundError` из самой записи.
  */
 export async function requireWork(projectPath: string, workId: string): Promise<void> {

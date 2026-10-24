@@ -143,8 +143,8 @@ export type LaunchOutcome = 'started' | 'held';
 export type CreatedSession = SessionRef & { held?: 'folder-trust' };
 
 /**
- * Попыток записать старт процесса в карту, пока `map.lock` занят: подъём всей работы после перезапуска хоста
- * держал замок дольше 3 с (2026-10-09), а процесс к этому моменту уже идёт.
+ * Попыток записать старт процесса в карту, пока база работ занята: подъём всей работы после перезапуска хоста
+ * держал запись дольше 3 с (2026-10-09), а процесс к этому моменту уже идёт.
  */
 const START_WRITE_ATTEMPTS = 3;
 
@@ -850,9 +850,9 @@ export function createSessionsService(
                 plan.env['PARLEY_NATIVE_CONTEXT_REVISION']);
               break;
             } catch (error) {
-              // Замок держат другие писатели карты — это пройдёт; прочий сбой повтором не лечится.
+              // Базу держат другие писатели карты — это пройдёт; прочий сбой повтором не лечится.
               if (!(error instanceof MapLockTimeoutError) || attempt >= START_WRITE_ATTEMPTS) throw error;
-              host.log.warn('запись старта сессии ждёт map.lock — повтор', { ref, attempt });
+              host.log.warn('запись старта сессии ждёт базу работ — повтор', { ref, attempt });
             }
           }
         } finally {

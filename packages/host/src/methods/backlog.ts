@@ -27,11 +27,12 @@ function absolute(projectPath: string): void {
 
 async function knownMap(projectPath: string, workId: string) {
   // Карта — строки базы (спека хранилища 6.9): известна та работа, что лежит под этим проектом и загружается.
-  // Версия — до карты: запись между ними даст запоздавший `revision`, а не устаревшую карту под свежим.
+  // Версия — до карты: запись между ними даст запоздавший `revision`, а не устаревшую карту под свежим. Путь проекта в
+  // `revision` не входит: он уже есть в `author.projectPath`, а длина строки в протоколе ограничена.
   const version = workVersion(projectPath, workId);
   const map = await readMap(projectPath, workId);
   if (version === undefined || map.work.id !== workId || map.sessions.length > 100_000) throw new SharedStateError('shared-state-unsafe');
-  return { map, project: projectPath, revision: `${projectPath}:${workId}:${version}` };
+  return { map, project: projectPath, revision: `${workId}:${version}` };
 }
 
 /** Suggestions lack a persisted project identity. Only a unique verified known map proves the author. */
