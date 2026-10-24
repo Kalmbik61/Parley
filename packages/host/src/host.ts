@@ -1,5 +1,6 @@
 import { AGENT_PROVIDERS_PATH, createProvidersEndpoint, providerRowsOf } from './agent/providers-endpoint.js';
 import { AGENT_SESSIONS_PATH, createSessionEndpoint } from './agent/session-endpoint.js';
+import { AGENT_ATTEMPTS_PATH, createAttemptsEndpoint } from './agent/attempts-endpoint.js';
 import { randomBytes } from 'node:crypto';
 import { mkdir, chmod, link, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -367,6 +368,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     authenticate: (req) => browserEndpoint.authenticate(req),
     create: (input) => sessionsService.create(input),
   });
+  const attemptsEndpoint = createAttemptsEndpoint({ authenticate: req => browserEndpoint.authenticate(req) });
   // Строки провайдеров для агента (спека подписок 5.8, К7): тот же `providers.list`, что у окна, без ключа и проверок.
   // Обработчик собирается ниже, когда готовы службы проверки ключей, поэтому привязка поздняя.
   let listProviders: (() => Promise<Result<'providers.list'>>) | undefined;
@@ -388,7 +390,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       }
       feedService.onHook(request);
     },
-    routes: { [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
+    routes: { [AGENT_ATTEMPTS_PATH]: (req, res) => attemptsEndpoint.handle(req, res), [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
   });
 
   // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт, а
