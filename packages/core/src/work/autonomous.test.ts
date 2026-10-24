@@ -737,6 +737,8 @@ describe('автономные правила', () => {
     expect(last(first.plan).manifest!.artifacts).toEqual([{ ...artifact, storedAs: `artifacts/0-${artifact.sha256}` }]);
     const { hash: _hash, ...body } = last(first.plan).manifest!;
     expect(last(first.plan).manifest!.hash).toBe(digest(body));
+    const finished = integrated(queued(accepted(first.plan).plan));
+    expect(finished.items[0]!.evidence!.artifacts).toEqual([`artifacts/0-${artifact.sha256}`]);
     for (const artifacts of [[], [{ ...artifact, path: 'other.txt', storedAs: 'artifacts/result' }], [{ ...artifact, sha256: 'b'.repeat(64), storedAs: 'artifacts/result' }], [{ ...artifact, storedAs: '../escape' }]]) {
       const plan = structuredClone(first.plan);
       last(plan).receipt = null;
