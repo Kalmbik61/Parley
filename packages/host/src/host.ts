@@ -74,6 +74,7 @@ import { createFeedService } from './feed/feed-service.js';
 import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
+import { autonomousEngineIO, createAutonomousEngine } from './rooms/autonomous-engine.js';
 import { createHistoryService } from './rooms/history-service.js';
 import { createHumanRoom, resolveRoomProposal, sendHumanLetter } from './rooms/rooms-service.js';
 import { createAssistantEndpoint } from './assistant/assistant-endpoint.js';
@@ -368,7 +369,16 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     authenticate: (req) => browserEndpoint.authenticate(req),
     create: (input) => sessionsService.create(input),
   });
-  const attemptsEndpoint = createAttemptsEndpoint({ authenticate: req => browserEndpoint.authenticate(req) });
+  const autonomousEngine = createAutonomousEngine(autonomousEngineIO({
+    create: input => sessionsService.create(input),
+    launch: (ref, mode, choice) => sessionsService.launch(ref, mode, choice),
+    stop: ref => sessionsService.stop(ref),
+    close: ref => sessionsService.close(ref),
+  }), { provider: 'codex', verifier: { provider: 'claude', model: 'sonnet' }, works: worksService,
+    onFailure: error => log.error('autonomous engine failed', { error: String(error) }),
+  });
+  handle.context.onShutdown(() => autonomousEngine.stop());
+  const attemptsEndpoint = createAttemptsEndpoint({ authenticate: req => browserEndpoint.authenticate(req), engine: autonomousEngine });
   // Строки провайдеров для агента (спека подписок 5.8, К7): тот же `providers.list`, что у окна, без ключа и проверок.
   // Обработчик собирается ниже, когда готовы службы проверки ключей, поэтому привязка поздняя.
   let listProviders: (() => Promise<Result<'providers.list'>>) | undefined;
@@ -761,6 +771,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   void authService.refreshAll();
   await activityService.start();
   planEffects.start();
+  autonomousEngine.start();
   history.start();
   wakeService.start();
   // Первое чтение лимитов — после чтения работ: файлы сессий ищутся по их картам. Окно, подключившееся

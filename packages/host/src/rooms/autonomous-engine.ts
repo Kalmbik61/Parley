@@ -1,0 +1,660 @@
+import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import * as filesystem from 'node:fs/promises';
+import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { promisify } from 'node:util';
+import {
+  ENGINE, addMember, coverageVerdict, enqueue, failureSignature, halt, intendOp,
+  liveLead, parleyNote, PlanConflictError, ProposalConflictError, readMap, receipt, reconcileAfterRestart, recordCheck, resolveProposal,
+  returnAttempt, settleOp, startAttempt, submitAttempt, supersedeByAmendment, updateMap, workPaths,
+  type AutonomousOp, type CheckResult, type HandoffManifest, type PlanAttempt,
+  type RoomPlan, type WorkMap,
+} from '@parley/core';
+import {
+  attemptsEngineGitPath, type AttemptsEngine, type AttemptsProposal, type AttemptsResult,
+} from '../agent/attempts-endpoint.js';
+import type { CreateSessionInput, SessionsService } from '../sessions/sessions-service.js';
+import type { WorksService } from '../works/works-service.js';
+import { run } from './check-runner.js';
+
+export interface EngineIO {
+  readMap: typeof readMap;
+  updateMap: typeof updateMap;
+  sessions: Pick<SessionsService, 'create' | 'launch' | 'stop' | 'close'>;
+  runner: typeof run;
+  git(args: string[], options?: { env?: NodeJS.ProcessEnv }): Promise<Buffer>;
+  fs: Pick<typeof filesystem, 'mkdir' | 'stat' | 'lstat' | 'realpath' | 'readFile' | 'writeFile' | 'rm'>;
+  now(): Date;
+  sleep(ms: number): Promise<unknown>;
+}
+export interface AutonomousEngineOptions {
+  provider: string;
+  model?: string;
+  verifier: { provider: string; model?: string };
+  works?: Pick<WorksService, 'snapshot' | 'onChange'>;
+  onFailure?(error: unknown): void;
+}
+export interface AutonomousEngine extends AttemptsEngine {
+  start(): void;
+  stop(): Promise<void>;
+  flush(projectPath: string, workId: string): Promise<void>;
+}
+const exec = promisify(execFile);
+export function autonomousEngineIO(sessions: EngineIO['sessions']): EngineIO {
+  return {
+    readMap, updateMap, sessions, runner: run, fs: filesystem, now: () => new Date(), sleep,
+    git: async (args, options) => (await exec('git', args, { ...options, encoding: 'buffer', maxBuffer: 16 * 1024 * 1024 })).stdout,
+  };
+}
+const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.map(canonical).join(',')}]`
+  : value !== null && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(',')}}`
+  : JSON.stringify(value)!;
+const hash = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
+const bytesHash = (value: Buffer) => createHash('sha256').update(value).digest('hex');
+const context = (plan: RoomPlan, at: string) => ({ actor: ENGINE, rev: plan.rev, now: at });
+const fenced = new Set(['returned', 'blocked', 'aborted', 'superseded']);
+const active = (plan: RoomPlan) => plan.mode === 'autonomous' && plan.acceptedAt !== null && ['active', 'completing'].includes(plan.status) && !!plan.autonomous;
+const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+const denied = (error: unknown): AttemptsResult => ({ ok: false, error: { code: errorText(error), message: errorText(error) } });
+const attemptOf = (plan: RoomPlan, id: string) => {
+  const attempt = plan.autonomous!.attempts.find(row => row.id === id);
+  if (!attempt) throw new Error('attempt-not-found');
+  return attempt;
+};
+// Shared by every engine instance in this host process: sandbox log windows cannot overlap.
+let checkQueue: Promise<unknown> = Promise.resolve();
+function serialCheck<T>(effect: () => Promise<T>): Promise<T> {
+  const result = checkQueue.then(effect, effect);
+  checkQueue = result.catch(() => {});
+  return result;
+}
+interface WorkState { tail: Promise<unknown>; scheduled: boolean }
+interface Location { projectPath: string; workId: string; planId: string }
+class NoEngineChange extends Error {}
+
+/** Runs inside the caller's single updateMap transaction, before any effects. */
+export function resolveAutonomousProposal(
+  map: WorkMap, roomId: string, proposalId: string, action: 'accept' | 'return',
+  options: Parameters<typeof resolveProposal>[4], now = new Date().toISOString(),
+): string {
+  const room = map.rooms.find(row => row.id === roomId);
+  const proposal = room?.proposal as AttemptsProposal | null | undefined;
+  const amendment = proposal?.autonomousAmendment;
+  if (action !== 'accept' || !amendment) return resolveProposal(map, roomId, proposalId, action, options, now).messageId;
+  // Validate the exact card the human saw before changing either revision.
+  if (proposal!.id !== proposalId || options?.rev !== proposal!.rev || options?.planId !== proposal!.plan?.id || options?.planRev !== proposal!.plan?.rev) throw new ProposalConflictError('plan identity/revision must match the displayed proposal');
+  const index = map.plans?.findIndex(row => row.id === amendment.planId) ?? -1;
+  const old = map.plans?.[index];
+  if (!old || old.rev !== amendment.rev || !active(old))
+    return resolveProposal(map, roomId, proposalId, 'return', { ...options, note: 'Amendment revision changed; propose it again against the current plan.' }, now).messageId;
+  if (!proposal!.plan || !room) throw new PlanConflictError();
+  const semantics = (item: RoomPlan['items'][number]) => canonical([item.title, item.owner, item.scope, item.after, item.criteria, item.verifier]);
+  const specs = (plan: RoomPlan, item: number, checks = plan.autonomous!.checks, coverage = plan.autonomous!.coverage) => {
+    const ids = new Set(Object.values(coverage[item] ?? {}).flat().filter(id => id !== 'verifier'));
+    return canonical(checks.filter(row => ids.has(row.id)).map(({ frozenAt: _frozenAt, ...row }) => row).sort((a, b) => a.id.localeCompare(b.id)));
+  };
+  const changedItems = old.items.filter(item => {
+    const proposed = proposal!.plan!.items.find(row => row.id === item.id);
+    return !proposed || semantics(item) !== semantics(proposed) ||
+      canonical(old.autonomous!.coverage[item.id]) !== canonical(amendment.draft.coverage[item.id]) ||
+      specs(old, item.id) !== specs(old, item.id, amendment.checks, amendment.draft.coverage);
+  }).map(item => item.id);
+  const fenced = supersedeByAmendment(old, room, { ...context(old, now), changedItems });
+  map.plans![index] = fenced.plan;
+  map.rooms[map.rooms.indexOf(room)] = fenced.room;
+  const pending = fenced.room.proposal as AttemptsProposal;
+  const proposed = pending.plan!;
+  // Supersession and acceptance each advance rev once; runtime history is retained.
+  proposed.rev = fenced.plan.rev + 1;
+  proposed.autonomous = structuredClone(fenced.plan.autonomous!);
+  proposed.autonomous.checks = structuredClone(amendment.checks);
+  proposed.autonomous.coverage = structuredClone(amendment.draft.coverage);
+  proposed.autonomous.budget.limits = structuredClone(amendment.draft.budget);
+  proposed.autonomous.criteriaVersion = Object.fromEntries(proposed.items.map(item => [item.id, fenced.plan.autonomous!.criteriaVersion[item.id] ?? 1]));
+  pending.planRev = proposed.rev;
+  return resolveProposal(map, roomId, proposalId, action, { ...options, planRev: proposed.rev }, now).messageId;
+}
+
+/** Durable rule transactions precede all effects. Integration and resume are separate stages. */
+export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOptions): AutonomousEngine {
+  const states = new Map<string, WorkState>();
+  let stopped = false;
+  let off: (() => void) | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const at = () => io.now().toISOString();
+  function state(projectPath: string, workId: string): WorkState {
+    const key = `${projectPath}\0${workId}`;
+    let value = states.get(key);
+    if (!value) { value = { tail: Promise.resolve(), scheduled: false }; states.set(key, value); }
+    return value;
+  }
+  function exclusive<T>(projectPath: string, workId: string, effect: () => Promise<T>): Promise<T> {
+    const current = state(projectPath, workId);
+    const result = current.tail.then(() => { if (stopped) throw new Error('engine-stopped'); return effect(); });
+    current.tail = result.catch(() => {});
+    return result;
+  }
+  async function load(loc: Location): Promise<RoomPlan> {
+    const map = await io.readMap(loc.projectPath, loc.workId);
+    const plan = map.plans?.find(row => row.id === loc.planId);
+    if (!plan || !active(plan)) throw new Error('plan-unavailable');
+    return plan;
+  }
+  async function change(loc: Location, edit: (plan: RoomPlan, map: WorkMap) => RoomPlan): Promise<RoomPlan> {
+    let changed!: RoomPlan;
+    try { await io.updateMap(loc.projectPath, loc.workId, map => {
+      const before = JSON.stringify(map);
+      const index = map.plans?.findIndex(row => row.id === loc.planId) ?? -1;
+      if (index < 0 || !active(map.plans![index]!)) throw new Error('plan-unavailable');
+      changed = edit(map.plans![index]!, map);
+      map.plans![index] = changed;
+      if (JSON.stringify(map) === before) throw new NoEngineChange();
+    }); } catch (error) { if (!(error instanceof NoEngineChange)) throw error; }
+    return changed;
+  }
+  const directory = (loc: Location, attemptId: string) => path.join(workPaths(loc.projectPath, loc.workId).dir, 'autonomous', loc.planId, 'attempts', attemptId);
+  const cloneDirectory = (loc: Location, attemptId: string) => path.join(directory(loc, attemptId), 'clone');
+  const artifactPath = (loc: Location, attemptId: string, index: number, sha: string) => path.join(directory(loc, attemptId), 'artifacts', `${index}-${sha}`);
+  async function exists(file: string): Promise<boolean> {
+    try { await io.fs.stat(file); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
+  }
+  // No inherited git variables, global config, executable hooks, fsmonitor or signing.
+  async function git(loc: Location, args: string[], extra: NodeJS.ProcessEnv = {}): Promise<Buffer> {
+    const home = path.join(workPaths(loc.projectPath, loc.workId).dir, 'autonomous', loc.planId, 'git-home');
+    const hooks = path.join(home, 'empty-hooks');
+    return io.git(['-c', `core.hooksPath=${hooks}`, '-c', 'core.fsmonitor=false', '-c', 'commit.gpgsign=false', '-c', 'protocol.file.allow=always', ...args], {
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, LC_ALL: 'C', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0', GIT_AUTHOR_NAME: 'Parley engine', GIT_AUTHOR_EMAIL: 'engine@parley.local', GIT_COMMITTER_NAME: 'Parley engine', GIT_COMMITTER_EMAIL: 'engine@parley.local', ...extra },
+    });
+  }
+  const bare = (loc: Location, args: string[], env?: NodeJS.ProcessEnv) => git(loc, [`--git-dir=${attemptsEngineGitPath(loc.projectPath, loc.workId)}`, ...args], env);
+  const text = async (loc: Location, args: string[]) => (await bare(loc, args)).toString('utf8').trim();
+  function sessionLabel(attemptId: string, op: AutonomousOp) { return `${attemptId} ${op.payload.role} ${op.key}`; }
+  async function intend(loc: Location, kind: AutonomousOp['kind'], attemptId: string | null, payload: Record<string, unknown>): Promise<AutonomousOp> {
+    const plan = await change(loc, current => intendOp(current, { ...context(current, at()), kind, attemptId, payload }));
+    return plan.autonomous!.ops.at(-1)!;
+  }
+  async function settled(loc: Location, op: AutonomousOp, outcome: 'done' | 'failed', result: Record<string, unknown>) {
+    return change(loc, (plan, map) => {
+      const next = settleOp(plan, { ...context(plan, at()), key: op.key, outcome, result });
+      if (op.kind === 'create-session' && outcome === 'done') joinCreated(map, next, String(result.sessionId));
+      return next;
+    });
+  }
+  function joinCreated(map: WorkMap, plan: RoomPlan, sessionId: string) {
+    const room = map.rooms.find(row => row.id === plan.roomId)!;
+    const session = map.sessions.find(row => row.id === sessionId);
+    if (session && session.lifecycle !== 'closed' && !room.members.includes(sessionId)) addMember(map, room.id, sessionId, at());
+  }
+  async function effect(loc: Location, op: AutonomousOp, execute: () => Promise<Record<string, unknown>>): Promise<AutonomousOp> {
+    if (op.state !== 'intended') return op;
+    if (stopped) throw new Error('engine-stopped');
+    const latest = await load(loc);
+    if (!['stop-session', 'close-session'].includes(op.kind) &&
+      (latest.autonomous!.halted || (op.attemptId && fenced.has(attemptOf(latest, op.attemptId).status)))) {
+      await settled(loc, op, 'failed', { reason: 'attempt-fenced' });
+      throw new Error('attempt-fenced');
+    }
+    let result: Record<string, unknown>;
+    try { result = await execute(); }
+    catch (error) {
+      await settled(loc, op, 'failed', { reason: errorText(error) });
+      await change(loc, plan => halt(plan, { ...context(plan, at()), reason: /resource|limit|budget|denied/i.test(errorText(error)) ? 'budget' : 'human', detail: `${op.kind}: ${errorText(error)}` }));
+      throw error;
+    }
+    // A crash/failing write here leaves the original intention for startup reconciliation.
+    const plan = await settled(loc, op, 'done', result);
+    return plan.autonomous!.ops.find(row => row.key === op.key)!;
+  }
+  async function sessionOperation(loc: Location, op: AutonomousOp): Promise<void> {
+    const sessionId = String(op.payload.sessionId);
+    const map = await io.readMap(loc.projectPath, loc.workId);
+    const session = map.sessions.find(row => row.id === sessionId);
+    await effect(loc, op, async () => {
+      if (session && (op.kind === 'close-session' ? session.lifecycle !== 'closed' : ['active', 'pending', 'closing'].includes(session.lifecycle))) {
+        const ref = { projectPath: loc.projectPath, workId: loc.workId, sessionId };
+        if (op.kind === 'close-session') await io.sessions.close(ref); else await io.sessions.stop(ref);
+      }
+      return { sessionId };
+    });
+  }
+  async function drainSessions(loc: Location) {
+    const plan = await load(loc);
+    for (const op of plan.autonomous!.ops.filter(row => row.state === 'intended' && ['stop-session', 'close-session'].includes(row.kind))) {
+      if (stopped) return;
+      await sessionOperation(loc, op);
+    }
+  }
+  async function initialize(loc: Location): Promise<void> {
+    const plan = await load(loc);
+    const previous = plan.autonomous!.ops.find(row => row.kind === 'clone' && row.payload.purpose === 'engine');
+    if (previous?.state === 'done') return;
+    const op = previous ?? await intend(loc, 'clone', null, { purpose: 'engine', baseSha: plan.autonomous!.integration.baseSha, branch: plan.autonomous!.integration.branch });
+    await effect(loc, op, async () => {
+      const repo = attemptsEngineGitPath(loc.projectPath, loc.workId), integration = plan.autonomous!.integration;
+      await io.fs.mkdir(path.dirname(repo), { recursive: true });
+      if (!await exists(repo)) await git(loc, ['init', '--bare', repo]);
+      await bare(loc, ['fetch', '--no-tags', '--', loc.projectPath, integration.baseSha]);
+      await bare(loc, ['update-ref', `refs/heads/${integration.branch}`, integration.baseSha]);
+      return { sha: integration.baseSha };
+    });
+  }
+  async function workerBrief(loc: Location, plan: RoomPlan, attempt: PlanAttempt): Promise<string> {
+    const a = plan.autonomous!, item = plan.items.find(row => row.id === attempt.item)!;
+    const dependencies = a.attempts.filter(row => item.after.includes(row.item) && ['accepted', 'queued', 'integrated'].includes(row.status));
+    const previous = a.attempts.filter(row => row.item === item.id && row.n < attempt.n);
+    const tails = await outputTails(loc, previous.flatMap(row => thisResults(plan, row)));
+    return [
+      `Goal: ${plan.goal}`, `Attempt: ${attempt.id}; plan ${plan.id} rev ${plan.rev}; baseSha ${attempt.baseSha}`,
+      `Item: ${item.id} ${item.title}; scope: ${item.scope}`, `Criteria version ${attempt.criteriaVersion}: ${JSON.stringify(item.criteria)}`,
+      `Accepted dependencies (use these attempt IDs in dependsOn): ${JSON.stringify(dependencies.map(row => ({ attemptId: row.id, facts: row.manifest?.facts, artifacts: row.manifest?.artifacts })))}`,
+      `Previous attempts: ${JSON.stringify(previous.map(row => ({ manifest: row.manifest, failure: row.failureSignature, checks: thisResults(plan, row) })))}`,
+      `Previous check output tails: ${JSON.stringify(tails)}`,
+      `Frozen inputs: ${JSON.stringify(a.checks.filter(row => row.item === item.id).flatMap(row => row.inputs))}`,
+      'Work only inside the clone. Do not modify git or write outside the clone. Submit only through attempt_submit.',
+      'Manifest: {version:1,criteriaVersion,dependsOn,coverage:"covered"|"partial"|"failed"|"unstarted",scope,facts:[],hypotheses:[],notFound:[],gaps:[],text (<=4096),artifacts:[{path,sha256,storedAs:""}],hash,submittedAt}. The engine captures sha and copies artifacts.',
+    ].join('\n');
+  }
+  function thisResults(plan: RoomPlan, attempt: PlanAttempt): CheckResult[] {
+    return plan.autonomous!.ops.filter(op => op.kind === 'check' && op.state === 'done' && op.attemptId === attempt.id)
+      .map(op => op.result?.checkResult as CheckResult).filter(row => row && attempt.checks.includes(row.id));
+  }
+  async function spawn(loc: Location, attemptId: string, role: 'worker' | 'verifier'): Promise<void> {
+    let plan = await load(loc), attempt = attemptOf(plan, attemptId);
+    let op = plan.autonomous!.ops.find(row => row.kind === 'create-session' && row.attemptId === attemptId && row.payload.role === role);
+    op ??= await intend(loc, 'create-session', attemptId, { role });
+    if (op.state === 'failed' || (await load(loc)).autonomous!.halted) return;
+    if (op.state === 'intended') {
+      if (role === 'worker') {
+        const dir = cloneDirectory(loc, attemptId);
+        const cloneOp = await intend(loc, 'clone', attemptId, { dir, sha: attempt.baseSha, branch: attempt.branch });
+        await effect(loc, cloneOp, async () => {
+          await io.fs.mkdir(path.dirname(dir), { recursive: true });
+          await git(loc, ['clone', '--no-hardlinks', '--no-checkout', '--', attemptsEngineGitPath(loc.projectPath, loc.workId), dir]);
+          await git(loc, ['-C', dir, 'checkout', '--detach', attempt.baseSha]);
+          return { dir, sha: attempt.baseSha };
+        });
+      }
+      const task = role === 'worker' ? await workerBrief(loc, plan, attempt) : await verifierBrief(loc, plan, attempt);
+      const selected = role === 'worker' ? { provider: options.provider, model: options.model } : options.verifier;
+      const create = op;
+      await effect(loc, create, async () => {
+        const map = await io.readMap(loc.projectPath, loc.workId);
+        const existing = map.sessions.find(row => row.label === sessionLabel(attemptId, create));
+        if (existing) return { sessionId: existing.id };
+        const input: CreateSessionInput = { projectPath: loc.projectPath, workId: loc.workId, requestedBy: ENGINE, deferLaunch: true, parent: null, provider: selected.provider, label: sessionLabel(attemptId, create), task, role: { source: 'builtin', name: role === 'worker' ? 'executor' : 'verifier' }, ...(selected.model === undefined ? {} : { model: selected.model }) };
+        const ref = await io.sessions.create(input);
+        return { sessionId: ref.sessionId };
+      });
+    }
+    plan = await load(loc); attempt = attemptOf(plan, attemptId);
+    if (plan.autonomous!.halted || fenced.has(attempt.status)) return;
+    const sessionId = role === 'worker' ? attempt.worker : attempt.verifier;
+    if (!sessionId) return;
+    const launched = plan.autonomous!.ops.find(row => row.kind === 'launch' && row.payload.sessionId === sessionId && row.state === 'done');
+    if (!launched) {
+      const launch = await intend(loc, 'launch', attemptId, { sessionId, role });
+      if (launch.state !== 'intended') return;
+      await effect(loc, launch, async () => {
+        const result = await io.sessions.launch({ projectPath: loc.projectPath, workId: loc.workId, sessionId }, 'launch', { by: ENGINE });
+        if (result !== 'started') throw new Error('session-launch-held');
+        return { sessionId };
+      });
+    }
+  }
+  async function outputTails(loc: Location, results: CheckResult[]) {
+    return Promise.all(results.map(async result => {
+      if (!result.outputTail) return { id: result.id, tail: null };
+      const file = path.resolve(loc.projectPath, result.outputTail);
+      const root = path.join(workPaths(loc.projectPath, loc.workId).dir, 'autonomous', loc.planId);
+      if (!file.startsWith(`${root}${path.sep}`)) throw new Error('untrusted-check-output');
+      return { id: result.id, tail: (await io.fs.readFile(file, 'utf8')).slice(-65536) };
+    }));
+  }
+  async function verifierBrief(loc: Location, plan: RoomPlan, attempt: PlanAttempt): Promise<string> {
+    const diff = await text(loc, ['diff', '--no-ext-diff', '--no-textconv', '--stat', `${attempt.baseSha}..${attempt.sha}`]);
+    const results = thisResults(plan, attempt);
+    const tails = await outputTails(loc, results);
+    return [`Read-only verifier for ${attempt.id}; sha ${attempt.sha}; criteriaVersion ${attempt.criteriaVersion}.`,
+      `Criteria: ${JSON.stringify(plan.items.find(row => row.id === attempt.item)!.criteria)}`,
+      'Use only these engine-owned artifacts. Do not read source code or execute commands. Return attempt_verify for every qualitative criterion.',
+      `Manifest: ${JSON.stringify(attempt.manifest)}`, `Diff summary: ${diff}`, `Checks: ${JSON.stringify(results)}`, `Output tails: ${JSON.stringify(tails)}`].join('\n');
+  }
+  async function capture(loc: Location, attempt: PlanAttempt): Promise<AutonomousOp> {
+    const plan = await load(loc);
+    const previous = plan.autonomous!.ops.find(op => op.kind === 'capture' && op.attemptId === attempt.id);
+    const op = previous ?? await intend(loc, 'capture', attempt.id, { baseSha: attempt.baseSha, dir: cloneDirectory(loc, attempt.id) });
+    return effect(loc, op, async () => {
+      const recovered = await captureEvidence(loc, op, attempt);
+      if (recovered) return recovered;
+      const index = path.join(directory(loc, attempt.id), `${op.key}.index`);
+      await io.fs.rm(index, { force: true });
+      const env = { GIT_INDEX_FILE: index, GIT_WORK_TREE: cloneDirectory(loc, attempt.id) };
+      await bare(loc, ['read-tree', attempt.baseSha], env);
+      await bare(loc, ['add', '-A', '--', '.'], env);
+      const tree = (await bare(loc, ['write-tree'], env)).toString('utf8').trim();
+      const baseTree = await text(loc, ['rev-parse', `${attempt.baseSha}^{tree}`]);
+      const sha = tree === baseTree ? attempt.baseSha : (await bare(loc, ['commit-tree', tree, '-p', attempt.baseSha, '-m', `${op.key} ${attempt.id}`], { ...env, GIT_AUTHOR_NAME: `attempt ${attempt.id}` })).toString('utf8').trim();
+      await bare(loc, ['update-ref', `refs/attempts/${attempt.id}`, sha]);
+      await io.fs.rm(index, { force: true });
+      return { sha, tree, baseTree };
+    });
+  }
+  async function captureEvidence(loc: Location, op: AutonomousOp, attempt: PlanAttempt): Promise<Record<string, unknown> | null> {
+    if (!await exists(attemptsEngineGitPath(loc.projectPath, loc.workId))) return null;
+    // commit-tree can finish before update-ref: scan engine-owned objects, including dangling commits.
+    const objects = await text(loc, ['cat-file', '--batch-all-objects', '--batch-check=%(objectname) %(objecttype)']);
+    for (const line of objects.split('\n')) {
+      const [sha, type] = line.split(' ');
+      if (type !== 'commit') continue;
+      const commit = await text(loc, ['cat-file', 'commit', sha!]);
+      const parents = [...commit.matchAll(/^parent (.+)$/gm)].map(match => match[1]);
+      if (commit.split('\n\n').slice(1).join('\n\n').trim() === `${op.key} ${attempt.id}` && parents.length === 1 && parents[0] === attempt.baseSha) {
+        return { sha, tree: /^tree (.+)$/m.exec(commit)![1], baseTree: await text(loc, ['rev-parse', `${attempt.baseSha}^{tree}`]) };
+      }
+    }
+    // Unchanged captures are witnessed by an attempt ref pointing exactly at baseSha.
+    try {
+      if (await text(loc, ['rev-parse', '--verify', `refs/attempts/${attempt.id}`]) === attempt.baseSha) {
+        const tree = await text(loc, ['rev-parse', `${attempt.baseSha}^{tree}`]);
+        return { sha: attempt.baseSha, tree, baseTree: tree };
+      }
+    } catch { /* No attempt ref yet. */ }
+    return null;
+  }
+  async function frozenInputs(loc: Location, plan: RoomPlan, attempt: PlanAttempt, sha: string): Promise<boolean> {
+    for (const input of plan.autonomous!.checks.filter(row => row.item === attempt.item).flatMap(row => row.inputs)) {
+      try { if (await text(loc, ['rev-parse', `${sha}:${input.path}`]) !== input.blob || await text(loc, ['cat-file', '-t', `${sha}:${input.path}`]) !== 'blob') return false; }
+      catch { return false; }
+    }
+    return true;
+  }
+  async function artifactDirectory(loc: Location, attemptId: string): Promise<string> {
+    const dir = directory(loc, attemptId);
+    const root = await io.fs.realpath(path.dirname(dir));
+    if (await io.fs.realpath(dir) !== path.join(root, attemptId)) throw new Error('untrusted-artifact-directory');
+    const artifacts = path.join(dir, 'artifacts');
+    await io.fs.mkdir(artifacts, { recursive: true });
+    if (!(await io.fs.lstat(artifacts)).isDirectory() || await io.fs.realpath(artifacts) !== path.join(root, attemptId, 'artifacts')) throw new Error('untrusted-artifact-directory');
+    return artifacts;
+  }
+  async function artifactBytes(file: string): Promise<Buffer> {
+    if (!(await io.fs.lstat(file)).isFile() || await io.fs.realpath(file) !== path.join(await io.fs.realpath(path.dirname(file)), path.basename(file))) throw new Error('untrusted-artifact-file');
+    return io.fs.readFile(file);
+  }
+  async function copyArtifacts(loc: Location, attempt: PlanAttempt, captureOp: AutonomousOp): Promise<AutonomousOp> {
+    const plan = await load(loc);
+    const op = plan.autonomous!.ops.find(row => row.kind === 'copy-artifacts' && row.attemptId === attempt.id)
+      ?? await intend(loc, 'copy-artifacts', attempt.id, { captureOp: captureOp.key });
+    return effect(loc, op, async () => {
+      let valid = true;
+      const artifacts: HandoffManifest['artifacts'] = [];
+      for (const [index, artifact] of attempt.manifest!.artifacts.entries()) {
+        const file = artifactPath(loc, attempt.id, index, artifact.sha256);
+        const storedAs = path.relative(directory(loc, attempt.id), file);
+        artifacts.push({ ...artifact, storedAs });
+        if (path.posix.isAbsolute(artifact.path) || artifact.path.split('/').some(part => part === '..' || part === '.git') || !/^[a-f0-9]{64}$/.test(artifact.sha256)) { valid = false; continue; }
+        try {
+          const object = `${captureOp.result!.sha}:${artifact.path}`;
+          // Read blobs from the captured tree; never follow a clone symlink or trust storedAs.
+          const entry = await text(loc, ['ls-tree', String(captureOp.result!.sha), '--', artifact.path]);
+          if (!/^100(644|755) blob /.test(entry)) { valid = false; continue; }
+          const data = await bare(loc, ['cat-file', 'blob', object]);
+          if (bytesHash(data) !== artifact.sha256) { valid = false; continue; }
+          await artifactDirectory(loc, attempt.id);
+          await io.fs.writeFile(file, data, { flag: 'wx' }).catch(async error => {
+            if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || bytesHash(await artifactBytes(file)) !== artifact.sha256) throw error;
+          });
+        } catch { valid = false; }
+      }
+      return { artifacts, artifactsCopied: valid, artifactHashesOk: valid };
+    });
+  }
+  async function finishSubmission(loc: Location, attemptId: string): Promise<void> {
+    await drainSessions(loc);
+    let plan = await load(loc), attempt = attemptOf(plan, attemptId);
+    if (fenced.has(attempt.status) || plan.autonomous!.halted || attempt.receipt) return;
+    const captured = await capture(loc, attempt);
+    const copied = await copyArtifacts(loc, attempt, captured);
+    const sha = String(captured.result!.sha), tree = String(captured.result!.tree);
+    const inputsOk = await frozenInputs(loc, plan, attempt, sha);
+    let descendantOfBase = false;
+    try { await bare(loc, ['merge-base', '--is-ancestor', attempt.baseSha, sha]); descendantOfBase = true; } catch { /* Receipt records the failed observation. */ }
+    plan = await change(loc, (current, map) => {
+      const result = receipt(current, { ...context(current, at()), attemptId, submissionKey: attempt.submissionKey!, sha, tree, baseTree: String(captured.result!.baseTree), descendantOfBase, inputsOk, artifactsCopied: copied.result!.artifactsCopied === true, artifactHashesOk: copied.result!.artifactHashesOk === true, artifacts: copied.result!.artifacts as HandoffManifest['artifacts'], captureOp: captured.key, copyOp: copied.key });
+      const received = attemptOf(result.plan, attemptId);
+      if (received.receipt && !attempt.receipt && received.worker) parleyNote(map, result.plan.roomId, received.worker, `Receipt ${received.receipt.id} recorded (${received.receipt.valid ? 'valid' : received.receipt.reason}).`, at());
+      return result.plan;
+    });
+    await drainSessions(loc);
+    attempt = attemptOf(plan, attemptId);
+    if (attempt.receipt?.valid) await checkAttempt(loc, attemptId);
+  }
+  async function record(loc: Location, attemptId: string, op: AutonomousOp, result: CheckResult): Promise<void> {
+    await settled(loc, op, 'done', { checkResult: result });
+    await change(loc, plan => recordCheck(plan, { ...context(plan, at()), attemptId, opKey: op.key, result }));
+    if (result.verdict === 'error' && result.summary.includes('confinement-unavailable'))
+      await change(loc, plan => halt(plan, { ...context(plan, at()), reason: 'confinement', detail: result.summary }));
+  }
+  async function checkAttempt(loc: Location, attemptId: string): Promise<void> {
+    let plan = await load(loc), attempt = attemptOf(plan, attemptId);
+    if (plan.autonomous!.halted || !['submitted', 'checking'].includes(attempt.status)) return;
+    for (const spec of plan.autonomous!.checks.filter(row => row.item === attempt.item)) {
+      plan = await load(loc); attempt = attemptOf(plan, attemptId);
+      if (plan.autonomous!.halted || fenced.has(attempt.status)) return;
+      if (thisResults(plan, attempt).some(row => row.specId === spec.id)) continue;
+      await serialCheck(async () => {
+        const current = await load(loc);
+        if (stopped || current.autonomous!.halted) return;
+        const resultId = `ck-${String(current.autonomous!.seq.check + 1).padStart(4, '0')}`;
+        const op = await intend(loc, 'check', attemptId, { phase: 'attempt', sha: attempt.sha, specId: spec.id, resultId });
+        let result: CheckResult;
+        try { result = await io.runner({ projectPath: loc.projectPath, workId: loc.workId, planId: loc.planId, resultId, now: io.now }, spec, attempt.sha!, attemptId); }
+        catch (error) {
+          await settled(loc, op, 'failed', { reason: errorText(error) });
+          await change(loc, row => halt(row, { ...context(row, at()), reason: 'human', detail: `check: ${errorText(error)}` }));
+          throw error;
+        }
+        await record(loc, attemptId, op, result);
+      });
+    }
+    plan = await load(loc); attempt = attemptOf(plan, attemptId);
+    if (plan.autonomous!.halted || fenced.has(attempt.status)) return;
+    const qualitative = Object.entries(plan.autonomous!.coverage[attempt.item] ?? {}).filter(([, checks]) => checks.includes('verifier')).map(([criterion]) => `verifier:${criterion}`);
+    const results = thisResults(plan, attempt);
+    if (qualitative.some(id => !results.some(row => row.specId === id))) {
+      await spawn(loc, attemptId, 'verifier');
+      return;
+    }
+    await decide(loc, attemptId);
+  }
+  async function decide(loc: Location, attemptId: string): Promise<void> {
+    await change(loc, plan => {
+      const attempt = attemptOf(plan, attemptId), results = thisResults(plan, attempt);
+      const verdict = coverageVerdict(plan, { ...context(plan, at()), attemptId, results: results.filter(row => row.by === ENGINE), verifiers: results.filter(row => row.by !== ENGINE) });
+      if (verdict.plan.autonomous!.halted || fenced.has(attemptOf(verdict.plan, attemptId).status)) return verdict.plan;
+      if (verdict.accepted) return enqueue(verdict.plan, { ...context(verdict.plan, at()), attemptId });
+      return returnAttempt(verdict.plan, { ...context(verdict.plan, at()), attemptId, signature: failureSignature({ checks: results, criteria: results.filter(row => row.specId.startsWith('verifier:')).map(row => ({ criterion: Number(row.specId.split(':')[1]), verdict: row.verdict })), reasons: [verdict.reason ?? 'coverage-incomplete', ...verdict.gaps] }), reason: JSON.stringify({ gaps: verdict.gaps, checks: results.map(row => ({ id: row.specId, verdict: row.verdict, summary: row.summary, outputTail: row.outputTail })) }) });
+    });
+    const plan = await load(loc), attempt = attemptOf(plan, attemptId);
+    if (attempt.verifier && !plan.autonomous!.ops.some(op => op.kind === 'close-session' && op.payload.sessionId === attempt.verifier)) await intend(loc, 'close-session', attemptId, { sessionId: attempt.verifier });
+    await drainSessions(loc);
+  }
+  async function recover(loc: Location): Promise<void> {
+    const plan = await load(loc), map = await io.readMap(loc.projectPath, loc.workId);
+    const observations: Parameters<typeof reconcileAfterRestart>[1]['observations'] = [];
+    for (const op of plan.autonomous!.ops.filter(row => row.state === 'intended')) {
+      let result: Record<string, unknown> | null = null;
+      if (op.kind === 'create-session' && op.attemptId) {
+        const session = map.sessions.find(row => row.label === sessionLabel(op.attemptId!, op));
+        if (session) result = { sessionId: session.id };
+      } else if (['launch', 'stop-session', 'close-session'].includes(op.kind)) {
+        const session = map.sessions.find(row => row.id === op.payload.sessionId);
+        const confirmed = op.kind === 'launch' ? session?.lifecycle === 'active' : op.kind === 'close-session' ? session?.lifecycle === 'closed' : session && ['sleeping', 'closed'].includes(session.lifecycle);
+        if (confirmed) result = { sessionId: op.payload.sessionId };
+      } else if (op.kind === 'capture' && op.attemptId) result = await captureEvidence(loc, op, attemptOf(plan, op.attemptId));
+      else if (op.kind === 'copy-artifacts' && op.attemptId) {
+        const attempt = attemptOf(plan, op.attemptId);
+        const artifacts = attempt.manifest?.artifacts ?? [];
+        let valid = true;
+        for (const [index, artifact] of artifacts.entries()) {
+          try {
+            const file = artifactPath(loc, attempt.id, index, artifact.sha256);
+            const root = await io.fs.realpath(path.dirname(directory(loc, attempt.id)));
+            valid &&= await io.fs.realpath(path.dirname(file)) === path.join(root, attempt.id, 'artifacts') && bytesHash(await artifactBytes(file)) === artifact.sha256;
+          } catch { valid = false; }
+        }
+        if (valid) result = { artifactsCopied: true, artifactHashesOk: true };
+      }
+      observations.push({ key: op.key, outcome: result ? 'done' : 'failed', result: result ?? { reason: 'restart-unconfirmed' } });
+    }
+    let head = plan.autonomous!.integration.verifiedHead, parents: string[] = [], opKey: string | null = null;
+    if (await exists(attemptsEngineGitPath(loc.projectPath, loc.workId))) {
+      try {
+        head = await text(loc, ['rev-parse', `refs/heads/${plan.autonomous!.integration.branch}`]);
+        const commit = await text(loc, ['cat-file', 'commit', head]);
+        parents = [...commit.matchAll(/^parent (.+)$/gm)].map(match => match[1]!);
+        opKey = plan.autonomous!.ops.find(op => ['merge', 'noop-integration'].includes(op.kind) && commit.split('\n\n').slice(1).join('\n\n').trim() === `${op.key} ${op.attemptId}`)?.key ?? null;
+      } catch { /* Missing/unconfirmed branch is never proof of integration. */ }
+    }
+    await change(loc, (current, map) => {
+      const next = reconcileAfterRestart(current, { ...context(current, at()), observations, integrationHead: { sha: head, parents, opKey } });
+      for (const op of next.autonomous!.ops.filter(row => row.kind === 'create-session' && row.state === 'done')) joinCreated(map, next, String(op.result!.sessionId));
+      return next;
+    });
+    await drainSessions(loc);
+  }
+  async function cycle(projectPath: string, workId: string): Promise<void> {
+    const map = await io.readMap(projectPath, workId);
+    if (map.work.status !== 'active') return;
+    for (const original of map.plans?.filter(active) ?? []) {
+      const loc = { projectPath, workId, planId: original.id };
+      await drainSessions(loc);
+      let plan = await load(loc);
+      if (plan.autonomous!.halted) continue;
+      if (!['codex', 'claude'].includes(options.provider)) {
+        await change(loc, current => halt(current, { ...context(current, at()), reason: 'confinement', detail: `Unsupported executor provider: ${options.provider}` }));
+        continue;
+      }
+      const expired = plan.autonomous!.attempts.find(attempt => ['starting', 'running', 'checking'].includes(attempt.status) && io.now().getTime() - Date.parse(attempt.startedAt) > plan.autonomous!.budget.limits.minutesPerAttempt * 60_000);
+      if (expired) {
+        const session = map.sessions.find(row => row.id === expired.verifier || row.id === expired.worker);
+        for (const sessionId of [expired.worker, expired.verifier].filter((id): id is string => id !== null)) {
+          const op = await intend(loc, 'stop-session', expired.id, { sessionId });
+          await sessionOperation(loc, op);
+        }
+        await change(loc, (current, draft) => {
+          const detail = `${expired.id}: ${session?.stuck ? `stuck ${session.stuck.kind} since ${session.stuck.since}` : 'minutesPerAttempt exceeded'}`;
+          const next = halt(current, { ...context(current, at()), reason: 'stuck', detail });
+          const room = draft.rooms.find(row => row.id === next.roomId)!;
+          const lead = liveLead(draft, room);
+          if (lead) parleyNote(draft, room.id, lead, detail, at());
+          return next;
+        });
+        await drainSessions(loc);
+        continue;
+      }
+      await initialize(loc);
+      for (const attempt of plan.autonomous!.attempts) {
+        if (stopped) return;
+        if (attempt.status === 'running' && attempt.submissionKey && !attempt.receipt) await finishSubmission(loc, attempt.id);
+        else if (['submitted', 'checking'].includes(attempt.status)) await checkAttempt(loc, attempt.id);
+        else if (attempt.status === 'starting') await spawn(loc, attempt.id, 'worker');
+      }
+      plan = await load(loc);
+      for (const item of plan.items.filter(row => ['ready', 'returned'].includes(row.status))) {
+        plan = await load(loc);
+        if (stopped || plan.autonomous!.halted) break;
+        const a = plan.autonomous!;
+        // Verifier sessions share the same concurrent budget as executors.
+        const running = a.ops.filter(op => op.kind === 'launch' && op.state === 'done' && !a.ops.some(end => ['stop-session', 'close-session'].includes(end.kind) && end.state === 'done' && end.payload.sessionId === op.payload.sessionId)).length;
+        if (running >= a.budget.limits.concurrent) break;
+        const nextId = `at-${String(a.seq.attempt + 1).padStart(4, '0')}`;
+        plan = await change(loc, current => startAttempt(current, { ...context(current, at()), item: item.id, baseSha: current.autonomous!.integration.verifiedHead, branch: `attempts/${nextId}` }));
+        if (!plan.autonomous!.halted) await spawn(loc, nextId, 'worker');
+      }
+    }
+  }
+  function schedule(projectPath: string, workId: string) {
+    const current = state(projectPath, workId);
+    if (current.scheduled || stopped) return;
+    current.scheduled = true;
+    void exclusive(projectPath, workId, async () => {
+      current.scheduled = false;
+      await cycle(projectPath, workId);
+    }).catch(error => options.onFailure?.(error));
+  }
+  return {
+    start() {
+      if (off || stopped || !options.works) return;
+      // Snapshot plans before subscribing: plans accepted later are Go, not restarts.
+      for (const entry of options.works.snapshot().entries) {
+        for (const plan of entry.map.plans?.filter(active) ?? []) {
+          void exclusive(entry.projectPath, entry.map.work.id, () => recover({ projectPath: entry.projectPath, workId: entry.map.work.id, planId: plan.id })).catch(error => options.onFailure?.(error));
+        }
+      }
+      const scan = () => { for (const entry of options.works!.snapshot().entries) if (entry.map.plans?.some(active)) schedule(entry.projectPath, entry.map.work.id); };
+      off = options.works.onChange(scan);
+      const poll = () => { if (stopped) return; scan(); timer = setTimeout(poll, 1000); timer.unref?.(); };
+      poll();
+    },
+    async stop() { stopped = true; off?.(); if (timer) clearTimeout(timer); await Promise.all([...states.values()].map(value => value.tail)); },
+    flush: (projectPath, workId) => exclusive(projectPath, workId, () => cycle(projectPath, workId)),
+    async submit(ref, planId, rev, request) {
+      return exclusive(ref.projectPath, ref.workId, async () => {
+        const loc = { projectPath: ref.projectPath, workId: ref.workId, planId };
+        try {
+          await change(loc, plan => {
+            const attempt = attemptOf(plan, request.attemptId);
+            if (ref.sessionId !== attempt.worker) throw new Error('not-worker');
+            if (['aborted', 'superseded'].includes(attempt.status)) throw new Error('attempt-fenced');
+            if (plan.rev !== rev) throw new Error('rev-conflict');
+            if (attempt.receipt) {
+              if (attempt.submissionKey !== request.submissionKey || hash(request.manifest) !== request.submissionKey) throw new Error('handoff-conflict');
+              return plan;
+            }
+            if (fenced.has(attempt.status)) throw new Error('attempt-fenced');
+            if (attempt.status !== 'running') throw new Error('attempt-not-running');
+            if (request.manifest.criteriaVersion !== plan.autonomous!.criteriaVersion[attempt.item]) throw new Error('criteria-version-stale');
+            if (request.manifest.text.length > 4096) throw new Error('invalid manifest');
+            return submitAttempt(plan, { ...context(plan, at()), attemptId: request.attemptId, submissionKey: request.submissionKey, manifest: { ...request.manifest, sha: null } });
+          });
+          let plan = await load(loc);
+          if (attemptOf(plan, request.attemptId).status === 'superseded') return denied(new Error('attempt-superseded'));
+          if (!attemptOf(plan, request.attemptId).receipt) await finishSubmission(loc, request.attemptId);
+          plan = await load(loc);
+          return { ok: true, result: { receipt: attemptOf(plan, request.attemptId).receipt } };
+        } catch (error) { return denied(error); }
+      });
+    },
+    async verify(ref, planId, rev, request) {
+      return exclusive(ref.projectPath, ref.workId, async () => {
+        const loc = { projectPath: ref.projectPath, workId: ref.workId, planId };
+        try {
+          let result!: CheckResult;
+          let operation!: AutonomousOp;
+          await change(loc, plan => {
+            const attempt = attemptOf(plan, request.attemptId);
+            if (ref.sessionId !== attempt.verifier) throw new Error('not-attempt-verifier');
+            if (plan.rev !== rev || attempt.criteriaVersion !== plan.autonomous!.criteriaVersion[attempt.item]) throw new Error('stale-criteria');
+            if (request.sha !== attempt.sha) throw new Error('sha-mismatch');
+            if (!['submitted', 'checking'].includes(attempt.status)) throw new Error('attempt-fenced');
+            if (!plan.autonomous!.coverage[attempt.item]?.[request.criterion]?.includes('verifier')) throw new Error('criterion-not-covered');
+            const existing = thisResults(plan, attempt).find(row => row.specId === `verifier:${request.criterion}`);
+            if (existing) {
+              if (existing.verdict !== request.verdict || existing.summary !== request.note) throw new Error('check-conflict');
+              result = existing; return plan;
+            }
+            result = { id: `ck-${String(plan.autonomous!.seq.check + 1).padStart(4, '0')}`, specId: `verifier:${request.criterion}`, attemptId: attempt.id, sha: request.sha, argvHash: hash([]), envHash: hash({}), inputsOk: true, verdict: request.verdict, by: ref.sessionId, exitCode: null, summary: request.note, outputTail: null, at: at(), durationMs: 0 };
+            const next = intendOp(plan, { ...context(plan, at()), kind: 'check', attemptId: attempt.id, payload: { phase: 'attempt', sha: request.sha, criterion: request.criterion, criteriaVersion: attempt.criteriaVersion } });
+            operation = next.autonomous!.ops.at(-1)!;
+            return next;
+          });
+          if (operation) await record(loc, request.attemptId, operation, result);
+          await checkAttempt(loc, request.attemptId);
+          return { ok: true, result: { check: result.id } };
+        } catch (error) { return denied(error); }
+      });
+    },
+  };
+}

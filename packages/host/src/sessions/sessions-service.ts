@@ -75,6 +75,7 @@ import {
   settleAttempt,
   startSession,
   SYSTEM,
+  ENGINE,
   transitionSession,
   trustKey,
   updateMap,
@@ -114,6 +115,8 @@ export interface CreateSessionInput {
   parent: string | null;
   /** Authenticated caller requesting an ordinary workspace peer. */
   requestedBy?: string;
+  /** Только для движка: create_session канала агента этот флаг не передаёт. */
+  deferLaunch?: boolean;
   role?: SessionRole | null;
   agent?: string;
   /** Своя рабочая копия git — план пишется сразу, каталог заводит `launch()` (спека 8.1). */
@@ -1000,6 +1003,7 @@ export function createSessionsService(
     logged: { sessionId?: string },
   ): Promise<CreatedSession> {
     const { projectPath, workId, provider, label, task, parent, worktree, lean } = input;
+    if (input.deferLaunch && input.requestedBy !== ENGINE) throw new HostError('bad_request', 'Only the engine may defer a session launch.');
     if (input.requestedBy !== undefined && (workId === null || !task.trim())) throw new HostError('bad_request', 'Agent-created sessions require a workspace and task.');
     const agentConfig = input.requestedBy === undefined ? undefined : (await loadConfig()).config;
     if (parent !== null) throw new HostError('bad_request', 'Child sessions are no longer supported. Create a root session and add it to a room.');
@@ -1071,16 +1075,18 @@ export function createSessionsService(
         ...(lean === undefined ? {} : { lean }),
       }, agentConfig === undefined ? undefined : (map, sessionId) => {
         const caller = map.sessions.find(s => s.id === input.requestedBy);
-        if (!caller || caller.lifecycle === 'closed') throw new HostError('bad_request', 'The caller session is no longer available.');
+        if (input.requestedBy !== ENGINE && (!caller || caller.lifecycle === 'closed')) throw new HostError('bad_request', 'The caller session is no longer available.');
         if (map.work.status === 'archived') throw new HostError('bad_request', 'The workspace is archived.');
         const limits = limitsFromConfig(agentConfig);
-        const room = roomOfSession(map, caller.id);
+        const room = input.requestedBy === ENGINE
+          ? map.plans?.find(plan => plan.mode === 'autonomous' && plan.autonomous?.ops.some(op => op.kind === 'create-session' && label === `${op.attemptId} ${op.payload.role} ${op.key}`))?.roomId ?? null
+          : roomOfSession(map, caller!.id);
         const used = map.resources?.spawned ?? 0;
         const roomUsed = room === null ? 0 : map.resources?.spawnedByRoom[room] ?? 0;
         if (used >= limits.workNewSessions) throw new ResourceDeniedError('new-sessions', 'work', used, limits.workNewSessions);
         if (room !== null && roomUsed >= limits.roomNewSessions) throw new ResourceDeniedError('new-sessions', 'room', roomUsed, limits.roomNewSessions);
-        if (!awaitsConsent) {
-          const attempt = reserveAttempt(map, { kind: 'launch', actor: caller.id, session: sessionId, owner: generation, limits });
+        if (!awaitsConsent && !input.deferLaunch) {
+          const attempt = reserveAttempt(map, { kind: 'launch', actor: input.requestedBy!, session: sessionId, owner: generation, limits });
           admitted = { ref: { projectPath, workId, sessionId }, attemptId: attempt.id };
         } else {
           // Резерв слота возьмёт `launch()` после решения человека; счётчики созданных сессий растут уже сейчас.
@@ -1092,6 +1098,7 @@ export function createSessionsService(
       logged.sessionId = sessionId;
       const ref = { projectPath, workId, sessionId };
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, true));
+      if (input.deferLaunch) return ref;
       const created = await timer.step('launch', () => createInteractive(ref, 'launch', choice));
       // Согласие пропало между проверкой и запуском (отозвано): резерв, взятый при создании, возвращается.
       const reserved = admitted as { ref: SessionRef; attemptId: string } | undefined;

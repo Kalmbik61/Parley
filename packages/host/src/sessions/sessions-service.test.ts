@@ -24,6 +24,7 @@ import {
   setWorkStatus,
   SKILL_MD,
   SYSTEM,
+  ENGINE,
   transitionSession,
   updateMap,
   workPaths,
@@ -2395,6 +2396,36 @@ describe('setModel(): смена модели (спека нормалайзер
 
 
 describe('agent-created workspace peers', () => {
+  it('defers engine creation until its separately journaled launch', async () => {
+    const work = await createWork(project, { title: 'Engine', goal: '' });
+    const pty = createPtyManager(fakeHost());
+    const start = vi.spyOn(pty, 'start');
+    const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity());
+    const input = { projectPath: project, workId: work.work.id, provider: 'claude', label: 'at-0001 worker op-0001', task: 'Implement', parent: null, requestedBy: ENGINE, deferLaunch: true };
+    try {
+      const ref = await service.create(input);
+      const pending = await readMap(project, work.work.id);
+      expect(pending.sessions.find(row => row.id === ref.sessionId)?.lifecycle).toBe('pending');
+      expect(start).not.toHaveBeenCalled();
+      expect(pending.resources?.attempts ?? []).toEqual([]);
+      expect(pending.resources?.spawned).toBe(1);
+      await service.launch(ref, 'launch', { by: ENGINE });
+      expect(start).toHaveBeenCalledTimes(1);
+      expect((await readMap(project, work.work.id)).resources?.attempts.find(row => row.session === ref.sessionId)).toMatchObject({ actor: ENGINE, state: 'spent' });
+    } finally { await service.stopAll(); }
+  });
+
+  it('refuses deferLaunch for ordinary callers and preserves engine creation limits', async () => {
+    setEnv('PARLEY_WORK_NEW_SESSIONS', '1');
+    const work = await createWork(project, { title: 'Engine', goal: '' });
+    const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const input = { projectPath: project, workId: work.work.id, provider: 'claude', label: 'Engine', task: 'Implement', parent: null, deferLaunch: true };
+    await expect(service.create({ ...input, requestedBy: caller })).rejects.toThrow('engine');
+    await service.create({ ...input, requestedBy: ENGINE });
+    await expect(service.create({ ...input, requestedBy: ENGINE })).rejects.toThrow();
+    expect((await readMap(project, work.work.id)).sessions).toHaveLength(2);
+  });
   it('identifies the recorded peer after launch failure and releases its reserved slot', async () => {
     const work = await createWork(project, { title: 'Peers', goal: '' });
     const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });

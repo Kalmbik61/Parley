@@ -11,6 +11,7 @@
  */
 
 import { existsSync } from 'node:fs';
+import { resolveAutonomousProposal } from './autonomous-engine.js';
 import {
   addMember,
   addMessage,
@@ -34,7 +35,6 @@ import {
   renameRoom,
   reopenRoom,
   requireOpenRoom,
-  resolveProposal,
   RoomRuleError,
   setRoomLead,
   setRoomOwner,
@@ -241,7 +241,7 @@ export async function resolveRoomProposal(input: Params<'rooms.resolveProposal'>
   await updateMap(projectPath, workId, (map) => {
     try {
       const completion = map.rooms.find(row => row.id === roomId)?.proposal;
-      messageId = resolveProposal(map, roomId, proposalId, action, { note, rev, ...(planId === undefined ? {} : { planId }), ...(planRev === undefined ? {} : { planRev }) }).messageId;
+      messageId = resolveAutonomousProposal(map, roomId, proposalId, action, { note, rev, ...(planId === undefined ? {} : { planId }), ...(planRev === undefined ? {} : { planRev }) });
       if (action === 'return' && completion?.kind === 'completion')
         capturePlanNotice(map, roomId, 'completion-returned', messageId, completion.planId);
       reservePlanEffects(map, rate);

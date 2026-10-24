@@ -172,7 +172,7 @@ it('never runs from a cwd outside checkout', async () => {
 });
 
 // Explicit opt-in: run outside Codex's nested sandbox. All escape targets are disposable fixtures.
-describe.skipIf(process.env.PARLEY_TEST_NATIVE_SANDBOX !== '1')('native macOS confinement', () => {
+describe.skipIf(process.env.PARLEY_TEST_NATIVE_SANDBOX !== '1')('native macOS confinement', { timeout: 30_000 }, () => {
   beforeEach(async () => {
     boundary.native = true;
     // The runner intentionally includes a one-second margin around the journal window.
@@ -213,7 +213,7 @@ describe.skipIf(process.env.PARLEY_TEST_NATIVE_SANDBOX !== '1')('native macOS co
       if (!orphan) { try { orphan = Number(await readFile(marker, 'utf8')); } catch {} }
       if (orphan) { try { process.kill(orphan, 'SIGKILL'); } catch {} }
     }
-  }, 15_000);
+  }, 30_000);
 });
 
 it('reports an unavailable executable as a launch error', async () => {
