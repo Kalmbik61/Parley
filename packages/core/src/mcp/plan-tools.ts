@@ -1,5 +1,6 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { DEFAULT_CONFIG, loadConfig } from "../config.js";
+import { PageError } from "../work/context-pages.js";
 import {
   capturePlanNotice,
   flushPlanEffects,
@@ -12,16 +13,28 @@ import {
   updatePlanItem,
   verifyPlanItem,
   PlanConflictError,
+  validateAutonomousDraft,
 } from "../work/plans.js";
 import {
   proposeCompletion,
   setProposal,
   ProposalConflictError,
 } from "../work/proposals.js";
-import { RoomRuleError } from "../work/rooms.js";
+import { requireOpenRoom, RoomRuleError } from "../work/rooms.js";
 import { readMap, updateMap } from "../work/store.js";
-import type { PlanDraft, PlanEvidence, WorkMap } from "../work/types.js";
+import type {
+  AutonomousDraft,
+  PlanDraft,
+  PlanEvidence,
+  WorkMap,
+} from "../work/types.js";
 import type { McpContext } from "./context.js";
+import {
+  ATTEMPT_TOOLS,
+  attemptTool,
+  isAttemptTool,
+  sendAttemptRequest,
+} from "./attempt-tools.js";
 
 const WRITE = {
   readOnlyHint: false,
@@ -39,6 +52,63 @@ const identity = {
   rev: revision,
 };
 const item = { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER };
+const AUTONOMOUS_DRAFT_SCHEMA = {
+  type: "object",
+  properties: {
+    budget: {
+      type: "object",
+      properties: {
+        attemptsPerItem: item,
+        repairWaves: item,
+        minutesPerAttempt: item,
+        sessions: item,
+        concurrent: item,
+      },
+      required: [
+        "attemptsPerItem",
+        "repairWaves",
+        "minutesPerAttempt",
+        "sessions",
+        "concurrent",
+      ],
+      additionalProperties: false,
+    },
+    checks: {
+      type: "array",
+      maxItems: 10000,
+      items: {
+        type: "object",
+        properties: {
+          id: text,
+          item,
+          argv: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string", maxLength: 10000 },
+          },
+          cwd: text,
+          env: {
+            type: "object",
+            additionalProperties: { type: "string", maxLength: 10000 },
+          },
+          inputs: { type: "array", items: text },
+          timeoutMs: item,
+        },
+        required: ["id", "item", "argv", "cwd", "env", "inputs", "timeoutMs"],
+        additionalProperties: false,
+      },
+    },
+    coverage: {
+      type: "object",
+      additionalProperties: {
+        type: "object",
+        additionalProperties: { type: "array", minItems: 1, items: text },
+      },
+    },
+  },
+  required: ["budget", "checks", "coverage"],
+  additionalProperties: false,
+};
 const evidence = {
   type: "object",
   properties: {
@@ -57,7 +127,7 @@ export const PLAN_DRAFT_SCHEMA = {
   properties: {
     id: identity.planId,
     rev: revision,
-    mode: { type: "string", enum: ["checklist", "verified"] },
+    mode: { type: "string", enum: ["checklist", "verified", "autonomous"] },
     goal: text,
     items: {
       type: "array",
@@ -68,13 +138,17 @@ export const PLAN_DRAFT_SCHEMA = {
         properties: {
           id: item,
           title: text,
-          owner: { type: "string", pattern: "^s-[0-9]+$", maxLength: 128 },
+          owner: {
+            type: "string",
+            pattern: "^(s-[0-9]+|engine)$",
+            maxLength: 128,
+          },
           scope: text,
           after: { type: "array", maxItems: 30, items: item },
           criteria: { type: "array", maxItems: 10, items: text },
           verifier: {
             type: ["string", "null"],
-            pattern: "^s-[0-9]+$",
+            pattern: "^(s-[0-9]+|engine)$",
             maxLength: 128,
           },
         },
@@ -87,6 +161,7 @@ export const PLAN_DRAFT_SCHEMA = {
       maxItems: 30,
       items: { type: "string", pattern: "^b-[0-9]{3,}$", maxLength: 128 },
     },
+    autonomous: AUTONOMOUS_DRAFT_SCHEMA,
   },
   required: ["mode", "goal", "items"],
   additionalProperties: false,
@@ -101,7 +176,10 @@ export const PLAN_TOOLS: Tool[] = [
       type: "object",
       properties: {
         room: { type: "string", pattern: "^r-[0-9]+$", maxLength: 128 },
-        mode: { type: "string", enum: ["free", "checklist", "verified"] },
+        mode: {
+          type: "string",
+          enum: ["free", "checklist", "verified", "autonomous"],
+        },
         reason: text,
       },
       required: ["room", "mode", "reason"],
@@ -166,6 +244,7 @@ export const PLAN_TOOLS: Tool[] = [
       additionalProperties: false,
     },
   },
+  ...ATTEMPT_TOOLS,
 ];
 const names = new Set(PLAN_TOOLS.map((tool) => tool.name));
 export const isPlanTool = (name: string): boolean => names.has(name);
@@ -194,11 +273,19 @@ function safe(value: unknown, positive = false): value is number {
     value >= (positive ? 1 : 0)
   );
 }
-function draft(value: unknown): PlanDraft {
+function draft(value: unknown): PlanDraft & { autonomous?: AutonomousDraft } {
   if (!record(value)) throw new RoomRuleError("invalid plan draft");
-  keys(value, ["id", "rev", "mode", "goal", "items", "backlog"]);
+  keys(value, [
+    "id",
+    "rev",
+    "mode",
+    "goal",
+    "items",
+    "backlog",
+    ...(value.mode === "autonomous" ? ["autonomous"] : []),
+  ]);
   if (
-    !["checklist", "verified"].includes(String(value.mode)) ||
+    !["checklist", "verified", "autonomous"].includes(String(value.mode)) ||
     !validText(value.goal) ||
     (value.id === undefined) !== (value.rev === undefined) ||
     (value.id !== undefined &&
@@ -227,7 +314,8 @@ function draft(value: unknown): PlanDraft {
       !validText(entry.title) ||
       !validText(entry.scope) ||
       typeof entry.owner !== "string" ||
-      !/^s-\d+$/.test(entry.owner) ||
+      (!(value.mode === "autonomous" && entry.owner === "engine") &&
+        !/^s-\d+$/.test(entry.owner)) ||
       entry.owner.length > 128 ||
       (entry.after !== undefined &&
         (!Array.isArray(entry.after) ||
@@ -240,7 +328,8 @@ function draft(value: unknown): PlanDraft {
       (entry.verifier !== undefined &&
         entry.verifier !== null &&
         (typeof entry.verifier !== "string" ||
-          !/^s-\d+$/.test(entry.verifier) ||
+          (!(value.mode === "autonomous" && entry.verifier === "engine") &&
+            !/^s-\d+$/.test(entry.verifier)) ||
           entry.verifier.length > 128))
     )
       throw new RoomRuleError("invalid plan item");
@@ -288,10 +377,72 @@ export async function planTool(
   context: McpContext,
   name: string,
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   try {
     if (Buffer.byteLength(JSON.stringify(args)) > 64 * 1024)
       throw new RoomRuleError("plan arguments are too large");
+    if (isAttemptTool(name))
+      return await attemptTool(context, name, args, signal);
+    if (name === "propose_decision") {
+      const map = await readMap(context.projectPath, context.workId);
+      const actor = caller(map, context);
+      if (
+        typeof args.room === "string" &&
+        requireOpenRoom(map, args.room).mode === "autonomous" &&
+        args.kind !== "completion"
+      ) {
+        keys(args, [
+          "room",
+          "text",
+          "plan",
+          "kind",
+          "planId",
+          "rev",
+          "requestKey",
+        ]);
+        if (
+          !validText(args.text) ||
+          !validText(args.requestKey, 128) ||
+          (args.kind !== undefined && args.kind !== "decision")
+        )
+          throw new RoomRuleError(
+            "autonomous proposals need text and a stable requestKey",
+          );
+        const input = draft(args.plan);
+        if (
+          (args.planId !== undefined && args.planId !== input.id) ||
+          (args.rev !== undefined && args.rev !== input.rev)
+        ) {
+          if (input.id !== undefined || input.rev !== undefined)
+            throw new PlanConflictError();
+          if (
+            typeof args.planId !== "string" ||
+            !/^pl-\d+$/.test(args.planId) ||
+            !safe(args.rev)
+          )
+            throw new RoomRuleError("invalid amendment identity");
+          input.id = args.planId;
+          input.rev = args.rev;
+        }
+        const plan = input as PlanDraft & { autonomous: AutonomousDraft };
+        validateAutonomousDraft(map, args.room, actor, plan, args.text.length);
+        return await sendAttemptRequest(
+          context,
+          {
+            action: "propose-plan",
+            roomId: args.room,
+            text: args.text,
+            requestKey: args.requestKey,
+            plan,
+            ...(plan.id === undefined
+              ? {}
+              : { planId: plan.id, rev: plan.rev! }),
+          },
+          signal,
+        );
+      }
+    }
     const config = (await loadConfig()).config;
     let proposed: { proposalId: string; rev: number } | undefined;
     let legacyFree = false;
@@ -304,7 +455,9 @@ export async function planTool(
           typeof args.room !== "string" ||
           !/^r-\d+$/.test(args.room) ||
           args.room.length > 128 ||
-          !["free", "checklist", "verified"].includes(String(args.mode)) ||
+          !["free", "checklist", "verified", "autonomous"].includes(
+            String(args.mode),
+          ) ||
           !validText(args.reason) ||
           /[\r\n]/.test(args.reason)
         )
@@ -314,7 +467,7 @@ export async function planTool(
           map,
           args.room,
           actor,
-          args.mode as "free" | "checklist" | "verified",
+          args.mode as "free" | "checklist" | "verified" | "autonomous",
           args.reason,
         );
         const source = map.messages
@@ -474,6 +627,8 @@ export async function planTool(
     )
       throw new Error("Plan revision or item changed; refresh get_map.");
     if (error instanceof RoomRuleError) throw new Error(error.message);
+    if (error instanceof PageError)
+      throw new Error(`${error.code}: ${error.message}`);
     throw new Error("Plan operation could not be completed.");
   }
 }

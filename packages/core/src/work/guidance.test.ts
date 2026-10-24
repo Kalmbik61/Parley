@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { TOOLS as PARLEY_TOOLS } from '../mcp/tools.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import { GUIDE } from './guide.js';
+import { SKILL_MD } from './skill.js';
 import { contextBytes, GUIDANCE_MAX_BYTES, STABLE_POLICY_MAX_BYTES, textHash } from './context-budget.js';
 import { BROWSER_PRIORITY_RULE, CODEX_TOOL_EXAMPLES, guidanceBudgetProblems, linkedSettingsRule, stableGuidance, systemGuidance } from './guidance.js';
 import { ACCEPTED_LETTER, RETURNED_LETTER } from './proposals.js';
@@ -40,6 +41,19 @@ const TOOLS = [
 ];
 
 describe('системная вставка', () => {
+  it('объясняет автономный режим и исключение движка для сессий', () => {
+    const text = systemGuidance(mapOf('Autonomous', ''), 's-01');
+    expect(text).toContain('autonomous');
+    expect(text).toContain('attempt_*');
+    expect(text).toContain('engine');
+    expect(text).toContain('engine creates and closes');
+    expect(GUIDE).toContain('requestKey');
+    expect(GUIDE).toContain('every criterion');
+    expect(GUIDE).toContain('code');
+    expect(GUIDE).toContain('manifests and cards');
+    expect(SKILL_MD).toContain('autonomous');
+    expect(SKILL_MD).toContain('engine creates and closes');
+  });
   it('короткая (≤14 строк), называет работу, сессию и активные инструменты', () => {
     const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
     const lines = text.split('\n');

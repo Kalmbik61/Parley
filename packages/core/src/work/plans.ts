@@ -8,8 +8,9 @@ import {
   RoomRuleError,
 } from "./rooms.js";
 import { capturePlanSnapshot } from "./plan-snapshots.js";
-import { HUMAN } from "./types.js";
+import { ENGINE, HUMAN } from "./types.js";
 import type {
+  AutonomousDraft,
   PlanDraft,
   PlanEvidence,
   PlanItem,
@@ -39,7 +40,13 @@ export function planRoom(map: WorkMap, roomId: string): Room {
   if (!room) throw new RoomRuleError("room is not in the map");
   return room;
 }
-function participant(map: WorkMap, room: Room, actor: string): boolean {
+function participant(
+  map: WorkMap,
+  room: Room,
+  actor: string,
+  mode = room.mode,
+): boolean {
+  if (actor === ENGINE) return mode === "autonomous";
   return (
     actor === HUMAN ||
     (isMember(room, actor) &&
@@ -56,8 +63,13 @@ export function requirePlanLead(map: WorkMap, room: Room, actor: string): void {
   )
     throw new RoomRuleError("only the live room lead can propose a plan");
 }
-function liveOwner(map: WorkMap, room: Room, actor: string): boolean {
-  return actor !== HUMAN && participant(map, room, actor);
+function liveOwner(
+  map: WorkMap,
+  room: Room,
+  actor: string,
+  mode = room.mode,
+): boolean {
+  return actor !== HUMAN && participant(map, room, actor, mode);
 }
 const current = (plan: RoomPlan): boolean =>
   plan.status === "active" || plan.status === "completing";
@@ -94,7 +106,7 @@ function validateDraft(
 ): PlanItem[] {
   if (
     !input ||
-    !["checklist", "verified"].includes(input.mode) ||
+    !["checklist", "verified", "autonomous"].includes(input.mode) ||
     !text(input.goal) ||
     !Array.isArray(input.items) ||
     input.items.length < 1 ||
@@ -112,12 +124,15 @@ function validateDraft(
       ids.has(item.id) ||
       !text(item.title) ||
       !text(item.scope) ||
-      !liveOwner(map, room, item.owner)
+      !liveOwner(map, room, item.owner, input.mode) ||
+      (input.mode !== "autonomous" && item.verifier === ENGINE) ||
+      (input.mode === "autonomous" &&
+        (item.owner !== ENGINE || item.verifier !== ENGINE))
     )
       throw new RoomRuleError("invalid plan item or owner");
     ids.add(item.id);
     const after = item.after ?? [];
-    const criteria = input.mode === "verified" ? (item.criteria ?? []) : [];
+    const criteria = input.mode !== "checklist" ? (item.criteria ?? []) : [];
     if (
       !Array.isArray(after) ||
       after.length > PLAN_ITEM_MAX ||
@@ -129,11 +144,12 @@ function validateDraft(
     )
       throw new RoomRuleError("invalid dependencies or criteria");
     let verifier: string | null = null;
-    if (input.mode === "verified") {
+    if (input.mode !== "checklist") {
       if (!criteria.length)
         throw new RoomRuleError("verified items need criteria");
       verifier = item.verifier ?? liveLead(map, room);
       if (
+        input.mode !== "autonomous" &&
         verifier === item.owner &&
         [...new Set([...room.members, room.creator])].filter((id) =>
           liveOwner(map, room, id),
@@ -142,8 +158,8 @@ function validateDraft(
         verifier = HUMAN;
       if (
         verifier === null ||
-        verifier === item.owner ||
-        !participant(map, room, verifier)
+        (verifier === item.owner && input.mode !== "autonomous") ||
+        !participant(map, room, verifier, input.mode)
       )
         throw new RoomRuleError(
           "verifier must be an independent live participant or human",
@@ -190,6 +206,108 @@ function validateDraft(
   };
   for (const item of items) visit(item.id);
   return items;
+}
+/** Проверка входа канала без записи карты и резервирования идентификатора плана. */
+export function validateAutonomousDraft(
+  map: WorkMap,
+  roomId: string,
+  from: string,
+  input: PlanDraft & { autonomous: AutonomousDraft },
+  decisionTextLength = 0,
+): void {
+  if (input?.mode !== "autonomous")
+    throw new RoomRuleError("invalid autonomous draft");
+  proposedRoomPlan(
+    structuredClone(map),
+    roomId,
+    from,
+    input,
+    decisionTextLength,
+  );
+  const object = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === "object" && !Array.isArray(value);
+  const positive = (value: unknown): boolean =>
+    Number.isSafeInteger(value) && Number(value) > 0;
+  const auto = input.autonomous;
+  const limits = [
+    "attemptsPerItem",
+    "repairWaves",
+    "minutesPerAttempt",
+    "sessions",
+    "concurrent",
+  ];
+  if (
+    !object(auto) ||
+    Object.keys(auto).some(
+      (key) => !["budget", "checks", "coverage"].includes(key),
+    ) ||
+    !object(auto.budget) ||
+    Object.keys(auto.budget).length !== limits.length ||
+    !limits.every((key) =>
+      positive((auto.budget as unknown as Record<string, unknown>)[key]),
+    ) ||
+    !Array.isArray(auto.checks) ||
+    auto.checks.length > 10_000 ||
+    !object(auto.coverage)
+  )
+    throw new RoomRuleError("invalid autonomous budget, checks or coverage");
+  const checks = new Map<string, number>();
+  for (const check of auto.checks) {
+    if (
+      !object(check) ||
+      Object.keys(check).some(
+        (key) =>
+          !["id", "item", "argv", "cwd", "env", "inputs", "timeoutMs"].includes(
+            key,
+          ),
+      ) ||
+      !text(check.id) ||
+      check.id === "verifier" ||
+      checks.has(check.id) ||
+      !input.items.some((item) => item.id === check.item) ||
+      !Array.isArray(check.argv) ||
+      !check.argv.length ||
+      !check.argv.every((arg) => text(arg, false)) ||
+      !text(check.argv[0]!) ||
+      !text(check.cwd) ||
+      !object(check.env) ||
+      Object.entries(check.env).some(
+        ([key, value]) =>
+          !text(key) || typeof value !== "string" || !text(value, false),
+      ) ||
+      !Array.isArray(check.inputs) ||
+      !check.inputs.every((file) => text(file)) ||
+      !positive(check.timeoutMs)
+    )
+      throw new RoomRuleError("invalid autonomous check");
+    checks.set(check.id, check.item);
+  }
+  for (const [id, criteria] of Object.entries(auto.coverage)) {
+    const item = input.items.find((item) => String(item.id) === id);
+    if (!item || !object(criteria))
+      throw new RoomRuleError("invalid autonomous coverage item");
+    for (const [index, required] of Object.entries(criteria)) {
+      const criterion = Number(index);
+      if (
+        String(criterion) !== index ||
+        !Number.isSafeInteger(criterion) ||
+        criterion < 0 ||
+        criterion >= item.criteria!.length ||
+        !Array.isArray(required) ||
+        required.length === 0 ||
+        required.some(
+          (id) =>
+            id !== "verifier" &&
+            (typeof id !== "string" || checks.get(id) !== item.id),
+        )
+      )
+        throw new RoomRuleError("invalid autonomous criterion coverage");
+    }
+  }
+  for (const item of input.items)
+    for (let criterion = 0; criterion < item.criteria!.length; criterion++)
+      if (!auto.coverage[item.id]?.[criterion]?.length)
+        throw new RoomRuleError("every autonomous criterion needs coverage");
 }
 export function proposedRoomPlan(
   map: WorkMap,
@@ -293,7 +411,7 @@ function recalculate(map: WorkMap, plan: RoomPlan, at: string): void {
   for (const item of plan.items)
     if (item.status === "waiting" || item.status === "ready")
       item.status = ready(plan, item) ? "ready" : "waiting";
-  if (plan.status !== "active") return;
+  if (plan.status !== "active" || plan.mode === "autonomous") return;
   if (planItemsComplete(plan)) {
     if (plan.mode === "verified") {
       plan.status = "completing";
@@ -419,7 +537,7 @@ function mutablePlan(
   if (!plan || plan.rev !== rev || !current(plan))
     throw new PlanConflictError();
   const room = planRoom(map, plan.roomId);
-  if (isRoomClosed(map, room) || !participant(map, room, actor))
+  if (isRoomClosed(map, room) || !participant(map, room, actor, plan.mode))
     throw new RoomRuleError("actor must be a live room participant");
   return plan;
 }
@@ -440,6 +558,8 @@ export function updatePlanItem(
 ): void {
   edit(map, (draft) => {
     const plan = mutablePlan(draft, id, rev, actor);
+    if (plan.mode === "autonomous")
+      throw new RoomRuleError("autonomous plan is driven by the engine");
     const item = itemOf(plan, itemId);
     if (
       plan.status !== "active" ||
@@ -469,6 +589,8 @@ export function submitPlanItem(
 ): void {
   edit(map, (draft) => {
     const plan = mutablePlan(draft, id, rev, actor);
+    if (plan.mode === "autonomous")
+      throw new RoomRuleError("autonomous plan is driven by the engine");
     const item = itemOf(plan, itemId);
     if (
       plan.status !== "active" ||
@@ -512,17 +634,23 @@ export function verifyPlanItem(
 ): void {
   edit(map, (draft) => {
     const plan = mutablePlan(draft, id, rev, actor);
+    if (plan.mode === "autonomous" && actor !== ENGINE)
+      throw new RoomRuleError("autonomous plan is driven by the engine");
     const item = itemOf(plan, itemId);
     const humanReturn =
       actor === HUMAN &&
       verdict === "returned" &&
       ["done", "verified"].includes(item.status);
     if (
-      plan.mode !== "verified" ||
+      (plan.mode !== "verified" && plan.mode !== "autonomous") ||
       (!humanReturn && (plan.status !== "active" || item.status !== "done"))
     )
       throw new PlanConflictError();
-    if (actor !== HUMAN && (actor !== item.verifier || actor === item.owner))
+    if (
+      actor !== HUMAN &&
+      !(plan.mode === "autonomous" && actor === ENGINE) &&
+      (actor !== item.verifier || actor === item.owner)
+    )
       throw new RoomRuleError("only the independent verifier can verify");
     if (!["verified", "returned"].includes(verdict) || !text(note))
       throw new RoomRuleError("verification needs a note");
@@ -606,7 +734,7 @@ export function setRoomMode(
   edit(map, (draft) => {
     const room = requireOpenRoom(draft, roomId);
     const previous = room.mode ?? "free";
-    const order = ["free", "checklist", "verified"];
+    const order = ["free", "checklist", "verified", "autonomous"];
     if (!order.includes(mode) || !text(reason) || /[\r\n]/.test(reason))
       throw new RoomRuleError("mode change needs a one-line reason");
     if (actor !== HUMAN) {
@@ -663,8 +791,9 @@ export function reconcileRoomPlans(
       }
       for (const item of plan.items)
         if (
-          !liveOwner(draft, room, item.owner) &&
-          item.status !== "blocked" && !planItemSatisfied(plan, item)
+          !liveOwner(draft, room, item.owner, plan.mode) &&
+          item.status !== "blocked" &&
+          !planItemSatisfied(plan, item)
         )
           log(item, "system", "blocked", "Owner is closed or deleted.", at);
     }
@@ -682,7 +811,7 @@ export function completeRoomPlan(
   edit(map, (draft) => {
     const plan = mutablePlan(draft, id, rev, HUMAN);
     if (
-      plan.mode !== "verified" ||
+      (plan.mode !== "verified" && plan.mode !== "autonomous") ||
       plan.status !== "completing" ||
       !planItemsComplete(plan)
     )

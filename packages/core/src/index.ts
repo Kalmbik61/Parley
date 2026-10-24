@@ -626,7 +626,7 @@ export type { BacklogSuggestionInput, BacklogSuggestionResult, SuggestionOptions
 export { readProjectPreferences, setBacklogFile, setBacklogRule } from './work/project-preferences.js';
 export type { BacklogRule, ProjectPreferences } from './work/project-preferences.js';
 
-export { PLAN_ITEM_MAX, PLAN_TEXT_MAX, PlanConflictError, activeRoomPlan, planItemSatisfied, planItemsComplete, cancelRoomPlan, reconcileRoomPlans, setRoomMode, submitPlanItem, updatePlanItem, verifyPlanItem } from './work/plans.js';
+export { PLAN_ITEM_MAX, PLAN_TEXT_MAX, PlanConflictError, validateAutonomousDraft, activeRoomPlan, planItemSatisfied, planItemsComplete, cancelRoomPlan, reconcileRoomPlans, setRoomMode, submitPlanItem, updatePlanItem, verifyPlanItem } from './work/plans.js';
 export {
   intendOp, settleOp, startAttempt, submitAttempt, receipt, recordCheck, coverageVerdict,
   returnAttempt, enqueue, integrate, suspend, supersedeByAmendment, lateDefect, halt,
@@ -638,7 +638,7 @@ export { proposeCompletion } from './work/proposals.js';
 export type { ProposalOptions } from './work/proposals.js';
 export type { MapCompact } from './work/types.js';
 export type { RoomMode, PlanMode, PlanStatus, PlanItemStatus, PlanDraft, PlanItemInput, PlanItem, PlanEvidence, RoomPlan, PlanExportIntent } from './work/types.js';
-export type { AutonomousPlan, PlanAttempt, HandoffManifest, Receipt, CheckSpec, CheckResult, Integration, AutonomousBudget, AutonomousOp } from './work/types.js';
+export type { AutonomousDraft, AttemptChannelRequest, AutonomousPlan, PlanAttempt, HandoffManifest, Receipt, CheckSpec, CheckResult, Integration, AutonomousBudget, AutonomousOp } from './work/types.js';
 
 export { parseProjectMemory, readProjectMemory, addProjectMemory, updateProjectMemory, removeProjectMemory, undoProjectMemory } from './work/project-memory.js';
 export type { MemoryKind, MemoryProvenance, MemoryItem, MemoryDocument, MemoryInput, MemoryPatch, MemoryWriteOptions, MemoryWriteResult, MemorySuggestion } from './work/project-memory.js';

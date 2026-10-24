@@ -186,6 +186,23 @@ export interface PlanDraft {
   /** Required together for an amendment: the currently accepted identity/revision. */
   id?: string; rev?: number; mode: PlanMode; goal: string; items: PlanItemInput[]; backlog?: string[];
 }
+/** Вход предложения: git-факты и начальное состояние добавляет только хост. */
+export interface AutonomousDraft {
+  budget: AutonomousBudget['limits'];
+  checks: { id: string; item: number; argv: string[]; cwd: string; env: Record<string, string>; inputs: string[]; timeoutMs: number }[];
+  coverage: AutonomousPlan['coverage'];
+}
+
+/**
+ * POST /agent/attempts: токен в Authorization: Bearer, актор и работа определяются хостом.
+ * Хост повторно проверяет права, режим и rev; возвращает {ok:true,result} либо
+ * {ok:false,error:{code,message}}. requestKey идемпотентен для предложения этой сессии;
+ * amendment сохраняет состояние исполнения до принятия человеком, без повторной инициализации.
+ */
+export type AttemptChannelRequest =
+  | { action: 'propose-plan'; roomId: string; planId?: string; rev?: number; requestKey: string; text: string; plan: PlanDraft & { autonomous: AutonomousDraft } }
+  | { action: 'submit'; attemptId: string; submissionKey: string; manifest: Omit<HandoffManifest, 'sha'> }
+  | { action: 'verify'; attemptId: string; sha: string; criterion: number; verdict: CheckResult['verdict']; note: string };
 export interface PlanItem extends PlanItemInput {
   after: number[]; criteria: string[]; verifier: string | null; status: PlanItemStatus;
   evidence: PlanEvidence | null; note: string | null;

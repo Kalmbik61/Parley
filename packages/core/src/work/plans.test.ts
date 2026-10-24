@@ -18,9 +18,13 @@ import {
   submitPlanItem,
   updatePlanItem,
   verifyPlanItem,
+  validateAutonomousDraft,
+  proposedRoomPlan,
+  acceptRoomPlan,
+  PlanConflictError,
 } from "./plans.js";
-import { HUMAN } from "./types.js";
-import type { PlanDraft, WorkMap } from "./types.js";
+import { ENGINE, HUMAN } from "./types.js";
+import type { AutonomousDraft, PlanDraft, WorkMap } from "./types.js";
 const AT = "2026-10-04T01:00:00.000Z";
 function fixture(mode: "checklist" | "verified" = "checklist"): WorkMap {
   const map: WorkMap = {
@@ -93,6 +97,273 @@ function accept(
   return map.plans![0]!;
 }
 const evidence = { text: "Test passed", artifacts: ["src/a.ts"] };
+
+function autonomousDraft(): PlanDraft & { autonomous: AutonomousDraft } {
+  return {
+    mode: "autonomous",
+    goal: "Engine-owned work",
+    items: [
+      {
+        id: 1,
+        title: "Implement",
+        owner: ENGINE,
+        verifier: ENGINE,
+        scope: "src/a.ts",
+        criteria: ["Works", "Reviewed"],
+      },
+    ],
+    autonomous: {
+      budget: {
+        attemptsPerItem: 3,
+        repairWaves: 2,
+        minutesPerAttempt: 10,
+        sessions: 6,
+        concurrent: 2,
+      },
+      checks: [
+        {
+          id: "ck-spec-01",
+          item: 1,
+          argv: ["pnpm", "test"],
+          cwd: ".",
+          env: {},
+          inputs: ["test.ts"],
+          timeoutMs: 1000,
+        },
+      ],
+      coverage: { 1: { 0: ["ck-spec-01"], 1: ["verifier"] } },
+    },
+  };
+}
+function autonomousMap() {
+  const map = fixture("verified");
+  map.rooms[0]!.mode = "autonomous";
+  return map;
+}
+describe("autonomous plan rules", () => {
+  it("creates a room directly in autonomous mode", () => {
+    const map = fixture();
+    expect(
+      addRoom(map, {
+        title: "Engine room",
+        creator: HUMAN,
+        members: ["s-02"],
+        lead: "s-02",
+        mode: "autonomous",
+      }).mode,
+    ).toBe("autonomous");
+  });
+  it("reserves ENGINE ownership and verification for autonomous plans", () => {
+    const map = autonomousMap();
+    const proposed = proposedRoomPlan(map, "r-01", "s-01", autonomousDraft());
+    expect(proposed.items[0]).toMatchObject({
+      owner: ENGINE,
+      verifier: ENGINE,
+      criteria: ["Works", "Reviewed"],
+    });
+    acceptRoomPlan(map, proposed, AT);
+    reconcileRoomPlans(map, AT);
+    expect(map.plans![0]!.items[0]!.status).toBe("ready");
+    for (const mode of ["checklist", "verified"] as const) {
+      for (const field of ["owner", "verifier"] as const) {
+        const ordinary = input(mode);
+        ordinary.items[0]![field] = ENGINE;
+        expect(() =>
+          proposedRoomPlan(fixture(mode), "r-01", "s-01", ordinary),
+        ).toThrow();
+      }
+    }
+  });
+  it("rejects legacy mutations by participants and the human by plan mode", () => {
+    const map = autonomousMap();
+    acceptRoomPlan(
+      map,
+      proposedRoomPlan(map, "r-01", "s-01", autonomousDraft()),
+      AT,
+    );
+    // A room mode change must not reopen legacy mutation of the accepted autonomous plan.
+    map.rooms[0]!.mode = "verified";
+    const before = JSON.stringify(map);
+    for (const actor of ["s-01", "s-02", "s-03", HUMAN]) {
+      for (const operation of [
+        () => updatePlanItem(map, "pl-01", 0, 1, actor, "in_progress"),
+        () => submitPlanItem(map, "pl-01", 0, 1, actor, evidence),
+        () => verifyPlanItem(map, "pl-01", 0, 1, actor, "verified", "Checked"),
+      ])
+        expect(operation).toThrow("autonomous plan is driven by the engine");
+    }
+    expect(JSON.stringify(map)).toBe(before);
+  });
+  it("validates a detached autonomous proposal without allocating plan identities", () => {
+    const map = autonomousMap();
+    const before = JSON.stringify(map);
+    expect(() =>
+      validateAutonomousDraft(map, "r-01", "s-01", autonomousDraft()),
+    ).not.toThrow();
+    expect(JSON.stringify(map)).toBe(before);
+  });
+  it("allows the core engine verifier and leaves completion to the engine", () => {
+    const map = autonomousMap();
+    acceptRoomPlan(
+      map,
+      proposedRoomPlan(map, "r-01", "s-01", autonomousDraft()),
+      AT,
+    );
+    const item = map.plans![0]!.items[0]!;
+    item.status = "done";
+    item.evidence = evidence;
+    verifyPlanItem(
+      map,
+      "pl-01",
+      0,
+      1,
+      ENGINE,
+      "verified",
+      "Integrated with full coverage",
+      AT,
+    );
+    expect(map.plans![0]!.items[0]!.log.at(-1)).toMatchObject({
+      by: ENGINE,
+      status: "verified",
+      note: "Integrated with full coverage",
+    });
+    expect(map.plans![0]!.status).toBe("active");
+  });
+  it.each([
+    [
+      "owner",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        d.items[0]!.owner = "s-02";
+      },
+    ],
+    [
+      "verifier",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        d.items[0]!.verifier = "s-03";
+      },
+    ],
+    [
+      "coverage item",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        d.autonomous.coverage[2] = { 0: ["verifier"] };
+      },
+    ],
+    [
+      "criterion",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        d.autonomous.coverage[1]![2] = ["verifier"];
+      },
+    ],
+    [
+      "noncanonical criterion",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        (d.autonomous.coverage[1]! as Record<string, string[]>)["01"] = [
+          "verifier",
+        ];
+      },
+    ],
+    [
+      "unknown check",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        d.autonomous.coverage[1]![0] = ["missing"];
+      },
+    ],
+    [
+      "missing criterion coverage",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        delete d.autonomous.coverage[1]![1];
+      },
+    ],
+    [
+      "empty criterion coverage",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        d.autonomous.coverage[1]![1] = [];
+      },
+    ],
+    [
+      "another item's check",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        d.items.push({ ...d.items[0]!, id: 2 });
+        d.autonomous.coverage[2] = { 0: ["ck-spec-01"], 1: ["verifier"] };
+      },
+    ],
+    [
+      "duplicate check",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        d.autonomous.checks.push(structuredClone(d.autonomous.checks[0]!));
+      },
+    ],
+    [
+      "check item",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        d.autonomous.checks[0]!.item = 2;
+      },
+    ],
+    [
+      "unsafe budget",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        d.autonomous.budget.sessions = Number.MAX_SAFE_INTEGER + 1;
+      },
+    ],
+    [
+      "zero budget",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        d.autonomous.budget.concurrent = 0;
+      },
+    ],
+    [
+      "fractional budget",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        d.autonomous.budget.repairWaves = 1.5;
+      },
+    ],
+    [
+      "empty argv",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        d.autonomous.checks[0]!.argv = [];
+      },
+    ],
+    [
+      "invalid timeout",
+      (d: ReturnType<typeof autonomousDraft>) => {
+        d.autonomous.checks[0]!.timeoutMs = -1;
+      },
+    ],
+  ])("rejects invalid autonomous %s", (_name, mutate) => {
+    const draft = autonomousDraft();
+    mutate(draft);
+    expect(() =>
+      validateAutonomousDraft(autonomousMap(), "r-01", "s-01", draft),
+    ).toThrow();
+  });
+  it("uses revision CAS for stale and competing autonomous amendments", () => {
+    const map = autonomousMap();
+    acceptRoomPlan(
+      map,
+      proposedRoomPlan(map, "r-01", "s-01", autonomousDraft()),
+      AT,
+    );
+    const amendment = { ...autonomousDraft(), id: "pl-01", rev: 0 };
+    const first = proposedRoomPlan(map, "r-01", "s-01", amendment);
+    const competing = proposedRoomPlan(map, "r-01", "s-01", amendment);
+    acceptRoomPlan(map, first, AT);
+    expect(() => acceptRoomPlan(map, competing, AT)).toThrow(PlanConflictError);
+    expect(() =>
+      validateAutonomousDraft(map, "r-01", "s-01", amendment),
+    ).toThrow(PlanConflictError);
+  });
+  it("lets the lead raise through autonomous and only the human lower it", () => {
+    const map = fixture();
+    for (const mode of ["verified", "autonomous"] as const)
+      setRoomMode(map, "r-01", "s-01", mode, "Stronger verification", {}, AT);
+    for (const mode of ["verified", "checklist", "free"] as const)
+      expect(() => setRoomMode(map, "r-01", "s-01", mode, "Lower")).toThrow(
+        "only the human",
+      );
+    setRoomMode(map, "r-01", HUMAN, "verified", "Human choice", {}, AT);
+    expect(map.rooms[0]!.mode).toBe("verified");
+  });
+});
 
 describe("room plan state and permissions", () => {
   it("normalizes legacy v2 maps to Free without upgrading schema version", () => {

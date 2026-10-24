@@ -548,6 +548,7 @@ export const TOOLS: Tool[] = [
       properties: {
         room: { type: 'string', description: 'Room id from get_map.' },
         plan: PLAN_DRAFT_SCHEMA,
+        requestKey: { type: 'string', minLength: 1, maxLength: 128, description: 'Required for autonomous proposals: a client idempotency key; keep it unchanged when retrying the same request.' },
         kind: { type: 'string', enum: ['decision', 'completion'] },
         planId: { type: 'string', pattern: '^pl-[0-9]+$', maxLength: 128 },
         rev: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
@@ -1123,8 +1124,9 @@ async function proposeDecision(
   context: McpContext,
   _sessionId: string,
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<unknown> {
-  return planTool(context, 'propose_decision', args);
+  return planTool(context, 'propose_decision', args, signal);
 }
 
 /**
@@ -1332,7 +1334,7 @@ async function dispatch(
   // Гид не про конкретную сессию: он доступен и без `PARLEY_SESSION_ID`.
   if (name === 'read_guide') return readGuide(context, args);
 
-  if (isPlanTool(name)) return planTool(context, name, args);
+  if (isPlanTool(name)) return planTool(context, name, args, signal);
   const { sessionId } = context;
   if (sessionId === null) throw new Error(NO_SESSION);
 
@@ -1344,7 +1346,7 @@ async function dispatch(
   if (name === 'create_room') return createRoom(context, sessionId, args);
   if (name === 'add_to_room') return addToRoom(context, sessionId, args);
   if (name === 'read_room') return readRoom(context, sessionId, args);
-  if (name === 'propose_decision') return proposeDecision(context, sessionId, args);
+  if (name === 'propose_decision') return proposeDecision(context, sessionId, args, signal);
   if (name === 'close_session') return closeSession(context, sessionId, args);
   throw new Error(`unknown tool ${name}`);
 }
