@@ -46,7 +46,7 @@ export const unreadForHuman = (message: Message): boolean =>
  * Ставит readBy.human = now письмам, которые человек видит: прямым письмам человеку
  * и сообщениям комнат, не от самого человека. Уже прочитанные и чужие id пропускаются.
  * Возвращает, сколько отметок поставлено. work.updatedAt не сдвигается.
- * Подходящих id нет — 0 без updateMap: карта, индекс и .bak не переписываются.
+ * Подходящих id нет — 0 без updateMap: в базу ничего не пишется, версия работы прежняя.
  * Карты нет — WorkNotFoundError, как у updateMap.
  */
 export async function markHumanRead(
@@ -58,9 +58,8 @@ export async function markHumanRead(
   const pending = (map: WorkMap): Message[] =>
     map.messages.filter((message) => wanted.has(message.id) && unreadForHuman(message));
 
-  // Сперва чтение без лока: updateMap пишет индекс и карту всегда (.bak — не чаще раза в
-  // MAP_BACKUP_INTERVAL_MS, спека хранилища 6.9), и повтор пачки окна разослал бы works.changed
-  // всем клиентам впустую.
+  // Сперва чтение без записи: updateMap поднимает версию работы всегда (спека хранилища 6.9),
+  // и повтор пачки окна разослал бы works.changed всем клиентам впустую.
   let current: WorkMap;
   try {
     current = await readMap(projectPath, workId);

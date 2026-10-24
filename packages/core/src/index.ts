@@ -312,17 +312,21 @@ export {
   deleteWorkFiles,
   parleyHome,
   MapLockTimeoutError,
+  onMapWritten,
   pruneWorksIndex,
   readMap,
+  readStoredMap,
   readWorksIndex,
   renameWork,
+  replaceStoredMap,
   setWorkStatus,
   updateMap,
   WorkNotFoundError,
+  workExists,
   workPaths,
   worksIndexPath,
 } from './work/store.js';
-export type { NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';
+export type { MapWrittenEvent, NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';
 export { ensureStateDir, isDirectorySync, stateDir } from './work/state-dir.js';
 export { isStaleHostLock, parseHostLock, readHostLock, socketIsAlive } from './host-lock.js';
 export type { HostLock } from './host-lock.js';

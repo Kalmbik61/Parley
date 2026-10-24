@@ -1,10 +1,11 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { workDb } from './db.js';
 import { isUnreadFor, markHumanRead, recipientsOf, unreadFor } from './letters.js';
 import { addMessage } from './map.js';
-import { createWork, readMap, updateMap, WorkNotFoundError, workPaths } from './store.js';
+import { createWork, readMap, readStoredMap, replaceStoredMap, updateMap, WorkNotFoundError } from './store.js';
 import { HUMAN, type Room, type WorkMap } from './types.js';
 
 /** Работа с комнатой r-01: создатель s-01, участники s-02 и s-03; s-04 вне её. */
@@ -163,11 +164,18 @@ describe('markHumanRead', () => {
       addMessage(map, { from: HUMAN, to: [], text: 'от человека', roomId: 'r-01' }); // m-05
       addMessage(map, { from: HUMAN, to: ['s-01'], text: 'агенту от человека' }); // m-06
     });
-    const file = workPaths(project, 'w-0001').map;
-    const raw = JSON.parse(await readFile(file, 'utf8')) as WorkMap;
-    raw.work.updatedAt = OLD;
-    await writeFile(file, JSON.stringify(raw), 'utf8');
+    const stored = readStoredMap(project, 'w-0001');
+    stored.work.updatedAt = OLD;
+    replaceStoredMap(project, 'w-0001', stored);
   }
+
+  /** Версия строки работы в базе: растёт на каждой записи. */
+  const versionOf = (): number =>
+    Number(
+      (workDb().prepare('SELECT version FROM works WHERE project_path = ? AND id = ?').get(project, 'w-0001') as {
+        version: number;
+      }).version,
+    );
 
   const readAt = async (id: string): Promise<string | undefined> =>
     (await readMap(project, 'w-0001')).messages.find((m) => m.id === id)?.readBy[HUMAN];
@@ -181,16 +189,15 @@ describe('markHumanRead', () => {
     expect(new Date(at as string).toISOString()).toBe(at);
   });
 
-  it('повтор → 0, map.json не переписан', async () => {
+  it('повтор → 0, в базу ничего не пишется: версия работы прежняя', async () => {
     await seed();
     await markHumanRead(project, 'w-0001', ['m-01']);
-    const file = workPaths(project, 'w-0001').map;
-    const before = (await stat(file)).mtimeMs;
-    const text = await readFile(file, 'utf8');
+    const before = versionOf();
+    const stored = readStoredMap(project, 'w-0001');
 
     expect(await markHumanRead(project, 'w-0001', ['m-01'])).toBe(0);
-    expect((await stat(file)).mtimeMs).toBe(before);
-    expect(await readFile(file, 'utf8')).toBe(text);
+    expect(versionOf()).toBe(before);
+    expect(readStoredMap(project, 'w-0001')).toEqual(stored);
   });
 
   it('письмо человеку и S02, прочитанное S02, но не человеком → 1', async () => {
