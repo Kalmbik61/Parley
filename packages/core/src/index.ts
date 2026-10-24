@@ -310,6 +310,7 @@ export {
   createWork,
   deleteSessionFiles,
   deleteWorkFiles,
+  isDatabaseBusy,
   parleyHome,
   MapLockTimeoutError,
   onMapWritten,
@@ -332,6 +333,7 @@ export { ensureStateDir, isDirectorySync, stateDir } from './work/state-dir.js';
 export { isStaleHostLock, parseHostLock, readHostLock, socketIsAlive } from './host-lock.js';
 export type { HostLock } from './host-lock.js';
 export { MIGRATION_RECORD, migrateHome, migrateProjects, rewriteArtifactRefs } from './migrate.js';
+export { closeWorkDb } from './work/db.js';
 export { migrateMapsToDb } from './work/migrate-to-db.js';
 export type { MapMigrationResult } from './work/migrate-to-db.js';
 export type {

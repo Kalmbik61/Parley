@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { addMessage, addSession } from '../work/map.js';
 import { addRoom } from '../work/rooms.js';
-import { createWork, readMap, updateMap, workPaths, workVersion } from '../work/store.js';
+import { createWork, listWorkVersions, readMap, updateMap, workPaths } from '../work/store.js';
 import { type WorkMap } from '../work/types.js';
 import { createParleyServer } from './tools.js';
 
@@ -121,7 +121,8 @@ async function snapshot(root: string): Promise<Record<string, string>> {
 const snapshotAll = async () => ({
   project: await snapshot(project),
   home: await snapshot(home),
-  version: workVersion(project, workId),
+  // Версии всех работ базы, а не только этой: чтение не должно поднять версию ни одной.
+  versions: listWorkVersions().sort((a, b) => `${a.projectPath}\0${a.id}`.localeCompare(`${b.projectPath}\0${b.id}`)),
 });
 
 const ids = (map: WorkMap) => ({

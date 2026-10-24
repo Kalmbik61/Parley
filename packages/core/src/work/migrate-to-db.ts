@@ -226,6 +226,19 @@ export async function migrateMapsToDb(options: { log?: (line: string) => void } 
   const missing: Candidate[] = [];
 
   const { list, unreadable } = await candidates(indexed, log);
+  // Первый старт с большими картами длится заметно, а окно до тех пор «подключается»: одна строка в журнале хоста, чтобы
+  // было видно, что хост занят переездом, а не завис. Работы без `map.json` (переехали раньше) в счёт не идут.
+  const pending = (
+    await Promise.all(
+      list.map(({ projectPath, workId }) =>
+        lstat(workPaths(projectPath, workId).map).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    )
+  ).filter(Boolean).length;
+  if (pending > 0) log(`переезд карт в базу: ${pending} работ`);
   for (const candidate of list) {
     const { projectPath, workId } = candidate;
     const outcome = await migrateOne(candidate);

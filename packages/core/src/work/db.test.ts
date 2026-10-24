@@ -1,6 +1,6 @@
 /** Рабочая база SQLite (спека хранилища 6.1): только временные дома, настоящий `~/.parley` не трогаем. */
 
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -48,6 +48,17 @@ const countEntries = (): number =>
   Number((workDb().prepare('SELECT COUNT(*) AS n FROM entries').get() as { n: number }).n);
 
 describe('workDb', () => {
+  it('новый parley.db (и его -wal/-shm) — с правами 0600: в нём переписка всех проектов', () => {
+    insertWork('w-0001');
+
+    const file = path.join(home, WORK_DB_FILE);
+    const modes = [file, `${file}-wal`, `${file}-shm`]
+      .filter((candidate) => existsSync(candidate))
+      .map((candidate) => [path.basename(candidate), statSync(candidate).mode & 0o777]);
+    expect(modes[0]).toEqual([WORK_DB_FILE, 0o600]);
+    expect(modes.every(([, mode]) => mode === 0o600)).toBe(true);
+  });
+
   it('создаёт parley.db в PARLEY_HOME с WAL и user_version = 1', () => {
     expect(WORK_DB_FILE).toBe('parley.db');
     expect(WORK_DB_SCHEMA_VERSION).toBe(1);

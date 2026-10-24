@@ -291,6 +291,14 @@ const SQLITE_CONSTRAINT_PRIMARYKEY = 1555;
 const sqliteCode = (error: unknown): number => (error as { errcode?: number } | null)?.errcode ?? 0;
 
 /**
+ * Отказ из-за занятости базы, а не из-за карты: `MapLockTimeoutError` (запись не дождалась) или сырой `SQLITE_BUSY` у
+ * читателя. Такая работа не битая — повтор на следующем проходе удастся, и хост молчит о повреждении.
+ */
+export function isDatabaseBusy(error: unknown): boolean {
+  return error instanceof MapLockTimeoutError || (sqliteCode(error) & 0xff) === SQLITE_BUSY;
+}
+
+/**
  * База занята другим соединением дольше `lockTimeoutMs` — тот же `MapLockTimeoutError`, что был у файловой блокировки:
  * хост по нему не падает, а сообщает `host.notice` и повторяет (спека хранилища 6.9). Прочие ошибки идут как есть.
  */
@@ -340,9 +348,17 @@ function readTransaction<T>(db: DatabaseSync, body: () => T): T {
   if (db.isTransaction) return body();
   db.exec('BEGIN');
   try {
-    return body();
-  } finally {
+    const result = body();
     db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    // Тело бросило или COMMIT не прошёл: открытая транзакция не должна остаться (следующий вызов принял бы её за свою).
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // Транзакции уже нет: причина — исходная ошибка, её и бросаем.
+    }
+    throw error;
   }
 }
 
@@ -1128,10 +1144,9 @@ export async function withBacklogChoice(paths: SharedProjectPaths): Promise<Shar
 export interface SharedFileSnapshot { text: string; version: string }
 const SHARED_FILE_LIMIT = 1024 * 1024;
 /**
- * Потолок чтения для карты работы. Карта — собственный файл Parley, а не общий файл проекта: переписка
- * раздувает её за 1 МиБ, и общий потолок делал такую карту нечитаемой для бэклога. Так карту читает бэклог
- * хоста (`knownMap`): `readSharedFile(file, MAP_SNAPSHOT_LIMIT)`; `writeSharedFile` остаётся на 1 МиБ —
- * картам он не нужен (спека хранилища 6.9).
+ * Потолок чтения общего файла проекта, если звавший просит его поднять (`readSharedFile(file, limit)`). Карты работ давно
+ * не файлы — они в базе (спека хранилища 6.9), и бэклог хоста читает их через `readMap`; константа осталась экспортом
+ * для старых вызывающих и своих тестов.
  */
 export const MAP_SNAPSHOT_LIMIT = 256 * 1024 * 1024;
 export const MISSING_SHARED_VERSION = 'missing';

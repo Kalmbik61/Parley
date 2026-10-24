@@ -6,7 +6,7 @@
  * Базой владеет хост: на один `parleyHome` хост один (спека хранилища 6.1), поэтому дескриптор здесь один на процесс.
  */
 
-import { mkdirSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -62,6 +62,7 @@ export function workDb(): DatabaseSync {
   if (opened?.file === file) return opened.db;
   closeWorkDb();
   mkdirSync(path.dirname(file), { recursive: true });
+  createPrivateFile(file);
   const db = new Database(file);
   try {
     prepare(db);
@@ -71,6 +72,18 @@ export function workDb(): DatabaseSync {
   }
   opened = { file, db };
   return db;
+}
+
+/**
+ * Файл базы заводится с правами 0600 до того, как SQLite его откроет: в нём переписка всех проектов (спека хранилища 6.1),
+ * а `-wal` и `-shm` SQLite создаёт с правами самой базы. Уже существующий файл не трогается.
+ */
+function createPrivateFile(file: string): void {
+  try {
+    closeSync(openSync(file, 'wx', 0o600));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
 }
 
 /** Закрывает базу, если она открыта: для тестов и остановки хоста. Повторный вызов ничего не делает. */
@@ -99,7 +112,11 @@ function prepare(db: DatabaseSync): void {
     }
     db.exec('COMMIT');
   } catch (error) {
-    db.exec('ROLLBACK');
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // Транзакции уже нет (COMMIT не прошёл или SQLite откатила сама): причина — исходная ошибка, её и бросаем.
+    }
     throw error;
   }
 }

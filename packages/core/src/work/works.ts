@@ -213,8 +213,9 @@ export function watchWorks(
       const now = workDataVersion();
       failing = false;
       if (now === dataVersion) return;
-      dataVersion = now;
       const next = versionsNow();
+      // Число запоминается только после удачного чтения версий: сбой между ними оставит прежнее, и следующий опрос повторит.
+      dataVersion = now;
       const changed = !sameVersions(versions, next);
       versions = next;
       if (changed) schedule();

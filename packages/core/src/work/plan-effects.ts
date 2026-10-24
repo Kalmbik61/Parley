@@ -250,7 +250,7 @@ export interface PlanReservation {
   queued: number;
   nextDueAt: number | null;
 }
-/** Called under map.lock: reserve occurrence and letter together before existing wake sees either. */
+/** Called inside a map write (`updateMap`): reserve occurrence and letter together before existing wake sees either. */
 export function reservePlanEffects(
   map: WorkMap,
   messageRate: number,
