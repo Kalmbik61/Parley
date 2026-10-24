@@ -1,8 +1,7 @@
-import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  DecisionJournalError, RoomHistoryError, SharedStateError, classifyDecisionFile, parseMap, readDecisionJournalFiles,
-  readRoomHistoryStatus, shareRoomHistory, sharedProjectPaths, unshareRoomHistory, workPaths,
+  DecisionJournalError, RoomHistoryError, SharedStateError, classifyDecisionFile, readDecisionJournalFiles,
+  readMap, readRoomHistoryStatus, shareRoomHistory, sharedProjectPaths, unshareRoomHistory,
 } from '@parley/core';
 import type { WorkEntry, WorkMap } from '@parley/core';
 import {
@@ -39,13 +38,11 @@ function validate<M extends JournalMethodName>(method: M, params: JournalMethodP
 }
 
 /**
- * Свежая карта с диска: проект, работа и комната проверяются по ней, а не по снимку окна.
- * Не `readSharedFile`: его лимит 1 МиБ рассчитан на общие Markdown-файлы, а карта работы бывает больше (как и у `readMap` ядра).
+ * Свежая карта из базы: проект, работа и комната проверяются по ней, а не по снимку окна (спека хранилища 6.9).
+ * Потолка размера нет: карта собирается из строк базы, как и у любого читателя `readMap` ядра.
  */
 async function freshMap(projectPath: string, workId: string): Promise<WorkMap> {
-  const file = workPaths(await realpath(projectPath), workId).map;
-  if (await realpath(file) !== file) throw new SharedStateError('shared-state-unsafe');
-  const map = parseMap(await readFile(file, 'utf8'), file);
+  const map = await readMap(projectPath, workId);
   if (map.work.id !== workId) throw new SharedStateError('shared-state-unsafe');
   return map;
 }

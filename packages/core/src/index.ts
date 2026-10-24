@@ -324,6 +324,7 @@ export {
   WorkNotFoundError,
   workExists,
   workPaths,
+  workVersion,
   worksIndexPath,
 } from './work/store.js';
 export type { MapWrittenEvent, NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';

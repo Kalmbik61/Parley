@@ -96,7 +96,7 @@ describe('обновления снимка по одному', () => {
     await vi.waitFor(() => expect(reconcile.calls).toBe(1));
 
     // Пока первая сверка держится, наблюдатель дважды приносит новое чтение.
-    const works = await readWorks(project);
+    const works = await readWorks();
     deliver[0]?.(works, 1);
     await sleep(50);
     deliver[0]?.(works, 2);

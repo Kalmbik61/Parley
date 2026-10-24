@@ -1,23 +1,19 @@
 /**
  * Список работ хоста: сколько их, в каких проектах, кто их держит.
  *
- * Источник — глобальный индекс (`readWorksIndex`) плюс карта каждого известного
- * проекта. Наблюдатель за одним `parleyHome()` ловит только смену самого
- * индекса — содержимое чужого `<проект>/.parley/works/<id>/map.json` (или прежнего `.harnas`) лежит вне его поля
- * зрения, поэтому на каждый известный проект заводится свой `watchWorks`
- * (спецификация 3.3, 4.2, план, кусок 1.4).
+ * Источник — таблица `works` базы дома и карта каждой работы (`readWorks`). О переменах сервис узнаёт не из файлов, а
+ * от одного `watchWorks`: записи этого процесса приходят событием хранилища, записи других — опросом
+ * `PRAGMA data_version` (спека хранилища 6.9). Наблюдателей по проектам больше нет — база одна на весь дом.
  *
- * Карту пишут трое — хост, CLI и MCP-серверы агентов (ревью, пункт 5): таймаут
- * `map.lock` здесь не роняет сервис, а уходит уведомлением `host.notice` и
- * повторяется на следующем изменении. Карту, которая есть на диске, но не
- * разбирается, `readWorks` из core молча пропускает — сервис проверяет это
- * отдельно и жалуется один раз на файл, ничего в него не дописывая.
+ * Карту пишут трое — хост, CLI и MCP-серверы агентов (ревью, пункт 5): таймаут записи в базу (`MapLockTimeoutError`)
+ * здесь не роняет сервис, а уходит уведомлением `host.notice` и повторяется на следующем изменении. Работу, которая есть
+ * в базе, но не загружается (`normalizeMap` её не принимает), `readWorks` из core молча пропускает — сервис проверяет
+ * это отдельно и жалуется один раз на работу, ничего в неё не дописывая.
  */
 
 import {
   compactWorkMap,
   gitBranch,
-  parleyHome,
   MapLockTimeoutError,
   processStartedAt,
   readMap,
@@ -26,7 +22,7 @@ import {
   reconcileMap,
   removeHostLease,
   watchWorks,
-  workPaths,
+  WorkNotFoundError,
   writeHostLease,
 } from '@parley/core';
 import type { HostLease, WorkEntry, WorksWatcher } from '@parley/core';
@@ -34,7 +30,6 @@ import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES } from '@parley/protoc
 import type { WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
 import type { HostContext } from '../context.js';
-import { createSettler } from '../watch-settle.js';
 import type { WindowCounters } from '../health/window-counters.js';
 
 export interface WorksServiceOptions {
@@ -67,9 +62,8 @@ export interface WorksService {
 const DEFAULT_DEBOUNCE_MS = 100;
 
 /**
- * Склейка событий внутри одного `watchWorks`. Запись карты — это запись индекса и самой карты (`.bak` к ним
- * добавляется не чаще раза в десять минут, спека хранилища 6.9) с промежутками в десятки миллисекунд:
- * при 0 каждое событие запускало своё полное чтение всех карт.
+ * Склейка событий внутри `watchWorks`: записи подряд (письма, сверка живости нескольких работ) приходят с промежутками
+ * в десятки миллисекунд, и при 0 каждая запускала бы своё чтение списка.
  */
 const WATCH_DEBOUNCE_MS = 75;
 
@@ -98,7 +92,7 @@ export function createWorksService(
 
   const entries = new Map<string, WorkEntry>();
   const branches = new Map<string, string | null>();
-  const watchers = new Map<string, WorksWatcher>();
+  let watcher: WorksWatcher | undefined;
   const listeners = new Set<(next: WorksSnapshot, previous: WorksSnapshot) => void>();
   const leased = new Set<string>();
   const readAlready = new Set<string>();
@@ -208,10 +202,9 @@ export function createWorksService(
   };
 
   /**
-   * Работы, о которых знает глобальный индекс, но которых нет в свежем чтении:
-   * либо её каталог переехал или исчез (файла нет — молчим, как и `readWorks`),
-   * либо `map.json` есть, но не разбирается — про это, в отличие от `readWorks`,
-   * сервис обязан сказать (раздел «На что смотреть на ревью», пункт 5).
+   * Работы, о которых знает таблица `works`, но которых нет в свежем чтении: либо её только что сняли (строки нет —
+   * молчим, как и `readWorks`), либо строки есть, но `normalizeMap` работу не принимает — про это, в отличие от
+   * `readWorks`, сервис обязан сказать (раздел «На что смотреть на ревью», пункт 5).
    */
   async function checkCorruption(present: ReadonlySet<string>): Promise<void> {
     const index = await readWorksIndex().catch(() => null);
@@ -222,12 +215,13 @@ export function createWorksService(
       if (present.has(key)) continue;
       try {
         await readMap(item.projectPath, item.id);
-        // Распарсилась — просто гонка со свежим чтением, не карта битая.
+        // Загрузилась — просто гонка со свежим чтением, не работа битая.
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        if (error instanceof WorkNotFoundError) continue;
         if (notifiedCorrupt.has(key)) continue;
         notifiedCorrupt.add(key);
-        notice('map-corrupt', workPaths(item.projectPath, item.id).map);
+        const reason = error instanceof Error ? error.message : String(error);
+        notice('map-corrupt', `workspace ${item.id} in ${item.projectPath} cannot be loaded: ${reason}`);
       }
     }
   }
@@ -293,58 +287,26 @@ export function createWorksService(
     options.windowCounters?.mapsParsed(works.reduce((sum, work) => sum + (work.bytes ?? 0), 0));
   }
 
-  /** `true` — наблюдатель проекта заведён только что. */
-  function ensureWatcher(projectPath: string): boolean {
-    if (stopped || watchers.has(projectPath)) return false;
-    const watcher = watchWorks(
+  /** Единственный источник перемен — `watchWorks` на всю базу; заводится на `start`. */
+  function ensureWatcher(): void {
+    if (stopped || watcher !== undefined) return;
+    watcher = watchWorks(
       (works, seq) => {
         // Разбор уже случился, даже если список ниже отбросим как устаревший.
         countParsed(works);
-        // Наблюдателей несколько (дом и каждый проект), каждый читает список
-        // сам, и медленное старое чтение одного может прийти позже свежего
-        // чтения другого.
+        // Чтение, начатое раньше уже принятого, может прийти позже свежего.
         if (seq < latestSeq) return;
         latestSeq = seq;
         latest = works;
         scheduleRefresh();
       },
-      projectPath,
       {
-        // Помимо склейки сервиса (`scheduleRefresh`) события склеивает и сам наблюдатель. Дом
-        // наблюдается один раз — наблюдателю проекта достаточно каталога его работ, иначе каждая
-        // запись индекса будила бы каждого из них и каждый читал бы все карты.
         debounceMs: WATCH_DEBOUNCE_MS,
-        watchHome: projectPath === parleyHome(),
         onError: (error) =>
           host.log.warn('наблюдение за работами: событие пропущено', { error: String(error) }),
       },
     );
-    watchers.set(projectPath, watcher);
-    settler.schedule();
-    return true;
   }
-
-  /**
-   * Дочитывание после включения наблюдателя (`watch-settle`): запись карты, попавшая в окно между созданием
-   * наблюдателя и его реальным включением, не приходит событием никогда. Список перечитывается заново, и
-   * если он отличается от последнего полученного, идёт обычное обновление; без отличий — ничего.
-   */
-  async function settleRead(): Promise<void> {
-    if (stopped) return;
-    const seq = latestSeq;
-    const fresh = await readWorks(parleyHome()).catch(() => null);
-    if (fresh !== null) countParsed(fresh);
-    // Пока читали, пришло событие наблюдателя: его чтение свежее нашего, следующая пауза сверит ещё раз.
-    if (stopped || fresh === null || seq !== latestSeq) return;
-    // `bytes` в сравнении не участвует: у карты из кэша разбора он 0, и список без перемен выглядел бы новым.
-    const content = (list: readonly WorkEntry[]): string =>
-      JSON.stringify(list.map(({ projectPath, map }) => ({ projectPath, map })));
-    if (content(fresh) === content(latest)) return;
-    latest = fresh;
-    scheduleRefresh();
-  }
-
-  const settler = createSettler(() => void settleRead());
 
   function scheduleRefresh(): void {
     if (timer !== undefined) clearTimeout(timer);
@@ -375,31 +337,6 @@ export function createWorksService(
     return refreshing;
   }
 
-  /**
-   * Карты проекта, чей наблюдатель заведён только что, перечитываются (fix-tests2): список
-   * пришёл от наблюдателя дома, а `updateMap` пишет индекс раньше карты — запись карты,
-   * сделанная до наблюдателя проекта, иначе не видна никому (первая сессия нового проекта
-   * оставалась pending в снимке). Всё, что запишут после, увидит уже сам наблюдатель.
-   */
-  async function rereadNewlyWatched(
-    works: readonly WorkEntry[],
-    projects: ReadonlySet<string>,
-  ): Promise<void> {
-    if (projects.size === 0) return;
-    for (const work of works) {
-      if (!projects.has(work.projectPath)) continue;
-      try {
-        const fresh = await readMap(work.projectPath, work.map.work.id);
-        entries.set(workKey(work.projectPath, work.map.work.id), {
-          projectPath: work.projectPath,
-          map: fresh,
-        });
-      } catch {
-        // Карту удалили или переписывают — следующее чтение наблюдателя разберётся.
-      }
-    }
-  }
-
   /** Счётчик окна: проход `refresh` считается и при сбое в `publish` или слушателе, и при раннем выходе из-за `stopped`. */
   async function refresh(works: readonly WorkEntry[]): Promise<void> {
     const startedAt = performance.now();
@@ -415,19 +352,16 @@ export function createWorksService(
     if (stopped) return;
     const previous = buildSnapshot();
 
-    // `works` — уже полный список: `readWorks` каждый раз перечитывает весь
-    // глобальный индекс заново, а не только изменившийся проект, поэтому карту
-    // сервиса можно просто заменить целиком, слитую по ключу `projectPath+workId`.
+    // `works` — уже полный список: `readWorks` каждый раз берёт всю таблицу `works`
+    // (неизменённая работа — из кэша по версии), поэтому карту сервиса можно просто
+    // заменить целиком, слитую по ключу `projectPath+workId`.
     const seenKeys = new Set<string>();
-    const newlyWatched = new Set<string>();
     entries.clear();
     for (const work of works) {
       const key = workKey(work.projectPath, work.map.work.id);
       entries.set(key, work);
       seenKeys.add(key);
-      if (ensureWatcher(work.projectPath)) newlyWatched.add(work.projectPath);
     }
-    await rereadNewlyWatched(works, newlyWatched);
 
     const projects = new Set(works.map((work) => work.projectPath));
     await Promise.all(
@@ -460,13 +394,10 @@ export function createWorksService(
         since: new Date().toISOString(),
       };
 
-      // Наблюдатель за `parleyHome()` ловит появление новых проектов в
-      // глобальном индексе, даже если на старте их ещё ни одного нет.
-      ensureWatcher(parleyHome());
-      const index = await readWorksIndex().catch(() => ({ schemaVersion: 1 as const, works: [] }));
-      for (const item of index.works) ensureWatcher(item.projectPath);
+      // Источник заводится до первого чтения: запись между ними он заметит и пошлёт повторное.
+      ensureWatcher();
 
-      const initial = await readWorks(parleyHome());
+      const initial = await readWorks();
       countParsed(initial);
       // Наблюдатель успел отдать своё чтение, пока шло это, — его и берём:
       // номер у начального чтения не спросить, а следующее событие всё равно
@@ -486,10 +417,9 @@ export function createWorksService(
     async stop() {
       if (stopped) return;
       stopped = true;
-      settler.cancel();
       if (timer !== undefined) clearTimeout(timer);
-      for (const watcher of watchers.values()) watcher.close();
-      watchers.clear();
+      watcher?.close();
+      watcher = undefined;
 
       const pid = process.pid;
       await Promise.all(

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { HUMAN, addRoom, addSession, createWork, flushDecisionJournal, readMap, resolveProposal, setProposal, updateMap } from '@parley/core';
+import { HUMAN, addMessage, addRoom, addSession, createWork, flushDecisionJournal, readMap, resolveProposal, setProposal, updateMap } from '@parley/core';
 import type { WorkEntry } from '@parley/core';
 import type { WorksService } from '../works/works-service.js';
 import { createJournalHandlers } from './journal.js';
@@ -42,10 +42,12 @@ async function accepted(at: string, texts: string[], flush = true): Promise<stri
   await refresh(at, workId);
   return workId;
 }
-/** Раздувает карту работы выше лимита общих файлов (1 МиБ) пробелами в конце: JSON остаётся допустимым. */
+/** Раздувает карту работы выше лимита общих файлов (1 МиБ) настоящими письмами в комнату r-01: к карте в базе этот лимит не относится. */
 async function bloatMap(at: string, workId: string): Promise<void> {
-  const file = path.join(at, '.parley', 'works', workId, 'map.json');
-  await writeFile(file, (await readFile(file, 'utf8')) + ' '.repeat(1024 * 1024 + 10));
+  await updateMap(at, workId, map => {
+    for (let i = 0; i < 300; i++) addMessage(map, { from: HUMAN, to: [], roomId: 'r-01', text: 'x'.repeat(4000) });
+  });
+  expect(Buffer.byteLength(JSON.stringify(await readMap(at, workId)))).toBeGreaterThan(1024 * 1024);
 }
 const tree = async (dir: string): Promise<string[]> => (await readdir(dir, { recursive: true }).catch(() => [])).sort();
 

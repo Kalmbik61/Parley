@@ -1,9 +1,8 @@
-import { lstat } from 'node:fs/promises';
 import {
   rebuildRoomHistory,
   removeLocalRoomHistories,
   renderRoomHistory,
-  workPaths,
+  workExists,
 } from '@parley/core';
 import type { WorkEntry } from '@parley/core';
 import type { WorksService } from '../works/works-service.js';
@@ -32,6 +31,14 @@ interface HistoryState {
   timer?: ReturnType<typeof setTimeout>;
   running?: Promise<void>;
 }
+/**
+ * Работу сняли, если её строки в базе нет (спека хранилища 6.9). Строка, которую `normalizeMap` не принимает, или сбой
+ * чтения базы удалением не считаются: чистку производных файлов нельзя делать по догадке.
+ */
+export async function isWorkDeleted(projectPath: string, workId: string): Promise<boolean> {
+  try { return !workExists(projectPath, workId); }
+  catch { return false; }
+}
 const identity = (entry: WorkEntry): string => JSON.stringify(entry.map.rooms.map(room => renderRoomHistory(entry.map, room.id)));
 /** Derivative files only; it never publishes shared history or changes the source map. */
 export function createHistoryService(
@@ -41,10 +48,7 @@ export function createHistoryService(
   const io = options.io ?? {
     rebuild: rebuildRoomHistory,
     remove: removeLocalRoomHistories,
-    deleted: async (projectPath: string, workId: string): Promise<boolean> => {
-      try { await lstat(workPaths(projectPath, workId).map); return false; }
-      catch (error) { return (error as NodeJS.ErrnoException).code === 'ENOENT'; }
-    },
+    deleted: isWorkDeleted,
   };
   const states = new Map<string, HistoryState>();
   const noticed = new Set<string>();

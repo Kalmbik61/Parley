@@ -1,19 +1,31 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addSession,
   createWork,
+  deleteWorkFiles,
+  readStoredMap,
+  replaceStoredMap,
   transitionSession,
   updateMap,
   workPaths,
+  workVersion,
 } from '@parley/core';
+import type { Room } from '@parley/core';
 import type { EventData, EventName } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createWindowCounters } from '../health/window-counters.js';
 import { createWorksService } from './works-service.js';
 import type { WorksService } from './works-service.js';
+
+/** Второе соединение с базой дома: держит запись и читает размеры, как это делает чужой процесс (CLI, MCP агента без канала). */
+const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 
 let home = '';
 let projectA = '';
@@ -56,6 +68,23 @@ function service(options: Parameters<typeof createWorksService>[1] = {}): WorksS
   const created = createWorksService(fakeHost(), options);
   services.push(created);
   return created;
+}
+
+/** Сколько байт текста лежит в строках работы: то, что хост разбирает при чтении, — и считает счётчик окна. */
+function rowBytes(projectPath: string, workId: string): number {
+  const db = new DatabaseSync(path.join(home, 'parley.db'));
+  try {
+    const row = db
+      .prepare(
+        `SELECT length(CAST(work_json AS BLOB)) + length(CAST(extra_json AS BLOB)) + COALESCE(
+           (SELECT SUM(length(CAST(json AS BLOB))) FROM entries WHERE project_path = works.project_path AND work_id = works.id), 0
+         ) AS n FROM works WHERE project_path = ? AND id = ?`,
+      )
+      .get(projectPath, workId) as { n: number };
+    return Number(row.n);
+  } finally {
+    db.close();
+  }
 }
 
 const exists = async (file: string): Promise<boolean> => {
@@ -122,7 +151,7 @@ describe('источники', () => {
 });
 
 describe('счётчики окна', () => {
-  it('start читает N карт один раз: байты равны сумме размеров файлов, refresh считан один раз', async () => {
+  it('start читает N карт один раз: байты равны сумме размеров строк карт в базе, refresh считан один раз', async () => {
     const first = await createWork(projectA, { title: 'Первая' });
     const second = await createWork(projectA, { title: 'Вторая с чуть более длинным названием' });
     const windowCounters = createWindowCounters();
@@ -130,11 +159,8 @@ describe('счётчики окна', () => {
     const s = service({ windowCounters });
     await s.start();
 
-    const sizes = await Promise.all(
-      [first, second].map(async (map) =>
-        Buffer.byteLength(await readFile(workPaths(projectA, map.work.id).map, 'utf8')),
-      ),
-    );
+    // Карт-файлов больше нет: счётчик считает байты строк базы, из которых собраны карты.
+    const sizes = [first, second].map((map) => rowBytes(projectA, map.work.id));
     const tally = windowCounters.read();
     expect(tally.mapBytesParsed).toBe(sizes[0]! + sizes[1]!);
     // Число проходов не фиксируем: пока идёт start, наблюдатель может прислать своё событие и добавить ещё один refresh.
@@ -154,8 +180,8 @@ describe('счётчики окна', () => {
       { timeout: 10_000, interval: 5 },
     );
 
-    const size = Buffer.byteLength(await readFile(workPaths(projectA, work.work.id).map, 'utf8'));
-    // Наблюдатель мог прочитать список не раз (карта, .bak, индекс), поэтому не меньше размера, а не равенство.
+    const size = rowBytes(projectA, work.work.id);
+    // Наблюдатель мог прочитать список не раз, поэтому не меньше размера, а не равенство.
     expect(windowCounters.read().mapBytesParsed - afterStart).toBeGreaterThanOrEqual(size);
   }, 20_000);
 
@@ -213,14 +239,15 @@ describe('аренда', () => {
     const s = service();
     await s.start();
 
+    // Карта лежит в базе, а не в каталоге работы: в нём остаются только каталоги и аренда хоста.
     expect((await readdir(workPaths(projectA, a.work.id).dir)).sort()).toEqual(
-      ['artifacts', 'briefs', 'host.lease', 'map.json', 'map.json.bak'].sort(),
+      ['artifacts', 'briefs', 'host.lease'].sort(),
     );
   });
 });
 
 describe('лок', () => {
-  it('занятый map.lock уходит host.notice(map-lock) и не роняет сервис; на следующем изменении проходит', async () => {
+  it('занятая база уходит host.notice(map-lock) и не роняет сервис; на следующем изменении проходит', async () => {
     const map = await createWork(projectA, { title: 'Работа' });
     await updateMap(projectA, map.work.id, (current) => {
       const created = addSession(current, { provider: 'claude', label: 'план', task: 't' });
@@ -228,46 +255,163 @@ describe('лок', () => {
       created.pid = 999_999;
       transitionSession(current, created.id, 'active');
     });
-    const lockFile = workPaths(projectA, map.work.id).lock;
-    await writeFile(lockFile, '', { flag: 'wx' });
+    const other = new DatabaseSync(path.join(home, 'parley.db'));
+    other.exec('BEGIN IMMEDIATE');
 
-    const s = service({ lockTimeoutMs: 50, debounceMs: 50 });
-    await s.start();
+    try {
+      const s = service({ lockTimeoutMs: 50, debounceMs: 50 });
+      await s.start();
 
-    expect(broadcasts.some((b) => b.event === 'host.notice')).toBe(true);
-    expect(s.entry(projectA, map.work.id)?.map.sessions[0]?.lifecycle).toBe('active');
+      expect(broadcasts.some((b) => b.event === 'host.notice')).toBe(true);
+      expect(s.entry(projectA, map.work.id)?.map.sessions[0]?.lifecycle).toBe('active');
 
-    await rm(lockFile, { force: true });
-    broadcasts = [];
-    // Любое дальнейшее изменение индекса запускает следующий цикл.
-    await createWork(projectB, { title: 'Толчок' });
-    // Склейка событий наблюдателя (75 мс) и сервиса (50 мс) складываются: ждём результат, а не фиксированную паузу.
-    await vi.waitFor(
-      () => expect(s.entry(projectA, map.work.id)?.map.sessions[0]?.lifecycle).toBe('sleeping'),
-      { timeout: 3000, interval: 25 },
-    );
+      other.exec('ROLLBACK');
+      broadcasts = [];
+      // Любое дальнейшее изменение запускает следующий цикл.
+      await createWork(projectB, { title: 'Толчок' });
+      await vi.waitFor(
+        () => expect(s.entry(projectA, map.work.id)?.map.sessions[0]?.lifecycle).toBe('sleeping'),
+        { timeout: 3000, interval: 25 },
+      );
+    } finally {
+      other.close();
+    }
   });
 });
 
+/** Комната, которую `normalizeMap` не примет: неизвестный режим — работа остаётся в базе, но не загружается. */
+const bogusRoom = (): Room =>
+  ({
+    id: 'r-01',
+    title: 'бэкенд',
+    creator: 'human',
+    ownerId: null,
+    members: [],
+    createdAt: '2026-10-24T00:00:00.000Z',
+    lead: null,
+    proposal: null,
+    archivedAt: null,
+    mode: 'bogus',
+  }) as unknown as Room;
+
 describe('битая карта', () => {
-  it('map.json с мусором даёт один host.notice(map-corrupt) с путём и не переписывается', async () => {
+  it('работа, которую normalizeMap не принимает, даёт один host.notice(map-corrupt) и не переписывается', async () => {
     const map = await createWork(projectA, { title: 'Работа' });
-    const mapFile = workPaths(projectA, map.work.id).map;
-    const before = await readFile(mapFile, 'utf8');
-    await writeFile(mapFile, 'мусор, не json', 'utf8');
+    const stored = readStoredMap(projectA, map.work.id);
+    stored.rooms.push(bogusRoom());
+    replaceStoredMap(projectA, map.work.id, stored);
+    const versionBefore = workVersion(projectA, map.work.id);
 
     const s = service({ debounceMs: 50 });
     await s.start();
 
     const notices = broadcasts.filter((b) => b.event === 'host.notice');
     expect(notices).toHaveLength(1);
-    expect(notices[0]?.data).toMatchObject({ kind: 'map-corrupt', text: mapFile });
-    expect(await readFile(mapFile, 'utf8')).toBe('мусор, не json');
-    expect(before).not.toBe('мусор, не json');
+    expect(notices[0]?.data).toMatchObject({ kind: 'map-corrupt' });
+    expect((notices[0]?.data as { text: string }).text).toContain(map.work.id);
+    // Строки базы хост не трогает: любая его запись подняла бы версию работы.
+    expect(workVersion(projectA, map.work.id)).toBe(versionBefore);
+    expect(s.entry(projectA, map.work.id)).toBeUndefined();
 
-    // Второй цикл — карта всё ещё битая, но повторного уведомления нет.
+    // Второй цикл — работа всё ещё битая, но повторного уведомления нет.
     await createWork(projectB, { title: 'Толчок' });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 300));
     expect(broadcasts.filter((b) => b.event === 'host.notice')).toHaveLength(1);
+  });
+});
+
+const run = promisify(execFile);
+const hostDir = fileURLToPath(new URL('../../', import.meta.url));
+
+/** Запись настоящего второго процесса: `node` со своим соединением к той же базе, ядро берётся из `dist`. */
+async function writeFromChildProcess(body: string): Promise<void> {
+  await run(process.execPath, ['--input-type=module', '--no-warnings', '-e', `import * as core from '@parley/core';\n${body}`], {
+    cwd: hostDir,
+    env: { ...process.env, PARLEY_HOME: home },
+  });
+}
+
+describe('изменения без файлов', () => {
+  it('updateMap в процессе хоста даёт works.changed и звонит слушателям', async () => {
+    const work = await createWork(projectA, { title: 'Работа' });
+    const s = service({ debounceMs: 20 });
+    await s.start();
+    const goals: string[] = [];
+    s.onChange((snapshot) => {
+      goals.push(snapshot.entries[0]?.map.work.goal ?? '');
+    });
+    const changes = (): number => broadcasts.filter((item) => item.event === 'works.changed').length;
+    const before = changes();
+
+    await updateMap(projectA, work.work.id, (map) => {
+      map.work.goal = 'через событие хранилища';
+    });
+
+    await vi.waitFor(() => expect(goals).toContain('через событие хранилища'), { timeout: 2000, interval: 10 });
+    expect(changes()).toBeGreaterThan(before);
+  });
+
+  it('запись из дочернего процесса (другое соединение с базой) видна слушателям в течение 2 с', async () => {
+    const work = await createWork(projectA, { title: 'Работа' });
+    const s = service({ debounceMs: 20 });
+    await s.start();
+    const goals: string[] = [];
+    s.onChange((snapshot) => {
+      goals.push(snapshot.entries[0]?.map.work.goal ?? '');
+    });
+
+    await writeFromChildProcess(
+      `const map = core.readStoredMap(${JSON.stringify(projectA)}, ${JSON.stringify(work.work.id)});
+       map.work.goal = 'из дочернего процесса';
+       core.replaceStoredMap(${JSON.stringify(projectA)}, ${JSON.stringify(work.work.id)}, map);`,
+    );
+
+    await vi.waitFor(() => expect(goals).toContain('из дочернего процесса'), { timeout: 2000, interval: 25 });
+    expect(s.entry(projectA, work.work.id)?.map.work.goal).toBe('из дочернего процесса');
+  }, 20_000);
+
+  it('работа, созданная дочерним процессом, появляется в снимке', async () => {
+    const s = service({ debounceMs: 20 });
+    await s.start();
+
+    await writeFromChildProcess(
+      `await core.createWork(${JSON.stringify(projectB)}, { title: 'Из дочернего' });`,
+    );
+
+    await vi.waitFor(
+      () => expect(s.snapshot().entries.map((entry) => entry.map.work.title)).toEqual(['Из дочернего']),
+      { timeout: 2000, interval: 25 },
+    );
+  }, 20_000);
+
+  it('работа, снятая в процессе хоста (deleteWorkFiles), пропадает из снимка', async () => {
+    const work = await createWork(projectA, { title: 'Работа' });
+    await createWork(projectB, { title: 'Остаётся' });
+    const s = service({ debounceMs: 20 });
+    await s.start();
+    expect(s.snapshot().entries).toHaveLength(2);
+
+    await deleteWorkFiles(projectA, work.work.id);
+
+    await vi.waitFor(() => expect(s.snapshot().entries.map((entry) => entry.map.work.title)).toEqual(['Остаётся']), {
+      timeout: 2000,
+      interval: 10,
+    });
+  });
+
+  it('после stop сервис записей больше не слушает', async () => {
+    const work = await createWork(projectA, { title: 'Работа' });
+    const s = service({ debounceMs: 20 });
+    await s.start();
+    await s.stop();
+    services = services.filter((candidate) => candidate !== s);
+    broadcasts = [];
+
+    await updateMap(projectA, work.work.id, (map) => {
+      map.work.goal = 'после stop';
+    });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    expect(broadcasts.filter((item) => item.event === 'works.changed')).toEqual([]);
   });
 });

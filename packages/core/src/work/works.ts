@@ -1,7 +1,12 @@
-import { watch, type FSWatcher } from 'node:fs';
-import path from 'node:path';
-import { stateDir } from './state-dir.js';
-import { onMapWritten, parleyHome, readMap, readWorksIndex, workVersion } from './store.js';
+import {
+  listWorkVersions,
+  onMapWritten,
+  readMap,
+  readWorksIndex,
+  storedMapBytes,
+  workDataVersion,
+  workVersion,
+} from './store.js';
 import type { WorkMap } from './types.js';
 
 /** Карта работы вместе с проектом, в котором она лежит. */
@@ -9,13 +14,11 @@ export interface WorkEntry {
   projectPath: string;
   map: WorkMap;
   /**
-   * Размер JSON карты в байтах, когда её собрали заново, — для счётчиков хоста, без повторного чтения: карта из кэша
-   * списка приходит с 0, и счётчик не врёт про «прочитанное».
+   * Сколько байт строк базы разобрано, когда карту собрали заново (`storedMapBytes`), — для счётчиков хоста, без повторного
+   * чтения: карта из кэша списка приходит с 0, и счётчик не врёт про «прочитанное».
    */
   bytes?: number;
 }
-
-const worksDir = (projectPath: string): string => path.join(stateDir(projectPath), 'works');
 
 /**
  * В тестах и разработке (`VITEST`, `PARLEY_FREEZE_MAPS=1`) карта списка замораживается: общий объект,
@@ -65,7 +68,7 @@ async function readEntry(projectPath: string, workId: string): Promise<WorkEntry
     const copy = await readMap(projectPath, workId);
     const map = freezeMaps ? deepFreeze(copy) : copy;
     listedMaps.set(key, { version, map });
-    return { projectPath, map, bytes: Buffer.byteLength(JSON.stringify(map)) };
+    return { projectPath, map, bytes: storedMapBytes(projectPath, workId) ?? 0 };
   } catch {
     listedMaps.delete(key);
     return null;
@@ -76,7 +79,7 @@ async function readEntry(projectPath: string, workId: string): Promise<WorkEntry
  * Все работы, которые нужно показать: список из таблицы `works` (все проекты базы, в том числе чужие — дизайн TUI,
  * 6.5) и карта каждой из `readMap`. Каталоги проектов не читаются: всё, что Parley про работу знает, лежит в базе.
  * Аргумент-проект принимается и не используется: список один на весь дом, а вызывающие (хост, тесты) его ещё
- * передают — их правят задачи 6 и 8 плана 3.
+ * передают — хост уже без него, остались тесты ядра.
  *
  * `archived` здесь не отсеиваются: скрывает их список, а не чтение.
  */
@@ -99,15 +102,12 @@ export async function readWorks(_projectPath?: string): Promise<WorkEntry[]> {
 }
 
 export interface WatchWorksOptions {
-  /** Запись карты идёт несколькими файловыми операциями — склеиваем их в одну. */
+  /** Запись карты — несколько событий подряд (запись самой работы, сверка живости) — склеиваем в одно чтение. */
   debounceMs?: number;
-  /**
-   * Следить ли за всем `parleyHome()`. По умолчанию да; наблюдателю проекта при уже заведённом
-   * наблюдателе дома хватает каталога работ проекта: иначе каждая запись индекса будит каждого.
-   */
-  watchHome?: boolean;
+  /** Как часто опрашивать `PRAGMA data_version` — признак записи другого процесса; по умолчанию 500 мс (спека хранилища 6.9). */
+  pollMs?: number;
   /** Чтение списка; подменяется в тестах, чтобы считать проходы. */
-  read?: (projectPath: string) => Promise<WorkEntry[]>;
+  read?: () => Promise<WorkEntry[]>;
   onError?: (error: unknown) => void;
 }
 
@@ -118,32 +118,37 @@ export interface WorksWatcher {
 /**
  * Номер чтения списка — общий для всех наблюдателей процесса и растёт с
  * началом чтения, а не с его концом. Чтения идут параллельно (всплеск событий,
- * несколько наблюдателей хоста), и медленное старое может закончиться позже
+ * несколько наблюдателей), и медленное старое может закончиться позже
  * свежего: по номеру его можно узнать и отбросить.
  */
 let readSeq = 0;
 
-/** Меняют список работ только эти файлы; `map.lock`, `.bak` и `.tmp` — шум. */
-const relevant = (name: string): boolean =>
-  name.endsWith('map.json') || name.endsWith('works-index.json');
+const versionKey = (projectPath: string, workId: string): string => `${projectPath}\0${workId}`;
+
+const versionsNow = (): Map<string, number> =>
+  new Map(listWorkVersions().map((row) => [versionKey(row.projectPath, row.id), row.version]));
+
+const sameVersions = (left: ReadonlyMap<string, number>, right: ReadonlyMap<string, number>): boolean => {
+  if (left.size !== right.size) return false;
+  for (const [key, version] of left) if (right.get(key) !== version) return false;
+  return true;
+};
 
 /**
- * Следит за работами и на изменение перечитывает список целиком: работ
- * немного, а «какая именно работа изменилась» файловая система не говорит.
+ * Следит за работами и на изменение перечитывает список целиком: неизменённая работа в нём стоит одного запроса версии
+ * (`readWorks`), а «какая именно работа изменилась» читателю знать не нужно.
  *
- * Запись базы файловая система не показывает (журнал WAL пишется без событий), поэтому при `watchHome` список
- * перечитывается по событию хранилища `onMapWritten` — по записям этого процесса. Записи других процессов
- * (CLI, MCP агента без канала) это наблюдение не видит; источник для них — опрос `PRAGMA data_version` в
- * `works-service` (план 3, задача 6), который заменит и файловое наблюдение ниже: карт и индекса на диске больше нет.
+ * Файлов, за которыми можно следить, больше нет: база пишется журналом WAL без событий файловой системы (спека хранилища
+ * 6.9). Источников два. Записи этого процесса приходят событием хранилища `onMapWritten`. Записи других процессов (CLI,
+ * MCP агента без канала) видны по `PRAGMA data_version`: его опрос раз в `pollMs` ничего не читает, а когда число
+ * сменилось, версии работ сверяются с прошлым снимком — лишнее чтение идёт только при настоящем отличии.
  *
  * Чтений внахлёст не бывает: пока одно идёт, события лишь помечают список «грязным».
  */
 export function watchWorks(
   onWorks: (works: WorkEntry[], seq: number) => void,
-  projectPath: string = process.cwd(),
-  { debounceMs = 300, watchHome = true, read = readWorks, onError }: WatchWorksOptions = {},
+  { debounceMs = 300, pollMs = 500, read = readWorks, onError }: WatchWorksOptions = {},
 ): WorksWatcher {
-  const watchers: FSWatcher[] = [];
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
   let applied = 0;
@@ -162,7 +167,7 @@ export function watchWorks(
     const seq = ++readSeq;
     // Синхронный бросок подменённого `read` не должен оставить `reading` навсегда.
     Promise.resolve()
-      .then(() => read(projectPath))
+      .then(() => read())
       .then((works) => {
         // Чтение, начатое раньше уже отданного, несёт устаревший список.
         if (closed || seq < applied) return;
@@ -184,29 +189,49 @@ export function watchWorks(
     timer = setTimeout(refresh, debounceMs);
   };
 
-  const unsubscribe = watchHome ? onMapWritten(schedule) : undefined;
-
-  for (const dir of watchHome ? [parleyHome(), worksDir(projectPath)] : [worksDir(projectPath)]) {
-    try {
-      const watcher = watch(dir, { recursive: true }, (_event, name) => {
-        if (name !== null && relevant(name.toString())) schedule();
-      });
-      watcher.on('error', (error) => onError?.(error));
-      watchers.push(watcher);
-    } catch (error) {
-      // Каталога может не быть: ни одной работы ещё не создавали — это не повод
-      // падать и не ошибка, о которой стоит сообщать (хост писал её в лог при
-      // каждом старте, наблюдая за домом как за проектом).
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') onError?.(error);
-    }
+  // Точка отсчёта опроса. Не вышла (база недоступна) — список пуст, и первый удавшийся опрос сам перечитает работы.
+  let dataVersion: number | undefined;
+  let versions = new Map<string, number>();
+  try {
+    dataVersion = workDataVersion();
+    versions = versionsNow();
+  } catch (error) {
+    onError?.(error);
   }
+
+  const unsubscribe = onMapWritten((event) => {
+    const key = versionKey(event.projectPath, event.workId);
+    if (event.removed === true) versions.delete(key);
+    else versions.set(key, event.version);
+    schedule();
+  });
+
+  let failing = false;
+  const poll = setInterval(() => {
+    try {
+      // Сначала число, потом версии: чужая запись между ними даст лишнее чтение, а не потерянное.
+      const now = workDataVersion();
+      failing = false;
+      if (now === dataVersion) return;
+      dataVersion = now;
+      const next = versionsNow();
+      const changed = !sameVersions(versions, next);
+      versions = next;
+      if (changed) schedule();
+    } catch (error) {
+      // Опрос идёт дважды в секунду: об одном и том же сбое сообщаем один раз, до первого удавшегося опроса.
+      if (!failing) onError?.(error);
+      failing = true;
+    }
+  }, pollMs);
+  poll.unref();
 
   return {
     close(): void {
       closed = true;
       if (timer !== undefined) clearTimeout(timer);
-      unsubscribe?.();
-      for (const watcher of watchers) watcher.close();
+      clearInterval(poll);
+      unsubscribe();
     },
   };
 }

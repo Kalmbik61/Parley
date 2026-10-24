@@ -10,6 +10,7 @@ import {
   HUMAN,
   PARLEY,
   readMap,
+  readStoredMap,
   roomLead,
   setProposal,
   SYSTEM,
@@ -674,10 +675,9 @@ describe('rooms.addMember', () => {
       }
       addRoom(map, { title: 'Новая', creator: HUMAN, members: [c] });
     });
-    const raw = JSON.parse(await readFile(path.join(dir, '.parley', 'works', workId, 'map.json'), 'utf8')) as {
-      rooms: Array<Record<string, unknown>>;
-    };
-    expect(raw.rooms.slice(0, 2).every((room) => !('lead' in room) || room['lead'] === null)).toBe(true);
+    // Строки базы собираются заново (`readStoredMap`), без кэша процесса: у старых комнат ведущего нет.
+    const raw = readStoredMap(dir, workId);
+    expect(raw.rooms.slice(0, 2).every((room) => room.lead === null)).toBe(true);
 
     const response = await call(client, 'rooms.addMember', { projectPath: dir, workId, roomId: 'r-03', sessionId: a });
     expect(response.error).toBeUndefined();

@@ -490,18 +490,35 @@ function rememberMap(key: string, entry: CachedMap): void {
   }
 }
 
-/** Запись базы одной работы дошла до подписчиков процесса: проект, работа и версия, под которой она теперь лежит. */
+/**
+ * Размер загруженной карты в байтах — сумма текстов её строк в базе (работа, `extra`, строки списков), как они были
+ * разобраны. Считается по кэшу процесса, а не по сборке JSON заново: на карте в десятки мегабайт `JSON.stringify` стоил бы
+ * больше самого чтения. `undefined` — карты в кэше нет (читать её нужно через `readMap`).
+ */
+export function storedMapBytes(projectPath: string, workId: string): number | undefined {
+  const entry = mapCache.get(cacheKey(projectPath, workId));
+  if (entry === undefined) return undefined;
+  let bytes = Buffer.byteLength(entry.work) + Buffer.byteLength(entry.extra);
+  for (const row of entry.index.values()) bytes += Buffer.byteLength(row.json);
+  return bytes;
+}
+
+/**
+ * Запись базы одной работы дошла до подписчиков процесса: проект, работа и версия, под которой она теперь лежит.
+ * `removed` — работу сняли (`deleteWorkFiles`, `pruneWorksIndex`): версия тогда последняя, какая у неё была.
+ */
 export interface MapWrittenEvent {
   projectPath: string;
   workId: string;
   version: number;
+  removed?: true;
 }
 
 const writeListeners = new Set<(event: MapWrittenEvent) => void>();
 
 /**
- * Подписка на записи этого процесса (`createWork`, `updateMap`, `replaceStoredMap`): событие приходит после коммита и
- * после обновления кэша. Записи других процессов видны хосту иначе — по `PRAGMA data_version` (спека хранилища 6.9).
+ * Подписка на записи этого процесса (`createWork`, `updateMap`, `replaceStoredMap`, снятие работы): событие приходит после
+ * коммита и после обновления кэша. Записи других процессов видны хосту иначе — по `workDataVersion` (спека хранилища 6.9).
  * Возвращает отписку.
  */
 export function onMapWritten(listener: (event: MapWrittenEvent) => void): () => void {
@@ -525,6 +542,26 @@ function emitMapWritten(event: MapWrittenEvent): void {
 /** Есть ли в базе строка работы. Без разбора карты: так проверяют существование вместо `stat` файла карты. */
 export function workExists(projectPath: string, workId: string): boolean {
   return versionOf(storeDb(), projectPath, workId) !== undefined;
+}
+
+/**
+ * `PRAGMA data_version` соединения: число меняется, когда запись закоммитило другое соединение (другой процесс — CLI,
+ * MCP агента без канала), и не меняется от коммитов этого. Читает только заголовок журнала, поэтому годится для опроса
+ * каждые полсекунды (спека хранилища 6.9). Записи своего процесса хост узнаёт по `onMapWritten`.
+ */
+export function workDataVersion(): number {
+  return Number(sql(storeDb(), 'PRAGMA data_version').get()?.['data_version']);
+}
+
+/** Версии всех работ базы одним запросом: после чужой записи хост сверяет их с прошлым снимком (спека хранилища 6.9). */
+export function listWorkVersions(): Array<{ projectPath: string; id: string; version: number }> {
+  return sql(storeDb(), 'SELECT project_path, id, version FROM works')
+    .all()
+    .map((row) => ({
+      projectPath: String(row['project_path']),
+      id: String(row['id']),
+      version: Number(row['version']),
+    }));
 }
 
 /**
@@ -680,10 +717,14 @@ export async function deleteWorkFiles(
   { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS }: WriteOptions = {},
 ): Promise<void> {
   const db = storeDb();
-  writeTransaction(db, lockTimeoutMs, () => {
+  const version = writeTransaction(db, lockTimeoutMs, () => {
+    const last = versionOf(db, projectPath, workId);
     sql(db, 'DELETE FROM works WHERE project_path = ? AND id = ?').run(projectPath, workId);
+    return last;
   });
   mapCache.delete(cacheKey(projectPath, workId));
+  // Снятие — тоже запись базы: без события хост этого процесса не узнал бы об удалении (файлов, за которыми он следил, нет).
+  if (version !== undefined) emitMapWritten({ projectPath, workId, version, removed: true });
   await rm(workPaths(projectPath, workId).dir, { recursive: true, force: true });
 }
 
@@ -746,15 +787,22 @@ export async function pruneWorksIndex({
     if (!alive) removed.push(entry);
   }
   if (removed.length === 0) return removed;
-  writeTransaction(db, lockTimeoutMs, () => {
+  const gone = writeTransaction(db, lockTimeoutMs, () => {
+    const versions: MapWrittenEvent[] = [];
     for (const entry of removed) {
+      const version = versionOf(db, entry.projectPath, entry.id);
       sql(db, 'DELETE FROM works WHERE project_path = ? AND id = ?').run(
         entry.projectPath,
         entry.id,
       );
       mapCache.delete(cacheKey(entry.projectPath, entry.id));
+      if (version !== undefined) {
+        versions.push({ projectPath: entry.projectPath, workId: entry.id, version, removed: true });
+      }
     }
+    return versions;
   });
+  for (const event of gone) emitMapWritten(event);
   return removed;
 }
 

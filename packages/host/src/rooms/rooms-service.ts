@@ -10,7 +10,6 @@
  * допускает. Сбой записи (лок, диск) остаётся своим кодом.
  */
 
-import { existsSync } from 'node:fs';
 import {
   addMember,
   addMessage,
@@ -39,7 +38,7 @@ import {
   setRoomLead,
   setRoomOwner,
   updateMap,
-  workPaths,
+  workExists,
   type MessageVia,
   type Room,
   type WorkMap,
@@ -55,7 +54,7 @@ const bad = (message: string): HostError => new HostError('bad_request', message
  * как `internal`, хотя ошибся запрос, а не хост.
  */
 function assertWork(projectPath: string, workId: string): void {
-  if (!existsSync(workPaths(projectPath, workId).map)) throw bad(`workspace ${workId} does not exist`);
+  if (!workExists(projectPath, workId)) throw bad(`workspace ${workId} does not exist`);
 }
 
 /** Сессия есть в карте и не закрыта — закрытая писем не получает (спека 7.1). */

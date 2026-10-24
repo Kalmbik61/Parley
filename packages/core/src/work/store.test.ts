@@ -31,12 +31,15 @@ import {
   updateMap,
   parleyHome,
   WorkNotFoundError,
+  workDataVersion,
   workExists,
   workPaths,
   worksIndexPath,
   inspectSharedIgnore,
+  listWorkVersions,
   prepareSharedIgnore,
   readSharedFile,
+  storedMapBytes,
   sharedProjectPaths,
   withSharedProjectLock,
   writeSharedFile,
@@ -980,6 +983,91 @@ describe('onMapWritten, workExists и replaceStoredMap', () => {
 
   it('replaceStoredMap на работе, которой нет, — WorkNotFoundError', () => {
     expect(() => replaceStoredMap(project, 'w-9999', {})).toThrow(WorkNotFoundError);
+  });
+});
+
+describe('workDataVersion, listWorkVersions и снятие работы (спека хранилища 6.9)', () => {
+  /** Второе соединение с той же базой: для хоста это «чужая запись» — CLI или MCP агента без канала. */
+  const foreignConnection = (): InstanceType<typeof Database> => new Database(path.join(parleyHome(), WORK_DB_FILE));
+
+  it('workDataVersion: запись своего соединения число не меняет, запись другого — меняет', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const base = workDataVersion();
+
+    await updateMap(project, 'w-0001', addPlanSession);
+    expect(workDataVersion()).toBe(base);
+
+    const foreign = foreignConnection();
+    try {
+      foreign.prepare('UPDATE works SET version = version + 1 WHERE id = ?').run('w-0001');
+    } finally {
+      foreign.close();
+    }
+    expect(workDataVersion()).not.toBe(base);
+  });
+
+  it('listWorkVersions: проект, id и версия каждой работы одним списком', async () => {
+    await createWork(project, { title: 'Первая' });
+    await createWork(other, { title: 'Вторая' });
+    await updateMap(project, 'w-0001', addPlanSession);
+
+    const listed = listWorkVersions();
+
+    expect(listed).toHaveLength(2);
+    expect(listed).toContainEqual({ projectPath: project, id: 'w-0001', version: versionOf('w-0001') });
+    expect(listed.map((row) => row.id).sort()).toEqual(['w-0001', 'w-0002']);
+    expect(listed.every((row) => Number.isFinite(row.version))).toBe(true);
+  });
+
+  it('storedMapBytes: сумма текстов строк загруженной карты в байтах; карты нет в кэше — undefined', async () => {
+    await createWork(project, { title: 'Авторизация «кириллицей»' });
+    await updateMap(project, 'w-0001', (map) => {
+      addPlanSession(map);
+      addMessage(map, { from: 's-01', to: ['human'], text: 'письмо на русском' });
+    });
+    await readMap(project, 'w-0001');
+
+    const expected = workDb()
+      .prepare(
+        `SELECT length(CAST(work_json AS BLOB)) + length(CAST(extra_json AS BLOB)) + COALESCE(
+           (SELECT SUM(length(CAST(json AS BLOB))) FROM entries WHERE project_path = works.project_path AND work_id = works.id), 0
+         ) AS n FROM works WHERE project_path = ? AND id = ?`,
+      )
+      .get(project, 'w-0001') as { n: number };
+
+    expect(storedMapBytes(project, 'w-0001')).toBe(Number(expected.n));
+    expect(storedMapBytes(project, 'w-9999')).toBeUndefined();
+  });
+
+  it('deleteWorkFiles сообщает о снятии: removed и последняя версия работы; работы нет — тишина', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await updateMap(project, 'w-0001', addPlanSession);
+    const last = versionOf('w-0001');
+    const events: Array<{ projectPath: string; workId: string; version: number; removed?: true }> = [];
+    const stop = onMapWritten((event) => events.push(event));
+
+    await deleteWorkFiles(project, 'w-0001');
+    await deleteWorkFiles(project, 'w-0001');
+    stop();
+
+    expect(events).toEqual([{ projectPath: project, workId: 'w-0001', version: last, removed: true }]);
+  });
+
+  it('pruneWorksIndex сообщает о каждой снятой работе после коммита', async () => {
+    await createWork(project, { title: 'Первая' });
+    await createWork(project, { title: 'Вторая' });
+    await rm(workPaths(project, 'w-0001').dir, { recursive: true });
+    await rm(workPaths(project, 'w-0002').dir, { recursive: true });
+    const events: Array<{ workId: string; removed?: true }> = [];
+    const stop = onMapWritten((event) => events.push({ workId: event.workId, removed: event.removed }));
+
+    await pruneWorksIndex();
+    stop();
+
+    expect(events).toEqual([
+      { workId: 'w-0001', removed: true },
+      { workId: 'w-0002', removed: true },
+    ]);
   });
 });
 

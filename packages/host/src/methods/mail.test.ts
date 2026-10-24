@@ -1,9 +1,9 @@
-import { mkdtemp, open, readFile, rename, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addMessage, HUMAN, readMap, updateMap, workPaths } from '@parley/core';
-import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
+import { addMessage, HUMAN, readMap, updateMap } from '@parley/core';
+import { connectRaw, hello, holdDatabase, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
@@ -31,7 +31,7 @@ async function reply(client: TestClient, id: number): Promise<RawMessage> {
 }
 
 /** Хост, клиент и работа с одним письмом агента человеку (m-01). */
-async function withLetter(): Promise<{ client: TestClient; dir: string; workId: string }> {
+async function withLetter(): Promise<{ client: TestClient; dir: string; workId: string; home: string }> {
   const home = await tempHome();
   homes.push(home);
   const running = await startHost({ home });
@@ -48,7 +48,7 @@ async function withLetter(): Promise<{ client: TestClient; dir: string; workId: 
   await updateMap(dir, workId, (map) => {
     addMessage(map, { from: 's-01', to: [HUMAN], text: 'вопрос' });
   });
-  return { client, dir, workId };
+  return { client, dir, workId, home };
 }
 
 describe('mail.markRead', () => {
@@ -76,22 +76,16 @@ describe('mail.markRead', () => {
     client.close();
   });
 
-  // Лок карты занят заранее, чтобы запись гарантированно встала в ожидание уже после
-  // проверки работы и чтения карты, — иначе гонку почти всегда выигрывает not_found.
-  // Файл лока остаётся и после close: писатель ждёт, пока каталог не пропадёт.
-  it('работа удалена, пока запись ждала map.lock — not_found, хост жив', async () => {
-    const { client, dir, workId } = await withLetter();
-    const paths = workPaths(dir, workId);
-    const held = await open(paths.lock, 'wx');
+  // База занята заранее другим процессом, который внутри захвата снимает работу: запись гарантированно
+  // встаёт в ожидание уже после проверки работы и чтения карты, — иначе гонку почти всегда выигрывает not_found.
+  it('работа удалена, пока запись ждала базу — not_found, хост жив', async () => {
+    const { client, dir, workId, home } = await withLetter();
+    const held = await holdDatabase(home, 300, { projectPath: dir, workId });
 
     client.send({ id: 2, method: 'mail.markRead', params: { projectPath: dir, workId, messageIds: ['m-01'] } });
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    await held.close();
-    // Каталог уносится одним rename, а не rm: ожидающий писатель мог бы создать лок в
-    // каталоге посреди рекурсивного удаления, и rm упал бы с ENOTEMPTY.
-    await rename(paths.dir, path.join(dir, 'gone-work'));
 
     expect((await reply(client, 2)).error?.code).toBe('not_found');
+    await held.done;
     client.send({ id: 3, method: 'works.list', params: {} });
     expect((await reply(client, 3)).result).toBeDefined();
     client.close();

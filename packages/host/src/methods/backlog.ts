@@ -1,9 +1,8 @@
-import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  MAP_SNAPSHOT_LIMIT, SharedStateError, inspectSharedIgnore, isRoomArchived, isRoomClosed, acceptBacklogSuggestion, addBacklogItem, dismissBacklogSuggestion, listBacklogSuggestions,
-  parseBacklog, parseMap, readBacklog, readProjectPreferences, readSharedFile, setBacklogFile, setBacklogRule, sharedProjectPaths,
-  takeBacklogItem, updateBacklogItem, removeBacklogItem, workPaths, worksIndexPath,
+  SharedStateError, inspectSharedIgnore, isRoomArchived, isRoomClosed, acceptBacklogSuggestion, addBacklogItem, dismissBacklogSuggestion, listBacklogSuggestions,
+  parseBacklog, readBacklog, readMap, readProjectPreferences, readSharedFile, readWorksIndex, setBacklogFile, setBacklogRule, sharedProjectPaths,
+  takeBacklogItem, updateBacklogItem, removeBacklogItem, workVersion,
 } from '@parley/core';
 import type { SharedDiagnostic } from '@parley/core';
 import { BACKLOG_SNAPSHOT_MAX_BYTES, backlogMethodSchemas, backlogSnapshot } from '@parley/protocol';
@@ -27,14 +26,12 @@ function absolute(projectPath: string): void {
 }
 
 async function knownMap(projectPath: string, workId: string) {
-  const canonicalProject = await realpath(projectPath);
-  const file = workPaths(canonicalProject, workId).map;
-  if (await realpath(file) !== file) throw new SharedStateError('shared-state-unsafe');
-  // Карта — собственный файл Parley: читаем её с потолком карт, а не с общим в 1 МиБ (спека хранилища 6.9).
-  const snapshot = await readSharedFile(file, MAP_SNAPSHOT_LIMIT);
-  const map = parseMap(snapshot.text, file);
-  if (map.work.id !== workId || map.sessions.length > 100_000) throw new SharedStateError('shared-state-unsafe');
-  return { map, canonicalProject, revision: snapshot.version };
+  // Карта — строки базы (спека хранилища 6.9): известна та работа, что лежит под этим проектом и загружается.
+  // Версия — до карты: запись между ними даст запоздавший `revision`, а не устаревшую карту под свежим.
+  const version = workVersion(projectPath, workId);
+  const map = await readMap(projectPath, workId);
+  if (version === undefined || map.work.id !== workId || map.sessions.length > 100_000) throw new SharedStateError('shared-state-unsafe');
+  return { map, project: projectPath, revision: `${projectPath}:${workId}:${version}` };
 }
 
 /** Suggestions lack a persisted project identity. Only a unique verified known map proves the author. */
@@ -42,15 +39,13 @@ async function authors(sharedProjectPath: string, suggestions: Awaited<ReturnTyp
   const result = new Map<string, BacklogAuthor>();
   if (suggestions.length === 0) return result;
   try {
-    const index: unknown = JSON.parse((await readSharedFile(worksIndexPath())).text);
-    if (typeof index !== 'object' || index === null || !('schemaVersion' in index) || index.schemaVersion !== 1 ||
-      !('works' in index) || !Array.isArray(index.works) || index.works.length > 10_000) return result;
+    const { works } = await readWorksIndex();
+    if (works.length > 10_000) return result;
     const workIds = new Set(suggestions.map(row => row.workId));
     const candidates = new Map<string, { projectPath: string; workId: string }>();
-    for (const row of index.works as unknown[]) {
-      if (typeof row !== 'object' || row === null || !('id' in row) || typeof row.id !== 'string') return result;
+    for (const row of works) {
       if (!workIds.has(row.id)) continue;
-      if (!('projectPath' in row) || typeof row.projectPath !== 'string' || !path.isAbsolute(row.projectPath) || row.projectPath.includes('\0')) return result;
+      if (!path.isAbsolute(row.projectPath) || row.projectPath.includes('\0')) return result;
       candidates.set(`${row.projectPath}\0${row.id}`, { projectPath: row.projectPath, workId: row.id });
     }
     // Bound native canonical-context work as well as JSON size/count; incomplete proof supplies no guessed author.
@@ -66,8 +61,8 @@ async function authors(sharedProjectPath: string, suggestions: Awaited<ReturnTyp
         if (!session) continue;
         let matches = identities.get(row.id);
         if (!matches) { matches = new Map(); identities.set(row.id, matches); }
-        matches.set(`${current.canonicalProject}\0${candidate.workId}\0${session.id}`, {
-          projectPath: current.canonicalProject, workId: candidate.workId, sessionId: session.id,
+        matches.set(`${current.project}\0${candidate.workId}\0${session.id}`, {
+          projectPath: current.project, workId: candidate.workId, sessionId: session.id,
           label: session.label, role: session.role ?? null, revision: current.revision });
       }
     }

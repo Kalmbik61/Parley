@@ -19,10 +19,9 @@ import {
 } from '../rooms/rooms-service.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 
-import { HUMAN, SYSTEM, DEFAULT_CONFIG, loadConfig, updateMap, workPaths, setRoomMode,
+import { HUMAN, SYSTEM, DEFAULT_CONFIG, loadConfig, updateMap, workExists, setRoomMode,
   cancelRoomPlan, updatePlanItem, submitPlanItem, verifyPlanItem, capturePlanNotice,
   reservePlanEffects, reconcileRoomPlans, readMap, summarizePlanEffects, PlanConflictError, RoomRuleError } from '@parley/core';
-import { existsSync } from 'node:fs';
 import type { PlanMethodName, PlanMethodParams, PlanActionResult } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import type { PlanEffectsService } from '../rooms/plan-effects.js';
@@ -103,7 +102,7 @@ class NoChange extends Error {}
 export function createPlanHandlers(effects: PlanEffectsService): { [M in PlanMethodName]: Handler<M> } {
   async function mutate<M extends PlanMethodName>(name: M, params: PlanMethodParams<M>): Promise<PlanActionResult> {
     const { projectPath, workId } = params;
-    if (!existsSync(workPaths(projectPath, workId).map)) throw new HostError('not_found', 'Workspace is unavailable.');
+    if (!workExists(projectPath, workId)) throw new HostError('not_found', 'Workspace is unavailable.');
     let messageId: string | null = null;
     if (name !== 'plans.retryEffects') {
       const rate = (await loadConfig()).config.messageRate ?? DEFAULT_CONFIG.messageRate;

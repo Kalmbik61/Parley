@@ -1,10 +1,11 @@
+import { createRequire } from 'node:module';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { closeWorkDb, workDb } from './db.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { closeWorkDb, WORK_DB_FILE, workDb } from './db.js';
 import { addSession } from './map.js';
-import { createWork, readStoredMap, replaceStoredMap, updateMap, workPaths } from './store.js';
+import { createWork, deleteWorkFiles, parleyHome, readStoredMap, replaceStoredMap, updateMap, workDataVersion, workPaths } from './store.js';
 import type { Room } from './types.js';
 import { readWorks, watchWorks, type WorkEntry } from './works.js';
 
@@ -196,61 +197,140 @@ describe('readWorks', () => {
 });
 
 describe('watchWorks', () => {
-  /**
-   * Ждём события, повторяя действие: рекурсивный fs.watch прогревается не мгновенно
-   * (та же причина, что и в watch.test.ts).
-   */
-  async function expectWorks(
-    seen: WorkEntry[][],
-    poke: () => Promise<void>,
-    predicate: (works: WorkEntry[]) => boolean,
-    timeoutMs = 15_000,
-  ): Promise<WorkEntry[]> {
-    const started = Date.now();
-    for (;;) {
-      await poke();
+  /** Второе соединение с той же базой: для наблюдателя это запись другого процесса (CLI, MCP агента без канала). */
+  const { DatabaseSync: Database } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+  const foreignConnection = (): InstanceType<typeof Database> => new Database(path.join(parleyHome(), WORK_DB_FILE));
 
-      const deadline = Date.now() + 400;
-      while (Date.now() < deadline) {
-        const found = seen.find(predicate);
-        if (found) return found;
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-
-      if (Date.now() - started > timeoutMs) throw new Error('события не дождались');
+  /** Чужая запись одной работы: правит `work.goal` и поднимает версию, как сделал бы `updateMap` в другом процессе. */
+  const foreignGoal = (projectPath: string, workId: string, goal: string): void => {
+    const foreign = foreignConnection();
+    try {
+      const row = foreign
+        .prepare('SELECT work_json FROM works WHERE project_path = ? AND id = ?')
+        .get(projectPath, workId) as { work_json: string };
+      const work = JSON.parse(row.work_json) as { goal: string };
+      work.goal = goal;
+      foreign
+        .prepare('UPDATE works SET work_json = ?, version = version + 1 WHERE project_path = ? AND id = ?')
+        .run(JSON.stringify(work), projectPath, workId);
+    } finally {
+      foreign.close();
     }
-  }
+  };
 
-  it('перечитывает работы после изменения карты', async () => {
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+  /** Опрос data_version нужен только тестам про чужие записи: остальным он мешал бы, поэтому там он «выключен» большим периодом. */
+  const NO_POLL = 600_000;
+
+  it('перечитывает работы по записи этого процесса — без опроса и без файлов', async () => {
     const created = await createWork(project, { title: 'Авторизация' });
     const seen: WorkEntry[][] = [];
-    const watcher = watchWorks((works) => seen.push(works), project, { debounceMs: 10 });
+    const watcher = watchWorks((works) => seen.push(works), { debounceMs: 10, pollMs: NO_POLL });
 
     try {
-      const works = await expectWorks(
-        seen,
-        () =>
-          updateMap(project, created.work.id, (map) => {
-            map.work.goal = 'логин по e-mail';
-          }).then(() => undefined),
-        (list) => list[0]?.map.work.goal === 'логин по e-mail',
-      );
-      expect(works).toHaveLength(1);
+      await updateMap(project, created.work.id, (map) => {
+        map.work.goal = 'логин по e-mail';
+      });
+      await vi.waitFor(() => expect(seen.at(-1)?.[0]?.map.work.goal).toBe('логин по e-mail'), {
+        timeout: 2000,
+        interval: 10,
+      });
+      expect(seen.at(-1)).toHaveLength(1);
     } finally {
       watcher.close();
     }
   });
 
-  it('после close колбэк больше не зовётся', async () => {
+  it('создание и снятие работы в этом процессе тоже будят наблюдателя', async () => {
+    const seen: WorkEntry[][] = [];
+    const watcher = watchWorks((works) => seen.push(works), { debounceMs: 10, pollMs: NO_POLL });
+
+    try {
+      const created = await createWork(project, { title: 'Авторизация' });
+      await vi.waitFor(() => expect(seen.at(-1)).toHaveLength(1), { timeout: 2000, interval: 10 });
+
+      await deleteWorkFiles(project, created.work.id);
+      await vi.waitFor(() => expect(seen.at(-1)).toEqual([]), { timeout: 2000, interval: 10 });
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it('запись другого соединения видна опросом data_version', async () => {
     const created = await createWork(project, { title: 'Авторизация' });
     const seen: WorkEntry[][] = [];
-    const watcher = watchWorks((works) => seen.push(works), project, { debounceMs: 10 });
+    const watcher = watchWorks((works) => seen.push(works), { debounceMs: 10, pollMs: 20 });
+
+    try {
+      foreignGoal(project, created.work.id, 'чужая цель');
+      await vi.waitFor(() => expect(seen.at(-1)?.[0]?.map.work.goal).toBe('чужая цель'), {
+        timeout: 2000,
+        interval: 10,
+      });
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it('работа, снятая другим соединением, пропадает из списка', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    await createWork(other, { title: 'Остаётся' });
+    const seen: WorkEntry[][] = [];
+    const watcher = watchWorks((works) => seen.push(works), { debounceMs: 10, pollMs: 20 });
+
+    try {
+      const foreign = foreignConnection();
+      try {
+        foreign.prepare('DELETE FROM works WHERE project_path = ? AND id = ?').run(project, created.work.id);
+      } finally {
+        foreign.close();
+      }
+      await vi.waitFor(() => expect(titles(seen.at(-1) ?? [])).toEqual(['Остаётся']), { timeout: 2000, interval: 10 });
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it('чужая запись, не тронувшая версий работ, чтение не запускает', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    let reads = 0;
+    const watcher = watchWorks(() => {}, {
+      debounceMs: 10,
+      pollMs: 20,
+      read: async () => {
+        reads += 1;
+        return readWorks();
+      },
+    });
+
+    try {
+      const dataVersion = workDataVersion();
+      const foreign = foreignConnection();
+      try {
+        // Коммит есть (data_version сменится), а версия строки `works` та же.
+        foreign.prepare('UPDATE works SET title = ? WHERE id = ?').run('другой заголовок', created.work.id);
+      } finally {
+        foreign.close();
+      }
+      expect(workDataVersion()).not.toBe(dataVersion);
+      await sleep(300);
+      expect(reads).toBe(0);
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it('после close колбэк больше не зовётся, ни на событие, ни на опрос', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    const seen: WorkEntry[][] = [];
+    const watcher = watchWorks((works) => seen.push(works), { debounceMs: 10, pollMs: 20 });
     watcher.close();
 
     await updateMap(project, created.work.id, (map) => {
       map.work.goal = 'после закрытия';
     });
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    foreignGoal(project, created.work.id, 'чужая после закрытия');
+    await sleep(300);
     expect(seen).toEqual([]);
   });
 
@@ -262,65 +342,35 @@ describe('watchWorks', () => {
       release = resolve;
     });
     const seen: WorkEntry[][] = [];
-    const watcher = watchWorks((works) => seen.push(works), project, {
+    const watcher = watchWorks((works) => seen.push(works), {
       debounceMs: 10,
-      read: async (projectPath) => {
+      pollMs: NO_POLL,
+      read: async () => {
         reads += 1;
         if (reads === 1) await gate;
-        return readWorks(projectPath);
+        return readWorks();
       },
     });
 
     try {
-      let n = 0;
-      const started = Date.now();
-      // Прогрев fs.watch: пишем, пока первое чтение не началось.
-      while (reads === 0) {
-        n += 1;
-        await updateMap(project, created.work.id, (map) => {
-          map.work.goal = `цель ${n}`;
-        });
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        if (Date.now() - started > 15_000) throw new Error('события не дождались');
-      }
-      // Первое чтение держится, а записи идут: каждая шлёт события карты и индекса.
+      await updateMap(project, created.work.id, (map) => {
+        map.work.goal = 'первая запись';
+      });
+      await vi.waitFor(() => expect(reads).toBe(1), { timeout: 2000, interval: 10 });
+      // Первое чтение держится, а записи идут: каждая шлёт событие.
       for (let i = 0; i < 5; i += 1) {
         await updateMap(project, created.work.id, (map) => {
           map.work.goal = `во время чтения ${i}`;
         });
       }
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(200);
       expect(reads).toBe(1);
 
       release();
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await vi.waitFor(() => expect(reads).toBe(2), { timeout: 2000, interval: 10 });
+      await sleep(200);
       expect(reads).toBe(2);
       expect(seen.at(-1)?.[0]?.map.work.goal).toBe('во время чтения 4');
-    } finally {
-      watcher.close();
-    }
-  });
-
-  it('без watchHome запись базы в доме читать не заставляет: карты в каталоге проекта больше нет, следить там не за чем', async () => {
-    const created = await createWork(project, { title: 'Авторизация' });
-    let reads = 0;
-    const watcher = watchWorks(() => {}, project, {
-      debounceMs: 10,
-      watchHome: false,
-      read: async (projectPath) => {
-        reads += 1;
-        return readWorks(projectPath);
-      },
-    });
-
-    try {
-      for (let n = 0; n < 5; n += 1) {
-        await updateMap(project, created.work.id, (map) => {
-          map.work.goal = `цель ${n}`;
-        });
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      expect(reads).toBe(0);
     } finally {
       watcher.close();
     }
@@ -331,25 +381,25 @@ describe('watchWorks', () => {
     let reads = 0;
     const errors: unknown[] = [];
     const seen: WorkEntry[][] = [];
-    const watcher = watchWorks((works) => seen.push(works), project, {
+    const watcher = watchWorks((works) => seen.push(works), {
       debounceMs: 10,
+      pollMs: NO_POLL,
       onError: (error) => errors.push(error),
-      read: (projectPath) => {
+      read: () => {
         reads += 1;
         if (reads === 1) throw new Error('синхронный бросок');
         if (reads === 2) return Promise.reject(new Error('отказ чтения'));
-        return readWorks(projectPath);
+        return readWorks();
       },
     });
     try {
-      await expectWorks(
-        seen,
-        () =>
-          updateMap(project, created.work.id, (map) => {
-            map.work.goal = `цель ${reads}`;
-          }).then(() => undefined),
-        (list) => list.length === 1,
-      );
+      for (let n = 0; n < 3; n += 1) {
+        await updateMap(project, created.work.id, (map) => {
+          map.work.goal = `цель ${n}`;
+        });
+        await sleep(60);
+      }
+      await vi.waitFor(() => expect(seen.at(-1)).toHaveLength(1), { timeout: 2000, interval: 10 });
       expect(errors).toHaveLength(2);
     } finally {
       watcher.close();
@@ -364,31 +414,43 @@ describe('watchWorks', () => {
       release = resolve;
     });
     const seen: WorkEntry[][] = [];
-    const watcher = watchWorks((works) => seen.push(works), project, {
+    const watcher = watchWorks((works) => seen.push(works), {
       debounceMs: 10,
-      read: async (projectPath) => {
+      pollMs: NO_POLL,
+      read: async () => {
         reads += 1;
         await gate;
-        return readWorks(projectPath);
+        return readWorks();
       },
     });
-    const started = Date.now();
-    let n = 0;
-    while (reads === 0) {
-      n += 1;
-      await updateMap(project, created.work.id, (map) => {
-        map.work.goal = `цель ${n}`;
-      });
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      if (Date.now() - started > 15_000) throw new Error('события не дождались');
-    }
+    await updateMap(project, created.work.id, (map) => {
+      map.work.goal = 'первая запись';
+    });
+    await vi.waitFor(() => expect(reads).toBe(1), { timeout: 2000, interval: 10 });
     await updateMap(project, created.work.id, (map) => {
       map.work.goal = 'во время чтения';
     });
     watcher.close();
     release();
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await sleep(200);
     expect(seen).toEqual([]);
     expect(reads).toBe(1);
+  });
+
+  it('сбой опроса (база дома недоступна) — одно сообщение, а не по одному на каждый опрос', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const errors: unknown[] = [];
+    const watcher = watchWorks(() => {}, { debounceMs: 10, pollMs: 20, onError: (error) => errors.push(error) });
+    const blocker = path.join(home, 'не-каталог');
+    await writeFile(blocker, '');
+    process.env.PARLEY_HOME = path.join(blocker, 'дом');
+
+    try {
+      await sleep(250);
+      expect(errors).toHaveLength(1);
+    } finally {
+      process.env.PARLEY_HOME = home;
+      watcher.close();
+    }
   });
 });

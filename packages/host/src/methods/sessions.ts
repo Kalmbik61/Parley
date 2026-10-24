@@ -4,7 +4,6 @@
  * здесь только разбор параметров протокола и форма ответа.
  */
 
-import { existsSync } from 'node:fs';
 import {
   effortsFor,
   hookedSince,
@@ -15,7 +14,7 @@ import {
   resolveModelEffort,
   RoomRuleError,
   updateMap,
-  workPaths,
+  workExists,
 } from '@parley/core';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { Handler } from '../context.js';
@@ -101,7 +100,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
     // их отказ (нет сессии, пустое имя) — `bad_request`, как у `rooms.rename`. Не событие работы: `updatedAt` стоит
     // на месте, иначе карточка всплыла бы в начало своего ранга. Закрытую сессию тоже можно переименовать.
     sessionsRename: async ({ ref, label }) => {
-      if (!existsSync(workPaths(ref.projectPath, ref.workId).map)) {
+      if (!workExists(ref.projectPath, ref.workId)) {
         throw new HostError('bad_request', `workspace ${ref.workId} does not exist`);
       }
       await updateMap(
