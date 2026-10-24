@@ -412,7 +412,21 @@ describe('parseMap', () => {
 
   it('читает автономный план с попытками, операциями и резервами без потерь', () => {
     const map = autonomousMap();
-    expect(parseMap(JSON.stringify(map), 'map.json')).toEqual(map);
+    const parsed = parseMap(JSON.stringify(map), 'map.json');
+    expect(parsed).toEqual(map);
+    expect(parsed.plans?.[0]?.autonomous?.coverage[1]?.[0]).toEqual(['ck-spec-01', 'verifier']);
+  });
+
+  it.each([
+    { '01': { '0': ['ck-spec-01'] } },
+    { '1': { '00': ['ck-spec-01'] } },
+    { '1': { '0': ['ck-spec-01'] }, '01': { '0': ['verifier'] } },
+    { '1': { '0': ['ck-spec-01'], '00': ['verifier'] } },
+    { '0': { '0': ['ck-spec-01'] } },
+  ])('отклоняет неканонические ключи coverage без нормализации: %j', (coverage) => {
+    const map = autonomousMap();
+    map.plans[0]!.autonomous.coverage = coverage as typeof map.plans[0]['autonomous']['coverage'];
+    expect(() => parseMap(JSON.stringify(map), 'map.json')).toThrow(/invalid autonomous plan/);
   });
 
   it('отклоняет автономный план без поля autonomous', () => {
@@ -452,6 +466,12 @@ describe('parseMap', () => {
     expect(parseMap(JSON.stringify(map), 'map.json')).toEqual(map);
   });
 
+  it('сохраняет null вместо SHA в манифесте до захвата', () => {
+    const map = autonomousMap();
+    Object.assign(map.plans[0]!.autonomous.attempts[0]!.manifest, { sha: null });
+    expect(parseMap(JSON.stringify(map), 'map.json')).toEqual(map);
+  });
+
   it('отклоняет попытку с неизвестным статусом', () => {
     const map = autonomousMap();
     map.plans[0]!.autonomous.attempts[0]!.status = 'unknown';
@@ -484,6 +504,10 @@ describe('parseMap', () => {
     ['coverage.1.0', [1]],
     ['coverage.unknown', {}],
     ['integration.verifiedHead', 1],
+    ['integration.branch', ''],
+    ['integration.baseSha', ''],
+    ['integration.verifiedHead', ''],
+    ['integration.candidateHead', ''],
     ['integration.queue', [null]],
     ['integration.suspended.at', false],
     ['attempts', null],
@@ -491,6 +515,14 @@ describe('parseMap', () => {
     ['attempts.0.planRev', Number.MAX_SAFE_INTEGER + 1],
     ['attempts.0.worker', 1],
     ['attempts.0.sha', 1],
+    ['attempts.0.branch', ''],
+    ['attempts.0.baseSha', ''],
+    ['attempts.0.sha', ''],
+    ['attempts.0.tree', ''],
+    ['attempts.0.receipt.sha', ''],
+    ['attempts.0.receipt.manifestHash', ''],
+    ['attempts.0.manifest.sha', ''],
+    ['attempts.0.manifest.artifacts.0.sha256', ''],
     ['attempts.0.manifest.version', 2],
     ['attempts.0.manifest.coverage', 'unknown'],
     ['attempts.0.manifest.artifacts.0.sha256', 1],

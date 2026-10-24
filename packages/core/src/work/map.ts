@@ -332,7 +332,9 @@ const isMessageShape =
     (version === 1 ? typeof value.to === 'string' : Array.isArray(value.to));
 
 const isString = (value: unknown): value is string => typeof value === 'string';
+const isNonemptyString = (value: unknown): value is string => isString(value) && value.length > 0;
 const isNullableString = (value: unknown): boolean => value === null || isString(value);
+const isNullableNonemptyString = (value: unknown): boolean => value === null || isNonemptyString(value);
 const isStringArray = (value: unknown): boolean => Array.isArray(value) && value.every(isString);
 const isSafeCount = (value: unknown): boolean => Number.isSafeInteger(value) && (value as number) >= 0;
 const ATTEMPT_STATUSES = [
@@ -345,27 +347,27 @@ const OP_KINDS = [
 ];
 
 function isHandoffManifest(value: unknown): boolean {
-  return isRecord(value) && value.version === 1 && isNullableString(value.sha) &&
+  return isRecord(value) && value.version === 1 && isNullableNonemptyString(value.sha) &&
     isSafeCount(value.criteriaVersion) && isStringArray(value.dependsOn) &&
     isString(value.coverage) && ['covered', 'partial', 'failed', 'unstarted'].includes(value.coverage) &&
     isString(value.scope) && isStringArray(value.facts) && isStringArray(value.hypotheses) &&
     isStringArray(value.notFound) && isStringArray(value.gaps) && isString(value.text) && value.text.length <= 4096 &&
     Array.isArray(value.artifacts) && value.artifacts.every((artifact) =>
-      isRecord(artifact) && isString(artifact.path) && isString(artifact.sha256) && isString(artifact.storedAs)) &&
+      isRecord(artifact) && isString(artifact.path) && isNonemptyString(artifact.sha256) && isString(artifact.storedAs)) &&
     isString(value.hash) && isString(value.submittedAt);
 }
 
 function isReceipt(value: unknown): boolean {
-  return isRecord(value) && isString(value.id) && isString(value.attemptId) && isString(value.manifestHash) &&
-    isString(value.sha) && isSafeCount(value.criteriaVersion) && typeof value.valid === 'boolean' &&
+  return isRecord(value) && isString(value.id) && isString(value.attemptId) && isNonemptyString(value.manifestHash) &&
+    isNonemptyString(value.sha) && isSafeCount(value.criteriaVersion) && typeof value.valid === 'boolean' &&
     isNullableString(value.reason) && isString(value.at);
 }
 
 function isPlanAttempt(value: unknown): boolean {
   return isRecord(value) && isString(value.id) && isSafeCount(value.item) && isSafeCount(value.n) &&
     isSafeCount(value.planRev) && isSafeCount(value.criteriaVersion) && isNullableString(value.worker) &&
-    isNullableString(value.verifier) && isString(value.branch) && isString(value.baseSha) &&
-    isNullableString(value.sha) && isNullableString(value.tree) && isNullableString(value.submissionKey) &&
+    isNullableString(value.verifier) && isNonemptyString(value.branch) && isNonemptyString(value.baseSha) &&
+    isNullableNonemptyString(value.sha) && isNullableNonemptyString(value.tree) && isNullableString(value.submissionKey) &&
     isString(value.status) && ATTEMPT_STATUSES.includes(value.status) &&
     (value.manifest === null || isHandoffManifest(value.manifest)) &&
     (value.receipt === null || isReceipt(value.receipt)) && isStringArray(value.checks) &&
@@ -384,8 +386,8 @@ function isCheckSpec(value: unknown): boolean {
 }
 
 function isIntegration(value: unknown): boolean {
-  return isRecord(value) && isString(value.branch) && isString(value.baseSha) && isString(value.verifiedHead) &&
-    isNullableString(value.candidateHead) && isStringArray(value.queue) &&
+  return isRecord(value) && isNonemptyString(value.branch) && isNonemptyString(value.baseSha) && isNonemptyString(value.verifiedHead) &&
+    isNullableNonemptyString(value.candidateHead) && isStringArray(value.queue) &&
     (value.suspended === null || (isRecord(value.suspended) && isString(value.suspended.reason) &&
       isString(value.suspended.attemptId) && isString(value.suspended.at)));
 }
@@ -413,9 +415,9 @@ function isAutonomousPlan(value: unknown): boolean {
   return isRecord(value) && isAutonomousBudget(value.budget) &&
     Array.isArray(value.checks) && value.checks.every(isCheckSpec) && isRecord(value.coverage) &&
     Object.entries(value.coverage).every(([item, criteria]) =>
-      /^\d+$/.test(item) && isSafeCount(Number(item)) && isRecord(criteria) &&
+      String(Number(item)) === item && isSafeCount(Number(item)) && Number(item) > 0 && isRecord(criteria) &&
       Object.entries(criteria).every(([index, checks]) =>
-        /^\d+$/.test(index) && isSafeCount(Number(index)) && isStringArray(checks))) &&
+        String(Number(index)) === index && isSafeCount(Number(index)) && isStringArray(checks))) &&
     isIntegration(value.integration) && Array.isArray(value.attempts) && value.attempts.every(isPlanAttempt) &&
     Array.isArray(value.ops) && value.ops.every(isAutonomousOp) &&
     (value.halted === null || (isRecord(value.halted) && isString(value.halted.reason) &&
