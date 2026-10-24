@@ -704,7 +704,7 @@ describe('App — уведомление хоста, пришедшее до п�
 
     expect(
       await screen.findByText(
-        "Workspace w-0001 in p couldn't be moved to the new storage — it is hidden until this is fixed. Details are in the host log.",
+        "Workspace w-0001 in p couldn't be moved to the new storage. Details are in the host log.",
       ),
     ).toBeTruthy();
   });

@@ -340,14 +340,14 @@ describe('noticeText', () => {
   it('map-migration-failed называет работу и папку проекта по пути map.json; причина со следующей строки в окно не попадает', () => {
     const notice = (text: string): HostNotice => ({ kind: 'map-migration-failed', ref: null, text, at: '2026-01-01T00:00:00.000Z' });
     const expected =
-      "Workspace w-0051 in scanum couldn't be moved to the new storage — it is hidden until this is fixed. Details are in the host log.";
+      "Workspace w-0051 in scanum couldn't be moved to the new storage. Details are in the host log.";
     expect(noticeText(notice('/Users/me/Desktop/scanum/.parley/works/w-0051/map.json'))).toBe(expected);
     expect(noticeText(notice('/Users/me/Desktop/scanum/.parley/works/w-0051/map.json\nbusy: map.lock is held by a running process'))).toBe(
       expected,
     );
     // Проект ещё на прежнем имени каталога состояния и с пробелом в имени.
     expect(noticeText(notice('/p/my shop/.harnas/works/w-0002/map.json\nSyntaxError: Unexpected token'))).toBe(
-      "Workspace w-0002 in my shop couldn't be moved to the new storage — it is hidden until this is fixed. Details are in the host log.",
+      "Workspace w-0002 in my shop couldn't be moved to the new storage. Details are in the host log.",
     );
     expect(noticeText(notice('/p/shop/.parley/works/w-0003/map.json\nreason'))).not.toMatch(CYRILLIC);
   });

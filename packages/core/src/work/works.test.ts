@@ -453,4 +453,39 @@ describe('watchWorks', () => {
       watcher.close();
     }
   });
+
+  it('сбой чтения версий при смене data_version — одно сообщение на серию; после удачного опроса новый сбой снова сообщается', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const errors: unknown[] = [];
+    const watcher = watchWorks(() => {}, { debounceMs: 10, pollMs: 20, onError: (error) => errors.push(error) });
+
+    /** Чужое соединение переименовывает таблицу: data_version сменится, а запрос версий работ упадёт. */
+    const foreignRename = (from: string, to: string): void => {
+      const foreign = foreignConnection();
+      try {
+        foreign.exec(`ALTER TABLE ${from} RENAME TO ${to}`);
+      } finally {
+        foreign.close();
+      }
+    };
+
+    try {
+      foreignRename('works', 'works_away');
+      await vi.waitFor(() => expect(errors).toHaveLength(1), { timeout: 2000, interval: 10 });
+      // data_version не запомнен, и каждый следующий опрос снова падает на том же запросе — но молча.
+      await sleep(250);
+      expect(errors).toHaveLength(1);
+
+      foreignRename('works_away', 'works');
+      await sleep(150);
+      expect(errors).toHaveLength(1);
+
+      foreignRename('works', 'works_away');
+      await vi.waitFor(() => expect(errors).toHaveLength(2), { timeout: 2000, interval: 10 });
+      await sleep(250);
+      expect(errors).toHaveLength(2);
+    } finally {
+      watcher.close();
+    }
+  });
 });

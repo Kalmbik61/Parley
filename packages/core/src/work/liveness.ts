@@ -117,7 +117,7 @@ export async function checkSession(
 export interface ReconcileOptions extends MetricsRoots {
   now?: number;
   silenceThresholdMs?: number;
-  /** Таймаут `map.lock` для перевода мёртвых сессий в `sleeping` (кусок 1.4 хоста). */
+  /** Сколько ждать занятую базу (`busy_timeout`) при переводе мёртвых сессий в `sleeping` (кусок 1.4 хоста). */
   lockTimeoutMs?: number;
 }
 

@@ -2659,14 +2659,14 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
 
 /**
  * `map-migration-failed`: хост кладёт в `text` путь `<проект>/.parley/works/<номер>/map.json` и со следующей строки причину
- * (спека хранилища 6.6). Работа осталась в файле и из списка пропала — поэтому в фразе её номер и имя проекта; причина
+ * (спека хранилища 6.6). Работа осталась в файле, а не в базе — поэтому в фразе её номер и имя проекта; причина
  * человеку не нужна, она в журнале хоста. Путь не той формы — прежняя общая фраза.
  */
 function unmovedWorkDetail(text: string): string {
   const match = /^(.*?)[\\/]\.[^\\/]+[\\/]works[\\/]([^\\/]+)[\\/]map\.json(?:\n|$)/.exec(text);
   const project = match?.[1]?.split(/[\\/]/).pop();
   if (!match || !project) return NOTICE_DETAIL['map-migration-failed'];
-  return `workspace ${match[2]} in ${project} couldn't be moved to the new storage — it is hidden until this is fixed. Details are in the host log`;
+  return `workspace ${match[2]} in ${project} couldn't be moved to the new storage. Details are in the host log`;
 }
 
 /**

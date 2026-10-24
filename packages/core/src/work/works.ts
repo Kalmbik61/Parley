@@ -211,9 +211,12 @@ export function watchWorks(
     try {
       // Сначала число, потом версии: чужая запись между ними даст лишнее чтение, а не потерянное.
       const now = workDataVersion();
-      failing = false;
-      if (now === dataVersion) return;
+      if (now === dataVersion) {
+        failing = false;
+        return;
+      }
       const next = versionsNow();
+      failing = false;
       // Число запоминается только после удачного чтения версий: сбой между ними оставит прежнее, и следующий опрос повторит.
       dataVersion = now;
       const changed = !sameVersions(versions, next);
