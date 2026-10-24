@@ -387,6 +387,25 @@ export function planItemSatisfied(plan: RoomPlan, item: PlanItem): boolean {
           item.acceptedChecklistRevision! < plan.rev);
 }
 export function planItemsComplete(plan: RoomPlan): boolean {
+  if (plan.mode === "autonomous") {
+    const a = plan.autonomous;
+    if (
+      !a ||
+      plan.items.some((item) => item.status !== "verified") ||
+      a.halted ||
+      a.integration.suspended ||
+      a.integration.candidateHead ||
+      a.integration.queue.length ||
+      a.ops.some((op) => op.state === "intended") ||
+      a.budget.reservations.length ||
+      a.attempts.some((attempt) =>
+        ["starting", "running", "submitted", "checking", "accepted", "queued"].includes(
+          attempt.status,
+        ),
+      )
+    )
+      return false;
+  }
   return plan.items.every((item) => planItemSatisfied(plan, item));
 }
 function ready(plan: RoomPlan, item: PlanItem): boolean {
@@ -697,11 +716,56 @@ export function cancelRoomPlan(
 }
 /** Отмена живого плана: статус, слот решения, снимок и строка ленты — общий шаг `cancelRoomPlan` и архивации комнаты. */
 function cancelPlan(draft: WorkMap, plan: RoomPlan, at: string): void {
+  if (
+    plan.mode === "autonomous" &&
+    (plan.autonomous?.halted?.reason !== "human" || !autonomousCleanupComplete(draft, plan))
+  )
+    throw new RoomRuleError(
+      "autonomous-plan-needs-engine-cancel: cancel the autonomous plan first",
+    );
   plan.status = "cancelled";
   plan.cancelledAt = at;
   planRoom(draft, plan.roomId).proposal = null;
   capturePlanSnapshot(draft, plan, "cancelled");
   addSystemMessage(draft, plan.roomId, `Plan ${plan.id} cancelled`, at);
+}
+function autonomousCleanupComplete(map: WorkMap, plan: RoomPlan): boolean {
+  const a = plan.autonomous;
+  if (!a || a.ops.some((op) => op.state === "intended") || a.budget.reservations.length)
+    return false;
+  const sessions = new Set([
+    ...a.attempts.flatMap((attempt) => [attempt.worker, attempt.verifier]),
+    ...a.ops
+      .filter((op) => op.kind === "create-session" && op.state === "done")
+      .map((op) => op.result?.sessionId),
+  ]);
+  if (map.sessions.some((session) => sessions.has(session.id) && session.lifecycle !== "closed"))
+    return false;
+  if (
+    !a.ops.some(
+      (op) =>
+        op.kind === "cleanup" &&
+        op.attemptId === null &&
+        ["completion", "cancellation"].includes(String(op.payload.purpose)) &&
+        op.state === "done",
+    )
+  )
+    return false;
+  return a.ops.every(
+    (op, index) =>
+      op.kind !== "clone" ||
+      ["engine", "review", "mirror"].includes(String(op.payload.purpose)) ||
+      a.ops
+        .slice(index + 1)
+        .some(
+          (cleanup) =>
+            cleanup.kind === "cleanup" &&
+            cleanup.state === "done" &&
+            (typeof op.payload.dir === "string"
+              ? cleanup.payload.dir === op.payload.dir
+              : cleanup.attemptId === op.attemptId),
+        ),
+  );
 }
 /**
  * Архивация комнаты (`archiveRoom`) отменяет её живой план так же, как человек (`cancelRoomPlan`), но без ревизии и
@@ -744,6 +808,7 @@ export function setRoomMode(
     if (mode === "free" && plan) {
       if (!options.confirmCancel)
         throw new RoomRuleError("confirm active plan cancellation");
+      if (plan.mode === "autonomous") cancelPlan(draft, plan, at);
       plan.status = "cancelled";
       plan.cancelledAt = at;
       capturePlanSnapshot(draft, plan, "cancelled");
@@ -777,6 +842,8 @@ export function reconcileRoomPlans(
 ): void {
   edit(map, (draft) => {
     for (const plan of draft.plans!.filter(current)) {
+      // Автономный план завершает и убирает только движок, даже когда комната без живых участников.
+      if (plan.mode === "autonomous") continue;
       const room = planRoom(draft, plan.roomId);
       if (isRoomClosed(draft, room)) {
         plan.status = "cancelled";
@@ -817,6 +884,8 @@ export function completeRoomPlan(
       plan.completionSummary = null;
       return;
     }
+    if (plan.mode === "autonomous" && !autonomousCleanupComplete(draft, plan))
+      throw new PlanConflictError();
     plan.status = "completed";
     plan.completedAt = at;
     plan.completionSummary = summary;

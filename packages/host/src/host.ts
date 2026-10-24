@@ -649,6 +649,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const handlers = createHostHandlers({
     backlog: backlogService,
     planEffects,
+    autonomousEngine,
     history,
     worksReady,
     providerVersions,

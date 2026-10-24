@@ -804,3 +804,13 @@ describe('вход в аккаунт подписки (спека подписо
     expectTypeOf(account.signedIn).toEqualTypeOf<null>();
   });
 });
+
+describe('explicit autonomous resume', () => {
+  const input = { projectPath: '/project', workId: 'w-01', roomId: 'r-01', planId: 'pl-01', rev: 4 };
+  it('requires the displayed plan identity and excludes actor impersonation', () => {
+    expect(METHODS['plans.resumeAutonomous']?.safeParse(input).success).toBe(true);
+    for (const invalid of [{ ...input, rev: -1 }, { ...input, rev: Number.MAX_SAFE_INTEGER + 1 }, { ...input, roomId: undefined }, { ...input, requestedBy: 'engine' }])
+      expect(METHODS['plans.resumeAutonomous']?.safeParse(invalid).success).toBe(false);
+    expectTypeOf<Result<'plans.resumeAutonomous'>>().toEqualTypeOf<{ ok: true }>();
+  });
+});

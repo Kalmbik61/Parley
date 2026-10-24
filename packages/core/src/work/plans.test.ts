@@ -887,3 +887,127 @@ it.each(["goal", "evidence", "summary"])(
     expect(JSON.stringify(map)).toBe(before);
   },
 );
+
+it("autonomous completion is idempotent and rejects unsettled or halted acceptance", () => {
+  const map = autonomousMap();
+  acceptRoomPlan(map, proposedRoomPlan(map, "r-01", "s-01", autonomousDraft()), AT);
+  const plan = map.plans![0]!;
+  plan.autonomous = {
+    budget: {
+      limits: {
+        attemptsPerItem: 3,
+        repairWaves: 2,
+        minutesPerAttempt: 10,
+        sessions: 6,
+        concurrent: 2,
+      },
+      spent: { attempts: 0, repairWaves: 0, sessions: 0, verifiers: 0, minutes: 0, launches: 0 },
+      reservations: [],
+    },
+    integration: {
+      branch: "integration",
+      baseSha: "a".repeat(40),
+      verifiedHead: "a".repeat(40),
+      candidateHead: null,
+      queue: [],
+      suspended: null,
+    },
+    checks: [],
+    coverage: {},
+    criteriaVersion: {},
+    attempts: [],
+    ops: [
+      {
+        key: "op-0001",
+        kind: "cleanup",
+        attemptId: null,
+        payload: { purpose: "completion", dir: "/integration" },
+        state: "done",
+        at: AT,
+        settledAt: AT,
+        result: { removed: true },
+      },
+    ],
+    halted: null,
+    seq: { attempt: 0, receipt: 0, check: 0, op: 1 },
+  };
+  plan.items.forEach((item) => {
+    item.status = "verified";
+  });
+  expect(() =>
+    proposeCompletion(map, "r-01", "s-01", plan.id, plan.rev, "By a session", AT),
+  ).toThrow("only the engine");
+  const card = proposeCompletion(
+    map,
+    "r-01",
+    "s-01",
+    plan.id,
+    plan.rev,
+    "Verified head and budget",
+    AT,
+    ENGINE,
+  );
+  const before = JSON.stringify(map);
+  expect(
+    proposeCompletion(
+      map,
+      "r-01",
+      "s-01",
+      plan.id,
+      plan.rev,
+      "Verified head and budget",
+      AT,
+      ENGINE,
+    ),
+  ).toEqual(card);
+  expect(JSON.stringify(map)).toBe(before);
+  for (const blocked of ["halted", "queue", "candidate", "intended"] as const) {
+    const draft = structuredClone(map),
+      a = draft.plans![0]!.autonomous!;
+    if (blocked === "halted") a.halted = { reason: "human", at: AT, detail: "Paused" };
+    if (blocked === "queue") a.integration.queue.push("at-0001");
+    if (blocked === "candidate") a.integration.candidateHead = a.integration.verifiedHead;
+    if (blocked === "intended")
+      a.ops.push({
+        key: "op-0001",
+        kind: "cleanup",
+        attemptId: null,
+        payload: {},
+        state: "intended",
+        at: AT,
+        settledAt: null,
+        result: null,
+      });
+    const snapshot = JSON.stringify(draft);
+    expect(() =>
+      resolveProposal(
+        draft,
+        "r-01",
+        card.proposalId,
+        "accept",
+        { rev: card.rev, planId: plan.id, planRev: plan.rev },
+        AT,
+      ),
+    ).toThrow();
+    expect(JSON.stringify(draft)).toBe(snapshot);
+  }
+  resolveProposal(
+    map,
+    "r-01",
+    card.proposalId,
+    "accept",
+    { rev: card.rev, planId: plan.id, planRev: plan.rev },
+    AT,
+  );
+  expect(map.plans![0]!.status).toBe("completed");
+});
+
+it("leaves a closed autonomous room to the engine instead of cancelling before cleanup", () => {
+  const map = autonomousMap();
+  acceptRoomPlan(map, proposedRoomPlan(map, "r-01", "s-01", autonomousDraft()), AT);
+  for (const session of map.sessions) session.lifecycle = "closed";
+  const before = JSON.stringify(map);
+  reconcileRoomPlans(map, AT);
+  expect(JSON.stringify(map)).toBe(before);
+  expect(map.plans![0]!.status).toBe("active");
+});

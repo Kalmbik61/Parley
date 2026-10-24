@@ -5,8 +5,8 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import {
-  ENGINE, addMember, coverageVerdict, enqueue, failureSignature, halt, intendOp,
-  liveLead, parleyNote, PlanConflictError, ProposalConflictError, readMap, receipt, reconcileAfterRestart, recordCheck, resolveProposal,
+  ENGINE, HUMAN, addMember, cancelRoomPlan, coverageVerdict, enqueue, failureSignature, halt, intendOp,
+  liveLead, parleyNote, planItemsComplete, proposeCompletion, PROPOSAL_TEXT_MAX, PlanConflictError, ProposalConflictError, readMap, receipt, reconcileAfterRestart, recordCheck, resolveProposal,
   integrate, returnAttempt, settleOp, startAttempt, submitAttempt, supersedeByAmendment, updateMap, workPaths,
   type AutonomousOp, type CheckResult, type HandoffManifest, type PlanAttempt,
   type RoomPlan, type WorkMap,
@@ -39,6 +39,7 @@ export interface AutonomousEngine extends AttemptsEngine {
   start(): void;
   stop(): Promise<void>;
   flush(projectPath: string, workId: string): Promise<void>;
+  cancel(input: { projectPath: string; workId: string; planId: string; rev: number }): Promise<void>;
 }
 const exec = promisify(execFile);
 export function autonomousEngineIO(sessions: EngineIO['sessions']): EngineIO {
@@ -162,6 +163,13 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       const index = map.plans?.findIndex(row => row.id === loc.planId) ?? -1;
       if (index < 0 || !active(map.plans![index]!)) throw new Error('plan-unavailable');
       changed = edit(map.plans![index]!, map);
+      const a = changed.autonomous!;
+      if (a.halted) {
+        const attempts = a.attempts.map(row => `item ${row.item}/${row.id}: ${row.status}`).join(', ') || 'no attempts';
+        const done = a.ops.filter(op => op.state === 'done').map(op => op.key).join(', ') || 'none';
+        const pending = a.ops.filter(op => op.state === 'intended').map(op => `${op.key} ${op.kind}`).join(', ') || 'none';
+        a.halted.detail = a.halted.detail.split('\nReason:')[0] + `\nReason: ${a.halted.reason}; ${attempts}.\nDone: ${done}; verifiedHead=${a.integration.verifiedHead}.\nWaiting: ${pending}; explicit human resume required.`;
+      }
       map.plans![index] = changed;
       if (JSON.stringify(map) === before) throw new NoEngineChange();
     }); } catch (error) { if (!(error instanceof NoEngineChange)) throw error; }
@@ -213,8 +221,11 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     if (stopped) throw new Error('engine-stopped');
     if (!['stop-session', 'close-session', 'merge-abort', 'cleanup'].includes(op.kind)) requireRecovered(loc.projectPath, loc.workId);
     const latest = await load(loc);
+    const cancelling = latest.autonomous!.halted?.detail.startsWith('cancelled by human');
+    const cancellationCleanup = cancelling && op.kind === 'cleanup' && op.payload.purpose === 'cancellation';
+    if (latest.autonomous!.halted && !['stop-session', 'close-session'].includes(op.kind) && !cancellationCleanup) throw new Error('plan-halted');
     if (!['stop-session', 'close-session', 'merge-abort', 'cleanup'].includes(op.kind) &&
-      (latest.autonomous!.halted || (op.attemptId && fenced.has(attemptOf(latest, op.attemptId).status)))) {
+      op.attemptId && fenced.has(attemptOf(latest, op.attemptId).status)) {
       await settled(loc, op, 'failed', { reason: 'attempt-fenced' });
       throw new Error('attempt-fenced');
     }
@@ -222,7 +233,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     try { result = await execute(); }
     catch (error) {
       await settled(loc, op, 'failed', { reason: errorText(error) });
-      if (errorText(error) !== 'integration-conflict') await change(loc, plan => halt(plan, { ...context(plan, at()), reason: errorText(error).includes('confinement-unavailable') ? 'confinement' : /resource|limit|budget|denied/i.test(errorText(error)) ? 'budget' : 'human', detail: `${op.kind}: ${errorText(error)}` }));
+      if (errorText(error) !== 'integration-conflict') await change(loc, plan => halt(plan, { ...context(plan, at()), reason: cancelling ? 'human' : errorText(error).includes('confinement-unavailable') ? 'confinement' : /resource|limit|budget|denied/i.test(errorText(error)) ? 'budget' : 'human', detail: `${cancelling ? 'cancelled by human: ' : ''}${op.kind}: ${errorText(error)}` }));
       throw error;
     }
     // A crash/failing write here leaves the original intention for startup reconciliation.
@@ -272,7 +283,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
   }
   async function workerBrief(loc: Location, plan: RoomPlan, attempt: PlanAttempt): Promise<string> {
     const a = plan.autonomous!, item = plan.items.find(row => row.id === attempt.item)!;
-    const dependencies = a.attempts.filter(row => item.after.includes(row.item) && ['accepted', 'queued', 'integrated'].includes(row.status));
+    const dependencies = item.after.map(id => a.attempts.findLast(row => row.item === id)!).filter(row => row && ['accepted', 'queued', 'integrated'].includes(row.status));
     const previous = a.attempts.filter(row => row.item === item.id && row.n < attempt.n);
     const integrationFailures = await Promise.all(a.ops.filter(op => ['merge', 'noop-integration'].includes(op.kind) && previous.some(row => row.id === op.attemptId)).map(async op => {
       const results = a.ops.filter(row => row.kind === 'check' && row.payload.integrationOp === op.key && row.state === 'done').map(row => row.result?.checkResult as CheckResult).filter(Boolean);
@@ -607,6 +618,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
   }
   async function rollback(loc: Location): Promise<void> {
     const plan = await load(loc);
+    if (plan.autonomous!.halted) return;
     for (const op of plan.autonomous!.ops.filter(row => row.kind === 'merge-abort' && row.state === 'intended')) {
       await effect(loc, op, async () => {
         const dir = integrationDirectory(loc), sha = String(op.payload.sha ?? plan.autonomous!.integration.verifiedHead);
@@ -640,12 +652,111 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
   }
   async function cleanupIntegrated(loc: Location): Promise<void> {
     const plan = await load(loc);
+    if (plan.autonomous!.halted) return;
     for (const attempt of plan.autonomous!.attempts.filter(row => row.status === 'integrated')) {
       let op = plan.autonomous!.ops.findLast(row => row.kind === 'cleanup' && row.attemptId === attempt.id && row.state !== 'failed');
       if (op?.state === 'done') continue;
       op ??= await intend(loc, 'cleanup', attempt.id, { dir: cloneDirectory(loc, attempt.id) });
       await effect(loc, op, async () => { await io.fs.rm(cloneDirectory(loc, attempt.id), { recursive: true, force: true }); return { removed: true }; });
     }
+  }
+  async function cleanupPlan(loc: Location, cancelling = false): Promise<void> {
+    let plan = await load(loc);
+    if (plan.autonomous!.halted && !cancelling) return;
+    // Remove only disposable trees. Artifacts, check tails and engine.git are retained.
+    const targets = [
+      ...plan.autonomous!.attempts.map(attempt => ({ attemptId: attempt.id, dir: cloneDirectory(loc, attempt.id) })),
+      { attemptId: null, dir: integrationDirectory(loc) },
+    ];
+    for (const target of targets) {
+      plan = await load(loc);
+      if (plan.autonomous!.halted && !cancelling) return;
+      let op = plan.autonomous!.ops.findLast(row => row.kind === 'cleanup' && row.payload.dir === target.dir && row.state !== 'failed' &&
+        (target.attemptId !== null || ['completion', 'cancellation'].includes(String(row.payload.purpose))));
+      if (op?.state === 'done' && !await exists(target.dir)) continue;
+      if (op?.state === 'done') op = undefined;
+      op ??= await intend(loc, 'cleanup', target.attemptId, { dir: target.dir, purpose: cancelling ? 'cancellation' : 'completion' });
+      await effect(loc, op, async () => { await io.fs.rm(target.dir, { recursive: true, force: true }); return { removed: true }; });
+    }
+    plan = await load(loc);
+    for (const creation of plan.autonomous!.ops.filter(op => op.kind === 'create-session' && op.state === 'done')) {
+      const sessionId = String(creation.result!.sessionId);
+      for (const kind of ['stop-session', 'close-session'] as const) {
+        const latest = await load(loc);
+        if (latest.autonomous!.halted && !cancelling) return;
+        const previous = latest.autonomous!.ops.findLast(op => op.kind === kind && op.payload.sessionId === sessionId && op.state !== 'failed');
+        const op = previous ?? await intend(loc, kind, creation.attemptId, { sessionId });
+        await sessionOperation(loc, op);
+      }
+    }
+    await drainSessions(loc);
+  }
+  async function complete(loc: Location): Promise<void> {
+    let plan = await load(loc);
+    if (!planItemsComplete(plan)) return;
+    await mirrorIntegration(loc);
+    await cleanupPlan(loc);
+    plan = await load(loc);
+    if (!planItemsComplete(plan)) return;
+    const room = (await io.readMap(loc.projectPath, loc.workId)).rooms.find(row => row.id === plan.roomId)!;
+    if (room.proposal) return;
+    const a = plan.autonomous!, b = a.budget;
+    const integrated = a.attempts.filter(attempt => attempt.status === 'integrated' && plan.items.some(item => item.id === attempt.item && item.status === 'verified'))
+      .filter(attempt => !a.attempts.some(other => other.item === attempt.item && other.status === 'integrated' && other.n > attempt.n));
+    const checks = a.ops.filter(op => op.kind === 'check' && op.state === 'done').map(op => op.result?.checkResult as CheckResult)
+      .filter(result => result && result.sha === a.integration.verifiedHead);
+    const concurrent = a.ops.filter(op => op.kind === 'launch' && op.state === 'done' && !a.ops.some(end => ['stop-session', 'close-session'].includes(end.kind) && end.state === 'done' && end.payload.sessionId === op.payload.sessionId)).length;
+    const minutes = a.attempts.map(attempt => {
+      const charged = a.ops.filter(op => op.kind === 'check' && op.state === 'done' &&
+        (op.payload.phase === 'integration' ? a.ops.find(merge => merge.key === op.payload.integrationOp)?.attemptId === attempt.id : op.attemptId === attempt.id))
+        .map(op => op.result?.checkResult as CheckResult).filter(result => result && a.attempts.some(owner => owner.checks.includes(result.id)));
+      const spent = Math.max(0, Math.ceil((Date.parse(attempt.endedAt ?? at()) - Date.parse(attempt.startedAt)) / 60_000)) + charged.reduce((sum, result) => sum + Math.ceil(result.durationMs / 60_000), 0);
+      return { attemptId: attempt.id, spent, remaining: Math.max(0, b.limits.minutesPerAttempt - spent) };
+    });
+    const budget = [
+      ...plan.items.map(item => { const spent = a.attempts.filter(attempt => attempt.item === item.id).length; return `attemptsPerItem item ${item.id}: spent ${spent}/${b.limits.attemptsPerItem}, remaining ${Math.max(0, b.limits.attemptsPerItem - spent)}`; }),
+      `repairWaves: spent ${b.spent.repairWaves}/${b.limits.repairWaves}, remaining ${Math.max(0, b.limits.repairWaves - b.spent.repairWaves)}`,
+      `minutesPerAttempt: limit ${b.limits.minutesPerAttempt}; total spent minutes ${b.spent.minutes}`,
+      ...minutes.map(row => `${row.attemptId}: spent minutes ${row.spent}, remaining ${row.remaining}`),
+      `sessions: spent ${b.spent.sessions}/${b.limits.sessions}, remaining ${Math.max(0, b.limits.sessions - b.spent.sessions)}; verifiers ${b.spent.verifiers}; launches ${b.spent.launches}`,
+      `concurrent: spent ${concurrent}/${b.limits.concurrent}, remaining ${Math.max(0, b.limits.concurrent - concurrent)}`,
+    ];
+    const report = Buffer.from(JSON.stringify({
+      planId: plan.id, rev: plan.rev, goal: plan.goal, verifiedHead: a.integration.verifiedHead,
+      integration: a.integration, items: integrated.map(attempt => ({ item: attempt.item, attemptId: attempt.id, receipt: attempt.receipt, evidence: plan.items.find(item => item.id === attempt.item)!.evidence })),
+      checks, budget: { ...b, minutes, summary: budget },
+    }, null, 2));
+    const sha256 = bytesHash(report);
+    let reportOp = a.ops.findLast(op => op.kind === 'copy-artifacts' && op.payload.purpose === 'completion-report' && op.payload.sha256 === sha256 && op.state !== 'failed');
+    const previous = a.ops.some(op => op.kind === 'copy-artifacts' && op.payload.purpose === 'completion-report' && op.payload.rev === plan.rev && op.payload.sha256 !== sha256);
+    const reportPath = reportOp ? String(reportOp.payload.path) : path.relative(loc.projectPath,
+      path.join(workPaths(loc.projectPath, loc.workId).dir, 'autonomous', loc.planId, `completion-${plan.rev}${previous ? '-' + sha256 : ''}.json`));
+    const reportFile = path.resolve(loc.projectPath, reportPath);
+    reportOp ??= await intend(loc, 'copy-artifacts', null, { purpose: 'completion-report', rev: plan.rev, path: reportPath, sha256 });
+    await effect(loc, reportOp, async () => {
+      await io.fs.writeFile(reportFile, report, { flag: 'wx' }).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; });
+      if (bytesHash(await artifactBytes(reportFile)) !== sha256) throw new Error('completion-report-conflict');
+      return { path: reportPath, sha256 };
+    });
+    const heading = [
+      `verifiedHead: ${a.integration.verifiedHead}`,
+      `Integration branch: ${a.integration.branch}; engine: ${attemptsEngineGitPath(loc.projectPath, loc.workId)}; project mirror: ${loc.projectPath} refs/heads/${a.integration.branch}`,
+      ...integrated.map(attempt => `Item ${attempt.item}: ${attempt.id}; receipt ${attempt.receipt?.id}; criteriaVersion ${attempt.criteriaVersion}`),
+    ];
+    const reference = `Full completion report: ${reportPath}; sha256: ${sha256}`;
+    let summary = [...heading, `Checks/verdicts on verifiedHead: ${JSON.stringify(checks.map(result => ({ id: result.id, specId: result.specId, attemptId: result.attemptId, verdict: result.verdict, by: result.by })))}`, ...budget, reference].join('\n');
+    if (summary.length > PROPOSAL_TEXT_MAX)
+      summary = [...heading, `Checks/verdicts on verifiedHead: ${checks.filter(result => result.verdict === 'pass').length} pass / ${checks.length} total; full list in report.`, ...budget, reference].join('\n');
+    await change(loc, (current, map) => {
+      if (!planItemsComplete(current) || current.rev !== plan.rev || current.autonomous!.integration.verifiedHead !== a.integration.verifiedHead) return current;
+      const room = map.rooms.find(row => row.id === current.roomId)!;
+      const lead = liveLead(map, room);
+      if (!lead) return halt(current, { ...context(current, at()), reason: 'human', detail: 'no live lead for completion proposal' });
+      if (room.proposal) return current;
+      if (summary.length > PROPOSAL_TEXT_MAX) return halt(current, { ...context(current, at()), reason: 'human', detail: `completion card exceeds limit: ${summary.length}` });
+      proposeCompletion(map, room.id, lead, current.id, current.rev, summary, at(), ENGINE);
+      return current;
+    });
   }
   async function spawnIntegrationVerifier(loc: Location, operation: AutonomousOp): Promise<void> {
     let plan = await load(loc);
@@ -688,7 +799,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       });
     }
   }
-  async function integrateQueue(loc: Location): Promise<void> {
+  async function integrateQueue(loc: Location, candidateOnly = false): Promise<void> {
     while (!stopped) {
       let plan = await load(loc), a = plan.autonomous!;
       if (a.halted || a.integration.suspended || !a.integration.queue.length) return;
@@ -775,6 +886,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       if ((await load(loc)).autonomous!.halted) return;
       await mirrorIntegration(loc);
       await cleanupIntegrated(loc);
+      if (candidateOnly) return;
     }
   }
   async function verifyIntegration(loc: Location, sessionId: string, rev: number, request: Parameters<AutonomousEngine['verify']>[3]): Promise<AttemptsResult> {
@@ -813,6 +925,16 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
         const confirmed = op.kind === 'launch' ? session?.lifecycle === 'active' : op.kind === 'close-session' ? session?.lifecycle === 'closed' : session && ['sleeping', 'closed'].includes(session.lifecycle);
         if (confirmed) result = { sessionId: op.payload.sessionId };
       } else if (op.kind === 'capture' && op.attemptId) result = await captureEvidence(loc, op, attemptOf(plan, op.attemptId));
+      else if (op.kind === 'cleanup' && typeof op.payload.dir === 'string' &&
+        [integrationDirectory(loc), ...plan.autonomous!.attempts.map(attempt => cloneDirectory(loc, attempt.id))].includes(op.payload.dir) &&
+        !await exists(op.payload.dir)) result = { removed: true };
+      else if (op.kind === 'copy-artifacts' && op.payload.purpose === 'completion-report' &&
+        typeof op.payload.path === 'string' && typeof op.payload.sha256 === 'string') {
+        const file = path.resolve(loc.projectPath, op.payload.path);
+        const root = path.join(workPaths(loc.projectPath, loc.workId).dir, 'autonomous', loc.planId);
+        if (path.dirname(file) === root && /^completion-\d+(?:-[a-f0-9]{64})?\.json$/.test(path.basename(file)) && await exists(file) &&
+          bytesHash(await artifactBytes(file)) === op.payload.sha256) result = { path: op.payload.path, sha256: op.payload.sha256 };
+      }
       else if (op.kind === 'copy-artifacts' && op.attemptId) {
         const attempt = attemptOf(plan, op.attemptId);
         const artifacts = attempt.manifest?.artifacts ?? [];
@@ -847,6 +969,8 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     }
     await change(loc, (current, map) => {
       let next = reconcileAfterRestart(current, { ...context(current, at()), observations, integrationHead: { sha: head, parents, opKey } });
+      if (current.autonomous!.halted?.detail.startsWith('cancelled by human'))
+        next = halt(next, { ...context(next, at()), reason: 'human', detail: current.autonomous!.halted!.detail.split('\nReason:')[0]! });
       if (branchMismatch) next = halt(next, { ...context(next, at()), reason: 'restart', detail: `Integration branch ${integration.branch} differs from verifiedHead; inspect before resuming` });
       for (const op of next.autonomous!.ops.filter(row => row.kind === 'create-session' && row.state === 'done')) joinCreated(map, next, String(op.result!.sessionId));
       return next;
@@ -861,7 +985,11 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       const loc = { projectPath, workId, planId: original.id };
       await drainSessions(loc);
       let plan = await load(loc);
-      if (plan.autonomous!.halted) continue;
+      if (plan.autonomous!.halted) { await change(loc, current => current); continue; }
+      for (const op of plan.autonomous!.ops.filter(op => op.kind === 'resume' && op.state === 'intended'))
+        await settled(loc, op, 'done', { requestedBy: HUMAN });
+      plan = await load(loc);
+      if (planItemsComplete(plan)) { await complete(loc); continue; }
       await rollback(loc);
       if (!['codex', 'claude'].includes(options.provider)) {
         await change(loc, current => halt(current, { ...context(current, at()), reason: 'confinement', detail: `Unsupported executor provider: ${options.provider}` }));
@@ -896,29 +1024,45 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
         await drainSessions(loc);
         continue;
       }
+      if (plan.autonomous!.integration.candidateHead) {
+        await integrateQueue(loc, true);
+        plan = await load(loc);
+        if (plan.autonomous!.halted || plan.autonomous!.integration.candidateHead) continue;
+      }
       await initialize(loc);
+      plan = await load(loc);
+      if (plan.autonomous!.halted) { await drainSessions(loc); continue; }
       for (const attempt of plan.autonomous!.attempts) {
         if (stopped) return;
         if (attempt.status === 'running' && attempt.submissionKey && !attempt.receipt) await finishSubmission(loc, attempt.id);
         else if (['submitted', 'checking'].includes(attempt.status)) await checkAttempt(loc, attempt.id);
         else if (attempt.status === 'starting') await spawn(loc, attempt.id, 'worker');
       }
+      plan = await load(loc);
+      if (plan.autonomous!.halted) { await drainSessions(loc); continue; }
       await mirrorIntegration(loc);
       await cleanupIntegrated(loc);
+      await startReady(loc, true);
       await integrateQueue(loc);
       plan = await load(loc);
+      if (planItemsComplete(plan)) { await complete(loc); continue; }
       if (plan.autonomous!.integration.candidateHead || plan.autonomous!.integration.suspended) continue;
-      for (const item of plan.items.filter(row => ['ready', 'returned'].includes(row.status))) {
-        plan = await load(loc);
-        if (stopped || plan.autonomous!.halted) break;
-        const a = plan.autonomous!;
-        // Verifier sessions share the same concurrent budget as executors.
-        const running = a.ops.filter(op => op.kind === 'launch' && op.state === 'done' && !a.ops.some(end => ['stop-session', 'close-session'].includes(end.kind) && end.state === 'done' && end.payload.sessionId === op.payload.sessionId)).length;
-        if (running >= a.budget.limits.concurrent) break;
-        const nextId = `at-${String(a.seq.attempt + 1).padStart(4, '0')}`;
-        plan = await change(loc, current => startAttempt(current, { ...context(current, at()), item: item.id, baseSha: current.autonomous!.integration.verifiedHead, branch: `attempts/${nextId}` }));
-        if (!plan.autonomous!.halted) await spawn(loc, nextId, 'worker');
-      }
+      await startReady(loc);
+    }
+  }
+  async function startReady(loc: Location, abortedOnly = false): Promise<void> {
+    let plan = await load(loc);
+    for (const item of plan.items.filter(row => ['ready', 'returned'].includes(row.status))) {
+      plan = await load(loc);
+      const a = plan.autonomous!;
+      if (stopped || a.halted || a.integration.candidateHead || a.integration.suspended) return;
+      if (abortedOnly && a.attempts.findLast(attempt => attempt.item === item.id)?.status !== 'aborted') continue;
+      // Verifier sessions share the same concurrent budget as executors.
+      const running = a.ops.filter(op => op.kind === 'launch' && op.state === 'done' && !a.ops.some(end => ['stop-session', 'close-session'].includes(end.kind) && end.state === 'done' && end.payload.sessionId === op.payload.sessionId)).length;
+      if (running >= a.budget.limits.concurrent) return;
+      const nextId = `at-${String(a.seq.attempt + 1).padStart(4, '0')}`;
+      plan = await change(loc, current => startAttempt(current, { ...context(current, at()), item: item.id, baseSha: current.autonomous!.integration.verifiedHead, branch: `attempts/${nextId}` }));
+      if (!plan.autonomous!.halted) await spawn(loc, nextId, 'worker');
     }
   }
   async function processWork(projectPath: string, workId: string, manual = false): Promise<void> {
@@ -966,6 +1110,32 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     },
     async stop() { stopped = true; off?.(); if (timer) clearTimeout(timer); await Promise.allSettled([...states.values()].map(value => value.tail)); },
     flush: (projectPath, workId) => exclusive(projectPath, workId, () => processWork(projectPath, workId, true)),
+    cancel: input => exclusive(input.projectPath, input.workId, async () => {
+      const { projectPath, workId, planId, rev } = input;
+      requireRecovered(projectPath, workId);
+      const map = await io.readMap(projectPath, workId);
+      const plan = map.plans?.find(row => row.id === planId);
+      if (!plan || plan.rev !== rev) throw new PlanConflictError();
+      if (plan.status === 'cancelled') return;
+      const loc = { projectPath, workId, planId };
+      await change(loc, current => {
+        if (current.rev !== rev) throw new PlanConflictError();
+        let next = halt(current, { ...context(current, at()), reason: 'human', detail: 'cancelled by human: cleanup pending' });
+        // No effect is in flight under the engine's work queue. Cancellation fences all
+        // other intentions; stop/close and cleanup remain durable work before terminal CAS.
+        for (const op of next.autonomous!.ops.filter(op => op.state === 'intended' && !['stop-session', 'close-session'].includes(op.kind)))
+          next = settleOp(next, { ...context(next, at()), key: op.key, outcome: 'failed', result: { reason: 'cancelled by human' } });
+        return next;
+      });
+      await drainSessions(loc);
+      await cleanupPlan(loc, true);
+      await io.updateMap(projectPath, workId, draft => {
+        const current = draft.plans?.find(row => row.id === planId);
+        if (!current || current.rev !== rev || !current.autonomous?.halted?.detail.startsWith('cancelled by human') ||
+          current.autonomous.ops.some(op => op.state === 'intended')) throw new PlanConflictError();
+        cancelRoomPlan(draft, planId, rev, HUMAN, at());
+      });
+    }),
     async submit(ref, planId, rev, request) {
       if (recovering(ref.projectPath, ref.workId)) return denied(new Error('engine-recovering'));
       return exclusive(ref.projectPath, ref.workId, async () => {
