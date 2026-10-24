@@ -32,7 +32,7 @@ vi.mock('@parley/core', async (importOriginal) => {
   };
 });
 
-const { createWork, MapLockTimeoutError, readMap, transitionSession, updateMap, workPaths } = await import('@parley/core');
+const { createWork, MapLockTimeoutError, parleyHome, readMap, transitionSession, updateMap } = await import('@parley/core');
 const { createPtyManager } = await import('../pty/pty-manager.js');
 const { createSessionsService } = await import('./sessions-service.js');
 
@@ -113,9 +113,9 @@ async function sleepingSession() {
 }
 
 describe('launch(): запись старта в карту не удалась после pty.start', () => {
-  it('map.lock занят один раз — запись повторяется: процесс жив, в карте active', async () => {
+  it('база занята один раз — запись повторяется: процесс жив, в карте active', async () => {
     const { service, ref, lifecycle } = await sleepingSession();
-    failWith = () => new MapLockTimeoutError(workPaths(project, ref.workId).lock, 3000);
+    failWith = () => new MapLockTimeoutError(path.join(parleyHome(), 'parley.db'), 3000);
     failStarts = 1;
 
     await service.launch(ref, 'resume');
@@ -125,9 +125,9 @@ describe('launch(): запись старта в карту не удалась 
     await service.stop(ref);
   });
 
-  it('map.lock занят дольше повторов — процесс остановлен, карта sleeping; следующий Resume поднимает', async () => {
+  it('база занята дольше повторов — процесс остановлен, карта sleeping; следующий Resume поднимает', async () => {
     const { service, ref, lifecycle } = await sleepingSession();
-    failWith = () => new MapLockTimeoutError(workPaths(project, ref.workId).lock, 3000);
+    failWith = () => new MapLockTimeoutError(path.join(parleyHome(), 'parley.db'), 3000);
     failStarts = Number.POSITIVE_INFINITY;
 
     await expect(service.launch(ref, 'resume')).rejects.toBeInstanceOf(MapLockTimeoutError);

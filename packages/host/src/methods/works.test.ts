@@ -187,7 +187,7 @@ describe('works.rename / works.setStatus', () => {
     client.close();
   });
 
-  it('works.rename меняет название в карте на диске', async () => {
+  it('works.rename меняет название в карте', async () => {
     const { client, dir, workId } = await withWork();
 
     client.send({ id: 2, method: 'works.rename', params: { projectPath: dir, workId, title: '  Новая  ' } });
@@ -196,7 +196,7 @@ describe('works.rename / works.setStatus', () => {
     client.close();
   });
 
-  it('works.setStatus пишет статус в карту на диске', async () => {
+  it('works.setStatus пишет статус в карту', async () => {
     const { client, dir, workId } = await withWork();
 
     client.send({ id: 2, method: 'works.setStatus', params: { projectPath: dir, workId, status: 'done' } });
