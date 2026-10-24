@@ -23,6 +23,8 @@ const { DatabaseSync: Database } = createRequire(import.meta.url)(
 
 export const WORK_DB_FILE = 'parley.db';
 export const WORK_DB_SCHEMA_VERSION = 1;
+/** Сколько соединение ждёт чужую блокировку по умолчанию; запись на время транзакции ставит своё и возвращает это (спека хранилища 6.9). */
+export const BUSY_TIMEOUT_MS = 5000;
 
 /**
  * Схема версии 1 (спека хранилища 6.1). `works` — строка на работу: заголовок, статус и версия вынесены в колонки
@@ -84,7 +86,7 @@ export function closeWorkDb(): void {
  * чтобы два процесса не создали таблицы дважды.
  */
 function prepare(db: DatabaseSync): void {
-  db.exec('PRAGMA busy_timeout = 5000');
+  db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA synchronous = NORMAL');
   db.exec('PRAGMA foreign_keys = ON');

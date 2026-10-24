@@ -12,6 +12,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { workDb } from "./db.js";
 import { addSession } from "./map.js";
 import { addRoom } from "./rooms.js";
 import { resolveProposal, setProposal } from "./proposals.js";
@@ -201,11 +202,12 @@ describe("captured immutable plan exports", () => {
 
 it("retries exact published bytes when acknowledgement fails before map persistence", async () => {
   const intent = (await readMap(project, workId)).planExports![0]!;
-  const index = path.join(process.env.PARLEY_HOME!, "works-index.json");
-  const original = await readFile(index, "utf8");
   const result = await flushPlanSnapshots(project, workId, {
     beforeCommit: async () => {
-      await writeFile(index, "malformed fixture");
+      // Запись работы в базе отказывает, как отказал бы сбой диска: файл снимка уже опубликован, карту записать нельзя.
+      workDb().exec(
+        "CREATE TRIGGER refuse_ack BEFORE UPDATE ON works BEGIN SELECT RAISE(ABORT, 'refused fixture'); END",
+      );
     },
   });
   expect(result.failed).toHaveLength(1);
@@ -215,7 +217,7 @@ it("retries exact published bytes when acknowledgement fails before map persiste
   expect((await readMap(project, workId)).planExports![0]!.status).toBe(
     "pending",
   );
-  await writeFile(index, original);
+  workDb().exec("DROP TRIGGER refuse_ack");
   expect((await flushPlanSnapshots(project, workId)).failed).toEqual([]);
   expect((await readMap(project, workId)).planExports![0]!.status).toBe(
     "written",

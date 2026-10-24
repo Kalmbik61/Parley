@@ -1,4 +1,4 @@
-import { readMap, updateMap, WorkNotFoundError, workPaths } from './store.js';
+import { readMap, updateMap } from './store.js';
 import { cancelledPlanLetter } from './plan-effects.js';
 import { isRoomArchived } from './rooms.js';
 import { HUMAN, type Message, type WorkMap } from './types.js';
@@ -47,7 +47,7 @@ export const unreadForHuman = (message: Message): boolean =>
  * и сообщениям комнат, не от самого человека. Уже прочитанные и чужие id пропускаются.
  * Возвращает, сколько отметок поставлено. work.updatedAt не сдвигается.
  * Подходящих id нет — 0 без updateMap: в базу ничего не пишется, версия работы прежняя.
- * Карты нет — WorkNotFoundError, как у updateMap.
+ * Работы нет — WorkNotFoundError: его бросает уже `readMap`, как и `updateMap`.
  */
 export async function markHumanRead(
   projectPath: string,
@@ -60,15 +60,7 @@ export async function markHumanRead(
 
   // Сперва чтение без записи: updateMap поднимает версию работы всегда (спека хранилища 6.9),
   // и повтор пачки окна разослал бы works.changed всем клиентам впустую.
-  let current: WorkMap;
-  try {
-    current = await readMap(projectPath, workId);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new WorkNotFoundError(`map ${workPaths(projectPath, workId).map} does not exist — workspace ${workId} does not exist`);
-    }
-    throw error;
-  }
+  const current = await readMap(projectPath, workId);
   if (pending(current).length === 0) return 0;
 
   // Под локом отбираем заново: другой клиент мог отметить часть писем между чтениями.

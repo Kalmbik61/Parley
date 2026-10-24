@@ -32,7 +32,7 @@ import { setResult } from './map.js';
 import { defaultSessionName } from './names.js';
 import { addRoom } from './rooms.js';
 import { workSettingsJson } from './settings-file.js';
-import { createWork, readMap, updateMap, workPaths } from './store.js';
+import { createWork, readMap, updateMap, workPaths, workVersion } from './store.js';
 
 /** Historical parent links remain readable, but are never created by production APIs. */
 async function historicalChild(projectPath: string, workId: string, parentId: string) {
@@ -285,11 +285,12 @@ describe('метки быстрой сессии и автозаголовок',
 
   it('applyAutoTitle указатель именем не ставит, карту не переписывает', async () => {
     const created = await createNewSession(project, null);
-    const before = await readFile(workPaths(project, created.workId).map, 'utf8');
+    const before = workVersion(project, created.workId);
 
     await applyAutoTitle(project, created.workId, created.session.id, POINTER);
 
-    expect(await readFile(workPaths(project, created.workId).map, 'utf8')).toBe(before);
+    // Запись поднимает версию строки работы всегда, так что та же версия — карту не писали.
+    expect(workVersion(project, created.workId)).toBe(before);
     const map = await readMap(project, created.workId);
     expect(map.sessions[0]?.label).toBe(created.session.label);
     expect(map.work.title).toBe(UNTITLED_WORK);

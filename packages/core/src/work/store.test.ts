@@ -270,6 +270,11 @@ const addPlanSession = (map: WorkMap): void => {
   addSession(map, { provider: 'claude', label: 'план', task: 't' });
 };
 
+const connectionBusyTimeout = (): number =>
+  Number((workDb().prepare('PRAGMA busy_timeout').get() as { timeout: number }).timeout);
+
+const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 /** Комната, которую `normalizeMap` не примет: неизвестный режим. */
 const bogusRoom = (): Room =>
   ({
@@ -362,6 +367,35 @@ describe('createWork', () => {
     expect((await readWorksIndex()).works.map((work) => work.title)).toEqual(['Первая']);
     expect(workDb().isTransaction).toBe(false);
   });
+
+  it('версия новой работы — метка времени в мс, а не 0; событие записи несёт её же', async () => {
+    const events: number[] = [];
+    const stop = onMapWritten((event) => events.push(event.version));
+    const before = Date.now();
+
+    await createWork(project, { title: 'Первая' });
+    stop();
+
+    expect(versionOf('w-0001')).toBeGreaterThanOrEqual(before);
+    expect(versionOf('w-0001')).toBeLessThanOrEqual(Date.now());
+    expect(events).toEqual([versionOf('w-0001')]);
+  });
+
+  it('работу удалил другой процесс и тот же id создан заново: кэш, прогретый до удаления, не попадает (спека хранилища 6.9)', async () => {
+    await createWork(project, { title: 'Первая' });
+    await readMap(project, 'w-0001');
+    // «Чужое» удаление: этот процесс о нём не знает, запись его кэша осталась.
+    workDb().prepare('DELETE FROM works WHERE project_path = ? AND id = ?').run(project, 'w-0001');
+    // Версии берутся из часов, поэтому между созданиями должна пройти хотя бы миллисекунда.
+    await pause(5);
+
+    await createWork(project, { title: 'Вторая' });
+    const before = mapCacheStats();
+
+    expect((await readMap(project, 'w-0001')).work.title).toBe('Вторая');
+    expect(mapCacheStats().misses - before.misses).toBe(1);
+    expect(mapCacheStats().hits - before.hits).toBe(0);
+  });
 });
 
 describe('updateMap', () => {
@@ -396,7 +430,7 @@ describe('updateMap', () => {
 
   it('пишет карту в базу и обновляет список работ', async () => {
     await createWork(project, { title: 'Авторизация' });
-    expect(versionOf('w-0001')).toBe(0);
+    const created = versionOf('w-0001');
 
     const updated = await updateMap(project, 'w-0001', (map) => {
       addSession(map, { provider: 'claude', label: 'план', task: 'составить план' });
@@ -405,7 +439,7 @@ describe('updateMap', () => {
 
     expect(updated.sessions[0]?.id).toBe('s-01');
     expect(readStoredMap(project, 'w-0001')).toEqual(updated);
-    expect(versionOf('w-0001')).toBe(1);
+    expect(versionOf('w-0001')).toBe(created + 1);
     expect((await readWorksIndex()).works).toEqual([
       {
         id: 'w-0001',
@@ -824,6 +858,50 @@ describe('updateMap', () => {
   }, 60_000);
 });
 
+describe('busy_timeout соединения после записи', () => {
+  it('после updateMap с lockTimeoutMs соединение снова ждёт 5000 мс, как при открытии', async () => {
+    await createWork(project, { title: 'Авторизация' });
+
+    await updateMap(project, 'w-0001', addPlanSession, { lockTimeoutMs: 100 });
+
+    expect(connectionBusyTimeout()).toBe(5000);
+  });
+
+  it('и после отказа: брошенная мутация, занятая база', async () => {
+    await createWork(project, { title: 'Авторизация' });
+
+    await expect(
+      updateMap(
+        project,
+        'w-0001',
+        () => {
+          throw new Error('мутация упала');
+        },
+        { lockTimeoutMs: 100 },
+      ),
+    ).rejects.toThrow('мутация упала');
+    expect(connectionBusyTimeout()).toBe(5000);
+
+    const foreign = holdWriteLock();
+    try {
+      await expect(
+        updateMap(project, 'w-0001', addPlanSession, { lockTimeoutMs: 100 }),
+      ).rejects.toBeInstanceOf(MapLockTimeoutError);
+    } finally {
+      foreign.release();
+    }
+    expect(connectionBusyTimeout()).toBe(5000);
+  });
+
+  it('createWork и deleteWorkFiles с lockTimeoutMs тоже возвращают 5000', async () => {
+    await createWork(project, { title: 'Авторизация' }, { lockTimeoutMs: 100 });
+    expect(connectionBusyTimeout()).toBe(5000);
+
+    await deleteWorkFiles(project, 'w-0001', { lockTimeoutMs: 100 });
+    expect(connectionBusyTimeout()).toBe(5000);
+  });
+});
+
 describe('onMapWritten, workExists и replaceStoredMap', () => {
   it('createWork и updateMap сообщают проект, работу и новую версию; после отписки — тишина', async () => {
     const events: { projectPath: string; workId: string; version: number }[] = [];
@@ -834,10 +912,12 @@ describe('onMapWritten, workExists и replaceStoredMap', () => {
     stop();
     await updateMap(project, 'w-0001', addPlanSession);
 
+    const created = events[0]!.version;
     expect(events).toEqual([
-      { projectPath: project, workId: 'w-0001', version: 0 },
-      { projectPath: project, workId: 'w-0001', version: 1 },
+      { projectPath: project, workId: 'w-0001', version: created },
+      { projectPath: project, workId: 'w-0001', version: created + 1 },
     ]);
+    expect(versionOf('w-0001')).toBe(created + 2);
   });
 
   it('слушатель, который бросает, не ломает уже записанное', async () => {
@@ -870,6 +950,7 @@ describe('onMapWritten, workExists и replaceStoredMap', () => {
       addPlanSession(map);
       addPlanSession(map);
     });
+    const before = versionOf('w-0001');
     const seen: number[] = [];
     const stop = onMapWritten((event) => seen.push(event.version));
     const replacement = readStoredMap(project, 'w-0001');
@@ -880,8 +961,8 @@ describe('onMapWritten, workExists и replaceStoredMap', () => {
     replaceStoredMap(project, 'w-0001', replacement);
     stop();
 
-    expect(versionOf('w-0001')).toBe(2);
-    expect(seen).toEqual([2]);
+    expect(versionOf('w-0001')).toBe(before + 1);
+    expect(seen).toEqual([before + 1]);
     expect((await readWorksIndex()).works[0]?.title).toBe('Заменённая');
     expect(
       Number(
@@ -946,6 +1027,40 @@ describe('читать и писать работу, которой нет — W
 
     await expect(readMap(project, 'w-0001')).rejects.toBeInstanceOf(WorkNotFoundError);
     await expect(updateMap(project, 'w-0001', () => {})).rejects.toBeInstanceOf(WorkNotFoundError);
+  });
+
+  it('updateMap на пропавшей работе снимает запись кэша, как readMap: строка вернулась под той же версией — читается заново', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await readMap(project, 'w-0001');
+    const row = workDb()
+      .prepare('SELECT * FROM works WHERE project_path = ? AND id = ?')
+      .get(project, 'w-0001') as Record<string, string | number>;
+    workDb().prepare('DELETE FROM works WHERE project_path = ? AND id = ?').run(project, 'w-0001');
+
+    await expect(updateMap(project, 'w-0001', () => {})).rejects.toBeInstanceOf(WorkNotFoundError);
+
+    // Другой процесс вернул строку с прежней версией, но другим содержимым.
+    const work = JSON.parse(String(row['work_json'])) as Record<string, unknown>;
+    work['title'] = 'Вернулась другой';
+    workDb()
+      .prepare(
+        `INSERT INTO works (project_path, id, title, status, updated_at, version, work_json, extra_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        project,
+        'w-0001',
+        'Вернулась другой',
+        String(row['status']),
+        String(row['updated_at']),
+        Number(row['version']),
+        JSON.stringify(work),
+        String(row['extra_json']),
+      );
+    const before = mapCacheStats();
+
+    expect((await readMap(project, 'w-0001')).work.title).toBe('Вернулась другой');
+    expect(mapCacheStats().misses - before.misses).toBe(1);
   });
 });
 
@@ -1065,6 +1180,17 @@ describe('pruneWorksIndex', () => {
     const { works } = await readWorksIndex();
     expect(works.map((work) => [work.projectPath, work.id])).toEqual([[project, kept.work.id]]);
     expect(workExists(other, gone.work.id)).toBe(false);
+  });
+
+  it('проект исчез целиком вместе с каталогом состояния — его работы тоже снимаются', async () => {
+    const gone = await createWork(other, { title: 'Из пропавшего проекта' });
+    await readMap(other, gone.work.id);
+    await rm(other, { recursive: true, force: true });
+
+    const removed = await pruneWorksIndex();
+
+    expect(removed).toEqual([expect.objectContaining({ id: gone.work.id, projectPath: other })]);
+    await expect(readMap(other, gone.work.id)).rejects.toBeInstanceOf(WorkNotFoundError);
   });
 
   it('целый список не трогает и ничего не возвращает', async () => {

@@ -18,7 +18,7 @@ import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { CONTEXT_DIR, contextFile } from '../context-fill.js';
 import { LIMITS_DIR, limitsFile } from '../limits.js';
 import { envValue, HOME_DIR, LEGACY_HOME_DIR, type Env } from '../names.js';
-import { WORK_DB_FILE, workDb } from './db.js';
+import { BUSY_TIMEOUT_MS, WORK_DB_FILE, workDb } from './db.js';
 import { diffRows, mapToRows, rowIndex, rowsToMap, type StoredRow } from './map-rows.js';
 import { bumpWorkId, nextWorkId, normalizeMap } from './map.js';
 import { isAlive } from './pid-alive.js';
@@ -68,7 +68,11 @@ function refuseRealHomeUnderTest(resolved: string): void {
   }
 }
 
-/** Глобальный индекс работ: все работы всех проектов. */
+/**
+ * Прежний глобальный индекс работ `works-index.json`. Список работ теперь — таблица `works` (`readWorksIndex`); путь
+ * остался для переезда прежних файлов в базу и для переноса каталогов состояния, которым нужен именно старый файл
+ * (спека хранилища 6.6).
+ */
 export function worksIndexPath(): string {
   return path.join(parleyHome(), 'works-index.json');
 }
@@ -298,29 +302,35 @@ function asLockTimeout(error: unknown, timeoutMs: number): unknown {
 /**
  * Запись в базу: синхронное тело между `BEGIN IMMEDIATE` и `COMMIT`, при любом исключении — `ROLLBACK` (спека хранилища
  * 6.9, этап 2). Синхронность ставит писателей этого процесса в очередь сама: между `BEGIN` и `COMMIT` цикл событий не
- * освобождается. Чужие процессы ждёт `busy_timeout` соединения — на время записи он равен `lockTimeoutMs`.
+ * освобождается. Чужие процессы ждёт `busy_timeout` соединения — на время записи он равен `lockTimeoutMs`, а после неё
+ * (в том числе после отказа) возвращается к `BUSY_TIMEOUT_MS`: иначе чтения и следующие записи ждали бы столько, сколько
+ * попросила последняя.
  */
 function writeTransaction<T>(db: DatabaseSync, lockTimeoutMs: number, body: () => T): T {
   const timeoutMs = Number.isFinite(lockTimeoutMs)
     ? Math.max(0, Math.trunc(lockTimeoutMs))
     : DEFAULT_LOCK_TIMEOUT_MS;
   try {
-    db.exec(`PRAGMA busy_timeout = ${timeoutMs}`);
-    db.exec('BEGIN IMMEDIATE');
-  } catch (error) {
-    throw asLockTimeout(error, timeoutMs);
-  }
-  try {
-    const result = body();
-    db.exec('COMMIT');
-    return result;
-  } catch (error) {
     try {
-      db.exec('ROLLBACK');
-    } catch {
-      // Транзакции уже нет: SQLite сама откатила её при сбое.
+      db.exec(`PRAGMA busy_timeout = ${timeoutMs}`);
+      db.exec('BEGIN IMMEDIATE');
+    } catch (error) {
+      throw asLockTimeout(error, timeoutMs);
     }
-    throw asLockTimeout(error, timeoutMs);
+    try {
+      const result = body();
+      db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // Транзакции уже нет: SQLite сама откатила её при сбое.
+      }
+      throw asLockTimeout(error, timeoutMs);
+    }
+  } finally {
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
   }
 }
 
@@ -372,6 +382,15 @@ function versionOf(db: DatabaseSync, projectPath: string, workId: string): numbe
     workId,
   );
   return row === undefined ? undefined : Number(row['version']);
+}
+
+/**
+ * Версия строки работы в базе; `undefined` — работы нет. Её растит каждая запись любого процесса, поэтому по ней
+ * читатель узнаёт, что его копия карты устарела (спека хранилища 6.9). Версию берут до чтения карты: запись между ними
+ * даст запоздавший ключ и лишнюю загрузку, а не устаревшую карту под свежим ключом.
+ */
+export function workVersion(projectPath: string, workId: string): number | undefined {
+  return versionOf(storeDb(), projectPath, workId);
 }
 
 /** То, что лежит в базе про одну работу: версия, запись работы, `extra` и строки списков. */
@@ -733,22 +752,26 @@ export async function createWork(
   // Каталог состояния — до путей работы: новый `.parley` получает свой `.gitignore` (R5).
   await ensureStateDir(projectPath);
   const db = storeDb();
-  const workId = writeTransaction(db, lockTimeoutMs, () => {
+  const created = writeTransaction(db, lockTimeoutMs, () => {
     let id = nextWorkId({ schemaVersion: 1, works: listWorks(db) });
     while (existsSync(workPaths(projectPath, id).map)) id = bumpWorkId(id);
     map.work.id = id;
     const rows = mapToRows(map);
+    // Версия новой работы — часы, а не 0: удалённый и созданный заново id (`nextWorkId` берёт максимум по базе) иначе
+    // совпал бы с версией в кэше другого процесса, и тот отдал бы карту прежней работы (спека хранилища 6.9).
+    const version = Date.now();
     try {
       sql(
         db,
-        `INSERT INTO works (project_path, id, title, status, updated_at, work_json, extra_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO works (project_path, id, title, status, updated_at, version, work_json, extra_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         projectPath,
         id,
         map.work.title,
         map.work.status,
         map.work.updatedAt,
+        version,
         rows.work,
         rows.extra,
       );
@@ -764,9 +787,9 @@ export async function createWork(
     const paths = workPaths(projectPath, id);
     mkdirSync(paths.briefs, { recursive: true });
     mkdirSync(paths.artifacts, { recursive: true });
-    return id;
+    return { workId: id, version };
   });
-  emitMapWritten({ projectPath, workId, version: 0 });
+  emitMapWritten({ projectPath, ...created });
   return map;
 }
 
@@ -797,7 +820,10 @@ export async function updateMap(
 
   const written = writeTransaction(db, lockTimeoutMs, () => {
     const stored = versionOf(db, projectPath, workId);
-    if (stored === undefined) throw notFound(projectPath, workId);
+    if (stored === undefined) {
+      mapCache.delete(key);
+      throw notFound(projectPath, workId);
+    }
     // Карта из кэша процесса — без загрузки и без копии: запись из кэша снимается, ниже её заменит свежая сборка.
     let current: WorkMap;
     let previous: { work: string; extra: string; index: ReadonlyMap<string, StoredRow> };
@@ -808,7 +834,10 @@ export async function updateMap(
       previous = hit;
     } else {
       const loaded = loadStored(db, projectPath, workId);
-      if (loaded === undefined) throw notFound(projectPath, workId);
+      if (loaded === undefined) {
+        mapCache.delete(key);
+        throw notFound(projectPath, workId);
+      }
       current = normalizeMap(rowsToMap(loaded.work, loaded.extra, loaded.rows), source);
       previous = { work: loaded.work, extra: loaded.extra, index: rowIndex(loaded.rows) };
     }

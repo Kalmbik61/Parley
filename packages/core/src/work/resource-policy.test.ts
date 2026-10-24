@@ -1,6 +1,6 @@
 /** Бюджет работы и комнаты (P37): допуск, резервы, окна, отмена и неоднозначные владельцы — чистыми фикстурами и через замок карты. */
 
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -24,7 +24,7 @@ import {
   type ResourceLimits,
 } from './resource-policy.js';
 import { addRoom } from './rooms.js';
-import { createWork, readMap, updateMap, workPaths } from './store.js';
+import { createWork, readMap, readStoredMap, updateMap } from './store.js';
 import { HUMAN, PARLEY, SYSTEM, type WorkMap } from './types.js';
 
 /** Чуть впереди настоящих часов: отметки `history` из `transitionSession` не должны выглядеть свидетельством запуска после резерва. */
@@ -379,8 +379,8 @@ describe('журнал в карте: чтение, запись, перезап
       settleAttempt(map, attempt.id, 'host-A', 'spent');
     });
 
-    // «Другой процесс» читает ту же карту заново — ничего не помнит, кроме файла.
-    const after = parseMap(await readFile(workPaths(project, workId).map, 'utf8'), workPaths(project, workId).map);
+    // «Другой процесс» читает ту же карту заново — ничего не помнит, кроме базы.
+    const after = readStoredMap(project, workId);
     expect(after.resources?.spawned).toBe(1);
     expect(after.resources?.attempts.map((attempt) => [attempt.kind, attempt.state])).toEqual([
       ['spawn', 'spent'],

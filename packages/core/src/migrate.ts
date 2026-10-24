@@ -40,7 +40,7 @@ import type { Env } from './names.js';
 import { hasLiveProcess } from './work/liveness.js';
 import { parseMap } from './work/map.js';
 import { writeSelfIgnore } from './work/state-dir.js';
-import { parleyHome, readMap, readWorksIndex, updateMap } from './work/store.js';
+import { parleyHome, readMap, readWorksIndex, updateMap, worksIndexPath } from './work/store.js';
 import type { WorksIndex } from './work/types.js';
 import { NO_FSMONITOR } from './work/worktree.js';
 
@@ -405,7 +405,9 @@ export async function migrateProjects(
 ): Promise<ProjectMigration[]> {
   const now = options.now ?? (() => new Date());
   const home = parleyHome();
-  const projects = new Set((await readWorksIndex()).works.map((work) => work.projectPath));
+  // Прежний `works-index.json`, а не таблица `works`: перенос каталогов идёт раньше переезда карт в базу, и таблица тогда
+  // ещё пуста (спека хранилища 6.6); читать её — значит не найти ни одного проекта.
+  const projects = new Set((await readWorksIndex(worksIndexPath())).works.map((work) => work.projectPath));
   const processes = processTable();
   const results: ProjectMigration[] = [];
   for (const projectPath of projects) {

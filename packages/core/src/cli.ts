@@ -29,7 +29,6 @@ import {
   readWorksIndex,
   updateMap,
   workPaths,
-  worksIndexPath,
 } from './work/store.js';
 
 const USAGE = `parley-core — an index of Claude Code sessions as JSON
@@ -41,9 +40,9 @@ const USAGE = `parley-core — an index of Claude Code sessions as JSON
 
   parley-core work new --title <t> [--goal <g>] [--cwd <path>]
                                             a new workspace in the project
-  parley-core work list [--all]             workspaces of the global index
-  parley-core work prune                    remove from the index the workspaces
-                                            that have no map
+  parley-core work list [--all]             workspaces of all projects
+  parley-core work prune                    remove from the list the workspaces
+                                            whose project or folder is gone
   parley-core work map --work <id> [--cwd <path>]
                                             the workspace map
   parley-core work session new --work <id> --provider <p> --label <l>
@@ -61,7 +60,7 @@ const USAGE = `parley-core — an index of Claude Code sessions as JSON
   --json   the default and only format, accepted for compatibility
   --root   history root (default ~/.claude/projects, read-only)
   --cwd    a project with \`.parley/\` (default: the current directory; for
-           commands with --work the project comes from the global index)
+           commands with --work the project comes from the workspace list)
   --all    also show archived workspaces`;
 
 function optionValue(argv: string[], name: string): string | undefined {
@@ -80,8 +79,8 @@ function print(value: unknown): void {
 }
 
 /**
- * Проект работы: явный `--cwd` или запись глобального индекса. Индекс и есть
- * список «где какая работа лежит», поэтому по `--work` каталог знать не нужно;
+ * Проект работы: явный `--cwd` или запись списка работ в базе. Список и есть
+ * «где какая работа лежит», поэтому по `--work` каталог знать не нужно;
  * одинаковый id в двух проектах (копия проекта с закоммиченным каталогом состояния) —
  * повод спросить `--cwd`, а не гадать.
  */
@@ -91,7 +90,7 @@ async function resolveProject(argv: string[], workId: string): Promise<string> {
 
   const found = (await readWorksIndex()).works.filter((work) => work.id === workId);
   if (found.length === 0) {
-    throw new Error(`workspace ${workId} is not in ${worksIndexPath()} — pass --cwd`);
+    throw new Error(`workspace ${workId} is not in the workspace list — pass --cwd`);
   }
   if (found.length > 1) {
     const projects = found.map((work) => work.projectPath).join(', ');
@@ -250,7 +249,7 @@ async function workCommand(rest: string[], argv: string[]): Promise<number> {
   }
 
   if (subcommand === 'prune') {
-    // Записи без карты на диске: работу снесли мимо харнесса или проект уехал.
+    // Записи без каталога работы на диске: работу снесли мимо Parley или проект уехал.
     print(await pruneWorksIndex());
     return 0;
   }

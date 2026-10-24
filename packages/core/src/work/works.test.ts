@@ -1,9 +1,11 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { closeWorkDb, workDb } from './db.js';
 import { addSession } from './map.js';
-import { createWork, updateMap, workPaths } from './store.js';
+import { createWork, readStoredMap, replaceStoredMap, updateMap, workPaths } from './store.js';
+import type { Room } from './types.js';
 import { readWorks, watchWorks, type WorkEntry } from './works.js';
 
 let home = '';
@@ -18,14 +20,55 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  closeWorkDb();
   delete process.env.PARLEY_HOME;
   await Promise.all([home, project, other].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 const titles = (works: WorkEntry[]): string[] => works.map((entry) => entry.map.work.title);
 
+/** Комната, которую `normalizeMap` не примет: неизвестный режим. */
+const bogusRoom = (): Room =>
+  ({
+    id: 'r-01',
+    title: 'бэкенд',
+    creator: 'human',
+    ownerId: null,
+    members: [],
+    createdAt: '2026-10-24T00:00:00.000Z',
+    lead: null,
+    proposal: null,
+    archivedAt: null,
+    mode: 'bogus',
+  }) as unknown as Room;
+
+/** Строка работы целиком: так тест «убирает» работу и возвращает её под той же версией, как сделал бы другой процесс. */
+const takeRow = (projectPath: string, workId: string): (() => void) => {
+  const row = workDb()
+    .prepare('SELECT * FROM works WHERE project_path = ? AND id = ?')
+    .get(projectPath, workId) as Record<string, string | number>;
+  workDb().prepare('DELETE FROM works WHERE project_path = ? AND id = ?').run(projectPath, workId);
+  return () => {
+    workDb()
+      .prepare(
+        `INSERT INTO works (project_path, id, title, status, updated_at, version, work_json, extra_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        String(row['project_path']),
+        String(row['id']),
+        String(row['title']),
+        String(row['status']),
+        String(row['updated_at']),
+        Number(row['version']),
+        String(row['work_json']),
+        String(row['extra_json']),
+      );
+  };
+};
+
 describe('readWorks', () => {
-  it('отдаёт работы текущего проекта и работы других проектов из индекса', async () => {
+  it('отдаёт работы текущего проекта и работы других проектов из базы', async () => {
     await createWork(project, { title: 'Авторизация' });
     await createWork(other, { title: 'Редизайн' });
 
@@ -37,10 +80,8 @@ describe('readWorks', () => {
     expect(works.find((entry) => entry.map.work.title === 'Редизайн')?.projectPath).toBe(other);
   });
 
-  it('видит работу проекта, которой нет в глобальном индексе', async () => {
+  it('список один на всю базу: прежний works-index.json в доме на него не влияет, каталоги проектов не читаются', async () => {
     await createWork(project, { title: 'Авторизация' });
-    // Индекс глобальный: он пуст после переноса PARLEY_HOME или клона проекта
-    // с закоммиченным .parley — карты на диске при этом никуда не делись.
     await writeFile(
       path.join(home, 'works-index.json'),
       '{"schemaVersion":1,"works":[]}\n',
@@ -48,6 +89,8 @@ describe('readWorks', () => {
     );
 
     expect(titles(await readWorks(project))).toEqual(['Авторизация']);
+    // Проект, в котором работ нет, список не сужает.
+    expect(titles(await readWorks(path.join(other, 'нет-такого')))).toEqual(['Авторизация']);
   });
 
   it('одна и та же работа не двоится', async () => {
@@ -55,12 +98,20 @@ describe('readWorks', () => {
     expect(await readWorks(project)).toHaveLength(1);
   });
 
-  it('битая и пропавшая карта не уносят весь список', async () => {
+  it('работа, которую normalizeMap не принимает, в список не попадает и не уносит остальные', async () => {
     await createWork(project, { title: 'Авторизация' });
     const broken = await createWork(project, { title: 'Битая' });
-    await writeFile(workPaths(project, broken.work.id).map, '{ не json', 'utf8');
-    const gone = await createWork(other, { title: 'Удалённая' });
-    await rm(workPaths(other, gone.work.id).dir, { recursive: true, force: true });
+    const stored = readStoredMap(project, broken.work.id);
+    stored.rooms.push(bogusRoom());
+    replaceStoredMap(project, broken.work.id, stored);
+    await createWork(other, { title: 'Редизайн' });
+
+    expect(titles(await readWorks(project)).sort()).toEqual(['Авторизация', 'Редизайн']);
+  });
+
+  it('работа без каталога на диске остаётся в списке: снимает её только prune', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    await rm(workPaths(project, created.work.id).dir, { recursive: true, force: true });
 
     expect(titles(await readWorks(project))).toEqual(['Авторизация']);
   });
@@ -93,6 +144,22 @@ describe('readWorks', () => {
     expect((await readWorks(project))[0]?.bytes).toBe(0);
   });
 
+  it('запись одной работы не сбрасывает кэш остальных: версия у каждой своя', async () => {
+    const first = await createWork(project, { title: 'Первая' });
+    await createWork(other, { title: 'Вторая' });
+    await readWorks(project);
+
+    await updateMap(project, first.work.id, (map) => {
+      map.work.goal = 'новая цель';
+    });
+    const works = await readWorks(project);
+
+    expect(works.map((entry) => [entry.map.work.title, entry.bytes === 0])).toEqual([
+      ['Первая', false],
+      ['Вторая', true],
+    ]);
+  });
+
   it('разобранная карта в тестах заморожена: правка «на месте» бросает, а не портит общий объект', async () => {
     await createWork(project, { title: 'Авторизация' });
     const [entry] = await readWorks(project);
@@ -102,15 +169,24 @@ describe('readWorks', () => {
     expect(() => entry?.map.sessions.push({} as never)).toThrow(TypeError);
   });
 
-  it('карта работы, пропавшей из списка, из кэша уходит: вернулась — разбирается заново', async () => {
+  it('заморозка касается копии списка: readMap и updateMap живут своими объектами', async () => {
+    const created = await createWork(project, { title: 'Авторизация' });
+    await readWorks(project);
+
+    await updateMap(project, created.work.id, (map) => {
+      map.work.goal = 'правится свободно';
+    });
+
+    expect((await readWorks(project))[0]?.map.work.goal).toBe('правится свободно');
+  });
+
+  it('карта работы, пропавшей из списка, из кэша уходит: вернулась с той же версией — разбирается заново', async () => {
     const created = await createWork(project, { title: 'Авторизация' });
     expect((await readWorks(project))[0]?.bytes).toBeGreaterThan(0);
     expect((await readWorks(project))[0]?.bytes).toBe(0);
-    const file = workPaths(project, created.work.id).map;
-    const text = await readFile(file, 'utf8');
-    await rm(file);
+    const restore = takeRow(project, created.work.id);
     expect(await readWorks(project)).toEqual([]);
-    await writeFile(file, text, 'utf8');
+    restore();
     expect((await readWorks(project))[0]?.bytes).toBeGreaterThan(0);
   });
 
@@ -225,7 +301,7 @@ describe('watchWorks', () => {
     }
   });
 
-  it('без watchHome запись индекса в доме читать не заставляет, а карта проекта — заставляет', async () => {
+  it('без watchHome запись базы в доме читать не заставляет: карты в каталоге проекта больше нет, следить там не за чем', async () => {
     const created = await createWork(project, { title: 'Авторизация' });
     let reads = 0;
     const watcher = watchWorks(() => {}, project, {
@@ -238,24 +314,13 @@ describe('watchWorks', () => {
     });
 
     try {
-      // Каталог работ проекта наблюдается всегда: ждём, пока watch прогреется.
-      const started = Date.now();
-      while (reads === 0) {
+      for (let n = 0; n < 5; n += 1) {
         await updateMap(project, created.work.id, (map) => {
-          map.work.goal = 'карта проекта';
+          map.work.goal = `цель ${n}`;
         });
         await new Promise((resolve) => setTimeout(resolve, 100));
-        if (Date.now() - started > 15_000) throw new Error('события не дождались');
       }
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      const before = reads;
-      await writeFile(
-        path.join(home, 'works-index.json'),
-        '{"schemaVersion":1,"works":[]}\n',
-        'utf8',
-      );
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(reads).toBe(before);
+      expect(reads).toBe(0);
     } finally {
       watcher.close();
     }

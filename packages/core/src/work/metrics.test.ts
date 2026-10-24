@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PROVIDERS } from '../providers.js';
 import { addSession, transitionSession } from './map.js';
 import { finishSession, linkProviderSession, readSessionMetrics, silenceMs } from './metrics.js';
-import { createWork, readMap, updateMap } from './store.js';
+import { createWork, readMap, updateMap, workVersion } from './store.js';
 
 /** Фикстуры Claude — реальные сессии из ~/.claude/projects, обезличенные. */
 const FIXTURES = path.join(
@@ -424,23 +424,18 @@ describe('finishSession', () => {
     expect(session?.metrics).toBeNull();
   });
 
-  it('недопустимый переход — карта на диске не меняется', async () => {
+  it('недопустимый переход — карта в базе не меняется', async () => {
     const map = await createWork(project, { title: 'Авторизация' });
     await updateMap(project, map.work.id, (current) => {
       addSession(current, { provider: 'claude', label: 'план', task: 'Составить план' });
     });
-    const before = await readFile(
-      path.join(project, '.parley', 'works', map.work.id, 'map.json'),
-      'utf8',
-    );
+    const before = workVersion(project, map.work.id);
 
     // pending → sleeping в таблице переходов нет: процесс ещё не запускали.
     await expect(finishSession(project, map.work.id, 's-01', 'sleeping')).rejects.toThrow(
       /invalid transition/,
     );
-    expect(
-      await readFile(path.join(project, '.parley', 'works', map.work.id, 'map.json'), 'utf8'),
-    ).toBe(before);
+    expect(workVersion(project, map.work.id)).toBe(before);
   });
 
   it('сессии с таким id нет — ошибка', async () => {

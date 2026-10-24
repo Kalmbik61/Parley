@@ -244,7 +244,10 @@ describe('markHumanRead', () => {
     expect((await readMap(project, 'w-0001')).work.updatedAt).toBe(OLD);
   });
 
-  it('работы нет — WorkNotFoundError', async () => {
-    await expect(markHumanRead(project, 'w-0009', ['m-01'])).rejects.toBeInstanceOf(WorkNotFoundError);
+  it('работы нет — WorkNotFoundError с текстом хранилища, без обёртки про файл карты', async () => {
+    const error = await markHumanRead(project, 'w-0009', ['m-01']).catch((cause: Error) => cause);
+
+    expect(error).toBeInstanceOf(WorkNotFoundError);
+    expect((error as Error).message).toBe(`workspace w-0009 does not exist in ${project}`);
   });
 });

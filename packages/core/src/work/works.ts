@@ -1,30 +1,26 @@
 import { watch, type FSWatcher } from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { parseMap } from './map.js';
 import { stateDir } from './state-dir.js';
-import { parleyHome, readWorksIndex, workPaths } from './store.js';
+import { onMapWritten, parleyHome, readMap, readWorksIndex, workVersion } from './store.js';
 import type { WorkMap } from './types.js';
 
 /** Карта работы вместе с проектом, в котором она лежит. */
 export interface WorkEntry {
   projectPath: string;
   map: WorkMap;
-  /** Размер файла карты в байтах, как его прочли с диска: для счётчиков хоста, без повторного чтения. */
+  /**
+   * Размер JSON карты в байтах, когда её собрали заново, — для счётчиков хоста, без повторного чтения: карта из кэша
+   * списка приходит с 0, и счётчик не врёт про «прочитанное».
+   */
   bytes?: number;
 }
 
 const worksDir = (projectPath: string): string => path.join(stateDir(projectPath), 'works');
 
 /**
- * Разобранные карты по файлу. Карта пишется атомарным rename (новый inode), поэтому `mtimeMs + ctimeMs + size + ino` (ctime не выставить задним числом, как mtime)
- * различают версии; неизменённая карта стоит одного `stat` вместо чтения и разбора мегабайт JSON. Карту отдаём
- * общим объектом, не копией: читатели (`WorkEntry`) её не меняют — правки идут через `updateMap` с диска.
- */
-/**
- * В тестах и разработке (`VITEST`, `PARLEY_FREEZE_MAPS=1`) разобранная карта замораживается: общий объект,
+ * В тестах и разработке (`VITEST`, `PARLEY_FREEZE_MAPS=1`) карта списка замораживается: общий объект,
  * который кто-то правит «на месте», в проде тихо портил бы карту всем читателям сразу, а здесь это `TypeError`
- * в месте правки. В проде заморозки нет — обход объекта на каждый разбор лишний.
+ * в месте правки. В проде заморозки нет — обход объекта на каждую сборку лишний.
  */
 const freezeMaps = process.env['VITEST'] !== undefined || process.env['PARLEY_FREEZE_MAPS'] === '1';
 
@@ -36,82 +32,69 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-const parsedMaps = new Map<string, { mtimeMs: number; ctimeMs: number; size: number; ino: number; map: WorkMap }>();
+/**
+ * Карты списка по версии строки работы в базе (спека хранилища 6.9): неизменённая работа стоит одного запроса версии
+ * вместо сборки карты. Карту отдаём общим объектом, не копией: читатели (`WorkEntry`) её не меняют — правки идут
+ * через `updateMap`. Объект — своя копия (`readMap` выдаёт `structuredClone`), поэтому заморозка выше кэш хранилища
+ * не задевает: тот мутируется `updateMap` на месте.
+ */
+const listedMaps = new Map<string, { version: number; map: WorkMap }>();
+
+const listKey = (projectPath: string, workId: string): string => `${projectPath}\0${workId}`;
 
 /**
- * Читает одну карту. Её может не быть (проект переехал или удалён) или она может
- * быть битой — в списке работ это повод пропустить одну строку, а не остаться
- * без списка совсем. Отдельная работа с битой картой отвечает за себя сама
+ * Читает одну карту. Она может быть такой, что `normalizeMap` её не принимает, — в списке работ это повод
+ * пропустить одну строку, а не остаться без списка совсем. Отдельная работа с такой картой отвечает за себя сама
  * (`readMap` по-прежнему бросает).
  *
- * `bytes` — только реальный разбор: из кэша карта приходит с 0, счётчик хоста не врёт про прочитанное.
+ * Версию берём до карты: запись другого процесса между ними даст запоздавший ключ и лишнюю сборку при следующем
+ * чтении, а не устаревшую карту под свежим ключом. `bytes` — только реальная сборка.
  */
 async function readEntry(projectPath: string, workId: string): Promise<WorkEntry | null> {
-  const file = workPaths(projectPath, workId).map;
+  const key = listKey(projectPath, workId);
+  const version = workVersion(projectPath, workId);
+  if (version === undefined) {
+    listedMaps.delete(key);
+    return null;
+  }
+  const cached = listedMaps.get(key);
+  if (cached !== undefined && cached.version === version) {
+    return { projectPath, map: cached.map, bytes: 0 };
+  }
   try {
-    // `stat` до чтения: если карту перепишут между ними, в кэше окажется новое содержимое под старым ключом,
-    // и следующий проход просто разберёт её ещё раз.
-    const info = await stat(file);
-    const cached = parsedMaps.get(file);
-    if (
-      cached !== undefined &&
-      cached.mtimeMs === info.mtimeMs &&
-      cached.ctimeMs === info.ctimeMs &&
-      cached.size === info.size &&
-      cached.ino === info.ino
-    ) {
-      return { projectPath, map: cached.map, bytes: 0 };
-    }
-    const text = await readFile(file, 'utf8');
-    const map = freezeMaps ? deepFreeze(parseMap(text, file)) : parseMap(text, file);
-    parsedMaps.set(file, { mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs, size: info.size, ino: info.ino, map });
-    return { projectPath, map, bytes: Buffer.byteLength(text) };
+    const copy = await readMap(projectPath, workId);
+    const map = freezeMaps ? deepFreeze(copy) : copy;
+    listedMaps.set(key, { version, map });
+    return { projectPath, map, bytes: Buffer.byteLength(JSON.stringify(map)) };
   } catch {
-    parsedMaps.delete(file);
+    listedMaps.delete(key);
     return null;
   }
 }
 
-/** Каталоги работ проекта: индекс глобальный и может ничего про них не знать. */
-async function localWorkIds(projectPath: string): Promise<string[]> {
-  try {
-    const items = await readdir(worksDir(projectPath), { withFileTypes: true });
-    return items.filter((item) => item.isDirectory()).map((item) => item.name);
-  } catch {
-    // `<состояние>/works` ещё нет — работ в проекте просто нет.
-    return [];
-  }
-}
-
 /**
- * Все работы, которые нужно показать: из глобального индекса (в том числе чужих
- * проектов — дизайн TUI, 6.5) плюс карты текущего проекта на диске.
+ * Все работы, которые нужно показать: список из таблицы `works` (все проекты базы, в том числе чужие — дизайн TUI,
+ * 6.5) и карта каждой из `readMap`. Каталоги проектов не читаются: всё, что Parley про работу знает, лежит в базе.
+ * Аргумент-проект принимается и не используется: список один на весь дом, а вызывающие (хост, тесты) его ещё
+ * передают — их правят задачи 6 и 8 плана 3.
  *
  * `archived` здесь не отсеиваются: скрывает их список, а не чтение.
  */
-export async function readWorks(projectPath: string = process.cwd()): Promise<WorkEntry[]> {
-  const seen = new Set<string>();
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- см. выше: сигнатура остаётся ради вызывающих
+export async function readWorks(_projectPath?: string): Promise<WorkEntry[]> {
   const works: WorkEntry[] = [];
-  const files = new Set<string>();
+  const listed = new Set<string>();
 
-  const push = async (project: string, workId: string): Promise<void> => {
-    const key = `${project}\0${workId}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    files.add(workPaths(project, workId).map);
-    const entry = await readEntry(project, workId);
+  for (const item of (await readWorksIndex()).works) {
+    const key = listKey(item.projectPath, item.id);
+    if (listed.has(key)) continue;
+    listed.add(key);
+    const entry = await readEntry(item.projectPath, item.id);
     if (entry !== null) works.push(entry);
-  };
-
-  for (const entry of (await readWorksIndex()).works) {
-    await push(entry.projectPath, entry.id);
-  }
-  for (const workId of await localWorkIds(projectPath)) {
-    await push(projectPath, workId);
   }
 
-  // Карты работ, которых в списке больше нет (удалены, ушли из индекса), в кэше не держим.
-  for (const file of parsedMaps.keys()) if (!files.has(file)) parsedMaps.delete(file);
+  // Карты работ, которых в списке больше нет (удалены, сняты `prune`), в кэше не держим.
+  for (const key of listedMaps.keys()) if (!listed.has(key)) listedMaps.delete(key);
   return works;
 }
 
@@ -145,13 +128,13 @@ const relevant = (name: string): boolean =>
   name.endsWith('map.json') || name.endsWith('works-index.json');
 
 /**
- * Следит за картами работ и на изменение перечитывает список целиком: работ
- * немного, а карта пишется атомарным rename — точечного «эта работа изменилась»
- * файловая система не даёт.
+ * Следит за работами и на изменение перечитывает список целиком: работ
+ * немного, а «какая именно работа изменилась» файловая система не говорит.
  *
- * Хватает наблюдения за домом (`parleyHome`): любая запись карты обновляет и глобальный
- * индекс (см. `updateMap`), поэтому изменения чужих проектов видны тоже. Каталог
- * работ самого проекта наблюдается вдобавок — на случай другого дома.
+ * Запись базы файловая система не показывает (журнал WAL пишется без событий), поэтому при `watchHome` список
+ * перечитывается по событию хранилища `onMapWritten` — по записям этого процесса. Записи других процессов
+ * (CLI, MCP агента без канала) это наблюдение не видит; источник для них — опрос `PRAGMA data_version` в
+ * `works-service` (план 3, задача 6), который заменит и файловое наблюдение ниже: карт и индекса на диске больше нет.
  *
  * Чтений внахлёст не бывает: пока одно идёт, события лишь помечают список «грязным».
  */
@@ -201,6 +184,8 @@ export function watchWorks(
     timer = setTimeout(refresh, debounceMs);
   };
 
+  const unsubscribe = watchHome ? onMapWritten(schedule) : undefined;
+
   for (const dir of watchHome ? [parleyHome(), worksDir(projectPath)] : [worksDir(projectPath)]) {
     try {
       const watcher = watch(dir, { recursive: true }, (_event, name) => {
@@ -220,6 +205,7 @@ export function watchWorks(
     close(): void {
       closed = true;
       if (timer !== undefined) clearTimeout(timer);
+      unsubscribe?.();
       for (const watcher of watchers) watcher.close();
     },
   };
