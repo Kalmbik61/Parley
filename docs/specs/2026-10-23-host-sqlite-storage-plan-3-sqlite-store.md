@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Ветка `feat/sqlite-store` от `origin/master` (285ed9e2 или новее) в своём worktree: `git worktree add .claude/worktrees/sqlite-store -b feat/sqlite-store origin/master`, затем `pnpm install --prefer-offline`, `pnpm --filter "@parley/host^..." build` и `pnpm --filter @parley/file-icons build` (без него не пройдёт проверка типов окна).
-- **Node ≥ 22.13** — с этой версии `node:sqlite` работает без флага. Корневой `engines.node` → `">=22.13"`. CI (`ci.yml`, `release.yml`) уже на Node 22; приложение везёт 22.23.3 (`fetch-node.mjs:35`).
+- **Node ≥ 22.16** — `node:sqlite` работает без флага с 22.13, но `DatabaseSync.isTransaction` (его использует `readTransaction`) появился только в 22.16.0. Корневой `engines.node` → `">=22.16"`. CI (`ci.yml`, `release.yml`) уже на Node 22; приложение везёт 22.23.3 (`fetch-node.mjs:35`).
 - **Новых npm-зависимостей нет.** База — встроенный `node:sqlite`.
 - Коммиты по-английски, с подписью Co-Authored-By той модели, которая их делает. Комментарии по-русски со ссылкой «спека хранилища N.M». Тексты агентам и окну — по-английски. Названия тестов — на языке блока `describe`.
 - Тесты — только затронутых файлов: `pnpm --filter @parley/<pkg> exec vitest run <paths>`. Полный прогон запрещён, мутационные прогоны запрещены. Перед прогоном смотреть `uptime`; при load ≥ 12 ждать. Под нагрузкой флейкают `works-service.test.ts` и `sessions-service.test.ts` — упавший файл перезапустить в одиночку.
@@ -69,7 +69,7 @@ CREATE INDEX entries_order ON entries(project_path, work_id, kind, ord);
 
 - [ ] **Step 1: Failing tests** (`db.test.ts`, Russian names): база создаётся в `PARLEY_HOME` с WAL и `user_version = 1`; повторное открытие не пересоздаёт схему и сохраняет данные; смена `PARLEY_HOME` открывает другую базу; удаление строки `works` каскадно удаляет её `entries`.
 - [ ] **Step 2: Run, expect FAIL** — `pnpm --filter @parley/core exec vitest run src/work/db.test.ts`.
-- [ ] **Step 3: Implement** `db.ts` по Interfaces; `engines.node` → `">=22.13"`.
+- [ ] **Step 3: Implement** `db.ts` по Interfaces; `engines.node` → `">=22.16"`.
 - [ ] **Step 4: Run, expect PASS**; затем `pnpm --filter @parley/core build`.
 - [ ] **Step 5: Commit** — `feat(core): add the SQLite work database (node:sqlite, WAL)`.
 

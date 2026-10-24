@@ -178,7 +178,7 @@ Node.js is not needed: the app carries its own. Linux and Windows are not suppor
 
 ## Build from source
 
-Node.js 20 or newer (tested on 22) and pnpm 9:
+Node.js 22.16 or newer and pnpm 9:
 
 ```bash
 pnpm install
