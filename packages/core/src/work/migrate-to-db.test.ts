@@ -340,12 +340,13 @@ describe('migrateMapsToDb — переезд map.json в базу', () => {
     expect(await exists(indexFile())).toBe(true);
   });
 
-  it('прерванный переезд (строка есть, map.json лежит): только переименование, строка не перезаписана и версия прежняя', async () => {
+  it('прерванный переезд (строка есть, map.json лежит и равен строке): только переименование, строка не перезаписана и версия прежняя', async () => {
     const original = await legacyWork(emptyMap());
     await migrateMapsToDb();
     const version = workVersion(project, 'w-0001');
-    // Хост упал после коммита: файл остался на месте. Текст другой — чтобы вторая вставка была видна.
-    await writeFile(mapFile('w-0001'), `${JSON.stringify(emptyMap('w-0001', 'Другое название'))}\n`);
+    const stored = await readMap(project, 'w-0001');
+    // Хост упал после коммита: файл остался на месте.
+    await writeFile(mapFile('w-0001'), original);
 
     const result = await migrateMapsToDb();
 
@@ -353,8 +354,38 @@ describe('migrateMapsToDb — переезд map.json в базу', () => {
     expect(await exists(mapFile('w-0001'))).toBe(false);
     expect(await exists(backupFile('w-0001'))).toBe(true);
     expect(workVersion(project, 'w-0001')).toBe(version);
-    expect((await readMap(project, 'w-0001')).work.title).toBe('Старая работа');
-    expect(original).toContain('Старая работа');
+    expect(await readMap(project, 'w-0001')).toEqual(stored);
+  });
+
+  it('вернулся map.json с письмом, которого нет в строках (откат сборки и запись в файл): failed с причиной, оба файла и строка не тронуты, map.v2.json не затёрт', async () => {
+    await legacyWork(emptyMap());
+    await migrateMapsToDb();
+    const version = workVersion(project, 'w-0001');
+    const stored = await readMap(project, 'w-0001');
+    // Откат по рецепту: `map.v2.json` вернули в `map.json`, прежняя сборка дописала письмо. Прежний `map.v2.json` с первого переезда лежит рядом.
+    const newer = emptyMap();
+    addSession(newer, { provider: 'codex', label: 'Lead', task: 'Fixture' }, AT);
+    addSession(newer, { provider: 'codex', label: 'Owner', task: 'Fixture' }, AT);
+    addMessage(newer, { from: 's-01', to: ['s-02'], text: 'письмо из откатной сборки' }, AT);
+    const newerText = `${JSON.stringify(newer, null, 2)}\n`;
+    await writeFile(mapFile('w-0001'), newerText);
+    const backupBefore = await readFile(backupFile('w-0001'), 'utf8');
+
+    const result = await migrateMapsToDb();
+
+    expect(result.migrated).toEqual([]);
+    expect(result.failed).toEqual([
+      {
+        projectPath: project,
+        workId: 'w-0001',
+        reason: 'map.json differs from the stored copy (newer edits after a downgrade?)',
+      },
+    ]);
+    expect(await readFile(mapFile('w-0001'), 'utf8')).toBe(newerText);
+    expect(await readFile(backupFile('w-0001'), 'utf8')).toBe(backupBefore);
+    expect(backupBefore).toContain('Старая работа');
+    expect(workVersion(project, 'w-0001')).toBe(version);
+    expect(await readMap(project, 'w-0001')).toEqual(stored);
   });
 
   it('прерванный переезд, а строка не собирается в карту: failed, файл не переименован', async () => {
