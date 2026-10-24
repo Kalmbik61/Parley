@@ -4,7 +4,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -394,22 +394,76 @@ describe('migrateMapsToDb — переезд map.json в базу', () => {
     expect((await readWorksIndex()).works.map((work) => work.id)).toEqual(['w-0002', 'w-0001']);
   });
 
-  it('запись индекса, чьей работы больше нет на диске, переезд не держит: индекс всё равно переименован', async () => {
-    await legacyWork(emptyMap('w-0001', 'Жива'));
+  it('проект из индекса недоступен (том не смонтирован): индекс остаётся и в журнале сказано почему; проект вернулся — карта переезжает, индекс переименован', async () => {
+    const gone = path.join(root, 'gone');
+    await legacyWork(emptyMap('w-0001', 'Доступна'));
     await writeFile(
       indexFile(),
       JSON.stringify({
         schemaVersion: 1,
         works: [
-          { id: 'w-0001', projectPath: project, title: 'Жива', status: 'active', updatedAt: AT },
-          { id: 'w-0005', projectPath: path.join(root, 'gone'), title: 'Проект исчез', status: 'active', updatedAt: AT },
+          { id: 'w-0001', projectPath: project, title: 'Доступна', status: 'active', updatedAt: AT },
+          { id: 'w-0005', projectPath: gone, title: 'На томе, который не смонтирован', status: 'active', updatedAt: AT },
         ],
       }),
     );
+    const lines: string[] = [];
+
+    const first = await migrateMapsToDb({ log: (line) => lines.push(line) });
+
+    expect(first).toEqual({ migrated: [{ projectPath: project, workId: 'w-0001' }], failed: [], skipped: [] });
+    expect(await exists(indexFile())).toBe(true);
+    expect(await exists(indexBackup())).toBe(false);
+    expect(lines.some((line) => line.includes(gone) && line.includes('w-0005'))).toBe(true);
+
+    // Том вернулся: карта лежит там, где лежала.
+    await legacyWork(emptyMap('w-0005', 'На томе'), { indexed: false, projectPath: gone });
+    const second = await migrateMapsToDb();
+
+    expect(second.migrated).toEqual([{ projectPath: gone, workId: 'w-0005' }]);
+    expect(await exists(indexFile())).toBe(false);
+    expect(await exists(indexBackup())).toBe(true);
+  });
+
+  it('запись индекса, чей каталог работы цел, но карты в нём нет (переехала раньше), и запись, у которой в базе есть строка, индекс не держат', async () => {
+    // Строка есть (w-0001), а файлов уже нет совсем.
+    await createWork(project, { title: 'Только в базе' });
+    await rm(workDir('w-0001'), { recursive: true });
+    await legacyWork(emptyMap('w-0002', 'Переедет'));
+    // Каталог без карты: так остаётся работа, чей `map.json` уже стал `map.v2.json`.
+    await legacyWork(emptyMap('w-0003', 'Переехала раньше'));
+    await rename(mapFile('w-0003'), backupFile('w-0003'));
+    const index = JSON.parse(await readFile(indexFile(), 'utf8')) as { works: unknown[] };
+    index.works.unshift({ id: 'w-0001', projectPath: project, title: 'Только в базе', status: 'active', updatedAt: AT });
+    await writeFile(indexFile(), JSON.stringify(index));
 
     const result = await migrateMapsToDb();
 
-    expect(result).toEqual({ migrated: [{ projectPath: project, workId: 'w-0001' }], failed: [], skipped: [] });
+    expect(result).toEqual({ migrated: [{ projectPath: project, workId: 'w-0002' }], failed: [], skipped: [] });
+    expect(await exists(indexBackup())).toBe(true);
+  });
+
+  it.skipIf(asRoot)('проект не читается (EACCES): остальные проекты переезжают, исключения нет, индекс остаётся, в журнале назван проект', async () => {
+    // Проект, известный по строкам базы: его каталог работ не открыть.
+    const locked = path.join(root, 'locked');
+    await createWork(locked, { title: 'Закрыт' });
+    await chmod(path.join(locked, '.parley', 'works'), 0o000);
+    await legacyWork(emptyMap('w-0007', 'Читается'), { indexed: true });
+    const lines: string[] = [];
+
+    let first: Awaited<ReturnType<typeof migrateMapsToDb>>;
+    try {
+      first = await migrateMapsToDb({ log: (line) => lines.push(line) });
+    } finally {
+      await chmod(path.join(locked, '.parley', 'works'), 0o700);
+    }
+    expect(first).toEqual({ migrated: [{ projectPath: project, workId: 'w-0007' }], failed: [], skipped: [] });
+    expect(lines.some((line) => line.includes(locked) && line.includes('EACCES'))).toBe(true);
+    expect(await exists(indexFile())).toBe(true);
+    expect(await exists(indexBackup())).toBe(false);
+
+    // Доступ вернулся: переносить нечего, индекс больше ничего не держит.
+    expect(await migrateMapsToDb()).toEqual({ migrated: [], failed: [], skipped: [] });
     expect(await exists(indexBackup())).toBe(true);
   });
 

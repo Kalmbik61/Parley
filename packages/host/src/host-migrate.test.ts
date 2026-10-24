@@ -84,7 +84,7 @@ async function legacyProject(
   return { project, workId: map.work.id };
 }
 
-async function listWorks(home: string): Promise<Array<{ projectPath: string; map: WorkMap }>> {
+async function worksListResponse(home: string): Promise<{ result?: unknown; error?: { code: string; data?: Record<string, unknown> } }> {
   const paths = hostPaths(home);
   const client = connectRaw(paths.socket);
   await waitConnected(client.socket);
@@ -93,7 +93,11 @@ async function listWorks(home: string): Promise<Array<{ projectPath: string; map
   let response = await client.next();
   while (response.id !== 1) response = await client.next();
   client.close();
-  return (response.result as { entries: Array<{ projectPath: string; map: WorkMap }> }).entries;
+  return response;
+}
+
+async function listWorks(home: string): Promise<Array<{ projectPath: string; map: WorkMap }>> {
+  return ((await worksListResponse(home)).result as { entries: Array<{ projectPath: string; map: WorkMap }> }).entries;
 }
 
 async function logged(home: string): Promise<Array<{ level: string; msg: string } & Record<string, unknown>>> {
@@ -246,6 +250,9 @@ describe('startHost переносит каталог состояния про�
       expect.objectContaining({ level: 'error', msg: 'перенос каталогов состояния проектов не выполнен' }),
     );
     expect(existsSync(hostPaths(home).socket)).toBe(true);
+    // Пустая база не сходит за «работ нет»: снимок отказывает с причиной, окно покажет баннер, а индекс остался как был.
+    expect((await worksListResponse(home)).error).toMatchObject({ code: 'internal', data: { reason: 'works-unreadable' } });
+    expect(await readFile(path.join(home, 'works-index.json'), 'utf8')).toBe('{ broken');
   });
 
   it('второй хост того же дома отказывает до переноса: проекты переносит только держатель замка', async () => {

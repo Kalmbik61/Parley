@@ -217,7 +217,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   //     затем карты `map.json` → база, затем пути артефактов в картах. Под замком хоста, до сокета, службы работ и
   //     автозапуска сессий — ни клиент, ни наблюдатель ещё не держат старый путь, `works.create` не успеет записать в
   //     каталог, который сейчас переименуется, а служба работ первым же чтением увидит уже переехавшие карты.
-  const startupNotices = (await migrateStorage(log)).map(
+  const migration = await migrateStorage(log);
+  const startupNotices = migration.failed.map(
     ({ projectPath, workId }): HostNotice => ({
       kind: 'map-migration-failed',
       ref: null,
@@ -762,10 +763,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // 7. Таймер простоя: ни клиентов, ни занятых ключей — отсчёт стартует сразу.
   idleWatcher.notify(true);
 
-  const worksFailure = await worksService.start().then(
+  const startFailure = await worksService.start().then(
     () => null,
     (error: unknown) => (error instanceof Error ? error.message : String(error)),
   );
+  // Прежний индекс, который не разобрался, — тот же отказ первого чтения, что и раньше: переезд карт его не пропускает, а
+  // пустая таблица иначе сошла бы за «работ нет» и окно не показало бы причину (`works-unreadable`).
+  const worksFailure = migration.unreadable ?? startFailure;
   if (worksFailure === null) {
     // Сверка живости уже прошла на первом чтении работ: те, чей журнал оборван
     // посреди хода, прерваны падением прошлого хоста (спека 10).
@@ -877,21 +881,28 @@ async function moveProjectStateDirs(log: Log): Promise<ProjectMigration[]> {
  * уровне файлов, (2) карты `map.json` → база (`migrateMapsToDb`), (3) пути артефактов в картах переехавших проектов:
  * они правятся через `updateMap`, и строки работ к этому моменту должны быть в базе. Сбой одного шага остальные не
  * останавливает и хост не роняет: что не переехало, остаётся в прежних файлах, и следующий старт пробует снова.
- * Возвращает карты, которые не переехали, — окно узнает о них уведомлением.
+ * Возвращает карты, которые не переехали (окно узнает о них уведомлением), и причину, если сам переезд не смог начаться:
+ * тогда первое чтение работ считается отказавшим (`works-unreadable`).
  */
-async function migrateStorage(log: Log): Promise<Array<{ projectPath: string; workId: string }>> {
+async function migrateStorage(log: Log): Promise<{
+  failed: Array<{ projectPath: string; workId: string }>;
+  unreadable: string | null;
+}> {
   const moved = await moveProjectStateDirs(log);
   let failed: Array<{ projectPath: string; workId: string }> = [];
+  let unreadable: string | null = null;
   try {
     const result = await migrateMapsToDb({ log: (line) => log.info(line) });
     failed = result.failed;
   } catch (error) {
-    log.error('переезд карт в базу не выполнен', { error: String(error) });
+    // Прежний индекс не разобрался (или база не читается): карт не назвать, и список работ пуст не потому, что работ нет.
+    unreadable = error instanceof Error ? error.message : String(error);
+    log.error('переезд карт в базу не выполнен', { error: unreadable });
   }
   await rewriteArtifactRefs(moved).catch((error: unknown) => {
     log.error('пути артефактов в переехавших каталогах не поправлены', { error: String(error) });
   });
-  return failed;
+  return { failed, unreadable };
 }
 
 /**

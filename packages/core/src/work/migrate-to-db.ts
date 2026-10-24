@@ -1,7 +1,9 @@
 /**
  * Переезд прежних карт в базу на старте хоста (спека хранилища 6.6): `map.json` каждой работы становится строками
  * `works` и `entries`, а сам файл — `map.v2.json`. Прежний глобальный `works-index.json` уходит в `works-index.v2.json`,
- * когда непереехавших работ не осталось. Переименованные файлы — страховка: база их не читает, человек вернёт карту
+ * когда каждая его запись урегулирована: работа в базе, или её каталог цел и без `map.json`. Не найденная на диске
+ * работа (проект на несмонтированном томе), непереехавшая и непрочитанный проект индекс удерживают: по нему следующий
+ * старт найдёт карты. Переименованные файлы — страховка: база их не читает, человек вернёт карту
  * обратным переименованием.
  *
  * Порядок на первом старте — вся схема 6.6, а не только этот файл: (1) каталоги состояния `.harnas` → `.parley` на уровне
@@ -52,7 +54,8 @@ interface Candidate {
 }
 
 type Outcome =
-  | { status: 'none' }
+  /** Карты нет. `settled` — работа не потеряна: она уже в базе или её каталог цел и без `map.json` (спека хранилища 6.6). */
+  | { status: 'none'; settled: boolean }
   | { status: 'migrated' }
   | { status: 'busy' }
   | { status: 'failed'; reason: string };
@@ -103,8 +106,13 @@ async function workDirs(projectPath: string): Promise<string[]> {
 /**
  * Работы, у которых мог остаться `map.json`: записи прежнего индекса в его порядке (он станет порядком списка), затем
  * карты в каталогах работ каждого известного проекта — проекта из индекса и проекта, у которого в базе уже есть строки.
+ * Проект, чей каталог работ не читается (права, сбой диска), не останавливает остальных: он называется в `unreadable`
+ * и до следующего старта остаётся неурегулированным.
  */
-async function candidates(indexed: readonly Candidate[]): Promise<Candidate[]> {
+async function candidates(
+  indexed: readonly Candidate[],
+  log: (line: string) => void,
+): Promise<{ list: Candidate[]; unreadable: string[] }> {
   const found = new Map<string, Candidate>();
   const add = (projectPath: string, workId: string): void => {
     const key = `${projectPath}\0${workId}`;
@@ -115,10 +123,25 @@ async function candidates(indexed: readonly Candidate[]): Promise<Candidate[]> {
     ...indexed.map((entry) => entry.projectPath),
     ...(await readWorksIndex()).works.map((work) => work.projectPath),
   ]);
+  const unreadable: string[] = [];
   for (const projectPath of projects) {
-    for (const workId of await workDirs(projectPath)) add(projectPath, workId);
+    try {
+      for (const workId of await workDirs(projectPath)) add(projectPath, workId);
+    } catch (error) {
+      unreadable.push(projectPath);
+      log(`the works of ${projectPath} cannot be listed (${fsReason(error)}), their maps wait for the next start`);
+    }
   }
-  return [...found.values()];
+  return { list: [...found.values()], unreadable };
+}
+
+/** Каталог работы цел (это каталог): без него у записи индекса нет ни карты, ни следа, и сказать «переехала» нельзя. */
+async function workDirExists(dir: string): Promise<boolean> {
+  try {
+    return (await lstat(dir)).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** Одна работа: от «файла нет» до переименования. Исключение наружу не уходит — оно становится отказом этой работы. */
@@ -128,8 +151,10 @@ async function migrateOne({ projectPath, workId }: Candidate): Promise<Outcome> 
     try {
       await lstat(paths.map);
     } catch (error) {
-      if (isMissing(error)) return { status: 'none' }; // переехала раньше, или работы на диске уже нет
-      throw error;
+      if (!isMissing(error)) throw error;
+      // Карты нет: переехала раньше (строка в базе или каталог без `map.json`) — или не видна, потому что проект или
+      // каталог недоступны (том не смонтирован): такую запись индекса отпускать рано.
+      return { status: 'none', settled: workExists(projectPath, workId) || (await workDirExists(paths.dir)) };
     }
     // Занятость — до чтения: пока писатель прежней сборки жив, его `map.json` ещё меняется.
     if (await lockHeld(path.join(paths.dir, 'map.lock'))) return { status: 'busy' };
@@ -175,13 +200,21 @@ export async function migrateMapsToDb(options: { log?: (line: string) => void } 
   const indexFile = worksIndexPath();
   const indexed = (await readWorksIndex(indexFile)).works.map((work) => ({ projectPath: work.projectPath, workId: work.id }));
   const result: MapMigrationResult = { migrated: [], failed: [], skipped: [] };
+  const inIndex = new Set(indexed.map((entry) => `${entry.projectPath}\0${entry.workId}`));
+  /** Записи индекса, чью работу не найти ни в базе, ни на диске: том не смонтирован или каталог убрали. */
+  const missing: Candidate[] = [];
 
-  for (const candidate of await candidates(indexed)) {
+  const { list, unreadable } = await candidates(indexed, log);
+  for (const candidate of list) {
     const { projectPath, workId } = candidate;
     const outcome = await migrateOne(candidate);
     const name = `map ${workId} (${projectPath})`;
     switch (outcome.status) {
       case 'none':
+        if (!outcome.settled && inIndex.has(`${projectPath}\0${workId}`)) {
+          missing.push(candidate);
+          log(`${name} is not on disk (project or folder unavailable), its entry stays in the old index`);
+        }
         break;
       case 'migrated':
         result.migrated.push(candidate);
@@ -198,8 +231,11 @@ export async function migrateMapsToDb(options: { log?: (line: string) => void } 
     }
   }
 
-  // Индекс нужен следующему старту, пока хоть одна работа осталась в файле: по нему находится проект.
-  if (result.failed.length === 0 && result.skipped.length === 0) {
+  // Индекс нужен следующему старту, пока хоть одна работа осталась в файле или не найдена: по нему находится проект.
+  // Исчезнувший том вернётся с картами на месте, и без записи индекса они не нашлись бы.
+  const settled =
+    result.failed.length === 0 && result.skipped.length === 0 && missing.length === 0 && unreadable.length === 0;
+  if (settled) {
     try {
       await rename(indexFile, path.join(path.dirname(indexFile), INDEX_BACKUP_FILE));
     } catch (error) {
