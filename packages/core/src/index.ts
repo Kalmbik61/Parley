@@ -571,11 +571,24 @@ export { contextFromEnv } from './mcp/context.js';
 export type { McpContext } from './mcp/context.js';
 export type { ProviderRow } from './mcp/provider-rows.js';
 export {
+  AGENT_TOOLS_PATH,
+  AGENT_TOOLS_REQUEST_BYTES,
+  ARGUMENTS_TOO_LARGE,
+  HOST_NOT_RESPONDING,
+  SESSION_LINK_EXPIRED,
+  createRemoteToolRunner,
+  launchOf,
+} from './mcp/remote-tools.js';
+export type { RemoteToolOptions, RemoteToolRequest, RemoteToolResponse, ToolLaunch } from './mcp/remote-tools.js';
+export {
   DEFAULT_TIMEOUT_SEC,
   MAX_TIMEOUT_SEC,
   RATE_WINDOW_MS,
   createParleyServer,
+  createToolRunner,
 } from './mcp/tools.js';
+export type { ToolRunner } from './mcp/tools.js';
+export type { MapChanges } from './mcp/watch-map.js';
 export { HUMAN, MESSAGE_KINDS, SYSTEM, PARLEY } from './work/types.js';
 export type {
   Artifact,

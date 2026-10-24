@@ -96,7 +96,7 @@ export const DEFAULT_TIMEOUT_SEC = 600;
 /** Верхний предел: у MCP-клиентов есть свой лимит на длительность вызова. */
 export const MAX_TIMEOUT_SEC = 30 * 60;
 
-/** Как часто перечитывать карту, когда `fs.watch` промолчал. */
+/** Как часто сверять `stat` карты, когда `fs.watch` промолчал: перечитывается она, только когда файл изменился (спека хранилища 6.9). */
 const POLL_MS = 2000;
 
 /**
@@ -600,7 +600,12 @@ async function getMap(context: McpContext, args: Record<string, unknown> = {}, s
   // Строки провайдеров с входом аккаунтов и лимитами отдаёт хост (спека подписок 5.8, К7): процесс MCP не видит ни кэша
   // входа, ни других работ. `needs` (почему недоступен: `sign-in`, `key`, `cli`) и `limits` — только когда известны, чтобы
   // карта оставалась компактной; агент отличает «не вошёл» от «старый CLI» (спека подписок 5.8).
-  const hostRows = context.agent === undefined ? null : await fetchProviderRows(context.agent, signal ?? new AbortController().signal);
+  // Откуда строки (спека хранилища 6.9): `providerRows` — исполнитель в самом хосте, ходить к себе по HTTP незачем; иначе
+  // канал агента — запрос к хосту; иначе локальный реестр с пометкой ниже. Заданный `providerRows` — единственный
+  // источник: его `null` ведёт к тому же локальному ответу с пометкой.
+  const rowsSignal = signal ?? new AbortController().signal;
+  const hostRows = context.providerRows !== undefined ? await context.providerRows(rowsSignal)
+    : context.agent === undefined ? null : await fetchProviderRows(context.agent, rowsSignal);
   if (hostRows !== null) {
     const providers = hostRows.map(({ id, label, family, available, needs, models, effort, limits }) => ({
       id, label, family, available, ...(needs === null ? {} : { needs }), models, effort, ...(limits === null ? {} : { limits }),
@@ -877,12 +882,14 @@ async function waitFor(
   };
 
   try {
+    // `mapChanges` — сигнал об изменении карты снаружи (хост, спека хранилища 6.9): он заменяет `fs.watch`, а опрос остаётся запасным.
     const found = await waitForMap(
       workPaths(context.projectPath, context.workId).map,
       probeAndNote,
       timeoutMs,
       context.pollMs ?? POLL_MS,
       signal,
+      context.mapChanges,
     );
     return found ?? { state: 'running' };
   } finally {
@@ -1561,11 +1568,69 @@ function skillNavigator(context: McpContext): { list: () => Promise<Tool>; find:
   };
 }
 
-export function createParleyServer(context: McpContext): Server<Request, ChannelNotification> {
+/**
+ * Инструменты Parley без транспорта (спека хранилища 6.9, этап 1): то, что отвечает на `tools/list` и `tools/call`, но
+ * не знает про MCP-соединение. Сервер процесса агента зовёт исполнитель в своём процессе или пересылает вызовы хосту,
+ * а хост исполняет их тем же `createToolRunner` (спека 6.3) — карту тогда открывает только он.
+ */
+export interface ToolRunner {
+  list(): Promise<Tool[]>;
+  call(
+    name: string,
+    args: Record<string, unknown>,
+    meta: Record<string, unknown> | undefined,
+    signal?: AbortSignal,
+  ): Promise<CallToolResult>;
+}
+
+/**
+ * Исполнитель инструментов одной сессии: список по профилю запуска и навигатор скиллов, привязка треда Codex, разбор
+ * вызова и ответ агенту — текстом, а ошибки результатом с `isError`. Браузерных инструментов и `create_session` здесь
+ * нет: им нужен канал агента к окну, и они остаются за сервером (`createParleyServer`).
+ */
+export function createToolRunner(context: McpContext): ToolRunner {
+  const navigator = context.skillNavigator === true ? skillNavigator(context) : null;
+  // Профиль `short` (Codex): три инструмента памяти не объявляются; вызов такого имени уходит в обычный разбор, как и любое неизвестное.
+  const declaredInProfile = (tool: Tool): boolean => context.toolProfile !== 'short' || !(SHORT_PROFILE_HIDDEN_TOOLS as readonly string[]).includes(tool.name);
+  // Тред Codex привязывается один раз за жизнь исполнителя — с первого вызова, где `_meta.threadId` есть.
+  let threadBound = false;
+  return {
+    async list() {
+      return [...TOOLS.filter(declaredInProfile), ...(navigator ? [await navigator.list()] : [])];
+    },
+    async call(name, args, meta, signal): Promise<CallToolResult> {
+      if (name === 'find_skill' && navigator === null)
+        return { content: [{ type: 'text', text: 'Skill navigator is disabled for this launch.' }], isError: true };
+      // До самого инструмента: `wait_for` может держать вызов до получаса, а привязка нужна сразу.
+      if (!threadBound) threadBound = await bindCodexThread(context, meta);
+      try {
+        const result = name === 'find_skill' ? await navigator!.find(args)
+          : await dispatch(context, name, args, signal);
+        // Гид — готовый текст: заворачивать его в JSON-строку с экранированием
+        // значило бы отдать агенту документ, который ему же и разбирать.
+        const text = typeof result === 'string' ? result : `${JSON.stringify(result, null, 2)}\n`;
+        return { content: [{ type: 'text', text }] };
+      } catch (error) {
+        // Исчерпанный бюджет — безопасный исход: текст говорит, что расширяет его только человек.
+        const text = error instanceof ResourceDeniedError ? deniedForAgent(error) : (error as Error).message;
+        return { content: [{ type: 'text', text }], isError: true };
+      }
+    },
+  };
+}
+
+/**
+ * Сервер MCP одной сессии. Инструменты Parley исполняет `runner`; не передан — свой, в этом процессе (так живут сессии
+ * без канала агента). Переданный исполнитель (удалённый, спека хранилища 6.9) карту в этом процессе не открывает,
+ * поэтому сторож входящих — он читает карту сам — запускается только без него, а `claude/channel` с его instructions
+ * сервер не объявляет: звонков в таком режиме не будет.
+ */
+export function createParleyServer(context: McpContext, runner?: ToolRunner): Server<Request, ChannelNotification> {
   // Сессии нет — звонить некому: сервер без `PARLEY_SESSION_ID` умеет только
-  // отдавать карту и гид (4.2).
+  // отдавать карту и гид (4.2). Нет и сторожа (удалённый исполнитель) — звонить тоже некому: объявить capability значило
+  // бы обещать агенту звонки, которых он не дождётся (спека хранилища 6.9).
   const { sessionId } = context;
-  const channel = context.channel && sessionId !== null;
+  const channel = context.channel && sessionId !== null && runner === undefined;
   const server = new Server<Request, ChannelNotification>(
     { name: MCP_SERVER_NAME, version: '0.0.0' },
     {
@@ -1591,25 +1656,17 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
     server.onclose = () => stop?.();
   }
 
-  const navigator = context.skillNavigator === true ? skillNavigator(context) : null;
+  const tools = runner ?? createToolRunner(context);
   // Инструмент браузера окна (спека браузера 2026-10-07, 3.7) — только при канале агента в окружении сервера.
   const browser = context.agent === undefined ? null : createBrowserTools(context.agent, { clientName: () => server.getClientVersion()?.name });
   const sessionAgent = sessionId === null ? undefined : context.agent;
-  // Профиль `short` (Codex): три инструмента памяти не объявляются; вызов такого имени уходит в обычный разбор, как и любое неизвестное.
-  const declaredInProfile = (tool: Tool): boolean => context.toolProfile !== 'short' || !(SHORT_PROFILE_HIDDEN_TOOLS as readonly string[]).includes(tool.name);
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [...TOOLS.filter(declaredInProfile), ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL] : []), ...(navigator ? [await navigator.list()] : [])],
+    tools: [...await tools.list(), ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL] : [])],
   }));
-  // Тред Codex привязывается один раз за жизнь сервера — с первого вызова, где `_meta.threadId` есть.
-  let threadBound = false;
   server.setRequestHandler(
     CallToolRequestSchema,
     async (request, extra): Promise<CallToolResult> => {
       const args = isRecord(request.params.arguments) ? request.params.arguments : {};
-      if (request.params.name === 'find_skill' && navigator === null)
-        return { content: [{ type: 'text', text: 'Skill navigator is disabled for this launch.' }], isError: true };
-      // До самого инструмента: `wait_for` может держать вызов до получаса, а привязка нужна сразу.
-      if (!threadBound) threadBound = await bindCodexThread(context, request.params._meta);
       // Инструменты браузера отвечают сами: без канала — отказ с советом перезапустить сессию.
       if (request.params.name.startsWith('browser_')) {
         return browser === null ? { content: [{ type: 'text', text: BROWSER_UNAVAILABLE }], isError: true } : browser.call(request.params.name, args);
@@ -1619,18 +1676,7 @@ export function createParleyServer(context: McpContext): Server<Request, Channel
           ? { content: [{ type: 'text', text: SESSION_CREATION_UNAVAILABLE }], isError: true }
           : createSession(sessionAgent, args, extra.signal);
       }
-      try {
-        const result = request.params.name === 'find_skill' ? await navigator!.find(args)
-          : await dispatch(context, request.params.name, args, extra.signal);
-        // Гид — готовый текст: заворачивать его в JSON-строку с экранированием
-        // значило бы отдать агенту документ, который ему же и разбирать.
-        const text = typeof result === 'string' ? result : `${JSON.stringify(result, null, 2)}\n`;
-        return { content: [{ type: 'text', text }] };
-      } catch (error) {
-        // Исчерпанный бюджет — безопасный исход: текст говорит, что расширяет его только человек.
-        const text = error instanceof ResourceDeniedError ? deniedForAgent(error) : (error as Error).message;
-        return { content: [{ type: 'text', text }], isError: true };
-      }
+      return tools.call(request.params.name, args, request.params._meta, extra.signal);
     },
   );
 

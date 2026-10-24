@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { buildRoleCatalog } from '@parley/core';
 import type { RequestInfo } from '../context.js';
 import type { AssistantService } from '../assistant/assistant-service.js';
 import type { ConsentsService } from '../consents/consents-service.js';
@@ -53,6 +54,22 @@ it('assistant.* регистрируются, только если сервис
   const assistant = {} as unknown as AssistantService;
   expect(createHostHandlers({ ...deps, assistant }).methods['assistant.ask']).toBeTypeOf('function');
   expect(createHostHandlers(deps).methods['assistant.ask']).toBeUndefined();
+});
+
+it('roles.list and recipes.list take the role catalog from deps.roleCatalog: the same cache the agents tools use', async () => {
+  const project = await mkdtemp(path.join(tmpdir(), 'parley-methods-roles-'));
+  try {
+    const { deps } = fakeDeps(Promise.resolve());
+    const roleCatalog = vi.fn(async () => buildRoleCatalog());
+    const { methods } = createHostHandlers({ ...deps, roleCatalog });
+    await methods['roles.list']!({ projectPath: project } as never, {} as RequestInfo);
+    await methods['recipes.list']!({ projectPath: project } as never, {} as RequestInfo);
+    expect(roleCatalog).toHaveBeenCalledTimes(2);
+    expect(roleCatalog).toHaveBeenNthCalledWith(1, project, { codex: true });
+    expect(roleCatalog).toHaveBeenNthCalledWith(2, project, { codex: true });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
 });
 
 it('providers.deleteCustom спрашивает живые PTY хоста: папку провайдера с живой сессией не удаляют (спека подписок 10)', async () => {
