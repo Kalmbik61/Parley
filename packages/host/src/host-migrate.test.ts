@@ -338,10 +338,36 @@ describe('startHost moves workspace maps into the database (storage spec 6.6)', 
     let message = await client.next();
     while (message.event !== 'host.notice') message = await client.next();
     client.close();
-    expect(message.data).toEqual({ kind: 'map-migration-failed', ref: null, text: file, at: expect.any(String) });
+    // Путь `map.json` (окно берёт из него номер работы и имя проекта), со следующей строки — причина.
+    expect(message.data).toEqual({ kind: 'map-migration-failed', ref: null, text: expect.stringMatching(/^.+\n.+$/s), at: expect.any(String) });
+    expect((message.data as { text: string }).text.split('\n')[0]).toBe(file);
     expect(await readFile(file, 'utf8')).toBe('{ broken');
     expect(workExists(project, 'w-0001')).toBe(false);
     expect(existsSync(path.join(home, 'works-index.json'))).toBe(true);
     expect(await listWorks(home)).toEqual([]);
+  });
+
+  it('a work busy with an old-build writer (live map.lock) stays in its file and the window gets a map-migration-failed notice for it', async () => {
+    const home = await newHome();
+    const project = await mkdtemp(path.join(tmpdir(), 'parley-host-migrate-'));
+    projects.push(project);
+    await writeLegacyWork(home, project, '.parley', legacyMap('w-0001', 'Busy'));
+    const file = path.join(project, '.parley', 'works', 'w-0001', 'map.json');
+    // Замок с pid живого процесса (этого же): так выглядит запись прежней сборки.
+    await writeFile(path.join(project, '.parley', 'works', 'w-0001', 'map.lock'), `${process.pid}\n`);
+
+    const running = await startHost({ home });
+    hosts.push(running);
+
+    const client = await connect(home);
+    let message = await client.next();
+    while (message.event !== 'host.notice') message = await client.next();
+    client.close();
+    const notice = message.data as { kind: string; text: string };
+    expect(notice.kind).toBe('map-migration-failed');
+    expect(notice.text.split('\n')).toEqual([file, 'busy: map.lock is held by a running process']);
+    expect(existsSync(file)).toBe(true);
+    expect(workExists(project, 'w-0001')).toBe(false);
+    expect(existsSync(path.join(home, 'works-index.json'))).toBe(true);
   });
 });

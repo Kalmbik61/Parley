@@ -218,11 +218,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   //     автозапуска сессий — ни клиент, ни наблюдатель ещё не держат старый путь, `works.create` не успеет записать в
   //     каталог, который сейчас переименуется, а служба работ первым же чтением увидит уже переехавшие карты.
   const migration = await migrateStorage(log);
-  const startupNotices = migration.failed.map(
-    ({ projectPath, workId }): HostNotice => ({
+  // Работа, что осталась в файле, из списка окна пропадает: окну нужно её назвать. Текст — путь `map.json` (из него окно
+  // берёт номер работы и имя проекта) и со следующей строки причина; подробности остаются в журнале хоста.
+  const startupNotices = migration.unmoved.map(
+    ({ projectPath, workId, reason }): HostNotice => ({
       kind: 'map-migration-failed',
       ref: null,
-      text: workPaths(projectPath, workId).map,
+      text: `${workPaths(projectPath, workId).map}\n${reason}`,
       at: new Date().toISOString(),
     }),
   );
@@ -885,15 +887,23 @@ async function moveProjectStateDirs(log: Log): Promise<ProjectMigration[]> {
  * тогда первое чтение работ считается отказавшим (`works-unreadable`).
  */
 async function migrateStorage(log: Log): Promise<{
-  failed: Array<{ projectPath: string; workId: string }>;
+  /** Работы, что остались в файле: не вышло (`failed`) или заняты процессом прежней сборки (`skipped`) — окну нужны обе. */
+  unmoved: Array<{ projectPath: string; workId: string; reason: string }>;
   unreadable: string | null;
 }> {
   const moved = await moveProjectStateDirs(log);
-  let failed: Array<{ projectPath: string; workId: string }> = [];
+  let unmoved: Array<{ projectPath: string; workId: string; reason: string }> = [];
   let unreadable: string | null = null;
   try {
     const result = await migrateMapsToDb({ log: (line) => log.info(line) });
-    failed = result.failed;
+    unmoved = [
+      ...result.failed,
+      ...result.skipped.map(({ projectPath, workId }) => ({
+        projectPath,
+        workId,
+        reason: 'busy: map.lock is held by a running process',
+      })),
+    ];
   } catch (error) {
     // Прежний индекс не разобрался (или база не читается): карт не назвать, и список работ пуст не потому, что работ нет.
     unreadable = error instanceof Error ? error.message : String(error);
@@ -902,7 +912,7 @@ async function migrateStorage(log: Log): Promise<{
   await rewriteArtifactRefs(moved).catch((error: unknown) => {
     log.error('пути артефактов в переехавших каталогах не поправлены', { error: String(error) });
   });
-  return { failed, unreadable };
+  return { unmoved, unreadable };
 }
 
 /**
