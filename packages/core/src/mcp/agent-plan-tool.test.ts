@@ -1,11 +1,11 @@
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { addSession, transitionSession } from '../work/map.js';
-import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
+import { createWork, readMap, updateMap, workPaths, workVersion } from '../work/store.js';
 import { createParleyServer } from './tools.js';
 
 let root: string;
@@ -71,10 +71,10 @@ it.each([
   { steps: [{ ...steps[0], description: 'x'.repeat(4097) }] },
 ])('rejects invalid or redirected input atomically', async args => {
   const client = await connect();
-  const file = workPaths(project, workId).map;
-  const before = await readFile(file, 'utf8');
+  // Версия строки работы растёт с каждой записью: не сдвинулась — карту не переписывали.
+  const before = workVersion(project, workId);
   expect((await client.callTool({ name: 'publish_agent_plan', arguments: args })).isError).toBe(true);
-  expect(await readFile(file, 'utf8')).toBe(before);
+  expect(workVersion(project, workId)).toBe(before);
 });
 it.each([null, 'missing', 'closed', 'archived'])('refuses a caller without an open work/session: %s', async condition => {
   await updateMap(project, workId, map => {

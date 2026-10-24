@@ -24,7 +24,7 @@ import { planLaunch } from '../work/launch.js';
 import { PROPOSAL_TEXT_MAX, resolveProposal } from '../work/proposals.js';
 import { addRoom, archiveRoom } from '../work/rooms.js';
 import type { SessionNeed } from '../work/stuck.js';
-import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
+import { createWork, readMap, readStoredMap, replaceStoredMap, updateMap, workPaths, workVersion } from '../work/store.js';
 import { decisionsOf, participantLabel, threadOf } from '../work/thread.js';
 import { HUMAN, type WorkMap } from '../work/types.js';
 import { addBacklogItem, readBacklog } from '../work/backlog.js';
@@ -127,8 +127,8 @@ async function addHistoricalSession(client: Client, init: { provider?: string; l
   });
 }
 
-const readMapFile = async (): Promise<WorkMap> =>
-  JSON.parse(await readFile(workPaths(project, workId).map, 'utf8')) as WorkMap;
+/** Карта из строк базы мимо кэша процесса: то, что записал инструмент, а не то, что запомнил читатель. */
+const readMapFile = async (): Promise<WorkMap> => readStoredMap(project, workId);
 
 const session = (map: WorkMap, id: string) => {
   const found = map.sessions.find((candidate) => candidate.id === id);
@@ -1277,8 +1277,8 @@ describe('add_to_room', () => {
     return { lead, member };
   }
 
-  /** Карта как есть на диске: после отказа она должна совпасть байт в байт. */
-  const rawMap = (): Promise<string> => readFile(workPaths(project, workId).map, 'utf8');
+  /** Версия строки работы: после отказа она не сдвинулась — карту не записывали. */
+  const rawMap = (): number | undefined => workVersion(project, workId);
 
   it('ведущий вводит живую сессию: она в members, в ленте — системная строка, письма ей нет', async () => {
     const { lead } = await setup();
@@ -1420,8 +1420,8 @@ describe('propose_decision', () => {
     return { lead, a, b };
   }
 
-  /** Карта как есть на диске: после отказа она должна совпасть байт в байт. */
-  const rawMap = (): Promise<string> => readFile(workPaths(project, workId).map, 'utf8');
+  /** Версия строки работы: после отказа она не сдвинулась — карту не записывали. */
+  const rawMap = (): number | undefined => workVersion(project, workId);
 
   it('ведущий: { proposalId, rev: 0 }, решение лежит в слоте комнаты', async () => {
     const { lead } = await leadRoom();
@@ -2248,13 +2248,16 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
     expect(await journalLines()).toEqual([started('s-02'), ended]);
   });
 
-  it('ожидание кончилось ошибкой (карта не читается): End всё равно записан', async () => {
+  it('ожидание кончилось ошибкой (карта не собирается из базы): End всё равно записан', async () => {
     const client = await connect('s-01');
     await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
     const pending = call(client, 'wait_for', { target: 's-02', timeoutSec: 20 });
 
     await linesAre(1);
-    await writeFile(workPaths(project, workId).map, 'не json', 'utf8');
+    // Карта, которую `normalizeMap` не принимает: неизвестный режим комнаты (файла карты больше нет, портят строки базы).
+    const broken = readStoredMap(project, workId);
+    broken.rooms.push({ id: 'r-99', title: 'битая', creator: 'human', ownerId: null, members: [], createdAt: '2026-10-24T00:00:00.000Z', lead: null, proposal: null, archivedAt: null, mode: 'bogus' } as unknown as WorkMap['rooms'][number]);
+    replaceStoredMap(project, workId, broken);
 
     expect((await pending).isError).toBe(true);
     expect(await journalLines()).toEqual([started('s-02'), ended]);
@@ -2913,7 +2916,8 @@ describe('архивная комната в MCP (архив комнат, 3.3, 
     return { lead: await connect('s-01'), member: await connect('s-02'), outsider: await connect('s-03') };
   }
 
-  const rawMap = (): Promise<string> => readFile(workPaths(project, workId).map, 'utf8');
+  /** Версия строки работы: после отказа она не сдвинулась — карту не записывали. */
+  const rawMap = (): number | undefined => workVersion(project, workId);
 
   it('send_message и add_to_room в архивную комнату отказывают текстом из спеки, карта не меняется', async () => {
     const { lead, member } = await setup();

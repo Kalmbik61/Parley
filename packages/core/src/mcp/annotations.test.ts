@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { addMessage, addSession } from '../work/map.js';
 import { addRoom } from '../work/rooms.js';
-import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
+import { createWork, readMap, updateMap, workPaths, workVersion } from '../work/store.js';
 import { type WorkMap } from '../work/types.js';
 import { createParleyServer } from './tools.js';
 
@@ -95,12 +95,17 @@ async function callOk(client: Client, name: string, args: Record<string, unknown
   return result;
 }
 
-/** Все файлы каталога: путь → размер, время записи и содержимое. Переписанный файл виден и без смены текста. */
+/**
+ * Все файлы каталога: путь → размер, время записи и содержимое. Переписанный файл виден и без смены текста. Файлы базы
+ * (`parley.db`, `-wal`, `-shm`) в снимок не входят: любое чтение двигает отметки читателей в `-shm`, и по байтам они
+ * ничего не говорят — запись в карту видна по версии строки работы (спека хранилища 6.9), её снимок идёт рядом.
+ */
 async function snapshot(root: string): Promise<Record<string, string>> {
   const files: Record<string, string> = {};
   const walk = async (dir: string): Promise<void> => {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
       const file = path.join(dir, entry.name);
+      if (entry.name.startsWith('parley.db')) continue;
       if (entry.isDirectory()) {
         await walk(file);
         continue;
@@ -113,7 +118,11 @@ async function snapshot(root: string): Promise<Record<string, string>> {
   return files;
 }
 
-const snapshotAll = async () => ({ project: await snapshot(project), home: await snapshot(home) });
+const snapshotAll = async () => ({
+  project: await snapshot(project),
+  home: await snapshot(home),
+  version: workVersion(project, workId),
+});
 
 const ids = (map: WorkMap) => ({
   sessions: map.sessions.map((session) => session.id),
