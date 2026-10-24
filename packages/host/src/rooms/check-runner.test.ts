@@ -9,7 +9,7 @@ import { attemptsEngineGitPath } from '../agent/attempts-endpoint.js';
 import { run } from './check-runner.js';
 
 // Only the unavailable macOS boundary is simulated; clones and candidate processes are real.
-const boundary = vi.hoisted(() => ({ native: false, unavailable: '', kernelOnly: false, logs: '', dirty: false, wrongHead: false, postLogFailure: false, queries: 0, stamps: [] as string[] }));
+const boundary = vi.hoisted(() => ({ native: false, unavailable: '', kernelOnly: false, logs: '', dirty: false, wrongHead: false, postLogFailure: false, delayedLogs: false, logFailureAt: 0, orphanMarker: '', orphanExitCode: 0, orphanScanUnavailable: false, queries: 0, stamps: [] as string[] }));
 vi.mock('node:child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   const intercepted = (file: string, args: string[], ...rest: any[]) => {
@@ -19,17 +19,24 @@ vi.mock('node:child_process', async importOriginal => {
       if (!boundary.native && file === '/usr/bin/log') {
         boundary.queries++;
         boundary.stamps.push(args[args.indexOf('--start') + 1]!, args[args.indexOf('--end') + 1]!);
-        if ((boundary.kernelOnly && !args[args.indexOf('--predicate') + 1]?.includes('sender == \"Sandbox\"')) || boundary.unavailable === 'log' || (boundary.postLogFailure && boundary.queries > 1)) {
+        if ((boundary.kernelOnly && !args[args.indexOf('--predicate') + 1]?.includes('sender == \"Sandbox\"')) || boundary.unavailable === 'log' || (boundary.postLogFailure && boundary.queries > 1) || boundary.queries === boundary.logFailureAt) {
           return actual.execFile('/nonexistent/log', [], ...rest);
         }
-        return actual.execFile('/usr/bin/printf', ['%s', boundary.queries > 1 ? boundary.logs : ''], ...rest);
+        return actual.execFile('/usr/bin/printf', ['%s', boundary.queries > (boundary.delayedLogs ? 2 : 1) ? boundary.logs : ''], ...rest);
+      }
+      if (!boundary.native && file === '/usr/sbin/lsof') {
+        if (boundary.orphanScanUnavailable) return actual.execFile('/nonexistent/lsof', [], ...rest);
+        if (boundary.orphanMarker) return boundary.orphanExitCode === 1
+          ? actual.execFile('/bin/sh', ['-c', 'cat \"$1\"; exit 1', 'sh', boundary.orphanMarker], ...rest)
+          : actual.execFile('/bin/cat', [boundary.orphanMarker], ...rest);
+        return actual.execFile('/usr/bin/printf', [''], ...rest);
       }
       if (!boundary.native && args.includes('status') && boundary.dirty) return actual.execFile('/usr/bin/printf', ['?? unexpected\n'], ...rest);
       if (!boundary.native && args.includes('rev-parse') && args.includes('HEAD') && boundary.wrongHead) return actual.execFile('/usr/bin/printf', ['0'.repeat(40)], ...rest);
       return actual.execFile(file, args, ...rest);
   };
   Object.defineProperty(intercepted, Symbol.for('nodejs.util.promisify.custom'), { value: (...args: any[]) => new Promise((resolve, reject) => {
-    (intercepted as any)(...args, (error: Error | null, stdout: string, stderr: string) => error ? reject(error) : resolve({ stdout, stderr }));
+    (intercepted as any)(...args, (error: Error | null, stdout: string, stderr: string) => error ? reject(Object.assign(error, { stdout, stderr })) : resolve({ stdout, stderr }));
   }) });
   return {
     ...actual,
@@ -39,10 +46,18 @@ vi.mock('node:child_process', async importOriginal => {
       : actual.spawn(file, args, options),
   };
 });
+vi.mock('node:timers/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:timers/promises')>();
+  return { ...actual, setTimeout: (ms: number) => boundary.native ? actual.setTimeout(ms) : Promise.resolve() };
+});
 const exec = promisify(execFile);
 const roots: string[] = [];
-beforeEach(() => Object.assign(boundary, { native: false, unavailable: '', kernelOnly: false, logs: '', dirty: false, wrongHead: false, postLogFailure: false, queries: 0, stamps: [] as string[] }));
+beforeEach(() => Object.assign(boundary, { native: false, unavailable: '', kernelOnly: false, logs: '', dirty: false, wrongHead: false, postLogFailure: false, delayedLogs: false, logFailureAt: 0, orphanMarker: '', orphanExitCode: 0, orphanScanUnavailable: false, queries: 0, stamps: [] as string[] }));
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+function detachedCandidate(marker: string): string {
+  const child = `require('fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000)`;
+  return `const fs=require('fs');const c=require('child_process').spawn(process.execPath,['-e',${JSON.stringify(child)}],{detached:true,stdio:'inherit'});c.unref();const ready=setInterval(()=>{if(fs.existsSync(${JSON.stringify(marker)})){clearInterval(ready);console.log(c.pid)}},10);`;
+}
 async function fixture() {
   const base = path.resolve('.parley/check-runner-tests');
   await mkdir(base, { recursive: true });
@@ -58,7 +73,7 @@ async function fixture() {
   await exec('git', ['clone', '--bare', '--no-hardlinks', projectPath, engine]);
   const ctx = { projectPath, workId: 'w-01', planId: 'pl-01', resultId: 'cr-01' };
   const spec: CheckSpec = { id: 'check', item: 1, argv: [process.execPath, '-e', 'console.log("ok")'], cwd: '.', env: {}, inputs: [], timeoutMs: 2000, frozenAt: '2026-10-24T00:00:00.000Z' };
-  const checkDir = path.join(projectPath, '.parley/works/w-01/autonomous/pl-01/attempts/at-01/checks/check');
+  const checkDir = path.join(projectPath, '.parley/works/w-01/autonomous/pl-01/attempts/at-01/checks/check/cr-01');
   return { ctx, spec, sha, git, engine, checkDir };
 }
 
@@ -180,6 +195,25 @@ describe.skipIf(process.env.PARLEY_TEST_NATIVE_SANDBOX !== '1')('native macOS co
     if (kind === 'child') expect(result.exitCode).toBe(0);
     await expect(access(path.join(f.checkDir, 'checkout'))).rejects.toThrow();
   });
+  it('kills a real detached descendant that retains checkout cwd and inherited pipes', async () => {
+    const f = await fixture();
+    const marker = path.join(f.checkDir, 'tmp/orphan.pid');
+    f.spec.argv = [process.execPath, '-e', detachedCandidate(marker)];
+    let orphan = 0;
+    try {
+      const result = await Promise.race([
+        run(f.ctx, f.spec, f.sha, 'at-01'),
+        new Promise<never>((_, reject) => { const timer = setTimeout(() => reject(new Error('native orphan cleanup exceeded bound')), 12_000); timer.unref(); }),
+      ]);
+      orphan = Number((await readFile(result.outputTail!, 'utf8')).trim());
+      expect(Number.isInteger(orphan) && orphan > 1).toBe(true);
+      expect(result).toMatchObject({ verdict: 'error', summary: 'orphan-descendants', exitCode: 0 });
+      expect(() => process.kill(orphan, 0)).toThrow();
+    } finally {
+      if (!orphan) { try { orphan = Number(await readFile(marker, 'utf8')); } catch {} }
+      if (orphan) { try { process.kill(orphan, 'SIGKILL'); } catch {} }
+    }
+  }, 15_000);
 });
 
 it('reports an unavailable executable as a launch error', async () => {
@@ -204,7 +238,7 @@ it('fails closed for an unattributed child executable in the journal window', as
 it('passes log show timestamps with whole seconds and an explicit UTC offset', async () => {
   const f = await fixture();
   expect((await run(f.ctx, f.spec, f.sha, 'at-01')).verdict).toBe('pass');
-  expect(boundary.stamps).toHaveLength(4);
+  expect(boundary.stamps).toHaveLength(6);
   for (const stamp of boundary.stamps) expect(stamp).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\+0000$/);
 });
 
@@ -212,4 +246,72 @@ it.each(['kernel[0:1] (Sandbox) Sandbox:', 'kernel[0:1] (Sandbox) 13 duplicate r
   const f = await fixture(); boundary.kernelOnly = true;
   boundary.logs = `${prefix} node(999999) deny(1) file-write-create ${f.ctx.projectPath}/outside`;
   expect(await run(f.ctx, f.spec, f.sha, 'at-01')).toMatchObject({ verdict: 'error', summary: expect.stringContaining('write-outside-root (sandbox log)') });
+});
+
+it('observes a denial published only on the second post-run journal read', async () => {
+  const f = await fixture(); boundary.delayedLogs = true;
+  boundary.logs = `Sandbox: node(999999) deny(1) file-write-create ${f.ctx.projectPath}/delayed`;
+  const result = await run(f.ctx, f.spec, f.sha, 'at-01');
+  expect(result).toMatchObject({ verdict: 'error', summary: expect.stringContaining('write-outside-root (sandbox log)') });
+});
+it('fails closed when the second post-run journal read fails', async () => {
+  const f = await fixture(); boundary.logFailureAt = 3;
+  expect(await run(f.ctx, f.spec, f.sha, 'at-01')).toMatchObject({ verdict: 'error', summary: 'confinement-unavailable (sandbox log)' });
+});
+it('preserves independent output tails for two result IDs', async () => {
+  const f = await fixture(); f.spec.argv = [process.execPath, '-e', 'console.log("run-1")'];
+  const first = await run(f.ctx, f.spec, f.sha, 'at-01');
+  f.spec.argv = [process.execPath, '-e', 'console.log("run-2")'];
+  const second = await run({ ...f.ctx, resultId: 'cr-02' }, f.spec, f.sha, 'at-01');
+  expect(first.verdict).toBe('pass'); expect(second.verdict).toBe('pass');
+  expect(first.outputTail).not.toBe(second.outputTail);
+  expect(await readFile(first.outputTail!, 'utf8')).toBe('run-1\n');
+  expect(await readFile(second.outputTail!, 'utf8')).toBe('run-2\n');
+});
+it.each(['unit:core', '.', 'x'.repeat(128)])('runs an accepted logical spec ID safely: %s', async id => {
+  const f = await fixture(); f.spec.id = id;
+  const result = await run(f.ctx, f.spec, f.sha, 'at-01');
+  expect(result).toMatchObject({ specId: id, verdict: 'pass' });
+  const components = path.relative(f.ctx.projectPath, result.outputTail!).split(path.sep);
+  expect(components.at(-3)!.length).toBeLessThanOrEqual(64);
+  expect(components.at(-2)).toBe('cr-01');
+});
+it.each(['unit/core', 'unit\0core'])('rejects an unsafe logical spec ID: %s', async id => {
+  const f = await fixture(); f.spec.id = id;
+  expect(await run(f.ctx, f.spec, f.sha, 'at-01')).toMatchObject({ verdict: 'error', summary: 'invalid-check', outputTail: null });
+});
+
+it.each([0, 1])('kills detached descendants holding pipes when lsof exits %i', async orphanExitCode => {
+  const f = await fixture();
+  const marker = path.join(f.checkDir, 'tmp/orphan.pid'); boundary.orphanMarker = marker; boundary.orphanExitCode = orphanExitCode;
+  f.spec.argv = [process.execPath, '-e', detachedCandidate(marker)];
+  let orphan = 0;
+  try {
+    const result = await Promise.race([
+      run(f.ctx, f.spec, f.sha, 'at-01'),
+      new Promise<never>((_, reject) => { const timer = setTimeout(() => reject(new Error('runner did not return within bound')), 3000); timer.unref(); }),
+    ]);
+    // Marker lives in tmp and is cleaned by run; the PID is also emitted into retained output.
+    orphan = Number((await readFile(result.outputTail!, 'utf8')).trim());
+      expect(Number.isInteger(orphan) && orphan > 1).toBe(true);
+    expect(result).toMatchObject({ verdict: 'error', summary: 'orphan-descendants', exitCode: 0 });
+    let alive = true;
+    for (let i = 0; i < 20 && alive; i++) {
+      try { process.kill(orphan, 0); await new Promise(resolve => setTimeout(resolve, 10)); } catch { alive = false; }
+    }
+    expect(alive).toBe(false);
+  } finally {
+    if (!orphan) { try { orphan = Number(await readFile(marker, 'utf8')); } catch {} }
+    if (orphan) { try { process.kill(orphan, 'SIGKILL'); } catch {} }
+  }
+});
+it('fails closed when orphan discovery is unavailable', async () => {
+  const f = await fixture(); boundary.orphanScanUnavailable = true;
+  expect(await run(f.ctx, f.spec, f.sha, 'at-01')).toMatchObject({ verdict: 'error', summary: 'orphan-scan-unavailable' });
+});
+it('rejects a colliding result ID without truncating its existing evidence', async () => {
+  const f = await fixture(); const first = await run(f.ctx, f.spec, f.sha, 'at-01');
+  const retry = await run(f.ctx, f.spec, f.sha, 'at-01');
+  expect(retry).toMatchObject({ verdict: 'error', summary: 'result-already-exists', outputTail: null });
+  expect(await readFile(first.outputTail!, 'utf8')).toBe('ok\n');
 });

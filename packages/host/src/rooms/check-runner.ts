@@ -4,6 +4,7 @@ import { constants } from 'node:fs';
 import { access, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { ENGINE, workPaths, type CheckResult, type CheckSpec } from '@parley/core';
 import { attemptsEngineGitPath } from '../agent/attempts-endpoint.js';
 
@@ -24,6 +25,11 @@ const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.m
 const hash = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
 const inside = (root: string, file: string) => file === root || file.startsWith(`${root}${path.sep}`);
 const identifier = (value: string) => /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(value);
+function specDirectory(id: string): string {
+  let encoded: string;
+  try { encoded = encodeURIComponent(id).replace(/\./g, '%2E'); } catch { return hash(id); }
+  return encoded.length <= 64 ? encoded : `${encoded.slice(0, 31)}-${hash(id).slice(0, 32)}`;
+}
 const stamp = (date: Date) => date.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '+0000');
 
 async function sandboxLog(start: Date, end: Date): Promise<string> {
@@ -72,7 +78,8 @@ export async function run(ctx: CheckRunnerContext, spec: CheckSpec, sha: string,
     if (Object.keys(spec.env).some(key => /^(ANTHROPIC_|CLAUDE_CODE_|OPENAI_)|_(TOKEN|KEY|SECRET)$/i.test(key))) {
       result.summary = 'env-not-allowed'; return result;
     }
-    if (![ctx.workId, ctx.planId, attemptId, spec.id].every(identifier)
+    if (![ctx.workId, ctx.planId, attemptId, ctx.resultId].every(identifier)
+      || !spec.id || spec.id.length > 128 || /[/\0]/.test(spec.id)
       || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(sha)
       || !spec.argv.length || !spec.argv[0] || !(spec.timeoutMs > 0 && spec.timeoutMs <= 2_147_483_647)) {
       result.summary = 'invalid-check'; return result;
@@ -82,15 +89,16 @@ export async function run(ctx: CheckRunnerContext, spec: CheckSpec, sha: string,
       const root = await realpath(candidate).catch(() => path.resolve(candidate));
       if (inside(root, project)) { result.summary = 'check-directory-in-temporary-root'; return result; }
     }
-    const dir = path.join(workPaths(project, ctx.workId).dir, 'autonomous', ctx.planId, 'attempts', attemptId, 'checks', spec.id);
-    await mkdir(dir, { recursive: true });
-    if (await realpath(dir) !== dir) throw new Error('check-directory-outside-root');
+    const specDir = path.join(workPaths(project, ctx.workId).dir, 'autonomous', ctx.planId, 'attempts', attemptId, 'checks', specDirectory(spec.id));
+    await mkdir(specDir, { recursive: true });
+    if (await realpath(specDir) !== specDir) throw new Error('check-directory-outside-root');
+    const dir = path.join(specDir, ctx.resultId);
+    try { await mkdir(dir); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      result.summary = 'result-already-exists'; return result;
+    }
     checkout = path.join(dir, 'checkout');
     tmp = path.join(dir, 'tmp');
-    try { await access(checkout); result.summary = 'checkout-already-exists'; return result; } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-    await rm(tmp, { recursive: true, force: true });
     await mkdir(path.join(tmp, 'home'), { recursive: true });
     result.outputTail = path.join(dir, 'output.tail');
     // Host git must not inherit a caller's GIT_DIR, filters, hooks or alternate object store.
@@ -130,26 +138,77 @@ export async function run(ctx: CheckRunnerContext, spec: CheckSpec, sha: string,
     let timedOut = false;
     let launchError: Error | undefined;
     let signal: NodeJS.Signals | null = null;
-    await new Promise<void>(resolve => {
-      const child = spawn('/usr/bin/sandbox-exec', ['-f', profile, ...spec.argv], {
-        cwd, env: { ...spec.env, HOME: path.join(tmp!, 'home'), TMPDIR: tmp! },
-        detached: true, stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      pid = child.pid;
-      const kill = () => { if (pid) { try { process.kill(-pid, 'SIGKILL'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') launchError = error as Error; } } };
-      const timer = setTimeout(() => { timedOut = true; kill(); }, spec.timeoutMs);
-      child.stdout.on('data', append); child.stderr.on('data', append);
-      child.on('error', error => { launchError = error; });
-      child.on('exit', kill); // Reap descendants even when a parent masks a child's failure.
-      child.on('close', (code, value) => { clearTimeout(timer); result.exitCode = code; signal = value; resolve(); });
+    const child = spawn('/usr/bin/sandbox-exec', ['-f', profile, ...spec.argv], {
+      cwd, env: { ...spec.env, HOME: path.join(tmp, 'home'), TMPDIR: tmp },
+      detached: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const windowEnd = new Date();
-    let logs: string;
-    try { logs = await sandboxLog(new Date(windowStart.getTime() - 1000), new Date(windowEnd.getTime() + 1000)); } catch {
+    pid = child.pid;
+    let closed = false;
+    child.once('close', () => { closed = true; });
+    const killGroup = () => {
+      if (pid) {
+        try { process.kill(-pid, 'SIGKILL'); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') launchError = error as Error;
+        }
+      }
+    };
+    await new Promise<void>(resolve => {
+      const timer = setTimeout(() => { timedOut = true; killGroup(); resolve(); }, spec.timeoutMs);
+      child.stdout.on('data', append); child.stderr.on('data', append);
+      child.once('error', error => { clearTimeout(timer); launchError = error; resolve(); });
+      child.once('exit', (code, value) => {
+        clearTimeout(timer); result.exitCode = code; signal = value;
+        killGroup(); resolve();
+      });
+    });
+    // A detached descendant can retain pipes after its parent exits. Never await close unboundedly.
+    if (!closed) await new Promise<void>(resolve => {
+      const finish = () => { clearTimeout(timer); child.off('close', finish); resolve(); };
+      const timer = setTimeout(finish, 500);
+      child.once('close', finish);
+    });
+    child.stdout.destroy(); child.stderr.destroy();
+    let orphaned = false;
+    let orphanScanUnavailable = false;
+    try {
+      let output = '';
+      let warnings = '';
+      try {
+        const listing = await exec('/usr/sbin/lsof', ['-t', '+D', dir], { encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 });
+        output = listing.stdout;
+        warnings = listing.stderr;
+      } catch (error) {
+        const failure = error as { code?: number; stdout?: string; stderr?: string; signal?: string; killed?: boolean };
+        // +D can return 1 for unmatched entries even when stdout lists live processes.
+        if (failure.code !== 1 || failure.signal || failure.killed) throw error;
+        output = failure.stdout ?? ''; warnings = failure.stderr ?? '';
+      }
+      if (!output.trim() && warnings.trim()) throw new Error('orphan-scan-warning');
+      const pids = output.trim() ? output.trim().split(/\s+/) : [];
+      if (pids.some(value => !/^[1-9]\d*$/.test(value) || Number(value) === process.pid)) throw new Error('invalid-orphan-scan');
+      // This is bounded discovery, not full lifetime containment: a setsid descendant that
+      // changes cwd and closes all run-directory descriptors evades lsof but retains seatbelt.
+      for (const value of new Set(pids)) {
+        try { process.kill(Number(value), 'SIGKILL'); orphaned = true; } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+        }
+      }
+    } catch { orphanScanUnavailable = true; }
+    const records: string[] = [];
+    try {
+      // sandboxd/kernel publication is asynchronous; an immediate empty read is not evidence.
+      for (const delay of [1500, 1000]) {
+        await sleep(delay);
+        records.push(await sandboxLog(new Date(windowStart.getTime() - 1000), new Date(Date.now() + 1000)));
+      }
+    } catch {
       result.summary = 'confinement-unavailable (sandbox log)'; return result;
     }
+    const logs = records.join('\n');
     const violations = outsideWrites(logs, pid, spec.argv[0]!, [checkout, tmp, '/dev']);
     if (violations.lines.length) result.summary = `write-outside-root (sandbox log${violations.attributed ? '' : ', unattributed'}): ${violations.lines.slice(0, 3).join('\n')}`;
+    else if (orphanScanUnavailable) result.summary = 'orphan-scan-unavailable';
+    else if (orphaned) result.summary = 'orphan-descendants';
     else if (timedOut) result.summary = 'timeout';
     else if (launchError) result.summary = `launch-failed: ${launchError.message}`;
     else if (signal) result.summary = `killed-by-signal: ${signal}`;
