@@ -73,7 +73,7 @@ import { fetchProviderRows } from './provider-rows.js';
 import { addMemberByLead, addRoom, canReadRoom, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
 import { reportedStatus } from '../work/session-state.js';
 import { stuckHint, stuckWarning } from '../work/stuck.js';
-import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workPaths } from '../work/store.js';
+import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workVersionKey } from '../work/store.js';
 import { participantLabel, sessionMention, agentThreadOf } from '../work/thread.js';
 import {
   HUMAN,
@@ -96,7 +96,7 @@ export const DEFAULT_TIMEOUT_SEC = 600;
 /** Верхний предел: у MCP-клиентов есть свой лимит на длительность вызова. */
 export const MAX_TIMEOUT_SEC = 30 * 60;
 
-/** Как часто сверять `stat` карты, когда `fs.watch` промолчал: перечитывается она, только когда файл изменился (спека хранилища 6.9). */
+/** Как часто сверять версию работы в базе: карта перечитывается, только когда версия сменилась (спека хранилища 6.9). */
 const POLL_MS = 2000;
 
 /**
@@ -882,9 +882,10 @@ async function waitFor(
   };
 
   try {
-    // `mapChanges` — сигнал об изменении карты снаружи (хост, спека хранилища 6.9): он заменяет `fs.watch`, а опрос остаётся запасным.
+    // `mapChanges` — сигнал об изменении карты снаружи (хост, спека хранилища 6.9): он будит ожидание сразу, а опрос по версии
+    // работы остаётся запасным и единственным поводом там, где сигнала нет (сессия без канала, запасной путь при 404).
     const found = await waitForMap(
-      workPaths(context.projectPath, context.workId).map,
+      () => workVersionKey(context.projectPath, context.workId),
       probeAndNote,
       timeoutMs,
       context.pollMs ?? POLL_MS,

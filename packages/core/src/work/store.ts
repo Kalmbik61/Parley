@@ -396,6 +396,16 @@ export function workVersion(projectPath: string, workId: string): number | undef
   return versionOf(storeDb(), projectPath, workId);
 }
 
+/**
+ * Личность работы для ожидания (спека хранилища 6.9): версия строки текстом, `null` — работы в базе нет. Файла карты,
+ * по `stat` которого ожидание узнавало запись, больше нет; версию растит каждая запись любого процесса, и один запрос по
+ * ключу строки дешевле разбора карты, так что ею можно сверяться на каждом тике опроса.
+ */
+export function workVersionKey(projectPath: string, workId: string): string | null {
+  const version = workVersion(projectPath, workId);
+  return version === undefined ? null : `${version}`;
+}
+
 /** То, что лежит в базе про одну работу: версия, запись работы, `extra` и строки списков. */
 interface Stored {
   version: number;

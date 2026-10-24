@@ -34,6 +34,7 @@ import {
   workDataVersion,
   workExists,
   workPaths,
+  workVersionKey,
   worksIndexPath,
   inspectSharedIgnore,
   listWorkVersions,
@@ -946,6 +947,22 @@ describe('onMapWritten, workExists и replaceStoredMap', () => {
     expect(workExists(project, 'w-0001')).toBe(true);
     expect(workExists(other, 'w-0001')).toBe(false);
     expect(workExists(project, 'w-0002')).toBe(false);
+  });
+
+  it('workVersionKey: версия строки работы текстом растёт с каждой записью; работы нет — null', async () => {
+    expect(workVersionKey(project, 'w-0001')).toBeNull();
+    await createWork(project, { title: 'Авторизация' });
+    const created = workVersionKey(project, 'w-0001');
+
+    expect(created).toBe(String(versionOf('w-0001')));
+    await updateMap(project, 'w-0001', addPlanSession);
+    const written = workVersionKey(project, 'w-0001');
+    expect(written).toBe(String(versionOf('w-0001')));
+    expect(written).not.toBe(created);
+    // Чтение ключ не двигает: по нему ожидание узнаёт запись, а не обращение.
+    await readMap(project, 'w-0001');
+    expect(workVersionKey(project, 'w-0001')).toBe(written);
+    expect(workVersionKey(other, 'w-0001')).toBeNull();
   });
 
   it('replaceStoredMap заменяет карту целиком без проверки формы и поднимает версию', async () => {

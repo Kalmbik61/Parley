@@ -1,5 +1,5 @@
 import { unreadFor } from '../work/letters.js';
-import { readMap, workPaths } from '../work/store.js';
+import { readMap, workVersionKey } from '../work/store.js';
 import { participantLabel } from '../work/thread.js';
 import type { Message } from '../work/types.js';
 import type { McpContext } from './context.js';
@@ -11,7 +11,7 @@ import { waitForMap } from './watch-map.js';
  * поэтому `readBy` остаётся честным, а гонок с `check_inbox` и `wait_for` нет:
  *
  *   while (!stopped)
- *     found = await waitForMap(map, probe, waitMs, pollMs)
+ *     found = await waitForMap(версия работы, probe, waitMs, pollMs)
  *             probe: unreadFor(me) && id ∉ rung
  *                    (пусто → null: ждём дальше), звонок собирается тут же —
  *                    по тому же снимку карты
@@ -41,7 +41,7 @@ export type Ring = {
 
 export interface InboxWatchOptions {
   notify: (ring: Ring) => Promise<void>;
-  /** Как часто сверять `stat` карты, если `fs.watch` промолчал: перечитывается она, только когда файл изменился (спека хранилища 6.9). */
+  /** Как часто сверять версию работы в базе: карта перечитывается, только когда версия сменилась (спека хранилища 6.9). */
   pollMs: number;
   /** Ожидание в `waitForMap` за один оборот; тесты укорачивают. */
   waitMs?: number;
@@ -78,10 +78,12 @@ export function watchInbox(
   const rung = new Set<string>();
   let stopped = false;
   // Остановка прерывает ожидание сама: `waitForMap` зовёт пробу только после
-  // изменения файла карты (спека хранилища 6.9), и на неподвижной карте флаг
+  // смены версии работы (спека хранилища 6.9), и на неподвижной карте флаг
   // `stopped` до конца оборота никто бы не увидел.
   const stopping = new AbortController();
-  const mapFile = workPaths(context.projectPath, context.workId).map;
+  // Сессия без канала живёт в своём процессе MCP и читает базу напрямую; письмо, записанное любым процессом, поднимает
+  // версию строки работы, и сторож узнаёт о нём на ближайшем тике опроса — файла карты и `fs.watch` больше нет.
+  const identity = (): string | null => workVersionKey(context.projectPath, context.workId);
 
   /**
    * Заход по карте: и письма, и звонки про них считаются по одному снимку.
@@ -111,9 +113,9 @@ export function watchInbox(
     while (!stopped) {
       let found: Call[] | null = null;
       try {
-        found = await waitForMap(mapFile, probe, waitMs, pollMs, stopping.signal);
+        found = await waitForMap(identity, probe, waitMs, pollMs, stopping.signal);
       } catch {
-        // Карта не парсится или исчезла (работу снесли живьём): подождём
+        // Карта не собирается из базы или исчезла (работу снесли живьём): подождём
         // следующего изменения.
         await new Promise((resolve) => setTimeout(resolve, pollMs));
         continue;
