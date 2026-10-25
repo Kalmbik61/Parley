@@ -456,7 +456,8 @@ describe('autonomous room cycle with stub agents and real Git', () => {
 
   it('serializes independent merges and publishes only fully checked heads', async () => {
     const f = await fixture({ independent: true }); await f.go(); await f.write(); await f.write(1);
-    expect((await Promise.all([f.submit(), f.submit(1)])).every(row => row.ok)).toBe(true);
+    expect(await f.submit()).toMatchObject({ ok: true });
+    expect(await f.submit(1)).toMatchObject({ ok: true });
     expect((await f.state()).integration.queue).toEqual([(await f.attempt()).id, (await f.attempt(1)).id]);
     expect((await f.plan()).items.map(row => row.status)).toEqual(['in_progress', 'in_progress']);
     await Promise.all([f.flush(), f.flush(), f.flush()]);
