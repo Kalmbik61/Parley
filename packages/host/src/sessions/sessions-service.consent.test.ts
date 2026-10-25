@@ -15,9 +15,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createPendingSession,
   createWork,
+  createWorktree,
   grantTrust,
   planLaunch,
   planResume,
+  plannedWorktree,
   readMap,
   updateMap,
 } from '@parley/core';
@@ -247,9 +249,14 @@ describe('launch(): согласие на папку у Codex', () => {
     const { workId, ref } = await pendingPeer();
     const worktreePath = await mkdtemp(path.join(tmpdir(), 'parley-sessions-consent-tree-'));
     cleanup.push(() => rm(worktreePath, { recursive: true, force: true }));
+    await runGit('git', ['init', '-b', 'main', project]);
+    await runGit('git', ['-C', project, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'Initialize consent fixture']);
+    const info = { ...plannedWorktree(project, workId, ref.sessionId, 'main', path.dirname(worktreePath)), path: worktreePath };
+    await createWorktree(project, info);
+    info.createdAt = '2026-10-21T10:00:00.000Z';
     await updateMap(project, workId, (map) => {
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId)!;
-      session.worktree = { path: worktreePath, branch: 'b', base: 'main', createdAt: '2026-10-21T10:00:00.000Z' };
+      session.worktree = info;
     });
     setEnv('STUB_ARGS_FILE', path.join(await mkdtemp(path.join(tmpdir(), 'parley-sessions-consent-args-')), 'args.json'));
     const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { consents: fakeConsents() });

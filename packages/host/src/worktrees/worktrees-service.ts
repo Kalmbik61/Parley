@@ -140,7 +140,7 @@ async function requireNoWorktree(ref: SessionRef): Promise<void> {
 }
 
 export function createWorktreesService(
-  sessions: Pick<SessionsService, 'stop'>,
+  sessions: Pick<SessionsService, 'stop' | 'checkWorktreeGit'>,
 ): WorktreesService {
   return {
     available: (projectPath) => isGitRepo(projectPath),
@@ -194,6 +194,7 @@ export function createWorktreesService(
           transitionSession(map, ref.sessionId, 'closed');
         }
       });
+      if (worktree.createdAt !== null) await sessions.checkWorktreeGit(ref);
     },
 
     async mergeCheck(ref) {

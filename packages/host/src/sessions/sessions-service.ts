@@ -169,6 +169,8 @@ export interface LaunchChoice {
 }
 
 export interface SessionsService {
+  /** Проверка после удаления worktree, включая сессии без живого процесса. */
+  checkWorktreeGit(ref: SessionRef): Promise<void>;
   create(input: CreateSessionInput): Promise<CreatedSession>;
   /**
    * `prompt` — указатель первым ходом `resume`; `model` и `effort` перекрывают выбор из карты. `held` — запуск Codex
@@ -306,19 +308,11 @@ export function createSessionsService(
   const spawnLimits = feed.spawnLimits ?? querySpawnLimits;
   const warned = new Set<string>();
   const creationWarnings = new Set<string>();
+  const gitWriteGrants = new Map<string, boolean>();
 
-  async function needsGitCheck(ref: SessionRef, session: WorkSession | undefined): Promise<boolean> {
-    if (!session || session.provider !== 'codex' || session.workspace || !session.worktree || session.worktree.createdAt === null) return false;
-    try {
-      const entry = (await loadProviders()).codex!;
-      const catalog = await feed.roleCatalog?.(session.worktree.path);
-      const role = await prepareSessionRole(session.worktree.path, entry, { provider: 'codex', roleId: roleId(session.role) }, catalog);
-      return !role.readOnly && role.sandboxMode === 'workspace-write';
-    } catch (error) {
-      // Неизвестная теперь роль не должна отменять проверку ранее выданной записи.
-      host.log.warn('could not resolve session role for Git check', { ref, error: String(error) });
-      return true;
-    }
+  function needsGitCheck(session: WorkSession | undefined, issuedGrant: boolean | undefined): boolean {
+    // После перезапуска хоста прежний grant неизвестен: текущая роль его не отменяет.
+    return issuedGrant ?? Boolean(session?.provider === 'codex' && !session.workspace && session.worktree?.createdAt);
   }
 
   async function checkGit(ref: SessionRef): Promise<void> {
@@ -332,6 +326,11 @@ export function createSessionsService(
         at: new Date().toISOString(),
       });
     }
+  }
+
+  async function checkWorktreeGit(ref: SessionRef): Promise<void> {
+    const map = await readMap(ref.projectPath, ref.workId);
+    if (needsGitCheck(map.sessions.find(session => session.id === ref.sessionId), gitWriteGrants.get(refKey(ref)))) await checkGit(ref);
   }
 
   function deliverWarnings(ref: SessionRef, plan: LaunchPlan): void {
@@ -472,17 +471,24 @@ export function createSessionsService(
   // Итог `done`/`failed` — другая ось, выход процесса его не трогает.
   pty.on('exit', (ref, exit) => {
     const key = refKey(ref);
+    const issuedGitGrant = gitWriteGrants.get(key);
     // Токен приёмника живёт, пока жив процесс: `SessionEnd` приходит до выхода, позже хуков нет.
     hooks?.unregister(ref);
     feed.agent?.unregister(ref);
     const done = (starting.get(key) ?? Promise.resolve())
       .then(async () => {
-        await finishExited(ref.projectPath, ref.workId, ref.sessionId, {
-          exitCode: exit.exitCode,
-          signal: exit.signal ?? undefined,
-        });
-        const map = await readMap(ref.projectPath, ref.workId);
-        if (await needsGitCheck(ref, map.sessions.find(session => session.id === ref.sessionId))) await checkGit(ref);
+        try {
+          await finishExited(ref.projectPath, ref.workId, ref.sessionId, {
+            exitCode: exit.exitCode,
+            signal: exit.signal ?? undefined,
+          });
+        } finally {
+          if (issuedGitGrant === true) await checkGit(ref);
+          else if (issuedGitGrant === undefined) {
+            const map = await readMap(ref.projectPath, ref.workId);
+            if (needsGitCheck(map.sessions.find(session => session.id === ref.sessionId), undefined)) await checkGit(ref);
+          }
+        }
       })
       .catch((error: unknown) => {
         host.log.error('переход сессии в sleeping не записался', { ref, error: String(error) });
@@ -849,10 +855,13 @@ export function createSessionsService(
       // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
       // и ввод идёт своим порядком (спека комнат, 3.6).
       let handle: PtyHandle;
+      const previousGitGrant = gitWriteGrants.get(key);
       try {
         // The hook token and inherited host environment are now final. No PTY starts on guard failure.
         handle = await timer.step('spawn', async () => {
           validateSpawnBudget(command, plan.args, env, await spawnLimits());
+          gitWriteGrants.set(key, Boolean(session.provider === 'codex' && !session.workspace && session.worktree &&
+            plan.args.some(arg => arg.startsWith('sandbox_workspace_write.writable_roots='))));
           const spawned = pty.start(ref, {
             command,
             args: plan.args,
@@ -864,6 +873,8 @@ export function createSessionsService(
           return spawned;
         });
       } catch (error) {
+        if (previousGitGrant === undefined) gitWriteGrants.delete(key);
+        else gitWriteGrants.set(key, previousGitGrant);
         if (hookUrl !== undefined) hooks?.unregister(ref);
         const safe = (error as NodeJS.ErrnoException).code === 'E2BIG'
           ? new SpawnBudgetError('spawn-budget-too-large') : error;
@@ -1260,7 +1271,7 @@ export function createSessionsService(
     const map = await readMap(ref.projectPath, ref.workId).catch(() => null);
     const session = map?.sessions.find((candidate) => candidate.id === ref.sessionId);
     const worktree = session?.worktree;
-    const check = await needsGitCheck(ref, session);
+    const check = needsGitCheck(session, gitWriteGrants.get(refKey(ref)));
     if (worktree !== null && worktree !== undefined && worktree.createdAt !== null) {
       try {
         await discardWorktree(ref.projectPath, worktree, { force });
@@ -1274,6 +1285,7 @@ export function createSessionsService(
     }
     await deleteSession(ref.projectPath, ref.workId, ref.sessionId);
     if (check) await checkGit(ref);
+    gitWriteGrants.delete(refKey(ref));
   }
 
   /**
@@ -1316,6 +1328,7 @@ export function createSessionsService(
   }
 
   return {
+    checkWorktreeGit,
     create,
     launch,
     stop,

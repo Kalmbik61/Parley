@@ -30,7 +30,7 @@ import {
   updateMap,
   workPaths,
 } from '@parley/core';
-import type { RoomPlan, WorktreeInfo } from '@parley/core';
+import type { RoleCatalog, RoomPlan, WorktreeInfo } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
@@ -40,6 +40,7 @@ import type { PtyManager } from '../pty/pty-manager.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { atPrompt, busyError, createSessionsService, createSwitchLock } from './sessions-service.js';
+import { createWorktreesService } from '../worktrees/worktrees-service.js';
 import type { SessionsFeedOptions, SessionsService } from './sessions-service.js';
 
 const STUB = fileURLToPath(new URL('../../test/stub-agent.mjs', import.meta.url));
@@ -220,37 +221,76 @@ describe('Git connectivity after worktree sessions', () => {
     let exit: (ref: SessionRef, result: { exitCode: number }) => void;
     return {
       on(event: string, listener: typeof exit) { if (event === 'exit') exit = listener; return () => {}; },
+      start(ref: SessionRef, launch: { provider: string }) {
+        active = true;
+        return { ref, pid: process.pid, startedAt: Date.now(), cols: 120, rows: 40, provider: launch.provider,
+          hasDraft: () => false, bracketedPaste: () => false };
+      },
       get: () => active ? {} : undefined,
       stop: async (ref: SessionRef) => { active = false; const result = { exitCode: 0 }; exit(ref, result); return result; },
     } as unknown as PtyManager;
   }
 
-  it.each([['exit', 0], ['exit', 1], ['natural-exit', 0], ['natural-exit', 1], ['delete', 0], ['delete', 1]] as const)('%s waits for Git fsck and warns only on failure (%s)', async (action, code) => {
+  it.each([['exit', 0], ['exit', 1], ['natural-exit', 0], ['natural-exit', 1], ['delete', 0], ['delete', 1], ['discard', 0], ['discard', 1]] as const)('%s waits for Git fsck and warns only on failure (%s)', async (action, code) => {
     const { ref, info } = await fixture();
     await withGitStub(info, code, async marker => {
       const host = fakeHost(); const warning = vi.spyOn(host.log, 'warn');
-      const pty = lifecyclePty(action !== 'delete');
+      const pty = lifecyclePty(action !== 'delete' && action !== 'discard');
       const sessions = createSessionsService(host, fakeWorks(), pty, fakeActivity());
       if (action === 'natural-exit') { await pty.stop(ref); await sessions.stop(ref); }
       else if (action === 'exit') await sessions.stop(ref);
+      else if (action === 'discard') await createWorktreesService(sessions).discard(ref, true);
       else await sessions.delete(ref, true);
       const calls = (await readFile(marker, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
       expect(calls).toHaveLength(1);
       expect(calls[0].args).toEqual(expect.arrayContaining(['fsck', '--connectivity-only']));
-      expect(calls[0].worktreeExists).toBe(action !== 'delete');
+      expect(calls[0].worktreeExists).toBe(action !== 'delete' && action !== 'discard');
       const notices = broadcasts.filter(item => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'git-connectivity-failed');
       expect(notices).toHaveLength(code === 0 ? 0 : 1);
       expect(warning.mock.calls.some(([message]) => message === 'Git connectivity check failed')).toBe(code !== 0);
     });
   });
 
-  it.each([['claude', 'executor', true], ['codex', 'critic', true], ['codex', 'executor', false]] as const)('leaves %s/%s worktree=%s unchanged', async (provider, role, withWorktree) => {
+  it.each([['claude', 'executor', true], ['codex', 'executor', false]] as const)('leaves %s/%s worktree=%s unchanged', async (provider, role, withWorktree) => {
     const { ref, info } = await fixture(provider, role, withWorktree);
     await withGitStub(info, 1, async marker => {
       const sessions = createSessionsService(fakeHost(), fakeWorks(), lifecyclePty(true), fakeActivity());
       await sessions.stop(ref);
       expect(existsSync(marker)).toBe(false);
       expect(broadcasts.some(item => item.event === 'host.notice')).toBe(false);
+    });
+  });
+
+  it.each([['exit', false], ['delete', false], ['exit', true]] as const)('uses the issued native-role grant after %s (initial readOnly=%s)', async (action, initiallyReadOnly) => {
+    const { ref, info } = await fixture();
+    setEnv('PARLEY_CODEX_BIN', STUB);
+    await saveConfig({ codexWriteApprovals: 'terminal' });
+    await updateMap(project, ref.workId, map => { map.sessions[0]!.role = { source: 'codex', name: 'changing' }; });
+    let readOnly = initiallyReadOnly;
+    const roleCatalog = async (): Promise<RoleCatalog> => ({ roles: [{ id: 'codex:changing', source: 'codex', provider: 'codex', name: 'Changing', description: '', path: '/fixture.toml', prompt: 'Role', readOnly, sandboxMode: readOnly ? 'read-only' : 'workspace-write' }], diagnostics: [], partial: false });
+    await withGitStub(info, 1, async marker => {
+      const sessions = createSessionsService(fakeHost(), fakeWorks(), lifecyclePty(false), fakeActivity(), { roleCatalog });
+      expect(await sessions.launch(ref, 'launch')).toBe('started');
+      readOnly = true;
+      if (action === 'exit') await sessions.stop(ref);
+      else await sessions.delete(ref, true);
+      expect(existsSync(marker)).toBe(!initiallyReadOnly);
+      if (!initiallyReadOnly) {
+        const calls = (await readFile(marker, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+        expect(calls.at(-1).worktreeExists).toBe(action === 'exit');
+        expect(broadcasts.some(item => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'git-connectivity-failed')).toBe(true);
+      }
+    });
+  });
+
+  it('checks historical worktree grants conservatively after host restart, including current read-only roles', async () => {
+    const { ref, info } = await fixture('codex', 'critic');
+    await withGitStub(info, 1, async marker => {
+      const sessions = createSessionsService(fakeHost(), fakeWorks(), lifecyclePty(false), fakeActivity());
+      await createWorktreesService(sessions).discard(ref, true);
+      const calls = (await readFile(marker, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+      expect(calls).toHaveLength(1);
+      expect(calls[0].worktreeExists).toBe(false);
     });
   });
 });
@@ -685,6 +725,18 @@ describe('время шагов в логе хоста', () => {
 });
 
 describe('launch(): лента вида «Chat» — адрес приёмника и токен по версии claude (Task 2c)', () => {
+  const hookEnv = ['PARLEY_HOOK_TOKEN', 'PARLEY_HOOK_URL', 'PARLEY_HOOK_CAPABILITY'];
+  let inheritedHooks: Array<string | undefined>;
+  beforeEach(() => {
+    inheritedHooks = hookEnv.map(name => process.env[name]);
+    for (const name of hookEnv) delete process.env[name];
+  });
+  afterEach(() => {
+    hookEnv.forEach((name, index) => {
+      if (inheritedHooks[index] === undefined) delete process.env[name];
+      else process.env[name] = inheritedHooks[index];
+    });
+  });
   const HOOK_URL = 'http://127.0.0.1:4321/hooks';
 
   /** Заглушка приёмника: выдаёт токены по порядку и пишет, кого зарегистрировали и сняли. */
@@ -2478,7 +2530,8 @@ describe('agent-created workspace peers', () => {
       expect(options.env?.TMPDIR).toBe(path.join(clone, '.parley-tmp'));
       expect(options.env?.HOME).toBe(process.env.HOME);
       if (provider === 'claude') {
-        expect(options.args).toEqual(expect.arrayContaining(['--permission-mode', 'acceptEdits']));
+        expect(options.args).toEqual(expect.arrayContaining(['--permission-mode', 'auto']));
+        expect(options.args).not.toContain('acceptEdits');
         const file = options.args[options.args.indexOf('--settings') + 1]!;
         expect(JSON.parse(await readFile(file, 'utf8')).sandbox).toEqual({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true });
         expect(file).toContain(`/settings/${worker.sessionId}.json`);
