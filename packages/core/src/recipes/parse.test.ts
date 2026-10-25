@@ -33,3 +33,9 @@ it('rejects path traversal IDs while keeping native names as exact data',()=>{
  expect(parseProjectRecipe('../sample.md',document())).toMatchObject({status:'invalid',diagnostic:{code:'invalid-id'}});
  expect(parseProjectRecipe('native.md',document().replace('builtin:executor','"codex:\uFEFF security:审计"'))).toMatchObject({status:'valid',recipe:{agents:[{role:'builtin:planner'},{role:'codex:\uFEFF security:审计'}]}});
 });
+
+it('accepts autonomous project recipes while keeping unknown modes invalid', () => {
+ const result = parseProjectRecipe('autonomous.md', document(undefined, 'autonomous'));
+ expect(result).toMatchObject({ status: 'valid', recipe: { mode: 'autonomous', playbook: 'Keep the human requirements.\n' } });
+ expect(parseProjectRecipe('unknown.md', document(undefined, 'unknown'))).toMatchObject({ status: 'invalid', diagnostic: { code: 'invalid-schema' } });
+});

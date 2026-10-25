@@ -14,7 +14,7 @@ export interface RecipeDefinition {
   source: 'builtin' | 'project';
   name: string;
   description: string;
-  mode: 'free' | 'checklist' | 'verified';
+  mode: 'free' | 'checklist' | 'verified' | 'autonomous';
   agents: RecipeAgent[];
   /** Full human text; marked delivery preprocessing belongs to the launch layer. */
   playbook: string;

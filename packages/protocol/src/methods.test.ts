@@ -214,7 +214,7 @@ describe('комнаты: ведущий и решение (дизайн ком�
     expectTypeOf<Params<'rooms.create'>['quiet']>().toEqualTypeOf<boolean | undefined>();
   });
 
-  it('rooms.create: mode и снимок рецепта необязательны; снимок строгий, режим из трёх', () => {
+  it('rooms.create: mode и снимок рецепта необязательны; снимок строгий, режим из четырёх', () => {
     const base = { projectPath: '/p', workId: 'w-0001', title: 'Возвраты', members: ['s-02', 's-03'] };
     const parse = (extra: Record<string, unknown>) => METHODS['rooms.create'].safeParse({ ...base, ...extra });
     const recipe = { id: 'project:pay', name: 'Payments', playbook: 'Lead playbook' };
@@ -225,7 +225,7 @@ describe('комнаты: ведущий и решение (дизайн ком�
     for (const mode of ['', 'strict', 1, null]) expect(parse({ mode }).success).toBe(false);
     for (const bad of [{ ...recipe, extra: 1 }, { id: 'a', name: 'b' }, { ...recipe, name: '' }, { ...recipe, playbook: 5 }, { ...recipe, playbook: 'x'.repeat(1024 * 1024 + 1) }, null, 'text'])
       expect(parse({ recipe: bad }).success).toBe(false);
-    expectTypeOf<Params<'rooms.create'>['mode']>().toEqualTypeOf<'free' | 'checklist' | 'verified' | undefined>();
+    expectTypeOf<Params<'rooms.create'>['mode']>().toEqualTypeOf<'free' | 'checklist' | 'verified' | 'autonomous' | undefined>();
     expectTypeOf<Params<'rooms.create'>['recipe']>().toEqualTypeOf<{ id: string; name: string; playbook: string } | undefined>();
   });
 
@@ -813,4 +813,13 @@ describe('explicit autonomous resume', () => {
       expect(METHODS['plans.resumeAutonomous']?.safeParse(invalid).success).toBe(false);
     expectTypeOf<Result<'plans.resumeAutonomous'>>().toEqualTypeOf<{ ok: true }>();
   });
+});
+
+it('accepts autonomous room creation and mode changes while rejecting unknown modes', () => {
+  const create = { projectPath: '/p', workId: 'w-01', title: 'Engine', members: ['s-01', 's-02'] };
+  const change = { projectPath: '/p', workId: 'w-01', roomId: 'r-01', reason: 'Human choice' };
+  expect(METHODS['rooms.create'].safeParse({ ...create, mode: 'autonomous' }).success).toBe(true);
+  expect(METHODS['rooms.setMode'].safeParse({ ...change, mode: 'autonomous' }).success).toBe(true);
+  expect(METHODS['rooms.create'].safeParse({ ...create, mode: 'unknown' }).success).toBe(false);
+  expect(METHODS['rooms.setMode'].safeParse({ ...change, mode: 'unknown' }).success).toBe(false);
 });
