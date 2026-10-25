@@ -718,6 +718,49 @@ describe('автономные правила', () => {
     expect(last(next).log.every((entry) => entry.by === ENGINE)).toBe(true);
   });
 
+  it('сдача без хэшей заполняет прежние формулы и повторяется до квитанции без эффектов', () => {
+    const plan = running(), explicit = handoff(plan);
+    const { hash: _hash, ...manifest } = explicit.manifest;
+    const input = { ...context(plan), attemptId: last(plan).id, manifest };
+    const first = submitAttempt(plan, input);
+    expect(last(first).manifest).toEqual(explicit.manifest);
+    expect(last(first).submissionKey).toBe(explicit.key);
+    expect(input.manifest).not.toHaveProperty('hash');
+    expect(last(plan).manifest).toBeNull();
+    expect(submitAttempt(first, input)).toEqual(first);
+    expect(submitAttempt(first, { ...input, submissionKey: last(first).submissionKey! })).toEqual(first);
+    expect(submitAttempt(first, { ...input, submissionKey: explicit.key, manifest: explicit.manifest })).toEqual(first);
+    expect(auto(first).ops.filter(op => op.kind === 'stop-session')).toHaveLength(1);
+    expect(auto(first).seq.receipt).toBe(0);
+    expect(auto(first).budget).toEqual(auto(plan).budget);
+  });
+
+  it('повтор без хэшей после захвата сохраняет квитанцию, операции и бюджет', () => {
+    const first = submitted(running(), { manifest: { artifacts: [{ path: 'result.txt', sha256: 'a'.repeat(64), storedAs: '' }] } });
+    const { hash: _hash, ...manifest } = first.manifest;
+    for (const submissionKey of [undefined, first.key]) {
+      const repeated = submitAttempt(first.plan, { ...context(first.plan), attemptId: last(first.plan).id, manifest, submissionKey });
+      expect(repeated).toEqual(first.plan);
+      expect(receipt(repeated, first.input).plan).toEqual(first.plan);
+    }
+  });
+
+  it('проверяет каждый явный хэш даже при отсутствии другого', () => {
+    const plan = running(), explicit = handoff(plan);
+    const { hash: _hash, ...manifest } = explicit.manifest;
+    const input = { ...context(plan), attemptId: last(plan).id, manifest };
+    expect(submitAttempt(plan, { ...input, submissionKey: explicit.key })).toEqual(submitAttempt(plan, input));
+    expect(submitAttempt(plan, { ...input, manifest: explicit.manifest })).toEqual(submitAttempt(plan, input));
+    for (const invalid of [
+      { ...input, manifest: { ...manifest, hash: 'f'.repeat(64) } },
+      { ...input, manifest: { ...manifest, sha: 'agent-sha' } },
+    ]) expect(() => submitAttempt(plan, invalid)).toThrow('invalid manifest');
+    expect(() => submitAttempt(plan, { ...input, submissionKey: 'f'.repeat(64) })).toThrow('handoff-conflict');
+    const first = submitAttempt(plan, input);
+    expect(() => submitAttempt(first, { ...input, submissionKey: explicit.key, manifest: { ...manifest, text: 'Изменено' } })).toThrow();
+    expect(last(first).manifest).toEqual(explicit.manifest);
+  });
+
   it('повтор с тем же submissionKey возвращает ту же квитанцию без новых операций', () => {
     const first = submitted();
     const repeated = submitAttempt(first.plan, {

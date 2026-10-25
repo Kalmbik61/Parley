@@ -83,8 +83,7 @@ include the current plan id and rev (or top-level planId/rev); the host preserve
 state until human acceptance. The host pins git facts and frozen inputs in the proposal;
 human acceptance is Go. Do not write code as the autonomous lead. Read manifests and cards,
 not transcripts. Use attempt_status to read cards and paged full manifests.
-Autonomous workers use attempt_submit(attemptId, submissionKey, manifest) without sha;
-only the engine captures the commit. Keep submissionKey unchanged on retries.
+Autonomous workers: Submit a truthful handoff manifest without sha via attempt_submit(attemptId, manifest). The host computes manifest.hash and submissionKey; omit both and retry with the same manifest. The response returns the assigned submissionKey. Explicit hashes are checked. Read attempt_status before retrying a lost response. Only the engine captures the commit.
 Assigned verifiers use attempt_verify(attemptId, sha, criterion, verdict, note) on the exact SHA;
 criterion is zero-based, verdict is pass, fail, error or not_verified. The host rechecks
 assignments, state and revisions. plan_update, plan_submit and plan_verify are refused

@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { createServer, request, type Server } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import { addRoom, addSession, ENGINE, HUMAN, readMap, resolveProposal, workPaths } from '@parley/core';
 import type { AttemptChannelRequest, PlanAttempt, WorkMap } from '@parley/core';
@@ -13,9 +14,7 @@ import { attemptsEngineGitPath, createAttemptsEndpoint, type AttemptsEngine } fr
 
 const run = promisify(execFile);
 const dirs: string[] = [];
-const servers: Server[] = [];
 afterEach(async () => {
-  await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))));
   await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
 });
 const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.map(canonical).join(',')}]`
@@ -60,15 +59,19 @@ async function setup(withEngine = true) {
   };
   const registry = createBrowserEndpoint({ log: { info() {}, warn() {}, error() {} }, clients: () => [], roomsOf: () => [] });
   const endpoint = createAttemptsEndpoint({ authenticate: req => registry.authenticate(req), ...(withEngine ? { engine } : {}) });
-  const server = createServer((req, res) => endpoint.handle(req, res)); servers.push(server);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const tokens = Object.fromEntries(map.sessions.map(session => [session.id, registry.register({ ...ref, sessionId: session.id })]));
+  // Drive the authenticated HTTP handler directly, as in autonomous-cycle, without sockets.
   const post = (body: unknown, session = 's-01') => new Promise<{ status: number; body: any }>((resolve, reject) => {
-    const data = JSON.stringify(body);
-    const req = request({ hostname: '127.0.0.1', port: (server.address() as { port: number }).port, method: 'POST', headers: { Authorization: `Bearer ${tokens[session] ?? session}`, 'Content-Length': Buffer.byteLength(data) } }, res => {
-      let text = ''; res.on('data', chunk => { text += chunk; }); res.on('end', () => resolve({ status: res.statusCode!, body: text ? JSON.parse(text) : null }));
-    });
-    req.on('error', reject); req.end(data);
+    const data = Buffer.from(JSON.stringify(body));
+    const req = Object.assign(Readable.from([data]), { method: 'POST', headers: { authorization: `Bearer ${tokens[session] ?? session}`, 'content-length': String(data.length) } });
+    let status = 200;
+    const res = {
+      writableEnded: false, destroyed: false,
+      writeHead(code: number) { status = code; },
+      end(text?: string) { this.writableEnded = true; resolve({ status, body: text ? JSON.parse(text) : null }); },
+    };
+    req.on('error', reject);
+    endpoint.handle(req as IncomingMessage, res as unknown as ServerResponse);
   });
   const read = () => readMap(projectPath, 'w-01');
   async function active() {
@@ -187,12 +190,37 @@ describe('agent attempts endpoint', () => {
   it('dispatches a valid worker handoff with authenticated scope and accepted revision', async () => {
     const f = await setup(), { value, plan } = await f.active(), body = handoff();
     plan.autonomous!.attempts = [attempt(f.baseSha)]; await f.save(value); const before = await f.raw();
-    expect((await f.post(body, 's-02')).body).toEqual({ ok: true, result: { receipt: 'from-engine' } });
+    expect((await f.post(body, 's-02')).body).toEqual({ ok: true, result: { receipt: 'from-engine', submissionKey: body.submissionKey } });
     expect(f.calls).toEqual([['submit', { ...f.ref, sessionId: 's-02' }, plan.id, 1, body]]); expect(await f.raw()).toBe(before);
   });
+  it('normalizes omitted hashes before engine dispatch without writing the map', async () => {
+    const f = await setup(), { value, plan } = await f.active();
+    plan.autonomous!.attempts = [attempt(f.baseSha)]; await f.save(value);
+    const before = await f.raw(), explicit = handoff();
+    const { hash: _hash, ...manifest } = explicit.manifest;
+    const request = { action: 'submit', attemptId: explicit.attemptId, manifest };
+    for (const body of [request, { ...request, submissionKey: explicit.submissionKey }, explicit]) {
+      expect((await f.post(body, 's-02')).body).toEqual({ ok: true, result: { receipt: 'from-engine', submissionKey: explicit.submissionKey } });
+      expect(f.calls.at(-1)).toEqual(['submit', { ...f.ref, sessionId: 's-02' }, plan.id, plan.rev, explicit]);
+      expect(await f.raw()).toBe(before);
+    }
+    const calls = f.calls.length;
+    for (const body of [
+      { ...request, manifest: { ...manifest, hash: 'f'.repeat(64) } },
+      { ...request, submissionKey: 'f'.repeat(64) },
+      { ...request, submissionKey: explicit.submissionKey, manifest: { ...manifest, text: 'Changed' } },
+    ]) {
+      expect((await f.post(body, 's-02')).body.ok).toBe(false);
+      expect(f.calls).toHaveLength(calls); expect(await f.raw()).toBe(before);
+    }
+  });
+
   it('returns an existing receipt on retry without engine dispatch', async () => {
     const f = await setup(), { entry, submission } = await checking(f), before = await f.raw();
-    expect((await f.post(submission, 's-02')).body).toEqual({ ok: true, result: entry.receipt });
+    const { hash: _hash, ...manifest } = submission.manifest;
+    for (const body of [submission, { action: 'submit', attemptId: entry.id, manifest }, { action: 'submit', attemptId: entry.id, manifest, submissionKey: submission.submissionKey }]) {
+      expect((await f.post(body, 's-02')).body).toEqual({ ok: true, result: { ...entry.receipt, submissionKey: submission.submissionKey } });
+    }
     expect(f.calls).toEqual([]); expect(await f.raw()).toBe(before);
     expect((await f.post(handoff(2), 's-02')).body.error.code).toBe('handoff-conflict');
   });

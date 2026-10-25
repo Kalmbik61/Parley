@@ -7,6 +7,7 @@ import type {
   AutonomousPlan,
   CheckResult,
   HandoffManifest,
+  HandoffManifestInput,
   PlanAttempt,
   PlanItem,
   Room,
@@ -745,23 +746,34 @@ export function startAttempt(
   return next;
 }
 
+/** Normalize untrusted handoffs using the original canonical hash formulas. */
+export function normalizeAttemptSubmission(input: {
+  submissionKey?: string;
+  manifest: HandoffManifestInput;
+}): { submissionKey: string; manifest: HandoffManifest } {
+  const { hash: suppliedHash, ...body } = input.manifest;
+  const manifestHash = hash(body);
+  if (body.sha !== null || (suppliedHash !== undefined && suppliedHash !== manifestHash))
+    throw new RoomRuleError('invalid manifest');
+  const manifest = { ...body, hash: manifestHash };
+  const { sha: _sha, ...submission } = manifest;
+  const submissionKey = hash(submission);
+  if (input.submissionKey !== undefined && input.submissionKey !== submissionKey)
+    throw new RoomRuleError('handoff-conflict');
+  return { submissionKey, manifest };
+}
+
 /** Preflight only: the host must stop, capture and copy before calling receipt. */
 export function submitAttempt(
   plan: RoomPlan,
-  input: Context & { attemptId: string; submissionKey: string; manifest: HandoffManifest },
+  input: Context & { attemptId: string; submissionKey?: string; manifest: HandoffManifestInput },
 ): RoomPlan {
   const next = edit(plan, input),
     attempt = attemptOf(next, input.attemptId);
-  const { hash: manifestHash, sha, ...body } = input.manifest;
   if (['aborted', 'superseded'].includes(attempt.status)) throw new RoomRuleError('attempt-fenced');
-  const { sha: _sha, ...submission } = input.manifest;
+  const { submissionKey, manifest } = normalizeAttemptSubmission(input);
   if (attempt.submissionKey !== null) {
-    if (
-      attempt.submissionKey !== input.submissionKey ||
-      hash(submission) !== input.submissionKey ||
-      sha !== null ||
-      hash({ sha, ...body }) !== manifestHash
-    )
+    if (attempt.submissionKey !== submissionKey)
       throw new RoomRuleError('handoff-conflict');
     return next;
   }
@@ -770,23 +782,20 @@ export function submitAttempt(
   if (attempt.status !== 'running') throw new RoomRuleError('attempt-not-running');
   if (!withinTime(next, attempt, input.now)) return next;
   if (
-    sha !== null ||
-    input.manifest.version !== 1 ||
-    input.manifest.text.length > 4096 ||
-    input.manifest.artifacts.some((artifact) =>
+    manifest.version !== 1 ||
+    manifest.text.length > 4096 ||
+    manifest.artifacts.some((artifact) =>
       artifact.storedAs !== '' || !artifact.path || artifact.path.startsWith('/') ||
-      artifact.path.includes('\\') || artifact.path.split('/').includes('..')) ||
-    hash(submission) !== input.submissionKey ||
-    hash({ sha, ...body }) !== manifestHash
+      artifact.path.includes('\\') || artifact.path.split('/').includes('..'))
   )
     throw new RoomRuleError('invalid manifest');
-  const stale = staleReason(next, attempt, input.manifest);
+  const stale = staleReason(next, attempt, manifest);
   if (stale) {
     supersede(next, attempt, input.now, stale);
     return next;
   }
-  attempt.submissionKey = input.submissionKey;
-  attempt.manifest = structuredClone(input.manifest);
+  attempt.submissionKey = submissionKey;
+  attempt.manifest = structuredClone(manifest);
   if (attempt.worker)
     appendOp(next, 'stop-session', attempt.id, { sessionId: attempt.worker }, input.now);
   return next;

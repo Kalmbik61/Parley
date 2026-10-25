@@ -6,7 +6,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import {
   activeRoomPlan, baseBranchOf, ENGINE, isMember, liveLead, PlanConflictError,
-  readMap, requireOpenRoom, setProposal, submitAttempt, updateMap,
+  normalizeAttemptSubmission, readMap, requireOpenRoom, setProposal, submitAttempt, updateMap,
   validateAutonomousDraft, workPaths,
 } from '@parley/core';
 import type {
@@ -55,7 +55,7 @@ function canonical(value: unknown): string {
 function manifest(value: unknown): void {
   if (!object(value)) fail('bad_request', 'Invalid handoff manifest.');
   keys(value, ['version', 'criteriaVersion', 'dependsOn', 'coverage', 'scope', 'facts', 'hypotheses', 'notFound', 'gaps', 'text', 'artifacts', 'hash', 'submittedAt']);
-  if (value.version !== 1 || !safe(value.criteriaVersion, 1) || !hash(value.hash) ||
+  if (value.version !== 1 || !safe(value.criteriaVersion, 1) || (value.hash !== undefined && !hash(value.hash)) ||
     !Array.isArray(value.dependsOn) || value.dependsOn.length > 100 || !value.dependsOn.every(id => text(id, 128) && /^at-\d+$/.test(id)) ||
     !['covered', 'partial', 'failed', 'unstarted'].includes(String(value.coverage)) ||
     !text(value.scope) || !text(value.text, 4096, true) || !text(value.submittedAt) ||
@@ -87,7 +87,7 @@ function parseRequest(value: unknown): AttemptChannelRequest {
     if (!text(value.attemptId, 128) || !/^at-\d+$/.test(value.attemptId)) fail('bad_request', 'Invalid attempt identity.');
     if (value.action === 'submit') {
       keys(value, ['action', 'attemptId', 'submissionKey', 'manifest']);
-      if (!hash(value.submissionKey)) fail('bad_request', 'Invalid submissionKey.');
+      if (value.submissionKey !== undefined && !hash(value.submissionKey)) fail('bad_request', 'Invalid submissionKey.');
       manifest(value.manifest);
     } else {
       keys(value, ['action', 'attemptId', 'sha', 'criterion', 'verdict', 'note']);
@@ -198,14 +198,17 @@ async function handoff(ref: SessionRef, request: Exclude<AttemptChannelRequest, 
       : attempt.verifier !== ref.sessionId)) fail('forbidden', 'This session is not assigned to this attempt operation.');
   if (['aborted', 'superseded', 'returned', 'blocked'].includes(attempt.status)) fail('attempt-fenced');
   if (request.action === 'submit') {
-    const next = submitAttempt(plan, { actor: ENGINE, rev: plan.rev, now: new Date().toISOString(), attemptId: attempt.id, submissionKey: request.submissionKey, manifest: { ...request.manifest, sha: null } });
+    const submission = normalizeAttemptSubmission({ ...request, manifest: { ...request.manifest, sha: null } });
+    const next = submitAttempt(plan, { actor: ENGINE, rev: plan.rev, now: new Date().toISOString(), attemptId: attempt.id, ...submission });
     // submitAttempt is pure: inspect its fenced result, never persist its stop/capture intent here.
-    if (attempt.submissionKey !== null && attempt.receipt) return { ok: true, result: attempt.receipt };
+    if (attempt.submissionKey !== null && attempt.receipt) return { ok: true, result: { ...attempt.receipt, submissionKey: submission.submissionKey } };
     if (attempt.criteriaVersion !== a.criteriaVersion[attempt.item] || request.manifest.criteriaVersion !== a.criteriaVersion[attempt.item]) fail('stale-criteria');
     const preflight = next.autonomous!.attempts.find(entry => entry.id === attempt.id)!;
     if (preflight.status === 'superseded') fail('attempt-fenced', preflight.log.at(-1)?.note ?? 'attempt-fenced');
     if (next.autonomous!.halted) fail('attempt-fenced', 'The attempt has exceeded its execution limits.');
-    return engine.submit(ref, plan.id, plan.rev, request);
+    const { sha: _sha, ...normalizedManifest } = submission.manifest;
+    const result = await engine.submit(ref, plan.id, plan.rev, { ...request, submissionKey: submission.submissionKey, manifest: normalizedManifest });
+    return result.ok ? { ok: true, result: { ...result.result, submissionKey: submission.submissionKey } } : result;
   }
   if (!['active', 'completing'].includes(plan.status) || a.halted || !['submitted', 'checking', 'accepted', 'queued', 'integrated'].includes(attempt.status) || !attempt.receipt?.valid || !attempt.manifest) fail('attempt-fenced');
   if (attempt.criteriaVersion !== a.criteriaVersion[attempt.item] || attempt.manifest.criteriaVersion !== a.criteriaVersion[attempt.item]) fail('stale-criteria');

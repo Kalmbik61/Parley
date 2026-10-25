@@ -9,7 +9,7 @@ import {
 import { activeRoomPlan } from "../work/plans.js";
 import { isMember, requireOpenRoom, RoomRuleError } from "../work/rooms.js";
 import { readMap } from "../work/store.js";
-import type { AttemptChannelRequest, HandoffManifest } from "../work/types.js";
+import type { AttemptChannelRequest, HandoffManifestInput } from "../work/types.js";
 import type { McpContext } from "./context.js";
 
 const text = { type: "string", minLength: 1, maxLength: 10000 };
@@ -65,7 +65,6 @@ const MANIFEST_SCHEMA = {
     "gaps",
     "text",
     "artifacts",
-    "hash",
     "submittedAt",
   ],
   additionalProperties: false,
@@ -74,7 +73,7 @@ export const ATTEMPT_TOOLS: Tool[] = [
   {
     name: "attempt_submit",
     description:
-      "Autonomous worker: submit your handoff manifest without sha through the host. Keep submissionKey unchanged when retrying; only the engine captures the commit. Read attempt_status before retrying a lost response.",
+      "Autonomous worker: submit your handoff manifest without sha via attempt_submit(attemptId, manifest). The host computes manifest.hash and submissionKey; omit both and retry with the same manifest. The response returns the assigned submissionKey. Explicit hashes are checked. Read attempt_status before retrying a lost response. Only the engine captures the commit.",
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -83,7 +82,7 @@ export const ATTEMPT_TOOLS: Tool[] = [
     inputSchema: {
       type: "object",
       properties: { attemptId, submissionKey: hash, manifest: MANIFEST_SCHEMA },
-      required: ["attemptId", "submissionKey", "manifest"],
+      required: ["attemptId", "manifest"],
       additionalProperties: false,
     },
   },
@@ -156,9 +155,9 @@ function keys(value: Record<string, unknown>, allowed: string[]): void {
   if (Object.keys(value).some((key) => !allowed.includes(key)))
     throw new RoomRuleError("unexpected attempt argument");
 }
-function manifest(value: unknown): Omit<HandoffManifest, "sha"> {
+function manifest(value: unknown): Omit<HandoffManifestInput, "sha"> {
   if (!record(value)) throw new RoomRuleError("invalid handoff manifest");
-  keys(value, MANIFEST_SCHEMA.required);
+  keys(value, Object.keys(MANIFEST_SCHEMA.properties));
   if (
     value.version !== 1 ||
     !safe(value.criteriaVersion, 1) ||
@@ -171,8 +170,8 @@ function manifest(value: unknown): Omit<HandoffManifest, "sha"> {
     !validText(value.scope) ||
     !validText(value.text, 4096, true) ||
     !validText(value.submittedAt) ||
-    typeof value.hash !== "string" ||
-    !/^[a-f0-9]{64}$/.test(value.hash) ||
+    (value.hash !== undefined &&
+      (typeof value.hash !== "string" || !/^[a-f0-9]{64}$/.test(value.hash))) ||
     !["facts", "hypotheses", "notFound", "gaps"].every(
       (key) =>
         Array.isArray(value[key]) &&
@@ -194,7 +193,7 @@ function manifest(value: unknown): Omit<HandoffManifest, "sha"> {
     )
       throw new RoomRuleError("invalid handoff artifact");
   }
-  return value as unknown as Omit<HandoffManifest, "sha">;
+  return value as unknown as Omit<HandoffManifestInput, "sha">;
 }
 
 /** The host derives actor and workspace from the same channel token as create_session. */
@@ -353,8 +352,8 @@ export async function attemptTool(
   if (name === "attempt_submit") {
     keys(args, ["attemptId", "submissionKey", "manifest"]);
     if (
-      typeof args.submissionKey !== "string" ||
-      !/^[a-f0-9]{64}$/.test(args.submissionKey)
+      args.submissionKey !== undefined &&
+      (typeof args.submissionKey !== "string" || !/^[a-f0-9]{64}$/.test(args.submissionKey))
     )
       throw new RoomRuleError("invalid submissionKey");
     return sendAttemptRequest(
@@ -362,7 +361,7 @@ export async function attemptTool(
       {
         action: "submit",
         attemptId: attempt.id,
-        submissionKey: args.submissionKey,
+        ...(typeof args.submissionKey === "string" ? { submissionKey: args.submissionKey } : {}),
         manifest: manifest(args.manifest),
       },
       signal,

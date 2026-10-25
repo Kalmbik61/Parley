@@ -137,8 +137,7 @@ async function fixture(options: { count?: number; independent?: boolean; qualita
     const p = await plan(), a = await attempt(index), item = p.items.find(row => row.id === a.item)!;
     const dependsOn = item.after.map(id => p.autonomous!.attempts.findLast(row => row.item === id && row.status === 'integrated')!.id);
     const body = { version: 1 as const, criteriaVersion: a.criteriaVersion, dependsOn, coverage: 'covered' as const, scope: item.scope, facts: ['Implementation ready'], hypotheses: [], notFound: [], gaps: [], text: 'Ready for independent checks', artifacts: [], submittedAt: io.now().toISOString(), ...change };
-    const manifest = { ...body, hash: digest({ ...body, sha: null }) };
-    return { action: 'submit', attemptId: a.id, submissionKey: digest(manifest), manifest };
+    return { action: 'submit', attemptId: a.id, manifest: body };
   };
   const submit = async (index = 0, request?: Submission) => engine.submit(ref((await attempt(index)).worker!), 'pl-01', (await plan()).rev, request ?? await submission(index));
   const write = async (index = 0, content?: string) => { const a = await attempt(index); await fs.writeFile(path.join(await clone(index), `item-${a.item}.txt`), content ?? `implementation ${a.item}`); };
@@ -309,12 +308,42 @@ describe('autonomous room cycle with stub agents and real Git', () => {
     expect((await f.state()).ops.filter(op => op.kind === 'capture')).toHaveLength(1);
   });
 
+  it.each(['before-capture', 'before-receipt'] as const)('retries a hashless handoff after a lost response %s without duplicate effects', async phase => {
+    const f = await fixture({ count: 1 }); await f.go(); await f.write();
+    const restore = crashOnWrite(f, p => phase === 'before-capture'
+      ? p.autonomous!.ops.some(op => op.kind === 'capture')
+      : p.autonomous!.attempts[0]!.receipt !== null, `lost response ${phase}`);
+    const request = await f.submission();
+    expect(await f.submit(0, request)).toMatchObject({ ok: false }); restore();
+    const pending = await f.attempt();
+    expect(pending.receipt).toBeNull(); expect(pending.submissionKey).toMatch(/^[a-f0-9]{64}$/);
+    expect((await f.state()).ops.filter(op => op.kind === 'capture')).toHaveLength(phase === 'before-capture' ? 0 : 1);
+    // The worker recovers the assigned key through attempt_status, then retries the original body.
+    expect(await f.submit(0, { ...request, submissionKey: pending.submissionKey! })).toMatchObject({ ok: true, result: { submissionKey: pending.submissionKey } });
+    const settled = await f.state(), events = [...f.events], runs = [...f.runs], calls = [...f.gitCalls];
+    const received = await f.attempt();
+    expect(await f.submit(0, request)).toEqual({ ok: true, result: { receipt: received.receipt, submissionKey: pending.submissionKey } });
+    expect(await f.state()).toEqual(settled);
+    expect(f.events).toEqual(events); expect(f.runs).toEqual(runs); expect(f.gitCalls).toEqual(calls);
+    expect(settled.seq.receipt).toBe(1);
+    expect(settled.ops.filter(op => op.kind === 'capture')).toHaveLength(1);
+    expect(f.gitCalls.filter(args => args.includes('commit-tree'))).toHaveLength(1);
+    expect(f.events.filter(event => event === `stop:${received.worker}`)).toHaveLength(1);
+    await f.integrate(); await completion(f);
+  });
+
   it('retains a receipt across a crash before checks and never recaptures the submission', async () => {
     const f = await fixture({ count: 1 }); await f.go(); await f.write();
     const restore = crashOnWrite(f, p => p.autonomous!.ops.some(op => op.kind === 'check'), 'crash before first check');
     const request = await f.submission();
     expect(await f.submit(0, request)).toMatchObject({ ok: false }); restore();
     const received = await f.attempt(); expect(received).toMatchObject({ status: 'submitted', receipt: { valid: true } });
+    const beforeRetry = await f.state(), events = [...f.events], runs = [...f.runs];
+    for (const body of [request, { ...request, submissionKey: received.submissionKey! }]) {
+      expect(await f.submit(0, body)).toEqual({ ok: true, result: { receipt: received.receipt, submissionKey: received.submissionKey } });
+      expect(await f.state()).toEqual(beforeRetry);
+      expect(f.events).toEqual(events); expect(f.runs).toEqual(runs);
+    }
     const refs = await f.bare('show-ref'), sessions = (await f.read()).sessions.length;
     await expectReadOnlyRecovery(f); await expectReadOnlyRecovery(f);
     expect((await f.attempt()).receipt).toEqual(received.receipt);
@@ -398,11 +427,22 @@ describe('autonomous room cycle with stub agents and real Git', () => {
     const results = await Promise.all([f.submit(0, request), f.submit(0, request)]);
     expect(results[0]).toEqual(results[1]); expect(results[0]).toMatchObject({ ok: true });
     const a = await f.state(), received = await f.attempt();
+    expect(results[0]).toEqual({ ok: true, result: { receipt: received.receipt, submissionKey: received.submissionKey } });
+    const events = [...f.events], runs = [...f.runs];
+    const manifest = { ...request.manifest, hash: digest({ ...request.manifest, sha: null }) };
+    for (const body of [request, { ...request, submissionKey: received.submissionKey! }, { ...request, manifest, submissionKey: received.submissionKey! }]) {
+      expect(await f.submit(0, body)).toEqual(results[0]);
+      expect(await f.state()).toEqual(a);
+      expect(f.events).toEqual(events); expect(f.runs).toEqual(runs);
+    }
     expect(a.seq.receipt).toBe(1); expect(a.ops.filter(op => op.kind === 'capture')).toHaveLength(1);
     expect(f.events.filter(event => event === `stop:${received.worker}`)).toHaveLength(1);
     expect(await f.bare('rev-parse', `refs/attempts/pl-01/${received.id}`)).toBe(received.receipt!.sha);
     expect(await f.bare('show', `${received.sha}:item-1.txt`)).toBe('implementation 1');
     expect(await f.submit(0, { ...request, submissionKey: 'f'.repeat(64) })).toMatchObject({ ok: false, error: { code: 'handoff-conflict' } });
+    expect(await f.submit(0, { ...request, submissionKey: received.submissionKey!, manifest: { ...request.manifest, text: 'Changed under the same key' } })).toMatchObject({ ok: false, error: { code: 'handoff-conflict' } });
+    expect(await f.submit(0, { ...request, manifest: { ...request.manifest, hash: 'f'.repeat(64) } })).toMatchObject({ ok: false, error: { code: 'invalid manifest' } });
+    expect(await f.state()).toEqual(a);
     expect((await f.attempt()).receipt).toEqual(received.receipt);
     await f.integrate(); await completion(f);
   });

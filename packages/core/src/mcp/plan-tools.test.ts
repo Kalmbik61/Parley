@@ -261,6 +261,28 @@ describe("autonomous agent channel", () => {
       expect(tool.inputSchema.properties).not.toHaveProperty("actor");
     }
   });
+  it("forwards hashless submissions and returns the host-assigned key", async () => {
+    await autonomousAccepted();
+    const requests = attemptChannel();
+    const before = JSON.stringify(await readMap(project, context.workId));
+    const { hash: _hash, ...body } = manifest;
+    const submissionKey = "a".repeat(64);
+    vi.stubGlobal("fetch", async (_url: URL, options: RequestInit) => {
+      requests.push({ url: String(_url), headers: new Headers(options.headers), body: JSON.parse(options.body as string) });
+      return Response.json({ ok: true, result: { submissionKey, receipt: { id: "rc-0001" } } });
+    });
+    for (const args of [
+      { attemptId: "at-0001", manifest: body },
+      { attemptId: "at-0001", manifest: body, submissionKey },
+    ]) {
+      const result = await call("s-02", "attempt_submit", args);
+      expect(result.failed, result.text).toBe(false);
+      expect(JSON.parse(result.text)).toEqual({ submissionKey, receipt: { id: "rc-0001" } });
+      expect(requests.at(-1)!.body).toEqual({ action: "submit", ...args });
+    }
+    expect(JSON.stringify(await readMap(project, context.workId))).toBe(before);
+  });
+
   it("forwards submit and verify with the session token and exact payload without writing the map", async () => {
     await autonomousAccepted();
     const requests = attemptChannel();

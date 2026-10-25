@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import {
   ENGINE, HUMAN, addMember, cancelRoomPlan, coverageVerdict, enqueue, failureSignature, halt, intendOp,
   liveLead, parleyNote, planItemsComplete, proposeCompletion, PROPOSAL_TEXT_MAX, PlanConflictError, ProposalConflictError, RoomRuleError, readMap, receipt, reconcileAfterRestart, recordCheck, resolveProposal,
-  integrate, returnAttempt, settleOp, startAttempt, submitAttempt, supersedeByAmendment, updateMap, workPaths,
+  integrate, normalizeAttemptSubmission, returnAttempt, settleOp, startAttempt, submitAttempt, supersedeByAmendment, updateMap, workPaths,
   type AutonomousOp, type CheckResult, type HandoffManifest, type PlanAttempt,
   type RoomPlan, type WorkMap,
 } from '@parley/core';
@@ -1152,21 +1152,23 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
             if (ref.sessionId !== attempt.worker) throw new Error('not-worker');
             if (['aborted', 'superseded'].includes(attempt.status)) throw new Error('attempt-fenced');
             if (plan.rev !== rev) throw new Error('rev-conflict');
+            const submission = normalizeAttemptSubmission({ ...request, manifest: { ...request.manifest, sha: null } });
             if (attempt.receipt) {
-              if (attempt.submissionKey !== request.submissionKey || hash(request.manifest) !== request.submissionKey) throw new Error('handoff-conflict');
+              if (attempt.submissionKey !== submission.submissionKey) throw new Error('handoff-conflict');
               return plan;
             }
             if (fenced.has(attempt.status)) throw new Error('attempt-fenced');
             if (attempt.status !== 'running') throw new Error('attempt-not-running');
             if (request.manifest.criteriaVersion !== plan.autonomous!.criteriaVersion[attempt.item]) throw new Error('criteria-version-stale');
             if (request.manifest.text.length > 4096) throw new Error('invalid manifest');
-            return submitAttempt(plan, { ...context(plan, at()), attemptId: request.attemptId, submissionKey: request.submissionKey, manifest: { ...request.manifest, sha: null } });
+            return submitAttempt(plan, { ...context(plan, at()), attemptId: request.attemptId, ...submission });
           });
           let plan = await load(loc);
           if (attemptOf(plan, request.attemptId).status === 'superseded') return denied(new Error('attempt-superseded'));
           if (!attemptOf(plan, request.attemptId).receipt) await finishSubmission(loc, request.attemptId);
           plan = await load(loc);
-          return { ok: true, result: { receipt: attemptOf(plan, request.attemptId).receipt } };
+          const attempt = attemptOf(plan, request.attemptId);
+          return { ok: true, result: { receipt: attempt.receipt, submissionKey: attempt.submissionKey } };
         } catch (error) { return denied(error); }
       });
     },

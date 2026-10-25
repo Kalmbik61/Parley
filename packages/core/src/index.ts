@@ -631,7 +631,7 @@ export type { BacklogRule, ProjectPreferences } from './work/project-preferences
 
 export { PLAN_ITEM_MAX, PLAN_TEXT_MAX, PlanConflictError, validateAutonomousDraft, activeRoomPlan, planItemSatisfied, planItemsComplete, cancelRoomPlan, reconcileRoomPlans, setRoomMode, submitPlanItem, updatePlanItem, verifyPlanItem } from './work/plans.js';
 export {
-  intendOp, settleOp, startAttempt, submitAttempt, receipt, recordCheck, coverageVerdict,
+  intendOp, settleOp, startAttempt, normalizeAttemptSubmission, submitAttempt, receipt, recordCheck, coverageVerdict,
   returnAttempt, enqueue, integrate, suspend, supersedeByAmendment, lateDefect, halt,
   reconcileAfterRestart, resume, reserve, release, failureSignature,
 } from './work/autonomous.js';
@@ -641,7 +641,7 @@ export { proposeCompletion } from './work/proposals.js';
 export type { ProposalOptions } from './work/proposals.js';
 export type { MapCompact } from './work/types.js';
 export type { RoomMode, PlanMode, PlanStatus, PlanItemStatus, PlanDraft, PlanItemInput, PlanItem, PlanEvidence, RoomPlan, PlanExportIntent } from './work/types.js';
-export type { AutonomousDraft, AttemptChannelRequest, AutonomousPlan, PlanAttempt, HandoffManifest, Receipt, CheckSpec, CheckResult, Integration, AutonomousBudget, AutonomousOp } from './work/types.js';
+export type { AutonomousDraft, AttemptChannelRequest, AutonomousPlan, PlanAttempt, HandoffManifest, HandoffManifestInput, Receipt, CheckSpec, CheckResult, Integration, AutonomousBudget, AutonomousOp } from './work/types.js';
 
 export { parseProjectMemory, readProjectMemory, addProjectMemory, updateProjectMemory, removeProjectMemory, undoProjectMemory } from './work/project-memory.js';
 export type { MemoryKind, MemoryProvenance, MemoryItem, MemoryDocument, MemoryInput, MemoryPatch, MemoryWriteOptions, MemoryWriteResult, MemorySuggestion } from './work/project-memory.js';

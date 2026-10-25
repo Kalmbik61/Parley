@@ -277,6 +277,10 @@ describe('бриф: роль в комнате', () => {
     expect(brief).toContain('autonomous worker');
     expect(brief).toContain('attempt_submit');
     expect(brief).toContain('without sha');
+    expect(brief).toContain('The host computes manifest.hash and submissionKey');
+    expect(brief).toContain('retry with the same manifest');
+    expect(brief).toContain('Read attempt_status before retrying a lost response');
+    expect(brief).toContain('returns the assigned submissionKey');
     expect(brief).toContain('plan_*');
     map.sessions.find((session) => session.id === 's-03')!.role = { source: 'builtin', name: 'verifier' };
     brief = buildBrief(map, 's-03');

@@ -216,7 +216,7 @@ export interface AutonomousDraft {
  */
 export type AttemptChannelRequest =
   | { action: 'propose-plan'; roomId: string; planId?: string; rev?: number; requestKey: string; text: string; plan: PlanDraft & { autonomous: AutonomousDraft } }
-  | { action: 'submit'; attemptId: string; submissionKey: string; manifest: Omit<HandoffManifest, 'sha'> }
+  | { action: 'submit'; attemptId: string; submissionKey?: string; manifest: Omit<HandoffManifestInput, 'sha'> }
   | { action: 'verify'; attemptId: string; sha: string; criterion: number; verdict: CheckResult['verdict']; note: string };
 export interface PlanItem extends PlanItemInput {
   after: number[]; criteria: string[]; verifier: string | null; status: PlanItemStatus;
@@ -266,6 +266,7 @@ export interface PlanAttempt {
 }
 
 /** Модель данных (план автономной комнаты, §2). */
+export type HandoffManifestInput = Omit<HandoffManifest, 'hash'> & { hash?: string };
 export interface HandoffManifest {
   version: 1;
   sha: string | null;                            // null при сдаче; дописывает движок после захвата
