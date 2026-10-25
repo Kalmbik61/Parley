@@ -20,6 +20,7 @@ const PROTOCOL_CODES: ErrorCode[] = [
 const NOTICE_KINDS: NoticeKind[] = [
   'map-lock',
   'map-corrupt',
+  'git-connectivity-failed',
   'hooks-missing',
   'launch-failed',
   'pointer-timeout',

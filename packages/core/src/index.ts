@@ -280,6 +280,7 @@ export {
   isGitRepo,
   baseBranchOf,
   checkoutGitDir,
+  checkProjectConnectivity,
   commitProject,
   gitStateReason,
   GitStateError,

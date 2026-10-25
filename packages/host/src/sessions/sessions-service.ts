@@ -27,6 +27,7 @@ import {
   createNewSession,
   createPendingSession,
   createWorktree,
+  checkProjectConnectivity,
   ensureParleyMd,
   deleteSession,
   DirtyWorktreeError,
@@ -306,6 +307,33 @@ export function createSessionsService(
   const warned = new Set<string>();
   const creationWarnings = new Set<string>();
 
+  async function needsGitCheck(ref: SessionRef, session: WorkSession | undefined): Promise<boolean> {
+    if (!session || session.provider !== 'codex' || session.workspace || !session.worktree || session.worktree.createdAt === null) return false;
+    try {
+      const entry = (await loadProviders()).codex!;
+      const catalog = await feed.roleCatalog?.(session.worktree.path);
+      const role = await prepareSessionRole(session.worktree.path, entry, { provider: 'codex', roleId: roleId(session.role) }, catalog);
+      return !role.readOnly && role.sandboxMode === 'workspace-write';
+    } catch (error) {
+      // Неизвестная теперь роль не должна отменять проверку ранее выданной записи.
+      host.log.warn('could not resolve session role for Git check', { ref, error: String(error) });
+      return true;
+    }
+  }
+
+  async function checkGit(ref: SessionRef): Promise<void> {
+    try {
+      await checkProjectConnectivity(ref.projectPath);
+    } catch (error) {
+      host.log.warn('Git connectivity check failed', { ref, error: String(error) });
+      host.broadcast('host.notice', {
+        kind: 'git-connectivity-failed', ref,
+        text: 'Git repository connectivity check failed; inspect the host log before continuing.',
+        at: new Date().toISOString(),
+      });
+    }
+  }
+
   function deliverWarnings(ref: SessionRef, plan: LaunchPlan): void {
     const diagnostics = plan.diagnostics ?? [];
     for (const message of plan.warnings) {
@@ -448,12 +476,14 @@ export function createSessionsService(
     hooks?.unregister(ref);
     feed.agent?.unregister(ref);
     const done = (starting.get(key) ?? Promise.resolve())
-      .then(() =>
-        finishExited(ref.projectPath, ref.workId, ref.sessionId, {
+      .then(async () => {
+        await finishExited(ref.projectPath, ref.workId, ref.sessionId, {
           exitCode: exit.exitCode,
           signal: exit.signal ?? undefined,
-        }),
-      )
+        });
+        const map = await readMap(ref.projectPath, ref.workId);
+        if (await needsGitCheck(ref, map.sessions.find(session => session.id === ref.sessionId))) await checkGit(ref);
+      })
       .catch((error: unknown) => {
         host.log.error('переход сессии в sleeping не записался', { ref, error: String(error) });
       })
@@ -1123,8 +1153,7 @@ export function createSessionsService(
   }
 
   async function stop(ref: SessionRef): Promise<void> {
-    if (pty.get(ref) === undefined) return;
-    await pty.stop(ref);
+    if (pty.get(ref) !== undefined) await pty.stop(ref);
     // Само событие `exit` уже прошло (см. выше) — если запись карты ещё
     // пишется, дожидаемся её, чтобы вызывающая сторона не читала гонку.
     await finalizing.get(refKey(ref));
@@ -1229,7 +1258,9 @@ export function createSessionsService(
     // без явного согласия теряют молча (спека 8.3), поэтому проверка раньше
     // самого удаления записи.
     const map = await readMap(ref.projectPath, ref.workId).catch(() => null);
-    const worktree = map?.sessions.find((candidate) => candidate.id === ref.sessionId)?.worktree;
+    const session = map?.sessions.find((candidate) => candidate.id === ref.sessionId);
+    const worktree = session?.worktree;
+    const check = await needsGitCheck(ref, session);
     if (worktree !== null && worktree !== undefined && worktree.createdAt !== null) {
       try {
         await discardWorktree(ref.projectPath, worktree, { force });
@@ -1242,6 +1273,7 @@ export function createSessionsService(
       }
     }
     await deleteSession(ref.projectPath, ref.workId, ref.sessionId);
+    if (check) await checkGit(ref);
   }
 
   /**

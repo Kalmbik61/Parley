@@ -2660,6 +2660,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'compact-failed': "compaction didn't go through — check the agent's terminal",
   'snapshot-too-large': 'workspace data is too large to show — delete or archive old workspaces',
   'codex-auto-unsupported': 'Codex is too old for Auto-review — approvals are asked in the terminal; update Codex to use it',
+  'git-connectivity-failed': 'Git repository connectivity check failed — inspect the host log before continuing',
 };
 
 /**

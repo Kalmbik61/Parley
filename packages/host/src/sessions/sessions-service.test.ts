@@ -189,6 +189,72 @@ async function readArgs(file: string): Promise<StubArgs> {
   return JSON.parse(await readFile(file, 'utf8')) as StubArgs;
 }
 
+describe('Git connectivity after worktree sessions', () => {
+  async function fixture(provider = 'codex', role = 'executor', withWorktree = true) {
+    await initGitProject(project);
+    const { work } = await createWork(project, { title: 'Git connectivity' });
+    const sessionId = await createPendingSession(project, work.id, { provider, label: '', task: '', role: { source: 'builtin', name: role } });
+    const ref = { projectPath: project, workId: work.id, sessionId };
+    const info = plannedWorktree(project, work.id, sessionId, 'main', path.join(project, 'worktrees'));
+    if (withWorktree) {
+      await createWorktree(project, info);
+      info.createdAt = new Date().toISOString();
+      await updateMap(project, work.id, map => { map.sessions[0]!.worktree = info; });
+    }
+    return { ref, info };
+  }
+
+  async function withGitStub(info: WorktreeInfo, code: number, task: (marker: string) => Promise<void>) {
+    const binary = (await runGit('which', ['git'])).stdout.trim();
+    const dir = path.join(project, 'git-bin'); await mkdir(dir);
+    const marker = path.join(project, 'fsck.jsonl');
+    const stub = path.join(dir, 'git');
+    await writeFile(stub, `#!/usr/bin/env node\nconst fs=require('node:fs');const cp=require('node:child_process');const args=process.argv.slice(2);if(args.includes('fsck')){fs.appendFileSync(${JSON.stringify(marker)},JSON.stringify({args,worktreeExists:fs.existsSync(${JSON.stringify(info.path)})})+'\\n');process.exit(${code});}const r=cp.spawnSync(${JSON.stringify(binary)},args,{stdio:'inherit'});process.exit(r.status??1);\n`);
+    await chmod(stub, 0o755);
+    const original = process.env.PATH;
+    process.env.PATH = `${dir}${path.delimiter}${original ?? ''}`;
+    try { await task(marker); } finally { process.env.PATH = original; }
+  }
+
+  function lifecyclePty(active: boolean): PtyManager {
+    let exit: (ref: SessionRef, result: { exitCode: number }) => void;
+    return {
+      on(event: string, listener: typeof exit) { if (event === 'exit') exit = listener; return () => {}; },
+      get: () => active ? {} : undefined,
+      stop: async (ref: SessionRef) => { active = false; const result = { exitCode: 0 }; exit(ref, result); return result; },
+    } as unknown as PtyManager;
+  }
+
+  it.each([['exit', 0], ['exit', 1], ['natural-exit', 0], ['natural-exit', 1], ['delete', 0], ['delete', 1]] as const)('%s waits for Git fsck and warns only on failure (%s)', async (action, code) => {
+    const { ref, info } = await fixture();
+    await withGitStub(info, code, async marker => {
+      const host = fakeHost(); const warning = vi.spyOn(host.log, 'warn');
+      const pty = lifecyclePty(action !== 'delete');
+      const sessions = createSessionsService(host, fakeWorks(), pty, fakeActivity());
+      if (action === 'natural-exit') { await pty.stop(ref); await sessions.stop(ref); }
+      else if (action === 'exit') await sessions.stop(ref);
+      else await sessions.delete(ref, true);
+      const calls = (await readFile(marker, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+      expect(calls).toHaveLength(1);
+      expect(calls[0].args).toEqual(expect.arrayContaining(['fsck', '--connectivity-only']));
+      expect(calls[0].worktreeExists).toBe(action !== 'delete');
+      const notices = broadcasts.filter(item => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'git-connectivity-failed');
+      expect(notices).toHaveLength(code === 0 ? 0 : 1);
+      expect(warning.mock.calls.some(([message]) => message === 'Git connectivity check failed')).toBe(code !== 0);
+    });
+  });
+
+  it.each([['claude', 'executor', true], ['codex', 'critic', true], ['codex', 'executor', false]] as const)('leaves %s/%s worktree=%s unchanged', async (provider, role, withWorktree) => {
+    const { ref, info } = await fixture(provider, role, withWorktree);
+    await withGitStub(info, 1, async marker => {
+      const sessions = createSessionsService(fakeHost(), fakeWorks(), lifecyclePty(true), fakeActivity());
+      await sessions.stop(ref);
+      expect(existsSync(marker)).toBe(false);
+      expect(broadcasts.some(item => item.event === 'host.notice')).toBe(false);
+    });
+  });
+});
+
 describe('create() + launch(): argv и окружение процесса', () => {
   it('сессия с задачей: settings/mcp-config/append-system-prompt есть, бриф — последним аргументом, канала нет', async () => {
     const work = await createWork(project, { title: 'Работа', goal: '' });

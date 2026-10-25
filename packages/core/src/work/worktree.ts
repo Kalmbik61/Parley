@@ -6,6 +6,12 @@
  *
  * Команды всегда идут через `execFile` с массивом аргументов, без `shell:
  * true` — путь проекта или ветки с пробелом иначе ломал бы команду молча.
+ *
+ * Codex получает запись в общие objects (p-16): это позволяет повредить объекты
+ * master и соседей, хотя их ссылки остаются без записи. Проверка connectivity
+ * после сессии обнаруживает нарушения связности, но не предотвращает их.
+ * Отдельного запрета push нет: его ограничивает доступность remote. Внешний
+ * pack-refs может удалить каталоги ссылок; новый запуск/resume готовит их снова.
  */
 
 import { execFile } from 'node:child_process';
@@ -515,6 +521,59 @@ export async function checkoutGitDir(commonDir: string, checkoutPath: string): P
   } catch {
     return null;
   }
+}
+
+/** Prepare exact worktree Git paths for Codex without rewriting refs or reflogs. */
+export async function prepareWorktreeGitWrites(
+  projectPath: string,
+  workId: string,
+  sessionId: string,
+  info: WorktreeInfo,
+): Promise<string[]> {
+  const wrongBranch = (): GitStateError => new GitStateError('worktree-corrupt', 'worktree is not on its own branch');
+  if (info.branch !== `${BRANCH_PREFIX}${workId}/${sessionId}` && info.branch !== `harnas/${workId}/${sessionId}`) throw wrongBranch();
+  await assertRevisions(projectPath, [info.branch]);
+  const common = await projectCommonDir(projectPath);
+  const cwd = path.resolve(projectPath, info.path);
+  const gitDir = await checkoutGitDir(common, cwd);
+  if (gitDir === null || gitDir === common) throw new GitStateError('worktree-corrupt', 'expected a registered session worktree');
+  let ref: string;
+  try {
+    ref = (await run('git', [...NO_FSMONITOR, '--git-dir', gitDir, '--work-tree', cwd, 'symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
+  } catch { throw wrongBranch(); }
+  if (ref !== `refs/heads/${info.branch}`) throw wrongBranch();
+  const branchRef = path.join(common, ref);
+  const branchLog = path.join(common, 'logs', ref);
+  const files = [branchRef, `${branchRef}.lock`, branchLog, `${branchLog}.lock`];
+  for (const parent of [path.dirname(branchRef), path.dirname(branchLog)]) {
+    let directory = common;
+    for (const segment of path.relative(common, parent).split(path.sep)) {
+      directory = path.join(directory, segment);
+      await mkdir(directory).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EEXIST') throw error;
+      });
+      if (!(await lstat(directory)).isDirectory()) throw new GitStateError('worktree-corrupt', 'redirected session Git directory');
+    }
+  }
+  for (const file of files) {
+    const kind = await lstat(file).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (kind !== null && !kind.isFile()) throw new GitStateError('worktree-corrupt', 'redirected session Git file');
+  }
+  const objects = path.join(common, 'objects');
+  if (!(await lstat(objects)).isDirectory()) throw new GitStateError('worktree-corrupt', 'redirected Git object directory');
+  return [gitDir, objects, ...files];
+}
+
+/** Только проверка связности: хост не чинит и не переупаковывает общий репозиторий. */
+export async function checkProjectConnectivity(projectPath: string): Promise<void> {
+  const common = await projectCommonDir(projectPath);
+  await run('git', [...NO_FSMONITOR, '--git-dir', common, 'fsck', '--connectivity-only', '--no-dangling'], {
+    timeout: 60_000,
+    maxBuffer: MAX_BUFFER,
+  });
 }
 
 /**

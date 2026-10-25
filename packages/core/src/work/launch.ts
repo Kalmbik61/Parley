@@ -16,6 +16,7 @@ import { realpath } from 'node:fs/promises';
 import { loadConfig, type CodexWriteApprovals } from '../config.js';
 import { codexHookFlags } from './codex-hooks.js';
 import { codexPolicyArgs, trustArgs } from './codex-policy.js';
+import { prepareWorktreeGitWrites } from './worktree.js';
 import { findRunnerBinary } from './find-binary.js';
 import { CLAUDE_LEAN_ENV, CLAUDE_LEAN_FLAGS, codexLeanFlags, readCodexMcpServerIds, readUserPluginIds } from './lean.js';
 import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
@@ -410,6 +411,10 @@ async function plan(
   }
   if ((workspace ? workspace.kind === 'artifacts' : role.readOnly) && isClaudeCode(entry)) subs.disallowedTools = workspace?.kind === 'artifacts' ? 'Edit,Write,NotebookEdit,Bash' : 'Edit,Write,NotebookEdit';
   assertRoleDelivery(entry, role, [template]);
+  if (entry.id === 'codex' && !workspace && !role.readOnly && role.sandboxMode === 'workspace-write' && session.worktree && template.includes('{approvals}')) {
+    const roots = await prepareWorktreeGitWrites(projectPath, workId, session.id, session.worktree);
+    subs.approvals = [...(subs.approvals ?? []), '-c', `sandbox_workspace_write.writable_roots=${JSON.stringify(roots)}`];
+  }
   if (template.includes('{settingsFile}')) {
     // Плагины пользователя lean выключает вместе с модом jev одним списком. Файл — свой у сессии: в общем файле работы
     // список лёг бы и на сессии без lean.
