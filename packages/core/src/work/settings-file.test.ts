@@ -388,6 +388,20 @@ describe('writeWorkSettings', () => {
     expect(await writeWorkSettings(project, work.id)).toBe(file);
   });
 
+  it.each([[false, false], [false, true], [true, false], [true, true]])('writes Parley permissions only for autonomous settings and preserves browser rules (autonomous=%s, allowBrowser=%s)', async (autonomous, allowBrowser) => {
+    const { work } = await createWork(project, { title: 'Autonomous permissions' });
+    const file = await writeWorkSettings(project, work.id, { sessionId: 's-01', autonomous, allowBrowser });
+    const settings = JSON.parse(await readFile(file, 'utf8'));
+    const allow = [
+      ...(autonomous ? [`mcp__${MCP_SERVER_NAME}`] : []),
+      ...(allowBrowser ? BROWSER_PERMISSIONS : []),
+    ];
+    expect(settings.permissions).toEqual(allow.length ? { allow } : undefined);
+    expect(settings.sandbox).toEqual(autonomous
+      ? { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true }
+      : undefined);
+  });
+
   it('с hookUrl пишет HTTP-хуки, без него — снова прежний файл', async () => {
     const { work } = await createWork(project, { title: 'Лента' });
     const url = 'http://127.0.0.1:40001/hooks';

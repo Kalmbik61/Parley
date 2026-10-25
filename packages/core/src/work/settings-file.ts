@@ -234,12 +234,16 @@ export function workSettings({
       }
     }
   }
+  const allow = [
+    ...(autonomous ? [`mcp__${MCP_SERVER_NAME}`] : []),
+    ...(allowBrowser ? BROWSER_PERMISSIONS : []),
+  ];
   return {
     hooks,
     ...(autonomous ? { sandbox: { enabled: true as const, failIfUnavailable: true as const, allowUnsandboxedCommands: false as const, autoAllowBashIfSandboxed: true as const } } : {}),
     statusLine: { type: 'command', command: statusLineCommand() },
     ...(model === undefined ? {} : { model }),
-    ...(allowBrowser ? { permissions: { allow: [...BROWSER_PERMISSIONS] } } : {}),
+    ...(allow.length > 0 ? { permissions: { allow } } : {}),
     ...(disablePlugins.length === 0 ? {} : { enabledPlugins: Object.fromEntries(disablePlugins.map((id) => [id, false as const])) }),
   };
 }

@@ -560,7 +560,7 @@ async function plan(
   }
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
-  if (workspace && entry.id === 'claude') args.unshift('--permission-mode', 'acceptEdits');
+  if (workspace && entry.id === 'claude') args.unshift('--permission-mode', 'auto');
   validateLayerArguments(args, blockBytes, subs.systemPrompt);
   if (skillNavigator && skillList === undefined && (!nativeVerified || codexListUnread)) {
     warnings.push('Skill navigator availability is unverified for this launch; the full native skill list remains enabled.');

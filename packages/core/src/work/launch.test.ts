@@ -2955,32 +2955,52 @@ describe('Codex: политика одобрений, доверие к папк
 });
 
 
-it('launches Claude artifact workspaces with sandbox settings and explicit read-only tools', async () => {
+it.each([['launch', planLaunch], ['resume', planResume]] as const)('Claude artifact workspace %s uses auto permissions, sandbox settings and explicit read-only tools', async (mode, planner) => {
   const { workId, sessionId } = await pending('claude');
   const session = await sessionOf(workId, sessionId);
   const review = path.join(project, 'review', 'op-01'); await mkdir(review, { recursive: true });
   session.workspace = { kind: 'artifacts', path: review };
   session.role = { source: 'builtin', name: 'executor' };
-  const plan = await planLaunch(project, workId, session);
+  session.providerSessionId = session.id;
+  await claudeTranscript(session.id);
+  const plan = await planner(project, workId, session);
+  expect(plan.args.includes('--resume')).toBe(mode === 'resume');
   expect(plan.cwd).toBe(review);
   expect(plan.env.TMPDIR).toBe(path.join(review, '.parley-tmp'));
-  expect(plan.args[plan.args.indexOf('--permission-mode') + 1]).toBe('acceptEdits');
+  expect(plan.args.slice(0, 2)).toEqual(['--permission-mode', 'auto']);
+  expect(plan.args).not.toContain('acceptEdits');
   expect(plan.args[plan.args.indexOf('--disallowedTools') + 1]).toBe('Edit,Write,NotebookEdit,Bash');
   const settings = JSON.parse(await readFile(plan.args[plan.args.indexOf('--settings') + 1]!, 'utf8'));
   expect(settings.sandbox).toEqual({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true });
 });
 
-it('uses workspace permissions while preserving Claude role text and engine model choices', async () => {
+it.each([['launch', planLaunch], ['resume', planResume]] as const)('Claude clone workspace %s uses auto permissions while preserving role text and engine model choices', async (mode, planner) => {
   const { workId, sessionId } = await pending('claude');
   const session = await sessionOf(workId, sessionId);
   session.workspace = { kind: 'clone', path: project, branch: 'attempt', sha: 'abc' };
   session.role = { source: 'builtin', name: 'planner' };
   session.model = 'sonnet'; session.effort = 'high';
-  const plan = await planLaunch(project, workId, session);
+  session.providerSessionId = session.id;
+  await claudeTranscript(session.id);
+  const plan = await planner(project, workId, session);
+  expect(plan.args.includes('--resume')).toBe(mode === 'resume');
+  expect(plan.args.slice(0, 2)).toEqual(['--permission-mode', 'auto']);
+  expect(plan.args).not.toContain('acceptEdits');
   expect(plan.args).not.toContain('--disallowedTools');
   expect(plan.args[plan.args.indexOf('--append-system-prompt') + 1]).toContain('Your role in this workspace: Planner');
   expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('sonnet');
   expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('high');
+});
+
+it.each([['launch', planLaunch], ['resume', planResume]] as const)('ordinary Claude session %s does not override the permission mode', async (mode, planner) => {
+  const { workId, sessionId } = await pending('claude');
+  const session = await sessionOf(workId, sessionId);
+  session.providerSessionId = session.id;
+  await claudeTranscript(session.id);
+  const plan = await planner(project, workId, session);
+  expect(plan.args.includes('--resume')).toBe(mode === 'resume');
+  expect(plan.args).not.toContain('--permission-mode');
+  expect(plan.args).not.toContain('acceptEdits');
 });
 
 it('ignores native Codex role permissions but retains role text and engine model/effort', async () => {
