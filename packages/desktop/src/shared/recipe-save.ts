@@ -13,7 +13,7 @@ export interface RecipeSaveRequest {
   file: string;
   name: string;
   description: string;
-  mode: 'free' | 'checklist' | 'verified';
+  mode: 'free' | 'checklist' | 'verified' | 'autonomous';
   agents: RecipeAgent[];
   playbook: string;
   /** Только после выбора человека «Replace» в ответ на `exists`: без него существующий файл не трогается. */

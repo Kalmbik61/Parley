@@ -1,3 +1,5 @@
+import { autonomousPlan } from '../../test-utils/autonomous-plan.js';
+import { useHostStore } from '../../store/host.js';
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   act,
@@ -132,4 +134,42 @@ it("freezes a completion Return note while the submitted response is pending", a
   await act(async () => finish(false));
   expect(field).toHaveProperty("disabled", false);
   expect(field).toHaveProperty("value", "Captured return note");
+});
+
+it('returns a selected autonomous item through plans.verify and never generic return', async () => {
+  useHostStore.setState({ connections: 1, status: { state: 'connected', hostVersion: 'test', methods: ['plans.verify'] } });
+  const p = props(); p.plan = { ...plan, mode: 'autonomous', autonomous: autonomousPlan() };
+  p.bridge.setHandler('plans.verify', () => ({ messageId: null, effects: { queued: 0, pendingSnapshots: 0, pendingBacklog: 0, conflictCount: 0, conflicts: [] } }));
+  render(<CompletionCard {...p} />);
+  fireEvent.click(screen.getByText('Return for rework'));
+  expect(screen.getByLabelText('Item to return')).toBeTruthy();
+  expect((screen.getByText('Send to lead') as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText('Item to return'), { target: { value: '1' } });
+  fireEvent.change(screen.getByLabelText('What should the lead change?'), { target: { value: 'Late recovery failure' } });
+  fireEvent.click(screen.getByText('Send to lead'));
+  await waitFor(() => expect(p.bridge.calls).toHaveLength(1));
+  expect(p.bridge.calls[0]).toMatchObject({ method: 'plans.verify', params: { projectPath: p.entry.projectPath, workId: 'w-01', planId: 'pl-01', rev: 4, item: 1, verdict: 'returned', note: 'Late recovery failure' } });
+  expect(p.onResolve).not.toHaveBeenCalled();
+});
+
+it('keeps an autonomous item selection and note when the host rejects return', async () => {
+  useHostStore.setState({ connections: 1, status: { state: 'connected', hostVersion: 'test', methods: ['plans.verify'] } });
+  const p = props(); p.plan = { ...plan, mode: 'autonomous', autonomous: autonomousPlan() };
+  const message = 'autonomous-completion-needs-item: select an item to return';
+  p.bridge.setHandler('plans.verify', () => { throw { code: 'bad_request', message }; });
+  render(<CompletionCard {...p} />);
+  fireEvent.click(screen.getByText('Return for rework'));
+  fireEvent.change(screen.getByLabelText('Item to return'), { target: { value: '1' } });
+  fireEvent.change(screen.getByLabelText('What should the lead change?'), { target: { value: 'Keep this note' } });
+  fireEvent.click(screen.getByText('Send to lead'));
+  expect(await screen.findByText(message)).toBeTruthy();
+  expect(screen.getByLabelText('Item to return')).toHaveProperty('value', '1');
+  expect(screen.getByLabelText('What should the lead change?')).toHaveProperty('value', 'Keep this note');
+  expect(p.onResolve).not.toHaveBeenCalled();
+});
+it('disables autonomous Return if the host does not advertise plans.verify', () => {
+  useHostStore.setState({ status: { state: 'connected', hostVersion: 'old', methods: [] } });
+  const p = props(); p.plan = { ...plan, mode: 'autonomous', autonomous: autonomousPlan() };
+  render(<CompletionCard {...p} />);
+  expect(screen.getByText('Return for rework')).toHaveProperty('disabled', true);
 });
