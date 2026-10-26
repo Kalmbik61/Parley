@@ -117,3 +117,12 @@ it('идёт диктовка: Send to lead завершает её и отве�
   expect(onResolve).not.toHaveBeenCalled();
   finish.mockRestore();
 });
+
+it('keeps the full long Go text available in an expandable proposal', () => {
+  const text = 'Go budget and frozen check specs\n' + 'spec argv detail\n'.repeat(160) + 'Final report hash';
+  const view = render(<DecisionCard {...props({ proposal: { ...proposal('p-01'), text } })} />);
+  const full = view.container.querySelector('details');
+  expect(full).toBeTruthy();
+  expect(full?.textContent).toContain('Final report hash');
+  expect(screen.getByText('Show full proposal')).toBeTruthy();
+});

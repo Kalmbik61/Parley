@@ -280,6 +280,7 @@ export {
   isGitRepo,
   baseBranchOf,
   checkoutGitDir,
+  checkProjectConnectivity,
   commitProject,
   gitStateReason,
   GitStateError,
@@ -589,7 +590,7 @@ export {
 } from './mcp/tools.js';
 export type { ToolRunner } from './mcp/tools.js';
 export type { MapChanges } from './mcp/watch-map.js';
-export { HUMAN, MESSAGE_KINDS, SYSTEM, PARLEY } from './work/types.js';
+export { HUMAN, MESSAGE_KINDS, SYSTEM, PARLEY, ENGINE } from './work/types.js';
 export type {
   Artifact,
   HistoryEntry,
@@ -613,6 +614,8 @@ export type {
   WorkStatus,
   WorksIndex,
   WorktreeInfo,
+  CloneWorkspace,
+  ArtifactsWorkspace,
 } from './work/types.js';
 
 export { createParleyMd, ensureParleyMd } from './work/parley-md.js';
@@ -639,13 +642,19 @@ export type { BacklogSuggestionInput, BacklogSuggestionResult, SuggestionOptions
 export { readProjectPreferences, setBacklogFile, setBacklogRule } from './work/project-preferences.js';
 export type { BacklogRule, ProjectPreferences } from './work/project-preferences.js';
 
-export { PLAN_ITEM_MAX, PLAN_TEXT_MAX, PlanConflictError, activeRoomPlan, planItemSatisfied, planItemsComplete, cancelRoomPlan, reconcileRoomPlans, setRoomMode, submitPlanItem, updatePlanItem, verifyPlanItem } from './work/plans.js';
+export { PLAN_ITEM_MAX, PLAN_TEXT_MAX, PlanConflictError, validateAutonomousDraft, activeRoomPlan, planItemSatisfied, planItemsComplete, cancelRoomPlan, reconcileRoomPlans, setRoomMode, submitPlanItem, updatePlanItem, verifyPlanItem } from './work/plans.js';
+export {
+  intendOp, settleOp, startAttempt, normalizeAttemptSubmission, submitAttempt, receipt, recordCheck, coverageVerdict,
+  returnAttempt, enqueue, integrate, suspend, supersedeByAmendment, lateDefect, halt,
+  reconcileAfterRestart, resume, reserve, release, failureSignature,
+} from './work/autonomous.js';
 export { capturePlanSnapshot, flushPlanSnapshots, PlanSnapshotError } from './work/plan-snapshots.js';
 export type { PlanSnapshotFlushResult } from './work/plan-snapshots.js';
 export { proposeCompletion } from './work/proposals.js';
 export type { ProposalOptions } from './work/proposals.js';
 export type { MapCompact } from './work/types.js';
 export type { RoomMode, PlanMode, PlanStatus, PlanItemStatus, PlanDraft, PlanItemInput, PlanItem, PlanEvidence, RoomPlan, PlanExportIntent } from './work/types.js';
+export type { AutonomousDraft, AttemptChannelRequest, AutonomousPlan, PlanAttempt, HandoffManifest, HandoffManifestInput, Receipt, CheckSpec, CheckResult, Integration, AutonomousBudget, AutonomousOp } from './work/types.js';
 
 export { parseProjectMemory, readProjectMemory, addProjectMemory, updateProjectMemory, removeProjectMemory, undoProjectMemory } from './work/project-memory.js';
 export type { MemoryKind, MemoryProvenance, MemoryItem, MemoryDocument, MemoryInput, MemoryPatch, MemoryWriteOptions, MemoryWriteResult, MemorySuggestion } from './work/project-memory.js';

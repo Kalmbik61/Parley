@@ -24,11 +24,13 @@ import {
   setWorkStatus,
   SKILL_MD,
   SYSTEM,
+  ENGINE,
+  startAttempt,
   transitionSession,
   updateMap,
   workPaths,
 } from '@parley/core';
-import type { WorktreeInfo } from '@parley/core';
+import type { RoleCatalog, RoomPlan, WorktreeInfo } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
@@ -38,6 +40,7 @@ import type { PtyManager } from '../pty/pty-manager.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
 import { atPrompt, busyError, createSessionsService, createSwitchLock } from './sessions-service.js';
+import { createWorktreesService } from '../worktrees/worktrees-service.js';
 import type { SessionsFeedOptions, SessionsService } from './sessions-service.js';
 
 const STUB = fileURLToPath(new URL('../../test/stub-agent.mjs', import.meta.url));
@@ -186,6 +189,111 @@ async function readArgs(file: string): Promise<StubArgs> {
   await waitFor(() => existsSync(file), REAL_PROCESS_WAIT_MS);
   return JSON.parse(await readFile(file, 'utf8')) as StubArgs;
 }
+
+describe('Git connectivity after worktree sessions', () => {
+  async function fixture(provider = 'codex', role = 'executor', withWorktree = true) {
+    await initGitProject(project);
+    const { work } = await createWork(project, { title: 'Git connectivity' });
+    const sessionId = await createPendingSession(project, work.id, { provider, label: '', task: '', role: { source: 'builtin', name: role } });
+    const ref = { projectPath: project, workId: work.id, sessionId };
+    const info = plannedWorktree(project, work.id, sessionId, 'main', path.join(project, 'worktrees'));
+    if (withWorktree) {
+      await createWorktree(project, info);
+      info.createdAt = new Date().toISOString();
+      await updateMap(project, work.id, map => { map.sessions[0]!.worktree = info; });
+    }
+    return { ref, info };
+  }
+
+  async function withGitStub(info: WorktreeInfo, code: number, task: (marker: string) => Promise<void>) {
+    const binary = (await runGit('which', ['git'])).stdout.trim();
+    const dir = path.join(project, 'git-bin'); await mkdir(dir);
+    const marker = path.join(project, 'fsck.jsonl');
+    const stub = path.join(dir, 'git');
+    await writeFile(stub, `#!/usr/bin/env node\nconst fs=require('node:fs');const cp=require('node:child_process');const args=process.argv.slice(2);if(args.includes('fsck')){fs.appendFileSync(${JSON.stringify(marker)},JSON.stringify({args,worktreeExists:fs.existsSync(${JSON.stringify(info.path)})})+'\\n');process.exit(${code});}const r=cp.spawnSync(${JSON.stringify(binary)},args,{stdio:'inherit'});process.exit(r.status??1);\n`);
+    await chmod(stub, 0o755);
+    const original = process.env.PATH;
+    process.env.PATH = `${dir}${path.delimiter}${original ?? ''}`;
+    try { await task(marker); } finally { process.env.PATH = original; }
+  }
+
+  function lifecyclePty(active: boolean): PtyManager {
+    let exit: (ref: SessionRef, result: { exitCode: number }) => void;
+    return {
+      on(event: string, listener: typeof exit) { if (event === 'exit') exit = listener; return () => {}; },
+      start(ref: SessionRef, launch: { provider: string }) {
+        active = true;
+        return { ref, pid: process.pid, startedAt: Date.now(), cols: 120, rows: 40, provider: launch.provider,
+          hasDraft: () => false, bracketedPaste: () => false };
+      },
+      get: () => active ? {} : undefined,
+      stop: async (ref: SessionRef) => { active = false; const result = { exitCode: 0 }; exit(ref, result); return result; },
+    } as unknown as PtyManager;
+  }
+
+  it.each([['exit', 0], ['exit', 1], ['natural-exit', 0], ['natural-exit', 1], ['delete', 0], ['delete', 1], ['discard', 0], ['discard', 1]] as const)('%s waits for Git fsck and warns only on failure (%s)', async (action, code) => {
+    const { ref, info } = await fixture();
+    await withGitStub(info, code, async marker => {
+      const host = fakeHost(); const warning = vi.spyOn(host.log, 'warn');
+      const pty = lifecyclePty(action !== 'delete' && action !== 'discard');
+      const sessions = createSessionsService(host, fakeWorks(), pty, fakeActivity());
+      if (action === 'natural-exit') { await pty.stop(ref); await sessions.stop(ref); }
+      else if (action === 'exit') await sessions.stop(ref);
+      else if (action === 'discard') await createWorktreesService(sessions).discard(ref, true);
+      else await sessions.delete(ref, true);
+      const calls = (await readFile(marker, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+      expect(calls).toHaveLength(1);
+      expect(calls[0].args).toEqual(expect.arrayContaining(['fsck', '--connectivity-only']));
+      expect(calls[0].worktreeExists).toBe(action !== 'delete' && action !== 'discard');
+      const notices = broadcasts.filter(item => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'git-connectivity-failed');
+      expect(notices).toHaveLength(code === 0 ? 0 : 1);
+      expect(warning.mock.calls.some(([message]) => message === 'Git connectivity check failed')).toBe(code !== 0);
+    });
+  });
+
+  it.each([['claude', 'executor', true], ['codex', 'executor', false]] as const)('leaves %s/%s worktree=%s unchanged', async (provider, role, withWorktree) => {
+    const { ref, info } = await fixture(provider, role, withWorktree);
+    await withGitStub(info, 1, async marker => {
+      const sessions = createSessionsService(fakeHost(), fakeWorks(), lifecyclePty(true), fakeActivity());
+      await sessions.stop(ref);
+      expect(existsSync(marker)).toBe(false);
+      expect(broadcasts.some(item => item.event === 'host.notice')).toBe(false);
+    });
+  });
+
+  it.each([['exit', false], ['delete', false], ['exit', true]] as const)('uses the issued native-role grant after %s (initial readOnly=%s)', async (action, initiallyReadOnly) => {
+    const { ref, info } = await fixture();
+    setEnv('PARLEY_CODEX_BIN', STUB);
+    await saveConfig({ codexWriteApprovals: 'terminal' });
+    await updateMap(project, ref.workId, map => { map.sessions[0]!.role = { source: 'codex', name: 'changing' }; });
+    let readOnly = initiallyReadOnly;
+    const roleCatalog = async (): Promise<RoleCatalog> => ({ roles: [{ id: 'codex:changing', source: 'codex', provider: 'codex', name: 'Changing', description: '', path: '/fixture.toml', prompt: 'Role', readOnly, sandboxMode: readOnly ? 'read-only' : 'workspace-write' }], diagnostics: [], partial: false });
+    await withGitStub(info, 1, async marker => {
+      const sessions = createSessionsService(fakeHost(), fakeWorks(), lifecyclePty(false), fakeActivity(), { roleCatalog });
+      expect(await sessions.launch(ref, 'launch')).toBe('started');
+      readOnly = true;
+      if (action === 'exit') await sessions.stop(ref);
+      else await sessions.delete(ref, true);
+      expect(existsSync(marker)).toBe(!initiallyReadOnly);
+      if (!initiallyReadOnly) {
+        const calls = (await readFile(marker, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+        expect(calls.at(-1).worktreeExists).toBe(action === 'exit');
+        expect(broadcasts.some(item => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'git-connectivity-failed')).toBe(true);
+      }
+    });
+  });
+
+  it('checks historical worktree grants conservatively after host restart, including current read-only roles', async () => {
+    const { ref, info } = await fixture('codex', 'critic');
+    await withGitStub(info, 1, async marker => {
+      const sessions = createSessionsService(fakeHost(), fakeWorks(), lifecyclePty(false), fakeActivity());
+      await createWorktreesService(sessions).discard(ref, true);
+      const calls = (await readFile(marker, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+      expect(calls).toHaveLength(1);
+      expect(calls[0].worktreeExists).toBe(false);
+    });
+  });
+});
 
 describe('create() + launch(): argv и окружение процесса', () => {
   it('сессия с задачей: settings/mcp-config/append-system-prompt есть, бриф — последним аргументом, канала нет', async () => {
@@ -617,6 +725,18 @@ describe('время шагов в логе хоста', () => {
 });
 
 describe('launch(): лента вида «Chat» — адрес приёмника и токен по версии claude (Task 2c)', () => {
+  const hookEnv = ['PARLEY_HOOK_TOKEN', 'PARLEY_HOOK_URL', 'PARLEY_HOOK_CAPABILITY'];
+  let inheritedHooks: Array<string | undefined>;
+  beforeEach(() => {
+    inheritedHooks = hookEnv.map(name => process.env[name]);
+    for (const name of hookEnv) delete process.env[name];
+  });
+  afterEach(() => {
+    hookEnv.forEach((name, index) => {
+      if (inheritedHooks[index] === undefined) delete process.env[name];
+      else process.env[name] = inheritedHooks[index];
+    });
+  });
   const HOOK_URL = 'http://127.0.0.1:4321/hooks';
 
   /** Заглушка приёмника: выдаёт токены по порядку и пишет, кого зарегистрировали и сняли. */
@@ -2395,6 +2515,109 @@ describe('setModel(): смена модели (спека нормалайзер
 
 
 describe('agent-created workspace peers', () => {
+  it.each(['codex', 'claude'] as const)('enforces autonomous %s policy and TMPDIR at the actual spawn', async provider => {
+    const work = await createWork(project, { title: 'Autonomous launch', goal: '' });
+    const pty = createPtyManager(fakeHost()), spawn = vi.spyOn(pty, 'start');
+    const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity());
+    const attempt = path.join(project, 'attempt');
+    const clone = path.join(attempt, 'clone'); await mkdir(clone, { recursive: true }); await mkdir(path.join(clone, '.parley-tmp'));
+    try {
+      const worker = await service.create({ projectPath: project, workId: work.work.id, provider, label: 'Worker', task: 'Implement', parent: null, requestedBy: ENGINE,
+        deferLaunch: true, workspace: { kind: 'clone', path: clone, branch: 'attempt', sha: 'a'.repeat(40) } });
+      await service.launch(worker, 'launch', { by: ENGINE });
+      const options = spawn.mock.calls.at(-1)![1];
+      expect(options.cwd).toBe(clone);
+      expect(options.env?.TMPDIR).toBe(path.join(clone, '.parley-tmp'));
+      expect(options.env?.HOME).toBe(process.env.HOME);
+      if (provider === 'claude') {
+        expect(options.args).toEqual(expect.arrayContaining(['--permission-mode', 'auto']));
+        expect(options.args).not.toContain('acceptEdits');
+        const file = options.args[options.args.indexOf('--settings') + 1]!;
+        expect(JSON.parse(await readFile(file, 'utf8')).sandbox).toEqual({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true });
+        expect(file).toContain(`/settings/${worker.sessionId}.json`);
+      } else expect(options.args).toEqual(expect.arrayContaining(['approval_policy="never"', 'sandbox_workspace_write.exclude_slash_tmp=true', 'sandbox_workspace_write.exclude_tmpdir_env_var=true']));
+    } finally { await service.stopAll(); }
+  });
+
+  it('persists engine clone cwd and rejects ordinary clone assignment', async () => {
+    const work = await createWork(project, { title: 'Engine clone', goal: '' });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const workspace = { kind: 'clone' as const, path: path.join(project, 'clone'), branch: 'attempts/at-0001', sha: 'a'.repeat(40) };
+    await mkdir(workspace.path);
+    const input = { projectPath: project, workId: work.work.id, provider: 'claude', label: 'Worker', task: 'Implement', parent: null, workspace };
+    await expect(service.create(input)).rejects.toMatchObject({ code: 'bad_request' });
+    const ref = await service.create({ ...input, requestedBy: ENGINE, deferLaunch: true });
+    const session = (await readMap(project, work.work.id)).sessions.find(row => row.id === ref.sessionId)!;
+    expect(session.workspace).toEqual(workspace);
+    expect(session.worktree).toBeNull();
+    const argsFile = await tempArgsFile();
+    setEnv('STUB_ARGS_FILE', argsFile);
+    try {
+      await service.launch(ref, 'launch', { by: ENGINE });
+      expect(await realpath((await readArgs(argsFile)).cwd)).toBe(await realpath(workspace.path));
+    } finally { await service.stopAll(); }
+  });
+
+  it('charges plan-namespaced engine identities to their own room creation budgets', async () => {
+    setEnv('PARLEY_ROOM_NEW_SESSIONS', '1');
+    const work = await createWork(project, { title: 'Two engine plans', goal: '' });
+    const leads = await Promise.all([1, 2].map(i => createPendingSession(project, work.work.id, { provider: 'claude', label: `Lead ${i}`, task: 'Lead', parent: null, contextFrom: [] })));
+    const roomIds: string[] = [];
+    await updateMap(project, work.work.id, map => {
+      map.plans = leads.map((lead, index) => {
+        const room = addRoom(map, { title: `Plan ${index}`, creator: lead, members: [lead], lead, mode: 'autonomous' }); roomIds.push(room.id);
+        const at = new Date().toISOString(), sha = 'a'.repeat(40);
+        const plan: RoomPlan = {
+          id: `pl-0${index + 1}`, roomId: room.id, rev: 1, mode: 'autonomous', status: 'active', goal: 'Implement', backlog: [], acceptedAt: at, completedAt: null, cancelledAt: null, completionSummary: null,
+          items: [{ id: 1, title: 'Implement', owner: ENGINE, verifier: ENGINE, scope: 'src', after: [], criteria: ['Works'], status: 'ready', evidence: null, note: null, log: [] }],
+          autonomous: { criteriaVersion: { 1: 1 }, checks: [], coverage: { 1: { 0: ['verifier'] } },
+            budget: { limits: { attemptsPerItem: 3, repairWaves: 3, minutesPerAttempt: 30, sessions: 10, concurrent: 4 }, spent: { attempts: 0, repairWaves: 0, sessions: 0, verifiers: 0, minutes: 0, launches: 0 }, reservations: [] },
+            integration: { branch: `integration/pl-0${index + 1}`, baseSha: sha, verifiedHead: sha, candidateHead: null, queue: [], suspended: null }, attempts: [], ops: [], halted: null, seq: { attempt: 0, receipt: 0, check: 0, op: 0 } },
+        };
+        return startAttempt(plan, { actor: ENGINE, rev: 1, now: at, item: 1, branch: 'attempt', baseSha: sha });
+      });
+    });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const input = { projectPath: project, workId: work.work.id, provider: 'claude', task: 'Implement', parent: null, requestedBy: ENGINE, deferLaunch: true };
+    for (const planId of ['pl-01', 'pl-02']) {
+      await service.create({ ...input, label: `${planId}/at-0001/worker/op-0001` });
+      await expect(service.create({ ...input, label: `${planId}/at-0001/worker/op-0001` })).rejects.toThrow();
+    }
+    await service.create({ ...input, label: 'pl-unknown/at-0001/worker/op-0001' });
+    const map = await readMap(project, work.work.id);
+    expect(map.resources?.spawnedByRoom).toEqual(Object.fromEntries(roomIds.map(id => [id, 1])));
+    expect(map.resources?.spawned).toBe(3);
+  });
+  it('defers engine creation until its separately journaled launch', async () => {
+    const work = await createWork(project, { title: 'Engine', goal: '' });
+    const pty = createPtyManager(fakeHost());
+    const start = vi.spyOn(pty, 'start');
+    const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity());
+    const input = { projectPath: project, workId: work.work.id, provider: 'claude', label: 'at-0001 worker op-0001', task: 'Implement', parent: null, requestedBy: ENGINE, deferLaunch: true };
+    try {
+      const ref = await service.create(input);
+      const pending = await readMap(project, work.work.id);
+      expect(pending.sessions.find(row => row.id === ref.sessionId)?.lifecycle).toBe('pending');
+      expect(start).not.toHaveBeenCalled();
+      expect(pending.resources?.attempts ?? []).toEqual([]);
+      expect(pending.resources?.spawned).toBe(1);
+      await service.launch(ref, 'launch', { by: ENGINE });
+      expect(start).toHaveBeenCalledTimes(1);
+      expect((await readMap(project, work.work.id)).resources?.attempts.find(row => row.session === ref.sessionId)).toMatchObject({ actor: ENGINE, state: 'spent' });
+    } finally { await service.stopAll(); }
+  });
+
+  it('refuses deferLaunch for ordinary callers and preserves engine creation limits', async () => {
+    setEnv('PARLEY_WORK_NEW_SESSIONS', '1');
+    const work = await createWork(project, { title: 'Engine', goal: '' });
+    const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity());
+    const input = { projectPath: project, workId: work.work.id, provider: 'claude', label: 'Engine', task: 'Implement', parent: null, deferLaunch: true };
+    await expect(service.create({ ...input, requestedBy: caller })).rejects.toThrow('engine');
+    await service.create({ ...input, requestedBy: ENGINE });
+    await expect(service.create({ ...input, requestedBy: ENGINE })).rejects.toThrow();
+    expect((await readMap(project, work.work.id)).sessions).toHaveLength(2);
+  });
   it('identifies the recorded peer after launch failure and releases its reserved slot', async () => {
     const work = await createWork(project, { title: 'Peers', goal: '' });
     const caller = await createPendingSession(project, work.work.id, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });

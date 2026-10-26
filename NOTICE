@@ -188,6 +188,20 @@ docs/design/2026-09-29-rooms-organic/prototype/assets: это hi-fi handoff, к�
 Знаки принадлежат их владельцам: Anthropic — Claude, OpenAI — Codex. Проект их
 не изменял и не выдаёт за свои.
 
+Файлы packages/desktop/src/renderer/assets/providers/kimi.svg и kimi-light.svg
+(для тёмной темы) — официальный знак Kimi, Moonshot AI. Скопированы без правок
+2026-10-26 из KIMI-logos/Logomark/SVG/Logomark_Light.svg и Logomark_Dark.svg
+архива kimi-logo-assets.zip, ссылка Download Asset на странице брендбука:
+https://www.kimi.com/resources/kimi-brand
+Адрес архива:
+https://kimi-file.kimi.ai/prod-chat-kimi/kfs/4/1/2026-08-12/1d9u74p1l51jas5cp5oq0?response-content-disposition=attachment%3Bfilename%3Dkimi-logo-assets.zip
+Условия использования знака: https://www.kimi.com/zh-cn/policies/logo-usage-terms
+Знак принадлежит Moonshot AI; используется для обозначения провайдера Kimi,
+не означает одобрения или партнёрства с Parley.
+SHA-256 исходных SVG:
+kimi.svg: a543446e0c6827bae262ec45e6bbc67cc0c9e9f446ebc86be916c082459aed25
+kimi-light.svg: e47dc8cfa928317cba1ce1605545d5b92f349a465b031f956a56f2788ed17c6a
+
 Файл packages/desktop/src/renderer/assets/providers/parley.svg — собственный знак
 проекта Parley, копия docs/media/brand/parley-icon.svg. Окно рисует его у своих
 (пользовательских) провайдеров, пока у них нет вендорских значков.

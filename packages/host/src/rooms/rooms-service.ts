@@ -11,6 +11,7 @@
  */
 
 import { existsSync } from 'node:fs';
+import { resolveAutonomousProposal } from './autonomous-engine.js';
 import {
   addMember,
   addMessage,
@@ -20,6 +21,9 @@ import {
   archiveRoom,
   deleteRoom,
   HUMAN,
+  ENGINE,
+  resume,
+  settleOp,
   DEFAULT_CONFIG,
   loadConfig,
   capturePlanNotice,
@@ -34,7 +38,6 @@ import {
   renameRoom,
   reopenRoom,
   requireOpenRoom,
-  resolveProposal,
   RoomRuleError,
   setRoomLead,
   setRoomOwner,
@@ -241,7 +244,7 @@ export async function resolveRoomProposal(input: Params<'rooms.resolveProposal'>
   await updateMap(projectPath, workId, (map) => {
     try {
       const completion = map.rooms.find(row => row.id === roomId)?.proposal;
-      messageId = resolveProposal(map, roomId, proposalId, action, { note, rev, ...(planId === undefined ? {} : { planId }), ...(planRev === undefined ? {} : { planRev }) }).messageId;
+      messageId = resolveAutonomousProposal(map, roomId, proposalId, action, { note, rev, ...(planId === undefined ? {} : { planId }), ...(planRev === undefined ? {} : { planRev }) });
       if (action === 'return' && completion?.kind === 'completion')
         capturePlanNotice(map, roomId, 'completion-returned', messageId, completion.planId);
       reservePlanEffects(map, rate);
@@ -250,6 +253,24 @@ export async function resolveRoomProposal(input: Params<'rooms.resolveProposal'>
     }
   });
   return messageId;
+}
+
+/** Explicit human action; the engine observes the committed map through its subscription. */
+export async function resumeAutonomousPlan(input: Params<'plans.resumeAutonomous'>): Promise<void> {
+  const { projectPath, workId, roomId, planId, rev } = input;
+  assertWork(projectPath, workId);
+  await updateMap(projectPath, workId, map => {
+    try {
+      if (map.work.status !== 'active') throw new RoomRuleError('workspace is closed');
+      requireOpenRoom(map, roomId);
+      const index = map.plans?.findIndex(plan => plan.id === planId && plan.roomId === roomId) ?? -1;
+      if (index < 0) throw new PlanConflictError();
+      let plan = resume(map.plans![index]!, { actor: ENGINE, requestedBy: HUMAN, rev, now: new Date().toISOString() });
+      const op = plan.autonomous!.ops.at(-1)!;
+      plan = settleOp(plan, { actor: ENGINE, rev, now: op.at, key: op.key, outcome: 'done', result: { requestedBy: HUMAN } });
+      map.plans![index] = plan;
+    } catch (error) { throw asHostError(error); }
+  });
 }
 
 /**

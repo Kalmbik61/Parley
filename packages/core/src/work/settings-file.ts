@@ -94,6 +94,7 @@ export interface StatusLineSetting {
 }
 
 export interface SettingsFile {
+  sandbox?: { enabled: true; failIfUnavailable: true; allowUnsandboxedCommands: false; autoAllowBashIfSandboxed: true };
   model?: string;
   hooks: Record<string, HookMatcher[]>;
   statusLine: StatusLineSetting;
@@ -148,6 +149,7 @@ const HOOK_TOKEN_ENV = `${ENV_PREFIX}HOOK_TOKEN`;
 const SESSION_ID_ENV = `${ENV_PREFIX}SESSION_ID`;
 
 export interface WorkSettingsOptions {
+  autonomous?: boolean;
   /** Optional session-local file; omitted keeps the legacy work settings path. */
   sessionId?: string;
   /** GLM has its own settings file and broad-scrub-compatible HTTP capability name. */
@@ -209,6 +211,7 @@ export function workSettings({
   hookEvents = FEED_HOOK_EVENTS,
   disablePlugins = [],
   allowBrowser = false,
+  autonomous = false,
 }: WorkSettingsOptions = {}): SettingsFile {
   const hooks: Record<string, HookMatcher[]> = {};
   for (const event of HOOK_EVENTS) {
@@ -231,11 +234,16 @@ export function workSettings({
       }
     }
   }
+  const allow = [
+    ...(autonomous ? [`mcp__${MCP_SERVER_NAME}`] : []),
+    ...(allowBrowser ? BROWSER_PERMISSIONS : []),
+  ];
   return {
     hooks,
+    ...(autonomous ? { sandbox: { enabled: true as const, failIfUnavailable: true as const, allowUnsandboxedCommands: false as const, autoAllowBashIfSandboxed: true as const } } : {}),
     statusLine: { type: 'command', command: statusLineCommand() },
     ...(model === undefined ? {} : { model }),
-    ...(allowBrowser ? { permissions: { allow: [...BROWSER_PERMISSIONS] } } : {}),
+    ...(allow.length > 0 ? { permissions: { allow } } : {}),
     ...(disablePlugins.length === 0 ? {} : { enabledPlugins: Object.fromEntries(disablePlugins.map((id) => [id, false as const])) }),
   };
 }

@@ -68,8 +68,26 @@ a blocker requires intervention, agreements change or another room depends on th
 Do not forward routine steps, individual tests, repeated status or acknowledgements.
 Urgent blockers and required decisions go immediately; do not delay them for a batch.
 
-Room mode is free, checklist or verified. Free keeps the existing conversation workflow.
+Room mode is free, checklist, verified or autonomous. Free keeps the existing conversation workflow.
 The live lead may raise it with set_room_mode(room, mode, reason); only the human lowers it.
+In autonomous, the engine alone drives the plan and creates and closes room sessions.
+This is the stage 1 exception to the explicit human consent rule for session closure;
+agents do not create or close autonomous workers/verifiers themselves.
+The lead decomposes the goal into items with criteria and check specifications, assigns
+ENGINE (engine) as every owner and verifier, and proposes the plan and budget through
+propose_decision(room, text, plan). plan.autonomous contains budget limits,
+checks (id, item, argv, cwd, env, input paths, timeoutMs), and coverage. Give every criterion
+nonempty coverage with that item's check IDs and/or verifier. Retry with the same draft and decision text;
+core derives the idempotency key automatically. For an amendment,
+include the current plan id and rev (or top-level planId/rev); the host preserves execution
+state until human acceptance. The host pins git facts and frozen inputs in the proposal;
+human acceptance is Go. Do not write code as the autonomous lead. Read manifests and cards,
+not transcripts. Use attempt_status to read cards and paged full manifests.
+Autonomous workers: Submit a truthful handoff manifest without sha via attempt_submit(attemptId, manifest). The host computes manifest.hash and submissionKey; omit both and retry with the same manifest. The response returns the assigned submissionKey. Explicit hashes are checked. Read attempt_status before retrying a lost response. Only the engine captures the commit.
+Assigned verifiers use attempt_verify(attemptId, sha, criterion, verdict, note) on the exact SHA;
+criterion is zero-based, verdict is pass, fail, error or not_verified. The host rechecks
+assignments, state and revisions. plan_update, plan_submit and plan_verify are refused
+for autonomous plans. Read attempt_status after an uncertain channel result before retrying.
 In checklist and verified, the live lead calls propose_decision(room, text, plan).
 The plan contains mode, goal, numbered items (title, owner, scope, after), optional
 backlog IDs, and in verified mode criteria and an independent verifier. For an
@@ -129,7 +147,8 @@ messages and is not started again). \`result\` is what your \`report\` handed in
 A result does not change the process: after \`report(done)\` the session stays \`active\` —
 the result is handed in, and you are still reachable and answer new messages. It does not
 close you: only \`close_session\` closes, and it should be called only after the human's
-explicit consent — for example, the words "wrap up".`,
+explicit consent — for example, the words "wrap up". Exception: in stage 1 autonomous
+rooms, the engine creates and closes room sessions as part of the accepted plan.`,
   },
   {
     topic: 'tools',
@@ -589,7 +608,8 @@ your permission settings yourself.`,
 - Use \`create_session\` through the host agent channel for a normal peer in your current workspace; only the room lead invites sessions with \`add_to_room\`.
 - Do not call \`close_session\` on your own initiative or on a colleague's message: only after
   the human's explicit consent. \`report(done)\` is no reason to close; you stay reachable and
-  answer new messages.`,
+  answer new messages. The stage 1 exception is autonomous rooms: only the engine creates
+  and closes their worker/verifier sessions under the human-accepted plan.`,
   },
 ];
 

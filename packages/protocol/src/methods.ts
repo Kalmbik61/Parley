@@ -209,7 +209,7 @@ export const METHODS = {
     // сессии уже работают и о комнате иначе не узнают. Старый хост поле отбросит.
     quiet: z.boolean().optional(),
     // Режим комнаты (планы и режимы): без него комната свободная, как прежде. Старый хост поле отбросит.
-    mode: z.enum(['free', 'checklist', 'verified']).optional(),
+    mode: z.enum(['free', 'checklist', 'verified', 'autonomous']).optional(),
     // Снимок рецепта на момент создания (спека рецептов, 6.2): хост кладёт его в комнату как есть, правка
     // файла рецепта комнату потом не меняет. Лишние поля не принимаются.
     recipe: recipeSnapshot.optional(),
@@ -257,6 +257,13 @@ export const METHODS = {
     planId: z.string().regex(/^pl-\d+$/).max(128).optional(),
     planRev: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
   }).refine(value => (value.planId === undefined) === (value.planRev === undefined)),
+  'plans.resumeAutonomous': z.strictObject({
+    projectPath: z.string().min(1).max(32768),
+    workId: z.string().regex(/^w-\d+$/).max(128),
+    roomId: z.string().regex(/^r-\d+$/).max(128),
+    planId: z.string().regex(/^pl-\d+$/).max(128),
+    rev: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  }),
   'rooms.send': z.object({
     projectPath: z.string(),
     workId: z.string(),
@@ -454,6 +461,7 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
   'rooms.usage': RoomUsage;
   /** `messageId` — сообщение `decision` при `accept`, письмо ведущему при `return`. */
   'rooms.resolveProposal': { messageId: string };
+  'plans.resumeAutonomous': { ok: true };
   'rooms.send': { messageId: string };
   'worktrees.available': { available: boolean };
   'worktrees.diff': WorktreeDiff;

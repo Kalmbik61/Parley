@@ -158,9 +158,9 @@ export function CustomProviderPanel({ providerId, onSaved, onDeleted }: CustomPr
               className="flex flex-col items-start gap-0.5 rounded-xl border border-border px-3 py-2 text-left transition-colors hover:bg-foreground/7"
             >
               <span className="flex items-center gap-1.5 text-sm font-medium">
-                {/* Значок Parley на всех плитках: вендорские значки — следующая работа (спека 3.7). */}
+                {/* У Kimi — официальный знак; у остальных вендоров пока значок Parley. */}
                 <span aria-hidden="true" className="inline-flex">
-                  <AgentIcon provider="custom-x" size={14} />
+                  <AgentIcon provider={preset?.id === 'kimi' ? 'kimi' : 'custom-x'} size={14} />
                 </span>
                 {preset?.label ?? S.customProviders.ownAddress}
               </span>

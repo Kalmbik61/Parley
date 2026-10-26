@@ -20,6 +20,7 @@ const PROTOCOL_CODES: ErrorCode[] = [
 const NOTICE_KINDS: NoticeKind[] = [
   'map-lock',
   'map-corrupt',
+  'git-connectivity-failed',
   'hooks-missing',
   'launch-failed',
   'pointer-timeout',
@@ -404,4 +405,12 @@ describe('аккаунты подписки: минимальная версия
   it('текст «нужен Claude Code» называет ту же версию, что ACCOUNT_MIN_VERSION_CLAUDE ядра', () => {
     expect(S.accounts.needsCli('Claude Code 2')).toBe(`Claude Code 2 requires Claude Code ${ACCOUNT_MIN_VERSION_CLAUDE} or newer`);
   });
+});
+
+it('provides autonomous labels and counts verified progress', () => {
+  expect(S.plans.modes.autonomous).toBe('Autonomous');
+  expect(S.plans.modeHelp.autonomous).toBe('The engine runs attempts after Go; the human accepts the result');
+  expect(S.plans.progress('autonomous', 1, 2, 0)).toBe('1/2 verified');
+  expect(S.plans.halted).toBe('Execution stopped');
+  expect(S.plans.continue).toBe('Continue');
 });

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -10,6 +10,7 @@ import {
   commitProject,
   commitWorktree,
   createWorktree,
+  checkProjectConnectivity,
   discardWorktree,
   DirtyWorktreeError,
   GitStateError,
@@ -25,6 +26,7 @@ import {
   parseNumstat,
   parsePorcelainPaths,
   plannedWorktree,
+  prepareWorktreeGitWrites,
   projectChanges,
   worktreeDiff,
 } from './worktree.js';
@@ -65,6 +67,78 @@ async function initProject(): Promise<void> {
   await git(project, ['add', 'README.md']);
   await git(project, ['commit', '-m', 'первый']);
 }
+
+describe('prepareWorktreeGitWrites', () => {
+  it.each([false, true])('prepares only own ref/log parents, including packed refs (%s), without rewriting Git state', async packed => {
+    await initProject();
+    const info = plannedWorktree(project, 'w-0001', 's-02', 'main', worktreeRoot);
+    await createWorktree(project, info);
+    if (packed) await git(project, ['pack-refs', '--all']);
+    const common = await realpath(path.join(project, '.git'));
+    const ref = path.join(common, 'refs', 'heads', info.branch);
+    const log = path.join(common, 'logs', 'refs', 'heads', info.branch);
+    const originalLog = await readFile(log, 'utf8');
+    const sha = (await git(info.path, ['rev-parse', 'HEAD'])).stdout.trim();
+    const [roots, concurrent] = await Promise.all([
+      prepareWorktreeGitWrites(project, 'w-0001', 's-02', info),
+      prepareWorktreeGitWrites(project, 'w-0001', 's-02', info),
+    ]);
+    expect(concurrent).toEqual(roots);
+    const gitDir = (await git(info.path, ['rev-parse', '--absolute-git-dir'])).stdout.trim();
+    expect(roots).toEqual([await realpath(gitDir), path.join(common, 'objects'), ref, `${ref}.lock`, log, `${log}.lock`]);
+    expect((await stat(path.dirname(ref))).isDirectory()).toBe(true);
+    expect((await stat(path.dirname(log))).isDirectory()).toBe(true);
+    expect(await access(ref).then(() => true, () => false)).toBe(!packed);
+    expect(await readFile(log, 'utf8')).toBe(originalLog);
+    expect((await git(info.path, ['rev-parse', 'HEAD'])).stdout.trim()).toBe(sha);
+    expect(await prepareWorktreeGitWrites(project, 'w-0001', 's-02', info)).toEqual(roots);
+  });
+
+  it('rejects a changed branch, detached HEAD, another session and forged checkout metadata', async () => {
+    await initProject();
+    const info = plannedWorktree(project, 'w-0001', 's-02', 'main', worktreeRoot);
+    await createWorktree(project, info);
+    await expect(prepareWorktreeGitWrites(project, 'w-0001', 's-03', info)).rejects.toThrow('own branch');
+    await git(info.path, ['checkout', '-b', 'other']);
+    await expect(prepareWorktreeGitWrites(project, 'w-0001', 's-02', info)).rejects.toThrow('own branch');
+    await git(info.path, ['checkout', '--detach']);
+    await expect(prepareWorktreeGitWrites(project, 'w-0001', 's-02', info)).rejects.toThrow('own branch');
+    await writeFile(path.join(info.path, '.git'), `gitdir: ${path.join(project, '.git')}\n`);
+    await expect(prepareWorktreeGitWrites(project, 'w-0001', 's-02', info)).rejects.toBeInstanceOf(GitStateError);
+  });
+
+  it('keeps the stored legacy session branch name', async () => {
+    await initProject();
+    const info = { ...plannedWorktree(project, 'w-0001', 's-02', 'main', worktreeRoot), branch: 'harnas/w-0001/s-02' };
+    await createWorktree(project, info);
+    expect(await prepareWorktreeGitWrites(project, 'w-0001', 's-02', info)).toContain(path.join(await realpath(path.join(project, '.git')), 'refs', 'heads', info.branch));
+  });
+
+  it.each(['log', 'lock', 'parent'])('rejects redirected %s paths before granting permissions', async kind => {
+    await initProject();
+    const info = plannedWorktree(project, 'w-0001', 's-02', 'main', worktreeRoot);
+    await createWorktree(project, info);
+    const common = path.join(project, '.git');
+    const foreign = path.join(root, 'foreign'); await mkdir(foreign);
+    const target = kind === 'parent' ? path.join(common, 'logs', 'refs', 'heads', 'parley')
+      : kind === 'log' ? path.join(common, 'logs', 'refs', 'heads', info.branch)
+      : `${path.join(common, 'refs', 'heads', info.branch)}.lock`;
+    await rm(target, { recursive: true, force: true });
+    await symlink(kind === 'parent' ? foreign : path.join(project, 'README.md'), target);
+    await expect(prepareWorktreeGitWrites(project, 'w-0001', 's-02', info)).rejects.toBeInstanceOf(GitStateError);
+    expect(await access(path.join(foreign, 'w-0001')).then(() => true, () => false)).toBe(false);
+  });
+});
+
+describe('checkProjectConnectivity', () => {
+  it('accepts intact repositories and rejects a missing referenced object', async () => {
+    await initProject();
+    await expect(checkProjectConnectivity(project)).resolves.toBeUndefined();
+    const tree = (await git(project, ['rev-parse', 'HEAD^{tree}'])).stdout.trim();
+    await rm(path.join(project, '.git', 'objects', tree.slice(0, 2), tree.slice(2)));
+    await expect(checkProjectConnectivity(project)).rejects.toThrow();
+  });
+});
 
 describe('plannedWorktree', () => {
   it('строит путь и ветку по формату спеки: <root>/<проект>-<хеш6>/<workId>-<sessionId>', () => {

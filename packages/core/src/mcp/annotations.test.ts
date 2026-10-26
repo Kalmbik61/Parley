@@ -50,6 +50,9 @@ const TABLE: Record<string, Hints> = {
   send_message: WRITE,
   create_room: WRITE,
   add_to_room: WRITE,
+  attempt_status: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  attempt_submit: WRITE,
+  attempt_verify: WRITE,
   propose_decision: WRITE,
   set_room_mode: WRITE,
   plan_update: WRITE,
@@ -173,6 +176,7 @@ describe('аннотации инструментов parley: таблица', (
 
     expect(destructive.map((tool) => tool.name)).toEqual(['close_session']);
     expect(readOnly.map((tool) => tool.name).sort()).toEqual([
+      'attempt_status',
       'backlog_list',
       'get_map',
       'list_roles',

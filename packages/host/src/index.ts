@@ -8,3 +8,5 @@ export { createLog } from './log.js';
 export type { Log } from './log.js';
 export { probeCliVersion } from './providers/versions.js';
 export type { VersionProbe } from './providers/versions.js';
+export { AGENT_ATTEMPTS_PATH, attemptsEngineGitPath, createAttemptsEndpoint } from './agent/attempts-endpoint.js';
+export type { AttemptsEngine, AttemptsProposal, AttemptsResult } from './agent/attempts-endpoint.js';

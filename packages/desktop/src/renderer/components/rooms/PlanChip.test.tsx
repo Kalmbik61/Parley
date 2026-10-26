@@ -1,3 +1,5 @@
+import { PlanHaltBadge } from './PlanChip.js';
+import { autonomousRoomPlan } from '../../test-utils/autonomous-plan.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { capPlan } from '@parley/core/agent-plan';
@@ -91,4 +93,12 @@ describe('PlanChip and shared PlanHover', () => {
     expect(screen.getByText('Plan may be incomplete')).toBeTruthy();
     expect(screen.queryByText('1/3')).toBeNull();
   });
+});
+
+it('shows a halt badge with the engine detail and removes it when resumed', () => {
+  const roomPlan = autonomousRoomPlan();
+  const view = render(<PlanHaltBadge plan={roomPlan} />);
+  expect(screen.getByText('Execution stopped').title).toBe('capture: unexpected failure');
+  view.rerender(<PlanHaltBadge plan={{ ...roomPlan, autonomous: { ...roomPlan.autonomous!, halted: null } }} />);
+  expect(screen.queryByText('Execution stopped')).toBeNull();
 });

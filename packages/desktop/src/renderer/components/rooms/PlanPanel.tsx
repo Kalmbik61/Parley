@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { PlanItem, RoomMode, RoomPlan, WorkEntry } from "@parley/core";
+import type { CheckResult, PlanItem, RoomMode, RoomPlan, WorkEntry } from "@parley/core";
 import type { PlanActionResult } from "@parley/protocol";
 import type { ParleyBridge } from "../../../shared/bridge.js";
 import { decodeIpcError } from "../../../shared/ipc-error.js";
@@ -11,6 +11,7 @@ import { sessionRowLabel } from "../../lib/participant.js";
 import { useHostStore } from "../../store/host.js";
 import { Button } from "../../ui/button.js";
 import { Textarea } from "../../ui/textarea.js";
+import { PlanHaltBadge } from "./PlanChip.js";
 
 const P = S.plans;
 export function currentRoomPlan(
@@ -42,7 +43,7 @@ export function planProgress(plan: RoomPlan): string {
  * Replies cannot settle another room/revision, connection, bridge or unmounted view. Human form text survives.
  * An archived room (`archived`) is read-only like a closed work: nothing is written to it until the human reopens it.
  */
-function usePlanRequest(
+export function usePlanRequest(
   identity: string,
   bridge: ParleyBridge,
   workStatus: WorkEntry["map"]["work"]["status"],
@@ -66,18 +67,20 @@ function usePlanRequest(
   const generation = useRef(0);
   const inFlight = useRef(false);
   const [busy, setBusy] = useState(false);
+  const [succeeded, setSucceeded] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   useEffect(() => {
     ++generation.current;
     inFlight.current = false;
     setBusy(false);
+    setSucceeded(false);
     setFeedback(null);
     return () => {
       ++generation.current;
     };
   }, [key, bridge]);
   const run = async (
-    request: () => Promise<PlanActionResult>,
+    request: () => Promise<PlanActionResult | { ok: true }>,
     allowClosed = false,
   ): Promise<boolean> => {
     if (
@@ -98,14 +101,13 @@ function usePlanRequest(
     try {
       const result = await request();
       if (!active()) return false;
-      const effects = result.effects;
+      const effects = "effects" in result ? result.effects : null;
       setFeedback(
         P.saved +
-          (effects.queued +
+          (effects && (effects.queued +
             effects.pendingSnapshots +
             effects.pendingBacklog +
-            effects.conflictCount >
-          0
+            effects.conflictCount) > 0
             ? " " +
               P.workspaceEffects +
               ": " +
@@ -117,12 +119,16 @@ function usePlanRequest(
               )
             : ""),
       );
+      setSucceeded(true);
       return true;
     } catch (error) {
-      if (active())
+      if (active()) {
+        const info = decodeIpcError(error);
         setFeedback(
-          decodeIpcError(error).code === "conflict" ? P.changed : P.failed,
+          info.code === "conflict" ? P.changed
+            : info.code === "bad_request" && info.message.startsWith("autonomous-completion-needs-item:") ? info.message : P.failed,
         );
+      }
       return false;
     } finally {
       if (active()) {
@@ -131,7 +137,13 @@ function usePlanRequest(
       }
     }
   };
-  return { methods, busy, feedback, run, canMutate: workStatus === "active" && !archived };
+  return { methods, busy, succeeded, feedback, run, canMutate: workStatus === "active" && !archived };
+}
+export function canReturnPlanItem(plan: RoomPlan, item: PlanItem): boolean {
+  if (plan.mode === "autonomous")
+    return ["active", "completing", "completed"].includes(plan.status) && item.status === "verified";
+  return plan.mode === "verified" && ["active", "completing"].includes(plan.status)
+    && ["done", "verified"].includes(item.status);
 }
 export function RoomModeControl({
   entry,
@@ -167,8 +179,8 @@ export function RoomModeControl({
   const canChange = action.methods.has("rooms.setMode");
   const lower =
     selected !== null &&
-    ["free", "checklist", "verified"].indexOf(selected) <
-      ["free", "checklist", "verified"].indexOf(mode);
+    ["free", "checklist", "verified", "autonomous"].indexOf(selected) <
+      ["free", "checklist", "verified", "autonomous"].indexOf(mode);
   return (
     <div
       data-room-mode=""
@@ -190,7 +202,7 @@ export function RoomModeControl({
           }}
           className="rounded border bg-background px-2 py-1"
         >
-          {(["free", "checklist", "verified"] as const).map((value) => (
+          {(["free", "checklist", "verified", "autonomous"] as const).map((value) => (
             <option key={value} value={value}>
               {P.modes[value]}
             </option>
@@ -198,6 +210,7 @@ export function RoomModeControl({
         </select>
       </label>
       <span className="text-muted-foreground">{P.modeHelp[mode]}</span>
+      <PlanHaltBadge plan={plan} />
       {!canChange ? <span>{P.oldHost}</span> : null}
       {!action.canMutate ? <span>{archived ? P.roomArchived : P.workClosed}</span> : null}
       {selected === null ? null : (
@@ -295,6 +308,16 @@ export function PlanSummary({
           const session = entry?.map.sessions.find(
             (session) => session.id === item.owner,
           );
+          const attempt = plan.mode === "autonomous"
+            ? plan.autonomous?.attempts.filter((row) => row.item === item.id).sort((a, b) => b.n - a.n)[0]
+            : undefined;
+          const check = attempt ? plan.autonomous?.ops
+            .filter((op) => op.kind === "check" && op.state === "done")
+            .map((op) => op.result?.checkResult as CheckResult | undefined)
+            .filter((row): row is CheckResult => !!row && row.attemptId === attempt.id && attempt.checks.includes(row.id))
+            .sort((a, b) => a.at.localeCompare(b.at)).at(-1) : undefined;
+          const summary = check?.summary.replace(/\s+/g, " ") ?? "";
+          const verdict = check ? `${check.specId} → ${check.verdict} · ${summary.slice(0, 160)}${summary.length > 160 ? "…" : ""}` : "";
           return (
             <li
               key={item.id}
@@ -323,6 +346,7 @@ export function PlanSummary({
                   />
                 ) : null}
               </div>
+              {attempt ? <p data-plan-attempt="" className="truncate" title={verdict}>{P.attempt(attempt.n, P.attemptStatus[attempt.status], verdict)}</p> : null}
               {item.acceptedChecklistRevision === undefined ? null : (
                 <p>{P.basis(item.acceptedChecklistRevision)}</p>
               )}
@@ -474,13 +498,12 @@ export function PlanPanel({
   const formAllowed =
     currentItem !== undefined &&
     (form?.action === "submit"
-      ? plan?.status === "active" &&
+      ? plan?.mode !== "autonomous" && plan?.status === "active" &&
         ["ready", "in_progress", "returned"].includes(currentItem.status)
-      : plan?.mode === "verified" &&
+      : (plan?.mode === "verified" || (plan?.mode === "autonomous" && form?.action === "returned")) &&
         (form?.action === "verified"
           ? plan.status === "active" && currentItem.status === "done"
-          : ["active", "completing"].includes(plan.status) &&
-            ["done", "verified"].includes(currentItem.status)));
+          : canReturnPlanItem(plan, currentItem)));
   const open = (item: PlanItem, kind: ItemForm["action"]) => {
     setForm({ item: item.id, action: kind });
     setText("");
@@ -532,16 +555,14 @@ export function PlanPanel({
           bridge={bridge}
           renderActions={(item) => {
             const submitAllowed =
-              plan.status === "active" &&
+              plan.mode !== "autonomous" && plan.status === "active" &&
               ["ready", "in_progress", "returned"].includes(item.status);
             const verifyAllowed =
               plan.mode === "verified" &&
               plan.status === "active" &&
               item.status === "done";
             const returnAllowed =
-              plan.mode === "verified" &&
-              ["active", "completing"].includes(plan.status) &&
-              ["done", "verified"].includes(item.status);
+              canReturnPlanItem(plan, item);
             return (
               <div className="flex flex-wrap gap-2">
                 {submitAllowed ? (
@@ -589,7 +610,7 @@ export function PlanPanel({
           }}
         />
       ) : null}
-      {form === null ? null : (
+      {form === null || (plan?.mode === "autonomous" && form.action !== "returned") ? null : (
         <div className="space-y-2" data-plan-form="">
           <Textarea
             aria-label={

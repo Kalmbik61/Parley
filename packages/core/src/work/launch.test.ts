@@ -1,8 +1,10 @@
 import { readNativeContext, readNativeSkillCatalog } from './native-context.js';
+import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseTomlAssignment, type TomlValue } from '../../test/toml-mini.js';
 import type { SkillCatalog } from '../skills/catalog.js';
@@ -28,11 +30,24 @@ import {
 import { writeBrief } from './brief.js';
 import { BROWSER_PRIORITY_RULE } from './guidance.js';
 import { customProvidersFile, writeCustomProviders, type CustomProviderRecord } from '../custom-providers.js';
+import { PROVIDERS } from '../providers.js';
 import { setResult } from './map.js';
 import { defaultSessionName } from './names.js';
 import { addRoom } from './rooms.js';
 import { workSettingsJson } from './settings-file.js';
 import { createWork, readMap, updateMap, workPaths } from './store.js';
+import { createWorktree } from './worktree.js';
+import { BRANCH_PREFIX } from '../names.js';
+
+const runGit = promisify(execFile);
+async function sessionWorktree(workId: string, sessionId: string, cwd = path.join(project, 'session-worktree')) {
+  await runGit('git', ['init', '-b', 'main', project]);
+  await runGit('git', ['-C', project, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+    '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgSign=false', 'commit', '--allow-empty', '-m', 'Initialize launch fixture']);
+  const info = { path: cwd, branch: `${BRANCH_PREFIX}${workId}/${sessionId}`, base: 'main', createdAt: null };
+  await createWorktree(project, info);
+  return info;
+}
 
 /** Historical parent links remain readable, but are never created by production APIs. */
 async function historicalChild(projectPath: string, workId: string, parentId: string) {
@@ -1469,12 +1484,12 @@ describe('common session layer delivery', () => {
   it('uses main-project PARLEY.md with the native bridge condition from worktree cwd', async () => {
     const { workId, sessionId } = await pending('codex');
     const cwd = path.join(project, 'branch');
-    await mkdir(cwd);
+    const worktree = await sessionWorktree(workId, sessionId, cwd);
     await writeFile(path.join(project, 'PARLEY.md'), 'MAIN SHARED RULES');
     await writeFile(path.join(cwd, 'PARLEY.md'), 'BRANCH RULES IGNORED');
     await writeFile(path.join(cwd, 'CLAUDE.md'), 'native rules');
     const session = await sessionOf(workId, sessionId);
-    session.worktree = { path: cwd, branch: 'codex/test', base: 'main', createdAt: null };
+    session.worktree = worktree;
     const bridged = await planLaunch(project, workId, session);
     expect(bridged.cwd).toBe(cwd);
     expect(codexLayer(bridged.args)).toContain('MAIN SHARED RULES');
@@ -2177,10 +2192,11 @@ describe('fresh canonical project memory on session assembly', () => {
   };
   it('new/launch/resume read main project facts last, not the participant worktree copy or details', async () => {
     const { workId, sessionId } = await pending('codex'); const session = await sessionOf(workId, sessionId);
-    const cwd = path.join(project, 'memory-branch'); await mkdir(cwd); await mkdir(path.join(cwd, '.parley'));
+    const cwd = path.join(project, 'memory-branch');
+    session.worktree = await sessionWorktree(workId, sessionId, cwd);
+    await mkdir(path.join(cwd, '.parley'));
     await writeFile(path.join(cwd, '.parley', 'memory.md'), '## Facts\n- BRANCH PRIVATE <!-- m-999 -->\n');
     await writeFile(path.join(project, '.parley', 'memory.md'), '## Facts\n- Main old <!-- m-001 · human -->\n  PRIVATE DETAIL\n');
-    session.worktree = { path: cwd, branch: 'memory/test', base: 'main', createdAt: null };
     const first = codexLayer((await planNew(project, workId, session)).args);
     expect(first).toContain('Main old'); expect(first).not.toContain('PRIVATE');
     await writeFile(path.join(project, '.parley', 'memory.md'), '## Facts\n- Main current <!-- m-001 · human -->\n');
@@ -2720,6 +2736,35 @@ describe('Codex: политика одобрений, доверие к папк
   }
   const planners = [['planNew', planNew], ['planLaunch', planLaunch], ['planResume', planResume]] as const;
 
+  it.each(planners)('Codex worktree Git roots (%s) prepare packed ref parents and scope permissions to this session', async (_name, planner) => {
+    const { workId, session } = await codexWith('executor');
+    session.worktree = await sessionWorktree(workId, session.id);
+    await runGit('git', ['-C', project, 'pack-refs', '--all']);
+    const plan = await planner(project, workId, session);
+    const argument = codexConfigValues(plan.args).find(value => value.startsWith('sandbox_workspace_write.writable_roots='));
+    expect(argument).toBeDefined();
+    const roots = parseTomlAssignment(argument!).value as string[];
+    const common = await realpath(path.join(project, '.git'));
+    const ref = path.join(common, 'refs', 'heads', session.worktree.branch);
+    const log = path.join(common, 'logs', 'refs', 'heads', session.worktree.branch);
+    const gitDir = await realpath((await runGit('git', ['-C', session.worktree.path, 'rev-parse', '--absolute-git-dir'])).stdout.trim());
+    expect(roots).toEqual([gitDir, path.join(common, 'objects'), ref, `${ref}.lock`, log, `${log}.lock`]);
+    for (const broad of [common, path.join(common, 'worktrees'), path.dirname(ref), path.dirname(log)]) expect(roots).not.toContain(broad);
+    expect((await stat(path.dirname(ref))).isDirectory()).toBe(true);
+    expect(await exists(ref)).toBe(false);
+    expect(plan.cwd).toBe(session.worktree.path);
+    expect(plan.args[0] === 'resume').toBe(planner === planResume);
+  });
+
+  it.each(planners)('read-only Codex worktree (%s) gets no Git write roots', async (_name, planner) => {
+    const { workId, session } = await codexWith('critic');
+    const cwd = path.join(project, 'read-only'); await mkdir(cwd);
+    session.worktree = { path: cwd, branch: `${BRANCH_PREFIX}${workId}/${session.id}`, base: 'main', createdAt: null };
+    const plan = await planner(project, workId, session);
+    expect(codexConfigValues(plan.args).some(value => value.startsWith('sandbox_workspace_write.writable_roots='))).toBe(false);
+    expect(codexConfigValues(plan.args)).toContain('sandbox_mode="read-only"');
+  });
+
   it.each(planners)('пишущая роль и сессия без роли при auto (%s): on-request, авторевьюер, workspace-write; ни -a, ни хуков', async (_name, planner) => {
     setEnv('PARLEY_CODEX_WRITE_APPROVALS', 'auto');
     for (const role of ['executor', undefined]) {
@@ -2729,6 +2774,7 @@ describe('Codex: политика одобрений, доверие к папк
       expect(values, String(role)).toEqual(expect.arrayContaining(['approval_policy="on-request"', 'approvals_reviewer="auto_review"', 'sandbox_mode="workspace-write"']));
       expect(plan.args, String(role)).not.toContain('-a');
       expect(hooksOf(plan.args), String(role)).toEqual([]);
+      expect(values.some(value => value.startsWith('sandbox_workspace_write.writable_roots='))).toBe(false);
     }
   });
 
@@ -2799,6 +2845,54 @@ describe('Codex: политика одобрений, доверие к папк
     expect(plan.args[plan.args.indexOf(trustOf(plan.args)[0]!) - 1]).toBe('-c');
     // Не из ~/.codex: пара не пишет в файлы Codex, а стоит только в аргументах.
     expect(plan.env).not.toHaveProperty('CODEX_HOME');
+  });
+
+  it.each(planners)('clone cwd (%s) selects native context and trust roots', async (_name, planner) => {
+    const { workId, session } = await codexWith('executor');
+    const clone = path.join(project, 'engine-clone');
+    await mkdir(clone);
+    session.workspace = { kind: 'clone', path: clone, branch: 'attempts/at-0001', sha: 'abc123' };
+    const plan = await planner(project, workId, session, { trust: { project: await realpath(project), cwd: await realpath(clone) } });
+    expect(plan.cwd).toBe(clone);
+    expect(trustOf(plan.args)[0]).toContain(JSON.stringify(await realpath(clone)));
+  });
+
+  it.each(planners)('autonomous clone (%s) enforces audited Codex policy independently of role/settings', async (_name, planner) => {
+    const { workId, session } = await codexWith('verifier');
+    const clone = path.join(project, 'attempt', 'clone'); await mkdir(clone, { recursive: true });
+    session.workspace = { kind: 'clone', path: clone, branch: 'attempts/at-0001', sha: 'abc' };
+    const plan = await planner(project, workId, session, { ...hookOptions, codexWriteApprovals: 'auto' });
+    expect(codexConfigValues(plan.args)).toEqual(expect.arrayContaining([
+      'approval_policy="never"', 'sandbox_mode="workspace-write"',
+      'sandbox_workspace_write.exclude_slash_tmp=true', 'sandbox_workspace_write.exclude_tmpdir_env_var=true',
+    ]));
+    expect(codexConfigValues(plan.args).filter(arg => arg.startsWith('sandbox_mode='))).toEqual(['sandbox_mode="workspace-write"']);
+    expect(codexConfigValues(plan.args).filter(arg => arg.startsWith('approval_policy='))).toEqual(['approval_policy="never"']);
+    expect(codexConfigValues(plan.args).some(arg => arg.startsWith('approvals_reviewer='))).toBe(false);
+    expect(hooksOf(plan.args)).toEqual([]);
+    expect(plan.cwd).toBe(clone); expect(plan.env.TMPDIR).toBe(path.join(clone, '.parley-tmp'));
+    expect(plan.env).not.toHaveProperty('HOME');
+  });
+
+  it('autonomous artifact workspace forces read-only/never even for the executor role', async () => {
+    const { workId, session } = await codexWith('executor');
+    const review = path.join(project, 'attempt', 'review', 'op-0010'); await mkdir(review, { recursive: true });
+    Object.assign(session, { workspace: { kind: 'artifacts', path: review } });
+    const plan = await planLaunch(project, workId, session);
+    expect(plan.cwd).toBe(review);
+    expect(codexConfigValues(plan.args)).toEqual(expect.arrayContaining(['approval_policy="never"', 'sandbox_mode="read-only"']));
+    expect(codexConfigValues(plan.args)).not.toContain('sandbox_mode="workspace-write"');
+  });
+
+  it.each([
+    ['codex', 'args'], ['codex', 'resumeArgs'], ['claude', 'args'], ['claude', 'resumeArgs'],
+  ] as const)('rejects custom autonomous %s %s', async (provider, field) => {
+    const { workId, session } = await codexWith('executor');
+    session.provider = provider;
+    session.workspace = { kind: 'clone', path: project, branch: 'attempt', sha: 'abc' };
+    session.role = null;
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ [provider]: { [field]: [...PROVIDERS[provider].runner[field]!, '--unexpected-autonomous-argument'] } }));
+    await expect(planLaunch(project, workId, session)).rejects.toThrow('confinement-unavailable');
   });
 
   it('доверие при worktree: вторая пара в той же таблице; путь с кавычкой и обратным слэшем экранируется', async () => {
@@ -2903,4 +2997,78 @@ describe('Codex: политика одобрений, доверие к папк
     expect(codexConfigValues(plan.args)).toContain(SKILL_FLAG);
     expect(plan.warnings.join(' ')).not.toContain('full native skill list');
   });
+});
+
+
+it.each([['launch', planLaunch], ['resume', planResume]] as const)('Claude artifact workspace %s uses auto permissions, sandbox settings and explicit read-only tools', async (mode, planner) => {
+  const { workId, sessionId } = await pending('claude');
+  const session = await sessionOf(workId, sessionId);
+  const review = path.join(project, 'review', 'op-01'); await mkdir(review, { recursive: true });
+  session.workspace = { kind: 'artifacts', path: review };
+  session.role = { source: 'builtin', name: 'executor' };
+  session.providerSessionId = session.id;
+  await claudeTranscript(session.id);
+  const plan = await planner(project, workId, session);
+  expect(plan.args.includes('--resume')).toBe(mode === 'resume');
+  expect(plan.cwd).toBe(review);
+  expect(plan.env.TMPDIR).toBe(path.join(review, '.parley-tmp'));
+  expect(plan.args.slice(0, 2)).toEqual(['--permission-mode', 'auto']);
+  expect(plan.args).not.toContain('acceptEdits');
+  expect(plan.args[plan.args.indexOf('--disallowedTools') + 1]).toBe('Edit,Write,NotebookEdit,Bash');
+  const settings = JSON.parse(await readFile(plan.args[plan.args.indexOf('--settings') + 1]!, 'utf8'));
+  expect(settings.sandbox).toEqual({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: true });
+});
+
+it.each([['launch', planLaunch], ['resume', planResume]] as const)('Claude clone workspace %s uses auto permissions while preserving role text and engine model choices', async (mode, planner) => {
+  const { workId, sessionId } = await pending('claude');
+  const session = await sessionOf(workId, sessionId);
+  session.workspace = { kind: 'clone', path: project, branch: 'attempt', sha: 'abc' };
+  session.role = { source: 'builtin', name: 'planner' };
+  session.model = 'sonnet'; session.effort = 'high';
+  session.providerSessionId = session.id;
+  await claudeTranscript(session.id);
+  const plan = await planner(project, workId, session);
+  expect(plan.args.includes('--resume')).toBe(mode === 'resume');
+  expect(plan.args.slice(0, 2)).toEqual(['--permission-mode', 'auto']);
+  expect(plan.args).not.toContain('acceptEdits');
+  expect(plan.args).not.toContain('--disallowedTools');
+  expect(plan.args[plan.args.indexOf('--append-system-prompt') + 1]).toContain('Your role in this workspace: Planner');
+  expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('sonnet');
+  expect(plan.args[plan.args.indexOf('--effort') + 1]).toBe('high');
+});
+
+it.each([['launch', planLaunch], ['resume', planResume]] as const)('ordinary Claude session %s does not override the permission mode', async (mode, planner) => {
+  const { workId, sessionId } = await pending('claude');
+  const session = await sessionOf(workId, sessionId);
+  session.providerSessionId = session.id;
+  await claudeTranscript(session.id);
+  const plan = await planner(project, workId, session);
+  expect(plan.args.includes('--resume')).toBe(mode === 'resume');
+  expect(plan.args).not.toContain('--permission-mode');
+  expect(plan.args).not.toContain('acceptEdits');
+});
+
+it('ignores native Codex role permissions but retains role text and engine model/effort', async () => {
+  const { workId, sessionId } = await pending('codex');
+  const session = await sessionOf(workId, sessionId);
+  session.workspace = { kind: 'clone', path: project, branch: 'attempt', sha: 'abc' };
+  session.role = { source: 'codex', name: 'review' };
+  session.model = 'gpt-6.1-sol'; session.effort = 'high';
+  const roleCatalog = { roles: [{ id: 'codex:review', source: 'codex' as const, provider: 'codex' as const, name: 'Review', description: '', path: '/fixture.toml', prompt: 'Role text remains', model: 'role-model', effort: 'xhigh', sandboxMode: 'read-only' as const, readOnly: true }], diagnostics: [], partial: false };
+  const plan = await planLaunch(project, workId, session, { roleCatalog });
+  expect(plan.args).toContain('sandbox_mode="workspace-write"');
+  expect(plan.args).not.toContain('sandbox_mode="read-only"');
+  expect(plan.args).toContain('approval_policy="never"');
+  expect(plan.args[plan.args.indexOf('--model') + 1]).toBe('gpt-6.1-sol');
+  expect(plan.args).toContain('model_reasoning_effort="high"');
+  expect(plan.args.join(' ')).toContain('Role text remains');
+});
+
+it('refuses autonomous Claude roles that require native permission delivery', async () => {
+  const { workId, sessionId } = await pending('claude');
+  const session = await sessionOf(workId, sessionId);
+  session.workspace = { kind: 'clone', path: project, branch: 'attempt', sha: 'abc' };
+  session.role = { source: 'claude', name: 'native-reviewer' };
+  const roleCatalog = { roles: [{ id: 'claude:native-reviewer', source: 'claude' as const, provider: 'claude' as const, name: 'native-reviewer', description: '', path: '/fixture/native-reviewer.md', nativeAgent: 'native-reviewer', readOnly: false }], diagnostics: [], partial: false };
+  await expect(planLaunch(project, workId, session, { roleCatalog })).rejects.toThrow('confinement-unavailable');
 });
