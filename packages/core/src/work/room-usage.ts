@@ -3,6 +3,7 @@
  * счёта — целиком и по провайдерам. Цифры даёт `UsageResolver`: хост — индекс логов и срез, тесты — свои данные.
  */
 
+import type { LetterReads } from './letter-store.js';
 import { isCurrentMember, roomMembership } from './room-membership.js';
 import { roomLead } from './rooms.js';
 import type { WorkMap, WorkSession } from './types.js';
@@ -80,13 +81,23 @@ function settle(total: UsageTotal, missing: boolean): UsageTotal {
   return missing && total.completeness === 'complete' ? { ...total, completeness: 'partial' } : total;
 }
 
-export async function roomUsage(map: WorkMap, roomId: string, resolver: UsageResolver, now: string): Promise<RoomUsage> {
+/**
+ * `letters` — откуда читать ленту комнат без журнала участия (`roomMembership`); без него — письма карты. Хост даёт
+ * чтение из базы работы (спека хранилища 6.2).
+ */
+export async function roomUsage(
+  map: WorkMap,
+  roomId: string,
+  resolver: UsageResolver,
+  now: string,
+  letters?: LetterReads,
+): Promise<RoomUsage> {
   const room = map.rooms.find((candidate) => candidate.id === roomId);
   if (room === undefined) throw new Error(`room ${roomId} is not in the map`);
-  const view = roomMembership(map, roomId);
+  const view = roomMembership(map, roomId, letters);
   const others = map.rooms
     .filter((other) => other.id !== roomId)
-    .map((other) => ({ id: other.id, members: roomMembership(map, other.id).members }));
+    .map((other) => ({ id: other.id, members: roomMembership(map, other.id, letters).members }));
   const lead = roomLead(room);
   const sessions = new Map(map.sessions.map((session) => [session.id, session]));
 

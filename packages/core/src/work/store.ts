@@ -690,6 +690,15 @@ export function readMapView(projectPath: string, workId: string): Readonly<WorkM
   return loadMap(projectPath, workId, false);
 }
 
+/**
+ * Разбор карты из кэша процесса без копии, пока `read` работает: объект принадлежит кэшу, и `read` обязан отработать
+ * синхронно и не вернуть из карты ничего изменяемого (см. `readMapView`). Хост берёт так комнаты и состав работы для
+ * страницы писем, не платя копией всей карты (спека хранилища 6.2). Ошибки те же, что у `readMap`.
+ */
+export function viewMap<T>(projectPath: string, workId: string, read: (map: Readonly<WorkMap>) => T): T {
+  return read(readMapView(projectPath, workId));
+}
+
 function loadMap(projectPath: string, workId: string, copy: boolean): WorkMap {
   const db = storeDb();
   const key = cacheKey(projectPath, workId);

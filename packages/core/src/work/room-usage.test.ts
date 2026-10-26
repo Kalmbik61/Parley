@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { addSession } from './map.js';
 import { roomUsage, type UsageResolver } from './room-usage.js';
-import { addMember, addRoom, archiveRoom } from './rooms.js';
-import { HUMAN, type WorkMap, type WorkSession } from './types.js';
+import { addMember, addRoom, archiveRoom, joinedLine } from './rooms.js';
+import { HUMAN, SYSTEM, type WorkMap, type WorkSession } from './types.js';
 import type { UsageSummary, UsageWindow } from './usage-ledger.js';
 import { mapLetterTx } from './letter-store.js';
 const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
@@ -164,6 +164,23 @@ describe('roomUsage (спека расхода токенов, 5)', () => {
     const result = await roomUsage(map, 'r-01', resolver(), NOW);
     expect(result.reconstructed).toBe(true);
     expect(result.members[0]?.sharedWith).toEqual(['r-02']);
+  });
+
+  // Спека хранилища 6.2: ленту старой комнаты хост читает из базы, а не из `map.messages`.
+  it('старая комната: вход восстанавливается по письмам, которые дал читатель, а не по карте', async () => {
+    const map = emptyMap();
+    const session = bound(map, 'a');
+    const room = addRoom(map, { title: 'r', creator: HUMAN, members: [session.id] }, T0);
+    delete room.memberLog;
+    const line = { id: 'm-01', roomId: room.id, from: SYSTEM, to: [], text: joinedLine(session.id), kind: 'note', at: T2, readBy: {} } as const;
+    const letters = {
+      query: () => [line],
+      count: () => 1,
+    };
+    const without = await roomUsage(map, room.id, resolver(), NOW);
+    const result = await roomUsage(map, room.id, resolver(), NOW, letters);
+    expect(without.members[0]?.periods).toEqual([{ from: T0, to: null }]);
+    expect(result.members[0]?.periods).toEqual([{ from: T2, to: null }]);
   });
 });
 

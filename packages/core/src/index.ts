@@ -325,6 +325,7 @@ export {
   replaceStoredMap,
   setWorkStatus,
   updateMap,
+  viewMap,
   WorkNotFoundError,
   workExists,
   workPaths,
