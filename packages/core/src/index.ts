@@ -195,7 +195,7 @@ export {
 } from './work/session-state.js';
 export type { DotState, SessionAxes, StateWordKey } from './work/session-state.js';
 export { isUnreadFor, recipientsOf, unreadFor } from './work/letters.js';
-export { channelStats, letterById, mapLetterTx, markHumanRead, readLetters, unreadCount, unreadLetters, writeLetters } from './work/letter-store.js';
+export { channelStats, letterById, letterCount, mapLetterReader, mapLetterTx, markHumanRead, readLetters, storeLetterReader, unreadCount, unreadLetters, writeLetters } from './work/letter-store.js';
 export type { LetterQuery, LetterReads, LetterTx, NewLetter } from './work/letter-store.js';
 export {
   PAGE_DEFAULT_BYTES,
@@ -214,7 +214,7 @@ export {
   textPage,
   viewBytes,
 } from './work/context-pages.js';
-export type { MapTopology, PageCursor, PageInfo, TextPage, WindowOptions } from './work/context-pages.js';
+export type { LetterReader, MapTopology, PageCursor, PageInfo, TextPage, WindowOptions } from './work/context-pages.js';
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
 export {
   addMember,

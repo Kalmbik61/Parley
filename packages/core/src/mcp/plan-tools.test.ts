@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, rm, realpath } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createParleyServer } from "./tools.js";
@@ -8,10 +8,16 @@ import { addSession, transitionSession } from "../work/map.js";
 import { addRoom, archiveRoom } from "../work/rooms.js";
 import { createWork, updateMap, readMap, workPaths } from "../work/store.js";
 import { resolveProposal } from "../work/proposals.js";
-import { HUMAN } from "../work/types.js";
+import { HUMAN, SYSTEM } from "../work/types.js";
+import { setRoomMode } from "../work/plans.js";
 import type { McpContext } from "./context.js";
 import { mapLetterTx } from "../work/letter-store.js";
 const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
+// Оболочка над настоящей `setRoomMode`: тест подставляет ответ с лишней строкой на один вызов, остальные идут как есть.
+vi.mock("../work/plans.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../work/plans.js")>();
+  return { ...actual, setRoomMode: vi.fn(actual.setRoomMode) };
+});
 let root: string;
 let project: string;
 let previous: string | undefined;
@@ -288,6 +294,31 @@ it("only a live lead raises mode and a participant cannot lower or spoof it", as
     ).failed,
   ).toBe(true);
   expect(JSON.stringify(await readMap(project, context.workId))).toBe(before);
+});
+
+it("set_room_mode reports its own system line by id, even when the write put another system line in the room before it", async () => {
+  await updateMap(project, context.workId, (map) => {
+    map.rooms[0]!.mode = "free";
+  });
+  const real = await vi.importActual<typeof import("../work/plans.js")>("../work/plans.js");
+  vi.mocked(setRoomMode).mockImplementationOnce((...args) => {
+    // Строка плана раньше строки режима — так пишет понижение режима, которое завершает план: «первая системная
+    // строка комнаты после записи» была бы не той.
+    const earlier = args[1].add({ roomId: "r-01", from: SYSTEM, to: [HUMAN], text: "Plan pl-01 completed", kind: "note" });
+    return [earlier.id, ...real.setRoomMode(...args)];
+  });
+  const result = await call("s-01", "set_room_mode", {
+    room: "r-01",
+    mode: "checklist",
+    reason: "Need a plan",
+  });
+  expect(result.failed, result.text).toBe(false);
+  const notices = (await readMap(project, context.workId)).messages.filter((message) =>
+    message.text.startsWith("Room mode changed."),
+  );
+  expect(notices).toHaveLength(1);
+  expect(notices[0]!.text).toContain("switched the room to checklist: Need a plan");
+  expect(notices[0]!.text).not.toContain("Plan pl-01 completed");
 });
 
 it("a still-live verifier cannot complete an unsatisfied item whose owner closed before the host reconcile event", async () => {

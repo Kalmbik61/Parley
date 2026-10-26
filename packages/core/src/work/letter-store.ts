@@ -9,6 +9,7 @@
  * возвращённое письмо нельзя ни там, ни там: меняют письма только методы `LetterTx`.
  */
 
+import type { LetterReader } from './context-pages.js';
 import { recipientsOf, unreadFor, unreadForHuman } from './letters.js';
 import { addMessage, maxNumber } from './map.js';
 import { applyMapUpdate, readMapView, type UpdateMapOptions } from './store.js';
@@ -332,6 +333,41 @@ export function unreadCount(
 /** Письма по каналам: сколько и номер новейшего; ключ `''` — прямые письма. Каналов без писем нет. */
 export function channelStats(projectPath: string, workId: string): Record<string, { total: number; latestId: string | null }> {
   return channelStatsOf(readMapView(projectPath, workId));
+}
+
+/** Сколько писем подходит под условия вне транзакции (итог страницы, `LetterReader.count`). */
+export function letterCount(projectPath: string, workId: string, q: Omit<LetterQuery, 'limit'>): number {
+  return countLetters(readMapView(projectPath, workId), q);
+}
+
+/**
+ * Читатель писем для страниц и снимка (`LetterReader`, спека хранилища 6.2, 6.7) над картой `map`: то, что берут
+ * `messagePage`, `mapTopology` и `compactWorkMap`, когда читателя им не передали. Возвращает живые объекты карты;
+ * менять их нельзя. Ключ канала `''` — прямые письма.
+ */
+export function mapLetterReader(map: Readonly<WorkMap>): LetterReader {
+  return {
+    page: (q) => selectLetters(map, q),
+    count: (q) => countLetters(map, q),
+    byIds: (ids) => selectLetters(map, { ids, limit: ids.length }),
+    tail: (roomId, n) => selectLetters(map, { roomId, limit: n, newestFirst: true }).reverse(),
+    humanUnread: (limit) => (limit <= 0 ? [] : unreadOf(map, HUMAN).slice(-limit)),
+    unreadCount: (reader) => unreadCountOf(map, reader),
+    channelStats: () => channelStatsOf(map),
+  };
+}
+
+/** Читатель писем работы вне транзакции: то же, что `mapLetterReader`, но над функциями чтения этого файла (копии писем). */
+export function storeLetterReader(projectPath: string, workId: string): LetterReader {
+  return {
+    page: (q) => readLetters(projectPath, workId, q),
+    count: (q) => letterCount(projectPath, workId, q),
+    byIds: (ids) => readLetters(projectPath, workId, { ids, limit: ids.length }),
+    tail: (roomId, n) => readLetters(projectPath, workId, { roomId, limit: n, newestFirst: true }).reverse(),
+    humanUnread: (limit) => (limit <= 0 ? [] : unreadLetters(projectPath, workId, HUMAN).slice(-limit)),
+    unreadCount: (reader) => unreadCount(projectPath, workId, reader),
+    channelStats: () => channelStats(projectPath, workId),
+  };
 }
 
 /**

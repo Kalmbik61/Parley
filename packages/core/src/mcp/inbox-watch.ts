@@ -1,4 +1,4 @@
-import { unreadFor } from '../work/letters.js';
+import { unreadLetters } from '../work/letter-store.js';
 import { readMap, workVersionKey } from '../work/store.js';
 import { participantLabel } from '../work/thread.js';
 import type { Message } from '../work/types.js';
@@ -7,8 +7,9 @@ import { waitForMap } from './watch-map.js';
 
 /*
  * Сторож входящих (разговор агентов 2026-09-08, 4.2; решения D8, D16). Только
- * читает карту и звонит — письмо агент забирает сам своим `check_inbox`,
- * поэтому `readBy` остаётся честным, а гонок с `check_inbox` и `wait_for` нет:
+ * читает карту и звонит — письмо агент забирает сам своим `check_inbox` (`wait_for`
+ * его лишь показывает и ничего не отмечает), поэтому `readBy` остаётся честным,
+ * а гонок с `check_inbox` и `wait_for` нет:
  *
  *   while (!stopped)
  *     found = await waitForMap(версия работы, probe, waitMs, pollMs)
@@ -22,7 +23,7 @@ import { waitForMap } from './watch-map.js';
  *   состояния письма (карту меняет только агент своими инструментами)
  *     непрочитано ──звонок──▶ непрочитано, звонок сделан
  *          │                             │
- *          └────check_inbox / wait_for───┴──▶ прочитано (readBy[me])
+ *          └────────check_inbox──────────┴──▶ прочитано (readBy[me])
  *
  * Множество `rung` живёт в памяти процесса: после перезапуска непрочитанное
  * письмо позвонит ещё раз, и это правильно — агент его так и не забрал.
@@ -98,7 +99,7 @@ export function watchInbox(
     // закрытый транспорт гасит ожидание через `stopping` (спека хранилища 6.9).
     if (stopped) return [];
     const map = await readMap(context.projectPath, context.workId);
-    const mine = unreadFor(map, context.sessionId);
+    const mine = unreadLetters(context.projectPath, context.workId, context.sessionId);
     const letters = mine
       .filter((message) => !rung.has(message.id))
       .sort((a, b) => a.at.localeCompare(b.at));

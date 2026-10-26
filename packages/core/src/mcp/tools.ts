@@ -46,8 +46,9 @@ import {
   textPage,
 } from '../work/context-pages.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
-import { recipientsOf, unreadFor } from '../work/letters.js';
-import { addMessage, transitionSession } from '../work/map.js';
+import { storeLetterReader, unreadLetters, writeLetters, type LetterReads } from '../work/letter-store.js';
+import { recipientsOf } from '../work/letters.js';
+import { transitionSession } from '../work/map.js';
 import { readBacklog } from '../work/backlog.js';
 import { listBacklogSuggestions, suggestBacklog } from '../work/backlog-suggestions.js';
 import { rememberProjectMemory } from '../work/memory-suggestions.js';
@@ -74,7 +75,7 @@ import { addMemberByLead, addRoom, canReadRoom, isMember, isRoomArchived, joinNo
 import { reportedStatus } from '../work/session-state.js';
 import { stuckHint, stuckWarning } from '../work/stuck.js';
 import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workVersionKey } from '../work/store.js';
-import { participantLabel, sessionMention, agentThreadOf } from '../work/thread.js';
+import { participantLabel, sessionMention, agentLetterVisible } from '../work/thread.js';
 import {
   HUMAN,
   MESSAGE_KINDS,
@@ -282,13 +283,12 @@ const inboxView = (message: Message, map: WorkMap, recipientId: string) => {
 /**
  * Окно писем (разговор агентов, 4.7): два вежливых агента способны отвечать
  * друг другу, пока не кончится лимит подписки, поэтому сервер считает письма
- * этой сессии за последний час по всей карте. Скользящий час отличает петлю от
- * честной долгой работы и восстанавливается сам; состояния нет — всё в карте.
+ * этой сессии за последний час по всем письмам работы. Скользящий час отличает петлю от
+ * честной долгой работы и восстанавливается сам; состояния нет — всё в письмах.
+ * Час — запрос `count` с `sinceAt`, а не обход ленты (спека хранилища 6.2); письмо ровно часовой давности в окно не входит.
  */
-function assertRate(map: WorkMap, sessionId: string, limit: number, now: number, needed = 1): void {
-  const recent = map.messages.filter(
-    (message) => message.from === sessionId && now - Date.parse(message.at) < RATE_WINDOW_MS,
-  ).length;
+function assertRate(letters: LetterReads, sessionId: string, limit: number, now: number, needed = 1): void {
+  const recent = letters.count({ from: sessionId, sinceAt: new Date(now - RATE_WINDOW_MS).toISOString() });
   if (recent + needed > limit) {
     throw new Error(
       `too many messages: ${recent} from this session in the last hour (limit ${limit}); call report and turn to the human`,
@@ -610,7 +610,7 @@ async function getMap(context: McpContext, args: Record<string, unknown> = {}, s
     const providers = hostRows.map(({ id, label, family, available, needs, models, effort, limits }) => ({
       id, label, family, available, ...(needs === null ? {} : { needs }), models, effort, ...(limits === null ? {} : { limits }),
     }));
-    return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId), providers };
+    return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId, storeLetterReader(context.projectPath, context.workId)), providers };
   }
   const registry = await loadProviders();
   const providers = await Promise.all(
@@ -627,7 +627,7 @@ async function getMap(context: McpContext, args: Record<string, unknown> = {}, s
     }),
   );
   // Плейбук рецепта получает только ведущий (слоем и письмом): в топологии агенту видны id и имя рецепта.
-  return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId), providers, note: HOST_UNREACHABLE_NOTE };
+  return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId, storeLetterReader(context.projectPath, context.workId)), providers, note: HOST_UNREACHABLE_NOTE };
 }
 
 const optionalString = (args: Record<string, unknown>, name: string): string | undefined => {
@@ -644,17 +644,18 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
   const sessionId = optionalString(args, 'session');
   const roomId = optionalString(args, 'room');
   const cursorRaw = optionalString(args, 'cursor');
+  const letters = storeLetterReader(context.projectPath, context.workId);
   try {
     if (field === undefined) {
       if (sessionId !== undefined) {
         const session = requireSession(map, sessionId);
-        const entry = mapTopology(map, context.sessionId).sessions.find((candidate) => candidate.id === sessionId);
+        const entry = mapTopology(map, context.sessionId, letters).sessions.find((candidate) => candidate.id === sessionId);
         return { session: { ...entry, artifacts: session.artifacts.slice(0, 20), history: session.history.slice(-20) } };
       }
       if (roomId !== undefined) {
         const room = requireRoom(map, roomId);
         if (context.sessionId === null || !canReadRoom(room, context.sessionId)) throw new Error(`room ${roomId} is not available to this session`);
-        const topology = mapTopology(map, context.sessionId).rooms.find((candidate) => candidate.id === roomId);
+        const topology = mapTopology(map, context.sessionId, letters).rooms.find((candidate) => candidate.id === roomId);
         const { recipe, recipeLeadNotified, ...rest } = room;
         void recipeLeadNotified;
         // Решение целиком (до 10000 знаков) — здесь, а не в общей топологии.
@@ -691,15 +692,13 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
       if (field === 'message') {
         const id = optionalString(args, 'id');
         if (id === undefined) throw new Error('argument id is required for field message');
-        const message = map.messages.find((candidate) => candidate.id === id);
-        if (message === undefined || !agentThreadOf(map, caller).messages.some((row) => row.id === message.id)) throw new PageError('unknown-target', `message ${id} is not available to this session`);
+        const message = letters.byIds([id])[0];
+        if (message === undefined || !agentLetterVisible(map, caller)(message)) throw new PageError('unknown-target', `message ${id} is not available to this session`);
         return { id, from: message.from, at: message.at, roomId: message.roomId, ...textPage(message.text, cursorRaw, maxBytes) };
       }
       let filter: ((message: Message) => boolean) | undefined;
-      if (roomId === undefined) {
-        const visible = new Set(agentThreadOf(map, caller).messages.map((row) => row.id));
-        filter = (message) => visible.has(message.id);
-      }
+      // Прямые письма отбирает предикат видимости одного письма (спека хранилища 6.2): тред целиком не собирается.
+      if (roomId === undefined) filter = agentLetterVisible(map, caller);
       else if (!canReadRoom(requireRoom(map, roomId), caller)) throw new Error(`session ${caller} is not a participant of room ${roomId}`);
       const kind = optionalString(args, 'kind');
       if (kind !== undefined && !(MESSAGE_KINDS as readonly string[]).includes(kind)) throw new Error(`argument kind: one of ${MESSAGE_KINDS.join(', ')}`);
@@ -710,7 +709,7 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
         cursor: parseCursor(cursorRaw),
         maxBytes,
         view: (message) => messageView(message, map),
-      });
+      }, letters);
     }
     // Остальные поля — поля одной сессии.
     if (sessionId === undefined) throw new Error(`field ${field} needs the session argument`);
@@ -822,7 +821,8 @@ async function waitFor(
   if (target === 'inbox') {
     probe = async () => {
       const map = await read();
-      const messages = unreadFor(map, sessionId);
+      // Только читает, как и раньше: прочитанным письма отмечает один `check_inbox`.
+      const messages = unreadLetters(context.projectPath, context.workId, sessionId);
       return messages.length === 0
         ? null
         : { state: 'message', messages: messages.map((message) => inboxView(message, map, sessionId)) };
@@ -940,13 +940,15 @@ async function sendMessage(
 
   const limits = await limitsOf(context);
   let created = '';
-  const written = await updateMap(context.projectPath, context.workId, (current, letters) => {
+  let stuckNotes: string[] = [];
+  writeLetters(context.projectPath, context.workId, (letters, current) => {
     // Отправителя проверяем наравне с получателем: сервер удалённой сессии ещё
     // жив, и без проверки в карту легло бы письмо от несуществующего адресата,
     // ответить на которое нечем (план от 2026-09-06, раздел C).
     requireSession(current, sessionId);
-    assertRate(current, sessionId, context.messageRate ?? DEFAULT_CONFIG.messageRate, Date.now());
+    assertRate(letters, sessionId, context.messageRate ?? DEFAULT_CONFIG.messageRate, Date.now());
 
+    let sent: Message;
     if (roomId !== null) {
       // Запись в комнату: архивная отказывает текстом `RoomRuleError`. Чтение (`requireRoom`) архивную комнату отдаёт.
       const room = requireOpenRoom(current, roomId);
@@ -969,7 +971,7 @@ async function sendMessage(
       // комната и прямое письмо дают отказ. Сверка идёт под тем же замком, что и запись: карта между ними
       // не устареет, как у проверок участников выше.
       if (replyTo !== null) {
-        const quoted = current.messages.find((message) => message.id === replyTo);
+        const quoted = letters.byId(replyTo);
         if (quoted?.roomId !== roomId) {
           throw new Error(`message ${replyTo} is not in room ${roomId}`);
         }
@@ -982,14 +984,14 @@ async function sendMessage(
         limits,
       });
       // Пустой to в комнате — рассылка всем участникам (recipientsOf её и разберёт).
-      created = addMessage(current, {
+      sent = letters.add({
+        roomId,
         from: sessionId,
         to,
         text,
         kind,
-        roomId,
         ...(replyTo === null ? {} : { replyTo }),
-      }).id;
+      });
     } else {
       // Цитата живёт в ленте комнаты: у прямого письма её нет, и молча отбросить `replyTo` значило бы
       // обмануть агента, ждущего цитаты.
@@ -1000,15 +1002,15 @@ async function sendMessage(
       const target = to[0] as string;
       assertDeliverable(current, target);
       assertMessageBudget(current, letters, { actor: sessionId, room: null, messages: 1, recipients: 1, limits });
-      created = addMessage(current, { from: sessionId, to: [target], text, kind }).id;
+      sent = letters.add({ roomId: null, from: sessionId, to: [target], text, kind });
     }
-  });
-  // Адресат (явный или по рассылке комнаты) застрял: письмо уже записано, но прочтёт он его по возвращении (5.3).
-  const sent = written.messages.find((message) => message.id === created);
-  const now = new Date();
-  const stuckNotes = (sent === undefined ? [] : recipientsOf(sent, written)).flatMap((id) => {
-    const need = written.sessions.find((candidate) => candidate.id === id)?.stuck;
-    return need == null ? [] : [stuckWarning(id, need, now)];
+    created = sent.id;
+    // Адресат (явный или по рассылке комнаты) застрял: письмо уже записано, но прочтёт он его по возвращении (5.3).
+    const now = new Date();
+    stuckNotes = recipientsOf(sent, current).flatMap((id) => {
+      const need = current.sessions.find((candidate) => candidate.id === id)?.stuck;
+      return need == null ? [] : [stuckWarning(id, need, now)];
+    });
   });
   const warnings = [
     text.length > LETTER_SOFT_CHARS ? `long letter (${text.length} chars): prefer a file and a path` : null,
@@ -1019,15 +1021,16 @@ async function sendMessage(
 }
 
 async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {
-  let messages: Message[] = [];
+  let views: ReturnType<typeof inboxView>[] = [];
   const at = new Date().toISOString();
-  const map = await updateMap(context.projectPath, context.workId, (current) => {
+  // Пустой ящик ничего не пишет: ни версии работы, ни `updatedAt` (спека хранилища 6.2); сдвиг — когда отмечено письмо.
+  writeLetters(context.projectPath, context.workId, (letters, current) => {
     requireSession(current, sessionId);
-    const inbox = unreadFor(current, sessionId);
-    messages = inbox.map((message) => ({ ...message }));
-    for (const message of inbox) message.readBy[sessionId] = at;
+    const inbox = letters.unreadFor(sessionId);
+    views = inbox.map((message) => inboxView(message, current, sessionId));
+    letters.markRead(sessionId, inbox.map((message) => message.id), at);
   });
-  return { messages: messages.map((message) => inboxView(message, map, sessionId)) };
+  return { messages: views };
 }
 
 async function createRoom(
@@ -1055,7 +1058,7 @@ async function createRoom(
     // Приглашение — письмо от создателя каждому участнику: оно расходует тот же бюджет писем, что и `send_message`,
     // иначе исчерпанный лимит обходился бы созданием комнаты.
     if (invited.length > 0) {
-      assertRate(current, sessionId, context.messageRate ?? DEFAULT_CONFIG.messageRate, Date.now(), invited.length);
+      assertRate(letters, sessionId, context.messageRate ?? DEFAULT_CONFIG.messageRate, Date.now(), invited.length);
       assertMessageBudget(current, letters, { actor: sessionId, room: null, messages: invited.length, recipients: invited.length, limits });
     }
 
@@ -1070,7 +1073,7 @@ async function createRoom(
     for (const memberId of members) leaveOtherRooms(current, letters, memberId, room.id, room.createdAt);
     const notice = joinNotice(room, current);
     for (const memberId of invited) {
-      addMessage(current, { from: sessionId, to: [memberId], roomId: room.id, kind: 'note', text: notice });
+      letters.add({ roomId: room.id, from: sessionId, to: [memberId], kind: 'note', text: notice });
     }
   });
   return { roomId };
@@ -1120,7 +1123,7 @@ async function readRoom(
       maxBytes: clampPageBytes(numberArg(args, 'maxBytes')),
       maxItems: Math.min(Math.max(Math.floor(limit), 1), PAGE_MAX_ITEMS),
       view: (message) => messageView(message, map),
-    });
+    }, storeLetterReader(context.projectPath, context.workId));
   } catch (error) {
     if (error instanceof PageError) throw new Error(`${error.code}: ${error.message}`);
     throw error;
@@ -1226,11 +1229,11 @@ async function backlogTool(context: McpContext, name: string, args: Record<strin
     // Строка в ленту — только открытым комнатам: в архивную комнату не пишет никто, кроме человека.
     if (result.status !== 'duplicate' && map.rooms.some(room => room.members.includes(sessionId) && !isRoomArchived(room))) {
       try {
-        await updateMap(context.projectPath, context.workId, current => {
+        writeLetters(context.projectPath, context.workId, (letters, current) => {
           const label = sessionId.replace(/^s-/, 'S');
           const text = `${label} ${result.status === 'added' ? 'added to' : 'suggested for'} the backlog: ${args.title as string}`;
           for (const room of current.rooms.filter(row => row.members.includes(sessionId) && !isRoomArchived(row)))
-            addMessage(current, { from: SYSTEM, to: [], text, kind: 'note', roomId: room.id });
+            letters.add({ roomId: room.id, from: SYSTEM, to: [], text, kind: 'note' });
         });
       } catch { feedUnavailable = true; }
     }
@@ -1300,14 +1303,14 @@ async function memoryTool(context: McpContext, name: string, args: Record<string
     // Строка в ленту — только открытым комнатам, как у `backlog_suggest`.
     if (result.status !== 'duplicate' && map.rooms.some(room => room.members.includes(sessionId) && !isRoomArchived(room))) {
       try {
-        await updateMap(context.projectPath, context.workId, current => {
+        writeLetters(context.projectPath, context.workId, (letters, current) => {
           const label = sessionId.replace(/^s-/, 'S');
           const fact = args.fact as string;
           const brief = fact.length > FEED_FACT_LENGTH ? `${fact.slice(0, FEED_FACT_LENGTH)}…` : fact;
           // The agent only claims that the human asked: the line says so instead of vouching for it.
           const text = result.status === 'remembered' ? `${label} remembered, saying you asked for it: ${brief}` : `${label} suggests remembering: ${brief}`;
           for (const room of current.rooms.filter(row => row.members.includes(sessionId) && !isRoomArchived(row)))
-            addMessage(current, { from: SYSTEM, to: [], text, kind: 'note', roomId: room.id });
+            letters.add({ roomId: room.id, from: SYSTEM, to: [], text, kind: 'note' });
         });
       } catch { feedUnavailable = true; }
     }
@@ -1410,7 +1413,8 @@ async function bindCodexThread(
   const root = meta?.['sessionId'];
   if (typeof root === 'string' && THREAD_ID.test(root) && root.toLowerCase() !== thread) return false;
   try {
-    // Чтение до записи: `updateMap` переписал бы карту и без изменений, а её читают наблюдатели окна.
+    // Чтение до записи: пустая запись версию не поднимает, но всё равно занимает блокировку записи (спека хранилища 6.2),
+    // а привязка уже стоит почти при каждом вызове — незачем держать замок ради «ничего не менять».
     const known = (await readMap(context.projectPath, context.workId)).sessions.find(
       (candidate) => candidate.id === sessionId,
     );

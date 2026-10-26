@@ -309,8 +309,7 @@ export async function planTool(
           /[\r\n]/.test(args.reason)
         )
           throw new RoomRuleError("invalid room mode");
-        const before = map.messages.length;
-        setRoomMode(
+        const written = setRoomMode(
           map,
           letters,
           args.room,
@@ -318,10 +317,11 @@ export async function planTool(
           args.mode as "free" | "checklist" | "verified",
           args.reason,
         );
-        const source = map.messages
-          .slice(before)
-          .find((row) => row.roomId === args.room && row.from === "system");
-        if (source) capturePlanNotice(map, letters, args.room, "mode", source.id);
+        // Строка «switched the room» пишется последней: пересчёт плана может дописать свои строки раньше неё. Берём её
+        // по номеру, а не «первую системную после записи» (спека хранилища 6.2); режим не менялся — писать нечего.
+        const modeLine = written.at(-1);
+        if (modeLine !== undefined)
+          capturePlanNotice(map, letters, args.room, "mode", modeLine);
       } else if (name === "propose_decision") {
         keys(args, ["room", "text", "plan", "kind", "planId", "rev"]);
         if (

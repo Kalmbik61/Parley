@@ -738,6 +738,20 @@ describe('get_map: компактная карта и страницы (P35)', (
     expect((await call(client, 'get_map', { field: 'messages', room: 'r-01', kind: 'bogus' })).isError).toBe(true);
   });
 
+  it('страницы писем не длиннее 100: ни read_room с большим limit, ни get_map messages не отдают больше', async () => {
+    await seedRoom();
+    await fill(150, 20);
+    const client = await connect('s-01');
+    const room = await callOk(client, 'read_room', { room: 'r-01', limit: 500, maxBytes: 262144 });
+    expect((room['messages'] as unknown[]).length).toBe(100);
+    expect(room['page']).toMatchObject({ total: 150, complete: false, next: 'before:51' });
+    const mapPage = await callOk(client, 'get_map', { field: 'messages', room: 'r-01', maxBytes: 262144 });
+    expect((mapPage['messages'] as unknown[]).length).toBe(100);
+    const older = await callOk(client, 'read_room', { room: 'r-01', cursor: 'before:51', limit: 500, maxBytes: 262144 });
+    expect((older['messages'] as unknown[]).length).toBe(50);
+    expect(older['page']).toMatchObject({ complete: true, next: null });
+  });
+
   it('письма комнаты читает только участник; без сессии страницы писем недоступны', async () => {
     await seedRoom();
     await updateMap(project, workId, (current) => { addSession(current, { provider: 'claude', label: 'сторонний', task: 'x' }); });
@@ -1018,6 +1032,29 @@ describe('send_message и check_inbox', () => {
 
     const again = await callOk(first, 'check_inbox');
     expect(again['messages']).toEqual([]);
+  });
+
+  it('check_inbox с пустым ящиком ничего не пишет: версия работы и updatedAt прежние; с письмом — оба сдвигаются', async () => {
+    const first = await connect('s-01');
+    await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
+    const second = await connect('s-02');
+    const versionBefore = workVersion(project, workId);
+    const updatedBefore = (await readMap(project, workId)).work.updatedAt;
+
+    expect(await callOk(first, 'check_inbox')).toEqual({ messages: [] });
+    expect(workVersion(project, workId)).toBe(versionBefore);
+    expect((await readMap(project, workId)).work.updatedAt).toBe(updatedBefore);
+
+    await callOk(second, 'send_message', { to: 's-01', text: 'нужен план' });
+    const versionSent = workVersion(project, workId);
+    expect(versionSent).toBeGreaterThan(versionBefore!);
+    expect(((await callOk(first, 'check_inbox'))['messages'] as unknown[]).length).toBe(1);
+    expect(workVersion(project, workId)).toBeGreaterThan(versionSent!);
+    expect((await readMap(project, workId)).work.updatedAt >= updatedBefore).toBe(true);
+    // Повтор снова пустой: версия не растёт.
+    const versionRead = workVersion(project, workId);
+    expect(await callOk(first, 'check_inbox')).toEqual({ messages: [] });
+    expect(workVersion(project, workId)).toBe(versionRead);
   });
 
   it('чужие сообщения в ящик не попадают', async () => {

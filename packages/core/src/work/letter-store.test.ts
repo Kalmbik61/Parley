@@ -6,7 +6,10 @@ import { closeWorkDb, workDb } from './db.js';
 import {
   channelStats,
   letterById,
+  letterCount,
+  mapLetterReader,
   readLetters,
+  storeLetterReader,
   unreadCount,
   unreadLetters,
   writeLetters,
@@ -527,6 +530,44 @@ describe('чтение вне транзакции', () => {
 
     expect((letterById(project, WORK, 'm-01') as Message).text).toBe('text');
     expect(ids(unreadLetters(project, WORK, 's-03'))).toEqual(['m-01', 'm-02', 'm-03']);
+  });
+});
+
+describe('читатель писем для страниц и снимка', () => {
+  it('над картой и над базой даёт одно и то же: страница, итоги, хвосты, цитируемые, непрочитанное человеком', async () => {
+    await seed(fillFive);
+    const map = await readMap(project, WORK);
+    for (const reader of [mapLetterReader(map), storeLetterReader(project, WORK)]) {
+      expect(ids(reader.page({ roomId: 'r-01', limit: 2, newestFirst: true }))).toEqual(['m-04', 'm-03']);
+      expect(ids(reader.page({ roomId: 'r-01', afterSeq: 2, limit: 5 }))).toEqual(['m-03', 'm-04']);
+      expect(reader.count({ roomId: 'r-01' })).toBe(3);
+      expect(reader.count({ roomId: 'r-01', kind: 'question' })).toBe(1);
+      expect(reader.count({ roomId: null, from: 's-02' })).toBe(1);
+      expect(ids(reader.byIds(['m-05', 'm-02', 'm-99']))).toEqual(['m-02', 'm-05']);
+      expect(reader.byIds([])).toEqual([]);
+      expect(ids(reader.tail('r-01', 2))).toEqual(['m-03', 'm-04']);
+      expect(ids(reader.tail(null, 5))).toEqual(['m-01', 'm-05']);
+      expect(reader.tail('r-01', 0)).toEqual([]);
+      expect(ids(reader.humanUnread(2))).toEqual(['m-04', 'm-05']);
+      expect(ids(reader.humanUnread(10))).toEqual(['m-02', 'm-03', 'm-04', 'm-05']);
+      expect(reader.humanUnread(0)).toEqual([]);
+      expect(reader.unreadCount(HUMAN)).toEqual({ total: 4, byRoom: { 'r-01': 3, '': 1 } });
+      expect(reader.unreadCount('s-03')).toEqual({ total: 3, byRoom: { '': 1, 'r-01': 2 } });
+      expect(reader.channelStats()).toEqual({
+        '': { total: 2, latestId: 'm-05' },
+        'r-01': { total: 3, latestId: 'm-04' },
+      });
+    }
+  });
+
+  it('letterCount считает те же условия, что count внутри транзакции, и пустую выборку нулём', async () => {
+    await seed(fillFive);
+
+    expect(letterCount(project, WORK, {})).toBe(5);
+    expect(letterCount(project, WORK, { roomId: 'r-01', sinceAt: T2 })).toBe(2);
+    expect(letterCount(project, WORK, { kind: 'decision' })).toBe(1);
+    expect(letterCount(project, WORK, { from: 's-09' })).toBe(0);
+    expect(await updateMapResult((letters) => letters.count({ roomId: 'r-01', sinceAt: T2 }))).toBe(2);
   });
 });
 
