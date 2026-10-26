@@ -208,7 +208,7 @@ async function migrateOne({ projectPath, workId }: Candidate): Promise<Outcome> 
   try {
     await rename(paths.map, path.join(paths.dir, MAP_BACKUP_FILE));
   } catch (error) {
-    // Работа уже в базе: файл переименует следующий старт.
+    // Работа уже в базе: файл переименует следующий старт (спека хранилища 6.6: старый `map.json` на месте не держат).
     return { status: 'failed', reason: `stored in the database, but ${paths.map} could not be renamed: ${fsReason(error)}` };
   }
   return { status: 'migrated' };

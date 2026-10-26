@@ -1038,7 +1038,10 @@ interface ApplyMapOptions extends UpdateMapOptions {
   keepResult?: boolean;
 }
 
-/** Карту без потерь переживает JSON; ошибка обхода (слишком глубокое дерево) — как «нет». */
+/**
+ * Карту без потерь переживает JSON; ошибка обхода (слишком глубокое дерево) — как «нет». Только такая карта может лечь в
+ * кэш как есть, без повторного разбора записанных строк (спека хранилища 6.9).
+ */
 const survivesJson = (map: WorkMap): boolean => {
   try {
     return isPlainJsonTree(map);

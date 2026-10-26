@@ -9,7 +9,6 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { DecisionJournalMap } from './decision-journal.js';
 import type { PlanEffect, WorkMap } from './types.js';
 
 /** Общая жизнь `planExports` и `decisionExports`: текст до записи файла, отпечаток после. */
@@ -76,8 +75,7 @@ export const effectTextIs = (effect: PlanEffect, text: string): boolean =>
  * проверок `normalizeMap`.
  */
 export function compactStoredTexts<M extends WorkMap>(map: M): M {
-  const decisions = (map as DecisionJournalMap).decisionExports;
-  for (const list of [map.planExports, decisions]) {
+  for (const list of [map.planExports, map.decisionExports]) {
     if (!Array.isArray(list)) continue;
     for (const intent of list) if (intent?.status === 'written') settleExport(intent);
   }

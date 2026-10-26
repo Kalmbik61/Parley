@@ -451,6 +451,7 @@ export function archiveRoom(map: WorkMap, letters: LetterTx, roomId: string, at 
   for (const effect of map.planEffects ?? []) {
     if (effect.roomId === roomId && effect.status === 'queued') {
       effect.status = 'cancelled';
+      // `effectCancelled` не нужен: у эффекта в `queued` `messageId === null`, письма, чьи кандидаты снимать, ещё нет.
       // Письмо этого эффекта не уходило, и текст ему больше не нужен: остаётся хэш (спека хранилища 6.2).
       settleEffectText(effect);
     }
