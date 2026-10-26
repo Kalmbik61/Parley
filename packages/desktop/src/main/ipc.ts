@@ -138,7 +138,8 @@ export function isFocusTarget(value: unknown): value is FocusTarget {
         typeof ref.projectPath === 'string' &&
         typeof ref.workId === 'string' &&
         typeof ref.sessionId === 'string' &&
-        (value.cardId === undefined || isValidPathArg(value.cardId))
+        (value.cardId === undefined || isValidPathArg(value.cardId)) &&
+        (value.view === undefined || value.view === 'terminal' && value.cardId === undefined)
       );
     }
     case 'mail':

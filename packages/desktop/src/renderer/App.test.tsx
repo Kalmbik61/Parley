@@ -437,6 +437,17 @@ describe('App — переход по цели уведомления (тест�
     return layout === undefined ? [] : groups(layout).flatMap((group) => group.tabs.map((tab) => tab.id));
   };
 
+  it('terminal focus target switches an existing Chat tab without any host mutation', async () => {
+    useWorksStore.setState({ entries: [work('w-02', '2026-01-02', [session('s-02', 'executor')])], branches: {}, loading: false, error: null });
+    const layout = openTab(emptyLayout(), { kind: 'terminal', id: 'terminal:s-02', sessionId: 's-02', view: 'chat' });
+    useLayoutStore.setState({ layouts: { [key]: layout }, hydrated: { [key]: true }, activeWorkKey: key });
+    render(<App />); await flush();
+    const before = bridge.calls.length;
+    act(() => bridge.emitFocusTarget({ ...target, view: 'terminal' })); await flush();
+    expect(groups(useLayoutStore.getState().layouts[key]!).flatMap((group) => group.tabs)).toEqual([{ kind: 'terminal', id: 'terminal:s-02', sessionId: 's-02', view: 'terminal' }]);
+    expect(bridge.calls.slice(before).filter((call) => ['feed.decide', 'sessions.interrupt', 'pty.send'].includes(call.method))).toEqual([]);
+  });
+
   it('тест 4: цель удалённой сессии — тост «Workspace or session no longer exists», ничего не открыто', async () => {
     useWorksStore.setState({ entries: [work('w-01', '2026-01-01', [session('s-01', 'план')])], branches: {}, loading: false, error: null });
     render(<App />);

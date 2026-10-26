@@ -10,7 +10,7 @@ import type { FocusTarget } from '../../shared/bridge.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { tabId } from '../layout/ids.js';
 import { useLayoutStore } from '../layout/store.js';
-import { groups, openTab } from '../layout/tree.js';
+import { groups, openTab, updateTab } from '../layout/tree.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { terminalSurfaces, type TerminalSurfaceHandle } from '../terminal/surface-registry.js';
 import { useUiStore } from '../store/ui.js';
@@ -50,7 +50,7 @@ function targetTab(target: FocusTarget, works: readonly WorkEntry[]): { workKey:
     case 'session': {
       const { sessionId } = target.ref;
       if (!entry.map.sessions.some((session) => session.id === sessionId)) return null;
-      return { workKey: key, tab: { kind: 'terminal', id: tabId.terminal(sessionId), sessionId } };
+      return { workKey: key, tab: { kind: 'terminal', id: tabId.terminal(sessionId), sessionId, ...(target.view === 'terminal' ? { view: 'terminal' as const } : {}) } };
     }
     case 'mail':
       return { workKey: key, tab: { kind: 'mail', id: tabId.mail() } };
@@ -149,7 +149,10 @@ export function buildFocusTargetDeps(signal?: AbortSignal): FocusTargetDeps {
     works: useWorksStore.getState().entries,
     setActiveWork: (key) => useLayoutStore.getState().setActiveWork(key),
     openTab: (key, tab) => {
-      useLayoutStore.getState().apply(key, (layout) => openTab(layout, tab));
+      useLayoutStore.getState().apply(key, (layout) => {
+        const next = openTab(layout, tab);
+        return tab.kind === 'terminal' && tab.view === 'terminal' ? updateTab(next, tab.id, { view: 'terminal' }) : next;
+      });
     },
     whenShown: (key, tab) => whenShown(key, tab, signal),
     surface: (ref) => terminalSurfaces.get(refKey(ref)),

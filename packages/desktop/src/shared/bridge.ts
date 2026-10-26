@@ -50,9 +50,10 @@ export type HostStatus =
  * Main шлёт её окну событием `app:focus-target`; окну, которое ещё грузится, — через
  * отложенную (`app:take-focus-target`). У цели-сессии с `cardId` клик открывает сессию в виде «Chat»,
  * прокрученном к этой ждущей карточке (`cardId` — `id` элемента ленты).
+ * Явный view:'terminal' меняет и сохранённый вид сессии; с cardId он несовместим.
  */
 export type FocusTarget =
-  | { kind: 'session'; ref: SessionRef; cardId?: string }
+  | ({ kind: 'session'; ref: SessionRef } & ({ cardId?: string; view?: never } | { view: 'terminal'; cardId?: never }))
   | { kind: 'mail'; projectPath: string; workId: string }
   | { kind: 'room'; projectPath: string; workId: string; roomId: string };
 

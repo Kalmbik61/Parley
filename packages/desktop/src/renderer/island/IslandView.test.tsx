@@ -55,6 +55,10 @@ function questionItem(options: string[]): IslandRequest {
   return permissionItem({ key: 'k\u0000c-3', card, summary: 'Question: Which DB?' });
 }
 
+function planItem(patch: Partial<IslandRequest> = {}, plan = 'Read the code\nChange the implementation'): IslandRequest {
+  return permissionItem({ key: 'k\u0000p-1', summary: 'Plan', card: { kind: 'plan', id: 'p-1', cardId: 'p-1', state: 'pending', at: '', toolUseId: null, toolName: 'ExitPlanMode', toolInput: {}, plan, planFilePath: '/unread/plan.md' }, ...patch });
+}
+
 const MODEL: IslandModel = {
   working: 2, waiting: 1, done: 0, providers: ['claude'], active: true,
   groups: [{ key: 'g', title: 'Backend', project: 'proj', rows: [
@@ -587,6 +591,75 @@ describe('размеры текста', () => {
     view({ items: [permissionItem({ inWindow: false })] });
     expect(screen.getByTestId('island-open').className).toContain('h-9');
     expect(screen.getByTestId('island-open').className).toContain('text-sm');
+  });
+});
+
+describe('PlanView — проводка родителя', () => {
+  it('full escaped plan stays readable, truncated has a transition and Change plan only opens an explicit terminal target', () => {
+    const plan = '<img src="https://example.com" onerror="bad()">\nhttps://example.com\n' + 'x'.repeat(16000) + '\nEND';
+    const item = planItem({}, plan);
+    const props = view({ items: [{ ...item, card: { ...item.card!, truncated: true } as FeedCard }] });
+    const body = screen.getByRole('region', { name: 'Plan' });
+    expect(body.textContent).toBe(plan);
+    expect(body.querySelector('a,img,script')).toBeNull();
+    expect(body.className).not.toContain('line-clamp');
+    expect(screen.getByText('Truncated')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Change plan in terminal' }));
+    expect(props.api.open).toHaveBeenCalledWith({ kind: 'session', ref: REF, view: 'terminal' });
+    expect(props.onDecide).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Parley' }));
+    expect(props.api.open).toHaveBeenLastCalledWith({ kind: 'session', ref: REF, cardId: 'p-1' });
+  });
+
+  it.each([['Approve, auto-accept edits', 'auto-accept'], ['Approve, approve each edit', 'manual']])('%s sends only the existing %s choice after arming', (label, choice) => {
+    const props = view({ items: [planItem()] }, false);
+    const button = screen.getByRole('button', { name: label }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true); arm();
+    fireEvent.click(button);
+    expect(props.onDecide).toHaveBeenCalledWith('k\u0000p-1', { kind: 'plan', choice });
+    expect(props.onTakeRequestKeyboard).not.toHaveBeenCalled();
+  });
+
+  it.each(['Enter', ' '])('same plan card/new text rearms and resets owned focus before native %s', (key) => {
+    const props = viewProps({ items: [planItem()], requestKeyboard: true });
+    const root = render(<IslandView {...props} />); arm();
+    act(() => screen.getByRole('button', { name: 'Approve, auto-accept edits' }).focus());
+    root.rerender(<IslandView {...props} items={[planItem({}, 'New plan text')]} />);
+    const button = screen.getByRole('button', { name: 'Approve, auto-accept edits' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(document.activeElement).toBe(screen.getByTestId('island-card')); arm();
+    fireEvent.keyDown(document.activeElement!, { key }); expect(props.onDecide).not.toHaveBeenCalled();
+    act(() => button.focus()); const allowed = fireEvent.keyDown(button, { key }); fireEvent.keyUp(button, { key });
+    if (allowed && document.activeElement === button && !button.disabled) fireEvent.click(button, { detail: 0 });
+    expect(props.onDecide).toHaveBeenCalledTimes(1);
+  });
+
+  it('terminal-only keeps plan readable without approvals; deciding/elsewhere disable and errors allow retry', () => {
+    const props = viewProps({ items: [planItem({ inWindow: false })] });
+    const root = render(<IslandView {...props} />); arm();
+    expect(screen.getByRole('region', { name: 'Plan' }).textContent).toContain('Read the code');
+    expect(screen.getByText('Approval is available in the terminal')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Approve, auto-accept edits' })).toBeNull();
+    for (const patch of [{ deciding: true }, { note: 'elsewhere' as const }, { note: 'failed' as const }]) {
+      root.rerender(<IslandView {...props} items={[planItem(patch)]} />); arm();
+      expect((screen.getByRole('button', { name: 'Approve, auto-accept edits' }) as HTMLButtonElement).disabled).toBe(patch.note !== 'failed');
+    }
+  });
+
+  it('measured chrome and notch bound the scroll body to remaining frame; text/scroll cannot drag', () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { height: this.dataset.testid === 'island-card' ? 300 : this.getAttribute('role') === 'region' ? 200 : 0, width: 440 } as DOMRect;
+    });
+    vi.stubGlobal('innerHeight', 520);
+    try {
+      const props = view({ items: [planItem()], config: { ...viewProps().config, topInset: 180 } });
+      const body = screen.getByRole('region', { name: 'Plan' });
+      expect(body.style.maxHeight).toBe('190px');
+      expect(screen.getByTestId('island-card').style.maxHeight).toBe('calc(100vh - 230px)');
+      for (const [type, at] of [['pointerdown', 10], ['pointermove', 50], ['pointerup', 50]] as const) fireEvent(body, new MouseEvent(type, { bubbles: true, button: 0, buttons: 1, screenX: at, screenY: at }));
+      fireEvent.scroll(body);
+      expect(props.api.dragStart).not.toHaveBeenCalled(); expect(props.onHide).not.toHaveBeenCalled();
+    } finally { vi.restoreAllMocks(); }
   });
 });
 

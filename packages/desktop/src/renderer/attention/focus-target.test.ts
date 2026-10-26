@@ -11,6 +11,7 @@ import type { WorkEntry, WorkSession } from '@parley/core';
 import type { FocusTarget } from '../../shared/bridge.js';
 import { refKey } from '@parley/protocol';
 import { useLayoutStore } from '../layout/store.js';
+import { emptyLayout, groups, openTab } from '../layout/tree.js';
 import { useWorksStore } from '../store/works.js';
 import { terminalSurfaces, type TerminalSurfaceHandle } from '../terminal/surface-registry.js';
 import { applyFocusTarget, buildFocusTargetDeps, type FocusTargetDeps } from './focus-target.js';
@@ -85,6 +86,17 @@ function deps(shown: boolean): { deps: FocusTargetDeps; calls: string[]; surface
 }
 
 describe('applyFocusTarget (тест 4 куска 4.3)', () => {
+  it('explicit terminal target updates an existing Chat tab through the production deps', () => {
+    const ref = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-02' };
+    const layout = openTab(emptyLayout(), { kind: 'terminal', id: 'terminal:s-02', sessionId: 's-02', view: 'chat' });
+    useWorksStore.setState({ entries: [work] });
+    useLayoutStore.setState({ layouts: { [key]: layout }, hydrated: { [key]: true }, pending: {}, activeWorkKey: key });
+    expect(applyFocusTarget({ kind: 'session', ref }, { ...buildFocusTargetDeps(), whenShown: async () => false })).toBe(true);
+    expect(groups(useLayoutStore.getState().layouts[key]!).flatMap((group) => group.tabs)).toEqual([{ kind: 'terminal', id: 'terminal:s-02', sessionId: 's-02', view: 'chat' }]);
+    expect(applyFocusTarget({ kind: 'session', ref, view: 'terminal' }, { ...buildFocusTargetDeps(), whenShown: async () => false })).toBe(true);
+    const tabs = groups(useLayoutStore.getState().layouts[key]!).flatMap((group) => group.tabs);
+    expect(tabs).toEqual([{ kind: 'terminal', id: 'terminal:s-02', sessionId: 's-02', view: 'terminal' }]);
+  });
   const target: FocusTarget = { kind: 'session', ref: { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-02' } };
 
   it('сессия: setActiveWork и openTab(terminal) сразу; flash, scrollToBottom и focus — после whenShown → true', async () => {

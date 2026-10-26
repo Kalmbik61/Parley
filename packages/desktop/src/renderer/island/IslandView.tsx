@@ -51,6 +51,7 @@ import type { IslandModel, IslandRow } from './model.js';
 import { useIslandReplies } from './replies.js';
 import type { IslandRequest } from './requests.js';
 import { EMPTY_QUESTION_FORM_DRAFT, QuestionForm, type QuestionFormDraft } from './QuestionForm.js';
+import { PlanView } from './PlanView.js';
 import { Swarm } from './swarm/Swarm.js';
 import { swarmSpecFor } from './swarm/spec.js';
 
@@ -305,6 +306,23 @@ function Card(props: IslandViewProps & { questionDraft: QuestionFormDraft; onQue
   // или новый показ) снимает взвод в очистке эффекта и ставит паузу заново.
   const showKey = item === undefined ? null : `${showId}\u0000${item.key}\u0000${item.fingerprint ?? JSON.stringify([item.card, item.inWindow])}`;
   const focus = useRequestFocus(showKey, props.requestKeyboard, props.onTakeRequestKeyboard);
+  const [planBodyHeight, setPlanBodyHeight] = useState(280);
+  useLayoutEffect(() => {
+    if (item?.card?.kind !== 'plan') return undefined;
+    const element = focus.ref.current;
+    const body = element?.querySelector<HTMLElement>('[role="region"]');
+    if (element === null || body === null || body === undefined) return undefined;
+    const measure = (): void => {
+      // Всё кроме прокручиваемого текста: header, summary, кнопки, заметки, gaps и padding.
+      const chrome = Math.max(0, element.getBoundingClientRect().height - body.getBoundingClientRect().height);
+      setPlanBodyHeight(Math.max(0, Math.min(280, window.innerHeight - props.config.topInset - BOTTOM_RESERVE_PX - chrome)));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element); observer.observe(body);
+    window.addEventListener('resize', measure);
+    return () => { observer.disconnect(); window.removeEventListener('resize', measure); };
+  }, [showKey, item?.card?.kind, item?.note, props.config.topInset, focus.ref]);
   const [armedKey, setArmedKey] = useState<string | null>(null);
   const armed = showKey !== null && armedKey === showKey;
   useEffect(() => {
@@ -324,7 +342,7 @@ function Card(props: IslandViewProps & { questionDraft: QuestionFormDraft; onQue
       {...focus}
       data-testid="island-card"
       className="island-reveal flex min-h-0 w-[440px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm"
-      style={item.card?.kind === 'question' ? { maxHeight: `calc(100vh - ${props.config.topInset + BOTTOM_RESERVE_PX}px)` } : undefined}
+      style={item.card?.kind === 'question' || item.card?.kind === 'plan' ? { maxHeight: `calc(100vh - ${props.config.topInset + BOTTOM_RESERVE_PX}px)` } : undefined}
     >
       <div className="flex shrink-0 items-center gap-2">
         <span className="min-w-0 flex-1 truncate">
@@ -348,7 +366,18 @@ function Card(props: IslandViewProps & { questionDraft: QuestionFormDraft; onQue
       </div>
       {item.note === 'elsewhere' ? <div className="text-muted-foreground">{S.island.answeredElsewhere}</div> : null}
       {item.note === 'failed' ? <div className="text-[var(--status-warning-text)]">{S.island.failed}</div> : null}
-      {item.card?.kind === 'question' && item.note !== 'elsewhere' ? (
+      {item.card?.kind === 'plan' ? (
+        <PlanView
+          card={item.card}
+          disabled={!armed || item.deciding || item.note === 'elsewhere'}
+          canDecide={item.inWindow}
+          maxBodyHeight={planBodyHeight}
+          labels={{ plan: S.chat.cardKind.plan, approveAuto: S.chat.card.approveAuto, approveManual: S.chat.card.approveManual, changeInTerminal: S.island.planChangeInTerminal, truncated: S.island.planTruncated, terminalOnly: S.island.planTerminalOnly, openInParley: S.island.openInParley }}
+          onDecide={(choice) => onDecide(item.key, { kind: 'plan', choice })}
+          onOpenTerminal={() => api.open({ kind: 'session', ref: item.ref, view: 'terminal' })}
+          onOpenInParley={() => api.open({ kind: 'session', ref: item.ref, cardId: item.card!.cardId })}
+        />
+      ) : item.card?.kind === 'question' && item.note !== 'elsewhere' ? (
         item.inWindow && item.card.state === 'pending' ? (
           <QuestionForm
             card={item.card}

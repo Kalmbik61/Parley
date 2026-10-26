@@ -16,7 +16,7 @@ import { LayoutTooLargeError, type LayoutStore } from './layout-store.js';
 import type { UiStore } from './ui-store.js';
 import { createNotesStore, type NotesStore } from './notes-store.js';
 import type { NotesFile } from '../shared/notes-types.js';
-import { forwardHostToPages, forwardHostToWindow, parseAgentRegistration, registerIpc, withIpcError } from './ipc.js';
+import { forwardHostToPages, forwardHostToWindow, isFocusTarget, parseAgentRegistration, registerIpc, withIpcError } from './ipc.js';
 import { createRootsRegistry, FilesDeniedError, type RootsRegistry } from './roots.js';
 
 /** Подставной `ipcMain`: сохраняет обработчики и умеет их дёргать, как настоящий `invoke`. */
@@ -273,6 +273,14 @@ function setup(
 }
 
 describe('registerIpc', () => {
+  it('terminal session target is additive, while cardId+terminal and other view values are rejected', () => {
+    const session = { kind: 'session', ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-01' } };
+    expect(isFocusTarget(session)).toBe(true);
+    expect(isFocusTarget({ ...session, cardId: 'c-1' })).toBe(true);
+    expect(isFocusTarget({ ...session, view: 'terminal' })).toBe(true);
+    for (const view of ['chat', null, false, 1]) expect(isFocusTarget({ ...session, view })).toBe(false);
+    expect(isFocusTarget({ ...session, view: 'terminal', cardId: 'c-1' })).toBe(false);
+  });
   it('session-visibility preserves sender and main-frame identity for the guarded relay', () => {
     const reportSessionVisibility = vi.fn();
     const { ipcMain } = setup({ reportSessionVisibility });

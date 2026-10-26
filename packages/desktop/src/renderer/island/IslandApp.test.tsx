@@ -18,7 +18,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FeedCard, FeedQuestionCard } from '@parley/core';
+import type { FeedCard, FeedPlanCard, FeedQuestionCard } from '@parley/core';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import { refKey, type ConsentCard } from '@parley/protocol';
 import type { IslandApi, IslandBridge, IslandConfig } from '../../shared/island.js';
@@ -906,7 +906,7 @@ describe('единый keyboard owner T1c', () => {
     await flush();
     blocked('s-01');
     await flush();
-    const button = screen.getByTestId('island-open');
+    const button = screen.getByRole('button', { name: 'Open in Parley' });
     fireEvent(button, pointer('pointerdown'));
     act(() => button.focus());
     fireEvent.click(button, { detail: 1 });
@@ -1119,6 +1119,63 @@ describe('перепроверка выбранного запроса T1a', () 
     await act(async () => { resolve({ items: [], revision: 2, mode: null, decisions: 'window' }); });
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
     expect(snapshot).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PlanView — настоящая проводка острова', () => {
+  const plan = (): FeedPlanCard => ({ kind: 'plan', id: 'p-1', cardId: 'p-1', state: 'pending', at: '', toolUseId: null, toolName: 'ExitPlanMode', toolInput: {}, plan: 'First step\nLast step', planFilePath: '/unread/plan.md' });
+  const settle = async (): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); };
+  async function mount(decisions: 'window' | 'terminal' = 'window') {
+    const state = setup(); let current = plan();
+    state.fake.setHandler('feed.snapshot', () => ({ items: [current], revision: 1, mode: null, decisions }));
+    render(<IslandApp bridge={state.bridge} />); await settle(); state.blocked('s-01'); await settle();
+    return { ...state, update: async (next: FeedPlanCard) => { current = next; act(() => useIslandRequests.getState().revalidate()); await settle(); } };
+  }
+  beforeEach(() => vi.useFakeTimers());
+
+  it.each([['Approve, auto-accept edits', 'auto-accept'], ['Approve, approve each edit', 'manual']])('%s has exact %s payload, duplicate guard, retry and elsewhere state', async (label, choice) => {
+    const state = await mount();
+    let resolve!: (value: { applied: false; state: 'pending' }) => void;
+    state.fake.setHandler('feed.decide', () => new Promise((done) => { resolve = done; }));
+    const button = screen.getByRole('button', { name: label }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true); await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    fireEvent(button, pointer('pointerdown')); act(() => button.focus());
+    fireEvent.click(button, { detail: 1 }); fireEvent.click(button, { detail: 1 });
+    expect(state.island.keyboard).not.toHaveBeenCalled();
+    expect(state.fake.calls.filter((call) => call.method === 'feed.decide')).toEqual([{ method: 'feed.decide', params: { ref: ref('s-01'), cardId: 'p-1', decision: { kind: 'plan', choice } } }]);
+    await act(async () => resolve({ applied: false, state: 'pending' }));
+    expect(button.disabled).toBe(false);
+    expect(screen.getByText("Couldn't send — try again")).toBeTruthy();
+    const allowed = fireEvent.keyDown(button, { key: 'Enter' }); fireEvent.keyUp(button, { key: 'Enter' });
+    if (allowed && document.activeElement === button && !button.disabled) fireEvent.click(button, { detail: 0 });
+    expect(state.fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(1);
+    state.fake.setHandler('feed.decide', () => ({ applied: false, state: 'answered' } as never));
+    fireEvent.click(button); await settle();
+    expect(screen.getByText('Answered elsewhere')).toBeTruthy(); expect(button.disabled).toBe(true);
+  });
+
+  it('terminal-only plan remains readable; Change plan is only navigation with no host mutation', async () => {
+    const state = await mount('terminal');
+    expect(screen.getByRole('region', { name: 'Plan' }).textContent).toBe(plan().plan);
+    expect(screen.queryByRole('button', { name: 'Approve, auto-accept edits' })).toBeNull();
+    const before = state.fake.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Change plan in terminal' }));
+    expect(state.island.open).toHaveBeenCalledWith({ kind: 'session', ref: ref('s-01'), view: 'terminal' });
+    expect(state.fake.calls.slice(before)).toEqual([]);
+    expect(state.fake.notified).toEqual([]);
+    expect(state.island.keyboard).not.toHaveBeenCalled();
+  });
+
+  it('same cardId/new plan text resets owned focus and arms again on a real snapshot', async () => {
+    const state = await mount(); await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    act(() => screen.getByRole('region', { name: 'Plan' }).focus()); await settle();
+    act(() => screen.getByRole('button', { name: 'Approve, auto-accept edits' }).focus());
+    await state.update({ ...plan(), plan: 'Revised plan text' });
+    expect(document.activeElement).toBe(screen.getByTestId('island-card'));
+    const button = screen.getByRole('button', { name: 'Approve, auto-accept edits' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true); await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter' });
+    expect(state.fake.calls.filter((call) => call.method === 'feed.decide')).toEqual([]);
   });
 });
 

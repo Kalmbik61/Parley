@@ -16,7 +16,7 @@ import { refKey } from '@parley/protocol';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { useLayoutStore } from '../layout/store.js';
-import { emptyLayout, openTab } from '../layout/tree.js';
+import { emptyLayout, groups, openTab } from '../layout/tree.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { workKey } from '../lib/tree-order.js';
 import { AppShell } from '../shell/AppShell.js';
@@ -28,7 +28,7 @@ import { terminalSurfaces } from '../terminal/surface-registry.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { xtermMock } from '../test-utils/xterm-mock.js';
 import { flashTab } from './flash.js';
-import { applyFocusTarget, whenShown } from './focus-target.js';
+import { applyFocusTarget, buildFocusTargetDeps, whenShown } from './focus-target.js';
 
 vi.mock('sonner', () => ({ toast: vi.fn() }));
 
@@ -138,6 +138,20 @@ afterEach(() => {
 });
 
 describe('applyFocusTarget в AppShell — фоновая работа вне LRU (тест 14 куска 4.3)', () => {
+  it('terminal target changes a saved Chat tab and focuses the visible terminal surface', async () => {
+    const entry = work('w-01', '2026-01-01', [session('s-01', 'executor')]);
+    const key = workKey(entry.projectPath, 'w-01');
+    useWorksStore.setState({ entries: [entry], branches: {}, loading: false, error: null });
+    const layout = openTab(emptyLayout(), { kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01', view: 'chat' });
+    useLayoutStore.setState({ activeWorkKey: key, layouts: { [key]: layout }, hydrated: { [key]: true } });
+    render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
+    await act(async () => {});
+    xterm.events = [];
+    act(() => { applyFocusTarget({ kind: 'session', ref: { projectPath: entry.projectPath, workId: 'w-01', sessionId: 's-01' }, view: 'terminal' }, buildFocusTargetDeps()); });
+    await waitFor(() => expect(xterm.events.some((event) => event.call === 'focus')).toBe(true));
+    expect(groups(useLayoutStore.getState().layouts[key]!).flatMap((group) => group.tabs)).toEqual([{ kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01', view: 'terminal' }]);
+    expect(xterm.events.filter((event) => event.call === 'focus').every((event) => !event.inert)).toBe(true);
+  });
   it('openTab ждёт hydrate; после него focus() и scrollToBottom() поверхности, и в момент focus() ничего не inert', async () => {
     const w1 = work('w-01', '2026-01-01', [session('s-01', 'planner')]);
     const w2 = work('w-02', '2026-01-02', [session('s-02', 'executor')]);
