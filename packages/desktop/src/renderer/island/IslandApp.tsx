@@ -38,7 +38,7 @@
  *
  * Помощник (спека 2026-10-14, раздел 8): стор `useAssistantStore` привязан к мосту при подключении хоста. Режим открывает
  * событие main (`onAssistantOpen`) или точка в пилюле; пока он открыт или идёт ход, окно видно даже при выключенном
- * острове, а остров в покое не убирается. Esc, стрелка ⌃, смахивание и потеря фокуса панели (`onAssistantBlur`) выходят
+ * острове, а остров в покое не убирается. Esc, стрелка ⌃, смахивание и потеря фокуса панели (`onKeyboardBlur`) выходят
  * через `hideAssistant`: идущий ход сворачивается в мини-вид, иначе режим закрывается и клавиатура уходит обратно.
  * Ответ сам не закрывается: человек читает его сколько нужно и закрывает одним из этих способов.
  */
@@ -128,6 +128,22 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   const consentDeciding = useConsentsStore((state) => state.deciding);
   const consentNote = useConsentsStore((state) => state.note);
   const shapeRef = useRef<HTMLDivElement>(null);
+  /** Один owner для всей панели; ref даёт актуальное значение синхронным callbacks стора. */
+  const ownerRef = useRef<'assistant' | 'request' | null>(null);
+  const [keyboardOwner, setKeyboardOwner] = useState<'assistant' | 'request' | null>(null);
+  const setOwner = useCallback((next: 'assistant' | 'request' | null): void => {
+    const previous = ownerRef.current;
+    if (previous === next) return;
+    ownerRef.current = next;
+    setKeyboardOwner(next);
+    if (previous === null || next === null) bridge.island.keyboard(next !== null);
+  }, [bridge]);
+  const releaseKeyboard = useCallback((): void => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && shapeRef.current?.contains(active)) active.blur();
+    setOwner(null);
+  }, [setOwner]);
+  useEffect(() => () => releaseKeyboard(), [releaseKeyboard]);
   /** Ключи запросов, что остров уже показывал: показанный раз не поднимает окно и не звучит повторно. */
   const seen = useRef(new Set<string>());
   /** Скрытые Clear ключи Done: память острова до перезапуска, при переподключении не сбрасывается. */
@@ -146,13 +162,14 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
         const ok = status.state === 'connected';
         setConnected(ok);
         if (!ok) {
+          releaseKeyboard();
           useIslandRequests.getState().clear();
           useConsentsStore.getState().replace([]);
           // После переподключения всё ещё ждущая карточка — новая: возвращает окно, выбирается и звучит.
           seen.current.clear();
         }
       }),
-    [bridge],
+    [bridge, releaseKeyboard],
   );
   useEffect(() => {
     if (!connected) return undefined;
@@ -206,7 +223,11 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     if (!connected) return;
     useAssistantStore.getState().configure({
       call: bridge.call,
-      keyboard: (on) => bridge.island.keyboard(on),
+      keyboard: (on) => {
+        if (on) setOwner('assistant');
+        else if (ownerRef.current === 'assistant') releaseKeyboard();
+      },
+      ownsKeyboard: () => ownerRef.current === 'assistant',
       config: () => configRef.current.assistant,
       listen: (hooks) => {
         const settings = configRef.current.assistant;
@@ -226,15 +247,16 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     void bridge.call('assistant.state', {}).then((state) => useAssistantStore.getState().applyHost(state)).catch(() => {});
     const off = bridge.on('assistant.changed', (state) => useAssistantStore.getState().applyHost(state));
     const offOpen = bridge.island.onAssistantOpen((request) => useAssistantStore.getState().openMode(request));
-    const offBlur = bridge.island.onAssistantBlur(() => {
-      hideAssistant();
+    const offBlur = bridge.island.onKeyboardBlur(() => {
+      if (ownerRef.current === 'assistant') hideAssistant();
+      releaseKeyboard();
     });
     return () => {
       off();
       offOpen();
       offBlur();
     };
-  }, [connected, bridge]);
+  }, [connected, bridge, setOwner, releaseKeyboard]);
 
   // Карточки согласия: начальный список и изменения хоста (как у помощника). Подписка раньше списка: событие, пришедшее
   // следом за запросом, не потеряется; карточки хоста переживают его перезапуск, и после переподключения список снова новый.
@@ -251,9 +273,10 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   const [retracted, setRetracted] = useState(idle);
   // `hovered` здесь не трогаем: его ведёт только main, и локальный сброс разошёлся бы с ним, пока курсор над зоной нажатия.
   const retract = useCallback(() => {
+    releaseKeyboard();
     setRetracted(true);
     setListOpen(false);
-  }, []);
+  }, [releaseKeyboard]);
 
   // Удержание строк Done: пока остров выдвинут, непросмотренные строки, что он показывает, копятся в `held` (удержанные
   // уже там, а после очистки вернулись бы, пока ещё видны в том же кадре). Новых ключей нет — состояние то же, иначе
@@ -337,15 +360,29 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     if (assistant.open) setRetracted(false);
   }, [assistant.open]);
   useEffect(() => {
-    if (!assistant.open) return;
+    if (!assistant.open && keyboardOwner === null) return;
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') useAssistantStore.getState().close();
+      if (event.key !== 'Escape' || event.isComposing) return;
+      if (ownerRef.current === 'request') {
+        event.preventDefault();
+        releaseKeyboard();
+      } else if (assistant.open) useAssistantStore.getState().close();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [assistant.open]);
+  }, [assistant.open, keyboardOwner, releaseKeyboard]);
   const shown = connected && !retracted;
   const requestVisible = shown && config.islandEnabled && !(assistant.open && !assistant.collapsed) && consents.length === 0;
+  const requestAvailable = shown && config.islandEnabled && !(assistant.open && !assistant.collapsed) && (consents.length > 0 || selectedKey !== null);
+  useEffect(() => {
+    if ((keyboardOwner === 'request' && !requestAvailable) ||
+      (keyboardOwner === 'assistant' && (!connected || !config.assistant.enabled || !assistant.open || assistant.collapsed))) releaseKeyboard();
+  }, [keyboardOwner, requestAvailable, connected, config.assistant.enabled, assistant.open, assistant.collapsed, releaseKeyboard]);
+  const takeRequestKeyboard = (): void => {
+    if (!requestAvailable || ownerRef.current === 'request') return;
+    setOwner('request');
+    if (requestVisible) useIslandRequests.getState().revalidate();
+  };
   useEffect(() => {
     if (!requestVisible || selectedKey === null) return undefined;
     const refresh = (): void => useIslandRequests.getState().revalidate();
@@ -438,6 +475,8 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
         showId={show.id}
         labels={labels}
         api={bridge.island}
+        requestKeyboard={keyboardOwner === 'request'}
+        onTakeRequestKeyboard={takeRequestKeyboard}
         shapeRef={shapeRef}
         onDragStart={() => setDragging(true)}
         onDragEnd={() => setDragging(false)}

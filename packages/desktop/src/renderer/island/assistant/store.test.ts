@@ -4,9 +4,11 @@ import { createAssistantStore, HOST_IDLE, type AssistantDeps } from './store.js'
 const CONFIG = { enabled: true, provider: null, model: null, language: 'ru' as const, hotkey: 'Alt+Space', voice: { enabled: true, model: 'small' as const } };
 function setup(over: Partial<AssistantDeps> = {}) {
   const store = createAssistantStore();
+  let owned = false;
   const deps: AssistantDeps = {
     call: vi.fn().mockResolvedValue({ ok: true, applied: true, error: null }),
-    keyboard: vi.fn(),
+    keyboard: vi.fn((on: boolean) => { owned = on; }),
+    ownsKeyboard: () => owned,
     config: () => CONFIG,
     listen: vi.fn(() => null),
     ...over,
@@ -16,6 +18,13 @@ function setup(over: Partial<AssistantDeps> = {}) {
 }
 
 describe('стор помощника', () => {
+  it('takeKeyboard проверяет общего owner вместо собственного устаревшего флага', () => {
+    const { store, deps } = setup({ ownsKeyboard: () => false });
+    store.getState().openMode({ listen: false });
+    // Общий owner отдал клавиатуру другому режиму без отдельного флага в assistant store.
+    store.getState().takeKeyboard();
+    expect(deps.keyboard).toHaveBeenCalledTimes(2);
+  });
   it('openMode берёт клавиатуру; close отдаёт и отменяет ход', async () => {
     const { store, deps } = setup();
     store.getState().openMode({ listen: false });

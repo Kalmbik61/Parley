@@ -35,7 +35,7 @@ function api(): IslandApi {
   return {
     config: vi.fn(), onConfig: vi.fn(), onHover: vi.fn(), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(),
     dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
-    keyboard: vi.fn(), onAssistantOpen: vi.fn(() => () => {}), onAssistantBlur: vi.fn(() => () => {}),
+    keyboard: vi.fn(), onAssistantOpen: vi.fn(() => () => {}), onKeyboardBlur: vi.fn(() => () => {}),
     voice: { transcribe: vi.fn(), micStatus: vi.fn(), requestMic: vi.fn() },
   };
 }
@@ -80,7 +80,7 @@ const DONE_MODEL: IslandModel = {
 function viewProps(patch: Partial<IslandViewProps> = {}): IslandViewProps {
   return {
     model: MODEL, items: [], index: 0, config: { ...ISLAND_BASE, sound: true, topInset: 0, anchor: 'center' }, listOpen: false, retracted: false, doneCount: 0, hovered: false, showId: 1,
-    labels: LABELS, api: api(), shapeRef: createRef<HTMLDivElement>(),
+    labels: LABELS, api: api(), shapeRef: createRef<HTMLDivElement>(), requestKeyboard: false, onTakeRequestKeyboard: vi.fn(),
     onDragStart: vi.fn(), onDragEnd: vi.fn(),
     onToggleList: vi.fn(), onHide: vi.fn(), onClearDone: vi.fn(), onSelect: vi.fn(), onDecide: vi.fn(),
     assistant: null,
@@ -588,6 +588,45 @@ describe('размеры текста', () => {
 });
 
 describe('пауза кнопок решения после показа запроса', () => {
+  it.each(['Enter', ' '])('same cardId/fingerprint: rearm и новый явный фокус перед native %j', (key) => {
+    const first = permissionItem({ fingerprint: 'first' });
+    const props = viewProps({ items: [first], requestKeyboard: true, onTakeRequestKeyboard: vi.fn() });
+    const { rerender } = render(<IslandView {...props} />);
+    arm();
+    act(() => screen.getByTestId('island-allow').focus());
+    rerender(<IslandView {...props} items={[{ ...first, fingerprint: 'second', summary: 'Run: changed' }]} />);
+    expect((screen.getByTestId('island-allow') as HTMLButtonElement).disabled).toBe(true);
+    expect(document.activeElement).toBe(screen.getByTestId('island-card'));
+    arm();
+    // jsdom не создаёт default click от клавиши: моделируем его только для реально сфокусированной кнопки.
+    const activateFocused = (): void => {
+      const target = document.activeElement;
+      if (target instanceof HTMLButtonElement && !target.disabled && fireEvent.keyDown(target, { key })) {
+        fireEvent.keyUp(target, { key });
+        fireEvent.click(target, { detail: 0 });
+      }
+    };
+    activateFocused();
+    expect(props.onDecide).not.toHaveBeenCalled();
+    act(() => screen.getByTestId('island-allow').focus());
+    activateFocused();
+    expect(props.onDecide).toHaveBeenCalledTimes(1);
+  });
+
+  it('fingerprint change без request owner не уводит внешний DOM focus и не берёт OS keyboard', () => {
+    const first = permissionItem({ fingerprint: 'first' });
+    const props = viewProps({ items: [first], requestKeyboard: false, onTakeRequestKeyboard: vi.fn() });
+    const { rerender, container } = render(<IslandView {...props} />);
+    const input = document.createElement('input');
+    container.append(input);
+    input.focus();
+    arm();
+    rerender(<IslandView {...props} items={[{ ...first, fingerprint: 'second' }]} />);
+    expect(document.activeElement).toBe(input);
+    expect((screen.getByTestId('island-allow') as HTMLButtonElement).disabled).toBe(true);
+    expect(props.onTakeRequestKeyboard).not.toHaveBeenCalled();
+    expect(props.api.keyboard).not.toHaveBeenCalled();
+  });
   it('сразу после показа Allow выключен, через 500 мс нажимается и зовёт onDecide', () => {
     const props = view({ items: [permissionItem()] }, false);
     const allow = screen.getByTestId('island-allow') as HTMLButtonElement;
@@ -988,6 +1027,46 @@ describe('карточка согласия на острове', () => {
   };
   const consent = (patch: Partial<NonNullable<IslandViewProps['consent']>> = {}): NonNullable<IslandViewProps['consent']> => ({
     card: CONSENT, deciding: false, note: null, onDecide: vi.fn(), ...patch,
+  });
+
+  it.each(['Enter', ' '])('consent same id/new folder: rearm, container focus и явная native активация %j', (key) => {
+    const c = consent();
+    const props = viewProps({ consent: c, requestKeyboard: true });
+    const { rerender } = render(<IslandView {...props} />);
+    arm();
+    act(() => screen.getByTestId('island-consent-trust').focus());
+    rerender(<IslandView {...props} consent={{ ...c, card: { ...CONSENT, folder: '/tmp/changed' } }} />);
+    expect((screen.getByTestId('island-consent-trust') as HTMLButtonElement).disabled).toBe(true);
+    expect(document.activeElement).toBe(screen.getByTestId('island-consent-request'));
+    arm();
+    fireEvent.keyDown(document.activeElement!, { key });
+    expect(c.onDecide).not.toHaveBeenCalled();
+    act(() => screen.getByTestId('island-consent-trust').focus());
+    const target = document.activeElement as HTMLButtonElement;
+    expect(target.disabled).toBe(false);
+    if (fireEvent.keyDown(target, { key })) {
+      fireEvent.keyUp(target, { key });
+      fireEvent.click(target, { detail: 0 });
+    }
+    expect(c.onDecide).toHaveBeenCalledTimes(1);
+    expect(c.onDecide).toHaveBeenCalledWith('c-01', 'allow');
+  });
+
+  it('consent metadata/state отправки не перевзводят; changed requestedBy перевзводит без захвата фокуса', () => {
+    const c = consent();
+    const props = viewProps({ consent: c });
+    const { rerender, container } = render(<IslandView {...props} />);
+    const input = document.createElement('input');
+    container.append(input);
+    input.focus();
+    arm();
+    rerender(<IslandView {...props} consent={{ ...c, deciding: true, note: 'failed', card: { ...CONSENT, at: '2026-10-27T10:00:00.000Z' } }} />);
+    rerender(<IslandView {...props} consent={{ ...c, card: { ...CONSENT, at: '2026-10-27T10:00:00.000Z' } }} />);
+    expect((screen.getByTestId('island-consent-trust') as HTMLButtonElement).disabled).toBe(false);
+    rerender(<IslandView {...props} consent={{ ...c, card: { ...CONSENT, requestedBy: { source: 'launch' } } }} />);
+    expect((screen.getByTestId('island-consent-trust') as HTMLButtonElement).disabled).toBe(true);
+    expect(document.activeElement).toBe(input);
+    expect(props.onTakeRequestKeyboard).not.toHaveBeenCalled();
   });
 
   it('есть и ждущий запрос ленты, и согласие — показано согласие, запрос ждёт за ним', () => {

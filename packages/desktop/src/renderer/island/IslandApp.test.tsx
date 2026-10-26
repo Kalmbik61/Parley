@@ -73,7 +73,7 @@ function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
     onHover: vi.fn(() => () => undefined), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
     keyboard: vi.fn(),
     onAssistantOpen: vi.fn(() => () => undefined),
-    onAssistantBlur: vi.fn(() => () => undefined),
+    onKeyboardBlur: vi.fn(() => () => undefined),
     voice: { transcribe: vi.fn(), micStatus: vi.fn(), requestMic: vi.fn() },
   };
 }
@@ -120,7 +120,7 @@ function setup(config: Partial<IslandConfig> = {}, entries = ENTRIES, consents: 
   };
   const assistantBlur = (): void => {
     act(() => {
-      vi.mocked(island.onAssistantBlur).mock.calls.at(-1)![0]();
+      vi.mocked(island.onKeyboardBlur).mock.calls.at(-1)![0]();
     });
   };
   return { fake, island, bridge, blocked, working, disconnect, reconnect, hover, assistantOpen, assistantBlur };
@@ -866,6 +866,90 @@ describe('убирание острова в покое', () => {
   });
 });
 
+describe('единый keyboard owner T1c', () => {
+  beforeEach(() => vi.useFakeTimers());
+  const flush = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  const takeRequest = (): void => { fireEvent(screen.getByTestId('island-card'), pointer('pointerdown')); };
+
+  it('snapshot сам не берёт клавиатуру; явное взаимодействие берёт один раз, Escape отдаёт без решения', async () => {
+    const { fake, bridge, island, blocked } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    expect(island.keyboard).not.toHaveBeenCalled();
+    takeRequest();
+    takeRequest();
+    expect(vi.mocked(island.keyboard).mock.calls).toEqual([[true]]);
+    expect(document.activeElement).toBe(screen.getByTestId('island-card'));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(island.keyboard).toHaveBeenLastCalledWith(false);
+    expect(document.activeElement).not.toBe(screen.getByTestId('island-card'));
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(0);
+  });
+
+  it.each(['blur', 'collapse', 'disconnect', 'unmount'])('request owner отдаёт клавиатуру по %s', async (reason) => {
+    const { bridge, island, blocked, hover, disconnect, assistantBlur } = setup();
+    const mounted = render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    takeRequest();
+    expect(island.keyboard).toHaveBeenLastCalledWith(true);
+    if (reason === 'blur') assistantBlur();
+    if (reason === 'collapse') tuck(hover);
+    if (reason === 'disconnect') disconnect();
+    if (reason === 'unmount') mounted.unmount();
+    expect(vi.mocked(island.keyboard).mock.calls).toEqual([[true], [false]]);
+  });
+
+  it('assistant/request передают одного owner без повторного OS focus и чужого release', async () => {
+    const { bridge, island, blocked, assistantOpen } = setup({ assistant: ASSISTANT_ON });
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    takeRequest();
+    assistantOpen({ listen: false });
+    expect(vi.mocked(island.keyboard).mock.calls).toEqual([[true]]);
+    act(() => useAssistantStore.getState().close());
+    takeRequest();
+    vi.mocked(island.keyboard).mockClear();
+    // Запоздалый release помощника не принадлежит уже активному request owner.
+    act(() => useAssistantStore.getState().collapse());
+    expect(island.keyboard).not.toHaveBeenCalled();
+  });
+
+  it('WATCH: deciding → same-id fingerprint change → после 500ms Enter не отправляет новое решение без фокуса', async () => {
+    const { bridge, fake, island, blocked } = setup();
+    let finish!: (value: { applied: boolean; state: 'allowed' }) => void;
+    fake.setHandler('feed.decide', () => new Promise((resolve) => { finish = resolve; }));
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    takeRequest();
+    act(() => screen.getByTestId('island-allow').focus());
+    fireEvent.click(screen.getByTestId('island-allow'));
+    await flush();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(1);
+    fake.setHandler('feed.snapshot', () => ({ items: [permission('c-1', 'new command')], revision: 2, mode: null, decisions: 'window' }));
+    fireEvent.focus(window);
+    await flush();
+    expect(document.activeElement).toBe(screen.getByTestId('island-card'));
+    expect((screen.getByTestId('island-allow') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    const active = document.activeElement!;
+    fireEvent.keyDown(active, { key: 'Enter' });
+    if (active instanceof HTMLButtonElement && !active.disabled) fireEvent.click(active);
+    await flush();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(1);
+    expect(vi.mocked(island.keyboard).mock.calls).toEqual([[true]]);
+    await act(async () => { finish({ applied: true, state: 'allowed' }); });
+  });
+});
+
 describe('перепроверка выбранного запроса T1a', () => {
   beforeEach(() => vi.useFakeTimers());
   const flush = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
@@ -1344,6 +1428,22 @@ describe('согласия на папку', () => {
     requestedBy: { source: 'agent', sessionId: 's-01', label: 'S01 a' }, at: '2026-10-21T10:00:00.000Z', state: 'pending',
   };
   const SECOND: ConsentCard = { ...CONSENT, id: 'c-02', folder: '/tmp/other', projectPath: '/tmp/other' };
+
+  it.each(['Escape', 'blur', 'collapse', 'disconnect'])('consent явный request owner и release по %s без решения', async (reason) => {
+    vi.useFakeTimers();
+    const { bridge, fake, island, hover, disconnect, assistantBlur } = setup({}, ENTRIES, [CONSENT]);
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(island.keyboard).not.toHaveBeenCalled();
+    fireEvent(screen.getByTestId('island-card'), pointer('pointerdown'));
+    expect(island.keyboard).toHaveBeenLastCalledWith(true);
+    if (reason === 'Escape') fireEvent.keyDown(window, { key: 'Escape' });
+    if (reason === 'blur') assistantBlur();
+    if (reason === 'collapse') tuck(hover);
+    if (reason === 'disconnect') disconnect();
+    expect(vi.mocked(island.keyboard).mock.calls).toEqual([[true], [false]]);
+    expect(fake.calls.filter((call) => call.method === 'consents.decide')).toHaveLength(0);
+  });
 
   it('начальный consents.list: карточка видна, остров выдвинут', async () => {
     const { fake, bridge } = setup({}, ENTRIES, [CONSENT]);

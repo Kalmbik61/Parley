@@ -497,7 +497,7 @@ if (!gotLock) {
         const window = island.current();
         if (window !== null) window.webContents.send('island:hover', hovered);
       },
-      onKeyboardLost: () => blurAssistant(),
+      onKeyboardLost: () => blurKeyboard(),
       onCreated: (window) => {
         // Острову — только нужные ему события хоста: `pty.output` всех сессий в его renderer не нужен.
         forwardHostToPages(connection, window, { events: ISLAND_EVENTS });
@@ -518,10 +518,10 @@ if (!gotLock) {
       if (window === null || window.isDestroyed()) return;
       window.webContents.send('island:assistant-open', request);
     }
-    function blurAssistant(): void {
+    function blurKeyboard(): void {
       const window = island.current();
       if (window === null || window.isDestroyed()) return;
-      window.webContents.send('island:assistant-blur');
+      window.webContents.send('island:keyboard-blur');
     }
     const assistantLanguage = (current: UiFile): AssistantLanguage =>
       current.assistant.language ?? systemAssistantLanguage(app.getLocale());

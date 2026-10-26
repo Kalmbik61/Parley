@@ -31,7 +31,7 @@
  * помощник не раскрыт (`ConsentView`, свой стор `consents/store.ts`).
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type Ref } from 'react';
 import { ChevronUp } from 'lucide-react';
 import type { FeedDecision } from '@parley/core';
 import { S } from '../../shared/strings.js';
@@ -90,6 +90,8 @@ export interface IslandViewProps {
   showId: number;
   labels: ReadonlyMap<string, { session: string; work: string; project: string }>;
   api: IslandApi;
+  requestKeyboard: boolean;
+  onTakeRequestKeyboard(): void;
   /** Ссылка на внешнюю форму: `IslandApp` по ней замеряет область, которую остров ловит мышью. */
   shapeRef: Ref<HTMLDivElement>;
   /** Перетаскивание формы началось / закончилось: пока оно идёт, остров не убирается в покое. */
@@ -272,12 +274,41 @@ function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: b
   return openButton;
 }
 
+/** Явное взаимодействие берёт клавиатуру; новая identity фокусирует контейнер только у текущего owner. */
+function useRequestFocus(identity: string | null, owned: boolean, takeKeyboard: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  const previousIdentity = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (previousIdentity.current === identity) return;
+    previousIdentity.current = identity;
+    if (owned) ref.current?.focus({ preventScroll: true });
+  }, [identity, owned]);
+  return {
+    ref,
+    tabIndex: -1,
+    onFocusCapture: takeKeyboard,
+    onPointerDownCapture: (event: PointerEvent<HTMLDivElement>): void => {
+      if (event.button !== 0) return;
+      takeKeyboard();
+      if (!(event.target instanceof Element) || event.target.closest('button, input, textarea, select, [contenteditable]') === null) event.currentTarget.focus({ preventScroll: true });
+    },
+  };
+}
+
+function ConsentRequest({ consent, showId, owned, takeKeyboard }: { consent: IslandConsentProps; showId: number; owned: boolean; takeKeyboard(): void }): JSX.Element {
+  const { card } = consent;
+  const identity = JSON.stringify([showId, card.id, card.kind, card.folder, card.projectPath, card.requestedBy]);
+  const focus = useRequestFocus(identity, owned, takeKeyboard);
+  return <div {...focus} data-testid="island-consent-request"><ConsentView key={identity} {...consent} /></div>;
+}
+
 function Card(props: IslandViewProps): JSX.Element | null {
   const { items, index, showId, labels, api, onSelect, onDecide } = props;
   const item = items[index] ?? items[0];
   // Взведённая пара «показ + карточка» ровно одна: любая смена пары (другая карточка, в том числе виденная раньше,
   // или новый показ) снимает взвод в очистке эффекта и ставит паузу заново.
-  const showKey = item === undefined ? null : `${showId}\u0000${item.key}`;
+  const showKey = item === undefined ? null : `${showId}\u0000${item.key}\u0000${item.fingerprint ?? JSON.stringify([item.card, item.inWindow])}`;
+  const focus = useRequestFocus(showKey, props.requestKeyboard, props.onTakeRequestKeyboard);
   const [armedKey, setArmedKey] = useState<string | null>(null);
   const armed = showKey !== null && armedKey === showKey;
   useEffect(() => {
@@ -292,7 +323,12 @@ function Card(props: IslandViewProps): JSX.Element | null {
   const label = labels.get(sessionKeyOf(item));
   return (
     // Ключ по показанному запросу: новая карточка (стрелки, новый запрос) заново проигрывает появление.
-    <div key={item.key} data-testid="island-card" className="island-reveal flex w-[440px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm">
+    <div
+      key={showKey}
+      {...focus}
+      data-testid="island-card"
+      className="island-reveal flex w-[440px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm"
+    >
       <div className="flex items-center gap-2">
         <span className="min-w-0 flex-1 truncate">
           {label === undefined ? null : `${label.session} · ${label.work}`}
@@ -373,8 +409,7 @@ export function IslandView(props: IslandViewProps): JSX.Element {
             {assistantBig ? (
               <AssistantView {...assistant.view} maxHeight={`calc(100vh - ${config.topInset + ASSISTANT_BOTTOM_RESERVE_PX}px)`} />
             ) : consent !== null ? (
-              // Ключ с номером показа: новый показ острова заново ставит паузу кнопок, как у карточек ленты.
-              <ConsentView key={`${showId}\u0000${consent.card.id}`} {...consent} />
+              <ConsentRequest consent={consent} showId={showId} owned={props.requestKeyboard} takeKeyboard={props.onTakeRequestKeyboard} />
             ) : items.length > 0 ? (
               <Card {...props} />
             ) : (

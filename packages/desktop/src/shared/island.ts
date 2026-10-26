@@ -72,12 +72,12 @@ export interface IslandApi {
   /** Область, которую остров ловит мышью: форма (выдвинутый), язычок (убранный) или `null`, если ничего не показано. */
   setHitRect(rect: IslandHitRect | null): void;
   setVisible(visible: boolean): void;
-  /** Режим помощника: панель берёт клавиатуру (`true`) или отдаёт её прежнему приложению (`false`). */
+  /** Общий owner assistant/request: панель берёт клавиатуру (`true`) или отдаёт её прежнему приложению (`false`). */
   keyboard(on: boolean): void;
   /** Хоткей или палитра открыли помощника. */
   onAssistantOpen(listener: (request: AssistantOpenRequest) => void): () => void;
   /** Панель потеряла фокус, пока держала клавиатуру (клик в другое приложение): выйти из режима, как по Esc или ⌃. */
-  onAssistantBlur(listener: () => void): () => void;
+  onKeyboardBlur(listener: () => void): () => void;
   /** Голос для помощника — те же каналы `voice:*`, что у окна. */
   voice: Pick<VoiceApi, 'transcribe' | 'micStatus' | 'requestMic'>;
   dragStart(point: IslandPoint): void;

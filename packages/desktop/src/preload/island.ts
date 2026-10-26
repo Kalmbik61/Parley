@@ -16,7 +16,7 @@ const statusListeners = new Set<(status: HostStatus) => void>();
 const configListeners = new Set<(config: IslandConfig) => void>();
 const hoverListeners = new Set<(hovered: boolean) => void>();
 const assistantOpenListeners = new Set<(request: AssistantOpenRequest) => void>();
-const assistantBlurListeners = new Set<() => void>();
+const keyboardBlurListeners = new Set<() => void>();
 /** Последний статус: подписчик, пришедший позже события, получает его сразу (как в общем preload). */
 let lastStatus: HostStatus | null = null;
 
@@ -36,8 +36,8 @@ ipcRenderer.on('island:hover', (_event, hovered: boolean) => {
 ipcRenderer.on('island:assistant-open', (_event, request: unknown) => {
   for (const listener of assistantOpenListeners) listener(request as AssistantOpenRequest);
 });
-ipcRenderer.on('island:assistant-blur', () => {
-  for (const listener of assistantBlurListeners) listener();
+ipcRenderer.on('island:keyboard-blur', () => {
+  for (const listener of keyboardBlurListeners) listener();
 });
 
 const bridge = {
@@ -85,10 +85,10 @@ const bridge = {
         assistantOpenListeners.delete(listener);
       };
     },
-    onAssistantBlur: (listener: () => void) => {
-      assistantBlurListeners.add(listener);
+    onKeyboardBlur: (listener: () => void) => {
+      keyboardBlurListeners.add(listener);
       return () => {
-        assistantBlurListeners.delete(listener);
+        keyboardBlurListeners.delete(listener);
       };
     },
     voice: {
