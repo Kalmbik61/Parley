@@ -665,7 +665,7 @@ export function AppShell({ bridge, status, fontFamily, fontSize }: AppShellProps
     <div className="flex h-screen flex-col bg-background text-foreground">
       {/* Поиск в заголовке — только пока сайдбара со строкой `Search` нет на экране. */}
       <Titlebar bridge={bridge} showSearch={!ui.leftSidebar.open || showLanding} />
-      <InterruptedBanner bridge={bridge} />
+      <InterruptedBanner bridge={bridge} onOpenSession={openSessionTab} />
       <WorksErrorBanner />
       {showLanding ? (
         <Landing />

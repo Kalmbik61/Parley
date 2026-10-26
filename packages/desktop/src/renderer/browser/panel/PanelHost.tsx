@@ -3,9 +3,9 @@
  * терминал) или комнаты: рядом с видом стоит «участок панели» — пустой блок с именем CSS-якоря, на который встаёт сама
  * панель из слоя поверхностей работы (`PanelSurface`): `<webview>` страниц не должен пересоздаваться, когда человек уходит
  * на другую вкладку группы и возвращается.
- * - Широкий вид: участок рядом с видом, шириной панели от 320 px до 70 % вида; ширину тянет ручка между ними
+ * - Широкий вид: участок рядом с видом, шириной панели от 320 px до 70 % вида (виду остаётся не меньше 240 px); ширину тянет ручка между ними
  *   (`shell/Resizer.tsx`, в раскладку — на `pointerup`). Терминал сессии уступает ему место по якорю `reserve`.
- * - Вид уже 720 px (в том числе окно 800×500): участок поверх вида целиком, ручки нет; вид под ним недоступен (`inert`) —
+ * - Вид уже 560 px (в том числе окно 800×500): участок поверх вида целиком, ручки нет; вид под ним недоступен (`inert`) —
  *   чат до нечитаемого не сжимается, вернуться к нему можно кнопкой «Back to chat» полоски панели.
  * Вид сообщает о себе стору окна (`runtime.ts`): панель видна, только пока вид хозяина на экране, а узкий он или нет —
  * нужно полоске панели.
@@ -51,7 +51,7 @@ export function PanelHost({ workKey, owner, children }: PanelHostProps): JSX.Ele
   }, []);
 
   const narrow = width > 0 && width < PANEL_LIMITS.narrowBelow;
-  const maxWidth = Math.max(PANEL_LIMITS.minWidth, Math.floor(width * PANEL_LIMITS.maxShare));
+  const maxWidth = Math.max(PANEL_LIMITS.minWidth, Math.min(Math.floor(width * PANEL_LIMITS.maxShare), width - PANEL_LIMITS.minView));
   const wanted = Math.max(panel?.width ?? PANEL_LIMITS.defaultWidth, PANEL_LIMITS.minWidth);
   const areaWidth = width > 0 ? Math.min(wanted, maxWidth) : wanted;
 

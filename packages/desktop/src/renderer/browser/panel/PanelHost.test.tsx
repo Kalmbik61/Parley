@@ -1,6 +1,6 @@
 /**
  * Вид хозяина с участком под панель браузера (спека браузера 4.11; этап B2, часть 1): широкий вид — участок рядом с видом
- * и ручка ширины; вид уже 720 px — участок поверх вида; вид сообщает о себе стору окна.
+ * и ручка ширины; вид уже 560 px — участок поверх вида; вид сообщает о себе стору окна.
  */
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -118,7 +118,16 @@ describe('PanelHost — участок панели', () => {
     expect(area()?.style.width).toBe('320px');
   });
 
-  it('вид уже 720 px: участок поверх вида целиком, якорь только area, ручки нет, вид под inert; шире — снова рядом', () => {
+  it('виду остаётся не меньше 240 px: на 610 px участок 370 при сохранённых 400, на narrowBelow — минимальные 320', () => {
+    setLayout(layoutWithPanel(true, 400));
+    renderHost();
+    setViewWidth(610);
+    expect(area()?.style.width).toBe(`${610 - PANEL_LIMITS.minView}px`);
+    setViewWidth(PANEL_LIMITS.narrowBelow);
+    expect(area()?.style.width).toBe(`${PANEL_LIMITS.minWidth}px`);
+  });
+
+  it('вид уже 560 px: участок поверх вида целиком, якорь только area, ручки нет, вид под inert; шире — снова рядом', () => {
     setLayout(layoutWithPanel(true, 400));
     renderHost();
     setViewWidth(PANEL_LIMITS.narrowBelow - 1);
@@ -168,7 +177,7 @@ describe('PanelHost — стор окна', () => {
     const { unmount } = renderHost();
     const key = panelRuntimeKey(KEY, OWNER);
     expect(usePanelRuntime.getState().hosts[key]).toEqual({ narrow: false });
-    setViewWidth(600);
+    setViewWidth(500);
     expect(usePanelRuntime.getState().hosts[key]).toEqual({ narrow: true });
     unmount();
     expect(usePanelRuntime.getState().hosts[key]).toBeUndefined();

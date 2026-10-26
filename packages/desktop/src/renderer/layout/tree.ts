@@ -33,14 +33,16 @@ export const LIMITS: {
 
 /**
  * Панели браузера хозяев (спека браузера 3.10, 4.11, 8): страниц не больше пяти; ширина от 320 px до 70 % вида хозяина,
- * по умолчанию 400 (на виде в 720 px чату остаётся 320); вид уже 720 px — панель встаёт поверх него целиком.
+ * по умолчанию 400 (на виде в 720 px чату остаётся 320); виду остаётся не меньше `minView` (240), поэтому вид уже
+ * `narrowBelow` = `minWidth` + `minView` (560 px) — панель встаёт поверх него целиком.
  */
-export const PANEL_LIMITS: { pages: 5; minWidth: 320; defaultWidth: 400; maxShare: 0.7; narrowBelow: 720 } = {
+export const PANEL_LIMITS: { pages: 5; minWidth: 320; defaultWidth: 400; maxShare: 0.7; narrowBelow: 560; minView: 240 } = {
   pages: 5,
   minWidth: 320,
   defaultWidth: 400,
   maxShare: 0.7,
-  narrowBelow: 720,
+  narrowBelow: 560,
+  minView: 240,
 };
 
 export type GroupSizes = Record<string, { width: number; height: number }>;

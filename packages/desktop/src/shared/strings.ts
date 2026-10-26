@@ -233,22 +233,6 @@ export const S = {
     openFailed: 'The result could not be opened.', gone: 'The workspace, room or session no longer exists.',
     incomplete: 'Excerpt', shared: 'Shared snapshot', alsoShared: 'Also shared', line: (n: number): string => `line ${n}`,
   },
-  roomHistory: {
-    menu: 'History', notShared: 'Not shared', sharedAt: (iso: string): string => `Shared at ${new Date(iso).toLocaleString()}`,
-    conflict: 'The shared file was changed or is not owned by Parley. Parley will not overwrite or remove it.',
-    share: 'Share history…', reshare: 'Share again…', unshare: 'Unshare…',
-    shareWarning: 'This publishes a snapshot to the project’s shared Git files. Check for secrets before continuing.',
-    confirmShare: 'Publish snapshot',
-    unshareWarning: 'Remove the shared snapshot from the working copy. Previous Git commits retain it.',
-    confirmUnshare: 'Remove snapshot',
-    loading: 'Reading the history state…', loadFailed: 'The history state could not be read. Try again.', refresh: 'Refresh',
-    unavailable: 'Update or restart the host to share room history.', disconnected: 'Reconnect to the host to share room history.',
-    shareFailed: 'The history could not be shared. Nothing was recorded as shared.',
-    unshareFailed: 'The shared snapshot could not be removed.',
-    changed: 'The shared history changed. Review it and try again.',
-    ignore: { 'parley-gitignore-custom': 'The project has a custom state ignore file. Check that the shared history is tracked by Git.',
-      'parley-dir-ignored': 'The project state folder is ignored by Git, so the shared history stays local.' },
-  },
   usage: {
     title: 'Token usage',
     since: 'Since each member joined',
@@ -1041,6 +1025,9 @@ export const S = {
     toAll: 'all',
     /** `aria-label` ленты участников и тултип `★` у ведущего. */
     participants: 'Participants',
+    /** Кнопка в конце ленты участников: закрытые спрятаны (`N closed`) или показаны (`Hide closed`). */
+    closedParticipants: (n: number): string => `${n} closed`,
+    hideClosedParticipants: 'Hide closed',
     lead: 'Lead',
     /** Пустая комната. */
     emptyFeed: 'Write the task for everyone below. The lead collects positions and brings you a decision.',
@@ -1883,7 +1870,7 @@ export const S = {
       addPage: 'Add a page',
       closePage: (title: string): string => `Close ${title}`,
       closePanel: 'Close the browser panel',
-      /** Узкий вид (уже 720 px): панель закрывает вид собой, кнопка возвращает к нему. */
+      /** Узкий вид (уже 560 px): панель закрывает вид собой, кнопка возвращает к нему. */
       backToChat: 'Back to chat',
       backToRoom: 'Back to room',
       resize: 'Resize the browser panel',
@@ -1979,10 +1966,15 @@ export const S = {
       `${CONTEXT_NAMES[kind]} ${label}: ${mdPath}${pngPath === null ? '' : ` (screenshot: ${pngPath})`}`,
   },
 
-  /** Баннер прерванных сессий — `components/InterruptedBanner.tsx`. */
+  /**
+   * Баннер прерванных сессий — `components/InterruptedBanner.tsx`. `interrupted` — начало строки перед чипами сессий,
+   * `interruptedHint` — её подсказка (что значит «прервана»), `dismiss` — «×» (прячет показанные сессии).
+   */
   banners: {
-    interrupted: (labels: string): string => `Interrupted mid-turn: ${labels}`,
+    interrupted: 'Interrupted mid-turn:',
+    interruptedHint: 'These sessions were working when the host stopped. They are asleep now; resume them to let them finish the turn.',
     resumeAll: 'Resume all',
+    dismiss: 'Dismiss',
   },
 
   /**

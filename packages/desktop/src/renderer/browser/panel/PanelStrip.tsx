@@ -23,7 +23,7 @@ export interface PanelStripProps {
   owner: BrowserOwner;
   panel: BrowserPanelSpec;
   entry: WorkEntry;
-  /** Вид хозяина уже 720 px: панель закрывает его собой. */
+  /** Вид хозяина уже 560 px: панель закрывает его собой. */
   narrow: boolean;
 }
 
