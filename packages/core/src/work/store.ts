@@ -391,9 +391,9 @@ export function readTransaction<T>(db: DatabaseSync, body: () => T): T {
   }
 }
 
-const UPSERT_ENTRY = `INSERT INTO entries (project_path, work_id, kind, key, ord, json) VALUES (?, ?, ?, ?, ?, ?)
+export const UPSERT_ENTRY = `INSERT INTO entries (project_path, work_id, kind, key, ord, json) VALUES (?, ?, ?, ?, ?, ?)
   ON CONFLICT (project_path, work_id, kind, key) DO UPDATE SET ord = excluded.ord, json = excluded.json`;
-const DELETE_ENTRY =
+export const DELETE_ENTRY =
   'DELETE FROM entries WHERE project_path = ? AND work_id = ? AND kind = ? AND key = ?';
 const INSERT_WORK = `INSERT INTO works (project_path, id, title, status, updated_at, version, work_json, extra_json)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
@@ -619,7 +619,14 @@ export function listWorkVersions(): Array<{ projectPath: string; id: string; ver
  * (спека хранилища 6.2). Работы нет — `WorkNotFoundError`.
  */
 export function readStoredMap(projectPath: string, workId: string): WindowWorkMap {
-  const db = storeDb();
+  return readStoredMapOn(storeDb(), projectPath, workId);
+}
+
+/**
+ * `readStoredMap` на заданном соединении: апгрейд базы со схемы 1 собирает и сверяет карты ещё до того, как дескриптор
+ * `workDb()` существует (`letter-upgrade.ts`, спека хранилища 6.6).
+ */
+export function readStoredMapOn(db: DatabaseSync, projectPath: string, workId: string): WindowWorkMap {
   return readTransaction(db, () => {
     const stored = loadStored(db, projectPath, workId);
     if (stored === undefined) throw notFound(projectPath, workId);

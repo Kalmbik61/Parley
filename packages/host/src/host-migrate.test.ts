@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -385,5 +386,42 @@ describe('startHost moves workspace maps into the database (storage spec 6.6)', 
     expect(existsSync(file)).toBe(true);
     expect(workExists(project, 'w-0001')).toBe(false);
     expect(existsSync(path.join(home, 'works-index.json'))).toBe(true);
+  });
+
+  it('a schema 1 database that cannot be upgraded to the letters schema: the host logs why, the works are unreadable, and the database stays at schema 1', async () => {
+    const home = await newHome();
+    // База сборки плана 3 (письма — строки `entries`) с письмом, которое не разобрать: апгрейд откатывается целиком.
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+    const file = path.join(home, 'parley.db');
+    const old = new DatabaseSync(file);
+    old.exec(`
+      CREATE TABLE works (
+        project_path TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, updated_at TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 0, work_json TEXT NOT NULL, extra_json TEXT NOT NULL, PRIMARY KEY (project_path, id));
+      CREATE TABLE entries (
+        project_path TEXT NOT NULL, work_id TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, ord INTEGER NOT NULL,
+        json TEXT NOT NULL, PRIMARY KEY (project_path, work_id, kind, key),
+        FOREIGN KEY (project_path, work_id) REFERENCES works(project_path, id) ON DELETE CASCADE);`);
+    const map = legacyMap('w-0001', 'Stuck');
+    old
+      .prepare(`INSERT INTO works (project_path, id, title, status, updated_at, work_json, extra_json) VALUES ('/p', 'w-0001', 'Stuck', 'active', ?, ?, ?)`)
+      .run(map.work.updatedAt, JSON.stringify(map.work), JSON.stringify({ schemaVersion: 2, present: [], foreign: {} }));
+    old.prepare(`INSERT INTO entries (project_path, work_id, kind, key, ord, json) VALUES ('/p', 'w-0001', 'message', 'm-01', 0, '{ broken')`).run();
+    old.exec('PRAGMA user_version = 1');
+    old.close();
+
+    const running = await startHost({ home });
+    hosts.push(running);
+
+    expect((await worksListResponse(home)).error).toMatchObject({ code: 'internal', data: { reason: 'works-unreadable' } });
+    const failure = (await logged(home)).find((line) => line.level === 'error' && line.msg === 'переезд карт в базу не выполнен');
+    expect(failure?.['error']).toEqual(expect.stringMatching(/could not be upgraded from schema 1 to schema 2: workspace w-0001 \(\/p\)/));
+    await running.context.shutdown('test');
+    await running.closed;
+
+    const check = new DatabaseSync(file);
+    expect((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(1);
+    expect(check.prepare(`SELECT name FROM sqlite_master WHERE name = 'messages'`).all()).toEqual([]);
+    check.close();
   });
 });

@@ -325,13 +325,32 @@ const isSessionShape =
     Array.isArray(value.history) &&
     (value.agentPlan === undefined || isPublishedAgentPlan(value.agentPlan));
 
-/** У письма v2 адресаты — массив: по нему идут `removeSession` и `recipientsOf`. */
-const isMessageShape =
-  (version: 1 | 2) =>
-  (value: unknown): boolean =>
-    isRecord(value) &&
-    typeof value.id === 'string' &&
-    (version === 1 ? typeof value.to === 'string' : Array.isArray(value.to));
+/** Поле письма — строка: так оно ляжет в колонку таблицы `messages` (спека хранилища 6.2). */
+const isText = (value: unknown): value is string => typeof value === 'string';
+
+/**
+ * Что не так с письмом прежней карты: первая найденная причина или `undefined`, если письмо годится. Письма уходят в
+ * таблицы (спека хранилища 6.2, переезд — 6.6), и поле неверной формы не должно всплыть сырой ошибкой `TypeError` или
+ * SQLite из вставки: отказ называет письмо и поле. У письма v2 адресаты — массив (по нему идут `removeSession` и
+ * `recipientsOf`), комната — строка или `null`, отметки прочтения — объект «читатель → время», время письма читается как
+ * дата (по нему идёт сравнение `sinceAt`). Письмо v1 `roomId` и `readBy` ещё не знает — их ставит `migrateMessageV1`.
+ */
+function letterProblem(version: 1 | 2, value: unknown): string | undefined {
+  if (!isRecord(value)) return 'a letter is not an object';
+  if (!isText(value.id)) return 'a letter has no string id';
+  const bad = (field: string): string => `letter ${value.id as string} has an invalid ${field}`;
+  if (version === 1 ? !isText(value.to) : !Array.isArray(value.to) || !value.to.every(isText)) return bad('to');
+  if (!isText(value.from)) return bad('from');
+  if (!isText(value.text)) return bad('text');
+  if (!isText(value.at) || Number.isNaN(Date.parse(value.at))) return bad('at');
+  if (value.kind !== undefined && value.kind !== null && !isText(value.kind)) return bad('kind');
+  if (value.deleted !== undefined && typeof value.deleted !== 'boolean') return bad('deleted');
+  if (version === 2) {
+    if (value.roomId !== null && !isText(value.roomId)) return bad('roomId');
+    if (!isRecord(value.readBy) || !Object.values(value.readBy).every(isText)) return bad('readBy');
+  }
+  return undefined;
+}
 
 /**
  * Разбирает прежнюю карту `map.json` вместе с письмами. Форма undocumented-логов тут ни при чём: файл пишем мы сами,
@@ -360,13 +379,12 @@ export function parseMapText(raw: string, source: string): unknown {
  */
 export function normalizeLegacyMap(data: unknown, source: string): WindowWorkMap {
   const version = isRecord(data) ? data.schemaVersion : undefined;
-  if (
-    !isRecord(data) ||
-    (version !== 1 && version !== 2) ||
-    !Array.isArray(data.messages) ||
-    !data.messages.every(isMessageShape(version))
-  ) {
+  if (!isRecord(data) || (version !== 1 && version !== 2) || !Array.isArray(data.messages)) {
     throw new Error(`map ${source} cannot be parsed: unexpected shape`);
+  }
+  for (const letter of data.messages) {
+    const problem = letterProblem(version, letter);
+    if (problem !== undefined) throw new Error(`map ${source} cannot be parsed: unexpected shape (${problem})`);
   }
   if (version === 1) for (const message of data.messages as Record<string, unknown>[]) migrateMessageV1(message);
   for (const message of data.messages as Record<string, unknown>[]) migrateMessage(message);
@@ -462,9 +480,15 @@ function migrateMessageV1(message: Record<string, unknown>): void {
  * Письма до 2026-09-08 вида не знали: заметка (спецификация 2026-09-08, 3.1).
  * Миграция при чтении, как у `idle`: читатели карты дефолта не знают, а файл
  * получит поле при первой же мутации.
+ *
+ * Два приведения под таблицу писем (спека хранилища 6.2, 6.6): время письма становится каноническим ISO-моментом (тот же
+ * момент, а запросы `sinceAt` сравнивают `at` как текст), а `deleted: false` убирается — у письма без признака тот же
+ * смысл, и в таблице это колонка `deleted = 0`. Обе правки идемпотентны; форму поля уже проверил `letterProblem`.
  */
 function migrateMessage(message: Record<string, unknown>): void {
   message['kind'] ??= 'note';
+  message['at'] = new Date(message['at'] as string).toISOString();
+  if (message['deleted'] === false) delete message['deleted'];
 }
 
 /** Снимок рецепта в карте: ровно три строки, без лишних полей; границы — как у файла рецепта (1 MiB). */

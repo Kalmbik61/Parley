@@ -16,23 +16,26 @@
  * старте. Вставка и сверка — одна транзакция: карта читается из ещё не записанных строк (`readStoredMap`) и должна быть
  * структурно равна разобранной из файла (не по тексту JSON: `rowsToMap` порядок полей верхнего уровня не хранит) и
  * сжатой: тексты записанных экспортов и отправленных эффектов в базу не идут (`compactStoredTexts`, спека хранилища 6.2),
- * а непрочитанное каждой сессии и человека — совпасть до и после. Только тогда `COMMIT`, и только после него — `rename`:
+ * а непрочитанное каждой сессии и человека, как его отдаёт база, — совпасть с прежними правилами над картой из файла
+ * (`verifyLetterMap`, `letter-upgrade.ts`). Письма переезжают такими, какими были: незнакомые ключи письма едут в `body`,
+ * время приводится к каноническому ISO-моменту, `deleted: false` убирается (`migrateMessage`); письмо с полем неверной формы,
+ * нечитаемым временем, номером не `m-N` или повторным номером отказывает работе с причиной, номера не переписываются.
+ * Только после сверки `COMMIT`, и только после него — `rename`:
  * упади хост между ними, строка есть, файл на месте, и следующий старт лишь переименует его — если файл равен строкам;
  * иначе (файл вернули после отката сборки и в него писали) работа `failed`, и оба остаются как были.
  */
 
 import { lstat, readdir, readFile, rename } from 'node:fs/promises';
 import path from 'node:path';
-import { isDeepStrictEqual } from 'node:util';
-import { unreadFor, unreadForHuman } from './letters.js';
+import { legacyUnread, verifyLetterMap, type UnreadDigest } from './letter-upgrade.js';
 import { parseMap } from './map.js';
 import { stateDir } from './state-dir.js';
 import { compactStoredTexts } from './stored-texts.js';
 import {
   insertMigratedMap,
   isOrphaned,
-  readStoredMap,
   readWorksIndex,
+  storeDb,
   workExists,
   workPaths,
   worksIndexPath,
@@ -76,37 +79,24 @@ const errorText = (error: unknown): string => (error instanceof Error ? error.me
 const fsReason = (error: unknown): string =>
   (error as NodeJS.ErrnoException | null)?.code ?? errorText(error);
 
-/** Что обязана сохранить сверка: непрочитанные письма по каждой сессии и у человека. */
-function unreadDigest(map: WindowWorkMap): { bySession: Record<string, string[]>; human: string[] } {
-  return {
-    bySession: Object.fromEntries(
-      map.sessions.map((session) => [session.id, unreadFor(map, session.id).map((message) => message.id)]),
-    ),
-    human: map.messages.filter(unreadForHuman).map((message) => message.id),
-  };
-}
-
 /** Причина отказа, когда у работы есть и строка, и `map.json`, а карты разные: файл новее строк или наоборот, выбирать нечем. */
 const DIFFERS_FROM_STORED = 'map.json differs from the stored copy (newer edits after a downgrade?)';
 
 /**
  * Сверка карты из строк с разобранной из файла — одна и для вставки (внутри её транзакции), и для работы, у которой уже
- * есть строка: структурно, а не по тексту JSON, и непрочитанное каждой сессии и человека то же (`before` — до вставки).
+ * есть строка: карты равны структурно, а не по тексту JSON, и непрочитанное каждой сессии и человека, как его отдаёт
+ * база, то же, что дали прежние правила над картой из файла до вставки (`before`; `letter-upgrade.ts`, спека хранилища 6.6).
  * Строки не собираются в карту — `readStoredMap` бросит свою ошибку, и она станет причиной отказа.
  */
 function verifyStored(
   projectPath: string,
   workId: string,
   map: WindowWorkMap,
-  before: ReturnType<typeof unreadDigest>,
+  before: UnreadDigest,
   file: string,
-  mismatch = `the map read back from the database does not match ${file}`,
+  mismatch?: string,
 ): void {
-  const stored = readStoredMap(projectPath, workId);
-  if (!isDeepStrictEqual(stored, map)) throw new Error(mismatch);
-  if (!isDeepStrictEqual(unreadDigest(stored), before)) {
-    throw new Error(`unread letters read back from the database differ from ${file}`);
-  }
+  verifyLetterMap(storeDb(), projectPath, workId, map, before, file, mismatch);
 }
 
 /** Идёт ли запись прежней сборки: есть `map.lock`, и его хозяин жив. Замок упавшего процесса работу не держит. */
@@ -201,13 +191,13 @@ async function migrateOne({ projectPath, workId }: Candidate): Promise<Outcome> 
       // (`map.v2.json` переименован обратно, прежняя сборка писала в него). Вставлять второй раз нельзя, а переименовать
       // файл, который новее строк, — спрятать правки: переименование только если файл равен строкам (спека хранилища 6.6).
       const map = await readLegacyMap(paths.map);
-      verifyStored(projectPath, workId, map, unreadDigest(map), paths.map, DIFFERS_FROM_STORED);
+      verifyStored(projectPath, workId, map, legacyUnread(map), paths.map, DIFFERS_FROM_STORED);
     } else {
       const map = await readLegacyMap(paths.map);
       if (map.work.id !== workId) {
         throw new Error(`map ${paths.map} belongs to workspace ${map.work.id}, not ${workId}`);
       }
-      const before = unreadDigest(map);
+      const before = legacyUnread(map);
       insertMigratedMap(projectPath, workId, map, () => {
         verifyStored(projectPath, workId, map, before, paths.map);
       });

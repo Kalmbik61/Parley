@@ -5,21 +5,24 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { closeWorkDb } from './db.js';
+import { closeWorkDb, WORK_DB_FILE } from './db.js';
+import { legacyUnread, verifyLetterMap } from './letter-upgrade.js';
 import { unreadFor, unreadForHuman } from './letters.js';
+import { mapToRows } from './map-rows.js';
 import { addMessage, addSession, parseMap } from './map.js';
 import { migrateMapsToDb } from './migrate-to-db.js';
 import { reservePlanEffects } from './plan-effects.js';
 import { resolveProposal, setProposal } from './proposals.js';
 import { addRoom } from './rooms.js';
 import { unreadLetters } from './letter-store.js';
-import { createWork, readMap, readStoredMap, readWorksIndex, replaceStoredMap, workExists, workVersion } from './store.js';
+import { createWork, readMap, readStoredMap, readWorksIndex, replaceStoredMap, storeDb, workExists, workVersion } from './store.js';
 import type { DecisionJournalMap } from './decision-journal.js';
-import { HUMAN, type PlanDraft, type WindowWorkMap, type WorkMap } from './types.js';
+import { HUMAN, type Message, type PlanDraft, type Room, type WindowWorkMap, type WorkMap } from './types.js';
 import { mapLetterTx } from './letter-store.js';
 const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
@@ -144,6 +147,71 @@ function withoutLetters(map: WindowWorkMap): WorkMap {
   const rest: Partial<WindowWorkMap> = { ...map };
   delete rest.messages;
   return rest as WorkMap;
+}
+
+/** Сколько писем в карте формы w-0051 (спека хранилища, раздел 2): 3 795 за неделю работы. */
+const W0051_LETTERS = 3795;
+
+/**
+ * Карта формы w-0051 (спека хранилища 2, план 4, ревью 4): три тысячи писем с отметками прочтения у разных читателей,
+ * удалённые письма, старая комната без журнала участия, ведущего, решения и режима, висячая ссылка записи журнала решений
+ * на письмо, записанные экспорты и отправленные эффекты со старым текстом, отменённый эффект и прямые письма человеку.
+ * Часть писем такого вида, какого `LetterTx.add` не пишет: время не в каноническом виде, `deleted: false`, незнакомый ключ.
+ */
+function w0051Map(): WorkMap & DecisionJournalMap & Pick<WindowWorkMap, 'messages'> {
+  const map = fullMap() as WindowWorkMap & DecisionJournalMap;
+  // Старый вид: тексты записанных экспортов и отправленных эффектов лежат в самой карте.
+  map.planExports![0]!.status = 'written';
+  map.decisionExports![0]!.status = 'written';
+  // Запись журнала решений ссылается на письмо, которого в карте нет.
+  map.decisionExports![0]!.messageId = 'm-9990';
+  for (const row of map.planEffects!) {
+    if (row.status !== 'sent') continue;
+    row.text = map.messages.find((message) => message.id === row.messageId)!.text;
+    delete row.textSha256;
+  }
+  const source = map.planEffects![0]!;
+  map.planEffects!.push({
+    ...source,
+    key: `${source.roomId}/${source.planId}/${source.rev}/${source.item}/${source.kind}/legacy/${source.target}`,
+    occurrence: 'legacy',
+    status: 'cancelled',
+    messageId: null,
+    text: 'Cancelled before it was sent',
+  });
+
+  // Комната, созданная до журнала участия, ведущего, решения, режима и архива (миграция комнат дописывает их при чтении).
+  addRoom(map, { title: 'Old room', creator: 's-02', members: ['s-01', 's-02', 's-03'] }, AT);
+  const old = map.rooms.at(-1) as Partial<Room>;
+  for (const key of ['memberLog', 'ownerId', 'lead', 'proposal', 'archivedAt', 'mode', 'recipe'] as const) delete old[key];
+
+  const senders = ['s-01', 's-02', 's-03', HUMAN, 'system'];
+  for (let n = map.messages.length + 1; n <= W0051_LETTERS; n += 1) {
+    const from = senders[n % senders.length]!;
+    const roomId = n % 5 === 0 ? null : ['r-01', 'r-02', 'r-03'][n % 3]!;
+    const to = roomId === null ? [from === 's-01' ? HUMAN : n % 2 === 0 ? 's-02' : HUMAN] : n % 4 === 0 ? ['s-02'] : [];
+    const readBy: Record<string, string> = {};
+    if (n % 7 === 0) readBy['s-01'] = AT;
+    if (n % 11 === 0) readBy[HUMAN] = AT;
+    if (n % 13 === 0) Object.assign(readBy, { 's-02': AT, 's-03': AT });
+    if (from === 'system') readBy[HUMAN] = AT;
+    const message: Message & Record<string, unknown> = {
+      id: `m-${String(n).padStart(2, '0')}`,
+      roomId,
+      from,
+      to,
+      at: n % 53 === 0 ? '2026-10-04T04:00:00+03:00' : new Date(Date.parse(AT) + n * 60_000).toISOString(),
+      text: `письмо ${n}`,
+      kind: n % 29 === 0 ? 'question' : 'note',
+      readBy,
+    };
+    if (n % 97 === 0) message.deleted = true;
+    if (n % 101 === 0) message.deleted = false;
+    if (n % 61 === 0) message.pinned = { by: HUMAN, n };
+    if (n % 37 === 0) message.replyTo = `m-${String(n - 1).padStart(2, '0')}`;
+    map.messages.push(message);
+  }
+  return map;
 }
 
 /** Пид процесса, которого уже нет. */
@@ -271,6 +339,114 @@ describe('migrateMapsToDb — переезд map.json в базу', () => {
     expect(settled.find((row) => row.status === 'cancelled')!.textSha256).toBe(sha('Cancelled before it was sent'));
   });
 
+  it('карта формы w-0051 переезжает и проходит сверку: письма с отметками, удалённые, прямые человеку, старая комната, висячая ссылка', async () => {
+    const map = w0051Map();
+    const text = await legacyWork(map);
+    const expected = parseMap(text, 'fixture');
+    // Фикстура и вправду с тем, что должна проверить сверка: иначе пустое сравнивалось бы с пустым.
+    const digest = unreadDigest(expected);
+    expect(expected.messages).toHaveLength(W0051_LETTERS);
+    expect(digest.bySession['s-01']!.length).toBeGreaterThan(300);
+    expect(digest.bySession['s-02']!.length).toBeGreaterThan(300);
+    expect(digest.human.length).toBeGreaterThan(300);
+    expect(expected.messages.some((message) => message.roomId === null && message.to.includes(HUMAN))).toBe(true);
+    expect(expected.rooms.at(-1)).toMatchObject({ id: 'r-03', ownerId: 's-02', lead: null, mode: 'free', archivedAt: null });
+    expect(expected.rooms.at(-1)).not.toHaveProperty('memberLog');
+
+    const result = await migrateMapsToDb();
+
+    expect(result).toEqual({ migrated: [{ projectPath: project, workId: 'w-0001' }], failed: [], skipped: [] });
+    expect(await readFile(backupFile('w-0001'), 'utf8')).toBe(text);
+    const after = readStoredMap(project, 'w-0001') as WindowWorkMap & DecisionJournalMap;
+    expect(after).toEqual(expected);
+    expect(unreadDigest(after)).toEqual(digest);
+    expect(storedUnread(project, after)).toEqual(digest);
+    expect(await readMap(project, 'w-0001')).toEqual(withoutLetters(expected));
+    // Висячая ссылка и тексты экспортов: ссылка остаётся как была, текст заменён отпечатком.
+    expect(after.decisionExports![0]).toMatchObject({ messageId: 'm-9990', status: 'written' });
+    expect(after.decisionExports![0]).not.toHaveProperty('content');
+    expect(after.planEffects!.some((row) => row.status === 'cancelled' && row.textSha256 !== undefined)).toBe(true);
+  });
+
+  it('письмо прежней карты возвращается как было: время приведено к ISO, deleted: false убран, незнакомый ключ и ответ на месте', async () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'a', task: '' }, AT);
+    addSession(map, { provider: 'claude', label: 'b', task: '' }, AT);
+    const letter = (id: string, extra: Record<string, unknown> = {}): Message =>
+      ({ id, roomId: null, from: 's-01', to: ['s-02'], at: AT, text: id, kind: 'note', readBy: {}, ...extra }) as Message;
+    map.messages = [
+      letter('m-01', { at: '2026-10-04T04:00:00+03:00' }),
+      letter('m-02', { deleted: false }),
+      letter('m-03', { deleted: true, readBy: { 's-02': AT } }),
+      letter('m-04', { pinned: { by: HUMAN, tags: ['a', 'b'] }, replyTo: 'm-01', via: 'telegram' }),
+    ];
+    await legacyWork(map);
+
+    const result = await migrateMapsToDb();
+
+    expect(result.failed).toEqual([]);
+    const [first, second, third, fourth] = readStoredMap(project, 'w-0001').messages;
+    expect(first!.at).toBe('2026-10-04T01:00:00.000Z');
+    expect(second).not.toHaveProperty('deleted');
+    expect(third).toMatchObject({ deleted: true, readBy: { 's-02': AT } });
+    expect(fourth).toMatchObject({ pinned: { by: HUMAN, tags: ['a', 'b'] }, replyTo: 'm-01', via: 'telegram' });
+  });
+
+  it('письмо, которое не собирается из таблицы в точности (-0 в незнакомом ключе), — failed, файлы и база не тронуты', async () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'a', task: '' }, AT);
+    addMessage(map, { from: 's-01', to: [HUMAN], text: 'письмо' }, AT);
+    const text = `${JSON.stringify(map, null, 2).replace('"readBy": {}', '"readBy": {},\n"weight": -0')}\n`;
+    expect(text).toContain('"weight": -0');
+    await legacyWork(map, { text });
+
+    const result = await migrateMapsToDb();
+
+    expect(result.migrated).toEqual([]);
+    expect(result.failed).toEqual([{ projectPath: project, workId: 'w-0001', reason: expect.stringContaining('does not match') }]);
+    expect(workExists(project, 'w-0001')).toBe(false);
+    expect(await readFile(mapFile('w-0001'), 'utf8')).toBe(text);
+    expect(await exists(backupFile('w-0001'))).toBe(false);
+    expect(await exists(indexFile())).toBe(true);
+  });
+
+  it.each([
+    ['номер m-07 и m-7 — один номер', ['m-07', 'm-7'], 'letter ids are not unique: m-07 and m-7 share the number 7'],
+    ['номер не m-N', ['m-01', 'letter-2'], 'letter id letter-2 is not m-N'],
+    ['номер m-0', ['m-0'], 'letter id m-0 is not m-N'],
+    ['номер с суффиксом', ['m-1x'], 'letter id m-1x is not m-N'],
+  ])('письма с неподходящими номерами не переезжают, номера не переписываются: %s', async (_name, ids, reason) => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'a', task: '' }, AT);
+    map.messages = ids.map((id) => ({ id, roomId: null, from: 's-01', to: [HUMAN], at: AT, text: id, kind: 'note', readBy: {} }));
+    const text = await legacyWork(map);
+
+    const result = await migrateMapsToDb();
+
+    expect(result.failed).toEqual([{ projectPath: project, workId: 'w-0001', reason }]);
+    expect(workExists(project, 'w-0001')).toBe(false);
+    expect(await readFile(mapFile('w-0001'), 'utf8')).toBe(text);
+  });
+
+  it.each([
+    ['readBy', { readBy: 'нет' }],
+    ['roomId', { roomId: 5 }],
+    ['at', { at: 'вчера' }],
+  ])('письмо с неверным полем %s — failed с понятной причиной, а не сырой ошибкой вставки; файл на месте', async (field, patch) => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'a', task: '' }, AT);
+    map.messages = [{ id: 'm-05', roomId: null, from: 's-01', to: [HUMAN], at: AT, text: 't', kind: 'note', readBy: {}, ...patch }] as Message[];
+    const text = await legacyWork(map);
+
+    const result = await migrateMapsToDb();
+
+    expect(result.failed).toEqual([
+      { projectPath: project, workId: 'w-0001', reason: expect.stringContaining(`letter m-05 has an invalid ${field}`) },
+    ]);
+    expect(workExists(project, 'w-0001')).toBe(false);
+    expect(await readFile(mapFile('w-0001'), 'utf8')).toBe(text);
+  });
+
   it('карта v1 переезжает уже в виде v2; в map.v2.json остаётся прежний текст', async () => {
     const text = await legacyWork(v1Map());
 
@@ -300,7 +476,7 @@ describe('migrateMapsToDb — переезд map.json в базу', () => {
     const result = await migrateMapsToDb();
 
     expect(result.migrated).toEqual([]);
-    expect(result.failed).toEqual([{ projectPath: project, workId: 'w-0001', reason: expect.stringContaining('letter id m-07') }]);
+    expect(result.failed).toEqual([{ projectPath: project, workId: 'w-0001', reason: expect.stringContaining('letter ids are not unique') }]);
     expect(workExists(project, 'w-0001')).toBe(false);
     expect(await exists(mapFile('w-0001'))).toBe(true);
     expect(await exists(backupFile('w-0001'))).toBe(false);
@@ -656,5 +832,237 @@ describe('migrateMapsToDb — переезд map.json в базу', () => {
 
     expect(second.migrated).toEqual([{ projectPath: project, workId: 'w-0001' }]);
     expect(await exists(mapFile('w-0001'))).toBe(false);
+  });
+});
+
+describe('verifyLetterMap — непрочитанное из базы против прежних правил', () => {
+  let home = '';
+  let project = '';
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'parley-verify-home-'));
+    project = path.join(home, 'shop');
+    process.env.PARLEY_HOME = home;
+  });
+
+  afterEach(async () => {
+    closeWorkDb();
+    delete process.env.PARLEY_HOME;
+    await rm(home, { recursive: true, force: true });
+  });
+
+  /** Работа в базе с письмами полной карты; возвращает карту, как её отдаёт база, и непрочитанное по прежним правилам. */
+  async function seeded(): Promise<{ stored: WindowWorkMap; before: ReturnType<typeof legacyUnread> }> {
+    await createWork(project, { title: 'Старая работа' });
+    replaceStoredMap(project, 'w-0001', fullMap());
+    const stored = readStoredMap(project, 'w-0001');
+    return { stored, before: legacyUnread(stored) };
+  }
+
+  it('сходится, когда кандидаты на месте', async () => {
+    const { stored, before } = await seeded();
+    expect(before.bySession['s-01']!.length).toBeGreaterThan(0);
+    expect(before.human.length).toBeGreaterThan(0);
+
+    expect(() => verifyLetterMap(storeDb(), project, 'w-0001', stored, before, 'fixture')).not.toThrow();
+  });
+
+  it('потерянный кандидат сессии — отказ с именем читателя, хотя карты равны', async () => {
+    const { stored, before } = await seeded();
+    storeDb().prepare(`DELETE FROM message_unread WHERE reader = 's-01'`).run();
+
+    expect(() => verifyLetterMap(storeDb(), project, 'w-0001', stored, before, 'fixture')).toThrow(
+      'unread letters of s-01 read back from the database differ from fixture',
+    );
+  });
+
+  it('потерянный кандидат человека — отказ', async () => {
+    const { stored, before } = await seeded();
+    storeDb().prepare(`DELETE FROM message_unread WHERE reader = 'human'`).run();
+
+    expect(() => verifyLetterMap(storeDb(), project, 'w-0001', stored, before, 'fixture')).toThrow(
+      'unread letters of the human read back from the database differ from fixture',
+    );
+  });
+
+  it('другая карта — отказ с переданным текстом', async () => {
+    const { stored, before } = await seeded();
+    const other = structuredClone(stored);
+    other.messages[0]!.text = 'другой текст';
+
+    expect(() => verifyLetterMap(storeDb(), project, 'w-0001', other, before, 'fixture', 'maps differ')).toThrow('maps differ');
+  });
+});
+
+describe('апгрейд базы со схемы 1 — письма из entries в таблицы', () => {
+  const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+  let home = '';
+  let project = '';
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), 'parley-v1up-home-'));
+    project = path.join(home, 'shop');
+    process.env.PARLEY_HOME = home;
+  });
+
+  afterEach(async () => {
+    closeWorkDb();
+    delete process.env.PARLEY_HOME;
+    await rm(home, { recursive: true, force: true });
+  });
+
+  /** Схема сборки плана 3 (user_version 1), как она лежала на диске: письма — строки `entries` вида `message`. */
+  const SCHEMA_V1 = `
+    CREATE TABLE works (
+      project_path TEXT NOT NULL, id TEXT NOT NULL,
+      title TEXT NOT NULL, status TEXT NOT NULL, updated_at TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 0,
+      work_json TEXT NOT NULL, extra_json TEXT NOT NULL,
+      PRIMARY KEY (project_path, id));
+    CREATE TABLE entries (
+      project_path TEXT NOT NULL, work_id TEXT NOT NULL,
+      kind TEXT NOT NULL, key TEXT NOT NULL, ord INTEGER NOT NULL, json TEXT NOT NULL,
+      PRIMARY KEY (project_path, work_id, kind, key),
+      FOREIGN KEY (project_path, work_id) REFERENCES works(project_path, id) ON DELETE CASCADE);
+    CREATE INDEX entries_order ON entries(project_path, work_id, kind, ord);`;
+
+  const dbFile = (): string => path.join(home, WORK_DB_FILE);
+
+  /** Пишет базу схемы 1 из карт: строки списков — как их раскладывал план 3, письма — по строке `message` с полным письмом. */
+  function writeV1Database(maps: WindowWorkMap[], mutate: (db: InstanceType<typeof DatabaseSync>) => void = () => undefined): void {
+    const db = new DatabaseSync(dbFile());
+    db.exec('PRAGMA foreign_keys = ON');
+    db.exec(SCHEMA_V1);
+    for (const map of maps) {
+      const rows = mapToRows(map);
+      db.prepare('INSERT INTO works (project_path, id, title, status, updated_at, version, work_json, extra_json) VALUES (?, ?, ?, ?, ?, 7, ?, ?)').run(
+        project, map.work.id, map.work.title, map.work.status, map.work.updatedAt, rows.work, rows.extra,
+      );
+      const insert = db.prepare('INSERT INTO entries (project_path, work_id, kind, key, ord, json) VALUES (?, ?, ?, ?, ?, ?)');
+      for (const row of rows.rows) insert.run(project, map.work.id, row.kind, row.key, row.ord, row.json);
+      map.messages.forEach((message, ord) => insert.run(project, map.work.id, 'message', message.id, ord, JSON.stringify(message)));
+    }
+    mutate(db);
+    db.exec('PRAGMA user_version = 1');
+    db.close();
+  }
+
+  /** Всё, что лежит в базе файла: версия схемы, таблицы и строки `works` и `entries` — чтобы видеть, что откат ничего не тронул. */
+  function dump(): { version: number; tables: string[]; works: unknown[]; entries: unknown[] } {
+    const db = new DatabaseSync(dbFile());
+    const state = {
+      version: Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version),
+      tables: db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`).all().map((row) => String(row['name'])),
+      works: db.prepare('SELECT * FROM works ORDER BY project_path, id').all(),
+      entries: db.prepare('SELECT * FROM entries ORDER BY project_path, work_id, kind, key').all(),
+    };
+    db.close();
+    return state;
+  }
+
+  it('база v1 с письмами формы w-0051 поднимается до v2: собранная карта равна прежней, непрочитанное то же, строк message нет', async () => {
+    const raw = w0051Map();
+    const expected = parseMap(JSON.stringify(raw), 'fixture');
+    const digest = unreadDigest(expected);
+    expect(expected.messages).toHaveLength(W0051_LETTERS);
+    expect(digest.human.length).toBeGreaterThan(300);
+    writeV1Database([raw]);
+
+    const after = readStoredMap(project, 'w-0001') as WindowWorkMap & DecisionJournalMap;
+
+    expect(after).toEqual(expected);
+    expect(unreadDigest(after)).toEqual(digest);
+    expect(storedUnread(project, after)).toEqual(digest);
+    expect(await readMap(project, 'w-0001')).toEqual(withoutLetters(expected));
+    expect(workVersion(project, 'w-0001')).toBe(7);
+    const state = dump();
+    expect(state.version).toBe(2);
+    expect(state.tables).toEqual(expect.arrayContaining(['messages', 'message_reads', 'message_unread']));
+    expect((state.entries as Array<{ kind: string }>).filter((row) => row.kind === 'message')).toEqual([]);
+    // Тексты записанных экспортов и отправленных эффектов, что плана 3 лежали в строках, теперь только отпечатки.
+    expect(after.planExports![0]).not.toHaveProperty('content');
+    expect(after.planExports![0]).toMatchObject({ status: 'written' });
+    expect((state.entries as Array<{ json: string }>).some((row) => row.json.includes('"content"'))).toBe(false);
+    expect(after.messages.find((message) => message.id === 'm-61')).toMatchObject({ pinned: { by: HUMAN, n: 61 } });
+  });
+
+  it('несколько работ и проектов поднимаются все; работа без писем и пустая база тоже', async () => {
+    const second = emptyMap('w-0002', 'Без писем');
+    writeV1Database([fullMap(), second]);
+
+    expect(readStoredMap(project, 'w-0002')).toEqual(parseMap(JSON.stringify(second), 'fixture'));
+    expect(readStoredMap(project, 'w-0001').messages.length).toBeGreaterThan(3);
+    expect(dump().version).toBe(2);
+
+    closeWorkDb();
+    await rm(dbFile());
+    await rm(`${dbFile()}-wal`, { force: true });
+    await rm(`${dbFile()}-shm`, { force: true });
+    writeV1Database([]);
+    expect(storeDb().prepare('SELECT COUNT(*) AS n FROM works').get()).toEqual({ n: 0 });
+    expect(dump().version).toBe(2);
+  });
+
+  it('письма с одним номером в строках: апгрейд откатывается целиком, база остаётся v1, ошибка называет работу; починили — поднимается', () => {
+    const good = fullMap();
+    const bad = emptyMap('w-0002', 'С дублем');
+    addSession(bad, { provider: 'claude', label: 'a', task: '' }, AT);
+    addMessage(bad, { from: 's-01', to: [HUMAN], text: 'первое' }, AT);
+    addMessage(bad, { from: 's-01', to: [HUMAN], text: 'второе' }, AT);
+    // Дубль номера в строках `entries`: ключи разные (повтор получает суффикс), номер один.
+    writeV1Database([good, bad], (db) => {
+      db.prepare(`UPDATE entries SET json = replace(json, '"m-02"', '"m-01"') WHERE work_id = 'w-0002' AND kind = 'message' AND key = 'm-02'`).run();
+    });
+    const before = dump();
+
+    expect(() => storeDb()).toThrow(/workspace w-0002 .*letter ids are not unique: m-01 appears more than once.*stays at schema 1/s);
+    expect(() => storeDb()).toThrow(/could not be upgraded from schema 1 to schema 2/);
+
+    // Ни версии, ни письменных таблиц, ни строк: работа w-0001, обработанная раньше, тоже как была.
+    expect(dump()).toEqual(before);
+    expect(before.version).toBe(1);
+    expect(before.tables).not.toContain('messages');
+
+    closeWorkDb();
+    const fix = new DatabaseSync(dbFile());
+    fix.prepare(`UPDATE entries SET json = replace(json, '"m-01"', '"m-02"') WHERE work_id = 'w-0002' AND kind = 'message' AND key = 'm-02'`).run();
+    fix.close();
+    expect(readStoredMap(project, 'w-0002').messages.map((message) => message.id)).toEqual(['m-01', 'm-02']);
+    expect(dump().version).toBe(2);
+  });
+
+  it('письмо с неверным полем в строке (readBy не объект): откат, v1, причина называет письмо', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'a', task: '' }, AT);
+    addMessage(map, { from: 's-01', to: [HUMAN], text: 'письмо' }, AT);
+    map.messages[0]!.readBy = 'нет' as unknown as Record<string, string>;
+    writeV1Database([map]);
+    const before = dump();
+
+    expect(() => storeDb()).toThrow(/workspace w-0001 .*letter m-01 has an invalid readBy/s);
+    expect(dump()).toEqual(before);
+  });
+
+  it('письма не по порядку номеров (карта и таблица разошлись бы): сверка не сошлась — откат, v1', () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'claude', label: 'a', task: '' }, AT);
+    addMessage(map, { from: 's-01', to: [HUMAN], text: 'первое' }, AT);
+    addMessage(map, { from: 's-01', to: [HUMAN], text: 'второе' }, AT);
+    map.messages.reverse();
+    writeV1Database([map]);
+    const before = dump();
+
+    expect(() => storeDb()).toThrow(/workspace w-0001 .*does not match the schema 1 rows/s);
+    expect(dump()).toEqual(before);
+  });
+
+  it('база v2 повторно не апгрейдится: версия и данные те же', async () => {
+    writeV1Database([fullMap()]);
+    const first = readStoredMap(project, 'w-0001');
+    closeWorkDb();
+    const state = dump();
+
+    expect(readStoredMap(project, 'w-0001')).toEqual(first);
+    expect(dump()).toEqual(state);
   });
 });

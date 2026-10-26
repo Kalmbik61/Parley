@@ -610,7 +610,7 @@ describe('parseMap', () => {
           history: [{ status: 'failed', at: '2026-09-02T11:00:00.000Z' }],
         },
       ],
-      messages: [{ id: 'm-01', from: 's-01', to: 's-02', at: 'x', text: 't', readAt: null }],
+      messages: [{ id: 'm-01', from: 's-01', to: 's-02', at: '2026-09-02T11:00:00.000Z', text: 't', readAt: null }],
     };
     const once = parseMap(JSON.stringify(v1), 'map.json');
     const twice = parseMap(JSON.stringify(once), 'map.json');
@@ -837,13 +837,78 @@ describe('parseMap', () => {
   });
 });
 
+describe('parseMap — письма прежней карты под таблицу писем', () => {
+  const AT = '2026-09-20T10:45:00.000Z';
+  const letter = (patch: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: 'm-05',
+    roomId: null,
+    from: 's-01',
+    to: ['s-02'],
+    at: AT,
+    text: 'письмо',
+    kind: 'note',
+    readBy: {},
+    ...patch,
+  });
+  const parse = (messages: unknown[], version = 2): WindowWorkMap => {
+    const base = version === 2 ? emptyMap() : emptyV1();
+    return parseMap(JSON.stringify({ ...base, messages }), 'map.json');
+  };
+
+  it.each([
+    ['readBy', { readBy: null }],
+    ['readBy', { readBy: ['s-02'] }],
+    ['readBy', { readBy: { 's-02': 5 } }],
+    ['readBy', { readBy: undefined }],
+    ['roomId', { roomId: 7 }],
+    ['roomId', { roomId: undefined }],
+    ['at', { at: 'вчера' }],
+    ['at', { at: 5 }],
+    ['at', { at: undefined }],
+    ['from', { from: undefined }],
+    ['text', { text: 5 }],
+    ['kind', { kind: 5 }],
+    ['deleted', { deleted: 'yes' }],
+    ['to', { to: ['s-02', 7] }],
+  ])('письмо с неверным полем %s отвергается причиной с номером письма, а не сырой ошибкой', (field, patch) => {
+    expect(() => parse([letter(patch)])).toThrow(
+      new RegExp(`^map map\\.json cannot be parsed: unexpected shape \\(letter m-05 has an invalid ${field}\\)`),
+    );
+  });
+
+  it('письмо v1 с нечитаемым временем отвергается, а readBy и roomId у v1 не требуются: их ставит миграция', () => {
+    const v1 = (patch: Record<string, unknown>) => ({ id: 'm-01', from: 's-01', to: 's-02', at: AT, text: 't', ...patch });
+
+    expect(() => parse([v1({ at: 'вчера' })], 1)).toThrow(/letter m-01 has an invalid at/);
+    expect(parse([v1({ readAt: AT })], 1).messages[0]).toMatchObject({ roomId: null, to: ['s-02'], readBy: { 's-02': AT } });
+  });
+
+  it('время письма приводится к каноническому ISO-моменту (тот же момент), а deleted: false убирается', () => {
+    const [plain, offset, gone, kept] = parse([
+      letter({ id: 'm-01', at: '2026-09-20T10:45:00Z' }),
+      letter({ id: 'm-02', at: '2026-09-20T13:45:00+03:00' }),
+      letter({ id: 'm-03', deleted: false }),
+      letter({ id: 'm-04', deleted: true }),
+    ]).messages;
+
+    expect(plain!.at).toBe('2026-09-20T10:45:00.000Z');
+    expect(offset!.at).toBe('2026-09-20T10:45:00.000Z');
+    expect(Object.hasOwn(gone!, 'deleted')).toBe(false);
+    expect(kept!.deleted).toBe(true);
+  });
+
+  it('незнакомые ключи письма разбор не трогает: их переносит переезд', () => {
+    expect(parse([letter({ pinned: { by: 'human' } })]).messages[0]).toMatchObject({ pinned: { by: 'human' } });
+  });
+});
+
 describe('parseMapText и normalizeMap', () => {
   it('parseMap равна normalizeLegacyMap(parseMapText(...)): и для v2, и для v1, и для отказов', () => {
     const v2 = JSON.stringify(emptyMap());
     const v1 = JSON.stringify({
       ...emptyV1(),
       sessions: [{ id: 's-01', status: 'failed', history: [{ status: 'failed', at: '2026-09-02T11:00:00.000Z' }] }],
-      messages: [{ id: 'm-01', from: 's-01', to: 's-02', at: 'x', text: 't', readAt: null }],
+      messages: [{ id: 'm-01', from: 's-01', to: 's-02', at: '2026-09-02T11:00:00.000Z', text: 't', readAt: null }],
     });
 
     for (const raw of [v2, v1]) {
@@ -851,7 +916,7 @@ describe('parseMapText и normalizeMap', () => {
     }
     // Письма v1 разбор прежнего файла переводит сам: адресат — список, отметка — `readBy`.
     expect(parseMap(v1, 'map.json').messages).toEqual([
-      { id: 'm-01', roomId: null, from: 's-01', to: ['s-02'], at: 'x', text: 't', kind: 'note', readBy: {} },
+      { id: 'm-01', roomId: null, from: 's-01', to: ['s-02'], at: '2026-09-02T11:00:00.000Z', text: 't', kind: 'note', readBy: {} },
     ]);
     const failure = (run: () => unknown): string => {
       try {
@@ -889,7 +954,7 @@ describe('parseMapText и normalizeMap', () => {
     const v1 = {
       ...emptyV1(),
       sessions: [{ id: 's-01', status: 'idle', history: [{ status: 'idle', at: '2026-09-02T11:00:00.000Z' }] }],
-      messages: [{ id: 'm-01', from: 's-01', to: 's-02', at: 'x', text: 't', readAt: null }],
+      messages: [{ id: 'm-01', from: 's-01', to: 's-02', at: '2026-09-02T11:00:00.000Z', text: 't', readAt: null }],
     };
     const once = normalizeMap(v1, 'map.json');
     const snapshot = structuredClone(once);

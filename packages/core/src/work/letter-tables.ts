@@ -69,6 +69,21 @@ const LETTER_COLUMNS = `m.seq, m.id, m.room_id, m.sender, m.recipients, m.at, m.
 const COUNTING_COLUMNS = `m.seq, m.id, m.room_id, m.sender, m.recipients, m.at, m.kind, m.deleted,
   CASE WHEN m.sender = '${PARLEY}' THEN m.body ELSE '{"text":""}' END AS body, NULL AS reads`;
 
+/** Поля письма, у которых есть своя колонка или своё место в `body`; всё остальное в письме — незнакомые ключи старой карты. */
+const LETTER_FIELDS: ReadonlySet<string> = new Set([
+  'id',
+  'roomId',
+  'from',
+  'to',
+  'at',
+  'text',
+  'kind',
+  'replyTo',
+  'via',
+  'readBy',
+  'deleted',
+]);
+
 function toMessage(row: LetterRow): Message {
   const body = JSON.parse(row.body) as { text: string; replyTo?: string; via?: MessageVia };
   const message: Message = {
@@ -84,6 +99,17 @@ function toMessage(row: LetterRow): Message {
   if (body.replyTo !== undefined) message.replyTo = body.replyTo;
   if (body.via !== undefined) message.via = body.via;
   if (row.deleted === 1) message.deleted = true;
+  // Незнакомые ключи письма прежней карты (спека хранилища 6.6) лежат в `body` рядом с текстом и возвращаются как были.
+  // `defineProperty`, а не присваивание: ключ `__proto__` из JSON — обычное свойство, а не смена прототипа.
+  for (const key in body) {
+    if (key === 'text' || key === 'replyTo' || key === 'via') continue;
+    Object.defineProperty(message, key, {
+      value: (body as Record<string, unknown>)[key],
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
   return message;
 }
 
@@ -331,9 +357,12 @@ const INSERT_LETTER = `INSERT INTO messages (project_path, work_id, seq, id, roo
 /** Строки письма: само письмо, отметки и кандидаты. `candidates` — читатели, которым письмо непрочитанное. */
 function insertLetter(db: DatabaseSync, projectPath: string, workId: string, message: Message, readers: readonly string[]): void {
   const seq = letterSeq(message.id);
-  const body: { text: string; replyTo?: string; via?: MessageVia } = { text: message.text };
+  const body: Record<string, unknown> = { text: message.text };
   if (message.replyTo !== undefined) body.replyTo = message.replyTo;
   if (message.via !== undefined) body.via = message.via;
+  // Письмо прежней карты может нести ключи, которых схема не знает: они едут в `body`, и сверка переезда видит письмо
+  // таким, каким оно было (спека хранилища 6.6). У писем, записанных `LetterTx.add`, лишних ключей нет.
+  for (const key of Object.keys(message)) if (!LETTER_FIELDS.has(key)) body[key] = (message as unknown as Record<string, unknown>)[key];
   sql(db, INSERT_LETTER).run(
     projectPath,
     workId,
@@ -370,15 +399,30 @@ function insertLetter(db: DatabaseSync, projectPath: string, workId: string, mes
  * равны непрочитанному по живым правилам, то есть без письма плана, ставшего неактуальным, их отсеет чтение.
  */
 export function replaceLetters(db: DatabaseSync, projectPath: string, workId: string, map: WindowWorkMap): void {
+  assertStorableLetterIds(map.messages);
   sql(db, 'DELETE FROM messages WHERE project_path = ? AND work_id = ?').run(projectPath, workId);
-  const seen = new Set<number>();
-  for (const message of map.messages) {
-    const seq = letterSeq(message.id);
-    if (seq === 0 || seen.has(seq)) {
-      throw new Error(`letter id ${message.id} is not an unused m-N number — the letters cannot be stored`);
+  for (const message of map.messages) insertLetter(db, projectPath, workId, message, candidateReaders(message, map));
+}
+
+/**
+ * Номера писем годятся для таблицы: каждый — `m-N` с положительным N, и номера не повторяются (спека хранилища 6.2, 6.6).
+ * Номера не переписываются: карта, которой они не подходят, остаётся в своём файле, а причина называет письмо. Номер
+ * сравнивается по числу, поэтому `m-07` и `m-7` — один номер.
+ */
+export function assertStorableLetterIds(messages: readonly Message[]): void {
+  const owners = new Map<number, string>();
+  for (const { id } of messages) {
+    const seq = letterSeq(id);
+    if (!/^m-\d+$/.test(id) || seq === 0 || !Number.isSafeInteger(seq)) throw new Error(`letter id ${id} is not m-N`);
+    const owner = owners.get(seq);
+    if (owner !== undefined) {
+      throw new Error(
+        owner === id
+          ? `letter ids are not unique: ${id} appears more than once`
+          : `letter ids are not unique: ${owner} and ${id} share the number ${seq}`,
+      );
     }
-    seen.add(seq);
-    insertLetter(db, projectPath, workId, message, candidateReaders(message, map));
+    owners.set(seq, id);
   }
 }
 

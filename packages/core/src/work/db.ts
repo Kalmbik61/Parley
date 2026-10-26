@@ -10,6 +10,7 @@ import { closeSync, mkdirSync, openSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { upgradeLettersSchema } from './letter-upgrade.js';
 import { parleyHome } from './store.js';
 
 /**
@@ -80,7 +81,7 @@ CREATE TABLE message_unread (
 CREATE INDEX message_unread_seq ON message_unread(project_path, work_id, seq);
 `;
 
-/** Схема версии 2: основа и письма. Базу версии 1 (сборка плана 3, письма в `entries`) апгрейд задачи 8 поднимет до неё. */
+/** Схема версии 2: основа и письма. Базу версии 1 (сборка плана 3, письма в `entries`) `upgradeLettersSchema` поднимает до неё. */
 const SCHEMA_V2 = SCHEMA_BASE + SCHEMA_LETTERS;
 
 interface Opened {
@@ -144,10 +145,13 @@ function prepare(db: DatabaseSync): void {
   db.exec('BEGIN IMMEDIATE');
   try {
     const version = userVersion(db);
-    // Базу версии 1 (письма в `entries`) без апгрейда не открываем: молча создать письменные таблицы рядом с письмами в
-    // `entries` значило бы потерять переписку (спека хранилища 6.6, план 4, задача 8).
-    if (version === 1) throw new Error(`parley.db has schema 1; it needs the letters upgrade (schema ${WORK_DB_SCHEMA_VERSION})`);
-    if (version < WORK_DB_SCHEMA_VERSION) {
+    if (version === 1) {
+      // База версии 1 (сборка плана 3, письма — строки `entries`): письменные таблицы создаются рядом, письма переезжают в
+      // них и сверяются, и всё это одной транзакцией с подъёмом версии — упало что-то, остаётся схема 1 (спека хранилища 6.6).
+      db.exec(SCHEMA_LETTERS);
+      upgradeLettersSchema(db);
+      db.exec(`PRAGMA user_version = ${WORK_DB_SCHEMA_VERSION}`);
+    } else if (version < WORK_DB_SCHEMA_VERSION) {
       db.exec(SCHEMA_V2);
       db.exec(`PRAGMA user_version = ${WORK_DB_SCHEMA_VERSION}`);
     }

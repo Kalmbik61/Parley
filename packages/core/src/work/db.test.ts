@@ -98,20 +98,63 @@ describe('workDb', () => {
     );
   });
 
-  it('база версии 1 (письма в entries) без апгрейда не открывается: понятная ошибка, данные на месте', () => {
+  /** База схемы 1 (сборка плана 3) с одной работой и одним письмом в `entries`; `letter` — текст JSON строки письма. */
+  const writeV1 = (letter: string): string => {
     const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
     mkdirSync(home, { recursive: true });
     const file = path.join(home, WORK_DB_FILE);
     const old = new DatabaseSync(file);
-    old.exec('CREATE TABLE works (id TEXT); PRAGMA user_version = 1');
+    old.exec(`
+      CREATE TABLE works (
+        project_path TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, updated_at TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 0, work_json TEXT NOT NULL, extra_json TEXT NOT NULL, PRIMARY KEY (project_path, id));
+      CREATE TABLE entries (
+        project_path TEXT NOT NULL, work_id TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, ord INTEGER NOT NULL,
+        json TEXT NOT NULL, PRIMARY KEY (project_path, work_id, kind, key),
+        FOREIGN KEY (project_path, work_id) REFERENCES works(project_path, id) ON DELETE CASCADE);
+      CREATE INDEX entries_order ON entries(project_path, work_id, kind, ord);`);
+    const work = { id: 'w-0001', title: 'Work', goal: '', status: 'active', createdAt: '2026-10-24T00:00:00.000Z', updatedAt: '2026-10-24T00:00:00.000Z' };
+    old
+      .prepare(`INSERT INTO works (project_path, id, title, status, updated_at, version, work_json, extra_json) VALUES ('/p', 'w-0001', 'Work', 'active', ?, 3, ?, ?)`)
+      .run(work.updatedAt, JSON.stringify(work), JSON.stringify({ schemaVersion: 2, present: [], foreign: {} }));
+    old.prepare(`INSERT INTO entries (project_path, work_id, kind, key, ord, json) VALUES ('/p', 'w-0001', 'message', 'm-01', 0, ?)`).run(letter);
+    old.exec('PRAGMA user_version = 1');
     old.close();
+    return file;
+  };
+  const goodLetter = JSON.stringify({ id: 'm-01', roomId: null, from: 's-01', to: ['s-02'], at: '2026-10-24T00:00:00.000Z', text: 'hi', kind: 'note', readBy: {} });
 
-    expect(() => workDb()).toThrow('parley.db has schema 1; it needs the letters upgrade');
+  it('база версии 1 (письма в entries) поднимается до 2 при открытии: письмо в таблице с кандидатом, строки message ушли, версия работы прежняя', () => {
+    writeV1(goodLetter);
 
+    expect(pragma('user_version')).toBe(2);
+
+    const db = workDb();
+    expect(db.prepare('SELECT seq, id, sender, recipients, body FROM messages').all()).toEqual([
+      { seq: 1, id: 'm-01', sender: 's-01', recipients: '["s-02"]', body: '{"text":"hi"}' },
+    ]);
+    expect(db.prepare('SELECT reader, seq FROM message_unread').all()).toEqual([{ reader: 's-02', seq: 1 }]);
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM entries WHERE kind = 'message'`).get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT version FROM works').get()).toEqual({ version: 3 });
+  });
+
+  it('апгрейд, который не сошёлся, откатывается: база остаётся схемы 1 без письменных таблиц, ошибка называет работу; открытие повторяется', () => {
+    const file = writeV1('{ не json');
+
+    expect(() => workDb()).toThrow(
+      /parley\.db could not be upgraded from schema 1 to schema 2: workspace w-0001 \(\/p\): .*The database is unchanged and stays at schema 1/s,
+    );
+    expect(() => workDb()).toThrow('could not be upgraded from schema 1 to schema 2');
+
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
     const check = new DatabaseSync(file);
     expect((check.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(1);
-    expect(check.prepare(`SELECT name FROM sqlite_master WHERE name = 'messages'`).all()).toEqual([]);
+    expect(check.prepare(`SELECT name FROM sqlite_master WHERE name LIKE 'message%'`).all()).toEqual([]);
+    expect(check.prepare(`SELECT json FROM entries WHERE kind = 'message'`).all()).toEqual([{ json: '{ не json' }]);
+    check.prepare(`UPDATE entries SET json = ?`).run(goodLetter);
     check.close();
+
+    expect(pragma('user_version')).toBe(2);
   });
 
   it('отдаёт один и тот же дескриптор, пока PARLEY_HOME не меняется', () => {
