@@ -21,6 +21,7 @@ import { envValue, HOME_DIR, LEGACY_HOME_DIR, type Env } from '../names.js';
 import { BUSY_TIMEOUT_MS, WORK_DB_FILE, workDb } from './db.js';
 import { diffRows, mapToRows, rowIndex, rowsToMap, type StoredRow } from './map-rows.js';
 import { bumpWorkId, nextWorkId, normalizeMap } from './map.js';
+import { mapLetterTx, type LetterTx } from './letter-store.js';
 import { isAlive } from './pid-alive.js';
 import { PRE_JOURNAL_STATE_IGNORE, PRE_MEMORY_STATE_IGNORE, PRE_RECIPES_STATE_IGNORE, ensureStateDir, isDirectorySync, stateDir, SHARED_STATE_IGNORE } from './state-dir.js';
 import { resolveSharedProjectContext, sharedPathIgnored } from './project-context.js';
@@ -677,6 +678,19 @@ export function insertMigratedMap(
  * хранилища 6.9).
  */
 export async function readMap(projectPath: string, workId: string): Promise<WorkMap> {
+  return loadMap(projectPath, workId, true);
+}
+
+/**
+ * Карта из кэша процесса без копии и без `await` — только чтение внутри ядра (`letter-store.ts`, спека хранилища 6.2):
+ * выданный объект принадлежит кэшу, его нельзя менять и держать за пределами вызова, потому что следующий `updateMap`
+ * забирает его себе и мутирует. Наружу из ядра уходят копии нужных частей. Ошибки те же, что у `readMap`.
+ */
+export function readMapView(projectPath: string, workId: string): Readonly<WorkMap> {
+  return loadMap(projectPath, workId, false);
+}
+
+function loadMap(projectPath: string, workId: string, copy: boolean): WorkMap {
   const db = storeDb();
   const key = cacheKey(projectPath, workId);
   const version = versionOf(db, projectPath, workId);
@@ -685,7 +699,7 @@ export async function readMap(projectPath: string, workId: string): Promise<Work
     throw notFound(projectPath, workId);
   }
   const cached = cachedEntry(key, version);
-  if (cached !== undefined) return structuredClone(cached.map);
+  if (cached !== undefined) return copy ? structuredClone(cached.map) : cached.map;
   // Версию в запись кэша берём из той же загрузки, что и строки: запись между запросами не перепутает их.
   const stored = loadStored(db, projectPath, workId);
   if (stored === undefined) {
@@ -703,7 +717,7 @@ export async function readMap(projectPath: string, workId: string): Promise<Work
     extra: stored.extra,
     index: rowIndex(stored.rows),
   });
-  return structuredClone(map);
+  return copy ? structuredClone(map) : map;
 }
 
 /**
@@ -949,13 +963,38 @@ export interface UpdateMapOptions extends WriteOptions {
  * карту, откатывается целиком — раньше такая карта ложилась в файл и ломала следующее чтение. Битую карту в базе не трогаем.
  * Работы нет — `WorkNotFoundError`. После коммита в кэш кладётся свежая сборка записанных строк, подписчики
  * `onMapWritten` получают событие, а вызывающий — изменённую карту.
+ *
+ * Мутатор получает вторым аргументом письма работы (`LetterTx`, спека хранилища 6.2); мутаторы с одним аргументом
+ * работают как прежде. Мутация, которая ничего не изменила (ни строк карты, ни работы, ни писем), не пишет: версия
+ * работы и `updatedAt` прежние, `onMapWritten` молчит (план 4, «Пустая запись не пишет»).
  */
 export async function updateMap(
   projectPath: string,
   workId: string,
-  mutate: (map: WorkMap) => void,
-  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true }: UpdateMapOptions = {},
+  mutate: (map: WorkMap, letters: LetterTx) => void,
+  options: UpdateMapOptions = {},
 ): Promise<WorkMap> {
+  const update = applyMapUpdate(projectPath, workId, mutate, options);
+  return update.shared ? structuredClone(update.map) : update.map;
+}
+
+/** Результат `applyMapUpdate`: карта и признак, что объект принадлежит кэшу (запись была пустой) и наружу идёт копией. */
+export interface MapUpdate {
+  map: WorkMap;
+  shared: boolean;
+}
+
+/**
+ * Синхронное тело `updateMap`: транзакция не отпускает цикл событий, поэтому им пользуются и вызывающие, которым нужен
+ * результат сразу (`writeLetters`, спека хранилища 6.2). Пустая запись возвращает объект кэша (`shared`): копию берёт
+ * тот, кому карта нужна наружу, а `writeLetters` карту не отдаёт и копии не платит.
+ */
+export function applyMapUpdate(
+  projectPath: string,
+  workId: string,
+  mutate: (map: WorkMap, letters: LetterTx) => void,
+  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true }: UpdateMapOptions = {},
+): MapUpdate {
   const db = storeDb();
   const key = cacheKey(projectPath, workId);
   const source = mapSource(projectPath, workId);
@@ -987,13 +1026,28 @@ export async function updateMap(
     if (current.work.id !== workId) {
       throw new Error(`map ${source} belongs to workspace ${current.work.id}, not ${workId}`);
     }
-    mutate(current);
-    if (touch) current.work.updatedAt = new Date().toISOString();
+    const { letters, wrote } = mapLetterTx(current);
+    mutate(current, letters);
     // Мутация могла дать карту, которую нормализация не примет: бросает — запись откатывается.
     normalizeMap(current, source);
 
+    // Сдвиг `updatedAt` — после проверки на пустоту: пустая запись его не трогает (спека хранилища 6.2).
     const next = mapToRows(current, previous.index);
     const diff = diffRows(previous, next);
+    if (
+      diff.upserts.length === 0 &&
+      diff.deletes.length === 0 &&
+      !diff.workChanged &&
+      !wrote()
+    ) {
+      // Карта в кэше не менялась (её строки те же): возвращаем запись на место, а наружу карта уходит копией.
+      if (hit !== undefined) rememberMap(key, hit);
+      return { empty: true as const, current, shared: hit !== undefined };
+    }
+    if (touch) {
+      current.work.updatedAt = new Date().toISOString();
+      next.work = JSON.stringify(current.work);
+    }
     for (const row of diff.upserts) {
       sql(db, UPSERT_ENTRY).run(projectPath, workId, row.kind, row.key, row.ord, row.json);
     }
@@ -1008,8 +1062,9 @@ export async function updateMap(
       projectPath,
       workId,
     );
-    return { current, next, version: Number(updated?.['version']) };
+    return { empty: false as const, current, next, version: Number(updated?.['version']) };
   });
+  if (written.empty) return { map: written.current, shared: written.shared };
 
   // В кэш — после коммита, и не `current`, а свежая сборка записанных строк (спека хранилища 6.9): иначе писавший процесс
   // читал бы карту иначе, чем любой другой. Не вышло — запись снимаем и молчим: карта уже записана, ошибка заставила бы
@@ -1030,7 +1085,7 @@ export async function updateMap(
     mapCache.delete(key);
   }
   emitMapWritten({ projectPath, workId, version: written.version });
-  return written.current;
+  return { map: written.current, shared: false };
 }
 
 /** Предел названия работы в кодовых точках: эмодзи — один символ, а не два UTF-16. */
