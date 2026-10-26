@@ -96,11 +96,12 @@ async function listDecisions(works: WorksService, params: JournalMethodParams<'d
   for (const entry of relevant) {
     const map = maps.get(`${entry.projectPath}\0${entry.map.work.id}`) ?? entry.map;
     for (const intent of map.decisionExports ?? []) {
+      // Ожидающее решение ещё с текстом: заголовок берётся из него, у записанного текста в карте нет (спека хранилища 6.2).
       if (intent.status !== 'pending' || seen.has(intent.file)) continue;
       seen.add(intent.file);
       if (pending++ >= MAX_PENDING) { mapErrors++; break; }
       rows.push({ file: intent.file, workId: intent.workId, roomId: intent.roomId, proposalId: intent.proposalId, rev: intent.rev,
-        acceptedAt: intent.acceptedAt, title: firstLine(intent.content), kind: intent.kind, state: 'pending', openable: false });
+        acceptedAt: intent.acceptedAt, title: firstLine(intent.content ?? ''), kind: intent.kind, state: 'pending', openable: false });
     }
   }
   const words = [...new Set(folded(params.query ?? '').split(/\s+/).filter(Boolean))];

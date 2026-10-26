@@ -12,8 +12,9 @@
  *
  * Каждая работа сама по себе. Не вышла — остальные переезжают, а её файл остаётся как был и пробуется на следующем
  * старте. Вставка и сверка — одна транзакция: карта читается из ещё не записанных строк (`readStoredMap`) и должна быть
- * структурно равна разобранной из файла (не по тексту JSON: `rowsToMap` порядок полей верхнего уровня не хранит), а
- * непрочитанное каждой сессии и человека — совпасть до и после. Только тогда `COMMIT`, и только после него — `rename`:
+ * структурно равна разобранной из файла (не по тексту JSON: `rowsToMap` порядок полей верхнего уровня не хранит) и
+ * сжатой: тексты записанных экспортов и отправленных эффектов в базу не идут (`compactStoredTexts`, спека хранилища 6.2),
+ * а непрочитанное каждой сессии и человека — совпасть до и после. Только тогда `COMMIT`, и только после него — `rename`:
  * упади хост между ними, строка есть, файл на месте, и следующий старт лишь переименует его — если файл равен строкам;
  * иначе (файл вернули после отката сборки и в него писали) работа `failed`, и оба остаются как были.
  */
@@ -24,6 +25,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { unreadFor, unreadForHuman } from './letters.js';
 import { parseMap } from './map.js';
 import { stateDir } from './state-dir.js';
+import { compactStoredTexts } from './stored-texts.js';
 import {
   insertMigratedMap,
   isOrphaned,
@@ -116,6 +118,15 @@ async function lockHeld(lockFile: string): Promise<boolean> {
   return !(await isOrphaned(lockFile));
 }
 
+/**
+ * Карта из `map.json` в том виде, в каком она ляжет в базу и с каким её сверяют: записанные экспорты без текста,
+ * отправленные эффекты с хэшем вместо текста (спека хранилища 6.2). `parseMap` сжимает карту сам; явный вызов держит
+ * сверку переезда независимой от того, где ядро переводит старый вид.
+ */
+async function readLegacyMap(file: string): Promise<WorkMap> {
+  return compactStoredTexts(parseMap(await readFile(file, 'utf8'), file));
+}
+
 /** Каталоги работ проекта под текущим именем каталога состояния; нет каталога — работ нет. */
 async function workDirs(projectPath: string): Promise<string[]> {
   try {
@@ -187,10 +198,10 @@ async function migrateOne({ projectPath, workId }: Candidate): Promise<Outcome> 
       // Строка и файл разом: прерванный переезд (строки закоммичены, файл не переименован) или возврат после отката сборки
       // (`map.v2.json` переименован обратно, прежняя сборка писала в него). Вставлять второй раз нельзя, а переименовать
       // файл, который новее строк, — спрятать правки: переименование только если файл равен строкам (спека хранилища 6.6).
-      const map = parseMap(await readFile(paths.map, 'utf8'), paths.map);
+      const map = await readLegacyMap(paths.map);
       verifyStored(projectPath, workId, map, unreadDigest(map), paths.map, DIFFERS_FROM_STORED);
     } else {
-      const map = parseMap(await readFile(paths.map, 'utf8'), paths.map);
+      const map = await readLegacyMap(paths.map);
       if (map.work.id !== workId) {
         throw new Error(`map ${paths.map} belongs to workspace ${map.work.id}, not ${workId}`);
       }

@@ -9,6 +9,7 @@ import {
   RoomRuleError,
 } from "./rooms.js";
 import { capturePlanSnapshot } from "./plan-snapshots.js";
+import { hasDigestOnly } from "./stored-texts.js";
 import { HUMAN } from "./types.js";
 import type {
   PlanDraft,
@@ -818,8 +819,9 @@ export function validatePlanStorage(map: WorkMap): void {
         intent.file,
       ) ||
       !["pending", "written"].includes(intent.status) ||
-      typeof intent.content !== "string" ||
-      Buffer.byteLength(intent.content) > 1024 * 1024
+      (!hasDigestOnly(intent) &&
+        (typeof intent.content !== "string" ||
+          Buffer.byteLength(intent.content) > 1024 * 1024))
     )
       throw new Error("invalid snapshot intent");
 }

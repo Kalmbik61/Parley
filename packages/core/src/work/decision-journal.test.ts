@@ -53,7 +53,7 @@ it('accepted legacy text/note retains escaped lone units without rolling back Ac
   expect(intent.content).toContain('generated representation');
   expect(intent.content).toContain('\uFEFFLegacy\r\nEmoji 😀');
   expect(intent.content).toContain('\\ud800'); expect(intent.content).toContain('\\u0000'); expect(intent.content).toContain('\\u0001'); expect(intent.content).toContain('\\udc00');
-  expect(Buffer.from(intent.content).toString()).toBe(intent.content); expect(intent.content).not.toContain('�');
+  expect(Buffer.from(intent.content!).toString()).toBe(intent.content); expect(intent.content).not.toContain('�');
 });
 
 it('disk retry uses captured accepted bytes and snapshot link after later plan revisions, without undoing Accept', async () => {
@@ -83,11 +83,16 @@ it('disk retry uses captured accepted bytes and snapshot link after later plan r
     });
     await flushPlanSnapshots(project, workId); const result = await flushDecisionJournal(project, workId);
     expect(result.failed).toEqual([]); expect(result.written).toHaveLength(2);
+    // Записанные тексты ушли из карты, а хэш снимка в решении тот же, что хранит экспорт плана (спека хранилища 6.2).
+    const settled = await store.readMap(project, workId);
+    expect(settled.decisionExports!.every(row => row.content === undefined && row.status === 'written')).toBe(true);
+    for (const row of settled.decisionExports!) expect(row.snapshotSha256).toBe(settled.planExports!.find(plan => plan.file === row.snapshot)!.sha256);
     const file = path.join(project, '.parley', 'decisions', intent.file);
     expect(await fs.readFile(file, 'utf8')).toBe(intent.content); expect(intent.content).not.toContain('Later goal');
     expect((await flushDecisionJournal(project, workId)).written).toEqual([]);
     await fs.writeFile(file, 'Human changed immutable journal');
-    await store.updateMap(project, workId, map => { map.decisionExports![0]!.status = 'pending'; }, { touch: false });
+    // Снова ожидающим решение становится с тем текстом, который захвачен: у записанного текста в карте уже нет.
+    await store.updateMap(project, workId, map => { map.decisionExports![0] = { ...intent }; }, { touch: false });
     expect((await flushDecisionJournal(project, workId)).failed[0]?.code).toBe('journal-conflict');
     expect(await fs.readFile(file, 'utf8')).toBe('Human changed immutable journal');
   } finally {
@@ -152,13 +157,33 @@ describe('read-only journal listing (P28)', () => {
       expect((await t.fs.readdir(t.path.join(t.project, '.parley'), { recursive: true })).sort()).toEqual(before);
     } finally { await t.done(); }
   });
+  it('a written decision keeps only file, sha256, bytes and title; classify decides by that sha256', async () => {
+    const { readDecisionJournalFiles, classifyDecisionFile } = await import('./decision-journal.js');
+    const { createHash } = await import('node:crypto');
+    const t = await disk();
+    try {
+      const map = await t.store.readMap(t.project, t.workId);
+      for (const [index, intent] of map.decisionExports!.entries()) {
+        const text = await t.fs.readFile(t.path.join(t.dir, intent.file), 'utf8');
+        expect(intent).not.toHaveProperty('content');
+        expect(intent).toMatchObject({ status: 'written', sha256: createHash('sha256').update(text).digest('hex'), bytes: Buffer.byteLength(text), title: `Version ${index}` });
+      }
+      const listing = await readDecisionJournalFiles(t.project);
+      expect(listing.files.map(row => classifyDecisionFile(row, map))).toEqual(['accepted', 'accepted']);
+      const [first] = map.decisionExports!;
+      await t.fs.appendFile(t.path.join(t.dir, first!.file), 'Human note');
+      const edited = await readDecisionJournalFiles(t.project);
+      expect(edited.files.map(row => [row.file, classifyDecisionFile(row, map)])).toEqual(
+        [...map.decisionExports!].map(row => row.file).sort().reverse().map(file => [file, file === first!.file ? 'edited' : 'accepted']));
+    } finally { await t.done(); }
+  });
   it('an edited file is not accepted, and a foreign header never becomes retained', async () => {
     const { readDecisionJournalFiles, classifyDecisionFile } = await import('./decision-journal.js');
     const t = await disk();
     try {
       const map = await t.store.readMap(t.project, t.workId);
       const [first, second] = map.decisionExports!;
-      await t.fs.writeFile(t.path.join(t.dir, first!.file), `${first!.content}\nHuman note`);
+      await t.fs.writeFile(t.path.join(t.dir, first!.file), `${await t.fs.readFile(t.path.join(t.dir, first!.file), 'utf8')}\nHuman note`);
       await t.fs.writeFile(t.path.join(t.dir, second!.file), 'Not a journal header');
       const listing = await readDecisionJournalFiles(t.project);
       const byFile = Object.fromEntries(listing.files.map(row => [row.file, row]));

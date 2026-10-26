@@ -2,6 +2,7 @@ import type { RecipeSnapshot } from '../recipes/types.js';
 import type { LetterTx } from './letter-store.js';
 import { maxNumber } from './map.js';
 import { cancelActiveRoomPlan } from './plans.js';
+import { settleEffectText } from './stored-texts.js';
 import { sessionMention, sessionTag } from './thread.js';
 import { HUMAN, PARLEY, SYSTEM, type RoomMode, type Message, type Room, type WorkMap } from './types.js';
 
@@ -448,7 +449,11 @@ export function archiveRoom(map: WorkMap, letters: LetterTx, roomId: string, at 
 
   cancelActiveRoomPlan(map, letters, roomId, at);
   for (const effect of map.planEffects ?? []) {
-    if (effect.roomId === roomId && effect.status === 'queued') effect.status = 'cancelled';
+    if (effect.roomId === roomId && effect.status === 'queued') {
+      effect.status = 'cancelled';
+      // Письмо этого эффекта не уходило, и текст ему больше не нужен: остаётся хэш (спека хранилища 6.2).
+      settleEffectText(effect);
+    }
   }
   // Отмена плана подменяет `map.rooms` копией (`edit` в plans.ts): запись комнаты ищем заново, а не держим прежнюю ссылку.
   const room = findRoom(map, roomId);

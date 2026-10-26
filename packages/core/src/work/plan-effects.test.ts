@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { addMessage, addSession, parseMap, transitionSession } from "./map.js";
-import { addRoom } from "./rooms.js";
+import { addRoom, archiveRoom } from "./rooms.js";
 import {
   proposeCompletion,
   resolveProposal,
@@ -700,4 +701,106 @@ it("closed work never reserves or resumes a plan assignment, but retains capture
   reservePlanEffects(map, lt(map), 20, AT);
   expect(map.messages).toHaveLength(before);
   expect(JSON.stringify(map.planExports)).toBe(captured);
+});
+
+describe("effect texts live only in the letter once an effect is sent or cancelled", () => {
+  const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+  it("a sent effect keeps textSha256 of its letter, a queued one keeps its text; the letter stays owned and resumable", () => {
+    const map = fixture("checklist", 3);
+    reservePlanEffects(map, lt(map), 1, AT);
+    const [sent, ...queued] = map.planEffects!;
+    const letter = map.messages.find((row) => row.id === sent!.messageId)!;
+    expect(sent!.status).toBe("sent");
+    expect(sent).not.toHaveProperty("text");
+    expect(sent!.textSha256).toBe(sha(letter.text));
+    expect(queued).toHaveLength(2);
+    for (const row of queued) {
+      expect(row.status).toBe("queued");
+      expect(row.text).toContain("Accepted plan");
+      expect(row).not.toHaveProperty("textSha256");
+    }
+    expect(resumablePlanLetter(map, letter, sent!.target)).toBe(true);
+    expect(cancelledPlanLetter(map, letter)).toBe(false);
+    expect(() => validatePlanEffects(map)).not.toThrow();
+  });
+  const expectSentByHash = (map: WorkMap, kind: "mode" | "completion-returned") => {
+    // Второй расчёт сверяет уже отправленные эффекты по хэшу текста: ни один не отменяется.
+    reservePlanEffects(map, lt(map), 20, AT);
+    const sent = map.planEffects!.find((row) => row.kind === kind)!;
+    const letter = map.messages.find((row) => row.id === sent.messageId)!;
+    expect(sent.status).toBe("sent");
+    expect(sent).not.toHaveProperty("text");
+    expect(sent.textSha256).toBe(sha(letter.text));
+    expect(resumablePlanLetter(map, letter, sent.target)).toBe(true);
+  };
+  it("a sent mode notice stays current by hash", () => {
+    const map = fixture();
+    setRoomMode(map, lt(map), "r-01", HUMAN, "checklist", "Human choice", {}, AT);
+    capturePlanNotice(map, lt(map), "r-01", "mode", map.messages.at(-1)!.id);
+    reservePlanEffects(map, lt(map), 20, AT);
+    expectSentByHash(map, "mode");
+  });
+  it("a sent completion-return notice stays current by hash", () => {
+    const map = fixture();
+    submitPlanItem(
+      map,
+      lt(map),
+      "pl-01",
+      0,
+      1,
+      "s-02",
+      { text: "Measured", artifacts: [] },
+      AT,
+    );
+    verifyPlanItem(map, lt(map), "pl-01", 0, 1, "s-03", "verified", "Checked", AT);
+    const p = proposeCompletion(map, "r-01", "s-01", "pl-01", 0, "Done", AT);
+    const source = resolveProposal(
+      map,
+      lt(map),
+      "r-01",
+      p.proposalId,
+      "return",
+      { rev: p.rev, planId: "pl-01", planRev: 0, note: "Add detail" },
+      AT,
+    );
+    capturePlanNotice(map, lt(map), "r-01", "completion-returned", source.messageId, "pl-01");
+    reservePlanEffects(map, lt(map), 20, AT);
+    expectSentByHash(map, "completion-returned");
+  });
+  it("a cancelled effect still hides its sent letter when only the hash is left", () => {
+    const map = fixture();
+    reservePlanEffects(map, lt(map), 20, AT);
+    const sent = map.planEffects!.find((row) => row.status === "sent")!;
+    const letter = map.messages.find((row) => row.id === sent.messageId)!;
+    transitionSession(map, sent.target, "closed", { at: AT });
+    reservePlanEffects(map, lt(map), 20, AT);
+    // Расчёт ведётся на копии: запись эффекта после него — другой объект.
+    const proof = map.planEffects!.find((row) => row.key === sent.key)!;
+    expect(proof.status).toBe("cancelled");
+    expect(proof).not.toHaveProperty("text");
+    expect(proof.textSha256).toBe(sha(letter.text));
+    expect(cancelledPlanLetter(map, letter)).toBe(true);
+    expect(unreadFor(map, proof.target).some((row) => row.id === letter.id)).toBe(false);
+    // Письмо с чужим текстом тем же номером эффекту не принадлежит.
+    expect(cancelledPlanLetter(map, { ...letter, text: `${letter.text}!` })).toBe(false);
+  });
+  it("an effect cancelled before it was sent drops its text and keeps the hash", () => {
+    const map = fixture("checklist", 3);
+    reservePlanEffects(map, lt(map), 1, AT);
+    const texts = map.planEffects!.map((row) => row.text);
+    archiveRoom(map, lt(map), "r-01", AT);
+    expect(map.planEffects!.map((row) => row.status)).toEqual(["sent", "cancelled", "cancelled"]);
+    for (const [index, row] of map.planEffects!.entries()) {
+      if (index === 0) continue;
+      expect(row).not.toHaveProperty("text");
+      expect(row.textSha256).toBe(sha(texts[index]!));
+    }
+    expect(() => validatePlanEffects(map)).not.toThrow();
+  });
+  it("a sent effect with neither text nor hash is not valid storage", () => {
+    const map = fixture();
+    reservePlanEffects(map, lt(map), 20, AT);
+    delete map.planEffects![0]!.textSha256;
+    expect(() => validatePlanEffects(map)).toThrow("invalid plan effect");
+  });
 });

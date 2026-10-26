@@ -2,6 +2,7 @@ import { isPublishedAgentPlan } from '../agent-plan.js';
 import { validateDecisionJournalStorage } from './decision-journal.js';
 import { validatePlanStorage } from './plans.js';
 import { validatePlanEffects } from './plan-effects.js';
+import { compactStoredTexts } from './stored-texts.js';
 import { validateResources } from './resource-policy.js';
 import { EFFORT_TOKEN, type EffortLevel } from '../providers.js';
 import type { LetterTx } from './letter-store.js';
@@ -389,6 +390,8 @@ export function normalizeMap(data: unknown, source: string): WorkMap {
     migrateRoom(room as unknown, map.sessions);
   }
   map.plans ??= [];
+  // Старый вид (записанный экспорт с текстом, отправленный эффект с текстом) переводится при разборе (спека хранилища 6.2).
+  compactStoredTexts(map);
   validatePlanStorage(map);
   validatePlanEffects(map);
   validateDecisionJournalStorage(map);

@@ -197,18 +197,29 @@ export interface RoomPlan {
   acceptedAt: string | null; completedAt: string | null; cancelledAt: string | null;
   completionSummary: string | null;
 }
-/** Local durable intent: exact captured Markdown, never rebuilt from a later live revision. */
+/**
+ * Local durable intent: exact captured Markdown, never rebuilt from a later live revision. Пока `pending`, у намерения
+ * есть `content`: файл пишется вне транзакции карты и при отказе повторяется ровно с этого текста. У `written` текста
+ * нет — он лежит в самом файле, а карта хранит его `sha256`, размер и заголовок (спека хранилища 6.2).
+ */
 export interface PlanExportIntent {
   file: string; planId: string; rev: number; event: 'accepted' | 'completed' | 'cancelled';
-  content: string; status: 'pending' | 'written';
+  status: 'pending' | 'written';
+  content?: string;
+  sha256?: string; bytes?: number; title?: string;
 }
 
-/** Durable delivery record: occurrence is an item log offset or a captured source message ID. */
+/**
+ * Durable delivery record: occurrence is an item log offset or a captured source message ID. Текст письма нужен, пока
+ * эффект `queued`: по нему письмо отправляется. Отправленный и отменённый эффект хранит вместо него `textSha256` —
+ * сам текст остаётся в письме, и принадлежность письма эффекту сверяется по хэшу (спека хранилища 6.2).
+ */
 export interface PlanEffect {
   key: string; roomId: string; planId: string | null; rev: number;
   item: number | null; kind: 'ready' | 'verify' | 'returned' | 'blocked' | 'completing' | 'mode' | 'completion-returned';
-  occurrence: string; target: string; text: string; createdAt: string;
+  occurrence: string; target: string; createdAt: string;
   status: 'queued' | 'sent' | 'cancelled'; messageId: string | null;
+  text?: string; textSha256?: string;
 }
 /** Captured completion, then separately prepared file version; never a map/Markdown atomic claim. */
 export interface PlanBacklogIntent {

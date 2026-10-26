@@ -4,6 +4,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -16,6 +17,7 @@ import { reservePlanEffects } from './plan-effects.js';
 import { resolveProposal, setProposal } from './proposals.js';
 import { addRoom } from './rooms.js';
 import { createWork, readMap, readStoredMap, readWorksIndex, replaceStoredMap, workExists, workVersion } from './store.js';
+import type { DecisionJournalMap } from './decision-journal.js';
 import { HUMAN, type PlanDraft, type WorkMap } from './types.js';
 import { mapLetterTx } from './letter-store.js';
 const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
@@ -208,6 +210,45 @@ describe('migrateMapsToDb — переезд map.json в базу', () => {
     expect(after).toEqual(expected);
     expect(unreadDigest(after)).toEqual(digest);
     expect(readStoredMap(project, 'w-0001')).toEqual(expected);
+  });
+
+  it('карта с записанными экспортами и отправленными эффектами переезжает сжатой и проходит сверку', async () => {
+    const sha = (text: string): string => createHash('sha256').update(text).digest('hex');
+    const map: WorkMap & DecisionJournalMap = fullMap();
+    // Старый вид: тексты записанных экспортов и отправленных эффектов лежат в самой карте.
+    const planText = map.planExports![0]!.content!;
+    const decisionText = map.decisionExports![0]!.content!;
+    map.planExports![0]!.status = 'written';
+    map.decisionExports![0]!.status = 'written';
+    const letterTexts = map.planEffects!.filter((row) => row.status === 'sent').map((row) => map.messages.find((message) => message.id === row.messageId)!.text);
+    for (const row of map.planEffects!) {
+      if (row.status !== 'sent') continue;
+      row.text = map.messages.find((message) => message.id === row.messageId)!.text;
+      delete row.textSha256;
+    }
+    const source = map.planEffects![0]!;
+    map.planEffects!.push({ ...source, key: `${source.roomId}/${source.planId}/${source.rev}/${source.item}/${source.kind}/legacy/${source.target}`, occurrence: 'legacy', status: 'cancelled', messageId: null, text: 'Cancelled before it was sent' });
+    const text = await legacyWork(map);
+    const expected = parseMap(text, 'fixture');
+    const digest = unreadDigest(expected);
+    expect(digest.bySession['s-01']!.length).toBeGreaterThan(0);
+
+    const result = await migrateMapsToDb();
+
+    expect(result).toEqual({ migrated: [{ projectPath: project, workId: 'w-0001' }], failed: [], skipped: [] });
+    const after = await readMap(project, 'w-0001') as WorkMap & DecisionJournalMap;
+    expect(after).toEqual(expected);
+    expect(readStoredMap(project, 'w-0001')).toEqual(expected);
+    expect(unreadDigest(after)).toEqual(digest);
+    expect(after.planExports![0]).not.toHaveProperty('content');
+    expect(after.planExports![0]).toMatchObject({ status: 'written', sha256: sha(planText), bytes: Buffer.byteLength(planText) });
+    expect(after.decisionExports![0]).not.toHaveProperty('content');
+    expect(after.decisionExports![0]).toMatchObject({ status: 'written', sha256: sha(decisionText), bytes: Buffer.byteLength(decisionText) });
+    const settled = after.planEffects!.filter((row) => row.status !== 'queued');
+    expect(settled.length).toBeGreaterThan(1);
+    for (const row of settled) expect(row).not.toHaveProperty('text');
+    expect(settled.filter((row) => row.status === 'sent').map((row) => row.textSha256)).toEqual(letterTexts.map(sha));
+    expect(settled.find((row) => row.status === 'cancelled')!.textSha256).toBe(sha('Cancelled before it was sent'));
   });
 
   it('карта v1 переезжает уже в виде v2; в map.v2.json остаётся прежний текст', async () => {

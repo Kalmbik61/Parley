@@ -4,6 +4,7 @@ import type { SharedWriteOptions, UpdateMapOptions } from "./store.js";
 import type { LetterTx } from "./letter-store.js";
 import { isMember, isRoomClosed, liveLead, RoomRuleError } from "./rooms.js";
 import { planItemSatisfied, reconcileRoomPlans } from "./plans.js";
+import { effectTextIs, isSha256, settleEffectText } from "./stored-texts.js";
 import { PARLEY, HUMAN, SYSTEM } from "./types.js";
 import type {
   Message,
@@ -40,6 +41,13 @@ const safe = (value: unknown): value is number =>
   Number.isSafeInteger(value) && (value as number) >= 0;
 const current = (plan: RoomPlan): boolean =>
   ["active", "completing"].includes(plan.status);
+/** Текст эффекта: у `queued` он обязателен; отправленный или отменённый держит его (прежний вид) или `textSha256` (спека хранилища 6.2). */
+const effectTextShape = (value: PlanEffect): boolean =>
+  value.text !== undefined
+    ? bounded(value.text, 32768)
+    : value.status !== "queued" && isSha256(value.textSha256);
+/** Только что собранный эффект: он `queued` и держит текст письма. */
+type NewEffect = PlanEffect & { text: string };
 const effectKey = (effect: Omit<PlanEffect, "key">): string =>
   `${effect.roomId}/${effect.planId ?? "mode"}/${effect.rev}/${effect.item ?? 0}/${effect.kind}/${effect.occurrence}/${effect.target}`;
 function effect(
@@ -51,8 +59,8 @@ function effect(
   target: string,
   text: string,
   at: string,
-): PlanEffect {
-  const value: Omit<PlanEffect, "key"> = {
+): NewEffect {
+  const value: Omit<NewEffect, "key"> = {
     roomId: room.id,
     planId: plan?.id ?? null,
     rev: plan?.rev ?? 0,
@@ -80,7 +88,7 @@ function itemEffect(
   plan: RoomPlan,
   item: PlanItem,
   at: string,
-): PlanEffect | null {
+): NewEffect | null {
   const room = map.rooms.find((row) => row.id === plan.roomId);
   if (!room || !current(plan) || isRoomClosed(map, room)) return null;
   if (
@@ -123,7 +131,7 @@ function completionEffect(
   map: WorkMap,
   plan: RoomPlan,
   at: string,
-): PlanEffect | null {
+): NewEffect | null {
   const room = map.rooms.find((row) => row.id === plan.roomId);
   if (!room || plan.status !== "completing") return null;
   const target = liveLead(map, room) ?? "";
@@ -152,7 +160,7 @@ export function planEffectOwnsLetter(
     message.roomId === effect.roomId &&
     message.to.length === 1 &&
     message.to[0] === effect.target &&
-    message.text === effect.text
+    effectTextIs(effect, message.text)
   );
 }
 /**
@@ -184,8 +192,10 @@ export function currentPlanEffect(
         source.text.includes(
           ` switched the room to ${room.mode ?? "free"}: `,
         ) &&
-        value.text ===
-          `Room mode changed. ${source.text}\nBring a plan matching the current mode before proceeding.`
+        effectTextIs(
+          value,
+          `Room mode changed. ${source.text}\nBring a plan matching the current mode before proceeding.`,
+        )
       );
     return (
       plan !== undefined &&
@@ -193,8 +203,10 @@ export function currentPlanEffect(
       source.from === HUMAN &&
       source.to.length === 1 &&
       source.to[0] === HUMAN &&
-      value.text ===
-        `Plan ${plan.id}, revision ${plan.rev}: ${source.text}\nRevise the completion summary or propose an amended decision.`
+      effectTextIs(
+        value,
+        `Plan ${plan.id}, revision ${plan.rev}: ${source.text}\nRevise the completion summary or propose an amended decision.`,
+      )
     );
   }
   if (!plan || !current(plan)) return false;
@@ -210,7 +222,7 @@ export function currentPlanEffect(
   return (
     expected !== null &&
     expected.key === value.key &&
-    expected.text === value.text
+    effectTextIs(value, expected.text)
   );
 }
 /** Capture an actual trusted mode/return occurrence; this is not an API accepting caller identities. */
@@ -346,21 +358,28 @@ function reserve(
     if (value.status === "cancelled") continue;
     if (!currentPlanEffect(map, value, (id) => letters.byId(id))) {
       value.status = "cancelled";
+      // Текст эффекта больше не нужен: письмо, если оно ушло, хранит его само (спека хранилища 6.2).
+      settleEffectText(value);
       // Отправленное письмо отменённого эффекта перестаёт быть непрочитанным у адресата (спека хранилища 6.2).
       if (value.messageId !== null) letters.effectCancelled(value.messageId);
       continue;
     }
     if (value.status !== "queued" || available === 0) continue;
+    // Эффект в очереди всегда с текстом: его проверяет `validatePlanEffects`.
+    const text = value.text;
+    if (text === undefined) throw new RoomRuleError("plan effect text is unavailable");
     const message = letters.add({
       from: PARLEY,
       roomId: value.roomId,
       to: [value.target],
-      text: value.text,
+      text,
       kind: "note",
       at,
     });
     value.status = "sent";
     value.messageId = message.id;
+    // Письмо отправлено: текст остаётся в нём, а эффекту хватает хэша (спека хранилища 6.2).
+    settleEffectText(value);
     available--;
     sent++;
   }
@@ -442,7 +461,7 @@ export function validatePlanEffects(map: WorkMap): void {
         : value.planId === null) ||
       !bounded(value.occurrence, 2048) ||
       !id(value.target, "s") ||
-      !bounded(value.text, 32768) ||
+      !effectTextShape(value) ||
       !date(value.createdAt) ||
       !["queued", "sent", "cancelled"].includes(value.status) ||
       (value.messageId !== null && !id(value.messageId, "m")) ||

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import {
   mkdir,
@@ -18,7 +19,7 @@ import { addRoom } from "./rooms.js";
 import { resolveProposal, setProposal } from "./proposals.js";
 import { createWork, readMap, updateMap, workPaths } from "./store.js";
 import { cancelRoomPlan, submitPlanItem } from "./plans.js";
-import { flushPlanSnapshots } from "./plan-snapshots.js";
+import { capturePlanSnapshot, flushPlanSnapshots } from "./plan-snapshots.js";
 import { HUMAN } from "./types.js";
 import { mapLetterTx } from "./letter-store.js";
 const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
@@ -200,8 +201,11 @@ describe("captured immutable plan exports", () => {
     expect((await flushPlanSnapshots(project, workId)).written).toHaveLength(2);
     expect(await readFile(ignore, "utf8")).toContain("!plans/**");
     const intents = (await readMap(project, workId)).planExports!;
-    expect(intents[0]!.content).toContain("status: active");
-    expect(intents[1]!.content).toContain("status: cancelled");
+    // Записанный экспорт текста в карте не держит: читаем файл.
+    const fileOf = (index: number) =>
+      readFile(path.join(snapshotDir(), intents[index]!.file), "utf8");
+    expect(await fileOf(0)).toContain("status: active");
+    expect(await fileOf(1)).toContain("status: cancelled");
   });
 });
 
@@ -358,4 +362,40 @@ it('prepared ownership callback precedes publication and a failed callback clean
   expect((await readdir(dir)).filter(name => name.startsWith('.plan-'))).toEqual([]);
   const proof = await publishImmutableMarkdown(dir, parent, { file: 'own.md', content: 'Exact' });
   expect(proof.sha256).toBe(createHash('sha256').update('Exact').digest('hex'));
+});
+
+describe("written plan exports keep only their file and sha256", () => {
+  const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+  it("after a flush the written export has no content and its sha256 is the sha256 of the .md file", async () => {
+    const pending = (await readMap(project, workId)).planExports![0]!;
+    expect(pending.content).toBeDefined();
+    await flushPlanSnapshots(project, workId);
+    const written = (await readMap(project, workId)).planExports![0]!;
+    const text = await readFile(path.join(snapshotDir(), pending.file), "utf8");
+    expect(written).not.toHaveProperty("content");
+    expect(written).toMatchObject({
+      status: "written",
+      sha256: sha(text),
+      bytes: Buffer.byteLength(text),
+      title: "Plan pl-01 — revision 0 (accepted)",
+    });
+  });
+  it("capturing the same text again returns the previous export, a different text is snapshot-conflict", async () => {
+    await flushPlanSnapshots(project, workId);
+    const map = await readMap(project, workId);
+    const plan = map.plans![0]!;
+    const previous = map.planExports![0]!;
+    expect(capturePlanSnapshot(map, plan, "accepted")).toBe(previous);
+    expect(map.planExports).toHaveLength(1);
+    plan.goal = "A different goal";
+    expect(() => capturePlanSnapshot(map, plan, "accepted")).toThrow(
+      "snapshot-conflict",
+    );
+  });
+  it("a second flush of a written export leaves the digest as it was", async () => {
+    await flushPlanSnapshots(project, workId);
+    const first = (await readMap(project, workId)).planExports![0]!;
+    expect((await flushPlanSnapshots(project, workId)).written).toEqual([]);
+    expect((await readMap(project, workId)).planExports![0]).toEqual(first);
+  });
 });
