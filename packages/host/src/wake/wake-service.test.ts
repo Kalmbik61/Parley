@@ -13,6 +13,7 @@ import {
   createWork,
   DEFAULT_RESOURCE_LIMITS,
   LIMIT_RETURN_TEXT,
+  mapLetterTx,
   readMap,
   reserveAttempt,
   saveConfig,
@@ -23,6 +24,7 @@ import {
   unreadFor,
   updateMap,
   workPaths,
+  writeLetters,
 } from '@parley/core';
 import type { ProviderLimits, SessionActivity, SessionNeed } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
@@ -1159,7 +1161,7 @@ describe('WakeService: подъём спящей письмом', () => {
     const { workId, target, sender } = await sleepingPair();
     await updateMap(project, workId, (map) => {
       addRoom(map, { title: 'Созвон', creator: sender, members: [sender, target], lead: sender });
-      archiveRoom(map, 'r-01');
+      archiveRoom(map, mapLetterTx(map).letters, 'r-01');
     });
     const argsFile = await tempArgsFile();
     setEnv('STUB_ARGS_FILE', argsFile);
@@ -1578,7 +1580,10 @@ describe('возврат после сброса лимита', () => {
       working: () => publish(activityOf('working')),
       idle: () => publish(activityOf('idle', { turnEndedAt: new Date(Date.now()).toISOString() })),
       letter: () => {
-        addMessage(map, { from: 's-00', to: [sessionId], text: 'письмо, пока шёл лимит' });
+        // Непрочитанное будильник берёт из базы работы, а не из снимка (спека хранилища 6.2): письмо пишем туда.
+        writeLetters(project, workId, (letters) => {
+          letters.add({ roomId: null, from: 's-00', to: [sessionId], text: 'письмо, пока шёл лимит', kind: 'note' });
+        });
         publish(live.activity);
       },
       poke: () => publish(live.activity),

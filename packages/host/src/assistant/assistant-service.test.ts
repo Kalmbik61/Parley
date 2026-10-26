@@ -1,7 +1,8 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createWork, writeLetters } from '@parley/core';
 import type { AssistantStreamEvent, ProviderEntry, WorkEntry, WorkMap } from '@parley/core';
 import type { AssistantState } from '@parley/protocol';
 import { HostError } from '../errors.js';
@@ -966,5 +967,33 @@ describe('assistant-service: зеркало настроек, слушатели
     expect(await service.onReminder(REMINDER, false)).toBe('fired');
     expect(turns.at(-1)?.spec.env['WHO']).toBe('claude');
     expect(turns.at(-1)?.spec.args[1]).toContain('[reminder r1');
+  });
+});
+
+describe('assistant-service: письма комнаты из базы работы', () => {
+  // Спека хранилища 6.2: последние письма `parley_detail` берутся из базы, а не из снимка хоста.
+  it('parley_detail комнаты показывает последние десять писем из базы, а не из снимка', async () => {
+    const project = path.join(home, 'project');
+    await mkdir(project);
+    await mkdir(path.join(home, 'store'));
+    const previous = process.env['PARLEY_HOME'];
+    process.env['PARLEY_HOME'] = path.join(home, 'store');
+    try {
+      const workId = (await createWork(project, { title: 'Parley' })).work.id;
+      writeLetters(project, workId, (letters) => {
+        for (let n = 1; n <= 12; n += 1) letters.add({ roomId: 'r-1', from: 's-03', to: [], text: `письмо ${n}`, kind: 'note' });
+      });
+      const map = { ...MAP, work: { ...MAP.work, id: workId } } as unknown as WorkMap;
+      const service = createAssistantService({ ...deps, works: { snapshot: () => ({ entries: [{ projectPath: project, map }] as WorkEntry[], branches: {} }) } });
+      await service.ask(ASK);
+      const reply = await service.tool('parley_detail', { target: 'Auth' });
+      const shown = (reply.body as { text: string }).text.split('\n').filter((line) => line.includes('(note):'));
+      expect(shown).toHaveLength(10);
+      expect(shown[0]).toContain('письмо 3');
+      expect(shown.at(-1)).toContain('письмо 12');
+    } finally {
+      if (previous === undefined) delete process.env['PARLEY_HOME'];
+      else process.env['PARLEY_HOME'] = previous;
+    }
   });
 });

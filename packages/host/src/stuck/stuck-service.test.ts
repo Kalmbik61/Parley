@@ -10,7 +10,9 @@ import {
   backLetter,
   backLine,
   createWork,
+  deleteWorkFiles,
   HUMAN,
+  mapLetterTx,
   PARLEY,
   readMap,
   STUCK_REPORT_MS,
@@ -19,7 +21,6 @@ import {
   SYSTEM,
   transitionSession,
   updateMap,
-  workPaths,
   type LimitAlternative,
   type Message,
   type NeedKind,
@@ -561,7 +562,7 @@ describe('служба «застрял» — доклад (спека заст�
     const [, worker] = await makeWork((map, [a, b]) => {
       inRoom(a, b)(map);
       addMessage(map, { from: a, to: [b], text: 'до архива' });
-      archiveRoom(map, 'r-01');
+      archiveRoom(map, mapLetterTx(map).letters, 'r-01');
     });
     const before = (await readMap(project, workId)).messages.length;
     boot({ alternatives: async () => [] });
@@ -576,7 +577,8 @@ describe('служба «застрял» — доклад (спека заст�
   it('сбой updateMap — строка в логе, без исключения наружу', async () => {
     const [, worker] = await makeWork((map, [a, b]) => inRoom(a, b)(map));
     boot({ alternatives: async () => [] });
-    await rm(workPaths(project, workId).dir, { recursive: true, force: true });
+    // Карта лежит в базе, а не в каталоге работы: каталог стирать мало — запись откажет, когда снята строка работы.
+    await deleteWorkFiles(project, workId);
     fire(worker, needOf('limit'));
     await quiet();
     expect(logErrors).toHaveLength(1);

@@ -8,9 +8,11 @@
  * Лежит в `main/` по той же причине, что `agent-guide-sync.test.ts`: только процесс main тянет `@parley/core` значением.
  */
 
-import { addRoom, addSession, HUMAN, resolveProposal, setProposal, type WorkMap } from '@parley/core';
+import { addRoom, addSession, HUMAN, mapLetterTx, resolveProposal, setProposal, type WorkMap } from '@parley/core';
 import { describe, expect, it } from 'vitest';
 import { roomDecisionReturned } from '../renderer/attention/derive.js';
+
+const lt = (map: WorkMap) => mapLetterTx(map).letters;
 
 function roomOfThree(): WorkMap {
   const map: WorkMap = {
@@ -30,15 +32,15 @@ describe('ответ человека на решение — слова core и
     const map = roomOfThree();
 
     const first = setProposal(map, 'r-01', 's-01', 'решение');
-    resolveProposal(map, 'r-01', first.proposalId, 'return', { note: 'добавь тесты' });
+    resolveProposal(map, lt(map), 'r-01', first.proposalId, 'return', { note: 'добавь тесты' });
     expect(roomDecisionReturned(map, 'r-01')).toBe(true);
 
     const second = setProposal(map, 'r-01', 's-01', 'решение 2');
-    resolveProposal(map, 'r-01', second.proposalId, 'return');
+    resolveProposal(map, lt(map), 'r-01', second.proposalId, 'return');
     expect(roomDecisionReturned(map, 'r-01')).toBe(true);
 
     const third = setProposal(map, 'r-01', 's-01', 'решение 3');
-    resolveProposal(map, 'r-01', third.proposalId, 'accept');
+    resolveProposal(map, lt(map), 'r-01', third.proposalId, 'accept');
     expect(roomDecisionReturned(map, 'r-01')).toBe(false);
   });
 });

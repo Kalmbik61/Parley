@@ -10,7 +10,6 @@
  */
 
 import {
-  addMessage,
   addSystemMessage,
   backLetter,
   backLine,
@@ -28,7 +27,6 @@ import {
   STUCK_REPORT_MS,
   stuckLetter,
   stuckLine,
-  unreadFor,
   updateMap,
   type LetterTx,
   type LimitAlternative,
@@ -178,10 +176,10 @@ export function createStuckService(
    * Получатели письма (5.2): живой ведущий комнаты и отправители непрочитанных писем к застрявшему; без самого
    * застрявшего, человека, системы и Parley (их нет среди сессий), без закрытых и удалённых. Вне комнаты ведущего нет.
    */
-  function recipientsOf(map: WorkMap, session: WorkSession, lead: string | null): string[] {
+  function recipientsOf(map: WorkMap, letters: LetterTx, session: WorkSession, lead: string | null): string[] {
     const to = new Set<string>();
     if (lead !== null) to.add(lead);
-    for (const message of unreadFor(map, session.id)) to.add(message.from);
+    for (const message of letters.unreadFor(session.id)) to.add(message.from);
     to.delete(session.id);
     return [...to].filter((id) => map.sessions.some((candidate) => candidate.id === id && candidate.lifecycle !== 'closed'));
   }
@@ -198,8 +196,8 @@ export function createStuckService(
     const lead = room === undefined ? null : liveLead(map, room);
     if (room !== undefined) addSystemMessage(map, letters, room.id, posting.line(lead === session.id), stamp);
     if (posting.letter === null) return;
-    for (const to of recipientsOf(map, session, lead)) {
-      if (room === undefined) addMessage(map, { from: PARLEY, to: [to], text: posting.letter }, stamp);
+    for (const to of recipientsOf(map, letters, session, lead)) {
+      if (room === undefined) letters.add({ roomId: null, from: PARLEY, to: [to], text: posting.letter, kind: 'note', at: stamp });
       else parleyNote(map, letters, room.id, to, posting.letter, stamp);
     }
   }

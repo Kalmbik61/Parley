@@ -23,9 +23,11 @@ import {
   participantLabel,
   pendingCards,
   planRefOf,
+  readLetters,
   sessionDotState,
   sessionMention,
   splitMood,
+  WorkNotFoundError,
   type AssistantLanguage,
   type FeedCard,
   type FeedDecision,
@@ -161,6 +163,16 @@ interface Ask {
 /** Чем кончился запуск хода: `not-ready` и `evicted` — повторять позже, `failed` — ошибка уже показана окну. */
 type StartReason = 'started' | 'not-ready' | 'evicted' | 'failed';
 
+/** Хвост комнаты из базы работы (спека хранилища 6.2). Работу могли удалить, пока её запись ещё в снимке: хвоста нет. */
+const roomTailOf: OverviewSource['roomTail'] = (entry, roomId, count) => {
+  try {
+    return readLetters(entry.projectPath, entry.map.work.id, { roomId, limit: count, newestFirst: true }).reverse();
+  } catch (error) {
+    if (error instanceof WorkNotFoundError) return [];
+    throw error;
+  }
+};
+
 const firstLine = (text: string): string => text.split('\n')[0]?.trim() ?? '';
 /** Почему сессии в этом состоянии нельзя передать сообщение; `null` — можно (`active` — отправка, `sleeping` — подъём). Нет сессии — закрыта. */
 const unreachable = (name: string, lifecycle: SessionLifecycle | undefined): string | null =>
@@ -237,7 +249,11 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     deps.broadcast('assistant.changed', state);
     for (const listener of [...stateListeners]) listener(state);
   };
-  const source = (): OverviewSource => ({ entries: deps.works.snapshot().entries, live: (ref) => deps.activity.get(ref) });
+  const source = (): OverviewSource => ({
+    entries: deps.works.snapshot().entries,
+    live: (ref) => deps.activity.get(ref),
+    roomTail: roomTailOf,
+  });
   /**
    * Реестр провайдеров и часы для строки `need` в обзоре (имя аккаунта и время сброса в причине); сбой реестра —
    * без имён, строка называет провайдера по id.

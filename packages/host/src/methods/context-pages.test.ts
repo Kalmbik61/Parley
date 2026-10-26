@@ -1,7 +1,8 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as core from '@parley/core';
 import { addMessage, addRoom, addSession, createWork, updateMap } from '@parley/core';
 import type { Message } from '@parley/core';
 import { COMPACT_WORKS_FEATURE, HOST_ERROR_REASONS, MAX_LINE_BYTES } from '@parley/protocol';
@@ -11,6 +12,8 @@ import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
+import type { RequestInfo } from '../context.js';
+import { contextMessages, contextText } from './context-pages.js';
 
 let hosts: RunningHost[] = [];
 let homes: string[] = [];
@@ -236,5 +239,49 @@ describe('context.messages', () => {
     const stale = await ask(client, 'context.text', { projectPath: dir, workId, ref: { kind: 'session', sessionId: 's-01', field: 'task' }, cursor: next });
     expect(stale.error).toMatchObject({ code: 'bad_request', data: { reason: 'stale-cursor' } });
     client.close();
+  });
+});
+
+describe('context.messages и context.text: карта целиком не читается', () => {
+  // Спека хранилища 6.2: страница и текст письма — запросами к базе; `readMap` копирует всю карту работы.
+  const request = {} as RequestInfo;
+
+  async function seeded(count: number): Promise<{ dir: string; workId: string }> {
+    const home = await tempHome();
+    homes.push(home);
+    process.env.PARLEY_HOME = home;
+    const dir = await project();
+    return { dir, workId: await seed(dir, count, 40) };
+  }
+
+  it('страница комнаты и прямых писем не зовёт readMap, а неизвестная комната и работа — прежние отказы', async () => {
+    const { dir, workId } = await seeded(5);
+    const readMap = vi.spyOn(core, 'readMap');
+    try {
+      const page = await contextMessages({ projectPath: dir, workId, roomId: 'r-01', maxBytes: 16384 }, request);
+      expect(page.messages.map((message) => message.id)).toEqual(['m-01', 'm-02', 'm-03', 'm-04', 'm-05']);
+      expect(page.page).toMatchObject({ total: 5, complete: true });
+      await expect(contextMessages({ projectPath: dir, workId, roomId: 'r-77' }, request)).rejects.toMatchObject({ code: 'not_found' });
+      await expect(contextMessages({ projectPath: dir, workId: 'w-9999', roomId: null }, request)).rejects.toMatchObject({ code: 'not_found' });
+      await expect(contextMessages({ projectPath: dir, workId, roomId: 'r-01', cursor: 'sideways' }, request)).rejects.toMatchObject({ code: 'bad_request' });
+      expect(readMap).not.toHaveBeenCalled();
+    } finally {
+      readMap.mockRestore();
+    }
+  });
+
+  it('текст письма не зовёт readMap; цель и поля сессии по-прежнему читают карту', async () => {
+    const { dir, workId } = await seeded(2);
+    const readMap = vi.spyOn(core, 'readMap');
+    try {
+      const text = await contextText({ projectPath: dir, workId, ref: { kind: 'message', id: 'm-02' } }, request);
+      expect(text).toMatchObject({ text: '1:'.padEnd(40, 'я'), complete: true });
+      await expect(contextText({ projectPath: dir, workId, ref: { kind: 'message', id: 'm-99' } }, request)).rejects.toMatchObject({ code: 'not_found' });
+      await expect(contextText({ projectPath: dir, workId: 'w-9999', ref: { kind: 'message', id: 'm-01' } }, request)).rejects.toMatchObject({ code: 'not_found' });
+      expect(readMap).not.toHaveBeenCalled();
+    } finally {
+      readMap.mockRestore();
+    }
+    await expect(contextText({ projectPath: dir, workId, ref: { kind: 'goal' } }, request)).resolves.toMatchObject({ complete: true });
   });
 });

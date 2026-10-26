@@ -4,7 +4,7 @@
  * склеиваются в один расчёт.
  */
 
-import { roomUsage, type RoomUsage, type UsageResolver, type WorkEntry } from '@parley/core';
+import { letterCount, readLetters, roomUsage, type RoomUsage, type UsageResolver, type WorkEntry } from '@parley/core';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
 
@@ -21,7 +21,12 @@ export function createRoomsUsage(
     const key = `${projectPath}\u0000${workId}\u0000${roomId}`;
     const known = running.get(key);
     if (known !== undefined) return known;
-    const job = roomUsage(map, roomId, activity.usageResolver(), now()).finally(() => running.delete(key));
+    // Ленту комнат без журнала участия читаем из базы работы, а не из снимка хоста (спека хранилища 6.2).
+    const letters = {
+      query: (q: Parameters<typeof readLetters>[2]) => readLetters(projectPath, workId, q),
+      count: (q: Parameters<typeof letterCount>[2]) => letterCount(projectPath, workId, q),
+    };
+    const job = roomUsage(map, roomId, activity.usageResolver(), now(), letters).finally(() => running.delete(key));
     running.set(key, job);
     return job;
   };

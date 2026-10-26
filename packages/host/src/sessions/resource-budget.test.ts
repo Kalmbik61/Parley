@@ -12,6 +12,7 @@ import {
   readMap,
   reserveAttempt,
   saveConfig,
+  SYSTEM,
   updateMap,
   DEFAULT_RESOURCE_LIMITS,
 } from '@parley/core';
@@ -150,6 +151,30 @@ describe('запуск: резерв до процесса, исход посл�
     const resources = await ledger(work.work.id);
     expect(resources?.attempts.filter((attempt) => attempt.state === 'reserved')).toEqual([]);
     expect((await readMap(project, work.work.id)).sessions.find((session) => session.id === 's-03')?.lifecycle).toBe('pending');
+  });
+
+  // Спека хранилища 6.2: письмо об отказе пишется как письмо (`writeLetters`), без разбора карты.
+  it('автозапуск отказан бюджетом: родителю — системное письмо об отказе, человеку — уведомление; запуск человека письма не пишет', async () => {
+    await saveConfig({ workConcurrent: 1 });
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const { sessions } = host();
+    const parent = await create(sessions, work.work.id, 'a');
+    await updateMap(project, work.work.id, (map) => {
+      // `addSession` родителя не принимает: поле осталось в старых картах, письмо идёт тому, кого оно называет.
+      addSession(map, { provider: 'claude', label: 'child', task: 'т' }).parent = parent.sessionId;
+    });
+    const child: SessionRef = { projectPath: project, workId: work.work.id, sessionId: 's-02' };
+
+    await budgetError(sessions.launch(child, 'launch'));
+    expect((await readMap(project, work.work.id)).messages).toEqual([]);
+
+    const refusal = await budgetError(sessions.launch(child, 'launch', { by: 'auto' }));
+    const letters = (await readMap(project, work.work.id)).messages;
+    expect(letters).toHaveLength(1);
+    expect(letters[0]).toMatchObject({ from: SYSTEM, to: [parent.sessionId], roomId: null, kind: 'note' });
+    expect(letters[0]?.text).toMatch(/^S02 was not started: /);
+    expect(letters[0]?.text).toContain(refusal.message);
+    expect(broadcasts.some((item) => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'launch-failed')).toBe(true);
   });
 
   it('окно запусков: после остановки слот свободен, а запуск всё равно считается в часе', async () => {

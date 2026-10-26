@@ -40,8 +40,9 @@ import {
   resetPointerLabel,
   selectUsage,
   sessionTag,
-  unreadFor,
+  unreadCount,
   watchEvents,
+  WorkNotFoundError,
   workPaths,
   type Activity,
   type ContextFill,
@@ -735,8 +736,18 @@ export function createActivityService(
     return !Number.isNaN(seenMs) && !Number.isNaN(endedMs) && seenMs >= endedMs;
   }
 
-  const unreadOf = (entry: WorkEntry, sessionId: string): number =>
-    unreadFor(entry.map, sessionId).length;
+  /**
+   * Число непрочитанного сессией — счётом из базы работы, а не обходом снимка хоста (спека хранилища 6.2). Работу могли
+   * удалить, пока её запись ещё в снимке: писем тогда нет, а не сбой пересчёта.
+   */
+  const unreadOf = (entry: WorkEntry, sessionId: string): number => {
+    try {
+      return unreadCount(entry.projectPath, entry.map.work.id, sessionId).total;
+    } catch (error) {
+      if (error instanceof WorkNotFoundError) return 0;
+      throw error;
+    }
+  };
 
   /**
    * Чтение `meta.json` субагента в фоне: пока оно идёт, окно видит задачу без описания. Прочитано —

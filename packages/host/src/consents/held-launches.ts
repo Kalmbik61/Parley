@@ -3,7 +3,7 @@
  * `deny` отказывает. Сервис согласий (`consents-service.ts`) только хранит карточки и зовёт эти два действия.
  */
 
-import { addMessage, sessionTag, setResult, SYSTEM, updateMap } from '@parley/core';
+import { sessionTag, setResult, SYSTEM, updateMap } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { HeldLaunch } from './consents-service.js';
 
@@ -38,7 +38,7 @@ export function createHeldLaunchActions(deps: HeldLaunchDeps): {
       if (hold.mode !== 'launch') return;
       const { ref } = hold;
       let open = false;
-      await updateMap(ref.projectPath, ref.workId, (map) => {
+      await updateMap(ref.projectPath, ref.workId, (map, letters) => {
         const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
         // Сессии уже нет или её закрыли за время ожидания: отказывать нечему.
         if (session === undefined || session.lifecycle === 'closed') return;
@@ -48,7 +48,7 @@ export function createHeldLaunchActions(deps: HeldLaunchDeps): {
         // `by` — `human`, такой сессии нет, и письма нет.
         const creator = session.parent ?? hold.by;
         if (creator !== ref.sessionId && map.sessions.some((candidate) => candidate.id === creator && candidate.lifecycle !== 'closed')) {
-          addMessage(map, { from: SYSTEM, to: [creator], text: `launch refused: folder not trusted (${sessionTag(ref.sessionId)})` });
+          letters.add({ roomId: null, from: SYSTEM, to: [creator], text: `launch refused: folder not trusted (${sessionTag(ref.sessionId)})`, kind: 'note' });
         }
       });
       if (open) await deps.close(ref);

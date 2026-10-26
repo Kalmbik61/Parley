@@ -6,7 +6,19 @@
 import path from 'node:path';
 import { humanUnreadLetters, humanUnreadMentions, plainHumanMention, roomAwaitsDecision, sessionNeed } from '@parley/core/attention';
 import { sessionDotState, type Activity } from '@parley/core/session-state';
-import { ACCEPTED_LETTER, RETURNED_LETTER, type Message, type Room, type SessionActivity, type WorkEntry, type WorkSession } from '@parley/core';
+import {
+  ACCEPTED_LETTER,
+  HUMAN,
+  readLetters,
+  RETURNED_LETTER,
+  unreadLetters,
+  WorkNotFoundError,
+  type Message,
+  type Room,
+  type SessionActivity,
+  type WorkEntry,
+  type WorkSession,
+} from '@parley/core';
 import { refKey, type SessionRef, type WorksSnapshot } from '@parley/protocol';
 
 export interface NotifyMemory {
@@ -54,16 +66,46 @@ export function sessionWhere(entry: WorkEntry): string {
 
 const decisionKey = (entry: WorkEntry, roomId: string): string => `${entry.projectPath}\u0000${entry.map.work.id}\u0000${roomId}`;
 
+/**
+ * Письма, которых нет в снимке работ: непрочитанное человеком и последнее письмо человека в комнате. По умолчанию
+ * берутся из базы работы (спека хранилища 6.2), тесты подставляют чтение из карты в памяти.
+ */
+export interface TriggerLetters {
+  humanUnread(entry: WorkEntry): Message[];
+  lastHumanLetter(entry: WorkEntry, roomId: string): Message | undefined;
+}
+
+/** Работу могли удалить, пока её запись ещё в снимке: писем тогда нет, а не сбой рассылки. */
+function orGone<T>(read: () => T, gone: T): T {
+  try {
+    return read();
+  } catch (error) {
+    if (error instanceof WorkNotFoundError) return gone;
+    throw error;
+  }
+}
+
+export const storeTriggerLetters: TriggerLetters = {
+  humanUnread: (entry) => orGone(() => unreadLetters(entry.projectPath, entry.map.work.id, HUMAN), []),
+  lastHumanLetter: (entry, roomId) =>
+    orGone(() => readLetters(entry.projectPath, entry.map.work.id, { roomId, from: HUMAN, limit: 1, newestFirst: true })[0], undefined),
+};
+
 /** Чем кончилось решение, которого в слоте больше нет: по последнему письму человека в комнате. */
-function closedAs(entry: WorkEntry, roomId: string): 'accepted' | 'returned' | 'gone' {
-  const last = [...entry.map.messages].reverse().find((message) => message.roomId === roomId && message.from === 'human');
+function closedAs(entry: WorkEntry, roomId: string, letters: TriggerLetters): 'accepted' | 'returned' | 'gone' {
+  const last = letters.lastHumanLetter(entry, roomId);
   if (last === undefined) return 'gone';
   // 'Completion accepted.' — литерал из core/src/work/proposals.ts (acceptProposal): константы для него в core нет.
   if (last.text === ACCEPTED_LETTER || last.text === 'Completion accepted.') return 'accepted';
   return last.text.startsWith(RETURNED_LETTER) ? 'returned' : 'gone';
 }
 
-export function worksTriggers(memory: NotifyMemory, snapshot: WorksSnapshot, hasMention: (text: string) => boolean = plainHumanMention): WorksTriggers {
+export function worksTriggers(
+  memory: NotifyMemory,
+  snapshot: WorksSnapshot,
+  hasMention: (text: string) => boolean = plainHumanMention,
+  letters: TriggerLetters = storeTriggerLetters,
+): WorksTriggers {
   const result: WorksTriggers = { letters: [], decisions: [], closed: [] };
   const first = memory.letters === null;
   const seenLetters = memory.letters ?? new Set<string>();
@@ -75,7 +117,9 @@ export function worksTriggers(memory: NotifyMemory, snapshot: WorksSnapshot, has
     const { map } = entry;
     entries.set(`${entry.projectPath}\u0000${map.work.id}`, entry);
 
-    for (const message of [...humanUnreadLetters(map), ...humanUnreadMentions(map, hasMention)]) {
+    // Правила внимания — core по карте с непрочитанным человеком: письма в снимке работ могли быть сжаты или отсутствовать.
+    const unread = { ...map, messages: letters.humanUnread(entry) };
+    for (const message of [...humanUnreadLetters(unread), ...humanUnreadMentions(unread, hasMention)]) {
       const key = `${entry.projectPath}\u0000${map.work.id}\u0000${message.id}`;
       if (nextLetters.has(key)) continue;
       nextLetters.add(key);
@@ -96,7 +140,7 @@ export function worksTriggers(memory: NotifyMemory, snapshot: WorksSnapshot, has
         result.decisions.push({ entry, room, change: 'revised' });
         result.closed.push({ entry, roomId: room.id, previous, now: 'revised' });
       } else {
-        result.closed.push({ entry, roomId: room.id, previous, now: closedAs(entry, room.id) });
+        result.closed.push({ entry, roomId: room.id, previous, now: closedAs(entry, room.id, letters) });
         result.decisions.push({ entry, room, change: 'new' });
       }
     }
@@ -108,7 +152,7 @@ export function worksTriggers(memory: NotifyMemory, snapshot: WorksSnapshot, has
       if (currentDecisions.has(key)) continue;
       const [projectPath, workId, roomId] = key.split('\u0000') as [string, string, string];
       const entry = entries.get(`${projectPath}\u0000${workId}`);
-      if (entry !== undefined) result.closed.push({ entry, roomId, previous, now: closedAs(entry, roomId) });
+      if (entry !== undefined) result.closed.push({ entry, roomId, previous, now: closedAs(entry, roomId, letters) });
     }
   }
 

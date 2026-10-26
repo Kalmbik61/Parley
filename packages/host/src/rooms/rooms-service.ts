@@ -12,7 +12,6 @@
 
 import {
   addMember,
-  addMessage,
   addRoom,
   addRoomArchivedLetters,
   addRoomOriginMessage,
@@ -39,6 +38,7 @@ import {
   setRoomOwner,
   updateMap,
   workExists,
+  writeLetters,
   type MessageVia,
   type Room,
   type WorkMap,
@@ -134,7 +134,7 @@ export async function createHumanRoom(input: Params<'rooms.create'>): Promise<st
     if (input.quiet !== true) {
       const notice = joinNotice(room, map);
       for (const id of members) {
-        addMessage(map, { from: HUMAN, to: [id], roomId: room.id, kind: 'note', text: notice });
+        letters.add({ from: HUMAN, to: [id], roomId: room.id, kind: 'note', text: notice });
       }
     }
   });
@@ -169,8 +169,8 @@ export async function deliverRecipeToNewLeads(projectPath: string, map: WorkMap)
 export async function sendHumanLetter(input: Params<'rooms.send'>, options: { via?: MessageVia } = {}): Promise<string> {
   const { projectPath, workId, roomId, to, text, kind } = input;
   assertWork(projectPath, workId);
-  let messageId = '';
-  await updateMap(projectPath, workId, (map) => {
+  // Письмо человека — только письма, без разбора карты (спека хранилища 6.2): `writeLetters` кладёт одну строку.
+  return writeLetters(projectPath, workId, (letters, map) => {
     if (roomId !== null) {
       // Нет комнаты или она в архиве — `bad_request`: писать в архивную нельзя, пока человек не вернёт её (`rooms.reopen`).
       const room = openRoom(map, roomId);
@@ -178,7 +178,7 @@ export async function sendHumanLetter(input: Params<'rooms.send'>, options: { vi
         if (!isMember(room, id)) throw bad(`session ${id} is not a participant of room ${roomId}`);
         assertDeliverable(map, id);
       }
-      messageId = addMessage(map, {
+      return letters.add({
         from: HUMAN,
         to,
         text,
@@ -186,21 +186,20 @@ export async function sendHumanLetter(input: Params<'rooms.send'>, options: { vi
         roomId,
         ...(options.via === undefined ? {} : { via: options.via }),
       }).id;
-      return;
     }
 
     if (to.length !== 1) throw bad('without a room, exactly one addressee in to is required');
     const target = to[0] as string;
     assertDeliverable(map, target);
-    messageId = addMessage(map, {
+    return letters.add({
       from: HUMAN,
       to: [target],
       text,
       kind,
+      roomId: null,
       ...(options.via === undefined ? {} : { via: options.via }),
     }).id;
   });
-  return messageId;
 }
 
 /**

@@ -1,13 +1,16 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { addMessage, HUMAN, readMap, updateMap } from '@parley/core';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as core from '@parley/core';
+import { addMessage, createWork, HUMAN, readMap, updateMap } from '@parley/core';
 import { connectRaw, hello, holdDatabase, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
+import type { RequestInfo } from '../context.js';
+import { mailMarkRead } from './mail.js';
 
 let hosts: RunningHost[] = [];
 let homes: string[] = [];
@@ -99,5 +102,38 @@ describe('mail.markRead', () => {
     expect((await reply(client, 2)).error?.code).toBe('bad_request');
     expect((await readMap(dir, workId)).messages[0]?.readBy[HUMAN]).toBeUndefined();
     client.close();
+  });
+});
+
+describe('mail.markRead: карта целиком не читается', () => {
+  // Спека хранилища 6.2: проверка работы и отметка — запросами к базе; `readMap` копирует всю карту работы.
+  it('отметка не зовёт readMap; повтор и несуществующая работа — прежние ответы', async () => {
+    const home = await tempHome();
+    homes.push(home);
+    const previous = process.env.PARLEY_HOME;
+    process.env.PARLEY_HOME = home;
+    const dir = await mkdtemp(path.join(tmpdir(), 'parley-mail-project-'));
+    projects.push(dir);
+    const request = {} as RequestInfo;
+    try {
+      const workId = (await createWork(dir, { title: 'Почта' })).work.id;
+      await updateMap(dir, workId, (_map, letters) => {
+        letters.add({ roomId: null, from: 's-01', to: [HUMAN], text: 'вопрос', kind: 'note' });
+      });
+      const params = { projectPath: dir, workId, messageIds: ['m-01'] };
+      const readMapSpy = vi.spyOn(core, 'readMap');
+      try {
+        expect(await mailMarkRead(params, request)).toEqual({ marked: 1 });
+        expect(await mailMarkRead(params, request)).toEqual({ marked: 0 });
+        await expect(mailMarkRead({ ...params, workId: 'w-9999' }, request)).rejects.toMatchObject({ code: 'not_found' });
+        expect(readMapSpy).not.toHaveBeenCalled();
+      } finally {
+        readMapSpy.mockRestore();
+      }
+      expect((await readMap(dir, workId)).messages[0]?.readBy[HUMAN]).toBeDefined();
+    } finally {
+      if (previous === undefined) delete process.env.PARLEY_HOME;
+      else process.env.PARLEY_HOME = previous;
+    }
   });
 });

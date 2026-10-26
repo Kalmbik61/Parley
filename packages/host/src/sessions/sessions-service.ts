@@ -15,7 +15,6 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
-  addMessage,
   attemptKindFor,
   limitsFromConfig,
   prepareSessionRole,
@@ -80,6 +79,7 @@ import {
   updateMap,
   workPaths,
   writeBrief,
+  writeLetters,
   type CodexWriteApprovals,
   type EffortLevel,
   type ParleyConfig,
@@ -364,13 +364,16 @@ export function createSessionsService(
       const text = `${sessionTag(ref.sessionId)} was not started: ${error.message}`;
       host.broadcast('host.notice', { kind: 'launch-failed', ref, text, at: new Date().toISOString() });
       if (parentId !== null) {
-        await updateMap(ref.projectPath, ref.workId, (current) => {
-          if (current.sessions.some((candidate) => candidate.id === parentId)) {
-            addMessage(current, { from: SYSTEM, to: [parentId], text });
-          }
-        }).catch((mapError: unknown) => {
+        try {
+          // Только письмо: без разбора карты (спека хранилища 6.2).
+          writeLetters(ref.projectPath, ref.workId, (letters, current) => {
+            if (current.sessions.some((candidate) => candidate.id === parentId)) {
+              letters.add({ roomId: null, from: SYSTEM, to: [parentId], text, kind: 'note' });
+            }
+          });
+        } catch (mapError) {
           host.log.error('письмо об отказе запуска не записалось', { ref, error: String(mapError) });
-        });
+        }
       }
     }
     throw new HostError('conflict', error.message, {
@@ -646,16 +649,18 @@ export function createSessionsService(
           });
           const parentId = session.parent;
           if (parentId !== null) {
-            await updateMap(ref.projectPath, ref.workId, (current) => {
-              if (current.sessions.some((candidate) => candidate.id === parentId)) {
-                addMessage(current, { from: SYSTEM, to: [parentId], text });
-              }
-            }).catch((mapError: unknown) => {
+            try {
+              writeLetters(ref.projectPath, ref.workId, (letters, current) => {
+                if (current.sessions.some((candidate) => candidate.id === parentId)) {
+                  letters.add({ roomId: null, from: SYSTEM, to: [parentId], text, kind: 'note' });
+                }
+              });
+            } catch (mapError) {
               host.log.error('письмо о несозданном worktree не записалось', {
                 ref,
                 error: String(mapError),
               });
-            });
+            }
           }
           throw error;
         }

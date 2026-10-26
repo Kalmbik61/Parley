@@ -6,6 +6,7 @@ import {
   renameWork,
   setWorkStatus,
   WorkNotFoundError,
+  workExists,
 } from '@parley/core';
 import { COMPACT_WORKS_FEATURE, HOST_ERROR_REASONS } from '@parley/protocol';
 import type { Handler } from '../context.js';
@@ -65,14 +66,12 @@ export function createWorksDelete(history?: Pick<HistoryService, 'removeWork'>):
 export const worksDelete: Handler<'works.delete'> = createWorksDelete();
 
 /**
- * Работы нет — `not_found`, а не `internal`. Карта читается заранее, как в
- * `worksDelete` (битая карта — тоже `not_found`), а работу, удалённую уже после
- * этой проверки (`works.delete` другого клиента, пока запись ждала базу),
- * core сообщает `WorkNotFoundError` из самой записи.
+ * Работы нет — `not_found`, а не `internal`. Проверка — строка работы в базе, без разбора карты (спека хранилища 6.2), а
+ * работу, удалённую уже после неё (`works.delete` другого клиента, пока запись ждала базу), core сообщает
+ * `WorkNotFoundError` из самой записи.
  */
-export async function requireWork(projectPath: string, workId: string): Promise<void> {
-  const map = await readMap(projectPath, workId).catch(() => null);
-  if (map === null) throw new HostError('not_found', `workspace ${workId} does not exist`);
+export function requireWork(projectPath: string, workId: string): void {
+  if (!workExists(projectPath, workId)) throw new HostError('not_found', `workspace ${workId} does not exist`);
 }
 
 export function notFoundOnGone(error: unknown): never {
@@ -83,13 +82,13 @@ export function notFoundOnGone(error: unknown): never {
 export const worksRename: Handler<'works.rename'> = async (params) => {
   // Пустое или длинное название отсекает схема протокола (`bad_request`) —
   // те же правила, что у core, поэтому до `renameWork` оно не доходит.
-  await requireWork(params.projectPath, params.workId);
+  requireWork(params.projectPath, params.workId);
   await renameWork(params.projectPath, params.workId, params.title).catch(notFoundOnGone);
   return { ok: true };
 };
 
 export const worksSetStatus: Handler<'works.setStatus'> = async (params) => {
-  await requireWork(params.projectPath, params.workId);
+  requireWork(params.projectPath, params.workId);
   await setWorkStatus(params.projectPath, params.workId, params.status).catch(notFoundOnGone);
   return { ok: true };
 };
