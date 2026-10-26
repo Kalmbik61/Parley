@@ -42,7 +42,6 @@ import {
   sessionTag,
   unreadCount,
   watchEvents,
-  WorkNotFoundError,
   workPaths,
   type Activity,
   type ContextFill,
@@ -737,17 +736,12 @@ export function createActivityService(
   }
 
   /**
-   * Число непрочитанного сессией — счётом из базы работы, а не обходом снимка хоста (спека хранилища 6.2). Работу могли
-   * удалить, пока её запись ещё в снимке: писем тогда нет, а не сбой пересчёта.
+   * Число непрочитанного сессией — счётом по карте снимка, которую хост уже держит (`entry.map`): метрики собираются для
+   * каждой сессии на каждое изменение, и из базы при числе работ больше кэша карт каждый проход грузил бы их заново
+   * (спека хранилища 6.2).
    */
-  const unreadOf = (entry: WorkEntry, sessionId: string): number => {
-    try {
-      return unreadCount(entry.projectPath, entry.map.work.id, sessionId).total;
-    } catch (error) {
-      if (error instanceof WorkNotFoundError) return 0;
-      throw error;
-    }
-  };
+  const unreadOf = (entry: WorkEntry, sessionId: string): number =>
+    unreadCount(entry.projectPath, entry.map.work.id, sessionId, { map: entry.map }).total;
 
   /**
    * Чтение `meta.json` субагента в фоне: пока оно идёт, окно видит задачу без описания. Прочитано —

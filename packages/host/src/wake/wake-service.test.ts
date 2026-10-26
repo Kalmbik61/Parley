@@ -24,7 +24,6 @@ import {
   unreadFor,
   updateMap,
   workPaths,
-  writeLetters,
 } from '@parley/core';
 import type { ProviderLimits, SessionActivity, SessionNeed } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
@@ -1580,10 +1579,7 @@ describe('возврат после сброса лимита', () => {
       working: () => publish(activityOf('working')),
       idle: () => publish(activityOf('idle', { turnEndedAt: new Date(Date.now()).toISOString() })),
       letter: () => {
-        // Непрочитанное будильник берёт из базы работы, а не из снимка (спека хранилища 6.2): письмо пишем туда.
-        writeLetters(project, workId, (letters) => {
-          letters.add({ roomId: null, from: 's-00', to: [sessionId], text: 'письмо, пока шёл лимит', kind: 'note' });
-        });
+        addMessage(map, { from: 's-00', to: [sessionId], text: 'письмо, пока шёл лимит' });
         publish(live.activity);
       },
       poke: () => publish(live.activity),

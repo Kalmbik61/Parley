@@ -2,9 +2,11 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createWork, deleteWorkFiles, mapLetterTx, writeLetters } from '@parley/core';
+import { createWork, deleteWorkFiles, mapLetterTx, readMap, writeLetters } from '@parley/core';
 import type { Message, Room, SessionActivity, WorkEntry, WorkSession } from '@parley/core';
 import type { SessionRef, WorksSnapshot } from '@parley/protocol';
+// Счётчик кэша карт ядра — только для тестов, из пакета он не экспортируется; тот же экземпляр модуля, что у `@parley/core`.
+import { mapCacheStats } from '../../../core/dist/work/store.js';
 import { activityTransition, emptyMemory, sessionWhere, worksTriggers as triggersWith, type NotifyMemory, type TriggerLetters } from './notify.js';
 
 const ref: SessionRef = { projectPath: '/p/my_harnas', workId: 'w-01', sessionId: 's-01' };
@@ -165,14 +167,24 @@ describe('worksTriggers: письма из базы работы (по умол�
     });
   };
 
-  it('письмо человеку, которого нет в снимке, — повод; повтор — нет', async () => {
+  it('письмо человеку из карты снимка — повод, повтор — нет; карта из базы при этом не загружается', async () => {
     const workId = (await createWork(project, { title: 'Parley' })).work.id;
     const memory = emptyMemory();
-    triggersWith(memory, bare(workId));
+    const snapshotOf = async (): Promise<WorksSnapshot> => ({
+      entries: [{ projectPath: project, map: await readMap(project, workId) } as unknown as WorkEntry],
+      branches: {},
+    });
+    triggersWith(memory, await snapshotOf());
     say(workId, { text: 'из базы' });
-    const next = triggersWith(memory, bare(workId));
-    expect(next.letters.map((item) => item.message.text)).toEqual(['из базы']);
-    expect(triggersWith(memory, bare(workId)).letters).toEqual([]);
+    const start = mapCacheStats();
+    const next = await snapshotOf();
+    expect(mapCacheStats()).not.toEqual(start); // счётчик — тот же экземпляр модуля, что у `@parley/core`
+
+    // Спека хранилища 6.2: повод считается по карте снимка — на каждое изменение работ база не перебирает кэш карт.
+    const before = mapCacheStats();
+    expect(triggersWith(memory, next).letters.map((item) => item.message.text)).toEqual(['из базы']);
+    expect(triggersWith(memory, next).letters).toEqual([]);
+    expect(mapCacheStats()).toEqual(before);
   });
 
   it('слот решения исчез: итог — по последнему письму человека в базе', async () => {

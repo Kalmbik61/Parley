@@ -1,5 +1,6 @@
 /**
- * Поводы для сообщений бота: что изменилось с прошлого снимка. Функции чистые, состояние (`NotifyMemory`) держит вызывающий.
+ * Поводы для сообщений бота: что изменилось с прошлого снимка. Состояние (`NotifyMemory`) держит вызывающий; письма берутся
+ * через `TriggerLetters` (по умолчанию — непрочитанное по карте снимка, последнее письмо человека из базы работы), остальное чистое.
  * Первый вызов только запоминает базу — после старта хоста бот не засыпает человека тем, что было до него.
  */
 
@@ -67,15 +68,17 @@ export function sessionWhere(entry: WorkEntry): string {
 const decisionKey = (entry: WorkEntry, roomId: string): string => `${entry.projectPath}\u0000${entry.map.work.id}\u0000${roomId}`;
 
 /**
- * Письма, которых нет в снимке работ: непрочитанное человеком и последнее письмо человека в комнате. По умолчанию
- * берутся из базы работы (спека хранилища 6.2), тесты подставляют чтение из карты в памяти.
+ * Письма для поводов: непрочитанное человеком и последнее письмо человека в комнате (спека хранилища 6.2). По умолчанию
+ * непрочитанное считается по карте снимка (`worksTriggers` зовётся на каждое изменение работ, и карты из базы при числе
+ * работ больше кэша каждый раз грузились бы заново), последнее письмо читается из базы работы — оно нужно редко.
+ * Тесты подставляют чтение из карты в памяти.
  */
 export interface TriggerLetters {
   humanUnread(entry: WorkEntry): Message[];
   lastHumanLetter(entry: WorkEntry, roomId: string): Message | undefined;
 }
 
-/** Работу могли удалить, пока её запись ещё в снимке: писем тогда нет, а не сбой рассылки. */
+/** Работу могли удалить, пока её запись ещё в снимке: последнего письма тогда нет, а не сбой рассылки. */
 function orGone<T>(read: () => T, gone: T): T {
   try {
     return read();
@@ -86,7 +89,7 @@ function orGone<T>(read: () => T, gone: T): T {
 }
 
 export const storeTriggerLetters: TriggerLetters = {
-  humanUnread: (entry) => orGone(() => unreadLetters(entry.projectPath, entry.map.work.id, HUMAN), []),
+  humanUnread: (entry) => unreadLetters(entry.projectPath, entry.map.work.id, HUMAN, { map: entry.map }),
   lastHumanLetter: (entry, roomId) =>
     orGone(() => readLetters(entry.projectPath, entry.map.work.id, { roomId, from: HUMAN, limit: 1, newestFirst: true })[0], undefined),
 };

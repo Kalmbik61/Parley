@@ -68,7 +68,8 @@ export const worksDelete: Handler<'works.delete'> = createWorksDelete();
 /**
  * Работы нет — `not_found`, а не `internal`. Проверка — строка работы в базе, без разбора карты (спека хранилища 6.2), а
  * работу, удалённую уже после неё (`works.delete` другого клиента, пока запись ждала базу), core сообщает
- * `WorkNotFoundError` из самой записи.
+ * `WorkNotFoundError` из самой записи. Карта, которую база хранит, но разобрать нельзя, раньше давала здесь `not_found`; теперь
+ * она всплывает как `internal` из последующего чтения или записи.
  */
 export function requireWork(projectPath: string, workId: string): void {
   if (!workExists(projectPath, workId)) throw new HostError('not_found', `workspace ${workId} does not exist`);

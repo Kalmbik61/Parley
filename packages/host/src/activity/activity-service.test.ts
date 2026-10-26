@@ -3,6 +3,7 @@ import { mkdir, appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/pro
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as core from '@parley/core';
 import {
   addSession,
   createWork,
@@ -366,6 +367,31 @@ describe('createActivityService', () => {
     await settle();
 
     expect(a.get(ref)?.metrics?.unread).toBe(2);
+  }, 20_000);
+
+  // Спека хранилища 6.2: метрики собираются для каждой сессии на каждое изменение; число читается по карте снимка хоста,
+  // а не по карте из базы (кэш карт — 32 записи, при большем числе работ каждый проход грузил бы их заново).
+  it('5а: unread считается по карте снимка хоста, карта из базы для этого не нужна', async () => {
+    const { ref, workId } = await activeSession();
+    await updateMap(project, workId, (_map, letters) => {
+      letters.add({ roomId: null, from: 's-00', to: [ref.sessionId], text: 'привет', kind: 'note' });
+    });
+
+    const w = await works();
+    const unread = vi.spyOn(core, 'unreadCount');
+    try {
+      const a = activity(w);
+      await a.start();
+      await settle();
+
+      expect(a.get(ref)?.metrics?.unread).toBe(1);
+      expect(unread).toHaveBeenCalled();
+      for (const call of unread.mock.calls) {
+        expect(call[3]?.map?.work.id).toBe(workId);
+      }
+    } finally {
+      unread.mockRestore();
+    }
   }, 20_000);
 
   it('6: автозаголовок применяется один раз, переименованную вручную не трогает', async () => {
