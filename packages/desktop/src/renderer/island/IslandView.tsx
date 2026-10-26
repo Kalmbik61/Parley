@@ -31,7 +31,7 @@
  * помощник не раскрыт (`ConsentView`, свой стор `consents/store.ts`).
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type Ref } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent, type Ref } from 'react';
 import { ChevronUp } from 'lucide-react';
 import type { FeedDecision } from '@parley/core';
 import { S } from '../../shared/strings.js';
@@ -283,12 +283,20 @@ function useRequestFocus(identity: string | null, owned: boolean, takeKeyboard: 
     previousIdentity.current = identity;
     if (owned) ref.current?.focus({ preventScroll: true });
   }, [identity, owned]);
+  const isButton = (target: EventTarget): boolean => target instanceof Element && target.closest('button, [role="button"]') !== null;
+  const guardButtonKeyboard = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (!owned && isButton(event.target) && (event.key === 'Enter' || event.key === ' ')) event.preventDefault();
+  };
   return {
     ref,
     tabIndex: -1,
-    onFocusCapture: takeKeyboard,
+    onFocusCapture: (event: FocusEvent<HTMLDivElement>): void => {
+      if (!isButton(event.target)) takeKeyboard();
+    },
+    onKeyDownCapture: guardButtonKeyboard,
+    onKeyUpCapture: guardButtonKeyboard,
     onPointerDownCapture: (event: PointerEvent<HTMLDivElement>): void => {
-      if (event.button !== 0) return;
+      if (event.button !== 0 || isButton(event.target)) return;
       takeKeyboard();
       if (!(event.target instanceof Element) || event.target.closest('button, input, textarea, select, [contenteditable]') === null) event.currentTarget.focus({ preventScroll: true });
     },

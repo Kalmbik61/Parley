@@ -871,6 +871,68 @@ describe('единый keyboard owner T1c', () => {
   const flush = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
   const takeRequest = (): void => { fireEvent(screen.getByTestId('island-card'), pointer('pointerdown')); };
 
+  it.each(['island-allow', 'island-deny'])('мышь pointerdown/focus/click по %s не берёт OS keyboard при оставшихся pending', async (id) => {
+    const { fake, bridge, island, blocked } = setup();
+    fake.setHandler('feed.decide', () => ({ applied: true, state: 'allowed' }));
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    blocked('s-02');
+    await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    const button = screen.getByTestId(id);
+    const label = document.createElement('span');
+    label.textContent = 'nested button target';
+    button.append(label);
+    fireEvent(label, pointer('pointerdown'));
+    act(() => button.focus());
+    fireEvent.click(label, { detail: 1 });
+    await flush();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(1);
+    expect(useIslandRequests.getState().items).toHaveLength(1);
+    expect(island.keyboard).not.toHaveBeenCalled();
+  });
+
+  it('мышь pointerdown/focus/click по Open in Parley не берёт OS keyboard', async () => {
+    const { fake, bridge, island, blocked } = setup();
+    fake.setHandler('feed.snapshot', () => ({ items: [{
+      id: 'plan', cardId: 'plan', at: '2026-10-26T10:00:00.000Z', kind: 'plan', state: 'pending', toolUseId: null,
+      toolName: 'ExitPlanMode', toolInput: {}, plan: 'A plan', planFilePath: null,
+    }], revision: 1, mode: null, decisions: 'window' }));
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    const button = screen.getByTestId('island-open');
+    fireEvent(button, pointer('pointerdown'));
+    act(() => button.focus());
+    fireEvent.click(button, { detail: 1 });
+    expect(island.open).toHaveBeenCalledWith({ kind: 'session', ref: ref('s-01'), cardId: 'plan' });
+    expect(island.keyboard).not.toHaveBeenCalled();
+  });
+
+  it.each(['Enter', ' '])('failed mouse decide не получает повторный ответ от %j без keyboard owner', async (key) => {
+    const { fake, bridge, island, blocked } = setup();
+    fake.setHandler('feed.decide', () => ({ applied: false, state: 'pending' }));
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    const button = screen.getByTestId('island-allow') as HTMLButtonElement;
+    fireEvent(button, pointer('pointerdown'));
+    act(() => button.focus());
+    fireEvent.click(button, { detail: 1 });
+    await flush();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(1);
+    const nativeDefault = fireEvent.keyDown(button, { key });
+    fireEvent.keyUp(button, { key });
+    if (nativeDefault && document.activeElement === button && !button.disabled) fireEvent.click(button, { detail: 0 });
+    await flush();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(1);
+    expect(island.keyboard).not.toHaveBeenCalled();
+  });
+
   it('snapshot сам не берёт клавиатуру; явное взаимодействие берёт один раз, Escape отдаёт без решения', async () => {
     const { fake, bridge, island, blocked } = setup();
     render(<IslandApp bridge={bridge} />);
@@ -1428,6 +1490,22 @@ describe('согласия на папку', () => {
     requestedBy: { source: 'agent', sessionId: 's-01', label: 'S01 a' }, at: '2026-10-21T10:00:00.000Z', state: 'pending',
   };
   const SECOND: ConsentCard = { ...CONSENT, id: 'c-02', folder: '/tmp/other', projectPath: '/tmp/other' };
+
+  it.each(['island-consent-trust', 'island-consent-deny'])('consent mouse pointerdown/focus/click по %s не берёт OS keyboard', async (id) => {
+    vi.useFakeTimers();
+    const { bridge, fake, island } = setup({}, ENTRIES, [CONSENT]);
+    fake.setHandler('consents.decide', () => ({ applied: true, state: 'allowed' }));
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    const button = screen.getByTestId(id);
+    fireEvent(button, pointer('pointerdown'));
+    act(() => button.focus());
+    fireEvent.click(button, { detail: 1 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(fake.calls.filter((call) => call.method === 'consents.decide')).toHaveLength(1);
+    expect(island.keyboard).not.toHaveBeenCalled();
+  });
 
   it.each(['Escape', 'blur', 'collapse', 'disconnect'])('consent явный request owner и release по %s без решения', async (reason) => {
     vi.useFakeTimers();
