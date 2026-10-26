@@ -12,7 +12,7 @@ function fixture(value = entry()) {
  };
  const io: HistoryServiceIO = {
   rebuild:vi.fn(async ()=>({sharedAt:null,diagnostics:[]})),
-  remove:vi.fn(async (_p,_w,ids)=>({removed:ids.length,failed:[]})), deleted:vi.fn(async()=>true),
+  remove:vi.fn(async (_p,_w,ids)=>({removed:ids.length,failed:[]})), deleted:vi.fn(async()=>true), stats:vi.fn(()=>({})),
  };
  const failure=vi.fn();const service=createHistoryService(works,{io,debounceMs:100,onFailure:failure});
  return {service,io,failure,changed:()=>listener(),gone:()=>{entries=[];listener();},back:()=>{entries=[value];listener();}};

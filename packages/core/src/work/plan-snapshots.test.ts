@@ -21,8 +21,6 @@ import { createWork, readMap, updateMap, workPaths } from "./store.js";
 import { cancelRoomPlan, submitPlanItem } from "./plans.js";
 import { capturePlanSnapshot, flushPlanSnapshots } from "./plan-snapshots.js";
 import { HUMAN } from "./types.js";
-import { mapLetterTx } from "./letter-store.js";
-const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 let root: string;
 let project: string;
 let workId: string;
@@ -36,7 +34,7 @@ beforeEach(async () => {
   previous = process.env.PARLEY_HOME;
   process.env.PARLEY_HOME = home;
   workId = (await createWork(project, { title: "Snapshot" })).work.id;
-  await updateMap(project, workId, (map) => {
+  await updateMap(project, workId, (map, letters) => {
     addSession(map, { provider: "codex", label: "Lead", task: "Fixture" }, AT);
     addRoom(
       map,
@@ -59,7 +57,7 @@ beforeEach(async () => {
     const plan = map.rooms[0]!.proposal!.plan!;
     resolveProposal(
       map,
-      lt(map),
+      letters,
       "r-01",
       p.proposalId,
       "accept",
@@ -78,7 +76,7 @@ const snapshotDir = () => path.join(project, ".parley", "plans");
 describe("captured immutable plan exports", () => {
   it("writes the accepted payload even after a later revision and completion; replay is idempotent", async () => {
     const captured = (await readMap(project, workId)).planExports![0]!;
-    await updateMap(project, workId, (map) => {
+    await updateMap(project, workId, (map, letters) => {
       const p = setProposal(map, "r-01", "s-01", "New decision", AT, {
         plan: {
           id: "pl-01",
@@ -92,7 +90,7 @@ describe("captured immutable plan exports", () => {
       });
       resolveProposal(
         map,
-        lt(map),
+        letters,
         "r-01",
         p.proposalId,
         "accept",
@@ -101,7 +99,7 @@ describe("captured immutable plan exports", () => {
       );
       submitPlanItem(
         map,
-        lt(map),
+        letters,
         "pl-01",
         1,
         1,
@@ -195,8 +193,8 @@ describe("captured immutable plan exports", () => {
   it("exports cancellation with an independent filename and migrates only the exact generated ignore", async () => {
     const ignore = path.join(project, ".parley", ".gitignore");
     await writeFile(ignore, "*\n");
-    await updateMap(project, workId, (map) =>
-      cancelRoomPlan(map, lt(map), "pl-01", 0, HUMAN, AT),
+    await updateMap(project, workId, (map, letters) =>
+      cancelRoomPlan(map, letters, "pl-01", 0, HUMAN, AT),
     );
     expect((await flushPlanSnapshots(project, workId)).written).toHaveLength(2);
     expect(await readFile(ignore, "utf8")).toContain("!plans/**");
@@ -261,7 +259,7 @@ it("publishes a nested linked-worktree plan in the corresponding main folder whi
   await git("worktree", "add", "-b", "linked", linked);
   const participant = path.join(linked, "nested");
   const id = (await createWork(participant, { title: "Nested plan" })).work.id;
-  await updateMap(participant, id, (map) => {
+  await updateMap(participant, id, (map, letters) => {
     addSession(map, { provider: "codex", label: "Lead", task: "" }, AT);
     addRoom(
       map,
@@ -283,7 +281,7 @@ it("publishes a nested linked-worktree plan in the corresponding main folder whi
     });
     resolveProposal(
       map,
-      lt(map),
+      letters,
       "r-01",
       p.proposalId,
       "accept",
@@ -337,7 +335,7 @@ it("excluded immutable intents preserve their file and captured state while a la
   const original = (await readMap(project, workId)).planExports![0]!;
   await mkdir(snapshotDir(), { recursive: true });
   await writeFile(path.join(snapshotDir(), original.file), "Human file", "utf8");
-  await updateMap(project, workId, map => cancelRoomPlan(map, lt(map), "pl-01", 0, HUMAN, AT));
+  await updateMap(project, workId, (map, letters) => cancelRoomPlan(map, letters, "pl-01", 0, HUMAN, AT));
   const result = await flushPlanSnapshots(project, workId, { excludedFiles: new Set([original.file]) });
   expect(result.failed).toEqual([]);
   expect(result.written).toHaveLength(1);

@@ -1,19 +1,38 @@
 /**
- * API писем работы (спека хранилища 6.2, план 4, задача 1). Код работает с письмами через `LetterTx` — внутри
- * транзакции `updateMap` (вторым аргументом мутатора) или `writeLetters` — и через функции чтения вне транзакции.
- * Здесь API стоит поверх нынешнего `map.messages`: внутри транзакции это тот же черновик карты, что у мутатора, снаружи —
- * карта из кэша процесса (`readMapView`). Поведение каждого метода — ровно того кода, на который он ссылается; задача 7
- * подставит под тот же API таблицы `messages`, `message_reads` и `message_unread`.
+ * API писем работы (спека хранилища 6.2, план 4). Код работает с письмами через `LetterTx` — внутри транзакции `updateMap`
+ * (вторым аргументом мутатора) или `writeLetters` — и через функции чтения вне транзакции. Письма лежат в таблицах
+ * `messages`, `message_reads` и `message_unread` (`letter-tables.ts`), а не в карте: хранимая карта (`WorkMap`) писем не
+ * содержит, карта с письмами — `WindowWorkMap` (окно, страницы, тесты).
  *
- * Что возвращают методы: внутри транзакции — живые объекты черновика (как `addMessage`), вне её — копии; менять
- * возвращённое письмо нельзя ни там, ни там: меняют письма только методы `LetterTx`.
+ * Для карты с письмами в памяти (тесты правил комнат и планов, сверка переезда) есть `mapLetterTx` и `mapLetterReader` — то же
+ * API над массивом `map.messages`.
+ *
+ * Что возвращают методы: письма из таблиц — новые объекты, их можно держать; письма из `mapLetterTx` — живые объекты
+ * карты, менять их нельзя: письма меняют только методы `LetterTx`.
  */
 
 import type { LetterReader } from './context-pages.js';
+import {
+  assertLetter,
+  assertLimit,
+  channelKey,
+  channelTotals,
+  countLetters as countRows,
+  humanUnreadTail,
+  humanUnreadTotals,
+  letterByIdRow,
+  letterSeq,
+  NON_AGENT_SENDERS,
+  selectLetters as selectRows,
+  sessionUnreadTotals,
+  sinceBound,
+  unreadOfHuman,
+  unreadOfSession,
+} from './letter-tables.js';
 import { recipientsOf, unreadFor, unreadForHuman } from './letters.js';
 import { addMessage, maxNumber } from './map.js';
-import { applyMapUpdate, readMapView, type UpdateMapOptions } from './store.js';
-import { HUMAN, type Message, type MessageKind, type MessageVia, type WorkMap } from './types.js';
+import { applyMapUpdate, letterDb, readMapView, readTransaction, storeDb, type UpdateMapOptions } from './store.js';
+import { HUMAN, type Message, type MessageKind, type MessageVia, type WindowWorkMap, type WorkMap } from './types.js';
 
 /** Новое письмо. Номер `m-NN` выдаёт хранилище; `readBy` и `at` задают тесты и переезд, у обычного письма их нет. */
 export interface NewLetter {
@@ -29,10 +48,12 @@ export interface NewLetter {
 }
 
 /**
- * Выборка писем. Условия складываются по «и»; порядок — порядок карты (по номеру письма), `newestFirst` берёт с конца.
+ * Выборка писем. Условия складываются по «и»; порядок — по номеру письма, `newestFirst` берёт с конца.
  * `roomId`: не задан — любой канал, `null` — только прямые письма, строка — одна комната. `sinceAt` — строго позже
  * этого момента (как прежнее окно «последний час»: `now - at < окно`). `beforeSeq`/`afterSeq` — по числу из `m-NN`,
- * границы не входят. `limit` обязателен: запрос без предела в транзакции — ошибка вызова.
+ * границы не входят. `agentsOnly` — только письма агентов: не от человека, хоста и плана (`resource-policy.ts`).
+ * `involving` — отправитель или кто-то из адресатов письма назван в списке (предотбор прямых писем семьи сессий, пока
+ * точное правило видимости применяет вызывающий). `limit` обязателен: запрос без предела — ошибка вызова.
  */
 export interface LetterQuery {
   roomId?: string | null;
@@ -42,6 +63,8 @@ export interface LetterQuery {
   ids?: readonly string[];
   beforeSeq?: number;
   afterSeq?: number;
+  agentsOnly?: boolean;
+  involving?: readonly string[];
   limit: number;
   newestFirst?: boolean;
 }
@@ -54,52 +77,50 @@ export interface LetterTx {
   byId(id: string): Message | undefined;
   query(q: LetterQuery): Message[];
   count(q: Omit<LetterQuery, 'limit'>): number;
-  /** Непрочитанное читателем: у сессии — правила `unreadFor` (`letters.ts`), у `human` — `unreadForHuman`. */
+  /** Непрочитанное читателем: у сессии — правила `isUnreadFor` (`letters.ts`), у `human` — `isHumanUnread`. */
   unreadFor(reader: string): Message[];
-  /** Сессия вошла в комнату. Пока письма в карте, непрочитанное считается из всех писем — метод ничего не делает. */
+  /** Сессия вошла в комнату: все рассылки комнаты без её отметки и не от неё становятся ей непрочитанными. */
   joined(roomId: string, reader: string): void;
-  /** Сессия вышла из комнаты. Здесь ничего не делает (см. `joined`). */
+  /** Сессия вышла из комнаты: рассылки комнаты ей больше не непрочитанные (письма с явным `to` остаются адресату). */
   left(roomId: string, reader: string): void;
-  /** Комната ушла в архив. Здесь ничего не делает (см. `joined`). */
+  /** Комната ушла в архив: у неё нет адресатов-сессий, человеку её письма остаются непрочитанными. */
   archived(roomId: string): void;
   /**
    * Комната возвращена из архива: `readBy[id] ??= at` текущим адресатам каждого письма комнаты, как `reopenRoom`.
    * Зовут после того, как `archivedAt` снова `null`: у архивной комнаты адресатов нет.
    */
   reopened(roomId: string, at: string): void;
-  /** Письма комнаты уходят, `work.messageSeq` запоминает наибольший номер до удаления, как `deleteRoom`. */
+  /**
+   * Письма комнаты уходят, `work.messageSeq` запоминает наибольший номер до удаления, как `deleteRoom`. Комната без писем
+   * ничего не меняет.
+   */
   deleteRoom(roomId: string): void;
-  /** Письма от сессии и к ней получают `deleted = true`, как `removeSession`. */
+  /** Письма от сессии и к ней получают `deleted = true`, как `removeSession`; непрочитанное самой сессии уходит. */
   flagDeleted(sessionId: string): void;
-  /** Эффект плана отменён. Здесь ничего не делает: `cancelledPlanLetter` смотрит в карту. */
+  /** Эффект плана отменён: письмо больше не непрочитанное у сессий (человек видит его по своему правилу). */
   effectCancelled(messageId: string): void;
-  /** Исполняет `fn`; бросила — письма и отметки, сделанные внутри через `LetterTx`, пропадают, ошибка идёт дальше. */
+  /**
+   * Исполняет синхронную `fn`; бросила — письма и отметки, сделанные внутри через `LetterTx`, пропадают, ошибка идёт дальше.
+   * Асинхронную `fn` не принимает: откатить отложенную работу нечем.
+   */
   savepoint<T>(fn: () => T): T;
 }
 
 /**
  * Чтение писем для читателей карты, у которых нет транзакции (брифы, история комнаты, окна участия). Подходит и сам
- * `LetterTx`. Читатели берут это последним необязательным параметром: без него — письма карты (`mapLetterTx`), пока
- * письма живут в `map.messages`; задача 7 сделает параметр обязательным.
+ * `LetterTx`; вне транзакции — `storeLetterReads` над таблицами или `mapLetterTx` над картой с письмами.
  */
 export type LetterReads = Pick<LetterTx, 'query' | 'count'>;
 
-const letterSeq = (id: string): number => maxNumber([id], 'm-');
-
-/** Предел запроса — неотрицательное целое: иначе выборка без границы или с NaN стала бы тихим «ничего» или «всё». */
-function assertLimit(limit: number): void {
-  if (!Number.isInteger(limit) || limit < 0) throw new RangeError(`letter query limit must be a non-negative integer, got ${limit}`);
-}
-
-/** Условие выборки одним предикатом; `sinceAt` разбирается один раз. */
+/** Условие выборки одним предикатом над письмом из памяти; `sinceAt` разбирается один раз. */
 function matcher(q: Omit<LetterQuery, 'limit'>): (message: Message) => boolean {
   const ids = q.ids === undefined ? undefined : new Set(q.ids);
-  const since = q.sinceAt === undefined ? undefined : Date.parse(q.sinceAt);
-  // Нечитаемый момент не должен молча выключать условие: лимиты расхода считают письма «за час» по этому полю.
-  if (since !== undefined && Number.isNaN(since)) throw new RangeError(`letter query sinceAt is not a date: ${q.sinceAt}`);
+  const since = q.sinceAt === undefined ? undefined : Date.parse(sinceBound(q.sinceAt));
   return (message) =>
     (q.roomId === undefined || message.roomId === q.roomId) &&
     (q.from === undefined || message.from === q.from) &&
+    (q.agentsOnly !== true || !NON_AGENT_SENDERS.includes(message.from)) &&
+    (q.involving === undefined || q.involving.includes(message.from) || message.to.some((id) => q.involving?.includes(id))) &&
     (q.kind === undefined || message.kind === q.kind) &&
     (since === undefined || Date.parse(message.at) > since) &&
     (ids === undefined || ids.has(message.id)) &&
@@ -107,7 +128,7 @@ function matcher(q: Omit<LetterQuery, 'limit'>): (message: Message) => boolean {
     (q.afterSeq === undefined || letterSeq(message.id) > q.afterSeq);
 }
 
-function selectLetters(map: Readonly<WorkMap>, q: LetterQuery): Message[] {
+function selectLetters(map: Pick<WindowWorkMap, 'messages'>, q: LetterQuery): Message[] {
   assertLimit(q.limit);
   const matches = matcher(q);
   const list = map.messages;
@@ -124,31 +145,28 @@ function selectLetters(map: Readonly<WorkMap>, q: LetterQuery): Message[] {
   return found;
 }
 
-function countLetters(map: Readonly<WorkMap>, q: Omit<LetterQuery, 'limit'>): number {
+function countLetters(map: Pick<WindowWorkMap, 'messages'>, q: Omit<LetterQuery, 'limit'>): number {
   const matches = matcher(q);
   let total = 0;
   for (const message of map.messages) if (matches(message)) total += 1;
   return total;
 }
 
-const unreadOf = (map: Readonly<WorkMap>, reader: string): Message[] =>
+const unreadOf = (map: WindowWorkMap, reader: string): Message[] =>
   reader === HUMAN ? map.messages.filter(unreadForHuman) : unreadFor(map, reader);
 
-/** Ключ канала в итогах: комната — её id, прямые письма — пустая строка. */
-const channelOf = (message: Message): string => message.roomId ?? '';
-
-function unreadCountOf(map: Readonly<WorkMap>, reader: string): { total: number; byRoom: Record<string, number> } {
+function unreadCountOf(map: WindowWorkMap, reader: string): { total: number; byRoom: Record<string, number> } {
   const byRoom: Record<string, number> = {};
   const unread = unreadOf(map, reader);
-  for (const message of unread) byRoom[channelOf(message)] = (byRoom[channelOf(message)] ?? 0) + 1;
+  for (const message of unread) byRoom[channelKey(message.roomId)] = (byRoom[channelKey(message.roomId)] ?? 0) + 1;
   return { total: unread.length, byRoom };
 }
 
-function channelStatsOf(map: Readonly<WorkMap>): Record<string, { total: number; latestId: string | null }> {
+function channelStatsOf(map: Pick<WindowWorkMap, 'messages'>): Record<string, { total: number; latestId: string | null }> {
   const stats: Record<string, { total: number; latestId: string | null }> = {};
   const latest: Record<string, number> = {};
   for (const message of map.messages) {
-    const channel = channelOf(message);
+    const channel = channelKey(message.roomId);
     const entry = (stats[channel] ??= { total: 0, latestId: null });
     entry.total += 1;
     // Новейшее — с наибольшим номером, при равных последнее в карте: так его назовёт индекс таблицы по (канал, номер).
@@ -162,17 +180,15 @@ function channelStatsOf(map: Readonly<WorkMap>): Record<string, { total: number;
 }
 
 /**
- * `LetterTx` над черновиком карты `map` (ссылку на `map.messages` не держим: `deleteRoom` подменяет массив) и признак
- * «письма были записаны» для `updateMap`: когда письма лягут в свои таблицы, диф строк карты их не увидит и пустую запись
- * от непустой отличит только он. Признак поднимают методы, которые что-то изменили.
+ * `LetterTx` над картой с письмами в памяти `map` (ссылку на `map.messages` не держим: `deleteRoom` подменяет массив) и
+ * признак «письма были записаны». Для тестов правил комнат и планов и для читателей без базы: письма в базе кладёт
+ * `createTableLetterTx`. Непрочитанное считается по всем письмам карты, поэтому `joined`, `left`, `archived` и
+ * `effectCancelled` здесь ничего не делают.
  *
  * `savepoint` ведёт журнал отмен только своих методов: объекты, которые держит вызывающий, остаются теми же, а
  * вложенный `savepoint` при успехе отдаёт свой журнал внешнему.
- *
- * Экспортируется из ядра: хост гоняет на копии карты пробный расчёт доставки планов (`rooms/plan-effects.ts`), а тесты —
- * правила комнат и планов над картой без транзакции; читатели без транзакции берут его по умолчанию (`LetterReads`).
  */
-export function mapLetterTx(map: WorkMap): { letters: LetterTx; wrote: () => boolean } {
+export function mapLetterTx(map: WindowWorkMap): { letters: LetterTx; wrote: () => boolean } {
   let wrote = false;
   const logs: Array<Array<() => void>> = [];
   const record = (undo: () => void): void => {
@@ -181,6 +197,7 @@ export function mapLetterTx(map: WorkMap): { letters: LetterTx; wrote: () => boo
 
   const letters: LetterTx = {
     add(letter) {
+      assertLetter(letter);
       const message = addMessage(
         map,
         {
@@ -245,6 +262,8 @@ export function mapLetterTx(map: WorkMap): { letters: LetterTx; wrote: () => boo
     deleteRoom(roomId) {
       const before = map.messages;
       const seqBefore = map.work.messageSeq;
+      // Комната без писем номер не двигает и ничего не пишет.
+      if (!before.some((message) => message.roomId === roomId)) return;
       map.work.messageSeq = Math.max(map.work.messageSeq ?? 0, maxNumber(map.messages.map((message) => message.id), 'm-'));
       map.messages = map.messages.filter((message) => message.roomId !== roomId);
       wrote = true;
@@ -307,30 +326,31 @@ export function writeLetters<T>(
   return result as T;
 }
 
-/** Выборка писем вне транзакции — копии, не объекты кэша. */
+/** Выборка писем вне транзакции. Работы нет — `WorkNotFoundError`. */
 export function readLetters(projectPath: string, workId: string, q: LetterQuery): Message[] {
-  return structuredClone(selectLetters(readMapView(projectPath, workId), q));
+  return selectRows(letterDb(projectPath, workId), projectPath, workId, q);
 }
 
 export function letterById(projectPath: string, workId: string, id: string): Message | undefined {
-  const message = readMapView(projectPath, workId).messages.find((candidate) => candidate.id === id);
-  return message === undefined ? undefined : structuredClone(message);
+  return letterByIdRow(letterDb(projectPath, workId), projectPath, workId, id);
 }
 
 /**
  * Параметры чтения непрочитанного вне транзакции. `map` — карта вызывающего (снимок хоста, который он и так держит):
- * живые правила (`recipientsOf`, `cancelledPlanLetter`, `unreadForHuman`) идут по ней, и карта из базы не загружается.
- * Пересчёт будильника и метрик зовёт это на каждую сессию каждой работы при каждом изменении, а кэш карт — всего
- * `MAP_CACHE_LIMIT` записей: без `map` при большем числе работ каждый проход загружал бы карты заново (спека хранилища 6.2).
- * Пока письма лежат в карте, непрочитанное считается по письмам этой карты; таблицы дадут только кандидатов, а правила
- * по-прежнему применятся к ней.
+ * живые правила (`recipientsOf`, `cancelledPlanLetter`) идут по ней, а из базы читаются только кандидаты читателя и их письма;
+ * карта работы не загружается. Пересчёт будильника и метрик зовёт это на каждую сессию каждой работы при каждом изменении, а
+ * кэш карт — всего `MAP_CACHE_LIMIT` записей: без `map` при большем числе работ каждый проход загружал бы карты заново
+ * (спека хранилища 6.2). Работы в базе нет — кандидатов нет, ответ пуст.
  */
 export interface UnreadOptions {
   map?: Readonly<WorkMap>;
 }
 
 export function unreadLetters(projectPath: string, workId: string, reader: string, options: UnreadOptions = {}): Message[] {
-  return structuredClone(unreadOf(options.map ?? readMapView(projectPath, workId), reader));
+  const db = options.map === undefined ? letterDb(projectPath, workId) : storeDb();
+  if (reader === HUMAN) return unreadOfHuman(db, projectPath, workId);
+  const map = options.map ?? readMapView(projectPath, workId);
+  return unreadOfSession(db, projectPath, workId, reader, map, (id) => letterByIdRow(db, projectPath, workId, id));
 }
 
 /** Число непрочитанного читателем: всего и по каналам; ключ `''` — прямые письма. */
@@ -340,25 +360,29 @@ export function unreadCount(
   reader: string,
   options: UnreadOptions = {},
 ): { total: number; byRoom: Record<string, number> } {
-  return unreadCountOf(options.map ?? readMapView(projectPath, workId), reader);
+  const db = options.map === undefined ? letterDb(projectPath, workId) : storeDb();
+  if (reader === HUMAN) return humanUnreadTotals(db, projectPath, workId);
+  const map = options.map ?? readMapView(projectPath, workId);
+  return sessionUnreadTotals(db, projectPath, workId, reader, map, (id) => letterByIdRow(db, projectPath, workId, id));
 }
 
 /** Письма по каналам: сколько и номер новейшего; ключ `''` — прямые письма. Каналов без писем нет. */
 export function channelStats(projectPath: string, workId: string): Record<string, { total: number; latestId: string | null }> {
-  return channelStatsOf(readMapView(projectPath, workId));
+  const db = letterDb(projectPath, workId);
+  return readTransaction(db, () => channelTotals(db, projectPath, workId));
 }
 
 /** Сколько писем подходит под условия вне транзакции (итог страницы, `LetterReader.count`). */
 export function letterCount(projectPath: string, workId: string, q: Omit<LetterQuery, 'limit'>): number {
-  return countLetters(readMapView(projectPath, workId), q);
+  return countRows(letterDb(projectPath, workId), projectPath, workId, q);
 }
 
 /**
- * Читатель писем для страниц и снимка (`LetterReader`, спека хранилища 6.2, 6.7) над картой `map`: то, что берут
- * `messagePage`, `mapTopology` и `compactWorkMap`, когда читателя им не передали. Возвращает живые объекты карты;
- * менять их нельзя. Ключ канала `''` — прямые письма.
+ * Читатель писем для страниц и снимка (`LetterReader`, спека хранилища 6.2, 6.7) над картой с письмами `map`: то, что
+ * берут `messagePage`, `mapTopology` и `compactWorkMap`, когда письма в памяти (чистые тесты, окно). Возвращает живые объекты
+ * карты; менять их нельзя. Ключ канала `''` — прямые письма.
  */
-export function mapLetterReader(map: Readonly<WorkMap>): LetterReader {
+export function mapLetterReader(map: WindowWorkMap): LetterReader {
   return {
     page: (q) => selectLetters(map, q),
     count: (q) => countLetters(map, q),
@@ -370,16 +394,72 @@ export function mapLetterReader(map: Readonly<WorkMap>): LetterReader {
   };
 }
 
-/** Читатель писем работы вне транзакции: то же, что `mapLetterReader`, но над функциями чтения этого файла (копии писем). */
-export function storeLetterReader(projectPath: string, workId: string): LetterReader {
+/**
+ * Читатель писем работы вне транзакции: то же, что `mapLetterReader`, но над таблицами. `options.map` — карта вызывающего
+ * для живых правил непрочитанного сессий (снимок окна хоста): снимок писем не содержит, и сборка снимка не грузит карты из
+ * базы (`UnreadOptions`).
+ */
+export function storeLetterReader(projectPath: string, workId: string, options: UnreadOptions = {}): LetterReader {
   return {
     page: (q) => readLetters(projectPath, workId, q),
     count: (q) => letterCount(projectPath, workId, q),
     byIds: (ids) => readLetters(projectPath, workId, { ids, limit: ids.length }),
     tail: (roomId, n) => readLetters(projectPath, workId, { roomId, limit: n, newestFirst: true }).reverse(),
-    humanUnread: (limit) => (limit <= 0 ? [] : unreadLetters(projectPath, workId, HUMAN).slice(-limit)),
-    unreadCount: (reader) => unreadCount(projectPath, workId, reader),
+    humanUnread: (limit) => humanUnreadTail(letterDb(projectPath, workId), projectPath, workId, limit),
+    unreadCount: (reader) => unreadCount(projectPath, workId, reader, options),
     channelStats: () => channelStats(projectPath, workId),
+  };
+}
+
+/** Чтение писем работы для читателей карты (`LetterReads`): брифы, история комнаты, окна участия. */
+export const storeLetterReads = (projectPath: string, workId: string): LetterReads => ({
+  query: (q) => readLetters(projectPath, workId, q),
+  count: (q) => letterCount(projectPath, workId, q),
+});
+
+/**
+ * `LetterTx` для пробного расчёта на копии карты `map`, ничего не пишущий в базу (хост проверяет, изменит ли доставка планов
+ * карту, не беря блокировку записи). Чтение — из таблиц работы вне транзакции; `add` отдаёт письмо со следующим номером, но
+ * не сохраняет его; отметки и прочее — пустые. Расчёт, зависящий от того, что записанное тут же прочитается, получит прежнюю
+ * картину базы.
+ */
+export function previewLetterTx(projectPath: string, workId: string, map: WorkMap): LetterTx {
+  // Номер следующего письма читается при первой записи: расчёт, который письма не пишет, базы не касается.
+  let top: number | undefined;
+  return {
+    add(letter) {
+      assertLetter(letter);
+      top ??= Math.max(
+        map.work.messageSeq ?? 0,
+        letterSeq(readLetters(projectPath, workId, { limit: 1, newestFirst: true })[0]?.id ?? ''),
+      );
+      top += 1;
+      return {
+        id: `m-${String(top).padStart(2, '0')}`,
+        roomId: letter.roomId ?? null,
+        from: letter.from,
+        to: [...letter.to],
+        at: letter.at ?? new Date().toISOString(),
+        text: letter.text,
+        kind: letter.kind,
+        readBy: { ...(letter.readBy ?? {}) },
+        ...(letter.replyTo === undefined ? {} : { replyTo: letter.replyTo }),
+        ...(letter.via === undefined ? {} : { via: letter.via }),
+      };
+    },
+    markRead: () => [],
+    byId: (id) => letterById(projectPath, workId, id),
+    query: (q) => readLetters(projectPath, workId, q),
+    count: (q) => letterCount(projectPath, workId, q),
+    unreadFor: (reader) => unreadLetters(projectPath, workId, reader, { map }),
+    joined() {},
+    left() {},
+    archived() {},
+    reopened() {},
+    deleteRoom() {},
+    flagDeleted() {},
+    effectCancelled() {},
+    savepoint: (fn) => fn(),
   };
 }
 

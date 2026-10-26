@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { MergeCheck, WorkEntry } from '@parley/core';
+import type { MergeCheck, WindowWorkEntry } from '@parley/core';
 import { HOST_ERROR_REASONS, refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
@@ -23,7 +23,7 @@ type Mode = 'none' | 'pending' | 'worktree' | 'project';
 /** Загрузка diff/mergeCheck или changes.project по сессии, всегда с patch: false; обновление по правилам 11.1, не чаще раза в 2 с. */
 export function useChanges(input: {
   bridge: ParleyBridge;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   sessionId: string | null;
   /** false — без mergeCheck: вкладке диффа (8.3) нужны файлы и сигналы обновления, а не проверка. По умолчанию true. */
   mergeCheck?: boolean;

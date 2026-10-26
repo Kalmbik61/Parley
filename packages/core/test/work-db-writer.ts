@@ -3,12 +3,14 @@
  * tsx: настоящий второй процесс со своим соединением к `parley.db`, а не эмуляция внутри vitest.
  *
  * Аргументы: <путь проекта> <work-id|"new-work"> <префикс|заголовок> <сколько сессий> [<момент старта, мс epoch>]
- * Момент старта нужен, чтобы писатели начали вместе и записи действительно чередовались.
+ * [<"letters">]. Момент старта нужен, чтобы писатели начали вместе и записи действительно чередовались. С "letters" вместо
+ * сессий пишутся письма (`writeLetters`, спека хранилища 6.2): номера писем выдаёт база под блокировкой записи.
  */
+import { writeLetters } from '../src/work/letter-store.js';
 import { addSession } from '../src/work/map.js';
 import { createWork, updateMap } from '../src/work/store.js';
 
-const [projectPath = '', workId = '', prefix = '', countRaw = '0', startRaw = '0'] =
+const [projectPath = '', workId = '', prefix = '', countRaw = '0', startRaw = '0', mode = 'sessions'] =
   process.argv.slice(2);
 const start = Number(startRaw);
 
@@ -20,6 +22,15 @@ while (Date.now() < start) {
 
 if (workId === 'new-work') {
   await createWork(projectPath, { title: prefix }, { lockTimeoutMs: 30_000 });
+} else if (mode === 'letters') {
+  for (let i = 0; i < Number(countRaw); i += 1) {
+    writeLetters(
+      projectPath,
+      workId,
+      (letters) => letters.add({ roomId: null, from: 's-01', to: ['s-02'], text: `${prefix}-${i}`, kind: 'note' }),
+      { lockTimeoutMs: 30_000 },
+    );
+  }
 } else {
   for (let i = 0; i < Number(countRaw); i += 1) {
     await updateMap(

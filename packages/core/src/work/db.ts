@@ -22,16 +22,16 @@ const { DatabaseSync: Database } = createRequire(import.meta.url)(
 ) as typeof import('node:sqlite');
 
 export const WORK_DB_FILE = 'parley.db';
-export const WORK_DB_SCHEMA_VERSION = 1;
+export const WORK_DB_SCHEMA_VERSION = 2;
 /** Сколько соединение ждёт чужую блокировку по умолчанию; запись на время транзакции ставит своё и возвращает это (спека хранилища 6.9). */
 export const BUSY_TIMEOUT_MS = 5000;
 
 /**
- * Схема версии 1 (спека хранилища 6.1). `works` — строка на работу: заголовок, статус и версия вынесены в колонки
+ * Основа схемы (спека хранилища 6.1). `works` — строка на работу: заголовок, статус и версия вынесены в колонки
  * для выборок, остальная карта лежит в `work_json`, а то, чего схема ещё не знает, — в `extra_json`.
  * `entries` — списки карты по одному элементу на строку; `ord` хранит порядок внутри `kind`.
  */
-const SCHEMA_V1 = `
+const SCHEMA_BASE = `
 CREATE TABLE works (
   project_path TEXT NOT NULL, id TEXT NOT NULL,
   title TEXT NOT NULL, status TEXT NOT NULL, updated_at TEXT NOT NULL,
@@ -45,6 +45,43 @@ CREATE TABLE entries (
   FOREIGN KEY (project_path, work_id) REFERENCES works(project_path, id) ON DELETE CASCADE);
 CREATE INDEX entries_order ON entries(project_path, work_id, kind, ord);
 `;
+
+/**
+ * Письма в своих таблицах (спека хранилища 6.2, план 4). `messages` — строка на письмо: `seq` — число из `m-NN`, `id` —
+ * номер как записан (`m-01`, `m-3795`), `recipients` — JSON `to`, `body` — JSON `{text, replyTo?, via?}`. `message_reads` —
+ * кто и когда прочитал (прежний `readBy`). `message_unread` — кандидаты в непрочитанное: надмножество, окончательно письмо
+ * отбирают живые правила (`recipientsOf`, `cancelledPlanLetter`, `isHumanUnread`) на маленьком наборе кандидатов.
+ * Индекс `message_unread_seq` — для внешнего ключа на `messages(…, seq)`: первичный ключ кандидатов начинается с читателя, и
+ * без индекса каскад каждого удалённого письма обходил бы всех кандидатов работы (замер: удаление комнаты из 20 000
+ * писем при 32 000 кандидатов — 48 с без индекса, 0,6 с с ним).
+ */
+const SCHEMA_LETTERS = `
+CREATE TABLE messages (
+  project_path TEXT NOT NULL, work_id TEXT NOT NULL,
+  seq INTEGER NOT NULL, id TEXT NOT NULL,
+  room_id TEXT, sender TEXT NOT NULL, recipients TEXT NOT NULL,
+  at TEXT NOT NULL, kind TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+  body TEXT NOT NULL,
+  PRIMARY KEY (project_path, work_id, seq),
+  FOREIGN KEY (project_path, work_id) REFERENCES works(project_path, id) ON DELETE CASCADE);
+CREATE UNIQUE INDEX messages_id ON messages(project_path, work_id, id);
+CREATE INDEX messages_channel ON messages(project_path, work_id, room_id, seq);
+CREATE INDEX messages_at ON messages(project_path, work_id, at);
+CREATE TABLE message_reads (
+  project_path TEXT NOT NULL, work_id TEXT NOT NULL, seq INTEGER NOT NULL,
+  reader TEXT NOT NULL, at TEXT NOT NULL,
+  PRIMARY KEY (project_path, work_id, seq, reader),
+  FOREIGN KEY (project_path, work_id, seq) REFERENCES messages(project_path, work_id, seq) ON DELETE CASCADE);
+CREATE TABLE message_unread (
+  project_path TEXT NOT NULL, work_id TEXT NOT NULL, reader TEXT NOT NULL,
+  seq INTEGER NOT NULL, room_id TEXT,
+  PRIMARY KEY (project_path, work_id, reader, seq),
+  FOREIGN KEY (project_path, work_id, seq) REFERENCES messages(project_path, work_id, seq) ON DELETE CASCADE);
+CREATE INDEX message_unread_seq ON message_unread(project_path, work_id, seq);
+`;
+
+/** Схема версии 2: основа и письма. Базу версии 1 (сборка плана 3, письма в `entries`) апгрейд задачи 8 поднимет до неё. */
+const SCHEMA_V2 = SCHEMA_BASE + SCHEMA_LETTERS;
 
 interface Opened {
   file: string;
@@ -106,8 +143,12 @@ function prepare(db: DatabaseSync): void {
 
   db.exec('BEGIN IMMEDIATE');
   try {
-    if (userVersion(db) < WORK_DB_SCHEMA_VERSION) {
-      db.exec(SCHEMA_V1);
+    const version = userVersion(db);
+    // Базу версии 1 (письма в `entries`) без апгрейда не открываем: молча создать письменные таблицы рядом с письмами в
+    // `entries` значило бы потерять переписку (спека хранилища 6.6, план 4, задача 8).
+    if (version === 1) throw new Error(`parley.db has schema 1; it needs the letters upgrade (schema ${WORK_DB_SCHEMA_VERSION})`);
+    if (version < WORK_DB_SCHEMA_VERSION) {
+      db.exec(SCHEMA_V2);
       db.exec(`PRAGMA user_version = ${WORK_DB_SCHEMA_VERSION}`);
     }
     db.exec('COMMIT');

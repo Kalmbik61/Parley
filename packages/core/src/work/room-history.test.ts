@@ -2,7 +2,8 @@ import * as fs from 'node:fs/promises';
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { addSession, addMessage } from './map.js';
+import { addSession } from './map.js';
+import { storeLetterReads } from './letter-store.js';
 import { addRoom } from './rooms.js';
 import { createWork, readMap, updateMap, sharedProjectPaths } from './store.js';
 import { HUMAN, SYSTEM } from './types.js';
@@ -32,21 +33,21 @@ beforeEach(async () => {
   project = path.join(root, 'project'); await mkdir(project); await mkdir(path.join(root, 'home'));
   previous = process.env.PARLEY_HOME; process.env.PARLEY_HOME = path.join(root, 'home');
   workId = (await createWork(project, { title: 'Work' })).work.id;
-  await updateMap(project, workId, map => {
+  await updateMap(project, workId, (map, letters) => {
     addSession(map, { provider: 'codex', label: 'Lead', task: 'Bounded', role: { source: 'builtin', name: 'reviewer' } });
     addRoom(map, { title: 'Room', creator: HUMAN, members: ['s-01'], lead: 's-01' });
-    addMessage(map, { from: 's-01', to: [], roomId: 'r-01', kind: 'question', text: 'Human-readable feed' });
-    addMessage(map, { from: SYSTEM, to: [], roomId: 'r-01', kind: 'note', text: 'Accepted or returned plan event' });
-    addMessage(map, { from: 's-01', to: [HUMAN], kind: 'note', text: 'Private solo letter' });
+    letters.add({ roomId: 'r-01', from: 's-01', to: [], kind: 'question', text: 'Human-readable feed' });
+    letters.add({ roomId: 'r-01', from: SYSTEM, to: [], kind: 'note', text: 'Accepted or returned plan event' });
+    letters.add({ roomId: null, from: 's-01', to: [HUMAN], kind: 'note', text: 'Private solo letter' });
   });
 });
 afterEach(async () => { if (previous === undefined) delete process.env.PARLEY_HOME; else process.env.PARLEY_HOME = previous; await rm(root, { recursive: true, force: true }); });
 const local = () => path.join(project, '.parley', 'history', `${workId}-r-01.md`);
 const shared = () => path.join(project, '.parley', 'history-shared', `${workId}-r-01.md`);
-const amend = () => updateMap(project, workId, map => { addMessage(map, { from: HUMAN, to: [], roomId: 'r-01', kind: 'note', text: 'Later human text' }); });
+const amend = () => updateMap(project, workId, (_map, letters) => { letters.add({ roomId: 'r-01', from: HUMAN, to: [], kind: 'note', text: 'Later human text' }); });
 describe('derived local history and explicitly owned shared snapshots', () => {
   it('renders room/system feed, roles and mode while excluding direct/provider transcripts', async () => {
-    const source = renderRoomHistory(await readMap(project, workId), 'r-01');
+    const source = renderRoomHistory(await readMap(project, workId), 'r-01', storeLetterReads(project, workId));
     expect(source).toContain('builtin:"reviewer"'); expect(source).toContain('mode: free');
     expect(source).toContain('Human-readable feed'); expect(source).toContain('Accepted or returned'); expect(source).not.toContain('Private solo');
     await rebuildRoomHistory(project, workId, 'r-01'); expect(await readFile(local(), 'utf8')).toBe(source);
@@ -62,7 +63,7 @@ describe('derived local history and explicitly owned shared snapshots', () => {
   });
   it('preserves a foreign shared file even when its bytes equal the generated history', async () => {
     const paths = await sharedProjectPaths(project); await mkdir(paths.historyShared);
-    const content = renderRoomHistory(await readMap(project, workId), 'r-01'); await writeFile(shared(), content);
+    const content = renderRoomHistory(await readMap(project, workId), 'r-01', storeLetterReads(project, workId)); await writeFile(shared(), content);
     await expect(shareRoomHistory(project, workId, 'r-01')).rejects.toMatchObject({ code: 'history-conflict' });
     await expect(unshareRoomHistory(project, workId, 'r-01')).rejects.toMatchObject({ code: 'history-conflict' });
     expect(await readFile(shared(), 'utf8')).toBe(content);
@@ -75,7 +76,7 @@ describe('derived local history and explicitly owned shared snapshots', () => {
     expect(await readFile(shared(), 'utf8')).toBe(original);
   });
   it('lost acknowledgement recovers only own linked inode, not a missing-to-identical foreign target', async () => {
-    const content = renderRoomHistory(await readMap(project, workId), 'r-01');
+    const content = renderRoomHistory(await readMap(project, workId), 'r-01', storeLetterReads(project, workId));
     await expect(shareRoomHistory(project, workId, 'r-01', { beforeCommit: async file => { if (file === shared()) { await writeFile(file, content); } } })).rejects.toMatchObject({ code: 'history-conflict' });
     await expect(shareRoomHistory(project, workId, 'r-01')).rejects.toMatchObject({ code: 'history-conflict' });
     expect(await readFile(shared(), 'utf8')).toBe(content);
@@ -103,8 +104,8 @@ describe('derived local history and explicitly owned shared snapshots', () => {
 });
 
 it('legacy feed scalar/control units are explicitly represented while valid emoji, BOM and EOL are retained', async () => {
-  await updateMap(project, workId, map => { map.messages[0]!.text = '\uFEFFOriginal\r\n😀\nBad \ud800\0\u0001'; });
-  const source = renderRoomHistory(await readMap(project, workId), 'r-01');
+  await updateMap(project, workId, (_map, letters) => { letters.add({ roomId: 'r-01', from: 's-01', to: [], kind: 'note', text: '\uFEFFOriginal\r\n😀\nBad \ud800\0\u0001' }); });
+  const source = renderRoomHistory(await readMap(project, workId), 'r-01', storeLetterReads(project, workId));
   expect(source).toContain('generated representation'); expect(source).toContain('\uFEFFOriginal\r\n😀');
   expect(source).toContain('\\ud800'); expect(source).toContain('\\u0000'); expect(source).not.toContain('�');
   await rebuildRoomHistory(project, workId, 'r-01'); expect(await readFile(local(), 'utf8')).toBe(source);

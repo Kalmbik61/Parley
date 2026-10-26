@@ -8,14 +8,14 @@
  * Лежит в `main/` по той же причине, что `agent-guide-sync.test.ts`: только процесс main тянет `@parley/core` значением.
  */
 
-import { addRoom, addSession, HUMAN, mapLetterTx, resolveProposal, setProposal, type WorkMap } from '@parley/core';
+import { addRoom, addSession, HUMAN, mapLetterTx, resolveProposal, setProposal, type WindowWorkMap } from '@parley/core';
 import { describe, expect, it } from 'vitest';
 import { roomDecisionReturned } from '../renderer/attention/derive.js';
 
-const lt = (map: WorkMap) => mapLetterTx(map).letters;
+const lt = (map: WindowWorkMap) => mapLetterTx(map).letters;
 
-function roomOfThree(): WorkMap {
-  const map: WorkMap = {
+function roomOfThree(): WindowWorkMap {
+  const map: WindowWorkMap = {
     schemaVersion: 2,
     work: { id: 'w-0001', title: 'W', goal: '', status: 'active', createdAt: '2026-09-30T10:00:00.000Z', updatedAt: '2026-09-30T10:00:00.000Z' },
     sessions: [],

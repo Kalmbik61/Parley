@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { addMessage, addRoom, addSession, createWork, setWorkStatus, updateMap } from '@parley/core';
+import { addRoom, addSession, createWork, letterCount, readStoredMap, setWorkStatus, updateMap } from '@parley/core';
 import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, MAX_LINE_BYTES } from '@parley/protocol';
 import type { EventData, EventName, WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
@@ -85,11 +85,11 @@ afterEach(async () => {
 /** Работа с комнатой и перепиской: `count` писем по `size` знаков. */
 async function seedWork(title: string, count: number, size: number, status?: 'archived'): Promise<string> {
   const map = await createWork(project, { title, goal: 'цель' });
-  await updateMap(project, map.work.id, (current) => {
+  await updateMap(project, map.work.id, (current, letters) => {
     addSession(current, { provider: 'claude', label: 'план', task: 'x' });
     addSession(current, { provider: 'claude', label: 'код', task: 'y', parent: null }).parent = 's-01';
     addRoom(current, { title: 'Комната', creator: 'human', members: ['s-01', 's-02'], lead: 's-01' });
-    for (let i = 0; i < count; i += 1) addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: `${i}:`.padEnd(size, 'я') });
+    for (let i = 0; i < count; i += 1) letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: `${i}:`.padEnd(size, 'я') });
   });
   if (status !== undefined) await setWorkStatus(project, map.work.id, status);
   return map.work.id;
@@ -114,9 +114,10 @@ describe('снимки для окна (P35)', () => {
     expect(compactMap?.compact?.messages).toMatchObject({ total: 400, latestId: 'm-400' });
     expect(legacy?.entries[0]?.map.messages).toHaveLength(400);
     expect(legacy?.entries[0]?.map.compact).toBeUndefined();
-    // Сервисам хоста по-прежнему отдаётся полная карта.
-    expect(s.snapshot().entries[0]?.map.messages).toHaveLength(400);
-    expect(s.entry(project, workId)?.map.messages).toHaveLength(400);
+    // Сервисам хоста отдаётся хранимая карта без писем: они в своих таблицах (спека хранилища 6.2).
+    expect(s.snapshot().entries[0]?.map).not.toHaveProperty('messages');
+    expect(s.entry(project, workId)?.map).not.toHaveProperty('messages');
+    expect(letterCount(project, workId, {})).toBe(400);
 
     const forCompact = compactClient.sent.filter((message) => message.event === 'works.changed').at(-1)?.data as WorksSnapshot;
     const forLegacy = legacyClient.sent.filter((message) => message.event === 'works.changed').at(-1)?.data as WorksSnapshot;
@@ -132,8 +133,8 @@ describe('снимки для окна (P35)', () => {
     const first = s.windowSnapshot()?.revision as number;
     // Наблюдатель файлов (FSEvents) оживает не мгновенно: запись сразу после старта он мог бы не заметить.
     await new Promise((resolve) => setTimeout(resolve, 300));
-    await updateMap(project, 'w-0001', (current) => {
-      addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: 'ещё' });
+    await updateMap(project, 'w-0001', (current, letters) => {
+      letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: 'ещё' });
     });
     // Снимок обновляется и от служебных записей (аренда хоста), поэтому ждём именно новое письмо.
     await vi.waitFor(() => expect(s.windowSnapshot()?.entries[0]?.map.compact?.messages.latestId).toBe('m-04'), { timeout: 10_000, interval: 10 });
@@ -151,7 +152,7 @@ describe('снимки для окна (P35)', () => {
     const legacyClient = fakeClient([]);
     const s = service();
     await s.start();
-    expect(bytes(s.snapshot())).toBeGreaterThan(MAX_LINE_BYTES);
+    expect(bytes(readStoredMap(project, 'w-0001'))).toBeGreaterThan(MAX_LINE_BYTES);
     expect(s.legacySnapshot()).toBeNull();
     const window = s.windowSnapshot() as WorksSnapshot;
     expect(bytes(window)).toBeLessThan(2 * 1024 * 1024);
@@ -166,14 +167,14 @@ describe('снимки для окна (P35)', () => {
 
   it('воспроизведение 2 (2 100 решений по 4 000 знаков): компактный снимок в пределах бюджета', async () => {
     const map = await createWork(project, { title: 'Решения', goal: '' });
-    await updateMap(project, map.work.id, (current) => {
+    await updateMap(project, map.work.id, (current, letters) => {
       addSession(current, { provider: 'claude', label: 'план', task: 'x' });
       addRoom(current, { title: 'Комната', creator: 'human', members: ['s-01'], lead: 's-01' });
-      for (let i = 0; i < 2100; i += 1) addMessage(current, { from: 's-01', to: [], roomId: 'r-01', kind: 'decision', text: `${i}:`.padEnd(4000, 'я') });
+      for (let i = 0; i < 2100; i += 1) letters.add({ from: 's-01', to: [], roomId: 'r-01', kind: 'decision', text: `${i}:`.padEnd(4000, 'я') });
     });
     const s = service();
     await s.start();
-    expect(bytes(s.snapshot())).toBeGreaterThan(MAX_LINE_BYTES);
+    expect(bytes(readStoredMap(project, map.work.id))).toBeGreaterThan(MAX_LINE_BYTES);
     expect(bytes(s.windowSnapshot())).toBeLessThan(2 * 1024 * 1024);
   });
 
@@ -190,14 +191,15 @@ describe('снимки для окна (P35)', () => {
     expect(archived?.compact?.unread.rooms['r-01']).toBe(2500);
     for (const entry of window.entries) expect(entry.map.compact?.messages.total).toBe(2500);
     expect(bytes(window)).toBeLessThan(4 * 1024 * 1024);
-    expect(bytes(s.snapshot())).toBeGreaterThan(MAX_LINE_BYTES);
+    const whole = ['w-0001', 'w-0002', 'w-0003', 'w-0004', 'w-0005'].reduce((sum, id) => sum + bytes(readStoredMap(project, id)), 0);
+    expect(whole).toBeGreaterThan(MAX_LINE_BYTES);
   });
 
   it('полный снимок чуть ниже предела старому окну отдаётся как есть', async () => {
     await seedWork('А', 50, 200);
     const s = service();
     await s.start();
-    expect(bytes(s.snapshot())).toBeLessThan(LEGACY_SNAPSHOT_MAX_BYTES);
+    expect(bytes(readStoredMap(project, 'w-0001'))).toBeLessThan(LEGACY_SNAPSHOT_MAX_BYTES);
     expect(s.legacySnapshot()?.entries[0]?.map.messages).toHaveLength(50);
   });
 

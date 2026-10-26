@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import type { BrowserTarget } from '../../../shared/layout-types.js';
 import { S } from '../../../shared/strings.js';
@@ -26,7 +26,7 @@ export interface PageContextInput {
   bridge: ParleyBridge;
   workKey: string;
   tabId: string;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   /** `TabSpec.target` вкладки: нет поля — умолчание. */
   stored: BrowserTarget | undefined;
   /**

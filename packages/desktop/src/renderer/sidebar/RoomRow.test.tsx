@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { Message, Proposal, Room, WorkEntry, WorkSession } from '@parley/core';
+import type { Message, Proposal, Room, WindowWorkEntry, WorkSession } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { LayoutNode, TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
@@ -47,7 +47,7 @@ const message = (id: string, at: string, patch: Partial<Message> = {}): Message 
  * Строка комнаты из настоящих `cardRows` и `archivedRows`: тесты берут ту же форму данных, что даёт карточка. Без
  * `roomId` — первая из основных строк (архивные идут после них).
  */
-function roomRowOf(entry: WorkEntry, showClosed = false, roomId?: string): CardRoomRow {
+function roomRowOf(entry: WindowWorkEntry, showClosed = false, roomId?: string): CardRoomRow {
   const found = [...cardRows(entry.map, showClosed), ...archivedRows(entry.map, showClosed)].find((row): row is CardRoomRow => row.kind === 'room' && (roomId === undefined || row.room.id === roomId));
   if (found === undefined) throw new Error('строки комнаты нет');
   return found;
@@ -61,7 +61,7 @@ interface Options extends Partial<Omit<RoomRowProps, 'row'>> {
   onParentClick?: () => void;
 }
 
-function renderRow(entry: WorkEntry, options: Options = {}) {
+function renderRow(entry: WindowWorkEntry, options: Options = {}) {
   const { showClosed, roomId, onParentClick, ...props } = options;
   return render(
     <div onClick={onParentClick}>
@@ -118,7 +118,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 /** Комната из четырёх сессий: S01 ведёт, S02 ждёт тебя, S03 не просмотрена, S04 не запущена. */
-const fourAgents = (roomPatch: Partial<Room> = {}, extra: { messages?: Message[]; sessions?: WorkSession[] } = {}): WorkEntry =>
+const fourAgents = (roomPatch: Partial<Room> = {}, extra: { messages?: Message[]; sessions?: WorkSession[] } = {}): WindowWorkEntry =>
   makeWork(WORK, {
     projectPath: PROJECT,
     sessions: extra.sessions ?? sessions('s-01', 's-02', 's-03', 's-04'),
@@ -130,7 +130,7 @@ const fourAgents = (roomPatch: Partial<Room> = {}, extra: { messages?: Message[]
  * Старая карта (решение 4): s-02 числится в двух комнатах — в ранней r-01 и в поздней r-02, — а сайдбар ставит её в
  * самую раннюю; у поздней «своя» только s-03.
  */
-const oldMapTwoRooms = (): WorkEntry =>
+const oldMapTwoRooms = (): WindowWorkEntry =>
   makeWork(WORK, {
     projectPath: PROJECT,
     sessions: sessions('s-01', 's-02', 's-03'),
@@ -796,7 +796,7 @@ describe('RoomRow — меню строки: Rename и Make lead участни�
 describe('RoomRow — архивная комната (5.1)', () => {
   const ARCHIVED_AT = '2026-10-08T12:00:00.000Z';
   const sleeping = (...ids: string[]): WorkSession[] => ids.map((id) => makeSession(id, `${id} label`, { lifecycle: 'sleeping' }));
-  const archivedEntry = (): WorkEntry => fourAgents({ archivedAt: ARCHIVED_AT }, { sessions: sleeping('s-01', 's-02', 's-03', 's-04') });
+  const archivedEntry = (): WindowWorkEntry => fourAgents({ archivedAt: ARCHIVED_AT }, { sessions: sleeping('s-01', 's-02', 's-03', 's-04') });
 
   beforeEach(() => {
     useHostStore.setState({

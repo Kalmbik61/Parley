@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { refKey, type LiveTask } from '@parley/protocol';
 import type { TabSpec, WorkLayout } from '../../../shared/layout-types.js';
 import { EMPTY_HISTORY } from '../history.js';
@@ -35,7 +35,7 @@ const PROJECT = '/tmp/proj';
 const KEY = `${PROJECT} w-01`;
 const REF = (sessionId: string) => ({ projectPath: PROJECT, workId: 'w-01', sessionId });
 
-const entry: WorkEntry = makeWork('w-01', {
+const entry: WindowWorkEntry = makeWork('w-01', {
   projectPath: PROJECT,
   title: 'Payments',
   sessions: [makeSession('s-01', 'architect'), makeSession('s-02', 'backend')],
@@ -105,7 +105,7 @@ describe('RoomBody — переход из ленты участников', () 
   });
 
   it('участника уже нет в карте работы — тост «цели нет», вкладка не открывается', () => {
-    const gone: WorkEntry = makeWork('w-01', { projectPath: PROJECT, sessions: [makeSession('s-02', 'backend')], rooms: entry.map.rooms });
+    const gone: WindowWorkEntry = makeWork('w-01', { projectPath: PROJECT, sessions: [makeSession('s-02', 'backend')], rooms: entry.map.rooms });
     useWorksStore.setState({ entries: [gone] });
     renderBody();
     fireEvent.click(within(participant('s-01')).getByTestId('agents-badge'));

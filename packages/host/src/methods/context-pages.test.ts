@@ -72,18 +72,18 @@ async function connect(home: string, token: string, features?: string[]): Promis
 /** Работа с комнатой и перепиской. */
 async function seed(dir: string, count: number, size: number, extra: Partial<Parameters<typeof addMessage>[1]> = {}): Promise<string> {
   const map = await createWork(dir, { title: 'Работа', goal: 'Цель работы' });
-  await updateMap(dir, map.work.id, (current) => {
+  await updateMap(dir, map.work.id, (current, letters) => {
     addSession(current, { provider: 'claude', label: 'план', task: 'x' });
     addSession(current, { provider: 'claude', label: 'код', task: 'y', parent: null }).parent = 's-01';
     addRoom(current, { title: 'Комната', creator: 'human', members: ['s-01', 's-02'], lead: 's-01' });
-    for (let i = 0; i < count; i += 1) addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: `${i}:`.padEnd(size, 'я'), ...extra });
+    for (let i = 0; i < count; i += 1) letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: `${i}:`.padEnd(size, 'я'), ...extra });
   });
   return map.work.id;
 }
 
 const append = async (dir: string, workId: string, count: number): Promise<void> => {
-  await updateMap(dir, workId, (current) => {
-    for (let i = 0; i < count; i += 1) addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: `новое ${i}` });
+  await updateMap(dir, workId, (current, letters) => {
+    for (let i = 0; i < count; i += 1) letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: `новое ${i}` });
   });
 };
 
@@ -176,7 +176,7 @@ describe('context.messages', () => {
   it('прямые письма (roomId null), неизвестная работа и комната, кривой курсор — понятные отказы', async () => {
     const { home, token, dir, prepared: workId } = await bootWith(async (dir) => {
       const id = await seed(dir, 3, 20);
-      await updateMap(dir, id, (current) => { addMessage(current, { from: 's-01', to: ['s-02'], text: 'прямое' }); });
+      await updateMap(dir, id, (current, letters) => { letters.add({ roomId: null, kind: 'note', from: 's-01', to: ['s-02'], text: 'прямое' }); });
       return id;
     });
     const { client } = await connect(home, token, [COMPACT_WORKS_FEATURE]);
@@ -194,7 +194,7 @@ describe('context.messages', () => {
     const long = 'x'.repeat(200_000);
     const { home, token, dir, prepared: workId } = await bootWith(async (dir) => {
       const id = await seed(dir, 0, 0);
-      await updateMap(dir, id, (current) => { addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: long }); });
+      await updateMap(dir, id, (current, letters) => { letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: long }); });
       return id;
     });
     const { client } = await connect(home, token, [COMPACT_WORKS_FEATURE]);

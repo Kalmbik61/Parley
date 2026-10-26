@@ -75,7 +75,7 @@ import { addMemberByLead, addRoom, canReadRoom, isMember, isRoomArchived, joinNo
 import { reportedStatus } from '../work/session-state.js';
 import { stuckHint, stuckWarning } from '../work/stuck.js';
 import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, workVersionKey } from '../work/store.js';
-import { participantLabel, sessionMention, agentLetterVisible } from '../work/thread.js';
+import { participantLabel, sessionMention, agentLetterAudience, agentLetterVisible } from '../work/thread.js';
 import {
   HUMAN,
   MESSAGE_KINDS,
@@ -705,7 +705,7 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
       return messagePage(map, {
         roomId: roomId ?? null,
         ...(kind === undefined ? {} : { kind: kind as Message['kind'] }),
-        ...(filter === undefined ? {} : { filter }),
+        ...(filter === undefined ? {} : { filter, involving: agentLetterAudience(map, caller) }),
         cursor: parseCursor(cursorRaw),
         maxBytes,
         view: (message) => messageView(message, map),

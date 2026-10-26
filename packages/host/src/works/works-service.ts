@@ -15,20 +15,23 @@ import {
   compactWorkMap,
   gitBranch,
   isDatabaseBusy,
+  letterCount,
   mapLetterReader,
   MapLockTimeoutError,
   processStartedAt,
+  readLetters,
   readMap,
   readWorks,
   readWorksIndex,
   reconcileMap,
   removeHostLease,
+  storeLetterReader,
   watchWorks,
   WorkNotFoundError,
   workVersion,
   writeHostLease,
 } from '@parley/core';
-import type { HostLease, WorkEntry, WorksWatcher } from '@parley/core';
+import type { HostLease, WindowWorkEntry, WindowWorkMap, WorkEntry, WorksWatcher } from '@parley/core';
 import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES } from '@parley/protocol';
 import type { WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
@@ -44,10 +47,20 @@ export interface WorksServiceOptions {
   windowCounters?: WindowCounters;
 }
 
+/**
+ * Снимок работ для сервисов хоста: карты хранимые, без писем (спека хранилища 6.2) — письма читаются из базы через API
+ * писем. В кадр к клиенту он не идёт: окно получает `WorksSnapshot` с письмами (`windowSnapshot`, `legacySnapshot`).
+ */
+export interface WorksView {
+  entries: WorkEntry[];
+  branches: Record<string, string | null>;
+  revision?: number;
+}
+
 export interface WorksService {
   start(): Promise<void>;
-  /** Полный снимок для сервисов хоста: карты как на диске. В кадр к клиенту он не идёт — для этого `windowSnapshot`. */
-  snapshot(): WorksSnapshot;
+  /** Снимок для сервисов хоста: карты как в базе, без писем. В кадр к клиенту он не идёт — для этого `windowSnapshot`. */
+  snapshot(): WorksView;
   /**
    * Снимок для окна с `compact-works` (P35): письма хвостом, длинные тексты сокращены, итоги и счётчики в
    * `map.compact`. `null` — даже он не влезает в кадр; номер `revision` растёт на каждую рассылку.
@@ -58,7 +71,7 @@ export interface WorksService {
   entry(projectPath: string, workId: string): WorkEntry | undefined;
   /** Первое чтение этой работы хостом уже было: autoLaunch берёт только новое (1.7). */
   firstReadDone(projectPath: string, workId: string): boolean;
-  onChange(listener: (snapshot: WorksSnapshot, previous: WorksSnapshot) => void): () => void;
+  onChange(listener: (snapshot: WorksView, previous: WorksView) => void): () => void;
   stop(): Promise<void>;
 }
 
@@ -76,6 +89,11 @@ const WINDOW_MESSAGES_PER_WORK_BYTES = 1024 * 1024;
 const WINDOW_MESSAGES_MIN_BYTES = 64 * 1024;
 /** Потолок снимка для окна целиком: кадр ограничен 8 МиБ, остальное — запас на события и дописывание. */
 const WINDOW_SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024;
+/**
+ * Сколько писем у всех работ вместе можно читать для прежнего окна: столько в потолок кадра (`LEGACY_SNAPSHOT_MAX_BYTES`)
+ * заведомо не влезет — потолок делится на наименьшее письмо в JSON, — и читать их ради отказа незачем.
+ */
+const LEGACY_MAX_LETTERS = 40_000;
 /** Тексты в запасном (сжатом) снимке: хвост писем не берётся вовсе, а длинные поля короче. */
 const WINDOW_FALLBACK_TEXT_BYTES = 4 * 1024;
 
@@ -102,7 +120,7 @@ export function createWorksService(
   const entries = new Map<string, WorkEntry>();
   const branches = new Map<string, string | null>();
   let watcher: WorksWatcher | undefined;
-  const listeners = new Set<(next: WorksSnapshot, previous: WorksSnapshot) => void>();
+  const listeners = new Set<(next: WorksView, previous: WorksView) => void>();
   const leased = new Set<string>();
   const readAlready = new Set<string>();
   const notifiedCorrupt = new Set<string>();
@@ -133,15 +151,15 @@ export function createWorksService(
   const upgradeNotified = new Set<string>();
   let oversizeNotified = false;
 
-  const buildSnapshot = (): WorksSnapshot => ({
+  const buildSnapshot = (): WorksView => ({
     entries: Array.from(entries.values()),
     branches: Object.fromEntries(branches),
   });
 
   /**
    * Сжатая карта одной работы для окна и её размер в кадре. Берётся из `windowParts`, пока не сменилась версия карты
-   * (`WorkEntry.version`: та же версия — та же карта) и бюджет; у работы без версии кэша нет. Письма читаются из самой
-   * карты работы: она уже у сервиса, и сборка снимка в базу не ходит.
+   * (`WorkEntry.version`: та же версия — та же карта) и бюджет; у работы без версии кэша нет. Письма читаются запросами из
+   * таблиц (`storeLetterReader`); живые правила непрочитанного идут по карте сервиса, а не по карте из базы (спека хранилища 6.2).
    */
   function windowPart(work: WorkEntry, messageBytes: number, textMax?: number): WindowPart {
     const key = workKey(work.projectPath, work.map.work.id);
@@ -152,14 +170,16 @@ export function createWorksService(
       const cached = slot.parts.get(variant);
       if (cached !== undefined) return cached;
     }
-    const entry = {
-      projectPath: work.projectPath,
-      map: compactWorkMap(
-        work.map,
-        { messageBytes, ...(textMax === undefined ? {} : { textMax }) },
-        mapLetterReader(work.map),
-      ),
-    };
+    const options = { messageBytes, ...(textMax === undefined ? {} : { textMax }) };
+    let map: WindowWorkMap;
+    try {
+      map = compactWorkMap(work.map, options, storeLetterReader(work.projectPath, work.map.work.id, { map: work.map }));
+    } catch (error) {
+      // Работу сняли между чтением списка и сборкой снимка: до следующего обновления она без писем, остальное окно не страдает.
+      if (!(error instanceof WorkNotFoundError)) throw error;
+      map = compactWorkMap(work.map, options, mapLetterReader({ ...work.map, messages: [] }));
+    }
+    const entry = { projectPath: work.projectPath, map };
     const part = { entry, bytes: jsonBytes(entry) };
     if (version !== undefined) {
       if (slot?.version === version) slot.parts.set(variant, part);
@@ -204,10 +224,35 @@ export function createWorksService(
     return windowCache.snapshot;
   };
 
+  /** Полные карты с письмами для прежнего окна; `null` — писем слишком много, чтобы читать их ради заведомого отказа. */
+  const legacyEntries = (): WindowWorkEntry[] | null => {
+    const all = Array.from(entries.values());
+    const counts = all.map((work) => {
+      try {
+        return letterCount(work.projectPath, work.map.work.id, {});
+      } catch (error) {
+        if (error instanceof WorkNotFoundError) return 0;
+        throw error;
+      }
+    });
+    if (counts.reduce((sum, count) => sum + count, 0) > LEGACY_MAX_LETTERS) return null;
+    return all.map((work, at) => {
+      let messages: WindowWorkMap['messages'] = [];
+      try {
+        messages = readLetters(work.projectPath, work.map.work.id, { limit: counts[at] ?? 0 });
+      } catch (error) {
+        if (!(error instanceof WorkNotFoundError)) throw error;
+      }
+      return { projectPath: work.projectPath, map: { ...work.map, messages } };
+    });
+  };
+
   const legacySnapshot = (): WorksSnapshot | null => {
     if (legacyCache?.revision !== revision) {
-      const full: WorksSnapshot = { ...buildSnapshot(), revision };
-      legacyCache = { revision, snapshot: jsonBytes(full) <= LEGACY_SNAPSHOT_MAX_BYTES ? full : null };
+      const legacy = legacyEntries();
+      const full: WorksSnapshot | null =
+        legacy === null ? null : { entries: legacy, branches: Object.fromEntries(branches), revision };
+      legacyCache = { revision, snapshot: full !== null && jsonBytes(full) <= LEGACY_SNAPSHOT_MAX_BYTES ? full : null };
     }
     return legacyCache.snapshot;
   };

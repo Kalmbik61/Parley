@@ -9,7 +9,7 @@ import {
   addSession,
   configPath,
   createWork,
-  readMap,
+  readStoredMap,
   reserveAttempt,
   saveConfig,
   SYSTEM,
@@ -111,7 +111,7 @@ afterEach(async () => {
 const create = (sessions: SessionsService, workId: string, label = 'a'): Promise<SessionRef> =>
   sessions.create({ projectPath: project, workId, provider: 'claude', label, task: 'т', parent: null });
 
-const ledger = async (workId: string): Promise<WorkMap['resources']> => (await readMap(project, workId)).resources;
+const ledger = async (workId: string): Promise<WorkMap['resources']> => (readStoredMap(project, workId)).resources;
 
 const budgetError = async (run: Promise<unknown>): Promise<HostError> => {
   try {
@@ -150,7 +150,7 @@ describe('запуск: резерв до процесса, исход посл�
     expect(pty.list()).toHaveLength(2);
     const resources = await ledger(work.work.id);
     expect(resources?.attempts.filter((attempt) => attempt.state === 'reserved')).toEqual([]);
-    expect((await readMap(project, work.work.id)).sessions.find((session) => session.id === 's-03')?.lifecycle).toBe('pending');
+    expect((readStoredMap(project, work.work.id)).sessions.find((session) => session.id === 's-03')?.lifecycle).toBe('pending');
   });
 
   // Спека хранилища 6.2: письмо об отказе пишется как письмо (`writeLetters`), без разбора карты.
@@ -166,10 +166,10 @@ describe('запуск: резерв до процесса, исход посл�
     const child: SessionRef = { projectPath: project, workId: work.work.id, sessionId: 's-02' };
 
     await budgetError(sessions.launch(child, 'launch'));
-    expect((await readMap(project, work.work.id)).messages).toEqual([]);
+    expect((readStoredMap(project, work.work.id)).messages).toEqual([]);
 
     const refusal = await budgetError(sessions.launch(child, 'launch', { by: 'auto' }));
-    const letters = (await readMap(project, work.work.id)).messages;
+    const letters = (readStoredMap(project, work.work.id)).messages;
     expect(letters).toHaveLength(1);
     expect(letters[0]).toMatchObject({ from: SYSTEM, to: [parent.sessionId], roomId: null, kind: 'note' });
     expect(letters[0]?.text).toMatch(/^S02 was not started: /);
@@ -247,7 +247,7 @@ describe('меньший лимит и управление', () => {
     await sessions.stop(a);
     await sessions.close(b);
     expect(pty.list()).toHaveLength(0);
-    const map = await readMap(project, work.work.id);
+    const map = readStoredMap(project, work.work.id);
     expect(map.sessions.find((session) => session.id === 's-01')?.lifecycle).toBe('sleeping');
     expect(map.sessions.find((session) => session.id === 's-02')?.lifecycle).toBe('closed');
   });
@@ -360,7 +360,7 @@ describe('явный запуск исторической сессии', () => 
 
     await expect(sessions.launch({ projectPath: project, workId: work.work.id, sessionId: childId }, 'launch')).rejects.toThrow('session limit reached');
 
-    const map = await readMap(project, work.work.id);
+    const map = readStoredMap(project, work.work.id);
     expect(map.sessions.find((session) => session.id === childId)?.lifecycle).toBe('pending');
     expect(pty.list()).toHaveLength(2);
     expect(map.messages).toEqual([]);

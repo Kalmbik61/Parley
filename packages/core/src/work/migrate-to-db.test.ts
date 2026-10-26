@@ -16,9 +16,10 @@ import { migrateMapsToDb } from './migrate-to-db.js';
 import { reservePlanEffects } from './plan-effects.js';
 import { resolveProposal, setProposal } from './proposals.js';
 import { addRoom } from './rooms.js';
+import { unreadLetters } from './letter-store.js';
 import { createWork, readMap, readStoredMap, readWorksIndex, replaceStoredMap, workExists, workVersion } from './store.js';
 import type { DecisionJournalMap } from './decision-journal.js';
-import { HUMAN, type PlanDraft, type WorkMap } from './types.js';
+import { HUMAN, type PlanDraft, type WindowWorkMap, type WorkMap } from './types.js';
 import { mapLetterTx } from './letter-store.js';
 const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
@@ -31,7 +32,7 @@ const exists = (target: string): Promise<boolean> =>
     () => false,
   );
 
-const emptyMap = (id = 'w-0001', title = 'Старая работа'): WorkMap => ({
+const emptyMap = (id = 'w-0001', title = 'Старая работа'): WindowWorkMap => ({
   schemaVersion: 2,
   work: { id, title, goal: '', status: 'active', createdAt: AT, updatedAt: AT },
   sessions: [],
@@ -40,7 +41,7 @@ const emptyMap = (id = 'w-0001', title = 'Старая работа'): WorkMap =
 });
 
 /** Карта со всеми коллекциями (как в `map-rows.test.ts`) и письмами с разной отметкой прочтения: людям и сессиям. */
-function fullMap(): WorkMap {
+function fullMap(): WindowWorkMap {
   const map = emptyMap();
   for (const label of ['Lead', 'Owner', 'Reviewer']) {
     addSession(map, { provider: 'codex', label, task: 'Fixture' }, AT);
@@ -121,11 +122,28 @@ const v1Map = (): Record<string, unknown> => ({
 });
 
 /** Непрочитанное по каждой сессии и у человека: то, что сверка обязана сохранить. */
-function unreadDigest(map: WorkMap): { bySession: Record<string, string[]>; human: string[] } {
+function unreadDigest(map: WindowWorkMap): { bySession: Record<string, string[]>; human: string[] } {
   return {
     bySession: Object.fromEntries(map.sessions.map((session) => [session.id, unreadFor(map, session.id).map((message) => message.id)])),
     human: map.messages.filter(unreadForHuman).map((message) => message.id),
   };
+}
+
+/** Непрочитанное по каждой сессии и у человека, как его отдаёт база (кандидаты и живые правила), а не чистые правила над картой. */
+function storedUnread(project: string, map: WindowWorkMap): { bySession: Record<string, string[]>; human: string[] } {
+  return {
+    bySession: Object.fromEntries(
+      map.sessions.map((session) => [session.id, unreadLetters(project, map.work.id, session.id).map((message) => message.id)]),
+    ),
+    human: unreadLetters(project, map.work.id, HUMAN).map((message) => message.id),
+  };
+}
+
+/** Карта без писем: то, что отдаёт `readMap` (письма — в своих таблицах). */
+function withoutLetters(map: WindowWorkMap): WorkMap {
+  const rest: Partial<WindowWorkMap> = { ...map };
+  delete rest.messages;
+  return rest as WorkMap;
 }
 
 /** Пид процесса, которого уже нет. */
@@ -206,10 +224,11 @@ describe('migrateMapsToDb — переезд map.json в базу', () => {
     expect(result).toEqual({ migrated: [{ projectPath: project, workId: 'w-0001' }], failed: [], skipped: [] });
     expect(await exists(mapFile('w-0001'))).toBe(false);
     expect(await readFile(backupFile('w-0001'), 'utf8')).toBe(text);
-    const after = await readMap(project, 'w-0001');
+    const after = readStoredMap(project, 'w-0001');
     expect(after).toEqual(expected);
     expect(unreadDigest(after)).toEqual(digest);
-    expect(readStoredMap(project, 'w-0001')).toEqual(expected);
+    expect(storedUnread(project, after)).toEqual(digest);
+    expect(await readMap(project, 'w-0001')).toEqual(withoutLetters(expected));
   });
 
   it('карта с записанными экспортами и отправленными эффектами переезжает сжатой и проходит сверку', async () => {
@@ -236,10 +255,11 @@ describe('migrateMapsToDb — переезд map.json в базу', () => {
     const result = await migrateMapsToDb();
 
     expect(result).toEqual({ migrated: [{ projectPath: project, workId: 'w-0001' }], failed: [], skipped: [] });
-    const after = await readMap(project, 'w-0001') as WorkMap & DecisionJournalMap;
+    const after = readStoredMap(project, 'w-0001') as WindowWorkMap & DecisionJournalMap;
     expect(after).toEqual(expected);
-    expect(readStoredMap(project, 'w-0001')).toEqual(expected);
+    expect(await readMap(project, 'w-0001')).toEqual(withoutLetters(expected));
     expect(unreadDigest(after)).toEqual(digest);
+    expect(storedUnread(project, after)).toEqual(digest);
     expect(after.planExports![0]).not.toHaveProperty('content');
     expect(after.planExports![0]).toMatchObject({ status: 'written', sha256: sha(planText), bytes: Buffer.byteLength(planText) });
     expect(after.decisionExports![0]).not.toHaveProperty('content');
@@ -257,7 +277,7 @@ describe('migrateMapsToDb — переезд map.json в базу', () => {
     const result = await migrateMapsToDb();
 
     expect(result.migrated).toEqual([{ projectPath: project, workId: 'w-0001' }]);
-    const after = await readMap(project, 'w-0001');
+    const after = readStoredMap(project, 'w-0001');
     expect(after.schemaVersion).toBe(2);
     expect(after.rooms).toEqual([]);
     expect(after.sessions[0]).toMatchObject({ lifecycle: 'sleeping', result: 'done' });
@@ -268,18 +288,22 @@ describe('migrateMapsToDb — переезд map.json в базу', () => {
     expect(await readFile(backupFile('w-0001'), 'utf8')).toBe(text);
   });
 
-  it('карта с повторяющимися id писем сохраняет оба письма и порядок', async () => {
+  it('карта с повторяющимися номерами писем не переезжает: failed с причиной, файл на месте, строк нет', async () => {
+    // Письма живут в таблице с уникальным номером (спека хранилища 6.2): такой карте нечем лечь, и она остаётся в файле.
     const map = emptyMap();
     const letter = (id: string, text: string) => ({ id, roomId: null, from: 's-01', to: ['s-02'], text, kind: 'note', at: AT, readBy: {} });
-    map.messages = [letter('m-07', 'первое'), letter('m-08', 'другое'), letter('m-07', 'второе')] as WorkMap['messages'];
+    map.messages = [letter('m-07', 'первое'), letter('m-08', 'другое'), letter('m-07', 'второе')] as WindowWorkMap['messages'];
     addSession(map, { provider: 'claude', label: 'a', task: '' }, AT);
     addSession(map, { provider: 'claude', label: 'b', task: '' }, AT);
     await legacyWork(map);
 
     const result = await migrateMapsToDb();
 
-    expect(result.failed).toEqual([]);
-    expect((await readMap(project, 'w-0001')).messages.map((message) => message.text)).toEqual(['первое', 'другое', 'второе']);
+    expect(result.migrated).toEqual([]);
+    expect(result.failed).toEqual([{ projectPath: project, workId: 'w-0001', reason: expect.stringContaining('letter id m-07') }]);
+    expect(workExists(project, 'w-0001')).toBe(false);
+    expect(await exists(mapFile('w-0001'))).toBe(true);
+    expect(await exists(backupFile('w-0001'))).toBe(false);
   });
 
   it('битая map.json: failed, файл не тронут, строки нет, следующий запуск пробует снова', async () => {

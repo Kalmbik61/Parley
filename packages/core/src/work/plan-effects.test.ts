@@ -8,7 +8,7 @@ import {
   setProposal,
 } from "./proposals.js";
 import { setRoomMode, submitPlanItem, verifyPlanItem } from "./plans.js";
-import { unreadFor } from "./letters.js";
+import { lookupIn, unreadFor } from "./letters.js";
 import {
   capturePlanNotice,
   cancelledPlanLetter,
@@ -101,7 +101,7 @@ describe("durable accepted-plan delivery", () => {
     expect(owned[0]!.text).toContain("src/0.ts; use a native skill");
     expect(owned[0]!.text).toContain("Passing meaningful checks");
     const restarted = parseMap(JSON.stringify(map), "fixture");
-    expect(resumablePlanLetter(restarted, owned[0]!, "s-02")).toBe(true);
+    expect(resumablePlanLetter(restarted, owned[0]!, "s-02", lookupIn(restarted))).toBe(true);
     expect(reservePlanEffects(restarted, lt(restarted), 20, AT).changed).toBe(false);
     expect(
       restarted.messages.filter((row) => row.from === PARLEY),
@@ -186,7 +186,7 @@ describe("durable accepted-plan delivery", () => {
         .planEffects!.filter((row) => row.rev === 0)
         .every((row) => row.status === "cancelled"),
     ).toBe(true);
-    expect(cancelledPlanLetter(map, old)).toBe(true);
+    expect(cancelledPlanLetter(map, old, lookupIn(map))).toBe(true);
     expect(unreadFor(map, "s-02")).not.toContainEqual(old);
     expect(map.messages).toContainEqual(old);
     expect(old.readBy["s-02"]).toBeUndefined();
@@ -267,8 +267,8 @@ describe("durable accepted-plan delivery", () => {
     reservePlanEffects(map, lt(map), 20, AT);
     expect(map.plans![0]!.items[0]!.status).toBe("blocked");
     expect(map.plans![0]!.items[0]!.evidence!.text).toBe("Measured");
-    expect(resumablePlanLetter(map, verify, "s-03")).toBe(false);
-    expect(cancelledPlanLetter(map, verify)).toBe(true);
+    expect(resumablePlanLetter(map, verify, "s-03", lookupIn(map))).toBe(false);
+    expect(cancelledPlanLetter(map, verify, lookupIn(map))).toBe(true);
     expect(map.planEffects!.find((row) => row.kind === "blocked")!.target).toBe(
       "s-01",
     );
@@ -358,9 +358,9 @@ describe("durable accepted-plan delivery", () => {
     const value = map.planEffects![0]!;
     value.status = "cancelled";
     value.messageId = ordinary.id;
-    expect(cancelledPlanLetter(map, ordinary)).toBe(false);
+    expect(cancelledPlanLetter(map, ordinary, lookupIn(map))).toBe(false);
     expect(unreadFor(map, "s-02")).toContainEqual(ordinary);
-    expect(resumablePlanLetter(map, ordinary, "s-02")).toBe(false);
+    expect(resumablePlanLetter(map, ordinary, "s-02", lookupIn(map))).toBe(false);
   });
   it("captures one actual mode occurrence with trusted sender and lead identity", () => {
     const map = fixture();
@@ -590,7 +590,7 @@ it("flushes a real temp Markdown file only after captured map completion, withou
       title: "Human row",
       details: "Preserve details",
     });
-    await updateMap(project, created.work.id, (map) => {
+    await updateMap(project, created.work.id, (map, letters) => {
       addSession(
         map,
         { provider: "codex", label: "Lead", task: "Fixture" },
@@ -617,7 +617,7 @@ it("flushes a real temp Markdown file only after captured map completion, withou
       });
       resolveProposal(
         map,
-        lt(map),
+        letters,
         "r-01",
         p.proposalId,
         "accept",
@@ -626,7 +626,7 @@ it("flushes a real temp Markdown file only after captured map completion, withou
       );
       submitPlanItem(
         map,
-        lt(map),
+        letters,
         "pl-01",
         0,
         1,
@@ -634,7 +634,7 @@ it("flushes a real temp Markdown file only after captured map completion, withou
         { text: "Measured", artifacts: [] },
         AT,
       );
-      reservePlanEffects(map, lt(map), 20, AT);
+      reservePlanEffects(map, letters, 20, AT);
     });
     expect((await readBacklog(project)).items[0]!.checked).toBe(false);
     const concurrent = await Promise.all([
@@ -680,11 +680,11 @@ it("owned obsolete verification is hidden immediately when an unsatisfied owner 
   reservePlanEffects(map, lt(map), 20, AT);
   const proof = map.planEffects!.find((row) => row.kind === "verify")!;
   const message = map.messages.find((row) => row.id === proof.messageId)!;
-  expect(resumablePlanLetter(map, message, proof.target)).toBe(true);
+  expect(resumablePlanLetter(map, message, proof.target, lookupIn(map))).toBe(true);
   transitionSession(map, "s-02", "closed", { at: AT });
   expect(proof.status).toBe("sent");
-  expect(resumablePlanLetter(map, message, proof.target)).toBe(false);
-  expect(cancelledPlanLetter(map, message)).toBe(true);
+  expect(resumablePlanLetter(map, message, proof.target, lookupIn(map))).toBe(false);
+  expect(cancelledPlanLetter(map, message, lookupIn(map))).toBe(true);
   expect(
     unreadFor(map, proof.target).some((row) => row.id === message.id),
   ).toBe(false);
@@ -697,7 +697,7 @@ it("closed work never reserves or resumes a plan assignment, but retains capture
   const captured = JSON.stringify(map.planExports);
   const proof = map.planEffects!.find((row) => row.status === "sent")!;
   const message = map.messages.find((row) => row.id === proof.messageId)!;
-  expect(resumablePlanLetter(map, message, proof.target)).toBe(false);
+  expect(resumablePlanLetter(map, message, proof.target, lookupIn(map))).toBe(false);
   reservePlanEffects(map, lt(map), 20, AT);
   expect(map.messages).toHaveLength(before);
   expect(JSON.stringify(map.planExports)).toBe(captured);
@@ -719,8 +719,8 @@ describe("effect texts live only in the letter once an effect is sent or cancell
       expect(row.text).toContain("Accepted plan");
       expect(row).not.toHaveProperty("textSha256");
     }
-    expect(resumablePlanLetter(map, letter, sent!.target)).toBe(true);
-    expect(cancelledPlanLetter(map, letter)).toBe(false);
+    expect(resumablePlanLetter(map, letter, sent!.target, lookupIn(map))).toBe(true);
+    expect(cancelledPlanLetter(map, letter, lookupIn(map))).toBe(false);
     expect(() => validatePlanEffects(map)).not.toThrow();
   });
   const expectSentByHash = (map: WorkMap, kind: "mode" | "completion-returned") => {
@@ -731,7 +731,7 @@ describe("effect texts live only in the letter once an effect is sent or cancell
     expect(sent.status).toBe("sent");
     expect(sent).not.toHaveProperty("text");
     expect(sent.textSha256).toBe(sha(letter.text));
-    expect(resumablePlanLetter(map, letter, sent.target)).toBe(true);
+    expect(resumablePlanLetter(map, letter, sent.target, lookupIn(map))).toBe(true);
   };
   it("a sent mode notice stays current by hash", () => {
     const map = fixture();
@@ -779,10 +779,10 @@ describe("effect texts live only in the letter once an effect is sent or cancell
     expect(proof.status).toBe("cancelled");
     expect(proof).not.toHaveProperty("text");
     expect(proof.textSha256).toBe(sha(letter.text));
-    expect(cancelledPlanLetter(map, letter)).toBe(true);
+    expect(cancelledPlanLetter(map, letter, lookupIn(map))).toBe(true);
     expect(unreadFor(map, proof.target).some((row) => row.id === letter.id)).toBe(false);
     // Письмо с чужим текстом тем же номером эффекту не принадлежит.
-    expect(cancelledPlanLetter(map, { ...letter, text: `${letter.text}!` })).toBe(false);
+    expect(cancelledPlanLetter(map, { ...letter, text: `${letter.text}!` }, lookupIn(map))).toBe(false);
   });
   it("an effect cancelled before it was sent drops its text and keeps the hash", () => {
     const map = fixture("checklist", 3);

@@ -14,19 +14,21 @@ import {
 } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
 import path from 'node:path';
-import type { DatabaseSync, StatementSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 import { CONTEXT_DIR, contextFile } from '../context-fill.js';
 import { LIMITS_DIR, limitsFile } from '../limits.js';
 import { envValue, ENV_PREFIX, HOME_DIR, LEGACY_ENV_PREFIX, LEGACY_HOME_DIR, type Env } from '../names.js';
 import { BUSY_TIMEOUT_MS, WORK_DB_FILE, workDb } from './db.js';
 import { diffRows, isPlainJsonTree, mapToRows, rowIndex, rowsToMap, type StoredRow } from './map-rows.js';
 import { bumpWorkId, nextWorkId, normalizeMap } from './map.js';
-import { mapLetterTx, type LetterTx } from './letter-store.js';
+import type { LetterTx } from './letter-store.js';
+import { createTableLetterTx, loadAllLetters, replaceLetters } from './letter-tables.js';
 import { isAlive } from './pid-alive.js';
+import { sql } from './sql-statements.js';
 import { PRE_JOURNAL_STATE_IGNORE, PRE_MEMORY_STATE_IGNORE, PRE_RECIPES_STATE_IGNORE, ensureStateDir, isDirectorySync, stateDir, SHARED_STATE_IGNORE } from './state-dir.js';
 import { resolveSharedProjectContext, sharedPathIgnored } from './project-context.js';
 import type { ProjectContextOptions, SharedProjectContext } from './project-context.js';
-import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js';
+import type { WindowWorkMap, WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js';
 
 /** Найденный дом и снимок входов, под которым он найден (`parleyHome`). */
 let homeMemo: { snapshot: string; home: string } | undefined;
@@ -371,7 +373,7 @@ function writeTransaction<T>(db: DatabaseSync, lockTimeoutMs: number, body: () =
 }
 
 /** Чтение нескольких запросов с одного снимка базы; внутри уже открытой транзакции (запись, переезд) своей не открывает. */
-function readTransaction<T>(db: DatabaseSync, body: () => T): T {
+export function readTransaction<T>(db: DatabaseSync, body: () => T): T {
   if (db.isTransaction) return body();
   db.exec('BEGIN');
   try {
@@ -387,23 +389,6 @@ function readTransaction<T>(db: DatabaseSync, body: () => T): T {
     }
     throw error;
   }
-}
-
-/** Заготовленные запросы по дескриптору базы: дескриптор меняется вместе с домом, а `prepare` на горячем пути не нужен. */
-const prepared = new WeakMap<DatabaseSync, Map<string, StatementSync>>();
-
-function sql(db: DatabaseSync, text: string): StatementSync {
-  let byText = prepared.get(db);
-  if (byText === undefined) {
-    byText = new Map();
-    prepared.set(db, byText);
-  }
-  let statement = byText.get(text);
-  if (statement === undefined) {
-    statement = db.prepare(text);
-    byText.set(text, statement);
-  }
-  return statement;
 }
 
 const UPSERT_ENTRY = `INSERT INTO entries (project_path, work_id, kind, key, ord, json) VALUES (?, ?, ?, ?, ?, ?)
@@ -515,7 +500,7 @@ export function mapCacheStats(): { hits: number; misses: number } {
 const cacheKey = (projectPath: string, workId: string): string => `${projectPath}\0${workId}`;
 
 /** База текущего дома; у другого дескриптора (дом сменился) — свой пустой кэш. */
-function storeDb(): DatabaseSync {
+export function storeDb(): DatabaseSync {
   const db = workDb();
   if (db !== cacheOwner) {
     mapCache.clear();
@@ -599,6 +584,16 @@ export function workExists(projectPath: string, workId: string): boolean {
 }
 
 /**
+ * База текущего дома для чтения писем работы (`letter-store.ts`, спека хранилища 6.2). Работы нет — `WorkNotFoundError`, как
+ * у `readMap`: письма без работы читать нечем, а запрос с пустым ответом выдал бы удалённую работу за пустую.
+ */
+export function letterDb(projectPath: string, workId: string): DatabaseSync {
+  const db = storeDb();
+  if (versionOf(db, projectPath, workId) === undefined) throw notFound(projectPath, workId);
+  return db;
+}
+
+/**
  * `PRAGMA data_version` соединения: число меняется, когда запись закоммитило другое соединение (другой процесс — CLI,
  * MCP агента без канала), и не меняется от коммитов этого. Читает только заголовок журнала, поэтому годится для опроса
  * каждые полсекунды (спека хранилища 6.9). Записи своего процесса хост узнаёт по `onMapWritten`.
@@ -619,22 +614,25 @@ export function listWorkVersions(): Array<{ projectPath: string; id: string; ver
 }
 
 /**
- * Собирает карту из строк базы мимо кэша — для тестов и сверки переезда. Прошла `normalizeMap`, как и загрузка
- * `readMap`. Работы нет — `WorkNotFoundError`.
+ * Собирает полную карту из строк базы мимо кэша — для тестов, выгрузки и сверки переезда: хранимая часть прошла
+ * `normalizeMap`, как и загрузка `readMap`, а письма с отметками прочтения собраны из своих таблиц одним снимком базы
+ * (спека хранилища 6.2). Работы нет — `WorkNotFoundError`.
  */
-export function readStoredMap(projectPath: string, workId: string): WorkMap {
-  const stored = loadStored(storeDb(), projectPath, workId);
-  if (stored === undefined) throw notFound(projectPath, workId);
-  return normalizeMap(
-    rowsToMap(stored.work, stored.extra, stored.rows),
-    mapSource(projectPath, workId),
-  );
+export function readStoredMap(projectPath: string, workId: string): WindowWorkMap {
+  const db = storeDb();
+  return readTransaction(db, () => {
+    const stored = loadStored(db, projectPath, workId);
+    if (stored === undefined) throw notFound(projectPath, workId);
+    const map = normalizeMap(rowsToMap(stored.work, stored.extra, stored.rows), mapSource(projectPath, workId));
+    return Object.assign(map, { messages: loadAllLetters(db, projectPath, workId) });
+  });
 }
 
 /**
  * Только для тестов: записывает строки работы из произвольного объекта без `normalizeMap` и поднимает версию — так
- * тест изображает «чужую запись» и карту, которую нормализация отвергает. Списки заменяются целиком. Работы нет —
- * `WorkNotFoundError`.
+ * тест изображает «чужую запись» и карту, которую нормализация отвергает. Списки заменяются целиком; письма — тоже, если в
+ * объекте есть `messages` (полная карта: письма с `readBy`, кандидаты в непрочитанное раскладываются по правилам карты),
+ * иначе письма работы остаются как были. Работы нет — `WorkNotFoundError`.
  */
 export function replaceStoredMap(projectPath: string, workId: string, data: unknown): void {
   const db = storeDb();
@@ -646,6 +644,7 @@ export function replaceStoredMap(projectPath: string, workId: string, data: unkn
     for (const row of next.rows) {
       sql(db, UPSERT_ENTRY).run(projectPath, workId, row.kind, row.key, row.ord, row.json);
     }
+    if (Array.isArray((data as Partial<WindowWorkMap>).messages)) replaceLetters(db, projectPath, workId, data as WindowWorkMap);
     const work = map.work as unknown as Record<string, unknown>;
     const text = (value: unknown): string => (typeof value === 'string' ? value : '');
     const updated = sql(db, UPDATE_WORK).get(
@@ -663,15 +662,15 @@ export function replaceStoredMap(projectPath: string, workId: string, data: unkn
 }
 
 /**
- * Только для переезда прежнего `map.json` (спека хранилища 6.6): вставляет строку работы и строки её списков одной
- * транзакцией и зовёт `check` до `COMMIT` — внутри транзакции видны ещё не записанные строки, и `readStoredMap` собирает
+ * Только для переезда прежнего `map.json` (спека хранилища 6.6): вставляет строку работы, строки её списков и письма с
+ * отметками прочтения и кандидатами одной транзакцией и зовёт `check` до `COMMIT` — внутри транзакции видны ещё не записанные строки, и `readStoredMap` собирает
  * из них карту для сверки. Бросил `check` (или вставка) — `ROLLBACK`, в базе ничего не остаётся. Версия — часы, как у
  * `createWork`. Подписчики `onMapWritten` узнают о работе после коммита.
  */
 export function insertMigratedMap(
   projectPath: string,
   workId: string,
-  map: WorkMap,
+  map: WindowWorkMap,
   check: () => void,
 ): void {
   const db = storeDb();
@@ -693,6 +692,7 @@ export function insertMigratedMap(
     for (const row of rows.rows) {
       sql(db, UPSERT_ENTRY).run(projectPath, workId, row.kind, row.key, row.ord, row.json);
     }
+    replaceLetters(db, projectPath, workId, map);
     check();
     return at;
   });
@@ -941,7 +941,6 @@ export async function createWork(
       updatedAt: at,
     },
     sessions: [],
-    messages: [],
     rooms: [],
   };
 
@@ -1090,7 +1089,7 @@ export function applyMapUpdate(
     if (current.work.id !== workId) {
       throw new Error(`map ${source} belongs to workspace ${current.work.id}, not ${workId}`);
     }
-    const { letters, wrote } = mapLetterTx(current);
+    const { letters, wrote } = createTableLetterTx(db, projectPath, workId, current);
     mutate(current, letters);
     // Мутация могла дать карту, которую нормализация не примет: бросает — запись откатывается.
     normalizeMap(current, source);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Message, Proposal, Room, SessionActivity, SessionNeed, WorkEntry, WorkSession } from '@parley/core';
+import type { Message, Proposal, Room, SessionActivity, SessionNeed, WindowWorkEntry, WorkSession } from '@parley/core';
 import { refKey, type MailWait } from '@parley/protocol';
 import type { ActivityEntry } from '../store/activity.js';
 import { makeNeed } from '../test-utils/work-fixtures.js';
@@ -66,7 +66,7 @@ function letter(over: Partial<Message> & Pick<Message, 'id' | 'from' | 'to'>): M
   return { roomId: null, at: '2026-09-27T10:00:00.000Z', text: '', kind: 'note', readBy: {}, ...over };
 }
 
-function entry(sessions: WorkSession[], messages: Message[] = [], updatedAt = '2026-09-27T09:00:00.000Z'): WorkEntry {
+function entry(sessions: WorkSession[], messages: Message[] = [], updatedAt = '2026-09-27T09:00:00.000Z'): WindowWorkEntry {
   return {
     projectPath: '/tmp/p',
     map: {
@@ -79,7 +79,7 @@ function entry(sessions: WorkSession[], messages: Message[] = [], updatedAt = '2
   };
 }
 
-function activityOf(e: WorkEntry, byId: Record<string, SessionActivity>): Record<string, ActivityEntry> {
+function activityOf(e: WindowWorkEntry, byId: Record<string, SessionActivity>): Record<string, ActivityEntry> {
   const out: Record<string, ActivityEntry> = {};
   for (const [sessionId, activity] of Object.entries(byId)) {
     const ref = { projectPath: e.projectPath, workId: e.map.work.id, sessionId };
@@ -266,7 +266,7 @@ describe('workAttention — решение и почта человеку (2.7)'
     proposal: null,
     ...patch,
   });
-  const withRooms = (sessions: WorkSession[], rooms: Room[], messages: Message[] = []): WorkEntry => {
+  const withRooms = (sessions: WorkSession[], rooms: Room[], messages: Message[] = []): WindowWorkEntry => {
     const base = entry(sessions, messages);
     return { ...base, map: { ...base.map, rooms } };
   };
@@ -403,7 +403,7 @@ describe('workAttention — упоминания человека в комна�
     rooms: Room[],
     messages: Message[],
     sessions: WorkSession[] = [],
-  ): WorkEntry => {
+  ): WindowWorkEntry => {
     const base = entry(sessions, messages);
     return { ...base, map: { ...base.map, rooms } };
   };
@@ -593,7 +593,7 @@ describe('архивная комната не учитывается во вн�
   });
   const mention = (id: string, roomId: string, patch: Partial<Message> = {}): Message =>
     letter({ id, from: 's-02', to: [], roomId, text: '@human, please decide', ...patch });
-  const withRooms = (rooms: Room[], messages: Message[] = []): WorkEntry => {
+  const withRooms = (rooms: Room[], messages: Message[] = []): WindowWorkEntry => {
     const base = entry([session('s-01')], messages);
     return { ...base, map: { ...base.map, rooms } };
   };

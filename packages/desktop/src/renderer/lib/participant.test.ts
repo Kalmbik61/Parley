@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 // Указатель — из исходников core (корневой `@parley/core` под jsdom не грузится, см. chat/items/items.test.tsx):
 // копия выражений в окне должна узнавать ровно то, что core набирает в терминал.
@@ -145,7 +145,7 @@ function session(id: string, label = ''): WorkSession {
   };
 }
 
-function entry(projectPath: string, workId: string, sessions: WorkSession[]): WorkEntry {
+function entry(projectPath: string, workId: string, sessions: WorkSession[]): WindowWorkEntry {
   return {
     projectPath,
     map: {

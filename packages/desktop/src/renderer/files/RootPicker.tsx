@@ -4,7 +4,7 @@
  * человек его не сменит.
  */
 
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { FileRootSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { sessionTag } from '../lib/participant.js';
@@ -21,7 +21,7 @@ function valueOf(spec: FileRootSpec): string {
 }
 
 /** «Project» и worktree каждой сессии с созданной папкой (`createdAt !== null`). */
-export function rootOptions(entry: WorkEntry): RootOption[] {
+export function rootOptions(entry: WindowWorkEntry): RootOption[] {
   const options: RootOption[] = [{ value: 'project', label: S.files.project, spec: { kind: 'project' } }];
   for (const session of entry.map.sessions) {
     const worktree = session.worktree;
@@ -33,7 +33,7 @@ export function rootOptions(entry: WorkEntry): RootOption[] {
 }
 
 export interface RootPickerProps {
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   value: FileRootSpec;
   onChange(spec: FileRootSpec): void;
 }

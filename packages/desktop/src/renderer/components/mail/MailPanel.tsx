@@ -13,7 +13,7 @@
  */
 
 import { useLayoutEffect, useRef, useState } from 'react';
-import type { Message, WorkEntry } from '@parley/core';
+import type { Message, WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
 import { isHumanUnread } from '../../attention/derive.js';
@@ -24,7 +24,7 @@ import { Decisions } from './Decisions.js';
 import { Letter } from './Letter.js';
 
 export interface MailPanelProps {
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   providers: Array<{ id: string; label: string }>;
   models: Record<string, string | null>;
   bridge: ParleyBridge;

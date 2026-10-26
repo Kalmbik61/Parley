@@ -164,14 +164,13 @@ export function planEffectOwnsLetter(
   );
 }
 /**
- * `byId` finds the letter that caused a mode or return notice (storage spec 6.2). Code inside a transaction passes
- * `letters.byId`; without it the map's own list is read, which is what the readers over a map snapshot still do.
+ * `byId` finds the letter that caused a mode or return notice (storage spec 6.2): the letters are not in the map. Code
+ * inside a transaction passes `letters.byId`, readers outside one `letterById` of the work.
  */
 export function currentPlanEffect(
   map: WorkMap,
   value: PlanEffect,
-  byId: (id: string) => Message | undefined = (id) =>
-    map.messages.find((row) => row.id === id),
+  byId: (id: string) => Message | undefined,
 ): boolean {
   const room = map.rooms.find((row) => row.id === value.roomId);
   if (!room || !actionable(map, room, value.target)) return false;
@@ -416,20 +415,25 @@ export function resumablePlanLetter(
   map: WorkMap,
   message: Message,
   recipient: string,
+  byId: (id: string) => Message | undefined,
 ): boolean {
   return (map.planEffects ?? []).some(
     (value) =>
       value.status === "sent" &&
       value.target === recipient &&
       planEffectOwnsLetter(value, message) &&
-      currentPlanEffect(map, value),
+      currentPlanEffect(map, value, byId),
   );
 }
-export function cancelledPlanLetter(map: WorkMap, message: Message): boolean {
+export function cancelledPlanLetter(
+  map: WorkMap,
+  message: Message,
+  byId: (id: string) => Message | undefined,
+): boolean {
   return (map.planEffects ?? []).some(
     (value) =>
       planEffectOwnsLetter(value, message) &&
-      (value.status === "cancelled" || !currentPlanEffect(map, value)),
+      (value.status === "cancelled" || !currentPlanEffect(map, value, byId)),
   );
 }
 export function validatePlanEffects(map: WorkMap): void {

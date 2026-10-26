@@ -20,7 +20,8 @@ import {
   type WorkEntry,
   type WorkSession,
 } from '@parley/core';
-import { refKey, type SessionRef, type WorksSnapshot } from '@parley/protocol';
+import { refKey, type SessionRef } from '@parley/protocol';
+import type { WorksView } from '../works/works-service.js';
 
 export interface NotifyMemory {
   /** Уровень сессии по `refKey`; `closed` — точка не показывает activity (закрыта, спит, итог). */
@@ -105,7 +106,7 @@ function closedAs(entry: WorkEntry, roomId: string, letters: TriggerLetters): 'a
 
 export function worksTriggers(
   memory: NotifyMemory,
-  snapshot: WorksSnapshot,
+  snapshot: WorksView,
   hasMention: (text: string) => boolean = plainHumanMention,
   letters: TriggerLetters = storeTriggerLetters,
 ): WorksTriggers {

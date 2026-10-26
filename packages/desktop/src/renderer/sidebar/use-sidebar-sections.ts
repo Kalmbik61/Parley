@@ -13,7 +13,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { create } from 'zustand';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { sameWorkAttention, workAttention, type WorkAttention } from '../attention/derive.js';
 import { workKey } from '../lib/tree-order.js';
 import { useActivityStore } from '../store/activity.js';
@@ -33,7 +33,7 @@ interface SidebarSectionsState {
    * `attention`; `null` — ещё не считали. Обработчики клавиш (3.4) берут порядок через
    * `getState()`: соседа и работу на старте выбирают, только когда здесь текущий снимок.
    */
-  entries: WorkEntry[] | null;
+  entries: WindowWorkEntry[] | null;
 }
 
 /** Пишет только `useSidebarSectionsSync`; экспорт — для тестов. */

@@ -5,7 +5,7 @@
  * `RoomView`); ведущий — `room-lead.ts`, внимание — `attention/derive.ts`.
  */
 
-import type { Room, WorkMap, WorkSession } from '@parley/core';
+import type { Room, WindowWorkMap, WorkSession } from '@parley/core';
 import type { WorkLayout } from '../../shared/layout-types.js';
 import { groups } from '../layout/tree.js';
 import { isoMs } from './iso-time.js';
@@ -19,7 +19,7 @@ const HUMAN = 'human';
  * вкладки, `components/rooms/feed-model.ts`). Человек, повторы и сессии, которых уже нет в карте (удалены), не входят;
  * закрытые входят — значок-счётчик свёрнутой комнаты считает всех агентов, не только запущенных (решение 7).
  */
-export function roomSessions(map: WorkMap, room: Room): WorkSession[] {
+export function roomSessions(map: WindowWorkMap, room: Room): WorkSession[] {
   const ids = [...new Set(room.members)].filter((id) => id !== HUMAN);
   return ids.flatMap((id) => map.sessions.find((session) => session.id === id) ?? []);
 }
@@ -37,7 +37,7 @@ function later(a: string, b: string): string {
  * в слоте `Room.proposal`, письмом не становится, но для человека это событие). В пустой комнате — время её
  * создания. У комнаты карты до 2026-09-29 поля `proposal` нет.
  */
-export function roomLastAt(map: WorkMap, room: Room): string {
+export function roomLastAt(map: WindowWorkMap, room: Room): string {
   let last = room.createdAt;
   for (const message of map.messages) {
     if (message.roomId === room.id) last = later(last, message.at);

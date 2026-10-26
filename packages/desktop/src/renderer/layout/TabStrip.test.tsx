@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Profiler } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { Room, WorkEntry, WorkSession } from '@parley/core';
+import type { Room, WindowWorkEntry, WorkSession } from '@parley/core';
 import type { GroupNode } from '../../shared/layout-types.js';
 import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
@@ -44,7 +44,7 @@ function session(id: string, label: string): WorkSession {
   };
 }
 
-function entry(sessions: WorkSession[], rooms: Room[] = []): WorkEntry {
+function entry(sessions: WorkSession[], rooms: Room[] = []): WindowWorkEntry {
   return {
     projectPath: '/tmp/p',
     map: {
@@ -195,7 +195,7 @@ describe('TabStrip — внимание (кусок 4.2)', () => {
     activeTabId: 'terminal:s-01',
   };
 
-  function mount(e: WorkEntry, onRender?: () => void): void {
+  function mount(e: WindowWorkEntry, onRender?: () => void): void {
     useLayoutStore.setState({
       layouts: { [WORK_KEY]: { root: group, activeGroupId: 'g1', closedTabs: [] } },
       hydrated: { [WORK_KEY]: true },
@@ -440,7 +440,7 @@ describe('TabStrip — затухание краёв только со стор�
 describe('TabStrip — вкладки-пилюли (Organic, 1.1)', () => {
   const mail: GroupNode = { type: 'group', id: 'g1', tabs: [{ kind: 'mail', id: 'mail' }, { kind: 'terminal', id: 'terminal:a', sessionId: 'a' }], activeTabId: 'terminal:a' };
 
-  function mountStrip(portal: boolean, group: GroupNode = mail, e: WorkEntry = entry([session('a', 'исполнитель')])) {
+  function mountStrip(portal: boolean, group: GroupNode = mail, e: WindowWorkEntry = entry([session('a', 'исполнитель')])) {
     useLayoutStore.setState({ layouts: { [WORK_KEY]: { root: group, activeGroupId: group.id, closedTabs: [] } }, hydrated: { [WORK_KEY]: true } });
     return render(<TabStrip workKey={WORK_KEY} group={group} entry={e} portal={portal} active />);
   }
@@ -485,7 +485,7 @@ describe('TabStrip — вкладки-пилюли (Organic, 1.1)', () => {
     const roomTab = { kind: 'room', id: 'room:r-01', roomId: 'r-01' } as const;
     const group: GroupNode = { type: 'group', id: 'g1', tabs: [{ kind: 'mail', id: 'mail' }, roomTab], activeTabId: 'mail' };
     const e = entry([], [{ id: 'r-01', title: 'Возвраты', creator: 'human', members: [], createdAt: '2026-01-01T00:00:00.000Z', lead: null, proposal: { id: 'p-1', from: 's-01', text: 'Решение', rev: 0, at: '2026-09-29T10:00:00.000Z' } }]);
-    const withLetter: WorkEntry = {
+    const withLetter: WindowWorkEntry = {
       ...e,
       map: { ...e.map, messages: [{ id: 'm-1', roomId: null, from: 's-01', to: ['human'], at: '2026-09-29T10:00:00.000Z', text: 'привет', kind: 'note', readBy: {} }] },
     };

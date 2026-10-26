@@ -311,7 +311,7 @@ export interface Room {
 /** Через кого человек отправил письмо (спека 2026-10-14, 7.4); нет поля — сам, в окне. */
 export type MessageVia = 'assistant' | 'telegram';
 
-/** Письмо: доставляется по pull, живёт в карте. */
+/** Письмо: доставляется по pull, живёт в таблице `messages` (спека хранилища 6.2). */
 export interface Message {
   id: string;
   /** Комната письма; `null` — прямое письмо, как до комнат. */
@@ -445,14 +445,14 @@ export interface Work {
 }
 
 /**
- * Карта работы — один файл `map.json`, пишет только харнесс. Версия 2 — с
+ * Хранимая карта работы: всё, кроме писем. Письма лежат в своих таблицах (`messages`, `message_reads`, `message_unread`,
+ * спека хранилища 6.2) и читаются через API писем (`letter-store.ts`); карта с письмами — `WindowWorkMap`. Версия 2 — с
  * комнатами и двумя осями сессии; карту v1 `parseMap` поднимает при чтении.
  */
 export interface WorkMap {
   schemaVersion: 2;
   work: Work;
   sessions: WorkSession[];
-  messages: Message[];
   rooms: Room[];
   plans?: RoomPlan[];
   planExports?: PlanExportIntent[];
@@ -462,9 +462,18 @@ export interface WorkMap {
   planBacklogIntents?: PlanBacklogIntent[];
   /** Журнал ресурсов (`resource-policy.ts`); нет поля — карта до P37, бюджет начинается с нуля. */
   resources?: WorkResources;
+}
+
+/**
+ * Карта с письмами: снимок для окна (`compactWorkMap`), страницы, разбор прежней `map.json`, полная карта из
+ * `readStoredMap` и выгрузка `parley-core work map` (спека хранилища 6.2). Чистые предикаты писем (`isUnreadFor`,
+ * `recipientsOf`, `unreadFor`, `isHumanUnread`) работают на ней — ими пользуются окно и сверка переезда.
+ */
+export type WindowWorkMap = WorkMap & {
+  messages: Message[];
   /** Только в снимке для окна (`compactWorkMap`): что осталось за его пределами. */
   compact?: MapCompact;
-}
+};
 
 /** Запись глобального индекса работ `works-index.json` дома (`parleyHome()`). */
 export interface WorkIndexEntry {

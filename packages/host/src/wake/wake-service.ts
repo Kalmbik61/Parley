@@ -29,6 +29,7 @@ import {
   sessionTag,
   SYSTEM,
   PARLEY,
+  letterById,
   resumablePlanLetter,
   unreadCount,
   unreadLetters,
@@ -426,7 +427,9 @@ export function createWakeService(
     const entry = works.entry(ref.projectPath, ref.workId);
     if (entry === undefined) return;
     for (const message of unreadOf(entry, ref.sessionId)) {
-      if (!allowPlanRestart || !resumablePlanLetter(entry.map, message, ref.sessionId)) state.pointed.add(message.id);
+      if (!allowPlanRestart || !resumablePlanLetter(entry.map, message, ref.sessionId, (id) => letterById(entry.projectPath, entry.map.work.id, id))) {
+        state.pointed.add(message.id);
+      }
     }
   }
 

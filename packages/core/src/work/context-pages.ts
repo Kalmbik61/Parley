@@ -1,9 +1,9 @@
 import { markedExcerpt, textHash } from './context-budget.js';
-import { mapLetterReader, type LetterQuery } from './letter-store.js';
+import type { LetterQuery } from './letter-store.js';
 import { isRoomArchived } from './rooms.js';
 import { reportedStatus } from './session-state.js';
 import type { SessionNeed } from './stuck.js';
-import { HUMAN, type Message, type MapCompact, type RoomPlan, type WorkMap, type WorkSession } from './types.js';
+import { HUMAN, type Message, type MapCompact, type RoomPlan, type WindowWorkMap, type WorkMap, type WorkSession } from './types.js';
 
 /**
  * Компактная карта и страницы (P35, первая ступень A14). Карта остаётся хранилищем состояния, а письма читаются через
@@ -204,6 +204,11 @@ export interface MessagePageOptions<V extends { text: string }> {
   kind?: Message['kind'];
   /** Дополнительный отбор (например, прямые письма сессии): выборка и её размер считаются уже с ним. */
   filter?: (message: Message) => boolean;
+  /**
+   * Предотбор запросом для `filter`: письма, где отправитель или адресат назван в списке (`LetterQuery.involving`). Без него
+   * итог страницы с `filter` читает весь канал; со списком — только письма названных. `filter` должен быть не шире списка.
+   */
+  involving?: readonly string[];
   cursor?: PageCursor | null;
   maxBytes?: number;
   maxItems?: number;
@@ -213,8 +218,7 @@ export interface MessagePageOptions<V extends { text: string }> {
 /**
  * Чтение писем для страниц и снимка (спека хранилища 6.2, 6.7): запросы по индексу, а не обход карты. Ключ канала `''` —
  * прямые письма. Реализации: `mapLetterReader` над картой (чистые тесты и читатели без базы), `storeLetterReader` над
- * таблицами работы. Пока письма живут в `map.messages`, читатель в `messagePage`, `mapTopology` и `compactWorkMap` —
- * последний необязательный параметр (по умолчанию письма карты); план 4, задача 7 сделает его обязательным.
+ * таблицами работы. Читатель в `messagePage`, `mapTopology` и `compactWorkMap` обязателен: в хранимой карте писем нет.
  */
 export interface LetterReader {
   /** Выборка по `LetterQuery`: порядок номера письма, `newestFirst` берёт новейшие. */
@@ -270,12 +274,16 @@ function* walkLetters(
 export function messagePage<V extends { text: string }>(
   map: WorkMap,
   options: MessagePageOptions<V>,
-  letters: LetterReader = mapLetterReader(map),
+  letters: LetterReader,
 ): { messages: V[]; page: PageInfo } {
   const { maxBytes, maxItems } = pageLimits(options, LETTER_PAGE_MAX_ITEMS);
   const cursor = options.cursor ?? { dir: 'before' as const, seq: Number.POSITIVE_INFINITY };
   const forward = cursor.dir === 'after';
-  const selection = { roomId: options.roomId, ...(options.kind === undefined ? {} : { kind: options.kind }) };
+  const selection = {
+    roomId: options.roomId,
+    ...(options.kind === undefined ? {} : { kind: options.kind }),
+    ...(options.involving === undefined ? {} : { involving: options.involving }),
+  };
 
   const { taken, bytes, cut, lastSeq, more } = takeSeqPage(walkLetters(letters, selection, cursor.seq, forward, options.filter), {
     seq: (message) => seqOf(message.id, 'm-'),
@@ -287,7 +295,8 @@ export function messagePage<V extends { text: string }>(
   });
   if (!forward) taken.reverse();
 
-  // Итог — один запрос: без отбора это `count`, с отбором (предикат на одно письмо в `count` не уложить) — выборка канала целиком.
+  // Итог — один запрос: без отбора это `count`, с отбором (предикат на одно письмо в `count` не уложить) — выборка канала, а
+  // с предотбором `involving` — только писем названных.
   const total =
     options.filter === undefined
       ? letters.count(selection)
@@ -447,7 +456,7 @@ function totalsOf(stats: Record<string, { total: number; latestId: string | null
  * Что осталось за окном, названо в `compact`: итоги, точные счётчики непрочитанного и пути обрезанных полей.
  * Письма и их итоги читаются у `letters` запросами (спека хранилища 6.7), а не обходом карты.
  */
-export function compactWorkMap(map: WorkMap, options: WindowOptions, letters: LetterReader = mapLetterReader(map)): WorkMap {
+export function compactWorkMap(map: WorkMap, options: WindowOptions, letters: LetterReader): WindowWorkMap {
   const recent = options.recentPerRoom ?? WINDOW_RECENT_PER_ROOM;
   const unreadMax = options.unreadMax ?? WINDOW_UNREAD_MAX;
   const textMax = options.textMax ?? WINDOW_TEXT_MAX;
@@ -693,7 +702,7 @@ export const TOPOLOGY_PAGES =
  * зависит от числа сессий и комнат, а не от длины переписки; письма, история и артефакты — страницами. Счётчики и
  * курсоры писем даёт `letters` (спека хранилища 6.2): итоги каналов и непрочитанное вызывающей сессии.
  */
-export function mapTopology(map: WorkMap, callerId: string | null, letters: LetterReader = mapLetterReader(map)): MapTopology {
+export function mapTopology(map: WorkMap, callerId: string | null, letters: LetterReader): MapTopology {
   const workCut: Cut = {};
   const unread = callerId === null ? { total: 0, byRoom: {} as Record<string, number> } : letters.unreadCount(callerId);
   const { '': unreadDirect = 0, ...unreadRooms } = unread.byRoom;

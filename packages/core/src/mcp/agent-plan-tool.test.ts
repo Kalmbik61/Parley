@@ -5,7 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { addSession, transitionSession } from '../work/map.js';
-import { createWork, readMap, updateMap, workPaths, workVersion } from '../work/store.js';
+import { createWork, readStoredMap, updateMap, workPaths, workVersion } from '../work/store.js';
 import { createParleyServer } from './tools.js';
 
 let root: string;
@@ -47,19 +47,19 @@ const steps = [{ step: 'Implement', status: 'in_progress', description: 'Change 
 it.each(['s-01', 's-02'])('publishes and replaces only the caller’s plan without messages (%s)', async sessionId => {
   const client = await connect(sessionId);
   expect((await client.listTools()).tools.some(tool => tool.name === 'publish_agent_plan')).toBe(true);
-  const before = await readMap(project, workId);
+  const before = readStoredMap(project, workId);
   expect((await client.callTool({ name: 'publish_agent_plan', arguments: { steps } })).isError).not.toBe(true);
-  let map = await readMap(project, workId);
+  let map = readStoredMap(project, workId);
   expect(map.sessions.find(s => s.id === sessionId)?.agentPlan?.items[0]).toMatchObject({ subject: 'Implement', status: 'in_progress', description: 'Change the bounded flow' });
   expect(map.sessions.find(s => s.id !== sessionId)?.agentPlan).toBeUndefined();
   expect(map.messages).toEqual(before.messages);
   expect(map.plans).toEqual(before.plans);
   const completed = steps.map(step => ({ ...step, status: 'completed' }));
   await client.callTool({ name: 'publish_agent_plan', arguments: { steps: completed, explanation: 'Checks passed' } });
-  map = await readMap(project, workId);
+  map = readStoredMap(project, workId);
   expect(map.sessions.find(s => s.id === sessionId)?.agentPlan?.items.every(item => item.status === 'completed')).toBe(true);
   await client.callTool({ name: 'publish_agent_plan', arguments: { steps: [] } });
-  expect((await readMap(project, workId)).sessions.find(s => s.id === sessionId)?.agentPlan?.items).toEqual([]);
+  expect((readStoredMap(project, workId)).sessions.find(s => s.id === sessionId)?.agentPlan?.items).toEqual([]);
 });
 it.each([
   { steps, sessionId: 's-02' },

@@ -10,7 +10,7 @@
  */
 
 import { Check, ChevronDown } from 'lucide-react';
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import { sessionDotStateWithNeed } from '@parley/core/session-state';
 import { S } from '../../../shared/strings.js';
 import { sessionNeed } from '../../attention/derive.js';
@@ -22,7 +22,7 @@ import { activityFor, useActivityStore } from '../../store/activity.js';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../../ui/dropdown-menu.js';
 
 export interface SendMenuProps {
-  entry: WorkEntry; // сессии работы: AgentStateDot, ярлык, время последней активности
+  entry: WindowWorkEntry; // сессии работы: AgentStateDot, ярлык, время последней активности
   defaultSessionId: string | null; // по умолчанию — сессия диффа
   label: string; // подпись кнопки: S.common.send, S.notes.sendFile…
   disabled?: boolean;

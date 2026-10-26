@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useRef } from 'react';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { BrowserOwner, TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { settleVanishedWork } from '../files/SaveChangesDialog.js';
@@ -29,7 +29,7 @@ const ACTIVE_WORK_SILENCE_MS = 300;
  * Жива ли вкладка по картам работ (спека 5.8): используется при восстановлении
  * раскладки — `pruneLayout` выбрасывает вкладки, для которых здесь `false`.
  */
-export function isTabAlive(entry: WorkEntry, tab: TabSpec): boolean {
+export function isTabAlive(entry: WindowWorkEntry, tab: TabSpec): boolean {
   switch (tab.kind) {
     case 'terminal':
     case 'diff':
@@ -56,14 +56,14 @@ export function isTabAlive(entry: WorkEntry, tab: TabSpec): boolean {
  * Жив ли хозяин панели браузера (спека браузера 3.10): сессия есть в карте (закрытая тоже — её вкладка и панель живут до
  * удаления); комната есть и не в архиве (панель архивной комнаты уходит вместе с полем ввода, куда ложился бы контекст).
  */
-export function isPanelOwnerAlive(entry: WorkEntry, owner: BrowserOwner): boolean {
+export function isPanelOwnerAlive(entry: WindowWorkEntry, owner: BrowserOwner): boolean {
   return owner.kind === 'session'
     ? entry.map.sessions.some((session) => session.id === owner.sessionId)
     : entry.map.rooms.some((room) => room.id === owner.roomId && !isRoomArchived(room));
 }
 
 /** Раскладка без мёртвых вкладок и панелей исчезнувших хозяев; ничего не умерло — та же ссылка. */
-function pruneDead(layout: WorkLayout, entry: WorkEntry): WorkLayout {
+function pruneDead(layout: WorkLayout, entry: WindowWorkEntry): WorkLayout {
   return prunePanels(
     pruneLayout(layout, (tab) => isTabAlive(entry, tab)),
     (owner) => isPanelOwnerAlive(entry, owner),
@@ -120,7 +120,7 @@ function survivingNeighbor(
 }
 
 /** `loadLayout` → `parseWorkLayout` → `pruneLayout(isTabAlive)` и панели живых хозяев; `null` на любом шаге → `emptyLayout()`. */
-async function restoreLayout(bridge: ParleyBridge, entry: WorkEntry | undefined, key: string): Promise<WorkLayout> {
+async function restoreLayout(bridge: ParleyBridge, entry: WindowWorkEntry | undefined, key: string): Promise<WorkLayout> {
   const raw = await bridge.app.loadLayout(key);
   const parsed = raw === null ? null : parseWorkLayout(raw);
   const base = parsed ?? emptyLayout();
@@ -162,7 +162,7 @@ const hydrating = new Set<string>();
 const drops = new Map<string, number>();
 
 /** Гидрирует раскладки работ, ещё не показанных за этот запуск: тот же hydrateWork, что у первого показа. */
-export async function ensureHydrated(input: { bridge: ParleyBridge; works: WorkEntry[] }): Promise<void> {
+export async function ensureHydrated(input: { bridge: ParleyBridge; works: WindowWorkEntry[] }): Promise<void> {
   const jobs: Array<Promise<void>> = [];
   for (const entry of input.works) {
     const key = workKeyOf(entry.projectPath, entry.map.work.id);
@@ -186,7 +186,7 @@ export async function ensureHydrated(input: { bridge: ParleyBridge; works: WorkE
 
 export interface UseLayoutPersistenceInput {
   bridge: ParleyBridge;
-  works: WorkEntry[];
+  works: WindowWorkEntry[];
   worksLoaded: boolean;
   /**
    * Состав снимка (кусок 3.4): все работы — с архивными, свёрнутыми и скрытыми `done`,

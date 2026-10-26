@@ -2,7 +2,7 @@ import type { LetterReads } from './letter-store.js';
 import { recipientsOf } from './letters.js';
 import { canReadRoom } from './rooms.js';
 import { PARLEY } from './types.js';
-import type { Message, WorkMap, WorkSession } from './types.js';
+import type { Message, WindowWorkMap, WorkMap, WorkSession } from './types.js';
 
 /**
  * Тред выводится из карты, а не хранится (спецификация 2026-09-08, 3.4):
@@ -78,7 +78,7 @@ function inThread(map: WorkMap, scope: ThreadScope): (message: Message) => boole
   };
 }
 
-export function threadOf(map: WorkMap, sessionId: string): Thread {
+export function threadOf(map: WindowWorkMap, sessionId: string): Thread {
   const scope = threadScope(map, sessionId);
   const { owner, members } = scope;
   // Одинокий корень видит всю работу целиком: делить письма не на кого (3.4).
@@ -108,8 +108,18 @@ export function agentLetterVisible(map: WorkMap, sessionId: string): (message: M
   return visibleTo(map, threadScope(map, sessionId), sessionId);
 }
 
+/**
+ * Кто может быть концом прямого письма, видимого агенту (`agentLetterVisible`): сам агент и, если у него есть семья, её
+ * участники. Видимое письмо всегда называет кого-то из них отправителем или адресатом, поэтому по этому списку прямые
+ * письма отбираются запросом (`LetterQuery.involving`), а точное правило применяется уже к небольшому остатку.
+ */
+export function agentLetterAudience(map: WorkMap, sessionId: string): string[] {
+  const scope = threadScope(map, sessionId);
+  return scope.owner === null ? [sessionId] : [...new Set([sessionId, ...scope.members])];
+}
+
 /** Agent context keeps historical family access, but a lone root cannot read unrelated private mail. */
-export function agentThreadOf(map: WorkMap, sessionId: string): Thread {
+export function agentThreadOf(map: WindowWorkMap, sessionId: string): Thread {
   const scope = threadScope(map, sessionId);
   return {
     owner: scope.owner,

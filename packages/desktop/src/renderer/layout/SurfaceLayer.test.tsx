@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { refKey, type Result } from '@parley/protocol';
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import type { LayoutNode } from '../../shared/layout-types.js';
 import { resetFeedStoreForTests, useFeedStore } from '../chat/store.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
@@ -75,7 +75,7 @@ function session(id: string, label: string): WorkSession {
 const PROJECT = '/tmp/p';
 const WORK_KEY = '/tmp/p w';
 
-function entry(sessions: WorkSession[]): WorkEntry {
+function entry(sessions: WorkSession[]): WindowWorkEntry {
   return {
     projectPath: PROJECT,
     map: {

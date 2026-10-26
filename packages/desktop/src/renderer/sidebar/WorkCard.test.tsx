@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
-import type { Message, Room, WorkEntry } from '@parley/core';
+import type { Message, Room, WindowWorkEntry } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import type { WorkAttention } from '../attention/derive.js';
 import { roomKey } from '../lib/room-view.js';
@@ -67,7 +67,7 @@ function attention(patch: Partial<WorkAttention> = {}): WorkAttention {
   };
 }
 
-function renderCard(entry: WorkEntry, patch: Partial<WorkCardProps> = {}) {
+function renderCard(entry: WindowWorkEntry, patch: Partial<WorkCardProps> = {}) {
   const props: WorkCardProps = {
     entry,
     attention: attention(),
@@ -519,7 +519,7 @@ describe('WorkCard — кеш колбэков строк (решение кон
     const lastOpen = (id: string): (() => void) | undefined => rowProps.all.filter((props) => props.session.id === id).at(-1)?.onOpen;
     const before = { s1: lastOpen('s-01'), s2: lastOpen('s-02') };
 
-    const props = (entry: WorkEntry): WorkCardProps => ({
+    const props = (entry: WindowWorkEntry): WorkCardProps => ({
       entry,
       attention: attention(),
       activity: {},

@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
@@ -22,7 +22,7 @@ import { useHostStore } from '../../store/host.js';
 
 export interface RoomBodyProps {
   bridge: ParleyBridge;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   roomId: string;
   /** Работа активна — `LayoutBodyContext.active` из `GroupView` (кусок 4.2). */
   active: boolean;

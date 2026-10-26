@@ -6,7 +6,7 @@
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { FocusTarget } from '../../shared/bridge.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -31,7 +31,7 @@ function note(roomId: string, body = 'Возвраты · S01 collected position
   return { tag: `proposal:${KEY}:${roomId}`, title: 'Decision waiting for you', body, target: target(roomId) };
 }
 
-function workWithRooms(roomIds: string[]): WorkEntry {
+function workWithRooms(roomIds: string[]): WindowWorkEntry {
   return {
     projectPath: '/tmp/p',
     map: {

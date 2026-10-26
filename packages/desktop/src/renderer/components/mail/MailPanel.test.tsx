@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { Message, WorkEntry, WorkSession } from '@parley/core';
+import type { Message, WindowWorkEntry, WorkSession } from '@parley/core';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { ErrorBoundary } from '../../shell/ErrorBoundary.js';
 import { useHostStore } from '../../store/host.js';
@@ -52,7 +52,7 @@ function message(id: string, at: string): Message {
   return { id, roomId: null, from: 's-01', to: ['s-02'], at, text: `письмо ${id}`, kind: 'note', readBy: {} };
 }
 
-function entryWith(messages: Message[]): WorkEntry {
+function entryWith(messages: Message[]): WindowWorkEntry {
   return {
     projectPath: '/tmp/w-01',
     map: {

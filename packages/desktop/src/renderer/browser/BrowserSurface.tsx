@@ -35,7 +35,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { AGENT_LIMITS } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { viewportSize, type ViewportSpec } from '../../shared/browser-devtools.js';
@@ -150,7 +150,7 @@ export interface BrowserSurfaceProps {
   visible: boolean;
   bridge: ParleyBridge;
   /** Работа вкладки: сессии и комнаты цели «To» (этап B). */
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   /** Отправка агенту окна — строке в ввод CLI сессии без Chat (этап B). */
   sendDeps: SendWithToastDeps;
 }

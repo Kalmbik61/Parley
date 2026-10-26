@@ -2,15 +2,21 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { LEAD_ROLE, briefRevisions, buildBrief, loadBrief, memberRole, reconcileBrief, writeBrief } from './brief.js';
+import { LEAD_ROLE, briefRevisions, buildBrief as buildBriefOf, loadBrief, memberRole, reconcileBrief, writeBrief } from './brief.js';
 import { BRIEF_MAX_BYTES, ContextBudgetError, contextBytes, textHash } from './context-budget.js';
 import { GUIDE_TOPICS, guideTopic } from './guide.js';
 import { addMessage, addSession } from './map.js';
 import { addRoom } from './rooms.js';
 import { createWork, readMap, updateMap, workPaths } from './store.js';
-import type { WorkMap } from './types.js';
+import { mapLetterTx } from './letter-store.js';
+import type { WindowWorkMap, WorkMap } from './types.js';
 
 const AT = '2026-09-02T10:00:00.000Z';
+
+// Хранимая карта писем не содержит (спека хранилища 6.2): бриф читает их через `LetterReads`. Чистые тесты читают письма
+// самой карты с письмами; чтение из базы проверяют тесты записи брифа ниже.
+const buildBrief = (map: WorkMap, sessionId: string): string =>
+  buildBriefOf(map, sessionId, mapLetterTx('messages' in map ? (map as WindowWorkMap) : { ...map, messages: [] }).letters);
 
 function mapWithSessions(): WorkMap {
   const map: WorkMap = {

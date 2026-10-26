@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { BRIEF_MAX_BYTES, CONTEXT_LIMITS, ContextBudgetError, assertWithinBudget, inlineOrRef, textHash } from './context-budget.js';
-import { mapLetterTx, type LetterReads } from './letter-store.js';
+import { storeLetterReads, type LetterReads } from './letter-store.js';
 import { isMember, isRoomArchived, liveLead } from './rooms.js';
 import { ensureStateDir } from './state-dir.js';
 import { readMap, workPaths } from './store.js';
@@ -72,7 +72,7 @@ export function briefRevisions(text: string): { recorded: string | null; actual:
  * копируется, только пути — план агент прочитает сам, если он ему нужен. Живое состояние (статусы коллег,
  * вся история решений) в бриф не входит: оно меняется чаще брифа, а читается через `get_map`.
  */
-export function buildBrief(map: WorkMap, sessionId: string, letters: LetterReads = mapLetterTx(map).letters): string {
+export function buildBrief(map: WorkMap, sessionId: string, letters: LetterReads): string {
   const session = sessionOf(map, sessionId);
   const lines: string[] = [
     `# Workspace ${map.work.id} — ${field('title', map.work.title, CONTEXT_LIMITS.title, 'get_map {field: "title"}')}`,
@@ -266,7 +266,7 @@ export async function loadBrief(
   }
   let fresh: string | null = null;
   try {
-    fresh = buildBrief(await readMap(projectPath, workId), sessionId);
+    fresh = buildBrief(await readMap(projectPath, workId), sessionId, storeLetterReads(projectPath, workId));
   } catch (error) {
     // Бриф не влез в бюджет — отказ, а не молчаливый старый текст; прочие ошибки карты оставляют файл.
     if (error instanceof ContextBudgetError) throw error;
@@ -287,7 +287,7 @@ export async function writeBrief(
   map: WorkMap,
   sessionId: string,
 ): Promise<string> {
-  const text = buildBrief(map, sessionId);
+  const text = buildBrief(map, sessionId, storeLetterReads(projectPath, map.work.id));
   const paths = workPaths(projectPath, map.work.id);
   const file = path.join(paths.briefs, `${sessionId}.md`);
   // Каталог состояния заводит `ensureStateDir`: новый `.parley` получает свой `.gitignore` (R5), даже если

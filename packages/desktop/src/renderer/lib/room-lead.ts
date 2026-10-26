@@ -8,13 +8,13 @@
  * одной живой сессии: такая комната закрыта. Человек — не сессия и ведущим не бывает.
  */
 
-import type { Room, WorkMap } from '@parley/core';
+import type { Room, WindowWorkMap } from '@parley/core';
 
-function isAlive(map: WorkMap, id: string): boolean {
+function isAlive(map: WindowWorkMap, id: string): boolean {
   return map.sessions.some((session) => session.id === id && session.lifecycle !== 'closed');
 }
 
-export function roomLiveLead(map: WorkMap, room: Room): string | null {
+export function roomLiveLead(map: WindowWorkMap, room: Room): string | null {
   const declared = room.lead ?? room.members[0] ?? null;
   if (declared !== null && room.members.includes(declared) && isAlive(map, declared)) return declared;
   return room.members.find((id) => isAlive(map, id)) ?? null;

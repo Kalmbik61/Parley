@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import { App } from './App.js';
 import { createFakeBridge, type FakeBridge } from './test-utils/fake-bridge.js';
 import { bufferKey, initialBuffer } from './files/buffer.js';
@@ -232,7 +232,7 @@ function session(id: string, label: string): WorkSession {
   };
 }
 
-function work(id: string, createdAt: string, sessions: WorkSession[]): WorkEntry {
+function work(id: string, createdAt: string, sessions: WorkSession[]): WindowWorkEntry {
   return {
     projectPath: `/tmp/${id}`,
     map: {
@@ -482,7 +482,7 @@ describe('App — переход по цели уведомления (тест�
 
   it('тест 15: отложенная цель до ответа works.list ждёт его — без тоста; после ответа применена', async () => {
     const w2 = work('w-02', '2026-01-02', [session('s-02', 'бэк')]);
-    let answer: (value: { entries: WorkEntry[]; branches: Record<string, string | null> }) => void = () => {};
+    let answer: (value: { entries: WindowWorkEntry[]; branches: Record<string, string | null> }) => void = () => {};
     bridge.setHandler('works.list', () => new Promise((resolve) => (answer = resolve)));
     useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
     bridge.setPendingFocusTarget(target);

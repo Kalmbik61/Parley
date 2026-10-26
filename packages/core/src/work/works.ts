@@ -7,9 +7,12 @@ import {
   workDataVersion,
   workVersion,
 } from './store.js';
-import type { WorkMap } from './types.js';
+import type { WindowWorkMap, WorkMap } from './types.js';
 
-/** Карта работы вместе с проектом, в котором она лежит. */
+/**
+ * Карта работы вместе с проектом, в котором она лежит. Карта хранимая, без писем (спека хранилища 6.2): письма читаются из
+ * таблиц (`letter-store.ts`). Для окна — `WindowWorkEntry`.
+ */
 export interface WorkEntry {
   projectPath: string;
   map: WorkMap;
@@ -24,6 +27,15 @@ export interface WorkEntry {
    * успела вклиниться между чтением версии и карты, — тогда работу надо считать новой.
    */
   version?: number;
+}
+
+/**
+ * Работа в снимке для окна и страниц (протокол `WorksSnapshot`): карта с письмами — сжатая `compactWorkMap` у окна с
+ * `compact-works` или полная у прежнего окна. Сборка снимка — хост (`works-service.ts`); код окна работает с этим видом.
+ */
+export interface WindowWorkEntry {
+  projectPath: string;
+  map: WindowWorkMap;
 }
 
 /**

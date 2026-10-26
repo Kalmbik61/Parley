@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkMap, WorkSession } from '@parley/core';
+import type { WindowWorkMap, WorkSession } from '@parley/core';
 import { participantTag } from './participant-tag.js';
 
 function session(id: string, provider: string): WorkSession {
@@ -29,7 +29,7 @@ function session(id: string, provider: string): WorkSession {
   };
 }
 
-function mapWith(sessions: WorkSession[], deletedSessions: string[] = []): WorkMap {
+function mapWith(sessions: WorkSession[], deletedSessions: string[] = []): WindowWorkMap {
   return {
     schemaVersion: 2,
     rooms: [],

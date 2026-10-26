@@ -25,7 +25,7 @@ import { addSession } from './work/map.js';
 import {
   createWork,
   pruneWorksIndex,
-  readMap,
+  readStoredMap,
   readWorksIndex,
   updateMap,
   workPaths,
@@ -259,7 +259,8 @@ async function workCommand(rest: string[], argv: string[]): Promise<number> {
   if (subcommand === 'map') {
     const workId = requiredOption(argv, '--work');
     const projectPath = await resolveProject(argv, workId);
-    print({ projectPath, map: await readMap(projectPath, workId) });
+    // Выгрузка — полная карта с письмами (`WindowWorkMap`): хранимая карта их не содержит (спека хранилища 6.2).
+    print({ projectPath, map: readStoredMap(projectPath, workId) });
     return 0;
   }
 

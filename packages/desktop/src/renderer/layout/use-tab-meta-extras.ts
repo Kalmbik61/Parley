@@ -10,7 +10,7 @@
 
 import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import { sessionAttention, sessionNeed, type Attention } from '../attention/derive.js';
 import { useBrowserStore, type BrowserTabState } from '../browser/store.js';
@@ -19,7 +19,7 @@ import { useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
 import { EMPTY_EXTRAS, type TabMetaExtras } from './tab-meta.js';
 
-function attentionBySession(entries: WorkEntry[], byRef: Record<string, ActivityEntry>): Record<string, Attention> {
+function attentionBySession(entries: WindowWorkEntry[], byRef: Record<string, ActivityEntry>): Record<string, Attention> {
   const out: Record<string, Attention> = {};
   for (const entry of entries) {
     for (const session of entry.map.sessions) {
@@ -34,7 +34,7 @@ function attentionBySession(entries: WorkEntry[], byRef: Record<string, Activity
  * refKey живых сессий снимка, которым нужен человек (`SessionActivity.need`, спека застрявших 7.3). Массив, а не
  * множество: `useShallow` сравнивает его поэлементно, и вкладки на метрики не перерисовываются.
  */
-export function needSessionKeys(entries: WorkEntry[], byRef: Record<string, ActivityEntry>): string[] {
+export function needSessionKeys(entries: WindowWorkEntry[], byRef: Record<string, ActivityEntry>): string[] {
   const keys: string[] = [];
   for (const entry of entries) {
     for (const session of entry.map.sessions) {

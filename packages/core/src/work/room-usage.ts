@@ -82,15 +82,15 @@ function settle(total: UsageTotal, missing: boolean): UsageTotal {
 }
 
 /**
- * `letters` — откуда читать ленту комнат без журнала участия (`roomMembership`); без него — письма карты. Хост даёт
- * чтение из базы работы (спека хранилища 6.2).
+ * `letters` — откуда читать ленту комнат без журнала участия (`roomMembership`): чтение писем работы из базы
+ * (`storeLetterReads`, спека хранилища 6.2); в хранимой карте писем нет.
  */
 export async function roomUsage(
   map: WorkMap,
   roomId: string,
   resolver: UsageResolver,
   now: string,
-  letters?: LetterReads,
+  letters: LetterReads,
 ): Promise<RoomUsage> {
   const room = map.rooms.find((candidate) => candidate.id === roomId);
   if (room === undefined) throw new Error(`room ${roomId} is not in the map`);

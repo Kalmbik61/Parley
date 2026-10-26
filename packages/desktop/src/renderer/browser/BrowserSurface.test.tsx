@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import type { Room, WorkEntry, WorkSession } from '@parley/core';
+import type { Room, WindowWorkEntry, WorkSession } from '@parley/core';
 import type { BrowserTarget, GroupNode, TabSpec } from '../../shared/layout-types.js';
 import { BROWSER_PARTITION } from '../../shared/browser-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
@@ -46,7 +46,7 @@ class ResizeObserverStub {
 const WORK_KEY = '/tmp/p w';
 const TAB = 'browser:abc123';
 
-function entry(): WorkEntry {
+function entry(): WindowWorkEntry {
   return {
     projectPath: '/tmp/p',
     map: {
@@ -1140,7 +1140,7 @@ describe('BrowserSurface — первая загрузка после захва
   });
 });
 
-function entryWith(sessions: WorkSession[], rooms: Room[]): WorkEntry {
+function entryWith(sessions: WorkSession[], rooms: Room[]): WindowWorkEntry {
   const base = entry();
   return { ...base, map: { ...base.map, sessions, rooms } };
 }

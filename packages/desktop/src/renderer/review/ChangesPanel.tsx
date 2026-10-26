@@ -16,7 +16,7 @@
 import { useState, type CSSProperties } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import { toast } from 'sonner';
-import type { BranchCommit, DiffFile, WorkEntry } from '@parley/core';
+import type { BranchCommit, DiffFile, WindowWorkEntry } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
@@ -49,7 +49,7 @@ export interface ChangesPanelProps {
   bridge: ParleyBridge;
   workKey: string;
   /** Активная работа. */
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   /** `SendWithToastDeps` окна, из `AppShell` (7.2). */
   sendDeps: SendWithToastDeps;
 }

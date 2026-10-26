@@ -4,7 +4,7 @@
  */
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '../../ui/dropdown-menu.js';
 import { makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
 import { MoveToMenu } from './MoveToMenu.js';
@@ -17,7 +17,7 @@ const WORK = makeWork('w-01', {
 
 afterEach(cleanup);
 
-function renderMenu(entry: WorkEntry, onMove = vi.fn()): ReturnType<typeof vi.fn> {
+function renderMenu(entry: WindowWorkEntry, onMove = vi.fn()): ReturnType<typeof vi.fn> {
   render(
     <DropdownMenu open>
       <DropdownMenuTrigger>меню</DropdownMenuTrigger>

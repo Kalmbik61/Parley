@@ -8,10 +8,12 @@ import {
   type LetterReader,
   capStrings,
   clampPageBytes,
-  compactWorkMap,
+  compactWorkMap as compactWorkMapOf,
   listPage,
-  mapTopology,
-  messagePage,
+  mapTopology as mapTopologyOf,
+  messagePage as messagePageOf,
+  type MessagePageOptions,
+  type WindowOptions,
   pageBySeq,
   parseCursor,
   seqOf,
@@ -23,9 +25,18 @@ import { unreadForHuman } from './letters.js';
 import { addMessage, addSession } from './map.js';
 import { addRoom } from './rooms.js';
 import type { SessionNeed } from './stuck.js';
-import { HUMAN, type Message, type WorkMap } from './types.js';
+import { HUMAN, type Message, type WindowWorkMap, type WorkMap } from './types.js';
 
-const emptyMap = (): WorkMap => ({
+// Хранимая карта писем не содержит (спека хранилища 6.2): страницы и снимок берут читателя писем. Чистые тесты читают письма
+// самой карты с письмами; сборка из базы проверяется в `letter-store.test.ts` и хосте.
+const messagePage = <V extends { text: string }>(map: WorkMap, options: MessagePageOptions<V>, letters: LetterReader = mapLetterReader(map as WindowWorkMap)) =>
+  messagePageOf(map, options, letters);
+const compactWorkMap = (map: WorkMap, options: WindowOptions, letters: LetterReader = mapLetterReader(map as WindowWorkMap)) =>
+  compactWorkMapOf(map, options, letters);
+const mapTopology = (map: WorkMap, callerId: string | null, letters: LetterReader = mapLetterReader(map as WindowWorkMap)) =>
+  mapTopologyOf(map, callerId, letters);
+
+const emptyMap = (): WindowWorkMap => ({
   schemaVersion: 2,
   work: { id: 'w-0001', title: 'Работа', goal: 'Цель', status: 'active', createdAt: '2026-10-05T00:00:00.000Z', updatedAt: '2026-10-05T00:00:00.000Z' },
   sessions: [],

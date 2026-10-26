@@ -3,6 +3,7 @@ import {
   addMessage,
   addSession,
   canTransition,
+  normalizeLegacyMap,
   normalizeMap,
   parseMap,
   parseMapText,
@@ -12,11 +13,11 @@ import {
 } from './map.js';
 import { defaultSessionName, NEW_LABEL } from './names.js';
 import { roomLead } from './rooms.js';
-import { HUMAN, type Room, type SessionLifecycle, type WorkMap } from './types.js';
+import { HUMAN, type Room, type SessionLifecycle, type WindowWorkMap, type WorkMap } from './types.js';
 import { mapLetterTx } from './letter-store.js';
 const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
-const emptyMap = (): WorkMap => ({
+const emptyMap = (): WindowWorkMap => ({
   schemaVersion: 2,
   work: {
     id: 'w-0001',
@@ -837,7 +838,7 @@ describe('parseMap', () => {
 });
 
 describe('parseMapText и normalizeMap', () => {
-  it('parseMap равна normalizeMap(parseMapText(...)): и для v2, и для v1, и для отказов', () => {
+  it('parseMap равна normalizeLegacyMap(parseMapText(...)): и для v2, и для v1, и для отказов', () => {
     const v2 = JSON.stringify(emptyMap());
     const v1 = JSON.stringify({
       ...emptyV1(),
@@ -846,8 +847,12 @@ describe('parseMapText и normalizeMap', () => {
     });
 
     for (const raw of [v2, v1]) {
-      expect(parseMap(raw, 'map.json')).toEqual(normalizeMap(parseMapText(raw, 'map.json'), 'map.json'));
+      expect(parseMap(raw, 'map.json')).toEqual(normalizeLegacyMap(parseMapText(raw, 'map.json'), 'map.json'));
     }
+    // Письма v1 разбор прежнего файла переводит сам: адресат — список, отметка — `readBy`.
+    expect(parseMap(v1, 'map.json').messages).toEqual([
+      { id: 'm-01', roomId: null, from: 's-01', to: ['s-02'], at: 'x', text: 't', kind: 'note', readBy: {} },
+    ]);
     const failure = (run: () => unknown): string => {
       try {
         run();
@@ -861,6 +866,18 @@ describe('parseMapText и normalizeMap', () => {
       expect(viaParse).toMatch(/^map map\.json cannot be parsed: /);
       expect(failure(() => normalizeMap(parseMapText(raw, 'map.json'), 'map.json'))).toBe(viaParse);
     }
+  });
+
+  it('normalizeMap принимает хранимую карту без писем и их не проверяет; письма проверяет разбор прежнего файла', () => {
+    const stored: Partial<WindowWorkMap> = emptyMap();
+    delete stored.messages;
+    expect(() => normalizeMap(structuredClone(stored), 'map.json')).not.toThrow();
+
+    const broken = { ...emptyMap(), messages: [{ id: 'm-01', to: 's-02' }] };
+    expect(() => parseMap(JSON.stringify(broken), 'map.json')).toThrow(/^map map\.json cannot be parsed: unexpected shape/);
+    expect(() => normalizeMap(structuredClone(broken), 'map.json')).not.toThrow();
+    const noLetters = { ...stored };
+    expect(() => parseMap(JSON.stringify(noLetters), 'map.json')).toThrow(/unexpected shape/);
   });
 
   it('parseMapText отдаёт сырой объект без разбора формы, а имя источника попадает в текст отказа', () => {

@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  addMessage,
   addSession,
   compactWorkMap,
   createWork,
@@ -595,8 +594,8 @@ describe('снимок окна по версии работы (план 4, за
     const latest = (): string | null | undefined => s.windowSnapshot()?.entries[0]?.map.compact?.messages.latestId;
     expect(latest()).toBeNull();
 
-    await updateMap(projectA, a.work.id, (map) => {
-      addMessage(map, { from: 's-01', to: [], text: 'привет' });
+    await updateMap(projectA, a.work.id, (map, letters) => {
+      letters.add({ roomId: null, kind: 'note', from: 's-01', to: [], text: 'привет' });
     });
 
     await vi.waitFor(() => expect(latest()).toBe('m-01'), { timeout: 10_000, interval: 10 });

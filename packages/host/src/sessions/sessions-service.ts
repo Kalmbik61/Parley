@@ -88,7 +88,7 @@ import {
   type ProviderEntry,
 } from '@parley/core';
 import { HOST_ERROR_REASONS, refKey } from '@parley/protocol';
-import type { SessionRef, WorksSnapshot } from '@parley/protocol';
+import type { SessionRef } from '@parley/protocol';
 import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { ConsentsService } from '../consents/consents-service.js';
 import type { HostContext } from '../context.js';
@@ -97,7 +97,7 @@ import { serialized } from '../methods/custom-providers.js';
 import type { HookServer } from '../hooks/hook-server.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
-import type { WorksService } from '../works/works-service.js';
+import type { WorksService, WorksView } from '../works/works-service.js';
 import { gitFailure } from '../worktrees/worktrees-service.js';
 import { createStepTimer } from '../timing.js';
 import { createSkillInstaller } from './agent-skills.js';
@@ -1242,7 +1242,7 @@ export function createSessionsService(
    * гасит процесс сам — закрытая сессия жить не должна. Так же и всякая живая
    * сессия архивной работы: архив освобождает процессы агентов, сессии засыпают.
    */
-  function stopRetired(snapshot: WorksSnapshot): void {
+  function stopRetired(snapshot: WorksView): void {
     for (const entry of snapshot.entries) {
       const archived = entry.map.work.status === 'archived';
       for (const session of entry.map.sessions) {

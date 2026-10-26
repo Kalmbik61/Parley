@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Message, Proposal, Room, SessionActivity, WorkEntry, WorkSession } from '@parley/core';
+import type { Message, Proposal, Room, SessionActivity, WindowWorkEntry, WorkSession } from '@parley/core';
 import { refKey, type HostNotice, type SessionRef } from '@parley/protocol';
 import type { AppNote, FocusTarget } from '../../shared/bridge.js';
 import { providerName } from '../../shared/strings.js';
@@ -55,7 +55,7 @@ function letter(id: string, overrides: Partial<Message> = {}): Message {
   return { id, roomId: null, from: 's-01', to: ['human'], at: '2026-01-01T00:00:00.000Z', text: 'hello', kind: 'note', readBy: {}, ...overrides };
 }
 
-function entry(title: string, sessions: WorkSession[], messages: Message[] = [], rooms: Room[] = []): WorkEntry {
+function entry(title: string, sessions: WorkSession[], messages: Message[] = [], rooms: Room[] = []): WindowWorkEntry {
   return {
     projectPath: '/tmp/p',
     map: {
@@ -79,7 +79,7 @@ interface Harness {
   notes: AppNote[];
   prefs: UiFile['notifications'];
   visible: Set<string>;
-  entries: WorkEntry[];
+  entries: WindowWorkEntry[];
   /** Окно в фокусе: решение — карточкой в окне, а не уведомлением macOS (кусок 8). */
   active: boolean;
   /** Окно острова живо: запрос с найденной карточкой показывает остров, а не уведомление macOS (спека 2026-10-12). */
@@ -94,7 +94,7 @@ interface Harness {
   notifier: ReturnType<typeof createAttentionNotifier>;
 }
 
-function harness(entries: WorkEntry[]): Harness {
+function harness(entries: WindowWorkEntry[]): Harness {
   const h: Harness = {
     notes: [],
     prefs: { ...DEFAULT_UI.notifications },
@@ -132,7 +132,7 @@ function harness(entries: WorkEntry[]): Harness {
 /** Дать отработать запросу карточки и паузе повтора (таймеры — подставные, см. `useFakeTimers` в describe). */
 const settle = (): Promise<void> => vi.runAllTimersAsync().then(() => undefined);
 
-const redesign = (): WorkEntry =>
+const redesign = (): WindowWorkEntry =>
   entry('Redesign', [
     session('s-02', 'executor', { task: 'Fix the login form\nand the tests', summary: 'Login fixed\nall green' }),
     session('s-03', 'backend'),
@@ -456,7 +456,7 @@ function proposal(id: string, rev = 0, from = 's-01'): Proposal {
 }
 
 /** Работа с двумя сессиями и заданными комнатами: ведущий комнат — `s-01`. */
-function roomsEntry(rooms: Room[]): WorkEntry {
+function roomsEntry(rooms: Room[]): WindowWorkEntry {
   return entry('Redesign', [session('s-01', 'planner'), session('s-02', 'executor')], [], rooms);
 }
 
@@ -532,7 +532,7 @@ describe('createAttentionNotifier.onWorks — решение ведущего в
   const answer = (id: string, text: string): Message =>
     letter(id, { roomId: 'r-01', from: 'human', to: ['s-01'], text, at: '2026-01-01T00:05:00.000Z' });
   const RETURNED = 'Returned for rework: add the tests';
-  const roomWith = (decision: Proposal | null, messages: Message[]): WorkEntry => {
+  const roomWith = (decision: Proposal | null, messages: Message[]): WindowWorkEntry => {
     const base = roomsEntry([room('r-01', 'Возвраты', decision)]);
     return { ...base, map: { ...base.map, messages } };
   };
@@ -764,7 +764,7 @@ describe('createAttentionNotifier.onWorks — упоминание челове�
   const withMessages = (
     messages: Message[],
     rooms: Room[] = [room('r-01', 'Mobile APP', null)],
-  ): WorkEntry => {
+  ): WindowWorkEntry => {
     const base = roomsEntry(rooms);
     return { ...base, map: { ...base.map, messages } };
   };
@@ -1222,7 +1222,7 @@ describe('wireAttentionNotifications на подставном мосте и н�
 
   it('первый снимок работ после подписки — база писем; следующий с новым письмом — уведомление', () => {
     const off = wire();
-    const current = useWorksStore.getState().entries[0] as WorkEntry;
+    const current = useWorksStore.getState().entries[0] as WindowWorkEntry;
     useWorksStore.setState({ entries: [{ ...current, map: { ...current.map, messages: [letter('m-1')] } }] });
     expect(bridge.appNotified).toEqual([]);
     useWorksStore.setState({ entries: [{ ...current, map: { ...current.map, messages: [letter('m-1'), letter('m-2')] } }] });
@@ -1232,7 +1232,7 @@ describe('wireAttentionNotifications на подставном мосте и н�
 
   it('упоминание человека в комнате: первый снимок работ — база; следующий с новым упоминанием — уведомление macOS с целью-комнатой', () => {
     const off = wire();
-    const current = useWorksStore.getState().entries[0] as WorkEntry;
+    const current = useWorksStore.getState().entries[0] as WindowWorkEntry;
     const base = { ...current, map: { ...current.map, rooms: [room('r-01', 'Mobile APP', null)] } };
     const mention = (id: string): Message =>
       letter(id, { roomId: 'r-01', from: 's-02', to: [], text: 'Take a look, @human' });
@@ -1256,7 +1256,7 @@ describe('wireAttentionNotifications на подставном мосте и н�
 
   /** Снимок работы с комнатой `r-01` и решением (или без него) — заменой `entries` стора работ. */
   function setRoom(decision: Proposal | null): void {
-    const current = useWorksStore.getState().entries[0] as WorkEntry;
+    const current = useWorksStore.getState().entries[0] as WindowWorkEntry;
     useWorksStore.setState({ entries: [{ ...current, map: { ...current.map, rooms: [room('r-01', 'Возвраты', decision)] } }] });
   }
 
@@ -1335,7 +1335,7 @@ describe('createAttentionNotifier.onActivity — причина need, сигна
     ...live(activity),
     need,
   });
-  const codexPair = (): WorkEntry =>
+  const codexPair = (): WindowWorkEntry =>
     entry('Redesign', [
       session('s-02', 'executor', { provider: 'codex' }),
       session('s-03', 'backend', { provider: 'codex' }),

@@ -7,7 +7,7 @@
 
 import { cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { tabId } from './ids.js';
@@ -46,7 +46,7 @@ function session(id: string, overrides: Partial<WorkSession> = {}): WorkSession 
   };
 }
 
-function work(id: string, projectPath: string, sessions: WorkSession[] = [], status: 'active' | 'done' | 'archived' = 'active'): WorkEntry {
+function work(id: string, projectPath: string, sessions: WorkSession[] = [], status: 'active' | 'done' | 'archived' = 'active'): WindowWorkEntry {
   return {
     projectPath,
     map: {
@@ -209,7 +209,7 @@ describe('useLayoutPersistence', () => {
     const entryB = work('w-b', '/tmp/b');
 
     const { rerender } = renderHook(
-      ({ entries, order }: { entries: WorkEntry[]; order: string[] }) =>
+      ({ entries, order }: { entries: WindowWorkEntry[]; order: string[] }) =>
         useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder: order }),
       { initialProps: { entries: [entryA, entryB], order: [keyA, keyB] } },
     );
@@ -233,7 +233,7 @@ describe('useLayoutPersistence', () => {
     const diffTab: TabSpec = { kind: 'diff', id: tabId.diff('s-02', null), sessionId: 's-02', commit: null };
 
     const { rerender } = renderHook(
-      ({ entries }: { entries: WorkEntry[] }) =>
+      ({ entries }: { entries: WindowWorkEntry[] }) =>
         useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order: [keyA], visibleOrder: [keyA] }),
       { initialProps: { entries: [entryA] } },
     );
@@ -256,7 +256,7 @@ describe('useLayoutPersistence', () => {
     const roomTab: TabSpec = { kind: 'room', id: tabId.room('r-01'), roomId: 'r-01' };
 
     const { rerender } = renderHook(
-      ({ entries }: { entries: WorkEntry[] }) =>
+      ({ entries }: { entries: WindowWorkEntry[] }) =>
         useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order: [keyA], visibleOrder: [keyA] }),
       { initialProps: { entries: [entryA] } },
     );
@@ -277,7 +277,7 @@ describe('useLayoutPersistence', () => {
     const tab: TabSpec = { kind: 'terminal', id: tabId.terminal('s-02'), sessionId: 's-02' };
 
     const { rerender } = renderHook(
-      ({ entries }: { entries: WorkEntry[] }) =>
+      ({ entries }: { entries: WindowWorkEntry[] }) =>
         useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order: [keyA], visibleOrder: [keyA] }),
       { initialProps: { entries: [entryA] } },
     );
@@ -300,7 +300,7 @@ describe('useLayoutPersistence', () => {
     const chat = { kind: 'session', sessionId: 's-02' } as const;
     const room = { kind: 'room', roomId: 'r-01' } as const;
 
-    function entryWithRoom(sessions: WorkSession[], archived = false): WorkEntry {
+    function entryWithRoom(sessions: WorkSession[], archived = false): WindowWorkEntry {
       const entry = work('w-a', '/tmp/a', sessions);
       entry.map.rooms.push({ id: 'r-01', title: 'r', creator: 'human', members: [], createdAt: '2026-01-01', ...(archived ? { archivedAt: '2026-02-01' } : {}) });
       return entry;
@@ -326,7 +326,7 @@ describe('useLayoutPersistence', () => {
       const bridge = createFakeBridge();
       const withSession = entryWithRoom([session('s-01'), session('s-02')]);
       const { rerender } = renderHook(
-        ({ entries }: { entries: WorkEntry[] }) => useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order: [keyA], visibleOrder: [keyA] }),
+        ({ entries }: { entries: WindowWorkEntry[] }) => useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order: [keyA], visibleOrder: [keyA] }),
         { initialProps: { entries: [withSession] } },
       );
       await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
@@ -457,7 +457,7 @@ describe('useLayoutPersistence', () => {
     const entryC = work('w-c', '/tmp/c');
 
     const { rerender } = renderHook(
-      ({ entries, order }: { entries: WorkEntry[]; order: string[] }) =>
+      ({ entries, order }: { entries: WindowWorkEntry[]; order: string[] }) =>
         useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder: order }),
       { initialProps: { entries: [entryA, entryB, entryC], order: [keyA, keyB, keyC] } },
     );
@@ -477,7 +477,7 @@ describe('useLayoutPersistence', () => {
     const entryC = work('w-c', '/tmp/c');
 
     const { rerender } = renderHook(
-      ({ entries, order }: { entries: WorkEntry[]; order: string[] }) =>
+      ({ entries, order }: { entries: WindowWorkEntry[]; order: string[] }) =>
         useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder: order }),
       { initialProps: { entries: [entryA, entryB, entryC], order: [keyA, keyB, keyC] } },
     );
@@ -502,7 +502,7 @@ describe('useLayoutPersistence', () => {
     const entryC = work('w-c', '/tmp/c');
 
     const { rerender } = renderHook(
-      ({ entries, order }: { entries: WorkEntry[]; order: string[] }) =>
+      ({ entries, order }: { entries: WindowWorkEntry[]; order: string[] }) =>
         useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder: order }),
       { initialProps: { entries: [entryA, entryB, entryC], order: [keyA, keyB, keyC] } },
     );
@@ -522,7 +522,7 @@ describe('useLayoutPersistence', () => {
     const entryB = work('w-b', '/tmp/b');
 
     const { rerender } = renderHook(
-      ({ entries, order }: { entries: WorkEntry[]; order: string[] }) =>
+      ({ entries, order }: { entries: WindowWorkEntry[]; order: string[] }) =>
         useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder: order }),
       { initialProps: { entries: [entryA, entryB], order: [keyA, keyB] } },
     );
@@ -560,9 +560,9 @@ describe('useLayoutPersistence', () => {
     const entryB = work('w-b', '/tmp/b');
 
     const { rerender } = renderHook(
-      ({ entries, order }: { entries: WorkEntry[]; order: string[] }) =>
+      ({ entries, order }: { entries: WindowWorkEntry[]; order: string[] }) =>
         useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder: order }),
-      { initialProps: { entries: [] as WorkEntry[], order: [] as string[] } },
+      { initialProps: { entries: [] as WindowWorkEntry[], order: [] as string[] } },
     );
 
     expect(useLayoutStore.getState().activeWorkKey).toBeNull();
@@ -644,7 +644,7 @@ describe('useLayoutPersistence', () => {
 // ---------------------------------------------------------------------------
 
 describe('useLayoutPersistence — order и visibleOrder (кусок 3.4)', () => {
-  type Props = { entries: WorkEntry[]; order: string[]; visibleOrder: string[] | null };
+  type Props = { entries: WindowWorkEntry[]; order: string[]; visibleOrder: string[] | null };
   const mount = (bridge: ReturnType<typeof createFakeBridge>, initialProps: Props) =>
     renderHook(
       ({ entries, order, visibleOrder }: Props) => useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder }),
@@ -753,7 +753,7 @@ describe('useLayoutPersistence — order и visibleOrder (кусок 3.4)', () =
 // Тест 7 куска 6.3: показ архивных включён — в visibleOrder есть архивные, но соседом и
 // «первой видимой» они не бывают (спека 6.7).
 describe('useLayoutPersistence — показ архивных (тест 7 куска 6.3)', () => {
-  type Props = { entries: WorkEntry[]; order: string[]; visibleOrder: string[] | null };
+  type Props = { entries: WindowWorkEntry[]; order: string[]; visibleOrder: string[] | null };
   const mount = (bridge: ReturnType<typeof createFakeBridge>, initialProps: Props) =>
     renderHook(
       ({ entries, order, visibleOrder }: Props) => useLayoutPersistence({ bridge, works: entries, worksLoaded: true, order, visibleOrder }),

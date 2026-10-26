@@ -14,6 +14,7 @@ import type {
   MessageVia,
   SessionLifecycle,
   SessionResult,
+  WindowWorkMap,
   WorkMap,
   WorkProvider,
   WorkSession,
@@ -77,7 +78,7 @@ export function nextSessionId(map: WorkMap): string {
  * Следующий id сообщения внутри работы: `m-01`, `m-02`, … Номер — по списку, но не ниже `work.messageSeq`:
  * удалённая комната уносит свои письма, и их id не переиспользуются.
  */
-export function nextMessageId(map: WorkMap): string {
+export function nextMessageId(map: WindowWorkMap): string {
   const next = Math.max(map.work.messageSeq ?? 0, maxNumber(map.messages.map((message) => message.id), 'm-')) + 1;
   return `m-${String(next).padStart(2, '0')}`;
 }
@@ -202,8 +203,11 @@ export interface NewMessage {
   via?: MessageVia;
 }
 
-/** Кладёт сообщение в карту непрочитанным: доставка — pull через `check_inbox`. */
-export function addMessage(map: WorkMap, init: NewMessage, at = new Date().toISOString()): Message {
+/**
+ * Кладёт сообщение в карту с письмами непрочитанным: доставка — pull через `check_inbox`. Карта с письмами — это
+ * `WindowWorkMap` (тесты, окно и сверка переезда); в базе письма кладёт `LetterTx.add` (спека хранилища 6.2).
+ */
+export function addMessage(map: WindowWorkMap, init: NewMessage, at = new Date().toISOString()): Message {
   // Поля перечислены руками, а не `...init`: при разложении `kind: undefined`
   // попал бы в карту ключом без значения, и письмо на диске осталось бы без вида.
   // По той же причине `replyTo` дописывается только заданный.
@@ -330,12 +334,12 @@ const isMessageShape =
     (version === 1 ? typeof value.to === 'string' : Array.isArray(value.to));
 
 /**
- * Разбирает карту. Форма undocumented-логов тут ни при чём: файл пишем мы сами,
- * поэтому чужая форма — повод отказаться, а не догадываться (раздел 8). Карта
- * v1 поднимается до v2 в памяти; на диск v2 ляжет первой же мутацией.
+ * Разбирает прежнюю карту `map.json` вместе с письмами. Форма undocumented-логов тут ни при чём: файл пишем мы сами,
+ * поэтому чужая форма — повод отказаться, а не догадываться (раздел 8). Карта v1 поднимается до v2 в памяти. Письма в
+ * хранимой карте не живут (спека хранилища 6.2): этот разбор нужен переезду прежних файлов в базу и тестам.
  */
-export function parseMap(raw: string, file: string): WorkMap {
-  return normalizeMap(parseMapText(raw, file), file);
+export function parseMap(raw: string, file: string): WindowWorkMap {
+  return normalizeLegacyMap(parseMapText(raw, file), file);
 }
 
 /**
@@ -351,9 +355,29 @@ export function parseMapText(raw: string, source: string): unknown {
 }
 
 /**
- * Вторая половина `parseMap`: проверка формы, подъём v1 до v2, миграции записей и проверки карты целиком
- * (спека хранилища 6.2). Нужна отдельно потому, что карту из базы собирает `rowsToMap`, а не `JSON.parse`.
- * Правит `data` на месте и идемпотентна: уже разобранная карта проходит без изменений.
+ * Вторая половина `parseMap` для карты с письмами: проверка формы писем и их миграции, затем `normalizeMap` остального
+ * (спека хранилища 6.2). Правит `data` на месте; письма остаются в нём как `messages`.
+ */
+export function normalizeLegacyMap(data: unknown, source: string): WindowWorkMap {
+  const version = isRecord(data) ? data.schemaVersion : undefined;
+  if (
+    !isRecord(data) ||
+    (version !== 1 && version !== 2) ||
+    !Array.isArray(data.messages) ||
+    !data.messages.every(isMessageShape(version))
+  ) {
+    throw new Error(`map ${source} cannot be parsed: unexpected shape`);
+  }
+  if (version === 1) for (const message of data.messages as Record<string, unknown>[]) migrateMessageV1(message);
+  for (const message of data.messages as Record<string, unknown>[]) migrateMessage(message);
+  return normalizeMap(data, source) as WindowWorkMap;
+}
+
+/**
+ * Проверка формы, подъём v1 до v2, миграции записей и проверки хранимой карты целиком (спека хранилища 6.2). Нужна
+ * отдельно потому, что карту из базы собирает `rowsToMap`, а не `JSON.parse`. Писем в хранимой карте нет: их форму
+ * проверяет `LetterTx.add` при записи, а старые файлы — `normalizeLegacyMap`. Правит `data` на месте и идемпотентна:
+ * уже разобранная карта проходит без изменений.
  */
 export function normalizeMap(data: unknown, source: string): WorkMap {
   const work = isRecord(data) ? data.work : undefined;
@@ -364,17 +388,14 @@ export function normalizeMap(data: unknown, source: string): WorkMap {
     !isRecord(work) ||
     typeof work.id !== 'string' ||
     !Array.isArray(data.sessions) ||
-    !Array.isArray(data.messages) ||
     (version === 2 && !Array.isArray(data.rooms)) ||
-    !data.sessions.every(isSessionShape(version)) ||
-    !data.messages.every(isMessageShape(version))
+    !data.sessions.every(isSessionShape(version))
   ) {
     throw new Error(`map ${source} cannot be parsed: unexpected shape`);
   }
 
   if (version === 1) {
     for (const session of data.sessions as Record<string, unknown>[]) migrateSessionV1(session);
-    for (const message of data.messages as Record<string, unknown>[]) migrateMessageV1(message);
     data.rooms = [];
     data.schemaVersion = 2;
   }
@@ -382,9 +403,6 @@ export function normalizeMap(data: unknown, source: string): WorkMap {
   const map = data as unknown as WorkMap;
   for (const session of map.sessions) {
     migrateSession(session as unknown as Record<string, unknown>);
-  }
-  for (const message of map.messages) {
-    migrateMessage(message as unknown as Record<string, unknown>);
   }
   for (const room of map.rooms) {
     migrateRoom(room as unknown, map.sessions);

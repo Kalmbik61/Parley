@@ -2,10 +2,9 @@ import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import {
-  mapLetterTx,
   createWork,
   updateMap,
-  readMap,
+  readStoredMap,
   addSession,
   addRoom,
   HUMAN,
@@ -21,7 +20,6 @@ import {
 import type { RequestInfo } from "../context.js";
 import { createPlanHandlers } from "./rooms.js";
 import { resolveRoomProposal } from "../rooms/rooms-service.js";
-const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 let root: string;
 let project: string;
 let workId: string;
@@ -52,7 +50,7 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 async function accept() {
-  await updateMap(project, workId, (map) => {
+  await updateMap(project, workId, (map, letters) => {
     const p = setProposal(map, "r-01", "s-01", "Decision", undefined, {
       plan: {
         mode: "verified",
@@ -69,7 +67,7 @@ async function accept() {
         ],
       },
     });
-    resolveProposal(map, lt(map), "r-01", p.proposalId, "accept", {
+    resolveProposal(map, letters, "r-01", p.proposalId, "accept", {
       rev: p.rev,
       planId: "pl-01",
       planRev: 0,
@@ -80,7 +78,7 @@ const request = {} as RequestInfo;
 function handlers(fail = false) {
   const flush = vi.fn(async () => {
     if (fail) throw new Error("PRIVATE IO");
-    return summarizePlanEffects(await readMap(project, workId));
+    return summarizePlanEffects(readStoredMap(project, workId));
   });
   return { flush, all: createPlanHandlers({ start() {}, stop() {}, flush }) };
 }
@@ -100,14 +98,14 @@ describe("host-owned human plan actions", () => {
       request,
     );
     expect(result.effects.pendingSnapshots).toBe(1);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(map.plans![0]!.items[0]!.log.at(-1)!.by).toBe(HUMAN);
     const before = JSON.stringify(map);
     await h.all["plans.retryEffects"](
       { projectPath: project, workId },
       request,
     );
-    expect(JSON.stringify(await readMap(project, workId))).toBe(before);
+    expect(JSON.stringify(readStoredMap(project, workId))).toBe(before);
     await expect(
       h.all["plans.verify"](
         {
@@ -139,7 +137,7 @@ describe("host-owned human plan actions", () => {
     );
     expect(result.effects.pendingSnapshots).toBe(1);
     expect(JSON.stringify(result)).not.toContain("PRIVATE");
-    expect((await readMap(project, workId)).plans![0]!.items[0]!.status).toBe(
+    expect((readStoredMap(project, workId)).plans![0]!.items[0]!.status).toBe(
       "done",
     );
   });
@@ -156,7 +154,7 @@ describe("host-owned human plan actions", () => {
       request,
     );
     expect(result.messageId).not.toBeNull();
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(map.planEffects!.filter((row) => row.kind === "mode")).toHaveLength(
       1,
     );
@@ -172,19 +170,19 @@ describe("host-owned human plan actions", () => {
       },
       request,
     );
-    expect(JSON.stringify(await readMap(project, workId))).toBe(before);
+    expect(JSON.stringify(readStoredMap(project, workId))).toBe(before);
   });
   // Спека хранилища 6.2: строку режима берём по id, а не по положению — пересчёт плана пишет свои строки раньше неё.
   it("a verified to checklist downgrade that completes the plan reports its own mode line", async () => {
     await accept();
-    await updateMap(project, workId, (map) => {
-      submitPlanItem(map, lt(map), "pl-01", 0, 1, "s-02", { text: "Measured", artifacts: [] });
+    await updateMap(project, workId, (map, letters) => {
+      submitPlanItem(map, letters, "pl-01", 0, 1, "s-02", { text: "Measured", artifacts: [] });
     });
     const result = await handlers().all["rooms.setMode"](
       { projectPath: project, workId, roomId: "r-01", mode: "checklist", reason: "Human choice" },
       request,
     );
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     // Строка «Plan … completed» легла раньше строки режима — отвечать должна вторая.
     const completed = map.messages.findIndex((row) => row.from === SYSTEM && row.text === "Plan pl-01 completed");
     const line = map.messages.findIndex((row) => row.id === result.messageId);
@@ -195,15 +193,15 @@ describe("host-owned human plan actions", () => {
   });
   it("completion Return keeps a human room-feed source and one proof-bound Parley lead letter", async () => {
     await accept();
-    await updateMap(project, workId, (map) => {
-      submitPlanItem(map, lt(map), "pl-01", 0, 1, "s-02", {
+    await updateMap(project, workId, (map, letters) => {
+      submitPlanItem(map, letters, "pl-01", 0, 1, "s-02", {
         text: "Measured",
         artifacts: [],
       });
-      verifyPlanItem(map, lt(map), "pl-01", 0, 1, "s-03", "verified", "Independent");
+      verifyPlanItem(map, letters, "pl-01", 0, 1, "s-03", "verified", "Independent");
       proposeCompletion(map, "r-01", "s-01", "pl-01", 0, "Summary");
     });
-    const before = await readMap(project, workId);
+    const before = readStoredMap(project, workId);
     const p = before.rooms[0]!.proposal!;
     const id = await resolveRoomProposal({
       projectPath: project,
@@ -216,7 +214,7 @@ describe("host-owned human plan actions", () => {
       action: "return",
       note: "Revise summary",
     });
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(map.messages.find((row) => row.id === id)!.to).toEqual([HUMAN]);
     expect(
       map.planEffects!.filter((row) => row.kind === "completion-returned"),

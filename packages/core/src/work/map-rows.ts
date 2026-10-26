@@ -6,7 +6,8 @@
  * - `work` — запись работы целиком (`JSON.stringify(map.work)`);
  * - `extra` — всё, что не список: `schemaVersion`, `resources`, незнакомые поля верхнего уровня и перечень
  *   присутствовавших необязательных коллекций (`present`), чтобы сборка вернула ровно тот же набор полей;
- * - строки `entries` — по одной на элемент списков карты: сессию, письмо, комнату, план и так далее.
+ * - строки `entries` — по одной на элемент списков карты: сессию, комнату, план и так далее. Письма сюда не входят: они
+ *   лежат в своих таблицах (`messages`, `message_reads`, `message_unread`; спека хранилища 6.2, `letter-store.ts`).
  *
  * Изменения находятся по ключу и содержимому JSON, не по ссылке на объект: часть мутаторов заменяет массивы
  * клонами целиком (`plans.ts`, `plan-effects.ts`), `deleteRoom` фильтрует их, `removeSession` вырезает записи.
@@ -16,7 +17,6 @@ import type { WorkMap } from './types.js';
 
 export type EntryKind =
   | 'session'
-  | 'message'
   | 'room'
   | 'plan'
   | 'planExport'
@@ -28,7 +28,6 @@ export type EntryKind =
 export const ENTRY_FIELDS: Record<
   EntryKind,
   | 'sessions'
-  | 'messages'
   | 'rooms'
   | 'plans'
   | 'planExports'
@@ -37,7 +36,6 @@ export const ENTRY_FIELDS: Record<
   | 'planBacklogIntents'
 > = {
   session: 'sessions',
-  message: 'messages',
   room: 'rooms',
   plan: 'plans',
   planExport: 'planExports',
@@ -59,12 +57,16 @@ const OPTIONAL_FIELDS: readonly EntryField[] = [
   'planBacklogIntents',
 ];
 
-/** Поля верхнего уровня, которые знает схема. Всё остальное уходит в `extra` как есть. `compact` не хранится. */
+/**
+ * Поля верхнего уровня, которые знает схема. Всё остальное уходит в `extra` как есть. `compact` не хранится, `messages`
+ * тоже: письма — в своих таблицах, и карта с письмами (`WindowWorkMap`) не должна утащить их в `extra_json`.
+ */
 const KNOWN_FIELDS: ReadonlySet<string> = new Set([
   'schemaVersion',
   'work',
   'resources',
   'compact',
+  'messages',
   ...Object.values(ENTRY_FIELDS),
 ]);
 
@@ -204,7 +206,6 @@ export function rowsToMap(work: string, extra: string, rows: readonly StoredRow[
     schemaVersion: stored.schemaVersion,
     work: JSON.parse(work) as unknown,
     sessions: lists.sessions,
-    messages: lists.messages,
     rooms: lists.rooms,
   };
   for (const field of stored.present) map[field] = lists[field];

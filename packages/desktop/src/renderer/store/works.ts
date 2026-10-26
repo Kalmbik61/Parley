@@ -10,7 +10,7 @@
  */
 
 import { create } from 'zustand';
-import type { Message, WorkEntry } from '@parley/core';
+import type { Message, WindowWorkEntry } from '@parley/core';
 import type { WorksSnapshot } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
@@ -23,7 +23,7 @@ export interface WorksLoadError {
 }
 
 export interface WorksState {
-  entries: WorkEntry[];
+  entries: WindowWorkEntry[];
   branches: Record<string, string | null>;
   /** Снимка работ ещё нет: `works.list` не ответил или отказал. */
   loading: boolean;
@@ -101,6 +101,6 @@ export const useWorksStore = create<WorksState>((set) => ({
 }));
 
 /** Работы по порядку создания — по нему идёт нумерация 1…9 в сайдбаре и ⌘1…⌘9. */
-export function orderedWorks(entries: readonly WorkEntry[]): WorkEntry[] {
+export function orderedWorks(entries: readonly WindowWorkEntry[]): WindowWorkEntry[] {
   return [...entries].sort((a, b) => a.map.work.createdAt.localeCompare(b.map.work.createdAt));
 }

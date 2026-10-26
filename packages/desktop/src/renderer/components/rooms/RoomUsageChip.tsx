@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { RoomUsage, UsageCounters, WorkEntry } from '@parley/core';
+import type { RoomUsage, UsageCounters, WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
 import { useHostSupports } from '../../lib/capabilities.js';
@@ -35,7 +35,7 @@ const GRID = 'grid grid-cols-[minmax(0,1fr)_repeat(4,4.5rem)] items-baseline gap
 
 export interface RoomUsageChipProps {
   bridge: ParleyBridge;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   roomId: string;
   /** Вкладка комнаты активна (`RoomBody.active`): неактивная хост не спрашивает. */
   active: boolean;

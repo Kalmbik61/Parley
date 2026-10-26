@@ -3,9 +3,8 @@ import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mapLetterTx, addMessage, addRoom, addSession, archiveRoom, createWork, deleteWorkFiles, readMap, sharedProjectPaths, suggestBacklog, transitionSession, updateMap, workVersion } from '@parley/core';
+import { addRoom, addSession, archiveRoom, createWork, deleteWorkFiles, readMap, readStoredMap, sharedProjectPaths, suggestBacklog, transitionSession, updateMap, workVersion } from '@parley/core';
 import { createBacklogHandlers } from './backlog.js';
-const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 
@@ -112,7 +111,7 @@ describe('human backlog handlers', () => {
   });
   it('an archived room is not a target: take is refused until the human reopens it', async () => {
     const created = await target(); const added = await add(); const id = added.items[0]!.id!;
-    await updateMap(project, created.workId, map => { archiveRoom(map, lt(map), created.roomId); });
+    await updateMap(project, created.workId, (map, letters) => { archiveRoom(map, letters, created.roomId); });
     await expect(handlers['backlog.take']({ projectPath: project, id, version: added.version, target: created })).rejects.toMatchObject({ code: 'not_found' });
     expect((await get()).items[0]!.taken).toBeUndefined();
   });
@@ -177,10 +176,10 @@ describe('human backlog handlers', () => {
     expect((await get()).suggestions[0]!.author).toBeUndefined();
   });
   async function padPastOneMiB(workId: string, roomId: string): Promise<void> {
-    await updateMap(project, workId, map => {
-      for (let i = 0; i < 300; i++) addMessage(map, { from: 'human', to: [], roomId, text: 'x'.repeat(4000) });
+    await updateMap(project, workId, (map, letters) => {
+      for (let i = 0; i < 300; i++) letters.add({ kind: 'note', from: 'human', to: [], roomId, text: 'x'.repeat(4000) });
     });
-    expect(Buffer.byteLength(JSON.stringify(await readMap(project, workId)))).toBeGreaterThan(1024 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(readStoredMap(project, workId)))).toBeGreaterThan(1024 * 1024);
   }
   it('take reaches a live room of a map larger than 1 MiB', async () => {
     const created = await target(); await padPastOneMiB(created.workId, created.roomId);

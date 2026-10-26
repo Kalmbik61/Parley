@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { ACTIONS, type ActionId } from '../../shared/keybindings.js';
 import type { WorkLayout } from '../../shared/layout-types.js';
 import { workAttention, type WorkAttention } from '../attention/derive.js';
@@ -19,7 +19,7 @@ import type { PaletteMode } from './store.js';
 const NOW = Date.parse('2026-09-27T12:00:00.000Z');
 const HOUR = 60 * 60 * 1000;
 
-function keyOf(entry: WorkEntry): string {
+function keyOf(entry: WindowWorkEntry): string {
   return workKey(entry.projectPath, entry.map.work.id);
 }
 
@@ -34,7 +34,7 @@ function layoutWith(...sessionIds: string[]): WorkLayout {
 }
 
 interface Input {
-  works: WorkEntry[];
+  works: WindowWorkEntry[];
   layouts?: Record<string, WorkLayout>;
   history?: HistoryEntry[];
   attention?: Record<string, WorkAttention>;

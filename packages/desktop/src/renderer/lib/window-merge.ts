@@ -4,7 +4,7 @@
  * не пропадает, когда хвост сдвинулся, а подгруженные страницей письма встают на свои места.
  */
 
-import type { Message, WorkEntry } from '@parley/core';
+import type { Message, WindowWorkEntry } from '@parley/core';
 import { isHumanUnread } from '../attention/derive.js';
 
 /** Номер письма из id `m-12`; нарастает вместе с перепиской. */
@@ -26,7 +26,7 @@ function union(base: readonly Message[], extra: readonly Message[]): Message[] {
  * исчезнув из него, оно прочитано — стухшая копия с `readBy` без отметки горела бы счётчиком вечно. Письма комнат,
  * которых в карте больше нет, тоже не переносятся. Полная карта прежнего хоста (без `compact`) возвращается как есть.
  */
-export function retainSeen(prev: WorkEntry | undefined, next: WorkEntry): WorkEntry {
+export function retainSeen(prev: WindowWorkEntry | undefined, next: WindowWorkEntry): WindowWorkEntry {
   if (prev === undefined || next.map.compact === undefined) return next;
   const rooms = new Set(next.map.rooms.map((room) => room.id));
   const have = new Set(next.map.messages.map((message) => message.id));
@@ -38,13 +38,13 @@ export function retainSeen(prev: WorkEntry | undefined, next: WorkEntry): WorkEn
 }
 
 /** Работа с письмами, пришедшими страницей: в ленте они встают по номеру, письма снимка остаются как были. */
-export function withMessages(entry: WorkEntry, messages: readonly Message[]): WorkEntry {
+export function withMessages(entry: WindowWorkEntry, messages: readonly Message[]): WindowWorkEntry {
   if (messages.length === 0) return entry;
   return { ...entry, map: { ...entry.map, messages: union(entry.map.messages, messages) } };
 }
 
 /** Сколько писем комнаты хост держит, а окно ещё нет: всего минус то, что в карте окна. `0` — карта полная. */
-export function earlierRemaining(entry: WorkEntry, roomId: string): number {
+export function earlierRemaining(entry: WindowWorkEntry, roomId: string): number {
   const total = entry.map.compact?.messages.rooms[roomId]?.total;
   if (total === undefined) return 0;
   let held = 0;
@@ -53,7 +53,7 @@ export function earlierRemaining(entry: WorkEntry, roomId: string): number {
 }
 
 /** С чего начинать подгрузку старых писем комнаты: курсор перед хвостом без дыр; без хвоста — с самых новых. */
-export function earlierCursor(entry: WorkEntry, roomId: string): string | undefined {
+export function earlierCursor(entry: WindowWorkEntry, roomId: string): string | undefined {
   const from = entry.map.compact?.messages.rooms[roomId]?.tailFrom ?? null;
   return from === null ? undefined : `before:${from}`;
 }

@@ -12,7 +12,6 @@ import { clearSecret, writeSecret } from '../secrets.js';
 import { LEAD_ROLE, memberRole } from '../work/brief.js';
 import { GUIDE, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import {
-  addMessage,
   addSession,
   removeSession,
   setResult,
@@ -26,7 +25,7 @@ import { addRoom, archiveRoom } from '../work/rooms.js';
 import type { SessionNeed } from '../work/stuck.js';
 import { createWork, readMap, readStoredMap, replaceStoredMap, updateMap, workPaths, workVersion } from '../work/store.js';
 import { decisionsOf, participantLabel, threadOf } from '../work/thread.js';
-import { HUMAN, type WorkMap } from '../work/types.js';
+import { HUMAN, type WindowWorkMap, type WorkMap } from '../work/types.js';
 import { addBacklogItem, readBacklog } from '../work/backlog.js';
 import { listBacklogSuggestions } from '../work/backlog-suggestions.js';
 import { acceptMemorySuggestion, listMemorySuggestions, listUndoableMemory } from '../work/memory-suggestions.js';
@@ -45,8 +44,8 @@ import {
   waitTimeoutMs,
   type ToolRunner,
 } from './tools.js';
-import { mapLetterTx } from '../work/letter-store.js';
-const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
+import type { NewLetter } from '../work/letter-store.js';
+import { workDb } from '../work/db.js';
 
 let home = '';
 let project = '';
@@ -130,7 +129,7 @@ async function addHistoricalSession(client: Client, init: { provider?: string; l
 }
 
 /** Карта из строк базы мимо кэша процесса: то, что записал инструмент, а не то, что запомнил читатель. */
-const readMapFile = async (): Promise<WorkMap> => readStoredMap(project, workId);
+const readMapFile = async (): Promise<WindowWorkMap> => readStoredMap(project, workId);
 
 const session = (map: WorkMap, id: string) => {
   const found = map.sessions.find((candidate) => candidate.id === id);
@@ -644,9 +643,9 @@ describe('get_map: компактная карта и страницы (P35)', (
       addRoom(current, { title: 'Обсуждение', creator: HUMAN, members: ['s-01', 's-02'], lead: 's-01' });
     });
   }
-  const fill = async (count: number, size: number, extra: Partial<Parameters<typeof addMessage>[1]> = {}): Promise<void> => {
-    await updateMap(project, workId, (current) => {
-      for (let i = 0; i < count; i += 1) addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: `${i}:`.padEnd(size, 'я'), ...extra });
+  const fill = async (count: number, size: number, extra: Partial<NewLetter> = {}): Promise<void> => {
+    await updateMap(project, workId, (current, letters) => {
+      for (let i = 0; i < count; i += 1) letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: `${i}:`.padEnd(size, 'я'), ...extra });
     });
   };
 
@@ -766,11 +765,11 @@ describe('get_map: компактная карта и страницы (P35)', (
 
   it('прямые письма: только из треда сессии; field message читает длинное письмо страницами', async () => {
     await seedRoom();
-    await updateMap(project, workId, (current) => {
-      addMessage(current, { from: 's-01', to: ['s-02'], text: longText(40_000) }); // m-01
+    await updateMap(project, workId, (current, letters) => {
+      letters.add({ roomId: null, kind: 'note', from: 's-01', to: ['s-02'], text: longText(40_000) }); // m-01
       addSession(current, { provider: 'claude', label: 'чужой', task: 'x', parent: null }); // s-03
       addSession(current, { provider: 'claude', label: 'чужой2', task: 'x', parent: null }); // s-04
-      addMessage(current, { from: 's-03', to: ['s-04'], text: 'секрет' }); // m-02
+      letters.add({ roomId: null, kind: 'note', from: 's-03', to: ['s-04'], text: 'секрет' }); // m-02
     });
     const client = await connect('s-02');
     const direct = await callOk(client, 'get_map', { field: 'messages' });
@@ -1060,8 +1059,8 @@ describe('send_message и check_inbox', () => {
   it('чужие сообщения в ящик не попадают', async () => {
     const first = await connect('s-01');
     await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-01', to: ['s-02'], text: 'не тебе' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, kind: 'note', from: 's-01', to: ['s-02'], text: 'не тебе' });
     });
 
     expect(await callOk(first, 'check_inbox')).toEqual({ messages: [] });
@@ -1135,10 +1134,10 @@ describe('send_message и check_inbox', () => {
     expect((await readMapFile()).messages).toHaveLength(3);
 
     // Первое письмо уезжает за окно — место в часе освобождается само.
-    await updateMap(project, workId, (map) => {
-      const oldest = map.messages[0];
-      if (oldest !== undefined) oldest.at = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-    });
+    // Письма не правятся через API, поэтому ход времени — прямой правкой строки в таблице писем.
+    workDb()
+      .prepare('UPDATE messages SET at = ? WHERE project_path = ? AND work_id = ? AND seq = 1')
+      .run(new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), project, workId);
     expect(await callOk(second, 'send_message', { to: 's-01', text: 'три' })).toEqual({
       messageId: 'm-04',
     });
@@ -1276,7 +1275,7 @@ describe('create_room explicit working membership and ownership', () => {
     ]) expect((await call(owner, 'send_message', args)).isError).toBe(true);
     expect((await call(owner, 'add_to_room', { room: 'r-01', session: 's-04' })).isError).toBe(true);
     expect((await call(owner, 'propose_decision', { room: 'r-01', text: 'Owner decision' })).isError).toBe(true);
-    await updateMap(project, workId, map => { archiveRoom(map, lt(map), 'r-01'); });
+    await updateMap(project, workId, (map, letters) => { archiveRoom(map, letters, 'r-01'); });
     expect((await call(owner, 'read_room', { room: 'r-01' })).isError).toBe(false);
     expect((await call(owner, 'get_map', { room: 'r-01' })).isError).toBe(false);
     expect((await call(owner, 'get_map', { room: 'r-01', field: 'messages' })).isError).toBe(false);
@@ -1433,8 +1432,8 @@ describe('add_to_room', () => {
   it('сервер удалённой сессии ведущим не служит', async () => {
     const { lead } = await setup();
     // s-01 удалена человеком, а её сервер ещё жив: SessionEnd приходит раньше выхода процесса.
-    await updateMap(project, workId, (map) => {
-      removeSession(map, lt(map), 's-01');
+    await updateMap(project, workId, (map, letters) => {
+      removeSession(map, letters, 's-01');
     });
     const before = await rawMap();
 
@@ -1492,8 +1491,8 @@ describe('propose_decision', () => {
   it('после ответа человека новое решение — новый proposalId и rev 0', async () => {
     const { lead } = await leadRoom();
     await callOk(lead, 'propose_decision', { room: 'r-01', text: 'раз' });
-    await updateMap(project, workId, (map) => {
-      resolveProposal(map, lt(map), 'r-01', 'p-01', 'return', { note: 'мало' });
+    await updateMap(project, workId, (map, letters) => {
+      resolveProposal(map, letters, 'r-01', 'p-01', 'return', { note: 'мало' });
     });
 
     expect(await callOk(lead, 'propose_decision', { room: 'r-01', text: 'два' })).toEqual({
@@ -1707,8 +1706,8 @@ describe('send_message и check_inbox в комнате', () => {
 
     /** Письмо человека в r-01: без `to` — задача всем, с `to` — адресное. */
     const humanSays = (to: string[] = []): Promise<unknown> =>
-      updateMap(project, workId, (map) => {
-        addMessage(map, { from: HUMAN, to, text: TASK, roomId: 'r-01' });
+      updateMap(project, workId, (map, letters) => {
+        letters.add({ kind: 'note', from: HUMAN, to, text: TASK, roomId: 'r-01' });
       });
 
     const inboxOf = async (client: Client): Promise<TaskView[]> =>
@@ -1846,17 +1845,15 @@ describe('send_message: replyTo — ответ с цитатой (Parley 0.3.0)'
     const b = await connect('s-03');
     await callOk(a, 'check_inbox');
     await callOk(b, 'check_inbox');
-    await updateMap(project, workId, (map) => {
-      addMessage(map, {
-        from: HUMAN,
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ from: HUMAN,
         to: [],
         text: 'Кто берёт миграции?',
         kind: 'question',
-        roomId: 'r-01',
-      });
+        roomId: 'r-01' });
       addRoom(map, { title: 'другая', creator: HUMAN, members: [] });
-      addMessage(map, { from: HUMAN, to: [], text: 'Про другое', roomId: 'r-02' });
-      addMessage(map, { from: 's-01', to: ['s-02'], text: 'Лично тебе' });
+      letters.add({ kind: 'note', from: HUMAN, to: [], text: 'Про другое', roomId: 'r-02' });
+      letters.add({ roomId: null, kind: 'note', from: 's-01', to: ['s-02'], text: 'Лично тебе' });
     });
     return { owner, a, b };
   }
@@ -2008,9 +2005,9 @@ describe('send_message: replyTo — ответ с цитатой (Parley 0.3.0)'
 
   it('read_room: письмо человека через помощника приходит с via, обычное — без ключа', async () => {
     const { owner } = await replySetup();
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: HUMAN, to: [], text: 'Через помощника', roomId: 'r-01', via: 'assistant' }); // m-06
-      addMessage(map, { from: HUMAN, to: [], text: 'Сам в окне', roomId: 'r-01' }); // m-07
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ kind: 'note', from: HUMAN, to: [], text: 'Через помощника', roomId: 'r-01', via: 'assistant' }); // m-06
+      letters.add({ kind: 'note', from: HUMAN, to: [], text: 'Сам в окне', roomId: 'r-01' }); // m-07
     });
 
     const messages = (await callOk(owner, 'read_room', { room: 'r-01' }))['messages'] as { id: string }[];
@@ -2185,8 +2182,8 @@ describe('wait_for', () => {
     const client = await connect('s-01');
     const pending = callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 20 });
     await delay(60);
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-01', to: ['s-01'], text: 'проснись' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, kind: 'note', from: 's-01', to: ['s-01'], text: 'проснись' });
     });
 
     const result = await pending;
@@ -2235,8 +2232,8 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
     await linesAre(1);
     expect(await journalLines()).toEqual([started('inbox')]);
 
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-01', to: ['s-01'], text: 'проснись' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, kind: 'note', from: 's-01', to: ['s-01'], text: 'проснись' });
     });
     expect((await pending)['state']).toBe('message');
     expect(await journalLines()).toEqual([started('inbox'), ended]);
@@ -2279,8 +2276,8 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
     const pending = callOk(client, 'wait_for', { target: 's-02', timeoutSec: 20 });
 
     await linesAre(1);
-    await updateMap(project, workId, (map) => {
-      removeSession(map, lt(map), 's-02');
+    await updateMap(project, workId, (map, letters) => {
+      removeSession(map, letters, 's-02');
     });
 
     expect(await pending).toEqual({ state: 'deleted', sessionId: 's-02' });
@@ -2305,9 +2302,9 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
   it('ответ без ожидания строк не пишет: итог уже есть, письмо уже пришло, id неизвестен', async () => {
     const client = await connect('s-01');
     await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
-    await updateMap(project, workId, (map) => {
+    await updateMap(project, workId, (map, letters) => {
       setResult(map, 's-02', 'done');
-      addMessage(map, { from: 's-02', to: ['s-01'], text: 'готово' });
+      letters.add({ roomId: null, kind: 'note', from: 's-02', to: ['s-01'], text: 'готово' });
     });
 
     expect((await callOk(client, 'wait_for', { target: 's-02', timeoutSec: 5 }))['state']).toBe(
@@ -2444,8 +2441,8 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
 
     const pending = callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 20 });
     await delay(60);
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-01', to: ['s-01'], text: 'проснись' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, kind: 'note', from: 's-01', to: ['s-01'], text: 'проснись' });
     });
     expect((await pending)['state']).toBe('message');
   });
@@ -2472,8 +2469,8 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
     await linesAre(1);
     expect(await waitingFor()).toBe('inbox');
 
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-01', to: ['s-01'], text: 'проснись' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, kind: 'note', from: 's-01', to: ['s-01'], text: 'проснись' });
     });
     await pending;
     expect(await waitingFor()).toBeNull();
@@ -2484,8 +2481,8 @@ describe('удалённая сессия (план от 2026-09-06, разде�
   it('27: wait_for на id из deletedSessions отвечает deleted сразу', async () => {
     const client = await connect('s-01');
     await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
-    await updateMap(project, workId, (map) => {
-      removeSession(map, lt(map), 's-02');
+    await updateMap(project, workId, (map, letters) => {
+      removeSession(map, letters, 's-02');
     });
 
     const started = Date.now();
@@ -2502,8 +2499,8 @@ describe('удалённая сессия (план от 2026-09-06, разде�
 
     const pending = callOk(client, 'wait_for', { target: 's-02', timeoutSec: 20 });
     await delay(60);
-    await updateMap(project, workId, (map) => {
-      removeSession(map, lt(map), 's-02');
+    await updateMap(project, workId, (map, letters) => {
+      removeSession(map, letters, 's-02');
     });
 
     expect(await pending).toEqual({ state: 'deleted', sessionId: 's-02' });
@@ -2523,8 +2520,8 @@ describe('удалённая сессия (план от 2026-09-06, разде�
     await addHistoricalSession(owner, { provider: 'claude', label: 'бэк', task: 'делать' });
     // Сервер сессии `s-02` ещё жив: SessionEnd приходит раньше выхода процесса.
     const orphan = await connect('s-02');
-    await updateMap(project, workId, (map) => {
-      removeSession(map, lt(map), 's-02');
+    await updateMap(project, workId, (map, letters) => {
+      removeSession(map, letters, 's-02');
     });
     const before = await readMapFile();
 
@@ -2691,7 +2688,7 @@ describe('двухсторонний разговор (разговор аген
     await rung(ringsB, 2);
     expect(texts(await callOk(back, 'check_inbox'))).toEqual(['миграции отдельным PR']);
 
-    const thread = threadOf(await readMap(project, workId), 's-02');
+    const thread = threadOf(readStoredMap(project, workId), 's-02');
     expect(thread.messages.map((message) => message.kind)).toEqual([
       'question',
       'note',
@@ -2737,7 +2734,7 @@ describe('двухсторонний разговор (разговор аген
     await rung(ringsB, 2);
     expect(texts(await callOk(back, 'check_inbox'))).toEqual(['миграции отдельным PR']);
 
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     const thread = threadOf(map, 's-02');
     expect(thread.messages).toHaveLength(3);
     expect(decisionsOf(thread)).toHaveLength(1);
@@ -2795,7 +2792,7 @@ describe('trusted caller backlog MCP tools', () => {
     expect((await readBacklog(project)).items[0]).toMatchObject({ by: 's-01', title: 'Observed regression' });
     const duplicate = await callOk(client, 'backlog_suggest', { kind: 'bug', title: 'OBSERVED REGRESSION', why: 'Again' });
     expect(duplicate.message).toBe('already in backlog: b-001');
-    const notices = (await readMap(project, workId)).messages.filter(row => row.text.includes('added to the backlog'));
+    const notices = readStoredMap(project, workId).messages.filter(row => row.text.includes('added to the backlog'));
     expect(notices).toHaveLength(1); expect(notices[0]).toMatchObject({ from: 'system', text: 'S01 added to the backlog: Observed regression' });
     const proposed = await callOk(client, 'backlog_suggest', { kind: 'idea', title: 'New feature', why: 'Useful later' });
     expect(proposed.message).toBe('suggested: sg-02');
@@ -2848,7 +2845,7 @@ describe('memory and history MCP tools', () => {
     expect(await readFile(path.join(project, '.parley', 'memory.md')).catch(() => null)).toBeNull();
     expect(await listMemorySuggestions(project)).toMatchObject([{ id: 'ms-01', kind: 'lesson', fact: FACT, why: 'Seen twice' }]);
     expect((await callOk(client, 'remember', { kind: 'lesson', fact: FACT.toUpperCase(), why: 'Again' })).message).toBe('already remembered: ms-01');
-    const notices = (await readMap(project, workId)).messages.filter(row => row.text.includes('remembering'));
+    const notices = readStoredMap(project, workId).messages.filter(row => row.text.includes('remembering'));
     expect(notices).toHaveLength(1);
     expect(notices[0]).toMatchObject({ from: 'system', text: `S01 suggests remembering: ${FACT}` });
     expect(await listUndoableMemory(project)).toEqual([]);
@@ -2870,7 +2867,7 @@ describe('memory and history MCP tools', () => {
     const file = await readFile(path.join(project, '.parley', 'memory.md'), 'utf8');
     expect(file).toContain('Sessions close only with consent');
     expect(file).toContain('on request');
-    expect((await readMap(project, workId)).messages.at(-1)).toMatchObject({ from: 'system', text: 'S01 remembered, saying you asked for it: Sessions close only with consent' });
+    expect(readStoredMap(project, workId).messages.at(-1)).toMatchObject({ from: 'system', text: 'S01 remembered, saying you asked for it: Sessions close only with consent' });
     expect(await newSessionPrompt(client)).toContain('Sessions close only with consent');
     const [undoable] = await listUndoableMemory(project);
     expect(undoable).toMatchObject({ memoryId: 'm-001', fact: 'Sessions close only with consent', sessionId: 's-01' });
@@ -2944,13 +2941,13 @@ describe('архивная комната в MCP (архив комнат, 3.3, 
    * До архивации s-02 написал всей комнате «до архива».
    */
   async function setup(): Promise<{ lead: Client; member: Client; outsider: Client }> {
-    await updateMap(project, workId, (current) => {
+    await updateMap(project, workId, (current, letters) => {
       addSession(current, { provider: 'claude', label: 'бэк', task: 'делать' });
       addSession(current, { provider: 'claude', label: 'ревью', task: 'делать' });
       addRoom(current, { title: 'архив', creator: 's-01', members: ['s-01', 's-02'], lead: 's-01' });
       addRoom(current, { title: 'открытая', creator: 's-03', members: ['s-03'] });
-      addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: 'до архива' });
-      archiveRoom(current, lt(current), 'r-01', AT);
+      letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: 'до архива' });
+      archiveRoom(current, letters, 'r-01', AT);
     });
     return { lead: await connect('s-01'), member: await connect('s-02'), outsider: await connect('s-03') };
   }
@@ -3014,12 +3011,12 @@ describe('архивная комната в MCP (архив комнат, 3.3, 
 
   it('backlog_suggest и remember не пишут строку в ленту архивной комнаты', async () => {
     const { member } = await setup();
-    const before = (await readMap(project, workId)).messages.length;
+    const before = readStoredMap(project, workId).messages.length;
 
     expect((await callOk(member, 'backlog_suggest', { kind: 'bug', title: 'Observed regression', why: 'Evidence' })).message).toBe('added: b-001');
     expect((await callOk(member, 'remember', { kind: 'lesson', fact: 'PTY tests flake in worktrees', why: 'Seen twice' })).message).toBe('suggested: ms-01');
 
-    const after = await readMap(project, workId);
+    const after = readStoredMap(project, workId);
     expect(after.messages).toHaveLength(before);
     expect(after.messages.filter((m) => m.roomId === 'r-01' && m.from === 'system').map((m) => m.text)).toEqual(['Room archived by the human.']);
   });
@@ -3030,13 +3027,13 @@ describe('owner private message visibility', () => {
     let privateId = '';
     let ownId = '';
     let roomMessageId = '';
-    await updateMap(project, workId, (map) => {
+    await updateMap(project, workId, (map, letters) => {
       addSession(map, { provider: 'claude', label: 'worker', task: 'work' });
       addSession(map, { provider: 'claude', label: 'reviewer', task: 'review' });
       const room = addRoom(map, { creator: 's-01', ownerId: 's-01', title: 'owned', members: ['s-02', 's-03'], lead: 's-02' });
-      privateId = addMessage(map, { from: 's-02', to: ['s-03'], text: 'private worker mail', kind: 'decision' }).id;
-      ownId = addMessage(map, { from: 's-02', to: ['s-01'], text: 'direct owner mail', kind: 'note' }).id;
-      roomMessageId = addMessage(map, { from: 's-02', to: [], roomId: room.id, text: 'room mail', kind: 'note' }).id;
+      privateId = letters.add({ roomId: null, from: 's-02', to: ['s-03'], text: 'private worker mail', kind: 'decision' }).id;
+      ownId = letters.add({ roomId: null, from: 's-02', to: ['s-01'], text: 'direct owner mail', kind: 'note' }).id;
+      roomMessageId = letters.add({ from: 's-02', to: [], roomId: room.id, text: 'room mail', kind: 'note' }).id;
     });
     const owner = await connect('s-01');
     const page = await callOk(owner, 'get_map', { field: 'messages' });
@@ -3220,7 +3217,7 @@ describe('createToolRunner: инструменты Parley без транспо�
     expect(names.some((name) => name.startsWith('browser_'))).toBe(false);
     const sent = await runner.call('send_message', { to: 's-02', text: 'привет' }, undefined);
     expect(sent.isError).not.toBe(true);
-    expect((await readMap(project, workId)).messages.at(-1)).toMatchObject({ from: 's-01', to: ['s-02'], text: 'привет' });
+    expect(readStoredMap(project, workId).messages.at(-1)).toMatchObject({ from: 's-01', to: ['s-02'], text: 'привет' });
   });
 
   it('get_map берёт строки провайдеров из context.providerRows — без запроса к хосту и без пометки', async () => {
@@ -3239,7 +3236,7 @@ describe('createToolRunner: инструменты Parley без транспо�
     const waiting = runner.call('wait_for', { target: 'inbox', timeoutSec: 30 }, undefined);
     // Подписка заводится после первой пробы: ждём её, а не гадаем по времени — под нагрузкой пятидесяти миллисекунд мало.
     await vi.waitFor(() => expect(listener).not.toBeNull(), { timeout: 2000, interval: 10 });
-    await updateMap(project, workId, (map) => { addMessage(map, { from: 's-02', to: ['s-01'], text: 'есть' }); });
+    await updateMap(project, workId, (map, letters) => { letters.add({ roomId: null, kind: 'note', from: 's-02', to: ['s-01'], text: 'есть' }); });
     listener!();
     const body = JSON.parse(textOf(await waiting));
     expect(body.state).toBe('message');
@@ -3288,9 +3285,9 @@ describe('createToolRunner: инструменты Parley без транспо�
     });
 
     it('сторож входящих не запускается: карту такой сервер не читает, звонка нет', async () => {
-      await updateMap(project, workId, (map) => {
+      await updateMap(project, workId, (map, letters) => {
         addSession(map, { provider: 'claude', label: 'бэк', task: 'делать' });
-        addMessage(map, { from: 's-02', to: ['s-01'], text: 'привет' });
+        letters.add({ roomId: null, kind: 'note', from: 's-02', to: ['s-01'], text: 'привет' });
       });
       const rings: Ring[] = [];
       await connectStub({ projectPath: project, workId, workDir: workPaths(project, workId).dir, sessionId: 's-01', channel: true, pollMs: 40 }, rings);

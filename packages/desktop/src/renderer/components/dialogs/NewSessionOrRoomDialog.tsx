@@ -79,7 +79,7 @@
  */
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import type { RecipeAgent, RecipeCatalogView, RecipeEntryView, WorkEntry } from '@parley/core';
+import type { RecipeAgent, RecipeCatalogView, RecipeEntryView, WindowWorkEntry } from '@parley/core';
 import {
   RESOURCE_LIMIT_KEYS,
   limitsFromConfig,
@@ -144,7 +144,7 @@ function projectName(projectPath: string): string {
   return projectPath.split('/').filter((part) => part !== '').at(-1) ?? projectPath;
 }
 
-const keyOf = (entry: WorkEntry): string => workKey(entry.projectPath, entry.map.work.id);
+const keyOf = (entry: WindowWorkEntry): string => workKey(entry.projectPath, entry.map.work.id);
 
 export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = null, onCreated, onOpenChange }: NewSessionOrRoomDialogProps): JSX.Element {
   const entries = useWorksStore((state) => state.entries);

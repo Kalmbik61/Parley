@@ -26,7 +26,7 @@ describe('roomMembership (спека расхода токенов, 4.3, 5.1)', 
     const r2 = addRoom(map, { title: 'r2', creator: HUMAN, members: [] }, T0);
     addMember(map, lt(map), r2.id, 's-01', T1);
     addMember(map, lt(map), r1.id, 's-01', T2);
-    expect(roomMembership(map, r1.id)).toEqual({
+    expect(roomMembership(map, r1.id, lt(map))).toEqual({
       reconstructed: false,
       members: [{ session: 's-01', periods: [{ from: T0, to: T1 }, { from: T2, to: null }] }],
     });
@@ -43,7 +43,7 @@ describe('roomMembership (спека расхода токенов, 4.3, 5.1)', 
     addMember(map, lt(map), fresh.id, 's-03', T2);
     addMember(map, lt(map), fresh.id, 's-02', T2);
     delete old.memberLog;
-    expect(roomMembership(map, old.id)).toEqual({
+    expect(roomMembership(map, old.id, lt(map))).toEqual({
       reconstructed: true,
       members: [
         { session: 's-01', periods: [{ from: T0, to: null }] },
@@ -59,10 +59,10 @@ describe('roomMembership (спека расхода токенов, 4.3, 5.1)', 
     const r2 = addRoom(map, { title: 'r2', creator: HUMAN, members: ['s-01'] }, T1);
     delete r1.memberLog;
     delete r2.memberLog;
-    expect(roomMembership(map, r1.id).members).toEqual([{ session: 's-01', periods: [{ from: T0, to: null }] }]);
+    expect(roomMembership(map, r1.id, lt(map)).members).toEqual([{ session: 's-01', periods: [{ from: T0, to: null }] }]);
   });
 
   it('неизвестная комната — ошибка', () => {
-    expect(() => roomMembership(emptyMap(), 'r-09')).toThrow('room r-09 is not in the map');
+    expect(() => roomMembership(emptyMap(), 'r-09', { query: () => [], count: () => 0 })).toThrow('room r-09 is not in the map');
   });
 });

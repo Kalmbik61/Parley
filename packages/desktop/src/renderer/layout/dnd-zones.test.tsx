@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
 import type { ClientRect, DroppableContainer } from '@dnd-kit/core';
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import type { LayoutNode } from '../../shared/layout-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { useUiStore } from '../store/ui.js';
@@ -93,7 +93,7 @@ function session(id: string, label: string): WorkSession {
 const PROJECT = '/tmp/p';
 const WORK_KEY = '/tmp/p w';
 
-function entry(sessions: WorkSession[]): WorkEntry {
+function entry(sessions: WorkSession[]): WindowWorkEntry {
   return {
     projectPath: PROJECT,
     map: {

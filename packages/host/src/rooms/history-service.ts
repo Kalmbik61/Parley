@@ -1,7 +1,7 @@
 import {
+  channelStats,
   rebuildRoomHistory,
   removeLocalRoomHistories,
-  renderRoomHistory,
   workExists,
 } from '@parley/core';
 import type { WorkEntry } from '@parley/core';
@@ -11,6 +11,8 @@ export interface HistoryServiceIO {
   rebuild: typeof rebuildRoomHistory;
   remove: typeof removeLocalRoomHistories;
   deleted(projectPath: string, workId: string): Promise<boolean>;
+  /** Итоги писем по каналам работы (`channelStats`): число и номер новейшего письма — отпечаток ленты комнат. */
+  stats: typeof channelStats;
 }
 export interface HistoryServiceOptions {
   io?: HistoryServiceIO;
@@ -39,7 +41,6 @@ export async function isWorkDeleted(projectPath: string, workId: string): Promis
   try { return !workExists(projectPath, workId); }
   catch { return false; }
 }
-const identity = (entry: WorkEntry): string => JSON.stringify(entry.map.rooms.map(room => renderRoomHistory(entry.map, room.id)));
 /** Derivative files only; it never publishes shared history or changes the source map. */
 export function createHistoryService(
   works: Pick<WorksService, 'snapshot' | 'entry' | 'onChange'>,
@@ -49,6 +50,23 @@ export function createHistoryService(
     rebuild: rebuildRoomHistory,
     remove: removeLocalRoomHistories,
     deleted: isWorkDeleted,
+    stats: channelStats,
+  };
+  /**
+   * Отпечаток всего, от чего зависит история комнат работы: комнаты, подписи и роли участников, название работы и итоги
+   * писем по каналам. Письма не правятся, поэтому запись или удаление письма меняют число или номер новейшего; тексты
+   * лент для отпечатка не читаются — иначе каждая запись письма читала бы все письма всех комнат (спека хранилища 6.2).
+   */
+  const identity = (entry: WorkEntry): string => {
+    const { work, rooms, sessions } = entry.map;
+    return JSON.stringify([
+      work.id,
+      work.title,
+      work.deletedSessions ?? [],
+      rooms,
+      sessions.map((session) => [session.id, session.label, session.role ?? null]),
+      io.stats(entry.projectPath, work.id),
+    ]);
   };
   const states = new Map<string, HistoryState>();
   const noticed = new Set<string>();

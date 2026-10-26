@@ -261,6 +261,33 @@ describe('assertMessageBudget: письма, рассылки и приглаш�
     expect([refusal.code, refusal.used, refusal.limit]).toEqual(['fanout', 3, 4]);
   });
 
+  it('запросы ограничены лимитами, а не письмами за час: письма человека не читаются, агентские — не больше workMessages', () => {
+    const map = emptyMap();
+    const a = addActive(map);
+    const b = addActive(map);
+    // Час, полный писем человека и хоста: у настоящего хоста их тысячи.
+    for (let i = 0; i < 300; i += 1) addMessage(map, { from: i % 2 === 0 ? HUMAN : SYSTEM, to: [b], text: 'x' }, iso(NOW - 1000));
+    for (let i = 0; i < 3; i += 1) addMessage(map, { from: a, to: [b], text: 'x' }, iso(NOW - 1000));
+    const inner = lt(map);
+    const asked: Array<{ agentsOnly?: boolean; limit?: number }> = [];
+    const spy = {
+      ...inner,
+      query: (q: Parameters<typeof inner.query>[0]) => {
+        asked.push({ ...(q.agentsOnly === undefined ? {} : { agentsOnly: q.agentsOnly }), limit: q.limit });
+        return inner.query(q);
+      },
+    };
+
+    expect(() => assertMessageBudget(map, spy, { actor: a, room: null, messages: 1, recipients: 1, limits: limits({ workMessages: 10 }), now: NOW })).not.toThrow();
+
+    expect(asked).toEqual([{ agentsOnly: true, limit: 3 }]);
+    // Отказ по числу писем не читает их вовсе.
+    asked.length = 0;
+    const refusal = denied(() => assertMessageBudget(map, spy, { actor: a, room: null, messages: 1, recipients: 1, limits: limits({ workMessages: 3 }), now: NOW }));
+    expect([refusal.code, refusal.used]).toEqual(['messages', 3]);
+    expect(asked).toEqual([]);
+  });
+
   it('приглашения: N приглашённых — N писем и N адресатов сразу', () => {
     const map = emptyMap();
     const a = addActive(map);

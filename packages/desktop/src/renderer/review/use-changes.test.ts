@@ -4,7 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
-import type { WorkEntry, WorktreeDiff } from '@parley/core';
+import type { WindowWorkEntry, WorktreeDiff } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import { useActivityStore } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
@@ -32,7 +32,7 @@ function diff(patch: Partial<WorktreeDiff> = {}): WorktreeDiff {
 
 const worktree = { path: '/tmp/wt/s-02', branch: 'harnas/w-a/s02', base: 'master', createdAt: '2026-09-27T08:00:00Z' };
 
-function work(title = 'w-a', createdAt: string | null = worktree.createdAt): WorkEntry {
+function work(title = 'w-a', createdAt: string | null = worktree.createdAt): WindowWorkEntry {
   return makeWork('w-a', {
     title,
     sessions: [
@@ -57,7 +57,7 @@ async function flush(ms = 0): Promise<void> {
   });
 }
 
-function emitWorks(entries: WorkEntry[]): void {
+function emitWorks(entries: WindowWorkEntry[]): void {
   act(() => {
     bridge.emit('works.changed', { entries, branches: {} });
   });

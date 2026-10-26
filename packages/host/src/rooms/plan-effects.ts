@@ -1,7 +1,7 @@
 import {
   DEFAULT_CONFIG,
   loadConfig,
-  mapLetterTx,
+  previewLetterTx,
   readMap,
   reservePlanEffects,
   summarizePlanEffects,
@@ -17,6 +17,8 @@ export interface PlanEffectsServiceIO {
   updateMap: typeof updateMap;
   flush: typeof flushPlanEffects;
   flushJournal?: typeof flushDecisionJournal;
+  /** Чтение писем для пробного расчёта (`previewLetterTx`, спека хранилища 6.2); тесты подставляют письма карты в памяти. */
+  previewLetters?: typeof previewLetterTx;
 }
 export interface PlanEffectsServiceOptions {
   io?: PlanEffectsServiceIO;
@@ -187,7 +189,7 @@ export function createPlanEffectsService(
         return result;
       const at = new Date(now()).toISOString();
       const preview = structuredClone(map);
-      let reservation = reservePlanEffects(preview, mapLetterTx(preview).letters, rate, at);
+      let reservation = reservePlanEffects(preview, (io.previewLetters ?? previewLetterTx)(state.projectPath, state.workId, preview), rate, at);
       let current = map;
       if (reservation.changed) {
         try {

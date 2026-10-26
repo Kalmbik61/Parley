@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import type { Message, WorkEntry } from '@parley/core';
+import type { Message, WindowWorkEntry } from '@parley/core';
 import { workKey } from '../lib/tree-order.js';
 import type { SidebarSection } from '../sidebar/sort.js';
 import { useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
@@ -21,11 +21,11 @@ function att(patch: Partial<WorkAttention>): WorkAttention {
   };
 }
 
-function section(key: string, works: WorkEntry[], collapsed = false): SidebarSection {
+function section(key: string, works: WindowWorkEntry[], collapsed = false): SidebarSection {
   return { kind: 'project', key, title: key, projectPath: key, works, collapsed };
 }
 
-const keyOf = (entry: WorkEntry): string => workKey(entry.projectPath, entry.map.work.id);
+const keyOf = (entry: WindowWorkEntry): string => workKey(entry.projectPath, entry.map.work.id);
 
 beforeEach(() => {
   useSidebarSectionsStore.setState({ sections: [], attention: {}, entries: null });
@@ -98,7 +98,7 @@ describe('useAttentionTotals', () => {
 // Parley 0.3.0: упоминание человека в комнате (`@human`) — письмо ему: входит в `humanUnread`, а значит, и в бейдж Dock
 // (`needsYou + humanUnread`). Сам `badgeCount` не менялся — расчёт внимания (`workAttention`) считает упоминание.
 describe('бейдж Dock и упоминание @human (Parley 0.3.0)', () => {
-  const work = (messages: Message[]): WorkEntry =>
+  const work = (messages: Message[]): WindowWorkEntry =>
     makeWork('w-01', {
       projectPath: '/tmp/a',
       sessions: [makeSession('s-01', 'a')],
@@ -107,7 +107,7 @@ describe('бейдж Dock и упоминание @human (Parley 0.3.0)', () => 
     });
   const inRoom = (id: string, text: string, patch: Partial<Message> = {}): Message =>
     makeLetter(id, { roomId: 'r-01', from: 's-01', to: [], text, ...patch });
-  const totalsOf = (entry: WorkEntry) =>
+  const totalsOf = (entry: WindowWorkEntry) =>
     attentionTotals([section('/tmp/a', [entry])], { [keyOf(entry)]: workAttention(entry, {}) });
 
   it('упоминание увеличивает humanUnread итогов и бейдж Dock на единицу', () => {

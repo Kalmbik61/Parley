@@ -4,7 +4,7 @@
  * (`actions.ts#moveTabToPanel`); меню само ничего не переносит. У страницы панели пункта нет: она уже в чьём-то браузере.
  */
 
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { BrowserOwner } from '../../../shared/layout-types.js';
 import { S } from '../../../shared/strings.js';
 import { AgentIcon } from '../../components/AgentIcon.js';
@@ -21,7 +21,7 @@ import {
 import { targetOptions, type TargetOption } from '../context/targets.js';
 
 export interface MoveToMenuProps {
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   onMove(owner: BrowserOwner): void;
 }
 

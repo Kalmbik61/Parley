@@ -6,7 +6,7 @@
  * тоже здесь.
  */
 
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import { bufferKey } from '../files/buffer.js';
 import { focusedSessionOf, useLayoutStore, type LayoutState } from '../layout/store.js';
@@ -50,7 +50,7 @@ export function changesSessionOf(
   review: Pick<ReviewState, 'changesSession'>,
   layout: Pick<LayoutState, 'layouts' | 'entries'>,
   workKey: string,
-  entry: WorkEntry,
+  entry: WindowWorkEntry,
 ): string | null {
   const chosen = review.changesSession[workKey];
   if (chosen !== undefined && entry.map.sessions.some((session) => session.id === chosen)) return chosen;

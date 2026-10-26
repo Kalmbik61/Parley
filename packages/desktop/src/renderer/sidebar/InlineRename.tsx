@@ -14,7 +14,7 @@
 
 import { useLayoutEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { Room, WorkEntry, WorkSession } from '@parley/core';
+import type { Room, WindowWorkEntry, WorkSession } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
@@ -24,7 +24,7 @@ import { workKey } from '../lib/tree-order.js';
 import { useSidebarHold } from './use-sidebar-hold.js';
 
 export interface InlineRenameProps {
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   bridge: ParleyBridge;
   /** Поле закрывается: сохранено, отменено или хост отказал. */
   onDone(): void;

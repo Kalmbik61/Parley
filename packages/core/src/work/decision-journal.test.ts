@@ -65,11 +65,11 @@ it('disk retry uses captured accepted bytes and snapshot link after later plan r
   try {
     await fs.mkdir(project); await fs.mkdir(path.join(root, 'home'));
     const workId = (await store.createWork(project, { title: 'Disk' })).work.id;
-    await store.updateMap(project, workId, map => {
+    await store.updateMap(project, workId, (map, letters) => {
       addSession(map, { provider: 'codex', label: 'Lead', task: 'Bounded' });
       addRoom(map, { title: 'Room', creator: HUMAN, members: ['s-01'], lead: 's-01', mode: 'checklist' });
       const p = setProposal(map, 'r-01', 's-01', 'Version zero', at, { plan: { mode: 'checklist', goal: 'Original goal', items: [{ id: 1, title: 'Original work', owner: 's-01', scope: 'src/old' }] } });
-      resolveProposal(map, lt(map), 'r-01', p.proposalId, 'accept', { rev: p.rev, planId: 'pl-01', planRev: 0, note: 'Exact remark' }, at);
+      resolveProposal(map, letters, 'r-01', p.proposalId, 'accept', { rev: p.rev, planId: 'pl-01', planRev: 0, note: 'Exact remark' }, at);
     });
     const intent = (await store.readMap(project, workId)).decisionExports![0]!;
     expect(intent.snapshot).toBe(`${workId}-r-01-pl-01-rev-0-accepted.md`);
@@ -77,9 +77,9 @@ it('disk retry uses captured accepted bytes and snapshot link after later plan r
     expect((await store.readMap(project, workId)).rooms[0]!.proposal).toBeNull();
     await flushPlanSnapshots(project, workId);
     expect((await flushDecisionJournal(project, workId, { beforeCommit: async () => { throw new Error('Synthetic disk failure'); } })).failed).toHaveLength(1);
-    await store.updateMap(project, workId, map => {
+    await store.updateMap(project, workId, (map, letters) => {
       const p = setProposal(map, 'r-01', 's-01', 'Version one', at, { plan: { id: 'pl-01', rev: 0, mode: 'checklist', goal: 'Later goal', items: [{ id: 1, title: 'Later work', owner: 's-01', scope: 'src/new' }] } });
-      resolveProposal(map, lt(map), 'r-01', p.proposalId, 'accept', { rev: p.rev, planId: 'pl-01', planRev: 1 }, at);
+      resolveProposal(map, letters, 'r-01', p.proposalId, 'accept', { rev: p.rev, planId: 'pl-01', planRev: 1 }, at);
     });
     await flushPlanSnapshots(project, workId); const result = await flushDecisionJournal(project, workId);
     expect(result.failed).toEqual([]); expect(result.written).toHaveLength(2);
@@ -128,12 +128,12 @@ describe('read-only journal listing (P28)', () => {
     const oldHome = process.env.PARLEY_HOME; process.env.PARLEY_HOME = path.join(root, 'home');
     await fs.mkdir(project); await fs.mkdir(path.join(root, 'home'));
     const workId = (await store.createWork(project, { title: 'List' })).work.id;
-    await store.updateMap(project, workId, map => {
+    await store.updateMap(project, workId, (map, letters) => {
       addSession(map, { provider: 'codex', label: 'Lead', task: 'Bounded' });
       addRoom(map, { title: 'Room', creator: HUMAN, members: ['s-01'], lead: 's-01' });
       for (const rev of [0, 1]) {
         const p = setProposal(map, 'r-01', 's-01', `Version ${rev}\nBody`, at);
-        resolveProposal(map, lt(map), 'r-01', p.proposalId, 'accept', { rev: p.rev }, at);
+        resolveProposal(map, letters, 'r-01', p.proposalId, 'accept', { rev: p.rev }, at);
       }
     });
     const { flushDecisionJournal } = await import('./decision-journal.js');

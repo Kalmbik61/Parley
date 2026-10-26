@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addMessage, addSession, normalizeMap } from './map.js';
+import { addSession, normalizeMap } from './map.js';
 import {
   diffRows,
   ENTRY_FIELDS,
@@ -13,7 +13,7 @@ import {
 import { reservePlanEffects } from './plan-effects.js';
 import { resolveProposal, setProposal } from './proposals.js';
 import { addRoom } from './rooms.js';
-import { HUMAN, type PlanDraft, type WorkMap } from './types.js';
+import { HUMAN, type PlanDraft, type WindowWorkMap, type WorkMap } from './types.js';
 import { mapLetterTx } from './letter-store.js';
 const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
@@ -31,7 +31,6 @@ const emptyMap = (): WorkMap => ({
     updatedAt: AT,
   },
   sessions: [],
-  messages: [],
   rooms: [],
 });
 
@@ -41,10 +40,11 @@ const asRead = (map: WorkMap): WorkMap =>
 
 /**
  * Карта со всеми коллекциями, которые живут строками: три сессии, две комнаты, принятый план (план, снимок плана,
- * решение с экспортом, доставки), письма, намерение закрыть пункт бэклога, журнал ресурсов.
+ * решение с экспортом, доставки), намерение закрыть пункт бэклога, журнал ресурсов. Письма в строки не входят (они в своих
+ * таблицах, спека хранилища 6.2): пока карта собирается, они нужны правилам в памяти, а в итог не попадают.
  */
 function fullMap(): WorkMap {
-  const map = emptyMap();
+  const map: WindowWorkMap = { ...emptyMap(), messages: [] };
   for (const label of ['Lead', 'Owner', 'Reviewer']) {
     addSession(map, { provider: 'codex', label, task: 'Fixture' }, AT);
   }
@@ -85,7 +85,6 @@ function fullMap(): WorkMap {
     AT,
   );
   reservePlanEffects(map, lt(map), 20, AT);
-  addMessage(map, { from: 's-02', to: ['s-01'], text: 'ping' }, AT);
 
   const plan = map.plans![0]!;
   plan.status = 'completed';
@@ -102,7 +101,9 @@ function fullMap(): WorkMap {
     },
   ];
   map.resources = { seq: 1, spawned: 1, spawnedByRoom: { 'r-01': 1 }, attempts: [] };
-  return asRead(map);
+  const stored: Partial<WindowWorkMap> = { ...map };
+  delete stored.messages;
+  return asRead(stored as WorkMap);
 }
 
 /** Через базу карта проходит строками-строками: на выходе — то, что дал бы `readMap`. */
@@ -162,7 +163,6 @@ describe('mapToRows и rowsToMap', () => {
   it('карта без необязательных коллекций возвращает тот же набор полей, пустая коллекция остаётся пустой', () => {
     const minimal = asRead(emptyMap());
     expect(Object.keys(minimal).sort()).toEqual([
-      'messages',
       'plans',
       'rooms',
       'schemaVersion',
@@ -176,7 +176,6 @@ describe('mapToRows и rowsToMap', () => {
     const { work, extra, rows } = mapToRows(raw);
     const stored = rowsToMap(work, extra, rows) as Record<string, unknown>;
     expect(Object.keys(stored).sort()).toEqual([
-      'messages',
       'rooms',
       'schemaVersion',
       'sessions',
@@ -199,36 +198,22 @@ describe('mapToRows и rowsToMap', () => {
     expect(extra).not.toContain('compact');
   });
 
-  it('повторяющиеся id писем дают ключи m-07 и m-07#2 и оба возвращаются в исходном порядке', () => {
-    const map = emptyMap();
-    const letter = (text: string) => ({
-      id: 'm-07',
-      roomId: null,
-      from: 's-01',
-      to: ['s-02'],
-      text,
-      kind: 'note' as const,
-      at: AT,
-      readBy: {},
-    });
-    map.messages = [
-      letter('первое'),
-      { ...letter('другое'), id: 'm-08' },
-      letter('второе'),
-      letter('третье'),
-    ];
-    const normalized = asRead(map);
+  it('письма в строки и в extra не попадают: карта с письмами раскладывается так же, как без них', () => {
+    const stored = fullMap();
+    const withLetters: WindowWorkMap = {
+      ...stored,
+      messages: [
+        { id: 'm-01', roomId: null, from: 's-01', to: ['s-02'], text: 'ping', kind: 'note', at: AT, readBy: {} },
+      ],
+    };
 
-    const { rows } = mapToRows(normalized);
-    const messages = rows.filter((row) => row.kind === 'message');
-    expect(messages.map((row) => row.key)).toEqual(['m-07', 'm-08', 'm-07#2', 'm-07#3']);
-    expect(new Set(messages.map((row) => row.key)).size).toBe(4);
-    expect(roundTrip(normalized).messages.map((message) => message.text)).toEqual([
-      'первое',
-      'другое',
-      'второе',
-      'третье',
-    ]);
+    const plain = mapToRows(stored);
+    const full = mapToRows(withLetters);
+
+    expect(full).toEqual(plain);
+    expect(full.rows.some((row) => (row.kind as string) === 'message')).toBe(false);
+    expect(full.extra).not.toContain('messages');
+    expect(Object.hasOwn(rowsToMap(full.work, full.extra, full.rows) as object, 'messages')).toBe(false);
   });
 
   it('ключи остальных видов: файл, тройка экспорта решения, key доставки', () => {
@@ -256,9 +241,7 @@ describe('mapToRows и rowsToMap', () => {
       expect(row.json).toBe(JSON.stringify(entry));
       expect(row.key).toBe(entry.id);
     }
-    expect(rows.filter((row) => row.kind === 'message').map((row) => row.ord)).toEqual(
-      map.messages.map((_, index) => index),
-    );
+    expect(rows.filter((row) => row.kind === 'room').map((row) => row.ord)).toEqual(map.rooms.map((_, index) => index));
   });
 });
 
@@ -270,26 +253,26 @@ describe('diffRows', () => {
     expect(diff).toEqual({ upserts: [], deletes: [], workChanged: false });
   });
 
-  it('добавление письма в конец даёт ровно один upsert', () => {
+  it('добавление сессии в конец даёт ровно один upsert (и работу: счётчик номеров)', () => {
     const before = fullMap();
     const after = structuredClone(before);
-    addMessage(after, { from: 's-01', to: ['s-02'], text: 'новое' }, AT);
+    addSession(after, { provider: 'codex', label: 'Новая', task: 'Fixture' }, AT);
 
     const diff = diffBetween(before, after);
     expect(diff.upserts).toHaveLength(1);
-    expect(diff.upserts[0]).toMatchObject({ kind: 'message', ord: before.messages.length });
+    expect(diff.upserts[0]).toMatchObject({ kind: 'session', ord: before.sessions.length });
     expect(diff.deletes).toEqual([]);
   });
 
-  it('изменение readBy одного письма даёт ровно один upsert', () => {
+  it('изменение одного поля одной сессии даёт ровно один upsert', () => {
     const before = fullMap();
     const after = structuredClone(before);
-    const target = after.messages[0]!;
-    target.readBy['s-02'] = AT;
+    const target = after.sessions[0]!;
+    target.label = 'Переименована';
 
     const diff = diffBetween(before, after);
     expect(diff.upserts).toHaveLength(1);
-    expect(diff.upserts[0]).toMatchObject({ kind: 'message', key: target.id, ord: 0 });
+    expect(diff.upserts[0]).toMatchObject({ kind: 'session', key: target.id, ord: 0 });
     expect(diff.deletes).toEqual([]);
   });
 
@@ -337,14 +320,14 @@ describe('diffRows', () => {
   it('новый ключ перед старым нумерует коллекцию заново с нуля', () => {
     const before = fullMap();
     const after = structuredClone(before);
-    const extra = addMessage(after, { from: 's-01', to: ['s-02'], text: 'вставка' }, AT);
-    after.messages = [extra, ...after.messages.filter((message) => message.id !== extra.id)];
+    const extra = addSession(after, { provider: 'codex', label: 'Вставка', task: 'Fixture' }, AT);
+    after.sessions = [extra, ...after.sessions.filter((session) => session.id !== extra.id)];
 
     const diff = diffBetween(before, after);
-    const messages = diff.upserts.filter((row) => row.kind === 'message');
-    expect(messages).toHaveLength(before.messages.length + 1);
-    expect(messages[0]).toMatchObject({ key: extra.id, ord: 0 });
-    expect(diff.upserts.filter((row) => row.kind !== 'message')).toEqual([]);
+    const sessions = diff.upserts.filter((row) => row.kind === 'session');
+    expect(sessions).toHaveLength(before.sessions.length + 1);
+    expect(sessions[0]).toMatchObject({ key: extra.id, ord: 0 });
+    expect(diff.upserts.filter((row) => row.kind !== 'session')).toEqual([]);
   });
 
   it('массивы, заменённые клонами (как в plans.ts), дают пустой diff: изменения ищутся по содержимому, не по ссылке', () => {

@@ -3,7 +3,7 @@
  * до журнала, — восстановленные по ленте и составу. Обрезки архивом здесь нет: её делает подсчёт (`roomUsage`).
  */
 
-import { mapLetterTx, type LetterReads } from './letter-store.js';
+import type { LetterReads } from './letter-store.js';
 import { joinedLine } from './rooms.js';
 import { HUMAN, SYSTEM, type Room, type WorkMap } from './types.js';
 import type { UsageWindow } from './usage-ledger.js';
@@ -94,7 +94,7 @@ function group(periods: ReadonlyArray<{ session: string } & UsageWindow>): Membe
 export function roomMembership(
   map: WorkMap,
   roomId: string,
-  letters: LetterReads = mapLetterTx(map).letters,
+  letters: LetterReads,
 ): RoomMembershipView {
   const room = map.rooms.find((candidate) => candidate.id === roomId);
   if (room === undefined) throw new Error(`room ${roomId} is not in the map`);

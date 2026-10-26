@@ -1,4 +1,4 @@
-import type { AgentPlan, ContextFill, UsageSummary, WorkEntry } from '@parley/core';
+import type { AgentPlan, ContextFill, UsageSummary, WindowWorkEntry } from '@parley/core';
 
 /**
  * Лимиты подписки провайдера (спека комнат Organic, 3.5): пятичасовое и недельное окна и время, когда
@@ -357,8 +357,9 @@ export interface HostDiagnostics {
   profile: ProfileStatus;
 }
 
+/** Снимок работ для окна: карты с письмами (`WindowWorkMap`) — сжатые или полные, как собрал хост (спека хранилища 6.7). */
 export interface WorksSnapshot {
-  entries: WorkEntry[];
+  entries: WindowWorkEntry[];
   branches: Record<string, string | null>;
   /**
    * Номер снимка в жизни хоста: растёт на каждую рассылку. Окно применяет только снимок новее уже применённого, и

@@ -14,7 +14,7 @@
 
 import type { LetterTx } from './letter-store.js';
 import { HUMAN, PARLEY, SYSTEM } from './types.js';
-import type { Message, ResourceAttempt, ResourceKind, WorkMap, WorkResources } from './types.js';
+import type { Message, ResourceAttempt, ResourceKind, WindowWorkMap, WorkMap, WorkResources } from './types.js';
 
 /** Скользящее окно запусков, возобновлений и писем. */
 export const RESOURCE_WINDOW_MS = 60 * 60 * 1000;
@@ -360,22 +360,22 @@ const recipientCount = (message: Message, map: WorkMap): number =>
 export function assertMessageBudget(map: WorkMap, letters: LetterTx, request: MessageRequest): void {
   const now = request.now ?? Date.now();
   const { limits } = request;
-  // Окно «последний час» — запрос с `sinceAt`, а не обход всей ленты; предел запроса — число писем окна, а агентов от
-  // человека, хоста и плана отличает `isAgentSender` (спека хранилища 6.2).
-  const window = { sinceAt: new Date(now - RESOURCE_WINDOW_MS).toISOString() };
-  const recent = letters
-    .query({ ...window, limit: letters.count(window) })
-    .filter((message) => isAgentSender(message.from));
+  // Окно «последний час» — запросы по индексу времени, а не обход всей ленты; письма человека, хоста и плана отсеивает
+  // сам запрос (`agentsOnly`), а читаются только письма агентов и только после проверки счётчиков: их не больше
+  // `workMessages` (спека хранилища 6.2).
+  const window = { sinceAt: new Date(now - RESOURCE_WINDOW_MS).toISOString(), agentsOnly: true };
+  const recentCount = letters.count(window);
 
-  if (recent.length + request.messages > limits.workMessages) {
-    throw new ResourceDeniedError('messages', 'work', recent.length, limits.workMessages);
+  if (recentCount + request.messages > limits.workMessages) {
+    throw new ResourceDeniedError('messages', 'work', recentCount, limits.workMessages);
   }
   if (request.room !== null) {
-    const inThisRoom = recent.filter((message) => message.roomId === request.room).length;
+    const inThisRoom = letters.count({ ...window, roomId: request.room });
     if (inThisRoom + request.messages > limits.roomMessages) {
       throw new ResourceDeniedError('messages', 'room', inThisRoom, limits.roomMessages);
     }
   }
+  const recent = letters.query({ ...window, limit: recentCount });
   const delivered = recent.reduce((sum, message) => sum + recipientCount(message, map), 0);
   if (delivered + request.recipients > limits.fanout) {
     throw new ResourceDeniedError('fanout', 'work', delivered, limits.fanout);
@@ -422,7 +422,7 @@ const meter = (used: number, reserved: number, limit: number): Meter => ({
  * Ничего не меняет в карте: читает копию журнала и считает так же, как допуск.
  */
 export function resourceStatus(
-  map: WorkMap,
+  map: WindowWorkMap,
   limits: ResourceLimits,
   now: number = Date.now(),
   roomId: string | null = null,

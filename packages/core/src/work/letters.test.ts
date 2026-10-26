@@ -3,14 +3,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { workDb } from './db.js';
-import { markHumanRead } from './letter-store.js';
-import { isUnreadFor, recipientsOf, unreadFor } from './letters.js';
+import { letterById, markHumanRead } from './letter-store.js';
+import { isUnreadFor, lookupIn, recipientsOf, unreadFor } from './letters.js';
 import { addMessage } from './map.js';
 import { createWork, readMap, readStoredMap, replaceStoredMap, updateMap, WorkNotFoundError } from './store.js';
-import { HUMAN, type Room, type WorkMap } from './types.js';
+import { HUMAN, type Room, type WindowWorkMap } from './types.js';
 
 /** Работа с комнатой r-01: создатель s-01, участники s-02 и s-03; s-04 вне её. */
-const mapWithRoom = (): WorkMap => ({
+const mapWithRoom = (): WindowWorkMap => ({
   schemaVersion: 2,
   work: {
     id: 'w-0001',
@@ -92,8 +92,8 @@ describe('unreadFor', () => {
     const broadcast = addMessage(map, { from: 's-01', to: [], text: 'всем', roomId: 'r-01' });
     broadcast.readBy['s-02'] = '2026-09-26T10:05:00.000Z';
 
-    expect(isUnreadFor(broadcast, 's-02', map)).toBe(false);
-    expect(isUnreadFor(broadcast, 's-03', map)).toBe(true);
+    expect(isUnreadFor(broadcast, 's-02', map, lookupIn(map))).toBe(false);
+    expect(isUnreadFor(broadcast, 's-03', map, lookupIn(map))).toBe(true);
     expect(unreadFor(map, 's-02')).toEqual([]);
     expect(unreadFor(map, 's-03')).toEqual([broadcast]);
   });
@@ -115,7 +115,7 @@ describe('unreadFor', () => {
     const room = map.rooms[0] as Room;
 
     room.archivedAt = '2026-10-08T12:00:00.000Z';
-    expect(isUnreadFor(broadcast, 's-02', map)).toBe(false);
+    expect(isUnreadFor(broadcast, 's-02', map, lookupIn(map))).toBe(false);
     expect(unreadFor(map, 's-03')).toEqual([]);
 
     room.archivedAt = null;
@@ -146,7 +146,7 @@ describe('markHumanRead', () => {
    */
   async function seed(): Promise<void> {
     await createWork(project, { title: 'почта' });
-    await updateMap(project, 'w-0001', (map) => {
+    await updateMap(project, 'w-0001', (map, letters) => {
       map.rooms.push({
         id: 'r-01',
         title: 'r',
@@ -157,13 +157,15 @@ describe('markHumanRead', () => {
         proposal: null,
         archivedAt: null,
       });
-      addMessage(map, { from: 's-01', to: [HUMAN], text: 'человеку' }); // m-01
-      const both = addMessage(map, { from: 's-01', to: [HUMAN, 's-02'], text: 'обоим' }); // m-02
-      both.readBy['s-02'] = OLD;
-      addMessage(map, { from: 's-01', to: ['s-02'], text: 'агенту' }); // m-03
-      addMessage(map, { from: 's-02', to: [], text: 'в комнату', roomId: 'r-01' }); // m-04
-      addMessage(map, { from: HUMAN, to: [], text: 'от человека', roomId: 'r-01' }); // m-05
-      addMessage(map, { from: HUMAN, to: ['s-01'], text: 'агенту от человека' }); // m-06
+      const letter = (from: string, to: string[], text: string, roomId: string | null = null, readBy: Record<string, string> = {}): void => {
+        letters.add({ roomId, from, to, text, kind: 'note', readBy });
+      };
+      letter('s-01', [HUMAN], 'человеку'); // m-01
+      letter('s-01', [HUMAN, 's-02'], 'обоим', null, { 's-02': OLD }); // m-02
+      letter('s-01', ['s-02'], 'агенту'); // m-03
+      letter('s-02', [], 'в комнату', 'r-01'); // m-04
+      letter(HUMAN, [], 'от человека', 'r-01'); // m-05
+      letter(HUMAN, ['s-01'], 'агенту от человека'); // m-06
     });
     const stored = readStoredMap(project, 'w-0001');
     stored.work.updatedAt = OLD;
@@ -179,7 +181,7 @@ describe('markHumanRead', () => {
     );
 
   const readAt = async (id: string): Promise<string | undefined> =>
-    (await readMap(project, 'w-0001')).messages.find((m) => m.id === id)?.readBy[HUMAN];
+    letterById(project, 'w-0001', id)?.readBy[HUMAN];
 
   it('письмо S01 человеку → 1, readBy.human — ISO-время', async () => {
     await seed();

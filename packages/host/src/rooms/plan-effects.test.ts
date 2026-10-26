@@ -9,13 +9,13 @@ import {
   setProposal,
   flushDecisionJournal,
 } from "@parley/core";
-import type { LetterTx, WorkMap } from "@parley/core";
+import type { LetterTx, WindowWorkMap, WorkMap } from "@parley/core";
 import type { WorksService } from "../works/works-service.js";
 import type { PlanEffectsServiceIO } from "./plan-effects.js";
 import { createPlanEffectsService } from "./plan-effects.js";
 const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 const AT = "2026-10-04T01:00:00.000Z";
-const empty = (): WorkMap => ({
+const empty = (): WindowWorkMap => ({
   schemaVersion: 2,
   work: {
     id: "w-01",
@@ -62,6 +62,8 @@ function fixture(map = empty()) {
     };
   });
   const io = {
+    // Пробный расчёт читает письма карты в памяти: базы у этого стенда нет.
+    previewLetters: (_p: string, _w: string, preview: WorkMap) => lt(preview as WindowWorkMap),
     readMap: vi.fn(async () => structuredClone(map)),
     updateMap: vi.fn(
       async (_p: string, _w: string, body: (m: WorkMap, letters: LetterTx) => void) => {

@@ -8,7 +8,7 @@
  */
 
 import { Suspense } from 'react';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import type { TabSpec } from '../../../shared/layout-types.js';
 import { S } from '../../../shared/strings.js';
@@ -22,7 +22,7 @@ export interface DiffBodyProps {
   bridge: ParleyBridge;
   workKey: string;
   /** Сессия вкладки есть в карте — иначе `GroupView` показал бы `MissingBody`. */
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   tab: Extract<TabSpec, { kind: 'diff' }>;
   font?: { family: string; size: number };
   /** Отправка агенту окна (7.2) — заметкам диффа (8.4b). */

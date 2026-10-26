@@ -11,7 +11,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  addMessage,
   addSession,
   createWork,
   transitionSession,
@@ -176,8 +175,8 @@ async function rig(
     wake,
     stream: () => stream,
     letter: (text = 'тело письма — секрет') =>
-      updateMap(project, map.work.id, (current) => {
-        addMessage(current, { from: 's-00', to: [sessionId], text });
+      updateMap(project, map.work.id, (current, letters) => {
+        letters.add({ roomId: null, kind: 'note', from: 's-00', to: [sessionId], text });
       }).then(() => undefined),
     notices: (kind) =>
       broadcasts.filter(
@@ -308,7 +307,7 @@ describe('будильник и codex', () => {
   it('указатель в комнате: название с токеном на конце не мешает — текст кончается словом', async () => {
     const { ref, activity, stream, workId } = await rig();
     await waitFor(() => known(activity, ref));
-    await updateMap(project, workId, (current) => {
+    await updateMap(project, workId, (current, letters) => {
       current.rooms.push({
         id: 'r-01',
         title: 'Ревью @файл',
@@ -318,7 +317,7 @@ describe('будильник и codex', () => {
         lead: null,
         proposal: null,
       });
-      addMessage(current, { from: 's-00', to: [ref.sessionId], text: 'x', roomId: 'r-01' });
+      letters.add({ kind: 'note', from: 's-00', to: [ref.sessionId], text: 'x', roomId: 'r-01' });
     });
     await waitFor(() => stream().includes('enter: New messages (1) in r-01'), 5000);
   }, 30_000);

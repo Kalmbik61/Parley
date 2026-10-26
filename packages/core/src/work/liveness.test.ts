@@ -9,8 +9,6 @@ import { checkSession, hasLiveProcess, isAlive, processStartedAt, reconcileMap }
 import { addSession, removeSession, transitionSession } from './map.js';
 import { createWork, readMap, updateMap } from './store.js';
 import type { WorkSession } from './types.js';
-import { mapLetterTx } from './letter-store.js';
-const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
 /**
  * Счётчик записей карты. Раньше число записей читалось по `.bak` (карта до последней записи), но копию
@@ -313,8 +311,8 @@ describe('reconcileMap (чек-лист 15)', () => {
     const startedAtProcess = await processStartedAt(dead.pid ?? 0);
     await stop(dead);
     const id = await seed(work.id, { pid: dead.pid ?? 0, startedAtProcess });
-    await updateMap(project, work.id, (map) => {
-      removeSession(map, lt(map), id);
+    await updateMap(project, work.id, (map, letters) => {
+      removeSession(map, letters, id);
     });
 
     // Мёртвый процесс в карте больше не значится: переводить некого, и записи

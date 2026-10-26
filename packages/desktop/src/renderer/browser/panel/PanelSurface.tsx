@@ -13,7 +13,7 @@
  */
 
 import { useLayoutEffect, useRef } from 'react';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import type { BrowserOwner, BrowserPanelSpec } from '../../../shared/layout-types.js';
 import { ownerKey, ownerTabId } from '../../layout/ids.js';
@@ -34,7 +34,7 @@ export interface PanelSurfaceProps {
   /** Работа активна, панель открыта и вид хозяина на экране. */
   visible: boolean;
   bridge: ParleyBridge;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   sendDeps: SendWithToastDeps;
 }
 

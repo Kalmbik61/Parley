@@ -194,8 +194,9 @@ export {
   stateWord,
 } from './work/session-state.js';
 export type { DotState, SessionAxes, StateWordKey } from './work/session-state.js';
-export { isUnreadFor, recipientsOf, unreadFor } from './work/letters.js';
-export { channelStats, letterById, letterCount, mapLetterReader, mapLetterTx, markHumanRead, readLetters, storeLetterReader, unreadCount, unreadLetters, writeLetters } from './work/letter-store.js';
+export { isUnreadFor, lookupIn, recipientsOf, unreadFor } from './work/letters.js';
+export type { LetterLookup } from './work/letters.js';
+export { channelStats, letterById, letterCount, mapLetterReader, mapLetterTx, markHumanRead, previewLetterTx, readLetters, storeLetterReader, storeLetterReads, unreadCount, unreadLetters, writeLetters } from './work/letter-store.js';
 export type { LetterQuery, LetterReads, LetterTx, NewLetter, UnreadOptions } from './work/letter-store.js';
 export {
   LETTER_PAGE_MAX_ITEMS,
@@ -409,7 +410,7 @@ export {
 } from './work/summary.js';
 export type { AutoSummaryOptions, TranscriptOptions } from './work/summary.js';
 export { readWorks, watchWorks } from './work/works.js';
-export type { WatchWorksOptions, WorkEntry, WorksWatcher } from './work/works.js';
+export type { WatchWorksOptions, WindowWorkEntry, WorkEntry, WorksWatcher } from './work/works.js';
 export {
   LINK_TOLERANCE_MS,
   finishSession,
@@ -618,6 +619,7 @@ export type {
   SessionResult,
   SessionStatus,
   SummarySource,
+  WindowWorkMap,
   Work,
   WorkIndexEntry,
   WorkMap,

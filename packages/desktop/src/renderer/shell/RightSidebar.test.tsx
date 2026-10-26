@@ -7,7 +7,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { DirEntry, FileRoot, TextFile } from '../../shared/files-types.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { useFilesStore } from '../files/store.js';
@@ -59,7 +59,7 @@ const DIFF = {
   commits: [],
   uncommittedPaths: [],
 };
-const ENTRY: WorkEntry = makeWork('w-01', { projectPath: '/tmp/proj', sessions: [makeSession('s-02', 'two', { worktree: WORKTREE })] });
+const ENTRY: WindowWorkEntry = makeWork('w-01', { projectPath: '/tmp/proj', sessions: [makeSession('s-02', 'two', { worktree: WORKTREE })] });
 
 function dirEntry(name: string, kind: DirEntry['kind'] = 'file'): DirEntry {
   return { name, kind, size: 1, mtimeMs: 1, ignored: false, target: null };
@@ -107,7 +107,7 @@ async function flush(): Promise<void> {
   });
 }
 
-async function renderShell(entries: WorkEntry[]): Promise<void> {
+async function renderShell(entries: WindowWorkEntry[]): Promise<void> {
   useWorksStore.setState({ entries, branches: {}, loading: false, error: null });
   render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
   await flush();

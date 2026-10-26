@@ -16,7 +16,7 @@
  * Комната помечена `done`, если никто из её участников не в работе, а кто-то из них в Done. У Codex показываем запросы действий.
  */
 
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import { ISLAND_ATTENTION_ONLY_PROVIDERS } from '../../shared/island.js';
 import { sessionAttention } from '../attention/derive.js';
@@ -49,7 +49,7 @@ export interface IslandModel {
 }
 
 export function islandModel(
-  entries: readonly WorkEntry[],
+  entries: readonly WindowWorkEntry[],
   byRef: Readonly<Record<string, ActivityEntry>>,
   withCard: ReadonlySet<string>,
   cleared: ReadonlySet<string>,
@@ -114,7 +114,7 @@ export function islandModel(
 }
 
 /** Шапка карточки запроса: сессия, работа и проект по `refKey`. */
-export function sessionLabels(entries: readonly WorkEntry[]): Map<string, { session: string; work: string; project: string }> {
+export function sessionLabels(entries: readonly WindowWorkEntry[]): Map<string, { session: string; work: string; project: string }> {
   const labels = new Map<string, { session: string; work: string; project: string }>();
   for (const entry of entries) {
     const work = workTitleText(entry.map.work.title);

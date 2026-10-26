@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as core from '@parley/core';
-import { addMessage, createWork, HUMAN, readMap, updateMap } from '@parley/core';
+import { createWork, HUMAN, updateMap, readStoredMap } from '@parley/core';
 import { connectRaw, hello, holdDatabase, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
@@ -48,8 +48,8 @@ async function withLetter(): Promise<{ client: TestClient; dir: string; workId: 
   await hello(client, token);
   client.send({ id: 1, method: 'works.create', params: { projectPath: dir, title: 'Почта', goal: '' } });
   const workId = ((await reply(client, 1)).result as { workId: string }).workId;
-  await updateMap(dir, workId, (map) => {
-    addMessage(map, { from: 's-01', to: [HUMAN], text: 'вопрос' });
+  await updateMap(dir, workId, (map, letters) => {
+    letters.add({ roomId: null, kind: 'note', from: 's-01', to: [HUMAN], text: 'вопрос' });
   });
   return { client, dir, workId, home };
 }
@@ -60,7 +60,7 @@ describe('mail.markRead', () => {
 
     client.send({ id: 2, method: 'mail.markRead', params: { projectPath: dir, workId, messageIds: ['m-01'] } });
     expect((await reply(client, 2)).result).toEqual({ marked: 1 });
-    expect((await readMap(dir, workId)).messages[0]?.readBy[HUMAN]).toBeDefined();
+    expect((readStoredMap(dir, workId)).messages[0]?.readBy[HUMAN]).toBeDefined();
 
     client.send({ id: 3, method: 'mail.markRead', params: { projectPath: dir, workId, messageIds: ['m-01'] } });
     expect((await reply(client, 3)).result).toEqual({ marked: 0 });
@@ -100,7 +100,7 @@ describe('mail.markRead', () => {
 
     client.send({ id: 2, method: 'mail.markRead', params: { projectPath: dir, workId, messageIds } });
     expect((await reply(client, 2)).error?.code).toBe('bad_request');
-    expect((await readMap(dir, workId)).messages[0]?.readBy[HUMAN]).toBeUndefined();
+    expect((readStoredMap(dir, workId)).messages[0]?.readBy[HUMAN]).toBeUndefined();
     client.close();
   });
 });
@@ -130,7 +130,7 @@ describe('mail.markRead: карта целиком не читается', () =>
       } finally {
         readMapSpy.mockRestore();
       }
-      expect((await readMap(dir, workId)).messages[0]?.readBy[HUMAN]).toBeDefined();
+      expect((readStoredMap(dir, workId)).messages[0]?.readBy[HUMAN]).toBeDefined();
     } finally {
       if (previous === undefined) delete process.env.PARLEY_HOME;
       else process.env.PARLEY_HOME = previous;

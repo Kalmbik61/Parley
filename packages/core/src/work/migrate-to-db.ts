@@ -1,6 +1,8 @@
 /**
  * Переезд прежних карт в базу на старте хоста (спека хранилища 6.6): `map.json` каждой работы становится строками
- * `works` и `entries`, а сам файл — `map.v2.json`. Прежний глобальный `works-index.json` уходит в `works-index.v2.json`,
+ * `works` и `entries`, письмами с отметками и кандидатами в непрочитанное (`messages`, `message_reads`, `message_unread`;
+ * `insertMigratedMap`), а сам файл — `map.v2.json`. Письмам нужен уникальный номер `m-N`: карта с повторяющимися номерами
+ * не переезжает (`failed`), её файл остаётся. Прежний глобальный `works-index.json` уходит в `works-index.v2.json`,
  * когда каждая его запись урегулирована: работа в базе, или её каталог цел и без `map.json`. Не найденная на диске
  * работа (проект на несмонтированном томе), непереехавшая и непрочитанный проект индекс удерживают: по нему следующий
  * старт найдёт карты. Переименованные файлы — страховка: база их не читает, человек вернёт карту
@@ -35,7 +37,7 @@ import {
   workPaths,
   worksIndexPath,
 } from './store.js';
-import type { WorkMap } from './types.js';
+import type { WindowWorkMap } from './types.js';
 
 /** Имя, под которым прежний `map.json` остаётся рядом с картой в базе. */
 const MAP_BACKUP_FILE = 'map.v2.json';
@@ -75,7 +77,7 @@ const fsReason = (error: unknown): string =>
   (error as NodeJS.ErrnoException | null)?.code ?? errorText(error);
 
 /** Что обязана сохранить сверка: непрочитанные письма по каждой сессии и у человека. */
-function unreadDigest(map: WorkMap): { bySession: Record<string, string[]>; human: string[] } {
+function unreadDigest(map: WindowWorkMap): { bySession: Record<string, string[]>; human: string[] } {
   return {
     bySession: Object.fromEntries(
       map.sessions.map((session) => [session.id, unreadFor(map, session.id).map((message) => message.id)]),
@@ -95,7 +97,7 @@ const DIFFERS_FROM_STORED = 'map.json differs from the stored copy (newer edits 
 function verifyStored(
   projectPath: string,
   workId: string,
-  map: WorkMap,
+  map: WindowWorkMap,
   before: ReturnType<typeof unreadDigest>,
   file: string,
   mismatch = `the map read back from the database does not match ${file}`,
@@ -123,7 +125,7 @@ async function lockHeld(lockFile: string): Promise<boolean> {
  * отправленные эффекты с хэшем вместо текста (спека хранилища 6.2). `parseMap` сжимает карту сам; явный вызов держит
  * сверку переезда независимой от того, где ядро переводит старый вид.
  */
-async function readLegacyMap(file: string): Promise<WorkMap> {
+async function readLegacyMap(file: string): Promise<WindowWorkMap> {
   return compactStoredTexts(parseMap(await readFile(file, 'utf8'), file));
 }
 

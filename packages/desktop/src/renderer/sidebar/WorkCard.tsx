@@ -36,7 +36,7 @@
 import { memo, useRef, useState } from 'react';
 import { create } from 'zustand';
 import { AtSign, Hash, Mail, Plus } from 'lucide-react';
-import type { SessionLifecycle, WorkEntry } from '@parley/core';
+import type { SessionLifecycle, WindowWorkEntry } from '@parley/core';
 import { sessionDotStateWithNeed, type DotState } from '@parley/core/session-state';
 import { refKey } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
@@ -60,7 +60,7 @@ import { archivedRows, cardRows, NO_GUIDES, treeGuides, type CardRoomRow, type T
 import { useCursorStop } from './use-sidebar-keys.js';
 
 export interface WorkCardProps {
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   attention: WorkAttention;
   activity: Record<string, ActivityEntry>;
   active: boolean;
@@ -88,7 +88,7 @@ const URGENCY: readonly DotState[] = ['blocked', 'working', 'unseen', 'failed', 
 
 /** Значок самого срочного состояния среди живых (не закрытых) сессий; `null` — живых нет. */
 function urgentGlyph(
-  entry: WorkEntry,
+  entry: WindowWorkEntry,
   activity: Record<string, ActivityEntry>,
 ): { state: DotState; lifecycle: SessionLifecycle } | null {
   let best: { state: DotState; lifecycle: SessionLifecycle; rank: number } | null = null;

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { MapCompact, Message, WorkEntry } from '@parley/core';
+import type { MapCompact, Message, WindowWorkEntry } from '@parley/core';
 import type { WorksSnapshot } from '@parley/protocol';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeLetter, makeRoom, makeWork } from '../test-utils/work-fixtures.js';
@@ -19,12 +19,12 @@ const meta = (total: number, tailFrom: number): MapCompact => ({
   omitted: {},
 });
 
-function entry(messages: Message[], total: number, tailFrom: number): WorkEntry {
+function entry(messages: Message[], total: number, tailFrom: number): WindowWorkEntry {
   const base = makeWork('w-01', { rooms: [makeRoom('r-01', 'К')], messages });
   return { ...base, map: { ...base.map, compact: meta(total, tailFrom) } };
 }
 
-const snapshot = (revision: number | undefined, entries: WorkEntry[]): WorksSnapshot => ({
+const snapshot = (revision: number | undefined, entries: WindowWorkEntry[]): WorksSnapshot => ({
   entries,
   branches: {},
   ...(revision === undefined ? {} : { revision }),
