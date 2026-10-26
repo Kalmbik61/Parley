@@ -61,7 +61,7 @@ describe('usePanelRuntime', () => {
 
   it('вид хозяина: смонтирован с узостью, узость обновляется, размонтирован — записи нет', () => {
     state().mountHost('k', false);
-    expect(state().hosts).toEqual({ k: { narrow: false } });
+    expect(state().hosts).toEqual({ k: { narrow: false, measured: false } });
     const same = state().hosts;
     state().mountHost('k', false);
     expect(state().hosts).toBe(same);
@@ -72,6 +72,17 @@ describe('usePanelRuntime', () => {
     const empty = state().hosts;
     state().unmountHost('k');
     expect(state().hosts).toBe(empty);
+  });
+
+  it('measurement change updates a wide host even when narrow is unchanged', () => {
+    state().mountHost('wide', false);
+    const unknown = state().hosts;
+    state().mountHost('wide', false, true);
+    expect(state().hosts).not.toBe(unknown);
+    expect(state().hosts.wide).toEqual({ narrow: false, measured: true });
+    const measured = state().hosts;
+    state().mountHost('wide', false, true);
+    expect(state().hosts).toBe(measured);
   });
 
   it('публикация слоя работы даёт живые панели; другая работа добавляет своё, предел общий на окно', () => {

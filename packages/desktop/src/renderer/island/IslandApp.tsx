@@ -45,7 +45,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { refKey, type AssistantProposal } from '@parley/protocol';
-import { markSeenBatches, type IslandBridge, type IslandConfig, type IslandHitRect } from '../../shared/island.js';
+import { markSeenBatches, parseVisibilitySnapshot, type IslandBridge, type IslandConfig, type IslandHitRect, type IslandPresentationOutcome } from '../../shared/island.js';
 import type { IslandAnchor } from '../../shared/ui-types.js';
 import { isoMs } from '../lib/iso-time.js';
 import { useActivityStore } from '../store/activity.js';
@@ -112,7 +112,7 @@ function hideAssistant(): boolean {
   return true;
 }
 
-export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
+export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; onPresentation?: (outcome: IslandPresentationOutcome) => void }): JSX.Element {
   const [connected, setConnected] = useState(false);
   const [config, setConfig] = useState<IslandConfig>(INITIAL_CONFIG);
   const [listOpen, setListOpen] = useState(false);
@@ -155,6 +155,27 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   const connectedAt = useRef(0);
   /** Счётчик свежих Done: его смена заводит отсчёт удержания заново. */
   const [freshDone, setFreshDone] = useState(0);
+  const [visibleSessions, setVisibleSessions] = useState<ReadonlySet<string>>(() => new Set());
+
+  useEffect(() => {
+    let active = true;
+    let version = -1;
+    setVisibleSessions(new Set());
+    const apply = (value: unknown, fromGetter = false): void => {
+      if (!active) return;
+      const snapshot = parseVisibilitySnapshot(value);
+      if (snapshot === null) {
+        if (!fromGetter || version < 0) setVisibleSessions(new Set());
+        return;
+      }
+      if (snapshot.version <= version) return;
+      version = snapshot.version;
+      setVisibleSessions(new Set(snapshot.refs.map(refKey)));
+    };
+    const off = bridge.island.onVisibility(apply);
+    void bridge.island.visibility().then((snapshot) => apply(snapshot, true), () => { if (active && version < 0) setVisibleSessions(new Set()); });
+    return () => { active = false; off(); };
+  }, [bridge]);
 
   useEffect(
     () =>
@@ -271,6 +292,12 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   const idle = !model.active && items.length === 0 && consents.length === 0 && !assistant.open && !busy;
   /** Убран ли остров: в покое при открытии — да, при работе или очереди — нет. */
   const [retracted, setRetracted] = useState(idle);
+  const present = useCallback((outcomes: IslandPresentationOutcome[]): void => {
+    if (outcomes.some((outcome) => outcome.expand)) setRetracted(false);
+    if (onPresentation !== undefined) {
+      for (const outcome of outcomes) onPresentation(outcome);
+    } else if (config.sound && outcomes.some((outcome) => outcome.soundEligible)) bridge.island.beep();
+  }, [bridge, config.sound, onPresentation]);
   // `hovered` здесь не трогаем: его ведёт только main, и локальный сброс разошёлся бы с ним, пока курсор над зоной нажатия.
   const retract = useCallback(() => {
     releaseKeyboard();
@@ -299,9 +326,11 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   useEffect(() => {
     // Новые запросы встают в очередь по времени, а на экране мог остаться прежний — показываем первый из новых.
     let firstFresh = -1;
+    const outcomes: IslandPresentationOutcome[] = [];
     items.forEach((item, at) => {
       if (seen.current.has(item.key)) return;
       seen.current.add(item.key);
+      outcomes.push({ key: item.key, kind: item.card?.kind ?? 'terminal-request', fresh: true, expand: true, soundEligible: true });
       if (firstFresh === -1) firstFresh = at;
     });
     // Новая карточка согласия (id `c-NN` не пересекается с ключами запросов) выдвигает остров и звучит так же.
@@ -309,14 +338,14 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     for (const card of consents) {
       if (seen.current.has(card.id)) continue;
       seen.current.add(card.id);
+      outcomes.push({ key: card.id, kind: 'consent', fresh: true, expand: true, soundEligible: true });
       freshConsent = true;
     }
     if (firstFresh === -1 && !freshConsent) return;
     // Новый pending не уводит выбор, пока человек работает клавиатурой внутри острова.
     if (firstFresh !== -1 && !shapeRef.current?.contains(document.activeElement)) useIslandRequests.getState().select(firstFresh);
-    setRetracted(false);
-    if (config.sound) bridge.island.beep();
-  }, [items, consents, config.sound, bridge]);
+    present(outcomes);
+  }, [items, consents, present]);
   // Агенты начали работу — остров выдвигается. Эффект идёт только при смене признака: стрелка среди работы его не возвращает.
   useEffect(() => {
     if (model.active) setRetracted(false);
@@ -329,17 +358,17 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     for (const row of doneRows) replies.fetch(row.ref, row.doneKey);
     replies.prune(new Set(doneRows.map((row) => row.doneKey)));
     if (!connected) return;
-    let fresh = false;
+    const outcomes: IslandPresentationOutcome[] = [];
     for (const row of doneRows) {
       if (seenDone.current.has(row.doneKey)) continue;
       seenDone.current.add(row.doneKey);
       const endedAt = row.turnEndedAt === null ? null : isoMs(row.turnEndedAt);
-      if (endedAt !== null && endedAt >= connectedAt.current) fresh = true;
+      const fresh = endedAt !== null && endedAt >= connectedAt.current;
+      outcomes.push({ key: row.doneKey, kind: 'done', fresh, expand: fresh && !visibleSessions.has(refKey(row.ref)), soundEligible: false });
     }
-    if (!fresh) return;
-    setRetracted(false);
-    setFreshDone((count) => count + 1);
-  }, [connected, doneRows]);
+    present(outcomes);
+    if (outcomes.some((outcome) => outcome.expand)) setFreshDone((count) => count + 1);
+  }, [connected, doneRows, visibleSessions, present]);
   // Покой: любое изменение условий снимает таймер и, если покой остался, заводит его заново. Со строками Done покой
   // дольше; Clear (Done стало 0) возвращает короткий срок.
   const holdMs = model.done > 0 ? DONE_HOLD_MS : IDLE_RETRACT_MS;

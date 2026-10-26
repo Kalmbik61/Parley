@@ -17,7 +17,7 @@ import type {
   PickResult,
   SavedContext,
 } from '../shared/browser-types.js';
-import type { AssistantShortcutStatus } from '../shared/island.js';
+import type { AssistantShortcutStatus, SessionVisibilityReport } from '../shared/island.js';
 import type { ActionId } from '../shared/keybindings.js';
 import type {
   DiffFile,
@@ -215,6 +215,7 @@ const bridge = {
       }
       return () => focusTargetListeners.delete(listener);
     },
+    reportSessionVisibility: (report: SessionVisibilityReport) => ipcRenderer.send('app:session-visibility', report),
     setBadge: (count: number) => {
       ipcRenderer.send('app:set-badge', count);
     },

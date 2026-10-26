@@ -8,7 +8,7 @@ import type {
   SessionRef,
 } from '@parley/protocol';
 import type { BrowserApi } from './browser-types.js';
-import type { AssistantShortcutStatus } from './island.js';
+import type { AssistantShortcutStatus, SessionVisibilityReport } from './island.js';
 import type { VoiceApi } from './voice-types.js';
 import type {
   DiffFile,
@@ -96,6 +96,8 @@ export interface ParleyBridge {
    */
   activitySnapshot(): Promise<Array<EventData<'activity.changed'>>>;
   app: {
+    /** Desktop-only: main перепроверяет sender/frame и нативное состояние окна. */
+    reportSessionVisibility(report: SessionVisibilityReport): void;
     openExternal(url: string): Promise<void>;
     notify(note: AppNote): void;
     /** При подписке отдаёт слушателю отложенную цель: сначала ту, что держит прелоад, иначе из app:take-focus-target. */

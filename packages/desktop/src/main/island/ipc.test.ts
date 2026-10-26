@@ -27,6 +27,7 @@ function setup() {
     ipcMain,
     controller,
     config: vi.fn().mockResolvedValue({ sound: true, topInset: 38, anchor: 'center' }),
+    visibility: vi.fn(() => ({ version: 7, refs: [REF] })),
     pushConfig: vi.fn(),
     keyboard: vi.fn(),
     openTarget: vi.fn(),
@@ -60,6 +61,12 @@ function calledNames(state: ReturnType<typeof setup>): string[] {
 }
 
 describe('IPC острова', () => {
+  it('visibility getter is island-only', async () => {
+    const { ipcMain, visibility } = setup();
+    await expect(ipcMain.emit('island:session-visibility', { sender: stranger })).rejects.toThrow();
+    expect(visibility).not.toHaveBeenCalled();
+    await expect(ipcMain.emit('island:session-visibility', { sender: island })).resolves.toEqual({ version: 7, refs: [REF] });
+  });
   it('failed от острова зовёт onFailed, от чужого окна — нет', () => {
     const { ipcMain, onFailed } = setup();
     ipcMain.emit('island:failed', { sender: stranger });

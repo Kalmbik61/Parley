@@ -124,6 +124,7 @@ function setup(
     appVersion?: string | null;
     isIslandSender?: (sender: unknown) => boolean;
     islandActive?: () => boolean;
+    reportSessionVisibility?: (event: { sender?: unknown; senderFrame?: unknown }, value: unknown) => void;
   } = {},
 ): {
   ipcMain: FakeIpcMain;
@@ -226,6 +227,7 @@ function setup(
     ...(overrides.onUiSaved === undefined ? {} : { onUiSaved: overrides.onUiSaved }),
     ...(overrides.isIslandSender === undefined ? {} : { isIslandSender: overrides.isIslandSender }),
     ...(overrides.islandActive === undefined ? {} : { islandActive: overrides.islandActive }),
+    ...(overrides.reportSessionVisibility === undefined ? {} : { reportSessionVisibility: overrides.reportSessionVisibility }),
     setBadge: vi.fn(),
     showItemInFolder,
     roots,
@@ -271,6 +273,15 @@ function setup(
 }
 
 describe('registerIpc', () => {
+  it('session-visibility preserves sender and main-frame identity for the guarded relay', () => {
+    const reportSessionVisibility = vi.fn();
+    const { ipcMain } = setup({ reportSessionVisibility });
+    const event = { sender: {}, senderFrame: {} };
+    const value = { seq: 1, documentVisible: true, refs: [] };
+    ipcMain.invokeWithEvent('app:session-visibility', event, value);
+    expect(reportSessionVisibility).toHaveBeenCalledOnce();
+    expect(reportSessionVisibility).toHaveBeenCalledWith(event, value);
+  });
   it('host:activity-snapshot отдаёт снимок активности из HostConnection (раунд исправлений 1 куска 3.1)', async () => {
     const { ipcMain } = setup();
     expect(await ipcMain.invoke('host:activity-snapshot')).toEqual([{ ref: { sessionId: 's-1' } }]);

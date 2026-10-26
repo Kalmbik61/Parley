@@ -240,6 +240,8 @@ export interface RegisterIpcOptions {
   isIslandSender?: (sender: unknown) => boolean;
   /** Есть ли живое окно острова — для `notify.ts` главного окна (`app:island-active`). */
   islandActive?: () => boolean;
+  /** Отчёт окна: callback проверяет текущие main webContents/main frame и форму данных. */
+  reportSessionVisibility?: (event: { sender?: unknown; senderFrame?: unknown }, value: unknown) => void;
   /** Палитра открывает помощника на острове (`app:assistant-open`): печать, без голоса. */
   openAssistant?: () => void;
   /** Состояние глобального хоткея помощника для настроек (`app:assistant-shortcut`). */
@@ -430,6 +432,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
   ipcMain.on('app:island-active', (event) => {
     (event as { returnValue: unknown }).returnValue = islandActive?.() === true;
   });
+  ipcMain.on('app:session-visibility', (event, value: unknown) => options.reportSessionVisibility?.(event, value));
 
   ipcMain.on('app:assistant-open', () => options.openAssistant?.());
   ipcMain.handle(

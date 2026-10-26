@@ -95,6 +95,16 @@ afterEach(() => {
 });
 
 describe('App — корневая обёртка окна (раунд исправлений 1, находка B№3)', () => {
+  it('wires session visibility for the connected page and clears it on cleanup', async () => {
+    const report = vi.spyOn(bridge.app, 'reportSessionVisibility');
+    const { unmount } = render(<App />);
+    await act(async () => {});
+    act(() => useUiStore.setState({ documentVisible: true, visibleSessionRefs: { [refKey({ projectPath: '/p', workId: 'w-1', sessionId: 's-01' })]: true } }));
+    expect(report).toHaveBeenLastCalledWith(expect.objectContaining({ documentVisible: true, refs: [{ projectPath: '/p', workId: 'w-1', sessionId: 's-01' }] }));
+    const previousSeq = report.mock.calls.at(-1)![0].seq;
+    unmount();
+    expect(report).toHaveBeenLastCalledWith({ seq: previousSeq + 1, refs: [], documentVisible: false });
+  });
   it('text-foreground рядом с bg-background, без произвольного var(--…) старой палитры', () => {
     const { container } = render(<App />);
     const root = container.querySelector('.bg-background');

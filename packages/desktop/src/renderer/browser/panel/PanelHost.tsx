@@ -51,6 +51,7 @@ export function PanelHost({ workKey, owner, children }: PanelHostProps): JSX.Ele
   }, []);
 
   const narrow = width > 0 && width < PANEL_LIMITS.narrowBelow;
+  const measured = width > 0;
   const maxWidth = Math.max(PANEL_LIMITS.minWidth, Math.min(Math.floor(width * PANEL_LIMITS.maxShare), width - PANEL_LIMITS.minView));
   const wanted = Math.max(panel?.width ?? PANEL_LIMITS.defaultWidth, PANEL_LIMITS.minWidth);
   const areaWidth = width > 0 ? Math.min(wanted, maxWidth) : wanted;
@@ -59,8 +60,8 @@ export function PanelHost({ workKey, owner, children }: PanelHostProps): JSX.Ele
   const runtimeKey = panelRuntimeKey(workKey, owner);
   useLayoutEffect(() => () => usePanelRuntime.getState().unmountHost(runtimeKey), [runtimeKey]);
   useLayoutEffect(() => {
-    usePanelRuntime.getState().mountHost(runtimeKey, narrow);
-  }, [runtimeKey, narrow]);
+    usePanelRuntime.getState().mountHost(runtimeKey, narrow, measured);
+  }, [runtimeKey, narrow, measured]);
 
   // Якоря — через `setProperty`: в `CSSProperties` @types/react 18 их нет (как у `GroupView`). `reserve` — только у участка
   // рядом с видом: терминал отнимает у себя ровно его ширину, а под участком поверх вида остаётся прежним.

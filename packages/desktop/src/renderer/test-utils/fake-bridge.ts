@@ -919,6 +919,7 @@ export function createFakeBridge(): FakeBridge {
       },
       isDark: () => dark,
       islandActive: () => islandActive,
+      reportSessionVisibility: () => {},
       onMenu: (listener) => {
         menuListeners.add(listener);
         return () => menuListeners.delete(listener);

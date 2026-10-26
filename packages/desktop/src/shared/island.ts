@@ -5,7 +5,7 @@
  */
 
 import type { AssistantLanguage } from '@parley/core/assistant';
-import type { EventName, SessionRef } from '@parley/protocol';
+import { sessionRef, type EventName, type SessionRef } from '@parley/protocol';
 import type { FocusTarget, ParleyBridge } from './bridge.js';
 import type { IslandAnchor } from './ui-types.js';
 import type { VoiceApi, VoiceModelId } from './voice-types.js';
@@ -63,6 +63,8 @@ export interface IslandConfig {
 export interface IslandApi {
   config(): Promise<IslandConfig>;
   onConfig(listener: (config: IslandConfig) => void): () => void;
+  visibility(): Promise<SessionVisibilitySnapshot>;
+  onVisibility(listener: (snapshot: SessionVisibilitySnapshot) => void): () => void;
   /**
    * Курсор над областью острова (`setHitRect`) или нет — решает main по настоящему положению курсора: DOM-наведение
    * в сквозном окне ненадёжно (`mouseleave` могло не прийти вовсе). Над областью окно ловит мышь, вне её клики проходят
@@ -97,6 +99,35 @@ export interface IslandApi {
 }
 
 export type IslandBridge = Pick<ParleyBridge, 'call' | 'on' | 'onStatus' | 'activitySnapshot'> & { island: IslandApi };
+
+export const SESSION_VISIBILITY_LIMIT = 50;
+export interface SessionVisibilityReport {
+  refs: SessionRef[];
+  documentVisible: boolean;
+  seq: number;
+}
+export interface SessionVisibilitySnapshot {
+  version: number;
+  refs: SessionRef[];
+}
+
+/** Неизвестная видимость не является доказательством просмотра. */
+export function parseVisibilitySnapshot(value: unknown): SessionVisibilitySnapshot | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { version, refs } = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(version) || (version as number) < 0 || !Array.isArray(refs) || refs.length > SESSION_VISIBILITY_LIMIT) return null;
+  const parsed = sessionRef.array().safeParse(refs);
+  return parsed.success ? { version: version as number, refs: parsed.data } : null;
+}
+
+/** Единый исход показа для r-05; Done не даёт звука, quiet Done не раскрывает остров. */
+export interface IslandPresentationOutcome {
+  key: string;
+  kind: 'permission' | 'question' | 'plan' | 'consent' | 'room-proposal' | 'done' | 'terminal-request';
+  fresh: boolean;
+  expand: boolean;
+  soundEligible: boolean;
+}
 
 /** Методы хоста, которые main пропускает от острова (`host:call` по отправителю). */
 export const ISLAND_METHODS: ReadonlySet<string> = new Set([

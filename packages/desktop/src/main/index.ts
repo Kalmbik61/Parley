@@ -60,6 +60,7 @@ import { createAssistantShortcut } from './assistant/shortcut.js';
 import { registerIslandIpc } from './island/ipc.js';
 import type { IslandPlacement } from './island/placement.js';
 import { createIslandController, islandWindowOptions } from './island/window.js';
+import { createSessionVisibility } from './island/visibility.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
 import { guardAppQuit, quitQuestion } from './quit-guard.js';
@@ -318,6 +319,7 @@ if (!gotLock) {
     const pendingFocusTarget = createPendingFocusTarget();
     // Вопрос о несохранённых буферах при закрытии окна и ⌘Q (кусок 7.3a) — по окну-отправителю.
     const closeGuards = new WeakMap<WebContents, ReturnType<typeof guardWindowClose>>();
+    let sessionVisibility: ReturnType<typeof createSessionVisibility> | null = null;
 
     const openWindow = (): BrowserWindow => {
       const window = createMainWindow({
@@ -338,6 +340,7 @@ if (!gotLock) {
         forwardAppearanceToWindow(nativeTheme, window);
       });
       trackLoadedWindow(window, loadedWindows);
+      sessionVisibility?.track(window);
       const closeGuard = guardWindowClose(window, app, {
         askUnresponsive: async () => {
           // E2E (`PARLEY_DIALOGS=log`): настоящий системный диалог на экране человека не встаёт.
@@ -508,6 +511,12 @@ if (!gotLock) {
       },
       log: (message) => console.warn('[parley]', message),
     });
+    const visibility = createSessionVisibility((snapshot) => {
+      const window = island.current();
+      if (window !== null && !window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('island:session-visibility', snapshot);
+    });
+    sessionVisibility = visibility;
+    visibility.track(mainWindow);
     const assistantShortcut = createAssistantShortcut({
       registry: globalShortcut,
       onTrigger: () => openAssistant({ listen: true }),
@@ -593,6 +602,7 @@ if (!gotLock) {
       ipcMain,
       controller: island,
       config: islandConfig,
+      visibility: () => visibility.snapshot(),
       pushConfig: pushIslandConfig,
       keyboard: (on) => island.setKeyboard(on),
       openTarget: (target) => {
@@ -782,6 +792,7 @@ if (!gotLock) {
         });
       },
       isIslandSender: (sender) => island.isIsland(sender),
+      reportSessionVisibility: (event, report) => visibility.report(event, report),
       openAssistant: () => openAssistant({ listen: false }),
       assistantShortcut: () => assistantShortcut.status(),
       suspendAssistantShortcut: (on) => assistantShortcut.suspend(on),

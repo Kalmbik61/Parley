@@ -60,7 +60,7 @@ describe('preload острова', () => {
     expect(Object.keys(bridge.island).sort()).toEqual(
       [
         'beep', 'config', 'dragEnd', 'dragMove', 'dragStart', 'failed', 'keyboard', 'markSeen', 'onKeyboardBlur', 'onAssistantOpen', 'onConfig',
-        'onHover', 'open', 'setHitRect', 'setVisible', 'voice',
+        'onHover', 'onVisibility', 'visibility', 'open', 'setHitRect', 'setVisible', 'voice',
       ].sort(),
     );
   });
@@ -137,7 +137,22 @@ describe('preload острова', () => {
   it('мост выставлен под ключом parley, а подписки ipcRenderer.on — ровно шесть каналов', async () => {
     await loadPreload();
     expect(exposedKey).toBe('parley');
-    expect([...subscribed].sort()).toEqual(['host:event', 'host:status', 'island:assistant-open', 'island:config', 'island:hover', 'island:keyboard-blur']);
+    expect([...subscribed].sort()).toEqual(['host:event', 'host:status', 'island:assistant-open', 'island:config', 'island:hover', 'island:keyboard-blur', 'island:session-visibility']);
+  });
+
+  it('session visibility has an island-only snapshot getter and removable event listener', async () => {
+    const bridge = await loadPreload();
+    const snapshot = { version: 3, refs: [{ projectPath: '/p', workId: 'w-1', sessionId: 's-01' }] };
+    invoke.mockResolvedValueOnce(snapshot);
+    const listener = vi.fn();
+    const off = bridge.island.onVisibility(listener);
+    expect(await bridge.island.visibility()).toEqual(snapshot);
+    expect(invoke).toHaveBeenLastCalledWith('island:session-visibility');
+    emit('island:session-visibility', snapshot);
+    expect(listener).toHaveBeenCalledWith(snapshot);
+    off();
+    emit('island:session-visibility', { version: 4, refs: [] });
+    expect(listener).toHaveBeenCalledOnce();
   });
 
   it('generic keyboard blur приходит request/assistant слушателям и снимается dispose', async () => {

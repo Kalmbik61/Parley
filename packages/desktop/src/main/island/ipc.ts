@@ -9,7 +9,7 @@
 import type { IpcMain } from 'electron';
 import { sessionRef, type SessionRef } from '@parley/protocol';
 import type { FocusTarget } from '../../shared/bridge.js';
-import { ISLAND_MARK_SEEN_LIMIT, type IslandConfig, type IslandHitRect, type IslandPoint } from '../../shared/island.js';
+import { ISLAND_MARK_SEEN_LIMIT, type IslandConfig, type IslandHitRect, type IslandPoint, type SessionVisibilitySnapshot } from '../../shared/island.js';
 import { isFocusTarget, withIpcError } from '../ipc.js';
 import type { IslandController, IslandWindowLike } from './window.js';
 
@@ -17,6 +17,7 @@ export interface IslandIpcOptions {
   ipcMain: Pick<IpcMain, 'on' | 'handle'>;
   controller: Pick<IslandController<IslandWindowLike>, 'isIsland' | 'setHitRect' | 'setVisible' | 'dragStart' | 'dragMove' | 'dragEnd'>;
   config(): Promise<IslandConfig>;
+  visibility(): SessionVisibilitySnapshot;
   /** Место могло смениться (другой монитор — другой отступ под чёлку): отдать острову настройки заново. */
   pushConfig(): void;
   /** Режим помощника: панель берёт клавиатуру (`true`) или отдаёт её прежнему приложению (`false`). */
@@ -61,6 +62,11 @@ function parseSeenRefs(value: unknown): SessionRef[] | null {
 export function registerIslandIpc(options: IslandIpcOptions): void {
   const { ipcMain, controller } = options;
   const fromIsland = (event: unknown): boolean => controller.isIsland((event as { sender?: unknown }).sender);
+
+  ipcMain.handle('island:session-visibility', withIpcError((event) => {
+    if (!fromIsland(event)) throw new Error('island:session-visibility is for the island window only');
+    return options.visibility();
+  }));
 
   ipcMain.handle(
     'island:config',

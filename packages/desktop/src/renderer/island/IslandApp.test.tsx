@@ -70,6 +70,8 @@ function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
   return {
     config: vi.fn(async (): Promise<IslandConfig> => ({ islandEnabled: true, assistant: { enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null } }, sound: false, topInset: 0, anchor: 'center', ...config })),
     onConfig: vi.fn(() => () => undefined),
+    visibility: vi.fn(async () => ({ version: 0, refs: [] })),
+    onVisibility: vi.fn(() => () => undefined),
     onHover: vi.fn(() => () => undefined), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
     keyboard: vi.fn(),
     onAssistantOpen: vi.fn(() => () => undefined),
@@ -1127,8 +1129,8 @@ describe('Done на острове', () => {
   const STALE = '2026-10-13T09:59:00.000Z';
 
   /** Сессия s-01 закончила ход в `endedAt`: ждёт, пока на неё посмотрят в Parley. */
-  function seedDone(endedAt: string): void {
-    useWorksStore.setState({ entries: ENTRIES, branches: {}, loading: false, error: null });
+  function seedDone(endedAt: string, entries = ENTRIES): void {
+    useWorksStore.setState({ entries, branches: {}, loading: false, error: null });
     useActivityStore.setState({ byRef: { [refKey(ref('s-01'))]: makeActivity(ref('s-01'), 'unseen', { turnEndedAt: endedAt }) }, loaded: true });
   }
   /** Сессию s-01 посмотрели в Parley: хост перевёл её в idle, конец хода остался прежним. */
@@ -1154,6 +1156,96 @@ describe('Done на острове', () => {
     expect(isRetracted()).toBe(false);
     expect(screen.queryByTestId('island-tab')).toBeNull();
     expect(screen.getByTestId('island-counters').textContent).toBe('✅ 1 done');
+  });
+
+  it.each(['claude', 'codex'])('exact visible %s Done stays quiet, keeps badge, sends no seen and is consumed before blur', async (provider) => {
+    const entries = [makeWork('w-1', { projectPath: PROJECT, sessions: [makeSession('s-01', 'a', { provider })] })];
+    const { bridge, island, blocked, hover } = setup({ sound: true }, entries);
+    vi.mocked(island.visibility).mockResolvedValue({ version: 1, refs: [ref('s-01')] });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => {});
+    act(() => seedDone(FRESH, entries));
+    expect(isRetracted()).toBe(true);
+    expect(screen.getByTestId('island-tab').textContent).toContain('1');
+    expect(island.markSeen).not.toHaveBeenCalled();
+    expect(island.beep).not.toHaveBeenCalled();
+    act(() => vi.mocked(island.onVisibility).mock.calls.at(-1)![0]({ version: 2, refs: [] }));
+    expect(isRetracted()).toBe(true);
+    act(() => seedDone(FRESHER, entries));
+    expect(isRetracted()).toBe(false);
+    tuck(hover);
+    act(() => vi.mocked(island.onVisibility).mock.calls.at(-1)![0]({ version: 3, refs: [ref('s-01')] }));
+    blocked('s-01');
+    await act(async () => {});
+    expect(isRetracted()).toBe(false);
+  });
+
+  it('quiet Codex Done never suppresses consent or its terminal-request presentation', async () => {
+    const entries = [makeWork('w-1', { projectPath: PROJECT, sessions: [makeSession('s-01', 'a', { provider: 'codex' })] })];
+    const { bridge, island, blocked, fake, hover } = setup({}, entries);
+    fake.setHandler('feed.snapshot', () => ({ items: [], revision: 1, mode: null, decisions: 'terminal' }));
+    vi.mocked(island.visibility).mockResolvedValue({ version: 1, refs: [ref('s-01')] });
+    const onPresentation = vi.fn();
+    render(<IslandApp bridge={bridge} onPresentation={onPresentation} />);
+    await act(async () => {});
+    act(() => seedDone(FRESH, entries));
+    expect(isRetracted()).toBe(true);
+    act(() => useConsentsStore.getState().replace([{
+      id: 'quiet-consent', kind: 'folder-trust', folder: PROJECT, projectPath: PROJECT,
+      requestedBy: { source: 'agent', sessionId: 's-01', label: 'S01 a' }, at: FRESH, state: 'pending',
+    }]));
+    expect(isRetracted()).toBe(false);
+    expect(onPresentation).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'consent', expand: true, soundEligible: true }));
+    act(() => useConsentsStore.getState().replace([]));
+    tuck(hover);
+    blocked('s-01');
+    await act(async () => {});
+    expect(isRetracted()).toBe(false);
+    expect(onPresentation).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'terminal-request', expand: true, soundEligible: true }));
+    expect(island.markSeen).not.toHaveBeenCalled();
+  });
+
+  it('a same-id ref in another worktree never suppresses Done', async () => {
+    const { bridge, island } = setup();
+    vi.mocked(island.visibility).mockResolvedValue({ version: 1, refs: [{ ...ref('s-01'), projectPath: '/another-worktree' }] });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => {});
+    act(() => seedDone(FRESH));
+    expect(isRetracted()).toBe(false);
+  });
+
+  it.each([{ version: 1, refs: [] }, { version: NaN, refs: [] }, null])('event before getter wins over %j; stale versions cannot overwrite it and malformed events fall back', async (getterReply) => {
+    const { bridge, island } = setup();
+    let resolve!: (value: { version: number; refs: ReturnType<typeof ref>[] }) => void;
+    vi.mocked(island.visibility).mockImplementation(() => new Promise((done) => { resolve = done; }));
+    render(<IslandApp bridge={bridge} />);
+    expect(vi.mocked(island.onVisibility).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(island.visibility).mock.invocationCallOrder[0]!);
+    const publish = vi.mocked(island.onVisibility).mock.calls[0]![0];
+    act(() => publish({ version: 9, refs: [ref('s-01')] }));
+    await act(async () => resolve(getterReply as never));
+    act(() => publish({ version: 8, refs: [] }));
+    act(() => seedDone(FRESH));
+    expect(isRetracted()).toBe(true);
+    act(() => publish({ version: NaN, refs: [ref('s-01')] }));
+    act(() => seedDone(FRESHER));
+    expect(isRetracted()).toBe(false);
+  });
+
+  it('quiet Done neither closes an open island nor rearms its existing hold timer; outcome preserves r-05 seam', async () => {
+    const { bridge, island, hover } = setup();
+    const onPresentation = vi.fn();
+    render(<IslandApp bridge={bridge} onPresentation={onPresentation} />);
+    await act(async () => {});
+    act(() => seedDone(FRESH));
+    expect(onPresentation).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'done', fresh: true, expand: true, soundEligible: false }));
+    advance(DONE_HOLD_MS / 2);
+    act(() => vi.mocked(island.onVisibility).mock.calls.at(-1)![0]({ version: 1, refs: [ref('s-01')] }));
+    act(() => seedDone(FRESHER));
+    expect(isRetracted()).toBe(false);
+    expect(onPresentation).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'done', fresh: true, expand: false, soundEligible: false }));
+    advance(DONE_HOLD_MS / 2);
+    expect(isRetracted()).toBe(true);
+    hover(false);
   });
 
   it('выдвигает без звука, даже если Sound включён', async () => {

@@ -8,7 +8,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { EventMessage, EventName, MethodName, SessionRef } from '@parley/protocol';
 import type { HostStatus } from '../shared/bridge.js';
-import type { AssistantOpenRequest, IslandApi, IslandBridge, IslandConfig, IslandHitRect, IslandPoint } from '../shared/island.js';
+import type { AssistantOpenRequest, IslandApi, IslandBridge, IslandConfig, IslandHitRect, IslandPoint, SessionVisibilitySnapshot } from '../shared/island.js';
 import type { MicStatus, TranscribeResult } from '../shared/voice-types.js';
 
 const eventListeners = new Map<EventName, Set<(data: unknown) => void>>();
@@ -17,6 +17,7 @@ const configListeners = new Set<(config: IslandConfig) => void>();
 const hoverListeners = new Set<(hovered: boolean) => void>();
 const assistantOpenListeners = new Set<(request: AssistantOpenRequest) => void>();
 const keyboardBlurListeners = new Set<() => void>();
+const visibilityListeners = new Set<(snapshot: SessionVisibilitySnapshot) => void>();
 /** Последний статус: подписчик, пришедший позже события, получает его сразу (как в общем preload). */
 let lastStatus: HostStatus | null = null;
 
@@ -38,6 +39,9 @@ ipcRenderer.on('island:assistant-open', (_event, request: unknown) => {
 });
 ipcRenderer.on('island:keyboard-blur', () => {
   for (const listener of keyboardBlurListeners) listener();
+});
+ipcRenderer.on('island:session-visibility', (_event, snapshot: SessionVisibilitySnapshot) => {
+  for (const listener of visibilityListeners) listener(snapshot);
 });
 
 const bridge = {
@@ -63,6 +67,11 @@ const bridge = {
   activitySnapshot: () => ipcRenderer.invoke('host:activity-snapshot'),
   // `satisfies`: член, добавленный в `IslandApi`, но не реализованный здесь, не пройдёт сборку; внешнее приведение — ради `call`.
   island: {
+    visibility: () => ipcRenderer.invoke('island:session-visibility') as Promise<SessionVisibilitySnapshot>,
+    onVisibility: (listener: (snapshot: SessionVisibilitySnapshot) => void) => {
+      visibilityListeners.add(listener);
+      return () => { visibilityListeners.delete(listener); };
+    },
     config: () => ipcRenderer.invoke('island:config') as Promise<IslandConfig>,
     onConfig: (listener: (config: IslandConfig) => void) => {
       configListeners.add(listener);
