@@ -86,7 +86,6 @@ import { DecisionCard } from './DecisionCard.js';
 import { buildRoomModel, type ParticipantModel } from './feed-model.js';
 import { RoomContextChip } from './RoomContextChip.js';
 import { RoomHeader } from './RoomHeader.js';
-import { RoomHistoryMenu } from './RoomHistoryMenu.js';
 import { RoomMessage } from './RoomMessage.js';
 import { RoomRecipeChip } from './RoomRecipeChip.js';
 import { RoomUsageChip } from './RoomUsageChip.js';
@@ -476,7 +475,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
             />
           )
         }
-        usageChip={<RoomUsageChip bridge={bridge} entry={entry} roomId={roomId} active={active} providers={providers}/>} recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} historyMenu={<RoomHistoryMenu key={`history:${draftKey}`} projectPath={entry.projectPath} workId={entry.map.work.id} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} archived={archived} participants={model.participants} now={now} onOpenSession={onOpenSession} onOpenPlan={(id) => openPlanInPanel({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: id })} />
+        usageChip={<RoomUsageChip bridge={bridge} entry={entry} roomId={roomId} active={active} providers={providers}/>} recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} archived={archived} participants={model.participants} now={now} onOpenSession={onOpenSession} onOpenPlan={(id) => openPlanInPanel({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: id })} />
       {/* Обёртка — только для кнопки `↓N` поверх низа ленты: прокручивается сама лента. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div

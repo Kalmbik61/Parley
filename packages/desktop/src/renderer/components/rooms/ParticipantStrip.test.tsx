@@ -236,6 +236,59 @@ describe('чип контекста (спека 2026-10-15, 3.2)', () => {
 });
 
 
+describe('ParticipantStrip — закрытые участники', () => {
+  const mixed = (): ParticipantModel[] => [
+    participant({ id: 's-01' }),
+    participant({ id: 's-02', label: 'S02 бэкенд', closed: true, lifecycle: 'closed' }),
+    participant({ id: 's-03', label: 'S03 ревью' }),
+  ];
+  const toggle = (name: string): HTMLElement => screen.getByRole('button', { name });
+
+  it('закрытые по умолчанию спрятаны, в конце ленты — кнопка «N closed»', () => {
+    renderStrip(mixed());
+
+    expect(card('s-01')).toBeTruthy();
+    expect(card('s-03')).toBeTruthy();
+    expect(card('s-02')).toBeNull();
+    expect(toggle('1 closed')).toBeTruthy();
+  });
+
+  it('клик по кнопке показывает закрытых после открытых, приглушёнными; повторный клик прячет', () => {
+    renderStrip(mixed());
+
+    fireEvent.click(toggle('1 closed'));
+    expect(card('s-02').hasAttribute('data-participant-closed')).toBe(true);
+    expect(card('s-01').hasAttribute('data-participant-closed')).toBe(false);
+    expect(Array.from(document.querySelectorAll('[data-participant]')).map((node) => node.getAttribute('data-participant'))).toEqual(['s-01', 's-03', 's-02']);
+    expect(toggle('Hide closed')).toBeTruthy();
+
+    fireEvent.click(toggle('Hide closed'));
+    expect(card('s-02')).toBeNull();
+    expect(toggle('1 closed')).toBeTruthy();
+  });
+
+  it('раскрытая закрытая карточка по-прежнему открывает сессию', () => {
+    const onOpen = renderStrip(mixed());
+
+    fireEvent.click(toggle('1 closed'));
+    fireEvent.click(within(card('s-02')).getAllByRole('button')[0]!);
+    expect(onOpen).toHaveBeenCalledWith('s-02');
+  });
+
+  it('никто не закрыт — кнопки нет', () => {
+    renderStrip([participant({ id: 's-01' }), participant({ id: 's-02' })]);
+
+    expect(screen.queryByRole('button', { name: /closed/ })).toBeNull();
+  });
+
+  it('все закрыты — по умолчанию только кнопка', () => {
+    renderStrip([participant({ id: 's-01', closed: true }), participant({ id: 's-02', closed: true })]);
+
+    expect(document.querySelector('[data-participant]')).toBeNull();
+    expect(toggle('2 closed')).toBeTruthy();
+  });
+});
+
 describe('ParticipantStrip — agent plan', () => {
   const plan = (done = 3, total = 7, partial = false): AgentPlan => capPlan({
     items: Array.from({ length: total }, (_, i) => ({ id: String(i), subject: `Step ${i + 1}`, description: null, activeForm: null, status: i < done ? 'completed' : 'in_progress' })),

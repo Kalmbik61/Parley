@@ -17,10 +17,13 @@
  *
  * Чип контекста (спека 2026-10-15, 3.2) — справа во второй строке; с ним кнопка открытия — только первая строка, а
  * «чем занят» — отдельная кнопка рядом с чипом. Сама карточка — блок: фон, рамка наведения и тултип у него.
+ *
+ * Закрытые участники (`closed`) по умолчанию спрятаны; в конце ленты — кнопка «N closed» / «Hide closed». Раскрытые идут
+ * после открытых, той же карточкой, приглушённой (`data-participant-closed`); клик по ним открывает сессию, как прежде.
  */
 
 import { planSummary } from '@parley/core/agent-plan';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { S } from '../../../shared/strings.js';
 import { needLabel, needTooltip } from '../../attention/derive.js';
 import { RoleChip } from '../../lib/role-summary.js';
@@ -43,6 +46,125 @@ export interface ParticipantStripProps {
 }
 
 export function ParticipantStrip({ participants, onOpenSession, onOpenPlan, contextChip, now }: ParticipantStripProps): JSX.Element {
+  const [showClosed, setShowClosed] = useState(false);
+  const renderCard = (participant: ParticipantModel, closed: boolean): JSX.Element => {
+    const chip = contextChip?.(participant) ?? null;
+    const open = (): void => onOpenSession(participant.id);
+    const openPlan = (): void => onOpenPlan?.(participant.id);
+    const summary = participant.plan == null ? null : planSummary(participant.plan);
+    const showPlanChip = participant.plan != null && summary !== null && (participant.plan.partial || summary.done < summary.total);
+    const showPlanLine = participant.doing === null && participant.plan != null && participant.planLine != null;
+    // Нужен человек — слово причины вместо слова состояния, `detail` в подсказке слова (спека застрявших 7.3).
+    const need = participant.need ?? null;
+    const header = (
+      <span className="flex w-full min-w-0 items-center gap-1.5 text-xs">
+        <AgentStateDot state={participant.state} lifecycle={participant.lifecycle} />
+        <AgentIcon provider={participant.provider} size={14} />
+        <span className="min-w-[5ch] flex-1 truncate font-semibold">{participant.label}</span>
+        <RoleChip {...(participant.cwd ? { cwd: participant.cwd } : {})} {...(participant.roleRevision ? { revision: participant.roleRevision } : {})} role={participant.role} {...(participant.sessionRef ? { sessionRef: participant.sessionRef } : {})} />
+        {participant.lead ? (
+          <span title={S.rooms.lead} className="shrink-0 text-accent-700">
+            ★
+          </span>
+        ) : null}
+        <span
+          {...(need === null ? {} : { title: needTooltip(need) })}
+          className={cn(
+            'shrink-0 text-[11px]',
+            participant.attention === 'needs-you'
+              ? 'text-accent-800'
+              : participant.attention === 'unseen'
+                ? 'text-accent-2-800'
+                : 'text-neutral-700',
+          )}
+        >
+          {need === null ? participant.word : needLabel(need, now.getTime())}
+        </span>
+      </span>
+    );
+    return (
+      <div
+        key={participant.id}
+        data-participant={participant.id}
+        {...(closed ? { 'data-participant-closed': '' } : {})}
+        title={S.rooms.participantTooltip(participant.providerName, participant.model)}
+        className={cn(
+          'flex w-[230px] shrink-0 flex-col rounded-[14px] text-foreground hover:shadow-[inset_0_0_0_1px_color-mix(in_srgb,currentColor_28%,transparent)]',
+          closed && 'opacity-50 hover:opacity-100',
+          participant.attention === 'needs-you'
+            ? 'bg-accent-200'
+            : participant.attention === 'unseen'
+              ? 'bg-accent-2-200'
+              : 'bg-[color-mix(in_srgb,currentColor_6%,transparent)]',
+        )}
+      >
+        {chip !== null || showPlanChip || showPlanLine || onOpenPlan !== undefined ? (
+          <>
+            <button type="button" onClick={open} className="flex w-full flex-col rounded-t-[14px] px-3 pt-[9px] text-left">
+              {header}
+            </button>
+            <div className="mx-3 mb-[9px] mt-1 flex min-w-0 items-center gap-2">
+              {participant.agents.length > 0 && participant.doing !== null ? (
+                <AgentsBadge
+                  tasks={participant.agents}
+                  label={participant.doing}
+                  {...(participant.doingDetail === null ? {} : { title: participant.doingDetail })}
+                  onOpen={(task) => onOpenSession(participant.id, task.id)}
+                  className="min-h-4 min-w-0 flex-1 truncate text-left text-xs text-muted-foreground hover:text-foreground hover:underline"
+                />
+              ) : showPlanLine && participant.plan != null ? (
+                <PlanHover plan={participant.plan} onOpen={openPlan}>
+                  <button type="button" onClick={openPlan} className="min-h-4 min-w-0 flex-1 truncate text-left text-xs text-muted-foreground hover:text-foreground hover:underline">
+                    {participant.planLine?.text}
+                  </button>
+                </PlanHover>
+              ) : (
+                <button
+                  type="button"
+                  onClick={open}
+                  title={participant.doing === null ? undefined : (participant.doingDetail ?? undefined)}
+                  className="min-h-4 min-w-0 flex-1 truncate text-left text-xs text-muted-foreground"
+                >
+                  {participant.doing ?? participant.task}
+                </button>
+              )}
+              {showPlanChip && participant.plan != null ? <PlanChip plan={participant.plan} onOpen={openPlan} /> : onOpenPlan ? (
+                <button type="button" onClick={openPlan} title={S.agentsPanel.openPlan} className="shrink-0 text-xs text-muted-foreground hover:text-foreground hover:underline">
+                  {S.agentsPanel.plan}
+                </button>
+              ) : null}
+              {chip !== null ? <span className="shrink-0">{chip}</span> : null}
+            </div>
+          </>
+        ) : participant.agents.length > 0 && participant.doing !== null ? (
+          <>
+            <button type="button" onClick={open} className="flex w-full flex-col rounded-t-[14px] px-3 pt-[9px] text-left">
+              {header}
+            </button>
+            <AgentsBadge
+              tasks={participant.agents}
+              label={participant.doing}
+              {...(participant.doingDetail === null ? {} : { title: participant.doingDetail })}
+              onOpen={(task) => onOpenSession(participant.id, task.id)}
+              className="mx-3 mb-[9px] mt-1 min-h-4 truncate text-left text-xs text-muted-foreground hover:text-foreground hover:underline"
+            />
+          </>
+        ) : (
+          <button type="button" onClick={open} className="flex w-full flex-col gap-1 rounded-[14px] px-3 py-[9px] text-left">
+            {header}
+            <span
+              title={participant.doing === null ? undefined : (participant.doingDetail ?? undefined)}
+              className="min-h-4 truncate text-xs text-muted-foreground"
+            >
+              {participant.doing ?? participant.task}
+            </span>
+          </button>
+        )}
+      </div>
+    );
+  };
+  const openParticipants = participants.filter((participant) => !participant.closed);
+  const closedParticipants = participants.filter((participant) => participant.closed);
   return (
     <div
       role="group"
@@ -50,120 +172,18 @@ export function ParticipantStrip({ participants, onOpenSession, onOpenPlan, cont
       data-participant-strip=""
       className="flex gap-2 overflow-x-auto pb-0.5 [scrollbar-width:thin]"
     >
-      {participants.map((participant) => {
-        const chip = contextChip?.(participant) ?? null;
-        const open = (): void => onOpenSession(participant.id);
-        const openPlan = (): void => onOpenPlan?.(participant.id);
-        const summary = participant.plan == null ? null : planSummary(participant.plan);
-        const showPlanChip = participant.plan != null && summary !== null && (participant.plan.partial || summary.done < summary.total);
-        const showPlanLine = participant.doing === null && participant.plan != null && participant.planLine != null;
-        // Нужен человек — слово причины вместо слова состояния, `detail` в подсказке слова (спека застрявших 7.3).
-        const need = participant.need ?? null;
-        const header = (
-          <span className="flex w-full min-w-0 items-center gap-1.5 text-xs">
-            <AgentStateDot state={participant.state} lifecycle={participant.lifecycle} />
-            <AgentIcon provider={participant.provider} size={14} />
-            <span className="min-w-[5ch] flex-1 truncate font-semibold">{participant.label}</span>
-            <RoleChip {...(participant.cwd ? { cwd: participant.cwd } : {})} {...(participant.roleRevision ? { revision: participant.roleRevision } : {})} role={participant.role} {...(participant.sessionRef ? { sessionRef: participant.sessionRef } : {})} />
-            {participant.lead ? (
-              <span title={S.rooms.lead} className="shrink-0 text-accent-700">
-                ★
-              </span>
-            ) : null}
-            <span
-              {...(need === null ? {} : { title: needTooltip(need) })}
-              className={cn(
-                'shrink-0 text-[11px]',
-                participant.attention === 'needs-you'
-                  ? 'text-accent-800'
-                  : participant.attention === 'unseen'
-                    ? 'text-accent-2-800'
-                    : 'text-neutral-700',
-              )}
-            >
-              {need === null ? participant.word : needLabel(need, now.getTime())}
-            </span>
-          </span>
-        );
-        return (
-          <div
-            key={participant.id}
-            data-participant={participant.id}
-            title={S.rooms.participantTooltip(participant.providerName, participant.model)}
-            className={cn(
-              'flex w-[230px] shrink-0 flex-col rounded-[14px] text-foreground hover:shadow-[inset_0_0_0_1px_color-mix(in_srgb,currentColor_28%,transparent)]',
-              participant.attention === 'needs-you'
-                ? 'bg-accent-200'
-                : participant.attention === 'unseen'
-                  ? 'bg-accent-2-200'
-                  : 'bg-[color-mix(in_srgb,currentColor_6%,transparent)]',
-            )}
-          >
-            {chip !== null || showPlanChip || showPlanLine || onOpenPlan !== undefined ? (
-              <>
-                <button type="button" onClick={open} className="flex w-full flex-col rounded-t-[14px] px-3 pt-[9px] text-left">
-                  {header}
-                </button>
-                <div className="mx-3 mb-[9px] mt-1 flex min-w-0 items-center gap-2">
-                  {participant.agents.length > 0 && participant.doing !== null ? (
-                    <AgentsBadge
-                      tasks={participant.agents}
-                      label={participant.doing}
-                      {...(participant.doingDetail === null ? {} : { title: participant.doingDetail })}
-                      onOpen={(task) => onOpenSession(participant.id, task.id)}
-                      className="min-h-4 min-w-0 flex-1 truncate text-left text-xs text-muted-foreground hover:text-foreground hover:underline"
-                    />
-                  ) : showPlanLine && participant.plan != null ? (
-                    <PlanHover plan={participant.plan} onOpen={openPlan}>
-                      <button type="button" onClick={openPlan} className="min-h-4 min-w-0 flex-1 truncate text-left text-xs text-muted-foreground hover:text-foreground hover:underline">
-                        {participant.planLine?.text}
-                      </button>
-                    </PlanHover>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={open}
-                      title={participant.doing === null ? undefined : (participant.doingDetail ?? undefined)}
-                      className="min-h-4 min-w-0 flex-1 truncate text-left text-xs text-muted-foreground"
-                    >
-                      {participant.doing ?? participant.task}
-                    </button>
-                  )}
-                  {showPlanChip && participant.plan != null ? <PlanChip plan={participant.plan} onOpen={openPlan} /> : onOpenPlan ? (
-                    <button type="button" onClick={openPlan} title={S.agentsPanel.openPlan} className="shrink-0 text-xs text-muted-foreground hover:text-foreground hover:underline">
-                      {S.agentsPanel.plan}
-                    </button>
-                  ) : null}
-                  {chip !== null ? <span className="shrink-0">{chip}</span> : null}
-                </div>
-              </>
-            ) : participant.agents.length > 0 && participant.doing !== null ? (
-              <>
-                <button type="button" onClick={open} className="flex w-full flex-col rounded-t-[14px] px-3 pt-[9px] text-left">
-                  {header}
-                </button>
-                <AgentsBadge
-                  tasks={participant.agents}
-                  label={participant.doing}
-                  {...(participant.doingDetail === null ? {} : { title: participant.doingDetail })}
-                  onOpen={(task) => onOpenSession(participant.id, task.id)}
-                  className="mx-3 mb-[9px] mt-1 min-h-4 truncate text-left text-xs text-muted-foreground hover:text-foreground hover:underline"
-                />
-              </>
-            ) : (
-              <button type="button" onClick={open} className="flex w-full flex-col gap-1 rounded-[14px] px-3 py-[9px] text-left">
-                {header}
-                <span
-                  title={participant.doing === null ? undefined : (participant.doingDetail ?? undefined)}
-                  className="min-h-4 truncate text-xs text-muted-foreground"
-                >
-                  {participant.doing ?? participant.task}
-                </span>
-              </button>
-            )}
-          </div>
-        );
-      })}
+      {openParticipants.map((participant) => renderCard(participant, false))}
+      {showClosed ? closedParticipants.map((participant) => renderCard(participant, true)) : null}
+      {closedParticipants.length > 0 ? (
+        <button
+          type="button"
+          data-participant-closed-toggle=""
+          onClick={() => setShowClosed((value) => !value)}
+          className="shrink-0 self-center rounded-full px-2 py-1 text-[11px] text-muted-foreground hover:bg-foreground/6 hover:text-foreground"
+        >
+          {showClosed ? S.rooms.hideClosedParticipants : S.rooms.closedParticipants(closedParticipants.length)}
+        </button>
+      ) : null}
     </div>
   );
 }

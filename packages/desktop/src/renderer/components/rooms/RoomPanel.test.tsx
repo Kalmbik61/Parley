@@ -2507,33 +2507,6 @@ it('disables archived completion responses and ignores a response when its work 
  expect(screen.getAllByText('Reopen this workspace to change the plan.').length).toBeGreaterThan(0);
 });
 
-describe('room history menu in the header (P28)', () => {
-  const sharedStatus = { state: 'shared' as const, sharedAt: '2026-10-05T10:00:00.000Z', version: 'v1', diagnostics: [] };
-  const notShared = { state: 'not-shared' as const, sharedAt: null, version: 'missing', diagnostics: [] };
-  it('is part of the room header and does not touch the host until opened', () => {
-    renderPanel(entryOf());
-    expect(document.querySelector('[data-room-header] [data-room-history]')).not.toBeNull();
-    expect(bridge.calls.some(call => call.method.startsWith('rooms.history.'))).toBe(false);
-  });
-  it('Share publishes the snapshot of this room only after the explicit confirmation, with the host version', async () => {
-    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'rooms.history.get', 'rooms.history.share', 'rooms.history.unshare'] } });
-    bridge.setHandler('rooms.history.get', () => notShared); bridge.setHandler('rooms.history.share', () => sharedStatus);
-    renderPanel(entryOf());
-    fireEvent.click(screen.getByRole('button', { name: 'History' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Share history…' }));
-    expect(bridge.calls.some(call => call.method === 'rooms.history.share')).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: 'Publish snapshot' }));
-    await screen.findByText(/^Shared at /);
-    expect(bridge.calls.find(call => call.method === 'rooms.history.share')?.params).toEqual({ projectPath: PROJECT, workId: WORK_ID, roomId: 'r-01', expectedVersion: 'missing', confirmed: true });
-  });
-  it('an old host leaves the room usable and the history actions unavailable', () => {
-    renderPanel(entryOf());
-    fireEvent.click(screen.getByRole('button', { name: 'History' }));
-    expect(screen.getByText('Update or restart the host to share room history.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Share/ })).toBeNull();
-  });
-});
-
 describe('RoomPanel — файлы, брошенные на вкладку', () => {
   it('подсветка при переносе файлов; бросок — вложения поля ввода; текст без файлов вкладка не берёт', () => {
     renderPanel(entryOf());
@@ -2618,12 +2591,11 @@ describe('RoomPanel — архивная комната (5.2)', () => {
     expect(screen.queryByRole('button', { name: 'Reopen' })).toBeNull();
   });
 
-  it('лента читается и Share истории работает: сообщения на месте, меню History в шапке', () => {
+  it('лента читается: сообщения на месте', () => {
     renderPanel(
       entryOf({ room: room({ archivedAt: '2026-10-08T12:00:00.000Z' }), messages: [message('m-1', { from: 's-01', text: 'Hello from the feed' })] }),
     );
     expect(screen.getByText('Hello from the feed')).toBeTruthy();
-    expect(document.querySelector('[data-room-header] [data-room-history]')).not.toBeNull();
   });
 
   it('файлы на вкладку не принимаются: ни подсветки, ни вложений', () => {
