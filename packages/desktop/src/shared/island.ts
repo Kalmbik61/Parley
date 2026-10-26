@@ -119,9 +119,6 @@ export const ISLAND_METHODS: ReadonlySet<string> = new Set([
  */
 export const ISLAND_EVENTS: ReadonlySet<EventName> = new Set<EventName>(['works.changed', 'activity.changed', 'assistant.changed', 'consents.changed']);
 
-/** У Codex остров показывает запросы действий; обычная работа и Done остаются вне острова. */
-export const ISLAND_ATTENTION_ONLY_PROVIDERS: ReadonlySet<string> = new Set(['codex']);
-
 /** Сколько ссылок на сессии принимает одно «просмотрено» острова (`island:mark-seen`); main отбрасывает список длиннее. */
 export const ISLAND_MARK_SEEN_LIMIT = 50;
 

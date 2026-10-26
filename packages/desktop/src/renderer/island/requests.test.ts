@@ -126,6 +126,18 @@ describe('очередь запросов острова', () => {
     expect(useIslandRequests.getState().items).toHaveLength(1);
   });
 
+  it('Codex pending card с decisions:terminal не отправляет feed.decide', async () => {
+    const call = vi.fn(async () => ({ ...snap([permission('codex-permission')]), decisions: 'terminal' as const }));
+    useIslandRequests.getState().bind(call as never);
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-03'), 'blocked')]));
+    await flush();
+    const item = useIslandRequests.getState().items[0]!;
+    expect(item).toMatchObject({ ref: ref('s-03'), card: { cardId: 'codex-permission' }, inWindow: false });
+    await useIslandRequests.getState().decide(item.key, { kind: 'permission', behavior: 'allow' });
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(call).toHaveBeenCalledWith('feed.snapshot', { ref: ref('s-03'), scope: 'attention' });
+  });
+
   it('Codex: недоступная лента не скрывает действие в терминале и не разрешает его через feed.decide', async () => {
     const { call, snapshot, decide } = bridge({});
     snapshot.mockRejectedValue(new Error('feed unavailable'));
