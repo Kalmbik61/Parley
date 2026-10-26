@@ -601,6 +601,50 @@ describe('migrateMapsToDb — переезд map.json в базу', () => {
     expect(await readMap(project, 'w-0001')).toEqual(stored);
   });
 
+  it('прерванный переезд карты с письмами (время не в каноническом виде, незнакомый ключ, отметки): только переименование, строки писем те же', async () => {
+    const map = emptyMap();
+    addSession(map, { provider: 'codex', label: 'Lead', task: 'Fixture' }, AT);
+    addSession(map, { provider: 'codex', label: 'Owner', task: 'Fixture' }, AT);
+    addRoom(map, { title: 'Chat', creator: HUMAN, members: ['s-01', 's-02'] }, AT);
+    const odd = addMessage(map, { from: 's-01', to: ['s-02'], text: 'время со сдвигом пояса' }, AT) as Message & Record<string, unknown>;
+    odd.at = '2026-10-04T04:00:00+03:00';
+    const pinned = addMessage(map, { from: 's-02', to: ['s-01'], text: 'с незнакомым ключом' }, AT) as Message & Record<string, unknown>;
+    pinned.pinned = { by: HUMAN, n: 1 };
+    pinned.deleted = false;
+    addMessage(map, { from: 's-01', to: [HUMAN], text: 'человеку' }, AT).readBy['s-01'] = AT;
+    addMessage(map, { from: 's-02', to: [], text: 'в комнату', roomId: 'r-01' }, AT).readBy['s-01'] = AT;
+    const original = await legacyWork(map);
+    const lettersOf = (): Record<string, unknown[]> => {
+      const db = storeDb();
+      const at = [project, 'w-0001'];
+      return {
+        messages: db.prepare('SELECT * FROM messages WHERE project_path = ? AND work_id = ? ORDER BY seq').all(...at),
+        reads: db.prepare('SELECT * FROM message_reads WHERE project_path = ? AND work_id = ? ORDER BY seq, reader').all(...at),
+        unread: db.prepare('SELECT * FROM message_unread WHERE project_path = ? AND work_id = ? ORDER BY reader, seq').all(...at),
+      };
+    };
+
+    // Первый переезд: время приведено к каноническому, незнакомый ключ уехал в `body`.
+    expect((await migrateMapsToDb()).migrated).toEqual([{ projectPath: project, workId: 'w-0001' }]);
+    const rows = lettersOf();
+    expect(rows['messages']).toHaveLength(4);
+    expect(rows['messages']![0]).toMatchObject({ id: 'm-01', at: '2026-10-04T01:00:00.000Z' });
+    expect(String((rows['messages']![1] as { body: string }).body)).toContain('pinned');
+    const version = workVersion(project, 'w-0001');
+    const stored = readStoredMap(project, 'w-0001');
+    // Хост упал после коммита: прежний `map.json` вернулся на место, а `map.v2.json` (его копия) остался рядом.
+    await writeFile(mapFile('w-0001'), original);
+
+    const result = await migrateMapsToDb();
+
+    expect(result).toEqual({ migrated: [{ projectPath: project, workId: 'w-0001' }], failed: [], skipped: [] });
+    expect(await exists(mapFile('w-0001'))).toBe(false);
+    expect(await readFile(backupFile('w-0001'), 'utf8')).toBe(original);
+    expect(workVersion(project, 'w-0001')).toBe(version);
+    expect(lettersOf()).toEqual(rows);
+    expect(readStoredMap(project, 'w-0001')).toEqual(stored);
+  });
+
   it('вернулся map.json с письмом, которого нет в строках (откат сборки и запись в файл): failed с причиной, оба файла и строка не тронуты, map.v2.json не затёрт', async () => {
     await legacyWork(emptyMap());
     await migrateMapsToDb();

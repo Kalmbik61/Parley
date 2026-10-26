@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  addRoom,
   addSession,
   compactWorkMap,
   createWork,
@@ -24,6 +25,8 @@ import type { Room, WorkMap } from '@parley/core';
 import type { EventData, EventName } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createWindowCounters } from '../health/window-counters.js';
+// Счётчик кэша карт ядра — только для тестов, из пакета он не экспортируется; тот же экземпляр модуля, что у `@parley/core`.
+import { mapCacheStats } from '../../../core/dist/work/store.js';
 import { createWorksService } from './works-service.js';
 import type { WorksService } from './works-service.js';
 
@@ -642,5 +645,52 @@ describe('снимок окна по версии работы (план 4, за
 
     expect(rebuilt()).toContain(again.work.id);
     expect(rebuilt()).not.toContain(b.work.id);
+  });
+
+  it('сборка снимка окна не загружает карты из базы ни у одной работы: письма читаются запросами к таблицам, карта — из снимка сервиса', async () => {
+    const works = [
+      { projectPath: projectA, workId: (await createWork(projectA, { title: '1' })).work.id },
+      { projectPath: projectA, workId: (await createWork(projectA, { title: '2' })).work.id },
+      { projectPath: projectB, workId: (await createWork(projectB, { title: '3' })).work.id },
+    ];
+    for (const { projectPath, workId } of works) {
+      await updateMap(projectPath, workId, (map, letters) => {
+        addSession(map, { provider: 'claude', label: 'план', task: 'x' });
+        addRoom(map, { title: 'Комната', creator: 'human', members: ['s-01'], lead: 's-01' });
+        for (let i = 0; i < 5; i += 1) letters.add({ roomId: 'r-01', kind: 'note', from: 's-01', to: ['human'], text: `письмо ${i}` });
+        letters.add({ roomId: null, kind: 'note', from: 's-01', to: ['human'], text: 'прямое' });
+      });
+    }
+
+    // Каждый вызов `compactWorkMap` меряется изнутри: он синхронный, поэтому загрузки карт из асинхронного прохода
+    // службы (чтение после записи, сверка живости) в измерение не попадают — считаются только загрузки самой сборки.
+    const actual = await vi.importActual<typeof import('@parley/core')>('@parley/core');
+    const seen: Array<{ title: string; loads: number }> = [];
+    compact.mockImplementation((...args) => {
+      const before = mapCacheStats();
+      const result = actual.compactWorkMap(...args);
+      const after = mapCacheStats();
+      seen.push({ title: args[0].work.title, loads: after.hits + after.misses - (before.hits + before.misses) });
+      return result;
+    });
+    try {
+      const s = service({ debounceMs: 20 });
+      await s.start();
+      await settle(s);
+
+      // Снимок настоящий: письма всех работ дошли до него запросами к таблицам.
+      const window = s.windowSnapshot();
+      expect(window?.entries.map((entry) => entry.map.compact?.messages.total)).toEqual([6, 6, 6]);
+      expect([...new Set(seen.map((item) => item.title))].sort()).toEqual(['1', '2', '3']);
+      expect(seen.filter((item) => item.loads !== 0)).toEqual([]);
+    } finally {
+      compact.mockImplementation(actual.compactWorkMap);
+    }
+
+    // Счётчик живой: чтение карты из базы он считает, так что нули выше — не пустая проверка.
+    const probe = mapCacheStats();
+    await readMap(works[0]!.projectPath, works[0]!.workId);
+    const after = mapCacheStats();
+    expect(after.hits + after.misses).toBeGreaterThan(probe.hits + probe.misses);
   });
 });
