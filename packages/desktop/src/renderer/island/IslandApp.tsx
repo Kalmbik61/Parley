@@ -342,10 +342,12 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
       freshConsent = true;
     }
     if (firstFresh === -1 && !freshConsent) return;
-    // Новый pending не уводит выбор, пока человек работает клавиатурой внутри острова.
-    if (firstFresh !== -1 && !shapeRef.current?.contains(document.activeElement)) useIslandRequests.getState().select(firstFresh);
+    // Вопрос сохраняет выбор и draft даже после blur/уборки; остальные запросы не уводим из-под текущего ввода.
+    const selected = items.find((item) => item.key === selectedKey);
+    const keepQuestion = selected?.inWindow && selected.card?.kind === 'question' && selected.card.state === 'pending' && selected.note !== 'elsewhere';
+    if (firstFresh !== -1 && !keepQuestion && !shapeRef.current?.contains(document.activeElement)) useIslandRequests.getState().select(firstFresh);
     present(outcomes);
-  }, [items, consents, present]);
+  }, [items, consents, present, selectedKey]);
   // Агенты начали работу — остров выдвигается. Эффект идёт только при смене признака: стрелка среди работы его не возвращает.
   useEffect(() => {
     if (model.active) setRetracted(false);

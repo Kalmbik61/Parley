@@ -1145,8 +1145,8 @@ describe('QuestionForm — настоящая проводка острова', 
     fireEvent.click(screen.getByRole('radio', { name: 'Other' }));
     fireEvent.change(other(), { target: { value: '  Custom answer  ' } });
   };
-  async function mount(decisions: 'window' | 'terminal' = 'window') {
-    const state = setup({ assistant: ASSISTANT_ON });
+  async function mount(decisions: 'window' | 'terminal' = 'window', config: Partial<IslandConfig> = {}) {
+    const state = setup({ assistant: ASSISTANT_ON, ...config });
     let current: FeedQuestionCard | null = card();
     state.fake.setHandler('feed.snapshot', ({ ref: target }) => ({ items: target.sessionId === 's-01' ? current === null ? [] : [current] : CARDS[target.sessionId] ?? [], revision: 1, mode: null, decisions }));
     const root = render(<IslandApp bridge={state.bridge} />);
@@ -1205,6 +1205,42 @@ describe('QuestionForm — настоящая проводка острова', 
     fireEvent.click(screen.getByRole('button', { name: 'Previous request' }));
     expect(screen.getByText('Question 1 of 3')).toBeTruthy();
     expect((screen.getByRole('radio', { name: 'Postgres' }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it.each(['blur', 'retract', 'blur and retract'])('new pending after %s preserves selected question, draft and page; still expands and sounds', async (mode) => {
+    const state = await mount('window', { sound: true }); fill(); act(() => other().focus());
+    const selected = useIslandRequests.getState().selectedKey;
+    vi.mocked(state.island.beep).mockClear();
+    if (mode.includes('blur')) state.assistantBlur();
+    if (mode.includes('retract')) tuck(state.hover);
+    expect(document.activeElement).not.toBe(screen.queryByRole('textbox'));
+    vi.mocked(state.island.keyboard).mockClear();
+    state.blocked('s-02'); await settle();
+    expect(useIslandRequests.getState().selectedKey).toBe(selected);
+    expect(useIslandRequests.getState().items).toHaveLength(2);
+    expect(isRetracted()).toBe(false);
+    expect(screen.getByText(/^[12] of 2$/)).toBeTruthy();
+    expect(screen.getByText('Question 3 of 3')).toBeTruthy();
+    expect(other().value).toBe('  Custom answer  ');
+    expect(state.island.beep).toHaveBeenCalledOnce();
+    expect(state.island.keyboard).not.toHaveBeenCalled();
+  });
+
+  it('an empty selected pending question also stays selected; removing it selects the remaining request', async () => {
+    const state = await mount('window', { sound: true });
+    const selected = useIslandRequests.getState().selectedKey;
+    tuck(state.hover);
+    vi.mocked(state.island.keyboard).mockClear(); vi.mocked(state.island.beep).mockClear();
+    state.blocked('s-02'); await settle();
+    expect(useIslandRequests.getState().selectedKey).toBe(selected);
+    expect(screen.getByText('Question 1 of 3')).toBeTruthy();
+    expect((screen.getByRole('radio', { name: 'Postgres' }) as HTMLInputElement).checked).toBe(false);
+    expect(useIslandRequests.getState().items).toHaveLength(2);
+    expect(state.island.keyboard).not.toHaveBeenCalled();
+    expect(state.island.beep).toHaveBeenCalledOnce();
+    await state.update(null);
+    expect(useIslandRequests.getState().selectedKey).not.toBe(selected);
+    expect(screen.getByTestId('island-allow')).toBeTruthy();
   });
 
   it.each(['card', 'questions', 'ref', 'resolved', 'disconnect'])('%s change resets the retained draft and page', async (mode) => {
