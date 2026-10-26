@@ -221,6 +221,9 @@ describe('список инструментов', () => {
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       'add_to_room',
+      'attempt_status',
+      'attempt_submit',
+      'attempt_verify',
       'backlog_list',
       'backlog_suggest',
       'check_inbox',

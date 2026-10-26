@@ -1,3 +1,5 @@
+import { autonomousPlan } from '../../test-utils/autonomous-plan.js';
+import { MODES } from '../dialogs/agent-rows.js';
 import { afterEach, beforeEach, expect, it } from "vitest";
 import {
   act,
@@ -562,4 +564,54 @@ it("does not settle a verification after the same work is archived", async () =>
     true,
   );
   expect(screen.queryByText("Saved.")).toBeNull();
+});
+
+it('offers autonomous fourth and treats verified as a downgrade', () => {
+  const entry = entryOf(planOf({ mode: 'autonomous', autonomous: autonomousPlan() }));
+  render(<RoomModeControl entry={entry} roomId="r-01" bridge={createFakeBridge()} />);
+  expect(Array.from((screen.getByLabelText('Room mode') as HTMLSelectElement).options).map(o => o.value)).toEqual(['free', 'checklist', 'verified', 'autonomous']);
+  expect(MODES).toEqual(['free', 'checklist', 'verified', 'autonomous']);
+  fireEvent.change(screen.getByLabelText('Room mode'), { target: { value: 'verified' } });
+  expect(screen.getByText('Lowering the mode removes verification requirements.')).toBeTruthy();
+});
+it('shows the latest autonomous attempt and check, hiding agent forms', () => {
+  const plan = planOf({ mode: 'autonomous', autonomous: autonomousPlan() });
+  plan.items[0]!.status = 'ready';
+  render(<PlanPanel entry={entryOf(plan)} roomId="r-01" bridge={createFakeBridge()} />);
+  expect(screen.getByText('Attempt 2 · Returned · verifier:0 → fail · Restart still fails')).toBeTruthy();
+  expect(screen.queryByText('Submit evidence')).toBeNull();
+  expect(screen.queryByText('Verify item')).toBeNull();
+  expect(screen.queryByText('Return item')).toBeNull();
+});
+it('allows human return of an autonomous verified item after completion', async () => {
+  const plan = planOf({ mode: 'autonomous', status: 'completed', autonomous: autonomousPlan() });
+  plan.items[0]!.status = 'verified';
+  const bridge = createFakeBridge(); bridge.setHandler('plans.verify', () => result);
+  render(<PlanPanel entry={entryOf(plan)} roomId="r-01" bridge={bridge} />);
+  expect(screen.queryByText('Verify item')).toBeNull();
+  fireEvent.click(screen.getByText('Return item'));
+  fireEvent.change(screen.getByLabelText('Verification note'), { target: { value: 'Late defect' } });
+  fireEvent.click(screen.getByText('Confirm return'));
+  await waitFor(() => expect(bridge.calls.at(-1)).toMatchObject({ method: 'plans.verify', params: { planId: plan.id, rev: plan.rev, item: 1, verdict: 'returned', note: 'Late defect' } }));
+});
+
+it('hides a previously open agent form when the plan becomes autonomous', () => {
+  const bridge = createFakeBridge(); const plan = planOf();
+  const view = render(<PlanPanel entry={entryOf(plan)} roomId="r-01" bridge={bridge} />);
+  fireEvent.click(screen.getByText('Verify item'));
+  expect(screen.getByLabelText('Verification note')).toBeTruthy();
+  view.rerender(<PlanPanel entry={entryOf({ ...plan, mode: 'autonomous', autonomous: autonomousPlan() })} roomId="r-01" bridge={bridge} />);
+  expect(screen.queryByLabelText('Verification note')).toBeNull();
+});
+it('selects the highest attempt number and latest check without showing an older attempt verdict', () => {
+  const autonomous = autonomousPlan();
+  autonomous.attempts.push({ ...autonomous.attempts[0]!, id: 'at-01', n: 1 });
+  const current = autonomous.ops[0]!.result!.checkResult as import('@parley/core').CheckResult;
+  autonomous.ops.push({ ...autonomous.ops[0]!, key: 'op-02', result: { checkResult: { ...current, id: 'ck-02', specId: 'unit', at: '2026-10-25T10:01:00Z', verdict: 'pass', summary: 'newest\n' + 'x'.repeat(200) } } });
+  autonomous.attempts[0]!.checks.push('ck-02');
+  render(<PlanPanel entry={entryOf(planOf({ mode: 'autonomous', autonomous }))} roomId="r-01" bridge={createFakeBridge()} />);
+  const line = screen.getByText(/^Attempt 2/);
+  expect(line.textContent).toContain('unit → pass · newest ');
+  expect(line.textContent).toMatch(/…$/);
+  expect(line.textContent).not.toContain('Restart still fails');
 });

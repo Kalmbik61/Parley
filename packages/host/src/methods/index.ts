@@ -62,6 +62,7 @@ import {
   roomsRename,
   roomsReopen,
   roomsResolveProposal,
+  plansResumeAutonomous,
   roomsSend,
   roomsSetLead,
   roomsSetOwner,
@@ -93,6 +94,7 @@ export interface MethodDeps {
   backlog?: BacklogService;
   /** One host authority for durable plan delivery and export retries. */
   planEffects?: PlanEffectsService;
+  autonomousEngine?: Pick<import('../rooms/autonomous-engine.js').AutonomousEngine, 'cancel'>;
   /** Selected-checkout derivative history; shared publication stays explicit. */
   history?: HistoryService;
   /** Первое чтение работ хостом и сбор прерванных (их ждут WORKS_GATED_*); без него — сразу. */
@@ -222,7 +224,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     ...createJournalHandlers(deps.works),
     ...createMemoryHandlers(),
     ...createHistoryHandlers(),
-    ...(deps.planEffects ? createPlanHandlers(deps.planEffects) : {}),
+    ...(deps.planEffects ? createPlanHandlers(deps.planEffects, deps.autonomousEngine) : {}),
+    'plans.resumeAutonomous': plansResumeAutonomous as AnyHandler,
     ...(deps.assistant === undefined ? {} : createAssistantHandlers(deps.assistant)),
     ...(deps.telegram === undefined ? {} : createTelegramHandlers(deps.telegram)),
     // Снимка работ не читают: не в `WORKS_GATED_METHODS`, окно спрашивает согласие ещё до создания работы.

@@ -6,6 +6,7 @@
  * `action`, `note`; `conflict` — тост; двойное нажатие — один вызов), прочтение и прокрутка.
  */
 
+import { autonomousRoomPlan } from '../../test-utils/autonomous-plan.js';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -2679,4 +2680,38 @@ describe('кнопка «Browser» в шапке комнаты (этап B2, с
       useLayoutStore.setState({ activeWorkKey: null, layouts: {}, hydrated: {}, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
     }
   });
+});
+
+it('shows a map-derived halt line, badge and card and removes them when the map resumes', () => {
+  const entry = entryOf(); const plan = autonomousRoomPlan();
+  entry.map.plans = [plan]; entry.map.rooms[0]!.mode = 'autonomous';
+  const view = render(<RoomPanel {...props(entry)} />);
+  expect(view.container.querySelector('[data-halt-notice]')?.textContent).toBe('Execution stopped: capture: unexpected failure');
+  expect(view.container.querySelector('[data-plan-halted]')?.getAttribute('title')).toBe('capture: unexpected failure');
+  expect(view.container.querySelector('[data-halt-card]')).toBeTruthy();
+  const resumed = structuredClone(entry); resumed.map.plans![0]!.autonomous!.halted = null;
+  view.rerender(<RoomPanel {...props(resumed)} />);
+  expect(view.container.querySelector('[data-halt-notice]')).toBeNull();
+  expect(view.container.querySelector('[data-halt-card]')).toBeNull();
+  expect(view.container.querySelector('[data-plan-halted]')).toBeNull();
+});
+
+it('uses an existing host halt notice instead of adding a duplicate fallback line', () => {
+  const plan = autonomousRoomPlan();
+  const entry = entryOf({ messages: [message('m-halt', { from: 'system', at: plan.autonomous!.halted!.at, text: 'Execution stopped: ' + plan.autonomous!.halted!.detail })] });
+  entry.map.plans = [plan]; entry.map.rooms[0]!.mode = 'autonomous';
+  const view = render(<RoomPanel {...props(entry)} />);
+  expect(view.container.querySelector('[data-halt-notice]')).toBeNull();
+  expect(view.container.querySelector('[data-halt-card]')).toBeTruthy();
+});
+
+it('shows the host item-selection error from a generic proposal response', async () => {
+  const entry = entryOf();
+  entry.map.rooms[0]!.proposal = { id: 'p-01', rev: 1, from: 's-01', at: 'x', text: 'Complete now' };
+  const message = 'autonomous-completion-needs-item: select an item to return';
+  bridge.setHandler('rooms.resolveProposal', () => { throw encodeIpcError({ code: 'bad_request', message }); });
+  renderPanel(entry);
+  fireEvent.click(screen.getByText('Return for rework'));
+  fireEvent.click(screen.getByText('Send to lead'));
+  await waitFor(() => expect(toast).toHaveBeenCalledWith(message));
 });

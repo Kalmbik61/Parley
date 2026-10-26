@@ -20,7 +20,7 @@ import { Textarea } from '../../ui/textarea.js';
 export interface RecipeSavePanelProps {
   bridge: ParleyBridge;
   projectPath: string;
-  mode: 'free' | 'checklist' | 'verified';
+  mode: 'free' | 'checklist' | 'verified' | 'autonomous';
   /** Состав диалога; `null` — у какой-то строки нет роли, и рецепт из такого состава не собрать. */
   agents: RecipeAgent[] | null;
   /** Плейбук выбранного рецепта или шаблон этапов. */

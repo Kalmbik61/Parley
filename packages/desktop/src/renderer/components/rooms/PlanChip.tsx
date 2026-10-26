@@ -1,3 +1,4 @@
+import type { RoomPlan } from '@parley/core';
 import type { ReactElement } from 'react';
 import { CheckCircle2, Circle, LoaderCircle } from 'lucide-react';
 import { planSummary, type AgentPlan } from '@parley/core/agent-plan';
@@ -86,4 +87,10 @@ export function PlanChip({ plan, onOpen }: Omit<PlanHoverProps, 'children'>): JS
       </button>
     </PlanHover>
   );
+}
+
+/** Остановка относится к плану комнаты, а не к личному плану агента. */
+export function PlanHaltBadge({ plan }: { plan: RoomPlan | null }): JSX.Element | null {
+  const halted = plan?.mode === 'autonomous' ? plan.autonomous?.halted : null;
+  return halted ? <span data-plan-halted="" title={halted.detail} className="rounded-full border px-2 py-0.5 text-xs">{S.plans.halted}</span> : null;
 }

@@ -1,6 +1,6 @@
 import type { SkillCatalog } from '../skills/catalog.js';
 import type { ResourceLimits } from '../work/resource-policy.js';
-import type { WorkSession } from '../work/types.js';
+import type { AttemptChannelRequest, WorkSession } from '../work/types.js';
 import path from 'node:path';
 import type { RoleCatalog } from '../roles/types.js';
 import { envName, envValue, LEGACY_STATE_DIR, STATE_DIR, STATE_DIRS } from '../names.js';
@@ -43,6 +43,8 @@ export interface McpContext {
    * `browser_open` не объявляется (сессия до обновления или хост без эндпоинта).
    */
   agent?: AgentChannel;
+  /** Внутренний канал попыток для исполнителя в хосте; в окружении и протоколе его нет. */
+  attempts?: (request: AttemptChannelRequest, signal?: AbortSignal) => Promise<unknown>;
   /** Как часто сверять `stat` карты, если `fs.watch` промолчал: перечитывается она, только когда файл изменился (спека хранилища 6.9). Тесты ускоряют. */
   pollMs?: number;
   /**

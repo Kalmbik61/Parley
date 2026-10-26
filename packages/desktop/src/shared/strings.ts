@@ -52,8 +52,8 @@ export const S = {
     roomArchived: 'Reopen this room to change the plan.',
     title: 'Plan', proposed: 'Proposed plan', completion: 'Completion · waiting for you',
     revision: (n: number) => 'Revision ' + n,
-    mode: 'Room mode', modes: { free: 'Free', checklist: 'Checklist', verified: 'Verified' },
-    modeHelp: { free: 'Discussion without a tracked plan.', checklist: 'Owners submit evidence; done items complete the plan.', verified: 'Independent verification and human acceptance complete the plan.' },
+    mode: 'Room mode', modes: { free: 'Free', checklist: 'Checklist', verified: 'Verified', autonomous: 'Autonomous' },
+    modeHelp: { free: 'Discussion without a tracked plan.', checklist: 'Owners submit evidence; done items complete the plan.', verified: 'Independent verification and human acceptance complete the plan.', autonomous: 'The engine runs attempts after Go; the human accepts the result' },
     reason: 'Reason for mode change', confirmMode: 'Confirm mode change', lower: 'Lowering the mode removes verification requirements.', freeCancels: 'Switching to Free cancels the active plan.',
     status: { proposed: 'Proposed', active: 'Active', completing: 'Awaiting completion acceptance', completed: 'Completed', cancelled: 'Cancelled' },
     itemStatus: { waiting: 'Waiting', ready: 'Ready', in_progress: 'In progress', done: 'Done', blocked: 'Blocked', verified: 'Verified', returned: 'Returned' },
@@ -61,6 +61,12 @@ export const S = {
     basis: (n: number) => 'Done in Checklist · human accepted revision ' + n,
     progress: (mode: string, done: number, total: number, basis: number) => done + '/' + total + (mode === 'checklist' ? ' done' : ' verified') + (basis > 0 ? ' · ' + basis + ' accepted from Checklist' : ''),
     markDone: 'Mark done', submit: 'Submit evidence', verify: 'Verify item', returnItem: 'Return item', confirmSubmit: 'Confirm submission', confirmVerify: 'Confirm verification', confirmReturn: 'Confirm return', verificationNote: 'Verification note',
+    halted: 'Execution stopped', continue: 'Continue', fullText: 'Show full proposal',
+    haltReason: { budget: 'budget', no_progress: 'no progress', stuck: 'stuck', restart: 'restart', confinement: 'confinement' },
+    haltNotice: (detail: string) => 'Execution stopped: ' + detail,
+    attemptStatus: { starting: 'Starting', running: 'Running', submitted: 'Submitted', checking: 'Checking', accepted: 'Accepted', queued: 'Queued', integrated: 'Integrated', returned: 'Returned', blocked: 'Blocked', aborted: 'Aborted', superseded: 'Superseded' },
+    attempt: (n: number, status: string, check: string) => 'Attempt ' + n + ' · ' + status + (check ? ' · ' + check : ''),
+    itemToReturn: 'Item to return', selectItem: 'Select an item',
     artifactHelp: 'References are plain text, one per line. They are not opened as files.',
     cancelPlan: 'Cancel plan…', cancelWarning: 'Cancel this active plan? Its captured cancellation snapshot will be retained.', confirmCancel: 'Confirm cancellation',
     oldHost: 'Update or restart the host to use plan actions.', changed: 'The plan changed. Review the current revision and try again.', failed: 'The plan action failed. Check the host and try again.', saved: 'The host accepted the action.',
@@ -2654,6 +2660,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'compact-failed': "compaction didn't go through — check the agent's terminal",
   'snapshot-too-large': 'workspace data is too large to show — delete or archive old workspaces',
   'codex-auto-unsupported': 'Codex is too old for Auto-review — approvals are asked in the terminal; update Codex to use it',
+  'git-connectivity-failed': 'Git repository connectivity check failed — inspect the host log before continuing',
 };
 
 /**

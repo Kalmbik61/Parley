@@ -179,6 +179,7 @@ export interface LiveMetrics {
 export type NoticeKind =
   | 'map-lock'
   | 'map-corrupt'
+  | 'git-connectivity-failed'
   | 'hooks-missing'
   | 'launch-failed'
   | 'parley-md-created'

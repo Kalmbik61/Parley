@@ -1,5 +1,6 @@
 import { AGENT_PROVIDERS_PATH, createProvidersEndpoint, providerRowsOf } from './agent/providers-endpoint.js';
 import { AGENT_SESSIONS_PATH, createSessionEndpoint } from './agent/session-endpoint.js';
+import { AGENT_ATTEMPTS_PATH, createAttemptsEndpoint } from './agent/attempts-endpoint.js';
 import { hostToolContext } from './agent/tool-context.js';
 import { createToolsEndpoint } from './agent/tools-endpoint.js';
 import { randomBytes } from 'node:crypto';
@@ -77,6 +78,7 @@ import { createFeedService } from './feed/feed-service.js';
 import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
+import { autonomousEngineIO, createAutonomousEngine } from './rooms/autonomous-engine.js';
 import { createHistoryService } from './rooms/history-service.js';
 import { createHumanRoom, resolveRoomProposal, sendHumanLetter } from './rooms/rooms-service.js';
 import { createAssistantEndpoint } from './assistant/assistant-endpoint.js';
@@ -371,6 +373,16 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     authenticate: (req) => browserEndpoint.authenticate(req),
     create: (input) => sessionsService.create(input),
   });
+  const autonomousEngine = createAutonomousEngine(autonomousEngineIO({
+    create: input => sessionsService.create(input),
+    launch: (ref, mode, choice) => sessionsService.launch(ref, mode, choice),
+    stop: ref => sessionsService.stop(ref),
+    close: ref => sessionsService.close(ref),
+  }), { provider: 'codex', verifier: { provider: 'claude', model: 'sonnet' }, works: worksService,
+    onFailure: error => log.error('autonomous engine failed', { error: String(error) }),
+  });
+  handle.context.onShutdown(() => autonomousEngine.stop());
+  const attemptsEndpoint = createAttemptsEndpoint({ authenticate: req => browserEndpoint.authenticate(req), engine: autonomousEngine });
   // Строки провайдеров для агента (спека подписок 5.8, К7): тот же `providers.list`, что у окна, без ключа и проверок.
   // Обработчик собирается ниже, когда готовы службы проверки ключей, поэтому привязка поздняя.
   let listProviders: (() => Promise<Result<'providers.list'>>) | undefined;
@@ -396,6 +408,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         providerRows: listProviderRows,
         onWorksChange: (listener) => worksService.onChange(() => listener()),
         roleCatalog: (cwd) => roleCatalog(cwd, { codex: true }),
+        attempts: (ref, request) => attemptsEndpoint.perform(ref, request, () => browserEndpoint.isRegistered(ref)),
       }),
     log,
   });
@@ -410,7 +423,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       }
       feedService.onHook(request);
     },
-    routes: { [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_TOOLS_PATH]: (req, res) => toolsEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
+    routes: { [AGENT_ATTEMPTS_PATH]: (req, res) => attemptsEndpoint.handle(req, res), [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_TOOLS_PATH]: (req, res) => toolsEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
   });
 
   // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт, а
@@ -664,6 +677,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     roleCatalog,
     backlog: backlogService,
     planEffects,
+    autonomousEngine,
     history,
     worksReady,
     providerVersions,
@@ -786,6 +800,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   void authService.refreshAll();
   await activityService.start();
   planEffects.start();
+  autonomousEngine.start();
   history.start();
   wakeService.start();
   // Первое чтение лимитов — после чтения работ: файлы сессий ищутся по их картам. Окно, подключившееся

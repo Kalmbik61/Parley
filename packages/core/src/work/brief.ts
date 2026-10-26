@@ -89,7 +89,11 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
   // папку перед запуском, — к чтению брифа агентом она уже на месте.
   // Указатель на гид — по имени темы (`topic` у `read_guide`), а не по заголовку раздела:
   // заголовок агент в `read_guide` передать не может, а тема и раздел не совпадают.
-  if (session.worktree !== null) {
+  if (session.workspace?.kind === 'artifacts') {
+    lines.push(`Artifacts: engine-owned review evidence in \`${session.workspace.path}\`. Read only these artifacts; do not read source code or execute commands.`, '');
+  } else if (session.workspace?.kind === 'clone') {
+    lines.push(`Clone: isolated clone of the integration branch at ${session.workspace.sha}; the engine captures your tree on attempt_submit; do not commit, do not touch git, do not write outside this folder. Use .parley-tmp inside this clone as your only temporary directory; the engine excludes it from captured trees. Folder: \`${session.workspace.path}\`.`, '');
+  } else if (session.worktree !== null) {
     const { branch, base, path: folder } = session.worktree;
     lines.push(
       `Worktree: branch \`${branch}\` off base \`${base}\`, folder \`${folder}\`.`,
@@ -181,6 +185,12 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
     const lead = liveLead(map, room);
     if (lead === null) return [];
     const head = `- ${room.id} "${field('title', room.title, CONTEXT_LIMITS.label, `get_map {room: "${room.id}"}`)}": `;
+    if (room.mode === 'autonomous') {
+      const engine = 'The engine drives the plan; plan_* are refused. Stage 1 exception to human-only closure: the engine creates and closes room sessions. Read attempt_status for manifests and cards.';
+      if (lead === session.id) return [`${head}you are the autonomous lead. Decompose the goal into items with criteria and check specifications; set each owner and verifier to engine. Propose the plan and budget via propose_decision; amendments use the current plan id/rev. Wait for human acceptance (Go). Read manifests and cards, not transcripts. Do not write code. ${engine}`];
+      const verifier = session.role?.name === 'verifier' || map.plans?.some((plan) => plan.roomId === room.id && plan.autonomous?.attempts.some((attempt) => attempt.verifier === session.id));
+      return [`${head}you are an autonomous ${verifier ? 'verifier' : 'worker'}. Follow the engine assignment and accepted scope. ${verifier ? 'Verify each assigned criterion on the exact SHA using attempt_verify(attemptId, sha, criterion, verdict, note); criterion indices start at zero.' : 'Submit a truthful handoff manifest without sha via attempt_submit(attemptId, manifest). The host computes manifest.hash and submissionKey; omit both and retry with the same manifest. The response returns the assigned submissionKey. Explicit hashes are checked. Read attempt_status before retrying a lost response. Only the engine captures the commit.'} ${engine}`];
+    }
     if (lead === session.id) return [`${head}${LEAD_ROLE}`];
     const name = `${lead} (${participantLabel(map, lead)})`;
     return [`${head}the lead is ${name}. ${memberRole(sessionMention(session.id))}`];

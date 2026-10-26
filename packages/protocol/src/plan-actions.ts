@@ -22,7 +22,7 @@ const rev = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const item = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const location = { projectPath: project, workId: id("w") };
 const identity = { ...location, planId: id("pl"), rev };
-export const roomMode = z.enum(["free", "checklist", "verified"]);
+export const roomMode = z.enum(["free", "checklist", "verified", "autonomous"]);
 export const planEvidence = z
   .strictObject({
     text,

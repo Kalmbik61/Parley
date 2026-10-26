@@ -26,6 +26,8 @@ export async function hostToolContext(
     onWorksChange(listener: () => void): () => void;
     /** Каталог ролей для `list_roles` (кэш хоста, тот же, что у `roles.list`); нет — исполнитель читает каталог сам. */
     roleCatalog?: (cwd: string) => Promise<RoleCatalog>;
+    /** Канал попыток внутри хоста: область задаёт токен, а не аргументы инструмента. */
+    attempts?: (ref: SessionRef, request: unknown, signal?: AbortSignal) => Promise<unknown>;
   },
 ): Promise<McpContext> {
   const { config } = await loadConfig();
@@ -48,5 +50,6 @@ export async function hostToolContext(
     },
     mapChanges: deps.onWorksChange,
     ...(deps.roleCatalog === undefined ? {} : { roleCatalog: deps.roleCatalog }),
+    ...(deps.attempts === undefined ? {} : { attempts: (request, signal) => deps.attempts!(ref, request, signal) }),
   };
 }
