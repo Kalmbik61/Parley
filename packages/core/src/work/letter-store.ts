@@ -317,8 +317,20 @@ export function letterById(projectPath: string, workId: string, id: string): Mes
   return message === undefined ? undefined : structuredClone(message);
 }
 
-export function unreadLetters(projectPath: string, workId: string, reader: string): Message[] {
-  return structuredClone(unreadOf(readMapView(projectPath, workId), reader));
+/**
+ * Параметры чтения непрочитанного вне транзакции. `map` — карта вызывающего (снимок хоста, который он и так держит):
+ * живые правила (`recipientsOf`, `cancelledPlanLetter`, `unreadForHuman`) идут по ней, и карта из базы не загружается.
+ * Пересчёт будильника и метрик зовёт это на каждую сессию каждой работы при каждом изменении, а кэш карт — всего
+ * `MAP_CACHE_LIMIT` записей: без `map` при большем числе работ каждый проход загружал бы карты заново (спека хранилища 6.2).
+ * Пока письма лежат в карте, непрочитанное считается по письмам этой карты; таблицы дадут только кандидатов, а правила
+ * по-прежнему применятся к ней.
+ */
+export interface UnreadOptions {
+  map?: Readonly<WorkMap>;
+}
+
+export function unreadLetters(projectPath: string, workId: string, reader: string, options: UnreadOptions = {}): Message[] {
+  return structuredClone(unreadOf(options.map ?? readMapView(projectPath, workId), reader));
 }
 
 /** Число непрочитанного читателем: всего и по каналам; ключ `''` — прямые письма. */
@@ -326,8 +338,9 @@ export function unreadCount(
   projectPath: string,
   workId: string,
   reader: string,
+  options: UnreadOptions = {},
 ): { total: number; byRoom: Record<string, number> } {
-  return unreadCountOf(readMapView(projectPath, workId), reader);
+  return unreadCountOf(options.map ?? readMapView(projectPath, workId), reader);
 }
 
 /** Письма по каналам: сколько и номер новейшего; ключ `''` — прямые письма. Каналов без писем нет. */

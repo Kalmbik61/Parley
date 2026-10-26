@@ -196,7 +196,7 @@ export {
 export type { DotState, SessionAxes, StateWordKey } from './work/session-state.js';
 export { isUnreadFor, recipientsOf, unreadFor } from './work/letters.js';
 export { channelStats, letterById, letterCount, mapLetterReader, mapLetterTx, markHumanRead, readLetters, storeLetterReader, unreadCount, unreadLetters, writeLetters } from './work/letter-store.js';
-export type { LetterQuery, LetterReads, LetterTx, NewLetter } from './work/letter-store.js';
+export type { LetterQuery, LetterReads, LetterTx, NewLetter, UnreadOptions } from './work/letter-store.js';
 export {
   LETTER_PAGE_MAX_ITEMS,
   PAGE_DEFAULT_BYTES,

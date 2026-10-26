@@ -26,6 +26,7 @@ import {
   readStoredMap,
   replaceStoredMap,
   updateMap,
+  WorkNotFoundError,
   type MapWrittenEvent,
 } from './store.js';
 import { HUMAN, PARLEY, type Message, type PlanEffect, type Room, type WorkMap } from './types.js';
@@ -508,6 +509,27 @@ describe('чтение вне транзакции', () => {
     expect(unreadCount(project, WORK, 's-02')).toEqual({ total: 1, byRoom: { 'r-01': 1 } });
     expect(unreadCount(project, WORK, HUMAN)).toEqual({ total: 4, byRoom: { 'r-01': 3, '': 1 } });
     expect(unreadCount(project, WORK, 's-04')).toEqual({ total: 0, byRoom: {} });
+  });
+
+  // Спека хранилища 6.2: пересчёт будильника и метрик идёт по снимку хоста; карты из базы он не грузит и кэш не перебирает.
+  it('с options.map непрочитанное считается по карте вызывающего: карта из базы не загружается, работа в базе не нужна', async () => {
+    await seed(fillFive);
+    const map = await readMap(project, WORK);
+    const before = mapCacheStats();
+
+    expect(ids(unreadLetters(project, WORK, 's-03', { map }))).toEqual(['m-01', 'm-02', 'm-03']);
+    expect(unreadCount(project, WORK, 's-03', { map })).toEqual({ total: 3, byRoom: { '': 1, 'r-01': 2 } });
+    expect(unreadCount(project, WORK, HUMAN, { map })).toEqual({ total: 4, byRoom: { 'r-01': 3, '': 1 } });
+    expect(mapCacheStats()).toEqual(before);
+
+    // Правила идут по карте вызывающего: письмо, отмеченное только в ней, уже не непрочитанное.
+    (map.messages[0] as Message).readBy['s-03'] = T1;
+    expect(ids(unreadLetters(project, WORK, 's-03', { map }))).toEqual(['m-02', 'm-03']);
+    expect(ids(unreadLetters(project, WORK, 's-03'))).toEqual(['m-01', 'm-02', 'm-03']);
+
+    // Базы читатель не касается: работы с таким номером в ней нет, а ответ есть; без карты вызова — отказ.
+    expect(unreadCount(project, 'w-9999', 's-03', { map }).total).toBe(2);
+    expect(() => unreadCount(project, 'w-9999', 's-03')).toThrow(WorkNotFoundError);
   });
 
   it('channelStats: число писем и номер новейшего по каналам', async () => {
