@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedCard } from '@parley/core';
 import type { ConsentCard } from '@parley/protocol';
 import type { IslandApi } from '../../shared/island.js';
+import * as QuestionFormModule from './QuestionForm.js';
 import { S } from '../../shared/strings.js';
 import type { IslandModel } from './model.js';
 import { useIslandReplies } from './replies.js';
@@ -226,22 +227,23 @@ describe('вид острова', () => {
     expect(props.onDecide).toHaveBeenCalledWith('k\u0000c-1', { kind: 'permission', behavior: 'allow', always: true });
   });
 
-  it('простой вопрос — кнопки вариантов, ответ по тексту вопроса', () => {
+  it('вопрос выбирает вариант, но отправляется только явным Submit', () => {
     const props = view({ items: [questionItem(['Postgres', 'SQLite'])] });
-    const buttons = screen.getAllByTestId('island-option');
-    expect(buttons.map((button) => button.textContent)).toEqual(['Postgres', 'SQLite']);
-    fireEvent.click(buttons[1] as HTMLElement);
+    fireEvent.click(screen.getByRole('radio', { name: 'SQLite' }));
+    expect(props.onDecide).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
     expect(props.onDecide).toHaveBeenCalledWith('k\u0000c-3', { kind: 'question', answers: { 'Which DB?': 'SQLite' } });
   });
 
-  it('варианты с одинаковой или пустой подписью — по кнопке на каждый, без предупреждения React о ключах', () => {
+  it('дубликаты и пустые подписи дают объяснение и безопасный переход', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const props = view({ items: [questionItem(['Same', 'Same', '', ''])] });
-      const buttons = screen.getAllByTestId('island-option');
-      expect(buttons.map((button) => button.textContent)).toEqual(['Same', 'Same', '', '']);
-      fireEvent.click(buttons[1] as HTMLElement);
-      expect(props.onDecide).toHaveBeenCalledWith('k\u0000c-3', { kind: 'question', answers: { 'Which DB?': 'Same' } });
+      expect(screen.queryByRole('button', { name: 'Submit' })).toBeNull();
+      expect(screen.getByText('Open this question in Parley to answer it.')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Open in Parley' }));
+      expect(props.onDecide).not.toHaveBeenCalled();
+      expect(props.api.open).toHaveBeenCalledWith({ kind: 'session', ref: REF, cardId: 'c-3' });
       expect(errorSpy).not.toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();
@@ -580,7 +582,7 @@ describe('размеры текста', () => {
     }
     cleanup();
     view({ items: [questionItem(['Postgres'])] });
-    expect(screen.getByTestId('island-option').className).toContain('h-9');
+    expect(screen.getByRole('button', { name: 'Submit' }).className).toContain('h-9');
     cleanup();
     view({ items: [permissionItem({ inWindow: false })] });
     expect(screen.getByTestId('island-open').className).toContain('h-9');
@@ -589,6 +591,73 @@ describe('размеры текста', () => {
 });
 
 describe('пауза кнопок решения после показа запроса', () => {
+  it('late controlled draft callback from a previous selected identity cannot overwrite the current draft', () => {
+    const spy = vi.spyOn(QuestionFormModule, 'QuestionForm');
+    try {
+      const a = questionItem(['Postgres', 'SQLite']);
+      const b = questionItem(['Postgres', 'SQLite']); b.key = 'other\u0000c-3'; b.ref = { ...REF, projectPath: '/other' };
+      const props = viewProps({ items: [a, b] });
+      const root = render(<IslandView {...props} />);
+      fireEvent.click(screen.getByRole('radio', { name: 'Postgres' }));
+      const old = spy.mock.calls.at(-1)![0].onDraftChange;
+      root.rerender(<IslandView {...props} index={1} />);
+      act(() => old({ step: 0, picked: { 0: ['SQLite'] }, otherOn: {}, otherText: {} }));
+      expect((screen.getByRole('radio', { name: 'SQLite' }) as HTMLInputElement).checked).toBe(false);
+      root.rerender(<IslandView {...props} index={0} />);
+      expect((screen.getByRole('radio', { name: 'Postgres' }) as HTMLInputElement).checked).toBe(false);
+      act(() => old({ step: 0, picked: { 0: ['SQLite'] }, otherOn: {}, otherText: {} }));
+      expect((screen.getByRole('radio', { name: 'SQLite' }) as HTMLInputElement).checked).toBe(false);
+    } finally { spy.mockRestore(); }
+  });
+
+  it.each(['Enter', ' '])('question reopen re-arms Submit and restores only container focus before native %s', (key) => {
+    const props = viewProps({ items: [questionItem(['Postgres'])], requestKeyboard: true });
+    const root = render(<IslandView {...props} />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Postgres' })); arm();
+    const first = screen.getByRole('button', { name: 'Submit' }) as HTMLButtonElement;
+    act(() => first.focus());
+    root.rerender(<IslandView {...props} retracted />);
+    root.rerender(<IslandView {...props} showId={props.showId + 1} />);
+    const current = screen.getByRole('button', { name: 'Submit' }) as HTMLButtonElement;
+    expect(document.activeElement).toBe(screen.getByTestId('island-card'));
+    expect(current.disabled).toBe(true); arm(); expect(current.disabled).toBe(false);
+    fireEvent.keyDown(document.activeElement!, { key });
+    expect(props.onDecide).not.toHaveBeenCalled();
+    act(() => current.focus());
+    const allowed = fireEvent.keyDown(current, { key }); fireEvent.keyUp(current, { key });
+    if (allowed && document.activeElement === current && !current.disabled) fireEvent.click(current, { detail: 0 });
+    expect(props.onDecide).toHaveBeenCalledTimes(1);
+  });
+
+  it('question Submit mouse click does not take keyboard and unowned Enter cannot repeat it', () => {
+    const props = view({ items: [questionItem(['Postgres'])], requestKeyboard: false });
+    fireEvent.click(screen.getByRole('radio', { name: 'Postgres' }));
+    const submit = screen.getByRole('button', { name: 'Submit' }) as HTMLButtonElement;
+    fireEvent(submit, new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+    act(() => submit.focus());
+    fireEvent.click(submit, { detail: 1 });
+    expect(props.onTakeRequestKeyboard).not.toHaveBeenCalled();
+    expect(props.onDecide).toHaveBeenCalledTimes(1);
+    const allowed = fireEvent.keyDown(submit, { key: 'Enter' });
+    fireEvent.keyUp(submit, { key: 'Enter' });
+    if (allowed && document.activeElement === submit && !submit.disabled) fireEvent.click(submit, { detail: 0 });
+    expect(props.onDecide).toHaveBeenCalledTimes(1);
+  });
+
+  it('question body fits remaining frame and editing/selection/scroll never start dragging', () => {
+    const props = view({ items: [questionItem(['Postgres'])], config: { ...viewProps().config, topInset: 80 } });
+    const card = screen.getByTestId('island-card');
+    expect(card.style.maxHeight).toBe('calc(100vh - 130px)');
+    const body = screen.getByTestId('island-question-body');
+    expect(body.className).toContain('overflow-y-auto');
+    const pointer = (type: string, screenX: number, screenY: number): MouseEvent => new MouseEvent(type, { bubbles: true, screenX, screenY, buttons: 1 });
+    fireEvent(body, pointer('pointerdown', 10, 10));
+    fireEvent(body, pointer('pointermove', 50, 50));
+    fireEvent(body, pointer('pointerup', 50, 50));
+    fireEvent.scroll(body);
+    expect(props.api.dragStart).not.toHaveBeenCalled();
+    expect(props.onHide).not.toHaveBeenCalled();
+  });
   it.each(['Enter', ' '])('same cardId/fingerprint: rearm и новый явный фокус перед native %j', (key) => {
     const first = permissionItem({ fingerprint: 'first' });
     const props = viewProps({ items: [first], requestKeyboard: true, onTakeRequestKeyboard: vi.fn() });
@@ -652,9 +721,10 @@ describe('пауза кнопок решения после показа зап�
     expect((screen.getByTestId('island-deny') as HTMLButtonElement).disabled).toBe(true);
     cleanup();
     view({ items: [questionItem(['Postgres', 'SQLite'])] }, false);
-    expect(screen.getAllByTestId('island-option').every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+    fireEvent.click(screen.getByRole('radio', { name: 'Postgres' }));
+    expect((screen.getByRole('button', { name: 'Submit' }) as HTMLButtonElement).disabled).toBe(true);
     arm();
-    expect(screen.getAllByTestId('island-option').every((button) => !(button as HTMLButtonElement).disabled)).toBe(true);
+    expect((screen.getByRole('button', { name: 'Submit' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('«Open in Parley» и стрелки не защищены паузой', () => {

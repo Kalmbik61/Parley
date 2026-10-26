@@ -2140,6 +2140,11 @@ export const S = {
         .join(' · '),
     waitingInTerminal: 'waiting in terminal',
     codexTerminalAction: 'Codex needs your attention in the terminal',
+    question: {
+      back: 'Back',
+      invalidQuestion: 'Open this question in Parley to answer it.',
+      answerTooLong: (limit: number): string => `Each answer must be at most ${limit} characters.`,
+    },
     roomBusy: (count: number): string => `${count} in work`,
     roomDone: 'done',
     clearDone: 'Clear',

@@ -18,7 +18,8 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FeedCard } from '@parley/core';
+import type { FeedCard, FeedQuestionCard } from '@parley/core';
+import { encodeIpcError } from '../../shared/ipc-error.js';
 import { refKey, type ConsentCard } from '@parley/protocol';
 import type { IslandApi, IslandBridge, IslandConfig } from '../../shared/island.js';
 import { useActivityStore } from '../store/activity.js';
@@ -1118,6 +1119,144 @@ describe('перепроверка выбранного запроса T1a', () 
     await act(async () => { resolve({ items: [], revision: 2, mode: null, decisions: 'window' }); });
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
     expect(snapshot).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('QuestionForm — настоящая проводка острова', () => {
+  const card = (): FeedQuestionCard => ({
+    id: 'q-1', cardId: 'q-1', at: '2026-10-12T10:00:00.000Z', kind: 'question', state: 'pending',
+    toolUseId: null, toolName: 'AskUserQuestion', toolInput: {}, notified: false,
+    questions: [
+      { question: 'Which DB?', header: null, multiSelect: false, options: [{ label: 'Postgres', description: null }, { label: 'SQLite', description: null }] },
+      { question: 'Which checks?', header: null, multiSelect: true, options: [{ label: 'Lint', description: null }, { label: 'Test', description: null }] },
+      { question: 'Anything else?', header: null, multiSelect: false, options: [] },
+    ],
+  });
+  const settle = async (): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); };
+  const next = (): void => { fireEvent.click(screen.getByRole('button', { name: 'Next' })); };
+  const other = (): HTMLInputElement => screen.getByRole('textbox', { name: 'Your answer' });
+  const submit = (): HTMLButtonElement => screen.getByRole('button', { name: 'Submit' });
+  const fill = (): void => {
+    fireEvent.click(screen.getByRole('radio', { name: 'Postgres' })); next();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Lint' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Test' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Other' }));
+    fireEvent.change(other(), { target: { value: '  Extra check  ' } }); next();
+    fireEvent.click(screen.getByRole('radio', { name: 'Other' }));
+    fireEvent.change(other(), { target: { value: '  Custom answer  ' } });
+  };
+  async function mount(decisions: 'window' | 'terminal' = 'window') {
+    const state = setup({ assistant: ASSISTANT_ON });
+    let current: FeedQuestionCard | null = card();
+    state.fake.setHandler('feed.snapshot', ({ ref: target }) => ({ items: target.sessionId === 's-01' ? current === null ? [] : [current] : CARDS[target.sessionId] ?? [], revision: 1, mode: null, decisions }));
+    const root = render(<IslandApp bridge={state.bridge} />);
+    await settle(); state.blocked('s-01'); await settle();
+    return { ...state, root, update: async (value: FeedQuestionCard | null) => { current = value; act(() => useIslandRequests.getState().revalidate()); await settle(); } };
+  }
+  beforeEach(() => vi.useFakeTimers());
+
+  it('single/multi/Other serialize exactly once; typing, IME and navigation do not decide', async () => {
+    const { fake, island } = await mount();
+    fake.setHandler('feed.decide', () => ({ applied: false, state: 'pending' }));
+    fill();
+    act(() => other().focus());
+    fireEvent.compositionStart(other());
+    fireEvent.keyDown(other(), { key: 'Enter', isComposing: true });
+    fireEvent.compositionEnd(other());
+    fireEvent.keyDown(other(), { key: 'Enter' });
+    fireEvent.keyUp(other(), { key: 'Enter' });
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toEqual([]);
+    expect(island.keyboard).toHaveBeenCalledWith(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    fireEvent.click(submit()); await settle();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toEqual([{ method: 'feed.decide', params: {
+      ref: ref('s-01'), cardId: 'q-1', decision: { kind: 'question', answers: { 'Which DB?': 'Postgres', 'Which checks?': 'Lint, Test, Extra check', 'Anything else?': 'Custom answer' } },
+    } }]);
+    expect(other().value).toBe('  Custom answer  ');
+  });
+
+  it.each(['collapse', 'assistant', 'consent'])('%s preserves choices/Other/page while rearming on reopen', async (mode) => {
+    const state = await mount(); fill(); act(() => other().focus());
+    if (mode === 'collapse') { tuck(state.hover); expand(); }
+    if (mode === 'assistant') { state.assistantOpen({ listen: false }); state.assistantBlur(); }
+    if (mode === 'consent') {
+      act(() => useConsentsStore.getState().replace([{ id: 'retain', kind: 'folder-trust', folder: PROJECT, projectPath: PROJECT, requestedBy: { source: 'agent', sessionId: 's-01', label: 'S01' }, at: '', state: 'pending' }]));
+      act(() => useConsentsStore.getState().replace([]));
+    }
+    expect(screen.getByText('Question 3 of 3')).toBeTruthy();
+    expect(other().value).toBe('  Custom answer  ');
+    expect(submit().disabled).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(499); });
+    expect(submit().disabled).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(submit().disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect((screen.getByRole('checkbox', { name: 'Lint' }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('checkbox', { name: 'Test' }) as HTMLInputElement).checked).toBe(true);
+    expect(other().value).toBe('  Extra check  ');
+  });
+
+  it('new pending preserves the active draft; A -> B -> A really clears it', async () => {
+    const { blocked } = await mount(); fill(); act(() => other().focus());
+    blocked('s-02'); await settle();
+    expect(other().value).toBe('  Custom answer  ');
+    fireEvent.click(screen.getByRole('button', { name: 'Next request' }));
+    expect(screen.getByTestId('island-allow')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Previous request' }));
+    expect(screen.getByText('Question 1 of 3')).toBeTruthy();
+    expect((screen.getByRole('radio', { name: 'Postgres' }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it.each(['card', 'questions', 'ref', 'resolved', 'disconnect'])('%s change resets the retained draft and page', async (mode) => {
+    const state = await mount(); fill();
+    if (mode === 'card') await state.update({ ...card(), id: 'q-2', cardId: 'q-2' });
+    if (mode === 'questions') await state.update({ ...card(), questions: card().questions.map((question, at) => at === 0 ? { ...question, header: 'Changed' } : question) });
+    if (mode === 'ref') {
+      const changed = { ...ref('s-01'), projectPath: '/other' };
+      act(() => {
+        useWorksStore.setState({ entries: ENTRIES.map((entry) => ({ ...entry, projectPath: changed.projectPath })) });
+        useActivityStore.setState({ byRef: { [refKey(changed)]: makeActivity(changed, 'blocked') } });
+      });
+      await settle();
+    }
+    if (mode === 'resolved') { await state.update(null); await state.update(card()); state.blocked('s-01'); await settle(); }
+    if (mode === 'disconnect') { state.disconnect(); state.reconnect(); await settle(); }
+    expect(screen.getByText('Question 1 of 3')).toBeTruthy();
+    expect((screen.getByRole('radio', { name: 'Postgres' }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('terminal-only shows question text and a terminal target without a local decision', async () => {
+    const { island, fake } = await mount('terminal');
+    expect(screen.getByText('Which DB?')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Submit' })).toBeNull();
+    fireEvent.click(screen.getByTestId('island-open'));
+    expect(island.open).toHaveBeenCalledWith({ kind: 'session', ref: ref('s-01') });
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toEqual([]);
+  });
+
+  it('failed decide retains draft and the store blocks duplicate send', async () => {
+    const { fake } = await mount(); fill();
+    let resolve!: (result: { applied: false; state: 'pending' }) => void;
+    fake.setHandler('feed.decide', () => new Promise((done) => { resolve = done; }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    fireEvent.click(submit()); fireEvent.click(submit());
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(1);
+    await act(async () => resolve({ applied: false, state: 'pending' }));
+    expect(other().value).toBe('  Custom answer  ');
+    expect(submit().disabled).toBe(false);
+  });
+
+  it.each(['elsewhere', 'not_found'])('%s clears the form without reopening a settled question', async (mode) => {
+    const { fake } = await mount(); fill();
+    fake.setHandler('feed.decide', () => {
+      if (mode === 'not_found') throw encodeIpcError({ code: 'not_found', message: 'gone' });
+      return { applied: false, state: 'answered' } as never;
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    fireEvent.click(submit()); await settle();
+    expect(screen.getByText('Answered elsewhere')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Submit' })).toBeNull();
+    expect(screen.queryByRole('textbox')).toBeNull();
   });
 });
 

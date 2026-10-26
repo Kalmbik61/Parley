@@ -34,6 +34,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent, type Ref } from 'react';
 import { ChevronUp } from 'lucide-react';
 import type { FeedDecision } from '@parley/core';
+import { refKey } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
 import type { FocusTarget } from '../../shared/bridge.js';
 import type { IslandApi, IslandConfig } from '../../shared/island.js';
@@ -49,7 +50,7 @@ import { useShapeDrag } from './drag.js';
 import type { IslandModel, IslandRow } from './model.js';
 import { useIslandReplies } from './replies.js';
 import type { IslandRequest } from './requests.js';
-import { simpleChoices } from './simple-question.js';
+import { EMPTY_QUESTION_FORM_DRAFT, QuestionForm, type QuestionFormDraft } from './QuestionForm.js';
 import { Swarm } from './swarm/Swarm.js';
 import { swarmSpecFor } from './swarm/spec.js';
 
@@ -60,7 +61,7 @@ export { CARD_ARM_MS };
  * Что под видом помощника должно остаться в кадре: ряд стрелки ⌃ (`pt-1.5` + `h-5` + `pb-2` = 34 px) и запас на тень
  * `shadow-lg` выдвинутой формы. Вид не выше кадра за вычетом чёлки и этого запаса — длинный ответ прокручивается внутри.
  */
-const ASSISTANT_BOTTOM_RESERVE_PX = 34 + 16;
+const BOTTOM_RESERVE_PX = 34 + 16;
 
 export interface IslandAssistantProps {
   view: Omit<AssistantViewProps, 'maxHeight'>;
@@ -258,19 +259,6 @@ function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: b
       </>
     );
   }
-  const simple = simpleChoices(card);
-  if (simple !== null) {
-    return (
-      <>
-        {/* Подписи могут повторяться или быть пустыми — ключ с номером. */}
-        {simple.options.map((label, at) => (
-          <Button key={`${at}:${label}`} data-testid="island-option" size="default" variant="outline" className="cursor-pointer text-sm" disabled={disabled} onClick={() => onDecide(item.key, { kind: 'question', answers: { [simple.question]: label } })}>
-            {label}
-          </Button>
-        ))}
-      </>
-    );
-  }
   return openButton;
 }
 
@@ -310,7 +298,7 @@ function ConsentRequest({ consent, showId, owned, takeKeyboard }: { consent: Isl
   return <div {...focus} data-testid="island-consent-request"><ConsentView key={identity} {...consent} /></div>;
 }
 
-function Card(props: IslandViewProps): JSX.Element | null {
+function Card(props: IslandViewProps & { questionDraft: QuestionFormDraft; onQuestionDraft(next: QuestionFormDraft): void; onQuestionSubmit(decision: Extract<FeedDecision, { kind: 'question' }>): void }): JSX.Element | null {
   const { items, index, showId, labels, api, onSelect, onDecide } = props;
   const item = items[index] ?? items[0];
   // Взведённая пара «показ + карточка» ровно одна: любая смена пары (другая карточка, в том числе виденная раньше,
@@ -335,9 +323,10 @@ function Card(props: IslandViewProps): JSX.Element | null {
       key={showKey}
       {...focus}
       data-testid="island-card"
-      className="island-reveal flex w-[440px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm"
+      className="island-reveal flex min-h-0 w-[440px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm"
+      style={item.card?.kind === 'question' ? { maxHeight: `calc(100vh - ${props.config.topInset + BOTTOM_RESERVE_PX}px)` } : undefined}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         <span className="min-w-0 flex-1 truncate">
           {label === undefined ? null : `${label.session} · ${label.work}`}
           {label === undefined ? null : <span className="text-[13px] text-muted-foreground"> · {label.project}</span>}
@@ -354,20 +343,56 @@ function Card(props: IslandViewProps): JSX.Element | null {
           </span>
         ) : null}
       </div>
-      <div title={item.summary} className="truncate font-mono text-sm">
+      <div title={item.summary} className="shrink-0 truncate font-mono text-sm">
         {item.summary}
       </div>
       {item.note === 'elsewhere' ? <div className="text-muted-foreground">{S.island.answeredElsewhere}</div> : null}
       {item.note === 'failed' ? <div className="text-[var(--status-warning-text)]">{S.island.failed}</div> : null}
-      <div className="flex flex-wrap gap-2">
-        <Actions item={item} armed={armed} api={api} onDecide={onDecide} />
-      </div>
+      {item.card?.kind === 'question' && item.note !== 'elsewhere' ? (
+        item.inWindow && item.card.state === 'pending' ? (
+          <QuestionForm
+            card={item.card}
+            draft={props.questionDraft}
+            onDraftChange={props.onQuestionDraft}
+            disabled={!armed || item.deciding}
+            onTakeKeyboard={props.onTakeRequestKeyboard}
+            onSubmit={props.onQuestionSubmit}
+            onOpenInParley={() => api.open({ kind: 'session', ref: item.ref, cardId: item.card!.cardId })}
+            labels={{ ...S.chat.card, ...S.island.question, openInParley: S.island.openInParley }}
+          />
+        ) : (
+          <>
+            <div data-no-drag className="min-h-0 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere]">
+              {item.card.questions.map((question, at) => <div key={at}><p>{question.question}</p>{question.options.map((option, index) => <p key={index}>{option.label}{option.description === null ? '' : ` — ${option.description}`}</p>)}</div>)}
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2"><Actions item={item} armed={armed} api={api} onDecide={onDecide} /></div>
+          </>
+        )
+      ) : item.note === 'elsewhere' && item.card?.kind === 'question' ? null : (
+        <div className="flex flex-wrap gap-2"><Actions item={item} armed={armed} api={api} onDecide={onDecide} /></div>
+      )}
     </div>
   );
 }
 
 export function IslandView(props: IslandViewProps): JSX.Element {
   const { model, items, listOpen, config, retracted, doneCount, hovered, shapeRef, api, onDragStart, onDragEnd, onHide, assistant, consent, showId } = props;
+  // Один draft выбранного вопроса живёт выше условного Card. showId не входит в identity: уборка и перекрытие не стирают ввод.
+  const selected = items[props.index] ?? items[0];
+  const question = selected?.inWindow && selected.note !== 'elsewhere' && selected.card?.kind === 'question' && selected.card.state === 'pending' ? selected.card : null;
+  const identity = question === null ? null : JSON.stringify([refKey(selected!.ref), question.cardId, question.questions]);
+  const generation = useRef({ identity, epoch: 0 });
+  if (generation.current.identity !== identity) generation.current = { identity, epoch: generation.current.epoch + 1 };
+  const epoch = generation.current.epoch;
+  const [questionState, setQuestionState] = useState<{ identity: string | null; draft: QuestionFormDraft }>(() => ({ identity, draft: EMPTY_QUESTION_FORM_DRAFT }));
+  if (questionState.identity !== identity) setQuestionState({ identity, draft: EMPTY_QUESTION_FORM_DRAFT });
+  const questionDraft = questionState.identity === identity ? questionState.draft : EMPTY_QUESTION_FORM_DRAFT;
+  const onQuestionDraft = (draft: QuestionFormDraft): void => {
+    setQuestionState((current) => generation.current.epoch === epoch && identity !== null && current.identity === identity ? { identity, draft } : current);
+  };
+  const onQuestionSubmit = (decision: Extract<FeedDecision, { kind: 'question' }>): void => {
+    if (generation.current.epoch === epoch && identity !== null && selected !== undefined) props.onDecide(selected.key, decision);
+  };
   const drag = useShapeDrag(api, { onDragStart, onDragEnd, onSwipeUp: onHide });
   const contentRef = useRef<HTMLDivElement>(null);
   /** Размер содержимого в пикселях; до первого замера `null` — у формы нет явных `width`/`height`. */
@@ -415,11 +440,11 @@ export function IslandView(props: IslandViewProps): JSX.Element {
         ) : (
           <>
             {assistantBig ? (
-              <AssistantView {...assistant.view} maxHeight={`calc(100vh - ${config.topInset + ASSISTANT_BOTTOM_RESERVE_PX}px)`} />
+              <AssistantView {...assistant.view} maxHeight={`calc(100vh - ${config.topInset + BOTTOM_RESERVE_PX}px)`} />
             ) : consent !== null ? (
               <ConsentRequest consent={consent} showId={showId} owned={props.requestKeyboard} takeKeyboard={props.onTakeRequestKeyboard} />
             ) : items.length > 0 ? (
-              <Card {...props} />
+              <Card {...props} questionDraft={questionDraft} onQuestionDraft={onQuestionDraft} onQuestionSubmit={onQuestionSubmit} />
             ) : (
               <>
                 <Pill {...props} />
