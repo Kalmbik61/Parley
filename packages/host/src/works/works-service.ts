@@ -15,6 +15,7 @@ import {
   compactWorkMap,
   gitBranch,
   isDatabaseBusy,
+  mapLetterReader,
   MapLockTimeoutError,
   processStartedAt,
   readMap,
@@ -78,6 +79,12 @@ const WINDOW_SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024;
 /** Тексты в запасном (сжатом) снимке: хвост писем не берётся вовсе, а длинные поля короче. */
 const WINDOW_FALLBACK_TEXT_BYTES = 4 * 1024;
 
+/** Сжатая карта одной работы для окна и её размер в кадре (`windowPart`). */
+interface WindowPart {
+  entry: WorksSnapshot['entries'][number];
+  bytes: number;
+}
+
 const isCompactClient = (client: Client): boolean => client.features.has(COMPACT_WORKS_FEATURE);
 const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8');
 
@@ -113,6 +120,12 @@ export function createWorksService(
   let ownLease: HostLease | null = null;
   /** Номер рассылки снимка; растёт в конце каждого `refresh`, перед рассылкой. */
   let revision = 0;
+  /**
+   * Снимок каждой работы для окна по версии её карты и бюджету писем (спека хранилища 6.2, план 4, задача 5): запись в одну
+   * работу не заставляет сжимать остальные. Ключ — работа; в записи версия и по снимку на каждый бюджет (обычный,
+   * архивный, запасной).
+   */
+  const windowParts = new Map<string, { version: number; parts: Map<string, WindowPart> }>();
   /** Снимки для клиентов считаются один раз на номер: `works.list` и рассылка делят одну работу. */
   let windowCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
   let legacyCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
@@ -126,32 +139,64 @@ export function createWorksService(
   });
 
   /**
+   * Сжатая карта одной работы для окна и её размер в кадре. Берётся из `windowParts`, пока не сменилась версия карты
+   * (`WorkEntry.version`: та же версия — та же карта) и бюджет; у работы без версии кэша нет. Письма читаются из самой
+   * карты работы: она уже у сервиса, и сборка снимка в базу не ходит.
+   */
+  function windowPart(work: WorkEntry, messageBytes: number, textMax?: number): WindowPart {
+    const key = workKey(work.projectPath, work.map.work.id);
+    const variant = `${messageBytes}:${textMax ?? ''}`;
+    const slot = windowParts.get(key);
+    const version = work.version;
+    if (version !== undefined && slot?.version === version) {
+      const cached = slot.parts.get(variant);
+      if (cached !== undefined) return cached;
+    }
+    const entry = {
+      projectPath: work.projectPath,
+      map: compactWorkMap(
+        work.map,
+        { messageBytes, ...(textMax === undefined ? {} : { textMax }) },
+        mapLetterReader(work.map),
+      ),
+    };
+    const part = { entry, bytes: jsonBytes(entry) };
+    if (version !== undefined) {
+      if (slot?.version === version) slot.parts.set(variant, part);
+      else windowParts.set(key, { version, parts: new Map([[variant, part]]) });
+    }
+    return part;
+  }
+
+  /**
    * Снимок для окна: каждая работа сжата `compactWorkMap`, бюджет писем делится между активными работами, архивные
    * идут без писем. Размер проверяется до отправки: не влез — запасной вариант без писем и с короткими текстами,
-   * не влез и он — `null` (кадр, который декодер окна разорвёт, не уходит никогда).
+   * не влез и он — `null` (кадр, который декодер окна разорвёт, не уходит никогда). Размер кадра складывается из
+   * размеров частей: каркас без работ, сами работы и запятые между ними — столько же, сколько дал бы `JSON.stringify`
+   * всего снимка, но без повторной сериализации работ, которые не менялись.
    */
   function buildWindow(): WorksSnapshot | null {
+    for (const key of windowParts.keys()) if (!entries.has(key)) windowParts.delete(key);
     const all = Array.from(entries.values());
     const live = all.filter((entry) => entry.map.work.status !== 'archived').length;
     const share = Math.min(
       WINDOW_MESSAGES_PER_WORK_BYTES,
       Math.max(WINDOW_MESSAGES_MIN_BYTES, Math.floor(WINDOW_MESSAGES_TOTAL_BYTES / Math.max(live, 1))),
     );
-    const build = (messagesFor: (archived: boolean) => number, textMax?: number): WorksSnapshot => ({
-      entries: all.map((entry) => ({
-        projectPath: entry.projectPath,
-        map: compactWorkMap(entry.map, {
-          messageBytes: messagesFor(entry.map.work.status === 'archived'),
-          ...(textMax === undefined ? {} : { textMax }),
-        }),
-      })),
-      branches: Object.fromEntries(branches),
-      revision,
-    });
-    const normal = build((archived) => (archived ? 0 : share));
-    if (jsonBytes(normal) <= WINDOW_SNAPSHOT_MAX_BYTES) return normal;
-    const fallback = build(() => 0, WINDOW_FALLBACK_TEXT_BYTES);
-    return jsonBytes(fallback) <= WINDOW_SNAPSHOT_MAX_BYTES ? fallback : null;
+    const build = (messagesFor: (archived: boolean) => number, textMax?: number): WorksSnapshot | null => {
+      const parts = all.map((work) => windowPart(work, messagesFor(work.map.work.status === 'archived'), textMax));
+      const snapshot: WorksSnapshot = {
+        entries: parts.map((part) => part.entry),
+        branches: Object.fromEntries(branches),
+        revision,
+      };
+      const bytes =
+        jsonBytes({ ...snapshot, entries: [] }) +
+        parts.reduce((sum, part) => sum + part.bytes, 0) +
+        Math.max(parts.length - 1, 0);
+      return bytes <= WINDOW_SNAPSHOT_MAX_BYTES ? snapshot : null;
+    };
+    return build((archived) => (archived ? 0 : share)) ?? build(() => 0, WINDOW_FALLBACK_TEXT_BYTES);
   }
 
   const windowSnapshot = (): WorksSnapshot | null => {
@@ -273,10 +318,15 @@ export function createWorksService(
         // наблюдателя мог быть прочитан до записи прошлой сверки (sleeping уже на диске,
         // мёртвых больше нет), и без перечитывания снимок откатился бы к active мёртвой
         // сессии навсегда (fix-tests2, host-disconnect:127).
+        // Версия — до карты и после неё: совпали, значит запись между ними не вклинилась и номер точен
+        // (по нему снимок окна узнаёт, что работа не менялась); не совпали — работа считается новой.
+        const before = workVersion(work.projectPath, work.map.work.id);
         const fresh = await readMap(work.projectPath, work.map.work.id);
+        const exact = before !== undefined && workVersion(work.projectPath, work.map.work.id) === before;
         entries.set(workKey(work.projectPath, work.map.work.id), {
           projectPath: work.projectPath,
           map: fresh,
+          ...(exact ? { version: before } : {}),
         });
       } catch (error) {
         if (error instanceof MapLockTimeoutError) {

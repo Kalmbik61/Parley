@@ -12,7 +12,7 @@ import { processStartedAt } from './work/liveness.js';
 import { closeWorkDb } from './work/db.js';
 import { migrateMapsToDb } from './work/migrate-to-db.js';
 import { addSession, nextWorkId, transitionSession } from './work/map.js';
-import { createWork, readMap, readStoredMap, readWorksIndex, updateMap, workPaths, worksIndexPath } from './work/store.js';
+import { createWork, parleyHome, readMap, readStoredMap, readWorksIndex, updateMap, workPaths, worksIndexPath } from './work/store.js';
 import type { WorkMap, WorkSession } from './work/types.js';
 
 const AT = new Date('2026-09-30T18:00:00.000Z');
@@ -141,6 +141,26 @@ describe('migrateHome — перенос ~/.harnas → ~/.parley (R6)', () => {
       schemaVersion: 1,
       migrated: [{ what: 'home', from: legacy(), to: current(), at: AT.toISOString() }],
     });
+  });
+
+  it('процесс, уже нашедший прежний дом, после переноса идёт в новый: запомненный ответ parleyHome сброшен', async () => {
+    const saved = { home: process.env['HOME'], parley: process.env['PARLEY_HOME'], harnas: process.env['HARNAS_HOME'] };
+    delete process.env['PARLEY_HOME'];
+    delete process.env['HARNAS_HOME'];
+    process.env['HOME'] = userHome;
+    try {
+      await seedLegacyHome();
+      expect(parleyHome()).toBe(legacy());
+
+      expect(await migrateHome({ env: {}, userHome, now })).toMatchObject({ status: 'moved' });
+
+      expect(parleyHome()).toBe(current());
+    } finally {
+      for (const [name, value] of [['HOME', saved.home], ['PARLEY_HOME', saved.parley], ['HARNAS_HOME', saved.harnas]] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 
   it('запись, которую хост оставил в прежнем доме (проекты переехали раньше дома), переезжает с ним и дополняется', async () => {

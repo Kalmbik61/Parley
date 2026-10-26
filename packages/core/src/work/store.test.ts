@@ -10,8 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { contextFile } from '../context-fill.js';
 import { closeWorkDb, WORK_DB_FILE, workDb } from './db.js';
 import { addMessage, addSession } from './map.js';
+import { isDirectorySync } from './state-dir.js';
 import type { Room, WorkMap } from './types.js';
 import {
+  applyMapUpdate,
   createWork,
   deleteSessionFiles,
   deleteWorkFiles,
@@ -117,6 +119,12 @@ afterEach(async () => {
   await Promise.all([home, project, other].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
+// `isDirectorySync` обёрнут шпионом, который по умолчанию зовёт настоящий: тест дома считает обращения к диску.
+vi.mock('./state-dir.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./state-dir.js')>();
+  return { ...actual, isDirectorySync: vi.fn(actual.isDirectorySync) };
+});
+
 const isDirectory = async (dir: string): Promise<boolean> => (await stat(dir)).isDirectory();
 
 const exists = async (file: string): Promise<boolean> => {
@@ -213,6 +221,53 @@ describe('parleyHome — выбор дома (R4)', () => {
     } finally {
       if (saved === undefined) delete process.env.HARNAS_HOME;
       else process.env.HARNAS_HOME = saved;
+    }
+  });
+
+  it('смена PARLEY_HOME и HARNAS_HOME между вызовами замечается: запомненный дом не залипает (спека хранилища 6.9)', () => {
+    const saved = process.env.HARNAS_HOME;
+    try {
+      process.env.PARLEY_HOME = '/первый';
+      expect(parleyHome()).toBe('/первый');
+      expect(parleyHome()).toBe('/первый');
+      process.env.PARLEY_HOME = '/второй';
+      expect(parleyHome()).toBe('/второй');
+      delete process.env.PARLEY_HOME;
+      process.env.HARNAS_HOME = '/прежний';
+      expect(parleyHome()).toBe('/прежний');
+      process.env.HARNAS_HOME = '/прежний-два';
+      expect(parleyHome()).toBe('/прежний-два');
+      process.env.PARLEY_HOME = '/снова-новый';
+      expect(parleyHome()).toBe('/снова-новый');
+    } finally {
+      if (saved === undefined) delete process.env.HARNAS_HOME;
+      else process.env.HARNAS_HOME = saved;
+    }
+  });
+
+  it('дом без переменных окружения ищется на диске один раз на снимок окружения; смена HOME — новый поиск', async () => {
+    const probe = vi.mocked(isDirectorySync);
+    const savedUserHome = process.env.HOME;
+    delete process.env.PARLEY_HOME;
+    delete process.env.HARNAS_HOME;
+    try {
+      // Такого HOME память ещё не видела (каталог создан этим тестом).
+      process.env.HOME = home;
+      probe.mockClear();
+      const first = parleyHome();
+      expect(first).toBe(path.join(home, '.parley'));
+      expect(parleyHome()).toBe(first);
+      expect(parleyHome()).toBe(first);
+      // Первый вызов смотрел `~/.parley` и `~/.harnas`, остальные — ни разу.
+      expect(probe).toHaveBeenCalledTimes(2);
+
+      // HOME сменился: найденное для прежнего дома не годится, у нового есть только `.harnas`.
+      await mkdir(path.join(other, '.harnas'));
+      process.env.HOME = other;
+      expect(parleyHome()).toBe(path.join(other, '.harnas'));
+    } finally {
+      if (savedUserHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedUserHome;
     }
   });
 
@@ -861,6 +916,191 @@ describe('updateMap', () => {
     expect(index.works.map((work) => work.id).sort()).toEqual(['w-0001', 'w-0002']);
     expect(index.works.map((work) => work.title).sort()).toEqual(['вторая', 'первая']);
   }, 60_000);
+});
+
+describe('кэш после записи: писавший процесс видит то же, что свежая загрузка (план 4, задача 5)', () => {
+  /** Правка, оставляющая в карте то, что JSON не переносит: ключ без значения и NaN. После записи они `null` или пропадают. */
+  const addJsonGhosts = (map: WorkMap): void => {
+    const session = map.sessions[0] as unknown as Record<string, unknown>;
+    session['ghost'] = undefined;
+    session['nan'] = Number.NaN;
+  };
+
+  /** Работа со всеми видами содержимого, которые мутаторы пишут руками: сессии с историей, комнаты, письма, незнакомое поле. */
+  const seedRichWork = async (): Promise<void> => {
+    await createWork(project, { title: 'Раскладка' });
+    await updateMap(project, 'w-0001', (map, letters) => {
+      addSession(map, { provider: 'claude', label: 'план', task: 'составить' });
+      addSession(map, { provider: 'codex', label: 'код', task: 'написать' });
+      map.rooms.push({
+        id: 'r-01',
+        title: 'бэкенд',
+        creator: 'human',
+        ownerId: null,
+        members: ['s-01', 's-02'],
+        createdAt: '2026-10-24T00:00:00.000Z',
+        lead: 's-01',
+        proposal: null,
+        archivedAt: null,
+      } as unknown as Room);
+      for (let n = 0; n < 5; n += 1) letters.add({ roomId: 'r-01', from: 's-01', to: ['s-02'], text: `письмо ${n}`, kind: 'note' });
+      (map as unknown as Record<string, unknown>)['future'] = { list: [1, 'x', null], nested: { a: true } };
+    });
+  };
+
+  it('после updateMap и после записи без копии readMap строго равен свежему разбору строк', async () => {
+    await seedRichWork();
+    expect(await readMap(project, 'w-0001')).toStrictEqual(readStoredMap(project, 'w-0001'));
+
+    await updateMap(project, 'w-0001', (map, letters) => {
+      map.work.goal = 'новая цель';
+      map.sessions[1]!.label = 'код-2';
+      letters.add({ roomId: null, from: 's-02', to: ['s-01'], text: 'прямое', kind: 'note' });
+    });
+    expect(await readMap(project, 'w-0001')).toStrictEqual(readStoredMap(project, 'w-0001'));
+
+    applyMapUpdate(project, 'w-0001', (map, letters) => {
+      map.work.goal = 'ещё цель';
+      letters.markRead('s-02', ['m-01', 'm-02'], '2026-10-24T01:00:00.000Z');
+      letters.add({ roomId: 'r-01', from: 's-02', to: ['s-01'], text: 'ответ', kind: 'note' });
+    });
+    const before = mapCacheStats();
+    const cached = await readMap(project, 'w-0001');
+    expect(mapCacheStats().misses).toBe(before.misses);
+    expect(cached).toStrictEqual(readStoredMap(project, 'w-0001'));
+    expect(cached.messages).toHaveLength(7);
+  });
+
+  it('запись письма без результата не разбирает строки карты заново: кэш берёт уже нормализованную карту', async () => {
+    await createWork(project, { title: 'Переписка' });
+    await updateMap(project, 'w-0001', (_map, letters) => {
+      for (let n = 0; n < 300; n += 1) letters.add({ roomId: null, from: 's-01', to: ['s-02'], text: `письмо ${n}`, kind: 'note' });
+    });
+    await readMap(project, 'w-0001');
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    const parse = vi.spyOn(JSON, 'parse');
+    try {
+      const before = mapCacheStats();
+      applyMapUpdate(project, 'w-0001', (_map, letters) => {
+        letters.add({ roomId: null, from: 's-01', to: ['s-02'], text: 'ещё одно', kind: 'note' });
+      });
+
+      expect(mapCacheStats().hits - before.hits).toBe(1);
+      // Прежняя сборка разбирала JSON каждой из 300 строк; теперь — ни одной, и копии карты тоже нет.
+      expect(parse.mock.calls.length).toBeLessThan(10);
+      expect(clone).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+      clone.mockRestore();
+    }
+    const after = mapCacheStats();
+    const cached = await readMap(project, 'w-0001');
+    expect(mapCacheStats().misses).toBe(after.misses);
+    expect(cached.messages).toHaveLength(301);
+    expect(cached).toStrictEqual(readStoredMap(project, 'w-0001'));
+  });
+
+  it('мутация оставила в карте ключ без значения и NaN: кэш не делает их своими, а берёт то, что дал бы разбор строк', async () => {
+    await seedRichWork();
+    await readMap(project, 'w-0001');
+
+    applyMapUpdate(project, 'w-0001', (map, letters) => {
+      addJsonGhosts(map);
+      letters.add({ roomId: null, from: 's-01', to: ['s-02'], text: 'письмо', kind: 'note' });
+    });
+
+    const cached = await readMap(project, 'w-0001');
+    expect('ghost' in cached.sessions[0]!).toBe(false);
+    expect((cached.sessions[0] as unknown as Record<string, unknown>)['nan']).toBeNull();
+    expect(cached).toStrictEqual(readStoredMap(project, 'w-0001'));
+  });
+
+  it('пустая запись, после которой в карте осталось то, что JSON не переносит, не кладёт такую карту в кэш', async () => {
+    await seedRichWork();
+    await readMap(project, 'w-0001');
+    const version = versionOf('w-0001');
+    const seen: number[] = [];
+    const stop = onMapWritten((event) => seen.push(event.version));
+
+    // Ключ без значения в JSON не виден: строки те же, запись пустая, но объект в кэше после мутации уже другой.
+    await updateMap(project, 'w-0001', (map) => {
+      (map.sessions[0] as unknown as Record<string, unknown>)['ghost'] = undefined;
+    });
+    stop();
+
+    expect(versionOf('w-0001')).toBe(version);
+    expect(seen).toEqual([]);
+    const cached = await readMap(project, 'w-0001');
+    expect('ghost' in cached.sessions[0]!).toBe(false);
+    expect(cached).toStrictEqual(readStoredMap(project, 'w-0001'));
+    // Кэш цел и работает: следующая запись идёт по нему и читается так же.
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.goal = 'дальше';
+    });
+    expect(await readMap(project, 'w-0001')).toStrictEqual(readStoredMap(project, 'w-0001'));
+  });
+
+  it('пустая запись без побочных следов оставляет карту в кэше: чтение после неё — попадание', async () => {
+    await seedRichWork();
+    await readMap(project, 'w-0001');
+    applyMapUpdate(project, 'w-0001', () => {});
+    const before = mapCacheStats();
+
+    await readMap(project, 'w-0001');
+    applyMapUpdate(project, 'w-0001', (_map, letters) => {
+      letters.markRead('s-02', ['m-99'], '2026-10-24T01:00:00.000Z');
+    });
+
+    expect(mapCacheStats().misses).toBe(before.misses);
+  });
+
+  it('два письма делят один массив to: после записи они разные объекты, и правка одного не задевает второе', async () => {
+    await createWork(project, { title: 'Переписка' });
+    const letter = (id: string, to: string[]): WorkMap['messages'][number] => ({
+      id,
+      roomId: null,
+      from: 's-01',
+      to,
+      text: id,
+      kind: 'note',
+      at: '2026-10-24T00:00:00.000Z',
+      readBy: {},
+    });
+    applyMapUpdate(project, 'w-0001', (map) => {
+      const shared = ['s-02'];
+      map.messages.push(letter('m-01', shared), letter('m-02', shared));
+      map.work.messageSeq = 2;
+    });
+    const before = entryRows();
+
+    applyMapUpdate(project, 'w-0001', (map) => {
+      map.messages[0]!.to.push('s-03');
+    });
+
+    const changed = [...entryRows()].filter(([key, value]) => before.get(key) !== value).map(([key]) => key);
+    expect(changed).toEqual(['message/m-01']);
+    const cached = await readMap(project, 'w-0001');
+    expect(cached.messages.map((message) => message.to)).toEqual([['s-02', 's-03'], ['s-02']]);
+    expect(cached).toStrictEqual(readStoredMap(project, 'w-0001'));
+  });
+
+  it('updateMap возвращает карту вызывающему, а кэш держит свою: правка результата кэш не портит, в том числе вглубь', async () => {
+    await seedRichWork();
+    await readMap(project, 'w-0001');
+
+    const updated = await updateMap(project, 'w-0001', (_map, letters) => {
+      letters.add({ roomId: null, from: 's-01', to: ['s-02'], text: 'ещё', kind: 'note' });
+    });
+    updated.sessions[0]!.label = 'испорчено снаружи';
+    updated.messages[0]!.to.push('s-77');
+    updated.messages.length = 0;
+
+    const cached = await readMap(project, 'w-0001');
+    expect(cached.sessions[0]!.label).toBe('план');
+    expect(cached.messages).toHaveLength(6);
+    expect(cached.messages[0]!.to).toEqual(['s-02']);
+    expect(cached).toStrictEqual(readStoredMap(project, 'w-0001'));
+  });
 });
 
 describe('busy_timeout соединения после записи', () => {

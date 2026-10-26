@@ -17,9 +17,9 @@ import path from 'node:path';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { CONTEXT_DIR, contextFile } from '../context-fill.js';
 import { LIMITS_DIR, limitsFile } from '../limits.js';
-import { envValue, HOME_DIR, LEGACY_HOME_DIR, type Env } from '../names.js';
+import { envValue, ENV_PREFIX, HOME_DIR, LEGACY_ENV_PREFIX, LEGACY_HOME_DIR, type Env } from '../names.js';
 import { BUSY_TIMEOUT_MS, WORK_DB_FILE, workDb } from './db.js';
-import { diffRows, mapToRows, rowIndex, rowsToMap, type StoredRow } from './map-rows.js';
+import { diffRows, isPlainJsonTree, mapToRows, rowIndex, rowsToMap, type StoredRow } from './map-rows.js';
 import { bumpWorkId, nextWorkId, normalizeMap } from './map.js';
 import { mapLetterTx, type LetterTx } from './letter-store.js';
 import { isAlive } from './pid-alive.js';
@@ -27,6 +27,9 @@ import { PRE_JOURNAL_STATE_IGNORE, PRE_MEMORY_STATE_IGNORE, PRE_RECIPES_STATE_IG
 import { resolveSharedProjectContext, sharedPathIgnored } from './project-context.js';
 import type { ProjectContextOptions, SharedProjectContext } from './project-context.js';
 import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js';
+
+/** Найденный дом и снимок входов, под которым он найден (`parleyHome`). */
+let homeMemo: { snapshot: string; home: string } | undefined;
 
 /**
  * Домашняя папка Parley (R4), первое подходящее:
@@ -36,6 +39,29 @@ import type { WorkIndexEntry, WorkMap, WorksIndex, WorkStatus } from './types.js
  * Пустая переменная — то же, что незаданная. `env` и `userHome` подменяет тест.
  */
 export function parleyHome(env: Env = process.env, userHome: string = homedir()): string {
+  // Дом процесса ищут на каждой записи, чтении версии и подготовке запроса, а без переменных это два `stat`: найденное
+  // помним, пока не сменились сами входы — `PARLEY_HOME`, `HARNAS_HOME`, домашний каталог и признак теста. Каталоги
+  // `~/.parley` и `~/.harnas` при этом смотрятся один раз на снимок: перенос дома (`migrateHome`) идёт, пока процессы
+  // его агентов не живы (спека хранилища 6.9, план 4, задача 5). Чужое окружение (`env` из теста) не запоминается.
+  if (env !== process.env) return checkedHome(env, userHome);
+  const snapshot = [
+    env[ENV_PREFIX + 'HOME'],
+    env[LEGACY_ENV_PREFIX + 'HOME'],
+    env['VITEST'],
+    userHome,
+  ].join('\u0000');
+  if (homeMemo?.snapshot === snapshot) return homeMemo.home;
+  const home = checkedHome(env, userHome);
+  homeMemo = { snapshot, home };
+  return home;
+}
+
+/** Забывает найденный дом: после переноса `~/.harnas` → `~/.parley` (`migrateHome`) прежний ответ уже неверен. */
+export function forgetParleyHome(): void {
+  homeMemo = undefined;
+}
+
+function checkedHome(env: Env, userHome: string): string {
   const resolved = resolveParleyHome(env, userHome);
   refuseRealHomeUnderTest(resolved);
   return resolved;
@@ -441,7 +467,7 @@ function loadStored(db: DatabaseSync, projectPath: string, workId: string): Stor
     if (head === undefined) return undefined;
     const rows = sql(
       db,
-      'SELECT kind, key, ord, json FROM entries WHERE project_path = ? AND work_id = ?',
+      'SELECT kind, key, ord, json FROM entries WHERE project_path = ? AND work_id = ? ORDER BY kind, ord',
     ).all(projectPath, workId) as unknown as StoredRow[];
     return {
       version: Number(head['version']),
@@ -459,11 +485,12 @@ function loadStored(db: DatabaseSync, projectPath: string, workId: string): Stor
  * устаревшую карту кэш не отдаст. Карты бывают в мегабайты, а читают их часто: неизменная работа загружается один раз.
  * `readMap` кладёт в кэш объект и выдаёт копии (`structuredClone`): вызывающие свободно меняют полученную карту, и общий
  * объект испортил бы её всем читателям сразу. `updateMap` копию не берёт: на попадании он забирает объект из кэша себе
- * (запись снимается), мутирует его сам, а после записи кладёт в кэш не этот объект, а свежую сборку записанных строк:
- * сборка достраивает умолчания и отвергает неверное, и писавший процесс не должен читать карту иначе, чем любой другой.
- * Брошенная мутация или отказ записи оставляют кэш без записи: следующее чтение загрузит базу, а не увидит наполовину
- * изменённый объект. Записей не больше `MAP_CACHE_LIMIT`, сверх лимита уходит самая давняя по вставке. Кэш принадлежит
- * дескриптору базы: сменился дом — кэш пуст.
+ * (запись снимается), мутирует его сам, а после записи кладёт в кэш карту, которую дал бы свежий разбор записанных
+ * строк, — писавший процесс не должен читать карту иначе, чем любой другой. Это либо свежая сборка строк (карту забирает
+ * вызывающий), либо сама записанная карта, если она чистое дерево JSON (`applyMapUpdate`). Брошенная мутация или отказ
+ * записи оставляют кэш без записи: следующее чтение загрузит базу, а не увидит наполовину изменённый объект. Записей не
+ * больше `MAP_CACHE_LIMIT`, сверх лимита уходит самая давняя по вставке. Кэш принадлежит дескриптору базы: сменился
+ * дом — кэш пуст.
  */
 export const MAP_CACHE_LIMIT = 32;
 
@@ -970,8 +997,8 @@ export interface UpdateMapOptions extends WriteOptions {
  * неудавшаяся запись не оставляет следов (спека хранилища 6.9, этап 2). На диск уходит только изменившееся: строки
  * списков с другим JSON или порядком (`diffRows`) и строка работы. Мутация, после которой `normalizeMap` не принимает
  * карту, откатывается целиком — раньше такая карта ложилась в файл и ломала следующее чтение. Битую карту в базе не трогаем.
- * Работы нет — `WorkNotFoundError`. После коммита в кэш кладётся свежая сборка записанных строк, подписчики
- * `onMapWritten` получают событие, а вызывающий — изменённую карту.
+ * Работы нет — `WorkNotFoundError`. После коммита в кэш кладётся карта, которую дал бы свежий разбор записанных строк
+ * (см. `applyMapUpdate`), подписчики `onMapWritten` получают событие, а вызывающий — изменённую карту.
  *
  * Мутатор получает вторым аргументом письма работы (`LetterTx`, спека хранилища 6.2); мутаторы с одним аргументом
  * работают как прежде. Мутация, которая ничего не изменила (ни строк карты, ни работы, ни писем), не пишет: версия
@@ -983,26 +1010,54 @@ export async function updateMap(
   mutate: (map: WorkMap, letters: LetterTx) => void,
   options: UpdateMapOptions = {},
 ): Promise<WorkMap> {
-  const update = applyMapUpdate(projectPath, workId, mutate, options);
+  // Карта уходит вызывающему, и он её меняет: кэшу нужен свой объект — свежая сборка строк, а не эта карта.
+  const update = applyMapUpdate(projectPath, workId, mutate, { ...options, keepResult: true });
   return update.shared ? structuredClone(update.map) : update.map;
 }
 
-/** Результат `applyMapUpdate`: карта и признак, что объект принадлежит кэшу (запись была пустой) и наружу идёт копией. */
+/** Результат `applyMapUpdate`: карта и признак, что объект принадлежит кэшу (запись была пустой или кэш взял саму карту) и наружу идёт копией. */
 export interface MapUpdate {
   map: WorkMap;
   shared: boolean;
 }
 
+/** Условия `applyMapUpdate` сверх `UpdateMapOptions`: публичные `updateMap` и `writeLetters` их не знают или задают сами. */
+interface ApplyMapOptions extends UpdateMapOptions {
+  /**
+   * `true` — карту результата оставит у себя вызывающий и будет её менять (`updateMap`): кэш тогда держит свежую сборку
+   * записанных строк, и объект вызывающего ему не принадлежит. `false` (по умолчанию) — результат не нужен или идёт
+   * копией (`writeLetters`): кэш берёт саму записанную карту, уже прошедшую `normalizeMap`, и строки заново не
+   * разбираются (спека хранилища 6.9, план 4, задача 5).
+   */
+  keepResult?: boolean;
+}
+
+/** Карту без потерь переживает JSON; ошибка обхода (слишком глубокое дерево) — как «нет». */
+const survivesJson = (map: WorkMap): boolean => {
+  try {
+    return isPlainJsonTree(map);
+  } catch {
+    return false;
+  }
+};
+
 /**
  * Синхронное тело `updateMap`: транзакция не отпускает цикл событий, поэтому им пользуются и вызывающие, которым нужен
  * результат сразу (`writeLetters`, спека хранилища 6.2). Пустая запись возвращает объект кэша (`shared`): копию берёт
  * тот, кому карта нужна наружу, а `writeLetters` карту не отдаёт и копии не платит.
+ *
+ * Что лежит в кэше после записи — инвариант «писавший видит то же, что другие процессы»: карта, структурно равная
+ * свежему разбору записанных строк (`rowsToMap` и `normalizeMap`). Свежий разбор стоит обхода всей карты, поэтому
+ * без `keepResult` кэш берёт саму карту мутатора, но только пока она чистое дерево JSON (`isPlainJsonTree`): ключ
+ * без значения, `NaN`, дата или массив, общий у двух писем, после записи и перечитывания выглядели бы иначе, и тогда
+ * разбор строк остаётся. С `keepResult` карта уходит вызывающему, и кэш всегда держит свой разобранный объект. Пустая
+ * запись возвращает карту в кэш на тех же условиях: строки те же, а объект мутатор мог изменить, не задев JSON.
  */
 export function applyMapUpdate(
   projectPath: string,
   workId: string,
   mutate: (map: WorkMap, letters: LetterTx) => void,
-  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true }: UpdateMapOptions = {},
+  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true, keepResult = false }: ApplyMapOptions = {},
 ): MapUpdate {
   const db = storeDb();
   const key = cacheKey(projectPath, workId);
@@ -1014,7 +1069,7 @@ export function applyMapUpdate(
       mapCache.delete(key);
       throw notFound(projectPath, workId);
     }
-    // Карта из кэша процесса — без загрузки и без копии: запись из кэша снимается, ниже её заменит свежая сборка.
+    // Карта из кэша процесса — без загрузки и без копии: запись из кэша снимается, после записи ниже кэш получит новую.
     let current: WorkMap;
     let previous: { work: string; extra: string; index: ReadonlyMap<string, StoredRow> };
     const hit = cachedEntry(key, stored);
@@ -1049,9 +1104,12 @@ export function applyMapUpdate(
       !diff.workChanged &&
       !wrote()
     ) {
-      // Карта в кэше не менялась (её строки те же): возвращаем запись на место, а наружу карта уходит копией.
-      if (hit !== undefined) rememberMap(key, hit);
-      return { empty: true as const, current, shared: hit !== undefined };
+      // Строки в базе те же, но объект кэша мутатор мог изменить, не задев JSON (ключ без значения, общий массив): на
+      // место он возвращается, только если свежий разбор строк дал бы такую же карту. Иначе записи кэша нет — следующее
+      // чтение загрузит базу. Наружу карта уходит копией.
+      const keep = hit !== undefined && survivesJson(current);
+      if (keep) rememberMap(key, hit);
+      return { empty: true as const, current, shared: keep };
     }
     if (touch) {
       current.work.updatedAt = new Date().toISOString();
@@ -1075,26 +1133,30 @@ export function applyMapUpdate(
   });
   if (written.empty) return { map: written.current, shared: written.shared };
 
-  // В кэш — после коммита, и не `current`, а свежая сборка записанных строк (спека хранилища 6.9): иначе писавший процесс
-  // читал бы карту иначе, чем любой другой. Не вышло — запись снимаем и молчим: карта уже записана, ошибка заставила бы
+  // В кэш — после коммита (спека хранилища 6.9): карта, структурно равная свежему разбору записанных строк, иначе писавший
+  // процесс читал бы карту иначе, чем любой другой. Не вышло — запись снимаем и молчим: карта уже записана, ошибка заставила бы
   // повторить мутацию, а следующее чтение загрузит базу и откажет так же, как отказал бы любой другой процесс.
+  let shared = false;
   try {
-    const fresh = normalizeMap(
-      rowsToMap(written.next.work, written.next.extra, written.next.rows),
-      source,
-    );
+    // Строки записанной карты — её же JSON (`mapToRows` после `normalizeMap`), поэтому чистое дерево JSON и есть то, что
+    // даст разбор этих строк; повторять его нужно, только когда это не так или карту заберёт вызывающий.
+    const own = !keepResult && survivesJson(written.current);
+    const map = own
+      ? written.current
+      : normalizeMap(rowsToMap(written.next.work, written.next.extra, written.next.rows), source);
     rememberMap(key, {
       version: written.version,
-      map: fresh,
+      map,
       work: written.next.work,
       extra: written.next.extra,
       index: rowIndex(written.next.rows),
     });
+    shared = own;
   } catch {
     mapCache.delete(key);
   }
   emitMapWritten({ projectPath, workId, version: written.version });
-  return { map: written.current, shared: false };
+  return { map: written.current, shared };
 }
 
 /** Предел названия работы в кодовых точках: эмодзи — один символ, а не два UTF-16. */

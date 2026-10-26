@@ -18,6 +18,12 @@ export interface WorkEntry {
    * чтения: карта из кэша списка приходит с 0, и счётчик не врёт про «прочитанное».
    */
   bytes?: number;
+  /**
+   * Версия строки работы в базе, под которой взята карта (спека хранилища 6.9): та же версия — та же карта. Хост по ней
+   * узнаёт, что работа не менялась, и не пересобирает её снимок для окна (план 4, задача 5). Номера нет, если запись
+   * успела вклиниться между чтением версии и карты, — тогда работу надо считать новой.
+   */
+  version?: number;
 }
 
 /**
@@ -62,13 +68,15 @@ async function readEntry(projectPath: string, workId: string): Promise<WorkEntry
   }
   const cached = listedMaps.get(key);
   if (cached !== undefined && cached.version === version) {
-    return { projectPath, map: cached.map, bytes: 0 };
+    return { projectPath, map: cached.map, bytes: 0, version };
   }
   try {
     const copy = await readMap(projectPath, workId);
     const map = freezeMaps ? deepFreeze(copy) : copy;
     listedMaps.set(key, { version, map });
-    return { projectPath, map, bytes: storedMapBytes(projectPath, workId) ?? 0 };
+    // Номер сообщается, только если версия не сдвинулась за время чтения карты: иначе под ним лежит более новая карта.
+    const unchanged = workVersion(projectPath, workId) === version;
+    return { projectPath, map, bytes: storedMapBytes(projectPath, workId) ?? 0, ...(unchanged ? { version } : {}) };
   } catch {
     listedMaps.delete(key);
     return null;

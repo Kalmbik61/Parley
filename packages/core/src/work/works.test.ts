@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeWorkDb, WORK_DB_FILE, workDb } from './db.js';
 import { addSession } from './map.js';
-import { createWork, deleteWorkFiles, parleyHome, readStoredMap, replaceStoredMap, updateMap, workDataVersion, workPaths } from './store.js';
+import { createWork, deleteWorkFiles, parleyHome, readStoredMap, replaceStoredMap, updateMap, workDataVersion, workPaths, workVersion } from './store.js';
 import type { Room } from './types.js';
 import { readWorks, watchWorks, type WorkEntry } from './works.js';
 
@@ -159,6 +159,25 @@ describe('readWorks', () => {
       ['Первая', false],
       ['Вторая', true],
     ]);
+  });
+
+  it('у каждой работы списка версия базы, под которой взята карта: та же версия — та же карта, запись её меняет', async () => {
+    const first = await createWork(project, { title: 'Первая' });
+    const second = await createWork(other, { title: 'Вторая' });
+    const versionsOf = async (): Promise<Array<number | undefined>> => (await readWorks(project)).map((entry) => entry.version);
+
+    const before = await versionsOf();
+    expect(before).toEqual([workVersion(project, first.work.id), workVersion(other, second.work.id)]);
+    // Повторное чтение из кэша списка — те же номера.
+    expect(await versionsOf()).toEqual(before);
+
+    await updateMap(project, first.work.id, (map) => {
+      map.work.goal = 'новая цель';
+    });
+    const after = await versionsOf();
+    expect(after[0]).toBe(workVersion(project, first.work.id));
+    expect(after[0]).not.toBe(before[0]);
+    expect(after[1]).toBe(before[1]);
   });
 
   it('разобранная карта в тестах заморожена: правка «на месте» бросает, а не портит общий объект', async () => {

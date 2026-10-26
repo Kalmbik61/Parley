@@ -185,14 +185,18 @@ export function mapToRows(map: WorkMap, previous?: ReadonlyMap<string, StoredRow
 
 /**
  * Собирает из строк сырой объект карты в порядке `ord`. Форму не проверяет и миграций не делает: дальше его ведёт
- * `normalizeMap`, как и текст `map.json`.
+ * `normalizeMap`, как и текст `map.json`. Строки раскладываются по видам за один проход; выборка `ORDER BY kind, ord`
+ * (`loadStored`) и строки `mapToRows` уже идут по возрастанию `ord`, а сортировка упорядоченного списка — один проход
+ * без перестановок (спека хранилища 6.2, план 4, задача 5). Порядок выборки от этого не зависит: вперемешку строки
+ * тоже собираются верно. Строка неизвестного вида пропускается, как и раньше.
  */
 export function rowsToMap(work: string, extra: string, rows: readonly StoredRow[]): unknown {
   const stored = JSON.parse(extra) as Extra;
+  const byKind = new Map<EntryKind, StoredRow[]>(KINDS.map((kind) => [kind, []]));
+  for (const row of rows) byKind.get(row.kind)?.push(row);
   const lists = {} as Record<EntryField, unknown[]>;
   for (const kind of KINDS) {
-    lists[ENTRY_FIELDS[kind]] = rows
-      .filter((row) => row.kind === kind)
+    lists[ENTRY_FIELDS[kind]] = (byKind.get(kind) as StoredRow[])
       .sort((a, b) => a.ord - b.ord)
       .map((row) => JSON.parse(row.json) as unknown);
   }
@@ -244,4 +248,45 @@ export function diffRows(
     deletes,
     workChanged: previous.work !== next.work || previous.extra !== next.extra,
   };
+}
+
+/**
+ * Карта (или любое значение) — чистое дерево JSON: строки, конечные числа без `-0`, булевы, `null`, массивы без дыр и
+ * простые объекты, и ни один массив или объект не встречается в дереве дважды. У такого значения свежий разбор его
+ * же JSON даёт структурно ту же карту (`toStrictEqual`) и независимые друг от друга объекты: в нём нет ключей без
+ * значения (после записи их нет), `NaN` и бесконечности (в JSON это `null`), дат, `Map`, функций, объектов с чужим
+ * прототипом и общих ссылок (правка одного письма в кэше не должна задевать другое). Кэш писавшего процесса держит
+ * саму записанную карту, только если она такая (спека хранилища 6.9, план 4, задача 5); иначе — разбор строк.
+ */
+export function isPlainJsonTree(value: unknown): boolean {
+  return isPlainNode(value, new Set<object>());
+}
+
+function isPlainNode(value: unknown, seen: Set<object>): boolean {
+  if (value === null) return true;
+  switch (typeof value) {
+    case 'string':
+    case 'boolean':
+      return true;
+    case 'number':
+      return Number.isFinite(value) && !Object.is(value, -0);
+    case 'object':
+      break;
+    default:
+      return false;
+  }
+  if (seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) return false;
+    for (let at = 0; at < value.length; at += 1) {
+      if (!(at in value) || !isPlainNode(value[at], seen)) return false;
+    }
+    return true;
+  }
+  if (Object.getPrototypeOf(value) !== Object.prototype) return false;
+  for (const key in value) {
+    if (!isPlainNode((value as Record<string, unknown>)[key], seen)) return false;
+  }
+  return true;
 }

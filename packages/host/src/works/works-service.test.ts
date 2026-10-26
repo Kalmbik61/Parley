@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  addMessage,
   addSession,
+  compactWorkMap,
   createWork,
   deleteWorkFiles,
   MapLockTimeoutError,
@@ -27,10 +29,11 @@ import { createWorksService } from './works-service.js';
 import type { WorksService } from './works-service.js';
 
 // `readMap` обёрнут шпионом, который по умолчанию зовёт настоящий: тесты битой карты считают его вызовы и подсовывают отказ
-// занятой базы, которого на живой WAL-базе не вызвать.
+// занятой базы, которого на живой WAL-базе не вызвать. Так же обёрнут `compactWorkMap`: тесты снимка окна считают, какие
+// работы он пересобрал.
 vi.mock('@parley/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@parley/core')>();
-  return { ...actual, readMap: vi.fn(actual.readMap) };
+  return { ...actual, readMap: vi.fn(actual.readMap), compactWorkMap: vi.fn(actual.compactWorkMap) };
 });
 
 /** Второе соединение с базой дома: держит запись и читает размеры, как это делает чужой процесс (CLI, MCP агента без канала). */
@@ -487,5 +490,158 @@ describe('изменения без файлов', () => {
     await new Promise((resolve) => setTimeout(resolve, 700));
 
     expect(broadcasts.filter((item) => item.event === 'works.changed')).toEqual([]);
+  });
+});
+
+describe('снимок окна по версии работы (план 4, задача 5)', () => {
+  const compact = vi.mocked(compactWorkMap);
+  /** Работы, чей снимок для окна пересобирался с последнего `mockClear`. */
+  const rebuilt = (): string[] => compact.mock.calls.map(([map]) => map.work.id);
+  const goalOf = (s: WorksService, workId: string): string | undefined =>
+    s.windowSnapshot()?.entries.find((entry) => entry.map.work.id === workId)?.map.work.goal;
+
+  /** Ждёт, пока рассылки стихнут: служебные записи хоста (аренда) тоже будят сервис, а считать надо только запись теста. */
+  async function settle(s: WorksService): Promise<void> {
+    let last = -1;
+    await vi.waitFor(
+      () => {
+        const now = s.windowSnapshot()?.revision ?? 0;
+        const quiet = now === last;
+        last = now;
+        expect(quiet).toBe(true);
+      },
+      { timeout: 15_000, interval: 300 },
+    );
+  }
+
+  it('запись в работу A не пересобирает снимок работы B; снимок B в рассылке остаётся на месте', async () => {
+    const a = await createWork(projectA, { title: 'A' });
+    const b = await createWork(projectB, { title: 'B' });
+    const s = service({ debounceMs: 20 });
+    await s.start();
+    await settle(s);
+    const before = s.windowSnapshot();
+    compact.mockClear();
+
+    await updateMap(projectA, a.work.id, (map) => {
+      map.work.goal = 'новая цель';
+    });
+    await vi.waitFor(() => expect(goalOf(s, a.work.id)).toBe('новая цель'), { timeout: 10_000, interval: 10 });
+    await settle(s);
+
+    expect(rebuilt()).toContain(a.work.id);
+    expect(rebuilt()).not.toContain(b.work.id);
+    const after = s.windowSnapshot();
+    expect(after?.revision).toBeGreaterThan(before?.revision ?? 0);
+    expect(after?.entries.map((entry) => entry.map.work.title)).toEqual(['A', 'B']);
+    // Снимок B — тот же объект, что в прошлой рассылке: его не собирали и не копировали заново.
+    const mapOf = (snapshot: typeof after, workId: string) => snapshot?.entries.find((entry) => entry.map.work.id === workId)?.map;
+    expect(mapOf(after, b.work.id)).toBe(mapOf(before, b.work.id));
+  });
+
+  it('работу с кандидатом на сверку живости каждый проход перечитывают, но её снимок не пересобирается, пока версия та же', async () => {
+    const a = await createWork(projectA, { title: 'A' });
+    const b = await createWork(projectB, { title: 'B' });
+    await updateMap(projectB, b.work.id, (current) => {
+      const created = addSession(current, { provider: 'claude', label: 'план', task: 't' });
+      created.launchedBy = 'tui';
+      created.pid = 999_999;
+      transitionSession(current, created.id, 'active');
+    });
+    const s = service({ debounceMs: 20 });
+    await s.start();
+    await settle(s);
+    expect(s.entry(projectB, b.work.id)?.map.sessions[0]?.lifecycle).toBe('sleeping');
+    compact.mockClear();
+    vi.mocked(readMap).mockClear();
+
+    await updateMap(projectA, a.work.id, (map) => {
+      map.work.goal = 'новая цель';
+    });
+    await vi.waitFor(() => expect(goalOf(s, a.work.id)).toBe('новая цель'), { timeout: 10_000, interval: 10 });
+    await settle(s);
+
+    // Сверка живости перечитала B (свежая карта, другой объект), а снимок для окна остался прежним: версия строки та же.
+    expect(vi.mocked(readMap).mock.calls.filter(([, workId]) => workId === b.work.id).length).toBeGreaterThan(0);
+    expect(rebuilt()).toContain(a.work.id);
+    expect(rebuilt()).not.toContain(b.work.id);
+  });
+
+  it('работа, записанная несколько раз подряд, каждый раз в снимке свежая: старый снимок под новой версией не залипает', async () => {
+    const a = await createWork(projectA, { title: 'A' });
+    await createWork(projectB, { title: 'B' });
+    const s = service({ debounceMs: 20 });
+    await s.start();
+    await settle(s);
+
+    for (const goal of ['первая', 'вторая', 'третья']) {
+      await updateMap(projectA, a.work.id, (map) => {
+        map.work.goal = goal;
+      });
+      await vi.waitFor(() => expect(goalOf(s, a.work.id)).toBe(goal), { timeout: 10_000, interval: 10 });
+    }
+    await settle(s);
+    expect(goalOf(s, a.work.id)).toBe('третья');
+  });
+
+  it('письмо в работе доходит до снимка: компактная карта видит новый хвост', async () => {
+    const a = await createWork(projectA, { title: 'A' });
+    await updateMap(projectA, a.work.id, (map) => {
+      addSession(map, { provider: 'claude', label: 'план', task: 'x' });
+    });
+    const s = service({ debounceMs: 20 });
+    await s.start();
+    await settle(s);
+    const latest = (): string | null | undefined => s.windowSnapshot()?.entries[0]?.map.compact?.messages.latestId;
+    expect(latest()).toBeNull();
+
+    await updateMap(projectA, a.work.id, (map) => {
+      addMessage(map, { from: 's-01', to: [], text: 'привет' });
+    });
+
+    await vi.waitFor(() => expect(latest()).toBe('m-01'), { timeout: 10_000, interval: 10 });
+  });
+
+  it('бюджет писем зависит от числа живых работ: когда оно меняется, пересобираются все живые, и каждая со своим бюджетом', async () => {
+    const works = [
+      await createWork(projectA, { title: '1' }),
+      await createWork(projectA, { title: '2' }),
+      await createWork(projectB, { title: '3' }),
+    ];
+    const s = service({ debounceMs: 20 });
+    await s.start();
+    await settle(s);
+    const budgetsOf = (workId: string): number[] =>
+      compact.mock.calls.filter(([map]) => map.work.id === workId).map(([, options]) => options.messageBytes);
+    // Три живые работы — по 1 МиБ каждой.
+    for (const work of works) expect(budgetsOf(work.work.id).at(-1)).toBe(1024 * 1024);
+    compact.mockClear();
+
+    // Четвёртая живая работа: 3 МиБ на четверых — по 768 КиБ, и бюджет сменился у всех.
+    const fourth = await createWork(projectB, { title: '4' });
+    await vi.waitFor(() => expect(s.windowSnapshot()?.entries).toHaveLength(4), { timeout: 10_000, interval: 10 });
+    await settle(s);
+
+    for (const work of [...works, fourth]) expect(budgetsOf(work.work.id).at(-1), work.work.title).toBe(768 * 1024);
+  });
+
+  it('работа, снятая из базы, уходит из снимка; новая работа в нём собирается, а уцелевшая — нет', async () => {
+    const a = await createWork(projectA, { title: 'A' });
+    const b = await createWork(projectB, { title: 'B' });
+    const s = service({ debounceMs: 20 });
+    await s.start();
+    await settle(s);
+    compact.mockClear();
+
+    await deleteWorkFiles(projectA, a.work.id);
+    const again = await createWork(projectA, { title: 'Новая A' });
+    await vi.waitFor(() => expect(s.windowSnapshot()?.entries.map((entry) => entry.map.work.title).sort()).toEqual(['B', 'Новая A']), {
+      timeout: 10_000,
+      interval: 10,
+    });
+    await settle(s);
+
+    expect(rebuilt()).toContain(again.work.id);
+    expect(rebuilt()).not.toContain(b.work.id);
   });
 });

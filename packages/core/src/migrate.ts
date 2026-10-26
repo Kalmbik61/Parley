@@ -42,7 +42,7 @@ import type { Env } from './names.js';
 import { hasLiveProcess } from './work/liveness.js';
 import { parseMap } from './work/map.js';
 import { writeSelfIgnore } from './work/state-dir.js';
-import { parleyHome, readMap, readWorksIndex, updateMap, worksIndexPath } from './work/store.js';
+import { forgetParleyHome, parleyHome, readMap, readWorksIndex, updateMap, worksIndexPath } from './work/store.js';
 import type { WorksIndex } from './work/types.js';
 import { NO_FSMONITOR } from './work/worktree.js';
 
@@ -205,6 +205,8 @@ export async function migrateHome(options: MigrateHomeOptions = {}): Promise<Mig
     } catch (error) {
       return skipped('rename-failed', from, errorText(error));
     }
+    // Дом, найденный процессом до переноса, теперь неверен (`parleyHome` помнит ответ).
+    forgetParleyHome();
     // Перенос состоялся; запись о нём — справка, её сбой перенос не отменяет.
     await appendRecord(path.join(to, MIGRATION_RECORD), {
       what: 'home',

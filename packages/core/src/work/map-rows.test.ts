@@ -3,6 +3,7 @@ import { addMessage, addSession, normalizeMap } from './map.js';
 import {
   diffRows,
   ENTRY_FIELDS,
+  isPlainJsonTree,
   mapToRows,
   rowIndex,
   rowsToMap,
@@ -130,6 +131,19 @@ describe('mapToRows и rowsToMap', () => {
     const { rows } = mapToRows(map);
     expect(new Set(rows.map((row) => row.kind))).toEqual(new Set(Object.keys(ENTRY_FIELDS)));
     expect(roundTrip(map)).toEqual(map);
+  });
+
+  it('строки в любом порядке собираются в порядке ord своего вида: порядок выборки не важен', () => {
+    const map = fullMap();
+    const { work, extra, rows } = mapToRows(map);
+    // Вперемешку по видам и против ord: как отдала бы база без `ORDER BY`.
+    const shuffled = [...rows].sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0) || b.ord - a.ord);
+    expect(shuffled.map((row) => `${row.kind}/${row.key}`)).not.toEqual(rows.map((row) => `${row.kind}/${row.key}`));
+
+    expect(normalizeMap(rowsToMap(work, extra, shuffled), SOURCE)).toEqual(map);
+    // Уже упорядоченные строки (выборка `ORDER BY kind, ord`) дают ту же карту.
+    const ordered = [...rows].sort((a, b) => (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0) || a.ord - b.ord);
+    expect(normalizeMap(rowsToMap(work, extra, ordered), SOURCE)).toEqual(map);
   });
 
   it('незнакомое поле верхнего уровня возвращается как было, даже с именем из служебных', () => {
@@ -372,5 +386,44 @@ describe('rowIndex', () => {
       rows.find((row) => row.kind === 'session' && row.key === 's-01'),
     );
     expect(index.get('room\u0000r-02')?.key).toBe('r-02');
+  });
+});
+
+describe('isPlainJsonTree', () => {
+  it('карта, прошедшая через JSON, — чистое дерево, а полная карта с коллекциями — тоже', () => {
+    expect(isPlainJsonTree(fullMap())).toBe(true);
+    expect(isPlainJsonTree(emptyMap())).toBe(true);
+    // Повтор значения — не общая ссылка: одинаковые строки и числа в разных местах допустимы.
+    expect(isPlainJsonTree({ a: 'x', b: 'x', c: 1, d: 1, e: [null, true, false], f: {} })).toBe(true);
+  });
+
+  it.each([
+    ['ключ без значения (undefined)', { a: undefined }],
+    ['undefined в массиве', [1, undefined]],
+    ['NaN', { a: Number.NaN }],
+    ['Infinity', { a: Number.POSITIVE_INFINITY }],
+    ['минус ноль', { a: -0 }],
+    ['дата', { a: new Date(0) }],
+    ['Map', { a: new Map() }],
+    ['функция', { a: () => 1 }],
+    ['bigint', { a: 1n }],
+    ['символ', { a: Symbol('s') }],
+    ['объект без прототипа', Object.assign(Object.create(null) as object, { a: 1 })],
+    ['экземпляр класса', { a: new (class Letter { id = 'm-01'; })() }],
+    ['дыра в массиве', [1, , 3]], // eslint-disable-line no-sparse-arrays
+  ])('не чистое дерево: %s — после JSON оно было бы другим', (_name, value) => {
+    expect(isPlainJsonTree(value)).toBe(false);
+  });
+
+  it('один объект в двух местах — общая ссылка: правка в одном месте после разбора JSON не затронула бы второе', () => {
+    const shared = ['s-02'];
+    expect(isPlainJsonTree({ messages: [{ to: shared }, { to: shared }] })).toBe(false);
+    expect(isPlainJsonTree({ messages: [{ to: ['s-02'] }, { to: ['s-02'] }] })).toBe(true);
+  });
+
+  it('всё, что признано чистым деревом, после JSON структурно строго равно себе', () => {
+    const map = fullMap();
+    expect(isPlainJsonTree(map)).toBe(true);
+    expect(JSON.parse(JSON.stringify(map))).toStrictEqual(map);
   });
 });
