@@ -82,10 +82,13 @@ const cardFingerprint = (card: FeedCard, inWindow: boolean): string => JSON.stri
   card.kind, card.toolUseId, card.toolName, card.toolInput, card.truncated ?? false, card.agentId ?? null, inWindow,
   card.kind === 'permission' ? card.suggestions : card.kind === 'question' ? card.questions : [card.plan, card.planFilePath],
 ]);
-const withItems = (state: IslandRequestsState, items: IslandRequest[]): Pick<IslandRequestsState, 'items' | 'selectedKey'> => ({
-  items,
-  selectedKey: items.some((item) => item.key === state.selectedKey) ? state.selectedKey : items[0]?.key ?? null,
-});
+const withItems = (state: IslandRequestsState, items: IslandRequest[]): Pick<IslandRequestsState, 'items' | 'selectedKey'> => {
+  const previousIndex = state.items.findIndex((item) => item.key === state.selectedKey);
+  const selectedKey = items.some((item) => item.key === state.selectedKey)
+    ? state.selectedKey
+    : items[clampIndex(previousIndex, items.length)]?.key ?? null;
+  return { items, selectedKey };
+};
 
 function invalidate(): void {
   generation += 1;

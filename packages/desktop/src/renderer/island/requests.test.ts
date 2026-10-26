@@ -412,6 +412,20 @@ describe('очередь запросов острова', () => {
     expect(state.items.find((item) => item.key === state.selectedKey)?.card?.cardId).toBe('c-2');
   });
 
+  it('снятие выбранной карточки посередине выбирает следующую на её месте', async () => {
+    const cards = { 's-01': [permission('c-1'), permission('c-2'), permission('c-3')] };
+    const { call } = bridge(cards);
+    useIslandRequests.getState().bind(call as never);
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
+    await flush();
+    useIslandRequests.getState().select(1);
+    cards['s-01'] = [permission('c-1'), permission('c-3')];
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
+    await flush();
+    const state = useIslandRequests.getState();
+    expect(state.items.find((item) => item.key === state.selectedKey)?.card?.cardId).toBe('c-3');
+  });
+
   it('same cardId обновляет payload и summary, снимает deciding старого содержимого', async () => {
     const late = deferred<{ applied: boolean; state: string }>();
     const cards = { 's-01': [permission('c-1', 'old')] };
