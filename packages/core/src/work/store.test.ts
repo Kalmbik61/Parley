@@ -6,14 +6,17 @@ import { tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { contextFile } from '../context-fill.js';
-import { addSession } from './map.js';
+import { addSession, parseMap } from './map.js';
 import type { WorkMap } from './types.js';
 import {
   createWork,
   deleteSessionFiles,
   deleteWorkFiles,
+  MAP_CACHE_LIMIT,
+  MAP_SNAPSHOT_LIMIT,
+  mapCacheStats,
   MapLockTimeoutError,
   pruneWorksIndex,
   readMap,
@@ -47,6 +50,14 @@ describe('shared storage primitives', () => {
     await expect(readSharedFile(project)).rejects.toMatchObject({ code: 'shared-file-unreadable' });
     await writeFile(file, Buffer.alloc(1024 * 1024 + 1));
     await expect(readSharedFile(file)).rejects.toMatchObject({ code: 'shared-file-too-large' });
+  });
+  it('reads past the default bound only when the caller raises it', async () => {
+    const file = path.join(project, 'big.json');
+    await writeFile(file, 'x'.repeat(2 * 1024 * 1024));
+    await expect(readSharedFile(file)).rejects.toMatchObject({ code: 'shared-file-too-large' });
+    const snapshot = await readSharedFile(file, MAP_SNAPSHOT_LIMIT);
+    expect(snapshot.text).toHaveLength(2 * 1024 * 1024);
+    await expect(readSharedFile(file, 1024)).rejects.toMatchObject({ code: 'shared-file-too-large' });
   });
   it('rejects symlink/FIFO readers and symlink state directories without following them', async () => {
     const target = path.join(project, 'target'); await writeFile(target, 'private');
@@ -306,7 +317,7 @@ describe('updateMap', () => {
     expect(raw.rooms).toEqual([]);
     expect(raw.sessions[0]).toMatchObject({ lifecycle: 'sleeping', result: null });
     expect(raw.messages[0]).toMatchObject({ to: ['s-01'], readBy: {}, roomId: null });
-    expect(await readMap(project, 'w-0001')).toEqual(updated);
+    expect(parseMap(await readFile(paths.map, 'utf8'), paths.map)).toEqual(updated);
   });
 
   it('пишет карту, кладёт прежнюю версию в .bak и обновляет индекс', async () => {
@@ -321,7 +332,7 @@ describe('updateMap', () => {
 
     expect(updated.sessions[0]?.id).toBe('s-01');
     expect(await readFile(paths.bak, 'utf8')).toBe(before);
-    expect(await readMap(project, 'w-0001')).toEqual(updated);
+    expect(parseMap(await readFile(paths.map, 'utf8'), paths.map)).toEqual(updated);
     expect(updated.work.updatedAt >= JSON.parse(before).work.updatedAt).toBe(true);
     expect((await readWorksIndex()).works).toEqual([
       {
@@ -332,6 +343,84 @@ describe('updateMap', () => {
         updatedAt: updated.work.updatedAt,
       },
     ]);
+  });
+
+  it('вторая запись в течение 10 минут не переписывает .bak', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    const created = await readFile(paths.map, 'utf8');
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Первая';
+    });
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Вторая';
+    });
+
+    expect(await readFile(paths.bak, 'utf8')).toBe(created);
+  });
+
+  it('копия старше 10 минут обновляется: в ней версия перед этой записью', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Первая';
+    });
+    const before = await readFile(paths.map, 'utf8');
+    const old = new Date(Date.now() - 11 * 60 * 1000);
+    await utimes(paths.bak, old, old);
+
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Вторая';
+    });
+
+    expect(await readFile(paths.bak, 'utf8')).toBe(before);
+  });
+
+  it('пропавший .bak кладётся следующей записью', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    await rm(paths.bak);
+    const before = await readFile(paths.map, 'utf8');
+
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Первая';
+    });
+
+    expect(await readFile(paths.bak, 'utf8')).toBe(before);
+  });
+
+  it('.bak из будущего (часы сдвинули) не застревает', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Первая';
+    });
+    const future = new Date(Date.now() + 60 * 60 * 1000);
+    await utimes(paths.bak, future, future);
+    const before = await readFile(paths.map, 'utf8');
+
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Вторая';
+    });
+
+    expect(await readFile(paths.bak, 'utf8')).toBe(before);
+  });
+
+  it('после обновления копии по сроку в каталоге работы не остаётся .tmp', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    const old = new Date(Date.now() - 11 * 60 * 1000);
+    await utimes(paths.bak, old, old);
+    const before = await readFile(paths.map, 'utf8');
+
+    await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Новая';
+    });
+
+    expect(
+      (await readdir(workPaths(project, 'w-0001').dir)).filter((name) => name.endsWith('.tmp')),
+    ).toEqual([]);
+    expect(await readFile(paths.bak, 'utf8')).toBe(before);
   });
 
   it('после записи в каталоге работы не остаётся временных файлов', async () => {
@@ -362,6 +451,165 @@ describe('updateMap', () => {
 
     expect(await readFile(paths.map, 'utf8')).toBe('{ сломано');
     expect(await readFile(paths.bak, 'utf8')).toBe(before);
+  });
+
+  it('повторное чтение неизменной карты идёт из кэша и не делит объект с вызывающим', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const before = mapCacheStats();
+    const first = await readMap(project, 'w-0001');
+    first.work.title = 'испорчено снаружи';
+
+    expect((await readMap(project, 'w-0001')).work.title).toBe('Авторизация');
+    expect(mapCacheStats().hits - before.hits).toBeGreaterThanOrEqual(1);
+  });
+
+  it('карту переписали мимо кэша — следующее чтение видит новую версию', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await readMap(project, 'w-0001');
+    const paths = workPaths(project, 'w-0001');
+    const raw = JSON.parse(await readFile(paths.map, 'utf8')) as WorkMap;
+    raw.work.title = 'Снаружи';
+    await writeFile(`${paths.map}.ext`, JSON.stringify(raw));
+    await rename(`${paths.map}.ext`, paths.map);
+
+    expect((await readMap(project, 'w-0001')).work.title).toBe('Снаружи');
+  });
+
+  it('updateMap неизменной карты не читает файл, а результат и кэш независимы', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await readMap(project, 'w-0001');
+    const before = mapCacheStats();
+    const updated = await updateMap(project, 'w-0001', (map) => {
+      map.work.title = 'Новая';
+    });
+    updated.work.title = 'испорчено снаружи';
+
+    expect((await readMap(project, 'w-0001')).work.title).toBe('Новая');
+    expect(mapCacheStats().misses).toBe(before.misses);
+  });
+
+  it('брошенная мутация не портит кэш', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await readMap(project, 'w-0001');
+
+    await expect(
+      updateMap(project, 'w-0001', (map) => {
+        map.work.title = 'Наполовину';
+        throw new Error('стоп');
+      }),
+    ).rejects.toThrow('стоп');
+
+    expect((await readMap(project, 'w-0001')).work.title).toBe('Авторизация');
+  });
+
+  it('updateMap на попадании в кэш берёт карту во владение: копии нет, а результат и кэш не делят объект', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await readMap(project, 'w-0001');
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    try {
+      const before = mapCacheStats();
+      const updated = await updateMap(project, 'w-0001', (map) => {
+        map.work.title = 'Новая';
+      });
+
+      expect(mapCacheStats().hits - before.hits).toBe(1);
+      expect(clone).not.toHaveBeenCalled();
+      // Карту, что вернул `updateMap`, мутировали в кэше: после записи запись кэша — свежий разбор, а не этот объект.
+      updated.work.title = 'испорчено снаружи';
+      expect((await readMap(project, 'w-0001')).work.title).toBe('Новая');
+    } finally {
+      clone.mockRestore();
+    }
+  });
+
+  it('брошенная мутация на попадании в кэш не оставляет следов: следующее чтение — то, что на диске', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    await readMap(project, 'w-0001');
+    const before = mapCacheStats();
+
+    await expect(
+      updateMap(project, 'w-0001', (map) => {
+        map.work.title = 'Наполовину';
+        addSession(map, { provider: 'claude', label: 'план', task: 't' });
+        throw new Error('стоп');
+      }),
+    ).rejects.toThrow('стоп');
+    // Мутация шла над кэшированным объектом, а не над копией: иначе тест ничего бы не сторожил.
+    expect(mapCacheStats().hits - before.hits).toBe(1);
+
+    const after = await readMap(project, 'w-0001');
+    expect(after.work.title).toBe('Авторизация');
+    expect(after.sessions).toEqual([]);
+    expect(after).toEqual(parseMap(await readFile(paths.map, 'utf8'), paths.map));
+  });
+
+  it('отказ блокировки индекса на попадании в кэш не оставляет следов: ретрай не двоит запись', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await readMap(project, 'w-0001');
+    const indexLock = path.join(home, 'works-index.lock');
+    await writeFile(indexLock, '', { flag: 'wx' });
+    const append = (map: WorkMap): void => {
+      addSession(map, { provider: 'claude', label: 'план', task: 't' });
+    };
+    const before = mapCacheStats();
+
+    await expect(updateMap(project, 'w-0001', append, { lockTimeoutMs: 100 })).rejects.toThrow(
+      /lock .*works-index\.lock was not released within 100 ms/,
+    );
+    expect(mapCacheStats().hits - before.hits).toBe(1);
+    expect((await readMap(project, 'w-0001')).sessions).toEqual([]);
+
+    await rm(indexLock);
+    await updateMap(project, 'w-0001', append);
+
+    expect((await readMap(project, 'w-0001')).sessions).toHaveLength(1);
+  });
+
+  it('после записи кэш отдаёт то же, что свежий разбор файла', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const paths = workPaths(project, 'w-0001');
+    // `parseMap` убирает effort, не прошедший токен: писавший процесс не должен читать его иначе, чем свежий.
+    await updateMap(project, 'w-0001', (map) => {
+      addSession(map, { provider: 'claude', label: 'план', task: 't', effort: 'bad"value' });
+    });
+    const fresh = parseMap(await readFile(paths.map, 'utf8'), paths.map);
+    expect(fresh.sessions[0]!.effort).toBeUndefined();
+
+    const before = mapCacheStats();
+    const cached = await readMap(project, 'w-0001');
+
+    expect(mapCacheStats().misses).toBe(before.misses);
+    expect(cached.sessions[0]!.effort).toBe(fresh.sessions[0]!.effort);
+    expect(cached).toEqual(fresh);
+  });
+
+  it('карта, которую свежий разбор отвергнет, не остаётся в кэше: чтение и обновление падают, как с диска', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    await updateMap(project, 'w-0001', (map) => {
+      const session = addSession(map, { provider: 'claude', label: 'план', task: 't' });
+      Object.assign(session, { role: { source: 'bogus', name: 'x' } });
+    });
+
+    await expect(readMap(project, 'w-0001')).rejects.toThrow('invalid session role');
+    await expect(updateMap(project, 'w-0001', () => {})).rejects.toThrow('invalid session role');
+  });
+
+  it('кэш вмещает не больше MAP_CACHE_LIMIT карт: самая давняя по вставке вытесняется', async () => {
+    const ids: string[] = [];
+    for (let n = 0; n <= MAP_CACHE_LIMIT; n += 1) {
+      ids.push((await createWork(project, { title: `Работа ${n}` })).work.id);
+    }
+    // MAP_CACHE_LIMIT + 1 разборов подряд: первая карта вытеснена последней.
+    for (const id of ids) await readMap(project, id);
+
+    const missesOf = async (id: string): Promise<number> => {
+      const before = mapCacheStats().misses;
+      await readMap(project, id);
+      return mapCacheStats().misses - before;
+    };
+    expect(await missesOf(ids[1]!)).toBe(0);
+    expect(await missesOf(ids[0]!)).toBe(1);
   });
 
   it('занятая блокировка — ошибка, а не ожидание', async () => {
@@ -397,6 +645,64 @@ describe('updateMap', () => {
     const map = await readMap(project, 'w-0001');
     expect(map.sessions).toHaveLength(10);
     expect(new Set(map.sessions.map((session) => session.id)).size).toBe(10);
+  });
+
+  it('50 одновременных updateMap одного процесса проходят без MapLockTimeoutError и все применяются', async () => {
+    await createWork(project, { title: 'Авторизация' });
+
+    await Promise.all(
+      Array.from({ length: 50 }, (_unused, i) =>
+        updateMap(
+          project,
+          'w-0001',
+          (map) => {
+            addSession(map, { provider: 'claude', label: `s${i}`, task: 't' });
+          },
+          { lockTimeoutMs: 100 },
+        ),
+      ),
+    );
+
+    expect((await readMap(project, 'w-0001')).sessions).toHaveLength(50);
+  });
+
+  it('писатели в очереди падают по таймауту по одному: ожидание в очереди его не съедает', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    // Файловый замок занят «чужим процессом» (живой pid): трое одинаковых писателей встают в очередь процесса,
+    // и каждому отсчёт своих 100 мс начинается, только когда дошла его очередь.
+    await writeFile(workPaths(project, 'w-0001').lock, `${process.pid}\n`, { flag: 'wx' });
+
+    const started = Date.now();
+    const results = await Promise.allSettled(
+      Array.from({ length: 3 }, () =>
+        updateMap(project, 'w-0001', () => {}, { lockTimeoutMs: 100 }),
+      ),
+    );
+
+    expect(results.map((result) => result.status)).toEqual(['rejected', 'rejected', 'rejected']);
+    for (const result of results) {
+      expect((result as PromiseRejectedResult).reason).toBeInstanceOf(MapLockTimeoutError);
+    }
+    expect(Date.now() - started).toBeGreaterThanOrEqual(290);
+  });
+
+  it('мутация, упавшая под замком, не вешает очередь: идущие за ней применяются', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const fail = (): void => {
+      throw new Error('мутация упала');
+    };
+
+    // Двое падают, третий — в любом порядке прихода — должен применить своё: за каждым упавшим кто-то да стоит.
+    const results = await Promise.allSettled([
+      updateMap(project, 'w-0001', fail),
+      updateMap(project, 'w-0001', fail),
+      updateMap(project, 'w-0001', (map) => {
+        map.work.goal = 'применено';
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(2);
+    expect((await readMap(project, 'w-0001')).work.goal).toBe('применено');
   });
 
   it('два параллельных процесса-писателя не теряют записи', async () => {

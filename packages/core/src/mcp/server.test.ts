@@ -35,13 +35,15 @@ import { setBacklogRule } from '../work/project-preferences.js';
 import { buildRoleCatalog } from '../roles/catalog.js';
 import type { RoleCatalog } from '../roles/types.js';
 import type { AgentChannel } from '../work/mcp-config.js';
-import { contextFromEnv } from './context.js';
+import { contextFromEnv, type McpContext } from './context.js';
 import type { Ring } from './inbox-watch.js';
 import {
   DEFAULT_TIMEOUT_SEC,
   MAX_TIMEOUT_SEC,
   createParleyServer,
+  createToolRunner,
   waitTimeoutMs,
+  type ToolRunner,
 } from './tools.js';
 
 let home = '';
@@ -3162,5 +3164,106 @@ describe('застрявшая сессия: get_map, wait_for и send_message (
     expect(sent['warning']).toBe(
       'unknown parameters ignored: reply_to (did you mean replyTo?); @s02 is stuck (waiting for approval): it reads this when it is back',
     );
+  });
+});
+
+describe('createToolRunner: инструменты Parley без транспорта (спека хранилища 6.9)', () => {
+  /** Текст первого блока ответа: ответы инструментов — один текстовый блок. */
+  const textOf = (result: Awaited<ReturnType<ToolRunner['call']>>): string => (result.content[0] as { text: string }).text;
+
+  it('исполнитель без сервера: в list нет браузера и create_session, call пишет письмо как MCP', async () => {
+    await updateMap(project, workId, (map) => { addSession(map, { provider: 'claude', label: 'ревью', task: 't' }); });
+    const runner = createToolRunner({ projectPath: project, workId, workDir: workPaths(project, workId).dir, sessionId: 's-01', channel: false, messageRate: DEFAULT_CONFIG.messageRate });
+    const names = (await runner.list()).map((tool) => tool.name);
+    expect(names).toContain('send_message');
+    expect(names).not.toContain('create_session');
+    expect(names.some((name) => name.startsWith('browser_'))).toBe(false);
+    const sent = await runner.call('send_message', { to: 's-02', text: 'привет' }, undefined);
+    expect(sent.isError).not.toBe(true);
+    expect((await readMap(project, workId)).messages.at(-1)).toMatchObject({ from: 's-01', to: ['s-02'], text: 'привет' });
+  });
+
+  it('get_map берёт строки провайдеров из context.providerRows — без запроса к хосту и без пометки', async () => {
+    const row = { id: 'claude', label: 'Claude', family: 'claude' as const, available: true, needs: null, models: null, effort: false, limits: null };
+    const runner = createToolRunner({ projectPath: project, workId, workDir: workPaths(project, workId).dir, sessionId: 's-01', channel: false, messageRate: DEFAULT_CONFIG.messageRate, providerRows: async () => [row] });
+    const body = JSON.parse(textOf(await runner.call('get_map', {}, undefined)));
+    expect(body.providers).toEqual([{ id: 'claude', label: 'Claude', family: 'claude', available: true, models: null, effort: false }]);
+    expect(body.note).toBeUndefined();
+  });
+
+  it('wait_for inbox просыпается от context.mapChanges', async () => {
+    await updateMap(project, workId, (map) => { addSession(map, { provider: 'claude', label: 'ревью', task: 't' }); });
+    let listener = null as (() => void) | null;
+    const runner = createToolRunner({ projectPath: project, workId, workDir: workPaths(project, workId).dir, sessionId: 's-01', channel: false, messageRate: DEFAULT_CONFIG.messageRate, pollMs: 60_000,
+      mapChanges: (onChange) => { listener = onChange; return () => { listener = null; }; } });
+    const waiting = runner.call('wait_for', { target: 'inbox', timeoutSec: 30 }, undefined);
+    // Подписка заводится после первой пробы: ждём её, а не гадаем по времени — под нагрузкой пятидесяти миллисекунд мало.
+    await vi.waitFor(() => expect(listener).not.toBeNull(), { timeout: 2000, interval: 10 });
+    await updateMap(project, workId, (map) => { addMessage(map, { from: 's-02', to: ['s-01'], text: 'есть' }); });
+    listener!();
+    const body = JSON.parse(textOf(await waiting));
+    expect(body.state).toBe('message');
+  });
+
+  describe('сервер с явным исполнителем', () => {
+    /** Подставной исполнитель: что звал сервер, остаётся в `seen`; собственных инструментов у сервера в списке нет. */
+    const seen: { name: string; args: Record<string, unknown>; meta: Record<string, unknown> | undefined; signal: AbortSignal | undefined }[] = [];
+    const stub: ToolRunner = {
+      list: async () => [{ name: 'stub_tool', description: 'подставной', inputSchema: { type: 'object' } }],
+      call: async (name, args, meta, signal) => {
+        seen.push({ name, args, meta, signal });
+        return { content: [{ type: 'text', text: 'готово' }] };
+      },
+    };
+    beforeEach(() => { seen.length = 0; });
+
+    async function connectStub(context: McpContext, rings: Ring[] = []): Promise<Client> {
+      const server = createParleyServer(context, stub);
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: 'test', version: '0.0.0' });
+      client.fallbackNotificationHandler = async (notification) => {
+        if (notification.method === 'notifications/claude/channel') rings.push(notification.params as unknown as Ring);
+      };
+      await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+      opened.push({ client, server });
+      return client;
+    }
+
+    it('list и call идут через него, с _meta и сигналом отмены; браузер и create_session остаются за сервером', async () => {
+      const agent: AgentChannel = { url: 'http://127.0.0.1:1/agent/browser', token: 'a'.repeat(64) };
+      const client = await connectStub({ projectPath: project, workId, workDir: workPaths(project, workId).dir, sessionId: 's-01', channel: false, agent });
+
+      const names = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(names[0]).toBe('stub_tool');
+      expect(names).toContain('create_session');
+      expect(names.some((name) => name.startsWith('browser_'))).toBe(true);
+      // Своих инструментов у сервера нет: всё остальное — от исполнителя.
+      expect(names).not.toContain('get_map');
+
+      const result = await client.callTool({ name: 'stub_tool', arguments: { n: 1 }, _meta: { threadId: 'T' } });
+      expect(result.content).toEqual([{ type: 'text', text: 'готово' }]);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toMatchObject({ name: 'stub_tool', args: { n: 1 }, meta: { threadId: 'T' } });
+      expect(seen[0]!.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('сторож входящих не запускается: карту такой сервер не читает, звонка нет', async () => {
+      await updateMap(project, workId, (map) => {
+        addSession(map, { provider: 'claude', label: 'бэк', task: 'делать' });
+        addMessage(map, { from: 's-02', to: ['s-01'], text: 'привет' });
+      });
+      const rings: Ring[] = [];
+      await connectStub({ projectPath: project, workId, workDir: workPaths(project, workId).dir, sessionId: 's-01', channel: true, pollMs: 40 }, rings);
+
+      await delay(200);
+      expect(rings).toHaveLength(0);
+    });
+
+    it('с исполнителем сервер не объявляет claude/channel и его instructions даже при channel: true — звонить некому', async () => {
+      const client = await connectStub({ projectPath: project, workId, workDir: workPaths(project, workId).dir, sessionId: 's-01', channel: true });
+
+      expect(client.getServerCapabilities()?.experimental).toBeUndefined();
+      expect(client.getInstructions()).toBeUndefined();
+    });
   });
 });

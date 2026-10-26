@@ -41,7 +41,7 @@ export type Ring = {
 
 export interface InboxWatchOptions {
   notify: (ring: Ring) => Promise<void>;
-  /** Как часто перечитывать карту, если `fs.watch` промолчал. */
+  /** Как часто сверять `stat` карты, если `fs.watch` промолчал: перечитывается она, только когда файл изменился (спека хранилища 6.9). */
   pollMs: number;
   /** Ожидание в `waitForMap` за один оборот; тесты укорачивают. */
   waitMs?: number;
@@ -77,6 +77,10 @@ export function watchInbox(
 ): () => void {
   const rung = new Set<string>();
   let stopped = false;
+  // Остановка прерывает ожидание сама: `waitForMap` зовёт пробу только после
+  // изменения файла карты (спека хранилища 6.9), и на неподвижной карте флаг
+  // `stopped` до конца оборота никто бы не увидел.
+  const stopping = new AbortController();
   const mapFile = workPaths(context.projectPath, context.workId).map;
 
   /**
@@ -87,8 +91,9 @@ export function watchInbox(
    * `catch` вокруг `waitForMap`, и цикл сторожа его переживает.
    */
   const probe = async (): Promise<Call[] | null> => {
-    // Пустой список будит `waitForMap` и гасит его таймеры: иначе закрытый
-    // транспорт оставил бы процесс ждать своего часа.
+    // Остановленный сторож карту не читает. Пустой список заканчивает ожидание,
+    // если пробу всё же позвали, но на неподвижной карте её не зовёт никто:
+    // закрытый транспорт гасит ожидание через `stopping` (спека хранилища 6.9).
     if (stopped) return [];
     const map = await readMap(context.projectPath, context.workId);
     const mine = unreadFor(map, context.sessionId);
@@ -106,7 +111,7 @@ export function watchInbox(
     while (!stopped) {
       let found: Call[] | null = null;
       try {
-        found = await waitForMap(mapFile, probe, waitMs, pollMs);
+        found = await waitForMap(mapFile, probe, waitMs, pollMs, stopping.signal);
       } catch {
         // Карта не парсится или исчезла (работу снесли живьём): подождём
         // следующего изменения.
@@ -133,5 +138,6 @@ export function watchInbox(
 
   return () => {
     stopped = true;
+    stopping.abort();
   };
 }

@@ -5,6 +5,8 @@ import path from 'node:path';
 import type { RoleCatalog } from '../roles/types.js';
 import { envName, envValue, LEGACY_STATE_DIR, STATE_DIR, STATE_DIRS } from '../names.js';
 import { AGENT_TOKEN_ENV, AGENT_URL_ENV, type AgentChannel, type ToolProfile } from '../work/mcp-config.js';
+import type { ProviderRow } from './provider-rows.js';
+import type { MapChanges } from './watch-map.js';
 
 /**
  * Кто звонит и куда писать. Сервер живёт по одному процессу на сессию и узнаёт
@@ -41,7 +43,7 @@ export interface McpContext {
    * `browser_open` не объявляется (сессия до обновления или хост без эндпоинта).
    */
   agent?: AgentChannel;
-  /** Как часто перечитывать карту, если `fs.watch` промолчал. Тесты ускоряют. */
+  /** Как часто сверять `stat` карты, если `fs.watch` промолчал: перечитывается она, только когда файл изменился (спека хранилища 6.9). Тесты ускоряют. */
   pollMs?: number;
   /**
    * Потолок писем этой сессии за скользящий час (разговор агентов, 4.7). В
@@ -59,6 +61,17 @@ export interface McpContext {
    * Поле нужно тестам и встраиванию.
    */
   resourceLimits?: ResourceLimits;
+  /**
+   * Строки провайдеров для `get_map` из своего процесса (спека хранилища 6.9): исполнитель в хосте знает вход аккаунтов
+   * и лимиты сам, и спрашивать у себя по HTTP через `agent` ему незачем. `null` — строки неизвестны: `get_map` отдаёт
+   * локальные с пометкой. Нет поля — строки спрашиваются у хоста по каналу `agent`. В окружении его нет.
+   */
+  providerRows?: (signal: AbortSignal) => Promise<ProviderRow[] | null>;
+  /**
+   * Внешний источник «карта изменилась» для `wait_for` (спека хранилища 6.9, этап 1): хост знает о каждой записи карты,
+   * и ожидание в его процессе не заводит `fs.watch`. Нет поля — ожидание следит за файлом само. В окружении его нет.
+   */
+  mapChanges?: MapChanges;
 }
 
 /**

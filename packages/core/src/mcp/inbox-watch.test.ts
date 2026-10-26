@@ -34,6 +34,24 @@ vi.mock('../work/store.js', async (importOriginal) => {
   };
 });
 
+/**
+ * Ожидания `waitForMap`, которые завёл сторож. Промис своего цикла он наружу не отдаёт, а то, что `stop()` дотянулся
+ * до ожидания, видно только по тому, что оно закончилось (спека хранилища 6.9).
+ */
+const waits = vi.hoisted(() => ({ list: [] as Promise<unknown>[] }));
+
+vi.mock('./watch-map.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./watch-map.js')>();
+  return {
+    ...actual,
+    waitForMap: (...args: Parameters<typeof actual.waitForMap>) => {
+      const waiting = actual.waitForMap(...args);
+      waits.list.push(waiting);
+      return waiting;
+    },
+  };
+});
+
 let project = '';
 let workId = '';
 
@@ -48,8 +66,8 @@ const contextFor = (sessionId: string) => ({
   channel: true,
 });
 
-function start(sessionId: string, notify: (ring: Ring) => Promise<void>): () => void {
-  const stop = watchInbox(contextFor(sessionId), { notify, pollMs: 20, waitMs: 500 });
+function start(sessionId: string, notify: (ring: Ring) => Promise<void>, waitMs = 500): () => void {
+  const stop = watchInbox(contextFor(sessionId), { notify, pollMs: 20, waitMs });
   stops.push(stop);
   return stop;
 }
@@ -66,6 +84,7 @@ const settle = (check: () => void): Promise<void> =>
   vi.waitFor(check, { timeout: 2000, interval: 10 });
 
 beforeEach(async () => {
+  waits.list.length = 0;
   project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
   const map = await createWork(project, { title: 'Авторизация', goal: 'логин по паролю' });
   workId = map.work.id;
@@ -194,5 +213,23 @@ describe('watchInbox', () => {
 
     await delay(200);
     expect(rings).toHaveLength(0);
+  });
+
+  it('stop() завершает ожидание и на неизменной карте', async () => {
+    // Оборот в час: само ожидание не кончится. Пробу зовёт только изменение файла карты (спека хранилища 6.9), а
+    // карта стоит, так что флаг остановки пробой не заметить — ожидание обязано прерваться по сигналу `stop()`.
+    const stop = start('s-02', async () => {}, 60 * 60 * 1000);
+    await settle(() => expect(waits.list).toHaveLength(1));
+    // Первая проба вернула `null`, и ожидание заведено: дальше оно держится только на таймере и опросе.
+    await delay(100);
+    let settled = false;
+    const mark = (): void => {
+      settled = true;
+    };
+    void (waits.list[0] as Promise<unknown>).then(mark, mark);
+
+    stop();
+
+    await settle(() => expect(settled).toBe(true));
   });
 });

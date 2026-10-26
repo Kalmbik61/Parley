@@ -1,14 +1,31 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { checkSession, hasLiveProcess, isAlive, processStartedAt, reconcileMap } from './liveness.js';
 import { addSession, removeSession, transitionSession } from './map.js';
-import { createWork, readMap, updateMap, workPaths } from './store.js';
+import { createWork, readMap, updateMap } from './store.js';
 import type { WorkSession } from './types.js';
+
+/**
+ * Счётчик записей карты. Раньше число записей читалось по `.bak` (карта до последней записи), но копию
+ * `updateMap` кладёт не чаще раза в десять минут (спека хранилища 6.9) и записей уже не отражает.
+ */
+const mapWrites = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock('./store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./store.js')>();
+  return {
+    ...actual,
+    updateMap: (...args: Parameters<typeof actual.updateMap>) => {
+      mapWrites.count += 1;
+      return actual.updateMap(...args);
+    },
+  };
+});
 
 /** Сколько живёт сессия без pid после последнего признака жизни (спецификация, 5.4). */
 const DEAD_MS = DEFAULT_CONFIG.silenceThresholdMs * 10;
@@ -252,12 +269,11 @@ describe('reconcileMap (чек-лист 15)', () => {
   it('все мёртвые сессии работы усыпляются одной записью карты', async () => {
     const { work } = await createWork(project, { title: 'работа' });
     const ids = await seedDead(work.id, 3);
+    const writesBefore = mapWrites.count;
 
     expect((await reconcileMap(project, work.id)).sort()).toEqual([...ids].sort());
 
-    // `.bak` — карта до последней записи: в ней все три ещё active, значит запись была одна.
-    const before = JSON.parse(await readFile(workPaths(project, work.id).bak, 'utf8')) as { sessions: WorkSession[] };
-    expect(before.sessions.map((session) => session.lifecycle)).toEqual(['active', 'active', 'active']);
+    expect(mapWrites.count - writesBefore).toBe(1);
     const after = await readMap(project, work.id);
     expect(after.sessions.map((session) => session.lifecycle)).toEqual(['sleeping', 'sleeping', 'sleeping']);
   });

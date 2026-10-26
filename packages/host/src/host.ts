@@ -1,12 +1,15 @@
 import { AGENT_PROVIDERS_PATH, createProvidersEndpoint, providerRowsOf } from './agent/providers-endpoint.js';
 import { AGENT_SESSIONS_PATH, createSessionEndpoint } from './agent/session-endpoint.js';
 import { AGENT_ATTEMPTS_PATH, createAttemptsEndpoint } from './agent/attempts-endpoint.js';
+import { hostToolContext } from './agent/tool-context.js';
+import { createToolsEndpoint } from './agent/tools-endpoint.js';
 import { randomBytes } from 'node:crypto';
 import { mkdir, chmod, link, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  AGENT_TOOLS_PATH,
   ASSISTANT_MIN_VERSIONS,
   bothEnv,
   clearSecret,
@@ -48,6 +51,7 @@ import type { HostPaths } from './paths.js';
 import { HOST_ERROR_REASONS } from '@parley/protocol';
 import type { Result, SessionRef } from '@parley/protocol';
 import { createHostHandlers } from './methods/index.js';
+import { createCachedCatalog } from './methods/role-catalog-cache.js';
 import { createWorksService } from './works/works-service.js';
 import { createActivityService } from './activity/activity-service.js';
 import { createCompactionService, type CompactionService } from './compaction/compaction-service.js';
@@ -382,12 +386,30 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Строки провайдеров для агента (спека подписок 5.8, К7): тот же `providers.list`, что у окна, без ключа и проверок.
   // Обработчик собирается ниже, когда готовы службы проверки ключей, поэтому привязка поздняя.
   let listProviders: (() => Promise<Result<'providers.list'>>) | undefined;
+  const listProviderRows = async () => {
+    if (listProviders === undefined) throw new Error('the host is still starting');
+    return providerRowsOf(await listProviders());
+  };
   const providersEndpoint = createProvidersEndpoint({
     authenticate: (req) => browserEndpoint.authenticate(req),
-    list: async () => {
-      if (listProviders === undefined) throw new Error('the host is still starting');
-      return providerRowsOf(await listProviders());
-    },
+    list: listProviderRows,
+  });
+  // Каталог ролей хоста один на окно (`roles.list`, `recipes.list`) и агентов (`list_roles`): без общего кэша каждый
+  // `list_roles` агента заново читал бы конфигурацию Codex (`codex app-server`, до 8 с) — так хост уже подвисал.
+  const roleCatalog = createCachedCatalog();
+  // Инструменты агента исполняются здесь, в процессе хоста (спека хранилища 6.3, 6.9): карту работы открывает только хост.
+  // Строки провайдеров для `get_map` — те же, что у `/agent/providers`: ходить к себе по HTTP незачем; `wait_for` будит
+  // изменение работ службы, а не `fs.watch`; `list_roles` берёт общий кэш каталога. Токен тот же, что у остальных
+  // маршрутов агента.
+  const toolsEndpoint = createToolsEndpoint({
+    authenticate: (req) => browserEndpoint.authenticate(req),
+    contextFor: (ref, launch) =>
+      hostToolContext(ref, launch, {
+        providerRows: listProviderRows,
+        onWorksChange: (listener) => worksService.onChange(() => listener()),
+        roleCatalog: (cwd) => roleCatalog(cwd, { codex: true }),
+      }),
+    log,
   });
   const hookServer = createHookServer({
     log,
@@ -400,7 +422,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       }
       feedService.onHook(request);
     },
-    routes: { [AGENT_ATTEMPTS_PATH]: (req, res) => attemptsEndpoint.handle(req, res), [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
+    routes: { [AGENT_ATTEMPTS_PATH]: (req, res) => attemptsEndpoint.handle(req, res), [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_TOOLS_PATH]: (req, res) => toolsEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
   });
 
   // Версии CLI пробуются один раз на старте, пока остальное поднимается; `providers.list` их ждёт, а
@@ -476,7 +498,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
           return origin === null ? null : `${origin}${AGENT_BROWSER_PATH}`;
         },
         register: (ref) => browserEndpoint.register(ref),
-        unregister: (ref) => browserEndpoint.unregister(ref),
+        // Токен снят — и исполнитель сессии с памятью её вызовов уходит вместе с ним.
+        unregister: (ref) => {
+          browserEndpoint.unregister(ref);
+          toolsEndpoint.forget(ref);
+        },
       },
     },
   );
@@ -647,6 +673,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   handle.context.onShutdown(async () => profiler.stop());
 
   const handlers = createHostHandlers({
+    roleCatalog,
     backlog: backlogService,
     planEffects,
     autonomousEngine,
