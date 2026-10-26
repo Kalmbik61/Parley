@@ -253,7 +253,7 @@ describe('очередь запросов острова', () => {
     useIslandRequests.getState().clear();
     const state = useIslandRequests.getState();
     expect(state.items).toEqual([]);
-    expect(state.index).toBe(0);
+    expect(state.selectedKey).toBeNull();
     expect(state.waitingSince).toEqual({});
   });
 
@@ -284,7 +284,7 @@ describe('очередь запросов острова', () => {
     expect(useIslandRequests.getState().items).toEqual([]);
   });
 
-  it('два снимка одной сессии отвечают не по порядку — побеждает отправленный позже', async () => {
+  it('новая activity во время snapshot ставит свежий снимок в очередь без второго in-flight', async () => {
     const older = deferred<ReturnType<typeof snap>>();
     const newer = deferred<ReturnType<typeof snap>>();
     const pending = [older, newer];
@@ -294,10 +294,12 @@ describe('очередь запросов острова', () => {
     await flush();
     useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
     await flush();
-    expect(call).toHaveBeenCalledTimes(2);
-    newer.resolve(snap([permission('c-new')]));
-    await flush();
+    expect(call).toHaveBeenCalledTimes(1);
     older.resolve(snap([permission('c-old')]));
+    await flush();
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(useIslandRequests.getState().items).toEqual([]);
+    newer.resolve(snap([permission('c-new')]));
     await flush();
     expect(useIslandRequests.getState().items.map((item) => item.card?.cardId)).toEqual(['c-new']);
   });
@@ -379,10 +381,10 @@ describe('очередь запросов острова', () => {
     useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked'), makeActivity(ref('s-02'), 'blocked')]));
     await flush();
     useIslandRequests.getState().select(1);
-    expect(useIslandRequests.getState().index).toBe(1);
+    expect(useIslandRequests.getState().selectedKey).toBe(useIslandRequests.getState().items[1]!.key);
     useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked'), makeActivity(ref('s-02'), 'working')]));
     expect(useIslandRequests.getState().items.map((item) => item.card?.cardId)).toEqual(['c-1']);
-    expect(useIslandRequests.getState().index).toBe(0);
+    expect(useIslandRequests.getState().selectedKey).toBe(useIslandRequests.getState().items[0]!.key);
   });
 
   it('ждущая сессия завершённой работы (done) игнорируется', async () => {
@@ -393,6 +395,134 @@ describe('очередь запросов острова', () => {
     await flush();
     expect(snapshot).not.toHaveBeenCalled();
     expect(useIslandRequests.getState().waitingSince).toEqual({});
+    expect(useIslandRequests.getState().items).toEqual([]);
+  });
+
+  it('снятие соседа сохраняет выбранную карточку по ключу', async () => {
+    const cards = { 's-01': [permission('c-1'), permission('c-2'), permission('c-3')] };
+    const { call } = bridge(cards);
+    useIslandRequests.getState().bind(call as never);
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
+    await flush();
+    useIslandRequests.getState().select(1);
+    cards['s-01'] = [permission('c-2'), permission('c-3')];
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
+    await flush();
+    const state = useIslandRequests.getState();
+    expect(state.items.find((item) => item.key === state.selectedKey)?.card?.cardId).toBe('c-2');
+  });
+
+  it('same cardId обновляет payload и summary, снимает deciding старого содержимого', async () => {
+    const late = deferred<{ applied: boolean; state: string }>();
+    const cards = { 's-01': [permission('c-1', 'old')] };
+    const { call } = bridge(cards, vi.fn(() => late.promise));
+    useIslandRequests.getState().bind(call as never);
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
+    await flush();
+    const key = useIslandRequests.getState().items[0]!.key;
+    const deciding = useIslandRequests.getState().decide(key, { kind: 'permission', behavior: 'allow' });
+    cards['s-01'] = [permission('c-1', 'new')];
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
+    await flush();
+    expect(useIslandRequests.getState().items[0]).toMatchObject({ key, summary: 'Run: new', deciding: false, card: { toolInput: { command: 'new' } } });
+    late.resolve({ applied: true, state: 'allowed' });
+    await deciding;
+    expect(useIslandRequests.getState().items[0]?.summary).toBe('Run: new');
+  });
+
+  it('bind отменяет снимок старого соединения и перечитывает ту же activity', async () => {
+    const late = deferred<ReturnType<typeof snap>>();
+    useIslandRequests.getState().bind(vi.fn(() => late.promise) as never);
+    const blocked = activityMap([makeActivity(ref('s-01'), 'blocked')]);
+    useIslandRequests.getState().sync(entries, blocked);
+    const current = bridge({ 's-01': [permission('new')] });
+    useIslandRequests.getState().bind(current.call as never);
+    useIslandRequests.getState().sync(entries, blocked);
+    await flush();
+    late.resolve(snap([permission('old')]));
+    await flush();
+    expect(current.snapshot).toHaveBeenCalledTimes(1);
+    expect(useIslandRequests.getState().items.map((item) => item.card?.cardId)).toEqual(['new']);
+  });
+
+  it.each([
+    { applied: true, state: 'allowed' },
+    { applied: false, state: 'pending' },
+    { applied: false, state: 'elsewhere' },
+  ])('поздний decide после reconnect не меняет новую карточку: %j', async (result) => {
+    const late = deferred<typeof result>();
+    const { call } = bridge({ 's-01': [permission('c-1')] }, vi.fn(() => late.promise));
+    useIslandRequests.getState().bind(call as never);
+    const blocked = activityMap([makeActivity(ref('s-01'), 'blocked')]);
+    useIslandRequests.getState().sync(entries, blocked);
+    await flush();
+    const deciding = useIslandRequests.getState().decide(useIslandRequests.getState().items[0]!.key, { kind: 'permission', behavior: 'allow' });
+    useIslandRequests.getState().bind(null);
+    useIslandRequests.getState().clear();
+    useIslandRequests.getState().bind(call as never);
+    useIslandRequests.getState().sync(entries, blocked);
+    await flush();
+    late.resolve(result);
+    await deciding;
+    await vi.advanceTimersByTimeAsync(ELSEWHERE_MS);
+    expect(useIslandRequests.getState().items[0]).toMatchObject({ deciding: false, note: null });
+  });
+
+  it('удалённый ref не передаёт поздний decide следующему эпизоду с тем же cardId', async () => {
+    const late = deferred<{ applied: boolean; state: string }>();
+    const { call } = bridge({ 's-01': [permission('c-1')] }, vi.fn(() => late.promise));
+    useIslandRequests.getState().bind(call as never);
+    const blocked = activityMap([makeActivity(ref('s-01'), 'blocked')]);
+    useIslandRequests.getState().sync(entries, blocked);
+    await flush();
+    const deciding = useIslandRequests.getState().decide(useIslandRequests.getState().items[0]!.key, { kind: 'permission', behavior: 'allow' });
+    useIslandRequests.getState().sync([], {});
+    useIslandRequests.getState().sync(entries, blocked);
+    await flush();
+    late.resolve({ applied: true, state: 'allowed' });
+    await deciding;
+    expect(useIslandRequests.getState().items[0]?.card?.cardId).toBe('c-1');
+  });
+
+  it('таймер elsewhere не снимает новое содержимое того же cardId', async () => {
+    const cards = { 's-01': [permission('c-1', 'old')] };
+    const { call } = bridge(cards, vi.fn().mockResolvedValue({ applied: false, state: 'elsewhere' }));
+    useIslandRequests.getState().bind(call as never);
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
+    await flush();
+    await useIslandRequests.getState().decide(useIslandRequests.getState().items[0]!.key, { kind: 'permission', behavior: 'deny' });
+    cards['s-01'] = [permission('c-1', 'new')];
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
+    await flush();
+    await vi.advanceTimersByTimeAsync(ELSEWHERE_MS);
+    expect(useIslandRequests.getState().items[0]).toMatchObject({ summary: 'Run: new', note: null });
+  });
+
+  it('повторный pending snapshot не возвращает уже применённое решение этого эпизода', async () => {
+    const { call } = bridge({ 's-01': [permission('c-1'), permission('c-2')] });
+    useIslandRequests.getState().bind(call as never);
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
+    await flush();
+    await useIslandRequests.getState().decide(useIslandRequests.getState().items[0]!.key, { kind: 'permission', behavior: 'allow' });
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
+    await flush();
+    expect(useIslandRequests.getState().items.map((item) => item.card?.cardId)).toEqual(['c-2']);
+  });
+
+  it('notification metadata не меняет содержимое и не сбрасывает отправляемое решение', async () => {
+    const late = deferred<{ applied: boolean; state: string }>();
+    const cards = { 's-01': [permission('c-1')] };
+    const { call } = bridge(cards, vi.fn(() => late.promise));
+    useIslandRequests.getState().bind(call as never);
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
+    await flush();
+    const deciding = useIslandRequests.getState().decide(useIslandRequests.getState().items[0]!.key, { kind: 'permission', behavior: 'allow' });
+    cards['s-01'] = [{ ...permission('c-1'), notified: true } as FeedCard];
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
+    await flush();
+    expect(useIslandRequests.getState().items[0]?.deciding).toBe(true);
+    late.resolve({ applied: true, state: 'allowed' });
+    await deciding;
     expect(useIslandRequests.getState().items).toEqual([]);
   });
 });

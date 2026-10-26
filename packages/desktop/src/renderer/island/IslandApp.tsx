@@ -122,10 +122,12 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
   const entries = useWorksStore((state) => state.entries);
   const byRef = useActivityStore((state) => state.byRef);
   const items = useIslandRequests((state) => state.items);
-  const index = useIslandRequests((state) => state.index);
+  const selectedKey = useIslandRequests((state) => state.selectedKey);
+  const index = Math.max(0, items.findIndex((item) => item.key === selectedKey));
   const consents = useConsentsStore((state) => state.items);
   const consentDeciding = useConsentsStore((state) => state.deciding);
   const consentNote = useConsentsStore((state) => state.note);
+  const shapeRef = useRef<HTMLDivElement>(null);
   /** Ключи запросов, что остров уже показывал: показанный раз не поднимает окно и не звучит повторно. */
   const seen = useRef(new Set<string>());
   /** Скрытые Clear ключи Done: память острова до перезапуска, при переподключении не сбрасывается. */
@@ -287,7 +289,8 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
       freshConsent = true;
     }
     if (firstFresh === -1 && !freshConsent) return;
-    if (firstFresh !== -1) useIslandRequests.getState().select(firstFresh);
+    // Новый pending не уводит выбор, пока человек работает клавиатурой внутри острова.
+    if (firstFresh !== -1 && !shapeRef.current?.contains(document.activeElement)) useIslandRequests.getState().select(firstFresh);
     setRetracted(false);
     if (config.sound) bridge.island.beep();
   }, [items, consents, config.sound, bridge]);
@@ -342,12 +345,23 @@ export function IslandApp({ bridge }: { bridge: IslandBridge }): JSX.Element {
     return () => window.removeEventListener('keydown', onKey);
   }, [assistant.open]);
   const shown = connected && !retracted;
+  const requestVisible = shown && config.islandEnabled && !(assistant.open && !assistant.collapsed) && consents.length === 0;
+  useEffect(() => {
+    if (!requestVisible || selectedKey === null) return undefined;
+    const refresh = (): void => useIslandRequests.getState().revalidate();
+    refresh();
+    const timer = setInterval(refresh, 1000);
+    window.addEventListener('focus', refresh);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [requestVisible, selectedKey, bridge]);
   // Номер показа растёт при каждом переходе «убран → выдвинут» и считается прямо при отрисовке: карточка, оставшаяся
   // на экране с прошлого показа, не успевает мелькнуть с уже взведёнными кнопками.
   const [show, setShow] = useState({ visible: false, id: 0 });
   if (show.visible !== shown) setShow({ visible: shown, id: shown ? show.id + 1 : show.id });
 
-  const shapeRef = useRef<HTMLDivElement>(null);
   const tabRef = useRef<HTMLButtonElement>(null);
   /** Последняя область, отправленная main: равную ей не шлём повторно (`undefined` — ещё ничего не слали). */
   const sentHitRect = useRef<IslandHitRect | null | undefined>(undefined);

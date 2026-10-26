@@ -204,7 +204,7 @@ describe('проводка острова', () => {
     blocked('s-02');
     expect(await screen.findByTitle('Run: ls')).toBeTruthy();
     expect(screen.getByText('2 of 2')).toBeTruthy();
-    expect(useIslandRequests.getState().index).toBe(1);
+    expect(useIslandRequests.getState().selectedKey).toBe(useIslandRequests.getState().items[1]!.key);
   });
 
   it('новый запрос выдвигает убранный остров: язычок уходит, форма на месте', async () => {
@@ -863,6 +863,113 @@ describe('убирание острова в покое', () => {
     advance(IDLE_RETRACT_MS * 2);
     expect(isRetracted()).toBe(true);
     expect(screen.getByTestId('island-tab')).toBeTruthy();
+  });
+});
+
+describe('перепроверка выбранного запроса T1a', () => {
+  beforeEach(() => vi.useFakeTimers());
+  const flush = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+  it('новый pending не уводит уже сфокусированную карточку', async () => {
+    const { bridge, blocked } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    act(() => screen.getByTestId('island-allow').focus());
+    blocked('s-02');
+    await flush();
+    expect(screen.queryByTitle('Run: rm -rf build')).not.toBeNull();
+    expect(screen.getByText('1 of 2')).toBeTruthy();
+  });
+
+  it('раз в 1000ms замечает ответ извне, хотя та же сессия всё ещё ждёт другую карточку', async () => {
+    const { fake, bridge, blocked } = setup();
+    let cards = [permission('c-1', 'first'), permission('c-2', 'second')];
+    fake.setHandler('feed.snapshot', () => ({ items: cards, revision: 1, mode: null, decisions: 'window' }));
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    expect(screen.queryByTitle('Run: first')).not.toBeNull();
+    cards = [cards[1]!];
+    await act(async () => { await vi.advanceTimersByTimeAsync(999); });
+    expect(screen.queryByTitle('Run: first')).not.toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(screen.queryByTitle('Run: first')).toBeNull();
+    expect(screen.queryByTitle('Run: second')).not.toBeNull();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(0);
+  });
+
+  it('возврат фокуса сразу перепроверяет payload same cardId', async () => {
+    const { fake, bridge, blocked } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    fake.setHandler('feed.snapshot', () => ({ items: [permission('c-1', 'changed')], revision: 2, mode: null, decisions: 'window' }));
+    fireEvent.focus(window);
+    await flush();
+    expect(screen.queryByTitle('Run: changed')).not.toBeNull();
+  });
+
+  it('collapse останавливает polling, повторное открытие сразу обновляет и disconnect снимает timer/focus', async () => {
+    const { fake, bridge, blocked, hover, disconnect } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    tuck(hover);
+    const snapshots = () => fake.calls.filter((call) => call.method === 'feed.snapshot').length;
+    const collapsed = snapshots();
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    fireEvent.focus(window);
+    await flush();
+    expect(snapshots()).toBe(collapsed);
+    expand();
+    await flush();
+    expect(snapshots()).toBe(collapsed + 1);
+    disconnect();
+    const disconnected = snapshots();
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    fireEvent.focus(window);
+    await flush();
+    expect(snapshots()).toBe(disconnected);
+  });
+
+  it('focus и timer делят один in-flight snapshot на ref; network error сохраняет карточку', async () => {
+    const { fake, bridge, blocked } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    let reject!: (error: Error) => void;
+    const snapshot = vi.fn(() => new Promise<never>((_resolve, fail) => { reject = fail; }));
+    fake.setHandler('feed.snapshot', snapshot);
+    fireEvent.focus(window);
+    fireEvent.focus(window);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    await act(async () => { reject(new Error('disconnected')); });
+    expect(screen.queryByTitle('Run: rm -rf build')).not.toBeNull();
+    expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(0);
+  });
+
+  it('snapshot выбранной карточки, завершившийся после collapse, не запускает фоновые retries', async () => {
+    const { fake, bridge, blocked, hover } = setup();
+    render(<IslandApp bridge={bridge} />);
+    await flush();
+    blocked('s-01');
+    await flush();
+    let resolve!: (result: { items: FeedCard[]; revision: number; mode: null; decisions: 'window' }) => void;
+    const snapshot = vi.fn(() => new Promise<{ items: FeedCard[]; revision: number; mode: null; decisions: 'window' }>((done) => { resolve = done; }));
+    fake.setHandler('feed.snapshot', snapshot);
+    fireEvent.focus(window);
+    tuck(hover);
+    await act(async () => { resolve({ items: [], revision: 2, mode: null, decisions: 'window' }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(snapshot).toHaveBeenCalledTimes(1);
   });
 });
 
