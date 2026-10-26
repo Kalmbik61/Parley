@@ -27,6 +27,7 @@ import {
   removeHostLease,
   storeLetterReader,
   watchWorks,
+  withLetterSnapshot,
   WorkNotFoundError,
   workVersion,
   writeHostLease,
@@ -141,7 +142,8 @@ export function createWorksService(
   /**
    * Снимок каждой работы для окна по версии её карты и бюджету писем (спека хранилища 6.2, план 4, задача 5): запись в одну
    * работу не заставляет сжимать остальные. Ключ — работа; в записи версия и по снимку на каждый бюджет (обычный,
-   * архивный, запасной).
+   * архивный, запасной); после каждой сборки в слоте остаются только запрошенные ею варианты (`buildWindow`): простаивающая
+   * работа не копит по варианту на каждое число живых работ, которое когда-то было.
    */
   const windowParts = new Map<string, { version: number; parts: Map<string, WindowPart> }>();
   /** Снимки для клиентов считаются один раз на номер: `works.list` и рассылка делят одну работу. */
@@ -160,10 +162,19 @@ export function createWorksService(
    * Сжатая карта одной работы для окна и её размер в кадре. Берётся из `windowParts`, пока не сменилась версия карты
    * (`WorkEntry.version`: та же версия — та же карта) и бюджет; у работы без версии кэша нет. Письма читаются запросами из
    * таблиц (`storeLetterReader`); живые правила непрочитанного идут по карте сервиса, а не по карте из базы (спека хранилища 6.2).
+   * `asked` — какие варианты слота просила эта сборка окна: по нему `buildWindow` потом убирает остальные.
    */
-  function windowPart(work: WorkEntry, messageBytes: number, textMax?: number): WindowPart {
+  function windowPart(
+    work: WorkEntry,
+    messageBytes: number,
+    asked: Map<string, Set<string>>,
+    textMax?: number,
+  ): WindowPart {
     const key = workKey(work.projectPath, work.map.work.id);
     const variant = `${messageBytes}:${textMax ?? ''}`;
+    let wanted = asked.get(key);
+    if (wanted === undefined) asked.set(key, (wanted = new Set()));
+    wanted.add(variant);
     const slot = windowParts.get(key);
     const version = work.version;
     if (version !== undefined && slot?.version === version) {
@@ -173,7 +184,10 @@ export function createWorksService(
     const options = { messageBytes, ...(textMax === undefined ? {} : { textMax }) };
     let map: WindowWorkMap;
     try {
-      map = compactWorkMap(work.map, options, storeLetterReader(work.projectPath, work.map.work.id, { map: work.map }));
+      // Один снимок базы на все чтения писем этой работы: чужая запись между ними не рассогласует итоги и хвосты.
+      map = withLetterSnapshot(work.projectPath, work.map.work.id, () =>
+        compactWorkMap(work.map, options, storeLetterReader(work.projectPath, work.map.work.id, { map: work.map })),
+      );
     } catch (error) {
       // Работу сняли между чтением списка и сборкой снимка: до следующего обновления она без писем, остальное окно не страдает.
       if (!(error instanceof WorkNotFoundError)) throw error;
@@ -196,7 +210,7 @@ export function createWorksService(
    * всего снимка, но без повторной сериализации работ, которые не менялись.
    */
   function buildWindow(): WorksSnapshot | null {
-    for (const key of windowParts.keys()) if (!entries.has(key)) windowParts.delete(key);
+    const asked = new Map<string, Set<string>>();
     const all = Array.from(entries.values());
     const live = all.filter((entry) => entry.map.work.status !== 'archived').length;
     const share = Math.min(
@@ -204,7 +218,7 @@ export function createWorksService(
       Math.max(WINDOW_MESSAGES_MIN_BYTES, Math.floor(WINDOW_MESSAGES_TOTAL_BYTES / Math.max(live, 1))),
     );
     const build = (messagesFor: (archived: boolean) => number, textMax?: number): WorksSnapshot | null => {
-      const parts = all.map((work) => windowPart(work, messagesFor(work.map.work.status === 'archived'), textMax));
+      const parts = all.map((work) => windowPart(work, messagesFor(work.map.work.status === 'archived'), asked, textMax));
       const snapshot: WorksSnapshot = {
         entries: parts.map((part) => part.entry),
         branches: Object.fromEntries(branches),
@@ -216,7 +230,16 @@ export function createWorksService(
         Math.max(parts.length - 1, 0);
       return bytes <= WINDOW_SNAPSHOT_MAX_BYTES ? snapshot : null;
     };
-    return build((archived) => (archived ? 0 : share)) ?? build(() => 0, WINDOW_FALLBACK_TEXT_BYTES);
+    const snapshot = build((archived) => (archived ? 0 : share)) ?? build(() => 0, WINDOW_FALLBACK_TEXT_BYTES);
+    // В слотах остаётся то, что просила эта сборка: слот пропавшей работы (её ключа в `asked` нет) уходит целиком, у
+    // остальных — только запрошенные варианты. Запасной проход тоже в счёт: при снимке выше потолка просят оба варианта,
+    // и пересобирать их каждый раз незачем.
+    for (const [key, slot] of windowParts) {
+      const wanted = asked.get(key);
+      if (wanted === undefined) windowParts.delete(key);
+      else for (const variant of slot.parts.keys()) if (!wanted.has(variant)) slot.parts.delete(variant);
+    }
+    return snapshot;
   }
 
   const windowSnapshot = (): WorksSnapshot | null => {

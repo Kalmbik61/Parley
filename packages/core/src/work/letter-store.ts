@@ -421,6 +421,17 @@ export function storeLetterReader(projectPath: string, workId: string, options: 
   };
 }
 
+/**
+ * Выполняет `fn` — несколько чтений писем одной работы — внутри одной читающей транзакции: все запросы видят один снимок
+ * базы, и чужая запись между ними не даёт картины, где итог канала расходится с его хвостом (так собирается снимок
+ * окна: `compactWorkMap` читает письма десятком запросов, спека хранилища 6.2). Внутри уже открытой транзакции (запись,
+ * переезд) своей не открывает, а присоединяется к ней. Работы нет — `WorkNotFoundError`, до вызова `fn`. Чтения,
+ * сделанные `fn` вне базы этой работы (другой дом), в снимок не входят.
+ */
+export function withLetterSnapshot<T>(projectPath: string, workId: string, fn: () => T): T {
+  return readTransaction(letterDb(projectPath, workId), fn);
+}
+
 /** Чтение писем работы для читателей карты (`LetterReads`): брифы, история комнаты, окна участия. */
 export const storeLetterReads = (projectPath: string, workId: string): LetterReads => ({
   query: (q) => readLetters(projectPath, workId, q),

@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -13,6 +14,7 @@ import {
   storeLetterReader,
   unreadCount,
   unreadLetters,
+  withLetterSnapshot,
   writeLetters,
   type LetterTx,
   type NewLetter,
@@ -35,6 +37,9 @@ import {
   type MapWrittenEvent,
 } from './store.js';
 import { HUMAN, PARLEY, type Message, type PlanEffect, type Room, type WindowWorkMap, type WorkMap } from './types.js';
+
+/** Второе соединение с базой дома: чужой процесс, пишущий между чтениями (CLI, MCP агента без канала). */
+const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 
 const WORK = 'w-0001';
 const OLD = '2020-01-01T00:00:00.000Z';
@@ -171,6 +176,29 @@ describe('LetterTx.add', () => {
     const map = readStoredMap(project, WORK);
     expect(map.work.messageSeq).toBe(2);
     expect(ids(map.messages)).toEqual(['m-01', 'm-03']);
+  });
+});
+
+describe('LetterTx.add: время письма', () => {
+  it('хранит at в каноническом виде: письмо со смещением +03:00 лежит как момент UTC и находится по sinceAt', async () => {
+    await seed();
+
+    // 13:00+03:00 — это 10:00Z; как текст «13:00+03:00» попал бы в выборке после «10:00:01Z».
+    writeLetters(project, WORK, (letters) => letters.add(letter({ from: 's-01', to: ['s-02'], at: '2026-10-01T13:00:00+03:00' })));
+
+    expect(letterById(project, WORK, 'm-01')?.at).toBe(T1);
+    expect(ids(readLetters(project, WORK, { limit: 10, sinceAt: '2026-10-01T09:59:59.999Z' }))).toEqual(['m-01']);
+    expect(letterCount(project, WORK, { sinceAt: '2026-10-01T10:00:01.000Z' })).toBe(0);
+  });
+
+  it('нечитаемое время — ошибка вызова, записи нет', async () => {
+    await seed();
+    const before = versionOf();
+
+    expect(() => writeLetters(project, WORK, (letters) => letters.add(letter({ from: 's-01', to: ['s-02'], at: 'не дата' })))).toThrow(RangeError);
+
+    expect(versionOf()).toBe(before);
+    expect(letterCount(project, WORK, {})).toBe(0);
   });
 });
 
@@ -605,6 +633,51 @@ describe('читатель писем для страниц и снимка', ()
   });
 });
 
+describe('withLetterSnapshot: одно чтение — один снимок', () => {
+  it('чужая запись между чтениями внутри снимка не видна, после снимка видна', async () => {
+    await seed(fillFive);
+    const foreign = new DatabaseSync(path.join(home, 'parley.db'));
+    try {
+      const inside = withLetterSnapshot(project, WORK, () => {
+        const before = [letterCount(project, WORK, {}), channelStats(project, WORK)['r-01']?.total];
+        foreign.exec(`DELETE FROM messages WHERE work_id = '${WORK}' AND id = 'm-04'`);
+        return { before, after: [letterCount(project, WORK, {}), channelStats(project, WORK)['r-01']?.total], tail: ids(readLetters(project, WORK, { roomId: 'r-01', limit: 5 })) };
+      });
+
+      expect(inside).toEqual({ before: [5, 3], after: [5, 3], tail: ['m-02', 'm-03', 'm-04'] });
+      expect(workDb().isTransaction).toBe(false);
+      expect(letterCount(project, WORK, {})).toBe(4);
+    } finally {
+      foreign.close();
+    }
+  });
+
+  it('внутри открытой транзакции записи присоединяется к ней, своей не открывает и не закрывает', async () => {
+    await seed(fillFive);
+
+    await updateMap(project, WORK, (_map, letters) => {
+      letters.add(letter({ from: 's-01', to: ['s-02'] })); // m-06, видно только этой транзакции
+      expect(withLetterSnapshot(project, WORK, () => letterCount(project, WORK, {}))).toBe(6);
+      expect(workDb().isTransaction).toBe(true);
+    });
+
+    expect(workDb().isTransaction).toBe(false);
+    expect(letterCount(project, WORK, {})).toBe(6);
+  });
+
+  it('упавшее тело откатывает снимок и пробрасывает ошибку; работы нет — WorkNotFoundError, тело не зовётся', async () => {
+    await seed(fillFive);
+
+    expect(() => withLetterSnapshot(project, WORK, () => { throw new Error('сбой чтения'); })).toThrow('сбой чтения');
+    expect(workDb().isTransaction).toBe(false);
+
+    const body = vi.fn();
+    expect(() => withLetterSnapshot(project, 'w-9999', body)).toThrow(WorkNotFoundError);
+    expect(body).not.toHaveBeenCalled();
+    expect(workDb().isTransaction).toBe(false);
+  });
+});
+
 /** Результат чтения внутри транзакции, без изменений карты. */
 async function updateMapResult<T>(read: (letters: LetterTx) => T): Promise<T> {
   let result: T | undefined;
@@ -944,6 +1017,26 @@ describe('записанные письма в таблицах', () => {
     expect(readStoredMap(project, WORK)).toEqual(full);
     expect(await readMap(project, WORK)).toEqual({ ...full, messages: undefined });
     expectDbParity();
+  });
+
+  it('незнакомый ключ __proto__ в письме прежней карты переезжает собственным ключом, а не сменой прототипа', async () => {
+    await seed();
+    const full: WindowWorkMap = readStoredMap(project, WORK);
+    // `JSON.parse` создаёт `__proto__` обычным собственным ключом — так он и пришёл бы из файла прежней карты.
+    const odd = JSON.parse(
+      `{"id":"m-01","roomId":null,"from":"s-01","to":["s-02"],"at":"${T1}","text":"t","kind":"note","readBy":{},"__proto__":{"polluted":true},"future":1}`,
+    ) as Message;
+    full.messages = [odd];
+    full.work.messageSeq = 1;
+
+    replaceStoredMap(project, WORK, full);
+
+    const stored = readStoredMap(project, WORK).messages[0] as Message;
+    expect(Object.hasOwn(stored, '__proto__')).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(stored, '__proto__')?.value).toEqual({ polluted: true });
+    expect(Object.getPrototypeOf(stored)).toBe(Object.prototype);
+    expect((stored as unknown as Record<string, unknown>)['future']).toBe(1);
+    expect((stored as unknown as Record<string, unknown>)['polluted']).toBeUndefined();
   });
 
   it('replaceStoredMap без messages письма не трогает, с пустым списком — стирает', async () => {

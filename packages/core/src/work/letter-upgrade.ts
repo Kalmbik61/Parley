@@ -11,7 +11,7 @@
 
 import type { DatabaseSync } from 'node:sqlite';
 import { isDeepStrictEqual } from 'node:util';
-import { letterByIdRow, replaceLetters, unreadOfHuman, unreadOfSession } from './letter-tables.js';
+import { letterByIdRow, letterSeq, replaceLetters, unreadOfHuman, unreadOfSession } from './letter-tables.js';
 import { unreadFor, unreadForHuman } from './letters.js';
 import { diffRows, ENTRY_FIELDS, mapToRows, rowIndex, rowsToMap, type StoredRow } from './map-rows.js';
 import { normalizeLegacyMap } from './map.js';
@@ -50,6 +50,31 @@ function storedUnread(db: DatabaseSync, projectPath: string, workId: string, map
 }
 
 /**
+ * Первый путь, где два значения различаются (`messages[12].readBy.s-04`), чтобы причина отказа была по делу. Пустая
+ * строка — расходятся сами корни; `undefined` — различий не найдено (значения равны).
+ */
+function firstDifference(left: unknown, right: unknown, at: string): string | undefined {
+  if (isDeepStrictEqual(left, right)) return undefined;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+      const found = firstDifference(left[index], right[index], `${at}[${index}]`);
+      if (found !== undefined) return found;
+    }
+    return at;
+  }
+  const plain = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+  if (plain(left) && plain(right)) {
+    for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+      const found = firstDifference(left[key], right[key], at === '' ? key : `${at}.${key}`);
+      if (found !== undefined) return found;
+    }
+  }
+  // Расхождение не в потомках (другой тип, прототип, `undefined` против отсутствия ключа): виноват сам узел.
+  return at;
+}
+
+/**
  * Сверка работы, чьи строки уже в базе (внутри транзакции их видно и до `COMMIT`): карта из таблиц равна `expected`, а
  * непрочитанное из базы — `before`, снятому с исходной карты до вставки. Не сошлось — исключение с причиной: `source` —
  * то, с чем сверяли (имя файла или «строки схемы 1»), `mismatch` — текст отказа при разных картах. Таблицы, из которых
@@ -64,8 +89,18 @@ export function verifyLetterMap(
   source: string,
   mismatch = `the map read back from the database does not match ${source}`,
 ): void {
+  // База отдаёт письма по номерам: исходная карта с письмами в другом порядке не сойдётся при любом чтении — скажем это прямо.
+  let previous = 0;
+  for (const message of expected.messages) {
+    const seq = letterSeq(message.id);
+    if (seq <= previous) throw new Error(`letters are not in id order in ${source}`);
+    previous = seq;
+  }
   const stored = readStoredMapOn(db, projectPath, workId);
-  if (!isDeepStrictEqual(stored, expected)) throw new Error(mismatch);
+  if (!isDeepStrictEqual(stored, expected)) {
+    const path = firstDifference(stored, expected, '');
+    throw new Error(path === undefined || path === '' ? mismatch : `${mismatch}; first difference at ${path}`);
+  }
   const after = storedUnread(db, projectPath, workId, stored);
   if (!isDeepStrictEqual(after.human, before.human)) {
     throw new Error(`unread letters of the human read back from the database differ from ${source}`);

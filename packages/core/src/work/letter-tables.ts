@@ -362,7 +362,17 @@ function insertLetter(db: DatabaseSync, projectPath: string, workId: string, mes
   if (message.via !== undefined) body.via = message.via;
   // Письмо прежней карты может нести ключи, которых схема не знает: они едут в `body`, и сверка переезда видит письмо
   // таким, каким оно было (спека хранилища 6.6). У писем, записанных `LetterTx.add`, лишних ключей нет.
-  for (const key of Object.keys(message)) if (!LETTER_FIELDS.has(key)) body[key] = (message as unknown as Record<string, unknown>)[key];
+  // Через `defineProperty`, как в `toMessage`: присваивание `body['__proto__']` задало бы прототип, а не собственный ключ.
+  for (const key of Object.keys(message)) {
+    if (!LETTER_FIELDS.has(key)) {
+      Object.defineProperty(body, key, {
+        value: (message as unknown as Record<string, unknown>)[key],
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+  }
   sql(db, INSERT_LETTER).run(
     projectPath,
     workId,
@@ -473,7 +483,9 @@ export function createTableLetterTx(
         roomId: letter.roomId ?? null,
         from: letter.from,
         to: [...letter.to],
-        at: letter.at ?? new Date().toISOString(),
+        // `at` в каноническом ISO-виде: `sinceAt` сравнивает его как текст, так что строка с другим смещением сломала бы порядок
+        // (спека хранилища 6.6); нечитаемый момент — ошибка вызова.
+        at: letter.at === undefined ? new Date().toISOString() : sinceBound(letter.at),
         text: letter.text,
         kind: letter.kind,
         readBy: { ...(letter.readBy ?? {}) },

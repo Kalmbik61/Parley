@@ -21,7 +21,7 @@ import {
   workPaths,
   workVersion,
 } from '@parley/core';
-import type { Room, WorkMap } from '@parley/core';
+import type { Room, WindowWorkMap, WorkMap } from '@parley/core';
 import type { EventData, EventName } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { createWindowCounters } from '../health/window-counters.js';
@@ -645,6 +645,107 @@ describe('снимок окна по версии работы (план 4, за
 
     expect(rebuilt()).toContain(again.work.id);
     expect(rebuilt()).not.toContain(b.work.id);
+  });
+
+  it('простаивающая работа держит только нынешний вариант бюджета: после двух смен числа живых работ прежний вариант собирается заново', async () => {
+    const idle = await createWork(projectA, { title: 'простаивающая' });
+    await createWork(projectA, { title: 'вторая' });
+    const s = service({ debounceMs: 20 });
+    await s.start();
+    await settle(s);
+    const budgetsOf = (workId: string): number[] =>
+      compact.mock.calls.filter(([map]) => map.work.id === workId).map(([, options]) => options.messageBytes);
+    // Две живые работы — по 1 МиБ каждой.
+    expect(budgetsOf(idle.work.id).at(-1)).toBe(1024 * 1024);
+
+    // Первая смена: четыре живые работы — по 768 КиБ; простаивающую пересобрали под новый бюджет.
+    const extra = [await createWork(projectB, { title: 'третья' }), await createWork(projectB, { title: 'четвёртая' })];
+    await vi.waitFor(() => expect(s.windowSnapshot()?.entries).toHaveLength(4), { timeout: 10_000, interval: 10 });
+    await settle(s);
+    expect(budgetsOf(idle.work.id).at(-1)).toBe(768 * 1024);
+    compact.mockClear();
+
+    // Вторая смена: снова две живые работы. Вариант в 1 МиБ из прошлого раза в слоте уже не лежит — слот хранит только
+    // тот, что просила последняя сборка, — поэтому простаивающую работу (версия та же, её никто не писал) собирают заново.
+    for (const work of extra) await deleteWorkFiles(projectB, work.work.id);
+    await vi.waitFor(() => expect(s.windowSnapshot()?.entries).toHaveLength(2), { timeout: 10_000, interval: 10 });
+    await settle(s);
+
+    expect(budgetsOf(idle.work.id).at(-1)).toBe(1024 * 1024);
+  });
+
+  it('слот работы, пропавшей из снимка, убирается: вернувшаяся с той же версией собирается заново', async () => {
+    const a = await createWork(projectA, { title: 'A' });
+    await createWork(projectB, { title: 'B' });
+    const s = service({ debounceMs: 20 });
+    await s.start();
+    await settle(s);
+    const has = (): boolean => s.windowSnapshot()?.entries.some((entry) => entry.map.work.id === a.work.id) === true;
+
+    // Строку работы снимает и возвращает другое соединение с базой: с той же версией, как у работы, что не менялась.
+    const db = new DatabaseSync(path.join(home, 'parley.db'));
+    try {
+      const row = db.prepare('SELECT * FROM works WHERE project_path = ? AND id = ?').get(projectA, a.work.id) as Record<string, unknown>;
+      db.prepare('DELETE FROM works WHERE project_path = ? AND id = ?').run(projectA, a.work.id);
+      // Вызов `windowSnapshot` на этой ревизии и есть сборка, которая убирает слот пропавшей работы.
+      await vi.waitFor(() => expect(has()).toBe(false), { timeout: 10_000, interval: 10 });
+      await settle(s);
+      compact.mockClear();
+
+      const columns = Object.keys(row);
+      db.prepare(`INSERT INTO works (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`).run(
+        ...(columns.map((column) => row[column]) as Array<string | number | null>),
+      );
+    } finally {
+      db.close();
+    }
+    await vi.waitFor(() => expect(has()).toBe(true), { timeout: 10_000, interval: 10 });
+    await settle(s);
+
+    expect(rebuilt()).toContain(a.work.id);
+  });
+
+  it('работа собирается с одного снимка базы: письмо, снятое чужой записью посреди сборки, остаётся в хвосте, согласованном с итогом', async () => {
+    const work = await createWork(projectA, { title: 'A' });
+    await updateMap(projectA, work.work.id, (map, letters) => {
+      addSession(map, { provider: 'claude', label: 'план', task: 'x' });
+      addRoom(map, { title: 'Комната', creator: 'human', members: ['s-01'], lead: 's-01' });
+      for (let i = 0; i < 3; i += 1) letters.add({ roomId: 'r-01', kind: 'note', from: 's-01', to: [], text: `письмо ${i}` });
+    });
+    const actual = await vi.importActual<typeof import('@parley/core')>('@parley/core');
+    const foreign = new DatabaseSync(path.join(home, 'parley.db'));
+    let first: WindowWorkMap | undefined;
+    let raced = false;
+    // Чужая запись (письмо m-03 стёрто) приходит сразу после чтения итогов канала, до чтения его хвоста.
+    compact.mockImplementation((map, options, letters) => {
+      const racing = {
+        ...letters,
+        channelStats: () => {
+          const stats = letters.channelStats();
+          if (!raced) {
+            raced = true;
+            foreign.prepare('DELETE FROM messages WHERE project_path = ? AND work_id = ? AND id = ?').run(projectA, work.work.id, 'm-03');
+          }
+          return stats;
+        },
+      };
+      const result = actual.compactWorkMap(map, options, racing);
+      first ??= result;
+      return result;
+    });
+    try {
+      const s = service({ debounceMs: 20 });
+      await s.start();
+      await settle(s);
+
+      expect(raced).toBe(true);
+      // Итог и хвост — из одного момента: новейшее письмо по итогам есть и в хвосте.
+      expect(first?.compact?.messages).toMatchObject({ total: 3, latestId: 'm-03' });
+      expect(first?.messages.map((message) => message.id)).toEqual(['m-01', 'm-02', 'm-03']);
+    } finally {
+      compact.mockImplementation(actual.compactWorkMap);
+      foreign.close();
+    }
   });
 
   it('сборка снимка окна не загружает карты из базы ни у одной работы: письма читаются запросами к таблицам, карта — из снимка сервиса', async () => {

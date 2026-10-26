@@ -666,7 +666,7 @@ describe('migrateMapsToDb — переезд map.json в базу', () => {
       {
         projectPath: project,
         workId: 'w-0001',
-        reason: 'map.json differs from the stored copy (newer edits after a downgrade?)',
+        reason: expect.stringContaining('map.json differs from the stored copy (newer edits after a downgrade?); first difference at '),
       },
     ]);
     expect(await readFile(mapFile('w-0001'), 'utf8')).toBe(newerText);
@@ -936,6 +936,40 @@ describe('verifyLetterMap — непрочитанное из базы прот�
 
     expect(() => verifyLetterMap(storeDb(), project, 'w-0001', other, before, 'fixture', 'maps differ')).toThrow('maps differ');
   });
+
+  it('отказ при разных картах называет первый различающийся путь', async () => {
+    const { stored, before } = await seeded();
+    const target = stored.messages.length - 1;
+    const other = structuredClone(stored);
+    other.messages[target]!.readBy['s-04'] = AT;
+
+    expect(() => verifyLetterMap(storeDb(), project, 'w-0001', other, before, 'fixture')).toThrow(
+      `the map read back from the database does not match fixture; first difference at messages[${target}].readBy.s-04`,
+    );
+
+    const shorter = structuredClone(stored);
+    shorter.messages.pop();
+    expect(() => verifyLetterMap(storeDb(), project, 'w-0001', shorter, before, 'fixture', 'maps differ')).toThrow(
+      `maps differ; first difference at messages[${stored.messages.length - 1}]`,
+    );
+
+    const renamed = structuredClone(stored);
+    renamed.work.title = 'другое имя';
+    expect(() => verifyLetterMap(storeDb(), project, 'w-0001', renamed, before, 'fixture', 'maps differ')).toThrow(
+      'maps differ; first difference at work.title',
+    );
+  });
+
+  it('письма не по порядку номеров — отказ с этой причиной, а не безымянное «не совпадает»', async () => {
+    const { stored, before } = await seeded();
+    expect(stored.messages.length).toBeGreaterThan(1);
+    const shuffled = structuredClone(stored);
+    shuffled.messages.reverse();
+
+    expect(() => verifyLetterMap(storeDb(), project, 'w-0001', shuffled, before, 'fixture')).toThrow(
+      'letters are not in id order in fixture',
+    );
+  });
 });
 
 describe('апгрейд базы со схемы 1 — письма из entries в таблицы', () => {
@@ -1096,7 +1130,7 @@ describe('апгрейд базы со схемы 1 — письма из entrie
     writeV1Database([map]);
     const before = dump();
 
-    expect(() => storeDb()).toThrow(/workspace w-0001 .*does not match the schema 1 rows/s);
+    expect(() => storeDb()).toThrow(/workspace w-0001 .*letters are not in id order in the schema 1 rows/s);
     expect(dump()).toEqual(before);
   });
 
