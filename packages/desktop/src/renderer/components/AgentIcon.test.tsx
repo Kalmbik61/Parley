@@ -117,7 +117,7 @@ describe('AgentIcon — свои провайдеры (спека 3.7)', () => {
 });
 
 // Аккаунт подписки (спека подписок 5.9): значок по семейству CLI из `providers.list`, а не по id. Своё место с адресом
-// (`endpoint`) остаётся со значком Parley, хотя тоже запускается через `claude` и тоже несёт `family: 'claude'`.
+// (`endpoint`) выбирает вендорский значок по пресету, а не по `family: 'claude'`.
 describe('AgentIcon — аккаунты подписки (спека подписок 5.9)', () => {
   const row = (id: string, custom: Record<string, unknown>, family: 'claude' | null = 'claude'): ProviderInfo =>
     ({ id, label: id, available: true, family, version: null, limits: null, custom }) as ProviderInfo;
@@ -137,6 +137,18 @@ describe('AgentIcon — аккаунты подписки (спека подпи
     kimi.unmount();
     const other = render(<AgentIcon provider="custom-glm2" />);
     expect(imageOf(other.container)?.getAttribute('src')).toMatch(/parley\.svg$/);
+  });
+
+  it.each([undefined, 'endpoint'])('пресет Kimi — официальный знак в обеих темах, независимо от id и версии хоста (%s)', (kind) => {
+    useProvidersStore.setState({ providers: [row('custom-work-2', { ...endpoint, kind, preset: 'kimi' })] });
+    const { container } = render(<AgentIcon provider="custom-work-2" size={20} label="Kimi" />);
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/kimi\.svg$/);
+    expect(imageOf(container)?.getAttribute('alt')).toBe('Kimi');
+    expect(imageOf(container)?.getAttribute('width')).toBe('20');
+    act(() => useUiStore.setState({ dark: true }));
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/kimi-light\.svg$/);
+    act(() => useProvidersStore.setState({ providers: [row('custom-work-2', endpoint)] }));
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/parley\.svg$/);
   });
 
   it('custom-* без записи в сторе — значок Parley, как раньше', () => {
