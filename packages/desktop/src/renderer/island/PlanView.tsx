@@ -33,7 +33,7 @@ export function PlanView({ card, disabled, canDecide, maxBodyHeight, labels, onD
         aria-label={labels.plan}
         tabIndex={0}
         className="min-h-0 overflow-y-auto whitespace-pre-wrap font-mono text-sm [overflow-wrap:anywhere]"
-        style={{ maxHeight: Math.min(280, Math.max(0, maxBodyHeight)) }}
+        style={{ maxHeight: Number.isFinite(maxBodyHeight) ? Math.min(280, Math.max(0, maxBodyHeight)) : 280 }}
       >
         {card.plan}
       </div>

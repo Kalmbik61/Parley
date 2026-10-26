@@ -54,6 +54,11 @@ describe('PlanView', () => {
     expect(screen.getByRole('button', { name: LABELS.openInParley })).toBeTruthy();
   });
 
+  it.each([NaN, Infinity, -Infinity])('keeps a finite body limit for invalid available height %s', (maxBodyHeight) => {
+    render(<PlanView {...props({ maxBodyHeight })} />);
+    expect(screen.getByRole('region', { name: LABELS.plan }).style.maxHeight).toBe('280px');
+  });
+
   it.each([
     [LABELS.approveAuto, 'auto-accept'],
     [LABELS.approveManual, 'manual'],
