@@ -226,7 +226,22 @@ export function createAttemptsEndpoint(options: {
   authenticate(req: IncomingMessage): SessionRef | undefined;
   engine?: AttemptsEngine;
 }) {
+  const refusal = (error: unknown): AttemptsResult => {
+    const message = error instanceof Error ? error.message : String(error);
+    const ruleCode = ['attempt-fenced', 'handoff-conflict', 'stale-criteria', 'bad-sha', 'attempt-not-running', 'attempt-not-checkable'].includes(message) ? message : 'bad_request';
+    return { ok: false, error: { code: error instanceof PlanConflictError ? 'conflict' : error instanceof Error && 'code' in error ? String(error.code) : ruleCode, message } };
+  };
+  const perform = async (ref: SessionRef, value: unknown, authenticated: () => boolean): Promise<AttemptsResult> => {
+    try {
+      if (!authenticated()) fail('forbidden', 'The session token was revoked.');
+      const request = parseRequest(value);
+      return await (request.action === 'propose-plan' ? propose(ref, request, authenticated) : handoff(ref, request, options.engine ?? engineStub, authenticated));
+    } catch (error) {
+      return refusal(error);
+    }
+  };
   return {
+    perform,
     handle(req: IncomingMessage, res: ServerResponse): void {
       const refuse = (status: number): void => { res.writeHead(status, { Connection: 'close' }); res.end(); req.resume(); };
       const reply = (body: AttemptsResult): void => {
@@ -255,12 +270,9 @@ export function createAttemptsEndpoint(options: {
               return current?.projectPath === ref.projectPath && current?.workId === ref.workId && current?.sessionId === ref.sessionId;
             };
             if (!authenticated()) return refuse(401);
-            const request = parseRequest(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-            reply(request.action === 'propose-plan' ? await propose(ref, request, authenticated) : await handoff(ref, request, options.engine ?? engineStub, authenticated));
+            reply(await perform(ref, JSON.parse(Buffer.concat(chunks).toString('utf8')), authenticated));
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            const ruleCode = ['attempt-fenced', 'handoff-conflict', 'stale-criteria', 'bad-sha', 'attempt-not-running', 'attempt-not-checkable'].includes(message) ? message : 'bad_request';
-            reply({ ok: false, error: { code: error instanceof PlanConflictError ? 'conflict' : error instanceof Error && 'code' in error ? String(error.code) : ruleCode, message } });
+            reply(refusal(error));
           }
         })();
       });

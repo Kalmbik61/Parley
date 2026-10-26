@@ -8,7 +8,7 @@ import { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import { addRoom, addSession, ENGINE, HUMAN, readMap, resolveProposal, workPaths } from '@parley/core';
 import type { AttemptChannelRequest, PlanAttempt, WorkMap } from '@parley/core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBrowserEndpoint } from './browser-endpoint.js';
 import { attemptsEngineGitPath, createAttemptsEndpoint, type AttemptsEngine } from './attempts-endpoint.js';
 
@@ -83,7 +83,11 @@ async function setup(withEngine = true) {
     value.plans = [plan]; value.rooms[0]!.proposal = null;
     await save(value); return { value, plan };
   }
-  return { projectPath, git, baseSha, map, save, read, post, calls, ref, registry, active, raw: () => readFile(file, 'utf8') };
+  const authenticated = (session = 's-01') => {
+    const current = registry.authenticate({ headers: { authorization: `Bearer ${tokens[session]}` } } as IncomingMessage);
+    return current?.projectPath === ref.projectPath && current.workId === ref.workId && current.sessionId === session;
+  };
+  return { projectPath, git, baseSha, map, save, read, post, calls, ref, registry, endpoint, authenticated, active, raw: () => readFile(file, 'utf8') };
 }
 function handoff(criteriaVersion = 1) {
   const body = { version: 1 as const, criteriaVersion, dependsOn: [], coverage: 'covered' as const, scope: 'src', facts: ['Works'], hypotheses: [], notFound: [], gaps: [], text: 'Done', artifacts: [], submittedAt: new Date().toISOString() };
@@ -105,6 +109,46 @@ async function checking(f: Awaited<ReturnType<typeof setup>>) {
 }
 
 describe('agent attempts endpoint', () => {
+  it('shares proposal parsing and execution between handle and perform', async () => {
+    const f = await setup(), body = proposal();
+    const http = (await f.post(body)).body, before = await f.raw();
+    expect(await f.endpoint.perform(f.ref, body, () => f.authenticated())).toEqual(http);
+    expect(await f.raw()).toBe(before);
+    expect((await f.read()).work.proposalSeq).toBe(1);
+  });
+
+  it('shares worker preflight and normalized engine dispatch between handle and perform', async () => {
+    const f = await setup(), { value, plan } = await f.active();
+    plan.autonomous!.attempts = [attempt(f.baseSha)]; await f.save(value);
+    const { hash: _hash, ...manifest } = handoff().manifest;
+    const body = { action: 'submit', attemptId: 'at-0001', manifest };
+    const http = (await f.post(body, 's-02')).body, before = await f.raw();
+    expect(await f.endpoint.perform({ ...f.ref, sessionId: 's-02' }, body, () => f.authenticated('s-02'))).toEqual(http);
+    expect(f.calls[1]).toEqual(f.calls[0]); expect(await f.raw()).toBe(before);
+  });
+
+  it.each([null, [], { action: 'unknown' }, { ...handoff(), actor: 's-02' }])('shares invalid request rejection between handle and perform: %j', async body => {
+    const f = await setup(), before = await f.raw();
+    expect(await f.endpoint.perform(f.ref, body, () => f.authenticated())).toEqual((await f.post(body)).body);
+    expect(f.calls).toEqual([]); expect(await f.raw()).toBe(before);
+  });
+
+  it('refuses perform after token revocation without writes or dispatch', async () => {
+    const f = await setup(), before = await f.raw();
+    f.registry.unregister(f.ref);
+    expect(await f.endpoint.perform(f.ref, proposal(), () => f.authenticated())).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+    expect(f.calls).toEqual([]); expect(await f.raw()).toBe(before);
+  });
+
+  it('rechecks perform authorization after reading the map', async () => {
+    const f = await setup(), { value, plan } = await f.active();
+    plan.autonomous!.attempts = [attempt(f.baseSha)]; await f.save(value);
+    const before = await f.raw(), authenticated = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+    expect(await f.endpoint.perform({ ...f.ref, sessionId: 's-02' }, handoff(), authenticated)).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+    expect(authenticated).toHaveBeenCalledTimes(2);
+    expect(f.calls).toEqual([]); expect(await f.raw()).toBe(before);
+  });
+
   it('freezes base and blob facts in one proposal without starting execution', async () => {
     const f = await setup();
     expect((await f.post(proposal())).body).toEqual({ ok: true, result: { proposalId: 'p-01', rev: 0 } });

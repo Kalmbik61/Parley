@@ -196,12 +196,34 @@ function manifest(value: unknown): Omit<HandoffManifestInput, "sha"> {
   return value as unknown as Omit<HandoffManifestInput, "sha">;
 }
 
+function attemptResult(body: unknown, status?: number): unknown {
+  if (
+    record(body) &&
+    body.ok === false &&
+    record(body.error) &&
+    typeof body.error.code === "string" &&
+    typeof body.error.message === "string"
+  )
+    throw new RoomRuleError(`${body.error.code}: ${body.error.message}`);
+  if (
+    (status === undefined || status === 200) &&
+    record(body) &&
+    body.ok === true &&
+    record(body.result)
+  )
+    return body.result;
+  throw new RoomRuleError(
+    `Parley's host did not return a valid attempt result${status === undefined ? "" : ` (HTTP ${status})`}. Read attempt_status before retrying.`,
+  );
+}
+
 /** The host derives actor and workspace from the same channel token as create_session. */
 export async function sendAttemptRequest(
   context: McpContext,
   request: AttemptChannelRequest,
   signal?: AbortSignal,
 ): Promise<unknown> {
+  if (context.attempts) return attemptResult(await context.attempts(request, signal));
   if (!context.agent || !context.sessionId)
     throw new RoomRuleError(
       "Attempt operations require an identified session with a host connection. Restart this session from Parley.",
@@ -241,24 +263,7 @@ export async function sendAttemptRequest(
       "Parley's host sent an unreadable attempt answer. Read attempt_status before retrying.",
     );
   }
-  if (
-    record(body) &&
-    body.ok === false &&
-    record(body.error) &&
-    typeof body.error.code === "string" &&
-    typeof body.error.message === "string"
-  )
-    throw new RoomRuleError(`${body.error.code}: ${body.error.message}`);
-  if (
-    response.status === 200 &&
-    record(body) &&
-    body.ok === true &&
-    record(body.result)
-  )
-    return body.result;
-  throw new RoomRuleError(
-    `Parley's host did not return a valid attempt result (HTTP ${response.status}). Read attempt_status before retrying.`,
-  );
+  return attemptResult(body, response.status);
 }
 
 export async function attemptTool(

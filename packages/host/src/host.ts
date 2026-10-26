@@ -408,6 +408,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         providerRows: listProviderRows,
         onWorksChange: (listener) => worksService.onChange(() => listener()),
         roleCatalog: (cwd) => roleCatalog(cwd, { codex: true }),
+        attempts: (ref, request) => attemptsEndpoint.perform(ref, request, () => browserEndpoint.isRegistered(ref)),
       }),
     log,
   });
