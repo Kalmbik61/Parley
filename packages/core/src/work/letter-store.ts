@@ -23,6 +23,7 @@ import {
   letterByIdRow,
   letterSeq,
   NON_AGENT_SENDERS,
+  roomLetterTops as roomTops,
   selectLetters as selectRows,
   sessionUnreadTotals,
   sinceBound,
@@ -370,6 +371,15 @@ export function unreadCount(
 export function channelStats(projectPath: string, workId: string): Record<string, { total: number; latestId: string | null }> {
   const db = letterDb(projectPath, workId);
   return readTransaction(db, () => channelTotals(db, projectPath, workId));
+}
+
+/**
+ * Номер новейшего письма каждой из комнат `roomIds` (комнат без писем в ответе нет): запрос `MAX(seq)` на комнату по индексу
+ * канала. Для отпечатков, которые сверяют на каждое изменение работ: цена — от числа комнат, не писем. Работы нет —
+ * `WorkNotFoundError`.
+ */
+export function roomLetterTops(projectPath: string, workId: string, roomIds: readonly string[]): Record<string, number> {
+  return roomTops(letterDb(projectPath, workId), projectPath, workId, roomIds);
 }
 
 /** Сколько писем подходит под условия вне транзакции (итог страницы, `LetterReader.count`). */

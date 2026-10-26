@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeWorkDb, workDb } from './db.js';
 import {
   channelStats,
@@ -9,6 +9,7 @@ import {
   letterCount,
   mapLetterReader,
   readLetters,
+  roomLetterTops,
   storeLetterReader,
   unreadCount,
   unreadLetters,
@@ -1198,5 +1199,94 @@ describe('savepoint и пробный расчёт', () => {
     expect(wrote()).toBe(true);
     expect(map.work.messageSeq).toBe(5);
     expect(ids(map.messages)).toEqual(['m-01', 'm-05']);
+  });
+});
+
+describe('отпечаток лент комнат: номер новейшего письма на комнату', () => {
+  it('roomLetterTops: новейший номер каждой названной комнаты; комнат без писем и чужих нет; прямые письма не мешают', async () => {
+    await seed(fillFive); // r-01: m-02..m-04; прямые m-01, m-05
+    await updateMap(project, WORK, (map) => {
+      addRoom(map, { title: 'пустая', creator: 's-01', members: [] }, OLD);
+    });
+
+    expect(roomLetterTops(project, WORK, ['r-01', 'r-02', 'r-99'])).toEqual({ 'r-01': 4 });
+    expect(roomLetterTops(project, WORK, [])).toEqual({});
+
+    writeLetters(project, WORK, (letters) => letters.add(letter({ from: 's-01', to: [], roomId: 'r-02', text: 'в пустую' })));
+    expect(roomLetterTops(project, WORK, ['r-01', 'r-02'])).toEqual({ 'r-01': 4, 'r-02': 6 });
+  });
+
+  it('запрос — MAX(seq) на комнату по индексу канала: без GROUP BY и COUNT, письма работы не обходятся', async () => {
+    await seed(fillFive);
+    const db = workDb();
+    const real = db.prepare.bind(db);
+    const prepared: string[] = [];
+    const spy = vi.spyOn(db, 'prepare').mockImplementation((text: string) => {
+      prepared.push(text);
+      return real(text);
+    });
+
+    roomLetterTops(project, WORK, ['r-01']);
+    spy.mockRestore();
+
+    const touching = prepared.filter((text) => text.includes('messages'));
+    expect(touching).toEqual(['SELECT MAX(seq) AS top FROM messages WHERE project_path = ? AND work_id = ? AND room_id = ?']);
+    expect(prepared.some((text) => /GROUP BY|COUNT/i.test(text))).toBe(false);
+    const plan = db.prepare(`EXPLAIN QUERY PLAN ${touching[0]}`).all(project, WORK, 'r-01') as { detail: string }[];
+    expect(plan.map((row) => row.detail).join(' ')).toContain('messages_channel');
+  });
+
+  it('работы нет — WorkNotFoundError', () => {
+    expect(() => roomLetterTops(project, 'w-0042', ['r-01'])).toThrow(WorkNotFoundError);
+  });
+});
+
+describe('effectCancelled: письмо отменяет только его эффект', () => {
+  const effect = (id: string, text: string): PlanEffect => ({
+    key: `r-01/mode/0/0/mode/${id}/s-02`,
+    roomId: 'r-01',
+    planId: null,
+    rev: 0,
+    item: null,
+    kind: 'mode',
+    occurrence: id,
+    target: 's-02',
+    text,
+    createdAt: T1,
+    status: 'cancelled',
+    messageId: id,
+  });
+  const candidateSeqs = (): number[] =>
+    (workDb().prepare("SELECT seq FROM message_unread WHERE reader = 's-02' ORDER BY seq").all() as { seq: number }[]).map((row) => row.seq);
+
+  it('кандидаты снимаются у письма своего эффекта; чужое письмо, письмо с другим текстом и письмо без эффекта остаются непрочитанными', async () => {
+    await seed((_map, letters) => {
+      letters.add(letter({ from: PARLEY, to: ['s-02'], roomId: 'r-01', text: 'Switch the mode' })); // m-01: принадлежит эффекту
+      letters.add(letter({ from: 's-01', to: ['s-02'], roomId: 'r-01', text: 'обычное' })); // m-02: эффект назван, но письмо не plan
+      letters.add(letter({ from: PARLEY, to: ['s-02'], roomId: 'r-01', text: 'Другой текст' })); // m-03: текст не тот
+      letters.add(letter({ from: PARLEY, to: ['s-02'], roomId: 'r-01', text: 'без эффекта' })); // m-04: эффекта в карте нет
+    });
+    expect(candidateSeqs()).toEqual([1, 2, 3, 4]);
+
+    await updateMap(project, WORK, (map, letters) => {
+      map.planEffects = [effect('m-01', 'Switch the mode'), effect('m-02', 'обычное'), effect('m-03', 'Не тот текст')];
+      for (const id of ['m-01', 'm-02', 'm-03', 'm-04', 'm-99']) letters.effectCancelled(id);
+    });
+
+    expect(candidateSeqs()).toEqual([2, 3, 4]);
+    expect(ids(unreadLetters(project, WORK, 's-02'))).toEqual(['m-02', 'm-03', 'm-04']);
+  });
+
+  it('отказ ничего не пишет: версия работы не растёт, если других изменений нет', async () => {
+    await seed((_map, letters) => {
+      letters.add(letter({ from: 's-01', to: ['s-02'], roomId: 'r-01' })); // m-01
+    });
+    ageWork();
+    const before = versionOf();
+
+    await updateMap(project, WORK, (_map, letters) => letters.effectCancelled('m-01'));
+
+    expect(versionOf()).toBe(before);
+    expect(candidateSeqs()).toEqual([1]);
   });
 });

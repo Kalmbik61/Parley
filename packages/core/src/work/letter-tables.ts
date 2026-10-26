@@ -16,6 +16,7 @@ import { isHumanUnread } from './attention.js';
 import type { LetterQuery, LetterTx, NewLetter } from './letter-store.js';
 import { isUnreadFor, recipientsOf, type LetterLookup } from './letters.js';
 import { maxNumber } from './map.js';
+import { planEffectOwnsLetter } from './plan-effects.js';
 import { isRoomArchived } from './rooms.js';
 import { sql } from './sql-statements.js';
 import { HUMAN, MESSAGE_KINDS, PARLEY, SYSTEM, type Message, type MessageKind, type MessageVia, type WindowWorkMap, type WorkMap } from './types.js';
@@ -213,6 +214,24 @@ export function channelTotals(
     };
   }
   return stats;
+}
+
+/**
+ * Номер новейшего письма каждой из названных комнат; комнат без писем в ответе нет. По запросу на комнату — `MAX(seq)`
+ * по индексу `messages_channel`: цена от числа комнат, а не писем работы (в отличие от `channelTotals`, который считает письма
+ * каждого канала). Письма уходят только вместе с комнатой, так что новейший номер меняется при каждой записи в комнату.
+ */
+export function roomLetterTops(db: DatabaseSync, projectPath: string, workId: string, roomIds: readonly string[]): Record<string, number> {
+  const tops: Record<string, number> = {};
+  for (const roomId of roomIds) {
+    const top = sql(db, 'SELECT MAX(seq) AS top FROM messages WHERE project_path = ? AND work_id = ? AND room_id = ?').get(
+      projectPath,
+      workId,
+      roomId,
+    )?.['top'];
+    if (top !== null && top !== undefined) tops[roomId] = Number(top);
+  }
+  return tops;
 }
 
 /** Кандидаты читателя — письма по возрастанию номера; `counting` — лёгкие строки для подсчёта (см. `COUNTING_COLUMNS`). */
@@ -562,6 +581,10 @@ export function createTableLetterTx(
     },
 
     effectCancelled(messageId) {
+      // Письмо отменяет только его эффект: тот же точный признак принадлежности, что у `cancelledPlanLetter`. Чужое письмо
+      // (или письмо без эффекта в карте) остаётся непрочитанным у адресата.
+      const owned = byId(messageId);
+      if (owned === undefined || !(map.planEffects ?? []).some((effect) => planEffectOwnsLetter(effect, owned))) return;
       // Человека отмена не касается: `isHumanUnread` письма плана не различает, и кандидаты человека остаются ровно тем,
       // что он видит и не прочёл.
       const removed = sql(

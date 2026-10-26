@@ -1,8 +1,9 @@
 import {
-  channelStats,
   rebuildRoomHistory,
   removeLocalRoomHistories,
+  roomLetterTops,
   workExists,
+  WorkNotFoundError,
 } from '@parley/core';
 import type { WorkEntry } from '@parley/core';
 import type { WorksService } from '../works/works-service.js';
@@ -11,8 +12,8 @@ export interface HistoryServiceIO {
   rebuild: typeof rebuildRoomHistory;
   remove: typeof removeLocalRoomHistories;
   deleted(projectPath: string, workId: string): Promise<boolean>;
-  /** Итоги писем по каналам работы (`channelStats`): число и номер новейшего письма — отпечаток ленты комнат. */
-  stats: typeof channelStats;
+  /** Номер новейшего письма каждой комнаты (`roomLetterTops`) — отпечаток лент комнат. */
+  tops: typeof roomLetterTops;
 }
 export interface HistoryServiceOptions {
   io?: HistoryServiceIO;
@@ -50,22 +51,31 @@ export function createHistoryService(
     rebuild: rebuildRoomHistory,
     remove: removeLocalRoomHistories,
     deleted: isWorkDeleted,
-    stats: channelStats,
+    tops: roomLetterTops,
   };
   /**
-   * Отпечаток всего, от чего зависит история комнат работы: комнаты, подписи и роли участников, название работы и итоги
-   * писем по каналам. Письма не правятся, поэтому запись или удаление письма меняют число или номер новейшего; тексты
-   * лент для отпечатка не читаются — иначе каждая запись письма читала бы все письма всех комнат (спека хранилища 6.2).
+   * Отпечаток всего, от чего зависит история комнат работы: поля комнат, которые печатает `renderRoomHistory` (название,
+   * режим, время создания, ведущий, участники, id и название рецепта), подписи и роли участников, название работы и номер
+   * новейшего письма каждой комнаты. Письма не правятся и уходят только вместе с комнатой (она меняет список комнат), поэтому
+   * новейший номер ловит каждую запись; тексты лент не читаются, а запрос — `MAX(seq)` на комнату, цена от числа комнат, не
+   * писем (спека хранилища 6.2). Решение в слоте, журнал участия и архив в историю не входят — правка их историю не пересобирает.
+   * Работу сняли, пока она была в снимке, — писем нет: ложной ошибки истории не будет.
    */
   const identity = (entry: WorkEntry): string => {
     const { work, rooms, sessions } = entry.map;
+    let tops: Record<string, number> = {};
+    try {
+      tops = io.tops(entry.projectPath, work.id, rooms.map((room) => room.id));
+    } catch (error) {
+      if (!(error instanceof WorkNotFoundError)) throw error;
+    }
     return JSON.stringify([
       work.id,
       work.title,
       work.deletedSessions ?? [],
-      rooms,
+      rooms.map((room) => [room.id, room.title, room.mode ?? 'free', room.createdAt, room.lead, room.members, room.recipe?.id ?? null, room.recipe?.name ?? null]),
       sessions.map((session) => [session.id, session.label, session.role ?? null]),
-      io.stats(entry.projectPath, work.id),
+      tops,
     ]);
   };
   const states = new Map<string, HistoryState>();
