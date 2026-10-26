@@ -13,7 +13,7 @@ import { waitForMap } from './watch-map.js';
  *
  *   while (!stopped)
  *     found = await waitForMap(версия работы, probe, waitMs, pollMs)
- *             probe: unreadFor(me) && id ∉ rung
+ *             probe: unreadLetters(me) && id ∉ rung
  *                    (пусто → null: ждём дальше), звонок собирается тут же —
  *                    по тому же снимку карты
  *     for letter of found:

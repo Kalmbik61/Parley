@@ -32,8 +32,8 @@ import { roleSummaries, sessionRoleCatalog } from '../work/agents.js';
 import { LEAD_ROLE, memberRole } from '../work/brief.js';
 import { CONTEXT_LIMITS, FIND_SKILL_MAX_BYTES, LETTER_MAX_CHARS, LETTER_SOFT_CHARS, READ_GUIDE_MAX_BYTES, boundResponse, contextBytes, markedExcerpt } from '../work/context-budget.js';
 import {
+  LETTER_PAGE_MAX_ITEMS,
   PAGE_MAX_BYTES,
-  PAGE_MAX_ITEMS,
   PAGE_MIN_BYTES,
   PageError,
   clampPageBytes,
@@ -1121,7 +1121,7 @@ async function readRoom(
       roomId,
       cursor: parseCursor(optionalString(args, 'cursor')),
       maxBytes: clampPageBytes(numberArg(args, 'maxBytes')),
-      maxItems: Math.min(Math.max(Math.floor(limit), 1), PAGE_MAX_ITEMS),
+      maxItems: Math.min(Math.max(Math.floor(limit), 1), LETTER_PAGE_MAX_ITEMS),
       view: (message) => messageView(message, map),
     }, storeLetterReader(context.projectPath, context.workId));
   } catch (error) {

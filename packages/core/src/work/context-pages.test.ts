@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  LETTER_PAGE_MAX_ITEMS,
   PAGE_MAX_BYTES,
   PAGE_MAX_ITEMS,
   PAGE_MIN_BYTES,
@@ -157,6 +158,18 @@ describe('страницы по номеру записи', () => {
     expect(read(numbered(3), { cursor: parseCursor('after:3') }).page).toMatchObject({ returned: 0, complete: true, next: null });
   });
 
+  it('страницы не писем (история, артефакты, резюме, архив) держат прежний потолок 500: 100 им не навязан', () => {
+    const items = Array.from({ length: 700 }, (_, index) => index + 1);
+    const list = listPage(items, { view: (item) => item });
+    expect(list.items).toHaveLength(500);
+    expect(list.page).toMatchObject({ total: 700, complete: false, next: 'before:201' });
+    const small = listPage(items.slice(0, 150), { view: (item) => item });
+    expect(small.items).toHaveLength(150);
+    expect(small.page).toMatchObject({ complete: true, next: null });
+    const seq = pageBySeq(items.slice(0, 150), { seq: (item) => item, view: (item) => item, maxItems: 1000 });
+    expect(seq.items).toHaveLength(150);
+  });
+
   it('listPage: позиция в списке — номер; история и артефакты читаются теми же курсорами', () => {
     const history = ['a', 'b', 'c', 'd', 'e'];
     const first = listPage(history, { view: (item) => item, maxItems: 2 });
@@ -204,7 +217,8 @@ describe('страницы писем', () => {
   });
 
   it('страница не отдаёт больше 100 писем, как бы ни просили: ни предел байтов, ни maxItems его не раздвигают', () => {
-    expect(PAGE_MAX_ITEMS).toBe(100);
+    expect(LETTER_PAGE_MAX_ITEMS).toBe(100);
+    expect(PAGE_MAX_ITEMS).toBe(500);
     const map = baseMap();
     fill(map, 250, 20);
     const seen: string[] = [];
@@ -261,6 +275,26 @@ describe('страницы писем', () => {
     expect(ids(viaReader.messages)).toEqual(['m-15', 'm-17', 'm-19', 'm-21', 'm-23']);
     expect(viaReader).toEqual(expected);
     expect(viaReader.page).toMatchObject({ total: 12, complete: false, next: 'before:15' });
+  });
+
+  it('итог отобранной страницы — один запрос читателю, а не обход канала пачками', () => {
+    const map = baseMap();
+    fill(map, 250, 20);
+    const inner = arrayReader(map.messages);
+    let queries = 0;
+    const reader: LetterReader = {
+      ...inner,
+      page: (q) => {
+        queries += 1;
+        return inner.page(q);
+      },
+    };
+    const odd = (message: Message): boolean => seqOf(message.id, 'm-') % 2 === 1;
+    const { messages, page } = messagePage({ ...map, messages: [] }, { roomId: 'r-01', filter: odd, maxItems: 5, view: (message) => message }, reader);
+    expect(ids(messages)).toEqual(['m-241', 'm-243', 'm-245', 'm-247', 'm-249']);
+    expect(page.total).toBe(125);
+    // Одна пачка набирает страницу, один запрос — итог.
+    expect(queries).toBe(2);
   });
 
   it('чтение страницами при дописывании: каждое письмо ровно один раз, историю не теряем', () => {

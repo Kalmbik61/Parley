@@ -19,8 +19,10 @@ import { HUMAN, type Message, type MapCompact, type RoomPlan, type WorkMap, type
 export const PAGE_DEFAULT_BYTES = 64 * 1024;
 export const PAGE_MAX_BYTES = 256 * 1024;
 export const PAGE_MIN_BYTES = 2 * 1024;
-/** Не больше 100 писем за страницу (спека хранилища 6.2; было 500); потолок один для всех страниц по номеру. */
-export const PAGE_MAX_ITEMS = 100;
+/** Потолок записей на странице по номеру: история, артефакты, резюме, архив работ. */
+export const PAGE_MAX_ITEMS = 500;
+/** Страница писем — не больше 100 писем (спека хранилища 6.2; было 500): письмо весит больше строки истории. */
+export const LETTER_PAGE_MAX_ITEMS = 100;
 
 /** Размер представления в байтах: JSON с отступами MCP и запасом на отступ внутри массива страницы. */
 export function viewBytes(value: unknown): number {
@@ -93,10 +95,13 @@ export interface SeqPageOptions<T, V> {
   total?: number | null;
 }
 
-/** Потолки страницы из параметров: байты по умолчанию, записей — не больше `PAGE_MAX_ITEMS`. */
-const pageLimits = (options: { maxBytes?: number; maxItems?: number }): { maxBytes: number; maxItems: number } => ({
+/** Потолки страницы из параметров: байты по умолчанию, записей — не больше `ceiling` (`PAGE_MAX_ITEMS`, у писем `LETTER_PAGE_MAX_ITEMS`). */
+const pageLimits = (
+  options: { maxBytes?: number; maxItems?: number },
+  ceiling: number = PAGE_MAX_ITEMS,
+): { maxBytes: number; maxItems: number } => ({
   maxBytes: options.maxBytes ?? PAGE_DEFAULT_BYTES,
-  maxItems: Math.min(options.maxItems ?? PAGE_MAX_ITEMS, PAGE_MAX_ITEMS),
+  maxItems: Math.min(options.maxItems ?? ceiling, ceiling),
 });
 
 /**
@@ -267,7 +272,7 @@ export function messagePage<V extends { text: string }>(
   options: MessagePageOptions<V>,
   letters: LetterReader = mapLetterReader(map),
 ): { messages: V[]; page: PageInfo } {
-  const { maxBytes, maxItems } = pageLimits(options);
+  const { maxBytes, maxItems } = pageLimits(options, LETTER_PAGE_MAX_ITEMS);
   const cursor = options.cursor ?? { dir: 'before' as const, seq: Number.POSITIVE_INFINITY };
   const forward = cursor.dir === 'after';
   const selection = { roomId: options.roomId, ...(options.kind === undefined ? {} : { kind: options.kind }) };
@@ -282,12 +287,11 @@ export function messagePage<V extends { text: string }>(
   });
   if (!forward) taken.reverse();
 
-  let total = 0;
-  if (options.filter === undefined) total = letters.count(selection);
-  else {
-    const selected = walkLetters(letters, selection, 0, true, options.filter);
-    while (selected.next().done !== true) total += 1;
-  }
+  // Итог — один запрос: без отбора это `count`, с отбором (предикат на одно письмо в `count` не уложить) — выборка канала целиком.
+  const total =
+    options.filter === undefined
+      ? letters.count(selection)
+      : letters.page({ ...selection, limit: letters.count(selection) }).filter(options.filter).length;
   return {
     messages: taken,
     page: {
