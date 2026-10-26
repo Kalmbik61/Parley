@@ -1,5 +1,6 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,6 +10,9 @@ import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
+
+/** Второе соединение с базой дома — испортить строку работы, как это сделал бы чужой процесс или диск. */
+const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 
 let hosts: RunningHost[] = [];
 let homes: string[] = [];
@@ -219,6 +223,28 @@ describe('works.rename / works.setStatus', () => {
       params: { projectPath: dir, workId: 'w-9999', status: 'archived' },
     });
     expect((await reply(client, 3)).error?.code).toBe('not_found');
+    client.close();
+  });
+
+  it('работа, которую база хранит, но разобрать нельзя, — internal, а не not_found', async () => {
+    const { client, dir, workId, home } = await withWork();
+    // Строка работы на месте (`requireWork` её видит), а карта из неё не собирается; версия растёт, чтобы кэш карт не спас запись.
+    const db = new DatabaseSync(path.join(home, 'parley.db'));
+    try {
+      db.prepare('UPDATE works SET work_json = ?, version = version + 1 WHERE project_path = ? AND id = ?').run('not json', dir, workId);
+    } finally {
+      db.close();
+    }
+
+    client.send({ id: 2, method: 'works.rename', params: { projectPath: dir, workId, title: 'Икс' } });
+    const renamed = (await reply(client, 2)).error;
+    client.send({ id: 3, method: 'works.setStatus', params: { projectPath: dir, workId, status: 'archived' } });
+    const archived = (await reply(client, 3)).error;
+
+    for (const error of [renamed, archived]) {
+      expect(error?.code).toBe('internal');
+      expect(error?.code).not.toBe('not_found');
+    }
     client.close();
   });
 

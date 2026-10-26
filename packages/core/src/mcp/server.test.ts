@@ -1045,11 +1045,19 @@ describe('send_message и check_inbox', () => {
     expect((await readMap(project, workId)).work.updatedAt).toBe(updatedBefore);
 
     await callOk(second, 'send_message', { to: 's-01', text: 'нужен план' });
+    expect(workVersion(project, workId)).toBeGreaterThan(versionBefore!);
+    // Состарить `updatedAt`: сдвиг от `check_inbox` должен быть виден независимо от разрешения часов.
+    const aged = '2020-01-01T00:00:00.000Z';
+    await updateMap(project, workId, (current) => {
+      current.work.updatedAt = aged;
+    }, { touch: false });
+    expect((await readMap(project, workId)).work.updatedAt).toBe(aged);
     const versionSent = workVersion(project, workId);
-    expect(versionSent).toBeGreaterThan(versionBefore!);
     expect(((await callOk(first, 'check_inbox'))['messages'] as unknown[]).length).toBe(1);
     expect(workVersion(project, workId)).toBeGreaterThan(versionSent!);
-    expect((await readMap(project, workId)).work.updatedAt >= updatedBefore).toBe(true);
+    const touched = (await readMap(project, workId)).work.updatedAt;
+    expect(touched).not.toBe(aged);
+    expect(touched > aged).toBe(true);
     // Повтор снова пустой: версия не растёт.
     const versionRead = workVersion(project, workId);
     expect(await callOk(first, 'check_inbox')).toEqual({ messages: [] });

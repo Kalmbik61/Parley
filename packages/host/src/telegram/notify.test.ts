@@ -1,13 +1,13 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createWork, deleteWorkFiles, mapLetterTx, readMap, writeLetters } from '@parley/core';
+import { closeWorkDb, createWork, deleteWorkFiles, mapLetterTx, readMap, WorkNotFoundError, writeLetters } from '@parley/core';
 import type { Message, Room, SessionActivity, WorkEntry, WorkSession } from '@parley/core';
 import type { SessionRef, WorksSnapshot } from '@parley/protocol';
 // Счётчик кэша карт ядра — только для тестов, из пакета он не экспортируется; тот же экземпляр модуля, что у `@parley/core`.
 import { mapCacheStats } from '../../../core/dist/work/store.js';
-import { activityTransition, emptyMemory, sessionWhere, worksTriggers as triggersWith, type NotifyMemory, type TriggerLetters } from './notify.js';
+import { activityTransition, emptyMemory, sessionWhere, storeTriggerLetters, worksTriggers as triggersWith, type NotifyMemory, type TriggerLetters } from './notify.js';
 
 const ref: SessionRef = { projectPath: '/p/my_harnas', workId: 'w-01', sessionId: 's-01' };
 const session = (lifecycle: WorkSession['lifecycle'] = 'active'): WorkSession => ({ id: 's-01', lifecycle, result: null }) as unknown as WorkSession;
@@ -204,5 +204,24 @@ describe('worksTriggers: письма из базы работы (по умол�
     const triggers = triggersWith(memory, bare(workId, [room()]));
     expect(triggers.letters).toEqual([]);
     expect(triggers.closed.map((c) => c.now)).toEqual(['gone']);
+  });
+
+  it('lastHumanLetter: работы нет в базе — письма нет; сбой не из-за пропавшей работы идёт наружу', async () => {
+    const entry = bare('w-9999').entries[0] as WorkEntry;
+    expect(storeTriggerLetters.lastHumanLetter(entry, 'r-01')).toBeUndefined();
+
+    // Дом — путь внутри обычного файла: базу не открыть, и это не `WorkNotFoundError`, а значит и не «работы нет».
+    closeWorkDb();
+    const blocker = path.join(root, 'blocker');
+    await writeFile(blocker, 'файл на месте каталога');
+    process.env['PARLEY_HOME'] = path.join(blocker, 'home');
+    let thrown: unknown;
+    try {
+      storeTriggerLetters.lastHumanLetter(entry, 'r-01');
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).not.toBeInstanceOf(WorkNotFoundError);
   });
 });

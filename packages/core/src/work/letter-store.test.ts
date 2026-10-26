@@ -21,6 +21,7 @@ import {
 } from './letter-store.js';
 import { unreadFor, unreadForHuman } from './letters.js';
 import { mapLetterTx, previewLetterTx } from './letter-store.js';
+import { assertStorableLetterIds } from './letter-tables.js';
 import { messagePage, type LetterReader } from './context-pages.js';
 import { agentLetterAudience, agentLetterVisible } from './thread.js';
 import { addSession } from './map.js';
@@ -1037,6 +1038,14 @@ describe('записанные письма в таблицах', () => {
     expect(Object.getPrototypeOf(stored)).toBe(Object.prototype);
     expect((stored as unknown as Record<string, unknown>)['future']).toBe(1);
     expect((stored as unknown as Record<string, unknown>)['polluted']).toBeUndefined();
+  });
+
+  it('номер письма за границей безопасных целых отвергается, а наибольший безопасный годится', () => {
+    const at = (id: string): Message => ({ id, roomId: null, from: 's-01', to: [], at: T1, text: 't', kind: 'note', readBy: {} });
+
+    // 2^53 + 1 в `Number` не отличить от 2^53: такой номер не хранится числом без потери.
+    expect(() => assertStorableLetterIds([at('m-9007199254740993')])).toThrow('letter id m-9007199254740993 is not m-N');
+    expect(() => assertStorableLetterIds([at('m-9007199254740991')])).not.toThrow();
   });
 
   it('replaceStoredMap без messages письма не трогает, с пустым списком — стирает', async () => {

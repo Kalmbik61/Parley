@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createWork, writeLetters } from '@parley/core';
+import { closeWorkDb, createWork, WorkNotFoundError, writeLetters } from '@parley/core';
 import type { AssistantStreamEvent, ProviderEntry, WorkEntry, WorkMap } from '@parley/core';
 import type { AssistantState } from '@parley/protocol';
 import { HostError } from '../errors.js';
@@ -994,6 +994,39 @@ describe('assistant-service: письма комнаты из базы рабо�
     } finally {
       if (previous === undefined) delete process.env['PARLEY_HOME'];
       else process.env['PARLEY_HOME'] = previous;
+    }
+  });
+
+  it('parley_detail комнаты работы, которой уже нет в базе, — ответ без хвоста писем, не сбой', async () => {
+    // В снимке хоста работа есть (`MAP`), в базе её нет: чтение хвоста бросает `WorkNotFoundError`, и хвоста просто нет.
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+
+    const reply = await service.tool('parley_detail', { target: 'Auth' });
+
+    expect(reply.status).toBe(200);
+    const { text } = reply.body as { text: string };
+    expect(text).toContain('Room "Auth"');
+    expect(text).not.toContain('Last messages:');
+  });
+
+  it('сбой чтения хвоста, не связанный с пропавшей работой, идёт наружу', async () => {
+    const previous = process.env['PARLEY_HOME'];
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    // Дом — путь внутри обычного файла: базу не открыть, и это не `WorkNotFoundError`.
+    const blocker = path.join(home, 'blocker');
+    await writeFile(blocker, 'файл на месте каталога');
+    closeWorkDb();
+    process.env['PARLEY_HOME'] = path.join(blocker, 'home');
+    try {
+      const thrown = await service.tool('parley_detail', { target: 'Auth' }).then(() => undefined, (error: unknown) => error);
+      expect(thrown).toBeInstanceOf(Error);
+      expect(thrown).not.toBeInstanceOf(WorkNotFoundError);
+    } finally {
+      if (previous === undefined) delete process.env['PARLEY_HOME'];
+      else process.env['PARLEY_HOME'] = previous;
+      closeWorkDb();
     }
   });
 });

@@ -33,6 +33,7 @@ import {
   setWorkStatus,
   updateMap,
   parleyHome,
+  viewMap,
   WorkNotFoundError,
   workDataVersion,
   workExists,
@@ -627,6 +628,25 @@ describe('updateMap', () => {
 
     expect((await readMap(project, 'w-0001')).work.title).toBe('Авторизация');
     expect(mapCacheStats().hits - before.hits).toBeGreaterThanOrEqual(1);
+  });
+
+  it('viewMap отдаёт карту кэша без копии, в отличие от readMap; работы нет — WorkNotFoundError', async () => {
+    await createWork(project, { title: 'Авторизация' });
+    const owned = await readMap(project, 'w-0001');
+    const before = mapCacheStats();
+
+    const first = viewMap(project, 'w-0001', (map) => map);
+    const second = viewMap(project, 'w-0001', (map) => map);
+
+    // Один и тот же объект при каждом вызове — копия дала бы новый; и это не копия, что отдаёт `readMap`.
+    expect(second).toBe(first);
+    expect(first).not.toBe(owned);
+    expect(first).toEqual(owned);
+    expect(mapCacheStats().misses - before.misses).toBe(0);
+    expect(mapCacheStats().hits - before.hits).toBe(2);
+    expect(viewMap(project, 'w-0001', (map) => map.work.title)).toBe('Авторизация');
+
+    expect(() => viewMap(project, 'w-9999', () => 1)).toThrow(WorkNotFoundError);
   });
 
   it('readMap после updateMap в том же процессе — из кэша; после чужой записи — новая версия', async () => {
