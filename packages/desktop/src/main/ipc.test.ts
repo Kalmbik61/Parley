@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, IpcMain, Session, WebContents } from 'electron';
 import type { WorksSnapshot } from '@parley/protocol';
+import type { FeedCard, FeedItem } from '@parley/core';
 import { decodeIpcError, type IpcErrorInfo } from '../shared/ipc-error.js';
 import type { DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import { workKey } from '../shared/work-keys.js';
@@ -853,11 +854,96 @@ describe('host:call от острова', () => {
   const island = { id: 99 };
   const options = { isIslandSender: (sender: unknown) => sender === island };
   const REF = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
+  const at = '2026-10-26T10:00:00.000Z';
+  const text = (id: string): FeedItem => ({ id, at, kind: 'text', messageId: null, text: id, streaming: false });
+  const prompt = (id: string): FeedItem => ({ id, at, kind: 'prompt', text: id, images: 0 });
+  const card = (kind: FeedCard['kind'], id: string, state: FeedCard['state'] = 'pending'): FeedCard => {
+    const base = { id, at, cardId: id, state, toolUseId: null, toolName: kind, toolInput: {} };
+    if (kind === 'permission') return { ...base, kind, suggestions: [], notified: false };
+    if (kind === 'question') return { ...base, kind, questions: [{ question: 'Which?', header: null, multiSelect: false, options: [] }] };
+    return { ...base, kind, plan: 'Plan', planFilePath: null };
+  };
+  const snapshot = (items: FeedItem[]) => ({ items, revision: 7, schemaVersion: 3, mode: 'default', decisions: 'terminal' as const });
 
   it('остров зовёт методы белого списка', async () => {
     const { ipcMain, connection } = setup(options);
-    await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF });
-    expect(connection.call).toHaveBeenCalledWith('feed.snapshot', { ref: REF });
+    vi.mocked(connection.call).mockResolvedValue(snapshot([]));
+    await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF, scope: 'attention' });
+    expect(connection.call).toHaveBeenCalledWith('feed.snapshot', { ref: REF, scope: 'attention' });
+  });
+
+  it.each([
+    { ref: REF },
+    { ref: REF, scope: 'full' },
+    { ref: REF, scope: 'attention', agentId: 'child' },
+    { ref: REF, scope: 'attention', agentId: undefined },
+    { ref: REF, scope: 'attention', limit: 1 },
+    { ref: REF, scope: 'attention', extra: true },
+    { scope: 'attention' },
+    { ref: null, scope: 'attention' },
+    { ref: { ...REF, projectPath: 7 }, scope: 'attention' },
+    { ref: { projectPath: '/p', workId: 'w-1' }, scope: 'attention' },
+    null,
+    [],
+  ])('island snapshot отклоняет неправильные параметры до вызова хоста: %j', async (params) => {
+    const { ipcMain, connection } = setup(options);
+    await expect(ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', params)).rejects.toSatisfy(
+      (error: unknown) => decodeIpcError(error).code === 'bad_request',
+    );
+    expect(connection.call).not.toHaveBeenCalled();
+  });
+
+  it('island snapshot использует существующий sessionRef parser', async () => {
+    const { ipcMain, connection } = setup(options);
+    vi.mocked(connection.call).mockResolvedValue(snapshot([]));
+    await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: { ...REF, extra: 'stripped' }, scope: 'attention' });
+    expect(connection.call).toHaveBeenCalledWith('feed.snapshot', { ref: REF, scope: 'attention' });
+  });
+
+  it('legacy full snapshot остров получает как все pending и только последний text после последнего prompt', async () => {
+    const permission = card('permission', 'permission');
+    const question = card('question', 'question');
+    const plan = card('plan', 'plan');
+    const reply = text('latest-answer');
+    const full = snapshot([
+      prompt('old-private-prompt'), text('old-answer'), permission, question, prompt('current-private-prompt'),
+      text('partial-answer'), { id: 'private-tool', at, kind: 'tool', toolUseId: 'tool-1', name: 'Read', input: { path: '/private/old-file' }, status: 'done' },
+      card('permission', 'settled', 'allowed'), plan, reply,
+    ]);
+    const originalItems = [...full.items];
+    const { ipcMain, connection } = setup(options);
+    vi.mocked(connection.call).mockResolvedValue(full);
+    expect(await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF, scope: 'attention' }))
+      .toEqual({ ...full, items: [permission, question, plan, reply] });
+    expect(full.items).toEqual(originalItems);
+  });
+
+  it('island snapshot без prompt оставляет последний text, пустой новый ход не берёт text прежнего хода', async () => {
+    const pending = card('permission', 'permission');
+    const { ipcMain, connection } = setup(options);
+    vi.mocked(connection.call).mockResolvedValueOnce(snapshot([text('old'), pending, text('last')]))
+      .mockResolvedValueOnce(snapshot([text('old'), prompt('new-private-prompt'), pending]));
+    expect(await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF, scope: 'attention' }))
+      .toEqual(snapshot([pending, text('last')]));
+    expect(await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF, scope: 'attention' }))
+      .toEqual(snapshot([pending]));
+  });
+
+  it('уже урезанный attention snapshot и пустая очередь проходят без потери metadata', async () => {
+    const { ipcMain, connection } = setup(options);
+    const attention = snapshot([card('plan', 'plan'), text('reply')]);
+    vi.mocked(connection.call).mockResolvedValueOnce(attention).mockResolvedValueOnce(snapshot([]));
+    expect(await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF, scope: 'attention' })).toEqual(attention);
+    expect(await ipcMain.invokeWithEvent('host:call', { sender: island }, 'feed.snapshot', { ref: REF, scope: 'attention' })).toEqual(snapshot([]));
+  });
+
+  it.each([undefined, 'attention'] as const)('Chat snapshot scope=%s сохраняет исходные параметры и полный ответ', async (scope) => {
+    const { ipcMain, connection } = setup(options);
+    const full = snapshot([prompt('private-prompt'), text('first'), text('last')]);
+    const params = { ref: REF, agentId: 'child', ...(scope === undefined ? {} : { scope }) };
+    vi.mocked(connection.call).mockResolvedValue(full);
+    expect(await ipcMain.invokeWithEvent('host:call', { sender: { id: 1 } }, 'feed.snapshot', params)).toBe(full);
+    expect(connection.call).toHaveBeenCalledWith('feed.snapshot', params);
   });
 
   it('прочие методы острову отказаны, хост их не видит', async () => {

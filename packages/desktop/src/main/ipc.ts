@@ -68,6 +68,8 @@ export function withIpcError(
 
 const METHOD_NAMES = new Set<string>(Object.keys(METHODS));
 const NOTIFICATION_NAMES = new Set<string>(Object.keys(NOTIFICATIONS));
+/** Тот же sessionRef, но острову обязателен attention и запрещены agentId/лишние поля. */
+const ISLAND_SNAPSHOT_PARAMS = METHODS['feed.snapshot'].pick({ ref: true, scope: true }).required().strict();
 
 /**
  * Методы, которые зовёт только main (спека браузера 2026-10-07, 3.7): ответ на операцию агента не приходит от страницы
@@ -398,8 +400,22 @@ export function registerIpc(options: RegisterIpcOptions): void {
         throw new Error(`unknown method: ${String(method)}`);
       }
       // Остров — узкий клиент: остальное ему не нужно, а `host.shutdown` из прозрачного окна поверх всего — тем более.
-      if (isIslandSender?.((event as { sender?: unknown }).sender) === true && !ISLAND_METHODS.has(method)) {
+      const fromIsland = isIslandSender?.((event as { sender?: unknown }).sender) === true;
+      if (fromIsland && !ISLAND_METHODS.has(method)) {
         throw new Error(`method not allowed for the island: ${method}`);
+      }
+      if (fromIsland && method === 'feed.snapshot') {
+        const parsed = ISLAND_SNAPSHOT_PARAMS.safeParse(params);
+        if (!parsed.success) throw new HostError('bad_request', 'invalid island feed.snapshot params');
+        const snapshot = await connection.call('feed.snapshot', parsed.data) as Result<'feed.snapshot'>;
+        // Старый хост может проигнорировать scope: полная лента не должна пересечь границу острова.
+        const lastPrompt = snapshot.items.findLastIndex((item) => item.kind === 'prompt');
+        const lastText = snapshot.items.findLastIndex((item) => item.kind === 'text');
+        const items = snapshot.items.filter((item, index) =>
+          (index === lastText && index > lastPrompt) ||
+          ((item.kind === 'permission' || item.kind === 'question' || item.kind === 'plan') && item.state === 'pending'),
+        );
+        return { ...snapshot, items };
       }
       return connection.call(method, params);
     }),
