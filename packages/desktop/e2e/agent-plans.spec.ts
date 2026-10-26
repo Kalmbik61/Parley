@@ -10,7 +10,7 @@ import {
 } from '@playwright/test';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
-import { readStoredMapE2E, replaceStoredMapE2E } from './stored-map.js';
+import { readStoredMapE2E, replaceStoredMapE2E, withoutLettersE2E } from './stored-map.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
 import { seedTrust } from './trust-seed.js';
 
@@ -176,7 +176,7 @@ test('план из журнала доходит до карточки комн
         ],
       },
     ];
-    replaceStoredMapE2E(home, project, workId, map);
+    replaceStoredMapE2E(home, project, workId, withoutLettersE2E(map));
     const claudeFile = path.join(claudeRoot, '-fixture', `${nativeIds[0]}.jsonl`);
     await writeFile(claudeFile, claudePlan(nativeIds[0]!, project));
     await writeFile(
@@ -335,7 +335,7 @@ test('план из журнала доходит до карточки комн
     const currentMap = readStoredMapE2E(home, project, workId);
     const codexSession = currentMap.sessions.find(session => session.id === members[2])!;
     codexSession.agentPlan = { items: [], explanation: null, partial: false, updatedAt: new Date().toISOString() };
-    replaceStoredMapE2E(home, project, workId, currentMap);
+    replaceStoredMapE2E(home, project, workId, withoutLettersE2E(currentMap));
     // The write goes past the host (a second process); the host notices it within ~0.5 s, so a long timeout only covers a loaded machine.
     await expect(codexCard.getByRole('button', { name: 'Plan', exact: true })).toBeVisible({ timeout: 30_000 });
     await codexCard.getByRole('button', { name: 'Plan', exact: true }).click();
@@ -347,7 +347,7 @@ test('план из журнала доходит до карточки комн
         { id: '2', subject: 'Verify published progress', status: 'in_progress', description: 'Visible without sending the lead a message', activeForm: null },
       ], explanation: null, partial: false, updatedAt: new Date().toISOString(),
     };
-    replaceStoredMapE2E(home, project, workId, publishedMap);
+    replaceStoredMapE2E(home, project, workId, withoutLettersE2E(publishedMap));
     await expect(codexCard).toContainText('Verify published progress', { timeout: 30_000 });
     await expect(panel).toContainText('Plan · 1/2');
     await expect(panel).toContainText('Visible without sending the lead a message');

@@ -33,6 +33,7 @@ const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 
 const TITLE = 'Legacy work';
 const NOTE = 'заметка из прежней сборки\n';
+const LETTER = 'letter from the old build';
 const AT = '2026-09-01T10:00:00.000Z';
 /** Холодный старт окна, хоста и переноса под нагрузкой машины дольше обычных 5 с ожидания. */
 const STARTED = { timeout: 15_000 };
@@ -83,7 +84,8 @@ test.describe('перенос данных harnas → parley при старте
       schemaVersion: 2,
       work: { id: 'w-0001', title: TITLE, goal: '', status: 'active', createdAt: AT, updatedAt: AT },
       sessions: [],
-      messages: [],
+      // Прежняя сборка держала письма внутри карты: при переезде они уходят в таблицы писем (спека хранилища 6.6).
+      messages: [{ id: 'm-01', roomId: null, from: 'human', to: [], text: LETTER, kind: 'note', at: AT, readBy: {} }],
       rooms: [],
     };
     await writeFile(path.join(work, 'map.json'), `${JSON.stringify(map, null, 2)}\n`);
@@ -132,6 +134,8 @@ test.describe('перенос данных harnas → parley при старте
     expect(JSON.parse(await readFile(path.join(work, 'map.v2.json'), 'utf8'))).toMatchObject({ work: { id: 'w-0001', title: TITLE } });
     expect(existsSync(path.join(home, 'parley.db'))).toBe(true);
     expect(readStoredMapE2E(home, project, 'w-0001')).toMatchObject({ work: { id: 'w-0001', title: TITLE, status: 'active' } });
+    // Письмо прежней карты — строка таблицы писем, а не часть карты: полная карта собирает его оттуда.
+    expect(readStoredMapE2E(home, project, 'w-0001').messages).toMatchObject([{ id: 'm-01', from: 'human', text: LETTER }]);
     expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n');
 
     // Записи о переносах — в новом доме: дом, затем проект.
