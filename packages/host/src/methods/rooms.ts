@@ -19,7 +19,7 @@ import {
 } from '../rooms/rooms-service.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 
-import { HUMAN, SYSTEM, DEFAULT_CONFIG, loadConfig, updateMap, workExists, setRoomMode,
+import { HUMAN, DEFAULT_CONFIG, loadConfig, updateMap, workExists, setRoomMode,
   cancelRoomPlan, updatePlanItem, submitPlanItem, verifyPlanItem, capturePlanNotice,
   reservePlanEffects, reconcileRoomPlans, readMap, summarizePlanEffects, PlanConflictError, RoomRuleError } from '@parley/core';
 import type { PlanMethodName, PlanMethodParams, PlanActionResult } from '@parley/protocol';
@@ -113,12 +113,12 @@ export function createPlanHandlers(effects: PlanEffectsService): { [M in PlanMet
           switch (name) {
             case 'rooms.setMode': {
               const input = params as PlanMethodParams<'rooms.setMode'>;
-              const before = map.messages.length;
-              setRoomMode(map, letters, input.roomId, HUMAN, input.mode, input.reason, input.confirmCancel === undefined ? {} : { confirmCancel: input.confirmCancel });
-              const source = map.messages.slice(before).find(row => row.from === SYSTEM && row.roomId === input.roomId && row.kind === 'note');
-              if (!source) throw new NoChange();
-              messageId = source.id;
-              capturePlanNotice(map, letters, input.roomId, 'mode', source.id);
+              const written = setRoomMode(map, letters, input.roomId, HUMAN, input.mode, input.reason, input.confirmCancel === undefined ? {} : { confirmCancel: input.confirmCancel });
+              // Строка режима — последняя из записанных: пересчёт плана (понижение verified → checklist) пишет свои строки раньше неё (спека хранилища 6.2).
+              const source = written.at(-1);
+              if (source === undefined) throw new NoChange();
+              messageId = source;
+              capturePlanNotice(map, letters, input.roomId, 'mode', source);
               break;
             }
             case 'plans.update': {

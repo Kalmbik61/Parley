@@ -16,6 +16,7 @@ import {
   proposeCompletion,
   summarizePlanEffects,
   PARLEY,
+  SYSTEM,
 } from "@parley/core";
 import type { RequestInfo } from "../context.js";
 import { createPlanHandlers } from "./rooms.js";
@@ -172,6 +173,25 @@ describe("host-owned human plan actions", () => {
       request,
     );
     expect(JSON.stringify(await readMap(project, workId))).toBe(before);
+  });
+  // Спека хранилища 6.2: строку режима берём по id, а не по положению — пересчёт плана пишет свои строки раньше неё.
+  it("a verified to checklist downgrade that completes the plan reports its own mode line", async () => {
+    await accept();
+    await updateMap(project, workId, (map) => {
+      submitPlanItem(map, lt(map), "pl-01", 0, 1, "s-02", { text: "Measured", artifacts: [] });
+    });
+    const result = await handlers().all["rooms.setMode"](
+      { projectPath: project, workId, roomId: "r-01", mode: "checklist", reason: "Human choice" },
+      request,
+    );
+    const map = await readMap(project, workId);
+    // Строка «Plan … completed» легла раньше строки режима — отвечать должна вторая.
+    const completed = map.messages.findIndex((row) => row.from === SYSTEM && row.text === "Plan pl-01 completed");
+    const line = map.messages.findIndex((row) => row.id === result.messageId);
+    expect(completed).toBeGreaterThanOrEqual(0);
+    expect(line).toBeGreaterThan(completed);
+    expect(map.messages[line]!.text).toContain("switched the room to checklist");
+    expect(map.planEffects!.filter((row) => row.kind === "mode").map((row) => row.occurrence)).toEqual([result.messageId]);
   });
   it("completion Return keeps a human room-feed source and one proof-bound Parley lead letter", async () => {
     await accept();
