@@ -1,4 +1,4 @@
-import { useId, useState, type FocusEvent, type PointerEvent } from 'react';
+import { useId, type FocusEvent, type PointerEvent } from 'react';
 import type { FeedDecision, FeedQuestionCard } from '@parley/core';
 import { FEED_DECISION_ANSWER_LIMIT, FEED_INPUT_LIMIT } from '@parley/protocol';
 import { answerOf, type QuestionAnswerDraft } from '../lib/question-answer.js';
@@ -17,8 +17,15 @@ export interface QuestionFormLabels {
   openInParley: string;
 }
 
+export interface QuestionFormDraft extends QuestionAnswerDraft {
+  step: number;
+}
+
+export const EMPTY_QUESTION_FORM_DRAFT: QuestionFormDraft = { step: 0, picked: {}, otherOn: {}, otherText: {} };
+
 export interface QuestionFormProps {
-  identity: string;
+  draft: QuestionFormDraft;
+  onDraftChange(next: QuestionFormDraft): void;
   card: FeedQuestionCard;
   disabled: boolean;
   labels: QuestionFormLabels;
@@ -38,15 +45,9 @@ function canAnswer(card: FeedQuestionCard): boolean {
       && question.options.every((option) => text(option.label) && optionalText(option.description)));
 }
 
-/** Локальный draft только активной identity; refresh без изменения вопросов его не сбрасывает. */
-export function QuestionForm(props: QuestionFormProps): JSX.Element {
-  const identity = JSON.stringify([props.identity, props.card.cardId, props.card.questions, props.card.truncated, props.card.state]);
-  return <QuestionFormDraft key={identity} {...props} />;
-}
-
-function QuestionFormDraft({ card, disabled, labels, onTakeKeyboard, onSubmit, onOpenInParley }: QuestionFormProps): JSX.Element {
-  const [step, setStep] = useState(0);
-  const [draft, setDraft] = useState<QuestionAnswerDraft>({ picked: {}, otherOn: {}, otherText: {} });
+/** Родитель хранит один draft выше условной карточки и сбрасывает его при смене identity. */
+export function QuestionForm({ draft, onDraftChange, card, disabled, labels, onTakeKeyboard, onSubmit, onOpenInParley }: QuestionFormProps): JSX.Element {
+  const { step } = draft;
   const group = useId();
   const question = card.questions[step];
   if (!canAnswer(card) || question === undefined) {
@@ -66,14 +67,14 @@ function QuestionFormDraft({ card, disabled, labels, onTakeKeyboard, onSubmit, o
   const otherOn = draft.otherOn[step] === true;
   const last = step === card.questions.length - 1;
   const pick = (label: string): void => {
-    setDraft({
+    onDraftChange({
       ...draft,
       picked: { ...draft.picked, [step]: question.multiSelect ? (picked.includes(label) ? picked.filter((entry) => entry !== label) : [...picked, label]) : [label] },
       otherOn: question.multiSelect ? draft.otherOn : { ...draft.otherOn, [step]: false },
     });
   };
   const pickOther = (): void => {
-    setDraft({
+    onDraftChange({
       ...draft,
       picked: question.multiSelect ? draft.picked : { ...draft.picked, [step]: [] },
       otherOn: { ...draft.otherOn, [step]: question.multiSelect ? !otherOn : true },
@@ -115,7 +116,7 @@ function QuestionFormDraft({ card, disabled, labels, onTakeKeyboard, onSubmit, o
               aria-label={labels.otherAnswer}
               placeholder={labels.otherAnswer}
               value={draft.otherText[step] ?? ''}
-              onChange={(event) => setDraft({ ...draft, otherText: { ...draft.otherText, [step]: event.target.value } })}
+              onChange={(event) => onDraftChange({ ...draft, otherText: { ...draft.otherText, [step]: event.target.value } })}
               onKeyDown={(event) => { if (event.key === 'Enter' || event.nativeEvent.isComposing) event.stopPropagation(); }}
               onKeyUp={(event) => { if (event.key === 'Enter' || event.nativeEvent.isComposing) event.stopPropagation(); }}
             />
@@ -124,11 +125,11 @@ function QuestionFormDraft({ card, disabled, labels, onTakeKeyboard, onSubmit, o
         {tooLong.some(Boolean) ? <p role="alert" className="m-0 text-xs text-destructive">{labels.answerTooLong(FEED_DECISION_ANSWER_LIMIT)}</p> : null}
       </div>
       <div className="flex shrink-0 flex-wrap gap-2">
-        {step > 0 ? <Button type="button" variant="outline" onClick={() => setStep(step - 1)}>{labels.back}</Button> : null}
+        {step > 0 ? <Button type="button" variant="outline" onClick={() => onDraftChange({ ...draft, step: step - 1 })}>{labels.back}</Button> : null}
         {last ? (
           <Button type="button" disabled={disabled || !answers.every((_, at) => valid(at))} onClick={submit}>{labels.submit}</Button>
         ) : (
-          <Button type="button" disabled={!valid(step)} onClick={() => setStep(step + 1)}>{labels.next}</Button>
+          <Button type="button" disabled={!valid(step)} onClick={() => onDraftChange({ ...draft, step: step + 1 })}>{labels.next}</Button>
         )}
       </div>
     </div>
