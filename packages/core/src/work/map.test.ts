@@ -13,6 +13,8 @@ import {
 import { defaultSessionName, NEW_LABEL } from './names.js';
 import { roomLead } from './rooms.js';
 import { HUMAN, type Room, type SessionLifecycle, type WorkMap } from './types.js';
+import { mapLetterTx } from './letter-store.js';
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
 const emptyMap = (): WorkMap => ({
   schemaVersion: 2,
@@ -160,7 +162,7 @@ describe('addSession', () => {
     const map = emptyMap();
     addSession(map, { provider: 'claude', label: '', task: 't' });
     const second = addSession(map, { provider: 'claude', label: '', task: 't' });
-    removeSession(map, second.id);
+    removeSession(map, lt(map), second.id);
 
     const third = addSession(map, { provider: 'claude', label: '', task: 't' });
 
@@ -899,7 +901,7 @@ describe('removeSession', () => {
 
   it('20: дети поднимаются к родителю удалённой, contextFrom вычищен', () => {
     const map = tree();
-    const removed = removeSession(map, 's-02');
+    const removed = removeSession(map, lt(map), 's-02');
 
     expect(removed.id).toBe('s-02');
     expect(map.sessions.map((session) => session.id)).toEqual(['s-01', 's-03']);
@@ -909,7 +911,7 @@ describe('removeSession', () => {
 
   it('20: у детей сессии верхнего уровня родитель становится null', () => {
     const map = tree();
-    removeSession(map, 's-01');
+    removeSession(map, lt(map), 's-01');
 
     expect(map.sessions[0]?.parent).toBeNull();
   });
@@ -919,7 +921,7 @@ describe('removeSession', () => {
     addMessage(map, { from: 's-02', to: ['s-01'], text: 'жду миграции' });
     addMessage(map, { from: 's-01', to: ['s-03'], text: 'не про неё' });
     addMessage(map, { from: 's-01', to: ['s-03', 's-02'], text: 'обоим' });
-    removeSession(map, 's-02');
+    removeSession(map, lt(map), 's-02');
 
     expect(map.messages).toHaveLength(3);
     expect(map.messages[0]?.deleted).toBe(true);
@@ -931,7 +933,7 @@ describe('removeSession', () => {
 
   it('22: id не переиспользуется — счётчик sessionSeq переживает удаление', () => {
     const map = tree();
-    removeSession(map, 's-03');
+    removeSession(map, lt(map), 's-03');
 
     expect(map.work.sessionSeq).toBe(3);
     expect(addSession(map, { provider: 'claude', label: 'тесты', task: 't' }).id).toBe('s-04');
@@ -942,7 +944,7 @@ describe('removeSession', () => {
 
   it('22: удаление всех сессий работы не начинает нумерацию заново', () => {
     const map = tree();
-    for (const id of ['s-01', 's-02', 's-03']) removeSession(map, id);
+    for (const id of ['s-01', 's-02', 's-03']) removeSession(map, lt(map), id);
 
     expect(map.sessions).toEqual([]);
     expect(map.work.deletedSessions).toEqual(['s-01', 's-02', 's-03']);
@@ -964,7 +966,7 @@ describe('removeSession', () => {
   it('24: удаление несуществующего id — ошибка, карта не меняется', () => {
     const map = tree();
 
-    expect(() => removeSession(map, 's-99')).toThrow(/s-99/);
+    expect(() => removeSession(map, lt(map), 's-99')).toThrow(/s-99/);
     expect(map.sessions).toHaveLength(3);
     expect(map.work.deletedSessions).toBeUndefined();
   });

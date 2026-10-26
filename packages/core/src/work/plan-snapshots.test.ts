@@ -20,6 +20,8 @@ import { createWork, readMap, updateMap, workPaths } from "./store.js";
 import { cancelRoomPlan, submitPlanItem } from "./plans.js";
 import { flushPlanSnapshots } from "./plan-snapshots.js";
 import { HUMAN } from "./types.js";
+import { mapLetterTx } from "./letter-store.js";
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 let root: string;
 let project: string;
 let workId: string;
@@ -56,6 +58,7 @@ beforeEach(async () => {
     const plan = map.rooms[0]!.proposal!.plan!;
     resolveProposal(
       map,
+      lt(map),
       "r-01",
       p.proposalId,
       "accept",
@@ -88,6 +91,7 @@ describe("captured immutable plan exports", () => {
       });
       resolveProposal(
         map,
+        lt(map),
         "r-01",
         p.proposalId,
         "accept",
@@ -96,6 +100,7 @@ describe("captured immutable plan exports", () => {
       );
       submitPlanItem(
         map,
+        lt(map),
         "pl-01",
         1,
         1,
@@ -190,7 +195,7 @@ describe("captured immutable plan exports", () => {
     const ignore = path.join(project, ".parley", ".gitignore");
     await writeFile(ignore, "*\n");
     await updateMap(project, workId, (map) =>
-      cancelRoomPlan(map, "pl-01", 0, HUMAN, AT),
+      cancelRoomPlan(map, lt(map), "pl-01", 0, HUMAN, AT),
     );
     expect((await flushPlanSnapshots(project, workId)).written).toHaveLength(2);
     expect(await readFile(ignore, "utf8")).toContain("!plans/**");
@@ -274,6 +279,7 @@ it("publishes a nested linked-worktree plan in the corresponding main folder whi
     });
     resolveProposal(
       map,
+      lt(map),
       "r-01",
       p.proposalId,
       "accept",
@@ -327,7 +333,7 @@ it("excluded immutable intents preserve their file and captured state while a la
   const original = (await readMap(project, workId)).planExports![0]!;
   await mkdir(snapshotDir(), { recursive: true });
   await writeFile(path.join(snapshotDir(), original.file), "Human file", "utf8");
-  await updateMap(project, workId, map => cancelRoomPlan(map, "pl-01", 0, HUMAN, AT));
+  await updateMap(project, workId, map => cancelRoomPlan(map, lt(map), "pl-01", 0, HUMAN, AT));
   const result = await flushPlanSnapshots(project, workId, { excludedFiles: new Set([original.file]) });
   expect(result.failed).toEqual([]);
   expect(result.written).toHaveLength(1);

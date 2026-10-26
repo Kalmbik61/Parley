@@ -755,8 +755,8 @@ export async function deleteSession(
   workId: string,
   sessionId: string,
 ): Promise<void> {
-  await updateMap(projectPath, workId, (map) => {
-    removeSession(map, sessionId);
+  await updateMap(projectPath, workId, (map, letters) => {
+    removeSession(map, letters, sessionId);
   });
   await deleteSessionFiles(projectPath, workId, sessionId);
 }

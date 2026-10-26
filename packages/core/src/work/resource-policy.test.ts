@@ -26,6 +26,8 @@ import {
 import { addRoom } from './rooms.js';
 import { createWork, readMap, readStoredMap, updateMap } from './store.js';
 import { HUMAN, PARLEY, SYSTEM, type WorkMap } from './types.js';
+import { mapLetterTx } from './letter-store.js';
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
 /** Чуть впереди настоящих часов: отметки `history` из `transitionSession` не должны выглядеть свидетельством запуска после резерва. */
 const NOW = Date.now() + 60_000;
@@ -229,13 +231,13 @@ describe('assertMessageBudget: письма, рассылки и приглаш�
     for (const from of [HUMAN, SYSTEM, PARLEY]) addMessage(map, { from, to: [b], text: 'control', roomId: id }, iso(NOW - 1000));
 
     const base = { actor: a, room: id, messages: 1, recipients: 1, now: NOW } as const;
-    expect(() => assertMessageBudget(map, { ...base, limits: limits({ workMessages: 4, roomMessages: 4 }) })).not.toThrow();
-    const work = denied(() => assertMessageBudget(map, { ...base, limits: limits({ workMessages: 3, roomMessages: 50 }) }));
+    expect(() => assertMessageBudget(map, lt(map), { ...base, limits: limits({ workMessages: 4, roomMessages: 4 }) })).not.toThrow();
+    const work = denied(() => assertMessageBudget(map, lt(map), { ...base, limits: limits({ workMessages: 3, roomMessages: 50 }) }));
     expect([work.code, work.scope, work.used]).toEqual(['messages', 'work', 3]);
-    const inRoom = denied(() => assertMessageBudget(map, { ...base, limits: limits({ workMessages: 50, roomMessages: 3 }) }));
+    const inRoom = denied(() => assertMessageBudget(map, lt(map), { ...base, limits: limits({ workMessages: 50, roomMessages: 3 }) }));
     expect([inRoom.code, inRoom.scope]).toEqual(['messages', 'room']);
     // Прямое письмо вне комнаты комнатный потолок не задевает.
-    expect(() => assertMessageBudget(map, { ...base, room: null, limits: limits({ workMessages: 50, roomMessages: 3 }) })).not.toThrow();
+    expect(() => assertMessageBudget(map, lt(map), { ...base, room: null, limits: limits({ workMessages: 50, roomMessages: 3 }) })).not.toThrow();
   });
 
   it('письма старше часа не считаются', () => {
@@ -243,7 +245,7 @@ describe('assertMessageBudget: письма, рассылки и приглаш�
     const a = addActive(map);
     const b = addActive(map);
     addMessage(map, { from: a, to: [b], text: 'старое' }, iso(NOW - RESOURCE_WINDOW_MS - 1));
-    expect(() => assertMessageBudget(map, { actor: a, room: null, messages: 1, recipients: 1, limits: limits({ workMessages: 1 }), now: NOW })).not.toThrow();
+    expect(() => assertMessageBudget(map, lt(map), { actor: a, room: null, messages: 1, recipients: 1, limits: limits({ workMessages: 1 }), now: NOW })).not.toThrow();
   });
 
   it('рассылка: потолок адресатов считает каждого получателя, а письмо — как одно', () => {
@@ -254,8 +256,8 @@ describe('assertMessageBudget: письма, рассылки и приглаш�
     addMessage(map, { from: a, to: [], text: 'всем', roomId: id }, iso(NOW - 10)); // три адресата
 
     const fan = limits({ fanout: 4 });
-    expect(() => assertMessageBudget(map, { actor: a, room: id, messages: 1, recipients: 1, limits: fan, now: NOW })).not.toThrow();
-    const refusal = denied(() => assertMessageBudget(map, { actor: a, room: id, messages: 1, recipients: 2, limits: fan, now: NOW }));
+    expect(() => assertMessageBudget(map, lt(map), { actor: a, room: id, messages: 1, recipients: 1, limits: fan, now: NOW })).not.toThrow();
+    const refusal = denied(() => assertMessageBudget(map, lt(map), { actor: a, room: id, messages: 1, recipients: 2, limits: fan, now: NOW }));
     expect([refusal.code, refusal.used, refusal.limit]).toEqual(['fanout', 3, 4]);
   });
 
@@ -263,7 +265,7 @@ describe('assertMessageBudget: письма, рассылки и приглаш�
     const map = emptyMap();
     const a = addActive(map);
     const refusal = denied(() =>
-      assertMessageBudget(map, { actor: a, room: null, messages: 5, recipients: 5, limits: limits({ workMessages: 4 }), now: NOW }),
+      assertMessageBudget(map, lt(map), { actor: a, room: null, messages: 5, recipients: 5, limits: limits({ workMessages: 4 }), now: NOW }),
     );
     expect(refusal.code).toBe('messages');
   });

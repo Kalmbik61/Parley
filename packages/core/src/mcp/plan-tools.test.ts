@@ -10,6 +10,8 @@ import { createWork, updateMap, readMap, workPaths } from "../work/store.js";
 import { resolveProposal } from "../work/proposals.js";
 import { HUMAN } from "../work/types.js";
 import type { McpContext } from "./context.js";
+import { mapLetterTx } from "../work/letter-store.js";
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 let root: string;
 let project: string;
 let previous: string | undefined;
@@ -96,7 +98,7 @@ async function accepted() {
   expect(result.failed).toBe(false);
   await updateMap(project, context.workId, (map) => {
     const p = map.rooms[0]!.proposal!;
-    resolveProposal(map, "r-01", p.id, "accept", {
+    resolveProposal(map, lt(map), "r-01", p.id, "accept", {
       rev: p.rev,
       planId: p.plan!.id,
       planRev: p.plan!.rev,
@@ -384,7 +386,7 @@ describe("archived room", () => {
   it("refuses every plan tool with the archive reason, not a stale-revision error, and writes nothing", async () => {
     await accepted();
     await updateMap(project, context.workId, (map) => {
-      archiveRoom(map, "r-01", "2026-10-08T12:00:00.000Z");
+      archiveRoom(map, lt(map), "r-01", "2026-10-08T12:00:00.000Z");
     });
     const before = JSON.stringify(await readMap(project, context.workId));
     const cases: [string, string, Record<string, unknown>][] = [

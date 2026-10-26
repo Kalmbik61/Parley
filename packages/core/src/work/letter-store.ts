@@ -76,6 +76,13 @@ export interface LetterTx {
   savepoint<T>(fn: () => T): T;
 }
 
+/**
+ * Чтение писем для читателей карты, у которых нет транзакции (брифы, история комнаты, окна участия). Подходит и сам
+ * `LetterTx`. Читатели берут это последним необязательным параметром: без него — письма карты (`mapLetterTx`), пока
+ * письма живут в `map.messages`; задача 7 сделает параметр обязательным.
+ */
+export type LetterReads = Pick<LetterTx, 'query' | 'count'>;
+
 const letterSeq = (id: string): number => maxNumber([id], 'm-');
 
 /** Предел запроса — неотрицательное целое: иначе выборка без границы или с NaN стала бы тихим «ничего» или «всё». */
@@ -160,6 +167,9 @@ function channelStatsOf(map: Readonly<WorkMap>): Record<string, { total: number;
  *
  * `savepoint` ведёт журнал отмен только своих методов: объекты, которые держит вызывающий, остаются теми же, а
  * вложенный `savepoint` при успехе отдаёт свой журнал внешнему.
+ *
+ * Экспортируется из ядра: хост гоняет на копии карты пробный расчёт доставки планов (`rooms/plan-effects.ts`), а тесты —
+ * правила комнат и планов над картой без транзакции; читатели без транзакции берут его по умолчанию (`LetterReads`).
  */
 export function mapLetterTx(map: WorkMap): { letters: LetterTx; wrote: () => boolean } {
   let wrote = false;
@@ -322,4 +332,35 @@ export function unreadCount(
 /** Письма по каналам: сколько и номер новейшего; ключ `''` — прямые письма. Каналов без писем нет. */
 export function channelStats(projectPath: string, workId: string): Record<string, { total: number; latestId: string | null }> {
   return channelStatsOf(readMapView(projectPath, workId));
+}
+
+/**
+ * Ставит `readBy.human` письмам, которые человек видит: прямым письмам человеку и сообщениям комнат, не от самого
+ * человека (`unreadForHuman`). Уже прочитанные и чужие id пропускаются. Возвращает, сколько отметок поставлено.
+ * `work.updatedAt` не сдвигается. Подходящих id нет — 0 без записи. Работы нет — `WorkNotFoundError`: его бросает
+ * уже чтение, как и запись.
+ */
+export async function markHumanRead(projectPath: string, workId: string, messageIds: string[]): Promise<number> {
+  // Предел запроса — число id: подходящих писем не больше, чем названо.
+  const wanted = [...new Set(messageIds)];
+  const pending = (read: (q: LetterQuery) => Message[]): string[] =>
+    read({ ids: wanted, limit: wanted.length })
+      .filter(unreadForHuman)
+      .map((message) => message.id);
+
+  // Сперва чтение без записи: пустая запись версию не поднимает, но берёт блокировку записи, а повтор пачки окна
+  // не должен её занимать (спека хранилища 6.2).
+  if (pending((q) => readLetters(projectPath, workId, q)).length === 0) return 0;
+
+  // Под блокировкой отбираем заново: другой клиент мог отметить часть писем между чтениями.
+  let marked = 0;
+  writeLetters(
+    projectPath,
+    workId,
+    (letters) => {
+      marked = letters.markRead(HUMAN, pending((q) => letters.query(q)), new Date().toISOString()).length;
+    },
+    { touch: false },
+  );
+  return marked;
 }

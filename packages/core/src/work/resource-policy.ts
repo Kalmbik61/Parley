@@ -12,6 +12,7 @@
  * попытка той же сессии, которая второй раз не списывается.
  */
 
+import type { LetterTx } from './letter-store.js';
 import { HUMAN, PARLEY, SYSTEM } from './types.js';
 import type { Message, ResourceAttempt, ResourceKind, WorkMap, WorkResources } from './types.js';
 
@@ -356,10 +357,15 @@ const recipientCount = (message: Message, map: WorkMap): number =>
  * (`messageRate`) проверяет `send_message`; здесь — общий. Письма человека, хоста и плана (`human`, `system`, `parley`)
  * не считаются и не блокируются: остановка, ошибки и управление идут мимо разговорной квоты.
  */
-export function assertMessageBudget(map: WorkMap, request: MessageRequest): void {
+export function assertMessageBudget(map: WorkMap, letters: LetterTx, request: MessageRequest): void {
   const now = request.now ?? Date.now();
   const { limits } = request;
-  const recent = map.messages.filter((message) => isAgentSender(message.from) && within(message.at, now));
+  // Окно «последний час» — запрос с `sinceAt`, а не обход всей ленты; предел запроса — число писем окна, а агентов от
+  // человека, хоста и плана отличает `isAgentSender` (спека хранилища 6.2).
+  const window = { sinceAt: new Date(now - RESOURCE_WINDOW_MS).toISOString() };
+  const recent = letters
+    .query({ ...window, limit: letters.count(window) })
+    .filter((message) => isAgentSender(message.from));
 
   if (recent.length + request.messages > limits.workMessages) {
     throw new ResourceDeniedError('messages', 'work', recent.length, limits.workMessages);

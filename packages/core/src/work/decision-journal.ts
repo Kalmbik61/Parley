@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { lstat, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import type { LetterTx } from './letter-store.js';
 import type { ProjectContextOptions } from './project-context.js';
 import type { SharedWriteOptions } from './store.js';
 import type { Proposal, Room, WorkMap } from './types.js';
@@ -62,6 +63,7 @@ function member(map: WorkMap, id: string): string {
 /** Called only with the resolved proposal and its just-created decision letter, never a current mutable proposal. */
 export function captureDecisionJournal(
   map: DecisionJournalMap,
+  letters: LetterTx,
   room: Room,
   proposal: Proposal,
   action: 'accept' | 'return',
@@ -69,7 +71,7 @@ export function captureDecisionJournal(
   note?: string,
 ): DecisionJournalIntent | null {
   if (action === 'return') return null;
-  const letter = map.messages.find(row => row.id === messageId);
+  const letter = letters.byId(messageId);
   if (!letter || letter.kind !== 'decision' || letter.roomId !== room.id || letter.from !== proposal.from || letter.text !== proposal.text)
     throw new DecisionJournalError('journal-invalid');
   const previous = map.decisionExports?.find(row => row.roomId === room.id && row.proposalId === proposal.id && row.rev === proposal.rev);

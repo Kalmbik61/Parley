@@ -4,10 +4,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { HUMAN, addMessage, addRoom, addSession, createWork, flushDecisionJournal, readMap, resolveProposal, setProposal, updateMap } from '@parley/core';
+import { mapLetterTx, HUMAN, addMessage, addRoom, addSession, createWork, flushDecisionJournal, readMap, resolveProposal, setProposal, updateMap } from '@parley/core';
 import type { WorkEntry } from '@parley/core';
 import type { WorksService } from '../works/works-service.js';
 import { createJournalHandlers } from './journal.js';
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
 const run = promisify(execFile);
 let root: string; let project: string; let previous: string | undefined; let entries: WorkEntry[];
@@ -35,7 +36,7 @@ async function accepted(at: string, texts: string[], flush = true): Promise<stri
     addRoom(map, { title: 'Room', creator: HUMAN, members: ['s-01'], lead: 's-01' });
     for (const text of texts) {
       const proposal = setProposal(map, 'r-01', 's-01', text, new Date().toISOString());
-      resolveProposal(map, 'r-01', proposal.proposalId, 'accept', { rev: proposal.rev });
+      resolveProposal(map, lt(map), 'r-01', proposal.proposalId, 'accept', { rev: proposal.rev });
     }
   });
   if (flush) await flushDecisionJournal(at, workId);

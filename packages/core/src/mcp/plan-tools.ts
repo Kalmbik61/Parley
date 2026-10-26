@@ -295,7 +295,7 @@ export async function planTool(
     const config = (await loadConfig()).config;
     let proposed: { proposalId: string; rev: number } | undefined;
     let legacyFree = false;
-    await updateMap(context.projectPath, context.workId, (map) => {
+    await updateMap(context.projectPath, context.workId, (map, letters) => {
       const actor = caller(map, context);
       reconcileRoomPlans(map);
       if (name === "set_room_mode") {
@@ -312,6 +312,7 @@ export async function planTool(
         const before = map.messages.length;
         setRoomMode(
           map,
+          letters,
           args.room,
           actor,
           args.mode as "free" | "checklist" | "verified",
@@ -320,7 +321,7 @@ export async function planTool(
         const source = map.messages
           .slice(before)
           .find((row) => row.roomId === args.room && row.from === "system");
-        if (source) capturePlanNotice(map, args.room, "mode", source.id);
+        if (source) capturePlanNotice(map, letters, args.room, "mode", source.id);
       } else if (name === "propose_decision") {
         keys(args, ["room", "text", "plan", "kind", "planId", "rev"]);
         if (
@@ -439,6 +440,7 @@ export async function planTool(
               throw new RoomRuleError("invalid plan evidence");
             submitPlanItem(
               map,
+              letters,
               args.planId,
               args.rev,
               args.item,
@@ -453,6 +455,7 @@ export async function planTool(
               throw new RoomRuleError("invalid plan verification");
             verifyPlanItem(
               map,
+              letters,
               args.planId,
               args.rev,
               args.item,
@@ -463,7 +466,7 @@ export async function planTool(
           }
         }
       }
-      reservePlanEffects(map, config.messageRate ?? DEFAULT_CONFIG.messageRate);
+      reservePlanEffects(map, letters, config.messageRate ?? DEFAULT_CONFIG.messageRate);
     });
     if (legacyFree && proposed) return proposed;
     return { ...(proposed ?? {}), effects: await finish(context) };

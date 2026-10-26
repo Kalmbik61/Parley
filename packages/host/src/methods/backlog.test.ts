@@ -3,8 +3,9 @@ import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { addMessage, addRoom, addSession, archiveRoom, createWork, deleteWorkFiles, readMap, sharedProjectPaths, suggestBacklog, transitionSession, updateMap, workVersion } from '@parley/core';
+import { mapLetterTx, addMessage, addRoom, addSession, archiveRoom, createWork, deleteWorkFiles, readMap, sharedProjectPaths, suggestBacklog, transitionSession, updateMap, workVersion } from '@parley/core';
 import { createBacklogHandlers } from './backlog.js';
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 
@@ -111,7 +112,7 @@ describe('human backlog handlers', () => {
   });
   it('an archived room is not a target: take is refused until the human reopens it', async () => {
     const created = await target(); const added = await add(); const id = added.items[0]!.id!;
-    await updateMap(project, created.workId, map => { archiveRoom(map, created.roomId); });
+    await updateMap(project, created.workId, map => { archiveRoom(map, lt(map), created.roomId); });
     await expect(handlers['backlog.take']({ projectPath: project, id, version: added.version, target: created })).rejects.toMatchObject({ code: 'not_found' });
     expect((await get()).items[0]!.taken).toBeUndefined();
   });

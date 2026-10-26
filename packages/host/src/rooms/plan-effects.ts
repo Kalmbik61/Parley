@@ -1,6 +1,7 @@
 import {
   DEFAULT_CONFIG,
   loadConfig,
+  mapLetterTx,
   readMap,
   reservePlanEffects,
   summarizePlanEffects,
@@ -186,15 +187,15 @@ export function createPlanEffectsService(
         return result;
       const at = new Date(now()).toISOString();
       const preview = structuredClone(map);
-      let reservation = reservePlanEffects(preview, rate, at);
+      let reservation = reservePlanEffects(preview, mapLetterTx(preview).letters, rate, at);
       let current = map;
       if (reservation.changed) {
         try {
           current = await io.updateMap(
             state.projectPath,
             state.workId,
-            (draft) => {
-              reservation = reservePlanEffects(draft, rate, at);
+            (draft, letters) => {
+              reservation = reservePlanEffects(draft, letters, rate, at);
               if (!reservation.changed) throw new NoPlanChange();
             },
             { touch: false },

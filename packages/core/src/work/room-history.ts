@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { representLegacyMarkdown } from './decision-journal.js';
+import { mapLetterTx, type LetterReads } from './letter-store.js';
 import { participantLabel } from './thread.js';
 import { stateDir } from './state-dir.js';
 import { readMap, readSharedFile, sharedProjectPaths, withSharedProjectLock, withLocalHistoryLock, prepareSharedIgnore, MISSING_SHARED_VERSION } from './store.js';
@@ -24,7 +25,7 @@ function member(map: WorkMap, id: string): string {
   return `${metadata(participantLabel(map, id))}${role ? ` (${role.source}:${metadata(role.name)})` : ''}`;
 }
 /** Full derived room feed only. No direct/solo-provider transcript or prompt/config is read. */
-export function renderRoomHistory(map: WorkMap, roomId: string): string {
+export function renderRoomHistory(map: WorkMap, roomId: string, letters: LetterReads = mapLetterTx(map).letters): string {
   const room = map.rooms.find(row => row.id === roomId);
   if (!room || !validId(map.work.id, roomId)) throw new RoomHistoryError('history-invalid');
   const recipe = (room as typeof room & { recipe?: { id: string; name?: string; playbook?: string } }).recipe;
@@ -36,7 +37,9 @@ export function renderRoomHistory(map: WorkMap, roomId: string): string {
   ];
   if (recipe && typeof recipe.id === 'string') lines.push('', `Recipe: ${metadata(recipe.id)}${typeof recipe.name === 'string' ? ` — ${metadata(recipe.name)}` : ''}`);
   lines.push('', '## Feed');
-  for (const message of map.messages.filter(row => row.roomId === roomId)) {
+  // Вся лента комнаты — запросом, ограниченным числом её писем (спека хранилища 6.2).
+  const feed = { roomId };
+  for (const message of letters.query({ ...feed, limit: letters.count(feed) })) {
     lines.push('', `### ${message.at} — ${member(map, message.from)} (${message.kind})`, message.text);
   }
   const result = representLegacyMarkdown(`${lines.join('\n')}\n`);

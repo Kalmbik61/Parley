@@ -107,18 +107,18 @@ export function createPlanHandlers(effects: PlanEffectsService): { [M in PlanMet
     if (name !== 'plans.retryEffects') {
       const rate = (await loadConfig()).config.messageRate ?? DEFAULT_CONFIG.messageRate;
       try {
-        await updateMap(projectPath, workId, map => {
+        await updateMap(projectPath, workId, (map, letters) => {
           if (map.work.status !== 'active') throw new RoomRuleError('workspace is closed');
           reconcileRoomPlans(map);
           switch (name) {
             case 'rooms.setMode': {
               const input = params as PlanMethodParams<'rooms.setMode'>;
               const before = map.messages.length;
-              setRoomMode(map, input.roomId, HUMAN, input.mode, input.reason, input.confirmCancel === undefined ? {} : { confirmCancel: input.confirmCancel });
+              setRoomMode(map, letters, input.roomId, HUMAN, input.mode, input.reason, input.confirmCancel === undefined ? {} : { confirmCancel: input.confirmCancel });
               const source = map.messages.slice(before).find(row => row.from === SYSTEM && row.roomId === input.roomId && row.kind === 'note');
               if (!source) throw new NoChange();
               messageId = source.id;
-              capturePlanNotice(map, input.roomId, 'mode', source.id);
+              capturePlanNotice(map, letters, input.roomId, 'mode', source.id);
               break;
             }
             case 'plans.update': {
@@ -127,18 +127,18 @@ export function createPlanHandlers(effects: PlanEffectsService): { [M in PlanMet
             }
             case 'plans.submit': {
               const input = params as PlanMethodParams<'plans.submit'>;
-              submitPlanItem(map,input.planId,input.rev,input.item,HUMAN,input.evidence); break;
+              submitPlanItem(map,letters,input.planId,input.rev,input.item,HUMAN,input.evidence); break;
             }
             case 'plans.verify': {
               const input = params as PlanMethodParams<'plans.verify'>;
-              verifyPlanItem(map,input.planId,input.rev,input.item,HUMAN,input.verdict,input.note); break;
+              verifyPlanItem(map,letters,input.planId,input.rev,input.item,HUMAN,input.verdict,input.note); break;
             }
             case 'plans.cancel': {
               const input = params as PlanMethodParams<'plans.cancel'>;
-              cancelRoomPlan(map,input.planId,input.rev,HUMAN); break;
+              cancelRoomPlan(map,letters,input.planId,input.rev,HUMAN); break;
             }
           }
-          reservePlanEffects(map, rate);
+          reservePlanEffects(map, letters, rate);
         });
       } catch (error) {
         if (!(error instanceof NoChange)) {

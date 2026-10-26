@@ -4,6 +4,7 @@ import { validatePlanStorage } from './plans.js';
 import { validatePlanEffects } from './plan-effects.js';
 import { validateResources } from './resource-policy.js';
 import { EFFORT_TOKEN, type EffortLevel } from '../providers.js';
+import type { LetterTx } from './letter-store.js';
 import { defaultSessionName, NEW_LABEL } from './names.js';
 import type {
   HistoryEntry,
@@ -157,11 +158,11 @@ export function addSession(
 /**
  * Убирает сессию из карты (план от 2026-09-06, раздел C). Дети
  * поднимаются к родителю удалённой, её id уходит из чужих `contextFrom`, а
- * письма остаются с пометкой `deleted` — переписку задним числом не переписывают.
- * След удаления — только id в `work.deletedSessions`: ни ярлыка, ни задачи, ни
+ * письма остаются с пометкой `deleted` (`letters.flagDeleted`, спека хранилища 6.2) — переписку задним числом не
+ * переписывают. След удаления — только id в `work.deletedSessions`: ни ярлыка, ни задачи, ни
  * резюме в карте не остаётся.
  */
-export function removeSession(map: WorkMap, sessionId: string): WorkSession {
+export function removeSession(map: WorkMap, letters: LetterTx, sessionId: string): WorkSession {
   const at = map.sessions.findIndex((candidate) => candidate.id === sessionId);
   if (at === -1) throw new Error(`session ${sessionId} is not in the map`);
   const [removed] = map.sessions.splice(at, 1) as [WorkSession];
@@ -173,11 +174,7 @@ export function removeSession(map: WorkMap, sessionId: string): WorkSession {
     }
   }
   for (const room of map.rooms) if (room.ownerId === sessionId) room.ownerId = null;
-  for (const message of map.messages) {
-    // `to` — массив: сравнение строки с ним было бы всегда ложным и молча
-    // перестало бы помечать письма удалённой сессии.
-    if (message.from === sessionId || message.to.includes(sessionId)) message.deleted = true;
-  }
+  letters.flagDeleted(sessionId);
 
   const deleted = map.work.deletedSessions ?? [];
   if (!deleted.includes(sessionId)) deleted.push(sessionId);

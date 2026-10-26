@@ -1,4 +1,3 @@
-import { readMap, updateMap } from './store.js';
 import { cancelledPlanLetter } from './plan-effects.js';
 import { isRoomArchived } from './rooms.js';
 import { HUMAN, type Message, type WorkMap } from './types.js';
@@ -41,40 +40,3 @@ export const unreadForHuman = (message: Message): boolean =>
   message.from !== HUMAN &&
   message.readBy[HUMAN] === undefined &&
   (message.roomId !== null || message.to.includes(HUMAN));
-
-/**
- * Ставит readBy.human = now письмам, которые человек видит: прямым письмам человеку
- * и сообщениям комнат, не от самого человека. Уже прочитанные и чужие id пропускаются.
- * Возвращает, сколько отметок поставлено. work.updatedAt не сдвигается.
- * Подходящих id нет — 0 без updateMap: в базу ничего не пишется, версия работы прежняя.
- * Работы нет — WorkNotFoundError: его бросает уже `readMap`, как и `updateMap`.
- */
-export async function markHumanRead(
-  projectPath: string,
-  workId: string,
-  messageIds: string[],
-): Promise<number> {
-  const wanted = new Set(messageIds);
-  const pending = (map: WorkMap): Message[] =>
-    map.messages.filter((message) => wanted.has(message.id) && unreadForHuman(message));
-
-  // Сперва чтение без записи: updateMap поднимает версию работы всегда (спека хранилища 6.9),
-  // и повтор пачки окна разослал бы works.changed всем клиентам впустую.
-  const current = await readMap(projectPath, workId);
-  if (pending(current).length === 0) return 0;
-
-  // Под локом отбираем заново: другой клиент мог отметить часть писем между чтениями.
-  let marked = 0;
-  await updateMap(
-    projectPath,
-    workId,
-    (map) => {
-      const at = new Date().toISOString();
-      const fresh = pending(map);
-      for (const message of fresh) message.readBy[HUMAN] = at;
-      marked = fresh.length;
-    },
-    { touch: false },
-  );
-  return marked;
-}

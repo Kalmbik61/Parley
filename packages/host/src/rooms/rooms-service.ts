@@ -97,7 +97,7 @@ function openRoom(map: WorkMap, roomId: string): Room {
 export async function createHumanRoom(input: Params<'rooms.create'>): Promise<string> {
   assertWork(input.projectPath, input.workId);
   let roomId = '';
-  await updateMap(input.projectPath, input.workId, (map) => {
+  await updateMap(input.projectPath, input.workId, (map, letters) => {
     // Человек — участник всегда и в список не пишется (спека 6.1); повторы схлопнуты.
     const members = [...new Set(input.members)].filter((id) => id !== HUMAN);
     if (members.length === 0) throw bad('a room needs at least one session');
@@ -128,9 +128,9 @@ export async function createHumanRoom(input: Params<'rooms.create'>): Promise<st
     if (room.recipe != null && map.sessions.find((session) => session.id === lead)?.lifecycle === 'pending') {
       room.recipeLeadNotified = lead;
     }
-    for (const id of members) leaveOtherRooms(map, id, room.id, room.createdAt);
+    for (const id of members) leaveOtherRooms(map, letters, id, room.id, room.createdAt);
     roomId = room.id;
-    if (origin !== undefined) addRoomOriginMessage(map, room.id, origin);
+    if (origin !== undefined) addRoomOriginMessage(map, letters, room.id, origin);
     if (input.quiet !== true) {
       const notice = joinNotice(room, map);
       for (const id of members) {
@@ -152,10 +152,10 @@ class NothingToDeliver extends Error {}
 export async function deliverRecipeToNewLeads(projectPath: string, map: WorkMap): Promise<void> {
   if (!recipeLeadsPending(map)) return;
   try {
-    await updateMap(projectPath, map.work.id, (current) => {
+    await updateMap(projectPath, map.work.id, (current, letters) => {
       // Снимок хоста мог отстать: под локом уже могло быть сделано — карту не переписываем впустую.
       if (!recipeLeadsPending(current)) throw new NothingToDeliver();
-      reconcileRecipeLeads(current);
+      reconcileRecipeLeads(current, letters);
     });
   } catch (error) {
     if (!(error instanceof NothingToDeliver)) throw error;
@@ -214,9 +214,9 @@ export async function addRoomMember(input: Params<'rooms.addMember'>): Promise<s
   const { projectPath, workId, roomId, sessionId } = input;
   assertWork(projectPath, workId);
   let messageId = '';
-  await updateMap(projectPath, workId, (map) => {
+  await updateMap(projectPath, workId, (map, letters) => {
     try {
-      messageId = addMember(map, roomId, sessionId).id;
+      messageId = addMember(map, letters, roomId, sessionId).id;
     } catch (error) {
       throw asHostError(error);
     }
@@ -237,13 +237,13 @@ export async function resolveRoomProposal(input: Params<'rooms.resolveProposal'>
   const rate = (await loadConfig()).config.messageRate ?? DEFAULT_CONFIG.messageRate;
   assertWork(projectPath, workId);
   let messageId = '';
-  await updateMap(projectPath, workId, (map) => {
+  await updateMap(projectPath, workId, (map, letters) => {
     try {
       const completion = map.rooms.find(row => row.id === roomId)?.proposal;
-      messageId = resolveProposal(map, roomId, proposalId, action, { note, rev, ...(planId === undefined ? {} : { planId }), ...(planRev === undefined ? {} : { planRev }) }).messageId;
+      messageId = resolveProposal(map, letters, roomId, proposalId, action, { note, rev, ...(planId === undefined ? {} : { planId }), ...(planRev === undefined ? {} : { planRev }) }).messageId;
       if (action === 'return' && completion?.kind === 'completion')
-        capturePlanNotice(map, roomId, 'completion-returned', messageId, completion.planId);
-      reservePlanEffects(map, rate);
+        capturePlanNotice(map, letters, roomId, 'completion-returned', messageId, completion.planId);
+      reservePlanEffects(map, letters, rate);
     } catch (error) {
       throw asHostError(error);
     }
@@ -298,13 +298,13 @@ export async function setHumanRoomLead(input: Params<'rooms.setLead'>): Promise<
   const { projectPath, workId, roomId, sessionId } = input;
   assertWork(projectPath, workId);
   let messageId = '';
-  await updateMap(projectPath, workId, (map) => {
+  await updateMap(projectPath, workId, (map, letters) => {
     try {
-      messageId = setRoomLead(map, roomId, sessionId).line.id;
+      messageId = setRoomLead(map, letters, roomId, sessionId).line.id;
     } catch (error) {
       throw asHostError(error);
     }
-    reconcileRecipeLeads(map);
+    reconcileRecipeLeads(map, letters);
   });
   return messageId;
 }
@@ -322,9 +322,9 @@ export async function setHumanRoomLead(input: Params<'rooms.setLead'>): Promise<
 export async function deleteHumanRoom(input: Params<'rooms.delete'>): Promise<void> {
   const { projectPath, workId, roomId } = input;
   assertWork(projectPath, workId);
-  await updateMap(projectPath, workId, (map) => {
+  await updateMap(projectPath, workId, (map, letters) => {
     try {
-      deleteRoom(map, roomId);
+      deleteRoom(map, letters, roomId);
     } catch (error) {
       throw asHostError(error);
     }
@@ -359,13 +359,14 @@ export async function archiveHumanRoom(
   await updateMap(
     projectPath,
     workId,
-    (map) => {
+    (map, letters) => {
       try {
-        const orphans = archiveRoom(map, roomId);
+        const orphans = archiveRoom(map, letters, roomId);
         live = orphans.map(refOf).filter((ref) => sessions.live(ref));
         if (!stopSessions) {
           addRoomArchivedLetters(
             map,
+            letters,
             roomId,
             live.map((ref) => ref.sessionId),
           );
@@ -394,9 +395,9 @@ export async function reopenHumanRoom(input: Params<'rooms.reopen'>): Promise<vo
   await updateMap(
     projectPath,
     workId,
-    (map) => {
+    (map, letters) => {
       try {
-        reopenRoom(map, roomId);
+        reopenRoom(map, letters, roomId);
       } catch (error) {
         throw asHostError(error);
       }

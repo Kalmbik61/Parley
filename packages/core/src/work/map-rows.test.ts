@@ -13,6 +13,8 @@ import { reservePlanEffects } from './plan-effects.js';
 import { resolveProposal, setProposal } from './proposals.js';
 import { addRoom } from './rooms.js';
 import { HUMAN, type PlanDraft, type WorkMap } from './types.js';
+import { mapLetterTx } from './letter-store.js';
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
 const AT = '2026-10-04T01:00:00.000Z';
 const SOURCE = 'map-rows.test';
@@ -74,13 +76,14 @@ function fullMap(): WorkMap {
   const proposed = setProposal(map, 'r-01', 's-01', 'Decision', AT, { plan: draft });
   resolveProposal(
     map,
+    lt(map),
     'r-01',
     proposed.proposalId,
     'accept',
     { rev: proposed.rev, planId: map.rooms[0]!.proposal!.plan!.id, planRev: 0 },
     AT,
   );
-  reservePlanEffects(map, 20, AT);
+  reservePlanEffects(map, lt(map), 20, AT);
   addMessage(map, { from: 's-02', to: ['s-01'], text: 'ping' }, AT);
 
   const plan = map.plans![0]!;

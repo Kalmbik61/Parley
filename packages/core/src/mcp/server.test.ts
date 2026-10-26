@@ -45,6 +45,8 @@ import {
   waitTimeoutMs,
   type ToolRunner,
 } from './tools.js';
+import { mapLetterTx } from '../work/letter-store.js';
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
 let home = '';
 let project = '';
@@ -1237,7 +1239,7 @@ describe('create_room explicit working membership and ownership', () => {
     ]) expect((await call(owner, 'send_message', args)).isError).toBe(true);
     expect((await call(owner, 'add_to_room', { room: 'r-01', session: 's-04' })).isError).toBe(true);
     expect((await call(owner, 'propose_decision', { room: 'r-01', text: 'Owner decision' })).isError).toBe(true);
-    await updateMap(project, workId, map => { archiveRoom(map, 'r-01'); });
+    await updateMap(project, workId, map => { archiveRoom(map, lt(map), 'r-01'); });
     expect((await call(owner, 'read_room', { room: 'r-01' })).isError).toBe(false);
     expect((await call(owner, 'get_map', { room: 'r-01' })).isError).toBe(false);
     expect((await call(owner, 'get_map', { room: 'r-01', field: 'messages' })).isError).toBe(false);
@@ -1395,7 +1397,7 @@ describe('add_to_room', () => {
     const { lead } = await setup();
     // s-01 удалена человеком, а её сервер ещё жив: SessionEnd приходит раньше выхода процесса.
     await updateMap(project, workId, (map) => {
-      removeSession(map, 's-01');
+      removeSession(map, lt(map), 's-01');
     });
     const before = await rawMap();
 
@@ -1454,7 +1456,7 @@ describe('propose_decision', () => {
     const { lead } = await leadRoom();
     await callOk(lead, 'propose_decision', { room: 'r-01', text: 'раз' });
     await updateMap(project, workId, (map) => {
-      resolveProposal(map, 'r-01', 'p-01', 'return', { note: 'мало' });
+      resolveProposal(map, lt(map), 'r-01', 'p-01', 'return', { note: 'мало' });
     });
 
     expect(await callOk(lead, 'propose_decision', { room: 'r-01', text: 'два' })).toEqual({
@@ -2241,7 +2243,7 @@ describe('wait_for: журнал ожидания (Parley 0.2.0)', () => {
 
     await linesAre(1);
     await updateMap(project, workId, (map) => {
-      removeSession(map, 's-02');
+      removeSession(map, lt(map), 's-02');
     });
 
     expect(await pending).toEqual({ state: 'deleted', sessionId: 's-02' });
@@ -2446,7 +2448,7 @@ describe('удалённая сессия (план от 2026-09-06, разде�
     const client = await connect('s-01');
     await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
     await updateMap(project, workId, (map) => {
-      removeSession(map, 's-02');
+      removeSession(map, lt(map), 's-02');
     });
 
     const started = Date.now();
@@ -2464,7 +2466,7 @@ describe('удалённая сессия (план от 2026-09-06, разде�
     const pending = callOk(client, 'wait_for', { target: 's-02', timeoutSec: 20 });
     await delay(60);
     await updateMap(project, workId, (map) => {
-      removeSession(map, 's-02');
+      removeSession(map, lt(map), 's-02');
     });
 
     expect(await pending).toEqual({ state: 'deleted', sessionId: 's-02' });
@@ -2485,7 +2487,7 @@ describe('удалённая сессия (план от 2026-09-06, разде�
     // Сервер сессии `s-02` ещё жив: SessionEnd приходит раньше выхода процесса.
     const orphan = await connect('s-02');
     await updateMap(project, workId, (map) => {
-      removeSession(map, 's-02');
+      removeSession(map, lt(map), 's-02');
     });
     const before = await readMapFile();
 
@@ -2911,7 +2913,7 @@ describe('архивная комната в MCP (архив комнат, 3.3, 
       addRoom(current, { title: 'архив', creator: 's-01', members: ['s-01', 's-02'], lead: 's-01' });
       addRoom(current, { title: 'открытая', creator: 's-03', members: ['s-03'] });
       addMessage(current, { from: 's-02', to: [], roomId: 'r-01', text: 'до архива' });
-      archiveRoom(current, 'r-01', AT);
+      archiveRoom(current, lt(current), 'r-01', AT);
     });
     return { lead: await connect('s-01'), member: await connect('s-02'), outsider: await connect('s-03') };
   }

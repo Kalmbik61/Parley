@@ -1,5 +1,5 @@
 import type { RecipeSnapshot } from '../recipes/types.js';
-import { addMessage } from './map.js';
+import type { LetterTx } from './letter-store.js';
 import { truncateMarked } from './parley-md.js';
 import { isRoomArchived, liveLead } from './rooms.js';
 import { PARLEY, type Message, type WorkMap } from './types.js';
@@ -26,7 +26,7 @@ export function leadRecipeBlock(map: WorkMap, sessionId: string): string | null 
  * у ведущего, чью отметку хост поставил при создании комнаты: он ещё не запущен и получит плейбук слоем.
  * Возвращает записанные письма: будит их адресатов обычный будильник.
  */
-export function reconcileRecipeLeads(map: WorkMap, at = new Date().toISOString()): Message[] {
+export function reconcileRecipeLeads(map: WorkMap, letters: LetterTx, at = new Date().toISOString()): Message[] {
   const sent: Message[] = [];
   for (const room of map.rooms) {
     // В ленту архивной комнаты не пишет никто, кроме человека (архив комнат, 3.3): плейбук ведущему не нужен.
@@ -34,7 +34,7 @@ export function reconcileRecipeLeads(map: WorkMap, at = new Date().toISOString()
     const lead = liveLead(map, room);
     if (lead === null || room.recipeLeadNotified === lead) continue;
     const text = truncateMarked(recipeLeadBlock(room.recipe), RECIPE_PLAYBOOK_MARKER).text;
-    sent.push(addMessage(map, { from: PARLEY, to: [lead], roomId: room.id, kind: 'note', text }, at));
+    sent.push(letters.add({ from: PARLEY, to: [lead], roomId: room.id, kind: 'note', text, at }));
     room.recipeLeadNotified = lead;
   }
   return sent;

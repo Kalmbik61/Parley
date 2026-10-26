@@ -4,6 +4,8 @@ import { roomUsage, type UsageResolver } from './room-usage.js';
 import { addMember, addRoom, archiveRoom } from './rooms.js';
 import { HUMAN, type WorkMap, type WorkSession } from './types.js';
 import type { UsageSummary, UsageWindow } from './usage-ledger.js';
+import { mapLetterTx } from './letter-store.js';
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
 const T0 = '2026-10-14T10:00:00.000Z';
 const T1 = '2026-10-14T11:00:00.000Z';
@@ -86,7 +88,7 @@ describe('roomUsage (спека расхода токенов, 5)', () => {
     const session = bound(map, 'a');
     addRoom(map, { title: 'r1', creator: HUMAN, members: [session.id] }, T0);
     addRoom(map, { title: 'r2', creator: HUMAN, members: [] }, T0);
-    addMember(map, 'r-02', session.id, T2);
+    addMember(map, lt(map), 'r-02', session.id, T2);
     const fake = resolver({ bounds: () => ({ startedAt: T1, endedAt: T3 }) });
     const old = await roomUsage(map, 'r-01', fake, NOW);
     expect(old.members[0]).toMatchObject({ sessionId: session.id, current: false, periods: [{ from: T0, to: T2 }], method: 'sliced', sharedWith: [] });
@@ -98,7 +100,7 @@ describe('roomUsage (спека расхода токенов, 5)', () => {
     const map = emptyMap();
     const session = bound(map, 'a');
     addRoom(map, { title: 'r', creator: HUMAN, members: [session.id] }, T0);
-    archiveRoom(map, 'r-01', T2);
+    archiveRoom(map, lt(map), 'r-01', T2);
     const fake = resolver({ bounds: () => ({ startedAt: T1, endedAt: T3 }) });
     const result = await roomUsage(map, 'r-01', fake, NOW);
     expect(fake.sliced).toEqual([{ session: session.id, windows: [{ from: T0, to: T2 }] }]);

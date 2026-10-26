@@ -1,3 +1,4 @@
+import type { LetterTx } from "./letter-store.js";
 import { maxNumber } from "./map.js";
 import {
   addSystemMessage,
@@ -68,20 +69,21 @@ export function activeRoomPlan(
   return map.plans?.find((plan) => plan.roomId === roomId && current(plan));
 }
 
-/** Clone only mutated domain state: failures leave the caller's map unchanged. */
-function edit<T>(map: WorkMap, body: (draft: WorkMap) => T): T {
+/**
+ * Clone only mutated domain state: failures leave the caller's map unchanged. Letters are not part of the draft: a body
+ * that writes them is run in `letters.savepoint`, so a failure takes them back too (storage spec 6.2).
+ */
+function edit<T>(map: WorkMap, body: (draft: WorkMap) => T, letters?: LetterTx): T {
   const draft: WorkMap = {
     ...map,
     work: { ...map.work },
     rooms: structuredClone(map.rooms),
-    messages: [...map.messages],
     plans: structuredClone(map.plans ?? []),
     planExports: structuredClone(map.planExports ?? []),
   };
-  const result = body(draft);
+  const result = letters === undefined ? body(draft) : letters.savepoint(() => body(draft));
   map.work = draft.work;
   map.rooms = draft.rooms;
-  map.messages = draft.messages;
   map.plans = draft.plans!;
   map.planExports = draft.planExports!;
   return result;
@@ -289,30 +291,35 @@ function log(
   if (status !== "done") delete item.acceptedChecklistRevision;
   item.log.push({ by, status, note, at });
 }
-function recalculate(map: WorkMap, plan: RoomPlan, at: string): void {
+/** Returns the ids of the letters it wrote (the plan's status line, or none). */
+function recalculate(map: WorkMap, letters: LetterTx, plan: RoomPlan, at: string): string[] {
   for (const item of plan.items)
     if (item.status === "waiting" || item.status === "ready")
       item.status = ready(plan, item) ? "ready" : "waiting";
-  if (plan.status !== "active") return;
+  if (plan.status !== "active") return [];
   if (planItemsComplete(plan)) {
     if (plan.mode === "verified") {
       plan.status = "completing";
-      addSystemMessage(
-        map,
-        plan.roomId,
-        `Plan ${plan.id} is ready for completion`,
-        at,
-      );
-    } else {
-      plan.status = "completed";
-      plan.completedAt = at;
-      capturePlanSnapshot(map, plan, "completed");
-      addSystemMessage(map, plan.roomId, `Plan ${plan.id} completed`, at);
+      return [
+        addSystemMessage(
+          map,
+          letters,
+          plan.roomId,
+          `Plan ${plan.id} is ready for completion`,
+          at,
+        ).id,
+      ];
     }
+    plan.status = "completed";
+    plan.completedAt = at;
+    capturePlanSnapshot(map, plan, "completed");
+    return [addSystemMessage(map, letters, plan.roomId, `Plan ${plan.id} completed`, at).id];
   }
+  return [];
 }
 export function acceptRoomPlan(
   map: WorkMap,
+  letters: LetterTx,
   proposed: RoomPlan,
   at: string,
 ): void {
@@ -403,8 +410,8 @@ export function acceptRoomPlan(
         (old) => !plan.items.some((item) => item.id === old.id),
       ) ?? [],
     );
-    recalculate(draft, plan, at);
-  });
+    recalculate(draft, letters, plan, at);
+  }, letters);
 }
 function mutablePlan(
   map: WorkMap,
@@ -460,6 +467,7 @@ export function updatePlanItem(
 }
 export function submitPlanItem(
   map: WorkMap,
+  letters: LetterTx,
   id: string,
   rev: number,
   itemId: number,
@@ -497,11 +505,12 @@ export function submitPlanItem(
       throw new RoomRuleError("invalid evidence");
     item.evidence = structuredClone(evidence);
     log(item, actor, "done", null, at);
-    recalculate(draft, plan, at);
-  });
+    recalculate(draft, letters, plan, at);
+  }, letters);
 }
 export function verifyPlanItem(
   map: WorkMap,
+  letters: LetterTx,
   id: string,
   rev: number,
   itemId: number,
@@ -554,11 +563,12 @@ export function verifyPlanItem(
           }
       }
     }
-    recalculate(draft, plan, at);
-  });
+    recalculate(draft, letters, plan, at);
+  }, letters);
 }
 export function cancelRoomPlan(
   map: WorkMap,
+  letters: LetterTx,
   id: string,
   rev: number,
   actor: string,
@@ -568,16 +578,16 @@ export function cancelRoomPlan(
     const plan = mutablePlan(draft, id, rev, actor);
     if (actor !== HUMAN)
       throw new RoomRuleError("only the human can cancel a plan");
-    cancelPlan(draft, plan, at);
-  });
+    cancelPlan(draft, letters, plan, at);
+  }, letters);
 }
 /** Отмена живого плана: статус, слот решения, снимок и строка ленты — общий шаг `cancelRoomPlan` и архивации комнаты. */
-function cancelPlan(draft: WorkMap, plan: RoomPlan, at: string): void {
+function cancelPlan(draft: WorkMap, letters: LetterTx, plan: RoomPlan, at: string): void {
   plan.status = "cancelled";
   plan.cancelledAt = at;
   planRoom(draft, plan.roomId).proposal = null;
   capturePlanSnapshot(draft, plan, "cancelled");
-  addSystemMessage(draft, plan.roomId, `Plan ${plan.id} cancelled`, at);
+  addSystemMessage(draft, letters, plan.roomId, `Plan ${plan.id} cancelled`, at);
 }
 /**
  * Архивация комнаты (`archiveRoom`) отменяет её живой план так же, как человек (`cancelRoomPlan`), но без ревизии и
@@ -586,24 +596,31 @@ function cancelPlan(draft: WorkMap, plan: RoomPlan, at: string): void {
  */
 export function cancelActiveRoomPlan(
   map: WorkMap,
+  letters: LetterTx,
   roomId: string,
   at: string,
 ): void {
   if (activeRoomPlan(map, roomId) === undefined) return;
   edit(map, (draft) => {
-    cancelPlan(draft, activeRoomPlan(draft, roomId)!, at);
-  });
+    cancelPlan(draft, letters, activeRoomPlan(draft, roomId)!, at);
+  }, letters);
 }
+/**
+ * Switches the room mode. Returns the ids of the letters it wrote, in order (none when the mode is already set): a
+ * recalculated plan may add its own lines before the "switched the room" line, which is always the last one.
+ */
 export function setRoomMode(
   map: WorkMap,
+  letters: LetterTx,
   roomId: string,
   actor: string,
   mode: RoomMode,
   reason: string,
   options: { confirmCancel?: boolean } = {},
   at = new Date().toISOString(),
-): void {
-  edit(map, (draft) => {
+): string[] {
+  return edit(map, (draft) => {
+    const written: string[] = [];
     const room = requireOpenRoom(draft, roomId);
     const previous = room.mode ?? "free";
     const order = ["free", "checklist", "verified"];
@@ -615,7 +632,7 @@ export function setRoomMode(
         throw new RoomRuleError("only the human can lower room mode");
     } else if (isRoomClosed(draft, room))
       throw new RoomRuleError("room is closed");
-    if (previous === mode) return;
+    if (previous === mode) return written;
     const plan = activeRoomPlan(draft, roomId);
     if (mode === "free" && plan) {
       if (!options.confirmCancel)
@@ -636,15 +653,19 @@ export function setRoomMode(
         item.verifier = null;
         delete item.acceptedChecklistRevision;
       }
-      recalculate(draft, plan, at);
+      written.push(...recalculate(draft, letters, plan, at));
     }
-    addSystemMessage(
-      draft,
-      roomId,
-      `${actor === HUMAN ? "You" : actor} switched the room to ${mode}: ${reason}`,
-      at,
+    written.push(
+      addSystemMessage(
+        draft,
+        letters,
+        roomId,
+        `${actor === HUMAN ? "You" : actor} switched the room to ${mode}: ${reason}`,
+        at,
+      ).id,
     );
-  });
+    return written;
+  }, letters);
 }
 /** P23 consumes transitions for delivery; closed owners never retain an actionable assignment. */
 export function reconcileRoomPlans(

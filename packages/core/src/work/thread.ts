@@ -1,3 +1,4 @@
+import type { LetterReads } from './letter-store.js';
 import { recipientsOf } from './letters.js';
 import { canReadRoom } from './rooms.js';
 import { PARLEY } from './types.js';
@@ -35,7 +36,16 @@ function subtree(map: WorkMap, root: string): string[] {
 const byTime = (messages: readonly Message[]): Message[] =>
   [...messages].sort((a, b) => a.at.localeCompare(b.at));
 
-export function threadOf(map: WorkMap, sessionId: string): Thread {
+/** Область треда сессии: владелец, участники и их множества — всё, что нужно, чтобы решить про одно письмо. */
+interface ThreadScope {
+  owner: string | null;
+  members: string[];
+  inside: ReadonlySet<string>;
+  /** Удалённая сессия участником не считается, но письмо с её id из ленты не пропадает. */
+  gone: ReadonlySet<string>;
+}
+
+function threadScope(map: WorkMap, sessionId: string): ThreadScope {
   const session = map.sessions.find((candidate) => candidate.id === sessionId);
   if (session === undefined) throw new Error(`session ${sessionId} is not in the map`);
 
@@ -46,42 +56,79 @@ export function threadOf(map: WorkMap, sessionId: string): Thread {
         ? sessionId
         : null;
   const members = owner === null ? map.sessions.map((item) => item.id) : subtree(map, owner);
+  return { owner, members, inside: new Set(members), gone: new Set(map.work.deletedSessions ?? []) };
+}
+
+/**
+ * Лежит ли письмо в треде с владельцем (3.4): и отправитель, и получатели — в поддереве или следе удалённой сессии,
+ * и хотя бы один конец живой в поддереве. Удалённая сессия участником не считается, но письмо с её id из ленты не
+ * пропадает (3.4, 6.3): поддерева у следа в `deletedSessions` уже нет, и письмо остаётся в том треде, где живёт его
+ * второй конец. У треда всей работы (`owner === null`) письма не делятся — вызывающий этот случай не спрашивает.
+ */
+function inThread(map: WorkMap, scope: ThreadScope): (message: Message) => boolean {
+  const { inside, gone } = scope;
+  const here = (id: string): boolean => inside.has(id) || gone.has(id);
+  return (message) => {
+    const to = recipientsOf(message, map);
+    return (
+      here(message.from) &&
+      to.every(here) &&
+      (inside.has(message.from) || to.some((id) => inside.has(id)))
+    );
+  };
+}
+
+export function threadOf(map: WorkMap, sessionId: string): Thread {
+  const scope = threadScope(map, sessionId);
+  const { owner, members } = scope;
   // Одинокий корень видит всю работу целиком: делить письма не на кого (3.4).
   if (owner === null) return { owner, members, messages: byTime(map.messages) };
 
-  const inside = new Set(members);
-  const gone = new Set(map.work.deletedSessions ?? []);
-  // Удалённая сессия участником не считается, но письмо с её id из ленты не
-  // пропадает (3.4, 6.3): поддерева у следа в `deletedSessions` уже нет, и
-  // письмо остаётся в том треде, где живёт его второй конец.
-  const here = (id: string): boolean => inside.has(id) || gone.has(id);
-  const messages = byTime(
-    map.messages.filter((message) => {
-      const to = recipientsOf(message, map);
-      return (
-        here(message.from) &&
-        to.every(here) &&
-        (inside.has(message.from) || to.some((id) => inside.has(id)))
-      );
-    }),
-  );
-  return { owner, members, messages };
+  return { owner, members, messages: byTime(map.messages.filter(inThread(map, scope))) };
+}
+
+function visibleTo(map: WorkMap, scope: ThreadScope, sessionId: string): (message: Message) => boolean {
+  const historical = scope.owner === null ? (): boolean => false : inThread(map, scope);
+  return (message) => {
+    if (message.roomId !== null) {
+      const room = map.rooms.find((candidate) => candidate.id === message.roomId);
+      return room !== undefined && canReadRoom(room, sessionId);
+    }
+    return historical(message) || message.from === sessionId || message.to.includes(sessionId);
+  };
+}
+
+/**
+ * Видит ли агент `sessionId` письмо: предикат на одно письмо с тем же ответом, что членство письма в
+ * `agentThreadOf(map, sessionId).messages`, но без сортировки и обхода всех писем (спека хранилища 6.2): письмо
+ * комнаты — читателю комнаты (`canReadRoom`); прямое — если оно в историческом треде семьи, от агента или к нему.
+ * Одинокий корень исторического треда не имеет: чужой личной почты он не читает.
+ */
+export function agentLetterVisible(map: WorkMap, sessionId: string): (message: Message) => boolean {
+  return visibleTo(map, threadScope(map, sessionId), sessionId);
 }
 
 /** Agent context keeps historical family access, but a lone root cannot read unrelated private mail. */
 export function agentThreadOf(map: WorkMap, sessionId: string): Thread {
-  const thread = threadOf(map, sessionId);
-  const historical = thread.owner === null ? new Set<string>() : new Set(thread.messages.map((message) => message.id));
+  const scope = threadScope(map, sessionId);
   return {
-    ...thread,
-    messages: byTime(map.messages.filter((message) => {
-      if (message.roomId !== null) {
-        const room = map.rooms.find((candidate) => candidate.id === message.roomId);
-        return room !== undefined && canReadRoom(room, sessionId);
-      }
-      return historical.has(message.id) || message.from === sessionId || message.to.includes(sessionId);
-    })),
+    owner: scope.owner,
+    members: scope.members,
+    messages: byTime(map.messages.filter(visibleTo(map, scope, sessionId))),
   };
+}
+
+/** Участники треда сессии — те же, что в `threadOf(...).members`, без чтения писем. */
+export const threadMembersOf = (map: WorkMap, sessionId: string): string[] => threadScope(map, sessionId).members;
+
+/**
+ * Решения, которые агент видит в своём треде (`agentThreadOf`), по времени. Берутся запросом `kind: decision`,
+ * ограниченным числом решений в работе, и отбираются предикатом видимости одного письма (спека хранилища 6.2).
+ */
+export function agentDecisions(map: WorkMap, letters: LetterReads, sessionId: string): Message[] {
+  const visible = agentLetterVisible(map, sessionId);
+  const decisions = { kind: 'decision' as const };
+  return byTime(letters.query({ ...decisions, limit: letters.count(decisions) }).filter(visible));
 }
 
 /** Решения треда — его письма с `kind: decision`, по времени. */

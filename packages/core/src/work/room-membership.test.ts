@@ -3,6 +3,8 @@ import { addSession } from './map.js';
 import { roomMembership } from './room-membership.js';
 import { addMember, addRoom } from './rooms.js';
 import { HUMAN, type WorkMap } from './types.js';
+import { mapLetterTx } from './letter-store.js';
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
 const T0 = '2026-10-14T10:00:00.000Z';
 const T1 = '2026-10-14T11:00:00.000Z';
@@ -22,8 +24,8 @@ describe('roomMembership (спека расхода токенов, 4.3, 5.1)', 
     addSession(map, { provider: 'claude', label: 'a', task: 'x' });
     const r1 = addRoom(map, { title: 'r1', creator: HUMAN, members: ['s-01'] }, T0);
     const r2 = addRoom(map, { title: 'r2', creator: HUMAN, members: [] }, T0);
-    addMember(map, r2.id, 's-01', T1);
-    addMember(map, r1.id, 's-01', T2);
+    addMember(map, lt(map), r2.id, 's-01', T1);
+    addMember(map, lt(map), r1.id, 's-01', T2);
     expect(roomMembership(map, r1.id)).toEqual({
       reconstructed: false,
       members: [{ session: 's-01', periods: [{ from: T0, to: T1 }, { from: T2, to: null }] }],
@@ -36,10 +38,10 @@ describe('roomMembership (спека расхода токенов, 4.3, 5.1)', 
     addSession(map, { provider: 'claude', label: 'b', task: 'x' });
     addSession(map, { provider: 'claude', label: 'c', task: 'x' });
     const old = addRoom(map, { title: 'old', creator: 's-01', members: ['s-01', 's-02'] }, T0);
-    addMember(map, old.id, 's-03', T1);
+    addMember(map, lt(map), old.id, 's-03', T1);
     const fresh = addRoom(map, { title: 'new', creator: HUMAN, members: [] }, T0);
-    addMember(map, fresh.id, 's-03', T2);
-    addMember(map, fresh.id, 's-02', T2);
+    addMember(map, lt(map), fresh.id, 's-03', T2);
+    addMember(map, lt(map), fresh.id, 's-02', T2);
     delete old.memberLog;
     expect(roomMembership(map, old.id)).toEqual({
       reconstructed: true,

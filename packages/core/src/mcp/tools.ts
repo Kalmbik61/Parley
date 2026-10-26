@@ -940,7 +940,7 @@ async function sendMessage(
 
   const limits = await limitsOf(context);
   let created = '';
-  const written = await updateMap(context.projectPath, context.workId, (current) => {
+  const written = await updateMap(context.projectPath, context.workId, (current, letters) => {
     // Отправителя проверяем наравне с получателем: сервер удалённой сессии ещё
     // жив, и без проверки в карту легло бы письмо от несуществующего адресата,
     // ответить на которое нечем (план от 2026-09-06, раздел C).
@@ -974,7 +974,7 @@ async function sendMessage(
           throw new Error(`message ${replyTo} is not in room ${roomId}`);
         }
       }
-      assertMessageBudget(current, {
+      assertMessageBudget(current, letters, {
         actor: sessionId,
         room: roomId,
         messages: 1,
@@ -999,7 +999,7 @@ async function sendMessage(
       }
       const target = to[0] as string;
       assertDeliverable(current, target);
-      assertMessageBudget(current, { actor: sessionId, room: null, messages: 1, recipients: 1, limits });
+      assertMessageBudget(current, letters, { actor: sessionId, room: null, messages: 1, recipients: 1, limits });
       created = addMessage(current, { from: sessionId, to: [target], text, kind }).id;
     }
   });
@@ -1042,7 +1042,7 @@ async function createRoom(
 
   const limits = await limitsOf(context);
   let roomId = '';
-  await updateMap(context.projectPath, context.workId, (current) => {
+  await updateMap(context.projectPath, context.workId, (current, letters) => {
     requireSession(current, sessionId);
     const members = [...new Set(membersInput)];
     const invited = members.filter((id) => id !== sessionId);
@@ -1056,7 +1056,7 @@ async function createRoom(
     // иначе исчерпанный лимит обходился бы созданием комнаты.
     if (invited.length > 0) {
       assertRate(current, sessionId, context.messageRate ?? DEFAULT_CONFIG.messageRate, Date.now(), invited.length);
-      assertMessageBudget(current, { actor: sessionId, room: null, messages: invited.length, recipients: invited.length, limits });
+      assertMessageBudget(current, letters, { actor: sessionId, room: null, messages: invited.length, recipients: invited.length, limits });
     }
 
     const room = addRoom(current, {
@@ -1067,7 +1067,7 @@ async function createRoom(
       lead: leadInput,
     });
     roomId = room.id;
-    for (const memberId of members) leaveOtherRooms(current, memberId, room.id, room.createdAt);
+    for (const memberId of members) leaveOtherRooms(current, letters, memberId, room.id, room.createdAt);
     const notice = joinNotice(room, current);
     for (const memberId of invited) {
       addMessage(current, { from: sessionId, to: [memberId], roomId: room.id, kind: 'note', text: notice });
@@ -1085,14 +1085,14 @@ async function addToRoom(
   const target = stringArg(args, 'session');
 
   let messageId = '';
-  await updateMap(context.projectPath, context.workId, (current) => {
+  await updateMap(context.projectPath, context.workId, (current, letters) => {
     // Правила — ведущий, живая комната, закрытая или чужая сессия, уже участник, одна комната на сессию —
     // держит `addMemberByLead`. Его `RoomRuleError` уходит агенту текстом ошибки, как у `propose_decision`,
     // а исключение из мутатора не даёт `updateMap` записать карту: после отказа она не меняется.
     // Допуска бюджета здесь нет намеренно (P37): `addMemberByLead` пишет только системную строку «joined the room»
     // (`from: system`, адресат — человек), она никого не будит, не рассылается и в бюджет писем не входит. Письма
     // приглашённому здесь нет, в отличие от `create_room`; разговорная квота управление комнатой не блокирует.
-    messageId = addMemberByLead(current, roomId, sessionId, target).id;
+    messageId = addMemberByLead(current, letters, roomId, sessionId, target).id;
   });
   return { messageId };
 }

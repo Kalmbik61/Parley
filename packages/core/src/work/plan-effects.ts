@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { BacklogDocument, BacklogWriteResult } from "./backlog.js";
 import type { SharedWriteOptions, UpdateMapOptions } from "./store.js";
-import { addMessage } from "./map.js";
+import type { LetterTx } from "./letter-store.js";
 import { isMember, isRoomClosed, liveLead, RoomRuleError } from "./rooms.js";
 import { planItemSatisfied, reconcileRoomPlans } from "./plans.js";
 import { PARLEY, HUMAN, SYSTEM } from "./types.js";
@@ -155,7 +155,16 @@ export function planEffectOwnsLetter(
     message.text === effect.text
   );
 }
-export function currentPlanEffect(map: WorkMap, value: PlanEffect): boolean {
+/**
+ * `byId` finds the letter that caused a mode or return notice (storage spec 6.2). Code inside a transaction passes
+ * `letters.byId`; without it the map's own list is read, which is what the readers over a map snapshot still do.
+ */
+export function currentPlanEffect(
+  map: WorkMap,
+  value: PlanEffect,
+  byId: (id: string) => Message | undefined = (id) =>
+    map.messages.find((row) => row.id === id),
+): boolean {
   const room = map.rooms.find((row) => row.id === value.roomId);
   if (!room || !actionable(map, room, value.target)) return false;
   const plan = map.plans?.find(
@@ -165,9 +174,8 @@ export function currentPlanEffect(map: WorkMap, value: PlanEffect): boolean {
       row.rev === value.rev,
   );
   if (value.kind === "mode" || value.kind === "completion-returned") {
-    const source = map.messages.find(
-      (row) => row.id === value.occurrence && row.roomId === room.id,
-    );
+    const found = byId(value.occurrence);
+    const source = found?.roomId === room.id ? found : undefined;
     if (!source || liveLead(map, room) !== value.target) return false;
     if (value.kind === "mode")
       return (
@@ -208,15 +216,15 @@ export function currentPlanEffect(map: WorkMap, value: PlanEffect): boolean {
 /** Capture an actual trusted mode/return occurrence; this is not an API accepting caller identities. */
 export function capturePlanNotice(
   map: WorkMap,
+  letters: LetterTx,
   roomId: string,
   kind: "mode" | "completion-returned",
   sourceId: string,
   planId?: string,
 ): void {
   const room = map.rooms.find((row) => row.id === roomId);
-  const source = map.messages.find(
-    (row) => row.id === sourceId && row.roomId === roomId,
-  );
+  const found = letters.byId(sourceId);
+  const source = found?.roomId === roomId ? found : undefined;
   if (!room || !source)
     throw new RoomRuleError("plan notice source is unavailable");
   const plan =
@@ -239,7 +247,7 @@ export function capturePlanNotice(
     text,
     source.at,
   );
-  if (!currentPlanEffect(map, value))
+  if (!currentPlanEffect(map, value, (id) => letters.byId(id)))
     throw new RoomRuleError("plan notice proof is unavailable");
   map.planEffects ??= [];
   if (!map.planEffects.some((row) => row.key === value.key))
@@ -253,25 +261,25 @@ export interface PlanReservation {
 /** Called inside a map write (`updateMap`): reserve occurrence and letter together before existing wake sees either. */
 export function reservePlanEffects(
   map: WorkMap,
+  letters: LetterTx,
   messageRate: number,
   at = new Date().toISOString(),
 ): PlanReservation {
+  // Письма не часть черновика: сорвавшийся расчёт забирает их обратно через `savepoint` (спека хранилища 6.2).
   const draft: WorkMap = {
     ...map,
     work: { ...map.work },
     rooms: structuredClone(map.rooms),
-    messages: [...map.messages],
     plans: structuredClone(map.plans ?? []),
     planExports: structuredClone(map.planExports ?? []),
     planEffects: structuredClone(map.planEffects ?? []),
     planBacklogIntents: structuredClone(map.planBacklogIntents ?? []),
   };
-  const result = reserve(draft, messageRate, at);
+  const result = letters.savepoint(() => reserve(draft, letters, messageRate, at));
   if (result.changed)
     Object.assign(map, {
       work: draft.work,
       rooms: draft.rooms,
-      messages: draft.messages,
       plans: draft.plans,
       planExports: draft.planExports,
       planEffects: draft.planEffects,
@@ -281,6 +289,7 @@ export function reservePlanEffects(
 }
 function reserve(
   map: WorkMap,
+  letters: LetterTx,
   messageRate: number,
   at: string,
 ): PlanReservation {
@@ -325,40 +334,47 @@ function reserve(
   )
     throw new RoomRuleError("plan effect storage limit reached");
   const now = Date.parse(at);
-  const recent = map.messages.filter(
-    (row) => row.from === PARLEY && now - Date.parse(row.at) < WINDOW_MS,
-  );
-  let available = Math.max(0, messageRate - recent.length);
+  // Письма `parley` за последний час: окно считается запросом `sinceAt`, а не обходом всей ленты (спека хранилища 6.2).
+  const recentQuery = {
+    from: PARLEY,
+    sinceAt: new Date(now - WINDOW_MS).toISOString(),
+  };
+  const recentCount = letters.count(recentQuery);
+  let available = Math.max(0, messageRate - recentCount);
+  let sent = 0;
   for (const value of map.planEffects) {
     if (value.status === "cancelled") continue;
-    if (!currentPlanEffect(map, value)) {
+    if (!currentPlanEffect(map, value, (id) => letters.byId(id))) {
       value.status = "cancelled";
+      // Отправленное письмо отменённого эффекта перестаёт быть непрочитанным у адресата (спека хранилища 6.2).
+      if (value.messageId !== null) letters.effectCancelled(value.messageId);
       continue;
     }
     if (value.status !== "queued" || available === 0) continue;
-    const message = addMessage(
-      map,
-      {
-        from: PARLEY,
-        roomId: value.roomId,
-        to: [value.target],
-        text: value.text,
-        kind: "note",
-      },
+    const message = letters.add({
+      from: PARLEY,
+      roomId: value.roomId,
+      to: [value.target],
+      text: value.text,
+      kind: "note",
       at,
-    );
+    });
     value.status = "sent";
     value.messageId = message.id;
     available--;
+    sent++;
   }
   const queued = map.planEffects.filter(
     (row) => row.status === "queued",
   ).length;
+  // Самое раннее из писем окна определяет, когда освободится место; запрос ограничен их числом (до и после отправки).
   const nextDueAt = queued
     ? Math.max(
         now + 1,
         Math.min(
-          ...recent.map((row) => Date.parse(row.at) + WINDOW_MS),
+          ...letters
+            .query({ ...recentQuery, limit: recentCount + sent })
+            .map((row) => Date.parse(row.at) + WINDOW_MS),
           now + WINDOW_MS,
         ),
       )

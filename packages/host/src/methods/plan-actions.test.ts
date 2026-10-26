@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import {
+  mapLetterTx,
   createWork,
   updateMap,
   readMap,
@@ -19,6 +20,7 @@ import {
 import type { RequestInfo } from "../context.js";
 import { createPlanHandlers } from "./rooms.js";
 import { resolveRoomProposal } from "../rooms/rooms-service.js";
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 let root: string;
 let project: string;
 let workId: string;
@@ -66,7 +68,7 @@ async function accept() {
         ],
       },
     });
-    resolveProposal(map, "r-01", p.proposalId, "accept", {
+    resolveProposal(map, lt(map), "r-01", p.proposalId, "accept", {
       rev: p.rev,
       planId: "pl-01",
       planRev: 0,
@@ -174,11 +176,11 @@ describe("host-owned human plan actions", () => {
   it("completion Return keeps a human room-feed source and one proof-bound Parley lead letter", async () => {
     await accept();
     await updateMap(project, workId, (map) => {
-      submitPlanItem(map, "pl-01", 0, 1, "s-02", {
+      submitPlanItem(map, lt(map), "pl-01", 0, 1, "s-02", {
         text: "Measured",
         artifacts: [],
       });
-      verifyPlanItem(map, "pl-01", 0, 1, "s-03", "verified", "Independent");
+      verifyPlanItem(map, lt(map), "pl-01", 0, 1, "s-03", "verified", "Independent");
       proposeCompletion(map, "r-01", "s-01", "pl-01", 0, "Summary");
     });
     const before = await readMap(project, workId);

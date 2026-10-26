@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  mapLetterTx,
   addRoom,
   addSession,
   HUMAN,
@@ -8,10 +9,11 @@ import {
   setProposal,
   flushDecisionJournal,
 } from "@parley/core";
-import type { WorkMap } from "@parley/core";
+import type { LetterTx, WorkMap } from "@parley/core";
 import type { WorksService } from "../works/works-service.js";
 import type { PlanEffectsServiceIO } from "./plan-effects.js";
 import { createPlanEffectsService } from "./plan-effects.js";
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 const AT = "2026-10-04T01:00:00.000Z";
 const empty = (): WorkMap => ({
   schemaVersion: 2,
@@ -62,11 +64,11 @@ function fixture(map = empty()) {
   const io = {
     readMap: vi.fn(async () => structuredClone(map)),
     updateMap: vi.fn(
-      async (_p: string, _w: string, body: (m: WorkMap) => void) => {
+      async (_p: string, _w: string, body: (m: WorkMap, letters: LetterTx) => void) => {
         locked = true;
         try {
           const draft = structuredClone(map);
-          body(draft);
+          body(draft, lt(draft));
           Object.assign(map, draft);
           writes++;
           listener();
@@ -134,6 +136,7 @@ function planned(): WorkMap {
   });
   resolveProposal(
     map,
+    lt(map),
     "r-01",
     p.proposalId,
     "accept",
@@ -262,7 +265,7 @@ it("an idle current plan with no pending effects writes nothing and schedules no
   vi.useFakeTimers();
   vi.setSystemTime(AT);
   const map = planned();
-  reservePlanEffects(map, 20, AT);
+  reservePlanEffects(map, lt(map), 20, AT);
   map.planExports!.forEach((row) => {
     row.status = "written";
   });

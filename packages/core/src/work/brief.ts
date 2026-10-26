@@ -1,10 +1,11 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { BRIEF_MAX_BYTES, CONTEXT_LIMITS, ContextBudgetError, assertWithinBudget, inlineOrRef, textHash } from './context-budget.js';
+import { mapLetterTx, type LetterReads } from './letter-store.js';
 import { isMember, isRoomArchived, liveLead } from './rooms.js';
 import { ensureStateDir } from './state-dir.js';
 import { readMap, workPaths } from './store.js';
-import { participantLabel, recentDecisions, sessionMention, agentThreadOf } from './thread.js';
+import { agentDecisions, participantLabel, sessionMention, threadMembersOf } from './thread.js';
 import { HUMAN, type WorkMap, type WorkSession } from './types.js';
 
 /**
@@ -71,7 +72,7 @@ export function briefRevisions(text: string): { recorded: string | null; actual:
  * копируется, только пути — план агент прочитает сам, если он ему нужен. Живое состояние (статусы коллег,
  * вся история решений) в бриф не входит: оно меняется чаще брифа, а читается через `get_map`.
  */
-export function buildBrief(map: WorkMap, sessionId: string): string {
+export function buildBrief(map: WorkMap, sessionId: string, letters: LetterReads = mapLetterTx(map).letters): string {
   const session = sessionOf(map, sessionId);
   const lines: string[] = [
     `# Workspace ${map.work.id} — ${field('title', map.work.title, CONTEXT_LIMITS.title, 'get_map {field: "title"}')}`,
@@ -127,8 +128,7 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
   // Знакомство с коллегами и уже принятыми решениями треда (спецификация 5.2):
   // без них сессия не знает, кому писать, и переспрашивает то, о чём в её
   // группе договорились до неё. Пустые разделы не печатаются.
-  const thread = agentThreadOf(map, session.id);
-  const colleagues = thread.members.filter((id) => id !== session.id);
+  const colleagues = threadMembersOf(map, session.id).filter((id) => id !== session.id);
   // Комнаты, где сессия участник (этап 3, раздел 6.3): без них сессия узнаёт
   // о своих комнатах только из ответа `create_room`, а на резюме сессии в
   // брифе комната появляется у всех остальных участников.
@@ -198,7 +198,9 @@ export function buildBrief(map: WorkMap, sessionId: string): string {
 
   // Решения треда — последние несколько со ссылкой на сообщение: полная история и текст, не влезший в бюджет,
   // читаются через `get_map`, а не едут в каждом брифе.
-  const { shown, total } = recentDecisions(thread, MAX_DECISIONS);
+  const decisions = agentDecisions(map, letters, session.id);
+  const shown = decisions.slice(-MAX_DECISIONS);
+  const total = decisions.length;
   if (total > 0) {
     const note =
       total > shown.length
