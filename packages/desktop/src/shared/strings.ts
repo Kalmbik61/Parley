@@ -2518,6 +2518,17 @@ export const S = {
       islandShortcutOff: 'Turn shortcut off',
       shortcutConflictAssistant: 'This shortcut is assigned to the assistant.',
       glmSlow: 'GLM answers in about 13 seconds.',
+      /** Голос помощника (план 3b, B20; #9 §6.8). Кнопки скачивания — строки Whisper из `S.voice.settings`. */
+      speak: 'Speak answers',
+      voice: 'Voice',
+      voiceGender: { female: 'Female', male: 'Male', neutral: 'Neutral' },
+      voiceDetails: (gender: string, languages: string, licence: string): string => `${gender} · ${languages} · ${licence}`,
+      voiceModel: 'Qwen3-TTS 0.6B CustomVoice',
+      voiceModelHint: 'One download for all voices.',
+      voicePreparing: 'Preparing voice…',
+      voiceUnavailable: 'Voice is unavailable on this Mac. Answers are shown as text.',
+      voiceNoLanguage: 'No voice for this language yet. Answers are shown as text.',
+      voiceCredit: 'Voices: Qwen3-TTS by Qwen Team, Alibaba Cloud (Apache-2.0). Speech runs on this Mac with speech.cpp.',
     },
   },
 
