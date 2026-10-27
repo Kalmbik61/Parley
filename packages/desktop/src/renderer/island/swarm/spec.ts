@@ -12,8 +12,8 @@ export type SwarmShape = 'dot' | 'cloud' | 'sphere' | 'face';
 export type SwarmFx = 'listen' | 'ring' | 'flow' | 'arc' | null;
 /** Эмоция лица — та же, что метка ответа хоста. */
 export type SwarmEmotion = AssistantState['mood'];
-/** Фаза ввода для облика: речь (`speaking`) и пауза после неё (`settling`) живут в острове. */
-export type SwarmInput = InputPhase | 'speaking' | 'settling';
+/** Фаза ввода для облика: речь (`speaking`) и пауза после неё (`settling`) живут в острове, в `InputPhase`. */
+export type SwarmInput = InputPhase;
 
 export interface SwarmSpec {
   shape: SwarmShape;
@@ -139,14 +139,14 @@ const BASE: SwarmSpec = { shape: 'cloud', fx: null, pal: 'amber', rot: 0.35, vis
 
 /**
  * Облик по состоянию хоста и фазе ввода (таблица `SPEC` и `specFor` макета). Приоритет: слушание, затем `offline`
- * хоста, затем речь, затем фаза хоста. Речь — лицо с эмоцией хоста; в мини-виде лица нет — сфера с палитрой лица.
- * В мини-виде облако рисуется точкой.
+ * хоста, затем речь, затем фаза хоста. Речь — лицо с эмоцией звучащего предложения (`sentenceMood`, #9 §6.7 L3), а
+ * без неё — с эмоцией хода; в мини-виде лица нет — сфера с палитрой лица. В мини-виде облако рисуется точкой.
  */
-export function swarmSpecFor(host: AssistantState, input: SwarmInput, mini: boolean): SwarmSpec {
+export function swarmSpecFor(host: AssistantState, input: SwarmInput, mini: boolean, sentenceMood?: SwarmEmotion): SwarmSpec {
   let spec: SwarmSpec;
   if (input === 'listening' || input === 'transcribing') spec = { ...BASE, fx: 'listen' };
   else if (host.phase !== 'offline' && input === 'speaking') {
-    const emo = host.mood;
+    const emo = sentenceMood ?? host.mood;
     const pal = emo === 'anger' || emo === 'error' ? 'coral' : 'amber';
     spec = { ...BASE, shape: 'face', emo, pal, dim: EMO[emo].dim ?? 1 };
     if (mini) spec = { ...spec, shape: 'sphere', emo: null };

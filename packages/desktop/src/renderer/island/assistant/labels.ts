@@ -6,6 +6,8 @@ import type { InputPhase } from './store.js';
 export function statusLabel(host: AssistantState, input: InputPhase, sending = false): string {
   if (input === 'listening') return S.assistant.listening;
   if (input === 'transcribing') return S.assistant.transcribing;
+  if (input === 'speaking') return S.assistant.speaking;
+  if (input === 'settling') return S.assistant.spoken;
   if (sending) return S.assistant.sending;
   switch (host.phase) {
     case 'thinking':
@@ -28,6 +30,8 @@ export function statusLabel(host: AssistantState, input: InputPhase, sending = f
 }
 
 export function miniLabel(host: AssistantState, input: InputPhase, sending = false): string | null {
+  if (input === 'speaking') return S.assistant.miniSpeaking;
+  if (input === 'settling') return S.assistant.miniSpoken;
   if (input !== 'idle') return S.assistant.miniListening;
   if (sending) return S.assistant.miniSending;
   switch (host.phase) {
