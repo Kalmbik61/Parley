@@ -8,6 +8,29 @@ import type { EventData } from './events.js';
 import type { FeedDecisions } from './feed.js';
 import type { Capabilities, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderCheck, ProviderCheckReason, ProviderLimits } from './types.js';
 import { PROVIDER_CHECK_REASONS } from './types.js';
+import * as protocolExports from './index.js';
+import { progressLine, progressResult, type ProgressResult } from './feed-progress.js';
+
+describe('feed.progress registration', () => {
+  const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-01' };
+  it('registers a strict ref-only method and preserves existing feed params', () => {
+    expect(METHODS).toHaveProperty('feed.progress');
+    expect(METHODS['feed.progress'].safeParse({ ref }).success).toBe(true);
+    for (const extra of [{ agentId: 'agent' }, { path: '/secret' }, { limit: 20 }, { scope: 'attention' }, { generation: 1 }]) expect(METHODS['feed.progress'].safeParse({ ref, ...extra }).success).toBe(false);
+    for (const value of [{}, { ref: null }, { ref: { sessionId: 's-01' } }]) expect(METHODS['feed.progress'].safeParse(value).success).toBe(false);
+    expect(METHODS['feed.snapshot'].safeParse({ ref, agentId: 'agent', scope: 'attention' }).success).toBe(true);
+    expect(NOTIFICATIONS).not.toHaveProperty('feed.progress');
+  });
+  it('exports schemas, bounds and result types through the public protocol entry point', () => {
+    expect(protocolExports.progressLine).toBe(progressLine);
+    expect(protocolExports.progressResult).toBe(progressResult);
+    expect(protocolExports.FEED_PROGRESS_ID_LIMIT).toBe(128);
+    expect(protocolExports.FEED_PROGRESS_RECENT_LIMIT).toBe(20);
+    expect(protocolExports.FEED_PROGRESS_MAX_BYTES).toBe(16 * 1024);
+    expectTypeOf<Params<'feed.progress'>>().toEqualTypeOf<{ ref: { projectPath: string; workId: string; sessionId: string } }>();
+    expectTypeOf<Result<'feed.progress'>>().toEqualTypeOf<ProgressResult>();
+  });
+});
 
 describe('providers.check — явная проверка ключа тестовым запросом', () => {
   it('принимает провайдера строкой; без провайдера — отказ', () => {

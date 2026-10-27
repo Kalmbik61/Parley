@@ -39,6 +39,7 @@ import { backlogMethodSchemas } from './backlog.js';
 import type { BacklogMethodResults } from './backlog.js';
 import { feedDecision } from './feed.js';
 import type { FeedDecisions } from './feed.js';
+import type { ProgressResult } from './feed-progress.js';
 import type { Capabilities, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 /** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
@@ -295,6 +296,8 @@ export const METHODS = {
   // байтов не видит, поэтому здесь только «не пусто».
   // `requestedAt` — как у `rooms.send`: метка нажатия Send для `queueMs` в журнале хоста.
   'pty.send': z.object({ ref: sessionRef, text: z.string().min(1), submit: z.boolean(), requestedAt: z.number().optional() }),
+  // Отдельная ограниченная проекция острова: никаких renderer path/agentId/limit.
+  'feed.progress': z.strictObject({ ref: sessionRef }),
   // Лента вида «Chat» (план 2026-10-01, Task 2, решение 14). `agentId` — лента субагента из его
   // журнала: id идёт в путь `subagents/agent-<id>.jsonl`, поэтому только буквы, цифры, `_` и `-`.
   'feed.snapshot': z.object({
@@ -473,6 +476,7 @@ export interface Results extends AssistantMethodResults, TelegramMethodResults, 
   'changes.commitProject': { commit: string };
   'mail.markRead': { marked: number };
   'pty.send': SendResult;
+  'feed.progress': ProgressResult;
   /**
    * `schemaVersion` — `FEED_SCHEMA_VERSION` хоста; дальше дельты `feed.changed` по `revision`.
    * `mode` — режим разрешений сессии (сырая строка CLI), `null` — не известен.

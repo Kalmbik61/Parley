@@ -58,6 +58,8 @@ export {
   feedItem,
 } from './feed.js';
 export type { FeedDecisions } from './feed.js';
+export { FEED_PROGRESS_ID_LIMIT, FEED_PROGRESS_RECENT_LIMIT, FEED_PROGRESS_MAX_BYTES, FEED_PROGRESS_RETRY_AFTER_MAX_MS, progressLine, progressResult } from './feed-progress.js';
+export type { ProgressLine, ProgressResult, ProgressRateLimitData } from './feed-progress.js';
 export type {
   MethodName,
   NotificationName,
