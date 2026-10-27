@@ -227,14 +227,19 @@ is kept in the session's record: a session that a message wakes from sleep resum
 same model and effort.
 
 \`wait_for(target, timeoutSec)\` — wait for a session by its id or for an incoming message
-(\`target: "inbox"\`). On timeout you get \`{"state":"running"}\` — decide yourself whether to
-call again. The answer \`state: deleted\` means the human deleted the session: there is
+(\`target: "inbox"\`). \`wait_for("inbox")\` returns the mail itself, already marked read: do not
+call \`check_inbox\` after it (\`check_inbox\` is for when you are not waiting). Wait with one call
+\`wait_for("inbox", 1500)\`, with no text before or after it. On timeout you get
+\`{"state":"running"}\`: for \`"inbox"\` call it once more, then end the turn (without \`report\`: you are
+not done) — Parley wakes you with the pointer when mail arrives; for a session id decide yourself
+whether to call again.
+The answer \`state: deleted\` means the human deleted the session: there is
 nothing left to wait for, re-plan the work without it. The answer \`state: "stuck"\` means the
 session waits for the human (an approval, a question, a usage limit, a sign-in): do not call
 \`wait_for\` for it again, see topic \`stuck\`. An unknown id is an error right
 away — it is a typo. Giving a new job to a session that has already handed in its
 \`report\`? Do not wait for it with \`wait_for(target)\` — it returns the old result at once.
-Wait with \`wait_for("inbox")\`: it will wake on the session's reply message.
+Wait with \`wait_for("inbox", 1500)\`: it will wake on the session's reply message.
 
 \`send_message(to, text, kind, room, replyTo)\` and \`check_inbox()\` — correspondence inside the
 workspace. Without \`room\`, \`to\` is exactly one session; with \`room\` it is one id or a list, an empty or
@@ -295,9 +300,11 @@ without \`@sNN\` mentions. Such a message arrives from \`check_inbox\` / \`wait_
 with what to do. If you are the lead, the workflow below is for Free mode; in plan rooms use topic \`plans\`.
 
 1. Collect the positions: each participant answers in the room with one message. Wait for
-   them with \`wait_for("inbox")\`, read the whole feed with \`read_room\`. If someone stays
-   silent for long, do not wait forever: propose a decision on the positions you have; it can
-   be replaced by a repeated call. A participant Parley reported as stuck is not silent: see
+   them with one \`wait_for("inbox", 1500)\`, not with a \`wait_for\` per participant id: all the
+   positions arrive in the same inbox. Read the whole feed with \`read_room\`. If someone stays
+   silent for long (for example \`wait_for("inbox", 1500)\` answers \`running\` while you already
+   hold some positions), do not wait forever or end the turn: propose a decision on the
+   positions you have; it can be replaced by a repeated call. A participant Parley reported as stuck is not silent: see
    topic \`stuck\`.
 2. Propose a decision: \`propose_decision(room, text)\`. The text is the whole decision: what
    we do and which part each person takes; name participants with mentions \`@s02\` (the
@@ -317,9 +324,11 @@ with what to do. If you are the lead, the workflow below is for Free mode; in pl
    \`kind: decision\` message. \`Returned for rework: <note>\` (without a note —
    \`Returned for rework.\`) means returned for rework.
 5. In Free mode, accepted — hand out the parts: with one \`send_message\` with \`room\` and no \`to\`, each
-   part starts with a mention of the executor: \`@s02 — migrations, @s03 — tests\`. The
-   participants' reports will come to you in the room; you hand in the result of the whole
-   work with your own \`report\`.
+   part starts with a mention of the executor: \`@s02 — migrations, @s03 — tests\`. Do not post
+   "plan accepted, handing out" first: the hand-out message itself is the news. The
+   participants' reports will come to you in the room; wait for them with one
+   \`wait_for("inbox", 1500)\` too, and hand in the result of the whole work with your own
+   \`report\`.
 6. Returned — redo it according to the note (clarify with the participants in the room if
    needed) and call \`propose_decision\` again; still do not start the work before the new
    acceptance.
@@ -351,9 +360,11 @@ The human set a task for everyone in the room. Such a message arrives from \`che
   task. Answering the human's task, pass \`replyTo\` with the id of the human's message
   (from \`check_inbox\` or \`read_room\`): the window shows a quote of it above your answer.
 - Wait for your part: do not start the work until the lead has handed out the parts with
-  mentions — look for your \`@sNN\` (\`s-02\` → \`@s02\`), wait with \`wait_for("inbox")\`. A
-  \`kind: decision\` message with the accepted decision is the outcome of the agreement, not
-  an order to take on everything: do what the lead named.
+  mentions — look for your \`@sNN\` (\`s-02\` → \`@s02\`), wait with one
+  \`wait_for("inbox", 1500)\`. A \`kind: decision\` message with the accepted decision is the
+  outcome of the agreement, not an order to take on everything: do what the lead named.
+- Do not acknowledge the lead's assignment of parts ("got it", "starting"): the next message
+  to the lead is the result. Silence means received.
 - Report to the lead in the room: \`send_message\` with \`room\` and \`to\` (the lead's id is
   the room's \`lead\` field in \`get_map\`; \`null\` means the first of \`members\`, and a closed
   lead is replaced by the first live participant) — what is done, where it lies, what did
@@ -392,7 +403,7 @@ participant is not "silent". The reason comes in Parley's message and in \`stuck
 - A message to a stuck participant is still sent: the answer carries a warning, and it reads the message when it is
   back.
 - \`wait_for\` on a stuck participant returns \`{"state":"stuck"}\` at once: do not call it again for that participant;
-  end your turn or \`wait_for("inbox")\`.`,
+  end your turn or \`wait_for("inbox", 1500)\`.`,
   },
   {
     topic: 'brief',
@@ -560,8 +571,18 @@ Three kinds of message:
   \`note\`, and it does not count toward the message cap below.
 
 Do not answer a \`note\` or a \`decision\`: "thanks" and "agreed" cost a colleague a whole turn.
-And do not \`wait_for\` someone who will answer with a message anyway — the message will wake
-you by itself.
+For the same reason do not acknowledge a message and do not announce that you are starting
+("got it", "starting", "waiting for s-03", "plan accepted"): silence means received, and every
+such message wakes each addressee for a whole turn. Write only a result, a position, a
+question, a decision or a blocker.
+
+Wait with one call \`wait_for("inbox", 1500)\`: no text before or after it, no \`Monitor\`,
+\`sleep\` or polling loops, no narration of the wait. On \`{"state":"running"}\` call it once
+more, then end the turn without \`report\` (you are not done): Parley wakes you with the pointer
+when mail arrives. Do not \`wait_for\` a session by its id when it will answer with a message
+anyway — wait via \`"inbox"\`, or end the turn: the message will wake you by itself. A session
+that only calls \`report\` sends no message: wait for it by id and call \`wait_for\` again while
+it is \`running\`.
 
 Rules for letters:
 

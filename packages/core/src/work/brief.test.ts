@@ -327,6 +327,22 @@ describe('бриф: роль в комнате', () => {
     expect(brief).not.toContain('you are the lead');
   });
 
+  it('ведущему: позиции и отчёты ждать одним wait_for("inbox", 1500), а не по id каждого исполнителя; running при собранных позициях — предложить решение', () => {
+    const brief = buildBrief(mapWithRoom(), 's-02');
+
+    expect(LEAD_ROLE).toContain('with one `wait_for("inbox", 1500)`, not by each participant\'s id');
+    expect(brief).toContain('Wait for positions and reports with one `wait_for("inbox", 1500)`, not by each participant\'s id;');
+    // Развилка с «закончить ход» (M2): ответ running при уже собранных позициях — предложить решение, не молчать до пробуждения.
+    expect(LEAD_ROLE).toContain('if it answers `running` while you already hold some positions, propose a decision on them instead of ending the turn.');
+  });
+
+  it('участнику: раздачу частей не подтверждать — следующее письмо ведущему уже результат', () => {
+    const role = memberRole('@s03');
+
+    expect(role).toContain('Do not acknowledge the assignment of parts: your next message to the lead is the result.');
+    expect(buildBrief(mapWithRoom(), 's-03')).toContain(role);
+  });
+
   it('архивная комната в бриф не попадает: ни составом, ни ролью ведущего', () => {
     const map = mapWithRoom();
     map.rooms[0]!.archivedAt = '2026-10-08T12:00:00.000Z';
