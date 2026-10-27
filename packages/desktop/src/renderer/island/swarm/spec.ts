@@ -101,6 +101,40 @@ export const EMO: Record<SwarmEmotion, FaceSpec> = {
   error: { x: true, len: 0.1, ey: 0.28, mw: 0.86, curl: 0, wave: true, H0: 0.05, H1: 0.05, pw: 0.1, nb: true },
 };
 
+/**
+ * Одноразовая реакция роя поверх облика фазы (#9 §4.1): вдох, кольцо яркости, подскок, кивок, оборот, дрожь, наклон
+ * к курсору. В малом рое реакции со сдвигом, в лице и при уменьшенном движении — любые реакции движок заменяет
+ * вспышкой яркости 300 мс (#9 §4.3, §4.5, V3).
+ */
+export type SwarmReaction = 'breathe' | 'glint' | 'hop' | 'nod' | 'spin' | 'shake' | 'lean';
+
+/**
+ * Событие, на которое отвечает рой (#9 §4.1). Согласие и терминал отвечают как `permission`, предложение комнаты —
+ * как `question`.
+ */
+export type SwarmEvent = 'start' | 'tool' | 'permission' | 'question' | 'plan' | 'done' | 'error' | 'hover';
+
+/** Событие → реакция (#9 §4.1): шаги — только яркость, запросы — движение, Done — самое длинное движение. */
+export const REACTION_FOR: Readonly<Record<SwarmEvent, SwarmReaction>> = {
+  start: 'breathe',
+  tool: 'glint',
+  permission: 'hop',
+  question: 'nod',
+  plan: 'hop',
+  done: 'spin',
+  error: 'shake',
+  hover: 'lean',
+};
+
+/**
+ * Проп `pulse` у `<Swarm>`: реакция и время события по `performance.now()`, мс. Новое `at` — новая реакция; то же
+ * `at` повторно ничего не меняет, а реакция, чьё время уже вышло (рой смонтирован позже), кадров не добавляет.
+ */
+export interface SwarmPulse {
+  reaction: SwarmReaction;
+  at: number;
+}
+
 const BASE: SwarmSpec = { shape: 'cloud', fx: null, pal: 'amber', rot: 0.35, vis: 1, ts: 1, dim: 1, glitch: false, emo: null };
 
 /**

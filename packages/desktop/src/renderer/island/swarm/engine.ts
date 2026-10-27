@@ -6,9 +6,11 @@
  * кольцо подтверждения, поток ответа, дуга инструмента. Отличия лица от макета: моргание — на втором потоке
  * генератора, а не на `Math.random`, и рот идёт по переданной громкости `mouth`, а не по синтетической кривой.
  * Все души живут в долях `d` (радиус сферы 0.5), экран — `cx + x * d`, `cy + y * d`.
+ * Поверх облика — одноразовые реакции (#9 §4.1): масштаб, сдвиг, оборот с закруткой, волна яркости, искры. Они
+ * меняют только отрисовку относительно `cx`/`cy` и к концу реакции сходят на нет; положения `souls` не трогают.
  */
 
-import { BLOBS, DUR, EMO, PAL, type FaceSpec, type SwarmPalette, type SwarmSpec } from './spec.js';
+import { BLOBS, DUR, EMO, PAL, type FaceSpec, type SwarmPalette, type SwarmReaction, type SwarmSpec } from './spec.js';
 
 export interface SwarmOptions {
   width: number;
@@ -27,12 +29,23 @@ export interface SwarmEngine {
    * `mouth` — открытие рта лица 0..1.
    */
   frame(now: number, ctx: CanvasRenderingContext2D | null, reducedMotion: boolean, mic: number, mouth?: number): void;
-  /** Нужен ли кадр: идёт переход, сменилась палитра или спека. */
+  /** Нужен ли кадр: идёт переход или реакция, сменилась палитра или спека. */
   needsFrame(): boolean;
+  /**
+   * Реакция с началом `at`, мс (время кадров). В малом рое (≤ 32 px) реакция со сдвигом, в лице и при `reducedMotion`
+   * любая — вспышка 300 мс; та же реакция заново начинается сначала; реакция, чьё время к `now` вышло, не ставится.
+   */
+  react(reaction: SwarmReaction, at: number, now: number, reducedMotion: boolean): void;
   /** Для тестов: положения душ в долях d (x, y, z) после последнего кадра; роль в лице: 0, 1 — глаза, 2 — рот. */
   readonly souls: ReadonlyArray<{ readonly x: number; readonly y: number; readonly z: number; readonly corona: boolean; readonly role: 0 | 1 | 2 }>;
-  /** Для тестов: длительность перехода и задержка рта, с; вспышка 0..1; целевая палитра. */
-  readonly debug: { readonly dur: number; readonly extra: number; readonly flash: number; readonly pal: SwarmPalette };
+  /** Для тестов: длительность перехода и задержка рта, с; вспышка 0..1; целевая палитра; идущие реакции. */
+  readonly debug: {
+    readonly dur: number;
+    readonly extra: number;
+    readonly flash: number;
+    readonly pal: SwarmPalette;
+    readonly reacts: ReadonlyArray<SwarmReaction | 'flash'>;
+  };
 }
 
 const TAU = Math.PI * 2;
@@ -54,6 +67,61 @@ const gauss = (R: () => number): number => Math.sqrt(-2 * Math.log(R() + 1e-9)) 
 const hs = (n: number): number => {
   const x = Math.sin(n * 127.1) * 43758.5453;
   return x - Math.floor(x);
+};
+
+/** Кривые ключей реакций: выход, вход-выход и выход с лёгким перелётом. */
+const CURVE = {
+  out: (t: number): number => 1 - Math.pow(1 - t, 3),
+  inOut: ease,
+  back: (t: number): number => 1 + 2.7 * Math.pow(t - 1, 3) + 1.7 * Math.pow(t - 1, 2),
+};
+type Key = readonly [to: number, ms: number, curve: keyof typeof CURVE];
+/** Значение цепочки ключей через `el` мс от начала; до первого ключа — `from`. */
+const keys = (chain: readonly Key[], el: number, from = 0): number => {
+  let v = from;
+  let rest = el;
+  for (const [to, ms, curve] of chain) {
+    if (rest < ms) return v + (to - v) * CURVE[curve](clamp(rest / ms));
+    rest -= ms;
+    v = to;
+  }
+  return v;
+};
+
+/** Вклад реакции в кадр: масштаб и яркость (множители), сдвиг в долях d, оборот, закрутка, искры, радиус волны. */
+interface Mod {
+  sc?: number;
+  br?: number;
+  ox?: number;
+  oy?: number;
+  spin?: number;
+  swirl?: number;
+  spark?: number;
+  wave?: number;
+}
+
+/**
+ * Реакции #9 §4.1: длительность, мс; `pos` — сдвигает души (в малом рое заменяется вспышкой, §4.3); `f` — вклад через
+ * `el` мс. `flash` — вспышка яркости 300 мс вместо движения.
+ */
+const REACT: Record<SwarmReaction | 'flash', { dur: number; pos: boolean; f: (el: number) => Mod }> = {
+  breathe: {
+    dur: 700,
+    pos: false,
+    f: (el) => ({ sc: keys([[0.9, 180, 'out'], [1.05, 220, 'out'], [1, 300, 'back']], el, 1), br: 1 + 0.35 * Math.sin(Math.PI * clamp(el / 700)) }),
+  },
+  glint: { dur: 450, pos: false, f: (el) => ({ wave: el / 450 }) },
+  hop: { dur: 450, pos: true, f: (el) => ({ oy: keys([[-0.13, 150, 'out'], [0, 300, 'back']], el) }) },
+  nod: { dur: 700, pos: true, f: (el) => ({ oy: keys([[-0.07, 110, 'out'], [0, 170, 'back'], [-0.05, 110, 'out'], [0, 310, 'back']], el) }) },
+  shake: { dur: 290, pos: true, f: (el) => ({ ox: keys([[0.07, 50, 'out'], [-0.07, 70, 'inOut'], [0.045, 70, 'inOut'], [0, 100, 'out']], el) }) },
+  // Оборот за 950 мс с закруткой (внутренние души ведут); искры у 16 % душ с 500 до 1400 мс.
+  spin: { dur: 1400, pos: false, f: (el) => ({ spin: el < 950 ? TAU * ease(el / 950) : TAU, swirl: Math.sin(Math.PI * clamp(el / 950)), spark: clamp((el - 500) / 900) }) },
+  lean: {
+    dur: 520,
+    pos: false,
+    f: (el) => ({ sc: keys([[1.05, 160, 'out'], [1, 360, 'back']], el, 1), br: 1 + 0.25 * Math.sin(Math.PI * clamp(el / 520)) }),
+  },
+  flash: { dur: 300, pos: false, f: (el) => ({ br: 1 + 0.7 * Math.sin(Math.PI * clamp(el / 300)) }) },
 };
 
 /** Наклон оси сферы 16°. */
@@ -101,6 +169,8 @@ interface Soul {
   b: number;
   /** Роль в лице: 0 — левый глаз, 1 — правый, 2 — рот. */
   role: 0 | 1 | 2;
+  /** Хэш номера души 0..1 для искр `spin`; не от генератора, чтобы облик по seed не менялся. */
+  sk: number;
 }
 
 interface Target {
@@ -167,6 +237,10 @@ class SwarmImpl implements SwarmEngine {
   private readonly cy: number;
   private readonly k: number;
   private readonly minPx: number;
+  /** Малый рой (≤ 32 px): реакции со сдвигом — вспышкой (#9 §4.3). */
+  private readonly mini: boolean;
+  /** Идущие реакции и их начало, мс. */
+  private reacts: Array<{ name: SwarmReaction | 'flash'; t0: number }> = [];
   private readonly bd: Array<{ ax: number; ay: number; per: number; ph: number }>;
   /** Второй поток генератора — для моргания; облик роя по seed от него не зависит. */
   private readonly R2: () => number;
@@ -206,6 +280,7 @@ class SwarmImpl implements SwarmEngine {
     this.cy = o.cy;
     this.k = o.k ?? 0.058;
     this.minPx = o.minPx ?? 2.4;
+    this.mini = Math.max(o.width, o.height) <= 32;
     const R = rng(o.seed ?? 7);
     this.R2 = rng((o.seed ?? 7) ^ 0x9e3779b9);
     const tot = BLOBS.reduce((a, b) => a + b[4], 0);
@@ -232,7 +307,7 @@ class SwarmImpl implements SwarmEngine {
         fph: R(),
         rc: 0.54 + 0.14 * R(),
         wc: (R() < 0.5 ? -1 : 1) * (0.5 + R()),
-        ra: 0, ux: 0, uy: 0, uz: 0, b: 0, role: 0,
+        ra: 0, ux: 0, uy: 0, uz: 0, b: 0, role: 0, sk: hs(i + 0.5),
       };
       let q = R() * tot;
       let b = 0;
@@ -267,12 +342,21 @@ class SwarmImpl implements SwarmEngine {
     });
   }
 
-  get debug(): { dur: number; extra: number; flash: number; pal: SwarmPalette } {
-    return { dur: this.dur, extra: this.extra, flash: this.flash, pal: this.palTo };
+  get debug(): { dur: number; extra: number; flash: number; pal: SwarmPalette; reacts: Array<SwarmReaction | 'flash'> } {
+    return { dur: this.dur, extra: this.extra, flash: this.flash, pal: this.palTo, reacts: this.reacts.map((r) => r.name) };
   }
 
   needsFrame(): boolean {
-    return this.sp !== null && (this.dirty || this.trans || this.palT < 1);
+    return this.sp !== null && (this.dirty || this.trans || this.palT < 1 || this.reacts.length > 0);
+  }
+
+  react(reaction: SwarmReaction, at: number, now: number, reducedMotion: boolean): void {
+    const face = this.sp !== null && this.sp.shape === 'face';
+    // Лицо не двигают (V3), малый рой не дрожит (§4.3), уменьшенное движение — без движения (§4.5).
+    const name = reducedMotion || face || (this.mini && REACT[reaction].pos) ? 'flash' : reaction;
+    if (now - at >= REACT[name].dur) return;
+    this.reacts = this.reacts.filter((r) => r.name !== name);
+    this.reacts.push({ name, t0: at });
   }
 
   setSpec(spec: SwarmSpec, now: number, reducedMotion: boolean): void {
@@ -477,12 +561,47 @@ class SwarmImpl implements SwarmEngine {
     const F = EMO[E.emo ?? 'calm'];
     const amp = rm ? 0.3 : E.shape === 'face' ? mouth : 0;
     const bl = E.shape === 'face' ? this.blink(now, F, rm) : 1;
+    // Реакции — в один общий модификатор; кончившиеся снимаются, и кадров они больше не просят.
+    let sc = 1;
+    let br = 1;
+    let ox = 0;
+    let oy = 0;
+    let spin = 0;
+    let swirl = 0;
+    let spark = 0;
+    let wave = -1;
+    this.reacts = this.reacts.filter((r) => {
+      const el = now - r.t0;
+      const R = REACT[r.name];
+      if (el >= R.dur) return false;
+      const m = R.f(el);
+      if (m.sc !== undefined) sc *= m.sc;
+      if (m.br !== undefined) br *= m.br;
+      ox += m.ox ?? 0;
+      oy += m.oy ?? 0;
+      spin += m.spin ?? 0;
+      swirl = Math.max(swirl, m.swirl ?? 0);
+      if (m.spark !== undefined) spark = m.spark;
+      if (m.wave !== undefined) wave = m.wave;
+      return true;
+    });
+    // Реакция, начатая до лица или до reduced motion, дальше идёт только яркостью.
+    if (rm || E.shape === 'face') {
+      sc = 1;
+      ox = 0;
+      oy = 0;
+      spin = 0;
+      swirl = 0;
+    }
     const el = rm ? 1e9 : (now - this.tr0) / 1000;
     const dur = this.dur;
     const glitch = now < this.gl && !rm;
     this.trans = el < dur + this.extra;
-    this.cr = Math.cos(this.rot);
-    this.sr = Math.sin(this.rot);
+    // Оборот сферы — через её вращение; облако и точка оборачиваются на отрисовке.
+    const rotS = this.rot + (E.shape === 'sphere' ? spin : 0);
+    const cloudSpin = E.shape === 'sphere' ? 0 : spin;
+    this.cr = Math.cos(rotS);
+    this.sr = Math.sin(rotS);
     const spr = ctx === null ? null : sprites();
     if (ctx !== null) {
       ctx.clearRect(0, 0, this.W, this.H);
@@ -515,11 +634,26 @@ class SwarmImpl implements SwarmEngine {
       s.z = z;
       s.v += ((s.rk < E.vis ? 1 : 0) - s.v) * Math.min(1, dt * 5);
       if (ctx === null || sa === null || sb === null) continue;
+      // Слой реакций: закрутка (внутренние души ведут), масштаб и сдвиг — относительно центра роя.
+      let rx = x;
+      let ry = y;
+      let mm = o.m;
+      if (cloudSpin !== 0) {
+        const a = cloudSpin + swirl * 0.9 * (0.45 - Math.hypot(x, y));
+        const c = Math.cos(a);
+        const n = Math.sin(a);
+        rx = x * c - y * n;
+        ry = x * n + y * c;
+      }
+      rx = rx * sc + ox;
+      ry = ry * sc + oy;
+      if (wave >= 0) mm *= 1 + 1.6 * Math.exp(-Math.pow((Math.hypot(rx, ry) - wave * 0.75) / 0.07, 2)); // кольцо от центра
       const zn = clamp(z + 0.5);
-      let al = (s.corona ? 0.62 : 0.85) * o.m * (0.5 + 0.5 * zn) * s.v * dim * (1 + 0.2 * Math.sin((TAU * t) / 1000 / s.tp + s.tw)); // мерцание ±20 %
+      let al = (s.corona ? 0.62 : 0.85) * mm * (0.5 + 0.5 * zn) * s.v * dim * br * (1 + 0.2 * Math.sin((TAU * t) / 1000 / s.tp + s.tw)); // мерцание ±20 %
+      if (spark > 0 && spark < 1 && s.sk < 0.16) al *= 1 + 3 * Math.sin(Math.PI * spark);
       const D = Math.max(this.minPx, this.d * this.k * s.sz * o.sm * (0.85 + 0.3 * zn));
-      let px = this.cx + x * this.d;
-      const py = this.cy + y * this.d;
+      let px = this.cx + rx * this.d;
+      const py = this.cy + ry * this.d;
       if (glitch) {
         const row = Math.floor(py / 6);
         if (row % 3 === 0) px += (hs(row + Math.floor(now / 70)) - 0.5) * 0.14 * this.d;
