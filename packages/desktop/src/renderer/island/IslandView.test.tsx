@@ -156,6 +156,15 @@ describe('subagents and room proposal badges', () => {
     expect(props.api.open).toHaveBeenCalledWith({ kind: 'room', projectPath: '/p', workId: 'w-1', roomId: 'r-1' });
     expect(props.onDecide).not.toHaveBeenCalled();
   });
+
+  it('marks the selected room by proposal revision key', () => {
+    const model: IslandModel = { ...MODEL, proposals: 1, groups: [{ ...MODEL.groups[0]!, rows: [
+      { kind: 'room', key: 'room-row-key', projectPath: '/p', workId: 'w-1', roomId: 'r-1', title: 'Refunds', busy: 0, done: false,
+        proposal: { key: 'proposal-rev-key', kind: 'completion', lead: 's-02', leadLabel: 'S02 api' } },
+    ] }] };
+    view({ model, listOpen: true, navigationKey: 'room:proposal-rev-key' });
+    expect(screen.getByRole('button', { name: 'Open room' }).getAttribute('aria-current')).toBe('true');
+  });
 });
 
 /** Проходит паузу `CARD_ARM_MS`: после неё кнопки решения нажимаются. */

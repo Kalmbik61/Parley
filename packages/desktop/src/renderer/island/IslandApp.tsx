@@ -275,7 +275,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
       setNavigationEmpty(true);
       if (navigationEmptyTimer.current !== null) clearTimeout(navigationEmptyTimer.current);
       navigationEmptyTimer.current = setTimeout(() => setNavigationEmpty(false), 1800);
-      bridge.island.keyboard(false);
+      if (ownerRef.current === null) bridge.island.keyboard(false);
       return;
     }
     setNavigationEmpty(false);

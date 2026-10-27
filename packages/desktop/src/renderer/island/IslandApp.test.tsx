@@ -631,6 +631,16 @@ describe('проводка острова', () => {
       expect(island.keyboard).toHaveBeenCalledWith(true);
     });
 
+    it('an empty pending shortcut keeps keyboard ownership with the open assistant', async () => {
+      const { island, assistantOpen } = await renderAssistant();
+      assistantOpen({ listen: false });
+      await screen.findByTestId('assistant-view');
+      island.keyboard.mockClear();
+      act(() => pendingNavigationHandler?.());
+      expect(island.keyboard).not.toHaveBeenCalledWith(false);
+      expect(screen.getByTestId('assistant-view')).toBeTruthy();
+    });
+
     it('Esc закрывает вид и отдаёт клавиатуру', async () => {
       const { island, assistantOpen } = await renderAssistant();
       assistantOpen({ listen: false });

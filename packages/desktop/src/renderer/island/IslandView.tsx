@@ -232,7 +232,7 @@ function List(props: IslandViewProps): JSX.Element {
             {/* Комнаты работы — подзаголовком под названием, по строке на комнату; имя комнаты открывает её. */}
             {group.rows
               .filter((row): row is RoomRow => row.kind === 'room')
-              .map((room) => <RoomLine key={room.key} room={room} api={api} selected={props.navigationKey === `room:${room.key}`} />)}
+              .map((room) => <RoomLine key={room.key} room={room} api={api} selected={props.navigationKey === `room:${room.proposal?.key}`} />)}
             {group.rows
               .filter((row): row is SessionRow => row.kind === 'session')
               .map((row) => {
