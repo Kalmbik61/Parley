@@ -16,6 +16,8 @@ export interface ChatEnv {
   tabId?: string;
   /** Send again под своим сообщением: тот же текст — в очередь отправки Chat (`chat-outbox.ts`). Нет — кнопки нет. */
   resend?: (text: string) => void;
+  /** Reply у ответа модели: цитата — над полем ввода, уйдёт с ближайшим сообщением (`reply.ts`). Нет — кнопки нет. */
+  reply?: (quote: string) => void;
 }
 
 export const ChatEnvContext = createContext<ChatEnv | null>(null);

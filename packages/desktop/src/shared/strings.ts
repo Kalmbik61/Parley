@@ -1558,7 +1558,9 @@ export const S = {
     /** Серый элемент ленты: сообщение ушло в очередь CLI во время хода. */
     queued: 'Queued — the agent reads it when the turn ends',
     /** Строка действий под сообщением (спека 2026-10-16, 3.1). */
-    actions: { copy: 'Copy', copied: 'Copied', sendAgain: 'Send again' },
+    actions: { copy: 'Copy', copied: 'Copied', sendAgain: 'Send again', reply: 'Reply' },
+    /** Плашка цитаты над полем ввода (Reply): подпись и крестик «убрать». */
+    reply: { label: 'Reply to', remove: 'Remove quote' },
     composer: {
       label: 'Message to Claude',
       placeholder: 'Message Claude — Enter to send',

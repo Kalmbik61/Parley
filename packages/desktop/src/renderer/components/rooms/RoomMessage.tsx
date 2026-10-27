@@ -31,17 +31,22 @@
  * Сообщение человека стоит справа и текстом лежит на пузыре `bg-secondary`, как промпт в Chat
  * (`chat/items/PromptItem.tsx`); сообщения агентов и системы — слева, без пузыря. Его вложения (хвост «Attachments:»
  * от `composeRoomMessage`) — чипами в пузыре под текстом, картинки миниатюрами, как в Chat.
+ *
+ * У сообщения агента в строке меты — Reply (виден при наведении и фокусе): выделенный в нём фрагмент или начало текста
+ * уходит цитатой над полем ввода комнаты (`chat/reply.ts`). `replyTo` письма человека протокол окна не несёт
+ * (`rooms.send`), поэтому ответ — только цитатой `> …` в тексте.
  */
 
-import { useContext } from 'react';
+import { useContext, useRef } from 'react';
 import type { SessionNeed } from '@parley/core';
 import type { MailWait } from '@parley/protocol';
-import { LoaderCircle } from 'lucide-react';
+import { LoaderCircle, Reply } from 'lucide-react';
 import { S } from '../../../shared/strings.js';
 import { mailWaitText } from '../../attention/derive.js';
 import { AttachmentChip } from '../../chat/AttachmentChip.js';
 import { pairContextAttachments } from '../../chat/context-attachments.js';
 import { useOpenAttachmentImage } from '../../chat/open-attachment.js';
+import { replyQuote, selectedTextIn } from '../../chat/reply.js';
 import { cn } from '../../lib/cn.js';
 import { isoMs } from '../../lib/iso-time.js';
 import { relativeTime } from '../../lib/relative-time.js';
@@ -68,6 +73,8 @@ export interface RoomMessageProps {
   /** Клик по цитате ответа: показать сообщение с этим id (прокрутить ленту и подсветить его). */
   onJumpTo: (messageId: string) => void;
   observeRef?: (el: HTMLElement | null) => void;
+  /** Reply у сообщения агента: цитата — над полем ввода комнаты (`chat/reply.ts`). Нет — кнопки нет. */
+  onReply?: (quote: string) => void;
 }
 
 /**
@@ -143,7 +150,9 @@ export function RoomMessage({
   onOpenExternal,
   onJumpTo,
   observeRef,
+  onReply,
 }: RoomMessageProps): JSX.Element {
+  const textRef = useRef<HTMLDivElement>(null);
   const { picked, waiting } = message.delivery;
   const delivering = waiting.filter(({ reason }) => reason !== null && DELIVERING.has(reason));
   const stalled = waiting.filter(({ reason }) => reason === null || !DELIVERING.has(reason));
@@ -159,7 +168,7 @@ export function RoomMessage({
       data-message-id={message.id}
       data-sender={message.sender.kind}
       tabIndex={-1}
-      className={cn('flex max-w-[680px] gap-2.5', human && 'flex-row-reverse self-end')}
+      className={cn('group/message flex max-w-[680px] gap-2.5', human && 'flex-row-reverse self-end')}
     >
       <div className="flex w-5 shrink-0 justify-center pt-px">
         <SenderAvatar kind={message.sender.kind} provider={message.sender.provider} via={message.via} />
@@ -182,6 +191,19 @@ export function RoomMessage({
           {message.to === null ? null : <span className="min-w-0 break-words">→ {message.to}</span>}
           <Badge variant={TAG_VARIANT[message.kind]}>{S.mail.kindTag[message.kind]}</Badge>
           <span>{relativeTime(message.at, now)}</span>
+          {onReply === undefined || message.sender.kind !== 'agent' ? null : (
+            <button
+              type="button"
+              aria-label={S.chat.actions.reply}
+              title={S.chat.actions.reply}
+              // Нажатие не снимает выделение: выделенный в сообщении фрагмент и цитируется.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onReply(replyQuote(message.text, selectedTextIn(textRef.current)))}
+              className="flex size-5 items-center justify-center rounded-sm opacity-0 transition-opacity hover:bg-foreground/12 hover:text-foreground focus-visible:opacity-100 group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
+            >
+              <Reply className="size-3.5" aria-hidden="true" />
+            </button>
+          )}
           {message.unread ? (
             <span
               role="img"
@@ -193,6 +215,7 @@ export function RoomMessage({
         </div>
         {message.reply === null ? null : <ReplyQuote reply={message.reply} onJumpTo={onJumpTo} right={human} />}
         <div
+          ref={textRef}
           className={cn(
             'min-w-0',
             human && 'max-w-full self-end rounded-md bg-secondary px-3 py-2 text-secondary-foreground',

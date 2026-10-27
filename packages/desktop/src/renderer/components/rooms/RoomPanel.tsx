@@ -55,6 +55,8 @@ import { S, errorText } from '../../../shared/strings.js';
 import { useMarkRead } from '../../attention/use-mark-read.js';
 import { PanelToggle } from '../../browser/panel/PanelToggle.js';
 import { addAttachments } from '../../chat/attachments.js';
+import { withQuote } from '../../chat/reply.js';
+import { ReplyPlate } from '../../chat/ReplyPlate.js';
 import { useHostSupports } from '../../lib/capabilities.js';
 import { cn } from '../../lib/cn.js';
 import { isRoomArchived } from '../../lib/room-archive.js';
@@ -189,6 +191,8 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   const atBottomRef = useRef(true);
   // Сколько пришло снизу, пока человек читал историю: сообщения и решения, при которых лента стояла не у низа (`↓N`).
   const [below, setBelow] = useState(0);
+  // Цитата Reply (`chat/reply.ts`): у комнаты своя (по ключу черновика), уходит с ближайшим письмом.
+  const [replyTo, setReplyTo] = useState<{ draftKey: string; quote: string } | null>(null);
   const onFeedScroll = useCallback((): void => {
     const feed = containerRef.current;
     if (feed === null) return;
@@ -418,6 +422,8 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   };
 
   // Письмо — в очередь комнаты (`room-outbox.ts`): серым сразу, уходит строго по одному; отказ — «Not sent» с Retry и ×.
+  const quote = replyTo?.draftKey === draftKey ? replyTo.quote : null;
+
   const handleSend = (submission: ComposerSubmission): void => {
     roomOutbox.enqueue(draftKey, {
       bridge,
@@ -425,9 +431,10 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       workId: entry.map.work.id,
       roomId,
       to: submission.to,
-      text: submission.text,
+      text: quote === null ? submission.text : withQuote(quote, submission.text),
       requestedAt: Date.now(),
     });
+    if (quote !== null) setReplyTo(null);
   };
 
   const handleReopen = (): void => {
@@ -557,6 +564,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
               onOpenExternal={onOpenExternal}
               onJumpTo={jumpTo}
               observeRef={markRead(message.id, message.needsRead)}
+              {...(archived ? {} : { onReply: (text: string) => setReplyTo({ draftKey, quote: text }) })}
             />
           ))}
           {shownPending.map((item) => (
@@ -639,7 +647,10 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
           ) : null}
         </div>
       ) : (
-        <Composer key={draftKey} members={members} bridge={bridge} draftKey={draftKey} onSend={handleSend} />
+        <>
+          {quote === null ? null : <ReplyPlate quote={quote} onRemove={() => setReplyTo(null)} />}
+          <Composer key={draftKey} members={members} bridge={bridge} draftKey={draftKey} onSend={handleSend} />
+        </>
       )}
     </div>
   );

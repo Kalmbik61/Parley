@@ -1591,6 +1591,32 @@ describe('RoomPanel — поле ввода и отправка (2.2)', () => {
     fireEvent.keyDown(editor(), { key: 'Enter' });
   }
 
+  it('Reply у сообщения агента: выделенный фрагмент — плашкой над полем, уходит «> …» перед текстом; у человека Reply нет', async () => {
+    renderPanel(
+      entryOf({
+        messages: [
+          message('m-1', { from: 's-01', text: 'Первый абзац ответа.\n\nВторой абзац с деталями.' }),
+          message('m-2', { from: 'human', text: 'моё' }),
+        ],
+      }),
+    );
+    expect(within(messageRow('m-2')).queryByRole('button', { name: S.chat.actions.reply })).toBeNull();
+    const paragraph = Array.from(messageRow('m-1').querySelectorAll('p')).find((p) => p.textContent?.startsWith('Второй')) as HTMLElement;
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+    fireEvent.click(within(messageRow('m-1')).getByRole('button', { name: S.chat.actions.reply }));
+    expect(screen.getByTestId('reply-plate').textContent).toBe('Второй абзац с деталями.');
+    document.getSelection()?.removeAllRanges();
+    typeAndSend('Почему?');
+    await waitFor(() => expect(bridge.calls.filter((call) => call.method === 'rooms.send')).toHaveLength(1));
+    expect((bridge.calls.find((call) => call.method === 'rooms.send')?.params as { text: string }).text).toBe(
+      '> Второй абзац с деталями.\n\nПочему?',
+    );
+    expect(screen.queryByTestId('reply-plate')).toBeNull();
+  });
+
   it('письмо без упоминаний уходит всем: rooms.send с to: [], kind note, roomId и работой', async () => {
     renderPanel(entryOf());
     typeAndSend('Всем привет');
