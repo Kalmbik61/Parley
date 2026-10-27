@@ -1,3 +1,4 @@
+import { plainHumanMention } from './attention.js';
 import { markedExcerpt, textHash } from './context-budget.js';
 import type { LetterQuery } from './letter-store.js';
 import { isRoomArchived } from './rooms.js';
@@ -423,6 +424,44 @@ export const WINDOW_RECENT_PER_ROOM = 100;
 export const WINDOW_UNREAD_MAX = 200;
 /** Записей истории сессии и артефактов в окне; остальное — страницами. */
 export const WINDOW_LIST_MAX = 100;
+/**
+ * Сколько байт окно получает под кандидатов в упоминания человека — в событии `rooms.mail` и в снимке без писем один и тот
+ * же потолок (спека rooms.mail 6.3). Кандидаты — непрочитанные человеком письма с `@human`, до `WINDOW_UNREAD_MAX`, каждое
+ * до `WINDOW_TEXT_MAX`; без потолка в байтах они съедали бы кадр события.
+ */
+export const WINDOW_MENTION_MAX_BYTES = 64 * 1024;
+
+/**
+ * Самые новые письма набора, пока влезают в `maxBytes`, и порядок прежний. Хвост без дыр: письмо, которое не влезло, обрывает
+ * набор, а более старые за ним не берутся. Считаются байты JSON писем и запятых между ними; скобки массива в счёт не идут.
+ */
+export function keepNewestWithin(letters: readonly Message[], maxBytes: number): Message[] {
+  const kept: Message[] = [];
+  let size = 0;
+  for (let at = letters.length - 1; at >= 0; at -= 1) {
+    const letter = letters[at] as Message;
+    const bytes = Buffer.byteLength(JSON.stringify(letter), 'utf8') + (kept.length > 0 ? 1 : 0);
+    if (size + bytes > maxBytes) break;
+    size += bytes;
+    kept.push(letter);
+  }
+  return kept.reverse();
+}
+
+/**
+ * Кандидаты в упоминания человека из его непрочитанных писем (по возрастанию номера, как `unreadLetters`): те, что проходят
+ * `plainHumanMention`, не больше `WINDOW_UNREAD_MAX` последних, текст сокращён как у письма окна, и всё это не больше
+ * `WINDOW_MENTION_MAX_BYTES` — сверх потолка не едут самые старые. Событие `rooms.mail` и снимок без писем берут набор
+ * только здесь: окно заменяет набор работы тем, что пришло последним, и два источника не должны расходиться по составу.
+ * Точное правило «@вы» применяет окно (спека rooms.mail 6.3).
+ */
+export function humanMentionCandidates(unread: readonly Message[], textMax: number = WINDOW_TEXT_MAX): Message[] {
+  const candidates = unread
+    .filter((message) => plainHumanMention(message.text))
+    .slice(-WINDOW_UNREAD_MAX)
+    .map((message) => (viewBytes(message) > textMax ? shrinkText(message, textMax) : message));
+  return keepNewestWithin(candidates, WINDOW_MENTION_MAX_BYTES);
+}
 
 export interface WindowOptions {
   /** Бюджет писем окна в байтах JSON: письма сверх него не включаются, а считаются в `compact.messages`. */

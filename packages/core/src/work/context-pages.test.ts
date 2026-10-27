@@ -5,10 +5,15 @@ import {
   PAGE_MAX_ITEMS,
   PAGE_MIN_BYTES,
   PageError,
+  WINDOW_MENTION_MAX_BYTES,
+  WINDOW_TEXT_MAX,
+  WINDOW_UNREAD_MAX,
   type LetterReader,
   capStrings,
   clampPageBytes,
   compactWorkMap as compactWorkMapOf,
+  humanMentionCandidates,
+  keepNewestWithin,
   listPage,
   mapTopology as mapTopologyOf,
   messagePage as messagePageOf,
@@ -774,5 +779,68 @@ describe('топология для агента', () => {
     expect(topology.rooms[0]?.proposal?.cut).toEqual({ text: 10_000 });
     expect(topology.plans.map((row) => row.id)).toEqual(['pl-2']);
     expect(topology.plans[0]?.items[0]?.log).toHaveLength(3);
+  });
+});
+
+describe('кандидаты в упоминания человека', () => {
+  const letter = (n: number, text: string): Message => ({
+    id: `m-${n}`,
+    roomId: 'r-01',
+    from: 's-02',
+    to: [],
+    at: '2026-10-27T10:00:00.000Z',
+    kind: 'note',
+    text,
+    readBy: {},
+  });
+  const bytes = (letters: Message[]): number => Buffer.byteLength(JSON.stringify(letters), 'utf8');
+
+  it('отбирает письма, которые проходят plainHumanMention, порядок письма сохраняется', () => {
+    const unread = [letter(1, '@human, посмотрите'), letter(2, 'без упоминания'), letter(3, 'mail@humanity.org не человек'), letter(4, 'ещё раз @human')];
+
+    expect(humanMentionCandidates(unread).map((message) => message.id)).toEqual(['m-1', 'm-4']);
+  });
+
+  it('не больше WINDOW_UNREAD_MAX: остаются последние', () => {
+    const unread = Array.from({ length: WINDOW_UNREAD_MAX + 50 }, (_, at) => letter(at + 1, '@human'));
+
+    const candidates = humanMentionCandidates(unread);
+
+    expect(candidates).toHaveLength(WINDOW_UNREAD_MAX);
+    expect(candidates[0]?.id).toBe('m-51');
+    expect(candidates.at(-1)?.id).toBe(`m-${WINDOW_UNREAD_MAX + 50}`);
+  });
+
+  it('потолок в байтах: остаются самые новые подряд, а старые не едут', () => {
+    // Семьдесят писем по 4 КиБ вместе выше потолка: событие и снимок несут один и тот же урезанный набор.
+    const unread = Array.from({ length: 70 }, (_, at) => letter(at + 1, `@human ${'x'.repeat(4096)}`));
+
+    const candidates = humanMentionCandidates(unread);
+
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates.length).toBeLessThan(unread.length);
+    // Скобки массива не в счёте: потолок мерит письма и запятые между ними.
+    expect(bytes(candidates) - 2).toBeLessThanOrEqual(WINDOW_MENTION_MAX_BYTES);
+    expect(candidates.at(-1)?.id).toBe('m-70');
+    const first = Number((candidates[0] as Message).id.slice(2));
+    expect(candidates.map((message) => message.id)).toEqual(Array.from({ length: 70 - first + 1 }, (_, at) => `m-${first + at}`));
+  });
+
+  it('длинный текст режется как у письма окна: до WINDOW_TEXT_MAX, с textBytes', () => {
+    const text = `@human ${'я'.repeat(100 * 1024)}`;
+
+    const [candidate] = humanMentionCandidates([letter(1, text)]);
+
+    expect(candidate?.textBytes).toBe(Buffer.byteLength(text, 'utf8'));
+    expect(viewBytes(candidate)).toBeLessThanOrEqual(WINDOW_TEXT_MAX);
+  });
+
+  it('keepNewestWithin: письмо, которое не влезает одно, обрывает набор целиком; нулевой потолок даёт пустой набор', () => {
+    const unread = [letter(1, 'a'), letter(2, 'b'.repeat(3000)), letter(3, 'c')];
+
+    // Хвост без дыр: влезло бы письмо 1, но между ним и письмом 3 лежит письмо 2, которое не влезает.
+    expect(keepNewestWithin(unread, 500).map((message) => message.id)).toEqual(['m-3']);
+    expect(keepNewestWithin(unread, 0)).toEqual([]);
+    expect(keepNewestWithin(unread, 1_000_000)).toEqual(unread);
   });
 });

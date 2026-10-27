@@ -12,11 +12,15 @@ import {
   deleteRoom,
   deleteWorkFiles,
   HUMAN,
+  humanMentionCandidates,
   letterCount,
+  readLetters,
   readMap,
   roomLetterTops,
   unreadCount,
+  unreadLetters,
   updateMap,
+  WINDOW_MENTION_MAX_BYTES,
   WINDOW_TEXT_MAX,
   workVersion,
   writeLetters,
@@ -30,7 +34,7 @@ import type { HostContext } from '../context.js';
 import { createWindowCounters } from '../health/window-counters.js';
 import { createWorksService } from './works-service.js';
 import type { WorksService } from './works-service.js';
-import { MAIL_CANDIDATES_MAX_BYTES, MAIL_EVENT_MAX_BYTES } from './mail.js';
+import { MAIL_EVENT_MAX_BYTES, buildMailEvent, joinBatch, startBatch } from './mail.js';
 import type { MailNotice } from './mail.js';
 
 // Шпион кодировщика кадров: в хосте им кодируется каждый кадр клиенту, и событие писем должно кодироваться один раз.
@@ -463,8 +467,27 @@ describe('письма хоста: запись только писем', () => 
     expect(event.rooms[0]?.letters.map((letter) => letter.text)).toEqual(['новое письмо для @human']);
     expect(event.mentionCandidates.length).toBeGreaterThan(0);
     expect(event.mentionCandidates.length).toBeLessThan(71);
-    expect(Buffer.byteLength(JSON.stringify(event.mentionCandidates))).toBeLessThanOrEqual(MAIL_CANDIDATES_MAX_BYTES + 2);
+    expect(Buffer.byteLength(JSON.stringify(event.mentionCandidates))).toBeLessThanOrEqual(WINDOW_MENTION_MAX_BYTES + 2);
     expect(event.mentionCandidates.at(-1)?.text).toBe('новое письмо для @human');
+  });
+
+  it('набор кандидатов собран под потолок уже в buildMailEvent и равен набору общего помощника ядра, которым берёт снимок', async () => {
+    const id = await seedWork();
+    writeLetters(project, id, (letters) => {
+      for (let i = 0; i < 70; i += 1) letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: `@human ${i}: ${'x'.repeat(4000)}` });
+    });
+    const version = workVersion(project, id) as number;
+    const batch = startBatch(project, id, version - 1);
+    const added = readLetters(project, id, { roomId: 'r-01', limit: 1, newestFirst: true });
+    joinBatch(batch, { version, journal: { added, reads: [], deleted: [], droppedRooms: [], rereadRooms: [] }, structural: false });
+
+    // Без fitMailEvent: потолок не ждёт сборки кадра, иначе снимок (задача 7) и событие несли бы разные наборы.
+    const event = buildMailEvent(batch);
+
+    expect(event.mentionCandidates).toEqual(humanMentionCandidates(unreadLetters(project, id, HUMAN)));
+    expect(event.mentionCandidates.length).toBeLessThan(70);
+    expect(Buffer.byteLength(JSON.stringify(event.mentionCandidates)) - 2).toBeLessThanOrEqual(WINDOW_MENTION_MAX_BYTES);
+    expect(event.mentionCandidates.at(-1)?.id).toBe(added[0]?.id);
   });
 });
 

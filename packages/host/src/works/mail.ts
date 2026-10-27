@@ -9,6 +9,8 @@
 
 import {
   HUMAN,
+  humanMentionCandidates,
+  keepNewestWithin,
   letterById,
   letterCount,
   readLetters,
@@ -18,12 +20,11 @@ import {
   unreadLetters,
   viewBytes,
   viewMap,
+  WINDOW_MENTION_MAX_BYTES,
   WINDOW_TEXT_MAX,
-  WINDOW_UNREAD_MAX,
   withLetterSnapshot,
 } from '@parley/core';
 import type { LetterJournal, Message } from '@parley/core';
-import { plainHumanMention } from '@parley/core/attention';
 import type { RoomsMailEvent, RoomsMailRoom } from '@parley/protocol';
 
 /** Сколько писем одной работы копится в одно событие. Ориентир спеки 6.6, как у ленты (`feed-service.ts`). */
@@ -32,12 +33,6 @@ export const MAIL_BATCH_MS = 50;
 export const MAIL_EVENT_MAX_BYTES = 256 * 1024;
 /** Клиент, у которого в буфере записи больше, считается медленным: ему уходит склеенное событие с `reread` (спека 6.6). */
 export const MAIL_SLOW_CLIENT_BYTES = 1024 * 1024;
-/**
- * Сколько байт события отдано кандидатам в упоминания (`mentionCandidates`, спека 6.3): четверть кадра. Кандидаты — все
- * нынешние непрочитанные человеком письма с `@human`, до `WINDOW_UNREAD_MAX`, каждое до 32 КиБ; без своего потолка они
- * съедали бы кадр и оставляли новые письма без места. Сверх потолка не едут самые старые.
- */
-export const MAIL_CANDIDATES_MAX_BYTES = 64 * 1024;
 
 /** Одна запись с письмами для подписчиков хоста (`WorksService.onMail`): по уведомлению на каждый коммит с непустым журналом. */
 export interface MailNotice {
@@ -178,10 +173,10 @@ export function buildMailEvent(batch: MailBatch): RoomsMailEvent {
       rooms,
       droppedRooms,
       unread: { letters: unread.total, rooms: unread.byRoom },
-      mentionCandidates: unreadLetters(projectPath, workId, HUMAN)
-        .filter((message) => plainHumanMention(message.text))
-        .slice(-WINDOW_UNREAD_MAX)
-        .map(asWindowLetter),
+      // Набор и его потолок в байтах — общий помощник ядра: тем же берёт кандидатов снимок без писем, и окно, заменяющее набор
+      // работы последним пришедшим, не видит расхождения между событием и снимком. `fitMailEvent` урезает набор дальше лишь
+      // тогда, когда каркас кадра оставил меньше потолка.
+      mentionCandidates: humanMentionCandidates(unreadLetters(projectPath, workId, HUMAN)),
     };
   });
 }
@@ -196,7 +191,8 @@ const REREAD_BYTES = Buffer.byteLength(',"reread":true');
  * Событие под потолок кадра (`MAIL_EVENT_MAX_BYTES`, спека 6.6). Порядок, в котором кадр делится:
  * 1. каркас — комнаты без писем и без кандидатов, с отметками и удалениями. Не влез он сам (сотни тысяч отметок) —
  *    комнаты с самыми тяжёлыми отметками теряют их и получают `reread`, как у склеенного события;
- * 2. кандидаты в упоминания — не больше `MAIL_CANDIDATES_MAX_BYTES` и не больше остатка, самые новые;
+ * 2. кандидаты в упоминания: `buildMailEvent` уже собрал их под `WINDOW_MENTION_MAX_BYTES`; здесь они урезаются дальше, до
+ *    остатка кадра, и только когда каркас оставил меньше потолка (редко); самые новые остаются, как и там;
  * 3. письма комнат по порядку, пока остаток влезает; письма комнаты, которой не хватило, не едут вовсе, и комната
  *    получает `reread` — окно читает её страницей. Комната целиком, а не по частям: окно, получившее хвост письма без
  *    начала, держало бы дыру, а `reread` её закрывает.
@@ -225,19 +221,9 @@ export function fitMailEvent(event: RoomsMailEvent): RoomsMailEvent {
     if (room.reread !== true && (event.rooms[at] as RoomsMailRoom).letters.length > 0) budget -= REREAD_BYTES;
   });
 
-  // Кандидаты: новейшие подряд, пока влезают; `[]` в каркасе уже посчитан, поэтому в счёт идут сами письма и запятые между ними.
-  const candidates: Message[] = [];
-  let candidateBytes = 0;
-  const candidateLimit = Math.min(MAIL_CANDIDATES_MAX_BYTES, budget);
-  for (let at = event.mentionCandidates.length - 1; at >= 0; at -= 1) {
-    const candidate = event.mentionCandidates[at] as Message;
-    const bytes = jsonBytes(candidate) + (candidates.length > 0 ? 1 : 0);
-    if (candidateBytes + bytes > candidateLimit) break;
-    candidateBytes += bytes;
-    candidates.push(candidate);
-  }
-  candidates.reverse();
-  budget -= candidateBytes;
+  // Кандидаты: потолок общий, а остаток кадра может быть меньше; `[]` в каркасе уже посчитан, поэтому в счёт идут письма и запятые.
+  const candidates = keepNewestWithin(event.mentionCandidates, Math.min(WINDOW_MENTION_MAX_BYTES, budget));
+  budget -= jsonBytes(candidates) - jsonBytes([]);
 
   const fitted = rooms.map((room, at) => {
     const letters = (event.rooms[at] as RoomsMailRoom).letters;

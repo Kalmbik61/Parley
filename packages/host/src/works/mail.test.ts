@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { WINDOW_MENTION_MAX_BYTES } from '@parley/core';
 import type { Message } from '@parley/core';
 import type { RoomsMailEvent, RoomsMailRoom } from '@parley/protocol';
-import { MAIL_CANDIDATES_MAX_BYTES, MAIL_EVENT_MAX_BYTES, fitMailEvent } from './mail.js';
+import { MAIL_EVENT_MAX_BYTES, fitMailEvent } from './mail.js';
 
 /**
  * Потолок кадра события `rooms.mail` (спека rooms.mail 6.6, ревью задачи 4): кадр целиком — `{"event":"rooms.mail","data":…}`
@@ -65,12 +66,27 @@ describe('fitMailEvent: потолок кадра', () => {
     expect(fitted.rooms[0]?.reread).toBeUndefined();
     expect(fitted.mentionCandidates.length).toBeGreaterThan(0);
     expect(fitted.mentionCandidates.length).toBeLessThan(candidates.length);
-    expect(Buffer.byteLength(JSON.stringify(fitted.mentionCandidates))).toBeLessThanOrEqual(MAIL_CANDIDATES_MAX_BYTES + 2);
+    expect(Buffer.byteLength(JSON.stringify(fitted.mentionCandidates))).toBeLessThanOrEqual(WINDOW_MENTION_MAX_BYTES + 2);
     // Остались самые новые, и порядок прежний.
     expect(fitted.mentionCandidates.at(-1)).toEqual(fresh);
     const ids = fitted.mentionCandidates.map((candidate) => candidate.id);
     expect(ids).toEqual([...ids].sort());
     expect(fitted.mentionCandidates.slice(0, -1).at(-1)?.id).toBe(candidates.at(-1)?.id);
+  });
+
+  it('кандидаты, которые влезают, не трогаются; каркас, съевший почти кадр, урезает их до остатка: самые новые', () => {
+    // Каркас в ~220 КиБ (отметки), остаток кадра меньше потолка кандидатов: событие урезает набор ещё, а не вылезает за кадр.
+    const reads = Array.from({ length: 3500 }, (_, at) => ({ id: `m-${at + 1}`, reader: 's-01', at: '2026-10-27T10:00:00.000Z' }));
+    const candidates = Array.from({ length: 10 }, (_, at) => letter(at + 1, 4096));
+    const event = eventOf([room('r-01', { reads })], candidates);
+
+    const fitted = fitMailEvent(event);
+
+    expect(frame(fitted)).toBeLessThanOrEqual(MAIL_EVENT_MAX_BYTES);
+    expect(fitted.rooms[0]?.reads).toEqual(reads);
+    expect(fitted.mentionCandidates.length).toBeGreaterThan(0);
+    expect(fitted.mentionCandidates.length).toBeLessThan(candidates.length);
+    expect(fitted.mentionCandidates.at(-1)).toEqual(candidates.at(-1));
   });
 
   it('кандидатов нет, а письма комнат берут всё место: потолок кандидатов не отнимает его у писем', () => {

@@ -207,6 +207,8 @@ export {
   PageError,
   clampPageBytes,
   compactWorkMap,
+  humanMentionCandidates,
+  keepNewestWithin,
   listPage,
   mapTopology,
   messagePage,
@@ -216,6 +218,7 @@ export {
   shrinkText,
   textPage,
   viewBytes,
+  WINDOW_MENTION_MAX_BYTES,
   WINDOW_TEXT_MAX,
   WINDOW_UNREAD_MAX,
 } from './work/context-pages.js';
