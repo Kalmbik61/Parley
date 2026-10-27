@@ -4,6 +4,12 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Fixed
+
+- GLM sessions and custom providers with a key no longer stop on Claude Code's auto mode notice ("this session isn't eligible… ask your gateway to implement"). Their endpoints cannot run auto mode's server-side checks, so Parley starts them with `CLAUDE_CODE_AUTO_MODE_SERVER=0`: auto mode checks actions with Claude Code's own classifier requests on the provider's quota, as before, without holding the first action until someone presses Enter in the terminal.
+
 ## 0.22.0
 
 The largest release so far. Works move from `map.json` files into one SQLite database, and letters stop refreshing the whole window, so long works with busy rooms stay fast. A room can run its plan on its own in the new Autonomous mode. Agents take fewer turns: only urgent mail wakes them at once. The assistant speaks in a neural voice with a face, and the island answers agents' questions and plans, sits in the notch and plays its own sounds.

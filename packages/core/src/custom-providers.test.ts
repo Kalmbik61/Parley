@@ -67,6 +67,7 @@ describe('customProviderEntry', () => {
       ANTHROPIC_DEFAULT_HAIKU_MODEL: 'kimi-k2.7-code',
       CLAUDE_CODE_SUBAGENT_MODEL: 'kimi-k3[1m]',
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
+      CLAUDE_CODE_AUTO_MODE_SERVER: '0',
     });
     expect(Object.keys(entry.runner.env!).some((name) => /KEY|TOKEN/.test(name))).toBe(false);
     expect(entry.models?.map((m) => m.id)).toEqual(['kimi-k3[1m]', 'kimi-k2.7-code']);

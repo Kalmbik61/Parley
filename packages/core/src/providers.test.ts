@@ -823,6 +823,8 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
     });
     expect(entry.runner.env).toMatchObject({
       ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',
+      // Серверных проверок режима auto через Z.ai нет: без этого Claude Code держит действие на уведомлении.
+      CLAUDE_CODE_AUTO_MODE_SERVER: '0',
     });
     expect(entry.runner.env).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
   });

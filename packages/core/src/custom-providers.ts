@@ -239,6 +239,8 @@ export function customProviderEntry(record: CustomEndpointRecord, home = parleyH
       CLAUDE_CODE_SUBAGENT_MODEL: subagent,
       ...(record.contextWindow === null ? {} : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(record.contextWindow) }),
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      // Как у GLM: чужой шлюз не даёт серверных проверок режима auto.
+      CLAUDE_CODE_AUTO_MODE_SERVER: '0',
       API_TIMEOUT_MS: '3000000',
     },
     ...(isLoopbackUrl(record.baseUrl) ? { keyOptional: true as const } : {}),
