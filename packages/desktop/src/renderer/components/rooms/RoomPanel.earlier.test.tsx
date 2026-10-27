@@ -7,11 +7,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { toast } from 'sonner';
 import type { MapCompact, Message, WindowWorkEntry } from '@parley/core';
+import { S } from '../../../shared/strings.js';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { useHostStore } from '../../store/host.js';
-import { useRoomPagesStore } from '../../store/room-pages.js';
+import { stopOpenRetries, useRoomPagesStore } from '../../store/room-pages.js';
 import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
+import { makeCompactMail, makeRoomNumbers, withCompactMail } from '../../test-utils/compact-mail-fixtures.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { makeLetter, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
 import { RoomPanel } from './RoomPanel.js';
@@ -62,8 +64,8 @@ let bridge: FakeBridge;
 beforeEach(() => {
   bridge = createFakeBridge();
   useUiStore.setState({ composerDrafts: {}, decisionDrafts: {}, windowFocused: true, documentVisible: true });
-  useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'context.messages'] } });
-  useRoomPagesStore.setState({ chains: {}, loading: {} });
+  useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'context.messages', 'context.letter'] } });
+  useRoomPagesStore.setState({ chains: {}, loading: {}, opened: {}, quotes: {} });
   useWorksStore.setState({ entries: [], branches: {}, loading: false, error: null });
   vi.mocked(toast).mockClear();
   Element.prototype.scrollIntoView = vi.fn();
@@ -136,5 +138,190 @@ describe('RoomPanel: история старше хвоста', () => {
     });
     await waitFor(() => expect(screen.getByText('пятое')).toBeDefined());
     expect(earlierButton()?.textContent).toBe('Show earlier messages (4)');
+  });
+});
+
+describe('RoomPanel: снимок без писем (compact версии 2, спека rooms.mail 6.9)', () => {
+  /** Работа без писем в снимке: в комнате `total` писем, окно держит `held`. */
+  function bare(held: Message[], total: number): WindowWorkEntry {
+    const base = makeWork('w-01', {
+      projectPath: PROJECT,
+      sessions: [makeSession('s-01', 'архитектор')],
+      rooms: [{ ...makeRoom('r-01', 'Возвраты'), members: ['s-01'], lead: 's-01' }],
+    });
+    return withCompactMail(base, makeCompactMail({ rooms: { 'r-01': makeRoomNumbers({ total, top: total }) } }), held);
+  }
+  const page = (messages: Message[], next: string | null) => ({ messages, page: { total: 7, returned: messages.length, complete: next === null, next, bytes: 10, cut: 0 } });
+
+  it('открытие комнаты без писем читает последнюю страницу (без курсора), письма встают в ленту; кнопки «раньше» до страницы нет', async () => {
+    const calls: unknown[] = [];
+    bridge.setHandler('context.messages', (params) => {
+      calls.push(params);
+      return page([note('m-06', 'шестое'), note('m-07', 'седьмое')], 'before:6');
+    });
+    useWorksStore.setState({ entries: [bare([], 7)] });
+    render(<Live bridge={bridge} />);
+    expect(earlierButton()).toBeNull();
+
+    await waitFor(() => expect(screen.getByText('седьмое')).toBeDefined());
+    expect(calls).toEqual([{ projectPath: PROJECT, workId: 'w-01', roomId: 'r-01' }]);
+    // Окно держит два письма из семи: над лентой — кнопка с числом оставшихся.
+    expect(earlierButton()?.textContent).toBe('Show earlier messages (5)');
+  });
+
+  it('открытие комнаты с историей не показывает пустую ленту, пока страница в пути; по-настоящему пустая комната — показывает', async () => {
+    let release: (answer: ReturnType<typeof page>) => void = () => {};
+    bridge.setHandler('context.messages', () => new Promise((resolve) => (release = resolve)));
+    useWorksStore.setState({ entries: [bare([], 7)] });
+    render(<Live bridge={bridge} />);
+    await waitFor(() => expect(bridge.calls.some((call) => call.method === 'context.messages')).toBe(true));
+    // Снимок говорит «в комнате семь писем»: «Write the task…» было бы неправдой, лента тихо ждёт страницу.
+    expect(screen.queryByText(S.rooms.emptyFeed)).toBeNull();
+    expect(document.querySelector('[data-room-feed]')?.getAttribute('aria-busy')).toBe('true');
+    expect(earlierButton()).toBeNull();
+
+    await act(async () => {
+      release(page([note('m-06', 'шестое'), note('m-07', 'седьмое')], 'before:6'));
+    });
+    await waitFor(() => expect(screen.getByText('седьмое')).toBeDefined());
+    expect(document.querySelector('[data-room-feed]')?.getAttribute('aria-busy')).toBeNull();
+    expect(screen.queryByText(S.rooms.emptyFeed)).toBeNull();
+    cleanup();
+
+    // Писем в комнате нет вовсе (`total` 0): страница пуста, и подсказка, что писать, на месте.
+    bridge.setHandler('context.messages', () => page([], null));
+    useWorksStore.setState({ entries: [bare([], 0)] });
+    useRoomPagesStore.setState({ chains: {}, loading: {}, opened: {}, quotes: {} });
+    render(<Live bridge={bridge} />);
+    expect(screen.getByText(S.rooms.emptyFeed)).toBeDefined();
+    expect(document.querySelector('[data-room-feed]')?.getAttribute('aria-busy')).toBeNull();
+  });
+
+  it('прочитать страницу некому — хост без context.messages, связи нет, комнату стёрли: лента как прежде, подсказка на месте, ожидания нет', async () => {
+    const quiet = (): void => {
+      expect(screen.getByText(S.rooms.emptyFeed)).toBeDefined();
+      expect(document.querySelector('[data-room-feed]')?.getAttribute('aria-busy')).toBeNull();
+    };
+    // Хост не умеет читать страницы: страницы не будет, ждать нечего.
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS] } });
+    useWorksStore.setState({ entries: [bare([], 7)] });
+    render(<Live bridge={bridge} />);
+    quiet();
+    expect(bridge.calls.filter((call) => call.method === 'context.messages')).toEqual([]);
+    cleanup();
+
+    // Связи нет: чтение не отправить, пока она не вернётся.
+    useHostStore.setState({ status: { state: 'disconnected', reason: 'host gone' } });
+    render(<Live bridge={bridge} />);
+    quiet();
+    cleanup();
+
+    // Хост ответил «комнаты нет»: чтение закончилось без писем, ленте ждать больше нечего.
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'context.messages', 'context.letter'] } });
+    useRoomPagesStore.setState({ chains: {}, loading: {}, opened: {}, quotes: {} });
+    bridge.setHandler('context.messages', () => {
+      throw { code: 'not_found', message: 'room r-01 does not exist' };
+    });
+    render(<Live bridge={bridge} />);
+    await waitFor(() => expect(screen.getByText(S.rooms.emptyFeed)).toBeDefined());
+    quiet();
+  });
+
+  it('неудачное открытие повторяется: комната с историей после сбоя чтения получает страницу без перемонтирования', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let failures = 1;
+      bridge.setHandler('context.messages', () => {
+        if (failures-- > 0) throw { code: 'internal', message: 'нет' };
+        return page([note('m-06', 'шестое'), note('m-07', 'седьмое')], 'before:6');
+      });
+      useWorksStore.setState({ entries: [bare([], 7)] });
+      render(<Live bridge={bridge} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.queryByText('седьмое')).toBeNull();
+      // Пока страницы нет, лента не пустая подсказка, а ожидание.
+      expect(screen.queryByText(S.rooms.emptyFeed)).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      await waitFor(() => expect(screen.getByText('седьмое')).toBeDefined());
+      expect(bridge.calls.filter((call) => call.method === 'context.messages')).toHaveLength(2);
+    } finally {
+      stopOpenRetries();
+      vi.useRealTimers();
+    }
+  });
+
+  it('лента расставляется, когда страница пришла: к самому раннему непрочитанному упоминанию, а не к низу пустой ленты', async () => {
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this);
+    });
+    const mention = (id: string, text: string): Message => makeLetter(id, { roomId: 'r-01', to: [], from: 's-01', readBy: {}, text, at: `2026-09-27T09:00:${id.slice(2)}.000Z` });
+    bridge.setHandler('context.messages', () => page([mention('m-5', 'первое, @human'), mention('m-6', 'второе, @human'), mention('m-7', 'после всех')], null));
+    useWorksStore.setState({ entries: [bare([], 7)] });
+    render(<Live bridge={bridge} />);
+    expect(scrolled).toHaveLength(0);
+
+    await waitFor(() => expect(screen.getByText('после всех')).toBeDefined());
+    expect(scrolled).toHaveLength(1);
+    expect((scrolled[0] as HTMLElement).dataset.messageId).toBe('m-5');
+  });
+
+  it('письма комнаты уже держатся — страница при открытии не читается', async () => {
+    bridge.setHandler('context.messages', () => page([], null));
+    useWorksStore.setState({ entries: [bare([note('m-06', 'шестое'), note('m-07', 'седьмое')], 7)] });
+    render(<Live bridge={bridge} />);
+    await act(async () => {});
+    expect(bridge.calls.filter((call) => call.method === 'context.messages')).toEqual([]);
+    expect(screen.getByText('шестое')).toBeDefined();
+  });
+
+  it('загрузить раньше: курсор — перед наименьшим держимым номером, число — итог комнаты из снимка минус держимое', async () => {
+    const calls: unknown[] = [];
+    bridge.setHandler('context.messages', (params) => {
+      calls.push(params);
+      return page([note('m-04', 'четвёртое'), note('m-05', 'пятое')], 'before:4');
+    });
+    useWorksStore.setState({ entries: [bare([note('m-06', 'шестое'), note('m-07', 'седьмое')], 7)] });
+    render(<Live bridge={bridge} />);
+    expect(earlierButton()?.textContent).toBe('Show earlier messages (5)');
+
+    await act(async () => {
+      fireEvent.click(earlierButton()!);
+    });
+    await waitFor(() => expect(screen.getByText('четвёртое')).toBeDefined());
+    expect(calls).toEqual([{ projectPath: PROJECT, workId: 'w-01', roomId: 'r-01', cursor: 'before:6' }]);
+    expect(earlierButton()?.textContent).toBe('Show earlier messages (3)');
+  });
+
+  it('цитата неподгруженного письма запрашивает context.letter и показывает оригинал; письма нет — «оригинала нет»', async () => {
+    const asked: unknown[] = [];
+    bridge.setHandler('context.letter', (params) => {
+      asked.push(params);
+      return { message: params.id === 'm-02' ? note('m-02', 'Старый вопрос про возвраты') : null };
+    });
+    const reply = (id: string, text: string, replyTo: string): Message => ({ ...note(id, text), replyTo });
+    useWorksStore.setState({ entries: [bare([reply('m-07', 'ответ', 'm-02'), reply('m-08', 'ещё ответ', 'm-99')], 8)] });
+    render(<Live bridge={bridge} />);
+
+    await waitFor(() => expect(document.querySelector('[data-message-reply="m-02"]')?.textContent).toContain('Старый вопрос про возвраты'));
+    await waitFor(() => expect(document.querySelector('[data-message-reply-missing]')).not.toBeNull());
+    expect(asked).toEqual([
+      { projectPath: PROJECT, workId: 'w-01', id: 'm-02' },
+      { projectPath: PROJECT, workId: 'w-01', id: 'm-99' },
+    ]);
+  });
+
+  it('прежний хост (compact версии 1, метода context.letter нет): комната при открытии ничего не читает, цитата без оригинала не запрашивается', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'context.messages'] } });
+    bridge.setHandler('context.messages', () => page([], null));
+    bridge.setHandler('context.letter', () => ({ message: null }));
+    useWorksStore.setState({ entries: [entry([{ ...note('m-07', 'ответ'), replyTo: 'm-02' }], 7, 7)] });
+    render(<Live bridge={bridge} />);
+    await act(async () => {});
+    expect(bridge.calls.filter((call) => call.method === 'context.messages' || call.method === 'context.letter')).toEqual([]);
   });
 });

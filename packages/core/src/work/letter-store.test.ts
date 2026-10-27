@@ -781,7 +781,8 @@ describe('пустая запись не пишет', () => {
     writeLetters(project, WORK, (letters) => letters.add(letter({ from: 's-01', to: ['s-02'] })));
 
     expect(versionOf()).toBe(before + 1);
-    expect(events).toEqual([{ projectPath: project, workId: WORK, version: before + 1 }]);
+    // Событие несёт ещё журнал и признаки записи (`prevVersion`, `structural`): их проверяет «журнал писем транзакции».
+    expect(events).toMatchObject([{ projectPath: project, workId: WORK, version: before + 1 }]);
     expect(await updatedAt()).not.toBe(OLD);
   });
 
@@ -1390,5 +1391,209 @@ describe('effectCancelled: письмо отменяет только его э�
 
     expect(versionOf()).toBe(before);
     expect(candidateSeqs()).toEqual([1]);
+  });
+});
+
+describe('журнал писем транзакции в событии onMapWritten (спека rooms.mail 6.2)', () => {
+  const events: MapWrittenEvent[] = [];
+  let stop = (): void => {};
+
+  beforeEach(() => {
+    events.length = 0;
+    stop = onMapWritten((event) => events.push(event));
+  });
+  afterEach(() => stop());
+
+  const EMPTY = { added: [], reads: [], deleted: [], droppedRooms: [], rereadRooms: [] };
+
+  /** Событие единственной записи после посева: посев сам шлёт события, их отбрасывает `events.length = 0`. */
+  const written = (): MapWrittenEvent => {
+    expect(events).toHaveLength(1);
+    return events[0]!;
+  };
+
+  it('журнал: add и markRead попадают в событие; запись только писем не структурная', async () => {
+    await seed();
+    events.length = 0;
+    const before = versionOf();
+    let id = '';
+
+    writeLetters(project, WORK, (letters) => {
+      id = letters.add(letter({ from: 's-01', to: ['s-02'], text: 'привет' })).id;
+      letters.markRead('s-02', [id], T2);
+      // Повторная отметка того же читателя новой не считается.
+      letters.markRead('s-02', [id], T3);
+    });
+
+    const event = written();
+    expect(event.structural).toBe(false);
+    expect(event.version).toBe(before + 1);
+    expect(event.prevVersion).toBe(event.version - 1);
+    expect(event.journal?.added.map((message) => message.id)).toEqual([id]);
+    expect(event.journal?.added[0]).toMatchObject({ from: 's-01', to: ['s-02'], text: 'привет', readBy: {} });
+    expect(event.journal?.reads).toEqual([{ id, reader: 's-02', at: T2 }]);
+    expect(event.journal).toMatchObject({ deleted: [], droppedRooms: [], rereadRooms: [] });
+  });
+
+  it('журнал: добавленные письма идут по возрастанию номера, как записаны', async () => {
+    await seed();
+    events.length = 0;
+
+    writeLetters(project, WORK, (letters) => {
+      letters.add(letter({ from: 's-01', to: ['s-02'] }));
+      letters.add(letter({ from: 's-02', to: [], roomId: 'r-01' }));
+      letters.add(letter({ from: 's-03', to: [HUMAN] }));
+    });
+
+    expect(written().journal?.added.map((message) => message.id)).toEqual(['m-01', 'm-02', 'm-03']);
+  });
+
+  it('журнал: письмо в журнале — снимок записанного, правка возвращённого письма его не меняет', async () => {
+    await seed();
+    events.length = 0;
+
+    writeLetters(project, WORK, (letters) => {
+      const message = letters.add(letter({ from: 's-01', to: ['s-02'], text: 'как записано' }));
+      message.text = 'правка снаружи';
+      message.to.push('s-03');
+    });
+
+    expect(written().journal?.added[0]).toMatchObject({ text: 'как записано', to: ['s-02'] });
+  });
+
+  it('журнал: откат SAVEPOINT выбрасывает свои записи, записи до него остаются', async () => {
+    await seed();
+    events.length = 0;
+
+    writeLetters(project, WORK, (letters) => {
+      const a = letters.add(letter({ from: 's-02', to: [], roomId: 'r-01', text: 'a' }));
+      expect(() =>
+        letters.savepoint(() => {
+          letters.add(letter({ from: 's-03', to: [], roomId: 'r-01', text: 'b' }));
+          letters.markRead('s-03', [a.id], T2);
+          letters.flagDeleted('s-03');
+          letters.reopened('r-01', T3);
+          letters.deleteRoom('r-01');
+          throw new Error('boom');
+        }),
+      ).toThrow('boom');
+    });
+
+    expect(written().journal).toEqual({ ...EMPTY, added: [expect.objectContaining({ id: 'm-01', text: 'a' })] });
+  });
+
+  it('журнал: вложенный успешный savepoint отдаёт записи внешнему, откат внешнего уносит и их', async () => {
+    await seed();
+    events.length = 0;
+
+    writeLetters(project, WORK, (letters) => {
+      letters.add(letter({ from: 's-01', to: ['s-02'], text: 'до' }));
+      letters.savepoint(() => letters.add(letter({ from: 's-01', to: ['s-02'], text: 'цел' })));
+      expect(() =>
+        letters.savepoint(() => {
+          letters.savepoint(() => letters.add(letter({ from: 's-01', to: ['s-02'], text: 'вложенное' })));
+          throw new Error('outer');
+        }),
+      ).toThrow('outer');
+    });
+
+    expect(written().journal?.added.map((message) => message.text)).toEqual(['до', 'цел']);
+  });
+
+  it('смешанная запись — structural true, письма в журнале всё равно есть', async () => {
+    await seed();
+    events.length = 0;
+
+    await updateMap(project, WORK, (map, letters) => {
+      addRoom(map, { title: 'второй', creator: 's-01', members: ['s-02'] }, OLD);
+      letters.add(letter({ from: 's-01', to: [], roomId: 'r-02' }));
+    });
+
+    const event = written();
+    expect(event.structural).toBe(true);
+    expect(event.prevVersion).toBe(event.version - 1);
+    expect(event.journal?.added).toHaveLength(1);
+  });
+
+  it('запись одной карты без писем — structural true и пустой журнал', async () => {
+    await seed();
+    events.length = 0;
+
+    await updateMap(project, WORK, (map) => {
+      addRoom(map, { title: 'второй', creator: 's-01', members: ['s-02'] }, OLD);
+    });
+
+    expect(written()).toMatchObject({ structural: true, journal: EMPTY });
+  });
+
+  it('reopened просит перечитать комнату, а не шлёт отметки поштучно', async () => {
+    await seed(fillFive);
+    events.length = 0;
+
+    writeLetters(project, WORK, (letters) => letters.reopened('r-01', T3));
+
+    const event = written();
+    expect(event.structural).toBe(false);
+    expect(event.journal).toEqual({ ...EMPTY, rereadRooms: ['r-01'] });
+  });
+
+  it('reopened архивной комнаты или без отметок журнал не трогает', async () => {
+    await seed(fillFive);
+    events.length = 0;
+
+    await updateMap(project, WORK, (map, letters) => {
+      room(map).archivedAt = T1;
+      letters.reopened('r-01', T3);
+      letters.add(letter({ from: 's-01', to: ['s-02'] }));
+    });
+
+    expect(written().journal?.rereadRooms).toEqual([]);
+  });
+
+  it('flagDeleted кладёт в журнал id помеченных писем, повторная пометка — ничего', async () => {
+    await seed(fillFive);
+    events.length = 0;
+
+    writeLetters(project, WORK, (letters) => letters.flagDeleted('s-03'));
+    // m-01 адресовано s-03, m-04 написано им; рассылки комнаты m-02 и m-03 по `recipients` s-03 не называют.
+    const event = written();
+    expect(event.structural).toBe(false);
+    expect(event.journal).toEqual({ ...EMPTY, deleted: ['m-01', 'm-04'] });
+
+    events.length = 0;
+    writeLetters(project, WORK, (letters) => letters.flagDeleted('s-03'));
+    expect(events).toEqual([]);
+  });
+
+  it('deleteRoom кладёт комнату в droppedRooms; номер письма сдвигается, запись структурная', async () => {
+    await seed(fillFive);
+    events.length = 0;
+
+    writeLetters(project, WORK, (letters) => {
+      letters.deleteRoom('r-01');
+      // Комната без писем журнал не пополняет.
+      letters.deleteRoom('r-99');
+    });
+
+    const event = written();
+    expect(event.structural).toBe(true);
+    expect(event.journal).toEqual({ ...EMPTY, droppedRooms: ['r-01'] });
+  });
+
+  it('методы кандидатов (joined, left, archived, effectCancelled) журнал не пополняют', async () => {
+    await seed((_map, letters) => {
+      letters.add(letter({ from: 's-02', to: [], roomId: 'r-01' })); // m-01
+    });
+    events.length = 0;
+
+    writeLetters(project, WORK, (letters) => {
+      letters.left('r-01', 's-03');
+      letters.joined('r-01', 's-03');
+      letters.archived('r-01');
+    });
+
+    const event = written();
+    expect(event.structural).toBe(false);
+    expect(event.journal).toEqual(EMPTY);
   });
 });

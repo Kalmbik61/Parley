@@ -197,7 +197,7 @@ export type { DotState, SessionAxes, StateWordKey } from './work/session-state.j
 export { isUnreadFor, lookupIn, recipientsOf, unreadFor } from './work/letters.js';
 export type { LetterLookup } from './work/letters.js';
 export { channelStats, letterById, letterCount, mapLetterReader, mapLetterTx, markHumanRead, previewLetterTx, readLetters, roomLetterTops, storeLetterReader, storeLetterReads, unreadCount, unreadLetters, withLetterSnapshot, writeLetters } from './work/letter-store.js';
-export type { LetterQuery, LetterReads, LetterTx, NewLetter, UnreadOptions } from './work/letter-store.js';
+export type { LetterJournal, LetterQuery, LetterReads, LetterTx, NewLetter, UnreadOptions } from './work/letter-store.js';
 export {
   LETTER_PAGE_MAX_ITEMS,
   PAGE_DEFAULT_BYTES,
@@ -207,14 +207,21 @@ export {
   PageError,
   clampPageBytes,
   compactWorkMap,
+  humanMentionCandidates,
+  keepNewestWithin,
   listPage,
+  mailWorkMap,
   mapTopology,
   messagePage,
   pageBySeq,
   parseCursor,
   seqOf,
+  shrinkText,
   textPage,
   viewBytes,
+  WINDOW_MENTION_MAX_BYTES,
+  WINDOW_TEXT_MAX,
+  WINDOW_UNREAD_MAX,
 } from './work/context-pages.js';
 export type { LetterReader, MapTopology, PageCursor, PageInfo, TextPage, WindowOptions } from './work/context-pages.js';
 export type { NewMessage, NewSession, TransitionOptions } from './work/map.js';
@@ -667,7 +674,7 @@ export { capturePlanSnapshot, flushPlanSnapshots, PlanSnapshotError } from './wo
 export type { PlanSnapshotFlushResult } from './work/plan-snapshots.js';
 export { proposeCompletion } from './work/proposals.js';
 export type { ProposalOptions } from './work/proposals.js';
-export type { MapCompact } from './work/types.js';
+export type { MapCompact, MapCompactMail } from './work/types.js';
 export type { RoomMode, PlanMode, PlanStatus, PlanItemStatus, PlanDraft, PlanItemInput, PlanItem, PlanEvidence, RoomPlan, PlanExportIntent } from './work/types.js';
 export type { AutonomousDraft, AttemptChannelRequest, AutonomousPlan, PlanAttempt, HandoffManifest, HandoffManifestInput, Receipt, CheckSpec, CheckResult, Integration, AutonomousBudget, AutonomousOp } from './work/types.js';
 

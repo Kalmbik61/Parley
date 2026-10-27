@@ -4,7 +4,8 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addSession, createWork, readMap, readWorksIndex, transitionSession, updateMap, workPaths } from '@parley/core';
+import { addRoom, addSession, createWork, readMap, readWorksIndex, transitionSession, updateMap, workPaths } from '@parley/core';
+import { COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE } from '@parley/protocol';
 import { connectRaw, hello, holdDatabase, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
@@ -386,6 +387,52 @@ describe('settings.get / settings.set', () => {
     expect((response.result as { config: { messageRate: number } }).config.messageRate).toBe(7);
 
     client.close();
+  });
+});
+
+describe('works.list по признакам окна (спека rooms.mail 6.8, 6.10)', () => {
+  it('окно с rooms-mail получает снимок без писем, окно с compact-works — с хвостами, прежнее — полный: тот же вариант, что и в works.changed', async () => {
+    const home = await tempHome();
+    homes.push(home);
+    const dir = await project();
+    const previousHome = process.env['PARLEY_HOME'];
+    process.env['PARLEY_HOME'] = home;
+    const map = await createWork(dir, { title: 'Работа' });
+    await updateMap(dir, map.work.id, (current, letters) => {
+      addSession(current, { provider: 'claude', label: 'план', task: 't' });
+      addRoom(current, { title: 'Комната', creator: 'human', members: ['s-01'], lead: 's-01' });
+      for (let i = 0; i < 30; i += 1) letters.add({ kind: 'note', from: 's-01', to: [], roomId: 'r-01', text: `письмо ${i}` });
+    });
+    if (previousHome === undefined) delete process.env['PARLEY_HOME'];
+    else process.env['PARLEY_HOME'] = previousHome;
+
+    const running = await startHost({ home });
+    hosts.push(running);
+    const token = await readFile(hostPaths(home).token, 'utf8');
+    type Entry = { version?: number; map: { messages: unknown[]; compact?: { version: number; messages?: unknown; rooms?: Record<string, { total: number; top: number }> } } };
+    const list = async (features: string[]): Promise<Entry> => {
+      const client = connectRaw(hostPaths(home).socket);
+      await waitConnected(client.socket);
+      await hello(client, token, { features });
+      client.send({ id: 1, method: 'works.list', params: {} });
+      const response = await reply(client, 1);
+      client.close();
+      return (response.result as { entries: Entry[] }).entries[0] as Entry;
+    };
+
+    const mail = await list([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const compact = await list([COMPACT_WORKS_FEATURE]);
+    const legacy = await list([]);
+
+    expect(mail.map.messages).toEqual([]);
+    expect(mail.map.compact).toMatchObject({ version: 2, rooms: { 'r-01': { total: 30, top: 30 } } });
+    expect(mail.map.compact).not.toHaveProperty('messages');
+    expect(compact.map.messages).toHaveLength(30);
+    expect(compact.map.compact).toMatchObject({ version: 1, messages: { total: 30 } });
+    expect(legacy.map.messages).toHaveLength(30);
+    expect(legacy.map.compact).toBeUndefined();
+    expect(mail.version).toBeDefined();
+    expect(mail.version).toBe(compact.version);
   });
 });
 

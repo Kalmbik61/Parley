@@ -1,4 +1,4 @@
-import type { AgentPlan, ContextFill, UsageSummary, WindowWorkEntry } from '@parley/core';
+import type { AgentPlan, ContextFill, Message, UsageSummary, WindowWorkEntry } from '@parley/core';
 
 /**
  * Лимиты подписки провайдера (спека комнат Organic, 3.5): пятичасовое и недельное окна и время, когда
@@ -330,6 +330,12 @@ export interface HealthSample {
   ptyBytes: number;
   /** Пересчёты сессий за окно: будильник и активность вместе. */
   recomputes: number;
+  /** Окнам ушло `works.changed` за интервал: событий и байт (кадр считается один раз на рассылку, не по клиентам; спека rooms.mail 6.12). */
+  worksChangedEvents: number;
+  worksChangedBytes: number;
+  /** То же для `rooms.mail`. */
+  mailEvents: number;
+  mailBytes: number;
 }
 
 /** Живая сессия в ответе `host.diagnostics`: без текстов и вывода, только адрес, процесс и состояние. */
@@ -367,4 +373,54 @@ export interface WorksSnapshot {
    * поздно пришедший старый ответ `works.list` не откатывает свежее событие. Нет поля — хост до P35.
    */
   revision?: number;
+}
+
+/**
+ * Одна затронутая комната в событии `rooms.mail` (спека rooms.mail 6.3); `roomId: null` — прямые письма.
+ * Числа абсолютные: потерянное или повторённое событие не сбивает окно навсегда.
+ */
+export interface RoomsMailRoom {
+  roomId: string | null;
+  /** Наибольший `seq` комнаты до этой пачки и после неё. Окно сверяет `prevTop` со своим верхом: расхождение — дочитывание. */
+  prevTop: number;
+  top: number;
+  total: number;
+  lastAt: string | null;
+  /** Новые письма целиком, как их отдаёт `context.messages`: с `readBy` и текстом до `WINDOW_TEXT_MAX`, у обрезанных — `textBytes`. */
+  letters: Message[];
+  /** Новые отметки прочтения. */
+  reads: Array<{ id: string; reader: string; at: string }>;
+  /** Id писем, помеченных удалёнными. */
+  deleted: string[];
+  /**
+   * Дочитай комнату: потолок события, медленный клиент, массовая отметка или чужая запись — письма пришли не все, а отметки
+   * других читателей могли не прийти. `deleted` и отметки человека (`reads` с читателем `human`) идут и с `reread`: по ним
+   * окно снимает кандидатов в упоминания, в том числе в комнатах, которых оно не держит. Не вмещает их и потолок кадра
+   * события (256 КиБ, редко: десятки тысяч отметок) — тогда у комнаты остаётся один `reread`.
+   */
+  reread?: true;
+}
+
+/** Событие `rooms.mail`: письма одной работы за пачку, только окнам с признаком `rooms-mail` (спека rooms.mail 6.3). */
+export interface RoomsMailEvent {
+  projectPath: string;
+  workId: string;
+  /** Версия работы в базе после этой пачки и до неё (`works.version`). */
+  version: number;
+  prevVersion: number;
+  updatedAt: string;
+  rooms: RoomsMailRoom[];
+  /** Комнаты, чьи письма удалены целиком (`deleteRoom`): окно убирает их письма и счётчики. */
+  droppedRooms: string[];
+  /** Непрочитанное у человека по работе, абсолютные числа. Ключ `''` в `rooms` — прямые письма. */
+  unread: { letters: number; rooms: Record<string, number> };
+  /**
+   * Новые кандидаты этой пачки, а не весь набор: письма пачки, ещё не прочитанные человеком к моменту сборки события и
+   * прошедшие `plainHumanMention`, по возрастанию `seq`, не больше `WINDOW_UNREAD_MAX` последних и не больше
+   * `WINDOW_MENTION_MAX_BYTES` (64 КиБ) — сверх потолка не едут самые старые. Окно дописывает их в свой набор по работе; набор
+   * заменяет только снимок. Из набора уходят id, прочитанные человеком (`reads` комнат с читателем `human`), `deleted` и
+   * комнаты из `droppedRooms`. Точное правило «@вы» применяет окно. Событие урезает набор ещё лишь в редком случае, когда
+   * каркас кадра (отметки прочтения) оставил под него меньше потолка: урезанных кандидатов окно получит со следующим снимком.
+   */
+  mentionCandidates: Message[];
 }

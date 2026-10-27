@@ -1,7 +1,8 @@
 /**
- * Поводы для сообщений бота: что изменилось с прошлого снимка. Состояние (`NotifyMemory`) держит вызывающий; письма берутся
- * через `TriggerLetters` (по умолчанию — непрочитанное по карте снимка, последнее письмо человека из базы работы), остальное чистое.
- * Первый вызов только запоминает базу — после старта хоста бот не засыпает человека тем, что было до него.
+ * Поводы для сообщений бота: что изменилось с прошлого снимка, и какие письма принесла запись (`mailTriggers`). Состояние
+ * (`NotifyMemory`) держит вызывающий; письма базы берутся через `TriggerLetters` (по умолчанию — непрочитанное по карте
+ * снимка, последнее письмо человека из базы работы), остальное чистое. Первый вызов `worksTriggers` только запоминает базу —
+ * после старта хоста бот не засыпает человека тем, что было до него.
  */
 
 import path from 'node:path';
@@ -26,7 +27,10 @@ import type { WorksView } from '../works/works-service.js';
 export interface NotifyMemory {
   /** Уровень сессии по `refKey`; `closed` — точка не показывает activity (закрыта, спит, итог). */
   levels: Map<string, Activity | 'closed'>;
-  /** Id писем и упоминаний, которые уже видели; `null` — снимка ещё не было. */
+  /**
+   * Id писем и упоминаний, о которых бот уже знает: база первого снимка и всё, что принёс `mailTriggers`; `null` — снимка
+   * ещё не было. Множество только пополняется: письма приходят событием записи, а не пересчётом снимка (спека rooms.mail 6.7).
+   */
   letters: Set<string> | null;
   /** Решение в слоте комнаты по `проект\0работа\0комната`. */
   decisions: Map<string, { id: string; rev: number }>;
@@ -55,8 +59,6 @@ export function activityTransition(memory: NotifyMemory, ref: SessionRef, sessio
 }
 
 export interface WorksTriggers {
-  /** Новые письма человеку (roomId === null) и упоминания в комнатах. */
-  letters: Array<{ entry: WorkEntry; message: Message }>;
   decisions: Array<{ entry: WorkEntry; room: Room; change: 'new' | 'revised' }>;
   closed: Array<{ entry: WorkEntry; roomId: string; previous: { id: string; rev: number }; now: 'accepted' | 'returned' | 'revised' | 'gone' }>;
 }
@@ -64,6 +66,24 @@ export interface WorksTriggers {
 /** `Parley · my_harnas`: название работы и папка проекта. */
 export function sessionWhere(entry: WorkEntry): string {
   return `${entry.map.work.title} · ${path.basename(entry.projectPath)}`;
+}
+
+/** Письмо человеку (`roomId === null`) или упоминание человека в комнате, о котором бот говорит один раз. */
+export interface MailTrigger {
+  entry: WorkEntry;
+  message: Message;
+}
+
+const letterKey = (entry: WorkEntry, message: Message): string =>
+  `${entry.projectPath}\u0000${entry.map.work.id}\u0000${message.id}`;
+
+/**
+ * Из `messages` — письма, о которых бот пишет человеку: прямые письма ему и упоминания его в комнатах. Правила внимания
+ * считает core по карте с этими письмами: в снимке работ писем нет, они приходят из базы или из записи.
+ */
+function humanLetters(entry: WorkEntry, messages: Message[], hasMention: (text: string) => boolean): Message[] {
+  const unread = { ...entry.map, messages };
+  return [...humanUnreadLetters(unread), ...humanUnreadMentions(unread, hasMention)];
 }
 
 const decisionKey = (entry: WorkEntry, roomId: string): string => `${entry.projectPath}\u0000${entry.map.work.id}\u0000${roomId}`;
@@ -110,10 +130,9 @@ export function worksTriggers(
   hasMention: (text: string) => boolean = plainHumanMention,
   letters: TriggerLetters = storeTriggerLetters,
 ): WorksTriggers {
-  const result: WorksTriggers = { letters: [], decisions: [], closed: [] };
+  const result: WorksTriggers = { decisions: [], closed: [] };
   const first = memory.letters === null;
-  const seenLetters = memory.letters ?? new Set<string>();
-  const nextLetters = new Set<string>();
+  const baseLetters = new Set<string>();
   const currentDecisions = new Map<string, { id: string; rev: number }>();
   const entries = new Map<string, WorkEntry>();
 
@@ -121,14 +140,9 @@ export function worksTriggers(
     const { map } = entry;
     entries.set(`${entry.projectPath}\u0000${map.work.id}`, entry);
 
-    // Правила внимания — core по карте с непрочитанным человеком: письма в снимке работ могли быть сжаты или отсутствовать.
-    const unread = { ...map, messages: letters.humanUnread(entry) };
-    for (const message of [...humanUnreadLetters(unread), ...humanUnreadMentions(unread, hasMention)]) {
-      const key = `${entry.projectPath}\u0000${map.work.id}\u0000${message.id}`;
-      if (nextLetters.has(key)) continue;
-      nextLetters.add(key);
-      if (!first && !seenLetters.has(key)) result.letters.push({ entry, message });
-    }
+    // База писем — только первый снимок: непрочитанное человеком к этому моменту молчит. Дальше письма приходят записью
+    // (`mailTriggers`), а запись одних писем снимок работ не меняет и сюда не доходит (спека rooms.mail 6.7).
+    if (first) for (const message of humanLetters(entry, letters.humanUnread(entry), hasMention)) baseLetters.add(letterKey(entry, message));
 
     for (const room of map.rooms) {
       const proposal = room.proposal;
@@ -160,7 +174,30 @@ export function worksTriggers(
     }
   }
 
-  memory.letters = nextLetters;
+  if (first) memory.letters = baseLetters;
   memory.decisions = currentDecisions;
+  return result;
+}
+
+/**
+ * Новые письма человеку из записи писем (`onMail`): `added` — письма записи как легли в базу. Письмо, о котором бот уже
+ * знает (база первого снимка или прежняя запись), повода не даёт. Без базы — `worksTriggers` ещё не звали — молчит: бот не
+ * знает, что было до него. `entry` нужен правилам внимания (архивная комната) и подписям карточки.
+ */
+export function mailTriggers(
+  memory: NotifyMemory,
+  entry: WorkEntry,
+  added: readonly Message[],
+  hasMention: (text: string) => boolean = plainHumanMention,
+): MailTrigger[] {
+  const seen = memory.letters;
+  if (seen === null) return [];
+  const result: MailTrigger[] = [];
+  for (const message of humanLetters(entry, [...added], hasMention)) {
+    const key = letterKey(entry, message);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ entry, message });
+  }
   return result;
 }

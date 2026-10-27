@@ -1,7 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createFakeBridge } from '../test-utils/fake-bridge.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { MapCompact, Message, Room, WindowWorkEntry } from '@parley/core';
+import { ROOMS_MAIL_FEATURE, type RoomsMailEvent, type RoomsMailRoom, type WorksSnapshot } from '@parley/protocol';
+import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { makeLetter, makeMailEvent, makeMailRoom, makeRoom, makeWork } from '../test-utils/work-fixtures.js';
+import { MAIL_PAGES_MAX } from './room-pages.js';
 import { orderedWorks, useWorksStore } from './works.js';
-import type { WindowWorkEntry } from '@parley/core';
 
 function entry(id: string, createdAt: string): WindowWorkEntry {
   return {
@@ -134,5 +137,628 @@ describe('orderedWorks', () => {
     const b = entry('w-b', '2026-01-02');
     const a = entry('w-a', '2026-01-01');
     expect(orderedWorks([b, a]).map((item) => item.map.work.id)).toEqual(['w-a', 'w-b']);
+  });
+});
+
+describe('useWorksStore: rooms.mail (спека rooms.mail 6.3-6.5)', () => {
+  const letter = (id: string, patch: Partial<Message> = {}): Message => makeLetter(id, { roomId: 'r-01', to: [], from: 's-02', readBy: {}, ...patch });
+  const seqOf = (message: Message): number => Number(message.id.slice(2));
+
+  /** Работа с комнатой `r-01` (и другими по просьбе), письмами снимка, счётчиками хоста и версией; `version: undefined` — снимок без версии. */
+  function work(messages: Message[], total: number, version: number | undefined, rooms: Room[] = [makeRoom('r-01', 'К')]): WindowWorkEntry {
+    const base = makeWork('w-01', { rooms, messages });
+    const first = messages.filter((message) => message.roomId === 'r-01').map(seqOf);
+    const compact: MapCompact = {
+      version: 1,
+      messages: { total, included: messages.length, latestId: `m-${total}`, rooms: { 'r-01': { total, included: messages.length, tailFrom: first.length === 0 ? null : Math.min(...first) } } },
+      unread: { letters: 0, rooms: {} },
+      cut: [],
+      omitted: {},
+    };
+    return { ...base, map: { ...base.map, compact }, ...(version === undefined ? {} : { version }) };
+  }
+
+  const snapshot = (revision: number, ...entries: WindowWorkEntry[]): WorksSnapshot => ({ entries, branches: {}, revision });
+  const page = (messages: Message[]) => ({ messages, page: { total: messages.length, returned: messages.length, complete: true, next: null, bytes: 1, cut: 0 } });
+  const ids = (): string[] => useWorksStore.getState().entries[0]!.map.messages.map((message) => message.id);
+  const compactOf = (): MapCompact => useWorksStore.getState().entries[0]!.map.compact!;
+  const pageCalls = (bridge: FakeBridge): Array<string | undefined> =>
+    bridge.calls.filter((call) => call.method === 'context.messages').map((call) => (call.params as { cursor?: string }).cursor);
+
+  /** Слушатели `onMail` живут в модуле: каждый тест снимает свои. */
+  const unsubscribe: Array<() => void> = [];
+  const listen = (listener: (event: RoomsMailEvent) => void): void => {
+    unsubscribe.push(useWorksStore.getState().onMail(listener));
+  };
+  afterEach(() => {
+    vi.useRealTimers();
+    for (const off of unsubscribe.splice(0)) off();
+  });
+
+  /** Пустой ход цикла событий: цепочки обещаний и вызовы бриджа, начатые синхронно, успевают дойти до конца (реальные таймеры). */
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+  /** Ход поддельных часов (после `vi.useFakeTimers()`): заодно доводит до конца цепочки обещаний. */
+  const tick = async (ms: number): Promise<void> => {
+    await vi.advanceTimersByTimeAsync(ms);
+  };
+
+  /** Окно подключено к хосту с признаком (или без: `features: null`) и получило снимок. */
+  async function start(entry: WindowWorkEntry, features: string[] | null = [ROOMS_MAIL_FEATURE]) {
+    const bridge = createFakeBridge();
+    bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: null, features });
+    bridge.setHandler('works.list', () => snapshot(1, entry));
+    const dispose = useWorksStore.getState().init(bridge);
+    await vi.waitFor(() => expect(useWorksStore.getState().entries).toHaveLength(1));
+    return { bridge, dispose };
+  }
+
+  const roomBatch = (letters: Message[], patch: Partial<RoomsMailRoom> = {}) =>
+    makeMailRoom('r-01', { prevTop: 9, top: 10, total: 10, letters, ...patch });
+
+  it('событие с prevVersion = held применяется без запросов; слушатель зовётся после применения и снимается', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08'), letter('m-09')], 9, 5));
+    const seen: string[][] = [];
+    const off = useWorksStore.getState().onMail(() => void seen.push(ids()));
+
+    bridge.emit('rooms.mail', makeMailEvent({ version: 6, prevVersion: 5, rooms: [roomBatch([letter('m-10')])], unread: { letters: 1, rooms: { '': 0, 'r-01': 1 } } }));
+
+    expect(ids()).toEqual(['m-08', 'm-09', 'm-10']);
+    expect(pageCalls(bridge)).toEqual([]);
+    expect(seen).toEqual([['m-08', 'm-09', 'm-10']]);
+    expect(compactOf().unread).toEqual({ letters: 0, rooms: { 'r-01': 1 } });
+    off();
+    bridge.emit('rooms.mail', makeMailEvent({ version: 7, prevVersion: 6, rooms: [roomBatch([letter('m-11')], { prevTop: 10, top: 11, total: 11 })] }));
+    expect(ids()).toHaveLength(4);
+    expect(seen).toHaveLength(1);
+    dispose();
+  });
+
+  it('разрыв версии: письмо события применяется, repairWork читает от вершины вниз до наименьшего держимого seq и обновляет readBy старых писем', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08'), letter('m-09')], 9, 5));
+    bridge.setHandler('context.messages', () =>
+      page([letter('m-08', { readBy: { human: 'T' } }), letter('m-09', { readBy: { human: 'T' } }), letter('m-10')]),
+    );
+
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7, rooms: [roomBatch([letter('m-10')])] }));
+    expect(ids()).toEqual(['m-08', 'm-09', 'm-10']);
+    await vi.waitFor(() => expect(useWorksStore.getState().entries[0]!.map.messages[0]?.readBy).toEqual({ human: 'T' }));
+
+    // Без курсора — страница от вершины; m-08 — наименьший держимый номер, страница его достигает, дальше читать нечего.
+    expect(pageCalls(bridge)).toEqual([undefined]);
+    expect(useWorksStore.getState().entries[0]!.map.messages[1]?.readBy).toEqual({ human: 'T' });
+    // Версия 8 держится: следующее событие по цепочке запросов не требует.
+    bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8, rooms: [roomBatch([letter('m-11')], { prevTop: 10, top: 11, total: 11 })] }));
+    expect(pageCalls(bridge)).toHaveLength(1);
+    dispose();
+  });
+
+  it('починка читает и Mail, если окно держит прямые письма; комнату без держимых писем не читает', async () => {
+    const mail = letter('m-07', { roomId: null, to: ['human'] });
+    const { bridge, dispose } = await start(work([letter('m-08'), mail], 9, 5, [makeRoom('r-01', 'К'), makeRoom('r-02', 'Вторая')]));
+    const asked: Array<{ roomId: string | null; cursor?: string }> = [];
+    bridge.setHandler('context.messages', (params) => {
+      asked.push({ roomId: params.roomId, ...(params.cursor === undefined ? {} : { cursor: params.cursor }) });
+      return page([]);
+    });
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7 }));
+    await vi.waitFor(() => expect(asked).toHaveLength(2));
+    expect(asked).toEqual(expect.arrayContaining([{ roomId: 'r-01' }, { roomId: null }]));
+    dispose();
+  });
+
+  it('сбой починки не оставляет окно уверенным: следующее событие снова считается разрывом', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
+    let fail = true;
+    bridge.setHandler('context.messages', () => {
+      if (fail) throw { code: 'internal', message: 'нет' };
+      return page([]);
+    });
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7 }));
+    await tick(0);
+    expect(warn).toHaveBeenCalled();
+    fail = false;
+    bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8 }));
+    await tick(1000);
+    expect(pageCalls(bridge)).toHaveLength(2);
+    warn.mockRestore();
+    dispose();
+  });
+
+  it('событие смешанной пачки, начатой до снимка, применяется без починки', async () => {
+    // Пачка хоста держит prevVersion первой записи, пока в неё вливаются следующие, а снимок версии 7 мог выйти внутри неё:
+    // окно держит 7, событие несёт (5, 8] целиком — пропущенного нет.
+    const { bridge, dispose } = await start(work([letter('m-08'), letter('m-09')], 9, 7));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 5, rooms: [roomBatch([letter('m-10')])], unread: { letters: 1, rooms: { '': 0, 'r-01': 1 } } }));
+
+    expect(ids()).toEqual(['m-08', 'm-09', 'm-10']);
+    expect(compactOf().messages.total).toBe(10);
+    expect(compactOf().unread).toEqual({ letters: 0, rooms: { 'r-01': 1 } });
+    // Версия окна стала 8: следующее событие по цепочке тоже без запросов.
+    bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8, rooms: [roomBatch([letter('m-11')], { prevTop: 10, top: 11, total: 11 })] }));
+    expect(ids()).toHaveLength(4);
+    await settle();
+    expect(pageCalls(bridge)).toEqual([]);
+    dispose();
+  });
+
+  it('событие, начатое после держимой версии, — разрыв', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08'), letter('m-09')], 9, 5));
+    bridge.setHandler('context.messages', () => page([letter('m-08'), letter('m-09'), letter('m-10')]));
+    // prevVersion 6 больше версии окна 5: версию 6 окно не получало ни снимком, ни событием.
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 6, rooms: [roomBatch([letter('m-10')])] }));
+    await vi.waitFor(() => expect(pageCalls(bridge)).toEqual([undefined]));
+    expect(ids()).toEqual(['m-08', 'm-09', 'm-10']);
+    dispose();
+  });
+
+  it('починка одной работы не идёт внахлёст: второй разрыв ждёт первой и даёт одну починку', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const open: Array<() => void> = [];
+    let reading = 0;
+    let most = 0;
+    bridge.setHandler('context.messages', async () => {
+      reading += 1;
+      most = Math.max(most, reading);
+      await new Promise<void>((resolve) => open.push(resolve));
+      reading -= 1;
+      return page([letter('m-08')]);
+    });
+    const gap = (version: number): void => bridge.emit('rooms.mail', makeMailEvent({ version, prevVersion: version - 1 }));
+
+    gap(8);
+    gap(12);
+    gap(16);
+    expect(pageCalls(bridge)).toHaveLength(1);
+
+    open[0]!();
+    await vi.waitFor(() => expect(pageCalls(bridge)).toHaveLength(2));
+    open[1]!();
+    await settle();
+    expect(pageCalls(bridge)).toHaveLength(2);
+    expect(most).toBe(1);
+    dispose();
+  });
+
+  it('неудачная починка забывает версию, даже если после неё пришло событие', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
+    let fail!: (error: unknown) => void;
+    let first = true;
+    bridge.setHandler('context.messages', () => {
+      if (!first) return page([letter('m-08')]);
+      first = false;
+      return new Promise<never>((_resolve, reject) => (fail = reject));
+    });
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7 }));
+    // Пока чтение в пути, цепочка идёт дальше: версия 9 стыкуется с 8, и окно держит 9.
+    bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8 }));
+    fail({ code: 'internal', message: 'нет' });
+    await tick(0);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    // Событие 10 стыкуется с 9, но чтение, начатое на 8, не удалось: окно не знает, чем располагает, — это разрыв.
+    bridge.emit('rooms.mail', makeMailEvent({ version: 10, prevVersion: 9 }));
+    await tick(1000);
+    expect(pageCalls(bridge)).toHaveLength(2);
+    warn.mockRestore();
+    dispose();
+  });
+
+  it('после неудачной починки следующая ждёт отступа', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
+    let fail = true;
+    bridge.setHandler('context.messages', () => {
+      if (fail) throw { code: 'internal', message: 'нет' };
+      return page([letter('m-08')]);
+    });
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7 }));
+    await tick(0);
+    expect(pageCalls(bridge)).toHaveLength(1);
+
+    // Отступ: события применяются (письма, числа), починка не стартует.
+    bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8, rooms: [roomBatch([letter('m-10')], { prevTop: 9, top: 10, total: 10 })] }));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 10, prevVersion: 9, rooms: [roomBatch([letter('m-11')], { prevTop: 10, top: 11, total: 11 })] }));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 11, prevVersion: 10, rooms: [roomBatch([letter('m-12')], { prevTop: 11, top: 12, total: 12 })] }));
+    expect(ids()).toEqual(['m-08', 'm-10', 'm-11', 'm-12']);
+    expect(compactOf().messages.total).toBe(12);
+    await tick(999);
+    expect(pageCalls(bridge)).toHaveLength(1);
+
+    // Отступ кончился: одна починка на все три события.
+    fail = false;
+    await tick(1);
+    expect(pageCalls(bridge)).toHaveLength(2);
+    await tick(60_000);
+    expect(pageCalls(bridge)).toHaveLength(2);
+    warn.mockRestore();
+    dispose();
+  });
+
+  it('отступ удваивается до 30 секунд, а успешная починка сбрасывает его', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
+    let fail = true;
+    bridge.setHandler('context.messages', () => {
+      if (fail) throw { code: 'internal', message: 'нет' };
+      return page([letter('m-08')]);
+    });
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7 }));
+    await tick(0);
+    let calls = 1;
+    let version = 8;
+
+    // Каждая починка падает: отступ перед следующей 1, 2, 4, 8, 16 с, дальше потолок 30 с.
+    for (const wait of [1000, 2000, 4000, 8000, 16_000, 30_000, 30_000]) {
+      version += 1;
+      bridge.emit('rooms.mail', makeMailEvent({ version, prevVersion: version - 1 }));
+      await tick(wait - 1);
+      expect(pageCalls(bridge)).toHaveLength(calls);
+      await tick(1);
+      calls += 1;
+      expect(pageCalls(bridge)).toHaveLength(calls);
+    }
+
+    // Починка удалась после очередного отступа и обнулила счёт: следующий разрыв чинится сразу.
+    fail = false;
+    version += 1;
+    bridge.emit('rooms.mail', makeMailEvent({ version, prevVersion: version - 1 }));
+    await tick(30_000);
+    expect(pageCalls(bridge)).toHaveLength(calls + 1);
+    bridge.emit('rooms.mail', makeMailEvent({ version: version + 5, prevVersion: version + 4 }));
+    await tick(0);
+    expect(pageCalls(bridge)).toHaveLength(calls + 2);
+    warn.mockRestore();
+    dispose();
+  });
+
+  it('разрыв во время починки, которая потом падает, ждёт отступа', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
+    let fail!: (error: unknown) => void;
+    let first = true;
+    bridge.setHandler('context.messages', () => {
+      if (!first) return page([letter('m-08')]);
+      first = false;
+      return new Promise<never>((_resolve, reject) => (fail = reject));
+    });
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7 }));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 12, prevVersion: 11 }));
+    fail({ code: 'internal', message: 'нет' });
+    await tick(999);
+    expect(pageCalls(bridge)).toHaveLength(1);
+    await tick(1);
+    expect(pageCalls(bridge)).toHaveLength(2);
+    warn.mockRestore();
+    dispose();
+  });
+
+  it('dispose снимает отложенную починку', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
+    bridge.setHandler('context.messages', () => {
+      throw { code: 'internal', message: 'нет' };
+    });
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7 }));
+    await tick(0);
+    bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8 }));
+    expect(vi.getTimerCount()).toBe(1);
+
+    dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    await tick(60_000);
+    expect(pageCalls(bridge)).toHaveLength(1);
+    warn.mockRestore();
+  });
+
+  it('держимый диапазон больше потолка страниц: письма вершины доходят, починка — сбой, и следующее событие читает снова', async () => {
+    const top = 100 * (MAIL_PAGES_MAX + 5);
+    const { bridge, dispose } = await start(work([letter('m-1'), letter('m-2')], 2, 5));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
+    // Хост листает комнату от вершины вниз по сотне писем: курсор `before:N` называет номер.
+    bridge.setHandler('context.messages', (params) => {
+      const below = params.cursor === undefined ? top + 1 : Number(params.cursor.slice('before:'.length));
+      const from = Math.max(1, below - 100);
+      const messages = Array.from({ length: below - from }, (_, index) => letter(`m-${from + index}`));
+      return { messages, page: { total: top, returned: messages.length, complete: from === 1, next: from === 1 ? null : `before:${from}`, bytes: 1, cut: 0 } };
+    });
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7, rooms: [roomBatch([letter(`m-${top}`)], { prevTop: 2, top, total: top })] }));
+    await tick(0);
+    expect(warn).toHaveBeenCalled();
+
+    // Потолок обрезал старый конец: самые новые письма пришли, дыра осталась внизу, и окно не считает себя починенным.
+    expect(pageCalls(bridge)).toHaveLength(MAIL_PAGES_MAX);
+    expect(ids()).toContain(`m-${top - 1}`);
+    expect(ids()).toContain(`m-${top - 100 * MAIL_PAGES_MAX + 1}`);
+    expect(ids()).not.toContain(`m-${top - 100 * MAIL_PAGES_MAX}`);
+    bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8, rooms: [roomBatch([letter(`m-${top + 1}`)], { prevTop: top, top: top + 1, total: top + 1 })] }));
+    await tick(1000);
+    expect(pageCalls(bridge)).toHaveLength(2 * MAIL_PAGES_MAX);
+    warn.mockRestore();
+    dispose();
+  });
+
+  it('комната, которую починка уже не нашла на хосте (not_found), — не сбой', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    bridge.setHandler('context.messages', () => {
+      throw { code: 'not_found', message: 'room r-01 does not exist' };
+    });
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7 }));
+    await vi.waitFor(() => expect(pageCalls(bridge)).toHaveLength(1));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8 }));
+    expect(pageCalls(bridge)).toHaveLength(1);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+    dispose();
+  });
+
+  it('снимок без версии: окно не знает, чем располагает, и первое событие считает разрывом, а дальше версия известна', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, undefined));
+    bridge.setHandler('context.messages', () => page([letter('m-08')]));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 6, prevVersion: 5, rooms: [roomBatch([letter('m-09')], { prevTop: 8, top: 9, total: 9 })] }));
+    await vi.waitFor(() => expect(pageCalls(bridge)).toEqual([undefined]));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 7, prevVersion: 6, rooms: [roomBatch([letter('m-10')], { prevTop: 9, top: 10, total: 10 })] }));
+    expect(pageCalls(bridge)).toHaveLength(1);
+    expect(ids()).toEqual(['m-08', 'm-09', 'm-10']);
+    dispose();
+  });
+
+  it('версия сходится, а верх комнаты у окна ниже prevTop: followRoom дочитывает от вершины вниз до своего верха', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08'), letter('m-09')], 9, 5));
+    bridge.setHandler('context.messages', () => page([letter('m-10'), letter('m-11'), letter('m-12')]));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 6, prevVersion: 5, rooms: [roomBatch([letter('m-12')], { prevTop: 11, top: 12, total: 12 })] }));
+    await vi.waitFor(() => expect(ids()).toEqual(['m-08', 'm-09', 'm-10', 'm-11', 'm-12']));
+    expect(pageCalls(bridge)).toEqual([undefined]);
+    dispose();
+  });
+
+  it('reread: держимая комната читается с начала держимого, чужая и пустая — нет', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5, [makeRoom('r-01', 'К'), makeRoom('r-02', 'Вторая')]));
+    bridge.setHandler('context.messages', () => page([letter('m-08', { readBy: { human: 'T' } })]));
+    bridge.emit(
+      'rooms.mail',
+      makeMailEvent({
+        version: 6,
+        prevVersion: 5,
+        rooms: [makeMailRoom('r-01', { prevTop: 8, top: 8, total: 8, reread: true }), makeMailRoom('r-02', { prevTop: 0, top: 0, total: 0, reread: true })],
+      }),
+    );
+    await vi.waitFor(() => expect(useWorksStore.getState().entries[0]!.map.messages[0]?.readBy).toEqual({ human: 'T' }));
+    expect(pageCalls(bridge)).toEqual([undefined]);
+    dispose();
+  });
+
+  // Смешанная запись: снимок её версии вышел раньше события, поэтому событие (5, 6] приходит устаревшим по версии, а
+  // письма и отметки комнат, урезанных потолком кадра или склеенных для медленного окна, несёт только `reread` (находка I1).
+  it('устаревшее событие с reread у держимой комнаты дочитывает её', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 6, [makeRoom('r-01', 'К'), makeRoom('r-02', 'Вторая')]));
+    bridge.setHandler('context.messages', () => page([letter('m-08', { readBy: { human: 'T' } })]));
+    bridge.emit(
+      'rooms.mail',
+      makeMailEvent({
+        version: 6,
+        prevVersion: 5,
+        rooms: [makeMailRoom('r-01', { prevTop: 8, top: 8, total: 8, reread: true }), makeMailRoom('r-02', { prevTop: 0, top: 0, total: 0, reread: true })],
+      }),
+    );
+    await vi.waitFor(() => expect(useWorksStore.getState().entries[0]!.map.messages[0]?.readBy).toEqual({ human: 'T' }));
+    // Держимая комната прочитана с начала держимого, чужая — нет; разрыва нет, и починка работы не идёт.
+    expect(pageCalls(bridge)).toEqual([undefined]);
+    dispose();
+  });
+
+  it('устаревшее событие, чьи письма окно не дослало (верх ниже prevTop), дочитывается от вершины вниз', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08'), letter('m-09')], 9, 6));
+    bridge.setHandler('context.messages', () => page([letter('m-10'), letter('m-11'), letter('m-12')]));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 6, prevVersion: 5, rooms: [roomBatch([letter('m-12')], { prevTop: 11, top: 12, total: 12 })] }));
+    await vi.waitFor(() => expect(ids()).toEqual(['m-08', 'm-09', 'm-10', 'm-11', 'm-12']));
+    expect(pageCalls(bridge)).toEqual([undefined]);
+    dispose();
+  });
+
+  it('устаревшее событие с reread перечитывает комнату, но числа окна не трогает', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 9));
+    bridge.setHandler('context.messages', () => page([letter('m-08')]));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 7, rooms: [makeMailRoom('r-01', { prevTop: 8, top: 8, total: 8, reread: true })], unread: { letters: 5, rooms: { 'r-01': 5 } } }));
+    await vi.waitFor(() => expect(pageCalls(bridge)).toEqual([undefined]));
+    expect(compactOf().unread).toEqual({ letters: 0, rooms: {} });
+    dispose();
+  });
+
+  it('событие раньше снимка с комнатой ждёт снимка этой работы с version >= версии события и применяется', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const delivered: string[][] = [];
+    listen((event) => void delivered.push(event.rooms.map((room) => room.roomId ?? 'direct')));
+    bridge.emit(
+      'rooms.mail',
+      makeMailEvent({ version: 6, prevVersion: 5, rooms: [makeMailRoom('r-02', { prevTop: 0, top: 11, total: 1, letters: [letter('m-11', { roomId: 'r-02' })] })] }),
+    );
+    expect(ids()).toEqual(['m-08']);
+
+    // Снимок, собранный до записи (version 5) и без комнаты: ждать дальше.
+    bridge.emit('works.changed', snapshot(2, work([letter('m-08')], 8, 5)));
+    expect(ids()).toEqual(['m-08']);
+    expect(delivered).toEqual([]);
+
+    // Снимок записи: комната есть — событие применяется.
+    bridge.emit('works.changed', snapshot(3, work([letter('m-08')], 8, 6, [makeRoom('r-01', 'К'), makeRoom('r-02', 'Вторая')])));
+    expect(ids()).toEqual(['m-08', 'm-11']);
+    expect(delivered).toEqual([['r-02']]);
+    expect(pageCalls(bridge)).toEqual([]);
+    dispose();
+  });
+
+  it('события работы идут по порядку: пока первое ждёт снимка, следующее не обгоняет его', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    const delivered: number[] = [];
+    listen((event) => void delivered.push(event.version));
+    const second = [makeRoom('r-01', 'К'), makeRoom('r-02', 'Вторая')];
+    bridge.emit(
+      'rooms.mail',
+      makeMailEvent({ version: 6, prevVersion: 5, rooms: [makeMailRoom('r-02', { prevTop: 0, top: 11, total: 1, letters: [letter('m-11', { roomId: 'r-02' })] })] }),
+    );
+    bridge.emit('rooms.mail', makeMailEvent({ version: 7, prevVersion: 6, rooms: [roomBatch([letter('m-12')], { prevTop: 8, top: 12, total: 9 })] }));
+    expect(delivered).toEqual([]);
+    expect(ids()).toEqual(['m-08']);
+
+    bridge.emit('works.changed', snapshot(2, work([letter('m-08')], 8, 7, second)));
+    expect(delivered).toEqual([6, 7]);
+    expect(ids()).toEqual(['m-08', 'm-11', 'm-12']);
+    dispose();
+  });
+
+  it('очередь ждущих событий ограничена: самые старые теряются, потерянное звено чинится как разрыв версии', async () => {
+    const { bridge, dispose } = await start(work([], 0, 5));
+    const delivered: number[] = [];
+    listen((event) => void delivered.push(event.version));
+    // Работы `w-02` в снимке нет: её события ждут. Их больше предела — сохраняются последние.
+    for (let version = 6; version <= 45; version += 1) {
+      bridge.emit('rooms.mail', makeMailEvent({ workId: 'w-02', version, prevVersion: version - 1, rooms: [makeMailRoom(null, { letters: [letter(`m-${version}`, { roomId: null })] })] }));
+    }
+    expect(delivered).toEqual([]);
+    bridge.emit('works.changed', snapshot(2, work([], 0, 5), { ...makeWork('w-02'), version: 5 }));
+    expect(delivered).toEqual(Array.from({ length: 32 }, (_, at) => 14 + at));
+    // Первая из оставшихся (14) не сходится с версией окна (5): разрыв, но держимых писем нет — читать нечего.
+    expect(pageCalls(bridge)).toEqual([]);
+    dispose();
+  });
+
+  it('событие удалённой комнаты выбрасывается: сразу, если снимок не старее события, и после снимка, если ждало', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 7));
+    const delivered = vi.fn();
+    listen(delivered);
+    const ghost = (version: number, prevVersion: number) =>
+      makeMailEvent({ version, prevVersion, rooms: [makeMailRoom('r-03', { prevTop: 0, top: 11, total: 1, letters: [letter('m-11', { roomId: 'r-03' })] })] });
+
+    // Снимок версии 7 уже свежее события 7: комнаты в нём нет, значит, она удалена той же записью.
+    bridge.emit('rooms.mail', ghost(7, 6));
+    expect(ids()).toEqual(['m-08']);
+    expect(delivered).not.toHaveBeenCalled();
+
+    // Событие 9 снимок версии 7 ещё не покрывает: ждёт. Снимок 9 комнаты не принёс — событие выброшено, комната не воскресла.
+    bridge.emit('rooms.mail', ghost(9, 8));
+    expect(ids()).toEqual(['m-08']);
+    bridge.emit('works.changed', snapshot(2, work([letter('m-08')], 8, 9)));
+    expect(ids()).toEqual(['m-08']);
+    expect(delivered).not.toHaveBeenCalled();
+    // Очередь освободилась: следующее событие идёт своим путём.
+    bridge.emit('rooms.mail', makeMailEvent({ version: 10, prevVersion: 9, rooms: [roomBatch([letter('m-09')], { prevTop: 8, top: 9, total: 9 })] }));
+    expect(ids()).toEqual(['m-08', 'm-09']);
+    expect(pageCalls(bridge)).toEqual([]);
+    dispose();
+  });
+
+  it('числа присваиваются, а не прибавляются: два одинаковых события дают те же числа', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08'), letter('m-09')], 9, 5));
+    const event = makeMailEvent({ version: 6, prevVersion: 5, rooms: [roomBatch([letter('m-10')])], unread: { letters: 4, rooms: { '': 1, 'r-01': 3 } } });
+
+    bridge.emit('rooms.mail', event);
+    const first = structuredClone(compactOf());
+    bridge.emit('rooms.mail', event);
+
+    expect(compactOf()).toEqual(first);
+    expect(compactOf().unread).toEqual({ letters: 1, rooms: { 'r-01': 3 } });
+    expect(compactOf().messages.total).toBe(10);
+    expect(ids()).toEqual(['m-08', 'm-09', 'm-10']);
+
+    // Следующее событие ставит свои числа, а не прибавляет к прежним.
+    bridge.emit(
+      'rooms.mail',
+      makeMailEvent({ version: 7, prevVersion: 6, rooms: [roomBatch([letter('m-11')], { prevTop: 10, top: 11, total: 11 })], unread: { letters: 4, rooms: { '': 1, 'r-01': 3 } } }),
+    );
+    expect(compactOf().unread).toEqual({ letters: 1, rooms: { 'r-01': 3 } });
+    expect(compactOf().messages.total).toBe(11);
+    dispose();
+  });
+
+  it('отметка человека во время события в пути: итог равен событию, запоздалый повтор прежнего события его не откатывает', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08'), letter('m-09')], 9, 5));
+    const arrived = makeMailEvent({ version: 6, prevVersion: 5, rooms: [roomBatch([letter('m-10')])], unread: { letters: 1, rooms: { '': 0, 'r-01': 1 } } });
+    const marked = makeMailEvent({
+      version: 7,
+      prevVersion: 6,
+      rooms: [makeMailRoom('r-01', { prevTop: 10, top: 10, total: 10, reads: [{ id: 'm-10', reader: 'human', at: 'T' }] })],
+      unread: { letters: 0, rooms: {} },
+    });
+
+    bridge.emit('rooms.mail', arrived);
+    bridge.emit('rooms.mail', marked);
+    expect(useWorksStore.getState().entries[0]!.map.messages.at(-1)?.readBy).toEqual({ human: 'T' });
+    expect(compactOf().unread).toEqual({ letters: 0, rooms: {} });
+
+    bridge.emit('rooms.mail', arrived);
+    expect(useWorksStore.getState().entries[0]!.map.messages.at(-1)?.readBy).toEqual({ human: 'T' });
+    expect(compactOf().unread).toEqual({ letters: 0, rooms: {} });
+    expect(ids()).toEqual(['m-08', 'm-09', 'm-10']);
+    expect(pageCalls(bridge)).toEqual([]);
+    dispose();
+  });
+
+  it('снимок новее события: числа запоздавшего события снимок не откатывают, письма и отметки сливаются', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 9));
+    bridge.emit(
+      'rooms.mail',
+      makeMailEvent({ version: 8, prevVersion: 7, rooms: [roomBatch([letter('m-09')], { prevTop: 8, top: 9, total: 9 })], unread: { letters: 2, rooms: { '': 0, 'r-01': 2 } } }),
+    );
+    expect(compactOf().unread).toEqual({ letters: 0, rooms: {} });
+    expect(compactOf().messages.total).toBe(8);
+    expect(ids()).toEqual(['m-08', 'm-09']);
+    expect(pageCalls(bridge)).toEqual([]);
+    dispose();
+  });
+
+  it('прежний хост без rooms-mail в status.features: событие не читается, окно живёт по works.changed как раньше', async () => {
+    for (const features of [null, ['compact-works']]) {
+      useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
+      const { bridge, dispose } = await start(work([letter('m-08')], 8, 5), features);
+      const delivered = vi.fn();
+      const off = useWorksStore.getState().onMail(delivered);
+      bridge.emit('rooms.mail', makeMailEvent({ version: 6, prevVersion: 5, rooms: [roomBatch([letter('m-09')], { prevTop: 8, top: 9, total: 9 })] }));
+      expect(ids()).toEqual(['m-08']);
+      expect(delivered).not.toHaveBeenCalled();
+      expect(pageCalls(bridge)).toEqual([]);
+      bridge.emit('works.changed', snapshot(2, work([letter('m-08'), letter('m-09')], 9, 6)));
+      expect(ids()).toEqual(['m-08', 'm-09']);
+      off();
+      dispose();
+    }
+  });
+
+  it('dispose снимает подписку на rooms.mail', async () => {
+    const { bridge, dispose } = await start(work([letter('m-08')], 8, 5));
+    dispose();
+    bridge.emit('rooms.mail', makeMailEvent({ version: 6, prevVersion: 5, rooms: [roomBatch([letter('m-09')], { prevTop: 8, top: 9, total: 9 })] }));
+    expect(ids()).toEqual(['m-08']);
+  });
+
+  it('страница починки разрыва встаёт в карту свежими копиями: отметка прочтения прибавляется, другая работа не затронута', async () => {
+    const mine = work([letter('m-08', { readBy: {} })], 8, 5);
+    const other: WindowWorkEntry = { ...mine, map: { ...mine.map, work: { ...mine.map.work, id: 'w-02' } } };
+    const bridge = createFakeBridge();
+    bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: null, features: [ROOMS_MAIL_FEATURE] });
+    bridge.setHandler('works.list', () => snapshot(1, mine, other));
+    const dispose = useWorksStore.getState().init(bridge);
+    await vi.waitFor(() => expect(useWorksStore.getState().entries).toHaveLength(2));
+    // Хост отдаёт страницу с отметкой человека на m-08 и новым m-09; событие начинается после держимой версии — разрыв.
+    bridge.setHandler('context.messages', () => page([letter('m-08', { readBy: { human: 'T' } }), letter('m-09')]));
+    bridge.emit('rooms.mail', makeMailEvent({ version: 8, prevVersion: 6, rooms: [roomBatch([letter('m-09')], { prevTop: 8, top: 9, total: 9 })] }));
+
+    const readBys = (index: number): Array<Message['readBy']> =>
+      useWorksStore.getState().entries[index]!.map.messages.map((message) => message.readBy);
+    await vi.waitFor(() => expect(readBys(0)).toEqual([{ human: 'T' }, {}]));
+    expect(pageCalls(bridge)).toEqual([undefined]);
+    expect(ids()).toEqual(['m-08', 'm-09']);
+    expect(useWorksStore.getState().entries[1]!.map.messages.map((message) => message.id)).toEqual(['m-08']);
+    expect(readBys(1)).toEqual([{}]);
+    dispose();
   });
 });

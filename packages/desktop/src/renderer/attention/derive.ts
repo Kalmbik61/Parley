@@ -7,9 +7,10 @@
  * поэтому считается здесь своими функциями, а не через `recipientsOf`.
  */
 
-import type { Message, SessionNeed, WindowWorkEntry, WindowWorkMap } from '@parley/core';
+import type { MapCompactMail, Message, SessionNeed, WindowWorkEntry, WindowWorkMap } from '@parley/core';
 import {
   ATTENTION_RANK,
+  humanDecisionOutcome,
   humanUnreadLetters,
   humanUnreadMentions as coreHumanUnreadMentions,
   isHumanMention as coreIsHumanMention,
@@ -102,10 +103,22 @@ export function mailWaitText(reason: MailWait | null, need: SessionNeed | null, 
   return known[reason] ?? S.rooms.mailWaitUnknown;
 }
 
-// Те же литералы, что `RETURNED_LETTER` и `ACCEPTED_LETTER` в `core/work/proposals.ts`: из core рендерер берёт только
-// типы. Сходство держит страж `main/decision-letters-sync.test.ts`.
-const RETURNED_LETTER = 'Returned for rework';
-const ACCEPTED_LETTER = 'Decision accepted.';
+/**
+ * Снимок без писем (`compact` версии 2, спека rooms.mail 6.8): числа внимания берутся из него, а письма окна — только
+ * те, что оно держит, — для них не годятся. У снимка прежнего хоста (версия 1 или без `compact`) — `null`: там письма хвостом.
+ */
+function mailCompact(map: WindowWorkMap): MapCompactMail | null {
+  return map.compact?.version === 2 ? map.compact : null;
+}
+
+/**
+ * Непрочитанные человеком прямые письма (Mail): у снимка без писем — число хоста по ключу прямых писем (`unread.rooms['']`),
+ * иначе письма карты. `unread.letters` версии 2 — всё непрочитанное по работе, включая сообщения комнат, и сюда не годится.
+ */
+export function humanUnreadDirect(map: WindowWorkMap): number {
+  const meta = mailCompact(map);
+  return meta === null ? humanUnreadLetters(map).length : (meta.unread.rooms[''] ?? 0);
+}
 
 /**
  * Последний ответ человека на решение комнаты — `Return for rework` (спека окна 2026-09-29, 1.10)? Слот `proposal`
@@ -113,15 +126,17 @@ const ACCEPTED_LETTER = 'Decision accepted.';
  * rework: …` или `Decision accepted.`. Решает самое позднее из двух: возврат, за которым решение приняли, следующее
  * решение «переделанным» не делает. Свои слова человека в комнате (без этих двух начал) в счёт не идут. Ленту читаем
  * в момент нового решения, а не ведём по снимкам окна: окно, открытое между возвратом и новым решением, тоже знает.
+ *
+ * Снимок без писем несёт итог последнего ответа готовым (`compact.rooms[id].decision`, его считает хост по тем же словам
+ * `humanDecisionOutcome` и ведёт событие `rooms.mail`): письма окна — только держимые, и ответ среди них мог не оказаться.
  */
 export function roomDecisionReturned(map: WindowWorkMap, roomId: string): boolean {
+  const meta = mailCompact(map);
+  if (meta !== null) return meta.rooms[roomId]?.decision === 'returned';
   const answer = map.messages.findLast(
-    (message) =>
-      message.roomId === roomId &&
-      message.from === HUMAN &&
-      (message.text.startsWith(RETURNED_LETTER) || message.text === ACCEPTED_LETTER),
+    (message) => message.roomId === roomId && message.from === HUMAN && humanDecisionOutcome(message.text) !== null,
   );
-  return answer?.text.startsWith(RETURNED_LETTER) ?? false;
+  return answer !== undefined && humanDecisionOutcome(answer.text) === 'returned';
 }
 
 /**
@@ -132,9 +147,14 @@ export function isHumanMention(message: Message): boolean {
   return coreIsHumanMention(message, hasHumanMention);
 }
 
-/** Упоминания человека в комнатах с isHumanUnread, без архивных комнат (правило core, разбор Markdown окна). */
+/**
+ * Упоминания человека в комнатах с isHumanUnread, без архивных комнат (правило core, разбор Markdown окна). Снимок без
+ * писем несёт не упоминания, а кандидатов — непрочитанные письма, прошедшие грубую проверку хоста (`mentionCandidates`):
+ * точное правило «@вы» применяет здесь окно, чтобы значок, чип и уведомление совпадали (спека rooms.mail 6.3).
+ */
 export function humanUnreadMentions(map: WindowWorkMap): Message[] {
-  return coreHumanUnreadMentions(map, hasHumanMention);
+  const meta = mailCompact(map);
+  return coreHumanUnreadMentions(meta === null ? map : { messages: meta.mentionCandidates, rooms: map.rooms }, hasHumanMention);
 }
 
 /** Куда ведёт кнопка «для тебя» карточки: в почту — письма важнее — или в комнату самого позднего упоминания. */
@@ -146,7 +166,7 @@ export type ForYouTarget = { kind: 'mail' } | { kind: 'room'; roomId: string };
  * упоминание там не найти.
  */
 export function forYouTarget(map: WindowWorkMap): ForYouTarget | null {
-  if (humanUnreadLetters(map).length > 0) return { kind: 'mail' };
+  if (humanUnreadDirect(map) > 0) return { kind: 'mail' };
   const roomId = humanUnreadMentions(map).at(-1)?.roomId ?? null;
   return roomId === null ? null : { kind: 'room', roomId };
 }
@@ -198,9 +218,18 @@ export function workAttention(entry: WindowWorkEntry, activity: Record<string, A
   // Лента архивной комнаты — не событие работы: строка «Room archived by the human.» не поднимает карточку в сайдбаре
   // и не меняет время в её заголовке (хост пишет архивацию без `touch`, чтобы карточка не подпрыгивала).
   const archived = archivedRoomIds(map);
-  for (const message of map.messages) {
-    if (message.roomId !== null && archived.has(message.roomId)) continue;
-    lastEventAt = later(lastEventAt, message.at);
+  const meta = mailCompact(map);
+  if (meta === null) {
+    for (const message of map.messages) {
+      if (message.roomId !== null && archived.has(message.roomId)) continue;
+      lastEventAt = later(lastEventAt, message.at);
+    }
+  } else {
+    // Снимок без писем: время самого нового письма каждой комнаты и прямых писем (ключ `''`) приходит готовым.
+    for (const [key, room] of Object.entries(meta.rooms)) {
+      if (key !== '' && archived.has(key)) continue;
+      lastEventAt = later(lastEventAt, room.lastAt);
+    }
   }
 
   // Комната с ждущим решением — «нужен ты», ранг 4, как blocked (спека окна 2026-09-29, 2.7): в счёт
@@ -215,8 +244,11 @@ export function workAttention(entry: WindowWorkEntry, activity: Record<string, A
   // Письма идут без `roomId`, упоминания — с ним: множества не пересекаются, и одно сообщение считается один раз.
   const mentions = humanUnreadMentions(map);
   // Прямых писем в компактной карте — точное число из `compact.unread`; упоминания считаются по письмам окна: все
-  // непрочитанные в нём есть (до 200), а за ними счётчик комнаты и так точный.
-  const humanUnread = (map.compact?.unread.letters ?? humanUnreadLetters(map).length) + mentions.length;
+  // непрочитанные в нём есть (до 200), а за ними счётчик комнаты и так точный. У снимка без писем прямые письма —
+  // `unread.rooms['']` (`unread.letters` там — всё непрочитанное по работе, а сообщения комнат значок не считает, пока
+  // в них не назвали человека), упоминания — кандидаты хоста после точного правила окна.
+  const direct = meta === null ? (map.compact?.unread.letters ?? humanUnreadLetters(map).length) : humanUnreadDirect(map);
+  const humanUnread = direct + mentions.length;
   // Письмо человеку — ранг 3 (2.7, как `workRank` прототипа): выше работающей и простаивающей работы,
   // ниже blocked и решения. Прежде оно поднимало работу до needs-you (спека Orca-UI 7.1). Упоминание человека в
   // комнате — то же письмо, ему и ранг тот же. Прочие комнаты — фон, а не вызов: их непрочитанное уровень не

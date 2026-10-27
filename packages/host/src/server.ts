@@ -7,6 +7,7 @@ import {
   LineDecoder,
   LineTooLongError,
   PROTOCOL_VERSION,
+  ROOMS_MAIL_FEATURE,
   parseIncoming,
 } from '@parley/protocol';
 import type { MethodName, NotificationName, ResponseMessage } from '@parley/protocol';
@@ -37,8 +38,11 @@ interface HelloParams {
   features?: string[];
 }
 
-/** Что хост умеет сверх протокола 1: окно по этому списку знает, что снимок работ компактный и что лента Chat есть у Codex. */
-const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE];
+/**
+ * Что хост умеет сверх протокола 1: окно по этому списку знает, что снимок работ компактный, что лента Chat есть у Codex и
+ * что письма приходят событием `rooms.mail`, а не вместе со снимком.
+ */
+const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE, ROOMS_MAIL_FEATURE];
 
 /** Пишет один кадр напрямую в сокет — до рукопожатия у соединения ещё нет `Client`. */
 function writeRaw(socket: Socket, message: ResponseMessage): void {

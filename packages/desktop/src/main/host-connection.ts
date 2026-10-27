@@ -13,6 +13,7 @@ import {
   LineTooLongError,
   PROTOCOL_VERSION,
   refKey,
+  ROOMS_MAIL_FEATURE,
   type BrowserAgentOpEvent,
   type BrowserAgentResult,
   type EventData,
@@ -383,9 +384,15 @@ export class HostConnection {
       encodeLine({
         id,
         method: 'hello',
-        // Окно читает компактный снимок работ (P35): письма хвостом, старше — страницами `context.messages`, и исполняет
-        // операции агента над своим браузером (спека браузера 3.7).
-        params: { token, protocol: PROTOCOL_VERSION, client: 'desktop', features: [COMPACT_WORKS_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE)] },
+        // Окно читает компактный снимок работ (P35): письма хвостом, старше — страницами `context.messages`; письма и
+        // отметки прочтения берёт событием `rooms.mail` (спека rooms.mail 6.10); исполняет операции агента над своим
+        // браузером (спека браузера 3.7).
+        params: {
+          token,
+          protocol: PROTOCOL_VERSION,
+          client: 'desktop',
+          features: [COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE)],
+        },
       }),
     );
 

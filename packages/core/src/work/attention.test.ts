@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ATTENTION_RANK,
   humanUnreadLetters,
+  humanDecisionOutcome,
   humanUnreadMentions,
   isHumanMention,
   isHumanUnread,
@@ -11,6 +12,7 @@ import {
   sessionNeed,
 } from './attention.js';
 import type { SessionActivity } from './activity.js';
+import { ACCEPTED_LETTER, RETURNED_LETTER } from './proposals.js';
 import type { SessionNeed } from './stuck.js';
 import type { Message, Room, WorkMap, WorkSession } from './types.js';
 
@@ -163,5 +165,25 @@ describe('plainHumanMention', () => {
   it('адрес почты и слово длиннее — не упоминание', () => {
     expect(plainHumanMention('mail@humanity.org')).toBe(false);
     expect(plainHumanMention('@humanoid')).toBe(false);
+  });
+});
+
+describe('humanDecisionOutcome', () => {
+  it('"Decision accepted." — accepted, "Returned for rework…" с заметкой и без — returned, прочее — null', () => {
+    expect(humanDecisionOutcome('Decision accepted.')).toBe('accepted');
+    expect(humanDecisionOutcome('Returned for rework.')).toBe('returned');
+    expect(humanDecisionOutcome('Returned for rework: add tests')).toBe('returned');
+    expect(humanDecisionOutcome('просто слова')).toBeNull();
+    expect(humanDecisionOutcome('Completion accepted.')).toBeNull();
+    // Принятие — только полное слово письма, возврат — его начало, как у окна.
+    expect(humanDecisionOutcome('Decision accepted. Thanks!')).toBeNull();
+    expect(humanDecisionOutcome('Please: Returned for rework')).toBeNull();
+    expect(humanDecisionOutcome('')).toBeNull();
+  });
+
+  it('слова те же, что пишет resolveProposal: ACCEPTED_LETTER и RETURNED_LETTER из proposals.ts', () => {
+    expect(humanDecisionOutcome(ACCEPTED_LETTER)).toBe('accepted');
+    expect(humanDecisionOutcome(`${RETURNED_LETTER}.`)).toBe('returned');
+    expect(humanDecisionOutcome(`${RETURNED_LETTER}: заметка`)).toBe('returned');
   });
 });

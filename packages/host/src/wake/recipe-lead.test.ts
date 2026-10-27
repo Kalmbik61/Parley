@@ -50,6 +50,7 @@ async function rig(workId: string) {
     snapshot: () => ({ entries: [{ projectPath: project, map }], branches: {} }),
     entry: () => ({ projectPath: project, map }),
     onChange: (fn: () => void) => { listener = fn; return () => {}; },
+    onMail: () => () => {},
   } as unknown as WorksService;
   const activity = { onChange: () => () => {}, mailWaiting: vi.fn() } as unknown as ActivityService;
   const pty = { get: () => undefined, on: () => () => {} } as unknown as PtyManager;

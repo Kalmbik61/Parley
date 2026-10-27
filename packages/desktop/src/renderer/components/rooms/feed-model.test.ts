@@ -45,8 +45,8 @@ function entryOf(patch: { room?: Room; sessions?: WorkSession[]; messages?: Mess
   });
 }
 
-function build(entry: WindowWorkEntry, activity = {}): RoomModel {
-  const model = buildRoomModel({ entry, roomId: 'r-01', providers: PROVIDERS, activity });
+function build(entry: WindowWorkEntry, activity = {}, quoted?: Readonly<Record<string, Message | null>>): RoomModel {
+  const model = buildRoomModel({ entry, roomId: 'r-01', providers: PROVIDERS, activity, ...(quoted === undefined ? {} : { quoted }) });
   if (model === null) throw new Error('комната не найдена');
   return model;
 }
@@ -625,6 +625,32 @@ describe('buildRoomModel — ответы: Message.replyTo (Parley 0.3.0)', () =
       { id: 'm-1', from: '', excerpt: '', found: false },
       { id: 'm-2', from: '', excerpt: '', found: false },
       { id: 'm-99', from: '', excerpt: '', found: false },
+    ]);
+  });
+
+  it('оригинал, которого окно не держит, берётся из подгруженных по id; письмо чужой комнаты, null и неспрошенное — found: false', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-30', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:00:00.000Z' }),
+        message('m-31', { from: 's-02', replyTo: 'm-2', at: '2026-09-27T09:01:00.000Z' }),
+        message('m-32', { from: 's-02', replyTo: 'm-3', at: '2026-09-27T09:02:00.000Z' }),
+        message('m-33', { from: 's-02', replyTo: 'm-4', at: '2026-09-27T09:03:00.000Z' }),
+        message('m-34', { from: 's-02', replyTo: 'm-30', at: '2026-09-27T09:04:00.000Z' }),
+      ],
+    });
+    const quoted = {
+      'm-1': message('m-1', { text: 'Старый вопрос' }),
+      'm-2': message('m-2', { roomId: 'r-02', text: 'Из чужой комнаты' }),
+      'm-3': null,
+      // Держимое письмо берётся из карты, а не из подгруженного.
+      'm-30': message('m-30', { text: 'подгруженная копия' }),
+    };
+    expect(build(entry, {}, quoted).messages.map((item) => item.reply)).toEqual([
+      { id: 'm-1', from: 'You', excerpt: 'Старый вопрос', found: true },
+      { id: 'm-2', from: '', excerpt: '', found: false },
+      { id: 'm-3', from: '', excerpt: '', found: false },
+      { id: 'm-4', from: '', excerpt: '', found: false },
+      expect.objectContaining({ id: 'm-30', found: true, excerpt: 'text' }),
     ]);
   });
 

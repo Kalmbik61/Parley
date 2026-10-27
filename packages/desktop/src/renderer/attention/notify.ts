@@ -23,9 +23,9 @@
  * У остальных провайдеров без карточки уведомление остаётся.
  */
 
-import type { Proposal, Room, SessionActivity, SessionNeed, WindowWorkEntry, WorkSession } from '@parley/core';
+import type { Message, Proposal, Room, SessionActivity, SessionNeed, WindowWorkEntry, WorkSession } from '@parley/core';
 import { localClock, needReason } from '@parley/core/stuck';
-import { refKey, type HostNotice, type SessionRef } from '@parley/protocol';
+import { refKey, type HostNotice, type RoomsMailEvent, type SessionRef } from '@parley/protocol';
 import { clampNoteText } from '../../shared/app-note.js';
 import type { AppNote, FocusTarget, ParleyBridge } from '../../shared/bridge.js';
 import { noticeText, providerName, S } from '../../shared/strings.js';
@@ -39,6 +39,7 @@ import { projectName } from '../lib/project-name.js';
 import { hostMethods } from '../lib/capabilities.js';
 import { isRoomArchived } from '../lib/room-archive.js';
 import { workKey } from '../lib/tree-order.js';
+import { messageSeq } from '../lib/window-merge.js';
 import { useActivityStore } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
@@ -47,6 +48,8 @@ import { useWorksStore } from '../store/works.js';
 import {
   humanUnreadLetters,
   humanUnreadMentions,
+  isHumanMention,
+  isHumanUnread,
   roomAwaitsDecision,
   roomDecisionReturned,
   sessionAttention,
@@ -139,6 +142,84 @@ function roomOf(entry: WindowWorkEntry, session: WorkSession): Room | undefined 
  */
 const LIVE_SESSION = { lifecycle: 'active' } as WorkSession;
 
+/** Тот же литерал, что `HUMAN` в `core/work/types.ts`: из core рендерер берёт только типы (как в `derive.ts`). */
+const HUMAN = 'human';
+
+/** Ключ базы писем комнаты (`mailTops`): работа и комната; прямые письма — пустой id, как в `compact.rooms` снимка без писем. */
+const mailSlot = (key: string, roomId: string | null): string => `${key}\u0000${roomId ?? ''}`;
+
+/** Письма одной комнаты (`null` — прямые): из события `rooms.mail` или из тех, что окно уже держит. */
+interface MailBatch {
+  roomId: string | null;
+  letters: readonly Message[];
+  /** Отметки прочтения, пришедшие вместе с письмами; у держимых писем они уже в `readBy`. */
+  reads: ReadonlyArray<{ id: string; reader: string }>;
+}
+
+/** То, о чём просят внимания среди писем новее базы. */
+interface FreshMail {
+  /** Прямые письма человеку. */
+  letters: Message[];
+  /** Упоминания человека по комнатам. */
+  mentioned: Array<{ room: Room; letters: Message[] }>;
+}
+
+/** Письма, которые окно держит в карте работы (события, страницы починки и открытия комнаты), по комнатам. */
+function heldBatches(entry: WindowWorkEntry): MailBatch[] {
+  const byRoom = new Map<string | null, Message[]>();
+  for (const message of entry.map.messages) {
+    const list = byRoom.get(message.roomId);
+    if (list === undefined) byRoom.set(message.roomId, [message]);
+    else list.push(message);
+  }
+  return [...byRoom].map(([roomId, letters]) => ({ roomId, letters, reads: [] }));
+}
+
+/**
+ * Письма пачек новее базы комнаты (`tops`, спека rooms.mail 6.9): двигает базу до настройки и видимости цели, чтобы
+ * включённое позже уведомление старых писем не повторяло, и отбирает то, что просит внимания, по правилам окна:
+ * прямые письма — `isHumanUnread`, упоминания — ещё и `isHumanMention`, в открытой комнате. Письмо уведомляет один раз,
+ * каким бы путём оно ни пришло — событием или страницей: тот путь, что пришёл первым, подвинул базу, второй молчит.
+ */
+function freshMail(tops: Map<string, number>, key: string, entry: WindowWorkEntry, batches: readonly MailBatch[]): FreshMail {
+  const letters: Message[] = [];
+  const mentioned: Array<{ room: Room; letters: Message[] }> = [];
+  for (const batch of batches) {
+    const slot = mailSlot(key, batch.roomId);
+    const seen = tops.get(slot) ?? 0;
+    const fresh = batch.letters.filter((message) => messageSeq(message) > seen);
+    if (fresh.length === 0) continue;
+    tops.set(slot, fresh.reduce((top, message) => Math.max(top, messageSeq(message)), seen));
+    // Отметка человека в этой же пачке — письмо прочитано, как если бы оно пришло с `readBy.human`.
+    const readByHuman = new Set(batch.reads.filter((read) => read.reader === HUMAN).map((read) => read.id));
+    const unread = fresh.filter((message) => isHumanUnread(message) && !readByHuman.has(message.id));
+    if (batch.roomId === null) {
+      letters.push(...unread);
+      continue;
+    }
+    const room = entry.map.rooms.find((item) => item.id === batch.roomId);
+    // Архивная комната внимания не просит (спека архива комнат, 5.3); комнаты нет в карте — нечем назвать.
+    if (room === undefined || isRoomArchived(room)) continue;
+    const mentions = unread.filter(isHumanMention);
+    if (mentions.length > 0) mentioned.push({ room, letters: mentions });
+  }
+  return { letters, mentioned };
+}
+
+/**
+ * Комнаты события для `freshMail`. Комната с `reread` письма почти не несёт: событие урезано потолком кадра или склеено для
+ * медленного окна, а письма её окно дочитает страницей, только если комнату откроет. Упоминания человека в ней есть в
+ * `mentionCandidates` события — целиком, с текстом, — и уведомляют отсюда: иначе в неоткрытой комнате не уведомил бы никто.
+ */
+function withCandidates(event: RoomsMailEvent): readonly MailBatch[] {
+  return event.rooms.map((room) => {
+    if (room.reread !== true) return room;
+    const held = new Set(room.letters.map((message) => message.id));
+    const extra = event.mentionCandidates.filter((message) => message.roomId === room.roomId && !held.has(message.id));
+    return extra.length === 0 ? room : { ...room, letters: [...room.letters, ...extra] };
+  });
+}
+
 /** Тег решения (1.10): один на комнату — и у уведомления macOS, и у карточки в окне. */
 const decisionTag = (key: string, roomId: string): string => `proposal:${key}:${roomId}`;
 
@@ -160,9 +241,23 @@ export function createAttentionNotifier(deps: NotifyDeps): {
   /**
    * Новые прямые письма человеку (isHumanUnread), новые упоминания человека в комнатах (`@human`, по уведомлению на
    * комнату) и решения ведущих, ждущие человека в комнатах (новое — по новому `id`, переделанное — по выросшему `rev`
-   * или по новому `id` после возврата на доработку); первый снимок — база.
+   * или по новому `id` после возврата на доработку); первый снимок — база. У работы со снимком версии 2 письма в снимке
+   * нет, и по тем же правилам и той же базе (`mailTops`) уведомляют письма новее базы среди держимых окном — дочитанные
+   * страницами после разрыва или `reread`. Базу ставит первый снимок работы, которая была до запуска уведомителя, — и у
+   * той, что появилась в позднейшем снимке (восстановлена из архива, частичный первый снимок): её письма, что уже были,
+   * не уведомляют. У работы, созданной после запуска, базы нет: первое письмо смешанной записи, которое снимок уже
+   * считает, уведомляет по событию.
    */
   onWorks(entries: readonly WindowWorkEntry[]): void;
+  /**
+   * Письма события `rooms.mail` у работы со снимком без писем (`compact.version === 2`, спека rooms.mail 6.9): прямые письма
+   * человеку и упоминания в комнатах, в том числе в комнате, письма которой окно не держит. Уведомляет только о письмах
+   * новее базы комнаты: базу ставит первый снимок (`top` каждой комнаты), дальше она растёт вместе с письмами, о которых
+   * окно знает. Повтор события и письмо, которое снимок уже покрыл, не уведомляют. Письма, что событие не несёт (`reread`,
+   * разрыв, потерянное событие), а окно дочитало страницами, уведомляет `onWorks` — если они новее базы. Событие раньше
+   * первого снимка — без уведомления. Работа со снимком версии 1 — молчание: её письма уведомляет `onWorks`.
+   */
+  onMail(event: RoomsMailEvent): void;
   /** trust-wait, launch-failed, resume-failed; ref: null или сессии нет в снимке — без уведомления. */
   onHostNotice(notice: HostNotice): void;
 } {
@@ -178,6 +273,26 @@ export function createAttentionNotifier(deps: NotifyDeps): {
    * ещё не было.
    */
   let knownLetters: Set<string> | null = null;
+  /**
+   * У работ со снимком без писем (`compact.version === 2`) снимок письмами не делится, и множества id не из чего собрать:
+   * вместо него — номер самого нового письма, о котором окно знает, по комнате (`workKey` + id комнаты, прямые письма —
+   * пустой id). Первый снимок работы — первый вызов `onWorks`, в котором работа есть, а не только самый первый, — ставит
+   * его по `top` комнат (`seeded`), если работа была до запуска уведомителя (`createdAt` раньше `startedAt`): письма,
+   * что уже были, когда окно узнало о ней, не новость. У работы, созданной после запуска, базы нет — её письма новые,
+   * даже если снимок, пришедший раньше события смешанной записи, уже считает первое. Письма события и письма, что окно
+   * держит (страницы починки), подвигают базу (`freshMail`). Письмо с номером не больше базы — повтор; комнаты без записи
+   * (создана после первого снимка работы) база не держит. Позднейшие снимки базу не двигают: запись только писем и снимок
+   * после неё не должны проглотить уведомление. null — первого снимка ещё не было.
+   */
+  let mailTops: Map<string, number> | null = null;
+  /** Работы со снимком без писем, которые уведомитель уже видел (`workKey`): базу работе ставит только первый снимок, и только старой. */
+  const seeded = new Set<string>();
+  /** Запуск уведомителя: работа с `createdAt` раньше него была до окна; не разобрать дату — считается старой (тихая сторона). */
+  const startedAt = Date.now();
+  const existedBefore = (entry: WindowWorkEntry): boolean => {
+    const created = Date.parse(entry.map.work.createdAt);
+    return Number.isNaN(created) || created < startedAt;
+  };
   /**
    * Решения комнат, о которых окно знает: `workKey` + id комнаты → решение (`id`, `rev`) и ждёт ли оно ещё; null —
    * снимка ещё не было. Записи не удаляются, пока живёт уведомитель: `id` решения не переиспользуется, и работа, на миг
@@ -366,6 +481,53 @@ export function createAttentionNotifier(deps: NotifyDeps): {
     );
   };
 
+  /** Письмо человеку: одно уведомление на работу (тег `mail:<workKey>`), текст — первая строка письма. */
+  const notifyLetter = (entry: WindowWorkEntry, letter: Message): void => {
+    send(
+      {
+        title: S.notifications.mailTitle(workTitleText(entry.map.work.title), letter.kind, sessionTag(letter.from)),
+        body: firstLine(letter.text),
+        tag: `mail:${workKey(entry.projectPath, entry.map.work.id)}`,
+        target: { kind: 'mail', projectPath: entry.projectPath, workId: entry.map.work.id },
+      },
+      'action',
+    );
+  };
+
+  /**
+   * Упоминание человека в комнате: одно уведомление на комнату (тег `mention:<workKey>:<roomId>`), текст — выдержка
+   * (`replyExcerpt`, как у цитаты ответа) из самого позднего нового упоминания. Подписи упоминаний в выдержке — по карте
+   * работы, как у чипов ленты: сессии нет в карте — берётся тег.
+   */
+  const notifyMention = (entry: WindowWorkEntry, room: Room, letter: Message): void => {
+    const { projectPath, map } = entry;
+    const labelOf = (sessionId: string): string | null => {
+      const found = map.sessions.find((candidate) => candidate.id === sessionId);
+      return found === undefined ? null : sessionRowLabel(sessionId, found.label);
+    };
+    send(
+      {
+        title: S.notifications.mentionTitle(sessionTag(letter.from), room.title === '' ? S.rooms.fallbackTitle : room.title),
+        body: replyExcerpt(letter.text, labelOf),
+        tag: `mention:${workKey(projectPath, map.work.id)}:${room.id}`,
+        target: { kind: 'room', projectPath, workId: map.work.id, roomId: room.id },
+      },
+      'action',
+    );
+  };
+
+  /** Пачка — одно уведомление на работу и по одному на комнату: текст — самого позднего письма (как у снимка версии 1). */
+  const announce = (entry: WindowWorkEntry, { letters, mentioned }: FreshMail): void => {
+    const newest = (list: readonly Message[]): Message | undefined =>
+      list.reduce<Message | undefined>((top, message) => (top === undefined || messageSeq(message) > messageSeq(top) ? message : top), undefined);
+    const latest = newest(letters);
+    if (latest !== undefined) notifyLetter(entry, latest);
+    for (const { room, letters: list } of mentioned) {
+      const last = newest(list);
+      if (last !== undefined) notifyMention(entry, room, last);
+    }
+  };
+
   return {
     onActivity(ref, activity) {
       const key = refKey(ref);
@@ -405,9 +567,28 @@ export function createAttentionNotifier(deps: NotifyDeps): {
     },
 
     onWorks(entries) {
+      const tops = mailTops ?? new Map<string, number>();
+      mailTops = tops;
       const current = new Set<string>();
+      // Письма работ со снимком версии 2, которые окно держит и которые новее базы: их принесла страница, а не событие.
+      const held: Array<{ entry: WindowWorkEntry; fresh: FreshMail }> = [];
       for (const entry of entries) {
         const key = workKey(entry.projectPath, entry.map.work.id);
+        const compact = entry.map.compact;
+        // Снимок без писем: базу (`top` каждой комнаты) ставит первый снимок работы (спека rooms.mail 6.9) — и работы,
+        // что появилась позже (восстановлена из архива, частичный первый снимок): её держимые письма не новее базы, и с
+        // номера 1 они не уведомляют. Работа, созданная после запуска, базы не получает: её письма новые, первое из них
+        // снимок мог уже посчитать (смешанная запись), а событие идёт следом. Письма события уведомляет `onMail`. Держимые
+        // письма новее базы двигают её и здесь: первый снимок старой работы молчит, как и у версии 1.
+        if (compact?.version === 2) {
+          const unseen = !seeded.has(key);
+          if (unseen) seeded.add(key);
+          const silent = unseen && existedBefore(entry);
+          if (silent) for (const [roomId, item] of Object.entries(compact.rooms)) tops.set(mailSlot(key, roomId), item.top);
+          const fresh = freshMail(tops, key, entry, heldBatches(entry));
+          if (!silent) held.push({ entry, fresh });
+          continue;
+        }
         for (const message of entry.map.messages) current.add(`${key}\u0000${message.id}`);
       }
       const known = knownLetters;
@@ -416,51 +597,34 @@ export function createAttentionNotifier(deps: NotifyDeps): {
       // Письма и упоминания, которые уже были на старте окна, не уведомляют.
       if (known === null || !deps.prefs().mail) return;
       for (const entry of entries) {
+        if (entry.map.compact?.version === 2) continue;
         const key = workKey(entry.projectPath, entry.map.work.id);
         const fresh = humanUnreadLetters(entry.map).filter((message) => !known.has(`${key}\u0000${message.id}`));
         // Одно уведомление на работу (тег `mail:<workKey>`): новее — последнее письмо.
         const latest = fresh.at(-1);
-        if (latest === undefined) continue;
-        send(
-          {
-            title: S.notifications.mailTitle(workTitleText(entry.map.work.title), latest.kind, sessionTag(latest.from)),
-            body: firstLine(latest.text),
-            tag: `mail:${key}`,
-            target: { kind: 'mail', projectPath: entry.projectPath, workId: entry.map.work.id },
-          },
-          'action',
-        );
+        if (latest !== undefined) notifyLetter(entry, latest);
       }
-      // Упоминания человека в комнатах (`@human`): одно уведомление на комнату (тег `mention:<workKey>:<roomId>`),
-      // текст — выдержка (`replyExcerpt`, как у цитаты ответа) из самого позднего нового упоминания. Настройка та же,
-      // что у писем человеку.
-      for (const { projectPath, map } of entries) {
-        const key = workKey(projectPath, map.work.id);
-        const fresh = humanUnreadMentions(map).filter(
-          (message) => !known.has(`${key}\u0000${message.id}`),
-        );
-        // Подписи упоминаний в выдержке — по карте работы, как у чипов ленты: сессии нет в карте — берётся тег.
-        const labelOf = (sessionId: string): string | null => {
-          const found = map.sessions.find((candidate) => candidate.id === sessionId);
-          return found === undefined ? null : sessionRowLabel(sessionId, found.label);
-        };
-        for (const room of map.rooms) {
+      // Упоминания человека в комнатах (`@human`): одно уведомление на комнату, настройка та же, что у писем человеку.
+      for (const entry of entries) {
+        if (entry.map.compact?.version === 2) continue;
+        const key = workKey(entry.projectPath, entry.map.work.id);
+        const fresh = humanUnreadMentions(entry.map).filter((message) => !known.has(`${key}\u0000${message.id}`));
+        for (const room of entry.map.rooms) {
           const latest = fresh.findLast((message) => message.roomId === room.id);
-          if (latest === undefined) continue;
-          send(
-            {
-              title: S.notifications.mentionTitle(
-                sessionTag(latest.from),
-                room.title === '' ? S.rooms.fallbackTitle : room.title,
-              ),
-              body: replyExcerpt(latest.text, labelOf),
-              tag: `mention:${key}:${room.id}`,
-              target: { kind: 'room', projectPath, workId: map.work.id, roomId: room.id },
-            },
-            'action',
-          );
+          if (latest !== undefined) notifyMention(entry, room, latest);
         }
       }
+      for (const { entry, fresh } of held) announce(entry, fresh);
+    },
+
+    onMail(event) {
+      // Первого снимка не было: письма события уже в нём или придут следом — базы для «новее» нет (первое подключение молчит).
+      if (mailTops === null) return;
+      const entry = deps.entries().find((item) => item.projectPath === event.projectPath && item.map.work.id === event.workId);
+      if (entry === undefined || entry.map.compact?.version !== 2) return;
+      const fresh = freshMail(mailTops, workKey(event.projectPath, event.workId), entry, withCandidates(event));
+      if (!deps.prefs().mail) return;
+      announce(entry, fresh);
     },
 
     onHostNotice(notice) {
@@ -551,10 +715,13 @@ export function wireAttentionNotifications(
   const offWorks = useWorksStore.subscribe((state, prev) => {
     if (state.entries !== prev.entries) notifier.onWorks(state.entries);
   });
+  // Письма окон со снимком без писем приходят событием `rooms.mail`; стор зовёт слушателя после того, как применил его.
+  const offMail = useWorksStore.getState().onMail((event) => notifier.onMail(event));
   const offNotice = bridge.on('host.notice', (notice) => notifier.onHostNotice(notice));
   return () => {
     offActivity();
     offWorks();
+    offMail();
     offNotice();
   };
 }

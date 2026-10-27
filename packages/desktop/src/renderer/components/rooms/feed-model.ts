@@ -22,7 +22,8 @@
  *
  * Ответ (`Message.replyTo`, Parley 0.3.0): у сообщения-ответа модель несёт цитату — подпись и выдержку оригинала
  * (`replyExcerpt`: тот же разбор Markdown, что у ленты, и то же правило `@human` по отправителю — у сообщения человека
- * он остаётся текстом), если он лежит в этой же комнате, и пометку «оригинала нет», если нет.
+ * он остаётся текстом), если он лежит в этой же комнате, и пометку «оригинала нет», если нет. Оригинал, которого окно не
+ * держит (оно держит письма открытой комнаты, а не всю историю), подгружается по id и приходит в `RoomModelInput.quoted`.
  */
 
 import type { Message, MessageKind, MessageVia, SessionLifecycle, SessionNeed, WindowWorkEntry, WindowWorkMap, RoomMode, RoomPlan } from '@parley/core';
@@ -203,6 +204,11 @@ export interface RoomModelInput {
   providers: ReadonlyArray<{ id: string; label: string }>;
   /** `useActivityStore.byRef`: живая активность по `refKey`. */
   activity: Readonly<Record<string, ActivityEntry>>;
+  /**
+   * Оригиналы цитат, которых окно не держит: письма, подгруженные по id (`context.letter`, спека rooms.mail 6.9); `null` —
+   * такого письма нет. Держимое письмо берётся из карты, а письмо другой комнаты оригиналом не считается.
+   */
+  quoted?: Readonly<Record<string, Message | null>>;
 }
 
 /** Подпись участника переписки: человек, система, сессия с номером и ярлыком, удалённая, чужой id как есть. */
@@ -265,7 +271,7 @@ function doingOf(
 }
 
 export function buildRoomModel(input: RoomModelInput): RoomModel | null {
-  const { entry, roomId, providers, activity } = input;
+  const { entry, roomId, providers, activity, quoted } = input;
   const map = entry.map;
   const room = map.rooms.find((candidate) => candidate.id === roomId);
   if (room === undefined) return null;
@@ -356,7 +362,8 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
   };
   const replyOf = (replyTo: string | undefined): ReplyModel | null => {
     if (replyTo === undefined) return null;
-    const original = roomMessageById.get(replyTo);
+    const fetched = quoted?.[replyTo];
+    const original = roomMessageById.get(replyTo) ?? (fetched != null && fetched.roomId === roomId ? fetched : undefined);
     if (original === undefined) return { id: replyTo, from: '', excerpt: '', found: false };
     return {
       id: original.id,

@@ -77,6 +77,14 @@ describe('preload острова', () => {
     expect(statuses).toEqual([{ state: 'connecting' }]);
   });
 
+  it('rooms.mail доходит до подписчика острова: письма работ больше не едут в works.changed', async () => {
+    const bridge = await loadPreload();
+    const seen: unknown[] = [];
+    bridge.on('rooms.mail', (data) => seen.push(data));
+    emit('host:event', { event: 'rooms.mail', data: { workId: 'w-01', version: 6 } });
+    expect(seen).toEqual([{ workId: 'w-01', version: 6 }]);
+  });
+
   it('настройки острова приходят событием island:config', async () => {
     const bridge = await loadPreload();
     const configs: IslandConfig[] = [];

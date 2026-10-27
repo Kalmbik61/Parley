@@ -65,6 +65,7 @@ it('проход по сорока работам с непрочитанным 
       onChange = listener;
       return () => {};
     },
+    onMail: () => () => {},
   } as unknown as WorksService;
   const activity = { onChange: () => () => {}, mailWaiting: vi.fn() } as unknown as ActivityService;
   const pty = { get: () => undefined, on: () => () => {} } as unknown as PtyManager;

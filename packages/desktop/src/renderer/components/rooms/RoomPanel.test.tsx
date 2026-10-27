@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import type { Message, Room, WindowWorkEntry, WorkSession } from '@parley/core';
-import type { LiveMetrics, LiveTask, MailWait } from '@parley/protocol';
+import { ROOMS_MAIL_FEATURE, type LiveMetrics, type LiveTask, type MailWait } from '@parley/protocol';
 import { encodeIpcError } from '../../../shared/ipc-error.js';
 import { EMPTY_HISTORY } from '../../layout/history.js';
 import { useLayoutStore } from '../../layout/store.js';
@@ -24,7 +24,7 @@ import { useHostStore } from '../../store/host.js';
 import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
-import { activityMap, makeActivity, makeLetter, makeNeed, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
+import { activityMap, makeActivity, makeLetter, makeMailEvent, makeMailRoom, makeNeed, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
 import { RoomPanel, type RoomPanelProps } from './RoomPanel.js';
 import { roomOutbox } from './room-outbox.js';
 
@@ -1535,6 +1535,20 @@ describe('RoomPanel — старая карта', () => {
 describe('RoomPanel — поле ввода и отправка (2.2)', () => {
   const editor = (): HTMLElement => screen.getByRole('textbox', { name: 'Message' });
 
+  /** Стор работ подключён к подставному мосту (хост с признаком `rooms-mail`, работа версии 5); `afterEach` отключает и очищает. */
+  const disconnect: Array<() => void> = [];
+  afterEach(() => {
+    for (const off of disconnect.splice(0)) off();
+    useWorksStore.setState({ entries: [], branches: {}, loading: true, ready: false, error: null });
+  });
+  async function connectWorks(): Promise<void> {
+    const work = { ...entryOf(), version: 5 };
+    bridge.emitStatus({ state: 'connected', hostVersion: 'test', methods: null, features: [ROOMS_MAIL_FEATURE] });
+    bridge.setHandler('works.list', () => ({ entries: [work], branches: {}, revision: 1 }));
+    disconnect.push(useWorksStore.getState().init(bridge));
+    await waitFor(() => expect(useWorksStore.getState().ready).toBe(true));
+  }
+
   function typeAndSend(text: string): void {
     const node = document.createTextNode(text);
     editor().append(node);
@@ -1638,6 +1652,48 @@ describe('RoomPanel — поле ввода и отправка (2.2)', () => {
     update(entryOf({ messages: [message('m-new', { text: 'Важное' })] }));
     await waitFor(() => expect(pendingStates()).toEqual([]));
     expect(screen.getAllByText('Важное')).toHaveLength(1);
+  });
+
+  it('ушло: серый снимается, когда id пришёл событием rooms.mail, даже если письма нет среди писем окна', async () => {
+    await connectWorks();
+    // Панель держит свою карту без письма: лента его не покажет, снять серое может только событие.
+    renderPanel(entryOf());
+    typeAndSend('Важное');
+    await act(async () => {});
+    expect(pendingStates()).toEqual(['sending']);
+    bridge.emit(
+      'rooms.mail',
+      makeMailEvent({
+        projectPath: PROJECT,
+        workId: WORK_ID,
+        version: 6,
+        prevVersion: 5,
+        rooms: [makeMailRoom('r-01', { prevTop: 0, top: 1, total: 1, letters: [message('m-new', { text: 'Важное' })] })],
+      }),
+    );
+    await waitFor(() => expect(pendingStates()).toEqual([]));
+    expect(screen.queryAllByText('Важное')).toHaveLength(0);
+  });
+
+  it('событие пришло раньше ответа rooms.send: серое не рисуется и снимается, как только id известен', async () => {
+    await connectWorks();
+    let answer!: () => void;
+    bridge.setHandler('rooms.send', () => new Promise<{ messageId: string }>((resolve) => (answer = () => resolve({ messageId: 'm-new' }))));
+    renderPanel(entryOf());
+    typeAndSend('Важное');
+    bridge.emit(
+      'rooms.mail',
+      makeMailEvent({
+        projectPath: PROJECT,
+        workId: WORK_ID,
+        version: 6,
+        prevVersion: 5,
+        rooms: [makeMailRoom('r-01', { prevTop: 0, top: 1, total: 1, letters: [message('m-new', { text: 'Важное' })] })],
+      }),
+    );
+    expect(pendingStates()).toEqual(['sending']);
+    await act(async () => answer());
+    await waitFor(() => expect(pendingStates()).toEqual([]));
   });
 
   it('два Enter подряд — второй rooms.send только после ответа на первый, по порядку', async () => {
@@ -1785,6 +1841,39 @@ describe('RoomPanel — прокрутка к низу', () => {
       // `message()` по умолчанию — от человека: это его ответ из поля ввода.
       update(entryOf({ messages: [...first, message('m-3', { at: '2026-09-27T10:05:00.000Z' })] }));
       expect(feed().scrollTop).toBe(800);
+      expect(newBelow()).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('лента у потолка в 300 писем по-прежнему прилипает к низу и считает ↓N: длина не меняется, новое письмо вытесняет старейшее', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
+    try {
+      const at = (n: number): string => new Date(Date.UTC(2026, 8, 27, 10, 0, n)).toISOString();
+      /** Триста писем агента, от m-`first`: сдвиг окна на единицу — это одно новое письмо у потолка. */
+      const ring = (first: number): Message[] => Array.from({ length: 300 }, (_, index) => fromAgent(`m-${first + index}`, at(first + index)));
+      const { update } = renderPanel(entryOf({ messages: ring(1) }));
+      expect(feed().scrollTop).toBe(500);
+
+      // У низа: m-301 вытеснило m-1, длина прежняя, а лента прижимается к новому низу.
+      setScrollHeight(feed(), 800);
+      update(entryOf({ messages: ring(2) }));
+      expect(feed().scrollTop).toBe(800);
+      expect(newBelow()).toBeNull();
+
+      // Читают историю: позиция стоит, «↓N» растёт с каждым вытеснившим письмом.
+      scrollUp();
+      update(entryOf({ messages: ring(3) }));
+      expect(feed().scrollTop).toBe(40);
+      expect(newBelow()?.textContent).toBe('↓1');
+      update(entryOf({ messages: ring(4) }));
+      expect(newBelow()?.textContent).toBe('↓2');
+
+      // Своё письмо у потолка прижимает ленту и гасит «↓N», как и без потолка.
+      setScrollHeight(feed(), 900);
+      update(entryOf({ messages: [...ring(4).slice(1), message('m-304', { at: at(304) })] }));
+      expect(feed().scrollTop).toBe(900);
       expect(newBelow()).toBeNull();
     } finally {
       spy.mockRestore();

@@ -5,11 +5,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG, mapLetterTx, telegramBotId, telegramTokenFingerprint } from '@parley/core';
-import type { FeedCard, FeedItem, ParleyConfig, SessionNeed, WorkEntry } from '@parley/core';
+import type { FeedCard, FeedItem, Message, ParleyConfig, SessionNeed, WorkEntry } from '@parley/core';
 import type { AssistantProposal, AssistantSettings, AssistantState, SessionRef, WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
 import { HostError } from '../errors.js';
 import type { TriggerLetters } from './notify.js';
+import type { MailNotice } from '../works/works-service.js';
 import { createTelegramService } from './service.js';
 import type { TelegramService, TelegramServiceDeps } from './service.js';
 import { T } from './texts.js';
@@ -67,6 +68,7 @@ let liveNeed: SessionNeed | null;
 let feedItems: FeedItem[];
 let feedTerminal: boolean;
 let worksListener: ((next: WorksSnapshot, previous: WorksSnapshot) => void) | null;
+let mailListener: ((notice: MailNotice) => void) | null;
 let activityListener: ((ref: SessionRef, value: any) => void) | null;
 let feedClient: Client | null;
 let logs: string[];
@@ -194,12 +196,26 @@ const setWorks = (next: WorksSnapshot): void => {
   snapshot = next;
   worksListener?.(next, previous);
 };
+/** Запись писем работы `w-01` (`onMail`): снимок работ при этом не меняется, как у записи одних писем (спека rooms.mail 6.7). */
+const sendMail = (added: unknown[]): void =>
+  mailListener?.({
+    projectPath: '/p/my_harnas',
+    workId: 'w-01',
+    version: 2,
+    prevVersion: 1,
+    foreign: false,
+    journal: { added: added as Message[], reads: [], deleted: [], droppedRooms: [], rereadRooms: [] },
+  });
 
 function make(): TelegramService {
   return createTelegramService({
     home,
     host,
-    works: { snapshot: () => snapshot, onChange: (listener: any) => ((worksListener = listener), () => (worksListener = null)) },
+    works: {
+      snapshot: () => snapshot,
+      onChange: (listener: any) => ((worksListener = listener), () => (worksListener = null)),
+      onMail: (listener: any) => ((mailListener = listener), () => (mailListener = null)),
+    },
     letters: memoryLetters,
     activity: {
       get: (ref: SessionRef) =>
@@ -262,6 +278,7 @@ beforeEach(async () => {
   feedItems = [];
   feedTerminal = false;
   worksListener = null;
+  mailListener = null;
   activityListener = null;
   feedClient = null;
   assistantListener = null;
@@ -688,7 +705,7 @@ describe('createTelegramService: комнаты, письма, помощник'
 
   it('письмо человеку: уведомление и запись в letters; ответ на него уходит sendLetter с реакцией, обычный текст — помощнику', async () => {
     await bootLinked();
-    setWorks(snap({ messages: [letter()] }));
+    sendMail([letter()]);
     await settle();
     const notice = sent().at(-1)!;
     expect(notice.params.text).toContain(`Letter from Backend in ${WHERE}`);
@@ -704,10 +721,38 @@ describe('createTelegramService: комнаты, письма, помощник'
     expect(assistant.ask).toHaveBeenCalledWith(expect.objectContaining({ text: 'hello assistant' }), 'telegram');
   });
 
+  // Спека rooms.mail 6.7: письмо приходит событием `onMail`, а не снимком работ.
+  it('письмо человеку через onMail даёт одну карточку; повтор того же id — ничего', async () => {
+    await bootLinked();
+    const cards = (): number => sent().filter((call) => String(call.params.text).includes('Letter from')).length;
+    sendMail([letter()]);
+    await settle();
+    expect(cards()).toBe(1);
+    sendMail([letter()]);
+    await settle();
+    expect(cards()).toBe(1);
+  });
+
+  it('смешанная запись: снимок с письмом и onMail с ним же дают одну карточку', async () => {
+    await bootLinked();
+    setWorks(snap({ messages: [letter()] }));
+    sendMail([letter()]);
+    await settle();
+    expect(sent().filter((call) => String(call.params.text).includes('Letter from'))).toHaveLength(1);
+  });
+
+  it('письмо, непрочитанное на старте, через onMail молчит', async () => {
+    snapshot = snap({ messages: [letter()] });
+    await bootLinked();
+    sendMail([letter()]);
+    await settle();
+    expect(sent()).toEqual([]);
+  });
+
   it('telegramMail false — письмо молчит; telegramFinished false — unseen молчит, true — тихое уведомление', async () => {
     cfg.telegramMail = false;
     await bootLinked();
-    setWorks(snap({ messages: [letter()] }));
+    sendMail([letter()]);
     setActivity('unseen');
     await vi.advanceTimersByTimeAsync(5_000);
     expect(sent()).toEqual([]);
@@ -894,7 +939,7 @@ describe('createTelegramService: очередь, гонки, отвязка', ()
 
   it('unlink: стоявшая в очереди карточка не уходит и не записывается, письма забыты', async () => {
     await bootLinked();
-    setWorks(snap({ messages: [letter()] }));
+    sendMail([letter()]);
     await settle();
     journal.length = 0;
 
@@ -933,7 +978,7 @@ describe('createTelegramService: очередь, гонки, отвязка', ()
 
   it('HostError из sendLetter становится уведомлением «Could not do that»', async () => {
     await bootLinked();
-    setWorks(snap({ messages: [letter()] }));
+    sendMail([letter()]);
     await settle();
     const noticeId = lastOutId;
     sendLetter.mockRejectedValueOnce(new HostError('bad_request', 'room is archived'));
@@ -949,12 +994,14 @@ describe('createTelegramService: очередь, гонки, отвязка', ()
     push([]);
     await settle();
     setWorks(snap({ messages: [letter()] }));
+    sendMail([letter()]);
     conflictMode = false;
     await service.takeOver();
     await settle();
     journal.length = 0;
 
-    setWorks(snap({ messages: [letter()], rooms: [] }));
+    // Запись, пришедшая уже после takeOver, — то же письмо: оно в базе, снятой при takeOver, и молчит.
+    sendMail([letter()]);
     await settle();
     expect(sent()).toEqual([]);
   });
@@ -1118,7 +1165,7 @@ describe('createTelegramService: финальное ревью', () => {
 
   it('письмо длиннее лимита уходит с хвостом «truncated», /new закрывает карточку помощника', async () => {
     await bootLinked();
-    setWorks(snap({ messages: [{ ...(letter() as object), text: 'x'.repeat(3000) }] }));
+    sendMail([{ ...(letter() as object), text: 'x'.repeat(3000) }]);
     await settle();
     expect(sent().at(-1)?.params.text).toContain('truncated');
 

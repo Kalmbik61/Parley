@@ -1,5 +1,23 @@
 import { loadConfig, workPaths, type McpContext, type ProviderRow, type RoleCatalog, type ToolLaunch } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
+import type { WorksService } from '../works/works-service.js';
+
+/**
+ * Сигнал изменения работ для `wait_for` (`mapChanges`): хост будит ожидание по событию службы работ, а не по `fs.watch`.
+ * Возвращает подписку в виде, который ждёт `hostToolContext` (`onWorksChange`). Запись одних писем `onChange` не зовёт
+ * (спека rooms.mail 6.7), и без `onMail` агент, ждущий письма, не проснулся бы на него; смешанная запись зовёт оба,
+ * ожидание же от лишнего пробуждения только перечитывает почту.
+ */
+export function mapChangeSignal(works: Pick<WorksService, 'onChange' | 'onMail'>): (listener: () => void) => () => void {
+  return (listener) => {
+    const offChange = works.onChange(() => listener());
+    const offMail = works.onMail(() => listener());
+    return () => {
+      offChange();
+      offMail();
+    };
+  };
+}
 
 /**
  * Контекст исполнителя инструментов сессии в процессе хоста (спека хранилища 6.3, 6.9): то, что процесс MCP узнавал из

@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { addRoom, addSession, createWork, letterCount, readStoredMap, setWorkStatus, updateMap } from '@parley/core';
-import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, MAX_LINE_BYTES } from '@parley/protocol';
-import type { EventData, EventName, WorksSnapshot } from '@parley/protocol';
+import { addRoom, addSession, createWork, letterCount, readStoredMap, setWorkStatus, updateMap, writeLetters } from '@parley/core';
+import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, MAX_LINE_BYTES, ROOMS_MAIL_FEATURE } from '@parley/protocol';
+import type { EventData, EventName, RoomsMailEvent, WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
 import type { HostContext } from '../context.js';
 import { createWorksService } from './works-service.js';
@@ -228,4 +228,151 @@ describe('снимки для окна (P35)', () => {
     expect(legacyClient.sent).toEqual([]);
     for (const client of clients) for (const message of client.sent) expect(bytes(message)).toBeLessThan(MAX_LINE_BYTES);
   }, 30_000);
+});
+
+describe('снимок без писем для окон с rooms-mail (спека rooms.mail 6.8, 6.10)', () => {
+  const lastChanged = (client: FakeClient): WorksSnapshot =>
+    client.sent.filter((message) => message.event === 'works.changed').at(-1)?.data as WorksSnapshot;
+
+  it('окно с rooms-mail получает снимок без писем, окно с compact-works — с хвостами, прежнее — полный', async () => {
+    await seedWork('А', 400, 200);
+    const mailClient = fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const compactClient = fakeClient([COMPACT_WORKS_FEATURE]);
+    const legacyClient = fakeClient([]);
+    const s = service();
+    await s.start();
+
+    const forMail = lastChanged(mailClient);
+    const forCompact = lastChanged(compactClient);
+    const forLegacy = lastChanged(legacyClient);
+
+    expect(forMail.entries[0]?.map.messages).toEqual([]);
+    expect(forMail.entries[0]?.map.compact).toMatchObject({
+      version: 2,
+      rooms: { '': { total: 0, top: 0, lastAt: null }, 'r-01': { total: 400, top: 400, unread: 400 } },
+      unread: { letters: 400, rooms: { 'r-01': 400 } },
+    });
+    expect(forMail.entries[0]?.map.compact).not.toHaveProperty('messages');
+    expect(forMail.entries[0]?.version).toBeDefined();
+    expect(forCompact.entries[0]?.map.messages.length).toBeGreaterThan(0);
+    expect(forCompact.entries[0]?.map.compact).toMatchObject({ version: 1, messages: { total: 400, latestId: 'm-400' } });
+    expect(forLegacy.entries[0]?.map.messages).toHaveLength(400);
+    expect(forLegacy.entries[0]?.map.compact).toBeUndefined();
+    // Версия снимка без писем — та же, что у снимка с хвостами, и по номеру рассылки они в одном ряду.
+    expect(forMail.entries[0]?.version).toBe(forCompact.entries[0]?.version);
+    expect(forMail.revision).toBe(forCompact.revision);
+    // Каждому окну ушёл один вариант: окно с признаком не получило снимка с хвостами и наоборот.
+    expect(mailClient.sent.filter((message) => message.event === 'works.changed')).toHaveLength(1);
+    expect(compactClient.sent.filter((message) => message.event === 'works.changed')).toHaveLength(1);
+    // Снимок без писем сервис отдаёт и сам (его берёт works.list).
+    expect(s.mailSnapshot()).toEqual(forMail);
+  });
+
+  it('размер не зависит от числа писем: 10 000 писем — несколько килобайт против сотен у снимка с хвостами', async () => {
+    await seedWork('А', 2500, 1500);
+    await seedWork('Б', 2500, 1500);
+    const s = service();
+    await s.start();
+
+    const mail = s.mailSnapshot() as WorksSnapshot;
+    const compact = s.windowSnapshot() as WorksSnapshot;
+
+    expect(mail.entries).toHaveLength(2);
+    for (const entry of mail.entries) {
+      expect(entry.map.messages).toEqual([]);
+      expect(entry.map.compact).toMatchObject({ version: 2, rooms: { 'r-01': { total: 2500, top: 2500 } } });
+    }
+    expect(bytes(mail)).toBeLessThan(16 * 1024);
+    expect(bytes(compact)).toBeGreaterThan(bytes(mail) * 20);
+  });
+
+  it('части снимка кэшируются по версии, и варианты не вытесняют друг друга: запись в одну работу пересобирает только её', async () => {
+    const first = await seedWork('А', 5, 20);
+    const second = await seedWork('Б', 5, 20);
+    const s = service();
+    await s.start();
+    const entryOf = (snapshot: WorksSnapshot | null, id: string) => snapshot?.entries.find((entry) => entry.map.work.id === id);
+    const compactBefore = s.windowSnapshot();
+    const mailBefore = s.mailSnapshot();
+    // Наблюдатель файлов (FSEvents) оживает не мгновенно: запись сразу после старта он мог бы не заметить.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    await updateMap(project, second, (current) => {
+      current.work.goal = 'новая цель';
+    });
+    await vi.waitFor(() => expect(entryOf(s.mailSnapshot(), second)?.map.work.goal).toBe('новая цель'), { timeout: 10_000, interval: 10 });
+    const compactAfter = s.windowSnapshot();
+    const mailAfter = s.mailSnapshot();
+
+    expect(entryOf(compactAfter, second)?.map.work.goal).toBe('новая цель');
+    // Работа без записи отдаёт ту же часть, что и до неё, в обоих вариантах: ни один не сбросил кэш другого.
+    expect(entryOf(compactAfter, first)).toBe(entryOf(compactBefore, first));
+    expect(entryOf(mailAfter, first)).toBe(entryOf(mailBefore, first));
+    expect(entryOf(mailAfter, second)).not.toBe(entryOf(mailBefore, second));
+  }, 20_000);
+
+  it('кандидаты в упоминания и итог решения: непрочитанные @human письма, ответ человека на решение, прямые письма', async () => {
+    const workId = await seedWork('А', 0, 0);
+    await updateMap(project, workId, (_current, letters) => {
+      letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: '@human посмотри' }); // m-01
+      letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: 'без упоминания' }); // m-02
+      letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: 'mail@humanity.org не человек' }); // m-03
+      letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: '@human уже прочитано', readBy: { human: '2026-10-27T10:00:00.000Z' } }); // m-04
+      letters.add({ kind: 'note', from: 's-01', to: ['human'], roomId: null, text: 'прямое человеку' }); // m-05
+      letters.add({ kind: 'note', from: 'human', to: ['s-01'], roomId: 'r-01', text: 'Returned for rework: add tests' }); // m-06
+      letters.add({ kind: 'note', from: 'human', to: ['s-01'], roomId: 'r-01', text: 'и ещё одно слово' }); // m-07
+    });
+    const s = service();
+    await s.start();
+
+    const compact = (s.mailSnapshot() as WorksSnapshot).entries[0]?.map.compact;
+
+    expect(compact).toMatchObject({
+      version: 2,
+      rooms: {
+        '': { total: 1, top: 5, unread: 1, decision: null },
+        'r-01': { total: 6, top: 7, unread: 3, decision: 'returned' },
+      },
+      unread: { letters: 4, rooms: { '': 1, 'r-01': 3 } },
+    });
+    expect((compact as { mentionCandidates: Array<{ id: string }> }).mentionCandidates.map((message) => message.id)).toEqual(['m-01']);
+  });
+
+  it('снимок и событие rooms.mail называют одно письмо: новый кандидат события лежит и в наборе снимка, который его заменяет', async () => {
+    const workId = await seedWork('А', 3, 20);
+    const mailClient = fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const s = service();
+    await s.start();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    writeLetters(project, workId, (letters) => {
+      letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: '@human нужен ответ' });
+    });
+    await vi.waitFor(() => expect(mailClient.sent.some((message) => message.event === 'rooms.mail')).toBe(true), { timeout: 10_000, interval: 10 });
+    const event = mailClient.sent.find((message) => message.event === 'rooms.mail')?.data as RoomsMailEvent;
+    const snapshot = s.mailSnapshot()?.entries[0]?.map.compact;
+
+    expect(event.mentionCandidates.map((message) => message.id)).toEqual(['m-04']);
+    expect((snapshot as { mentionCandidates: Array<{ id: string }> }).mentionCandidates.map((message) => message.id)).toEqual(['m-04']);
+    expect(snapshot).toMatchObject({ rooms: { 'r-01': { total: 4, top: 4 } }, unread: { letters: 4 } });
+    expect(event.rooms[0]).toMatchObject({ total: 4, top: 4 });
+    // Письмо не вызвало `works.changed` окну с признаком: снимок без писем уходит только на структурную запись.
+    expect(mailClient.sent.filter((message) => message.event === 'works.changed')).toHaveLength(1);
+  }, 20_000);
+
+  it('снимок без писем выше потолка — запасной вариант с короткими текстами, письма он не несёт и так', async () => {
+    const map = await createWork(project, { title: 'Большая', goal: '' });
+    await updateMap(project, map.work.id, (current) => {
+      for (let i = 0; i < 300; i += 1) addSession(current, { provider: 'claude', label: `с${i}`, task: 'ж'.repeat(10_000) });
+    });
+    const s = service();
+    await s.start();
+
+    const fallback = s.mailSnapshot() as WorksSnapshot;
+
+    expect(bytes(fallback)).toBeLessThan(5 * 1024 * 1024);
+    expect(fallback.entries[0]?.map.sessions[0]?.task).toContain('cut: ');
+    expect(fallback.entries[0]?.map.compact?.cut.length).toBeGreaterThan(0);
+    expect(fallback.entries[0]?.map.compact?.version).toBe(2);
+  });
 });

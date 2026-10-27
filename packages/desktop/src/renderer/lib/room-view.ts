@@ -35,12 +35,19 @@ function later(a: string, b: string): string {
 /**
  * Время последнего события комнаты — справа в её строке: позднее из сообщений комнаты и решения (оно лежит
  * в слоте `Room.proposal`, письмом не становится, но для человека это событие). В пустой комнате — время её
- * создания. У комнаты карты до 2026-09-29 поля `proposal` нет.
+ * создания. У комнаты карты до 2026-09-29 поля `proposal` нет. Снимок без писем (`compact` версии 2) несёт время самого нового
+ * письма комнаты готовым (`rooms[id].lastAt`), письма окна — только держимые.
  */
 export function roomLastAt(map: WindowWorkMap, room: Room): string {
   let last = room.createdAt;
-  for (const message of map.messages) {
-    if (message.roomId === room.id) last = later(last, message.at);
+  const compact = map.compact;
+  if (compact?.version === 2) {
+    const at = compact.rooms[room.id]?.lastAt;
+    if (at !== undefined && at !== null) last = later(last, at);
+  } else {
+    for (const message of map.messages) {
+      if (message.roomId === room.id) last = later(last, message.at);
+    }
   }
   const proposal = room.proposal ?? null;
   return proposal === null ? last : later(last, proposal.at);

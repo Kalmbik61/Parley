@@ -13,7 +13,7 @@
 
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { isHumanUnread } from './attention.js';
-import type { LetterQuery, LetterTx, NewLetter } from './letter-store.js';
+import type { LetterJournal, LetterQuery, LetterTx, NewLetter } from './letter-store.js';
 import { isUnreadFor, recipientsOf, type LetterLookup } from './letters.js';
 import { maxNumber } from './map.js';
 import { planEffectOwnsLetter } from './plan-effects.js';
@@ -453,6 +453,19 @@ const isThenable = (value: unknown): boolean => typeof (value as { then?: unknow
 
 const changed = (result: { changes: number | bigint }): number => Number(result.changes);
 
+/** Письма, которые `flagDeleted` пометит: чужие сессии и уже помеченные сюда не входят. */
+const FLAGGABLE = `project_path = ? AND work_id = ? AND deleted = 0
+  AND (sender = ? OR EXISTS (SELECT 1 FROM json_each(messages.recipients) WHERE value = ?))`;
+
+const journalLengths = (journal: LetterJournal): number[] => Object.values(journal).map((entries) => entries.length);
+
+/** Журнал только дописывается, поэтому откат `SAVEPOINT` — обрезка каждого списка до прежней длины. */
+function truncateJournal(journal: LetterJournal, lengths: readonly number[]): void {
+  Object.values(journal).forEach((entries, at) => {
+    entries.length = lengths[at]!;
+  });
+}
+
 /**
  * `LetterTx` над таблицами внутри открытой транзакции записи `db` и признак «письма были записаны» для `updateMap`: диф
  * строк карты писем не видит, и пустую запись от непустой отличит только он. `map` — черновик карты без писем: комнаты и
@@ -460,16 +473,23 @@ const changed = (result: { changes: number | bigint }): number => Number(result.
  *
  * `savepoint` — `SAVEPOINT` SQLite: письма и отметки упавшего `fn` откатываются, транзакция продолжается; номер
  * `work.messageSeq`, который сдвинул внутри него `deleteRoom`, возвращает журнал отмен.
+ *
+ * `journal` — что транзакция записала в письма (спека rooms.mail 6.2), для события `onMapWritten`. Методы, которые меняют
+ * письма и отметки, дописывают свой список: `add` — `added`, `markRead` — `reads`, `flagDeleted` — `deleted`, `deleteRoom` —
+ * `droppedRooms`, `reopened` — `rereadRooms`. Методы одних кандидатов непрочитанного (`joined`, `left`, `archived`,
+ * `effectCancelled`) ставят `wrote`, но окну не нужны и в журнал не идут. `savepoint` при отказе обрезает журнал до длин,
+ * какими он был до `fn`.
  */
 export function createTableLetterTx(
   db: DatabaseSync,
   projectPath: string,
   workId: string,
   map: WorkMap,
-): { letters: LetterTx; wrote: () => boolean } {
+): { letters: LetterTx; wrote: () => boolean; journal: () => LetterJournal } {
   let wrote = false;
   let savepoints = 0;
   const undo: Array<Array<() => void>> = [];
+  const journal: LetterJournal = { added: [], reads: [], deleted: [], droppedRooms: [], rereadRooms: [] };
   const byId: LetterLookup = (id) => letterByIdRow(db, projectPath, workId, id);
 
   const letters: LetterTx = {
@@ -494,6 +514,9 @@ export function createTableLetterTx(
       };
       insertLetter(db, projectPath, workId, message, candidateReaders(message, map));
       wrote = true;
+      // Копия: журнал хранит записанное, а не письмо, которое вызывающий получил и может менять. Не `structuredClone`:
+      // запись из кэша не платит за глубокое копирование (`store.test.ts`, «300 строк»).
+      journal.added.push({ ...message, to: [...message.to], readBy: { ...message.readBy } });
       return message;
     },
 
@@ -523,6 +546,7 @@ export function createTableLetterTx(
                         WHERE m.project_path = ? AND m.work_id = ? AND m.id = j.value)`,
       ).run(projectPath, workId, reader, wanted, projectPath, workId);
       if (fresh.length > 0) wrote = true;
+      for (const row of fresh) journal.reads.push({ id: String(row['id']), reader, at });
       return fresh.map((row) => String(row['id']));
     },
 
@@ -597,6 +621,8 @@ export function createTableLetterTx(
                AND r.seq = message_unread.seq AND r.reader = message_unread.reader)`,
       ).run(projectPath, workId, roomId);
       wrote = true;
+      // Отметки одним оператором, ни читателя, ни номера у них под рукой нет: окну достаточно знать комнату.
+      if (!journal.rereadRooms.includes(roomId)) journal.rereadRooms.push(roomId);
     },
 
     deleteRoom(roomId) {
@@ -619,21 +645,23 @@ export function createTableLetterTx(
         });
       }
       wrote = true;
+      if (!journal.droppedRooms.includes(roomId)) journal.droppedRooms.push(roomId);
     },
 
     flagDeleted(sessionId) {
       // `recipients` — JSON-массив: сравнивать с ним строку было бы всегда ложно (как в прежнем `removeSession`).
-      const flagged = sql(
-        db,
-        `UPDATE messages SET deleted = 1 WHERE project_path = ? AND work_id = ? AND deleted = 0
-           AND (sender = ? OR EXISTS (SELECT 1 FROM json_each(messages.recipients) WHERE value = ?))`,
-      ).run(projectPath, workId, sessionId, sessionId);
+      // Номера помечаемых писем — до `UPDATE`, тем же условием: потом их уже не отличить от помеченных раньше.
+      const ids = sql(db, `SELECT id FROM messages WHERE ${FLAGGABLE} ORDER BY seq`)
+        .all(projectPath, workId, sessionId, sessionId)
+        .map((row) => String(row['id']));
+      const flagged = sql(db, `UPDATE messages SET deleted = 1 WHERE ${FLAGGABLE}`).run(projectPath, workId, sessionId, sessionId);
       const dropped = sql(db, 'DELETE FROM message_unread WHERE project_path = ? AND work_id = ? AND reader = ?').run(
         projectPath,
         workId,
         sessionId,
       );
       if (changed(flagged) > 0 || changed(dropped) > 0) wrote = true;
+      for (const id of ids) journal.deleted.push(id);
     },
 
     effectCancelled(messageId) {
@@ -656,6 +684,7 @@ export function createTableLetterTx(
       const name = `letters_${savepoints}`;
       const log: Array<() => void> = [];
       const wroteBefore = wrote;
+      const journalBefore = journalLengths(journal);
       db.exec(`SAVEPOINT ${name}`);
       undo.push(log);
       try {
@@ -671,11 +700,12 @@ export function createTableLetterTx(
         undo.pop();
         for (let at = log.length - 1; at >= 0; at -= 1) log[at]!();
         wrote = wroteBefore;
+        truncateJournal(journal, journalBefore);
         db.exec(`ROLLBACK TO ${name}`);
         db.exec(`RELEASE ${name}`);
         throw error;
       }
     },
   };
-  return { letters, wrote: () => wrote };
+  return { letters, wrote: () => wrote, journal: () => journal };
 }

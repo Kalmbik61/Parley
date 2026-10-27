@@ -21,7 +21,7 @@ import { envValue, ENV_PREFIX, HOME_DIR, LEGACY_ENV_PREFIX, LEGACY_HOME_DIR, typ
 import { BUSY_TIMEOUT_MS, WORK_DB_FILE, workDb } from './db.js';
 import { diffRows, isPlainJsonTree, mapToRows, rowIndex, rowsToMap, type StoredRow } from './map-rows.js';
 import { bumpWorkId, nextWorkId, normalizeMap } from './map.js';
-import type { LetterTx } from './letter-store.js';
+import type { LetterJournal, LetterTx } from './letter-store.js';
 import { createTableLetterTx, loadAllLetters, replaceLetters } from './letter-tables.js';
 import { isAlive } from './pid-alive.js';
 import { sql } from './sql-statements.js';
@@ -545,12 +545,20 @@ export function storedMapBytes(projectPath: string, workId: string): number | un
 /**
  * Запись базы одной работы дошла до подписчиков процесса: проект, работа и версия, под которой она теперь лежит.
  * `removed` — работу сняли (`deleteWorkFiles`, `pruneWorksIndex`): версия тогда последняя, какая у неё была.
+ *
+ * `prevVersion`, `structural` и `journal` (спека rooms.mail 6.2) есть у записей `updateMap` и `writeLetters`: версия до
+ * записи, менялись ли строки карты, и что записано в письма. Журнал лежит в событии каждой такой записи, пустым тоже. У
+ * остальных записей (`createWork`, `replaceStoredMap`, переезд, снятие работы) их нет, и нет `structural` — считать `true`:
+ * письмами такая запись не разбирается, подписчик обязан пересчитать всё.
  */
 export interface MapWrittenEvent {
   projectPath: string;
   workId: string;
   version: number;
   removed?: true;
+  prevVersion?: number;
+  structural?: boolean;
+  journal?: LetterJournal;
 }
 
 const writeListeners = new Set<(event: MapWrittenEvent) => void>();
@@ -1099,7 +1107,7 @@ export function applyMapUpdate(
     if (current.work.id !== workId) {
       throw new Error(`map ${source} belongs to workspace ${current.work.id}, not ${workId}`);
     }
-    const { letters, wrote } = createTableLetterTx(db, projectPath, workId, current);
+    const { letters, wrote, journal } = createTableLetterTx(db, projectPath, workId, current);
     mutate(current, letters);
     // Мутация могла дать карту, которую нормализация не примет: бросает — запись откатывается.
     normalizeMap(current, source);
@@ -1107,12 +1115,9 @@ export function applyMapUpdate(
     // Сдвиг `updatedAt` — после проверки на пустоту: пустая запись его не трогает (спека хранилища 6.2).
     const next = mapToRows(current, previous.index);
     const diff = diffRows(previous, next);
-    if (
-      diff.upserts.length === 0 &&
-      diff.deletes.length === 0 &&
-      !diff.workChanged &&
-      !wrote()
-    ) {
+    // Строки карты изменились — до проверки на пустоту и до `touch`: сдвиг `updatedAt` запись структурной не делает.
+    const structural = diff.upserts.length > 0 || diff.deletes.length > 0 || diff.workChanged;
+    if (!structural && !wrote()) {
       // Строки в базе те же, но объект кэша мутатор мог изменить, не задев JSON (ключ без значения, общий массив): на
       // место он возвращается, только если свежий разбор строк дал бы такую же карту. Иначе записи кэша нет — следующее
       // чтение загрузит базу. Наружу карта уходит копией.
@@ -1138,7 +1143,15 @@ export function applyMapUpdate(
       projectPath,
       workId,
     );
-    return { empty: false as const, current, next, version: Number(updated?.['version']) };
+    return {
+      empty: false as const,
+      current,
+      next,
+      version: Number(updated?.['version']),
+      prevVersion: stored,
+      structural,
+      journal: journal(),
+    };
   });
   if (written.empty) return { map: written.current, shared: written.shared };
 
@@ -1164,7 +1177,14 @@ export function applyMapUpdate(
   } catch {
     mapCache.delete(key);
   }
-  emitMapWritten({ projectPath, workId, version: written.version });
+  emitMapWritten({
+    projectPath,
+    workId,
+    version: written.version,
+    prevVersion: written.prevVersion,
+    structural: written.structural,
+    journal: written.journal,
+  });
   return { map: written.current, shared };
 }
 
