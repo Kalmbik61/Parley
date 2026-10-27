@@ -135,14 +135,14 @@ describe('GLM launch boundaries', () => {
     await writeSecret('zai', 'fake-zai-key');
     Object.assign(process.env, {
       HOME: home, PARLEY_SKILL_NAVIGATOR: '1', CLAUDE_CONFIG_DIR: '/wrong', ANTHROPIC_MODEL: 'wrong',
-      SLASH_COMMAND_TOOL_CHAR_BUDGET: '9999',
+      SLASH_COMMAND_TOOL_CHAR_BUDGET: '9999', CLAUDE_CODE_AUTO_MODE_SERVER: '1',
     });
     await service().create(input());
     const launch = launches[0]!;
     expect(launch.env).toMatchObject({
       SLASH_COMMAND_TOOL_CHAR_BUDGET: '1', PARLEY_SKILL_NAVIGATOR: '1', PARLEY_SKILL_LIST_REDUCED: '1',
       ANTHROPIC_AUTH_TOKEN: 'fake-zai-key', ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',
-      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1',
+      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1', CLAUDE_CODE_AUTO_MODE_SERVER: '0',
     });
     expect(launch.env['CLAUDE_CONFIG_DIR']).toBeUndefined();
     expect(launch.env['ANTHROPIC_MODEL']).toBeUndefined();
