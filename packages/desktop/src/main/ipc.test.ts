@@ -7,6 +7,7 @@ import type { BrowserWindow, IpcMain, Session, WebContents } from 'electron';
 import type { WorksSnapshot } from '@parley/protocol';
 import { decodeIpcError, type IpcErrorInfo } from '../shared/ipc-error.js';
 import type { DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
+import { ISLAND_EVENTS } from '../shared/island.js';
 import { workKey } from '../shared/work-keys.js';
 import { DEFAULT_UI } from '../shared/ui-types.js';
 import { DropTooLargeError, MAX_DROP_IMAGE_BYTES } from './drops.js';
@@ -1664,6 +1665,16 @@ describe('forwardHostToPages (fix-7.3 п. 4а)', () => {
       ['host:status', { state: 'connected' }],
       ['host:event', { event: 'works.changed', data: {} }],
       ['host:event', { event: 'activity.changed', data: {} }],
+    ]);
+  });
+
+  it('остров (ISLAND_EVENTS) получает rooms.mail рядом с works.changed: запись одних писем works.changed уже не шлёт', () => {
+    const { sent, emit } = fakeForwarding({ events: ISLAND_EVENTS });
+    emit('rooms.mail');
+    emit('pty.output');
+    expect(sent).toEqual([
+      ['host:status', { state: 'connected' }],
+      ['host:event', { event: 'rooms.mail', data: {} }],
     ]);
   });
 

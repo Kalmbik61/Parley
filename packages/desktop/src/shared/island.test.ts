@@ -15,6 +15,17 @@ describe('остров: белый список методов хоста', () =
   });
 });
 
+describe('остров: письма работ', () => {
+  it('context.messages разрешён: разрыв версии остров чинит страницами, как главное окно', () => {
+    expect(ISLAND_METHODS.has('context.messages')).toBe(true);
+  });
+
+  it('rooms.mail в белом списке: без него числа острова застыли бы до следующего структурного снимка (спека rooms.mail, Review Focus 4)', () => {
+    expect(ISLAND_EVENTS.has('rooms.mail')).toBe(true);
+    expect(ISLAND_EVENTS.has('works.changed')).toBe(true);
+  });
+});
+
 describe('markSeenBatches: длинный Clear уходит порциями (2026-10-15)', () => {
   const refs = (count: number) => Array.from({ length: count }, (_, at) => ({ projectPath: '/p', workId: 'w-1', sessionId: `s-${at}` }));
 

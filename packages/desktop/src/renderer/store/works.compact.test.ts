@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MapCompact, Message, WindowWorkEntry } from '@parley/core';
-import type { WorksSnapshot } from '@parley/protocol';
+import { ROOMS_MAIL_FEATURE, type WorksSnapshot } from '@parley/protocol';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
-import { makeLetter, makeRoom, makeWork } from '../test-utils/work-fixtures.js';
+import { makeLetter, makeMailEvent, makeMailRoom, makeRoom, makeWork } from '../test-utils/work-fixtures.js';
 import { useWorksStore } from './works.js';
 
 const flush = async (): Promise<void> => {
@@ -19,9 +19,9 @@ const meta = (total: number, tailFrom: number): MapCompact => ({
   omitted: {},
 });
 
-function entry(messages: Message[], total: number, tailFrom: number): WindowWorkEntry {
+function entry(messages: Message[], total: number, tailFrom: number, version?: number): WindowWorkEntry {
   const base = makeWork('w-01', { rooms: [makeRoom('r-01', 'К')], messages });
-  return { ...base, map: { ...base.map, compact: meta(total, tailFrom) } };
+  return { ...base, map: { ...base.map, compact: meta(total, tailFrom) }, ...(version === undefined ? {} : { version }) };
 }
 
 const snapshot = (revision: number | undefined, entries: WindowWorkEntry[]): WorksSnapshot => ({
@@ -94,6 +94,45 @@ describe('useWorksStore: номер снимка (P35)', () => {
     // Чужая работа не затронута.
     useWorksStore.getState().addMessages('/tmp/other', 'w-01', [note('m-99')]);
     expect(useWorksStore.getState().entries[0]?.map.messages).toHaveLength(5);
+    dispose();
+  });
+
+  it('пропущенное окном rooms.mail: следующий снимок (переподключение или новее по номеру) содержит письмо и применяется', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('works.list', () => snapshot(5, [entry([note('m-05')], 5, 5, 5)]));
+    const first = useWorksStore.getState().init(bridge);
+    await flush();
+    expect(useWorksStore.getState().entries[0]?.map.messages.map((message) => message.id)).toEqual(['m-05']);
+    first();
+
+    // Событие о письме m-06 окно не получило; хост же после письма сменил номер снимка (works.list отвечает с новым).
+    bridge.setHandler('works.list', () => snapshot(6, [entry([note('m-05'), note('m-06')], 6, 5, 6)]));
+    const second = useWorksStore.getState().init(bridge);
+    await flush();
+    expect(useWorksStore.getState().entries[0]?.map.messages.map((message) => message.id)).toEqual(['m-05', 'm-06']);
+    second();
+  });
+
+  it('версия работы берётся из снимка: после пропущенного события следующее по цепочке применяется без починки, с разрывом — чинит', async () => {
+    const bridge = createFakeBridge();
+    bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: null, features: [ROOMS_MAIL_FEATURE] });
+    bridge.setHandler('works.list', () => snapshot(1, [entry([note('m-05')], 5, 5, 6)]));
+    const requests: Array<string | undefined> = [];
+    bridge.setHandler('context.messages', (params) => {
+      requests.push(params.cursor);
+      return { messages: [note('m-05'), note('m-06')], page: { total: 6, returned: 2, complete: true, next: null, bytes: 1, cut: 0 } };
+    });
+    const dispose = useWorksStore.getState().init(bridge);
+    await flush();
+
+    // Снимок версии 6 уже учёл пропущенное: событие 7 по цепочке (prevVersion 6) запросов не требует.
+    bridge.emit('rooms.mail', makeMailEvent({ version: 7, prevVersion: 6, rooms: [makeMailRoom('r-01', { prevTop: 5, top: 6, total: 6, letters: [note('m-06')] })] }));
+    expect(requests).toEqual([]);
+    expect(useWorksStore.getState().entries[0]?.map.messages.map((message) => message.id)).toEqual(['m-05', 'm-06']);
+
+    // Событие 9 при версии окна 7: пропущено 8, окно перечитывает держимое.
+    bridge.emit('rooms.mail', makeMailEvent({ version: 9, prevVersion: 8, rooms: [makeMailRoom('r-01', { prevTop: 6, top: 7, total: 7, letters: [note('m-07')] })] }));
+    await vi.waitFor(() => expect(requests).toEqual(['after:4']));
     dispose();
   });
 });

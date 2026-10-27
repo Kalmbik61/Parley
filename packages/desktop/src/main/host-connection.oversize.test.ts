@@ -3,7 +3,17 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { HostPaths } from '@parley/host';
-import { BROWSER_AGENT_FEATURE, BROWSER_AGENT_OP_FEATURE, BROWSER_AGENT_OPS, COMPACT_WORKS_FEATURE, encodeLine, LineDecoder, MAX_LINE_BYTES, PROTOCOL_VERSION } from '@parley/protocol';
+import {
+  BROWSER_AGENT_FEATURE,
+  BROWSER_AGENT_OP_FEATURE,
+  BROWSER_AGENT_OPS,
+  COMPACT_WORKS_FEATURE,
+  encodeLine,
+  LineDecoder,
+  MAX_LINE_BYTES,
+  PROTOCOL_VERSION,
+  ROOMS_MAIL_FEATURE,
+} from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S } from '../shared/strings.js';
 import { HostConnection } from './host-connection.js';
@@ -80,12 +90,12 @@ describe('HostConnection: слишком длинная строка от хос
     await rm(home, { recursive: true, force: true });
   });
 
-  it('hello сообщает возможности compact-works, browser-agent и его операции', async () => {
+  it('hello сообщает возможности compact-works, rooms-mail, browser-agent и его операции', async () => {
     const fake = await startOversizeHost(paths);
     fakes.push(fake);
     const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
     await connection.connect();
-    expect(fake.hellos[0]?.['features']).toEqual([COMPACT_WORKS_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE)]);
+    expect(fake.hellos[0]?.['features']).toEqual([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE)]);
     connection.close();
   });
 

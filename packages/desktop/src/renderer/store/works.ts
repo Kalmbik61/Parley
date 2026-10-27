@@ -7,14 +7,23 @@
  * `revision`, и применяется только новее уже применённого: поздно пришедший ответ `works.list` не откатывает
  * свежее событие. Номер считается от подключения — после переподключения (новый `init`) отсчёт начинается заново,
  * хост мог быть другим процессом. Письма, что окно уже показывало, а хвост сдвинулся, остаются (`retainSeen`).
+ *
+ * Письма и отметки прочтения приходят событием `rooms.mail` (спека rooms.mail 6.3-6.5), если хост объявил признак
+ * `rooms-mail`: без него события нет, и окно живёт по `works.changed`, как прежде. Окно помнит версию каждой работы —
+ * из снимка и из последнего применённого события — и сверяет с ней `prevVersion` события: совпало — событие применяется,
+ * не больше версии окна — это повтор или обогнавший событие снимок, письма сливаются, а числа не трогаются; иначе окно
+ * что-то пропустило, и держимые письма перечитываются (`repairWork`). Событие про комнату, которой нет в снимке, ждёт
+ * снимка этой работы: структура смешанной записи может прийти позже события.
  */
 
 import { create } from 'zustand';
 import type { Message, WindowWorkEntry } from '@parley/core';
-import type { WorksSnapshot } from '@parley/protocol';
+import { ROOMS_MAIL_FEATURE, type RoomsMailEvent, type WorksSnapshot } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
-import { retainSeen, withMessages } from '../lib/window-merge.js';
+import { hostFeatures } from '../lib/capabilities.js';
+import { heldRanges, retainSeen, withFreshMessages, withMail, withMessages } from '../lib/window-merge.js';
+import { followRoom, repairWork, rereadRoom } from './room-pages.js';
 
 /** Отказ `works.list`: код протокола и причина хоста (`works-unreadable`, раунд lane-r5). */
 export interface WorksLoadError {
@@ -34,18 +43,62 @@ export interface WorksState {
   ready: boolean;
   error: WorksLoadError | null;
   /** Подписывается на бридж и один раз запрашивает `works.list`; возвращает отписку. */
-  init: (bridge: Pick<ParleyBridge, 'call' | 'on'>) => () => void;
+  init: (bridge: Pick<ParleyBridge, 'call' | 'on' | 'onStatus'>) => () => void;
   /** Письма, пришедшие страницей (`context.messages`), встают в карту работы по номеру. */
   addMessages: (projectPath: string, workId: string, messages: readonly Message[]) => void;
+  /**
+   * Письма, пришедшие страницей при починке разрыва или дочитывании (`repairWork`, `followRoom`): свежая копия письма
+   * заменяет держимую, отметки прочтения только прибавляются (`addMessages` оставляет держимую копию как есть).
+   */
+  addMail: (projectPath: string, workId: string, messages: readonly Message[]) => void;
+  /**
+   * Слушатель событий `rooms.mail`: зовётся после того, как событие применено к стору, — в том числе событие, которое
+   * ждало снимка, и повтор, обогнанный снимком. Событие, выброшенное целиком (комнаты нет в снимке), слушателей не будит.
+   * Слушатель живёт, пока его не сняли: переподключение `init` его не сбрасывает. Возвращает отписку.
+   */
+  onMail: (listener: (event: RoomsMailEvent) => void) => () => void;
 }
 
-export const useWorksStore = create<WorksState>((set) => ({
+/** Слушатели `onMail`: общие для всех `init`, чтобы уведомления и очередь отправки не подписывались заново на каждое подключение. */
+const mailListeners = new Set<(event: RoomsMailEvent) => void>();
+
+/** Событий одной работы, ждущих снимка, и работ с такими событиями не больше: потерянное звено цепочки окно чинит как разрыв версии. */
+const WAITING_EVENTS_MAX = 32;
+const WAITING_WORKS_MAX = 16;
+
+const mailKey = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
+
+function notifyMail(event: RoomsMailEvent): void {
+  // Событие без комнат и без `droppedRooms` — выброшенное целиком: сообщать слушателям нечего.
+  if (event.rooms.length === 0 && event.droppedRooms.length === 0) return;
+  for (const listener of [...mailListeners]) {
+    try {
+      listener(event);
+    } catch (error) {
+      console.warn('[parley] rooms.mail listener', error);
+    }
+  }
+}
+
+export const useWorksStore = create<WorksState>((set, get) => ({
   addMessages: (projectPath, workId, messages) =>
     set((state) => ({
       entries: state.entries.map((entry) =>
         entry.projectPath === projectPath && entry.map.work.id === workId ? withMessages(entry, messages) : entry,
       ),
     })),
+  addMail: (projectPath, workId, messages) =>
+    set((state) => ({
+      entries: state.entries.map((entry) =>
+        entry.projectPath === projectPath && entry.map.work.id === workId ? withFreshMessages(entry, messages) : entry,
+      ),
+    })),
+  onMail: (listener) => {
+    mailListeners.add(listener);
+    return () => {
+      mailListeners.delete(listener);
+    };
+  },
   entries: [],
   branches: {},
   loading: true,
@@ -54,8 +107,110 @@ export const useWorksStore = create<WorksState>((set) => ({
   init: (bridge) => {
     let disposed = false;
     let applied = -1;
+    /**
+     * Версия каждой работы, которой располагает окно: из снимка (`max`) и из последнего применённого события. Нет записи —
+     * окно не знает, чем располагает (снимок без версии, сбой починки), и первое событие считает разрывом: безопасный путь,
+     * цена — одна лишняя починка.
+     */
+    const held = new Map<string, number>();
+    /** События, что ждут снимка своей работы (или комнаты в нём), в порядке прихода: следующее не обгоняет первое. */
+    const waiting = new Map<string, RoomsMailEvent[]>();
     // Новое подключение — возможно, к только что запущенному хосту: готовность считается заново.
     set({ ready: false });
+
+    const find = (key: string): WindowWorkEntry | undefined =>
+      get().entries.find((entry) => mailKey(entry.projectPath, entry.map.work.id) === key);
+
+    /**
+     * Что делать с событием при данной карте работы: комнаты на месте — применить как есть; комнаты нет, а снимок не
+     * старее события — её удалила та же запись, события про неё выбрасываются (применяется остальное); иначе структура
+     * ещё в пути — `null`, ждать снимка (спека rooms.mail 6.5).
+     */
+    const place = (entry: WindowWorkEntry, event: RoomsMailEvent, key: string): RoomsMailEvent | null => {
+      const known = new Set(entry.map.rooms.map((room) => room.id));
+      const present = event.rooms.filter((room) => room.roomId === null || known.has(room.roomId));
+      if (present.length === event.rooms.length) return event;
+      const version = held.get(key);
+      return version !== undefined && version >= event.version ? { ...event, rooms: present } : null;
+    };
+
+    /** Применяет событие к карте работы по правилам версии (6.5) и запускает дочитывание, если оно нужно. `before` — карта до применения. */
+    const deliver = (before: WindowWorkEntry, event: RoomsMailEvent): void => {
+      const key = mailKey(event.projectPath, event.workId);
+      const version = held.get(key);
+      // Версия события не больше версии окна: повтор или обогнавший событие снимок — письма и отметки сливаются, числа не трогаются.
+      const stale = version !== undefined && event.version <= version;
+      const gap = !stale && version !== event.prevVersion;
+      // Версия сошлась, но верх держимой комнаты ниже `prevTop` (письма между ними потерялись) или комната помечена `reread`.
+      const ranges = heldRanges(before);
+      const lagging: Array<string | null> = [];
+      const rereading: Array<string | null> = [];
+      if (!stale && !gap) {
+        for (const room of event.rooms) {
+          const range = ranges.get(room.roomId);
+          if (range === undefined) continue;
+          if (room.reread === true) rereading.push(room.roomId);
+          else if (range.max < room.prevTop) lagging.push(room.roomId);
+        }
+      }
+
+      set((state) => ({
+        entries: state.entries.map((entry) =>
+          entry.projectPath === event.projectPath && entry.map.work.id === event.workId ? withMail(entry, event, stale) : entry,
+        ),
+      }));
+      if (!stale) held.set(key, event.version);
+      notifyMail(event);
+      if (stale) return;
+
+      const repair = gap
+        ? repairWork(bridge, before)
+        : Promise.all([...lagging.map((roomId) => followRoom(bridge, before, roomId)), ...rereading.map((roomId) => rereadRoom(bridge, before, roomId))]);
+      repair.catch((error: unknown) => {
+        if (disposed) return;
+        console.warn('[parley] rooms.mail repair', error);
+        // Не починено — окно не знает, чем располагает: следующее событие снова станет разрывом и повторит чтение.
+        if (held.get(key) === event.version) held.delete(key);
+      });
+    };
+
+    const enqueue = (key: string, event: RoomsMailEvent): void => {
+      const queue = waiting.get(key) ?? [];
+      queue.push(event);
+      if (queue.length > WAITING_EVENTS_MAX) queue.shift();
+      waiting.set(key, queue);
+      if (waiting.size > WAITING_WORKS_MAX) waiting.delete(waiting.keys().next().value!);
+    };
+
+    /** После снимка: ждущие события работ, которые теперь в карте, применяются по порядку; ждать дальше — только тем, что снимок не покрыл. */
+    const drain = (): void => {
+      for (const [key, queue] of [...waiting]) {
+        for (let event = queue[0]; event !== undefined; event = queue[0]) {
+          const entry = find(key);
+          if (entry === undefined) break;
+          const placed = place(entry, event, key);
+          if (placed === null) break;
+          queue.shift();
+          deliver(entry, placed);
+        }
+        if (queue.length === 0) waiting.delete(key);
+      }
+    };
+
+    const handleMail = (event: RoomsMailEvent): void => {
+      if (disposed) return;
+      const key = mailKey(event.projectPath, event.workId);
+      const entry = find(key);
+      if (entry !== undefined && !waiting.has(key)) {
+        const placed = place(entry, event, key);
+        if (placed !== null) {
+          deliver(entry, placed);
+          return;
+        }
+      }
+      enqueue(key, event);
+    };
+
     const apply = (snapshot: WorksSnapshot): void => {
       if (disposed) return;
       // Хост до P35 номера не шлёт: его снимки применяются в порядке прихода, как прежде.
@@ -63,15 +218,25 @@ export const useWorksStore = create<WorksState>((set) => ({
         if (snapshot.revision <= applied) return;
         applied = snapshot.revision;
       }
+      const present = new Set<string>();
+      for (const entry of snapshot.entries) {
+        const key = mailKey(entry.projectPath, entry.map.work.id);
+        present.add(key);
+        // Снимок ставит `held = max(held, version)`; без версии окно не знает, чем располагает, и забывает прежнюю.
+        if (entry.version === undefined) held.delete(key);
+        else held.set(key, Math.max(held.get(key) ?? entry.version, entry.version));
+      }
+      for (const key of [...held.keys()]) if (!present.has(key)) held.delete(key);
       set((state) => {
-        const previous = new Map(state.entries.map((entry) => [`${entry.projectPath}\u0000${entry.map.work.id}`, entry]));
+        const previous = new Map(state.entries.map((entry) => [mailKey(entry.projectPath, entry.map.work.id), entry]));
         return {
-          entries: snapshot.entries.map((entry) => retainSeen(previous.get(`${entry.projectPath}\u0000${entry.map.work.id}`), entry)),
+          entries: snapshot.entries.map((entry) => retainSeen(previous.get(mailKey(entry.projectPath, entry.map.work.id)), entry)),
           branches: snapshot.branches,
           loading: false,
           error: null,
         };
       });
+      drain();
     };
 
     bridge
@@ -93,9 +258,25 @@ export const useWorksStore = create<WorksState>((set) => ({
       });
 
     const unsubscribe = bridge.on('works.changed', apply);
+    // На `rooms.mail` окно подписано, только пока хост объявляет признак: хост без него события не шлёт, а пришедшее
+    // от чужой сборки не читается — письма тогда приходят снимком, как раньше (спека rooms.mail 6.10). Статус
+    // отдаётся при подписке, так что решение принято до первого события; остров статус хоста не хранит — берём из моста.
+    let offMail: (() => void) | null = null;
+    const offStatus = bridge.onStatus((status) => {
+      const wants = hostFeatures(status).has(ROOMS_MAIL_FEATURE);
+      if (wants && offMail === null) offMail = bridge.on('rooms.mail', handleMail);
+      else if (!wants && offMail !== null) {
+        offMail();
+        offMail = null;
+      }
+    });
     return () => {
       disposed = true;
       unsubscribe();
+      offStatus();
+      offMail?.();
+      waiting.clear();
+      held.clear();
     };
   },
 }));
