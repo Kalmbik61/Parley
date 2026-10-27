@@ -147,20 +147,34 @@ export function isPointerText(text: string): boolean {
 }
 
 /**
+ * Упоминание получателя в простом тексте: `@sNN` (`sessionMention`) и, для id вида `s-NN`, ещё `@s-NN` — модель
+ * нередко копирует id как есть. Граница та же, что у `plainHumanMention` (`attention.ts`): не часть слова и не адрес,
+ * так что `@s02` не находится ни в `@s020`, ни в `a@s02`, а `@s-02` — ни в `@s-020`. Без флага `g`, значит
+ * без состояния: одно выражение годится на любое число писем.
+ */
+function mentionPattern(recipientId: string): RegExp {
+  const forms = [sessionMention(recipientId)];
+  if (/^s-\d+$/.test(recipientId)) forms.push(`@${recipientId}`);
+  const alternatives = forms.map((form) => form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  return new RegExp(`(^|[^\\w@])(?:${alternatives})(?!\\w)`, 'i');
+}
+
+const isUrgentWithoutMention = (message: Message): boolean =>
+  message.from === HUMAN || message.to.length > 0 || message.kind !== 'note';
+
+/**
  * Письмо будит получателя сразу, без окна тишины: от человека, адресное (`to` не пусто), не заметка (`question`,
- * `decision`) или с упоминанием получателя `@sNN`. Упоминание — по правилу `plainHumanMention` (`attention.ts`):
- * не часть слова и не адрес, так что `@s02` не находится ни в `@s020`, ни в `a@s02`.
+ * `decision`) или с упоминанием получателя `@sNN` (или `@s-NN`, `mentionPattern`).
  */
 export function wakesAtOnce(message: Message, recipientId: string): boolean {
-  if (message.from === HUMAN || message.to.length > 0 || message.kind !== 'note') return true;
-  const token = sessionMention(recipientId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|[^\\w@])${token}(?!\\w)`, 'i').test(message.text);
+  return isUrgentWithoutMention(message) || mentionPattern(recipientId).test(message.text);
 }
 
 /**
  * Сколько ещё ждать тишины, мс; 0 — доставлять сейчас. Есть срочное письмо (`wakesAtOnce`), писем нет или у
- * какого-то нечитаемый `at` — 0: сломанная метка не должна задерживать доставку. Иначе срок — через `settleMs`
- * после самого нового письма, но не позже `settleMaxMs` от самого старого.
+ * какого-то нечитаемый `at` или `at` из будущего дальше `settleMs` — 0: сломанная метка не должна задерживать
+ * доставку. Иначе срок — через `settleMs` после самого нового письма, но не позже `settleMaxMs` от самого старого
+ * и никогда не выше `settleMaxMs`.
  */
 export function settleDelayMs(
   letters: readonly Message[],
@@ -169,12 +183,20 @@ export function settleDelayMs(
   settleMs = SETTLE_MS,
   settleMaxMs = SETTLE_MAX_MS,
 ): number {
-  if (letters.length === 0 || letters.some((message) => wakesAtOnce(message, recipientId))) return 0;
+  if (letters.length === 0) return 0;
+  // Выражение упоминания строим один раз на пачку, а не на каждое письмо.
+  const mention = mentionPattern(recipientId);
+  if (letters.some((message) => isUrgentWithoutMention(message) || mention.test(message.text))) return 0;
   const times = letters.map((message) => Date.parse(message.at));
   if (times.some((time) => Number.isNaN(time))) return 0;
   const newest = Math.max(...times);
   const oldest = Math.min(...times);
-  return Math.max(0, Math.min(newest + settleMs, oldest + settleMaxMs) - now);
+  // Метка дальше окна тишины вперёд — скачок часов или битые данные, а не «письмо только что»: тишины от такой
+  // метки не дождаться, и далёкое будущее дало бы срок за 2^31−1 мс, который Node урезает до 1 мс (пересчёт в цикле).
+  // Поэтому доставляем сразу. К `now` метку не прижимаем: письмо из будущего тогда никогда бы не успокоилось.
+  if (newest - now > settleMs) return 0;
+  // Вторая страховка: срок не выше потолка, как бы ни сложились метки.
+  return Math.max(0, Math.min(Math.min(newest + settleMs, oldest + settleMaxMs) - now, settleMaxMs));
 }
 
 /**

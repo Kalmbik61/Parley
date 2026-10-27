@@ -666,6 +666,20 @@ describe('wakesAtOnce — срочность письма для получат�
     expect(wakesAtOnce(broadcast({ text: 'ping @S02.' }), 's-02')).toBe(true);
   });
 
+  it('упоминание в форме id (@s-02) тоже будит s-02, с любым регистром и границами', () => {
+    expect(wakesAtOnce(broadcast({ text: '@s-02 take the schema' }), 's-02')).toBe(true);
+    expect(wakesAtOnce(broadcast({ text: 'thanks, @s-02, done' }), 's-02')).toBe(true);
+    expect(wakesAtOnce(broadcast({ text: 'ping (@S-02).' }), 's-02')).toBe(true);
+  });
+
+  it('@s-020 и @s020 не будят s-02; @s-02 внутри слова и адреса — тоже нет', () => {
+    expect(wakesAtOnce(broadcast({ text: '@s-020 take the schema' }), 's-02')).toBe(false);
+    expect(wakesAtOnce(broadcast({ text: '@s020 take the schema' }), 's-02')).toBe(false);
+    expect(wakesAtOnce(broadcast({ text: 'a@s-02' }), 's-02')).toBe(false);
+    expect(wakesAtOnce(broadcast({ text: '@@s-02' }), 's-02')).toBe(false);
+    expect(wakesAtOnce(broadcast({ text: '@s-03 take the schema' }), 's-02')).toBe(false);
+  });
+
   it('заметка всем без упоминания — не сразу', () => {
     expect(wakesAtOnce(broadcast(), 's-02')).toBe(false);
   });
@@ -733,6 +747,20 @@ describe('settleDelayMs — сколько ещё ждать тишины', () =
   it('нечитаемый at не задерживает доставку — 0', () => {
     expect(settleDelayMs([note('m-01', 0, { at: 'not-a-date' })], 's-02', T0)).toBe(0);
     expect(settleDelayMs([note('m-01', 0), note('m-02', 0, { at: '' })], 's-02', T0)).toBe(0);
+  });
+
+  it('заметка с at на 10 минут вперёд — 0: ждать тишины от метки из будущего нечего', () => {
+    expect(settleDelayMs([note('m-01', 600_000)], 's-02', T0)).toBe(0);
+    expect(settleDelayMs([note('m-01', 0), note('m-02', 600_000)], 's-02', T0)).toBe(0);
+    // Далёкое будущее не должно дать срок за 2^31−1 мс.
+    expect(settleDelayMs([note('m-01', 0, { at: '9999-12-31T00:00:00.000Z' })], 's-02', T0)).toBe(0);
+  });
+
+  it('заметка с at на 1 с вперёд — около SETTLE_MS + 1 с, но не выше потолка', () => {
+    expect(settleDelayMs([note('m-01', 1_000)], 's-02', T0)).toBe(SETTLE_MS + 1_000);
+    // Метка на 1 с вперёд при settleMs 10 с, settleMaxMs 5 с: min(11 с, 6 с) = 6 с, а потолок — 5 с.
+    expect(settleDelayMs([note('m-01', 1_000)], 's-02', T0, 10_000, 5_000)).toBe(5_000);
+    expect(settleDelayMs([note('m-01', 1_000)], 's-02', T0)).toBeLessThanOrEqual(SETTLE_MAX_MS);
   });
 
   it('settleMs и settleMaxMs можно задать', () => {
