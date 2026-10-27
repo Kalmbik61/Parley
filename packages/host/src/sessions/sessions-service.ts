@@ -558,7 +558,7 @@ export function createSessionsService(
 
   async function readyProvider(provider: string): Promise<ProviderEntry> {
     const entry = (await loadProviders())[provider];
-    if (entry === undefined) throw new HostError('bad_request', `unknown provider ${provider}`);
+    if (entry === undefined) throw new HostError('bad_request', `unknown provider ${provider}; see get_map {field: "providers"}`);
     const readiness = await providerReadiness(entry, {
       ...(providerVersions === undefined ? {} : { probeVersion: (command) => providerVersions.fresh(command) }),
       signedIn: entry.account === undefined ? null : ((await feed.signedIn?.(entry.id)) ?? null),
@@ -1073,7 +1073,7 @@ export function createSessionsService(
     const role = input.role ?? (input.agent === undefined ? null : { source: 'claude' as const, name: input.agent });
     const registry = await timer.step('providers', () => loadProviders());
     const entry = registry[provider];
-    if (!entry) throw new HostError('bad_request', 'unknown provider');
+    if (!entry) throw new HostError('bad_request', `unknown provider ${provider}; see get_map {field: "providers"}`);
     await timer.step('role', async () => {
       await prepareSessionRole(projectPath, entry, { roleId: roleId(role), provider, mode: 'create' }, feed.roleCatalog ? await feed.roleCatalog(projectPath) : undefined);
     });

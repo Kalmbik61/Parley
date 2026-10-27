@@ -89,14 +89,22 @@ describe('хост: маршрут /agent/tools смонтирован (спек
       expect(listed.status).toBe(200);
       expect(listed.json).toMatchObject({ ok: true, result: { tools: expect.arrayContaining([expect.objectContaining({ name: 'get_map' })]) as unknown } });
 
-      // `get_map`: сессию называет токен; строки провайдеров — свои у хоста (запасной путь с пометкой «host unreachable» не взят).
+      // `get_map`: сессию называет токен; каталога провайдеров в карте нет.
       const got = await post({ op: 'call', launch: {}, name: 'get_map', args: {}, callId: randomUUID() });
       expect(got.status).toBe(200);
       const text = ((got.json as { result: { content: { text: string }[] } }).result.content[0] as { text: string }).text;
-      const view = JSON.parse(text) as { sessionId: string; providers: { id: string }[]; note?: string };
+      const view = JSON.parse(text) as { sessionId: string; providers?: unknown; note?: string };
       expect(view.sessionId).toBe(ref.sessionId);
-      expect(view.providers.map((provider) => provider.id)).toContain('claude');
+      expect(view).not.toHaveProperty('providers');
       expect(view).not.toHaveProperty('note');
+
+      // `get_map {field: "providers"}`: строки провайдеров — свои у хоста (запасной путь с пометкой «host unreachable» не взят).
+      const catalog = await post({ op: 'call', launch: {}, name: 'get_map', args: { field: 'providers' }, callId: randomUUID() });
+      expect(catalog.status).toBe(200);
+      const catalogText = ((catalog.json as { result: { content: { text: string }[] } }).result.content[0] as { text: string }).text;
+      const providers = JSON.parse(catalogText) as { providers: { id: string }[]; note?: string };
+      expect(providers.providers.map((provider) => provider.id)).toContain('claude');
+      expect(providers).not.toHaveProperty('note');
 
       // Сессия остановлена — токен снят, маршрут отвечает 401.
       client.send({ id: 902, method: 'sessions.stop', params: { ref } });

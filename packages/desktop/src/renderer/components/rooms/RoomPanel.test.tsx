@@ -1434,6 +1434,7 @@ describe('RoomPanel — строка доставки: кто забрал со�
       'resume-limit': 'resume limit reached',
       pending: 'not launched',
       'folder-trust': 'waiting for folder trust',
+      settling: 'batched, waits for a quiet room',
     };
     const delivering = new Set<MailWait>(['in-flight', 'pointed', 'resuming']);
     for (const [reason, text] of Object.entries(words) as Array<[MailWait, string]>) {

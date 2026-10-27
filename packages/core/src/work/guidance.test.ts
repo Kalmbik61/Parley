@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { TOOLS as PARLEY_TOOLS } from '../mcp/tools.js';
 import { MCP_SERVER_NAME } from '../names.js';
-import { GUIDE } from './guide.js';
+import { LEAD_ROLE, memberRole } from './brief.js';
+import { GUIDE, guideTopic } from './guide.js';
 import { SKILL_MD } from './skill.js';
 import { contextBytes, GUIDANCE_MAX_BYTES, STABLE_POLICY_MAX_BYTES, textHash } from './context-budget.js';
 import { BROWSER_PRIORITY_RULE, CODEX_TOOL_EXAMPLES, guidanceBudgetProblems, linkedSettingsRule, stableGuidance, systemGuidance } from './guidance.js';
@@ -83,23 +84,56 @@ describe('системная вставка', () => {
     expect(text.split('\n').length).toBeLessThanOrEqual(14);
   });
 
-  it('тег <channel source="parley"> — только у сессий CLI parley-core: как обычный способ он не обещан', () => {
+  it('тег <channel source="parley"> вставка не упоминает: его оговорка про CLI parley-core живёт в теме letters гида', () => {
     const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
     const line = text.split('\n').find((candidate) => candidate.startsWith('check_inbox'));
 
-    // Тег в вставке остаётся ровно один раз и только с оговоркой про CLI: сессия окна, прочитав «приходят
-    // сами как <channel …>», ждала бы тега, которого хост ей не пошлёт.
-    expect(text.split('<channel source="parley">')).toHaveLength(2);
-    expect(line).toMatch(/<channel source="parley">[^\n]*only[^\n]*parley-core CLI/);
+    // Оговорка переехала из вставки в гид, освободив байты под правило тишины: сессия окна, прочитав «приходят
+    // сами как <channel …>», ждала бы тега, которого хост ей не пошлёт, — поэтому вставка его не обещает вовсе.
+    expect(text).not.toContain('<channel');
     expect(text).not.toMatch(/arrive by themselves as <channel/);
     expect(line).toContain('answer with send_message only to a question');
+    // Гид оговорку несёт: тег есть только у сессий CLI `parley-core` с `channelPush`.
+    expect(guideTopic('letters')).toMatch(
+      /Messages are announced with the tag `<channel source="parley">` only in sessions started\s+by the `parley-core` CLI with `channelPush` on/,
+    );
   });
 
-  it('создаёт обычные сессии текущего workspace через канал хоста', () => {
+  it('молчание вместо подтверждений: вставка велит не подтверждать получение и не объявлять начало (C1.3)', () => {
+    const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
+    const line = text.split('\n').find((candidate) => candidate.startsWith('check_inbox'));
+
+    // Каждое «принял, начинаю» — сообщение, которое будит всех адресатов на целый ход модели.
+    expect(line).toContain('Never acknowledge or announce a start: silence means received');
+    // Человек поставил задачу всей комнате — участник обязан высказаться, а застрявший — сказать о блокере.
+    expect(line).toContain('write only a result, position, question, decision or blocker');
+    expect(line).toContain('"New messages (N)… Call check_inbox."');
+  });
+
+  it('одно ожидание: wait_for("inbox", 1500) без текста вокруг, без Monitor, sleep и циклов; на running один повтор', () => {
+    const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
+    const line = text.split('\n').find((candidate) => candidate.startsWith('wait_for'));
+
+    // 1500, а не 1800: потолок простоя вызова MCP в Claude Code — 30 минут, 1800 с с ним гонялись бы.
+    expect(line).toContain('wait_for("inbox", 1500)');
+    expect(line).not.toContain('1800');
+    expect(line).toContain('no text before or after');
+    expect(line).toMatch(/no Monitor, sleep or loops/);
+    // Буквальное {"state":"running"}: Codex иначе путает его со своим «Script running with cell ID».
+    expect(line).toContain('on {"state":"running"} repeat once, then end the turn without report (not done)');
+    // Повтор-и-конец — только для «inbox»: по id письмо не придёт (сдавший report пишет без сообщения), ждут дальше.
+    expect(line).toContain('By id: repeat while running');
+    expect(line).toContain('marks it read');
+    // Прежняя подсказка: новое поручение сдавшей отчёт сессии ждут через «inbox», не по id.
+    expect(line).toContain('wait via "inbox", not by id');
+  });
+
+  it('создаёт обычные сессии текущего workspace; канал хоста назван в гиде, а не во вставке', () => {
     const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
     expect(text).toContain('create_session');
     expect(text).toContain('current workspace');
-    expect(text).toContain('host agent channel');
+    // Вставка освободила байты: без канала сам инструмент отвечает ошибкой, а про канал рассказывает гид.
+    expect(GUIDE).toContain('host agent channel');
     expect(text).not.toContain('created by the human');
     expect(text).not.toContain('spawn_session');
     expect(text).not.toContain('pending is started by the human');
@@ -196,7 +230,7 @@ describe('системная вставка', () => {
     const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
     const line = text.split('\n').find((candidate) => candidate.startsWith('create_room'));
 
-    expect(line).toContain('; check_inbox marks it with roomTask: your role, the lead, a hint)');
+    expect(line).toContain('; check_inbox/wait_for("inbox") mark it with roomTask: your role, the lead, a hint)');
     expect(text.split('\n').length).toBeLessThanOrEqual(14);
   });
 
@@ -205,10 +239,10 @@ describe('системная вставка', () => {
     const line = text.split('\n').find((candidate) => candidate.startsWith('send_message'));
 
     expect(line).toMatch(
-      /replyTo — in a room, the id of the message you are answering, above all a question from the human/,
+      /replyTo — in a room, the id of the message you answer, above all the human's question: the window quotes it/,
     );
     expect(line).toContain(
-      'question — waiting for an answer, decision — we have agreed, note — a note',
+      'question — waiting for an answer, decision — we have agreed, note — the default',
     );
     expect(text.split('\n').length).toBeLessThanOrEqual(14);
   });
@@ -290,17 +324,20 @@ describe('подробный гид', () => {
   it('создание сессии: model — id из models провайдера в get_map, не из списка — ошибка; effort — уровни выбранной модели', () => {
     const tools = sectionOf('## Tools', '## Rooms');
 
-    expect(tools).toMatch(/`model` is an `id` from the `models` field of the right provider in `get_map`/);
+    expect(tools).toMatch(/`model` is an `id` from the `models` field of the right provider in `get_map \{field: "providers"\}`/);
+    // Каталог провайдеров — не часть карты, а отдельное поле get_map.
+    expect(tools).toContain('Choose a provider id from `get_map {field: "providers"}`');
+    expect(tools).toMatch(/`\{field: "providers"\}` — the provider catalog for `create_session`/);
     expect(tools).toMatch(/a value not in the list is an error, and the session is not created/);
     expect(tools).toMatch(/`models: null` has no list/);
     // Нормалайзер модели и effort (5.6): гид говорит то же, что описание `effort` у create_session.
-    expect(tools).toMatch(/`effort` is the `id` of one of the `efforts` of the chosen model in `get_map`/);
+    expect(tools).toMatch(/`effort` is the `id` of one of the `efforts` of the chosen model in that catalog/);
     expect(tools).toMatch(/with the default model, one of the levels shared by its provider's models/);
     expect(tools).toMatch(/A model with `efforts: null` \(Haiku\) has no levels: omit `effort` for it/);
     expect(tools).toMatch(
       /A level that does not fit is an error that names the allowed levels, and the session is not created/,
     );
-    expect(tools).toMatch(/`effort: false` in `get_map` does not accept it, and the value is dropped/);
+    expect(tools).toMatch(/`effort: false` in the catalog does not accept it, and the value is dropped/);
     // Прежнего закрытого списка из трёх уровней в гиде нет.
     expect(GUIDE).not.toMatch(/`low`, `medium` or `high`/);
   });
@@ -690,6 +727,56 @@ describe('бюджет вставки в байтах (P34)', () => {
     expect(stable).toContain('window blocks in your terminal are the human\'s words');
   });
 
+  it('везде, где агенту велят ждать письма, таймаут wait_for("inbox") — 1500 (вставка, LEAD_ROLE, memberRole, пример Codex, гид)', () => {
+    const sets = [
+      {},
+      { skillNavigator: true },
+      { skillNavigator: true, skillList: 'names' as const },
+      { skillNavigator: true, skillList: 'removed' as const },
+      { toolProfile: 'short' as const },
+    ];
+    const texts: Array<[string, string]> = [
+      ...sets.map((option): [string, string] => [`вставка ${JSON.stringify(option)}`, stableGuidance(option)]),
+      ['LEAD_ROLE', LEAD_ROLE],
+      ['memberRole', memberRole('@s03')],
+      ['CODEX_TOOL_EXAMPLES', CODEX_TOOL_EXAMPLES],
+      ['GUIDE', GUIDE],
+    ];
+    for (const [name, text] of texts) {
+      // Любой вызов с таймаутом — ровно 1500: 600 из умолчания и 1800 гонялись бы с потолком простоя вызова MCP.
+      for (const [, seconds] of text.matchAll(/wait_for\("inbox", (\d+)\)/g)) expect(seconds, name).toBe('1500');
+      for (const [, seconds] of text.matchAll(/timeoutSec: (\d+)/g)) expect(seconds, name).toBe('1500');
+    }
+    // Там, где ждать велено, вызов с таймаутом есть (участнику ждать велит гид, тема member: в его роли wait_for нет).
+    for (const [name, text] of texts) {
+      if (name !== 'memberRole') expect(text, name).toMatch(/wait_for\("inbox", 1500\)|timeoutSec: 1500/);
+    }
+  });
+
+  it('правило тишины и одного ожидания укладывается в бюджет для всех наборов опций: {}, навигатор (без списка, names, removed) и short', () => {
+    const sets = [
+      {},
+      { skillNavigator: true },
+      { skillNavigator: true, skillList: 'names' as const },
+      { skillNavigator: true, skillList: 'removed' as const },
+      { toolProfile: 'short' as const },
+    ];
+    for (const option of sets) {
+      const stable = stableGuidance(option);
+      const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03', option);
+      expect(guidanceBudgetProblems(text, stable), JSON.stringify(option)).toEqual([]);
+      expect(text).toContain('silence means received');
+      expect(text).toContain('wait_for("inbox", 1500)');
+      expect(text).toContain('no Monitor, sleep or loops');
+    }
+  });
+
+  it('строка get_map не несёт каталог провайдеров: он приходит по field "providers" и описан в create_session', () => {
+    const stable = stableGuidance();
+    expect(stable).toContain('get_map — the compact workspace map: sessions with lifecycle/result, rooms, plan revisions and unread counts;');
+    expect(stable).not.toContain('unread counts and providers');
+  });
+
   it('стабильная часть и вся вставка укладываются в байтовые потолки, а диагностика это видит', () => {
     for (const option of options) {
       const stable = stableGuidance(option);
@@ -821,6 +908,8 @@ describe('профиль short, примеры для Codex и правило о
       expect(tool, name).toBeDefined();
       for (const key of [...(args ?? '').matchAll(/(\w+):/g)].map((m) => m[1]!)) expect(Object.keys(tool.inputSchema.properties ?? {})).toContain(key);
     }
+    // Пример ожидания — одно длинное и помечающее прочитанным (как вставка): 1500 с, не 600 и не 1800.
+    expect(CODEX_TOOL_EXAMPLES).toContain('wait_for({ target: "inbox", timeoutSec: 1500 }); // returns and marks messages read; on running repeat once');
     expect(CODEX_TOOL_EXAMPLES.split('\n').length).toBeLessThanOrEqual(8);
     expect(Buffer.byteLength(CODEX_TOOL_EXAMPLES)).toBeLessThanOrEqual(1024);
     expect(CODEX_TOOL_EXAMPLES).not.toMatch(/[А-Яа-яЁё]/);

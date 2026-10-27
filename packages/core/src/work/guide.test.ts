@@ -32,6 +32,7 @@ describe('темы гида', () => {
     expect(text).toContain('Do not write `@human` about it again.');
     expect(text).toContain('If you are not the lead, do not call the human about it: the lead does.');
     expect(text).toContain('`wait_for` on a stuck participant returns `{"state":"stuck"}` at once');
+    expect(text).toContain('end your turn or `wait_for("inbox", 1500)`');
   });
 
   it('тема lead, шаг 1: застрявший участник, о котором написал Parley, не молчит — отсылка к теме stuck', () => {
@@ -65,6 +66,76 @@ describe('темы гида', () => {
     const text = (guideTopic('tools') ?? '').replace(/\s+/g, ' ');
     expect(text).toContain('The answer `state: "stuck"` means the session waits for the human');
     expect(text).toContain('do not call `wait_for` for it again, see topic `stuck`');
+  });
+
+  it('тема tools: wait_for("inbox") отдаёт письма прочитанными, ждать одним вызовом на 1500 с, check_inbox после него не нужен', () => {
+    const text = (guideTopic('tools') ?? '').replace(/\s+/g, ' ');
+
+    expect(text).toContain('`wait_for("inbox")` returns the mail itself, already marked read: do not call `check_inbox` after it');
+    expect(text).toContain('`check_inbox` is for when you are not waiting');
+    expect(text).toContain('Wait with one call `wait_for("inbox", 1500)`, with no text before or after it');
+    expect(text).toContain('for `"inbox"` call it once more, then end the turn (without `report`: you are not done)');
+    // По id ждут, пока running (как и в вставке): повтор-и-конец — только для «inbox».
+    expect(text).toContain('for a session id keep calling while it is `running`');
+    // Ждать письма велено с таймаутом, как и везде (L1).
+    expect(text).toContain('Wait with `wait_for("inbox", 1500)`: it will wake on the session\'s reply message.');
+    expect(text).not.toContain('1800');
+  });
+
+  it('тема letters: не подтверждать и не объявлять начало, одно длинное ожидание, на running один повтор', () => {
+    const text = (guideTopic('letters') ?? '').replace(/\s+/g, ' ');
+
+    expect(text).toContain('do not acknowledge a message and do not announce that you are starting');
+    expect(text).toContain('silence means received');
+    // Участник обязан высказаться по задаче человека, а застрявший — назвать блокер: молчание их не запрещено.
+    expect(text).toContain('Write only a result, a position, a question, a decision or a blocker.');
+    expect(text).toContain('Wait with one call `wait_for("inbox", 1500)`: no text before or after it, no `Monitor`, `sleep` or polling loops');
+    expect(text).toContain('On `{"state":"running"}` call it once more, then end the turn without `report` (you are not done)');
+    // По id ждут сдавшего только report: письма не будет, будить некому — ждать дальше, пока running.
+    expect(text).toContain('A session that only calls `report` sends no message: wait for it by id and call `wait_for` again while it is `running`.');
+    expect(text).toContain('wait via `"inbox"`');
+  });
+
+  it('тема letters: заметка всем без упоминания приходит пачкой после 30 с тишины, остальное будит сразу', () => {
+    const text = (guideTopic('letters') ?? '').replace(/\s+/g, ' ');
+
+    // Что будит сразу: человек, адресное, question/decision, упоминание (обе записи).
+    expect(text).toContain(
+      'At once: a letter from the human, a letter addressed with `to`, a `question`, a `decision`, and any letter that mentions the colleague (`@s02`; `@s-02` works too).',
+    );
+    // Что идёт пачкой: простая заметка всем ждёт 30 с тишины (потолок 120 с) и приходит одним указателем.
+    expect(text).toContain('a plain broadcast `note` without a mention waits until the room has been quiet for 30 seconds');
+    expect(text).toContain('at most 120 seconds after the oldest');
+    expect(text).toContain('arrives in one pointer together with the rest');
+    // wait_for("inbox") по тому же правилу и на своём таймауте отдаёт накопленные заметки вместо running.
+    expect(text).toContain('`wait_for("inbox")` follows the same rule: at its timeout it returns the pending notes instead of `running`');
+    // Практический вывод: срочное — адресовать или упомянуть.
+    expect(text).toContain(
+      'if a colleague must act on your room message now, address it (`to`) or mention them (`@sNN`); a plain broadcast note is read in the next batch.',
+    );
+    // Правило окна — для оконных сессий; у сессий `parley-core` с `channelPush` каждое письмо объявляется сразу.
+    expect(text).toContain('When an idle colleague in a window session is woken.');
+    expect(text).toContain('Sessions started by the `parley-core` CLI with `channelPush` have no batch: every letter is announced to them at once.');
+    // Голый ярлык без `@` упоминанием не считается.
+    expect(text).toContain('A bare label like `S02` without the `@` is not a mention: write `@s02`.');
+  });
+
+  it('тема lead: ждать позиции одним wait_for("inbox", 1500), не писать «plan accepted, handing out»', () => {
+    const text = (guideTopic('lead') ?? '').replace(/\s+/g, ' ');
+
+    expect(text).toContain('Wait for them with one `wait_for("inbox", 1500)`, not with a `wait_for` per participant id');
+    expect(text).toContain('Do not post "plan accepted, handing out" first: the hand-out message itself is the news.');
+    // Развилка (M2): running при уже собранных позициях — предложить решение, а не закончить ход.
+    expect(text).toContain(
+      'If someone stays silent for long (for example `wait_for("inbox", 1500)` answers `running` while you already hold some positions), do not wait forever or end the turn: propose a decision on the positions you have; it can be replaced by a repeated call.',
+    );
+  });
+
+  it('тема member: раздачу частей не подтверждать, ждать одним wait_for("inbox", 1500)', () => {
+    const text = (guideTopic('member') ?? '').replace(/\s+/g, ' ');
+
+    expect(text).toContain('wait with one `wait_for("inbox", 1500)`');
+    expect(text).toContain('Do not acknowledge the lead\'s assignment of parts ("got it", "starting"): the next message to the lead is the result.');
   });
 
   it('раздел темы не пуст и начинается своим заголовком', () => {

@@ -35,9 +35,10 @@ import {
 } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ActivityService } from '../activity/activity-service.js';
 import { createBrowserEndpoint } from './browser-endpoint.js';
 import { createAttemptsEndpoint } from './attempts-endpoint.js';
-import { hostToolContext, mapChangeSignal } from './tool-context.js';
+import { hostToolContext, mapChangeSignal, turnBoundarySource } from './tool-context.js';
 import { CALL_REPLAY_LIMIT, CALL_REPLAY_TTL_MS, createToolsEndpoint } from './tools-endpoint.js';
 
 /** Ожидания идут через сеть и диск: запас на загруженную машину больше умолчания в секунду. */
@@ -173,7 +174,8 @@ async function boot(options: { now?: () => number; pollMs?: number } = {}) {
   };
 }
 
-const getMapCall = (callId: string = randomUUID()) => ({ op: 'call', launch: {}, name: 'get_map', args: {}, callId });
+// Каталог провайдеров (`field: "providers"`) — единственный ответ `get_map`, что ходит в `providerRows`: по нему и считается исполнение.
+const getMapCall = (callId: string = randomUUID()) => ({ op: 'call', launch: {}, name: 'get_map', args: { field: 'providers' }, callId });
 const sendCall = (text: string, callId: string = randomUUID()) => ({ op: 'call', launch: {}, name: 'send_message', args: { to: 's-02', text }, callId });
 const waitCall = (callId: string = randomUUID()) => ({ op: 'call', launch: {}, name: 'wait_for', args: { target: 'inbox', timeoutSec: 600 }, callId });
 const textOf = (envelope: Envelope): string => ((envelope.result as { content: { text: string }[] }).content[0] as { text: string }).text;
@@ -267,6 +269,42 @@ describe('маршрут /agent/tools: инструменты агента в п
     });
     const retried = await post(body);
     expect(JSON.parse(textOf(retried))).toMatchObject({ state: 'message' });
+  });
+
+  it('wait_for(inbox), закончившийся с письмом до обрыва соединения: повтор с тем же callId получает то же письмо из сохранённого результата, а не новое пустое ожидание', async () => {
+    const { token, url, waiters, closes, notify, post } = await boot();
+    const body = waitCall();
+    // Сырой сокет: клиент шлёт запрос, ответа не читает и бросает соединение, как агент, потерявший ответ.
+    const target = new URL(url);
+    const payload = JSON.stringify(body);
+    const socket = connect({ host: target.hostname, port: Number(target.port) });
+    socket.on('error', () => {});
+    socket.write(
+      [
+        `POST ${target.pathname} HTTP/1.1`,
+        `Host: ${target.host}`,
+        `Authorization: Bearer ${token}`,
+        'Content-Type: application/json',
+        `Content-Length: ${Buffer.byteLength(payload)}`,
+        'Connection: close',
+        '',
+        payload,
+      ].join('\r\n'),
+    );
+    await expect.poll(() => waiters(), POLL).toBe(1);
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, from: 's-02', to: ['s-01'], text: 'lost reply', kind: 'note' });
+    });
+    notify();
+    // Ожидание закончилось, письмо отдано и отмечено прочитанным: вызов уже закончен, и только потом соединение бросают.
+    await expect.poll(() => readStoredMap(project, workId).messages.find((message) => message.text === 'lost reply')?.readBy['s-01'], POLL).toBeDefined();
+    await expect.poll(() => waiters(), POLL).toBe(0);
+    socket.destroy();
+    await expect.poll(() => closes(), POLL).toBe(1);
+    // Письмо прочитано, поэтому свежее ожидание его уже не увидело бы и висело до таймаута; сохранённый результат отвечает сразу.
+    const retried = await post(body);
+    expect(JSON.parse(textOf(retried))).toMatchObject({ state: 'message', messages: [{ text: 'lost reply' }] });
+    expect(waiters()).toBe(0);
   });
 
   it('a call that does not take the signal survives a dropped connection: the retry joins the same run instead of repeating it', async () => {
@@ -740,6 +778,78 @@ describe('hostToolContext', () => {
     expect(shared.roleCatalog).toBe(roleCatalog);
     const own = await hostToolContext(scope(), {}, { providerRows: noRows, onWorksChange: () => () => {} });
     expect('roleCatalog' in own).toBe(false);
+  });
+
+  describe('turn boundary for an abandoned wait_for', () => {
+    const since = Date.parse('2026-10-27T10:00:00.000Z');
+    /** Живая активность, которую тест подменяет между вопросами; `undefined` — сессии службе активности не известны. */
+    let live: { activity: { turnBoundaryAt: string | null } } | undefined;
+    const boundaryAt = (turnBoundaryAt: string | null) => {
+      live = { activity: { turnBoundaryAt } };
+    };
+    /** Служба работ поверх настоящей карты: сессии `s-03` (codex) и `s-02` (claude); неизвестной работы, как у службы, нет. */
+    const works = {
+      entry: (projectPath: string, id: string) => (id === workId ? { projectPath, map: readStoredMap(projectPath, id) } : undefined),
+    };
+    /** Источник хоста поверх неё и подменяемой живой активности. */
+    const source = () => turnBoundarySource(works, { get: () => live as ReturnType<ActivityService['get']> });
+    const ofSession = (sessionId: string): SessionRef => ({ projectPath: project, workId, sessionId });
+
+    beforeEach(async () => {
+      live = undefined;
+      await updateMap(project, workId, (map) => {
+        addSession(map, { provider: 'codex', label: 'three', task: 'third' });
+      });
+    });
+
+    it('a codex session gets a predicate that is true only for a boundary after the call start, read at ask time', async () => {
+      const context = await hostToolContext(ofSession('s-03'), {}, { providerRows: noRows, onWorksChange: () => () => {}, turnBoundary: source() });
+      expect(context.turnBoundarySince).toBeTypeOf('function');
+
+      // No live activity, no boundary, a boundary before or exactly at the call start, an unparsable one: the call is alive.
+      expect(context.turnBoundarySince?.(since)).toBe(false);
+      boundaryAt(null);
+      expect(context.turnBoundarySince?.(since)).toBe(false);
+      boundaryAt('2026-10-27T09:59:59.999Z');
+      expect(context.turnBoundarySince?.(since)).toBe(false);
+      boundaryAt('2026-10-27T10:00:00.000Z');
+      expect(context.turnBoundarySince?.(since)).toBe(false);
+      boundaryAt('not a date');
+      expect(context.turnBoundarySince?.(since)).toBe(false);
+      // A boundary after the call start: the call is abandoned.
+      boundaryAt('2026-10-27T10:00:00.001Z');
+      expect(context.turnBoundarySince?.(since)).toBe(true);
+    });
+
+    it('a claude session, or one the map does not know, gets no predicate even with a boundary in its activity', async () => {
+      boundaryAt('2026-10-27T10:00:00.001Z');
+      const claude = await hostToolContext(ofSession('s-02'), {}, { providerRows: noRows, onWorksChange: () => () => {}, turnBoundary: source() });
+      expect('turnBoundarySince' in claude).toBe(false);
+      const unknown = await hostToolContext(ofSession('s-99'), {}, { providerRows: noRows, onWorksChange: () => () => {}, turnBoundary: source() });
+      expect('turnBoundarySince' in unknown).toBe(false);
+    });
+
+    it('has no predicate without a turn boundary source, whatever the provider', async () => {
+      const context = await hostToolContext(ofSession('s-03'), {}, { providerRows: noRows, onWorksChange: () => () => {} });
+      expect('turnBoundarySince' in context).toBe(false);
+    });
+
+    it('the host source reads the provider from the work map and passes the activity service answer through', () => {
+      const asked: SessionRef[] = [];
+      const answer = { activity: { turnBoundaryAt: '2026-10-27T10:00:00.001Z' } };
+      const wired = turnBoundarySource(works, {
+        get: (ref) => {
+          asked.push(ref);
+          return answer as unknown as ReturnType<ActivityService['get']>;
+        },
+      });
+      expect(wired.provider(ofSession('s-03'))).toBe('codex');
+      expect(wired.provider(ofSession('s-02'))).toBe('claude');
+      expect(wired.provider(ofSession('s-99'))).toBeUndefined();
+      expect(wired.provider({ projectPath: project, workId: 'w-9999', sessionId: 's-03' })).toBeUndefined();
+      expect(wired.activity(ofSession('s-03'))).toBe(answer);
+      expect(asked).toEqual([ofSession('s-03')]);
+    });
   });
 
   it('lets the token scope win over a launch that names scope fields', async () => {

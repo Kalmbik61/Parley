@@ -521,7 +521,17 @@ export type {
   EventsWatcher,
   WatchEventsOptions,
 } from './work/events.js';
-export { deliveryAction, isPointerText, LIMIT_RETURN_TEXT, limitReturnText, pointerText } from './work/delivery.js';
+export {
+  deliveryAction,
+  isPointerText,
+  LIMIT_RETURN_TEXT,
+  limitReturnText,
+  pointerText,
+  SETTLE_MAX_MS,
+  SETTLE_MS,
+  settleDelayMs,
+  wakesAtOnce,
+} from './work/delivery.js';
 export type { DeliveryAction, DeliveryInput } from './work/delivery.js';
 export {
   START_TOLERANCE_MS,

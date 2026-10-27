@@ -110,6 +110,18 @@ export interface SessionActivity {
   heldByBackground: boolean;
   /** Когда закончился ход; `null` — агент работает или ход не начинался. */
   turnEndedAt: string | null;
+  /**
+   * Время последней границы хода в потоке событий: начало хода (`UserPromptSubmit`), его конец (`Stop`, `StopFailure`,
+   * `idle_prompt`, который ход действительно кончает) или запуск процесса (`SessionStart` не `compact`). В отличие от
+   * `turnEndedAt` позднее начало хода его не сбрасывает. Не граница: строки `wait_for`, кадр спиннера Codex, инструменты,
+   * разрешения, субагенты и всё, что выведено по тишине или логу, — догадка не должна отменять живое ожидание.
+   * `null` — границ в потоке нет. По нему хост узнаёт брошенный вызов `wait_for` у Codex (`McpContext.turnBoundarySince`).
+   * Границы Codex — те же `Stop`, что хост кладёт в поток: сигналы терминала о конце хода (заголовок `Ready`, OSC 9) и
+   * события rollout (`task_complete`, `turn_aborted`). Предел: у строк журнала время — mtime файла на момент чтения, поэтому
+   * отложенное чтение может выдать старую границу за более позднюю: тогда вызов получает ложный `running`, а письмо
+   * остаётся непрочитанным.
+   */
+  turnBoundaryAt: string | null;
   lastEventAt: string | null;
   source: ActivitySource;
   /** Каталога `events/` нет — работает одна страховка, нужно предупреждение. */
@@ -274,6 +286,7 @@ export function activityOf({
   let phase = null as Phase | null;
   let source: ActivitySource = 'none';
   let turnEndedAt: string | null = null;
+  let turnBoundaryAt: string | null = null;
   let lastEventAt: string | null = null;
   // Время последнего события, которое начало или продолжило работу (`restartsWork`).
   let lastRestartAt: string | null = null;
@@ -379,6 +392,7 @@ export function activityOf({
     }
     switch (event.name) {
       case 'UserPromptSubmit':
+        turnBoundaryAt = event.at;
         waits = [];
         start();
         break;
@@ -393,6 +407,7 @@ export function activityOf({
         // SessionStart срабатывает через ~0,2-0,35 с после запуска и набранный в этот миг текст не теряется;
         // удерживать `working` до `idle_prompt` ради готовности ввода не нужно.
         if (isLaunchSource(event.source)) {
+          turnBoundaryAt = event.at;
           // Запущен новый процесс: то, чего ждал прежний (вопрос, лимит, вход), позади.
           need = null;
           if (phase === 'working' || phase === 'blocked') end(event.at);
@@ -418,6 +433,7 @@ export function activityOf({
         } else if (type === 'idle_prompt' && phase !== 'blocked') {
           // Простой не отменяет вопроса пользователю: blocked снимает только
           // ответ на него или новый промпт.
+          turnBoundaryAt = event.at;
           end(event.at);
         }
         break;
@@ -427,9 +443,11 @@ export function activityOf({
         if (phase === 'blocked') start();
         break;
       case 'Stop':
+        turnBoundaryAt = event.at;
         end(event.at);
         break;
       case 'StopFailure':
+        turnBoundaryAt = event.at;
         // Claude Code шлёт его вместо `Stop`, когда ход оборвала ошибка API; у Codex такое событие хост выводит
         // из `task_complete` с ошибкой. Текст ошибки — то, что видит человек; без него — подробности.
         failed(event.at, event.error, event.lastAssistantMessage ?? event.errorDetails);
@@ -601,6 +619,7 @@ export function activityOf({
     waitingFor: phase === 'ended' ? null : (waits.at(-1)?.target ?? null),
     heldByBackground,
     turnEndedAt,
+    turnBoundaryAt,
     lastEventAt,
     source,
     hooksMissing: events === null,

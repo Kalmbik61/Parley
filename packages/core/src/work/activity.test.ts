@@ -223,6 +223,7 @@ describe('activityOf: таблица переходов 4.2', () => {
       waitingFor: null,
       heldByBackground: false,
       turnEndedAt: null,
+      turnBoundaryAt: null,
       lastEventAt: null,
       source: 'none',
       hooksMissing: false,
@@ -2776,5 +2777,115 @@ describe('activityOf: need — инвариант вида и хода (3.1)', (
     }
     expect(count).toBeGreaterThan(3_000);
     expect(bad).toEqual([]);
+  });
+});
+
+describe('activityOf: turnBoundaryAt — граница хода для брошенного wait_for', () => {
+  const boundary = (events: EventRecord[], log: ActivityLog | null = null): string | null =>
+    activityOf({ events, log, now: NOW }).turnBoundaryAt;
+
+  it('пустой поток, нет журнала и ничего не известно — null', () => {
+    expect(boundary([])).toBeNull();
+    expect(activityOf({ events: null, now: NOW }).turnBoundaryAt).toBeNull();
+    expect(activityOf({ now: NOW }).turnBoundaryAt).toBeNull();
+  });
+
+  it.each<[string, EventRecord]>([
+    ['UserPromptSubmit', submit(5)],
+    ['Stop', event('Stop', null, sec(5))],
+    ['StopFailure', failure(5, 'server_error', 'boom')],
+    ['StopFailure с лимитом подписки', failure(5, 'rate_limit', SESSION_LIMIT)],
+    ['Notification idle_prompt', notice(5, 'idle_prompt')],
+    ['SessionStart startup', hook('SessionStart', { source: 'startup' }, sec(5))],
+    ['SessionStart resume', hook('SessionStart', { source: 'resume' }, sec(5))],
+    ['SessionStart clear', hook('SessionStart', { source: 'clear' }, sec(5))],
+    ['SessionStart без поля source', hook('SessionStart', {}, sec(5))],
+  ])('%s — граница хода', (_name, next) => {
+    expect(boundary([next])).toBe(sec(5));
+    // Ход шёл раньше: граница — всегда последнее такое событие, а не первое.
+    expect(boundary([submit(1), next])).toBe(sec(5));
+  });
+
+  it('idle_prompt при вопросе к человеку ход не кончает — границы нет', () => {
+    const blocked = [submit(1), permission(2, 'Bash'), notice(3, 'idle_prompt')];
+    expect(activityOf({ events: blocked, now: NOW }).activity).toBe('blocked');
+    expect(boundary(blocked)).toBe(sec(1));
+  });
+
+  it.each<[string, EventRecord]>([
+    ['ParleyWaitStart', hook('ParleyWaitStart', { waitTarget: 'inbox', waitId: 'w1' }, sec(5))],
+    ['ParleyWaitEnd', hook('ParleyWaitEnd', { waitId: 'w1' }, sec(5))],
+    ['кадр спиннера Codex', event(TERMINAL_WORKING_EVENT, null, sec(5))],
+    ['SessionStart compact', hook('SessionStart', { source: 'compact' }, sec(5))],
+    ['SessionStart с незнакомым source', hook('SessionStart', { source: 'something-new' }, sec(5))],
+    ['PreToolUse', hook('PreToolUse', { toolName: 'Bash' }, sec(5))],
+    ['PostToolUse', hook('PostToolUse', { toolName: 'Bash' }, sec(5))],
+    ['PermissionRequest', permission(5, 'Bash')],
+    ['Notification permission_prompt', notice(5, 'permission_prompt')],
+    ['ответ на запрос разрешения', event(PERMISSION_ANSWERED_EVENT, null, sec(5))],
+    ['SubagentStart', startOf('a1', {}, sec(5))],
+    ['SubagentStop', stopOf('a1', {}, sec(5))],
+  ])('%s — не граница хода', (_name, next) => {
+    expect(boundary([next])).toBeNull();
+    expect(boundary([submit(1), next])).toBe(sec(1));
+  });
+
+  it('позднее начало хода границу не сбрасывает, в отличие от turnEndedAt', () => {
+    const ended = activityOf({ events: [submit(1), event('Stop', null, sec(2))], now: NOW });
+    expect(ended.turnBoundaryAt).toBe(sec(2));
+    expect(ended.turnEndedAt).toBe(sec(2));
+
+    const next = activityOf({
+      events: [submit(1), event('Stop', null, sec(2)), submit(3)],
+      now: NOW,
+    });
+    expect(next.turnBoundaryAt).toBe(sec(3));
+    expect(next.turnEndedAt).toBeNull();
+
+    // Работа внутри нового хода границу не двигает, а turnEndedAt остаётся пустым.
+    const working = activityOf({
+      events: [
+        submit(1),
+        event('Stop', null, sec(2)),
+        submit(3),
+        hook('ParleyWaitStart', { waitTarget: 'inbox', waitId: 'w1' }, sec(4)),
+        event(TERMINAL_WORKING_EVENT, null, sec(5)),
+      ],
+      now: NOW,
+    });
+    expect(working.turnBoundaryAt).toBe(sec(3));
+    expect(working.turnEndedAt).toBeNull();
+  });
+
+  it('вывод по тишине границей не считается: ход окончен молчанием, граница прежняя', () => {
+    const quiet = activityOf({
+      events: [submit(1)],
+      now: Date.parse(sec(1)) + 120_000,
+      silenceThresholdMs: 30_000,
+    });
+    expect(quiet.activity).toBe('unseen');
+    expect(quiet.turnEndedAt).not.toBeNull();
+    expect(quiet.turnBoundaryAt).toBe(sec(1));
+  });
+
+  it('вывод по логу провайдера границей не считается: запись лога и ошибка API её не двигают', () => {
+    const newerRecord = activityOf({
+      events: [submit(1)],
+      log: { lastRecordAt: sec(8), lastUserRecordAt: null },
+      now: NOW,
+    });
+    expect(newerRecord.source).toBe('log');
+    expect(newerRecord.turnBoundaryAt).toBe(sec(1));
+
+    // Запасной путь лимита: ход кончился по записи лога (`failed`), но в потоке событий такого события не было.
+    const apiError = activityOf({
+      events: [submit(1)],
+      log: apiErrorLog(5, 'rate_limit', SESSION_LIMIT),
+      now: NOW,
+    });
+    expect(apiError.need?.kind).toBe('limit');
+    expect(apiError.turnBoundaryAt).toBe(sec(1));
+    // Без событий лог границу тоже не создаёт.
+    expect(boundary([], apiErrorLog(5, 'rate_limit', SESSION_LIMIT))).toBeNull();
   });
 });

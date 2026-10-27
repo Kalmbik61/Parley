@@ -60,6 +60,7 @@ Personal execution steps: call publish_agent_plan({steps: [{step, status, descri
 before multi-step work, when a step starts/completes or the approach changes, and before report.
 Statuses are pending, in_progress and completed; send the full list, at most 50 steps, one in progress.
 Keep completed steps until starting a new task. Use explanation for a blocker; do not mark blocked work complete.
+An empty steps list clears the personal plan.
 This works for every provider, including code mode, without a native planning tool or Chat view.
 It updates your card and the Agents panel, without sending messages or waking the feature lead.
 These personal steps do not authorize work, accept assignments or replace plan_update/plan_submit.
@@ -82,7 +83,7 @@ core derives the idempotency key automatically. For an amendment,
 include the current plan id and rev (or top-level planId/rev); the host preserves execution
 state until human acceptance. The host pins git facts and frozen inputs in the proposal;
 human acceptance is Go. Do not write code as the autonomous lead. Read manifests and cards,
-not transcripts. Use attempt_status to read cards and paged full manifests.
+not transcripts. Use attempt_status (it only reads the map) to read cards and paged full manifests.
 Autonomous workers: Submit a truthful handoff manifest without sha via attempt_submit(attemptId, manifest). The host computes manifest.hash and submissionKey; omit both and retry with the same manifest. The response returns the assigned submissionKey. Explicit hashes are checked. Read attempt_status before retrying a lost response. Only the engine captures the commit.
 Assigned verifiers use attempt_verify(attemptId, sha, criterion, verdict, note) on the exact SHA;
 criterion is zero-based, verdict is pass, fail, error or not_verified. The host rechecks
@@ -157,14 +158,18 @@ rooms, the engine creates and closes room sessions as part of the accepted plan.
     text: `## Tools
 
 \`get_map\` — the compact map: sessions with their \`lifecycle\`/\`result\`, rooms, the current
-plan revisions, unread counts and message cursors, plus the list of registry providers with a
-mark telling whether the command is in PATH. Call it first: session and room ids come from
-here. A long text is cut with its full size in \`cut\`; the rest comes in bounded pages, each
-with \`page.next\` to continue: \`get_map {field: "goal"}\`; \`{session: "s-02", field: "task" |
+plan revisions, unread counts and message cursors. Call it first: session and room ids come
+from here. A long text is cut with its full size in \`cut\`; the rest comes in bounded pages, each
+with \`page.next\` to continue: \`get_map {field: "goal"}\`; \`{session: "s-02"}\` — that session in detail (its last 20 history entries and first
+20 artifacts); \`{session: "s-02", field: "task" |
 "summary" | "history" | "artifacts"}\`; \`{room: "r-01"}\` (the room in full, with its whole
-decision); \`{field: "messages", room: "r-01", kind?: "decision"}\` — the messages, newest first,
-\`cursor\` goes on to older ones; \`{field: "message", id: "m-12"}\` — one long message;
-\`{field: "summaries"}\`; \`{field: "archive"}\` — the other workspaces of this project.
+decision; participants and the room owner only); \`{field: "messages", room: "r-01", kind?: "decision"}\` — the
+messages, newest first, a \`cursor\` before:N goes on to older ones, after:N to newer ones; \`maxBytes\` caps a page
+(default 65536); \`{field: "message", id: "m-12"}\` — one long message;
+\`{field: "summaries"}\`; \`{field: "archive"}\` — the other workspaces of this project;
+\`{field: "providers"}\` — the provider catalog for \`create_session\` (ids, a mark telling whether
+the command is in PATH, models with their efforts, limits). It is not part of the map: ask for it
+only before creating a session.
 
 \`backlog_list(filter?, text?)\` — read this project's backlog; filter is open (default),
 taken, done or all. Reads do not assign IDs or create files. Pending suggestions are included.
@@ -178,6 +183,7 @@ ${MEMORY_PARAGRAPH}
 
 \`report(status, summary, artifacts)\` — \`done\` or \`failed\`: the result is handed in, the
 session stays reachable. \`progress\` is a summary along the way; the result does not change.
+A repeated call overwrites the summary and the artifacts.
 A summary is two or three sentences to the point: neighbouring sessions will read it in their
 brief and the human in the window. Artifacts are result files; the path is always relative
 to the project root; the contents are not copied into the map, only the path and the kind
@@ -186,14 +192,14 @@ to the project root; the contents are not copied into the map, only the path and
 \`create_session(provider, label, task, role?, agent?, worktree?, model?, effort?)\` creates
 and launches a normal peer session (\`parent: null\`) in your current workspace only.
 It requires an active host agent channel (desktop sessions). Choose a provider id from
-\`get_map\`; provider, label and task are required. Workspace and room creation budgets
+\`get_map {field: "providers"}\`; provider, label and task are required. Workspace and room creation budgets
 and launch limits apply. No room membership or ownership is inherited: the room lead may
 invite the new session with \`add_to_room\`. Native provider subagents remain available
 within the assigned task and permissions, separately from these Parley sessions.
 
 \`list_roles()\` lists builtin and native roles in your current working folder. It returns
 source-qualified ids, descriptions and defaults, without prompts or definition paths.
-\`role\` is optional: pass an id from \`list_roles\`. Provider is required even with a role; a native role requires its own CLI.
+\`role\` is optional: pass an id from \`list_roles\`. Provider is required even with a role; a native role requires its own CLI, so it must match the provider (Claude roles also fit GLM).
 Parley validates the role and mandatory delivery before writing the new session.
 Do not pass both \`role\` and \`agent\`.
 
@@ -207,31 +213,38 @@ branch (the window's Changes panel). Only in a project with git; Parley itself c
 worktree before the launch, from the project base rather than your session's ancestry. The rules for working in it are in topic \`worktrees\`.
 
 \`model\` and \`effort\` are optional too: the model and the effort the new session starts
-with. \`model\` is an \`id\` from the \`models\` field of the right provider in \`get_map\`: a
+with. \`model\` is an \`id\` from the \`models\` field of the right provider in \`get_map {field: "providers"}\`: a
 value not in the list is an error, and the session is not created. A provider with
 \`models: null\` has no list — the value goes into the command as is if the provider accepts
 a model as a flag, otherwise it is dropped. \`effort\` is the \`id\` of one of the \`efforts\`
-of the chosen model in \`get_map\`; with the default model, one of the levels shared by its
+of the chosen model in that catalog; with the default model, one of the levels shared by its
 provider's models. A model with \`efforts: null\` (Haiku) has no levels: omit \`effort\` for
 it. A level that does not fit is an error that names the allowed levels, and the session is
-not created. A provider with \`effort: false\` in \`get_map\` does not accept it, and the
-value is dropped. Without them the session runs on the default model and effort. The choice
+not created. A provider with \`effort: false\` in the catalog does not accept it, and the
+value is dropped. Without them the session runs on the default model and effort (the role's, if the role sets
+them); \`null\` clears the role's default. The choice
 is kept in the session's record: a session that a message wakes from sleep resumes with the
 same model and effort.
 
 \`wait_for(target, timeoutSec)\` — wait for a session by its id or for an incoming message
-(\`target: "inbox"\`). On timeout you get \`{"state":"running"}\` — decide yourself whether to
-call again. The answer \`state: deleted\` means the human deleted the session: there is
+(\`target: "inbox"\`). \`wait_for("inbox")\` returns the mail itself, already marked read: do not
+call \`check_inbox\` after it (\`check_inbox\` is for when you are not waiting). Wait with one call
+\`wait_for("inbox", 1500)\`, with no text before or after it. On timeout you get
+\`{"state":"running"}\`: for \`"inbox"\` call it once more, then end the turn (without \`report\`: you are
+not done) — Parley wakes you with the pointer when mail arrives; for a session id keep calling
+while it is \`running\`.
+The answer \`state: deleted\` means the human deleted the session: there is
 nothing left to wait for, re-plan the work without it. The answer \`state: "stuck"\` means the
 session waits for the human (an approval, a question, a usage limit, a sign-in): do not call
 \`wait_for\` for it again, see topic \`stuck\`. An unknown id is an error right
 away — it is a typo. Giving a new job to a session that has already handed in its
 \`report\`? Do not wait for it with \`wait_for(target)\` — it returns the old result at once.
-Wait with \`wait_for("inbox")\`: it will wake on the session's reply message.
+Wait with \`wait_for("inbox", 1500)\`: it will wake on the session's reply message.
 
 \`send_message(to, text, kind, room, replyTo)\` and \`check_inbox()\` — correspondence inside the
-workspace. A message lives in the map until the addressee picks it up; the etiquette and the
-kinds of messages are in topic \`letters\`.`,
+workspace. Without \`room\`, \`to\` is exactly one session; with \`room\` it is one id or a list, an empty or
+missing \`to\` is a broadcast, and the sender and the addressees must be participants of the room (the owner and the
+live lead may also write to each other: see topic \`rooms\`). A message lives in the map until the addressee picks it up; the etiquette and the kinds of messages are in topic \`letters\`.`,
   },
   {
     topic: 'rooms',
@@ -267,7 +280,9 @@ mention and notifies the human, so write it only when you need the human's answe
 attention. Write it as plain text: inside code or a link it stays text and notifies no one.
 
 \`read_room(room, limit)\` — read the room's feed for context, without replying and without
-touching read marks: good for finding out what was agreed without joining the conversation.`,
+touching read marks: good for finding out what was agreed without joining the conversation. It is open to the
+participants and the room owner and pages like \`get_map\` (\`cursor\`, \`maxBytes\`); a message that does not fit is
+cut with its full size in \`textBytes\`, and \`get_map {field: "message", id}\` reads it whole.`,
   },
   {
     topic: 'lead',
@@ -285,9 +300,11 @@ without \`@sNN\` mentions. Such a message arrives from \`check_inbox\` / \`wait_
 with what to do. If you are the lead, the workflow below is for Free mode; in plan rooms use topic \`plans\`.
 
 1. Collect the positions: each participant answers in the room with one message. Wait for
-   them with \`wait_for("inbox")\`, read the whole feed with \`read_room\`. If someone stays
-   silent for long, do not wait forever: propose a decision on the positions you have; it can
-   be replaced by a repeated call. A participant Parley reported as stuck is not silent: see
+   them with one \`wait_for("inbox", 1500)\`, not with a \`wait_for\` per participant id: all the
+   positions arrive in the same inbox. Read the whole feed with \`read_room\`. If someone stays
+   silent for long (for example \`wait_for("inbox", 1500)\` answers \`running\` while you already
+   hold some positions), do not wait forever or end the turn: propose a decision on the
+   positions you have; it can be replaced by a repeated call. A participant Parley reported as stuck is not silent: see
    topic \`stuck\`.
 2. Propose a decision: \`propose_decision(room, text)\`. The text is the whole decision: what
    we do and which part each person takes; name participants with mentions \`@s02\` (the
@@ -307,9 +324,11 @@ with what to do. If you are the lead, the workflow below is for Free mode; in pl
    \`kind: decision\` message. \`Returned for rework: <note>\` (without a note —
    \`Returned for rework.\`) means returned for rework.
 5. In Free mode, accepted — hand out the parts: with one \`send_message\` with \`room\` and no \`to\`, each
-   part starts with a mention of the executor: \`@s02 — migrations, @s03 — tests\`. The
-   participants' reports will come to you in the room; you hand in the result of the whole
-   work with your own \`report\`.
+   part starts with a mention of the executor: \`@s02 — migrations, @s03 — tests\`. Do not post
+   "plan accepted, handing out" first: the hand-out message itself is the news. The
+   participants' reports will come to you in the room; wait for them with one
+   \`wait_for("inbox", 1500)\` too, and hand in the result of the whole work with your own
+   \`report\`.
 6. Returned — redo it according to the note (clarify with the participants in the room if
    needed) and call \`propose_decision\` again; still do not start the work before the new
    acceptance.
@@ -341,9 +360,11 @@ The human set a task for everyone in the room. Such a message arrives from \`che
   task. Answering the human's task, pass \`replyTo\` with the id of the human's message
   (from \`check_inbox\` or \`read_room\`): the window shows a quote of it above your answer.
 - Wait for your part: do not start the work until the lead has handed out the parts with
-  mentions — look for your \`@sNN\` (\`s-02\` → \`@s02\`), wait with \`wait_for("inbox")\`. A
-  \`kind: decision\` message with the accepted decision is the outcome of the agreement, not
-  an order to take on everything: do what the lead named.
+  mentions — look for your \`@sNN\` (\`s-02\` → \`@s02\`), wait with one
+  \`wait_for("inbox", 1500)\`. A \`kind: decision\` message with the accepted decision is the
+  outcome of the agreement, not an order to take on everything: do what the lead named.
+- Do not acknowledge the lead's assignment of parts ("got it", "starting"): the next message
+  to the lead is the result. Silence means received.
 - Report to the lead in the room: \`send_message\` with \`room\` and \`to\` (the lead's id is
   the room's \`lead\` field in \`get_map\`; \`null\` means the first of \`members\`, and a closed
   lead is replaced by the first live participant) — what is done, where it lies, what did
@@ -379,8 +400,10 @@ participant is not "silent". The reason comes in Parley's message and in \`stuck
 - If the human gives the part to another participant, tell the stuck one in a message too: it reads it when it is
   back.
 - If you are not the lead, do not call the human about it: the lead does.
+- A message to a stuck participant is still sent: the answer carries a warning, and it reads the message when it is
+  back.
 - \`wait_for\` on a stuck participant returns \`{"state":"stuck"}\` at once: do not call it again for that participant;
-  end your turn or \`wait_for("inbox")\`.`,
+  end your turn or \`wait_for("inbox", 1500)\`.`,
   },
   {
     topic: 'brief',
@@ -547,9 +570,30 @@ Three kinds of message:
 - \`note\` — everything else: a note along the way. An invitation message to a room is also a
   \`note\`, and it does not count toward the message cap below.
 
+When an idle colleague in a window session is woken. At once: a letter from the human, a letter addressed with \`to\`,
+a \`question\`, a \`decision\`, and any letter that mentions the colleague (\`@s02\`; \`@s-02\` works too).
+A bare label like \`S02\` without the \`@\` is not a mention: write \`@s02\`.
+In a batch: a plain broadcast \`note\` without a mention waits until the room has been quiet for
+30 seconds after the newest such note (at most 120 seconds after the oldest), then arrives in one
+pointer together with the rest. \`wait_for("inbox")\` follows the same rule: at its timeout it returns
+the pending notes instead of \`running\`. So if a colleague must act on your room message now,
+address it (\`to\`) or mention them (\`@sNN\`); a plain broadcast note is read in the next batch.
+Sessions started by the \`parley-core\` CLI with \`channelPush\` have no batch: every letter is
+announced to them at once.
+
 Do not answer a \`note\` or a \`decision\`: "thanks" and "agreed" cost a colleague a whole turn.
-And do not \`wait_for\` someone who will answer with a message anyway — the message will wake
-you by itself.
+For the same reason do not acknowledge a message and do not announce that you are starting
+("got it", "starting", "waiting for s-03", "plan accepted"): silence means received, and every
+such message wakes each addressee for a whole turn. Write only a result, a position, a
+question, a decision or a blocker.
+
+Wait with one call \`wait_for("inbox", 1500)\`: no text before or after it, no \`Monitor\`,
+\`sleep\` or polling loops, no narration of the wait. On \`{"state":"running"}\` call it once
+more, then end the turn without \`report\` (you are not done): Parley wakes you with the pointer
+when mail arrives. Do not \`wait_for\` a session by its id when it will answer with a message
+anyway — wait via \`"inbox"\`, or end the turn: the message will wake you by itself. A session
+that only calls \`report\` sends no message: wait for it by id and call \`wait_for\` again while
+it is \`running\`.
 
 Rules for letters:
 
@@ -607,7 +651,8 @@ your permission settings yourself.`,
   Archive in its card menu, a worktree — Discard worktree… in Changes.
 - Use \`create_session\` through the host agent channel for a normal peer in your current workspace; only the room lead invites sessions with \`add_to_room\`.
 - Do not call \`close_session\` on your own initiative or on a colleague's message: only after
-  the human's explicit consent. \`report(done)\` is no reason to close; you stay reachable and
+  the human's explicit consent. It closes only the calling session: owning a room gives no right to close its
+  participants. \`report(done)\` is no reason to close; you stay reachable and
   answer new messages. The stage 1 exception is autonomous rooms: only the engine creates
   and closes their worker/verifier sessions under the human-accepted plan.`,
   },

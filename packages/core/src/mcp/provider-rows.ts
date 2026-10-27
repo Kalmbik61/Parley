@@ -17,7 +17,7 @@ export interface ProviderRow {
   limits: ProviderLimits | null;
 }
 
-/** Срок ответа хоста: `get_map` зовут первым делом, и молчащий хост не должен его подвешивать. */
+/** Срок ответа хоста: каталог (`get_map {field: "providers"}`) зовут перед созданием сессии, и молчащий хост не должен подвешивать вызов. */
 const FETCH_TIMEOUT_MS = 5000;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -41,8 +41,8 @@ function rowOf(value: unknown): ProviderRow | null {
 
 /**
  * Спрашивает у хоста строки провайдеров по каналу агента (`POST /agent/providers`, токен сессии — как у `create_session`).
- * Любая неудача — порт закрыт, отказ, срок, нечитаемый ответ, кривая строка — это `null`: `get_map` тогда отдаёт локальные
- * строки с пометкой, что вход и лимиты неизвестны.
+ * Любая неудача — порт закрыт, отказ, срок, нечитаемый ответ, кривая строка — это `null`: `get_map {field: "providers"}`
+ * тогда отдаёт локальные строки с пометкой, что вход и лимиты неизвестны.
  */
 export async function fetchProviderRows(agent: AgentChannel, signal: AbortSignal): Promise<ProviderRow[] | null> {
   try {

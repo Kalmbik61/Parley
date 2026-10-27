@@ -1,6 +1,29 @@
-import { loadConfig, workPaths, type McpContext, type ProviderRow, type RoleCatalog, type ToolLaunch } from '@parley/core';
+import { loadConfig, workPaths, type McpContext, type ProviderRow, type RoleCatalog, type SessionActivity, type ToolLaunch } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
+import type { ActivityService } from '../activity/activity-service.js';
 import type { WorksService } from '../works/works-service.js';
+
+/**
+ * Откуда `wait_for` узнаёт, что его вызов брошен (`McpContext.turnBoundarySince`): провайдер сессии по карте работ и её
+ * живая активность. Только сессии Codex получают проверку: Claude Code сам отменяет прерванный вызов, а его
+ * `UserPromptSubmit` приходит и при сообщении человека, поставленном в очередь посреди работы, — для живого вызова такая
+ * «граница» была бы ложной, и `wait_for` отвечал бы `running`.
+ */
+export interface TurnBoundarySource {
+  /** Провайдер сессии; `undefined` — работы или сессии в карте нет. */
+  provider(ref: SessionRef): string | undefined;
+  activity(ref: SessionRef): { activity: Pick<SessionActivity, 'turnBoundaryAt'> } | undefined;
+}
+
+/** Источник границ хода хоста: провайдер — из карты работы в памяти службы работ, активность — из службы активности. */
+export const turnBoundarySource = (
+  works: Pick<WorksService, 'entry'>,
+  activity: Pick<ActivityService, 'get'>,
+): TurnBoundarySource => ({
+  provider: (ref) =>
+    works.entry(ref.projectPath, ref.workId)?.map.sessions.find((session) => session.id === ref.sessionId)?.provider,
+  activity: (ref) => activity.get(ref),
+});
 
 /**
  * Сигнал изменения работ для `wait_for` (`mapChanges`): хост будит ожидание по событию службы работ, а не по `fs.watch`.
@@ -46,6 +69,8 @@ export async function hostToolContext(
     roleCatalog?: (cwd: string) => Promise<RoleCatalog>;
     /** Канал попыток внутри хоста: область задаёт токен, а не аргументы инструмента. */
     attempts?: (ref: SessionRef, request: unknown, signal?: AbortSignal) => Promise<unknown>;
+    /** Границы хода для брошенного `wait_for` (только Codex, см. `TurnBoundarySource`); нет — вызов всегда живой. */
+    turnBoundary?: TurnBoundarySource;
   },
 ): Promise<McpContext> {
   const { config } = await loadConfig();
@@ -58,7 +83,7 @@ export async function hostToolContext(
     channel: false,
     messageRate: config.messageRate,
     worktreeRoot: config.worktreeRoot,
-    // Исключение — «строки неизвестны»: `get_map` отдаст локальный реестр с пометкой, а не откажет целиком.
+    // Исключение — «строки неизвестны»: `get_map {field: "providers"}` отдаст локальный реестр с пометкой, а не откажет целиком.
     providerRows: async () => {
       try {
         return await deps.providerRows();
@@ -69,5 +94,15 @@ export async function hostToolContext(
     mapChanges: deps.onWorksChange,
     ...(deps.roleCatalog === undefined ? {} : { roleCatalog: deps.roleCatalog }),
     ...(deps.attempts === undefined ? {} : { attempts: (request, signal) => deps.attempts!(ref, request, signal) }),
+    // Граница хода новее начала вызова — вызов брошен (`wait_for`). Провайдер решает, есть ли проверка вообще; активность
+    // читается в момент вопроса, а не при создании контекста.
+    ...(deps.turnBoundary === undefined || deps.turnBoundary.provider(ref) !== 'codex'
+      ? {}
+      : {
+          turnBoundarySince: (sinceMs) => {
+            const at = deps.turnBoundary!.activity(ref)?.activity.turnBoundaryAt;
+            return at != null && Date.parse(at) > sinceMs;
+          },
+        }),
   };
 }

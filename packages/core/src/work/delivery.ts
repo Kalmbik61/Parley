@@ -8,6 +8,15 @@
 
 import { HUMAN, type Message, type Room, type WorkSession } from './types.js';
 import type { SessionActivity } from './activity.js';
+import { sessionMention } from './thread.js';
+
+/**
+ * Окно тишины (план «меньше ходов», C1.2): заметка всем без упоминания не будит простаивающего агента сразу —
+ * указатель печатается, когда комната притихла на `SETTLE_MS` после самого нового такого письма, но не позже
+ * `SETTLE_MAX_MS` от самого старого: болтовня раз в 20 с не откладывает доставку навсегда.
+ */
+export const SETTLE_MS = 30_000;
+export const SETTLE_MAX_MS = 120_000;
 
 export interface DeliveryInput {
   session: WorkSession;
@@ -34,6 +43,11 @@ export interface DeliveryInput {
    * `blocked` мешает по-прежнему. Не задан — как у Claude Code: указатель ждёт конца хода.
    */
   queueWhileBusy?: boolean;
+  /** Часы вызова (мс): окно тишины считается от `at` писем до этого момента. */
+  now: number;
+  /** Окно тишины и его потолок для тестов; не заданы — `SETTLE_MS` и `SETTLE_MAX_MS`. */
+  settleMs?: number;
+  settleMaxMs?: number;
 }
 
 export type DeliveryAction =
@@ -52,6 +66,8 @@ export type DeliveryAction =
         | 'no-hooks'
         | 'stuck';
     }
+  /** Письма несрочные: указатель ждёт тишины в комнате ещё `retryInMs` — пересчёт по этому сроку. */
+  | { kind: 'none'; reason: 'settling'; retryInMs: number }
   | {
       kind: 'type-pointer';
       text: string;
@@ -131,6 +147,61 @@ export function isPointerText(text: string): boolean {
 }
 
 /**
+ * Упоминание получателя в простом тексте: `@sNN` (`sessionMention`) и, для id вида `s-NN`, ещё `@s-NN` — модель
+ * нередко копирует id как есть. Граница та же, что у `plainHumanMention` (`attention.ts`): не часть слова и не адрес,
+ * так что `@s02` не находится ни в `@s020`, ни в `a@s02`, а `@s-02` — ни в `@s-020`. Без флага `g`, значит
+ * без состояния: одно выражение годится на любое число писем.
+ */
+function mentionPattern(recipientId: string): RegExp {
+  const forms = [sessionMention(recipientId)];
+  if (/^s-\d+$/.test(recipientId)) forms.push(`@${recipientId}`);
+  const alternatives = forms.map((form) => form.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  return new RegExp(`(^|[^\\w@])(?:${alternatives})(?!\\w)`, 'i');
+}
+
+/**
+ * Срочность письма для одного получателя: от человека, адресное (`to` не пусто), не заметка (`question`, `decision`)
+ * или с упоминанием получателя `@sNN` (или `@s-NN`, `mentionPattern`). Выражение упоминания строится один раз —
+ * предикат годится на любое число писем.
+ */
+function urgencyOf(recipientId: string): (message: Message) => boolean {
+  const mention = mentionPattern(recipientId);
+  return (message) => message.from === HUMAN || message.to.length > 0 || message.kind !== 'note' || mention.test(message.text);
+}
+
+/** Письмо будит получателя сразу, без окна тишины (`urgencyOf`). */
+export function wakesAtOnce(message: Message, recipientId: string): boolean {
+  return urgencyOf(recipientId)(message);
+}
+
+/**
+ * Сколько ещё ждать тишины, мс; 0 — доставлять сейчас. Есть срочное письмо (`wakesAtOnce`), писем нет или у
+ * какого-то нечитаемый `at` или `at` из будущего дальше `settleMs` — 0: сломанная метка не должна задерживать
+ * доставку. Иначе срок — через `settleMs` после самого нового письма, но не позже `settleMaxMs` от самого старого
+ * и никогда не выше `settleMaxMs`.
+ */
+export function settleDelayMs(
+  letters: readonly Message[],
+  recipientId: string,
+  now: number,
+  settleMs = SETTLE_MS,
+  settleMaxMs = SETTLE_MAX_MS,
+): number {
+  if (letters.length === 0) return 0;
+  if (letters.some(urgencyOf(recipientId))) return 0;
+  const times = letters.map((message) => Date.parse(message.at));
+  if (times.some((time) => Number.isNaN(time))) return 0;
+  const newest = Math.max(...times);
+  const oldest = Math.min(...times);
+  // Метка дальше окна тишины вперёд — скачок часов или битые данные, а не «письмо только что»: тишины от такой
+  // метки не дождаться, и далёкое будущее дало бы срок за 2^31−1 мс, который Node урезает до 1 мс (пересчёт в цикле).
+  // Поэтому доставляем сразу. К `now` метку не прижимаем: письмо из будущего тогда никогда бы не успокоилось.
+  if (newest - now > settleMs) return 0;
+  // Вторая страховка: срок не выше потолка, как бы ни сложились метки.
+  return Math.max(0, Math.min(Math.min(newest + settleMs, oldest + settleMaxMs) - now, settleMaxMs));
+}
+
+/**
  * Правила по порядку, первое сработавшее решает (план, куски 1.8 и 3.4). Письма
  * к уже удалённой сессии (`deleted`) в счёт не идут — сама доставка их не читает.
  */
@@ -147,6 +218,9 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
     resumeAllowed,
     hooked,
     queueWhileBusy,
+    now,
+    settleMs,
+    settleMaxMs,
   } = input;
 
   if (paused) return { kind: 'none', reason: 'paused' };
@@ -165,10 +239,23 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
     return { kind: 'none', reason: 'already-pointed' };
   }
 
+  // Окно тишины — только там, где иначе получился бы подъём или указатель, и по ещё не указанным письмам:
+  // срочное письмо забирает пачку с собой, а текст указателя считает все непрочитанные.
+  const settleIn = (): number =>
+    settleDelayMs(
+      letters.filter((message) => !pointed.has(message.id)),
+      session.id,
+      now,
+      settleMs,
+      settleMaxMs,
+    );
+
   // Спящую письмо поднимает (спецификация 7.2), но не чаще `resumeRate` в час:
   // сверх лимита письма ждут, а не жгут подписку за ночь (7.4).
   if (session.lifecycle === 'sleeping') {
     if (!resumeAllowed) return { kind: 'none', reason: 'resume-limit' };
+    const retryInMs = settleIn();
+    if (retryInMs > 0) return { kind: 'none', reason: 'settling', retryInMs };
     return {
       kind: 'resume',
       text: pointerText(letters, rooms),
@@ -193,6 +280,8 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
   }
   if (hasDraft) return { kind: 'none', reason: 'draft' };
   if (inFlight) return { kind: 'none', reason: 'in-flight' };
+  const retryInMs = settleIn();
+  if (retryInMs > 0) return { kind: 'none', reason: 'settling', retryInMs };
 
   return {
     kind: 'type-pointer',

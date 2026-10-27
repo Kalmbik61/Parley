@@ -44,7 +44,7 @@ import {
   waitTimeoutMs,
   type ToolRunner,
 } from './tools.js';
-import type { NewLetter } from '../work/letter-store.js';
+import { writeLetters, type NewLetter } from '../work/letter-store.js';
 import { workDb } from '../work/db.js';
 
 let home = '';
@@ -313,7 +313,10 @@ describe('список инструментов', () => {
     expect(replyTo?.type).toBe('string');
     expect(replyTo?.description).toMatch(/check_inbox or read_room/);
     expect(replyTo?.description).toMatch(/quote/);
-    expect(replyTo?.description).toMatch(/Only together with room/);
+    expect(replyTo?.description).toMatch(/Only with room/);
+    expect(replyTo?.description).toMatch(/in this room/);
+    // Подсказка, экономящая ход: отвечать только на question.
+    expect(send?.description).toContain('Answer only a question');
   });
 
   it('гид называет в подписи send_message все параметры инструмента, в том же порядке', async () => {
@@ -327,7 +330,7 @@ describe('список инструментов', () => {
     );
   });
 
-  it('read_guide: topic необязателен, enum — темы гида, описание перечисляет их', async () => {
+  it('read_guide: topic необязателен, enum — темы гида; в описании их нет (список уже в enum, сумма описаний ограничена)', async () => {
     const client = await connect('s-01');
     const { tools } = await client.listTools();
     const guide = tools.find((tool) => tool.name === 'read_guide');
@@ -336,7 +339,9 @@ describe('список инструментов', () => {
     expect(guide?.inputSchema.required ?? []).toEqual([]);
     expect(Object.keys(guide?.inputSchema.properties ?? {})).toEqual(['topic']);
     expect(guide?.inputSchema.properties?.['topic']).toMatchObject({ type: 'string', enum: names });
-    for (const name of names) expect(guide?.description).toContain(name);
+    // Список тем уже в enum схемы; в описании он только тратил бы токены каждого хода.
+    expect(guide?.description).toContain('topic picks one section');
+    expect(guide?.description).not.toContain(names.join(', '));
   });
 
   it('create_room: lead обязателен, описание отделяет владельца от участников', async () => {
@@ -358,8 +363,8 @@ describe('список инструментов', () => {
     const { tools } = await client.listTools();
     const getMap = tools.find((tool) => tool.name === 'get_map');
 
-    expect(getMap?.description).toMatch(/the detailed guide is the read_guide tool$/);
-    expect(getMap?.description).toContain('models with their effort levels');
+    expect(getMap?.description).toMatch(/Details: read_guide\.$/);
+    expect(getMap?.description).toContain('The provider catalog comes with field "providers"');
   });
 
   it('описания инструментов и параметров — по-английски: кириллицы в списке инструментов нет', async () => {
@@ -393,7 +398,8 @@ describe('список инструментов', () => {
     const { tools } = await client.listTools();
     const waitFor = tools.find((tool) => tool.name === 'wait_for');
 
-    expect(waitFor?.description).toMatch(/"inbox"[\s\S]*not by id/);
+    expect(waitFor?.description).toContain('marked read');
+    expect(waitFor?.description).toMatch(/already handed in its report returns the old result at once by id: wait for its answer[\s\S]*via "inbox"/);
   });
 });
 
@@ -469,13 +475,21 @@ describe('read_guide', () => {
 });
 
 describe('get_map', () => {
-  it('отдаёт карту, свою сессию и провайдеров с флагом доступности', async () => {
+  it('без аргументов — карта и своя сессия, без providers и без note', async () => {
     const client = await connect('s-01');
     const result = await callOk(client, 'get_map');
 
     expect(result['sessionId']).toBe('s-01');
     expect((result['map'] as WorkMap).work.title).toBe('Авторизация');
     expect((result['map'] as WorkMap).sessions).toHaveLength(1);
+    expect(Object.keys(result).sort()).toEqual(['map', 'sessionId']);
+    expect(result['providers']).toBeUndefined();
+    expect(result['note']).toBeUndefined();
+  });
+
+  it('field providers — провайдеры с флагом доступности', async () => {
+    const client = await connect('s-01');
+    const result = await callOk(client, 'get_map', { field: 'providers' });
 
     const providers = result['providers'] as {
       id: string;
@@ -494,7 +508,7 @@ describe('get_map', () => {
 
   it('провайдеры несут то же, что providers.list окна: список моделей и принимает ли усилие', async () => {
     const client = await connect('s-01');
-    const result = await callOk(client, 'get_map');
+    const result = await callOk(client, 'get_map', { field: 'providers' });
     const providers = result['providers'] as {
       id: string;
       models: { id: string; label: string }[] | null;
@@ -522,7 +536,7 @@ describe('get_map', () => {
 
   it('модели несут свои уровни effort (нормалайзер, 5.6): у Claude и GLM пять, у Haiku — null, у Codex свои наборы', async () => {
     const client = await connect('s-01');
-    const result = await callOk(client, 'get_map');
+    const result = await callOk(client, 'get_map', { field: 'providers' });
     type Effort = { id: string; label: string; description?: string };
     const providers = result['providers'] as {
       id: string;
@@ -582,7 +596,7 @@ describe('get_map: строки провайдеров от хоста (спек
 
   it('с каналом агента providers — строки хоста: family, needs, лимиты и вход; needs и limits только когда известны', async () => {
     const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], DEFAULT_CONFIG.worktreeRoot, undefined, await fakeHost(hostRows));
-    const result = await callOk(client, 'get_map');
+    const result = await callOk(client, 'get_map', { field: 'providers' });
     const providers = result['providers'] as MapRow[];
 
     expect(providers).toEqual([
@@ -592,12 +606,13 @@ describe('get_map: строки провайдеров от хоста (спек
     // Готовый провайдер несёт компактную строку без `needs`; недоступный называет причину.
     expect('needs' in providers[0]!).toBe(false);
     expect('limits' in providers[1]!).toBe(false);
-    expect(result['note']).toBeUndefined();
+    // Строки хоста — без пометки и без остального ответа: карты в каталоге нет.
+    expect(Object.keys(result)).toEqual(['providers']);
   });
 
   it('без канала агента — прежние локальные строки и note о недоступном хосте', async () => {
     const client = await connect('s-01');
-    const result = await callOk(client, 'get_map');
+    const result = await callOk(client, 'get_map', { field: 'providers' });
     const providers = result['providers'] as MapRow[];
 
     expect(result['note']).toBe('host unreachable: sign-in state and limits unknown');
@@ -616,9 +631,26 @@ describe('get_map: строки провайдеров от хоста (спек
     ];
     for (const agent of channels) {
       const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], DEFAULT_CONFIG.worktreeRoot, undefined, agent);
-      const result = await callOk(client, 'get_map');
+      const result = await callOk(client, 'get_map', { field: 'providers' });
+      // Пометка идёт рядом со списком, а не внутри карты.
+      expect(Object.keys(result).sort()).toEqual(['note', 'providers']);
       expect(result['note']).toBe('host unreachable: sign-in state and limits unknown');
       expect((result['providers'] as MapRow[]).find((entry) => entry.id === 'claude')?.available).toBe(true);
+    }
+  });
+
+  it('get_map без аргументов не несёт ни providers, ни note — даже когда хост недоступен или отвечает', async () => {
+    const closed = createServer();
+    await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve));
+    const { port } = closed.address() as { port: number };
+    await new Promise<void>((resolve) => closed.close(() => resolve()));
+    const channels: AgentChannel[] = [
+      { url: `http://127.0.0.1:${port}/agent/browser`, token: 'a'.repeat(64) },
+      await fakeHost(hostRows),
+    ];
+    for (const agent of channels) {
+      const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], DEFAULT_CONFIG.worktreeRoot, undefined, agent);
+      expect(Object.keys(await callOk(client, 'get_map')).sort()).toEqual(['map', 'sessionId']);
     }
   });
 
@@ -629,10 +661,14 @@ describe('get_map: строки провайдеров от хоста (спек
     expect(page['note']).toBeUndefined();
   });
 
-  it('описание create_session отсылает к providers[].limits: аккаунт того же CLI — отдельная подписка', async () => {
+  it('описание create_session отсылает к get_map {field: "providers"}: аккаунт того же CLI — отдельная подписка', async () => {
     const client = await connect('s-01', 40, DEFAULT_CONFIG.messageRate, false, [], DEFAULT_CONFIG.worktreeRoot, undefined, await fakeHost(hostRows));
     const tool = (await client.listTools()).tools.find((item) => item.name === 'create_session');
-    expect(tool?.description).toContain('An account of the same CLI (for example custom-claude-2) is a separate subscription with its own limits — see providers[].limits in get_map.');
+    expect(tool?.description).toContain('limits from get_map {field: "providers"}');
+    expect(tool?.description).toContain('an account of the same CLI (for example custom-claude-2) is a separate subscription');
+    const getMap = (await client.listTools()).tools.find((item) => item.name === 'get_map');
+    expect(getMap?.description).toContain('field "providers"');
+    expect(JSON.stringify(getMap?.inputSchema)).toContain('"providers"');
   });
 });
 
@@ -866,7 +902,7 @@ describe('GLM readiness in MCP', () => {
   }
   it('get_map reports unavailable without key, after key removal, or with old/unknown/custom CLI', async () => {
     const client = await connect('s-01');
-    const available = async () => ((await callOk(client, 'get_map'))['providers'] as { id: string; available: boolean }[]).find((entry) => entry.id === 'glm')!.available;
+    const available = async () => ((await callOk(client, 'get_map', { field: 'providers' }))['providers'] as { id: string; available: boolean }[]).find((entry) => entry.id === 'glm')!.available;
     await versionStub('2.1.287');
     expect(await available()).toBe(false);
     await writeSecret('zai', 'fake-key');
@@ -1122,6 +1158,8 @@ describe('send_message и check_inbox', () => {
       'question',
     ]);
 
+    // wait_for уже забрал первое письмо: check_inbox нужно новое.
+    await callOk(second, 'send_message', { to: 's-01', text: 'а сейчас?', kind: 'question' });
     const inbox = await callOk(first, 'check_inbox');
     expect((inbox['messages'] as { kind: string }[]).map((item) => item.kind)).toEqual([
       'question',
@@ -1791,11 +1829,13 @@ describe('send_message и check_inbox в комнате', () => {
 
     it('wait_for("inbox") отдаёт тот же roomTask, что и check_inbox', async () => {
       const { a } = await roomSetup();
+      // Эталон — check_inbox; письмо второй раз, потому что отданное им уже прочитано.
+      await humanSays();
+      const [fromInbox] = await inboxOf(a);
       await humanSays();
 
       const waited = await callOk(a, 'wait_for', { target: 'inbox', timeoutSec: 5 });
       const fromWait = (waited['messages'] as TaskView[])[0];
-      const [fromInbox] = await inboxOf(a);
 
       expect(fromWait).toMatchObject({ text: TASK, toEveryone: true });
       expect(fromWait?.roomTask).toBeDefined();
@@ -1982,7 +2022,8 @@ describe('send_message: replyTo — ответ с цитатой (Parley 0.3.0)'
   });
 
   it('read_room, wait_for("inbox") и check_inbox: у ответа есть replyTo, у обычного письма ключа нет совсем', async () => {
-    const { owner, a } = await replySetup();
+    // wait_for отмечает отданное прочитанным, поэтому check_inbox идёт от второго получателя тех же писем (s-03).
+    const { owner, a, b } = await replySetup();
     await callOk(a, 'send_message', { room: 'r-01', text: 'Беру', replyTo: 'm-03' }); // m-06
     await callOk(a, 'send_message', { room: 'r-01', text: 'К слову' }); // m-07
 
@@ -1996,7 +2037,7 @@ describe('send_message: replyTo — ответ с цитатой (Parley 0.3.0)'
         'wait_for',
         (await callOk(owner, 'wait_for', { target: 'inbox', timeoutSec: 5 }))['messages'] as View[],
       ],
-      ['check_inbox', (await callOk(owner, 'check_inbox'))['messages'] as View[]],
+      ['check_inbox', (await callOk(b, 'check_inbox'))['messages'] as View[]],
     ];
 
     for (const [surface, messages] of surfaces) {
@@ -2189,7 +2230,7 @@ describe('wait_for', () => {
     });
   });
 
-  it('inbox просыпается на новом входящем', async () => {
+  it('inbox просыпается на новом входящем и помечает его прочитанным', async () => {
     const client = await connect('s-01');
     const pending = callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 20 });
     await delay(60);
@@ -2202,8 +2243,139 @@ describe('wait_for', () => {
     expect((result['messages'] as { text: string }[]).map((item) => item.text)).toEqual([
       'проснись',
     ]);
-    // Прочитанным помечает только check_inbox.
-    expect((await readMapFile()).messages[0]?.readBy).toEqual({});
+    // Отданное письмо wait_for отмечает прочитанным сам.
+    expect(Object.keys((await readMapFile()).messages[0]?.readBy ?? {})).toEqual(['s-01']);
+    expect(await callOk(client, 'check_inbox')).toEqual({ messages: [] });
+  });
+
+  /** Письма от `s-02` к `s-01`: `s-02` заводится в карте, тексты — по порядку. */
+  async function lettersFromBack(client: Client, ...texts: string[]): Promise<void> {
+    if (!(await readMapFile()).sessions.some((item) => item.id === 's-02')) {
+      await addHistoricalSession(client, { provider: 'claude', label: 'бэк', task: 'делать' });
+    }
+    await updateMap(project, workId, (map, letters) => {
+      for (const text of texts) letters.add({ roomId: null, kind: 'note', from: 's-02', to: ['s-01'], text });
+    });
+  }
+  const textsOf = (result: Record<string, unknown>): string[] =>
+    ((result['messages'] ?? []) as { text: string }[]).map((item) => item.text);
+
+  it('inbox: отданные письма помечены прочитанными, check_inbox после — пустой', async () => {
+    const client = await connect('s-01');
+    await lettersFromBack(client, 'раз', 'два');
+
+    const waited = await callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 5 });
+
+    expect(waited['state']).toBe('message');
+    expect(textsOf(waited)).toEqual(['раз', 'два']);
+    expect((await readMapFile()).messages.every((message) => message.readBy['s-01'] !== undefined)).toBe(true);
+    expect(await callOk(client, 'check_inbox')).toEqual({ messages: [] });
+  });
+
+  it('повторный wait_for без новых писем ждёт до таймаута и отвечает running', async () => {
+    const client = await connect('s-01');
+    await lettersFromBack(client, 'раз');
+    await callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 5 });
+
+    const started = Date.now();
+    expect(await callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 0.3 })).toEqual({ state: 'running' });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(250);
+  });
+
+  it('wait_for и check_inbox одновременно: каждое письмо отдано хотя бы одним, непомеченных-неотданных нет', async () => {
+    const client = await connect('s-01');
+    await lettersFromBack(client, 'раз', 'два', 'три');
+
+    const [waited, inbox] = await Promise.all([
+      callOk(client, 'wait_for', { target: 'inbox', timeoutSec: 0.5 }),
+      callOk(client, 'check_inbox'),
+    ]);
+
+    // Запись одна и целиком: письмо уходит ровно одному из вызовов, а проигравший wait_for ждёт до таймаута, не отвечая пустым message.
+    expect([...textsOf(waited), ...textsOf(inbox)].sort()).toEqual(['два', 'раз', 'три']);
+    if (waited['state'] !== 'message') expect(waited).toEqual({ state: 'running' });
+    expect((await readMapFile()).messages.every((message) => message.readBy['s-01'] !== undefined)).toBe(true);
+  });
+
+  describe('отмена и гонка с check_inbox (исполнитель без транспорта)', () => {
+    const textOf = (result: Awaited<ReturnType<ToolRunner['call']>>): string => (result.content[0] as { text: string }).text;
+
+    /** Исполнитель `s-01` с подпиской `mapChanges`, которую тест дёргает сам; `onStop` — когда ожидание подписку снимает. */
+    function runnerWithChanges(onStop: () => void = () => undefined, pollMs = 60_000): { runner: ToolRunner; listener: () => (() => void) | null } {
+      const state = { listener: null as (() => void) | null };
+      const runner = createToolRunner({
+        projectPath: project, workId, workDir: workPaths(project, workId).dir, sessionId: 's-01', channel: false,
+        messageRate: DEFAULT_CONFIG.messageRate, pollMs,
+        mapChanges: (onChange) => { state.listener = onChange; return () => { state.listener = null; onStop(); }; },
+      });
+      return { runner, listener: () => state.listener };
+    }
+    /** Подписка заводится после первой пробы: ждём её, а не гадаем по времени. */
+    const subscribed = (listener: () => (() => void) | null): Promise<void> =>
+      vi.waitFor(() => expect(listener()).not.toBeNull(), { timeout: 2000, interval: 10 });
+
+    it('отменённый wait_for не помечает: check_inbox отдаёт письмо', async () => {
+      const client = await connect('s-01');
+      await lettersFromBack(client);
+      const controller = new AbortController();
+      const { runner, listener } = runnerWithChanges();
+      const waiting = runner.call('wait_for', { target: 'inbox', timeoutSec: 30 }, undefined, controller.signal);
+      await subscribed(listener);
+
+      controller.abort();
+      await waiting;
+      await lettersFromBack(client, 'пришло после отмены');
+
+      expect((await readMapFile()).messages[0]?.readBy).toEqual({});
+      expect(textsOf(JSON.parse(textOf(await runner.call('check_inbox', {}, undefined))))).toEqual(['пришло после отмены']);
+    });
+
+    it('отмена в тот же миг, когда письмо найдено: ничего не помечено, check_inbox отдаёт письмо', async () => {
+      const client = await connect('s-01');
+      await lettersFromBack(client);
+      const controller = new AbortController();
+      // Подписку ожидание снимает, решив, что письмо есть, и ровно в этот миг клиент отменяет вызов.
+      const { runner, listener } = runnerWithChanges(() => controller.abort());
+      const waiting = runner.call('wait_for', { target: 'inbox', timeoutSec: 30 }, undefined, controller.signal);
+      await subscribed(listener);
+      await lettersFromBack(client, 'письмо');
+
+      listener()!();
+
+      expect(JSON.parse(textOf(await waiting))).toEqual({ state: 'running' });
+      expect((await readMapFile()).messages[0]?.readBy).toEqual({});
+      expect(textsOf(JSON.parse(textOf(await runner.call('check_inbox', {}, undefined))))).toEqual(['письмо']);
+    });
+
+    it('письма в тот же миг забрал check_inbox: wait_for не отвечает пустым message, а ждёт дальше', async () => {
+      const client = await connect('s-01');
+      await lettersFromBack(client);
+      const stolen: { texts: string[] | null } = { texts: null };
+      // В миг, когда ожидание решило, что письмо есть, параллельный check_inbox забирает его (один раз). Пауза перед новым
+      // ожиданием — pollMs, поэтому он короткий.
+      const { runner, listener } = runnerWithChanges(() => {
+        if (stolen.texts !== null) return;
+        stolen.texts = writeLetters(project, workId, (letters) => {
+          const inbox = letters.unreadFor('s-01');
+          letters.markRead('s-01', inbox.map((message) => message.id), new Date().toISOString());
+          return inbox.map((message) => message.text);
+        });
+      }, 50);
+      const waiting = runner.call('wait_for', { target: 'inbox', timeoutSec: 30 }, undefined);
+      await subscribed(listener);
+      await lettersFromBack(client, 'первое');
+      listener()!();
+      await vi.waitFor(() => expect(stolen.texts).toEqual(['первое']), { timeout: 2000, interval: 10 });
+
+      // Ожидание продолжается с новой подпиской; ответ пришёл бы пустым message, если бы оно отвечало сразу.
+      await subscribed(listener);
+      await lettersFromBack(client, 'второе');
+      listener()!();
+
+      const body = JSON.parse(textOf(await waiting)) as Record<string, unknown>;
+      expect(body['state']).toBe('message');
+      expect(textsOf(body)).toEqual(['второе']);
+    });
   });
 });
 
@@ -2615,7 +2787,7 @@ describe('channel: звонок про письмо (разговор агент
     expect(rings[0]?.meta['kind']).toBe('note');
   });
 
-  it('звонок доходит и при висящем wait_for, письмо остаётся одно', async () => {
+  it('при висящем wait_for письмо остаётся одно: wait_for отдаёт его и отмечает, звонок не дублируется, а сторож рядом жив', async () => {
     const rings: Ring[] = [];
     const first = await withChannel('s-01', rings);
     await addHistoricalSession(first, { provider: 'claude', label: 'бэк', task: 'делать' });
@@ -2627,8 +2799,17 @@ describe('channel: звонок про письмо (разговор агент
 
     const waited = await waiting;
     expect(waited['messages']).toHaveLength(1);
-    await rung(rings, 1);
+    // Звонок и wait_for просыпаются от одной записи: если wait_for забрал письмо раньше сторожа, звонить уже не о чем.
+    await delay(150);
+    expect(rings.length).toBeLessThanOrEqual(1);
     expect((await readMapFile()).messages).toHaveLength(1);
+    expect((await callOk(first, 'check_inbox'))['messages']).toEqual([]);
+
+    // Сторож жив рядом с wait_for: следующее письмо, которого никто не ждёт, звонит (счёт — с учётом того, что звонок про первое мог быть).
+    const before = rings.length;
+    await callOk(second, 'send_message', { to: 's-01', text: 'ещё одно' });
+    await rung(rings, before + 1);
+    expect(rings.at(-1)?.meta['from']).toBe('s-02');
   });
 
   it('без PARLEY_CHANNEL нет ни capability, ни instructions, ни звонка', async () => {
@@ -2732,10 +2913,9 @@ describe('двухсторонний разговор (разговор аген
     await delay(50);
     await callOk(back, 'send_message', { to: 's-01', text: 'в db/migrations/0007' });
     expect(texts(await waiting)).toEqual(['в db/migrations/0007']);
-    // Звонок приходит и сюда, но письмо в карте одно: wait_for его не помечает,
-    // и забирает его тот же check_inbox (4.3).
-    await rung(ringsA, 1);
-    expect(texts(await callOk(plan, 'check_inbox'))).toEqual(['в db/migrations/0007']);
+    // Письмо в карте одно, и wait_for его уже отметил: check_inbox после него пуст (4.3). Звонок мог прийти
+    // раньше или не прийти вовсе — сторож и wait_for просыпаются от одной записи, — поэтому его не ждём.
+    expect(texts(await callOk(plan, 'check_inbox'))).toEqual([]);
 
     await callOk(plan, 'send_message', {
       to: 's-02',
@@ -3156,7 +3336,7 @@ describe('застрявшая сессия: get_map, wait_for и send_message (
     const description = (name: string): string => tools.find((tool) => tool.name === name)?.description ?? '';
 
     expect(description('wait_for')).toContain(
-      '{"state":"stuck"} means the session waits for the human or for its usage limit: do not wait for it again — Parley writes to you when it is back.',
+      '{"state":"stuck"}: that session waits for the human or its usage limit — do not wait for it again, Parley writes when it is back.',
     );
     expect(description('send_message')).toContain('stuck');
   });
@@ -3234,7 +3414,7 @@ describe('createToolRunner: инструменты Parley без транспо�
   it('get_map берёт строки провайдеров из context.providerRows — без запроса к хосту и без пометки', async () => {
     const row = { id: 'claude', label: 'Claude', family: 'claude' as const, available: true, needs: null, models: null, effort: false, limits: null };
     const runner = createToolRunner({ projectPath: project, workId, workDir: workPaths(project, workId).dir, sessionId: 's-01', channel: false, messageRate: DEFAULT_CONFIG.messageRate, providerRows: async () => [row] });
-    const body = JSON.parse(textOf(await runner.call('get_map', {}, undefined)));
+    const body = JSON.parse(textOf(await runner.call('get_map', { field: 'providers' }, undefined)));
     expect(body.providers).toEqual([{ id: 'claude', label: 'Claude', family: 'claude', available: true, models: null, effort: false }]);
     expect(body.note).toBeUndefined();
   });

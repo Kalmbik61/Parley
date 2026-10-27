@@ -17,7 +17,7 @@ import {
   NEW_LABEL,
   UNTITLED_WORK,
 } from '@parley/core';
-import type { ProviderLimits, UsageSummary } from '@parley/core';
+import type { ProviderLimits, UsageSummary, WorkSession } from '@parley/core';
 import type { EventData, EventName, LiveMetrics, SessionRef } from '@parley/protocol';
 import { refKey } from '@parley/protocol';
 import type { HostContext } from '../context.js';
@@ -824,6 +824,67 @@ describe('createActivityService', () => {
     expect(current[0]?.ref).toEqual(ref);
     expect(current[0]?.activity.activity).toBe('blocked');
     expect(current[0]?.metrics).toEqual(a.get(ref)?.metrics);
+  }, 20_000);
+
+  it('turnBoundaryAt: границу двигают начало и конец хода, инструмент и ожидание — нет, новый ход её не сбрасывает', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+    const journal = path.join(workPaths(project, ref.workId).events, `${ref.sessionId}.jsonl`);
+    expect(a.get(ref)?.activity.turnBoundaryAt ?? null).toBeNull();
+
+    await appendFile(journal, hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+    const started = a.get(ref)?.activity.turnBoundaryAt;
+    expect(started).toBe(a.get(ref)?.activity.lastEventAt);
+
+    // Инструмент и ожидание `wait_for` идут позже начала хода, но границей не становятся.
+    await appendFile(
+      journal,
+      hook('PreToolUse') + hook('ParleyWaitStart', { parley_wait_target: 'inbox', parley_wait_id: 'w1' }),
+    );
+    await waitFor(() => a.get(ref)?.activity.waitingFor === 'inbox');
+    expect(a.get(ref)?.activity.turnBoundaryAt).toBe(started);
+
+    await appendFile(journal, hook('Stop'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
+    const ended = a.get(ref)?.activity.turnEndedAt;
+    expect(ended).not.toBeNull();
+    expect(a.get(ref)?.activity.turnBoundaryAt).toBe(ended);
+
+    // Новый ход сбрасывает `turnEndedAt`, а граница остаётся — это время начала хода.
+    await appendFile(journal, hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+    expect(a.get(ref)?.activity.turnEndedAt).toBeNull();
+    expect(a.get(ref)?.activity.turnBoundaryAt).toBe(a.get(ref)?.activity.lastEventAt);
+  }, 20_000);
+
+  it('turnBoundaryAt: защёлка границы уходит вместе с сессией — вернувшаяся под тем же ключом начинает с чистого листа', async () => {
+    const { workId, ref } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+    const journal = path.join(workPaths(project, workId).events, `${ref.sessionId}.jsonl`);
+
+    await appendFile(journal, hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.turnBoundaryAt != null);
+
+    // Сессия уходит из карты, её журнал переписан без границы (он короче прежнего — читается заново), сессия возвращается.
+    let removed: WorkSession | undefined;
+    await updateMap(project, workId, (map) => {
+      removed = map.sessions.splice(0, 1)[0];
+    });
+    await waitFor(() => a.get(ref) === undefined);
+    await writeFile(journal, hook('PreToolUse'));
+    await updateMap(project, workId, (map) => {
+      map.sessions.push(removed as WorkSession);
+    });
+    await waitFor(() => a.get(ref) !== undefined);
+
+    expect(a.get(ref)?.activity.turnBoundaryAt).toBeNull();
   }, 20_000);
 });
 

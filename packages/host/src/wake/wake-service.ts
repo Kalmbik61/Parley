@@ -81,6 +81,9 @@ export interface WakeServiceOptions {
   limits?: Pick<LimitsService, 'get'>;
   /** Сроки возврата после сброса лимита; по умолчанию `LIMIT_RETURN_GRACE_MS` и `LIMIT_RETRY_MS`. Рычаги E2E. */
   limitReturn?: { graceMs?: number; retryMs?: number };
+  /** Окно тишины для несрочных писем и его потолок (мс); не заданы — `SETTLE_MS` и `SETTLE_MAX_MS` из core. Рычаги тестов. */
+  settleMs?: number;
+  settleMaxMs?: number;
 }
 
 export interface WakeService {
@@ -120,6 +123,11 @@ const PASTE_MODE_RETRIES = 15;
  * пересчёт каждые 200 мс, до 30 с; дальше — до следующего события сессии.
  */
 const CHOICE_RETRIES = 150;
+/**
+ * Запас к сроку окна тишины: таймер Node может сработать на миллисекунду раньше часов, и пересчёт увидел бы тот же
+ * `settling` с остатком в одну миллисекунду.
+ */
+const SETTLE_SLACK_MS = 50;
 
 /**
  * Ступень таймера возврата. Срок бывает в часах и днях, а таймер Node на macOS не идёт, пока Mac спит: один длинный
@@ -210,6 +218,8 @@ interface AttemptState {
   trustHeld: boolean;
   /** Повтор пересчёта, пока у Codex нет режима вставки (`PASTE_MODE_RETRIES`). */
   pasteRetry: NodeJS.Timeout | undefined;
+  /** Пересчёт по сроку окна тишины (`settling`): один на сессию, новый срок заменяет старый. */
+  settleTimer: NodeJS.Timeout | undefined;
   /** Сколько повторов уже было; с режимом вставки на экране счёт начинается заново. */
   pasteRetries: number;
   /** Повторов пересчёта, пока идёт смена модели или effort (`CHOICE_RETRIES`); без смены счёт начинается заново. */
@@ -277,6 +287,10 @@ export function createWakeService(
   const resumeFailWindowMs = options.resumeFailWindowMs ?? DEFAULT_RESUME_FAIL_WINDOW_MS;
   const limitGraceMs = options.limitReturn?.graceMs ?? LIMIT_RETURN_GRACE_MS;
   const limitRetryMs = options.limitReturn?.retryMs ?? LIMIT_RETRY_MS;
+  const settle = {
+    ...(options.settleMs !== undefined ? { settleMs: options.settleMs } : {}),
+    ...(options.settleMaxMs !== undefined ? { settleMaxMs: options.settleMaxMs } : {}),
+  };
 
   // Как `silenceThresholdMs` в активности: настройка читается на старте.
   let resumeRate = DEFAULT_CONFIG.resumeRate;
@@ -316,6 +330,7 @@ export function createWakeService(
         budgetDeniedAt: null,
         trustHeld: false,
         pasteRetry: undefined,
+        settleTimer: undefined,
         pasteRetries: 0,
         choiceRetries: 0,
         limit: undefined,
@@ -341,6 +356,23 @@ export function createWakeService(
       clearTimeout(state.pasteRetry);
       state.pasteRetry = undefined;
     }
+    if (state.settleTimer !== undefined) {
+      clearTimeout(state.settleTimer);
+      state.settleTimer = undefined;
+    }
+  }
+
+  /**
+   * Несрочные письма ждут тишины в комнате (`settling`): событий, которые разбудили бы сессию к сроку, может не быть —
+   * пересчёт взводится на срок. Таймер один на сессию, новый срок заменяет старый; он не держит процесс хоста.
+   */
+  function settleLater(ref: SessionRef, state: AttemptState, retryInMs: number): void {
+    if (state.settleTimer !== undefined) clearTimeout(state.settleTimer);
+    state.settleTimer = setTimeout(() => {
+      state.settleTimer = undefined;
+      recompute(ref);
+    }, retryInMs + SETTLE_SLACK_MS);
+    state.settleTimer.unref();
   }
 
   /** Пересчёт через короткий срок, но не бесконечно: у Codex ещё нет режима вставки либо идёт смена модели. */
@@ -903,6 +935,8 @@ export function createWakeService(
         resumeAllowed: true,
         // Процесса нет: подъём заводит новый, хуки старого тут ни при чём.
         hooked: false,
+        now: Date.now(),
+        ...settle,
       };
       // Лимит берём только под настоящий подъём: каждый пересчёт без писем
       // иначе съедал бы его впустую.
@@ -917,6 +951,7 @@ export function createWakeService(
       if (action.kind === 'resume') {
         void resumeSession(ref, session, state, { ...action, ...traceOf(input.unread, action.letterIds) });
       } else if (action.kind === 'none' && action.reason === 'resume-limit' && !trustBlocked) limitNotice(ref);
+      else if (action.kind === 'none' && action.reason === 'settling') settleLater(ref, state, action.retryInMs);
       publishWaiting(
         ref,
         state,
@@ -930,7 +965,9 @@ export function createWakeService(
                 ? 'resume-limit'
                 : action.kind === 'none' && action.reason === 'paused'
                   ? 'paused'
-                  : 'sleeping',
+                  : action.kind === 'none' && action.reason === 'settling'
+                    ? 'settling'
+                    : 'sleeping',
       );
       return;
     }
@@ -962,9 +999,12 @@ export function createWakeService(
       resumeAllowed: false,
       hooked: hookedSince(live?.activity, handle.startedAt),
       queueWhileBusy: codex,
+      now: Date.now(),
+      ...settle,
     });
 
     if (action.kind !== 'type-pointer') {
+      if (action.kind === 'none' && action.reason === 'settling') settleLater(ref, state, action.retryInMs);
       // Пауза будильника проверяется раньше писем: без непрочитанных причины нет и на паузе.
       const letters = hasUnread(entry, session.id);
       publishWaiting(ref, state, letters ? waitingOf(action, state) : null);
@@ -1009,6 +1049,8 @@ export function createWakeService(
         return 'pending';
       case 'resume-limit':
         return 'resume-limit';
+      case 'settling':
+        return 'settling';
       case 'stuck':
       case 'no-hooks':
       case 'busy':

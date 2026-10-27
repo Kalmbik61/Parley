@@ -444,19 +444,19 @@ test.describe('аккаунты Claude Code на изолированном Clau
     await expect(meter).toHaveText('58% 5h · 41% wk', { timeout: 15_000 });
     await expect(segment(window, 'claude').locator('[data-limits]')).toHaveCount(0);
 
-    // Агент обычной сессии зовёт `get_map {}`: строки провайдеров приходят от хоста (спека подписок 5.8).
-    await window.evaluate(([target, line]) => (globalThis as unknown as Bridge).parley.notify('pty.input', { ref: target, data: line }), [seedRef, 'STUB_MCP get_map {}\r'] as const);
+    // Агент обычной сессии зовёт `get_map {field: "providers"}`: строки провайдеров приходят от хоста (спека подписок 5.8).
+    await window.evaluate(([target, line]) => (globalThis as unknown as Bridge).parley.notify('pty.input', { ref: target, data: line }), [seedRef, 'STUB_MCP get_map {"field":"providers"}\r'] as const);
     await expect.poll(async () => (await mcpEntries()).filter((entry) => entry.tool === 'get_map').length, { timeout: 30_000 }).toBeGreaterThan(0);
     const entry = (await mcpEntries()).find((item) => item.tool === 'get_map')!;
     expect(entry).toMatchObject({ session: seedRef.sessionId, isError: false });
-    const map = JSON.parse(entry.text) as { providers: MapProvider[]; note?: string };
-    expect(map).not.toHaveProperty('note');
-    const account = map.providers.find((row) => row.id === id)!;
+    const catalog = JSON.parse(entry.text) as { providers: MapProvider[]; note?: string };
+    expect(catalog).not.toHaveProperty('note');
+    const account = catalog.providers.find((row) => row.id === id)!;
     expect(account).toMatchObject({ label: 'Claude Code 2', family: 'claude', available: true });
     expect(account.limits?.fiveHour?.usedPercent).toBeCloseTo(58.7, 1);
     expect(account.limits?.week?.usedPercent).toBeCloseTo(41.9, 1);
     // У глобального claude данных лимитов в этом тесте нет: поля нет вовсе.
-    expect(map.providers.find((row) => row.id === 'claude')).not.toHaveProperty('limits');
+    expect(catalog.providers.find((row) => row.id === 'claude')).not.toHaveProperty('limits');
     expect(errors).toEqual([]);
   });
 

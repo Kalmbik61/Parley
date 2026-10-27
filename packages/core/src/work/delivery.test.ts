@@ -1,9 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionActivity } from './activity.js';
 import { oneLine } from '../counters.js';
-import { deliveryAction, isPointerText, LIMIT_RETURN_TEXT, limitReturnText, pointerText } from './delivery.js';
+import {
+  deliveryAction,
+  isPointerText,
+  LIMIT_RETURN_TEXT,
+  limitReturnText,
+  pointerText,
+  SETTLE_MAX_MS,
+  SETTLE_MS,
+  settleDelayMs,
+  wakesAtOnce,
+} from './delivery.js';
 import type { SessionNeed } from './stuck.js';
-import type { Message, Room, WorkSession } from './types.js';
+import { HUMAN, type Message, type Room, type WorkSession } from './types.js';
 
 const sessionOf = (patch: Partial<WorkSession> = {}): WorkSession => ({
   id: 's-01',
@@ -53,6 +63,7 @@ const activityOf = (
   waitingFor: null,
   heldByBackground: false,
   turnEndedAt: null,
+  turnBoundaryAt: null,
   lastEventAt: null,
   source: 'hooks',
   hooksMissing: false,
@@ -255,6 +266,8 @@ describe('deliveryAction', () => {
     inFlight: false,
     resumeAllowed: true,
     hooked: true,
+    // Часы далеко после писем фикстур (`new Date()`): окно тишины давно вышло, прежние ожидания целы.
+    now: Date.parse('2099-01-01T00:00:00.000Z'),
   };
 
   it('1. пауза — none(paused), даже если остальные условия тоже нарушены', () => {
@@ -624,6 +637,299 @@ describe('deliveryAction', () => {
     });
     expect(deliveryAction({ ...base, activity: activityOf('idle') })).toMatchObject({
       kind: 'type-pointer',
+    });
+  });
+});
+
+describe('wakesAtOnce — срочность письма для получателя s-02', () => {
+  // Заметка всем в комнате: от агента, без адресата, без упоминания.
+  const broadcast = (patch: Partial<Message> = {}): Message =>
+    messageOf({ from: 's-01', to: [], roomId: 'r-01', kind: 'note', text: 'got it, starting', ...patch });
+
+  it('письмо человека — сразу, даже заметкой всем', () => {
+    expect(wakesAtOnce(broadcast({ from: HUMAN }), 's-02')).toBe(true);
+  });
+
+  it('адресное письмо (to не пусто) — сразу', () => {
+    expect(wakesAtOnce(broadcast({ to: ['s-02'] }), 's-02')).toBe(true);
+  });
+
+  it('question и decision — сразу', () => {
+    expect(wakesAtOnce(broadcast({ kind: 'question' }), 's-02')).toBe(true);
+    expect(wakesAtOnce(broadcast({ kind: 'decision' }), 's-02')).toBe(true);
+  });
+
+  it('заметка с упоминанием получателя — сразу', () => {
+    expect(wakesAtOnce(broadcast({ text: '@s02 take the schema' }), 's-02')).toBe(true);
+    expect(wakesAtOnce(broadcast({ text: 'thanks, @s02, done' }), 's-02')).toBe(true);
+    expect(wakesAtOnce(broadcast({ text: 'ping (@s02)' }), 's-02')).toBe(true);
+    expect(wakesAtOnce(broadcast({ text: 'ping @S02.' }), 's-02')).toBe(true);
+  });
+
+  it('упоминание в форме id (@s-02) тоже будит s-02, с любым регистром и границами', () => {
+    expect(wakesAtOnce(broadcast({ text: '@s-02 take the schema' }), 's-02')).toBe(true);
+    expect(wakesAtOnce(broadcast({ text: 'thanks, @s-02, done' }), 's-02')).toBe(true);
+    expect(wakesAtOnce(broadcast({ text: 'ping (@S-02).' }), 's-02')).toBe(true);
+  });
+
+  it('@s-020 и @s020 не будят s-02; @s-02 внутри слова и адреса — тоже нет', () => {
+    expect(wakesAtOnce(broadcast({ text: '@s-020 take the schema' }), 's-02')).toBe(false);
+    expect(wakesAtOnce(broadcast({ text: '@s020 take the schema' }), 's-02')).toBe(false);
+    expect(wakesAtOnce(broadcast({ text: 'a@s-02' }), 's-02')).toBe(false);
+    expect(wakesAtOnce(broadcast({ text: '@@s-02' }), 's-02')).toBe(false);
+    expect(wakesAtOnce(broadcast({ text: '@s-03 take the schema' }), 's-02')).toBe(false);
+  });
+
+  it('заметка всем без упоминания — не сразу', () => {
+    expect(wakesAtOnce(broadcast(), 's-02')).toBe(false);
+  });
+
+  it('упоминание другого — не сразу; @s020 для s-02 — тоже', () => {
+    expect(wakesAtOnce(broadcast({ text: '@s03 take the schema' }), 's-02')).toBe(false);
+    expect(wakesAtOnce(broadcast({ text: '@s020 take the schema' }), 's-02')).toBe(false);
+    expect(wakesAtOnce(broadcast({ text: 'see @s0200' }), 's-02')).toBe(false);
+  });
+
+  it('@s02 внутри слова и адреса (a@s02, mail@s02.org) — не упоминание, как у plainHumanMention', () => {
+    expect(wakesAtOnce(broadcast({ text: 'a@s02' }), 's-02')).toBe(false);
+    expect(wakesAtOnce(broadcast({ text: 'write to mail@s02.org' }), 's-02')).toBe(false);
+    expect(wakesAtOnce(broadcast({ text: '@@s02' }), 's-02')).toBe(false);
+  });
+
+  it('чужая форма id упоминается как есть и экранируется для регулярного выражения', () => {
+    expect(wakesAtOnce(broadcast({ text: 'ping @a.b+c' }), 'a.b+c')).toBe(true);
+    expect(wakesAtOnce(broadcast({ text: 'ping @axb+c' }), 'a.b+c')).toBe(false);
+  });
+});
+
+describe('settleDelayMs — сколько ещё ждать тишины', () => {
+  const T0 = Date.parse('2026-10-27T10:00:00.000Z');
+  const note = (id: string, offsetMs: number, patch: Partial<Message> = {}): Message =>
+    messageOf({
+      id,
+      from: 's-01',
+      to: [],
+      roomId: 'r-01',
+      text: 'got it, starting',
+      at: new Date(T0 + offsetMs).toISOString(),
+      ...patch,
+    });
+
+  it('одна заметка всем: в её момент — SETTLE_MS, по ходу убывает, через SETTLE_MS — 0', () => {
+    expect(SETTLE_MS).toBe(30_000);
+    expect(SETTLE_MAX_MS).toBe(120_000);
+    expect(settleDelayMs([note('m-01', 0)], 's-02', T0)).toBe(30_000);
+    expect(settleDelayMs([note('m-01', 0)], 's-02', T0 + 10_000)).toBe(20_000);
+    expect(settleDelayMs([note('m-01', 0)], 's-02', T0 + 30_000)).toBe(0);
+    expect(settleDelayMs([note('m-01', 0)], 's-02', T0 + 90_000)).toBe(0);
+  });
+
+  it('заметки каждые 20 с сдвигают срок, но не дальше SETTLE_MAX_MS от первой', () => {
+    const chatter = [0, 20_000, 40_000, 60_000, 80_000, 100_000].map((offset, index) => note(`m-0${index + 1}`, offset));
+    // Последняя заметка в 100 с: 100 + 30 = 130 с, потолок 0 + 120 = 120 с.
+    expect(settleDelayMs(chatter, 's-02', T0 + 100_000)).toBe(20_000);
+    expect(settleDelayMs(chatter, 's-02', T0 + 110_000)).toBe(10_000);
+    expect(settleDelayMs(chatter, 's-02', T0 + 120_000)).toBe(0);
+    // Пока потолок далёк, решает самая новая: заметки 0..40 с, сейчас 50 с → 40 + 30 − 50.
+    expect(settleDelayMs(chatter.slice(0, 3), 's-02', T0 + 50_000)).toBe(20_000);
+  });
+
+  it('срочное письмо среди заметок — 0', () => {
+    const letters = [note('m-01', 0), note('m-02', 5_000, { kind: 'question' }), note('m-03', 10_000)];
+    expect(settleDelayMs(letters, 's-02', T0 + 10_000)).toBe(0);
+    expect(settleDelayMs([note('m-01', 0), note('m-02', 5_000, { text: '@s02 look' })], 's-02', T0 + 5_000)).toBe(0);
+  });
+
+  it('писем нет — 0', () => {
+    expect(settleDelayMs([], 's-02', T0)).toBe(0);
+  });
+
+  it('нечитаемый at не задерживает доставку — 0', () => {
+    expect(settleDelayMs([note('m-01', 0, { at: 'not-a-date' })], 's-02', T0)).toBe(0);
+    expect(settleDelayMs([note('m-01', 0), note('m-02', 0, { at: '' })], 's-02', T0)).toBe(0);
+  });
+
+  it('заметка с at на 10 минут вперёд — 0: ждать тишины от метки из будущего нечего', () => {
+    expect(settleDelayMs([note('m-01', 600_000)], 's-02', T0)).toBe(0);
+    expect(settleDelayMs([note('m-01', 0), note('m-02', 600_000)], 's-02', T0)).toBe(0);
+    // Далёкое будущее не должно дать срок за 2^31−1 мс.
+    expect(settleDelayMs([note('m-01', 0, { at: '9999-12-31T00:00:00.000Z' })], 's-02', T0)).toBe(0);
+  });
+
+  it('заметка с at на 1 с вперёд — около SETTLE_MS + 1 с, но не выше потолка', () => {
+    expect(settleDelayMs([note('m-01', 1_000)], 's-02', T0)).toBe(SETTLE_MS + 1_000);
+    // Метка на 1 с вперёд при settleMs 10 с, settleMaxMs 5 с: min(11 с, 6 с) = 6 с, а потолок — 5 с.
+    expect(settleDelayMs([note('m-01', 1_000)], 's-02', T0, 10_000, 5_000)).toBe(5_000);
+    expect(settleDelayMs([note('m-01', 1_000)], 's-02', T0)).toBeLessThanOrEqual(SETTLE_MAX_MS);
+  });
+
+  it('settleMs и settleMaxMs можно задать', () => {
+    expect(settleDelayMs([note('m-01', 0)], 's-02', T0, 1_000, 5_000)).toBe(1_000);
+    const letters = [note('m-01', 0), note('m-02', 4_000)];
+    // 4 + 1 = 5 с против потолка 0 + 5 = 5 с.
+    expect(settleDelayMs(letters, 's-02', T0 + 4_000, 1_000, 5_000)).toBe(1_000);
+    expect(settleDelayMs(letters, 's-02', T0 + 4_500, 10_000, 5_000)).toBe(500);
+  });
+});
+
+describe('deliveryAction — окно тишины (план «меньше ходов», C1.2)', () => {
+  const T0 = Date.parse('2026-10-27T10:00:00.000Z');
+  const note = (id: string, offsetMs: number, patch: Partial<Message> = {}): Message =>
+    messageOf({
+      id,
+      from: 's-02',
+      to: [],
+      roomId: 'r-01',
+      text: 'got it, starting',
+      at: new Date(T0 + offsetMs).toISOString(),
+      ...patch,
+    });
+  const idle: Parameters<typeof deliveryAction>[0] = {
+    session: sessionOf(),
+    activity: activityOf('idle'),
+    hasDraft: false,
+    paused: false,
+    unread: [note('m-01', 0)],
+    rooms: [],
+    pointed: new Set<string>(),
+    inFlight: false,
+    resumeAllowed: true,
+    hooked: true,
+    now: T0,
+  };
+  const sleeping = { ...idle, session: sessionOf({ lifecycle: 'sleeping' }), activity: null };
+
+  it('простаивающая сессия и одна заметка всем: settling на SETTLE_MS, через SETTLE_MS — указатель', () => {
+    expect(deliveryAction(idle)).toEqual({ kind: 'none', reason: 'settling', retryInMs: 30_000 });
+    expect(deliveryAction({ ...idle, now: T0 + 12_000 })).toEqual({ kind: 'none', reason: 'settling', retryInMs: 18_000 });
+    expect(deliveryAction({ ...idle, now: T0 + 30_000 })).toEqual({
+      kind: 'type-pointer',
+      text: 'New messages (1) in r-01. Call check_inbox.',
+      letterIds: ['m-01'],
+    });
+  });
+
+  it('пачка заметок: указатель на все после тишины, срок — от самой новой', () => {
+    const unread = [note('m-01', 0), note('m-02', 10_000)];
+    expect(deliveryAction({ ...idle, unread, now: T0 + 30_000 })).toEqual({
+      kind: 'none',
+      reason: 'settling',
+      retryInMs: 10_000,
+    });
+    expect(deliveryAction({ ...idle, unread, now: T0 + 40_000 })).toEqual({
+      kind: 'type-pointer',
+      text: 'New messages (2) in r-01. Call check_inbox.',
+      letterIds: ['m-01', 'm-02'],
+    });
+  });
+
+  it('срочное письмо среди заметок будит сразу и забирает пачку с собой', () => {
+    const unread = [note('m-01', 0), note('m-02', 2_000, { kind: 'question' }), note('m-03', 4_000)];
+    expect(deliveryAction({ ...idle, unread, now: T0 + 4_000 })).toEqual({
+      kind: 'type-pointer',
+      text: 'New messages (3) in r-01. Call check_inbox.',
+      letterIds: ['m-01', 'm-02', 'm-03'],
+    });
+    // Упоминание получателя и письмо человека — то же.
+    const mention = [note('m-01', 0), note('m-02', 1_000, { text: 'hey @s01' })];
+    expect(deliveryAction({ ...idle, unread: mention, now: T0 + 1_000 }).kind).toBe('type-pointer');
+    const human = [note('m-01', 0), note('m-02', 1_000, { from: HUMAN })];
+    expect(deliveryAction({ ...idle, unread: human, now: T0 + 1_000 }).kind).toBe('type-pointer');
+  });
+
+  it('болтовня каждые 20 с: указатель не позже SETTLE_MAX_MS от первой заметки', () => {
+    const unread = [0, 20_000, 40_000, 60_000, 80_000, 100_000].map((offset, index) => note(`m-0${index + 1}`, offset));
+    expect(deliveryAction({ ...idle, unread, now: T0 + 100_000 })).toEqual({
+      kind: 'none',
+      reason: 'settling',
+      retryInMs: 20_000,
+    });
+    expect(deliveryAction({ ...idle, unread, now: T0 + SETTLE_MAX_MS })).toMatchObject({
+      kind: 'type-pointer',
+      letterIds: ['m-01', 'm-02', 'm-03', 'm-04', 'm-05', 'm-06'],
+    });
+  });
+
+  it('срок считается по ещё не указанным письмам, а текст указателя — по всем непрочитанным', () => {
+    const unread = [note('m-01', 0), note('m-02', 100_000)];
+    const pointed = new Set(['m-01']);
+    // Свежая одна, в 100 с: 100 + 30 − 110 = 20 с (по всем решал бы потолок первой — 10 с).
+    expect(deliveryAction({ ...idle, unread, pointed, now: T0 + 110_000 })).toEqual({
+      kind: 'none',
+      reason: 'settling',
+      retryInMs: 20_000,
+    });
+    expect(deliveryAction({ ...idle, unread, pointed, now: T0 + 130_000 })).toEqual({
+      kind: 'type-pointer',
+      text: 'New messages (2) in r-01. Call check_inbox.',
+      letterIds: ['m-01', 'm-02'],
+    });
+  });
+
+  it('settleMs и settleMaxMs из входа', () => {
+    expect(deliveryAction({ ...idle, settleMs: 2_000 })).toEqual({ kind: 'none', reason: 'settling', retryInMs: 2_000 });
+    expect(deliveryAction({ ...idle, settleMs: 2_000, now: T0 + 2_000 }).kind).toBe('type-pointer');
+  });
+
+  it('спящая сессия и одна заметка: сначала settling, потом resume; лимит подъёмов раньше окна', () => {
+    expect(deliveryAction(sleeping)).toEqual({ kind: 'none', reason: 'settling', retryInMs: 30_000 });
+    expect(deliveryAction({ ...sleeping, now: T0 + 30_000 })).toEqual({
+      kind: 'resume',
+      text: 'New messages (1) in r-01. Call check_inbox.',
+      letterIds: ['m-01'],
+    });
+    expect(deliveryAction({ ...sleeping, resumeAllowed: false })).toEqual({ kind: 'none', reason: 'resume-limit' });
+  });
+
+  it('спящая сессия и срочное письмо: resume сразу', () => {
+    const unread = [note('m-01', 0), note('m-02', 1_000, { to: ['s-01'] })];
+    expect(deliveryAction({ ...sleeping, unread, now: T0 + 1_000 })).toMatchObject({
+      kind: 'resume',
+      letterIds: ['m-01', 'm-02'],
+    });
+  });
+
+  it('прежние причины и их порядок не меняются: окно тишины — после них', () => {
+    expect(deliveryAction({ ...idle, activity: activityOf('working') })).toEqual({ kind: 'none', reason: 'busy' });
+    expect(deliveryAction({ ...idle, activity: null })).toEqual({ kind: 'none', reason: 'busy' });
+    expect(deliveryAction({ ...idle, paused: true })).toEqual({ kind: 'none', reason: 'paused' });
+    expect(deliveryAction({ ...idle, session: sessionOf({ lifecycle: 'closed' }) })).toEqual({
+      kind: 'none',
+      reason: 'closed',
+    });
+    expect(deliveryAction({ ...idle, session: sessionOf({ lifecycle: 'pending' }) })).toEqual({
+      kind: 'none',
+      reason: 'not-live',
+    });
+    expect(deliveryAction({ ...idle, hooked: false })).toEqual({ kind: 'none', reason: 'no-hooks' });
+    expect(deliveryAction({ ...idle, hasDraft: true })).toEqual({ kind: 'none', reason: 'draft' });
+    expect(deliveryAction({ ...idle, inFlight: true })).toEqual({ kind: 'none', reason: 'in-flight' });
+    expect(deliveryAction({ ...idle, pointed: new Set(['m-01']) })).toEqual({
+      kind: 'none',
+      reason: 'already-pointed',
+    });
+    expect(deliveryAction({ ...idle, unread: [] })).toEqual({ kind: 'none', reason: 'no-letters' });
+    const need: SessionNeed = {
+      kind: 'question',
+      since: new Date(T0).toISOString(),
+      detail: null,
+      resetsAt: null,
+      window: null,
+      account: null,
+    };
+    expect(deliveryAction({ ...idle, activity: activityOf('idle', { need }) })).toEqual({
+      kind: 'none',
+      reason: 'stuck',
+    });
+  });
+
+  it('Codex: заметка занятому агенту тоже ждёт тишины, срочная идёт в очередь сразу', () => {
+    const codex = { ...idle, activity: activityOf('working'), queueWhileBusy: true };
+    expect(deliveryAction(codex)).toEqual({ kind: 'none', reason: 'settling', retryInMs: 30_000 });
+    expect(deliveryAction({ ...codex, now: T0 + 30_000 })).toMatchObject({ kind: 'type-pointer', queue: true });
+    expect(deliveryAction({ ...codex, unread: [note('m-01', 0, { kind: 'question' })] })).toMatchObject({
+      kind: 'type-pointer',
+      queue: true,
     });
   });
 });

@@ -6,7 +6,7 @@ import type { McpContext } from './context.js';
 export const AGENT_PLAN_TOOL: Tool = {
   name: 'publish_agent_plan',
   annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-  description: 'Publish your own execution steps in the human’s agent card and Agents panel. Before multi-step work, publish the full list; update it when a step starts, completes or the approach changes. Keep completed steps until a new task starts. This replaces your previous personal plan; it does not change accepted room assignments, send messages or wake the feature lead. Use explanation for blockers. An empty steps list clears the personal plan.',
+  description: 'Publish your own execution steps to the human’s agent card and Agents panel: the full list before multi-step work, updated as steps change; an empty list clears it. Changes no room assignments. Use explanation for blockers.',
   inputSchema: {
     type: 'object', additionalProperties: false, required: ['steps'],
     properties: {

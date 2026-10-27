@@ -45,6 +45,7 @@ import {
   seqOf,
   textPage,
 } from '../work/context-pages.js';
+import { settleDelayMs } from '../work/delivery.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { storeLetterReader, unreadLetters, writeLetters, type LetterReads } from '../work/letter-store.js';
 import { recipientsOf } from '../work/letters.js';
@@ -99,6 +100,12 @@ export const MAX_TIMEOUT_SEC = 30 * 60;
 
 /** Как часто сверять версию работы в базе: карта перечитывается, только когда версия сменилась (спека хранилища 6.9). */
 const POLL_MS = 2000;
+
+/**
+ * Запас к сроку окна тишины в `wait_for("inbox")`: таймер Node может сработать на миллисекунду раньше часов, и цикл вошёл бы
+ * в новое ожидание с остатком в 1–2 мс. Ожидание всё равно не уходит за таймаут вызова.
+ */
+const SETTLE_SLACK_MS = 20;
 
 /**
  * Состояние, на котором `wait_for` перестаёт ждать (спецификация 7.1): у цели
@@ -313,7 +320,7 @@ async function limitsOf(context: McpContext): Promise<ResourceLimits> {
  */
 type Annotations = NonNullable<Tool['annotations']>;
 
-/** Чтения — карта, лента комнаты, гид, ожидание: на диск ничего не пишут, отметок прочтения не ставят. */
+/** Чтения — карта, лента комнаты, гид: на диск ничего не пишут, отметок прочтения не ставят. */
 const READS: Annotations = { readOnlyHint: true };
 
 /**
@@ -336,7 +343,7 @@ export const TOOLS: Tool[] = [
   ...PLAN_TOOLS,
   {
     name: 'backlog_list', annotations: READS,
-    description: 'Read this project backlog before suggesting work outside your task. Reads never create files or assign IDs.',
+    description: 'Read this project backlog before suggesting work outside your task.',
     inputSchema: { type: 'object', properties: {
       filter: { type: 'string', enum: ['open', 'taken', 'done', 'all'], default: 'open' },
       text: { type: 'string', maxLength: 4096 },
@@ -344,7 +351,7 @@ export const TOOLS: Tool[] = [
   },
   {
     name: 'backlog_suggest', annotations: WRITES,
-    description: 'Propose one worthwhile finding outside your task with a reason. The project rule decides whether to add it or ask the human. Cannot edit, close, or remove existing items.',
+    description: 'Propose one finding outside your task, with a reason. The project rule decides whether it is added or the human is asked.',
     inputSchema: { type: 'object', properties: {
       kind: { type: 'string', enum: ['bug', 'debt', 'idea'] }, title: { type: 'string', minLength: 1, maxLength: 4096 },
       details: { type: 'string', maxLength: 65536 }, why: { type: 'string', minLength: 1, maxLength: 16384 },
@@ -352,23 +359,23 @@ export const TOOLS: Tool[] = [
   },
   {
     name: 'remember', annotations: WRITES,
-    description: 'Propose one lasting fact, lesson or agreement about this project, with a reason. It waits for the human to accept it, unless the human has just asked you to remember it: then set onHumanRequest. One fact per call, short; do not store what the code, git, PARLEY.md or CLAUDE.md already say.',
+    description: 'Propose one lasting project fact, lesson or agreement, with a reason. The human accepts it first, unless they just asked you to remember it: then set onHumanRequest. One short fact per call.',
     inputSchema: { type: 'object', properties: {
       kind: { type: 'string', enum: ['fact', 'lesson', 'agreement'] }, fact: { type: 'string', minLength: 1, maxLength: 4096 },
       details: { type: 'string', maxLength: 65536 }, why: { type: 'string', minLength: 1, maxLength: 16384 },
-      onHumanRequest: { type: 'boolean', description: 'Only when the human asked you in this conversation to remember it.' },
+      onHumanRequest: { type: 'boolean' },
     }, required: ['kind', 'fact', 'why'], additionalProperties: false },
   },
   {
     name: 'memory_read', annotations: READS,
-    description: 'Read the project memory with details: all entries, or only the given ids (m-NNN). The memory phrases are already in your instructions; this adds the details. Current human instructions take precedence over memory.',
+    description: 'Read the project memory with details: all entries or only the given ids (m-NNN).',
     inputSchema: { type: 'object', properties: {
       ids: { type: 'array', items: { type: 'string', pattern: '^m-\\d{3,}$' }, maxItems: 100 },
     }, additionalProperties: false },
   },
   {
     name: 'search_history', annotations: READS,
-    description: `Search this project's past before deciding something big: accepted decisions, memory, plans, backlog, room histories and session results. All words of the query must meet in one entry. scope: ${HISTORY_SCOPES.join(', ')} (default all). Does not search skills.`,
+    description: "Search this project's past before deciding something big: decisions, memory, plans, backlog, room history, sessions. All query words must meet in one entry.",
     inputSchema: { type: 'object', properties: {
       query: { type: 'string', minLength: 1, maxLength: 1000 },
       scope: { type: 'string', enum: [...HISTORY_SCOPES], default: 'all' },
@@ -379,21 +386,21 @@ export const TOOLS: Tool[] = [
     name: 'get_map',
     annotations: READS,
     description:
-      'The compact workspace map: sessions with statuses, rooms, current plan revisions, unread counts and message cursors — plus the list of registry providers with an availability flag in PATH and what the provider accepts at launch (models with their effort levels). Long texts, history, summaries, artifacts and messages are not in it: they come as bounded pages through the parameters (a cut field names its full size). Call it first; the detailed guide is the read_guide tool',
+      'The compact workspace map: sessions with statuses, rooms, plan revisions, unread counts, message cursors. Call it first. Long texts and history come as pages via the parameters. The provider catalog comes with field "providers", only before create_session. Details: read_guide.',
     inputSchema: {
       type: 'object',
       properties: {
-        session: { type: 'string', description: 'Session id (s-NN): that session in detail, or with field the one field of it.' },
-        room: { type: 'string', description: 'Room id (r-NN): that room in full, or with field messages its message pages. Without field only participants read a room.' },
+        session: { type: 'string', description: 'Session id; with field — one field of it.' },
+        room: { type: 'string' },
         field: {
           type: 'string',
-          enum: ['goal', 'title', 'task', 'summary', 'history', 'artifacts', 'contextFrom', 'messages', 'message', 'summaries', 'archive'],
-          description: 'goal/title — the workspace texts; task/summary/history/artifacts/contextFrom — one field of session; messages — message pages of room (without room — your direct messages), newest first; message — the text of the message id; summaries — summaries of all sessions; archive — other workspaces of this project.',
+          enum: ['goal', 'title', 'task', 'summary', 'history', 'artifacts', 'contextFrom', 'messages', 'message', 'summaries', 'archive', 'providers'],
+          description: 'task…contextFrom go with session; messages — room pages (no room: direct ones); message — one by id; archive — other workspaces.',
         },
-        id: { type: 'string', description: 'Message id (m-NN) for field message.' },
-        kind: { type: 'string', enum: [...MESSAGE_KINDS], description: 'Only messages of this kind (field messages); decision lists the decisions of a room.' },
-        cursor: { type: 'string', description: 'The `next` of the previous page: continues it without gaps or repeats. Messages: a cursor before:N goes to older ones, after:N to newer ones.' },
-        maxBytes: { type: 'integer', minimum: PAGE_MIN_BYTES, maximum: PAGE_MAX_BYTES, description: 'Page size limit in bytes; the default is 65536.' },
+        id: { type: 'string' },
+        kind: { type: 'string', enum: [...MESSAGE_KINDS] },
+        cursor: { type: 'string', description: '`next` of the previous page.' },
+        maxBytes: { type: 'integer', minimum: PAGE_MIN_BYTES, maximum: PAGE_MAX_BYTES, description: 'Page size in bytes; default 65536.' },
       },
       additionalProperties: false,
     },
@@ -402,15 +409,15 @@ export const TOOLS: Tool[] = [
     name: 'report',
     annotations: WRITES,
     description:
-      'A report on your own session. done or failed — the result is handed in, the session stays reachable and does not close itself; progress — an intermediate summary without changing the result. A repeated call overwrites the summary and the artifacts.',
+      'Report on your own session: done or failed hands in the result (the session stays reachable, not closed); progress is an interim summary. A repeat overwrites the summary and artifacts.',
     inputSchema: {
       type: 'object',
       properties: {
         status: { type: 'string', enum: ['done', 'failed', 'progress'] },
-        summary: { type: 'string', description: 'A summary of the result in two or three sentences.' },
+        summary: { type: 'string' },
         artifacts: {
           type: 'array',
-          description: 'Result files; the path is relative to the project root.',
+          description: 'Paths relative to the project root.',
           items: {
             type: 'object',
             properties: { kind: { type: 'string' }, path: { type: 'string' } },
@@ -422,20 +429,20 @@ export const TOOLS: Tool[] = [
     },
   },
   {
-    name: 'list_roles', annotations: READS, description: 'List current builtin and native roles in the participant working folder, without prompts or file paths.', inputSchema: { type: 'object', properties: {} },
+    name: 'list_roles', annotations: READS, description: 'List roles (ids for create_session), without prompts or paths.', inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'wait_for',
-    annotations: READS,
+    annotations: WRITES,
     description:
-      'Waits for a session to finish (target is its id) or for an incoming message (target = "inbox"). On timeout it returns {"state":"running"} — decide yourself whether to call again. {"state":"deleted"} means the human deleted the session: there is nothing left to wait for. {"state":"stuck"} means the session waits for the human or for its usage limit: do not wait for it again — Parley writes to you when it is back. Giving a new job to a session that has already handed in its report? Wait for its answer with target = "inbox", not by id: by id the old result comes back at once.',
+      'Wait for a session to finish (target = its id) or for mail (target = "inbox"); mail comes back marked read, so check_inbox is not needed. Timeout returns {"state":"running"}. {"state":"stuck"}: that session waits for the human or its usage limit — do not wait for it again, Parley writes when it is back. A session that already handed in its report returns the old result at once by id: wait for its answer to a new job via "inbox".',
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'A session id or "inbox".' },
+        target: { type: 'string' },
         timeoutSec: {
           type: 'number',
-          description: `How long to wait; the default is ${DEFAULT_TIMEOUT_SEC}, the maximum is ${MAX_TIMEOUT_SEC}.`,
+          description: `Seconds; default ${DEFAULT_TIMEOUT_SEC}, maximum ${MAX_TIMEOUT_SEC}.`,
         },
       },
       required: ['target'],
@@ -445,31 +452,27 @@ export const TOOLS: Tool[] = [
     name: 'send_message',
     annotations: WRITES,
     description:
-      'Puts a message into the correspondence. Without room — to exactly one addressee in the workspace. With room — the sender and the addressees must be participants of the room; an empty or missing to is a broadcast to all participants. Answer only a question: a note and a decision need no answer. If an addressee is stuck (waiting for the human or for its usage limit), the message is still sent and the answer carries a warning: the addressee reads it when it is back.',
+      "Send a message: direct to one addressee, or with room to some of the room's participants (no to = all of them). Answer only a question: a note and a decision need no answer. A stuck addressee still gets it; the answer carries a warning.",
     inputSchema: {
       type: 'object',
       properties: {
         to: {
-          description:
-            'An addressee id, or several at once. Without room — exactly one; with room and no to — a broadcast to the room.',
           oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
         },
         text: {
           type: 'string',
           maxLength: LETTER_MAX_CHARS,
-          description: `At most ${LETTER_MAX_CHARS} characters; keep letters short. For anything long write a file and send its path.`,
+          description: 'Keep it short; send long content as a file path.',
         },
         kind: {
           type: 'string',
           enum: [...MESSAGE_KINDS],
-          description:
-            'question — waiting for an answer; decision — we have agreed; note — a note (the default).',
+          description: 'question — answer expected; decision — we agreed; note — default.',
         },
-        room: { type: 'string', description: 'Room id from get_map; without it the message is direct.' },
+        room: { type: 'string' },
         replyTo: {
           type: 'string',
-          description:
-            'Id of the message in this room you are answering (from check_inbox or read_room), above all a question from the human: the window shows a quote of it above your message. Only together with room.',
+          description: 'Id of the message in this room that you answer (from check_inbox or read_room): the window quotes it. Only with room.',
         },
       },
       required: ['text'],
@@ -479,27 +482,26 @@ export const TOOLS: Tool[] = [
     name: 'check_inbox',
     annotations: WRITES,
     description:
-      "Returns this session's unread messages — direct ones and those from its rooms, including broadcasts — and marks them as read. Each message carries the sender's label and the room, if there is one.",
+      "Return this session's unread messages (direct and from its rooms) and mark them read.",
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'create_room',
     annotations: WRITES,
     description:
-      "Creates a room owned by the caller, with explicit existing working participants and a lead from that list. Only listed participants move from other rooms. Ownership is separate from working membership: you may own several rooms without joining them. Coordinate through addressed messages to each room's lead.",
+      "Create a room you own, with existing working sessions as members and a lead from them. Members leave their other rooms; you join only if you list yourself.",
     inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string' },
         members: {
           type: 'array',
-          description: 'Nonempty list of existing working session ids from get_map. List yourself only if you will work in this room.',
+          description: 'Existing working session ids from get_map.',
           items: { type: 'string' },
         },
         lead: {
           type: 'string',
-          description:
-            "The operational lead's id, required and included in members.",
+          description: 'One of members.',
         },
       },
       required: ['title', 'members', 'lead'],
@@ -509,15 +511,12 @@ export const TOOLS: Tool[] = [
     name: 'add_to_room',
     annotations: WRITES,
     description:
-      "The lead brings one more session of this workspace into the room — for example, an existing executor. Lead only (get_map, the room's lead field); the room is not closed, the session is alive and not yet a participant. One room per session: it leaves the workspace's other rooms, and a line \"@s04 joined the room\" appears in the feed. The new participant gets no message about being added — write to it in the room yourself, saying what you expect.",
+      "Bring another session of this workspace into the room. Lead only. One room per session: it leaves its other rooms and the feed shows \"@s04 joined the room\". The new participant gets no message: tell it in the room what you expect.",
     inputSchema: {
       type: 'object',
       properties: {
-        room: { type: 'string', description: 'Room id from get_map.' },
-        session: {
-          type: 'string',
-          description: 'Id of a session of this workspace from get_map; a closed or foreign one is an error.',
-        },
+        room: { type: 'string' },
+        session: { type: 'string' },
       },
       required: ['room', 'session'],
     },
@@ -526,14 +525,14 @@ export const TOOLS: Tool[] = [
     name: 'read_room',
     annotations: READS,
     description:
-      "The room's feed for context — the last limit messages within the byte limit, without read marks; `page.next` continues to older ones. Available to participants and the room owner.",
+      "The room's feed for context: the last limit messages, without read marks; `page.next` continues to older ones.",
     inputSchema: {
       type: 'object',
       properties: {
-        room: { type: 'string', description: 'Room id from get_map.' },
-        limit: { type: 'number', description: 'How many of the latest messages to return; the default is 50.' },
-        cursor: { type: 'string', description: 'The `next` of the previous page: older messages (before:N) or newer ones (after:N).' },
-        maxBytes: { type: 'integer', minimum: PAGE_MIN_BYTES, maximum: PAGE_MAX_BYTES, description: 'Page size limit in bytes; the default is 65536. A message that does not fit is cut with its full size named (textBytes); get_map with field message reads it whole.' },
+        room: { type: 'string' },
+        limit: { type: 'number', description: 'How many latest messages; default 50.' },
+        cursor: { type: 'string', description: '`next` of the previous page.' },
+        maxBytes: { type: 'integer', minimum: PAGE_MIN_BYTES, maximum: PAGE_MAX_BYTES, description: 'Page size in bytes; default 65536.' },
       },
       required: ['room'],
     },
@@ -542,18 +541,18 @@ export const TOOLS: Tool[] = [
     name: 'propose_decision',
     annotations: WRITES,
     description:
-      "The room's lead proposes a decision: it lands as a card in the window and waits for the human's answer — accept or return for rework. Lead only (get_map, the room's lead field); in a closed room — an error. Call it when the participants' positions are collected; do not start the work before acceptance. A repeat before the human's answer replaces the text (the same proposalId, rev + 1). The answer will reach you as a message: accepted — hand out the parts, returned — redo it and propose again.",
+      "The room's lead proposes a decision: a card that waits for the human's answer. Lead only. Call it when positions are collected; do not start work before acceptance. A repeat before the answer replaces the text. The answer arrives as a message.",
     inputSchema: {
       type: 'object',
       properties: {
-        room: { type: 'string', description: 'Room id from get_map.' },
+        room: { type: 'string' },
         plan: PLAN_DRAFT_SCHEMA,
         kind: { type: 'string', enum: ['decision', 'completion'] },
         planId: { type: 'string', pattern: '^pl-[0-9]+$', maxLength: 128 },
         rev: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
         text: {
           type: 'string',
-          description: `The whole decision, up to ${PROPOSAL_TEXT_MAX} characters: what we do and which part each takes; name participants with @s02 mentions.`,
+          description: `Up to ${PROPOSAL_TEXT_MAX} characters: what we do and which part each takes; mention participants as @s02.`,
         },
       },
       required: ['room', 'text'],
@@ -564,7 +563,7 @@ export const TOOLS: Tool[] = [
     name: 'close_session',
     annotations: CLOSES,
     description:
-      "Closes only the calling session, only after the human's explicit consent. Ownership of a room grants no permission to close its participants.",
+      "Close only the calling session, and only after the human's explicit consent.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -576,14 +575,13 @@ export const TOOLS: Tool[] = [
   {
     name: 'read_guide',
     annotations: READS,
-    description: `The detailed guide to Parley: entities, the session lifecycle, rooms and the roles in them (lead, participant), what to put in a report and artifacts, how to wait for another session, what not to do. Read it when the short descriptions were not enough. Without topic — the whole guide, with topic — one section: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}.`,
+    description: 'The detailed Parley guide: rooms and the roles in them (lead, participant), reports, waiting, what not to do. Read it when unsure; topic picks one section.',
     inputSchema: {
       type: 'object',
       properties: {
         topic: {
           type: 'string',
           enum: GUIDE_TOPICS.map((item) => item.topic),
-          description: 'A guide section; without it — the whole guide.',
         },
       },
       additionalProperties: false,
@@ -596,21 +594,31 @@ const HOST_UNREACHABLE_NOTE = 'host unreachable: sign-in state and limits unknow
 
 async function getMap(context: McpContext, args: Record<string, unknown> = {}, signal?: AbortSignal): Promise<unknown> {
   const map = await readMap(context.projectPath, context.workId);
-  if (Object.keys(args).length > 0) return mapPage(context, map, args);
-  // Строки провайдеров с входом аккаунтов и лимитами отдаёт хост (спека подписок 5.8, К7): процесс MCP не видит ни кэша
-  // входа, ни других работ. `needs` (почему недоступен: `sign-in`, `key`, `cli`) и `limits` — только когда известны, чтобы
-  // карта оставалась компактной; агент отличает «не вошёл» от «старый CLI» (спека подписок 5.8).
-  // Откуда строки (спека хранилища 6.9): `providerRows` — исполнитель в самом хосте, ходить к себе по HTTP незачем; иначе
-  // канал агента — запрос к хосту; иначе локальный реестр с пометкой ниже. Заданный `providerRows` — единственный
-  // источник: его `null` ведёт к тому же локальному ответу с пометкой.
+  if (Object.keys(args).length > 0) return mapPage(context, map, args, signal);
+  // Плейбук рецепта получает только ведущий (слоем и письмом): в топологии агенту видны id и имя рецепта.
+  // Каталог провайдеров в карту не входит: он нужен только при создании сессии и приходит по `field: "providers"`.
+  return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId, storeLetterReader(context.projectPath, context.workId)) };
+}
+
+/**
+ * Каталог провайдеров для `get_map {field: "providers"}`.
+ * Строки провайдеров с входом аккаунтов и лимитами отдаёт хост (спека подписок 5.8, К7): процесс MCP не видит ни кэша
+ * входа, ни других работ. `needs` (почему недоступен: `sign-in`, `key`, `cli`) и `limits` — только когда известны, чтобы
+ * ответ оставался компактным; агент отличает «не вошёл» от «старый CLI» (спека подписок 5.8).
+ * Откуда строки (спека хранилища 6.9): `providerRows` — исполнитель в самом хосте, ходить к себе по HTTP незачем; иначе
+ * канал агента — запрос к хосту; иначе локальный реестр с пометкой `note`. Заданный `providerRows` — единственный
+ * источник: его `null` ведёт к тому же локальному ответу с пометкой.
+ */
+async function providerCatalog(context: McpContext, signal?: AbortSignal): Promise<{ providers: unknown[]; note?: string }> {
   const rowsSignal = signal ?? new AbortController().signal;
   const hostRows = context.providerRows !== undefined ? await context.providerRows(rowsSignal)
     : context.agent === undefined ? null : await fetchProviderRows(context.agent, rowsSignal);
   if (hostRows !== null) {
-    const providers = hostRows.map(({ id, label, family, available, needs, models, effort, limits }) => ({
-      id, label, family, available, ...(needs === null ? {} : { needs }), models, effort, ...(limits === null ? {} : { limits }),
-    }));
-    return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId, storeLetterReader(context.projectPath, context.workId)), providers };
+    return {
+      providers: hostRows.map(({ id, label, family, available, needs, models, effort, limits }) => ({
+        id, label, family, available, ...(needs === null ? {} : { needs }), models, effort, ...(limits === null ? {} : { limits }),
+      })),
+    };
   }
   const registry = await loadProviders();
   const providers = await Promise.all(
@@ -626,8 +634,7 @@ async function getMap(context: McpContext, args: Record<string, unknown> = {}, s
       };
     }),
   );
-  // Плейбук рецепта получает только ведущий (слоем и письмом): в топологии агенту видны id и имя рецепта.
-  return { sessionId: context.sessionId, map: mapTopology(map, context.sessionId, storeLetterReader(context.projectPath, context.workId)), providers, note: HOST_UNREACHABLE_NOTE };
+  return { providers, note: HOST_UNREACHABLE_NOTE };
 }
 
 const optionalString = (args: Record<string, unknown>, name: string): string | undefined => {
@@ -638,7 +645,7 @@ const optionalString = (args: Record<string, unknown>, name: string): string | u
 };
 
 /** Ограниченные страницы `get_map`: поле, список или письма — по параметрам; без параметров карту отдаёт `getMap`. */
-async function mapPage(context: McpContext, map: WorkMap, args: Record<string, unknown>): Promise<unknown> {
+async function mapPage(context: McpContext, map: WorkMap, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
   const maxBytes = clampPageBytes(numberArg(args, 'maxBytes'));
   const field = optionalString(args, 'field');
   const sessionId = optionalString(args, 'session');
@@ -664,6 +671,7 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
       throw new Error('give session, room or field; without parameters get_map returns the compact map');
     }
     if (field === 'goal' || field === 'title') return { field, ...textPage(map.work[field], cursorRaw, maxBytes) };
+    if (field === 'providers') return providerCatalog(context, signal);
     if (field === 'archive') {
       const index = await readWorksIndex();
       const others = index.works.filter((work) => work.projectPath === context.projectPath && work.id !== context.workId);
@@ -806,26 +814,53 @@ async function noteWait(
   }
 }
 
+/** Пауза, которую прерывает отмена вызова клиентом: ждать больше некого, и вызывающий проверит `signal` сам. */
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted === true) {
+      resolve();
+      return;
+    }
+    const done = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
 async function waitFor(
   context: McpContext,
   sessionId: string,
   args: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<unknown> {
+  const startedAt = Date.now();
   const target = stringArg(args, 'target');
-  const waitId = randomUUID();
   const timeoutMs = waitTimeoutMs(numberArg(args, 'timeoutSec'));
   const read = (): Promise<WorkMap> => readMap(context.projectPath, context.workId);
+  /** Сколько ещё ждать тишины по этим письмам, мс; 0 — доставлять сейчас (окно и потолок — из контекста, для тестов). */
+  const settleDelay = (unread: readonly Message[]): number =>
+    settleDelayMs(unread, sessionId, Date.now(), context.settleMs, context.settleMaxMs);
+  /** Ответ пробы «письма есть, но не устоялись»: цикл ниже пересчитывает срок и ждёт не дольше него. */
+  const PENDING = Symbol('pending');
+  /** Ожидание начато без писем: появившиеся несрочные письма оно обязано отдать циклу (см. пробу), а не ждать мимо их срока. */
+  let wakeOnPending = false;
 
   let probe: () => Promise<unknown | null>;
   if (target === 'inbox') {
+    // Проба только читает: письма отдаёт и отмечает прочитанными `takeInbox` после ожидания, когда вызов точно не отменён
+    // (отмена посреди пробы иначе отметила бы письма, которых агент не увидит). «Готово» — есть срочное письмо или пачка
+    // устоялась (`settleDelayMs`, то же правило, что у будильника хоста); несрочные ещё в окне тишины — не готово.
     probe = async () => {
-      const map = await read();
-      // Только читает, как и раньше: прочитанным письма отмечает один `check_inbox`.
-      const messages = unreadLetters(context.projectPath, context.workId, sessionId);
-      return messages.length === 0
-        ? null
-        : { state: 'message', messages: messages.map((message) => inboxView(message, map, sessionId)) };
+      const unread = unreadLetters(context.projectPath, context.workId, sessionId);
+      if (unread.length === 0) return null;
+      if (settleDelay(unread) === 0) return true;
+      // Письма пришли, пока ожидание шло без них: оно не знает их срока, поэтому отдаёт управление циклу ниже, и тот ограничит
+      // ожидание окном. Ожидание, уже ограниченное окном, этого не делает — иначе цикл не вышел бы из пробы.
+      return wakeOnPending ? PENDING : null;
     };
   } else {
     // Первая проба идёт до всякого ожидания, поэтому неизвестный id падает
@@ -865,43 +900,83 @@ async function waitFor(
     };
   }
 
-  // Реальное ожидание начинается, когда первая проба вернула `null`; ответ без ожидания —
-  // итог уже есть, письмо уже пришло, неизвестный id — следов в журнале не оставляет. Конец
-  // ждёт записи начала: строки идут по порядку, что бы ни случилось с ожиданием.
-  const wait = { begun: null as Promise<void> | null };
-  const probeAndNote = async (): Promise<unknown | null> => {
-    const result = await probe();
-    if (result === null && wait.begun === null) {
-      wait.begun = noteWait(context, sessionId, {
-        hook_event_name: 'ParleyWaitStart',
-        parley_wait_target: target,
-        parley_wait_id: waitId,
-      });
+  // Одно ожидание: свой id и своя пара ParleyWaitStart/End. Реальное ожидание начинается, когда первая проба вернула
+  // `null`; ответ без ожидания — итог уже есть, письмо уже пришло, неизвестный id — следов в журнале не оставляет. Конец
+  // ждёт записи начала: строки идут по порядку, что бы ни случилось с ожиданием. Конец пишется до возврата из этой
+  // функции, то есть до того, как вызывающий заберёт письма (см. ниже).
+  const waitOnce = async (ms: number): Promise<unknown | null> => {
+    const waitId = randomUUID();
+    const wait = { begun: null as Promise<void> | null };
+    const probeAndNote = async (): Promise<unknown | null> => {
+      const result = await probe();
+      if (result === null && wait.begun === null) {
+        wait.begun = noteWait(context, sessionId, {
+          hook_event_name: 'ParleyWaitStart',
+          parley_wait_target: target,
+          parley_wait_id: waitId,
+        });
+      }
+      return result;
+    };
+    try {
+      // `mapChanges` — сигнал об изменении карты снаружи (хост, спека хранилища 6.9): он будит ожидание сразу, а опрос по версии
+      // работы остаётся запасным и единственным поводом там, где сигнала нет (сессия без канала, запасной путь при 404).
+      return await waitForMap(
+        () => workVersionKey(context.projectPath, context.workId),
+        probeAndNote,
+        ms,
+        context.pollMs ?? POLL_MS,
+        signal,
+        context.mapChanges,
+      );
+    } finally {
+      // Любой исход, в том числе отмена вызова клиентом: она прерывает ожидание, и конец пишется сразу.
+      if (wait.begun !== null) {
+        await wait.begun;
+        await noteWait(context, sessionId, {
+          hook_event_name: 'ParleyWaitEnd',
+          parley_wait_id: waitId,
+        });
+      }
     }
-    return result;
   };
 
-  try {
-    // `mapChanges` — сигнал об изменении карты снаружи (хост, спека хранилища 6.9): он будит ожидание сразу, а опрос по версии
-    // работы остаётся запасным и единственным поводом там, где сигнала нет (сессия без канала, запасной путь при 404).
-    const found = await waitForMap(
-      () => workVersionKey(context.projectPath, context.workId),
-      probeAndNote,
-      timeoutMs,
-      context.pollMs ?? POLL_MS,
-      signal,
-      context.mapChanges,
-    );
-    return found ?? { state: 'running' };
-  } finally {
-    // Любой исход, в том числе отмена вызова клиентом: она прерывает ожидание, и конец пишется сразу.
-    if (wait.begun !== null) {
-      await wait.begun;
-      await noteWait(context, sessionId, {
-        hook_event_name: 'ParleyWaitEnd',
-        parley_wait_id: waitId,
-      });
+  const endsAt = Date.now() + timeoutMs;
+  // Функцией, а не полем `signal.aborted` напрямую: после `await` отмена могла прийти, а компилятор помнил бы прежнее `false`.
+  const cancelled = (): boolean => signal?.aborted === true;
+  for (;;) {
+    const timeLeftMs = Math.max(endsAt - Date.now(), 0);
+    // Письма лежат, но пачка не устоялась: проба из-за этого не сработает до смены карты, а срок идёт по часам. Поэтому ждём
+    // не дольше срока и пересчитываем (не раньше, чем кончится таймаут вызова).
+    const unsettledMs = target === 'inbox' ? settleDelay(unreadLetters(context.projectPath, context.workId, sessionId)) : 0;
+    wakeOnPending = unsettledMs === 0;
+    const found = await waitOnce(unsettledMs > 0 ? Math.min(timeLeftMs, unsettledMs + SETTLE_SLACK_MS) : timeLeftMs);
+    if (target !== 'inbox') return found === null ? { state: 'running' } : found;
+    if (found === PENDING) continue;
+    if (found === null) {
+      if (cancelled()) return { state: 'running' };
+      // Короткое ожидание до срока кончилось, а таймаут вызова — нет: письма могли устояться или прибавиться.
+      if (endsAt - Date.now() > 0) continue;
+      // Таймаут вызова при лежащих неустоявшихся письмах: отдаём их, а не `running` — письмо уже лежит, а держать его дольше
+      // вызова незачем. Ничего не лежит — `running`.
+      if (unreadLetters(context.projectPath, context.workId, sessionId).length === 0) return { state: 'running' };
     }
+    // Письма забираются только теперь, когда ожидание целиком закончено, в том числе запись конца в журнал: пока она шла,
+    // клиент мог отменить вызов, а письма, помеченные до этого, пропали бы вместе с отброшенным ответом. От проверки отмены
+    // до `return` ни одного `await`: отмена приходит отдельным событием, а не микрозадачей, и между пометкой и ответом
+    // вклиниться не может. Отменённый вызов ничего не отмечает: письмо остаётся для следующего `check_inbox`.
+    if (cancelled()) return { state: 'running' };
+    // Брошенный вызов: ход сессии кончился или начался заново после старта вызова (человек прервал ход, а клиент отмену не
+    // прислал — Codex). Агент ответа не увидит; письмо остаётся непрочитанным, и хост напечатает на него указатель.
+    if (context.turnBoundarySince?.(startedAt) === true) return { state: 'running' };
+    const messages = takeInbox(context, sessionId);
+    if (messages.length > 0) return { state: 'message', messages };
+    // Письма успел забрать параллельный `check_inbox`: пустой `message` не отдаём, ждём остаток таймаута. Пауза перед
+    // новым ожиданием — на случай, если проба и `takeInbox` разойдутся: без неё цикл крутился бы в микрозадачах до таймаута.
+    const remaining = endsAt - Date.now();
+    if (remaining <= 0) return { state: 'running' };
+    await abortableDelay(Math.min(context.pollMs ?? POLL_MS, remaining), signal);
+    if (cancelled()) return { state: 'running' };
   }
 }
 
@@ -1020,17 +1095,24 @@ async function sendMessage(
   return warnings.length === 0 ? { messageId: created } : { messageId: created, warning: warnings.join('; ') };
 }
 
-async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {
-  let views: ReturnType<typeof inboxView>[] = [];
+/**
+ * Забирает непрочитанное: письма в ответ и пометка прочитанными — по одному снимку, одной записью. Общая для `check_inbox` и
+ * `wait_for("inbox")`: письмо не бывает отмечено, не будучи отданным хотя бы одному из вызовов. Пустой ящик ничего не пишет:
+ * ни версии работы, ни `updatedAt` (спека хранилища 6.2); сдвиг — когда отмечено письмо.
+ */
+function takeInbox(context: McpContext, sessionId: string): ReturnType<typeof inboxView>[] {
   const at = new Date().toISOString();
-  // Пустой ящик ничего не пишет: ни версии работы, ни `updatedAt` (спека хранилища 6.2); сдвиг — когда отмечено письмо.
-  writeLetters(context.projectPath, context.workId, (letters, current) => {
+  return writeLetters(context.projectPath, context.workId, (letters, current) => {
     requireSession(current, sessionId);
     const inbox = letters.unreadFor(sessionId);
-    views = inbox.map((message) => inboxView(message, current, sessionId));
+    const views = inbox.map((message) => inboxView(message, current, sessionId));
     letters.markRead(sessionId, inbox.map((message) => message.id), at);
+    return views;
   });
-  return { messages: views };
+}
+
+async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {
+  return { messages: takeInbox(context, sessionId) };
 }
 
 async function createRoom(

@@ -125,7 +125,7 @@ describe('заглушка скилла parley: тело', () => {
 
   it('правило про задачу человека всем: письмо приходит с roomTask — роль, ведущий, подсказка', () => {
     expect(body).toMatch(
-      /The human's task for everyone in a room arrives from `check_inbox` marked `toEveryone: true` with `roomTask` \(your role, the lead, a hint\): follow it\./,
+      /The human's task for everyone in a room arrives from `check_inbox` \/ `wait_for\("inbox"\)` marked `toEveryone: true` with `roomTask` \(your role, the lead, a hint\): follow it\./,
     );
   });
 
