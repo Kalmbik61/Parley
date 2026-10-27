@@ -26,6 +26,7 @@ import {
   gitBranch,
   isDatabaseBusy,
   letterCount,
+  mailWorkMap,
   mapLetterReader,
   MapLockTimeoutError,
   onMapWritten,
@@ -45,7 +46,7 @@ import {
   workVersion,
   writeHostLease,
 } from '@parley/core';
-import type { HostLease, MapWrittenEvent, Message, WindowWorkEntry, WindowWorkMap, WorkEntry, WorkMap, WorksWatcher } from '@parley/core';
+import type { HostLease, LetterReader, MapWrittenEvent, Message, WindowWorkEntry, WindowWorkMap, WorkEntry, WorkMap, WorksWatcher } from '@parley/core';
 import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, ROOMS_MAIL_FEATURE, encodeLine } from '@parley/protocol';
 import type { RoomsMailEvent, WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
@@ -104,6 +105,11 @@ export interface WorksService {
    * `map.compact`. `null` — даже он не влезает в кадр; номер `revision` растёт на каждую рассылку.
    */
   windowSnapshot(): WorksSnapshot | null;
+  /**
+   * Снимок для окна с `rooms-mail` (спека rooms.mail 6.8): писем в нём нет, вместо них числа по комнатам (`MapCompactMail`);
+   * размер не зависит от переписки. Тот же `revision` и те же версии работ, что у `windowSnapshot`. `null` — не влезает в кадр.
+   */
+  mailSnapshot(): WorksSnapshot | null;
   /** Прежний полный снимок для клиента без `compact-works`; `null` — он не влезает в кадр, клиенту нужно обновление. */
   legacySnapshot(): WorksSnapshot | null;
   entry(projectPath: string, workId: string): WorkEntry | undefined;
@@ -146,6 +152,8 @@ const WINDOW_SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024;
 const LEGACY_MAX_LETTERS = 40_000;
 /** Тексты в запасном (сжатом) снимке: хвост писем не берётся вовсе, а длинные поля короче. */
 const WINDOW_FALLBACK_TEXT_BYTES = 4 * 1024;
+/** Начало ключа варианта части снимка без писем в `windowParts`: у остальных вариантов ключ начинается с числа байт. */
+const LETTERLESS_VARIANT = 'mail:';
 
 /** Сжатая карта одной работы для окна и её размер в кадре (`windowPart`). */
 interface WindowPart {
@@ -201,6 +209,11 @@ export function createWorksService(
   const windowParts = new Map<string, { version: number; parts: Map<string, WindowPart> }>();
   /** Снимки для клиентов считаются один раз на номер: `works.list` и рассылка делят одну работу. */
   let windowCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
+  /**
+   * Снимок без писем для окон с `rooms-mail`: тоже по номеру рассылки, и пересобирается только когда его кто-то просит. Сбрасывать
+   * его вместе с остальными не нужно — номер растёт там же, где обнуляется `windowCache`, а устаревший снимок мал.
+   */
+  let mailCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
   let legacyCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
   /** Клиенты, о которых уже записано «нужно обновление», и признак сообщения о слишком большом снимке: не на каждую рассылку. */
   const upgradeNotified = new Set<string>();
@@ -216,15 +229,19 @@ export function createWorksService(
    * (`WorkEntry.version`: та же версия — та же карта) и бюджет; у работы без версии кэша нет. Письма читаются запросами из
    * таблиц (`storeLetterReader`); живые правила непрочитанного идут по карте сервиса, а не по карте из базы (спека хранилища 6.2).
    * `asked` — какие варианты слота просила эта сборка окна: по нему `buildWindow` потом убирает остальные.
+   *
+   * `letterless` — часть для окна с `rooms-mail`: `mailWorkMap` вместо `compactWorkMap`, бюджет писем не нужен (спека rooms.mail
+   * 6.8). Это третий вариант слота рядом с обычным, архивным и запасным (`mail:` в ключе); версия карты та же.
    */
   function windowPart(
     work: WorkEntry,
     messageBytes: number,
     asked: Map<string, Set<string>>,
     textMax?: number,
+    letterless = false,
   ): WindowPart {
     const key = workKey(work.projectPath, work.map.work.id);
-    const variant = `${messageBytes}:${textMax ?? ''}`;
+    const variant = letterless ? `${LETTERLESS_VARIANT}${textMax ?? ''}` : `${messageBytes}:${textMax ?? ''}`;
     let wanted = asked.get(key);
     if (wanted === undefined) asked.set(key, (wanted = new Set()));
     wanted.add(variant);
@@ -235,16 +252,18 @@ export function createWorksService(
       if (cached !== undefined) return cached;
     }
     const options = { messageBytes, ...(textMax === undefined ? {} : { textMax }) };
+    const compacted = (letters: LetterReader): WindowWorkMap =>
+      letterless ? mailWorkMap(work.map, letters, textMax === undefined ? {} : { textMax }) : compactWorkMap(work.map, options, letters);
     let map: WindowWorkMap;
     try {
       // Один снимок базы на все чтения писем этой работы: чужая запись между ними не рассогласует итоги и хвосты.
       map = withLetterSnapshot(work.projectPath, work.map.work.id, () =>
-        compactWorkMap(work.map, options, storeLetterReader(work.projectPath, work.map.work.id, { map: work.map })),
+        compacted(storeLetterReader(work.projectPath, work.map.work.id, { map: work.map })),
       );
     } catch (error) {
       // Работу сняли между чтением списка и сборкой снимка: до следующего обновления она без писем, остальное окно не страдает.
       if (!(error instanceof WorkNotFoundError)) throw error;
-      map = compactWorkMap(work.map, options, mapLetterReader({ ...work.map, messages: [] }));
+      map = compacted(mapLetterReader({ ...work.map, messages: [] }));
     }
     // Версия работы едет в записи снимка (спека rooms.mail 6.3): по ней окно сверяет события писем с `prevVersion`.
     const entry = { projectPath: work.projectPath, map, ...(version === undefined ? {} : { version }) };
@@ -262,8 +281,12 @@ export function createWorksService(
    * не влез и он — `null` (кадр, который декодер окна разорвёт, не уходит никогда). Размер кадра складывается из
    * размеров частей: каркас без работ, сами работы и запятые между ними — столько же, сколько дал бы `JSON.stringify`
    * всего снимка, но без повторной сериализации работ, которые не менялись.
+   *
+   * `letterless` — снимок для окон с `rooms-mail` (`mailWorkMap`): писем в нём нет, поэтому бюджет всем работам 0, а запасной
+   * вариант отличается только короткими текстами. Слоты `windowParts` общие с обычным снимком: каждая сборка убирает из них
+   * только свои варианты, чтобы две сборки на одном номере не выбрасывали части друг друга.
    */
-  function buildWindow(): WorksSnapshot | null {
+  function buildWindow(letterless = false): WorksSnapshot | null {
     const asked = new Map<string, Set<string>>();
     const all = Array.from(entries.values());
     const live = all.filter((entry) => entry.map.work.status !== 'archived').length;
@@ -272,7 +295,7 @@ export function createWorksService(
       Math.max(WINDOW_MESSAGES_MIN_BYTES, Math.floor(WINDOW_MESSAGES_TOTAL_BYTES / Math.max(live, 1))),
     );
     const build = (messagesFor: (archived: boolean) => number, textMax?: number): WorksSnapshot | null => {
-      const parts = all.map((work) => windowPart(work, messagesFor(work.map.work.status === 'archived'), asked, textMax));
+      const parts = all.map((work) => windowPart(work, messagesFor(work.map.work.status === 'archived'), asked, textMax, letterless));
       const snapshot: WorksSnapshot = {
         entries: parts.map((part) => part.entry),
         branches: Object.fromEntries(branches),
@@ -284,14 +307,14 @@ export function createWorksService(
         Math.max(parts.length - 1, 0);
       return bytes <= WINDOW_SNAPSHOT_MAX_BYTES ? snapshot : null;
     };
-    const snapshot = build((archived) => (archived ? 0 : share)) ?? build(() => 0, WINDOW_FALLBACK_TEXT_BYTES);
+    const snapshot = build(letterless ? () => 0 : (archived) => (archived ? 0 : share)) ?? build(() => 0, WINDOW_FALLBACK_TEXT_BYTES);
     // В слотах остаётся то, что просила эта сборка: слот пропавшей работы (её ключа в `asked` нет) уходит целиком, у
     // остальных — только запрошенные варианты. Запасной проход тоже в счёт: при снимке выше потолка просят оба варианта,
     // и пересобирать их каждый раз незачем.
     for (const [key, slot] of windowParts) {
       const wanted = asked.get(key);
       if (wanted === undefined) windowParts.delete(key);
-      else for (const variant of slot.parts.keys()) if (!wanted.has(variant)) slot.parts.delete(variant);
+      else for (const variant of slot.parts.keys()) if (variant.startsWith(LETTERLESS_VARIANT) === letterless && !wanted.has(variant)) slot.parts.delete(variant);
     }
     return snapshot;
   }
@@ -299,6 +322,11 @@ export function createWorksService(
   const windowSnapshot = (): WorksSnapshot | null => {
     if (windowCache?.revision !== revision) windowCache = { revision, snapshot: buildWindow() };
     return windowCache.snapshot;
+  };
+
+  const mailSnapshot = (): WorksSnapshot | null => {
+    if (mailCache?.revision !== revision) mailCache = { revision, snapshot: buildWindow(true) };
+    return mailCache.snapshot;
   };
 
   /** Полные карты с письмами для прежнего окна; `null` — писем слишком много, чтобы читать их ради заведомого отказа. */
@@ -346,29 +374,47 @@ export function createWorksService(
   }
 
   /**
-   * Рассылка снимка: окно с `compact-works` получает компактный, прежнее окно — полный, пока тот влезает в кадр. Не
-   * влезает — ни одного кадра сверх предела (декодер окна на таком разорвал бы соединение, и оно переподключалось бы
-   * по кругу): прежнее окно остаётся с последним снимком, а хост один раз на клиента пишет об этом в журнал.
-   * Уведомления `host.notice` прежнему окну не шлются: вида, которого оно не знает, его строка статуса не разберёт.
+   * Рассылка снимка: окно с `rooms-mail` получает снимок без писем (спека rooms.mail 6.8), окно с `compact-works` без признака —
+   * компактный с хвостами писем, прежнее окно — полный, пока тот влезает в кадр. Не влезает — ни одного кадра сверх предела
+   * (декодер окна на таком разорвал бы соединение, и оно переподключалось бы по кругу): прежнее окно остаётся с последним
+   * снимком, а хост один раз на клиента пишет об этом в журнал. Уведомления `host.notice` прежнему окну не шлются: вида,
+   * которого оно не знает, его строка статуса не разберёт.
    *
    * `only` — кому слать: запись только писем перечитывает одну работу и шлёт снимок окнам без `rooms-mail` (спека
    * rooms.mail 6.10); снимки при этом не собираются, пока такого окна нет. Без `only` — полная рассылка, и вслед за снимком
-   * уходят письма смешанных записей, которые он включает (`releaseMail`).
+   * уходят письма смешанных записей, которые он включает (`releaseMail`). Снимок без писем собирается, только если есть окно
+   * с признаком, а снимок с хвостами не собирается, когда подключены одни окна с признаком: они не платят за хвосты писем,
+   * которых не получают.
    */
   function publish(only?: (client: Client) => boolean): void {
     if (only !== undefined && !host.clients().some(only)) return;
     const wanted = only ?? ((): boolean => true);
-    const toCompact = (client: Client): boolean => isCompactClient(client) && wanted(client);
-    const toLegacy = (client: Client): boolean => !isCompactClient(client) && wanted(client);
+    const toMail = (client: Client): boolean => isMailClient(client) && wanted(client);
+    const toCompact = (client: Client): boolean => isCompactClient(client) && !isMailClient(client) && wanted(client);
+    const toLegacy = (client: Client): boolean => !isCompactClient(client) && !isMailClient(client) && wanted(client);
 
-    const compact = windowSnapshot();
-    if (compact !== null) {
-      broadcastWorks(compact, toCompact);
-      oversizeNotified = false;
-    } else if (!oversizeNotified) {
-      oversizeNotified = true;
-      notice('snapshot-too-large', 'the workspace snapshot does not fit into one frame even in compact form');
+    const connected = host.clients();
+    const mailWindows = connected.some(toMail);
+    let fits = true;
+    // Снимок с хвостами писем читает письма из базы: его собирают, если ему есть кому уйти, а когда окон с признаком нет вовсе,
+    // рассылка идёт как прежде, даже без клиентов. Подключены одни окна с признаком — он не нужен. Идёт первым: письмо, легшее
+    // между сборками, окно с признаком получит событием, а окну без признака хвост нужен как был прочитан проходом.
+    if (connected.some(toCompact) || !mailWindows) {
+      const compact = windowSnapshot();
+      if (compact === null) fits = false;
+      else broadcastWorks(compact, toCompact);
     }
+    if (mailWindows) {
+      const mail = mailSnapshot();
+      if (mail === null) fits = false;
+      else broadcastWorks(mail, toMail);
+    }
+    if (!fits) {
+      if (!oversizeNotified) {
+        oversizeNotified = true;
+        notice('snapshot-too-large', 'the workspace snapshot does not fit into one frame even in compact form');
+      }
+    } else oversizeNotified = false;
 
     publishLegacy(toLegacy);
     if (only === undefined) {
@@ -932,6 +978,7 @@ export function createWorksService(
     },
     snapshot: buildSnapshot,
     windowSnapshot,
+    mailSnapshot,
     legacySnapshot,
     entry: (projectPath, workId) => entries.get(workKey(projectPath, workId)),
     firstReadDone: (projectPath, workId) => readAlready.has(workKey(projectPath, workId)),

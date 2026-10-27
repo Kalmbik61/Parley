@@ -210,6 +210,7 @@ export {
   humanMentionCandidates,
   keepNewestWithin,
   listPage,
+  mailWorkMap,
   mapTopology,
   messagePage,
   pageBySeq,
@@ -673,7 +674,7 @@ export { capturePlanSnapshot, flushPlanSnapshots, PlanSnapshotError } from './wo
 export type { PlanSnapshotFlushResult } from './work/plan-snapshots.js';
 export { proposeCompletion } from './work/proposals.js';
 export type { ProposalOptions } from './work/proposals.js';
-export type { MapCompact } from './work/types.js';
+export type { MapCompact, MapCompactMail } from './work/types.js';
 export type { RoomMode, PlanMode, PlanStatus, PlanItemStatus, PlanDraft, PlanItemInput, PlanItem, PlanEvidence, RoomPlan, PlanExportIntent } from './work/types.js';
 export type { AutonomousDraft, AttemptChannelRequest, AutonomousPlan, PlanAttempt, HandoffManifest, HandoffManifestInput, Receipt, CheckSpec, CheckResult, Integration, AutonomousBudget, AutonomousOp } from './work/types.js';
 

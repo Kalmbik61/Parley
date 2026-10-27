@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   LETTER_PAGE_MAX_ITEMS,
   PAGE_MAX_BYTES,
@@ -15,6 +18,7 @@ import {
   humanMentionCandidates,
   keepNewestWithin,
   listPage,
+  mailWorkMap,
   mapTopology as mapTopologyOf,
   messagePage as messagePageOf,
   type MessagePageOptions,
@@ -25,12 +29,14 @@ import {
   textPage,
   viewBytes,
 } from './context-pages.js';
-import { mapLetterReader, type LetterQuery } from './letter-store.js';
+import { closeWorkDb } from './db.js';
+import { mapLetterReader, storeLetterReader, writeLetters, type LetterQuery } from './letter-store.js';
 import { unreadForHuman } from './letters.js';
 import { addMessage, addSession } from './map.js';
 import { addRoom } from './rooms.js';
+import { createWork, updateMap } from './store.js';
 import type { SessionNeed } from './stuck.js';
-import { HUMAN, type Message, type WindowWorkMap, type WorkMap } from './types.js';
+import { HUMAN, type MapCompactMail, type Message, type WindowWorkMap, type WorkMap } from './types.js';
 
 // Хранимая карта писем не содержит (спека хранилища 6.2): страницы и снимок берут читателя писем. Чистые тесты читают письма
 // самой карты с письмами; сборка из базы проверяется в `letter-store.test.ts` и хосте.
@@ -842,5 +848,175 @@ describe('кандидаты в упоминания человека', () => {
     expect(keepNewestWithin(unread, 500).map((message) => message.id)).toEqual(['m-3']);
     expect(keepNewestWithin(unread, 0)).toEqual([]);
     expect(keepNewestWithin(unread, 1_000_000)).toEqual(unread);
+  });
+});
+
+describe('снимок без писем (rooms.mail 6.8)', () => {
+  const shellOf = (map: WindowWorkMap): WorkMap => ({ ...map, messages: [] }) as WorkMap;
+  const fixture = (): WindowWorkMap => windowFixture() as WindowWorkMap;
+  const base = (): WindowWorkMap => baseMap() as WindowWorkMap;
+  const atOf = (map: WindowWorkMap, id: string): string => (map.messages.find((message) => message.id === id) as Message).at;
+  const mailOf = (map: WindowWorkMap): MapCompactMail => {
+    if (map.compact?.version !== 2) throw new Error('the snapshot is not letterless');
+    return map.compact;
+  };
+
+  it('не несёт писем и даёт total/top/lastAt/unread по комнатам и прямым; unread — итог и разбивка события', () => {
+    const map = fixture();
+    const snapshot = mailWorkMap(shellOf(map), arrayReader(map.messages), {});
+
+    expect(snapshot.messages).toEqual([]);
+    expect(snapshot.schemaVersion).toBe(2);
+    expect(snapshot.sessions.map((session) => session.id)).toEqual(['s-01', 's-02']);
+    expect(snapshot.rooms.map((room) => room.id)).toEqual(['r-01', 'r-02']);
+    // `unread.letters` — итог человека по работе (как `unreadCount(HUMAN).total`), прямые письма — ключ '' в `rooms`.
+    expect(snapshot.compact).toEqual({
+      version: 2,
+      rooms: {
+        '': { total: 2, top: 19, lastAt: atOf(map, 'm-19'), unread: 1, decision: null },
+        'r-01': { total: 16, top: 24, lastAt: atOf(map, 'm-24'), unread: 7, decision: null },
+        'r-02': { total: 6, top: 15, lastAt: atOf(map, 'm-15'), unread: 6, decision: null },
+      },
+      unread: { letters: 14, rooms: { '': 1, 'r-01': 7, 'r-02': 6 } },
+      mentionCandidates: [],
+      cut: [],
+      omitted: {},
+    });
+  });
+
+  it('комната и прямые без писем остаются в снимке нулями, а не пропадают', () => {
+    const map = base();
+    const snapshot = mailWorkMap(shellOf(map), arrayReader([]), {});
+
+    expect(snapshot.compact).toMatchObject({
+      version: 2,
+      rooms: {
+        '': { total: 0, top: 0, lastAt: null, unread: 0, decision: null },
+        'r-01': { total: 0, top: 0, lastAt: null, unread: 0, decision: null },
+      },
+      unread: { letters: 0, rooms: {} },
+    });
+  });
+
+  it('читатель над картой и читатель над массивом дают один снимок', () => {
+    const map = fixture();
+
+    expect(mailWorkMap(shellOf(map), mapLetterReader(map), {})).toEqual(mailWorkMap(shellOf(map), arrayReader(map.messages), {}));
+  });
+
+  it('сессии, комнаты и планы ужимаются как в compactWorkMap: длинное сокращено, пути названы, история обрезана хвостом', () => {
+    const map = fixture();
+    (map.sessions[0] as WorkMap['sessions'][number]).task = 'я'.repeat(2000);
+    const session = map.sessions[1] as WorkMap['sessions'][number];
+    for (let i = 0; i < 130; i += 1) session.history.push({ event: 'active', at: '2026-10-05T00:00:00.000Z' });
+    map.decisionExports = [{ file: 'f', workId: 'w', roomId: 'r', proposalId: 'p', rev: 0, messageId: 'm', acceptedAt: 'x', kind: 'decision', snapshot: null, snapshotSha256: null, content: 'ж'.repeat(100_000), status: 'pending' }];
+    map.planExports = [{ file: 'p.md', planId: 'pl-1', rev: 1, event: 'accepted', content: 'ж'.repeat(100_000), status: 'pending' }];
+
+    const letterless = mailWorkMap(shellOf(map), arrayReader(map.messages), { textMax: 500 });
+    const compact = compactWorkMap(shellOf(map), { messageBytes: 0, textMax: 500 }, arrayReader(map.messages));
+
+    for (const field of ['work', 'sessions', 'rooms', 'plans', 'planExports', 'planEffects', 'decisionExports'] as const) {
+      expect(letterless[field], field).toEqual(compact[field]);
+    }
+    expect(letterless.sessions[1]?.history).toHaveLength(100);
+    expect(letterless.planExports).toEqual([{ file: 'p.md', planId: 'pl-1', rev: 1, event: 'accepted', content: '', status: 'pending' }]);
+    expect(letterless.compact).toMatchObject({ version: 2, omitted: { 'sessions.s-02.history': 31, decisionExports: 1 } });
+    expect(letterless.compact?.cut.map((cut) => cut.path)).toContain('sessions.s-01.task');
+  });
+
+  it('итог последнего решения комнаты: принято и возвращено; слова человека между ответами и до них его не прячут', () => {
+    const map = base();
+    addRoom(map, { title: 'Вторая', creator: HUMAN, members: ['s-01', 's-02'], lead: 's-01' }); // r-02
+    addRoom(map, { title: 'Третья', creator: HUMAN, members: ['s-01', 's-02'], lead: 's-01' }); // r-03
+    addRoom(map, { title: 'Четвёртая', creator: HUMAN, members: ['s-01', 's-02'], lead: 's-01' }); // r-04
+    addMessage(map, { from: HUMAN, to: ['s-01'], roomId: 'r-01', text: 'Returned for rework: add tests' });
+    addMessage(map, { from: HUMAN, to: ['s-01'], roomId: 'r-01', text: 'Decision accepted.' });
+    addMessage(map, { from: HUMAN, to: ['s-01'], roomId: 'r-02', text: 'Decision accepted.' });
+    addMessage(map, { from: HUMAN, to: ['s-01'], roomId: 'r-02', text: 'Returned for rework.' });
+    // Свои слова человека после ответа в счёт не идут, как в `roomDecisionReturned` окна.
+    addMessage(map, { from: HUMAN, to: ['s-01'], roomId: 'r-02', text: 'и ещё проверь краевой случай' });
+    addMessage(map, { from: 's-01', to: [], roomId: 'r-03', text: 'Decision accepted.' }); // не от человека
+    addMessage(map, { from: HUMAN, to: ['s-01'], roomId: 'r-03', text: 'просто слова' });
+
+    const snapshot = mailWorkMap(shellOf(map), arrayReader(map.messages), {});
+    const decisions = Object.fromEntries(Object.entries(mailOf(snapshot).rooms).map(([id, room]) => [id, room.decision]));
+
+    expect(decisions).toEqual({ '': null, 'r-01': 'accepted', 'r-02': 'returned', 'r-03': null, 'r-04': null });
+  });
+
+  it('кандидаты в упоминания — непрочитанный хвост человека через общий помощник, текст сокращён по textMax', () => {
+    const map = base();
+    addMessage(map, { from: 's-02', to: [], roomId: 'r-01', text: '@human посмотри' }); // m-01
+    addMessage(map, { from: 's-02', to: [], roomId: 'r-01', text: 'без упоминания' }); // m-02
+    addMessage(map, { from: 's-02', to: [], roomId: 'r-01', text: `@human ${'я'.repeat(4000)}` }); // m-03
+    addMessage(map, { from: 's-02', to: [], roomId: 'r-01', text: '@human уже прочитано' }); // m-04
+    (map.messages[3] as Message).readBy[HUMAN] = '2026-10-05T00:00:00.000Z';
+
+    const snapshot = mailWorkMap(shellOf(map), arrayReader(map.messages), { textMax: 1000 });
+    const candidates = mailOf(snapshot).mentionCandidates;
+
+    expect(candidates.map((message) => message.id)).toEqual(['m-01', 'm-03']);
+    expect(candidates).toEqual(humanMentionCandidates(arrayReader(map.messages).humanUnread(WINDOW_UNREAD_MAX), 1000));
+    expect(candidates[1]?.textBytes).toBe(Buffer.byteLength(`@human ${'я'.repeat(4000)}`, 'utf8'));
+  });
+
+  it('набор кандидатов не больше WINDOW_UNREAD_MAX последних непрочитанных: старые за хвостом не едут', () => {
+    const map = base();
+    for (let at = 0; at < WINDOW_UNREAD_MAX + 20; at += 1) addMessage(map, { from: 's-02', to: [], roomId: 'r-01', text: '@human' });
+
+    const snapshot = mailWorkMap(shellOf(map), arrayReader(map.messages), {});
+    const candidates = mailOf(snapshot).mentionCandidates;
+
+    expect(candidates).toHaveLength(WINDOW_UNREAD_MAX);
+    expect(candidates.at(-1)?.id).toBe(`m-${WINDOW_UNREAD_MAX + 20}`);
+  });
+
+  describe('над базой', () => {
+    let home = '';
+    let project = '';
+
+    beforeEach(async () => {
+      home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
+      project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
+      process.env.PARLEY_HOME = home;
+    });
+
+    afterEach(async () => {
+      closeWorkDb();
+      delete process.env.PARLEY_HOME;
+      await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
+    });
+
+    it('размер не меняется от 10 000 писем: до и после разница меньше 200 байт', async () => {
+      await createWork(project, { title: 'много писем' });
+      const map = await updateMap(project, 'w-0001', (stored) => {
+        addSession(stored, { provider: 'claude', label: 'план', task: 'Спланировать' });
+        addRoom(stored, { title: 'Обсуждение', creator: HUMAN, members: ['s-01'], lead: 's-01' });
+      });
+      const letterless = (): string => JSON.stringify(mailWorkMap(map, storeLetterReader(project, 'w-0001'), {}));
+
+      const before = letterless().length;
+      writeLetters(project, 'w-0001', (letters) => {
+        for (let at = 0; at < 10_000; at += 1) {
+          const direct = at % 2 === 0;
+          letters.add({
+            roomId: direct ? null : 'r-01',
+            from: 's-01',
+            to: direct ? [HUMAN] : [],
+            kind: 'note',
+            text: `письмо ${at} ${'я'.repeat(200)}`,
+          });
+        }
+      });
+      const after = letterless().length;
+
+      expect(Math.abs(after - before)).toBeLessThan(200);
+      expect(after).toBeLessThan(4096);
+      expect(JSON.parse(letterless()).compact).toMatchObject({
+        version: 2,
+        rooms: { '': { total: 5000, top: 9999, unread: 5000 }, 'r-01': { total: 5000, top: 10_000, unread: 5000 } },
+        unread: { letters: 10_000 },
+      });
+    });
   });
 });

@@ -10,6 +10,7 @@
 import type { Message, SessionNeed, WindowWorkEntry, WindowWorkMap } from '@parley/core';
 import {
   ATTENTION_RANK,
+  humanDecisionOutcome,
   humanUnreadLetters,
   humanUnreadMentions as coreHumanUnreadMentions,
   isHumanMention as coreIsHumanMention,
@@ -102,11 +103,6 @@ export function mailWaitText(reason: MailWait | null, need: SessionNeed | null, 
   return known[reason] ?? S.rooms.mailWaitUnknown;
 }
 
-// Те же литералы, что `RETURNED_LETTER` и `ACCEPTED_LETTER` в `core/work/proposals.ts`: из core рендерер берёт только
-// типы. Сходство держит страж `main/decision-letters-sync.test.ts`.
-const RETURNED_LETTER = 'Returned for rework';
-const ACCEPTED_LETTER = 'Decision accepted.';
-
 /**
  * Последний ответ человека на решение комнаты — `Return for rework` (спека окна 2026-09-29, 1.10)? Слот `proposal`
  * после ответа пуст и не помнит, чем ответили, а факт ответа лежит в ленте: письмо человека ведущему — `Returned for
@@ -116,12 +112,9 @@ const ACCEPTED_LETTER = 'Decision accepted.';
  */
 export function roomDecisionReturned(map: WindowWorkMap, roomId: string): boolean {
   const answer = map.messages.findLast(
-    (message) =>
-      message.roomId === roomId &&
-      message.from === HUMAN &&
-      (message.text.startsWith(RETURNED_LETTER) || message.text === ACCEPTED_LETTER),
+    (message) => message.roomId === roomId && message.from === HUMAN && humanDecisionOutcome(message.text) !== null,
   );
-  return answer?.text.startsWith(RETURNED_LETTER) ?? false;
+  return answer !== undefined && humanDecisionOutcome(answer.text) === 'returned';
 }
 
 /**

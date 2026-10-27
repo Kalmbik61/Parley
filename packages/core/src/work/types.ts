@@ -509,6 +509,36 @@ export interface MapCompact {
   omitted: Record<string, number>;
 }
 
+/**
+ * `MapCompact` версии 2: что окно с признаком `rooms-mail` получает вместо писем (`mailWorkMap`, спека rooms.mail 6.8).
+ * Писем в карте нет совсем, а размер не зависит от длины переписки: на комнату — несколько чисел. Окно держит письма
+ * само, из страниц `context.messages` и событий `rooms.mail`, а эти числа сверяет со своими (`top`, `total`).
+ *
+ * Два смысла «непрочитанного», не путать. `unread` — смысл СОБЫТИЯ `rooms.mail`, не версии 1: `letters` — ВСЕ непрочитанные
+ * человеком письма работы (то же, что `unreadCount(HUMAN).total`), `rooms` — разбивка по комнатам, ключ `''` — прямые письма
+ * (`unreadCount(HUMAN).byRoom`). У версии 1 `compact.unread.letters` — только прямые письма, комнаты в нём не считаются.
+ * Комнаты без непрочитанного в `unread.rooms` нет, а в `rooms[id].unread` стоит `0`.
+ */
+export interface MapCompactMail {
+  version: 2;
+  /**
+   * Каждая комната карты и прямые письма (ключ `''`; запись есть всегда, у пустого канала — нули и `null`):
+   * `total` — сколько писем, `top` — наибольший номер `seq` (`0`, если писем нет), `lastAt` — момент самого нового письма,
+   * `unread` — сколько из них человек не прочёл, `decision` — чем человек ответил на последнее решение комнаты
+   * (`humanDecisionOutcome` по его письмам; у прямых писем всегда `null`).
+   */
+  rooms: Record<string, { total: number; top: number; lastAt: string | null; unread: number; decision: 'accepted' | 'returned' | null }>;
+  unread: { letters: number; rooms: Record<string, number> };
+  /**
+   * Непрочитанные человеком письма, где могут называть `@human`: хвост непрочитанного (до `WINDOW_UNREAD_MAX`) через
+   * `humanMentionCandidates`. Окно ЗАМЕНЯЕТ ими набор кандидатов работы; кандидатов события `rooms.mail` оно дописывает
+   * в этот набор. Точное правило «@вы» применяет окно.
+   */
+  mentionCandidates: Message[];
+  cut: Array<{ path: string; bytes: number }>;
+  omitted: Record<string, number>;
+}
+
 /** Что израсходовано под бюджет работы (`resource-policy.ts`): запуск, возобновление, повтор запуска или новая сессия от агента. */
 export type ResourceKind = 'spawn' | 'launch' | 'resume' | 'retry';
 
@@ -608,8 +638,11 @@ export interface WorkMap {
  */
 export type WindowWorkMap = WorkMap & {
   messages: Message[];
-  /** Только в снимке для окна (`compactWorkMap`): что осталось за его пределами. */
-  compact?: MapCompact;
+  /**
+   * Только в снимке для окна: версия 1 (`compactWorkMap`) — письма хвостом и что осталось за ним; версия 2 (`mailWorkMap`) —
+   * писем нет, вместо них числа (`MapCompactMail`). Какую версию получает окно, решает признак `rooms-mail`.
+   */
+  compact?: MapCompact | MapCompactMail;
 };
 
 /** Запись глобального индекса работ `works-index.json` дома (`parleyHome()`). */

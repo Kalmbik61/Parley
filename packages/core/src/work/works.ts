@@ -31,7 +31,8 @@ export interface WorkEntry {
 
 /**
  * Работа в снимке для окна и страниц (протокол `WorksSnapshot`): карта с письмами — сжатая `compactWorkMap` у окна с
- * `compact-works` или полная у прежнего окна. Сборка снимка — хост (`works-service.ts`); код окна работает с этим видом.
+ * `compact-works`, без писем (`mailWorkMap`) у окна с `rooms-mail` или полная у прежнего окна. Сборка снимка — хост
+ * (`works-service.ts`); код окна работает с этим видом.
  */
 export interface WindowWorkEntry {
   projectPath: string;

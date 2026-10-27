@@ -1,10 +1,10 @@
-import { plainHumanMention } from './attention.js';
+import { humanDecisionOutcome, plainHumanMention } from './attention.js';
 import { markedExcerpt, textHash } from './context-budget.js';
 import type { LetterQuery } from './letter-store.js';
 import { isRoomArchived } from './rooms.js';
 import { reportedStatus } from './session-state.js';
 import type { SessionNeed } from './stuck.js';
-import { HUMAN, type Message, type MapCompact, type RoomPlan, type WindowWorkMap, type WorkMap, type WorkSession } from './types.js';
+import { HUMAN, type Message, type MapCompact, type MapCompactMail, type RoomPlan, type WindowWorkMap, type WorkMap, type WorkSession } from './types.js';
 
 /**
  * Компактная карта и страницы (P35, первая ступень A14). Карта остаётся хранилищем состояния, а письма читаются через
@@ -491,6 +491,43 @@ function totalsOf(stats: Record<string, { total: number; latestId: string | null
 }
 
 /**
+ * Всё в карте окна, кроме писем: сессии, работа, комнаты и планы ужаты так, как их отдаёт `compactWorkMap` и без писем
+ * `mailWorkMap`. История сессии и артефакты — хвостом (`WINDOW_LIST_MAX`, число опущенных в `omitted`), длинные поля
+ * сокращены до `textMax` (пути — в `cuts`), внутренние очереди хоста (`decisionExports`) и тела снимков планов не едут.
+ */
+function windowMapBase(map: WorkMap, textMax: number, cuts: CutRecord[], omitted: Record<string, number>): WorkMap {
+  const sessions = map.sessions.map((session) => {
+    let next: WorkSession = session;
+    if (session.history.length > WINDOW_LIST_MAX) {
+      omitted[`sessions.${session.id}.history`] = session.history.length - WINDOW_LIST_MAX;
+      next = { ...next, history: session.history.slice(-WINDOW_LIST_MAX) };
+    }
+    if (session.artifacts.length > WINDOW_LIST_MAX) {
+      omitted[`sessions.${session.id}.artifacts`] = session.artifacts.length - WINDOW_LIST_MAX;
+      next = { ...next, artifacts: session.artifacts.slice(0, WINDOW_LIST_MAX) };
+    }
+    return capStrings(next, textMax, `sessions.${session.id}`, cuts);
+  });
+
+  const { decisionExports, planExports, ...base } = map;
+  if (decisionExports !== undefined && decisionExports.length > 0) omitted['decisionExports'] = decisionExports.length;
+  const work = capStrings(map.work, textMax, 'work', cuts);
+  const roomList = capStrings(map.rooms, textMax, 'rooms', cuts);
+  const plans = map.plans === undefined ? undefined : capStrings(map.plans, textMax, 'plans', cuts);
+  const effects = map.planEffects === undefined ? undefined : capStrings(map.planEffects, 1024, 'planEffects', cuts);
+  return {
+    ...base,
+    work,
+    sessions,
+    rooms: roomList,
+    ...(plans === undefined ? {} : { plans }),
+    // Окно читает только состояние снимков (`pending`/`written`): тело — целый Markdown плана — ему не нужно.
+    ...(planExports === undefined ? {} : { planExports: planExports.map((intent) => ({ ...intent, content: '' })) }),
+    ...(effects === undefined ? {} : { planEffects: effects }),
+  };
+}
+
+/**
  * Карта для окна: та же форма `WorkMap`, но ограниченная. Письма — хвост каждой комнаты, непрочитанные человеком
  * и подлинники цитат, сколько влезает в `messageBytes`; длинные тексты сокращены с пометкой, история сессий и
  * артефакты обрезаны хвостом, внутренние очереди хоста (`decisionExports`) и тела снимков планов не отправляются.
@@ -583,35 +620,9 @@ export function compactWorkMap(map: WorkMap, options: WindowOptions, letters: Le
     rooms[roomId ?? 'direct'] = { total, included: keptRooms.get(roomId) ?? 0, tailFrom: contiguousFrom(roomId) };
   }
 
-  const sessions = map.sessions.map((session) => {
-    let next: WorkSession = session;
-    if (session.history.length > WINDOW_LIST_MAX) {
-      omitted[`sessions.${session.id}.history`] = session.history.length - WINDOW_LIST_MAX;
-      next = { ...next, history: session.history.slice(-WINDOW_LIST_MAX) };
-    }
-    if (session.artifacts.length > WINDOW_LIST_MAX) {
-      omitted[`sessions.${session.id}.artifacts`] = session.artifacts.length - WINDOW_LIST_MAX;
-      next = { ...next, artifacts: session.artifacts.slice(0, WINDOW_LIST_MAX) };
-    }
-    return capStrings(next, textMax, `sessions.${session.id}`, cuts);
-  });
-
-  const { decisionExports, planExports, ...base } = map;
-  if (decisionExports !== undefined && decisionExports.length > 0) omitted['decisionExports'] = decisionExports.length;
-  const work = capStrings(map.work, textMax, 'work', cuts);
-  const roomList = capStrings(map.rooms, textMax, 'rooms', cuts);
-  const plans = map.plans === undefined ? undefined : capStrings(map.plans, textMax, 'plans', cuts);
-  const effects = map.planEffects === undefined ? undefined : capStrings(map.planEffects, 1024, 'planEffects', cuts);
   return {
-    ...base,
-    work,
-    sessions,
+    ...windowMapBase(map, textMax, cuts, omitted),
     messages: kept,
-    rooms: roomList,
-    ...(plans === undefined ? {} : { plans }),
-    // Окно читает только состояние снимков (`pending`/`written`): тело — целый Markdown плана — ему не нужно.
-    ...(planExports === undefined ? {} : { planExports: planExports.map((intent) => ({ ...intent, content: '' })) }),
-    ...(effects === undefined ? {} : { planEffects: effects }),
     compact: {
       version: 1,
       messages: {
@@ -621,6 +632,83 @@ export function compactWorkMap(map: WorkMap, options: WindowOptions, letters: Le
         rooms,
       },
       unread: { letters: unreadLetters, rooms: unreadRooms },
+      cut: cuts.slice(0, MAX_CUT_RECORDS),
+      omitted,
+    },
+  };
+}
+
+/** Сколько писем человека читать за раз в поисках его ответа на решение, и сколько таких заходов делать самое большее. */
+const DECISION_SCAN_BATCH = 5;
+const DECISION_SCAN_PAGES = 6;
+
+/**
+ * Чем человек ответил на последнее решение комнаты: идёт по его письмам в комнату от новых к старым, пока не найдёт ответ
+ * (`humanDecisionOutcome`). Слова человека, которые не ответ, ищущего не останавливают и ответа не отменяют: окно так и
+ * считает (`roomDecisionReturned`: «свои слова человека в счёт не идут»). Ищет не глубже `DECISION_SCAN_BATCH *
+ * DECISION_SCAN_PAGES` писем, чтобы цена не зависела от длины переписки; дальше — `null`.
+ */
+function lastHumanDecision(letters: LetterReader, roomId: string): MapCompactMail['rooms'][string]['decision'] {
+  let before: number | undefined;
+  for (let page = 0; page < DECISION_SCAN_PAGES; page += 1) {
+    const found = letters.page({
+      roomId,
+      from: HUMAN,
+      newestFirst: true,
+      limit: DECISION_SCAN_BATCH,
+      ...(before === undefined ? {} : { beforeSeq: before }),
+    });
+    for (const letter of found) {
+      const outcome = humanDecisionOutcome(letter.text);
+      if (outcome !== null) return outcome;
+    }
+    if (found.length < DECISION_SCAN_BATCH) return null;
+    before = seqOf((found.at(-1) as Message).id, 'm-');
+  }
+  return null;
+}
+
+/**
+ * Карта для окна с признаком `rooms-mail` (спека rooms.mail 6.8): та же форма `WorkMap` и те же ужатые сессии, комнаты и
+ * планы, что у `compactWorkMap`, но писем нет совсем (`messages: []`), а в `compact` (версия 2, `MapCompactMail`) на каждую
+ * комнату и на прямые письма — `total`, `top`, `lastAt`, непрочитанное человеком и итог его последнего ответа на решение.
+ * Размер не зависит от числа писем: всё берётся запросами по индексам — `count`, одно новейшее письмо канала, `unreadCount`
+ * и хвост непрочитанного, а не `channelStats` с группировкой по всей истории. `top` и `lastAt` даёт одно новейшее письмо
+ * канала (`page` с `newestFirst`): так читаются и прямые письма, которых `roomLetterTops` не умеет. Кандидаты в упоминания —
+ * `humanMentionCandidates` над хвостом непрочитанного человека.
+ *
+ * `options.textMax` — предел текстов, как у `compactWorkMap`: сокращает длинные поля карты и письма кандидатов.
+ */
+export function mailWorkMap(map: WorkMap, letters: LetterReader, options: { textMax?: number } = {}): WindowWorkMap {
+  const textMax = options.textMax ?? WINDOW_TEXT_MAX;
+  const cuts: CutRecord[] = [];
+  const omitted: Record<string, number> = {};
+
+  const unread = letters.unreadCount(HUMAN);
+  const channels: Array<{ key: string; roomId: string | null }> = [{ key: '', roomId: null }];
+  for (const room of map.rooms) channels.push({ key: room.id, roomId: room.id });
+  const rooms: MapCompactMail['rooms'] = {};
+  for (const { key, roomId } of channels) {
+    const newest = letters.page({ roomId, newestFirst: true, limit: 1 })[0];
+    rooms[key] = {
+      total: letters.count({ roomId }),
+      top: newest === undefined ? 0 : seqOf(newest.id, 'm-'),
+      lastAt: newest?.at ?? null,
+      unread: unread.byRoom[key] ?? 0,
+      // Решение — письмо в комнату: у прямых писем ответов на решение нет.
+      decision: roomId === null ? null : lastHumanDecision(letters, roomId),
+    };
+  }
+  const mentionCandidates = humanMentionCandidates(letters.humanUnread(WINDOW_UNREAD_MAX), textMax);
+
+  return {
+    ...windowMapBase(map, textMax, cuts, omitted),
+    messages: [],
+    compact: {
+      version: 2,
+      rooms,
+      unread: { letters: unread.total, rooms: unread.byRoom },
+      mentionCandidates,
       cut: cuts.slice(0, MAX_CUT_RECORDS),
       omitted,
     },

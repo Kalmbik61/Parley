@@ -46,7 +46,9 @@ export function withMessages(entry: WindowWorkEntry, messages: readonly Message[
 
 /** Сколько писем комнаты хост держит, а окно ещё нет: всего минус то, что в карте окна. `0` — карта полная. */
 export function earlierRemaining(entry: WindowWorkEntry, roomId: string): number {
-  const total = entry.map.compact?.messages.rooms[roomId]?.total;
+  // Снимок без писем (`compact.version === 2`) окно разбирает отдельно (спека rooms.mail 6.9): итоги комнат в нём другие.
+  const compact = entry.map.compact;
+  const total = compact?.version === 1 ? compact.messages.rooms[roomId]?.total : undefined;
   if (total === undefined) return 0;
   let held = 0;
   for (const message of entry.map.messages) if (message.roomId === roomId) held += 1;
@@ -55,7 +57,8 @@ export function earlierRemaining(entry: WindowWorkEntry, roomId: string): number
 
 /** С чего начинать подгрузку старых писем комнаты: курсор перед хвостом без дыр; без хвоста — с самых новых. */
 export function earlierCursor(entry: WindowWorkEntry, roomId: string): string | undefined {
-  const from = entry.map.compact?.messages.rooms[roomId]?.tailFrom ?? null;
+  const compact = entry.map.compact;
+  const from = (compact?.version === 1 ? compact.messages.rooms[roomId]?.tailFrom : undefined) ?? null;
   return from === null ? undefined : `before:${from}`;
 }
 
