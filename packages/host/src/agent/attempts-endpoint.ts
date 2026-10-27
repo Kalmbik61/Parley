@@ -135,6 +135,7 @@ async function propose(ref: SessionRef, request: Extract<AttemptChannelRequest, 
   const baseSha = await git(ref.projectPath, 'rev-parse', '--verify', '--end-of-options', `${await baseBranchOf(ref.projectPath)}^{commit}`);
   const accepted = activeRoomPlan(before, room.id);
   const oldChecks = accepted?.autonomous?.checks;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
   const unchangedChecks = oldChecks && canonical(oldChecks.map(({ inputs, frozenAt: _at, ...check }) => ({ ...check, inputs: inputs.map(input => input.path) }))) === canonical(request.plan.autonomous.checks);
   const checks = unchangedChecks ? structuredClone(oldChecks) : await freezeChecks(ref.projectPath, baseSha, request.plan.autonomous, now);
   let result: { proposalId: string; rev: number } | undefined;
@@ -206,6 +207,7 @@ async function handoff(ref: SessionRef, request: Exclude<AttemptChannelRequest, 
     const preflight = next.autonomous!.attempts.find(entry => entry.id === attempt.id)!;
     if (preflight.status === 'superseded') fail('attempt-fenced', preflight.log.at(-1)?.note ?? 'attempt-fenced');
     if (next.autonomous!.halted) fail('attempt-fenced', 'The attempt has exceeded its execution limits.');
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
     const { sha: _sha, ...normalizedManifest } = submission.manifest;
     const result = await engine.submit(ref, plan.id, plan.rev, { ...request, submissionKey: submission.submissionKey, manifest: normalizedManifest });
     return result.ok ? { ok: true, result: { ...result.result, submissionKey: submission.submissionKey } } : result;

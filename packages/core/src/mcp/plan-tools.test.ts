@@ -271,6 +271,7 @@ describe("autonomous agent channel", () => {
     await autonomousAccepted();
     const requests = attemptChannel();
     const before = JSON.stringify(await readMap(project, context.workId));
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- ключ вырезается из копии через rest
     const { hash: _hash, ...body } = manifest;
     const submissionKey = "a".repeat(64);
     vi.stubGlobal("fetch", async (_url: URL, options: RequestInit) => {

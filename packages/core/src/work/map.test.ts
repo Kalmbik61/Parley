@@ -456,7 +456,9 @@ describe('parseMap', () => {
   it('подставляет только безопасные пустые поля автономного плана', () => {
     const map = autonomousMap();
     const autonomous = map.plans[0]!.autonomous;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- ключ вырезается из копии через rest
     const { attempts, ops, halted, seq, budget, ...required } = autonomous;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- ключ вырезается из копии через rest
     const { reservations, ...requiredBudget } = budget;
     map.plans[0]!.autonomous = { ...required, budget: requiredBudget } as typeof autonomous;
     const parsed = parseMap(JSON.stringify(map), 'map.json').plans?.[0]?.autonomous;
