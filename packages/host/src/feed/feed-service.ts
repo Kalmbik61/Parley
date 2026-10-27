@@ -62,9 +62,11 @@ import type {
   FeedUpdate,
   RawRecord,
   RolloutRecord,
+  WorkSession,
 } from '@parley/core';
-import { FEED_SCHEMA_VERSION, refKey } from '@parley/protocol';
-import type { FeedDecisions, Result, SessionRef } from '@parley/protocol';
+import { FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, refKey, sessionRef } from '@parley/protocol';
+import type { FeedDecisions, ProgressResult, Result, SessionRef } from '@parley/protocol';
+import { projectProgress } from './progress.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { Client } from '../client.js';
 import type { HostContext } from '../context.js';
@@ -164,6 +166,8 @@ export interface FeedService {
    * (нет `prompt` — последний `text` вообще); с `agentId` игнорируется.
    */
   snapshot(ref: SessionRef, agentId?: string, scope?: 'attention'): Promise<FeedSnapshot>;
+  /** Ограниченная проекция существующей ленты, без подписки и дополнительного source polling. */
+  progress(ref: SessionRef, client: Client): Promise<ProgressResult>;
   subscribe(ref: SessionRef, client: Client): void;
   unsubscribe(ref: SessionRef, client: Client): void;
   /** Клиент отключился от хоста: все его подписки сняты. */
@@ -212,6 +216,22 @@ interface Batch {
   removed: Set<string>;
 }
 
+interface SourceStamp {
+  provider: string;
+  providerSessionId: string;
+  startedAtProcess: string;
+}
+
+interface ProgressCall {
+  key: string;
+  cancel(): void;
+}
+
+interface ProgressClient {
+  calls: Array<{ at: number; key: string }>;
+  active: ProgressCall | null;
+}
+
 interface SessionFeed {
   ref: SessionRef;
   state: FeedState;
@@ -228,6 +248,11 @@ interface SessionFeed {
   /** Сев из журнала уже был (удачный или нет) — второй раз не сеем. */
   seeded: boolean;
   seeding: Promise<void> | undefined;
+  /** Provenance только для progress; существующая лента и подписчики не сбрасываются. */
+  sourceStamp: SourceStamp | null;
+  sourceReady: boolean;
+  progressInvalidated: boolean;
+  sourceGeneration: number;
   /** Последний `transcript_path` из хуков: запасной путь к журналам субагентов. */
   transcriptPath: string | null;
   /** Состояние ленты Codex: журнал сессии и журналы её агентов. */
@@ -344,6 +369,9 @@ export function createFeedService(
   imageSweep.unref();
 
   const feeds = new Map<string, SessionFeed>();
+  // Это lock underlying cold seed, не кэш ответа. Removal/timeout не освобождают незавершённый I/O.
+  const coldReads = new Map<string, Promise<void>>();
+  const progressClients = new Map<Client, ProgressClient>();
   const subscribers = new Map<string, Set<Client>>();
   const lastActivity = new Map<string, string>();
   /** Метки `markSent`: ключ сессии → время отправки, до первой пачки ленты (журнал задержек `feed.firstDelta`). */
@@ -424,6 +452,10 @@ export function createFeedService(
         live: false,
         seeded: false,
         seeding: undefined,
+        sourceStamp: sourceOf(ref),
+        sourceReady: false,
+        progressInvalidated: false,
+        sourceGeneration: 0,
         transcriptPath: null,
         decisions: null,
       };
@@ -468,6 +500,7 @@ export function createFeedService(
   }
 
   function commit(feed: SessionFeed, update: FeedUpdate): void {
+    if (!feedCurrent(feed)) return;
     if (update.state.permissionMode !== feed.state.permissionMode) feed.modeChanged = true;
     feed.state = update.state;
     for (const item of update.changes) {
@@ -491,6 +524,7 @@ export function createFeedService(
 
   /** Отправляет накопленную пачку подписчикам; `revision` растёт на 1 с каждой пачкой. */
   function flush(feed: SessionFeed): void {
+    if (!feedCurrent(feed)) return;
     if (feed.timer !== undefined) {
       clearTimeout(feed.timer);
       feed.timer = undefined;
@@ -643,6 +677,7 @@ export function createFeedService(
     }
     const feed = feedOf(ref);
     feed.live = true;
+    feed.sourceReady = true;
     const transcript = textOf(body['transcript_path']);
     if (transcript !== null) feed.transcriptPath = transcript;
 
@@ -687,18 +722,38 @@ export function createFeedService(
    * повторит следующий снимок или изменение журналов (`seedAside`).
    */
   function seed(feed: SessionFeed, provider: string): Promise<void> {
-    if (provider === 'codex') return seedCodex(feed);
+    if (stopped) return Promise.resolve();
+    const key = refKey(feed.ref);
+    const existing = coldReads.get(key);
+    if (existing !== undefined) return existing;
+    // Stamp можно установить при первом настоящем source seed, но не поверх старой истории/live событий.
+    if (feed.sourceStamp === null && !feed.progressInvalidated && !feed.live && !feed.seeded && feed.state.items.length === 0) {
+      feed.sourceStamp = sourceOf(feed.ref);
+    }
+    const run = provider === 'codex' ? seedCodex(feed) : seedClaude(feed, provider);
+    if (feed.seeding === undefined) return run;
+    const held = run.finally(() => {
+      if (coldReads.get(key) === held) coldReads.delete(key);
+    });
+    coldReads.set(key, held);
+    return held;
+  }
+
+  function seedClaude(feed: SessionFeed, provider: string): Promise<void> {
     if (feed.seeding !== undefined) return feed.seeding;
     const file = isClaudeCode(provider) ? deps.activity.logFile(feed.ref) : null;
     if (file === null) return Promise.resolve();
+    const stamp = sourceOf(feed.ref);
+    const generation = feed.sourceGeneration;
     feed.seeding = (async () => {
       try {
         const records = await readTranscript(file);
-        if (records === null || feed.live || stopped) return;
+        if (records === null || feed.live || !readCurrent(feed, stamp, generation)) return;
         const seeded = closeBrokenTurn(feedFromTranscript(stashClaude(records), { limit: maxItems }));
         // Режим, который хост уже сверил по подвалу (`noteMode`), свежее записи журнала.
         const state = { ...seeded, permissionMode: feed.state.permissionMode ?? seeded.permissionMode };
         feed.state = state;
+        feed.sourceReady = true;
         feed.sizes = new Map();
         feed.bytes = 0;
         for (const item of state.items) {
@@ -725,17 +780,20 @@ export function createFeedService(
     if (feed.seeding !== undefined) return feed.seeding;
     const file = deps.activity.logFile(feed.ref);
     if (file === null) return Promise.resolve();
+    const stamp = sourceOf(feed.ref);
+    const generation = feed.sourceGeneration;
     feed.seeding = (async () => {
       try {
         const tail = createRolloutTail(file);
         const records = await tail.read();
-        if (stopped) return;
+        if (!readCurrent(feed, stamp, generation)) return;
         const seeded = feedFromCodexRollout(stashCodex(records), { limit: maxItems });
         // Ход, оборванный в журнале, закрывается только без живого процесса: у живого он ещё идёт
         // (рестарт хоста — процесс умер с ним).
         const state =
           deps.pty.get(feed.ref) === undefined ? closeBrokenTurn(seeded.state) : seeded.state;
         feed.state = state;
+        feed.sourceReady = true;
         feed.codex = { tail, cursor: seeded.cursor, agents: new Map(), queue: Promise.resolve() };
         feed.sizes = new Map();
         feed.bytes = 0;
@@ -760,7 +818,7 @@ export function createFeedService(
         feed.seeded = true;
         feed.seeding = undefined;
       }
-      await serialCodex(feed, () => syncCodexAgents(feed));
+      if (readCurrent(feed, stamp, generation)) await serialCodex(feed, () => syncCodexAgents(feed));
     })();
     return feed.seeding;
   }
@@ -777,8 +835,10 @@ export function createFeedService(
   function pollCodex(feed: SessionFeed): Promise<void> {
     return serialCodex(feed, async () => {
       const codex = feed.codex;
-      if (codex === undefined || stopped) return;
+      // Raw Chat сохраняет свой source lifecycle. Исходный progress stamp проверяется только при проекции.
+      if (codex === undefined || !feedCurrent(feed)) return;
       const records = await codex.tail.read();
+      if (!feedCurrent(feed)) return;
       if (records.length > 0) {
         const { update, cursor } = applyCodexRecords(feed.state, stashCodex(records), codex.cursor);
         codex.cursor = cursor;
@@ -793,7 +853,7 @@ export function createFeedService(
     const codex = feed.codex;
     if (codex === undefined) return;
     for (const item of feed.state.items) {
-      if (stopped) return;
+      if (!feedCurrent(feed)) return;
       if (item.kind !== 'agent' || item.agentId === null) continue;
       let track = codex.agents.get(item.agentId);
       if (track?.done === true) continue;
@@ -807,6 +867,7 @@ export function createFeedService(
         track.tail = createRolloutTail(file);
       }
       const records = await track.tail.read();
+      if (!feedCurrent(feed)) return;
       if (records.length > 0) {
         const firstRead = track.meta.threadId === null;
         track.meta = codexAgentMeta(records, track.meta);
@@ -906,12 +967,57 @@ export function createFeedService(
     }
   }
 
-  function sessionOf(ref: SessionRef): { provider: string } {
+  function sessionOf(ref: SessionRef): WorkSession {
     const session = deps.works
       .entry(ref.projectPath, ref.workId)
       ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
     if (session === undefined) throw new HostError('not_found', `no session ${ref.sessionId}`);
     return session;
+  }
+
+  function sourceOf(ref: SessionRef): SourceStamp | null {
+    try {
+      const session = sessionOf(ref);
+      if ((!isClaudeCode(session.provider) && session.provider !== 'codex') ||
+          typeof session.providerSessionId !== 'string' || session.providerSessionId.length === 0 ||
+          typeof session.startedAtProcess !== 'string' || session.startedAtProcess.length === 0) return null;
+      return { provider: session.provider, providerSessionId: session.providerSessionId, startedAtProcess: session.startedAtProcess };
+    } catch {
+      return null;
+    }
+  }
+
+  function sameSource(left: SourceStamp, right: SourceStamp | null): boolean {
+    return right !== null && left.provider === right.provider && left.providerSessionId === right.providerSessionId && left.startedAtProcess === right.startedAtProcess;
+  }
+
+  function feedCurrent(feed: SessionFeed): boolean {
+    return !stopped && feeds.get(refKey(feed.ref)) === feed;
+  }
+
+  function readCurrent(feed: SessionFeed, stamp: SourceStamp | null, generation: number): boolean {
+    return feedCurrent(feed) && feed.sourceGeneration === generation &&
+      (stamp === null || sameSource(stamp, sourceOf(feed.ref)));
+  }
+
+  function progressCurrent(feed: SessionFeed): boolean {
+    if (!feedCurrent(feed) || feed.progressInvalidated || feed.sourceStamp === null) return false;
+    if (sameSource(feed.sourceStamp, sourceOf(feed.ref))) return true;
+    feed.progressInvalidated = true;
+    feed.sourceGeneration += 1;
+    return false;
+  }
+
+  function unavailableProgress(feed?: SessionFeed): ProgressResult {
+    return { revision: feed?.revision ?? 0, availability: 'unavailable', current: null, recent: [], truncated: false };
+  }
+
+  function clearProgress(key: string): void {
+    for (const [client, state] of progressClients) {
+      state.calls = state.calls.filter((call) => call.key !== key);
+      if (state.active?.key === key) state.active.cancel();
+      if (state.calls.length === 0) progressClients.delete(client);
+    }
   }
 
   /**
@@ -1058,6 +1164,7 @@ export function createFeedService(
     sentAt.delete(key);
     subscribers.delete(key);
     graceWaiting.delete(key);
+    clearProgress(key);
   }
 
   const unsubscribeWorks = deps.works.onChange((snapshot) => {
@@ -1073,6 +1180,13 @@ export function createFeedService(
     for (const key of [...feeds.keys(), ...subscribers.keys(), ...lastActivity.keys()]) {
       if (!alive.has(key)) forget(key);
     }
+    for (const feed of feeds.values()) {
+      if (feed.sourceStamp !== null && !feed.progressInvalidated && !sameSource(feed.sourceStamp, sourceOf(feed.ref))) {
+        feed.progressInvalidated = true;
+        feed.sourceGeneration += 1;
+        clearProgress(refKey(feed.ref));
+      }
+    }
     for (const [key, ref] of [...graceWaiting]) {
       if (!alive.has(key)) continue;
       graceWaiting.delete(key);
@@ -1085,6 +1199,12 @@ export function createFeedService(
     if (stopped) return;
     // Новый процесс не ответит на отправку старого: метка дала бы ложные минуты в `feed.firstDelta`.
     sentAt.delete(refKey(ref));
+    const previous = feeds.get(refKey(ref));
+    if (previous !== undefined) {
+      previous.progressInvalidated = true;
+      previous.sourceGeneration += 1;
+      clearProgress(refKey(ref));
+    }
     void seedAside(ref);
     void armCodexGrace(ref);
   });
@@ -1197,6 +1317,56 @@ export function createFeedService(
   return {
     onHook,
 
+    async progress(ref, client) {
+      const parsed = sessionRef.safeParse(ref);
+      if (!parsed.success) throw new HostError('bad_request', 'invalid session ref');
+      const session = sessionOf(parsed.data);
+      const key = refKey(parsed.data);
+      if (stopped) return unavailableProgress(feeds.get(key));
+      const time = now();
+      let quota = progressClients.get(client);
+      if (quota === undefined) {
+        quota = { calls: [], active: null };
+        progressClients.set(client, quota);
+      }
+      quota.calls = quota.calls.filter((call) => call.at > time - 1000);
+      if (quota.active !== null || quota.calls.length >= 4) {
+        const wait = quota.active !== null ? FEED_PROGRESS_RETRY_AFTER_MAX_MS : (quota.calls[0]?.at ?? time) + 1000 - time;
+        throw new HostError('conflict', 'progress request rate limited', {
+          reason: 'island-progress-rate-limit',
+          retryAfterMs: Math.max(0, Math.min(FEED_PROGRESS_RETRY_AFTER_MAX_MS, Math.ceil(wait))),
+        });
+      }
+      quota.calls.push({ at: time, key });
+      let cancel!: () => void;
+      const cancelled = new Promise<boolean>((resolve) => { cancel = () => resolve(false); });
+      const call: ProgressCall = { key, cancel };
+      quota.active = call;
+      const timer = setTimeout(cancel, 2000);
+      timer.unref();
+      const feed = feedOf(parsed.data);
+      try {
+        // Только ещё пустой source ДО начала любого чтения можно впервые связать с provenance.
+        if (feed.sourceStamp === null && !feed.progressInvalidated && !feed.live && !feed.seeded &&
+            feed.seeding === undefined && !coldReads.has(key) && feed.state.items.length === 0) {
+          feed.sourceStamp = sourceOf(feed.ref);
+        }
+        if (!progressCurrent(feed)) return unavailableProgress(feed);
+        if (!feed.live && !feed.seeded) {
+          const settled = await Promise.race([seed(feed, session.provider).then(() => true, () => false), cancelled]);
+          if (!settled) return unavailableProgress(feed);
+        }
+        if (progressClients.get(client) !== quota || quota.active !== call || !progressCurrent(feed) || !feed.sourceReady) return unavailableProgress(feed);
+        // Как snapshot: feed revision принадлежит уже накопленной пачке, не числу progress вызовов.
+        flush(feed);
+        const result = projectProgress(feed.state, feed.revision);
+        return progressCurrent(feed) && progressClients.get(client) === quota ? result : unavailableProgress(feed);
+      } finally {
+        clearTimeout(timer);
+        if (quota.active === call) quota.active = null;
+      }
+    },
+
     async snapshot(ref, agentId, scope) {
       const startedAt = performance.now();
       const session = sessionOf(ref);
@@ -1266,6 +1436,8 @@ export function createFeedService(
     },
 
     dropClient(client) {
+      progressClients.get(client)?.active?.cancel();
+      progressClients.delete(client);
       for (const [key, clients] of subscribers) {
         clients.delete(client);
         if (clients.size === 0) {
@@ -1345,6 +1517,8 @@ export function createFeedService(
     async stop() {
       if (stopped) return;
       stopped = true;
+      for (const state of progressClients.values()) state.active?.cancel();
+      progressClients.clear();
       unsubscribeActivity();
       unsubscribeStart();
       unsubscribeExit();

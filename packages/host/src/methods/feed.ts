@@ -4,6 +4,7 @@
  * состояние ленты держит `FeedService`.
  */
 
+import { progressResult } from '@parley/protocol';
 import type { Handler } from '../context.js';
 import type { FeedService } from '../feed/feed-service.js';
 
@@ -13,6 +14,7 @@ export interface FeedMethodDeps {
 
 export interface FeedHandlers {
   feedSnapshot: Handler<'feed.snapshot'>;
+  feedProgress: Handler<'feed.progress'>;
   feedSubscribe: Handler<'feed.subscribe'>;
   feedUnsubscribe: Handler<'feed.unsubscribe'>;
   feedDecide: Handler<'feed.decide'>;
@@ -22,6 +24,13 @@ export interface FeedHandlers {
 export function createFeedHandlers(deps: FeedMethodDeps): FeedHandlers {
   return {
     feedSnapshot: (params) => deps.feed.snapshot(params.ref, params.agentId, params.scope),
+    feedProgress: async (params, request) => {
+      const result = progressResult.safeParse(await deps.feed.progress(params.ref, request.client));
+      // Последняя граница перед generic server: не отправлять невалидный payload/ошибки schema клиенту.
+      return result.success ? result.data : {
+        revision: 0, availability: 'unavailable', current: null, recent: [], truncated: false,
+      };
+    },
     feedSubscribe: async (params, request) => {
       deps.feed.subscribe(params.ref, request.client);
       return { ok: true };

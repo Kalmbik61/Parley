@@ -25,7 +25,7 @@ import {
   parleyHome,
   readJsonlRecords,
 } from '@parley/core';
-import { FEED_SCHEMA_VERSION } from '@parley/protocol';
+import { FEED_SCHEMA_VERSION, progressResult } from '@parley/protocol';
 import type { EventData } from '@parley/protocol';
 import { fakeClient, fakeFeedDeps, hookRequest, REF } from '../../test/feed-fakes.js';
 import type { FakeFeedDeps } from '../../test/feed-fakes.js';
@@ -33,6 +33,8 @@ import { makePng } from '../../test/png.js';
 import { HostError } from '../errors.js';
 import { createFeedService, FEED_MAX_ITEMS, readRecordsTail } from './feed-service.js';
 import type { FeedService, FeedServiceOptions } from './feed-service.js';
+import * as progressModule from './progress.js';
+import * as codexSource from './codex-source.js';
 
 const FIXTURES = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -173,6 +175,360 @@ afterEach(async () => {
   vi.useRealTimers();
   await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
   tempDirs = [];
+});
+
+describe('feed.progress source, quota and lifecycle', () => {
+  function provenance() {
+    const stamp = { provider: 'claude', providerSessionId: 'SECRET-binding-A' as string | null, startedAtProcess: 'SECRET-process-A' as string | null };
+    const entry = fakes.deps.works.entry;
+    vi.spyOn(fakes.deps.works, 'entry').mockImplementation((...args) => {
+      const value = entry(...args);
+      return value === undefined ? undefined : { ...value, map: { ...value.map,
+        sessions: value.map.sessions.map((session) => ({ ...session, ...stamp })),
+      } };
+    });
+    return stamp;
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((done) => { resolve = done; });
+    return { promise, resolve };
+  }
+
+  async function cold(readRecords?: FeedServiceOptions['readRecords']) {
+    const root = await tempRoot();
+    const file = path.join(root, 'log.jsonl');
+    await copyFile(path.join(FIXTURES, 'transcript-p5b-write.jsonl'), file);
+    fakes.setLogFile(file);
+    start({ roots: () => [root], ...(readRecords === undefined ? {} : { readRecords }) });
+    return file;
+  }
+
+  it('validates ref and session before any source lookup or read', async () => {
+    provenance();
+    start();
+    const lookup = vi.spyOn(fakes.deps.activity, 'logFile');
+    await expect(service.progress({ ...REF, projectPath: null as unknown as string }, fakeClient())).rejects.toMatchObject({ code: 'bad_request' });
+    await expect(service.progress({ ...REF, sessionId: 'missing' }, fakeClient())).rejects.toMatchObject({ code: 'not_found' });
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it('seeds once, preserves feed revision and Chat subscriptions, and emits no source stamp', async () => {
+    provenance();
+    const read = vi.fn(async (file: string) => (await readJsonlRecords(file)).records);
+    await cold(read);
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    const result = await service.progress(REF, client);
+    const snapshot = await service.snapshot(REF);
+    expect(result.availability).toBe('available');
+    expect(result.recent.length).toBeGreaterThan(0);
+    expect(result.revision).toBe(snapshot.revision);
+    expect(progressResult.safeParse(result).success).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('SECRET');
+    expect(service.subscriberCount()).toBe(1);
+    expect(await service.progress(REF, client)).toEqual(result);
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it.each(['providerSessionId', 'startedAtProcess'] as const)('fails closed with missing %s without reading or relabeling old state', async (field) => {
+    const stamp = provenance();
+    stamp[field] = null;
+    const read = vi.fn(async () => []);
+    await cold(read);
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+    expect(read).not.toHaveBeenCalled();
+    send(pre('old-tool', 'Read', { path: 'SECRET' }));
+    stamp[field] = 'newly-known';
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+  });
+
+  it.each(['provider', 'providerSessionId', 'startedAtProcess'] as const)('invalidates existing state on %s change without resetting Chat', async (field) => {
+    const stamp = provenance();
+    start();
+    send(pre('old', 'Read', {}));
+    const before = await service.progress(REF, fakeClient());
+    expect(before.availability).toBe('available');
+    const previous = { ...stamp };
+    stamp[field] = field === 'provider' ? 'codex' : 'SECRET-new';
+    fakes.setSessions([{ ref: REF }]);
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [], revision: before.revision });
+    Object.assign(stamp, previous);
+    fakes.setSessions([{ ref: REF }]);
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+  });
+
+  it('invalidates a restart event even before the work map publishes a new process stamp', async () => {
+    provenance();
+    start();
+    send(pre('old', 'Read', {}));
+    expect((await service.progress(REF, fakeClient())).availability).toBe('available');
+    fakes.emitStart(REF);
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+  });
+
+  it('rejects quota overflow before source lookup or projection and scopes it per client', async () => {
+    provenance();
+    let time = 0;
+    start({ now: () => time });
+    send(pre('tool', 'Read', {}));
+    const client = fakeClient();
+    const lookup = vi.spyOn(fakes.deps.activity, 'logFile');
+    const project = vi.spyOn(progressModule, 'projectProgress');
+    try {
+      for (let i = 0; i < 4; i += 1) await service.progress(REF, client);
+      const reads = lookup.mock.calls.length;
+      const projections = project.mock.calls.length;
+      await expect(service.progress(REF, client)).rejects.toMatchObject({ code: 'conflict', data: { reason: 'island-progress-rate-limit', retryAfterMs: 250 } });
+      expect(lookup).toHaveBeenCalledTimes(reads);
+      expect(project).toHaveBeenCalledTimes(projections);
+      expect((await service.progress(REF, fakeClient())).availability).toBe('available');
+      time = 1000;
+      expect((await service.progress(REF, client)).availability).toBe('available');
+    } finally { project.mockRestore(); }
+  });
+
+  it('shares a cold read with Chat and other clients, rejects concurrent calls from the same client', async () => {
+    provenance();
+    const held = deferred<RawRecord[]>();
+    const read = vi.fn(() => held.promise);
+    const file = await cold(read);
+    const client = fakeClient();
+    const first = service.progress(REF, client);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    await expect(service.progress(REF, client)).rejects.toMatchObject({ code: 'conflict', data: { reason: 'island-progress-rate-limit' } });
+    const second = service.progress(REF, fakeClient());
+    const chat = service.snapshot(REF);
+    held.resolve((await readJsonlRecords(file)).records);
+    const [a, b, snapshot] = await Promise.all([first, second, chat]);
+    expect(a).toEqual(b);
+    expect(a.availability).toBe('available');
+    expect(a.revision).toBe(snapshot.revision);
+    expect(read).toHaveBeenCalledOnce();
+    expect(service.subscriberCount()).toBe(0);
+  });
+
+  it('does not attach newly known provenance to an unknown source read already started by Chat', async () => {
+    const stamp = provenance();
+    stamp.startedAtProcess = null;
+    const held = deferred<RawRecord[]>();
+    const read = vi.fn(() => held.promise);
+    const file = await cold(read);
+    const chat = service.snapshot(REF);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    stamp.startedAtProcess = 'SECRET-newly-known-process';
+    const pending = service.progress(REF, fakeClient());
+    held.resolve((await readJsonlRecords(file)).records);
+    expect(await pending).toMatchObject({ availability: 'unavailable', recent: [] });
+    await chat;
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it('returns unavailable after 2s but retains the underlying per-ref read until it settles', async () => {
+    provenance();
+    const held = deferred<RawRecord[]>();
+    const read = vi.fn(() => held.promise);
+    const file = await cold(read);
+    vi.useFakeTimers();
+    const client = fakeClient();
+    const first = service.progress(REF, client);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await first).toMatchObject({ availability: 'unavailable', recent: [] });
+    const second = service.progress(REF, client);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await second).toMatchObject({ availability: 'unavailable', recent: [] });
+    expect(read).toHaveBeenCalledOnce();
+    held.resolve((await readJsonlRecords(file)).records);
+    await vi.waitFor(async () => expect((await service.progress(REF, client)).availability).toBe('available'));
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it.each(['binding', 'process', 'remove-readd', 'dropClient', 'stop'] as const)('suppresses late delivery after %s and does not restore stale rows', async (change) => {
+    const stamp = provenance();
+    const held = deferred<RawRecord[]>();
+    const read = vi.fn(() => held.promise);
+    const file = await cold(read);
+    const client = fakeClient();
+    const pending = service.progress(REF, client);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    if (change === 'binding') stamp.providerSessionId = 'SECRET-binding-B';
+    if (change === 'process') stamp.startedAtProcess = 'SECRET-process-B';
+    if (change === 'remove-readd') {
+      fakes.setSessions([]);
+      fakes.setSessions([{ ref: REF }]);
+      service.onHook(hookRequest(pre('new-B', 'Write', {})));
+    }
+    if (change === 'dropClient') service.dropClient(client);
+    if (change === 'stop') await service.stop();
+    held.resolve((await readJsonlRecords(file)).records);
+    expect(await pending).toMatchObject({ availability: 'unavailable', recent: [] });
+    if (change === 'binding' || change === 'process') {
+      fakes.setLogFile(null);
+      expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(0);
+    }
+    if (change === 'remove-readd') {
+      const result = await service.progress(REF, fakeClient());
+      expect(result.availability).toBe('available');
+      expect(result.recent).toHaveLength(1);
+    }
+  });
+
+  it('keeps the old read pinned across removal/readd and dropClient clears pending delivery and quota', async () => {
+    provenance();
+    const held = deferred<RawRecord[]>();
+    const read = vi.fn(() => held.promise);
+    await cold(read);
+    const client = fakeClient();
+    const first = service.progress(REF, client);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    service.dropClient(client);
+    expect(await first).toMatchObject({ availability: 'unavailable' });
+    fakes.setSessions([]);
+    fakes.setSessions([{ ref: REF }]);
+    const next = service.progress(REF, client);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(read).toHaveBeenCalledOnce();
+    held.resolve([]);
+    expect(await next).toMatchObject({ availability: 'unavailable', recent: [] });
+  });
+
+  it('keeps same-provider sessions and identical work-relative refs in different projects separate', async () => {
+    const refs = [REF, { ...REF, sessionId: 's-02' }, { ...REF, projectPath: '/other/proj' }];
+    fakes.setSessions(refs.map((ref) => ({ ref })));
+    provenance();
+    start();
+    refs.forEach((ref, index) => service.onHook(hookRequest(pre(`tool-${index}`, 'Read', {}), ref)));
+    const results = await Promise.all(refs.map((ref) => service.progress(ref, fakeClient())));
+    expect(results.every((result) => result.availability === 'available' && result.recent.length === 1)).toBe(true);
+    expect(new Set(results.map((result) => result.recent[0]?.id)).size).toBe(3);
+  });
+
+  it('updates closed-Chat Codex progress only through existing log updates, without extra polling or deadlock', async () => {
+    const stamp = provenance();
+    stamp.provider = 'codex';
+    const root = await tempRoot();
+    const file = path.join(root, 'rollout.jsonl');
+    const record = (ordinal: number) => JSON.stringify({ timestamp: '2026-10-26T12:00:00.000Z', ordinal, type: 'event_msg', payload: {
+      type: 'item_completed', thread_id: 'main', turn_id: 'turn', item: { type: 'CommandExecution', id: `cmd-${ordinal}`, command: ['SECRET'], status: 'completed', exit_code: 0 },
+    } });
+    const started = JSON.stringify({ timestamp: '2026-10-26T11:59:59.000Z', ordinal: 0, type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn' } });
+    await writeFile(file, `${started}\n${record(1)}\n`);
+    fakes.setLogFile(file);
+    start();
+    const first = await service.progress(REF, fakeClient());
+    expect(first.recent).toHaveLength(1);
+    writeFileSync(file, `${record(2)}\n`, { flag: 'a' });
+    expect((await service.progress(REF, fakeClient())).recent).toHaveLength(1);
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    fakes.emitLog();
+    const [snapshot, progress] = await Promise.all([service.snapshot(REF), service.progress(REF, fakeClient())]);
+    expect(snapshot.items.length).toBeGreaterThan(0);
+    expect(progressResult.safeParse(progress).success).toBe(true);
+    await vi.waitFor(async () => expect((await service.progress(REF, fakeClient())).recent).toHaveLength(2));
+    service.unsubscribe(REF, client);
+    writeFileSync(file, `${record(3)}\n`, { flag: 'a' });
+    writeFileSync(file, `${JSON.stringify({ timestamp: '2026-10-26T12:00:01.000Z', ordinal: 4, type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn' } })}\n`, { flag: 'a' });
+    fakes.emitLog();
+    await vi.waitFor(async () => expect((await service.progress(REF, fakeClient())).recent).toHaveLength(3));
+    const done = await service.snapshot(REF);
+    expect(ofKind(done.items, 'turn')).toHaveLength(1);
+    expect(ofKind(done.items, 'turn')[0]?.interrupted).toBeUndefined();
+    expect((await service.progress(REF, fakeClient())).current).toBeNull();
+    expect(service.subscriberCount()).toBe(0);
+    // Raw Chat сохраняет retained tail после restart; progress не переименовывает прежний provenance.
+    stamp.startedAtProcess = 'SECRET-process-restarted';
+    fakes.emitStart(REF);
+    writeFileSync(file, `${record(5)}\n`, { flag: 'a' });
+    fakes.emitLog();
+    await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(4));
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+    await service.stop();
+  });
+
+  it.each(['remove-readd', 'stop'] as const)('does not publish a late raw Codex poll after %s', async (change) => {
+    const stamp = provenance();
+    stamp.provider = 'codex';
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const original = codexSource.createRolloutTail;
+    let polling: Promise<unknown> | undefined;
+    const create = vi.spyOn(codexSource, 'createRolloutTail').mockImplementation((...args) => {
+      const tail = original(...args);
+      let count = 0;
+      return { ...tail, read: () => {
+        const run = (async () => {
+          const records = await tail.read();
+          if (++count === 2) { entered.resolve(undefined); await release.promise; }
+          return records;
+        })();
+        if (count > 0) polling = run;
+        return run;
+      } };
+    });
+    try {
+      const root = await tempRoot();
+      const file = path.join(root, 'rollout.jsonl');
+      const row = (ordinal: number) => JSON.stringify({ timestamp: '2026-10-26T12:00:00.000Z', ordinal, type: 'event_msg', payload: {
+        type: 'item_completed', item: { type: 'CommandExecution', id: `A-${ordinal}`, command: ['SECRET-A'], status: 'completed', exit_code: 0 },
+      } });
+      await writeFile(file, `${row(1)}\n`);
+      fakes.setLogFile(file);
+      start();
+      await service.progress(REF, fakeClient());
+      const client = fakeClient();
+      service.subscribe(REF, client);
+      writeFileSync(file, `${row(2)}\n`, { flag: 'a' });
+      fakes.emitLog();
+      await entered.promise;
+      if (change === 'stop') await service.stop();
+      else {
+        fakes.setSessions([]);
+        stamp.provider = 'claude';
+        fakes.setSessions([{ ref: REF }]);
+        service.onHook(hookRequest(pre('new-B', 'Write', {})));
+        service.subscribe(REF, client);
+        await service.progress(REF, fakeClient());
+      }
+      const before = [...client.sent];
+      release.resolve(undefined);
+      await polling;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(client.sent).toEqual(before);
+      if (change === 'remove-readd') expect(ofKind((await service.snapshot(REF)).items, 'tool').map((item) => item.toolUseId)).toEqual(['new-B']);
+    } finally { release.resolve(undefined); create.mockRestore(); }
+  });
+
+  it('returns unavailable for missing or failed sources without exposing source errors', async () => {
+    provenance();
+    await cold(async () => { throw new Error('SECRET-source-failure'); });
+    const result = await service.progress(REF, fakeClient());
+    expect(result).toMatchObject({ availability: 'unavailable', recent: [] });
+    expect(JSON.stringify(result)).not.toContain('SECRET');
+    await service.stop();
+    fakes.setLogFile(null);
+    start();
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
+  });
+
+  it('clears caller timers on stop while the underlying read remains pending', async () => {
+    provenance();
+    const held = deferred<RawRecord[]>();
+    const read = vi.fn(() => held.promise);
+    await cold(read);
+    vi.useFakeTimers();
+    const pending = service.progress(REF, fakeClient());
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    await service.stop();
+    expect(await pending).toMatchObject({ availability: 'unavailable' });
+    expect(vi.getTimerCount()).toBe(0);
+    held.resolve([]);
+  });
 });
 
 describe('снимок и дельты', () => {
