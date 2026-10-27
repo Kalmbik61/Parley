@@ -6,7 +6,7 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
-The assistant speaks in a neural voice and its swarm becomes a face while it talks. The island gets its own sounds, smoother motion and, on a MacBook with a notch, a shape that continues the notch.
+The assistant speaks in a neural voice and its swarm becomes a face while it talks. The island gets its own sounds, smoother motion and, on a MacBook with a notch, a shape that continues the notch. It also does more for your agents: it answers their questions and plans, shows what an agent is doing, its subagents and rooms waiting for you, and a shortcut takes you through everything pending.
 
 ### Added
 
@@ -20,8 +20,16 @@ The assistant speaks in a neural voice and its swarm becomes a face while it tal
 - **Swarm reactions and island motion.** The swarms react to events with one short movement: a hop for a permission or a plan, a nod for a question, a spin with sparks for Done, a shake for an error, a glint for an assistant tool step. Small swarms flash instead of moving. The island grows with a slight overshoot and shrinks without one. "Reduce motion" in Settings → Notifications → Island, like the macOS setting, stills the swarm and the island's shape changes; the sounds stay.
 - **The island in the notch.** On a MacBook with a notch the island is exactly the size of the notch when there is nothing to show. While agents work, a Done is unseen or the assistant is folded away or speaking, it becomes one capsule around the notch, with the swarm or the assistant's face on the left and the Done or working count on the right. It drops down below the notch only when you open it (a click, the hotkey or pulling the tab; the pointer alone does not open it) or when something needs you: a request, a card or the assistant. Displays without a notch, and an island moved to the left or right edge, keep the strip; moving to another display changes the shape at once.
 
+- **Questions answered on the island.** A question card from an agent shows all of its questions, one to four, page by page with Back and Next, with single or multiple choice, option descriptions and Other. Submit sends every answer at once, and a half-typed answer survives when you click elsewhere.
+- **Plans on the island.** A plan card shows the whole plan as plain text in a scrolling area that fits the island. Two buttons approve it, with edits auto-accepted or approved one by one; changing the plan is an explicit hand-off: "Change plan in terminal" opens the session's terminal. When a plan can only be approved in the terminal, the card says so.
+- **What an agent is doing.** Open a session row on the island to see its recent actions: the step running now and up to 20 earlier ones (read files, edit files, run command, search, delegate), each with its status and time. Only the opened row is refreshed, and only while the island is open.
+- **Subagents and rooms waiting for you.** A session row lists its active subagents (up to eight, with "+N more") and stays on the island while they run, even after its own Done is cleared. A room whose lead proposes a decision or a completion shows as "Waiting for you" with the live lead's name and an "Open room" button; you answer in the room itself.
+- **Everything pending from the keyboard.** A global shortcut, Control+Alt+I by default, opens the island on the first pending item: folder consents, then agent requests, then rooms waiting for you. Up and Down move between them, Control+Enter opens the selected one in Parley, Esc gives the keyboard back. Settings → Notifications → Island changes or turns off the shortcut and says when another app holds it.
+
 ### Changed
 
+- Codex sessions show on the island like any other: working, waiting for you, Done with the last answer, in the counters and the work and room groups. A Codex request without a card on the island opens its terminal.
+- A Done of a session you are already looking at (its chat or terminal visible in the focused Parley window) no longer pops the island out; it still appears in the list.
 - The island's request sound is the island's own cue instead of the system beep, and Done on the island sounds only with "Sound when an agent finishes".
 - The assistant marks the mood of every sentence, not only the first one; the marks never reach the island, the history or Telegram. Its tone is calm by default: an idle home or something it can't do is a plain fact, sad and angry faces are kept for real failures and are softer than before, and coral is only for the assistant's own errors.
 
