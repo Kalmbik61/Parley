@@ -29,6 +29,14 @@ describe('подписи помощника', () => {
     expect(miniLabel({ ...HOST_IDLE, phase: 'awaiting-confirm', proposal: message }, 'idle')).toBe('Confirm send');
     expect(miniLabel({ ...HOST_IDLE, phase: 'awaiting-confirm', proposal: legacy }, 'idle')).toBe('Confirm send');
   });
+  it('речь: Speaking, после неё Done — и в мини-виде (таблицы LABEL и MINI макета)', () => {
+    expect(statusLabel({ ...HOST_IDLE, phase: 'idle' }, 'speaking')).toBe('Speaking');
+    expect(statusLabel({ ...HOST_IDLE, phase: 'idle' }, 'settling')).toBe('Done');
+    expect(miniLabel(HOST_IDLE, 'speaking')).toBe('Speaking·');
+    expect(miniLabel(HOST_IDLE, 'settling')).toBe('Done·');
+    expect(miniLabel(HOST_IDLE, 'listening')).toBe('Listening·');
+    expect(miniLabel(HOST_IDLE, 'transcribing')).toBe('Listening·');
+  });
   it('сочетание — значками macOS', () => {
     expect(hotkeyLabel('Alt+Space')).toBe('⌥Space');
     expect(hotkeyLabel('CmdOrCtrl+Shift+J')).toBe('⌘⇧J');

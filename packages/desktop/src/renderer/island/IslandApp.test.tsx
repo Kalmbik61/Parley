@@ -16,6 +16,8 @@
  * Пауза кнопок решения и анимация формы проверены в `IslandView.test.tsx`.
  * Звук (#9 T4): исходы показа идут в `useIslandCues`, граф окна подменён (`played()` — что он сыграл), политика
  * сигналов настоящая и считает остывание по `Date.now`; `island:beep` нет.
+ * Речь помощника (план 3b B22): проигрыватель подменён (`speakerOf()`), порт голоса — подставной объект с `onmessage`,
+ * его приносит сообщение окна (`sendPort`).
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -23,13 +25,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedCard, FeedPlanCard, FeedQuestionCard } from '@parley/core';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import { refKey, type ConsentCard, type ProgressResult } from '@parley/protocol';
-import type { IslandApi, IslandBridge, IslandConfig } from '../../shared/island.js';
+import { ISLAND_TTS_PORT, type IslandApi, type IslandBridge, type IslandConfig, type IslandSpeakRequest, type IslandTtsMessage, type TtsEngineState } from '../../shared/island.js';
 import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { DONE_HOLD_MS, IDLE_RETRACT_MS, IslandApp, RETRACT_MORPH_MS } from './IslandApp.js';
+import { DONE_HOLD_MS, IDLE_RETRACT_MS, INITIAL_CONFIG, IslandApp, RETRACT_MORPH_MS } from './IslandApp.js';
+import { createSpeaker } from './assistant/speaker.js';
 import { HOST_IDLE, useAssistantStore } from './assistant/store.js';
+import { createVoiceAnalysis } from './assistant/voice-features.js';
 import { useConsentsStore } from './consents/store.js';
 import { sessionLabels } from './model.js';
 import { PULL_EXPAND_PX } from './IslandTab.js';
@@ -41,6 +45,57 @@ import { islandSound } from './sound/graph.js';
 vi.mock('./sound/graph.js', () => ({
   islandSound: { graph: vi.fn(() => null), play: vi.fn(), setVolume: vi.fn(), setPalette: vi.fn(), duckVoice: vi.fn() },
 }));
+vi.mock('./assistant/speaker.js', () => ({
+  createSpeaker: vi.fn(() => {
+    const starts: Array<(utteranceId: string) => void> = [];
+    return {
+      starts,
+      enqueue: vi.fn(),
+      expect: vi.fn(),
+      stop: vi.fn(),
+      discard: vi.fn(),
+      mouth: vi.fn(() => 0),
+      speaking: vi.fn(() => false),
+      onIdle: vi.fn(() => () => undefined),
+      onStart: vi.fn((cb: (utteranceId: string) => void) => {
+        starts.push(cb);
+        return () => undefined;
+      }),
+      read: vi.fn(() => false),
+    };
+  }),
+}));
+vi.mock('./assistant/voice-features.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./assistant/voice-features.js')>();
+  return { ...actual, createVoiceAnalysis: vi.fn(actual.createVoiceAnalysis) };
+});
+
+/** Подменённый проигрыватель речи последнего смонтированного острова. */
+interface FakeSpeaker {
+  starts: Array<(utteranceId: string) => void>;
+  enqueue: ReturnType<typeof vi.fn>;
+  expect: ReturnType<typeof vi.fn>;
+  stop: ReturnType<typeof vi.fn>;
+  discard: ReturnType<typeof vi.fn>;
+  speaking: ReturnType<typeof vi.fn>;
+  read: ReturnType<typeof vi.fn>;
+}
+const speakerOf = (): FakeSpeaker => vi.mocked(createSpeaker).mock.results.at(-1)!.value as unknown as FakeSpeaker;
+
+/** Подставной порт голоса: остров ставит ему `onmessage`. */
+function voicePort(): { onmessage: ((event: { data: IslandTtsMessage }) => void) | null; start: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> } {
+  return { onmessage: null, start: vi.fn(), close: vi.fn() };
+}
+/** Сообщение окна, которым preload передаёт порт голоса; поля можно испортить. */
+function sendPort(ports: unknown[], init: { source?: unknown; data?: unknown } = {}): void {
+  const event = new Event('message');
+  Object.defineProperties(event, {
+    source: { value: 'source' in init ? init.source : window },
+    data: { value: 'data' in init ? init.data : ISLAND_TTS_PORT },
+    ports: { value: ports },
+  });
+  window.dispatchEvent(event);
+}
 
 /** Что сыграл граф острова: виды сигналов по порядку. */
 const played = (): string[] => vi.mocked(islandSound.play).mock.calls.map(([kind]) => kind);
@@ -172,6 +227,8 @@ function setup(config: Partial<IslandConfig> = {}, entries = ENTRIES, consents: 
 
 /** Помощник включён в настройках острова. */
 const ASSISTANT_ON = { enabled: true, provider: null, model: null, language: 'en' as const, hotkey: 'Alt+Space', voice: { enabled: false, model: null }, speech: SPEECH_OFF };
+/** Помощник говорит ответы: «Speak answers» включено, голос скачан. */
+const ASSISTANT_SPEAKS = { ...ASSISTANT_ON, speech: { ...SPEECH_OFF, enabled: true, available: true } };
 
 /** Работа идёт к моменту открытия острова: сторы заполнены заранее, обмена с хостом ждать не надо. */
 function seedWorking(): void {
@@ -780,6 +837,105 @@ describe('проводка острова', () => {
       assistantOpen({ listen: false });
       await waitFor(() => expect(island.setVisible).toHaveBeenLastCalledWith(true));
     });
+  });
+});
+
+describe('речь помощника (план 3b B22)', () => {
+  /** Остров с говорящим помощником; порт голоса приходит в ответ на `connect`, движок готов, режим открыт. */
+  async function renderSpeaking(config: Partial<IslandConfig> = {}) {
+    const ctx = setup({ assistant: ASSISTANT_SPEAKS, ...config });
+    const port = voicePort();
+    vi.mocked(ctx.island.speech.connect).mockImplementation(() => sendPort([port]));
+    vi.mocked(ctx.island.speech.speak).mockImplementation(() => new Promise<TtsEngineState>(() => {}));
+    render(<IslandApp bridge={ctx.bridge} />);
+    await waitFor(() => expect(ctx.island.onAssistantOpen).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); });
+    act(() => port.onmessage!({ data: { type: 'state', state: { state: 'ready' } } }));
+    ctx.assistantOpen({ listen: false });
+    await screen.findByTestId('assistant-view');
+    return { ...ctx, port };
+  }
+  /** Ход 1 с ответом из одного предложения: ответ дописан, предложение ушло на синтез. */
+  function answer(island: IslandApi): IslandSpeakRequest {
+    for (const state of [{ phase: 'thinking' }, { phase: 'answering', answer: 'Two agents are busy.' }, { phase: 'idle', answer: 'Two agents are busy.' }] as const) {
+      act(() => useAssistantStore.getState().applyHost({ ...HOST_IDLE, turn: 1, ...state }));
+    }
+    return vi.mocked(island.speech.speak).mock.calls.at(-1)![0];
+  }
+
+  it('порт голоса: принят только от своего окна, с меткой и одним портом; connect — после подписки на message', async () => {
+    const ctx = setup({ assistant: ASSISTANT_SPEAKS });
+    const port = voicePort();
+    const foreign = voicePort();
+    vi.mocked(ctx.island.speech.connect).mockImplementation(() => {
+      sendPort([foreign], { source: null });
+      sendPort([foreign], { data: 'other' });
+      sendPort([foreign, voicePort()]);
+      sendPort([port]);
+    });
+    render(<IslandApp bridge={ctx.bridge} />);
+    await waitFor(() => expect(ctx.island.speech.connect).toHaveBeenCalledTimes(1));
+    expect(port.onmessage).toEqual(expect.any(Function));
+    expect(foreign.onmessage).toBeNull();
+  });
+
+  it('кусок из порта — в проигрыватель после конца ответа, срыв — discard; expect раньше tts-speak; прогрев при открытии', async () => {
+    const { island, port } = await renderSpeaking();
+    expect(island.speech.warmup).toHaveBeenCalledTimes(1);
+    const request = answer(island);
+    expect(request).toMatchObject({ text: 'Two agents are busy.', voice: 'qwen3-0.6b/serena', language: 'en' });
+    const speaker = speakerOf();
+    expect(speaker.expect).toHaveBeenCalledWith(request.utteranceId);
+    act(() => port.onmessage!({ data: { type: 'chunk', chunk: { utteranceId: request.utteranceId, seq: 0, sampleRate: 24000, channels: 1, format: 'f32', pcm: new Float32Array(4), final: false } } }));
+    expect(speaker.enqueue).toHaveBeenCalledWith(expect.objectContaining({ utteranceId: request.utteranceId, seq: 0 }));
+    act(() => port.onmessage!({ data: { type: 'discard', utteranceId: request.utteranceId, fromSeq: 1 } }));
+    expect(speaker.discard).toHaveBeenCalledWith(request.utteranceId, 1);
+  });
+
+  it('Esc во время речи: проигрыватель глушится, в main уходит отмена всей очереди (E3)', async () => {
+    const { island } = await renderSpeaking();
+    const request = answer(island);
+    act(() => { for (const cb of speakerOf().starts) cb(request.utteranceId); });
+    expect(useAssistantStore.getState().input).toBe('speaking');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(speakerOf().stop).toHaveBeenCalled();
+    expect(island.speech.cancel).toHaveBeenCalledWith();
+    expect(useAssistantStore.getState().input).toBe('idle');
+  });
+
+  it('лицо: анализ голоса с частотой графа острова и reduced motion — системным или настройкой Parley', async () => {
+    vi.mocked(islandSound.graph).mockReturnValueOnce({ context: { sampleRate: 44100 } } as never);
+    await renderSpeaking({ motion: 'reduce' });
+    speakerOf().read.mockReturnValue(true);
+    act(() => { useAssistantStore.getState().voiceFrame(); });
+    const options = vi.mocked(createVoiceAnalysis).mock.calls.at(-1)![0]!;
+    expect(options.sampleRate).toBe(44100);
+    expect(options.reducedMotion!()).toBe(true);
+    cleanup();
+
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false })));
+    await renderSpeaking({ motion: 'system' });
+    speakerOf().read.mockReturnValue(true);
+    act(() => { useAssistantStore.getState().voiceFrame(); });
+    const system = vi.mocked(createVoiceAnalysis).mock.calls.at(-1)![0]!;
+    expect(system.reducedMotion!()).toBe(false);
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
+    expect(system.reducedMotion!()).toBe(true);
+  });
+
+  it('под речью разрешение звучит и опускает голос (V2)', async () => {
+    vi.mocked(islandSound.duckVoice).mockClear();
+    const { bridge, blocked } = setup({ islandSound: SOUND_ON });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await Promise.resolve(); });
+    speakerOf().speaking.mockReturnValue(true);
+    blocked('s-01');
+    await waitFor(() => expect(played()).toEqual(['permission']));
+    expect(islandSound.duckVoice).toHaveBeenCalledTimes(1);
+  });
+
+  it('до прихода настроек речь выключена и голоса нет', () => {
+    expect(INITIAL_CONFIG.assistant.speech).toEqual({ enabled: false, voice: 'qwen3-0.6b/serena', gender: 'female', available: false });
   });
 });
 

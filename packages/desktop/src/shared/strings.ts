@@ -2450,11 +2450,16 @@ export const S = {
     working: 'Working…',
     answering: 'Answering',
     confirm: 'Waiting for your confirmation',
+    /** Речь помощника и пауза после неё (таблицы `LABEL` и `MINI` макета). */
+    speaking: 'Speaking',
+    spoken: 'Done',
     miniListening: 'Listening·',
     miniThinking: 'Thinking·',
     miniSending: 'Sending·',
     miniWorking: 'Working·',
     miniConfirm: 'Confirm send',
+    miniSpeaking: 'Speaking·',
+    miniSpoken: 'Done·',
     to: 'To',
     send: 'Send',
     wakeAndSend: 'Wake and send',
@@ -2498,6 +2503,8 @@ export const S = {
     micDenied: 'Microphone access is off — System Settings → Privacy & Security',
     noSpeech: "Didn't catch that — try again",
     voiceFailed: "Couldn't recognize speech — type instead",
+    /** Голос помощника не скачан (#9 §6.8, G3): один раз за сессию в режиме помощника. */
+    voiceMissing: (name: string): string => `Voice "${name}" isn't downloaded — open Settings`,
     newConversation: 'New conversation',
     settings: {
       enabled: 'Turn on the assistant',

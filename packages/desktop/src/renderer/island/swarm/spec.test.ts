@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AssistantState } from '@parley/protocol';
 import { HOST_IDLE } from '../assistant/store.js';
+import { createSwarm } from './engine.js';
 import { EMO, haloFor, swarmSpecFor } from './spec.js';
 
 const host = (phase: AssistantState['phase']): AssistantState => ({ ...HOST_IDLE, phase });
@@ -68,6 +69,41 @@ describe('swarmSpecFor', () => {
 
   it('offline хоста важнее речи', () => {
     expect(swarmSpecFor({ ...host('offline'), mood: 'joy' }, 'speaking', false)).toMatchObject({ shape: 'cloud', pal: 'gray', emo: null });
+  });
+});
+
+describe('swarmSpecFor: эмоция предложения (L3, F3)', () => {
+  it('sentenceMood важнее эмоции хода: sad при host.mood joy', () => {
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'joy' }, 'speaking', false, 'sad')).toMatchObject({ shape: 'face', emo: 'sad', pal: 'amber', dim: EMO.sad.dim });
+  });
+
+  it('палитра — по эмоции предложения: anger — коралл и в мини-виде', () => {
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'calm' }, 'speaking', false, 'anger')).toMatchObject({ emo: 'anger', pal: 'coral' });
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'calm' }, 'speaking', true, 'anger')).toMatchObject({ shape: 'sphere', emo: null, pal: 'coral' });
+  });
+
+  it('без sentenceMood — эмоция хода', () => {
+    expect(swarmSpecFor({ ...HOST_IDLE, mood: 'joy' }, 'speaking', false, undefined)).toMatchObject({ emo: 'joy' });
+  });
+
+  it('sentenceMood вне речи облик не меняет', () => {
+    expect(swarmSpecFor(host('answering'), 'idle', false, 'sad')).toEqual(swarmSpecFor(host('answering'), 'idle', false));
+  });
+
+  it('смена эмоции предложения в лице — переход 0,6 с; при reduced motion — без перехода', () => {
+    const joy = swarmSpecFor({ ...HOST_IDLE, mood: 'joy' }, 'speaking', false, 'joy');
+    const sad = swarmSpecFor({ ...HOST_IDLE, mood: 'joy' }, 'speaking', false, 'sad');
+    const engine = createSwarm(120, { width: 200, height: 200, d: 100, cy: 100, seed: 7 });
+    engine.setSpec(joy, 0, false);
+    engine.setSpec(sad, 5000, false);
+    expect(engine.debug.dur).toBe(0.6);
+    engine.frame(5016, null, false, 0);
+    expect(engine.needsFrame()).toBe(true);
+    const still = createSwarm(120, { width: 200, height: 200, d: 100, cy: 100, seed: 7 });
+    still.setSpec(joy, 0, true);
+    still.setSpec(sad, 5000, true);
+    still.frame(5016, null, true, 0);
+    expect(still.needsFrame()).toBe(false);
   });
 });
 

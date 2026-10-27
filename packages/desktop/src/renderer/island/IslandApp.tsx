@@ -41,11 +41,18 @@
  * острове, а остров в покое не убирается. Esc, стрелка ⌃, смахивание и потеря фокуса панели (`onKeyboardBlur`) выходят
  * через `hideAssistant`: идущий ход сворачивается в мини-вид, иначе режим закрывается и клавиатура уходит обратно.
  * Ответ сам не закрывается: человек читает его сколько нужно и закрывает одним из этих способов.
+ *
+ * Речь помощника (план 3b B22): проигрыватель окна (`createSpeaker`) и мост голоса уходят в стор вместе с остальными
+ * зависимостями. Порт голоса остров просит сам (`speech.connect`), когда уже слушает сообщения окна: preload передаёт
+ * его сообщением с `data === ISLAND_TTS_PORT`, и чужое сообщение порт не подменит. Анализ голоса для лица берёт частоту
+ * графа окна и уменьшенное движение — системное или настройку Parley. Пока голос звучит, сигналы острова идут по
+ * правилам речи (#9 §6.4).
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { refKey, type AssistantProposal, type SessionRef } from '@parley/protocol';
-import { markSeenBatches, parseVisibilitySnapshot, type IslandBridge, type IslandConfig, type IslandHitRect, type IslandPresentationOutcome } from '../../shared/island.js';
+import { ISLAND_TTS_PORT, markSeenBatches, parseVisibilitySnapshot, type IslandBridge, type IslandConfig, type IslandHitRect, type IslandPresentationOutcome, type IslandTtsMessage } from '../../shared/island.js';
+import { DEFAULT_VOICE } from '../../shared/tts-types.js';
 import type { IslandAnchor } from '../../shared/ui-types.js';
 import { isoMs } from '../lib/iso-time.js';
 import { useActivityStore } from '../store/activity.js';
@@ -54,7 +61,9 @@ import { browserRecorderDeps } from '../voice/browser-recorder.js';
 import { startRecording } from '../voice/recorder.js';
 import { listen } from './assistant/listen.js';
 import { miniLabel } from './assistant/labels.js';
+import { createSpeaker } from './assistant/speaker.js';
 import { assistantBusy, useAssistantStore } from './assistant/store.js';
+import { createVoiceAnalysis } from './assistant/voice-features.js';
 import { useConsentsStore } from './consents/store.js';
 import { IslandTab } from './IslandTab.js';
 import { IslandView, sessionKeyOf, type IslandAssistantProps } from './IslandView.js';
@@ -62,6 +71,7 @@ import { islandModel, sessionLabels, type IslandRow } from './model.js';
 import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
 import { createProgressPoller, type ProgressState } from './progress.js';
+import { islandSound } from './sound/graph.js';
 import { useIslandCues } from './useIslandCues.js';
 import { movePendingSelection, pendingKeyCommand, pendingNavigation, pendingRoomNavigation, reconcilePendingNavigation, type PendingNavigationState } from './navigation.js';
 
@@ -72,9 +82,21 @@ export const DONE_HOLD_MS = 20000;
 /** Сколько форма сжимается в брусок: та же длительность, что у перехода сжатия `island-morph-shrink` (`island.css`). */
 export const RETRACT_MORPH_MS = 300;
 
-const INITIAL_CONFIG: IslandConfig = {
+/** Системная настройка уменьшенного движения. */
+const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
+
+/** Настройки до ответа main: речь выключена, голоса нет. */
+export const INITIAL_CONFIG: IslandConfig = {
   islandEnabled: true,
-  assistant: { enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null } },
+  assistant: {
+    enabled: false,
+    provider: null,
+    model: null,
+    language: 'en',
+    hotkey: 'Alt+Space',
+    voice: { enabled: false, model: null },
+    speech: { enabled: false, voice: DEFAULT_VOICE, gender: 'female', available: false },
+  },
   islandSound: { needs: false, finished: false, palette: 'soft', volume: 0.6, ui: false },
   motion: 'system',
   topInset: 0,
@@ -119,6 +141,9 @@ function hideAssistant(): boolean {
 export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; onPresentation?: (outcome: IslandPresentationOutcome) => void }): JSX.Element {
   const [connected, setConnected] = useState(false);
   const [config, setConfig] = useState<IslandConfig>(INITIAL_CONFIG);
+  /** Пришли ли настройки от main: до них «Speak answers» неизвестно, и его смена — не включение. */
+  const configLoaded = useRef(false);
+  const [speaker] = useState(createSpeaker);
   const [listOpen, setListOpen] = useState(false);
   const [navigationEmpty, setNavigationEmpty] = useState(false);
   const navigationEmptyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -231,8 +256,28 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     };
   }, [connected, bridge]);
   useEffect(() => {
-    void bridge.island.config().then(setConfig, () => undefined);
-    return bridge.island.onConfig(setConfig);
+    const apply = (next: IslandConfig): void => {
+      configLoaded.current = true;
+      setConfig(next);
+    };
+    void bridge.island.config().then(apply, () => undefined);
+    return bridge.island.onConfig(apply);
+  }, [bridge]);
+  // Порт голоса: только сообщение своего окна с меткой и одним портом. Подписка — раньше просьбы, иначе порт потерялся бы.
+  useEffect(() => {
+    let port: MessagePort | null = null;
+    const onMessage = (event: MessageEvent): void => {
+      if (event.source !== window || event.data !== ISLAND_TTS_PORT || event.ports.length !== 1) return;
+      port?.close();
+      port = event.ports[0]!;
+      port.onmessage = (message: MessageEvent<IslandTtsMessage>) => useAssistantStore.getState().speechMessage(message.data);
+    };
+    window.addEventListener('message', onMessage);
+    bridge.island.speech.connect();
+    return () => {
+      window.removeEventListener('message', onMessage);
+      port?.close();
+    };
   }, [bridge]);
   // Наведение решает main по настоящему курсору: над областью острова список открыт, вне её — закрыт.
   useEffect(
@@ -332,6 +377,18 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
           ...hooks,
         });
       },
+      speech: {
+        speaker,
+        api: bridge.island.speech,
+        analysis: () => {
+          const sampleRate = islandSound.graph()?.context.sampleRate;
+          return createVoiceAnalysis({
+            ...(sampleRate === undefined ? {} : { sampleRate }),
+            reducedMotion: () => configRef.current.motion === 'reduce' || (typeof window.matchMedia === 'function' && window.matchMedia(REDUCED_MOTION).matches),
+          });
+        },
+        now: () => performance.now(),
+      },
     });
     void bridge.call('assistant.state', {}).then((state) => useAssistantStore.getState().applyHost(state)).catch(() => {});
     const off = bridge.on('assistant.changed', (state) => useAssistantStore.getState().applyHost(state));
@@ -345,7 +402,11 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
       offOpen();
       offBlur();
     };
-  }, [connected, bridge, setOwner, releaseKeyboard]);
+  }, [connected, bridge, setOwner, releaseKeyboard, speaker]);
+  // «Speak answers» сменили (значок острова или Settings): выключение глушит речь, включение греет голос.
+  useEffect(() => {
+    if (connected && configLoaded.current) useAssistantStore.getState().speechConfig(config.assistant.speech);
+  }, [connected, config.assistant.speech]);
 
   // Карточки согласия: начальный список и изменения хоста (как у помощника). Подписка раньше списка: событие, пришедшее
   // следом за запросом, не потеряется; карточки хоста переживают его перезапуск, и после переподключения список снова новый.
@@ -360,7 +421,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   const idle = !model.active && items.length === 0 && consents.length === 0 && !assistant.open && !busy;
   /** Убран ли остров: в покое при открытии — да, при работе или очереди — нет. */
   const [retracted, setRetracted] = useState(idle);
-  const cues = useIslandCues({ sound: config.islandSound, active: model.active, hovered });
+  const cues = useIslandCues({ sound: config.islandSound, active: model.active, hovered, speaking: () => speaker.speaking() });
   const present = useCallback((outcomes: IslandPresentationOutcome[]): void => {
     if (outcomes.some((outcome) => outcome.expand)) setRetracted(false);
     if (onPresentation !== undefined) {
