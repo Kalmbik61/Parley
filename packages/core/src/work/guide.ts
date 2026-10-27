@@ -231,8 +231,8 @@ same model and effort.
 call \`check_inbox\` after it (\`check_inbox\` is for when you are not waiting). Wait with one call
 \`wait_for("inbox", 1500)\`, with no text before or after it. On timeout you get
 \`{"state":"running"}\`: for \`"inbox"\` call it once more, then end the turn (without \`report\`: you are
-not done) — Parley wakes you with the pointer when mail arrives; for a session id decide yourself
-whether to call again.
+not done) — Parley wakes you with the pointer when mail arrives; for a session id keep calling
+while it is \`running\`.
 The answer \`state: deleted\` means the human deleted the session: there is
 nothing left to wait for, re-plan the work without it. The answer \`state: "stuck"\` means the
 session waits for the human (an approval, a question, a usage limit, a sign-in): do not call

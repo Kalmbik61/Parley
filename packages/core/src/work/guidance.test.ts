@@ -909,7 +909,7 @@ describe('профиль short, примеры для Codex и правило о
       for (const key of [...(args ?? '').matchAll(/(\w+):/g)].map((m) => m[1]!)) expect(Object.keys(tool.inputSchema.properties ?? {})).toContain(key);
     }
     // Пример ожидания — одно длинное и помечающее прочитанным (как вставка): 1500 с, не 600 и не 1800.
-    expect(CODEX_TOOL_EXAMPLES).toContain('wait_for({ target: "inbox", timeoutSec: 1500 }); // returns and marks messages read');
+    expect(CODEX_TOOL_EXAMPLES).toContain('wait_for({ target: "inbox", timeoutSec: 1500 }); // returns and marks messages read; on running repeat once');
     expect(CODEX_TOOL_EXAMPLES.split('\n').length).toBeLessThanOrEqual(8);
     expect(Buffer.byteLength(CODEX_TOOL_EXAMPLES)).toBeLessThanOrEqual(1024);
     expect(CODEX_TOOL_EXAMPLES).not.toMatch(/[А-Яа-яЁё]/);

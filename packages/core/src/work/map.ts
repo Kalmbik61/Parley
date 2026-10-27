@@ -206,7 +206,7 @@ export interface NewMessage {
 }
 
 /**
- * Кладёт сообщение в карту с письмами непрочитанным: доставка — pull через `check_inbox`. Карта с письмами — это
+ * Кладёт сообщение в карту с письмами непрочитанным: доставка — pull через `check_inbox` или `wait_for("inbox")`. Карта с письмами — это
  * `WindowWorkMap` (тесты, окно и сверка переезда); в базе письма кладёт `LetterTx.add` (спека хранилища 6.2).
  */
 export function addMessage(map: WindowWorkMap, init: NewMessage, at = new Date().toISOString()): Message {

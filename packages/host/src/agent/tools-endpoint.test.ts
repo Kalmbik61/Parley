@@ -253,6 +253,42 @@ describe('маршрут /agent/tools: инструменты агента в п
     expect(JSON.parse(textOf(retried))).toMatchObject({ state: 'message' });
   });
 
+  it('wait_for(inbox), закончившийся с письмом до обрыва соединения: повтор с тем же callId получает то же письмо из сохранённого результата, а не новое пустое ожидание', async () => {
+    const { token, url, waiters, closes, notify, post } = await boot();
+    const body = waitCall();
+    // Сырой сокет: клиент шлёт запрос, ответа не читает и бросает соединение, как агент, потерявший ответ.
+    const target = new URL(url);
+    const payload = JSON.stringify(body);
+    const socket = connect({ host: target.hostname, port: Number(target.port) });
+    socket.on('error', () => {});
+    socket.write(
+      [
+        `POST ${target.pathname} HTTP/1.1`,
+        `Host: ${target.host}`,
+        `Authorization: Bearer ${token}`,
+        'Content-Type: application/json',
+        `Content-Length: ${Buffer.byteLength(payload)}`,
+        'Connection: close',
+        '',
+        payload,
+      ].join('\r\n'),
+    );
+    await expect.poll(() => waiters(), POLL).toBe(1);
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, from: 's-02', to: ['s-01'], text: 'lost reply', kind: 'note' });
+    });
+    notify();
+    // Ожидание закончилось, письмо отдано и отмечено прочитанным: вызов уже закончен, и только потом соединение бросают.
+    await expect.poll(() => readStoredMap(project, workId).messages.find((message) => message.text === 'lost reply')?.readBy['s-01'], POLL).toBeDefined();
+    await expect.poll(() => waiters(), POLL).toBe(0);
+    socket.destroy();
+    await expect.poll(() => closes(), POLL).toBe(1);
+    // Письмо прочитано, поэтому свежее ожидание его уже не увидело бы и висело до таймаута; сохранённый результат отвечает сразу.
+    const retried = await post(body);
+    expect(JSON.parse(textOf(retried))).toMatchObject({ state: 'message', messages: [{ text: 'lost reply' }] });
+    expect(waiters()).toBe(0);
+  });
+
   it('a call that does not take the signal survives a dropped connection: the retry joins the same run instead of repeating it', async () => {
     const { post, contextFor, standard, closes } = await boot();
     let release: () => void = () => {};

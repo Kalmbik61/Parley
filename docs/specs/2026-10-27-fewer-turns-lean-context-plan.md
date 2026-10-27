@@ -66,11 +66,11 @@
 
 **Interfaces:** produces `takeInbox` — общий помощник: письма в ответ и пометка по одному снимку; задача 8 пользуется им же.
 
-- [ ] Помощник в `tools.ts`: `takeInbox(context: McpContext, sessionId: string): ReturnType<typeof inboxView>[]` — внутри одного `writeLetters`: `unreadFor`, виды `inboxView`, `markRead` всех отданных. `checkInbox` переходит на него без изменения поведения.
-- [ ] `waitFor`, ветка `inbox`: проба по-прежнему только читает (`unreadLetters`) и возвращает признак «есть письма»; после `waitForMap` при найденном и `signal?.aborted !== true` — синхронно `takeInbox` и ответ `{ state: 'message', messages }`. Пусто после `takeInbox` (письма забрал параллельный `check_inbox`) — ждать дальше до конца таймаута, а не отвечать пустым `message`.
-- [ ] Аннотация `wait_for` — `WRITES`; из комментария `READS` убрать «ожидание»; таблица в `annotations.test.ts` и список read-only там же.
-- [ ] Описание `wait_for`: письма возвращаются и помечаются прочитанными; `check_inbox` после него не нужен.
-- [ ] Тесты (`server.test.ts`, блок `wait_for`): «inbox: отданные письма помечены прочитанными, check_inbox после — пустой»; «повторный wait_for без новых писем ждёт до таймаута и отвечает running»; «письмо, пришедшее во время ожидания, возвращается и помечается»; «отменённый wait_for не помечает: check_inbox отдаёт письмо» (через `AbortController`/`signal` исполнителя `createToolRunner`, как в блоке `createToolRunner`); «wait_for и check_inbox одновременно: каждое письмо отдано хотя бы одним, непомеченных-неотданных нет». Перевернуть `server.test.ts:2206` и `annotations.test.ts:231` (новое имя: «read_room прочитанным не отмечает, wait_for("inbox") — отмечает отданное»), сверить ожидания `двухсторонний разговор` (~2717) и `channel` (~2618).
+- [x] Помощник в `tools.ts`: `takeInbox(context: McpContext, sessionId: string): ReturnType<typeof inboxView>[]` — внутри одного `writeLetters`: `unreadFor`, виды `inboxView`, `markRead` всех отданных. `checkInbox` переходит на него без изменения поведения.
+- [x] `waitFor`, ветка `inbox`: проба по-прежнему только читает (`unreadLetters`) и возвращает признак «есть письма»; после `waitForMap` при найденном и `signal?.aborted !== true` — синхронно `takeInbox` и ответ `{ state: 'message', messages }`. Пусто после `takeInbox` (письма забрал параллельный `check_inbox`) — ждать дальше до конца таймаута, а не отвечать пустым `message`.
+- [x] Аннотация `wait_for` — `WRITES`; из комментария `READS` убрать «ожидание»; таблица в `annotations.test.ts` и список read-only там же.
+- [x] Описание `wait_for`: письма возвращаются и помечаются прочитанными; `check_inbox` после него не нужен.
+- [x] Тесты (`server.test.ts`, блок `wait_for`): «inbox: отданные письма помечены прочитанными, check_inbox после — пустой»; «повторный wait_for без новых писем ждёт до таймаута и отвечает running»; «письмо, пришедшее во время ожидания, возвращается и помечается»; «отменённый wait_for не помечает: check_inbox отдаёт письмо» (через `AbortController`/`signal` исполнителя `createToolRunner`, как в блоке `createToolRunner`); «wait_for и check_inbox одновременно: каждое письмо отдано хотя бы одним, непомеченных-неотданных нет». Перевернуть `server.test.ts:2206` и `annotations.test.ts:231` (новое имя: «read_room прочитанным не отмечает, wait_for("inbox") — отмечает отданное»), сверить ожидания `двухсторонний разговор` (~2717) и `channel` (~2618).
 
 **Проверка:** `cd packages/core && LC_ALL=C npx vitest run src/mcp/server.test.ts src/mcp/annotations.test.ts src/mcp/inbox-watch.test.ts` — зелёный.
 
@@ -78,11 +78,11 @@
 
 **Файлы:** `packages/core/src/mcp/tools.ts` (`getMap` ~597-631, `mapPage` ~641-734, enum `field` и описание `get_map` ~379-400), `packages/core/src/mcp/session-tools.ts` (описание `create_session` и полей `provider`, `model`, `effort`), `packages/core/src/work/guidance.ts` (строка `get_map` в `stableGuidance`), `packages/core/src/work/guide.ts` (тема `tools`: абзацы `get_map`, `create_session`, `model`/`effort`), `packages/host/src/sessions/sessions-service.ts:561`, тесты `server.test.ts` (блоки `get_map` ~471, `строки провайдеров от хоста` ~560, `GLM readiness in MCP` ~863), `guidance.test.ts`, `guide.test.ts`, тест хоста на `unknown provider`.
 
-- [ ] `getMap` без аргументов: `{ sessionId, map }` — без `providers` и без `note`. Сборка каталога (строки хоста, иначе локальный реестр с `HOST_UNREACHABLE_NOTE`) — в отдельную `providerCatalog(context, signal)`; `getMap` передаёт `signal` в `mapPage`.
-- [ ] `field: "providers"` в enum и в `mapPage`: `{ providers, note? }` — ровно прежний список и прежняя пометка.
-- [ ] Тексты: описание `get_map` — каталог по `field: "providers"`; `create_session` — провайдер, модели, усилие и `limits` из `get_map {field: "providers"}`; строка вставки — без «and providers»; гид — те же отсылки.
-- [ ] Хост: `unknown provider ${provider}; see get_map {field: "providers"}`.
-- [ ] Тесты: «get_map без аргументов — без providers и note»; прежние проверки провайдеров (`провайдеры несут то же, что providers.list`, строки хоста, GLM) — через `field: "providers"`; «с каналом агента и без хоста — note рядом с providers»; описание `create_session` называет `field: "providers"` (вместо теста `~632` про `providers[].limits`); хост — текст ошибки неизвестного провайдера.
+- [x] `getMap` без аргументов: `{ sessionId, map }` — без `providers` и без `note`. Сборка каталога (строки хоста, иначе локальный реестр с `HOST_UNREACHABLE_NOTE`) — в отдельную `providerCatalog(context, signal)`; `getMap` передаёт `signal` в `mapPage`.
+- [x] `field: "providers"` в enum и в `mapPage`: `{ providers, note? }` — ровно прежний список и прежняя пометка.
+- [x] Тексты: описание `get_map` — каталог по `field: "providers"`; `create_session` — провайдер, модели, усилие и `limits` из `get_map {field: "providers"}`; строка вставки — без «and providers»; гид — те же отсылки.
+- [x] Хост: `unknown provider ${provider}; see get_map {field: "providers"}`.
+- [x] Тесты: «get_map без аргументов — без providers и note»; прежние проверки провайдеров (`провайдеры несут то же, что providers.list`, строки хоста, GLM) — через `field: "providers"`; «с каналом агента и без хоста — note рядом с providers»; описание `create_session` называет `field: "providers"` (вместо теста `~632` про `providers[].limits`); хост — текст ошибки неизвестного провайдера.
 
 **Проверка:** core — `LC_ALL=C npx vitest run src/mcp/server.test.ts src/mcp/session-tools.test.ts src/work/guidance.test.ts src/work/guide.test.ts`; host — тестовый файл `sessions-service` по имени.
 
@@ -90,9 +90,9 @@
 
 **Файлы:** `packages/core/src/mcp/tools.ts` (массив `TOOLS`), `packages/core/src/mcp/session-tools.ts`, при необходимости `agent-plan-tool.ts`, `plan-tools.ts`, `attempt-tools.ts` (только `description`, не схемы), `packages/core/src/work/guide.ts` (темы принимают переехавшие правила), новый `packages/core/src/mcp/tools-size.test.ts`.
 
-- [ ] Описание — назначение, аргументы, одна фраза об ошибке. Правила, исключения, примеры — в тему `read_guide`, где их ещё нет (каждое снятое правило должно найтись в гиде; гид ≤ `READ_GUIDE_MAX_BYTES`). Остаются в описаниях подсказки, которые экономят ход: `wait_for` по id у сдавшей `report` сессии отдаёт старый итог — ждать через `inbox`; `stuck` — не ждать снова; `send_message` — отвечать только на `question`; `replyTo` — id из `check_inbox`/`read_room`.
-- [ ] `tools-size.test.ts`: сумма байт всех строк `description` (рекурсивно по схеме) в `TOOLS` + `CREATE_SESSION_TOOL` ≤ 5 600; `Buffer.byteLength(JSON.stringify([...TOOLS, CREATE_SESSION_TOOL]))` ≤ 21 000. В комментарии — откуда числа: 10 226 и 25 742 на 5f4dd71a.
-- [ ] Сверить тесты, которые читают описания: `server.test.ts` ~305 (`replyTo`), ~391 (`wait_for` и сдавшая сессия), ~3153 (`stuck`) и тест из задачи 2 — формулировки обновить, смысл проверок оставить.
+- [x] Описание — назначение, аргументы, одна фраза об ошибке. Правила, исключения, примеры — в тему `read_guide`, где их ещё нет (каждое снятое правило должно найтись в гиде; гид ≤ `READ_GUIDE_MAX_BYTES`). Остаются в описаниях подсказки, которые экономят ход: `wait_for` по id у сдавшей `report` сессии отдаёт старый итог — ждать через `inbox`; `stuck` — не ждать снова; `send_message` — отвечать только на `question`; `replyTo` — id из `check_inbox`/`read_room`.
+- [x] `tools-size.test.ts`: сумма байт всех строк `description` (рекурсивно по схеме) в `TOOLS` + `CREATE_SESSION_TOOL` ≤ 5 600; `Buffer.byteLength(JSON.stringify([...TOOLS, CREATE_SESSION_TOOL]))` ≤ 21 000. В комментарии — откуда числа: 10 226 и 25 742 на 5f4dd71a.
+- [x] Сверить тесты, которые читают описания: `server.test.ts` ~305 (`replyTo`), ~391 (`wait_for` и сдавшая сессия), ~3153 (`stuck`) и тест из задачи 2 — формулировки обновить, смысл проверок оставить.
 
 **Проверка:** `LC_ALL=C npx vitest run src/mcp src/work/guide.test.ts` в `packages/core`.
 
@@ -101,20 +101,35 @@
 **Файлы:** `packages/core/src/work/guidance.ts` (`stableGuidance`, `CODEX_TOOL_EXAMPLES`), `packages/core/src/work/brief.ts` (`LEAD_ROLE`, `memberRole`), `packages/core/src/work/guide.ts` (темы `letters`, `lead`, `member`, `tools`), тесты `guidance.test.ts`, `brief.test.ts`, `guide.test.ts`, при необходимости `server.test.ts` (`roomTask.hint` несёт те же тексты).
 
 - [x] До правки текстов: подтвердить, что таймаут вызова MCP в Claude Code не меньше 30 минут. Итог — решение 8: таймаут простоя stdio ровно 30 минут, совет `1500` вместо `1800` везде ниже.
-- [ ] Вставка (переписать строки `wait_for` и `check_inbox`, новых строк не добавлять): не подтверждать получение и не объявлять начало работы — молчание значит «получил»; писать результат, вопрос или решение. Ждать одним `wait_for("inbox", 1800)`: без текста до и после, без `Monitor`, `sleep` и циклов; на `running` — один повтор, затем закончить ход: Parley разбудит указателем. Место освобождается переносом в гид оговорки про тег `<channel source="parley">` (в окне его не бывает).
-- [ ] `LEAD_ROLE`: ждать позиций и отчётов одним `wait_for("inbox")`, не по id исполнителей; `memberRole`: не подтверждать раздачу частей — следующее письмо ведущему уже результат.
-- [ ] `CODEX_TOOL_EXAMPLES`: пример `wait_for` — `timeoutSec: 1800`, комментарий — «returns and marks messages read».
-- [ ] Гид: те же правила подробнее в `letters`, `lead`, `member`; в теме `tools` — что `wait_for("inbox")` помечает отданное.
-- [ ] Тесты: вставка содержит «silence», «1800» и запрет на `Monitor`; `LEAD_ROLE` — «one wait_for»; бюджет вставки (`guidanceBudgetProblems`) пуст для всех трёх наборов опций (`{}`, навигатор с `names`, `toolProfile: 'short'`).
+- [x] Вставка (переписать строки `wait_for` и `check_inbox`, новых строк не добавлять): не подтверждать получение и не объявлять начало работы — молчание значит «получил»; писать результат, вопрос или решение. Ждать одним `wait_for("inbox", 1500)`: без текста до и после, без `Monitor`, `sleep` и циклов; на `running` — один повтор, затем закончить ход: Parley разбудит указателем. Место освобождается переносом в гид оговорки про тег `<channel source="parley">` (в окне его не бывает).
+- [x] `LEAD_ROLE`: ждать позиций и отчётов одним `wait_for("inbox")`, не по id исполнителей; `memberRole`: не подтверждать раздачу частей — следующее письмо ведущему уже результат.
+- [x] `CODEX_TOOL_EXAMPLES`: пример `wait_for` — `timeoutSec: 1500`, комментарий — «returns and marks messages read».
+- [x] Гид: те же правила подробнее в `letters`, `lead`, `member`; в теме `tools` — что `wait_for("inbox")` помечает отданное.
+- [x] Тесты: вставка содержит «silence», «1500» и запрет на `Monitor`; `LEAD_ROLE` — «one wait_for»; бюджет вставки (`guidanceBudgetProblems`) пуст для всех трёх наборов опций (`{}`, навигатор с `names`, `toolProfile: 'short'`).
 
 **Проверка:** `LC_ALL=C npx vitest run src/work/guidance.test.ts src/work/brief.test.ts src/work/guide.test.ts src/mcp/server.test.ts` в `packages/core`.
 
 ### Task 5: Проверка куска 2
 
-- [ ] `uptime`; тесты core целиком по каталогу `src/mcp` и `src/work`, хоста — каталоги, чьи файлы трогали (`src/sessions`, `src/agent`).
-- [ ] `pnpm --filter @parley/core build`, `pnpm --filter @parley/host exec tsc --noEmit -p tsconfig.json`; eslint изменённых файлов.
-- [ ] Замер «до/после» тем же скриптом, что дал числа сверки: байты описаний, JSON схем, `stableGuidance`, ответ `get_map` на тестовой карте с тремя сессиями.
-- [ ] Финальное ревью ветки целиком; ссылка compare `master...feat/fewer-turns` и текст PR (что изменилось для агентов).
+- [x] `uptime`; тесты core целиком по каталогу `src/mcp` и `src/work`, хоста — каталоги, чьи файлы трогали (`src/sessions`, `src/agent`).
+- [x] `pnpm --filter @parley/core build`, `pnpm --filter @parley/host exec tsc --noEmit -p tsconfig.json`; eslint изменённых файлов.
+- [x] Замер «до/после» тем же скриптом, что дал числа сверки: байты описаний, JSON схем, `stableGuidance`, ответ `get_map` на тестовой карте с тремя сессиями.
+- [x] Финальное ревью ветки целиком; ссылка compare `master...feat/fewer-turns` и текст PR (что изменилось для агентов).
+
+**Итоги куска 2 (2026-10-27).**
+
+| Что | master 5f4dd71a | ветка |
+|---|---|---|
+| Все строки `description` инструментов | 10 226 Б | 5 580 Б |
+| JSON схем инструментов | 25 742 Б | 20 881 Б |
+| Обычный `get_map`, работа с тремя сессиями, локальный реестр | ≈ 16 836 Б | 3 100 Б |
+| `stableGuidance`, набор по умолчанию | 3 896 Б | 3 894 Б (два правила добавлены, повторы срезаны) |
+
+Сверх плана, по ревью: ждущий по id продолжает ждать, пока сессия работает (правило «один повтор и конец хода» — только для `"inbox"`); ведущий, у которого на `running` уже есть часть позиций, предлагает решение, а не заканчивает ход; конец хода при ожидании — без `report`.
+
+Открытый риск: «отменённый `wait_for` ничего не помечает» держится, пока отмена доходит до хоста. Claude Code её шлёт; шлёт ли Codex при прерывании хода посреди `wait_for`, не проверено. Если нет, повисший вызов заберёт следующее письмо, а ответ уйдёт в никуда. Варианты: живая проверка прерывания Codex; страж перед `takeInbox` (ход сессии закончился после начала ожидания — не забирать); принять и назвать в PR.
+
+Уже идущие сессии получают новые правила только новым запуском: при возобновлении меняется ревизия брифа (новые `LEAD_ROLE`/`memberRole`) — один лишний ход на уведомление о брифе. Замер куска 4 — на свежих сессиях.
 
 ---
 

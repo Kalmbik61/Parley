@@ -75,7 +75,8 @@ describe('темы гида', () => {
     expect(text).toContain('`check_inbox` is for when you are not waiting');
     expect(text).toContain('Wait with one call `wait_for("inbox", 1500)`, with no text before or after it');
     expect(text).toContain('for `"inbox"` call it once more, then end the turn (without `report`: you are not done)');
-    expect(text).toContain('for a session id decide yourself whether to call again');
+    // По id ждут, пока running (как и в вставке): повтор-и-конец — только для «inbox».
+    expect(text).toContain('for a session id keep calling while it is `running`');
     // Ждать письма велено с таймаутом, как и везде (L1).
     expect(text).toContain('Wait with `wait_for("inbox", 1500)`: it will wake on the session\'s reply message.');
     expect(text).not.toContain('1800');
