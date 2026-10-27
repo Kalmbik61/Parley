@@ -22,6 +22,7 @@ import {
   WINDOW_MENTION_MAX_BYTES,
   WINDOW_TEXT_MAX,
   withLetterSnapshot,
+  WorkNotFoundError,
 } from '@parley/core';
 import { isHumanUnread, plainHumanMention } from '@parley/core/attention';
 import type { LetterJournal, Message } from '@parley/core';
@@ -39,6 +40,13 @@ export const MAIL_SLOW_CLIENT_BYTES = 1024 * 1024;
  * держит событие по комнате, которой нет в его снимке (спека rooms.mail 6.5), поэтому раннее освобождение безопасно.
  */
 export const MAIL_HOLD_MAX_MS = 2000;
+
+/**
+ * Сколько писем чужой записи уходит в одно событие (спека rooms.mail 6.11): записей-россыпей в тысячи писем не бывает, а
+ * событие с ними собиралось бы в цикле хоста. Берутся новейшие; комнаты названных писем всё равно получают `reread`, и окно
+ * дочитывает их страницей.
+ */
+export const MAIL_FOREIGN_LETTERS_MAX = 500;
 
 /** Одна запись с письмами для подписчиков хоста (`WorksService.onMail`): по уведомлению на каждый коммит с непустым журналом. */
 export interface MailNotice {
@@ -77,7 +85,18 @@ export interface MailBatch {
    */
   notices: MailNotice[];
   journal: LetterJournal;
+  /**
+   * В пачке есть письма чужой записи среди прямых: комнаты у них нет, и в `journal.rereadRooms` (только строки) их канал не
+   * назвать. Событие ставит `reread` комнате `null`.
+   */
+  rereadDirect: boolean;
   timer: NodeJS.Timeout | undefined;
+}
+
+/** Что хост знает о работе по своим записям (спека rooms.mail 6.11): версия базы и наибольший номер письма, который уже объявлен. */
+export interface MailKnown {
+  version: number;
+  seq: number;
 }
 
 const emptyJournal = (): LetterJournal => ({ added: [], reads: [], deleted: [], droppedRooms: [], rereadRooms: [] });
@@ -107,8 +126,60 @@ export function startBatch(projectPath: string, workId: string, prevVersion: num
     startedAt: Date.now(),
     notices: [],
     journal: emptyJournal(),
+    rereadDirect: false,
     timer: undefined,
   };
+}
+
+/** Наибольший номер письма работы по всем каналам; писем нет — 0, работы нет — `undefined`. */
+export function topLetterSeq(projectPath: string, workId: string): number | undefined {
+  try {
+    const newest = readLetters(projectPath, workId, { limit: 1, newestFirst: true })[0];
+    return newest === undefined ? 0 : seqOf(newest.id, 'm-');
+  } catch (error) {
+    if (error instanceof WorkNotFoundError) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Письма новее `afterSeq` по всем каналам работы — то, что запись другого процесса добавила к известному хосту (спека 6.11);
+ * по возрастанию номера, не больше `MAIL_FOREIGN_LETTERS_MAX` новейших. `top` — наибольший номер в таблице на этот момент
+ * (не меньше `afterSeq`): дальше объявляются только письма новее его. Работы нет — писем нет.
+ */
+export function lettersAfter(projectPath: string, workId: string, afterSeq: number): { letters: Message[]; top: number } {
+  try {
+    const found = readLetters(projectPath, workId, { afterSeq, limit: MAIL_FOREIGN_LETTERS_MAX, newestFirst: true });
+    const newest = found[0];
+    return { letters: found.reverse(), top: newest === undefined ? afterSeq : Math.max(afterSeq, seqOf(newest.id, 'm-')) };
+  } catch (error) {
+    if (error instanceof WorkNotFoundError) return { letters: [], top: afterSeq };
+    throw error;
+  }
+}
+
+/**
+ * Журнал чужой записи (спека 6.11): письма названы по номеру, а отметки прочтения и удаления восстановить нельзя, поэтому
+ * каждая комната с письмами получает `reread` — окно читает её страницей. Прямые письма отмечает `MailBatch.rereadDirect`.
+ */
+export function foreignJournal(letters: readonly Message[]): LetterJournal {
+  const rooms = new Set<string>();
+  for (const letter of letters) if (letter.roomId !== null) rooms.add(letter.roomId);
+  return { added: [...letters], reads: [], deleted: [], droppedRooms: [], rereadRooms: [...rooms] };
+}
+
+/**
+ * Дописывает письма чужой записи в пачку, в том числе уже начатую своими письмами: `prevVersion` пачки не растёт, `version` не
+ * падает, письма остаются по возрастанию номера. Пачка ждёт снимка с версией не ниже `structuralVersion`: чужая запись могла
+ * менять и карту, и событие её писем идёт после снимка, который её включает (спека 6.5).
+ */
+export function joinForeign(batch: MailBatch, write: { prevVersion: number; version: number; structuralVersion: number; journal: LetterJournal }): void {
+  const structuralVersion = Math.max(batch.structuralVersion, write.structuralVersion);
+  joinBatch(batch, { version: Math.max(batch.version, write.version), journal: write.journal, structural: false });
+  batch.structuralVersion = structuralVersion;
+  batch.prevVersion = Math.min(batch.prevVersion, write.prevVersion);
+  batch.journal.added.sort((left, right) => seqOf(left.id, 'm-') - seqOf(right.id, 'm-'));
+  if (write.journal.added.some((letter) => letter.roomId === null)) batch.rereadDirect = true;
 }
 
 /** Письмо в событии — как его отдаёт `context.messages`: текст до `WINDOW_TEXT_MAX`, у сокращённых — `textBytes`. */
@@ -154,6 +225,7 @@ export function buildMailEvent(batch: MailBatch): RoomsMailEvent {
       if (roomId !== undefined) touch(roomId).deleted.push(id);
     }
     for (const roomId of journal.rereadRooms) touch(roomId).reread = true;
+    if (batch.rereadDirect) touch(null).reread = true;
     const droppedRooms = [...new Set(journal.droppedRooms)];
     for (const roomId of droppedRooms) touched.delete(roomId);
 

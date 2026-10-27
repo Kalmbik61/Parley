@@ -14,6 +14,11 @@
  * запускает `refreshPass` и не зовёт `onChange`. Окно с признаком `rooms-mail` получает её событием `rooms.mail` (пачка по
  * работе, `mail.ts`), окно без признака — `works.changed` по одной перечитанной работе, подписчики хоста — `onMail`. Смешанная
  * запись (карта и письма) идёт прежним полным проходом, а её письма — после публикации снимка, который её включает.
+ *
+ * Запись другого процесса (спека 6.11) журнала не имеет и приходит полным проходом: хост помнит по работе версию и наибольший
+ * объявленный номер письма (`mailKnown`) и называет письма новее этого номера, когда версия сменилась без его собственной
+ * записи — в начале прохода, перед публикацией снимка, или в своей записи, чей `prevVersion` перешагнул известную версию.
+ * Они идут той же пачкой, что и смешанная запись: после снимка, который их включает; комнаты с ними получают `reread`.
  */
 
 import {
@@ -31,6 +36,7 @@ import {
   readWorksIndex,
   reconcileMap,
   removeHostLease,
+  seqOf,
   storeLetterReader,
   viewMap,
   watchWorks,
@@ -39,7 +45,7 @@ import {
   workVersion,
   writeHostLease,
 } from '@parley/core';
-import type { HostLease, MapWrittenEvent, WindowWorkEntry, WindowWorkMap, WorkEntry, WorkMap, WorksWatcher } from '@parley/core';
+import type { HostLease, MapWrittenEvent, Message, WindowWorkEntry, WindowWorkMap, WorkEntry, WorkMap, WorksWatcher } from '@parley/core';
 import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, ROOMS_MAIL_FEATURE, encodeLine } from '@parley/protocol';
 import type { RoomsMailEvent, WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
@@ -51,12 +57,16 @@ import {
   MAIL_SLOW_CLIENT_BYTES,
   buildMailEvent,
   fitMailEvent,
+  foreignJournal,
   gluedMailEvent,
   joinBatch,
+  joinForeign,
   journalIsEmpty,
+  lettersAfter,
   startBatch,
+  topLetterSeq,
 } from './mail.js';
-import type { MailBatch, MailNotice } from './mail.js';
+import type { MailBatch, MailKnown, MailNotice } from './mail.js';
 
 export type { MailNotice } from './mail.js';
 
@@ -106,6 +116,8 @@ export interface WorksService {
    * выпускает уведомление вместе с событием и до снимка, если полный проход не дошёл до `publish`. Смешанная запись всё равно
    * доходит до подписчика через `onChange` после прохода, и подписчик, которому нужны письма, пересчитывает и по нему, так что
    * раннее уведомление исправляется. `onChange` запись только писем не зовёт: подписчик, которому нужны письма, слушает это.
+   * Письма записи другого процесса уходят уведомлением с `foreign: true` после снимка, который её включает: отметок в нём нет,
+   * комнаты с письмами названы в `rereadRooms`.
    */
   onMail(listener: (notice: MailNotice) => void): () => void;
   stop(): Promise<void>;
@@ -516,6 +528,11 @@ export function createWorksService(
   const mapAhead = new Map<string, number>();
   /** Работа → версия, с которой её последний раз разослал полный `publish`: запись сервиса меняется в начале прохода, а снимок уходит позже. */
   const published = new Map<string, number>();
+  /**
+   * Работа → что хост о ней знает по своим записям (спека 6.11): версия и наибольший объявленный номер письма. Заводит работу
+   * первый полный проход, который её видит; с этого момента версия, лёгшая без своей записи, — чужая запись.
+   */
+  const mailKnown = new Map<string, MailKnown>();
   const mailListeners = new Set<(mail: MailNotice) => void>();
   let unsubscribeWritten: (() => void) | undefined;
 
@@ -649,11 +666,15 @@ export function createWorksService(
       batches.delete(key);
       mapAhead.delete(key);
       published.delete(key);
+      mailKnown.delete(key);
       return;
     }
     // Запись без признака `structural` (создание работы, замена карты) считается структурной, как у `watchWorks`.
     const structural = event.structural !== false;
     if (structural) mapAhead.set(key, event.version);
+    // Чужая запись перед этой: её письма ждут снимка с ней, а этой записи писем без журнала нет — пачка заводится раньше неё.
+    const foreign = guardKnown(key, event.workId, () => trackKnown(key, event));
+    if (foreign !== undefined) holdForeign(key, event.projectPath, event.workId, foreign);
     const { journal } = event;
     if (journal === undefined || journalIsEmpty(journal)) return;
     const mail: MailNotice = {
@@ -676,23 +697,116 @@ export function createWorksService(
       if (ahead !== undefined) batch.structuralVersion = Math.max(batch.structuralVersion, ahead);
       notify(mail);
     }
-    if (batch.timer === undefined) {
-      const waiting = batch;
-      waiting.timer = setTimeout(() => {
-        waiting.timer = undefined;
-        // Пачку со структурной записью выпускает `releaseMail` после публикации снимка, а не этот таймер, но ждёт она не дольше
-        // `MAIL_HOLD_MAX_MS` от начала пачки: снимок может не выйти (проход упал, работу сняли, у записи нет версии).
-        const rest = waiting.structuralVersion === 0 ? 0 : MAIL_HOLD_MAX_MS - (Date.now() - waiting.startedAt);
-        if (rest <= 0) {
-          flushMail(key);
+    armBatch(key, batch);
+  }
+
+  /** Таймер пачки: `mailBatchMs` на накопление, потом рассылка — пачку со структурой держит снимок, но не дольше `MAIL_HOLD_MAX_MS`. */
+  function armBatch(key: string, batch: MailBatch): void {
+    if (batch.timer !== undefined) return;
+    batch.timer = setTimeout(() => {
+      batch.timer = undefined;
+      // Пачку со структурной записью выпускает `releaseMail` после публикации снимка, а не этот таймер, но ждёт она не дольше
+      // `MAIL_HOLD_MAX_MS` от начала пачки: снимок может не выйти (проход упал, работу сняли, у записи нет версии).
+      const rest = batch.structuralVersion === 0 ? 0 : MAIL_HOLD_MAX_MS - (Date.now() - batch.startedAt);
+      if (rest <= 0) {
+        flushMail(key);
+        return;
+      }
+      batch.timer = setTimeout(() => {
+        batch.timer = undefined;
+        flushMail(key);
+      }, rest);
+    }, mailBatchMs);
+  }
+
+  /**
+   * Разбор чужих записей не должен ронять ни запись писем, ни проход: база не ответила — работа забывается, и следующий проход
+   * заведёт её заново по базе, без объявлений (окно получит снимок). Объявить письма дважды хуже, чем не объявить: числа и
+   * письма к окну дойдут снимком.
+   */
+  function guardKnown<T>(key: string, workId: string, fn: () => T): T | undefined {
+    try {
+      return fn();
+    } catch (error) {
+      mailKnown.delete(key);
+      host.log.warn('письма: чужая запись не разобрана', { workId, error: String(error) });
+      return undefined;
+    }
+  }
+
+  /**
+   * Своя запись двигает то, что хост знает о работе (`mailKnown`). Версия, лёгшая между известной и `prevVersion` записи, —
+   * чужая запись: её письма — новее известного номера, кроме писем самой записи; они и возвращаются. Нет известного состояния
+   * (работу ещё не видел полный проход) — возвращать нечего: проход заведёт его по базе.
+   */
+  function trackKnown(key: string, event: MapWrittenEvent): { prevVersion: number; version: number; letters: Message[] } | undefined {
+    const known = mailKnown.get(key);
+    if (known === undefined) return undefined;
+    const before = known.version;
+    const prevVersion = event.prevVersion ?? event.version - 1;
+    const own = event.journal?.added ?? [];
+    let letters: Message[] = [];
+    if (prevVersion > before) {
+      const found = lettersAfter(event.projectPath, event.workId, known.seq);
+      const ownIds = new Set(own.map((message) => message.id));
+      letters = found.letters.filter((message) => !ownIds.has(message.id));
+      known.seq = found.top;
+    } else {
+      for (const message of own) known.seq = Math.max(known.seq, seqOf(message.id, 'm-'));
+    }
+    known.version = Math.max(before, event.version);
+    return letters.length === 0 ? undefined : { prevVersion: before, version: prevVersion, letters };
+  }
+
+  /**
+   * Письма чужой записи в пачку работы: уведомление `foreign` для подписчиков хоста и письма в событие, комнаты с ними — с
+   * `reread` (`foreignJournal`). Пачка ждёт снимка с версией не ниже `structuralVersion` (чужая запись могла менять карту), и
+   * его публикация выпускает её тем же `releaseMail`, что и смешанную запись; потолок `MAIL_HOLD_MAX_MS` страхует, если снимок
+   * не выйдет.
+   */
+  function holdForeign(
+    key: string,
+    projectPath: string,
+    workId: string,
+    write: { prevVersion: number; version: number; letters: Message[]; structuralVersion?: number },
+  ): void {
+    const journal = foreignJournal(write.letters);
+    let batch = batches.get(key);
+    if (batch === undefined) batches.set(key, (batch = startBatch(projectPath, workId, write.prevVersion)));
+    joinForeign(batch, { prevVersion: write.prevVersion, version: write.version, structuralVersion: write.structuralVersion ?? write.version, journal });
+    batch.notices.push({ projectPath, workId, version: write.version, prevVersion: write.prevVersion, journal, foreign: true });
+    armBatch(key, batch);
+  }
+
+  /**
+   * Чужие записи, которых проход ещё не назвал (спека 6.11): работа в списке на версии выше известной хосту — между ними легла
+   * запись другого процесса. Работу, которой хост не знает, заводит первый проход: письма базы на этот момент — точка отсчёта,
+   * объявлять их некому (окно получает снимок). Идёт в конце прохода, прямо перед публикацией снимка: пачка ждёт этого снимка.
+   */
+  function announceForeign(): void {
+    if (stopped) return;
+    for (const [key, work] of entries) {
+      const version = work.version;
+      if (version === undefined) continue;
+      const { projectPath } = work;
+      const workId = work.map.work.id;
+      guardKnown(key, workId, () => {
+        const known = mailKnown.get(key);
+        if (known === undefined) {
+          const seq = topLetterSeq(projectPath, workId);
+          if (seq !== undefined) mailKnown.set(key, { version, seq });
           return;
         }
-        waiting.timer = setTimeout(() => {
-          waiting.timer = undefined;
-          flushMail(key);
-        }, rest);
-      }, mailBatchMs);
+        // Версия не выше известной: список прочитан до своей записи, чужой записи за ним нет.
+        if (version <= known.version) return;
+        const { letters, top } = lettersAfter(projectPath, workId, known.seq);
+        const prevVersion = known.version;
+        known.version = version;
+        known.seq = top;
+        if (letters.length > 0) holdForeign(key, projectPath, workId, { prevVersion, version, letters });
+      });
     }
+    for (const key of mailKnown.keys()) if (!entries.has(key)) mailKnown.delete(key);
   }
 
   /** Источник перемен списка — `watchWorks` на всю базу, источник писем — `onMapWritten`; заводятся на `start`. */
@@ -786,6 +900,8 @@ export function createWorksService(
     await checkCorruption(seenKeys);
     for (const work of works) await leaseWork(work);
 
+    // Без `await` до `publish`: пачка чужих писем выходит вслед за этим снимком (`releaseMail`).
+    announceForeign();
     const snapshot = buildSnapshot();
     revision += 1;
     windowCache = null;
@@ -837,6 +953,7 @@ export function createWorksService(
       unsubscribeWritten = undefined;
       for (const batch of batches.values()) if (batch.timer !== undefined) clearTimeout(batch.timer);
       batches.clear();
+      mailKnown.clear();
 
       const pid = process.pid;
       await Promise.all(

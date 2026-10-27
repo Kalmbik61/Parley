@@ -44,12 +44,17 @@ vi.mock('@parley/protocol', async (importOriginal) => {
 // Шлюзы полного прохода: пока `gate` закрыт, `refreshPass` стоит на `gitBranch` и до `publish` не доходит; `stripVersions`
 // отдаёт проходу записи без точной версии, как при записи, вклинившейся между двумя чтениями версии работы, но наблюдателю
 // ядра этого не показывает, и повторного чтения нет; `bareReads` — сколько ближайших чтений списка вернут записи без версии
-// уже наблюдателю ядра: он по ним просит ещё одно чтение, как в проде.
-const pass = vi.hoisted(() => ({ gate: undefined as Promise<void> | undefined, stripVersions: false, bareReads: 0 }));
+// уже наблюдателю ядра: он по ним просит ещё одно чтение, как в проде. `failForeignRead` — чтение «писем новее номера» (так
+// хост ищет письма чужой записи) бросает, как при ответе базы с ошибкой.
+const pass = vi.hoisted(() => ({ gate: undefined as Promise<void> | undefined, stripVersions: false, bareReads: 0, failForeignRead: false }));
 vi.mock('@parley/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@parley/core')>();
   return {
     ...actual,
+    readLetters: (...args: Parameters<typeof actual.readLetters>) => {
+      if (pass.failForeignRead && args[2].afterSeq !== undefined) throw new Error('база не ответила');
+      return actual.readLetters(...args);
+    },
     gitBranch: vi.fn(async (...args: Parameters<typeof actual.gitBranch>) => {
       await pass.gate;
       return actual.gitBranch(...args);
@@ -149,6 +154,7 @@ beforeEach(async () => {
   pass.gate = undefined;
   pass.stripVersions = false;
   pass.bareReads = 0;
+  pass.failForeignRead = false;
   counters.reset();
   vi.mocked(encodeLine).mockClear();
 });
@@ -998,5 +1004,230 @@ describe('письма хоста: одна сериализация', () => {
     expect(mailLines(first.written)).toEqual(mailLines(second.written));
     const encodedMail = vi.mocked(encodeLine).mock.calls.filter(([message]) => 'event' in message && message.event === 'rooms.mail');
     expect(encodedMail).toHaveLength(1);
+  });
+});
+
+/**
+ * Чужая запись в базу (спека rooms.mail 6.11): второе соединение `node:sqlite` пишет письма, и журнала у записи нет. Одна
+ * запись в транзакции: письма (номера выдаёт тест по наибольшему номеру в таблице) и, по желанию, правка карты. Версия работы
+ * растёт один раз, как у `writeLetters` и `updateMap` в другом процессе (CLI, MCP агента).
+ */
+function foreignWrite(workId: string, write: { letters?: Array<{ text: string; roomId?: string | null }>; goal?: string }): void {
+  const { DatabaseSync: Database } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+  const foreign = new Database(path.join(home, 'parley.db'));
+  try {
+    foreign.exec('BEGIN IMMEDIATE');
+    for (const letter of write.letters ?? []) {
+      const top = foreign.prepare('SELECT COALESCE(MAX(seq), 0) AS top FROM messages WHERE project_path = ? AND work_id = ?').get(project, workId) as { top: number };
+      const seq = top.top + 1;
+      foreign
+        .prepare(
+          'INSERT INTO messages (project_path, work_id, seq, id, room_id, sender, recipients, at, kind, deleted, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)',
+        )
+        .run(project, workId, seq, `m-${seq}`, letter.roomId === undefined ? 'r-01' : letter.roomId, 's-02', '[]', new Date().toISOString(), 'note', JSON.stringify({ text: letter.text }));
+    }
+    if (write.goal !== undefined) {
+      const row = foreign.prepare('SELECT work_json FROM works WHERE project_path = ? AND id = ?').get(project, workId) as { work_json: string };
+      const work = JSON.parse(row.work_json) as { goal: string };
+      work.goal = write.goal;
+      foreign.prepare('UPDATE works SET work_json = ? WHERE project_path = ? AND id = ?').run(JSON.stringify(work), project, workId);
+    }
+    foreign.prepare('UPDATE works SET version = version + 1 WHERE project_path = ? AND id = ?').run(project, workId);
+    foreign.exec('COMMIT');
+  } finally {
+    foreign.close();
+  }
+}
+
+describe('письма хоста: записи других процессов', () => {
+  it('чужое письмо: полный проход, потом rooms.mail с письмом и reread комнаты; onMail с foreign: true', async () => {
+    const id = await seedWork();
+    const modern = fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const s = await started();
+    const notices: MailNotice[] = [];
+    s.onMail((notice) => notices.push(notice));
+    const before = workVersion(project, id) as number;
+
+    foreignWrite(id, { letters: [{ text: 'из другого процесса' }] });
+    await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: 10_000 });
+    await sleep(300);
+
+    expect(events('rooms.mail')).toHaveLength(1);
+    expect(events('rooms.mail')[0]?.to).toEqual([modern.id]);
+    expect(counters.read().refreshCount).toBeGreaterThanOrEqual(1);
+    const event = mailOf(events('rooms.mail')[0]);
+    expect(event).toMatchObject({ projectPath: project, workId: id, version: before + 1, prevVersion: before });
+    expect(event.rooms).toHaveLength(1);
+    expect(event.rooms[0]).toMatchObject({ roomId: 'r-01', reread: true, total: letterCount(project, id, { roomId: 'r-01' }) });
+    expect(event.rooms[0]?.letters.map((letter) => letter.text)).toEqual(['из другого процесса']);
+    // Снимок с работой на новой версии ушёл раньше события (спека 6.5).
+    const sequence = broadcasts.filter((item) => item.to.length > 0).map((item) => item.event);
+    expect(sequence.indexOf('works.changed')).toBeGreaterThanOrEqual(0);
+    expect(sequence.indexOf('works.changed')).toBeLessThan(sequence.indexOf('rooms.mail'));
+    const snapshot = events('works.changed')[0]?.data as WorksSnapshot;
+    expect(snapshot.entries[0]?.version).toBe(before + 1);
+
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ projectPath: project, workId: id, foreign: true, version: before + 1, prevVersion: before });
+    expect(notices[0]?.journal.added.map((letter) => letter.text)).toEqual(['из другого процесса']);
+    expect(notices[0]?.journal).toMatchObject({ reads: [], deleted: [], droppedRooms: [], rereadRooms: ['r-01'] });
+  });
+
+  it('чужая запись с письмом и правкой карты: события нет, пока снимок с правкой не ушёл', async () => {
+    const id = await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const s = await started();
+    const notices: MailNotice[] = [];
+    const goalAtNotice: Array<string | undefined> = [];
+    s.onMail((notice) => {
+      notices.push(notice);
+      goalAtNotice.push(s.entry(project, id)?.map.work.goal);
+    });
+
+    foreignWrite(id, { letters: [{ text: 'письмо за правкой' }], goal: 'чужая цель' });
+    await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: 10_000 });
+
+    const sequence = broadcasts.filter((item) => item.to.length > 0).map((item) => item.event);
+    expect(sequence.indexOf('works.changed')).toBeLessThan(sequence.indexOf('rooms.mail'));
+    const snapshots = events('works.changed').map((item) => item.data as WorksSnapshot);
+    expect(snapshots.at(-1)?.entries[0]?.map.work.goal).toBe('чужая цель');
+    expect(mailOf(events('rooms.mail')[0]).version).toBeLessThanOrEqual(snapshots.at(-1)?.entries[0]?.version as number);
+    // Подписчик узнаёт о письме уже по карте с правкой.
+    expect(goalAtNotice).toEqual(['чужая цель']);
+    expect(notices.map((notice) => notice.foreign)).toEqual([true]);
+  });
+
+  it('чужое прямое письмо: комната roomId null с reread, адресат назван в письме', async () => {
+    const id = await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const s = await started();
+    const notices: MailNotice[] = [];
+    s.onMail((notice) => notices.push(notice));
+
+    foreignWrite(id, { letters: [{ text: 'лично', roomId: null }, { text: 'в комнату' }] });
+    await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: 10_000 });
+
+    const event = mailOf(events('rooms.mail')[0]);
+    const direct = event.rooms.find((room) => room.roomId === null);
+    expect(direct).toMatchObject({ reread: true, total: 1 });
+    expect(direct?.letters.map((letter) => letter.text)).toEqual(['лично']);
+    expect(event.rooms.find((room) => room.roomId === 'r-01')).toMatchObject({ reread: true });
+    expect(notices).toHaveLength(1);
+    // Журнал чужой записи называет только комнаты: у прямых писем комнаты нет, их адресатов даёт `added`.
+    expect(notices[0]?.journal.rereadRooms).toEqual(['r-01']);
+    expect(notices[0]?.journal.added.map((letter) => letter.text)).toEqual(['лично', 'в комнату']);
+  });
+
+  it('чужая запись без писем (правка карты): полный проход есть, rooms.mail и onMail нет', async () => {
+    const id = await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const s = await started();
+    const notices: MailNotice[] = [];
+    s.onMail((notice) => notices.push(notice));
+
+    foreignWrite(id, { goal: 'только цель' });
+    await vi.waitFor(() => expect(s.entry(project, id)?.map.work.goal).toBe('только цель'), { timeout: 10_000 });
+    await sleep(300);
+
+    expect(events('rooms.mail')).toEqual([]);
+    expect(notices).toEqual([]);
+  });
+
+  it('чужое письмо, а за ним своё сразу: одно событие с обоими письмами, чужое названо foreign, своё — нет', async () => {
+    const id = await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const s = await started();
+    const notices: MailNotice[] = [];
+    s.onMail((notice) => notices.push(notice));
+    const before = workVersion(project, id) as number;
+
+    // Своя запись видит версию чужой между известной и своей `prevVersion`: чужие письма не потеряются и не задвоятся.
+    foreignWrite(id, { letters: [{ text: 'чужое' }] });
+    send(id, 'своё');
+    await vi.waitFor(() => expect(events('rooms.mail').length).toBeGreaterThanOrEqual(1), { timeout: 10_000 });
+    await sleep(500);
+
+    expect(events('rooms.mail')).toHaveLength(1);
+    const event = mailOf(events('rooms.mail')[0]);
+    expect(event).toMatchObject({ version: before + 2, prevVersion: before });
+    expect(event.rooms).toHaveLength(1);
+    expect(event.rooms[0]).toMatchObject({ roomId: 'r-01', reread: true });
+    expect(event.rooms[0]?.letters.map((letter) => letter.text)).toEqual(['чужое', 'своё']);
+    expect(notices.map((notice) => [notice.foreign, notice.journal.added.map((letter) => letter.text)])).toEqual([
+      [false, ['своё']],
+      [true, ['чужое']],
+    ]);
+  });
+
+  it('свои письма и полный проход после них чужой записью не считаются: foreign нет, повторных событий нет', async () => {
+    const id = await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const s = await started();
+    const notices: MailNotice[] = [];
+    s.onMail((notice) => notices.push(notice));
+
+    send(id, 'раз');
+    send(id, 'два');
+    await vi.waitFor(() => expect(events('rooms.mail').length).toBeGreaterThanOrEqual(1), { timeout: 5000 });
+    // Своя запись карты вызывает полный проход: версии и номера писем в нём сошлись со своими событиями.
+    await updateMap(project, id, (current) => {
+      current.work.goal = 'после писем';
+    });
+    await vi.waitFor(() => expect(events('works.changed').length).toBeGreaterThanOrEqual(1), { timeout: 5000 });
+    await sleep(500);
+
+    expect(notices.every((notice) => !notice.foreign)).toBe(true);
+    const texts = events('rooms.mail').flatMap((item) => mailOf(item).rooms.flatMap((room) => room.letters.map((letter) => letter.text)));
+    expect(texts).toEqual(['раз', 'два']);
+  });
+
+  it('письма, лежавшие в базе к старту хоста, чужой записью не объявляются', async () => {
+    await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const created = createWorksService(fakeHost(), { debounceMs: 5, windowCounters: counters });
+    services.push(created);
+    const notices: MailNotice[] = [];
+    created.onMail((notice) => notices.push(notice));
+
+    await created.start();
+    await settled();
+
+    expect(notices).toEqual([]);
+    expect(events('rooms.mail')).toEqual([]);
+  });
+
+  it('база не ответила при разборе чужой записи: проход доходит до снимка, событий и onMail нет, в журнале хоста предупреждение', async () => {
+    const id = await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const s = await started();
+    const notices: MailNotice[] = [];
+    s.onMail((notice) => notices.push(notice));
+    pass.failForeignRead = true;
+
+    foreignWrite(id, { letters: [{ text: 'письмо при сбое' }], goal: 'цель при сбое' });
+    await vi.waitFor(() => expect(s.entry(project, id)?.map.work.goal).toBe('цель при сбое'), { timeout: 10_000 });
+    await sleep(300);
+
+    expect(events('works.changed').length).toBeGreaterThanOrEqual(1);
+    expect(events('rooms.mail')).toEqual([]);
+    expect(notices).toEqual([]);
+    expect(warnings).toContain('письма: чужая запись не разобрана');
+  });
+
+  it('окон с признаком нет: onMail всё равно зовётся с foreign: true, событие не шлётся', async () => {
+    const id = await seedWork();
+    const old = fakeClient([COMPACT_WORKS_FEATURE]);
+    const s = await started();
+    const notices: MailNotice[] = [];
+    s.onMail((notice) => notices.push(notice));
+
+    foreignWrite(id, { letters: [{ text: 'для старого окна' }] });
+    await vi.waitFor(() => expect(notices).toHaveLength(1), { timeout: 10_000 });
+
+    expect(notices[0]?.foreign).toBe(true);
+    expect(events('rooms.mail')).toEqual([]);
+    // Старое окно получило письмо полным проходом: хвост писем снимка.
+    const lastTail = (events('works.changed').filter((item) => item.to.includes(old.id)).at(-1)?.data as WorksSnapshot).entries[0]?.map.messages.map((letter) => letter.text);
+    expect(lastTail).toContain('для старого окна');
   });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { HUMAN, WINDOW_MENTION_MAX_BYTES } from '@parley/core';
 import type { Message } from '@parley/core';
 import type { RoomsMailEvent, RoomsMailRoom } from '@parley/protocol';
-import { MAIL_EVENT_MAX_BYTES, fitMailEvent, gluedMailEvent } from './mail.js';
+import { MAIL_EVENT_MAX_BYTES, fitMailEvent, foreignJournal, gluedMailEvent, joinBatch, joinForeign, startBatch } from './mail.js';
 
 /**
  * Потолок кадра события `rooms.mail` (спека rooms.mail 6.6, ревью задачи 4): кадр целиком — `{"event":"rooms.mail","data":…}`
@@ -226,5 +226,39 @@ describe('gluedMailEvent: склеенное событие для медлен�
     // Числа и кандидаты прежние: окну они нужны и по комнатам, которых оно не держит.
     expect(glued.rooms[0]).toMatchObject({ prevTop: 1, top: 2, total: 2 });
     expect(glued.mentionCandidates).toEqual(event.mentionCandidates);
+  });
+});
+
+describe('письма чужой записи в пачке (спека 6.11)', () => {
+  const direct = (n: number): Message => ({ ...letter(n, 5), roomId: null });
+  const other = (n: number): Message => ({ ...letter(n, 5), roomId: 'r-02' });
+
+  it('журнал называет комнаты с письмами по разу; отметок, удалений и снесённых комнат в нём нет', () => {
+    const journal = foreignJournal([letter(5, 5), letter(6, 5), other(7), direct(8)]);
+
+    expect(journal.added.map((message) => message.id)).toEqual(['m-0005', 'm-0006', 'm-0007', 'm-0008']);
+    expect(journal.rereadRooms).toEqual(['r-01', 'r-02']);
+    expect(journal).toMatchObject({ reads: [], deleted: [], droppedRooms: [] });
+  });
+
+  it('чужие письма в начатую пачку: prevVersion не растёт, version не падает, письма по возрастанию номера, ожидание снимка — наибольшее', () => {
+    const batch = startBatch('/p', 'w-0001', 20);
+    joinBatch(batch, { version: 22, journal: { added: [letter(9, 5)], reads: [], deleted: [], droppedRooms: [], rereadRooms: [] }, structural: true });
+    expect(batch).toMatchObject({ prevVersion: 20, version: 22, structuralVersion: 22 });
+
+    joinForeign(batch, { prevVersion: 19, version: 21, structuralVersion: 21, journal: foreignJournal([letter(7, 5)]) });
+
+    expect(batch).toMatchObject({ prevVersion: 19, version: 22, structuralVersion: 22, rereadDirect: false });
+    expect(batch.journal.added.map((message) => message.id)).toEqual(['m-0007', 'm-0009']);
+    expect(batch.journal.rereadRooms).toEqual(['r-01']);
+  });
+
+  it('прямые письма чужой записи ставят признак прямого канала: у него нет комнаты в журнале', () => {
+    const batch = startBatch('/p', 'w-0001', 20);
+
+    joinForeign(batch, { prevVersion: 20, version: 21, structuralVersion: 21, journal: foreignJournal([direct(3)]) });
+
+    expect(batch).toMatchObject({ version: 21, structuralVersion: 21, rereadDirect: true });
+    expect(batch.journal.rereadRooms).toEqual([]);
   });
 });
