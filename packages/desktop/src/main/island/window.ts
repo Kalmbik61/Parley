@@ -14,12 +14,13 @@
  * (`setHitRect`: форма или язычок в координатах окна), а раз в `HOVER_POLL_MS`, пока окно видно, main сверяет с ней
  * настоящий курсор (`deps.cursor()`) и при смене «над / не над» переключает окно и зовёт `deps.onHover`.
  * Место держит верхний край и точку (`anchor`): перетаскивание и смена монитора пересчитывают прямоугольник через
- * `placement.ts`. Упал renderer — одно пересоздание; второе падение — острова нет до перезапуска приложения:
- * зависшее прозрачное окно поверх всего хуже, чем его отсутствие.
+ * `placement.ts`. Вырез дисплея (#9 §12) даёт датчик (`deps.notch`): у точки `center` кадр стоит по центру выреза,
+ * отступ — высота выреза; новый замер main применяет через `relayout()`. Упал renderer — одно пересоздание; второе
+ * падение — острова нет до перезапуска приложения: зависшее прозрачное окно поверх всего хуже, чем его отсутствие.
  */
 
 import type { BrowserWindowConstructorOptions } from 'electron';
-import type { IslandHitRect, IslandPoint } from '../../shared/island.js';
+import type { IslandConfig, IslandHitRect, IslandPoint } from '../../shared/island.js';
 import type { IslandAnchor } from '../../shared/ui-types.js';
 import {
   displayAt,
@@ -29,6 +30,7 @@ import {
   snapAnchor,
   type DisplayLike,
   type IslandPlacement,
+  type NotchGeometry,
   type Rect,
   type Size,
 } from './placement.js';
@@ -93,6 +95,8 @@ export interface IslandControllerDeps<W extends IslandWindowLike> {
   /** Текущее место из настроек (кеш main: запись в `ui.json` асинхронная). */
   placement(): IslandPlacement;
   savePlacement(placement: IslandPlacement): void;
+  /** Вырез дисплея по последнему замеру датчика (или подмена `PARLEY_NOTCH`); `null` — выреза нет. */
+  notch(display: DisplayLike): NotchGeometry | null;
   /** Настоящее положение курсора на экране (DIP) — `screen.getCursorScreenPoint()`. */
   cursor(): { x: number; y: number };
   /** Курсор вошёл в область острова или ушёл из неё: main отдаёт это renderer острова. */
@@ -117,10 +121,15 @@ export interface IslandController<W extends IslandWindowLike> {
   dragStart(point: IslandPoint): void;
   dragMove(point: IslandPoint): void;
   dragEnd(point: IslandPoint): void;
-  /** Мониторы изменились — место заново из сохранённой точки. */
+  /** Мониторы изменились или датчик выреза дал новый замер — место заново из сохранённой точки. */
   relayout(): void;
   /** Отступ содержимого под чёлку у текущего монитора острова. */
   topInset(): number;
+  /**
+   * Форма выреза для renderer (`IslandConfig.notch`): только у точки `center` (Н-3), центр — в координатах кадра окна;
+   * у левой и правой точки или без выреза — `null`, остаётся полоса.
+   */
+  notch(): NonNullable<IslandConfig['notch']> | null;
   /** Точка, у которой стоит остров, — renderer по ней выравнивает форму внутри кадра. */
   anchor(): IslandAnchor;
 }
@@ -139,10 +148,14 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
 
   const live = (): W | null => (window !== null && !window.isDestroyed() ? window : null);
   const display = (): DisplayLike => resolveDisplay(deps.displays(), deps.primaryDisplayId(), deps.placement().displayId);
+  const frame = (): Rect => {
+    const target = display();
+    return islandBounds(target, deps.placement().anchor, ISLAND_FRAME, deps.notch(target));
+  };
   const place = (): void => {
     const current = live();
     if (current === null) return;
-    current.setBounds(islandBounds(display(), deps.placement().anchor, ISLAND_FRAME));
+    current.setBounds(frame());
   };
 
   const stopPolling = (): void => {
@@ -306,7 +319,17 @@ export function createIslandController<W extends IslandWindowLike>(deps: IslandC
       dragging = false;
       place();
     },
-    topInset: () => notchInset(display()),
+    topInset: () => {
+      const target = display();
+      return notchInset(target, deps.notch(target));
+    },
     anchor: () => deps.placement().anchor,
+    notch: () => {
+      const target = display();
+      const geometry = deps.notch(target);
+      if (geometry === null || deps.placement().anchor !== 'center') return null;
+      // Кадр стоит в целых точках, поэтому центр выреза внутри него может прийтись на половину точки — её держит CSS.
+      return { width: geometry.width, height: geometry.height, centerX: target.bounds.x + geometry.centerX - frame().x };
+    },
   };
 }

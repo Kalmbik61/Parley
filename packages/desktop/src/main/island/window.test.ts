@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IslandHitRect } from '../../shared/island.js';
-import type { DisplayLike, IslandPlacement, Rect } from './placement.js';
+import type { DisplayLike, IslandPlacement, NotchGeometry, Rect } from './placement.js';
 import { createIslandController, HOVER_POLL_MS, ISLAND_FRAME, islandWindowOptions, type IslandWindowLike } from './window.js';
 
 const EXTERNAL: DisplayLike = { id: 3, bounds: { x: 0, y: 0, width: 3440, height: 1440 }, workArea: { x: 0, y: 25, width: 3440, height: 1415 }, internal: false };
@@ -39,6 +39,7 @@ function setup(placement: IslandPlacement = { displayId: null, anchor: 'center' 
   let saved = placement;
   let displays: DisplayLike[] = [EXTERNAL, MACBOOK];
   let cursor = { x: 0, y: 0 };
+  const notches = new Map<number, NotchGeometry>();
   const log = vi.fn();
   const onHover = vi.fn();
   const onKeyboardLost = vi.fn();
@@ -53,6 +54,7 @@ function setup(placement: IslandPlacement = { displayId: null, anchor: 'center' 
     primaryDisplayId: () => 3,
     placement: () => saved,
     savePlacement: (next) => { saved = next; },
+    notch: (display) => notches.get(display.id) ?? null,
     cursor: cursorSpy,
     onHover,
     onKeyboardLost,
@@ -63,6 +65,10 @@ function setup(placement: IslandPlacement = { displayId: null, anchor: 'center' 
     controller, windows, log, onHover, onKeyboardLost, cursorSpy,
     setDisplays: (next: DisplayLike[]) => { displays = next; },
     setCursor: (next: { x: number; y: number }) => { cursor = next; },
+    setNotch: (displayId: number, geometry: NotchGeometry | null) => {
+      if (geometry === null) notches.delete(displayId);
+      else notches.set(displayId, geometry);
+    },
     placement: () => saved,
   };
 }
@@ -241,6 +247,90 @@ describe('окно острова', () => {
     controller.setVisible(true);
     vi.advanceTimersByTime(HOVER_POLL_MS * 3);
     expect(windows[1]?.mouseCalls).toEqual([[true, { forward: false }]]);
+  });
+
+  describe('вырез дисплея', () => {
+    /** Вырез 14″ по датчику: 185 × 32, центр 755,5 от левого края дисплея. */
+    const NOTCH: NotchGeometry = { width: 185, height: 32, centerX: 755.5 };
+
+    it('кадр у верхнего края по центру выреза; notch — центр в координатах кадра, отступ — высота выреза (N6)', () => {
+      const { controller, windows, setNotch } = setup({ displayId: 1, anchor: 'center' });
+      setNotch(1, { ...NOTCH, centerX: 700 });
+      controller.open();
+      expect(windows[0]?.bounds).toEqual({ x: 460, y: 1440, width: 480, height: 520 });
+      expect(controller.notch()).toEqual({ width: 185, height: 32, centerX: 240 });
+      expect(controller.topInset()).toBe(32);
+    });
+
+    it('половина точки центра выреза остаётся в notch.centerX: кадр в целых точках', () => {
+      const { controller, windows, setNotch } = setup({ displayId: 1, anchor: 'center' });
+      setNotch(1, NOTCH);
+      controller.open();
+      expect(windows[0]?.bounds.x).toBe(516);
+      expect(controller.notch()).toEqual({ width: 185, height: 32, centerX: 239.5 });
+    });
+
+    it.each<IslandPlacement['anchor']>(['left', 'right'])('точка %s на дисплее с вырезом — notch null, полоса у края (N9)', (anchor) => {
+      const { controller, windows, setNotch } = setup({ displayId: 1, anchor });
+      setNotch(1, NOTCH);
+      controller.open();
+      expect(controller.notch()).toBeNull();
+      expect(windows[0]?.bounds.x).toBe(anchor === 'left' ? 12 : 1512 - 480 - 12);
+      expect(controller.topInset()).toBe(32);
+    });
+
+    it('без выреза — notch null, прежние кадр и отступ (N2)', () => {
+      const { controller, windows } = setup({ displayId: 1, anchor: 'center' });
+      controller.open();
+      expect(controller.notch()).toBeNull();
+      expect(windows[0]?.bounds).toEqual({ x: 516, y: 1440, width: 480, height: 520 });
+      expect(controller.topInset()).toBe(38);
+      const external = setup({ displayId: 3, anchor: 'center' });
+      external.controller.open();
+      expect(external.controller.notch()).toBeNull();
+      expect(external.controller.topInset()).toBe(0);
+    });
+
+    it('вырез только у своего дисплея: остров на внешнем мониторе выреза встроенного не берёт', () => {
+      const { controller, setNotch } = setup({ displayId: 3, anchor: 'center' });
+      setNotch(1, NOTCH);
+      controller.open();
+      expect(controller.notch()).toBeNull();
+      expect(controller.topInset()).toBe(0);
+    });
+
+    it('новый замер применяется через relayout: окно встаёт по вырезу, вырез пропал — обратно по середине', () => {
+      const { controller, windows, setNotch } = setup({ displayId: 1, anchor: 'center' });
+      controller.open();
+      setNotch(1, { ...NOTCH, centerX: 700 });
+      controller.relayout();
+      expect(windows[0]?.bounds.x).toBe(460);
+      setNotch(1, null);
+      controller.relayout();
+      expect(windows[0]?.bounds.x).toBe(516);
+      expect(controller.notch()).toBeNull();
+    });
+
+    it('полный экран (workArea без строки меню) не меняет ни кадр, ни отступ, ни notch (N7)', () => {
+      const { controller, windows, setNotch, setDisplays } = setup({ displayId: 1, anchor: 'center' });
+      setNotch(1, NOTCH);
+      controller.open();
+      const before = { bounds: windows[0]?.bounds, notch: controller.notch(), inset: controller.topInset() };
+      setDisplays([EXTERNAL, { ...MACBOOK, workArea: { ...MACBOOK.bounds } }]);
+      controller.relayout();
+      expect({ bounds: windows[0]?.bounds, notch: controller.notch(), inset: controller.topInset() }).toEqual(before);
+    });
+
+    it('перетаскивание к центру дисплея с вырезом — кадр встаёт по вырезу, notch появляется', () => {
+      const { controller, windows, setNotch } = setup({ displayId: 1, anchor: 'left' });
+      setNotch(1, { ...NOTCH, centerX: 700 });
+      controller.open();
+      expect(controller.notch()).toBeNull();
+      controller.dragStart({ screenX: 100, screenY: 1450 });
+      controller.dragEnd({ screenX: 756, screenY: 1450 });
+      expect(windows[0]?.bounds.x).toBe(460);
+      expect(controller.notch()).toEqual({ width: 185, height: 32, centerX: 240 });
+    });
   });
 
   describe('клавиатура помощника', () => {

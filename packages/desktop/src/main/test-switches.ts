@@ -3,7 +3,7 @@ import { envValue } from '@parley/core';
 /**
  * Тестовые переключатели окна (`PARLEY_DOWNLOADS/DIALOGS/NOTIFICATIONS/DROPS/SHELL/VOICE/TTS`) подменяют
  * системные действия журналом main; `PARLEY_ISLAND=off` убирает остров одобрений; `PARLEY_LOGIN_SHELL=skip`
- * не даёт окну звать оболочку человека за окружением. В собранном приложении случайная переменная окружения иначе молча глушила бы
+ * не даёт окну звать оболочку человека за окружением; `PARLEY_NOTCH=185x32` — подменный вырез вместо датчика. В собранном приложении случайная переменная окружения иначе молча глушила бы
  * уведомления, ссылки, Finder и загрузки (ревью M5) — поэтому они слушаются только в неупакованном
  * окне (E2E, `pnpm dev`) или при явном `PARLEY_E2E=1` (проверки самой сборки). Имена читаются
  * как все переменные (`envValue`): прежние `HARNAS_*` тоже годятся. `PARLEY_APP_DATA=<каталог>` — не действие,
@@ -30,6 +30,19 @@ export interface TestSwitches {
    * настоящий `appData` дал бы userData человека и лок одного экземпляра с его запущенным окном. `undefined` — не задан.
    */
   readonly appData: string | undefined;
+  /**
+   * Подменный вырез (`PARLEY_NOTCH=<ширина>x<высота>`, pt) вместо датчика `osascript`: E2E острова в вырезе (#9 T17) на
+   * любом мониторе, вырез — посередине каждого дисплея. `undefined` — не задан или задан не по форме.
+   */
+  readonly notch: { width: number; height: number } | undefined;
+}
+
+function parseNotch(value: string | undefined): { width: number; height: number } | undefined {
+  const match = value === undefined ? null : /^(\d+)x(\d+)$/.exec(value);
+  if (match === null) return undefined;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  return width > 0 && height > 0 ? { width, height } : undefined;
 }
 
 export function testSwitches(env: Readonly<Record<string, string | undefined>>, isPackaged: boolean): TestSwitches {
@@ -45,5 +58,6 @@ export function testSwitches(env: Readonly<Record<string, string | undefined>>, 
     tts: allowed && envValue(env, 'TTS') === 'fake',
     islandOff: allowed && envValue(env, 'ISLAND') === 'off',
     appData: allowed ? envValue(env, 'APP_DATA') : undefined,
+    notch: allowed ? parseNotch(envValue(env, 'NOTCH')) : undefined,
   };
 }
