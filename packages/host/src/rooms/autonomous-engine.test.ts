@@ -35,7 +35,7 @@ async function fixture(qualitative = false, count = 1) {
   await git('add', '.');
   await git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'Initial');
   const sha = await git('rev-parse', 'HEAD'), blob = await git('rev-parse', 'HEAD:test.js');
-  let map: WorkMap = { schemaVersion: 2, work: { id: 'w-01', title: 'Fixture', goal: '', status: 'active', createdAt: now.toISOString(), updatedAt: now.toISOString() }, sessions: [], rooms: [], messages: [] };
+  let map: WindowWorkMap = { schemaVersion: 2, work: { id: 'w-01', title: 'Fixture', goal: '', status: 'active', createdAt: now.toISOString(), updatedAt: now.toISOString() }, sessions: [], rooms: [], messages: [] };
   addSession(map, { provider: 'codex', label: 'Lead', task: 'Lead' });
   addRoom(map, { creator: HUMAN, title: 'Plan', members: ['s-01'], lead: 's-01', mode: 'autonomous' });
   const plan: RoomPlan = {
@@ -54,7 +54,7 @@ async function fixture(qualitative = false, count = 1) {
   const events: string[] = [];
   const io: EngineIO = {
     readMap: async () => structuredClone(map),
-    updateMap: async (_project, _work, mutate) => { const draft = structuredClone(map); await mutate(draft, mapLetterTx(draft as WindowWorkMap).letters); map = draft; return structuredClone(map); },
+    updateMap: async (_project, _work, mutate) => { const draft = structuredClone(map); await mutate(draft, mapLetterTx(draft).letters); map = draft; return structuredClone(map); },
     fs,
     git: async (args, options) => (await exec('git', args, { ...options, encoding: 'buffer', maxBuffer: 16 * 1024 * 1024 })).stdout,
     now: () => now,

@@ -8,7 +8,7 @@ import { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import {
   addRoom, addSession, archiveRoom, createParleyServer, createWork, mapLetterTx, ENGINE, HUMAN, readLetters, readMap, replaceStoredMap, summarizePlanEffects, updateMap, workPaths,
-  type AttemptChannelRequest, type CheckResult, type RoomPlan, type WorkMap,
+  type AttemptChannelRequest, type CheckResult, type RoomPlan, type WindowWorkMap, type WorkMap,
 } from '@parley/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { attemptsEngineGitPath, createAttemptsEndpoint, type AttemptsResult } from '../agent/attempts-endpoint.js';
@@ -48,7 +48,7 @@ async function fixture(options: { count?: number; independent?: boolean; qualita
   await git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'Initial cycle fixture');
   const baseSha = await git('rev-parse', 'HEAD');
   const workId = (await createWork(projectPath, { title: 'Cycle' })).work.id;
-  const map: WorkMap = { schemaVersion: 2, work: { id: workId, title: 'Cycle', goal: '', status: 'active', createdAt: time.toISOString(), updatedAt: time.toISOString() }, sessions: [], rooms: [], messages: [] };
+  const map: WindowWorkMap = { schemaVersion: 2, work: { id: workId, title: 'Cycle', goal: '', status: 'active', createdAt: time.toISOString(), updatedAt: time.toISOString() }, sessions: [], rooms: [], messages: [] };
   addSession(map, { provider: 'codex', label: 'Lead', task: 'Propose the cycle' });
   addRoom(map, { creator: HUMAN, title: 'Cycle', members: ['s-01'], lead: 's-01', mode: 'autonomous' });
   // Карта работы лежит в базе (спека хранилища 6.2): строки пишет `replaceStoredMap`.

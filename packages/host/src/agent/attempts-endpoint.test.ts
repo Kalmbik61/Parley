@@ -7,7 +7,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import { addRoom, addSession, createWork, ENGINE, HUMAN, readMap, readStoredMap, replaceStoredMap, resolveProposal, updateMap } from '@parley/core';
-import type { AttemptChannelRequest, PlanAttempt, WorkMap } from '@parley/core';
+import type { AttemptChannelRequest, PlanAttempt, WindowWorkMap, WorkMap } from '@parley/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBrowserEndpoint } from './browser-endpoint.js';
 import { attemptsEngineGitPath, createAttemptsEndpoint, type AttemptsEngine } from './attempts-endpoint.js';
@@ -45,7 +45,7 @@ async function setup(withEngine = true) {
   await git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'Initial fixture');
   const baseSha = await git('rev-parse', 'HEAD');
   const workId = (await createWork(projectPath, { title: 'Fixture' })).work.id;
-  const map: WorkMap = { schemaVersion: 2, work: { id: workId, title: 'Fixture', goal: '', status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, sessions: [], rooms: [], messages: [] };
+  const map: WindowWorkMap = { schemaVersion: 2, work: { id: workId, title: 'Fixture', goal: '', status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, sessions: [], rooms: [], messages: [] };
   for (const label of ['Lead', 'Worker', 'Verifier', 'Other', 'Integration']) addSession(map, { provider: 'codex', label, task: label });
   addRoom(map, { creator: HUMAN, title: 'Plan', members: ['s-01', 's-02', 's-03', 's-05'], lead: 's-01', mode: 'autonomous' });
   // Карта работы лежит в базе (спека хранилища 6.2): строки пишет `replaceStoredMap`, а письма остаются как были.
