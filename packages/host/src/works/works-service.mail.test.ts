@@ -169,11 +169,8 @@ async function seedWork(title = 'A'): Promise<string> {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Служба запущена и успокоилась: хвост проходов старта (аренда, сверка) дошёл, счётчики и рассылки начинаются с нуля. */
-async function started(options: WorksServiceOptions = {}): Promise<WorksService> {
-  const created = createWorksService(fakeHost(), { debounceMs: 5, windowCounters: counters, ...options });
-  services.push(created);
-  await created.start();
+/** Полные проходы затихли: хвост проходов (аренда, сверка) дошёл, и следующий полный снимок вызовет только сам тест. */
+async function settled(): Promise<void> {
   let last = -1;
   await vi.waitFor(
     () => {
@@ -184,6 +181,14 @@ async function started(options: WorksServiceOptions = {}): Promise<WorksService>
     },
     { timeout: 10_000, interval: 300 },
   );
+}
+
+/** Служба запущена и успокоилась: хвост проходов старта (аренда, сверка) дошёл, счётчики и рассылки начинаются с нуля. */
+async function started(options: WorksServiceOptions = {}): Promise<WorksService> {
+  const created = createWorksService(fakeHost(), { debounceMs: 5, windowCounters: counters, ...options });
+  services.push(created);
+  await created.start();
+  await settled();
   broadcasts = [];
   counters.reset();
   return created;
@@ -522,6 +527,8 @@ describe('письма хоста: запись только писем', () => 
 
   it('письмо, прочитанное человеком в той же пачке, — не кандидат', async () => {
     const id = await seedWork();
+    // Давнее непрочитанное письмо с @human: набор событий — новые письма пачки, давнее в него не входит.
+    send(id, '@human, давнее письмо, ещё не прочитано');
     fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
     await started();
     const at = new Date().toISOString();
@@ -538,6 +545,8 @@ describe('письма хоста: запись только писем', () => 
 
     expect(event.rooms[0]?.reads).toEqual([{ id: readId, reader: HUMAN, at }]);
     expect(event.mentionCandidates.map((letter) => letter.text)).toEqual(['@human, ждёт ответа']);
+    expect(event.mentionCandidates.map((letter) => letter.text)).not.toContain('@human, давнее письмо, ещё не прочитано');
+    expect(unreadLetters(project, id, HUMAN).map((letter) => letter.text)).toContain('@human, давнее письмо, ещё не прочитано');
   });
 
   it('письмо, помеченное удалённым в той же пачке, — не кандидат', async () => {
@@ -619,7 +628,7 @@ describe('письма хоста: пачка не ждёт снимка веч�
     expect(mailOf(events('rooms.mail')[0]).rooms[0]?.letters.map((letter) => letter.text)).toEqual(['письмо за структурной записью']);
   });
 
-  it('проход, прочитавший работу без точной версии, больше не ждёт её запись: следующее письмо уходит пачкой в 50 мс, а не по потолку', async () => {
+  it('пачка за структурной записью, которой нет в снимке без версии, ждёт следующего снимка или MAIL_HOLD_MAX_MS', async () => {
     const id = await seedWork();
     fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
     const s = await started();
@@ -633,12 +642,16 @@ describe('письма хоста: пачка не ждёт снимка веч�
       current.work.goal = 'новая цель';
     });
     await vi.waitFor(() => expect(events('works.changed').length).toBeGreaterThanOrEqual(1), { timeout: 5000 });
+    // Позднее чтение прохода сняло бы пачку раньше срока: письмо ложится, когда проходов больше не будет.
+    await settled();
     expect(s.entry(project, id)?.version).toBeUndefined();
     const sentAt = Date.now();
     send(id, 'письмо после прохода без версии');
     await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: MAIL_HOLD_MAX_MS + 8000 });
 
-    expect(mailAt - sentAt).toBeLessThan(MAIL_HOLD_MAX_MS);
+    // Чтение без версии могло лечь до структурной записи: карта в снимке может её не содержать, и пачка не уходит за 50 мс.
+    expect(mailAt - sentAt).toBeGreaterThanOrEqual(MAIL_HOLD_MAX_MS - 50);
+    expect(mailOf(events('rooms.mail')[0]).rooms[0]?.letters.map((letter) => letter.text)).toEqual(['письмо после прохода без версии']);
   });
 });
 
@@ -693,7 +706,7 @@ describe('письма хоста: смешанная запись', () => {
   it('снимок раньше события: works.changed, потом rooms.mail с version не выше версии снимка; onMail после снимка', async () => {
     const id = await seedWork();
     fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
-    const s = await started();
+    const s = await started({ mailBatchMs: LONG_BATCH_MS });
     const changed = vi.fn();
     s.onChange(changed);
     let snapshotsAtNotice = -1;
@@ -774,7 +787,7 @@ describe('письма хоста: смешанная запись', () => {
   it('письмо за структурной записью без писем ждёт снимка с ней: works.changed раньше rooms.mail, версия снимка не ниже prevVersion', async () => {
     const id = await seedWork();
     fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
-    await started();
+    await started({ mailBatchMs: LONG_BATCH_MS });
 
     // Смена цели не несёт писем, письмо идёт за ней сразу: полный проход (75 мс наблюдателя и склейка) прочтёт обе записи позже
     // таймера пачки в 50 мс. Окно с версией до смены не должно получить событие с prevVersion после неё. Проход закрыт, пока
@@ -804,7 +817,7 @@ describe('письма хоста: смешанная запись', () => {
     const id = await seedWork();
     const old = fakeClient([COMPACT_WORKS_FEATURE]);
     const modern = fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
-    const s = await started();
+    const s = await started({ mailBatchMs: LONG_BATCH_MS });
     let injected = false;
     onBroadcast = (event) => {
       if (event !== 'works.changed' || injected) return;

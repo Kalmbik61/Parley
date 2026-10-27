@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { WINDOW_MENTION_MAX_BYTES } from '@parley/core';
+import { HUMAN, WINDOW_MENTION_MAX_BYTES } from '@parley/core';
 import type { Message } from '@parley/core';
 import type { RoomsMailEvent, RoomsMailRoom } from '@parley/protocol';
-import { MAIL_EVENT_MAX_BYTES, fitMailEvent } from './mail.js';
+import { MAIL_EVENT_MAX_BYTES, fitMailEvent, gluedMailEvent } from './mail.js';
 
 /**
  * Потолок кадра события `rooms.mail` (спека rooms.mail 6.6, ревью задачи 4): кадр целиком — `{"event":"rooms.mail","data":…}`
@@ -148,11 +148,65 @@ describe('fitMailEvent: потолок кадра', () => {
     expect(fitted.rooms[2]?.deleted).toEqual(['m-0001']);
   });
 
+  it('урезанная комната сохраняет отметки человека и удаления: уходят только отметки других читателей', () => {
+    const at = '2026-10-27T10:00:00.000Z';
+    const others = Array.from({ length: 6000 }, (_, n) => ({ id: `m-${String(n).padStart(4, '0')}`, reader: 's-01', at }));
+    const first = { id: 'm-9001', reader: HUMAN, at };
+    const second = { id: 'm-9002', reader: HUMAN, at };
+    // Отметки человека лежат среди чужих: порядок не должен решать, какие остаются.
+    const reads = [...others.slice(0, 3000), first, ...others.slice(3000), second];
+    const event = eventOf([room('r-01', { reads, deleted: ['m-9003'] })]);
+    expect(frame(event)).toBeGreaterThan(MAIL_EVENT_MAX_BYTES);
+
+    const fitted = fitMailEvent(event);
+
+    expect(frame(fitted)).toBeLessThanOrEqual(MAIL_EVENT_MAX_BYTES);
+    // Окно убирает кандидатов в упоминания только по этим отметкам и удалениям, а комнаты, которой оно не держит, ему не дочитать.
+    expect(fitted.rooms[0]).toMatchObject({ roomId: 'r-01', reads: [first, second], deleted: ['m-9003'], reread: true });
+  });
+
+  it('когда и отметок человека с удалениями слишком много, они уходят тоже: кадр держит потолок', () => {
+    const at = '2026-10-27T10:00:00.000Z';
+    const reads = Array.from({ length: 6000 }, (_, n) => ({ id: `m-${String(n).padStart(4, '0')}`, reader: HUMAN, at }));
+    const event = eventOf([room('r-01', { reads, deleted: ['m-9003'] }), room('r-02', { deleted: ['m-0001'] })]);
+    expect(frame(event)).toBeGreaterThan(MAIL_EVENT_MAX_BYTES);
+
+    const fitted = fitMailEvent(event);
+
+    expect(frame(fitted)).toBeLessThanOrEqual(MAIL_EVENT_MAX_BYTES);
+    expect(fitted.rooms[0]).toMatchObject({ roomId: 'r-01', reads: [], deleted: [], reread: true });
+    // Лёгкая комната режется лишь пока не влезло.
+    expect(fitted.rooms[1]).toMatchObject({ roomId: 'r-02', deleted: ['m-0001'] });
+    expect(fitted.rooms[1]?.reread).toBeUndefined();
+  });
+
   it('комната с reread от записи (массовая отметка) не платит за него дважды', () => {
     const event = eventOf([room('r-01', { reread: true, letters: [letter(1, 100)] })]);
 
     const fitted = fitMailEvent(event);
 
     expect(fitted.rooms[0]).toMatchObject({ reread: true, letters: [letter(1, 100)] });
+  });
+});
+
+describe('gluedMailEvent: склеенное событие для медленного клиента', () => {
+  it('склеенное событие сохраняет отметки человека и удаления: письма и отметки других читателей не едут, reread у каждой комнаты', () => {
+    const at = '2026-10-27T10:00:00.000Z';
+    const humanRead = { id: 'm-0002', reader: HUMAN, at };
+    const event = eventOf(
+      [
+        room('r-01', { letters: [letter(3, 100)], reads: [{ id: 'm-0001', reader: 's-01', at }, humanRead], deleted: ['m-0001'] }),
+        room('r-02', { reads: [{ id: 'm-0010', reader: 's-02', at }] }),
+      ],
+      [letter(3, 100, '@human')],
+    );
+
+    const glued = gluedMailEvent(event);
+
+    expect(glued.rooms[0]).toMatchObject({ roomId: 'r-01', letters: [], reads: [humanRead], deleted: ['m-0001'], reread: true });
+    expect(glued.rooms[1]).toMatchObject({ roomId: 'r-02', letters: [], reads: [], deleted: [], reread: true });
+    // Числа и кандидаты прежние: окну они нужны и по комнатам, которых оно не держит.
+    expect(glued.rooms[0]).toMatchObject({ prevTop: 1, top: 2, total: 2 });
+    expect(glued.mentionCandidates).toEqual(event.mentionCandidates);
   });
 });

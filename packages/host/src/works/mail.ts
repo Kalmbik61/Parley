@@ -63,12 +63,18 @@ export interface MailBatch {
   /**
    * Версия последней записи, которую пачка ждёт: структурной записи самой пачки или структурной записи этого процесса без
    * писем, лёгшей до пачки и ещё не разосланной снимком; 0 — ждать нечего. Такая пачка выходит после публикации снимка с этой
-   * версией: окно получает структуру (комнату, участников) раньше писем (спека 6.5, «смешанная запись»).
+   * версией: окно получает структуру (комнату, участников) раньше писем (спека 6.5, «смешанная запись»). Не позже
+   * `MAIL_HOLD_MAX_MS` от начала пачки: потолок выпускает её и без снимка, окно само держит событие по комнате, которой у него
+   * нет (спека 6.5).
    */
   structuralVersion: number;
   /** Когда началась пачка, мс (`Date.now()`): от этого момента считается `MAIL_HOLD_MAX_MS`. */
   startedAt: number;
-  /** Уведомления смешанных записей: подписчики узнают о них после публикации снимка, а не в момент коммита. */
+  /**
+   * Уведомления смешанных записей: подписчики узнают о них после публикации снимка, а не в момент коммита. Потолок
+   * `MAIL_HOLD_MAX_MS` выпускает их вместе с событием и до снимка; смешанная запись всё равно доходит до каждого подписчика
+   * через `onChange` после прохода, и подписчики, которым нужны письма, пересчитывают и по нему.
+   */
   notices: MailNotice[];
   journal: LetterJournal;
   timer: NodeJS.Timeout | undefined;
@@ -200,6 +206,8 @@ export function buildMailEvent(batch: MailBatch): RoomsMailEvent {
 }
 
 const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8');
+/** Отметка человека: по ней окно убирает письмо из набора кандидатов в упоминания. */
+const isHumanRead = (read: RoomsMailRoom['reads'][number]): boolean => read.reader === HUMAN;
 /** Кадр — это ещё `{"event":"rooms.mail","data":…}` и перевод строки. */
 const frameBytes = (data: RoomsMailEvent): number => jsonBytes({ event: 'rooms.mail', data }) + 1;
 /** Что добавляет к комнате признак `reread`, которого в ней не было: `,"reread":true`. */
@@ -208,7 +216,9 @@ const REREAD_BYTES = Buffer.byteLength(',"reread":true');
 /**
  * Событие под потолок кадра (`MAIL_EVENT_MAX_BYTES`, спека 6.6). Порядок, в котором кадр делится:
  * 1. каркас — комнаты без писем и без кандидатов, с отметками и удалениями. Не влез он сам (сотни тысяч отметок) —
- *    комнаты с самыми тяжёлыми отметками теряют их и получают `reread`, как у склеенного события;
+ *    комнаты с самыми тяжёлыми отметками теряют отметки других читателей и получают `reread`; отметки человека и `deleted`
+ *    остаются: по ним окно убирает кандидатов в упоминания, в том числе из комнат, которых оно не держит. Не влезло и так
+ *    (десятки тысяч отметок человека или удалений) — тогда уходят и они;
  * 2. кандидаты в упоминания — новые письма пачки: `buildMailEvent` уже собрал их под `WINDOW_MENTION_MAX_BYTES`; здесь они
  *    урезаются дальше, до остатка кадра, и только когда каркас оставил меньше потолка (редко); самые новые остаются, как и там;
  * 3. письма комнат по порядку, пока остаток влезает; письма комнаты, которой не хватило, не едут вовсе, и комната
@@ -224,6 +234,17 @@ export function fitMailEvent(event: RoomsMailEvent): RoomsMailEvent {
     const heavy = rooms
       .map((room, at) => ({ at, bytes: jsonBytes(room.reads) + jsonBytes(room.deleted) }))
       .sort((left, right) => right.bytes - left.bytes);
+    // Сначала уходят отметки других читателей: человека и удаления окну нужны, чтобы снять кандидатов (спека 6.3).
+    for (const { at } of heavy) {
+      if (size <= MAIL_EVENT_MAX_BYTES) break;
+      const room = rooms[at] as RoomsMailRoom;
+      const human = room.reads.filter(isHumanRead);
+      if (human.length === room.reads.length) continue;
+      const cut = { ...room, reads: human, reread: true as const };
+      size -= jsonBytes(room) - jsonBytes(cut);
+      rooms[at] = cut;
+    }
+    // Каркас всё ещё не влез: уходит и остальное, окну остаётся `reread` и ближайший снимок.
     for (const { at } of heavy) {
       if (size <= MAIL_EVENT_MAX_BYTES) break;
       const room = rooms[at] as RoomsMailRoom;
@@ -257,11 +278,12 @@ export function fitMailEvent(event: RoomsMailEvent): RoomsMailEvent {
 }
 
 /**
- * Склеенное событие для медленного клиента: письма и отметки не едут, каждая комната названа с `reread`, числа и версии
- * прежние — окно ставит их из события и дочитывает письма страницами, когда буфер освободится (спека 6.6). Кандидаты в
- * упоминания остаются: окну они нужны и по комнатам, которых оно не держит и не дочитает.
+ * Склеенное событие для медленного клиента: письма и отметки других читателей не едут, каждая комната названа с `reread`,
+ * числа и версии прежние — окно ставит их из события и дочитывает письма страницами, когда буфер освободится (спека 6.6).
+ * Кандидаты в упоминания остаются вместе с тем, что их снимает, — отметками человека и `deleted`: окно держит набор по
+ * работе, а комнаты, которых оно не держит, ему не дочитать.
  */
 export const gluedMailEvent = (event: RoomsMailEvent): RoomsMailEvent => ({
   ...event,
-  rooms: event.rooms.map((room) => ({ ...room, letters: [], reads: [], deleted: [], reread: true as const })),
+  rooms: event.rooms.map((room) => ({ ...room, letters: [], reads: room.reads.filter(isHumanRead), reread: true as const })),
 });
