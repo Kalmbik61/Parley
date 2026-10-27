@@ -32,6 +32,12 @@ export const MAIL_BATCH_MS = 50;
 export const MAIL_EVENT_MAX_BYTES = 256 * 1024;
 /** Клиент, у которого в буфере записи больше, считается медленным: ему уходит склеенное событие с `reread` (спека 6.6). */
 export const MAIL_SLOW_CLIENT_BYTES = 1024 * 1024;
+/**
+ * Сколько байт события отдано кандидатам в упоминания (`mentionCandidates`, спека 6.3): четверть кадра. Кандидаты — все
+ * нынешние непрочитанные человеком письма с `@human`, до `WINDOW_UNREAD_MAX`, каждое до 32 КиБ; без своего потолка они
+ * съедали бы кадр и оставляли новые письма без места. Сверх потолка не едут самые старые.
+ */
+export const MAIL_CANDIDATES_MAX_BYTES = 64 * 1024;
 
 /** Одна запись с письмами для подписчиков хоста (`WorksService.onMail`): по уведомлению на каждый коммит с непустым журналом. */
 export interface MailNotice {
@@ -54,8 +60,9 @@ export interface MailBatch {
   prevVersion: number;
   version: number;
   /**
-   * Версия последней записи пачки, которая меняла карту; 0 — были только письма. Такая пачка ждёт публикации снимка, который
-   * её включает: окно получает структуру (комнату, участников) раньше писем (спека 6.5, «смешанная запись»).
+   * Версия последней записи, которую пачка ждёт: структурной записи самой пачки или структурной записи этого процесса без
+   * писем, лёгшей до пачки и ещё не разосланной снимком; 0 — ждать нечего. Такая пачка выходит после публикации снимка с этой
+   * версией: окно получает структуру (комнату, участников) раньше писем (спека 6.5, «смешанная запись»).
    */
   structuralVersion: number;
   /** Уведомления смешанных записей: подписчики узнают о них после публикации снимка, а не в момент коммита. */
@@ -180,28 +187,69 @@ export function buildMailEvent(batch: MailBatch): RoomsMailEvent {
 }
 
 const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8');
+/** Кадр — это ещё `{"event":"rooms.mail","data":…}` и перевод строки. */
+const frameBytes = (data: RoomsMailEvent): number => jsonBytes({ event: 'rooms.mail', data }) + 1;
+/** Что добавляет к комнате признак `reread`, которого в ней не было: `,"reread":true`. */
+const REREAD_BYTES = Buffer.byteLength(',"reread":true');
 
 /**
- * Событие под потолок кадра (`MAIL_EVENT_MAX_BYTES`): комнаты по порядку берут свои письма, пока остаток влезает; письма
- * комнаты, которой не хватило, не едут вовсе, и комната получает `reread` — окно читает её страницей (спека 6.6). Комната
- * целиком, а не по частям: окно, получившее хвост письма без начала, держало бы дыру, а `reread` её закрывает.
+ * Событие под потолок кадра (`MAIL_EVENT_MAX_BYTES`, спека 6.6). Порядок, в котором кадр делится:
+ * 1. каркас — комнаты без писем и без кандидатов, с отметками и удалениями. Не влез он сам (сотни тысяч отметок) —
+ *    комнаты с самыми тяжёлыми отметками теряют их и получают `reread`, как у склеенного события;
+ * 2. кандидаты в упоминания — не больше `MAIL_CANDIDATES_MAX_BYTES` и не больше остатка, самые новые;
+ * 3. письма комнат по порядку, пока остаток влезает; письма комнаты, которой не хватило, не едут вовсе, и комната
+ *    получает `reread` — окно читает её страницей. Комната целиком, а не по частям: окно, получившее хвост письма без
+ *    начала, держало бы дыру, а `reread` её закрывает.
+ * Байты `,"reread":true` у комнат с письмами отложены заранее: кадр не вылезает за потолок на них.
  */
 export function fitMailEvent(event: RoomsMailEvent): RoomsMailEvent {
-  const bare = { ...event, rooms: event.rooms.map((room) => ({ ...room, letters: [] })) };
-  // Кадр — это ещё `{"event":"rooms.mail","data":…}` и перевод строки.
-  let budget = MAIL_EVENT_MAX_BYTES - jsonBytes({ event: 'rooms.mail', data: bare }) - 1;
-  let cut = false;
-  const rooms = event.rooms.map((room) => {
-    if (room.letters.length === 0) return room;
-    const size = jsonBytes(room.letters);
-    if (size <= budget) {
-      budget -= size;
-      return room;
+  const rooms: RoomsMailRoom[] = event.rooms.map((room) => ({ ...room, letters: [] }));
+  let size = frameBytes({ ...event, rooms, mentionCandidates: [] });
+
+  if (size > MAIL_EVENT_MAX_BYTES) {
+    const heavy = rooms
+      .map((room, at) => ({ at, bytes: jsonBytes(room.reads) + jsonBytes(room.deleted) }))
+      .sort((left, right) => right.bytes - left.bytes);
+    for (const { at } of heavy) {
+      if (size <= MAIL_EVENT_MAX_BYTES) break;
+      const room = rooms[at] as RoomsMailRoom;
+      if (room.reads.length === 0 && room.deleted.length === 0) continue;
+      const cut = { ...room, reads: [], deleted: [], reread: true as const };
+      size -= jsonBytes(room) - jsonBytes(cut);
+      rooms[at] = cut;
     }
-    cut = true;
-    return { ...room, letters: [], reread: true as const };
+  }
+
+  let budget = MAIL_EVENT_MAX_BYTES - size;
+  rooms.forEach((room, at) => {
+    if (room.reread !== true && (event.rooms[at] as RoomsMailRoom).letters.length > 0) budget -= REREAD_BYTES;
   });
-  return cut ? { ...event, rooms } : event;
+
+  // Кандидаты: новейшие подряд, пока влезают; `[]` в каркасе уже посчитан, поэтому в счёт идут сами письма и запятые между ними.
+  const candidates: Message[] = [];
+  let candidateBytes = 0;
+  const candidateLimit = Math.min(MAIL_CANDIDATES_MAX_BYTES, budget);
+  for (let at = event.mentionCandidates.length - 1; at >= 0; at -= 1) {
+    const candidate = event.mentionCandidates[at] as Message;
+    const bytes = jsonBytes(candidate) + (candidates.length > 0 ? 1 : 0);
+    if (candidateBytes + bytes > candidateLimit) break;
+    candidateBytes += bytes;
+    candidates.push(candidate);
+  }
+  candidates.reverse();
+  budget -= candidateBytes;
+
+  const fitted = rooms.map((room, at) => {
+    const letters = (event.rooms[at] as RoomsMailRoom).letters;
+    if (letters.length === 0) return room;
+    const bytes = jsonBytes(letters) - jsonBytes([]);
+    if (bytes <= budget) {
+      budget -= bytes;
+      return { ...room, letters };
+    }
+    return { ...room, reread: true as const };
+  });
+  return { ...event, rooms: fitted, mentionCandidates: candidates };
 }
 
 /**

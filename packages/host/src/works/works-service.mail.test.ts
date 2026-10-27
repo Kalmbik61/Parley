@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -29,6 +30,7 @@ import type { HostContext } from '../context.js';
 import { createWindowCounters } from '../health/window-counters.js';
 import { createWorksService } from './works-service.js';
 import type { WorksService } from './works-service.js';
+import { MAIL_CANDIDATES_MAX_BYTES, MAIL_EVENT_MAX_BYTES } from './mail.js';
 import type { MailNotice } from './mail.js';
 
 // Шпион кодировщика кадров: в хосте им кодируется каждый кадр клиенту, и событие писем должно кодироваться один раз.
@@ -50,6 +52,8 @@ let services: WorksService[] = [];
 let clients: FakeClient[] = [];
 let broadcasts: Array<{ event: EventName; data: unknown; to: string[]; line: string | undefined }> = [];
 let warnings: string[] = [];
+/** Вызывается из `broadcast` после раздачи: тест может записать письмо в середине публикации снимка. */
+let onBroadcast: ((event: EventName) => void) | undefined;
 const counters = createWindowCounters();
 
 interface FakeClient extends Client {
@@ -90,6 +94,7 @@ function fakeHost(): HostContext {
       const to = clients.filter((client) => only === undefined || only(client));
       broadcasts.push({ event, data: data as EventData<EventName>, to: to.map((client) => client.id), line: encoded });
       for (const client of to) client.send({ event, data });
+      onBroadcast?.(event);
     },
     onShutdown: () => {},
     shutdown: async () => {},
@@ -105,6 +110,7 @@ beforeEach(async () => {
   clients = [];
   broadcasts = [];
   warnings = [];
+  onBroadcast = undefined;
   counters.reset();
   vi.mocked(encodeLine).mockClear();
 });
@@ -159,6 +165,20 @@ function send(workId: string, text: string, roomId: string | null = 'r-01', from
   writeLetters(project, workId, (letters) => {
     letters.add({ kind: 'note', from, to: [], roomId, text });
   });
+}
+
+/** Чужая запись: второе соединение с базой правит `work.goal` и поднимает версию, как `updateMap` в другом процессе (CLI, MCP агента). */
+function foreignGoal(workId: string, goal: string): void {
+  const { DatabaseSync: Database } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+  const foreign = new Database(path.join(home, 'parley.db'));
+  try {
+    const row = foreign.prepare('SELECT work_json FROM works WHERE project_path = ? AND id = ?').get(project, workId) as { work_json: string };
+    const work = JSON.parse(row.work_json) as { goal: string };
+    work.goal = goal;
+    foreign.prepare('UPDATE works SET work_json = ?, version = version + 1 WHERE project_path = ? AND id = ?').run(JSON.stringify(work), project, workId);
+  } finally {
+    foreign.close();
+  }
 }
 
 describe('письма хоста: запись только писем', () => {
@@ -423,6 +443,29 @@ describe('письма хоста: запись только писем', () => 
     expect(legacy.entries[0]?.map.messages.map((letter) => letter.text)).toContain('письмо');
     expect(legacy.entries[0]?.map.compact).toBeUndefined();
   });
+
+  it('кандидаты в упоминания не съедают кадр: у них свой потолок, новое письмо едет письмом, а не reread', async () => {
+    const id = await seedWork();
+    // Семьдесят непрочитанных человеком писем с @human по 4 КиБ: вместе выше потолка кадра.
+    writeLetters(project, id, (letters) => {
+      for (let i = 0; i < 70; i += 1) letters.add({ kind: 'note', from: 's-02', to: [], roomId: 'r-01', text: `@human ${i}: ${'x'.repeat(4000)}` });
+    });
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    await started();
+
+    send(id, 'новое письмо для @human');
+    await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: 5000 });
+    const item = events('rooms.mail')[0]!;
+    const event = mailOf(item);
+
+    expect(Buffer.byteLength(item.line ?? '')).toBeLessThanOrEqual(MAIL_EVENT_MAX_BYTES);
+    expect(event.rooms[0]?.reread).toBeUndefined();
+    expect(event.rooms[0]?.letters.map((letter) => letter.text)).toEqual(['новое письмо для @human']);
+    expect(event.mentionCandidates.length).toBeGreaterThan(0);
+    expect(event.mentionCandidates.length).toBeLessThan(71);
+    expect(Buffer.byteLength(JSON.stringify(event.mentionCandidates))).toBeLessThanOrEqual(MAIL_CANDIDATES_MAX_BYTES + 2);
+    expect(event.mentionCandidates.at(-1)?.text).toBe('новое письмо для @human');
+  });
 });
 
 describe('письма хоста: окна без признака', () => {
@@ -548,6 +591,84 @@ describe('письма хоста: смешанная запись', () => {
       () => expect(s.windowSnapshot()?.entries[0]?.map.messages.map((letter) => letter.text)).toContain('письмо сразу за записью карты'),
       { timeout: 5000 },
     );
+  });
+
+  it('письмо за структурной записью без писем ждёт снимка с ней: works.changed раньше rooms.mail, версия снимка не ниже prevVersion', async () => {
+    const id = await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    await started();
+
+    // Смена цели не несёт писем, письмо идёт за ней сразу: полный проход (75 мс наблюдателя и склейка) прочтёт обе записи позже
+    // таймера пачки в 50 мс. Окно с версией до смены не должно получить событие с prevVersion после неё.
+    await updateMap(project, id, (current) => {
+      current.work.goal = 'новая цель';
+    });
+    send(id, 'письмо за сменой цели');
+    await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: 5000 });
+    await sleep(300);
+
+    const order = broadcasts.map((item) => item.event);
+    expect(order.indexOf('works.changed')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('works.changed')).toBeLessThan(order.indexOf('rooms.mail'));
+    const snapshot = events('works.changed')[0]?.data as WorksSnapshot;
+    const event = mailOf(events('rooms.mail')[0]);
+    expect(snapshot.entries[0]?.map.work.goal).toBe('новая цель');
+    expect(snapshot.entries[0]?.version).toBeGreaterThanOrEqual(event.prevVersion);
+    expect(snapshot.entries[0]?.version).toBeLessThanOrEqual(event.version);
+    expect(event.rooms[0]?.letters.map((letter) => letter.text)).toEqual(['письмо за сменой цели']);
+    expect(events('rooms.mail')).toHaveLength(1);
+  });
+
+  it('письмо, записанное после чтения прохода, но до выхода снимка: пачка выходит за снимком и обновляет и окно без признака', async () => {
+    const id = await seedWork();
+    const old = fakeClient([COMPACT_WORKS_FEATURE]);
+    const modern = fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const s = await started();
+    let injected = false;
+    onBroadcast = (event) => {
+      if (event !== 'works.changed' || injected) return;
+      injected = true;
+      send(id, 'после чтения прохода');
+    };
+
+    await updateMap(project, id, (current) => {
+      current.work.goal = 'новая цель';
+    });
+    send(id, 'письмо за сменой цели');
+    await vi.waitFor(() => expect(events('rooms.mail')).toHaveLength(1), { timeout: 5000 });
+    await sleep(300);
+
+    const order = broadcasts.map((item) => item.event);
+    expect(order.indexOf('works.changed')).toBeLessThan(order.indexOf('rooms.mail'));
+    const event = mailOf(events('rooms.mail')[0]);
+    expect(events('rooms.mail')[0]?.to).toEqual([modern.id]);
+    expect(event.rooms[0]?.letters.map((letter) => letter.text)).toEqual(['письмо за сменой цели', 'после чтения прохода']);
+    // Окно без признака: снимок прохода ушёл без позднего письма, следом ушла перечитанная работа с ним.
+    const forOld = events('works.changed').filter((item) => item.to.includes(old.id));
+    expect(forOld.length).toBeGreaterThanOrEqual(2);
+    const lastTail = (forOld.at(-1)?.data as WorksSnapshot).entries[0]?.map.messages.map((letter) => letter.text);
+    expect(lastTail).toContain('после чтения прохода');
+    expect((forOld[0]?.data as WorksSnapshot).entries[0]?.map.messages.map((letter) => letter.text)).not.toContain('после чтения прохода');
+    expect(s.entry(project, id)?.version).toBe(workVersion(project, id));
+    expect(event.version).toBe(workVersion(project, id));
+  });
+
+  it('чужая структурная запись перед письмом не попадает в запись сервиса раньше прохода: onChange видит переход', async () => {
+    const id = await seedWork();
+    fakeClient([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const s = await started();
+    const goals: Array<[string | undefined, string | undefined]> = [];
+    s.onChange((snapshot, previous) => goals.push([previous.entries[0]?.map.work.goal, snapshot.entries[0]?.map.work.goal]));
+
+    // Чужую запись этот процесс не видит событием хранилища; письмо после неё идёт с prevVersion чужой записи.
+    foreignGoal(id, 'чужая цель');
+    send(id, 'письмо за чужой записью');
+    await vi.waitFor(() => expect(goals.length).toBeGreaterThanOrEqual(1), { timeout: 5000 });
+    await sleep(300);
+
+    expect(goals[0]).toEqual(['цель', 'чужая цель']);
+    expect(s.entry(project, id)?.map.work.goal).toBe('чужая цель');
+    expect(s.entry(project, id)?.version).toBe(workVersion(project, id));
   });
 
   it('запись, менявшая карту, — works.changed и onChange; письма событием не идут', async () => {

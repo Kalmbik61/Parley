@@ -349,7 +349,11 @@ export function createWorksService(
     }
 
     publishLegacy(toLegacy);
-    if (only === undefined) releaseMail();
+    if (only === undefined) {
+      published.clear();
+      for (const [key, work] of entries) if (work.version !== undefined) published.set(key, work.version);
+      releaseMail();
+    }
   }
 
   function publishLegacy(to: (client: Client) => boolean): void {
@@ -492,11 +496,14 @@ export function createWorksService(
   /** Пачки писем по работам, ждущие рассылки (спека rooms.mail 6.6): одна пачка на работу, живёт `MAIL_BATCH_MS`. */
   const batches = new Map<string, MailBatch>();
   /**
-   * Работа → версия последней записи этого процесса, менявшей карту, которую запись сервиса ещё не прочла: полный проход
-   * впереди (её запросил `watchWorks`). Пока он не прошёл, запись сервиса не трогаем — иначе `refreshPass` взял бы
-   * `previous` уже с этой записью, и подписчики `onChange` не увидели бы разницу.
+   * Работа → версия последней записи этого процесса, менявшей карту; запись сервиса может её ещё не содержать: полный проход
+   * впереди (его запросил `watchWorks`). Письма, записанные после неё, уходят окнам с признаком только после снимка с этой
+   * структурой — иначе окно с прежней версией получило бы `prevVersion`, которой не держит (спека 6.5). Устаревшие записи
+   * убирает `pendingStructural`.
    */
   const mapAhead = new Map<string, number>();
+  /** Работа → версия, с которой её последний раз разослал полный `publish`: запись сервиса меняется в начале прохода, а снимок уходит позже. */
+  const published = new Map<string, number>();
   const mailListeners = new Set<(mail: MailNotice) => void>();
   let unsubscribeWritten: (() => void) | undefined;
 
@@ -510,36 +517,50 @@ export function createWorksService(
     }
   }
 
+  /** Версия структурной записи этого процесса, которой в уже разосланном снимке ещё нет; `undefined` — окна её видели. */
+  function pendingStructural(key: string): number | undefined {
+    const ahead = mapAhead.get(key);
+    if (ahead === undefined) return undefined;
+    const held = published.get(key);
+    if (held !== undefined && held >= ahead) {
+      mapAhead.delete(key);
+      return undefined;
+    }
+    return ahead;
+  }
+
   /**
    * Запись работы в сервисе после записи только писем: версия и `updatedAt` свежие, кэш снимка этой работы пересоберётся по
    * новой версии, номер рассылки растёт (спека rooms.mail 6.10). Ни веток, ни живости, ни аренд: от письма они не меняются,
    * и полный проход не нужен. `true` — запись заменена.
+   *
+   * Перечитывает только при непрерывности версий: запись сервиса не старше начала пачки и уже содержит её структурные записи,
+   * а работа в базе — ровно на версии пачки. Иначе между записью сервиса и пачкой лежит запись, которой полный проход ещё не
+   * видел (структурная этого процесса, чужая), — перечитав, мы втянули бы её в запись сервиса, `previous` следующего прохода
+   * уже нёс бы её, и подписчики `onChange` (будильник, Telegram, активность) никогда не увидели бы переход. Тогда письма
+   * дойдут до окон без признака вместе с этим проходом.
    */
-  function refreshEntry(projectPath: string, workId: string): boolean {
+  function refreshEntry(batch: MailBatch): boolean {
+    const { projectPath, workId } = batch;
     const key = workKey(projectPath, workId);
     const current = entries.get(key);
-    // Работы нет в списке сервиса (её создание или первое чтение ещё впереди): обновит полный проход.
-    if (current === undefined) return false;
-    const ahead = mapAhead.get(key);
-    if (ahead !== undefined) {
-      // Карту менял структурный коммит, которого в записи сервиса ещё нет: письма уйдут вместе с полным проходом.
-      if (current.version === undefined || current.version < ahead) return false;
-      mapAhead.delete(key);
-    }
+    // Работы нет в списке сервиса (её создание или первое чтение ещё впереди) или у записи нет точной версии: обновит полный проход.
+    if (current?.version === undefined) return false;
+    // Запись сервиса уже не старше: полный проход прочёл работу после письма и разослал её всем окнам.
+    if (current.version >= batch.version) return false;
+    if (current.version < batch.prevVersion || current.version < batch.structuralVersion) return false;
     let fresh: WorkEntry;
     try {
       const before = workVersion(projectPath, workId);
-      if (before === undefined) return false;
+      if (before !== batch.version) return false;
       const map = viewMap(projectPath, workId, (view) => structuredClone(view) as WorkMap);
       // Версия — до карты и после неё, как в `reconcileLiveness`: совпали — номер точен.
-      const exact = workVersion(projectPath, workId) === before;
-      fresh = { projectPath, map, ...(exact ? { version: before } : {}) };
+      if (workVersion(projectPath, workId) !== before) return false;
+      fresh = { projectPath, map, version: before };
     } catch (error) {
       if (!(error instanceof WorkNotFoundError)) host.log.warn('письма: запись работы не перечиталась', { workId, error: String(error) });
       return false;
     }
-    // Запись сервиса уже не старше: полный проход прочёл работу после письма и разослал её всем окнам.
-    if (current.version !== undefined && fresh.version !== undefined && fresh.version <= current.version) return false;
     entries.set(key, fresh);
     // Следующий полный проход берёт список `latest`: без этого он вернул бы запись к версии, прочитанной до письма.
     const at = latest.findIndex((work) => work.projectPath === projectPath && work.map.work.id === workId);
@@ -578,7 +599,7 @@ export function createWorksService(
     if (batch.timer !== undefined) clearTimeout(batch.timer);
     try {
       for (const mail of batch.notices) notify(mail);
-      const refreshed = batch.structuralVersion === 0 && refreshEntry(batch.projectPath, batch.workId);
+      const refreshed = refreshEntry(batch);
       try {
         sendMail(batch);
       } catch (error) {
@@ -613,6 +634,7 @@ export function createWorksService(
       if (gone?.timer !== undefined) clearTimeout(gone.timer);
       batches.delete(key);
       mapAhead.delete(key);
+      published.delete(key);
       return;
     }
     // Запись без признака `structural` (создание работы, замена карты) считается структурной, как у `watchWorks`.
@@ -633,7 +655,13 @@ export function createWorksService(
     joinBatch(batch, { version: event.version, journal, structural });
     // Запись только писем — подписчикам сразу; смешанная ждёт снимка, в котором есть её структура.
     if (structural) batch.notices.push(mail);
-    else notify(mail);
+    else {
+      // Структурная запись без писем (статус, план) ещё не в записи сервиса: письма за ней ждут снимка с ней, как смешанная
+      // пачка, иначе окно получило бы событие раньше снимка и увидело разрыв по версии.
+      const ahead = pendingStructural(key);
+      if (ahead !== undefined) batch.structuralVersion = Math.max(batch.structuralVersion, ahead);
+      notify(mail);
+    }
     if (batch.timer === undefined) {
       const waiting = batch;
       waiting.timer = setTimeout(() => {
