@@ -1076,11 +1076,11 @@ describe('assistant-service: род голоса (G1)', () => {
   it('без voiceGender в зеркале (и без зеркала) — род female', async () => {
     const service = prompted();
     await service.ask(ASK);
-    expect(systemPrompt(0)).toContain('you speak as a female assistant');
+    expect(systemPrompt(0)).toContain('You speak as a female assistant');
     await answered(service, 0);
     service.configure(MIRROR);
     await service.ask({ ...ASK, text: 'дальше' });
-    expect(systemPrompt(1)).toContain('you speak as a female assistant');
+    expect(systemPrompt(1)).toContain('You speak as a female assistant');
     expect(turns[1]?.spec.args[1]).toBe('дальше');
   });
 
@@ -1088,7 +1088,7 @@ describe('assistant-service: род голоса (G1)', () => {
     const service = prompted();
     service.configure({ ...MIRROR, voiceGender: 'neutral' });
     await service.ask(ASK);
-    expect(systemPrompt(0)).toContain('you speak as a neutral assistant');
+    expect(systemPrompt(0)).toContain('Your voice has no grammatical gender');
   });
 
   it('смена рода в живом разговоре — следующий ход любого происхождения получает строку, разговор тот же', async () => {
@@ -1099,7 +1099,7 @@ describe('assistant-service: род голоса (G1)', () => {
     service.configure({ ...MIRROR, voiceGender: 'male' });
     await service.ask({ ...ASK, text: 'что нового?' }, 'telegram');
     expect(turns[1]?.spec.args.slice(0, 4)).toEqual(['-p', '[system: voice changed — speak as male]\nчто нового?', '--resume', 'sid-1']);
-    expect(systemPrompt(1)).toContain('you speak as a male assistant');
+    expect(systemPrompt(1)).toContain('You speak as a male assistant');
     await answered(service, 1);
     await service.ask({ ...ASK, text: 'а сейчас?' });
     expect(turns[2]?.spec.args[1]).toBe('а сейчас?');
@@ -1113,7 +1113,7 @@ describe('assistant-service: род голоса (G1)', () => {
     service.configure({ ...MIRROR, voiceGender: 'male' });
     await service.ask({ ...ASK, text: 'что нового?' }, 'telegram');
     expect(turns[1]?.spec.args[1]).toBe('что нового?');
-    expect(systemPrompt(1)).toContain('you speak as a male assistant');
+    expect(systemPrompt(1)).toContain('You speak as a male assistant');
   });
 
   it('смена рода без живого разговора — строки нет: новый разговор начнётся с нового рода', async () => {
@@ -1124,7 +1124,7 @@ describe('assistant-service: род голоса (G1)', () => {
     service.configure({ ...MIRROR, voiceGender: 'male' });
     await service.ask({ ...ASK, text: 'привет' });
     expect(turns[1]?.spec.args[1]).toBe('привет');
-    expect(systemPrompt(1)).toContain('you speak as a male assistant');
+    expect(systemPrompt(1)).toContain('You speak as a male assistant');
   });
 
   it('строка рода и заметка о карточке идут вместе', async () => {
