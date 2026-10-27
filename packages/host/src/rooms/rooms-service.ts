@@ -10,11 +10,9 @@
  * допускает. Сбой записи (лок, диск) остаётся своим кодом.
  */
 
-import { existsSync } from 'node:fs';
 import { resolveAutonomousProposal } from './autonomous-engine.js';
 import {
   addMember,
-  addMessage,
   addRoom,
   addRoomArchivedLetters,
   addRoomOriginMessage,
@@ -42,7 +40,8 @@ import {
   setRoomLead,
   setRoomOwner,
   updateMap,
-  workPaths,
+  workExists,
+  writeLetters,
   type MessageVia,
   type Room,
   type WorkMap,
@@ -58,7 +57,7 @@ const bad = (message: string): HostError => new HostError('bad_request', message
  * как `internal`, хотя ошибся запрос, а не хост.
  */
 function assertWork(projectPath: string, workId: string): void {
-  if (!existsSync(workPaths(projectPath, workId).map)) throw bad(`workspace ${workId} does not exist`);
+  if (!workExists(projectPath, workId)) throw bad(`workspace ${workId} does not exist`);
 }
 
 /** Сессия есть в карте и не закрыта — закрытая писем не получает (спека 7.1). */
@@ -101,7 +100,7 @@ function openRoom(map: WorkMap, roomId: string): Room {
 export async function createHumanRoom(input: Params<'rooms.create'>): Promise<string> {
   assertWork(input.projectPath, input.workId);
   let roomId = '';
-  await updateMap(input.projectPath, input.workId, (map) => {
+  await updateMap(input.projectPath, input.workId, (map, letters) => {
     // Человек — участник всегда и в список не пишется (спека 6.1); повторы схлопнуты.
     const members = [...new Set(input.members)].filter((id) => id !== HUMAN);
     if (members.length === 0) throw bad('a room needs at least one session');
@@ -132,13 +131,13 @@ export async function createHumanRoom(input: Params<'rooms.create'>): Promise<st
     if (room.recipe != null && map.sessions.find((session) => session.id === lead)?.lifecycle === 'pending') {
       room.recipeLeadNotified = lead;
     }
-    for (const id of members) leaveOtherRooms(map, id, room.id, room.createdAt);
+    for (const id of members) leaveOtherRooms(map, letters, id, room.id, room.createdAt);
     roomId = room.id;
-    if (origin !== undefined) addRoomOriginMessage(map, room.id, origin);
+    if (origin !== undefined) addRoomOriginMessage(map, letters, room.id, origin);
     if (input.quiet !== true) {
       const notice = joinNotice(room, map);
       for (const id of members) {
-        addMessage(map, { from: HUMAN, to: [id], roomId: room.id, kind: 'note', text: notice });
+        letters.add({ from: HUMAN, to: [id], roomId: room.id, kind: 'note', text: notice });
       }
     }
   });
@@ -156,10 +155,10 @@ class NothingToDeliver extends Error {}
 export async function deliverRecipeToNewLeads(projectPath: string, map: WorkMap): Promise<void> {
   if (!recipeLeadsPending(map)) return;
   try {
-    await updateMap(projectPath, map.work.id, (current) => {
+    await updateMap(projectPath, map.work.id, (current, letters) => {
       // Снимок хоста мог отстать: под локом уже могло быть сделано — карту не переписываем впустую.
       if (!recipeLeadsPending(current)) throw new NothingToDeliver();
-      reconcileRecipeLeads(current);
+      reconcileRecipeLeads(current, letters);
     });
   } catch (error) {
     if (!(error instanceof NothingToDeliver)) throw error;
@@ -173,8 +172,8 @@ export async function deliverRecipeToNewLeads(projectPath: string, map: WorkMap)
 export async function sendHumanLetter(input: Params<'rooms.send'>, options: { via?: MessageVia } = {}): Promise<string> {
   const { projectPath, workId, roomId, to, text, kind } = input;
   assertWork(projectPath, workId);
-  let messageId = '';
-  await updateMap(projectPath, workId, (map) => {
+  // Письмо человека — только письма, без разбора карты (спека хранилища 6.2): `writeLetters` кладёт одну строку.
+  return writeLetters(projectPath, workId, (letters, map) => {
     if (roomId !== null) {
       // Нет комнаты или она в архиве — `bad_request`: писать в архивную нельзя, пока человек не вернёт её (`rooms.reopen`).
       const room = openRoom(map, roomId);
@@ -182,7 +181,7 @@ export async function sendHumanLetter(input: Params<'rooms.send'>, options: { vi
         if (!isMember(room, id)) throw bad(`session ${id} is not a participant of room ${roomId}`);
         assertDeliverable(map, id);
       }
-      messageId = addMessage(map, {
+      return letters.add({
         from: HUMAN,
         to,
         text,
@@ -190,21 +189,20 @@ export async function sendHumanLetter(input: Params<'rooms.send'>, options: { vi
         roomId,
         ...(options.via === undefined ? {} : { via: options.via }),
       }).id;
-      return;
     }
 
     if (to.length !== 1) throw bad('without a room, exactly one addressee in to is required');
     const target = to[0] as string;
     assertDeliverable(map, target);
-    messageId = addMessage(map, {
+    return letters.add({
       from: HUMAN,
       to: [target],
       text,
       kind,
+      roomId: null,
       ...(options.via === undefined ? {} : { via: options.via }),
     }).id;
   });
-  return messageId;
 }
 
 /**
@@ -218,9 +216,9 @@ export async function addRoomMember(input: Params<'rooms.addMember'>): Promise<s
   const { projectPath, workId, roomId, sessionId } = input;
   assertWork(projectPath, workId);
   let messageId = '';
-  await updateMap(projectPath, workId, (map) => {
+  await updateMap(projectPath, workId, (map, letters) => {
     try {
-      messageId = addMember(map, roomId, sessionId).id;
+      messageId = addMember(map, letters, roomId, sessionId).id;
     } catch (error) {
       throw asHostError(error);
     }
@@ -232,7 +230,7 @@ export async function addRoomMember(input: Params<'rooms.addMember'>): Promise<s
  * Ответ человека на решение ведущего (`rooms.resolveProposal`). Устаревший `proposalId` —
  * `conflict`: карточку успели принять, вернуть или заменить. То же при `rev`, если он не
  * совпал с нынешним: ведущий заменил текст (`id` тот же), пока человек смотрел на прежнюю
- * версию. Проверка и запись идут под одним `map.lock`, поэтому два `Accept` подряд не пишут
+ * версию. Проверка и запись идут одной транзакцией базы, поэтому два `Accept` подряд не пишут
  * сообщения дважды: второй видит уже пустой слот. Возвращает id сообщения `decision`
  * (`accept`) или письма ведущему (`return`).
  */
@@ -241,13 +239,13 @@ export async function resolveRoomProposal(input: Params<'rooms.resolveProposal'>
   const rate = (await loadConfig()).config.messageRate ?? DEFAULT_CONFIG.messageRate;
   assertWork(projectPath, workId);
   let messageId = '';
-  await updateMap(projectPath, workId, (map) => {
+  await updateMap(projectPath, workId, (map, letters) => {
     try {
       const completion = map.rooms.find(row => row.id === roomId)?.proposal;
-      messageId = resolveAutonomousProposal(map, roomId, proposalId, action, { note, rev, ...(planId === undefined ? {} : { planId }), ...(planRev === undefined ? {} : { planRev }) });
+      messageId = resolveAutonomousProposal(map, letters, roomId, proposalId, action, { note, rev, ...(planId === undefined ? {} : { planId }), ...(planRev === undefined ? {} : { planRev }) });
       if (action === 'return' && completion?.kind === 'completion')
-        capturePlanNotice(map, roomId, 'completion-returned', messageId, completion.planId);
-      reservePlanEffects(map, rate);
+        capturePlanNotice(map, letters, roomId, 'completion-returned', messageId, completion.planId);
+      reservePlanEffects(map, letters, rate);
     } catch (error) {
       throw asHostError(error);
     }
@@ -320,13 +318,13 @@ export async function setHumanRoomLead(input: Params<'rooms.setLead'>): Promise<
   const { projectPath, workId, roomId, sessionId } = input;
   assertWork(projectPath, workId);
   let messageId = '';
-  await updateMap(projectPath, workId, (map) => {
+  await updateMap(projectPath, workId, (map, letters) => {
     try {
-      messageId = setRoomLead(map, roomId, sessionId).line.id;
+      messageId = setRoomLead(map, letters, roomId, sessionId).line.id;
     } catch (error) {
       throw asHostError(error);
     }
-    reconcileRecipeLeads(map);
+    reconcileRecipeLeads(map, letters);
   });
   return messageId;
 }
@@ -344,9 +342,9 @@ export async function setHumanRoomLead(input: Params<'rooms.setLead'>): Promise<
 export async function deleteHumanRoom(input: Params<'rooms.delete'>): Promise<void> {
   const { projectPath, workId, roomId } = input;
   assertWork(projectPath, workId);
-  await updateMap(projectPath, workId, (map) => {
+  await updateMap(projectPath, workId, (map, letters) => {
     try {
-      deleteRoom(map, roomId);
+      deleteRoom(map, letters, roomId);
     } catch (error) {
       throw asHostError(error);
     }
@@ -381,13 +379,14 @@ export async function archiveHumanRoom(
   await updateMap(
     projectPath,
     workId,
-    (map) => {
+    (map, letters) => {
       try {
-        const orphans = archiveRoom(map, roomId);
+        const orphans = archiveRoom(map, letters, roomId);
         live = orphans.map(refOf).filter((ref) => sessions.live(ref));
         if (!stopSessions) {
           addRoomArchivedLetters(
             map,
+            letters,
             roomId,
             live.map((ref) => ref.sessionId),
           );
@@ -416,9 +415,9 @@ export async function reopenHumanRoom(input: Params<'rooms.reopen'>): Promise<vo
   await updateMap(
     projectPath,
     workId,
-    (map) => {
+    (map, letters) => {
       try {
-        reopenRoom(map, roomId);
+        reopenRoom(map, letters, roomId);
       } catch (error) {
         throw asHostError(error);
       }

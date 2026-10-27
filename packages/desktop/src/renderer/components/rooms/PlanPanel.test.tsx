@@ -9,7 +9,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import type { RoomPlan, WorkEntry } from "@parley/core";
+import type { RoomPlan, WindowWorkEntry } from "@parley/core";
 import { PlanPanel, RoomModeControl } from "./PlanPanel.js";
 import { useHostStore } from "../../store/host.js";
 import { createFakeBridge } from "../../test-utils/fake-bridge.js";
@@ -55,7 +55,7 @@ const planOf = (patch: Partial<RoomPlan> = {}): RoomPlan => ({
   ],
   ...patch,
 });
-const entryOf = (plan = planOf()): WorkEntry => {
+const entryOf = (plan = planOf()): WindowWorkEntry => {
   const entry = makeWork("w-01", {
     projectPath: "/tmp/one",
     sessions: [makeSession("s-01", "Builder")],

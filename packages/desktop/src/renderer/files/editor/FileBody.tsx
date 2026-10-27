@@ -20,7 +20,7 @@
 
 import { Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import type { FileRoot } from '../../../shared/files-types.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
@@ -53,7 +53,7 @@ const FALLBACK_FONT = { family: 'Menlo, monospace', size: 13 };
 export interface FileBodyProps {
   bridge: ParleyBridge;
   workKey: string;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   tab: Extract<TabSpec, { kind: 'file' }>;
   onClose(): void;
   /** Шрифт терминала (дополнение плана): редактору — он же минус 1 (спека 10.4). */

@@ -9,7 +9,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
-import type { WorkEntry, WorktreeDiff } from '@parley/core';
+import type { WindowWorkEntry, WorktreeDiff } from '@parley/core';
 import type { SendResult } from '@parley/protocol';
 import type { DiffFile, FileRoot, TextFile } from '../../shared/files-types.js';
 import type { TabSpec } from '../../shared/layout-types.js';
@@ -91,7 +91,7 @@ function diff(files: DiffFile[]): WorktreeDiff {
   };
 }
 
-function work(title = 'w-a'): WorkEntry {
+function work(title = 'w-a'): WindowWorkEntry {
   return makeWork('w-a', {
     projectPath: '/tmp/proj',
     title,

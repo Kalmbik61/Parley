@@ -6,7 +6,8 @@ import { captureDecisionJournal } from './decision-journal.js';
  * хоста). Обе функции меняют карту в памяти — вызывающий держит их внутри `updateMap`.
  */
 
-import { addMessage, maxNumber } from './map.js';
+import type { LetterTx } from './letter-store.js';
+import { maxNumber } from './map.js';
 import { addSystemMessage, isRoomClosed, liveLead, requireOpenRoom, RoomRuleError } from './rooms.js';
 import { acceptRoomPlan, completeRoomPlan, requirePlanLead, planItemsComplete, PlanConflictError } from './plans.js';
 import { proposedRoomPlan } from './plans.js';
@@ -144,6 +145,7 @@ export interface ResolveOptions {
  */
 export function resolveProposal(
   map: WorkMap,
+  letters: LetterTx,
   roomId: string,
   proposalId: string,
   action: 'accept' | 'return',
@@ -168,7 +170,7 @@ export function resolveProposal(
     if (proposal.kind === 'completion') {
       if (planId === undefined || planRev === undefined) throw new PlanConflictError();
       completeRoomPlan(map, planId, planRev, action, proposal.text, at);
-    } else if (action === 'accept' && proposal.plan) acceptRoomPlan(map, proposal.plan, at);
+    } else if (action === 'accept' && proposal.plan) acceptRoomPlan(map, letters, proposal.plan, at);
     room = roomOf(map, roomId);
   }
   const lead = liveLead(map, room) ?? proposal.from;
@@ -177,23 +179,33 @@ export function resolveProposal(
     room.proposal = null;
     const remark = (options.note ?? '').trim();
     const text = remark === '' ? `${RETURNED_LETTER}.` : `${RETURNED_LETTER}: ${remark}`;
-    const letter = addMessage(map, { from: HUMAN, to: [proposal.kind === 'completion' ? HUMAN : lead], roomId, kind: 'note', text }, at);
-    if (proposal.kind === 'completion') letter.readBy[HUMAN] = at;
+    const letter = letters.add({
+      from: HUMAN,
+      to: [proposal.kind === 'completion' ? HUMAN : lead],
+      roomId,
+      kind: 'note',
+      text,
+      at,
+      ...(proposal.kind === 'completion' ? { readBy: { [HUMAN]: at } } : {}),
+    });
     return { messageId: letter.id };
   }
 
   // `to: []` — рассылка комнате: участники узнают решение письмом kind `decision`. Человек его
   // только что принял, и «непрочитанным» оно ему не значится.
-  const decision = addMessage(
-    map,
-    { from: proposal.from, to: [], roomId, kind: 'decision', text: proposal.text },
+  const decision = letters.add({
+    from: proposal.from,
+    to: [],
+    roomId,
+    kind: 'decision',
+    text: proposal.text,
     at,
-  );
-  decision.readBy[HUMAN] = at;
-  captureDecisionJournal(map, room, proposal, action, decision.id, options.note);
+    readBy: { [HUMAN]: at },
+  });
+  captureDecisionJournal(map, letters, room, proposal, action, decision.id, options.note);
   room.proposal = null;
-  addSystemMessage(map, roomId, proposal.kind === 'completion' ? `Plan ${proposal.planId} completed` : ACCEPTED_LINE, at);
-  addMessage(map, { from: HUMAN, to: [lead], roomId, kind: 'note', text: proposal.kind === 'completion' ? 'Completion accepted.' : ACCEPTED_LETTER }, at);
+  addSystemMessage(map, letters, roomId, proposal.kind === 'completion' ? `Plan ${proposal.planId} completed` : ACCEPTED_LINE, at);
+  letters.add({ from: HUMAN, to: [lead], roomId, kind: 'note', text: proposal.kind === 'completion' ? 'Completion accepted.' : ACCEPTED_LETTER, at });
   return { messageId: decision.id };
 }
 

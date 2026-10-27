@@ -3,12 +3,13 @@ import { mkdir, appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/pro
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as core from '@parley/core';
 import {
   addSession,
   createWork,
   freezeUsage,
   hookedSince,
-  readMap,
+  readStoredMap,
   transitionSession,
   updateMap,
   workPaths,
@@ -110,7 +111,7 @@ const waitFor = async (check: () => boolean, timeoutMs = 5000): Promise<void> =>
  * его событие приходит поздно или теряется, тогда как проверяется запись автозаголовка в карту.
  */
 const labelOnDisk = async (workId: string, sessionId: string): Promise<string | undefined> =>
-  (await readMap(project, workId)).sessions.find((s) => s.id === sessionId)?.label;
+  (readStoredMap(project, workId)).sessions.find((s) => s.id === sessionId)?.label;
 
 const hook = (name: string, extra: Record<string, unknown> = {}): string =>
   `${JSON.stringify({ hook_event_name: name, ...extra })}\n`;
@@ -350,14 +351,12 @@ describe('createActivityService', () => {
     expect(a.get(ref)?.metrics?.subagents).toBe(1);
   }, 20_000);
 
-  it('5: unread считается по карте', async () => {
+  it('5: unread считается по письмам работы', async () => {
     const { ref, workId } = await activeSession();
-    await updateMap(project, workId, (map) => {
-      map.messages.push(
-        { id: 'm1', roomId: null, from: 's-00', to: [ref.sessionId], at: new Date().toISOString(), text: 'привет', kind: 'note', readBy: {} },
-        { id: 'm2', roomId: null, from: 's-00', to: [ref.sessionId], at: new Date().toISOString(), text: 'ещё', kind: 'note', readBy: {} },
-        { id: 'm3', roomId: null, from: 's-00', to: [ref.sessionId], at: new Date().toISOString(), text: 'прочитано', kind: 'note', readBy: { [ref.sessionId]: new Date().toISOString() } },
-      );
+    await updateMap(project, workId, (_map, letters) => {
+      letters.add({ roomId: null, from: 's-00', to: [ref.sessionId], text: 'привет', kind: 'note' });
+      letters.add({ roomId: null, from: 's-00', to: [ref.sessionId], text: 'ещё', kind: 'note' });
+      letters.add({ roomId: null, from: 's-00', to: [ref.sessionId], text: 'прочитано', kind: 'note', readBy: { [ref.sessionId]: new Date().toISOString() } });
     });
 
     const w = await works();
@@ -366,6 +365,81 @@ describe('createActivityService', () => {
     await settle();
 
     expect(a.get(ref)?.metrics?.unread).toBe(2);
+  }, 20_000);
+
+  // Спека хранилища 6.2: метрики собираются для каждой сессии на каждое изменение; число читается по карте снимка хоста,
+  // а не по карте из базы (кэш карт — 32 записи, при большем числе работ каждый проход грузил бы их заново).
+  it('5а: unread считается по карте снимка хоста, карта из базы для этого не нужна', async () => {
+    const { ref, workId } = await activeSession();
+    await updateMap(project, workId, (_map, letters) => {
+      letters.add({ roomId: null, from: 's-00', to: [ref.sessionId], text: 'привет', kind: 'note' });
+    });
+
+    const w = await works();
+    const unread = vi.spyOn(core, 'unreadCount');
+    try {
+      const a = activity(w);
+      await a.start();
+      await settle();
+
+      expect(a.get(ref)?.metrics?.unread).toBe(1);
+      expect(unread).toHaveBeenCalled();
+      for (const call of unread.mock.calls) {
+        expect(call[3]?.map?.work.id).toBe(workId);
+      }
+    } finally {
+      unread.mockRestore();
+    }
+  }, 20_000);
+
+  // Спека rooms.mail 6.7: запись одних писем не зовёт `works.onChange`, и число непрочитанного адресата и читателя
+  // обновляется по `onMail`.
+  it('5б: новое письмо и отметка прочтения обновляют unread сессии без works.changed', async () => {
+    const { ref, workId } = await activeSession();
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle();
+    expect(a.get(ref)?.metrics?.unread).toBe(0);
+    const worksChanged = (): number => broadcasts.filter((item) => item.event === 'works.changed').length;
+    const before = worksChanged();
+
+    // `onMail` зовётся при коммите, до возврата `updateMap`: число уже новое, ждать индекс логов или опрос незачем (они
+    // пересчитали бы сессию и без письма, и тест не отличил бы их от `onMail`).
+    let letterId = '';
+    await updateMap(project, workId, (_map, letters) => {
+      letterId = letters.add({ roomId: null, from: 's-00', to: [ref.sessionId], text: 'привет', kind: 'note' }).id;
+    });
+    expect(a.get(ref)?.metrics?.unread).toBe(1);
+
+    await updateMap(project, workId, (_map, letters) => {
+      letters.markRead(ref.sessionId, [letterId], new Date().toISOString());
+    });
+    expect(a.get(ref)?.metrics?.unread).toBe(0);
+    expect(worksChanged()).toBe(before);
+  }, 20_000);
+
+  // Тот же рисунок, что у будильника: каждое уведомление `onMail` пересчитывало адресата и перечитывало его журнал заново.
+  it('5в: пачка из 60 писем подряд пересчитывает сессию и читает её журнал по разу, а не по разу на письмо', async () => {
+    const { ref, workId } = await activeSession();
+    const counters = createWindowCounters();
+    const w = await works();
+    const a = activity(w, { windowCounters: counters });
+    await a.start();
+    await settle();
+    const base = counters.read().recomputes;
+
+    // Записи подряд без `await`: уведомления `onMail` приходят в одном синхронном ходу.
+    for (let at = 1; at <= 60; at += 1) {
+      core.writeLetters(project, workId, (letters) => {
+        letters.add({ roomId: null, from: 's-00', to: [ref.sessionId], text: `письмо ${at}`, kind: 'note' });
+      });
+    }
+    await waitFor(() => a.get(ref)?.metrics?.unread === 60);
+    await settle(100);
+
+    // Один пересчёт сразу и один после чтения журнала; раньше — по два на каждое из 60 писем.
+    expect(counters.read().recomputes - base).toBeLessThanOrEqual(4);
   }, 20_000);
 
   it('6: автозаголовок применяется один раз, переименованную вручную не трогает', async () => {
@@ -477,7 +551,7 @@ describe('createActivityService', () => {
   }, 60_000);
 
   /** Название работы — с диска, по той же причине, что и `labelOnDisk`. */
-  const workTitleOnDisk = async (workId: string): Promise<string> => (await readMap(project, workId)).work.title;
+  const workTitleOnDisk = async (workId: string): Promise<string> => (readStoredMap(project, workId)).work.title;
 
   it('6e: сессия с именем по умолчанию в безымянной работе: ярлык не меняется, работа называется по заголовку лога', async () => {
     const { ref, workId } = await activeSession({ label: '', workTitle: UNTITLED_WORK, providerSessionId: 's-untitled' });
@@ -1414,7 +1488,7 @@ describe('need: потребность сессии (спека «Застряв
   it('экран старта наступает ровно на сроке (20 с по умолчанию) после запуска; since — момент истечения срока', async () => {
     const { ref } = await activeSession();
     const startedAt = Date.parse(
-      (await readMap(project, ref.workId)).sessions.find((s) => s.id === ref.sessionId)?.startedAt ?? '',
+      (readStoredMap(project, ref.workId)).sessions.find((s) => s.id === ref.sessionId)?.startedAt ?? '',
     );
     let clock = startedAt + 1000;
     const w = await works();
@@ -1673,7 +1747,7 @@ describe('need: потребность сессии (спека «Застряв
   /** Начало работы сессии `ref` по карте: от него считается срок экрана старта, когда хост запуска не видел. */
   const startedAtOf = async (ref: SessionRef): Promise<number> =>
     Date.parse(
-      (await readMap(project, ref.workId)).sessions.find((session) => session.id === ref.sessionId)?.startedAt ?? '',
+      (readStoredMap(project, ref.workId)).sessions.find((session) => session.id === ref.sessionId)?.startedAt ?? '',
     );
 
   it('Claude без хуков: запись транскрипта после запуска — экрана старта нет (экран входа транскрипт не пишет)', async () => {
@@ -2384,7 +2458,7 @@ it('publishes personal plans from map changes without a native log or Chat suppo
   const a = activity(w);
   await a.start();
   await waitFor(() => a.get(ref) !== undefined);
-  const messages = (await readMap(project, workId)).messages;
+  const messages = (readStoredMap(project, workId)).messages;
   await updateMap(project, workId, map => {
     map.sessions[0]!.agentPlan = {
       items: [{ id: '1', subject: 'Implement', status: 'in_progress', description: 'Bounded flow', activeForm: null }],
@@ -2396,5 +2470,5 @@ it('publishes personal plans from map changes without a native log or Chat suppo
   expect((activityChanges(ref).at(-1)?.metrics as LiveMetrics).plan?.summary.total).toBe(1);
   await updateMap(project, workId, map => { map.sessions[0]!.agentPlan!.items[0]!.status = 'completed'; });
   await waitFor(() => a.get(ref)?.metrics?.plan?.summary.done === 1);
-  expect((await readMap(project, workId)).messages).toEqual(messages);
+  expect((readStoredMap(project, workId)).messages).toEqual(messages);
 });

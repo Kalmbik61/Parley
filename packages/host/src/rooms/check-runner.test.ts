@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, type SpawnOptions } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile, access } from 'node:fs/promises';
 import path from 'node:path';
@@ -12,6 +12,7 @@ import { run } from './check-runner.js';
 const boundary = vi.hoisted(() => ({ native: false, unavailable: '', kernelOnly: false, logs: '', dirty: false, wrongHead: false, postLogFailure: false, delayedLogs: false, logFailureAt: 0, orphanMarker: '', orphanExitCode: 0, orphanScanUnavailable: false, queries: 0, stamps: [] as string[] }));
 vi.mock('node:child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('node:child_process')>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- pass-through of the overloaded execFile arguments
   const intercepted = (file: string, args: string[], ...rest: any[]) => {
       if (!boundary.native && file === '/usr/bin/sandbox-exec') {
         return actual.execFile(boundary.unavailable === 'sandbox' ? '/nonexistent/sandbox-exec' : '/usr/bin/true', [], ...rest);
@@ -19,7 +20,7 @@ vi.mock('node:child_process', async importOriginal => {
       if (!boundary.native && file === '/usr/bin/log') {
         boundary.queries++;
         boundary.stamps.push(args[args.indexOf('--start') + 1]!, args[args.indexOf('--end') + 1]!);
-        if ((boundary.kernelOnly && !args[args.indexOf('--predicate') + 1]?.includes('sender == \"Sandbox\"')) || boundary.unavailable === 'log' || (boundary.postLogFailure && boundary.queries > 1) || boundary.queries === boundary.logFailureAt) {
+        if ((boundary.kernelOnly && !args[args.indexOf('--predicate') + 1]?.includes('sender == "Sandbox"')) || boundary.unavailable === 'log' || (boundary.postLogFailure && boundary.queries > 1) || boundary.queries === boundary.logFailureAt) {
           return actual.execFile('/nonexistent/log', [], ...rest);
         }
         return actual.execFile('/usr/bin/printf', ['%s', boundary.queries > (boundary.delayedLogs ? 2 : 1) ? boundary.logs : ''], ...rest);
@@ -27,7 +28,7 @@ vi.mock('node:child_process', async importOriginal => {
       if (!boundary.native && file === '/usr/sbin/lsof') {
         if (boundary.orphanScanUnavailable) return actual.execFile('/nonexistent/lsof', [], ...rest);
         if (boundary.orphanMarker) return boundary.orphanExitCode === 1
-          ? actual.execFile('/bin/sh', ['-c', 'cat \"$1\"; exit 1', 'sh', boundary.orphanMarker], ...rest)
+          ? actual.execFile('/bin/sh', ['-c', 'cat "$1"; exit 1', 'sh', boundary.orphanMarker], ...rest)
           : actual.execFile('/bin/cat', [boundary.orphanMarker], ...rest);
         return actual.execFile('/usr/bin/printf', [''], ...rest);
       }
@@ -35,13 +36,13 @@ vi.mock('node:child_process', async importOriginal => {
       if (!boundary.native && args.includes('rev-parse') && args.includes('HEAD') && boundary.wrongHead) return actual.execFile('/usr/bin/printf', ['0'.repeat(40)], ...rest);
       return actual.execFile(file, args, ...rest);
   };
-  Object.defineProperty(intercepted, Symbol.for('nodejs.util.promisify.custom'), { value: (...args: any[]) => new Promise((resolve, reject) => {
-    (intercepted as any)(...args, (error: Error | null, stdout: string, stderr: string) => error ? reject(Object.assign(error, { stdout, stderr })) : resolve({ stdout, stderr }));
+  Object.defineProperty(intercepted, Symbol.for('nodejs.util.promisify.custom'), { value: (...args: unknown[]) => new Promise((resolve, reject) => {
+    (intercepted as (...call: unknown[]) => void)(...args, (error: Error | null, stdout: string, stderr: string) => error ? reject(Object.assign(error, { stdout, stderr })) : resolve({ stdout, stderr }));
   }) });
   return {
     ...actual,
     execFile: intercepted,
-    spawn: (file: string, args: string[], options: any) => !boundary.native && file === '/usr/bin/sandbox-exec'
+    spawn: (file: string, args: string[], options: SpawnOptions) => !boundary.native && file === '/usr/bin/sandbox-exec'
       ? actual.spawn(args[2]!, args.slice(3), options)
       : actual.spawn(file, args, options),
   };
@@ -159,6 +160,7 @@ it('uses only spec.env and private HOME/TMPDIR, and records stable canonical ide
   const result = await run({ ...f.ctx, now: () => new Date('2026-10-24T01:02:03Z') }, f.spec, f.sha, 'at-01');
   expect(result.verdict).toBe('pass');
   // Node on macOS inserts this platform bookkeeping variable even with an explicit env.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
   const { __CF_USER_TEXT_ENCODING: _encoding, ...environment } = JSON.parse(await readFile(result.outputTail!, 'utf8'));
   expect(environment).toEqual({ Z: 'last', A: 'first', HOME: path.join(f.checkDir, 'tmp/home'), TMPDIR: path.join(f.checkDir, 'tmp') });
   const digest = (json: string) => createHash('sha256').update(json).digest('hex');
@@ -183,7 +185,7 @@ describe.skipIf(process.env.PARLEY_TEST_NATIVE_SANDBOX !== '1')('native macOS co
     const outside = path.join(f.ctx.projectPath, 'outside.txt');
     const attack = `try{require('fs').writeFileSync(${JSON.stringify(outside)},'escape')}catch(e){console.log(e.code)}`;
     f.spec.argv = [process.execPath, '-e', kind === 'clean' ? 'console.log("clean")' : kind === 'direct' ? attack
-      : kind === 'different-child' ? `require('child_process').spawnSync('/bin/sh',['-c','printf escape > \"$1\"','sh',${JSON.stringify(outside)}]); console.log('masked');`
+      : kind === 'different-child' ? `require('child_process').spawnSync('/bin/sh',['-c','printf escape > "$1"','sh',${JSON.stringify(outside)}]); console.log('masked');`
       : `require('child_process').spawnSync(process.execPath,['-e',${JSON.stringify(attack)}]); console.log('masked');`];
     if (kind === 'missing-command') f.spec.argv = ['/nonexistent/check-command'];
     const result = await run(f.ctx, f.spec, f.sha, 'at-01');
@@ -210,8 +212,8 @@ describe.skipIf(process.env.PARLEY_TEST_NATIVE_SANDBOX !== '1')('native macOS co
       expect(result).toMatchObject({ verdict: 'error', summary: 'orphan-descendants', exitCode: 0 });
       expect(() => process.kill(orphan, 0)).toThrow();
     } finally {
-      if (!orphan) { try { orphan = Number(await readFile(marker, 'utf8')); } catch {} }
-      if (orphan) { try { process.kill(orphan, 'SIGKILL'); } catch {} }
+      if (!orphan) { try { orphan = Number(await readFile(marker, 'utf8')); } catch { /* the marker was never written */ } }
+      if (orphan) { try { process.kill(orphan, 'SIGKILL'); } catch { /* already gone */ } }
     }
   }, 30_000);
 });
@@ -301,8 +303,8 @@ it.each([0, 1])('kills detached descendants holding pipes when lsof exits %i', a
     }
     expect(alive).toBe(false);
   } finally {
-    if (!orphan) { try { orphan = Number(await readFile(marker, 'utf8')); } catch {} }
-    if (orphan) { try { process.kill(orphan, 'SIGKILL'); } catch {} }
+    if (!orphan) { try { orphan = Number(await readFile(marker, 'utf8')); } catch { /* the marker was never written */ } }
+    if (orphan) { try { process.kill(orphan, 'SIGKILL'); } catch { /* already gone */ } }
   }
 });
 it('fails closed when orphan discovery is unavailable', async () => {

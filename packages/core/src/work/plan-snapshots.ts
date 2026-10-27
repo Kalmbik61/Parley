@@ -7,6 +7,7 @@ import {
   withSharedProjectLock,
 } from "./store.js";
 import type { SharedDiagnostic, SharedWriteOptions } from "./store.js";
+import { exportSha256, hasDigestOnly, settleExport, sha256Hex } from "./stored-texts.js";
 import type { PlanExportIntent, PlanItem, RoomPlan, WorkMap } from "./types.js";
 
 export class PlanSnapshotError extends Error {
@@ -27,9 +28,10 @@ const valid = (intent: PlanExportIntent): boolean =>
   ) &&
   Number.isSafeInteger(intent.rev) &&
   intent.rev >= 0 &&
-  typeof intent.content === "string" &&
-  Buffer.byteLength(intent.content) <= 1024 * 1024 &&
-  Buffer.from(intent.content, "utf8").toString("utf8") === intent.content;
+  (hasDigestOnly(intent) ||
+    (typeof intent.content === "string" &&
+      Buffer.byteLength(intent.content) <= 1024 * 1024 &&
+      Buffer.from(intent.content, "utf8").toString("utf8") === intent.content));
 const metadata = (value: string): string =>
   JSON.stringify(
     value.length <= 512
@@ -99,19 +101,21 @@ export function capturePlanSnapshot(
     lines.push("", `Backlog: ${plan.backlog.join(", ")}`);
   if (plan.completionSummary)
     lines.push("", "## Completion", plan.completionSummary);
+  const content = `${lines.join("\n")}\n`;
   const intent: PlanExportIntent = {
     file,
     planId: plan.id,
     rev: plan.rev,
     event,
-    content: `${lines.join("\n")}\n`,
+    content,
     status: "pending",
   };
   if (!valid(intent)) throw new PlanSnapshotError("snapshot-invalid");
   map.planExports ??= [];
   const previous = map.planExports.find((entry) => entry.file === file);
   if (previous) {
-    if (previous.content !== intent.content)
+    // Записанный экспорт текста уже не держит: тот же текст узнаётся по sha256 (спека хранилища 6.2).
+    if (exportSha256(previous) !== sha256Hex(content))
       throw new PlanSnapshotError("snapshot-conflict");
     return previous;
   }
@@ -142,6 +146,9 @@ export async function flushPlanSnapshots(
     (intent) => intent.status === "pending" && !options.excludedFiles?.has(intent.file),
   ) ?? []) {
     try {
+      // Ожидающий экспорт всегда с текстом: по нему файл пишется и повторяется (спека хранилища 6.2).
+      const content = intent.content;
+      if (content === undefined) throw new PlanSnapshotError("snapshot-invalid");
       const paths = await sharedProjectPaths(projectPath, options);
       if (!intent.file.startsWith(`${workId}-`))
         throw new PlanSnapshotError("snapshot-invalid");
@@ -152,7 +159,7 @@ export async function flushPlanSnapshots(
             ...(await prepareSharedIgnore(paths, options)),
           );
           if (!valid(intent)) throw new PlanSnapshotError("snapshot-invalid");
-          try { await publishImmutableMarkdown(paths.dir, paths.plans, intent, options); }
+          try { await publishImmutableMarkdown(paths.dir, paths.plans, { file: intent.file, content }, options); }
           catch (error) {
             if (error instanceof ImmutableMarkdownError) throw new PlanSnapshotError(
               error.code === "conflict" ? "snapshot-conflict" : error.code === "invalid" ? "snapshot-invalid" : "snapshot-write-failed",
@@ -162,6 +169,8 @@ export async function flushPlanSnapshots(
         },
         options,
       );
+      // Запись подтверждается по (файл, sha256 текста) и тут же убирает текст из карты (спека хранилища 6.2).
+      const sha256 = sha256Hex(content);
       await updateMap(
         projectPath,
         workId,
@@ -169,9 +178,9 @@ export async function flushPlanSnapshots(
           const captured = current.planExports?.find(
             (candidate) =>
               candidate.file === intent.file &&
-              candidate.content === intent.content,
+              exportSha256(candidate) === sha256,
           );
-          if (captured) captured.status = "written";
+          if (captured) settleExport(captured);
         },
         { ...options, touch: false },
       );

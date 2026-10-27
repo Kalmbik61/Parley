@@ -5,10 +5,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
-import { addMessage, addSession } from '../work/map.js';
+import { addSession } from '../work/map.js';
 import { addRoom } from '../work/rooms.js';
-import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
-import { type WorkMap } from '../work/types.js';
+import { createWork, listWorkVersions, readMap, readStoredMap, updateMap, workPaths } from '../work/store.js';
+import { type WindowWorkMap } from '../work/types.js';
 import { createParleyServer } from './tools.js';
 
 /**
@@ -98,12 +98,17 @@ async function callOk(client: Client, name: string, args: Record<string, unknown
   return result;
 }
 
-/** Все файлы каталога: путь → размер, время записи и содержимое. Переписанный файл виден и без смены текста. */
+/**
+ * Все файлы каталога: путь → размер, время записи и содержимое. Переписанный файл виден и без смены текста. Файлы базы
+ * (`parley.db`, `-wal`, `-shm`) в снимок не входят: любое чтение двигает отметки читателей в `-shm`, и по байтам они
+ * ничего не говорят — запись в карту видна по версии строки работы (спека хранилища 6.9), её снимок идёт рядом.
+ */
 async function snapshot(root: string): Promise<Record<string, string>> {
   const files: Record<string, string> = {};
   const walk = async (dir: string): Promise<void> => {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
       const file = path.join(dir, entry.name);
+      if (entry.name.startsWith('parley.db')) continue;
       if (entry.isDirectory()) {
         await walk(file);
         continue;
@@ -116,9 +121,14 @@ async function snapshot(root: string): Promise<Record<string, string>> {
   return files;
 }
 
-const snapshotAll = async () => ({ project: await snapshot(project), home: await snapshot(home) });
+const snapshotAll = async () => ({
+  project: await snapshot(project),
+  home: await snapshot(home),
+  // Версии всех работ базы, а не только этой: чтение не должно поднять версию ни одной.
+  versions: listWorkVersions().sort((a, b) => `${a.projectPath}\0${a.id}`.localeCompare(`${b.projectPath}\0${b.id}`)),
+});
 
-const ids = (map: WorkMap) => ({
+const ids = (map: WindowWorkMap) => ({
   sessions: map.sessions.map((session) => session.id),
   rooms: map.rooms.map((room) => room.id),
   messages: map.messages.map((message) => message.id),
@@ -138,13 +148,13 @@ beforeEach(async () => {
   workId = map.work.id;
   // s-01 — вызывающий и ведущий комнаты r-01; s-02 и s-03 — его подчинённые; s-02 в комнате, s-03 нет.
   // От s-02 лежит непрочитанное письмо: им проверяется, что чтения отметок прочтения не ставят.
-  await updateMap(project, workId, (current) => {
+  await updateMap(project, workId, (current, letters) => {
     addSession(current, { provider: 'claude', label: 'план', task: 'составить план' });
     addSession(current, { provider: 'claude', label: 'бэк', task: 'бэкенд', parent: null }).parent = 's-01';
     addSession(current, { provider: 'claude', label: 'тесты', task: 'тесты', parent: null }).parent = 's-01';
     addRoom(current, { title: 'Разбор', creator: 's-01', members: ['s-01', 's-02'], lead: 's-01' });
-    addMessage(current, { from: 's-02', to: ['s-01'], text: 'Что делаем?', kind: 'question' });
-    addMessage(current, { from: 's-02', to: [], text: 'Готов', kind: 'note', roomId: 'r-01' });
+    letters.add({ roomId: null, from: 's-02', to: ['s-01'], text: 'Что делаем?', kind: 'question' });
+    letters.add({ from: 's-02', to: [], text: 'Готов', kind: 'note', roomId: 'r-01' });
   });
 });
 
@@ -232,12 +242,12 @@ describe('аннотации инструментов parley: правда по 
 
   it('check_inbox пишет: помечает письма прочитанными — это не чтение', async () => {
     const client = await connect();
-    const before = await readMap(project, workId);
+    const before = readStoredMap(project, workId);
     expect(before.messages.every((message) => message.readBy['s-01'] === undefined)).toBe(true);
 
     await callOk(client, 'check_inbox');
 
-    const after = await readMap(project, workId);
+    const after = readStoredMap(project, workId);
     expect(after.messages.every((message) => message.readBy['s-01'] !== undefined)).toBe(true);
   });
 
@@ -253,11 +263,11 @@ describe('аннотации инструментов parley: правда по 
 
   it.each(WRITES)('$name пишет в карту, но не уничтожает ни сессий, ни комнат, ни писем', async ({ name, args }) => {
     const client = await connect();
-    const before = await readMap(project, workId);
+    const before = readStoredMap(project, workId);
 
     await callOk(client, name, args);
 
-    const after = await readMap(project, workId);
+    const after = readStoredMap(project, workId);
     expect(after).not.toEqual(before);
     // «Не разрушает»: всё, что было в карте, в ней осталось.
     for (const [kind, list] of Object.entries(ids(before))) {
@@ -273,17 +283,17 @@ describe('аннотации инструментов parley: правда по 
 
   it('add_to_room уводит сессию из прежней комнаты: та остаётся с письмами и участниками, а lead уходит, creator остаётся историческим', async () => {
     // r-02 создала и ведёт s-03, в ней ещё s-04; ведущий r-01 s-01 зовёт s-03 к себе.
-    await updateMap(project, workId, (current) => {
+    await updateMap(project, workId, (current, letters) => {
       addSession(current, { provider: 'claude', label: 'ревью', task: 'ревью', parent: null }).parent = 's-01';
       addRoom(current, { title: 'Прежняя', creator: 's-03', members: ['s-03', 's-04'], lead: 's-03' });
-      addMessage(current, { from: 's-04', to: [], text: 'Начали', kind: 'note', roomId: 'r-02' });
+      letters.add({ from: 's-04', to: [], text: 'Начали', kind: 'note', roomId: 'r-02' });
     });
     const client = await connect();
-    const before = await readMap(project, workId);
+    const before = readStoredMap(project, workId);
 
     await callOk(client, 'add_to_room', { room: 'r-01', session: 's-03' });
 
-    const after = await readMap(project, workId);
+    const after = readStoredMap(project, workId);
     // Уход виден в записи прежней комнаты: s-03 больше не участник и не ведущий, участник остался один.
     expect(after.rooms.find((room) => room.id === 'r-02')).toMatchObject({
       creator: 's-03',

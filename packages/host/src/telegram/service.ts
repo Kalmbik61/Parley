@@ -38,7 +38,7 @@ import type { Client } from '../client.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import type { FeedService } from '../feed/feed-service.js';
-import type { WorksService } from '../works/works-service.js';
+import type { MailNotice, WorksService } from '../works/works-service.js';
 import { BotApiError, createBotApi } from './api.js';
 import type { BotApi } from './api.js';
 import { createAssistantBridge } from './assistant-bridge.js';
@@ -48,7 +48,7 @@ import { assistantCardMessage, consentCardMessage, feedCardMessage, feedDecision
 import { clipText, escapeHtml, lastLines } from './format.js';
 import { classify } from './ingress.js';
 import { createLinkCode, deepLink, LINK_ATTEMPTS, matchLinkCode } from './link.js';
-import { activityTransition, emptyMemory, sessionWhere, worksTriggers } from './notify.js';
+import { activityTransition, emptyMemory, mailTriggers, sessionWhere, worksTriggers, type TriggerLetters } from './notify.js';
 import { createOutbox } from './outbox.js';
 import type { Outbox, Priority } from './outbox.js';
 import { createPoller } from './poller.js';
@@ -62,7 +62,9 @@ import { createVoiceTranscriber } from './voice.js';
 export interface TelegramServiceDeps {
   home: string;
   host: Pick<HostContext, 'broadcast' | 'hold' | 'log'>;
-  works: Pick<WorksService, 'snapshot' | 'onChange'>;
+  works: Pick<WorksService, 'snapshot' | 'onChange' | 'onMail'>;
+  /** Письма, которых нет в снимке работ (непрочитанное человеком, последнее письмо человека в комнате); нет — из базы работы. */
+  letters?: TriggerLetters;
   activity: Pick<ActivityService, 'get' | 'onChange'>;
   feed?: Pick<FeedService, 'snapshot' | 'decide' | 'subscribe' | 'unsubscribe'>;
   /**
@@ -475,7 +477,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     memory = emptyMemory();
     if (owner() === null) return;
     const snapshot = deps.works.snapshot();
-    worksTriggers(memory, snapshot);
+    worksTriggers(memory, snapshot, undefined, deps.letters);
     for (const entry of snapshot.entries) {
       for (const session of entry.map.sessions) {
         const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
@@ -791,7 +793,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
 
   function onWorks(snapshot: Parameters<typeof worksTriggers>[1]): void {
     if (!canSend()) return;
-    const triggers = worksTriggers(memory, snapshot);
+    const triggers = worksTriggers(memory, snapshot, undefined, deps.letters);
     for (const { entry, roomId, previous, now: result } of triggers.closed) {
       const open = state.cardsFor(
         (card) => card.kind === 'room' && card.projectPath === entry.projectPath && card.workId === entry.map.work.id && card.roomId === roomId && card.proposalId === previous.id && card.rev === previous.rev,
@@ -802,8 +804,20 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       if (sending.has(sendKey)) closeEarly.set(sendKey, text);
     }
     if (cfg?.telegramNeedsYou === true) for (const { entry, room } of triggers.decisions) sendRoomCard(entry, room.id);
+  }
+
+  /**
+   * Запись писем (спека rooms.mail 6.7): запись одних писем снимок работ не меняет, и письма человеку приходят сюда, а не в
+   * `onWorks`. Смешанная запись зовёт оба, но письма ведёт только этот путь: повторного письма в `memory.letters` нет.
+   * Память пополняется и при выключенной почте: включённая позже, она не вываливает накопленное.
+   */
+  function onMail(notice: MailNotice): void {
+    if (!canSend()) return;
+    const entry = entryOf(notice.projectPath, notice.workId);
+    if (entry === undefined) return;
+    const triggers = mailTriggers(memory, entry, notice.journal.added);
     if (cfg?.telegramMail !== true) return;
-    for (const { entry, message } of triggers.letters) {
+    for (const { message } of triggers) {
       const from = participantLabel(entry.map, message.from);
       const roomTitle = message.roomId === null ? null : entry.map.rooms.find((room) => room.id === message.roomId)?.title;
       const where = roomTitle === undefined || roomTitle === null ? sessionWhere(entry) : `${roomTitle} · ${sessionWhere(entry)}`;
@@ -1231,6 +1245,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       });
       unsubs.push(
         deps.works.onChange((snapshot) => onWorks(snapshot)),
+        deps.works.onMail((notice) => onMail(notice)),
         deps.activity.onChange((ref, live) => onActivity(ref, live)),
       );
       if (deps.consents !== undefined) unsubs.push(deps.consents.onChange((change) => onConsentsChanged(change)));

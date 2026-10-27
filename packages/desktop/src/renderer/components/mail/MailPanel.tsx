@@ -12,19 +12,22 @@
  * этот же код проверяется без реального рендера (`MailPanel.test.ts`).
  */
 
-import { useLayoutEffect, useRef, useState } from 'react';
-import type { Message, WorkEntry } from '@parley/core';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { Message, WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
 import { isHumanUnread } from '../../attention/derive.js';
 import { useMarkRead } from '../../attention/use-mark-read.js';
+import { useHostSupports } from '../../lib/capabilities.js';
 import { mailView } from '../../lib/mail-view.js';
 import { sessionRowLabel, workTitleText } from '../../lib/participant.js';
+import { messageSeq } from '../../lib/window-merge.js';
+import { openMail } from '../../store/room-pages.js';
 import { Decisions } from './Decisions.js';
 import { Letter } from './Letter.js';
 
 export interface MailPanelProps {
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   providers: Array<{ id: string; label: string }>;
   models: Record<string, string | null>;
   bridge: ParleyBridge;
@@ -47,6 +50,21 @@ function isAtBottom(container: HTMLDivElement): boolean {
 
 export function MailPanel({ entry, providers, models, bridge, active, onOpenExternal }: MailPanelProps): JSX.Element {
   const view = mailView(entry, providers, models);
+  // Снимок без писем (`compact` версии 2, спека rooms.mail 6.9): прямые письма окно читает страницей `context.messages` с
+  // `roomId: null` при открытии, дальше они приходят событиями. Заново — когда по числам снимка письма есть, а окно их не
+  // держит (событие пропущено): `unheld` меняется, и эффект идёт снова.
+  const compact = entry.map.compact;
+  const bare = compact?.version === 2;
+  const canRead = useHostSupports('context.messages');
+  const unheld = compact?.version === 2 && (compact.rooms['']?.total ?? 0) > 0 && !entry.map.messages.some((message) => message.roomId === null);
+  const latest = useRef(entry);
+  latest.current = entry;
+  const latestBridge = useRef(bridge);
+  latestBridge.current = bridge;
+  useEffect(() => {
+    if (!bare || !canRead) return;
+    openMail(latestBridge.current, latest.current).catch((error: unknown) => console.warn('[parley] open mail', error));
+  }, [bare, canRead, entry.projectPath, entry.map.work.id, unheld]);
   const markRead = useMarkRead({ bridge, projectPath: entry.projectPath, workId: entry.map.work.id, active });
   const messages = new Map(entry.map.messages.map((message) => [message.id, message]));
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -54,12 +72,17 @@ export function MailPanel({ entry, providers, models, bridge, active, onOpenExte
   // `ref`, а не состояние: значение нужно синхронно внутри layout-эффекта и
   // обработчика скролла, а перерисовка панели из-за него не нужна.
   const stuckToBottomRef = useRef(true);
-  const previousCountRef = useRef(view.letters.length);
+  // Новое — по номеру новейшего письма, а не по длине: у потолка окна (300 писем) новое письмо вытесняет старейшее, и
+  // длина остаётся той же.
+  const newestId = view.letters.at(-1)?.id ?? null;
+  const previousNewestRef = useRef(newestId);
   const [below, setBelow] = useState(0);
 
   useLayoutEffect(() => {
-    const added = view.letters.length - previousCountRef.current;
-    previousCountRef.current = view.letters.length;
+    const previous = previousNewestRef.current;
+    // Сколько писем новее прежнего новейшего; ленты не было — все письма новые.
+    const added = previous === null ? view.letters.length : view.letters.filter((letter) => messageSeq(letter) > messageSeq({ id: previous })).length;
+    previousNewestRef.current = newestId ?? previous;
 
     const container = containerRef.current;
     if (container === null) return;
@@ -71,7 +94,7 @@ export function MailPanel({ entry, providers, models, bridge, active, onOpenExte
       // Пользователь ушёл вверх — позицию не трогаем, счёт новых писем растёт.
       setBelow((count) => count + added);
     }
-  }, [view.letters.length]);
+  }, [view.letters.length, newestId]);
 
   const handleScroll = (): void => {
     const container = containerRef.current;

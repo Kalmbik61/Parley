@@ -4,7 +4,7 @@
  * прочитать и то, и другое, а не завести рядом второй каталог состояния.
  */
 
-import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -12,7 +12,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { addSession } from '../work/map.js';
 import { mcpConfigJson } from '../work/mcp-config.js';
-import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
+import { createWork, readMap, readStoredMap, updateMap, workPaths } from '../work/store.js';
 import type { WorkMap } from '../work/types.js';
 import { contextFromEnv } from './context.js';
 import { createParleyServer } from './tools.js';
@@ -97,7 +97,7 @@ describe('сохранённый mcp/<sid>.json прежней сборки (т�
     expect(contextFromEnv(savedEnv(workDir, { HARNAS_CHANNEL: '1' })).channel).toBe(true);
   });
 
-  it('сервер по этому окружению отдаёт карту и принимает report в те же файлы; .parley не появляется', async () => {
+  it('сервер по этому окружению отдаёт карту и принимает report в ту же базу; .parley не появляется', async () => {
     const workDir = await legacyProject();
     const client = await connect(savedEnv(workDir));
 
@@ -108,7 +108,8 @@ describe('сохранённый mcp/<sid>.json прежней сборки (т�
     await callOk(client, 'report', { status: 'progress', summary: 'середина' });
 
     expect((await readMap(project, workId)).sessions[0]?.summary).toBe('середина');
-    expect(JSON.parse(await readFile(path.join(workDir, 'map.json'), 'utf8')).sessions[0].summary).toBe('середина');
+    // Файла карты больше нет: тот же `report` проверяется по строкам базы мимо кэша (спека хранилища 6.1).
+    expect(readStoredMap(project, workId).sessions[0]?.summary).toBe('середина');
     expect(await exists(path.join(project, '.parley'))).toBe(false);
   });
 

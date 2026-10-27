@@ -3,15 +3,15 @@
  * значок и данные для точки состояния — из `TabSpec` и текущего снимка
  * работы. Чистая функция, как и `layout/tree.ts`: сама раскладка ничего не
  * знает про сессии/комнаты, только про их id, поэтому заголовок собирается
- * заново на каждый рендер из свежего `WorkEntry`, а не хранится в `TabSpec`.
+ * заново на каждый рендер из свежего `WindowWorkEntry`, а не хранится в `TabSpec`.
  */
 
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { FileRootSpec, TabSpec } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
-import { humanUnreadLetters, roomAwaitsDecision, type Attention } from '../attention/derive.js';
+import { humanUnreadDirect, roomAwaitsDecision, type Attention } from '../attention/derive.js';
 import { bufferKey } from '../files/buffer.js';
 import { sessionRowLabel, sessionTag } from '../lib/participant.js';
 import { isRoomArchived } from '../lib/room-archive.js';
@@ -68,7 +68,7 @@ export function truncateTitle(title: string, max: number = TITLE_MAX): string {
   return `${codePoints.slice(0, max).join('')}…`;
 }
 
-function findSession(entry: WorkEntry | null, sessionId: string): WorkSession | null {
+function findSession(entry: WindowWorkEntry | null, sessionId: string): WorkSession | null {
   return entry?.map.sessions.find((session) => session.id === sessionId) ?? null;
 }
 
@@ -137,7 +137,7 @@ export function fileTabNames(tabs: readonly TabSpec[]): ReadonlyMap<string /* ta
   return fileTabLabels(tabs, null);
 }
 
-export function tabMeta(tab: TabSpec, entry: WorkEntry | null, extras: TabMetaExtras = EMPTY_EXTRAS): TabMeta {
+export function tabMeta(tab: TabSpec, entry: WindowWorkEntry | null, extras: TabMetaExtras = EMPTY_EXTRAS): TabMeta {
   const empty = { unread: false, needsYou: false, tint: null, dirty: false, favicon: null } as const;
 
   switch (tab.kind) {
@@ -161,7 +161,7 @@ export function tabMeta(tab: TabSpec, entry: WorkEntry | null, extras: TabMetaEx
     case 'mail': {
       // Письма без комнаты, которые человек ещё не прочёл: вкладка показывает только их. `✉N` карточки считает больше —
       // ещё и упоминания `@human` в комнатах (`WorkAttention.humanUnread`): они живут во вкладке своей комнаты.
-      const unread = entry !== null && humanUnreadLetters(entry.map).length > 0;
+      const unread = entry !== null && humanUnreadDirect(entry.map) > 0;
       return { title: truncateTitle(S.tabs.mail), icon: 'mail', session: null, ...empty, tint: unread ? 'accent' : null };
     }
     case 'room': {

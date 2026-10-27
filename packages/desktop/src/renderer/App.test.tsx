@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import { App } from './App.js';
 import { createFakeBridge, type FakeBridge } from './test-utils/fake-bridge.js';
 import { bufferKey, initialBuffer } from './files/buffer.js';
@@ -242,7 +242,7 @@ function session(id: string, label: string): WorkSession {
   };
 }
 
-function work(id: string, createdAt: string, sessions: WorkSession[]): WorkEntry {
+function work(id: string, createdAt: string, sessions: WorkSession[]): WindowWorkEntry {
   return {
     projectPath: `/tmp/${id}`,
     map: {
@@ -503,7 +503,7 @@ describe('App — переход по цели уведомления (тест�
 
   it('тест 15: отложенная цель до ответа works.list ждёт его — без тоста; после ответа применена', async () => {
     const w2 = work('w-02', '2026-01-02', [session('s-02', 'бэк')]);
-    let answer: (value: { entries: WorkEntry[]; branches: Record<string, string | null> }) => void = () => {};
+    let answer: (value: { entries: WindowWorkEntry[]; branches: Record<string, string | null> }) => void = () => {};
     bridge.setHandler('works.list', () => new Promise((resolve) => (answer = resolve)));
     useWorksStore.setState({ entries: [], branches: {}, loading: true, error: null });
     bridge.setPendingFocusTarget(target);
@@ -712,6 +712,23 @@ describe('App — связь вернулась (слияние lane-r3 и main-
     expect(await screen.findByText('Interrupted mid-turn:')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'S03' })).toBeTruthy();
     expect(screen.getByTestId('titlebar')).toBe(titlebar);
+  });
+});
+
+// Хост повторяет стартовое уведомление клиенту сразу после `hello`, а окно подписывается на события только в статусе
+// connected: уведомление приходит раньше подписки. Его держит main, окно берёт снимок.
+describe('App — уведомление хоста, пришедшее до подписки окна', () => {
+  it('map-migration-failed из снимка main показано в строке статуса по-английски', async () => {
+    bridge.setNoticesSnapshot([
+      { kind: 'map-migration-failed', ref: null, text: '/p/.parley/works/w-0001/map.json', at: '2026-10-24T00:00:00.000Z' },
+    ]);
+    render(<App />);
+
+    expect(
+      await screen.findByText(
+        "Workspace w-0001 in p couldn't be moved to the new storage. Details are in the host log.",
+      ),
+    ).toBeTruthy();
   });
 });
 

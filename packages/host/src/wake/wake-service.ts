@@ -16,7 +16,6 @@
 
 import { performance } from 'node:perf_hooks';
 import {
-  addMessage,
   DEFAULT_CONFIG,
   deliveryAction,
   hookedSince,
@@ -30,10 +29,12 @@ import {
   sessionTag,
   SYSTEM,
   PARLEY,
+  letterById,
   resumablePlanLetter,
-  unreadFor,
-  updateMap,
+  unreadCount,
+  unreadLetters,
   workPaths,
+  writeLetters,
   type DeliveryAction,
   type DeliveryInput,
   type Message,
@@ -47,6 +48,7 @@ import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
 import { HostError } from '../errors.js';
+import { mailSessions } from '../mail-sessions.js';
 import { CODEX_SUBMIT_DELAY_MS, codexPaste, codexSubmitKey } from '../pty/codex-input.js';
 import { choiceInProgress } from '../pty/effort-switch.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
@@ -55,7 +57,7 @@ import { deliverRecipeToNewLeads } from '../rooms/rooms-service.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { Attempt } from '../pty/type-and-submit.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
-import type { WorksService } from '../works/works-service.js';
+import type { MailNotice, WorksService } from '../works/works-service.js';
 import { limitReturnDue, limitWindowFree, returnBlock, returnBlockReason } from './limit-return.js';
 import { ResumeLimiter } from './resume-limiter.js';
 
@@ -289,6 +291,7 @@ export function createWakeService(
   let isPaused = false;
   let started = false;
   let unsubscribeWorks: (() => void) | undefined;
+  let unsubscribeMail: (() => void) | undefined;
   let unsubscribeActivity: (() => void) | undefined;
   let unsubscribeDraft: (() => void) | undefined;
   let unsubscribeHostDraft: (() => void) | undefined;
@@ -409,12 +412,26 @@ export function createWakeService(
     activity.mailWaiting(ref, reason);
   }
 
+  /**
+   * Непрочитанное сессии. Пересчёт зовётся на каждое изменение работ для каждой сессии каждой работы, поэтому карту
+   * берём ту, что хост уже держит (`entry.map`): из базы при числе работ больше кэша карт каждый проход грузил бы их заново
+   * (спека хранилища 6.2). Живые правила идут по этой карте, письма из базы нужны только в таблицах (задача 7).
+   */
+  const unreadOf = (entry: WorkEntry, sessionId: string): Message[] =>
+    unreadLetters(entry.projectPath, entry.map.work.id, sessionId, { map: entry.map });
+
+  /** Есть ли непрочитанное: счёт без копий писем, карта снимка — по тем же причинам, что у `unreadOf` (спека хранилища 6.2). */
+  const hasUnread = (entry: WorkEntry, sessionId: string): boolean =>
+    unreadCount(entry.projectPath, entry.map.work.id, sessionId, { map: entry.map }).total > 0;
+
   /** Письма, непрочитанные сейчас, считаются уже указанными: будить ими некого. */
   function markUnreadPointed(ref: SessionRef, state: AttemptState, allowPlanRestart = false): void {
     const entry = works.entry(ref.projectPath, ref.workId);
     if (entry === undefined) return;
-    for (const message of unreadFor(entry.map, ref.sessionId)) {
-      if (!allowPlanRestart || !resumablePlanLetter(entry.map, message, ref.sessionId)) state.pointed.add(message.id);
+    for (const message of unreadOf(entry, ref.sessionId)) {
+      if (!allowPlanRestart || !resumablePlanLetter(entry.map, message, ref.sessionId, (id) => letterById(entry.projectPath, entry.map.work.id, id))) {
+        state.pointed.add(message.id);
+      }
     }
   }
 
@@ -458,10 +475,9 @@ export function createWakeService(
     const text = `${sessionTag(ref.sessionId)} did not resume: ${reason}`;
     const ids = new Set(letterIds);
     try {
-      await updateMap(ref.projectPath, ref.workId, (map) => {
-        const senders = new Set(
-          map.messages.filter((message) => ids.has(message.id)).map((message) => message.from),
-        );
+      // Только письма: отправители ожидавших писем читаются запросом, карта целиком не разбирается (спека хранилища 6.2).
+      writeLetters(ref.projectPath, ref.workId, (letters, map) => {
+        const senders = new Set(letters.query({ ids: [...ids], limit: ids.size }).map((message) => message.from));
         // Человек узнаёт из уведомления, системе писать незачем, себе — тоже.
         senders.delete(HUMAN);
         senders.delete(SYSTEM);
@@ -469,7 +485,7 @@ export function createWakeService(
         senders.delete(ref.sessionId);
         for (const sender of senders) {
           if (!map.sessions.some((session) => session.id === sender)) continue;
-          addMessage(map, { from: SYSTEM, to: [sender], text });
+          letters.add({ roomId: null, from: SYSTEM, to: [sender], text, kind: 'note' });
         }
       });
     } catch (error) {
@@ -829,7 +845,7 @@ export function createWakeService(
     state.pasteRetries = 0;
     state.choiceRetries = 0;
 
-    const letters = unreadFor(entry.map, session.id).filter((message) => message.deleted !== true);
+    const letters = unreadOf(entry, session.id).filter((message) => message.deleted !== true);
     const letterIds = letters.map((message) => message.id);
     beginAttempt(
       ref,
@@ -856,7 +872,7 @@ export function createWakeService(
     trackLimit(ref, state, entry, session, handle);
 
     if (handle === undefined) {
-      const letters = unreadFor(entry.map, session.id).length > 0;
+      const letters = hasUnread(entry, session.id);
       // Без нашего PTY письмо поднимает только спящую: живая без него —
       // сессия, поднятая не хостом (CLI), со своим каналом звонка, `pending`
       // поднимает autoLaunch, закрытая не поднимается ничем (спека 7.2). Спящую архивной работы
@@ -880,7 +896,7 @@ export function createWakeService(
         activity: null,
         hasDraft: false,
         paused: isPaused,
-        unread: unreadFor(entry.map, session.id),
+        unread: unreadOf(entry, session.id),
         rooms: entry.map.rooms,
         pointed: state.pointed,
         inFlight: false,
@@ -926,7 +942,7 @@ export function createWakeService(
     if (state.pointerAfter !== null) {
       const endedAt = live?.activity.turnEndedAt ?? null;
       if (endedAt === null || Date.parse(endedAt) < state.pointerAfter) {
-        publishWaiting(ref, state, unreadFor(entry.map, session.id).length > 0 ? 'resuming' : null);
+        publishWaiting(ref, state, hasUnread(entry, session.id) ? 'resuming' : null);
         return;
       }
       state.pointerAfter = null;
@@ -939,7 +955,7 @@ export function createWakeService(
       activity: live?.activity ?? null,
       hasDraft: handle.hasDraft(),
       paused: isPaused,
-      unread: unreadFor(entry.map, session.id),
+      unread: unreadOf(entry, session.id),
       rooms: entry.map.rooms,
       pointed: state.pointed,
       inFlight: state.inFlight,
@@ -950,7 +966,7 @@ export function createWakeService(
 
     if (action.kind !== 'type-pointer') {
       // Пауза будильника проверяется раньше писем: без непрочитанных причины нет и на паузе.
-      const letters = unreadFor(entry.map, session.id).length > 0;
+      const letters = hasUnread(entry, session.id);
       publishWaiting(ref, state, letters ? waitingOf(action, state) : null);
       return;
     }
@@ -972,7 +988,7 @@ export function createWakeService(
       return;
     }
     state.choiceRetries = 0;
-    beginAttempt(ref, state, { ...action, ...traceOf(unreadFor(entry.map, session.id), action.letterIds) }, codex);
+    beginAttempt(ref, state, { ...action, ...traceOf(unreadOf(entry, session.id), action.letterIds) }, codex);
     // Указатель в очереди занятого Codex хода не начинает — он «сообщён», а не «в полёте».
     publishWaiting(ref, state, action.queue === true ? 'pointed' : 'in-flight');
   }
@@ -1022,11 +1038,54 @@ export function createWakeService(
     }
   }
 
+  /** Сессии уведомлений `onMail`, ждущие пересчёта в конце хода (`flushMail`); ключ — `refKey`. */
+  const mailDirty = new Map<string, SessionRef>();
+  let mailFlushQueued = false;
+
   /** Все сессии всех работ: живые получают указатель, спящие — подъём. */
   function recomputeAll(): void {
     for (const entry of works.snapshot().entries) {
       for (const session of entry.map.sessions) {
         recompute({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id });
+      }
+    }
+  }
+
+  /**
+   * Запись писем (спека rooms.mail 6.7): без записи карты `onChange` молчит, и письмо будит только свои адресатов, а отметка
+   * прочтения снимает «письма ждут» только у читателя. Смешанная запись зовёт и это, и `onChange`: пересчёт идемпотентен.
+   * Карта — из снимка работ: адресаты комнаты берутся по ней, и комната, заведённая записью, ещё не попавшей в снимок, до
+   * её `onChange` адресатов не имеет.
+   */
+  function recomputeAddressees(notice: MailNotice): void {
+    const entry = works.entry(notice.projectPath, notice.workId);
+    if (entry === undefined) return;
+    for (const sessionId of mailSessions(notice, entry.map)) {
+      const ref: SessionRef = { projectPath: notice.projectPath, workId: notice.workId, sessionId };
+      mailDirty.set(refKey(ref), ref);
+    }
+    if (mailDirty.size === 0 || mailFlushQueued) return;
+    mailFlushQueued = true;
+    queueMicrotask(flushMail);
+  }
+
+  /**
+   * Каждая запись письма зовёт `onMail` отдельно, и пересчёт на каждое уведомление давал на пачку из 60 писем в комнату из
+   * трёх 120 пересчётов вместо трёх у `onChange` мастера с его debounce. Сессии уведомлений собираются в `mailDirty`, и в
+   * конце текущего синхронного хода (микрозадача, не таймер: пересчёт письма не ждёт окна, а письма одной пачки, записанные
+   * подряд без `await`, делят один проход) каждая пересчитывается один раз. Адресаты берутся по карте на момент уведомления,
+   * сам пересчёт видит уже свежее состояние. Упавший пересчёт — предупреждение, а не необработанное исключение микрозадачи:
+   * подписчика `onMail` защищает `try` службы работ, а здесь его уже нет.
+   */
+  function flushMail(): void {
+    mailFlushQueued = false;
+    const refs = [...mailDirty.values()];
+    mailDirty.clear();
+    for (const ref of refs) {
+      try {
+        recompute(ref);
+      } catch (error) {
+        host.log.warn('будильник: пересчёт после письма упал', { ref, error: String(error) });
       }
     }
   }
@@ -1062,6 +1121,7 @@ export function createWakeService(
         deliverRecipes();
         recomputeAll();
       });
+      unsubscribeMail = works.onMail(recomputeAddressees);
       unsubscribeActivity = activity.onChange((ref, value) => {
         const state = attempts.get(refKey(ref));
         // Ход начался (`UserPromptSubmit`) — попытка удалась, предохранитель не нужен. Сессия, которую
@@ -1130,10 +1190,12 @@ export function createWakeService(
       if (!started) return;
       started = false;
       unsubscribeWorks?.();
+      unsubscribeMail?.();
       unsubscribeActivity?.();
       unsubscribeDraft?.();
       unsubscribeHostDraft?.();
       unsubscribeExit?.();
+      mailDirty.clear();
       for (const state of attempts.values()) {
         clearTimers(state);
         dropLimit(state);

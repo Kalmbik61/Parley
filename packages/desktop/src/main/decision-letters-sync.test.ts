@@ -1,19 +1,22 @@
 /**
  * Страж синхронности ответа на решение с окном. Окно узнаёт, что решение вернули на доработку, по началу письма человека
- * ведущему (`renderer/attention/derive.ts#roomDecisionReturned`) и держит свои копии литералов `RETURNED_LETTER`,
- * `ACCEPTED_LETTER` и `HUMAN`: рендерер берёт из core только типы. Здесь письма пишет настоящий core — поменяет он слова
+ * ведущему (`renderer/attention/derive.ts#roomDecisionReturned`): слова письма оно берёт у `humanDecisionOutcome` из
+ * `@parley/core/attention`, где лежат копии литералов `RETURNED_LETTER` и `ACCEPTED_LETTER` (модуль чистый и `proposals.ts`
+ * не тянет), а автора письма держит своей копией `HUMAN`. Здесь письма пишет настоящий core — поменяет он слова
  * письма или их автора, тест упадёт и напомнит поправить окно, а не оставит уведомления молча врать «collected
  * positions» после возврата.
  *
  * Лежит в `main/` по той же причине, что `agent-guide-sync.test.ts`: только процесс main тянет `@parley/core` значением.
  */
 
-import { addRoom, addSession, HUMAN, resolveProposal, setProposal, type WorkMap } from '@parley/core';
+import { addRoom, addSession, HUMAN, mapLetterTx, resolveProposal, setProposal, type WindowWorkMap } from '@parley/core';
 import { describe, expect, it } from 'vitest';
 import { roomDecisionReturned } from '../renderer/attention/derive.js';
 
-function roomOfThree(): WorkMap {
-  const map: WorkMap = {
+const lt = (map: WindowWorkMap) => mapLetterTx(map).letters;
+
+function roomOfThree(): WindowWorkMap {
+  const map: WindowWorkMap = {
     schemaVersion: 2,
     work: { id: 'w-0001', title: 'W', goal: '', status: 'active', createdAt: '2026-09-30T10:00:00.000Z', updatedAt: '2026-09-30T10:00:00.000Z' },
     sessions: [],
@@ -30,15 +33,15 @@ describe('ответ человека на решение — слова core и
     const map = roomOfThree();
 
     const first = setProposal(map, 'r-01', 's-01', 'решение');
-    resolveProposal(map, 'r-01', first.proposalId, 'return', { note: 'добавь тесты' });
+    resolveProposal(map, lt(map), 'r-01', first.proposalId, 'return', { note: 'добавь тесты' });
     expect(roomDecisionReturned(map, 'r-01')).toBe(true);
 
     const second = setProposal(map, 'r-01', 's-01', 'решение 2');
-    resolveProposal(map, 'r-01', second.proposalId, 'return');
+    resolveProposal(map, lt(map), 'r-01', second.proposalId, 'return');
     expect(roomDecisionReturned(map, 'r-01')).toBe(true);
 
     const third = setProposal(map, 'r-01', 's-01', 'решение 3');
-    resolveProposal(map, 'r-01', third.proposalId, 'accept');
+    resolveProposal(map, lt(map), 'r-01', third.proposalId, 'accept');
     expect(roomDecisionReturned(map, 'r-01')).toBe(false);
   });
 });

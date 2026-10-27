@@ -19,7 +19,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Plus, Search } from 'lucide-react';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
@@ -74,7 +74,7 @@ const INITIAL_LIST_RECT = { width: 288, height: 800 };
 
 type Row =
   | { kind: 'header'; section: SidebarSection }
-  | { kind: 'card'; section: SidebarSection; entry: WorkEntry }
+  | { kind: 'card'; section: SidebarSection; entry: WindowWorkEntry }
   | { kind: 'archived'; section: SidebarSection };
 
 /** Строка навигации (1.2): пилюля 32px, значок 14, сочетание справа; hover — `text 7%`. */
@@ -93,7 +93,7 @@ function rowsOf(sections: SidebarSection[]): Row[] {
 }
 
 /** Строки сессий, которые карточка покажет свёрнутой: закрытые спрятаны. */
-function estimateCard(entry: WorkEntry): number {
+function estimateCard(entry: WindowWorkEntry): number {
   const open = entry.map.sessions.filter((session) => session.lifecycle !== 'closed').length;
   return CARD_HEIGHT + SESSION_ROW_HEIGHT * open;
 }
@@ -104,7 +104,7 @@ function estimateCard(entry: WorkEntry): number {
  * работы не перерисовывается на событие чужой (раунд исправлений 1 куска 3.3).
  */
 function activitySlice(
-  entry: WorkEntry,
+  entry: WindowWorkEntry,
   byRef: Record<string, ActivityEntry>,
   previous: Record<string, ActivityEntry> | undefined,
 ): Record<string, ActivityEntry> {
@@ -205,7 +205,7 @@ export function WorkSidebar({ bridge, onActivateWork, onOpenSession, onOpenMail,
     patchUi({ collapsedProjects: next });
   };
 
-  const renderCard = (entry: WorkEntry): JSX.Element => {
+  const renderCard = (entry: WindowWorkEntry): JSX.Element => {
     const key = workKey(entry.projectPath, entry.map.work.id);
     const slice = activitySlice(entry, activity, slices.current.get(key));
     slices.current.set(key, slice);
@@ -302,7 +302,7 @@ interface VirtualListProps {
   /** Прокручиваемый список `WorkSidebar` — он же ловит наведение. */
   scrollRef: RefObject<HTMLDivElement>;
   rows: Row[];
-  renderCard(entry: WorkEntry): JSX.Element;
+  renderCard(entry: WindowWorkEntry): JSX.Element;
   onToggleCollapsed(projectPath: string): void;
   onNewWork(projectPath: string): void;
 }

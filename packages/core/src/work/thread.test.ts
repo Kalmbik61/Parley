@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { addMessage, addSession, removeSession } from './map.js';
-import { agentThreadOf, decisionsOf, participantLabel, recentDecisions, sessionTag, threadOf } from './thread.js';
-import type { Message, MessageKind, WorkMap } from './types.js';
+import { recipientsOf } from './letters.js';
+import { addRoom, archiveRoom, canReadRoom } from './rooms.js';
+import { agentDecisions, agentLetterVisible, agentThreadOf, decisionsOf, participantLabel, recentDecisions, sessionTag, threadMembersOf, threadOf } from './thread.js';
+import { HUMAN, type Message, type MessageKind, type WorkMap } from './types.js';
+import { mapLetterTx } from './letter-store.js';
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
 const emptyMap = (): WorkMap => ({
   schemaVersion: 2,
@@ -87,7 +91,7 @@ describe('threadOf', () => {
 
   it('удалённая сессия не участник, её письма остаются', () => {
     const map = forest();
-    removeSession(map, 's-03');
+    removeSession(map, lt(map), 's-03');
 
     const thread = threadOf(map, 's-02');
 
@@ -111,7 +115,7 @@ describe('participantLabel', () => {
     const map = forest();
 
     expect(participantLabel(map, 's-01')).toBe('план');
-    removeSession(map, 's-03');
+    removeSession(map, lt(map), 's-03');
     // Ярлыка удалённой в карте не остаётся — только id в `deletedSessions`.
     expect(participantLabel(map, 's-03')).toBe('s-03 (deleted)');
     expect(participantLabel(map, 's-99')).toBe('s-99');
@@ -158,5 +162,115 @@ describe('agentThreadOf', () => {
     expect(agentThreadOf(map, 's-07').messages).toEqual([]);
     const own = letter(map, 's-02', 's-07', '10:25', 'note');
     expect(ids(agentThreadOf(map, 's-07').messages)).toEqual([own.id]);
+  });
+});
+
+describe('agentLetterVisible', () => {
+  /**
+   * Лес из `forest()` плюс одинокий корень s-07, удалённая s-03 и комнаты: r-01 (участники s-02 и s-05, хозяин s-04),
+   * r-02 (архивная, участник s-01) и письма комнаты, которой нет. Прямые письма: внутри семьи, между семьями, человеку,
+   * от человека, от удалённой и к одинокому корню.
+   */
+  const crowded = (): WorkMap => {
+    const map = forest();
+    addSession(map, { provider: 'claude', label: 'одинокий', task: 't' });
+    addRoom(map, { title: 'общая', creator: HUMAN, ownerId: 's-04', members: ['s-02', 's-05'] }, at('11:00'));
+    addRoom(map, { title: 'старая', creator: HUMAN, members: ['s-01'] }, at('11:01'));
+    addMessage(map, { from: 's-02', to: [], text: 'всем', kind: 'note', roomId: 'r-01' }, at('11:05'));
+    addMessage(map, { from: 's-05', to: ['s-02'], text: 'адресно', kind: 'question', roomId: 'r-01' }, at('11:06'));
+    addMessage(map, { from: 's-01', to: [], text: 'в старую', kind: 'note', roomId: 'r-02' }, at('11:07'));
+    addMessage(map, { from: 's-06', to: [], text: 'в никуда', kind: 'note', roomId: 'r-09' }, at('11:08'));
+    addMessage(map, { from: HUMAN, to: ['s-04'], text: 'человек → s-04', kind: 'note' }, at('11:09'));
+    addMessage(map, { from: 's-04', to: [HUMAN], text: 's-04 → человеку', kind: 'question' }, at('11:10'));
+    addMessage(map, { from: 's-03', to: ['s-04'], text: 'от удалённой', kind: 'note' }, at('11:11'));
+    addMessage(map, { from: 's-06', to: ['s-07'], text: 'одинокому корню', kind: 'note' }, at('11:12'));
+    addMessage(map, { from: 's-07', to: ['s-01'], text: 'от одинокого', kind: 'decision' }, at('11:13'));
+    archiveRoom(map, lt(map), 'r-02', at('11:20'));
+    removeSession(map, lt(map), 's-03');
+    return map;
+  };
+
+  /**
+   * Образец — `agentThreadOf` в прежнем виде, до предиката на одно письмо: тред семьи по поддереву владельца, письма
+   * комнат читателю комнаты, прямые — своим и историческим. Копия логики, а не вызов: предикат и `agentThreadOf` теперь
+   * делят код, и сверять их друг с другом значило бы сверять код с самим собой.
+   */
+  const referenceVisible = (map: WorkMap, caller: string): Set<string> => {
+    const session = map.sessions.find((candidate) => candidate.id === caller);
+    if (session === undefined) throw new Error(`session ${caller} is not in the map`);
+    const childrenOf = (id: string) => map.sessions.filter((candidate) => candidate.parent === id);
+    const owner = session.parent !== null ? session.parent : childrenOf(caller).length > 0 ? caller : null;
+    let historical = new Set<string>();
+    if (owner !== null) {
+      const members: string[] = [];
+      const queue = [owner];
+      while (queue.length > 0) {
+        const id = queue.shift() as string;
+        members.push(id);
+        for (const child of childrenOf(id)) queue.push(child.id);
+      }
+      const inside = new Set(members);
+      const gone = new Set(map.work.deletedSessions ?? []);
+      const here = (id: string): boolean => inside.has(id) || gone.has(id);
+      historical = new Set(
+        map.messages
+          .filter((message) => {
+            const to = recipientsOf(message, map);
+            return here(message.from) && to.every(here) && (inside.has(message.from) || to.some((id) => inside.has(id)));
+          })
+          .map((message) => message.id),
+      );
+    }
+    return new Set(
+      map.messages
+        .filter((message) => {
+          if (message.roomId !== null) {
+            const room = map.rooms.find((candidate) => candidate.id === message.roomId);
+            return room !== undefined && canReadRoom(room, caller);
+          }
+          return historical.has(message.id) || message.from === caller || message.to.includes(caller);
+        })
+        .map((message) => message.id),
+    );
+  };
+
+  it('на каждом письме и у каждой сессии отвечает так же, как прежний agentThreadOf', () => {
+    const map = crowded();
+    const seen = new Set<boolean>();
+    const verdicts = new Set<string>();
+
+    for (const session of map.sessions) {
+      const visible = agentLetterVisible(map, session.id);
+      const reference = referenceVisible(map, session.id);
+      const answers: boolean[] = [];
+      for (const message of map.messages) {
+        expect(visible(message), `${session.id} видит ${message.id}`).toBe(reference.has(message.id));
+        seen.add(visible(message));
+        answers.push(visible(message));
+      }
+      expect(new Set(ids(agentThreadOf(map, session.id).messages))).toEqual(reference);
+      verdicts.add(answers.join());
+    }
+
+    // Фикстура различает сессии и даёт оба ответа: иначе совпадение ничего бы не доказывало.
+    expect(seen).toEqual(new Set([true, false]));
+    expect(verdicts.size).toBeGreaterThan(3);
+  });
+
+  it('неизвестная сессия — та же ошибка, что у agentThreadOf', () => {
+    const map = crowded();
+
+    expect(() => agentLetterVisible(map, 's-99')).toThrow(/s-99/);
+    expect(() => agentThreadOf(map, 's-99')).toThrow(/s-99/);
+  });
+
+  it('agentDecisions берёт решения запросом и совпадает с решениями треда', () => {
+    const map = crowded();
+    const letters = lt(map);
+
+    for (const session of map.sessions) {
+      expect(ids(agentDecisions(map, letters, session.id))).toEqual(ids(decisionsOf(agentThreadOf(map, session.id))));
+    }
+    expect(threadMembersOf(map, 's-02')).toEqual(threadOf(map, 's-02').members);
   });
 });

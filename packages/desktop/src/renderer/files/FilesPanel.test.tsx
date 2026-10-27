@@ -6,7 +6,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { refKey, type EventData } from '@parley/protocol';
 import type { DirEntry, FileRoot } from '../../shared/files-types.js';
 import type { TabSpec } from '../../shared/layout-types.js';
@@ -26,7 +26,7 @@ vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }))
 
 const KEY = '/tmp/proj w-01';
 const worktree = (id: string) => ({ path: `/wt/${id}`, branch: `harnas/w-0001/${id}`, base: 'main', createdAt: '2026-09-27T08:00:00.000Z' });
-const ENTRY: WorkEntry = makeWork('w-01', {
+const ENTRY: WindowWorkEntry = makeWork('w-01', {
   projectPath: '/tmp/proj',
   sessions: [
     makeSession('s-01', 'plain'),

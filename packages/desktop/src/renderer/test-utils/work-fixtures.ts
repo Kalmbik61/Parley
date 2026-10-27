@@ -1,10 +1,10 @@
 /**
  * Фикстуры работ и сессий для тестов сайдбара карточек (кусок 3.3): одна форма
- * `WorkSession`/`WorkEntry` на все его тесты вместо копии в каждом файле.
+ * `WorkSession`/`WindowWorkEntry` на все его тесты вместо копии в каждом файле.
  */
 
-import type { Activity, Message, NeedKind, Room, SessionNeed, WorkEntry, WorkSession, WorkStatus } from '@parley/core';
-import { refKey, type LiveMetrics, type SessionRef } from '@parley/protocol';
+import type { Activity, Message, NeedKind, Room, SessionNeed, WindowWorkEntry, WorkSession, WorkStatus } from '@parley/core';
+import { refKey, type LiveMetrics, type RoomsMailEvent, type RoomsMailRoom, type SessionRef } from '@parley/protocol';
 import type { ActivityEntry } from '../store/activity.js';
 
 export function makeSession(id: string, label: string, patch: Partial<WorkSession> = {}): WorkSession {
@@ -46,7 +46,7 @@ export interface WorkOptions {
   rooms?: Room[];
 }
 
-export function makeWork(id: string, options: WorkOptions = {}): WorkEntry {
+export function makeWork(id: string, options: WorkOptions = {}): WindowWorkEntry {
   const createdAt = options.createdAt ?? '2026-09-27T08:00:00.000Z';
   return {
     projectPath: options.projectPath ?? '/tmp/proj',
@@ -117,4 +117,23 @@ export function makeNeed(kind: NeedKind, patch: Partial<SessionNeed> = {}): Sess
 
 export function activityMap(entries: ActivityEntry[]): Record<string, ActivityEntry> {
   return Object.fromEntries(entries.map((entry) => [refKey(entry.ref), entry]));
+}
+
+/** Комната в событии `rooms.mail` (спека rooms.mail 6.3): по умолчанию пустая, без новых писем и отметок. */
+export function makeMailRoom(roomId: string | null, patch: Partial<RoomsMailRoom> = {}): RoomsMailRoom {
+  return { roomId, prevTop: 0, top: 0, total: 0, lastAt: null, letters: [], reads: [], deleted: [], ...patch };
+}
+
+/** Событие `rooms.mail` работы `w-01` проекта `/tmp/proj`; версии обязательны — по ним окно ищет разрыв. */
+export function makeMailEvent(patch: Partial<RoomsMailEvent> & Pick<RoomsMailEvent, 'version' | 'prevVersion'>): RoomsMailEvent {
+  return {
+    projectPath: '/tmp/proj',
+    workId: 'w-01',
+    updatedAt: '2026-09-27T10:00:00.000Z',
+    rooms: [],
+    droppedRooms: [],
+    unread: { letters: 0, rooms: {} },
+    mentionCandidates: [],
+    ...patch,
+  };
 }

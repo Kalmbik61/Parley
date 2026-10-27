@@ -6,12 +6,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MIGRATION_RECORD, migrateHome, migrateProjects } from './migrate.js';
+import { MIGRATION_RECORD, migrateHome, migrateProjects, rewriteArtifactRefs } from './migrate.js';
 import type { MigrationEntry } from './migrate.js';
 import { processStartedAt } from './work/liveness.js';
-import { addSession, transitionSession } from './work/map.js';
-import { createWork, readMap, readWorksIndex, updateMap, worksIndexPath } from './work/store.js';
-import type { WorkSession } from './work/types.js';
+import { closeWorkDb } from './work/db.js';
+import { migrateMapsToDb } from './work/migrate-to-db.js';
+import { addSession, nextWorkId, transitionSession } from './work/map.js';
+import { createWork, parleyHome, readMap, readStoredMap, readWorksIndex, updateMap, workPaths, worksIndexPath } from './work/store.js';
+import type { WorkMap, WorkSession } from './work/types.js';
 
 const AT = new Date('2026-09-30T18:00:00.000Z');
 const now = (): Date => AT;
@@ -43,6 +45,39 @@ const record = async (home: string): Promise<{ schemaVersion: number; migrated: 
 
 /** Запись с root в sandbox права не режет, и отказ `rename` по правам не проверить. */
 const asRoot = process.getuid?.() === 0;
+
+/** Пустая карта работы — такой её оставляла прежняя сборка. */
+const legacyMap = (id: string, title: string): WorkMap => ({
+  schemaVersion: 2,
+  work: { id, title, goal: '', status: 'active', createdAt: AT.toISOString(), updatedAt: AT.toISOString() },
+  sessions: [],
+  messages: [],
+  rooms: [],
+});
+
+/**
+ * Работа в формате до базы, каким его оставила прежняя сборка: `map.json` в каталоге работы проекта и запись в
+ * `works-index.json` дома (спека хранилища 6.6). Базы не касается: перенос каталогов читает именно эти файлы.
+ */
+async function writeLegacyWork(indexHome: string, project: string, stateDirName: string, map: WorkMap): Promise<void> {
+  const dir = path.join(project, stateDirName, 'works', map.work.id);
+  await mkdir(path.join(dir, 'artifacts'), { recursive: true });
+  await mkdir(path.join(dir, 'briefs'), { recursive: true });
+  await writeFile(path.join(dir, 'map.json'), `${JSON.stringify(map, null, 2)}\n`);
+  const indexFile = path.join(indexHome, 'works-index.json');
+  const index = await readWorksIndex(indexFile);
+  const entry = { id: map.work.id, projectPath: project, title: map.work.title, status: map.work.status, updatedAt: map.work.updatedAt };
+  const works = [...index.works.filter((work) => !(work.projectPath === project && work.id === map.work.id)), entry];
+  await writeFile(indexFile, `${JSON.stringify({ schemaVersion: 1, works }, null, 2)}\n`);
+}
+
+/** Правка карты в её прежнем файле. */
+async function editLegacyMap(project: string, stateDirName: string, workId: string, mutate: (map: WorkMap) => void): Promise<void> {
+  const file = path.join(project, stateDirName, 'works', workId, 'map.json');
+  const map = JSON.parse(await readFile(file, 'utf8')) as WorkMap;
+  mutate(map);
+  await writeFile(file, `${JSON.stringify(map, null, 2)}\n`);
+}
 
 describe('migrateHome — перенос ~/.harnas → ~/.parley (R6)', () => {
   /** «Домашний каталог человека» — прямо в `/tmp`: путь unix-сокета старого хоста ограничен 103 байтами. */
@@ -106,6 +141,26 @@ describe('migrateHome — перенос ~/.harnas → ~/.parley (R6)', () => {
       schemaVersion: 1,
       migrated: [{ what: 'home', from: legacy(), to: current(), at: AT.toISOString() }],
     });
+  });
+
+  it('процесс, уже нашедший прежний дом, после переноса идёт в новый: запомненный ответ parleyHome сброшен', async () => {
+    const saved = { home: process.env['HOME'], parley: process.env['PARLEY_HOME'], harnas: process.env['HARNAS_HOME'] };
+    delete process.env['PARLEY_HOME'];
+    delete process.env['HARNAS_HOME'];
+    process.env['HOME'] = userHome;
+    try {
+      await seedLegacyHome();
+      expect(parleyHome()).toBe(legacy());
+
+      expect(await migrateHome({ env: {}, userHome, now })).toMatchObject({ status: 'moved' });
+
+      expect(parleyHome()).toBe(current());
+    } finally {
+      for (const [name, value] of [['HOME', saved.home], ['PARLEY_HOME', saved.parley], ['HARNAS_HOME', saved.harnas]] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 
   it('запись, которую хост оставил в прежнем доме (проекты переехали раньше дома), переезжает с ним и дополняется', async () => {
@@ -259,33 +314,20 @@ describe('migrateHome — перенос ~/.harnas → ~/.parley (R6)', () => {
     expect(await migrateHome({ env: {}, userHome, now })).toMatchObject({ status: 'moved' });
   });
 
-  /** Работа с индексом прежнего дома: `createWork` и `updateMap` берут дом из `PARLEY_HOME`. */
-  async function inLegacyHome<T>(body: () => Promise<T>): Promise<T> {
-    process.env.PARLEY_HOME = legacy();
-    try {
-      return await body();
-    } finally {
-      delete process.env.PARLEY_HOME;
-    }
-  }
-
   /**
    * Проект из индекса прежнего дома, каким его оставила прежняя сборка: каталог состояния `.harnas` с работой и
    * сессией, которую поднимал человек командой из терминала (`work session new`) — в карте она `pending` без pid.
+   * Файлы прежнего формата, без базы: так выглядит дом до переезда карт.
    */
   async function legacyProject(name: string, stateDirName = '.harnas'): Promise<{ project: string; workId: string; sessionId: string }> {
     const project = path.join(userHome, name);
     await mkdir(path.join(project, stateDirName), { recursive: true });
-    return inLegacyHome(async () => {
-      const { work } = await createWork(project, { title: `Работа ${name}` });
-      let sessionId = '';
-      await updateMap(project, work.id, (map) => {
-        const session = addSession(map, { provider: 'claude', label: 'из терминала', task: '' });
-        session.launchedBy = 'cli';
-        sessionId = session.id;
-      });
-      return { project, workId: work.id, sessionId };
-    });
+    const workId = nextWorkId(await readWorksIndex(path.join(legacy(), 'works-index.json')));
+    const map = legacyMap(workId, `Работа ${name}`);
+    const session = addSession(map, { provider: 'claude', label: 'из терминала', task: '' });
+    session.launchedBy = 'cli';
+    await writeLegacyWork(legacy(), project, stateDirName, map);
+    return { project, workId, sessionId: session.id };
   }
 
   /** Процесс агента, поднятого из терминала: путь из каталога состояния стоит в его командной строке (`--mcp-config`). */
@@ -339,13 +381,11 @@ describe('migrateHome — перенос ~/.harnas → ~/.parley (R6)', () => {
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
     children.push(child);
     await once(child, 'spawn');
-    await inLegacyHome(() =>
-      updateMap(project, workId, (map) => {
-        transitionSession(map, sessionId, 'active');
-        const session = map.sessions.find((candidate) => candidate.id === sessionId);
-        if (session) Object.assign(session, { pid: child.pid ?? 0 });
-      }),
-    );
+    await editLegacyMap(project, '.harnas', workId, (map) => {
+      transitionSession(map, sessionId, 'active');
+      const session = map.sessions.find((candidate) => candidate.id === sessionId);
+      if (session) Object.assign(session, { pid: child.pid ?? 0 });
+    });
 
     expect(await migrateHome({ env: {}, userHome, now })).toMatchObject({ status: 'skipped', reason: 'live-session' });
     await expectUntouched();
@@ -427,6 +467,7 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
 
   afterEach(async () => {
     for (const child of children.splice(0)) await stop(child);
+    closeWorkDb();
     delete process.env.PARLEY_HOME;
     await chmod(root, 0o700);
     await Promise.all([home, root].map((dir) => rm(dir, { recursive: true, force: true })));
@@ -452,7 +493,7 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
   /** В карте — то, что оставляет `work session new`: `pending` без pid, запустил не хост. */
   async function seedTerminalSession(project: string, workId: string): Promise<string> {
     let id = '';
-    await updateMap(project, workId, (map) => {
+    await update(project, workId, (map) => {
       const session = addSession(map, { provider: 'claude', label: 'из терминала', task: '' });
       session.launchedBy = 'cli';
       id = session.id;
@@ -467,19 +508,36 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     await exited;
   }
 
+  /**
+   * Выгружает работу из базы в файлы прежнего формата: `map.json` и `works-index.json` дома. Перенос каталогов читает
+   * эти файлы (индекс, `map.json`, `map.lock`), а правит пути артефактов уже в строках базы, поэтому у работы есть и то
+   * и другое.
+   */
+  async function exportLegacy(project: string, workId: string): Promise<void> {
+    await writeFile(workPaths(project, workId).map, `${JSON.stringify(readStoredMap(project, workId), null, 2)}\n`);
+    await writeFile(worksIndexPath(), `${JSON.stringify(await readWorksIndex(), null, 2)}\n`);
+  }
+
+  /** Правка карты в базе с выгрузкой в прежний файл: проверка живости сессий читает файл. */
+  async function update(project: string, workId: string, mutate: (map: WorkMap) => void): Promise<void> {
+    await updateMap(project, workId, mutate);
+    await exportLegacy(project, workId);
+  }
+
   /** Проект, каким его оставила прежняя сборка: каталог состояния `.harnas` с одной работой. */
   async function legacyProject(name: string): Promise<{ project: string; workId: string }> {
     const project = path.join(root, name);
     await mkdir(path.join(project, '.harnas'), { recursive: true });
     const { work } = await createWork(project, { title: `Работа ${name}` });
     await writeFile(path.join(project, '.harnas', 'works', work.id, 'artifacts', 'note.txt'), 'заметка\n');
+    await exportLegacy(project, work.id);
     return { project, workId: work.id };
   }
 
   /** Заводит сессию в работе и ставит ей поля процесса. */
   async function seedSession(project: string, workId: string, patch: Partial<WorkSession>): Promise<string> {
     let id = '';
-    await updateMap(project, workId, (map) => {
+    await update(project, workId, (map) => {
       const session = addSession(map, { provider: 'claude', label: 'сессия', task: '' });
       id = session.id;
       transitionSession(map, id, patch.lifecycle === 'sleeping' ? 'active' : (patch.lifecycle ?? 'active'));
@@ -546,7 +604,8 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     const a = await legacyProject('a');
     const b = await legacyProject('b');
     // Вторая работа в проекте a: запись индекса с тем же projectPath.
-    await createWork(a.project, { title: 'Вторая в a' });
+    const second = await createWork(a.project, { title: 'Вторая в a' });
+    await exportLegacy(a.project, second.work.id);
 
     const results = await migrateProjects({ now });
 
@@ -622,7 +681,7 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
 
     expect(await migrateProjects({ now })).toMatchObject([{ status: 'skipped', reason: 'live-session', detail: `${workId}/${own}` }]);
 
-    await updateMap(project, workId, (map) => {
+    await update(project, workId, (map) => {
       const session = map.sessions.find((candidate) => candidate.id === own);
       if (session) session.startedAtProcess = '2020-01-01T00:00:00.000Z';
     });
@@ -634,7 +693,7 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     const child = start();
     const startedAtProcess = await processStartedAt(child.pid ?? 0);
     await seedSession(project, workId, { lifecycle: 'closed', pid: child.pid ?? 0, startedAtProcess });
-    await updateMap(project, workId, (map) => {
+    await update(project, workId, (map) => {
       addSession(map, { provider: 'claude', label: 'ждёт', task: 'задача' });
     });
 
@@ -740,7 +799,7 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     const { project, workId } = await legacyProject('shop');
     const note = `.harnas/works/${workId}/artifacts/note.txt`;
     let sessionId = '';
-    await updateMap(project, workId, (map) => {
+    await update(project, workId, (map) => {
       const session = addSession(map, { provider: 'claude', label: 'план', task: 'задача' });
       sessionId = session.id;
       session.summary = `план лежит в ${note}`;
@@ -755,7 +814,11 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     const before = await readMap(project, workId);
     const indexBefore = await readFile(worksIndexPath(), 'utf8');
 
-    expect(await migrateProjects({ now })).toMatchObject([{ status: 'moved' }]);
+    const results = await migrateProjects({ now });
+    expect(results).toMatchObject([{ status: 'moved' }]);
+    // Сам перенос карты в базе не трогает: их правит отдельный шаг после переезда карт (спека хранилища 6.6).
+    expect((await readMap(project, workId)).sessions[0]?.artifacts[0]?.path).toBe(note);
+    await rewriteArtifactRefs(results);
 
     const after = await readMap(project, workId);
     const session = after.sessions.find((candidate) => candidate.id === sessionId);
@@ -774,6 +837,46 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     // Правка не событие работы: updatedAt стоит на месте, индекс не менялся.
     expect(after.work.updatedAt).toBe(before.work.updatedAt);
     expect(await readFile(worksIndexPath(), 'utf8')).toBe(indexBefore);
+  });
+
+  it('пути артефактов правятся только у проектов, которые переехали: занятый проект остаётся при .harnas и при своих путях', async () => {
+    const { project, workId } = await legacyProject('shop');
+    const note = `.harnas/works/${workId}/artifacts/note.txt`;
+    await update(project, workId, (map) => {
+      addSession(map, { provider: 'claude', label: 'план', task: 'задача' }).artifacts = [{ kind: 'заметка', path: note }];
+    });
+    await writeFile(path.join(legacyDir(project), 'works', workId, 'map.lock'), '');
+
+    const results = await migrateProjects({ now });
+    await rewriteArtifactRefs(results);
+
+    expect(results).toMatchObject([{ status: 'skipped', reason: 'locked' }]);
+    expect((await readMap(project, workId)).sessions[0]?.artifacts[0]?.path).toBe(note);
+  });
+
+  it('первый старт из одних файлов: каталоги → карты в базу → пути артефактов; строки есть, пути переписаны, map.v2.json рядом', async () => {
+    const project = path.join(root, 'shop');
+    const map = legacyMap('w-0001', 'Старая');
+    const note = `.harnas/works/${map.work.id}/artifacts/note.txt`;
+    addSession(map, { provider: 'claude', label: 'план', task: 'задача' }).artifacts = [{ kind: 'заметка', path: note }];
+    await writeLegacyWork(home, project, '.harnas', map);
+    await writeFile(path.join(project, '.harnas', 'works', 'w-0001', 'artifacts', 'note.txt'), 'заметка\n');
+    // Только файлы прежней сборки: в базе ни одной строки.
+    expect((await readWorksIndex()).works).toEqual([]);
+
+    const moved = await migrateProjects({ now });
+    const maps = await migrateMapsToDb();
+    await rewriteArtifactRefs(moved);
+
+    expect(moved).toEqual([{ projectPath: project, status: 'moved', from: legacyDir(project), to: currentDir(project) }]);
+    expect(maps).toEqual({ migrated: [{ projectPath: project, workId: 'w-0001' }], failed: [], skipped: [] });
+    expect((await readWorksIndex()).works.map((work) => work.id)).toEqual(['w-0001']);
+    const artifact = (await readMap(project, 'w-0001')).sessions[0]?.artifacts[0];
+    expect(artifact?.path).toBe('.parley/works/w-0001/artifacts/note.txt');
+    expect(await exists(path.join(project, artifact?.path ?? ''))).toBe(true);
+    expect(await exists(path.join(currentDir(project), 'works', 'w-0001', 'map.v2.json'))).toBe(true);
+    expect(await exists(path.join(currentDir(project), 'works', 'w-0001', 'map.json'))).toBe(false);
+    expect(await exists(path.join(home, 'works-index.v2.json'))).toBe(true);
   });
 
   it('сохранённые брифы: относительные пути в каталог состояния переписываются, абсолютные и чужие — нет', async () => {
@@ -817,6 +920,7 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     const busy = await legacyProject('busy');
     await writeFile(path.join(legacyDir(busy.project), 'works', busy.workId, 'map.lock'), '');
     const second = await createWork(busy.project, { title: 'Свободная работа того же проекта' });
+    await exportLegacy(busy.project, second.work.id);
     const free = await legacyProject('free');
 
     const results = await migrateProjects({ now });
@@ -890,6 +994,7 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
   it('проект без прежнего каталога (уже на .parley) — молча, ничего не трогается', async () => {
     const project = path.join(root, 'fresh');
     await createWork(project, { title: 'Новая' });
+    await exportLegacy(project, 'w-0001');
     const before = await readFile(path.join(project, '.parley', 'works', 'w-0001', 'map.json'), 'utf8');
 
     expect(await migrateProjects({ now })).toMatchObject([{ status: 'skipped', reason: 'no-legacy' }]);
@@ -913,6 +1018,29 @@ describe('migrateProjects — перенос <проект>/.harnas → <про�
     await writeFile(worksIndexPath(), '{ broken');
 
     await expect(migrateProjects({ now })).rejects.toThrow('cannot be parsed');
+  });
+
+  it('проекты берутся из прежнего works-index.json, а не из таблицы: таблица пуста, как до переезда карт в базу (спека хранилища 6.6)', async () => {
+    const project = path.join(root, 'shop');
+    await mkdir(path.join(project, '.harnas'), { recursive: true });
+    // Только файлы прежней сборки: в базе ни одной строки.
+    await writeLegacyWork(home, project, '.harnas', legacyMap('w-0001', 'Старая'));
+    expect((await readWorksIndex()).works).toEqual([]);
+
+    const results = await migrateProjects({ now });
+
+    expect(results).toEqual([{ projectPath: project, status: 'moved', from: legacyDir(project), to: currentDir(project) }]);
+    expect(await readFile(path.join(currentDir(project), 'works', 'w-0001', 'map.json'), 'utf8')).toContain('Старая');
+  });
+
+  it('проект, который есть только в таблице, а в прежнем индексе нет, не называется: переносить по базе нечего', async () => {
+    const project = path.join(root, 'shop');
+    await mkdir(path.join(project, '.harnas'), { recursive: true });
+    await createWork(project, { title: 'Только в базе' });
+
+    expect(await migrateProjects({ now })).toEqual([]);
+    expect(await exists(legacyDir(project))).toBe(true);
+    expect(await exists(currentDir(project))).toBe(false);
   });
 
   it('индекса нет — переносить некому', async () => {

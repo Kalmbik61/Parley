@@ -5,14 +5,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Message, Proposal, Room, SessionActivity, WorkEntry, WorkSession } from '@parley/core';
-import { refKey, type HostNotice, type SessionRef } from '@parley/protocol';
+import type { MapCompactMail, Message, Proposal, Room, SessionActivity, WindowWorkEntry, WorkSession } from '@parley/core';
+import { refKey, type HostNotice, type RoomsMailEvent, type RoomsMailRoom, type SessionRef } from '@parley/protocol';
 import type { AppNote, FocusTarget } from '../../shared/bridge.js';
 import { providerName } from '../../shared/strings.js';
 import { DEFAULT_UI, type UiFile } from '../../shared/ui-types.js';
 import { AudioContextStub } from '../test-utils/audio.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
-import { makeNeed } from '../test-utils/work-fixtures.js';
+import { makeMailEvent, makeMailRoom, makeNeed } from '../test-utils/work-fixtures.js';
 import { useActivityStore } from '../store/activity.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
@@ -55,7 +55,7 @@ function letter(id: string, overrides: Partial<Message> = {}): Message {
   return { id, roomId: null, from: 's-01', to: ['human'], at: '2026-01-01T00:00:00.000Z', text: 'hello', kind: 'note', readBy: {}, ...overrides };
 }
 
-function entry(title: string, sessions: WorkSession[], messages: Message[] = [], rooms: Room[] = []): WorkEntry {
+function entry(title: string, sessions: WorkSession[], messages: Message[] = [], rooms: Room[] = []): WindowWorkEntry {
   return {
     projectPath: '/tmp/p',
     map: {
@@ -79,7 +79,7 @@ interface Harness {
   notes: AppNote[];
   prefs: UiFile['notifications'];
   visible: Set<string>;
-  entries: WorkEntry[];
+  entries: WindowWorkEntry[];
   /** Окно в фокусе: решение — карточкой в окне, а не уведомлением macOS (кусок 8). */
   active: boolean;
   /** Окно острова живо: запрос с найденной карточкой показывает остров, а не уведомление macOS (спека 2026-10-12). */
@@ -96,7 +96,7 @@ interface Harness {
   notifier: ReturnType<typeof createAttentionNotifier>;
 }
 
-function harness(entries: WorkEntry[]): Harness {
+function harness(entries: WindowWorkEntry[]): Harness {
   const h: Harness = {
     notes: [],
     prefs: { ...DEFAULT_UI.notifications },
@@ -136,7 +136,7 @@ function harness(entries: WorkEntry[]): Harness {
 /** Дать отработать запросу карточки и паузе повтора (таймеры — подставные, см. `useFakeTimers` в describe). */
 const settle = (): Promise<void> => vi.runAllTimersAsync().then(() => undefined);
 
-const redesign = (): WorkEntry =>
+const redesign = (): WindowWorkEntry =>
   entry('Redesign', [
     session('s-02', 'executor', { task: 'Fix the login form\nand the tests', summary: 'Login fixed\nall green' }),
     session('s-03', 'backend'),
@@ -460,7 +460,7 @@ function proposal(id: string, rev = 0, from = 's-01'): Proposal {
 }
 
 /** Работа с двумя сессиями и заданными комнатами: ведущий комнат — `s-01`. */
-function roomsEntry(rooms: Room[]): WorkEntry {
+function roomsEntry(rooms: Room[]): WindowWorkEntry {
   return entry('Redesign', [session('s-01', 'planner'), session('s-02', 'executor')], [], rooms);
 }
 
@@ -536,7 +536,7 @@ describe('createAttentionNotifier.onWorks — решение ведущего в
   const answer = (id: string, text: string): Message =>
     letter(id, { roomId: 'r-01', from: 'human', to: ['s-01'], text, at: '2026-01-01T00:05:00.000Z' });
   const RETURNED = 'Returned for rework: add the tests';
-  const roomWith = (decision: Proposal | null, messages: Message[]): WorkEntry => {
+  const roomWith = (decision: Proposal | null, messages: Message[]): WindowWorkEntry => {
     const base = roomsEntry([room('r-01', 'Возвраты', decision)]);
     return { ...base, map: { ...base.map, messages } };
   };
@@ -768,7 +768,7 @@ describe('createAttentionNotifier.onWorks — упоминание челове�
   const withMessages = (
     messages: Message[],
     rooms: Room[] = [room('r-01', 'Mobile APP', null)],
-  ): WorkEntry => {
+  ): WindowWorkEntry => {
     const base = roomsEntry(rooms);
     return { ...base, map: { ...base.map, messages } };
   };
@@ -994,6 +994,406 @@ describe('createAttentionNotifier.onWorks — упоминание челове�
     const h = started();
     h.notifier.onWorks([withMessages([mention('m-1')])]);
     expect(JSON.stringify(h.notes)).not.toMatch(/[Ѐ-ӿ]/);
+  });
+});
+
+describe('createAttentionNotifier.onMail — письма событием rooms.mail (спека rooms.mail 6.9)', () => {
+  const mentionTag = (roomId: string): string => `mention:/tmp/p w-01:${roomId}`;
+  const direct = (id: string, patch: Partial<Message> = {}): Message => letter(id, patch);
+  const mention = (id: string, patch: Partial<Message> = {}): Message =>
+    letter(id, { roomId: 'r-01', from: 's-02', to: [], text: 'Ready for review, @human', ...patch });
+  const seqOf = (message: Message): number => Number(message.id.slice(2));
+
+  /**
+   * Работа окна со снимком версии 2: писем в карте нет, есть итоги комнат (`top`) — по ним уведомитель знает, что
+   * к первому снимку уже было.
+   */
+  const snapshot = (tops: Record<string, number> = {}, rooms: Room[] = [room('r-01', 'Mobile APP', null)]): WindowWorkEntry => {
+    const base = entry('Redesign', [session('s-01', 'planner'), session('s-02', 'executor')], [], rooms);
+    const compact: MapCompactMail = {
+      version: 2,
+      rooms: Object.fromEntries(
+        ['', ...rooms.map((item) => item.id)].map((id) => [id, { total: tops[id] ?? 0, top: tops[id] ?? 0, lastAt: null, unread: 0, decision: null }]),
+      ),
+      unread: { letters: 0, rooms: {} },
+      mentionCandidates: [],
+      cut: [],
+      omitted: {},
+    };
+    return { ...base, version: 1, map: { ...base.map, compact } };
+  };
+  /** Пачка комнаты в событии: `top` — по самому новому письму. */
+  const batch = (roomId: string | null, letters: Message[], patch: Partial<RoomsMailRoom> = {}): RoomsMailRoom =>
+    makeMailRoom(roomId, { prevTop: 0, top: Math.max(0, ...letters.map(seqOf)), total: letters.length, letters, ...patch });
+  const event = (rooms: RoomsMailRoom[], version = 2): RoomsMailEvent =>
+    makeMailEvent({ projectPath: '/tmp/p', version, prevVersion: version - 1, rooms });
+
+  /** Уведомитель, у которого первый снимок уже пришёл: база есть, дальше всё — «после подключения». */
+  function started(tops: Record<string, number> = {}, rooms?: Room[]): Harness {
+    const h = harness([snapshot(tops, rooms)]);
+    h.notifier.onWorks(h.entries);
+    return h;
+  }
+
+  it('письмо в неподгруженной комнате даёт уведомление из события: комнаты нет среди держимых писем окна', () => {
+    const h = started();
+    expect(h.entries[0]?.map.messages).toEqual([]);
+    h.notifier.onMail(event([batch('r-01', [mention('m-3', { text: '\n\nReady for review, @human\nsecond line' })])]));
+    expect(h.notes).toEqual([
+      {
+        title: 'S02 mentioned you in Mobile APP',
+        body: 'Ready for review, @you second line',
+        tag: mentionTag('r-01'),
+        target: { kind: 'room', projectPath: '/tmp/p', workId: 'w-01', roomId: 'r-01' },
+        silent: true,
+      },
+    ]);
+    expect(h.chimes).toBe(1);
+  });
+
+  it('прямое письмо из события: заголовок, тег mail:<workKey> и первая строка — как у письма снимка', () => {
+    const h = started();
+    h.notifier.onMail(event([batch(null, [direct('m-1', { kind: 'question', text: 'Which API?\ndetails' })])]));
+    expect(h.notes).toEqual([
+      {
+        title: 'Redesign · question from S01',
+        body: 'Which API?',
+        tag: 'mail:/tmp/p w-01',
+        target: { kind: 'mail', projectPath: '/tmp/p', workId: 'w-01' },
+        silent: true,
+      },
+    ]);
+    expect(h.chimes).toBe(1);
+  });
+
+  it('повтор события с тем же id — без уведомления; письмо новее повтора — уведомляет', () => {
+    const h = started();
+    const first = event([batch('r-01', [mention('m-3')])]);
+    h.notifier.onMail(first);
+    h.notifier.onMail(first);
+    h.notifier.onMail(event([batch('r-01', [mention('m-3')])], 3));
+    expect(h.notes).toHaveLength(1);
+    h.notifier.onMail(event([batch('r-01', [mention('m-4', { text: 'again, @human' })])], 4));
+    expect(h.notes.map((note) => note.body)).toEqual(['Ready for review, @you', 'again, @you']);
+  });
+
+  it('события до первого снимка и первый снимок молчат; письмо, которое снимок уже покрыл (top), не уведомляет вовсе', () => {
+    const h = harness([snapshot({ '': 5, 'r-01': 7 })]);
+    // Событие пришло раньше первого снимка уведомителя (после переподключения стор ещё держит прежние работы): базы нет.
+    h.notifier.onMail(event([batch(null, [direct('m-4')])]));
+    expect(h.notes).toEqual([]);
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
+    // Событие, обогнанное снимком: его письма уже в снимке (m-5 прямое, m-7 в комнате) — подключение молчит.
+    h.notifier.onMail(event([batch(null, [direct('m-5')]), batch('r-01', [mention('m-7')])]));
+    expect(h.notes).toEqual([]);
+    h.notifier.onMail(event([batch(null, [direct('m-8')])], 3));
+    expect(h.notes).toMatchObject([{ tag: 'mail:/tmp/p w-01' }]);
+  });
+
+  it('после переподключения письма, дочитанные починкой и не новее последнего применённого события, не уведомляют', () => {
+    const h = started({ '': 9 });
+    const held = (...ids: string[]): WindowWorkEntry => {
+      const base = snapshot({ '': 9 });
+      return { ...base, map: { ...base.map, messages: ids.map((id) => direct(id)) } };
+    };
+    // Починка разрыва читает держимое страницами: m-10 и m-11 встают в карту, события о них нет.
+    h.notifier.onMail(event([batch(null, [direct('m-12', { text: 'newest' })])], 5));
+    h.entries = [held('m-10', 'm-11', 'm-12')];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes.map((note) => note.body)).toEqual(['newest']);
+    // Страницы тех же писем ещё раз и запоздалое событие о более старом письме — тоже молчание.
+    h.entries = [held('m-9', 'm-10', 'm-11', 'm-12')];
+    h.notifier.onWorks(h.entries);
+    h.notifier.onMail(event([batch(null, [direct('m-11')])], 4));
+    expect(h.notes).toHaveLength(1);
+  });
+
+  it('новое подключение — новый уведомитель с пустой базой: повтор того же события после переподключения молчит', () => {
+    const first = started({ '': 4 });
+    first.notifier.onMail(event([batch(null, [direct('m-5')])]));
+    expect(first.notes).toHaveLength(1);
+    // После переподключения App заводит нового уведомителя; снимок хоста уже несёт письмо m-5 (`top` 5).
+    const second = harness([snapshot({ '': 5 })]);
+    second.notifier.onWorks(second.entries);
+    second.notifier.onMail(event([batch(null, [direct('m-5')])]));
+    expect(second.notes).toEqual([]);
+  });
+
+  it('пачка из 50 писем — одно уведомление на работу и по одному на комнату, как у снимка: текст — самого позднего', () => {
+    const rooms = [room('r-01', 'Mobile APP', null), room('r-02', 'Backend', null)];
+    const h = started({}, rooms);
+    const letters = Array.from({ length: 50 }, (_, index) => direct(`m-${index + 1}`, { text: `letter ${index + 1}` }));
+    const first = Array.from({ length: 25 }, (_, index) => mention(`m-${index + 51}`, { text: `a ${index + 51}, @human` }));
+    const second = Array.from({ length: 25 }, (_, index) => mention(`m-${index + 76}`, { roomId: 'r-02', from: 's-01', text: `b ${index + 76}, @human` }));
+    h.notifier.onMail(event([batch(null, letters), batch('r-01', first), batch('r-02', second)]));
+    expect(h.notes.map((note) => note.tag)).toEqual(['mail:/tmp/p w-01', mentionTag('r-01'), mentionTag('r-02')]);
+    expect(h.notes.map((note) => note.body)).toEqual(['letter 50', 'a 75, @you', 'b 100, @you']);
+  });
+
+  it('prefs().mail: false — нет, и письмо запомнено: включение настройки его не повторяет', () => {
+    const h = started();
+    h.prefs = { ...h.prefs, mail: false };
+    h.notifier.onMail(event([batch(null, [direct('m-1')])]));
+    expect(h.notes).toEqual([]);
+    h.prefs = { ...h.prefs, mail: true };
+    h.notifier.onMail(event([batch(null, [direct('m-1')])], 3));
+    expect(h.notes).toEqual([]);
+    h.notifier.onMail(event([batch(null, [direct('m-2')])], 4));
+    expect(h.notes).toHaveLength(1);
+  });
+
+  it('вкладка комнаты видна — нет; видна вкладка другой комнаты — есть', () => {
+    const h = started({}, [room('r-01', 'Mobile APP', null), room('r-02', 'Backend', null)]);
+    h.visible.add(JSON.stringify({ kind: 'room', projectPath: '/tmp/p', workId: 'w-01', roomId: 'r-01' }));
+    h.notifier.onMail(event([batch('r-01', [mention('m-1')])]));
+    expect(h.notes).toEqual([]);
+    h.notifier.onMail(event([batch('r-02', [mention('m-2', { roomId: 'r-02' })])], 3));
+    expect(h.notes.map((note) => note.tag)).toEqual([mentionTag('r-02')]);
+  });
+
+  it('не уведомляют: письмо от человека, прочитанное, не человеку, без @human, системное, в архивной комнате', () => {
+    const rooms = [room('r-01', 'Mobile APP', null), room('r-02', 'Old', null, { archivedAt: '2026-01-02T00:00:00.000Z' })];
+    const h = started({}, rooms);
+    h.notifier.onMail(
+      event([
+        batch(null, [
+          direct('m-1', { from: 'human' }),
+          direct('m-2', { readBy: { human: 'T' } }),
+          direct('m-3', { to: ['s-02'] }),
+        ]),
+        batch('r-01', [
+          mention('m-4', { from: 'human' }),
+          mention('m-5', { text: 'no mention here' }),
+          mention('m-6', { text: 'ping @humans' }),
+          mention('m-7', { from: 'system' }),
+          mention('m-8', { readBy: { human: 'T' } }),
+        ]),
+        batch('r-02', [mention('m-9', { roomId: 'r-02' })]),
+      ]),
+    );
+    expect(h.notes).toEqual([]);
+  });
+
+  it('отметка человека в том же событии гасит уведомление о письме', () => {
+    const h = started();
+    h.notifier.onMail(
+      event([
+        batch(null, [direct('m-1')], { reads: [{ id: 'm-1', reader: 'human', at: '2026-01-01T00:00:01.000Z' }] }),
+        batch('r-01', [mention('m-2')], { reads: [{ id: 'm-2', reader: 'human', at: '2026-01-01T00:00:01.000Z' }] }),
+      ]),
+    );
+    expect(h.notes).toEqual([]);
+  });
+
+  it('комната, созданная после первого снимка, уведомляет с первого же письма: базы по ней нет', () => {
+    const h = started();
+    const created = snapshot({}, [room('r-01', 'Mobile APP', null), room('r-02', 'Fresh', null)]);
+    h.entries = [created];
+    h.notifier.onWorks(h.entries);
+    h.notifier.onMail(event([batch('r-02', [mention('m-1', { roomId: 'r-02' })])]));
+    expect(h.notes.map((note) => note.tag)).toEqual([mentionTag('r-02')]);
+  });
+
+  it('снимок версии 1 (хост без rooms-mail) и работа, которой в окне нет, — событие молчит: письма там уведомляет onWorks', () => {
+    const old = entry('Redesign', [session('s-01', 'planner')], [], [room('r-01', 'Mobile APP', null)]);
+    const h = harness([old]);
+    h.notifier.onWorks(h.entries);
+    h.notifier.onMail(event([batch('r-01', [mention('m-1')]), batch(null, [direct('m-2')])]));
+    expect(h.notes).toEqual([]);
+    h.entries = [];
+    h.notifier.onMail(event([batch(null, [direct('m-3')])], 3));
+    expect(h.notes).toEqual([]);
+  });
+
+  /** Карта работы версии 2 с письмами, которые окно держит: события, страницы починки и открытия комнаты. */
+  const holding = (messages: Message[], tops: Record<string, number> = {}, rooms?: Room[]): WindowWorkEntry => {
+    const base = snapshot(tops, rooms);
+    return { ...base, map: { ...base.map, messages } };
+  };
+
+  it('снимок версии 2: держимые письма не новее базы (top) по onWorks молчат; решение — по-прежнему со снимка', () => {
+    const h = started({ '': 5, 'r-01': 7 });
+    h.entries = [holding([direct('m-1'), direct('m-5'), mention('m-2'), mention('m-7')], { '': 5, 'r-01': 7 })];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
+    const held = h.entries[0] as WindowWorkEntry;
+    h.entries = [{ ...held, map: { ...held.map, rooms: [room('r-01', 'Mobile APP', proposal('p-1'))] } }];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes.map((note) => note.tag)).toEqual(['proposal:/tmp/p w-01:r-01']);
+  });
+
+  it('письмо, дочитанное починкой и новее последнего применённого события, уведомляет один раз; запоздавшее событие о нём молчит', () => {
+    const h = started({ '': 9 });
+    // Событие m-12 применено: база 12. События о m-13 и m-14 потерялись, разрыв починили страницами.
+    h.notifier.onMail(event([batch(null, [direct('m-12', { text: 'twelve' })])], 5));
+    expect(h.notes.map((note) => note.body)).toEqual(['twelve']);
+    h.entries = [holding([direct('m-10'), direct('m-11'), direct('m-12'), direct('m-13', { text: 'thirteen' }), direct('m-14', { text: 'fourteen' })], { '': 9 })];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes.map((note) => note.body)).toEqual(['twelve', 'fourteen']);
+    expect(h.notes[1]).toMatchObject({ tag: 'mail:/tmp/p w-01', silent: true });
+    expect(h.chimes).toBe(2);
+    // Те же страницы ещё раз и событие о том же письме позже (оно дошло после починки) — без второго уведомления.
+    h.notifier.onWorks(h.entries);
+    h.notifier.onMail(event([batch(null, [direct('m-13'), direct('m-14')])], 7));
+    expect(h.notes).toHaveLength(2);
+  });
+
+  it('событие с reread (потолок кадра): письма пришли страницами — одно уведомление на работу и по одному на комнату, как у снимка', () => {
+    const rooms = [room('r-01', 'Mobile APP', null), room('r-02', 'Backend', null)];
+    const h = started({}, rooms);
+    // Кадр не вместил письма: в событии комнаты и Mail с признаком «дочитай», писем нет.
+    h.notifier.onMail(event([batch(null, [], { reread: true, top: 50 }), batch('r-01', [], { reread: true, top: 75 }), batch('r-02', [], { reread: true, top: 100 })]));
+    expect(h.notes).toEqual([]);
+    const letters = Array.from({ length: 50 }, (_, index) => direct(`m-${index + 1}`, { text: `letter ${index + 1}` }));
+    const first = Array.from({ length: 25 }, (_, index) => mention(`m-${index + 51}`, { text: `a ${index + 51}, @human` }));
+    const second = Array.from({ length: 25 }, (_, index) => mention(`m-${index + 76}`, { roomId: 'r-02', from: 's-01', text: `b ${index + 76}, @human` }));
+    h.entries = [holding([...letters, ...first, ...second], {}, rooms)];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes.map((note) => note.tag)).toEqual(['mail:/tmp/p w-01', mentionTag('r-01'), mentionTag('r-02')]);
+    expect(h.notes.map((note) => note.body)).toEqual(['letter 50', 'a 75, @you', 'b 100, @you']);
+    // Тот же снимок ещё раз (следующая страница или чужое изменение работы) — тишина.
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toHaveLength(3);
+  });
+
+  // Находка I3 итогового ревью: склеенное для медленного окна (или урезанное потолком кадра) событие несёт комнаты с `reread`
+  // и без писем. Прямое письмо человеку хост оставляет в нём (письма человеку немногочисленны и малы), а упоминание в комнате,
+  // которой окно не открывало, — в `mentionCandidates`: они целиком и с текстом.
+  it('склеенное событие: прямое письмо и упоминание в неоткрытой комнате уведомляют один раз', () => {
+    const h = started({}, [room('r-01', 'Mobile APP', null)]);
+    const question = direct('m-1', { kind: 'question', text: 'Which API?' });
+    const mentioned = mention('m-3');
+    const glued = makeMailEvent({
+      projectPath: '/tmp/p',
+      version: 2,
+      prevVersion: 1,
+      rooms: [batch(null, [question], { reread: true }), batch('r-01', [], { reread: true, top: 3, total: 3 })],
+      mentionCandidates: [mentioned],
+    });
+    h.notifier.onMail(glued);
+    expect(h.notes.map((note) => note.tag)).toEqual(['mail:/tmp/p w-01', mentionTag('r-01')]);
+    expect(h.notes.map((note) => note.body)).toEqual(['Which API?', 'Ready for review, @you']);
+    expect(h.chimes).toBe(2);
+
+    // Повтор события, а затем те же письма страницами после `reread` — без второго уведомления.
+    h.notifier.onMail(glued);
+    h.entries = [holding([question, mentioned], {}, [room('r-01', 'Mobile APP', null)])];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toHaveLength(2);
+  });
+
+  it('держимые письма по onWorks: те же правила окна — не от человека, прочитанные, не человеку, без @human, архивная комната молчат', () => {
+    const rooms = [room('r-01', 'Mobile APP', null), room('r-02', 'Old', null, { archivedAt: '2026-01-02T00:00:00.000Z' })];
+    const h = started({}, rooms);
+    h.entries = [
+      holding(
+        [
+          direct('m-1', { from: 'human' }),
+          direct('m-2', { readBy: { human: 'T' } }),
+          direct('m-3', { to: ['s-02'] }),
+          mention('m-4', { from: 'human' }),
+          mention('m-5', { text: 'no mention here' }),
+          mention('m-6', { text: 'ping @humans' }),
+          mention('m-7', { from: 'system' }),
+          mention('m-8', { readBy: { human: 'T' } }),
+          mention('m-9', { roomId: 'r-02' }),
+        ],
+        {},
+        rooms,
+      ),
+    ];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
+    // Письма молчали, но база за ними ушла: страница, что принесёт их снова, не уведомляет.
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
+  });
+
+  it('первый снимок уведомителя с держимыми письмами — база, даже если они новее top; письмо после него уведомляет', () => {
+    const h = harness([holding([direct('m-3', { text: 'before' })], { '': 1 })]);
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
+    h.entries = [holding([direct('m-3'), direct('m-4', { text: 'after' })], { '': 1 })];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes.map((note) => note.body)).toEqual(['after']);
+  });
+
+  it('работа, появившаяся позже, не уведомляет старые письма: база — по её top; письмо новее уведомляет, созданная после подключения — с первого', () => {
+    const h = started();
+    /** Работа `id`, которой не было в первом снимке (восстановлена из архива, снимок был частичным); письма `held` окно держит. */
+    const appears = (id: string, held: Message[], tops: Record<string, number>): WindowWorkEntry => {
+      const base = holding(held, tops);
+      return { ...base, map: { ...base.map, work: { ...base.map.work, id } } };
+    };
+    const eventOf = (workId: string, rooms: RoomsMailRoom[], version: number): RoomsMailEvent => makeMailEvent({ projectPath: '/tmp/p', workId, version, prevVersion: version - 1, rooms });
+
+    const restored = appears('w-02', [direct('m-2', { text: 'old' }), mention('m-3')], { '': 2, 'r-01': 3 });
+    h.entries = [snapshot(), restored];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
+    // Те же страницы ещё раз и события о тех же письмах — тишина.
+    h.notifier.onWorks(h.entries);
+    h.notifier.onMail(eventOf('w-02', [batch(null, [direct('m-2')]), batch('r-01', [mention('m-3')])], 2));
+    expect(h.notes).toEqual([]);
+    // Письмо новее top уведомляет.
+    h.notifier.onMail(eventOf('w-02', [batch(null, [direct('m-4', { text: 'new' })])], 3));
+    expect(h.notes.map((note) => [note.tag, note.body])).toEqual([['mail:/tmp/p w-02', 'new']]);
+
+    // Работа, созданная после подключения: top нулевой, письма приходят событиями — уведомляют с первого.
+    h.entries = [snapshot(), restored, appears('w-03', [], {})];
+    h.notifier.onWorks(h.entries);
+    h.notifier.onMail(eventOf('w-03', [batch(null, [direct('m-1', { text: 'first' })])], 2));
+    expect(h.notes.map((note) => [note.tag, note.body])).toEqual([
+      ['mail:/tmp/p w-02', 'new'],
+      ['mail:/tmp/p w-03', 'first'],
+    ]);
+  });
+
+  it('новая работа, чей первый снимок уже считает письмо, уведомляет о нём; восстановленная, созданная до запуска, — молчит', () => {
+    const h = started();
+    /** Работа `id` со снимком, который уже считает прямое письмо m-1 (`top` 1): смешанная запись, снимок идёт раньше её события. */
+    const counted = (id: string, createdAt: string): WindowWorkEntry => {
+      const base = snapshot({ '': 1 });
+      return { ...base, map: { ...base.map, work: { ...base.map.work, id, createdAt } } };
+    };
+    const eventOf = (workId: string): RoomsMailEvent => makeMailEvent({ projectPath: '/tmp/p', workId, version: 2, prevVersion: 1, rooms: [batch(null, [direct('m-1', { text: 'first' })])] });
+
+    // Создана после запуска уведомителя (дата в будущем — от часов теста не зависит): базы нет, письмо события уведомляет.
+    const created = counted('w-02', '2999-01-01T00:00:00.000Z');
+    h.entries = [snapshot(), created];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
+    h.notifier.onMail(eventOf('w-02'));
+    expect(h.notes.map((note) => [note.tag, note.body])).toEqual([['mail:/tmp/p w-02', 'first']]);
+
+    // Была до запуска (восстановлена из архива, первый снимок частичный): письмо m-1 уже было, база — по `top`.
+    const restored = counted('w-03', '2026-01-01T00:00:00.000Z');
+    h.entries = [snapshot(), created, restored];
+    h.notifier.onWorks(h.entries);
+    h.notifier.onMail(eventOf('w-03'));
+    expect(h.notes).toHaveLength(1);
+  });
+
+  it('prefs().mail: false — страница письма не уведомляет и тоже запоминается: включение настройки его не повторяет', () => {
+    const h = started();
+    h.prefs = { ...h.prefs, mail: false };
+    h.entries = [holding([direct('m-1')])];
+    h.notifier.onWorks(h.entries);
+    h.prefs = { ...h.prefs, mail: true };
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
+    h.entries = [holding([direct('m-1'), direct('m-2')])];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toHaveLength(1);
+  });
+
+  it('вкладка комнаты видна — письмо со страницы не уведомляет', () => {
+    const h = started();
+    h.visible.add(JSON.stringify({ kind: 'room', projectPath: '/tmp/p', workId: 'w-01', roomId: 'r-01' }));
+    h.entries = [holding([mention('m-1')])];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
   });
 });
 
@@ -1226,7 +1626,7 @@ describe('wireAttentionNotifications на подставном мосте и н�
 
   it('первый снимок работ после подписки — база писем; следующий с новым письмом — уведомление', () => {
     const off = wire();
-    const current = useWorksStore.getState().entries[0] as WorkEntry;
+    const current = useWorksStore.getState().entries[0] as WindowWorkEntry;
     useWorksStore.setState({ entries: [{ ...current, map: { ...current.map, messages: [letter('m-1')] } }] });
     expect(bridge.appNotified).toEqual([]);
     useWorksStore.setState({ entries: [{ ...current, map: { ...current.map, messages: [letter('m-1'), letter('m-2')] } }] });
@@ -1236,7 +1636,7 @@ describe('wireAttentionNotifications на подставном мосте и н�
 
   it('упоминание человека в комнате: первый снимок работ — база; следующий с новым упоминанием — уведомление macOS с целью-комнатой', () => {
     const off = wire();
-    const current = useWorksStore.getState().entries[0] as WorkEntry;
+    const current = useWorksStore.getState().entries[0] as WindowWorkEntry;
     const base = { ...current, map: { ...current.map, rooms: [room('r-01', 'Mobile APP', null)] } };
     const mention = (id: string): Message =>
       letter(id, { roomId: 'r-01', from: 's-02', to: [], text: 'Take a look, @human' });
@@ -1258,9 +1658,54 @@ describe('wireAttentionNotifications на подставном мосте и н�
     off();
   });
 
+  // Само событие стор применяет в `withMail` (задача 8 ведёт её на снимок версии 2): здесь проверяется только проводка —
+  // уведомитель подписан на `onMail` стора работ и отписывается вместе с остальными подписками.
+  it('rooms.mail: уведомитель слушает onMail стора работ, и после отписки — нет', () => {
+    const original = useWorksStore.getState().onMail;
+    let listener: ((event: RoomsMailEvent) => void) | null = null;
+    const unsubscribe = vi.fn();
+    useWorksStore.setState({
+      onMail: (next) => {
+        listener = next;
+        return unsubscribe;
+      },
+    });
+    try {
+      const base = entry('Redesign', [session('s-01', 'planner')]);
+      const compact: MapCompactMail = {
+        version: 2,
+        rooms: { '': { total: 9, top: 9, lastAt: null, unread: 0, decision: null } },
+        unread: { letters: 0, rooms: {} },
+        mentionCandidates: [],
+        cut: [],
+        omitted: {},
+      };
+      const off = wire();
+      // Первый снимок после подписки — база: письмо m-9 при подключении молчит; следующее письмо события — уведомление.
+      useWorksStore.setState({ entries: [{ ...base, version: 5, map: { ...base.map, compact } }] });
+      const arrive = (id: string): RoomsMailEvent =>
+        makeMailEvent({
+          projectPath: '/tmp/p',
+          version: 6,
+          prevVersion: 5,
+          rooms: [makeMailRoom(null, { prevTop: 9, top: Number(id.slice(2)), total: Number(id.slice(2)), letters: [letter(id, { text: id })] })],
+        });
+      expect(listener).not.toBeNull();
+      listener!(arrive('m-9'));
+      expect(bridge.appNotified).toEqual([]);
+      listener!(arrive('m-10'));
+      expect(bridge.appNotified).toMatchObject([{ tag: 'mail:/tmp/p w-01', body: 'm-10' }]);
+      expect(unsubscribe).not.toHaveBeenCalled();
+      off();
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    } finally {
+      useWorksStore.setState({ onMail: original });
+    }
+  });
+
   /** Снимок работы с комнатой `r-01` и решением (или без него) — заменой `entries` стора работ. */
   function setRoom(decision: Proposal | null): void {
-    const current = useWorksStore.getState().entries[0] as WorkEntry;
+    const current = useWorksStore.getState().entries[0] as WindowWorkEntry;
     useWorksStore.setState({ entries: [{ ...current, map: { ...current.map, rooms: [room('r-01', 'Возвраты', decision)] } }] });
   }
 
@@ -1339,7 +1784,7 @@ describe('createAttentionNotifier.onActivity — причина need, сигна
     ...live(activity),
     need,
   });
-  const codexPair = (): WorkEntry =>
+  const codexPair = (): WindowWorkEntry =>
     entry('Redesign', [
       session('s-02', 'executor', { provider: 'codex' }),
       session('s-03', 'backend', { provider: 'codex' }),

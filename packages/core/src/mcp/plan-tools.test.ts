@@ -6,10 +6,16 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createParleyServer } from "./tools.js";
 import { addSession, transitionSession } from "../work/map.js";
 import { addRoom, archiveRoom } from "../work/rooms.js";
-import { createWork, updateMap, readMap, workPaths } from "../work/store.js";
+import { createWork, updateMap, readMap, readStoredMap, workPaths } from "../work/store.js";
 import { resolveProposal } from "../work/proposals.js";
-import { ENGINE, HUMAN } from "../work/types.js";
+import { ENGINE, HUMAN, SYSTEM } from "../work/types.js";
+import { setRoomMode } from "../work/plans.js";
 import type { McpContext } from "./context.js";
+// Оболочка над настоящей `setRoomMode`: тест подставляет ответ с лишней строкой на один вызов, остальные идут как есть.
+vi.mock("../work/plans.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../work/plans.js")>();
+  return { ...actual, setRoomMode: vi.fn(actual.setRoomMode) };
+});
 let root: string;
 let project: string;
 let previous: string | undefined;
@@ -96,9 +102,9 @@ async function accepted() {
     plan: draft,
   });
   expect(result.failed).toBe(false);
-  await updateMap(project, context.workId, (map) => {
+  await updateMap(project, context.workId, (map, letters) => {
     const p = map.rooms[0]!.proposal!;
-    resolveProposal(map, "r-01", p.id, "accept", {
+    resolveProposal(map, letters, "r-01", p.id, "accept", {
       rev: p.rev,
       planId: p.plan!.id,
       planRev: p.plan!.rev,
@@ -265,6 +271,7 @@ describe("autonomous agent channel", () => {
     await autonomousAccepted();
     const requests = attemptChannel();
     const before = JSON.stringify(await readMap(project, context.workId));
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- ключ вырезается из копии через rest
     const { hash: _hash, ...body } = manifest;
     const submissionKey = "a".repeat(64);
     vi.stubGlobal("fetch", async (_url: URL, options: RequestInit) => {
@@ -841,6 +848,31 @@ it("only a live lead raises mode and a participant cannot lower or spoof it", as
   expect(JSON.stringify(await readMap(project, context.workId))).toBe(before);
 });
 
+it("set_room_mode reports its own system line by id, even when the write put another system line in the room before it", async () => {
+  await updateMap(project, context.workId, (map) => {
+    map.rooms[0]!.mode = "free";
+  });
+  const real = await vi.importActual<typeof import("../work/plans.js")>("../work/plans.js");
+  vi.mocked(setRoomMode).mockImplementationOnce((...args) => {
+    // Строка плана раньше строки режима — так пишет понижение режима, которое завершает план: «первая системная
+    // строка комнаты после записи» была бы не той.
+    const earlier = args[1].add({ roomId: "r-01", from: SYSTEM, to: [HUMAN], text: "Plan pl-01 completed", kind: "note" });
+    return [earlier.id, ...real.setRoomMode(...args)];
+  });
+  const result = await call("s-01", "set_room_mode", {
+    room: "r-01",
+    mode: "checklist",
+    reason: "Need a plan",
+  });
+  expect(result.failed, result.text).toBe(false);
+  const notices = readStoredMap(project, context.workId).messages.filter((message) =>
+    message.text.startsWith("Room mode changed."),
+  );
+  expect(notices).toHaveLength(1);
+  expect(notices[0]!.text).toContain("switched the room to checklist: Need a plan");
+  expect(notices[0]!.text).not.toContain("Plan pl-01 completed");
+});
+
 it("a still-live verifier cannot complete an unsatisfied item whose owner closed before the host reconcile event", async () => {
   await accepted();
   const identity = { planId: "pl-01", rev: 0, item: 1 };
@@ -936,8 +968,8 @@ describe("archived room", () => {
   const REFUSAL = "room r-01 is archived: only the human can reopen it";
   it("refuses every plan tool with the archive reason, not a stale-revision error, and writes nothing", async () => {
     await accepted();
-    await updateMap(project, context.workId, (map) => {
-      archiveRoom(map, "r-01", "2026-10-08T12:00:00.000Z");
+    await updateMap(project, context.workId, (map, letters) => {
+      archiveRoom(map, letters, "r-01", "2026-10-08T12:00:00.000Z");
     });
     const before = JSON.stringify(await readMap(project, context.workId));
     const cases: [string, string, Record<string, unknown>][] = [

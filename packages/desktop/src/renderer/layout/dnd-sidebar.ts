@@ -15,7 +15,7 @@
  * комнаты проводит хост в `rooms.addMember`.
  */
 
-import type { WorkMap } from '@parley/core';
+import type { WindowWorkMap } from '@parley/core';
 import { isRoomArchived } from '../lib/room-archive.js';
 import { homeRoomOf } from '../sidebar/sort.js';
 import type { SidebarTarget } from './dnd.js';
@@ -26,7 +26,7 @@ export type SidebarDrop =
   | { kind: 'join'; sessionId: string; roomId: string };
 
 /** Значение броска сессии `sessionId` на цель `target` в работе `map`; `null` — бросить нельзя. */
-export function resolveSidebarDrop(map: WorkMap, sessionId: string, target: SidebarTarget): SidebarDrop | null {
+export function resolveSidebarDrop(map: WindowWorkMap, sessionId: string, target: SidebarTarget): SidebarDrop | null {
   const dragged = map.sessions.find((session) => session.id === sessionId);
   if (dragged === undefined || dragged.lifecycle === 'closed') return null;
 

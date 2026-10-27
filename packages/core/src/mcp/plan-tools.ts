@@ -457,7 +457,7 @@ export async function planTool(
     const config = (await loadConfig()).config;
     let proposed: { proposalId: string; rev: number } | undefined;
     let legacyFree = false;
-    await updateMap(context.projectPath, context.workId, (map) => {
+    await updateMap(context.projectPath, context.workId, (map, letters) => {
       const actor = caller(map, context);
       reconcileRoomPlans(map);
       if (name === "set_room_mode") {
@@ -473,18 +473,19 @@ export async function planTool(
           /[\r\n]/.test(args.reason)
         )
           throw new RoomRuleError("invalid room mode");
-        const before = map.messages.length;
-        setRoomMode(
+        const written = setRoomMode(
           map,
+          letters,
           args.room,
           actor,
           args.mode as "free" | "checklist" | "verified" | "autonomous",
           args.reason,
         );
-        const source = map.messages
-          .slice(before)
-          .find((row) => row.roomId === args.room && row.from === "system");
-        if (source) capturePlanNotice(map, args.room, "mode", source.id);
+        // Строка «switched the room» пишется последней: пересчёт плана может дописать свои строки раньше неё. Берём её
+        // по номеру, а не «первую системную после записи» (спека хранилища 6.2); режим не менялся — писать нечего.
+        const modeLine = written.at(-1);
+        if (modeLine !== undefined)
+          capturePlanNotice(map, letters, args.room, "mode", modeLine);
       } else if (name === "propose_decision") {
         keys(args, ["room", "text", "plan", "kind", "planId", "rev"]);
         if (
@@ -603,6 +604,7 @@ export async function planTool(
               throw new RoomRuleError("invalid plan evidence");
             submitPlanItem(
               map,
+              letters,
               args.planId,
               args.rev,
               args.item,
@@ -617,6 +619,7 @@ export async function planTool(
               throw new RoomRuleError("invalid plan verification");
             verifyPlanItem(
               map,
+              letters,
               args.planId,
               args.rev,
               args.item,
@@ -627,7 +630,7 @@ export async function planTool(
           }
         }
       }
-      reservePlanEffects(map, config.messageRate ?? DEFAULT_CONFIG.messageRate);
+      reservePlanEffects(map, letters, config.messageRate ?? DEFAULT_CONFIG.messageRate);
     });
     if (legacyFree && proposed) return proposed;
     return { ...(proposed ?? {}), effects: await finish(context) };

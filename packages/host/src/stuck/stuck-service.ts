@@ -10,7 +10,6 @@
  */
 
 import {
-  addMessage,
   addSystemMessage,
   backLetter,
   backLine,
@@ -28,8 +27,8 @@ import {
   STUCK_REPORT_MS,
   stuckLetter,
   stuckLine,
-  unreadFor,
   updateMap,
+  type LetterTx,
   type LimitAlternative,
   type NeedKind,
   type SessionNeed,
@@ -160,11 +159,11 @@ export function createStuckService(
   }
 
   /** Одна `updateMap` по сессии; сбой — строка в журнале хоста, без исключения наружу. */
-  async function write(ref: SessionRef, mutate: (map: WorkMap, session: WorkSession) => void): Promise<boolean> {
+  async function write(ref: SessionRef, mutate: (map: WorkMap, session: WorkSession, letters: LetterTx) => void): Promise<boolean> {
     try {
-      await updateMap(ref.projectPath, ref.workId, (map) => {
+      await updateMap(ref.projectPath, ref.workId, (map, letters) => {
         const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
-        if (session !== undefined) mutate(map, session);
+        if (session !== undefined) mutate(map, session, letters);
       });
       return true;
     } catch (error) {
@@ -177,10 +176,10 @@ export function createStuckService(
    * Получатели письма (5.2): живой ведущий комнаты и отправители непрочитанных писем к застрявшему; без самого
    * застрявшего, человека, системы и Parley (их нет среди сессий), без закрытых и удалённых. Вне комнаты ведущего нет.
    */
-  function recipientsOf(map: WorkMap, session: WorkSession, lead: string | null): string[] {
+  function recipientsOf(map: WorkMap, letters: LetterTx, session: WorkSession, lead: string | null): string[] {
     const to = new Set<string>();
     if (lead !== null) to.add(lead);
-    for (const message of unreadFor(map, session.id)) to.add(message.from);
+    for (const message of letters.unreadFor(session.id)) to.add(message.from);
     to.delete(session.id);
     return [...to].filter((id) => map.sessions.some((candidate) => candidate.id === id && candidate.lifecycle !== 'closed'));
   }
@@ -189,17 +188,17 @@ export function createStuckService(
    * Строка в комнату (для человека) и письма Parley (агентам). Комната сессии — по `members`; архивная не получает
    * ничего (8.8); без комнаты строки нет, а письма уходят отправителям без комнаты (как «did not resume»).
    */
-  function post(map: WorkMap, session: WorkSession, at: Date, posting: Posting): void {
+  function post(map: WorkMap, letters: LetterTx, session: WorkSession, at: Date, posting: Posting): void {
     const roomId = roomOfSession(map, session.id);
     const room = roomId === null ? undefined : map.rooms.find((candidate) => candidate.id === roomId);
     if (room !== undefined && isRoomArchived(room)) return;
     const stamp = at.toISOString();
     const lead = room === undefined ? null : liveLead(map, room);
-    if (room !== undefined) addSystemMessage(map, room.id, posting.line(lead === session.id), stamp);
+    if (room !== undefined) addSystemMessage(map, letters, room.id, posting.line(lead === session.id), stamp);
     if (posting.letter === null) return;
-    for (const to of recipientsOf(map, session, lead)) {
-      if (room === undefined) addMessage(map, { from: PARLEY, to: [to], text: posting.letter }, stamp);
-      else parleyNote(map, room.id, to, posting.letter, stamp);
+    for (const to of recipientsOf(map, letters, session, lead)) {
+      if (room === undefined) letters.add({ roomId: null, from: PARLEY, to: [to], text: posting.letter, kind: 'note', at: stamp });
+      else parleyNote(map, letters, room.id, to, posting.letter, stamp);
     }
   }
 
@@ -225,9 +224,9 @@ export function createStuckService(
     // Единственное место, где собирается письмо: тексты и состав письма о лимите — в core (`stuckLetter`, `limitLetter`).
     const letter = stuckLetter(who, need, at, need.kind === 'limit' ? await alternativesFor(session.provider) : []);
     if (unsubscribe === undefined || episodes.get(key) !== episode) return;
-    const written = await write(ref, (map, current) => {
+    const written = await write(ref, (map, current, letters) => {
       current.stuck = need;
-      post(map, current, at, { line: (isLead) => stuckLine(who, need, at, isLead), letter });
+      post(map, letters, current, at, { line: (isLead) => stuckLine(who, need, at, isLead), letter });
     });
     if (written) episode.told = need;
   }
@@ -252,10 +251,10 @@ export function createStuckService(
     const told = episode.told;
     if (told === null) return;
     const at = new Date(now());
-    await write(ref, (map, session) => {
+    await write(ref, (map, session, letters) => {
       session.stuck = null;
       if (silent || session.lifecycle !== 'active') return;
-      post(map, session, at, {
+      post(map, letters, session, at, {
         line: () => backLine(session.id, told.kind),
         letter: IMMEDIATE.has(told.kind) ? backLetter(session.id, told.kind) : null,
       });

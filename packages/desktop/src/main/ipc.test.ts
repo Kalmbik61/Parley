@@ -8,6 +8,7 @@ import type { WorksSnapshot } from '@parley/protocol';
 import type { FeedCard, FeedItem } from '@parley/core';
 import { decodeIpcError, type IpcErrorInfo } from '../shared/ipc-error.js';
 import type { DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
+import { ISLAND_EVENTS } from '../shared/island.js';
 import { workKey } from '../shared/work-keys.js';
 import { DEFAULT_UI } from '../shared/ui-types.js';
 import { DropTooLargeError, MAX_DROP_IMAGE_BYTES } from './drops.js';
@@ -174,6 +175,7 @@ function setup(
     onEvent: vi.fn(),
     onStatus: vi.fn(),
     activitySnapshot: vi.fn().mockReturnValue([{ ref: { sessionId: 's-1' } }]),
+    noticesSnapshot: vi.fn().mockReturnValue([{ kind: 'map-migration-failed', ref: null, text: '/p/map.json', at: 'at' }]),
   } as unknown as HostConnection;
   const layoutStore: LayoutStore =
     overrides.layoutStore ??
@@ -324,6 +326,13 @@ describe('registerIpc', () => {
   it('host:activity-snapshot отдаёт снимок активности из HostConnection (раунд исправлений 1 куска 3.1)', async () => {
     const { ipcMain } = setup();
     expect(await ipcMain.invoke('host:activity-snapshot')).toEqual([{ ref: { sessionId: 's-1' } }]);
+  });
+
+  it('host:notices-snapshot отдаёт уведомления хоста, пришедшие до подписки окна', async () => {
+    const { ipcMain } = setup();
+    expect(await ipcMain.invoke('host:notices-snapshot')).toEqual([
+      { kind: 'map-migration-failed', ref: null, text: '/p/map.json', at: 'at' },
+    ]);
   });
 
   it('неизвестный метод отвергается', async () => {
@@ -1915,6 +1924,16 @@ describe('forwardHostToPages (fix-7.3 п. 4а)', () => {
       ['host:status', { state: 'connected' }],
       ['host:event', { event: 'works.changed', data: {} }],
       ['host:event', { event: 'activity.changed', data: {} }],
+    ]);
+  });
+
+  it('остров (ISLAND_EVENTS) получает rooms.mail рядом с works.changed: запись одних писем works.changed уже не шлёт', () => {
+    const { sent, emit } = fakeForwarding({ events: ISLAND_EVENTS });
+    emit('rooms.mail');
+    emit('pty.output');
+    expect(sent).toEqual([
+      ['host:status', { state: 'connected' }],
+      ['host:event', { event: 'rooms.mail', data: {} }],
     ]);
   });
 

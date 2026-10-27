@@ -20,6 +20,7 @@ import {
   NEW_LABEL,
   plannedWorktree,
   readMap,
+  readStoredMap,
   saveConfig,
   setWorkStatus,
   SKILL_MD,
@@ -1506,7 +1507,7 @@ describe('worktree (план, кусок 4.2)', () => {
     );
     expect(notice).toBeDefined();
 
-    const map = await readMap(project, work.work.id);
+    const map = readStoredMap(project, work.work.id);
     expect(map.sessions.find((s) => s.id === childId)?.lifecycle).toBe('pending');
     const letter = map.messages.find((m) => m.from === SYSTEM && m.to.includes(parentId));
     expect(letter).toBeDefined();
@@ -2516,6 +2517,8 @@ describe('setModel(): смена модели (спека нормалайзер
 
 describe('agent-created workspace peers', () => {
   it.each(['codex', 'claude'] as const)('enforces autonomous %s policy and TMPDIR at the actual spawn', async provider => {
+    // The top-level beforeEach already stubs claude; codex needs the same override so the test passes where no Codex CLI is installed (CI).
+    setEnv('PARLEY_CODEX_BIN', STUB);
     const work = await createWork(project, { title: 'Autonomous launch', goal: '' });
     const pty = createPtyManager(fakeHost()), spawn = vi.spyOn(pty, 'start');
     const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity());

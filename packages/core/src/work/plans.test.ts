@@ -25,6 +25,8 @@ import {
 } from "./plans.js";
 import { ENGINE, HUMAN } from "./types.js";
 import type { AutonomousDraft, PlanDraft, WorkMap } from "./types.js";
+import { mapLetterTx, type LetterTx, type NewLetter } from "./letter-store.js";
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 const AT = "2026-10-04T01:00:00.000Z";
 function fixture(mode: "checklist" | "verified" = "checklist"): WorkMap {
   const map: WorkMap = {
@@ -88,6 +90,7 @@ function accept(
   const plan = map.rooms[0]!.proposal!.plan!;
   resolveProposal(
     map,
+    lt(map),
     "r-01",
     p.proposalId,
     "accept",
@@ -161,7 +164,7 @@ describe("autonomous plan rules", () => {
       verifier: ENGINE,
       criteria: ["Works", "Reviewed"],
     });
-    acceptRoomPlan(map, proposed, AT);
+    acceptRoomPlan(map, lt(map), proposed, AT);
     reconcileRoomPlans(map, AT);
     expect(map.plans![0]!.items[0]!.status).toBe("ready");
     for (const mode of ["checklist", "verified"] as const) {
@@ -178,6 +181,7 @@ describe("autonomous plan rules", () => {
     const map = autonomousMap();
     acceptRoomPlan(
       map,
+      lt(map),
       proposedRoomPlan(map, "r-01", "s-01", autonomousDraft()),
       AT,
     );
@@ -187,8 +191,8 @@ describe("autonomous plan rules", () => {
     for (const actor of ["s-01", "s-02", "s-03", HUMAN, ENGINE]) {
       for (const operation of [
         () => updatePlanItem(map, "pl-01", 0, 1, actor, "in_progress"),
-        () => submitPlanItem(map, "pl-01", 0, 1, actor, evidence),
-        () => verifyPlanItem(map, "pl-01", 0, 1, actor, "verified", "Checked"),
+        () => submitPlanItem(map, lt(map), "pl-01", 0, 1, actor, evidence),
+        () => verifyPlanItem(map, lt(map), "pl-01", 0, 1, actor, "verified", "Checked"),
       ])
         expect(operation).toThrow("autonomous plan is driven by the engine");
     }
@@ -206,7 +210,7 @@ describe("autonomous plan rules", () => {
     const map = autonomousMap();
     const input = autonomousDraft();
     input.items.push({ ...input.items[0]!, id: 2, after: [1] });
-    acceptRoomPlan(map, proposedRoomPlan(map, "r-01", "s-01", input), AT);
+    acceptRoomPlan(map, lt(map), proposedRoomPlan(map, "r-01", "s-01", input), AT);
     map.plans![0]!.items[0]!.status = "done";
     map.plans![0]!.items[0]!.evidence = evidence;
     const before = JSON.stringify(map);
@@ -214,6 +218,7 @@ describe("autonomous plan rules", () => {
       expect(() =>
         verifyPlanItem(
           map,
+          lt(map),
           "pl-01",
           0,
           1,
@@ -337,14 +342,15 @@ describe("autonomous plan rules", () => {
     const map = autonomousMap();
     acceptRoomPlan(
       map,
+      lt(map),
       proposedRoomPlan(map, "r-01", "s-01", autonomousDraft()),
       AT,
     );
     const amendment = { ...autonomousDraft(), id: "pl-01", rev: 0 };
     const first = proposedRoomPlan(map, "r-01", "s-01", amendment);
     const competing = proposedRoomPlan(map, "r-01", "s-01", amendment);
-    acceptRoomPlan(map, first, AT);
-    expect(() => acceptRoomPlan(map, competing, AT)).toThrow(PlanConflictError);
+    acceptRoomPlan(map, lt(map), first, AT);
+    expect(() => acceptRoomPlan(map, lt(map), competing, AT)).toThrow(PlanConflictError);
     expect(() =>
       validateAutonomousDraft(map, "r-01", "s-01", amendment),
     ).toThrow(PlanConflictError);
@@ -352,12 +358,12 @@ describe("autonomous plan rules", () => {
   it("lets the lead raise through autonomous and only the human lower it", () => {
     const map = fixture();
     for (const mode of ["verified", "autonomous"] as const)
-      setRoomMode(map, "r-01", "s-01", mode, "Stronger verification", {}, AT);
+      setRoomMode(map, lt(map), "r-01", "s-01", mode, "Stronger verification", {}, AT);
     for (const mode of ["verified", "checklist", "free"] as const)
-      expect(() => setRoomMode(map, "r-01", "s-01", mode, "Lower")).toThrow(
+      expect(() => setRoomMode(map, lt(map), "r-01", "s-01", mode, "Lower")).toThrow(
         "only the human",
       );
-    setRoomMode(map, "r-01", HUMAN, "verified", "Human choice", {}, AT);
+    setRoomMode(map, lt(map), "r-01", HUMAN, "verified", "Human choice", {}, AT);
     expect(map.rooms[0]!.mode).toBe("verified");
   });
 });
@@ -383,20 +389,20 @@ describe("room plan state and permissions", () => {
       rev: 0,
       at: AT,
     });
-    resolveProposal(map, "r-01", p.proposalId, "accept");
+    resolveProposal(map, lt(map), "r-01", p.proposalId, "accept");
   });
   it("requires mode-compatible decisions and permits only upward changes by a live lead", () => {
     const map = fixture();
     expect(() => setProposal(map, "r-01", "s-01", "Text", AT)).toThrow();
     expect(() =>
-      setRoomMode(map, "r-01", "s-02", "verified", "Need verification"),
+      setRoomMode(map, lt(map), "r-01", "s-02", "verified", "Need verification"),
     ).toThrow();
-    setRoomMode(map, "r-01", "s-01", "verified", "Need verification");
+    setRoomMode(map, lt(map), "r-01", "s-01", "verified", "Need verification");
     expect(map.rooms[0]!.mode).toBe("verified");
     expect(() =>
-      setRoomMode(map, "r-01", "s-01", "free", "Less ceremony"),
+      setRoomMode(map, lt(map), "r-01", "s-01", "free", "Less ceremony"),
     ).toThrow();
-    setRoomMode(map, "r-01", HUMAN, "free", "Small task");
+    setRoomMode(map, lt(map), "r-01", HUMAN, "free", "Small task");
     expect(map.rooms[0]!.mode).toBe("free");
     expect(() =>
       setProposal(map, "r-01", "s-01", "Plan", AT, { plan: input() }),
@@ -438,13 +444,14 @@ describe("room plan state and permissions", () => {
     const plan = map.rooms[0]!.proposal!.plan!;
     const before = JSON.stringify(map);
     expect(() =>
-      resolveProposal(map, "r-01", p.proposalId, "accept", { rev: p.rev }, AT),
+      resolveProposal(map, lt(map), "r-01", p.proposalId, "accept", { rev: p.rev }, AT),
     ).toThrow();
     expect(JSON.stringify(map)).toBe(before);
     transitionSession(map, "s-02", "closed", { at: AT });
     expect(() =>
       resolveProposal(
         map,
+        lt(map),
         "r-01",
         p.proposalId,
         "accept",
@@ -458,12 +465,12 @@ describe("room plan state and permissions", () => {
     const map = fixture();
     const plan = accept(map);
     expect(plan.items.map((item) => item.status)).toEqual(["ready", "waiting"]);
-    submitPlanItem(map, plan.id, plan.rev, 1, "s-02", evidence, AT);
+    submitPlanItem(map, lt(map), plan.id, plan.rev, 1, "s-02", evidence, AT);
     expect(map.plans![0]!.items.map((item) => item.status)).toEqual([
       "done",
       "ready",
     ]);
-    submitPlanItem(map, plan.id, plan.rev, 2, "s-01", evidence, AT);
+    submitPlanItem(map, lt(map), plan.id, plan.rev, 2, "s-01", evidence, AT);
     expect(map.plans![0]!.status).toBe("completed");
     expect(map.planExports!.map((item) => item.event)).toEqual([
       "accepted",
@@ -471,20 +478,21 @@ describe("room plan state and permissions", () => {
     ]);
     const before = JSON.stringify(map);
     expect(() =>
-      submitPlanItem(map, plan.id, plan.rev, 2, "s-01", evidence),
+      submitPlanItem(map, lt(map), plan.id, plan.rev, 2, "s-01", evidence),
     ).toThrow();
     expect(JSON.stringify(map)).toBe(before);
   });
   it("Verified unlocks only after independent verification and requires human completion acceptance", () => {
     const map = fixture("verified");
     const plan = accept(map);
-    submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
     expect(map.plans![0]!.items[1]!.status).toBe("waiting");
     expect(() =>
-      verifyPlanItem(map, plan.id, 0, 1, "s-02", "verified", "Own review"),
+      verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-02", "verified", "Own review"),
     ).toThrow();
     verifyPlanItem(
       map,
+      lt(map),
       plan.id,
       0,
       1,
@@ -494,10 +502,10 @@ describe("room plan state and permissions", () => {
       AT,
     );
     expect(map.plans![0]!.items[0]!.status).toBe("returned");
-    submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
-    verifyPlanItem(map, plan.id, 0, 1, HUMAN, "verified", "Reviewed", AT);
-    submitPlanItem(map, plan.id, 0, 2, "s-01", evidence, AT);
-    verifyPlanItem(map, plan.id, 0, 2, "s-03", "verified", "Reviewed", AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, HUMAN, "verified", "Reviewed", AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 2, "s-01", evidence, AT);
+    verifyPlanItem(map, lt(map), plan.id, 0, 2, "s-03", "verified", "Reviewed", AT);
     expect(map.plans![0]!.status).toBe("completing");
     const p = proposeCompletion(
       map,
@@ -510,6 +518,7 @@ describe("room plan state and permissions", () => {
     );
     resolveProposal(
       map,
+      lt(map),
       "r-01",
       p.proposalId,
       "return",
@@ -528,6 +537,7 @@ describe("room plan state and permissions", () => {
     );
     resolveProposal(
       map,
+      lt(map),
       "r-01",
       second.proposalId,
       "accept",
@@ -542,9 +552,9 @@ describe("room plan state and permissions", () => {
     (field) => {
       const map = fixture("verified");
       const plan = accept(map);
-      submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
-      verifyPlanItem(map, plan.id, 0, 1, "s-03", "verified", "Reviewed", AT);
-      submitPlanItem(map, plan.id, 0, 2, "s-01", evidence, AT);
+      submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+      verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-03", "verified", "Reviewed", AT);
+      submitPlanItem(map, lt(map), plan.id, 0, 2, "s-01", evidence, AT);
       const snapshot = map.planExports![0]!.content;
       const draft = input("verified");
       draft.id = plan.id;
@@ -574,7 +584,7 @@ describe("room plan state and permissions", () => {
       expect(map.planExports![0]!.content).toBe(snapshot);
       const before = JSON.stringify(map);
       expect(() =>
-        submitPlanItem(map, plan.id, 0, 1, "s-02", evidence),
+        submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence),
       ).toThrow();
       expect(JSON.stringify(map)).toBe(before);
     },
@@ -582,8 +592,8 @@ describe("room plan state and permissions", () => {
   it("unchanged assignments preserve evidence across a revision; removing items retains prior snapshot", () => {
     const map = fixture("verified");
     const plan = accept(map);
-    submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
-    verifyPlanItem(map, plan.id, 0, 1, "s-03", "verified", "Reviewed", AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-03", "verified", "Reviewed", AT);
     const draft = input("verified");
     draft.id = plan.id;
     draft.rev = 0;
@@ -599,12 +609,12 @@ describe("room plan state and permissions", () => {
     const plan = accept(map);
     updatePlanItem(map, plan.id, 0, 1, "s-02", "in_progress", undefined, AT);
     expect(() =>
-      submitPlanItem(map, plan.id, 0, 1, "s-03", evidence),
+      submitPlanItem(map, lt(map), plan.id, 0, 1, "s-03", evidence),
     ).toThrow();
-    removeSession(map, "s-02");
+    removeSession(map, lt(map), "s-02");
     const before = JSON.stringify(map);
     expect(() =>
-      submitPlanItem(map, plan.id, 0, 1, "s-02", evidence),
+      submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence),
     ).toThrow();
     expect(JSON.stringify(map)).toBe(before);
     reconcileRoomPlans(map, AT);
@@ -619,11 +629,12 @@ describe("room plan state and permissions", () => {
     const plan = accept(map);
     const before = JSON.stringify(map);
     expect(() =>
-      setRoomMode(map, "r-01", HUMAN, "free", "Small task"),
+      setRoomMode(map, lt(map), "r-01", HUMAN, "free", "Small task"),
     ).toThrow();
     expect(JSON.stringify(map)).toBe(before);
     setRoomMode(
       map,
+      lt(map),
       "r-01",
       HUMAN,
       "free",
@@ -633,26 +644,81 @@ describe("room plan state and permissions", () => {
     );
     expect(map.plans![0]!.status).toBe("cancelled");
     expect(map.planExports!.at(-1)!.event).toBe("cancelled");
-    expect(() => cancelRoomPlan(map, plan.id, 0, HUMAN)).toThrow();
+    expect(() => cancelRoomPlan(map, lt(map), plan.id, 0, HUMAN)).toThrow();
   });
   it("Verified downgrade makes returned items executable and done items satisfy Checklist", () => {
     const map = fixture("verified");
     const plan = accept(map);
-    submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
-    verifyPlanItem(map, plan.id, 0, 1, "s-03", "returned", "Fix", AT);
-    setRoomMode(map, "r-01", HUMAN, "checklist", "Enough checking", {}, AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-03", "returned", "Fix", AT);
+    setRoomMode(map, lt(map), "r-01", HUMAN, "checklist", "Enough checking", {}, AT);
     expect(map.plans![0]!.mode).toBe("checklist");
     expect(map.plans![0]!.items[0]!.status).toBe("in_progress");
-    submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
-    submitPlanItem(map, plan.id, 0, 2, HUMAN, evidence, AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 2, HUMAN, evidence, AT);
     expect(map.plans![0]!.status).toBe("completed");
+  });
+  /** A verified plan whose items are verified (1) and done (2): lowering the mode to Checklist completes it. */
+  function readyToDowngrade(): { map: WorkMap; planId: string } {
+    const map = fixture("verified");
+    const plan = accept(map);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-03", "verified", "Fine", AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 2, "s-01", evidence, AT);
+    return { map, planId: plan.id };
+  }
+  it("setRoomMode returns the id of its own system line, and nothing when the mode is already set", () => {
+    const map = fixture("checklist");
+    const ids = setRoomMode(map, lt(map), "r-01", HUMAN, "verified", "Need review", {}, AT);
+    expect(ids).toHaveLength(1);
+    const line = map.messages.find((message) => message.id === ids[0]);
+    expect(line).toMatchObject({ from: "system", roomId: "r-01", to: [HUMAN] });
+    expect(line!.text).toBe("You switched the room to verified: Need review");
+    // A letter that arrives afterwards does not become "its own line".
+    lt(map).add({ roomId: "r-01", from: "s-02", to: [], text: "later", kind: "note" });
+    expect(setRoomMode(map, lt(map), "r-01", HUMAN, "verified", "Same again", {}, AT)).toEqual([]);
+  });
+  it("setRoomMode lists the plan's own line before the mode line when the downgrade completes the plan", () => {
+    const { map } = readyToDowngrade();
+    const ids = setRoomMode(map, lt(map), "r-01", HUMAN, "checklist", "Enough checking", {}, AT);
+    const texts = ids.map((id) => map.messages.find((message) => message.id === id)?.text);
+    expect(texts).toEqual([
+      "Plan pl-01 completed",
+      "You switched the room to checklist: Enough checking",
+    ]);
+  });
+  it("a plan edit that fails after writing a letter leaves no letter and no read mark behind", () => {
+    const { map } = readyToDowngrade();
+    const real = lt(map);
+    const earlier = real.add({ roomId: "r-01", from: "s-02", to: ["s-01"], text: "ping", kind: "note" });
+    const before = JSON.stringify(map);
+    let adds = 0;
+    // The first line of the downgrade (the plan's completion) is written; at the second letter the call marks an
+    // older letter as read and then fails, so the savepoint around the edit has both a letter and a mark to undo.
+    const failing: LetterTx = {
+      ...real,
+      add(letter: NewLetter) {
+        adds += 1;
+        if (adds < 2) return real.add(letter);
+        real.markRead("s-01", [earlier.id], AT);
+        throw new Error("write failed");
+      },
+    };
+    expect(() =>
+      setRoomMode(map, failing, "r-01", HUMAN, "checklist", "Enough checking", {}, AT),
+    ).toThrow("write failed");
+    expect(adds).toBe(2);
+    expect(JSON.stringify(map)).toBe(before);
+    expect(map.messages.at(-1)!.id).toBe(earlier.id);
+    expect(map.messages.at(-1)!.readBy).toEqual({});
   });
   it("human-accepted promotion preserves Checklist done honestly; later criteria edits clear its basis", () => {
     const map = fixture();
     const plan = accept(map);
-    submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
     setRoomMode(
       map,
+      lt(map),
       "r-01",
       HUMAN,
       "verified",
@@ -726,7 +792,7 @@ it("a declared lead outside the room cannot gain plan permissions", () => {
 it("removed assignments and their latest submitted evidence survive in the accepted amendment journal", () => {
   const map = fixture("verified");
   const plan = accept(map);
-  submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
+  submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
   const next = input("verified");
   next.id = plan.id;
   next.rev = 0;
@@ -742,10 +808,10 @@ it("removed assignments and their latest submitted evidence survive in the accep
 it("human can return a verified item after completion was proposed, invalidating dependent results", () => {
   const map = fixture("verified");
   const plan = accept(map);
-  submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
-  verifyPlanItem(map, plan.id, 0, 1, "s-03", "verified", "Reviewed", AT);
-  submitPlanItem(map, plan.id, 0, 2, "s-01", evidence, AT);
-  verifyPlanItem(map, plan.id, 0, 2, "s-03", "verified", "Reviewed", AT);
+  submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+  verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-03", "verified", "Reviewed", AT);
+  submitPlanItem(map, lt(map), plan.id, 0, 2, "s-01", evidence, AT);
+  verifyPlanItem(map, lt(map), plan.id, 0, 2, "s-03", "verified", "Reviewed", AT);
   const proposal = proposeCompletion(
     map,
     "r-01",
@@ -757,6 +823,7 @@ it("human can return a verified item after completion was proposed, invalidating
   );
   verifyPlanItem(
     map,
+    lt(map),
     plan.id,
     0,
     1,
@@ -775,6 +842,7 @@ it("human can return a verified item after completion was proposed, invalidating
   expect(() =>
     resolveProposal(
       map,
+      lt(map),
       "r-01",
       proposal.proposalId,
       "accept",
@@ -797,13 +865,13 @@ it.each(["cycle", "basis"])(
 it("downgrade removes the verifier queue and promotion basis while keeping done and reloadable state", () => {
   const map = fixture();
   const plan = accept(map);
-  submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
-  setRoomMode(map, "r-01", HUMAN, "verified", "Review remaining", {}, AT);
+  submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+  setRoomMode(map, lt(map), "r-01", HUMAN, "verified", "Review remaining", {}, AT);
   const promoted = input("verified");
   promoted.id = plan.id;
   promoted.rev = 0;
   accept(map, promoted);
-  setRoomMode(map, "r-01", HUMAN, "checklist", "Enough review", {}, AT);
+  setRoomMode(map, lt(map), "r-01", HUMAN, "checklist", "Enough review", {}, AT);
   const reloaded = parseMap(JSON.stringify(map), "fixture");
   expect(reloaded.plans![0]!.items[0]!.status).toBe("done");
   expect(
@@ -832,6 +900,7 @@ it("captures artifact paths verbatim as evidence text without resolving or readi
   ];
   submitPlanItem(
     map,
+    lt(map),
     plan.id,
     0,
     1,
@@ -843,7 +912,7 @@ it("captures artifact paths verbatim as evidence text without resolving or readi
     text: "Reproduced 🛠️",
     artifacts,
   });
-  submitPlanItem(map, plan.id, 0, 2, "s-01", evidence, AT);
+  submitPlanItem(map, lt(map), plan.id, 0, 2, "s-01", evidence, AT);
   for (const value of artifacts)
     expect(map.planExports!.at(-1)!.content).toContain(value);
 });
@@ -865,6 +934,7 @@ it.each(["goal", "evidence", "summary"])(
       expect(() =>
         submitPlanItem(
           map,
+          lt(map),
           plan.id,
           0,
           1,
@@ -876,10 +946,10 @@ it.each(["goal", "evidence", "summary"])(
       expect(JSON.stringify(map)).toBe(before);
       return;
     }
-    submitPlanItem(map, plan.id, 0, 1, "s-02", evidence, AT);
-    verifyPlanItem(map, plan.id, 0, 1, "s-03", "verified", "Reviewed", AT);
-    submitPlanItem(map, plan.id, 0, 2, "s-01", evidence, AT);
-    verifyPlanItem(map, plan.id, 0, 2, "s-03", "verified", "Reviewed", AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-03", "verified", "Reviewed", AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 2, "s-01", evidence, AT);
+    verifyPlanItem(map, lt(map), plan.id, 0, 2, "s-03", "verified", "Reviewed", AT);
     const before = JSON.stringify(map);
     expect(() =>
       proposeCompletion(map, "r-01", "s-01", plan.id, 0, "Bad \ud800", AT),
@@ -890,7 +960,7 @@ it.each(["goal", "evidence", "summary"])(
 
 it("autonomous completion is idempotent and rejects unsettled or halted acceptance", () => {
   const map = autonomousMap();
-  acceptRoomPlan(map, proposedRoomPlan(map, "r-01", "s-01", autonomousDraft()), AT);
+  acceptRoomPlan(map, lt(map), proposedRoomPlan(map, "r-01", "s-01", autonomousDraft()), AT);
   const plan = map.plans![0]!;
   plan.autonomous = {
     budget: {
@@ -982,6 +1052,7 @@ it("autonomous completion is idempotent and rejects unsettled or halted acceptan
     expect(() =>
       resolveProposal(
         draft,
+        lt(draft),
         "r-01",
         card.proposalId,
         "accept",
@@ -993,6 +1064,7 @@ it("autonomous completion is idempotent and rejects unsettled or halted acceptan
   }
   resolveProposal(
     map,
+    lt(map),
     "r-01",
     card.proposalId,
     "accept",
@@ -1004,7 +1076,7 @@ it("autonomous completion is idempotent and rejects unsettled or halted acceptan
 
 it("leaves a closed autonomous room to the engine instead of cancelling before cleanup", () => {
   const map = autonomousMap();
-  acceptRoomPlan(map, proposedRoomPlan(map, "r-01", "s-01", autonomousDraft()), AT);
+  acceptRoomPlan(map, lt(map), proposedRoomPlan(map, "r-01", "s-01", autonomousDraft()), AT);
   for (const session of map.sessions) session.lifecycle = "closed";
   const before = JSON.stringify(map);
   reconcileRoomPlans(map, AT);

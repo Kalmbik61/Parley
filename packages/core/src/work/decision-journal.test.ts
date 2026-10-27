@@ -5,6 +5,8 @@ import { HUMAN } from './types.js';
 import type { Proposal } from './types.js';
 import { captureDecisionJournal, validDecisionJournalIntent } from './decision-journal.js';
 import type { DecisionJournalMap } from './decision-journal.js';
+import { mapLetterTx } from './letter-store.js';
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 const at = '2026-10-04T12:00:00.000Z';
 function fixture() {
   const map: DecisionJournalMap = { schemaVersion: 2, work: { id: 'w-0001', title: 'Journal', goal: '', status: 'active', createdAt: at, updatedAt: at }, sessions: [], rooms: [], messages: [] };
@@ -19,25 +21,25 @@ function accepted(map: DecisionJournalMap, roomId: string, p: Proposal, when = a
 describe('captured accepted decision journal', () => {
   it('captures exact version, roles, human note and timestamp once, independently of later mutable text', () => {
     const { map, room } = fixture(); const p = proposal(2); const letter = accepted(map, room.id, p);
-    const intent = captureDecisionJournal(map, room, p, 'accept', letter, 'Human remark')!;
+    const intent = captureDecisionJournal(map, lt(map), room, p, 'accept', letter, 'Human remark')!;
     expect(intent.file).toBe('2026-10-04-w-0001-r-01-p-01-rev-02.md');
     expect(intent.content).toContain('builtin:"reviewer"'); expect(intent.content).toContain('Human remark');
     expect(intent.content).toContain(p.text); expect(intent.acceptedAt).toBe(at);
-    expect(captureDecisionJournal(map, room, p, 'accept', letter)).toBe(intent);
+    expect(captureDecisionJournal(map, lt(map), room, p, 'accept', letter)).toBe(intent);
     p.text = 'Later proposal'; room.title = 'Later room'; map.sessions[0]!.label = 'Later lead';
     expect(intent.content).not.toMatch(/Later/); expect(validDecisionJournalIntent(intent)).toBe(true);
   });
   it('keeps separate files for accepted revisions and never journals Return', () => {
     const { map, room } = fixture();
-    for (const rev of [0, 1]) { const p = proposal(rev); captureDecisionJournal(map, room, p, 'accept', accepted(map, room.id, p)); }
+    for (const rev of [0, 1]) { const p = proposal(rev); captureDecisionJournal(map, lt(map), room, p, 'accept', accepted(map, room.id, p)); }
     expect(map.decisionExports?.map(row => row.file)).toEqual(['2026-10-04-w-0001-r-01-p-01-rev-00.md', '2026-10-04-w-0001-r-01-p-01-rev-01.md']);
-    expect(captureDecisionJournal(map, room, proposal(2), 'return', 'm-99')).toBeNull(); expect(map.decisionExports).toHaveLength(2);
+    expect(captureDecisionJournal(map, lt(map), room, proposal(2), 'return', 'm-99')).toBeNull(); expect(map.decisionExports).toHaveLength(2);
   });
   it('refuses a fabricated accepted letter or traversal while leaving legacy maps without an empty collection', () => {
     const { map, room } = fixture();
-    expect(() => captureDecisionJournal(map, room, proposal(), 'accept', 'm-99')).toThrow('journal-invalid');
+    expect(() => captureDecisionJournal(map, lt(map), room, proposal(), 'accept', 'm-99')).toThrow('journal-invalid');
     expect(map).not.toHaveProperty('decisionExports');
-    const p = proposal(); const intent = captureDecisionJournal(map, room, p, 'accept', accepted(map, room.id, p))!;
+    const p = proposal(); const intent = captureDecisionJournal(map, lt(map), room, p, 'accept', accepted(map, room.id, p))!;
     expect(validDecisionJournalIntent({ ...intent, file: '../foreign.md' })).toBe(false);
     expect(validDecisionJournalIntent({ ...intent, content: '\ud800' })).toBe(false);
     expect(validDecisionJournalIntent({ ...intent, content: 'x'.repeat(1024 * 1024 + 1) })).toBe(false);
@@ -47,11 +49,11 @@ describe('captured accepted decision journal', () => {
 it('accepted legacy text/note retains escaped lone units without rolling back Accept or replacing valid emoji/BOM/CRLF', () => {
   const { map, room } = fixture();
   const p = { ...proposal(), text: '\uFEFFLegacy\r\nEmoji 😀\nLone \uD800 and \0\u0001' };
-  const intent = captureDecisionJournal(map, room, p, 'accept', accepted(map, room.id, p), 'Human \uDC00 remark')!;
+  const intent = captureDecisionJournal(map, lt(map), room, p, 'accept', accepted(map, room.id, p), 'Human \uDC00 remark')!;
   expect(intent.content).toContain('generated representation');
   expect(intent.content).toContain('\uFEFFLegacy\r\nEmoji 😀');
   expect(intent.content).toContain('\\ud800'); expect(intent.content).toContain('\\u0000'); expect(intent.content).toContain('\\u0001'); expect(intent.content).toContain('\\udc00');
-  expect(Buffer.from(intent.content).toString()).toBe(intent.content); expect(intent.content).not.toContain('�');
+  expect(Buffer.from(intent.content!).toString()).toBe(intent.content); expect(intent.content).not.toContain('�');
 });
 
 it('disk retry uses captured accepted bytes and snapshot link after later plan revisions, without undoing Accept', async () => {
@@ -63,11 +65,11 @@ it('disk retry uses captured accepted bytes and snapshot link after later plan r
   try {
     await fs.mkdir(project); await fs.mkdir(path.join(root, 'home'));
     const workId = (await store.createWork(project, { title: 'Disk' })).work.id;
-    await store.updateMap(project, workId, map => {
+    await store.updateMap(project, workId, (map, letters) => {
       addSession(map, { provider: 'codex', label: 'Lead', task: 'Bounded' });
       addRoom(map, { title: 'Room', creator: HUMAN, members: ['s-01'], lead: 's-01', mode: 'checklist' });
       const p = setProposal(map, 'r-01', 's-01', 'Version zero', at, { plan: { mode: 'checklist', goal: 'Original goal', items: [{ id: 1, title: 'Original work', owner: 's-01', scope: 'src/old' }] } });
-      resolveProposal(map, 'r-01', p.proposalId, 'accept', { rev: p.rev, planId: 'pl-01', planRev: 0, note: 'Exact remark' }, at);
+      resolveProposal(map, letters, 'r-01', p.proposalId, 'accept', { rev: p.rev, planId: 'pl-01', planRev: 0, note: 'Exact remark' }, at);
     });
     const intent = (await store.readMap(project, workId)).decisionExports![0]!;
     expect(intent.snapshot).toBe(`${workId}-r-01-pl-01-rev-0-accepted.md`);
@@ -75,17 +77,22 @@ it('disk retry uses captured accepted bytes and snapshot link after later plan r
     expect((await store.readMap(project, workId)).rooms[0]!.proposal).toBeNull();
     await flushPlanSnapshots(project, workId);
     expect((await flushDecisionJournal(project, workId, { beforeCommit: async () => { throw new Error('Synthetic disk failure'); } })).failed).toHaveLength(1);
-    await store.updateMap(project, workId, map => {
+    await store.updateMap(project, workId, (map, letters) => {
       const p = setProposal(map, 'r-01', 's-01', 'Version one', at, { plan: { id: 'pl-01', rev: 0, mode: 'checklist', goal: 'Later goal', items: [{ id: 1, title: 'Later work', owner: 's-01', scope: 'src/new' }] } });
-      resolveProposal(map, 'r-01', p.proposalId, 'accept', { rev: p.rev, planId: 'pl-01', planRev: 1 }, at);
+      resolveProposal(map, letters, 'r-01', p.proposalId, 'accept', { rev: p.rev, planId: 'pl-01', planRev: 1 }, at);
     });
     await flushPlanSnapshots(project, workId); const result = await flushDecisionJournal(project, workId);
     expect(result.failed).toEqual([]); expect(result.written).toHaveLength(2);
+    // Записанные тексты ушли из карты, а хэш снимка в решении тот же, что хранит экспорт плана (спека хранилища 6.2).
+    const settled = await store.readMap(project, workId);
+    expect(settled.decisionExports!.every(row => row.content === undefined && row.status === 'written')).toBe(true);
+    for (const row of settled.decisionExports!) expect(row.snapshotSha256).toBe(settled.planExports!.find(plan => plan.file === row.snapshot)!.sha256);
     const file = path.join(project, '.parley', 'decisions', intent.file);
     expect(await fs.readFile(file, 'utf8')).toBe(intent.content); expect(intent.content).not.toContain('Later goal');
     expect((await flushDecisionJournal(project, workId)).written).toEqual([]);
     await fs.writeFile(file, 'Human changed immutable journal');
-    await store.updateMap(project, workId, map => { map.decisionExports![0]!.status = 'pending'; }, { touch: false });
+    // Снова ожидающим решение становится с тем текстом, который захвачен: у записанного текста в карте уже нет.
+    await store.updateMap(project, workId, map => { map.decisionExports![0] = { ...intent }; }, { touch: false });
     expect((await flushDecisionJournal(project, workId)).failed[0]?.code).toBe('journal-conflict');
     expect(await fs.readFile(file, 'utf8')).toBe('Human changed immutable journal');
   } finally {
@@ -100,14 +107,14 @@ it('verified completion journals its exact completed snapshot, while a returned 
   const { map, room } = fixture(); room.mode = 'verified';
   addSession(map, { provider: 'codex', label: 'Verifier', task: 'Independent proof' }); room.members.push('s-02');
   const p = setProposal(map, room.id, 's-01', 'Accepted plan', at, { plan: { mode: 'verified', goal: 'Goal', items: [{ id: 1, title: 'Work', owner: 's-01', scope: 'src/a', criteria: ['Measured'], verifier: 's-02' }], backlog: ['b-001'] } });
-  resolveProposal(map, room.id, p.proposalId, 'accept', { rev: p.rev, planId: 'pl-01', planRev: 0 }, at);
-  submitPlanItem(map, 'pl-01', 0, 1, 's-01', { text: 'Measured evidence', artifacts: ['src/a'] }, at);
-  verifyPlanItem(map, 'pl-01', 0, 1, 's-02', 'verified', 'Independent result', at);
+  resolveProposal(map, lt(map), room.id, p.proposalId, 'accept', { rev: p.rev, planId: 'pl-01', planRev: 0 }, at);
+  submitPlanItem(map, lt(map), 'pl-01', 0, 1, 's-01', { text: 'Measured evidence', artifacts: ['src/a'] }, at);
+  verifyPlanItem(map, lt(map), 'pl-01', 0, 1, 's-02', 'verified', 'Independent result', at);
   const returned = proposeCompletion(map, room.id, 's-01', 'pl-01', 0, 'Returned summary', at);
-  resolveProposal(map, room.id, returned.proposalId, 'return', { rev: returned.rev, planId: 'pl-01', planRev: 0, note: 'Human rework' }, at);
+  resolveProposal(map, lt(map), room.id, returned.proposalId, 'return', { rev: returned.rev, planId: 'pl-01', planRev: 0, note: 'Human rework' }, at);
   expect(map.decisionExports).toHaveLength(1);
   const completion = proposeCompletion(map, room.id, 's-01', 'pl-01', 0, 'Final truthful summary', at);
-  resolveProposal(map, room.id, completion.proposalId, 'accept', { rev: completion.rev, planId: 'pl-01', planRev: 0 }, at);
+  resolveProposal(map, lt(map), room.id, completion.proposalId, 'accept', { rev: completion.rev, planId: 'pl-01', planRev: 0 }, at);
   const intent = map.decisionExports![1]!;
   expect(intent.kind).toBe('completion'); expect(intent.snapshot).toBe('w-0001-r-01-pl-01-rev-0-completed.md');
   expect(intent.content).toContain('Final truthful summary'); expect(intent.content).toContain('b-001'); expect(intent.content).not.toContain('Returned summary');
@@ -121,12 +128,12 @@ describe('read-only journal listing (P28)', () => {
     const oldHome = process.env.PARLEY_HOME; process.env.PARLEY_HOME = path.join(root, 'home');
     await fs.mkdir(project); await fs.mkdir(path.join(root, 'home'));
     const workId = (await store.createWork(project, { title: 'List' })).work.id;
-    await store.updateMap(project, workId, map => {
+    await store.updateMap(project, workId, (map, letters) => {
       addSession(map, { provider: 'codex', label: 'Lead', task: 'Bounded' });
       addRoom(map, { title: 'Room', creator: HUMAN, members: ['s-01'], lead: 's-01' });
       for (const rev of [0, 1]) {
         const p = setProposal(map, 'r-01', 's-01', `Version ${rev}\nBody`, at);
-        resolveProposal(map, 'r-01', p.proposalId, 'accept', { rev: p.rev }, at);
+        resolveProposal(map, letters, 'r-01', p.proposalId, 'accept', { rev: p.rev }, at);
       }
     });
     const { flushDecisionJournal } = await import('./decision-journal.js');
@@ -150,13 +157,33 @@ describe('read-only journal listing (P28)', () => {
       expect((await t.fs.readdir(t.path.join(t.project, '.parley'), { recursive: true })).sort()).toEqual(before);
     } finally { await t.done(); }
   });
+  it('a written decision keeps only file, sha256, bytes and title; classify decides by that sha256', async () => {
+    const { readDecisionJournalFiles, classifyDecisionFile } = await import('./decision-journal.js');
+    const { createHash } = await import('node:crypto');
+    const t = await disk();
+    try {
+      const map = await t.store.readMap(t.project, t.workId);
+      for (const [index, intent] of map.decisionExports!.entries()) {
+        const text = await t.fs.readFile(t.path.join(t.dir, intent.file), 'utf8');
+        expect(intent).not.toHaveProperty('content');
+        expect(intent).toMatchObject({ status: 'written', sha256: createHash('sha256').update(text).digest('hex'), bytes: Buffer.byteLength(text), title: `Version ${index}` });
+      }
+      const listing = await readDecisionJournalFiles(t.project);
+      expect(listing.files.map(row => classifyDecisionFile(row, map))).toEqual(['accepted', 'accepted']);
+      const [first] = map.decisionExports!;
+      await t.fs.appendFile(t.path.join(t.dir, first!.file), 'Human note');
+      const edited = await readDecisionJournalFiles(t.project);
+      expect(edited.files.map(row => [row.file, classifyDecisionFile(row, map)])).toEqual(
+        [...map.decisionExports!].map(row => row.file).sort().reverse().map(file => [file, file === first!.file ? 'edited' : 'accepted']));
+    } finally { await t.done(); }
+  });
   it('an edited file is not accepted, and a foreign header never becomes retained', async () => {
     const { readDecisionJournalFiles, classifyDecisionFile } = await import('./decision-journal.js');
     const t = await disk();
     try {
       const map = await t.store.readMap(t.project, t.workId);
       const [first, second] = map.decisionExports!;
-      await t.fs.writeFile(t.path.join(t.dir, first!.file), `${first!.content}\nHuman note`);
+      await t.fs.writeFile(t.path.join(t.dir, first!.file), `${await t.fs.readFile(t.path.join(t.dir, first!.file), 'utf8')}\nHuman note`);
       await t.fs.writeFile(t.path.join(t.dir, second!.file), 'Not a journal header');
       const listing = await readDecisionJournalFiles(t.project);
       const byFile = Object.fromEntries(listing.files.map(row => [row.file, row]));

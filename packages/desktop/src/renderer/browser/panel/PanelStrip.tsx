@@ -9,7 +9,7 @@
 import { ArrowLeft, Plus, X } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { BrowserOwner, BrowserPanelSpec } from '../../../shared/layout-types.js';
 import { S } from '../../../shared/strings.js';
 import { PANEL_LIMITS } from '../../layout/tree.js';
@@ -22,13 +22,13 @@ export interface PanelStripProps {
   workKey: string;
   owner: BrowserOwner;
   panel: BrowserPanelSpec;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   /** Вид хозяина уже 560 px: панель закрывает его собой. */
   narrow: boolean;
 }
 
 /** Хозяин в заголовке: `S01 backend` у сессии (как строка дерева), название у комнаты. */
-export function ownerTitle(entry: WorkEntry, owner: BrowserOwner): string {
+export function ownerTitle(entry: WindowWorkEntry, owner: BrowserOwner): string {
   if (owner.kind === 'room') return entry.map.rooms.find((room) => room.id === owner.roomId)?.title ?? owner.roomId;
   const session = entry.map.sessions.find((item) => item.id === owner.sessionId);
   return session === undefined ? sessionTag(owner.sessionId) : sessionRowLabel(session.id, session.label);

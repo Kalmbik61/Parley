@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import type { FocusTarget } from '../../shared/bridge.js';
 import { refKey } from '@parley/protocol';
 import { useLayoutStore } from '../layout/store.js';
@@ -44,11 +44,11 @@ function session(id: string): WorkSession {
   };
 }
 
-const work: WorkEntry = {
+const work: WindowWorkEntry = {
   projectPath: '/tmp/p',
   map: {
     schemaVersion: 2,
-    rooms: [{ id: 'r-1', name: 'design', members: [], createdAt: '2026-01-01', createdBy: 'human' }] as unknown as WorkEntry['map']['rooms'],
+    rooms: [{ id: 'r-1', name: 'design', members: [], createdAt: '2026-01-01', createdBy: 'human' }] as unknown as WindowWorkEntry['map']['rooms'],
     work: { id: 'w-01', title: 'Redesign', goal: '', status: 'active', createdAt: '2026-01-01', updatedAt: '2026-01-01' },
     sessions: [session('s-02')],
     messages: [],

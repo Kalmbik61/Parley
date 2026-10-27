@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { SidebarSection } from './sort.js';
 import { useDeferredOrder } from './use-deferred-order.js';
 
-function work(id: string, title = id): WorkEntry {
+function work(id: string, title = id): WindowWorkEntry {
   return {
     projectPath: '/p/a',
     map: {
@@ -17,7 +17,7 @@ function work(id: string, title = id): WorkEntry {
   };
 }
 
-function section(key: string, works: WorkEntry[]): SidebarSection {
+function section(key: string, works: WindowWorkEntry[]): SidebarSection {
   return { kind: 'project', key, title: key, projectPath: key, works, collapsed: false };
 }
 

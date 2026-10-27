@@ -6,7 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentChannel } from '../work/mcp-config.js';
-import { createWork, workPaths } from '../work/store.js';
+import { createWork, deleteWorkFiles, workPaths } from '../work/store.js';
 import {
   AGENT_TOOLS_REQUEST_BYTES,
   ARGUMENTS_TOO_LARGE,
@@ -15,7 +15,7 @@ import {
   createRemoteToolRunner,
   launchOf,
 } from './remote-tools.js';
-import { createParleyServer, type ToolRunner } from './tools.js';
+import { createParleyServer, createToolRunner, type ToolRunner } from './tools.js';
 
 const TOKEN = 'a'.repeat(64);
 const servers: Server[] = [];
@@ -545,6 +545,44 @@ describe('сбой list при заданном запасном исполни�
   });
 });
 
+describe('запасной исполнитель читает базу напрямую (спека хранилища 6.5)', () => {
+  const contextFor = (workId: string) => ({
+    projectPath: project,
+    workId,
+    workDir: workPaths(project, workId).dir,
+    sessionId: 's-01',
+    channel: false,
+    pollMs: 20,
+  });
+
+  it('работы нет в базе: инструменты, читающие карту, отвечают отказом «does not exist», а не молчат и не ждут', async () => {
+    const { agent } = await hostWithoutRoute();
+    const runner = createRemoteToolRunner(agent, {}, { fallback: createToolRunner(contextFor('w-0001')) });
+
+    // `wait_for` на отсутствующей работе не должен висеть до таймаута: личности работы нет, проба читает базу и бросает.
+    const results = await Promise.all([
+      runner.call('get_map', {}, undefined),
+      runner.call('wait_for', { target: 'inbox', timeoutSec: 5 }, undefined),
+    ]);
+
+    for (const result of results) {
+      expect(result.isError).toBe(true);
+      expect(textOf(result as { content: unknown[] })).toMatch(/^workspace w-0001 does not exist in /);
+    }
+  });
+
+  it('работа в базе есть: запасной исполнитель отвечает картой из базы', async () => {
+    const created = await createWork(project, { title: 'Работа', goal: 'цель' });
+    const { agent } = await hostWithoutRoute();
+    const runner = createRemoteToolRunner(agent, {}, { fallback: createToolRunner(contextFor(created.work.id)) });
+
+    const result = await runner.call('get_map', {}, undefined);
+
+    expect(result.isError).not.toBe(true);
+    expect(textOf(result as { content: unknown[] })).toContain('Работа');
+  });
+});
+
 describe('строки диагностики в stderr процесса MCP (спека хранилища 6.4, 6.5)', () => {
   it('переход на запасной исполнитель после 404 пишет одну строку на процесс, сколько бы вызовов ни ждало ответа', async () => {
     const { agent } = await hostWithoutRoute();
@@ -617,8 +655,8 @@ describe('сервер с удалённым исполнителем (спек�
     const workId = created.work.id;
     const { agent, seen } = await fakeHost((_req, res, entry) =>
       reply(res, 200, entry.body['op'] === 'list' ? ok({ tools: [{ name: 'get_map', inputSchema: { type: 'object' } }] }) : ok(TOOL_OK)));
-    // Карты нет: любое её чтение в процессе MCP упало бы.
-    await rm(workPaths(project, workId).map);
+    // Работу из базы убрали: любое чтение её карты в процессе MCP упало бы («workspace … does not exist»).
+    await deleteWorkFiles(project, workId);
     const context = { projectPath: project, workId, workDir: workPaths(project, workId).dir, sessionId: 's-01', channel: false, agent };
     const server = createParleyServer(context, createRemoteToolRunner(agent, {}));
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

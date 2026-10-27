@@ -1,6 +1,7 @@
 import type {
   EventData,
   EventName,
+  HostNotice,
   MethodName,
   NotificationName,
   Params,
@@ -100,6 +101,11 @@ export interface ParleyBridge {
    * подписки рендерера (`main/host-connection.ts#activitySnapshot`).
    */
   activitySnapshot(): Promise<Array<EventData<'activity.changed'>>>;
+  /**
+   * Уведомления хоста текущего подключения, в том числе стартовые, которые хост повторяет после `hello` раньше подписки
+   * рендерера (`main/host-connection.ts#noticesSnapshot`): от старых к новым, не больше 20.
+   */
+  noticesSnapshot(): Promise<HostNotice[]>;
   app: {
     /** Desktop-only: main перепроверяет sender/frame и нативное состояние окна. */
     reportSessionVisibility(report: SessionVisibilityReport): void;

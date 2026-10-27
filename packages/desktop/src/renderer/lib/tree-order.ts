@@ -4,7 +4,7 @@
  * (дизайн TUI v2, 2.1).
  */
 
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import { workKey } from '../../shared/work-keys.js';
 
 // Формат ключа один на main и рендерер (кусок 5.2): прежние импорты отсюда остаются.
@@ -47,7 +47,7 @@ export function sessionSequence(
   return workKeys.flatMap((work) => (orders.get(work) ?? []).map((session) => ({ work, session })));
 }
 
-export function sessionOrders(entries: readonly WorkEntry[]): Map<string, string[]> {
+export function sessionOrders(entries: readonly WindowWorkEntry[]): Map<string, string[]> {
   return new Map(
     entries.map((entry) => [
       workKey(entry.projectPath, entry.map.work.id),

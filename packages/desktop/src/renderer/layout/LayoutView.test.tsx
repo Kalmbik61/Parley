@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
-import type { Room, WorkEntry, WorkSession } from '@parley/core';
+import type { Room, WindowWorkEntry, WorkSession } from '@parley/core';
 import type { GroupNode, SplitNode } from '../../shared/layout-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { xtermMock } from '../test-utils/xterm-mock.js';
@@ -66,7 +66,7 @@ function room(id: string, title: string): Room {
   return { id, title, creator: 'human', members: [], createdAt: '2026-01-01T00:00:00.000Z' };
 }
 
-function entry(): WorkEntry {
+function entry(): WindowWorkEntry {
   return {
     projectPath: '/tmp/p',
     map: {

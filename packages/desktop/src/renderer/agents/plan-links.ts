@@ -1,7 +1,7 @@
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 
 export function roomPlanLinks(
-  entry: WorkEntry,
+  entry: WindowWorkEntry,
   sessionId: string,
 ): { roomId: string; planId: string; itemId: number; title: string; scope: string }[] {
   return (entry.map.plans ?? [])

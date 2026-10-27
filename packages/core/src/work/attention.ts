@@ -9,11 +9,15 @@
 
 import type { SessionActivity } from './activity.js';
 import type { SessionNeed } from './stuck.js';
-import type { Message, Room, WorkMap, WorkSession } from './types.js';
+import type { Message, Room, WindowWorkMap, WorkSession } from './types.js';
 
 // Те же литералы, что `HUMAN` и `SYSTEM` в `types.ts`: значения не импортируем, чтобы модуль остался чистым.
 const HUMAN = 'human';
 const SYSTEM = 'system';
+// Те же слова письма человека ведущему, что `ACCEPTED_LETTER` и `RETURNED_LETTER` в `proposals.ts` (тот модуль тянет карту, а
+// этот должен остаться чистым). Сходство держит тест `attention.test.ts`.
+const ACCEPTED_LETTER = 'Decision accepted.';
+const RETURNED_LETTER = 'Returned for rework';
 
 export type Attention = 'needs-you' | 'unseen' | 'working' | 'idle' | 'off';
 
@@ -96,7 +100,7 @@ export function isHumanMention(message: Message, hasMention: (text: string) => b
  * Прямые письма человеку (roomId === null) с isHumanUnread. Упоминания в комнатах сюда не входят — их берёт
  * `humanUnreadMentions`.
  */
-export function humanUnreadLetters(map: WorkMap): Message[] {
+export function humanUnreadLetters(map: Pick<WindowWorkMap, 'messages'>): Message[] {
   return map.messages.filter((message) => message.roomId === null && isHumanUnread(message));
 }
 
@@ -104,7 +108,7 @@ export function humanUnreadLetters(map: WorkMap): Message[] {
  * Упоминания человека в комнатах с isHumanUnread, в порядке карты: последнее — самое позднее. Архивная комната
  * не источник внимания: её старые упоминания не считаются.
  */
-export function humanUnreadMentions(map: WorkMap, hasMention: (text: string) => boolean): Message[] {
+export function humanUnreadMentions(map: Pick<WindowWorkMap, 'messages' | 'rooms'>, hasMention: (text: string) => boolean): Message[] {
   const archived = new Set(map.rooms.filter(isArchived).map((room) => room.id));
   return map.messages.filter(
     (message) =>
@@ -117,4 +121,15 @@ export function humanUnreadMentions(map: WorkMap, hasMention: (text: string) => 
 /** `@human` в простом тексте, без Markdown: не часть слова и не адрес (`mail@humanity.org` не считается). */
 export function plainHumanMention(text: string): boolean {
   return /(^|[^\w@])@human\b/i.test(text);
+}
+
+/**
+ * Чем человек ответил на решение комнаты, по тексту его письма ведущему (`resolveProposal`): `accepted` — письмо
+ * `Decision accepted.` целиком, `returned` — любое, что начинается с `Returned for rework` (дальше заметка), прочее —
+ * `null`. Решение, которого слова нет в письме, ответом не считается. Окно (`derive.ts`) и хост (снимок без писем,
+ * спека rooms.mail 6.8) берут слова отсюда.
+ */
+export function humanDecisionOutcome(text: string): 'accepted' | 'returned' | null {
+  if (text === ACCEPTED_LETTER) return 'accepted';
+  return text.startsWith(RETURNED_LETTER) ? 'returned' : null;
 }

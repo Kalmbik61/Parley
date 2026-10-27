@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { readStoredMapE2E } from './stored-map.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
@@ -25,6 +26,7 @@ const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
  */
 const DEFAULT_NAME = /^[A-Z][a-z]+( \d+)?$/;
 let project = '';
+let home = '';
 
 async function call<T>(window: Page, method: string, params: unknown): Promise<T> {
   return window.evaluate(
@@ -46,12 +48,15 @@ interface MapView {
   messages: Array<{ roomId: string | null; from: string; text: string }>;
 }
 
-/** Карта работы из снимка хоста — то, что окно рисует. */
+/**
+ * Карта работы: сессии и комнаты — из снимка хоста, то, что окно рисует; письма — из базы дома теста: снимок окна с
+ * признаком `rooms-mail` писем не несёт (спека rooms.mail 6.8), окно берёт их страницами.
+ */
 async function mapOf(window: Page, workId: string): Promise<MapView> {
   const snapshot = await call<{ entries: Array<{ map: MapView & { work: { id: string } } }> }>(window, 'works.list', {});
   const entry = snapshot.entries.find((item) => item.map.work.id === workId);
   if (entry === undefined) throw new Error(`работы ${workId} нет в снимке`);
-  return entry.map;
+  return { ...entry.map, messages: readStoredMapE2E(home, project, workId).messages };
 }
 
 async function createSession(window: Page, workId: string, label: string): Promise<string> {
@@ -80,7 +85,6 @@ async function dragOver(window: Page, from: Locator, to: Locator): Promise<void>
 }
 
 test.describe('диалоги комнат и перетаскивание (кусок 7)', () => {
-  let home: string;
   let app: ElectronApplication | null = null;
 
   test.beforeEach(async () => {

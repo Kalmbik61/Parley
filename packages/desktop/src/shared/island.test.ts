@@ -8,7 +8,7 @@ describe('остров: белый список методов хоста', () =
   it('добавляет только progress чтение без подписок или новых событий', () => {
     expect(ISLAND_METHODS.has('feed.progress')).toBe(true);
     for (const method of ['feed.subscribe', 'feed.unsubscribe', 'pty.attach', 'pty.input', 'rooms.resolve', 'plans.submit']) expect(ISLAND_METHODS.has(method)).toBe(false);
-    expect([...ISLAND_EVENTS]).toEqual(['works.changed', 'activity.changed', 'assistant.changed', 'consents.changed']);
+    expect([...ISLAND_EVENTS]).toEqual(['works.changed', 'rooms.mail', 'activity.changed', 'assistant.changed', 'consents.changed']);
   });
 
   it('каждое имя из ISLAND_METHODS — метод протокола (опечатка не оставит остров без данных молча)', () => {
@@ -20,6 +20,17 @@ describe('остров: белый список методов хоста', () =
     expect(ISLAND_METHODS.has('consents.list')).toBe(true);
     expect(ISLAND_METHODS.has('consents.decide')).toBe(true);
     expect(ISLAND_EVENTS.has('consents.changed')).toBe(true);
+  });
+});
+
+describe('остров: письма работ', () => {
+  it('context.messages разрешён: разрыв версии остров чинит страницами, как главное окно', () => {
+    expect(ISLAND_METHODS.has('context.messages')).toBe(true);
+  });
+
+  it('rooms.mail в белом списке: без него числа острова застыли бы до следующего структурного снимка (спека rooms.mail, Review Focus 4)', () => {
+    expect(ISLAND_EVENTS.has('rooms.mail')).toBe(true);
+    expect(ISLAND_EVENTS.has('works.changed')).toBe(true);
   });
 });
 

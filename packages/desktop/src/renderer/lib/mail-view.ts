@@ -20,7 +20,7 @@
  * который трогает `node:fs`, а песочница окна такое не пропускает.
  */
 
-import type { Message, MessageKind, Room, WorkEntry, WorkMap } from '@parley/core';
+import type { Message, MessageKind, Room, WindowWorkEntry, WindowWorkMap } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { participantTag } from './participant-tag.js';
 import { isRoomArchived } from './room-archive.js';
@@ -39,7 +39,7 @@ export const DECISIONS_SHOWN = 5;
  * кроме отправителя (спецификация 6.1, перенос из `core/work/letters.ts`). Письма архивной комнаты адресатов не имеют,
  * и с явным `to` тоже: старая лента непрочитанной не считается (архив комнат, 3.4).
  */
-export function recipientsOf(message: Message, map: WorkMap): string[] {
+export function recipientsOf(message: Message, map: WindowWorkMap): string[] {
   if (message.roomId === null) return message.to;
   const room = map.rooms.find((candidate: Room) => candidate.id === message.roomId);
   if (room !== undefined && isRoomArchived(room)) return [];
@@ -52,7 +52,7 @@ export function recipientsOf(message: Message, map: WorkMap): string[] {
 }
 
 /** Письмо адресовано сессии, и она его ещё не прочла (перенос из `core/work/letters.ts`). */
-export function isUnreadFor(message: Message, sessionId: string, map: WorkMap): boolean {
+export function isUnreadFor(message: Message, sessionId: string, map: WindowWorkMap): boolean {
   return message.readBy[sessionId] === undefined && recipientsOf(message, map).includes(sessionId);
 }
 
@@ -84,7 +84,7 @@ export interface MailView {
  * Одно письмо в строку ленты «всей почты»: разбор адресатов и отметка
  * «непрочитано» — здесь, фильтр по `roomId` — у вызывающей стороны.
  */
-export function toLetterView(message: Message, map: WorkMap, tag: (id: string) => string): LetterView {
+export function toLetterView(message: Message, map: WindowWorkMap, tag: (id: string) => string): LetterView {
   const recipients = recipientsOf(message, map);
   // Рассылка комнаты («всем»): пустой `to` у письма с `roomId` — иначе
   // адресат печатался бы поимённо и там, где письмо явно уходило «всем»
@@ -102,7 +102,7 @@ export function toLetterView(message: Message, map: WorkMap, tag: (id: string) =
 }
 
 export function mailView(
-  entry: WorkEntry,
+  entry: WindowWorkEntry,
   providers: Array<{ id: string; label: string }>,
   models: Record<string, string | null>,
 ): MailView {

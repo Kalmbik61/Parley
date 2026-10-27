@@ -9,7 +9,7 @@
  */
 
 import { create } from 'zustand';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { ConsentCard } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
@@ -104,7 +104,7 @@ export function trustCardFor(
  * Кто просил, для диалога: «S03 Ruslan · create_session». Просившая сессия берётся из карты работы карточки, нет её
  * (человек, автозапуск, сессия уже ушла) — ярлык карточки, нет и его — один источник.
  */
-export function consentRequester(card: ConsentCard, entries: readonly WorkEntry[]): string {
+export function consentRequester(card: ConsentCard, entries: readonly WindowWorkEntry[]): string {
   const { requestedBy } = card;
   const via = S.dialogs.trustFolder.via[requestedBy.source];
   const session =

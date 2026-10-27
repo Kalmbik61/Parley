@@ -6,14 +6,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  addMessage,
+  writeLetters,
   addRoom,
   addSession,
   archiveRoom,
   createWork,
   DEFAULT_RESOURCE_LIMITS,
   LIMIT_RETURN_TEXT,
-  readMap,
+  readStoredMap,
   reserveAttempt,
   saveConfig,
   setWorkStatus,
@@ -127,9 +127,9 @@ async function activeSession(): Promise<{ workId: string; sessionId: string }> {
   return { workId: map.work.id, sessionId };
 }
 
-async function sendLetter(workId: string, to: string, text = 'тело письма — секрет'): Promise<void> {
-  await updateMap(project, workId, (map) => {
-    addMessage(map, { from: 's-00', to: [to], text });
+async function sendLetter(workId: string, to: string, text = 'тело письма — секрет', from = 's-00'): Promise<void> {
+  await updateMap(project, workId, (map, letters) => {
+    letters.add({ roomId: null, kind: 'note', from, to: [to], text });
   });
 }
 
@@ -291,10 +291,10 @@ describe('WakeService', () => {
     // Одной записью карты, а не тремя: иначе гонка с наблюдателем работ могла
     // бы застать письма по одному и напечатать три отдельных указателя с (1),
     // а второй и третий заблокировались бы уже висящей попыткой (`in-flight`).
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-00', to: [sessionId], text: 'один' });
-      addMessage(map, { from: 's-00', to: [sessionId], text: 'два' });
-      addMessage(map, { from: 's-00', to: [sessionId], text: 'три' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, kind: 'note', from: 's-00', to: [sessionId], text: 'один' });
+      letters.add({ roomId: null, kind: 'note', from: 's-00', to: [sessionId], text: 'два' });
+      letters.add({ roomId: null, kind: 'note', from: 's-00', to: [sessionId], text: 'три' });
     });
 
     const expected = `echo: ${pointer(3)}`;
@@ -858,12 +858,8 @@ describe('WakeService: подъём спящей письмом', () => {
     setEnv('STUB_PROMPT_FROM_ARGV', '1');
     const { stream, sessions } = await resumeRig();
 
-    await sendLetter(workId, target, 'тело письма');
     // Отправитель — настоящая сессия, а не s-00 из хелпера.
-    await updateMap(project, workId, (map) => {
-      const letter = map.messages.at(-1);
-      if (letter !== undefined) letter.from = sender;
-    });
+    await sendLetter(workId, target, 'тело письма', sender);
 
     const argv = await readArgv(argsFile);
     expect(argv.at(-1)).toBe(pointer(1));
@@ -920,7 +916,7 @@ describe('WakeService: подъём спящей письмом', () => {
       'S01 was not resumed: the hourly resume limit is reached, messages are waiting',
     ]);
     expect(sessions.live(ref)).toBe(false);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(map.sessions.find((s) => s.id === target)?.lifecycle).toBe('sleeping');
   }, 20_000);
 
@@ -946,7 +942,7 @@ describe('WakeService: подъём спящей письмом', () => {
     expect(notices('resume-limit')).toHaveLength(1);
     expect(noticeTexts('resume-limit')[0]).toMatch(/^S01 was not resumed: the workspace budget is exhausted \(launch limit reached: 1 of 1/);
     expect(sessions.live(ref)).toBe(false);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(map.sessions.find((s) => s.id === target)?.lifecycle).toBe('sleeping');
     // Письма не потеряны и не названы указанными: они ждут слота. Резерв не остался.
     expect(unreadFor(map, target)).toHaveLength(2);
@@ -976,7 +972,7 @@ describe('WakeService: подъём спящей письмом', () => {
 
     expect(noticeTexts('resume-limit')[0]).toContain('resume limit reached: 6 of 6');
     expect(sessions.live(ref)).toBe(false);
-    expect((await readMap(project, workId)).sessions.find((s) => s.id === target)?.lifecycle).toBe('sleeping');
+    expect((readStoredMap(project, workId)).sessions.find((s) => s.id === target)?.lifecycle).toBe('sleeping');
   }, 20_000);
 
   it('5в: запуск Codex удержан до согласия на папку (held) — письма ждут без сбоя, повторов нет, счёт часа цел, retry поднимает', async () => {
@@ -1005,7 +1001,7 @@ describe('WakeService: подъём спящей письмом', () => {
     expect(notices('resume-failed')).toEqual([]);
     expect(notices('resume-limit')).toEqual([]);
     expect(sessions.live(ref)).toBe(false);
-    const waiting = await readMap(project, workId);
+    const waiting = readStoredMap(project, workId);
     expect(unreadFor(waiting, target)).toHaveLength(2);
     expect(waiting.messages.some((m) => m.from === SYSTEM)).toBe(false);
     // Удержание не расходует счёт часа: все шесть подъёмов ещё доступны.
@@ -1052,7 +1048,7 @@ describe('WakeService: подъём спящей письмом', () => {
     second.start();
     await settle(300);
     expect(launches).toEqual([]);
-    expect(unreadFor(await readMap(project, workId), target)).toHaveLength(2);
+    expect(unreadFor(readStoredMap(project, workId), target)).toHaveLength(2);
 
     // Согласие пришло: `retry` заново считает письма спящей неуказанными — подъём с указателем на оба.
     second.retry(ref);
@@ -1065,12 +1061,12 @@ describe('WakeService: подъём спящей письмом', () => {
     setEnv('STUB_EXIT_AFTER_MS', '10');
     await resumeRig();
 
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: sender, to: [target], text: 'проснись' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, kind: 'note', from: sender, to: [target], text: 'проснись' });
     });
 
     await waitFor(() => notices('resume-failed').length > 0, 8000);
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     const systemLetters = map.messages.filter((m) => m.from === SYSTEM);
     expect(systemLetters).toHaveLength(1);
     expect(systemLetters[0]?.to).toEqual([sender]);
@@ -1081,7 +1077,7 @@ describe('WakeService: подъём спящей письмом', () => {
     // Выход процесса дописывает карту следом (выход или сверка живости — кто
     // первый) — дождаться, чтобы уборка теста не гонялась с этой записью.
     for (;;) {
-      const session = (await readMap(project, workId)).sessions.find((s) => s.id === target);
+      const session = (readStoredMap(project, workId)).sessions.find((s) => s.id === target);
       if (session?.lifecycle === 'sleeping') break;
       await settle(20);
     }
@@ -1090,7 +1086,7 @@ describe('WakeService: подъём спящей письмом', () => {
 
   it('6b: запуск сам остановил процесс и ответил ошибкой — сбой сообщается раз и причиной запуска', async () => {
     const { workId, target, sender } = await sleepingPair();
-    const reason = 'lock map.lock was not released within 3000 ms';
+    const reason = 'lock /home/.parley/parley.db was not released within 3000 ms';
     await resumeRig({}, (sessions) => ({
       ...sessions,
       // Как `launch`, когда старт не записался в карту: процесс поднят, остановлен, вызывающему — ошибка.
@@ -1101,15 +1097,15 @@ describe('WakeService: подъём спящей письмом', () => {
       },
     }));
 
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: sender, to: [target], text: 'проснись' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, kind: 'note', from: sender, to: [target], text: 'проснись' });
     });
 
     await waitFor(() => notices('resume-failed').length > 0, 8000);
     // Второй отчёт — выход процесса в срок сбоя — пришёл бы следом: даём ему время.
     await settle(500);
     expect(noticeTexts('resume-failed')).toEqual([`S01 did not resume: ${reason}`]);
-    const systemLetters = (await readMap(project, workId)).messages.filter((m) => m.from === SYSTEM);
+    const systemLetters = (readStoredMap(project, workId)).messages.filter((m) => m.from === SYSTEM);
     expect(systemLetters.map((m) => m.text)).toEqual([`S01 did not resume: ${reason}`]);
   }, 20_000);
 
@@ -1121,7 +1117,7 @@ describe('WakeService: подъём спящей письмом', () => {
     const ref = { projectPath: project, workId, sessionId: target };
 
     await sessions.close(ref);
-    expect((await readMap(project, workId)).sessions.find((s) => s.id === target)?.lifecycle).toBe('closed');
+    expect((readStoredMap(project, workId)).sessions.find((s) => s.id === target)?.lifecycle).toBe('closed');
 
     await sendLetter(workId, target);
     await settle(400);
@@ -1131,7 +1127,7 @@ describe('WakeService: подъём спящей письмом', () => {
 
     expect(sessions.live(ref)).toBe(false);
     expect(existsSync(argsFile)).toBe(false);
-    expect((await readMap(project, workId)).sessions.find((s) => s.id === target)?.lifecycle).toBe('closed');
+    expect((readStoredMap(project, workId)).sessions.find((s) => s.id === target)?.lifecycle).toBe('closed');
   }, 20_000);
 
   it('8: письмо спящей в архивной работе ждёт без подъёма и без resume-failed; после Reopen будит', async () => {
@@ -1157,9 +1153,9 @@ describe('WakeService: подъём спящей письмом', () => {
 
   it('9: письмо в ленте архивной комнаты спящую не поднимает — ни подъёма, ни resume-failed; прямое письмо по-прежнему будит', async () => {
     const { workId, target, sender } = await sleepingPair();
-    await updateMap(project, workId, (map) => {
+    await updateMap(project, workId, (map, letters) => {
       addRoom(map, { title: 'Созвон', creator: sender, members: [sender, target], lead: sender });
-      archiveRoom(map, 'r-01');
+      archiveRoom(map, letters, 'r-01');
     });
     const argsFile = await tempArgsFile();
     setEnv('STUB_ARGS_FILE', argsFile);
@@ -1167,9 +1163,9 @@ describe('WakeService: подъём спящей письмом', () => {
     const ref = { projectPath: project, workId, sessionId: target };
 
     // Письмо в архивную комнату агент или окно записать не могут (`requireOpenRoom`), но в ленте оно может оказаться
-    // (`addMessage` архив не проверяет): будильник адресатов у такой комнаты не видит.
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: sender, to: [target], roomId: 'r-01', text: 'в архивную' });
+    // (`letters.add` архив не проверяет): будильник адресатов у такой комнаты не видит.
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ kind: 'note', from: sender, to: [target], roomId: 'r-01', text: 'в архивную' });
     });
     await settle(600);
     expect(sessions.live(ref)).toBe(false);
@@ -1265,8 +1261,8 @@ describe('WakeService: комнаты (3.5)', () => {
     });
     const streams = await trioRig(workId, ids);
 
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: a, to: [], roomId: 'r-01', text: 'всем' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ kind: 'note', from: a, to: [], roomId: 'r-01', text: 'всем' });
     });
 
     const expected = `echo: ${inRoom(1, 'r-01', 'Ревью «схемы»')}`;
@@ -1284,8 +1280,8 @@ describe('WakeService: комнаты (3.5)', () => {
     });
     const streams = await trioRig(workId, ids);
 
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: a, to: [b], roomId: 'r-01', text: 'только тебе' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ kind: 'note', from: a, to: [b], roomId: 'r-01', text: 'только тебе' });
     });
 
     await waitFor(() => streams.get(b)?.().includes(`echo: ${inRoom(1, 'r-01', 'Трое')}`) === true, 3000);
@@ -1294,7 +1290,7 @@ describe('WakeService: комнаты (3.5)', () => {
     expect(streams.get(a)?.()).not.toContain('New messages');
 
     // `check_inbox` отдаёт `unreadFor`: неадресату в нём пусто.
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(unreadFor(map, c)).toEqual([]);
     expect(unreadFor(map, b).map((message) => message.text)).toEqual(['только тебе']);
   }, 20_000);
@@ -1376,9 +1372,9 @@ describe('WakeService: журнал задержек доставки (mail.deli
 
     // Два письма в одном указателе: старое прямое и новое в комнате — запись описывает новое.
     const ago = (ms: number): string => new Date(Date.now() - ms).toISOString();
-    await updateMap(project, map.work.id, (current) => {
-      addMessage(current, { from: author, to: [target], text: 'старое секретное' }, ago(60_000));
-      addMessage(current, { from: author, to: [], roomId: 'r-01', text: 'новое секретное' }, ago(5_000));
+    await updateMap(project, map.work.id, (current, letters) => {
+      letters.add({ roomId: null, kind: 'note', from: author, to: [target], text: 'старое секретное', at: ago(60_000) });
+      letters.add({ kind: 'note', from: author, to: [], roomId: 'r-01', text: 'новое секретное', at: ago(5_000) });
     });
     await waitFor(() => deliveries().length > 0, 3000);
 
@@ -1478,7 +1474,7 @@ describe('возврат после сброса лимита', () => {
 
   async function limitRig(wakeOptions: WakeServiceOptions = {}, provider = 'claude'): Promise<LimitRig> {
     const { workId, sessionId } = await activeSession();
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     const session = map.sessions.find((candidate) => candidate.id === sessionId);
     if (session !== undefined) session.provider = provider;
     const ref: SessionRef = { projectPath: project, workId, sessionId };
@@ -1530,6 +1526,7 @@ describe('возврат после сброса лимита', () => {
       entry: () => entry,
       snapshot: () => ({ entries: [entry] }),
       onChange: () => () => {},
+      onMail: () => () => {},
     } as unknown as WorksService;
     const activity = {
       get: () => live,
@@ -1578,7 +1575,10 @@ describe('возврат после сброса лимита', () => {
       working: () => publish(activityOf('working')),
       idle: () => publish(activityOf('idle', { turnEndedAt: new Date(Date.now()).toISOString() })),
       letter: () => {
-        addMessage(map, { from: 's-00', to: [sessionId], text: 'письмо, пока шёл лимит' });
+        // Письма лежат в базе, а не в снимке карты у службы: пишем через хранилище, как пишет хост.
+        writeLetters(project, workId, (letters) =>
+          letters.add({ roomId: null, kind: 'note', from: 's-00', to: [sessionId], text: 'письмо, пока шёл лимит' }),
+        );
         publish(live.activity);
       },
       poke: () => publish(live.activity),

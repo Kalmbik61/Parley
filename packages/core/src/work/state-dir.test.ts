@@ -256,27 +256,26 @@ describe('работа в проекте: новый и прежний ката�
   it('createWork в проекте без каталога: .parley/works/w-0001 и .parley/.gitignore', async () => {
     await createWork(project, { title: 'Первая' });
 
-    expect(await exists(path.join(project, '.parley', 'works', 'w-0001', 'map.json'))).toBe(true);
+    // Карта — строки базы; в каталоге состояния лежат только каталоги работы.
+    expect(await exists(path.join(project, '.parley', 'works', 'w-0001', 'briefs'))).toBe(true);
     expect(await readFile(path.join(project, '.parley', '.gitignore'), 'utf8')).toBe('*\n');
     expect(await exists(path.join(project, '.harnas'))).toBe(false);
   });
 
-  it('createWork в проекте со старым .harnas: карта ложится туда, .parley не заводится', async () => {
+  it('createWork в проекте со старым .harnas: каталоги работы ложатся туда, .parley не заводится', async () => {
     await mkdir(path.join(project, '.harnas'));
 
     const map = await createWork(project, { title: 'Первая' });
 
-    expect(await exists(path.join(project, '.harnas', 'works', map.work.id, 'map.json'))).toBe(true);
+    expect(await exists(path.join(project, '.harnas', 'works', map.work.id, 'briefs'))).toBe(true);
     expect(await exists(path.join(project, '.parley'))).toBe(false);
     // Прежний каталог остаётся как был: своего .gitignore код в него не кладёт.
     expect(await exists(path.join(project, '.harnas', '.gitignore'))).toBe(false);
   });
 
-  it('карты старого проекта читаются и пишутся на месте: updateMap, readMap, readWorks', async () => {
+  it('работа старого проекта читается и пишется на месте: updateMap, readMap, readWorks', async () => {
     await mkdir(path.join(project, '.harnas'));
     const created = await createWork(project, { title: 'Старая' });
-    // Индекс потерян (перенос дома): список берётся с диска проекта.
-    await rm(path.join(home, 'works-index.json'));
 
     await updateMap(project, created.work.id, (map) => {
       map.work.goal = 'цель';
@@ -288,14 +287,15 @@ describe('работа в проекте: новый и прежний ката�
     expect(await exists(path.join(project, '.parley'))).toBe(false);
   });
 
-  it('при обоих каталогах главнее .parley (R5): карты прежнего не видны, пока их не перенесли, читатель их не сливает', async () => {
+  it('при обоих каталогах главнее .parley (R5): работа остаётся в базе и в списке, каталоги прежнего читатель не сливает', async () => {
     await mkdir(path.join(project, '.harnas'));
     const old = await createWork(project, { title: 'Старая' });
     await mkdir(path.join(project, '.parley'));
-    await rm(path.join(home, 'works-index.json'));
 
-    expect((await readWorks(project)).map((entry) => entry.map.work.id)).toEqual([]);
-    expect(await exists(path.join(project, '.harnas', 'works', old.work.id, 'map.json'))).toBe(true);
+    expect((await readWorks(project)).map((entry) => entry.map.work.id)).toEqual([old.work.id]);
+    // Список — таблица базы, каталог состояния для него не нужен; артефакты работы остались там, где лежали.
+    expect(await exists(path.join(project, '.harnas', 'works', old.work.id, 'artifacts'))).toBe(true);
+    expect(await exists(path.join(project, '.parley', 'works'))).toBe(false);
   });
 });
 

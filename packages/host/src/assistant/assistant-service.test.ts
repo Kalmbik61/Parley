@@ -1,7 +1,8 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { closeWorkDb, createWork, WorkNotFoundError, writeLetters } from '@parley/core';
 import type { AssistantStreamEvent, ProviderEntry, WorkEntry, WorkMap } from '@parley/core';
 import type { AssistantState } from '@parley/protocol';
 import { HostError } from '../errors.js';
@@ -1136,5 +1137,66 @@ describe('assistant-service: род голоса (G1)', () => {
     service.configure({ ...MIRROR, voiceGender: 'male' });
     await service.ask({ ...ASK, text: 'ладно' });
     expect(turns[1]?.spec.args[1]).toBe('[system: voice changed — speak as male]\n[system: proposal p1 was cancelled]\nладно');
+  });
+});
+
+describe('assistant-service: письма комнаты из базы работы', () => {
+  // Спека хранилища 6.2: последние письма `parley_detail` берутся из базы, а не из снимка хоста.
+  it('parley_detail комнаты показывает последние десять писем из базы, а не из снимка', async () => {
+    const project = path.join(home, 'project');
+    await mkdir(project);
+    await mkdir(path.join(home, 'store'));
+    const previous = process.env['PARLEY_HOME'];
+    process.env['PARLEY_HOME'] = path.join(home, 'store');
+    try {
+      const workId = (await createWork(project, { title: 'Parley' })).work.id;
+      writeLetters(project, workId, (letters) => {
+        for (let n = 1; n <= 12; n += 1) letters.add({ roomId: 'r-1', from: 's-03', to: [], text: `письмо ${n}`, kind: 'note' });
+      });
+      const map = { ...MAP, work: { ...MAP.work, id: workId } } as unknown as WorkMap;
+      const service = createAssistantService({ ...deps, works: { snapshot: () => ({ entries: [{ projectPath: project, map }] as WorkEntry[], branches: {} }) } });
+      await service.ask(ASK);
+      const reply = await service.tool('parley_detail', { target: 'Auth' });
+      const shown = (reply.body as { text: string }).text.split('\n').filter((line) => line.includes('(note):'));
+      expect(shown).toHaveLength(10);
+      expect(shown[0]).toContain('письмо 3');
+      expect(shown.at(-1)).toContain('письмо 12');
+    } finally {
+      if (previous === undefined) delete process.env['PARLEY_HOME'];
+      else process.env['PARLEY_HOME'] = previous;
+    }
+  });
+
+  it('parley_detail комнаты работы, которой уже нет в базе, — ответ без хвоста писем, не сбой', async () => {
+    // В снимке хоста работа есть (`MAP`), в базе её нет: чтение хвоста бросает `WorkNotFoundError`, и хвоста просто нет.
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+
+    const reply = await service.tool('parley_detail', { target: 'Auth' });
+
+    expect(reply.status).toBe(200);
+    const { text } = reply.body as { text: string };
+    expect(text).toContain('Room "Auth"');
+    expect(text).not.toContain('Last messages:');
+  });
+
+  it('сбой чтения хвоста, не связанный с пропавшей работой, идёт наружу', async () => {
+    const previous = process.env['PARLEY_HOME'];
+    const service = createAssistantService(deps);
+    await service.ask(ASK);
+    // Дом — путь внутри обычного файла: базу не открыть, и это не `WorkNotFoundError`.
+    const blocker = path.join(home, 'blocker');
+    await writeFile(blocker, 'файл на месте каталога');
+    closeWorkDb();
+    process.env['PARLEY_HOME'] = path.join(blocker, 'home');
+    try {
+      const thrown = await service.tool('parley_detail', { target: 'Auth' }).then(() => undefined, (error: unknown) => error);
+      expect(thrown).toBeInstanceOf(Error);
+      expect(thrown).not.toBeInstanceOf(WorkNotFoundError);
+    } finally {
+      if (previous === undefined) delete process.env['PARLEY_HOME'];
+      else process.env['PARLEY_HOME'] = previous;
+      closeWorkDb();
+    }
   });
 });

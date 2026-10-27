@@ -7,7 +7,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { GroupNode, SplitNode } from '../../shared/layout-types.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { EMPTY_HISTORY } from './history.js';
@@ -21,7 +21,7 @@ function group(id: string, tabId: string): GroupNode {
   return { type: 'group', id, tabs: [{ kind: 'terminal', id: tabId, sessionId: tabId }], activeTabId: tabId };
 }
 
-function entry(): WorkEntry {
+function entry(): WindowWorkEntry {
   return {
     projectPath: '/tmp/p',
     map: {

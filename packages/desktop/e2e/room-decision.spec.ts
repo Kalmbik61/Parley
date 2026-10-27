@@ -5,6 +5,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { addRoom, addSession, HUMAN, setProposal, updateMap } from '@parley/core';
 import { quitApp, stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { readStoredMapE2E } from './stored-map.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
 
 /**
@@ -35,6 +36,7 @@ const dirname = path.dirname(fileURLToPath(import.meta.url));
 const mainEntry = path.resolve(dirname, '../out/main/index.js');
 const stubAgent = path.resolve(dirname, 'stub-echo-agent.mjs');
 let project = '';
+let home = '';
 
 const PROPOSAL = 'Contract first, then code: @s02 writes the tests, I take the API.';
 const PROPOSAL_REVISED = 'Contract first, then code: @s02 writes the tests and the review, I take the API.';
@@ -117,15 +119,18 @@ interface MapView {
   messages: Array<{ id: string; roomId: string | null; from: string; to: string[]; kind: string; text: string }>;
 }
 
+/**
+ * Комнаты и решения — из снимка хоста; письма — из базы дома теста: снимок окна с признаком `rooms-mail` писем не несёт
+ * (спека rooms.mail 6.8), окно берёт их страницами.
+ */
 async function workMap(window: Page, workId: string): Promise<MapView> {
   const { entries } = await call<{ entries: Array<{ projectPath: string; map: MapView & { work: { id: string } } }> }>(window, 'works.list', {});
   const entry = entries.find((item) => item.projectPath === project && item.map.work.id === workId);
   if (entry === undefined) throw new Error('работы нет в снимке');
-  return entry.map;
+  return { ...entry.map, messages: readStoredMapE2E(home, project, workId).messages };
 }
 
 test.describe('решение ведущего: настоящий parley-mcp, карточка, уведомления, ответ человека (кусок 8)', () => {
-  let home: string;
   let app: ElectronApplication | null = null;
   let homeBefore: string | undefined;
 

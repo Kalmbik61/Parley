@@ -19,7 +19,6 @@ import {
   AGENT_TOOLS_PATH,
   AGENT_TOOLS_REQUEST_BYTES,
   DEFAULT_CONFIG,
-  addMessage,
   addRoom,
   addSession,
   buildRoleCatalog,
@@ -27,7 +26,7 @@ import {
   createWork,
   ENGINE,
   HUMAN,
-  readMap,
+  readStoredMap,
   resolveProposal,
   updateMap,
   workPaths,
@@ -38,7 +37,7 @@ import type { SessionRef } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBrowserEndpoint } from './browser-endpoint.js';
 import { createAttemptsEndpoint } from './attempts-endpoint.js';
-import { hostToolContext } from './tool-context.js';
+import { hostToolContext, mapChangeSignal } from './tool-context.js';
 import { CALL_REPLAY_LIMIT, CALL_REPLAY_TTL_MS, createToolsEndpoint } from './tools-endpoint.js';
 
 /** Ожидания идут через сеть и диск: запас на загруженную машину больше умолчания в секунду. */
@@ -86,23 +85,34 @@ interface RawOptions {
   signal?: AbortSignal;
 }
 
-async function boot(options: { now?: () => number } = {}) {
+async function boot(options: { now?: () => number; pollMs?: number } = {}) {
   const registry = createBrowserEndpoint({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, clients: () => [], roomsOf: () => [] });
   const ref: SessionRef = { projectPath: project, workId, sessionId: 's-01' };
   const ownToken = registry.register(ref);
   const listeners = new Set<() => void>();
+  const mailListeners = new Set<() => void>();
+  // Служба работ — ручная: `onChange` и `onMail` ведут отдельные подписки, и тест будит их по очереди.
+  const works = {
+    onChange: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    onMail: (listener: () => void) => {
+      mailListeners.add(listener);
+      return () => {
+        mailListeners.delete(listener);
+      };
+    },
+  };
   // Сколько раз `get_map` на самом деле исполнился: повтор по тому же `callId` строки провайдеров не спрашивает.
   const providerRows = vi.fn(async (): Promise<ProviderRow[]> => []);
-  const standard = (target: SessionRef, launch: ToolLaunch) =>
-    hostToolContext(target, launch, {
-      providerRows,
-      onWorksChange: (listener) => {
-        listeners.add(listener);
-        return () => {
-          listeners.delete(listener);
-        };
-      },
-    });
+  // Подписка — та же `mapChangeSignal`, что у хоста; крупный `pollMs` гасит запасной опрос: проснуться можно только по сигналу.
+  const standard = async (target: SessionRef, launch: ToolLaunch) => ({
+    ...(await hostToolContext(target, launch, { providerRows, onWorksChange: mapChangeSignal(works as never) })),
+    ...(options.pollMs === undefined ? {} : { pollMs: options.pollMs }),
+  });
   const contextFor = vi.fn(standard);
   // Журнал маршрута — свой, отдельный от журнала реестра токенов: тест смотрит только на то, что пишет `/agent/tools`.
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -150,9 +160,15 @@ async function boot(options: { now?: () => number } = {}) {
     closes: () => closes,
     /** Живые подписки `wait_for` на изменения работ. */
     waiters: () => listeners.size,
+    /** Живые подписки `wait_for` на записи писем. */
+    mailWaiters: () => mailListeners.size,
     /** «Карта изменилась»: будит все ожидания, как `worksService.onChange`. */
     notify: () => {
       for (const listener of [...listeners]) listener();
+    },
+    /** «Записаны письма»: будит ожидания, как `worksService.onMail`; `works.changed` при этом нет. */
+    notifyMail: () => {
+      for (const listener of [...mailListeners]) listener();
     },
   };
 }
@@ -204,14 +220,14 @@ describe('маршрут /agent/tools: инструменты агента в п
     const reply = await post(sendCall('hi'));
     expect(reply.ok).toBe(true);
     expect((reply.result as { isError?: boolean }).isError).not.toBe(true);
-    expect((await readMap(project, workId)).messages.at(-1)).toMatchObject({ from: 's-01', to: ['s-02'], text: 'hi' });
+    expect((readStoredMap(project, workId)).messages.at(-1)).toMatchObject({ from: 's-01', to: ['s-02'], text: 'hi' });
   });
 
   it('a replayed callId does not run the tool twice', async () => {
     const { post } = await boot();
     const body = sendCall('once');
     const replies = [...(await Promise.all([post(body), post(body)])), await post(body)];
-    expect((await readMap(project, workId)).messages.filter((message) => message.text === 'once')).toHaveLength(1);
+    expect((readStoredMap(project, workId)).messages.filter((message) => message.text === 'once')).toHaveLength(1);
     // Все три получили один и тот же результат: тот же номер письма.
     expect(new Set(replies.map(textOf)).size).toBe(1);
   });
@@ -246,8 +262,8 @@ describe('маршрут /agent/tools: инструменты агента в п
     await expect.poll(() => waiters(), POLL).toBe(0);
     // Пока агент переподключался, пришло письмо. Хранись под callId исход отменённого ожидания (`running`), повтор
     // получил бы его; повтор исполняется заново и видит письмо.
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-02', to: ['s-01'], text: 'wake up', kind: 'note' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, from: 's-02', to: ['s-01'], text: 'wake up', kind: 'note' });
     });
     const retried = await post(body);
     expect(JSON.parse(textOf(retried))).toMatchObject({ state: 'message' });
@@ -299,8 +315,8 @@ describe('маршрут /agent/tools: инструменты агента в п
     controller.abort();
     await left;
     await expect.poll(() => closes(), POLL).toBe(1);
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-02', to: ['s-01'], text: 'wake up', kind: 'note' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, from: 's-02', to: ['s-01'], text: 'wake up', kind: 'note' });
     });
     const retried = post(body);
     release();
@@ -317,13 +333,27 @@ describe('маршрут /agent/tools: инструменты агента в п
     // Второму хватает времени дойти до хоста; отдельное ожидание дало бы вторую подписку.
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
     expect(waiters()).toBe(1);
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-02', to: ['s-01'], text: 'both', kind: 'note' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, from: 's-02', to: ['s-01'], text: 'both', kind: 'note' });
     });
     notify();
     const replies = await Promise.all([first, second]);
     expect(JSON.parse(textOf(replies[0] as Envelope))).toMatchObject({ state: 'message' });
     expect(textOf(replies[1] as Envelope)).toBe(textOf(replies[0] as Envelope));
+  });
+
+  // Спека rooms.mail 6.7: запись одних писем `works.onChange` не зовёт, и ожидающий агент просыпается по `onMail`.
+  it('a wait_for on the inbox wakes on a letters-only write, with no works.changed', async () => {
+    const { post, waiters, mailWaiters, notifyMail } = await boot({ pollMs: 600_000 });
+    const pending = post(waitCall());
+    await expect.poll(() => waiters(), POLL).toBe(1);
+    expect(mailWaiters()).toBe(1);
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, from: 's-02', to: ['s-01'], text: 'by mail', kind: 'note' });
+    });
+    notifyMail();
+    expect(JSON.parse(textOf(await pending))).toMatchObject({ state: 'message' });
+    await expect.poll(() => waiters() + mailWaiters(), POLL).toBe(0);
   });
 
   it('answers a failure to build the executor with ok: false internal, and the next request builds it again', async () => {
@@ -410,8 +440,8 @@ describe('маршрут /agent/tools: инструменты агента в п
     const pending = raw(waitCall());
     await expect.poll(() => waiters(), POLL).toBe(1);
     registry.unregister(ref);
-    await updateMap(project, workId, (map) => {
-      addMessage(map, { from: 's-02', to: ['s-01'], text: 'late', kind: 'note' });
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, from: 's-02', to: ['s-01'], text: 'late', kind: 'note' });
     });
     notify();
     expect((await pending).status).toBe(401);
@@ -464,7 +494,7 @@ describe('маршрут /agent/tools: инструменты агента в п
     };
     const reply = await post({ op: 'call', launch: hostile, name: 'send_message', args: { to: 's-02', text: 'scoped' }, callId: randomUUID() });
     expect(reply.ok).toBe(true);
-    expect((await readMap(project, workId)).messages.at(-1)).toMatchObject({ from: 's-01', to: ['s-02'], text: 'scoped' });
+    expect((readStoredMap(project, workId)).messages.at(-1)).toMatchObject({ from: 's-01', to: ['s-02'], text: 'scoped' });
   });
 
   it('keeps one executor per session while the launch is unchanged and builds a new one for a new launch', async () => {
@@ -485,7 +515,7 @@ describe('маршрут /agent/tools: инструменты агента в п
     const callId = randomUUID();
     await post(sendCall('from one', callId));
     await post({ op: 'call', launch: {}, name: 'send_message', args: { to: 's-01', text: 'from two' }, callId }, { token: other });
-    expect((await readMap(project, workId)).messages.map((message) => [message.from, message.text])).toEqual([
+    expect((readStoredMap(project, workId)).messages.map((message) => [message.from, message.text])).toEqual([
       ['s-01', 'from one'],
       ['s-02', 'from two'],
     ]);
@@ -544,7 +574,7 @@ describe('маршрут /agent/tools и настоящий удалённый �
     expect(names).not.toContain('remember');
     const result = await runner.call('send_message', { to: 's-02', text: 'via runner' }, undefined);
     expect(result.isError).not.toBe(true);
-    expect((await readMap(project, workId)).messages.at(-1)).toMatchObject({ from: 's-01', to: ['s-02'], text: 'via runner' });
+    expect((readStoredMap(project, workId)).messages.at(-1)).toMatchObject({ from: 's-01', to: ['s-02'], text: 'via runner' });
   });
 
   it('a tool error and an unknown tool come back as tool results, not as route failures', async () => {
@@ -633,9 +663,9 @@ describe('host-local attempts', () => {
     expect(proposed).toEqual({ proposalId: 'p-01', rev: 0 });
     expect(perform.mock.calls[0]![0]).toEqual(ref('s-01'));
     expect(perform.mock.calls[0]![1]).toMatchObject({ action: 'propose-plan', roomId: 'r-01' });
-    await updateMap(project, workId, map => {
+    await updateMap(project, workId, (map, letters) => {
       const proposal = map.rooms[0]!.proposal!;
-      resolveProposal(map, 'r-01', proposal.id, 'accept', { rev: proposal.rev, planId: proposal.plan!.id, planRev: proposal.plan!.rev });
+      resolveProposal(map, letters, 'r-01', proposal.id, 'accept', { rev: proposal.rev, planId: proposal.plan!.id, planRev: proposal.plan!.rev });
       const accepted = map.plans![0]!;
       accepted.autonomous!.attempts.push({
         id: 'at-0001', item: 1, n: 1, planRev: accepted.rev, criteriaVersion: 1, worker: 's-02', verifier: null,

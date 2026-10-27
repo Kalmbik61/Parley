@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { Proposal, Room, WorkEntry, WorkSession } from '@parley/core';
+import type { Proposal, Room, WindowWorkEntry, WorkSession } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { tabId } from '../layout/ids.js';
@@ -14,26 +14,26 @@ import { activityMap, makeActivity, makeRoom, makeSession, makeWork } from '../t
 import { workAttention, type WorkAttention } from './derive.js';
 import { nextAttentionTarget, openNextAttention, type AttentionTarget } from './next.js';
 
-const keyOf = (entry: WorkEntry): string => workKey(entry.projectPath, entry.map.work.id);
-const refOf = (entry: WorkEntry, sessionId: string): SessionRef => ({
+const keyOf = (entry: WindowWorkEntry): string => workKey(entry.projectPath, entry.map.work.id);
+const refOf = (entry: WindowWorkEntry, sessionId: string): SessionRef => ({
   projectPath: entry.projectPath,
   workId: entry.map.work.id,
   sessionId,
 });
 /** Цель-сессия и цель-комната в той форме, что отдаёт «следующая, где нужен ты» (как `FocusTarget` уведомлений). */
-const session = (entry: WorkEntry, sessionId: string): AttentionTarget => ({ kind: 'session', ref: refOf(entry, sessionId) });
-const roomOf = (entry: WorkEntry, roomId: string): AttentionTarget => ({
+const session = (entry: WindowWorkEntry, sessionId: string): AttentionTarget => ({ kind: 'session', ref: refOf(entry, sessionId) });
+const roomOf = (entry: WindowWorkEntry, roomId: string): AttentionTarget => ({
   kind: 'room',
   projectPath: entry.projectPath,
   workId: entry.map.work.id,
   roomId,
 });
 
-function section(key: string, works: WorkEntry[], collapsed = false): SidebarSection {
+function section(key: string, works: WindowWorkEntry[], collapsed = false): SidebarSection {
   return { kind: 'project', key, title: key, projectPath: key, works, collapsed };
 }
 
-function byWorkOf(entries: WorkEntry[], activity: Record<string, ActivityEntry>): Record<string, WorkAttention> {
+function byWorkOf(entries: WindowWorkEntry[], activity: Record<string, ActivityEntry>): Record<string, WorkAttention> {
   return Object.fromEntries(entries.map((entry) => [keyOf(entry), workAttention(entry, activity)]));
 }
 
@@ -91,9 +91,9 @@ describe('nextAttentionTarget (тест 5)', () => {
 // сайдбара, по кругу от текущей вкладки (сессия или комната).
 describe('nextAttentionTarget — комнаты с решением (2.7, кусок 5)', () => {
   // Сессии s-01…s-04; комната r-01 {s-02, s-03} стоит на месте s-02: порядок карточки — s-01, r-01, s-02, s-03, s-04.
-  const withRoom = (id: string, projectPath: string, patch: Partial<Room> = {}): WorkEntry =>
+  const withRoom = (id: string, projectPath: string, patch: Partial<Room> = {}): WindowWorkEntry =>
     makeWork(id, { projectPath, sessions: sessions('s-01', 's-02', 's-03', 's-04'), rooms: [room('r-01', ['s-02', 's-03'], patch)] });
-  const sectionsOf = (...works: WorkEntry[]): SidebarSection[] => works.map((entry) => section(entry.projectPath, [entry]));
+  const sectionsOf = (...works: WindowWorkEntry[]): SidebarSection[] => works.map((entry) => section(entry.projectPath, [entry]));
 
   it('порядок ярусов: blocked бьёт комнату с решением, комната — unseen, даже когда они раньше в порядке сайдбара', () => {
     const decision = withRoom('w-01', '/tmp/a', { proposal });
@@ -237,7 +237,7 @@ describe('openNextAttention (тест 15)', () => {
   const w1 = makeWork('w-01', { projectPath: '/tmp/a', sessions: sessions('s-01') });
   const w2 = makeWork('w-02', { projectPath: '/tmp/b', sessions: sessions('s-01') });
 
-  function setup(activity: Record<string, ActivityEntry>, entries: WorkEntry[] = [w1, w2]): void {
+  function setup(activity: Record<string, ActivityEntry>, entries: WindowWorkEntry[] = [w1, w2]): void {
     useWorksStore.setState({ entries, branches: {}, loading: false, error: null });
     useActivityStore.setState({ byRef: activity });
     useSidebarSectionsStore.setState({

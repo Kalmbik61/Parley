@@ -10,7 +10,7 @@
  */
 
 import { useState, type ReactNode } from 'react';
-import type { WorkMap } from '@parley/core';
+import type { WindowWorkMap } from '@parley/core';
 import { S } from '../../shared/strings.js';
 import { humanUnreadMentions, roomUnreadForHuman } from '../attention/derive.js';
 import { isRoomArchived } from '../lib/room-archive.js';
@@ -18,7 +18,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { useSidebarHold } from './use-sidebar-hold.js';
 
 export interface RoomsMenuProps {
-  map: WorkMap;
+  map: WindowWorkMap;
   onOpenRoom(roomId: string): void;
   /** Кнопка `#`/`#N` — триггер меню. */
   children: ReactNode;

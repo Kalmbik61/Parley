@@ -4,7 +4,7 @@
  * Меняется правило в core — меняется и здесь.
  */
 
-import type { Room, WorkMap, WorkSession } from '@parley/core';
+import type { Room, WindowWorkMap, WorkSession } from '@parley/core';
 
 // Тот же литерал, что и `HUMAN` в `core/work/types.ts`: из core рендерер берёт только типы.
 const HUMAN = 'human';
@@ -18,7 +18,7 @@ export function isRoomArchived(room: Room): boolean {
 }
 
 /** Id архивных комнат карты — для фильтров, которым нужна принадлежность письма (`attention/derive.ts`). */
-export function archivedRoomIds(map: WorkMap): Set<string> {
+export function archivedRoomIds(map: WindowWorkMap): Set<string> {
   return new Set(map.rooms.filter(isRoomArchived).map((room) => room.id));
 }
 
@@ -27,7 +27,7 @@ export function archivedRoomIds(map: WorkMap): Set<string> {
  * и без сессий, которых нет в карте), не числящиеся в другой неархивной комнате. Правило шага 5 `archiveRoom` в core —
  * по нему хост выбирает, кого остановить флажком «Also stop its N agents…»; число во флажке считает то же.
  */
-export function agentsLeftWithoutRoom(map: WorkMap, room: Room): WorkSession[] {
+export function agentsLeftWithoutRoom(map: WindowWorkMap, room: Room): WorkSession[] {
   const ids = [...new Set(room.members)].filter((id) => id !== HUMAN);
   return ids.flatMap((id) => {
     const session = map.sessions.find((candidate) => candidate.id === id);

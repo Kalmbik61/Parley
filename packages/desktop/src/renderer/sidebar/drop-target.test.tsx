@@ -12,7 +12,7 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { DndContext, PointerSensor, useSensor, useSensors, type CollisionDetection } from '@dnd-kit/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { dndId } from '../layout/dnd.js';
 import { useLayoutStore } from '../layout/store.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
@@ -41,7 +41,7 @@ const collisionDetection: CollisionDetection = ({ droppableContainers }) => {
   return hit === undefined ? [] : [{ id: hit.id, data: { droppableContainer: hit, value: 1 } }];
 };
 
-function Card({ entry, showClosed = false }: { entry: WorkEntry; showClosed?: boolean }): JSX.Element {
+function Card({ entry, showClosed = false }: { entry: WindowWorkEntry; showClosed?: boolean }): JSX.Element {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   return (
     <DndContext sensors={sensors} collisionDetection={collisionDetection}>
@@ -118,7 +118,7 @@ function connect(methods: readonly string[] = REQUIRED_METHODS): void {
 }
 
 /** Работа: s-01 и s-04 вне комнат, s-02 и s-03 — в комнате r-01, s-05 закрыта и вне комнат; вторая комната r-02 — s-06. */
-function entryOf(): WorkEntry {
+function entryOf(): WindowWorkEntry {
   return makeWork(WORK, {
     projectPath: PROJECT,
     sessions: [

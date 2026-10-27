@@ -3,6 +3,7 @@
  * до журнала, — восстановленные по ленте и составу. Обрезки архивом здесь нет: её делает подсчёт (`roomUsage`).
  */
 
+import type { LetterReads } from './letter-store.js';
 import { joinedLine } from './rooms.js';
 import { HUMAN, SYSTEM, type Room, type WorkMap } from './types.js';
 import type { UsageWindow } from './usage-ledger.js';
@@ -33,10 +34,11 @@ export const isCurrentMember = (room: Room, sessionId: string): boolean =>
   sessionId !== HUMAN && room.members.includes(sessionId);
 
 /** Входы в старую комнату: строки «joined» её ленты, а у текущих участников без строки — создание комнаты. */
-function legacyEntries(map: WorkMap, room: Room): Array<{ session: string; at: string }> {
+function legacyEntries(map: WorkMap, room: Room, letters: LetterReads): Array<{ session: string; at: string }> {
   const lines = new Map<string, string[]>();
-  for (const message of map.messages) {
-    if (message.roomId !== room.id || message.from !== SYSTEM) continue;
+  // Системные строки комнаты — запросом, ограниченным их числом (спека хранилища 6.2).
+  const system = { roomId: room.id, from: SYSTEM };
+  for (const message of letters.query({ ...system, limit: letters.count(system) })) {
     lines.set(message.text, [...(lines.get(message.text) ?? []), message.at]);
   }
   const candidates = new Set([...map.sessions.map((session) => session.id), ...room.members]);
@@ -51,13 +53,13 @@ function legacyEntries(map: WorkMap, room: Room): Array<{ session: string; at: s
 }
 
 /** Все входы каждой сессии во все комнаты работы, по времени. */
-function entriesBySession(map: WorkMap): Map<string, Entry[]> {
+function entriesBySession(map: WorkMap, letters: LetterReads): Map<string, Entry[]> {
   const result = new Map<string, Entry[]>();
   for (const room of map.rooms) {
     const entries =
       room.memberLog !== undefined
         ? room.memberLog.map((record) => ({ session: record.session, at: record.from }))
-        : legacyEntries(map, room);
+        : legacyEntries(map, room, letters);
     for (const { session, at } of entries) result.set(session, [...(result.get(session) ?? []), { room: room.id, at }]);
   }
   for (const list of result.values()) list.sort((a, b) => ms(a.at) - ms(b.at));
@@ -89,14 +91,18 @@ function group(periods: ReadonlyArray<{ session: string } & UsageWindow>): Membe
  * в другую комнату (одна комната на сессию); последний вход текущего участника открыт — в старых картах сессия
  * числилась в нескольких комнатах разом. Ушедшего начального участника и ушедшего создателя восстановить не по чему.
  */
-export function roomMembership(map: WorkMap, roomId: string): RoomMembershipView {
+export function roomMembership(
+  map: WorkMap,
+  roomId: string,
+  letters: LetterReads,
+): RoomMembershipView {
   const room = map.rooms.find((candidate) => candidate.id === roomId);
   if (room === undefined) throw new Error(`room ${roomId} is not in the map`);
   if (room.memberLog !== undefined) {
     return { reconstructed: false, members: group(room.memberLog.map(({ session, from, to }) => ({ session, from, to }))) };
   }
   const periods: Array<{ session: string } & UsageWindow> = [];
-  for (const [session, entries] of entriesBySession(map)) {
+  for (const [session, entries] of entriesBySession(map, letters)) {
     const here = entries.filter((entry) => entry.room === roomId);
     here.forEach((entry, index) => {
       const open = index === here.length - 1 && isCurrentMember(room, session);

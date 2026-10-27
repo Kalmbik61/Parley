@@ -14,7 +14,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ClientRect, DndContextProps, DragEndEvent, DroppableContainer } from '@dnd-kit/core';
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { xtermMock } from '../test-utils/xterm-mock.js';
 import type { TabSpec } from '../../shared/layout-types.js';
@@ -103,7 +103,7 @@ function term(sessionId: string): TabSpec {
   return { kind: 'terminal', id: tabId.terminal(sessionId), sessionId };
 }
 
-function work(id: string, createdAt: string, title: string, sessions: WorkSession[]): WorkEntry {
+function work(id: string, createdAt: string, title: string, sessions: WorkSession[]): WindowWorkEntry {
   return {
     projectPath: `/tmp/${id}`,
     map: {
@@ -204,7 +204,7 @@ function endEvent(
   } as unknown as DragEndEvent;
 }
 
-async function renderShell(entries: WorkEntry[]): Promise<void> {
+async function renderShell(entries: WindowWorkEntry[]): Promise<void> {
   useWorksStore.setState({ entries, branches: {}, loading: false, error: null });
   render(<AppShell bridge={bridge} status={STATUS} fontFamily="Menlo" fontSize={13} />);
   await flush();
@@ -532,7 +532,7 @@ describe('AppShell — бросок сессии на строки сайдба�
   beforeEach(() => useUiStore.setState({ roomExpanded: {} }));
 
   /** s-01 и s-02 вне комнат; s-03 и s-04 — в комнате r-01; s-05 закрыта. Вторая работа w-02 — чужая. */
-  const entries = (): WorkEntry[] => [
+  const entries = (): WindowWorkEntry[] => [
     makeWork('w-01', {
       projectPath: PROJECT,
       title: 'Первая',
@@ -601,7 +601,7 @@ describe('AppShell — бросок сессии на строки сайдба�
     expect(tabIds()).not.toContain(tabId.room('r-02'));
     const [first, ...rest] = entries();
     if (first === undefined) throw new Error('нет работы');
-    const withRoom: WorkEntry = {
+    const withRoom: WindowWorkEntry = {
       ...first,
       map: { ...first.map, rooms: [...first.map.rooms, { ...makeRoom('r-02', 'Room 2'), members: ['s-02', 's-01'], lead: 's-02' }] },
     };

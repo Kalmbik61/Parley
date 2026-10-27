@@ -3,7 +3,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { HostPaths } from '@parley/host';
-import { BROWSER_AGENT_FEATURE, BROWSER_AGENT_OP_FEATURE, BROWSER_AGENT_OPS, COMPACT_WORKS_FEATURE, encodeLine, LineDecoder, PROTOCOL_VERSION } from '@parley/protocol';
+import { BROWSER_AGENT_FEATURE, BROWSER_AGENT_OP_FEATURE, BROWSER_AGENT_OPS, COMPACT_WORKS_FEATURE, encodeLine, LineDecoder, PROTOCOL_VERSION, ROOMS_MAIL_FEATURE } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S } from '../shared/strings.js';
 import { answerBrowserAgentOps, HostConnection } from './host-connection.js';
@@ -265,6 +265,49 @@ describe('HostConnection', () => {
     connection.close();
     server.close();
   }, 10000);
+
+  it('host.notice до подписки окна копится на подключении; новое подключение начинает снимок заново', async () => {
+    const notice = (text: string): unknown => ({
+      event: 'host.notice',
+      data: { kind: 'map-migration-failed', ref: null, text, at: '2026-10-24T00:00:00.000Z' },
+    });
+    await writeToken(paths);
+    let server = await startFakeServer(paths, { afterHello: [notice('/a/map.json'), notice('/b/map.json')] });
+    const spawn = vi.fn(() => {
+      void startFakeServer(paths, { afterHello: [notice('/c/map.json')] }).then((s) => {
+        server = s;
+      });
+    });
+    const connection = new HostConnection({ paths, env: process.env, spawn, connectTimeoutMs: 2000 });
+    // Слушателей событий нет — окно ещё не подписалось.
+    await connection.connect();
+    const texts = (): string[] => connection.noticesSnapshot().map((entry) => entry.text);
+    await vi.waitFor(() => expect(texts()).toEqual(['/a/map.json', '/b/map.json']));
+
+    await connection.restartHost();
+    await vi.waitFor(() => expect(texts()).toEqual(['/c/map.json']));
+
+    connection.close();
+    server.close();
+  }, 10000);
+
+  it('снимок уведомлений хранит не больше 20 последних', async () => {
+    const notices = Array.from({ length: 25 }, (_, index) => ({
+      event: 'host.notice',
+      data: { kind: 'map-migration-failed', ref: null, text: `/p${index}/map.json`, at: '2026-10-24T00:00:00.000Z' },
+    }));
+    await writeToken(paths);
+    const server = await startFakeServer(paths, { afterHello: notices });
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 2000 });
+    await connection.connect();
+
+    await vi.waitFor(() => expect(connection.noticesSnapshot().at(-1)?.text).toBe('/p24/map.json'));
+    expect(connection.noticesSnapshot()).toHaveLength(20);
+    expect(connection.noticesSnapshot()[0]?.text).toBe('/p5/map.json');
+
+    connection.close();
+    server.close();
+  });
 
   it('после host.shutdown переподключается к новому', async () => {
     await writeToken(paths);
@@ -610,14 +653,14 @@ describe('операции агента над браузером (этап B2, 
     data: { opId, ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-02' }, label: 'S02', op: 'open', args: { url: 'http://localhost:5173/' } },
   });
 
-  it('hello заявляет compact-works, browser-agent и browser-agent:<op> на каждую операцию', async () => {
+  it('hello заявляет compact-works, rooms-mail, browser-agent и browser-agent:<op> на каждую операцию', async () => {
     await writeToken(paths);
     const received: unknown[] = [];
     const server = await startFakeServer(paths, { received });
     const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
     await connection.connect();
     const hello = received.find((message) => (message as { method?: string }).method === 'hello') as { params: { features: string[] } };
-    expect(hello.params.features).toEqual([COMPACT_WORKS_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE)]);
+    expect(hello.params.features).toEqual([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE)]);
     connection.close();
     server.close();
   });

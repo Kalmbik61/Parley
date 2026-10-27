@@ -1,17 +1,19 @@
-import { lstat } from 'node:fs/promises';
 import {
   rebuildRoomHistory,
   removeLocalRoomHistories,
-  renderRoomHistory,
-  workPaths,
+  roomLetterTops,
+  workExists,
+  WorkNotFoundError,
 } from '@parley/core';
 import type { WorkEntry } from '@parley/core';
-import type { WorksService } from '../works/works-service.js';
+import type { MailNotice, WorksService } from '../works/works-service.js';
 
 export interface HistoryServiceIO {
   rebuild: typeof rebuildRoomHistory;
   remove: typeof removeLocalRoomHistories;
   deleted(projectPath: string, workId: string): Promise<boolean>;
+  /** Номер новейшего письма каждой комнаты (`roomLetterTops`) — отпечаток лент комнат. */
+  tops: typeof roomLetterTops;
 }
 export interface HistoryServiceOptions {
   io?: HistoryServiceIO;
@@ -32,19 +34,49 @@ interface HistoryState {
   timer?: ReturnType<typeof setTimeout>;
   running?: Promise<void>;
 }
-const identity = (entry: WorkEntry): string => JSON.stringify(entry.map.rooms.map(room => renderRoomHistory(entry.map, room.id)));
+/**
+ * Работу сняли, если её строки в базе нет (спека хранилища 6.9). Строка, которую `normalizeMap` не принимает, или сбой
+ * чтения базы удалением не считаются: чистку производных файлов нельзя делать по догадке.
+ */
+export async function isWorkDeleted(projectPath: string, workId: string): Promise<boolean> {
+  try { return !workExists(projectPath, workId); }
+  catch { return false; }
+}
 /** Derivative files only; it never publishes shared history or changes the source map. */
 export function createHistoryService(
-  works: Pick<WorksService, 'snapshot' | 'entry' | 'onChange'>,
+  works: Pick<WorksService, 'snapshot' | 'entry' | 'onChange' | 'onMail'>,
   options: HistoryServiceOptions = {},
 ): HistoryService {
   const io = options.io ?? {
     rebuild: rebuildRoomHistory,
     remove: removeLocalRoomHistories,
-    deleted: async (projectPath: string, workId: string): Promise<boolean> => {
-      try { await lstat(workPaths(projectPath, workId).map); return false; }
-      catch (error) { return (error as NodeJS.ErrnoException).code === 'ENOENT'; }
-    },
+    deleted: isWorkDeleted,
+    tops: roomLetterTops,
+  };
+  /**
+   * Отпечаток всего, от чего зависит история комнат работы: поля комнат, которые печатает `renderRoomHistory` (название,
+   * режим, время создания, ведущий, участники, id и название рецепта), подписи и роли участников, название работы и номер
+   * новейшего письма каждой комнаты. Письма не правятся и уходят только вместе с комнатой (она меняет список комнат), поэтому
+   * новейший номер ловит каждую запись; тексты лент не читаются, а запрос — `MAX(seq)` на комнату, цена от числа комнат, не
+   * писем (спека хранилища 6.2). Решение в слоте, журнал участия и архив в историю не входят — правка их историю не пересобирает.
+   * Работу сняли, пока она была в снимке, — писем нет: ложной ошибки истории не будет.
+   */
+  const identity = (entry: WorkEntry): string => {
+    const { work, rooms, sessions } = entry.map;
+    let tops: Record<string, number> = {};
+    try {
+      tops = io.tops(entry.projectPath, work.id, rooms.map((room) => room.id));
+    } catch (error) {
+      if (!(error instanceof WorkNotFoundError)) throw error;
+    }
+    return JSON.stringify([
+      work.id,
+      work.title,
+      work.deletedSessions ?? [],
+      rooms.map((room) => [room.id, room.title, room.mode ?? 'free', room.createdAt, room.lead, room.members, room.recipe?.id ?? null, room.recipe?.name ?? null]),
+      sessions.map((session) => [session.id, session.label, session.role ?? null]),
+      tops,
+    ]);
   };
   const states = new Map<string, HistoryState>();
   const noticed = new Set<string>();
@@ -52,6 +84,7 @@ export function createHistoryService(
   if (!Number.isFinite(delay) || delay < 0 || delay > 30_000) throw new Error('invalid history debounce');
   let stopped = false;
   let off: (() => void) | undefined;
+  let offMail: (() => void) | undefined;
   const keyOf = (projectPath: string, workId: string): string => `${projectPath}\0${workId}`;
   function notify(state: HistoryState, count: number): void {
     const key = keyOf(state.projectPath, state.workId);
@@ -108,27 +141,36 @@ export function createHistoryService(
       state.running = process(state).catch(() => notify(state, 1)).finally(() => { delete state.running; });
     }, delay);
   }
+  function check(entry: WorkEntry): void {
+    const key = keyOf(entry.projectPath, entry.map.work.id);
+    if (!entry.map.rooms.length) return;
+    let state = states.get(key);
+    if (!state) {
+      state = { projectPath: entry.projectPath, workId: entry.map.work.id, rooms: new Set(), source: null, dirty: false };
+      states.set(key, state);
+    }
+    let source: string;
+    try { source = identity(entry); } catch { notify(state, 1); return; }
+    for (const room of entry.map.rooms) state.rooms.add(room.id);
+    if (source !== state.source) { state.source = source; state.dirty = true; schedule(state); }
+  }
   function scan(): void {
     const current = new Set<string>();
     for (const entry of works.snapshot().entries) {
-      const key = keyOf(entry.projectPath, entry.map.work.id);
-      current.add(key);
-      if (!entry.map.rooms.length) continue;
-      let state = states.get(key);
-      if (!state) {
-        state = { projectPath: entry.projectPath, workId: entry.map.work.id, rooms: new Set(), source: null, dirty: false };
-        states.set(key, state);
-      }
-      let source: string;
-      try { source = identity(entry); } catch { notify(state, 1); continue; }
-      for (const room of entry.map.rooms) state.rooms.add(room.id);
-      if (source !== state.source) { state.source = source; state.dirty = true; schedule(state); }
+      current.add(keyOf(entry.projectPath, entry.map.work.id));
+      check(entry);
     }
     for (const [key, state] of states) if (!current.has(key)) { state.dirty = true; schedule(state); }
   }
+  /** Запись писем без записи карты (спека rooms.mail 6.7): новое письмо меняет `MAX(seq)` комнаты работы; отметки прочтения — нет. */
+  function scanMail(notice: MailNotice): void {
+    if (stopped || !notice.journal.added.length) return;
+    const entry = works.entry(notice.projectPath, notice.workId);
+    if (entry) check(entry);
+  }
   return {
-    start() { if (off || stopped) return; off = works.onChange(scan); scan(); },
-    stop() { stopped = true; off?.(); off = undefined; for (const state of states.values()) clear(state); states.clear(); noticed.clear(); },
+    start() { if (off || stopped) return; off = works.onChange(scan); offMail = works.onMail(scanMail); scan(); },
+    stop() { stopped = true; off?.(); off = undefined; offMail?.(); offMail = undefined; for (const state of states.values()) clear(state); states.clear(); noticed.clear(); },
     removeWork,
   };
 }

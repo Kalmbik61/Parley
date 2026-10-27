@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createPendingSession, createWork, readMap, transitionSession, updateMap } from '@parley/core';
+import { createPendingSession, createWork, readStoredMap, transitionSession, updateMap } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import { fakeEffortScreen } from '../../test/fake-effort-screen.js';
 import type { FakeEffortScreen } from '../../test/fake-effort-screen.js';
@@ -464,18 +464,18 @@ describe('sessions.rename (часть 2 спеки архива комнат, 15
   }
 
   const labelsOf = async (workId: string): Promise<string[]> =>
-    (await readMap(project, workId)).sessions.map((session) => session.label);
+    (readStoredMap(project, workId)).sessions.map((session) => session.label);
 
   it('ярлык записан в карту с обрезанными краями; updatedAt работы и остальные записи стоят на месте', async () => {
     const { workId, refs } = await workWithSessions();
-    const before = await readMap(project, workId);
+    const before = readStoredMap(project, workId);
     await new Promise((resolve) => setTimeout(resolve, 5));
 
     await expect(sessionsRename({ ref: refs[0], label: '  \u200BRuslan Backend\u2060 ' }, request)).resolves.toEqual({
       ok: true,
     });
 
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(map.sessions.map((session) => session.label)).toEqual(['Ruslan Backend', 'бэкенд']);
     expect(map.work.updatedAt).toBe(before.work.updatedAt);
     expect(map.messages).toEqual(before.messages);
@@ -511,7 +511,7 @@ describe('sessions.rename (часть 2 спеки архива комнат, 15
 
     await sessionsRename({ ref: refs[1], label: 'Archived backend' }, request);
 
-    const closed = (await readMap(project, workId)).sessions[1];
+    const closed = (readStoredMap(project, workId)).sessions[1];
     expect(closed).toMatchObject({ label: 'Archived backend', lifecycle: 'closed' });
   });
 });

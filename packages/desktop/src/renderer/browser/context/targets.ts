@@ -6,7 +6,7 @@
  * архивировали) — снова умолчание, и вкладка сообщает об этом тостом (`use-page-context.ts`).
  */
 
-import type { Room, WorkEntry, WorkSession } from '@parley/core';
+import type { Room, WindowWorkEntry, WorkSession } from '@parley/core';
 import type { BrowserTarget } from '../../../shared/layout-types.js';
 import { sessionRowLabel, sessionTag } from '../../lib/participant.js';
 import { isRoomArchived } from '../../lib/room-archive.js';
@@ -29,17 +29,17 @@ export function targetKey(target: BrowserTarget): string {
 }
 
 /** Сессии меню: закрытая вложение не примет. */
-function listedSessions(entry: WorkEntry): WorkSession[] {
+function listedSessions(entry: WindowWorkEntry): WorkSession[] {
   return entry.map.sessions.filter((session) => session.lifecycle !== 'closed');
 }
 
 /** Комнаты меню: архивная читается, но писать в неё нельзя — поля ввода нет. */
-function listedRooms(entry: WorkEntry): Room[] {
+function listedRooms(entry: WindowWorkEntry): Room[] {
   return entry.map.rooms.filter((room) => !isRoomArchived(room));
 }
 
 export function targetOptions(
-  entry: WorkEntry,
+  entry: WindowWorkEntry,
   chatAvailable: (provider: string) => boolean | null,
 ): { sessions: TargetOption[]; rooms: TargetOption[] } {
   const sessions = listedSessions(entry).map((session): TargetOption => {
@@ -59,13 +59,13 @@ export function targetOptions(
   return { sessions, rooms };
 }
 
-export function isTargetAlive(entry: WorkEntry, target: BrowserTarget): boolean {
+export function isTargetAlive(entry: WindowWorkEntry, target: BrowserTarget): boolean {
   return target.kind === 'session'
     ? listedSessions(entry).some((session) => session.id === target.sessionId)
     : listedRooms(entry).some((room) => room.id === target.roomId);
 }
 
-export function defaultTarget(entry: WorkEntry, focusedSessionId: string | null): BrowserTarget | null {
+export function defaultTarget(entry: WindowWorkEntry, focusedSessionId: string | null): BrowserTarget | null {
   const sessions = listedSessions(entry);
   if (focusedSessionId !== null && sessions.some((session) => session.id === focusedSessionId)) {
     return { kind: 'session', sessionId: focusedSessionId };
@@ -77,7 +77,7 @@ export function defaultTarget(entry: WorkEntry, focusedSessionId: string | null)
 }
 
 export function resolveTarget(
-  entry: WorkEntry,
+  entry: WindowWorkEntry,
   stored: BrowserTarget | undefined,
   focusedSessionId: string | null,
 ): { target: BrowserTarget | null; fellBack: boolean } {
@@ -85,7 +85,7 @@ export function resolveTarget(
   return { target: defaultTarget(entry, focusedSessionId), fellBack: stored !== undefined };
 }
 
-export function targetName(entry: WorkEntry, target: BrowserTarget): string {
+export function targetName(entry: WindowWorkEntry, target: BrowserTarget): string {
   if (target.kind === 'session') return sessionTag(target.sessionId);
   return entry.map.rooms.find((room) => room.id === target.roomId)?.title ?? target.roomId;
 }

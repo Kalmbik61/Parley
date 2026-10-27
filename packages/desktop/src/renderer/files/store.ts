@@ -16,7 +16,7 @@
  */
 
 import { create } from 'zustand';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import type { FileRoot } from '../../shared/files-types.js';
 import type { FileRootSpec, WorkLayout } from '../../shared/layout-types.js';
@@ -343,7 +343,7 @@ export function bindBuffersToLayouts(bridge: ParleyBridge): () => void {
 }
 
 /** Корень по умолчанию: worktree сессии в фокусе (worktree.createdAt !== null), иначе проект. */
-export function defaultRoot(entry: WorkEntry, focusedSessionId: string | null): FileRootSpec {
+export function defaultRoot(entry: WindowWorkEntry, focusedSessionId: string | null): FileRootSpec {
   const session = focusedSessionId === null ? undefined : entry.map.sessions.find((item) => item.id === focusedSessionId);
   // `createdAt: null` — worktree только запланирован, папки на диске ещё нет.
   if (session?.worktree !== null && session?.worktree !== undefined && session.worktree.createdAt !== null) {
@@ -355,7 +355,7 @@ export function defaultRoot(entry: WorkEntry, focusedSessionId: string | null): 
 /** Корень «Файлов» работы: выбор человека, пока его нет — defaultRoot. Его же берут ⌘P и ⌘⇧F (7.4). */
 export function filesRootSpec(
   rootByWork: FilesState['rootByWork'],
-  entry: WorkEntry,
+  entry: WindowWorkEntry,
   focusedSessionId: string | null,
 ): FileRootSpec {
   return rootByWork[workKeyOf(entry.projectPath, entry.map.work.id)] ?? defaultRoot(entry, focusedSessionId);
@@ -365,14 +365,14 @@ export function filesRootSpec(
  * Папка корня на диске по снимку работ: проект — `projectPath`, worktree — `worktree.path` сессии.
  * null — сессии или её созданного worktree в снимке нет (корень исчез).
  */
-export function rootDirOf(entry: WorkEntry, spec: FileRootSpec): string | null {
+export function rootDirOf(entry: WindowWorkEntry, spec: FileRootSpec): string | null {
   if (spec.kind === 'project') return entry.projectPath;
   const worktree = entry.map.sessions.find((item) => item.id === spec.sessionId)?.worktree ?? null;
   return worktree === null || worktree.createdAt === null ? null : worktree.path;
 }
 
 /** Абсолютный путь файла корня: папка корня плюс относительный путь ('' — сама папка). */
-export function absPathOf(entry: WorkEntry, spec: FileRootSpec, path: string): string | null {
+export function absPathOf(entry: WindowWorkEntry, spec: FileRootSpec, path: string): string | null {
   const dir = rootDirOf(entry, spec);
   if (dir === null) return null;
   if (path === '') return dir;

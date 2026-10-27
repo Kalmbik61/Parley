@@ -36,7 +36,11 @@ const liveNeed = (activity: string, need: SessionNeed): SessionLive =>
   ({ activity: { activity, waitingFor: null, need }, metrics: null }) as unknown as SessionLive;
 
 function source(entries: WorkEntry[], states: Record<string, SessionLive>): OverviewSource {
-  return { entries, live: (ref) => states[ref.sessionId] };
+  return {
+    entries,
+    live: (ref) => states[ref.sessionId],
+    roomTail: (item, roomId, count) => item.map.messages.filter((message) => message.roomId === roomId).slice(-count),
+  };
 }
 
 describe('targetsOf и resolveTarget', () => {

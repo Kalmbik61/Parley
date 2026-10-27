@@ -9,7 +9,7 @@ import type { WorksService } from '../works/works-service.js';
 
 /**
  * Отдельный файл: здесь `startSession` подменён, чтобы запись старта в карту падала уже после `pty.start`. Так
- * было 2026-10-09: хост после перезапуска поднимал разом всю работу, `map.lock` не освободился за 3 с, процесс
+ * было 2026-10-09: хост после перезапуска поднимал разом всю работу, запись в карту не дождалась за 3 с, процесс
  * остался жить, а карта — `sleeping`. Окно показывало Resume, и `launch` на живом PTY молча выходил.
  */
 let failStarts = 0;
@@ -34,7 +34,7 @@ vi.mock('@parley/core', async (importOriginal) => {
   };
 });
 
-const { createWork, MapLockTimeoutError, readMap, transitionSession, updateMap, workPaths } = await import('@parley/core');
+const { createWork, MapLockTimeoutError, parleyHome, readMap, transitionSession, updateMap } = await import('@parley/core');
 const { createPtyManager } = await import('../pty/pty-manager.js');
 const { createSessionsService } = await import('./sessions-service.js');
 
@@ -116,10 +116,10 @@ async function sleepingSession() {
 }
 
 describe('launch(): запись старта в карту не удалась после pty.start', () => {
-  it('map.lock занят один раз — запись повторяется: процесс жив, в карте active', async () => {
+  it('база занята один раз — запись повторяется: процесс жив, в карте active', async () => {
     const { service, ref, lifecycle } = await sleepingSession();
     startAttempts.length = 0;
-    failWith = () => new MapLockTimeoutError(workPaths(project, ref.workId).lock, 3000);
+    failWith = () => new MapLockTimeoutError(path.join(parleyHome(), 'parley.db'), 3000);
     failStarts = 1;
 
     await service.launch(ref, 'resume');
@@ -134,9 +134,9 @@ describe('launch(): запись старта в карту не удалась 
     await service.stop(ref);
   });
 
-  it('map.lock занят дольше повторов — процесс остановлен, карта sleeping; следующий Resume поднимает', async () => {
+  it('база занята дольше повторов — процесс остановлен, карта sleeping; следующий Resume поднимает', async () => {
     const { service, ref, lifecycle } = await sleepingSession();
-    failWith = () => new MapLockTimeoutError(workPaths(project, ref.workId).lock, 3000);
+    failWith = () => new MapLockTimeoutError(path.join(parleyHome(), 'parley.db'), 3000);
     failStarts = Number.POSITIVE_INFINITY;
 
     await expect(service.launch(ref, 'resume')).rejects.toBeInstanceOf(MapLockTimeoutError);

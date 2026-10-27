@@ -122,9 +122,9 @@ A revision conflict means refresh get_map and use the accepted current revision.
 
 A workspace is a whole topic of work: a title, a goal, a set of sessions, rooms and the
 correspondence between them. A session is one agent run inside a workspace: it has a label
-(a role), a task, a lifecycle, a result, a summary and artifacts. The workspace map
-(\`map.json\`) is the shared memory: it is a Parley file, read through \`get_map\`,
-\`read_room\` and \`check_inbox\`; you do not open \`.parley/\` as files. Whatever you want
+(a role), a task, a lifecycle, a result, a summary and artifacts. The workspace map is the
+workspace's memory, kept by Parley: you read it only through \`get_map\`, \`read_room\` and
+\`check_inbox\`; you do not open \`.parley/\` as files. Whatever you want
 to pass to neighbouring sessions and to the human gets there through the tools, not through
 files dropped at random.
 
@@ -598,8 +598,8 @@ your permission settings yourself.`,
     text: `## What not to do
 
 - Do not finish without \`report\` — the result will not go anywhere.
-- Do not write to \`map.json\`, \`briefs/\` and \`events/\` by hand: Parley writes the map.
-- Do not read \`map.json\` directly: use \`get_map\`, \`read_room\` and \`check_inbox\`.
+- Do not write to \`briefs/\` and \`events/\` by hand: Parley writes them and keeps the workspace map.
+- Read the workspace map only through \`get_map\`, \`read_room\` and \`check_inbox\`; never as a file.
 - Do not delete or move the \`.parley\` state directories (and the old
   \`.harnas\` ones) through the shell, even if you are asked to "remove the workspace": you
   have no delete tool on purpose. Tell the human that it is done in the window: a session —

@@ -84,7 +84,7 @@ describe('workKey / sessionOrders', () => {
     expect(workKey('/tmp/proj', 'w-01')).toBe('/tmp/proj w-01');
   });
 
-  it('sessionOrders строит порядок для каждой работы из WorkEntry', () => {
+  it('sessionOrders строит порядок для каждой работы из WindowWorkEntry', () => {
     const entries = [
       {
         projectPath: '/tmp/proj',

@@ -1,13 +1,16 @@
-import { mkdtemp, open, readFile, rename, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { addMessage, HUMAN, readMap, updateMap, workPaths } from '@parley/core';
-import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as core from '@parley/core';
+import { createWork, HUMAN, updateMap, readStoredMap } from '@parley/core';
+import { connectRaw, hello, holdDatabase, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
+import type { RequestInfo } from '../context.js';
+import { mailMarkRead } from './mail.js';
 
 let hosts: RunningHost[] = [];
 let homes: string[] = [];
@@ -31,7 +34,7 @@ async function reply(client: TestClient, id: number): Promise<RawMessage> {
 }
 
 /** Хост, клиент и работа с одним письмом агента человеку (m-01). */
-async function withLetter(): Promise<{ client: TestClient; dir: string; workId: string }> {
+async function withLetter(): Promise<{ client: TestClient; dir: string; workId: string; home: string }> {
   const home = await tempHome();
   homes.push(home);
   const running = await startHost({ home });
@@ -45,10 +48,10 @@ async function withLetter(): Promise<{ client: TestClient; dir: string; workId: 
   await hello(client, token);
   client.send({ id: 1, method: 'works.create', params: { projectPath: dir, title: 'Почта', goal: '' } });
   const workId = ((await reply(client, 1)).result as { workId: string }).workId;
-  await updateMap(dir, workId, (map) => {
-    addMessage(map, { from: 's-01', to: [HUMAN], text: 'вопрос' });
+  await updateMap(dir, workId, (map, letters) => {
+    letters.add({ roomId: null, kind: 'note', from: 's-01', to: [HUMAN], text: 'вопрос' });
   });
-  return { client, dir, workId };
+  return { client, dir, workId, home };
 }
 
 describe('mail.markRead', () => {
@@ -57,7 +60,7 @@ describe('mail.markRead', () => {
 
     client.send({ id: 2, method: 'mail.markRead', params: { projectPath: dir, workId, messageIds: ['m-01'] } });
     expect((await reply(client, 2)).result).toEqual({ marked: 1 });
-    expect((await readMap(dir, workId)).messages[0]?.readBy[HUMAN]).toBeDefined();
+    expect((readStoredMap(dir, workId)).messages[0]?.readBy[HUMAN]).toBeDefined();
 
     client.send({ id: 3, method: 'mail.markRead', params: { projectPath: dir, workId, messageIds: ['m-01'] } });
     expect((await reply(client, 3)).result).toEqual({ marked: 0 });
@@ -76,22 +79,16 @@ describe('mail.markRead', () => {
     client.close();
   });
 
-  // Лок карты занят заранее, чтобы запись гарантированно встала в ожидание уже после
-  // проверки работы и чтения карты, — иначе гонку почти всегда выигрывает not_found.
-  // Файл лока остаётся и после close: писатель ждёт, пока каталог не пропадёт.
-  it('работа удалена, пока запись ждала map.lock — not_found, хост жив', async () => {
-    const { client, dir, workId } = await withLetter();
-    const paths = workPaths(dir, workId);
-    const held = await open(paths.lock, 'wx');
+  // База занята заранее другим процессом, который внутри захвата снимает работу: запись гарантированно
+  // встаёт в ожидание уже после проверки работы и чтения карты, — иначе гонку почти всегда выигрывает not_found.
+  it('работа удалена, пока запись ждала базу — not_found, хост жив', async () => {
+    const { client, dir, workId, home } = await withLetter();
+    const held = await holdDatabase(home, 300, { projectPath: dir, workId });
 
     client.send({ id: 2, method: 'mail.markRead', params: { projectPath: dir, workId, messageIds: ['m-01'] } });
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    await held.close();
-    // Каталог уносится одним rename, а не rm: ожидающий писатель мог бы создать лок в
-    // каталоге посреди рекурсивного удаления, и rm упал бы с ENOTEMPTY.
-    await rename(paths.dir, path.join(dir, 'gone-work'));
 
     expect((await reply(client, 2)).error?.code).toBe('not_found');
+    await held.done;
     client.send({ id: 3, method: 'works.list', params: {} });
     expect((await reply(client, 3)).result).toBeDefined();
     client.close();
@@ -103,7 +100,40 @@ describe('mail.markRead', () => {
 
     client.send({ id: 2, method: 'mail.markRead', params: { projectPath: dir, workId, messageIds } });
     expect((await reply(client, 2)).error?.code).toBe('bad_request');
-    expect((await readMap(dir, workId)).messages[0]?.readBy[HUMAN]).toBeUndefined();
+    expect((readStoredMap(dir, workId)).messages[0]?.readBy[HUMAN]).toBeUndefined();
     client.close();
+  });
+});
+
+describe('mail.markRead: карта целиком не читается', () => {
+  // Спека хранилища 6.2: проверка работы и отметка — запросами к базе; `readMap` копирует всю карту работы.
+  it('отметка не зовёт readMap; повтор и несуществующая работа — прежние ответы', async () => {
+    const home = await tempHome();
+    homes.push(home);
+    const previous = process.env.PARLEY_HOME;
+    process.env.PARLEY_HOME = home;
+    const dir = await mkdtemp(path.join(tmpdir(), 'parley-mail-project-'));
+    projects.push(dir);
+    const request = {} as RequestInfo;
+    try {
+      const workId = (await createWork(dir, { title: 'Почта' })).work.id;
+      await updateMap(dir, workId, (_map, letters) => {
+        letters.add({ roomId: null, from: 's-01', to: [HUMAN], text: 'вопрос', kind: 'note' });
+      });
+      const params = { projectPath: dir, workId, messageIds: ['m-01'] };
+      const readMapSpy = vi.spyOn(core, 'readMap');
+      try {
+        expect(await mailMarkRead(params, request)).toEqual({ marked: 1 });
+        expect(await mailMarkRead(params, request)).toEqual({ marked: 0 });
+        await expect(mailMarkRead({ ...params, workId: 'w-9999' }, request)).rejects.toMatchObject({ code: 'not_found' });
+        expect(readMapSpy).not.toHaveBeenCalled();
+      } finally {
+        readMapSpy.mockRestore();
+      }
+      expect((readStoredMap(dir, workId)).messages[0]?.readBy[HUMAN]).toBeDefined();
+    } finally {
+      if (previous === undefined) delete process.env.PARLEY_HOME;
+      else process.env.PARLEY_HOME = previous;
+    }
   });
 });

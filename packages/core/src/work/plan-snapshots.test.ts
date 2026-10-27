@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import {
   mkdir,
@@ -12,12 +13,13 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { workDb } from "./db.js";
 import { addSession } from "./map.js";
 import { addRoom } from "./rooms.js";
 import { resolveProposal, setProposal } from "./proposals.js";
 import { createWork, readMap, updateMap, workPaths } from "./store.js";
 import { cancelRoomPlan, submitPlanItem } from "./plans.js";
-import { flushPlanSnapshots } from "./plan-snapshots.js";
+import { capturePlanSnapshot, flushPlanSnapshots } from "./plan-snapshots.js";
 import { HUMAN } from "./types.js";
 let root: string;
 let project: string;
@@ -32,7 +34,7 @@ beforeEach(async () => {
   previous = process.env.PARLEY_HOME;
   process.env.PARLEY_HOME = home;
   workId = (await createWork(project, { title: "Snapshot" })).work.id;
-  await updateMap(project, workId, (map) => {
+  await updateMap(project, workId, (map, letters) => {
     addSession(map, { provider: "codex", label: "Lead", task: "Fixture" }, AT);
     addRoom(
       map,
@@ -55,6 +57,7 @@ beforeEach(async () => {
     const plan = map.rooms[0]!.proposal!.plan!;
     resolveProposal(
       map,
+      letters,
       "r-01",
       p.proposalId,
       "accept",
@@ -73,7 +76,7 @@ const snapshotDir = () => path.join(project, ".parley", "plans");
 describe("captured immutable plan exports", () => {
   it("writes the accepted payload even after a later revision and completion; replay is idempotent", async () => {
     const captured = (await readMap(project, workId)).planExports![0]!;
-    await updateMap(project, workId, (map) => {
+    await updateMap(project, workId, (map, letters) => {
       const p = setProposal(map, "r-01", "s-01", "New decision", AT, {
         plan: {
           id: "pl-01",
@@ -87,6 +90,7 @@ describe("captured immutable plan exports", () => {
       });
       resolveProposal(
         map,
+        letters,
         "r-01",
         p.proposalId,
         "accept",
@@ -95,6 +99,7 @@ describe("captured immutable plan exports", () => {
       );
       submitPlanItem(
         map,
+        letters,
         "pl-01",
         1,
         1,
@@ -188,24 +193,28 @@ describe("captured immutable plan exports", () => {
   it("exports cancellation with an independent filename and migrates only the exact generated ignore", async () => {
     const ignore = path.join(project, ".parley", ".gitignore");
     await writeFile(ignore, "*\n");
-    await updateMap(project, workId, (map) =>
-      cancelRoomPlan(map, "pl-01", 0, HUMAN, AT),
+    await updateMap(project, workId, (map, letters) =>
+      cancelRoomPlan(map, letters, "pl-01", 0, HUMAN, AT),
     );
     expect((await flushPlanSnapshots(project, workId)).written).toHaveLength(2);
     expect(await readFile(ignore, "utf8")).toContain("!plans/**");
     const intents = (await readMap(project, workId)).planExports!;
-    expect(intents[0]!.content).toContain("status: active");
-    expect(intents[1]!.content).toContain("status: cancelled");
+    // Записанный экспорт текста в карте не держит: читаем файл.
+    const fileOf = (index: number) =>
+      readFile(path.join(snapshotDir(), intents[index]!.file), "utf8");
+    expect(await fileOf(0)).toContain("status: active");
+    expect(await fileOf(1)).toContain("status: cancelled");
   });
 });
 
 it("retries exact published bytes when acknowledgement fails before map persistence", async () => {
   const intent = (await readMap(project, workId)).planExports![0]!;
-  const index = path.join(process.env.PARLEY_HOME!, "works-index.json");
-  const original = await readFile(index, "utf8");
   const result = await flushPlanSnapshots(project, workId, {
     beforeCommit: async () => {
-      await writeFile(index, "malformed fixture");
+      // Запись работы в базе отказывает, как отказал бы сбой диска: файл снимка уже опубликован, карту записать нельзя.
+      workDb().exec(
+        "CREATE TRIGGER refuse_ack BEFORE UPDATE ON works BEGIN SELECT RAISE(ABORT, 'refused fixture'); END",
+      );
     },
   });
   expect(result.failed).toHaveLength(1);
@@ -215,7 +224,7 @@ it("retries exact published bytes when acknowledgement fails before map persiste
   expect((await readMap(project, workId)).planExports![0]!.status).toBe(
     "pending",
   );
-  await writeFile(index, original);
+  workDb().exec("DROP TRIGGER refuse_ack");
   expect((await flushPlanSnapshots(project, workId)).failed).toEqual([]);
   expect((await readMap(project, workId)).planExports![0]!.status).toBe(
     "written",
@@ -250,7 +259,7 @@ it("publishes a nested linked-worktree plan in the corresponding main folder whi
   await git("worktree", "add", "-b", "linked", linked);
   const participant = path.join(linked, "nested");
   const id = (await createWork(participant, { title: "Nested plan" })).work.id;
-  await updateMap(participant, id, (map) => {
+  await updateMap(participant, id, (map, letters) => {
     addSession(map, { provider: "codex", label: "Lead", task: "" }, AT);
     addRoom(
       map,
@@ -272,6 +281,7 @@ it("publishes a nested linked-worktree plan in the corresponding main folder whi
     });
     resolveProposal(
       map,
+      letters,
       "r-01",
       p.proposalId,
       "accept",
@@ -325,7 +335,7 @@ it("excluded immutable intents preserve their file and captured state while a la
   const original = (await readMap(project, workId)).planExports![0]!;
   await mkdir(snapshotDir(), { recursive: true });
   await writeFile(path.join(snapshotDir(), original.file), "Human file", "utf8");
-  await updateMap(project, workId, map => cancelRoomPlan(map, "pl-01", 0, HUMAN, AT));
+  await updateMap(project, workId, (map, letters) => cancelRoomPlan(map, letters, "pl-01", 0, HUMAN, AT));
   const result = await flushPlanSnapshots(project, workId, { excludedFiles: new Set([original.file]) });
   expect(result.failed).toEqual([]);
   expect(result.written).toHaveLength(1);
@@ -350,4 +360,40 @@ it('prepared ownership callback precedes publication and a failed callback clean
   expect((await readdir(dir)).filter(name => name.startsWith('.plan-'))).toEqual([]);
   const proof = await publishImmutableMarkdown(dir, parent, { file: 'own.md', content: 'Exact' });
   expect(proof.sha256).toBe(createHash('sha256').update('Exact').digest('hex'));
+});
+
+describe("written plan exports keep only their file and sha256", () => {
+  const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+  it("after a flush the written export has no content and its sha256 is the sha256 of the .md file", async () => {
+    const pending = (await readMap(project, workId)).planExports![0]!;
+    expect(pending.content).toBeDefined();
+    await flushPlanSnapshots(project, workId);
+    const written = (await readMap(project, workId)).planExports![0]!;
+    const text = await readFile(path.join(snapshotDir(), pending.file), "utf8");
+    expect(written).not.toHaveProperty("content");
+    expect(written).toMatchObject({
+      status: "written",
+      sha256: sha(text),
+      bytes: Buffer.byteLength(text),
+      title: "Plan pl-01 — revision 0 (accepted)",
+    });
+  });
+  it("capturing the same text again returns the previous export, a different text is snapshot-conflict", async () => {
+    await flushPlanSnapshots(project, workId);
+    const map = await readMap(project, workId);
+    const plan = map.plans![0]!;
+    const previous = map.planExports![0]!;
+    expect(capturePlanSnapshot(map, plan, "accepted")).toBe(previous);
+    expect(map.planExports).toHaveLength(1);
+    plan.goal = "A different goal";
+    expect(() => capturePlanSnapshot(map, plan, "accepted")).toThrow(
+      "snapshot-conflict",
+    );
+  });
+  it("a second flush of a written export leaves the digest as it was", async () => {
+    await flushPlanSnapshots(project, workId);
+    const first = (await readMap(project, workId)).planExports![0]!;
+    expect((await flushPlanSnapshots(project, workId)).written).toEqual([]);
+    expect((await readMap(project, workId)).planExports![0]).toEqual(first);
+  });
 });

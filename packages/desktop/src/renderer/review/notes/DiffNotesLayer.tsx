@@ -14,7 +14,7 @@
 
 import { Fragment, useLayoutEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { DiffNote } from '../../../shared/notes-types.js';
 import { GutterAdd, type GutterEditor } from './GutterAdd.js';
 import { NoteEditor } from './NoteEditor.js';
@@ -37,7 +37,7 @@ export interface NotesDiffEditor {
 }
 
 export interface NoteHandlers {
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   defaultSessionId: string;
   editing: string | null;
   onPick(side: NoteSide, startLine: number, endLine: number): void;

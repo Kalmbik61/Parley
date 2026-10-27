@@ -1,14 +1,16 @@
+import { humanDecisionOutcome, plainHumanMention } from './attention.js';
 import { markedExcerpt, textHash } from './context-budget.js';
-import { unreadFor, unreadForHuman } from './letters.js';
+import type { LetterQuery } from './letter-store.js';
 import { isRoomArchived } from './rooms.js';
 import { reportedStatus } from './session-state.js';
 import type { SessionNeed } from './stuck.js';
-import type { Message, MapCompact, RoomPlan, WorkMap, WorkSession } from './types.js';
+import { HUMAN, type Message, type MapCompact, type MapCompactMail, type RoomPlan, type WindowWorkMap, type WorkMap, type WorkSession } from './types.js';
 
 /**
- * Компактная карта и страницы (P35, первая ступень A14). JSON-карта остаётся хранилищем: здесь только то, что
- * из неё отдают наружу. Агенту и окну по умолчанию уходит топология, статусы, активная ревизия, непрочитанное и
- * курсоры; история, резюме, письма, артефакты и длинные тексты читаются отдельными страницами с потолком в байтах.
+ * Компактная карта и страницы (P35, первая ступень A14). Карта остаётся хранилищем состояния, а письма читаются через
+ * `LetterReader` (спека хранилища 6.2, 6.7): здесь только то, что из писем отдают наружу. Агенту и окну по умолчанию
+ * уходит топология, статусы, активная ревизия, непрочитанное и курсоры; история, резюме, письма, артефакты и длинные
+ * тексты читаются отдельными страницами с потолком в байтах.
  *
  * Потолок проверяется до сборки ответа: каждое представление меряется отдельно, а страница набирается, пока
  * влезает; готовый ответ никогда не обрезается задним числом. Единица — байты JSON, измеренные с запасом на
@@ -19,7 +21,10 @@ import type { Message, MapCompact, RoomPlan, WorkMap, WorkSession } from './type
 export const PAGE_DEFAULT_BYTES = 64 * 1024;
 export const PAGE_MAX_BYTES = 256 * 1024;
 export const PAGE_MIN_BYTES = 2 * 1024;
+/** Потолок записей на странице по номеру: история, артефакты, резюме, архив работ. */
 export const PAGE_MAX_ITEMS = 500;
+/** Страница писем — не больше 100 писем (спека хранилища 6.2; было 500): письмо весит больше строки истории. */
+export const LETTER_PAGE_MAX_ITEMS = 100;
 
 /** Размер представления в байтах: JSON с отступами MCP и запасом на отступ внутри массива страницы. */
 export function viewBytes(value: unknown): number {
@@ -92,6 +97,52 @@ export interface SeqPageOptions<T, V> {
   total?: number | null;
 }
 
+/** Потолки страницы из параметров: байты по умолчанию, записей — не больше `ceiling` (`PAGE_MAX_ITEMS`, у писем `LETTER_PAGE_MAX_ITEMS`). */
+const pageLimits = (
+  options: { maxBytes?: number; maxItems?: number },
+  ceiling: number = PAGE_MAX_ITEMS,
+): { maxBytes: number; maxItems: number } => ({
+  maxBytes: options.maxBytes ?? PAGE_DEFAULT_BYTES,
+  maxItems: Math.min(options.maxItems ?? ceiling, ceiling),
+});
+
+/**
+ * Набирает страницу из потока записей в порядке чтения (от курсора в сторону чтения). Первая запись берётся всегда
+ * (после сокращения она влезает), следующие — пока помещаются в байты и в `maxItems`; `more` — поток оборвали, не
+ * дочитав: следующая запись есть. `lastSeq` — номер последней взятой записи (начало следующей страницы).
+ */
+function takeSeqPage<T, V>(
+  source: Iterator<T>,
+  options: Pick<SeqPageOptions<T, V>, 'seq' | 'view' | 'shrink'> & { maxBytes: number; maxItems: number; from: number },
+): { taken: V[]; bytes: number; cut: number; lastSeq: number; more: boolean } {
+  const taken: V[] = [];
+  let bytes = 0;
+  let cut = 0;
+  let lastSeq = options.from;
+  for (let step = source.next(); step.done !== true; step = source.next()) {
+    const item = step.value;
+    if (taken.length >= options.maxItems) return { taken, bytes, cut, lastSeq, more: true };
+    let view = options.view(item);
+    let size = viewBytes(view);
+    if (size > options.maxBytes) {
+      if (options.shrink === undefined) throw new Error(`a record of ${size} bytes does not fit the ${options.maxBytes}-byte page`);
+      view = options.shrink(view, options.maxBytes);
+      size = viewBytes(view);
+      cut += 1;
+    }
+    if (taken.length > 0 && bytes + size > options.maxBytes) return { taken, bytes, cut, lastSeq, more: true };
+    taken.push(view);
+    bytes += size;
+    lastSeq = options.seq(item);
+  }
+  return { taken, bytes, cut, lastSeq, more: false };
+}
+
+/** Записи массива от индекса `start` в сторону чтения. */
+function* walkItems<T>(items: readonly T[], start: number, forward: boolean): Generator<T> {
+  for (let index = start; forward ? index < items.length : index >= 0; index += forward ? 1 : -1) yield items[index] as T;
+}
+
 /**
  * Страница записей, упорядоченных по `seq` (по возрастанию). Без курсора — самая новая; `before:N` — старше
  * номера N; `after:N` — новее номера N. Записи внутри страницы идут по возрастанию. Курсор называет номер, а не
@@ -99,8 +150,7 @@ export interface SeqPageOptions<T, V> {
  * запись не пропускается и не повторяется.
  */
 export function pageBySeq<T, V>(items: readonly T[], options: SeqPageOptions<T, V>): { items: V[]; page: PageInfo } {
-  const maxBytes = options.maxBytes ?? PAGE_DEFAULT_BYTES;
-  const maxItems = Math.min(options.maxItems ?? PAGE_MAX_ITEMS, PAGE_MAX_ITEMS);
+  const { maxBytes, maxItems } = pageLimits(options);
   const cursor = options.cursor ?? { dir: 'before' as const, seq: Number.POSITIVE_INFINITY };
   const forward = cursor.dir === 'after';
 
@@ -114,31 +164,16 @@ export function pageBySeq<T, V>(items: readonly T[], options: SeqPageOptions<T, 
     else high = mid;
   }
 
-  const taken: V[] = [];
-  let bytes = 0;
-  let cut = 0;
-  let index = forward ? low : low - 1;
-  let lastSeq = cursor.seq;
-  for (; forward ? index < items.length : index >= 0; index += forward ? 1 : -1) {
-    if (taken.length >= maxItems) break;
-    const item = items[index] as T;
-    let view = options.view(item);
-    let size = viewBytes(view);
-    if (size > maxBytes) {
-      if (options.shrink === undefined) throw new Error(`a record of ${size} bytes does not fit the ${maxBytes}-byte page`);
-      view = options.shrink(view, maxBytes);
-      size = viewBytes(view);
-      cut += 1;
-    }
-    // Первая запись берётся всегда (после сокращения она влезает), следующие — пока помещаются.
-    if (taken.length > 0 && bytes + size > maxBytes) break;
-    taken.push(view);
-    bytes += size;
-    lastSeq = options.seq(item);
-  }
+  const { taken, bytes, cut, lastSeq, more } = takeSeqPage(walkItems(items, forward ? low : low - 1, forward), {
+    seq: options.seq,
+    view: options.view,
+    ...(options.shrink === undefined ? {} : { shrink: options.shrink }),
+    maxBytes,
+    maxItems,
+    from: cursor.seq,
+  });
   if (!forward) taken.reverse();
 
-  const more = forward ? index < items.length : index >= 0;
   return {
     items: taken,
     page: {
@@ -171,32 +206,114 @@ export interface MessagePageOptions<V extends { text: string }> {
   kind?: Message['kind'];
   /** Дополнительный отбор (например, прямые письма сессии): выборка и её размер считаются уже с ним. */
   filter?: (message: Message) => boolean;
+  /**
+   * Предотбор запросом для `filter`: письма, где отправитель или адресат назван в списке (`LetterQuery.involving`). Без него
+   * итог страницы с `filter` читает весь канал; со списком — только письма названных. `filter` должен быть не шире списка.
+   */
+  involving?: readonly string[];
   cursor?: PageCursor | null;
   maxBytes?: number;
   maxItems?: number;
   view: (message: Message) => V;
 }
 
-/** Страница писем комнаты (`roomId`) или прямых писем (`null`). Письма идут по номеру `m-NN`: он только растёт. */
+/**
+ * Чтение писем для страниц и снимка (спека хранилища 6.2, 6.7): запросы по индексу, а не обход карты. Ключ канала `''` —
+ * прямые письма. Реализации: `mapLetterReader` над картой (чистые тесты и читатели без базы), `storeLetterReader` над
+ * таблицами работы. Читатель в `messagePage`, `mapTopology` и `compactWorkMap` обязателен: в хранимой карте писем нет.
+ */
+export interface LetterReader {
+  /** Выборка по `LetterQuery`: порядок номера письма, `newestFirst` берёт новейшие. */
+  page(q: LetterQuery): Message[];
+  /** Сколько писем подходит под условия (итог страницы). */
+  count(q: Omit<LetterQuery, 'limit'>): number;
+  /** Письма по номерам (по возрастанию); несуществующих в ответе нет. */
+  byIds(ids: readonly string[]): Message[];
+  /** Последние `n` писем канала (`null` — прямые) по возрастанию номера. */
+  tail(roomId: string | null, n: number): Message[];
+  /** Последние `limit` писем, которые человек видит и не прочёл, по возрастанию номера (правило `unreadForHuman`). */
+  humanUnread(limit: number): Message[];
+  /** Сколько писем читатель не прочёл: всего и по каналам (`''` — прямые). У сессии — правила `unreadFor`, у `human` — `unreadForHuman`. */
+  unreadCount(reader: string): { total: number; byRoom: Record<string, number> };
+  /** Итоги каналов: сколько писем и номер новейшего; каналов без писем нет. */
+  channelStats(): Record<string, { total: number; latestId: string | null }>;
+}
+
+/** Сколько писем читатель отдаёт за запрос, когда страница набирает письма по одному. */
+const WALK_BATCH = 25;
+
+/**
+ * Письма выборки от номера `from` в сторону чтения (назад или вперёд), пачками по `WALK_BATCH`: страница, которая встала
+ * на байтовом потолке, не читает остаток канала. `filter` отсеивает письма уже после чтения.
+ */
+function* walkLetters(
+  letters: LetterReader,
+  selection: Omit<LetterQuery, 'limit'>,
+  from: number,
+  forward: boolean,
+  filter: ((message: Message) => boolean) | undefined,
+): Generator<Message> {
+  let edge = from;
+  for (;;) {
+    const rows = letters.page({
+      ...selection,
+      ...(forward ? { afterSeq: edge } : Number.isFinite(edge) ? { beforeSeq: edge } : {}),
+      limit: WALK_BATCH,
+      ...(forward ? {} : { newestFirst: true }),
+    });
+    for (const row of rows) {
+      edge = seqOf(row.id, 'm-');
+      if (filter === undefined || filter(row)) yield row;
+    }
+    if (rows.length < WALK_BATCH) return;
+  }
+}
+
+/**
+ * Страница писем комнаты (`roomId`) или прямых писем (`null`). Письма идут по номеру `m-NN`: он только растёт. Письма
+ * читаются запросами от курсора; итог страницы — `count`, а с `filter` — подсчёт отобранных (предикат на одно письмо).
+ */
 export function messagePage<V extends { text: string }>(
   map: WorkMap,
   options: MessagePageOptions<V>,
+  letters: LetterReader,
 ): { messages: V[]; page: PageInfo } {
-  const selected = map.messages.filter(
-    (message) =>
-      message.roomId === options.roomId &&
-      (options.kind === undefined || message.kind === options.kind) &&
-      (options.filter === undefined || options.filter(message)),
-  );
-  const { items, page } = pageBySeq(selected, {
+  const { maxBytes, maxItems } = pageLimits(options, LETTER_PAGE_MAX_ITEMS);
+  const cursor = options.cursor ?? { dir: 'before' as const, seq: Number.POSITIVE_INFINITY };
+  const forward = cursor.dir === 'after';
+  const selection = {
+    roomId: options.roomId,
+    ...(options.kind === undefined ? {} : { kind: options.kind }),
+    ...(options.involving === undefined ? {} : { involving: options.involving }),
+  };
+
+  const { taken, bytes, cut, lastSeq, more } = takeSeqPage(walkLetters(letters, selection, cursor.seq, forward, options.filter), {
     seq: (message) => seqOf(message.id, 'm-'),
     view: options.view,
     shrink: shrinkText,
-    ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
-    ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
-    ...(options.maxItems === undefined ? {} : { maxItems: options.maxItems }),
+    maxBytes,
+    maxItems,
+    from: cursor.seq,
   });
-  return { messages: items, page };
+  if (!forward) taken.reverse();
+
+  // Итог — один запрос: без отбора это `count`, с отбором (предикат на одно письмо в `count` не уложить) — выборка канала, а
+  // с предотбором `involving` — только писем названных.
+  const total =
+    options.filter === undefined
+      ? letters.count(selection)
+      : letters.page({ ...selection, limit: letters.count(selection) }).filter(options.filter).length;
+  return {
+    messages: taken,
+    page: {
+      total,
+      returned: taken.length,
+      complete: !more,
+      next: more ? formatCursor(forward ? 'after' : 'before', lastSeq) : null,
+      bytes,
+      cut,
+    },
+  };
 }
 
 /** Страница длинного текста: кусок по границе символа, полный размер и хеш, курсор на продолжение. */
@@ -307,6 +424,45 @@ export const WINDOW_RECENT_PER_ROOM = 100;
 export const WINDOW_UNREAD_MAX = 200;
 /** Записей истории сессии и артефактов в окне; остальное — страницами. */
 export const WINDOW_LIST_MAX = 100;
+/**
+ * Сколько байт окно получает под кандидатов в упоминания человека — в событии `rooms.mail` и в снимке без писем один и тот
+ * же потолок (спека rooms.mail 6.3). Кандидаты — непрочитанные человеком письма с `@human`, до `WINDOW_UNREAD_MAX`, каждое
+ * до `WINDOW_TEXT_MAX`; без потолка в байтах они съедали бы кадр события.
+ */
+export const WINDOW_MENTION_MAX_BYTES = 64 * 1024;
+
+/**
+ * Самые новые письма набора, пока влезают в `maxBytes`, и порядок прежний. Хвост без дыр: письмо, которое не влезло, обрывает
+ * набор, а более старые за ним не берутся. Считаются байты JSON писем и запятых между ними; скобки массива в счёт не идут.
+ */
+export function keepNewestWithin(letters: readonly Message[], maxBytes: number): Message[] {
+  const kept: Message[] = [];
+  let size = 0;
+  for (let at = letters.length - 1; at >= 0; at -= 1) {
+    const letter = letters[at] as Message;
+    const bytes = Buffer.byteLength(JSON.stringify(letter), 'utf8') + (kept.length > 0 ? 1 : 0);
+    if (size + bytes > maxBytes) break;
+    size += bytes;
+    kept.push(letter);
+  }
+  return kept.reverse();
+}
+
+/**
+ * Кандидаты в упоминания человека из непрочитанных им писем (по возрастанию номера, как `unreadLetters`): те, что проходят
+ * `plainHumanMention`, не больше `WINDOW_UNREAD_MAX` последних, текст сокращён как у письма окна, и всё это не больше
+ * `WINDOW_MENTION_MAX_BYTES` — сверх потолка не едут самые старые. Событие `rooms.mail` передаёт сюда новые непрочитанные
+ * письма своей пачки, а снимок без писем — непрочитанный хвост человека: окно дописывает кандидатов события в набор работы,
+ * а заменяет набор только снимок. Потолок и сокращение текста у них общие, чтобы источники не расходились по составу.
+ * Точное правило «@вы» применяет окно (спека rooms.mail 6.3).
+ */
+export function humanMentionCandidates(unread: readonly Message[], textMax: number = WINDOW_TEXT_MAX): Message[] {
+  const candidates = unread
+    .filter((message) => plainHumanMention(message.text))
+    .slice(-WINDOW_UNREAD_MAX)
+    .map((message) => (viewBytes(message) > textMax ? shrinkText(message, textMax) : message));
+  return keepNewestWithin(candidates, WINDOW_MENTION_MAX_BYTES);
+}
 
 export interface WindowOptions {
   /** Бюджет писем окна в байтах JSON: письма сверх него не включаются, а считаются в `compact.messages`. */
@@ -318,84 +474,28 @@ export interface WindowOptions {
 
 const windowMessageBytes = (message: Message): number => Buffer.byteLength(JSON.stringify(message), 'utf8');
 
+const channelRoom = (channel: string): string | null => (channel === '' ? null : channel);
+
+/** Сколько писем канала читатель отдаёт за запрос, когда хвост без дыр идёт глубже хвоста комнаты. */
+const CONTIGUOUS_BATCH = 50;
+
+/** Сумма писем по каналам и номер новейшего письма работы. */
+function totalsOf(stats: Record<string, { total: number; latestId: string | null }>): { total: number; latestId: string | null } {
+  let total = 0;
+  let latestId: string | null = null;
+  for (const entry of Object.values(stats)) {
+    total += entry.total;
+    if (entry.latestId !== null && (latestId === null || seqOf(entry.latestId, 'm-') > seqOf(latestId, 'm-'))) latestId = entry.latestId;
+  }
+  return { total, latestId };
+}
+
 /**
- * Карта для окна: та же форма `WorkMap`, но ограниченная. Письма — хвост каждой комнаты, непрочитанные человеком
- * и подлинники цитат, сколько влезает в `messageBytes`; длинные тексты сокращены с пометкой, история сессий и
- * артефакты обрезаны хвостом, внутренние очереди хоста (`decisionExports`) и тела снимков планов не отправляются.
- * Что осталось за окном, названо в `compact`: итоги, точные счётчики непрочитанного и пути обрезанных полей.
+ * Всё в карте окна, кроме писем: сессии, работа, комнаты и планы ужаты так, как их отдаёт `compactWorkMap` и без писем
+ * `mailWorkMap`. История сессии и артефакты — хвостом (`WINDOW_LIST_MAX`, число опущенных в `omitted`), длинные поля
+ * сокращены до `textMax` (пути — в `cuts`), внутренние очереди хоста (`decisionExports`) и тела снимков планов не едут.
  */
-export function compactWorkMap(map: WorkMap, options: WindowOptions): WorkMap {
-  const recent = options.recentPerRoom ?? WINDOW_RECENT_PER_ROOM;
-  const unreadMax = options.unreadMax ?? WINDOW_UNREAD_MAX;
-  const textMax = options.textMax ?? WINDOW_TEXT_MAX;
-  const cuts: CutRecord[] = [];
-  const omitted: Record<string, number> = {};
-
-  // Один проход: итоги по комнатам, хвосты и непрочитанное. Карта в порядке возрастания номера письма.
-  const totals = new Map<string | null, number>();
-  const tails = new Map<string | null, Message[]>();
-  const unread: Message[] = [];
-  const unreadRooms: Record<string, number> = {};
-  let unreadLetters = 0;
-  const byId = new Map<string, Message>();
-  for (const message of map.messages) {
-    byId.set(message.id, message);
-    totals.set(message.roomId, (totals.get(message.roomId) ?? 0) + 1);
-    const tail = tails.get(message.roomId) ?? [];
-    tail.push(message);
-    if (tail.length > recent) tail.shift();
-    tails.set(message.roomId, tail);
-    if (unreadForHuman(message)) {
-      unread.push(message);
-      if (message.roomId === null) unreadLetters += 1;
-      else unreadRooms[message.roomId] = (unreadRooms[message.roomId] ?? 0) + 1;
-    }
-  }
-
-  const chosen = new Map<string, Message>();
-  for (const tail of tails.values()) for (const message of tail) chosen.set(message.id, message);
-  for (const message of unread.slice(-unreadMax)) chosen.set(message.id, message);
-  // Подлинник цитаты берётся из той же комнаты: чужой id окно всё равно не покажет.
-  for (const message of [...chosen.values()]) {
-    const original = message.replyTo === undefined ? undefined : byId.get(message.replyTo);
-    if (original !== undefined && original.roomId === message.roomId) chosen.set(original.id, original);
-  }
-
-  // Бюджет: от новых к старым, пока влезает; сокращённый текст считается уже сокращённым.
-  let spent = 0;
-  const kept: Message[] = [];
-  const ordered = [...chosen.values()].sort((a, b) => seqOf(b.id, 'm-') - seqOf(a.id, 'm-'));
-  for (const message of ordered) {
-    const text = capStrings(message.text, textMax, `messages.${message.id}.text`, cuts);
-    const view: Message = text === message.text ? message : { ...message, text, textBytes: Buffer.byteLength(message.text, 'utf8') };
-    const size = windowMessageBytes(view);
-    if (spent + size > options.messageBytes) continue;
-    spent += size;
-    kept.push(view);
-  }
-  kept.sort((a, b) => seqOf(a.id, 'm-') - seqOf(b.id, 'm-'));
-
-  const keptRooms = new Map<string | null, number>();
-  const keptIds = new Set<string>();
-  for (const message of kept) {
-    keptRooms.set(message.roomId, (keptRooms.get(message.roomId) ?? 0) + 1);
-    keptIds.add(message.id);
-  }
-  // Хвост без дыр: с конца карты, пока подряд идут письма комнаты, которые в окне есть.
-  const contiguous = new Map<string | null, { from: number | null; broken: boolean }>();
-  for (let index = map.messages.length - 1; index >= 0; index -= 1) {
-    const message = map.messages[index] as Message;
-    const state = contiguous.get(message.roomId) ?? { from: null, broken: false };
-    contiguous.set(message.roomId, state);
-    if (state.broken) continue;
-    if (keptIds.has(message.id)) state.from = seqOf(message.id, 'm-');
-    else state.broken = true;
-  }
-  const rooms: MapCompact['messages']['rooms'] = {};
-  for (const [roomId, total] of totals) {
-    rooms[roomId ?? 'direct'] = { total, included: keptRooms.get(roomId) ?? 0, tailFrom: contiguous.get(roomId)?.from ?? null };
-  }
-
+function windowMapBase(map: WorkMap, textMax: number, cuts: CutRecord[], omitted: Record<string, number>): WorkMap {
   const sessions = map.sessions.map((session) => {
     let next: WorkSession = { ...session };
     delete next.codexThreadBinding;
@@ -420,21 +520,196 @@ export function compactWorkMap(map: WorkMap, options: WindowOptions): WorkMap {
     ...base,
     work,
     sessions,
-    messages: kept,
     rooms: roomList,
     ...(plans === undefined ? {} : { plans }),
     // Окно читает только состояние снимков (`pending`/`written`): тело — целый Markdown плана — ему не нужно.
     ...(planExports === undefined ? {} : { planExports: planExports.map((intent) => ({ ...intent, content: '' })) }),
     ...(effects === undefined ? {} : { planEffects: effects }),
+  };
+}
+
+/**
+ * Карта для окна: та же форма `WorkMap`, но ограниченная. Письма — хвост каждой комнаты, непрочитанные человеком
+ * и подлинники цитат, сколько влезает в `messageBytes`; длинные тексты сокращены с пометкой, история сессий и
+ * артефакты обрезаны хвостом, внутренние очереди хоста (`decisionExports`) и тела снимков планов не отправляются.
+ * Что осталось за окном, названо в `compact`: итоги, точные счётчики непрочитанного и пути обрезанных полей.
+ * Письма и их итоги читаются у `letters` запросами (спека хранилища 6.7), а не обходом карты.
+ */
+export function compactWorkMap(map: WorkMap, options: WindowOptions, letters: LetterReader): WindowWorkMap {
+  const recent = options.recentPerRoom ?? WINDOW_RECENT_PER_ROOM;
+  const unreadMax = options.unreadMax ?? WINDOW_UNREAD_MAX;
+  const textMax = options.textMax ?? WINDOW_TEXT_MAX;
+  const cuts: CutRecord[] = [];
+  const omitted: Record<string, number> = {};
+
+  // Итоги по каналам и их хвосты, непрочитанное человеком и точные счётчики — по одному запросу на канал.
+  const stats = letters.channelStats();
+  const all = totalsOf(stats);
+  const totals = new Map<string | null, number>();
+  const tails = new Map<string | null, Message[]>();
+  for (const [channel, entry] of Object.entries(stats)) {
+    totals.set(channelRoom(channel), entry.total);
+    tails.set(channelRoom(channel), letters.tail(channelRoom(channel), recent));
+  }
+  const unread = letters.humanUnread(unreadMax);
+  const { '': unreadLetters = 0, ...unreadRooms } = letters.unreadCount(HUMAN).byRoom;
+
+  const chosen = new Map<string, Message>();
+  for (const tail of tails.values()) for (const message of tail) chosen.set(message.id, message);
+  for (const message of unread) chosen.set(message.id, message);
+  // Подлинник цитаты берётся из той же комнаты: чужой id окно всё равно не покажет.
+  const quoted = new Set<string>();
+  for (const message of chosen.values()) if (message.replyTo !== undefined) quoted.add(message.replyTo);
+  const originals = new Map(letters.byIds([...quoted]).map((original) => [original.id, original] as const));
+  for (const message of [...chosen.values()]) {
+    const original = message.replyTo === undefined ? undefined : originals.get(message.replyTo);
+    if (original !== undefined && original.roomId === message.roomId) chosen.set(original.id, original);
+  }
+
+  // Бюджет: от новых к старым, пока влезает; сокращённый текст считается уже сокращённым.
+  let spent = 0;
+  const kept: Message[] = [];
+  const ordered = [...chosen.values()].sort((a, b) => seqOf(b.id, 'm-') - seqOf(a.id, 'm-'));
+  for (const message of ordered) {
+    const text = capStrings(message.text, textMax, `messages.${message.id}.text`, cuts);
+    const view: Message = text === message.text ? message : { ...message, text, textBytes: Buffer.byteLength(message.text, 'utf8') };
+    const size = windowMessageBytes(view);
+    if (spent + size > options.messageBytes) continue;
+    spent += size;
+    kept.push(view);
+  }
+  kept.sort((a, b) => seqOf(a.id, 'm-') - seqOf(b.id, 'm-'));
+
+  const keptRooms = new Map<string | null, number>();
+  const keptIds = new Set<string>();
+  for (const message of kept) {
+    keptRooms.set(message.roomId, (keptRooms.get(message.roomId) ?? 0) + 1);
+    keptIds.add(message.id);
+  }
+  // Хвост без дыр: от новейшего письма канала назад, пока подряд идут письма, которые в окне есть. Сперва хвост комнаты,
+  // уже прочитанный; глубже — только если в окне есть письма канала старше хвоста (непрочитанные и цитаты).
+  const contiguousFrom = (roomId: string | null): number | null => {
+    const tail = tails.get(roomId) ?? [];
+    let from: number | null = null;
+    for (let at = tail.length - 1; at >= 0; at -= 1) {
+      const message = tail[at] as Message;
+      if (!keptIds.has(message.id)) return from;
+      from = seqOf(message.id, 'm-');
+    }
+    let before = tail.length === 0 ? Number.POSITIVE_INFINITY : seqOf((tail[0] as Message).id, 'm-');
+    if (!kept.some((message) => message.roomId === roomId && seqOf(message.id, 'm-') < before)) return from;
+    let seen = tail.length;
+    while (seen < (totals.get(roomId) ?? 0)) {
+      const older = letters.page({
+        roomId,
+        ...(Number.isFinite(before) ? { beforeSeq: before } : {}),
+        newestFirst: true,
+        limit: CONTIGUOUS_BATCH,
+      });
+      if (older.length === 0) break;
+      for (const message of older) {
+        if (!keptIds.has(message.id)) return from;
+        from = seqOf(message.id, 'm-');
+      }
+      before = seqOf((older.at(-1) as Message).id, 'm-');
+      seen += older.length;
+    }
+    return from;
+  };
+  const rooms: MapCompact['messages']['rooms'] = {};
+  for (const [roomId, total] of totals) {
+    rooms[roomId ?? 'direct'] = { total, included: keptRooms.get(roomId) ?? 0, tailFrom: contiguousFrom(roomId) };
+  }
+
+  return {
+    ...windowMapBase(map, textMax, cuts, omitted),
+    messages: kept,
     compact: {
       version: 1,
       messages: {
-        total: map.messages.length,
+        total: all.total,
         included: kept.length,
-        latestId: map.messages.at(-1)?.id ?? null,
+        latestId: all.latestId,
         rooms,
       },
       unread: { letters: unreadLetters, rooms: unreadRooms },
+      cut: cuts.slice(0, MAX_CUT_RECORDS),
+      omitted,
+    },
+  };
+}
+
+/** Сколько писем человека читать за раз в поисках его ответа на решение, и сколько таких заходов делать самое большее. */
+const DECISION_SCAN_BATCH = 5;
+const DECISION_SCAN_PAGES = 6;
+
+/**
+ * Чем человек ответил на последнее решение комнаты: идёт по его письмам в комнату от новых к старым, пока не найдёт ответ
+ * (`humanDecisionOutcome`). Слова человека, которые не ответ, ищущего не останавливают и ответа не отменяют: окно так и
+ * считает (`roomDecisionReturned`: «свои слова человека в счёт не идут»). Ищет не глубже `DECISION_SCAN_BATCH *
+ * DECISION_SCAN_PAGES` писем, чтобы цена не зависела от длины переписки; дальше — `null`.
+ */
+function lastHumanDecision(letters: LetterReader, roomId: string): MapCompactMail['rooms'][string]['decision'] {
+  let before: number | undefined;
+  for (let page = 0; page < DECISION_SCAN_PAGES; page += 1) {
+    const found = letters.page({
+      roomId,
+      from: HUMAN,
+      newestFirst: true,
+      limit: DECISION_SCAN_BATCH,
+      ...(before === undefined ? {} : { beforeSeq: before }),
+    });
+    for (const letter of found) {
+      const outcome = humanDecisionOutcome(letter.text);
+      if (outcome !== null) return outcome;
+    }
+    if (found.length < DECISION_SCAN_BATCH) return null;
+    before = seqOf((found.at(-1) as Message).id, 'm-');
+  }
+  return null;
+}
+
+/**
+ * Карта для окна с признаком `rooms-mail` (спека rooms.mail 6.8): та же форма `WorkMap` и те же ужатые сессии, комнаты и
+ * планы, что у `compactWorkMap`, но писем нет совсем (`messages: []`), а в `compact` (версия 2, `MapCompactMail`) на каждую
+ * комнату и на прямые письма — `total`, `top`, `lastAt`, непрочитанное человеком и итог его последнего ответа на решение.
+ * Размер не зависит от числа писем: всё берётся запросами по индексам — `count`, одно новейшее письмо канала, `unreadCount`
+ * и хвост непрочитанного, а не `channelStats` с группировкой по всей истории. `top` и `lastAt` даёт одно новейшее письмо
+ * канала (`page` с `newestFirst`): так читаются и прямые письма, которых `roomLetterTops` не умеет. Кандидаты в упоминания —
+ * `humanMentionCandidates` над хвостом непрочитанного человека.
+ *
+ * `options.textMax` — предел текстов, как у `compactWorkMap`: сокращает длинные поля карты и письма кандидатов.
+ */
+export function mailWorkMap(map: WorkMap, letters: LetterReader, options: { textMax?: number } = {}): WindowWorkMap {
+  const textMax = options.textMax ?? WINDOW_TEXT_MAX;
+  const cuts: CutRecord[] = [];
+  const omitted: Record<string, number> = {};
+
+  const unread = letters.unreadCount(HUMAN);
+  const channels: Array<{ key: string; roomId: string | null }> = [{ key: '', roomId: null }];
+  for (const room of map.rooms) channels.push({ key: room.id, roomId: room.id });
+  const rooms: MapCompactMail['rooms'] = {};
+  for (const { key, roomId } of channels) {
+    const newest = letters.page({ roomId, newestFirst: true, limit: 1 })[0];
+    rooms[key] = {
+      total: letters.count({ roomId }),
+      top: newest === undefined ? 0 : seqOf(newest.id, 'm-'),
+      lastAt: newest?.at ?? null,
+      unread: unread.byRoom[key] ?? 0,
+      // Решение — письмо в комнату: у прямых писем ответов на решение нет.
+      decision: roomId === null ? null : lastHumanDecision(letters, roomId),
+    };
+  }
+  const mentionCandidates = humanMentionCandidates(letters.humanUnread(WINDOW_UNREAD_MAX), textMax);
+
+  return {
+    ...windowMapBase(map, textMax, cuts, omitted),
+    messages: [],
+    compact: {
+      version: 2,
+      rooms,
+      unread: { letters: unread.total, rooms: unread.byRoom },
+      mentionCandidates,
       cut: cuts.slice(0, MAX_CUT_RECORDS),
       omitted,
     },
@@ -554,24 +829,14 @@ export const TOPOLOGY_PAGES =
 
 /**
  * Топология для агента: участники, статусы, комнаты, действующие ревизии планов, счётчики и курсоры. Размер
- * зависит от числа сессий и комнат, а не от длины переписки; письма, история и артефакты — страницами.
+ * зависит от числа сессий и комнат, а не от длины переписки; письма, история и артефакты — страницами. Счётчики и
+ * курсоры писем даёт `letters` (спека хранилища 6.2): итоги каналов и непрочитанное вызывающей сессии.
  */
-export function mapTopology(map: WorkMap, callerId: string | null): MapTopology {
+export function mapTopology(map: WorkMap, callerId: string | null, letters: LetterReader): MapTopology {
   const workCut: Cut = {};
-  const unreadList = callerId === null ? [] : unreadFor(map, callerId);
-  const unreadRooms: Record<string, number> = {};
-  let unreadDirect = 0;
-  for (const message of unreadList) {
-    if (message.roomId === null) unreadDirect += 1;
-    else unreadRooms[message.roomId] = (unreadRooms[message.roomId] ?? 0) + 1;
-  }
-  const perRoom = new Map<string | null, { total: number; latestId: string | null }>();
-  for (const message of map.messages) {
-    const entry = perRoom.get(message.roomId) ?? { total: 0, latestId: null };
-    entry.total += 1;
-    entry.latestId = message.id;
-    perRoom.set(message.roomId, entry);
-  }
+  const unread = callerId === null ? { total: 0, byRoom: {} as Record<string, number> } : letters.unreadCount(callerId);
+  const { '': unreadDirect = 0, ...unreadRooms } = unread.byRoom;
+  const stats = letters.channelStats();
 
   const sessions = map.sessions.map((session): SessionTopology => {
     const cut: Cut = {};
@@ -605,7 +870,7 @@ export function mapTopology(map: WorkMap, callerId: string | null): MapTopology 
 
   const rooms = map.rooms.map((room): RoomTopology => {
     const cut: Cut = {};
-    const counted = perRoom.get(room.id) ?? { total: 0, latestId: null };
+    const counted = stats[room.id] ?? { total: 0, latestId: null };
     const proposal = room.proposal ?? null;
     let waiting: RoomTopology['proposal'] = null;
     if (proposal !== null) {
@@ -652,7 +917,8 @@ export function mapTopology(map: WorkMap, callerId: string | null): MapTopology 
       };
     });
 
-  const direct = perRoom.get(null) ?? { total: 0, latestId: null };
+  const direct = stats[''] ?? { total: 0, latestId: null };
+  const all = totalsOf(stats);
   const goal = bounded(map.work.goal, TOPOLOGY_LIMITS.goal, 'goal', workCut);
   const title = bounded(map.work.title, TOPOLOGY_LIMITS.title, 'title', workCut);
   return {
@@ -671,10 +937,10 @@ export function mapTopology(map: WorkMap, callerId: string | null): MapTopology 
     rooms,
     plans,
     messages: {
-      total: map.messages.length,
-      latestId: map.messages.at(-1)?.id ?? null,
+      total: all.total,
+      latestId: all.latestId,
       direct,
-      unreadForYou: { total: unreadList.length, rooms: unreadRooms, direct: unreadDirect },
+      unreadForYou: { total: unread.total, rooms: unreadRooms, direct: unreadDirect },
     },
     pages: TOPOLOGY_PAGES,
   };

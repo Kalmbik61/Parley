@@ -1,14 +1,19 @@
-import { chmod, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addSession, createWork, readMap, readWorksIndex, transitionSession, updateMap, workPaths } from '@parley/core';
-import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
+import { addRoom, addSession, createWork, readMap, readWorksIndex, transitionSession, updateMap, workPaths } from '@parley/core';
+import { COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE } from '@parley/protocol';
+import { connectRaw, hello, holdDatabase, removeHome, tempHome, waitConnected } from '../../test/helpers.js';
 import type { RawMessage, TestClient } from '../../test/helpers.js';
 import { startHost } from '../host.js';
 import type { RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
+
+/** Второе соединение с базой дома — испортить строку работы, как это сделал бы чужой процесс или диск. */
+const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
 
 let hosts: RunningHost[] = [];
 let homes: string[] = [];
@@ -39,7 +44,7 @@ afterEach(async () => {
 });
 
 describe('works.create / works.delete', () => {
-  it('works.create заводит каталог и запись индекса', async () => {
+  it('works.create заводит каталог и строку работы в базе', async () => {
     const { home, token } = await boot();
     const dir = await project();
     const client = connectRaw(hostPaths(home).socket);
@@ -58,7 +63,7 @@ describe('works.create / works.delete', () => {
     expect((await readWorksIndex()).works).toContainEqual(
       expect.objectContaining({ id: workId, projectPath: dir, title: 'Авторизация' }),
     );
-    expect(await readFile(workPaths(dir, workId).map, 'utf8')).toContain('Авторизация');
+    expect((await readMap(dir, workId)).work.title).toBe('Авторизация');
 
     client.close();
   });
@@ -83,8 +88,8 @@ describe('works.create / works.delete', () => {
     client.send({ id: 2, method: 'works.delete', params: { projectPath: dir, workId } });
     const response = await client.next();
     expect(response.error).toMatchObject({ code: 'conflict', message: `workspace ${workId} has a live session` });
-    // Работа осталась на диске.
-    expect(await readFile(workPaths(dir, workId).map, 'utf8')).toContain('Работа');
+    // Работа осталась в базе.
+    expect((await readMap(dir, workId)).work.title).toBe('Работа');
 
     client.close();
   });
@@ -130,15 +135,6 @@ describe('works.create: первая работа нового проекта б
     await waitConnected(client.socket);
     await hello(client, token);
 
-    // Запись карты медленнее чтения списка по событию индекса — так бывает под нагрузкой
-    // (E2E куска 3.5). Детерминированно: чужой map.lock будущей w-0001 держится 500 мс.
-    const lock = workPaths(dir, 'w-0001').lock;
-    await mkdir(path.dirname(lock), { recursive: true });
-    await writeFile(lock, '');
-    const released = new Promise<void>((resolve) => {
-      setTimeout(() => void rm(lock, { force: true }).then(() => resolve()), 500);
-    });
-
     client.send({ id: 1, method: 'works.create', params: { projectPath: dir, title: 'Новая', goal: '' } });
     let workId: string | null = null;
     let changed = false;
@@ -146,7 +142,7 @@ describe('works.create: первая работа нового проекта б
       (data as { entries: Array<{ projectPath: string; map: { work: { id: string } } }> }).entries.some(
         (entry) => entry.projectPath === dir && entry.map.work.id === workId,
       );
-    // Ни одна запись карты после создания не случается — снимок обязан обновиться сам.
+    // Ни одна запись карты после создания не случается — снимок обязан обновиться сам: строка работы создаётся одной записью базы.
     const deadline = Date.now() + 3000;
     while (!changed && Date.now() < deadline) {
       const message = await nextWithin(client, deadline - Date.now());
@@ -156,7 +152,6 @@ describe('works.create: первая работа нового проекта б
         changed = true;
       }
     }
-    await released;
     expect(workId).toBe('w-0001');
     expect(changed).toBe(true);
 
@@ -177,7 +172,7 @@ async function reply(client: TestClient, id: number): Promise<RawMessage> {
 }
 
 describe('works.rename / works.setStatus', () => {
-  async function withWork(): Promise<{ client: TestClient; dir: string; workId: string }> {
+  async function withWork(): Promise<{ client: TestClient; dir: string; workId: string; home: string }> {
     const { home, token } = await boot();
     const dir = await project();
     const client = connectRaw(hostPaths(home).socket);
@@ -185,7 +180,7 @@ describe('works.rename / works.setStatus', () => {
     await hello(client, token);
     client.send({ id: 1, method: 'works.create', params: { projectPath: dir, title: 'Старая', goal: '' } });
     const workId = ((await reply(client, 1)).result as { workId: string }).workId;
-    return { client, dir, workId };
+    return { client, dir, workId, home };
   }
 
   it('works.rename с пустым названием — bad_request, карта не тронута', async () => {
@@ -197,7 +192,7 @@ describe('works.rename / works.setStatus', () => {
     client.close();
   });
 
-  it('works.rename меняет название в карте на диске', async () => {
+  it('works.rename меняет название в карте', async () => {
     const { client, dir, workId } = await withWork();
 
     client.send({ id: 2, method: 'works.rename', params: { projectPath: dir, workId, title: '  Новая  ' } });
@@ -206,7 +201,7 @@ describe('works.rename / works.setStatus', () => {
     client.close();
   });
 
-  it('works.setStatus пишет статус в карту на диске', async () => {
+  it('works.setStatus пишет статус в карту', async () => {
     const { client, dir, workId } = await withWork();
 
     client.send({ id: 2, method: 'works.setStatus', params: { projectPath: dir, workId, status: 'done' } });
@@ -232,26 +227,43 @@ describe('works.rename / works.setStatus', () => {
     client.close();
   });
 
+  it('работа, которую база хранит, но разобрать нельзя, — internal, а не not_found', async () => {
+    const { client, dir, workId, home } = await withWork();
+    // Строка работы на месте (`requireWork` её видит), а карта из неё не собирается; версия растёт, чтобы кэш карт не спас запись.
+    const db = new DatabaseSync(path.join(home, 'parley.db'));
+    try {
+      db.prepare('UPDATE works SET work_json = ?, version = version + 1 WHERE project_path = ? AND id = ?').run('not json', dir, workId);
+    } finally {
+      db.close();
+    }
+
+    client.send({ id: 2, method: 'works.rename', params: { projectPath: dir, workId, title: 'Икс' } });
+    const renamed = (await reply(client, 2)).error;
+    client.send({ id: 3, method: 'works.setStatus', params: { projectPath: dir, workId, status: 'archived' } });
+    const archived = (await reply(client, 3)).error;
+
+    for (const error of [renamed, archived]) {
+      expect(error?.code).toBe('internal');
+      expect(error?.code).not.toBe('not_found');
+    }
+    client.close();
+  });
+
   // Раунд исправлений 1, находка 2: работу удалили между проверкой обработчика и
-  // записью. Лок карты занят заранее, чтобы запрос гарантированно встал в
-  // ожидание уже после проверки, — иначе гонку почти всегда выигрывает not_found.
+  // записью. База занята заранее другим процессом, который внутри захвата снимает работу: запрос
+  // гарантированно встаёт в ожидание уже после проверки, — иначе гонку почти всегда выигрывает not_found.
   for (const [method, extra] of [
     ['works.rename', { title: 'Икс' }],
     ['works.setStatus', { status: 'archived' }],
   ] as const) {
-    it(`${method}: работа удалена, пока запись ждала map.lock — not_found, хост жив`, async () => {
-      const { client, dir, workId } = await withWork();
-      const paths = workPaths(dir, workId);
-      const held = await open(paths.lock, 'wx');
+    it(`${method}: работа удалена, пока запись ждала базу — not_found, хост жив`, async () => {
+      const { client, dir, workId, home } = await withWork();
+      const held = await holdDatabase(home, 300, { projectPath: dir, workId });
 
       client.send({ id: 2, method, params: { projectPath: dir, workId, ...extra } });
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      await held.close();
-      // Каталог уносится одним rename, а не rm: ожидающий писатель мог бы создать лок в
-      // каталоге посреди рекурсивного удаления, и rm упал бы с ENOTEMPTY.
-      await rename(paths.dir, path.join(dir, 'gone-work'));
 
       expect((await reply(client, 2)).error?.code).toBe('not_found');
+      await held.done;
       client.send({ id: 3, method: 'works.list', params: {} });
       expect((await reply(client, 3)).result).toBeDefined();
       client.close();
@@ -378,12 +390,58 @@ describe('settings.get / settings.set', () => {
   });
 });
 
+describe('works.list по признакам окна (спека rooms.mail 6.8, 6.10)', () => {
+  it('окно с rooms-mail получает снимок без писем, окно с compact-works — с хвостами, прежнее — полный: тот же вариант, что и в works.changed', async () => {
+    const home = await tempHome();
+    homes.push(home);
+    const dir = await project();
+    const previousHome = process.env['PARLEY_HOME'];
+    process.env['PARLEY_HOME'] = home;
+    const map = await createWork(dir, { title: 'Работа' });
+    await updateMap(dir, map.work.id, (current, letters) => {
+      addSession(current, { provider: 'claude', label: 'план', task: 't' });
+      addRoom(current, { title: 'Комната', creator: 'human', members: ['s-01'], lead: 's-01' });
+      for (let i = 0; i < 30; i += 1) letters.add({ kind: 'note', from: 's-01', to: [], roomId: 'r-01', text: `письмо ${i}` });
+    });
+    if (previousHome === undefined) delete process.env['PARLEY_HOME'];
+    else process.env['PARLEY_HOME'] = previousHome;
+
+    const running = await startHost({ home });
+    hosts.push(running);
+    const token = await readFile(hostPaths(home).token, 'utf8');
+    type Entry = { version?: number; map: { messages: unknown[]; compact?: { version: number; messages?: unknown; rooms?: Record<string, { total: number; top: number }> } } };
+    const list = async (features: string[]): Promise<Entry> => {
+      const client = connectRaw(hostPaths(home).socket);
+      await waitConnected(client.socket);
+      await hello(client, token, { features });
+      client.send({ id: 1, method: 'works.list', params: {} });
+      const response = await reply(client, 1);
+      client.close();
+      return (response.result as { entries: Entry[] }).entries[0] as Entry;
+    };
+
+    const mail = await list([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE]);
+    const compact = await list([COMPACT_WORKS_FEATURE]);
+    const legacy = await list([]);
+
+    expect(mail.map.messages).toEqual([]);
+    expect(mail.map.compact).toMatchObject({ version: 2, rooms: { 'r-01': { total: 30, top: 30 } } });
+    expect(mail.map.compact).not.toHaveProperty('messages');
+    expect(compact.map.messages).toHaveLength(30);
+    expect(compact.map.compact).toMatchObject({ version: 1, messages: { total: 30 } });
+    expect(legacy.map.messages).toHaveLength(30);
+    expect(legacy.map.compact).toBeUndefined();
+    expect(mail.version).toBeDefined();
+    expect(mail.version).toBe(compact.version);
+  });
+});
+
 describe('works.list на старте хоста', () => {
   it('отвечает снимком после первого чтения работ хостом, а не тем, что успело набраться до него', async () => {
     // Окно подключается сразу после listen, а хост читает работы и сверяет живость уже после
     // него. Прежде works.list в это окно отдавал недочитанный снимок (пустой — окно считало
     // работы исчезнувшими и закрывало их вкладки; или с active мёртвой сессии): fix-tests2,
-    // restart-host. Сверку здесь держит чужой map.lock — ответ обязан её дождаться.
+    // restart-host. Запись сверки здесь держит чужой процесс, занявший базу, — ответ обязан её дождаться.
     const home = await tempHome();
     homes.push(home);
     const dir = await project();
@@ -399,8 +457,7 @@ describe('works.list на старте хоста', () => {
     if (previousHome === undefined) delete process.env['PARLEY_HOME'];
     else process.env['PARLEY_HOME'] = previousHome;
 
-    const lock = workPaths(dir, map.work.id).lock;
-    await writeFile(lock, '');
+    const held = await holdDatabase(home, 300);
     const starting = startHost({ home });
     starting.then((running) => hosts.push(running)).catch(() => {});
 
@@ -415,7 +472,6 @@ describe('works.list на старте хоста', () => {
     await waitConnected(client.socket);
     await hello(client, token);
     client.send({ id: 1, method: 'works.list', params: {} });
-    setTimeout(() => void rm(lock, { force: true }), 300);
 
     // До ответа могут прийти события (works.changed первого чтения) — ищем ответ по id.
     let response = await client.next();
@@ -424,6 +480,7 @@ describe('works.list на старте хоста', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.map.sessions[0]?.lifecycle).toBe('sleeping');
     await starting;
+    await held.done;
     client.close();
   });
 });
@@ -431,7 +488,7 @@ describe('works.list на старте хоста', () => {
 describe('sessions.* на старте хоста (lane-r4, п. 4)', () => {
   it('sessions.interrupted до первого чтения работ отвечает по прочитанному снимку, а не пустым списком', async () => {
     // Окно на старте спрашивает прерванные сессии (баннер): ответ до первого чтения работ и
-    // сбора прерванных был пустым, и баннер не появлялся. Чтение держит чужой map.lock.
+    // сбора прерванных был пустым, и баннер не появлялся. Запись сверки держит чужой процесс, занявший базу.
     const home = await tempHome();
     homes.push(home);
     const dir = await project();
@@ -453,8 +510,7 @@ describe('sessions.* на старте хоста (lane-r4, п. 4)', () => {
     await mkdir(events, { recursive: true });
     await writeFile(path.join(events, `${sessionId}.jsonl`), `${JSON.stringify({ hook_event_name: 'UserPromptSubmit' })}\n`);
 
-    const lock = workPaths(dir, map.work.id).lock;
-    await writeFile(lock, '');
+    const held = await holdDatabase(home, 300);
     const starting = startHost({ home });
     starting.then((running) => hosts.push(running)).catch(() => {});
 
@@ -469,12 +525,12 @@ describe('sessions.* на старте хоста (lane-r4, п. 4)', () => {
     await waitConnected(client.socket);
     await hello(client, token);
     client.send({ id: 1, method: 'sessions.interrupted', params: {} });
-    setTimeout(() => void rm(lock, { force: true }), 300);
 
     let response = await client.next();
     while (response.id !== 1) response = await client.next();
     expect(response.result).toEqual({ refs: [{ projectPath: dir, workId: map.work.id, sessionId }] });
     await starting;
+    await held.done;
     client.close();
   });
 });

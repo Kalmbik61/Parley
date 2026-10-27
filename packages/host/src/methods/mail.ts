@@ -11,8 +11,8 @@ import { notFoundOnGone, requireWork } from './works.js';
 
 export const mailMarkRead: Handler<'mail.markRead'> = async (params) => {
   // Работы нет — not_found, как у works.rename; работу удалили, пока запись ждала
-  // map.lock, — WorkNotFoundError core, тоже not_found. Пустой итог — не ошибка.
-  await requireWork(params.projectPath, params.workId);
+  // базу, — WorkNotFoundError core, тоже not_found. Пустой итог — не ошибка.
+  requireWork(params.projectPath, params.workId);
   const marked = await markHumanRead(params.projectPath, params.workId, params.messageIds).catch(
     notFoundOnGone,
   );

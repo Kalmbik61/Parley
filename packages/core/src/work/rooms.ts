@@ -1,7 +1,8 @@
 import type { RecipeSnapshot } from '../recipes/types.js';
-import { addMessage, maxNumber } from './map.js';
-import { recipientsOf } from './letters.js';
+import type { LetterTx } from './letter-store.js';
+import { maxNumber } from './map.js';
 import { cancelActiveRoomPlan } from './plans.js';
+import { settleEffectText } from './stored-texts.js';
 import { sessionMention, sessionTag } from './thread.js';
 import { HUMAN, PARLEY, SYSTEM, type RoomMode, type Message, type Room, type WorkMap } from './types.js';
 
@@ -125,10 +126,20 @@ export function liveLead(map: WorkMap, room: Room): string | null {
   return room.members.find((id) => isAlive(map, id)) ?? null;
 }
 
-/** Убирает рабочее членство в других комнатах; владение и происхождение сохраняются. */
-export function leaveOtherRooms(map: WorkMap, sessionId: string, exceptRoomId: string, at = new Date().toISOString()): void {
+/**
+ * Убирает рабочее членство в других комнатах; владение и происхождение сохраняются. Выход из комнаты — `letters.left`
+ * (спека хранилища 6.2): рассылки комнаты сессии больше не непрочитанные.
+ */
+export function leaveOtherRooms(
+  map: WorkMap,
+  letters: LetterTx,
+  sessionId: string,
+  exceptRoomId: string,
+  at = new Date().toISOString(),
+): void {
   for (const room of map.rooms) {
     if (room.id === exceptRoomId) continue;
+    if (room.members.includes(sessionId)) letters.left(room.id, sessionId);
     room.members = room.members.filter((id) => id !== sessionId);
     if (room.lead === sessionId) room.lead = null;
     // Уход — в журнал той комнаты, у которой он есть (спека расхода токенов, 4.2).
@@ -146,13 +157,12 @@ export function leaveOtherRooms(map: WorkMap, sessionId: string, exceptRoomId: s
  */
 export function addSystemMessage(
   map: WorkMap,
+  letters: LetterTx,
   roomId: string,
   text: string,
   at = new Date().toISOString(),
 ): Message {
-  const message = addMessage(map, { from: SYSTEM, to: [HUMAN], roomId, kind: 'note', text }, at);
-  message.readBy[HUMAN] = at;
-  return message;
+  return letters.add({ from: SYSTEM, to: [HUMAN], roomId, kind: 'note', text, at, readBy: { [HUMAN]: at } });
 }
 
 /** Строка ленты о входе сессии в комнату; по ней же восстанавливается участие в старых комнатах (спека расхода токенов, 4.3). */
@@ -174,6 +184,7 @@ export function joinedLine(sessionId: string): string {
  */
 export function addMember(
   map: WorkMap,
+  letters: LetterTx,
   roomId: string,
   sessionId: string,
   at = new Date().toISOString(),
@@ -189,13 +200,17 @@ export function addMember(
     throw new RoomRuleError(`session ${sessionId} is already a participant of room ${roomId}`);
   }
 
-  leaveOtherRooms(map, sessionId, roomId, at);
-  if (!inRoom) room.members.push(sessionId);
+  leaveOtherRooms(map, letters, sessionId, roomId, at);
+  if (!inRoom) {
+    room.members.push(sessionId);
+    // Вошедшему рассылки комнаты — непрочитанные (спека хранилища 6.2).
+    letters.joined(roomId, sessionId);
+  }
   // Журнал ведут только комнаты, у которых он есть: старая восстанавливается по ленте (спека расхода токенов, 4.3).
   if (room.memberLog !== undefined && !room.memberLog.some((entry) => entry.session === sessionId && entry.to === null)) {
     room.memberLog.push({ session: sessionId, from: at, to: null });
   }
-  return addSystemMessage(map, roomId, joinedLine(sessionId), at);
+  return addSystemMessage(map, letters, roomId, joinedLine(sessionId), at);
 }
 
 /**
@@ -208,6 +223,7 @@ export function addMember(
  */
 export function addMemberByLead(
   map: WorkMap,
+  letters: LetterTx,
   roomId: string,
   leadId: string,
   sessionId: string,
@@ -222,7 +238,7 @@ export function addMemberByLead(
       `session ${leadId} is not the lead of room ${roomId}: only the lead can bring a session into the room`,
     );
   }
-  return addMember(map, roomId, sessionId, at);
+  return addMember(map, letters, roomId, sessionId, at);
 }
 
 /**
@@ -233,13 +249,14 @@ export function addMemberByLead(
  */
 export function addRoomOriginMessage(
   map: WorkMap,
+  letters: LetterTx,
   roomId: string,
   origin: readonly [string, string],
   at = new Date().toISOString(),
 ): Message {
   const [first, second] = origin;
   const text = `Room created from ${sessionMention(first)} and ${sessionMention(second)}`;
-  return addSystemMessage(map, roomId, text, at);
+  return addSystemMessage(map, letters, roomId, text, at);
 }
 
 /** Комната карты по id; нет такой — отказ запроса. */
@@ -253,7 +270,7 @@ function findRoom(map: WorkMap, roomId: string): Room {
  * Комната карты для записи в неё: найденная, а для архивной — отказ `RoomRuleError`, который хост отдаёт окну как
  * `bad_request`, а агенту текстом ошибки. Единой точки поиска комнаты в коде нет, поэтому этот хелпер ставят на пути
  * записи (письмо, вход в комнату, решение, план, режим, ведущий); пути чтения — лента, `get_map {room}`, страницы писем —
- * его не зовут. `addSystemMessage` и `addMessage` проверки не делают: строки об архивации и возврате должны проходить.
+ * его не зовут. `addSystemMessage` и `letters.add` проверки не делают: строки об архивации и возврате должны проходить.
  */
 export function requireOpenRoom(map: WorkMap, roomId: string): Room {
   const room = findRoom(map, roomId);
@@ -299,10 +316,8 @@ export function renameSession(map: WorkMap, sessionId: string, label: string): v
  * Адресату-сессии письмо непрочитано и будит её обычным будильником. Экспорт — для хоста: письма службы «застрял»
  * (спека застрявших 5.2) пишутся тем же способом, что и письма о смене ведущего.
  */
-export function parleyNote(map: WorkMap, roomId: string, to: string, text: string, at: string): Message {
-  const message = addMessage(map, { from: PARLEY, to: [to], roomId, kind: 'note', text }, at);
-  message.readBy[HUMAN] = at;
-  return message;
+export function parleyNote(map: WorkMap, letters: LetterTx, roomId: string, to: string, text: string, at: string): Message {
+  return letters.add({ from: PARLEY, to: [to], roomId, kind: 'note', text, at, readBy: { [HUMAN]: at } });
 }
 
 export interface LeadChange {
@@ -324,6 +339,7 @@ export interface LeadChange {
  */
 export function setRoomLead(
   map: WorkMap,
+  letters: LetterTx,
   roomId: string,
   sessionId: string,
   at = new Date().toISOString(),
@@ -339,11 +355,12 @@ export function setRoomLead(
   if (previous === sessionId) throw new RoomRuleError(`session ${sessionId} already leads room ${roomId}`);
 
   room.lead = sessionId;
-  const line = addSystemMessage(map, roomId, `${sessionMention(sessionId)} is now the lead`, at);
+  const line = addSystemMessage(map, letters, roomId, `${sessionMention(sessionId)} is now the lead`, at);
   const where = `room ${room.id} "${room.title}"`;
-  const letters = [
+  const notes = [
     parleyNote(
       map,
+      letters,
       roomId,
       sessionId,
       `You now lead ${where}: the human made you the lead. Collect the participants' positions and bring the human a decision with propose_decision (read_guide topic: lead).`,
@@ -351,9 +368,10 @@ export function setRoomLead(
     ),
   ];
   if (previous !== null) {
-    letters.push(
+    notes.push(
       parleyNote(
         map,
+        letters,
         roomId,
         previous,
         `${sessionMention(sessionId)} now leads ${where}: the human changed the lead. You are a regular participant now (read_guide topic: member).`,
@@ -361,7 +379,7 @@ export function setRoomLead(
       ),
     );
   }
-  return { line, letters };
+  return { line, letters: notes };
 }
 
 /**
@@ -378,17 +396,17 @@ export function setRoomLead(
  * решения и планов не переиспользуются: счётчики работы запоминают их до удаления записей, как `removeSession` —
  * номер сессии. Возвращает эти письма.
  */
-export function deleteRoom(map: WorkMap, roomId: string, at = new Date().toISOString()): Message[] {
+export function deleteRoom(map: WorkMap, letters: LetterTx, roomId: string, at = new Date().toISOString()): Message[] {
   const room = findRoom(map, roomId);
   const plans = new Set((map.plans ?? []).filter((plan) => plan.roomId === roomId).map((plan) => plan.id));
   const { work } = map;
   work.roomSeq = Math.max(work.roomSeq ?? 0, maxNumber([room.id], 'r-'));
-  work.messageSeq = Math.max(work.messageSeq ?? 0, maxNumber(map.messages.map((message) => message.id), 'm-'));
   if (room.proposal !== null) work.proposalSeq = Math.max(work.proposalSeq ?? 0, maxNumber([room.proposal.id], 'p-'));
   if (plans.size > 0) work.planSeq = Math.max(work.planSeq ?? 0, maxNumber([...plans], 'pl-'));
 
   map.rooms = map.rooms.filter((candidate) => candidate !== room);
-  map.messages = map.messages.filter((message) => message.roomId !== roomId);
+  // Письма комнаты уходят, а `work.messageSeq` запоминает их наибольший номер (спека хранилища 6.2).
+  letters.deleteRoom(roomId);
   if (map.plans !== undefined) map.plans = map.plans.filter((plan) => plan.roomId !== roomId);
   if (map.planEffects !== undefined) map.planEffects = map.planEffects.filter((effect) => effect.roomId !== roomId);
   if (map.planBacklogIntents !== undefined) {
@@ -410,7 +428,7 @@ export function deleteRoom(map: WorkMap, roomId: string, at = new Date().toISOSt
       ) &&
       !map.rooms.some((other) => isMember(other, id)),
   );
-  return notified.map((id) => addMessage(map, { from: PARLEY, to: [id], text }, at));
+  return notified.map((id) => letters.add({ from: PARLEY, to: [id], roomId: null, text, kind: 'note', at }));
 }
 
 /**
@@ -426,18 +444,25 @@ export function deleteRoom(map: WorkMap, roomId: string, at = new Date().toISOSt
  * человека и без сессий, которых уже нет в карте), не числящиеся в другой неархивной комнате. Правило то же, что у
  * прощальных писем `deleteRoom`. Остановить их и написать им, кого не остановили, — дело хоста.
  */
-export function archiveRoom(map: WorkMap, roomId: string, at = new Date().toISOString()): string[] {
+export function archiveRoom(map: WorkMap, letters: LetterTx, roomId: string, at = new Date().toISOString()): string[] {
   if (isRoomArchived(findRoom(map, roomId))) return [];
 
-  cancelActiveRoomPlan(map, roomId, at);
+  cancelActiveRoomPlan(map, letters, roomId, at);
   for (const effect of map.planEffects ?? []) {
-    if (effect.roomId === roomId && effect.status === 'queued') effect.status = 'cancelled';
+    if (effect.roomId === roomId && effect.status === 'queued') {
+      effect.status = 'cancelled';
+      // `effectCancelled` не нужен: у эффекта в `queued` `messageId === null`, письма, чьи кандидаты снимать, ещё нет.
+      // Письмо этого эффекта не уходило, и текст ему больше не нужен: остаётся хэш (спека хранилища 6.2).
+      settleEffectText(effect);
+    }
   }
   // Отмена плана подменяет `map.rooms` копией (`edit` в plans.ts): запись комнаты ищем заново, а не держим прежнюю ссылку.
   const room = findRoom(map, roomId);
   room.proposal = null;
-  addSystemMessage(map, roomId, 'Room archived by the human.', at);
+  addSystemMessage(map, letters, roomId, 'Room archived by the human.', at);
   room.archivedAt = at;
+  // Письма комнаты адресатов больше не имеют (`recipientsOf`): кандидаты в непрочитанное снимаются (спека хранилища 6.2).
+  letters.archived(roomId);
 
   return [...new Set(room.members)].filter(
     (id) =>
@@ -458,6 +483,7 @@ export function archiveRoom(map: WorkMap, roomId: string, at = new Date().toISOS
  */
 export function addRoomArchivedLetters(
   map: WorkMap,
+  letters: LetterTx,
   roomId: string,
   sessionIds: readonly string[],
   at = new Date().toISOString(),
@@ -470,7 +496,7 @@ export function addRoomArchivedLetters(
         map.sessions.some((session) => session.id === id && session.lifecycle === 'active') &&
         !map.rooms.some((other) => !isRoomArchived(other) && isMember(other, id)),
     )
-    .map((id) => addMessage(map, { from: PARLEY, to: [id], text }, at));
+    .map((id) => letters.add({ from: PARLEY, to: [id], roomId: null, text, kind: 'note', at }));
 }
 
 /**
@@ -481,15 +507,12 @@ export function addRoomArchivedLetters(
  * Письма ленты, не прочитанные до архивации, после возврата снова стали бы непрочитанными (`recipientsOf`) и будильник
  * поднял бы спящих участников — поэтому старые письма комнаты помечаются прочитанными её участниками.
  */
-export function reopenRoom(map: WorkMap, roomId: string, at = new Date().toISOString()): void {
+export function reopenRoom(map: WorkMap, letters: LetterTx, roomId: string, at = new Date().toISOString()): void {
   const room = findRoom(map, roomId);
   if (!isRoomArchived(room)) return;
   room.archivedAt = null;
-  for (const message of map.messages) {
-    if (message.roomId !== roomId) continue;
-    for (const id of recipientsOf(message, map)) message.readBy[id] ??= at;
-  }
-  addSystemMessage(map, roomId, 'Room reopened by the human.', at);
+  letters.reopened(roomId, at);
+  addSystemMessage(map, letters, roomId, 'Room reopened by the human.', at);
 }
 
 /**

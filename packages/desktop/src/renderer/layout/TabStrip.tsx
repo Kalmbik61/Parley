@@ -43,7 +43,7 @@ import { useDroppable } from '@dnd-kit/core';
 import { horizontalListSortingStrategy, SortableContext, useSortable } from '@dnd-kit/sortable';
 import { Plus } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
-import type { Activity, WorkEntry } from '@parley/core';
+import type { Activity, WindowWorkEntry } from '@parley/core';
 import { dotState, liveStatus } from '@parley/core/session-state';
 import type { SessionRef } from '@parley/protocol';
 import type { GroupNode } from '../../shared/layout-types.js';
@@ -61,7 +61,7 @@ import { useTabMetaExtras } from './use-tab-meta-extras.js';
 export interface TabStripProps {
   workKey: string;
   group: GroupNode;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   /** Одна группа на всю работу — строка портали­руется в `#titlebar-tabs` (спека 5.3). */
   portal: boolean;
   /** Работа активна: у неактивной зоны броска выключены (кусок 2.6). */

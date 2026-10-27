@@ -10,7 +10,7 @@
  * `@parley/core/names` и `/resource-policy`), из него — имя сессии по умолчанию.
  */
 
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { defaultSessionName, NEW_LABEL } from '@parley/core/session-names';
 import type { SessionRef } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
@@ -75,7 +75,7 @@ export function sessionRowLabel(sessionId: string, label: string): string {
  * сессия/работа уже пропали из снимка — `undefined`: `noticeText` тогда даёт
  * фразу без ярлыка, а не подставляет что попало.
  */
-export function sessionLabelFor(entries: readonly WorkEntry[], ref: SessionRef | null): string | undefined {
+export function sessionLabelFor(entries: readonly WindowWorkEntry[], ref: SessionRef | null): string | undefined {
   if (ref === null) return undefined;
   const entry = entries.find((item) => item.projectPath === ref.projectPath && item.map.work.id === ref.workId);
   const session = entry?.map.sessions.find((candidate) => candidate.id === ref.sessionId);

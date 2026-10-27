@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { workPaths } from './work/store.js';
+import { closeWorkDb } from './work/db.js';
+import { readStoredMap, readWorksIndex, setWorkStatus, workPaths } from './work/store.js';
 import type { WorkIndexEntry, WorkMap, WorksIndex } from './work/types.js';
 
 const run = promisify(execFile);
@@ -62,11 +63,13 @@ async function okEnv(extra: NodeJS.ProcessEnv, ...args: string[]): Promise<Recor
   return JSON.parse(result.stdout) as Record<string, unknown>;
 }
 
-const readMapFile = async (workId: string): Promise<WorkMap> =>
-  JSON.parse(await readFile(workPaths(project, workId).map, 'utf8')) as WorkMap;
+/**
+ * Карты и список живут в базе дома. CLI идёт отдельным процессом с `PARLEY_HOME=home`; сам тест читает ту же базу
+ * через `PARLEY_HOME` своего процесса (`beforeEach`), а не файлы: `map.json` и `works-index.json` больше не пишутся.
+ */
+const storedMap = (workId: string): WorkMap => readStoredMap(project, workId);
 
-const readIndexFile = async (): Promise<WorksIndex> =>
-  JSON.parse(await readFile(path.join(home, 'works-index.json'), 'utf8')) as WorksIndex;
+const readIndex = (): Promise<WorksIndex> => readWorksIndex();
 
 const newWork = (title: string): Promise<Record<string, unknown>> =>
   ok('work', 'new', '--title', title, '--goal', 'Цель', '--cwd', project);
@@ -75,6 +78,7 @@ beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-home-'));
   project = await mkdtemp(path.join(tmpdir(), 'parley-project-'));
   binDir = await mkdtemp(path.join(tmpdir(), 'parley-bin-'));
+  process.env.PARLEY_HOME = home;
   stub = path.join(binDir, 'agent-stub');
   // `--version` заглушка отвечает свежей сборкой: перед флагом канала CLI
   // пробует версию (разговор агентов, 4.4).
@@ -82,13 +86,15 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  closeWorkDb();
+  delete process.env.PARLEY_HOME;
   await rm(home, { recursive: true, force: true });
   await rm(project, { recursive: true, force: true });
   await rm(binDir, { recursive: true, force: true });
 });
 
 describe('parley-core work prune', () => {
-  it('печатает снятые записи и оставляет в индексе только работы с картой', async () => {
+  it('печатает снятые записи и оставляет в списке только работы с каталогом', async () => {
     await newWork('Живая');
     await newWork('Снесённая');
     await rm(workPaths(project, 'w-0002').dir, { recursive: true, force: true });
@@ -96,12 +102,16 @@ describe('parley-core work prune', () => {
     const removed = (await ok('work', 'prune')) as unknown as WorksIndex['works'];
 
     expect(removed).toEqual([expect.objectContaining({ id: 'w-0002', title: 'Снесённая' })]);
-    expect((await readIndexFile()).works.map((work) => work.id)).toEqual(['w-0001']);
+    expect((await readIndex()).works.map((work) => work.id)).toEqual(['w-0001']);
+    // Работа снята вместе с письмами и планами — JSON-копия карты лежит в доме.
+    const copies = await readdir(path.join(home, 'pruned'));
+    expect(copies).toEqual([expect.stringMatching(/^w-0002-\d{4}-\d{2}-\d{2}T\d{6}\.\d{3}Z\.json$/)]);
+    expect((JSON.parse(await readFile(path.join(home, 'pruned', copies[0]!), 'utf8')) as WorkMap).work.title).toBe('Снесённая');
   }, 60_000);
 });
 
 describe('parley-core work new', () => {
-  it('создаёт работу, карту на диске и запись в глобальном индексе', async () => {
+  it('создаёт работу, её строки в базе и запись в списке; файла карты и индекса нет', async () => {
     const created = await newWork('Авторизация');
     const map = created['map'] as WorkMap;
     expect(created['projectPath']).toBe(project);
@@ -110,11 +120,13 @@ describe('parley-core work new', () => {
     expect(map.work.goal).toBe('Цель');
     expect(map.work.status).toBe('active');
 
-    expect((await readMapFile('w-0001')).work.id).toBe('w-0001');
-    const index = await readIndexFile();
+    expect(storedMap('w-0001').work.id).toBe('w-0001');
+    const index = await readIndex();
     expect(index.works).toEqual([
       expect.objectContaining({ id: 'w-0001', projectPath: project, title: 'Авторизация' }),
     ]);
+    await expect(stat(workPaths(project, 'w-0001').map)).rejects.toThrow();
+    await expect(stat(path.join(home, 'works-index.json'))).rejects.toThrow();
   }, 60_000);
 
   it('без --title — ошибка в stderr, stdout пуст', async () => {
@@ -126,14 +138,13 @@ describe('parley-core work new', () => {
 });
 
 describe('parley-core work list', () => {
-  it('печатает работы индекса, archived — только с --all', async () => {
+  it('печатает работы из списка в базе, archived — только с --all', async () => {
     await newWork('Авторизация');
     await newWork('Платежи');
 
-    const index = await readIndexFile();
+    const index = await readIndex();
     const second = index.works.find((work) => work.title === 'Платежи') as WorkIndexEntry;
-    second.status = 'archived';
-    await writeFile(path.join(home, 'works-index.json'), JSON.stringify(index, null, 2), 'utf8');
+    await setWorkStatus(project, second.id, 'archived');
 
     const visible = JSON.parse((await cli('work', 'list')).stdout) as WorkIndexEntry[];
     expect(visible.map((work) => work.title)).toEqual(['Авторизация']);
@@ -144,7 +155,7 @@ describe('parley-core work list', () => {
 });
 
 describe('parley-core work map', () => {
-  it('находит работу по глобальному индексу без --cwd', async () => {
+  it('находит работу по списку в базе без --cwd', async () => {
     await newWork('Авторизация');
     const printed = await ok('work', 'map', '--work', 'w-0001');
     expect(printed['projectPath']).toBe(project);
@@ -155,7 +166,8 @@ describe('parley-core work map', () => {
     const result = await cli('work', 'map', '--work', 'w-9999');
     expect(result.code).toBe(1);
     expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('workspace w-9999 is not in');
+    expect(result.stderr).toContain('workspace w-9999 is not in the workspace list — pass --cwd');
+    expect(result.stderr).not.toContain('works-index.json');
   }, 60_000);
 });
 
@@ -163,12 +175,12 @@ describe('parley-core work session new', () => {
   it('GLM refuses a secret-dependent command before writing the map even with a saved key', async () => {
     await newWork('GLM');
     await writeFile(path.join(home, 'secrets.json'), JSON.stringify({ zai: { key: 'fake-zai-key' } }));
-    const before = await readMapFile('w-0001');
+    const before = storedMap('w-0001');
     const result = await cli('work', 'session', 'new', '--work', 'w-0001', '--provider', 'glm', '--label', 'test', '--task', 'test');
     expect(result.code).not.toBe(0);
     expect(result.stderr).toMatch(/host/i);
     expect(result.stderr).not.toContain('fake-zai-key');
-    expect(await readMapFile('w-0001')).toEqual(before);
+    expect(storedMap('w-0001')).toEqual(before);
   });
   it('аккаунт подписки: напечатанная команда не знает его папку настроек — отказ до записи карты (спека подписок 5.3)', async () => {
     await newWork('Аккаунт');
@@ -176,12 +188,12 @@ describe('parley-core work session new', () => {
       path.join(home, 'custom-providers.json'),
       JSON.stringify({ version: 1, providers: [{ kind: 'claude-account', id: 'custom-claude-2', label: '', link: false }] }),
     );
-    const before = await readMapFile('w-0001');
+    const before = storedMap('w-0001');
     const result = await cli('work', 'session', 'new', '--work', 'w-0001', '--provider', 'custom-claude-2', '--label', 'test', '--task', 'test');
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('requires launch through the Parley host');
     expect(result.stdout).toBe('');
-    expect(await readMapFile('w-0001')).toEqual(before);
+    expect(storedMap('w-0001')).toEqual(before);
   }, 60_000);
   it('навигатор включён по умолчанию: снимок в конфиге MCP — 1, а PARLEY_SKILL_NAVIGATOR=0 его выключает', async () => {
     await newWork('Навигатор');
@@ -247,7 +259,7 @@ describe('parley-core work session new', () => {
     expect(guidance).toContain('s-01');
     expect(guidance).toContain('read_guide');
 
-    const map = await readMapFile('w-0001');
+    const map = storedMap('w-0001');
     expect(map.sessions).toHaveLength(1);
     expect(map.sessions[0]).toMatchObject({
       id: 's-01',
@@ -330,7 +342,7 @@ describe('parley-core work session new', () => {
     expect(args).not.toContain(brief);
     expect(args[args.indexOf('--append-system-prompt') + 1]).toBe(guidance);
     expect(args.at(-1)).toBe('server:parley');
-    expect((await readMapFile('w-0001')).sessions[0]?.task).toBe('');
+    expect(storedMap('w-0001').sessions[0]?.task).toBe('');
   }, 60_000);
 
   it('печатает команду с флагом канала, а конфиг MCP — с PARLEY_CHANNEL', async () => {
@@ -456,7 +468,7 @@ describe('parley-core work session new', () => {
 
     const args = printed['args'] as string[];
     expect(args[args.indexOf('--agent') + 1]).toBe('reviewer');
-    expect((await readMapFile('w-0001')).sessions[0]?.role).toEqual({ source: 'claude', name: 'reviewer' });
+    expect(storedMap('w-0001').sessions[0]?.role).toEqual({ source: 'claude', name: 'reviewer' });
   }, 60_000);
 
   it('агента без определения и провайдера без роли CLI отвергает до записи', async () => {
@@ -496,7 +508,7 @@ describe('parley-core work session new', () => {
     expect(foreign.code).toBe(1);
     expect(foreign.stderr).toContain('role-provider-mismatch');
 
-    expect((await readMapFile('w-0001')).sessions).toHaveLength(0);
+    expect(storedMap('w-0001').sessions).toHaveLength(0);
   }, 60_000);
 
   it('провайдеру без внешнего id uuid не выдаётся, конфиг уходит в аргументы', async () => {
@@ -521,7 +533,7 @@ describe('parley-core work session new', () => {
     // Хуки — возможность Claude Code: чужому провайдеру файл настроек не пишется.
     expect(printed['settings']).toBeNull();
     expect(args[args.indexOf('-c') + 1]).toContain('mcp_servers.parley=');
-    expect((await readMapFile('w-0001')).sessions[0]?.providerSessionId).toBeNull();
+    expect(storedMap('w-0001').sessions[0]?.providerSessionId).toBeNull();
   }, 60_000);
 
   it('codex: напечатанная команда — та же, что запускает окно: PARLEY_* в env сервера, notify человека не подменяется', async () => {
@@ -598,7 +610,7 @@ describe('parley-core work session new', () => {
     );
 
     expect(printed['sessionId']).toBe('s-02');
-    expect((await readMapFile('w-0001')).sessions[1]?.contextFrom).toEqual(['s-01']);
+    expect(storedMap('w-0001').sessions[1]?.contextFrom).toEqual(['s-01']);
     expect(await readFile(printed['brief'] as string, 'utf8')).toContain('s-01');
   }, 60_000);
 
@@ -622,7 +634,7 @@ describe('parley-core work session new', () => {
     expect(result.code).toBe(1);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('session s-07 is not in the map');
-    expect((await readMapFile('w-0001')).sessions).toHaveLength(0);
+    expect(storedMap('w-0001').sessions).toHaveLength(0);
   }, 60_000);
 
   it('неизвестный провайдер и команда не из PATH — ошибка, записи в карте нет', async () => {
@@ -661,7 +673,7 @@ describe('parley-core work session new', () => {
     expect(missing.stdout).toBe('');
     expect(missing.stderr).toContain('requires launch through the Parley host');
 
-    expect((await readMapFile('w-0001')).sessions).toHaveLength(0);
+    expect(storedMap('w-0001').sessions).toHaveLength(0);
   }, 60_000);
 
   it('без --work и с неизвестной подкомандой — ошибка, stdout пуст', async () => {
@@ -685,6 +697,9 @@ describe('parley-core work session new', () => {
     expect(nonsense.stdout).toBe('');
     expect(nonsense.stderr).toContain('Unknown command: work чепуха');
     expect(nonsense.stderr).toContain('a new workspace in the project');
+    expect(nonsense.stderr).toContain('delete from the database the workspaces');
+    expect(nonsense.stderr).toContain('whose project or folder is gone');
+    expect(nonsense.stderr).toContain('copy of each goes to <home>/pruned/');
   }, 60_000);
 });
 
@@ -693,7 +708,7 @@ describe('source-qualified role CLI compatibility', () => {
   it('writes only the builtin role and delivers mandatory text/permissions in quiet launch argv', async () => {
     await newWork('Roles');
     const printed = await ok('work', 'session', 'new', '--work', 'w-0001', '--provider', 'claude', '--label', 'Plan', '--role', 'builtin:planner');
-    const created = (await readMapFile('w-0001')).sessions[0]!;
+    const created = storedMap('w-0001').sessions[0]!;
     expect(created.role).toEqual({ source: 'builtin', name: 'planner' });
     expect(Object.hasOwn(created, 'agent')).toBe(false);
     expect(Object.hasOwn(created, 'model')).toBe(false);
@@ -708,6 +723,6 @@ describe('source-qualified role CLI compatibility', () => {
     await newWork('Roles');
     const result = await cli('work', 'session', 'new', '--work', 'w-0001', '--provider', 'claude', '--label', 'Plan', '--role', 'builtin:planner', '--agent', 'legacy');
     expect(result.code).toBe(1); expect(result.stderr).toContain('agent-and-role-conflict');
-    expect((await readMapFile('w-0001')).sessions).toHaveLength(0);
+    expect(storedMap('w-0001').sessions).toHaveLength(0);
   }, 60_000);
 });

@@ -48,7 +48,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { S, errorText } from '../../../shared/strings.js';
@@ -67,7 +67,7 @@ import { workKey } from '../../lib/tree-order.js';
 import { useNow } from '../../lib/use-now.js';
 import { Button } from '../../ui/button.js';
 import type { ActivityEntry } from '../../store/activity.js';
-import { useRoomPagesStore } from '../../store/room-pages.js';
+import { awaitsOpen, openRoom, quotesOf, useRoomPagesStore } from '../../store/room-pages.js';
 import { openPlanInPanel } from '../../agents/open-agents.js';
 import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
@@ -75,7 +75,7 @@ import { dragHasFiles } from '../../terminal/drop.js';
 import { ContextChip } from '../context/ContextChip.js';
 import { fitDefaultInstructions } from '../../lib/context-format.js';
 import { Decisions } from '../mail/Decisions.js';
-import { roomOutbox } from './room-outbox.js';
+import { roomOutbox, useMailLanded } from './room-outbox.js';
 import { RoomPendingMessage } from './RoomPendingMessage.js';
 import { Composer, type ComposerSubmission } from './Composer.js';
 import { useHostStore } from '../../store/host.js';
@@ -91,7 +91,7 @@ import { RoomRecipeChip } from './RoomRecipeChip.js';
 import { RoomUsageChip } from './RoomUsageChip.js';
 
 export interface RoomPanelProps {
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   roomId: string;
   providers: Array<{ id: string; label: string }>;
   /** Живая активность сессий (`useActivityStore.byRef`): состояния в ленте участников и в меню упоминаний. */
@@ -117,7 +117,9 @@ const REPLY_FLASH_MS = 1200;
 const SCROLL_END_WAIT_MS = 2000;
 
 export function RoomPanel({ entry, roomId, providers, activity, bridge, active, onOpenExternal, onOpenSession }: RoomPanelProps): JSX.Element {
-  const model = buildRoomModel({ entry, roomId, providers, activity });
+  // Оригиналы цитат, которых окно не держит, подгружаются по id (`context.letter`, спека rooms.mail 6.9) и приходят в модель.
+  const quoted = useRoomPagesStore((state) => quotesOf(state, entry));
+  const model = buildRoomModel({ entry, roomId, providers, activity, ...(quoted === undefined ? {} : { quoted }) });
   const halted = model?.plan?.mode === 'autonomous' ? model.plan.autonomous?.halted : null;
   const roomRecord = entry.map.rooms.find((room) => room.id === roomId);
   const recipe = roomRecord?.recipe;
@@ -135,7 +137,12 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   const canReopen = useHostSupports('rooms.reopen');
   // История старше хвоста, который прислал хост (P35): кнопка над лентой подгружает страницу `context.messages`.
   const canLoadEarlier = useHostSupports('context.messages');
-  const earlier = earlierRemaining(entry, roomId);
+  // Снимок без писем (`compact` версии 2, спека rooms.mail 6.9): окно читает последнюю страницу при открытии комнаты, а
+  // дальше письма приходят событиями. Пока оно не держит ни одного письма комнаты, кнопки «раньше» нет: страница ещё в пути.
+  const compact = entry.map.compact;
+  const bare = compact?.version === 2;
+  const held = entry.map.messages.some((message) => message.roomId === roomId);
+  const earlier = bare && !held ? 0 : earlierRemaining(entry, roomId);
   const earlierKey = `${entry.projectPath}\u0000${entry.map.work.id}\u0000${roomId}`;
   const earlierLoading = useRoomPagesStore((state) => state.loading[earlierKey] === true);
   const connection = useHostStore(state => state.connections);
@@ -144,6 +151,34 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   const resolveKey = [entry.projectPath, entry.map.work.id, roomId, connection, status, entry.map.work.status, canResolve, model?.plan?.id, model?.plan?.rev, JSON.stringify(model?.proposal)].join('\0');
   const currentResolve = useRef(resolveKey); currentResolve.current = resolveKey;
   const currentBridge = useRef(bridge); currentBridge.current = bridge;
+  const currentEntry = useRef(entry); currentEntry.current = entry;
+  // Последняя страница при открытии комнаты. Заново — когда по числам снимка письма в ней есть, а окно их не держит
+  // (событие пропущено, комната была пуста): `unheld` меняется, и эффект идёт снова. Страницу, которую хост не отдал,
+  // стор повторяет сам (`openRoom`); пока она читается или ждёт повтора, лента не пустая, а ждёт (`loadingOpen`,
+  // `aria-busy`), и подсказки «пишите» в ней нет. Читать нечем (хост без `context.messages`, связи нет) или читать
+  // больше нечего (комнату стёрли) — лента как прежде, подсказка на месте.
+  const unheld = compact?.version === 2 && !held && (compact.rooms[roomId]?.total ?? 0) > 0;
+  const awaitingOpen = useRoomPagesStore((state) => awaitsOpen(state, entry, roomId));
+  const loadingOpen = unheld && canLoadEarlier && awaitingOpen;
+  useEffect(() => {
+    if (!bare || !canLoadEarlier) return;
+    openRoom(currentBridge.current, currentEntry.current, roomId).catch((error: unknown) => console.warn('[parley] open room', error));
+  }, [bare, canLoadEarlier, entry.projectPath, entry.map.work.id, roomId, unheld]);
+  // Цитаты, оригинала которых нет ни в ленте, ни среди подгруженных: каждый id запрашивается один раз.
+  const canQuote = useHostSupports('context.letter');
+  const missingQuotes = new Set<string>();
+  if (canQuote) {
+    for (const message of model?.messages ?? []) {
+      if (message.reply !== null && !message.reply.found && quoted?.[message.reply.id] === undefined) missingQuotes.add(message.reply.id);
+    }
+  }
+  const missingKey = [...missingQuotes].join(' ');
+  useEffect(() => {
+    if (missingKey === '') return;
+    for (const id of missingKey.split(' ')) {
+      useRoomPagesStore.getState().loadQuote(currentBridge.current, currentEntry.current, id).catch((error: unknown) => console.warn('[parley] context.letter', error));
+    }
+  }, [missingKey, entry.projectPath, entry.map.work.id]);
   /** Над вкладкой тащат файлы — подсветка места броска. */
   const [dropping, setDropping] = useState(false);
   const resolveMounted = useRef(true);
@@ -286,10 +321,15 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   // открытие — первое её расположение.
   useLayoutEffect(() => {
     if (containerRef.current === null) return;
+    // Снимок без писем: страница комнаты ещё в пути. Первое расположение ленты будет, когда она придёт, — иначе лента
+    // «открылась» бы пустой и к упоминанию уже не перешла.
+    if (openedRef.current === null && loadingOpen) return;
     const messages = model?.messages ?? [];
     const waiting = model?.proposal ?? null;
     const proposal = waiting === null ? '' : `${waiting.id}\u0000${waiting.rev}`;
-    const key = `${messages.length}\u0000${proposal}`;
+    // Новое — по номеру новейшего письма, а не по длине: у потолка окна (300 писем) новое письмо вытесняет старейшее, и
+    // длина остаётся той же. Длина в ключе — для страницы старых писем, она меняет её, а новейшее оставляет.
+    const key = `${messages.length}\u0000${messages.at(-1)?.id ?? ''}\u0000${proposal}`;
     const seen = seenRef.current;
     seenRef.current = { ids: new Set(messages.map((message) => message.id)), proposal };
     // Пришла страница старых писем: это не новое снизу, ленту не прижимаем и `↓N` не растим — положение сохраняется.
@@ -321,13 +361,15 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
     const own = fresh.some((message) => message.sender.kind === 'human');
     if (atBottomRef.current || own) pinToBottom();
     else if (added > 0) setBelow((count) => count + added);
-    // Зависимости — длина ленты и версия решения, а не сами `model.messages`: модель собирается заново на каждой
-    // отрисовке (событие активности), а эффект нужен, только когда пришло новое.
+    // Зависимости — длина ленты, номер новейшего письма и версия решения, а не сами `model.messages`: модель собирается
+    // заново на каждой отрисовке (событие активности), а эффект нужен, только когда пришло новое.
   }, [
     pinToBottom,
     showMessage,
     onFeedScroll,
+    loadingOpen,
     model?.messages.length,
+    model?.messages.at(-1)?.id,
     model?.proposal?.id,
     model?.proposal?.rev,
   ]);
@@ -336,11 +378,13 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   useLayoutEffect(keepAtBottom, [keepAtBottom, liveKey]);
 
   const draftKey = roomKey(workKey(entry.projectPath, entry.map.work.id), roomId);
-  // Очередь писем человека (`room-outbox.ts`): серые — в конце ленты, пока письмо с тем же `messageId` не пришло в карту.
+  // Очередь писем человека (`room-outbox.ts`): серые — в конце ленты, пока письмо с тем же `messageId` не пришло в карту
+  // или событием `rooms.mail` (спека rooms.mail 6.9: комнату окно может не держать, и в ленте письма не будет).
   const pending = useOutboxItems(roomOutbox, draftKey);
   const flying = useOutboxFlying(roomOutbox, draftKey);
-  const landedIds = useMemo(() => new Set((model?.messages ?? []).map((message) => message.id)), [model?.messages]);
-  // Ушло и уже пришло в карту — серый не рисуется сразу (без кадра с двумя письмами) и убирается из очереди эффектом.
+  const mailLanded = useMailLanded(entry.projectPath, entry.map.work.id, roomId);
+  const landedIds = useMemo(() => new Set([...(model?.messages ?? []).map((message) => message.id), ...mailLanded]), [model?.messages, mailLanded]);
+  // Ушло и уже пришло — серый не рисуется сразу (без кадра с двумя письмами) и убирается из очереди эффектом.
   const shownPending = pending.filter((item) => !(item.status === 'sent' && item.sentAs !== undefined && landedIds.has(item.sentAs)));
   useEffect(() => {
     for (const item of pending) {
@@ -482,6 +526,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
           ref={containerRef}
           onScroll={onFeedScroll}
           data-room-feed=""
+          aria-busy={loadingOpen ? true : undefined}
           className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-9 py-[18px]"
         >
           <PlanPanel key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>
@@ -502,7 +547,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
               {earlierLoading ? S.rooms.earlierLoading : S.rooms.earlier(earlier)}
             </button>
           ) : null}
-          {model.empty ? <p className="m-0 text-sm text-muted-foreground">{S.rooms.emptyFeed}</p> : null}
+          {model.empty && !loadingOpen ? <p className="m-0 text-sm text-muted-foreground">{S.rooms.emptyFeed}</p> : null}
           {model.messages.map((message) => (
             <RoomMessage
               key={message.id}
@@ -600,6 +645,6 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   );
 }
 
-function CompletionOrDecision({ plan, entry, bridge, ...props }: import('./DecisionCard.js').DecisionCardProps & { plan: import('@parley/core').RoomPlan | null; entry: WorkEntry; bridge: ParleyBridge }): JSX.Element {
+function CompletionOrDecision({ plan, entry, bridge, ...props }: import('./DecisionCard.js').DecisionCardProps & { plan: import('@parley/core').RoomPlan | null; entry: WindowWorkEntry; bridge: ParleyBridge }): JSX.Element {
   return props.proposal.kind === 'completion' ? <CompletionCard {...props} plan={plan} entry={entry} bridge={bridge}/> : <DecisionCard {...props} entry={entry} bridge={bridge}/>;
 }

@@ -202,14 +202,17 @@ describe('linkTerminalActivity', () => {
 
   it('claude: журнал прошлого запуска не пуст, новый процесс молчит срок — startup (хост видит запуск процесса)', async () => {
     const { ref, pty, activity, launch } = await rig('claude', {}, 60_000, { trustWaitMs: 300 });
-    // Журнал прошлого запуска заведён после старта служб: его подхватит ближайшее изменение карты.
+    // Журнал прошлого запуска заведён после старта служб: его подхватит ближайшая настоящая запись в карту.
     const events = workPaths(project, ref.workId).events;
     await mkdir(events, { recursive: true });
     await appendFile(
       path.join(events, `${ref.sessionId}.jsonl`),
       `${JSON.stringify({ hook_event_name: 'SessionStart' })}\n${JSON.stringify({ hook_event_name: 'Stop' })}\n`,
     );
-    await updateMap(project, ref.workId, () => undefined);
+    // Пустой `updateMap` ничего не пишет и службу работ не будит (план 4, задача 1): нужна настоящая запись.
+    await updateMap(project, ref.workId, (current) => {
+      current.work.goal = 'запись в карту';
+    });
     await waitFor(() => activity.get(ref)?.activity.lastEventAt != null);
 
     pty.start(ref, launch({ provider: 'claude' }));

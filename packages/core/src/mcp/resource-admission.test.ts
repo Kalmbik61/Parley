@@ -7,10 +7,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
-import { addMessage, addSession, transitionSession } from '../work/map.js';
+import { addSession, transitionSession } from '../work/map.js';
 import { DEFAULT_RESOURCE_LIMITS, type ResourceLimits } from '../work/resource-policy.js';
 import { addRoom } from '../work/rooms.js';
-import { createWork, readMap, updateMap, workPaths } from '../work/store.js';
+import { createWork, readMap, readStoredMap, updateMap, workPaths } from '../work/store.js';
 import { HUMAN } from '../work/types.js';
 import { createParleyServer } from './tools.js';
 
@@ -127,11 +127,11 @@ describe('send_message и приглашения: допуск', () => {
     expect(refused.isError).toBe(true);
     expect(refused.text).toContain('message limit reached');
     expect(refused.text).toContain('Only the human can raise this limit');
-    expect((await readMap(project, workId)).messages).toHaveLength(0);
+    expect(readStoredMap(project, workId).messages).toHaveLength(0);
 
     const ok = await call(lead, 'create_room', { title: 'команда', members: ['s-02', 's-03'], lead: 's-02' });
     expect(ok.isError).toBe(false);
-    expect((await readMap(project, workId)).messages).toHaveLength(2);
+    expect(readStoredMap(project, workId).messages).toHaveLength(2);
   });
 
   it('комната: потолок писем комнаты уже рабочего, рассылка считает адресатов', async () => {
@@ -153,18 +153,18 @@ describe('send_message и приглашения: допуск', () => {
   });
 
   it('add_to_room: пишет только системную строку, бюджет писем не расходует и исчерпанной квотой не блокируется', async () => {
-    await updateMap(project, workId, (map) => {
+    await updateMap(project, workId, (map, letters) => {
       addRoom(map, { title: 'r', creator: 's-01', members: ['s-01', 's-02'], lead: 's-01' });
-      for (let i = 0; i < 3; i += 1) addMessage(map, { from: 's-02', to: ['s-01'], text: `шум ${i}` });
+      for (let i = 0; i < 3; i += 1) letters.add({ roomId: null, kind: 'note', from: 's-02', to: ['s-01'], text: `шум ${i}` });
     });
     const lead = await connect('s-01', limits({ workMessages: 3, roomMessages: 3, fanout: 3 }), 1);
     expect((await call(lead, 'send_message', { to: 's-02', text: 'ещё' })).isError).toBe(true);
 
-    const before = (await readMap(project, workId)).messages.length;
+    const before = readStoredMap(project, workId).messages.length;
     const added = await call(lead, 'add_to_room', { room: 'r-01', session: 's-03' });
     expect(added.isError).toBe(false);
 
-    const map = await readMap(project, workId);
+    const map = readStoredMap(project, workId);
     expect(map.messages).toHaveLength(before + 1);
     const line = map.messages[map.messages.length - 1];
     expect(line?.from).toBe('system');
@@ -174,11 +174,11 @@ describe('send_message и приглашения: допуск', () => {
   });
 
   it('исчерпанная разговорная квота не блокирует управление: report, close_session, check_inbox, get_map, read_room, wait_for', async () => {
-    await updateMap(project, workId, (map) => {
+    await updateMap(project, workId, (map, letters) => {
       addRoom(map, { title: 'r', creator: 's-01', members: ['s-01', 's-02'] });
-      for (let i = 0; i < 3; i += 1) addMessage(map, { from: 's-02', to: ['s-01'], text: `шум ${i}` });
+      for (let i = 0; i < 3; i += 1) letters.add({ roomId: null, kind: 'note', from: 's-02', to: ['s-01'], text: `шум ${i}` });
       // Письмо от человека — вне квоты: оно не считается и не мешает.
-      addMessage(map, { from: HUMAN, to: ['s-02'], text: 'человек' });
+      letters.add({ roomId: null, kind: 'note', from: HUMAN, to: ['s-02'], text: 'человек' });
     });
     const lead = await connect('s-01', limits({ workMessages: 3, roomMessages: 3, fanout: 3 }));
     expect((await call(lead, 'send_message', { to: 's-02', text: 'ещё' })).isError).toBe(true);

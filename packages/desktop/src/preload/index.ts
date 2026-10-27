@@ -205,6 +205,7 @@ const bridge = {
     return () => statusListeners.delete(listener);
   },
   activitySnapshot: () => ipcRenderer.invoke('host:activity-snapshot'),
+  noticesSnapshot: () => ipcRenderer.invoke('host:notices-snapshot'),
   app: {
     openExternal: (url: string) => ipcRenderer.invoke('app:open-external', url) as Promise<void>,
     notify: (note: AppNote) => {

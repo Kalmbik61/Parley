@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
@@ -36,7 +36,7 @@ const entry = makeWork('w-01', {
 });
 const key = workKey('/tmp/proj', 'w-01');
 
-function renderMenu(target: WorkEntry = entry, patch: { pinned?: boolean; onRename?: () => void; onOpenMail?: () => void } = {}): void {
+function renderMenu(target: WindowWorkEntry = entry, patch: { pinned?: boolean; onRename?: () => void; onOpenMail?: () => void } = {}): void {
   render(
     <CardMenu
       entry={target}

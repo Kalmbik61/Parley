@@ -5,7 +5,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { GroupNode } from '../../shared/layout-types.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { EMPTY_HISTORY } from './history.js';
@@ -13,7 +13,7 @@ import { useLayoutStore } from './store.js';
 import { GroupView } from './GroupView.js';
 import { LayoutBodyContext } from './GroupView.js';
 
-function entry(): WorkEntry {
+function entry(): WindowWorkEntry {
   return {
     projectPath: '/tmp/p',
     map: {

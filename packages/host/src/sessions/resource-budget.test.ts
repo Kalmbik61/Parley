@@ -9,9 +9,10 @@ import {
   addSession,
   configPath,
   createWork,
-  readMap,
+  readStoredMap,
   reserveAttempt,
   saveConfig,
+  SYSTEM,
   updateMap,
   DEFAULT_RESOURCE_LIMITS,
 } from '@parley/core';
@@ -110,7 +111,7 @@ afterEach(async () => {
 const create = (sessions: SessionsService, workId: string, label = 'a'): Promise<SessionRef> =>
   sessions.create({ projectPath: project, workId, provider: 'claude', label, task: 'т', parent: null });
 
-const ledger = async (workId: string): Promise<WorkMap['resources']> => (await readMap(project, workId)).resources;
+const ledger = async (workId: string): Promise<WorkMap['resources']> => (readStoredMap(project, workId)).resources;
 
 const budgetError = async (run: Promise<unknown>): Promise<HostError> => {
   try {
@@ -149,7 +150,31 @@ describe('запуск: резерв до процесса, исход посл�
     expect(pty.list()).toHaveLength(2);
     const resources = await ledger(work.work.id);
     expect(resources?.attempts.filter((attempt) => attempt.state === 'reserved')).toEqual([]);
-    expect((await readMap(project, work.work.id)).sessions.find((session) => session.id === 's-03')?.lifecycle).toBe('pending');
+    expect((readStoredMap(project, work.work.id)).sessions.find((session) => session.id === 's-03')?.lifecycle).toBe('pending');
+  });
+
+  // Спека хранилища 6.2: письмо об отказе пишется как письмо (`writeLetters`), без разбора карты.
+  it('автозапуск отказан бюджетом: родителю — системное письмо об отказе, человеку — уведомление; запуск человека письма не пишет', async () => {
+    await saveConfig({ workConcurrent: 1 });
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const { sessions } = host();
+    const parent = await create(sessions, work.work.id, 'a');
+    await updateMap(project, work.work.id, (map) => {
+      // `addSession` родителя не принимает: поле осталось в старых картах, письмо идёт тому, кого оно называет.
+      addSession(map, { provider: 'claude', label: 'child', task: 'т' }).parent = parent.sessionId;
+    });
+    const child: SessionRef = { projectPath: project, workId: work.work.id, sessionId: 's-02' };
+
+    await budgetError(sessions.launch(child, 'launch'));
+    expect((readStoredMap(project, work.work.id)).messages).toEqual([]);
+
+    const refusal = await budgetError(sessions.launch(child, 'launch', { by: 'auto' }));
+    const letters = (readStoredMap(project, work.work.id)).messages;
+    expect(letters).toHaveLength(1);
+    expect(letters[0]).toMatchObject({ from: SYSTEM, to: [parent.sessionId], roomId: null, kind: 'note' });
+    expect(letters[0]?.text).toMatch(/^S02 was not started: /);
+    expect(letters[0]?.text).toContain(refusal.message);
+    expect(broadcasts.some((item) => item.event === 'host.notice' && (item.data as { kind: string }).kind === 'launch-failed')).toBe(true);
   });
 
   it('окно запусков: после остановки слот свободен, а запуск всё равно считается в часе', async () => {
@@ -222,7 +247,7 @@ describe('меньший лимит и управление', () => {
     await sessions.stop(a);
     await sessions.close(b);
     expect(pty.list()).toHaveLength(0);
-    const map = await readMap(project, work.work.id);
+    const map = readStoredMap(project, work.work.id);
     expect(map.sessions.find((session) => session.id === 's-01')?.lifecycle).toBe('sleeping');
     expect(map.sessions.find((session) => session.id === 's-02')?.lifecycle).toBe('closed');
   });
@@ -335,7 +360,7 @@ describe('явный запуск исторической сессии', () => 
 
     await expect(sessions.launch({ projectPath: project, workId: work.work.id, sessionId: childId }, 'launch')).rejects.toThrow('session limit reached');
 
-    const map = await readMap(project, work.work.id);
+    const map = readStoredMap(project, work.work.id);
     expect(map.sessions.find((session) => session.id === childId)?.lifecycle).toBe('pending');
     expect(pty.list()).toHaveLength(2);
     expect(map.messages).toEqual([]);

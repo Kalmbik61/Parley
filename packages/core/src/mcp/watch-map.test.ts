@@ -1,34 +1,31 @@
 import { watch } from 'node:fs';
-import { mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { waitForMap, type MapChanges } from './watch-map.js';
 
 /**
- * `fs.watch` проходит через шпиона (спека хранилища 6.9): тесты проверяют, заводит ли ожидание его вообще, и сами
- * зовут его обработчик — так на неизменённой карте появляется событие, которого настоящая запись не даёт.
+ * `fs.watch` проходит через шпиона (спека хранилища 6.9): после переезда карты в базу файла, за которым следить, нет,
+ * и ожидание не должно заводить файловый наблюдатель вовсе — ни с внешним сигналом, ни без него.
  */
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   return { ...actual, watch: vi.fn(actual.watch) };
 });
 
-let dir = '';
-let mapFile = '';
-let version = 0;
+/**
+ * Личность работы, как её отдаёт `workVersionKey`: номер версии строкой или `null`, если работы нет. Тест двигает её
+ * сам — `bump` изображает запись, `current = null` — исчезнувшую работу.
+ */
+let current: string | null = '1';
+let version = 1;
+const identity = (): string | null => current;
+const bump = (): void => {
+  current = String(++version);
+};
 /** Отмена ожиданий теста: он гасит ими свои ожидания, а `afterEach` — те, что упавший тест не довёл до конца. */
 let cancel = new AbortController();
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const tick = (): Promise<void> => delay(30);
-
-/** Переписывает карту так, как это делает запись: через `.tmp` и `rename` — новый inode, размер и время. */
-async function touch(file: string): Promise<void> {
-  const tmp = `${file}.tmp`;
-  await writeFile(tmp, `{"v":${++version}${' '.repeat(version)}}`, 'utf8');
-  await rename(tmp, file);
-}
 
 /** Внешний источник сигнала, как `onWorksChange` у хоста: один слушатель; `fire` — «карта изменилась». */
 function source(): { changes: MapChanges; fire: () => void; listening: () => boolean } {
@@ -45,25 +42,15 @@ function source(): { changes: MapChanges; fire: () => void; listening: () => boo
   };
 }
 
-/** Обработчик, с которым ожидание завело `fs.watch`. */
-function watchHandler(): (event: string, name: string | null) => void {
-  const call = vi.mocked(watch).mock.calls.at(-1) as unknown as
-    [string, (event: string, name: string | null) => void] | undefined;
-  if (call === undefined) throw new Error('fs.watch не заводился');
-  return call[1];
-}
-
-beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'parley-watch-map-'));
-  mapFile = path.join(dir, 'map.json');
-  await writeFile(mapFile, '{}', 'utf8');
+beforeEach(() => {
+  current = '1';
+  version = 1;
   cancel = new AbortController();
   vi.mocked(watch).mockClear();
 });
 
-afterEach(async () => {
+afterEach(() => {
   cancel.abort();
-  await rm(dir, { recursive: true, force: true });
 });
 
 describe('waitForMap', () => {
@@ -76,25 +63,18 @@ describe('waitForMap', () => {
       };
     };
     let ready = false;
-    const waiting = waitForMap(
-      mapFile,
-      async () => (ready ? 'ok' : null),
-      5_000,
-      60_000,
-      undefined,
-      changes,
-    );
+    const waiting = waitForMap(identity, async () => (ready ? 'ok' : null), 5_000, 60_000, undefined, changes);
     // Подписка заводится после первой пробы: ждём её, а не спим, и только тогда даём пробе увидеть «готово».
     await vi.waitFor(() => expect(listener).not.toBeNull());
     ready = true;
-    await touch(mapFile);
+    bump();
     listener!();
     await expect(waiting).resolves.toBe('ok');
     expect(listener).toBeNull();
     expect(watch).not.toHaveBeenCalled();
   });
 
-  it('пока файл карты не менялся, проба не зовётся', async () => {
+  it('пока личность не менялась, проба не зовётся', async () => {
     let calls = 0;
     let listener: (() => void) | null = null;
     const changes: MapChanges = (onChange) => {
@@ -103,7 +83,7 @@ describe('waitForMap', () => {
     };
     const abort = new AbortController();
     const waiting = waitForMap(
-      mapFile,
+      identity,
       async () => {
         calls++;
         return null;
@@ -119,18 +99,18 @@ describe('waitForMap', () => {
     // Отсутствие пробы ждать нечем: пауза даёт лишнему вызову, если бы он был, успеть.
     await tick();
     expect(calls).toBe(1);
-    await touch(mapFile);
+    bump();
     listener!();
     await vi.waitFor(() => expect(calls).toBe(2));
     abort.abort();
     await expect(waiting).resolves.toBeNull();
   });
 
-  it('два сигнала подряд на изменившейся карте зовут пробу один раз', async () => {
+  it('два сигнала подряд на изменившейся работе зовут пробу один раз', async () => {
     const { changes, fire, listening } = source();
     let calls = 0;
     const waiting = waitForMap(
-      mapFile,
+      identity,
       async () => {
         calls++;
         return null;
@@ -141,7 +121,7 @@ describe('waitForMap', () => {
       changes,
     );
     await vi.waitFor(() => expect(listening()).toBe(true));
-    await touch(mapFile);
+    bump();
     fire();
     fire();
     fire();
@@ -153,15 +133,15 @@ describe('waitForMap', () => {
     await expect(waiting).resolves.toBeNull();
   });
 
-  it('запись во время пробы не теряется: личность файла берётся до пробы', async () => {
+  it('запись во время пробы не теряется: личность берётся до пробы', async () => {
     const { changes, fire, listening } = source();
     let calls = 0;
     const waiting = waitForMap(
-      mapFile,
+      identity,
       async () => {
         calls++;
-        // Карту переписали, пока первая проба её читала: следующий повод обязан это заметить.
-        if (calls === 1) await touch(mapFile);
+        // Работу переписали, пока первая проба её читала: следующий повод обязан это заметить.
+        if (calls === 1) bump();
         return null;
       },
       5_000,
@@ -176,11 +156,11 @@ describe('waitForMap', () => {
     await expect(waiting).resolves.toBeNull();
   });
 
-  it('карты нет — проба зовётся на каждый повод', async () => {
+  it('работы нет (личность null) — проба зовётся на каждый повод', async () => {
     const { changes, fire, listening } = source();
     let calls = 0;
     const waiting = waitForMap(
-      mapFile,
+      identity,
       async () => {
         calls++;
         return null;
@@ -191,7 +171,7 @@ describe('waitForMap', () => {
       changes,
     );
     await vi.waitFor(() => expect(listening()).toBe(true));
-    await rm(mapFile);
+    current = null;
     fire();
     fire();
     await vi.waitFor(() => expect(calls).toBe(3));
@@ -199,39 +179,57 @@ describe('waitForMap', () => {
     await expect(waiting).resolves.toBeNull();
   });
 
-  it('без внешнего сигнала fs.watch стоит на каталоге карты, а событие на неизменённой карте пробу не зовёт', async () => {
+  it('функция личности бросила — это «личности нет»: проба зовётся, а отказ не уходит необработанным', async () => {
+    const { changes, fire, listening } = source();
     let calls = 0;
+    let broken = false;
     const waiting = waitForMap(
-      mapFile,
+      () => {
+        if (broken) throw new Error('база не открылась');
+        return current;
+      },
       async () => {
         calls++;
-        return null;
+        return calls === 2 ? 'ok' : null;
       },
       5_000,
       60_000,
       cancel.signal,
+      changes,
     );
-    await vi.waitFor(() => expect(watch).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(watch).mock.calls[0]?.[0]).toBe(dir);
-    const onEvent = watchHandler();
-    onEvent('change', 'map.json');
-    onEvent('rename', 'map.json');
-    onEvent('change', null);
-    await tick();
-    expect(calls).toBe(1);
-    await touch(mapFile);
-    await vi.waitFor(() => expect(calls).toBe(2));
-    // Одна запись — несколько событий файловой системы, а проба одна.
-    await tick();
+    await vi.waitFor(() => expect(listening()).toBe(true));
+    broken = true;
+    fire();
+    await expect(waiting).resolves.toBe('ok');
     expect(calls).toBe(2);
-    cancel.abort();
-    await expect(waiting).resolves.toBeNull();
   });
 
-  it('тик опроса пробу не зовёт, пока карта не менялась, и зовёт после записи', async () => {
+  it('без внешнего сигнала fs.watch не заводится, а будит ожидание тик опроса', async () => {
+    let ready = false;
     let calls = 0;
     const waiting = waitForMap(
-      mapFile,
+      identity,
+      async () => {
+        calls++;
+        return ready ? 'ok' : null;
+      },
+      5_000,
+      20,
+      cancel.signal,
+    );
+    await delay(100);
+    expect(calls).toBe(1);
+    ready = true;
+    bump();
+    await expect(waiting).resolves.toBe('ok');
+    expect(calls).toBe(2);
+    expect(watch).not.toHaveBeenCalled();
+  });
+
+  it('тик опроса пробу не зовёт, пока личность не менялась, и зовёт после записи', async () => {
+    let calls = 0;
+    const waiting = waitForMap(
+      identity,
       async () => {
         calls++;
         return null;
@@ -242,7 +240,7 @@ describe('waitForMap', () => {
     );
     await delay(150);
     expect(calls).toBe(1);
-    await touch(mapFile);
+    bump();
     await vi.waitFor(() => expect(calls).toBe(2));
     await delay(100);
     expect(calls).toBe(2);
@@ -253,18 +251,11 @@ describe('waitForMap', () => {
   it('с внешним сигналом опрос остаётся запасным', async () => {
     const { changes, listening } = source();
     let ready = false;
-    const waiting = waitForMap(
-      mapFile,
-      async () => (ready ? 'ok' : null),
-      5_000,
-      20,
-      cancel.signal,
-      changes,
-    );
+    const waiting = waitForMap(identity, async () => (ready ? 'ok' : null), 5_000, 20, cancel.signal, changes);
     await vi.waitFor(() => expect(listening()).toBe(true));
     ready = true;
     // Сигнал не придёт: ожидание заметит запись по тику опроса.
-    await touch(mapFile);
+    bump();
     await expect(waiting).resolves.toBe('ok');
     expect(listening()).toBe(false);
     expect(watch).not.toHaveBeenCalled();
@@ -272,7 +263,7 @@ describe('waitForMap', () => {
 
   it('подписка на внешний сигнал снимается по таймауту', async () => {
     const { changes, listening } = source();
-    const waiting = waitForMap(mapFile, async () => null, 300, 60_000, undefined, changes);
+    const waiting = waitForMap(identity, async () => null, 300, 60_000, undefined, changes);
     await vi.waitFor(() => expect(listening()).toBe(true));
     await expect(waiting).resolves.toBeNull();
     expect(listening()).toBe(false);
@@ -281,7 +272,7 @@ describe('waitForMap', () => {
   it('подписка на внешний сигнал снимается по отмене', async () => {
     const { changes, listening } = source();
     const abort = new AbortController();
-    const waiting = waitForMap(mapFile, async () => null, 5_000, 60_000, abort.signal, changes);
+    const waiting = waitForMap(identity, async () => null, 5_000, 60_000, abort.signal, changes);
     await vi.waitFor(() => expect(listening()).toBe(true));
     abort.abort();
     await expect(waiting).resolves.toBeNull();
@@ -292,7 +283,7 @@ describe('waitForMap', () => {
     const { changes, fire, listening } = source();
     let calls = 0;
     const waiting = waitForMap(
-      mapFile,
+      identity,
       async () => {
         if (++calls === 2) throw new Error('карта не читается');
         return null;
@@ -303,7 +294,7 @@ describe('waitForMap', () => {
       changes,
     );
     await vi.waitFor(() => expect(listening()).toBe(true));
-    await touch(mapFile);
+    bump();
     fire();
     await expect(waiting).rejects.toThrow('карта не читается');
     expect(listening()).toBe(false);

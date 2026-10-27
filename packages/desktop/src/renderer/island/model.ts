@@ -16,7 +16,7 @@
  * Комната помечена `done`, если никто из её участников не в работе, а кто-то из них в Done.
  */
 
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { refKey, type LiveTask, type SessionRef } from '@parley/protocol';
 import { sessionAttention } from '../attention/derive.js';
 import { sessionRowLabel, workTitleText } from '../lib/participant.js';
@@ -67,7 +67,7 @@ function tasksFor(entry: ActivityEntry | undefined): IslandTaskSummary {
 }
 
 export function islandModel(
-  entries: readonly WorkEntry[],
+  entries: readonly WindowWorkEntry[],
   byRef: Readonly<Record<string, ActivityEntry>>,
   withCard: ReadonlySet<string>,
   cleared: ReadonlySet<string>,
@@ -150,7 +150,7 @@ export function islandModel(
 }
 
 /** Шапка карточки запроса: сессия, работа и проект по `refKey`. */
-export function sessionLabels(entries: readonly WorkEntry[]): Map<string, { session: string; work: string; project: string }> {
+export function sessionLabels(entries: readonly WindowWorkEntry[]): Map<string, { session: string; work: string; project: string }> {
   const labels = new Map<string, { session: string; work: string; project: string }>();
   for (const entry of entries) {
     const work = workTitleText(entry.map.work.title);

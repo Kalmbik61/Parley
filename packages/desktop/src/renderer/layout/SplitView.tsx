@@ -19,7 +19,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { LayoutNode, SplitNode } from '../../shared/layout-types.js';
 import { cn } from '../lib/cn.js';
 import { GroupView } from './GroupView.js';
@@ -29,7 +29,7 @@ import { LIMITS, setRatio } from './tree.js';
 export interface NodeViewProps {
   workKey: string;
   node: LayoutNode;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   /** Единственная группа во всей раскладке работы (спека 5.3) — передаётся дальше без изменений. */
   singleGroup: boolean;
 }
@@ -42,7 +42,7 @@ export function NodeView({ workKey, node, entry, singleGroup }: NodeViewProps): 
 export interface SplitViewProps {
   workKey: string;
   node: SplitNode;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   singleGroup: boolean;
 }
 

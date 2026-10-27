@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { CheckResult, PlanItem, RoomMode, RoomPlan, WorkEntry } from "@parley/core";
+import type { CheckResult, PlanItem, RoomMode, RoomPlan, WindowWorkEntry } from "@parley/core";
 import type { PlanActionResult } from "@parley/protocol";
 import type { ParleyBridge } from "../../../shared/bridge.js";
 import { decodeIpcError } from "../../../shared/ipc-error.js";
@@ -15,7 +15,7 @@ import { PlanHaltBadge } from "./PlanChip.js";
 
 const P = S.plans;
 export function currentRoomPlan(
-  entry: WorkEntry,
+  entry: WindowWorkEntry,
   roomId: string,
 ): RoomPlan | null {
   const plans = (entry.map.plans ?? []).filter(
@@ -46,7 +46,7 @@ export function planProgress(plan: RoomPlan): string {
 export function usePlanRequest(
   identity: string,
   bridge: ParleyBridge,
-  workStatus: WorkEntry["map"]["work"]["status"],
+  workStatus: WindowWorkEntry["map"]["work"]["status"],
   archived = false,
 ) {
   const status = useHostStore((state) => state.status);
@@ -150,7 +150,7 @@ export function RoomModeControl({
   roomId,
   bridge,
 }: {
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   roomId: string;
   bridge: ParleyBridge;
 }): JSX.Element {
@@ -277,7 +277,7 @@ export function RoomModeControl({
     </div>
   );
 }
-function ownerLabel(entry: WorkEntry | undefined, id: string): string {
+function ownerLabel(entry: WindowWorkEntry | undefined, id: string): string {
   if (id === "human") return S.participants.human;
   const session = entry?.map.sessions.find((session) => session.id === id);
   return session ? sessionRowLabel(session.id, session.label) : id;
@@ -290,7 +290,7 @@ export function PlanSummary({
   renderActions,
 }: {
   plan: RoomPlan;
-  entry?: WorkEntry;
+  entry?: WindowWorkEntry;
   bridge?: ParleyBridge;
   renderActions?: (item: PlanItem) => JSX.Element | null;
 }): JSX.Element {
@@ -409,7 +409,7 @@ export function PlanPanel({
   roomId,
   bridge,
 }: {
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   roomId: string;
   bridge: ParleyBridge;
 }): JSX.Element | null {

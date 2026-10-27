@@ -18,7 +18,7 @@
  */
 
 import { create } from 'zustand';
-import type { FeedCard, FeedDecision, WorkEntry } from '@parley/core';
+import type { FeedCard, FeedDecision, WindowWorkEntry } from '@parley/core';
 import { needReason } from '@parley/core/stuck';
 import { refKey, type Result, type SessionRef } from '@parley/protocol';
 import type { IslandBridge } from '../../shared/island.js';
@@ -56,7 +56,7 @@ interface IslandRequestsState {
   applied: number;
   bind(call: IslandBridge['call'] | null): void;
   select(index: number): void;
-  sync(entries: readonly WorkEntry[], byRef: Readonly<Record<string, ActivityEntry>>): void;
+  sync(entries: readonly WindowWorkEntry[], byRef: Readonly<Record<string, ActivityEntry>>): void;
   revalidate(): void;
   decide(key: string, decision: FeedDecision): Promise<void>;
   clear(): void;

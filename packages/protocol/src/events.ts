@@ -10,6 +10,7 @@ import type {
   HostNotice,
   LiveMetrics,
   ProviderLimits,
+  RoomsMailEvent,
   SessionRef,
   WorksSnapshot,
 } from './types.js';
@@ -19,6 +20,8 @@ export interface Events {
   'backlog.changed': BacklogChanged;
   'capabilities.changed': { projectPath: string; snapshot: CapabilitySnapshot };
   'works.changed': WorksSnapshot;
+  /** Письма одной работы за пачку, только окнам с признаком `rooms-mail` (спека rooms.mail 6.3). */
+  'rooms.mail': RoomsMailEvent;
   'activity.changed': { ref: SessionRef; activity: SessionActivity; metrics: LiveMetrics | null };
   'pty.output': { ref: SessionRef; data: string };
   'pty.resync': { ref: SessionRef };

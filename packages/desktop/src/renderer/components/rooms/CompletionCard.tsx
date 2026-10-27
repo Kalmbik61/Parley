@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { RoomPlan, WorkEntry } from "@parley/core";
+import type { RoomPlan, WindowWorkEntry } from "@parley/core";
 import type { ParleyBridge } from "../../../shared/bridge.js";
 import { S } from "../../../shared/strings.js";
 import { DecisionCard, type DecisionCardProps } from "./DecisionCard.js";
@@ -13,7 +13,7 @@ export function CompletionCard({
   ...props
 }: DecisionCardProps & {
   plan: RoomPlan | null;
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   bridge: ParleyBridge;
 }): JSX.Element {
   const [item, setItem] = useState("");

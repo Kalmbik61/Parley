@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import { lstat, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import type { LetterTx } from './letter-store.js';
 import type { ProjectContextOptions } from './project-context.js';
+import { exportSha256, hasDigestOnly, settleExport, sha256Hex } from './stored-texts.js';
 import type { SharedWriteOptions } from './store.js';
 import type { Proposal, Room, WorkMap } from './types.js';
 
@@ -9,7 +11,10 @@ export type DecisionJournalCode = 'journal-invalid' | 'journal-conflict' | 'jour
 export class DecisionJournalError extends Error {
   constructor(readonly code: DecisionJournalCode) { super(code); this.name = 'DecisionJournalError'; }
 }
-/** Exact accepted event, captured within the map transition. Filesystem retries use only this payload. */
+/**
+ * Exact accepted event, captured within the map transition. Filesystem retries use only this payload. Текст `content`
+ * есть, пока файл не записан; у `written` его место занимают `sha256`, `bytes` и `title` (спека хранилища 6.2).
+ */
 export interface DecisionJournalIntent {
   file: string;
   workId: string;
@@ -21,8 +26,9 @@ export interface DecisionJournalIntent {
   kind: 'decision' | 'completion';
   snapshot: string | null;
   snapshotSha256: string | null;
-  content: string;
   status: 'pending' | 'written';
+  content?: string;
+  sha256?: string; bytes?: number; title?: string;
 }
 export type DecisionJournalMap = WorkMap & { decisionExports?: DecisionJournalIntent[] };
 const text = (value: string): boolean => !value.includes('\0') && Buffer.from(value).toString() === value;
@@ -39,7 +45,7 @@ export function validDecisionJournalIntent(value: unknown): value is DecisionJou
     ['decision', 'completion'].includes(row.kind) && ['pending', 'written'].includes(row.status) &&
     (row.snapshot === null || (typeof row.snapshot === 'string' && new RegExp(`^${row.workId}-${row.roomId}-pl-\\d+-rev-\\d+-(accepted|completed)\\.md$`).test(row.snapshot))) &&
     (row.snapshot === null ? row.snapshotSha256 === null : typeof row.snapshotSha256 === 'string' && /^[0-9a-f]{64}$/.test(row.snapshotSha256)) &&
-    typeof row.content === 'string' && Buffer.byteLength(row.content) <= 1024 * 1024 && text(row.content);
+    (hasDigestOnly(row) || (typeof row.content === 'string' && Buffer.byteLength(row.content) <= 1024 * 1024 && text(row.content)));
 }
 /** JSON can retain legacy lone UTF-16/control units; Markdown uses visible literal escapes with a truthful marker. */
 export function representLegacyMarkdown(value: string): string {
@@ -62,6 +68,7 @@ function member(map: WorkMap, id: string): string {
 /** Called only with the resolved proposal and its just-created decision letter, never a current mutable proposal. */
 export function captureDecisionJournal(
   map: DecisionJournalMap,
+  letters: LetterTx,
   room: Room,
   proposal: Proposal,
   action: 'accept' | 'return',
@@ -69,7 +76,7 @@ export function captureDecisionJournal(
   note?: string,
 ): DecisionJournalIntent | null {
   if (action === 'return') return null;
-  const letter = map.messages.find(row => row.id === messageId);
+  const letter = letters.byId(messageId);
   if (!letter || letter.kind !== 'decision' || letter.roomId !== room.id || letter.from !== proposal.from || letter.text !== proposal.text)
     throw new DecisionJournalError('journal-invalid');
   const previous = map.decisionExports?.find(row => row.roomId === room.id && row.proposalId === proposal.id && row.rev === proposal.rev);
@@ -102,7 +109,7 @@ export function captureDecisionJournal(
     file: `${letter.at.slice(0, 10)}-${map.work.id}-${room.id}-${proposal.id}-rev-${String(proposal.rev).padStart(2, '0')}.md`,
     workId: map.work.id, roomId: room.id, proposalId: proposal.id, rev: proposal.rev, messageId,
     acceptedAt: letter.at, kind: proposal.kind ?? 'decision', snapshot,
-    snapshotSha256: captured ? createHash('sha256').update(captured.content).digest('hex') : null,
+    snapshotSha256: captured ? exportSha256(captured) : null,
     content: representLegacyMarkdown(`${lines.join('\n')}\n`), status: 'pending',
   };
   if (!validDecisionJournalIntent(intent)) throw new DecisionJournalError('journal-invalid');
@@ -137,6 +144,9 @@ export async function flushDecisionJournal(projectPath: string, workId: string, 
   for (const intent of map.decisionExports?.filter(row => row.status === 'pending' && !options.excludedFiles?.has(row.file)) ?? []) {
     try {
       if (!validDecisionJournalIntent(intent) || intent.workId !== workId) throw new DecisionJournalError('journal-invalid');
+      // Ожидающее решение всегда с текстом: по нему файл пишется и повторяется (спека хранилища 6.2).
+      const content = intent.content;
+      if (content === undefined) throw new DecisionJournalError('journal-invalid');
       const paths = await store.sharedProjectPaths(projectPath, options);
       await store.withSharedProjectLock(paths, async () => {
         result.diagnostics.push(...await store.prepareSharedIgnore(paths, options));
@@ -145,11 +155,13 @@ export async function flushDecisionJournal(projectPath: string, workId: string, 
           if (previous.version === store.MISSING_SHARED_VERSION) throw new DecisionJournalError('journal-unavailable');
           if (createHash('sha256').update(previous.text).digest('hex') !== intent.snapshotSha256) throw new DecisionJournalError('journal-conflict');
         }
-        await publishImmutableMarkdown(paths.dir, paths.decisions, intent, options);
+        await publishImmutableMarkdown(paths.dir, paths.decisions, { file: intent.file, content }, options);
       }, options);
+      // Запись подтверждается по (файл, sha256 текста) и тут же убирает текст из карты (спека хранилища 6.2).
+      const sha256 = sha256Hex(content);
       await store.updateMap(projectPath, workId, current => {
-        const captured = (current as DecisionJournalMap).decisionExports?.find(row => row.file === intent.file && row.content === intent.content && row.messageId === intent.messageId);
-        if (captured) captured.status = 'written';
+        const captured = (current as DecisionJournalMap).decisionExports?.find(row => row.file === intent.file && exportSha256(row) === sha256 && row.messageId === intent.messageId);
+        if (captured) settleExport(captured);
       }, { ...options, touch: false });
       result.written.push(intent.file);
     } catch (error) {
@@ -255,5 +267,5 @@ export function classifyDecisionFile(file: DecisionJournalFile, map: DecisionJou
   if (map === undefined || map.work.id !== file.workId) return 'unverified';
   const intent = map.decisionExports?.find(row => row.file === file.file && validDecisionJournalIntent(row));
   if (!intent) return 'unverified';
-  return createHash('sha256').update(intent.content).digest('hex') === file.sha256 ? 'accepted' : 'edited';
+  return exportSha256(intent) === file.sha256 ? 'accepted' : 'edited';
 }

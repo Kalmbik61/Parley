@@ -15,7 +15,7 @@
 
 import { useRef, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import type { WorkEntry, WorkStatus } from '@parley/core';
+import type { WindowWorkEntry, WorkStatus } from '@parley/core';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, S } from '../../shared/strings.js';
@@ -43,7 +43,7 @@ export type CardAction = 'pin' | 'unpin' | 'new-session' | 'new-room' | 'open-ma
 
 /** Действия без внешнего состояния меню делает само (сторы, мост); наружу — то, что у карточки. */
 export interface CardMenuProps {
-  entry: WorkEntry;
+  entry: WindowWorkEntry;
   pinned: boolean;
   bridge: ParleyBridge;
   /** InlineRename своей карточки. */

@@ -20,7 +20,7 @@
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { LoaderCircle } from 'lucide-react';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { useUiStore } from '../../store/ui.js';
 import { S } from '../../../shared/strings.js';
@@ -43,7 +43,7 @@ export const decisionDraftKey = (roomDraftKey: string, proposalId: string): stri
 
 export interface DecisionCardProps {
   unavailableReason?: string;
-  entry?: WorkEntry;
+  entry?: WindowWorkEntry;
   bridge?: ParleyBridge;
   children?: ReactNode;
   /** Дополнительный выбор пункта при возврате автономного завершения. */

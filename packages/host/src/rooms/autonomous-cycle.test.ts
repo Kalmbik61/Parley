@@ -7,13 +7,15 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import {
-  addRoom, addSession, archiveRoom, createParleyServer, ENGINE, HUMAN, readMap, summarizePlanEffects, updateMap, workPaths,
-  type AttemptChannelRequest, type CheckResult, type RoomPlan, type WorkMap,
+  addRoom, addSession, archiveRoom, createParleyServer, createWork, mapLetterTx, ENGINE, HUMAN, readLetters, readMap, replaceStoredMap, summarizePlanEffects, updateMap, workPaths,
+  type AttemptChannelRequest, type CheckResult, type RoomPlan, type WindowWorkMap, type WorkMap,
 } from '@parley/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { attemptsEngineGitPath, createAttemptsEndpoint, type AttemptsResult } from '../agent/attempts-endpoint.js';
 import { createBrowserEndpoint } from '../agent/browser-endpoint.js';
+import type { RequestInfo } from '../context.js';
 import { createPlanHandlers } from '../methods/rooms.js';
+import type { WorksView } from '../works/works-service.js';
 import { autonomousEngineIO, createAutonomousEngine, type AutonomousEngine } from './autonomous-engine.js';
 import { resolveRoomProposal, resumeAutonomousPlan } from './rooms-service.js';
 
@@ -47,22 +49,23 @@ async function fixture(options: { count?: number; independent?: boolean; qualita
   await git('add', '.');
   await git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'Initial cycle fixture');
   const baseSha = await git('rev-parse', 'HEAD');
-  const map: WorkMap = { schemaVersion: 2, work: { id: 'w-01', title: 'Cycle', goal: '', status: 'active', createdAt: time.toISOString(), updatedAt: time.toISOString() }, sessions: [], rooms: [], messages: [] };
+  const workId = (await createWork(projectPath, { title: 'Cycle' })).work.id;
+  const map: WindowWorkMap = { schemaVersion: 2, work: { id: workId, title: 'Cycle', goal: '', status: 'active', createdAt: time.toISOString(), updatedAt: time.toISOString() }, sessions: [], rooms: [], messages: [] };
   addSession(map, { provider: 'codex', label: 'Lead', task: 'Propose the cycle' });
   addRoom(map, { creator: HUMAN, title: 'Cycle', members: ['s-01'], lead: 's-01', mode: 'autonomous' });
-  await fs.mkdir(path.dirname(workPaths(projectPath, 'w-01').map), { recursive: true });
-  await fs.writeFile(workPaths(projectPath, 'w-01').map, JSON.stringify(map));
-  const read = () => readMap(projectPath, 'w-01');
+  // Карта работы лежит в базе (спека хранилища 6.2): строки пишет `replaceStoredMap`.
+  replaceStoredMap(projectPath, workId, map);
+  const read = () => readMap(projectPath, workId);
   const plan = async () => (await read()).plans![0]!;
   const state = async () => (await plan()).autonomous!;
   const attempt = async (index = 0) => (await state()).attempts[index]!;
-  const clone = async (index = 0) => path.join(workPaths(projectPath, 'w-01').dir, 'autonomous/pl-01/attempts', (await attempt(index)).id, 'clone');
-  const ref = (sessionId: string) => ({ projectPath, workId: 'w-01', sessionId });
+  const clone = async (index = 0) => path.join(workPaths(projectPath, workId).dir, 'autonomous/pl-01/attempts', (await attempt(index)).id, 'clone');
+  const ref = (sessionId: string) => ({ projectPath, workId, sessionId });
   const snapshots: WorkMap[] = [];
   const events: string[] = [];
   const gitCalls: string[][] = [];
   const runs: { sha: string; spec: string; attempt: string }[] = [];
-  const mutate = (fn: (map: WorkMap) => void) => updateMap(projectPath, 'w-01', fn);
+  const mutate = (fn: (map: WorkMap) => void) => updateMap(projectPath, workId, fn);
   const io = autonomousEngineIO({
     create: async input => {
       let sessionId = '';
@@ -89,7 +92,7 @@ async function fixture(options: { count?: number; independent?: boolean; qualita
   };
   const realGit = io.git;
   io.git = async (args, opts) => { gitCalls.push([...args]); return realGit(args, { ...opts, env: opts?.env ?? gitEnv }); };
-  const bare = async (...args: string[]) => (await io.git([`--git-dir=${attemptsEngineGitPath(projectPath, 'w-01')}`, ...args])).toString('utf8').trim();
+  const bare = async (...args: string[]) => (await io.git([`--git-dir=${attemptsEngineGitPath(projectPath, workId)}`, ...args])).toString('utf8').trim();
   io.runner = async (ctx, spec, sha, attemptId): Promise<CheckResult> => {
     runs.push({ sha, spec: spec.id, attempt: attemptId });
     const requirement = JSON.parse(await bare('show', `${sha}:spec/${spec.item}.json`)) as { file: string; expected: string };
@@ -123,14 +126,14 @@ async function fixture(options: { count?: number; independent?: boolean; qualita
   };
   const accept = async () => {
     const proposal = (await read()).rooms[0]!.proposal!;
-    await resolveRoomProposal({ projectPath, workId: 'w-01', roomId: 'r-01', proposalId: proposal.id, rev: proposal.rev, planId: proposal.plan?.id ?? proposal.planId!, planRev: proposal.plan?.rev ?? proposal.planRev!, action: 'accept' });
+    await resolveRoomProposal({ projectPath, workId, roomId: 'r-01', proposalId: proposal.id, rev: proposal.rev, planId: proposal.plan?.id ?? proposal.planId!, planRev: proposal.plan?.rev ?? proposal.planRev!, action: 'accept' });
   };
   const go = async () => {
     expect(await post(keyed({ action: 'propose-plan', roomId: 'r-01', text: 'Go: implement the frozen specifications', plan: draft, requestKey: '' }))).toMatchObject({ ok: true });
-    expect((await fs.stat(attemptsEngineGitPath(projectPath, 'w-01')).catch(() => null))).toBeNull();
+    expect((await fs.stat(attemptsEngineGitPath(projectPath, workId)).catch(() => null))).toBeNull();
     await accept();
     expect((await state()).integration).toMatchObject({ baseSha, verifiedHead: baseSha, queue: [], candidateHead: null });
-    await engine.flush(projectPath, 'w-01');
+    await engine.flush(projectPath, workId);
     expect(await bare('rev-parse', `refs/heads/${(await state()).integration.branch}`)).toBe(baseSha);
   };
   const submission = async (index = 0, change: Partial<Submission['manifest']> = {}): Promise<Submission> => {
@@ -141,7 +144,7 @@ async function fixture(options: { count?: number; independent?: boolean; qualita
   };
   const submit = async (index = 0, request?: Submission) => engine.submit(ref((await attempt(index)).worker!), 'pl-01', (await plan()).rev, request ?? await submission(index));
   const write = async (index = 0, content?: string) => { const a = await attempt(index); await fs.writeFile(path.join(await clone(index), `item-${a.item}.txt`), content ?? `implementation ${a.item}`); };
-  const flush = () => engine.flush(projectPath, 'w-01');
+  const flush = () => engine.flush(projectPath, workId);
   const verifyAttempt = async (index = 0) => {
     const a = await attempt(index);
     expect(await engine.verify(ref(a.verifier!), 'pl-01', (await plan()).rev, { action: 'verify', attemptId: a.id, sha: a.sha!, criterion: 0, verdict: 'pass', note: 'Artifacts satisfy the criterion' })).toMatchObject({ ok: true });
@@ -161,15 +164,15 @@ async function fixture(options: { count?: number; independent?: boolean; qualita
     if (options.qualitative) await verifyAttempt(index);
     await integrate();
   };
-  const resume = async () => resumeAutonomousPlan({ projectPath, workId: 'w-01', roomId: 'r-01', planId: 'pl-01', rev: (await plan()).rev });
+  const resume = async () => resumeAutonomousPlan({ projectPath, workId, roomId: 'r-01', planId: 'pl-01', rev: (await plan()).rev });
   const restart = async () => {
     await engine.stop();
     const map = await read();
-    engine = createAutonomousEngine(io, { provider: 'codex', verifier: { provider: 'claude', model: 'sonnet' }, works: { snapshot: () => ({ entries: [{ projectPath, map }] }) as any, onChange: () => () => {} } });
+    engine = createAutonomousEngine(io, { provider: 'codex', verifier: { provider: 'claude', model: 'sonnet' }, works: { snapshot: () => ({ entries: [{ projectPath, map }] }) as unknown as WorksView, onChange: () => () => {} } });
     engines.push(engine); engine.start(); await flush();
   };
   const handlers = createPlanHandlers({ start() {}, stop() {}, flush: async () => summarizePlanEffects(await read()) });
-  const returnItem = async (item = 1) => handlers['plans.verify']({ projectPath, workId: 'w-01', planId: 'pl-01', rev: (await plan()).rev, item, verdict: 'returned', note: 'Human found a late defect' }, {} as any);
+  const returnItem = async (item = 1) => handlers['plans.verify']({ projectPath, workId, planId: 'pl-01', rev: (await plan()).rev, item, verdict: 'returned', note: 'Human found a late defect' }, {} as RequestInfo);
   const mirror = async () => {
     const a = await state();
     expect(await bare('rev-parse', `refs/heads/${a.integration.branch}`)).toBe(a.integration.verifiedHead);
@@ -177,15 +180,15 @@ async function fixture(options: { count?: number; independent?: boolean; qualita
     expect(await git('rev-parse', 'HEAD')).toBe(baseSha);
     expect(await git('status', '--porcelain')).toBe('');
   };
-  return { projectPath, baseSha, git, bare, io, plan, state, attempt, clone, read, mutate, ref, go, post, draft, accept, submission, submit, write, flush, verifyAttempt, integrate, finish, resume, restart, returnItem, handlers, mirror, snapshots, events, gitCalls, runs, engine: () => engine };
+  return { projectPath, workId, baseSha, git, bare, io, plan, state, attempt, clone, read, mutate, ref, go, post, draft, accept, submission, submit, write, flush, verifyAttempt, integrate, finish, resume, restart, returnItem, handlers, mirror, snapshots, events, gitCalls, runs, engine: () => engine };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 
 function crashOnWrite(f: Fixture, matches: (plan: RoomPlan) => boolean, message: string) {
   const update = f.io.updateMap;
   let crashed = false;
-  f.io.updateMap = (project, work, mutate) => update(project, work, draft => {
-    mutate(draft);
+  f.io.updateMap = (project, work, mutate) => update(project, work, (draft, letters) => {
+    mutate(draft, letters);
     if (!crashed && matches(draft.plans![0]!)) { crashed = true; throw new Error(message); }
   });
   return () => { expect(crashed).toBe(true); f.io.updateMap = update; };
@@ -201,7 +204,7 @@ async function expectReadOnlyRecovery(f: Fixture) {
 }
 
 async function planTool(f: Fixture, name: string, args: Record<string, unknown>) {
-  const server = createParleyServer({ projectPath: f.projectPath, workId: 'w-01', workDir: workPaths(f.projectPath, 'w-01').dir, sessionId: (await f.attempt()).worker!, channel: false });
+  const server = createParleyServer({ projectPath: f.projectPath, workId: f.workId, workDir: workPaths(f.projectPath, f.workId).dir, sessionId: (await f.attempt()).worker!, channel: false });
   type Transport = Parameters<typeof server.connect>[0];
   let reply!: (message: { result?: { isError?: boolean; content: { text: string }[] } }) => void;
   const response = new Promise<{ result?: { isError?: boolean; content: { text: string }[] } }>(resolve => { reply = resolve; });
@@ -436,6 +439,9 @@ describe('autonomous room cycle with stub agents and real Git', () => {
       expect(f.events).toEqual(events); expect(f.runs).toEqual(runs);
     }
     expect(a.seq.receipt).toBe(1); expect(a.ops.filter(op => op.kind === 'capture')).toHaveLength(1);
+    // The receipt note goes to the worker through the letter tables, once, however many submissions raced.
+    const notes = readLetters(f.projectPath, f.workId, { roomId: 'r-01', kind: 'note', limit: 100 }).filter(letter => letter.text.startsWith('Receipt '));
+    expect(notes).toMatchObject([{ to: [received.worker], text: `Receipt ${received.receipt!.id} recorded (valid).` }]);
     expect(f.events.filter(event => event === `stop:${received.worker}`)).toHaveLength(1);
     expect(await f.bare('rev-parse', `refs/attempts/pl-01/${received.id}`)).toBe(received.receipt!.sha);
     expect(await f.bare('show', `${received.sha}:item-1.txt`)).toBe('implementation 1');
@@ -601,11 +607,11 @@ describe('autonomous room cycle with stub agents and real Git', () => {
     const artifact = (await f.attempt()).manifest!.artifacts[0]!;
     const stored = path.join(path.dirname(await f.clone()), artifact.storedAs);
     const before = await f.read();
-    expect(() => archiveRoom(before, 'r-01', HUMAN)).toThrow('cancel the autonomous plan first');
-    await expect(f.handlers['rooms.setMode']({ projectPath: f.projectPath, workId: 'w-01', roomId: 'r-01', mode: 'free', reason: 'Bypass cancellation', confirmCancel: true }, {} as any)).rejects.toThrow('Cancel the autonomous plan first');
+    expect(() => archiveRoom(before, mapLetterTx({ ...before, messages: [] }).letters, 'r-01', HUMAN)).toThrow('cancel the autonomous plan first');
+    await expect(f.handlers['rooms.setMode']({ projectPath: f.projectPath, workId: f.workId, roomId: 'r-01', mode: 'free', reason: 'Bypass cancellation', confirmCancel: true }, {} as RequestInfo)).rejects.toThrow('Cancel the autonomous plan first');
     const restore = crashOnWrite(f, p => p.autonomous!.ops.some(op => op.kind === 'cleanup' && op.payload.purpose === 'cancellation' && op.state === 'done'), 'cleanup settlement lost');
     const rev = (await f.plan()).rev;
-    const cancel = () => f.engine().cancel({ projectPath: f.projectPath, workId: 'w-01', planId: 'pl-01', rev });
+    const cancel = () => f.engine().cancel({ projectPath: f.projectPath, workId: f.workId, planId: 'pl-01', rev });
     await expect(cancel()).rejects.toThrow('cleanup settlement lost'); restore();
     expect((await f.plan()).status).toBe('active'); expect((await f.state()).halted?.reason).toBe('human');
     expect((await f.state()).ops.some(op => op.kind === 'cleanup' && op.state === 'intended')).toBe(true);
@@ -619,7 +625,7 @@ describe('autonomous room cycle with stub agents and real Git', () => {
     }
     expect(await fs.readFile(stored, 'utf8')).toBe(bytes);
     expect(bytesHash(await fs.readFile(stored))).toBe(hash);
-    expect((await fs.stat(attemptsEngineGitPath(f.projectPath, 'w-01'))).isDirectory()).toBe(true);
+    expect((await fs.stat(attemptsEngineGitPath(f.projectPath, f.workId))).isDirectory()).toBe(true);
     expect(await fs.stat(await f.clone(1)).catch(() => null)).toBeNull();
     await f.mirror();
     const events = [...f.events], refs = await f.bare('show-ref'); await cancel(); await f.flush();

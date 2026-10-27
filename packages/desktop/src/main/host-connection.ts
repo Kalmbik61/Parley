@@ -13,10 +13,12 @@ import {
   LineTooLongError,
   PROTOCOL_VERSION,
   refKey,
+  ROOMS_MAIL_FEATURE,
   type BrowserAgentOpEvent,
   type BrowserAgentResult,
   type EventData,
   type EventMessage,
+  type HostNotice,
   type MethodName,
   type NotificationName,
   type Result,
@@ -24,6 +26,9 @@ import {
 import type { HostStatus } from '../shared/bridge.js';
 import { S } from '../shared/strings.js';
 import { createRpcRing, type RpcRecord } from './diagnostics/rpc-ring.js';
+
+/** Сколько уведомлений хоста main держит для окна: столько же, сколько хранит их стор окна. */
+const NOTICE_CACHE_LIMIT = 20;
 
 interface PendingCall {
   resolve: (value: unknown) => void;
@@ -169,6 +174,12 @@ export class HostConnection {
    */
   private readonly activityCache = new Map<string, EventData<'activity.changed'>>();
   /**
+   * `host.notice` текущего подключения, не больше `NOTICE_CACHE_LIMIT` последних. Стартовые уведомления хост (карты, не
+   * переехавшие в базу) повторяет новому клиенту сразу после `hello`, как активность, — а рендерер подписывается позже,
+   * в статусе connected: без этого кеша повтор уходил бы в пустоту и человек не узнал бы о работе, оставшейся в файле.
+   */
+  private readonly noticeCache: HostNotice[] = [];
+  /**
    * Сокет, на котором хост прислал строку длиннее предела кадра (хост до P35 с огромным снимком работ). Декодер на такой
    * строке не восстановить, а переподключение получило бы ту же строку по кругу: сокет остаётся (чтобы «Restart host»
    * мог послать `host.shutdown`), его данные не читаются, а человеку сказано, что делать. Его закрытие хостом — обычный
@@ -216,6 +227,11 @@ export class HostConnection {
   /** Снимок кеша активности — окно берёт его, подписавшись на события (`host:activity-snapshot`). */
   activitySnapshot(): Array<EventData<'activity.changed'>> {
     return [...this.activityCache.values()];
+  }
+
+  /** Снимок кеша уведомлений хоста — окно берёт его, подписавшись на события (`host:notices-snapshot`). */
+  noticesSnapshot(): HostNotice[] {
+    return [...this.noticeCache];
   }
 
   onStatus(listener: (status: HostStatus) => void): () => void {
@@ -349,6 +365,7 @@ export class HostConnection {
     // пропасть вместе с ним. Чистим до `hello`, а не после ответа: повтор идёт
     // в том же куске данных сразу за ответом и разобрался бы раньше продолжения.
     this.activityCache.clear();
+    this.noticeCache.length = 0;
     socket.on('data', (chunk: Buffer) => this.handleChunk(socket, decoder, chunk));
     // Ошибки сокета проявляются как 'close' — отдельный обработчик тут не нужен,
     // но слушатель обязателен, иначе неотловленная ошибка валит процесс.
@@ -367,9 +384,15 @@ export class HostConnection {
       encodeLine({
         id,
         method: 'hello',
-        // Окно читает компактный снимок работ (P35): письма хвостом, старше — страницами `context.messages`, и исполняет
-        // операции агента над своим браузером (спека браузера 3.7).
-        params: { token, protocol: PROTOCOL_VERSION, client: 'desktop', features: [COMPACT_WORKS_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE)] },
+        // Окно читает компактный снимок работ (P35): письма хвостом, старше — страницами `context.messages`; письма и
+        // отметки прочтения берёт событием `rooms.mail` (спека rooms.mail 6.10); исполняет операции агента над своим
+        // браузером (спека браузера 3.7).
+        params: {
+          token,
+          protocol: PROTOCOL_VERSION,
+          client: 'desktop',
+          features: [COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE)],
+        },
       }),
     );
 
@@ -446,6 +469,10 @@ export class HostConnection {
       if (obj.event === 'activity.changed') {
         const data = obj.data as EventData<'activity.changed'>;
         this.activityCache.set(refKey(data.ref), data);
+      }
+      if (obj.event === 'host.notice') {
+        this.noticeCache.push(obj.data as HostNotice);
+        if (this.noticeCache.length > NOTICE_CACHE_LIMIT) this.noticeCache.shift();
       }
       for (const listener of this.eventListeners) listener(obj as unknown as EventMessage);
       return;

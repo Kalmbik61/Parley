@@ -15,7 +15,6 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
-  addMessage,
   attemptKindFor,
   limitsFromConfig,
   prepareSessionRole,
@@ -83,6 +82,7 @@ import {
   updateMap,
   workPaths,
   writeBrief,
+  writeLetters,
   type CodexWriteApprovals,
   type EffortLevel,
   type ParleyConfig,
@@ -91,7 +91,7 @@ import {
   type ProviderEntry,
 } from '@parley/core';
 import { HOST_ERROR_REASONS, refKey } from '@parley/protocol';
-import type { SessionRef, WorksSnapshot } from '@parley/protocol';
+import type { SessionRef } from '@parley/protocol';
 import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { ConsentsService } from '../consents/consents-service.js';
 import type { HostContext } from '../context.js';
@@ -100,7 +100,7 @@ import { serialized } from '../methods/custom-providers.js';
 import type { HookServer } from '../hooks/hook-server.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
-import type { WorksService } from '../works/works-service.js';
+import type { WorksService, WorksView } from '../works/works-service.js';
 import { gitFailure } from '../worktrees/worktrees-service.js';
 import { createStepTimer } from '../timing.js';
 import { createSkillInstaller } from './agent-skills.js';
@@ -149,8 +149,8 @@ export type LaunchOutcome = 'started' | 'held';
 export type CreatedSession = SessionRef & { held?: 'folder-trust' };
 
 /**
- * Попыток записать старт процесса в карту, пока `map.lock` занят: подъём всей работы после перезапуска хоста
- * держал замок дольше 3 с (2026-10-09), а процесс к этому моменту уже идёт.
+ * Попыток записать старт процесса в карту, пока база работ занята: подъём всей работы после перезапуска хоста
+ * держал запись дольше 3 с (2026-10-09), а процесс к этому моменту уже идёт.
  */
 const START_WRITE_ATTEMPTS = 3;
 
@@ -396,13 +396,16 @@ export function createSessionsService(
       const text = `${sessionTag(ref.sessionId)} was not started: ${error.message}`;
       host.broadcast('host.notice', { kind: 'launch-failed', ref, text, at: new Date().toISOString() });
       if (parentId !== null) {
-        await updateMap(ref.projectPath, ref.workId, (current) => {
-          if (current.sessions.some((candidate) => candidate.id === parentId)) {
-            addMessage(current, { from: SYSTEM, to: [parentId], text });
-          }
-        }).catch((mapError: unknown) => {
+        try {
+          // Только письмо: без разбора карты (спека хранилища 6.2).
+          writeLetters(ref.projectPath, ref.workId, (letters, current) => {
+            if (current.sessions.some((candidate) => candidate.id === parentId)) {
+              letters.add({ roomId: null, from: SYSTEM, to: [parentId], text, kind: 'note' });
+            }
+          });
+        } catch (mapError) {
           host.log.error('письмо об отказе запуска не записалось', { ref, error: String(mapError) });
-        });
+        }
       }
     }
     throw new HostError('conflict', error.message, {
@@ -687,16 +690,18 @@ export function createSessionsService(
           });
           const parentId = session.parent;
           if (parentId !== null) {
-            await updateMap(ref.projectPath, ref.workId, (current) => {
-              if (current.sessions.some((candidate) => candidate.id === parentId)) {
-                addMessage(current, { from: SYSTEM, to: [parentId], text });
-              }
-            }).catch((mapError: unknown) => {
+            try {
+              writeLetters(ref.projectPath, ref.workId, (letters, current) => {
+                if (current.sessions.some((candidate) => candidate.id === parentId)) {
+                  letters.add({ roomId: null, from: SYSTEM, to: [parentId], text, kind: 'note' });
+                }
+              });
+            } catch (mapError) {
               host.log.error('письмо о несозданном worktree не записалось', {
                 ref,
                 error: String(mapError),
               });
-            });
+            }
           }
           throw error;
         }
@@ -897,9 +902,9 @@ export function createSessionsService(
                 plan.env['PARLEY_NATIVE_CONTEXT_REVISION']);
               break;
             } catch (error) {
-              // Замок держат другие писатели карты — это пройдёт; прочий сбой повтором не лечится.
+              // Базу держат другие писатели карты — это пройдёт; прочий сбой повтором не лечится.
               if (!(error instanceof MapLockTimeoutError) || attempt >= START_WRITE_ATTEMPTS) throw error;
-              host.log.warn('запись старта сессии ждёт map.lock — повтор', { ref, attempt });
+              host.log.warn('запись старта сессии ждёт базу работ — повтор', { ref, attempt });
             }
           }
         } finally {
@@ -1293,7 +1298,7 @@ export function createSessionsService(
    * гасит процесс сам — закрытая сессия жить не должна. Так же и всякая живая
    * сессия архивной работы: архив освобождает процессы агентов, сессии засыпают.
    */
-  function stopRetired(snapshot: WorksSnapshot): void {
+  function stopRetired(snapshot: WorksView): void {
     for (const entry of snapshot.entries) {
       const archived = entry.map.work.status === 'archived';
       for (const session of entry.map.sessions) {

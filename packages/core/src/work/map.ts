@@ -2,8 +2,10 @@ import { isPublishedAgentPlan } from '../agent-plan.js';
 import { validateDecisionJournalStorage } from './decision-journal.js';
 import { validatePlanStorage } from './plans.js';
 import { validatePlanEffects } from './plan-effects.js';
+import { compactStoredTexts } from './stored-texts.js';
 import { validateResources } from './resource-policy.js';
 import { EFFORT_TOKEN, type EffortLevel } from '../providers.js';
+import type { LetterTx } from './letter-store.js';
 import { defaultSessionName, NEW_LABEL } from './names.js';
 import type {
   CodexThreadBinding,
@@ -13,6 +15,7 @@ import type {
   MessageVia,
   SessionLifecycle,
   SessionResult,
+  WindowWorkMap,
   WorkMap,
   WorkProvider,
   WorkSession,
@@ -76,7 +79,7 @@ export function nextSessionId(map: WorkMap): string {
  * Следующий id сообщения внутри работы: `m-01`, `m-02`, … Номер — по списку, но не ниже `work.messageSeq`:
  * удалённая комната уносит свои письма, и их id не переиспользуются.
  */
-export function nextMessageId(map: WorkMap): string {
+export function nextMessageId(map: WindowWorkMap): string {
   const next = Math.max(map.work.messageSeq ?? 0, maxNumber(map.messages.map((message) => message.id), 'm-')) + 1;
   return `m-${String(next).padStart(2, '0')}`;
 }
@@ -160,11 +163,11 @@ export function addSession(
 /**
  * Убирает сессию из карты (план от 2026-09-06, раздел C). Дети
  * поднимаются к родителю удалённой, её id уходит из чужих `contextFrom`, а
- * письма остаются с пометкой `deleted` — переписку задним числом не переписывают.
- * След удаления — только id в `work.deletedSessions`: ни ярлыка, ни задачи, ни
+ * письма остаются с пометкой `deleted` (`letters.flagDeleted`, спека хранилища 6.2) — переписку задним числом не
+ * переписывают. След удаления — только id в `work.deletedSessions`: ни ярлыка, ни задачи, ни
  * резюме в карте не остаётся.
  */
-export function removeSession(map: WorkMap, sessionId: string): WorkSession {
+export function removeSession(map: WorkMap, letters: LetterTx, sessionId: string): WorkSession {
   const at = map.sessions.findIndex((candidate) => candidate.id === sessionId);
   if (at === -1) throw new Error(`session ${sessionId} is not in the map`);
   const [removed] = map.sessions.splice(at, 1) as [WorkSession];
@@ -176,11 +179,7 @@ export function removeSession(map: WorkMap, sessionId: string): WorkSession {
     }
   }
   for (const room of map.rooms) if (room.ownerId === sessionId) room.ownerId = null;
-  for (const message of map.messages) {
-    // `to` — массив: сравнение строки с ним было бы всегда ложным и молча
-    // перестало бы помечать письма удалённой сессии.
-    if (message.from === sessionId || message.to.includes(sessionId)) message.deleted = true;
-  }
+  letters.flagDeleted(sessionId);
 
   const deleted = map.work.deletedSessions ?? [];
   if (!deleted.includes(sessionId)) deleted.push(sessionId);
@@ -207,8 +206,11 @@ export interface NewMessage {
   via?: MessageVia;
 }
 
-/** Кладёт сообщение в карту непрочитанным: доставка — pull через `check_inbox`. */
-export function addMessage(map: WorkMap, init: NewMessage, at = new Date().toISOString()): Message {
+/**
+ * Кладёт сообщение в карту с письмами непрочитанным: доставка — pull через `check_inbox`. Карта с письмами — это
+ * `WindowWorkMap` (тесты, окно и сверка переезда); в базе письма кладёт `LetterTx.add` (спека хранилища 6.2).
+ */
+export function addMessage(map: WindowWorkMap, init: NewMessage, at = new Date().toISOString()): Message {
   // Поля перечислены руками, а не `...init`: при разложении `kind: undefined`
   // попал бы в карту ключом без значения, и письмо на диске осталось бы без вида.
   // По той же причине `replyTo` дописывается только заданный.
@@ -346,13 +348,8 @@ const isSessionShape =
         (value.workspace.kind === 'artifacts' || value.workspace.kind === 'clone' &&
           [value.workspace.branch, value.workspace.sha].every(isNonemptyString))));
 
-/** У письма v2 адресаты — массив: по нему идут `removeSession` и `recipientsOf`. */
-const isMessageShape =
-  (version: 1 | 2) =>
-  (value: unknown): boolean =>
-    isRecord(value) &&
-    typeof value.id === 'string' &&
-    (version === 1 ? typeof value.to === 'string' : Array.isArray(value.to));
+/** Поле письма — строка: так оно ляжет в колонку таблицы `messages` (спека хранилища 6.2). */
+const isText = (value: unknown): value is string => typeof value === 'string';
 
 const isString = (value: unknown): value is string => typeof value === 'string';
 const isNonemptyString = (value: unknown): value is string => isString(value) && value.length > 0;
@@ -475,18 +472,75 @@ function validateAutonomousStorage(map: WorkMap): void {
 }
 
 /**
- * Разбирает карту. Форма undocumented-логов тут ни при чём: файл пишем мы сами,
- * поэтому чужая форма — повод отказаться, а не догадываться (раздел 8). Карта
- * v1 поднимается до v2 в памяти; на диск v2 ляжет первой же мутацией.
+ * Что не так с письмом прежней карты: первая найденная причина или `undefined`, если письмо годится. Письма уходят в
+ * таблицы (спека хранилища 6.2, переезд — 6.6), и поле неверной формы не должно всплыть сырой ошибкой `TypeError` или
+ * SQLite из вставки: отказ называет письмо и поле. У письма v2 адресаты — массив (по нему идут `removeSession` и
+ * `recipientsOf`), комната — строка или `null`, отметки прочтения — объект «читатель → время», время письма читается как
+ * дата (по нему идёт сравнение `sinceAt`). Письмо v1 `roomId` и `readBy` ещё не знает — их ставит `migrateMessageV1`.
  */
-export function parseMap(raw: string, file: string): WorkMap {
-  let data: unknown;
-  try {
-    data = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`map ${file} cannot be parsed: ${(error as Error).message}`);
+function letterProblem(version: 1 | 2, value: unknown): string | undefined {
+  if (!isRecord(value)) return 'a letter is not an object';
+  if (!isText(value.id)) return 'a letter has no string id';
+  const bad = (field: string): string => `letter ${value.id as string} has an invalid ${field}`;
+  if (version === 1 ? !isText(value.to) : !Array.isArray(value.to) || !value.to.every(isText)) return bad('to');
+  if (!isText(value.from)) return bad('from');
+  if (!isText(value.text)) return bad('text');
+  if (!isText(value.at) || Number.isNaN(Date.parse(value.at))) return bad('at');
+  if (value.kind !== undefined && value.kind !== null && !isText(value.kind)) return bad('kind');
+  if (value.deleted !== undefined && typeof value.deleted !== 'boolean') return bad('deleted');
+  if (version === 2) {
+    if (value.roomId !== null && !isText(value.roomId)) return bad('roomId');
+    if (!isRecord(value.readBy) || !Object.values(value.readBy).every(isText)) return bad('readBy');
   }
+  return undefined;
+}
 
+/**
+ * Разбирает прежнюю карту `map.json` вместе с письмами. Форма undocumented-логов тут ни при чём: файл пишем мы сами,
+ * поэтому чужая форма — повод отказаться, а не догадываться (раздел 8). Карта v1 поднимается до v2 в памяти. Письма в
+ * хранимой карте не живут (спека хранилища 6.2): этот разбор нужен переезду прежних файлов в базу и тестам.
+ */
+export function parseMap(raw: string, file: string): WindowWorkMap {
+  return normalizeLegacyMap(parseMapText(raw, file), file);
+}
+
+/**
+ * Первая половина `parseMap`: текст в сырой объект, форму не проверяет (спека хранилища 6.2). Имя источника —
+ * только для текста отказа: это файл `map.json` или работа, чьи строки собраны из базы.
+ */
+export function parseMapText(raw: string, source: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`map ${source} cannot be parsed: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * Вторая половина `parseMap` для карты с письмами: проверка формы писем и их миграции, затем `normalizeMap` остального
+ * (спека хранилища 6.2). Правит `data` на месте; письма остаются в нём как `messages`.
+ */
+export function normalizeLegacyMap(data: unknown, source: string): WindowWorkMap {
+  const version = isRecord(data) ? data.schemaVersion : undefined;
+  if (!isRecord(data) || (version !== 1 && version !== 2) || !Array.isArray(data.messages)) {
+    throw new Error(`map ${source} cannot be parsed: unexpected shape`);
+  }
+  for (const letter of data.messages) {
+    const problem = letterProblem(version, letter);
+    if (problem !== undefined) throw new Error(`map ${source} cannot be parsed: unexpected shape (${problem})`);
+  }
+  if (version === 1) for (const message of data.messages as Record<string, unknown>[]) migrateMessageV1(message);
+  for (const message of data.messages as Record<string, unknown>[]) migrateMessage(message);
+  return normalizeMap(data, source) as WindowWorkMap;
+}
+
+/**
+ * Проверка формы, подъём v1 до v2, миграции записей и проверки хранимой карты целиком (спека хранилища 6.2). Нужна
+ * отдельно потому, что карту из базы собирает `rowsToMap`, а не `JSON.parse`. Писем в хранимой карте нет: их форму
+ * проверяет `LetterTx.add` при записи, а старые файлы — `normalizeLegacyMap`. Правит `data` на месте и идемпотентна:
+ * уже разобранная карта проходит без изменений.
+ */
+export function normalizeMap(data: unknown, source: string): WorkMap {
   const work = isRecord(data) ? data.work : undefined;
   const version = isRecord(data) ? data.schemaVersion : undefined;
   if (
@@ -495,17 +549,14 @@ export function parseMap(raw: string, file: string): WorkMap {
     !isRecord(work) ||
     typeof work.id !== 'string' ||
     !Array.isArray(data.sessions) ||
-    !Array.isArray(data.messages) ||
     (version === 2 && !Array.isArray(data.rooms)) ||
-    !data.sessions.every(isSessionShape(version)) ||
-    !data.messages.every(isMessageShape(version))
+    !data.sessions.every(isSessionShape(version))
   ) {
-    throw new Error(`map ${file} cannot be parsed: unexpected shape`);
+    throw new Error(`map ${source} cannot be parsed: unexpected shape`);
   }
 
   if (version === 1) {
     for (const session of data.sessions as Record<string, unknown>[]) migrateSessionV1(session);
-    for (const message of data.messages as Record<string, unknown>[]) migrateMessageV1(message);
     data.rooms = [];
     data.schemaVersion = 2;
   }
@@ -514,13 +565,12 @@ export function parseMap(raw: string, file: string): WorkMap {
   for (const session of map.sessions) {
     migrateSession(session as unknown as Record<string, unknown>);
   }
-  for (const message of map.messages) {
-    migrateMessage(message as unknown as Record<string, unknown>);
-  }
   for (const room of map.rooms) {
     migrateRoom(room as unknown, map.sessions);
   }
   map.plans ??= [];
+  // Старый вид (записанный экспорт с текстом, отправленный эффект с текстом) переводится при разборе (спека хранилища 6.2).
+  compactStoredTexts(map);
   validatePlanStorage(map);
   validateAutonomousStorage(map);
   validatePlanEffects(map);
@@ -574,9 +624,15 @@ function migrateMessageV1(message: Record<string, unknown>): void {
  * Письма до 2026-09-08 вида не знали: заметка (спецификация 2026-09-08, 3.1).
  * Миграция при чтении, как у `idle`: читатели карты дефолта не знают, а файл
  * получит поле при первой же мутации.
+ *
+ * Два приведения под таблицу писем (спека хранилища 6.2, 6.6): время письма становится каноническим ISO-моментом (тот же
+ * момент, а запросы `sinceAt` сравнивают `at` как текст), а `deleted: false` убирается — у письма без признака тот же
+ * смысл, и в таблице это колонка `deleted = 0`. Обе правки идемпотентны; форму поля уже проверил `letterProblem`.
  */
 function migrateMessage(message: Record<string, unknown>): void {
   message['kind'] ??= 'note';
+  message['at'] = new Date(message['at'] as string).toISOString();
+  if (message['deleted'] === false) delete message['deleted'];
 }
 
 /** Снимок рецепта в карте: ровно три строки, без лишних полей; границы — как у файла рецепта (1 MiB). */

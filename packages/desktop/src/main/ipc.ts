@@ -473,6 +473,12 @@ export function registerIpc(options: RegisterIpcOptions): void {
     }),
   );
 
+  // Уведомления хоста, пришедшие до подписки окна (стартовые: карты, не переехавшие в базу).
+  ipcMain.handle(
+    'host:notices-snapshot',
+    withIpcError(async () => connection.noticesSnapshot()),
+  );
+
   // Есть ли окно острова: `sendSync` прелоада главного окна, чтобы `notify.ts` знал, слать ли системное уведомление.
   ipcMain.on('app:island-active', (event) => {
     (event as { returnValue: unknown }).returnValue = islandActive?.() === true;

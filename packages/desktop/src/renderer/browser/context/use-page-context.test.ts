@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, renderHook, type RenderHookResult } from '@testing-library/react';
 import { toast } from 'sonner';
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import type { SavedContext } from '../../../shared/browser-types.js';
 import { workKey } from '../../../shared/work-keys.js';
 import { useLayoutStore } from '../../layout/store.js';
@@ -24,7 +24,7 @@ const draft = (label: string): ContextDraft => ({ kind: 'element', label, markdo
 const roomPaths = (): readonly string[] => useUiStore.getState().composerAttachments[roomKey(KEY, 'r-01')] ?? [];
 
 /** Хук на вкладке без поля `target`: цель — умолчание (здесь единственная комната). */
-function mount(entry: WorkEntry): RenderHookResult<PageContext, unknown> {
+function mount(entry: WindowWorkEntry): RenderHookResult<PageContext, unknown> {
   return renderHook(() =>
     usePageContext({ bridge, workKey: KEY, tabId: 'browser:t1', entry, stored: undefined, sendDeps: { bridge, session: () => null, openSession: vi.fn() } }),
   );
@@ -85,7 +85,7 @@ describe('usePageContext — страница панели хозяина (сп�
   const sendDeps = { bridge: undefined as unknown as FakeBridge, session: () => null, openSession: vi.fn() };
 
   /** Хук страницы панели: цель закреплена за хозяином `fixed`, `stored` и умолчание ни при чём. */
-  function mountPinned(entry: WorkEntry, fixed: { kind: 'session'; sessionId: string } | { kind: 'room'; roomId: string }, stored?: { kind: 'room'; roomId: string }): RenderHookResult<PageContext, unknown> {
+  function mountPinned(entry: WindowWorkEntry, fixed: { kind: 'session'; sessionId: string } | { kind: 'room'; roomId: string }, stored?: { kind: 'room'; roomId: string }): RenderHookResult<PageContext, unknown> {
     return renderHook(() => usePageContext({ bridge, workKey: KEY, tabId: 'bp-000001', entry, stored, fixed, sendDeps: { ...sendDeps, bridge } }));
   }
 

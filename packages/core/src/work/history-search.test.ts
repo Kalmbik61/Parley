@@ -3,7 +3,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { addBacklogItem } from './backlog.js';
 import { searchHistory } from './history-search.js';
-import { addMessage, addSession, setResult } from './map.js';
+import { addSession, setResult } from './map.js';
 import { addProjectMemory } from './project-memory.js';
 import { rebuildRoomHistory, shareRoomHistory } from './room-history.js';
 import { addRoom } from './rooms.js';
@@ -24,11 +24,11 @@ beforeEach(async () => {
   previous = process.env.PARLEY_HOME; process.env.PARLEY_HOME = path.join(root, 'home');
   previousHome = process.env.HOME;
   workId = (await createWork(project, { title: 'Work' })).work.id;
-  await updateMap(project, workId, map => {
+  await updateMap(project, workId, (map, letters) => {
     addSession(map, { provider: 'codex', label: 'Lead', task: 'Bounded' });
     addRoom(map, { title: 'Room', creator: HUMAN, members: ['s-01'], lead: 's-01' });
-    addMessage(map, { from: 's-01', to: [], roomId: 'r-01', kind: 'question', text: 'Should the cache be sharded?' });
-    addMessage(map, { from: HUMAN, to: [], roomId: 'r-01', kind: 'note', text: 'Sharding is fine for now' });
+    letters.add({ from: 's-01', to: [], roomId: 'r-01', kind: 'question', text: 'Should the cache be sharded?' });
+    letters.add({ from: HUMAN, to: [], roomId: 'r-01', kind: 'note', text: 'Sharding is fine for now' });
     map.sessions[0]!.summary = 'Migrated the cache layer\nAll tests pass; benchmark attached.';
     setResult(map, 's-01', 'done', '2026-10-05T12:00:00.000Z');
   });
@@ -119,7 +119,7 @@ describe('search_history: поиск по записям проекта', () => 
 
   it('дубликат shared/local: письмо в одном экземпляре — локальном; письма только из снимка остаются', async () => {
     await shareRoomHistory(project, workId, 'r-01');
-    await updateMap(project, workId, map => { addMessage(map, { from: HUMAN, to: [], roomId: 'r-01', kind: 'note', text: 'Later local-only remark about sharding' }); });
+    await updateMap(project, workId, (_map, letters) => { letters.add({ from: HUMAN, to: [], roomId: 'r-01', kind: 'note', text: 'Later local-only remark about sharding' }); });
     await rebuildRoomHistory(project, workId, 'r-01');
 
     const both = await searchHistory(project, { query: 'sharded', scope: 'history' });

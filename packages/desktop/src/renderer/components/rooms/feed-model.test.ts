@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { capPlan, type AgentPlanItem } from '@parley/core/agent-plan';
-import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
+import type { Message, Room, WindowWorkEntry, WorkSession } from '@parley/core';
 import type { LiveMetrics, LiveTask, MailWait } from '@parley/protocol';
 import type { ActivityEntry } from '../../store/activity.js';
 import { activityMap, makeActivity, makeLetter, makeNeed, makeRoom, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
@@ -35,7 +35,7 @@ function message(id: string, patch: Partial<Message> = {}): Message {
   return makeLetter(id, { roomId: 'r-01', to: [], from: 'human', ...patch });
 }
 
-function entryOf(patch: { room?: Room; sessions?: WorkSession[]; messages?: Message[]; title?: string } = {}): WorkEntry {
+function entryOf(patch: { room?: Room; sessions?: WorkSession[]; messages?: Message[]; title?: string } = {}): WindowWorkEntry {
   return makeWork('w-01', {
     projectPath: PROJECT,
     title: patch.title ?? 'Платежи',
@@ -45,8 +45,8 @@ function entryOf(patch: { room?: Room; sessions?: WorkSession[]; messages?: Mess
   });
 }
 
-function build(entry: WorkEntry, activity = {}): RoomModel {
-  const model = buildRoomModel({ entry, roomId: 'r-01', providers: PROVIDERS, activity });
+function build(entry: WindowWorkEntry, activity = {}, quoted?: Readonly<Record<string, Message | null>>): RoomModel {
+  const model = buildRoomModel({ entry, roomId: 'r-01', providers: PROVIDERS, activity, ...(quoted === undefined ? {} : { quoted }) });
   if (model === null) throw new Error('комната не найдена');
   return model;
 }
@@ -207,7 +207,7 @@ describe('buildRoomModel — модель участника из живых м�
 // Спека застрявших 7.3: участник несёт `need` живой сессии — слово причины рисует лента участников.
 describe('buildRoomModel — чего участник ждёт от человека (need)', () => {
   const need = makeNeed('limit', { resetsAt: '2026-10-21T16:27:00.000Z' });
-  const needOf = (entry: WorkEntry, activity: Record<string, ActivityEntry>) =>
+  const needOf = (entry: WindowWorkEntry, activity: Record<string, ActivityEntry>) =>
     build(entry, activity).participants.map((participant) => [participant.id, participant.need]);
 
   it('живая сессия с need — need как есть; без need и без активности — null', () => {
@@ -628,6 +628,32 @@ describe('buildRoomModel — ответы: Message.replyTo (Parley 0.3.0)', () =
     ]);
   });
 
+  it('оригинал, которого окно не держит, берётся из подгруженных по id; письмо чужой комнаты, null и неспрошенное — found: false', () => {
+    const entry = entryOf({
+      messages: [
+        message('m-30', { from: 's-02', replyTo: 'm-1', at: '2026-09-27T09:00:00.000Z' }),
+        message('m-31', { from: 's-02', replyTo: 'm-2', at: '2026-09-27T09:01:00.000Z' }),
+        message('m-32', { from: 's-02', replyTo: 'm-3', at: '2026-09-27T09:02:00.000Z' }),
+        message('m-33', { from: 's-02', replyTo: 'm-4', at: '2026-09-27T09:03:00.000Z' }),
+        message('m-34', { from: 's-02', replyTo: 'm-30', at: '2026-09-27T09:04:00.000Z' }),
+      ],
+    });
+    const quoted = {
+      'm-1': message('m-1', { text: 'Старый вопрос' }),
+      'm-2': message('m-2', { roomId: 'r-02', text: 'Из чужой комнаты' }),
+      'm-3': null,
+      // Держимое письмо берётся из карты, а не из подгруженного.
+      'm-30': message('m-30', { text: 'подгруженная копия' }),
+    };
+    expect(build(entry, {}, quoted).messages.map((item) => item.reply)).toEqual([
+      { id: 'm-1', from: 'You', excerpt: 'Старый вопрос', found: true },
+      { id: 'm-2', from: '', excerpt: '', found: false },
+      { id: 'm-3', from: '', excerpt: '', found: false },
+      { id: 'm-4', from: '', excerpt: '', found: false },
+      expect.objectContaining({ id: 'm-30', found: true, excerpt: 'text' }),
+    ]);
+  });
+
   it('порядок хранения не важен: оригинал ищется и когда лежит в массиве позже ответа', () => {
     const entry = entryOf({
       messages: [
@@ -748,7 +774,7 @@ describe('buildRoomModel — доставка: кто забрал сообще�
   const T1 = '2026-09-27T09:01:00.000Z';
   const T2 = '2026-09-27T09:02:00.000Z';
   const T3 = '2026-09-27T09:03:00.000Z';
-  const deliveryOf = (entry: WorkEntry, activity = {}, index = 0) => build(entry, activity).messages[index]?.delivery;
+  const deliveryOf = (entry: WindowWorkEntry, activity = {}, index = 0) => build(entry, activity).messages[index]?.delivery;
   /** Живые метрики сессий с причиной ожидания; `undefined` — метрики есть, а поля `mailWaiting` нет (хост прежней версии). */
   const withMailWaiting = (reasons: Record<string, MailWait | null | undefined>) =>
     activityMap(

@@ -344,18 +344,29 @@ export interface AutonomousOp {
   at: string; settledAt: string | null; result: Record<string, unknown> | null;
 }
 
-/** Local durable intent: exact captured Markdown, never rebuilt from a later live revision. */
+/**
+ * Local durable intent: exact captured Markdown, never rebuilt from a later live revision. Пока `pending`, у намерения
+ * есть `content`: файл пишется вне транзакции карты и при отказе повторяется ровно с этого текста. У `written` текста
+ * нет — он лежит в самом файле, а карта хранит его `sha256`, размер и заголовок (спека хранилища 6.2).
+ */
 export interface PlanExportIntent {
   file: string; planId: string; rev: number; event: 'accepted' | 'completed' | 'cancelled';
-  content: string; status: 'pending' | 'written';
+  status: 'pending' | 'written';
+  content?: string;
+  sha256?: string; bytes?: number; title?: string;
 }
 
-/** Durable delivery record: occurrence is an item log offset or a captured source message ID. */
+/**
+ * Durable delivery record: occurrence is an item log offset or a captured source message ID. Текст письма нужен, пока
+ * эффект `queued`: по нему письмо отправляется. Отправленный и отменённый эффект хранит вместо него `textSha256` —
+ * сам текст остаётся в письме, и принадлежность письма эффекту сверяется по хэшу (спека хранилища 6.2).
+ */
 export interface PlanEffect {
   key: string; roomId: string; planId: string | null; rev: number;
   item: number | null; kind: 'ready' | 'verify' | 'returned' | 'blocked' | 'completing' | 'mode' | 'completion-returned';
-  occurrence: string; target: string; text: string; createdAt: string;
+  occurrence: string; target: string; createdAt: string;
   status: 'queued' | 'sent' | 'cancelled'; messageId: string | null;
+  text?: string; textSha256?: string;
 }
 /** Captured completion, then separately prepared file version; never a map/Markdown atomic claim. */
 export interface PlanBacklogIntent {
@@ -447,7 +458,7 @@ export interface Room {
 /** Через кого человек отправил письмо (спека 2026-10-14, 7.4); нет поля — сам, в окне. */
 export type MessageVia = 'assistant' | 'telegram';
 
-/** Письмо: доставляется по pull, живёт в карте. */
+/** Письмо: доставляется по pull, живёт в таблице `messages` (спека хранилища 6.2). */
 export interface Message {
   id: string;
   /** Комната письма; `null` — прямое письмо, как до комнат. */
@@ -504,6 +515,36 @@ export interface MapCompact {
   };
   /** Точное число непрочитанных человеком: прямых писем и по комнатам, независимо от окна. */
   unread: { letters: number; rooms: Record<string, number> };
+  cut: Array<{ path: string; bytes: number }>;
+  omitted: Record<string, number>;
+}
+
+/**
+ * `MapCompact` версии 2: что окно с признаком `rooms-mail` получает вместо писем (`mailWorkMap`, спека rooms.mail 6.8).
+ * Писем в карте нет совсем, а размер не зависит от длины переписки: на комнату — несколько чисел. Окно держит письма
+ * само, из страниц `context.messages` и событий `rooms.mail`, а эти числа сверяет со своими (`top`, `total`).
+ *
+ * Два смысла «непрочитанного», не путать. `unread` — смысл СОБЫТИЯ `rooms.mail`, не версии 1: `letters` — ВСЕ непрочитанные
+ * человеком письма работы (то же, что `unreadCount(HUMAN).total`), `rooms` — разбивка по комнатам, ключ `''` — прямые письма
+ * (`unreadCount(HUMAN).byRoom`). У версии 1 `compact.unread.letters` — только прямые письма, комнаты в нём не считаются.
+ * Комнаты без непрочитанного в `unread.rooms` нет, а в `rooms[id].unread` стоит `0`.
+ */
+export interface MapCompactMail {
+  version: 2;
+  /**
+   * Каждая комната карты и прямые письма (ключ `''`; запись есть всегда, у пустого канала — нули и `null`):
+   * `total` — сколько писем, `top` — наибольший номер `seq` (`0`, если писем нет), `lastAt` — момент самого нового письма,
+   * `unread` — сколько из них человек не прочёл, `decision` — чем человек ответил на последнее решение комнаты
+   * (`humanDecisionOutcome` по его письмам; у прямых писем всегда `null`).
+   */
+  rooms: Record<string, { total: number; top: number; lastAt: string | null; unread: number; decision: 'accepted' | 'returned' | null }>;
+  unread: { letters: number; rooms: Record<string, number> };
+  /**
+   * Непрочитанные человеком письма, где могут называть `@human`: хвост непрочитанного (до `WINDOW_UNREAD_MAX`) через
+   * `humanMentionCandidates`. Окно ЗАМЕНЯЕТ ими набор кандидатов работы; кандидатов события `rooms.mail` оно дописывает
+   * в этот набор. Точное правило «@вы» применяет окно.
+   */
+  mentionCandidates: Message[];
   cut: Array<{ path: string; bytes: number }>;
   omitted: Record<string, number>;
 }
@@ -581,14 +622,14 @@ export interface Work {
 }
 
 /**
- * Карта работы — один файл `map.json`, пишет только харнесс. Версия 2 — с
+ * Хранимая карта работы: всё, кроме писем. Письма лежат в своих таблицах (`messages`, `message_reads`, `message_unread`,
+ * спека хранилища 6.2) и читаются через API писем (`letter-store.ts`); карта с письмами — `WindowWorkMap`. Версия 2 — с
  * комнатами и двумя осями сессии; карту v1 `parseMap` поднимает при чтении.
  */
 export interface WorkMap {
   schemaVersion: 2;
   work: Work;
   sessions: WorkSession[];
-  messages: Message[];
   rooms: Room[];
   plans?: RoomPlan[];
   planExports?: PlanExportIntent[];
@@ -598,9 +639,21 @@ export interface WorkMap {
   planBacklogIntents?: PlanBacklogIntent[];
   /** Журнал ресурсов (`resource-policy.ts`); нет поля — карта до P37, бюджет начинается с нуля. */
   resources?: WorkResources;
-  /** Только в снимке для окна (`compactWorkMap`): что осталось за его пределами. */
-  compact?: MapCompact;
 }
+
+/**
+ * Карта с письмами: снимок для окна (`compactWorkMap`), страницы, разбор прежней `map.json`, полная карта из
+ * `readStoredMap` и выгрузка `parley-core work map` (спека хранилища 6.2). Чистые предикаты писем (`isUnreadFor`,
+ * `recipientsOf`, `unreadFor`, `isHumanUnread`) работают на ней — ими пользуются окно и сверка переезда.
+ */
+export type WindowWorkMap = WorkMap & {
+  messages: Message[];
+  /**
+   * Только в снимке для окна: версия 1 (`compactWorkMap`) — письма хвостом и что осталось за ним; версия 2 (`mailWorkMap`) —
+   * писем нет, вместо них числа (`MapCompactMail`). Какую версию получает окно, решает признак `rooms-mail`.
+   */
+  compact?: MapCompact | MapCompactMail;
+};
 
 /** Запись глобального индекса работ `works-index.json` дома (`parleyHome()`). */
 export interface WorkIndexEntry {

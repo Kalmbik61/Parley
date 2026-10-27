@@ -4,10 +4,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { Message, Room, WorkEntry, WorkSession } from '@parley/core';
+import type { Message, Room, WindowWorkEntry, WorkSession } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { FileRootSpec, TabSpec } from '../../shared/layout-types.js';
 import { bufferKey } from '../files/buffer.js';
+import { makeCompactMail, withCompactMail } from '../test-utils/compact-mail-fixtures.js';
 import { makeLetter, makeRoom } from '../test-utils/work-fixtures.js';
 import { EMPTY_EXTRAS, fileTabHint, fileTabTitles, tabMeta, truncateTitle, type TabMetaExtras } from './tab-meta.js';
 
@@ -43,7 +44,7 @@ function room(id: string, title: string): Room {
   return { id, title, creator: 'human', members: [], createdAt: '2026-01-01T00:00:00.000Z' };
 }
 
-function entry(sessions: WorkSession[], rooms: Room[] = []): WorkEntry {
+function entry(sessions: WorkSession[], rooms: Room[] = []): WindowWorkEntry {
   return {
     projectPath: '/tmp/p',
     map: {
@@ -241,7 +242,7 @@ describe('tabMeta — tint: подкраска вкладки (Organic, 1.1)', (
 
   it('почта: непрочитанное человеком письмо — accent; прочитанное, письмо агенту и сообщение комнаты — нет', () => {
     const mail = { kind: 'mail', id: 'mail' } as const;
-    const withMessages = (messages: Message[]): WorkEntry => {
+    const withMessages = (messages: Message[]): WindowWorkEntry => {
       const base = entry([]);
       return { ...base, map: { ...base.map, messages } };
     };
@@ -250,6 +251,15 @@ describe('tabMeta — tint: подкраска вкладки (Organic, 1.1)', (
     expect(tabMeta(mail, withMessages([letter({ to: ['s-02'] })])).tint).toBeNull();
     expect(tabMeta(mail, withMessages([letter({ roomId: 'r-01' })])).tint).toBeNull();
     expect(tabMeta(mail, withMessages([])).tint).toBeNull();
+  });
+
+  it('почта по снимку без писем: точка — по числу прямых непрочитанных из снимка, а не по держимым письмам; сообщения комнат не в счёт', () => {
+    const mail = { kind: 'mail', id: 'mail' } as const;
+    const bare = (unread: { letters: number; rooms: Record<string, number> }): WindowWorkEntry =>
+      withCompactMail(entry([]), makeCompactMail({ unread }));
+    expect(tabMeta(mail, bare({ letters: 3, rooms: { '': 3 } })).tint).toBe('accent');
+    expect(tabMeta(mail, bare({ letters: 40, rooms: { 'r-01': 40 } })).tint).toBeNull();
+    expect(tabMeta(mail, bare({ letters: 0, rooms: {} })).tint).toBeNull();
   });
 
   it('файл, дифф и браузер без подкраски', () => {
@@ -264,7 +274,7 @@ describe('tabMeta — tint: подкраска вкладки (Organic, 1.1)', (
 describe('tabMeta — dirty вкладки file (тест 9 куска 7.3a)', () => {
   const tab = { kind: 'file', id: 'file:p:src/a.ts', root: { kind: 'project' }, path: 'src/a.ts' } as const;
   const workA = entry([]);
-  const workB: WorkEntry = { ...workA, map: { ...workA.map, work: { ...workA.map.work, id: 'w-b' } } };
+  const workB: WindowWorkEntry = { ...workA, map: { ...workA.map, work: { ...workA.map.work, id: 'w-b' } } };
 
   it('грязный буфер работы A — точка на её вкладке, на такой же вкладке работы B того же проекта — нет', () => {
     const extras: TabMetaExtras = { ...EMPTY_EXTRAS, dirtyTabIds: new Set([bufferKey('/tmp/p w', tab.id)]) };

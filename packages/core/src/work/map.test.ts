@@ -3,16 +3,21 @@ import {
   addMessage,
   addSession,
   canTransition,
+  normalizeLegacyMap,
+  normalizeMap,
   parseMap,
+  parseMapText,
   removeSession,
   setResult,
   transitionSession,
 } from './map.js';
 import { defaultSessionName, NEW_LABEL } from './names.js';
 import { roomLead } from './rooms.js';
-import { HUMAN, type Room, type SessionLifecycle, type WorkMap } from './types.js';
+import { HUMAN, type Room, type SessionLifecycle, type WindowWorkMap, type WorkMap } from './types.js';
+import { mapLetterTx } from './letter-store.js';
+const lt = (map: Parameters<typeof mapLetterTx>[0]) => mapLetterTx(map).letters;
 
-const emptyMap = (): WorkMap => ({
+const emptyMap = (): WindowWorkMap => ({
   schemaVersion: 2,
   work: {
     id: 'w-0001',
@@ -206,7 +211,7 @@ describe('addSession', () => {
     const map = emptyMap();
     addSession(map, { provider: 'claude', label: '', task: 't' });
     const second = addSession(map, { provider: 'claude', label: '', task: 't' });
-    removeSession(map, second.id);
+    removeSession(map, lt(map), second.id);
 
     const third = addSession(map, { provider: 'claude', label: '', task: 't' });
 
@@ -499,7 +504,9 @@ describe('parseMap', () => {
   it('подставляет только безопасные пустые поля автономного плана', () => {
     const map = autonomousMap();
     const autonomous = map.plans[0]!.autonomous;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- ключ вырезается из копии через rest
     const { attempts, ops, halted, seq, budget, ...required } = autonomous;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- ключ вырезается из копии через rest
     const { reservations, ...requiredBudget } = budget;
     map.plans[0]!.autonomous = { ...required, budget: requiredBudget } as typeof autonomous;
     const parsed = parseMap(JSON.stringify(map), 'map.json').plans?.[0]?.autonomous;
@@ -876,7 +883,7 @@ describe('parseMap', () => {
           history: [{ status: 'failed', at: '2026-09-02T11:00:00.000Z' }],
         },
       ],
-      messages: [{ id: 'm-01', from: 's-01', to: 's-02', at: 'x', text: 't', readAt: null }],
+      messages: [{ id: 'm-01', from: 's-01', to: 's-02', at: '2026-09-02T11:00:00.000Z', text: 't', readAt: null }],
     };
     const once = parseMap(JSON.stringify(v1), 'map.json');
     const twice = parseMap(JSON.stringify(once), 'map.json');
@@ -1103,6 +1110,134 @@ describe('parseMap', () => {
   });
 });
 
+describe('parseMap — письма прежней карты под таблицу писем', () => {
+  const AT = '2026-09-20T10:45:00.000Z';
+  const letter = (patch: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: 'm-05',
+    roomId: null,
+    from: 's-01',
+    to: ['s-02'],
+    at: AT,
+    text: 'письмо',
+    kind: 'note',
+    readBy: {},
+    ...patch,
+  });
+  const parse = (messages: unknown[], version = 2): WindowWorkMap => {
+    const base = version === 2 ? emptyMap() : emptyV1();
+    return parseMap(JSON.stringify({ ...base, messages }), 'map.json');
+  };
+
+  it.each([
+    ['readBy', { readBy: null }],
+    ['readBy', { readBy: ['s-02'] }],
+    ['readBy', { readBy: { 's-02': 5 } }],
+    ['readBy', { readBy: undefined }],
+    ['roomId', { roomId: 7 }],
+    ['roomId', { roomId: undefined }],
+    ['at', { at: 'вчера' }],
+    ['at', { at: 5 }],
+    ['at', { at: undefined }],
+    ['from', { from: undefined }],
+    ['text', { text: 5 }],
+    ['kind', { kind: 5 }],
+    ['deleted', { deleted: 'yes' }],
+    ['to', { to: ['s-02', 7] }],
+  ])('письмо с неверным полем %s отвергается причиной с номером письма, а не сырой ошибкой', (field, patch) => {
+    expect(() => parse([letter(patch)])).toThrow(
+      new RegExp(`^map map\\.json cannot be parsed: unexpected shape \\(letter m-05 has an invalid ${field}\\)`),
+    );
+  });
+
+  it('письмо v1 с нечитаемым временем отвергается, а readBy и roomId у v1 не требуются: их ставит миграция', () => {
+    const v1 = (patch: Record<string, unknown>) => ({ id: 'm-01', from: 's-01', to: 's-02', at: AT, text: 't', ...patch });
+
+    expect(() => parse([v1({ at: 'вчера' })], 1)).toThrow(/letter m-01 has an invalid at/);
+    expect(parse([v1({ readAt: AT })], 1).messages[0]).toMatchObject({ roomId: null, to: ['s-02'], readBy: { 's-02': AT } });
+  });
+
+  it('время письма приводится к каноническому ISO-моменту (тот же момент), а deleted: false убирается', () => {
+    const [plain, offset, gone, kept] = parse([
+      letter({ id: 'm-01', at: '2026-09-20T10:45:00Z' }),
+      letter({ id: 'm-02', at: '2026-09-20T13:45:00+03:00' }),
+      letter({ id: 'm-03', deleted: false }),
+      letter({ id: 'm-04', deleted: true }),
+    ]).messages;
+
+    expect(plain!.at).toBe('2026-09-20T10:45:00.000Z');
+    expect(offset!.at).toBe('2026-09-20T10:45:00.000Z');
+    expect(Object.hasOwn(gone!, 'deleted')).toBe(false);
+    expect(kept!.deleted).toBe(true);
+  });
+
+  it('незнакомые ключи письма разбор не трогает: их переносит переезд', () => {
+    expect(parse([letter({ pinned: { by: 'human' } })]).messages[0]).toMatchObject({ pinned: { by: 'human' } });
+  });
+});
+
+describe('parseMapText и normalizeMap', () => {
+  it('parseMap равна normalizeLegacyMap(parseMapText(...)): и для v2, и для v1, и для отказов', () => {
+    const v2 = JSON.stringify(emptyMap());
+    const v1 = JSON.stringify({
+      ...emptyV1(),
+      sessions: [{ id: 's-01', status: 'failed', history: [{ status: 'failed', at: '2026-09-02T11:00:00.000Z' }] }],
+      messages: [{ id: 'm-01', from: 's-01', to: 's-02', at: '2026-09-02T11:00:00.000Z', text: 't', readAt: null }],
+    });
+
+    for (const raw of [v2, v1]) {
+      expect(parseMap(raw, 'map.json')).toEqual(normalizeLegacyMap(parseMapText(raw, 'map.json'), 'map.json'));
+    }
+    // Письма v1 разбор прежнего файла переводит сам: адресат — список, отметка — `readBy`.
+    expect(parseMap(v1, 'map.json').messages).toEqual([
+      { id: 'm-01', roomId: null, from: 's-01', to: ['s-02'], at: '2026-09-02T11:00:00.000Z', text: 't', kind: 'note', readBy: {} },
+    ]);
+    const failure = (run: () => unknown): string => {
+      try {
+        run();
+      } catch (error) {
+        return (error as Error).message;
+      }
+      return 'no error';
+    };
+    for (const raw of ['{', JSON.stringify({ schemaVersion: 3 })]) {
+      const viaParse = failure(() => parseMap(raw, 'map.json'));
+      expect(viaParse).toMatch(/^map map\.json cannot be parsed: /);
+      expect(failure(() => normalizeMap(parseMapText(raw, 'map.json'), 'map.json'))).toBe(viaParse);
+    }
+  });
+
+  it('normalizeMap принимает хранимую карту без писем и их не проверяет; письма проверяет разбор прежнего файла', () => {
+    const stored: Partial<WindowWorkMap> = emptyMap();
+    delete stored.messages;
+    expect(() => normalizeMap(structuredClone(stored), 'map.json')).not.toThrow();
+
+    const broken = { ...emptyMap(), messages: [{ id: 'm-01', to: 's-02' }] };
+    expect(() => parseMap(JSON.stringify(broken), 'map.json')).toThrow(/^map map\.json cannot be parsed: unexpected shape/);
+    expect(() => normalizeMap(structuredClone(broken), 'map.json')).not.toThrow();
+    const noLetters = { ...stored };
+    expect(() => parseMap(JSON.stringify(noLetters), 'map.json')).toThrow(/unexpected shape/);
+  });
+
+  it('parseMapText отдаёт сырой объект без разбора формы, а имя источника попадает в текст отказа', () => {
+    expect(parseMapText('{"schemaVersion":99}', 'x')).toEqual({ schemaVersion: 99 });
+    expect(() => parseMapText('not json', 'works/w-0001')).toThrow(/^map works\/w-0001 cannot be parsed: /);
+  });
+
+  it('normalizeMap идемпотентна: повторный разбор уже разобранной карты ничего не меняет', () => {
+    const v1 = {
+      ...emptyV1(),
+      sessions: [{ id: 's-01', status: 'idle', history: [{ status: 'idle', at: '2026-09-02T11:00:00.000Z' }] }],
+      messages: [{ id: 'm-01', from: 's-01', to: 's-02', at: '2026-09-02T11:00:00.000Z', text: 't', readAt: null }],
+    };
+    const once = normalizeMap(v1, 'map.json');
+    const snapshot = structuredClone(once);
+    const twice = normalizeMap(once, 'map.json');
+
+    expect(twice).toEqual(snapshot);
+    expect(normalizeMap(structuredClone(snapshot), 'map.json')).toEqual(snapshot);
+  });
+});
+
 describe('removeSession', () => {
   /** Работа с деревом `s-01 → s-02 → s-03` и перепиской между ними. */
   const tree = (): WorkMap => {
@@ -1121,7 +1256,7 @@ describe('removeSession', () => {
 
   it('20: дети поднимаются к родителю удалённой, contextFrom вычищен', () => {
     const map = tree();
-    const removed = removeSession(map, 's-02');
+    const removed = removeSession(map, lt(map), 's-02');
 
     expect(removed.id).toBe('s-02');
     expect(map.sessions.map((session) => session.id)).toEqual(['s-01', 's-03']);
@@ -1131,7 +1266,7 @@ describe('removeSession', () => {
 
   it('20: у детей сессии верхнего уровня родитель становится null', () => {
     const map = tree();
-    removeSession(map, 's-01');
+    removeSession(map, lt(map), 's-01');
 
     expect(map.sessions[0]?.parent).toBeNull();
   });
@@ -1141,7 +1276,7 @@ describe('removeSession', () => {
     addMessage(map, { from: 's-02', to: ['s-01'], text: 'жду миграции' });
     addMessage(map, { from: 's-01', to: ['s-03'], text: 'не про неё' });
     addMessage(map, { from: 's-01', to: ['s-03', 's-02'], text: 'обоим' });
-    removeSession(map, 's-02');
+    removeSession(map, lt(map), 's-02');
 
     expect(map.messages).toHaveLength(3);
     expect(map.messages[0]?.deleted).toBe(true);
@@ -1153,7 +1288,7 @@ describe('removeSession', () => {
 
   it('22: id не переиспользуется — счётчик sessionSeq переживает удаление', () => {
     const map = tree();
-    removeSession(map, 's-03');
+    removeSession(map, lt(map), 's-03');
 
     expect(map.work.sessionSeq).toBe(3);
     expect(addSession(map, { provider: 'claude', label: 'тесты', task: 't' }).id).toBe('s-04');
@@ -1164,7 +1299,7 @@ describe('removeSession', () => {
 
   it('22: удаление всех сессий работы не начинает нумерацию заново', () => {
     const map = tree();
-    for (const id of ['s-01', 's-02', 's-03']) removeSession(map, id);
+    for (const id of ['s-01', 's-02', 's-03']) removeSession(map, lt(map), id);
 
     expect(map.sessions).toEqual([]);
     expect(map.work.deletedSessions).toEqual(['s-01', 's-02', 's-03']);
@@ -1186,7 +1321,7 @@ describe('removeSession', () => {
   it('24: удаление несуществующего id — ошибка, карта не меняется', () => {
     const map = tree();
 
-    expect(() => removeSession(map, 's-99')).toThrow(/s-99/);
+    expect(() => removeSession(map, lt(map), 's-99')).toThrow(/s-99/);
     expect(map.sessions).toHaveLength(3);
     expect(map.work.deletedSessions).toBeUndefined();
   });

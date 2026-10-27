@@ -1,75 +1,139 @@
 /**
  * Список работ хоста: сколько их, в каких проектах, кто их держит.
  *
- * Источник — глобальный индекс (`readWorksIndex`) плюс карта каждого известного
- * проекта. Наблюдатель за одним `parleyHome()` ловит только смену самого
- * индекса — содержимое чужого `<проект>/.parley/works/<id>/map.json` (или прежнего `.harnas`) лежит вне его поля
- * зрения, поэтому на каждый известный проект заводится свой `watchWorks`
- * (спецификация 3.3, 4.2, план, кусок 1.4).
+ * Источник — таблица `works` базы дома и карта каждой работы (`readWorks`). О переменах сервис узнаёт не из файлов, а
+ * от одного `watchWorks`: записи этого процесса приходят событием хранилища, записи других — опросом
+ * `PRAGMA data_version` (спека хранилища 6.9). Наблюдателей по проектам больше нет — база одна на весь дом.
  *
- * Карту пишут трое — хост, CLI и MCP-серверы агентов (ревью, пункт 5): таймаут
- * `map.lock` здесь не роняет сервис, а уходит уведомлением `host.notice` и
- * повторяется на следующем изменении. Карту, которая есть на диске, но не
- * разбирается, `readWorks` из core молча пропускает — сервис проверяет это
- * отдельно и жалуется один раз на файл, ничего в него не дописывая.
+ * Карту пишут трое — хост, CLI и MCP-серверы агентов (ревью, пункт 5): таймаут записи в базу (`MapLockTimeoutError`)
+ * здесь не роняет сервис, а уходит уведомлением `host.notice` и повторяется на следующем изменении. Работу, которая есть
+ * в базе, но не загружается (`normalizeMap` её не принимает), `readWorks` из core молча пропускает — сервис проверяет
+ * это отдельно и жалуется один раз на работу, ничего в неё не дописывая.
+ *
+ * Письма идут мимо списка работ (спека rooms.mail 6.7): запись только писем (`structural === false` в событии хранилища) не
+ * запускает `refreshPass` и не зовёт `onChange`. Окно с признаком `rooms-mail` получает её событием `rooms.mail` (пачка по
+ * работе, `mail.ts`), окно без признака — `works.changed` по одной перечитанной работе, подписчики хоста — `onMail`. Смешанная
+ * запись (карта и письма) идёт прежним полным проходом, а её письма — после публикации снимка, который её включает.
+ *
+ * Запись другого процесса (спека 6.11) журнала не имеет и приходит полным проходом: хост помнит по работе версию и наибольший
+ * объявленный номер письма (`mailKnown`) и называет письма новее этого номера, когда версия сменилась без его собственной
+ * записи — в конце прохода, прямо перед публикацией снимка, или в своей записи, чей `prevVersion` перешагнул известную версию.
+ * Они идут той же пачкой, что и смешанная запись: после снимка, который их включает; комнаты с ними получают `reread`.
  */
 
 import {
   compactWorkMap,
   gitBranch,
-  parleyHome,
+  isDatabaseBusy,
+  letterCount,
+  mailWorkMap,
+  mapLetterReader,
   MapLockTimeoutError,
+  onMapWritten,
   processStartedAt,
+  readLetters,
   readMap,
   readWorks,
   readWorksIndex,
   reconcileMap,
   removeHostLease,
+  seqOf,
+  storeLetterReader,
+  viewMap,
   watchWorks,
-  workPaths,
+  withLetterSnapshot,
+  WorkNotFoundError,
+  workVersion,
   writeHostLease,
 } from '@parley/core';
-import type { HostLease, WorkEntry, WorksWatcher } from '@parley/core';
-import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES } from '@parley/protocol';
-import type { WorksSnapshot } from '@parley/protocol';
+import type { HostLease, LetterReader, MapWrittenEvent, Message, WindowWorkEntry, WindowWorkMap, WorkEntry, WorkMap, WorksWatcher } from '@parley/core';
+import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, ROOMS_MAIL_FEATURE, encodeLine } from '@parley/protocol';
+import type { RoomsMailEvent, WorksSnapshot } from '@parley/protocol';
 import type { Client } from '../client.js';
 import type { HostContext } from '../context.js';
-import { createSettler } from '../watch-settle.js';
 import type { WindowCounters } from '../health/window-counters.js';
+import {
+  MAIL_BATCH_MS,
+  MAIL_HOLD_MAX_MS,
+  MAIL_SLOW_CLIENT_BYTES,
+  buildMailEvent,
+  fitMailEvent,
+  foreignJournal,
+  gluedMailEvent,
+  joinBatch,
+  joinForeign,
+  journalIsEmpty,
+  lettersAfter,
+  startBatch,
+  topLetterSeq,
+} from './mail.js';
+import type { MailBatch, MailKnown, MailNotice } from './mail.js';
+
+export type { MailNotice } from './mail.js';
 
 export interface WorksServiceOptions {
   /** Сколько подряд изменений склеивается в одну рассылку `works.changed`. */
   debounceMs?: number;
-  /** Таймаут `map.lock` для записей сервиса (живость, аренда). */
+  /** Сколько запись сервиса (живость, аренда) ждёт занятую базу работ, мс. */
   lockTimeoutMs?: number;
   /** Счётчики окна строки состояния: один `refresh` — одна запись. */
   windowCounters?: WindowCounters;
+  /**
+   * Сколько пачка писем копится до рассылки, мс; по умолчанию `MAIL_BATCH_MS`. Только для тестов: большое значение, чтобы
+   * пачку выпускал снимок, а не таймер. Выше `MAIL_HOLD_MAX_MS` потолком ожидания пачки, которую держит снимок, становится
+   * само `mailBatchMs`.
+   */
+  mailBatchMs?: number;
+}
+
+/**
+ * Снимок работ для сервисов хоста: карты хранимые, без писем (спека хранилища 6.2) — письма читаются из базы через API
+ * писем. В кадр к клиенту он не идёт: окно получает `WorksSnapshot` с письмами (`windowSnapshot`, `legacySnapshot`).
+ */
+export interface WorksView {
+  entries: WorkEntry[];
+  branches: Record<string, string | null>;
+  revision?: number;
 }
 
 export interface WorksService {
   start(): Promise<void>;
-  /** Полный снимок для сервисов хоста: карты как на диске. В кадр к клиенту он не идёт — для этого `windowSnapshot`. */
-  snapshot(): WorksSnapshot;
+  /** Снимок для сервисов хоста: карты как в базе, без писем. В кадр к клиенту он не идёт — для этого `windowSnapshot`. */
+  snapshot(): WorksView;
   /**
    * Снимок для окна с `compact-works` (P35): письма хвостом, длинные тексты сокращены, итоги и счётчики в
    * `map.compact`. `null` — даже он не влезает в кадр; номер `revision` растёт на каждую рассылку.
    */
   windowSnapshot(): WorksSnapshot | null;
+  /**
+   * Снимок для окна с `rooms-mail` (спека rooms.mail 6.8): писем в нём нет, вместо них числа по комнатам (`MapCompactMail`);
+   * размер не зависит от переписки. Тот же `revision` и те же версии работ, что у `windowSnapshot`. `null` — не влезает в кадр.
+   */
+  mailSnapshot(): WorksSnapshot | null;
   /** Прежний полный снимок для клиента без `compact-works`; `null` — он не влезает в кадр, клиенту нужно обновление. */
   legacySnapshot(): WorksSnapshot | null;
   entry(projectPath: string, workId: string): WorkEntry | undefined;
   /** Первое чтение этой работы хостом уже было: autoLaunch берёт только новое (1.7). */
   firstReadDone(projectPath: string, workId: string): boolean;
-  onChange(listener: (snapshot: WorksSnapshot, previous: WorksSnapshot) => void): () => void;
+  onChange(listener: (snapshot: WorksView, previous: WorksView) => void): () => void;
+  /**
+   * Каждая запись с письмами (непустой журнал, спека rooms.mail 6.2, 6.7): запись только писем — сразу, после коммита;
+   * смешанная — после публикации снимка, который её включает, но не позже `MAIL_HOLD_MAX_MS` от начала пачки: потолок
+   * выпускает уведомление вместе с событием и до снимка, если полный проход не дошёл до `publish`. Смешанная запись всё равно
+   * доходит до подписчика через `onChange` после прохода, и подписчик, которому нужны письма, пересчитывает и по нему, так что
+   * раннее уведомление исправляется. `onChange` запись только писем не зовёт: подписчик, которому нужны письма, слушает это.
+   * Письма записи другого процесса уходят уведомлением с `foreign: true` после снимка, который её включает: отметок в нём нет,
+   * комнаты с письмами названы в `rereadRooms`.
+   */
+  onMail(listener: (notice: MailNotice) => void): () => void;
   stop(): Promise<void>;
 }
 
 const DEFAULT_DEBOUNCE_MS = 100;
 
 /**
- * Склейка событий внутри одного `watchWorks`. Запись карты — это запись индекса и самой карты (`.bak` к ним
- * добавляется не чаще раза в десять минут, спека хранилища 6.9) с промежутками в десятки миллисекунд:
- * при 0 каждое событие запускало своё полное чтение всех карт.
+ * Склейка событий внутри `watchWorks`: записи подряд (письма, сверка живости нескольких работ) приходят с промежутками
+ * в десятки миллисекунд, и при 0 каждая запускала бы своё чтение списка.
  */
 const WATCH_DEBOUNCE_MS = 75;
 
@@ -79,10 +143,28 @@ const WINDOW_MESSAGES_PER_WORK_BYTES = 1024 * 1024;
 const WINDOW_MESSAGES_MIN_BYTES = 64 * 1024;
 /** Потолок снимка для окна целиком: кадр ограничен 8 МиБ, остальное — запас на события и дописывание. */
 const WINDOW_SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024;
+/**
+ * Сколько писем у всех работ вместе читать для прежнего окна: осторожный предел, а не точная граница. Потолок кадра
+ * (`LEGACY_SNAPSHOT_MAX_BYTES`, 6 МиБ) на 40 000 писем даёт около 157 Б на письмо, а самое короткое письмо в JSON весит
+ * около 117 Б; живые письма тяжелее, поэтому больше этого числа кадр на деле не влезает, и читать письма ради отказа
+ * незачем.
+ */
+const LEGACY_MAX_LETTERS = 40_000;
 /** Тексты в запасном (сжатом) снимке: хвост писем не берётся вовсе, а длинные поля короче. */
 const WINDOW_FALLBACK_TEXT_BYTES = 4 * 1024;
+/** Начало ключа варианта части снимка без писем в `windowParts`: у остальных вариантов ключ начинается с числа байт. */
+const LETTERLESS_VARIANT = 'mail:';
+
+/** Сжатая карта одной работы для окна и её размер в кадре (`windowPart`). */
+interface WindowPart {
+  entry: WorksSnapshot['entries'][number];
+  bytes: number;
+}
 
 const isCompactClient = (client: Client): boolean => client.features.has(COMPACT_WORKS_FEATURE);
+/** Окно с `rooms-mail` получает письма событием; без признака — `works.changed` с хвостами писем, как прежде (спека 6.10). */
+const isMailClient = (client: Client): boolean => client.features.has(ROOMS_MAIL_FEATURE);
+const lacksMail = (client: Client): boolean => !isMailClient(client);
 const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8');
 
 /** Ключ работы для внутренних карт сервиса: `\u0000` в путях и id не встречается. */
@@ -93,16 +175,19 @@ export function createWorksService(
   options: WorksServiceOptions = {},
 ): WorksService {
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+  const mailBatchMs = options.mailBatchMs ?? MAIL_BATCH_MS;
   const lockOptions =
     options.lockTimeoutMs === undefined ? {} : { lockTimeoutMs: options.lockTimeoutMs };
 
   const entries = new Map<string, WorkEntry>();
   const branches = new Map<string, string | null>();
-  const watchers = new Map<string, WorksWatcher>();
-  const listeners = new Set<(next: WorksSnapshot, previous: WorksSnapshot) => void>();
+  let watcher: WorksWatcher | undefined;
+  const listeners = new Set<(next: WorksView, previous: WorksView) => void>();
   const leased = new Set<string>();
   const readAlready = new Set<string>();
   const notifiedCorrupt = new Set<string>();
+  /** Работа → версия, на которой она не загрузилась: до следующей записи её не перечитываем. */
+  const corruptAt = new Map<string, number>();
 
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
@@ -115,45 +200,123 @@ export function createWorksService(
   let ownLease: HostLease | null = null;
   /** Номер рассылки снимка; растёт в конце каждого `refresh`, перед рассылкой. */
   let revision = 0;
+  /**
+   * Снимок каждой работы для окна по версии её карты и бюджету писем (спека хранилища 6.2, план 4, задача 5): запись в одну
+   * работу не заставляет сжимать остальные. Ключ — работа; в записи версия и по снимку на каждый бюджет (обычный,
+   * архивный, запасной); после каждой сборки в слоте остаются только запрошенные ею варианты (`buildWindow`): простаивающая
+   * работа не копит по варианту на каждое число живых работ, которое когда-то было.
+   */
+  const windowParts = new Map<string, { version: number; parts: Map<string, WindowPart> }>();
   /** Снимки для клиентов считаются один раз на номер: `works.list` и рассылка делят одну работу. */
   let windowCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
+  /**
+   * Снимок без писем для окон с `rooms-mail`: тоже по номеру рассылки, и пересобирается только когда его кто-то просит. Сбрасывать
+   * его вместе с остальными не нужно — номер растёт там же, где обнуляется `windowCache`, а устаревший снимок мал.
+   */
+  let mailCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
   let legacyCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
   /** Клиенты, о которых уже записано «нужно обновление», и признак сообщения о слишком большом снимке: не на каждую рассылку. */
   const upgradeNotified = new Set<string>();
   let oversizeNotified = false;
 
-  const buildSnapshot = (): WorksSnapshot => ({
+  const buildSnapshot = (): WorksView => ({
     entries: Array.from(entries.values()),
     branches: Object.fromEntries(branches),
   });
 
   /**
+   * Сжатая карта одной работы для окна и её размер в кадре. Берётся из `windowParts`, пока не сменилась версия карты
+   * (`WorkEntry.version`: та же версия — та же карта) и бюджет; у работы без версии кэша нет. Письма читаются запросами из
+   * таблиц (`storeLetterReader`); живые правила непрочитанного идут по карте сервиса, а не по карте из базы (спека хранилища 6.2).
+   * `asked` — какие варианты слота просила эта сборка окна: по нему `buildWindow` потом убирает остальные.
+   *
+   * `letterless` — часть для окна с `rooms-mail`: `mailWorkMap` вместо `compactWorkMap`, бюджет писем не нужен (спека rooms.mail
+   * 6.8). Это третий вариант слота рядом с обычным, архивным и запасным (`mail:` в ключе); версия карты та же.
+   */
+  function windowPart(
+    work: WorkEntry,
+    messageBytes: number,
+    asked: Map<string, Set<string>>,
+    textMax?: number,
+    letterless = false,
+  ): WindowPart {
+    const key = workKey(work.projectPath, work.map.work.id);
+    const variant = letterless ? `${LETTERLESS_VARIANT}${textMax ?? ''}` : `${messageBytes}:${textMax ?? ''}`;
+    let wanted = asked.get(key);
+    if (wanted === undefined) asked.set(key, (wanted = new Set()));
+    wanted.add(variant);
+    const slot = windowParts.get(key);
+    const version = work.version;
+    if (version !== undefined && slot?.version === version) {
+      const cached = slot.parts.get(variant);
+      if (cached !== undefined) return cached;
+    }
+    const options = { messageBytes, ...(textMax === undefined ? {} : { textMax }) };
+    const compacted = (letters: LetterReader): WindowWorkMap =>
+      letterless ? mailWorkMap(work.map, letters, textMax === undefined ? {} : { textMax }) : compactWorkMap(work.map, options, letters);
+    let map: WindowWorkMap;
+    try {
+      // Один снимок базы на все чтения писем этой работы: чужая запись между ними не рассогласует итоги и хвосты.
+      map = withLetterSnapshot(work.projectPath, work.map.work.id, () =>
+        compacted(storeLetterReader(work.projectPath, work.map.work.id, { map: work.map })),
+      );
+    } catch (error) {
+      // Работу сняли между чтением списка и сборкой снимка: до следующего обновления она без писем, остальное окно не страдает.
+      if (!(error instanceof WorkNotFoundError)) throw error;
+      map = compacted(mapLetterReader({ ...work.map, messages: [] }));
+    }
+    // Версия работы едет в записи снимка (спека rooms.mail 6.3): по ней окно сверяет события писем с `prevVersion`.
+    const entry = { projectPath: work.projectPath, map, ...(version === undefined ? {} : { version }) };
+    const part = { entry, bytes: jsonBytes(entry) };
+    if (version !== undefined) {
+      if (slot?.version === version) slot.parts.set(variant, part);
+      else windowParts.set(key, { version, parts: new Map([[variant, part]]) });
+    }
+    return part;
+  }
+
+  /**
    * Снимок для окна: каждая работа сжата `compactWorkMap`, бюджет писем делится между активными работами, архивные
    * идут без писем. Размер проверяется до отправки: не влез — запасной вариант без писем и с короткими текстами,
-   * не влез и он — `null` (кадр, который декодер окна разорвёт, не уходит никогда).
+   * не влез и он — `null` (кадр, который декодер окна разорвёт, не уходит никогда). Размер кадра складывается из
+   * размеров частей: каркас без работ, сами работы и запятые между ними — столько же, сколько дал бы `JSON.stringify`
+   * всего снимка, но без повторной сериализации работ, которые не менялись.
+   *
+   * `letterless` — снимок для окон с `rooms-mail` (`mailWorkMap`): писем в нём нет, поэтому бюджет всем работам 0, а запасной
+   * вариант отличается только короткими текстами. Слоты `windowParts` общие с обычным снимком: каждая сборка убирает из них
+   * только свои варианты, чтобы две сборки на одном номере не выбрасывали части друг друга.
    */
-  function buildWindow(): WorksSnapshot | null {
+  function buildWindow(letterless = false): WorksSnapshot | null {
+    const asked = new Map<string, Set<string>>();
     const all = Array.from(entries.values());
     const live = all.filter((entry) => entry.map.work.status !== 'archived').length;
     const share = Math.min(
       WINDOW_MESSAGES_PER_WORK_BYTES,
       Math.max(WINDOW_MESSAGES_MIN_BYTES, Math.floor(WINDOW_MESSAGES_TOTAL_BYTES / Math.max(live, 1))),
     );
-    const build = (messagesFor: (archived: boolean) => number, textMax?: number): WorksSnapshot => ({
-      entries: all.map((entry) => ({
-        projectPath: entry.projectPath,
-        map: compactWorkMap(entry.map, {
-          messageBytes: messagesFor(entry.map.work.status === 'archived'),
-          ...(textMax === undefined ? {} : { textMax }),
-        }),
-      })),
-      branches: Object.fromEntries(branches),
-      revision,
-    });
-    const normal = build((archived) => (archived ? 0 : share));
-    if (jsonBytes(normal) <= WINDOW_SNAPSHOT_MAX_BYTES) return normal;
-    const fallback = build(() => 0, WINDOW_FALLBACK_TEXT_BYTES);
-    return jsonBytes(fallback) <= WINDOW_SNAPSHOT_MAX_BYTES ? fallback : null;
+    const build = (messagesFor: (archived: boolean) => number, textMax?: number): WorksSnapshot | null => {
+      const parts = all.map((work) => windowPart(work, messagesFor(work.map.work.status === 'archived'), asked, textMax, letterless));
+      const snapshot: WorksSnapshot = {
+        entries: parts.map((part) => part.entry),
+        branches: Object.fromEntries(branches),
+        revision,
+      };
+      const bytes =
+        jsonBytes({ ...snapshot, entries: [] }) +
+        parts.reduce((sum, part) => sum + part.bytes, 0) +
+        Math.max(parts.length - 1, 0);
+      return bytes <= WINDOW_SNAPSHOT_MAX_BYTES ? snapshot : null;
+    };
+    const snapshot = build(letterless ? () => 0 : (archived) => (archived ? 0 : share)) ?? build(() => 0, WINDOW_FALLBACK_TEXT_BYTES);
+    // В слотах остаётся то, что просила эта сборка: слот пропавшей работы (её ключа в `asked` нет) уходит целиком, у
+    // остальных — только запрошенные варианты. Запасной проход тоже в счёт: при снимке выше потолка просят оба варианта,
+    // и пересобирать их каждый раз незачем.
+    for (const [key, slot] of windowParts) {
+      const wanted = asked.get(key);
+      if (wanted === undefined) windowParts.delete(key);
+      else for (const variant of slot.parts.keys()) if (variant.startsWith(LETTERLESS_VARIANT) === letterless && !wanted.has(variant)) slot.parts.delete(variant);
+    }
+    return snapshot;
   }
 
   const windowSnapshot = (): WorksSnapshot | null => {
@@ -161,43 +324,120 @@ export function createWorksService(
     return windowCache.snapshot;
   };
 
+  const mailSnapshot = (): WorksSnapshot | null => {
+    if (mailCache?.revision !== revision) mailCache = { revision, snapshot: buildWindow(true) };
+    return mailCache.snapshot;
+  };
+
+  /** Полные карты с письмами для прежнего окна; `null` — писем слишком много, чтобы читать их ради заведомого отказа. */
+  const legacyEntries = (): WindowWorkEntry[] | null => {
+    const all = Array.from(entries.values());
+    const counts = all.map((work) => {
+      try {
+        return letterCount(work.projectPath, work.map.work.id, {});
+      } catch (error) {
+        if (error instanceof WorkNotFoundError) return 0;
+        throw error;
+      }
+    });
+    if (counts.reduce((sum, count) => sum + count, 0) > LEGACY_MAX_LETTERS) return null;
+    return all.map((work, at) => {
+      let messages: WindowWorkMap['messages'] = [];
+      try {
+        messages = readLetters(work.projectPath, work.map.work.id, { limit: counts[at] ?? 0 });
+      } catch (error) {
+        if (!(error instanceof WorkNotFoundError)) throw error;
+      }
+      // Привязка треда Codex — внутреннее доказательство запуска: в публичный снимок не идёт (как в `windowMapBase`).
+      const sessions = work.map.sessions.map((session) => {
+        const publicSession = { ...session };
+        delete publicSession.codexThreadBinding;
+        return publicSession;
+      });
+      return {
+        projectPath: work.projectPath,
+        map: { ...work.map, sessions, messages },
+        ...(work.version === undefined ? {} : { version: work.version }),
+      };
+    });
+  };
+
   const legacySnapshot = (): WorksSnapshot | null => {
     if (legacyCache?.revision !== revision) {
-      const full: WorksSnapshot = { ...buildSnapshot(), entries: Array.from(entries.values(), (entry) => ({
-        ...entry, map: { ...entry.map, sessions: entry.map.sessions.map((session) => {
-          const publicSession = { ...session };
-          delete publicSession.codexThreadBinding;
-          return publicSession;
-        }) },
-      })), revision };
-      legacyCache = { revision, snapshot: jsonBytes(full) <= LEGACY_SNAPSHOT_MAX_BYTES ? full : null };
+      const legacy = legacyEntries();
+      const full: WorksSnapshot | null =
+        legacy === null ? null : { entries: legacy, branches: Object.fromEntries(branches), revision };
+      legacyCache = { revision, snapshot: full !== null && jsonBytes(full) <= LEGACY_SNAPSHOT_MAX_BYTES ? full : null };
     }
     return legacyCache.snapshot;
   };
 
-  /**
-   * Рассылка снимка: окно с `compact-works` получает компактный, прежнее окно — полный, пока тот влезает в кадр. Не
-   * влезает — ни одного кадра сверх предела (декодер окна на таком разорвал бы соединение, и оно переподключалось бы
-   * по кругу): прежнее окно остаётся с последним снимком, а хост один раз на клиента пишет об этом в журнал.
-   * Уведомления `host.notice` прежнему окну не шлются: вида, которого оно не знает, его строка статуса не разберёт.
-   */
-  function publish(): void {
-    const compact = windowSnapshot();
-    if (compact !== null) {
-      host.broadcast('works.changed', compact, isCompactClient);
-      oversizeNotified = false;
-    } else if (!oversizeNotified) {
-      oversizeNotified = true;
-      notice('snapshot-too-large', 'the workspace snapshot does not fit into one frame even in compact form');
-    }
+  /** Рассылка снимка окнам: кадр кодируется один раз на рассылку, а не на клиента, и считается в счётчиках окна (спека rooms.mail 6.12). */
+  function broadcastWorks(snapshot: WorksSnapshot, to: (client: Client) => boolean): void {
+    const line = host.clients().some(to) ? encodeLine({ event: 'works.changed', data: snapshot }) : undefined;
+    host.broadcast('works.changed', snapshot, to, line);
+    if (line !== undefined) options.windowCounters?.worksChanged(Buffer.byteLength(line));
+  }
 
-    const legacyClients = host.clients().filter((client) => !isCompactClient(client));
+  /**
+   * Рассылка снимка: окно с `rooms-mail` получает снимок без писем (спека rooms.mail 6.8), окно с `compact-works` без признака —
+   * компактный с хвостами писем, прежнее окно — полный, пока тот влезает в кадр. Не влезает — ни одного кадра сверх предела
+   * (декодер окна на таком разорвал бы соединение, и оно переподключалось бы по кругу): прежнее окно остаётся с последним
+   * снимком, а хост один раз на клиента пишет об этом в журнал. Уведомления `host.notice` прежнему окну не шлются: вида,
+   * которого оно не знает, его строка статуса не разберёт.
+   *
+   * `only` — кому слать: запись только писем перечитывает одну работу и шлёт снимок окнам без `rooms-mail` (спека
+   * rooms.mail 6.10); снимки при этом не собираются, пока такого окна нет. Без `only` — полная рассылка, и вслед за снимком
+   * уходят письма смешанных записей, которые он включает (`releaseMail`). Снимок без писем собирается, только если есть окно
+   * с признаком, а снимок с хвостами не собирается, когда подключены одни окна с признаком: они не платят за хвосты писем,
+   * которых не получают.
+   */
+  function publish(only?: (client: Client) => boolean): void {
+    if (only !== undefined && !host.clients().some(only)) return;
+    const wanted = only ?? ((): boolean => true);
+    const toMail = (client: Client): boolean => isMailClient(client) && wanted(client);
+    const toCompact = (client: Client): boolean => isCompactClient(client) && !isMailClient(client) && wanted(client);
+    const toLegacy = (client: Client): boolean => !isCompactClient(client) && !isMailClient(client) && wanted(client);
+
+    const connected = host.clients();
+    const mailWindows = connected.some(toMail);
+    let fits = true;
+    // Снимок с хвостами писем читает письма из базы: его собирают, если ему есть кому уйти, а когда окон с признаком нет вовсе,
+    // рассылка идёт как прежде, даже без клиентов. Подключены одни окна с признаком — он не нужен. Идёт первым: письмо, легшее
+    // между сборками, окно с признаком получит событием, а окну без признака хвост нужен как был прочитан проходом.
+    if (connected.some(toCompact) || !mailWindows) {
+      const compact = windowSnapshot();
+      if (compact === null) fits = false;
+      else broadcastWorks(compact, toCompact);
+    }
+    if (mailWindows) {
+      const mail = mailSnapshot();
+      if (mail === null) fits = false;
+      else broadcastWorks(mail, toMail);
+    }
+    if (!fits) {
+      if (!oversizeNotified) {
+        oversizeNotified = true;
+        notice('snapshot-too-large', 'the workspace snapshot does not fit into one frame even in compact form');
+      }
+    } else oversizeNotified = false;
+
+    publishLegacy(toLegacy);
+    if (only === undefined) {
+      published.clear();
+      for (const [key, work] of entries) if (work.version !== undefined) published.set(key, work.version);
+      releaseMail();
+    }
+  }
+
+  function publishLegacy(to: (client: Client) => boolean): void {
+    const legacyClients = host.clients().filter(to);
     const stillConnected = new Set(legacyClients.map((client) => client.id));
     for (const id of upgradeNotified) if (!stillConnected.has(id)) upgradeNotified.delete(id);
     if (legacyClients.length === 0) return;
     const legacy = legacySnapshot();
     if (legacy !== null) {
-      host.broadcast('works.changed', legacy, (client) => !isCompactClient(client));
+      broadcastWorks(legacy, to);
       return;
     }
     for (const client of legacyClients) {
@@ -214,10 +454,9 @@ export function createWorksService(
   };
 
   /**
-   * Работы, о которых знает глобальный индекс, но которых нет в свежем чтении:
-   * либо её каталог переехал или исчез (файла нет — молчим, как и `readWorks`),
-   * либо `map.json` есть, но не разбирается — про это, в отличие от `readWorks`,
-   * сервис обязан сказать (раздел «На что смотреть на ревью», пункт 5).
+   * Работы, о которых знает таблица `works`, но которых нет в свежем чтении: либо её только что сняли (строки нет —
+   * молчим, как и `readWorks`), либо строки есть, но `normalizeMap` работу не принимает — про это, в отличие от
+   * `readWorks`, сервис обязан сказать (раздел «На что смотреть на ревью», пункт 5).
    */
   async function checkCorruption(present: ReadonlySet<string>): Promise<void> {
     const index = await readWorksIndex().catch(() => null);
@@ -225,15 +464,39 @@ export function createWorksService(
 
     for (const item of index.works) {
       const key = workKey(item.projectPath, item.id);
-      if (present.has(key)) continue;
+      if (present.has(key)) {
+        // Работа читается: следующая поломка — новая, о ней скажем снова.
+        notifiedCorrupt.delete(key);
+        corruptAt.delete(key);
+        continue;
+      }
+      // Та же версия, что уже не загрузилась, не загрузится и сейчас: полная загрузка большой карты стоит десятых долей
+      // секунды цикла хоста, а проход идёт на каждую запись любой работы. Грузим один раз на версию.
+      let version: number | undefined;
+      try {
+        version = workVersion(item.projectPath, item.id);
+      } catch {
+        continue; // База не ответила: проверим на следующем проходе.
+      }
+      if (version === undefined) {
+        corruptAt.delete(key);
+        continue;
+      }
+      if (corruptAt.get(key) === version) continue;
       try {
         await readMap(item.projectPath, item.id);
-        // Распарсилась — просто гонка со свежим чтением, не карта битая.
+        // Загрузилась — просто гонка со свежим чтением, не работа битая.
+        notifiedCorrupt.delete(key);
+        corruptAt.delete(key);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        if (error instanceof WorkNotFoundError) continue;
+        // База занята — не повреждение: молчим и пробуем на следующем проходе.
+        if (isDatabaseBusy(error)) continue;
+        corruptAt.set(key, version);
         if (notifiedCorrupt.has(key)) continue;
         notifiedCorrupt.add(key);
-        notice('map-corrupt', workPaths(item.projectPath, item.id).map);
+        const reason = error instanceof Error ? error.message : String(error);
+        notice('map-corrupt', `workspace ${item.id} in ${item.projectPath} cannot be loaded: ${reason}`);
       }
     }
   }
@@ -258,10 +521,15 @@ export function createWorksService(
         // наблюдателя мог быть прочитан до записи прошлой сверки (sleeping уже на диске,
         // мёртвых больше нет), и без перечитывания снимок откатился бы к active мёртвой
         // сессии навсегда (fix-tests2, host-disconnect:127).
+        // Версия — до карты и после неё: совпали, значит запись между ними не вклинилась и номер точен
+        // (по нему снимок окна узнаёт, что работа не менялась; спека хранилища 6.9); не совпали — работа считается новой.
+        const before = workVersion(work.projectPath, work.map.work.id);
         const fresh = await readMap(work.projectPath, work.map.work.id);
+        const exact = before !== undefined && workVersion(work.projectPath, work.map.work.id) === before;
         entries.set(workKey(work.projectPath, work.map.work.id), {
           projectPath: work.projectPath,
           map: fresh,
+          ...(exact ? { version: before } : {}),
         });
       } catch (error) {
         if (error instanceof MapLockTimeoutError) {
@@ -299,58 +567,332 @@ export function createWorksService(
     options.windowCounters?.mapsParsed(works.reduce((sum, work) => sum + (work.bytes ?? 0), 0));
   }
 
-  /** `true` — наблюдатель проекта заведён только что. */
-  function ensureWatcher(projectPath: string): boolean {
-    if (stopped || watchers.has(projectPath)) return false;
-    const watcher = watchWorks(
+  /** Пачки писем по работам, ждущие рассылки (спека rooms.mail 6.6): одна пачка на работу, живёт `MAIL_BATCH_MS`. */
+  const batches = new Map<string, MailBatch>();
+  /**
+   * Работа → версия последней записи этого процесса, менявшей карту; запись сервиса может её ещё не содержать: полный проход
+   * впереди (его запросил `watchWorks`). Письма, записанные после неё, уходят окнам с признаком только после снимка с этой
+   * структурой — иначе окно с прежней версией получило бы `prevVersion`, которой не держит (спека 6.5). Устаревшие записи
+   * убирает `pendingStructural`, когда `published` показывает версию не ниже. Проход, у которого записи работы нет точной
+   * версии (чтение вклинилось в запись), `published` не заполняет и запись не снимает: его карта могла лечь до структурной
+   * записи, и пачка за ней ждёт следующего снимка (чтение без версии `watchWorks` повторяет сам) или `MAIL_HOLD_MAX_MS`.
+   */
+  const mapAhead = new Map<string, number>();
+  /** Работа → версия, с которой её последний раз разослал полный `publish`: запись сервиса меняется в начале прохода, а снимок уходит позже. */
+  const published = new Map<string, number>();
+  /**
+   * Работа → что хост о ней знает по своим записям (спека 6.11): версия и наибольший объявленный номер письма. Заводит работу
+   * первый полный проход, который её видит; с этого момента версия, лёгшая без своей записи, — чужая запись.
+   */
+  const mailKnown = new Map<string, MailKnown>();
+  const mailListeners = new Set<(mail: MailNotice) => void>();
+  let unsubscribeWritten: (() => void) | undefined;
+
+  function notify(mail: MailNotice): void {
+    for (const listener of [...mailListeners]) {
+      try {
+        listener(mail);
+      } catch (error) {
+        host.log.warn('письма: подписчик onMail упал', { workId: mail.workId, error: String(error) });
+      }
+    }
+  }
+
+  /** Версия структурной записи этого процесса, которой в уже разосланном снимке ещё нет; `undefined` — окна её видели. */
+  function pendingStructural(key: string): number | undefined {
+    const ahead = mapAhead.get(key);
+    if (ahead === undefined) return undefined;
+    const held = published.get(key);
+    if (held !== undefined && held >= ahead) {
+      mapAhead.delete(key);
+      return undefined;
+    }
+    return ahead;
+  }
+
+  /**
+   * Запись работы в сервисе после записи только писем: версия и `updatedAt` свежие, кэш снимка этой работы пересоберётся по
+   * новой версии, номер рассылки растёт (спека rooms.mail 6.10). Ни веток, ни живости, ни аренд: от письма они не меняются,
+   * и полный проход не нужен. `true` — запись заменена.
+   *
+   * Перечитывает только при непрерывности версий: запись сервиса не старше начала пачки и уже содержит её структурные записи,
+   * а работа в базе — ровно на версии пачки. Иначе между записью сервиса и пачкой лежит запись, которой полный проход ещё не
+   * видел (структурная этого процесса, чужая), — перечитав, мы втянули бы её в запись сервиса, `previous` следующего прохода
+   * уже нёс бы её, и подписчики `onChange` (будильник, Telegram, активность) никогда не увидели бы переход. Тогда письма
+   * дойдут до окон без признака вместе с этим проходом.
+   */
+  function refreshEntry(batch: MailBatch): boolean {
+    const { projectPath, workId } = batch;
+    const key = workKey(projectPath, workId);
+    const current = entries.get(key);
+    // Работы нет в списке сервиса (её создание или первое чтение ещё впереди) или у записи нет точной версии: обновит полный проход.
+    if (current?.version === undefined) return false;
+    // Запись сервиса уже не старше: полный проход прочёл работу после письма и разослал её всем окнам.
+    if (current.version >= batch.version) return false;
+    if (current.version < batch.prevVersion || current.version < batch.structuralVersion) return false;
+    let fresh: WorkEntry;
+    try {
+      const before = workVersion(projectPath, workId);
+      if (before !== batch.version) return false;
+      const map = viewMap(projectPath, workId, (view) => structuredClone(view) as WorkMap);
+      // Версия — до карты и после неё, как в `reconcileLiveness`: совпали — номер точен.
+      if (workVersion(projectPath, workId) !== before) return false;
+      fresh = { projectPath, map, version: before };
+    } catch (error) {
+      if (!(error instanceof WorkNotFoundError)) host.log.warn('письма: запись работы не перечиталась', { workId, error: String(error) });
+      return false;
+    }
+    entries.set(key, fresh);
+    // Следующий полный проход берёт список `latest`: без этого он вернул бы запись к версии, прочитанной до письма.
+    const at = latest.findIndex((work) => work.projectPath === projectPath && work.map.work.id === workId);
+    if (at >= 0) latest = latest.with(at, fresh);
+    revision += 1;
+    windowCache = null;
+    legacyCache = null;
+    return true;
+  }
+
+  /** Одно событие окнам с признаком: кадр кодируется один раз, медленным клиентам уходит склеенный вариант (спека 6.6). */
+  function sendMail(batch: MailBatch): void {
+    const targets = host.clients().filter(isMailClient);
+    if (targets.length === 0) return;
+    const event = fitMailEvent(buildMailEvent(batch));
+    const slow = new Set(targets.filter((client) => client.writableLength() > MAIL_SLOW_CLIENT_BYTES).map((client) => client.id));
+    const fast = new Set(targets.filter((client) => !slow.has(client.id)).map((client) => client.id));
+    const send = (data: RoomsMailEvent, to: ReadonlySet<string>): void => {
+      const line = encodeLine({ event: 'rooms.mail', data });
+      host.broadcast('rooms.mail', data, (client) => to.has(client.id), line);
+      options.windowCounters?.mail(Buffer.byteLength(line));
+    };
+    if (fast.size > 0) send(event, fast);
+    if (slow.size > 0) send(gluedMailEvent(event), slow);
+  }
+
+  /**
+   * Рассылает пачку работы. Письма уходят окнам с признаком; после записи только писем работа ещё перечитывается и
+   * `works.changed` идёт окнам без признака (спека 6.10) — `onChange` и полный проход при этом не нужны. У смешанной записи
+   * карта и снимок ушли полным проходом: подписчики узнают о ней здесь, вслед за снимком.
+   */
+  function flushMail(key: string): void {
+    const batch = batches.get(key);
+    if (batch === undefined) return;
+    batches.delete(key);
+    if (batch.timer !== undefined) clearTimeout(batch.timer);
+    try {
+      for (const mail of batch.notices) notify(mail);
+      const refreshed = refreshEntry(batch);
+      try {
+        sendMail(batch);
+      } catch (error) {
+        // Работу сняли, пока пачка ждала: письма слать некому.
+        if (!(error instanceof WorkNotFoundError)) throw error;
+      }
+      if (refreshed) publish(lacksMail);
+    } catch (error) {
+      // Событие не ушло: следующее покажет окну разрыв по версии (`prevVersion`), и оно дочитает письма (спека 6.5).
+      host.log.warn('письма: событие не ушло', { workId: batch.workId, error: String(error) });
+    }
+  }
+
+  /** Снимок со структурой ушёл: письма смешанных записей, которые он включает, идут вслед за ним (спека 6.5). */
+  function releaseMail(): void {
+    for (const [key, batch] of batches) {
+      if (batch.structuralVersion === 0) continue;
+      // Работы ещё нет в списке или в нём версия старее записи — снимка с её структурой пока не было, а проход впереди.
+      // Версии у записи нет (чтение вклинилось между записями) — карта в снимке могла лечь до структурной записи, и событие
+      // обогнало бы её (спека 6.5): пачка ждёт повторного чтения, которое `watchWorks` теперь просит само (спека 6.10), или
+      // `MAIL_HOLD_MAX_MS`.
+      const entry = entries.get(key);
+      if (entry?.version === undefined || entry.version < batch.structuralVersion) continue;
+      flushMail(key);
+    }
+  }
+
+  /** Запись этого процесса с письмами в журнале (спека 6.2); остальные записи окну писем не дают. */
+  function onWritten(event: MapWrittenEvent): void {
+    if (stopped) return;
+    const key = workKey(event.projectPath, event.workId);
+    if (event.removed === true) {
+      const gone = batches.get(key);
+      if (gone?.timer !== undefined) clearTimeout(gone.timer);
+      batches.delete(key);
+      mapAhead.delete(key);
+      published.delete(key);
+      mailKnown.delete(key);
+      return;
+    }
+    // Запись без признака `structural` (создание работы, замена карты) считается структурной, как у `watchWorks`.
+    const structural = event.structural !== false;
+    if (structural) mapAhead.set(key, event.version);
+    // Чужая запись перед этой: её письма ждут снимка с ней, а этой записи писем без журнала нет — пачка заводится раньше неё.
+    const foreign = guardKnown(key, event.workId, () => trackKnown(key, event));
+    if (foreign !== undefined) holdForeign(key, event.projectPath, event.workId, foreign);
+    const { journal } = event;
+    if (journal === undefined || journalIsEmpty(journal)) return;
+    const mail: MailNotice = {
+      projectPath: event.projectPath,
+      workId: event.workId,
+      version: event.version,
+      prevVersion: event.prevVersion ?? event.version - 1,
+      journal,
+      foreign: false,
+    };
+    let batch = batches.get(key);
+    if (batch === undefined) batches.set(key, (batch = startBatch(event.projectPath, event.workId, mail.prevVersion)));
+    joinBatch(batch, { version: event.version, journal, structural });
+    // Запись только писем — подписчикам сразу; смешанная ждёт снимка, в котором есть её структура.
+    if (structural) batch.notices.push(mail);
+    else {
+      // Структурная запись без писем (статус, план) ещё не в записи сервиса: письма за ней ждут снимка с ней, как смешанная
+      // пачка, иначе окно получило бы событие раньше снимка и увидело разрыв по версии.
+      const ahead = pendingStructural(key);
+      if (ahead !== undefined) batch.structuralVersion = Math.max(batch.structuralVersion, ahead);
+      notify(mail);
+    }
+    armBatch(key, batch);
+  }
+
+  /** Таймер пачки: `mailBatchMs` на накопление, потом рассылка — пачку со структурой держит снимок, но не дольше `MAIL_HOLD_MAX_MS`. */
+  function armBatch(key: string, batch: MailBatch): void {
+    if (batch.timer !== undefined) return;
+    batch.timer = setTimeout(() => {
+      batch.timer = undefined;
+      // Пачку со структурной записью выпускает `releaseMail` после публикации снимка, а не этот таймер, но ждёт она не дольше
+      // `MAIL_HOLD_MAX_MS` от начала пачки: снимок может не выйти (проход упал, работу сняли, у записи нет версии).
+      const rest = batch.structuralVersion === 0 ? 0 : MAIL_HOLD_MAX_MS - (Date.now() - batch.startedAt);
+      if (rest <= 0) {
+        flushMail(key);
+        return;
+      }
+      batch.timer = setTimeout(() => {
+        batch.timer = undefined;
+        flushMail(key);
+      }, rest);
+    }, mailBatchMs);
+  }
+
+  /**
+   * Разбор чужих записей не должен ронять ни запись писем, ни проход: база не ответила — работа забывается, и следующий проход
+   * заведёт её заново по базе, без объявлений (окно получит снимок). Объявить письма дважды хуже, чем не объявить: числа и
+   * письма к окну дойдут снимком.
+   */
+  function guardKnown<T>(key: string, workId: string, fn: () => T): T | undefined {
+    try {
+      return fn();
+    } catch (error) {
+      mailKnown.delete(key);
+      host.log.warn('письма: чужая запись не разобрана', { workId, error: String(error) });
+      return undefined;
+    }
+  }
+
+  /**
+   * Своя запись двигает то, что хост знает о работе (`mailKnown`). Версия, лёгшая между известной и `prevVersion` записи, —
+   * чужая запись: её письма — новее известного номера, кроме писем самой записи; они и возвращаются. Нет известного состояния
+   * (работу ещё не видел полный проход) — возвращать нечего: проход заведёт его по базе.
+   */
+  function trackKnown(key: string, event: MapWrittenEvent): { prevVersion: number; version: number; letters: Message[] } | undefined {
+    const known = mailKnown.get(key);
+    if (known === undefined) return undefined;
+    const before = known.version;
+    const prevVersion = event.prevVersion ?? event.version - 1;
+    const own = event.journal?.added ?? [];
+    let letters: Message[] = [];
+    if (prevVersion > before) {
+      const found = lettersAfter(event.projectPath, event.workId, known.seq);
+      const ownIds = new Set(own.map((message) => message.id));
+      letters = found.letters.filter((message) => !ownIds.has(message.id));
+      known.seq = found.top;
+    } else {
+      for (const message of own) known.seq = Math.max(known.seq, seqOf(message.id, 'm-'));
+    }
+    known.version = Math.max(before, event.version);
+    return letters.length === 0 ? undefined : { prevVersion: before, version: prevVersion, letters };
+  }
+
+  /**
+   * Письма чужой записи в пачку работы: уведомление `foreign` для подписчиков хоста и письма в событие, комнаты с ними — с
+   * `reread` (`foreignJournal`). Пачка ждёт снимка с версией не ниже `structuralVersion` (чужая запись могла менять карту), и
+   * его публикация выпускает её тем же `releaseMail`, что и смешанную запись; потолок `MAIL_HOLD_MAX_MS` страхует, если снимок
+   * не выйдет.
+   */
+  function holdForeign(
+    key: string,
+    projectPath: string,
+    workId: string,
+    write: { prevVersion: number; version: number; letters: Message[]; structuralVersion?: number },
+  ): void {
+    const journal = foreignJournal(write.letters);
+    let batch = batches.get(key);
+    if (batch === undefined) batches.set(key, (batch = startBatch(projectPath, workId, write.prevVersion)));
+    joinForeign(batch, { prevVersion: write.prevVersion, version: write.version, structuralVersion: write.structuralVersion ?? write.version, journal });
+    batch.notices.push({ projectPath, workId, version: write.version, prevVersion: write.prevVersion, journal, foreign: true });
+    armBatch(key, batch);
+  }
+
+  /**
+   * Чужие записи, которых проход ещё не назвал (спека 6.11): работа в списке на версии выше известной хосту — между ними легла
+   * запись другого процесса. Работу, которой хост не знает, заводит первый проход: письма базы на этот момент — точка отсчёта,
+   * объявлять их некому (окно получает снимок). Идёт в конце прохода, прямо перед публикацией снимка: пачка ждёт этого снимка.
+   */
+  function announceForeign(): void {
+    if (stopped) return;
+    for (const [key, work] of entries) {
+      const version = work.version;
+      if (version === undefined) continue;
+      const { projectPath } = work;
+      const workId = work.map.work.id;
+      guardKnown(key, workId, () => {
+        const known = mailKnown.get(key);
+        if (known === undefined) {
+          const seq = topLetterSeq(projectPath, workId);
+          if (seq !== undefined) mailKnown.set(key, { version, seq });
+          return;
+        }
+        // Версия не выше известной: список прочитан до своей записи, чужой записи за ним нет.
+        if (version <= known.version) return;
+        const { letters, top } = lettersAfter(projectPath, workId, known.seq);
+        const prevVersion = known.version;
+        known.version = version;
+        known.seq = top;
+        if (letters.length > 0) holdForeign(key, projectPath, workId, { prevVersion, version, letters });
+      });
+    }
+    for (const key of mailKnown.keys()) if (!entries.has(key)) mailKnown.delete(key);
+  }
+
+  /**
+   * Запись работы из прочитанного списка против записи, которую сервис уже держит: список, начатый до письма, приходит
+   * после перечитывания записи под письмо (`refreshEntry`) и нёс бы работу прежней версии. Точная версия ниже держимой —
+   * остаётся держимая; без точной версии (чтение вклинилось в запись) список берётся как есть, как и работа, которой
+   * сервис ещё не знает. Версия работы только растёт: новая работа под прежним id получает версию по часам (`createWork`).
+   */
+  function newerOf(work: WorkEntry, current: WorkEntry | undefined): WorkEntry {
+    return work.version !== undefined && current?.version !== undefined && work.version < current.version ? current : work;
+  }
+
+  /** Источник перемен списка — `watchWorks` на всю базу, источник писем — `onMapWritten`; заводятся на `start`. */
+  function ensureWatcher(): void {
+    if (stopped || watcher !== undefined) return;
+    watcher = watchWorks(
       (works, seq) => {
         // Разбор уже случился, даже если список ниже отбросим как устаревший.
         countParsed(works);
-        // Наблюдателей несколько (дом и каждый проект), каждый читает список
-        // сам, и медленное старое чтение одного может прийти позже свежего
-        // чтения другого.
+        // Чтение, начатое раньше уже принятого, может прийти позже свежего.
         if (seq < latestSeq) return;
         latestSeq = seq;
-        latest = works;
+        // Список мог начаться до письма, которое хост уже перечитал под своей записью (`refreshEntry`): откатывать её нельзя.
+        latest = works.map((work) => newerOf(work, entries.get(workKey(work.projectPath, work.map.work.id))));
         scheduleRefresh();
       },
-      projectPath,
       {
-        // Помимо склейки сервиса (`scheduleRefresh`) события склеивает и сам наблюдатель. Дом
-        // наблюдается один раз — наблюдателю проекта достаточно каталога его работ, иначе каждая
-        // запись индекса будила бы каждого из них и каждый читал бы все карты.
         debounceMs: WATCH_DEBOUNCE_MS,
-        watchHome: projectPath === parleyHome(),
         onError: (error) =>
           host.log.warn('наблюдение за работами: событие пропущено', { error: String(error) }),
       },
     );
-    watchers.set(projectPath, watcher);
-    settler.schedule();
-    return true;
+    unsubscribeWritten = onMapWritten(onWritten);
   }
-
-  /**
-   * Дочитывание после включения наблюдателя (`watch-settle`): запись карты, попавшая в окно между созданием
-   * наблюдателя и его реальным включением, не приходит событием никогда. Список перечитывается заново, и
-   * если он отличается от последнего полученного, идёт обычное обновление; без отличий — ничего.
-   */
-  async function settleRead(): Promise<void> {
-    if (stopped) return;
-    const seq = latestSeq;
-    const fresh = await readWorks(parleyHome()).catch(() => null);
-    if (fresh !== null) countParsed(fresh);
-    // Пока читали, пришло событие наблюдателя: его чтение свежее нашего, следующая пауза сверит ещё раз.
-    if (stopped || fresh === null || seq !== latestSeq) return;
-    // `bytes` в сравнении не участвует: у карты из кэша разбора он 0, и список без перемен выглядел бы новым.
-    const content = (list: readonly WorkEntry[]): string =>
-      JSON.stringify(list.map(({ projectPath, map }) => ({ projectPath, map })));
-    if (content(fresh) === content(latest)) return;
-    latest = fresh;
-    scheduleRefresh();
-  }
-
-  const settler = createSettler(() => void settleRead());
 
   function scheduleRefresh(): void {
     if (timer !== undefined) clearTimeout(timer);
@@ -381,31 +923,6 @@ export function createWorksService(
     return refreshing;
   }
 
-  /**
-   * Карты проекта, чей наблюдатель заведён только что, перечитываются (fix-tests2): список
-   * пришёл от наблюдателя дома, а `updateMap` пишет индекс раньше карты — запись карты,
-   * сделанная до наблюдателя проекта, иначе не видна никому (первая сессия нового проекта
-   * оставалась pending в снимке). Всё, что запишут после, увидит уже сам наблюдатель.
-   */
-  async function rereadNewlyWatched(
-    works: readonly WorkEntry[],
-    projects: ReadonlySet<string>,
-  ): Promise<void> {
-    if (projects.size === 0) return;
-    for (const work of works) {
-      if (!projects.has(work.projectPath)) continue;
-      try {
-        const fresh = await readMap(work.projectPath, work.map.work.id);
-        entries.set(workKey(work.projectPath, work.map.work.id), {
-          projectPath: work.projectPath,
-          map: fresh,
-        });
-      } catch {
-        // Карту удалили или переписывают — следующее чтение наблюдателя разберётся.
-      }
-    }
-  }
-
   /** Счётчик окна: проход `refresh` считается и при сбое в `publish` или слушателе, и при раннем выходе из-за `stopped`. */
   async function refresh(works: readonly WorkEntry[]): Promise<void> {
     const startedAt = performance.now();
@@ -417,23 +934,21 @@ export function createWorksService(
     }
   }
 
-  async function refreshPass(works: readonly WorkEntry[]): Promise<void> {
+  async function refreshPass(listed: readonly WorkEntry[]): Promise<void> {
     if (stopped) return;
     const previous = buildSnapshot();
 
-    // `works` — уже полный список: `readWorks` каждый раз перечитывает весь
-    // глобальный индекс заново, а не только изменившийся проект, поэтому карту
-    // сервиса можно просто заменить целиком, слитую по ключу `projectPath+workId`.
+    // `listed` — уже полный список: `readWorks` каждый раз берёт всю таблицу `works`
+    // (неизменённая работа — из кэша по версии), поэтому карту сервиса можно просто
+    // заменить целиком, слитую по ключу `projectPath+workId`. Запись, что новее списка по версии, остаётся (`newerOf`).
+    const works = listed.map((work) => newerOf(work, entries.get(workKey(work.projectPath, work.map.work.id))));
     const seenKeys = new Set<string>();
-    const newlyWatched = new Set<string>();
     entries.clear();
     for (const work of works) {
       const key = workKey(work.projectPath, work.map.work.id);
       entries.set(key, work);
       seenKeys.add(key);
-      if (ensureWatcher(work.projectPath)) newlyWatched.add(work.projectPath);
     }
-    await rereadNewlyWatched(works, newlyWatched);
 
     const projects = new Set(works.map((work) => work.projectPath));
     await Promise.all(
@@ -449,6 +964,8 @@ export function createWorksService(
     await checkCorruption(seenKeys);
     for (const work of works) await leaseWork(work);
 
+    // Без `await` до `publish`: пачка чужих писем выходит вслед за этим снимком (`releaseMail`).
+    announceForeign();
     const snapshot = buildSnapshot();
     revision += 1;
     windowCache = null;
@@ -466,13 +983,10 @@ export function createWorksService(
         since: new Date().toISOString(),
       };
 
-      // Наблюдатель за `parleyHome()` ловит появление новых проектов в
-      // глобальном индексе, даже если на старте их ещё ни одного нет.
-      ensureWatcher(parleyHome());
-      const index = await readWorksIndex().catch(() => ({ schemaVersion: 1 as const, works: [] }));
-      for (const item of index.works) ensureWatcher(item.projectPath);
+      // Источник заводится до первого чтения: запись между ними он заметит и пошлёт повторное.
+      ensureWatcher();
 
-      const initial = await readWorks(parleyHome());
+      const initial = await readWorks();
       countParsed(initial);
       // Наблюдатель успел отдать своё чтение, пока шло это, — его и берём:
       // номер у начального чтения не спросить, а следующее событие всё равно
@@ -482,6 +996,7 @@ export function createWorksService(
     },
     snapshot: buildSnapshot,
     windowSnapshot,
+    mailSnapshot,
     legacySnapshot,
     entry: (projectPath, workId) => entries.get(workKey(projectPath, workId)),
     firstReadDone: (projectPath, workId) => readAlready.has(workKey(projectPath, workId)),
@@ -489,13 +1004,21 @@ export function createWorksService(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    onMail(listener) {
+      mailListeners.add(listener);
+      return () => mailListeners.delete(listener);
+    },
     async stop() {
       if (stopped) return;
       stopped = true;
-      settler.cancel();
       if (timer !== undefined) clearTimeout(timer);
-      for (const watcher of watchers.values()) watcher.close();
-      watchers.clear();
+      watcher?.close();
+      watcher = undefined;
+      unsubscribeWritten?.();
+      unsubscribeWritten = undefined;
+      for (const batch of batches.values()) if (batch.timer !== undefined) clearTimeout(batch.timer);
+      batches.clear();
+      mailKnown.clear();
 
       const pid = process.pid;
       await Promise.all(

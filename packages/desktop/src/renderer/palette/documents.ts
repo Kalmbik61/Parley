@@ -12,7 +12,7 @@
  * «Action». Поле поиска подписи не читает (`fields`), поэтому ранжирование прежнее.
  */
 
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import { sessionDotStateWithNeed, stateWord, type DotState } from '@parley/core/session-state';
 import { refKey } from '@parley/protocol';
 import { toast } from 'sonner';
@@ -69,7 +69,7 @@ export interface PaletteDoc {
 }
 
 export function buildDocuments(input: {
-  works: WorkEntry[];
+  works: WindowWorkEntry[];
   activity: Record<string, ActivityEntry>;
   /** useSidebarAttention() (3.3): lastEventAt и уровень работ — один расчёт внимания (4.2). */
   attention: Record<string, WorkAttention>;
@@ -178,8 +178,11 @@ export function buildDocuments(input: {
         visitedAt: workAt.get(key) ?? null,
         run: () => useLayoutStore.getState().setActiveWork(key),
       });
-      // Как у прежней команды «вся почта работы»: пустая почта не засоряет список.
-      if (entry.map.messages.length > 0) {
+      // Как у прежней команды «вся почта работы»: пустая почта не засоряет список. Снимок без писем (`compact` версии 2)
+      // писем не несёт — есть ли они, видно по итогам комнат и прямых писем.
+      const compact = entry.map.compact;
+      const hasLetters = compact?.version === 2 ? Object.values(compact.rooms).some((room) => room.total > 0) : entry.map.messages.length > 0;
+      if (hasLetters) {
         docs.push({
           id: `mail:${key}`,
           section: 'works',
@@ -340,7 +343,7 @@ export function paletteGone(): Promise<boolean> {
  * ввода, иначе сама вкладка. Фокус, который человек за это время увёл сам (или который забрал
  * открытый действием диалог), не перехватывается.
  */
-async function focusOpened(key: string, tab: TabSpec, entry: WorkEntry): Promise<void> {
+async function focusOpened(key: string, tab: TabSpec, entry: WindowWorkEntry): Promise<void> {
   if (!(await whenShown(key, tab)) || !(await paletteGone())) return;
   const current = document.activeElement;
   if (current !== null && current !== document.body) return;

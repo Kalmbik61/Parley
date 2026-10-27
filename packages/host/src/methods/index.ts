@@ -35,7 +35,7 @@ import { createAssistantHandlers } from './assistant.js';
 import { createAuthHandlers } from './auth.js';
 import { createBacklogHandlers } from './backlog.js';
 import { createConsentHandlers } from './consents.js';
-import { contextMessages, contextText } from './context-pages.js';
+import { contextLetter, contextMessages, contextText } from './context-pages.js';
 import { createChangesHandlers } from './changes.js';
 import { createDiagnosticsHandlers } from './diagnostics.js';
 import { createFeedHandlers } from './feed.js';
@@ -236,6 +236,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'works.list': worksList(deps.works) as AnyHandler,
     // Читают карту с диска, снимка работ не ждут: не в `WORKS_GATED_METHODS`.
     'context.messages': contextMessages as AnyHandler,
+    'context.letter': contextLetter as AnyHandler,
     'context.text': contextText as AnyHandler,
     'works.create': worksCreate as AnyHandler,
     'works.delete': createWorksDelete(deps.history) as AnyHandler,

@@ -11,7 +11,7 @@
 
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkEntry, WorkSession } from '@parley/core';
+import type { WindowWorkEntry, WorkSession } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
@@ -77,7 +77,7 @@ function session(id: string, label: string): WorkSession {
   };
 }
 
-function work(id: string, createdAt: string, sessions: WorkSession[]): WorkEntry {
+function work(id: string, createdAt: string, sessions: WorkSession[]): WindowWorkEntry {
   return {
     projectPath: `/tmp/${id}`,
     map: {

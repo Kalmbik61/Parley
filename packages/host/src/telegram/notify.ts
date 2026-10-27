@@ -1,18 +1,36 @@
 /**
- * Поводы для сообщений бота: что изменилось с прошлого снимка. Функции чистые, состояние (`NotifyMemory`) держит вызывающий.
- * Первый вызов только запоминает базу — после старта хоста бот не засыпает человека тем, что было до него.
+ * Поводы для сообщений бота: что изменилось с прошлого снимка, и какие письма принесла запись (`mailTriggers`). Состояние
+ * (`NotifyMemory`) держит вызывающий; письма базы берутся через `TriggerLetters` (по умолчанию — непрочитанное по карте
+ * снимка, последнее письмо человека из базы работы), остальное чистое. Первый вызов `worksTriggers` только запоминает базу —
+ * после старта хоста бот не засыпает человека тем, что было до него.
  */
 
 import path from 'node:path';
 import { humanUnreadLetters, humanUnreadMentions, plainHumanMention, roomAwaitsDecision, sessionNeed } from '@parley/core/attention';
 import { sessionDotState, type Activity } from '@parley/core/session-state';
-import { ACCEPTED_LETTER, RETURNED_LETTER, type Message, type Room, type SessionActivity, type WorkEntry, type WorkSession } from '@parley/core';
-import { refKey, type SessionRef, type WorksSnapshot } from '@parley/protocol';
+import {
+  ACCEPTED_LETTER,
+  HUMAN,
+  readLetters,
+  RETURNED_LETTER,
+  unreadLetters,
+  WorkNotFoundError,
+  type Message,
+  type Room,
+  type SessionActivity,
+  type WorkEntry,
+  type WorkSession,
+} from '@parley/core';
+import { refKey, type SessionRef } from '@parley/protocol';
+import type { WorksView } from '../works/works-service.js';
 
 export interface NotifyMemory {
   /** Уровень сессии по `refKey`; `closed` — точка не показывает activity (закрыта, спит, итог). */
   levels: Map<string, Activity | 'closed'>;
-  /** Id писем и упоминаний, которые уже видели; `null` — снимка ещё не было. */
+  /**
+   * Id писем и упоминаний, о которых бот уже знает: база первого снимка и всё, что принёс `mailTriggers`; `null` — снимка
+   * ещё не было. Множество только пополняется: письма приходят событием записи, а не пересчётом снимка (спека rooms.mail 6.7).
+   */
   letters: Set<string> | null;
   /** Решение в слоте комнаты по `проект\0работа\0комната`. */
   decisions: Map<string, { id: string; rev: number }>;
@@ -41,8 +59,6 @@ export function activityTransition(memory: NotifyMemory, ref: SessionRef, sessio
 }
 
 export interface WorksTriggers {
-  /** Новые письма человеку (roomId === null) и упоминания в комнатах. */
-  letters: Array<{ entry: WorkEntry; message: Message }>;
   decisions: Array<{ entry: WorkEntry; room: Room; change: 'new' | 'revised' }>;
   closed: Array<{ entry: WorkEntry; roomId: string; previous: { id: string; rev: number }; now: 'accepted' | 'returned' | 'revised' | 'gone' }>;
 }
@@ -52,22 +68,71 @@ export function sessionWhere(entry: WorkEntry): string {
   return `${entry.map.work.title} · ${path.basename(entry.projectPath)}`;
 }
 
+/** Письмо человеку (`roomId === null`) или упоминание человека в комнате, о котором бот говорит один раз. */
+export interface MailTrigger {
+  entry: WorkEntry;
+  message: Message;
+}
+
+const letterKey = (entry: WorkEntry, message: Message): string =>
+  `${entry.projectPath}\u0000${entry.map.work.id}\u0000${message.id}`;
+
+/**
+ * Из `messages` — письма, о которых бот пишет человеку: прямые письма ему и упоминания его в комнатах. Правила внимания
+ * считает core по карте с этими письмами: в снимке работ писем нет, они приходят из базы или из записи.
+ */
+function humanLetters(entry: WorkEntry, messages: Message[], hasMention: (text: string) => boolean): Message[] {
+  const unread = { ...entry.map, messages };
+  return [...humanUnreadLetters(unread), ...humanUnreadMentions(unread, hasMention)];
+}
+
 const decisionKey = (entry: WorkEntry, roomId: string): string => `${entry.projectPath}\u0000${entry.map.work.id}\u0000${roomId}`;
 
+/**
+ * Письма для поводов: непрочитанное человеком и последнее письмо человека в комнате (спека хранилища 6.2). По умолчанию
+ * непрочитанное считается по карте снимка (`worksTriggers` зовётся на каждое изменение работ, и карты из базы при числе
+ * работ больше кэша каждый раз грузились бы заново), последнее письмо читается из базы работы — оно нужно редко.
+ * Тесты подставляют чтение из карты в памяти.
+ */
+export interface TriggerLetters {
+  humanUnread(entry: WorkEntry): Message[];
+  lastHumanLetter(entry: WorkEntry, roomId: string): Message | undefined;
+}
+
+/** Работу могли удалить, пока её запись ещё в снимке: последнего письма тогда нет, а не сбой рассылки. */
+function orGone<T>(read: () => T, gone: T): T {
+  try {
+    return read();
+  } catch (error) {
+    if (error instanceof WorkNotFoundError) return gone;
+    throw error;
+  }
+}
+
+export const storeTriggerLetters: TriggerLetters = {
+  humanUnread: (entry) => unreadLetters(entry.projectPath, entry.map.work.id, HUMAN, { map: entry.map }),
+  lastHumanLetter: (entry, roomId) =>
+    orGone(() => readLetters(entry.projectPath, entry.map.work.id, { roomId, from: HUMAN, limit: 1, newestFirst: true })[0], undefined),
+};
+
 /** Чем кончилось решение, которого в слоте больше нет: по последнему письму человека в комнате. */
-function closedAs(entry: WorkEntry, roomId: string): 'accepted' | 'returned' | 'gone' {
-  const last = [...entry.map.messages].reverse().find((message) => message.roomId === roomId && message.from === 'human');
+function closedAs(entry: WorkEntry, roomId: string, letters: TriggerLetters): 'accepted' | 'returned' | 'gone' {
+  const last = letters.lastHumanLetter(entry, roomId);
   if (last === undefined) return 'gone';
   // 'Completion accepted.' — литерал из core/src/work/proposals.ts (acceptProposal): константы для него в core нет.
   if (last.text === ACCEPTED_LETTER || last.text === 'Completion accepted.') return 'accepted';
   return last.text.startsWith(RETURNED_LETTER) ? 'returned' : 'gone';
 }
 
-export function worksTriggers(memory: NotifyMemory, snapshot: WorksSnapshot, hasMention: (text: string) => boolean = plainHumanMention): WorksTriggers {
-  const result: WorksTriggers = { letters: [], decisions: [], closed: [] };
+export function worksTriggers(
+  memory: NotifyMemory,
+  snapshot: WorksView,
+  hasMention: (text: string) => boolean = plainHumanMention,
+  letters: TriggerLetters = storeTriggerLetters,
+): WorksTriggers {
+  const result: WorksTriggers = { decisions: [], closed: [] };
   const first = memory.letters === null;
-  const seenLetters = memory.letters ?? new Set<string>();
-  const nextLetters = new Set<string>();
+  const baseLetters = new Set<string>();
   const currentDecisions = new Map<string, { id: string; rev: number }>();
   const entries = new Map<string, WorkEntry>();
 
@@ -75,12 +140,9 @@ export function worksTriggers(memory: NotifyMemory, snapshot: WorksSnapshot, has
     const { map } = entry;
     entries.set(`${entry.projectPath}\u0000${map.work.id}`, entry);
 
-    for (const message of [...humanUnreadLetters(map), ...humanUnreadMentions(map, hasMention)]) {
-      const key = `${entry.projectPath}\u0000${map.work.id}\u0000${message.id}`;
-      if (nextLetters.has(key)) continue;
-      nextLetters.add(key);
-      if (!first && !seenLetters.has(key)) result.letters.push({ entry, message });
-    }
+    // База писем — только первый снимок: непрочитанное человеком к этому моменту молчит. Дальше письма приходят записью
+    // (`mailTriggers`), а запись одних писем снимок работ не меняет и сюда не доходит (спека rooms.mail 6.7).
+    if (first) for (const message of humanLetters(entry, letters.humanUnread(entry), hasMention)) baseLetters.add(letterKey(entry, message));
 
     for (const room of map.rooms) {
       const proposal = room.proposal;
@@ -96,7 +158,7 @@ export function worksTriggers(memory: NotifyMemory, snapshot: WorksSnapshot, has
         result.decisions.push({ entry, room, change: 'revised' });
         result.closed.push({ entry, roomId: room.id, previous, now: 'revised' });
       } else {
-        result.closed.push({ entry, roomId: room.id, previous, now: closedAs(entry, room.id) });
+        result.closed.push({ entry, roomId: room.id, previous, now: closedAs(entry, room.id, letters) });
         result.decisions.push({ entry, room, change: 'new' });
       }
     }
@@ -108,11 +170,34 @@ export function worksTriggers(memory: NotifyMemory, snapshot: WorksSnapshot, has
       if (currentDecisions.has(key)) continue;
       const [projectPath, workId, roomId] = key.split('\u0000') as [string, string, string];
       const entry = entries.get(`${projectPath}\u0000${workId}`);
-      if (entry !== undefined) result.closed.push({ entry, roomId, previous, now: closedAs(entry, roomId) });
+      if (entry !== undefined) result.closed.push({ entry, roomId, previous, now: closedAs(entry, roomId, letters) });
     }
   }
 
-  memory.letters = nextLetters;
+  if (first) memory.letters = baseLetters;
   memory.decisions = currentDecisions;
+  return result;
+}
+
+/**
+ * Новые письма человеку из записи писем (`onMail`): `added` — письма записи как легли в базу. Письмо, о котором бот уже
+ * знает (база первого снимка или прежняя запись), повода не даёт. Без базы — `worksTriggers` ещё не звали — молчит: бот не
+ * знает, что было до него. `entry` нужен правилам внимания (архивная комната) и подписям карточки.
+ */
+export function mailTriggers(
+  memory: NotifyMemory,
+  entry: WorkEntry,
+  added: readonly Message[],
+  hasMention: (text: string) => boolean = plainHumanMention,
+): MailTrigger[] {
+  const seen = memory.letters;
+  if (seen === null) return [];
+  const result: MailTrigger[] = [];
+  for (const message of humanLetters(entry, [...added], hasMention)) {
+    const key = letterKey(entry, message);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ entry, message });
+  }
   return result;
 }

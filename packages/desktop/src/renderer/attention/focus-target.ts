@@ -4,7 +4,7 @@
  * вниз и фокус ввода. Только переход: ни ввода в терминал, ни ответов агенту от имени человека.
  */
 
-import type { WorkEntry } from '@parley/core';
+import type { WindowWorkEntry } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import type { FocusTarget } from '../../shared/bridge.js';
 import type { TabSpec } from '../../shared/layout-types.js';
@@ -26,7 +26,7 @@ const SHOWN_TIMEOUT_MS = 2000;
 const SHOWN_POLL_MS = 50;
 
 export interface FocusTargetDeps {
-  works: readonly WorkEntry[];
+  works: readonly WindowWorkEntry[];
   setActiveWork(workKey: string): void;
   openTab(workKey: string, tab: TabSpec): void; // apply(workKey, l => openTab(l, tab)); до hydrate — очередь (2.2)
   /**
@@ -40,7 +40,7 @@ export interface FocusTargetDeps {
 }
 
 /** Вкладка цели; null — работы, сессии или комнаты уже нет. */
-function targetTab(target: FocusTarget, works: readonly WorkEntry[]): { workKey: string; tab: TabSpec } | null {
+function targetTab(target: FocusTarget, works: readonly WindowWorkEntry[]): { workKey: string; tab: TabSpec } | null {
   const projectPath = target.kind === 'session' ? target.ref.projectPath : target.projectPath;
   const workId = target.kind === 'session' ? target.ref.workId : target.workId;
   const entry = works.find((item) => item.projectPath === projectPath && item.map.work.id === workId);
