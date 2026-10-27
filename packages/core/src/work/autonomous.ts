@@ -756,6 +756,7 @@ export function normalizeAttemptSubmission(input: {
   if (body.sha !== null || (suppliedHash !== undefined && suppliedHash !== manifestHash))
     throw new RoomRuleError('invalid manifest');
   const manifest = { ...body, hash: manifestHash };
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
   const { sha: _sha, ...submission } = manifest;
   const submissionKey = hash(submission);
   if (input.submissionKey !== undefined && input.submissionKey !== submissionKey)
@@ -880,6 +881,7 @@ export function receipt(
   attempt.tree = input.tree;
   attempt.manifest.sha = input.sha;
   attempt.manifest.artifacts = structuredClone(input.artifacts);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
   const { hash: _old, ...body } = attempt.manifest;
   attempt.manifest.hash = hash(body);
   attempt.receipt = {

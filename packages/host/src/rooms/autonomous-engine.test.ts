@@ -4,12 +4,14 @@ import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { addRoom, addSession, archiveRoom, createWork, mapLetterTx, cancelRoomPlan, ENGINE, HUMAN, parseMap, readStoredMap, replaceStoredMap, summarizePlanEffects, proposeCompletion, resolveProposal, halt, reserve, resume, setProposal, startAttempt, type AttemptChannelRequest, type CheckResult, type RoomPlan, type WindowWorkMap, type WorkMap } from '@parley/core';
+import { addRoom, addSession, archiveRoom, createWork, mapLetterTx, cancelRoomPlan, ENGINE, HUMAN, parseMap, readStoredMap, replaceStoredMap, summarizePlanEffects, proposeCompletion, resolveProposal, halt, reserve, resume, setProposal, startAttempt, type AttemptChannelRequest, type CheckResult, type RoomPlan, type SessionNeed, type WindowWorkMap, type WorkMap } from '@parley/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAutonomousEngine, resolveAutonomousProposal, type EngineIO } from './autonomous-engine.js';
 import { attemptsEngineGitPath, type AttemptsProposal } from '../agent/attempts-endpoint.js';
 import { resolveRoomProposal, resumeAutonomousPlan } from './rooms-service.js';
+import type { RequestInfo } from '../context.js';
 import { createPlanHandlers } from '../methods/rooms.js';
+import type { WorksView } from '../works/works-service.js';
 
 const exec = promisify(execFile);
 // Письма не лежат в карте работы: правилам комнат и планов в тестах нужен `LetterTx` над картой с письмами в памяти.
@@ -75,7 +77,7 @@ async function fixture(qualitative = false, count = 1) {
       return { id: ctx.resultId, specId: spec.id, attemptId, sha: captured, argvHash: digest(spec.argv), envHash: digest(spec.env), inputsOk: true, verdict: 'pass', by: ENGINE, exitCode: 0, summary: 'pass', outputTail: null, at: now.toISOString(), durationMs: 1 };
     }),
   };
-  const make = (restart = false, onFailure = vi.fn()) => { const engine = createAutonomousEngine(io, { provider: 'codex', verifier: { provider: 'claude', model: 'sonnet' }, onFailure, ...(restart ? { works: { snapshot: () => ({ entries: [{ projectPath, map }] }) as any, onChange: () => () => {} } } : {}) }); engines.push(engine); return engine; };
+  const make = (restart = false, onFailure = vi.fn()) => { const engine = createAutonomousEngine(io, { provider: 'codex', verifier: { provider: 'claude', model: 'sonnet' }, onFailure, ...(restart ? { works: { snapshot: () => ({ entries: [{ projectPath, map }] }) as unknown as WorksView, onChange: () => () => {} } } : {}) }); engines.push(engine); return engine; };
   const engine = make();
   const read = (planId = 'pl-01') => map.plans!.find(plan => plan.id === planId)!;
   const attempt = (index = 0, planId = 'pl-01') => read(planId).autonomous!.attempts[index]!;
@@ -396,7 +398,7 @@ describe('autonomous engine', () => {
   it('halts and aborts a stuck worker after the attempt time limit', async () => {
     const f = await fixture();
     await f.engine.flush(f.projectPath, 'w-01');
-    f.map().sessions.find(row => row.id === f.attempt().worker)!.stuck = { kind: 'approval', since: now.toISOString() } as any;
+    f.map().sessions.find(row => row.id === f.attempt().worker)!.stuck = { kind: 'approval', since: now.toISOString() } as SessionNeed;
     f.io.now = () => new Date(now.getTime() + 31 * 60_000);
     await f.engine.flush(f.projectPath, 'w-01');
     expect(f.attempt().status).toBe('aborted');
@@ -437,6 +439,7 @@ describe('autonomous engine', () => {
     const plan = f.read(), a = plan.autonomous!;
     setProposal(f.map(), plan.roomId, 's-01', 'Amend plan', now.toISOString(), { plan: { id: plan.id, rev: plan.rev, mode: 'autonomous', goal: plan.goal, items: plan.items } });
     const proposal = f.map().rooms[0]!.proposal! as AttemptsProposal;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
     proposal.autonomousAmendment = { planId: plan.id, rev: plan.rev, draft: { budget: structuredClone(a.budget.limits), coverage: structuredClone(a.coverage), checks: a.checks.map(({ inputs, frozenAt: _at, ...spec }) => ({ ...spec, inputs: inputs.map(row => row.path) })) }, checks: structuredClone(a.checks) };
     edit(proposal);
     const options = { rev: proposal.rev, planId: proposal.plan!.id, planRev: proposal.plan!.rev };
@@ -905,7 +908,7 @@ it('halts a timed-out live integration verifier and journals its stop/close', as
   f.io.now = () => new Date(now.getTime() + 25 * 60_000);
   await f.engine.flush(f.projectPath, 'w-01');
   const verifier = f.read().autonomous!.ops.findLast(op => op.kind === 'create-session' && op.payload.purpose === 'integration-verifier')!;
-  f.map().sessions.find(row => row.id === verifier.result!.sessionId)!.stuck = { kind: 'approval', since: now.toISOString() } as any;
+  f.map().sessions.find(row => row.id === verifier.result!.sessionId)!.stuck = { kind: 'approval', since: now.toISOString() } as SessionNeed;
   f.io.now = () => new Date(now.getTime() + 31 * 60_000);
   await f.engine.flush(f.projectPath, 'w-01');
   expect(f.read().autonomous!.halted).toBeNull();
@@ -1170,9 +1173,9 @@ describe('human autonomous plan actions', () => {
     const handlers = createPlanHandlers({ start() {}, stop() {}, flush: async () => summarizePlanEffects(readStoredMap(f.projectPath, workId)) });
     const input = { projectPath: f.projectPath, workId, planId: 'pl-01', rev: 1, item: 1, verdict: 'returned' as const, note: 'Human found a regression' };
     const before = snapshot();
-    await expect(handlers['plans.verify']({ ...input, rev: 0 }, {} as any)).rejects.toMatchObject({ code: 'conflict' });
+    await expect(handlers['plans.verify']({ ...input, rev: 0 }, {} as RequestInfo)).rejects.toMatchObject({ code: 'conflict' });
     expect(snapshot()).toBe(before);
-    await handlers['plans.verify'](input, {} as any);
+    await handlers['plans.verify'](input, {} as RequestInfo);
     const disk = readStoredMap(f.projectPath, workId), plan = disk.plans![0]!;
     expect(plan).toMatchObject({ status: 'active', rev: 2, completedAt: null, completionSummary: null });
     expect(plan.items.map(item => item.status)).toEqual(['returned', 'waiting']);
@@ -1493,7 +1496,7 @@ it('tells the human to cancel the autonomous plan before lowering room mode', as
   const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01');
   const { workId, snapshot } = await saveFixture(f), before = snapshot();
   const handlers = createPlanHandlers({ start() {}, stop() {}, flush: async () => summarizePlanEffects(readStoredMap(f.projectPath, workId)) });
-  await expect(handlers['rooms.setMode']({ projectPath: f.projectPath, workId, roomId: 'r-01', mode: 'free', reason: 'Human request', confirmCancel: true }, {} as any))
+  await expect(handlers['rooms.setMode']({ projectPath: f.projectPath, workId, roomId: 'r-01', mode: 'free', reason: 'Human request', confirmCancel: true }, {} as RequestInfo))
     .rejects.toMatchObject({ code: 'bad_request', message: 'Cancel the autonomous plan first.' });
   expect(snapshot()).toBe(before);
 });
@@ -1542,7 +1545,7 @@ describe('human return of autonomous completion', () => {
     const { f, workId, input } = await completion();
     await expect(resolveRoomProposal(input)).rejects.toMatchObject({ code: 'bad_request' });
     const handlers = createPlanHandlers({ start() {}, stop() {}, flush: async () => summarizePlanEffects(readStoredMap(f.projectPath, workId)) });
-    await handlers['plans.verify']({ projectPath: f.projectPath, workId, planId: 'pl-01', rev: 1, item: 1, verdict: 'returned', note: 'Fix this item' }, {} as any);
+    await handlers['plans.verify']({ projectPath: f.projectPath, workId, planId: 'pl-01', rev: 1, item: 1, verdict: 'returned', note: 'Fix this item' }, {} as RequestInfo);
     Object.assign(f.map(), readStoredMap(f.projectPath, workId));
     expect(f.read().status).toBe('active');
     expect(f.read().autonomous!.halted).toBeNull();

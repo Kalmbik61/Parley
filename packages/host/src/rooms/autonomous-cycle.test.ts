@@ -13,7 +13,9 @@ import {
 import { afterEach, describe, expect, it } from 'vitest';
 import { attemptsEngineGitPath, createAttemptsEndpoint, type AttemptsResult } from '../agent/attempts-endpoint.js';
 import { createBrowserEndpoint } from '../agent/browser-endpoint.js';
+import type { RequestInfo } from '../context.js';
 import { createPlanHandlers } from '../methods/rooms.js';
+import type { WorksView } from '../works/works-service.js';
 import { autonomousEngineIO, createAutonomousEngine, type AutonomousEngine } from './autonomous-engine.js';
 import { resolveRoomProposal, resumeAutonomousPlan } from './rooms-service.js';
 
@@ -166,11 +168,11 @@ async function fixture(options: { count?: number; independent?: boolean; qualita
   const restart = async () => {
     await engine.stop();
     const map = await read();
-    engine = createAutonomousEngine(io, { provider: 'codex', verifier: { provider: 'claude', model: 'sonnet' }, works: { snapshot: () => ({ entries: [{ projectPath, map }] }) as any, onChange: () => () => {} } });
+    engine = createAutonomousEngine(io, { provider: 'codex', verifier: { provider: 'claude', model: 'sonnet' }, works: { snapshot: () => ({ entries: [{ projectPath, map }] }) as unknown as WorksView, onChange: () => () => {} } });
     engines.push(engine); engine.start(); await flush();
   };
   const handlers = createPlanHandlers({ start() {}, stop() {}, flush: async () => summarizePlanEffects(await read()) });
-  const returnItem = async (item = 1) => handlers['plans.verify']({ projectPath, workId, planId: 'pl-01', rev: (await plan()).rev, item, verdict: 'returned', note: 'Human found a late defect' }, {} as any);
+  const returnItem = async (item = 1) => handlers['plans.verify']({ projectPath, workId, planId: 'pl-01', rev: (await plan()).rev, item, verdict: 'returned', note: 'Human found a late defect' }, {} as RequestInfo);
   const mirror = async () => {
     const a = await state();
     expect(await bare('rev-parse', `refs/heads/${a.integration.branch}`)).toBe(a.integration.verifiedHead);
@@ -606,7 +608,7 @@ describe('autonomous room cycle with stub agents and real Git', () => {
     const stored = path.join(path.dirname(await f.clone()), artifact.storedAs);
     const before = await f.read();
     expect(() => archiveRoom(before, mapLetterTx({ ...before, messages: [] }).letters, 'r-01', HUMAN)).toThrow('cancel the autonomous plan first');
-    await expect(f.handlers['rooms.setMode']({ projectPath: f.projectPath, workId: f.workId, roomId: 'r-01', mode: 'free', reason: 'Bypass cancellation', confirmCancel: true }, {} as any)).rejects.toThrow('Cancel the autonomous plan first');
+    await expect(f.handlers['rooms.setMode']({ projectPath: f.projectPath, workId: f.workId, roomId: 'r-01', mode: 'free', reason: 'Bypass cancellation', confirmCancel: true }, {} as RequestInfo)).rejects.toThrow('Cancel the autonomous plan first');
     const restore = crashOnWrite(f, p => p.autonomous!.ops.some(op => op.kind === 'cleanup' && op.payload.purpose === 'cancellation' && op.state === 'done'), 'cleanup settlement lost');
     const rev = (await f.plan()).rev;
     const cancel = () => f.engine().cancel({ projectPath: f.projectPath, workId: f.workId, planId: 'pl-01', rev });

@@ -61,6 +61,7 @@ async function setup(withEngine = true) {
   const endpoint = createAttemptsEndpoint({ authenticate: req => registry.authenticate(req), ...(withEngine ? { engine } : {}) });
   const tokens = Object.fromEntries(map.sessions.map(session => [session.id, registry.register({ ...ref, sessionId: session.id })]));
   // Drive the authenticated HTTP handler directly, as in autonomous-cycle, without sockets.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the reply is null or a success/error envelope; tests probe both shapes without narrowing
   const post = (body: unknown, session = 's-01') => new Promise<{ status: number; body: any }>((resolve, reject) => {
     const data = Buffer.from(JSON.stringify(body));
     const req = Object.assign(Readable.from([data]), { method: 'POST', headers: { authorization: `Bearer ${tokens[session] ?? session}`, 'content-length': String(data.length) } });
@@ -120,6 +121,7 @@ describe('agent attempts endpoint', () => {
   it('shares worker preflight and normalized engine dispatch between handle and perform', async () => {
     const f = await setup(), { value, plan } = await f.active();
     plan.autonomous!.attempts = [attempt(f.baseSha)]; await f.save(value);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
     const { hash: _hash, ...manifest } = handoff().manifest;
     const body = { action: 'submit', attemptId: 'at-0001', manifest };
     const http = (await f.post(body, 's-02')).body, before = await f.raw();
@@ -241,6 +243,7 @@ describe('agent attempts endpoint', () => {
     const f = await setup(), { value, plan } = await f.active();
     plan.autonomous!.attempts = [attempt(f.baseSha)]; await f.save(value);
     const before = await f.raw(), explicit = handoff();
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
     const { hash: _hash, ...manifest } = explicit.manifest;
     const request = { action: 'submit', attemptId: explicit.attemptId, manifest };
     for (const body of [request, { ...request, submissionKey: explicit.submissionKey }, explicit]) {
@@ -261,6 +264,7 @@ describe('agent attempts endpoint', () => {
 
   it('returns an existing receipt on retry without engine dispatch', async () => {
     const f = await setup(), { entry, submission } = await checking(f), before = await f.raw();
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
     const { hash: _hash, ...manifest } = submission.manifest;
     for (const body of [submission, { action: 'submit', attemptId: entry.id, manifest }, { action: 'submit', attemptId: entry.id, manifest, submissionKey: submission.submissionKey }]) {
       expect((await f.post(body, 's-02')).body).toEqual({ ok: true, result: { ...entry.receipt, submissionKey: submission.submissionKey } });
