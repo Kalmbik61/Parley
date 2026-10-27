@@ -1262,7 +1262,15 @@ describe('WakeService: комнаты (3.5)', () => {
     const streams = await trioRig(workId, ids);
 
     await updateMap(project, workId, (map, letters) => {
-      letters.add({ kind: 'note', from: a, to: [], roomId: 'r-01', text: 'всем' });
+      // Заметка всем несрочная: ждёт окна тишины (30 с). Письмо старше окна — указатель сразу.
+      letters.add({
+        kind: 'note',
+        from: a,
+        to: [],
+        roomId: 'r-01',
+        text: 'всем',
+        at: new Date(Date.now() - 60_000).toISOString(),
+      });
     });
 
     const expected = `echo: ${inRoom(1, 'r-01', 'Ревью «схемы»')}`;

@@ -1059,6 +1059,7 @@ export const S = {
       'resume-limit': 'resume limit reached',
       pending: 'not launched',
       'folder-trust': 'waiting for folder trust',
+      settling: 'batched, waits for a quiet room',
     } satisfies Record<MailWait, string>,
     /** Причина, которой окно не знает (хост новее окна): вместо пустой скобки (`mailWaitText`). */
     mailWaitUnknown: 'waiting',

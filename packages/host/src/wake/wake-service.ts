@@ -901,6 +901,7 @@ export function createWakeService(
         resumeAllowed: true,
         // Процесса нет: подъём заводит новый, хуки старого тут ни при чём.
         hooked: false,
+        now: Date.now(),
       };
       // Лимит берём только под настоящий подъём: каждый пересчёт без писем
       // иначе съедал бы его впустую.
@@ -960,6 +961,7 @@ export function createWakeService(
       resumeAllowed: false,
       hooked: hookedSince(live?.activity, handle.startedAt),
       queueWhileBusy: codex,
+      now: Date.now(),
     });
 
     if (action.kind !== 'type-pointer') {
@@ -1007,6 +1009,8 @@ export function createWakeService(
         return 'pending';
       case 'resume-limit':
         return 'resume-limit';
+      case 'settling':
+        return 'settling';
       case 'stuck':
       case 'no-hooks':
       case 'busy':
