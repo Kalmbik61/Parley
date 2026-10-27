@@ -38,7 +38,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityService } from '../activity/activity-service.js';
 import { createBrowserEndpoint } from './browser-endpoint.js';
 import { createAttemptsEndpoint } from './attempts-endpoint.js';
-import { hostToolContext, turnBoundarySource } from './tool-context.js';
+import { hostToolContext, mapChangeSignal, turnBoundarySource } from './tool-context.js';
 import { CALL_REPLAY_LIMIT, CALL_REPLAY_TTL_MS, createToolsEndpoint } from './tools-endpoint.js';
 
 /** Ожидания идут через сеть и диск: запас на загруженную машину больше умолчания в секунду. */
@@ -86,23 +86,34 @@ interface RawOptions {
   signal?: AbortSignal;
 }
 
-async function boot(options: { now?: () => number } = {}) {
+async function boot(options: { now?: () => number; pollMs?: number } = {}) {
   const registry = createBrowserEndpoint({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, clients: () => [], roomsOf: () => [] });
   const ref: SessionRef = { projectPath: project, workId, sessionId: 's-01' };
   const ownToken = registry.register(ref);
   const listeners = new Set<() => void>();
+  const mailListeners = new Set<() => void>();
+  // Служба работ — ручная: `onChange` и `onMail` ведут отдельные подписки, и тест будит их по очереди.
+  const works = {
+    onChange: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    onMail: (listener: () => void) => {
+      mailListeners.add(listener);
+      return () => {
+        mailListeners.delete(listener);
+      };
+    },
+  };
   // Сколько раз `get_map` на самом деле исполнился: повтор по тому же `callId` строки провайдеров не спрашивает.
   const providerRows = vi.fn(async (): Promise<ProviderRow[]> => []);
-  const standard = (target: SessionRef, launch: ToolLaunch) =>
-    hostToolContext(target, launch, {
-      providerRows,
-      onWorksChange: (listener) => {
-        listeners.add(listener);
-        return () => {
-          listeners.delete(listener);
-        };
-      },
-    });
+  // Подписка — та же `mapChangeSignal`, что у хоста; крупный `pollMs` гасит запасной опрос: проснуться можно только по сигналу.
+  const standard = async (target: SessionRef, launch: ToolLaunch) => ({
+    ...(await hostToolContext(target, launch, { providerRows, onWorksChange: mapChangeSignal(works as never) })),
+    ...(options.pollMs === undefined ? {} : { pollMs: options.pollMs }),
+  });
   const contextFor = vi.fn(standard);
   // Журнал маршрута — свой, отдельный от журнала реестра токенов: тест смотрит только на то, что пишет `/agent/tools`.
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -150,9 +161,15 @@ async function boot(options: { now?: () => number } = {}) {
     closes: () => closes,
     /** Живые подписки `wait_for` на изменения работ. */
     waiters: () => listeners.size,
+    /** Живые подписки `wait_for` на записи писем. */
+    mailWaiters: () => mailListeners.size,
     /** «Карта изменилась»: будит все ожидания, как `worksService.onChange`. */
     notify: () => {
       for (const listener of [...listeners]) listener();
+    },
+    /** «Записаны письма»: будит ожидания, как `worksService.onMail`; `works.changed` при этом нет. */
+    notifyMail: () => {
+      for (const listener of [...mailListeners]) listener();
     },
   };
 }
@@ -361,6 +378,20 @@ describe('маршрут /agent/tools: инструменты агента в п
     const replies = await Promise.all([first, second]);
     expect(JSON.parse(textOf(replies[0] as Envelope))).toMatchObject({ state: 'message' });
     expect(textOf(replies[1] as Envelope)).toBe(textOf(replies[0] as Envelope));
+  });
+
+  // Спека rooms.mail 6.7: запись одних писем `works.onChange` не зовёт, и ожидающий агент просыпается по `onMail`.
+  it('a wait_for on the inbox wakes on a letters-only write, with no works.changed', async () => {
+    const { post, waiters, mailWaiters, notifyMail } = await boot({ pollMs: 600_000 });
+    const pending = post(waitCall());
+    await expect.poll(() => waiters(), POLL).toBe(1);
+    expect(mailWaiters()).toBe(1);
+    await updateMap(project, workId, (map, letters) => {
+      letters.add({ roomId: null, from: 's-02', to: ['s-01'], text: 'by mail', kind: 'note' });
+    });
+    notifyMail();
+    expect(JSON.parse(textOf(await pending))).toMatchObject({ state: 'message' });
+    await expect.poll(() => waiters() + mailWaiters(), POLL).toBe(0);
   });
 
   it('answers a failure to build the executor with ok: false internal, and the next request builds it again', async () => {

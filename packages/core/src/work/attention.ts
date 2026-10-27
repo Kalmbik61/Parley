@@ -14,6 +14,10 @@ import type { Message, Room, WindowWorkMap, WorkSession } from './types.js';
 // Те же литералы, что `HUMAN` и `SYSTEM` в `types.ts`: значения не импортируем, чтобы модуль остался чистым.
 const HUMAN = 'human';
 const SYSTEM = 'system';
+// Те же слова письма человека ведущему, что `ACCEPTED_LETTER` и `RETURNED_LETTER` в `proposals.ts` (тот модуль тянет карту, а
+// этот должен остаться чистым). Сходство держит тест `attention.test.ts`.
+const ACCEPTED_LETTER = 'Decision accepted.';
+const RETURNED_LETTER = 'Returned for rework';
 
 export type Attention = 'needs-you' | 'unseen' | 'working' | 'idle' | 'off';
 
@@ -117,4 +121,15 @@ export function humanUnreadMentions(map: Pick<WindowWorkMap, 'messages' | 'rooms
 /** `@human` в простом тексте, без Markdown: не часть слова и не адрес (`mail@humanity.org` не считается). */
 export function plainHumanMention(text: string): boolean {
   return /(^|[^\w@])@human\b/i.test(text);
+}
+
+/**
+ * Чем человек ответил на решение комнаты, по тексту его письма ведущему (`resolveProposal`): `accepted` — письмо
+ * `Decision accepted.` целиком, `returned` — любое, что начинается с `Returned for rework` (дальше заметка), прочее —
+ * `null`. Решение, которого слова нет в письме, ответом не считается. Окно (`derive.ts`) и хост (снимок без писем,
+ * спека rooms.mail 6.8) берут слова отсюда.
+ */
+export function humanDecisionOutcome(text: string): 'accepted' | 'returned' | null {
+  if (text === ACCEPTED_LETTER) return 'accepted';
+  return text.startsWith(RETURNED_LETTER) ? 'returned' : null;
 }

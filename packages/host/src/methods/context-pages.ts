@@ -1,12 +1,15 @@
 import {
   PageError,
+  WINDOW_TEXT_MAX,
   clampPageBytes,
   letterById,
   messagePage,
   parseCursor,
   readMap,
+  shrinkText,
   storeLetterReader,
   textPage,
+  viewBytes,
   viewMap,
 } from '@parley/core';
 import type { Message, WorkMap } from '@parley/core';
@@ -53,6 +56,22 @@ export const contextMessages: Handler<'context.messages'> = async (params) => {
     if (!entered) throw goneWork(workId);
     return badPage(error);
   }
+};
+
+/**
+ * Письмо по id (спека rooms.mail 6.9): запросом по номеру, карта целиком не читается. Текст ужат до `WINDOW_TEXT_MAX`, как
+ * у письма в событии `rooms.mail`, а у сокращённого назван полный размер (`textBytes`). Письма с таким id в работе нет —
+ * `null`, а не отказ: окно цитирует по id, который мог уйти вместе с комнатой.
+ */
+export const contextLetter: Handler<'context.letter'> = async ({ projectPath, workId, id }) => {
+  let message: Message | undefined;
+  try {
+    message = letterById(projectPath, workId, id);
+  } catch {
+    throw goneWork(workId);
+  }
+  if (message === undefined) return { message: null };
+  return { message: viewBytes(message) > WINDOW_TEXT_MAX ? shrinkText(message, WINDOW_TEXT_MAX) : message };
 };
 
 export const contextText: Handler<'context.text'> = async (params) => {

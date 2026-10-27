@@ -8,7 +8,8 @@ import {
   WorkNotFoundError,
   workExists,
 } from '@parley/core';
-import { COMPACT_WORKS_FEATURE, HOST_ERROR_REASONS } from '@parley/protocol';
+import { COMPACT_WORKS_FEATURE, HOST_ERROR_REASONS, ROOMS_MAIL_FEATURE } from '@parley/protocol';
+import type { WorksSnapshot } from '@parley/protocol';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
 import type { WorksService } from '../works/works-service.js';
@@ -19,15 +20,17 @@ import type { HistoryService } from '../rooms/history-service.js';
  * Ожидание первого чтения работ — в общих воротах `WORKS_GATED_METHODS` (`methods/index.ts`).
  */
 export function worksList(works: WorksService): Handler<'works.list'> {
-  return async (_params, request) => {
-    // Окно с `compact-works` читает компактный снимок (P35): письма хвостом, длинные тексты сокращены.
-    if (request.client.features.has(COMPACT_WORKS_FEATURE)) {
-      const compact = works.windowSnapshot();
-      if (compact === null) {
-        throw new HostError('internal', 'The workspace snapshot does not fit into one frame.', { reason: HOST_ERROR_REASONS.snapshotTooLarge });
-      }
-      return compact;
+  const required = (snapshot: WorksSnapshot | null): WorksSnapshot => {
+    if (snapshot === null) {
+      throw new HostError('internal', 'The workspace snapshot does not fit into one frame.', { reason: HOST_ERROR_REASONS.snapshotTooLarge });
     }
+    return snapshot;
+  };
+  return async (_params, request) => {
+    // Окно с `rooms-mail` читает снимок без писем (спека rooms.mail 6.8): письма оно берёт страницами и событиями.
+    if (request.client.features.has(ROOMS_MAIL_FEATURE)) return required(works.mailSnapshot());
+    // Окно с `compact-works` читает компактный снимок (P35): письма хвостом, длинные тексты сокращены.
+    if (request.client.features.has(COMPACT_WORKS_FEATURE)) return required(works.windowSnapshot());
     // Прежнее окно получает прежний полный снимок, пока тот влезает в кадр; иначе — ошибка с просьбой обновить окно,
     // а не строка, на которой декодер окна оборвёт соединение и начнёт переподключаться по кругу.
     const legacy = works.legacySnapshot();

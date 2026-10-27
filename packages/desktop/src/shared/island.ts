@@ -98,9 +98,14 @@ export interface IslandApi {
 
 export type IslandBridge = Pick<ParleyBridge, 'call' | 'on' | 'onStatus' | 'activitySnapshot'> & { island: IslandApi };
 
-/** Методы хоста, которые main пропускает от острова (`host:call` по отправителю). */
+/**
+ * Методы хоста, которые main пропускает от острова (`host:call` по отправителю). `context.messages` — чтение страниц писем:
+ * остров держит тот же стор работ, и при разрыве версии он перечитывает держимое так же, как главное окно
+ * (спека rooms.mail 6.5); без него каждое такое чтение отказывало бы и сыпало предупреждения в консоль.
+ */
 export const ISLAND_METHODS: ReadonlySet<string> = new Set([
   'works.list',
+  'context.messages',
   'feed.snapshot',
   'feed.decide',
   'assistant.ask',
@@ -113,11 +118,19 @@ export const ISLAND_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * События хоста, которые main пересылает окну острова (`forwardHostToPages` с `events`): список работ, активность
- * сессий, состояние помощника и карточки согласия на папку. Остальное (`pty.output` всех сессий, лимиты, `feed.changed` и т. д.) острову не нужно — иначе поток вывода
- * терминалов шёл бы в его renderer впустую. Тип `EventName` ловит опечатку при сборке.
+ * События хоста, которые main пересылает окну острова (`forwardHostToPages` с `events`): список работ, письма работ
+ * (`rooms.mail`: запись одних писем `works.changed` уже не шлёт, и без него числа острова застыли бы до следующего
+ * структурного снимка), активность сессий, состояние помощника и карточки согласия на папку. Остальное (`pty.output`
+ * всех сессий, лимиты, `feed.changed` и т. д.) острову не нужно — иначе поток вывода терминалов шёл бы в его renderer
+ * впустую. Тип `EventName` ловит опечатку при сборке.
  */
-export const ISLAND_EVENTS: ReadonlySet<EventName> = new Set<EventName>(['works.changed', 'activity.changed', 'assistant.changed', 'consents.changed']);
+export const ISLAND_EVENTS: ReadonlySet<EventName> = new Set<EventName>([
+  'works.changed',
+  'rooms.mail',
+  'activity.changed',
+  'assistant.changed',
+  'consents.changed',
+]);
 
 /** У Codex остров показывает запросы действий; обычная работа и Done остаются вне острова. */
 export const ISLAND_ATTENTION_ONLY_PROVIDERS: ReadonlySet<string> = new Set(['codex']);

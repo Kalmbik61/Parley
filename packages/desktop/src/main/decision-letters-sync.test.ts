@@ -1,7 +1,8 @@
 /**
  * Страж синхронности ответа на решение с окном. Окно узнаёт, что решение вернули на доработку, по началу письма человека
- * ведущему (`renderer/attention/derive.ts#roomDecisionReturned`) и держит свои копии литералов `RETURNED_LETTER`,
- * `ACCEPTED_LETTER` и `HUMAN`: рендерер берёт из core только типы. Здесь письма пишет настоящий core — поменяет он слова
+ * ведущему (`renderer/attention/derive.ts#roomDecisionReturned`): слова письма оно берёт у `humanDecisionOutcome` из
+ * `@parley/core/attention`, где лежат копии литералов `RETURNED_LETTER` и `ACCEPTED_LETTER` (модуль чистый и `proposals.ts`
+ * не тянет), а автора письма держит своей копией `HUMAN`. Здесь письма пишет настоящий core — поменяет он слова
  * письма или их автора, тест упадёт и напомнит поправить окно, а не оставит уведомления молча врать «collected
  * positions» после возврата.
  *

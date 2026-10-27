@@ -63,6 +63,16 @@ describe('рукопожатие', () => {
     client.close();
   });
 
+  it('hello.features содержит rooms-mail', async () => {
+    const { home, token } = await boot();
+    const client = connectRaw(hostPaths(home).socket);
+    await waitConnected(client.socket);
+
+    const response = await hello(client, token);
+    expect((response.result as { features: string[] }).features).toContain('rooms-mail');
+    client.close();
+  });
+
   it('protocol: 999 — protocol_mismatch с версией хоста и liveSessions: 0', async () => {
     const { home, token } = await boot({ version: '9.9.9' });
     const client = connectRaw(hostPaths(home).socket);

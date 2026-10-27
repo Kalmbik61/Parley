@@ -6,7 +6,7 @@ import {
   WorkNotFoundError,
 } from '@parley/core';
 import type { WorkEntry } from '@parley/core';
-import type { WorksService } from '../works/works-service.js';
+import type { MailNotice, WorksService } from '../works/works-service.js';
 
 export interface HistoryServiceIO {
   rebuild: typeof rebuildRoomHistory;
@@ -44,7 +44,7 @@ export async function isWorkDeleted(projectPath: string, workId: string): Promis
 }
 /** Derivative files only; it never publishes shared history or changes the source map. */
 export function createHistoryService(
-  works: Pick<WorksService, 'snapshot' | 'entry' | 'onChange'>,
+  works: Pick<WorksService, 'snapshot' | 'entry' | 'onChange' | 'onMail'>,
   options: HistoryServiceOptions = {},
 ): HistoryService {
   const io = options.io ?? {
@@ -84,6 +84,7 @@ export function createHistoryService(
   if (!Number.isFinite(delay) || delay < 0 || delay > 30_000) throw new Error('invalid history debounce');
   let stopped = false;
   let off: (() => void) | undefined;
+  let offMail: (() => void) | undefined;
   const keyOf = (projectPath: string, workId: string): string => `${projectPath}\0${workId}`;
   function notify(state: HistoryState, count: number): void {
     const key = keyOf(state.projectPath, state.workId);
@@ -140,27 +141,36 @@ export function createHistoryService(
       state.running = process(state).catch(() => notify(state, 1)).finally(() => { delete state.running; });
     }, delay);
   }
+  function check(entry: WorkEntry): void {
+    const key = keyOf(entry.projectPath, entry.map.work.id);
+    if (!entry.map.rooms.length) return;
+    let state = states.get(key);
+    if (!state) {
+      state = { projectPath: entry.projectPath, workId: entry.map.work.id, rooms: new Set(), source: null, dirty: false };
+      states.set(key, state);
+    }
+    let source: string;
+    try { source = identity(entry); } catch { notify(state, 1); return; }
+    for (const room of entry.map.rooms) state.rooms.add(room.id);
+    if (source !== state.source) { state.source = source; state.dirty = true; schedule(state); }
+  }
   function scan(): void {
     const current = new Set<string>();
     for (const entry of works.snapshot().entries) {
-      const key = keyOf(entry.projectPath, entry.map.work.id);
-      current.add(key);
-      if (!entry.map.rooms.length) continue;
-      let state = states.get(key);
-      if (!state) {
-        state = { projectPath: entry.projectPath, workId: entry.map.work.id, rooms: new Set(), source: null, dirty: false };
-        states.set(key, state);
-      }
-      let source: string;
-      try { source = identity(entry); } catch { notify(state, 1); continue; }
-      for (const room of entry.map.rooms) state.rooms.add(room.id);
-      if (source !== state.source) { state.source = source; state.dirty = true; schedule(state); }
+      current.add(keyOf(entry.projectPath, entry.map.work.id));
+      check(entry);
     }
     for (const [key, state] of states) if (!current.has(key)) { state.dirty = true; schedule(state); }
   }
+  /** Запись писем без записи карты (спека rooms.mail 6.7): новое письмо меняет `MAX(seq)` комнаты работы; отметки прочтения — нет. */
+  function scanMail(notice: MailNotice): void {
+    if (stopped || !notice.journal.added.length) return;
+    const entry = works.entry(notice.projectPath, notice.workId);
+    if (entry) check(entry);
+  }
   return {
-    start() { if (off || stopped) return; off = works.onChange(scan); scan(); },
-    stop() { stopped = true; off?.(); off = undefined; for (const state of states.values()) clear(state); states.clear(); noticed.clear(); },
+    start() { if (off || stopped) return; off = works.onChange(scan); offMail = works.onMail(scanMail); scan(); },
+    stop() { stopped = true; off?.(); off = undefined; offMail?.(); offMail = undefined; for (const state of states.values()) clear(state); states.clear(); noticed.clear(); },
     removeWork,
   };
 }

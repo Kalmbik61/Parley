@@ -190,8 +190,10 @@ function handoff(plan: RoomPlan, patch: Partial<HandoffManifest> = {}) {
     submittedAt: now,
     ...patch,
   };
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
   const { hash: _unused, ...body } = manifest;
   manifest.hash = digest(body);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
   const { sha: _sha, ...withoutSha } = manifest;
   const key = digest(withoutSha);
   return { manifest, key };
@@ -720,6 +722,7 @@ describe('автономные правила', () => {
 
   it('сдача без хэшей заполняет прежние формулы и повторяется до квитанции без эффектов', () => {
     const plan = running(), explicit = handoff(plan);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
     const { hash: _hash, ...manifest } = explicit.manifest;
     const input = { ...context(plan), attemptId: last(plan).id, manifest };
     const first = submitAttempt(plan, input);
@@ -737,6 +740,7 @@ describe('автономные правила', () => {
 
   it('повтор без хэшей после захвата сохраняет квитанцию, операции и бюджет', () => {
     const first = submitted(running(), { manifest: { artifacts: [{ path: 'result.txt', sha256: 'a'.repeat(64), storedAs: '' }] } });
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
     const { hash: _hash, ...manifest } = first.manifest;
     for (const submissionKey of [undefined, first.key]) {
       const repeated = submitAttempt(first.plan, { ...context(first.plan), attemptId: last(first.plan).id, manifest, submissionKey });
@@ -747,6 +751,7 @@ describe('автономные правила', () => {
 
   it('проверяет каждый явный хэш даже при отсутствии другого', () => {
     const plan = running(), explicit = handoff(plan);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
     const { hash: _hash, ...manifest } = explicit.manifest;
     const input = { ...context(plan), attemptId: last(plan).id, manifest };
     expect(submitAttempt(plan, { ...input, submissionKey: explicit.key })).toEqual(submitAttempt(plan, input));
@@ -778,6 +783,7 @@ describe('автономные правила', () => {
     const artifact = { path: 'result.txt', sha256: 'a'.repeat(64), storedAs: '' };
     const first = submitted(running(), { manifest: { artifacts: [artifact] } });
     expect(last(first.plan).manifest!.artifacts).toEqual([{ ...artifact, storedAs: `artifacts/0-${artifact.sha256}` }]);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
     const { hash: _hash, ...body } = last(first.plan).manifest!;
     expect(last(first.plan).manifest!.hash).toBe(digest(body));
     const finished = integrated(queued(accepted(first.plan).plan));

@@ -10,6 +10,11 @@ import type { Message, PageInfo, TextPage } from '@parley/core';
  * сокращены, итоги и счётчики — в `map.compact`). Клиент без неё получает прежний полный снимок, пока тот влезает в кадр.
  */
 export const COMPACT_WORKS_FEATURE = 'compact-works';
+/**
+ * Возможность клиента в `hello.features`: письма работы он получает событием `rooms.mail` (письма целиком, абсолютные
+ * счётчики, отметки прочтения), а не вместе со снимком работ (спека rooms.mail 6.10). Клиент без неё получает письма в `works.changed`, как прежде.
+ */
+export const ROOMS_MAIL_FEATURE = 'rooms-mail';
 /** Предел инструкции сжатия, знаков (UTF-16): общий для хоста и окна (спека 2026-10-15, 5.3). */
 export const COMPACT_MAX_INSTRUCTIONS = 350;
 
@@ -37,6 +42,11 @@ export const contextPageMethodSchemas = {
     cursor: cursor.optional(),
     maxBytes: maxBytes.optional(),
   }),
+  /**
+   * Одно письмо работы по id: оригинал цитаты, которого окно не держит (спека rooms.mail 6.9). Комната и прямое письмо
+   * не различаются: окно само сверяет `roomId` письма с комнатой, где его показывает.
+   */
+  'context.letter': z.strictObject({ projectPath: project, workId, id: messageId }),
   /** Кусок длинного текста по смещению: письмо, цель работы или задача и резюме сессии. */
   'context.text': z.strictObject({
     projectPath: project,
@@ -56,5 +66,7 @@ export type ContextPageMethodParams<M extends ContextPageMethodName> = z.infer<(
 export interface ContextPageMethodResults {
   /** Письма по возрастанию номера; сокращённое письмо несёт `textBytes` — полный размер текста. */
   'context.messages': { messages: Message[]; page: PageInfo };
+  /** Письмо с текстом до `WINDOW_TEXT_MAX` (у сокращённого — `textBytes`, как на страницах); `null` — такого письма в работе нет. */
+  'context.letter': { message: Message | null };
   'context.text': TextPage;
 }

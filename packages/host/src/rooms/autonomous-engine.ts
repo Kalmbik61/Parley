@@ -114,6 +114,7 @@ export function resolveAutonomousProposal(
   const semantics = (item: RoomPlan['items'][number]) => canonical([item.title, item.owner, item.scope, item.after, item.criteria, item.verifier]);
   const specs = (plan: RoomPlan, item: number, checks = plan.autonomous!.checks, coverage = plan.autonomous!.coverage) => {
     const ids = new Set(Object.values(coverage[item] ?? {}).flat().filter(id => id !== 'verifier'));
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the key is destructured only to drop it from the copy
     return canonical(checks.filter(row => ids.has(row.id)).map(({ frozenAt: _frozenAt, ...row }) => row).sort((a, b) => a.id.localeCompare(b.id)));
   };
   const changedItems = old.items.filter(item => {

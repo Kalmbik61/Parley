@@ -30,7 +30,7 @@ import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
-import type { WorksService } from '../works/works-service.js';
+import type { MailNotice, WorksService } from '../works/works-service.js';
 import { ResumeLimiter } from './resume-limiter.js';
 import { createWakeService } from './wake-service.js';
 import type { WakeService, WakeServiceOptions } from './wake-service.js';
@@ -82,6 +82,8 @@ interface SettleRig {
   limiter: ResumeLimiter;
   /** Письмо в комнату (в базу работы) и событие активности у каждой сессии — пересчёт будильника, как после записи карты. */
   send: (from: string, init?: { kind?: MessageKind; to?: string[]; text?: string; at?: string }) => void;
+  /** Письмо только через `onMail`, как запись одних писем после rooms.mail: ни события активности, ни `works.changed`. */
+  mail: (from: string, init?: { kind?: MessageKind; to?: string[]; text?: string; at?: string }) => void;
   /** Выход процесса сессии `ids[n]`. */
   exit: (n: number) => void;
   /** Все сессии начинают ход (`working`) или кончают его (простой): событие активности — пересчёт будильника. */
@@ -143,6 +145,7 @@ async function settleRig(
   const waits = new Map<string, Array<MailWait | null>>(ids.map((id) => [id, []]));
   const activityListeners = new Set<(ref: SessionRef, value: typeof live) => void>();
   const ptyListeners = new Map<string, Set<(...args: unknown[]) => void>>();
+  const mailListeners = new Set<(notice: MailNotice) => void>();
 
   const pty = {
     get: (ref: SessionRef) =>
@@ -164,6 +167,10 @@ async function settleRig(
     entry: () => entry,
     snapshot: () => ({ entries: [entry] }),
     onChange: () => () => {},
+    onMail: (listener: (notice: MailNotice) => void) => {
+      mailListeners.add(listener);
+      return () => mailListeners.delete(listener);
+    },
   } as unknown as WorksService;
   const activity = {
     get: () => live,
@@ -202,6 +209,27 @@ async function settleRig(
         }),
       );
       for (const id of ids) for (const listener of [...activityListeners]) listener(refOf(id), live);
+    },
+    mail: (from, init = {}) => {
+      const message = writeLetters(project, workId, (letters) =>
+        letters.add({
+          roomId: 'r-01',
+          kind: init.kind ?? 'note',
+          from,
+          to: init.to ?? [],
+          text: init.text ?? 'заметка',
+          ...(init.at === undefined ? {} : { at: init.at }),
+        }),
+      );
+      const notice: MailNotice = {
+        projectPath: project,
+        workId,
+        version: 0,
+        prevVersion: 0,
+        journal: { added: [message], reads: [], deleted: [], droppedRooms: [], rereadRooms: [] },
+        foreign: false,
+      };
+      for (const listener of [...mailListeners]) listener(notice);
     },
     busy: (on) => {
       live.activity = activityOf(on ? 'working' : 'idle');
@@ -384,6 +412,48 @@ describe('WakeService: окно тишины несрочных писем', () 
     expect(rig.pointers(1)).toEqual([]);
     await rig.advance(0.3 * SECOND);
     expect(rig.pointers(1)).toEqual([pointerOf(3)]);
+  });
+});
+
+describe('WakeService: окно тишины, запись одних писем (onMail)', () => {
+  it('запись одних писем (`onMail`, без `works.changed`): заметка всем держится окно тишины и будит живого по сроку', async () => {
+    const rig = await settleRig(3);
+    rig.mail(rig.ids[0]!);
+
+    // Пересчёт по `onMail` идёт в микрозадаче: таймеры фальшивые, а `queueMicrotask` — нет.
+    await rig.advance(0);
+    expect(rig.waiting(1)).toContain('settling');
+
+    await rig.advance(SETTLE_MS - SECOND);
+    expect(rig.written(1)).toEqual([]);
+    expect(rig.written(2)).toEqual([]);
+
+    await rig.advance(SECOND + PAST);
+    expect(rig.written(1)).toEqual([pointerOf(1), '\r']);
+    expect(rig.written(2)).toEqual([pointerOf(1), '\r']);
+    expect(rig.written(0)).toEqual([]);
+  });
+
+  it('запись одних писем: спящую поднимает по сроку окна, не раньше', async () => {
+    const rig = await settleRig(2, { sleeping: true });
+    rig.mail(rig.ids[0]!);
+
+    await rig.advance(SETTLE_MS - SECOND);
+    await rig.flush();
+    expect(rig.launch).not.toHaveBeenCalled();
+
+    await rig.advance(SECOND + PAST);
+    await rig.flush(() => rig.launch.mock.calls.length > 0);
+    expect(rig.launch).toHaveBeenCalledTimes(1);
+    expect(rig.launch.mock.calls[0]?.[2]).toEqual({ by: 'wake', prompt: pointerOf(1) });
+  });
+
+  it('запись одних писем: адресное письмо будит сразу', async () => {
+    const rig = await settleRig(2);
+    rig.mail(rig.ids[0]!, { to: [rig.ids[1]!] });
+
+    await rig.advance(ENTER_MS + 5);
+    expect(rig.pointers(1)).toEqual([pointerOf(1)]);
   });
 });
 

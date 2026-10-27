@@ -1,7 +1,7 @@
 import { AGENT_PROVIDERS_PATH, createProvidersEndpoint, providerRowsOf } from './agent/providers-endpoint.js';
 import { AGENT_SESSIONS_PATH, createSessionEndpoint } from './agent/session-endpoint.js';
 import { AGENT_ATTEMPTS_PATH, createAttemptsEndpoint } from './agent/attempts-endpoint.js';
-import { hostToolContext, turnBoundarySource } from './agent/tool-context.js';
+import { hostToolContext, mapChangeSignal, turnBoundarySource } from './agent/tool-context.js';
 import { createToolsEndpoint } from './agent/tools-endpoint.js';
 import { randomBytes } from 'node:crypto';
 import { mkdir, chmod, link, rename, rm, writeFile } from 'node:fs/promises';
@@ -422,7 +422,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     contextFor: (ref, launch) =>
       hostToolContext(ref, launch, {
         providerRows: listProviderRows,
-        onWorksChange: (listener) => worksService.onChange(() => listener()),
+        onWorksChange: mapChangeSignal(worksService),
         roleCatalog: (cwd) => roleCatalog(cwd, { codex: true }),
         attempts: (ref, request) => attemptsEndpoint.perform(ref, request, () => browserEndpoint.isRegistered(ref)),
         turnBoundary: turnBoundarySource(worksService, activityService),

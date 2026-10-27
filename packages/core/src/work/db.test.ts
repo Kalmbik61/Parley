@@ -87,15 +87,48 @@ describe('workDb', () => {
     expect(names).toEqual(expect.arrayContaining(['works', 'entries', 'entries_order']));
   });
 
-  it('создаёт таблицы писем messages, message_reads, message_unread и индексы messages_id, messages_channel, messages_at, message_unread_seq', () => {
+  it('создаёт таблицы писем messages, message_reads, message_unread и индексы messages_id, messages_channel, messages_at, messages_sender, message_unread_seq', () => {
     const names = workDb()
       .prepare(`SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name`)
       .all()
       .map((row) => (row as { name: string }).name);
 
     expect(names).toEqual(
-      expect.arrayContaining(['messages', 'message_reads', 'message_unread', 'messages_id', 'messages_channel', 'messages_at', 'message_unread_seq']),
+      expect.arrayContaining([
+        'messages',
+        'message_reads',
+        'message_unread',
+        'messages_id',
+        'messages_channel',
+        'messages_at',
+        'messages_sender',
+        'message_unread_seq',
+      ]),
     );
+  });
+
+  const indexColumns = (name: string): string[] =>
+    (workDb().prepare(`PRAGMA index_info(${name})`).all() as Array<{ name: string }>).map((row) => row.name);
+
+  it('индекс messages_sender — (project_path, work_id, room_id, sender, seq): письма отправителя комнаты по номеру', () => {
+    expect(indexColumns('messages_sender')).toEqual(['project_path', 'work_id', 'room_id', 'sender', 'seq']);
+  });
+
+  it('база версии 2 без индекса messages_sender получает его при открытии: версия 2, письма и работа целы (схема 2 не выпущена, версию не поднимаем)', () => {
+    insertWork('w-0001');
+    workDb()
+      .prepare(
+        `INSERT INTO messages (project_path, work_id, seq, id, room_id, sender, recipients, at, kind, body)
+         VALUES ('/p', 'w-0001', 1, 'm-01', 'r-01', 'human', '[]', '2026-10-24T00:00:00.000Z', 'note', '{"text":"hi"}')`,
+      )
+      .run();
+    workDb().exec('DROP INDEX messages_sender');
+    closeWorkDb();
+
+    expect(indexColumns('messages_sender')).toEqual(['project_path', 'work_id', 'room_id', 'sender', 'seq']);
+    expect(pragma('user_version')).toBe(2);
+    expect(workDb().prepare('SELECT id, sender FROM messages').all()).toEqual([{ id: 'm-01', sender: 'human' }]);
+    expect(workDb().prepare('SELECT id FROM works').all()).toEqual([{ id: 'w-0001' }]);
   });
 
   /** База схемы 1 (сборка плана 3) с одной работой и одним письмом в `entries`; `letter` — текст JSON строки письма. */

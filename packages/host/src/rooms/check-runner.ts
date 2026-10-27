@@ -17,7 +17,7 @@ export interface CheckRunnerContext {
 }
 const exec = promisify(execFile);
 // Depending on macOS reporting state, denials come from sandboxd or directly from the kernel.
-const predicate = '(subsystem == \"com.apple.sandbox.reporting\" OR sender == \"Sandbox\") AND eventMessage CONTAINS \"deny(1)\"';
+const predicate = '(subsystem == "com.apple.sandbox.reporting" OR sender == "Sandbox") AND eventMessage CONTAINS "deny(1)"';
 const tailLimit = 64 * 1024;
 const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.map(canonical).join(',')}]`
   : value !== null && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(',')}}`
@@ -135,7 +135,6 @@ export async function run(ctx: CheckRunnerContext, spec: CheckSpec, sha: string,
     const template = await readFile(new URL('../../../../scripts/gates/runner-profile-kill.sb', import.meta.url), 'utf8');
     await writeFile(profile, template.replace('__CHECKOUT__', JSON.stringify(checkout)).replace('__TMP__', JSON.stringify(tmp)));
     const windowStart = new Date();
-    let pid: number | undefined;
     let timedOut = false;
     let launchError: Error | undefined;
     let signal: NodeJS.Signals | null = null;
@@ -143,7 +142,7 @@ export async function run(ctx: CheckRunnerContext, spec: CheckSpec, sha: string,
       cwd, env: { ...spec.env, HOME: path.join(tmp, 'home'), TMPDIR: tmp },
       detached: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
-    pid = child.pid;
+    const pid = child.pid;
     let closed = false;
     child.once('close', () => { closed = true; });
     const killGroup = () => {

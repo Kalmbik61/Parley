@@ -48,6 +48,7 @@ import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
 import { HostError } from '../errors.js';
+import { mailSessions } from '../mail-sessions.js';
 import { CODEX_SUBMIT_DELAY_MS, codexPaste, codexSubmitKey } from '../pty/codex-input.js';
 import { choiceInProgress } from '../pty/effort-switch.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
@@ -56,7 +57,7 @@ import { deliverRecipeToNewLeads } from '../rooms/rooms-service.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { Attempt } from '../pty/type-and-submit.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
-import type { WorksService } from '../works/works-service.js';
+import type { MailNotice, WorksService } from '../works/works-service.js';
 import { limitReturnDue, limitWindowFree, returnBlock, returnBlockReason } from './limit-return.js';
 import { ResumeLimiter } from './resume-limiter.js';
 
@@ -304,6 +305,7 @@ export function createWakeService(
   let isPaused = false;
   let started = false;
   let unsubscribeWorks: (() => void) | undefined;
+  let unsubscribeMail: (() => void) | undefined;
   let unsubscribeActivity: (() => void) | undefined;
   let unsubscribeDraft: (() => void) | undefined;
   let unsubscribeHostDraft: (() => void) | undefined;
@@ -1078,11 +1080,54 @@ export function createWakeService(
     }
   }
 
+  /** Сессии уведомлений `onMail`, ждущие пересчёта в конце хода (`flushMail`); ключ — `refKey`. */
+  const mailDirty = new Map<string, SessionRef>();
+  let mailFlushQueued = false;
+
   /** Все сессии всех работ: живые получают указатель, спящие — подъём. */
   function recomputeAll(): void {
     for (const entry of works.snapshot().entries) {
       for (const session of entry.map.sessions) {
         recompute({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id });
+      }
+    }
+  }
+
+  /**
+   * Запись писем (спека rooms.mail 6.7): без записи карты `onChange` молчит, и письмо будит только свои адресатов, а отметка
+   * прочтения снимает «письма ждут» только у читателя. Смешанная запись зовёт и это, и `onChange`: пересчёт идемпотентен.
+   * Карта — из снимка работ: адресаты комнаты берутся по ней, и комната, заведённая записью, ещё не попавшей в снимок, до
+   * её `onChange` адресатов не имеет.
+   */
+  function recomputeAddressees(notice: MailNotice): void {
+    const entry = works.entry(notice.projectPath, notice.workId);
+    if (entry === undefined) return;
+    for (const sessionId of mailSessions(notice, entry.map)) {
+      const ref: SessionRef = { projectPath: notice.projectPath, workId: notice.workId, sessionId };
+      mailDirty.set(refKey(ref), ref);
+    }
+    if (mailDirty.size === 0 || mailFlushQueued) return;
+    mailFlushQueued = true;
+    queueMicrotask(flushMail);
+  }
+
+  /**
+   * Каждая запись письма зовёт `onMail` отдельно, и пересчёт на каждое уведомление давал на пачку из 60 писем в комнату из
+   * трёх 120 пересчётов вместо трёх у `onChange` мастера с его debounce. Сессии уведомлений собираются в `mailDirty`, и в
+   * конце текущего синхронного хода (микрозадача, не таймер: пересчёт письма не ждёт окна, а письма одной пачки, записанные
+   * подряд без `await`, делят один проход) каждая пересчитывается один раз. Адресаты берутся по карте на момент уведомления,
+   * сам пересчёт видит уже свежее состояние. Упавший пересчёт — предупреждение, а не необработанное исключение микрозадачи:
+   * подписчика `onMail` защищает `try` службы работ, а здесь его уже нет.
+   */
+  function flushMail(): void {
+    mailFlushQueued = false;
+    const refs = [...mailDirty.values()];
+    mailDirty.clear();
+    for (const ref of refs) {
+      try {
+        recompute(ref);
+      } catch (error) {
+        host.log.warn('будильник: пересчёт после письма упал', { ref, error: String(error) });
       }
     }
   }
@@ -1118,6 +1163,7 @@ export function createWakeService(
         deliverRecipes();
         recomputeAll();
       });
+      unsubscribeMail = works.onMail(recomputeAddressees);
       unsubscribeActivity = activity.onChange((ref, value) => {
         const state = attempts.get(refKey(ref));
         // Ход начался (`UserPromptSubmit`) — попытка удалась, предохранитель не нужен. Сессия, которую
@@ -1186,10 +1232,12 @@ export function createWakeService(
       if (!started) return;
       started = false;
       unsubscribeWorks?.();
+      unsubscribeMail?.();
       unsubscribeActivity?.();
       unsubscribeDraft?.();
       unsubscribeHostDraft?.();
       unsubscribeExit?.();
+      mailDirty.clear();
       for (const state of attempts.values()) {
         clearTimers(state);
         dropLimit(state);
