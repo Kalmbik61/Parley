@@ -75,7 +75,7 @@ import { dragHasFiles } from '../../terminal/drop.js';
 import { ContextChip } from '../context/ContextChip.js';
 import { fitDefaultInstructions } from '../../lib/context-format.js';
 import { Decisions } from '../mail/Decisions.js';
-import { roomOutbox } from './room-outbox.js';
+import { roomOutbox, useMailLanded } from './room-outbox.js';
 import { RoomPendingMessage } from './RoomPendingMessage.js';
 import { Composer, type ComposerSubmission } from './Composer.js';
 import { useHostStore } from '../../store/host.js';
@@ -370,11 +370,13 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   useLayoutEffect(keepAtBottom, [keepAtBottom, liveKey]);
 
   const draftKey = roomKey(workKey(entry.projectPath, entry.map.work.id), roomId);
-  // Очередь писем человека (`room-outbox.ts`): серые — в конце ленты, пока письмо с тем же `messageId` не пришло в карту.
+  // Очередь писем человека (`room-outbox.ts`): серые — в конце ленты, пока письмо с тем же `messageId` не пришло в карту
+  // или событием `rooms.mail` (спека rooms.mail 6.9: комнату окно может не держать, и в ленте письма не будет).
   const pending = useOutboxItems(roomOutbox, draftKey);
   const flying = useOutboxFlying(roomOutbox, draftKey);
-  const landedIds = useMemo(() => new Set((model?.messages ?? []).map((message) => message.id)), [model?.messages]);
-  // Ушло и уже пришло в карту — серый не рисуется сразу (без кадра с двумя письмами) и убирается из очереди эффектом.
+  const mailLanded = useMailLanded(entry.projectPath, entry.map.work.id, roomId);
+  const landedIds = useMemo(() => new Set([...(model?.messages ?? []).map((message) => message.id), ...mailLanded]), [model?.messages, mailLanded]);
+  // Ушло и уже пришло — серый не рисуется сразу (без кадра с двумя письмами) и убирается из очереди эффектом.
   const shownPending = pending.filter((item) => !(item.status === 'sent' && item.sentAs !== undefined && landedIds.has(item.sentAs)));
   useEffect(() => {
     for (const item of pending) {
