@@ -68,8 +68,8 @@ import { movePendingSelection, pendingKeyCommand, pendingNavigation, pendingRoom
 export const IDLE_RETRACT_MS = 4000;
 /** То же, но пока на острове есть строки Done: их надо успеть заметить. */
 export const DONE_HOLD_MS = 20000;
-/** Сколько форма сжимается в брусок: та же длительность, что `duration-[250ms]` перехода формы в `IslandView`. */
-export const RETRACT_MORPH_MS = 250;
+/** Сколько форма сжимается в брусок: та же длительность, что у перехода сжатия `island-morph-shrink` (`island.css`). */
+export const RETRACT_MORPH_MS = 300;
 
 const INITIAL_CONFIG: IslandConfig = {
   islandEnabled: true,

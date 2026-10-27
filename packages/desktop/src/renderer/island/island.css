@@ -12,25 +12,54 @@ body {
   -webkit-user-select: none;
 }
 
-/* Появление списка и карточки: лёгкий сдвиг сверху с проявлением, пока форма растёт до нового размера. */
+/*
+ * Появление списка и карточки (#9 §4.4): лёгкий сдвиг сверху с проявлением и снятием размытия, пока форма растёт до
+ * нового размера. Задержка даёт форме начать рост; до неё содержимое прозрачно (`both`).
+ */
 @keyframes island-reveal {
   from {
     opacity: 0;
     transform: translateY(-4px);
+    filter: blur(3px);
   }
   to {
     opacity: 1;
     transform: none;
+    filter: none;
   }
 }
 
 .island-reveal {
-  animation: island-reveal 180ms ease-out;
+  animation: island-reveal 220ms ease-out 90ms both;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .island-reveal {
     animation: none;
+  }
+}
+
+/*
+ * Движение формы (#9 §4.4): класс выбирает `IslandView` по площади содержимого. Рост — пружинная кривая с перелётом
+ * около 4 %, сжатие — без перелёта; его длина — `RETRACT_MORPH_MS` в `IslandApp`. Перелёт область мыши не сбивает:
+ * итоговую форму пересылает `transitionend`.
+ */
+.island-morph-grow,
+.island-morph-shrink {
+  transition-property: width, height, margin-top, border-radius, box-shadow;
+}
+.island-morph-grow {
+  transition-duration: 460ms;
+  transition-timing-function: cubic-bezier(0.32, 1.22, 0.42, 1);
+}
+.island-morph-shrink {
+  transition-duration: 300ms;
+  transition-timing-function: cubic-bezier(0.45, 0, 0.2, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .island-morph-grow,
+  .island-morph-shrink {
+    transition: none;
   }
 }
 
@@ -51,4 +80,16 @@ body {
 .assistant-dot-pulse { animation: assistant-dot-pulse 1s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
   .assistant-dot-pulse { animation: none; }
+}
+
+/*
+ * Настройка Parley «Reduce motion» (`motion: 'reduce'`, #9 §4.5) — как системный reduced motion. Класса перехода у
+ * формы тогда нет, а содержимое внутри неё (`data-motion` на форме) не проступает и не пульсирует.
+ */
+[data-motion='reduce'] .island-reveal {
+  animation: none;
+}
+[data-motion='reduce'] .assistant-pulse,
+[data-motion='reduce'] .assistant-dot-pulse {
+  animation: none;
 }
