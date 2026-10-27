@@ -46,7 +46,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
   useAssistantStore.setState({ host: HOST_IDLE, input: 'idle' });
-  useIslandRequests.setState({ items: [] });
+  useIslandRequests.setState({ items: [], applied: 0 });
   useConsentsStore.setState({ items: [], deciding: null, note: null });
 });
 
@@ -171,15 +171,18 @@ describe('useIslandCues: свои фронты', () => {
     expect(played()).toEqual(['listen-start', 'listen-end', 'error']);
   });
 
-  it('решение с острова: запрос, ушедший во время решения, и согласие с пометкой done; неудача молчит', () => {
+  it('решение с острова: запрос, применённый хостом, и согласие с пометкой done; неудача и обрыв связи молчат', () => {
     mount();
     const item = { key: 'feed:a', deciding: true, note: null } as unknown as ReturnType<typeof useIslandRequests.getState>['items'][number];
     act(() => useIslandRequests.setState({ items: [item] }));
     act(() => useIslandRequests.setState({ items: [{ ...item, deciding: false, note: 'failed' }] }));
     act(() => useIslandRequests.setState({ items: [] }));
-    expect(play).not.toHaveBeenCalled();
+    // Обрыв связи посреди решения: очередь пуста, но решения не было (критик m-1477).
     act(() => useIslandRequests.setState({ items: [item] }));
     act(() => useIslandRequests.setState({ items: [] }));
+    expect(play).not.toHaveBeenCalled();
+    act(() => useIslandRequests.setState({ items: [item] }));
+    act(() => useIslandRequests.setState((state) => ({ items: [], applied: state.applied + 1 })));
     advance(CUE_GAP_MS);
     act(() => useConsentsStore.setState({ deciding: 'c-1', note: null }));
     act(() => useConsentsStore.setState({ deciding: null, note: 'elsewhere' }));

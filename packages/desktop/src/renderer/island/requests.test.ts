@@ -219,9 +219,24 @@ describe('очередь запросов острова', () => {
     useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
     await flush();
     const [item] = useIslandRequests.getState().items;
+    const applied = useIslandRequests.getState().applied;
     await useIslandRequests.getState().decide(item!.key, { kind: 'permission', behavior: 'allow' });
     expect(decide).toHaveBeenCalledWith({ ref: ref('s-01'), cardId: 'c-1', decision: { kind: 'permission', behavior: 'allow' } });
     expect(useIslandRequests.getState().items).toEqual([]);
+    expect(useIslandRequests.getState().applied).toBe(applied + 1);
+  });
+
+  it('обрыв связи посреди решения: очередь пуста, счётчик applied не растёт', async () => {
+    const decide = vi.fn(() => new Promise(() => undefined));
+    const { call } = bridge({ 's-01': [permission('c-1')] }, decide);
+    useIslandRequests.getState().bind(call as never);
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
+    await flush();
+    const applied = useIslandRequests.getState().applied;
+    void useIslandRequests.getState().decide(useIslandRequests.getState().items[0]!.key, { kind: 'permission', behavior: 'allow' });
+    useIslandRequests.getState().bind(null);
+    expect(useIslandRequests.getState().items).toEqual([]);
+    expect(useIslandRequests.getState().applied).toBe(applied);
   });
 
   it('applied: false — «Answered elsewhere», через секунду уходит; кнопки не висят', async () => {

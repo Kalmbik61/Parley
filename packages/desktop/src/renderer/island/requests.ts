@@ -52,6 +52,8 @@ interface IslandRequestsState {
   items: IslandRequest[];
   selectedKey: string | null;
   waitingSince: Record<string, number>;
+  /** Сколько решений с острова хост применил: растёт только на `applied`, не на сбросе очереди при обрыве связи. */
+  applied: number;
   bind(call: IslandBridge['call'] | null): void;
   select(index: number): void;
   sync(entries: readonly WorkEntry[], byRef: Readonly<Record<string, ActivityEntry>>): void;
@@ -193,6 +195,7 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
     items: [],
     selectedKey: null,
     waitingSince: {},
+    applied: 0,
     bind: (next) => {
       if (call === next) return;
       call = next;
@@ -280,6 +283,7 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
         if (result.applied) {
           settled.set(key, fingerprint);
           remove(key);
+          set((state) => ({ applied: state.applied + 1 }));
           return;
         }
         if (result.state === 'pending') {

@@ -138,11 +138,11 @@ export function useIslandCues(input: IslandCueInput): IslandCues {
       }),
     [cues],
   );
-  // Решение с острова применено. Запрос ленты при `applied` уходит из очереди, пока решается (`deciding`); карточка
-  // согласия получает пометку `done`.
+  // Решение с острова применено: хост ответил `applied` (счётчик стора запросов — очередь пустеет и при обрыве
+  // связи, это не решение, критик m-1477); карточка согласия получает пометку `done`.
   useEffect(() => {
     const offRequests = useIslandRequests.subscribe((state, prev) => {
-      if (prev.items.some((item) => item.deciding && !state.items.some((next) => next.key === item.key))) cues.own('decide', true);
+      if (state.applied > prev.applied) cues.own('decide', true);
     });
     const offConsents = useConsentsStore.subscribe((state, prev) => {
       if (state.note === 'done' && prev.note !== 'done') cues.own('decide', true);
