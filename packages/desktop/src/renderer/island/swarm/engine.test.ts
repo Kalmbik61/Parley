@@ -328,12 +328,16 @@ describe('лицо: формы рта по голосу (L1, F1)', () => {
   });
 
   it('surprise: свой овал, L1 меняет только его высоту и ширину в пределах; овал не уже 0,65·mw и не ниже 0,5·H0', () => {
+    // Порог F5 для овала surprise (s-28, m-1465): все формы F5 в обоих режимах, включая самый узкий «о/у» тихо.
     const { mw, H0 } = EMO.surprise;
-    for (const frame of [voice(0), voice(0.5, { u: 1 }), voice(0.5, { m: 1 }), voice(1, { a: 1 }), voice(1, { i: 1 })]) {
-      const engine = faceSwarm('surprise', frame);
-      const ys = mouthSouls(engine).map((s) => s.y);
-      expect(mouthWidth(engine)).toBeGreaterThanOrEqual(0.65 * mw);
-      expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThanOrEqual(0.5 * H0);
+    for (const form of FORMS) {
+      for (const voiceMode of ['full', 'loudness'] as const) {
+        const engine = faceSwarm('surprise', form.frame, voiceMode);
+        const ys = mouthSouls(engine).map((s) => s.y);
+        const where = `${form.name}, ${voiceMode}`;
+        expect(mouthWidth(engine), where).toBeGreaterThanOrEqual(0.65 * mw);
+        expect(Math.max(...ys) - Math.min(...ys), where).toBeGreaterThanOrEqual(0.5 * H0);
+      }
     }
   });
 
