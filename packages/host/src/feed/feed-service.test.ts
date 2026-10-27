@@ -363,6 +363,77 @@ describe('feed.progress source, quota and lifecycle', () => {
     expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
   });
 
+  it.each(['before-exit', 'after-exit'] as const)('Codex first-feed start %s cannot recover retained process A proof after unconfirmed B exits', async (creation) => {
+    codexProvenance();
+    const { file, row } = await codexLog();
+    const entry = vi.mocked(fakes.deps.works.entry).getMockImplementation()!;
+    let visible = creation === 'before-exit';
+    vi.mocked(fakes.deps.works.entry).mockImplementation((...args) => visible ? entry(...args) : undefined);
+    fakes.setProcess({ pid: 2 });
+    start();
+    fakes.emitStart(REF);
+    if (visible) {
+      expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+      expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    }
+    fakes.setProcess(null);
+    fakes.emitExit(REF);
+    visible = true;
+    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+    writeFileSync(file, `${row(2)}\n`, { flag: 'a' });
+    fakes.emitLog();
+    await vi.waitFor(async () => expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(2));
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+  });
+
+  it('Codex deferred first feed accepts a map-confirmed B stopped cold seed after log indexing', async () => {
+    const stamp = codexProvenance();
+    const previousProof = stamp.codexThreadBinding!;
+    const { file, row } = await codexLog();
+    fakes.setLogFile(null);
+    const entry = vi.mocked(fakes.deps.works.entry).getMockImplementation()!;
+    let visible = false;
+    vi.mocked(fakes.deps.works.entry).mockImplementation((...args) => visible ? entry(...args) : undefined);
+    fakes.setProcess({ pid: 2 });
+    start();
+    fakes.emitStart(REF);
+    stamp.pid = 2;
+    stamp.startedAtProcess = 'SECRET-process-B';
+    stamp.codexThreadBinding = undefined;
+    visible = true;
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    fakes.setProcess(null);
+    fakes.emitExit(REF);
+    fakes.setLogFile(file);
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    stamp.codexThreadBinding = previousProof;
+    expect((await service.progress(REF, fakeClient())).availability).toBe('unavailable');
+    stamp.codexThreadBinding = { launchRevision: NEXT_LAUNCH, pid: 2, startedAtProcess: stamp.startedAtProcess, threadId: THREAD };
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'available', recent: [] });
+    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+    writeFileSync(file, `${row(2)}\n`, { flag: 'a' });
+    fakes.emitLog();
+    await vi.waitFor(async () => expect((await service.progress(REF, fakeClient())).recent.map((line) => line.id)).toEqual([toolId('cmd-2')]));
+  });
+
+  it.each(['removal', 'stop'] as const)('Codex pending start without a feed is cleaned up on %s', async (cleanup) => {
+    codexProvenance();
+    await codexLog();
+    const entry = vi.mocked(fakes.deps.works.entry).getMockImplementation()!;
+    let visible = false;
+    vi.mocked(fakes.deps.works.entry).mockImplementation((...args) => visible ? entry(...args) : undefined);
+    fakes.setProcess({ pid: 2 });
+    start();
+    fakes.emitStart(REF);
+    if (cleanup === 'removal') fakes.setSessions([]);
+    else await service.stop();
+    fakes.setProcess(null);
+    visible = true;
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    if (cleanup === 'stop') start();
+    expect((await service.progress(REF, fakeClient())).recent).toHaveLength(1);
+  });
+
   it('Codex checks the full nonce again at delivery after the projection runs', async () => {
     const stamp = codexProvenance();
     await codexLog();

@@ -239,6 +239,13 @@ interface ProgressProof {
   generation: number;
 }
 
+interface ProgressStart {
+  ref: SessionRef;
+  pid: number | null;
+  previousStartedAt: string | null;
+  confirmed: boolean;
+}
+
 interface ProgressCall {
   key: string;
   cancel(): void;
@@ -269,7 +276,6 @@ interface SessionFeed {
   observedSource: SourceStamp | null;
   progressEpoch: ProgressEpoch | null;
   sourceGeneration: number;
-  pendingStart: { pid: number | null; previousStartedAt: string | null } | null;
   /** Последний `transcript_path` из хуков: запасной путь к журналам субагентов. */
   transcriptPath: string | null;
   /** Состояние ленты Codex: журнал сессии и журналы её агентов. */
@@ -389,6 +395,8 @@ export function createFeedService(
   // Это lock underlying cold seed, не кэш ответа. Removal/timeout не освобождают незавершённый I/O.
   const coldReads = new Map<string, Promise<void>>();
   const progressClients = new Map<Client, ProgressClient>();
+  /** Граница запуска живёт до удаления сессии, даже если feed ещё нет или pending уже подтверждён. */
+  const progressStarts = new Map<string, ProgressStart>();
   const subscribers = new Map<string, Set<Client>>();
   const lastActivity = new Map<string, string>();
   /** Метки `markSent`: ключ сессии → время отправки, до первой пачки ленты (журнал задержек `feed.firstDelta`). */
@@ -471,8 +479,7 @@ export function createFeedService(
         seeding: undefined,
         observedSource: sourceOf(ref),
         progressEpoch: null,
-        sourceGeneration: 0,
-        pendingStart: null,
+        sourceGeneration: progressStarts.has(key) ? 1 : 0,
         transcriptPath: null,
         decisions: null,
       };
@@ -1041,14 +1048,22 @@ export function createFeedService(
     clearProgress(refKey(feed.ref));
   }
 
+  function confirmStart(ref: SessionRef): boolean {
+    const start = progressStarts.get(refKey(ref));
+    if (start === undefined || start.confirmed) return true;
+    const handle = deps.pty.get(ref);
+    if (handle === undefined || handle.pid !== start.pid) return false;
+    try {
+      const session = sessionOf(ref);
+      if (session.pid !== start.pid || typeof session.startedAtProcess !== 'string' || session.startedAtProcess.length === 0 ||
+          session.startedAtProcess === start.previousStartedAt) return false;
+      start.confirmed = true;
+      return true;
+    } catch { return false; }
+  }
+
   function observeSource(feed: SessionFeed): SourceStamp | null {
-    let stamp = sourceOf(feed.ref);
-    if (feed.pendingStart !== null) {
-      const handle = deps.pty.get(feed.ref);
-      if (stamp === null || handle === undefined || handle.pid !== feed.pendingStart.pid ||
-          stamp.startedAtProcess === feed.pendingStart.previousStartedAt) stamp = null;
-      else feed.pendingStart = null;
-    }
+    let stamp = confirmStart(feed.ref) ? sourceOf(feed.ref) : null;
     // Чужой binding/file фиксируется даже при missing proof и до works.changed.
     if (feed.codex !== undefined && !codexBindingCurrent(feed, stamp)) stamp = null;
     if (feed.observedSource !== null && !sameSource(feed.observedSource, stamp)) invalidateProgress(feed);
@@ -1262,6 +1277,7 @@ export function createFeedService(
 
   /** Сессии больше нет в работах: её лента, подписчики и удержанные хуки никому не нужны. */
   function forget(key: string): void {
+    progressStarts.delete(key);
     const feed = feeds.get(key);
     if (feed !== undefined) {
       if (feed.timer !== undefined) clearTimeout(feed.timer);
@@ -1290,9 +1306,10 @@ export function createFeedService(
         );
       }
     }
-    for (const key of [...feeds.keys(), ...subscribers.keys(), ...lastActivity.keys()]) {
+    for (const key of [...feeds.keys(), ...subscribers.keys(), ...lastActivity.keys(), ...progressStarts.keys()]) {
       if (!alive.has(key)) forget(key);
     }
+    for (const start of progressStarts.values()) confirmStart(start.ref);
     for (const feed of feeds.values()) {
       const stamp = observeSource(feed);
       if (feed.codex !== undefined) codexBindingCurrent(feed, stamp);
@@ -1310,13 +1327,13 @@ export function createFeedService(
     // Новый процесс не ответит на отправку старого: метка дала бы ложные минуты в `feed.firstDelta`.
     sentAt.delete(refKey(ref));
     const previous = feeds.get(refKey(ref));
-    if (previous !== undefined) {
-      previous.pendingStart = {
-        pid: deps.pty.get(ref)?.pid ?? null,
-        previousStartedAt: previous.observedSource?.startedAtProcess ?? null,
-      };
-      invalidateProgress(previous);
+    let previousStartedAt = previous?.observedSource?.startedAtProcess ?? null;
+    if (previousStartedAt === null) {
+      try { previousStartedAt = sessionOf(ref).startedAtProcess ?? null; } catch { /* Карта ещё не прочитана. */ }
     }
+    progressStarts.set(refKey(ref), { ref: { ...ref }, pid: deps.pty.get(ref)?.pid ?? null, previousStartedAt, confirmed: false });
+    confirmStart(ref);
+    if (previous !== undefined) invalidateProgress(previous);
     void seedAside(ref);
     void armCodexGrace(ref);
   });
@@ -1346,6 +1363,7 @@ export function createFeedService(
 
   const unsubscribeExit = deps.pty.on('exit', (ref) => {
     if (stopped) return;
+    confirmStart(ref);
     // Ответа вышедшего процесса не будет: метка отправки не должна дожить до чужой пачки.
     sentAt.delete(refKey(ref));
     graceWaiting.delete(refKey(ref));
@@ -1627,6 +1645,7 @@ export function createFeedService(
     async stop() {
       if (stopped) return;
       stopped = true;
+      progressStarts.clear();
       for (const state of progressClients.values()) state.active?.cancel();
       progressClients.clear();
       unsubscribeActivity();
