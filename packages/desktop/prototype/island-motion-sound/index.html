@@ -1,0 +1,848 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Parley island: motion and sound prototype</title>
+<link rel="icon" href="data:,">
+<!--
+  Прототип трека #9 «Звуки и анимации острова» (спека docs/specs/2026-10-26-island-motion-sound-design.md).
+  Самодостаточный: без внешних загрузок, шрифт системный. Рой — порт renderer/island/swarm/engine.ts (наш код) плюс слой
+  одноразовых реакций. Все звуки синтезируются здесь же Web Audio; файлов и чужих сэмплов нет. Механика (какое событие что
+  запускает, длительности, кривые, троттлинг) изучена по MIT-коду референсного приложения для выреза; его облик и звуки
+  не используются (каталог docs/audits/2026-10-26/island-motion-sound-research.md).
+-->
+<style>
+:root{--fg:#ece6dc;--mut:#a8a095;--acc:#d67f48;--line:rgba(255,255,255,.18);--hov:rgba(255,255,255,.1);
+ --pbg:rgba(24,21,19,.86);--pline:rgba(255,255,255,.16);
+ --grow-d:460ms;--grow-e:cubic-bezier(.32,1.22,.42,1);--shrink-d:300ms;--shrink-e:cubic-bezier(.45,0,.2,1)}
+*{box-sizing:border-box}
+html{background:#1b1730}
+body{margin:0;min-height:100vh;font:14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;color:var(--fg);
+ background:radial-gradient(ellipse 80% 60% at 18% 8%,#4d3b80,transparent 60%),radial-gradient(ellipse 70% 60% at 88% 28%,#a24a6c,transparent 55%),linear-gradient(160deg,#1b2145,#2b1d3d 55%,#1a1a2b);background-attachment:fixed}
+button,select,input{font:inherit;color:inherit}
+button{cursor:pointer}
+#menubar{position:fixed;inset:0 0 auto 0;height:var(--mb,25px);z-index:40;display:flex;align-items:center;gap:18px;padding:0 14px;font-size:13px;background:rgba(0,0,0,.3);backdrop-filter:blur(20px);color:#fff}
+#menubar b{font-weight:600}#menubar .r{margin-left:auto}
+
+/* ---- island ---- */
+#frame{position:fixed;top:0;left:0;right:0;height:300px;z-index:50;display:flex;justify-content:center;align-items:flex-start;pointer-events:none}
+@media(min-width:1100px){#frame{right:340px}}
+#shape{flex:none;overflow:hidden;background:#000;color:var(--fg);font-size:14px;border-radius:0 0 22px 22px;pointer-events:auto;cursor:grab;
+ box-shadow:0 14px 40px rgba(0,0,0,.5),0 2px 8px rgba(0,0,0,.35);
+ transition-property:width,height,margin-top,border-radius,box-shadow;transition-duration:var(--grow-d);transition-timing-function:var(--grow-e)}
+#shape.shrink{transition-duration:var(--shrink-d);transition-timing-function:var(--shrink-e)}
+#shape[data-view=bar]{border-radius:3px;margin-top:2px;box-shadow:0 0 0 1px rgba(255,255,255,.5)}
+#shape[data-view=peek]{border-radius:0 0 14px 14px;box-shadow:0 0 0 1px rgba(255,255,255,.5)}
+#content{width:max-content}
+.v{display:none}
+.v.on{display:block;animation:reveal var(--rev-d,220ms) ease-out var(--rev-delay,90ms) both}
+@keyframes reveal{from{opacity:0;transform:translateY(-4px);filter:blur(3px)}to{opacity:1;transform:none;filter:none}}
+.bar{width:40px;height:5px}
+.peekv{padding:4px 12px;white-space:nowrap}
+.pill{display:flex;align-items:center;justify-content:center;gap:8px;padding:6px 12px;white-space:nowrap}
+.v-pill.on{display:block}
+.dotbtn{width:26px;height:26px;border:0;border-radius:50%;background:none;padding:0;display:grid;place-items:center;margin-left:-4px;overflow:visible}
+.dotbtn:hover{background:var(--hov)}
+canvas{display:block}
+.cnt{display:flex;align-items:center;gap:6px}
+.list{width:400px;padding:0 10px 4px}
+.grp{font-size:12px;color:var(--mut);padding:6px 4px 2px}
+.row{display:flex;align-items:center;gap:8px;padding:3px 4px;border-radius:6px}
+.row:hover{background:var(--hov)}
+.row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .t{font-size:13px;color:var(--mut)}
+.sd{width:8px;height:8px;border-radius:50%;flex:none}
+.sd.w{background:#5fb4ff;animation:pulse 1.4s ease-in-out infinite}.sd.n{background:var(--acc)}.sd.d{background:#46c98a}
+.clear{display:flex;justify-content:flex-end;padding:2px 6px 4px}
+.clear button{border:0;background:none;color:var(--mut);font-size:13px}.clear button:hover{color:var(--fg)}
+.card{width:440px;padding:6px 12px 0}
+.ah{display:flex;align-items:center;gap:8px;padding-bottom:8px}
+.ah .ttl{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.m{font-size:13px;color:var(--mut)}
+.mono{font:13.5px ui-monospace,Menlo,monospace;padding-bottom:8px}
+.qtext{padding-bottom:8px}
+.plan{margin:0 0 8px;padding-left:20px;font-size:13.5px}.plan li{margin:2px 0}
+.ab{display:flex;gap:8px;padding-bottom:10px;flex-wrap:wrap}
+.pri,.out{height:32px;padding:0 14px;border-radius:8px;font-size:14px;font-weight:500}
+.pri{background:var(--acc);color:#0e0d0c;border:0}.out{background:none;border:1px solid var(--line)}
+.pri:hover:not(:disabled){filter:brightness(1.1)}.out:hover:not(:disabled){background:var(--hov)}
+.pri:disabled,.out:disabled{opacity:.45;cursor:default}
+.seat{width:30px;height:30px;flex:none;margin-left:-4px}
+.big{width:420px;padding-bottom:10px}
+.sw{position:relative;height:136px}
+.sw canvas{position:absolute;inset:0}
+.halo{position:absolute;inset:0;background:radial-gradient(ellipse 46% 62% at 50% 42%,rgba(var(--hc,239,176,92),var(--ha,.17)),transparent 72%);transition:background .3s}
+.lbl{display:flex;justify-content:center;align-items:center;gap:7px;height:20px;margin-top:-2px;font-size:13px;color:var(--mut)}
+.lbl i{width:7px;height:7px;border-radius:50%;background:var(--acc);flex:none}
+.lbl.listen i{animation:pulse 1s ease-in-out infinite}.lbl.err i{background:#dc604c}.lbl.conf i{background:#ffc24d}
+.ans{padding:6px 16px 0;min-height:42px;max-height:118px;overflow:hidden;line-height:1.5}
+#panel select{background:#2a2622;color:var(--fg);border:1px solid var(--pline);border-radius:6px;padding:2px 4px;font-size:12.5px}
+@keyframes pulse{50%{transform:scale(1.7);opacity:.5}}
+.tuck{display:none;justify-content:center;padding:0 0 8px}
+#shape.hov .tuck{display:flex}
+.tuck button{height:20px;min-width:32px;border:0;background:none;color:var(--mut);display:flex;justify-content:center;align-items:center}
+.tuck button:hover{color:var(--fg)}.tuck svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+
+/* ---- notch mode (#10): the collapsed island lives in the notch; sizes come from :root (applyScreen) ---- */
+#wrap{position:relative;flex:none;display:flex;pointer-events:none}
+#wrap .sh{display:none;position:absolute;top:0;width:6px;height:6px}
+#wrap .sh.l{left:-6px;background:radial-gradient(circle at 0 100%,transparent 6px,#000 6.5px)}
+#wrap .sh.r{right:-6px;background:radial-gradient(circle at 100% 100%,transparent 6px,#000 6.5px)}
+body.notch #wrap .sh{display:block}
+#hw{display:none;position:absolute;top:0;left:50%;transform:translateX(-50%);width:var(--nw);height:var(--nh);border-radius:0 0 9px 9px;
+ background:radial-gradient(circle at 50% 50%,#1b222c 0 2.5px,#000 3.5px);z-index:2;pointer-events:none}
+body.notch #hw{display:block}
+body.outline #hw{background:transparent;outline:1px dashed rgba(255,128,90,.95);outline-offset:-1px}
+#shape.notch{box-shadow:none}
+#shape.notch[data-view=ncomp],#shape.notch[data-view=nhide]{border-radius:0 0 10px 10px}
+#shape.notch[data-view=pill],#shape.notch[data-view=card],#shape.notch[data-view=big]{box-shadow:0 14px 40px rgba(0,0,0,.5),0 2px 8px rgba(0,0,0,.35)}
+#shape.notch[data-view=pill] #content,#shape.notch[data-view=card] #content,#shape.notch[data-view=big] #content{padding-top:var(--nh);min-width:calc(var(--nw) + 2*var(--ear))}
+.ears{display:flex;height:var(--fh)}
+.ear{width:var(--ear);height:100%;display:flex;align-items:center;justify-content:center}
+.ear.r,#earMeasure{font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ear.r .sd,#earMeasure .sd{width:6px;height:6px;margin-right:5px}
+.ear.r .sd.w{animation:glow 1.4s ease-in-out infinite}
+@keyframes glow{50%{opacity:.35}}
+.sd.e{background:#dc604c}
+.gap{width:var(--nw);height:var(--fh)}
+#earMeasure{position:absolute;visibility:hidden;left:-999px;top:0;display:flex;align-items:center}
+#fsband{display:none;position:fixed;inset:0 0 auto 0;height:var(--nh);background:#000;z-index:41}
+body.notch.fs #fsband{display:block}
+body.fs #menubar{display:none}
+
+/* ---- page ---- */
+main{padding:320px 16px 40px;max-width:760px;margin:0 auto}
+@media(min-width:1100px){body{padding-right:340px}}
+.stage{border-radius:14px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.08);padding:12px 12px 8px}
+.stage h2{margin:0 0 2px;font-size:14px;font-weight:600}
+.stage p{margin:0 0 6px;color:var(--mut);font-size:12.5px}
+.stage .sw{height:200px}
+#log{margin-top:12px;border-radius:14px;background:var(--pbg);border:1px solid var(--pline);padding:10px 12px;font-size:12.5px}
+#log h2{margin:0 0 6px;font-size:14px}
+#log ol{margin:0;padding:0;list-style:none;max-height:260px;overflow:auto;font-variant-numeric:tabular-nums}
+#log li{display:flex;gap:8px;padding:2px 0;border-top:1px solid rgba(255,255,255,.06)}
+#log li .k{width:120px;flex:none}#log li .r{color:var(--mut)}
+#log li.played .k{color:#9be3b6}#log li.held .k{color:#ffc78a}#log li.silent .k{color:#a8a095}
+#panel{margin:16px;padding:14px;border-radius:14px;background:var(--pbg);backdrop-filter:blur(18px);border:1px solid var(--pline);font-size:13px}
+@media(min-width:1100px){#panel{position:fixed;right:16px;top:41px;width:308px;max-height:calc(100vh - 57px);overflow:auto;margin:0;z-index:30}}
+#panel h2{margin:0 0 8px;font-size:15px}
+#panel h3{margin:12px 0 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:600}
+.bs{display:flex;flex-wrap:wrap;gap:5px}
+.bs button{padding:4px 9px;border-radius:7px;border:1px solid var(--pline);background:none;font-size:12.5px}
+.bs button:hover{background:rgba(127,127,127,.2)}
+.bs button.on,.bs button.big{background:var(--acc);border-color:var(--acc);color:#0e0d0c}
+.bs button.big{font-weight:500}
+.tg{display:flex;flex-direction:column;gap:6px}
+.tg label{display:flex;gap:7px;align-items:center}
+.tg input[type=range]{flex:1}
+#hud{padding:8px 10px;border-radius:9px;background:rgba(127,127,127,.16);line-height:1.5;font-size:12px;color:var(--mut);font-variant-numeric:tabular-nums}
+#hud b{color:var(--fg);font-weight:600}
+.note{font-size:12px;color:var(--mut);margin-top:8px}
+kbd{font:inherit;padding:0 4px;border-radius:4px;background:rgba(255,255,255,.1)}
+body.rm *,body.rm *::before,body.rm *::after{transition:none!important;animation:none!important}
+</style>
+</head>
+<body>
+<div id="menubar"><b>Finder</b><span>File</span><span>Edit</span><span>View</span><span>Go</span><span>Window</span><span>Help</span><span class="r">Mon 26 Oct&nbsp; 21:07</span></div>
+
+<div id="frame">
+ <div id="hw" title="Физический вырез"></div>
+ <div id="wrap"><i class="sh l"></i><i class="sh r"></i>
+ <div id="shape" data-view="pill"><div id="content">
+  <div class="v v-bar"><div class="bar"></div></div>
+  <div class="v v-peek"><div class="peekv" id="peekTxt">✅ 1</div></div>
+  <div class="v v-ncomp"><div class="ears"><div class="ear l"><canvas id="cvEar"></canvas></div><div class="gap"></div><div class="ear r" id="earR"></div></div></div>
+  <div class="v v-nhide"><div class="gap"></div></div>
+  <div class="v v-pill">
+   <div class="pill">
+    <button class="dotbtn" id="dot" title="Ask Jarvis" aria-label="Ask Jarvis"><canvas id="cvMini"></canvas></button>
+    <div class="cnt" id="cnt"><span id="pillTxt">No agents running</span></div>
+   </div>
+   <div id="list" class="list" hidden></div>
+  </div>
+  <div class="v v-card">
+   <div class="card">
+    <div class="ah"><canvas id="cvSeat" class="seat"></canvas><span class="ttl" id="cardTtl">S03 Ruslan · Auth<span class="m"> · Parley</span></span><span class="m" id="cardKind"></span></div>
+    <div id="cardBody"></div>
+    <div class="ab" id="cardBtns"></div>
+   </div>
+  </div>
+  <div class="v v-big">
+   <div class="big">
+    <div class="sw"><div class="halo" id="halo"></div><canvas id="cvBig"></canvas></div>
+    <div class="lbl" id="lbl"><i></i><span id="lblTxt">Ready</span></div>
+    <div class="ans" id="ans"></div>
+   </div>
+  </div>
+  <div class="tuck"><button id="tuck" aria-label="Collapse island" title="Collapse island"><svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg></button></div>
+ </div></div></div>
+</div>
+<div id="fsband"></div><span id="earMeasure"></span>
+
+<main>
+ <section class="stage">
+  <h2>Крупный план: та же реакция на большом рое</h2>
+  <p>В продукте большой рой живёт только в режиме помощника; события агентов играют мини-рой в пилюле и «место» в шапке карточки. Здесь — крупно, чтобы оценить движение.</p>
+  <div class="sw"><div class="halo" id="halo2"></div><canvas id="cvStage"></canvas></div>
+ </section>
+ <section id="log" aria-live="polite">
+  <h2>Журнал сигналов</h2>
+  <ol id="logList"></ol>
+ </section>
+</main>
+
+<aside id="panel" aria-label="Управление прототипом">
+ <h2>Звуки и движение острова</h2>
+ <div id="hud"></div>
+ <h3>Экран: остров в вырезе (#10)</h3>
+ <div class="bs" id="scrs"><button data-scr="mbp14" class="on">MacBook Pro 14″</button><button data-scr="mbp16">MacBook Pro 16″</button><button data-scr="ext">Без выреза</button></div>
+ <div class="tg" style="margin-top:6px">
+  <label>Высота формы <select id="formH"><option value="notch" selected>по вырезу</option><option value="mb">по строке меню</option></select></label>
+  <label>В покое <select id="idleMode"><option value="ears" selected>уши видны</option><option value="hide">только вырез</option></select></label>
+  <label><input type="checkbox" id="cbFs"> Приложение на весь экран (строка меню скрыта)</label>
+  <label><input type="checkbox" id="cbOutline"> Показать контур настоящего выреза</label>
+ </div>
+ <h3>События агентов</h3>
+ <div class="bs">
+  <button data-ev="start">Агент начал</button><button data-ev="thinking">Думает</button><button data-ev="tool">Шаг инструмента</button>
+  <button data-ev="permission">Нужно разрешение</button><button data-ev="question">Вопрос</button><button data-ev="plan">План</button>
+  <button data-ev="done">Done</button><button data-ev="error">Ошибка</button>
+ </div>
+ <h3>Остров</h3>
+ <div class="bs">
+  <button data-ev="hover">Наведение</button><button data-ev="open">Открыть</button><button data-ev="close">Закрыть</button>
+ </div>
+ <h3>Помощник</h3>
+ <div class="bs">
+  <button data-ev="listen">Слушает</button><button data-ev="speak">Говорит</button><button data-ev="asst-close">Закрыть помощника</button>
+ </div>
+ <h3>Лицо при речи</h3>
+ <div class="tg" style="margin-bottom:6px">
+  <label>Лицо <select id="faceMode"><option value="tone" selected>тон и звуки (L1–L3)</option><option value="loud">только громкость (план 3, v1)</option></select></label>
+  <label>Ответ <select id="voiceLang"><option value="ru" selected>ru · serena</option><option value="en">en · Piper ljspeech</option></select></label>
+ </div>
+ <div class="bs" id="emos"><button data-emo="calm" class="on">calm</button><button data-emo="joy">joy</button><button data-emo="sad">sad</button><button data-emo="surprise">surprise</button><button data-emo="anger">anger</button><button data-emo="error">error</button></div>
+ <h3>Нагрузка и правила</h3>
+ <div class="bs">
+  <button data-ev="storm" class="big">5 агентов закончили разом</button><button data-ev="scenario" class="big">▶ Сценарий</button><button data-ev="reset">Сброс</button>
+ </div>
+ <div class="tg" style="margin-top:8px">
+  <label><input type="checkbox" id="cbQuiet"> Сессия уже открыта в Parley (тихий Done, #8)</label>
+  <label><input type="checkbox" id="cbDoneSnd" checked> Звук у Done</label>
+  <label><input type="checkbox" id="cbUi" checked> Звуки интерфейса: наведение, открыть/закрыть, «агент начал» (в продукте — выкл)</label>
+ </div>
+ <h3>Палитра звуков</h3>
+ <div class="bs" id="pals"><button data-pal="soft" class="on">Мягкая</button><button data-pal="crystal">Хрусталь</button><button data-pal="warm">Тёплая</button></div>
+ <h3>Настройки</h3>
+ <div class="tg">
+  <label>Громкость <input type="range" id="vol" min="0" max="100" value="60"><span id="volTxt">60%</span></label>
+  <label><input type="checkbox" id="cbMute"> Без звука</label>
+  <label><input type="checkbox" id="cbRM"> Уменьшить движение (reduced motion)</label>
+  <label>Движение формы <select id="prof"><option value="new" selected>Новое: пружина 460/300 мс</option><option value="cur">Сейчас в Parley: 250 мс ease-out</option></select></label>
+ </div>
+ <div class="note">Первый клик включает звук (браузер не даёт Web Audio без жеста). Наведите курсор на остров — откроется список. Клавиши: <kbd>1</kbd>–<kbd>8</kbd> события агентов, <kbd>M</kbd> без звука, <kbd>R</kbd> сброс.</div>
+</aside>
+
+<script>
+(()=>{
+'use strict';
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const TAU=Math.PI*2,clamp=(v,a=0,b=1)=>v<a?a:v>b?b:v,lerp=(a,b,t)=>a+(b-a)*t;
+const ease=t=>t<.5?4*t*t*t:1-Math.pow(2-2*t,3)/2;              // = inOut
+const E={out:t=>1-Math.pow(1-t,3),inOut:ease,back:t=>{const c1=1.7,c3=c1+1;return 1+c3*Math.pow(t-1,3)+c1*Math.pow(t-1,2)},lin:t=>t};
+const rng=s=>()=>{s|=0;s=s+0x6D2B79F5|0;let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296};
+const gauss=R=>Math.sqrt(-2*Math.log(R()+1e-9))*Math.cos(TAU*R());
+const hs=n=>{const x=Math.sin(n*127.1)*43758.5453;return x-Math.floor(x)};
+const sysRM=matchMedia('(prefers-reduced-motion: reduce)');
+const RM=()=>document.body.classList.contains('rm');
+
+/* ================= swarm: port of renderer/island/swarm (spec.ts + engine.ts) ================= */
+const PAL={amber:{c:['#EFB05C','#F0DDA5','#F48A64','#FFC24D'],h:'239,176,92'},
+ coral:{c:['#DC604C','#F8B287','#C43F40','#FFC24D'],h:'220,96,76'},
+ gray:{c:['#9C948A','#C3BCB1','#6F665F','#9C948A'],h:'156,148,138'}};
+function sprite(hex){const c=document.createElement('canvas');c.width=c.height=48;const x=c.getContext('2d'),n=parseInt(hex.slice(1),16),
+ r=n>>16,g=n>>8&255,b=n&255,gr=x.createRadialGradient(24,24,0,24,24,24),k=(a,m)=>`rgba(${r+(255-r)*m|0},${g+(255-g)*m|0},${b+(255-b)*m|0},${a})`;
+ gr.addColorStop(0,k(1,.55));gr.addColorStop(.12,k(.9,.2));gr.addColorStop(.35,k(.3,0));gr.addColorStop(1,k(0,0));x.fillStyle=gr;x.fillRect(0,0,48,48);return c}
+const SPR={};for(const k in PAL)SPR[k]=PAL[k].c.map(sprite);
+const BLOBS=[[-.34,-.06,.2,.12,1.2],[.3,.08,.22,.13,1],[0,.12,.26,.1,1.3],[-.05,-.16,.15,.1,.8],[.52,-.1,.13,.09,.5],[-.55,.1,.12,.1,.5],[0,0,.5,.26,.8]];
+const DUR={cloudsphere:1.8,spherecloud:1.5,sphereface:.8,facesphere:.8,cloudface:1.4,facecloud:1.2};
+/* The face while speaking: verbatim port of the approved mockup docs/specs/assets/2026-10-14-assistant/island-mockup.html
+   (EMO, face(), blink(), flash, extra/toFace) — our own asset; the plan of stage 3 (Task 8) ports the same code into engine.ts.
+   eye: a,b half-axes; cut = lid line [base,slope]; dome = flat bottom; x = X-shaped; mouth: mw width, curl, H0 closed..H1 open */
+const EMO={
+ calm:{a:.095,b:.13,ey:.28,mw:.78,curl:.07,H0:.1,H1:.24,pw:.6},
+ joy:{a:.115,b:.1,dome:1,ey:.28,mw:1.04,curl:.18,H0:.14,H1:.3,pw:.55},
+ sad:{a:.095,b:.12,cut:[-.12,.8],ey:.27,mw:.72,curl:-.13,H0:.08,H1:.15,pw:.7,dim:.78},
+ surprise:{a:.11,b:.16,ey:.31,mo:1,mw:.4,H0:.3,H1:.4,nb:1},
+ anger:{a:.105,b:.085,cut:[-.1,-.95],ey:.27,mw:.6,curl:-.06,H0:.15,H1:.26,pw:.3},
+ error:{x:1,len:.1,ey:.28,mw:.86,curl:0,wave:1,H0:.05,H1:.05,pw:.1,nb:1}};
+const MOUTH_STROKE=.07; // minimum line-mouth stroke, in d (m-929)
+const shapeCat=sh=>sh==='sphere'?'sphere':sh==='face'?'face':'cloud';
+const CT=Math.cos(16*Math.PI/180),ST=Math.sin(16*Math.PI/180);
+const BASE={shape:'cloud',fx:null,pal:'amber',rot:.35,vis:1,ts:1,dim:1,glitch:false};
+/* spec by phase: same table as swarmSpecFor; the agent phases (#9) map onto the same looks */
+function specFor(phase,mini){
+ let s;
+ switch(phase){
+  case 'listening':s={...BASE,fx:'listen'};break;
+  case 'thinking':s={...BASE,shape:'sphere'};break;
+  case 'tool':s={...BASE,shape:'sphere',fx:'arc',rot:.1};break;
+  case 'answering':s={...BASE,shape:'sphere',fx:'flow',rot:.22};break;
+  case 'speaking':{const e=S.emo;s={...BASE,shape:'face',emo:e,pal:e==='anger'||e==='error'?'coral':'amber',dim:EMO[e].dim??1};
+   if(mini)s={...s,shape:'sphere',emo:null};break}
+  case 'settle':s={...BASE,shape:'sphere',rot:.3};break;
+  case 'confirm':s={...BASE,shape:'sphere',fx:'ring',rot:0};break;
+  case 'error':s={...BASE,shape:'sphere',pal:'coral',rot:0,glitch:true};break;
+  case 'offline':s={...BASE,pal:'gray',vis:.45,ts:.12,dim:.8};break;
+  default:s={...BASE}}
+ return mini&&s.shape==='cloud'?{...s,shape:'dot'}:s}
+const haloAlpha=p=>p==='confirm'?.32:p==='offline'?.07:.17;
+const tweenAt=(keys,el,from=0)=>{ // keys: [target, ms, easing]; el ms since start -> value
+ let v=from;for(const[t,ms,e]of keys){if(el<ms)return v+(t-v)*E[e](clamp(el/ms));el-=ms;v=t}return v};
+/* one-shot reactions (#9): channel, keys, duration. pos = moves souls; mini swarms skip pos channels (spec #9, 5.3).
+   The tween-key technique ([target, ms, easing] chains) and the out/inOut/back curves are a common technique studied
+   in reference notch apps; nothing is copied verbatim, the reactions themselves are ours. */
+const REACT={
+ breathe:{dur:700,pos:false,f:(el)=>({sc:tweenAt([[.9,180,'out'],[1.05,220,'out'],[1,300,'back']],el,1),br:1+.35*Math.sin(Math.PI*clamp(el/700))})},
+ glint:{dur:450,pos:false,f:(el)=>({wave:el/450})},
+ hop:{dur:450,pos:true,f:(el)=>({oy:tweenAt([[-.13,150,'out'],[0,300,'back']],el)})},
+ nod:{dur:700,pos:true,f:(el)=>({oy:tweenAt([[-.07,110,'out'],[0,170,'back'],[-.05,110,'out'],[0,310,'back']],el)})},
+ shake:{dur:290,pos:true,f:(el)=>({ox:tweenAt([[.07,50,'out'],[-.07,70,'inOut'],[.045,70,'inOut'],[0,100,'out']],el)})},
+ spin:{dur:1400,pos:false,f:(el)=>({spin:el<950?TAU*ease(el/950):TAU,swirl:Math.sin(Math.PI*clamp(el/950)),spark:clamp((el-500)/900)})},
+ lean:{dur:520,pos:false,f:(el)=>({sc:tweenAt([[1.05,160,'out'],[1,360,'back']],el,1),br:1+.25*Math.sin(Math.PI*clamp(el/520))})},
+ flash:{dur:300,pos:false,f:(el)=>({br:1+.7*Math.sin(Math.PI*clamp(el/300))})}};
+class Swarm{
+ constructor(cv,n,o){
+  Object.assign(this,{cv,W:o.w,H:o.h,d:o.d,cx:o.w/2,cy:o.cy,k:o.k||.058,minPx:o.minPx||2.4,ctx:cv.getContext('2d'),mini:!!o.mini,fps:o.fps||0,
+   dirty:true,trans:false,tr0:-1e9,dur:1,key:null,sp:null,palTo:'amber',palFrom:'amber',palT:1,T:0,rot:.5,rv:.35,mic:.4,gl:0,last:0,
+   o:{x:0,y:0,z:0,m:1,sm:1,c:0},reacts:[],hov:0,hovT:0,amp:0,mouth:0,vis:null,pro:null,flash:0,extra:0,toFace:false,nb:performance.now()+1200,b0:0,dbl:false,fAmp:0,fBl:1,drawn:0,mfps:0,cnt:0,t0:0,lastDraw:0});
+  const dpr=devicePixelRatio||1;cv.width=o.w*dpr;cv.height=o.h*dpr;cv.style.width=o.w+'px';cv.style.height=o.h+'px';this.ctx.setTransform(dpr,0,0,dpr,0,0);
+  const R=rng(o.seed||7),tot=BLOBS.reduce((a,b)=>a+b[4],0),core=[];this.S=[];
+  this.bd=BLOBS.map(()=>({ax:.04+.07*R(),ay:.03+.04*R(),per:8+12*R(),ph:TAU*R()}));
+  for(let i=0;i<n;i++){
+   const s={x:0,y:0,z:0,fx:0,fy:0,fz:0,v:1,rd:R(),sp:R()*2-1,sz:.7+.7*R(),ci:R()<.25?1:R()<.134?2:0,tw:TAU*R(),tp:2+8*R(),rk:R(),cor:R()<.17,
+    gx:gauss(R),gy:gauss(R),gz:gauss(R),ru:R(),rv:R(),fl:R()<.22,fph:R(),rc:.54+.14*R(),wc:(R()<.5?-1:1)*(.5+R()),ra:0,ux:0,uy:0,uz:0,b:0,sk:hs(i+.5)};
+   let q=R()*tot,b=0;while(q>BLOBS[b][4]&&b<BLOBS.length-1){q-=BLOBS[b][4];b++}s.b=b;{const r=R();s.role=r<.24?0:r<.48?1:2}
+   if(s.cor){const l=Math.hypot(s.gx,s.gy,s.gz)||1;s.ux=s.gx/l;s.uy=s.gy/l;s.uz=s.gz/l}else core.push(s);
+   this.S.push(s)}
+  core.forEach((s,k)=>{const y=1-2*(k+.5)/core.length,r=Math.sqrt(1-y*y),f=k*2.39996;s.ux=Math.cos(f)*r;s.uy=y;s.uz=Math.sin(f)*r});
+  const cors=this.S.filter(s=>s.cor);cors.forEach((s,k)=>s.ra=.18+k/cors.length*(TAU-.36));
+ }
+ /* prototype only: the stage follows its container; cx stays width/2 as in engine.ts */
+ resize(w){if(w<=0||w===this.W)return;const dpr=devicePixelRatio||1;this.W=w;this.cx=w/2;this.cv.width=w*dpr;this.cv.style.width=w+'px';this.ctx.setTransform(dpr,0,0,dpr,0,0);this.dirty=true}
+ needsFrame(now){return this.sp&&(this.dirty||this.trans||this.palT<1||this.reacts.length>0||Math.abs(this.hov-this.hovT)>.01||this.amp>0||(this.sp&&this.sp.shape==='face'))}
+ setSpec(E2){
+  const key=E2.shape+'|'+(E2.fx||'')+'|'+(E2.emo||''),old=this.sp,now=performance.now();
+  if(E2.pal!==this.palTo){this.palFrom=this.palTo;this.palTo=E2.pal;this.palT=RM()?1:0}
+  if(key!==this.key){this.key=key;
+   if(old&&!RM()){for(const s of this.S){s.fx=s.x;s.fy=s.y;s.fz=s.z}
+    const a=shapeCat(old.shape),b=shapeCat(E2.shape);this.tr0=now;this.dur=a===b?(old.emo!==E2.emo?.6:.7):DUR[a+b]||1;this.extra=b==='face'&&a!=='face'?.2:0;this.toFace=!!this.extra}
+   else this.tr0=-1e9;
+   if(E2.emo==='surprise')this.flash=1}
+  if(E2.glitch&&!(old&&old.glitch))this.gl=now+280;
+  this.sp=E2;this.dirty=true}
+ react(name){
+  if(RM())name='flash';                                           // reduced motion: brightness only, no movement
+  else if(this.mini&&REACT[name].pos)name='flash';                // the 28 px swarm: no hops/shakes, they read as jitter
+  else if(this.sp&&this.sp.shape==='face'&&name!=='flash')name='flash'; // the speaking face is never pushed around
+  this.reacts=this.reacts.filter(r=>r.name!==name);this.reacts.push({name,t0:performance.now()})}
+ tg(s,t){
+  const Q=this.sp,o=this.o,T=this.T;o.m=1;o.sm=1;o.c=s.ci;
+  if(Q.shape==='face'){this.face(s,EMO[Q.emo]||EMO.calm,this.fAmp,this.fBl,t);return}
+  if(Q.shape==='dot'){const k=.15*(1+(Q.fx==='listen'?.7*this.mic:0));o.x=s.gx*k;o.y=s.gy*k;o.z=s.gz*.15}
+  else if(Q.shape==='cloud'){
+   const B=BLOBS[s.b],D=this.bd[s.b],br=1+.04*Math.sin(TAU*T/7),ls=Q.fx==='listen'?.62+.5*this.mic:1;
+   o.x=(B[0]+D.ax*Math.sin(TAU*T/D.per+D.ph)+s.gx*B[2]*br)*ls;o.y=(B[1]+D.ay*Math.cos(TAU*T/D.per*1.3+D.ph)+s.gy*B[3]*br)*ls;o.z=s.gz*.18;
+   if(Q.fx==='listen'){const r=Math.hypot(o.x,o.y),rw=((t/2400)%1)*.9,w=Math.exp(-Math.pow((r-rw)/.08,2));o.x+=o.x/(r+.01)*.05*w;o.y+=o.y/(r+.01)*.05*w;o.m=1+.9*w}
+  }else{
+   if(s.cor&&Q.fx==='ring'){o.x=Math.cos(s.ra)*.64;o.y=Math.sin(s.ra)*.64;o.z=.3;o.c=3;o.m=1.15;return}
+   if(!s.cor&&Q.fx==='flow'&&s.fl){const u=(T/2.4+s.fph)%1;o.x=(s.ru-.5)*.46*(1-.4*u);o.y=.12+.7*u;o.z=.4;o.m=Math.pow(Math.sin(Math.PI*u),.7)*1.15*(1+.8*this.amp);return}
+   const k=s.cor?s.rc:.5*(1+.02*Math.sin(TAU*T/2.4)+.035*this.amp),a=s.cor?this.rot*s.wc:this.rot,ca=s.cor?Math.cos(a):this.cr,sa=s.cor?Math.sin(a):this.sr,
+    x1=(s.ux*ca+s.uz*sa)*k,z1=(-s.ux*sa+s.uz*ca)*k,y0=s.uy*k;
+   o.x=x1;o.y=y0*CT-z1*ST;o.z=y0*ST+z1*CT;
+   if(Q.fx==='arc'&&!s.cor){const ang=Math.atan2(o.y,o.x),u=((((t/2000*TAU)-ang)%TAU)+TAU)%TAU/(TAU/3);
+    if(u<1){const b=Math.pow(1-u,1.4);o.m=1+2.2*b;o.sm=1+.7*b;o.x*=1+.07*b;o.y*=1+.07*b}}}}
+ face(s,F,amp,bl,t){ // mockup face(): two eyes (roles 0, 1) and a mouth (role 2) out of the same souls; + L1/L2 (#9 §6.7)
+  const o=this.o,sx=s.role?1:-1,V=this.vis,P=this.pro,eW=P?P.eyeW:0;o.z=.35;
+  if(s.role<2){
+   const ex=.41*sx,ey=-(F.ey+.03*eW),ea=F.a*(1+.12*eW),eb=F.b*(1+.25*eW); // rising pitch: eyes widen and lift (the face has no brows)
+   if(F.x){const q=(s.ru*2-1)*F.len,k=s.rv<.5?1:-1;o.x=ex+q;o.y=ey+k*q+((s.rv*4)%1-.5)*.028}
+   else{const r=Math.sqrt(s.ru),th=TAU*s.rv,X=r*Math.cos(th);let Y=r*Math.sin(th);
+    if(F.dome)Y=-Math.abs(Y);
+    if(F.cut){const ym=clamp(F.cut[0]+F.cut[1]*sx*X,-1,.8);Y=ym+(Y+1)/2*(1-ym)}
+    o.x=ex+ea*X;o.y=ey+eb*Y*bl}
+  }else{
+   const ro=V?V.round:0,wi=V?V.wide:0,sm2=V?V.smile:0,cl=V?V.closed:0;
+   // L1 visemes (§6.7) on a mouth that always reads as a mouth (m-925, m-929): factors are clamped, the line keeps a
+   // minimum stroke and the closed length, «о/у» morphs the same souls into an oval (no position averaging).
+   const hf=clamp(1+.45*wi-.35*sm2,.6,1.45),open=lerp(lerp(F.H0,F.H1,amp)*hf,0,cl),curl=(F.curl||0)+.06*sm2;
+   if(F.mo){const w=F.mw*clamp(1-.35*ro+.2*sm2,.65,1.25),H=Math.max(.5*F.H0,open),r=Math.sqrt(s.ru),th=TAU*s.rv,c=Math.cos(th),n=Math.sin(th);
+    o.x=Math.sign(c)*Math.pow(Math.abs(c),.8)*r*w/2*(.92+.16*amp);o.y=.25+Math.sign(n)*Math.pow(Math.abs(n),.8)*r*H/2}
+   else{
+    const wLine=F.mw*clamp(1+.05*wi+.2*sm2,1,1.25),W=lerp(wLine,.65*F.mw,ro);              // a line is never shorter than its closed width
+    const q=s.ru*2-1,tap=Math.pow(Math.max(0,1-q*q),F.pw);
+    const lineT=Math.max(open*tap,MOUTH_STROKE*(.55+.45*tap));                             // minimum stroke, ends included
+    const ovalT=Math.max(open,.45*W)*Math.sqrt(Math.max(0,1-q*q));
+    let yc=.25-curl*q*q*(1-ro);if(F.wave)yc+=.035*Math.sin(q*3.4*Math.PI);
+    o.x=q*W/2;o.y=yc+(s.rv-.4)*lerp(lineT,Math.max(ovalT,lineT),ro);o.m=1.1}}            // the mouth souls a touch brighter
+  if(s.cor){o.x+=s.gx*.045+.012*Math.sin(t/1000*.8+s.tw);o.y+=s.gy*.045;o.m=.7}
+  o.x*=1.2;o.y*=1.2;o.sm=1.15*(1+.1*(P?P.pulse:0))} // L2: a stressed syllable swells the souls
+ forceBlink(now){if(now-this.b0>600){this.b0=now;this.dbl=false;this.nb=now+2400+Math.random()*2000}} // L2: a pause > 250 ms
+ blink(now,F){ // mockup blink(): every 2.4–4.4 s, 220 ms, 20 % double; surprise and error never blink
+  if(F.nb||RM())return 1;
+  if(now>this.nb){this.b0=now;this.dbl=Math.random()<.2;this.nb=now+2400+Math.random()*2000}
+  const u=(now-this.b0)/220;let k=0;
+  if(u>=0&&u<1)k=Math.sin(Math.PI*u);else if(this.dbl){const u2=(now-this.b0-330)/180;if(u2>=0&&u2<1)k=Math.sin(Math.PI*u2)}
+  return 1-.94*k}
+ frame(now){
+  const Q=this.sp;if(!Q)return;const ctx=this.ctx,rm=RM(),dt=Math.max(0,Math.min(.05,(now-this.last)/1000));
+  this.last=now;this.dirty=false;this.cnt++;
+  if(now-this.t0>1000){this.mfps=this.cnt;this.cnt=0;this.t0=now}
+  // reactions -> one combined modifier
+  let sc=1,br=1,ox=0,oy=0,spin=0,swirl=0,spark=0,wave=-1;
+  this.reacts=this.reacts.filter(r=>{const el=now-r.t0,R2=REACT[r.name];if(el>R2.dur)return false;const m=R2.f(el);
+   if(m.sc!==undefined)sc*=m.sc;if(m.br!==undefined)br*=m.br;if(m.ox)ox+=m.ox;if(m.oy)oy+=m.oy;if(m.spin)spin+=m.spin;if(m.swirl)swirl=Math.max(swirl,m.swirl);
+   if(m.spark)spark=m.spark;if(m.wave!==undefined)wave=m.wave;return true});
+  this.hov+=(this.hovT-this.hov)*Math.min(1,dt*14);sc*=1+.04*this.hov;br*=1+.14*this.hov;
+  const t=rm?3200:now;
+  if(rm){this.T=3.2;this.rot=.9;this.mic=.5}
+  else{this.T+=dt*Q.ts;this.rv+=(Q.rot-this.rv)*Math.min(1,dt*2);this.rot+=dt*this.rv;if(Q.fx==='listen')this.mic+=(micAt(now)-this.mic)*.3}
+  if(this.palT<1)this.palT=clamp(this.palT+dt/.3);
+  this.flash=Math.max(0,this.flash-dt/.6);
+  if(Q.shape==='face'){const F=EMO[Q.emo]||EMO.calm;this.fAmp=rm?.3:this.mouth;this.fBl=this.blink(now,F)}
+  const el=rm?1e9:(now-this.tr0)/1000,dur=this.dur,ex=this.extra,glitch=now<this.gl&&!rm;
+  this.trans=el<dur+ex;
+  const rotS=this.rot+(Q.shape==='sphere'?spin:0);this.cr=Math.cos(rotS);this.sr=Math.sin(rotS);
+  const cloudSpin=Q.shape==='sphere'?0:spin;
+  ctx.clearRect(0,0,this.W,this.H);ctx.globalCompositeOperation='lighter';
+  const sa=SPR[this.palTo],sb=SPR[this.palFrom],pt=this.palT,o=this.o;
+  for(const s of this.S){
+   this.tg(s,t);let x=o.x,y=o.y,z=o.z;
+   const p=clamp((el-s.rd*.33*dur-(this.toFace&&s.role===2?.2:0))/(.67*dur)); // entering a face: the mouth comes 0.2 s later
+   if(p<1){const e=ease(p),dx=x-s.fx,dy=y-s.fy,k=Math.sin(Math.PI*p)*.3*s.sp;x=s.fx+dx*e-dy*k;y=s.fy+dy*e+dx*k;z=lerp(s.fz,z,e)}
+   s.x=x;s.y=y;s.z=z;
+   s.v+=((s.rk<Q.vis?1:0)-s.v)*Math.min(1,dt*5);
+   // reaction layer: swirl (inner souls lead), scale, offsets
+   let rx=x,ry=y,mm=o.m;
+   if(cloudSpin){const r=Math.hypot(x,y),a=cloudSpin+swirl*.9*(.45-r),c=Math.cos(a),n=Math.sin(a);rx=x*c-y*n;ry=x*n+y*c}
+   rx=rx*sc+ox;ry=ry*sc+oy;
+   if(wave>=0){const r=Math.hypot(rx,ry),w=Math.exp(-Math.pow((r-wave*.75)/.07,2));mm*=1+1.6*w}
+   const zn=clamp(z+.5);
+   let al=(s.cor?.62:.85)*mm*(.5+.5*zn)*s.v*Q.dim*(1+.8*this.flash)*(this.pro?(.9+.25*this.pro.loud)*(1+.45*this.pro.pulse):1)*br*(1+.2*Math.sin(TAU*t/1000/s.tp+s.tw));
+   if(spark>0&&spark<1&&s.sk<.16)al*=1+3*Math.sin(Math.PI*spark);
+   const D=Math.max(this.minPx,this.d*this.k*s.sz*o.sm*(.85+.3*zn));
+   let px=this.cx+rx*this.d;const py=this.cy+ry*this.d;
+   if(glitch){const row=Math.floor(py/6);if(row%3===0)px+=(hs(row+Math.floor(now/70))-.5)*.14*this.d;if(hs(s.rd*50)<.25)al*=.2}
+   al=clamp(al);if(al<.01)continue;const c=o.c;
+   if(pt>=1){ctx.globalAlpha=al;ctx.drawImage(sa[c],px-D/2,py-D/2,D,D)}
+   else{ctx.globalAlpha=al*pt;ctx.drawImage(sa[c],px-D/2,py-D/2,D,D);ctx.globalAlpha=al*(1-pt);ctx.drawImage(sb[c],px-D/2,py-D/2,D,D)}}
+  ctx.globalAlpha=1;this.drawn++}
+}
+const micAt=n=>Math.max(0,.5+.28*Math.sin(n/90)+.22*Math.sin(n/37+1))*(.55+.45*Math.sin(n/530));
+const mini=new Swarm($('#cvMini'),150,{w:28,h:28,d:17,cy:14,k:.15,minPx:1.5,seed:5,mini:true});
+const seat=new Swarm($('#cvSeat'),150,{w:30,h:30,d:18,cy:15,k:.15,minPx:1.5,seed:5,mini:true});
+const ear=new Swarm($('#cvEar'),120,{w:24,h:24,d:15,cy:12,k:.15,minPx:1.4,seed:5,mini:true}); // the left ear of the notch form
+const big=new Swarm($('#cvBig'),700,{w:420,h:136,d:86,cy:62,k:.058,minPx:2.4});
+const stageBox=$('#cvStage').parentElement;
+const stage=new Swarm($('#cvStage'),700,{w:stageBox.clientWidth||600,h:200,d:120,cy:96,k:.058,minPx:2.4,seed:11});
+new ResizeObserver(()=>stage.resize(Math.round(stageBox.clientWidth))).observe(stageBox);
+const SW=[mini,seat,big,stage,ear];
+let lastLoop=0;
+function loop(now){requestAnimationFrame(loop);
+ for(const s of SW){const visible=s.cv.offsetParent!==null;if(!visible)continue;
+  const idleFps=s.fps,interval=1000/(idleFps||60)-2;
+  if((idleFps>0||s.needsFrame(now))&&now-s.lastDraw>=interval){s.lastDraw=now;s.frame(now)}
+  else if(now-s.t0>1000){s.mfps=s.cnt;s.cnt=0;s.t0=now}}}
+requestAnimationFrame(loop);
+
+/* ================= sound: procedural Web Audio, 3 palettes ================= */
+/* Levels: micro ≪ island < work < attention ≈ done (≈15 dB steps, coarse feel from the catalogue §2.3). */
+const LEVEL={micro:-28,island:-20,work:-15,attention:-7,done:-5,error:-8};
+const PALS={
+ soft:{root:587.33,name:'Мягкая'},    // D5, sine + soft octave, pentatonic feel
+ crystal:{root:659.25,name:'Хрусталь'},// E5, inharmonic FM bell
+ warm:{root:392,name:'Тёплая'}};       // G4, felt: triangle + detuned saw through a lowpass
+/* recipes: notes [semitones, startMs, durMs, gainDb]; noise [startMs, durMs, fromHz, toHz, gainDb]; glide = last note bends up */
+const RECIPE={
+ start:{level:'work',notes:[[0,0,200,0],[7,95,280,-1]]},
+ permission:{level:'attention',notes:[[0,0,240,0],[7,0,240,-6],[5,230,380,0],[12,230,380,-6]]},
+ question:{level:'attention',notes:[[0,0,170,0],[9,150,460,0]],glide:2},
+ plan:{level:'attention',notes:[[0,0,190,-1],[4,115,190,-1],[7,230,190,-1],[11,345,520,0]]},
+ done:{level:'done',notes:[[0,0,240,-2],[4,90,240,-2],[7,180,300,-1],[12,280,950,0],[19,290,700,-12]]},
+ error:{level:'error',notes:[[-12,0,320,0],[-13,210,560,0]],detune:9},
+ hover:{level:'micro',notes:[[19,0,60,0]]},
+ open:{level:'island',noise:[[0,360,500,3200,-2]],notes:[[12,40,300,-6]],glide:7},
+ close:{level:'island',noise:[[0,300,2600,450,-2]],notes:[[19,30,260,-6]],glide:-7},
+ 'listen-start':{level:'island',notes:[[7,0,90,0],[12,80,150,0]]},
+ 'listen-end':{level:'island',notes:[[12,0,90,0],[7,80,170,0]]},
+ speak:{level:'micro',notes:[[0,0,320,0],[4,0,320,-3]]},
+ decide:{level:'island',notes:[[12,0,110,0],[16,60,160,-3]]},
+ unmute:{level:'micro',notes:[[24,0,50,0]]}};
+const A={ctx:null,master:null,cues:null,voice:null,comp:null,pal:'soft',vol:.6,muted:false,noise:null};
+function audio(){
+ if(A.ctx)return A.ctx;
+ const c=new (window.AudioContext||window.webkitAudioContext)();A.ctx=c;
+ A.comp=c.createDynamicsCompressor();A.comp.threshold.value=-14;A.comp.ratio.value=4;A.comp.attack.value=.003;A.comp.release.value=.2;
+ A.master=c.createGain();A.cues=c.createGain();A.voice=c.createGain();
+ A.an=c.createAnalyser();A.an.fftSize=2048;A.an.smoothingTimeConstant=.5;
+ A.cues.connect(A.master);A.voice.connect(A.an);A.an.connect(A.master); // cues bypass the analyser: the swarm hears only the voice
+ A.master.connect(A.comp);A.comp.connect(c.destination);
+ const len=c.sampleRate*1.5,buf=c.createBuffer(1,len,c.sampleRate),d=buf.getChannelData(0),R=rng(3);for(let i=0;i<len;i++)d[i]=R()*2-1;A.noise=buf;
+ applyGain();return c}
+const masterGain=()=>A.muted?0:Math.pow(A.vol,2); // perceptual: slider² (0.6 -> 0.36)
+function applyGain(){if(!A.ctx)return;A.master.gain.setTargetAtTime(masterGain(),A.ctx.currentTime,.03)}
+const db=x=>Math.pow(10,x/20);
+function tone(c,dest,pal,freq,t,durS,g){
+ const P=pal,env=c.createGain();env.connect(dest);
+ const atk=P==='warm'?.03:P==='crystal'?.002:.012,tail=P==='crystal'?durS*1.9:durS*1.25;
+ env.gain.setValueAtTime(0,t);env.gain.linearRampToValueAtTime(g,t+atk);env.gain.exponentialRampToValueAtTime(Math.max(1e-4,g*.35),t+Math.max(atk+.01,durS*.55));env.gain.exponentialRampToValueAtTime(1e-4,t+tail);
+ const stop=t+tail+.05,oscs=[];
+ if(P==='soft'){
+  const lp=c.createBiquadFilter();lp.type='lowpass';lp.frequency.value=3200;lp.connect(env);
+  const a=c.createOscillator();a.type='sine';a.frequency.value=freq;a.connect(lp);
+  const b=c.createOscillator(),bg=c.createGain();b.type='sine';b.frequency.value=freq*2;bg.gain.value=.12;b.connect(bg);bg.connect(lp);oscs.push(a,b)}
+ else if(P==='crystal'){
+  const car=c.createOscillator(),mod=c.createOscillator(),mg=c.createGain();car.type='sine';car.frequency.value=freq;mod.frequency.value=freq*3.5;
+  mg.gain.setValueAtTime(freq*2.2,t);mg.gain.exponentialRampToValueAtTime(freq*.05,t+durS);mod.connect(mg);mg.connect(car.frequency);car.connect(env);
+  const sh=c.createOscillator(),sg=c.createGain();sh.type='sine';sh.frequency.value=freq*2.76;sg.gain.value=.18;sh.connect(sg);sg.connect(env);oscs.push(car,mod,sh)}
+ else{
+  const lp=c.createBiquadFilter();lp.type='lowpass';lp.Q.value=.7;lp.frequency.setValueAtTime(freq*5,t);lp.frequency.exponentialRampToValueAtTime(freq*1.6,t+durS);lp.connect(env);
+  const a=c.createOscillator();a.type='triangle';a.frequency.value=freq;a.connect(lp);
+  for(const det of[-7,7]){const s=c.createOscillator(),sg=c.createGain();s.type='sawtooth';s.frequency.value=freq;s.detune.value=det;sg.gain.value=.12;s.connect(sg);sg.connect(lp);oscs.push(s)}oscs.push(a)}
+ for(const o of oscs){o.start(t);o.stop(stop)}
+ return oscs}
+function noiseSweep(c,dest,pal,t,durS,f0,f1,g){
+ const src=c.createBufferSource();src.buffer=A.noise;const bp=c.createBiquadFilter();bp.type='bandpass';bp.Q.value=pal==='crystal'?6:pal==='warm'?1.2:2.5;
+ bp.frequency.setValueAtTime(f0,t);bp.frequency.exponentialRampToValueAtTime(f1,t+durS);
+ const env=c.createGain();env.gain.setValueAtTime(0,t);env.gain.linearRampToValueAtTime(g,t+durS*.35);env.gain.exponentialRampToValueAtTime(1e-4,t+durS);
+ src.connect(bp);bp.connect(env);env.connect(dest);src.start(t);src.stop(t+durS+.05)}
+function synth(kind,{duck=false}={}){
+ const c=audio(),r=RECIPE[kind];if(!r)return;if(c.state==='suspended')c.resume();
+ const P=A.pal,root=PALS[P].root,t0=c.currentTime+.01,base=db(LEVEL[r.level]+(duck?-10:0));
+ const bus=c.createGain();bus.gain.value=1;bus.connect(A.cues);
+ (r.notes||[]).forEach(([st,ms,dur,gdb],i,arr)=>{
+  const f=root*Math.pow(2,st/12),t=t0+ms/1000,oscs=tone(c,bus,P,f,t,dur/1000,base*db(gdb));
+  if(r.detune)oscs.forEach(o=>o.detune.value+=(i%2?-1:1)*r.detune);
+  if(r.glide&&i===arr.length-1)oscs.forEach(o=>{if(o.frequency.value>0){const v=o.frequency.value;o.frequency.setValueAtTime(v,t+dur/1000*.45);o.frequency.exponentialRampToValueAtTime(v*Math.pow(2,r.glide/12),t+dur/1000)}})});
+ (r.noise||[]).forEach(([ms,dur,f0,f1,gdb])=>noiseSweep(c,bus,P,t0+ms/1000,dur/1000,f0,f1,base*db(gdb)*1.6));
+ if(r.level==='attention'||r.level==='error'){ // the assistant's voice steps aside for an alert
+  A.voice.gain.cancelScheduledValues(c.currentTime);A.voice.gain.setTargetAtTime(.3,c.currentTime,.02);A.voice.gain.setTargetAtTime(1,c.currentTime+.7,.15)}}
+/* ================= voice (#9 §6): real TTS sentences, the face listens to them ================= */
+/* plan 3 seam: one sentence -> {pcm: Float32Array mono, sampleRate}; here the r-06 bench sentences play that role.
+   ru: Qwen3-TTS 0.6B CustomVoice, voice «serena» (the human's choice, m-918), Apache-2.0 — copied as voice-ru-1..4.wav.
+   en: Piper en_US-ljspeech-high, LJ Speech data, public domain — copied as voice-en-1..4.wav. */
+const REPLY={
+ ru:{label:'ru · Qwen3-TTS 0.6B serena (Apache-2.0)',url:n=>`voice-ru-${n}.wav`,
+  text:['Готово: я открыл пулл-реквест и запустил тесты.','В комнате три участника; ведущий ждёт ответа до 18:30, а сборка заняла 4 минуты 12 секунд.',
+   'Я повесил новый замок на ворота старого замка, и все сразу успокоились.','Сессия s-30 закончила замеры. Хотите, я прочитаю краткий отчёт вслух или отправлю его в Телеграм?']},
+ en:{label:'en · Piper ljspeech-high (public domain)',url:n=>`voice-en-${n}.wav`,
+  text:['Done: I opened the pull request and started the tests.','There are three people in the room; the lead expects an answer by 6:30 PM, and the build took 4 minutes 12 seconds.',
+   'I read the report yesterday, and I will read it again before we record the demo.','Session s-30 has finished its measurements. Shall I read the short report aloud or send it to Telegram?']}};
+const REPLY_MOODS=['joy','calm','sad','surprise']; // L3: one [[mood]] per sentence, scripted for the demo
+const voiceCache={};let speakTok=0,voiceSrcs=[];
+const VA={ms:0,f0:0,vis:'—'}; // voice analysis stats for the HUD
+function wavToChunk(ab,seq){ // 16-bit PCM mono WAV -> {seq, sampleRate, pcm: Float32Array}, as the engine would hand it over
+ const v=new DataView(ab);let o=12,sr=0,bits=0,ch=1,data=null;
+ while(o+8<=v.byteLength){const id=String.fromCharCode(v.getUint8(o),v.getUint8(o+1),v.getUint8(o+2),v.getUint8(o+3)),len=v.getUint32(o+4,true);
+  if(id==='fmt '){ch=v.getUint16(o+10,true);sr=v.getUint32(o+12,true);bits=v.getUint16(o+22,true)}
+  if(id==='data'){data=[o+8,len];break}o+=8+len+(len&1)}
+ if(!data||bits!==16||ch!==1)throw new Error('unsupported wav');
+ const n=data[1]/2,pcm=new Float32Array(n);for(let i=0;i<n;i++)pcm[i]=v.getInt16(data[0]+i*2,true)/32768;
+ return{seq,sampleRate:sr,pcm}}
+async function loadVoice(lang){
+ if(voiceCache[lang])return voiceCache[lang];const R2=REPLY[lang],out=[];
+ for(let n=1;n<=4;n++){
+  try{const r=await fetch(R2.url(n));if(!r.ok)throw new Error(r.status);out.push({...wavToChunk(await r.arrayBuffer(),n-1),text:R2.text[n-1],mood:REPLY_MOODS[n-1],label:R2.label})}
+  catch(e){log('speak','silent',`предложение ${lang}-${n} недоступно`);return lang==='ru'?loadVoice('en'):[]}}
+ voiceCache[lang]=out;return out}
+const toneMode=()=>$('#faceMode').value==='tone';
+/* L1–L2: per-frame analysis of the voice bus only (cues bypass the analyser). Language- and engine-agnostic. */
+function createVoiceAnalysis(c){
+ const an=A.an,N=an.fftSize,td=new Float32Array(N),fd=new Float32Array(N/2),sr=c.sampleRate,binHz=sr/N,dec=new Float32Array(N/4),sr4=sr/4;
+ const band=(lo,hi)=>{let e=0;const a=Math.max(1,Math.floor(lo/binHz)),b=Math.min(fd.length-1,Math.ceil(hi/binHz));for(let i=a;i<=b;i++)e+=Math.pow(10,fd[i]/10);return e};
+ const sm=(cur,target,dt,tau)=>cur+(target-cur)*(1-Math.exp(-dt/tau));
+ const st={mouth:0,round:0,wide:0,smile:0,closed:0,eyeW:0,pulse:0,loud:0,slowDb:-60,lastStress:0,quiet:0,lastBlink:0,eyeHold:0,
+  mM:0,vM:.5,mH:0,vH:.5,n:0,f0s:[]}; // running mean/variance of the band features: the voice normalises itself (any engine, any language)
+ const step=function(now,dt,useTone){
+  const t0=performance.now();
+  an.getFloatTimeDomainData(td);
+  let e=0;for(let i=N-512;i<N;i++)e+=td[i]*td[i];
+  const rms=Math.sqrt(e/512),target=clamp((rms-.02)/.25);                                // plan 3: mouth = clamp((rms − 0.02) / 0.25)
+  st.mouth=target>st.mouth?target:sm(st.mouth,target,dt,.08);                             // attack instant, release 0.08 s
+  const dbv=20*Math.log10(rms+1e-9);st.loud=clamp((dbv+45)/30);
+  if(useTone){
+   // L1 visemes: band-energy ratios (F1 ~ 250–1300 Hz, F2 ~ 1300–3000 Hz)
+   an.getFloatFrequencyData(fd);
+   const eLo=band(200,600),eMid=band(600,1300),eHi=band(1300,3000),tot=eLo+eMid+eHi+1e-12;
+   const voicedLoud=st.loud>.18,fM=Math.log((eMid+1e-12)/(eLo+1e-12)),fH=Math.log((eHi+1e-12)/(eLo+1e-12));
+   if(voicedLoud){const k=1-Math.exp(-dt/2);st.mM+=(fM-st.mM)*k;st.vM+=((fM-st.mM)**2-st.vM)*k;st.mH+=(fH-st.mH)*k;st.vH+=((fH-st.mH)**2-st.vH)*k;st.n++}
+   const zM=(fM-st.mM)/Math.sqrt(st.vM+1e-6),zH=(fH-st.mH)/Math.sqrt(st.vH+1e-6),ready=st.n>8;VA.r=[+zM.toFixed(2),+zH.toFixed(2)];
+   let tc=voicedLoud?0:1,                                                                   // silence between syllables: closed «м/б/п»
+       tw=voicedLoud&&ready?clamp((zM-.2)/.8):0,                                             // more F1 energy than usual: wide «а»
+       ts=voicedLoud&&ready?clamp((zH-.3)/.8)*clamp(1-zM/1.2):0,                             // high F2, low F1: stretched «и/е»
+       tr=voicedLoud&&ready?clamp((-zH-.3)/.8)*clamp((.3-zM)/.8):0;                          // both low: round «о/у»
+   const sum=tc+tr+tw+ts+.25;tc/=sum;tr/=sum;tw/=sum;ts/=sum;
+   st.closed=sm(st.closed,tc,dt,.06);st.round=sm(st.round,tr,dt,.07);st.wide=sm(st.wide,tw,dt,.07);st.smile=sm(st.smile,ts,dt,.07);
+   // L2 prosody: F0 by autocorrelation on a 4× decimated window (75–400 Hz)
+   for(let i=0;i<dec.length;i++)dec[i]=(td[4*i]+td[4*i+1]+td[4*i+2]+td[4*i+3])/4;
+   let mean=0;for(let i=0;i<dec.length;i++)mean+=dec[i];mean/=dec.length;let e0=0;for(let i=0;i<dec.length;i++){dec[i]-=mean;e0+=dec[i]*dec[i]}
+   let best=0,bestL=0;
+   if(e0>1e-6&&voicedLoud){for(let L=Math.floor(sr4/400);L<=Math.ceil(sr4/75)&&L<dec.length/2;L++){let acc=0;for(let i=0;i+L<dec.length;i++)acc+=dec[i]*dec[i+L];const r=acc/e0*dec.length/(dec.length-L);if(r>best){best=r;bestL=L}}}
+   const voiced=best>.5,f0=voiced?sr4/bestL:0;VA.f0=Math.round(f0);
+   if(voiced){st.f0s.push([now,f0]);while(st.f0s.length&&now-st.f0s[0][0]>600)st.f0s.shift()}
+   if(voicedLoud)st.quiet=0;else if(st.quiet>250&&st.f0s.length>4){                         // a phrase ended (pause > 250 ms): did it end rising?
+    const tEnd=st.f0s[st.f0s.length-1][0],late=st.f0s.filter(([t])=>tEnd-t<150),early=st.f0s.filter(([t])=>tEnd-t>=150);
+    const avg=a=>a.reduce((x,[,f])=>x+f,0)/a.length;
+    if(late.length&&early.length&&avg(late)>avg(early)*1.1)st.eyeHold=now+900;st.f0s=[]}    // rising end (a question): eyes widen in the pause
+   st.eyeW=sm(st.eyeW,now<st.eyeHold?1:0,dt,.12);
+   if(voiced&&dbv-st.slowDb>9&&now-st.lastStress>250){st.pulse=1;st.lastStress=now}         // stressed syllable: short pulse
+   st.pulse=Math.max(0,st.pulse-dt/.16);st.slowDb=sm(st.slowDb,dbv,dt,.35);
+   if(!voicedLoud){st.quiet+=dt*1000;if(st.quiet>250&&now-st.lastBlink>600){st.lastBlink=now;for(const s2 of[big,stage])s2.forceBlink(now)}} // pause > 250 ms: blink
+   const names=['закрыт','о/у','а','и/е'],w=[st.closed,st.round,st.wide,st.smile];VA.vis=voicedLoud?names[w.indexOf(Math.max(...w))]:'пауза';
+  }else{st.closed=st.round=st.wide=st.smile=st.eyeW=st.pulse=0;VA.vis='—';VA.f0=0}
+  VA.ms=VA.ms*.9+(performance.now()-t0)*.1;
+  return st};
+ step.ask=now=>{st.eyeHold=Math.max(st.eyeHold,now+900)}; // the sentence text ends with «?»: the same widening, for sure
+ return step}
+function speakChunks(chunks,tok){
+ const c=audio();if(c.state==='suspended')c.resume();
+ A.voice.gain.cancelScheduledValues(c.currentTime);A.voice.gain.setValueAtTime(1,c.currentTime);
+ let t=c.currentTime+.05;const starts=[];
+ for(const ch of chunks){ // each chunk: an AudioBuffer at its own sampleRate; Web Audio resamples
+  const b=c.createBuffer(1,ch.pcm.length,ch.sampleRate);b.copyToChannel(ch.pcm,0);
+  const src=c.createBufferSource();src.buffer=b;src.connect(A.voice);src.start(t);voiceSrcs.push(src);
+  starts.push([t,ch,b.duration]);t+=b.duration+.3}                   // 0.3 s between sentences, like a TTS sentence break
+ const end=t+.4,step=createVoiceAnalysis(c);let last=performance.now(),curSeq=-1; // a 0.7 s tail: the last phrase gets its pause (question check, blink)
+ const tick=()=>{
+  if(tok!==speakTok||S.phase!=='speaking'){for(const s2 of[big,stage]){s2.mouth=0;s2.vis=null;s2.pro=null}return}
+  const now=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;
+  const useTone=toneMode()&&!RM(),st=step(now,dt,useTone);
+  for(const s2 of[big,stage]){s2.mouth=st.mouth;s2.vis=useTone?st:null;s2.pro=useTone?st:null}
+  const cur=[...starts].reverse().find(([st0])=>c.currentTime>=st0);
+  if(cur&&cur[1].seq!==curSeq){curSeq=cur[1].seq;
+   if(toneMode()){S.emo=cur[1].mood;render()}                  // L3: the sentence's own mood, 0.6 s transition from the mockup
+   $('#ans').innerHTML=`<span>${cur[1].text}</span> <span class="m">${curSeq+1}/${chunks.length}</span>`+
+    `<div class="m">🔊 ${cur[1].label}${toneMode()?` · [[${cur[1].mood}]]`:''}</div>`}
+  if(useTone&&cur&&/[?？]\s*$/.test(cur[1].text)&&c.currentTime>cur[0]+cur[2]-.6)step.ask(now); // question by text: robust where the voice does not rise (ru)
+  if(c.currentTime>=end){finishSpeak(tok);return}
+  requestAnimationFrame(tick)};
+ requestAnimationFrame(tick)}
+function speakSynthetic(tok){
+ const ms=3400;try{voiceStart(ms)}catch(e){}
+ $('#ans').innerHTML=S.ansText+'<div class="m">(синтетический лепет: образцы речи недоступны)</div>';
+ const ampAt=n=>{const t=n/1000,syl=Math.max(0,Math.sin(t*TAU*3.4+1.2*Math.sin(t*TAU*.6))),ph=clamp(Math.sin(t*TAU*.42)*2.2+.7);return clamp(Math.pow(syl,.8)*ph*(.75+.25*Math.sin(t*5.3)))}; // mockup ampAt
+ const amp=()=>{if(tok!==speakTok||S.phase!=='speaking'){big.mouth=stage.mouth=0;return}big.mouth=stage.mouth=ampAt(performance.now());requestAnimationFrame(amp)};amp();
+ setTimeout(()=>finishSpeak(tok),ms)}
+function finishSpeak(tok){if(tok!==speakTok)return;policy.speaking=false;for(const s2 of[big,stage]){s2.mouth=0;s2.vis=null;s2.pro=null}voiceSrcs=[];S.emo=S.pickEmo;
+ if(S.phase==='speaking'){S.phase='settle';render();setTimeout(()=>{if(tok===speakTok&&S.phase==='settle'){S.phase='idle';render()}},1000)}} // mockup «settle»: sphere, «Done», 1 s
+/* placeholder for the assistant's spoken reply (stage 3 TTS): formant babble, only to show ducking */
+let voiceNodes=null;
+function voiceStart(ms){
+ const c=audio();if(c.state==='suspended')c.resume();voiceStop();
+ const src=c.createOscillator();src.type='sawtooth';src.frequency.value=165;
+ const f1=c.createBiquadFilter(),f2=c.createBiquadFilter();f1.type=f2.type='bandpass';f1.Q.value=f2.Q.value=7;
+ const env=c.createGain();env.gain.value=0;src.connect(f1);src.connect(f2);f1.connect(env);f2.connect(env);env.connect(A.voice);
+ const t=c.currentTime,R=rng(9);let k=t;
+ while(k<t+ms/1000){const syl=.12+.14*R();f1.frequency.setValueAtTime(380+500*R(),k);f2.frequency.setValueAtTime(1100+1300*R(),k);
+  src.frequency.setValueAtTime(150+40*R(),k);env.gain.setValueAtTime(0,k);env.gain.linearRampToValueAtTime(db(-12),k+syl*.3);env.gain.linearRampToValueAtTime(0,k+syl);k+=syl+(R()<.18?.18:.03)}
+ src.start(t);src.stop(k+.05);voiceNodes={src,env}}
+function voiceStop(){ // cancel: the voice fades out in 80 ms, late chunks never start
+ speakTok++;if(voiceNodes){try{voiceNodes.src.stop()}catch(e){}voiceNodes=null}
+ if(voiceSrcs.length&&A.ctx){const c=A.ctx,t=c.currentTime;A.voice.gain.cancelScheduledValues(t);A.voice.gain.setValueAtTime(A.voice.gain.value,t);A.voice.gain.linearRampToValueAtTime(0,t+.08);
+  for(const s2 of voiceSrcs){try{s2.stop(t+.09)}catch(e){}}A.voice.gain.setValueAtTime(1,t+.1)}
+ voiceSrcs=[];policy.speaking=false;big.amp=stage.amp=0;big.mouth=stage.mouth=0}
+
+/* ================= cue policy (#9 §4): dedup, cooldown, coalescing, priority, budget ================= */
+const PRI={error:5,permission:4,question:4,plan:4,done:3,start:2,'listen-start':2,'listen-end':2,speak:2,decide:2,open:1,close:1,hover:0,tool:0,thinking:0,unmute:0};
+const COOL={done:2000,start:3000,permission:1200,question:1200,plan:1200,error:2000,hover:600,tool:250,thinking:1500,open:300,close:300};
+const GAP=90,BUDGET_N=3,BUDGET_MS=10000; // budget: Done only; requests and errors are never budgeted
+const policy={keys:new Set(),last:{},slot:0,loud:[],speaking:false,coalesced:{}};
+function cue(kind,{key=kind+'-'+performance.now().toFixed(1),eligible=true,why=''}={}){
+ const now=performance.now();let verdict='played',note='';
+ if(policy.keys.has(key)){verdict='silent';note='тот же ключ уже звучал'}
+ else{policy.keys.add(key);
+  if(!eligible){verdict='silent';note=why||'не положено звучать'}
+  else if(A.muted||A.vol===0){verdict='silent';note='звук выключен'}
+  else if(policy.speaking&&PRI[kind]<=1){verdict='silent';note='помощник говорит: интерфейсные сигналы молчат'}
+  else if(COOL[kind]&&policy.last[kind]!==undefined&&now-policy.last[kind]<COOL[kind]){
+   verdict='held';policy.coalesced[kind]=(policy.coalesced[kind]||0)+1;note=`слито в прошлый сигнал (+${policy.coalesced[kind]} за ${COOL[kind]/1000} с)`}
+  else{
+   const loud=kind==='done';policy.loud=policy.loud.filter(t=>now-t<BUDGET_MS);
+   if(loud&&policy.loud.length>=BUDGET_N){verdict='held';note=`бюджет: ${BUDGET_N} Done за ${BUDGET_MS/1000} с`}
+   else{policy.last[kind]=now;policy.coalesced[kind]=0;if(loud)policy.loud.push(now);
+    const at=Math.max(now,policy.slot+GAP),wait=at-now;
+    const duck=policy.speaking&&PRI[kind]<4;
+    if(wait>400){verdict='held';note='очередь занята'}
+    else{policy.slot=at;setTimeout(()=>synth(kind,{duck}),wait);if(wait>1)note=`через ${Math.round(wait)} мс`;if(duck)note+=(note?', ':'')+'тише на 10 дБ: помощник говорит'}}}}
+ log(kind,verdict,note);return verdict}
+const KIND_RU={start:'агент начал',thinking:'думает',tool:'шаг',permission:'разрешение',question:'вопрос',plan:'план',done:'Done',error:'ошибка',hover:'наведение',open:'открыть',close:'закрыть','listen-start':'слушает','listen-end':'дослушал',speak:'говорит',decide:'решение',unmute:'звук включён'};
+function log(kind,verdict,note){
+ const li=document.createElement('li');li.className=verdict;
+ const t=new Date(),ts=t.toLocaleTimeString('ru-RU',{hour12:false})+'.'+String(t.getMilliseconds()).padStart(3,'0');
+ const V={played:'♪ звучит',held:'⏸ без звука',silent:'— тихо'};
+ li.innerHTML=`<span class="r">${ts}</span><span class="k">${KIND_RU[kind]||kind}</span><span>${V[verdict]}${note?' · <span class="r">'+note+'</span>':''}</span>`;
+ const ol=$('#logList');ol.prepend(li);while(ol.children.length>40)ol.lastChild.remove()}
+
+/* ================= island model and views ================= */
+const S={emo:'calm',pickEmo:'calm',ansText:'',view:'pill',ret:false,hover:false,working:0,waiting:0,done:0,rows:[],card:null,asst:false,phase:'idle',agentPhase:'idle',busyT:null,armT:null};
+const shape=$('#shape'),content=$('#content');
+// #10: screens. 14″ — measured on this Mac through NSScreen (safeAreaInsets.top, auxiliaryTopLeft/RightArea) at 1512×982;
+// 16″ — an estimate (the product reads the real numbers from the display, spec §12.2).
+const SCR={mbp14:{name:'MacBook Pro 14″',nw:185,nh:32,mb:38,src:'замер NSScreen, 1512×982'},
+ mbp16:{name:'MacBook Pro 16″',nw:185,nh:32,mb:38,src:'оценка, в продукте — датчик'},
+ ext:{name:'монитор без выреза',nw:0,nh:0,mb:25,src:'выреза нет'}};
+const D={scr:'mbp14',formH:'notch',idle:'ears',fs:false};
+const notchOn=()=>SCR[D.scr].nw>0;
+function formH(){const c=SCR[D.scr];return D.formH==='mb'?c.mb:c.nh}
+function earStatus(){
+ if(S.agentPhase==='error')return'<span class="sd e"></span>!';
+ if(S.waiting)return`<span class="sd n"></span>${S.waiting}`;
+ if(S.working)return`<span class="sd w"></span>${S.working}`;
+ return S.done?`✅ ${S.done}`:''}
+// The notch form: tucked — the bare notch (or the ears with ✅ N); hover, a request or the assistant drop it down.
+function nView(){if(S.ret)return S.done>0?'ncomp':'nhide';if(S.asst)return'big';if(S.card)return'card';if(S.hover)return'pill';
+ return S.working||S.waiting||S.done||S.agentPhase==='error'||D.idle==='ears'?'ncomp':'nhide'}
+function applyScreen(snap){const c=SCR[D.scr],r=document.documentElement.style,on=c.nw>0;
+ r.setProperty('--nw',c.nw+'px');r.setProperty('--nh',c.nh+'px');r.setProperty('--fh',(on?formH():0)+'px');r.setProperty('--mb',c.mb+'px');
+ document.body.classList.toggle('notch',on);document.body.classList.toggle('fs',D.fs);shape.classList.toggle('notch',on);
+ // another display: the form snaps to its new resting size without a morph
+ if(snap){shape.style.transition='none';requestAnimationFrame(()=>requestAnimationFrame(()=>shape.style.transition=''))}
+ render()}
+let prevArea=0;
+function measure(){const w=Math.ceil(content.offsetWidth),h=Math.ceil(content.offsetHeight);if(!w||!h)return;
+ const area=w*h;shape.classList.toggle('shrink',area<prevArea);prevArea=area;shape.style.width=w+'px';shape.style.height=h+'px'}
+new ResizeObserver(measure).observe(content);
+function pillText(){const p=[S.working?`${S.working} working`:null,S.waiting?`${S.waiting} waiting`:null,S.done?`✅ ${S.done} done`:null].filter(Boolean);return p.length?p.join(' · '):'No agents running'}
+function render(){
+ const v=notchOn()?nView():S.ret?(S.done>0?'peek':'bar'):S.asst?'big':S.card?'card':'pill';
+ if(notchOn()){const st=earStatus(),m=$('#earMeasure');$('#earR').innerHTML=st;m.innerHTML=st;   // both ears share one width: the form stays centred on the notch
+  document.documentElement.style.setProperty('--ear',Math.max(formH()+4,Math.ceil(m.offsetWidth)+18)+'px')}
+ if(v!==S.view){S.view=v;$$('.v').forEach(e=>e.classList.remove('on'));void content.offsetWidth}
+ shape.dataset.view=v;$(`.v-${v}`).classList.add('on');
+ $('#peekTxt').textContent=`✅ ${S.done}`;$('#pillTxt').textContent=pillText();
+ $('#cnt').style.color=S.working||S.waiting||S.done?'':'var(--mut)';
+ const list=$('#list');const showList=S.hover&&S.rows.length>0&&v==='pill';list.hidden=!showList;
+ if(showList)list.innerHTML=`<div class="grp">Parley · Улучшайзинг</div>`+S.rows.map(r=>`<div class="row"><span class="sd ${r.st}"></span><span class="nm">${r.name}</span><span class="t">${r.t}</span></div>`).join('')+(S.done?`<div class="clear"><button id="clr">Clear</button></div>`:'');
+ shape.classList.toggle('hov',S.hover&&!S.ret);
+ // swarm looks
+ const ph=S.asst?S.phase:S.agentPhase;
+ mini.setSpec(specFor(S.asst?S.phase:S.agentPhase,true));ear.setSpec(specFor(S.asst?S.phase:S.agentPhase,true));seat.setSpec(specFor(S.card?'confirm':S.agentPhase,true));
+ big.setSpec(specFor(S.phase,false));stage.setSpec(specFor(ph,false));
+ const busy=ph!=='idle';mini.fps=ear.fps=busy?30:0;seat.fps=S.card?30:0;big.fps=60;stage.fps=60;
+ const halo=specFor(ph,false);for(const id of['#halo','#halo2']){const h=$(id);h.style.setProperty('--hc',PAL[halo.pal].h);h.style.setProperty('--ha',haloAlpha(ph))}
+ const L={idle:'Ready',listening:'Listening…',thinking:'Thinking…',tool:'Checking rooms…',answering:'Answering',speaking:'Speaking',settle:'Done',confirm:'Confirm to send',error:'Something went wrong',offline:'Offline'};
+ $('#lblTxt').textContent=L[S.phase]||S.phase;$('#lbl').className='lbl'+(S.phase==='listening'?' listen':S.phase==='error'?' err':S.phase==='confirm'?' conf':'');
+ hud()}
+function hud(){
+ const f=s=>s.cv.offsetParent===null?'скрыт':`${s.mfps} к/с${s.fps?'':' (только переходы)'}`;
+ const c=SCR[D.scr];
+ $('#hud').innerHTML=`<b>Экран:</b> ${c.name} · ${c.nw?`вырез ${c.nw}×${c.nh}, строка меню ${D.fs?'скрыта':c.mb} (${c.src})`:'без выреза: полоса как сейчас'}<br>`+
+  (c.nw?`<b>Форма:</b> ${shape.style.width||'—'} × ${shape.style.height||'—'} · уши по ${getComputedStyle(document.documentElement).getPropertyValue('--ear').trim()}`+
+   (D.fs?' · эвристика notchInset дала бы 0 (строка меню скрыта), датчик выреза — нет':'')+'<br>':'')+
+  `<b>Палитра:</b> ${PALS[A.pal].name} · <b>громкость</b> ${A.muted?'выкл':Math.round(A.vol*100)+'%'}<br>`+
+  `<b>Вид:</b> ${S.view} · агенты: ${S.agentPhase} · помощник: ${S.asst?S.phase:'закрыт'}<br>`+
+  `мини-рой: ${f(mini)} · место в карточке: ${f(seat)}<br>большой рой: ${f(big)} · крупный план: ${f(stage)}<br>`+
+  `движение: ${RM()?'reduced (статичные кадры + вспышки)':'полное'}`+
+  (S.phase==='speaking'?`<br><b>Голос:</b> анализ ${VA.ms.toFixed(2)} мс/кадр · F0 ${VA.f0||'—'} Гц · рот: ${VA.vis} · эмоция: ${S.emo}`:'')}
+setInterval(hud,500);
+function reactAll(name,targets){for(const s of targets)s.react(name)}
+const agentTargets=()=>S.asst?[mini,ear,stage]:[mini,ear,seat,stage];
+function expand(){if(S.ret){S.ret=false}}
+function setAgentPhase(p,ms){S.agentPhase=p;clearTimeout(S.busyT);if(ms)S.busyT=setTimeout(()=>{S.agentPhase=S.working?'thinking':'idle';render()},ms)}
+let nameI=0;const NAMES=['S03 Ruslan · Auth','S07 Mila · Billing','S12 Astra · Browser','S19 Ivo · Docs','S24 Lea · Search','S31 Oto · CLI'];
+function addRow(st){const r={name:NAMES[nameI++%NAMES.length],st,t:st==='d'?'now':''};S.rows.push(r);return r}
+function openCard(kind){
+ const B=$('#cardBody'),btns=$('#cardBtns');S.card=kind;S.waiting++;
+ $('#cardKind').textContent={permission:'1 of 1',question:'question',plan:'plan'}[kind];
+ if(kind==='permission'){B.innerHTML='<div class="mono">Bash: pnpm test --filter @parley/auth</div>';btns.innerHTML='<button class="pri">Allow</button><button class="out">Always</button><button class="out">Deny</button>'}
+ if(kind==='question'){B.innerHTML='<div class="qtext">Какой набор тестов оставить на Safari?</div>';btns.innerHTML='<button class="out">Только smoke</button><button class="out">Полный</button><button class="out">Пропустить</button>'}
+ if(kind==='plan'){B.innerHTML='<ol class="plan"><li>Вынести SoundEngine в renderer/island/sound</li><li>Связать IslandCue с политикой сигналов</li><li>Добавить реакции роя и настройки</li></ol>';btns.innerHTML='<button class="pri">Approve</button><button class="out">Change</button>'}
+ // decision buttons arm after 500 ms, as in the island (CARD_ARM_MS)
+ const bs=[...btns.querySelectorAll('button')];bs.forEach(b=>{b.disabled=true;b.onclick=()=>decide()});clearTimeout(S.armT);S.armT=setTimeout(()=>bs.forEach(b=>b.disabled=false),500)}
+function decide(){S.card=null;S.waiting=Math.max(0,S.waiting-1);cue('decide');setAgentPhase('tool',1800);render()}
+
+/* ================= events ================= */
+const EV={
+ start(){expand();S.working++;addRow('w');setAgentPhase('thinking');render();reactAll('breathe',agentTargets());cue('start',{eligible:$('#cbUi').checked,why:'звуки интерфейса выключены'})},
+ thinking(){expand();if(!S.working){S.working++;addRow('w')}const entering=S.agentPhase!=='thinking';setAgentPhase('thinking');render();
+  if(entering)cue('thinking',{eligible:false,why:'«думает» молчит всегда'})},
+ tool(){expand();if(!S.working){S.working++;addRow('w')}setAgentPhase('tool');render();reactAll('glint',agentTargets());cue('tool',{eligible:false,why:'шаги молчат всегда'})},
+ permission(){attention('permission','hop')},
+ question(){attention('question','nod')},
+ plan(){attention('plan','hop')},
+ done(opts={}){
+  const quiet=$('#cbQuiet').checked;S.working=Math.max(0,S.working-1);
+  const w=S.rows.find(r=>r.st==='w');if(w){w.st='d';w.t='now'}else addRow('d');S.done++;
+  if(!quiet)expand();setAgentPhase('idle');render();
+  if(!quiet||!S.ret)reactAll('spin',agentTargets());
+  cue('done',{eligible:!quiet&&$('#cbDoneSnd').checked,why:quiet?'тихий Done: сессия уже на экране (#8)':'звук у Done выключен',key:opts.key})},
+ error(){
+  if(S.asst){S.phase='error';render();reactAll('shake',[big,stage]);cue('error');setTimeout(()=>{if(S.phase==='error'){S.phase='idle';render()}},3200)}
+  else{expand();setAgentPhase('error',3200);render();reactAll('shake',agentTargets());cue('error')}},
+ hover(){S.hover=!S.hover;if(S.hover)expand();render();if(S.hover){reactAll('lean',[mini]);cue('hover',{eligible:$('#cbUi').checked,why:'звуки интерфейса выключены'})}},
+ open(){if(!S.ret&&S.hover)return;S.ret=false;S.hover=true;render();cue('open',{eligible:$('#cbUi').checked,why:'звуки интерфейса выключены'})},
+ close(){if(S.ret)return;S.hover=false;S.asst=false;S.ret=true;render();cue('close',{eligible:$('#cbUi').checked,why:'звуки интерфейса выключены'})},
+ listen(){
+  if(!S.asst){S.asst=true;S.ret=false}
+  if(S.phase==='listening'){S.phase='thinking';render();cue('listen-end');return}
+  voiceStop(); // the human starts talking over the reply: barge-in cancels speech
+  S.phase='listening';$('#ans').textContent='';render();cue('listen-start')},
+ speak(){
+  if(!S.asst){S.asst=true;S.ret=false}
+  voiceStop();const tok=++speakTok;
+  // the answer streams as a sphere with flow; the face speaks after it (mockup «finish», stage-3 plan)
+  S.phase='answering';S.ansText='';$('#ans').textContent='';render();
+  const lang=$('#voiceLang').value,words=REPLY[lang].text.join(' ').split(' ');let i=0;S.emo=S.pickEmo;
+  const iv=setInterval(()=>{if(tok!==speakTok){clearInterval(iv);return}S.ansText=words.slice(0,++i).join(' ');$('#ans').textContent=S.ansText;if(i>=words.length)clearInterval(iv)},35);
+  Promise.all([loadVoice(lang),new Promise(r=>setTimeout(r,Math.max(1300,words.length*35+200)))]).then(([chunks])=>{
+   if(tok!==speakTok||S.phase!=='answering')return;
+   if(toneMode()&&chunks.length)S.emo=chunks[0].mood;
+   S.phase='speaking';render();cue('speak');policy.speaking=true;
+   if(chunks.length)speakChunks(chunks,tok);else speakSynthetic(tok)})},
+ 'asst-close'(){S.asst=false;S.phase='idle';voiceStop();policy.speaking=false;render()},
+ storm(){for(let i=0;i<5;i++){setTimeout(()=>{if(!S.working){S.working++;addRow('w')}EV.done()},i*60)}setTimeout(()=>EV.permission(),340)},
+ scenario(){runScenario()},
+ reset(){clearTimeout(S.busyT);Object.assign(S,{ret:false,hover:false,working:0,waiting:0,done:0,rows:[],card:null,asst:false,phase:'idle',agentPhase:'idle'});
+  voiceStop();policy.speaking=false;policy.last={};policy.loud=[];render()}};
+function attention(kind,react){expand();if(!S.working){S.working++;addRow('n')}else{const w=S.rows.find(r=>r.st==='w');if(w)w.st='n'}
+ openCard(kind);setAgentPhase('confirm');render();reactAll(react,agentTargets());cue(kind)}
+let scenTok=0;
+async function runScenario(){const my=++scenTok,w=ms=>new Promise((r,j)=>setTimeout(()=>my===scenTok?r():j(),ms));
+ try{EV.reset();await w(500);EV.start();await w(1600);EV.tool();await w(700);EV.tool();await w(700);EV.tool();await w(1200);
+  EV.permission();await w(2200);decide();await w(1800);EV.start();await w(1500);EV.done();await w(2200);EV.done();await w(2500);EV.close()}catch(e){}}
+
+/* ================= wiring ================= */
+document.addEventListener('pointerdown',()=>{try{audio()}catch(e){}},{once:true});
+$('#panel').addEventListener('click',e=>{const b=e.target.closest('button[data-ev]');if(b){audio();EV[b.dataset.ev]();if(e.detail)b.blur()}});
+$$('#pals button').forEach(b=>b.onclick=()=>{A.pal=b.dataset.pal;$$('#pals button').forEach(x=>x.classList.toggle('on',x===b));audio();synth('done');log('done','played','пример палитры')});
+$('#vol').oninput=e=>{A.vol=e.target.value/100;$('#volTxt').textContent=e.target.value+'%';applyGain()};
+$('#vol').onchange=()=>{audio();if(!A.muted)synth('decide')};
+const setMute=m=>{A.muted=m;$('#cbMute').checked=m;applyGain();if(!m){audio();synth('unmute');log('unmute','played','подтверждение')}};
+$('#cbMute').onchange=e=>setMute(e.target.checked);
+const setRM=()=>{document.body.classList.toggle('rm',sysRM.matches||$('#cbRM').checked);SW.forEach(s=>{s.tr0=-1e9;s.dirty=true;s.palT=1});render()};
+$('#cbRM').checked=sysRM.matches;$('#cbRM').onchange=setRM;sysRM.addEventListener?.('change',setRM);
+$$('#emos button').forEach(b=>b.onclick=()=>{S.emo=S.pickEmo=b.dataset.emo;$$('#emos button').forEach(x=>x.classList.toggle('on',x===b));audio();if(S.phase==='speaking')render();else EV.speak()});
+$('#prof').onchange=e=>{const r=document.documentElement.style;
+ if(e.target.value==='cur'){r.setProperty('--grow-d','250ms');r.setProperty('--grow-e','ease-out');r.setProperty('--shrink-d','250ms');r.setProperty('--shrink-e','ease-out');r.setProperty('--rev-d','180ms');r.setProperty('--rev-delay','0ms')}
+ else for(const p of['--grow-d','--grow-e','--shrink-d','--shrink-e','--rev-d','--rev-delay'])r.removeProperty(p)};
+shape.addEventListener('pointerenter',()=>{if(S.ret)return;S.hover=true;render();reactAll('lean',[mini]);cue('hover',{eligible:$('#cbUi').checked,why:'звуки интерфейса выключены'})});
+shape.addEventListener('pointerleave',()=>{S.hover=false;render()});
+shape.addEventListener('click',e=>{if(S.ret){audio();S.ret=false;S.hover=true;render();cue('open',{eligible:$('#cbUi').checked,why:'звуки интерфейса выключены'});return}if(e.target.id==='clr'){S.rows=S.rows.filter(r=>r.st!=='d');S.done=0;render()}});
+$('#tuck').onclick=()=>EV.close();
+$$('#scrs button').forEach(b=>b.onclick=()=>{D.scr=b.dataset.scr;$$('#scrs button').forEach(x=>x.classList.toggle('on',x===b));applyScreen(true)});
+$('#formH').onchange=e=>{D.formH=e.target.value;applyScreen(false)};
+$('#idleMode').onchange=e=>{D.idle=e.target.value;render()};
+$('#cbFs').onchange=e=>{D.fs=e.target.checked;applyScreen(false)};
+$('#cbOutline').onchange=e=>document.body.classList.toggle('outline',e.target.checked);
+$('#dot').onclick=e=>{e.stopPropagation();EV.listen()};
+document.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
+ const map={'1':'start','2':'thinking','3':'tool','4':'permission','5':'question','6':'plan','7':'done','8':'error'};
+ if(map[e.key]){audio();EV[map[e.key]]()}else if(e.key==='m'||e.key==='M')setMute(!A.muted);else if(e.key==='r'||e.key==='R')EV.reset();else if(e.key==='Escape'&&S.asst)EV['asst-close']()});
+shape.style.transition='none';measure();requestAnimationFrame(()=>requestAnimationFrame(()=>shape.style.transition=''));
+setRM();applyScreen(true);
+window.__proto={S,A,policy,cue,EV,SW,VA,render,D,applyScreen};
+})();
+</script>
+</body>
+</html>
