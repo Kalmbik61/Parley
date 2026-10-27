@@ -78,6 +78,8 @@ export interface IslandApi {
   keyboard(on: boolean): void;
   /** Хоткей или палитра открыли помощника. */
   onAssistantOpen(listener: (request: AssistantOpenRequest) => void): () => void;
+  /** Main registered the queue shortcut; focus the island and arm pending-item navigation. */
+  onNavigatePending(listener: () => void): () => void;
   /** Панель потеряла фокус, пока держала клавиатуру (клик в другое приложение): выйти из режима, как по Esc или ⌃. */
   onKeyboardBlur(listener: () => void): () => void;
   /** Голос для помощника — те же каналы `voice:*`, что у окна. */

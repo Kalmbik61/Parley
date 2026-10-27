@@ -125,6 +125,8 @@ function setup(
     isIslandSender?: (sender: unknown) => boolean;
     islandActive?: () => boolean;
     reportSessionVisibility?: (event: { sender?: unknown; senderFrame?: unknown }, value: unknown) => void;
+    islandShortcut?: () => { accelerator: string | null; ok: boolean };
+    suspendIslandShortcut?: (on: boolean) => void;
   } = {},
 ): {
   ipcMain: FakeIpcMain;
@@ -228,6 +230,8 @@ function setup(
     ...(overrides.isIslandSender === undefined ? {} : { isIslandSender: overrides.isIslandSender }),
     ...(overrides.islandActive === undefined ? {} : { islandActive: overrides.islandActive }),
     ...(overrides.reportSessionVisibility === undefined ? {} : { reportSessionVisibility: overrides.reportSessionVisibility }),
+    ...(overrides.islandShortcut === undefined ? {} : { islandShortcut: overrides.islandShortcut }),
+    ...(overrides.suspendIslandShortcut === undefined ? {} : { suspendIslandShortcut: overrides.suspendIslandShortcut }),
     setBadge: vi.fn(),
     showItemInFolder,
     roots,
@@ -273,6 +277,13 @@ function setup(
 }
 
 describe('registerIpc', () => {
+  it('exposes island shortcut status and suspends only through its dedicated IPC', async () => {
+    const suspend = vi.fn();
+    const { ipcMain } = setup({ islandShortcut: () => ({ accelerator: 'Control+Alt+I', ok: false }), suspendIslandShortcut: suspend });
+    expect(await ipcMain.invoke('app:island-shortcut')).toEqual({ accelerator: 'Control+Alt+I', ok: false });
+    ipcMain.invoke('app:island-shortcut-suspend', true);
+    expect(suspend).toHaveBeenCalledWith(true);
+  });
   it('terminal session target is additive, while cardId+terminal and other view values are rejected', () => {
     const session = { kind: 'session', ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-01' } };
     expect(isFocusTarget(session)).toBe(true);

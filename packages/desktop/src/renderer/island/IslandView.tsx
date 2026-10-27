@@ -95,6 +95,7 @@ export interface IslandViewProps {
   labels: ReadonlyMap<string, { session: string; work: string; project: string }>;
   api: IslandApi;
   requestKeyboard: boolean;
+  navigationKey?: string | null;
   onTakeRequestKeyboard(): void;
   /** Ссылка на внешнюю форму: `IslandApp` по ней замеряет область, которую остров ловит мышью. */
   shapeRef: Ref<HTMLDivElement>;
@@ -166,10 +167,10 @@ function Pill(props: IslandViewProps): JSX.Element {
 type RoomRow = Extract<IslandRow, { kind: 'room' }>;
 type SessionRow = Extract<IslandRow, { kind: 'session' }>;
 
-function RoomLine({ room, api }: { room: RoomRow; api: IslandApi }): JSX.Element {
+function RoomLine({ room, api, selected }: { room: RoomRow; api: IslandApi; selected?: boolean }): JSX.Element {
   return <div data-testid="island-room" className="flex min-w-0 flex-wrap gap-1 text-[13px] text-foreground/75">
     {room.proposal === undefined ? null : <span className="min-w-0 truncate">{room.title}</span>}
-    <button type="button" className="min-w-0 cursor-pointer truncate text-left hover:underline" onClick={() => api.open(rowTarget(room))}>
+    <button type="button" aria-current={selected ? 'true' : undefined} className={`min-w-0 cursor-pointer truncate rounded text-left hover:underline ${selected ? 'ring-1 ring-ring' : ''}`} onClick={() => api.open(rowTarget(room))}>
       {room.proposal === undefined ? room.title : S.island.openRoom}
     </button>
     <span className="shrink-0">· {room.proposal === undefined
@@ -216,7 +217,8 @@ function DoneLine({ row, api }: { row: Extract<SessionRow, { state: 'done' }>; a
   );
 }
 
-function List({ model, api, onClearDone, progress }: IslandViewProps): JSX.Element {
+function List(props: IslandViewProps): JSX.Element {
+  const { model, api, onClearDone, progress } = props;
   return (
     <div data-testid="island-list" className="island-reveal flex w-[400px] flex-col text-sm">
       {/* Прокручиваются только работы; «Clear» — ниже, вне прокрутки, и с ней не уезжает. */}
@@ -229,7 +231,7 @@ function List({ model, api, onClearDone, progress }: IslandViewProps): JSX.Eleme
             {/* Комнаты работы — подзаголовком под названием, по строке на комнату; имя комнаты открывает её. */}
             {group.rows
               .filter((row): row is RoomRow => row.kind === 'room')
-              .map((room) => <RoomLine key={room.key} room={room} api={api} />)}
+              .map((room) => <RoomLine key={room.key} room={room} api={api} selected={props.navigationKey === `room:${room.key}`} />)}
             {group.rows
               .filter((row): row is SessionRow => row.kind === 'session')
               .map((row) => {
@@ -330,11 +332,11 @@ function useRequestFocus(identity: string | null, owned: boolean, takeKeyboard: 
   };
 }
 
-function ConsentRequest({ consent, showId, owned, takeKeyboard }: { consent: IslandConsentProps; showId: number; owned: boolean; takeKeyboard(): void }): JSX.Element {
+function ConsentRequest({ consent, showId, owned, selected, takeKeyboard }: { consent: IslandConsentProps; showId: number; owned: boolean; selected: boolean; takeKeyboard(): void }): JSX.Element {
   const { card } = consent;
   const identity = JSON.stringify([showId, card.id, card.kind, card.folder, card.projectPath, card.requestedBy]);
   const focus = useRequestFocus(identity, owned, takeKeyboard);
-  return <div {...focus} data-testid="island-consent-request"><ConsentView key={identity} {...consent} /></div>;
+  return <div {...focus} data-testid="island-consent-request" aria-current={selected ? 'true' : undefined} className={selected ? 'rounded ring-1 ring-ring' : undefined}><ConsentView key={identity} {...consent} /></div>;
 }
 
 function Card(props: IslandViewProps & { questionDraft: QuestionFormDraft; onQuestionDraft(next: QuestionFormDraft): void; onQuestionSubmit(decision: Extract<FeedDecision, { kind: 'question' }>): void }): JSX.Element | null {
@@ -379,7 +381,8 @@ function Card(props: IslandViewProps & { questionDraft: QuestionFormDraft; onQue
       key={showKey}
       {...focus}
       data-testid="island-card"
-      className="island-reveal flex min-h-0 w-[440px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm"
+      aria-current={props.navigationKey === `feed:${item.key}` ? 'true' : undefined}
+      className={`island-reveal flex min-h-0 w-[440px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm ${props.navigationKey === `feed:${item.key}` ? 'rounded ring-1 ring-ring' : ''}`}
       style={item.card?.kind === 'question' || item.card?.kind === 'plan' ? { maxHeight: `calc(100vh - ${props.config.topInset + BOTTOM_RESERVE_PX}px)` } : undefined}
     >
       <div className="flex shrink-0 items-center gap-2">
@@ -490,6 +493,8 @@ export function IslandView(props: IslandViewProps): JSX.Element {
     <div
       ref={shapeRef}
       data-testid="island"
+      data-navigation-key={props.navigationKey ?? undefined}
+      tabIndex={props.requestKeyboard ? -1 : undefined}
       data-retracted={retracted}
       aria-hidden={retracted || undefined}
       className={`shrink-0 overflow-hidden bg-black text-sm text-foreground ${look} transition-[width,height,margin-top,border-radius,box-shadow] duration-[250ms] ease-out motion-reduce:transition-none ${drag.dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
@@ -509,7 +514,9 @@ export function IslandView(props: IslandViewProps): JSX.Element {
             {assistantBig ? (
               <AssistantView {...assistant.view} maxHeight={`calc(100vh - ${config.topInset + BOTTOM_RESERVE_PX}px)`} />
             ) : consent !== null ? (
-              <ConsentRequest consent={consent} showId={showId} owned={props.requestKeyboard} takeKeyboard={props.onTakeRequestKeyboard} />
+              <ConsentRequest consent={consent} showId={showId} owned={props.requestKeyboard} selected={props.navigationKey === `consent:${consent.card.id}`} takeKeyboard={props.onTakeRequestKeyboard} />
+            ) : props.navigationKey?.startsWith('room:') ? (
+              <><Pill {...props} />{model.groups.length > 0 ? <List {...props} /> : null}</>
             ) : items.length > 0 ? (
               <Card {...props} questionDraft={questionDraft} onQuestionDraft={onQuestionDraft} onQuestionSubmit={onQuestionSubmit} />
             ) : (

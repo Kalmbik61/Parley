@@ -62,6 +62,7 @@ import { islandModel, sessionLabels, type IslandRow } from './model.js';
 import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
 import { createProgressPoller, type ProgressState } from './progress.js';
+import { movePendingSelection, pendingKeyCommand, pendingNavigation, reconcilePendingNavigation, roomNavigationKey, type PendingNavigationState } from './navigation.js';
 
 /** Через сколько покоя (ничего не идёт, очереди нет, курсор не над формой, форму не тащат) остров убирается сам. */
 export const IDLE_RETRACT_MS = 4000;
@@ -158,6 +159,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     const active = document.activeElement;
     if (active instanceof HTMLElement && shapeRef.current?.contains(active)) active.blur();
     setOwner(null);
+    setNavSelectedKey(null);
   }, [setOwner]);
   useEffect(() => () => releaseKeyboard(), [releaseKeyboard]);
   /** Ключи запросов, что остров уже показывал: показанный раз не поднимает окно и не звучит повторно. */
@@ -248,6 +250,27 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
 
   const withCard = useMemo(() => new Set(items.filter((item) => item.inWindow).map((item) => refKey(item.ref))), [items]);
   const model = useMemo(() => islandModel(entries, byRef, withCard, cleared, held), [entries, byRef, withCard, cleared, held]);
+  const roomNavItems = useMemo(() => model.groups.flatMap((group) => group.rows)
+    .flatMap((row) => row.kind === 'room' && !row.done ? [{ key: roomNavigationKey(row.key), kind: 'room' as const,
+      target: { kind: 'room' as const, projectPath: row.projectPath, workId: row.workId, roomId: row.roomId } }] : []), [model]);
+  const navQueue = useMemo(() => pendingNavigation(consents, items, roomNavItems), [consents, items, roomNavItems]);
+  const navQueueRef = useRef<PendingNavigationState>(navQueue);
+  navQueueRef.current = navQueue;
+  const previousNavQueueRef = useRef<PendingNavigationState>(navQueue);
+  const [navSelectedKey, setNavSelectedKey] = useState<string | null>(null);
+  const navKeyRef = useRef<string | null>(navSelectedKey);
+  navKeyRef.current = navSelectedKey;
+  useEffect(() => {
+    const previous = previousNavQueueRef.current;
+    setNavSelectedKey((key) => key === null ? null : reconcilePendingNavigation({ ...previous, selectedKey: key }, navQueue.items).selectedKey);
+    previousNavQueueRef.current = navQueue;
+  }, [navQueue.items]);
+  useEffect(() => bridge.island.onNavigatePending(() => {
+    setRetracted(false);
+    setListOpen(true);
+    setOwner('request');
+    setNavSelectedKey(navQueueRef.current.selectedKey);
+  }), [bridge, setOwner]);
   const doneRows = useMemo(
     () => model.groups.flatMap((group) => group.rows).filter((row): row is DoneRow => row.kind === 'session' && row.state === 'done'),
     [model],
@@ -260,6 +283,9 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   const configRef = useRef(config);
   configRef.current = config;
   const assistant = useAssistantStore();
+  useEffect(() => {
+    if (keyboardOwner === 'request' && !assistant.open) requestAnimationFrame(() => shapeRef.current?.focus());
+  }, [keyboardOwner, assistant.open]);
   const busy = assistantBusy(assistant);
 
   useEffect(() => {
@@ -419,15 +445,35 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   useEffect(() => {
     if (!assistant.open && keyboardOwner === null) return;
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape' || event.isComposing) return;
+      const target = event.target;
+      const editable = target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
       if (ownerRef.current === 'request') {
-        event.preventDefault();
-        releaseKeyboard();
-      } else if (assistant.open) useAssistantStore.getState().close();
+        const command = pendingKeyCommand({ key: event.key, ctrlKey: event.ctrlKey, isComposing: event.isComposing, repeat: event.repeat, editable });
+        if (command === 'escape') { event.preventDefault(); releaseKeyboard(); return; }
+        if (command === 'next' || command === 'previous') {
+          event.preventDefault();
+          const next = movePendingSelection({ ...navQueueRef.current, selectedKey: navKeyRef.current }, command === 'next' ? 1 : -1);
+          navKeyRef.current = next.selectedKey;
+          setNavSelectedKey(next.selectedKey);
+          const selected = next.items.find((item) => item.key === next.selectedKey);
+          if (selected?.kind === 'feed') {
+            const key = selected.key.slice('feed:'.length);
+            const at = items.findIndex((item) => item.key === key);
+            if (at >= 0) useIslandRequests.getState().select(at);
+          }
+          return;
+        }
+        if (command === 'open') {
+          const selected = navQueueRef.current.items.find((item) => item.key === navKeyRef.current);
+          if (selected?.target !== undefined) { event.preventDefault(); bridge.island.open(selected.target); }
+          return;
+        }
+      }
+      if (event.key === 'Escape' && !event.isComposing && assistant.open) useAssistantStore.getState().close();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [assistant.open, keyboardOwner, releaseKeyboard]);
+  }, [assistant.open, keyboardOwner, releaseKeyboard, items, bridge]);
   const shown = connected && !retracted;
   const progressKey = progressSelected === null ? null : refKey(progressSelected);
   const progressSession = progressSelected === null ? undefined : entries
@@ -455,7 +501,8 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     if (progressSelected !== null && !progressRowPresent) setProgressSelected(null);
   }, [progressSelected, progressRowPresent]);
   const requestVisible = shown && config.islandEnabled && !(assistant.open && !assistant.collapsed) && consents.length === 0;
-  const requestAvailable = shown && config.islandEnabled && !(assistant.open && !assistant.collapsed) && (consents.length > 0 || selectedKey !== null);
+  const requestAvailable = shown && config.islandEnabled && !(assistant.open && !assistant.collapsed) &&
+    (consents.length > 0 || selectedKey !== null || roomNavItems.length > 0);
   useEffect(() => {
     if ((keyboardOwner === 'request' && !requestAvailable) ||
       (keyboardOwner === 'assistant' && (!connected || !config.assistant.enabled || !assistant.open || assistant.collapsed))) releaseKeyboard();
@@ -560,6 +607,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
         labels={labels}
         api={bridge.island}
         requestKeyboard={keyboardOwner === 'request'}
+        navigationKey={navSelectedKey}
         onTakeRequestKeyboard={takeRequestKeyboard}
         shapeRef={shapeRef}
         onDragStart={() => setDragging(true)}
@@ -574,9 +622,9 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
         onDecide={(key, decision) => void useIslandRequests.getState().decide(key, decision)}
         assistant={assistantProps}
         consent={
-          consents[0] === undefined
+          (consents.find((card) => `consent:${card.id}` === navSelectedKey) ?? (navSelectedKey === null ? consents[0] : undefined)) === undefined
             ? null
-            : { card: consents[0], deciding: consentDeciding === consents[0].id, note: consentNote, onDecide: (id, decision) => void useConsentsStore.getState().decide(id, decision) }
+            : { card: (consents.find((card) => `consent:${card.id}` === navSelectedKey) ?? (navSelectedKey === null ? consents[0] : undefined))!, deciding: consentDeciding === (consents.find((card) => `consent:${card.id}` === navSelectedKey) ?? (navSelectedKey === null ? consents[0] : undefined))!.id, note: consentNote, onDecide: (id, decision) => void useConsentsStore.getState().decide(id, decision) }
         }
       />
       {retracted ? (

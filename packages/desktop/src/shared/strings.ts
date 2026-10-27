@@ -2502,6 +2502,8 @@ export const S = {
       shortcutRecording: 'Press the keys…',
       shortcutTaken: 'This shortcut is taken by another app — choose another.',
       shortcutClaudeDesktop: 'Alt+Space is also the default Quick Entry shortcut in Claude Desktop. If the island does not open, change the shortcut here or there.',
+      islandShortcut: 'Open pending items',
+      islandShortcutOff: 'Turn shortcut off',
       glmSlow: 'GLM answers in about 13 seconds.',
     },
   },

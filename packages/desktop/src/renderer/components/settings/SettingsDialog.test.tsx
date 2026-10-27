@@ -402,6 +402,19 @@ describe('SettingsDialog — переключатель «Island»', () => {
     await waitFor(() => expect(saveUiSpy).toHaveBeenCalledTimes(1));
     expect(saveUiSpy.mock.calls[0]?.[0]).toStrictEqual({ island: { enabled: false } });
   });
+
+  it('records the island-only shortcut, suspends only its registration, and stores a field-only nested patch', async () => {
+    const bridge = createFakeBridge();
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    openSettings(bridge);
+    switchTo('Notifications');
+    const field = await screen.findByRole('button', { name: 'Open pending items' });
+    fireEvent.click(field);
+    expect(bridge.islandShortcutSuspended).toEqual([true]);
+    fireEvent.keyDown(field, { key: 'k', code: 'KeyK', ctrlKey: true, altKey: true });
+    await waitFor(() => expect(saveUiSpy).toHaveBeenCalledWith({ island: { pendingHotkey: 'Control+Alt+K' } }));
+    expect(bridge.islandShortcutSuspended).toEqual([true, false]);
+  });
 });
 
 describe('SettingsDialog — тест 10 куска 9.1: секция Browser', () => {

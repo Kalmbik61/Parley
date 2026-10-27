@@ -37,6 +37,8 @@ export interface IslandUi {
   enabled: boolean;
   displayId: number | null;
   anchor: IslandAnchor;
+  /** null disables the pending queue global shortcut. */
+  pendingHotkey: string | null;
 }
 
 /** Помощник на острове (спека 2026-10-14, 6.1). Выключен по умолчанию: тратит лимит провайдера. */
@@ -115,7 +117,7 @@ export const DEFAULT_UI: UiFile = {
   dismissedUpdate: null,
   voice: { enabled: false, model: null, language: 'auto' },
   browser: { devtoolsHeight: null, agentsAllowed: true },
-  island: { enabled: true, displayId: null, anchor: 'center' },
+  island: { enabled: true, displayId: null, anchor: 'center', pendingHotkey: 'Control+Alt+I' },
   assistant: { enabled: false, provider: null, model: null, hotkey: 'Alt+Space', language: null },
 };
 
@@ -268,6 +270,8 @@ function normalizeIsland(value: unknown): IslandUi {
     enabled: typeof source.enabled === 'boolean' ? source.enabled : fallback.enabled,
     displayId: Number.isInteger(source.displayId) ? (source.displayId as number) : fallback.displayId,
     anchor: ISLAND_ANCHORS.includes(source.anchor as IslandAnchor) ? (source.anchor as IslandAnchor) : fallback.anchor,
+    pendingHotkey: typeof source.pendingHotkey === 'string' && source.pendingHotkey.trim() !== ''
+      ? source.pendingHotkey : source.pendingHotkey === null ? null : fallback.pendingHotkey,
   };
 }
 

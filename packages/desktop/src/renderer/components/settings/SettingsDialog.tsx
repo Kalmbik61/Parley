@@ -31,6 +31,7 @@ import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
 import type { Appearance, UiFile } from '../../../shared/ui-types.js';
+import type { AssistantShortcutStatus } from '../../../shared/island.js';
 import { useUiStore, type SettingsSection } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogTitle } from '../../ui/dialog.js';
@@ -45,6 +46,7 @@ import { AssistantSettings } from './AssistantSettings.js';
 import { ProjectsSettings } from './ProjectsSettings.js';
 import { ProvidersSettings } from './ProvidersSettings.js';
 import { TelegramSettings } from './TelegramSettings.js';
+import { ShortcutField } from './ShortcutField.js';
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -123,6 +125,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
   const [locked, setLocked] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<FieldErrors>({});
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [islandShortcutStatus, setIslandShortcutStatus] = useState<AssistantShortcutStatus>({ accelerator: null, ok: true });
 
   const ui = useUiStore((state) => state.ui);
   const uiLoaded = useUiStore((state) => state.uiLoaded);
@@ -134,6 +137,16 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
   useEffect(() => {
     if (open) setSection(settingsSection);
   }, [open, settingsSection]);
+
+  useEffect(() => {
+    if (!open) return;
+    void bridge.app.islandShortcut?.().then(setIslandShortcutStatus).catch(() => {});
+  }, [open, bridge]);
+
+  useEffect(() => {
+    if (!open || !uiLoaded) return;
+    void bridge.app.islandShortcut?.().then(setIslandShortcutStatus).catch(() => {});
+  }, [open, uiLoaded, ui.island.pendingHotkey, ui.island.enabled, bridge]);
 
   useEffect(() => {
     if (!open) return;
@@ -480,6 +493,27 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                     patchUi({ island: { enabled: checked } } as Partial<Omit<UiFile, 'version' | 'activeWorkKey'>>)
                   }
                 />
+                <div className="flex flex-col gap-2 rounded-md border p-3">
+                  <span className="text-sm font-medium">{S.assistant.settings.islandShortcut}</span>
+                  {ui.island.pendingHotkey === null ? (
+                    <Button type="button" variant="outline" onClick={() => patchUi({ island: { pendingHotkey: 'Control+Alt+I' } } as Partial<Omit<UiFile, 'version' | 'activeWorkKey'>>)}>
+                      {S.assistant.settings.islandShortcutOff}
+                    </Button>
+                  ) : <ShortcutField
+                    value={ui.island.pendingHotkey}
+                    label={S.assistant.settings.islandShortcut}
+                    onChange={(pendingHotkey) => {
+                      patchUi({ island: { pendingHotkey } } as Partial<Omit<UiFile, 'version' | 'activeWorkKey'>>);
+                      void bridge.app.islandShortcut?.().then(setIslandShortcutStatus);
+                    }}
+                    onRecording={(recording) => bridge.app.islandShortcutSuspend?.(recording)}
+                  />}
+                  <Button type="button" variant="ghost" className="self-start" onClick={() => {
+                    patchUi({ island: { pendingHotkey: null } } as Partial<Omit<UiFile, 'version' | 'activeWorkKey'>>);
+                    void bridge.app.islandShortcut?.().then(setIslandShortcutStatus);
+                  }}>{S.assistant.settings.islandShortcutOff}</Button>
+                  {!islandShortcutStatus.ok ? <p role="status" className="text-xs text-destructive">{S.assistant.settings.shortcutTaken}</p> : null}
+                </div>
               </>
             ) : null}
             {/* Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */}

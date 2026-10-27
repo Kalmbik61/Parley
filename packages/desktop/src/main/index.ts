@@ -57,6 +57,7 @@ import { forwardAppearanceToWindow, forwardHostToPages, registerIpc } from './ip
 import { quietExpectedIpcRefusals } from './ipc-quiet.js';
 import { forwardGuestShortcuts } from './guest-shortcuts.js';
 import { createAssistantShortcut } from './assistant/shortcut.js';
+import { createIslandShortcut } from './island/shortcut.js';
 import { registerIslandIpc } from './island/ipc.js';
 import type { IslandPlacement } from './island/placement.js';
 import { createIslandController, islandWindowOptions } from './island/window.js';
@@ -522,6 +523,18 @@ if (!gotLock) {
       onTrigger: () => openAssistant({ listen: true }),
       log: (line) => console.warn('[parley]', line),
     });
+    let hostConnected = false;
+    let applyIslandSync: ((current: UiFile) => void) | null = null;
+    const islandShortcut = createIslandShortcut({
+      registry: globalShortcut,
+      onTrigger: () => {
+        const window = island.current();
+        if (window === null || window.isDestroyed()) return;
+        island.setKeyboard(true);
+        window.webContents.send('island:navigate-pending');
+      },
+      log: (line) => console.warn('[parley]', line),
+    });
     function openAssistant(request: AssistantOpenRequest): void {
       const window = island.current();
       if (window === null || window.isDestroyed()) return;
@@ -547,6 +560,8 @@ if (!gotLock) {
       await assistantMirror.push(assistantSettingsOf(current, { downloaded: (id) => downloaded.has(id), path: (id) => mirrorModels.path(id) }, assistantLanguage));
     };
     connection.onStatus((status) => {
+      hostConnected = status.state === 'connected';
+      if (applyIslandSync !== null) void uiStore.load().then(applyIslandSync).catch((error: unknown) => console.warn('[parley] island sync failed', error));
       if (status.state !== 'connected') return;
       hostMethods = status.methods;
       void uiStore.load().then(pushAssistantSettings).catch((error: unknown) => console.warn('[parley] assistant mirror', error));
@@ -581,9 +596,15 @@ if (!gotLock) {
     const syncIsland = (current: UiFile): void => {
       if ((current.island.enabled || current.assistant.enabled) && !switches.islandOff) island.open();
       else island.close();
+      // The assistant owns a shared accelerator when both settings request it. Release only the island's
+      // registered copy before asking Electron to register the assistant; the reverse conflict stays visible.
+      if (current.assistant.enabled && current.island.pendingHotkey !== null &&
+        current.assistant.hotkey === current.island.pendingHotkey) islandShortcut.sync(false, null);
       assistantShortcut.sync(current.assistant.enabled && !switches.islandOff, current.assistant.hotkey);
+      islandShortcut.sync(current.island.enabled && hostConnected && !switches.islandOff, current.island.pendingHotkey);
       pushIslandConfig();
     };
+    applyIslandSync = syncIsland;
     // Второстепенное окно не должно ронять старт: сбой создания — в журнал, остальное приложение работает.
     try {
       syncIsland(ui);
@@ -796,6 +817,8 @@ if (!gotLock) {
       openAssistant: () => openAssistant({ listen: false }),
       assistantShortcut: () => assistantShortcut.status(),
       suspendAssistantShortcut: (on) => assistantShortcut.suspend(on),
+      islandShortcut: () => islandShortcut.status(),
+      suspendIslandShortcut: (on) => islandShortcut.suspend(on),
       // «Страница острова загружена», а не просто «окно есть»: пока она грузится или не загрузилась, системные уведомления не глушатся.
       islandActive: () => {
         const window = island.current();

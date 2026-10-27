@@ -237,6 +237,8 @@ const bridge = {
     openAssistant: () => ipcRenderer.send('app:assistant-open'),
     assistantShortcut: () => ipcRenderer.invoke('app:assistant-shortcut') as Promise<AssistantShortcutStatus>,
     assistantShortcutSuspend: (on: boolean) => ipcRenderer.send('app:assistant-shortcut-suspend', on),
+    islandShortcut: () => ipcRenderer.invoke('app:island-shortcut') as Promise<AssistantShortcutStatus>,
+    islandShortcutSuspend: (on: boolean) => ipcRenderer.send('app:island-shortcut-suspend', on),
     loadNotes: (workKey: string, sessionId: string) =>
       ipcRenderer.invoke('app:load-notes', workKey, sessionId) as Promise<{ file: NotesFile; corruptedTo: string | null }>,
     saveNotes: (workKey: string, sessionId: string, notes: NotesFile) =>

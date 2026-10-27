@@ -255,6 +255,8 @@ export interface RegisterIpcOptions {
   assistantShortcut?: () => AssistantShortcutStatus;
   /** Поле записи сочетания в настройках снимает глобальный хоткей на время записи (`app:assistant-shortcut-suspend`). */
   suspendAssistantShortcut?: (on: boolean) => void;
+  islandShortcut?: () => AssistantShortcutStatus;
+  suspendIslandShortcut?: (on: boolean) => void;
   /** Двойной клик по пустому месту заголовка (кусок 2.3, спека 5.1) — системное действие macOS. */
   titlebarDoubleClick: () => void;
   /** «Reveal in Finder» карточки работы (кусок 3.4) — `shell.showItemInFolder`. */
@@ -476,6 +478,8 @@ export function registerIpc(options: RegisterIpcOptions): void {
     withIpcError(() => options.assistantShortcut?.() ?? { accelerator: null, ok: true }),
   );
   ipcMain.on('app:assistant-shortcut-suspend', (_event, on: unknown) => options.suspendAssistantShortcut?.(on === true));
+  ipcMain.handle('app:island-shortcut', withIpcError(() => options.islandShortcut?.() ?? { accelerator: null, ok: true }));
+  ipcMain.on('app:island-shortcut-suspend', (_event, on: unknown) => options.suspendIslandShortcut?.(on === true));
 
   ipcMain.on('host:notify', (event, method: unknown, params: unknown) => {
     if (typeof method !== 'string' || !isNotificationName(method)) return;

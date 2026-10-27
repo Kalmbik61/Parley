@@ -143,6 +143,7 @@ export interface FakeBridge extends ParleyBridge {
   readonly assistantOpenCalls: string[];
   /** Вызовы `app.assistantShortcutSuspend` (поле записи сочетания): значение аргумента на каждый вызов. */
   readonly assistantShortcutSuspended: boolean[];
+  readonly islandShortcutSuspended: boolean[];
   /** Вызовы `app.openPath` и `app.showInFinder`. */
   readonly openedPaths: string[];
   readonly revealedPaths: string[];
@@ -314,6 +315,7 @@ export function createFakeBridge(): FakeBridge {
   const saveDiagnosticsCalls: Array<{ profile: boolean }> = [];
   const assistantOpenCalls: string[] = [];
   const assistantShortcutSuspended: boolean[] = [];
+  const islandShortcutSuspended: boolean[] = [];
   let saveDiagnosticsAnswer: DiagnosticsSaveResult | Error = { file: '/Users/test/Downloads/parley-diagnostics-20261016-123456.zip', hostResponded: true };
   let openPathResult: 'opened' | 'revealed' | { error: unknown } = 'opened';
   const openedPaths: string[] = [];
@@ -438,6 +440,7 @@ export function createFakeBridge(): FakeBridge {
     saveDiagnosticsCalls,
     assistantOpenCalls,
     assistantShortcutSuspended,
+    islandShortcutSuspended,
     setSaveDiagnosticsAnswer: (answer) => {
       saveDiagnosticsAnswer = answer;
     },
@@ -899,6 +902,8 @@ export function createFakeBridge(): FakeBridge {
       assistantShortcutSuspend: (on) => {
         assistantShortcutSuspended.push(on);
       },
+      islandShortcut: async () => ({ accelerator: 'Control+Alt+I', ok: true }),
+      islandShortcutSuspend: (on) => { islandShortcutSuspended.push(on); },
       loadNotes: async (workKey, sessionId) => {
         loadNotesCalls.push({ workKey, sessionId });
         const answer = notesAnswers.get(notesKey(workKey, sessionId)) ?? { file: { version: 1, notes: [] }, corruptedTo: null };

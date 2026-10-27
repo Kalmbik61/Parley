@@ -60,7 +60,7 @@ describe('preload острова', () => {
     expect(Object.keys(bridge.island).sort()).toEqual(
       [
         'beep', 'config', 'dragEnd', 'dragMove', 'dragStart', 'failed', 'keyboard', 'markSeen', 'onKeyboardBlur', 'onAssistantOpen', 'onConfig',
-        'onHover', 'onVisibility', 'visibility', 'open', 'setHitRect', 'setVisible', 'voice',
+        'onHover', 'onNavigatePending', 'onVisibility', 'visibility', 'open', 'setHitRect', 'setVisible', 'voice',
       ].sort(),
     );
   });
@@ -137,7 +137,7 @@ describe('preload острова', () => {
   it('мост выставлен под ключом parley, а подписки ipcRenderer.on — ровно шесть каналов', async () => {
     await loadPreload();
     expect(exposedKey).toBe('parley');
-    expect([...subscribed].sort()).toEqual(['host:event', 'host:status', 'island:assistant-open', 'island:config', 'island:hover', 'island:keyboard-blur', 'island:session-visibility']);
+    expect([...subscribed].sort()).toEqual(['host:event', 'host:status', 'island:assistant-open', 'island:config', 'island:hover', 'island:keyboard-blur', 'island:navigate-pending', 'island:session-visibility']);
   });
 
   it('session visibility has an island-only snapshot getter and removable event listener', async () => {

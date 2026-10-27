@@ -16,6 +16,7 @@ const statusListeners = new Set<(status: HostStatus) => void>();
 const configListeners = new Set<(config: IslandConfig) => void>();
 const hoverListeners = new Set<(hovered: boolean) => void>();
 const assistantOpenListeners = new Set<(request: AssistantOpenRequest) => void>();
+const navigatePendingListeners = new Set<() => void>();
 const keyboardBlurListeners = new Set<() => void>();
 const visibilityListeners = new Set<(snapshot: SessionVisibilitySnapshot) => void>();
 /** Последний статус: подписчик, пришедший позже события, получает его сразу (как в общем preload). */
@@ -36,6 +37,9 @@ ipcRenderer.on('island:hover', (_event, hovered: boolean) => {
 });
 ipcRenderer.on('island:assistant-open', (_event, request: unknown) => {
   for (const listener of assistantOpenListeners) listener(request as AssistantOpenRequest);
+});
+ipcRenderer.on('island:navigate-pending', () => {
+  for (const listener of navigatePendingListeners) listener();
 });
 ipcRenderer.on('island:keyboard-blur', () => {
   for (const listener of keyboardBlurListeners) listener();
@@ -93,6 +97,10 @@ const bridge = {
       return () => {
         assistantOpenListeners.delete(listener);
       };
+    },
+    onNavigatePending: (listener: () => void) => {
+      navigatePendingListeners.add(listener);
+      return () => { navigatePendingListeners.delete(listener); };
     },
     onKeyboardBlur: (listener: () => void) => {
       keyboardBlurListeners.add(listener);

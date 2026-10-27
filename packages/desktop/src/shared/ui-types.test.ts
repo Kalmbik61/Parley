@@ -6,6 +6,17 @@ describe('normalizeUi', () => {
     expect(normalizeUi({})).toEqual(DEFAULT_UI);
   });
 
+  it('normalizes the pending hotkey for existing ui files and preserves island placement on partial patches', () => {
+    expect(normalizeUi({ island: { enabled: false, displayId: 42, anchor: 'left' } }).island).toEqual({
+      enabled: false, displayId: 42, anchor: 'left', pendingHotkey: 'Control+Alt+I',
+    });
+    expect(normalizeUi({ island: { pendingHotkey: null } }).island.pendingHotkey).toBeNull();
+    expect(normalizeUi({ island: { pendingHotkey: 42 } }).island.pendingHotkey).toBe('Control+Alt+I');
+    expect(normalizeUi(mergeUiPatch(DEFAULT_UI, { island: { pendingHotkey: null } })).island).toEqual({
+      ...DEFAULT_UI.island, pendingHotkey: null,
+    });
+  });
+
   it('ширина левого сайдбара приводится к пределам 220–500', () => {
     expect(normalizeUi({ leftSidebar: { width: 9999 } }).leftSidebar.width).toBe(500);
     expect(normalizeUi({ leftSidebar: { width: 10 } }).leftSidebar.width).toBe(220);
@@ -176,7 +187,7 @@ describe('раздел browser (спека 2026-10-07, 4.3)', () => {
 
 describe('normalizeUi: остров', () => {
   it('нет поля — умолчания: включён, по центру, монитор не выбран', () => {
-    expect(normalizeUi({}).island).toEqual({ enabled: true, displayId: null, anchor: 'center' });
+    expect(normalizeUi({}).island).toEqual({ enabled: true, displayId: null, anchor: 'center', pendingHotkey: 'Control+Alt+I' });
   });
 
   it('битые значения заменяются умолчаниями по одному, целые остаются', () => {
@@ -184,12 +195,13 @@ describe('normalizeUi: остров', () => {
       enabled: false,
       displayId: null,
       anchor: 'center',
+      pendingHotkey: 'Control+Alt+I',
     });
   });
 
   it('ключ hintShown из ui.json прежних сборок игнорируется: загрузка не ломается, в результат он не попадает', () => {
     const island = normalizeUi({ island: { enabled: false, displayId: 3, anchor: 'right', hintShown: true } }).island;
-    expect(island).toEqual({ enabled: false, displayId: 3, anchor: 'right' });
+    expect(island).toEqual({ enabled: false, displayId: 3, anchor: 'right', pendingHotkey: 'Control+Alt+I' });
     expect('hintShown' in island).toBe(false);
   });
 

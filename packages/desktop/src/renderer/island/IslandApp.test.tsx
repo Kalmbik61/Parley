@@ -81,10 +81,12 @@ function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
     onHover: vi.fn(() => () => undefined), setHitRect: vi.fn(), setVisible: vi.fn(), dragStart: vi.fn(), dragMove: vi.fn(), dragEnd: vi.fn(), open: vi.fn(), beep: vi.fn(), markSeen: vi.fn(), failed: vi.fn(),
     keyboard: vi.fn(),
     onAssistantOpen: vi.fn(() => () => undefined),
+    onNavigatePending: vi.fn((listener: () => void) => { pendingNavigationHandler = listener; return () => { pendingNavigationHandler = null; }; }),
     onKeyboardBlur: vi.fn(() => () => undefined),
     voice: { transcribe: vi.fn(), micStatus: vi.fn(), requestMic: vi.fn() },
   };
 }
+let pendingNavigationHandler: (() => void) | null = null;
 
 /** Мост острова поверх подставного моста окна: хост «подключён», `works.list` и `feed.snapshot` отвечают из таблиц выше. */
 function setup(config: Partial<IslandConfig> = {}, entries = ENTRIES, consents: ConsentCard[] = []) {
@@ -181,6 +183,20 @@ afterEach(() => {
 });
 
 describe('проводка острова', () => {
+  it('global queue activation opens a feed target, while navigation keys never decide', async () => {
+    const { bridge, blocked, fake } = setup();
+    render(<IslandApp bridge={bridge} />);
+    blocked('s-01');
+    await waitFor(() => expect(fake.calls.some((call) => call.method === 'feed.snapshot')).toBe(true));
+    act(() => pendingNavigationHandler?.());
+    await waitFor(() => expect(screen.getByTestId('island').getAttribute('data-navigation-key')).toMatch(/^feed:/));
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    fireEvent.keyDown(window, { key: 'ArrowUp' });
+    fireEvent.keyDown(window, { key: 'Enter', ctrlKey: true });
+    expect(bridge.island.open).toHaveBeenCalled();
+    expect(fake.calls.some((call) => call.method === 'feed.decide')).toBe(false);
+  });
+
   it.each(['close', 'collapse', 'hidden', 'disconnect', 'assistant', 'pending', 'room'] as const)('progress polls only the selected detail and stops on %s', async (pause) => {
     vi.useFakeTimers();
     const { fake, bridge, hover, disconnect, blocked } = setup({ assistant: ASSISTANT_ON });
