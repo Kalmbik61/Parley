@@ -1,0 +1,1 @@
+{"type":"error","id":"e1","error":{"code":"out_of_range","option":"voice","message":"Qwen3-TTS-12Hz-0.6B-CustomVoice has no voice named \"nobody\"; its voices are aiden, dylan, eric, ono_anna, ryan, serena, sohee, uncle_fu, vivian"}}
