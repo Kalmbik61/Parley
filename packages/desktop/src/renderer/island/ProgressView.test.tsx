@@ -19,6 +19,21 @@ describe('progress detail', () => {
     expect(screen.queryByText('Recent actions unavailable')).toBeNull();
   });
 
+  it('renders synthetic Codex positive progress with a completed step and one current action', () => {
+    const recent: ProgressResult['recent'] = [
+      { id: 'codex-read-1', at: '2026-10-27T08:00:00.000Z', endedAt: '2026-10-27T08:00:01.000Z', category: 'read', status: 'done' },
+      { id: 'codex-delegate-2', at: '2026-10-27T08:00:02.000Z', category: 'delegate', status: 'running' },
+    ];
+    const result: ProgressResult = { revision: 2, availability: 'available', current: recent[1]!, recent, truncated: false };
+    render(<ProgressView state={{ kind: 'available', result, delayed: false }} onOpen={() => {}} onClose={() => {}} />);
+    expect(screen.getByText('Read files')).toBeTruthy();
+    expect(screen.getByText('Done')).toBeTruthy();
+    expect(screen.getByText('Delegate')).toBeTruthy();
+    expect(screen.getByText('Current')).toBeTruthy();
+    expect(screen.getByText('Running')).toBeTruthy();
+    expect(screen.getAllByRole('listitem')[1]?.getAttribute('aria-current')).toBe('step');
+  });
+
   it('caps history at20, labels enums locally, marks current within history and shows delayed/truncated', () => {
     const recent = Array.from({ length: 25 }, (_, index) => ({ id: `opaque-${index}`, at: '2026-10-26T10:00:00.000Z',
       category: 'execute' as const, status: index === 24 ? 'running' as const : 'done' as const, name: 'SECRET-command' }));
