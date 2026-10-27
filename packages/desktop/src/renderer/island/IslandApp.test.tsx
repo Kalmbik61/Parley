@@ -20,7 +20,7 @@
  * его приносит сообщение окна (`sendPort`).
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedCard, FeedPlanCard, FeedQuestionCard } from '@parley/core';
 import { encodeIpcError } from '../../shared/ipc-error.js';
@@ -41,6 +41,7 @@ import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
 import { CUE_COOLDOWN_MS, CUE_GAP_MS } from './sound/cues.js';
 import { islandSound } from './sound/graph.js';
+import * as engineModule from './swarm/engine.js';
 
 vi.mock('./sound/graph.js', () => ({
   islandSound: { graph: vi.fn(() => null), play: vi.fn(), setVolume: vi.fn(), setPalette: vi.fn(), duckVoice: vi.fn() },
@@ -932,6 +933,56 @@ describe('речь помощника (план 3b B22)', () => {
     blocked('s-01');
     await waitFor(() => expect(played()).toEqual(['permission']));
     expect(islandSound.duckVoice).toHaveBeenCalledTimes(1);
+  });
+
+  it('кадр голоса: лицо читает голос из стора в кадре роя (подставной rAF), а не при рендере (Р10)', async () => {
+    const ctx2d = {
+      setTransform: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), fillRect: vi.fn(), fillStyle: '', globalAlpha: 1, globalCompositeOperation: '',
+      createRadialGradient: () => ({ addColorStop: vi.fn() }),
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx2d as unknown as CanvasRenderingContext2D);
+    let frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    try {
+      const { island } = await renderSpeaking();
+      const request = answer(island);
+      act(() => { for (const cb of speakerOf().starts) cb(request.utteranceId); });
+      expect(useAssistantStore.getState().input).toBe('speaking');
+      expect(speakerOf().read).not.toHaveBeenCalled();
+      act(() => {
+        for (let t = 100; t < 200; t += 16) {
+          const run = frames;
+          frames = [];
+          for (const cb of run) cb(t);
+        }
+      });
+      expect(speakerOf().read).toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('data-emo лица идёт за эмоцией звучащего предложения (L3), а без него — за меткой хода', async () => {
+    await renderSpeaking();
+    const face = (): HTMLElement => within(screen.getByTestId('assistant-view')).getByTestId('swarm');
+    act(() => useAssistantStore.setState({ host: { ...HOST_IDLE, mood: 'joy', turn: 1 }, input: 'speaking', sentence: { utteranceId: 'u-1', emo: 'calm', text: 'Two agents are busy.' } }));
+    expect(face().getAttribute('data-shape')).toBe('face');
+    expect(face().getAttribute('data-emo')).toBe('calm');
+    act(() => useAssistantStore.setState({ sentence: { utteranceId: 'u-2', emo: 'sad', text: 'One has failed.' } }));
+    expect(face().getAttribute('data-emo')).toBe('sad');
+    act(() => useAssistantStore.setState({ sentence: null }));
+    expect(face().getAttribute('data-emo')).toBe('joy');
+  });
+
+  it('значок динамика: aria-pressed по «Speak answers», клик переключает его через main', async () => {
+    const { island } = await renderSpeaking();
+    const button = screen.getByTestId('assistant-speak');
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(button);
+    expect(island.speech.setSpeak).toHaveBeenCalledWith(false);
   });
 
   it('до прихода настроек речь выключена и голоса нет', () => {
@@ -2525,5 +2576,54 @@ describe('согласия на папку', () => {
       advance(1);
       expect(isRetracted()).toBe(true);
     });
+  });
+});
+
+describe('реакции роёв помощника (#9 §4.1–§4.3, план 3b B24)', () => {
+  /** Шпионы `react` движков всех роёв острова: шпион ставится при создании, до первого эффекта. */
+  function spyReacts(): Array<ReturnType<typeof vi.fn>> {
+    const real = engineModule.createSwarm;
+    const reacts: Array<ReturnType<typeof vi.fn>> = [];
+    vi.spyOn(engineModule, 'createSwarm').mockImplementation((...args) => {
+      const engine = real(...args);
+      reacts.push(vi.spyOn(engine, 'react') as unknown as ReturnType<typeof vi.fn>);
+      return engine;
+    });
+    return reacts;
+  }
+  const reacted = (reacts: Array<ReturnType<typeof vi.fn>>): string[] => reacts.flatMap((react) => react.mock.calls.map(([reaction]) => reaction as string));
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('мини-рой: начало работы — вдох (остров выдвигается, и мини-рой застаёт реакцию), наведение — наклон', async () => {
+    const reacts = spyReacts();
+    const { bridge, island, working, hover } = setup({ assistant: ASSISTANT_ON });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(island.onAssistantOpen).toHaveBeenCalled());
+    working('s-01');
+    await waitFor(() => expect(reacted(reacts)).toEqual(['breathe']));
+    hover(true);
+    expect(reacted(reacts)).toEqual(['breathe', 'lean']);
+  });
+
+  it('рой помощника: шаг инструмента — кольцо яркости, ошибка — дрожь; пока вид свёрнут, реагирует мини-рой', async () => {
+    const reacts = spyReacts();
+    const { bridge, island } = setup({ assistant: ASSISTANT_ON });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(island.onAssistantOpen).toHaveBeenCalled());
+    act(() => vi.mocked(island.onAssistantOpen).mock.calls.at(-1)![0]({ listen: false }));
+    await screen.findByTestId('assistant-view');
+    act(() => useAssistantStore.getState().applyHost({ ...HOST_IDLE, phase: 'thinking', turn: 1 }));
+    act(() => useAssistantStore.getState().applyHost({ ...HOST_IDLE, phase: 'tool', detail: 'works.list', turn: 1 }));
+    act(() => useAssistantStore.getState().applyHost({ ...HOST_IDLE, phase: 'tool', detail: 'works.list', turn: 1 }));
+    act(() => useAssistantStore.getState().applyHost({ ...HOST_IDLE, phase: 'tool', detail: 'feed.snapshot', turn: 1 }));
+    expect(reacted(reacts)).toEqual(['glint', 'glint']);
+    act(() => useAssistantStore.getState().collapse());
+    expect(within(screen.getByTestId('assistant-dot')).getByTestId('swarm')).toBeTruthy();
+    for (const react of reacts) react.mockClear();
+    act(() => useAssistantStore.getState().applyHost({ ...HOST_IDLE, phase: 'error', error: 'Limit reached', turn: 1 }));
+    expect(reacted(reacts)).toEqual(['shake']);
   });
 });

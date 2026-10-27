@@ -68,11 +68,13 @@ export { CARD_ARM_MS };
 const BOTTOM_RESERVE_PX = 34 + 16;
 
 export interface IslandAssistantProps {
-  view: Omit<AssistantViewProps, 'maxHeight'>;
+  view: Omit<AssistantViewProps, 'maxHeight' | 'reducedMotion'>;
   open: boolean;
   collapsed: boolean;
   busy: boolean;
   mini: string | null;
+  /** Реакция мини-роя (#9 §4.1–§4.3): события агентов, наведение и фазы помощника; новый объект на каждое событие. */
+  pulse?: SwarmPulse | null;
   onOpen(): void;
 }
 
@@ -129,11 +131,17 @@ function rowTarget(row: IslandRow): FocusTarget {
     : { kind: 'room', projectPath: row.projectPath, workId: row.workId, roomId: row.roomId };
 }
 
-/** Мини-рой в кнопке пилюли: canvas 28 px лежит в кнопке 26 px, как `.dotbtn` макета; 30 кадров/с только пока помощник занят. */
-function MiniSwarm({ assistant }: { assistant: IslandAssistantProps }): JSX.Element {
+/**
+ * Мини-рой в кнопке пилюли: canvas 28 px лежит в кнопке 26 px, как `.dotbtn` макета; 30 кадров/с только пока помощник
+ * занят. При речи — сфера с палитрой лица звучащего предложения.
+ */
+function MiniSwarm({ assistant, reducedMotion }: { assistant: IslandAssistantProps; reducedMotion: boolean }): JSX.Element {
   const { host, input } = assistant.view;
-  const spec = useMemo(() => swarmSpecFor(host, input, true), [host.phase, input]);
-  return <Swarm spec={spec} souls={150} width={28} height={28} d={17} cy={14} k={0.15} minPx={1.5} seed={5} fps={assistant.busy ? 30 : 0} />;
+  const sentenceMood = assistant.view.sentenceMood ?? undefined;
+  const spec = useMemo(() => swarmSpecFor(host, input, true, sentenceMood), [host.phase, host.mood, input, sentenceMood]);
+  return (
+    <Swarm spec={spec} souls={150} width={28} height={28} d={17} cy={14} k={0.15} minPx={1.5} seed={5} fps={assistant.busy ? 30 : 0} pulse={assistant.pulse ?? null} reducedMotion={reducedMotion} />
+  );
 }
 
 /** Облик «места»: сфера с янтарным кольцом подтверждения и без вращения (`rot = 0`), как `confirm` макета. */
@@ -145,9 +153,9 @@ const SEAT_SPEC = swarmSpecFor({ ...HOST_IDLE, phase: 'awaiting-confirm' }, 'idl
  * покое 0 к/с (§5): кадры идут только на реакцию. Монтируется заново с каждой показанной карточкой (ключ `Card`),
  * поэтому реакция одна на показ.
  */
-function SeatSwarm({ kind }: { kind: 'permission' | 'question' | 'plan' }): JSX.Element {
+function SeatSwarm({ kind, reducedMotion }: { kind: 'permission' | 'question' | 'plan'; reducedMotion: boolean }): JSX.Element {
   const [pulse] = useState<SwarmPulse>(() => ({ reaction: REACTION_FOR[kind], at: performance.now() }));
-  return <Swarm spec={SEAT_SPEC} souls={150} width={30} height={30} d={18} cy={15} k={0.15} minPx={1.5} seed={5} fps={0} pulse={pulse} className="-ml-1 shrink-0" />;
+  return <Swarm spec={SEAT_SPEC} souls={150} width={30} height={30} d={18} cy={15} k={0.15} minPx={1.5} seed={5} fps={0} pulse={pulse} reducedMotion={reducedMotion} className="-ml-1 shrink-0" />;
 }
 
 function Pill(props: IslandViewProps): JSX.Element {
@@ -159,7 +167,7 @@ function Pill(props: IslandViewProps): JSX.Element {
     <div data-testid="island-pill" className="island-reveal flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 text-sm">
       {props.assistant === null ? null : (
         <button type="button" data-testid="assistant-dot" aria-label={S.assistant.ask} className="grid size-[26px] -ml-1 cursor-pointer place-items-center overflow-visible rounded-full hover:bg-white/10" onClick={props.assistant.onOpen}>
-          <MiniSwarm assistant={props.assistant} />
+          <MiniSwarm assistant={props.assistant} reducedMotion={props.config.motion === 'reduce'} />
         </button>
       )}
       {props.assistant?.collapsed === true && props.assistant.mini !== null ? (
@@ -405,7 +413,7 @@ function Card(props: IslandViewProps & { questionDraft: QuestionFormDraft; onQue
       style={item.card?.kind === 'question' || item.card?.kind === 'plan' ? { maxHeight: `calc(100vh - ${props.config.topInset + BOTTOM_RESERVE_PX}px)` } : undefined}
     >
       <div className="flex shrink-0 items-center gap-2">
-        <SeatSwarm kind={item.card?.kind ?? 'permission'} />
+        <SeatSwarm kind={item.card?.kind ?? 'permission'} reducedMotion={props.config.motion === 'reduce'} />
         <span className="min-w-0 flex-1 truncate">
           {label === undefined ? null : `${label.session} · ${label.work}`}
           {label === undefined ? null : <span className="text-[13px] text-muted-foreground"> · {label.project}</span>}
@@ -551,7 +559,7 @@ export function IslandView(props: IslandViewProps): JSX.Element {
         ) : (
           <>
             {assistantBig ? (
-              <AssistantView {...assistant.view} maxHeight={`calc(100vh - ${config.topInset + BOTTOM_RESERVE_PX}px)`} />
+              <AssistantView {...assistant.view} maxHeight={`calc(100vh - ${config.topInset + BOTTOM_RESERVE_PX}px)`} reducedMotion={config.motion === 'reduce'} />
             ) : consent !== null ? (
               <ConsentRequest consent={consent} showId={showId} owned={props.requestKeyboard} selected={props.navigationKey === `consent:${consent.card.id}`} takeKeyboard={props.onTakeRequestKeyboard} />
             ) : props.navigationKey?.startsWith('room:') ? (
