@@ -143,7 +143,6 @@ const bridge = {
     dragMove: (point: IslandPoint) => ipcRenderer.send('island:drag-move', point),
     dragEnd: (point: IslandPoint) => ipcRenderer.send('island:drag-end', point),
     open: (target: unknown) => ipcRenderer.send('island:open', target),
-    beep: () => ipcRenderer.send('island:beep'),
     markSeen: (refs: SessionRef[]) => ipcRenderer.send('island:mark-seen', refs),
     failed: () => ipcRenderer.send('island:failed'),
   } satisfies IslandApi,

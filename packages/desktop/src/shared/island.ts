@@ -190,7 +190,6 @@ export interface IslandApi {
   dragEnd(point: IslandPoint): void;
   /** Показать главное окно (создать, если закрыто) и открыть в нём цель. */
   open(target: FocusTarget): void;
-  beep(): void;
   /**
    * Clear: сессии строк Done просмотрены. Остров хосту уведомлений не шлёт (`host:notify` от него отбрасывается), поэтому
    * для этого есть узкий канал `island:mark-seen`: main проверяет список и шлёт хосту `activity.seen`, как главное окно, когда

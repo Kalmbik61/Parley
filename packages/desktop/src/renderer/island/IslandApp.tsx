@@ -1,7 +1,7 @@
 /**
  * Проводка острова (спека 2026-10-12, раздел 6): статус хоста, сторы работ и активности, очередь запросов, настройки,
  * видимость окна и область под мышь. Хост не подключён — очередь пуста (удержанные хуки хост снимает сам), сторы не
- * поднимаются. Новый запрос выдвигает убранный остров, выбирается в карточке и звучит (`beep` у main, если включён Sound).
+ * поднимаются. Новый запрос выдвигает убранный остров, выбирается в карточке и звучит сигналом острова (`useIslandCues`).
  *
  * Окно острова — фиксированный прозрачный кадр, сквозной для мыши. Корень заполняет кадр и выравнивает форму по
  * точке (`config.anchor`), а размер формы анимирует сам вид (`IslandView`). Окно ловит мышь, только пока курсор над
@@ -62,6 +62,7 @@ import { islandModel, sessionLabels, type IslandRow } from './model.js';
 import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
 import { createProgressPoller, type ProgressState } from './progress.js';
+import { useIslandCues } from './useIslandCues.js';
 import { movePendingSelection, pendingKeyCommand, pendingNavigation, pendingRoomNavigation, reconcilePendingNavigation, type PendingNavigationState } from './navigation.js';
 
 /** Через сколько покоя (ничего не идёт, очереди нет, курсор не над формой, форму не тащат) остров убирается сам. */
@@ -359,12 +360,13 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   const idle = !model.active && items.length === 0 && consents.length === 0 && !assistant.open && !busy;
   /** Убран ли остров: в покое при открытии — да, при работе или очереди — нет. */
   const [retracted, setRetracted] = useState(idle);
+  const cues = useIslandCues({ sound: config.islandSound, active: model.active, hovered });
   const present = useCallback((outcomes: IslandPresentationOutcome[]): void => {
     if (outcomes.some((outcome) => outcome.expand)) setRetracted(false);
     if (onPresentation !== undefined) {
       for (const outcome of outcomes) onPresentation(outcome);
-    } else if (config.islandSound.needs && outcomes.some((outcome) => outcome.soundEligible)) bridge.island.beep();
-  }, [bridge, config.islandSound.needs, onPresentation]);
+    } else cues.present(outcomes);
+  }, [cues, onPresentation]);
   // `hovered` здесь не трогаем: его ведёт только main, и локальный сброс разошёлся бы с ним, пока курсор над зоной нажатия.
   const retract = useCallback(() => {
     releaseKeyboard();
@@ -644,6 +646,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
         onToggleList={setListOpen}
         onHide={() => {
           if (hideAssistant()) return;
+          cues.close();
           retract();
         }}
         onClearDone={clearDone}
@@ -662,7 +665,10 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
           topInset={config.topInset}
           doneCount={unseenDone}
           tabRef={tabRef}
-          onExpand={() => setRetracted(false)}
+          onExpand={() => {
+            cues.open();
+            setRetracted(false);
+          }}
         />
       ) : null}
     </div>

@@ -79,7 +79,6 @@ function setup() {
     pushConfig: vi.fn(),
     keyboard: vi.fn(),
     openTarget: vi.fn(),
-    beep: vi.fn(),
     markSeen: vi.fn(),
     onFailed: vi.fn(),
     tts: voice.tts,
@@ -112,7 +111,6 @@ function calledNames(state: ReturnType<typeof setup>): string[] {
     pushConfig: state.pushConfig,
     keyboard: state.keyboard,
     openTarget: state.openTarget,
-    beep: state.beep,
     markSeen: state.markSeen,
     onFailed: state.onFailed,
     speak: state.tts.speak,
@@ -206,7 +204,6 @@ describe('IPC острова', () => {
     ['island:drag-move', [{ screenX: 1, screenY: 2 }]],
     ['island:drag-end', [{ screenX: 1, screenY: 2 }]],
     ['island:open', [TARGET]],
-    ['island:beep', []],
     ['island:mark-seen', [[REF]]],
     ['island:failed', []],
     ['island:tts-connect', []],
@@ -265,11 +262,9 @@ describe('IPC острова', () => {
     expect(markSeen.mock.calls).toEqual([[[REF, other]], [fifty]]);
   });
 
-  it('звук; канала подсказки первого показа больше нет', () => {
-    const { ipcMain, beep } = setup();
-    ipcMain.emit('island:beep', { sender: island });
-    ipcMain.emit('island:beep', { sender: stranger });
-    expect(beep).toHaveBeenCalledTimes(1);
+  it('звук играет сам остров (#9 §3.3): канала island:beep нет, как и канала подсказки первого показа', () => {
+    const { ipcMain } = setup();
+    expect(ipcMain.handlers.has('island:beep')).toBe(false);
     expect(ipcMain.handlers.has('island:hint-shown')).toBe(false);
   });
 
