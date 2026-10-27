@@ -21,6 +21,7 @@ describe('testSwitches', () => {
       shell: true,
       loginShell: true,
       voice: false,
+      tts: false,
       islandOff: true,
     });
   });
@@ -34,6 +35,7 @@ describe('testSwitches', () => {
       shell: false,
       loginShell: false,
       voice: false,
+      tts: false,
       islandOff: false,
     });
   });
@@ -47,6 +49,7 @@ describe('testSwitches', () => {
       shell: true,
       loginShell: true,
       voice: false,
+      tts: false,
       islandOff: true,
     });
   });
@@ -63,6 +66,15 @@ describe('testSwitches', () => {
     expect(testSwitches({ PARLEY_VOICE: 'fake' }, true).voice).toBe(false);
     expect(testSwitches({ PARLEY_VOICE: 'fake', PARLEY_E2E: '1' }, true).voice).toBe(true);
     expect(testSwitches({}, false).voice).toBe(false);
+  });
+
+  it('tts: fake (PARLEY_TTS=fake) — только в неупакованном окне или с PARLEY_E2E=1', () => {
+    expect(testSwitches({ PARLEY_TTS: 'fake' }, false).tts).toBe(true);
+    expect(testSwitches({ PARLEY_TTS: 'fake' }, true).tts).toBe(false);
+    expect(testSwitches({ PARLEY_TTS: 'fake', PARLEY_E2E: '1' }, true).tts).toBe(true);
+    expect(testSwitches({ HARNAS_TTS: 'fake' }, false).tts).toBe(true);
+    expect(testSwitches({ PARLEY_TTS: 'on' }, false).tts).toBe(false);
+    expect(testSwitches({}, false).tts).toBe(false);
   });
 
   it('PARLEY_E2E с другим значением не открывает переключатели в сборке', () => {
@@ -87,6 +99,7 @@ describe('testSwitches', () => {
       shell: true,
       loginShell: true,
       voice: false,
+      tts: false,
       islandOff: true,
     };
     expect(testSwitches(legacy, false)).toEqual(all);
@@ -117,6 +130,7 @@ describe('testSwitches', () => {
       shell: false,
       loginShell: false,
       voice: false,
+      tts: false,
       islandOff: false,
     });
     expect(testSwitches({ PARLEY_DROPS: 'log', PARLEY_SHELL: '1', PARLEY_LOGIN_SHELL: '1' }, false)).toMatchObject({
