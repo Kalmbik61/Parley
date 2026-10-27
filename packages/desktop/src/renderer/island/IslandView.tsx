@@ -67,7 +67,7 @@ import type { ProgressState } from './progress.js';
 import { HOST_IDLE } from './assistant/store.js';
 import { REACTION_FOR, swarmSpecFor, type SwarmPulse } from './swarm/spec.js';
 import { droppedMinWidth, notchShift } from './notch.js';
-import { capsuleContent, NotchCapsule } from './NotchCapsule.js';
+import { CapsuleSwarm, capsuleContent, NotchCapsule } from './NotchCapsule.js';
 
 /** Пауза кнопок решения после показа карточки — в `arm.ts` (её же берёт карточка согласия); здесь для импортов вида. */
 export { CARD_ARM_MS };
@@ -148,12 +148,13 @@ function rowTarget(row: IslandRow): FocusTarget {
 
 /**
  * Мини-рой в кнопке пилюли: canvas 28 px лежит в кнопке 26 px, как `.dotbtn` макета; 30 кадров/с только пока помощник
- * занят. При речи — сфера с палитрой лица звучащего предложения.
+ * занят. Пока помощник говорит — лицо капсулы выреза (`CapsuleSwarm`): рот идёт по голосу, эмоция — по предложению.
  */
 function MiniSwarm({ assistant, reducedMotion }: { assistant: IslandAssistantProps; reducedMotion: boolean }): JSX.Element {
   const { host, input } = assistant.view;
   const sentenceMood = assistant.view.sentenceMood ?? undefined;
   const spec = useMemo(() => swarmSpecFor(host, input, true, sentenceMood), [host.phase, host.mood, input, sentenceMood]);
+  if (input === 'speaking') return <CapsuleSwarm assistant={assistant} face pulse={assistant.pulse ?? null} reducedMotion={reducedMotion} height={32} />;
   return (
     <Swarm spec={spec} souls={150} width={28} height={28} d={17} cy={14} k={0.15} minPx={1.5} seed={5} fps={assistant.busy ? 30 : 0} pulse={assistant.pulse ?? null} reducedMotion={reducedMotion} />
   );

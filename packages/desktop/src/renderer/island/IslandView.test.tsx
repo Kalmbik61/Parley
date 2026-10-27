@@ -1477,20 +1477,65 @@ describe('помощник на острове', () => {
     return engines;
   }
 
-  it('мини при речи: сфера без эмоции, палитра лица звучащего предложения, подпись «Speaking·»', () => {
-    const engines = spyEngines();
-    const speaking = (sentenceMood: 'error' | null): IslandAssistantProps => {
-      const base = assistantProps({ open: true, collapsed: true, busy: true, mini: S.assistant.miniSpeaking });
-      return { ...base, view: { ...base.view, input: 'speaking', host: { ...HOST_IDLE, mood: 'joy' }, sentenceMood } };
+  /** Подставные контекст и rAF: кадры роя идут в jsdom, `run()` гоняет накопленные колбэки. */
+  function runFrames(): () => void {
+    const ctx = {
+      setTransform: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), fillRect: vi.fn(), beginPath: vi.fn(), arc: vi.fn(), fill: vi.fn(),
+      fillStyle: '', globalAlpha: 1, globalCompositeOperation: '', createRadialGradient: () => ({ addColorStop: vi.fn() }),
     };
-    const { rerender } = render(<IslandView {...viewProps({ assistant: speaking(null) })} />);
-    const mini = within(screen.getByTestId('assistant-dot')).getByTestId('swarm');
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+    let frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    return () => {
+      for (let t = 1000; t < 1200; t += 40) {
+        const run = frames;
+        frames = [];
+        act(() => run.forEach((cb) => cb(t)));
+      }
+    };
+  }
+
+  /** Помощник свёрнут в пилюлю полосы: говорит или думает; `sentenceMood` — эмоция звучащего предложения. */
+  function collapsed(speaking: boolean, voice: () => null, sentenceMood: 'joy' | 'error' | null = 'joy'): IslandAssistantProps {
+    const base = assistantProps({ open: true, collapsed: true, busy: true, mini: speaking ? S.assistant.miniSpeaking : 'Thinking·' });
+    const host = speaking ? { ...HOST_IDLE, mood: 'joy' as const } : { ...HOST_IDLE, phase: 'thinking' as const };
+    return { ...base, view: { ...base.view, input: speaking ? 'speaking' : 'idle', host, sentenceMood, voice } };
+  }
+
+  it('полоса, помощник говорит: в пилюле лицо капсулы — эмоция предложения, рот читает кадр голоса; не говорит — сфера', () => {
+    const run = runFrames();
+    const voice = vi.fn(() => null);
+    const { rerender } = render(<IslandView {...viewProps({ assistant: collapsed(true, voice) })} />);
+    let mini = within(screen.getByTestId('assistant-dot')).getByTestId('swarm');
+    expect(mini.getAttribute('data-shape')).toBe('face');
+    expect(mini.getAttribute('data-emo')).toBe('joy');
+    expect(mini.style.width).toBe('28px');
+    expect(screen.getByTestId('assistant-mini').textContent).toBe('Speaking·');
+    run();
+    expect(voice).toHaveBeenCalled();
+    // Эмоция идёт по предложению.
+    rerender(<IslandView {...viewProps({ assistant: collapsed(true, voice, 'error') })} />);
+    expect(within(screen.getByTestId('assistant-dot')).getByTestId('swarm').getAttribute('data-emo')).toBe('error');
+    // Не говорит — сегодняшняя сфера без эмоции, голос больше не читается.
+    rerender(<IslandView {...viewProps({ assistant: collapsed(false, voice) })} />);
+    mini = within(screen.getByTestId('assistant-dot')).getByTestId('swarm');
     expect(mini.getAttribute('data-shape')).toBe('sphere');
     expect(mini.getAttribute('data-emo')).toBeNull();
-    expect(screen.getByTestId('assistant-mini').textContent).toBe('Speaking·');
-    expect(engines[0]!.setSpec).toHaveBeenLastCalledWith(expect.objectContaining({ shape: 'sphere', pal: 'amber' }), expect.any(Number), false);
-    rerender(<IslandView {...viewProps({ assistant: speaking('error') })} />);
-    expect(engines[0]!.setSpec).toHaveBeenLastCalledWith(expect.objectContaining({ shape: 'sphere', pal: 'coral' }), expect.any(Number), false);
+    voice.mockClear();
+    run();
+    expect(voice).not.toHaveBeenCalled();
+  });
+
+  it('«Reduce motion»: лицо в пилюле стоит — кадров по голосу нет', () => {
+    const run = runFrames();
+    const voice = vi.fn(() => null);
+    render(<IslandView {...viewProps({ config: { ...ISLAND_BASE, topInset: 0, anchor: 'center', motion: 'reduce' }, assistant: collapsed(true, voice) })} />);
+    expect(within(screen.getByTestId('assistant-dot')).getByTestId('swarm').getAttribute('data-shape')).toBe('face');
+    run();
+    expect(voice).not.toHaveBeenCalled();
   });
 
   it('реакция мини-роя (#9 §4.1): pulse уходит в движок один раз на событие, новое событие — снова', () => {

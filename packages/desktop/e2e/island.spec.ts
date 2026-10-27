@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { macScreens } from './mac-screens.js';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
@@ -222,24 +222,6 @@ async function settled(locator: Locator): Promise<void> {
         .map((animation) => animation.finished.catch(() => undefined)),
     ),
   );
-}
-
-/**
- * Дисплеи по данным macOS: номер дисплея (тот же id, что у Electron) и высота выреза (`safeAreaInsets.top`, 0 — выреза
- * нет). Не macOS — пустой список.
- */
-function macScreens(): Array<{ id: number; top: number }> {
-  if (process.platform !== 'darwin') return [];
-  const script = [
-    'ObjC.import("AppKit");',
-    'var screens = $.NSScreen.screens, out = [];',
-    'for (var i = 0; i < screens.count; i++) {',
-    '  var screen = screens.objectAtIndex(i);',
-    '  out.push({ id: screen.deviceDescription.objectForKey("NSScreenNumber").unsignedIntValue, top: screen.safeAreaInsets.top });',
-    '}',
-    'JSON.stringify(out);',
-  ].join('\n');
-  return JSON.parse(execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script], { encoding: 'utf8', timeout: 10_000 })) as Array<{ id: number; top: number }>;
 }
 
 interface Opened {
