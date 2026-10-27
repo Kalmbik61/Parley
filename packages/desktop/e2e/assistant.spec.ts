@@ -1,7 +1,8 @@
-import { readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { macScreens } from './mac-screens.js';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
 import { makeTempHome, makeTempProject } from './tmp.js';
@@ -530,6 +531,47 @@ test.describe('помощник на острове', () => {
     await again.waitForTimeout(1500);
     await expect(fresh).not.toHaveAttribute('data-shape', 'face');
     await expect(again.getByTestId('assistant-status')).not.toHaveText('Speaking');
+  });
+
+  test('речь в полосе: помощник свёрнут в пилюлю — в пилюле говорящее лицо, после речи снова сфера', async () => {
+    test.setTimeout(120_000);
+    // Остров — на дисплей без выреза, как в N2 `island.spec.ts`: в вырезе вместо пилюли была бы капсула.
+    const screens = macScreens();
+    const plain = screens.find((screen) => screen.top === 0);
+    test.skip(screens.length > 0 && plain === undefined, 'у всех дисплеев есть вырез — полосу без выреза проверить негде');
+    if (plain !== undefined) {
+      await mkdir(path.join(home, 'desktop'), { recursive: true });
+      await writeFile(path.join(home, 'desktop', 'ui.json'), JSON.stringify({ version: 1, island: { displayId: plain.id } }));
+    }
+    const window = await launchWithAssistant(SPEECH_ENV, { speak: true, language: 'en' });
+    await call(window, 'works.create', { projectPath: project, title: WORK_TITLE, goal: '' });
+    const island = await openAssistant(window);
+    await ask(island, 'speak long');
+    await expect(island.getByTestId('assistant-view').getByTestId('swarm')).toHaveAttribute('data-shape', 'face', { timeout: 30_000 });
+
+    // Клавиатура ушла с острова посреди речи (то же событие main): идущий ход сворачивается в пилюлю.
+    await app!.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()
+        .find((window) => window.webContents.getURL().endsWith('/island.html'))
+        ?.webContents.send('island:keyboard-blur'),
+    );
+    const pill = island.getByTestId('island-pill');
+    await expect(pill).toBeVisible();
+    await expect(island.getByTestId('island-capsule')).toHaveCount(0);
+    await expect(pill.getByTestId('assistant-mini')).toHaveText('Speaking·');
+    const face = pill.getByTestId('assistant-dot').getByTestId('swarm');
+    await expect(face).toHaveAttribute('data-shape', 'face');
+    expect(await face.boundingBox()).toMatchObject({ width: 28, height: 28 });
+    // Вокруг лица нет кольца: и при фокусе с клавиатуры у кнопки нет обводки.
+    const dot = await pill.getByTestId('assistant-dot').evaluate((element) => {
+      (element as HTMLElement).focus({ focusVisible: true } as FocusOptions);
+      return { focused: element.matches(':focus-visible'), outline: getComputedStyle(element).outlineStyle };
+    });
+    expect(dot).toEqual({ focused: true, outline: 'none' });
+    await pill.screenshot({ path: test.info().outputPath('speaking-pill.png'), animations: 'allow' });
+
+    // Речь кончилась — в пилюле снова мини-сфера.
+    await expect(face).not.toHaveAttribute('data-shape', 'face', { timeout: 60_000 });
   });
 
   test('голос не скачан (G3): ответ текстом без лица и строка-подсказка один раз; Parley ничего не качает', async () => {

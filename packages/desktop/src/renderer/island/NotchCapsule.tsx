@@ -37,7 +37,11 @@ export function capsuleContent(model: Pick<IslandModel, 'active' | 'working'>, d
   return left === null && right === null ? null : { left, right };
 }
 
-function CapsuleSwarm({ assistant, face, pulse, reducedMotion, height }: {
+/**
+ * Рой капсулы и лицо говорящего помощника: его же берёт кнопка пилюли полосы, пока помощник говорит (`MiniSwarm`).
+ * Размер — 28 px, но не выше `height - 4`.
+ */
+export function CapsuleSwarm({ assistant, face, pulse, reducedMotion, height }: {
   assistant: IslandAssistantProps | null;
   face: boolean;
   pulse: SwarmPulse | null;
