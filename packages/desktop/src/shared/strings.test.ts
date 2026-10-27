@@ -179,6 +179,19 @@ describe('S.settings.island — блок «Island» (#9 §5)', () => {
   });
 });
 
+describe('S.island.ears — подписи ушей острова в вырезе (#9 §12.1)', () => {
+  it('рой слева и статус справа — по-английски, с числом', () => {
+    const { ears } = S.island;
+    expect(ears.swarm).toBe('Parley agents');
+    expect(ears.error).toBe('Something went wrong');
+    expect(ears.waiting(2)).toBe('2 waiting for you');
+    expect(ears.working(3)).toBe('3 working');
+    expect(ears.done(1)).toBe('1 done');
+    const texts = [ears.swarm, ears.error, ears.waiting(1), ears.working(1), ears.done(1)];
+    expect(texts.some((text) => CYRILLIC.test(text))).toBe(false);
+  });
+});
+
 describe('providerName', () => {
   it('claude — «Claude Code», codex — «Codex», независимо от метки хоста', () => {
     expect(providerName('claude', 'Claude')).toBe('Claude Code');

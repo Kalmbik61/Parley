@@ -29,6 +29,13 @@
  *
  * Карточка согласия на папку (спека 2026-10-21, 4.4) держит запуск Codex, поэтому встаёт раньше карточек ленты, пока
  * помощник не раскрыт (`ConsentView`, свой стор `consents/store.ts`).
+ *
+ * Остров в вырезе (#9 §12, план 3b B28): с `config.notch` форма стоит у верхнего края по центру выреза (сдвиг до
+ * половины точки — у обёртки, там же вогнутые плечи) и вместо пилюли и бруска показывает уши (`NotchEars`): рой
+ * слева, статус справа. Убранный остров без Done — голый вырез, ровно по его размеру; с непросмотренными Done — уши.
+ * Наведение, запрос, согласие, помощник и переход к ждущему выдвигают форму вниз: содержимое — ниже выреза, ширина —
+ * не меньше ушей. Скругление снизу — 10 px у ушей и голого выреза, 22 px у выдвинутых видов. Смена выреза (другой
+ * дисплей, новый замер) меняет форму мгновенно: два кадра у формы нет класса перехода (§12.4).
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type PointerEvent, type Ref } from 'react';
@@ -57,6 +64,7 @@ import { ProgressView } from './ProgressView.js';
 import type { ProgressState } from './progress.js';
 import { HOST_IDLE } from './assistant/store.js';
 import { REACTION_FOR, swarmSpecFor, type SwarmPulse } from './swarm/spec.js';
+import { earStatus, NotchEars, notchShift } from './NotchEars.js';
 
 /** Пауза кнопок решения после показа карточки — в `arm.ts` (её же берёт карточка согласия); здесь для импортов вида. */
 export { CARD_ARM_MS };
@@ -498,6 +506,19 @@ export function IslandView(props: IslandViewProps): JSX.Element {
    * перехода к нему (#9 §4.4): площадь выросла — рост, упала — сжатие, та же — прежнее.
    */
   const [shape, setShape] = useState<{ size: { width: number; height: number } | null; morph: Morph }>({ size: null, morph: 'grow' });
+  const notch = config.notch ?? null;
+  const notchKey = notch === null ? null : `${notch.width}x${notch.height}@${notch.centerX}`;
+  // Смена выреза (#9 §12.4): новый размер сразу и без класса перехода. Класс возвращается через два кадра после
+  // последней смены размера, когда форма уже стоит в новом размере.
+  const [snap, setSnap] = useState({ key: notchKey, on: false });
+  if (snap.key !== notchKey) setSnap({ key: notchKey, on: true });
+  useEffect(() => {
+    if (!snap.on) return undefined;
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => setSnap((current) => ({ ...current, on: false })));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [snap.on, shape.size]);
   // Уборка и выдвижение меняют отступ сверху и скругление сразу, а размер — лишь после замера: направление ставится в
   // том же кадре, иначе отступ и скругление поехали бы кривой прошлого перехода.
   const [morphRetracted, setMorphRetracted] = useState(retracted);
@@ -525,77 +546,105 @@ export function IslandView(props: IslandViewProps): JSX.Element {
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+    // Смена выреза замеряется сразу, в том же кадре: форма встаёт в новый размер без морфа.
+  }, [notchKey]);
   // Три облика одной формы. Выдвинутая: чёрное под чёлкой (отступ внутри содержимого), тень. Брусок: форма под чёлкой и на
   // 2 px ниже края. `✅ N`: сразу под чёлкой. У убранных обводка вместо тени.
   const peek = retracted && doneCount > 0;
-  const look = !retracted ? 'rounded-b-[22px] shadow-lg' : peek ? 'rounded-b-[14px] shadow-none ring-1 ring-white/50' : 'rounded-[3px] shadow-none ring-1 ring-white/50';
-  const marginTop = !retracted ? 0 : peek ? config.topInset : config.topInset + 2;
   const assistantBig = assistant !== null && assistant.open && !assistant.collapsed;
+  // В вырезе: выдвинутый вид, уши или голый вырез. Убранный остров наведение не выдвигает — его выдвигает язычок.
+  const dropped = !retracted && (hovered || listOpen || assistantBig || consent !== null || items.length > 0 || props.navigationKey != null || props.navigationEmpty === true);
+  const notchView = notch === null ? null : dropped ? 'dropped' : retracted && !peek ? 'bare' : 'ears';
+  /** Ширина уха по последнему замеру ушей: выдвинутый вид не уже ушей, из которых вырос. */
+  const [ear, setEar] = useState(0);
+  const look =
+    notchView !== null ? (notchView === 'dropped' ? 'rounded-b-[22px] shadow-lg' : 'rounded-b-[10px] shadow-none')
+      : !retracted ? 'rounded-b-[22px] shadow-lg' : peek ? 'rounded-b-[14px] shadow-none ring-1 ring-white/50' : 'rounded-[3px] shadow-none ring-1 ring-white/50';
+  const marginTop = notchView !== null || !retracted ? 0 : peek ? config.topInset : config.topInset + 2;
+  const paddingTop = notch !== null ? (notchView === 'dropped' ? notch.height : 0) : retracted ? 0 : config.topInset;
+  const minWidth = notch !== null && notchView === 'dropped' ? notch.width + 2 * Math.max(ear, notch.height + 4) : undefined;
   // «Reduce motion» Parley — как системный reduced motion: класса перехода нет, а `data-motion` гасит появление внутри.
-  const morph = config.motion === 'reduce' ? '' : `island-morph-${shape.morph}`;
+  const morph = config.motion === 'reduce' || snap.on ? '' : `island-morph-${shape.morph}`;
   return (
-    // Форма — прямой элемент flex-корня `IslandApp`: `shrink-0`, чтобы узкий кадр не сжимал её.
-    <div
-      ref={shapeRef}
-      data-testid="island"
-      data-navigation-key={props.navigationKey ?? undefined}
-      tabIndex={props.requestKeyboard ? -1 : undefined}
-      data-retracted={retracted}
-      data-motion={config.motion}
-      aria-hidden={retracted || undefined}
-      className={`shrink-0 overflow-hidden bg-black text-sm text-foreground ${look} ${morph} ${drag.dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
-      style={{ ...shape.size, marginTop }}
-      {...drag.handlers}
-    >
-      <div ref={contentRef} data-testid="island-content" className="w-max" style={{ paddingTop: retracted ? 0 : config.topInset }}>
-        {retracted ? (
-          // Содержимое убранной формы меняется сразу, а форма доезжает до него переходом.
-          peek ? (
-            <div className="whitespace-nowrap px-3 py-1 text-sm">{S.island.donePeek(doneCount)}</div>
-          ) : (
-            <div className="h-[5px] w-10" />
-          )
-        ) : (
-          <>
-            {assistantBig ? (
-              <AssistantView {...assistant.view} maxHeight={`calc(100vh - ${config.topInset + BOTTOM_RESERVE_PX}px)`} reducedMotion={config.motion === 'reduce'} />
-            ) : consent !== null ? (
-              <ConsentRequest consent={consent} showId={showId} owned={props.requestKeyboard} selected={props.navigationKey === `consent:${consent.card.id}`} takeKeyboard={props.onTakeRequestKeyboard} />
-            ) : props.navigationKey?.startsWith('room:') ? (
-              <><Pill {...props} />{model.groups.length > 0 ? <List {...props} /> : null}</>
-            ) : items.length > 0 ? (
-              <Card {...props} questionDraft={questionDraft} onQuestionDraft={onQuestionDraft} onQuestionSubmit={onQuestionSubmit} />
+    // Обёртка без выреза не участвует в раскладке (`contents`): форма — прямой элемент flex-корня `IslandApp`, `shrink-0`,
+    // чтобы узкий кадр не сжимал её. В вырезе обёртка сдвигает форму к центру выреза и держит плечи.
+    <div data-testid="island-frame" className={notch === null ? 'contents' : 'relative shrink-0'} style={notch === null ? undefined : { left: notchShift(notch) }}>
+      {notch === null ? null : (
+        <>
+          <i aria-hidden className="island-shoulder island-shoulder-left" />
+          <i aria-hidden className="island-shoulder island-shoulder-right" />
+        </>
+      )}
+      <div
+        ref={shapeRef}
+        data-testid="island"
+        data-navigation-key={props.navigationKey ?? undefined}
+        tabIndex={props.requestKeyboard ? -1 : undefined}
+        data-retracted={retracted}
+        data-motion={config.motion}
+        aria-hidden={retracted || undefined}
+        className={`shrink-0 overflow-hidden bg-black text-sm text-foreground ${look} ${morph} ${drag.dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        style={{ ...shape.size, marginTop }}
+        {...drag.handlers}
+      >
+        <div ref={contentRef} data-testid="island-content" className="w-max" style={{ paddingTop, minWidth }}>
+          {notch !== null && notchView === 'bare' ? (
+            <div data-testid="island-notch" style={{ width: notch.width, height: notch.height }} />
+          ) : notch !== null && notchView === 'ears' ? (
+            <NotchEars
+              notch={notch}
+              status={earStatus(model, doneCount, assistant?.view.host.phase === 'error')}
+              swarm={{ assistant, reducedMotion: config.motion === 'reduce' }}
+              onEar={setEar}
+            />
+          ) : retracted ? (
+            // Содержимое убранной формы меняется сразу, а форма доезжает до него переходом.
+            peek ? (
+              <div className="whitespace-nowrap px-3 py-1 text-sm">{S.island.donePeek(doneCount)}</div>
             ) : (
-              <>
-                <Pill {...props} />
-                {listOpen && model.groups.length > 0 ? <List {...props} /> : null}
-              </>
-            )}
-            {!assistantBig && props.navigationEmpty ? <p data-testid="island-no-pending" role="status" className="px-3 pb-2 text-xs text-muted-foreground">{S.island.noPending}</p> : null}
-            {!assistantBig && (consent !== null || items.length > 0) && (model.proposals ?? 0) > 0 ? (
-              <div className="flex max-w-[400px] flex-col gap-1 px-3 pb-3">
-                {model.groups.flatMap((group) => group.rows).filter((row): row is RoomRow => row.kind === 'room' && row.proposal !== undefined)
-                  .map((room) => <RoomLine key={room.key} room={room} api={api} />)}
-              </div>
-            ) : null}
-            {/* Стрелка ⌃ — только под курсором: между ней и содержимым над ней заметный отступ, и снизу до края формы тоже. */}
-            {hovered ? (
-              <div className="flex justify-center pb-2 pt-1.5">
-                <button
-                  type="button"
-                  data-testid="island-tuck"
-                  aria-label={S.island.tuckAway}
-                  title={S.island.tuckAway}
-                  onClick={onHide}
-                  className="flex h-5 min-w-8 cursor-pointer items-center justify-center text-muted-foreground hover:text-foreground"
-                >
-                  <ChevronUp size={18} />
-                </button>
-              </div>
-            ) : null}
-          </>
-        )}
+              <div className="h-[5px] w-10" />
+            )
+          ) : (
+            <>
+              {assistantBig ? (
+                <AssistantView {...assistant.view} maxHeight={`calc(100vh - ${config.topInset + BOTTOM_RESERVE_PX}px)`} reducedMotion={config.motion === 'reduce'} />
+              ) : consent !== null ? (
+                <ConsentRequest consent={consent} showId={showId} owned={props.requestKeyboard} selected={props.navigationKey === `consent:${consent.card.id}`} takeKeyboard={props.onTakeRequestKeyboard} />
+              ) : props.navigationKey?.startsWith('room:') ? (
+                <><Pill {...props} />{model.groups.length > 0 ? <List {...props} /> : null}</>
+              ) : items.length > 0 ? (
+                <Card {...props} questionDraft={questionDraft} onQuestionDraft={onQuestionDraft} onQuestionSubmit={onQuestionSubmit} />
+              ) : (
+                <>
+                  <Pill {...props} />
+                  {listOpen && model.groups.length > 0 ? <List {...props} /> : null}
+                </>
+              )}
+              {!assistantBig && props.navigationEmpty ? <p data-testid="island-no-pending" role="status" className="px-3 pb-2 text-xs text-muted-foreground">{S.island.noPending}</p> : null}
+              {!assistantBig && (consent !== null || items.length > 0) && (model.proposals ?? 0) > 0 ? (
+                <div className="flex max-w-[400px] flex-col gap-1 px-3 pb-3">
+                  {model.groups.flatMap((group) => group.rows).filter((row): row is RoomRow => row.kind === 'room' && row.proposal !== undefined)
+                    .map((room) => <RoomLine key={room.key} room={room} api={api} />)}
+                </div>
+              ) : null}
+              {/* Стрелка ⌃ — только под курсором: между ней и содержимым над ней заметный отступ, и снизу до края формы тоже. */}
+              {hovered ? (
+                <div className="flex justify-center pb-2 pt-1.5">
+                  <button
+                    type="button"
+                    data-testid="island-tuck"
+                    aria-label={S.island.tuckAway}
+                    title={S.island.tuckAway}
+                    onClick={onHide}
+                    className="flex h-5 min-w-8 cursor-pointer items-center justify-center text-muted-foreground hover:text-foreground"
+                  >
+                    <ChevronUp size={18} />
+                  </button>
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

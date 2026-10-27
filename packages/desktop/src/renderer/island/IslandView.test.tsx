@@ -1617,3 +1617,261 @@ describe('карточка согласия на острове', () => {
     expect((screen.getByTestId('island-consent-trust') as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+describe('остров в вырезе (#9 §12, план 3b B28)', () => {
+  /** Вырез MacBook Pro 14″: 185 × 32 pt; кадр окна 480 pt, центр выреза в нём — на половине точки. */
+  const NOTCH = { width: 185, height: 32, centerX: 239.5 };
+  const notched = { ...ISLAND_BASE, topInset: 32, anchor: 'center' as const, notch: NOTCH };
+  let innerWidth = 0;
+
+  beforeEach(() => {
+    innerWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 480 });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: innerWidth });
+  });
+
+  /** Подменяет размер, который jsdom не считает: `offsetWidth` и `offsetHeight` (содержимого и статуса уха). */
+  function withOffsets(width: number, height: number, body: () => void): void {
+    const widthSpy = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(width);
+    const heightSpy = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(height);
+    try {
+      body();
+    } finally {
+      widthSpy.mockRestore();
+      heightSpy.mockRestore();
+    }
+  }
+  /** Шевелит замер: содержимое получает новый размер, наблюдатели его пересчитывают. */
+  function resize(width: number, height: number): void {
+    withOffsets(width, height, () => {
+      act(() => {
+        for (const callback of resizeCallbacks) callback();
+      });
+    });
+  }
+  const shape = (): HTMLElement => screen.getByTestId('island');
+  const content = (): HTMLElement => screen.getByTestId('island-content');
+  const morph = (): string | undefined => shape().className.split(' ').find((name) => name.startsWith('island-morph-'));
+
+  describe('форма (N3)', () => {
+    it('нечего выдвигать — уши: форма у верхнего края, скругление снизу 10 px, без тени и обводки, содержимое без отступа', () => {
+      view({ config: notched, model: IDLE_MODEL });
+      expect(screen.getByTestId('island-ears')).toBeTruthy();
+      expect(screen.queryByTestId('island-pill')).toBeNull();
+      expect(shape().className).toContain('rounded-b-[10px]');
+      expect(shape().className).toContain('shadow-none');
+      expect(shape().className).not.toContain('shadow-lg');
+      expect(shape().className).not.toContain('ring-1');
+      expect(parseFloat(shape().style.marginTop)).toBe(0);
+      expect(content().style.paddingTop).toBe('0px');
+      // Покой до авто-убирания: рой слева, правое ухо пустое.
+      expect(screen.getByTestId('island-ear-right').textContent).toBe('');
+    });
+
+    it('уши ровные: оба уха одной ширины, промежуток — ширина выреза, высота — высота выреза', () => {
+      view({ config: notched, model: IDLE_MODEL });
+      const left = screen.getByTestId('island-ear-left');
+      const right = screen.getByTestId('island-ear-right');
+      expect(left.style.width).toBe('36px');
+      expect(right.style.width).toBe(left.style.width);
+      expect(screen.getByTestId('island-notch-gap').style.width).toBe('185px');
+      expect(screen.getByTestId('island-ears').style.height).toBe('32px');
+    });
+
+    it('центр формы — центр выреза с точностью до половины точки; вогнутые плечи 6 px у верхнего края', () => {
+      view({ config: notched });
+      const frame = screen.getByTestId('island-frame');
+      expect(frame.contains(shape())).toBe(true);
+      expect(frame.className).toContain('relative');
+      expect(frame.style.left).toBe('-0.5px');
+      const shoulders = frame.querySelectorAll('.island-shoulder');
+      expect(shoulders).toHaveLength(2);
+      expect(shoulders[0]!.getAttribute('aria-hidden')).toBe('true');
+      const css = ISLAND_CSS.replace(/\s+/g, ' ');
+      expect(css).toContain('.island-shoulder { position: absolute; top: 0; width: 6px; height: 6px;');
+      expect(css).toMatch(/\.island-shoulder-left \{ left: -6px; background: radial-gradient\(circle at 0 100%, transparent 6px, #000 6\.5px\); \}/);
+      expect(css).toMatch(/\.island-shoulder-right \{ right: -6px; background: radial-gradient\(circle at 100% 100%, transparent 6px, #000 6\.5px\); \}/);
+    });
+
+    it('без выреза обёртка не участвует в раскладке: ни сдвига, ни плеч', () => {
+      view();
+      const frame = screen.getByTestId('island-frame');
+      expect(frame.className).toBe('contents');
+      expect(frame.style.left).toBe('');
+      expect(frame.querySelector('.island-shoulder')).toBeNull();
+      expect(screen.queryByTestId('island-ears')).toBeNull();
+    });
+
+    it('убран без Done — голый вырез: форма ровно по вырезу, без обводки, у верхнего края', () => {
+      view({ config: notched, model: IDLE_MODEL, retracted: true });
+      const bare = screen.getByTestId('island-notch');
+      expect(bare.style.width).toBe('185px');
+      expect(bare.style.height).toBe('32px');
+      expect(content().children).toHaveLength(1);
+      expect(shape().className).toContain('rounded-b-[10px]');
+      expect(shape().className).not.toContain('ring-1');
+      expect(shape().className).not.toContain('rounded-[3px]');
+      expect(parseFloat(shape().style.marginTop)).toBe(0);
+      expect(screen.queryByTestId('island-ears')).toBeNull();
+    });
+
+    it('убран с непросмотренными Done — уши с «✅ N» справа', () => {
+      view({ config: notched, model: IDLE_MODEL, retracted: true, doneCount: 2 });
+      expect(screen.getByTestId('island-ear-right').textContent).toBe('✅ 2');
+      expect(screen.queryByTestId('island-notch')).toBeNull();
+    });
+
+    it('убранный остров наведение не выдвигает: голый вырез остаётся', () => {
+      view({ config: notched, model: IDLE_MODEL, retracted: true, hovered: true, listOpen: true });
+      expect(screen.getByTestId('island-notch')).toBeTruthy();
+      expect(screen.queryByTestId('island-pill')).toBeNull();
+    });
+  });
+
+  describe('уши (N4)', () => {
+    it('правое ухо — статус по приоритету: ждёт тебя (сессии и комнаты), ошибка помощника важнее', () => {
+      view({ config: notched, model: { ...MODEL, proposals: 1 } });
+      expect(screen.getByTestId('island-ear-right').textContent).toBe('2');
+      expect(screen.getByTestId('island-ear-right').getAttribute('aria-label')).toBe('2 waiting for you');
+      cleanup();
+      render(<IslandView {...viewProps({ config: notched, assistant: assistantProps({ view: { ...assistantProps().view, host: { ...HOST_IDLE, phase: 'error' } } }) })} />);
+      expect(screen.getByTestId('island-ear-right').textContent).toBe('!');
+    });
+
+    it('работает N — синяя точка; только Done — «✅ N»', () => {
+      view({ config: notched, model: { ...IDLE_MODEL, working: 3, active: true } });
+      expect(screen.getByTestId('island-ear-right').textContent).toBe('3');
+      cleanup();
+      view({ config: notched, model: DONE_MODEL, doneCount: 1 });
+      expect(screen.getByTestId('island-ear-right').textContent).toBe('✅ 1');
+    });
+
+    it('левое ухо — мини-рой 24 px; «Reduce motion» Parley доходит до него', () => {
+      const engines: Array<ReturnType<typeof vi.fn>> = [];
+      const real = engineModule.createSwarm;
+      vi.spyOn(engineModule, 'createSwarm').mockImplementation((...args) => {
+        const engine = real(...args);
+        engines.push(vi.spyOn(engine, 'setSpec') as unknown as ReturnType<typeof vi.fn>);
+        return engine;
+      });
+      view({ config: { ...notched, motion: 'reduce' }, model: IDLE_MODEL });
+      const swarm = within(screen.getByTestId('island-ear-left')).getByTestId('swarm') as HTMLCanvasElement;
+      expect(swarm.style.width).toBe('24px');
+      expect(engines).toHaveLength(1);
+      expect(engines[0]).toHaveBeenCalledWith(expect.any(Object), expect.any(Number), true);
+    });
+  });
+
+  describe('выдвижение (N5)', () => {
+    it('наведение выдвигает форму: пилюля под вырезом, не уже ушей, скругление 22 px и тень; уход курсора — снова уши', () => {
+      const props = viewProps({ config: notched });
+      const { rerender } = render(<IslandView {...props} />);
+      expect(screen.getByTestId('island-ears')).toBeTruthy();
+      rerender(<IslandView {...props} hovered listOpen />);
+      expect(screen.queryByTestId('island-ears')).toBeNull();
+      expect(screen.getByTestId('island-pill')).toBeTruthy();
+      expect(screen.getByTestId('island-list')).toBeTruthy();
+      expect(content().style.paddingTop).toBe('32px');
+      // min-width = nw + 2·ear: 185 + 2·36.
+      expect(content().style.minWidth).toBe('257px');
+      expect(shape().className).toContain('rounded-b-[22px]');
+      expect(shape().className).toContain('shadow-lg');
+      rerender(<IslandView {...props} hovered={false} listOpen={false} />);
+      expect(screen.getByTestId('island-ears')).toBeTruthy();
+      expect(content().style.minWidth).toBe('');
+    });
+
+    it('запрос, согласие и помощник выдвигают форму без наведения', () => {
+      view({ config: notched, items: [permissionItem()] });
+      expect(screen.getByTestId('island-card')).toBeTruthy();
+      expect(content().style.paddingTop).toBe('32px');
+      cleanup();
+      view({ config: notched, consent: { card: { id: 'c-01', kind: 'folder-trust', folder: '/tmp/proj', projectPath: '/tmp/proj', requestedBy: { source: 'launch' }, at: '', state: 'pending' } as ConsentCard, deciding: false, note: null, onDecide: vi.fn() } });
+      expect(screen.getByTestId('island-consent-request')).toBeTruthy();
+      cleanup();
+      render(<IslandView {...viewProps({ config: notched, assistant: assistantProps({ open: true }) })} />);
+      expect(screen.getByTestId('assistant-view')).toBeTruthy();
+      expect(screen.queryByTestId('island-ears')).toBeNull();
+    });
+
+    it('уши → выдвинутый вид — кривая роста, обратно — кривая сжатия (§4.4)', () => {
+      const props = viewProps({ config: notched });
+      const { rerender } = render(<IslandView {...props} />);
+      resize(257, 32);
+      rerender(<IslandView {...props} hovered listOpen />);
+      resize(400, 220);
+      expect(morph()).toBe('island-morph-grow');
+      rerender(<IslandView {...props} />);
+      resize(257, 32);
+      expect(morph()).toBe('island-morph-shrink');
+    });
+  });
+
+  describe('смена дисплея (N8)', () => {
+    it('вырез → полоса → вырез: новый размер сразу и без класса перехода, переход возвращается через два кадра', () => {
+      // Подставные кадры: rAF копит колбэки по номеру, отмена их снимает, `flush` прогоняет один кадр.
+      let frames = new Map<number, FrameRequestCallback>();
+      let next = 0;
+      vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+        frames.set(++next, cb);
+        return next;
+      });
+      vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => {
+        frames.delete(id);
+      });
+      const flush = (): void => {
+        act(() => {
+          const run = frames;
+          frames = new Map();
+          for (const cb of run.values()) cb(0);
+        });
+      };
+      const props = viewProps({ config: notched, model: IDLE_MODEL });
+      const { rerender } = render(<IslandView {...props} />);
+      resize(257, 32);
+      expect(morph()).toBe('island-morph-grow');
+      // Остров ушёл на внешний монитор: выреза нет — пилюля, размер сразу новый, морфа нет.
+      withOffsets(280, 40, () => rerender(<IslandView {...props} config={{ ...notched, notch: null }} />));
+      expect(shape().style.width).toBe('280px');
+      expect(shape().style.height).toBe('40px');
+      expect(morph()).toBeUndefined();
+      expect(screen.getByTestId('island-pill')).toBeTruthy();
+      flush();
+      expect(morph()).toBeUndefined();
+      flush();
+      expect(morph()).toBe('island-morph-grow');
+      // Вернулся на встроенный дисплей: снова уши, снова мгновенно.
+      withOffsets(257, 32, () => rerender(<IslandView {...props} />));
+      expect(shape().style.width).toBe('257px');
+      expect(shape().style.height).toBe('32px');
+      expect(morph()).toBeUndefined();
+      expect(screen.getByTestId('island-ears')).toBeTruthy();
+      flush();
+      flush();
+      expect(morph()).toBe('island-morph-shrink');
+    });
+
+    it('новый замер того же дисплея (другой центр выреза) — тоже без морфа и со сдвигом по новому центру', () => {
+      vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 1);
+      vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined);
+      const props = viewProps({ config: notched, model: IDLE_MODEL });
+      const { rerender } = render(<IslandView {...props} />);
+      rerender(<IslandView {...props} config={{ ...notched, notch: { ...NOTCH, centerX: 240.5 } }} />);
+      expect(morph()).toBeUndefined();
+      expect(screen.getByTestId('island-frame').style.left).toBe('0.5px');
+    });
+  });
+
+  describe('уменьшенное движение (N10)', () => {
+    it('«Reduce motion» в вырезе: форма без класса перехода, data-motion гасит проявление ушей', () => {
+      view({ config: { ...notched, motion: 'reduce' }, model: IDLE_MODEL });
+      resize(257, 32);
+      expect(morph()).toBeUndefined();
+      expect(shape().getAttribute('data-motion')).toBe('reduce');
+      expect(screen.getByTestId('island-ears').className).toContain('island-reveal');
+    });
+  });
+});

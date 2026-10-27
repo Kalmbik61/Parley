@@ -2647,3 +2647,120 @@ describe('реакции роёв помощника (#9 §4.1–§4.3, план
     expect(reacted(reacts)).toEqual(['shake']);
   });
 });
+
+describe('остров в вырезе (#9 §12, план 3b B28)', () => {
+  /** Вырез 185 × 32 pt по центру кадра 480 pt; уши без статуса — по 36 pt. */
+  const NOTCH = { width: 185, height: 32, centerX: 240 };
+  let innerWidth = 0;
+  /** Колбэки подставного rAF по номеру. */
+  let queued = new Map<number, FrameRequestCallback>();
+
+  beforeEach(() => {
+    innerWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 480 });
+    // Кадры подставные: настоящий rAF jsdom после подставных таймеров соседних тестов не срабатывает.
+    queued = new Map();
+    let next = 0;
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      queued.set(++next, cb);
+      return next;
+    });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => {
+      queued.delete(id);
+    });
+    // Прямоугольники по сдвигу к центру выреза: форма — по `left` обёртки, зона нажатия — по своему.
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const element = this as HTMLElement;
+      const id = element.dataset.testid;
+      if (id === 'island') return { x: 111.5 + (parseFloat((element.parentElement as HTMLElement).style.left) || 0), y: 0, width: 257, height: 32 } as DOMRect;
+      if (id === 'island-tab') return { x: 147.5 + (parseFloat(element.style.left) || 0), y: 0, width: 185, height: 32 } as DOMRect;
+      return { x: 0, y: 0, width: 0, height: 0 } as DOMRect;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: innerWidth });
+  });
+
+  const lastRect = (island: IslandApi): unknown => vi.mocked(island.setHitRect).mock.calls.at(-1)?.[0];
+  const morph = (): string | undefined => screen.getByTestId('island').className.split(' ').find((name) => name.startsWith('island-morph-'));
+  /** Прогоняет два подставных кадра: после смены выреза форма возвращает класс перехода через два rAF. */
+  const frames = (): void => {
+    for (let frame = 0; frame < 2; frame += 1) {
+      act(() => {
+        const run = queued;
+        queued = new Map();
+        for (const cb of run.values()) cb(0);
+      });
+    }
+  };
+  /** Main прислал новые настройки острова (`island:config`). */
+  const push = (island: IslandApi, config: IslandConfig): void => {
+    act(() => {
+      vi.mocked(island.onConfig).mock.calls.at(-1)![0](config);
+    });
+  };
+
+  it('N6: убранный — голый вырез и зона нажатия ровно по нему; выдвинутый в покое — уши, область мыши — форма ушей', async () => {
+    const { island, bridge } = setup({ notch: NOTCH, topInset: 32 });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(screen.getByTestId('island-notch')).toBeTruthy());
+    const tab = screen.getByTestId('island-tab');
+    expect(tab.className).not.toContain('w-16');
+    expect((tab.parentElement as HTMLElement).style.top).toBe('0px');
+    expect((tab.firstElementChild as HTMLElement).style.width).toBe('185px');
+    expect(lastRect(island)).toEqual({ x: 147.5, y: 0, width: 185, height: 32 });
+    expand();
+    expect(screen.getByTestId('island-ears')).toBeTruthy();
+    expect(screen.queryByTestId('island-pill')).toBeNull();
+    expect(lastRect(island)).toEqual({ x: 111.5, y: 0, width: 257, height: 32 });
+  });
+
+  it('N5: наведение выдвигает форму вниз (рост), уход курсора возвращает уши (сжатие)', async () => {
+    const { bridge, hover } = setup({ notch: NOTCH, topInset: 32 });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(screen.getByTestId('island-notch')).toBeTruthy());
+    expand();
+    hover(true);
+    expect(screen.getByTestId('island-pill')).toBeTruthy();
+    expect(screen.queryByTestId('island-ears')).toBeNull();
+    expect(screen.getByTestId('island-content').style.paddingTop).toBe('32px');
+    hover(false);
+    expect(screen.getByTestId('island-ears')).toBeTruthy();
+    expect(screen.queryByTestId('island-pill')).toBeNull();
+  });
+
+  it('убран с непросмотренным Done — уши с «✅ N»; зона нажатия — невидимые уши той же ширины', async () => {
+    useWorksStore.setState({ entries: ENTRIES, branches: {}, loading: false, error: null });
+    useActivityStore.setState({ byRef: { [refKey(ref('s-01'))]: makeActivity(ref('s-01'), 'unseen', { turnEndedAt: '2026-10-13T09:59:00.000Z' }) }, loaded: true });
+    const { bridge } = setup({ notch: NOTCH, topInset: 32 });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(screen.getAllByTestId('island-ears')).toHaveLength(2));
+    expect(isRetracted()).toBe(true);
+    expect(screen.getAllByTestId('island-ear-right').map((ear) => ear.textContent)).toEqual(['✅ 1', '✅ 1']);
+    const tab = screen.getByTestId('island-tab');
+    expect(tab.getAttribute('aria-label')).toBe('Agents finished — show the island');
+    expect(within(tab).getByTestId('island-ear-left').style.width).toBe(screen.getAllByTestId('island-ear-left')[0]!.style.width);
+  });
+
+  it('N8: новый замер выреза — область мыши уходит заново; вырез → полоса и обратно — без морфа', async () => {
+    const { island, bridge } = setup({ notch: NOTCH, topInset: 32 });
+    render(<IslandApp bridge={bridge} />);
+    await waitFor(() => expect(screen.getByTestId('island-notch')).toBeTruthy());
+    const base = await island.config();
+    push(island, { ...base, notch: { ...NOTCH, centerX: 240.5 } });
+    expect(lastRect(island)).toEqual({ x: 148, y: 0, width: 185, height: 32 });
+    expand();
+    frames();
+    expect(morph()).toBe('island-morph-grow');
+    push(island, { ...base, topInset: 38, notch: null });
+    expect(morph()).toBeUndefined();
+    expect(screen.getByTestId('island-idle')).toBeTruthy();
+    frames();
+    expect(morph()).toBeDefined();
+    push(island, base);
+    expect(morph()).toBeUndefined();
+    expect(screen.getByTestId('island-ears')).toBeTruthy();
+  });
+});
