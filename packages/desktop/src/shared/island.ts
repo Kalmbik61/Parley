@@ -7,7 +7,7 @@
 import type { AssistantLanguage } from '@parley/core/assistant';
 import { sessionRef, type EventData, type EventName, type SessionRef } from '@parley/protocol';
 import type { FocusTarget, ParleyBridge } from './bridge.js';
-import type { IslandAnchor } from './ui-types.js';
+import type { IslandAnchor, IslandMotion, IslandSoundUi } from './ui-types.js';
 import type { VoiceApi, VoiceModelId } from './voice-types.js';
 
 /** Точка курсора на экране (DIP), из `PointerEvent.screenX/Y` острова. */
@@ -49,12 +49,22 @@ export interface AssistantShortcutStatus {
   ok: boolean;
 }
 
-/** Что острову нужно из настроек и места: звук по Sound, отступ под чёлку, точка у края монитора. */
+/**
+ * Звук острова (#9 §5): `needs` — «Sound when you're needed» (`notifications.sound`), `finished` — «Sound when an agent
+ * finishes» (`notifications.finishedSound`, звук Done острова), остальное — `island.sound` из `ui.json`.
+ */
+export interface IslandSoundConfig extends IslandSoundUi {
+  needs: boolean;
+  finished: boolean;
+}
+
+/** Что острову нужно из настроек и места: звук и движение, отступ под чёлку, точка у края монитора. */
 export interface IslandConfig {
   /** Остров выключен, а помощник включён — окно показывается только в режиме помощника. */
   islandEnabled: boolean;
   assistant: IslandAssistantConfig;
-  sound: boolean;
+  islandSound: IslandSoundConfig;
+  motion: IslandMotion;
   topInset: number;
   /** Точка, у которой стоит остров: форма выравнивается внутри фиксированного кадра окна влево, по центру или вправо. */
   anchor: IslandAnchor;

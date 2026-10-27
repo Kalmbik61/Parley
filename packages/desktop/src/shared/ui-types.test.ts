@@ -8,7 +8,7 @@ describe('normalizeUi', () => {
 
   it('normalizes the pending hotkey for existing ui files and preserves island placement on partial patches', () => {
     expect(normalizeUi({ island: { enabled: false, displayId: 42, anchor: 'left' } }).island).toEqual({
-      enabled: false, displayId: 42, anchor: 'left', pendingHotkey: 'Control+Alt+I',
+      ...DEFAULT_UI.island, enabled: false, displayId: 42, anchor: 'left', pendingHotkey: 'Control+Alt+I',
     });
     expect(normalizeUi({ island: { pendingHotkey: null } }).island.pendingHotkey).toBeNull();
     expect(normalizeUi({ island: { pendingHotkey: 42 } }).island.pendingHotkey).toBe('Control+Alt+I');
@@ -187,11 +187,19 @@ describe('раздел browser (спека 2026-10-07, 4.3)', () => {
 
 describe('normalizeUi: остров', () => {
   it('нет поля — умолчания: включён, по центру, монитор не выбран', () => {
-    expect(normalizeUi({}).island).toEqual({ enabled: true, displayId: null, anchor: 'center', pendingHotkey: 'Control+Alt+I' });
+    expect(normalizeUi({}).island).toEqual({
+      enabled: true,
+      displayId: null,
+      anchor: 'center',
+      pendingHotkey: 'Control+Alt+I',
+      sound: { palette: 'soft', volume: 0.6, ui: false },
+      motion: 'system',
+    });
   });
 
   it('битые значения заменяются умолчаниями по одному, целые остаются', () => {
     expect(normalizeUi({ island: { enabled: false, displayId: 'x', anchor: 'top' } }).island).toEqual({
+      ...DEFAULT_UI.island,
       enabled: false,
       displayId: null,
       anchor: 'center',
@@ -201,13 +209,45 @@ describe('normalizeUi: остров', () => {
 
   it('ключ hintShown из ui.json прежних сборок игнорируется: загрузка не ломается, в результат он не попадает', () => {
     const island = normalizeUi({ island: { enabled: false, displayId: 3, anchor: 'right', hintShown: true } }).island;
-    expect(island).toEqual({ enabled: false, displayId: 3, anchor: 'right', pendingHotkey: 'Control+Alt+I' });
+    expect(island).toEqual({ ...DEFAULT_UI.island, enabled: false, displayId: 3, anchor: 'right', pendingHotkey: 'Control+Alt+I' });
     expect('hintShown' in island).toBe(false);
   });
 
   it('displayId — только целое число', () => {
     expect(normalizeUi({ island: { displayId: 3 } }).island.displayId).toBe(3);
     expect(normalizeUi({ island: { displayId: 2.5 } }).island.displayId).toBeNull();
+  });
+});
+
+describe('normalizeUi: звук и движение острова (#9 §5)', () => {
+  it('верные значения сохраняются', () => {
+    const island = normalizeUi({ island: { sound: { palette: 'warm', volume: 0.25, ui: true }, motion: 'reduce' } }).island;
+    expect(island.sound).toEqual({ palette: 'warm', volume: 0.25, ui: true });
+    expect(island.motion).toBe('reduce');
+    expect(normalizeUi({ island: { sound: { palette: 'crystal', volume: 0, ui: false } } }).island.sound)
+      .toEqual({ palette: 'crystal', volume: 0, ui: false });
+  });
+
+  it('чужие значения — умолчания по одному, годные поля остаются', () => {
+    expect(normalizeUi({ island: { sound: { palette: 'loud', volume: 0.3, ui: 'yes' }, motion: 'none' } }).island).toMatchObject({
+      sound: { palette: 'soft', volume: 0.3, ui: false },
+      motion: 'system',
+    });
+    for (const volume of ['0.5', null, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(normalizeUi({ island: { sound: { volume } } }).island.sound.volume).toBe(0.6);
+    }
+    expect(normalizeUi({ island: { sound: 'soft' } }).island.sound).toEqual(DEFAULT_UI.island.sound);
+  });
+
+  it('громкость приводится к 0–1', () => {
+    expect(normalizeUi({ island: { sound: { volume: 1.5 } } }).island.sound.volume).toBe(1);
+    expect(normalizeUi({ island: { sound: { volume: -0.2 } } }).island.sound.volume).toBe(0);
+  });
+
+  it('патч sound не трогает место острова; соседние поля sound приходят в самом патче', () => {
+    const current = normalizeUi({ island: { displayId: 7, anchor: 'right' } });
+    const patched = normalizeUi(mergeUiPatch(current, { island: { sound: { ...current.island.sound, palette: 'crystal' } } } as Partial<Omit<typeof DEFAULT_UI, 'version'>>)).island;
+    expect(patched).toEqual({ ...current.island, sound: { palette: 'crystal', volume: 0.6, ui: false } });
   });
 });
 

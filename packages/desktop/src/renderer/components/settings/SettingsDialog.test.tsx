@@ -16,6 +16,7 @@ import { createFakeBridge } from '../../test-utils/fake-bridge.js';
 import { S } from '../../../shared/strings.js';
 import { DEFAULT_UI } from '../../../shared/ui-types.js';
 import { useUiStore } from '../../store/ui.js';
+import { playCue } from '../../island/sound/synth.js';
 import { SettingsDialog } from './SettingsDialog.js';
 
 const CONFIG = {
@@ -37,10 +38,16 @@ const CONFIG = {
 
 // Тест 10 куска 9.1 проверяет вызов тоста, а не его разметку.
 vi.mock('sonner', () => ({ toast: vi.fn() }));
+// Пример палитры (#9 S5): синтез B07 подменён, проверяется, что и чем он играет.
+vi.mock('../../island/sound/synth.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../island/sound/synth.js')>()),
+  playCue: vi.fn(),
+}));
 
 afterEach(() => {
   cleanup();
   vi.mocked(toast).mockClear();
+  vi.mocked(playCue).mockClear();
 });
 
 /**
@@ -425,6 +432,127 @@ describe('SettingsDialog — переключатель «Island»', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Turn shortcut on' }));
     await waitFor(() => expect(saveUiSpy).toHaveBeenCalledWith({ island: { pendingHotkey: 'Control+Alt+I' } }));
     expect(screen.getAllByRole('button', { name: 'Turn shortcut off' })).toHaveLength(1);
+  });
+});
+
+// Звук и движение острова (#9 §5, T3): блок «Island» во вкладке Notifications.
+describe('SettingsDialog — блок «Island»: палитра, громкость, звуки интерфейса, движение', () => {
+  /** Контекст главного окна для примера палитры: jsdom своего `AudioContext` не даёт. */
+  class FakeAudioContext {
+    static created = 0;
+    state = 'running';
+    currentTime = 0;
+    destination = { kind: 'destination' };
+    readonly gains: { gain: { value: number }; connect: ReturnType<typeof vi.fn> }[] = [];
+    constructor() {
+      FakeAudioContext.created += 1;
+    }
+    createGain() {
+      const node = { gain: { value: 1 }, connect: vi.fn() };
+      this.gains.push(node);
+      return node;
+    }
+    resume() {
+      return Promise.resolve();
+    }
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('умолчания: «Soft», 60 %, звуки интерфейса и уменьшенное движение выключены', async () => {
+    const bridge = createFakeBridge();
+    openSettings(bridge);
+    switchTo('Notifications');
+
+    expect((await screen.findByRole('radio', { name: 'Soft' })).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('radio', { name: 'Crystal' }).getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByRole('radio', { name: 'Warm' }).getAttribute('aria-checked')).toBe('false');
+    expect((screen.getByRole('slider', { name: 'Island volume' }) as HTMLInputElement).value).toBe('60');
+    expect(screen.getByRole('switch', { name: 'Interface sounds' }).getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByRole('switch', { name: 'Reduce motion' }).getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('S5: выбор палитры сохраняется и сразу играет пример этой палитрой на громкости v²', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    const bridge = createFakeBridge();
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    openSettings(bridge);
+    switchTo('Notifications');
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'Crystal' }));
+
+    await waitFor(() =>
+      expect(saveUiSpy).toHaveBeenCalledWith({ island: { sound: { palette: 'crystal', volume: 0.6, ui: false } } }),
+    );
+    expect(useUiStore.getState().ui.island.sound.palette).toBe('crystal');
+    expect(screen.getByRole('radio', { name: 'Crystal' }).getAttribute('aria-checked')).toBe('true');
+    expect(playCue).toHaveBeenCalledTimes(1);
+    const [context, destination, kind, palette] = vi.mocked(playCue).mock.calls[0] ?? [];
+    expect(context).toBeInstanceOf(FakeAudioContext);
+    expect(kind).toBe('done');
+    expect(palette).toBe('crystal');
+    // Пример идёт через усиление громкости острова, а оно — в выход контекста.
+    const output = (context as unknown as FakeAudioContext).gains.find((node) => node === destination);
+    expect(output?.gain.value).toBeCloseTo(0.36);
+    expect(output?.connect).toHaveBeenCalledWith((context as unknown as FakeAudioContext).destination);
+
+    // Второй пример — в тот же контекст окна: он один на окно, как у `chime.ts`.
+    const created = FakeAudioContext.created;
+    fireEvent.click(screen.getByRole('radio', { name: 'Warm' }));
+    await waitFor(() => expect(playCue).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(playCue).mock.calls[1]?.[0]).toBe(context);
+    expect(vi.mocked(playCue).mock.calls[1]?.[3]).toBe('warm');
+    expect(FakeAudioContext.created).toBe(created);
+  });
+
+  it('при громкости 0 палитра сохраняется, а пример не играет', async () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    const bridge = createFakeBridge();
+    await bridge.app.saveUi({ island: { ...DEFAULT_UI.island, sound: { ...DEFAULT_UI.island.sound, volume: 0 } } });
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    openSettings(bridge);
+    switchTo('Notifications');
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'Warm' }));
+
+    await waitFor(() => expect(saveUiSpy).toHaveBeenCalledWith({ island: { sound: { palette: 'warm', volume: 0, ui: false } } }));
+    expect(playCue).not.toHaveBeenCalled();
+  });
+
+  it('ползунок громкости пишет island.sound.volume (0–1), соседние поля звука — в том же патче', async () => {
+    const bridge = createFakeBridge();
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    openSettings(bridge);
+    switchTo('Notifications');
+
+    fireEvent.change(await screen.findByRole('slider', { name: 'Island volume' }), { target: { value: '25' } });
+
+    await waitFor(() =>
+      expect(saveUiSpy).toHaveBeenCalledWith({ island: { sound: { palette: 'soft', volume: 0.25, ui: false } } }),
+    );
+    expect(useUiStore.getState().ui.island.sound.volume).toBe(0.25);
+  });
+
+  it('«Interface sounds» пишет island.sound.ui, «Reduce motion» — island.motion; в патчах нет места острова', async () => {
+    const bridge = createFakeBridge();
+    const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
+    openSettings(bridge);
+    switchTo('Notifications');
+
+    fireEvent.click(await screen.findByRole('switch', { name: 'Interface sounds' }));
+    await waitFor(() =>
+      expect(saveUiSpy).toHaveBeenCalledWith({ island: { sound: { palette: 'soft', volume: 0.6, ui: true } } }),
+    );
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Reduce motion' }));
+    await waitFor(() => expect(saveUiSpy).toHaveBeenLastCalledWith({ island: { motion: 'reduce' } }));
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Reduce motion' }).getAttribute('aria-checked')).toBe('true'));
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Reduce motion' }));
+    await waitFor(() => expect(saveUiSpy).toHaveBeenLastCalledWith({ island: { motion: 'system' } }));
+    expect(playCue).not.toHaveBeenCalled();
   });
 });
 

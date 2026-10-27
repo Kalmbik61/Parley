@@ -72,9 +72,13 @@ class ResizeObserverStub {
   }
 }
 
+/** Звук острова (#9 §5): по умолчанию в тестах молчит; `SOUND_ON` — включено «Sound when you're needed». */
+const SOUND_OFF: IslandConfig['islandSound'] = { needs: false, finished: false, palette: 'soft', volume: 0.6, ui: false };
+const SOUND_ON: IslandConfig['islandSound'] = { ...SOUND_OFF, needs: true };
+
 function islandApi(config: Partial<IslandConfig> = {}): IslandApi {
   return {
-    config: vi.fn(async (): Promise<IslandConfig> => ({ islandEnabled: true, assistant: { enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null } }, sound: false, topInset: 0, anchor: 'center', ...config })),
+    config: vi.fn(async (): Promise<IslandConfig> => ({ islandEnabled: true, assistant: { enabled: false, provider: null, model: null, language: 'en', hotkey: 'Alt+Space', voice: { enabled: false, model: null } }, islandSound: SOUND_OFF, motion: 'system', topInset: 0, anchor: 'center', ...config })),
     onConfig: vi.fn(() => () => undefined),
     visibility: vi.fn(async () => ({ version: 0, refs: [] })),
     onVisibility: vi.fn(() => () => undefined),
@@ -260,7 +264,7 @@ describe('проводка острова', () => {
 
   it('room proposals reveal once per full revision identity and only open the current room', async () => {
     vi.useFakeTimers();
-    const { fake, bridge, island, hover } = setup({ sound: true });
+    const { fake, bridge, island, hover } = setup({ islandSound: SOUND_ON });
     render(<IslandApp bridge={bridge} />);
     const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); };
     await settle();
@@ -351,7 +355,7 @@ describe('проводка острова', () => {
 
   it('Codex без карточки: действие в терминале выдвигает Island, открывает сессию и уходит после ответа', async () => {
     const entries = [makeWork('w-1', { projectPath: PROJECT, sessions: [makeSession('s-03', 'codex', { provider: 'codex' })] })];
-    const { island, bridge, blocked, working, hover } = setup({ sound: true }, entries);
+    const { island, bridge, blocked, working, hover } = setup({ islandSound: SOUND_ON }, entries);
     render(<IslandApp bridge={bridge} />);
     await act(async () => { await Promise.resolve(); });
     blocked('s-03');
@@ -1466,7 +1470,7 @@ describe('QuestionForm — настоящая проводка острова', 
   });
 
   it('new room proposal preserves the question draft, page, selection and keyboard owner', async () => {
-    const state = await mount('window', { sound: true }); fill(); act(() => other().focus());
+    const state = await mount('window', { islandSound: SOUND_ON }); fill(); act(() => other().focus());
     const selected = useIslandRequests.getState().selectedKey;
     const input = other();
     vi.mocked(state.island.beep).mockClear(); vi.mocked(state.island.keyboard).mockClear();
@@ -1487,7 +1491,7 @@ describe('QuestionForm — настоящая проводка острова', 
   });
 
   it.each(['blur', 'retract', 'blur and retract'])('new pending after %s preserves selected question, draft and page; still expands and sounds', async (mode) => {
-    const state = await mount('window', { sound: true }); fill(); act(() => other().focus());
+    const state = await mount('window', { islandSound: SOUND_ON }); fill(); act(() => other().focus());
     const selected = useIslandRequests.getState().selectedKey;
     vi.mocked(state.island.beep).mockClear();
     if (mode.includes('blur')) state.assistantBlur();
@@ -1506,7 +1510,7 @@ describe('QuestionForm — настоящая проводка острова', 
   });
 
   it('an empty selected pending question also stays selected; removing it selects the remaining request', async () => {
-    const state = await mount('window', { sound: true });
+    const state = await mount('window', { islandSound: SOUND_ON });
     const selected = useIslandRequests.getState().selectedKey;
     tuck(state.hover);
     vi.mocked(state.island.keyboard).mockClear(); vi.mocked(state.island.beep).mockClear();
@@ -1617,7 +1621,7 @@ describe('Done на острове', () => {
 
   it.each(['claude', 'codex'])('exact visible %s Done stays quiet, keeps badge, sends no seen and is consumed before blur', async (provider) => {
     const entries = [makeWork('w-1', { projectPath: PROJECT, sessions: [makeSession('s-01', 'a', { provider })] })];
-    const { bridge, island, blocked, hover } = setup({ sound: true }, entries);
+    const { bridge, island, blocked, hover } = setup({ islandSound: SOUND_ON }, entries);
     vi.mocked(island.visibility).mockResolvedValue({ version: 1, refs: [ref('s-01')] });
     render(<IslandApp bridge={bridge} />);
     await act(async () => {});
@@ -1706,7 +1710,7 @@ describe('Done на острове', () => {
   });
 
   it('выдвигает без звука, даже если Sound включён', async () => {
-    const { island, bridge } = setup({ sound: true });
+    const { island, bridge } = setup({ islandSound: SOUND_ON });
     render(<IslandApp bridge={bridge} />);
     await act(async () => {
       await Promise.resolve();
@@ -2134,7 +2138,7 @@ describe('согласия на папку', () => {
   });
 
   it('новая карточка выдвигает убранный остров и звучит один раз; повтор той же и решённая — без звука', async () => {
-    const { island, fake, bridge } = setup({ sound: true });
+    const { island, fake, bridge } = setup({ islandSound: SOUND_ON });
     render(<IslandApp bridge={bridge} />);
     await act(async () => { await Promise.resolve(); });
     expect(isRetracted()).toBe(true);
@@ -2148,7 +2152,16 @@ describe('согласия на папку', () => {
   });
 
   it('без Sound карточка выдвигает остров молча', async () => {
-    const { island, fake, bridge } = setup({ sound: false });
+    const { island, fake, bridge } = setup({ islandSound: SOUND_OFF });
+    render(<IslandApp bridge={bridge} />);
+    await act(async () => { await Promise.resolve(); });
+    act(() => fake.emit('consents.changed', { upsert: [CONSENT], removed: [] }));
+    await waitFor(() => expect(isRetracted()).toBe(false));
+    expect(island.beep).not.toHaveBeenCalled();
+  });
+
+  it('beep читает islandSound.needs: «Sound when an agent finishes» без «Sound when you’re needed» карточку не озвучивает', async () => {
+    const { island, fake, bridge } = setup({ islandSound: { ...SOUND_OFF, finished: true } });
     render(<IslandApp bridge={bridge} />);
     await act(async () => { await Promise.resolve(); });
     act(() => fake.emit('consents.changed', { upsert: [CONSENT], removed: [] }));
