@@ -5,7 +5,8 @@
  *
  * Хвостовые упоминания `@"путь"` — вложения, которые окно дописало при отправке (`attachments.ts`): в
  * пузыре они над текстом чипами (картинка — миниатюрой, клик открывает её: `open-attachment.ts`), самих путей в
- * тексте нет. Снимок файла-контекста браузера с тем же именем, что у его `.md`, отдельным чипом не показывается: его
+ * тексте нет. У Codex вложения уходят списком «Attachments:» (`components/rooms/attachments.ts`) — он разбирается
+ * так же. Снимок файла-контекста браузера с тем же именем, что у его `.md`, отдельным чипом не показывается: его
  * миниатюра — в чипе `.md`. Цитата Reply (`> …` в начале, `chat/reply.ts`) — над текстом, свёрнутая до трёх строк.
  *
  * Очередь окна (спека 2026-10-16, 4.3): серый элемент бывает трёх видов — `queued` (уже в очереди CLI во время хода),
@@ -22,6 +23,7 @@ import { cn } from '../../lib/cn.js';
 import { Button } from '../../ui/button.js';
 import { AssistantMark } from '../../components/AssistantMark.js';
 import { AttachmentChip } from '../AttachmentChip.js';
+import { splitRoomAttachments } from '../../components/rooms/attachments.js';
 import { splitAttachments } from '../attachments.js';
 import { ChatEnvContext } from '../chat-env.js';
 import { pairContextAttachments } from '../context-attachments.js';
@@ -51,7 +53,9 @@ export function PromptItem({ text, images = 0, state, onRetry, onSendNow, onRemo
   const resend = env?.resend;
   const openImage = useOpenAttachmentImage();
   // Вставка в CLI оставляет в промпте пустые строки по краям — в пузыре они только место.
-  const { text: rest, attachments } = splitAttachments(text);
+  // Вложения Claude — хвостовые `@"путь"`; у Codex окно шлёт их списком «Attachments:» (`composeRoomMessage`).
+  const mentions = splitAttachments(text);
+  const { text: rest, attachments } = mentions.attachments.length > 0 ? mentions : splitRoomAttachments(mentions.text);
   // Цитата Reply (`reply.ts`) — в начале текста блоком `> …`: в пузыре она свёрнута до трёх строк.
   const { quote, text: body } = splitQuote(rest);
   const shown = pairContextAttachments(attachments);

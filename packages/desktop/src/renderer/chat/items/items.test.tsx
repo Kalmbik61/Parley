@@ -273,6 +273,13 @@ describe('PromptItem — вложения: хвостовые упоминани
     expect(firstChip.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('у Codex вложения — список «Attachments:» (composeRoomMessage): тоже чипами, путей в тексте нет', () => {
+    renderPrompt(<PromptItem text={'look\n\nAttachments:\n- `/h/drops/a.png`\n- `/a/notes.txt`'} />);
+    expect(paths()).toEqual(['/h/drops/a.png', '/a/notes.txt']);
+    expect(screen.getByTestId('chat-prompt').textContent).not.toContain('Attachments:');
+    expect(screen.getByText('look')).toBeTruthy();
+  });
+
   it('только упоминания — текста нет, в пузыре одни чипы', () => {
     renderPrompt(<PromptItem text={'@"/a/notes.txt" '} />);
     expect(paths()).toEqual(['/a/notes.txt']);
