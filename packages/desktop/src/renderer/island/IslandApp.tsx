@@ -47,10 +47,14 @@
  * его сообщением с `data === ISLAND_TTS_PORT`, и чужое сообщение порт не подменит. Анализ голоса для лица берёт частоту
  * графа окна и уменьшенное движение — системное или настройку Parley. Пока голос звучит, сигналы острова идут по
  * правилам речи (#9 §6.4).
+ *
+ * Виды помощника (план 3b B24, Р10): лицо получает эмоцию звучащего предложения и геттер кадра голоса из стора, значок
+ * динамика — «Speak answers» и `toggleSpeak`. Реакции роёв (#9 §4.1–§4.3) — одноразовые `pulse`: мини-рой отвечает на
+ * начало работы, исходы показа, наведение и фазы помощника, большой рой — только на фазы помощника.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { refKey, type AssistantProposal, type SessionRef } from '@parley/protocol';
+import { refKey, type AssistantProposal, type AssistantState, type SessionRef } from '@parley/protocol';
 import { ISLAND_TTS_PORT, markSeenBatches, parseVisibilitySnapshot, type IslandBridge, type IslandConfig, type IslandHitRect, type IslandPresentationOutcome, type IslandTtsMessage } from '../../shared/island.js';
 import { DEFAULT_VOICE } from '../../shared/tts-types.js';
 import type { IslandAnchor } from '../../shared/ui-types.js';
@@ -63,7 +67,7 @@ import { listen } from './assistant/listen.js';
 import { miniLabel } from './assistant/labels.js';
 import { createSpeaker } from './assistant/speaker.js';
 import { assistantBusy, useAssistantStore } from './assistant/store.js';
-import { createVoiceAnalysis } from './assistant/voice-features.js';
+import { createVoiceAnalysis, type VoiceFrame } from './assistant/voice-features.js';
 import { useConsentsStore } from './consents/store.js';
 import { IslandTab } from './IslandTab.js';
 import { IslandView, sessionKeyOf, type IslandAssistantProps } from './IslandView.js';
@@ -72,6 +76,7 @@ import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
 import { createProgressPoller, type ProgressState } from './progress.js';
 import { islandSound } from './sound/graph.js';
+import { REACTION_FOR, type SwarmEvent, type SwarmPulse } from './swarm/spec.js';
 import { useIslandCues } from './useIslandCues.js';
 import { movePendingSelection, pendingKeyCommand, pendingNavigation, pendingRoomNavigation, reconcilePendingNavigation, type PendingNavigationState } from './navigation.js';
 
@@ -102,6 +107,34 @@ export const INITIAL_CONFIG: IslandConfig = {
   topInset: 0,
   anchor: 'center',
 };
+
+/** Кадр голоса для рта лица (Р10): рой читает его в своём кадре, а не при рендере. */
+const voiceFrame = (): VoiceFrame | null => useAssistantStore.getState().voiceFrame();
+
+/** Реакция роя на событие (#9 §4.1): новый объект на каждое событие, между событиями — тот же. */
+const pulseOf = (event: SwarmEvent): SwarmPulse => ({ reaction: REACTION_FOR[event], at: performance.now() });
+
+/** Исход показа → событие роя (#9 §4.1): согласие и терминал — как разрешение, предложение комнаты — как вопрос. */
+const OUTCOME_EVENT: Readonly<Record<IslandPresentationOutcome['kind'], SwarmEvent>> = {
+  permission: 'permission',
+  consent: 'permission',
+  'terminal-request': 'permission',
+  question: 'question',
+  'room-proposal': 'question',
+  plan: 'plan',
+  done: 'done',
+};
+
+/**
+ * Событие роя по смене состояния помощника (#9 §4.1): шаг инструмента (новая фаза `tool` или новый инструмент в ней),
+ * карточка подтверждения — как разрешение, ошибка; прочие фазы реакции не дают.
+ */
+function assistantEvent(host: AssistantState, prev: AssistantState): SwarmEvent | null {
+  if (host.phase === 'tool' && (prev.phase !== 'tool' || host.detail !== prev.detail)) return 'tool';
+  if (host.phase === prev.phase) return null;
+  if (host.phase === 'awaiting-confirm') return 'permission';
+  return host.phase === 'error' ? 'error' : null;
+}
 
 /** Выравнивание формы в кадре окна: влево, по центру или вправо — по точке, у которой стоит остров. */
 const ANCHOR_CLASS: Record<IslandAnchor, string> = { left: 'justify-start', center: 'justify-center', right: 'justify-end' };
@@ -422,12 +455,41 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   /** Убран ли остров: в покое при открытии — да, при работе или очереди — нет. */
   const [retracted, setRetracted] = useState(idle);
   const cues = useIslandCues({ sound: config.islandSound, active: model.active, hovered, speaking: () => speaker.speaking() });
+  /** Реакции роёв: мини-рой (события агентов, наведение, фазы помощника) и большой рой помощника (только его фазы). */
+  const [miniPulse, setMiniPulse] = useState<SwarmPulse | null>(null);
+  const [assistantPulse, setAssistantPulse] = useState<SwarmPulse | null>(null);
   const present = useCallback((outcomes: IslandPresentationOutcome[]): void => {
     if (outcomes.some((outcome) => outcome.expand)) setRetracted(false);
+    // Тихий Done и уже виденное (переподключение) не выдвигают остров — и рой на них не отвечает.
+    const shown = outcomes.find((outcome) => outcome.fresh && outcome.expand);
+    if (shown !== undefined) setMiniPulse(pulseOf(OUTCOME_EVENT[shown.kind]));
     if (onPresentation !== undefined) {
       for (const outcome of outcomes) onPresentation(outcome);
     } else cues.present(outcomes);
   }, [cues, onPresentation]);
+  // Фронты «нет → да» для мини-роя: значение при монтировании — база, а не событие (как у сигналов острова).
+  const pulseActive = useRef(model.active);
+  useEffect(() => {
+    if (model.active && !pulseActive.current) setMiniPulse(pulseOf('start'));
+    pulseActive.current = model.active;
+  }, [model.active]);
+  const pulseHovered = useRef(hovered);
+  useEffect(() => {
+    if (hovered && !pulseHovered.current) setMiniPulse(pulseOf('hover'));
+    pulseHovered.current = hovered;
+  }, [hovered]);
+  // Фазы помощника: отвечают оба роя — виден из них тот, что сейчас на острове.
+  useEffect(
+    () =>
+      useAssistantStore.subscribe((state, prev) => {
+        const event = assistantEvent(state.host, prev.host);
+        if (event === null) return;
+        const pulse = pulseOf(event);
+        setMiniPulse(pulse);
+        setAssistantPulse(pulse);
+      }),
+    [],
+  );
   // `hovered` здесь не трогаем: его ведёт только main, и локальный сброс разошёлся бы с ним, пока курсор над зоной нажатия.
   const retract = useCallback(() => {
     releaseKeyboard();
@@ -656,6 +718,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
         collapsed: assistant.collapsed,
         busy,
         mini: miniLabel(assistant.host, assistant.input, assistant.sending !== null),
+        pulse: miniPulse,
         onOpen: () => useAssistantStore.getState().openMode({ listen: false }),
         view: {
           host: assistant.host,
@@ -671,6 +734,11 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
           deciding: assistant.deciding,
           hotkey: config.assistant.hotkey,
           pending: pendingFor(items.length === 0 ? null : (labels.get(sessionKeyOf(items[0]!))?.session ?? ''), items.length, assistant.host.proposal),
+          sentenceMood: assistant.sentence?.emo ?? null,
+          voice: voiceFrame,
+          pulse: assistantPulse,
+          speakOn: config.assistant.speech?.enabled === true,
+          onToggleSpeak: () => useAssistantStore.getState().toggleSpeak(),
           onDraft: (text) => useAssistantStore.getState().setDraft(text),
           onSubmit: (text) => void useAssistantStore.getState().submit(text),
           onMic: () => useAssistantStore.getState().toggleListening(),

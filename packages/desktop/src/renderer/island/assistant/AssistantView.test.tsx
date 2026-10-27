@@ -1,14 +1,18 @@
 /**
  * Большой вид помощника: ответ и вопрос, подпись состояния, карточка подтверждения (кнопка Send взводится через
  * 500 мс, Enter в пустом поле отправляет), ввод по Enter, ошибка на карточке и строка ожидающих запросов; вопрос в пути,
- * очередь, упоминания на карточке и загрузка на Send.
+ * очередь, упоминания на карточке и загрузка на Send. Речь (план 3 Task 9, план 3b B24): лицо с эмоцией звучащего
+ * предложения, «Done» после речи, значок динамика, кадр голоса — в цикле кадров роя, реакция и «Reduce motion» — в рой.
  */
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistantProposal, AssistantState } from '@parley/protocol';
+import { S } from '../../../shared/strings.js';
+import * as engineModule from '../swarm/engine.js';
 import { AssistantView, type AssistantViewProps } from './AssistantView.js';
 import { HOST_IDLE } from './store.js';
+import type { VoiceFrame } from './voice-features.js';
 
 const PROPOSAL = { id: 'p1', target: 'Auth', where: 'Parley · Backend', kind: 'note', text: 'Please start with the tests.', wake: false } as const;
 
@@ -27,6 +31,8 @@ function props(patch: Partial<AssistantViewProps> = {}, host: Partial<AssistantS
     deciding: null,
     hotkey: 'Alt+Space',
     pending: null,
+    sentenceMood: null,
+    speakOn: false,
     maxHeight: 'calc(100vh - 88px)',
     onDraft: vi.fn(),
     onSubmit: vi.fn(),
@@ -35,6 +41,7 @@ function props(patch: Partial<AssistantViewProps> = {}, host: Partial<AssistantS
     onTakeKeyboard: vi.fn(),
     onUnqueue: vi.fn(),
     onShowRequests: vi.fn(),
+    onToggleSpeak: vi.fn(),
     ...patch,
   };
 }
@@ -360,5 +367,104 @@ describe('карточки по action', () => {
     });
     submitForm();
     expect(onDecide).toHaveBeenCalledWith('send');
+  });
+});
+
+describe('речь: лицо, значок динамика, кадр голоса (план 3 Task 9, план 3b B24)', () => {
+  const VOICE: VoiceFrame = { amp: 0.7, visemes: { a: 0.5, i: 0, u: 0, m: 0 } };
+
+  /** Движки роёв вида и шпионы их `setSpec` и `react`: шпион ставится при создании, до первого эффекта. */
+  function spyEngines(): Array<{ setSpec: ReturnType<typeof vi.fn>; react: ReturnType<typeof vi.fn> }> {
+    const real = engineModule.createSwarm;
+    const engines: Array<{ setSpec: ReturnType<typeof vi.fn>; react: ReturnType<typeof vi.fn> }> = [];
+    vi.spyOn(engineModule, 'createSwarm').mockImplementation((...args) => {
+      const engine = real(...args);
+      engines.push({ setSpec: vi.spyOn(engine, 'setSpec') as unknown as ReturnType<typeof vi.fn>, react: vi.spyOn(engine, 'react') as unknown as ReturnType<typeof vi.fn> });
+      return engine;
+    });
+    return engines;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('speaking и mood sad: лицо sad и «Speaking»; settling — сфера и «Done»', () => {
+    const { rerender } = render(<AssistantView {...props({ input: 'speaking' }, { mood: 'sad' })} />);
+    const canvas = screen.getByTestId('swarm');
+    expect(canvas.getAttribute('data-shape')).toBe('face');
+    expect(canvas.getAttribute('data-emo')).toBe('sad');
+    expect(screen.getByTestId('assistant-status').textContent).toBe('Speaking');
+    rerender(<AssistantView {...props({ input: 'settling' }, { mood: 'sad' })} />);
+    expect(screen.getByTestId('swarm').getAttribute('data-shape')).toBe('sphere');
+    expect(screen.getByTestId('swarm').getAttribute('data-emo')).toBeNull();
+    expect(screen.getByTestId('assistant-status').textContent).toBe('Done');
+  });
+
+  it('data-emo идёт за эмоцией звучащего предложения, а не за меткой хода (L3)', () => {
+    const { rerender } = render(<AssistantView {...props({ input: 'speaking', sentenceMood: 'anger' }, { mood: 'joy' })} />);
+    expect(screen.getByTestId('swarm').getAttribute('data-emo')).toBe('anger');
+    rerender(<AssistantView {...props({ input: 'speaking', sentenceMood: 'sad' }, { mood: 'joy' })} />);
+    expect(screen.getByTestId('swarm').getAttribute('data-emo')).toBe('sad');
+    rerender(<AssistantView {...props({ input: 'speaking', sentenceMood: null }, { mood: 'joy' })} />);
+    expect(screen.getByTestId('swarm').getAttribute('data-emo')).toBe('joy');
+  });
+
+  it('значок динамика: подпись «Speak answers», aria-pressed по настройке, клик зовёт onToggleSpeak, фокус не уходит', () => {
+    const p = props({ speakOn: true });
+    const { rerender } = render(<AssistantView {...p} />);
+    const button = screen.getByTestId('assistant-speak');
+    expect(button.getAttribute('aria-label')).toBe(S.assistant.settings.speak);
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(fireEvent.mouseDown(button)).toBe(false);
+    fireEvent.click(button);
+    expect(p.onToggleSpeak).toHaveBeenCalledTimes(1);
+    rerender(<AssistantView {...props({ speakOn: false })} />);
+    expect(screen.getByTestId('assistant-speak').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('строка G3: голос не скачан — подсказка видна в середине вида', () => {
+    render(<AssistantView {...props({ notice: S.assistant.voiceMissing('Serena') }, { answer: 'Two agents.' })} />);
+    expect(screen.getByTestId('assistant-scroll').textContent).toContain('Voice "Serena" isn\'t downloaded — open Settings');
+  });
+
+  it('кадр голоса: геттер voice читается в кадре роя (подставной rAF), не при рендере', () => {
+    const ctx = {
+      setTransform: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), fillRect: vi.fn(), fillStyle: '', globalAlpha: 1, globalCompositeOperation: '',
+      createRadialGradient: () => ({ addColorStop: vi.fn() }),
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+    let frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    const voice = vi.fn(() => VOICE);
+    const { rerender } = render(<AssistantView {...props({ input: 'speaking', voice }, { mood: 'joy' })} />);
+    rerender(<AssistantView {...props({ input: 'speaking', voice, draft: 'a' }, { mood: 'joy' })} />);
+    expect(voice).not.toHaveBeenCalled();
+    for (let t = 100; t < 200; t += 16) {
+      const run = frames;
+      frames = [];
+      for (const cb of run) cb(t);
+    }
+    expect(voice).toHaveBeenCalled();
+  });
+
+  it('реакция pulse уходит в движок большого роя один раз на событие', () => {
+    const engines = spyEngines();
+    vi.spyOn(performance, 'now').mockReturnValue(1000);
+    const pulse = { reaction: 'glint', at: 1000 } as const;
+    const { rerender } = render(<AssistantView {...props({ pulse }, { phase: 'tool' })} />);
+    rerender(<AssistantView {...props({ pulse: { ...pulse } }, { phase: 'tool' })} />);
+    expect(engines).toHaveLength(1);
+    expect(engines[0]!.react).toHaveBeenCalledTimes(1);
+    expect(engines[0]!.react).toHaveBeenCalledWith('glint', 1000, 1000, false);
+  });
+
+  it('«Reduce motion» Parley доходит до роя и лица: облик ставится без перехода', () => {
+    const engines = spyEngines();
+    render(<AssistantView {...props({ input: 'speaking', reducedMotion: true }, { mood: 'joy' })} />);
+    expect(engines[0]!.setSpec).toHaveBeenCalledWith(expect.objectContaining({ shape: 'face', emo: 'joy' }), expect.any(Number), true);
   });
 });

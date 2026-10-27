@@ -1433,7 +1433,8 @@ function assistantProps(patch: Partial<IslandAssistantProps> = {}): IslandAssist
   return {
     view: {
       host: HOST_IDLE, input: 'idle', level: 0, draft: '', notice: null, cardError: null, sending: null, queue: [], history: [], deciding: null, hotkey: 'Alt+Space', pending: null,
-      onDraft: vi.fn(), onSubmit: vi.fn(), onMic: vi.fn(), onDecide: vi.fn(), onUnqueue: vi.fn(), onShowRequests: vi.fn(),
+      sentenceMood: null, speakOn: false,
+      onDraft: vi.fn(), onSubmit: vi.fn(), onMic: vi.fn(), onDecide: vi.fn(), onUnqueue: vi.fn(), onShowRequests: vi.fn(), onToggleSpeak: vi.fn(),
     },
     open: false, collapsed: false, busy: false, mini: null, onOpen: vi.fn(),
     ...patch,
@@ -1462,6 +1463,63 @@ describe('помощник на острове', () => {
     cleanup();
     render(<IslandView {...viewProps()} />);
     expect(screen.queryByTestId('assistant-dot')).toBeNull();
+  });
+
+  /** Движки роёв вида и шпионы их `setSpec` и `react`: шпион ставится при создании, до первого эффекта. */
+  function spyEngines(): Array<{ setSpec: ReturnType<typeof vi.fn>; react: ReturnType<typeof vi.fn> }> {
+    const real = engineModule.createSwarm;
+    const engines: Array<{ setSpec: ReturnType<typeof vi.fn>; react: ReturnType<typeof vi.fn> }> = [];
+    vi.spyOn(engineModule, 'createSwarm').mockImplementation((...args) => {
+      const engine = real(...args);
+      engines.push({ setSpec: vi.spyOn(engine, 'setSpec') as unknown as ReturnType<typeof vi.fn>, react: vi.spyOn(engine, 'react') as unknown as ReturnType<typeof vi.fn> });
+      return engine;
+    });
+    return engines;
+  }
+
+  it('мини при речи: сфера без эмоции, палитра лица звучащего предложения, подпись «Speaking·»', () => {
+    const engines = spyEngines();
+    const speaking = (sentenceMood: 'anger' | null): IslandAssistantProps => {
+      const base = assistantProps({ open: true, collapsed: true, busy: true, mini: S.assistant.miniSpeaking });
+      return { ...base, view: { ...base.view, input: 'speaking', host: { ...HOST_IDLE, mood: 'joy' }, sentenceMood } };
+    };
+    const { rerender } = render(<IslandView {...viewProps({ assistant: speaking(null) })} />);
+    const mini = within(screen.getByTestId('assistant-dot')).getByTestId('swarm');
+    expect(mini.getAttribute('data-shape')).toBe('sphere');
+    expect(mini.getAttribute('data-emo')).toBeNull();
+    expect(screen.getByTestId('assistant-mini').textContent).toBe('Speaking·');
+    expect(engines[0]!.setSpec).toHaveBeenLastCalledWith(expect.objectContaining({ shape: 'sphere', pal: 'amber' }), expect.any(Number), false);
+    rerender(<IslandView {...viewProps({ assistant: speaking('anger') })} />);
+    expect(engines[0]!.setSpec).toHaveBeenLastCalledWith(expect.objectContaining({ shape: 'sphere', pal: 'coral' }), expect.any(Number), false);
+  });
+
+  it('реакция мини-роя (#9 §4.1): pulse уходит в движок один раз на событие, новое событие — снова', () => {
+    const engines = spyEngines();
+    vi.spyOn(performance, 'now').mockReturnValue(2000);
+    const pulse = { reaction: 'breathe', at: 2000 } as const;
+    const { rerender } = render(<IslandView {...viewProps({ assistant: assistantProps({ pulse }) })} />);
+    rerender(<IslandView {...viewProps({ assistant: assistantProps({ pulse }) })} />);
+    expect(engines).toHaveLength(1);
+    expect(engines[0]!.react).toHaveBeenCalledTimes(1);
+    expect(engines[0]!.react).toHaveBeenCalledWith('breathe', 2000, 2000, false);
+    rerender(<IslandView {...viewProps({ assistant: assistantProps({ pulse: { reaction: 'spin', at: 2100 } }) })} />);
+    expect(engines[0]!.react).toHaveBeenCalledTimes(2);
+    expect(engines[0]!.react).toHaveBeenLastCalledWith('spin', 2100, 2000, false);
+  });
+
+  it('M3: «Reduce motion» Parley доходит до мини-роя, роя помощника и «места» карточки', () => {
+    const reduce = { ...ISLAND_BASE, motion: 'reduce', topInset: 0, anchor: 'center' } as const;
+    let engines = spyEngines();
+    const { rerender } = render(<IslandView {...viewProps({ config: reduce, assistant: assistantProps() })} />);
+    expect(engines[0]!.setSpec).toHaveBeenCalledWith(expect.objectContaining({ shape: 'dot' }), expect.any(Number), true);
+    rerender(<IslandView {...viewProps({ config: reduce, assistant: assistantProps({ open: true }) })} />);
+    expect(engines.at(-1)!.setSpec).toHaveBeenCalledWith(expect.objectContaining({ shape: 'cloud' }), expect.any(Number), true);
+    cleanup();
+    vi.mocked(engineModule.createSwarm).mockRestore();
+    engines = spyEngines();
+    render(<IslandView {...viewProps({ config: reduce, items: [permissionItem()] })} />);
+    expect(engines).toHaveLength(1);
+    expect(engines[0]!.setSpec).toHaveBeenCalledWith(expect.objectContaining({ fx: 'ring' }), expect.any(Number), true);
   });
 });
 
