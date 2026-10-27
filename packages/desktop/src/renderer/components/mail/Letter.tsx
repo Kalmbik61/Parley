@@ -5,28 +5,23 @@
  * (было наоборот — старая палитра темы окна красила шапку в полный цвет, а
  * тело приглушала).
  *
- * `react-markdown` + `remark-gfm`, **без** `rehype-raw` (план куска, файлы):
- * без него `<script>…</script>` в тексте письма попадает в дерево как узел
- * `html` и на выходе печатается экранированным текстом, а не исполняется —
- * проверено (`renderToStaticMarkup`) и это ровно то, что просит спека 9.1/CSP:
- * агент не должен получить исполнение произвольного HTML через письмо.
- * Добавлять `rehype-raw` для «поддержки HTML» специально не нужно и вредно.
+ * Тело — тот же `RoomMarkdown`, что у ленты комнаты и «Chat» (`rooms/RoomMarkdown.tsx`): GFM без `rehype-raw` (сырой
+ * HTML печатается текстом, исполнения агенту письмо не даёт — спека 9.1/CSP), ссылки только `http(s)`, Copy у блока
+ * кода, ⌘/Ctrl-пути (`FilePathText`, контекст ставит `MailBody`). Упоминание `@s02` — чип, перенос строки — `<br>`, как
+ * в комнате. Письмо пишет агент: если Markdown не осилил текст, `RoomMarkdown` показывает его сырым текстом.
  *
  * Карточка вкладки «Почта» в облике Organic (спека окна 2026-09-29, 1.8): до 640px, тег вида, `S03 ревью →
  * you`, время, точка `accent-600` у непрочитанного, текст 14px. Лента комнаты рисует свои сообщения
  * (`rooms/RoomMessage.tsx`) и `Letter` не зовёт.
  *
- * Ссылки — через `app.openExternal` (дизайн окна 5.3, `use-terminal.ts` делает
- * то же для ссылок терминала): обычный переход в песочнице `contextIsolation`
- * открыл бы чужой домен в самом окне, а не в системном браузере.
+ * Ссылки — как в комнате: клик — вкладка встроенного браузера Parley, правый клик — меню, системный браузер —
+ * `onOpenExternal` (`app.openExternal`): обычный переход в песочнице `contextIsolation` открыл бы чужой домен в самом окне.
  */
 
-import ReactMarkdown, { type Components } from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { S } from '../../../shared/strings.js';
 import type { LetterView } from '../../lib/mail-view.js';
 import { Badge } from '../../ui/badge.js';
-import { MarkdownBoundary } from '../MarkdownBoundary.js';
+import { RoomMarkdown } from '../rooms/RoomMarkdown.js';
 
 export interface LetterProps {
   letter: LetterView;
@@ -35,49 +30,13 @@ export interface LetterProps {
   observeRef?: (el: HTMLElement | null) => void;
 }
 
-function markdownComponents(onOpenExternal: (url: string) => void): Components {
-  return {
-    a: ({ href, children }) => (
-      <a
-        href={href}
-        onClick={(event) => {
-          event.preventDefault();
-          if (href !== undefined) onOpenExternal(href);
-        }}
-        className="text-primary underline"
-      >
-        {children}
-      </a>
-    ),
-    // Инлайн-код и блок кода react-markdown отличает наличием `className`
-    // (`language-xxx` ставит только код внутри ``` — remark-rehype кладёт его
-    // на дочерний `<code>` фенса, у инлайн-кода класса нет).
-    code: ({ className, children }) => (
-      <code
-        className={`rounded bg-muted font-mono text-[0.9em] ${
-          className !== undefined ? 'block overflow-x-auto p-2' : 'px-1'
-        }`}
-      >
-        {children}
-      </code>
-    ),
-  };
-}
+/** Ярлыков сессий у письма нет: чип упоминания — тег `@S02`. */
+const noLabel = (): null => null;
 
 /** Вид письма → вид тега: вопрос — accent, решение — accent-2, заметка — neutral (1.8). */
 const TAG_VARIANT = { question: 'accent', decision: 'accent-2', note: 'neutral' } as const;
 
 export function Letter({ letter, onOpenExternal, observeRef }: LetterProps): JSX.Element {
-  // Письмо пишет агент: если Markdown не осилил текст (вложенность глубже стека), письмо показывается сырым текстом,
-  // а вкладка почты не падает (`MarkdownBoundary`).
-  const body = (
-    <MarkdownBoundary text={letter.text}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents(onOpenExternal)}>
-        {letter.text}
-      </ReactMarkdown>
-    </MarkdownBoundary>
-  );
-
   return (
     <div
       ref={observeRef}
@@ -99,7 +58,7 @@ export function Letter({ letter, onOpenExternal, observeRef }: LetterProps): JSX
         ) : null}
       </div>
       <div data-letter-body className="min-w-0 break-words text-sm">
-        {body}
+        <RoomMarkdown text={letter.text} labelOf={noLabel} onOpenExternal={onOpenExternal} />
       </div>
     </div>
   );
