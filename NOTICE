@@ -343,3 +343,106 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+------------------------------------------------------------------------------
+speech.cpp
+------------------------------------------------------------------------------
+
+Нейроголос помощника (только Mac на Apple silicon) синтезирует речь на этом
+Mac движком speech.cpp (https://github.com/nyosegawa/speech.cpp), версия
+0.9.0, коммит 49f022a48bc1c7e797aa64dd08d2d9655baf299e. Собранное приложение
+для arm64 везёт его исполняемый файл и библиотеку без изменений —
+Contents/Resources/speech/bin/speech и Contents/Resources/speech/lib/; исходник
+на сборке берёт packages/desktop/scripts/fetch-speech.mjs (git clone на
+закреплённом коммите, коммиты speech.cpp и подмодуля ggml сверяются). В
+репозитории файлов нет. Тот же текст лицензии лежит в приложении, рядом с
+бинарём, — Contents/Resources/speech/LICENSE.
+
+MIT License
+
+Copyright (c) 2026 Sakasegawa
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------------------------------------------------------------------------------
+ggml (сборка speech.cpp)
+------------------------------------------------------------------------------
+
+speech.cpp собран статически вместе с библиотекой ggml — форк
+https://github.com/nyosegawa/ggml, коммит
+cbdeccfd49ec9c702c175c273d36c47520cf4710 (подмодуль speech.cpp). Текст
+лицензии в приложении — Contents/Resources/speech/licenses/ggml-LICENSE. В ggml
+входят ggml-cpu/llamafile/sgemm.cpp (Copyright 2024 Mozilla Foundation) и
+функция rope_yarn (Copyright (c) 2023 Jeffrey Quesnelle and Bowen Peng) — обе
+под той же лицензией MIT; их уведомления — в исходнике ggml.
+
+MIT License
+
+Copyright (c) 2023-2026 The ggml authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------------------------------------------------------------------------------
+cpp-httplib и miniaudio (сборка speech.cpp)
+------------------------------------------------------------------------------
+
+В исполняемый файл speech входят две библиотеки-заголовка, которые speech.cpp
+держит в vendor/ вместе с их лицензиями. Тексты лицензий в приложении —
+Contents/Resources/speech/licenses/cpp-httplib-LICENSE и
+Contents/Resources/speech/licenses/miniaudio-LICENSE.
+
+- cpp-httplib (https://github.com/yhirose/cpp-httplib, v0.59.0) —
+  Copyright (c) 2017 yhirose, лицензия MIT (текст — как у speech.cpp выше).
+- miniaudio (https://github.com/mackron/miniaudio, v0.11.25) — на выбор
+  Public Domain (Unlicense) или MIT No Attribution, Copyright 2026 David Reid.
+
+------------------------------------------------------------------------------
+Qwen3-TTS
+------------------------------------------------------------------------------
+
+Голоса помощника (serena, ryan, aiden, vivian, ono_anna) — модель Qwen3-TTS
+12Hz 0.6B CustomVoice, Qwen Team, Alibaba Cloud
+(https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice, коммит
+85e237c12c027371202489a0ec509ded67b5e4b5; лицензия в карточке модели —
+apache-2.0). Parley веса не раздаёт: файл GGUF для speech.cpp скачивается по
+кнопке в настройках помощника.
+
+Лицензия: Apache License, Version 2.0. В репозитории модели на Hugging Face
+файла LICENSE нет, поэтому полный текст взят без правок из официального
+репозитория кода модели https://github.com/QwenLM/Qwen3-TTS, коммит
+022e286b98fbec7e1e916cb940cdf532cd9f488e (Copyright 2026 Alibaba Cloud), —
+packages/desktop/src/main/assistant/licenses/Qwen3-TTS-LICENSE.txt, в
+собранном приложении — Contents/Resources/licenses/Qwen3-TTS-LICENSE.txt
+(рядом с этим NOTICE). Файла NOTICE ни в одном из этих репозиториев нет.
