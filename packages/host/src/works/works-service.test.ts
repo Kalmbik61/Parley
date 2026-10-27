@@ -11,6 +11,7 @@ import {
 } from '@parley/core';
 import type { EventData, EventName } from '@parley/protocol';
 import type { HostContext } from '../context.js';
+import type { Client } from '../client.js';
 import { createWindowCounters } from '../health/window-counters.js';
 import { createWorksService } from './works-service.js';
 import type { WorksService } from './works-service.js';
@@ -68,6 +69,40 @@ const exists = async (file: string): Promise<boolean> => {
 };
 
 describe('источники', () => {
+  it('public compact и legacy snapshots/events скрывают proof, internal readers сохраняют его', async () => {
+    const map = await createWork(projectA, { title: 'Private proof' });
+    const proof = { launchRevision: '12345678-1234-1234-1234-123456789abc', pid: 42,
+      startedAtProcess: 'private-process-stamp', threadId: '019ce3d5-584a-7be2-922e-b8185a8d7c19' };
+    await updateMap(projectA, map.work.id, (current) => {
+      Object.assign(addSession(current, { provider: 'codex', label: 'codex', task: '' }),
+        { codexThreadBinding: proof, providerSessionId: proof.threadId });
+    });
+    const host = fakeHost();
+    host.clients = () => [{ id: 'legacy', features: new Set() } as Client];
+    const s = createWorksService(host);
+    services.push(s);
+    const changes: unknown[] = [];
+    s.onChange((next) => changes.push(next));
+    await s.start();
+    const internal = s.entry(projectA, map.work.id)!;
+    const before = JSON.stringify(internal);
+    expect(internal.map.sessions[0]?.codexThreadBinding).toEqual(proof);
+    expect(s.snapshot().entries[0]?.map.sessions[0]?.codexThreadBinding).toEqual(proof);
+    expect(JSON.stringify(changes)).toContain(proof.launchRevision);
+    const events = broadcasts.filter((item) => item.event === 'works.changed');
+    expect(events).toHaveLength(2);
+    for (const publicSnapshot of [s.windowSnapshot(), s.legacySnapshot(), ...events.map((item) => item.data)]) {
+      expect(publicSnapshot).not.toBeNull();
+      const json = JSON.stringify(publicSnapshot);
+      expect(json).not.toContain('codexThreadBinding');
+      expect(json).not.toContain(proof.launchRevision);
+      expect(json).not.toContain(proof.startedAtProcess);
+      expect(json).toContain(proof.threadId);
+    }
+    expect(JSON.stringify(internal)).toBe(before);
+    expect(s.snapshot().entries[0]?.map.sessions[0]?.codexThreadBinding).toEqual(proof);
+  });
+
   it('две работы в двух проектах из индекса попадают в один снимок', async () => {
     const a = await createWork(projectA, { title: 'Работа A' });
     const b = await createWork(projectB, { title: 'Работа B' });

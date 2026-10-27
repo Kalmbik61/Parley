@@ -23,6 +23,7 @@ import { isNotesFile } from '../shared/notes-types.js';
 import { isSessionId, workKey as projectWorkKey } from '../shared/work-keys.js';
 import type { UiStore } from './ui-store.js';
 import { openOrReveal, revealInFinder } from './files/open-path.js';
+import { projectIslandWorks } from './island/works-projection.js';
 import { FilesDeniedError, type RootsRegistry } from './roots.js';
 import { parseAnnotationPins, type createAnnotate } from './browser/annotate.js';
 import type { AgentOps } from './browser/agent-ops.js';
@@ -406,6 +407,9 @@ export function registerIpc(options: RegisterIpcOptions): void {
       const fromIsland = isIslandSender?.((event as { sender?: unknown }).sender) === true;
       if (fromIsland && !ISLAND_METHODS.has(method)) {
         throw new Error(`method not allowed for the island: ${method}`);
+      }
+      if (fromIsland && method === 'works.list') {
+        return projectIslandWorks(await connection.call('works.list', params) as Result<'works.list'>);
       }
       if (fromIsland && method === 'feed.snapshot') {
         const parsed = ISLAND_SNAPSHOT_PARAMS.safeParse(params);
@@ -1003,7 +1007,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
 export function forwardHostToWindow(
   connection: HostConnection,
   window: BrowserWindow,
-  options: { events?: ReadonlySet<string> } = {},
+  options: { events?: ReadonlySet<string>; island?: boolean } = {},
 ): { dispose: () => void } {
   const { events } = options;
   const unsubEvent = connection.onEvent((message) => {
@@ -1011,7 +1015,8 @@ export function forwardHostToWindow(
     // Операция агента — дело main (`answerBrowserAgentOps`): странице окна её аргументы не нужны.
     if (message.event === 'browser.agentOp') return;
     if (events !== undefined && !events.has(message.event)) return;
-    window.webContents.send('host:event', message);
+    window.webContents.send('host:event', options.island && message.event === 'works.changed'
+      ? { ...message, data: projectIslandWorks(message.data as Result<'works.list'>) } : message);
   });
   const unsubStatus = connection.onStatus((status) => {
     if (window.isDestroyed()) return;
@@ -1033,7 +1038,7 @@ export function forwardHostToWindow(
 export function forwardHostToPages(
   connection: HostConnection,
   window: BrowserWindow,
-  options: { events?: ReadonlySet<string> } = {},
+  options: { events?: ReadonlySet<string>; island?: boolean } = {},
 ): void {
   let current: { dispose: () => void } | null = null;
   window.webContents.on('did-finish-load', () => {

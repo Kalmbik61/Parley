@@ -1724,7 +1724,7 @@ describe('forwardHostToPages (fix-7.3 п. 4а)', () => {
   });
 
   /** Подставное соединение: `emit` рассылает событие подписчикам, статус отдаётся при подписке. */
-  function fakeForwarding(options?: { events?: ReadonlySet<string> }) {
+  function fakeForwarding(options?: { events?: ReadonlySet<string>; island?: boolean }) {
     const eventListeners = new Set<(message: unknown) => void>();
     const connection = {
       onEvent: (listener: (message: unknown) => void) => {
@@ -1745,11 +1745,32 @@ describe('forwardHostToPages (fix-7.3 п. 4а)', () => {
     };
     forwardHostToPages(connection, window as unknown as BrowserWindow, options);
     contents.emit('did-finish-load');
-    const emit = (event: string): void => {
-      for (const listener of eventListeners) listener({ event, data: {} });
+    const emit = (event: string, data: unknown = {}): void => {
+      for (const listener of eventListeners) listener({ event, data });
     };
     return { sent, emit };
   }
+
+  it('island old-host backstop одинаково скрывает private proof в RPC и event без мутации', async () => {
+    const island = { id: 99 };
+    const proof = { launchRevision: 'private-launch-canary', pid: 42, startedAtProcess: 'private-process-canary', threadId: 'raw-thread' };
+    const source = { entries: [{ projectPath: '/p', map: { work: { id: 'w-0001' },
+      sessions: [{ id: 's-01', providerSessionId: proof.threadId, codexThreadBinding: proof }] } }], branches: {}, revision: 7 };
+    const before = JSON.stringify(source);
+    const { ipcMain, connection } = setup({ isIslandSender: (sender) => sender === island });
+    vi.mocked(connection.call).mockResolvedValue(source);
+    const rpc = await ipcMain.invokeWithEvent('host:call', { sender: island }, 'works.list', {});
+    const { sent, emit } = fakeForwarding({ events: new Set(['works.changed']), island: true });
+    emit('works.changed', source);
+    expect(sent.at(-1)).toEqual(['host:event', { event: 'works.changed', data: rpc }]);
+    const json = JSON.stringify(rpc);
+    expect(json).not.toContain('codexThreadBinding');
+    expect(json).not.toContain(proof.launchRevision);
+    expect(json).not.toContain(proof.startedAtProcess);
+    expect(json).toContain(proof.threadId);
+    expect(JSON.stringify(source)).toBe(before);
+    expect(await ipcMain.invoke('host:call', 'works.list', {})).toBe(source);
+  });
 
   it('с белым списком окну уходят только события из списка, статус — всегда (остров: без pty.output)', () => {
     const { sent, emit } = fakeForwarding({ events: new Set(['works.changed', 'activity.changed']) });

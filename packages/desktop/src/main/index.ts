@@ -503,7 +503,7 @@ if (!gotLock) {
       onKeyboardLost: () => blurKeyboard(),
       onCreated: (window) => {
         // Острову — только нужные ему события хоста: `pty.output` всех сессий в его renderer не нужен.
-        forwardHostToPages(connection, window, { events: ISLAND_EVENTS });
+        forwardHostToPages(connection, window, { events: ISLAND_EVENTS, island: true });
         // Как у главного окна (`trackLoadedWindow`): «страница загружена» — для `islandActive`; перезагрузка снимает
         // признак до нового конца. С каждым концом загрузки — свежие настройки острова.
         trackLoadedWindow(window, loadedWindows);

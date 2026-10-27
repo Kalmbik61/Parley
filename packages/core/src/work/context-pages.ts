@@ -397,7 +397,8 @@ export function compactWorkMap(map: WorkMap, options: WindowOptions): WorkMap {
   }
 
   const sessions = map.sessions.map((session) => {
-    let next: WorkSession = session;
+    let next: WorkSession = { ...session };
+    delete next.codexThreadBinding;
     if (session.history.length > WINDOW_LIST_MAX) {
       omitted[`sessions.${session.id}.history`] = session.history.length - WINDOW_LIST_MAX;
       next = { ...next, history: session.history.slice(-WINDOW_LIST_MAX) };

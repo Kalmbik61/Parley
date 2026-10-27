@@ -163,7 +163,13 @@ export function createWorksService(
 
   const legacySnapshot = (): WorksSnapshot | null => {
     if (legacyCache?.revision !== revision) {
-      const full: WorksSnapshot = { ...buildSnapshot(), revision };
+      const full: WorksSnapshot = { ...buildSnapshot(), entries: Array.from(entries.values(), (entry) => ({
+        ...entry, map: { ...entry.map, sessions: entry.map.sessions.map((session) => {
+          const publicSession = { ...session };
+          delete publicSession.codexThreadBinding;
+          return publicSession;
+        }) },
+      })), revision };
       legacyCache = { revision, snapshot: jsonBytes(full) <= LEGACY_SNAPSHOT_MAX_BYTES ? full : null };
     }
     return legacyCache.snapshot;
