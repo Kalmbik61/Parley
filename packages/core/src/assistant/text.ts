@@ -20,6 +20,9 @@ export const MODEL_MOODS: readonly AssistantMood[] = ['calm', 'joy', 'sad', 'sur
 /** Дольше метки не ждём: `[[surprise]]` — 12 знаков, остальное — запас на пробелы внутри. */
 const MOOD_TAG_LIMIT = 24;
 
+/** Метка с одной закрывающей скобкой и пробелом после неё (`[[calm] `); эмоцию сверяет вызывающий. */
+const SINGLE_BRACKET_TAG = /^\[\[\s*([a-z]+)\s*\](?=\s|$)/i;
+
 export interface MoodSplit {
   mood: AssistantMood;
   /** Ответ без метки и без пробелов и перевода строки сразу после неё. */
@@ -89,13 +92,23 @@ export function createMoodStripper(): MoodStripper {
       }
       text += buffer.slice(index, open);
       const rest = buffer.slice(open);
+      // Модель иногда закрывает метку одной скобкой: `[[calm] Текст`. Метка — только знакомая эмоция; `]` в конце
+      // буфера ждёт следующей дельты: там может прийти вторая `]`.
+      const single = SINGLE_BRACKET_TAG.exec(rest);
+      const singleMood = single?.[1]?.toLowerCase() ?? '';
+      if (single && (MODEL_MOODS as readonly string[]).includes(singleMood) && (final || rest.length > single[0].length)) {
+        marks.push({ at: emitted + text.length, mood: singleMood as AssistantMood });
+        index = open + single[0].length;
+        skipSpace = true;
+        continue;
+      }
       const close = rest.indexOf(']]');
       const waiting = !final && close === -1 && rest.length < MOOD_TAG_LIMIT;
       if (waiting && (rest.length === 1 || rest[1] === '[')) {
         pending = rest;
         break;
       }
-      if (rest[1] !== '[' || close === -1 || close + 2 > MOOD_TAG_LIMIT) {
+      if (rest[1] !== '[' || close === -1 || close + 2 > MOOD_TAG_LIMIT || /[[\]]/.test(rest.slice(2, close))) {
         // Не метка: отдаём одну скобку, вторая может начинать настоящую метку.
         text += '[';
         index = open + 1;
@@ -126,6 +139,7 @@ export function speakable(text: string): string {
   return text
     .replace(/```[\s\S]*?(?:```|$)/g, ' ')
     .replace(/\[\[[^\]]*\]\]/g, ' ')
+    .replace(/\[\[\s*(?:calm|joy|sad|surprise|anger|error)\s*\](?=\s|$)/gi, ' ')
     .replace(/\bhttps?:\/\/\S+/gi, ' ')
     .replace(/(?<![\p{L}\p{N}_.~/])~?\/[\w@+~-]+(?:\.[\w@+~-]+)*(?:\/[\w@+~-]+(?:\.[\w@+~-]+)*)+\/?/gu, ' ')
     .replace(/[[(][^\])\s]*(?:session:|room:|\b[ws]-\d+\b)[^\])\s]*[\])]/g, ' ')

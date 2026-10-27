@@ -70,6 +70,10 @@ describe('speakable — текст ответа для озвучки', () => {
   it('не трогает обычные слова: S01, and/or, snake_case', () => {
     expect(speakable('S01 needs you, and/or snake_case.')).toBe('S01 needs you, and/or snake_case.');
   });
+  it('срезает знакомую метку с одной закрывающей скобкой, незнакомую — нет', () => {
+    expect(speakable('[[calm] He is done. [[joy] Yes.')).toBe('He is done. Yes.');
+    expect(speakable('[[foo] bar')).toBe('[[foo] bar');
+  });
   it('пустая строка, если ничего не осталось', () => {
     expect(speakable('[[calm]]')).toBe('');
     expect(speakable('  ')).toBe('');
@@ -122,6 +126,25 @@ describe('createMoodStripper — метки по предложениям в п�
     const text = 'Список [[это не метка, а длинный текст]] и [1] пункт.';
     expect(run([text])).toEqual({ text, marks: [] });
     expect(run(['Список [[это не метка, ', 'а длинный текст]] конец.']).text).toBe('Список [[это не метка, а длинный текст]] конец.');
+  });
+  it('метка с одной закрывающей скобкой (GLM) — отметка, даже разрезанная на `]`', () => {
+    const whole = run(['[[calm] Он закончил. [[joy] Ура.']);
+    expect(whole).toEqual({
+      text: 'Он закончил. Ура.',
+      marks: [
+        { at: 0, mood: 'calm' },
+        { at: 'Он закончил. '.length, mood: 'joy' },
+      ],
+    });
+    expect(run(['[[calm]', ' Он закончил. [[joy]', ' Ура.'])).toEqual(whole);
+    expect(run(['Ответ. [[sad]'])).toEqual({ text: 'Ответ. ', marks: [{ at: 'Ответ. '.length, mood: 'sad' }] });
+  });
+  it('незнакомое слово в `[[foo] ` не проглатывается, и следующая метка цела', () => {
+    expect(run(['[[foo] bar [[joy]] Да.'])).toEqual({
+      text: '[[foo] bar Да.',
+      marks: [{ at: '[[foo] bar '.length, mood: 'joy' }],
+    });
+    expect(run(['[[foo]', ' bar'])).toEqual({ text: '[[foo] bar', marks: [] });
   });
   it('в конце хода недописанная метка уходит текстом', () => {
     expect(run(['Ответ [[jo'])).toEqual({ text: 'Ответ [[jo', marks: [] });
