@@ -160,15 +160,18 @@ describe('useIslandCues: свои фронты', () => {
     expect(played()).toEqual(['start', 'hover', 'open', 'close']);
   });
 
-  it('фазы помощника: начал и кончил слушать, ошибка', () => {
+  it('фазы помощника: начал и кончил слушать, начал говорить, ошибка', () => {
     mount();
     act(() => useAssistantStore.setState({ input: 'listening' }));
     advance(CUE_GAP_MS);
     act(() => useAssistantStore.setState({ input: 'transcribing' }));
     advance(CUE_GAP_MS);
+    act(() => useAssistantStore.setState({ input: 'speaking' }));
+    act(() => useAssistantStore.setState({ input: 'speaking' }));
+    advance(CUE_GAP_MS);
     act(() => useAssistantStore.setState({ host: { ...HOST_IDLE, phase: 'error', error: 'boom' } }));
     act(() => useAssistantStore.setState({ host: { ...HOST_IDLE, phase: 'error', error: 'boom again' } }));
-    expect(played()).toEqual(['listen-start', 'listen-end', 'error']);
+    expect(played()).toEqual(['listen-start', 'listen-end', 'speak', 'error']);
   });
 
   it('решение с острова: запрос, применённый хостом, и согласие с пометкой done; неудача и обрыв связи молчат', () => {

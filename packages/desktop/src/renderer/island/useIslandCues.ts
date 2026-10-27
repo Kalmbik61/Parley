@@ -128,11 +128,12 @@ export function useIslandCues(input: IslandCueInput): IslandCues {
     hovered.current = input.hovered;
   }, [input.hovered, cues]);
 
-  // Фазы помощника: начал и кончил слушать, ошибка.
+  // Фазы помощника: начал и кончил слушать, начал говорить (#9 §3.1), ошибка.
   useEffect(
     () =>
       useAssistantStore.subscribe((state, prev) => {
         if (state.input === 'listening' && prev.input !== 'listening') cues.own('listen-start', true);
+        if (state.input === 'speaking' && prev.input !== 'speaking') cues.own('speak', true);
         if (state.input !== 'listening' && prev.input === 'listening') cues.own('listen-end', true);
         if (state.host.phase === 'error' && prev.host.phase !== 'error') cues.own('error', true);
       }),
