@@ -15,6 +15,10 @@
  * держимого номера. Здесь же — что окно помнит о комнатах, чтобы письма не пропадали и не копились: какие открывались
  * (`opened`: у неоткрытых событие обновляет одни числа) и докуда человек подгрузил историю (цепочка: `keepHeld` её не срежет).
  * Оригинал цитаты, которого окно не держит, берётся письмом по id (`loadQuote`, метод `context.letter`).
+ *
+ * Открытие, которое хост отклонил, повторяется само: с отступом 1 с, вдвое дольше после каждого сбоя подряд, до 30 с
+ * (`openRoom`, как у починки разрыва в `works.ts`). Повтор останавливают: письма комнаты встали (событие, починка), работы
+ * больше нет, комната уже не открыта, успешное открытие и отключение от хоста (`stopOpenRetries`).
  */
 
 import { create } from 'zustand';
@@ -60,6 +64,51 @@ const quoteKeyOf = (projectPath: string, workId: string): string => `${projectPa
 /** Запросы, что уже в пути: открытие комнаты и цитаты. Одно и то же дважды (повторная отрисовка, StrictMode) не шлётся. */
 const opening = new Map<string, Promise<void>>();
 const quoting = new Set<string>();
+
+/** Отступ повтора открытия после сбоя: первый, удвоение за каждый сбой подряд, потолок. Успешное открытие счёт обнуляет. */
+const OPEN_BACKOFF_MS = 1000;
+const OPEN_BACKOFF_MAX_MS = 30_000;
+
+/** Повтор открытия одной комнаты: сколько сбоев подряд и таймер, что ждёт следующей попытки. */
+interface OpenRetry {
+  failures: number;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+const openRetries = new Map<string, OpenRetry>();
+
+/** Снимает повтор комнаты вместе со счётом сбоев. */
+function forgetRetry(key: string): void {
+  const retry = openRetries.get(key);
+  if (retry?.timer != null) clearTimeout(retry.timer);
+  openRetries.delete(key);
+}
+
+/** Снимает все повторы открытия: связи с хостом нет, а открытые панели начнут заново, когда она вернётся. */
+export function stopOpenRetries(): void {
+  for (const key of [...openRetries.keys()]) forgetRetry(key);
+}
+
+/**
+ * Следующая попытка открыть комнату после сбоя. Читает карту работы на тот момент и ничего не делает, если письма комнаты
+ * уже встали (событие или починка принесли их сами), работы больше нет или комната не открыта.
+ */
+function scheduleReopen(bridge: Pick<ParleyBridge, 'call'>, projectPath: string, workId: string, roomId: string | null): void {
+  const key = roomKeyOf(projectPath, workId, roomId);
+  const retry = openRetries.get(key) ?? { failures: 0, timer: null };
+  retry.failures += 1;
+  if (retry.timer !== null) clearTimeout(retry.timer);
+  const delay = Math.min(OPEN_BACKOFF_MS * 2 ** (retry.failures - 1), OPEN_BACKOFF_MAX_MS);
+  retry.timer = setTimeout(() => {
+    retry.timer = null;
+    const current = useWorksStore.getState().entries.find((entry) => entry.projectPath === projectPath && entry.map.work.id === workId);
+    if (current === undefined || useRoomPagesStore.getState().opened[key] !== true || heldRanges(current).has(roomId)) {
+      forgetRetry(key);
+      return;
+    }
+    openRoom(bridge, current, roomId).catch((error: unknown) => console.warn('[parley] open room retry', error));
+  }, delay);
+  openRetries.set(key, retry);
+}
 
 /**
  * Страниц одной комнаты за одно дочитывание не больше. Страница — до сотни писем и 64 КиБ, поэтому потолок — не способ
@@ -143,18 +192,34 @@ export async function repairWork(bridge: Pick<ParleyBridge, 'call'>, entry: Wind
  * Комната (или Mail при `roomId: null`) открывается в окне: она помечается открытой, и если окно не держит ни одного её
  * письма, читается последняя страница `context.messages` (спека rooms.mail 6.9). Держимые письма заново не читаются: события
  * и починки разрыва поддерживают их сами. Открытие, что уже в пути, не повторяется; комната или работа, удалённые за это
- * время, — не сбой, другой отказ хоста бросается наружу. `entry` — карта на момент открытия.
+ * время, — не сбой, другой отказ хоста бросается наружу, а открытие повторяется само (отступ — в описании файла): открытие
+ * заново читает сразу и отменяет ожидающий повтор. `entry` — карта на момент открытия.
  */
 export function openRoom(bridge: Pick<ParleyBridge, 'call'>, entry: WindowWorkEntry, roomId: string | null): Promise<void> {
   const key = keyOf(entry, roomId);
   if (useRoomPagesStore.getState().opened[key] !== true) useRoomPagesStore.setState((state) => ({ opened: { ...state.opened, [key]: true } }));
-  if (heldRanges(entry).has(roomId)) return Promise.resolve();
+  if (heldRanges(entry).has(roomId)) {
+    forgetRetry(key);
+    return Promise.resolve();
+  }
   const running = opening.get(key);
   if (running !== undefined) return running;
+  const retry = openRetries.get(key);
+  if (retry?.timer != null) {
+    clearTimeout(retry.timer);
+    retry.timer = null;
+  }
   const read = readPage(bridge, entry, roomId, null)
-    .then((answer) => {
-      if (answer !== null) useWorksStore.getState().addMail(entry.projectPath, entry.map.work.id, answer.messages);
-    })
+    .then(
+      (answer) => {
+        forgetRetry(key);
+        if (answer !== null) useWorksStore.getState().addMail(entry.projectPath, entry.map.work.id, answer.messages);
+      },
+      (error: unknown) => {
+        scheduleReopen(bridge, entry.projectPath, entry.map.work.id, roomId);
+        throw error;
+      },
+    )
     .finally(() => opening.delete(key));
   opening.set(key, read);
   return read;

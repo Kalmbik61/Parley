@@ -4,7 +4,7 @@ import { ROOMS_MAIL_FEATURE } from '@parley/protocol';
 import { makeCompactMail, makeRoomNumbers, withCompactMail } from '../test-utils/compact-mail-fixtures.js';
 import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeLetter, makeMailEvent, makeMailRoom, makeRoom, makeWork } from '../test-utils/work-fixtures.js';
-import { MAIL_PAGES_MAX, followRoom, heldPolicy, openMail, openRoom, repairWork, rereadRoom, useRoomPagesStore } from './room-pages.js';
+import { MAIL_PAGES_MAX, followRoom, heldPolicy, openMail, openRoom, repairWork, rereadRoom, stopOpenRetries, useRoomPagesStore } from './room-pages.js';
 import { useWorksStore } from './works.js';
 
 const note = (id: string): Message => makeLetter(id, { roomId: 'r-01', to: [], from: 's-01', readBy: { human: 'x' } });
@@ -22,6 +22,7 @@ function entry(messages: Message[], total: number, tailFrom: number | null, vers
 }
 
 beforeEach(() => {
+  stopOpenRetries();
   useRoomPagesStore.setState({ chains: {}, loading: {}, opened: {}, quotes: {} });
   useWorksStore.setState({ entries: [], branches: {}, loading: false, error: null });
 });
@@ -374,6 +375,127 @@ describe('снимок без писем: открытие комнаты, Mail 
     expect(asked).toHaveLength(1);
     bridge.setHandler('context.messages', () => pageOf([]));
     await expect(openRoom(bridge, v2([]), 'r-01')).resolves.toBeUndefined();
+  });
+
+  describe('неудачное открытие', () => {
+    const failing = (bridge: ReturnType<typeof createFakeBridge>, outcomes: Array<'fail' | 'ok'>): { calls: () => number } => {
+      let calls = 0;
+      bridge.setHandler('context.messages', () => {
+        const outcome = outcomes[Math.min(calls, outcomes.length - 1)];
+        calls += 1;
+        if (outcome === 'fail') throw { code: 'internal', message: 'нет' };
+        return pageOf([unread('m-08'), unread('m-09')]);
+      });
+      return { calls: () => calls };
+    };
+
+    it('неудачное открытие повторяется: через 1 с, после каждого сбоя подряд вдвое дольше, пока страница не придёт', async () => {
+      vi.useFakeTimers();
+      try {
+        const bridge = createFakeBridge();
+        const read = failing(bridge, ['fail', 'fail', 'ok']);
+        const current = v2([]);
+        useWorksStore.setState({ entries: [current] });
+        await expect(openRoom(bridge, current, 'r-01')).rejects.toMatchObject({ code: 'internal' });
+        expect(read.calls()).toBe(1);
+        await vi.advanceTimersByTimeAsync(999);
+        expect(read.calls()).toBe(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(read.calls()).toBe(2);
+        // Второй сбой подряд — отступ 2 с.
+        await vi.advanceTimersByTimeAsync(1999);
+        expect(read.calls()).toBe(2);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(read.calls()).toBe(3);
+        expect(ids()).toEqual(['m-08', 'm-09']);
+        // Страница пришла — больше не читается.
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(read.calls()).toBe(3);
+      } finally {
+        stopOpenRetries();
+        vi.useRealTimers();
+      }
+    });
+
+    it('отступ растёт до потолка в 30 с', async () => {
+      vi.useFakeTimers();
+      try {
+        const bridge = createFakeBridge();
+        const read = failing(bridge, ['fail']);
+        const current = v2([]);
+        useWorksStore.setState({ entries: [current] });
+        await expect(openRoom(bridge, current, 'r-01')).rejects.toBeDefined();
+        // 1 + 2 + 4 + 8 + 16 с — пять повторов, шестой отступ уже 30 с, а не 32.
+        await vi.advanceTimersByTimeAsync(31_000);
+        expect(read.calls()).toBe(6);
+        await vi.advanceTimersByTimeAsync(29_999);
+        expect(read.calls()).toBe(6);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(read.calls()).toBe(7);
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(read.calls()).toBe(8);
+      } finally {
+        stopOpenRetries();
+        vi.useRealTimers();
+      }
+    });
+
+    it('письма комнаты встали сами (событие), работа ушла или комната закрыта — повтор ничего не читает', async () => {
+      vi.useFakeTimers();
+      try {
+        const bridge = createFakeBridge();
+        const read = failing(bridge, ['fail']);
+        const current = v2([]);
+        useWorksStore.setState({ entries: [current] });
+        await expect(openRoom(bridge, current, 'r-01')).rejects.toBeDefined();
+        useWorksStore.getState().addMail('/tmp/proj', 'w-01', [unread('m-09')]);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(read.calls()).toBe(1);
+
+        useWorksStore.setState({ entries: [v2([])] });
+        await expect(openRoom(bridge, v2([]), 'r-01')).rejects.toBeDefined();
+        useWorksStore.setState({ entries: [] });
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(read.calls()).toBe(2);
+
+        useWorksStore.setState({ entries: [v2([])] });
+        await expect(openRoom(bridge, v2([]), 'r-01')).rejects.toBeDefined();
+        useRoomPagesStore.setState({ opened: {} });
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(read.calls()).toBe(3);
+      } finally {
+        stopOpenRetries();
+        vi.useRealTimers();
+      }
+    });
+
+    it('открытие заново (панель смонтирована снова) читает сразу и отменяет ожидающий повтор; stopOpenRetries повторы снимает', async () => {
+      vi.useFakeTimers();
+      try {
+        const bridge = createFakeBridge();
+        const read = failing(bridge, ['fail', 'ok']);
+        const current = v2([]);
+        useWorksStore.setState({ entries: [current] });
+        await expect(openRoom(bridge, current, 'r-01')).rejects.toBeDefined();
+        await openRoom(bridge, current, 'r-01');
+        expect(read.calls()).toBe(2);
+        expect(ids()).toEqual(['m-08', 'm-09']);
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(read.calls()).toBe(2);
+
+        // Отключение: стор работ снимает повторы, и мост, который уже не ответит, больше не зовётся.
+        useWorksStore.setState({ entries: [v2([])] });
+        failing(bridge, ['fail']);
+        await expect(openRoom(bridge, v2([]), 'r-02')).rejects.toBeDefined();
+        const before = bridge.calls.length;
+        stopOpenRetries();
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(bridge.calls.length).toBe(before);
+      } finally {
+        stopOpenRetries();
+        vi.useRealTimers();
+      }
+    });
   });
 
   it('загрузить раньше: итог берётся из compact версии 2, курсор — перед наименьшим держимым номером', async () => {

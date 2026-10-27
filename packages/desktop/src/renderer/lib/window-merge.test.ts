@@ -302,6 +302,34 @@ describe('снимок без писем (compact версии 2, спека roo
       expect(meta(next).rooms['']).toMatchObject({ total: 3, top: 3 });
     });
 
+    it('письма события в открытой комнате: не больше 300 новейших плюс подгруженное раньше; другие комнаты и Mail не трогаются', () => {
+      const current = v2([...letters('r-01', 1, 300), ...letters('r-02', 401, 705), ...letters(null, 801, 820)]);
+      const event = batch({ prevTop: 300, top: 310, total: 310, letters: letters('r-01', 301, 310) });
+      const of = (value: WindowWorkEntry, room: string | null): Message[] => value.map.messages.filter((message) => message.roomId === room);
+
+      const next = withMail(current, event, false, () => true);
+      expect(of(next, 'r-01')).toHaveLength(300);
+      expect(of(next, 'r-01')[0]?.id).toBe('m-011');
+      expect(of(next, 'r-01').at(-1)?.id).toBe('m-310');
+      // Комната без письма в событии держит, что держала: срез — для комнат, куда письма пришли.
+      expect(of(next, 'r-02')).toHaveLength(305);
+      expect(of(next, null)).toHaveLength(20);
+
+      // Человек подгрузил историю до m-005: срез опускается до неё; подгружена вся (`0`) — остаётся всё.
+      expect(of(withMail(current, event, false, () => true, (room) => (room === 'r-01' ? 5 : undefined)), 'r-01')).toHaveLength(306);
+      expect(of(withMail(current, event, false, () => true, (room) => (room === 'r-01' ? 0 : undefined)), 'r-01')).toHaveLength(310);
+      // Граница выше порога ничего не удерживает: на комнату по-прежнему 300.
+      expect(of(withMail(current, event, false, () => true, (room) => (room === 'r-01' ? 200 : undefined)), 'r-01')).toHaveLength(300);
+    });
+
+    it('срез идёт и по устаревшему событию, а в неоткрытую комнату письма не кладутся вовсе', () => {
+      const current = v2(letters('r-01', 1, 300));
+      const event = batch({ prevTop: 300, top: 301, total: 301, letters: letters('r-01', 301, 301) });
+      expect(withMail(current, event, true, () => true).map.messages).toHaveLength(300);
+      expect(withMail(current, event, false, () => false).map.messages).toHaveLength(300);
+      expect(withMail(current, event, false, () => false).map.messages.at(-1)?.id).toBe('m-300');
+    });
+
     it('итог последнего решения: письмо человека с ответом меняет decision, newest wins; чужие слова и чужое письмо — нет', () => {
       const decided = (id: string, text: string, from = 'human'): Message => note(id, { from, to: ['s-01'], text, readBy: { human: 'x' } });
       const base = v2([], { rooms: { 'r-01': makeRoomNumbers({ total: 9, top: 9, decision: 'returned' }) } });

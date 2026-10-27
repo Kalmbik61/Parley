@@ -153,7 +153,8 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   const currentBridge = useRef(bridge); currentBridge.current = bridge;
   const currentEntry = useRef(entry); currentEntry.current = entry;
   // Последняя страница при открытии комнаты. Заново — когда по числам снимка письма в ней есть, а окно их не держит
-  // (событие пропущено, комната была пуста): `unheld` меняется, и эффект идёт снова.
+  // (событие пропущено, комната была пуста): `unheld` меняется, и эффект идёт снова. Страницу, которую хост не отдал,
+  // стор повторяет сам (`openRoom`); пока её нет, лента не пустая, а ждёт (`aria-busy`), и подсказки «пишите» в ней нет.
   const unheld = compact?.version === 2 && !held && (compact.rooms[roomId]?.total ?? 0) > 0;
   useEffect(() => {
     if (!bare || !canLoadEarlier) return;
@@ -518,6 +519,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
           ref={containerRef}
           onScroll={onFeedScroll}
           data-room-feed=""
+          aria-busy={unheld ? true : undefined}
           className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-9 py-[18px]"
         >
           <PlanPanel key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>
@@ -538,7 +540,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
               {earlierLoading ? S.rooms.earlierLoading : S.rooms.earlier(earlier)}
             </button>
           ) : null}
-          {model.empty ? <p className="m-0 text-sm text-muted-foreground">{S.rooms.emptyFeed}</p> : null}
+          {model.empty && !unheld ? <p className="m-0 text-sm text-muted-foreground">{S.rooms.emptyFeed}</p> : null}
           {model.messages.map((message) => (
             <RoomMessage
               key={message.id}

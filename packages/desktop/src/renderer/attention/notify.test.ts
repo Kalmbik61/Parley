@@ -1289,6 +1289,37 @@ describe('createAttentionNotifier.onMail — письма событием rooms
     expect(h.notes.map((note) => note.body)).toEqual(['after']);
   });
 
+  it('работа, появившаяся позже, не уведомляет старые письма: база — по её top; письмо новее уведомляет, созданная после подключения — с первого', () => {
+    const h = started();
+    /** Работа `id`, которой не было в первом снимке (восстановлена из архива, снимок был частичным); письма `held` окно держит. */
+    const appears = (id: string, held: Message[], tops: Record<string, number>): WindowWorkEntry => {
+      const base = holding(held, tops);
+      return { ...base, map: { ...base.map, work: { ...base.map.work, id } } };
+    };
+    const eventOf = (workId: string, rooms: RoomsMailRoom[], version: number): RoomsMailEvent => makeMailEvent({ projectPath: '/tmp/p', workId, version, prevVersion: version - 1, rooms });
+
+    const restored = appears('w-02', [direct('m-2', { text: 'old' }), mention('m-3')], { '': 2, 'r-01': 3 });
+    h.entries = [snapshot(), restored];
+    h.notifier.onWorks(h.entries);
+    expect(h.notes).toEqual([]);
+    // Те же страницы ещё раз и события о тех же письмах — тишина.
+    h.notifier.onWorks(h.entries);
+    h.notifier.onMail(eventOf('w-02', [batch(null, [direct('m-2')]), batch('r-01', [mention('m-3')])], 2));
+    expect(h.notes).toEqual([]);
+    // Письмо новее top уведомляет.
+    h.notifier.onMail(eventOf('w-02', [batch(null, [direct('m-4', { text: 'new' })])], 3));
+    expect(h.notes.map((note) => [note.tag, note.body])).toEqual([['mail:/tmp/p w-02', 'new']]);
+
+    // Работа, созданная после подключения: top нулевой, письма приходят событиями — уведомляют с первого.
+    h.entries = [snapshot(), restored, appears('w-03', [], {})];
+    h.notifier.onWorks(h.entries);
+    h.notifier.onMail(eventOf('w-03', [batch(null, [direct('m-1', { text: 'first' })])], 2));
+    expect(h.notes.map((note) => [note.tag, note.body])).toEqual([
+      ['mail:/tmp/p w-02', 'new'],
+      ['mail:/tmp/p w-03', 'first'],
+    ]);
+  });
+
   it('prefs().mail: false — страница письма не уведомляет и тоже запоминается: включение настройки его не повторяет', () => {
     const h = started();
     h.prefs = { ...h.prefs, mail: false };

@@ -7,9 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { toast } from 'sonner';
 import type { MapCompact, Message, WindowWorkEntry } from '@parley/core';
+import { S } from '../../../shared/strings.js';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { useHostStore } from '../../store/host.js';
-import { useRoomPagesStore } from '../../store/room-pages.js';
+import { stopOpenRetries, useRoomPagesStore } from '../../store/room-pages.js';
 import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
 import { makeCompactMail, makeRoomNumbers, withCompactMail } from '../../test-utils/compact-mail-fixtures.js';
@@ -166,6 +167,61 @@ describe('RoomPanel: снимок без писем (compact версии 2, с�
     expect(calls).toEqual([{ projectPath: PROJECT, workId: 'w-01', roomId: 'r-01' }]);
     // Окно держит два письма из семи: над лентой — кнопка с числом оставшихся.
     expect(earlierButton()?.textContent).toBe('Show earlier messages (5)');
+  });
+
+  it('открытие комнаты с историей не показывает пустую ленту, пока страница в пути; по-настоящему пустая комната — показывает', async () => {
+    let release: (answer: ReturnType<typeof page>) => void = () => {};
+    bridge.setHandler('context.messages', () => new Promise((resolve) => (release = resolve)));
+    useWorksStore.setState({ entries: [bare([], 7)] });
+    render(<Live bridge={bridge} />);
+    await waitFor(() => expect(bridge.calls.some((call) => call.method === 'context.messages')).toBe(true));
+    // Снимок говорит «в комнате семь писем»: «Write the task…» было бы неправдой, лента тихо ждёт страницу.
+    expect(screen.queryByText(S.rooms.emptyFeed)).toBeNull();
+    expect(document.querySelector('[data-room-feed]')?.getAttribute('aria-busy')).toBe('true');
+    expect(earlierButton()).toBeNull();
+
+    await act(async () => {
+      release(page([note('m-06', 'шестое'), note('m-07', 'седьмое')], 'before:6'));
+    });
+    await waitFor(() => expect(screen.getByText('седьмое')).toBeDefined());
+    expect(document.querySelector('[data-room-feed]')?.getAttribute('aria-busy')).toBeNull();
+    expect(screen.queryByText(S.rooms.emptyFeed)).toBeNull();
+    cleanup();
+
+    // Писем в комнате нет вовсе (`total` 0): страница пуста, и подсказка, что писать, на месте.
+    bridge.setHandler('context.messages', () => page([], null));
+    useWorksStore.setState({ entries: [bare([], 0)] });
+    useRoomPagesStore.setState({ chains: {}, loading: {}, opened: {}, quotes: {} });
+    render(<Live bridge={bridge} />);
+    expect(screen.getByText(S.rooms.emptyFeed)).toBeDefined();
+    expect(document.querySelector('[data-room-feed]')?.getAttribute('aria-busy')).toBeNull();
+  });
+
+  it('неудачное открытие повторяется: комната с историей после сбоя чтения получает страницу без перемонтирования', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let failures = 1;
+      bridge.setHandler('context.messages', () => {
+        if (failures-- > 0) throw { code: 'internal', message: 'нет' };
+        return page([note('m-06', 'шестое'), note('m-07', 'седьмое')], 'before:6');
+      });
+      useWorksStore.setState({ entries: [bare([], 7)] });
+      render(<Live bridge={bridge} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.queryByText('седьмое')).toBeNull();
+      // Пока страницы нет, лента не пустая подсказка, а ожидание.
+      expect(screen.queryByText(S.rooms.emptyFeed)).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      await waitFor(() => expect(screen.getByText('седьмое')).toBeDefined());
+      expect(bridge.calls.filter((call) => call.method === 'context.messages')).toHaveLength(2);
+    } finally {
+      stopOpenRetries();
+      vi.useRealTimers();
+    }
   });
 
   it('лента расставляется, когда страница пришла: к самому раннему непрочитанному упоминанию, а не к низу пустой ленты', async () => {

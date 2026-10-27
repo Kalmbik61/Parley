@@ -13,7 +13,7 @@ import type { Message, WindowWorkEntry, WorkSession } from '@parley/core';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { ErrorBoundary } from '../../shell/ErrorBoundary.js';
 import { useHostStore } from '../../store/host.js';
-import { useRoomPagesStore } from '../../store/room-pages.js';
+import { stopOpenRetries, useRoomPagesStore } from '../../store/room-pages.js';
 import { useUiStore } from '../../store/ui.js';
 import { useWorksStore } from '../../store/works.js';
 import { makeCompactMail, makeRoomNumbers, withCompactMail } from '../../test-utils/compact-mail-fixtures.js';
@@ -339,6 +339,34 @@ describe('MailPanel — снимок без писем (compact версии 2)'
     render(<Live fake={fake} />);
     await act(async () => {});
     expect(asked).toHaveLength(1);
+  });
+
+  it('неудачное открытие Mail повторяется с отступом, перемонтировать вкладку не нужно', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS, 'context.messages'] } });
+      useRoomPagesStore.setState({ chains: {}, loading: {}, opened: {}, quotes: {} });
+      const fake = createFakeBridge();
+      let failures = 1;
+      fake.setHandler('context.messages', () => {
+        if (failures-- > 0) throw { code: 'internal', message: 'нет' };
+        return page([message('m-3', '2026-01-01T10:02:00.000Z')]);
+      });
+      useWorksStore.setState({ entries: [bare([])], branches: {}, loading: false, error: null });
+      render(<Live fake={fake} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.queryByText('письмо m-3')).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      await waitFor(() => expect(screen.getByText('письмо m-3')).toBeDefined());
+      expect(fake.calls.filter((call) => call.method === 'context.messages')).toHaveLength(2);
+    } finally {
+      stopOpenRetries();
+      vi.useRealTimers();
+    }
   });
 
   it('прежний хост: письма в снимке, при открытии Mail ничего не читает', async () => {

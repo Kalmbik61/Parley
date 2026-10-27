@@ -18,7 +18,9 @@
  * следующие, и снимок мог выйти внутри неё (событие несёт письма и отметки всего `(prevVersion, version]`). `prevVersion`
  * больше версии окна, а равно и неизвестная версия — разрыв: держимые письма перечитываются (`repairWork`), по одной починке
  * на работу, после сбоя — с отступом. Событие про комнату, которой нет в снимке, ждёт снимка этой работы: структура
- * смешанной записи может прийти позже события.
+ * смешанной записи может прийти позже события. Версии держатся на одно подключение: после переподключения (новый `init`)
+ * первый снимок чинит каждую работу со снимком без писем, у которой окно ещё держит письма (открытые комнаты и Mail), —
+ * одна починка по тому же пути, письма, написанные при обрыве связи, иначе не появились бы до следующего события комнаты.
  */
 
 import { create } from 'zustand';
@@ -28,7 +30,7 @@ import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { hostFeatures } from '../lib/capabilities.js';
 import { heldRanges, keepHeld, withFreshMessages, withMail, withMessages } from '../lib/window-merge.js';
-import { followRoom, heldPolicy, repairWork, rereadRoom } from './room-pages.js';
+import { followRoom, heldPolicy, repairWork, rereadRoom, stopOpenRetries } from './room-pages.js';
 
 export { WINDOW_ROOM_KEEP, keepHeld } from '../lib/window-merge.js';
 
@@ -238,11 +240,10 @@ export const useWorksStore = create<WorksState>((set, get) => ({
         }
       }
 
+      const policy = heldPolicy(event.projectPath, event.workId);
       set((state) => ({
         entries: state.entries.map((entry) =>
-          entry.projectPath === event.projectPath && entry.map.work.id === event.workId
-            ? withMail(entry, event, stale, heldPolicy(event.projectPath, event.workId).isOpen)
-            : entry,
+          entry.projectPath === event.projectPath && entry.map.work.id === event.workId ? withMail(entry, event, stale, policy.isOpen, policy.floor) : entry,
         ),
       }));
       if (!stale) held.set(key, event.version);
@@ -297,6 +298,26 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       enqueue(key, event);
     };
 
+    /** Первый применённый снимок этого подключения: держимые письма стоят от прошлого подключения, и чинить их надо один раз. */
+    let first = true;
+
+    /**
+     * После первого снимка нового подключения: каждая работа со снимком без писем, у которой окно держит письма, чинится
+     * через ту же одиночную починку, что и разрыв версии (`again`, `pump`). Работа, которой уже чинит разрыв, из событий,
+     * что ждали снимка, лишней починки не получает: та починка читает то же держимое.
+     */
+    const repairHeld = (snapshot: WorksSnapshot): void => {
+      for (const { projectPath, map } of snapshot.entries) {
+        const key = mailKey(projectPath, map.work.id);
+        const entry = find(key);
+        if (entry === undefined || entry.map.compact?.version !== 2 || entry.map.messages.length === 0) continue;
+        const state = repairOf(key);
+        if (state.running || state.again || state.timer !== null) continue;
+        state.again = true;
+        pump(key);
+      }
+    };
+
     const apply = (snapshot: WorksSnapshot): void => {
       if (disposed) return;
       // Хост до P35 номера не шлёт: его снимки применяются в порядке прихода, как прежде.
@@ -325,6 +346,10 @@ export const useWorksStore = create<WorksState>((set, get) => ({
         };
       });
       drain();
+      if (first) {
+        first = false;
+        repairHeld(snapshot);
+      }
     };
 
     bridge
@@ -363,6 +388,7 @@ export const useWorksStore = create<WorksState>((set, get) => ({
       unsubscribe();
       offStatus();
       offMail?.();
+      stopOpenRetries();
       waiting.clear();
       held.clear();
       for (const state of repairs.values()) {

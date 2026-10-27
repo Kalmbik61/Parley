@@ -209,6 +209,90 @@ describe('useWorksStore: снимок без писем (спека rooms.mail 6
     dispose();
   });
 
+  it('событиями комната не растёт больше 300 писем, подгруженное раньше остаётся', async () => {
+    const room = '/tmp/proj\u0000w-01\u0000r-01';
+    const { bridge, dispose } = await start(bare(300));
+    useRoomPagesStore.setState({ opened: { [room]: true } });
+    useWorksStore.setState({ entries: [bare(300, Array.from({ length: 300 }, (_, index) => letter(index + 1)))] });
+    // Пять событий по десять писем (письма только пишутся, снимков между ними нет): окно держит 300 новейших.
+    let version = 5;
+    const write = (from: number, to: number): void => {
+      version += 1;
+      bridge.emit(
+        'rooms.mail',
+        makeMailEvent({
+          version,
+          prevVersion: version - 1,
+          rooms: [makeMailRoom('r-01', { prevTop: from - 1, top: to, total: to, letters: Array.from({ length: to - from + 1 }, (_, index) => letter(from + index)) })],
+        }),
+      );
+    };
+    for (let from = 301; from <= 350; from += 10) write(from, from + 9);
+    expect(heldIds()).toHaveLength(300);
+    expect(heldIds()[0]).toBe('m-51');
+    expect(heldIds().at(-1)).toBe('m-350');
+
+    // Человек подгрузил историю до m-31: новое письмо её не срезает.
+    useRoomPagesStore.setState({ chains: { [room]: { next: 'before:31', done: false } } });
+    useWorksStore.setState({ entries: [bare(350, Array.from({ length: 320 }, (_, index) => letter(index + 31)), version)] });
+    write(351, 351);
+    expect(heldIds()).toHaveLength(321);
+    expect(heldIds()[0]).toBe('m-31');
+    dispose();
+  });
+
+  describe('после переподключения', () => {
+    const page = (messages: Message[]) => ({ messages, page: { total: 10, returned: messages.length, complete: true, next: null, bytes: 1, cut: 0 } });
+    /** Работа, в которой окно ничего не держит: её после переподключения перечитывать нечем. */
+    const quiet = (version = 5): WindowWorkEntry => ({
+      ...withCompactMail(makeWork('w-02', { rooms: [makeRoom('r-01', 'К')] }), makeCompactMail({ rooms: { 'r-01': makeRoomNumbers({ total: 3, top: 3 }) } })),
+      version,
+    });
+    const connect = (answer: WorksSnapshot, reads: unknown[]) => {
+      const bridge = createFakeBridge();
+      bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: null, features: [ROOMS_MAIL_FEATURE] });
+      bridge.setHandler('works.list', () => answer);
+      bridge.setHandler('context.messages', (params) => {
+        reads.push(params);
+        return page([letter(8), letter(9), letter(10)]);
+      });
+      return { bridge, dispose: useWorksStore.getState().init(bridge) };
+    };
+
+    it('после переподключения держимые комнаты перечитываются один раз', async () => {
+      const room = '/tmp/proj\u0000w-01\u0000r-01';
+      const first = await start(bare(9));
+      useRoomPagesStore.setState({ opened: { [room]: true } });
+      // Окно держит открытую комнату и Mail первой работы; письма, написанные при обрыве связи, в них не попали.
+      useWorksStore.setState({ entries: [bare(9, [letter(8), letter(9), letter(3, { roomId: null, to: ['human'] })]), quiet()] });
+      first.dispose();
+
+      const reads: Array<{ workId: string; roomId: string | null }> = [];
+      const { bridge, dispose } = connect(snapshot(1, [bare(10, [], 6), quiet(6)]), reads);
+      await vi.waitFor(() => expect(reads).toHaveLength(2));
+      await flush();
+      expect(reads.map((read) => `${read.workId}/${read.roomId}`).sort()).toEqual(['w-01/null', 'w-01/r-01']);
+      expect(heldIds()).toContain('m-10');
+
+      // Дальше — обычные снимки: новой починки они не вызывают.
+      bridge.emit('works.changed', snapshot(2, [bare(10, [], 7), quiet(7)]));
+      await flush();
+      await flush();
+      expect(reads).toHaveLength(2);
+      dispose();
+    });
+
+    it('работа без держимых писем починки не получает; первый снимок v1 тоже', async () => {
+      useWorksStore.setState({ entries: [quiet(), entry([note('m-05')], 5, 5, 5)] });
+      const reads: unknown[] = [];
+      const { dispose } = connect(snapshot(1, [quiet(6), entry([note('m-05')], 5, 5, 6)]), reads);
+      await vi.waitFor(() => expect(useWorksStore.getState().ready).toBe(true));
+      await flush();
+      expect(reads).toEqual([]);
+      dispose();
+    });
+  });
+
   it('комната, которой нет в новом снимке, свои письма уносит', async () => {
     const { bridge, dispose } = await start(bare(2));
     useWorksStore.setState({ entries: [bare(2, [letter(1), letter(2)])] });

@@ -83,12 +83,41 @@ export function keepHeld(prev: WindowWorkEntry | undefined, next: WindowWorkEntr
   const kept: Message[] = [];
   for (const [roomId, list] of byRoom) {
     list.sort((a, b) => messageSeq(a) - messageSeq(b));
-    // Порог — номер 300-го с конца письма, а подгруженная человеком история опускает его до своей границы.
-    const edge = list.length > WINDOW_ROOM_KEEP ? messageSeq(list[list.length - WINDOW_ROOM_KEEP]!) : 0;
-    const threshold = Math.min(edge, floor?.(roomId) ?? Number.POSITIVE_INFINITY);
+    const threshold = keepFrom(list, floor?.(roomId));
     for (const message of list) if (messageSeq(message) >= threshold) kept.push(message);
   }
   return { ...next, map: { ...next.map, messages: kept.sort((a, b) => messageSeq(a) - messageSeq(b)) } };
+}
+
+/**
+ * Номер, с которого окно держит письма комнаты (`list` — по возрастанию номера): 300-е с конца письмо, а подгруженная
+ * человеком история опускает порог до своей границы (`floor`). У комнаты не длиннее `WINDOW_ROOM_KEEP` порога нет — `0`.
+ */
+function keepFrom(list: readonly Message[], floor: number | undefined): number {
+  const edge = list.length > WINDOW_ROOM_KEEP ? messageSeq(list[list.length - WINDOW_ROOM_KEEP]!) : 0;
+  return Math.min(edge, floor ?? Number.POSITIVE_INFINITY);
+}
+
+/**
+ * Тот же срез для писем, что пришли событием (спека rooms.mail 6.9, «Память окна»): письма только пишутся, снимка между
+ * событиями нет, и открытая шумная комната иначе росла бы без предела. Срез — у комнат `rooms`, куда события что-то
+ * положили; остальные комнаты и Mail не трогаются. `messages` — по возрастанию номера.
+ */
+function capRooms(messages: Message[], rooms: ReadonlySet<string | null>, floor?: HeldPolicy['floor']): Message[] {
+  const byRoom = new Map<string | null, Message[]>();
+  for (const message of messages) {
+    if (!rooms.has(message.roomId)) continue;
+    const list = byRoom.get(message.roomId);
+    if (list === undefined) byRoom.set(message.roomId, [message]);
+    else list.push(message);
+  }
+  const from = new Map<string | null, number>();
+  for (const [roomId, list] of byRoom) {
+    const threshold = keepFrom(list, floor?.(roomId));
+    if (threshold > 0) from.set(roomId, threshold);
+  }
+  if (from.size === 0) return messages;
+  return messages.filter((message) => messageSeq(message) >= (from.get(message.roomId) ?? 0));
 }
 
 /** Работа с письмами, пришедшими страницей: в ленте они встают по номеру, письма снимка остаются как были. */
@@ -293,10 +322,18 @@ function withMailNumbers(compact: MapCompactMail, event: RoomsMailEvent, touched
  * откатило свежее. Письма комнат, которых в карте нет (удалены или структура ещё в пути), не встают в ленту.
  *
  * Снимок без писем (версия 2): письма события встают только в комнаты, которые окно открывало (`isOpen`, по умолчанию —
- * все), а у неоткрытых событие обновляет одни числа (спека rooms.mail 6.9). Числа, кандидаты в упоминания и итог решения
- * берутся из события по правилам R5 и R11 (`withMailNumbers`); у прежнего снимка — перевод в `compact` версии 1.
+ * все), а у неоткрытых событие обновляет одни числа (спека rooms.mail 6.9). В комнате, куда письма встали, остаётся не
+ * больше `WINDOW_ROOM_KEEP` новейших плюс подгруженное человеком «раньше» (`floor`, как у `keepHeld`): срез идёт и по
+ * устаревшему событию. Числа, кандидаты в упоминания и итог решения берутся из события по правилам R5 и R11
+ * (`withMailNumbers`); у прежнего снимка — перевод в `compact` версии 1.
  */
-export function withMail(entry: WindowWorkEntry, event: RoomsMailEvent, stale = false, isOpen: HeldPolicy['isOpen'] = () => true): WindowWorkEntry {
+export function withMail(
+  entry: WindowWorkEntry,
+  event: RoomsMailEvent,
+  stale = false,
+  isOpen: HeldPolicy['isOpen'] = () => true,
+  floor?: HeldPolicy['floor'],
+): WindowWorkEntry {
   const known = roomIdsOf(entry);
   const touched = event.rooms.filter((room) => room.roomId === null || known.has(room.roomId));
   const dropped = new Set(stale ? [] : event.droppedRooms);
@@ -304,7 +341,8 @@ export function withMail(entry: WindowWorkEntry, event: RoomsMailEvent, stale = 
   const current = entry.map.compact;
   // Без писем в снимке письма события держит только открытая комната: у остальных память окна не растёт на каждое письмо.
   const holding = current?.version === 2 ? touched.filter((room) => isOpen(room.roomId)) : touched;
-  const messages = withMarks(unionFresh(kept, holding.flatMap((room) => room.letters)), touched);
+  const merged = withMarks(unionFresh(kept, holding.flatMap((room) => room.letters)), touched);
+  const messages = current?.version === 2 ? capRooms(merged, new Set(holding.filter((room) => room.letters.length > 0).map((room) => room.roomId)), floor) : merged;
   const compact =
     stale || current === undefined
       ? current

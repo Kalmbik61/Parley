@@ -229,7 +229,8 @@ export function createAttentionNotifier(deps: NotifyDeps): {
    * комнату) и решения ведущих, ждущие человека в комнатах (новое — по новому `id`, переделанное — по выросшему `rev`
    * или по новому `id` после возврата на доработку); первый снимок — база. У работы со снимком версии 2 письма в снимке
    * нет, и по тем же правилам и той же базе (`mailTops`) уведомляют письма новее базы среди держимых окном — дочитанные
-   * страницами после разрыва или `reread`.
+   * страницами после разрыва или `reread`. Базу такой работы ставит её первый снимок — и у работы, что появилась в
+   * позднейшем снимке: её письма, что уже были, не уведомляют.
    */
   onWorks(entries: readonly WindowWorkEntry[]): void;
   /**
@@ -259,12 +260,15 @@ export function createAttentionNotifier(deps: NotifyDeps): {
   /**
    * У работ со снимком без писем (`compact.version === 2`) снимок письмами не делится, и множества id не из чего собрать:
    * вместо него — номер самого нового письма, о котором окно знает, по комнате (`workKey` + id комнаты, прямые письма —
-   * пустой id). Первый снимок ставит его по `top` комнат, письма события и письма, что окно держит (страницы починки),
-   * подвигают его (`freshMail`). Письмо с номером не больше этого — повтор или то, что уже было при подключении;
-   * комнаты без записи (создана после первого снимка) база не держит. Позднейшие снимки базу не двигают: запись только
-   * писем и снимок после неё не должны проглотить уведомление. null — первого снимка ещё не было.
+   * пустой id). Первый снимок работы — первый вызов `onWorks`, в котором работа есть, а не только самый первый, — ставит
+   * его по `top` комнат (`seeded`), письма события и письма, что окно держит (страницы починки), подвигают его
+   * (`freshMail`). Письмо с номером не больше этого — повтор или то, что уже было, когда окно узнало о работе; комнаты без
+   * записи (создана после первого снимка работы) база не держит. Позднейшие снимки базу не двигают: запись только писем и
+   * снимок после неё не должны проглотить уведомление. null — первого снимка ещё не было.
    */
   let mailTops: Map<string, number> | null = null;
+  /** Работы со снимком без писем, у которых база уже поставлена по `top` (`workKey`): снимок такой работы больше базу не ставит. */
+  const seeded = new Set<string>();
   /**
    * Решения комнат, о которых окно знает: `workKey` + id комнаты → решение (`id`, `rev`) и ждёт ли оно ещё; null —
    * снимка ещё не было. Записи не удаляются, пока живёт уведомитель: `id` решения не переиспользуется, и работа, на миг
@@ -539,7 +543,6 @@ export function createAttentionNotifier(deps: NotifyDeps): {
     },
 
     onWorks(entries) {
-      const first = knownLetters === null;
       const tops = mailTops ?? new Map<string, number>();
       mailTops = tops;
       const current = new Set<string>();
@@ -548,12 +551,18 @@ export function createAttentionNotifier(deps: NotifyDeps): {
       for (const entry of entries) {
         const key = workKey(entry.projectPath, entry.map.work.id);
         const compact = entry.map.compact;
-        // Снимок без писем: базу (`top` каждой комнаты) ставит первый снимок (спека rooms.mail 6.9), а письма события
-        // уведомляет `onMail`. Держимые письма новее базы двигают её и здесь: первый снимок молчит, как и у версии 1.
+        // Снимок без писем: базу (`top` каждой комнаты) ставит первый снимок работы (спека rooms.mail 6.9) — и работы,
+        // что появилась позже (восстановлена из архива, частичный первый снимок): её держимые письма не новее базы, и с
+        // номера 1 они не уведомляют. Письма события уведомляет `onMail`. Держимые письма новее базы двигают её и здесь:
+        // первый снимок работы молчит, как и у версии 1.
         if (compact?.version === 2) {
-          if (first) for (const [roomId, item] of Object.entries(compact.rooms)) tops.set(mailSlot(key, roomId), item.top);
+          const seeding = !seeded.has(key);
+          if (seeding) {
+            seeded.add(key);
+            for (const [roomId, item] of Object.entries(compact.rooms)) tops.set(mailSlot(key, roomId), item.top);
+          }
           const fresh = freshMail(tops, key, entry, heldBatches(entry));
-          if (!first) held.push({ entry, fresh });
+          if (!seeding) held.push({ entry, fresh });
           continue;
         }
         for (const message of entry.map.messages) current.add(`${key}\u0000${message.id}`);
