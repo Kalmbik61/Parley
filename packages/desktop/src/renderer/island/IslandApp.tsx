@@ -51,6 +51,11 @@
  * Виды помощника (план 3b B24, Р10): лицо получает эмоцию звучащего предложения и геттер кадра голоса из стора, значок
  * динамика — «Speak answers» и `toggleSpeak`. Реакции роёв (#9 §4.1–§4.3) — одноразовые `pulse`: мини-рой отвечает на
  * начало работы, исходы показа, наведение и фазы помощника, большой рой — только на фазы помощника.
+ *
+ * Остров в вырезе (#9 §12, план 3b B28): с `config.notch` наведение выдвигает форму из ушей вниз, уход курсора
+ * возвращает уши (`IslandView` по `hovered`). Область под мышь — по форме: уши или выдвинутый вид у выдвинутого острова,
+ * у убранного — зона нажатия по голому вырезу или по ушам с непросмотренными Done. Новый вырез (другой дисплей, новый
+ * замер) сдвигает форму, поэтому область замеряется заново.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -70,6 +75,7 @@ import { assistantBusy, useAssistantStore } from './assistant/store.js';
 import { createVoiceAnalysis, type VoiceFrame } from './assistant/voice-features.js';
 import { useConsentsStore } from './consents/store.js';
 import { IslandTab } from './IslandTab.js';
+import { earStatus } from './NotchEars.js';
 import { IslandView, sessionKeyOf, type IslandAssistantProps } from './IslandView.js';
 import { islandModel, sessionLabels, type IslandRow } from './model.js';
 import { useIslandReplies } from './replies.js';
@@ -708,14 +714,14 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     bridge.island.setHitRect(next);
   }, [bridge, connected, retracted]);
   // Область меняется при монтировании, смене вида, размере формы или зоны нажатия и при смене места в кадре (точка,
-  // отступ под чёлку); переход, что размера формы не меняет (отступ сверху у бруска), ловит `transitionend` на корне.
+  // отступ под чёлку, вырез); переход, что размера формы не меняет (отступ сверху у бруска), ловит `transitionend` на корне.
   useLayoutEffect(() => {
     reportHitRect();
     const observer = new ResizeObserver(reportHitRect);
     if (shapeRef.current !== null) observer.observe(shapeRef.current);
     if (tabRef.current !== null) observer.observe(tabRef.current);
     return () => observer.disconnect();
-  }, [reportHitRect, config.anchor, config.topInset]);
+  }, [reportHitRect, config.anchor, config.topInset, config.notch]);
 
   // Clear: строки уходят с острова сразу, а ещё не просмотренные сессии отмечаются просмотренными в хосте.
   const clearDone = (): void => {
@@ -806,6 +812,8 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
           anchorClass={ANCHOR_CLASS[config.anchor]}
           topInset={config.topInset}
           doneCount={unseenDone}
+          notch={config.notch ?? null}
+          status={earStatus(model, unseenDone, config.assistant.enabled && assistant.host.phase === 'error')}
           tabRef={tabRef}
           onExpand={() => {
             cues.open();
