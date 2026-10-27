@@ -10,7 +10,7 @@ The assistant speaks in a neural voice and its swarm becomes a face while it tal
 
 ### Added
 
-- **The assistant speaks.** With "Speak answers" on (Settings → Assistant), answers are spoken by Qwen3-TTS 0.6B CustomVoice, run on your Mac by speech.cpp; nothing goes to the network.
+- **The assistant speaks.** With "Speak answers" on (Settings → Assistant), answers are spoken by Qwen3-TTS 0.6B CustomVoice, run on your Mac by speech.cpp: speech is synthesized locally, and no text or audio leaves your Mac for the voice.
   - Five voices: Serena (the default), Ryan, Aiden, Vivian and Ono Anna. Settings lists them with gender, languages and licence. The assistant speaks of itself in the gender of the voice; when you switch to a voice of another gender mid-conversation, its next answer follows.
   - The weights (one 1214 MB file for all five voices) are downloaded only when you press Download in Settings → Assistant, checked against their sha256, and can be cancelled or deleted, like the Whisper models. After a download, "Preparing voice…" shows until the voice is ready.
   - Speech streams sentence by sentence: the first sentence plays as soon as the answer is complete, without waiting for the whole answer to be synthesized. Esc, the speaker button on the island and a new question stop the voice at once. The model leaves memory after 15 minutes without speech and comes back by itself on the next answer.
