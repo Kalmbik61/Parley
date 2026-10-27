@@ -709,9 +709,44 @@ Send/Cancel, но ответ над карточкой не произнёс; о
 
 Вывод: на спокойной машине E1 ≤ 300 мс p50 у aiden и serena. У ryan p50 выше 300 мс, как и предупреждал B01 (запас
 ryan мал). Под нагрузкой соседних сессий все голоса выше 300 мс. До правки первый звук шёл только после всего ответа,
-то есть через секунды. Решение по ryan и повторный замер на спокойной машине — за человеком (указание к B26,
-критик m-1439). Данные — `scratchpad/e1-*.json` сессии s-35, вне репозитория.
+то есть через секунды.
+
+Решение человека (s-21, m-1532): результат E1 принят как есть. ryan p50 362 мс на спокойной машине (serena и aiden —
+227 мс) годится, работы над движком нет. Данные — `scratchpad/e1-*.json` сессии s-35, вне репозитория.
 
 Спека #9 §6.1 приведена s-28 к F-B26-4 и F-B26-5 (m-1527). Копия в ветке — байт в байт из рабочего дерева
 `master`, sha256 `a8f18fef0d105dd5196cbf530e377d5583dc47ece661b6f559be67e0cd3e1ad3`. Спека помощника §15, README и
 CHANGELOG описывают речь во время ответа.
+
+## Слияние `origin/master` (s-21, m-1533)
+
+Коммит `f16193d3` вливает `origin/master` `852713d6` (PR до #117, с rooms-mail #116 и письмами в своих таблицах;
+81 коммит) в ветку на `649ad95a`. Это коммит слияния, без перебазирования: на origin лежит `0ef3232c`. Конфликтов 8,
+у каждого сохранено поведение обеих сторон:
+
+| Файл | Как решено |
+|---|---|
+| `core/src/mcp/tools.ts` | импорты API писем master (`letter-store`) и проверка привязки треда Codex ветки (`isCodexThreadBinding`); `addMessage` и `unreadFor` больше не нужны |
+| `core/src/mcp/thread-binding.test.ts` | объединение импортов; проверка ветки «карта не переписана» сравнивает `workVersion`, как у master, а не время `map.json` |
+| `desktop/.../island/model.ts`, `requests.ts` | тип `WindowWorkEntry` master; импорт `LiveTask` и метод `revalidate()` ветки |
+| `host/src/assistant/assistant-service.ts` | хвост писем комнаты из базы работы master (`roomTailOf`, `WorkNotFoundError`); `splitMood` не нужен — ветка режет метки `createMoodStripper` |
+| `host/src/assistant/assistant-service.test.ts` | оба новых блока `describe` |
+| `host/src/sessions/sessions-service.start-write.test.ts` | путь блокировки базы master и сброс попыток старта ветки |
+| `host/src/works/works-service.ts` | `legacyEntries()` master; в нём теперь тоже вычищается частная привязка треда Codex, как в `windowMapBase` (правка ветки `96bd76b8`) |
+
+Ещё два теста ветки приведены к хранилищу master: круговой путь доказательства Codex читает строки базы
+(`readStoredMap`), а не `map.json`, а белый список событий острова включает `rooms.mail` (`923ad14d`).
+
+Проверки на `f16193d3`:
+- `pnpm build`, typecheck — без ошибок; lint — 0 (master снял 54 ошибки базы);
+- тесты: core 4846, protocol 351, file-icons 18 — зелёные; host — 2 известных падения lean; desktop — известное
+  падение `ui-store`;
+- имена: 0 совпадений;
+- E2E (с согласия человека), `--workers=1`: assistant, island-sound, island, dialogs-layout, codex, codex-chat,
+  room-actions, room-decision, room-owner, rooms-dialogs, parley-integration — 51 из 55 в общем прогоне. Три падения
+  `parley-integration` — окружение: сессия, из которой шёл прогон, сама запущена Parley и несёт
+  `SLASH_COMMAND_TOOL_CHAR_BUDGET=1`. Без переменной спека проходит. Четвёртое — `room-decision.spec.ts:383` (стопка
+  карточек 800×500): в длинном прогоне под нагрузкой не нашлась карточка, отдельно и всем файлом — 4 из 4.
+
+Решение человека (s-21, m-1534): тестовое дерево `w-0054-3b-int` удалено. Ветка `feat/assistant-stage-3b`
+двигается прямо, только вперёд, из `w-0054-3b-b26`.
